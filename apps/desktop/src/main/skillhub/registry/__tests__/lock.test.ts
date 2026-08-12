@@ -38,19 +38,31 @@ describe('withLock', () => {
     expect(counter).toBe(100);
   });
 
-  it('不同 key 并行，耗时近似单次而非 N 倍', async () => {
-    const delay = 20; // ms
-    const start = Date.now();
+  it('不同 key 并行：三个临界区在某一刻同时开着（而非首尾相接）', async () => {
+    // **不断言墙钟耗时**。原来是 `elapsed < delay * 2.5`（20ms × 2.5 = 50ms），Windows CI
+    // 两分片并跑时 52ms 就把 main 打红了 —— 三个 20ms 的 sleep 串行才 60ms，阈值离"串行"
+    // 只差 10ms，等于拿调度抖动当被测行为。
+    //
+    // 改成直接量"并行"本身：记下每个临界区的进入 / 离开时刻，断言
+    // `max(进入) < min(离开)`，即存在一个瞬间三者同时在临界区内。串行执行下
+    // 第二个的进入必然晚于第一个的离开，这条一定不成立。与机器快慢无关。
+    const enter: number[] = [];
+    const leave: number[] = [];
+    const section = async (): Promise<void> => {
+      enter.push(Date.now());
+      await new Promise<void>((r) => setTimeout(r, 20));
+      leave.push(Date.now());
+    };
 
     await Promise.all([
-      withLock('key-a', () => new Promise<void>((r) => setTimeout(r, delay))),
-      withLock('key-b', () => new Promise<void>((r) => setTimeout(r, delay))),
-      withLock('key-c', () => new Promise<void>((r) => setTimeout(r, delay))),
+      withLock('key-a', section),
+      withLock('key-b', section),
+      withLock('key-c', section),
     ]);
 
-    const elapsed = Date.now() - start;
-    // 并行时应该约 delay ms 完成（而非 3*delay）
-    expect(elapsed).toBeLessThan(delay * 2.5);
+    expect(enter).toHaveLength(3);
+    expect(leave).toHaveLength(3);
+    expect(Math.max(...enter)).toBeLessThan(Math.min(...leave));
   });
 
   it('前一个 task 失败，后续 task 仍可执行', async () => {

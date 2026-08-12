@@ -8,6 +8,7 @@
  */
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 
 import type {
   sessions,
@@ -114,6 +115,7 @@ export function extractMessagePreview(
   // role='user' 的正常落库行,但对用户不可见 —— 预览显示隐藏英文指令会暴露
   // 实现细节。返回 null 与"无预览"同渲染语义。
   if (isSyntheticTriggerText(text)) return null;
+  if (role === 'assistant') text = stripInternalWebCitations(text);
   const collapsed = text.replace(/\s+/g, ' ').trim();
   if (!collapsed) return null;
   return collapsed.length > PREVIEW_MAX_CHARS ? collapsed.slice(0, PREVIEW_MAX_CHARS) : collapsed;
@@ -199,6 +201,9 @@ export function messageToCamel(row: MessageRow): Message {
   } catch {
     // 容错：极端情况下 content 可能不是合法 JSON（例如旧手工写入），保留原字符串
     content = row.content;
+  }
+  if (row.role === 'assistant' && typeof content === 'string') {
+    content = stripInternalWebCitations(content);
   }
   // agent_meta 列存的是 JSON.stringify 后的字符串，老消息为 NULL。
   // 解析失败时返回 null 而非抛——容错保证历史消息能正常加载。

@@ -30,6 +30,8 @@ export interface StdioTransportOptions {
   env?: NodeJS.ProcessEnv;
   /** `app-server` 子命令之前/之后的额外参数 (一般用于注入 `-c` overrides)。 */
   extraArgs?: string[];
+  /** 本地进程生命周期观察器；仅用于宿主诊断，不得影响 transport 启动。 */
+  onProcessSpawned?: (pid: number) => void | (() => void);
 }
 
 export function createStdioTransport(opts: StdioTransportOptions): Transport {
@@ -62,6 +64,15 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
     // Linux/macOS: 跟父进程同 process group, 父进程退出时一并被收割。
     detached: false,
   });
+  let disposeProcessRegistration: (() => void) | undefined;
+  if (child.pid != null && child.pid > 0) {
+    try {
+      const dispose = opts.onProcessSpawned?.(child.pid);
+      if (typeof dispose === 'function') disposeProcessRegistration = dispose;
+    } catch {
+      // 诊断观察器失败不能阻断 app-server；进程归属仍由既有扫描安全边界判断。
+    }
+  }
 
   // stdout NDJSON 增量解析: readline 处理 \r\n / \n / EOF, 单行触发 callback。
   child.stdout.setEncoding('utf8');
@@ -97,6 +108,8 @@ export function createStdioTransport(opts: StdioTransportOptions): Transport {
     if (closed) return;
     closed = true;
     try { rl.close(); } catch { /* already closed */ }
+    try { disposeProcessRegistration?.(); } catch { /* best-effort diagnostic cleanup */ }
+    disposeProcessRegistration = undefined;
     for (const cb of closeHandlers) {
       try { cb({ reason }); } catch { /* handler should not throw */ }
     }

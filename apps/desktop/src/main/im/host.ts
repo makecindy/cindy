@@ -56,6 +56,7 @@ import {
   WechatCompatibilityPolicyService,
 } from './wechat/compatibilityPolicy';
 import { fetchPublicImageBytes } from './publicImageFetch';
+import { buildPersonalBotCommandMenu } from './shared/botCommands';
 
 const log = createLogger('im/host');
 
@@ -190,12 +191,7 @@ export const telegramIm = createTelegramIM(host, {
   // 行为配置 getter: transport 每次使用时现读 → 设置卡改动即生效。
   behavior: readTelegramBehavior,
   // owner 私聊的 "/" 命令菜单(BotCommandScopeChat 只发 owner, 其他人不可见)。
-  commandMenu: ['start', 'new', 'help', 'stop', 'session', 'project', 'model', 'permission', 'ctr', 'exctr'].map(
-    (command) => ({
-      command,
-      description: t(`settings.telegramBot.commandMenu.${command}`),
-    }),
-  ),
+  commandMenu: buildPersonalBotCommandMenu((key) => t(key)),
 });
 export const dingtalkIm = createDingTalkIM(host, {
   fetcher: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),

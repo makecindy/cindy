@@ -55,12 +55,7 @@ import {
   settleCachePathRemovals,
 } from './cacheLease.js';
 import { discoverMarketplace, type DiscoveredMarketplace, type DiscoverError } from './discover.js';
-import {
-  MarketGitError,
-  cloneMarketplace,
-  fetchMarketplace,
-  type GitExecutor,
-} from './git.js';
+import { MarketGitError, cloneMarketplace, fetchMarketplace, type GitExecutor } from './git.js';
 import { checkGitPreflight as checkGitPreflightImpl } from './preflight.js';
 import { parseMarketSource } from './parse.js';
 import { MarketSourceStore } from './store.js';
@@ -176,7 +171,13 @@ export class MarketSourceManager {
       try {
         const version = (readAtomicFileSync(pointer) ?? '').trim();
         // 版本名必须是 versions/ 下的直接子目录名,拒绝绝对路径与穿越。
-        if (version && !version.includes('/') && !version.includes('\\') && version !== '..' && version !== '.') {
+        if (
+          version &&
+          !version.includes('/') &&
+          !version.includes('\\') &&
+          version !== '..' &&
+          version !== '.'
+        ) {
           const dir = path.join(this.versionsDir(slot), version);
           if (fs.existsSync(dir)) return dir;
         }
@@ -445,7 +446,11 @@ export class MarketSourceManager {
     let revision: string;
     try {
       revision = await cloneMarketplace(
-        { url: source.url, ...(source.ref ? { ref: source.ref } : {}), sparsePaths: source.sparsePaths },
+        {
+          url: source.url,
+          ...(source.ref ? { ref: source.ref } : {}),
+          sparsePaths: source.sparsePaths,
+        },
         incoming,
         this.deps.gitExecutor,
       );
@@ -592,10 +597,7 @@ export class MarketSourceManager {
       // 两条路径(快进成功 / 重克隆)都会赋值或抛出,此处仅满足 TS 的确定性赋值分析。
       let revision = '';
       let stagedDir = fastForwardDir;
-      let discovered: Extract<
-        Awaited<ReturnType<typeof discoverMarketplace>>,
-        { ok: true }
-      >;
+      let discovered: Extract<Awaited<ReturnType<typeof discoverMarketplace>>, { ok: true }>;
       try {
         let fastForwarded = false;
         if (current) {
@@ -744,10 +746,42 @@ export class MarketSourceManager {
         : {
             ...entry.config,
             pluginCount: 0,
+            skippedCount: 0,
+            unreadableCount: 0,
             status: 'error' as const,
             errorCode: entry.result.code,
           },
     );
+  }
+
+  /**
+   * 在每个来源的读取租约内消费发现结果。回调返回前，result 中的 plugin.dir
+   * 仍然受缓存租约保护；需要从目录读取派生事实的投影层必须使用此入口。
+   */
+  async forEachDiscoveredSource(fn: (entry: DiscoveredSource) => Promise<void>): Promise<void> {
+    const configs = this.deps.store.list();
+    for (const config of configs) {
+      await this.withMarketRoot(config, async (root) => {
+        if (!root || !fs.existsSync(root)) {
+          await fn({
+            config,
+            result: { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'market root missing' },
+          });
+          return;
+        }
+        const discovered = await discoverMarketplace(root);
+        await fn({
+          config,
+          result: discovered.ok
+            ? { ok: true, marketplace: discovered.marketplace }
+            : {
+                ok: false,
+                code: discovered.code,
+                ...(discovered.detail ? { detail: discovered.detail } : {}),
+              },
+        });
+      });
+    }
   }
 
   /** 快照聚合用：全部来源的发现结果（含失败）。 */
@@ -799,6 +833,8 @@ export class MarketSourceManager {
     return {
       ...config,
       pluginCount: marketplace.plugins.length,
+      skippedCount: marketplace.skippedCount,
+      unreadableCount: marketplace.unreadableCount,
       status: 'ok',
       errorCode: null,
     };

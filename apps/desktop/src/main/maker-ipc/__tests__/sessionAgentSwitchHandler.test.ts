@@ -180,6 +180,17 @@ describe('performSessionAgentSwitch', () => {
     await expect(performSessionAgentSwitch(deleted.deps, validParams)).rejects.toThrow(/NOT_FOUND/);
   });
 
+  it('Review 审计任务拒绝切换 harness', async () => {
+    const { deps, calls } = makeDeps({
+      getSessionRow: vi.fn(async () => makeRow({ source: 'review' })),
+    });
+
+    await expect(performSessionAgentSwitch(deps, validParams)).rejects.toThrow(
+      /Review task settings are fixed/,
+    );
+    expect(calls).toEqual([]);
+  });
+
   it('远程会话与 Orca 会话抛 UNSUPPORTED_CAPABILITY', async () => {
     const remote = makeDeps({ getSessionRow: vi.fn(async () => makeRow({ remoteHostId: 'host-1' })) });
     await expect(performSessionAgentSwitch(remote.deps, validParams)).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);

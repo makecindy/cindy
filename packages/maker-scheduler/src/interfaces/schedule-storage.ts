@@ -50,6 +50,38 @@ export interface ScheduleStorage {
   ): Promise<Schedule | null>;
 
   /**
+   * Complete an automatic claim while only allowing `claimRunId` to clear the
+   * active claim marker or publish a new nextFireAt. Terminal timing/status
+   * fields may still land for a stale owner so one-shot runs are not revived by
+   * a concurrent stale-claim replan.
+   */
+  completeAutomaticClaim(
+    id: string,
+    claimRunId: string,
+    firedAt: number,
+    patch: Partial<Pick<Schedule, 'lastFinishedAt' | 'nextFireAt' | 'status'>>,
+  ): Promise<Schedule | null>;
+
+  /**
+   * Finish a deferred runNow while atomically preserving a live automatic claim
+   * if one appeared after runNow read the schedule snapshot.
+   */
+  deferRunNowWithLiveClaimGuard(
+    id: string,
+    previousLastFiredAt: number | undefined,
+    retryAt: number,
+  ): Promise<Schedule | null>;
+
+  /**
+   * Pause a schedule while atomically preserving a live automatic claim if its
+   * activeClaimRunId points at a running row at the moment the pause commits.
+   */
+  pauseWithLiveClaimGuard(
+    id: string,
+    updatedAt: number,
+  ): Promise<Schedule | null>;
+
+  /**
    * Resume a schedule while atomically preserving a live automatic claim if its
    * activeClaimRunId still points at a running row. This prevents a remote owner
    * completing between a separate hasRunningRuns() read and the resume update.

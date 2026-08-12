@@ -12,6 +12,15 @@
  * 注 xdt_card_id)。finalize 后留 GRACE_MS 宽限窗兜"最后一版在交卷竞态里
  * 晚到"的毛刺,窗外拒绝——无限接受会给已完结消息留远程改写面。
  *
+ * 无会话调用方(2026-08-04,scheduler「仅运行脚本」通道):脚本经 broker 直调
+ * 意识,没有 agent session,但意识泄洪落盘(root:'workdir')仍凭 callId 定位
+ * 写入根。broker 同样在派发前 registerCall、交卷后 finalizeCall,登记时把
+ * schedule.workingDir 记为条目的 scriptWorkdir(sessionId 恒 null)——fs 槽
+ * 凭它把写盘钳在该目录内,条目随同一套 finalize/宽限/清扫节奏失效,旧
+ * callId 不能跨调用复用(与 inFlightCallInfoOf 注释的目录授权不变量同源)。
+ * 脚本通道条目拒绝卡片供片(sessionId/toolUseId 均无锚,broadcast 出去是
+ * 孤儿卡)。
+ *
  * 依赖全注入(规则 14),纯逻辑可用内存 harness 直测,不碰 Electron。
  */
 
@@ -144,6 +153,25 @@ interface CallEntry {
   ghostId: string;
   toolUseId: string | null;
   sessionId: string | null;
+  /**
+   * 调用通道:'session' = 会话内 ghost_call(默认);'script' = scheduler
+   * 「仅运行脚本」broker 直调。显式字段而非由 sessionId/scriptWorkdir 推导
+   * ——workingDir 空白的脚本条目(scriptWorkdir null)也必须被识别为脚本
+   * 通道(拒卡判据),不能与会话通道的无会话调用混淆(review m2)。
+   */
+  channel: 'session' | 'script';
+  /**
+   * 脚本通道(「仅运行脚本」broker 直调)的落盘根:登记时取 schedule.workingDir,
+   * 普通会话调用恒 null。fs 槽 root:'workdir' 在 sessionId 为空时凭它定位
+   * 写入根(授权来源 = schedule 自身的工作目录配置,意识自报路径被钳在根内)。
+   */
+  scriptWorkdir: string | null;
+  /**
+   * 脚本声明的唯一可写相对路径(broker 登记的 out_file 原值):非 null 时
+   * fs 槽只放行恰好等于它的写入——调用在途期间插件也写不了根内其它文件
+   * (review P1 第五轮:写窗收窄到脚本声明的单个文件)。
+   */
+  scriptWritePath: string | null;
   hasCard: boolean;
   lastAcceptedAt: number | null;
   settledAt: number | null;
@@ -201,13 +229,26 @@ export class GhostCardService {
   /** 派发 tool-call 前登记(callId 由调用方铸造,与管子下行同值)。 */
   registerCall(
     callId: string,
-    info: { ghostId: string; toolUseId: string | null; sessionId: string | null },
+    info: {
+      ghostId: string;
+      toolUseId: string | null;
+      sessionId: string | null;
+      /** 脚本通道调用方传入 schedule.workingDir;普通会话调用省略。 */
+      scriptWorkdir?: string | null;
+      /** 脚本通道调用方传入脚本声明的 out_file(唯一可写相对路径);无写窗时省略。 */
+      scriptWritePath?: string | null;
+      /** 脚本通道调用方传 'script';缺省 'session'(会话内 ghost_call)。 */
+      channel?: 'script';
+    },
   ): void {
     this.sweep();
     this.calls.set(callId, {
       ghostId: info.ghostId,
       toolUseId: info.toolUseId,
       sessionId: info.sessionId,
+      channel: info.channel ?? 'session',
+      scriptWorkdir: info.scriptWorkdir ?? null,
+      scriptWritePath: info.scriptWritePath ?? null,
       hasCard: false,
       lastAcceptedAt: null,
       settledAt: null,
@@ -243,23 +284,25 @@ export class GhostCardService {
   /**
    * 内存条目全息查询(card-action 派发用):除归属外带出 sessionId——
    * 铸衍生卡位(spawnCallId)登记时要续上会话归属,历史回放才能按会话
-   * 捞回衍生卡。查无 null(由持久卡库兜底)。
+   * 捞回衍生卡。查无 null(由持久卡库兜底)。fs 槽 workdir 档也经它反查
+   * (含 scriptWorkdir——脚本通道的落盘根)。
    */
-  callInfoOf(callId: string): { ghostId: string; sessionId: string | null } | null {
+  callInfoOf(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir: string | null } | null {
     const e = this.calls.get(callId);
-    return e ? { ghostId: e.ghostId, sessionId: e.sessionId } : null;
+    return e ? { ghostId: e.ghostId, sessionId: e.sessionId, scriptWorkdir: e.scriptWorkdir } : null;
   }
 
   /**
-   * 严格在途查询(workspace 槽的上下文凭证用):仅当该单已登记、未交卷
-   * (settledAt 为 null)且非重开态时返回归属。宽限窗/重开窗/working 窗都是
-   * 卡片供片语义,不能让 callId 在工具调用结束后继续充当"目录授权上下文"
-   * ——否则插件记住一个旧 callId 就能跨调用复用当时会话的 workdir 自动放行。
+   * 严格在途查询(workspace 槽的上下文凭证、fs 槽脚本通道的写盘授权用):
+   * 仅当该单已登记、未交卷(settledAt 为 null)且非重开态时返回归属。
+   * 宽限窗/重开窗/working 窗都是卡片供片语义,不能让 callId 在工具调用
+   * 结束后继续充当"目录授权上下文"——否则插件记住一个旧 callId 就能跨
+   * 调用复用当时会话的 workdir 自动放行。
    */
-  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null } | null {
+  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script' } | null {
     const e = this.calls.get(callId);
     if (!e || e.settledAt !== null || e.reopenedAt !== null) return null;
-    return { ghostId: e.ghostId, sessionId: e.sessionId };
+    return { ghostId: e.ghostId, sessionId: e.sessionId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel };
   }
 
   /**
@@ -283,6 +326,10 @@ export class GhostCardService {
       ghostId: info.ghostId,
       toolUseId: null,
       sessionId: info.sessionId,
+      // 交互卡重开只发生在会话通道(脚本通道条目拒供片,无卡可点)。
+      channel: 'session',
+      scriptWorkdir: null,
+      scriptWritePath: null,
       hasCard: true,
       lastAcceptedAt: null,
       settledAt: null,
@@ -331,6 +378,10 @@ export class GhostCardService {
       // 拿着别人的单号供片:归属验身失败(与 pipeDispatcher"不是你的卷子"同款)。
       return reject('not-owner', { callId: p.callId, owner: entry.ghostId });
     }
+    // 脚本通道(broker 直调,无会话)条目:sessionId/toolUseId 均无锚,broadcast
+    // 出去是孤儿卡——供片语义不成立,直接拒(fs 落盘反查不受影响)。判据用显式
+    // channel 字段:workingDir 空白(scriptWorkdir null)的脚本条目同样拒。
+    if (entry.channel === 'script') return reject('script-call-no-card', { callId: p.callId });
     if (!this.deps.hasCardSlot(senderGhostId)) return reject('no-card-slot');
 
     const now = this.now();

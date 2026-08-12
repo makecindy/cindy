@@ -33,6 +33,8 @@ export interface InlineReferenceChipProps {
   ariaLabel?: string;
   className?: string;
   labelClassName?: string;
+  /** 标记会话路由动作，分屏 pane 不应在点击前抢走路由主权。 */
+  splitPaneRouteAction?: boolean;
   /**
    * chip 文字能否被 selection 选中并进入剪贴板。默认 `true`——已发送消息里的
    * chip 必须能跟着正文一起复制出去。composer 里的 ProseMirror atomic node 传
@@ -55,13 +57,14 @@ export function InlineReferenceChip({
   ariaLabel,
   className,
   labelClassName,
+  splitPaneRouteAction = false,
   textSelectable = true,
 }: InlineReferenceChipProps) {
   const interactive = Boolean(onClick || onContextMenu);
   const sharedClassName = cn(
     'inline-flex min-w-0 max-w-full items-center',
     !textSelectable && 'select-none',
-    'gap-1.5 rounded-full border px-2 py-0.5 text-[12px] font-normal leading-5',
+    'gap-1.5 rounded-full border px-2 py-0.5 text-12 font-normal leading-5',
     'bg-[var(--surface-chip)] text-[var(--text-primary)]',
     // 下划线跟着 `interactive` 一起给:DESIGN.md §14.5 要求「下划线 ⇔ 可点」双向成立,
     // 而本组件同时服务可点的会话 / 项目深链 chip 与不可点的静态 chip(sidebar-embedded
@@ -107,6 +110,7 @@ export function InlineReferenceChip({
       className={sharedClassName}
       style={style}
       data-inline-reference-chip=""
+      data-split-pane-route-action={splitPaneRouteAction ? '' : undefined}
     >
       {contents}
     </span>

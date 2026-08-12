@@ -159,6 +159,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:input:get-projection',
   'maker:input:enqueue',
   'maker:input:compact',
+  // 手动压缩(pi 原生 compact,capability-aware):上下文环 / 会话菜单对远程 pi 会话
+  // 隧道到被控端执行。业务 handler 无 sender / 本机 UI 副作用,真相在被控端。
+  // 长 LLM 摘要请求可能远超默认 30s → INVOKE_TIMEOUT_OVERRIDES_MS 覆盖(见下)。
+  'maker:compact-session',
   'maker:input:steer',
   'maker:input:stop',
   'maker:input:resume',
@@ -222,15 +226,29 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // UI 副作用);回读经 maker:get-new-maker-defaults + NEW_MAKER_DRAFT_CHANGED 回流。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端吞掉降级(勾选仅本次草稿生效)。
   'maker:apply-new-maker-worktree-pref',
+  // device-link 新建 worktree 源分支镜像:branch 选择属于被控端 canonical baseRepo,
+  // 控制端先按 repo 拉取、显式选择时写穿，被控端返回/广播带 revision 的权威 snapshot。
+  // GET 只读 main 内存镜像；APPLY 只更新该 repo 的 future-session 偏好，不执行 git/fs。
+  'maker:get-new-maker-worktree-branch-pref',
+  'maker:apply-new-maker-worktree-branch-pref',
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
   // Git safety 设置(只读):远程 Codex Rewind 入口必须按被控端是否会创建 safety snapshot
   // 决定显隐。SET/RESET 不放行,控制端不能改被控端全局偏好。
   'maker:git-safety:get',
+  // 会话标题旁的 Git / GitHub 上下文(分支、PR 引用与实时状态)必须在被控端查询,
+  // 因为控制端本地没有远端 session 的 DB、工作目录或 gh 登录态。
+  'git-context:get-for-session',
+  'git-context:pr-refs:list',
+  'git-context:pr-status',
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
   'local-db:sessions:get',
+  // Read-only indexed task search for the remote Composer @ palette. Older
+  // controlled clients reject this channel and the controller falls back to
+  // the bounded legacy sessions:list projection.
+  'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
   'local-db:messages:list',
   // 会话内搜索跳转定位(loadAroundMessage):只读,与 messages:list 同安全级。
@@ -426,6 +444,18 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   //  - readFile 结果超帧限前被控端预判回结构化 oversize,不裸炸 FRAME_TOO_LARGE。
   //  - 老被控端无此 channel → CHANNEL_NOT_ALLOWED,控制端渲染"设备版本过旧"占位。
   'file-browser:remote-op',
+  // —— 远程 git 审查(右侧栏审查面板,只读)——
+  // 单聚合 channel:被控端专用 handler(见 apps/desktop/src/main/git-review/device-op.ts),
+  // 不复用本机 renderer 的 git-review:* handler。准入:
+  //  - 只读 git 数据(status / diff / commit 列表 / 文件 diff / 图片与 Markdown 预览),
+  //    **不放行任何写 op**(stage / discard / commit / push 不在被控端 handler 实现)。
+  //  - 入参只有 sessionId + 结构化查询字段,不接受任何客户端路径:workdir 一律由被控端
+  //    resolveReviewScope 从它自己的 session 记录解析,路径越界在 fsPathGuard 层拦。
+  //  - device-link 已是同账号 + remoteControlEnabled 显式 opt-in,控制端本就能在
+  //    workingDir 跑 agent(任意读/exec),只读 git 数据不扩大攻击面(fs:list-dir 同款论证)。
+  //  - 响应超帧限前被控端预判:先 gzip,仍超回结构化 OVERSIZE,不裸炸 FRAME_TOO_LARGE。
+  //  - 老被控端无此 channel → CHANNEL_NOT_ALLOWED,控制端渲染"设备版本过旧"占位。
+  'git-review:remote-op',
   // —— 窄口径文本预览(消息附件 / tool 文件引用只读查看)——
   // 不是裸文件读:handler 要求绝对路径,复用系统目录 blocklist,10MB 上限,
   // 并用 reason 明确 oversize / not_found / forbidden。见 bootstrap-electron text-file:read-preview。
@@ -471,6 +501,31 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
 ];
+
+/**
+ * Session-scoped input mutations that must be re-authorized by the controlled
+ * Desktop before dispatch. Review tasks are visible over device-link but are
+ * host-owned audit runs, so none of these channels may inject or mutate input.
+ */
+export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Set([
+  'maker:send',
+  'maker:steer',
+  'maker:input:enqueue',
+  'maker:input:compact',
+  'maker:input:steer',
+  'maker:input:stop',
+  'maker:input:resume',
+  'maker:input:retry-last-error',
+  'maker:input:clear-error',
+  'maker:input:remove',
+  'maker:input:update-text',
+  'maker:input:update-content',
+  'maker:input:move',
+  'maker:input:set-expanded',
+  'maker:input:set-interaction-lock',
+  'maker:input:set-edit-lock',
+  'maker:input:clear-session',
+]);
 
 /** 远程可调用的 invoke channel 全集(被控端 dispatch 前的权威校验依据) */
 export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
@@ -521,6 +576,9 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // 控制端的远程项目草稿据此实时刷新显示镜像(remoteDraftState)。账号 / 全局级、无 sessionId →
   // topics.ts 的 ACCOUNT_CHANNELS 把它并入 `sessions` topic(控制端按设备订阅 sessions)。
   'maker:new-maker-draft:changed',
+  // 被控端 repo-scoped worktree 源分支选择变化；无 sessionId，topics.ts 按账号级
+  // 并入 sessions topic，控制端再按来源 deviceId + payload.baseRepo 精确消费。
+  'maker:new-maker-worktree-branch:changed',
   // 被控端会话「非选中模型」effort/fast 变更:被控端本地改 / 应用控制端写后广播,带 sessionId →
   // 默认路由到 session:<id> topic;控制端打开该远程会话时已订阅,据此刷新显示镜像。
   'maker:session-model-pref:changed',
@@ -531,12 +589,20 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 逐 channel 的 invoke 隧道超时覆盖(ms)。
+ * 逐 channel 的 invoke 隧道超时覆盖(ms),双向使用:
  *
- * client 默认 requestTimeoutMs(30s)对「被控端自身持有同量级执行预算」的 channel
- * 会产生对撞:desktop-cmd:run 在被控端有 30s 命令超时 + 5s SIGKILL 宽限,隧道 30s
- * 必然先放弃 —— 命令在被控端继续跑完但输出被丢弃,控制端永远看不到 timedOut:true
+ * **放宽**:client 默认 requestTimeoutMs(30s)对「被控端自身持有同量级执行预算」的
+ * channel 会产生对撞:desktop-cmd:run 在被控端有 30s 命令超时 + 5s SIGKILL 宽限,隧道
+ * 30s 必然先放弃 —— 命令在被控端继续跑完但输出被丢弃,控制端永远看不到 timedOut:true
  * 的正确语义。此表给这类 channel「执行预算 + 回程余量」的覆盖值。
+ *
+ * **收紧**:listing tier 的轻量 DB 读(sessions:list / sessions:get)在被控端是毫秒级
+ * 查询,等满默认 30s 只可能是链路不通。它们又是控制端周期对账的高频 channel,弱网下
+ * 每个 30s 超时都占着重试与并发预算(2026-08 实测:单日 2253 次 sessions:list 等满
+ * 30s 超时)。给短超时让失败尽快暴露,把「设备无响应」判定交给控制端熔断器。
+ * 注意:被控端 dispatch 的 REMOTE_INVOKE_MAX_CLIENT_WAIT_MS 取 max(30s, ...本表),
+ * 收紧条目不影响被控端的等待窗口。
+ *
  * client-agnostic:mobile/web 控制端应使用同一映射(与 allowlist 同为协议契约)。
  */
 export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
@@ -547,6 +613,18 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   'worktree:create': 60_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。
   'worktree:discard-precreated': 60_000,
+  // pi 手动压缩调 LLM 生成摘要,大上下文 + 网关排队可达分钟级(core 侧
+  // PI_COMPACT_TIMEOUT_MS = 10min);默认 30s 隧道超时会截断远程压缩请求,
+  // 用户在控制端看到的就是「无反馈失败」。给足执行预算 + 回程余量:
+  // 被控端在请求穿过 relay 后才开始跑 PI_COMPACT_TIMEOUT_MS,控制端若只给相同
+  // 10min,压缩恰好到预算上限时会先 INVOKE_TIMEOUT,被误判为「设备无响应」并
+  // 可能触发 peer-link 恢复(codex P2)——同 desktop-cmd:run 模式加 1min 余量。
+  'maker:compact-session': 11 * 60_000,
+  // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
+  // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
+  // 不吃满超时),不会误伤首拉重试。
+  'local-db:sessions:list': 12_000,
+  'local-db:sessions:get': 12_000,
 };
 
 /**

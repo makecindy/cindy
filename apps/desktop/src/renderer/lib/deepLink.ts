@@ -61,7 +61,7 @@ export function buildSessionMessageDeepLink(
  * (review P2)。构建端把五个字符也转成 %XX,生成的深链永不含裸定界符;
  * decodeURIComponent 对 %21 %27 %28 %29 %2A 原生可解,解析端零改动。
  */
-function strictEncodeURIComponent(value: string): string {
+export function strictEncodeURIComponent(value: string): string {
   return encodeURIComponent(value).replace(
     /[!'()*]/g,
     (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,

@@ -5,6 +5,7 @@
  * ipcMain.handle 只做 adapter),__tests__ 用内存 harness 直接调 handler body。
  */
 
+import { createHash, randomBytes } from 'node:crypto';
 import { ipcMain } from 'electron';
 import {
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
@@ -25,6 +26,9 @@ import {
 import {
   getDeviceLinkStatus,
   getDeviceLinkConnectionIssue,
+  isDeviceLinkStandby,
+  getUnresponsiveDeviceIds,
+  clearDeviceResponsiveness,
   setRemoteControlEnabled,
   setKeepAwakeEnabled,
   openRemoteLink,
@@ -52,7 +56,7 @@ import {
   rememberLastKnownDeviceName,
   setDeviceControlEnabled,
 } from './settings-store';
-import { ownerScopedUserDataPath } from '../appSessionState';
+import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import {
   getMirrorCache,
   MirrorCachePurgeError,
@@ -97,6 +101,8 @@ export interface DeviceLinkIpcDeps {
   revoke(deviceId: string): Promise<void>;
   restore(deviceId: string): Promise<void>;
   setDeviceControlEnabled(deviceId: string, enabled: boolean): Promise<string[]>;
+  /** 清理本机禁用目标的响应性熔断状态。 */
+  clearDeviceResponsiveness?(deviceId: string): void;
   broadcast(channel: string, payload: unknown): void;
   readLastKnownDeviceNames(): Record<string, string>;
   rememberLastKnownDeviceName(deviceId: string, name: string): Promise<boolean>;
@@ -118,9 +124,11 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         keepAwake: s.keepAwake,
         linkStatus: getDeviceLinkStatus(),
         connectionIssue: getDeviceLinkConnectionIssue(),
+        standby: isDeviceLinkStandby(),
         controlledBy: getActiveControllers(),
         revokedControllers: s.revokedControllers,
         disabledControlDeviceIds: s.disabledControlDeviceIds,
+        unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
     },
     setEnabled: setRemoteControlEnabled,
@@ -138,6 +146,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     revoke: revokeController,
     restore: restoreController,
     setDeviceControlEnabled,
+    clearDeviceResponsiveness,
     broadcast,
     readLastKnownDeviceNames,
     rememberLastKnownDeviceName,
@@ -153,6 +162,7 @@ const DEVICE_LINK_CODE_MAP: Record<string, IpcErrorCode> = {
   CHANNEL_NOT_ALLOWED: 'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
   ACCESS_REVOKED: 'DEVICE_LINK_ACCESS_REVOKED',
   INVOKE_TIMEOUT: 'DEVICE_LINK_TIMEOUT',
+  DEVICE_UNRESPONSIVE: 'DEVICE_LINK_DEVICE_UNRESPONSIVE',
   VERSION_MISMATCH: 'DEVICE_LINK_VERSION_MISMATCH',
   NOT_CONNECTED: 'DEVICE_LINK_NOT_CONNECTED',
   LINK_NOT_OPEN: 'DEVICE_LINK_NOT_CONNECTED',
@@ -222,9 +232,12 @@ export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
     keepAwake: state.keepAwake,
     linkStatus: 'stopped',
     connectionIssue: null,
+    // 无 device-link 能力(未登录 / 本地会话)不是“被本机另一实例占用”,按 false 上报。
+    standby: false,
     controlledBy: [],
     revokedControllers: [],
     disabledControlDeviceIds: [],
+    unresponsiveDeviceIds: [],
   };
 }
 
@@ -265,6 +278,7 @@ export async function handleSetDeviceControlEnabled(
   const disabledControlDeviceIds = await deps.setDeviceControlEnabled(normalizedDeviceId, enabled);
   if (!enabled) {
     resetSubscriptionRefcountForDevice(normalizedDeviceId);
+    deps.clearDeviceResponsiveness?.(normalizedDeviceId);
     deps.closeLink(normalizedDeviceId);
   }
   deps.broadcast(DEVICE_LINK_PUSH.CONTROL_TARGET_CHANGED, {
@@ -392,7 +406,15 @@ export function handleCloseLink(deps: DeviceLinkIpcDeps, deviceId: unknown): { o
   if (typeof deviceId !== 'string' || !deviceId.trim()) {
     throwIpcError('INVALID_PARAMS', 'deviceId is required');
   }
-  deps.closeLink(deviceId);
+  const normalizedDeviceId = deviceId.trim();
+  // 显式断开 = 撤回对该设备的控制需求。订阅引用表是全部重放入口(ws-online /
+  // presence 翻转 / 熔断恢复)共用的需求信号:不清的话,close 后任一恢复事件都会
+  // 带着幽灵引用经按需建链把刚关的链路建回来;被控端在 link 关闭时本就丢弃订阅,
+  // 这里让控制端账本与之对齐。清引用 + 清熔断 + 关链路,与「禁用设备控制」路径
+  // (setDeviceControlEnabled(false))的既有三连一致(review P2)。
+  resetSubscriptionRefcountForDevice(normalizedDeviceId);
+  deps.clearDeviceResponsiveness?.(normalizedDeviceId);
+  deps.closeLink(normalizedDeviceId);
   return { ok: true };
 }
 
@@ -764,14 +786,39 @@ async function mirrorCacheReadsBlocked(): Promise<boolean> {
   return hasPendingPurgeRecords();
 }
 
+/** 每个 main 进程随机生成:renderer 只需要等值令牌,不应获知 owner 的绝对存储路径。 */
+const MIRROR_CACHE_OWNER_TOKEN_SECRET = randomBytes(32);
+
+function ownerTokenForScope(scopeKey: string): string {
+  return createHash('sha256')
+    .update(MIRROR_CACHE_OWNER_TOKEN_SECRET)
+    .update('\0')
+    .update(scopeKey)
+    .digest('base64url');
+}
+
 /**
- * 缓存 owner 的身份标记 = owner 作用域路径本身(见 appSessionState.ownerScopedUserDataPath)。
- * 读路径要在**返回之前**再取一次比对:闸门等待 / 文件读期间账号边界可能已经走完,
- * 那时返回的既可能是上一个账号的明文,也可能是新账号的快照被交给旧账号发起的那次请求
- * (review: codex P1)。变了就当未命中。
+ * 缓存 owner 的 opaque 身份标记。读路径要在**返回之前**再取一次比对:闸门等待 / 文件读
+ * 期间账号边界可能已经走完,那时返回的既可能是上一个账号的明文,也可能是新账号的快照
+ * 被交给旧账号发起的那次请求(review: codex P1)。变了就当未命中。
  */
 function cacheOwnerToken(): string {
-  return ownerScopedUserDataPath('device-link-mirror-cache');
+  return ownerTokenForScope(activeOwnerScopeKey());
+}
+
+/**
+ * 所有异步读 / purge 检查完成后的**最后同步安全门**。调用后到返回 renderer 之间不允许再 await:
+ * scope token 挡 A→B→A(generation 每次 commit 都变化),readOwnerRoot 再绑定 store 实际读取的
+ * 命名空间,避免把中间账号的数据错配到首尾账号(review: Greptile P1 Security)。
+ */
+function finalMirrorCacheReadOwnerToken(
+  ownerTokenAtStart: string,
+  readOwnerRoot: string,
+): string | undefined {
+  const currentToken = cacheOwnerToken();
+  const currentRoot = ownerScopedUserDataPath('device-link-mirror-cache');
+  if (currentToken !== ownerTokenAtStart || readOwnerRoot !== currentRoot) return undefined;
+  return currentToken;
 }
 
 /**
@@ -781,6 +828,9 @@ function cacheOwnerToken(): string {
  * 真实 id 是 cuid / uuid 量级(≤ 64),给到 256 已经宽松得离谱。
  */
 const MIRROR_CACHE_MAX_ID_LENGTH = 256;
+
+/** opaque owner token 是 32-byte digest 的 base64url(43 字符);宽松上限防异常 renderer。 */
+const MIRROR_CACHE_MAX_OWNER_TOKEN_LENGTH = 128;
 
 function requireCacheId(value: unknown, name: string): string {
   const id = requireString(value, name);
@@ -794,7 +844,12 @@ export async function handleMirrorCacheGetMessages(
   cache: MirrorCache,
   deviceId: unknown,
   sessionId: unknown,
-): Promise<{ messages: Record<string, unknown>[]; invalidation?: number }> {
+): Promise<{
+  messages: Record<string, unknown>[];
+  invalidation?: number;
+  ownerToken?: string;
+  accountCounter?: number;
+}> {
   const device = requireCacheId(deviceId, 'deviceId');
   const session = requireCacheId(sessionId, 'sessionId');
   const owner = cacheOwnerToken();
@@ -805,10 +860,6 @@ export async function handleMirrorCacheGetMessages(
   }
   const read = await cache.readMessagesWithInvalidation(device, session);
   const messages = read.messages;
-  if (cacheOwnerToken() !== owner) {
-    log.warn('mirror cache read discarded: account boundary moved while reading');
-    return { messages: [] };
-  }
   // 读**之后**再复核一次待清状态:另一个共享 userData 的实例(或本进程里一次失败的清理)
   // 可能刚好在预检之后、读完成之前登记了待清 —— 那份正文已经被标记为"必须删掉",不能再交出去
   // (review: codex P1)。这是与 owner 复核并列的"返回前再验一次"。
@@ -816,9 +867,24 @@ export async function handleMirrorCacheGetMessages(
     log.warn('mirror cache read discarded: purge enqueued while reading');
     return { messages: [] };
   }
+  // 最后一个 await 已结束:从这里到 return 只做同步 owner/root 绑定,不再打开竞态窗口。
+  const ownerToken = finalMirrorCacheReadOwnerToken(owner, read.ownerRoot);
+  if (!ownerToken) {
+    log.warn('mirror cache read discarded: account boundary moved while reading');
+    return { messages: [] };
+  }
   // 带回**主进程侧**的会话级作废计数:renderer 缓存它,下一次写入用它当"我取到内容时的
   // 计数",于是另一个窗口 / 另一个进程的作废也能挡住这次写(review: codex P1)。
-  return { messages, invalidation: read.invalidation };
+  //
+  // 同时带回 opaque owner token 与账号代际计数:renderer 原样回传,写入侧在落盘前比对
+  // 「取到内容时的 owner」与「当前 owner」。绝不把 store 内部的绝对路径 `read.ownerRoot`
+  // 暴露给不可信 renderer(review: codex P2)。账号代际再区分同账号登出重登。
+  return {
+    messages,
+    invalidation: read.invalidation,
+    ownerToken,
+    accountCounter: read.accountCounter,
+  };
 }
 
 export async function handleMirrorCachePutMessages(
@@ -833,17 +899,45 @@ export async function handleMirrorCachePutMessages(
     tombstones?: readonly string[],
   ) => Promise<void> = enqueuePurge,
   expectedInvalidation?: unknown,
+  expectedOwnerToken?: unknown,
+  expectedAccountCounter?: unknown,
 ): Promise<{ ok: true; invalidation?: number }> {
   const device = requireCacheId(deviceId, 'deviceId');
   const session = requireCacheId(sessionId, 'sessionId');
   if (!Array.isArray(messages)) throwIpcError('INVALID_PARAMS', 'messages must be an array');
   const bounded = boundedItems(messages, MIRROR_CACHE_MAX_INBOUND_MESSAGES, 'messages');
   const expected =
-    typeof expectedInvalidation === 'number' && Number.isFinite(expectedInvalidation)
+    typeof expectedInvalidation === 'number'
+    && Number.isInteger(expectedInvalidation)
+    && expectedInvalidation >= 0
       ? expectedInvalidation
       : undefined;
+  // renderer 只回传 opaque token。main 用**当前 root 的 token**验证后才把内部 root 交给
+  // store;token 不匹配 / 超长一律按缺失,落到 store fail-closed。若验证后账号又切换,
+  // store 仍会用自己提交时捕获的 root 再比对一次,不会穿透边界(review: codex P2)。
+  const ownerRootAtHandler = ownerScopedUserDataPath('device-link-mirror-cache');
+  const expectedOwner =
+    typeof expectedOwnerToken === 'string'
+    && expectedOwnerToken.length > 0
+    && expectedOwnerToken.length <= MIRROR_CACHE_MAX_OWNER_TOKEN_LENGTH
+    && expectedOwnerToken === cacheOwnerToken()
+      ? ownerRootAtHandler
+      : undefined;
+  const expectedAccount =
+    typeof expectedAccountCounter === 'number'
+    && Number.isInteger(expectedAccountCounter)
+    && expectedAccountCounter >= 0
+      ? expectedAccountCounter
+      : undefined;
   try {
-    const result = await cache.writeMessages(device, session, bounded, expected);
+    const result = await cache.writeMessages(
+      device,
+      session,
+      bounded,
+      expected,
+      expectedOwner,
+      expectedAccount,
+    );
     return { ok: true, invalidation: result.invalidation };
   } catch (err) {
     // 空写(被控端 /clear、rewind、会话删除)删不掉旧文件时同样要能重试:
@@ -855,24 +949,30 @@ export async function handleMirrorCachePutMessages(
 
 export async function handleMirrorCacheGetSessionList(
   cache: MirrorCache,
-): Promise<{ devices: CachedDeviceSessions[] }> {
+): Promise<{ devices: CachedDeviceSessions[]; ownerToken?: string; accountCounter?: number }> {
   const owner = cacheOwnerToken();
   await awaitMirrorCacheReadGate();
   if (await mirrorCacheReadsBlocked()) {
     log.warn('mirror cache read suppressed: purge queue still has pending entries');
     return { devices: [] };
   }
-  const devices = await cache.readSessionList();
-  if (cacheOwnerToken() !== owner) {
-    log.warn('mirror cache read discarded: account boundary moved while reading');
-    return { devices: [] };
-  }
+  const read = await cache.readSessionListWithInvalidation();
   // 同 messages:读完再复核待清状态(见那边的说明)。
   if (await mirrorCacheReadsBlocked()) {
     log.warn('mirror cache read discarded: purge enqueued while reading');
     return { devices: [] };
   }
-  return { devices };
+  const ownerToken = finalMirrorCacheReadOwnerToken(owner, read.ownerRoot);
+  if (!ownerToken) {
+    log.warn('mirror cache read discarded: account boundary moved while reading');
+    return { devices: [] };
+  }
+  // 同 messages:只带 opaque owner token 与账号代际;store 的绝对路径不跨 renderer 边界。
+  return {
+    devices: read.devices,
+    ownerToken,
+    accountCounter: read.accountCounter,
+  };
 }
 
 export async function handleMirrorCachePutSessionList(
@@ -884,6 +984,8 @@ export async function handleMirrorCachePutSessionList(
     barriers?: readonly string[],
     tombstones?: readonly string[],
   ) => Promise<void> = enqueuePurge,
+  expectedOwnerToken?: unknown,
+  expectedAccountCounter?: unknown,
 ): Promise<{ ok: true }> {
   if (!Array.isArray(devices)) throwIpcError('INVALID_PARAMS', 'devices must be an array');
   // 先把外层数组截断,再逐台把 sessions 截断,最后对整批做结构 / 字节预算。
@@ -904,9 +1006,25 @@ export async function handleMirrorCachePutSessionList(
         : [],
     };
   });
+  const ownerRootAtHandler = ownerScopedUserDataPath('device-link-mirror-cache');
+  const expectedOwner =
+    typeof expectedOwnerToken === 'string'
+    && expectedOwnerToken.length > 0
+    && expectedOwnerToken.length <= MIRROR_CACHE_MAX_OWNER_TOKEN_LENGTH
+    && expectedOwnerToken === cacheOwnerToken()
+      ? ownerRootAtHandler
+      : undefined;
+  const expectedAccount =
+    typeof expectedAccountCounter === 'number'
+    && Number.isInteger(expectedAccountCounter)
+    && expectedAccountCounter >= 0
+      ? expectedAccountCounter
+      : undefined;
   try {
     await cache.writeSessionList(
       boundedItems(trimmed, MIRROR_CACHE_MAX_INBOUND_DEVICES, 'session-list'),
+      expectedOwner,
+      expectedAccount,
     );
   } catch (err) {
     // 快照写空(最后一台设备离场)或清理期间的补偿删除失败时,盘上会留着本该消失的设备
@@ -1118,6 +1236,8 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       sessionId?: unknown;
       messages?: unknown;
       expectedInvalidation?: unknown;
+      expectedOwnerToken?: unknown;
+      expectedAccountCounter?: unknown;
     };
     return handleMirrorCachePutMessages(
       getMirrorCache(),
@@ -1126,6 +1246,8 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       p.messages,
       undefined,
       p.expectedInvalidation,
+      p.expectedOwnerToken,
+      p.expectedAccountCounter,
     );
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST, (e) => {
@@ -1136,8 +1258,18 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
   ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_PUT_SESSION_LIST, (e, payload: unknown) => {
     assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
-    const p = (payload ?? {}) as { devices?: unknown };
-    return handleMirrorCachePutSessionList(getMirrorCache(), p.devices);
+    const p = (payload ?? {}) as {
+      devices?: unknown;
+      expectedOwnerToken?: unknown;
+      expectedAccountCounter?: unknown;
+    };
+    return handleMirrorCachePutSessionList(
+      getMirrorCache(),
+      p.devices,
+      undefined,
+      p.expectedOwnerToken,
+      p.expectedAccountCounter,
+    );
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, (e, payload: unknown) => {
     assertTrustedAppRendererEvent(e);

@@ -59,6 +59,11 @@ export {
 } from './transform.js';
 export { createThreadStripController } from './thread-strip-controller.js';
 export type { ThreadStripController } from './thread-strip-controller.js';
+export {
+  collectToolUseIdsForResponseRewrite,
+  ToolUseIdDedupeRewriter,
+  ToolUseIdRewriteTransform,
+} from './tool-use-id-stream-rewrite.js';
 export type {
   InstructionsInjectionTransformOptions,
   InstructionsRegistry,

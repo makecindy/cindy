@@ -16,6 +16,7 @@ import { McpServersSection } from './McpServersSection';
 import { RemoteControlSection } from './RemoteControlSection';
 import { NotificationSection } from './NotificationSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
+import { ComposerSendShortcutSection } from './ComposerSendShortcutSection';
 import { KeyboardShortcutsSection } from './KeyboardShortcutsSection';
 import { AgentIslandSection } from './AgentIslandSection';
 import { LanguageSection } from './LanguageSection';
@@ -27,6 +28,7 @@ import { MemorySection } from './MemorySection';
 import { CompactionSection } from './CompactionSection';
 import { TerminalShellSection } from './TerminalShellSection';
 import { LinkOpenSection } from './LinkOpenSection';
+import { StreamFadeSection } from './StreamFadeSection';
 import { TipsSection } from './TipsSection';
 import { ExperimentalSection } from './ExperimentalSection';
 import { GitSafetySection } from './GitSafetySection';
@@ -88,6 +90,9 @@ export function SettingsView() {
     if (rawTab !== 'billing' || canAccessBilling) return;
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
+    // 计费页不可见时它的深链意图(intent=topup)也一并作废,不留在 URL 上等着
+    // 用户切到别的 tab 再被误消费。
+    next.delete('intent');
     setSearchParams(next, { replace: true });
   }, [canAccessBilling, rawTab, searchParams, setSearchParams]);
 
@@ -117,9 +122,11 @@ export function SettingsView() {
       next.delete('ghost');
       next.delete('imGroup');
       next.delete('section');
-      // providers 页深链参数(connect/wizard):切走 tab 即作废,防再切回来被误消费。
+      // providers 页深链参数(connect/wizard)与计费页深链参数(intent):切走 tab 即
+      // 作废,防再切回来被误消费。
       next.delete('connect');
       next.delete('wizard');
+      next.delete('intent');
       if (tab === 'general') {
         next.delete('tab');
       } else {
@@ -292,6 +299,15 @@ export function SettingsView() {
                   <WindowBehaviorSection />
                 </section>
 
+                {/* Section — Composer send shortcut (应用级、本地输入偏好)。 */}
+                <section
+                  id="settings-composer"
+                  className="py-[18px]"
+                  aria-label={t('settings.sections.composer')}
+                >
+                  <ComposerSendShortcutSection />
+                </section>
+
                 {/* Section — Experimental (py 18)
                     内部按 EXPERIMENTAL_FEATURES 注册表渲染; admin-only 项对非 admin 用户
                     自动跳过。如果当前没有任何可见 feature, ExperimentalSection 自身返回 null,
@@ -381,6 +397,10 @@ export function SettingsView() {
                 {/* 消息流链接/HTML 文件左键的默认打开位置(内置侧边栏 / 系统浏览器) */}
                 <section className="pb-[18px]" aria-label={t('settings.sections.linkOpen')}>
                   <LinkOpenSection />
+                </section>
+                {/* 流式输出淡入动效开关(默认开;reduced-motion 时无条件关) */}
+                <section className="pb-[18px]" aria-label={t('settings.sections.streamFade')}>
+                  <StreamFadeSection />
                 </section>
                 {/* "小技巧" section —— TipsSection 内部把多个功能性 cell
                     (SilentEncryptedRetryCell / ChatEmbeddingCell) 装在一个共享灰底 container,

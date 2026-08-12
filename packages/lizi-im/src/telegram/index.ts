@@ -44,7 +44,7 @@ import {
 } from './api.js';
 import { chunkTelegramSource } from './chunk.js';
 import { decodeLaneUserId, decodeMessageId, encodeLaneUserId, encodeMessageId } from './codec.js';
-import { buildCardPayload, parseCallbackQuery } from './components.js';
+import { buildCardPayload, hasLiveCallbackToken, parseCallbackQuery } from './components.js';
 import {
   detectGroupTrigger,
   groupWindowEntryOf,
@@ -53,10 +53,17 @@ import {
   type TelegramGroupWindowEntry,
 } from './inbound.js';
 import { markdownToTelegramHtml, stripTelegramHtmlTags } from './markdown.js';
+import { TELEGRAM_PERSONAL_CAPABILITIES } from './presentationCapabilities.js';
+import {
+  EXPRESSIVE_DONE_POOL,
+  EXPRESSIVE_ERROR_POOL,
+  pickExpressiveReaction,
+} from './reactionPool.js';
 import { startTelegramStreaming } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'telegram-owner-user-id';
+
 /** 历史遗留 key(上下线播报机制已移除), disconnect 时顺手清掉。 */
 const LEGACY_RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
 /**
@@ -78,23 +85,64 @@ const POLL_TIMEOUT_SEC = 50;
  * 同一批 getUpdates 里到齐; 静默 1s 后合并成单个事件, 不各起一轮 turn。
  */
 const ALBUM_SETTLE_MS = 1_000;
+/**
+ * 超过该时限的消息视为「离线期积压重放」, 不再起 turn。
+ *
+ * Telegram 会替离线的 bot 保留最长 24h 的 update, 一上线整批推来。官方 bot
+ * 服务端为此设了 10 分钟闸(2026-07-27 实踩: 上线后整批历史消息被诈尸回复,
+ * 半夜给离线桌面派了过期任务), 个人 bot 此前一道闸都没有 —— 而它跑在桌面端,
+ * 天天关机开机, 暴露面比常驻服务端大得多。
+ *
+ * 阈值比官方宽是**有意的**: 服务端离线 = 故障, 桌面关机 = 预期状态。用户合上
+ * 电脑一小时再打开, 那条正等回复的消息仍然该被处理; 但跨夜、跨半天的整批积压
+ * 用户早已不在等, 逐条回答只会刷屏并派出过期任务。
+ */
+const STALE_MESSAGE_MS = 60 * 60 * 1_000;
 const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
 /** 409 = 另一个进程在对同一 token 轮询 — 低频探测等它退出。 */
 const POLL_CONFLICT_RETRY_MS = 30_000;
+/**
+ * 429 没给 `retry_after`(或给了非法值)时的兜底退避。**只用于兜底** —— 合法值
+ * 一律按服务端给的全长等, 不设上限: 任何上限都等于在 flood 窗口结束前提前重试,
+ * 那次重试必然再 429, 终稿于是又丢一次(bot-wide flood 的 retry_after 可以远超
+ * 一分钟)。不设上限是安全的, 因为这个等待绑定了连接生命周期取消源(见
+ * outboundAbortSignal), dispose / 下线 / 重连会立刻把它收口。
+ */
+const RETRY_AFTER_FALLBACK_MS = 3_000;
+
+/** 429 退避时长: 合法 `retry_after` 原样采用, 缺失或非法(NaN / ≤0 / 非有限)走兜底。 */
+function retryAfterWaitMs(retryAfterSec: number | undefined): number {
+  if (typeof retryAfterSec !== 'number') return RETRY_AFTER_FALLBACK_MS;
+  if (!Number.isFinite(retryAfterSec) || retryAfterSec <= 0) return RETRY_AFTER_FALLBACK_MS;
+  return retryAfterSec * 1000;
+}
 const MAX_OUTBOUND_FILE_BYTES = 50 * 1024 * 1024;
 const OWNER_NOTICE_TIMEOUT_MS = 4_500;
-/** typing 状态原生只持续 ~5s — 按 4.5s 续命直到首条真实消息发出。 */
-const TYPING_REFRESH_MS = 4_500;
-/** typing 循环兜底上限(turn 异常悬挂时不无限打 API)。 */
-const TYPING_LOOP_MAX_MS = 5 * 60_000;
+/**
+ * typing 续命间隔/上限:引用呈现能力契约的**单一出处**(#1855 L1),不再本地
+ * 硬编码 —— 与 desktop turnPresenter re-export 的 PERSONAL_DRIVER_CAPABILITIES 同源。
+ * (原生 typing 只持续 ~5s,按 keepaliveMs 续命;keepaliveMaxMs 是异常悬挂兜底上限。)
+ */
+const TYPING_REFRESH_MS = TELEGRAM_PERSONAL_CAPABILITIES.typingKeepaliveMs;
+const TYPING_LOOP_MAX_MS = TELEGRAM_PERSONAL_CAPABILITIES.typingKeepaliveMaxMs;
+/**
+ * link preview 关闭,取自能力契约单一出处(见 `linkPreviewDisabled`)。
+ *
+ * **覆盖面是答案这条路,不是全部出站**(原注释写的"全档出站/编辑共用"不准确):
+ * 正文/过程消息的 `sendMessage`、400 回落的纯文本 `sendMessage`、分段
+ * `sendPlainChunked`、`editMessageText` 及其 HTML 解析失败后的纯文本回落 —— 只有
+ * 这五处带它。**卡片消息、rich 主路径(`rich_message` payload)、陌生人提示、主人
+ * 通知都不带**。新增出站路径时自己决定挂不挂, 不会被这个常量自动覆盖。
+ */
+const LINK_PREVIEW_OPTIONS = {
+  is_disabled: TELEGRAM_PERSONAL_CAPABILITIES.linkPreviewDisabled,
+} as const;
 const SECRET_WRITE_FAILED_REASON = '无法安全保存凭证(系统安全存储不可用)';
 const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
 
 /** 非 owner 显式召唤(私聊/群 @/reply)的礼貌回应 — per-user 冷却防刷屏。 */
 const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
-/** DM 定稿的 message_effect_id(官方公开的标准特效 id, 👍; 仅私聊生效)。 */
-const DM_DONE_EFFECT_ID = '5107584321108051014';
 const DEFAULT_STRANGER_NOTICE =
   '👋 我是一位主人的个人 Cindy 助理，只响应主人本人的指令~\nI am a personal Cindy assistant and only respond to my owner.';
 
@@ -111,6 +159,67 @@ type MessageHandler = (e: IMMessageEvent) => void;
 type CardActionHandler = (e: IMCardActionEvent) => void;
 type StatusHandler = (s: IMStatus) => void;
 type GroupWindowHandler = (entry: TelegramGroupWindowEntry) => void;
+
+/**
+ * 回挂目标的请求级凭据: 记住本次出站真正带上的那个目标身份。
+ * null = 本次没挂回(无需提交)。提交必须凭它校身份, 不能按 userId 当前槽位盲删。
+ */
+type ReplyTargetLease = { userId: string; messageId: string } | null;
+
+/**
+ * 流式回合的身份快照(建 handle 时拍下)。终稿补送必须绑定它 —— 补送是一次**全新**
+ * 的 callSend, 会按"当前"世代重新取 api, 所以旧回合的 429 退避即使正确放弃了,
+ * 补送仍可能把旧回合的完整答案发出去。
+ */
+interface StreamRoundIdentity {
+  /** 配置世代(换 token / 换 owner / disconnect / dispose 都会 +1)。 */
+  generation: number;
+  /** 建 handle 时的 api 客户端身份 —— 重连换了客户端就不是同一回合。 */
+  api: TelegramApiClient | null;
+  /**
+   * 建 handle 时的主人。只换 owner 不换 token 的那条分支不会 stopPolling,
+   * **api 对象完全不变**, 只有这个字段(与 generation)能识别出授权已经易主。
+   */
+  ownerUserId: string;
+  /** 本轮回挂目标(此刻还没被任何出站消耗)。 */
+  replyTargetId: string | null;
+}
+
+type TelegramReplyParams =
+  | { reply_parameters: { message_id: number; allow_sending_without_reply: true } }
+  | Record<string, never>;
+
+/** 回挂目标 id → 出站请求参数; null/空 = 不挂回。 */
+function replyParamsFor(targetId: string | null | undefined): TelegramReplyParams {
+  if (!targetId) return {};
+  return { reply_parameters: { message_id: Number(targetId), allow_sending_without_reply: true } };
+}
+
+/**
+ * 队列里是否存在比 current 更新的触发消息 —— Telegram 同一 chat 内 message_id
+ * 单调递增, 因此更大的 id 就意味着槽位里那个已经过时。
+ * current 解不出数字(不应发生)时不阴拦领取。
+ */
+function hasNewerTrigger(queue: Array<{ id: string }>, current: string): boolean {
+  const currentId = Number(current);
+  if (!Number.isFinite(currentId)) return true;
+  return queue.some((entry) => Number(entry.id) > currentId);
+}
+
+/**
+ * 调用方给的「本轮触发消息」编码 id → 同群的原生 message_id(给私聊授权卡拼深链)。
+ *
+ * 解不开、或解出来属于**别的 chat** 时返回 null(不渲染深链): 链到别的会话比没有链更糟。
+ */
+function sourceMessageIdIn(chatId: string, encoded: string | undefined): string | null {
+  if (encoded === undefined) return null;
+  try {
+    const decoded = decodeMessageId(encoded);
+    return decoded.chatId === chatId ? decoded.messageId : null;
+  } catch {
+    return null;
+  }
+}
 
 /** settle 缓冲/处理中的相册(见 albumsInFlight 注释)。 */
 interface PendingAlbum {
@@ -153,22 +262,6 @@ export const TELEGRAM_DEFAULT_BEHAVIOR: TelegramBehaviorConfig = {
   replyQuoteDm: 'off',
 };
 
-/**
- * 生动档变体池 — Telegram bot 可用标准 reaction 全集按语义分池(Chris:
- * 能用的都随便用)。正/负分开是底线: 成功不能随机出 💩/🤡。选中表情在该
- * 群被限制时(available_reactions), setMessageReaction 会 400 — 回落基础款
- * 重试一次。
- */
-const EXPRESSIVE_DONE_POOL = [
-  '👍', '❤', '🔥', '🥰', '👏', '😁', '🎉', '🤩', '🙏', '👌',
-  '😍', '❤‍🔥', '💯', '🤣', '⚡', '🏆', '🍾', '🤗', '🫡', '😇',
-  '🤝', '💅', '🆒', '💘', '😎', '🦄', '🕊', '🐳', '🍓', '💋',
-  '😘', '🎃', '👾', '🍌', '🌭',
-] as const;
-const EXPRESSIVE_ERROR_POOL = [
-  '👎', '😱', '😢', '💔', '😨', '🤯', '🥴', '🙈', '😐', '🗿',
-] as const;
-
 export interface TelegramIMOptions {
   /** cindy-media:// / xdt-image:// → 本地绝对路径(出站图片上传用)。 */
   resolveImageUrl?: (url: string) => string;
@@ -203,12 +296,18 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private ownerUserId = '';
   private configVersion = 0;
   private pollAbort: AbortController | null = null;
+  /**
+   * 实例级取消源(dispose 时 abort)。pollAbort 只覆盖"正在轮询"的时段, 而出站也
+   * 会发生在连接建立中与下线收尾这类没有轮询的窗口 —— 那时退避等待要靠这个收口。
+   *
+   * **不可 readonly**: 同一实例支持 dispose → init 复用(退出登录再登录, init 里
+   * 就有 `this.disposing = false`)。一次性的控制器 abort 之后永远是 aborted 态,
+   * 新世代的每次退避都会当场判定"已停止"而跳过重试 —— 等于把 429 重试永久关掉。
+   * 由 resetLifetimeAbort() 在新 init 世代重建。
+   */
+  private lifetimeAbort = new AbortController();
   private pollLoop: Promise<void> | null = null;
   private disposing = false;
-  /** DM 流式草稿的 draft_id 单调计数(非零; 同 id 连续更新触发客户端动画)。 */
-  private draftIdCounter = 0;
-  /** sendMessageDraft 能力性失败后的永久 latch(本实例生命周期内)。 */
-  private draftStreamingDisabled = false;
   /** sendRichMessage 方法不可用(404)后的永久 latch(本实例生命周期内)。 */
   private richSendDisabled = false;
   private readonly mediaDir: string;
@@ -244,6 +343,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private readonly pendingReplyTargets = new Map<string, Array<{ id: string; at: number }>>();
   /** 当前轮的回挂目标(claimTurnReplyTarget 领取; 'first' 用后即耗, 'all' 整轮保留)。 */
   private readonly turnReplyTargets = new Map<string, string>();
+  /**
+   * 活动流式回合计数(userId → 未收口的 handle 数) —— 回挂目标槽位的**归属权**。
+   *
+   * 为何必需: A 回合正在流式输出时, B 消息到达会入队并立即发一条排队提示
+   * (turnRunner 的 notifyQueuedPosition → sendMarkdownText)。若让那条独立出站按「队列
+   * 里有更新的 id」接管槽位, A 剩下的 sendRenderedChunk 会改挂到 B 上 —— 群 'all'
+   * 档要求目标整轮不变, 而「队列里有更新的消息」并不证明 A 已被放弃。
+   * 所以领取要看归属: 回合活着就由它持有, 收口(finalize/close)后才允许替换。
+   */
+  private readonly activeStreamRounds = new Map<string, number>();
   /** 非 owner 礼貌回应的 per-user 冷却(userId → 上次回应 ts)。 */
   private readonly strangerNoticeAt = new Map<string, number>();
   /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
@@ -269,6 +378,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   async init(): Promise<void> {
     this.disposing = false;
+    this.resetLifetimeAbort();
     const tokenResult = this.secretReadResult(TOKEN_SECRET_KEY);
     if (tokenResult.kind === 'error') {
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
@@ -385,6 +495,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   // 生命周期静默: dispose / 重连不向 owner 发任何播报(桌面端频繁重启会刷屏)。
   async dispose(): Promise<void> {
     this.disposing = true;
+    // 在途的 429 退避等待就此收口 —— 否则一个最长一分钟的定时器会活过 dispose。
+    this.lifetimeAbort.abort();
     this.configVersion += 1;
     this.clearAllTypingLoops();
     // 回挂配对是连接期内存态 — 换代/断开后旧目标一律作废, 不跨代错配。
@@ -618,17 +730,66 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   async sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
+    opts?: {
+      threadTs?: string;
+      deliverToOwnerDm?: boolean;
+      ownerDmNote?: string;
+      ownerDmSourceMessageId?: string;
+    },
   ): Promise<{ messageId: string }> {
+    // **只有授权类卡片**转宿主私聊(调用方用 deliverToOwnerDm 点名): 群里的授权卡消不掉,
+    // 且只有 owner 能回答它。命令卡 / 会话选择卡(/ctr 等)不传这个开关 —— 它们的回调必须
+    // 落在原群 lane, 否则 exitControl 释放的是宿主私聊那把锁而不是原群锁。
+    // owner 未知时(理论上不该发生: 群 lane 的触发条件本身就是 owner @bot / reply)保持原
+    // lane 投递, 不吞掉这次交互。
+    const groupLane =
+      opts?.deliverToOwnerDm === true && this.ownerUserId ? decodeLaneUserId(userId) : null;
+    if (groupLane) {
+      // 来源深链只认调用方给的那条触发消息 id —— 只有它知道这张卡属于哪一轮业务 turn。
+      // 传输层能看到的两个信号都不等于业务轮次: 回挂目标在 'first' 档发出首条回复即被
+      // consumeReplyParams 消耗, 而调用方在发卡前会主动收口流式 handle(turnRunner 的
+      // finalizeActiveStream), 所以"有活动流式回合"同样为假。宁可不渲染深链, 不猜。
+      const link = groupMessageLink(
+        groupLane.chatId,
+        sourceMessageIdIn(groupLane.chatId, opts?.ownerDmSourceMessageId),
+      );
+      // 卡片不再发到群里 —— callSend 只停它自己那条 chat 的 typing loop(这里是宿主私聊),
+      // 群里那条会继续每 4.5s 打一次 sendChatAction, 于是群里一直显示「正在输入…」。
+      // 手动停掉原群的那条(review 指出的回归)。
+      this.stopTypingLoopsForChat(groupLane.chatId);
+      // 说明文案由调用方给(传输层不造用户可见措辞); 深链是 URL 不是文案, 在这里拼。
+      const notice = [opts?.ownerDmNote, link].filter((line) => line).join('\n');
+      const { html, replyMarkup } = buildCardPayload({
+        ...spec,
+        body: notice.length > 0 ? `${notice}\n\n${spec.body}` : spec.body,
+      });
+      const sent = await this.callSend<TgMessage>('sendMessage', {
+        chat_id: this.ownerUserId,
+        text: html,
+        parse_mode: 'HTML',
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      });
+      // 刻意不动群 lane 的回挂目标: 那条触发消息在私聊里不存在, 消耗掉还会让本轮真正的
+      // 回答失去引用。回声按**实际落地**的私聊维度记, 否则群窗口会以为 bot 在群里说过这段。
+      this.recordOwnEcho(
+        this.ownerUserId,
+        spec.title ? `[${spec.title}]` : spec.body.slice(0, 100),
+        sent,
+      );
+      return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
+    }
     this.claimTurnReplyTargetIfIdle(userId);
     const target = this.targetOf(userId);
     const { html, replyMarkup } = buildCardPayload(spec);
+    const { params: replyParams, lease } = this.leaseReplyTarget(userId);
     const sent = await this.callSend<TgMessage>('sendMessage', {
       ...target,
-      ...this.consumeReplyParams(userId),
+      ...replyParams,
       text: html,
       parse_mode: 'HTML',
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
+    this.commitReplyTarget(lease);
     this.recordOwnEcho(userId, spec.title ? `[${spec.title}]` : spec.body.slice(0, 100), sent);
     return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
   }
@@ -646,59 +807,109 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   async startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
-    // DM(非 lane 合成 id)走 sendMessageDraft 原生流式草稿: turn 开始即原生
-    // "Thinking…" 占位动画, 中间态无真实消息、定稿才落聊天记录(#848 的
-    // answerOnly 补丁由该通道取代; draft 一旦失败 handle 内部 latch 回
-    // send+edit 经典路径, 且本实例后续 turn 不再尝试 draft)。
-    const isDm = decodeLaneUserId(userId) === null;
-    // 一轮输出开始: 从待配对队列领取本轮的回挂目标(见 claimTurnReplyTarget)。
+    // DM 与群/topic 共用同一条流式呈现: send + editMessageText 覆盖同一条
+    // 消息, 过程区(工具时间线)与正文一起原地刷新；定稿始终新发，避免最终答案
+    // 被过程载体的迟到更新或群 relay 替换。
+    // 私聊曾走 sendMessageDraft 草稿通道 —— 草稿只能承载一行纯文本, 工具调用
+    // 在私聊里因此整体不可见, 与群聊形成两套体验(Chris 2026-08 点名);
+    // 呈现规则不再按 DM / 群分叉。
+    // 一轮输出开始: 从待配对队列领取本轮的回挂目标(见 claimTurnReplyTarget), 并占住
+    // 槽位归属直到本回合收口 —— 期间的排队提示等独立出站不得把它改向新消息。
     this.claimTurnReplyTarget(userId);
-    const useDraft = isDm && !this.draftStreamingDisabled;
-    if (useDraft) this.draftIdCounter += 1;
-    const draftId = this.draftIdCounter;
+    this.beginStreamRound(userId);
+    return this.startTrackedStreaming(userId, initial);
+  }
+
+  private async startTrackedStreaming(
+    userId: string,
+    initial?: string,
+  ): Promise<StreamingTextHandle> {
+    try {
+      const handle = await this.createStreamingHandle(userId, initial);
+      return this.trackStreamRound(userId, handle);
+    } catch (err) {
+      // 建 handle 就失败 → 本回合没有 finalize/close 可依靠, 当场退归属, 否则槽位
+      // 会被一个不存在的回合永久锁住。
+      this.endStreamRound(userId);
+      throw err;
+    }
+  }
+
+  private createStreamingHandle(
+    userId: string,
+    initial?: string,
+  ): Promise<StreamingTextHandle> {
+    // 建 handle 时拍下本轮身份。回挂目标此刻还没被任何出站消耗
+    // (claimTurnReplyTarget 刚领完) —— 'first' 档下过程消息一发就把槽位耗掉了,
+    // 补送若重新 lease 会拿到空目标, 那条答案在群里就脱离了提问脉络。
+    const round: StreamRoundIdentity = {
+      generation: this.configVersion,
+      api: this.api,
+      ownerUserId: this.ownerUserId,
+      replyTargetId: this.turnReplyTargets.get(userId) ?? null,
+    };
     return startTelegramStreaming(
       {
+        // 本轮**每一个**触达 Telegram 的出站入口都先核验回合身份 —— 一个不漏。
+        // 逐个核验不可省成"补送时查一次": 换 owner 可能发生在任意一次 await 之后,
+        // 而 owner-only 变更**不换 api 客户端**, 剩下的出站照样能成功。
+        // 覆盖面: send / repost(HTML 新消息) / sendFinal(Rich 新消息)、edit(过程
+        // 载体)、deleteMessage
+        // (失权后连清理都不该再碰对方的聊天)、uploadImages(内部逐次再核验)。
+        // 正常轮次里这些核验恒为空操作。
         send: async (markdown) => {
+          this.assertRoundStillLive(round);
           const { messageId } = await this.sendRenderedChunk(userId, markdown);
           return messageId;
         },
+        repost: async (markdown) => {
+          // 核验必须在发之前: 补送是全新的 callSend, 按当前世代重新取 api —— 换
+          // owner 那条分支不 stopPolling、api 对象不变, 于是旧回合的答案会照发给
+          // **已失去授权的旧 userId**。核验失败就抛, 由 finalize 抛回原始编辑错误。
+          this.assertRoundStillLive(round);
+          const { messageId } = await this.sendRenderedChunk(
+            userId,
+            markdown,
+            round.replyTargetId,
+          );
+          return messageId;
+        },
         edit: async (messageId, markdown) => {
+          this.assertRoundStillLive(round);
           const { chatId, messageId: nativeId } = decodeMessageId(messageId);
           const { html } = markdownToTelegramHtml(markdown);
           await this.editHtml(chatId, nativeId, html, undefined);
         },
-        uploadImages: (messageId, imageUrls) => this.uploadImages(messageId, imageUrls),
+        uploadImages: async (messageId, imageUrls, imageOpts) => {
+          // 图片是多次真实出站(分组 sendMediaGroup、整组失败回落逐张 sendPhoto),
+          // 每次之间都有 await —— 所以核验要下沉到每次调用前, 只在批次开头查一次
+          // 挡不住"第一组传完才换主人"这个窗口。
+          this.assertRoundStillLive(round);
+          await this.uploadImages(
+            messageId,
+            imageUrls,
+            () => this.assertRoundStillLive(round),
+            imageOpts,
+          );
+        },
         chunk: chunkTelegramSource,
         extractImageUrls: (markdown) => markdownToTelegramHtml(markdown).imageUrls,
-        editFinal: (messageId, markdown) => this.richEditFinal(messageId, markdown),
+        sendFinal: async (markdown, reuseReplyTarget) => {
+          this.assertRoundStillLive(round);
+          return this.sendRichFinal(
+            userId,
+            markdown,
+            reuseReplyTarget ? round.replyTargetId : undefined,
+          );
+        },
         deleteMessage: async (messageId) => {
+          this.assertRoundStillLive(round);
           const { chatId, messageId: nativeId } = decodeMessageId(messageId);
           await this.requireApi().call('deleteMessage', {
             chat_id: chatId,
             message_id: Number(nativeId),
           });
         },
-        ...(useDraft
-          ? {
-              sendFinal: (markdown: string) => this.sendRichFinal(userId, markdown),
-              sendDraft: async (plainText: string) => {
-                try {
-                  await this.requireApi().call('sendMessageDraft', {
-                    chat_id: Number(userId),
-                    draft_id: draftId,
-                    text: plainText,
-                  });
-                } catch (err) {
-                  // 能力性失败(旧 Bot API server / 客户端不支持)永久 latch,
-                  // 不再逐 turn 白付一次往返; 瞬时失败(限流等)只影响本 turn。
-                  if (err instanceof TelegramApiError && err.errorCode === 400) {
-                    this.draftStreamingDisabled = true;
-                  }
-                  throw err;
-                }
-              },
-            }
-          : {}),
       },
       initial,
     );
@@ -747,10 +958,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (behavior.emojiReactions === 'expressive') {
         // 终态用变体池(生动档); ack(👀)保持稳重不随机。
         if (emoji === '👍') {
-          effective = EXPRESSIVE_DONE_POOL[Math.floor(Math.random() * EXPRESSIVE_DONE_POOL.length)];
+          effective = pickExpressiveReaction(EXPRESSIVE_DONE_POOL);
         } else if (emoji === '👎') {
-          effective =
-            EXPRESSIVE_ERROR_POOL[Math.floor(Math.random() * EXPRESSIVE_ERROR_POOL.length)];
+          effective = pickExpressiveReaction(EXPRESSIVE_ERROR_POOL);
         }
       }
       const { chatId, messageId: nativeId } = decodeMessageId(messageId);
@@ -1018,7 +1228,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 相册成员先入群窗口(逐条, 幂等), turn 触发交给聚合器合并处理。
     if (m.media_group_id) {
       if (m.chat.type === 'group' || m.chat.type === 'supergroup') {
-        this.emitGroupWindow(groupWindowEntryOf(m));
+        this.emitGroupWindow(groupWindowEntryOf(m), m);
       }
       this.bufferAlbumMessage(m, update.update_id);
       return;
@@ -1103,13 +1313,38 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.albumsInFlight.clear();
   }
 
+  /**
+   * 返回消息超龄的毫秒数; 未超龄、或时间戳缺失/不可信时返回 null(按新鲜处理)。
+   *
+   * 缺时间戳时选择放行而非拦截: 拦错等于吞掉用户当下发的消息, 比多回一条
+   * 陈旧消息严重得多。
+   */
+  private staleMessageAgeMs(m: TgMessage): number | null {
+    if (!Number.isFinite(m.date) || m.date <= 0) return null;
+    const age = Date.now() - m.date * 1_000;
+    return age > STALE_MESSAGE_MS ? age : null;
+  }
+
+  /** 只记录时长与 Telegram 侧序号 — 不写用户内容, 也不写 chat / user id。 */
+  private logStaleSkip(ageMs: number, chatType: string, messageId: number): void {
+    this.log.info(
+      `telegram stale message skipped (${Math.round(ageMs / 1_000)}s old ${chatType} message=${messageId})`,
+    );
+  }
+
   private async processInboundMessage(
     m: TgMessage,
     siblings: TgMessage[] = [],
     opts: { skipGroupWindow?: boolean } = {},
   ): Promise<void> {
     if (!m.from) return;
+    const staleFor = this.staleMessageAgeMs(m);
     if (m.chat.type === 'private') {
+      if (staleFor !== null) {
+        // 陌生人提示也一并跳过 —— 隔夜再回一句「我不认识你」同样是诈尸。
+        this.logStaleSkip(staleFor, 'private', m.message_id);
+        return;
+      }
       if (String(m.from.id) !== this.ownerUserId) {
         // 非 owner 私聊: 礼貌回应一句(官方 bot unbound 提示的个人版语义),
         // per-user 冷却防刷屏; 不进任何业务链路。
@@ -1130,8 +1365,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (this.behaviorOf().replyQuoteDm === 'first') {
         this.queueReplyTarget(String(m.from.id), String(m.message_id));
       }
-      // DM 也要 typing: 草稿占位只在会话内部可见, 聊天列表/标题栏的
-      // 「正在输入…」靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
+      // DM 也要 typing: 首条真实消息落地前, 聊天列表/标题栏的「正在输入…」
+      // 是唯一反馈, 靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
       this.startTypingLoop(String(m.chat.id));
       this.emitMessage(event);
       return;
@@ -1141,7 +1376,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // 每条群消息(触发与否)都进本地窗口 — 群上下文的数据面。相册成员在
       // 缓冲入口已逐条入窗, 这里跳过避免重复(入窗本身幂等, 跳过纯省一次写)。
       if (!opts.skipGroupWindow) {
-        this.emitGroupWindow(groupWindowEntryOf(m));
+        this.emitGroupWindow(groupWindowEntryOf(m), m);
+      }
+      // 群消息的历史价值与「该不该现在回答」是两件事: 上面照常入窗(数据面),
+      // 这里只拦 turn 触发 —— 隔夜的 @ 不再唤起一轮回答。
+      if (staleFor !== null) {
+        this.logStaleSkip(staleFor, m.chat.type, m.message_id);
+        return;
       }
 
       let trigger = detectGroupTrigger(m, this.botId, this.botUsername, this.botDisplayName);
@@ -1221,17 +1462,40 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private async handleCallbackQuery(q: import('./api.js').TgCallbackQuery): Promise<void> {
     const api = this.api;
     if (!api) return;
-    // 无论结果如何都先应答, 消掉客户端 loading 态。
-    void api.call('answerCallbackQuery', { callback_query_id: q.id }).catch(() => undefined);
-    if (String(q.from.id) !== this.ownerUserId) return;
-    const event = parseCallbackQuery(q);
-    if (!event) {
-      const notice = this.opts.expiredCardNotice ?? DEFAULT_EXPIRED_CARD_NOTICE;
+    // 应答只有一次机会: 同一个 callback_query_id 二次 answer 会被 Telegram 拒掉。
+    // 先无条件发一次空 answer 消 loading, 会把后面那条「已过期」alert 一起吞掉 ——
+    // 分支决定这唯一一次应答带不带提示。
+    const answer = (extra?: Record<string, unknown>): void => {
       void api
-        .call('answerCallbackQuery', { callback_query_id: q.id, text: notice, show_alert: true })
+        .call('answerCallbackQuery', { callback_query_id: q.id, ...extra })
         .catch(() => undefined);
+    };
+    if (String(q.from.id) !== this.ownerUserId) {
+      answer();
       return;
     }
+    const event = parseCallbackQuery(q);
+    if (!event) {
+      // ref 失效(重启丢内存 token / 被淘汰): 提示过期的同时把键盘清掉。
+      // 只提示不清键盘, 按钮会一直留在原消息上 —— 看起来还能点, 点了只会再弹一次过期。
+      answer({
+        text: this.opts.expiredCardNotice ?? DEFAULT_EXPIRED_CARD_NOTICE,
+        show_alert: true,
+      });
+      // 但**只有整张卡都失效**才清键盘: token 是逐个淘汰的, 同卡其它按钮可能还能用,
+      // 清掉等于把一次仍能完成的交互从用户手里拿走(pending 那头还在等它)。
+      if (q.message && !hasLiveCallbackToken(q.message)) {
+        void api
+          .call('editMessageReplyMarkup', {
+            chat_id: q.message.chat.id,
+            message_id: q.message.message_id,
+            reply_markup: { inline_keyboard: [] },
+          })
+          .catch(() => undefined);
+      }
+      return;
+    }
+    answer();
     for (const h of this.cardActionHandlers) {
       try {
         h(event);
@@ -1251,7 +1515,19 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
   }
 
-  private emitGroupWindow(entry: Omit<TelegramGroupWindowEntry, 'botId'>): void {
+  /**
+   * 群窗口入窗的**唯一出口**, 也是受保护内容的唯一执行点。
+   *
+   * source 传原始 Telegram 消息(入站)或 send 返回的消息(自回流): 只要它带
+   * has_protected_content, 该群开了「禁止保存内容」, 这条就一个字都不落本地池
+   * —— 与官方 bot 服务端「has_protected_content 的消息不中继」同一语义。判据放
+   * 在这里而不是各调用点, 是为了让将来新增的入窗路径默认受同一条边界约束。
+   */
+  private emitGroupWindow(
+    entry: Omit<TelegramGroupWindowEntry, 'botId'>,
+    source?: Pick<TgMessage, 'has_protected_content'>,
+  ): void {
+    if (source?.has_protected_content === true) return;
     // botId 统一在此注入 — 窗口存储按 bot 命名空间隔离(换绑不串史)。
     const full: TelegramGroupWindowEntry = { ...entry, botId: String(this.botId) };
     for (const h of this.groupWindowHandlers) {
@@ -1306,29 +1582,118 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     else this.turnReplyTargets.delete(userId);
   }
 
-  /** 独立输出入口用: 本轮没有已领取目标且队列有货时才领取(不动流式轮的语义)。 */
+  /**
+   * 独立输出入口用的领取: 队列有货, 且槽位为空 **或槽位已过时** 时领取。
+   *
+   * 为何不能拿「槽位非空」当忙: 槽位里的目标可能是上一轮的残留 —— 某轮领取后
+   * 出站失败且调用方直接放弃(如 processOne 捕到 unsupportedOnly 后 return), 目标就会
+   * 一直占着。旧判据下下一条入站消息领不到自己的新目标, 回复会持续落后一条。
+   *
+   * 过时判据不靠猜失败原因(传输层无法区分「调用方还会重试」与「已放弃」), 而是用
+   * Telegram 的硬事实: 同一 chat 内 message_id 单调递增 —— 队列里出现更大的 id,
+   * 就证明有更新的触发消息到达过, 槽位那个已经不是"当前该回的那条"。
+   * 这比分类失败路径更嬽: 任何原因造成的残留都会在下一条入站消息处自愈。
+   */
   private claimTurnReplyTargetIfIdle(userId: string): void {
-    if (this.turnReplyTargets.has(userId)) return;
-    if (!this.pendingReplyTargets.has(userId)) return;
+    const queue = this.pendingReplyTargets.get(userId);
+    if (!queue || queue.length === 0) return;
+    const current = this.turnReplyTargets.get(userId);
+    if (current !== undefined) {
+      // 流式回合持有期间一律不接管: 排队提示这类独立出站不得把正在输出的
+      // 回合改向新消息(群 'all' 档会把 A 剩下的答案挂到 B 上)。代价是该提示本身
+      // 沿用回合目标或不挂回 —— 但 B 的目标因此留在队列里, B 自己的回合能领到。
+      if (this.hasActiveStreamRound(userId)) return;
+      // 无活动回合 = 槽位是上一轮残留; 队列里有更新的 id 即证明它过时。
+      if (!hasNewerTrigger(queue, current)) return;
+    }
     this.claimTurnReplyTarget(userId);
   }
 
+  private hasActiveStreamRound(userId: string): boolean {
+    return (this.activeStreamRounds.get(userId) ?? 0) > 0;
+  }
+
+  private beginStreamRound(userId: string): void {
+    this.activeStreamRounds.set(userId, (this.activeStreamRounds.get(userId) ?? 0) + 1);
+  }
+
+  private endStreamRound(userId: string): void {
+    const next = (this.activeStreamRounds.get(userId) ?? 0) - 1;
+    if (next > 0) this.activeStreamRounds.set(userId, next);
+    else this.activeStreamRounds.delete(userId);
+  }
+
   /**
-   * 本轮回挂目标 → reply_parameters(首条出站专用)。
-   * allow_sending_without_reply: 触发消息被删时降级为普通消息, 不让发送失败。
+   * 给流式 handle 包上回合归属的生命周期: finalize / close 任一到达即收口(只计
+   * 一次)。收口后槽位失去保护, 残留目标可被下一条入站消息覆盖领取(自愈)。
    */
-  private consumeReplyParams(
-    userId: string,
-  ): { reply_parameters: { message_id: number; allow_sending_without_reply: true } } | Record<string, never> {
+  private trackStreamRound(userId: string, inner: StreamingTextHandle): StreamingTextHandle {
+    let ended = false;
+    const end = (): void => {
+      if (ended) return;
+      ended = true;
+      this.endStreamRound(userId);
+    };
+    const wrapped: StreamingTextHandle = {
+      get messageId() {
+        return inner.messageId;
+      },
+      append: (delta) => inner.append(delta),
+      replace: (fullText) => inner.replace(fullText),
+      finalize: async (finalText) => {
+        try {
+          await inner.finalize(finalText);
+        } finally {
+          end();
+        }
+      },
+      close: () => {
+        try {
+          inner.close();
+        } finally {
+          end();
+        }
+      },
+      // 只在底层真的支持时暴露 —— turnRunner 靠它是否存在判断能不能投图。
+      ...(inner.addExtraImageAbsPath
+        ? { addExtraImageAbsPath: (absPath: string) => inner.addExtraImageAbsPath?.(absPath) }
+        : {}),
+    };
+    return wrapped;
+  }
+
+  /**
+   * 租借本次出站的回挂目标: 同时返回 reply_parameters 与**请求级凭据**(lease),
+   * **只读不消耗**。allow_sending_without_reply: 触发消息被删时降级为普通消息。
+   *
+   * 读与消耗分开的原因: 首条出站失败(网络/限流耗尽)时调用方会重试 —— 发前就消耗
+   * 会让重试那条丢掉引用('first' 档于是整轮不再挂回)。旧 sendRichFinal 就是这么
+   * 做的, DM 改走经典路径后该语义必须留在共用发送入口上。
+   */
+  private leaseReplyTarget(userId: string): {
+    params: TelegramReplyParams;
+    lease: ReplyTargetLease;
+  } {
     const target = this.turnReplyTargets.get(userId);
-    if (!target) return {};
+    if (!target) return { params: {}, lease: null };
+    return { params: replyParamsFor(target), lease: { userId, messageId: target } };
+  }
+
+  /**
+   * 出站确定成功后才消耗 —— 且只能消耗**本次请求真正带上的那个目标**。
+   *
+   * 身份校验不可省: 旧轮请求还在途时新一轮可能已 claim 了新目标写进同一个槽位,
+   * 此时若按 userId 无条件删除, 旧请求的迟到成功会吃掉新轮的目标 —— 新轮首条
+   * 答案于是丢引用(群里就是一条与提问脉络不上的回答)。不匹配 = 本次与当前槽位无关,
+   * 什么都不做。
+   */
+  private commitReplyTarget(lease: ReplyTargetLease): void {
+    if (!lease) return;
+    if (this.turnReplyTargets.get(lease.userId) !== lease.messageId) return;
     // 群 'all' 档: 目标保留整轮(下一轮 claim 时被替换/清除), 每条出站都挂回。
     const keepForAll =
-      decodeLaneUserId(userId) !== null && this.behaviorOf().replyQuoteGroup === 'all';
-    if (!keepForAll) this.turnReplyTargets.delete(userId);
-    return {
-      reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
-    };
+      decodeLaneUserId(lease.userId) !== null && this.behaviorOf().replyQuoteGroup === 'all';
+    if (!keepForAll) this.turnReplyTargets.delete(lease.userId);
   }
 
 
@@ -1337,9 +1702,26 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     return this.api;
   }
 
-  /** 429 退避一次重试; 'message is not modified' 静默。 */
+  /**
+   * 429 退避一次重试; 'message is not modified' 静默。
+   *
+   * 退避时长必须尊重 Telegram 给的 `retry_after` **全值, 不设任何上限** —— 早先
+   * 这里封在 10s, 于是 `retry_after` 更大的 flood 窗口里重试必然二次失败(实测
+   * 2026-08-04: 一个 11 分钟群轮次的终稿撞上 `retry after 26`, 只等 10s 就重试,
+   * 再次 429 后整条答案丢失)。任何固定上限都只是把同一个 bug 往后挪: bot-wide
+   * flood 的 retry_after 可以是几分钟, 60s 上限照样会提前重试。只有缺失/非法值
+   * 才走 RETRY_AFTER_FALLBACK_MS。
+   *
+   * 退避必须绑定连接生命周期: 等待期可能长达一分钟, 期间实例完全可能被
+   * dispose / 下线 / 换配置重连。等待本身用当前世代的 AbortSignal 取消(否则
+   * 定时器会活过 dispose), 醒来后再核验一次仍是同一条连接 —— 少了这道核验,
+   * 停止后仍会用**旧 api 客户端**补发一次请求, 且这次重试已经脱离调用方
+   * (外层如 owner 通知的 4.5s 超时早就返回了), 变成没人收口的后台任务。
+   */
   private async callSend<T>(method: string, params: Record<string, unknown>): Promise<T> {
     const api = this.requireApi();
+    const generation = this.configVersion;
+    const abortSignal = this.outboundAbortSignal();
     // 首条真实消息即将出现 — typing 使命完成(客户端收到消息也会自动清)。
     if (typeof params.chat_id === 'string' || typeof params.chat_id === 'number') {
       this.stopTypingLoopsForChat(String(params.chat_id));
@@ -1348,7 +1730,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return await api.call<T>(method, params);
     } catch (err) {
       if (err instanceof TelegramApiError && err.errorCode === 429) {
-        await sleep(Math.min((err.retryAfterSec ?? 3) * 1000, 10_000));
+        // sleep 在 abort 时提前 resolve(不 reject), 所以醒来后必须显式核验。
+        await sleep(retryAfterWaitMs(err.retryAfterSec), abortSignal);
+        // 已停止 → 放弃重试并抛回原始 429, 不再发出任何请求。
+        if (!this.isLiveConnection(api, generation, abortSignal)) throw err;
         return api.call<T>(method, params);
       }
       throw err;
@@ -1356,78 +1741,130 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   /**
-   * Rich 定稿(Bot API 10.1 sendRichMessage, markdown 直投): 表格/标题/代码块/
-   * LaTeX 原生渲染, 32768 上限一条到底不分段。仅 DM 定稿路径尝试;
-   *   - 404 = 方法不可用(旧 Bot API server) → 实例级永久 latch;
-   *   - 400 = 本条内容 rich 解析不过 → 只本条回落, rich 保持可用;
-   *   - 其它错误(网络/限流)回落经典路径, 不 latch。
-   * DM 定稿顺带 message_effect_id(👍 特效, 仅私聊生效)。
+   * 旧回合还有权发新消息吗。生命周期取消(dispose)、配置换代、重连换客户端、
+   * 换主人 —— 任一命中即判这个回合已死, 不得再以它的名义出站。
+   *
+   * `ownerUserId` 与 `generation` 都查: 换 owner 的分支两者一起变, 但显式写出
+   * 主人这条能让"授权易主 → 旧内容不许再发"的意图留在代码里, 也兜住将来某条
+   * 路径改了 owner 却忘了升世代。
    */
-  private async sendRichFinal(userId: string, markdown: string): Promise<string | null> {
-    if (this.richSendDisabled || !markdown.trim()) return null;
-    const api = this.api;
-    if (!api) return null;
-    // 只读取不消耗: rich 失败(404 latch/400 解析/网络)回落经典路径时,
-    // 目标必须还在, 否则定稿消息丢掉回挂。成功后才按档位消耗。
-    const pendingTarget = this.turnReplyTargets.get(userId);
-    try {
-      const target = this.targetOf(userId);
-      const sent = await this.callSend<TgMessage>('sendRichMessage', {
-        ...target,
-        ...(pendingTarget
-          ? {
-              reply_parameters: {
-                message_id: Number(pendingTarget),
-                allow_sending_without_reply: true,
-              },
-            }
-          : {}),
-        rich_message: { markdown },
-        message_effect_id: DM_DONE_EFFECT_ID,
-      });
-      if (pendingTarget) this.consumeReplyParams(userId); // 成功才消耗('all' 档语义由它处理)
-      this.recordOwnEcho(userId, markdown, sent);
-      return encodeMessageId(String(sent.chat.id), String(sent.message_id));
-    } catch (err) {
-      if (err instanceof TelegramApiError && err.errorCode === 404) {
-        this.richSendDisabled = true;
-      }
-      return null;
+  private assertRoundStillLive(round: StreamRoundIdentity): void {
+    if (this.disposing) throw new Error('telegram round abandoned: instance disposing');
+    if (this.configVersion !== round.generation) {
+      throw new Error('telegram round abandoned: config generation superseded');
+    }
+    if (this.api !== round.api) throw new Error('telegram round abandoned: api client replaced');
+    if (this.ownerUserId !== round.ownerUserId) {
+      throw new Error('telegram round abandoned: owner changed');
+    }
+    if (this.lifetimeAbort.signal.aborted) {
+      throw new Error('telegram round abandoned: lifetime cancelled');
     }
   }
 
   /**
-   * 经典路径 rich 原地定稿(editMessageText + rich_message, Bot API 10.1):
-   * 群与降级档 DM 的流式占位消息一步升级 rich 渲染。404 → 实例级 latch;
-   * 400(本条解析不过)只回落本条。
+   * 新 init 世代重建生命周期取消源。只在已 abort 时重建: 未 abort 说明没经历
+   * dispose, 此时换掉控制器会让在途退避失去被后续 dispose 取消的能力。
    */
-  private async richEditFinal(messageId: string, markdown: string): Promise<boolean> {
-    if (this.richSendDisabled || !markdown.trim()) return false;
-    const api = this.api;
-    if (!api) return false;
+  private resetLifetimeAbort(): void {
+    if (!this.lifetimeAbort.signal.aborted) return;
+    this.lifetimeAbort = new AbortController();
+  }
+
+  /**
+   * 出站退避的取消信号: 轮询期用当前世代的 pollAbort(下线/重连即 abort),
+   * 并始终叠加实例级 lifetimeAbort(覆盖没有轮询的出站窗口)。
+   * 每次调用都重读字段 —— 不得缓存, 否则拿不到新 init 世代的控制器。
+   */
+  private outboundAbortSignal(): AbortSignal {
+    const poll = this.pollAbort?.signal;
+    if (poll === undefined) return this.lifetimeAbort.signal;
+    return AbortSignal.any([poll, this.lifetimeAbort.signal]);
+  }
+
+  /**
+   * 退避醒来后的重试前置校验: 仍是同一条连接、同一配置世代、未被取消、未在销毁。
+   * `this.api !== api` 覆盖「重连换了客户端」——世代号相同也不能用旧客户端发。
+   */
+  private isLiveConnection(
+    api: TelegramApiClient,
+    generation: number,
+    abortSignal: AbortSignal,
+  ): boolean {
+    if (this.disposing) return false;
+    if (this.configVersion !== generation) return false;
+    if (this.api !== api) return false;
+    return !abortSignal.aborted;
+  }
+
+  /**
+   * 新发 Rich 终稿(sendRichMessage + rich_message): 过程载体从不承担最终答案，
+   * 让最终消息拥有独立 message id，避免群 relay 与迟到过程更新覆盖它。
+   *
+   * Rich 不能用时返回 null，由调用方安全回落 HTML/Markdown 新发；404 代表方法
+   * 不可用，实例级熔断。
+   *
+   * 降级判据是「**Telegram 有没有应答**」，不是错误码大小：4xx 都意味着报文完整
+   * 往返、这条 Rich 没有落地，HTML 补发不会造成重复。**429 也在此列**
+   * (2026-08-11 review)：`callSend` 已按 `retry_after` 退避重试过，仍拿到 429 就是
+   * 明确拒绝；而 `turnRunner` 的终态路径只把 `finalize()` 的异常记成 non-fatal
+   * 警告、**不会再调一次**，抛出去等于让用户永远停在过程消息上。HTML 那条路自身
+   * 也走 `callSend`，会再遵守一次 `retry_after`。
+   *
+   * 只有拿不到应答的情况（网络中断、超时、5xx）才抛出：那时无法判断 Telegram
+   * 是否已经接收，补发 HTML 可能造成两份答案。
+   */
+  private async sendRichFinal(
+    userId: string,
+    markdown: string,
+    reuseReplyTargetId?: string | null,
+  ): Promise<string | null> {
+    if (this.richSendDisabled || !markdown.trim()) return null;
+    const reusing = reuseReplyTargetId !== undefined;
+    const { params: replyParams, lease } = reusing
+      ? { params: replyParamsFor(reuseReplyTargetId), lease: null }
+      : this.leaseReplyTarget(userId);
     try {
-      const { chatId, messageId: nativeId } = decodeMessageId(messageId);
-      await api.call('editMessageText', {
-        chat_id: chatId,
-        message_id: Number(nativeId),
+      const sent = await this.callSend<TgMessage>('sendRichMessage', {
+        ...this.targetOf(userId),
+        ...replyParams,
         rich_message: { markdown },
       });
-      return true;
+      this.commitReplyTarget(lease);
+      this.recordOwnEcho(userId, markdown, sent);
+      return encodeMessageId(String(sent.chat.id), String(sent.message_id));
     } catch (err) {
-      if (err instanceof TelegramApiError && err.errorCode === 404) {
-        this.richSendDisabled = true;
+      if (err instanceof TelegramApiError && err.errorCode >= 400 && err.errorCode < 500) {
+        // 4xx = Telegram 完整应答后拒绝了这条 Rich, 它没有落地, HTML 补发不会
+        // 造成重复。404 另外表示方法本身不可用 —— 实例级熔断, 后续不再尝试。
+        // 429(退避重试后仍限流)同样在此: 抛出去只会让答案永久停在过程消息。
+        if (err.errorCode === 404) {
+          this.richSendDisabled = true;
+        }
+        return null;
       }
-      return false;
+      throw err;
     }
   }
 
-  /** 单段 markdown → HTML 发送; parse 失败回退纯文本(agent 输出偶发怪标记)。 */
+  /**
+   * 单段 markdown → HTML 发送; parse 失败回退纯文本(agent 输出偶发怪标记)。
+   *
+   * `reuseReplyTargetId` 给终稿补送用: 那一轮的回挂目标已经被过程消息消耗掉了
+   * ('first' 档用后即耗), 补送是**替换那条消息**而不是新增一条输出, 所以要沿用
+   * 同一个目标、且不再走 lease/commit(既不重新领取也不二次消耗)。传 null =
+   * 本轮没有目标(如 replyQuote 档位为 off), 按不挂回处理。
+   */
   private async sendRenderedChunk(
     userId: string,
     markdownChunk: string,
+    reuseReplyTargetId?: string | null,
   ): Promise<{ messageId: string; imageUrls: string[] }> {
     const target = this.targetOf(userId);
-    const replyParams = this.consumeReplyParams(userId);
+    const reusing = reuseReplyTargetId !== undefined;
+    const { params: replyParams, lease } = reusing
+      ? { params: replyParamsFor(reuseReplyTargetId), lease: null }
+      : this.leaseReplyTarget(userId);
     const { html, imageUrls } = markdownToTelegramHtml(markdownChunk);
     let sent: TgMessage;
     try {
@@ -1436,7 +1873,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         ...replyParams,
         text: html || '…',
         parse_mode: 'HTML',
-        link_preview_options: { is_disabled: true },
+        link_preview_options: LINK_PREVIEW_OPTIONS,
       });
     } catch (err) {
       if (err instanceof TelegramApiError && err.errorCode === 400) {
@@ -1444,12 +1881,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           ...target,
           ...replyParams,
           text: markdownChunk || '…',
-          link_preview_options: { is_disabled: true },
+          link_preview_options: LINK_PREVIEW_OPTIONS,
         });
       } else {
         throw err;
       }
     }
+    this.commitReplyTarget(lease);
     this.recordOwnEcho(userId, markdownChunk, sent);
     return {
       messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)),
@@ -1461,13 +1899,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const target = this.targetOf(userId);
     let firstMessageId = '';
     for (const chunk of chunkTelegramSource(text)) {
+      // 只首条挂回: 后续分段不租借、也不提交(lease 为 null 时 commit 是 noop)。
+      const { params: replyParams, lease } =
+        firstMessageId === '' ? this.leaseReplyTarget(userId) : { params: {}, lease: null };
       const sent = await this.callSend<TgMessage>('sendMessage', {
         ...target,
-        ...(firstMessageId === '' ? this.consumeReplyParams(userId) : {}),
+        ...replyParams,
         text: chunk || '…',
-        link_preview_options: { is_disabled: true },
+        link_preview_options: LINK_PREVIEW_OPTIONS,
       });
       if (!firstMessageId) {
+        this.commitReplyTarget(lease);
         firstMessageId = encodeMessageId(String(sent.chat.id), String(sent.message_id));
       }
       this.recordOwnEcho(userId, chunk, sent);
@@ -1487,7 +1929,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         message_id: Number(nativeMessageId),
         text: html || '…',
         parse_mode: 'HTML',
-        link_preview_options: { is_disabled: true },
+        link_preview_options: LINK_PREVIEW_OPTIONS,
         ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
       });
     } catch (err) {
@@ -1498,7 +1940,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           chat_id: chatId,
           message_id: Number(nativeMessageId),
           text: stripTelegramHtmlTags(html) || '…',
-          link_preview_options: { is_disabled: true },
+          link_preview_options: LINK_PREVIEW_OPTIONS,
+          // 同样要带上 reply_markup: 走到这条 fallback 时若省略, 清空键盘的意图会被丢掉。
+          ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
         }).catch((fallbackErr) => {
           if (fallbackErr instanceof TelegramApiError && /not modified/i.test(fallbackErr.message)) {
             return;
@@ -1516,8 +1960,23 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 2 张起自动合成原生相册(sendMediaGroup, 每组 ≤10 — Telegram 上限),
    * 客户端渲染为整齐的图集而不是刷屏的一串独立消息; 单张走 sendPhoto;
    * 相册整组失败回落逐张(部分文件缺失/超限时不拖累其余)。
+   *
+   * `assertLive` 是**每次真实出站前**的回合核验(流式回合传入; 独立出站不传)。
+   * 这里的循环会跨多个 await 打出多次 callForm —— >10 张的分组、以及整组失败后
+   * 的逐张回落都是。只在进入本方法时查一次挡不住"第一组传完才换主人"的窗口,
+   * 剩下的图片会照发到已失权的旧聊天。
    */
-  private async uploadImages(messageId: string, imageRefs: string[]): Promise<void> {
+  /**
+   * `startIndex` / `onProgress` 支撑终稿重试的断点续传(见 streamingText 的
+   * `uploadImages` 契约): 去重后从 `startIndex` 起传, 每完成一批就回报**累计
+   * 已收口张数**。抛错时调用方据此续传, 用户不会收到重复附件。
+   */
+  private async uploadImages(
+    messageId: string,
+    imageRefs: string[],
+    assertLive?: () => void,
+    opts?: { startIndex?: number; onProgress?: (deliveredCount: number) => void },
+  ): Promise<void> {
     const api = this.api;
     if (!api || imageRefs.length === 0) return;
     // 图片以 reply 挂回答案锚点消息: 论坛 topic 内自动跟随该 topic(裸发会
@@ -1546,16 +2005,44 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       seen.add(absPath);
       absPaths.push(absPath);
     }
-    if (absPaths.length === 1) {
-      await this.sendSinglePhoto(chatId, absPaths[0], anchorReply);
+    // 续传起点按**去重后**的序号切: 与 onProgress 回报的口径一致。
+    const startIndex = Math.max(0, Math.min(opts?.startIndex ?? 0, absPaths.length));
+    const pending = absPaths.slice(startIndex);
+    if (pending.length === 0) return;
+    // 累计计数含已跳过的部分, 这样调用方存的始终是"总共已收口多少张"。
+    let delivered = startIndex;
+    const report = (): void => opts?.onProgress?.(delivered);
+
+    if (pending.length === 1) {
+      assertLive?.();
+      await this.sendSinglePhoto(chatId, pending[0], anchorReply);
+      delivered += 1;
+      report();
       return;
     }
-    for (let i = 0; i < absPaths.length; i += 10) {
-      const group = absPaths.slice(i, i + 10);
-      const albumSent = group.length > 1 && (await this.sendPhotoAlbum(chatId, group, anchorReply));
-      if (!albumSent) {
-        for (const absPath of group) await this.sendSinglePhoto(chatId, absPath, anchorReply);
+    for (let i = 0; i < pending.length; i += 10) {
+      const group = pending.slice(i, i + 10);
+      assertLive?.();
+      // 单张不成相册, 直接走单发 —— 这条是正常路径, 不是相册失败。
+      const outcome =
+        group.length > 1 ? await this.sendPhotoAlbum(chatId, group, anchorReply) : 'rejected';
+      if (outcome === 'uncertain') {
+        // 可能已经发出去了, 不补发 —— 同理也要记进已收口, 重试不得重来。
+        delivered += group.length;
+        report();
+        continue;
       }
+      if (outcome === 'rejected') {
+        for (const absPath of group) {
+          assertLive?.();
+          await this.sendSinglePhoto(chatId, absPath, anchorReply);
+          delivered += 1;
+          report();
+        }
+        continue;
+      }
+      delivered += group.length;
+      report();
     }
   }
 
@@ -1643,16 +2130,30 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
   }
 
-  /** 多图原生相册(attach:// 多部分上传)。返回 false = 整组失败, 调用方回落逐张。 */
+  /**
+   * 多图原生相册(attach:// 多部分上传)的结果。
+   *
+   * `rejected` 与 `uncertain` 的区别决定了能不能逐张重发:
+   * Telegram 没有发送端幂等键, 一次 sendMediaGroup 只要被服务端接受, 图片就
+   * 已经出现在聊天里 —— 哪怕响应在网络上丢了。此时逐张补发会让用户看到**两套**
+   * 同样的图, 而且无法分辨哪些是重复。只有 Telegram 明确回 400(确定性拒绝相册
+   * 形状, 一张都没接受)时, 逐张回落才是安全的 —— 与官方 bot 服务端同一判据。
+   */
   private async sendPhotoAlbum(
     chatId: string,
     absPaths: string[],
     anchorReply?: { reply_parameters: { message_id: number; allow_sending_without_reply: true } },
-  ): Promise<boolean> {
+  ): Promise<'sent' | 'rejected' | 'uncertain'> {
     const api = this.api;
-    if (!api) return false;
+    if (!api) return 'uncertain';
+
+    // 组装(含本地读盘)与发送分开 catch。两者都会抛, 但含义相反: 组装失败时请求
+    // 根本没发出, 一张都没进聊天 —— 这跟 Telegram 回 400 是同一类确定性失败,
+    // 逐张回落安全, 而且能把同组其余可读的图片救回来。混在一个 catch 里判成
+    // uncertain, 一张图丢失就会连累整组静默消失。
+    let form: FormData;
     try {
-      const form = new FormData();
+      form = new FormData();
       form.set('chat_id', chatId);
       if (anchorReply) form.set('reply_parameters', JSON.stringify(anchorReply.reply_parameters));
       form.set(
@@ -1662,12 +2163,26 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       absPaths.forEach((absPath, i) => {
         form.set(`photo${i}`, new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
       });
-      await api.callForm('sendMediaGroup', form);
-      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(`telegram album upload failed, fallback to singles: ${msg}`);
-      return false;
+      this.log.warn(`telegram album assembly failed before send, fallback to singles: ${msg}`);
+      return 'rejected';
+    }
+
+    try {
+      await api.callForm('sendMediaGroup', form);
+      return 'sent';
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // 400 = Telegram 读懂了请求并拒绝了相册形状(比如某张图不合法), 可以确定
+      // 一张都没进聊天; 逐张重发安全。网络错误 / 5xx / 429 都可能是「已被接受,
+      // 只是响应没回来」, 重发会造成重复相册 —— 宁可这一组丢失也不重复。
+      if (err instanceof TelegramApiError && err.errorCode === 400) {
+        this.log.warn(`telegram album rejected (400), fallback to singles: ${msg}`);
+        return 'rejected';
+      }
+      this.log.warn(`telegram album upload outcome unknown, not resending: ${msg}`);
+      return 'uncertain';
     }
   }
 
@@ -1692,7 +2207,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       text,
       ...(fileNames && fileNames.length > 0 ? { fileNames } : {}),
       sentAt: sent.date * 1000,
-    });
+    }, sent);
   }
 
   // ── owner notices / secrets ────────────────────────────────────────────────
@@ -1879,6 +2394,20 @@ export type { TelegramGroupWindowEntry } from './inbound.js';
  * reason 保留原文供日志/诊断; code 是给 UI 用的稳定分类 —— 渲染层按 code 取
  * i18n 文案, 不再把这些英文技术串直接怼给用户看。
  */
+/**
+ * 私有超级群里某条消息的深链(`t.me/c/<internal>/<messageId>`) —— 授权卡改投宿主私聊后,
+ * 用它告诉宿主「是哪个群的哪条消息」。
+ *
+ * 只对 `-100` 前缀的私有超级群成立(公开群要 username, 这一层没有持久化群名/username)。
+ * 形状对不上返回 null, 调用方省掉那一行, 不拼一个点不开的链接。
+ */
+function groupMessageLink(chatId: string, messageId: string | null): string | null {
+  if (messageId === null || !chatId.startsWith('-100')) return null;
+  const internal = chatId.slice(4);
+  if (!/^\d+$/.test(internal) || !/^\d+$/.test(messageId)) return null;
+  return `https://t.me/c/${internal}/${messageId}`;
+}
+
 function mapConnectErrorToStatus(err: unknown): IMStatus {
   if (err instanceof TelegramApiError) {
     if (err.errorCode === 401 || err.errorCode === 404) {
@@ -1905,7 +2434,18 @@ function botIdFromToken(token: string): number {
   return Number.isSafeInteger(n) && n > 0 ? n : 0;
 }
 
+/**
+ * 可取消等待。abort 时提前 resolve(不 reject) —— 调用方靠自己的世代/状态核验
+ * 决定醒来后做什么。
+ *
+ * **进来时就已 aborted 必须立刻返回**: `addEventListener('abort')` 对已经发生过
+ * 的 abort 不会再触发, 于是定时器会走满全程。这条路径是可达的 —— dispose() 先
+ * 同步 abort 生命周期取消源, 再 `await stopPolling()`(那里要等 pollLoop 才把
+ * this.api 置空), 落在这个窗口里的出站拿到的就是一个已取消的信号; 少了这行,
+ * 一次 429 会在 dispose 之后干等满一整个退避周期。
+ */
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(done, ms);
     function done(): void {

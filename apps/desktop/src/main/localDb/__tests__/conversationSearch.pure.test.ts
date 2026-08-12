@@ -252,6 +252,13 @@ describe('conversationSearch.pure', () => {
     });
   });
 
+  it('removes internal Web citation markers from assistant search previews', () => {
+    const marker = '\uE200cite\uE202turn17search1\uE202turn17search2\uE201';
+    expect(
+      visibleMessageTextForConversationSearch('assistant', `结论。${marker}`),
+    ).toBe('结论。');
+  });
+
   it('hides synthetic UI trigger rows from search previews and keyword matching', async () => {
     const { UI_ACTION_TRIGGER_PREFIX } = await import('../../../shared/interruptedTurn.js');
     // 隐藏续跑指令(合成 user 行)对用户不可见,搜索 preview/snippet 也不能露出,

@@ -9,6 +9,14 @@ import { PROTOCOL_VERSION, type Envelope } from './protocol.js';
  */
 export const DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT = 'reliable-transport-v1';
 
+/**
+ * 声明本端理解 link-close(transport-timeout) 的瞬时重置语义(收到后保留可靠层
+ * 并立即重建链路)。被控端**只对声明了该能力的控制端**发送 transport-timeout;
+ * 对旧控制端(未声明)保留整连接重连的兼容恢复路径——旧版把未知 reason 当永久
+ * 关闭处理且不会自动重开,relay/presence 又保持在线,订阅与在途请求会静默挂死。
+ */
+export const DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE = 'transport-timeout-close-v1';
+
 /** transport ACK 使用普通 push 承载，且 ACK 本身永不再包 transport。 */
 export const DEVICE_LINK_TRANSPORT_ACK_CHANNEL = '__cindy/device-link/transport-ack';
 
@@ -34,6 +42,43 @@ export const MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES = 8 * 1024 * 1024;
 export const TRANSPORT_RETRY_INTERVAL_MS = 2_000;
 /** 连续重发上限；之后保留消息等待重连，避免弱网下无限制造流量。 */
 export const TRANSPORT_MAX_RETRY_ATTEMPTS = 5;
+/**
+ * **定时器驱动**的单趟重发条数上限（旧→新，与累计 ACK 需要的顺序一致）。
+ *
+ * 为什么必须有这个上限:定时重发原本一趟遍历整个 pending 窗口（上限
+ * MAX_TRANSPORT_PENDING_MESSAGES = 64 条逻辑消息，每条还可能分多帧），在**一个同步
+ * 循环里**全部写进 ws。对端 relay 路由已失效时，这些帧逐帧弹回 DEVICE_OFFLINE ——
+ * 2026-08-08 线上单簇 213 条、单日 449 条，8-06 单簇 125 条，全部是这个形状。
+ *
+ * 这条路径原本有两道刹车，但都装在错的量上:
+ *  - per-peer 制动（收到带 dst 的 DEVICE_OFFLINE → linkReady=false + 清重试定时器，
+ *    #1187）是**异步**的:relay-error 要一个 RTT 才回来，那一趟早已全部上线路，它只
+ *    拦得住下一轮；
+ *  - 单趟中断（ws 容量抛 BACKPRESSURE → break，#2167）的阈值是 8MB buffered bytes，
+ *    而 64 条 maker:event 级小帧总共 1–2MB —— 灵敏度比这个故障低三个数量级。
+ *
+ * 于是「一趟重发多少条」从来没有上限，由「窗口里有多少条」决定，而窗口有多满又由
+ * 洪峰决定，两个失控量互相喂。本常量给它一个显式上限:健康 peer 的 ACK 正常回流、
+ * 队头被确认后窗口前移，后面的消息自然轮到；失联 peer 每趟只浪费这么多帧，第一条
+ * relay-error 回来后既有制动接管。
+ *
+ * 取 8 而不是 1:一趟只发一条会把「N 条积压 + 对端只是慢」的恢复拖成 N×重发间隔;
+ * 8 条既能在几趟内推进队头，又把失联时的单簇规模压到原来的 1/8 以下（线上最大簇
+ * 213 条 → 上限 8 条/趟）。它是**每趟**上限，不是窗口上限，不改变可靠交付语义:
+ * 没发出去的消息仍在 pending 里，下一趟继续。
+ *
+ * **只作用于定时器驱动的趟次**:link 重建后的 replay 由收到对端 link-accept 触发，
+ * 可达性刚被证明过，不受此限（见 client.replayPending）。
+ */
+export const TRANSPORT_RETRY_PASS_BUDGET = 8;
+/**
+ * pending 里 push 帧的最大滞留时长（按单调时钟计量，不受墙钟校正影响）。push 是
+ * 尽力而为的实时镜像旁路，长时间未被 ACK（典型是对端离线）后只剩历史价值；
+ * 超龄后在普通入队压力下被兜底清扫，避免陈旧 push 独占有界 pending 缓冲。
+ * 重连重放前与 invoke-result 腾位不看此 TTL：这两条路径直接丢弃队头整个可丢弃
+ * 前缀（含新鲜 push 与 transport-skip 占位），保证 invoke-result 是最早的 live seq。
+ */
+export const TRANSPORT_PENDING_PUSH_MAX_AGE_MS = 5 * 60_000;
 
 const TRANSPORT_MARKER = '__cindyDeviceLinkTransport';
 const TRANSPORT_SKIP_MARKER = '__cindyDeviceLinkTransportSkip';

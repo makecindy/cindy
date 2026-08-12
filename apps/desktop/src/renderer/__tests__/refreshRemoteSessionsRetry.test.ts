@@ -45,7 +45,44 @@ afterEach(() => {
 });
 
 function session(id: string, partial: Partial<Session> = {}): Session {
-  return { id, ...partial } as Session;
+  return {
+    id,
+    userId: 'user-1',
+    title: id,
+    workingDir: null,
+    workspaceKind: 'dialogue',
+    model: 'model-1',
+    effort: 'medium',
+    permissionMode: 'default',
+    sdkSessionId: null,
+    totalTokenUsage: 0,
+    totalCostUsd: 0,
+    contextTokens: 0,
+    contextWindow: 0,
+    fastMode: false,
+    clearedAt: null,
+    pinnedAt: null,
+    userSendAt: null,
+    status: 'active',
+    agentKind: 'cc',
+    extraDirs: [],
+    createdAt: '2026-08-02T00:00:00.000Z',
+    updatedAt: '2026-08-02T00:00:00.000Z',
+    ...partial,
+  };
+}
+
+function legacyMinimalSession(id: string) {
+  return {
+    id,
+    title: id,
+    workingDir: null,
+    model: 'model-1',
+    status: 'active',
+    agentKind: 'cc',
+    createdAt: '2026-08-02T00:00:00.000Z',
+    updatedAt: '2026-08-02T00:00:00.000Z',
+  };
 }
 
 function deferred<T>() {
@@ -102,6 +139,80 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(0);
   });
 
+  it('非数组响应不得冒充成功或权威空列表', async () => {
+    const d = did();
+    invoke.mockResolvedValueOnce(null);
+
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe(
+      'gave-up',
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(remoteProjectsStore.hasDevice(d)).toBe(false);
+  });
+
+  it('空数组是权威空任务列表并正常发布', async () => {
+    const d = did();
+    invoke.mockResolvedValueOnce([]);
+
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe('ok');
+
+    expect(remoteProjectsStore.hasDevice(d)).toBe(true);
+    expect(remoteProjectsStore.getDeviceSessions(d)).toEqual([]);
+  });
+
+  it('接受旧端最低任务列表形状，不强制要求新版附加字段', async () => {
+    const d = did();
+    invoke.mockResolvedValueOnce([legacyMinimalSession('legacy')]);
+
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe('ok');
+
+    expect(remoteProjectsStore.getDeviceSessions(d)).toEqual([
+      expect.objectContaining({ id: 'legacy', title: 'legacy', status: 'active' }),
+    ]);
+  });
+
+  it('数组混入非法会话时整份失败，保留旧 shard 且不部分应用', async () => {
+    const d = did();
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('existing')]);
+    invoke.mockResolvedValueOnce([session('fresh'), null]);
+
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe(
+      'gave-up',
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(remoteProjectsStore.getDeviceSessions(d).map((item) => item.id)).toEqual(['existing']);
+  });
+
+  it('active 列表混入非 active 会话时按协议损坏处理', async () => {
+    const d = did();
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('existing')]);
+    invoke.mockResolvedValueOnce([session('archived', { status: 'archived' })]);
+
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe(
+      'gave-up',
+    );
+    expect(remoteProjectsStore.getDeviceSessions(d).map((item) => item.id)).toEqual(['existing']);
+  });
+
+  it('损坏的满窗口响应不会触发 sessions:get 补查或改写旧 shard', async () => {
+    const d = did();
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('outside-window')]);
+    const malformed = [
+      ...Array.from({ length: 199 }, (_, index) => session(`recent-${index}`)),
+      null,
+    ];
+    invoke.mockResolvedValueOnce(malformed);
+
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe(
+      'gave-up',
+    );
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(remoteProjectsStore.getDeviceSessions(d).map((item) => item.id)).toEqual([
+      'outside-window',
+    ]);
+  });
+
   it('访问被撤销(DEVICE_LINK_ACCESS_REVOKED)→ 不重试,返回 revoked(调用方据此 handleRevoked)', async () => {
     const d = did();
     invoke.mockRejectedValue(new Error('[DEVICE_LINK_ACCESS_REVOKED] revoked'));
@@ -110,6 +221,37 @@ describe('refreshRemoteDeviceSessions retry', () => {
     );
     expect(invoke).toHaveBeenCalledTimes(1); // 终态,不重试
     expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(0);
+  });
+
+  it('超时类失败只额外重试 1 次:每次都吃满隧道超时,不许按完整预算连打 6 个', async () => {
+    const d = did();
+    invoke.mockRejectedValue(new Error('[DEVICE_LINK_TIMEOUT] no invoke-result within 12000ms'));
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe(
+      'gave-up',
+    );
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('超时账本独立:一次超时不吞掉快速失败瞬态错误的完整预算', async () => {
+    const d = did();
+    invoke
+      .mockRejectedValueOnce(new Error('[DEVICE_LINK_TIMEOUT] no invoke-result within 12000ms'))
+      .mockRejectedValueOnce(new Error('DbClient not ready'))
+      .mockRejectedValueOnce(new Error('DbClient not ready'))
+      .mockResolvedValueOnce([session('s1')]);
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe('ok');
+    expect(invoke).toHaveBeenCalledTimes(4);
+  });
+
+  it('熔断快速失败(DEVICE_LINK_DEVICE_UNRESPONSIVE)→ 不重试,立即放弃', async () => {
+    const d = did();
+    invoke.mockRejectedValue(
+      new Error('[DEVICE_LINK_DEVICE_UNRESPONSIVE] target device is unresponsive (circuit open)'),
+    );
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe(
+      'gave-up',
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it('重试耗尽 → 放弃,不抛(返回 gave-up,尝试次数 = maxAttempts)', async () => {
@@ -167,10 +309,103 @@ describe('refreshRemoteDeviceSessions retry', () => {
     ]);
   });
 
+  it('按需读取 archived 桶并保留既有 active 桶', async () => {
+    const d = did();
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('active-1')], 'active');
+    invoke.mockResolvedValueOnce([session('archived-1', { status: 'archived' })]);
+
+    await expect(
+      refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep, status: 'archived' }),
+    ).resolves.toBe('ok');
+
+    expect(invoke).toHaveBeenCalledWith(d, 'local-db:sessions:list', [
+      1000,
+      'archived',
+      { includePinned: true },
+    ]);
+    expect(remoteProjectsStore.getDeviceSessions(d, 'active').map((s) => s.id)).toEqual([
+      'active-1',
+    ]);
+    expect(remoteProjectsStore.getDeviceSessions(d, 'archived').map((s) => s.id)).toEqual([
+      'archived-1',
+    ]);
+  });
+
+  it('archived 列表混入 active 会话时按协议损坏处理且不覆盖 active 桶', async () => {
+    const d = did();
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('active-1')], 'active');
+    invoke.mockResolvedValueOnce([session('wrong-active')]);
+
+    await expect(
+      refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep, status: 'archived' }),
+    ).resolves.toBe('gave-up');
+
+    expect(remoteProjectsStore.getDeviceSessions(d, 'active').map((s) => s.id)).toEqual([
+      'active-1',
+    ]);
+    expect(remoteProjectsStore.hasLoadedSessionStatus(d, 'archived')).toBe(false);
+  });
+
+  it('同设备 active 与 archived 请求使用独立单飞和 epoch', async () => {
+    const d = did();
+    const activeSnapshot = deferred<Session[]>();
+    const archivedSnapshot = deferred<Session[]>();
+    invoke.mockImplementation(async (_deviceId, _channel, args) => {
+      return args[1] === 'archived' ? archivedSnapshot.promise : activeSnapshot.promise;
+    });
+
+    const activeRefresh = refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep });
+    const archivedRefresh = refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      status: 'archived',
+    });
+    archivedSnapshot.resolve([session('archived-1', { status: 'archived' })]);
+    activeSnapshot.resolve([session('active-1')]);
+
+    await expect(Promise.all([activeRefresh, archivedRefresh])).resolves.toEqual(['ok', 'ok']);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual([
+      'active-1',
+      'archived-1',
+    ]);
+  });
+
+  it('archived 使用 1000 条产品窗口，保留第 201 条之后的有效任务并清理陈旧缓存', async () => {
+    const d = did();
+    const archived = Array.from({ length: 250 }, (_, index) =>
+      session(`archived-recent-${index}`, { status: 'archived' }),
+    );
+    remoteProjectsStore.setDeviceSessions(
+      d,
+      'Mac B',
+      [session('stale-outside-window', { status: 'archived' })],
+      'archived',
+    );
+    invoke.mockResolvedValueOnce(archived);
+
+    await refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+      status: 'archived',
+    });
+
+    const archivedIds = remoteProjectsStore.getDeviceSessions(d, 'archived').map((item) => item.id);
+    expect(archivedIds).toHaveLength(250);
+    expect(archivedIds).toContain('archived-recent-200');
+    expect(archivedIds).toContain('archived-recent-249');
+    expect(archivedIds).not.toContain('stale-outside-window');
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(d, 'local-db:sessions:list', [
+      1000,
+      'archived',
+      { includePinned: true },
+    ]);
+  });
+
   it('周期有界快照更新命中行但保留 200 条窗口外的有效会话', async () => {
     const d = did();
     const recent = Array.from({ length: 200 }, (_, index) =>
-      session(`recent-${index}`, { title: index === 0 ? 'new' : undefined }),
+      session(`recent-${index}`, index === 0 ? { title: 'new' } : {}),
     );
     remoteProjectsStore.setDeviceSessions(d, 'Mac B', [
       session('recent-0', { title: 'old' }),
@@ -234,7 +469,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  it('周期满窗口用既有 sessions:get 有界补查并清理已归档的窗口外行', async () => {
+  it('周期满窗口用既有 sessions:get 有界补查并把已归档的窗口外行迁入归档桶', async () => {
     const d = did();
     const recent = Array.from({ length: 200 }, (_, index) => session(`recent-${index}`));
     remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('stale-archived')]);
@@ -252,10 +487,13 @@ describe('refreshRemoteDeviceSessions retry', () => {
       snapshotMode: 'merge',
     });
 
-    expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(200);
-    expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).not.toContain(
+    expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(201);
+    expect(remoteProjectsStore.getDeviceSessions(d, 'active').map((s) => s.id)).not.toContain(
       'stale-archived',
     );
+    expect(remoteProjectsStore.getDeviceSessions(d, 'archived')).toEqual([
+      expect.objectContaining({ id: 'stale-archived', status: 'archived' }),
+    ]);
     expect(getRemoteSessionActivity('stale-archived')).toBeUndefined();
   });
 

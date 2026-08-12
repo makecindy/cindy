@@ -11,7 +11,7 @@
  * 只附加 SDK handle。
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
@@ -19,6 +19,7 @@ import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { getDbClient } from '../../localDb/client/current';
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { sessions } from '../../localDb/schema';
+import { withSessionRouteLock } from '../../localDb/sessionRouteLock';
 import { createLogger, maskPath } from '../../logger';
 import { setSessionProvider } from '../../maker-host/session-provider-store';
 import {
@@ -56,6 +57,15 @@ export interface ImSessionRow {
    * IM turn 启动前 hydrate 进 session-provider-store,保证按选中供应商路由。
    */
   providerId: string | null;
+  /**
+   * 该会话的归属分组。`dialogue` = 托管目录里的临时对话, 它的目录末段是内部
+   * 名字(UUID / `telegram-<botId>`), **不是项目名**。
+   *
+   * schema 里 workspaceKind 与路径是解耦的 —— 只比对目录等于不等于渠道托管目录
+   * 判不出来(接管一条 desktop 的 dialogue 会话时路径根本不是渠道自己那条)。
+   * 只读路径按需带出, 建会话路径不填(那时归属由 ns.workspaceKind 决定)。
+   */
+  workspaceKind?: 'project' | 'dialogue' | null;
 }
 
 export interface SessionModelRouteSnapshot {
@@ -72,6 +82,25 @@ export interface ImSessionRepo {
     userId: string,
     scopeKey?: string,
   ): Promise<ImSessionRow | null>;
+  /**
+   * 纯只读地看一眼这对身份的通道行 —— **不创建、不复活、不广播**。
+   *
+   * findActiveSession 会把软删行翻回 active 并广播 created(用户从 IM 侧继续
+   * 发消息就该恢复对话)。那对「发消息」是对的, 对只读查询就是副作用: 问一句
+   * 「我现在什么配置」不该把用户已删的会话拉回列表。
+   *
+   * 软删行照样返回它的配置 —— 用户下次发消息复活的正是这一行、沿用的正是这份
+   * 设置, 报默认值反而误导。
+   */
+  peekSession(botContextId: string, userId: string, scopeKey?: string): Promise<ImSessionRow | null>;
+  /**
+   * 按 session id 只读一行 —— `/ctr` 接管期间要读的是**被接管的 desktop 会话**,
+   * 它的 id 不由 `sessionIdFor` 推得出来。同样不创建、不复活、不广播。
+   *
+   * `workingDir` 为空视为无效(binding 指向的行已被删/数据异常), 返回 null 让
+   * 调用方回落到渠道自身的会话 —— 与 turnRunner 命中无效 binding 时的落点一致。
+   */
+  peekSessionById(sessionId: string): Promise<ImSessionRow | null>;
   prepareNewSession(
     botContextId: string,
     userId: string,
@@ -96,9 +125,75 @@ export interface ImSessionRepo {
 export function createImSessionRepo(
   config: ImOrchestratorConfig,
   ns: ImSessionNamespace,
+  /**
+   * 该渠道是否开着 `/project`(见 ImChannelAdapter.projectSwitching)。
+   *
+   * 只有开着它的渠道, 「会话目录不等于渠道托管目录」才等价于「用户把它切进了项目」。
+   * 没开的渠道(微信等)只有一个托管目录, 而那个目录**可以被用户在设置页改掉** ——
+   * 已有会话按产品契约保留旧目录直到 `/new`, 于是新旧目录不等, 按路径推断会把一条
+   * 合法的对话会话误判成项目。这些渠道一律相信列里存的归属。
+   */
+  options: { projectSwitching?: boolean } = {},
 ): ImSessionRepo {
+  const pathImpliesProject = options.projectSwitching === true;
   function defaultEffortFor(modelId: string, agentKind: AgentKind = config.agentKind): Effort {
     return getImDefaultEffortFor(agentKind, modelId, config.effortOverrides);
+  }
+
+  /**
+   * 复活 / upsert 冲突分支里给 `workspaceKind` 用的 SET 片段。
+   *
+   * 渠道声明的归属分组只能校正**还留在渠道托管目录里**的行 —— 那种行的
+   * 'project' 是老版本留下的默认值, 刷成渠道真实归属是对的。但 `/project`
+   * 已经把行切到项目目录时, 'project' 是用户的显式选择: 归档后被新消息复活
+   * 就一并刷回 'dialogue' 的话, 会话会跳出 sidebar 的项目分组, 而 workingDir
+   * 仍指着那个项目 —— 两个 bot 的 `/project`、`/settings` 从此把真项目报成
+   * 「对话」, sidebar 的归组也跟着说谎。
+   *
+   * 判据写进同一条 UPDATE 的 CASE 里, 不做「先读再改写」: 并发下读到的旧值
+   * 会盖掉另一路刚写的新值。
+   */
+  function correctedWorkspaceKind(botContextId: string): Record<string, unknown> {
+    if (!ns.workspaceKind) return {};
+    // 不开 `/project` 的渠道: 会话只可能待在渠道自己的托管目录里, 归属就是渠道声明
+    // 的那个, 与路径无关。**不能**按路径判 —— 微信的托管目录是用户可改的, 改完之后
+    // 已有会话仍保留旧目录, 新旧不等会把合法的对话会话判成项目。
+    if (!pathImpliesProject) return { workspaceKind: ns.workspaceKind };
+    const managedDir = ns.ensureWorkingDir(botContextId);
+    // else 分支写死 'project' 而不是"保留现值": 库里躺着一批老版本刷坏的行
+    // (dialogue + 项目目录), 保留现值救不了它们, 那些会话会永远留在错的分组里。
+    // 目录不等于托管目录 ⟺ 它是项目 —— 见 readWorkspaceKind 的说明。
+    return {
+      workspaceKind: sql`case when ${sessions.workingDir} is null or ${sessions.workingDir} = ${managedDir} then ${ns.workspaceKind} else 'project' end`,
+    };
+  }
+
+  /**
+   * 只读路径上的归属判据 —— 不看列里存着什么, 按目录现算。
+   *
+   * 存量脏行的自愈: 老版本的复活 / upsert 会把 `/project` 选中的 'project' 无条件
+   * 刷回渠道默认的 'dialogue', 而 workingDir 还留在项目里。库里因此躺着一批
+   * 「dialogue + 项目目录」的行 —— 只保护未来的复活救不了它们, 用户看到的仍是
+   * 「对话」, 而且只要不再归档一次就永远不自愈。
+   *
+   * 这条通道的行只有两种去处: 渠道托管目录, 或用户经 `/project` 选中的项目目录
+   * (cardActionHandler 的非 project 分支写的正是 ensureWorkingDir)。所以「目录不等于
+   * 托管目录」⟺「它是项目」。
+   *
+   * 只能用在 peekSession / findActiveSession —— 它们查的是本渠道按 sessionIdFor 推出
+   * 的自有行。peekSessionById 不行: `/ctr` 接管的是一条 desktop 会话, 它的目录既不是
+   * 项目、也不是本渠道的托管目录(末段常是内部 UUID), 按这条判会把 UUID 当项目名。
+   */
+  function readWorkspaceKind(
+    workingDir: string | null,
+    storedKind: 'project' | 'dialogue' | null,
+    botContextId: string,
+  ): 'project' | 'dialogue' | null {
+    // 不开 `/project` 的渠道没有"切出去"这回事, 相信列里存的 —— 它们的托管目录
+    // 用户可以在设置页改, 已有会话保留旧目录, 按路径判必然误判(见构造参数说明)。
+    if (!pathImpliesProject) return storedKind;
+    if (ns.workspaceKind !== 'dialogue' || !workingDir) return storedKind;
+    return workingDir === ns.ensureWorkingDir(botContextId) ? 'dialogue' : 'project';
   }
 
   return {
@@ -115,30 +210,83 @@ export function createImSessionRepo(
      * (上下文)与模型/权限等全部设置。若把软删行当"不存在"返回 null,caller
      * 会用同 id INSERT 撞 UNIQUE(sessions.id),IM 消息从此全部报错(#748)。
      */
-    async findActiveSession(botContextId, userId, scopeKey) {
+    async peekSession(botContextId, userId, scopeKey) {
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
       const db = getDbClient().drizzle;
       const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
       const row = rows[0];
       if (!row) return null;
-      if (row.status !== 'active') {
-        // 复活由用户 IM 消息触发,一并 bump userSendAt:广播 created 后 renderer
-        // 立即重拉,而稍后 turnRunner 的 touchUserSent 不再广播 patched,不在这里
-        // 写的话 sidebar 会按旧活跃时间排序/分组,直到下次整页刷新。
-        const now = Date.now();
-        await db
-          .update(sessions)
-          .set({
-            status: 'active',
-            userSendAt: now,
-            updatedAt: now,
-            // 渠道声明了归属分组时顺手校正(老行可能还是默认 'project')
-            ...(ns.workspaceKind ? { workspaceKind: ns.workspaceKind } : {}),
-          })
-          .where(eq(sessions.id, id));
-        log.info(`revived soft-deleted ${ns.source} session id=${row.id} (was ${row.status})`);
+      return {
+        id: row.id,
+        agentKind: toCoreAgentKind(row.agentKind),
+        workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId),
+        model: row.model,
+        effort: row.effort,
+        permissionMode: row.permissionMode,
+        fastMode: row.fastMode,
+        sdkSessionId: row.sdkSessionId,
+        providerId: row.providerId ?? null,
+        workspaceKind: readWorkspaceKind(row.workingDir, row.workspaceKind ?? null, botContextId),
+      };
+    },
+
+    async findActiveSession(botContextId, userId, scopeKey) {
+      const id = ns.sessionIdFor(botContextId, userId, scopeKey);
+      const db = getDbClient().drizzle;
+      const result = await withSessionRouteLock(id, async () => {
+        const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+        const row = rows[0];
+        if (!row) return null;
+        const workspaceKind = readWorkspaceKind(
+          row.workingDir,
+          row.workspaceKind ?? null,
+          botContextId,
+        );
+        let revivedFrom: string | null = null;
+        let workspaceKindCorrected = false;
+        if (row.status !== 'active') {
+          // 复活由用户 IM 消息触发,一并 bump userSendAt:广播 created 后 renderer
+          // 立即重拉,而稍后 turnRunner 的 touchUserSent 不再广播 patched,不在这里
+          // 写的话 sidebar 会按旧活跃时间排序/分组,直到下次整页刷新。
+          const now = Date.now();
+          await db
+            .update(sessions)
+            .set({
+              status: 'active',
+              userSendAt: now,
+              updatedAt: now,
+              // 渠道声明了归属分组时顺手校正老行, 但不碰用户 `/project` 切出去的行
+              ...correctedWorkspaceKind(botContextId),
+            })
+            .where(eq(sessions.id, id));
+          revivedFrom = row.status;
+        } else if (workspaceKind !== null && workspaceKind !== row.workspaceKind) {
+          // 存量脏行**就地回写**, 不等下一次归档。sidebar 的分组直接投影 DB 那一列
+          // (localDb/mapper.ts), 只在返回值上现算的话, 会话会一直待在错的分组里 ——
+          // 而它现在是 active, 可能永远等不到那次归档。
+          //
+          // 判据仍走 correctedWorkspaceKind 的 CASE(SQL 里现算), 不把 JS 算出来的值
+          // 写回去: 读和写之间行可能已被 `/project` 改过。
+          await db
+            .update(sessions)
+            .set({ ...correctedWorkspaceKind(botContextId), updatedAt: Date.now() })
+            .where(eq(sessions.id, id));
+          workspaceKindCorrected = true;
+        }
+        return { row, workspaceKind, revivedFrom, workspaceKindCorrected };
+      });
+      if (!result) return null;
+      const { row, workspaceKind } = result;
+      if (result.revivedFrom) {
+        log.info(
+          `revived soft-deleted ${ns.source} session id=${row.id} (was ${result.revivedFrom})`,
+        );
         // 软删行已从 sidebar 消失,patched 增量对不存在的行无效;
         // created 触发 renderer 重拉列表,让会话重新出现。
+        broadcastSessionCreated(row.id);
+      } else if (result.workspaceKindCorrected) {
+        log.info(`corrected ${ns.source} session workspaceKind id=${row.id} -> ${workspaceKind}`);
+        // 行会跨分组移动, patched 增量覆盖不了归组变化 —— 与 switchSessionWorkingDir 同理。
         broadcastSessionCreated(row.id);
       }
       return {
@@ -151,6 +299,28 @@ export function createImSessionRepo(
         fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
+        // update 前读到的旧值不能直接回 —— 与 correctedWorkspaceKind 用同一判据现算,
+        // caller 拿到的和库里落定的才是同一个答案。
+        workspaceKind,
+      };
+    },
+
+    async peekSessionById(sessionId) {
+      const db = getDbClient().drizzle;
+      const rows = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+      const row = rows[0];
+      if (!row?.workingDir) return null;
+      return {
+        id: row.id,
+        agentKind: toCoreAgentKind(row.agentKind),
+        workingDir: row.workingDir,
+        model: row.model,
+        effort: row.effort,
+        permissionMode: row.permissionMode,
+        fastMode: row.fastMode,
+        sdkSessionId: row.sdkSessionId,
+        providerId: row.providerId ?? null,
+        workspaceKind: row.workspaceKind ?? null,
       };
     },
 
@@ -181,48 +351,52 @@ export function createImSessionRepo(
       const db = getDbClient().drizzle;
       const row = prepared ?? (await this.prepareNewSession(botContextId, userId, scopeKey));
       const now = Date.now();
-      await db
-        .insert(sessions)
-        .values({
-          id: row.id,
-          title: ns.defaultTitle(userId),
-          ...(ns.workspaceKind ? { workspaceKind: ns.workspaceKind } : {}),
-          workingDir: row.workingDir,
-          model: row.model,
-          effort: row.effort,
-          permissionMode: row.permissionMode,
-          fastMode: row.fastMode,
-          status: 'active',
-          agentKind: toDbAgentKind(row.agentKind),
-          providerId: row.providerId,
-          source: ns.source,
-          ...ns.extraInsertColumns(botContextId, userId),
-          createdAt: now,
-          updatedAt: now,
-          // IM 会话由用户消息触发创建,插入时即设 userSendAt,
-          // 避免广播后 renderer 重拉到 userSendAt=null 的行被误判为草稿。
-          userSendAt: now,
-        })
-        .onConflictDoUpdate({
-          target: sessions.id,
-          set: {
-            status: 'active',
-            source: ns.source,
+      const persisted = await withSessionRouteLock(row.id, async () => {
+        await db
+          .insert(sessions)
+          .values({
+            id: row.id,
+            title: ns.defaultTitle(userId),
             ...(ns.workspaceKind ? { workspaceKind: ns.workspaceKind } : {}),
+            workingDir: row.workingDir,
+            model: row.model,
+            effort: row.effort,
+            permissionMode: row.permissionMode,
+            fastMode: row.fastMode,
+            status: 'active',
+            agentKind: toDbAgentKind(row.agentKind),
+            providerId: row.providerId,
+            source: ns.source,
             ...ns.extraInsertColumns(botContextId, userId),
+            createdAt: now,
             updatedAt: now,
+            // IM 会话由用户消息触发创建,插入时即设 userSendAt,
+            // 避免广播后 renderer 重拉到 userSendAt=null 的行被误判为草稿。
             userSendAt: now,
-          },
-        });
-      // upsert 可能走冲突分支(残留行的 sdkSessionId / 模型 / 权限被刻意保留),
-      // 返回值必须以 DB 持久化结果为准——直接返回 prepared 默认值会让 turn 拿
-      // sdkSessionId=null 新开对话,而 DB 里旧上下文仍标记 active,两边失配。
-      const persistedRows = await db
-        .select()
-        .from(sessions)
-        .where(eq(sessions.id, row.id))
-        .limit(1);
-      const persisted = persistedRows[0];
+          })
+          .onConflictDoUpdate({
+            target: sessions.id,
+            set: {
+              status: 'active',
+              source: ns.source,
+              // 冲突分支撞的是残留行 —— 同 findActiveSession, 用户 `/project`
+              // 切出去的归属不能被渠道默认值刷掉。
+              ...correctedWorkspaceKind(botContextId),
+              ...ns.extraInsertColumns(botContextId, userId),
+              updatedAt: now,
+              userSendAt: now,
+            },
+          });
+        // upsert 可能走冲突分支(残留行的 sdkSessionId / 模型 / 权限被刻意保留),
+        // 返回值必须以 DB 持久化结果为准——直接返回 prepared 默认值会让 turn 拿
+        // sdkSessionId=null 新开对话,而 DB 里旧上下文仍标记 active,两边失配。
+        const persistedRows = await db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, row.id))
+          .limit(1);
+        return persistedRows[0];
+      });
       const result: ImSessionRow = persisted
         ? {
             id: persisted.id,

@@ -11,13 +11,21 @@ beforeEach(() => {
 });
 
 interface Caps {
-  availableModels: Array<{ id: string; displayName: string; contextWindow: number }>;
+  availableModels: Array<{
+    id: string;
+    displayName: string;
+    contextWindow: number;
+    efforts: string[];
+    defaultEffort: string | null;
+  }>;
   hasFastMode: boolean;
   effortLevels: unknown[];
   permissionModes: unknown[];
 }
 const caps = (label: string, ctx = 1): Caps => ({
-  availableModels: [{ id: 'm', displayName: label, contextWindow: ctx }],
+  availableModels: [
+    { id: 'm', displayName: label, contextWindow: ctx, efforts: [], defaultEffort: null },
+  ],
   hasFastMode: false,
   effortLevels: [],
   permissionModes: [],
@@ -31,6 +39,40 @@ function stubElectron() {
   );
   vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } } });
   return { getCapabilities, invoke };
+}
+
+function stubLocalCatalog() {
+  let providerId = 'provider-old';
+  let capabilityRevision = 'old';
+  let unavailableAgent: string | null = null;
+  let transientError: { agent: string; message: string } | null = null;
+  const getCapabilities = vi.fn(async (agent: string) => {
+    if (transientError?.agent === agent) throw new Error(transientError.message);
+    if (agent === unavailableAgent) throw new Error(`Agent '${agent}' is not registered`);
+    return caps(`${capabilityRevision}:${agent}`);
+  });
+  const listProviders = vi.fn(async () => ({
+    dataOwnerId: null,
+    ownerGeneration: 0,
+    providers: [{ id: providerId }],
+    providerOrder: [providerId],
+  }));
+  vi.stubGlobal('window', { electronAPI: { maker: { getCapabilities, listProviders } } });
+  return {
+    getCapabilities,
+    setSnapshot(nextProviderId: string, nextCapabilityRevision: string): void {
+      providerId = nextProviderId;
+      capabilityRevision = nextCapabilityRevision;
+    },
+    setUnavailableAgent(agent: string | null): void {
+      unavailableAgent = agent;
+      transientError = null;
+    },
+    setAgentError(agent: string | null, message = 'temporary capability failure'): void {
+      transientError = agent ? { agent, message } : null;
+      unavailableAgent = null;
+    },
+  };
 }
 
 describe('useAgentCapabilities deviceId-aware cache', () => {
@@ -47,7 +89,7 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     );
   });
 
-  it('本机目录热刷新会原子替换两个 agent 的缓存快照', async () => {
+  it('本机目录热刷新会原子替换核心 agent 的缓存快照', async () => {
     const { getCapabilities } = stubElectron();
     const mod = await import('@/hooks/useAgentCapabilities');
     await mod.preloadAllCapabilities();
@@ -60,6 +102,120 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     );
     expect(mod.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
       'refreshed:codex',
+    );
+  });
+
+  it('本机目录快照在可选 Pi 不可用时仍返回 Claude Code 与 Codex 能力', async () => {
+    const { getCapabilities } = stubElectron();
+    getCapabilities.mockImplementation(async (agent: string) => {
+      if (agent === 'pi')
+        throw new Error(
+          "[MAKER_NOT_FOUND] Agent 'pi' is not registered (available: claude-code, codex)",
+        );
+      return caps(`local:${agent}`);
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await expect(mod.loadLocalCapabilitiesSnapshot()).resolves.toEqual([
+      ['claude-code', caps('local:claude-code')],
+      ['codex', caps('local:codex')],
+    ]);
+    expect(getCapabilities).toHaveBeenCalledWith('pi');
+  });
+
+  it('本机目录快照在核心 agent 不可用时仍拒绝提交部分能力', async () => {
+    const { getCapabilities } = stubElectron();
+    getCapabilities.mockImplementation(async (agent: string) => {
+      if (agent === 'codex') throw new Error("Agent 'codex' is not registered");
+      return caps(`local:${agent}`);
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await expect(mod.loadLocalCapabilitiesSnapshot()).rejects.toThrow(
+      "Agent 'codex' is not registered",
+    );
+  });
+
+  it('Pi 不可用且没有旧快照时仍联合提交 provider 与核心能力', async () => {
+    const harness = stubLocalCatalog();
+    harness.setSnapshot('provider-initial', 'initial');
+    harness.setUnavailableAgent('pi');
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const providers = await import('@/lib/providersSnapshotStore');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+
+    expect(providers.getCachedProvidersSnapshot()?.providers).toEqual([{ id: 'provider-initial' }]);
+    expect(capabilities.getCachedCapabilities('claude-code')?.availableModels[0].displayName).toBe(
+      'initial:claude-code',
+    );
+    expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
+      'initial:codex',
+    );
+    expect(capabilities.getCachedCapabilities('pi')).toBeNull();
+  });
+
+  it('Pi 变为不可用时清除旧能力，并用新 provider 快照替换核心能力', async () => {
+    const harness = stubLocalCatalog();
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const providers = await import('@/lib/providersSnapshotStore');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+    expect(capabilities.getCachedCapabilities('pi')?.availableModels[0].displayName).toBe('old:pi');
+
+    harness.setSnapshot('provider-new', 'new');
+    harness.setUnavailableAgent('pi');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+
+    expect(providers.getCachedProvidersSnapshot()?.providers).toEqual([{ id: 'provider-new' }]);
+    expect(capabilities.getCachedCapabilities('claude-code')?.availableModels[0].displayName).toBe(
+      'new:claude-code',
+    );
+    expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
+      'new:codex',
+    );
+    expect(capabilities.getCachedCapabilities('pi')).toBeNull();
+  });
+
+  it('Pi 临时能力错误时联合刷新保留旧 provider 与三份 agent 快照', async () => {
+    const harness = stubLocalCatalog();
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const providers = await import('@/lib/providersSnapshotStore');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+
+    harness.setSnapshot('provider-new', 'new');
+    harness.setAgentError('pi', 'Pi capability IPC failed');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(false);
+
+    expect(providers.getCachedProvidersSnapshot()?.providers).toEqual([{ id: 'provider-old' }]);
+    expect(capabilities.getCachedCapabilities('claude-code')?.availableModels[0].displayName).toBe(
+      'old:claude-code',
+    );
+    expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
+      'old:codex',
+    );
+    expect(capabilities.getCachedCapabilities('pi')?.availableModels[0].displayName).toBe('old:pi');
+  });
+
+  it('核心 agent 失败时联合刷新保留 last-valid provider 与能力快照', async () => {
+    const harness = stubLocalCatalog();
+    const catalog = await import('@/lib/localCatalogSnapshot');
+    const providers = await import('@/lib/providersSnapshotStore');
+    const capabilities = await import('@/hooks/useAgentCapabilities');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(true);
+
+    harness.setSnapshot('provider-rejected', 'rejected');
+    harness.setUnavailableAgent('codex');
+    await expect(catalog.refreshLocalCatalogSnapshot()).resolves.toBe(false);
+
+    expect(providers.getCachedProvidersSnapshot()?.providers).toEqual([{ id: 'provider-old' }]);
+    expect(capabilities.getCachedCapabilities('claude-code')?.availableModels[0].displayName).toBe(
+      'old:claude-code',
+    );
+    expect(capabilities.getCachedCapabilities('codex')?.availableModels[0].displayName).toBe(
+      'old:codex',
     );
   });
 
@@ -77,6 +233,163 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     // 本地缓存不受影响(没预热过)
     expect(mod.getCachedCapabilities('claude-code')).toBeNull();
   });
+
+  it('远程 Pi capabilities 原样保留 BYOM 显式 effort 子集', async () => {
+    const explicitPiCaps: Caps = {
+      ...caps('dev-1:pi'),
+      availableModels: [
+        {
+          id: 'reasoner',
+          displayName: 'Reasoner',
+          contextWindow: 200_000,
+          efforts: ['low', 'high'],
+          defaultEffort: 'high',
+        },
+      ],
+    };
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) =>
+      args[0] === 'pi' ? explicitPiCaps : caps(`dev-1:${String(args[0])}`),
+    );
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('pi', 'dev-1')?.availableModels[0]?.efforts).toEqual([
+      'low',
+      'high',
+    ]);
+  });
+
+  it('非法 capabilities 响应进入 error，不得发布 ready 或落缓存', async () => {
+    const invoke = vi.fn(async () => null);
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    const listener = vi.fn();
+    mod.subscribeDeviceCapabilities('dev-invalid', 'codex', listener);
+
+    await mod.prefetchDeviceCapabilities('dev-invalid');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid agent capabilities response',
+    });
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid')).toBeNull();
+  });
+
+  it('capabilities 模型数组混入非法元素时整份进入 error，不得部分发布或落缓存', async () => {
+    const invoke = vi.fn(async () => ({
+      ...caps('invalid'),
+      availableModels: [...caps('valid').availableModels, null],
+    }));
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    const listener = vi.fn();
+    mod.subscribeDeviceCapabilities('dev-invalid-item', 'codex', listener);
+
+    await mod.prefetchDeviceCapabilities('dev-invalid-item');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid agent capabilities response',
+    });
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-item')).toBeNull();
+  });
+
+  it.each([
+    { label: '空数组', value: [] },
+    { label: '未知 agent', value: ['pi'] },
+    { label: '重复 agent', value: ['codex', 'codex'] },
+  ])('newSessionDefault 非法（$label）时整份 capabilities fail closed', async ({ value }) => {
+    const invoke = vi.fn(async () => ({
+      ...caps('invalid-default'),
+      availableModels: [
+        {
+          ...caps('invalid-default').availableModels[0],
+          newSessionDefault: value,
+        },
+      ],
+    }));
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    const listener = vi.fn();
+    mod.subscribeDeviceCapabilities('dev-invalid-default', 'codex', listener);
+
+    await mod.prefetchDeviceCapabilities('dev-invalid-default');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid agent capabilities response',
+    });
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-default')).toBeNull();
+  });
+
+  it('模型默认 effort 不在可用列表中时不得落缓存', async () => {
+    const invoke = vi.fn(async () => ({
+      ...caps('invalid-effort'),
+      availableModels: [
+        {
+          id: 'm',
+          displayName: 'Invalid Effort',
+          contextWindow: 1,
+          efforts: ['low'],
+          defaultEffort: 'high',
+        },
+      ],
+    }));
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    const listener = vi.fn();
+    mod.subscribeDeviceCapabilities('dev-invalid-effort', 'codex', listener);
+
+    await mod.prefetchDeviceCapabilities('dev-invalid-effort');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid agent capabilities response',
+    });
+    expect(mod.getCachedCapabilities('codex', 'dev-invalid-effort')).toBeNull();
+  });
+
+  it.each(['effortLevels', 'permissionModes'] as const)(
+    '%s 混入非法 descriptor 时不得发布 ready',
+    async (field) => {
+      const invoke = vi.fn(async () => ({
+        ...caps('invalid-descriptor'),
+        [field]: [{ id: 'invalid', displayName: null }],
+      }));
+      const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+      vi.stubGlobal('window', {
+        electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+      });
+      const mod = await import('@/hooks/useAgentCapabilities');
+      const listener = vi.fn();
+      mod.subscribeDeviceCapabilities(`dev-invalid-${field}`, 'codex', listener);
+
+      await mod.prefetchDeviceCapabilities(`dev-invalid-${field}`);
+
+      expect(listener).toHaveBeenCalledWith({
+        status: 'error',
+        error: 'Invalid agent capabilities response',
+      });
+      expect(mod.getCachedCapabilities('codex', `dev-invalid-${field}`)).toBeNull();
+    },
+  );
 
   it('key 隔离:local / dev-1 / dev-2 各自独立不串', async () => {
     stubElectron();

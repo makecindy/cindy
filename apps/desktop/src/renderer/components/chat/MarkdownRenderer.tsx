@@ -11,7 +11,7 @@
  *   into Markdown image nodes before HTML filtering.
  */
 
-import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type AnimationEvent as ReactAnimationEvent, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -25,12 +25,22 @@ import remarkStrictInlineMath from './remarkStrictInlineMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
-import remarkPreserveLocalImagePaths, {
+import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_IMAGE_SRC_PROP,
-} from './remarkPreserveLocalImagePaths';
+  RAW_LOCAL_LINK_HREF_PROP,
+} from './remarkPreserveRawLocalDestinations';
 import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
+import {
+  getOrCreateWordFadeState,
+  markSettledFromAnimationEnd,
+  releaseWordFadeState,
+  rehypeStreamWordFade,
+} from './rehypeStreamWordFade';
+import { repairStreamingMarkdown } from './repairStreamingMarkdown';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
 import type { Components, UrlTransform } from 'react-markdown';
 import type { PluggableList } from 'unified';
@@ -186,6 +196,11 @@ function isMermaidCodeChild(child: ReactNode): boolean {
 // 全中招);mobile 自研 parser 用正则配对本就能渲染这些写法,此处对齐。只放宽
 // emphasis/strong 的定界判定,不碰 `~~` 删除线(gfm strikethrough 有独立定界
 // 逻辑,行为不变),也不影响带空格的 `2 ** 3 ** 4` 这类本应保持字面量的写法。
+// remarkPreserveRawLocalDestinations 必须排在**链尾**:它给 image / link 节点存原始
+// 本地目的地(见该文件头部说明),必须在所有会新建这两类节点的插件之后运行——
+// remarkHtmlImages(<img> HTML → mdast image)与 remarkLocalPathLinks(正文裸路径
+// → link)。remarkSessionLinks 产出的 cindy:// 深链带 scheme,被它的判据跳过,
+// 顺序无关。
 const REMARK_PLUGINS: PluggableList = [
   [remarkGfm, { singleTilde: false }],
   remarkCjkFriendly,
@@ -193,8 +208,8 @@ const REMARK_PLUGINS: PluggableList = [
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,
   remarkHtmlImages,
-  remarkPreserveLocalImagePaths,
   remarkLocalPathLinks,
+  remarkPreserveRawLocalDestinations,
 ];
 const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   [remarkGfm, { singleTilde: false }],
@@ -203,9 +218,9 @@ const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,
   remarkHtmlImages,
-  remarkPreserveLocalImagePaths,
   remarkSessionLinks,
   remarkLocalPathLinks,
+  remarkPreserveRawLocalDestinations,
 ];
 // rehypeSlug: assigns a slug-style `id` to every heading. Without it
 // in-document anchor links (`[Section](#section-name)`) hit dead targets.
@@ -303,6 +318,11 @@ interface MarkdownRendererProps {
    *  message never misses its last token. Default false (static content
    *  paths like TextLightbox bypass the throttle entirely). */
   isStreaming?: boolean;
+  /**
+   * Stable identity of the streaming message. Keeps the word-fade timeline
+   * across task-view remounts so already-rendered text cannot replay.
+   */
+  streamFadeKey?: string;
   /** Files uploaded in the session. Used to resolve model-authored links like
    *  `[doc.docx](doc.docx)` back to the original attachment path. */
   localFileRefs?: readonly KnownLocalFileRef[];
@@ -864,6 +884,7 @@ function LightboxImage({
           <DropdownMenuTrigger asChild>
             <span
               aria-hidden
+              data-fixed-menu-anchor
               style={{
                 position: 'fixed',
                 left: menuPos?.x ?? 0,
@@ -1605,6 +1626,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   workingDir,
   content,
   isStreaming = false,
+  streamFadeKey,
   localFileRefs,
   currentSessionId,
   currentSessionTitle,
@@ -1615,14 +1637,51 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // Static callers (TextLightbox) leave isStreaming undefined → false,
   // so the throttle is fully bypassed — same behavior as before.
   const throttledContent = useStreamingThrottle(content, isStreaming);
+  // 流式逐词淡入(rehypeStreamWordFade,§14.4 第五个 sanctioned motion class):
+  // 仅 isStreaming + 非 reduced-motion 时把插件挂到 rehype 链尾。state 按渲染器
+  // 实例持有(useMemo 键 isStreaming):流式期间跨 parse tick 记住每个词的 delay
+  // 保证不重播;根节点监听冒泡的 animationend 把播完的词落袋(settled),下一次
+  // parse 直接还原纯文本 —— 结构性 remount 也无从重播(双保险,详见插件头注释)。
+  // isStreaming 翻 false 时整段回落到模块级常量 REHYPE_PLUGINS —— 终版渲染无
+  // 任何 span 包装,插件、state 与监听一起被回收,静态路径零开销。
+  // 用户开关(Settings → 个性化 → 流式动效,默认开)与 reduced-motion 取 AND:
+  // 系统级减弱动效永远优先,开关只在 motion 允许的前提下再做个人选择。
+  const reducedMotion = useReducedMotion();
+  const streamFadeEnabled = useStreamFadeEnabled();
+  const streamFade = isStreaming && !reducedMotion && streamFadeEnabled;
+  const wordFade = useMemo(() => {
+    if (!streamFade) return null;
+    const state = getOrCreateWordFadeState(streamFadeKey);
+    return {
+      state,
+      plugins: [...REHYPE_PLUGINS, [rehypeStreamWordFade, state]] as PluggableList,
+    };
+  }, [streamFade, streamFadeKey]);
+  useEffect(() => {
+    if (!isStreaming) releaseWordFadeState(streamFadeKey);
+  }, [isStreaming, streamFadeKey]);
+  const rehypePlugins = wordFade?.plugins ?? REHYPE_PLUGINS;
+  const handleWordFadeAnimationEnd = useMemo(() => {
+    if (!wordFade) return undefined;
+    return (event: ReactAnimationEvent<HTMLDivElement>) =>
+      markSettledFromAnimationEnd(wordFade.state, event.nativeEvent);
+  }, [wordFade]);
   // LaTeX 定界符归一化(`\(...\)` / `\[...\]` → `$...$` / `$$...$$`)。
   // emitSourceLines(TextLightbox 行锚点 doc 模式,依赖 data-source-line 与
   // 源文件行号一致)时走保行数模式:单行 inline 照常转换(同行替换不改行
   // 号),会插行的 display 保持源码展示。无定界符时函数原样返回原引用,
   // useMemo + react-markdown 缓存不失效。
+  // 流式 markdown 临时修复(未闭合围栏 / 强调符补齐、半截图片/链接降级文本):
+  // 减少半个语法符号引起的结构翻转与样式跳变。跟随 streamFade 总开关(而不是
+  // 只看 isStreaming):它是淡入动效的配套层(消除触发重淡的结构翻转源头),
+  // 用户关闭流式动效后应回到与改动前完全一致的原始渲染路径;终版渲染恒用原文。
+  const repairedContent = useMemo(
+    () => (streamFade ? repairStreamingMarkdown(throttledContent) : throttledContent),
+    [throttledContent, streamFade],
+  );
   const renderedContent = useMemo(
-    () => normalizeMathDelimiters(throttledContent, { preserveLineCount: emitSourceLines }),
-    [throttledContent, emitSourceLines],
+    () => normalizeMathDelimiters(repairedContent, { preserveLineCount: emitSourceLines }),
+    [repairedContent, emitSourceLines],
   );
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
@@ -1738,8 +1797,17 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         // remarkLocalPathLinks 打的标记:这条 link 来自正文裸写的路径,不是作者手写的
         // `[label](path)`。读完即从 DOM props 里剥掉(它只是内部信道,不该落到 <a> 上)。
         const fromBarePath = BARE_PATH_ATTR in rawProps;
+        // remarkPreserveRawLocalDestinations 存的原始本地 href。mdast→hast 序列化会把
+        // 反斜杠 percent-encode 成 %5C,`C:\Users\...` 变成 `C:%5CUsers...` 后既过不了
+        // trustedUrlTransform 的 Windows 绝对路径白名单(href 被清成 "" → 链接退化
+        // 纯文本,#1629),字面 `%20` 与真实空格也不可区分。与 img 渲染器同构:
+        // 分类/解析优先用原始值;仅受信任内容启用(untrusted 保持既有降级)。
+        const rawLocalHref = rawProps[RAW_LOCAL_LINK_HREF_PROP];
         const safeProps = omitMarkdownInternalProps(rawProps);
         delete safeProps[BARE_PATH_ATTR];
+        delete safeProps[RAW_LOCAL_LINK_HREF_PROP];
+        const targetHref =
+          allowPrivilegedLinks && typeof rawLocalHref === 'string' ? rawLocalHref : href;
         if (allowPrivilegedLinks && href != null && hasDeepLinkPathPrefix(href, 'session-card/')) {
           const parsed = parseSessionCardHref(href);
           if (parsed) {
@@ -1776,7 +1844,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         }
         return (
           <MarkdownTargetLink
-            href={href}
+            href={targetHref}
             workingDir={workingDir}
             isStreaming={isStreaming}
             localFileRefs={localFileRefs}
@@ -1807,10 +1875,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   );
 
   return (
-    <div className="msg-markdown select-text">
+    <div className="msg-markdown select-text" onAnimationEnd={handleWordFadeAnimationEnd}>
       <ReactMarkdown
         remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
+        rehypePlugins={rehypePlugins}
         components={components}
         urlTransform={allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform}
         skipHtml

@@ -55,6 +55,12 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return embeddingEnqueue(db, txArgs);
     case 'scheduler.claimDueFireAndInsertRun':
       return schedulerClaimDueFireAndInsertRun(db, txArgs);
+    case 'scheduler.completeAutomaticClaim':
+      return schedulerCompleteAutomaticClaim(db, txArgs);
+    case 'scheduler.deferRunNowWithLiveClaimGuard':
+      return schedulerDeferRunNowWithLiveClaimGuard(db, txArgs);
+    case 'scheduler.pauseWithLiveClaimGuard':
+      return schedulerPauseWithLiveClaimGuard(db, txArgs);
     case 'scheduler.resumeWithLiveClaimGuard':
       return schedulerResumeWithLiveClaimGuard(db, txArgs);
     case 'orca.reserveWorkerCreation':
@@ -71,6 +77,10 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return orcaRemoveWorker(db, txArgs);
     case 'orca.cancelStaleTeams':
       return orcaCancelStaleTeams(db, txArgs);
+    case 'orca.archiveWorkersByTeam':
+      return orcaArchiveWorkersByTeam(db, txArgs);
+    case 'orca.reconcileInactiveTeamWorkersForLead':
+      return orcaReconcileInactiveTeamWorkersForLead(db, txArgs);
     case 'sessions.renameTitles':
       return sessionsRenameTitles(db, txArgs);
     case 'sessions.setStatus':
@@ -221,7 +231,10 @@ function sessionAgentSwitchFallback(db: Database.Database, args: unknown): void 
 function messageDelete(
   db: Database.Database,
   args: unknown,
-): { messages: Array<{ messageId: string; clientId: string }> } {
+): {
+  messages: Array<{ messageId: string; clientId: string }>;
+  subagentRunIds: string[];
+} {
   const payload = asRecord(args, 'message.delete args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const clientIds = [...new Set(
@@ -240,14 +253,36 @@ function messageDelete(
   const markerContent = expectString(marker.content, 'contextMarker.content');
   const markerCreatedAt = expectNumber(marker.createdAt, 'contextMarker.createdAt');
   const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  const rawSubagentTurnWindow = payload.subagentTurnWindow;
+  const subagentTurnWindow = rawSubagentTurnWindow === undefined
+    ? null
+    : (() => {
+        const window = asRecord(rawSubagentTurnWindow, 'subagentTurnWindow');
+        const startedAtInclusive = expectNumber(
+          window.startedAtInclusive,
+          'subagentTurnWindow.startedAtInclusive',
+        );
+        const startedAtExclusive = window.startedAtExclusive === undefined
+          ? undefined
+          : expectNumber(window.startedAtExclusive, 'subagentTurnWindow.startedAtExclusive');
+        if (
+          !Number.isSafeInteger(startedAtInclusive)
+          || startedAtInclusive < 0
+          || (startedAtExclusive !== undefined
+            && (!Number.isSafeInteger(startedAtExclusive) || startedAtExclusive < 0))
+        ) {
+          throw invalidArgs('subagentTurnWindow must contain non-negative integer timestamps');
+        }
+        return { startedAtInclusive, startedAtExclusive };
+      })();
 
   const transaction = db.transaction(() => {
     const selectTarget = db.prepare(
-      "SELECT id, client_id AS clientId FROM messages WHERE session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL LIMIT 1",
+      "SELECT id, client_id AS clientId, tool_use_id AS toolUseId FROM messages WHERE session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL LIMIT 1",
     );
     const targets = clientIds.map((clientId) => {
       const target = selectTarget.get(sessionId, clientId) as
-        | { id: string; clientId: string }
+        | { id: string; clientId: string; toolUseId: string | null }
         | undefined;
       if (!target) {
         throw Object.assign(new Error(`Message 不存在或不可删除: ${clientId}`), {
@@ -274,12 +309,88 @@ function messageDelete(
         }
         stmt.run(job.rowid);
       }
-      db.prepare("DELETE FROM embedding_jobs WHERE source = 'chat' AND source_id = ?").run(target.id);
+      db.prepare("DELETE FROM embedding_jobs WHERE source = 'chat' AND source_id = ?").run(
+        target.id,
+      );
+    }
+
+    const subagentRunIds = new Set<string>();
+    const hasSubagentRuns = Boolean(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'").get(),
+    );
+    if (hasSubagentRuns) {
+      const selectLinkedSubagents = db.prepare(
+        `SELECT id
+           FROM subagent_runs
+          WHERE session_id = ?
+            AND parent_tool_use_id = ?
+            AND rewind_at IS NULL
+            AND deleted_at IS NULL`,
+      );
+      const parentToolUseIds = new Set(
+        targets.flatMap((target) => (target.toolUseId ? [target.toolUseId] : [])),
+      );
+      for (const toolUseId of parentToolUseIds) {
+        const linkedRows = selectLinkedSubagents.all(sessionId, toolUseId) as Array<{ id: string }>;
+        for (const row of linkedRows) subagentRunIds.add(row.id);
+      }
+      if (subagentTurnWindow) {
+        const parentlessRows = (
+          subagentTurnWindow.startedAtExclusive === undefined
+            ? db.prepare(
+                `SELECT id
+                   FROM subagent_runs
+                  WHERE session_id = ?
+                    AND parent_tool_use_id IS NULL
+                    AND rewind_at IS NULL
+                    AND deleted_at IS NULL
+                    AND started_at >= ?`,
+              ).all(sessionId, subagentTurnWindow.startedAtInclusive)
+            : db.prepare(
+                `SELECT id
+                   FROM subagent_runs
+                  WHERE session_id = ?
+                    AND parent_tool_use_id IS NULL
+                    AND rewind_at IS NULL
+                    AND deleted_at IS NULL
+                    AND started_at >= ?
+                    AND started_at < ?`,
+              ).all(
+                sessionId,
+                subagentTurnWindow.startedAtInclusive,
+                subagentTurnWindow.startedAtExclusive,
+              )
+        ) as Array<{ id: string }>;
+        for (const row of parentlessRows) subagentRunIds.add(row.id);
+      }
+      const scrubSubagent = db.prepare(
+        `UPDATE subagent_runs
+            SET title = NULL,
+                description = NULL,
+                summary = NULL,
+                activity = '[]',
+                updated_at = MAX(updated_at, ?),
+                deleted_at = ?
+          WHERE id = ?
+            AND session_id = ?
+            AND rewind_at IS NULL
+            AND deleted_at IS NULL`,
+      );
+      for (const runId of subagentRunIds) {
+        const scrubbed = scrubSubagent.run(updatedAt, updatedAt, runId, sessionId);
+        if (scrubbed.changes !== 1) {
+          throw Object.assign(new Error(`Subagent 删除竞态: ${runId}`), {
+            code: 'PRECONDITION_FAILED',
+          });
+        }
+      }
     }
 
     // 旧重建标记的 handoff 可能包含本次目标消息；先删旧标记，只保留基于
     // 当前有效历史重新生成的最新版本，避免隐藏派生记录把内容留在本地。
-    db.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(sessionId);
+    db.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(
+      sessionId,
+    );
     const scrubTarget = db.prepare(
       "UPDATE messages SET role = 'message_tombstone', content = 'null', tool_use_id = NULL, agent_meta = NULL, agent_kind = NULL, rewind_at = ? WHERE id = ? AND session_id = ? AND client_id = ? AND role IN ('user', 'assistant', 'tool_use', 'tool_result', 'ask_user', 'plan_review', 'thinking', 'error') AND rewind_at IS NULL",
     );
@@ -305,6 +416,7 @@ function messageDelete(
         messageId: target.id,
         clientId: target.clientId,
       })),
+      subagentRunIds: [...subagentRunIds].sort(),
     };
   });
   return transaction();
@@ -409,7 +521,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     throw invalidArgs(`invalid status: ${status}`);
   }
   const selectSession = db.prepare(
-    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = db.prepare(
     'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind',
@@ -427,6 +539,11 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
       const existing = selectSession.get(sessionId);
       if (!existing) {
         throw Object.assign(new Error(`Session 不存在: ${sessionId}`), { code: 'NOT_FOUND' });
+      }
+      if ((existing as { status?: unknown }).status === 'deleted') {
+        throw Object.assign(new Error(`已删除的任务不能恢复或归档: ${sessionId}`), {
+          code: 'PRECONDITION_FAILED',
+        });
       }
       const updated = updateSession.get(status, now, sessionId) as
         | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null }
@@ -461,7 +578,11 @@ function codexImportMessages(db: Database.Database, args: unknown): { changed: n
   const model = expectString(payload.model, 'model');
   const rows = expectArray(payload.rows, 'rows');
   const existing = readExistingMessageFingerprints(db, sessionId, importClientIdPrefix);
-  const existingImportedClientIds = readExistingImportedClientIds(db, sessionId, importClientIdPrefix);
+  const existingImportedClientIds = readExistingImportedClientIds(
+    db,
+    sessionId,
+    importClientIdPrefix,
+  );
   const upsert = db.prepare(`
     INSERT INTO messages
       (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at)
@@ -565,19 +686,25 @@ function rewindCommit(db: Database.Database, args: unknown): void {
   const payload = asRecord(args, 'rewind.commit args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const targetCreatedAt = expectNumber(payload.targetCreatedAt, 'targetCreatedAt');
-  const targetMessageId = typeof payload.targetMessageId === 'string' ? payload.targetMessageId : null;
+  const targetMessageId =
+    typeof payload.targetMessageId === 'string' ? payload.targetMessageId : null;
   const targetClientId = typeof payload.targetClientId === 'string' ? payload.targetClientId : null;
-  const targetMessageUuid = typeof payload.targetMessageUuid === 'string' ? payload.targetMessageUuid : null;
-  const preserveMessageUuid = typeof payload.preserveMessageUuid === 'string' ? payload.preserveMessageUuid : null;
-  const sdkSessionId = typeof payload.sdkSessionId === 'string' && payload.sdkSessionId ? payload.sdkSessionId : null;
+  const targetMessageUuid =
+    typeof payload.targetMessageUuid === 'string' ? payload.targetMessageUuid : null;
+  const preserveMessageUuid =
+    typeof payload.preserveMessageUuid === 'string' ? payload.preserveMessageUuid : null;
+  const sdkSessionId =
+    typeof payload.sdkSessionId === 'string' && payload.sdkSessionId ? payload.sdkSessionId : null;
   const requireLatestUser = payload.requireLatestUser === true;
   const now = expectNumber(payload.now, 'now');
-  const rows = db.prepare(
-    `SELECT id, client_id, role, created_at, agent_meta
+  const rows = db
+    .prepare(
+      `SELECT id, client_id, role, created_at, agent_meta, tool_use_id
        FROM messages
       WHERE session_id = ?
         AND rewind_at IS NULL`,
-  ).all(sessionId) as RewindMessageRow[];
+    )
+    .all(sessionId) as RewindMessageRow[];
   // edit-last-message 原子守卫(requireLatestUser):与软删同一同步临界区内
   // 断言 target 之后没有更新的可见 user 消息(worker 单线程 + better-sqlite3
   // 同步执行,本函数内不可能被其它写操作打断)。命中 → 抛错,软删不发生,
@@ -601,8 +728,44 @@ function rewindCommit(db: Database.Database, args: unknown): void {
     preserveMessageUuid,
   });
   const updateMessage = db.prepare('UPDATE messages SET rewind_at = ? WHERE id = ?');
+  const hasSubagentRuns = Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'").get(),
+  );
+  const rewindSubagentByParent = hasSubagentRuns
+    ? db.prepare(
+        `UPDATE subagent_runs
+            SET rewind_at = ?
+          WHERE session_id = ?
+            AND rewind_at IS NULL
+            AND parent_tool_use_id = ?`,
+      )
+    : null;
+  const rewindParentlessSubagentTail = hasSubagentRuns
+    ? db.prepare(
+        `UPDATE subagent_runs
+            SET rewind_at = ?
+          WHERE session_id = ?
+            AND rewind_at IS NULL
+            AND parent_tool_use_id IS NULL
+            AND started_at >= ?`,
+      )
+    : null;
   const transaction = db.transaction(() => {
     for (const id of idsToRewind) updateMessage.run(now, id);
+    if (rewindSubagentByParent && rewindParentlessSubagentTail) {
+      const rewoundIds = new Set(idsToRewind);
+      const parentToolUseIds = new Set(
+        rows.flatMap((row) => (rewoundIds.has(row.id) && row.tool_use_id ? [row.tool_use_id] : [])),
+      );
+      for (const toolUseId of parentToolUseIds) {
+        rewindSubagentByParent.run(now, sessionId, toolUseId);
+      }
+      // Older Claude task_updated events may not carry parentToolUseId. There
+      // is no stable ordering key for a same-millisecond orphan, so fail closed
+      // at the boundary: hiding a possibly older orphan is safer than exposing
+      // work from the branch the user explicitly withdrew.
+      rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
+    }
     if (sdkSessionId) {
       db.prepare(
         `UPDATE sessions
@@ -832,6 +995,7 @@ interface RewindMessageRow {
   role: string;
   created_at: number;
   agent_meta: string | null;
+  tool_use_id: string | null;
 }
 
 interface RewindSelectOpts {
@@ -906,8 +1070,9 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
   const detachAgentSwitchSessions = payload.detachAgentSwitchSessions === true;
   const resetHandoffBoundaryClientId = nullableString(payload.resetHandoffBoundaryClientId);
   const newMessageIds = normalizeNewMessageIds(payload.newMessageIds);
-  const sourceMessages = db.prepare(
-    `SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at
+  const sourceMessages = db
+    .prepare(
+      `SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at
        FROM messages
       WHERE session_id = ?
         AND (? IS NULL OR created_at > ?)
@@ -997,7 +1162,12 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
           resetHandoffBoundaryClientId,
         }),
         message.tool_use_id,
-        remapAgentMetaUuid(message.agent_meta, uuidMap, legacyTranscriptParentUuids, toolParentUuids),
+        remapAgentMetaUuid(
+          message.agent_meta,
+          uuidMap,
+          legacyTranscriptParentUuids,
+          toolParentUuids,
+        ),
         message.agent_kind,
         message.created_at,
       );
@@ -1033,64 +1203,85 @@ function sanitizeForkedMessageContent(
 // 行级校验放在事务体内,任一行非法 → 整体回滚零写入(导入编排的"DB 是最后一步"
 // 依赖这个原子性做免回滚)。session 已存在按 ALREADY_EXISTS 抛,编排层在
 // 冲突预检后理论上不会命中,这里是并发双导入的兜底。
+// 协同包经可选 orca 段在同一事务追加 Worker 会话 + orca_teams/orca_workers
+// 关系图,任一子会话失败整包回滚。
 // 本文件是 inproc 回滚口;默认热路径走 file worker 的同名 handler
 // (client/WorkerThreadTransport.ts)。两份实现必须同步,typecheck 抓不到 drift。
 function sessionImportShare(db: Database.Database, args: unknown): { messageCount: number } {
   const payload = asRecord(args, 'session.importShare args');
   const session = asRecord(payload.session, 'session');
   const messages = expectArray(payload.messages, 'messages');
-  const sessionId = expectString(session.id, 'session.id');
+  const replaceSessions = payload.replaceSessions == null
+    ? []
+    : expectArray(payload.replaceSessions, 'replaceSessions').map((raw, i) => {
+        const replacement = asRecord(raw, `replaceSessions[${i}]`);
+        const status = expectString(replacement.status, `replaceSessions[${i}].status`);
+        if (status !== 'active' && status !== 'archived') {
+          throw new Error(`replaceSessions[${i}].status must be active or archived`);
+        }
+        return {
+          id: expectString(replacement.id, `replaceSessions[${i}].id`),
+          status,
+        };
+      });
+  const orca = payload.orca == null ? null : asRecord(payload.orca, 'orca');
+  const insertSession = db.prepare(
+    `INSERT INTO sessions (
+      id, title, working_dir, workspace_kind, worktree_path, model, effort, permission_mode, provider_id, status,
+      sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window,
+      fast_mode, plan_mode_enabled, agent_kind, orca_role, source, extra_dirs,
+      codex_history_has_product_prompt, cleared_at, user_send_at, created_at, updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  );
   const insertMessage = db.prepare(
     `INSERT INTO messages
       (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  const transaction = db.transaction(() => {
+  const insertSessionWithMessages = (
+    rawSession: Record<string, unknown>,
+    rawMessages: unknown[],
+  ): number => {
+    const sessionId = expectString(rawSession.id, 'session.id');
     const existing = db.prepare('SELECT id FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
     if (existing) {
       throw Object.assign(new Error(`session already exists: ${sessionId}`), {
         code: 'ALREADY_EXISTS',
       });
     }
-    db.prepare(
-      `INSERT INTO sessions (
-        id, title, working_dir, workspace_kind, worktree_path, model, effort, permission_mode, provider_id, status,
-        sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window,
-        fast_mode, plan_mode_enabled, agent_kind, source, extra_dirs,
-        codex_history_has_product_prompt, cleared_at, user_send_at, created_at, updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run(
+    insertSession.run(
       sessionId,
-      expectString(session.title, 'session.title'),
-      nullableString(session.workingDir),
-      expectString(session.workspaceKind, 'session.workspaceKind'),
-      nullableString(session.worktreePath),
-      expectString(session.model, 'session.model'),
-      expectString(session.effort, 'session.effort'),
-      expectString(session.permissionMode, 'session.permissionMode'),
-      nullableString(session.providerId),
-      expectString(session.status, 'session.status'),
-      nullableString(session.sdkSessionId),
-      expectNumber(session.totalTokenUsage, 'session.totalTokenUsage'),
-      expectNumber(session.totalCostUsd, 'session.totalCostUsd'),
-      expectNumber(session.contextTokens, 'session.contextTokens'),
-      expectNumber(session.contextWindow, 'session.contextWindow'),
-      session.fastMode ? 1 : 0,
-      session.planModeEnabled ? 1 : 0,
-      expectString(session.agentKind, 'session.agentKind'),
-      expectString(session.source, 'session.source'),
-      expectString(session.extraDirs, 'session.extraDirs'),
-      session.codexHistoryHasProductPrompt == null
+      expectString(rawSession.title, 'session.title'),
+      nullableString(rawSession.workingDir),
+      expectString(rawSession.workspaceKind, 'session.workspaceKind'),
+      nullableString(rawSession.worktreePath),
+      expectString(rawSession.model, 'session.model'),
+      expectString(rawSession.effort, 'session.effort'),
+      expectString(rawSession.permissionMode, 'session.permissionMode'),
+      nullableString(rawSession.providerId),
+      expectString(rawSession.status, 'session.status'),
+      nullableString(rawSession.sdkSessionId),
+      expectNumber(rawSession.totalTokenUsage, 'session.totalTokenUsage'),
+      expectNumber(rawSession.totalCostUsd, 'session.totalCostUsd'),
+      expectNumber(rawSession.contextTokens, 'session.contextTokens'),
+      expectNumber(rawSession.contextWindow, 'session.contextWindow'),
+      rawSession.fastMode ? 1 : 0,
+      rawSession.planModeEnabled ? 1 : 0,
+      expectString(rawSession.agentKind, 'session.agentKind'),
+      nullableString(rawSession.orcaRole),
+      expectString(rawSession.source, 'session.source'),
+      expectString(rawSession.extraDirs, 'session.extraDirs'),
+      rawSession.codexHistoryHasProductPrompt == null
         ? null
-        : session.codexHistoryHasProductPrompt
+        : rawSession.codexHistoryHasProductPrompt
           ? 1
           : 0,
-      nullableNumber(session.clearedAt),
-      nullableNumber(session.userSendAt),
-      expectNumber(session.createdAt, 'session.createdAt'),
-      expectNumber(session.updatedAt, 'session.updatedAt'),
+      nullableNumber(rawSession.clearedAt),
+      nullableNumber(rawSession.userSendAt),
+      expectNumber(rawSession.createdAt, 'session.createdAt'),
+      expectNumber(rawSession.updatedAt, 'session.updatedAt'),
     );
-    for (const rawMessage of messages) {
+    for (const rawMessage of rawMessages) {
       const m = asRecord(rawMessage, 'message');
       insertMessage.run(
         expectString(m.id, 'message.id'),
@@ -1105,7 +1296,59 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
         nullableNumber(m.rewindAt),
       );
     }
-    return messages.length;
+    return rawMessages.length;
+  };
+  const transaction = db.transaction(() => {
+    // 覆盖导入的替换必须与新图落库同事务:失败时旧 session 状态原子回滚。
+    // 这里仅改 DB 状态,不能走 patchSessionMetaInDb——它会 fire-and-forget 清理
+    // 图片/媒体引用/附件/worktree,那些副作用无法随 SQLite 事务回滚。
+    const deleteReplacedSession = db.prepare(
+      "UPDATE sessions SET status = 'deleted', updated_at = ? WHERE id = ? AND status != 'deleted'",
+    );
+    const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
+    for (const replacedSession of replaceSessions) {
+      deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
+    }
+    let messageCount = insertSessionWithMessages(session, messages);
+    if (orca) {
+      const team = asRecord(orca.team, 'orca.team');
+      db.prepare(
+        `INSERT INTO orca_teams (id, lead_session_id, status, completed_at, created_at, updated_at)
+         VALUES (?,?,?,?,?,?)`,
+      ).run(
+        expectString(team.id, 'orca.team.id'),
+        expectString(team.leadSessionId, 'orca.team.leadSessionId'),
+        expectString(team.status, 'orca.team.status'),
+        nullableNumber(team.completedAt),
+        expectNumber(team.createdAt, 'orca.team.createdAt'),
+        expectNumber(team.updatedAt, 'orca.team.updatedAt'),
+      );
+      const insertWorker = db.prepare(
+        `INSERT INTO orca_workers
+          (id, team_id, session_id, status, label, worktree_branch, role, focused, idle_since, created_at, updated_at)
+         VALUES (?,?,?,?,?,NULL,?,?,NULL,?,?)`,
+      );
+      for (const rawWorker of expectArray(orca.workers, 'orca.workers')) {
+        const worker = asRecord(rawWorker, 'orca.workers[]');
+        const record = asRecord(worker.record, 'orca.workers[].record');
+        messageCount += insertSessionWithMessages(
+          asRecord(worker.session, 'orca.workers[].session'),
+          expectArray(worker.messages, 'orca.workers[].messages'),
+        );
+        insertWorker.run(
+          expectString(record.id, 'orca.workers[].record.id'),
+          expectString(record.teamId, 'orca.workers[].record.teamId'),
+          expectString(record.sessionId, 'orca.workers[].record.sessionId'),
+          expectString(record.status, 'orca.workers[].record.status'),
+          nullableString(record.label),
+          expectString(record.role, 'orca.workers[].record.role'),
+          record.focused ? 1 : 0,
+          expectNumber(record.createdAt, 'orca.workers[].record.createdAt'),
+          expectNumber(record.updatedAt, 'orca.workers[].record.updatedAt'),
+        );
+      }
+    }
+    return messageCount;
   });
   return { messageCount: transaction() as number };
 }
@@ -1263,13 +1506,13 @@ function orcaRemoveWorker(db: Database.Database, args: unknown): string | null {
   const now = expectNumber(payload.now, 'now');
   const selectWorker = db.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = db.prepare('DELETE FROM orca_workers WHERE id = ?');
-  const archiveSession = db.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ?");
+  const archiveSession = db.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   const transaction = db.transaction(() => {
     const row = selectWorker.get(workerId) as { sessionId: string } | undefined;
     if (!row) return null;
     deleteWorker.run(workerId);
-    archiveSession.run(now, row.sessionId);
-    return row.sessionId;
+    const archived = archiveSession.run(now, row.sessionId);
+    return archived.changes > 0 ? row.sessionId : null;
   });
   return transaction() as string | null;
 }
@@ -1283,6 +1526,71 @@ function orcaCancelStaleTeams(db: Database.Database, args: unknown): void {
   db.transaction(() => {
     cancel.run(now, now, leadSessionId, keepTeamId);
   })();
+}
+
+function orcaArchiveWorkersByTeam(db: Database.Database, args: unknown): string[] {
+  const payload = asRecord(args, 'orca.archiveWorkersByTeam args');
+  const teamId = expectString(payload.teamId, 'teamId');
+  const now = expectNumber(payload.now, 'now');
+  const selectCandidates = db.prepare(
+    `SELECT sessions.id
+       FROM orca_workers
+       INNER JOIN sessions ON orca_workers.session_id = sessions.id
+      WHERE orca_workers.team_id = ? AND sessions.status = 'active'
+      ORDER BY sessions.id`,
+  );
+  const archiveSession = db.prepare(
+    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'",
+  );
+  const transaction = db.transaction(() => {
+    const candidates = selectCandidates.all(teamId) as Array<{ id: string }>;
+    const updatedIds: string[] = [];
+    for (const { id } of candidates) {
+      if (archiveSession.run(now, id).changes > 0) updatedIds.push(id);
+    }
+    return updatedIds;
+  });
+  return transaction() as string[];
+}
+
+function orcaReconcileInactiveTeamWorkersForLead(
+  db: Database.Database,
+  args: unknown,
+): string[] {
+  const payload = asRecord(args, 'orca.reconcileInactiveTeamWorkersForLead args');
+  const leadSessionId = expectString(payload.leadSessionId, 'leadSessionId');
+  const now = expectNumber(payload.now, 'now');
+  const selectCandidates = db.prepare(
+    `SELECT sessions.id
+       FROM orca_workers
+       INNER JOIN orca_teams ON orca_workers.team_id = orca_teams.id
+       INNER JOIN sessions ON orca_workers.session_id = sessions.id
+      WHERE orca_teams.lead_session_id = ?
+        AND orca_teams.status != 'active'
+        AND sessions.status = 'active'
+      ORDER BY sessions.id`,
+  );
+  const finishWorkers = db.prepare(
+    `UPDATE orca_workers
+        SET status = 'done', updated_at = ?
+      WHERE team_id IN (
+        SELECT id FROM orca_teams
+         WHERE lead_session_id = ? AND status != 'active'
+      )`,
+  );
+  const archiveSession = db.prepare(
+    "UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'",
+  );
+  const transaction = db.transaction(() => {
+    const candidates = selectCandidates.all(leadSessionId) as Array<{ id: string }>;
+    finishWorkers.run(now, leadSessionId);
+    const updatedIds: string[] = [];
+    for (const { id } of candidates) {
+      if (archiveSession.run(now, id).changes > 0) updatedIds.push(id);
+    }
+    return updatedIds;
+  });
+  return transaction() as string[];
 }
 
 function orcaUpsertWorker(db: Database.Database, args: unknown): void {
@@ -1434,6 +1742,130 @@ function schedulerClaimDueFireAndInsertRun(db: Database.Database, args: unknown)
       nullableNumber(run.heartbeatAt),
     );
     return true;
+  })();
+}
+
+function schedulerCompleteAutomaticClaim(db: Database.Database, args: unknown): boolean {
+  const payload = asRecord(args, 'scheduler.completeAutomaticClaim args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const claimRunId = expectString(payload.claimRunId, 'claimRunId');
+  const firedAt = expectNumber(payload.firedAt, 'firedAt');
+  const patch = asRecord(payload.patch, 'patch');
+  const hasPatch = (key: string) => Object.prototype.hasOwnProperty.call(patch, key);
+
+  return db.transaction(() => {
+    const setClauses = [
+      `last_fired_at = CASE
+        WHEN last_fired_at IS NULL OR last_fired_at <= ? THEN ?
+        ELSE last_fired_at
+      END`,
+      `active_claim_run_id = CASE
+        WHEN active_claim_run_id = ? THEN NULL
+        ELSE active_claim_run_id
+      END`,
+    ];
+    const params: unknown[] = [firedAt, firedAt, claimRunId];
+
+    if (hasPatch('lastFinishedAt')) {
+      setClauses.push('last_finished_at = ?');
+      params.push(nullableNumber(patch.lastFinishedAt));
+    }
+    if (hasPatch('nextFireAt')) {
+      setClauses.push(`next_fire_at = CASE
+        WHEN active_claim_run_id = ? THEN ?
+        ELSE next_fire_at
+      END`);
+      params.push(claimRunId, nullableNumber(patch.nextFireAt));
+    }
+    if (hasPatch('status')) {
+      setClauses.push('status = ?');
+      params.push(expectString(patch.status, 'patch.status'));
+    }
+
+    const result = db
+      .prepare(`UPDATE schedules SET ${setClauses.join(', ')} WHERE id = ?`)
+      .run(...params, scheduleId);
+    return result.changes > 0;
+  })();
+}
+
+function schedulerDeferRunNowWithLiveClaimGuard(db: Database.Database, args: unknown): boolean {
+  const payload = asRecord(args, 'scheduler.deferRunNowWithLiveClaimGuard args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const previousLastFiredAt = nullableNumber(payload.previousLastFiredAt);
+  const retryAt = expectNumber(payload.retryAt, 'retryAt');
+
+  return db.transaction(() => {
+    const row = db
+      .prepare('SELECT active_claim_run_id FROM schedules WHERE id = ? LIMIT 1')
+      .get(scheduleId) as { active_claim_run_id?: unknown } | undefined;
+    if (!row) return false;
+    const activeClaimRunId =
+      typeof row.active_claim_run_id === 'string' ? row.active_claim_run_id : null;
+    const liveClaim =
+      activeClaimRunId !== null &&
+      db
+        .prepare(
+          "SELECT 1 FROM schedule_runs WHERE id = ? AND schedule_id = ? AND status = 'running' LIMIT 1",
+        )
+        .get(activeClaimRunId, scheduleId) !== undefined;
+
+    const result = liveClaim
+      ? db
+          .prepare(
+            `UPDATE schedules
+             SET last_fired_at = ?,
+                 active_claim_run_id = ?
+             WHERE id = ?`,
+          )
+          .run(previousLastFiredAt, activeClaimRunId, scheduleId)
+      : db
+          .prepare(
+            `UPDATE schedules
+             SET last_fired_at = ?,
+                 next_fire_at = ?,
+                 active_claim_run_id = NULL
+             WHERE id = ?`,
+          )
+          .run(previousLastFiredAt, retryAt, scheduleId);
+    return result.changes > 0;
+  })();
+}
+
+function schedulerPauseWithLiveClaimGuard(db: Database.Database, args: unknown): boolean {
+  const payload = asRecord(args, 'scheduler.pauseWithLiveClaimGuard args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+
+  return db.transaction(() => {
+    const row = db
+      .prepare('SELECT active_claim_run_id FROM schedules WHERE id = ? LIMIT 1')
+      .get(scheduleId) as { active_claim_run_id?: unknown } | undefined;
+    if (!row) return false;
+    const activeClaimRunId =
+      typeof row.active_claim_run_id === 'string' ? row.active_claim_run_id : null;
+    const liveClaim =
+      activeClaimRunId !== null &&
+      db
+        .prepare(
+          "SELECT 1 FROM schedule_runs WHERE id = ? AND schedule_id = ? AND status = 'running' LIMIT 1",
+        )
+        .get(activeClaimRunId, scheduleId) !== undefined;
+
+    const result = db
+      .prepare(
+        `UPDATE schedules
+         SET status = 'paused',
+             updated_at = ?,
+             active_claim_run_id = ?
+         WHERE id = ?`,
+      )
+      .run(
+        updatedAt,
+        liveClaim ? activeClaimRunId : null,
+        scheduleId,
+      );
+    return result.changes > 0;
   })();
 }
 

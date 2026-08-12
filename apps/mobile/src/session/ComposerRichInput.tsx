@@ -95,6 +95,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       document,
       editable,
       maxHeight,
+      platform: Platform.OS === 'ios' ? 'ios' as const : Platform.OS === 'android' ? 'android' as const : 'default' as const,
       placeholder,
       theme,
     });
@@ -244,6 +245,11 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       disposedRef.current = false;
       return () => {
         disposedRef.current = true;
+        // sessionId 原地换代时 ComposerRichInput 会重挂载。旧实例的异步图片写盘即使
+        // 随后落定，也不能再沿旧闭包调用新任务的 onPasteImages / load-failed；先摘掉
+        // 批次登记，settlePastedImage 会把迟到结果视为已作废。
+        pendingImagePastesRef.current.clear();
+        pendingImagePasteOrderRef.current = [];
         const pendingUris = [...pendingPastedImageFilesRef.current];
         pendingPastedImageFilesRef.current.clear();
         if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);

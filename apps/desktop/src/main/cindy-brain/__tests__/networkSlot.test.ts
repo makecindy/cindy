@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
 import {
   GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE,
+  GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES,
   GHOST_FETCH_INFLIGHT_LIMIT,
   GHOST_FETCH_MEDIA_MAX_BYTES,
   GHOST_FETCH_RESPONSE_MAX_BYTES,
@@ -20,8 +21,10 @@ import {
 
 function fakeGhost(
   overrides: {
+    id?: string;
     enabled?: boolean;
     slots?: string[];
+    trust?: InstalledGhost['trust'];
     /** null = 有槽无详单(老包语义);undefined = 默认 brave+tavily 双域名。 */
     network?: GhostNetworkNeeds | null;
   } = {},
@@ -44,7 +47,7 @@ function fakeGhost(
   return {
     manifest: {
       schemaVersion: 2,
-      id: 'web-search',
+      id: overrides.id ?? 'web-search',
       name: '搜索',
       version: '1.0.0',
       kind: 'chip',
@@ -55,6 +58,7 @@ function fakeGhost(
     },
     dir: '/fake/brain/web-search',
     enabled: overrides.enabled ?? true,
+    ...(overrides.trust ? { trust: overrides.trust } : {}),
   } as InstalledGhost;
 }
 
@@ -1197,6 +1201,168 @@ describe('networkSlot · 登录邮箱派生凭证(source:login-email)', () => {
   });
 });
 
+describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
+  const GITHUB_URL = 'https://api.github.com/user';
+  const githubNetwork: GhostNetworkNeeds = {
+    hosts: ['api.github.com'],
+    secrets: [
+      {
+        key: 'github_pat',
+        label: 'GitHub authentication',
+        source: 'gh-cli',
+        inject: {
+          header: 'Authorization',
+          format: 'Bearer {value}',
+          hosts: ['api.github.com'],
+        },
+      },
+    ],
+  };
+
+  function makeGithubSlot(overrides: Partial<NetworkSlotDeps> = {}) {
+    return makeSlot({
+      getGhost: () => fakeGhost({
+        id: 'cindy-github',
+        network: githubNetwork,
+        trust: {
+          level: 'cindy-official',
+          publisherSigned: true,
+          publisherVerified: true,
+          reviewed: true,
+          publisherName: 'Cindy Plugin Market',
+        },
+      }),
+      readSecret: () => 'github_pat_fallback',
+      ...overrides,
+    });
+  }
+
+  it('本机 gh token 优先于保险库 PAT，且令牌不回流沙箱', async () => {
+    const readSecret = vi.fn(() => 'github_pat_fallback');
+    const { slot, fetchImpl } = makeGithubSlot({
+      readGhCliToken: async () => 'gho_from_cli',
+      readSecret,
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(true);
+    expect(readSecret).not.toHaveBeenCalled();
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBe(
+      'Bearer gho_from_cli',
+    );
+    expect(JSON.stringify(result)).not.toContain('gho_from_cli');
+  });
+
+  it('gh 未安装或未登录时回落到已保存 PAT', async () => {
+    const { slot, fetchImpl } = makeGithubSlot({ readGhCliToken: async () => null });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(true);
+    expect((fetchImpl.mock.calls[0][1].headers as Record<string, string>).Authorization).toBe(
+      'Bearer github_pat_fallback',
+    );
+  });
+
+  it('gh 来源异常仍可回落 PAT；两边都不可用时才阻断并给出双路径指引', async () => {
+    const fallback = makeGithubSlot({
+      readGhCliToken: async () => {
+        throw new Error('spawn failed');
+      },
+    });
+    expect((await fallback.slot.handleFetchRequest('web-search', { url: GITHUB_URL })).ok).toBe(
+      true,
+    );
+
+    const unavailable = makeGithubSlot({
+      readGhCliToken: async () => null,
+      readSecret: () => null,
+    });
+    const result = await unavailable.slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain('gh auth login');
+      expect(result.message).toContain('Personal Access Token');
+    }
+    expect(unavailable.fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('仅自报 cindy-github 但没有 Host 官方 trust 时 fail-closed，不读取 gh token 也不发请求', async () => {
+    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+    const readSecret = vi.fn(() => 'github_pat_fallback');
+    const { slot, fetchImpl } = makeGithubSlot({
+      getGhost: () => fakeGhost({ id: 'cindy-github', network: githubNetwork }),
+      readGhCliToken,
+      readSecret,
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(false);
+    expect(readGhCliToken).not.toHaveBeenCalled();
+    expect(readSecret).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('官方 trust receipt 缺少 publisherName 时 fail-closed，不读取 gh token 也不发请求', async () => {
+    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+    const readSecret = vi.fn(() => 'github_pat_fallback');
+    const { slot, fetchImpl } = makeGithubSlot({
+      getGhost: () => fakeGhost({
+        id: 'cindy-github',
+        network: githubNetwork,
+        trust: {
+          level: 'cindy-official',
+          publisherSigned: true,
+          publisherVerified: true,
+          reviewed: true,
+        },
+      }),
+      readGhCliToken,
+      readSecret,
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(false);
+    expect(readGhCliToken).not.toHaveBeenCalled();
+    expect(readSecret).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['publisherSigned', { publisherSigned: false }],
+    ['publisherVerified', { publisherVerified: false }],
+    ['reviewed', { reviewed: false }],
+  ])('官方 trust receipt 的 %s 被篡改时 fail-closed', async (_field, override) => {
+    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+    const { slot, fetchImpl } = makeGithubSlot({
+      getGhost: () => fakeGhost({
+        id: 'cindy-github',
+        network: githubNetwork,
+        trust: {
+          level: 'cindy-official',
+          publisherSigned: true,
+          publisherVerified: true,
+          reviewed: true,
+          publisherName: 'Cindy Plugin Market',
+          ...override,
+        },
+      }),
+      readGhCliToken,
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(false);
+    expect(readGhCliToken).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('保留 ID 检查之外，非 cindy-github 也不能借 gh-cli trust', async () => {
+    const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+    const { slot, fetchImpl } = makeGithubSlot({
+      getGhost: () => fakeGhost({ id: 'third-party', network: githubNetwork }),
+      readGhCliToken,
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: GITHUB_URL });
+    expect(result.ok).toBe(false);
+    expect(readGhCliToken).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
 describe('networkSlot · 目录上传(uploadDir,过户票据)', () => {
   const DEPLOY_URL = 'https://api.search.brave.com/deploy';
   const VALID_TOKEN = '11111111-2222-4333-8444-555555555555';
@@ -1277,13 +1443,15 @@ describe('networkSlot · 目录上传(uploadDir,过户票据)', () => {
   });
 
   it('读盘期间总量超限整单拒(过户后文件被撑大也兜得住)', async () => {
-    // 单块恰好取目录通道的单文件上限(50MB,不触发单文件拒),6 块累计 300MB
-    // 超过 256MB 总限——只有总量分支能拦住。原用例误用媒体上传的 64MB 常量,
+    // 单块恰好取目录通道的单文件上限(不触发单文件拒),块数按总量上限动态算,
+    // 恰好超过总限一块——只有总量分支能拦住。原用例误用媒体上传的 64MB 常量,
     // 每块先撞单文件检查,总量分支永远走不到。
     const big = new Uint8Array(GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE);
+    const count =
+      Math.floor(GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES / big.byteLength) + 1;
     const takeDirDeposit = vi.fn(() => ({
-      totalBytes: big.byteLength * 6,
-      files: Array.from({ length: 6 }, (_, i) => ({
+      totalBytes: big.byteLength * count,
+      files: Array.from({ length: count }, (_, i) => ({
         relPath: `f${i}.bin`,
         size: big.byteLength,
         read: async () => big,

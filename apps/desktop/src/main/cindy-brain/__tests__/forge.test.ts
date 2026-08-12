@@ -5,6 +5,7 @@
  * 规则 23:全部路径在 os.tmpdir 下,收尾清理。
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import JSZip from 'jszip';
 import os from 'node:os';
@@ -12,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GHOST_MANIFEST_SUMMARY_MAX_CHARS } from '@cindy/plugin-protocol';
 
 import {
   FORGE_GUIDE,
@@ -21,6 +23,24 @@ import {
   type ForgeScaffoldTemplate,
 } from '../forge';
 import { GhostManager } from '../GhostManager';
+import { GHOST_SIGNATURE_FILE, signGhostPackage } from '../ghostSignature';
+import { GHOST_INSTALL_MANIFEST_MAX_BYTES } from '../../../shared/ghost';
+
+const canSymlink = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-forge-symlink-probe-'));
+  try {
+    const target = path.join(probeDir, 'target.txt');
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, path.join(probeDir, 'link.txt'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 
 let workDir: string;
 
@@ -75,6 +95,165 @@ describe('packGhostDir', () => {
     await fs.promises.rm(r.cindyPath, { force: true });
   });
 
+  it('iconPng 仅覆盖包内图标与清单快照，不改写插件源码', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+    const iconPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    );
+
+    const packed = await packGhostDir(dir, { iconPng });
+    expect(packed.ok, JSON.stringify(packed)).toBe(true);
+    if (!packed.ok) return;
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(packed.cindyPath));
+    expect(JSON.parse(await zip.file('ghost.json')!.async('string'))).toMatchObject({
+      icon: 'assets/icon.png',
+    });
+    expect(await zip.file('assets/icon.png')!.async('nodebuffer')).toEqual(iconPng);
+
+    expect(
+      JSON.parse(await fs.promises.readFile(path.join(dir, 'ghost.json'), 'utf8')),
+    ).not.toHaveProperty('icon');
+    await expect(fs.promises.stat(path.join(dir, 'assets/icon.png'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+
+    const manager = new GhostManager({ getRootDir: () => path.join(workDir, 'ghosts') });
+    const inspected = await manager.inspect(packed.cindyPath);
+    expect('manifest' in inspected, JSON.stringify(inspected)).toBe(true);
+  });
+
+  it('iconPng 超过安装器 512 KiB 上限时在打包期拒绝', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+
+    await expect(
+      packGhostDir(dir, { iconPng: Buffer.alloc(512 * 1024 + 1) }),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'TOO_LARGE',
+    });
+  });
+
+  it('已签名源码使用 iconPng 时拒绝 overlay，避免生成验签必失败的包', async () => {
+    const originalIcon = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    );
+    const manifest = { ...GOOD_MANIFEST, icon: 'assets/icon.png' };
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// brain',
+    });
+    await fs.promises.mkdir(path.join(dir, 'assets'), { recursive: true });
+    await fs.promises.writeFile(path.join(dir, 'assets/icon.png'), originalIcon);
+
+    const sourceZip = new JSZip();
+    sourceZip.file('ghost.json', JSON.stringify(manifest));
+    sourceZip.file('main.js', '// brain');
+    sourceZip.file('assets/icon.png', originalIcon);
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    const signed = await signGhostPackage(await sourceZip.generateAsync({ type: 'nodebuffer' }), {
+      publisherName: 'Forge Test Publisher',
+      privateKey,
+    });
+    const signedZip = await JSZip.loadAsync(signed);
+    const signatureBytes = await signedZip.file(GHOST_SIGNATURE_FILE)!.async('nodebuffer');
+    await fs.promises.writeFile(path.join(dir, GHOST_SIGNATURE_FILE), signatureBytes);
+
+    await expect(packGhostDir(dir, { iconPng: Buffer.from('replacement') })).resolves.toMatchObject(
+      {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: expect.stringContaining('已签名插件不能使用 AI 图标覆盖'),
+      },
+    );
+
+    const fallback = await packGhostDir(dir);
+    expect(fallback.ok, JSON.stringify(fallback)).toBe(true);
+    if (!fallback.ok) return;
+    const fallbackZip = await JSZip.loadAsync(await fs.promises.readFile(fallback.cindyPath));
+    expect(await fallbackZip.file('assets/icon.png')!.async('nodebuffer')).toEqual(originalIcon);
+    expect(await fallbackZip.file(GHOST_SIGNATURE_FILE)!.async('nodebuffer')).toEqual(
+      signatureBytes,
+    );
+
+    const manager = new GhostManager({ getRootDir: () => path.join(workDir, 'ghosts') });
+    expect(await manager.inspect(fallback.cindyPath)).toMatchObject({
+      trust: { publisherSigned: true },
+    });
+  });
+
+  it('无效清单传 iconPng 仍返回 MANIFEST_INVALID，不被 overlay 改造成其它形状', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': 'null',
+      'main.js': '// brain',
+    });
+
+    await expect(packGhostDir(dir, { iconPng: Buffer.from('png') })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+    });
+  });
+
+  it('icon overlay 后清单超过安装器上限时在打包期拒绝', async () => {
+    // 用未知字段填充到上限附近:validator 会忽略它,但安装器仍必须按实际
+    // ghost.json 字节数限流。overlay 只能写紧凑 JSON,并且写入 zip 前再复核。
+    const emptyExtraBytes = Buffer.byteLength(
+      `${JSON.stringify({ ...GOOD_MANIFEST, extra: '' })}\n`,
+      'utf8',
+    );
+    const manifest = {
+      ...GOOD_MANIFEST,
+      extra: 'x'.repeat(GHOST_INSTALL_MANIFEST_MAX_BYTES - emptyExtraBytes - 4),
+    };
+    const originalBytes = Buffer.byteLength(`${JSON.stringify(manifest)}\n`, 'utf8');
+    expect(originalBytes).toBeLessThanOrEqual(GHOST_INSTALL_MANIFEST_MAX_BYTES);
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// brain',
+    });
+
+    await expect(packGhostDir(dir, { iconPng: Buffer.from('png') })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('合成后超过安装器'),
+    });
+  });
+
+  it('assets/icon.png 已被目录占用时拒绝 icon overlay', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+    await fs.promises.mkdir(path.join(dir, 'assets/icon.png'), { recursive: true });
+
+    await expect(packGhostDir(dir, { iconPng: Buffer.from('png') })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('目标路径已被源码目录占用'),
+    });
+  });
+
+  it('assets/icon.png 子路径已被目录占用时拒绝 icon overlay', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+      'assets/icon.png/child.txt': 'occupied',
+    });
+
+    await expect(packGhostDir(dir, { iconPng: Buffer.from('png') })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('目标路径已被源码目录占用'),
+    });
+  });
+
   it('打包进 zip 的 ghost.json 是校验时的快照,并发改写不生效(防 TOCTOU)', async () => {
     const dir = await makeSrcDir({
       'ghost.json': JSON.stringify(GOOD_MANIFEST),
@@ -82,18 +261,23 @@ describe('packGhostDir', () => {
     });
     // 模拟"校验通过后、写入 zip 前"目录被并发改写:保 id/version,偷加权限声明。
     // 若打包时重读磁盘,包里的 manifest 会与返回值(安装侧审阅比对的依据)分叉。
-    const tampered = JSON.stringify({ ...GOOD_MANIFEST, slots: ['tool', 'network'], network: { allow: ['x.test'] } });
+    const tampered = JSON.stringify({
+      ...GOOD_MANIFEST,
+      slots: ['tool', 'network'],
+      network: { allow: ['x.test'] },
+    });
     const realRead = fs.promises.readFile;
     let ghostReads = 0;
-    const spy = vi
-      .spyOn(fs.promises, 'readFile')
-      .mockImplementation(((target: unknown, ...rest: unknown[]) => {
-        if (String(target).endsWith('ghost.json')) {
-          ghostReads += 1;
-          if (ghostReads > 1) return Promise.resolve(Buffer.from(tampered));
-        }
-        return (realRead as (...args: unknown[]) => unknown)(target, ...rest);
-      }) as typeof fs.promises.readFile);
+    const spy = vi.spyOn(fs.promises, 'readFile').mockImplementation(((
+      target: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (String(target).endsWith('ghost.json')) {
+        ghostReads += 1;
+        if (ghostReads > 1) return Promise.resolve(Buffer.from(tampered));
+      }
+      return (realRead as (...args: unknown[]) => unknown)(target, ...rest);
+    }) as typeof fs.promises.readFile);
     try {
       const r = await packGhostDir(dir);
       expect(r.ok, JSON.stringify(r)).toBe(true);
@@ -109,20 +293,25 @@ describe('packGhostDir', () => {
     }
   });
 
-  it('ghost.json 为符号链接或超限 → MANIFEST_INVALID(与市场发现/安装同一把闸)', async () => {
-    // 符号链接:目标是合法清单也不放行——"符号链接一律不穿透"覆盖身份卡本身,
-    // 否则打包输入目录里一根链接就能把目录外的文件读进打包管道。
-    const outside = path.join(workDir, 'outside-ghost.json');
-    await fs.promises.writeFile(outside, JSON.stringify(GOOD_MANIFEST));
-    const linked = path.join(workDir, 'src-linked');
-    await fs.promises.mkdir(linked, { recursive: true });
-    await fs.promises.symlink(outside, path.join(linked, 'ghost.json'));
-    await fs.promises.writeFile(path.join(linked, 'main.js'), '// brain');
-    expect(await packGhostDir(linked)).toMatchObject({
-      ok: false,
-      errorCode: 'MANIFEST_INVALID',
-    });
+  it.skipIf(!canSymlink)(
+    'ghost.json 为符号链接 → MANIFEST_INVALID(与市场发现/安装同一把闸)',
+    async () => {
+      // 符号链接:目标是合法清单也不放行——“符号链接一律不穿透”覆盖身份卡本身,
+      // 否则打包输入目录里一根链接就能把目录外的文件读进打包管道。
+      const outside = path.join(workDir, 'outside-ghost.json');
+      await fs.promises.writeFile(outside, JSON.stringify(GOOD_MANIFEST));
+      const linked = path.join(workDir, 'src-linked');
+      await fs.promises.mkdir(linked, { recursive: true });
+      await fs.promises.symlink(outside, path.join(linked, 'ghost.json'));
+      await fs.promises.writeFile(path.join(linked, 'main.js'), '// brain');
+      expect(await packGhostDir(linked)).toMatchObject({
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+      });
+    },
+  );
 
+  it('ghost.json 超限 → MANIFEST_INVALID(与市场发现/安装同一把闸)', async () => {
     // 超限:JSON 本身合法(合法清单 + 尾随空白撑体积),必须在读取层按大小拒,
     // 不能等到 JSON.parse/validate——那时数 GB 的文件已经进内存了。
     const big = path.join(workDir, 'src-big');
@@ -180,16 +369,13 @@ describe('packGhostDir', () => {
     await fs.promises.mkdir(staged, { recursive: true });
     const pluginDir = path.join(staged, 'alpha');
     await fs.promises.mkdir(pluginDir, { recursive: true });
-    await fs.promises.writeFile(
-      path.join(pluginDir, 'ghost.json'),
-      JSON.stringify(GOOD_MANIFEST),
-    );
+    await fs.promises.writeFile(path.join(pluginDir, 'ghost.json'), JSON.stringify(GOOD_MANIFEST));
     await fs.promises.writeFile(path.join(pluginDir, 'main.js'), '// brain');
     // 调用方(安装管道)校验时拿到的规范根。
     const expectedRealDir = await fs.promises.realpath(pluginDir);
     // 校验之后被换成指向外部目录的链接(外部目录留着同样的 ghost.json)。
     await fs.promises.rm(pluginDir, { recursive: true, force: true });
-    await fs.promises.symlink(await fs.promises.realpath(outside), pluginDir);
+    await fs.promises.symlink(await fs.promises.realpath(outside), pluginDir, directoryLinkType);
 
     const dest = path.join(workDir, 'out.cindy');
     const r = await packGhostDirToFile(pluginDir, dest, expectedRealDir);
@@ -272,11 +458,12 @@ describe('packGhostDir', () => {
         ja: 'locales/ja.json',
       },
     };
-    const locale = (name: string, description: string, tool: string) => JSON.stringify({
-      name,
-      description,
-      tools: { do_thing: { description: tool } },
-    });
+    const locale = (name: string, description: string, tool: string) =>
+      JSON.stringify({
+        name,
+        description,
+        tools: { do_thing: { description: tool } },
+      });
     const dir = await makeSrcDir({
       'ghost.json': JSON.stringify(manifest),
       'main.js': '// brain',
@@ -419,13 +606,16 @@ describe('scaffoldGhostDir', () => {
     '生成 %s 模板，随后可以直接打包并通过装入检查',
     async (template) => {
       const dir = path.join(workDir, template);
-      const result = await scaffoldGhostDir({
-        dir,
-        template,
-        id: `demo-${template}`,
-        name: `演示 ${template}`,
-        description: `${template} 起步插件`,
-      }, { sessionWorkdir: workDir });
+      const result = await scaffoldGhostDir(
+        {
+          dir,
+          template,
+          id: `demo-${template}`,
+          name: `演示 ${template}`,
+          description: `${template} 起步插件`,
+        },
+        { sessionWorkdir: workDir },
+      );
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true, dir, template });
       if (!result.ok) return;
       expect(result.files).toContain('ghost.json');
@@ -470,23 +660,29 @@ describe('scaffoldGhostDir', () => {
     await fs.promises.mkdir(existing);
     await fs.promises.writeFile(path.join(existing, 'keep.txt'), 'keep me');
     expect(
-      await scaffoldGhostDir({
-        dir: existing,
-        template: 'plain',
-        id: 'existing',
-        name: 'Existing',
-      }, { sessionWorkdir: workDir }),
+      await scaffoldGhostDir(
+        {
+          dir: existing,
+          template: 'plain',
+          id: 'existing',
+          name: 'Existing',
+        },
+        { sessionWorkdir: workDir },
+      ),
     ).toMatchObject({ ok: false, errorCode: 'TARGET_EXISTS' });
     expect(await fs.promises.readFile(path.join(existing, 'keep.txt'), 'utf8')).toBe('keep me');
 
     const invalid = path.join(workDir, 'invalid');
     expect(
-      await scaffoldGhostDir({
-        dir: invalid,
-        template: 'plain',
-        id: 'INVALID_ID',
-        name: 'Invalid',
-      }, { sessionWorkdir: workDir }),
+      await scaffoldGhostDir(
+        {
+          dir: invalid,
+          template: 'plain',
+          id: 'INVALID_ID',
+          name: 'Invalid',
+        },
+        { sessionWorkdir: workDir },
+      ),
     ).toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
     await expect(fs.promises.stat(invalid)).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -501,12 +697,15 @@ describe('scaffoldGhostDir', () => {
         return;
       }
       expect(
-        await scaffoldGhostDir({
-          dir: path.join(workDir, 'out', 'plugin'),
-          template: 'plain',
-          id: 'escape',
-          name: 'Escape',
-        }, { sessionWorkdir: workDir }),
+        await scaffoldGhostDir(
+          {
+            dir: path.join(workDir, 'out', 'plugin'),
+            template: 'plain',
+            id: 'escape',
+            name: 'Escape',
+          },
+          { sessionWorkdir: workDir },
+        ),
       ).toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
       await expect(fs.promises.stat(path.join(outside, 'plugin'))).rejects.toMatchObject({
         code: 'ENOENT',
@@ -518,6 +717,50 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  it('写死 whenToUse 发现面与二级分派 RULES 契约', () => {
+    expect(FORGE_GUIDE).toContain('给模型做插件发现与判断的唯一字段');
+    expect(FORGE_GUIDE).toContain(`最多 ${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符`);
+    expect(FORGE_GUIDE).toContain('花名册 → `ghost_info` → `ghost_call`');
+    expect(FORGE_GUIDE).toContain(
+      '禁止塞入"必须/不得"式行为规则、工具调用顺序、参数协议、错误码与重试策略',
+    );
+    expect(FORGE_GUIDE).toContain(
+      '"whenToUse": "管理项目时找我;必须先调用 list_tools(category=project),再调用 call_tool;遇到 INVALID_ARGS 不得改用其它工具"',
+    );
+    expect(FORGE_GUIDE).toContain(
+      '"whenToUse": "需要查询、创建或更新项目、任务、成员、迭代与发布状态时找我"',
+    );
+    expect(FORGE_GUIDE).toContain(
+      '`list_tools(category)` 返回工具明细时,必须在同一份结果里一并下发该类目的',
+    );
+    expect(FORGE_GUIDE).toContain(
+      '传 category 返回该类目下所有操作的名称、说明与该类目 RULES',
+    );
+    expect(FORGE_GUIDE).toContain('`rules: [规则键]`');
+    expect(FORGE_GUIDE).toContain('参数 schema **和本次自纠必需的规则**');
+    expect(FORGE_GUIDE).not.toContain('这是你影响 AI 行为的**唯一合法通道**');
+    expect(FORGE_GUIDE).not.toContain('description(花名册自述)');
+    expect(FORGE_GUIDE).not.toContain('选错会拖累所有会话');
+    expect(FORGE_GUIDE).not.toContain('所有意识的工具清单会一起被你一家撑爆');
+  });
+
+  it('向量检索示例按请求维度回放,不把回执 dim 当作请求判据', () => {
+    expect(FORGE_GUIDE).toContain('const requestedDim = undefined');
+    expect(FORGE_GUIDE).toContain('requestedDim 来自这次请求而不是回执');
+    expect(FORGE_GUIDE).toContain(
+      '...(storedRequestedDim !== undefined ? { dimensions: storedRequestedDim } : {}),',
+    );
+    expect(FORGE_GUIDE).not.toContain(
+      '...(storedDim !== undefined ? { dimensions: storedDim } : {}),',
+    );
+  });
+
+  it('app-context 保持插件协议旧四语并说明新增宿主语言的兼容回退', () => {
+    expect(FORGE_GUIDE).toContain("locale: 'zh-CN' | 'en' | 'ja' | 'ko'");
+    expect(FORGE_GUIDE).not.toContain("locale: 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko'");
+    expect(FORGE_GUIDE).toContain('会在插件边界固定映射为 `en`');
+  });
+
   it('分章体量守卫:每个 ## 章节须留在单次工具结果安全体量内(#890 分章投递的不变量)', () => {
     // 手册"随主机版本演进"持续增长;任一章越过单次 MCP 结果上限会静默复现 #890 于该章。
     // 上限取 32KB:当前最大章 ~22KB,余量 ~45%,越线即该拆小节。
@@ -535,9 +778,7 @@ describe('FORGE_GUIDE', () => {
     }
     sections.set(current, size);
     for (const [header, bytes] of sections) {
-      expect(bytes, `${header} 超出分章安全体量,请拆小节`).toBeLessThanOrEqual(
-        CHAPTER_BYTE_LIMIT,
-      );
+      expect(bytes, `${header} 超出分章安全体量,请拆小节`).toBeLessThanOrEqual(CHAPTER_BYTE_LIMIT);
     }
   });
 
@@ -556,6 +797,7 @@ describe('FORGE_GUIDE', () => {
       'notify 槽',
       'will-user-message',
       'will-assistant-message',
+      '同轮插话(steer)时是当前运行中 turn 的模型 id',
       'event-verdict',
       'data-ghost-action',
       'data-ghost-prompt',
@@ -569,7 +811,20 @@ describe('FORGE_GUIDE', () => {
       // 2026-07-31 快问快答(cindy.text.oneshot)与派活取件(agent.errand)。
       'oneshot_text',
       'NO_CANDIDATE',
+      // 2026-08-05 快问快答偏好模型声明(目录模型 id;用户钉档 > 插件声明 > 默认链)。
+      'oneshotModel',
       'expectJson',
+      // 2026-08-04 文本转向量(cindy.embed.text):作者最容易踩的是"换模型 =
+      // 换向量空间",手册必须讲到 model + dim 要跟向量一起存。
+      'embed_text',
+      '"embed": ["text"]',
+      'inputType',
+      'dimensions',
+      // 上下文化(voyage-context-*):二维 documents 与三层 documentEmbeddings 是
+      // 作者最容易写错的两处,手册必须给出可照抄的形态。
+      'documents',
+      'documentEmbeddings',
+      'voyage/voyage-context-4',
       '4.11.1',
       'cindy.agent.errand',
       'queryErrand',
@@ -611,6 +866,9 @@ describe('FORGE_GUIDE', () => {
       'exchange',
       'tokenPath',
       'login-email',
+      'gh-cli',
+      'gh auth token',
+      'hostAvailable',
       // 多连接(connections,2026-07-14):声明形态 / 设置页协议 / 主机受信确认。
       'connections',
       '/connections',
@@ -619,6 +877,9 @@ describe('FORGE_GUIDE', () => {
       'CONFIRM_DENIED',
       'uploadDir',
       'dir_deposit',
+      // 目录/保存交接的权限档契约:本地 Full Access 自动，其余/远程确认。
+      '本地 Full Access 会话则自动过户、不弹卡',
+      '远程会话仍由用户确认',
       // fs 槽(2026-07-14):三档代写(私有目录/工作目录/save 票据)。
       'fs-request',
       "root: 'data'",
@@ -677,8 +938,8 @@ describe('FORGE_GUIDE', () => {
       'minimize',
       '最小化为浮动气泡',
       // 2026-07-25 skill 槽:随包捆绑 Agent Skills,声明一致性 + 全局作用域披露。
-      // 卡槽总数标记随 workspace 槽合入更新为十五个。
-      '十五个卡槽',
+      // 卡槽总数标记随 ios-simulator 槽合入更新为十八个。
+      '十八个卡槽',
       '捆绑 Agent Skills(skill 槽)',
       'skill.items',
       'SKILL.md',
@@ -690,6 +951,12 @@ describe('FORGE_GUIDE', () => {
       '创建工作区会话(workspace 槽)',
       'cindy.workspace',
       "kind: 'ensure-session'",
+      // 2026-08-06 iOS Simulator 插件能力:只读脱敏状态与 Host 面板入口。
+      '内置 iOS 模拟器(ios-simulator 槽)',
+      'cindy.iosSimulator.request',
+      'caps.capabilities.pluginVideo === false',
+      'caps.capabilities.pluginInput === false',
+      '声明 `ios-simulator` 时必须同时声明 `minCindyVersion`',
       // 2026-07-28 图标与官方仓门禁(#809):§1/§2 的 icon 字段说明、
       // §8.1 官方插件仓的四语言 locale 与 assets/icon.png 惯例。
       '"icon": "assets/icon.png"',
@@ -731,6 +998,39 @@ describe('FORGE_GUIDE', () => {
       'did-approval-{start,end}',
       'did-user-input-{start,end}',
       '不会给 reasoning、工具',
+    ]) {
+      expect(FORGE_GUIDE).toContain(marker);
+    }
+  });
+
+  it('打包前仅轻提醒一次图标选择，AI 生成有固定提示词且失败不阻塞', () => {
+    for (const marker of [
+      '没有明确替换它生成的占位图',
+      '轻提醒一次',
+      '使用用户当前对话语言',
+      '使用 AI 生成（推荐）',
+      '上传图片',
+      '同步把',
+      'ghost.json',
+      'icon',
+      '使用默认图标（跳过）',
+      '聊天模型解耦',
+      '不要因为用户正在使用 GLM',
+      'Create a polished square app icon for a Cindy plugin named "{{name}}"',
+      'Purpose: {{one-sentence purpose}}',
+      'No text, letters, numbers',
+      'Output a 1024×1024 PNG',
+      '只尝试一次',
+      '超时或失败时不要重试',
+      'xdt_image_url',
+      'xdt_image_urls',
+      'selectedImageUrl',
+      'icon_source: selectedImageUrl',
+      'pack 也会自动回退默认图标',
+      'pack 会保留原图标和原签名',
+      '跳过与使用默认是同一个选择',
+      '不要用 AI 仿制商标',
+      '使用官方品牌图标',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

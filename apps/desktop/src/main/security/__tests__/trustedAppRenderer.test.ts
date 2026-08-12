@@ -17,6 +17,9 @@ import { markAppContentWindow } from '../../windowFocusClassifier';
 import {
   isTrustedAppRendererEventForLocation,
   isTrustedAppRendererUrl,
+  isTrustedAppRendererWindowForLocation,
+  isTrustedCindyRendererWindowForLocation,
+  isTrustedTopLevelCindyRendererEventForLocation,
 } from '../trustedAppRenderer';
 
 const packagedRendererFile = path.resolve('/Applications/Cindy/resources/app/renderer/index.html');
@@ -53,6 +56,28 @@ describe('trustedAppRenderer · URL', () => {
 });
 
 describe('trustedAppRenderer · sender frame', () => {
+  it('URL-only 顶层判据接受同源 utility renderer，但仍拒绝子 frame 与外部地址', () => {
+    electronMocks.fromWebContents.mockReturnValue({ isDestroyed: () => false });
+    const utilityEvent = fakeEvent(pathToFileURL(packagedRendererFile).toString());
+
+    expect(
+      isTrustedTopLevelCindyRendererEventForLocation(utilityEvent, packagedOptions),
+    ).toBe(true);
+    expect(isTrustedAppRendererEventForLocation(utilityEvent, packagedOptions)).toBe(false);
+    expect(
+      isTrustedTopLevelCindyRendererEventForLocation(
+        fakeEvent(pathToFileURL(packagedRendererFile).toString(), { child: true }),
+        packagedOptions,
+      ),
+    ).toBe(false);
+    expect(
+      isTrustedTopLevelCindyRendererEventForLocation(
+        fakeEvent('https://attacker.example/'),
+        packagedOptions,
+      ),
+    ).toBe(false);
+  });
+
   it('登记过的 Cindy 窗口顶层 frame 才通过', () => {
     const win = { isDestroyed: () => false };
     markAppContentWindow(win as never);
@@ -83,5 +108,54 @@ describe('trustedAppRenderer · sender frame', () => {
     expect(
       isTrustedAppRendererEventForLocation(fakeEvent('https://attacker.example/'), packagedOptions),
     ).toBe(false);
+  });
+});
+
+/**
+ * 出站推送(webContents.send)与入站 IPC 是同一道授权边界。载荷带用户私密内容时
+ * (如插件未读摘要:工单标题、邮件主题),拿 getAllWindows() 无条件广播就是把它
+ * 发给所有窗口,包括已经导航到别处的那些。
+ */
+describe('trustedAppRenderer · 窗口级判据(出站推送用)', () => {
+  const fakeWindow = (url: string) =>
+    ({
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, mainFrame: { url } },
+    }) as never;
+
+  it('URL-only 判据允许 Cindy utility 窗口，但不把它视为 app-content', () => {
+    const utility = fakeWindow(pathToFileURL(packagedRendererFile).toString());
+    expect(isTrustedCindyRendererWindowForLocation(utility, packagedOptions)).toBe(true);
+    expect(isTrustedAppRendererWindowForLocation(utility, packagedOptions)).toBe(false);
+  });
+
+  it('登记过且停在 renderer 页的窗口才可收推送', () => {
+    const win = fakeWindow(pathToFileURL(packagedRendererFile).toString());
+    markAppContentWindow(win);
+    expect(isTrustedAppRendererWindowForLocation(win, packagedOptions)).toBe(true);
+  });
+
+  it('已导航到别处的窗口不可收 —— 这正是内容泄漏面', () => {
+    const win = fakeWindow('https://attacker.example/index.html');
+    markAppContentWindow(win);
+    expect(isTrustedAppRendererWindowForLocation(win, packagedOptions)).toBe(false);
+  });
+
+  it('未登记的窗口、已销毁的窗口、null 一律不可收', () => {
+    const unregistered = fakeWindow(pathToFileURL(packagedRendererFile).toString());
+    expect(isTrustedAppRendererWindowForLocation(unregistered, packagedOptions)).toBe(false);
+
+    const destroyed = {
+      isDestroyed: () => true,
+      webContents: {
+        isDestroyed: () => false,
+        mainFrame: { url: pathToFileURL(packagedRendererFile).toString() },
+      },
+    } as never;
+    markAppContentWindow(destroyed);
+    expect(isTrustedAppRendererWindowForLocation(destroyed, packagedOptions)).toBe(false);
+
+    expect(isTrustedAppRendererWindowForLocation(null, packagedOptions)).toBe(false);
+    expect(isTrustedAppRendererWindowForLocation(undefined, packagedOptions)).toBe(false);
   });
 });

@@ -25,7 +25,27 @@
        收敛成统一 compact-delta 机制。 */
     --app-code-font-size: 14px;
     --app-ui-font-size: 14px;
-    --text-9: 9px;
+    --text-xs: 12px;
+    --text-sm: 14px;
+    --text-base: 16px;
+    --text-lg: 18px;
+    --text-xl: 20px;
+    --text-2xl: 24px;
+    --text-3xl: 30px;
+    --text-4xl: 36px;
+    --text-5xl: 48px;
+    --text-xs-line-height: 16px;
+    --text-sm-line-height: 20px;
+    --text-base-line-height: 24px;
+    --text-lg-line-height: 28px;
+    --text-xl-line-height: 28px;
+    --text-2xl-line-height: 32px;
+    --text-3xl-line-height: 36px;
+    --text-4xl-line-height: 40px;
+    --text-5xl-line-height: 48px;
+    /* DESIGN.md §3 的 numeric 字号白名单默认值。运行时会由
+       useFontSettings 按用户 UI 缩放覆写；档位须与 tailwind.config.ts、
+       UI_TEXT_TOKEN_SIZES、tailwind-merge 字号组保持权威来源与消费端一致。 */
     --text-10: 10px;
     --text-11: 11px;
     --text-12: 12px;
@@ -33,31 +53,37 @@
     --text-14: 14px;
     --text-15: 15px;
     --text-16: 16px;
-    --text-17: 17px;
     --text-18: 18px;
-    --text-19: 19px;
     --text-20: 20px;
-    --text-21: 21px;
-    --text-22: 22px;
-    --text-23: 23px;
     --text-24: 24px;
-    --text-25: 25px;
-    --text-26: 26px;
-    --text-27: 27px;
     --text-28: 28px;
 
     /* Motion token(全局动效档位,规范见 DESIGN.md §14.4):新增过渡/动画一律
        引用这些 token,不要再各处硬编码时长和 cubic-bezier。5 档交互时长 +
-       spinner 语义循环例外 + 3 条曲线,与三档圆角同一哲学。 */
+       spinner 语义循环例外、侧栏标题阅读例外 + 3 条曲线,与三档圆角同一哲学。 */
     --motion-instant: 80ms; /* hover 即时反馈、轻浮层退场 */
     --motion-fast: 150ms; /* 颜色/透明度状态切换、轻浮层入场(§14.4 功能性过渡上限) */
     --motion-base: 200ms; /* 尺寸变化:展开折叠、面板收展 */
     --motion-enter: 250ms; /* 重浮层(弹窗)入场 */
     --motion-exit: 150ms; /* 重浮层(弹窗)退场 */
     --motion-spinner-cycle: 1000ms; /* 功能性 loading spinner 完整一圈(§14.4 窄例外) */
+    --motion-sidebar-title-marquee-per-viewport: 2400ms; /* 溢出标题每个可视宽度的阅读时长(§14.4 窄例外) */
     --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场/展开 */
     --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
     --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
+
+    /* Claude 额度条的首帧 alias 与 ColorRegistry 一致：只复用已批准语义槽。 */
+    --quota-bar-fill: var(--text-secondary);
+    --quota-bar-warn: var(--warning-fg);
+    --quota-bar-crit: var(--error-flat);
+    --quota-bar-track: var(--surface-chip);
+  }
+
+  .dark {
+    --quota-bar-fill: var(--text-secondary);
+    --quota-bar-warn: var(--warning-fg);
+    --quota-bar-crit: var(--error-flat);
+    --quota-bar-track: var(--surface-chip);
   }
 
   body {
@@ -118,6 +144,14 @@
     -webkit-user-drag: none;
   }
 
+  /* SessionItem 是同窗分屏的原生 HTML5 拖拽源。拖拽通常从标题、图标或时间
+     子节点起手，所以必须与 composer atom 一样让整棵子树恢复 element drag；
+     行内按钮仍由 onDragStart 的交互区守卫 preventDefault，不会误触发分屏。 */
+  [data-split-group-drag-source='true'],
+  [data-split-group-drag-source='true'] * {
+    -webkit-user-drag: element !important;
+  }
+
   /* F3: Global disable focus outline — Chromium default :focus-visible draws
      a yellow/orange ring on buttons, options and menu items after Esc/click
      transitions focus. Suppress it on non-input elements while inputs keep
@@ -145,9 +179,15 @@
       --motion-enter: 0ms;
       --motion-exit: 0ms;
       --motion-spinner-cycle: 0ms;
+      --motion-sidebar-title-marquee-per-viewport: 0ms;
     }
 
-    [class*='animate-spinner'] {
+    /* 'animate-spin' 是 'animate-spinner' 的子串,一条同时覆盖 Tailwind 的
+       animate-spin 与自定义 animate-spinner(含 motion-safe: 等变体的转义类名)。
+       之前只匹配 'animate-spinner',37 处裸 animate-spin 全部逃逸——组件级的
+       motion-reduce:animate-none 有兜底的不受影响,但十余处没写兜底的转圈在
+       减弱动效下照转(reducedMotionEscape.test.ts 回归)。 */
+    [class*='animate-spin'] {
       animation: none !important;
     }
 
@@ -186,6 +226,7 @@
        同一行,出现"一个半角一个全角"。把 CJK 字体提前后,Inter 没覆盖的
        CJK 标点直接落到 PingFang/YaHei,宽度统一。Latin 仍然走 Inter,无副作用。 */
     font-family: var(--app-font-ui, var(--app-font-ui-default));
+    font-size: var(--text-base);
     -webkit-font-smoothing: antialiased;
   }
 
@@ -249,18 +290,18 @@ html:lang(ko) {
    ChatInput 区域(data-chat-input-root)单独还原回默认字号,避免输入框
    字号也跟着缩。 */
 .chat-rail-compact .text-xs {
-  font-size: 11px;
+  font-size: calc(var(--text-xs) - 1px);
 }
 .chat-rail-compact .text-sm {
-  font-size: 13px;
+  font-size: calc(var(--text-sm) - 1px);
   line-height: 1.4;
 }
 .chat-rail-compact .text-base {
-  font-size: 15px;
+  font-size: calc(var(--text-base) - 1px);
   line-height: 1.5;
 }
 .chat-rail-compact .text-lg {
-  font-size: 17px;
+  font-size: calc(var(--text-lg) - 1px);
   line-height: 1.5;
 }
 .chat-rail-compact .text-\[12px\] {
@@ -306,20 +347,20 @@ html:lang(ko) {
 }
 
 .chat-rail-compact [data-chat-input-root] .text-xs {
-  font-size: 0.75rem;
-  line-height: 1rem;
+  font-size: var(--text-xs);
+  line-height: var(--text-xs-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-sm {
-  font-size: 0.875rem;
-  line-height: 1.25rem;
+  font-size: var(--text-sm);
+  line-height: var(--text-sm-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-base {
-  font-size: 1rem;
-  line-height: 1.5rem;
+  font-size: var(--text-base);
+  line-height: var(--text-base-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-lg {
-  font-size: 1.125rem;
-  line-height: 1.75rem;
+  font-size: var(--text-lg);
+  line-height: var(--text-lg-line-height);
 }
 .chat-rail-compact [data-chat-input-root] .text-\[12px\] {
   font-size: 12px;
@@ -333,19 +374,34 @@ html:lang(ko) {
 .chat-rail-compact [data-chat-input-root] .text-\[15px\] {
   font-size: 15px;
 }
+.chat-rail-compact [data-chat-input-root] .text-12 {
+  font-size: var(--text-12);
+}
+.chat-rail-compact [data-chat-input-root] .text-13 {
+  font-size: var(--text-13);
+}
+.chat-rail-compact [data-chat-input-root] .text-14 {
+  font-size: var(--text-14);
+}
+.chat-rail-compact [data-chat-input-root] .text-15 {
+  font-size: var(--text-15);
+}
 
 /* Tiptap ChatInput — placeholder hook & chip alignment
    (command-palette F2.5). The Placeholder extension injects
    `p.is-editor-empty::before` with the placeholder text in a `data-*`
-   attribute; we style it to match the old textarea placeholder. */
-.ProseMirror > p.is-editor-empty:first-child::before {
+   attribute; after a controlled clear it can leave only `is-empty`, so the
+   sole-empty-paragraph selector preserves the same truly-empty contract. */
+.ProseMirror > p.is-editor-empty:first-child::before,
+.ProseMirror > p.is-empty:first-child:only-child::before {
   content: attr(data-placeholder);
   color: var(--chat-input-placeholder-subtle);
   float: left;
   height: 0;
   pointer-events: none;
 }
-[data-voice-draft-active='true'] .ProseMirror > p.is-editor-empty:first-child::before {
+[data-voice-draft-active='true'] .ProseMirror > p.is-editor-empty:first-child::before,
+[data-voice-draft-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {
   content: none;
 }
 .ProseMirror {
@@ -364,7 +420,16 @@ html:lang(ko) {
 [data-chat-input-root] .ProseMirror :is(ul, ol) {
   margin: 0;
   --composer-list-padding: 1.5em;
-  padding-inline-start: var(--composer-list-padding, 1.5em);
+  --composer-list-marker-extra: 0em;
+  padding-inline-start: calc(
+    var(--composer-list-padding, 1.5em) + var(--composer-list-marker-extra, 0em)
+  );
+}
+/* The ideographic comma is a full-width glyph, unlike the period / closing
+   parenthesis in the other ordered markers. Keep its extra width separate
+   from the digit budget so multi-digit ordinals still compose correctly. */
+[data-chat-input-root] .ProseMirror ol[data-marker='、'] {
+  --composer-list-marker-extra: 0.7em;
 }
 [data-chat-input-root] .ProseMirror ol[data-marker-digits='2'] {
   --composer-list-padding: 2.2em;
@@ -482,12 +547,8 @@ html:lang(ko) {
 @font-face {
   font-family: 'Cindy CJK Punctuation Local';
   src:
-    local('PingFang SC'),
-    local('Hiragino Sans GB'),
-    local('Microsoft YaHei UI'),
-    local('Microsoft YaHei'),
-    local('Noto Sans CJK SC'),
-    local('Source Han Sans SC');
+    local('PingFang SC'), local('Hiragino Sans GB'), local('Microsoft YaHei UI'),
+    local('Microsoft YaHei'), local('Noto Sans CJK SC'), local('Source Han Sans SC');
   font-style: normal;
   font-weight: 400;
   font-display: swap;
@@ -802,10 +863,17 @@ body.resizing-pane [data-ghost-webview] {
 
 /* F-SDK-3: Running status bar — soft whole-line breathing.
    The old clipping animation was perceived as a subtle fade, but forced
-   continuous Paint/Composite work in Electron. Opacity keeps it compositor-only. */
+   continuous Paint/Composite work in Electron. Opacity keeps it compositor-only.
+
+   Cadenced(2026-08-07,DESIGN.md §14.4):不再 infinite 循环 —— RunningStatusBar
+   在每次真实动静(状态文案 / token 计数变化)时通过重挂载触发一次呼吸,静默期
+   保持常亮。呼吸节奏跟随实际产出而非固定心跳,「运行指示」不再需要在循环装饰
+   红线上开洞;一次性动画也天然不进 hiddenAnimationGate 冻结清单。
+   steps(18, end):每半程 18 步 → 全程 36 步 / 1.5s = 24fps。常驻期合成帧减半以上,
+   低帧率的轻微颗粒感与纸面质感相合,肉眼近似无损(§14.4 低帧率原则)。 */
 .status-bar-shimmer {
   color: var(--status-bar-accent);
-  animation: status-shimmer 1.5s ease-in-out infinite;
+  animation: status-shimmer 1.5s steps(18, end) 1;
   will-change: opacity;
 }
 
@@ -872,18 +940,40 @@ body.resizing-pane [data-ghost-webview] {
 }
 
 /* 需关注圆点——深色 + box-shadow 扩散脉冲（对照 redesign 稿 xdtsb-pulse） */
+/* 呼吸点(AttentionDot 的 breathing 形态)。
+   常驻循环动画按 DESIGN.md §14.4 只允许动 transform / opacity(compositor-only);
+   原实现动的是 box-shadow,每帧都要重绘,多张未读卡长期同屏时持续吃 CPU 与电量
+   (codex review)。改成一个 ::after 光环做 scale + opacity,视觉节奏不变:
+   6px 的点外扩到约 4px 光环(6→14px ≈ scale 2.33),同时淡出。
+   起始帧 opacity 为 0,所以 scale(1) 那一刻光环不可见,不会给点本身蒙一层底色。 */
 .session-card-dot {
+  position: relative;
+}
+.session-card-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: hsl(var(--foreground));
   animation: session-card-pulse 2.1s infinite;
+  will-change: transform, opacity;
+  pointer-events: none;
 }
 @keyframes session-card-pulse {
   0% {
-    box-shadow: 0 0 0 0 hsl(var(--foreground) / 0.32);
+    transform: scale(1);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.32;
   }
   70% {
-    box-shadow: 0 0 0 4px hsl(var(--foreground) / 0);
+    transform: scale(2.33);
+    opacity: 0;
   }
   100% {
-    box-shadow: 0 0 0 0 hsl(var(--foreground) / 0);
+    transform: scale(2.33);
+    opacity: 0;
   }
 }
 
@@ -907,9 +997,11 @@ body.resizing-pane [data-ghost-webview] {
   .session-status-breathing,
   .session-card-bar::before,
   .session-card--settle,
-  .session-card-dot,
+  .session-card-dot::after,
   .session-running-dot,
   .thinking-dot,
+  .stream-word,
+  [data-stream-marker]::marker,
   .card-col-fade {
     animation: none !important;
     will-change: auto;
@@ -943,13 +1035,15 @@ body.resizing-pane [data-ghost-webview] {
    循环动画必然带 infinite 字面量,而一次性的 animate-[xxx_200ms_ease-out] 不会。 */
 [data-app-hidden='true'] [data-voice-spinner-arc],
 [data-app-hidden='true'] [data-voice-mic-bar],
-[data-app-hidden='true'] .status-bar-shimmer,
+/* .status-bar-shimmer 已 cadenced 化为一次性动画(2026-08-07),按「一次性动画
+   不得纳入冻结清单」原则移出 —— 冻在中途帧会让状态栏停在半暗。 */
 [data-app-hidden='true'] .session-status-breathing,
 [data-app-hidden='true'] .session-card-bar::before,
-[data-app-hidden='true'] .session-card-dot,
+[data-app-hidden='true'] .session-card-dot::after,
 [data-app-hidden='true'] .session-running-dot,
 [data-app-hidden='true'] .thinking-dot,
 [data-app-hidden='true'] .ghost-card-sweep,
+[data-app-hidden='true'] .brand-loading-mark-sheen::before,
 [data-app-hidden='true'] .ghost-bubble-face,
 [data-app-hidden='true'] .agent-island-mascot-character,
 [data-app-hidden='true'] .agent-island-mascot-keyboard,
@@ -1008,13 +1102,133 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
+/* Cadenced 后的一次呼吸:静止态是全亮(无动画时 opacity 继承 fadeStyle 的 1),
+   每次触发从 1 下潜到 0.45 再回满 —— 幅度与旧 infinite 版一致,只是方向反转
+   (旧版 0% 起点是 0.45,一次性播放会让常亮态在触发瞬间硬跳暗)。 */
 @keyframes status-shimmer {
   0%,
   100% {
-    opacity: 0.45;
+    opacity: 1;
   }
   50% {
+    opacity: 0.45;
+  }
+}
+
+/* 流式正文逐词淡入(§14.4 第五个 sanctioned motion class,2026-08-07):
+   每个新词以 --motion-fast 从透明「浮现」,delay 由 rehypeStreamWordFade 按词序
+   写进 --wf-delay(上限 24ms/词,按排程预算自适应压缩)。不是逐字打字机 ——
+   词整体已就位,只有 opacity 渐变;pure-opacity 一次性动画,compositor-only。
+   `both`:delay 未到时停在 0% 帧(透明),避免先闪现再淡入。
+   reduced-motion 双保险:JS 侧短路(插件不挂载,span 不进 DOM)+ 下方 reduce
+   块的 animation: none(摘掉动画连同 both 填充,span 落回自然 opacity 1,
+   不会钉在透明帧 —— 与「forwards/both 入场动画只能时长归零」那条坑的区别在于
+   这里 0% 帧之外元素本身没有 opacity 声明)。 */
+.stream-word {
+  animation: stream-word-in var(--motion-fast) ease-out var(--wf-delay, 0ms) both;
+}
+/* 流式列表圆点淡入(同一 motion class 家族,2026-08-08,Codex Desktop
+   fadeListDecoration 同构):动画打在 ::marker 上,圆点/序号从 transparent
+   浮现,delay 由 rehypeStreamWordFade 写入(与 li 内第一个词共享 timeline
+   位置,圆点与文字同帧出现)。::marker 只支持 color/font 等少数属性,故用
+   color 关键帧而不是 opacity。data 属性仅流式挂载;终版渲染无此属性。 */
+[data-stream-marker]::marker {
+  animation: stream-marker-in var(--motion-fast) ease-out var(--wf-delay, 0ms) both;
+}
+/* 只定义 0% 帧(Codex 同款):终点回落元素自然颜色,不用 inherit 终帧。 */
+@keyframes stream-marker-in {
+  from {
+    color: transparent;
+  }
+}
+@keyframes stream-word-in {
+  from {
+    opacity: 0;
+  }
+  to {
     opacity: 1;
+  }
+}
+
+/* 消息流条目级渲染跳过(Codex Desktop 同款,2026-08-09):视口外的 render
+   item 跳过整棵子树的布局与绘制,只按 contain-intrinsic-size 估高占位
+   (auto 前缀:渲染过一次后记住真实高度,滚回时用真实值,锚点不漂)。
+   切入长 session 时首帧只需布局视口内的几条消息 —— 之前是渲染窗口全量
+   80 条同步布局,几万字的会话切换有数百毫秒长任务(2026-08-09 实测卡顿)。
+   仅作用于 .msg-stream-items 的直接子元素(每条 render item 的根节点):
+   滚动恢复(measureViewportTop/applyRestore)按 children 索引取
+   getBoundingClientRect —— 对 content-visibility 隐藏的条目返回估高盒,
+   量测仍然成立,进入视口后 ResizeObserver 纠偏收敛到真实高度。
+   打印/导出走独立渲染树,不经过本容器,不受影响。 */
+.msg-stream-items > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+}
+
+/* Fixed-position menu triggers must keep the viewport as their containing
+   block. Their menu content is portaled to body, but Radix still measures the
+   zero-size trigger inside the render item. Opt only those items out of the
+   containment boundary; plain text items keep the render-skip optimization. */
+.msg-stream-items > *:has([data-fixed-menu-anchor]) {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
+}
+
+/* 分享选择模式会在消息 wrapper 左侧动态挂载绝对定位的选择框。该元素需要真实
+   消息盒参与布局与绘制；继续使用视口外 intrinsic 占位会让长消息末尾的选择框
+   被压缩或裁切。仅让可分享消息退出隔离，常态和工具类条目继续保留渲染跳过。 */
+.msg-stream-items[data-share-selection-active] > [data-share-message-id] {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
+}
+
+/* 会话切换 shell-first 帧的品牌加载指示(BrandLoadingMark):
+   wordmark 低亮常驻 + 亮带经同形 mask 在字标形状内扫过(Codex Desktop
+   startup loader 同构表现)。两条硬约束:
+   ① 延迟浮现 —— 指示器整体 200ms 后才淡入(brand-loading-appear,both 起始
+      透明)。多数会话下一帧就挂载完,指示器从未可见,小会话不闪 loading;
+   ② compositor-only —— 扫光用 sheen 伪层的 transform 位移(而非
+      background-position):消息树构建阻塞主线程时 transform 动画不冻结。
+   reduced-motion:两个动画全停,wordmark 直接静态显示(见下方 reduce 块)。 */
+.brand-loading-mark {
+  opacity: 0;
+  animation: brand-loading-appear var(--motion-base) ease-out 200ms both;
+}
+.brand-loading-mark > img {
+  opacity: 0.35;
+}
+.brand-loading-mark-sheen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  background: linear-gradient(
+    100deg,
+    transparent 10%,
+    var(--text-primary) 50%,
+    transparent 90%
+  );
+  transform: translateX(-120%);
+  animation: brand-loading-sheen 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes brand-loading-appear {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes brand-loading-sheen {
+  to {
+    transform: translateX(350%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-loading-mark {
+    animation: none;
+    opacity: 1;
+  }
+  .brand-loading-mark-sheen::before {
+    animation: none;
+    transform: translateX(-120%);
   }
 }
 
@@ -1044,7 +1258,9 @@ body.resizing-pane [data-ghost-webview] {
    (✓ 复用 Done 语义的唯一批准 overshoot 曲线,同 status-done-pop)。
    motion-reduce 下全部禁用,直接落终态帧。 */
 .summon-seal-arc {
-  transition: stroke-dasharray 600ms var(--motion-ease-out), opacity 600ms var(--motion-ease-out);
+  transition:
+    stroke-dasharray 600ms var(--motion-ease-out),
+    opacity 600ms var(--motion-ease-out);
 }
 @keyframes summon-seal-halo {
   0% {
@@ -1682,7 +1898,7 @@ body.resizing-pane [data-ghost-webview] {
      .doc-search-mark[data-active] → currently focused match (中黄实底 + 1px 琥珀内描边)
    Color spec follows the GitHub Primer attention family. */
 .doc-search-mark {
-  background-color: #fff8c5;       /* Primer attention-muted */
+  background-color: #fff8c5; /* Primer attention-muted */
   color: inherit;
   /* font / line-height 显式继承 —— <mark> 是 phrasing element,Chromium UA
      默认不改字号,但跨主题 / 跨 reset 时把字体属性钉在 inherit 最稳,避免
@@ -1700,7 +1916,7 @@ body.resizing-pane [data-ghost-webview] {
   box-shadow: inset 0 0 0 1px #d4a72c;
 }
 .dark .doc-search-mark {
-  background-color: #362d1b;       /* ≈ #bb8009 @ 15% on dark bg */
+  background-color: #362d1b; /* ≈ #bb8009 @ 15% on dark bg */
 }
 .dark .doc-search-mark[data-active] {
   background-color: #9e6a03;
@@ -1774,6 +1990,67 @@ body.resizing-pane [data-ghost-webview] {
   }
   to {
     transform: translateX(0);
+  }
+}
+
+/* 侧栏超长任务标题：只在实际溢出且 hover 时把完整标题横向带过视口。
+   轨道是 HTML 元素，动效只改 transform/opacity，离开标题区域立即恢复省略号。 */
+@keyframes sidebar-title-marquee {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    transform: translateX(var(--sidebar-title-marquee-shift));
+  }
+}
+
+.sidebar-title-marquee {
+  position: relative;
+  display: block;
+}
+
+.sidebar-title-marquee__ellipsis {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-title-marquee__track {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: max-content;
+  max-width: none;
+  white-space: nowrap;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(0);
+}
+
+.sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__ellipsis {
+  opacity: 0;
+}
+
+.sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track {
+  visibility: visible;
+  opacity: 1;
+  animation: sidebar-title-marquee var(--sidebar-title-marquee-duration) var(--motion-ease-move)
+    forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track {
+    animation: none;
+    visibility: hidden;
+    opacity: 0;
+  }
+
+  .sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__ellipsis {
+    opacity: 1;
   }
 }
 
@@ -1866,23 +2143,49 @@ body.resizing-pane [data-ghost-webview] {
    出现 = 面板收走 → 等 300ms → 圆圈渐显(160ms)→ 幽灵跳进来(240ms,回弹);
    消失 = 幽灵跳走(160ms)→ 圆圈渐隐(120ms 延迟 + 140ms)→ 面板滑入。 */
 @keyframes ghost-bubble-circle-in {
-  from { transform: scale(0.85); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 @keyframes ghost-bubble-circle-out {
-  to { transform: scale(0.9); opacity: 0; }
+  to {
+    transform: scale(0.9);
+    opacity: 0;
+  }
 }
 @keyframes ghost-bubble-ghost-in {
-  0% { transform: translateY(12px) scale(0.4); opacity: 0; }
-  65% { transform: translateY(-4px) scale(1.08); opacity: 1; }
-  100% { transform: none; opacity: 1; }
+  0% {
+    transform: translateY(12px) scale(0.4);
+    opacity: 0;
+  }
+  65% {
+    transform: translateY(-4px) scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
 }
 @keyframes ghost-bubble-ghost-out {
-  to { transform: translateY(-14px) scale(0.4); opacity: 0; }
+  to {
+    transform: translateY(-14px) scale(0.4);
+    opacity: 0;
+  }
 }
 @keyframes ghost-bubble-bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
 }
 .ghost-bubble-enter .ghost-bubble-circle {
   animation: ghost-bubble-circle-in 160ms ease-out 300ms backwards;
@@ -1904,11 +2207,23 @@ body.resizing-pane [data-ghost-webview] {
    这是 §7 compositor-only 的窄例外(同登录 handoff 的容器形变口径):
    一次性、有状态含义;内容层定实宽被外壳裁切,webview 不逐帧重排。
    keyframes 缺省端取元素实宽(inline style),不用变量传宽。 */
-@keyframes ghost-panel-expand { from { width: 0; } }
-@keyframes ghost-panel-collapse { to { width: 0; } }
-.ghost-panel-enter { animation: ghost-panel-expand 200ms ease-out; }
+@keyframes ghost-panel-expand {
+  from {
+    width: 0;
+  }
+}
+@keyframes ghost-panel-collapse {
+  to {
+    width: 0;
+  }
+}
+.ghost-panel-enter {
+  animation: ghost-panel-expand 200ms ease-out;
+}
 /* exit 在 enter 之后声明:出现瞬间就点收起时,后者整段覆盖前者。 */
-.ghost-panel-exit { animation: ghost-panel-collapse 180ms ease-in forwards; }
+.ghost-panel-exit {
+  animation: ghost-panel-collapse 180ms ease-in forwards;
+}
 @media (prefers-reduced-motion: reduce) {
   .ghost-bubble-enter .ghost-bubble-circle,
   .ghost-bubble-enter .ghost-bubble-face-jump,
@@ -1916,5 +2231,7 @@ body.resizing-pane [data-ghost-webview] {
   .ghost-bubble-exit .ghost-bubble-face-jump,
   .ghost-panel-enter,
   .ghost-panel-exit,
-  .ghost-bubble:hover .ghost-bubble-face { animation: none; }
+  .ghost-bubble:hover .ghost-bubble-face {
+    animation: none;
+  }
 }

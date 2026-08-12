@@ -194,10 +194,28 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
   /** 是否默认出现在模型选择器;缺省按 true(默认可见)。 */
   defaultEnabled?: boolean;
   /**
+   * 该模型是哪些 agent 的**新对话默认种子**（源自协议 ListModels v2 的 newSessionDefault，
+   * 服务端权威、按区域下发)。与 sortOrder / defaultEnabled 独立;客户端据它选新对话默认。
+   * 缺省 = 不作为任何 agent 的默认。pi 由客户端从 'claude-code' 投影(见 active-catalog)。
+   */
+  newSessionDefault?: ('claude-code' | 'codex')[];
+  /**
    * 展示图标 id(AI Gateway 侧登记,见 @cindy/model-providers CatalogModel.icon /
    * resolveModelIconKind);缺省或未知值客户端回落来源供应商标。
    */
   icon?: string;
   /** per-tab 能力覆盖(基线字段之上按 agent 应用)。 */
   perAgent?: Partial<Record<'claude-code' | 'codex', ModelAccessAgentOverride>>;
+}
+
+/**
+ * Consumer-side Bean for `GET /api/model-access/models`.
+ *
+ * The client intentionally owns this tolerant view: legacy responses may omit
+ * fields that the current server always emits, while unknown schema versions
+ * remain a runtime-parser concern.
+ */
+export interface ModelAccessModelsResponse {
+  schemaVersion: 1 | 2;
+  models: ModelAccessGatewayModel[];
 }

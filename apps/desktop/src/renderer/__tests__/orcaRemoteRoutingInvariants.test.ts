@@ -4,7 +4,8 @@
  * (按 ctx session 来源分流本机 / 隧道),不得再直连 `window.electronAPI.localDb.orcaWorkflows`
  * —— 否则远程 lead 的团队会查控制端空库、worker 变更收不到推送(真机实测的「浏览不出来」)。
  *
- * 唯一允许直连的是 makerTransport 自己(路由器本体,含本机分支 + onOrcaWorkerChanged 订阅)。
+ * 唯一允许直连的是 makerTransport 自己(路由器本体,含本机分支 + onOrcaWorkerChanged 订阅),
+ * 以及 workerProjectionStore 的本机批量只读入口；远程 Lead 仍必须经 orcaWorkflowsFor。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -35,9 +36,8 @@ describe('orca 远程路由接线不变式', () => {
 
   it('读 / 管理消费点用 orcaWorkflowsFor(ctx) 路由', () => {
     for (const f of [
-      'features/cc-agent/hooks/useWorkers.ts',
       'features/cc-agent/hooks/useOrcaWorkerSelection.ts',
-      'features/cc-agent/hooks/useOrcaLeadWorkerMap.ts',
+      'features/cc-agent/hooks/workerProjectionStore.ts',
       'features/cc-agent/CCAgentSessionView.tsx',
       'features/cc-agent/CCAgentIndexRedirect.tsx',
       'lib/orcaSessionIdentity.ts',
@@ -47,7 +47,9 @@ describe('orca 远程路由接线不变式', () => {
   });
 
   it('useWorkers worker 变更经 subscribeOrcaWorkerChanged(本机/远程分流),不直订本机 IPC', () => {
-    const src = read('features/cc-agent/hooks/useWorkers.ts');
+    const useWorkers = read('features/cc-agent/hooks/useWorkers.ts');
+    expect(useWorkers).toContain("from './workerProjectionStore'");
+    const src = read('features/cc-agent/hooks/workerProjectionStore.ts');
     expect(src).toContain('subscribeOrcaWorkerChanged(');
     expect(src).not.toContain('onOrcaWorkerChanged');
   });
@@ -56,13 +58,19 @@ describe('orca 远程路由接线不变式', () => {
   // enable/disable 这两个 mutation 曾走非粘滞的 makerApiFor —— relay 瞬时重连清空注册表的
   // 窗口内会退回本机,在**控制端**建出或销毁一个 team(本机恰有同 id 会话时还操作错对象)。
   // 这是「同一语义在对称路径上的缺口」,两条必须同口径,所以一起锁。
-  it('协同开关的 enable / disable 都用粘滞归属(makerApiForSticky),不用非粘滞 makerApiFor', () => {
+  it('协同开关的 enable / disable 都用粘滞归属,不用非粘滞 makerApiFor', () => {
     const view = read('features/cc-agent/CCAgentSessionView.tsx');
-    expect(view).toContain('makerApiForSticky(collabSessionId).enableOrca(');
+    expect(view).toContain('const orcaDeviceId = getStickySessionDeviceId(collabSessionId);');
+    expect(view).toContain('await enableRemoteCollabForSession({');
+    expect(view).toContain('deviceId: orcaDeviceId,');
     expect(view).not.toContain('makerApiFor(collabSessionId).enableOrca(');
     // 开启后的镜像回流也取粘滞值,否则瞬断窗口内解析成 undefined 会整段跳过,
     // 被控端刚建的 worker 永远进不了控制端注册表。
     expect(view).toContain('getStickySessionDeviceId(collabSessionId)');
+
+    const handoff = read('features/cc-agent/remoteCollabHandoff.ts');
+    expect(handoff).toContain('makerApiForDevice(p.deviceId).enableOrca(');
+    expect(handoff).not.toContain('makerApiFor(p.leadSessionId).enableOrca(');
 
     const stop = read('features/cc-agent/hooks/useStopOrcaCollab.ts');
     expect(stop).toContain('makerApiForSticky(leadSessionId).disableOrca(');

@@ -6,10 +6,10 @@
  * Layout:
  *   - Bar gap 2px, align-items: center
  *   - Order is `align`-driven:
- *       align="left"  → [CopyBtn][MoreMenu][TimeText][CostText]       (assistant)
- *       align="right" → [TimeText][CopyBtn][EditBtn][MoreMenu] (user)
+ *       align="left"  → [CopyBtn][ForkBtn][MoreMenu][TimeText][CostText] (assistant)
+ *       align="right" → [TimeText][CopyBtn][ForkBtn][EditBtn][MoreMenu] (user)
  *   - Action buttons are 24×24; More uses a pill trigger and a 12px menu
- *     containing fork, message deep-link copy, and single-message deletion.
+ *     containing message deep-link copy and single-message deletion.
  *   - Icon lucide 14×14, color #737373 (Light) / #a3a3a3 (Dark)
  *     hover color #262626 (Light) / #ffffff (Dark)
  *   - Time text 12px Inter normal, color INVERTED from icon (#a3a3a3 / #737373)
@@ -34,6 +34,7 @@ import {
   Link2,
   MessageSquarePlus,
   Pencil,
+  Share,
   Split,
   Trash2,
   Undo2,
@@ -51,6 +52,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
+import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 import { formatCompactTokens, formatTurnCostMoney } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
@@ -80,6 +82,8 @@ interface MessageActionBarProps {
   onFork?: () => Promise<void>;
   /** Insert this message's anchored conversation link into the active composer. */
   onAddToChat?: () => void;
+  /** 进入「分享为图片」选择模式并预选本条。放在复制按钮右边(产品指定位置)。 */
+  onShareAsImage?: () => void;
   /** When provided, the More menu exposes single-message deletion. The
    *  parent owns confirmation + persistence; the promise keeps the action
    *  bar disabled until the flow resolves. */
@@ -120,6 +124,7 @@ export function MessageActionBar({
   hovered,
   onFork,
   onAddToChat,
+  onShareAsImage,
   onDelete,
   onEdit,
   onRewind,
@@ -143,9 +148,10 @@ export function MessageActionBar({
   // ring behind. Track the latest menu interaction modality so pointer flows
   // can skip restoration while keyboard flows keep their focus indicator.
   const menuInteractionFromPointerRef = useRef(false);
-  // Unified in-flight: fork (internal) OR rewind (external) — bar dims & blocks
-  // pointer events for either. Same visual treatment for consistency.
+  // Fork has its own visible button. Menu-owned actions still dim and block
+  // the whole bar; Fork keeps the More trigger available while it runs.
   const inFlight = forking || deleting || rewindInFlight;
+  const moreInFlight = deleting || rewindInFlight;
   // `visible` is the actual opacity driver. It tracks `hovered` with a
   // trailing debounce so the bar fades out smoothly (CSS handles the
   // opacity interpolation from current value, not from 1).
@@ -275,18 +281,91 @@ export function MessageActionBar({
     </button>
   );
 
+  // 分享为图片 — 紧贴复制右侧。点击进入选择模式并预选本条,后续勾选与出口都在
+  // 底部操作条上完成(ShareSelectionBar),所以这里是纯 fire-and-forget。
+  const shareBtn = onShareAsImage && (
+    <Tooltip.Root key="share">
+      <Tooltip.Trigger asChild>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onShareAsImage();
+          }}
+          disabled={inFlight}
+          className={cn(
+            'group flex h-[24px] w-[24px] items-center justify-center',
+            'rounded-full border-none bg-transparent outline-none cursor-pointer',
+            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors disabled:cursor-default',
+          )}
+          aria-label={t('chat.shareImage.entry')}
+        >
+          {/* iOS 同款分享形状(托盘 + 上箭头,对应 SF Symbols 的
+              square.and.arrow.up);lucide 的 Share2 是三点连线的通用款,不用。 */}
+          <Share
+            size={14}
+            strokeWidth={2}
+            className={cn(
+              'text-[var(--cmd-palette-item-meta)]',
+              'group-hover:text-[var(--msg-assistant-text)]',
+              'transition-colors duration-150',
+            )}
+          />
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{t('chat.shareImage.entry')}</Tooltip.Content>
+    </Tooltip.Root>
+  );
+
+  const forkBtn = onFork && (
+    <Tooltip.Root key="fork">
+      <Tooltip.Trigger asChild>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            void handleFork();
+          }}
+          disabled={inFlight}
+          className={cn(
+            'group flex h-[24px] w-[24px] items-center justify-center',
+            'rounded-lg border-none bg-transparent outline-none cursor-pointer',
+            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
+            'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-default',
+          )}
+          aria-label={t('chat.messageActionBar.fork')}
+        >
+          {forking ? (
+            <Spinner size={14} strokeWidth={2} className="text-[var(--cmd-palette-item-meta)]" />
+          ) : (
+            <Split
+              size={14}
+              strokeWidth={2}
+              className={cn(
+                'text-[var(--cmd-palette-item-meta)]',
+                'group-hover:text-[var(--msg-assistant-text)]',
+                'transition-colors duration-150',
+              )}
+            />
+          )}
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{t('chat.messageActionBar.fork')}</Tooltip.Content>
+    </Tooltip.Root>
+  );
+
   const timeText = relText && (
     <Tooltip.Root key="time">
       <Tooltip.Trigger asChild>
         <time
           dateTime={createdAt}
           className={cn(
-            'inline-flex h-[24px] items-center text-[12px] font-normal whitespace-nowrap',
+            'inline-flex h-[24px] items-center text-12 font-normal whitespace-nowrap',
             // Optical adjustment: nudge time text down 0.5px so its visual
             // mid-line aligns with the lucide Copy icon glyph center.
             'relative top-[0.5px]',
             // 视觉分组:user 侧(right)时间在最左、后面跟 4 个操作图标
-            // ([copy][edit][undo][fork],彼此 gap-0.5=2px 是一组)。时间与图标组
+            // ([copy][fork][edit][more],彼此 gap-0.5=2px 是一组)。时间与图标组
             // 之间额外 +6px(共 8px),让"元信息 | 操作组"两段读起来是独立分组
             // —— 与 assistant 侧 costText 的 ml-1.5 同一间距语言。
             align === 'right' && 'mr-1.5',
@@ -326,17 +405,11 @@ export function MessageActionBar({
   const turnCostTooltipNode =
     displayedMoney && displayedMoney.amount > 0 && turnUsageDetails ? (
       <span className="whitespace-pre-line">
-        {isUserTurnTotal &&
-          `${t('chat.messageActionBar.userTurnCostTotalLine', {
-            cost: formatTurnCostMoney(displayedMoney),
-          })}\n`}
         {buildTurnUsageTooltipLines({
           details: turnUsageDetails,
           t,
-          // Token / model detail is currently scoped to this final SDK segment;
-          // never pair it with the user-turn cumulative total above.
-          money: isUserTurnTotal ? effectiveTurnMoney : displayedMoney,
-          isEstimate: isUserTurnTotal ? turnCostIsEstimate : displayedCostIsEstimate,
+          money: displayedMoney,
+          isEstimate: displayedCostIsEstimate,
           ...(isUserTurnTotal ? { title: t('chat.messageActionBar.userTurnCostDetailsTitle') } : {}),
         }).join('\n')}
       </span>
@@ -352,7 +425,7 @@ export function MessageActionBar({
   // bar 的 gap-0.5(2px)对两段相邻文本太挤,额外 6px 左距(共 8px)让「时间 | 用量」
   // 读成两个独立信息组。金额与 token 回退共用同一套 —— 换的是内容,不是位置。
   const metaTextClassName = cn(
-    'inline-flex h-[24px] items-center text-[12px] font-normal whitespace-nowrap',
+    'inline-flex h-[24px] items-center text-12 font-normal whitespace-nowrap',
     'relative top-[0.5px]',
     'ml-1.5',
     'text-[var(--settings-section-desc)] cursor-default',
@@ -398,8 +471,8 @@ export function MessageActionBar({
     );
 
   // Edit (Pencil) button — last user message only. Enters the inline edit
-  // state owned by UserMessage; no in-flight state here (entering edit is
-  // instant and side-effect free — commit happens on the edit box's Send).
+  // state owned by UserMessage; keep it disabled while any message action is
+  // in flight so editing cannot race with Fork's history read or a menu action.
   const editBtn = onEdit && align === 'right' && (
     <Tooltip.Root key="edit">
       <Tooltip.Trigger asChild>
@@ -409,10 +482,11 @@ export function MessageActionBar({
             e.stopPropagation();
             onEdit();
           }}
+          disabled={inFlight}
           className={cn(
             'group flex h-[24px] w-[24px] items-center justify-center',
             'rounded-[4px] border-none bg-transparent outline-none cursor-pointer',
-            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
+            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors disabled:cursor-default',
           )}
           aria-label={t('chat.messageActionBar.edit')}
         >
@@ -431,10 +505,10 @@ export function MessageActionBar({
     </Tooltip.Root>
   );
 
-  // Fork / rewind 收进 More 菜单；链接复制与单条删除也放在同一入口。
+  // Rewind、链接复制与单条删除收进 More 菜单；Fork 与复制同级外显。
   // 面板/行几何遵守 12px container + 8px inner-control 两档圆角。
   const canRewind = Boolean(onRewind && align === 'right');
-  const moreMenu = (onFork || onAddToChat || copyLinkText || canRewind || onDelete) && (
+  const moreMenu = (onAddToChat || copyLinkText || canRewind || onDelete) && (
     <DropdownMenu key="more" open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <button
@@ -446,7 +520,7 @@ export function MessageActionBar({
           onKeyDown={() => {
             menuInteractionFromPointerRef.current = false;
           }}
-          disabled={inFlight}
+          disabled={moreInFlight}
           className={cn(
             'group flex h-[24px] w-[24px] items-center justify-center',
             'rounded-full border-none bg-transparent outline-none cursor-pointer',
@@ -456,7 +530,7 @@ export function MessageActionBar({
           )}
           aria-label={t('chat.messageActionBar.moreActions')}
         >
-          {inFlight ? (
+          {moreInFlight ? (
             <Spinner size={14} strokeWidth={2} className="text-[var(--cmd-palette-item-meta)]" />
           ) : (
             <Ellipsis
@@ -491,19 +565,6 @@ export function MessageActionBar({
           'bg-[var(--cmd-palette-bg)] p-1 text-[var(--cmd-palette-item-text)] shadow-none',
         )}
       >
-        {onFork && (
-          <DropdownMenuItem
-            disabled={forking}
-            onSelect={(event) => {
-              event.stopPropagation();
-              void handleFork();
-            }}
-            className="h-8 cursor-pointer select-none rounded-lg px-2 text-sm focus:bg-[var(--cmd-palette-item-hover)]"
-          >
-            <Split size={14} strokeWidth={2} className="mr-2 shrink-0" />
-            {t('chat.messageActionBar.fork')}
-          </DropdownMenuItem>
-        )}
         {onAddToChat && (
           <DropdownMenuItem
             onSelect={(event) => {
@@ -543,7 +604,7 @@ export function MessageActionBar({
         )}
         {onDelete && (
           <>
-            {(onFork || onAddToChat || copyLinkText || canRewind) && (
+            {(onAddToChat || copyLinkText || canRewind) && (
               <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
             )}
             <DropdownMenuItem
@@ -566,15 +627,17 @@ export function MessageActionBar({
     </DropdownMenu>
   );
 
-  // align='left'  → [copy][more][time][cost]        (assistant)
-  // align='right' → [time][copy][edit][more]        (user)
+  // align='left'  → [copy][share][fork][more][time][cost]   (assistant)
+  // align='right' → [time][copy][share][fork][edit][more]   (user)
   const items =
     align === 'left'
-      ? [copyBtn, moreMenu, timeText, costText || tokensText]
-      : [timeText, copyBtn, editBtn, moreMenu];
+      ? [copyBtn, shareBtn, forkBtn, moreMenu, timeText, costText || tokensText]
+      : [timeText, copyBtn, shareBtn, forkBtn, editBtn, moreMenu];
 
   return (
     <div
+      // 操作栏是纯交互件:分享图片的光栅化会按这个标记整条剔除,不进产物。
+      {...{ [SHARE_EXCLUDE_ATTR]: '' }}
       className={cn(
         'flex items-center gap-0.5',
         align === 'right' ? 'justify-end' : 'justify-start',
@@ -583,8 +646,9 @@ export function MessageActionBar({
         // (browser CSS transition behavior — no replay from 0).
         'transition-opacity duration-[250ms] ease-out',
         visible || menuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
-        // Fork / delete / rewind in-flight: dim the entire bar and block clicks.
-        inFlight && 'opacity-60 pointer-events-none',
+        // Menu-owned actions dim the entire bar and block clicks. Fork only
+        // disables its own button so More remains available.
+        moreInFlight && 'opacity-60 pointer-events-none',
       )}
     >
       {items}

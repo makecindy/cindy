@@ -42,6 +42,10 @@ import {
   type GhostDirectiveDisplay,
   type GhostDirectiveSegment,
 } from '@/cindy-brain/ghostCommand';
+import {
+  hostCapabilityDirectiveSegments,
+  type HostCapabilityDirectiveDisplay,
+} from '@/cindy-brain/hostCapabilityInvocation';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 
 /**
@@ -61,8 +65,7 @@ export const GhostFulfillmentContext = createContext<ReadonlyMap<string, Readonl
  * 它不是"追加文本的解析结果",只是渲染层的展示形态。
  */
 export type GhostSummonDisplay =
-  | GhostDirectiveDisplay
-  | { kind: 'semantic'; ghostIds: string[] };
+  GhostDirectiveDisplay | HostCapabilityDirectiveDisplay | { kind: 'semantic'; ghostIds: string[] };
 
 /** 展开区正文:按来源双色渲染分段(injected = 意识注入值,高亮)。 */
 function DirectiveSegments({
@@ -272,20 +275,21 @@ export function GhostSummonCard({
       : [];
 
   if (directive.kind === 'mention' && fulfilled.length === 0) {
-    const soloIcon = directive.ghosts.length === 1 ? iconByGhostId(directive.ghosts[0].ghostId) : null;
-    const names = directive.ghosts
-      .map((g) => g.name)
-      .join(t('chat.ghostSummon.listSeparator'));
+    const soloIcon =
+      directive.ghosts.length === 1 ? iconByGhostId(directive.ghosts[0].ghostId) : null;
+    const names = directive.ghosts.map((g) => g.name).join(t('chat.ghostSummon.listSeparator'));
     return (
       <div className="flex max-w-full flex-col items-end gap-1.5">
         <button
           type="button"
           aria-expanded={expanded}
-          title={t(expanded ? 'chat.ghostSummon.collapseAria' : 'chat.ghostSummon.mentionExpandAria')}
+          title={t(
+            expanded ? 'chat.ghostSummon.collapseAria' : 'chat.ghostSummon.mentionExpandAria',
+          )}
           onClick={() => setExpanded((v) => !v)}
           className={cn(
             'inline-flex max-w-full cursor-pointer items-center gap-1.5',
-            'rounded-full border px-2.5 py-1 text-[11px]',
+            'rounded-full border px-2.5 py-1 text-11',
             'transition-colors hover:text-foreground focus-visible:outline-none',
             'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           )}
@@ -310,10 +314,7 @@ export function GhostSummonCard({
             className="max-w-full rounded-[12px] border px-3 py-2"
             style={{ borderColor: 'var(--border-default)' }}
           >
-            <div
-              className="mb-1.5 text-xs leading-[1.5]"
-              style={{ color: 'var(--text-tertiary)' }}
-            >
+            <div className="mb-1.5 text-xs leading-[1.5]" style={{ color: 'var(--text-tertiary)' }}>
               {t('chat.ghostSummon.legend')}
             </div>
             <DirectiveSegments
@@ -327,23 +328,26 @@ export function GhostSummonCard({
     );
   }
 
-  // ── 标注行形态:硬指令 / 软提示被兑现 / 语义自主召唤(三者完全同形态)──
+  // ── 标注行形态:普通插件调用与 Host capability 共用外观,路由语义分开──
   const isCommand = directive.kind === 'command';
+  const isHostCapability = directive.kind === 'host-capability';
   // 标注承载的意识:硬指令固定一个;兑现态取被真实召唤的子集;semantic 只有
   // ghostId,名字/指令词从已装清单实时解析(已卸下回退 ghostId)。
   // 多意识时名字并列、法阵取第一个。
   const cardGhosts: Array<{ name: string; ghostId: string; command?: string }> = isCommand
     ? [{ name: directive.name, ghostId: directive.ghostId, command: directive.command }]
-    : directive.kind === 'mention'
-      ? fulfilled
-      : directive.ghostIds.map((id) => {
-          const g = installedGhosts.find((x) => x.manifest.id === id);
-          return {
-            name: g?.manifest.name ?? id,
-            ghostId: id,
-            ...(g?.manifest.command ? { command: g.manifest.command } : {}),
-          };
-        });
+    : isHostCapability
+      ? [{ name: directive.name, ghostId: directive.ghostId }]
+      : directive.kind === 'mention'
+        ? fulfilled
+        : directive.ghostIds.map((id) => {
+            const g = installedGhosts.find((x) => x.manifest.id === id);
+            return {
+              name: g?.manifest.name ?? id,
+              ghostId: id,
+              ...(g?.manifest.command ? { command: g.manifest.command } : {}),
+            };
+          });
   // 兜底:空清单不渲(semantic 由 UserMessage 保证非空,此处防御性短路)。
   if (cardGhosts.length === 0) return null;
   // 命中已装意识时取实时安装态(头像/版本号);已卸下则都不显示,
@@ -363,18 +367,26 @@ export function GhostSummonCard({
   // 展开区改为如实说明(segments = null)。
   const segments = isCommand
     ? commandDirectiveSegments(directive)
-    : directive.kind === 'mention'
-      ? mentionDirectiveSegments(directive.ghosts)
-      : null;
+    : isHostCapability
+      ? hostCapabilityDirectiveSegments(directive)
+      : directive.kind === 'mention'
+        ? mentionDirectiveSegments(directive.ghosts)
+        : null;
   // 状态文字对齐兑现事实:mention 兑现态/semantic 由构造保证真调过;硬指令
   // 查兑现关联,AI 最终没调的只说「已完成」,不替 AI 撒谎。
-  const anyFulfilled =
-    !isCommand || cardGhosts.some((g) => Boolean(fulfilledIds?.has(g.ghostId)));
-  const statusText = running
-    ? t('chat.ghostSummon.status.running')
-    : anyFulfilled
-      ? t('chat.ghostSummon.status.called')
-      : t('chat.ghostSummon.status.done');
+  const anyFulfilled = isHostCapability
+    ? false
+    : !isCommand || cardGhosts.some((g) => Boolean(fulfilledIds?.has(g.ghostId)));
+  // Host capability selection is not a ghost_call fulfillment event. Until
+  // Host MCP fulfillment is tracked separately, report only the fact we know:
+  // the user selected this route. Do not show a success tick or "已调用".
+  const statusText = isHostCapability
+    ? t('chat.ghostSummon.status.selected')
+    : running
+      ? t('chat.ghostSummon.status.running')
+      : anyFulfilled
+        ? t('chat.ghostSummon.status.called')
+        : t('chat.ghostSummon.status.done');
 
   return (
     <div className={cn('max-w-full', className)}>
@@ -386,9 +398,11 @@ export function GhostSummonCard({
             ? 'chat.ghostSummon.collapseAria'
             : isCommand
               ? 'chat.ghostSummon.expandAria'
-              : directive.kind === 'mention'
-                ? 'chat.ghostSummon.mentionExpandAria'
-                : 'chat.ghostSummon.semanticExpandAria',
+              : isHostCapability
+                ? 'chat.ghostSummon.hostCapabilityExpandAria'
+                : directive.kind === 'mention'
+                  ? 'chat.ghostSummon.mentionExpandAria'
+                  : 'chat.ghostSummon.semanticExpandAria',
         )}
         onClick={() => setExpanded((v) => !v)}
         className={cn(
@@ -399,7 +413,7 @@ export function GhostSummonCard({
       >
         <SummonSeal
           iconDataUrl={installedGhost?.iconDataUrl ?? null}
-          running={running}
+          running={isHostCapability ? false : running}
           fulfilled={anyFulfilled}
         />
         <span
@@ -426,7 +440,7 @@ export function GhostSummonCard({
             <div className="mb-2 flex items-center gap-2">
               {badgeCommand && (
                 <span
-                  className="shrink-0 rounded-full px-2 py-[2px] font-mono text-[11px] leading-none"
+                  className="shrink-0 rounded-full px-2 py-[2px] font-mono text-11 leading-none"
                   style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
                 >
                   ${badgeCommand}
@@ -434,7 +448,7 @@ export function GhostSummonCard({
               )}
               {versionLabel && (
                 <span
-                  className="shrink-0 font-mono text-[11px] leading-none"
+                  className="shrink-0 font-mono text-11 leading-none"
                   style={{ color: 'var(--text-tertiary)' }}
                 >
                   {versionLabel}
@@ -444,21 +458,24 @@ export function GhostSummonCard({
           )}
           {segments ? (
             <>
-              <div
-                className="mb-1 text-xs font-medium"
-                style={{ color: 'var(--text-tertiary)' }}
-              >
+              <div className="mb-1 text-xs font-medium" style={{ color: 'var(--text-tertiary)' }}>
                 {t(
                   isCommand
                     ? 'chat.ghostSummon.directiveLabel'
-                    : 'chat.ghostSummon.mentionDirectiveLabel',
+                    : isHostCapability
+                      ? 'chat.ghostSummon.hostCapabilityDirectiveLabel'
+                      : 'chat.ghostSummon.mentionDirectiveLabel',
                 )}
               </div>
               <div
                 className="mb-1.5 text-xs leading-[1.5]"
                 style={{ color: 'var(--text-tertiary)' }}
               >
-                {t('chat.ghostSummon.legend')}
+                {t(
+                  isHostCapability
+                    ? 'chat.ghostSummon.hostCapabilityLegend'
+                    : 'chat.ghostSummon.legend',
+                )}
               </div>
               <DirectiveSegments
                 segments={segments}
@@ -468,10 +485,7 @@ export function GhostSummonCard({
             </>
           ) : (
             /* semantic:没有追加段,如实说明来由(不伪造"指令原文")。 */
-            <div
-              className="text-xs leading-[1.5]"
-              style={{ color: 'var(--text-tertiary)' }}
-            >
+            <div className="text-xs leading-[1.5]" style={{ color: 'var(--text-tertiary)' }}>
               {t('chat.ghostSummon.semanticNote')}
             </div>
           )}

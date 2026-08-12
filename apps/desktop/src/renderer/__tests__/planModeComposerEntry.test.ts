@@ -3,15 +3,16 @@
 /**
  * planModeComposerEntry.test.tsx
  * ---------------------------------------------------------------------------
- * issue #475 — 计划模式一级入口的 DOM 级渲染断言:
- *   - ExtraDirsButton:「计划模式」菜单项与「新建目标」同级;点击回调 toggle;
- *     勾选态 aria-checked;codex 也能只凭 planMode 渲染「+」按钮
+ * issue #475 — 模式入口与统一 composer 建议面板的 DOM 级渲染断言:
+ *   - ExtraDirsButton 只保留 MorphPopover 触发器;
+ *   - 计划模式 / 协同模式作为 action 与 @ 资源共用 AtMentionPanel;
  *   - PlanModeIndicator:激活 chip 文案 + 退出按钮;disabled 时隐藏退出按钮
  *   - PlanActionCard:取消收敛为次级动作(仅 Esc,无独立行)与 ⏎ 去重
  *     (编辑反馈时批准行 ⏎ 隐藏,反馈 ⏎ 仅在有文字时出现且可点击发送)
  */
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 
@@ -31,41 +32,42 @@ vi.mock('@/components/chat/MarkdownRenderer', () => ({
 }));
 
 import { ExtraDirsButton } from '@/components/new-chat/ExtraDirsButton';
+import { AtMentionPanel } from '@/components/new-chat/AtMentionPanel';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { PlanModeIndicator } from '@/components/new-chat/PlanModeIndicator';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
-import type { InstalledGhost } from '../../shared/ghost';
+import {
+  buildComposerSuggestionEntries,
+  nextEnabledSuggestionIndex,
+  type ComposerSuggestionAction,
+  type ComposerSuggestionEntry,
+  type ComposerPluginSuggestion,
+} from '@/lib/composerSuggestion';
 
-const installedPlugin: InstalledGhost = {
-  manifest: {
-    schemaVersion: 2,
-    id: 'cindy-art',
-    name: 'Cindy Art',
-    version: '1.0.0',
-    kind: 'chip',
-    entry: 'main.js',
-    slots: ['tool'],
-    tools: [{ name: 'draw', description: 'Draw.' }],
-    command: 'art',
+const iosSimulatorPluginSuggestion: ComposerPluginSuggestion = {
+  item: {
+    type: 'plugin-command',
+    name: 'iOS Simulator',
+    relPath: 'cindy://host-capability/ios-simulator',
+    pluginId: 'ios-simulator',
   },
-  dir: '/tmp/cindy-art',
-  enabled: true,
 };
 
-const installedMermaidPlugin: InstalledGhost = {
-  manifest: {
-    schemaVersion: 2,
-    id: 'cindy-mermaid',
-    name: 'Mermaid',
-    version: '1.0.0',
-    kind: 'chip',
-    entry: 'main.js',
-    slots: ['tool'],
-    tools: [{ name: 'render', description: 'Render a Mermaid diagram.' }],
-    command: 'mermaid',
+const disabledIOSSimulatorPluginSuggestion: ComposerPluginSuggestion = {
+  ...iosSimulatorPluginSuggestion,
+  disabled: true,
+  disabledReason: 'extraDirs.pluginDisabled',
+};
+
+const skillOnlyPluginSuggestion: ComposerPluginSuggestion = {
+  item: {
+    type: 'plugin-command',
+    name: 'Skill only',
+    relPath: 'cindy://plugin/skill-only',
+    pluginId: 'skill-only',
   },
-  dir: '/tmp/cindy-mermaid',
-  enabled: true,
+  disabled: true,
+  disabledReason: 'extraDirs.pluginAgentInvoked',
 };
 
 afterEach(() => {
@@ -73,146 +75,233 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('ExtraDirsButton 计划模式菜单项', () => {
-  it('附件接线单独存在时也渲染「+」入口，并把多选文件交给 composer', () => {
-    const onAddFiles = vi.fn();
-    const { container } = render(
+describe('统一 composer 建议入口', () => {
+  it('ExtraDirsButton 保留 MorphPopover 触发器、按下态与引用目录数量', () => {
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
       createElement(ExtraDirsButton, {
-        extraDirs: [],
-        onAddFiles,
+        extraDirsCount: 2,
+        hasReferenceDirs: true,
+        open: false,
+        onOpenChange,
+        panel: createElement('div', {}, 'panel'),
       }),
     );
-    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
-    expect(fileInput).toBeTruthy();
-    expect(fileInput?.multiple).toBe(true);
-
+    expect(screen.getByText('×2')).toBeTruthy();
     const trigger = screen.getByLabelText('extraDirs.menuAria');
-    expect(trigger.getAttribute('aria-haspopup')).toBeNull();
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(trigger);
-    const openPicker = screen.getByRole('button', { name: 'extraDirs.addFiles' });
-    const inputClick = vi.spyOn(fileInput!, 'click');
-    fireEvent.click(openPicker);
-    expect(inputClick).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(true);
 
-    const image = new File(['image'], 'photo.png', { type: 'image/png' });
-    const video = new File(['video'], 'clip.mp4', { type: 'video/mp4' });
-    fireEvent.change(fileInput!, { target: { files: [image, video] } });
-    expect(onAddFiles).toHaveBeenCalledWith([image, video]);
-    expect(fileInput?.value).toBe('');
-  });
-
-  it('菜单打开后 composer 变为 disabled 时，附件行同步禁用', () => {
-    const onAddFiles = vi.fn();
-    const props = { extraDirs: [], onAddFiles };
-    const { container, rerender } = render(createElement(ExtraDirsButton, props));
-    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
-    const inputClick = vi.spyOn(fileInput!, 'click');
-
-    fireEvent.click(screen.getByLabelText('extraDirs.menuAria'));
-    rerender(createElement(ExtraDirsButton, { ...props, disabled: true }));
-
-    const openPicker = screen.getByRole('button', { name: 'extraDirs.addFiles' });
-    expect((openPicker as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(openPicker);
-    expect(inputClick).not.toHaveBeenCalled();
-  });
-
-  it('codex 只凭 planMode 也渲染「+」入口, 菜单里出现计划模式 toggle', () => {
-    const onToggle = vi.fn();
-    render(
+    rerender(
       createElement(ExtraDirsButton, {
-        extraDirs: [],
-        planMode: { enabled: false, onToggle },
+        extraDirsCount: 2,
+        hasReferenceDirs: true,
+        open: true,
+        onOpenChange,
+        panel: createElement('div', {}, 'panel'),
       }),
     );
-    const trigger = screen.getByLabelText('extraDirs.menuAria');
-    fireEvent.click(trigger);
-
-    const item = screen.getByRole('menuitemcheckbox', { name: /planMode\.menuItem/ });
-    expect(item.getAttribute('aria-checked')).toBe('false');
-    fireEvent.click(item);
-    expect(onToggle).toHaveBeenCalledWith(true);
+    expect(
+      screen.getByRole('button', { name: 'extraDirs.menuAria' }).getAttribute('aria-pressed'),
+    ).toBe('true');
   });
 
-  it('开启态菜单项 aria-checked=true, 再点回调 false; 与新建目标同级共存', () => {
-    const onToggle = vi.fn();
-    const onNewGoal = vi.fn();
+  it('计划模式、协同与 Plugin 进入同一 AtMentionPanel', () => {
+    const onPlanToggle = vi.fn();
+    const actions: ComposerSuggestionAction[] = [
+      {
+        id: 'new-goal',
+        label: 'goal.newGoalMenuItem',
+        run: vi.fn(),
+      },
+      {
+        id: 'plan-mode',
+        label: 'planMode.menuItem',
+        checked: true,
+        run: () => onPlanToggle(false),
+      },
+      {
+        id: 'collaboration',
+        label: 'newChat.collaboration.modeLabel',
+        checked: false,
+        disabled: true,
+        disabledReason: 'policy unavailable',
+        run: vi.fn(),
+      },
+    ];
+    const entries = buildComposerSuggestionEntries({
+      query: '',
+      actions,
+      resources: [],
+      plugins: [
+        {
+          item: {
+            type: 'plugin-command',
+            name: 'Cindy Art',
+            relPath: 'art',
+            pluginId: 'cindy-art',
+          },
+        },
+      ],
+    });
+    const onSelect = (entry: ComposerSuggestionEntry) => {
+      if (entry.kind === 'action') entry.action.run();
+    };
     render(
-      createElement(ExtraDirsButton, {
-        extraDirs: [],
-        onChange: () => {},
-        onNewGoal,
-        planMode: { enabled: true, onToggle },
+      createElement(AtMentionPanel, {
+        query: '',
+        state: { kind: 'ready', items: [], truncated: false },
+        entries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect,
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
       }),
     );
-    fireEvent.click(screen.getByLabelText('extraDirs.menuAria'));
 
-    // 新建目标与计划模式同级出现在同一菜单
     expect(screen.getByText('goal.newGoalMenuItem')).toBeTruthy();
-    const item = screen.getByRole('menuitemcheckbox', { name: /planMode\.menuItem/ });
-    expect(item.getAttribute('aria-checked')).toBe('true');
-    fireEvent.click(item);
-    expect(onToggle).toHaveBeenCalledWith(false);
+    expect(screen.getByText('Cindy Art')).toBeTruthy();
+    const plan = screen.getByRole('menuitemcheckbox', { name: 'planMode.menuItem' });
+    expect(plan.getAttribute('aria-checked')).toBe('true');
+    expect(plan.className).toContain('rounded-[8px]');
+    expect(plan.className).toContain('px-3');
+    expect(plan.className).toContain('py-2');
+    expect(plan.className).toContain('hover:bg-[var(--model-item-hover)]');
+    fireEvent.click(plan);
+    expect(onPlanToggle).toHaveBeenCalledWith(false);
+    expect(
+      (
+        screen.getByRole('menuitemcheckbox', {
+          name: 'newChat.collaboration.modeLabel: policy unavailable',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
   });
 
-  it('没有任何入口时保持不渲染', () => {
-    const { container } = render(
-      createElement(ExtraDirsButton, {
-        extraDirs: [],
-      }),
-    );
-    expect(container.firstChild).toBeNull();
+  it('键盘导航跳过 disabled 条目', () => {
+    const entries: ComposerSuggestionEntry[] = [
+      {
+        kind: 'action',
+        action: { id: 'new-goal', label: 'goal', disabled: true, run: vi.fn() },
+      },
+      {
+        kind: 'action',
+        action: { id: 'plan-mode', label: 'plan', checked: false, run: vi.fn() },
+      },
+    ];
+    expect(nextEnabledSuggestionIndex(entries, 1, 1)).toBe(1);
+    expect(nextEnabledSuggestionIndex(entries, 0, 1)).toBe(1);
+    expect(nextEnabledSuggestionIndex(entries, 1, -1)).toBe(1);
   });
 
-  it('Codex 接入 onChange 后显示引用目录、数量与增删入口', () => {
-    const onChange = vi.fn();
+  it('引用目录管理复用统一面板的独立 section，移除按钮支持键盘访问', async () => {
+    const user = userEvent.setup();
+    const onRemove = vi.fn();
+    const entries = buildComposerSuggestionEntries({
+      query: '',
+      actions: [{ id: 'add-extra-dir', label: 'extraDirs.add', run: vi.fn() }],
+      resources: [],
+      plugins: [],
+    });
     render(
-      createElement(ExtraDirsButton, {
-        extraDirs: ['/repo-shared'],
-        workingDir: '/repo',
-        onChange,
+      createElement(AtMentionPanel, {
+        query: '',
+        state: { kind: 'ready', items: [], truncated: false },
+        entries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
+        referenceDirs: { dirs: ['/repo-shared'], onRemove },
       }),
     );
-
-    expect(screen.getByText('×1')).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('extraDirs.menuAria'));
     expect(screen.getByText('extraDirs.sectionTitle')).toBeTruthy();
     expect(screen.getByText('repo-shared')).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('extraDirs.remove'));
-    expect(onChange).toHaveBeenCalledWith([]);
+    const removeButton = screen.getByLabelText('extraDirs.remove');
+    expect(removeButton.className).toContain('focus-visible:opacity-100');
+    expect(removeButton.className).toContain('focus-visible:ring-2');
+    removeButton.focus();
+    expect(document.activeElement).toBe(removeButton);
+    await user.keyboard('{Enter}');
+    expect(onRemove).toHaveBeenCalledWith('/repo-shared');
   });
 
-  it('展示所有已安装 Plugin，并把可用项交给 composer 放置', () => {
-    const onPluginSelect = vi.fn();
+  it('Host capability 插件由统一建议面板交给 composer 处理，不伪造 command', () => {
+    const entries = buildComposerSuggestionEntries({
+      query: '',
+      actions: [],
+      resources: [],
+      plugins: [iosSimulatorPluginSuggestion],
+    });
+    const onSelect = vi.fn();
     render(
-      createElement(ExtraDirsButton, {
-        extraDirs: [],
-        plugins: [installedPlugin],
-        onPluginSelect,
+      createElement(AtMentionPanel, {
+        query: '',
+        state: { kind: 'ready', items: [], truncated: false },
+        entries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect,
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
+        embedded: true,
       }),
     );
 
-    fireEvent.click(screen.getByLabelText('extraDirs.menuAria'));
-    expect(screen.getByText('extraDirs.pluginsTitle')).toBeTruthy();
-    const pluginRow = screen.getByRole('button', { name: 'Cindy Art' });
-    expect(pluginRow.querySelector('span')?.className).toContain('size-5');
+    const pluginRow = screen.getByRole('button', { name: 'iOS Simulator' });
+    expect((pluginRow as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(pluginRow);
-    expect(onPluginSelect).toHaveBeenCalledWith(installedPlugin);
+    expect(onSelect).toHaveBeenCalledWith({
+      kind: 'resource',
+      item: iosSimulatorPluginSuggestion.item,
+    });
   });
 
-  it('复用 Plugin 页的功能兜底图标，避免无包内头像时入口不一致', () => {
-    render(
-      createElement(ExtraDirsButton, {
-        extraDirs: [],
-        plugins: [installedMermaidPlugin],
-        onPluginSelect: vi.fn(),
+  it('已停用优先显示停用状态；可用但无直接入口的 Skill 标为 Agent 自动调用', () => {
+    const disabledEntries = buildComposerSuggestionEntries({
+      query: '',
+      actions: [],
+      resources: [],
+      plugins: [disabledIOSSimulatorPluginSuggestion],
+    });
+    const { rerender } = render(
+      createElement(AtMentionPanel, {
+        query: '',
+        state: { kind: 'ready', items: [], truncated: false },
+        entries: disabledEntries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
+        embedded: true,
       }),
     );
+    expect(screen.getByText('extraDirs.pluginDisabled')).toBeTruthy();
 
-    fireEvent.click(screen.getByLabelText('extraDirs.menuAria'));
-    const pluginRow = screen.getByRole('button', { name: 'Mermaid' });
-    expect(pluginRow.querySelector('svg.lucide-workflow')).toBeTruthy();
-    expect(pluginRow.querySelector('svg.lucide-package')).toBeNull();
+    const skillOnlyEntries = buildComposerSuggestionEntries({
+      query: '',
+      actions: [],
+      resources: [],
+      plugins: [skillOnlyPluginSuggestion],
+    });
+    rerender(
+      createElement(AtMentionPanel, {
+        query: '',
+        state: { kind: 'ready', items: [], truncated: false },
+        entries: skillOnlyEntries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
+        embedded: true,
+      }),
+    );
+    expect(screen.getByText('extraDirs.pluginAgentInvoked')).toBeTruthy();
   });
 });
 

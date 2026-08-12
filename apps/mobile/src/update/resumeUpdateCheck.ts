@@ -5,7 +5,7 @@
 // - JS OTA:静默 check → fetch,**绝不 reload**(reload 会闪屏断状态);下载好的 bundle
 //   由 expo-updates 在下次冷启动自动生效。
 // - 整包(runtimeVersion 变化):静默拉 /latest 比对;唯一允许出 UI 的情况是命中
-//   minVersion 强更(强更本身无法无感),且同一目标 runtimeVersion 进程内只回调一次;
+//   minVersion 强更(强更本身无法无感),此时上报给 onForcedUpdate 进入阻断态;
 //   非强更完全静默(启动路径已有一次性提示,不在每次切回时骚扰)。
 // - 节流:只认真正的 background → active(iOS 通知中心/来电导致的 inactive 抖动不算),
 //   两次检查最小间隔 minIntervalMs;创建时间视为"刚检查过"(冷启动路径刚跑完,首次
@@ -15,25 +15,9 @@
 import { evaluateBundleUpdate, type BundleUpdateEvaluation } from './bundleUpdate';
 import { withTimeout } from './startupOtaUpdate';
 
-// 模块级强更提示去重:同一 runtimeVersion 进程内只弹一次,跨启动路径和 resume 路径共享。
-// 启动路径(useBundleUpdatePrompt)弹强更时调 markForcedPrompted 写入,resume 路径检查前
-// 先查 hasForcedPrompted,避免冷启动已弹过的强更在 5 分钟后 resume 时再弹一次。
-const promptedForcedRuntimes = new Set<string>();
-
-/** 标记某 runtimeVersion 的强更已提示过(启动路径弹窗后调用)。 */
-export function markForcedPrompted(runtimeVersion: string): void {
-  promptedForcedRuntimes.add(runtimeVersion);
-}
-
-/** 查询某 runtimeVersion 是否已提示过强更。 */
-export function hasForcedPrompted(runtimeVersion: string): boolean {
-  return promptedForcedRuntimes.has(runtimeVersion);
-}
-
-/** 仅供单测重置模块级状态。 */
-export function resetForcedPromptedForTest(): void {
-  promptedForcedRuntimes.clear();
-}
+// 强更不再需要"是否已提示过"的去重:它现在是阻断态而不是一次性弹窗,onForcedUpdate
+// (promptBundleUpdate → enterForcedUpdate)对同一目标幂等,重复上报不会产生重复 UI。
+// 反过来说,去重曾经引入过风险:标记了却没展示,强更就对本进程永久失声。
 
 export type ResumeOtaOutcome = 'skipped' | 'up-to-date' | 'fetched' | 'error';
 export type ResumeBundleOutcome = 'skipped' | 'up-to-date' | 'update-available' | 'forced' | 'error';
@@ -55,9 +39,9 @@ export interface ResumeUpdateCheckDeps {
   getCurrentRuntimeVersion: () => string | null | undefined;
   getCurrentVersion: () => string | null | undefined;
   /**
-   * 强更时的唯一 UI 出口。契约:实现必须在**实际展示**强更提示后调用 markForcedPrompted
-   * 标记该 runtimeVersion(见 promptBundleUpdate),本层据此跨路径去重、且只在确认展示后才标记
-   * ——若实现因故未展示(如无安装 URL)则不应标记,以便下次 resume 重试。
+   * 强更时的唯一 UI 出口(实参是 promptBundleUpdate → 进入模块级阻断态)。
+   * 契约:实现必须幂等 —— 本层每次命中强更都会上报,不做去重;
+   * 实现因故无法给出出口(如拿不到安装地址)时应自行 no-op,不要留下无出口的阻断屏。
    */
   onForcedUpdate: (evaluation: BundleUpdateEvaluation) => void;
   now: () => number;
@@ -93,7 +77,7 @@ export interface ResumeUpdateChecker {
   handleAppStateChange: (next: string) => Promise<ResumeUpdateOutcome> | null;
 }
 
-/** 创建 resume 检查器(持有节流/在途/已提示状态;一个 App 进程一个实例)。 */
+/** 创建 resume 检查器(持有节流/在途状态;一个 App 进程一个实例)。 */
 export function createResumeUpdateChecker(
   deps: ResumeUpdateCheckDeps,
   {
@@ -136,10 +120,8 @@ export function createResumeUpdateChecker(
       });
       if (!evaluation.needsUpdate || !evaluation.target) return 'up-to-date';
       if (!evaluation.forced) return 'update-available'; // 非强更静默:启动路径已负责提示
-      // 去重标记由 onForcedUpdate(promptBundleUpdate)在确认展示弹窗后统一负责,
-      // 这里只做 guard、不预先标记,避免"caller 已标记但 callee 未展示"竞态。
       if (deps.isCurrent && !deps.isCurrent()) return 'skipped';
-      if (!hasForcedPrompted(evaluation.target.runtimeVersion)) deps.onForcedUpdate(evaluation);
+      deps.onForcedUpdate(evaluation); // 幂等,不去重:阻断态重复上报无副作用
       return 'forced';
     } catch {
       return 'error'; // fail-open:连不上更新服务静默放过

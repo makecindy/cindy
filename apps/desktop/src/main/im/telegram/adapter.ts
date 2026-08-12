@@ -7,19 +7,16 @@
  *   - 群/topic: userId = `g/{chatId}[/{threadId}]`, 每 lane 一个长期会话,
  *     与官方 bot 的 telegram:group/topic externalKey 语义对齐。
  *
- * 两个渠道级差异化钩子(官方通道行为的移植):
- *   - answerOnlyProgress(DM): Telegram 客户端把可编辑消息渲染成 Rich draft
- *     动画, 过程时间线反复重排会清空重播(#848) → DM 中间态只发正文;
+ * 渠道级差异化钩子(官方通道行为的移植):
  *   - prepareAgentTurnText(群): 触发消息送模型前拼本地群上下文前缀(#843),
  *     游标在消息被路由受理后 commit。
+ *
+ * 流式呈现不按 DM / 群分叉: 两边共用同一份过程时间线 + 正文视图。
  */
 
 import fs from 'node:fs';
 import type { TelegramIM } from '@cindy/im';
-import {
-  decodeTelegramLaneUserId,
-  decodeTelegramMessageId,
-} from '@cindy/im';
+import { decodeTelegramLaneUserId, decodeTelegramMessageId } from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
@@ -27,7 +24,8 @@ import { buildTelegramGroupContextPrefix, buildTelegramReplyContextBlock } from 
 import { readTelegramPersona } from './behaviorStore';
 import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
 import { createTelegramGuestTurnPermissionPolicy } from './permissionPolicy';
-import { ui, PROCESSING_EMOJI } from './uiText';
+import { telegramUiText, ui, PROCESSING_EMOJI } from './uiText';
+import type { GroupHistoryAccessScope } from '../shared/groupHistoryAccess';
 
 function ensureWorkingDir(botId: string): string {
   const dir = ownerScopedImUserDataPath('im-working-dir', `telegram-${botId}`);
@@ -56,7 +54,10 @@ function personaBlock(): string {
 /** 发言人显示名/用户名消毒: 平台可改字段是不可信输入, 去控制字符与换行防注入。 */
 function sanitizeSpeakerText(value: string): string {
   // eslint-disable-next-line no-control-regex
-  return value.replace(/[\u0000-\u001f\u007f\u200b]/g, ' ').trim().slice(0, 64);
+  return value
+    .replace(/[\u0000-\u001f\u007f\u200b]/g, ' ')
+    .trim()
+    .slice(0, 64);
 }
 
 export function buildTelegramAdapter(
@@ -69,6 +70,7 @@ export function buildTelegramAdapter(
     output: { kind: 'rich-card', im: telegramIm },
     config,
     ui,
+    interactionExpiredNotice: telegramUiText.expiredCardNotice,
     sessions: {
       source: 'telegram',
       sessionIdFor: (botId, userId) => `telegram_${botId}_${sessionSafeUserId(userId)}`,
@@ -91,7 +93,6 @@ export function buildTelegramAdapter(
     // /project: 从 Telegram 把当前会话切到 desktop 项目目录(bot 原生会话)。
     projectSwitching: true,
     buildVendorOptions: (userId) => ({ telegramChatId: userId, source: 'telegram' }),
-    answerOnlyProgress: (userId) => decodeTelegramLaneUserId(userId) === null,
     // 一群一会话的权限收紧(D1 + 2026-07-30 review 修订): **所有群轮次**都挂
     // 破坏性操作强确认 — 不只成员触发的。群窗口/引用块把成员可控文本注入
     // owner 触发的轮次, 提示注入可借 owner 轮次的宽松档执行危险操作; 统一
@@ -99,6 +100,20 @@ export function buildTelegramAdapter(
     // DM(无 speaker)不挂, owner 私聊保持全速。
     turnPermissionPolicyFor: (event) =>
       event.speaker ? createTelegramGuestTurnPermissionPolicy(event.messageId) : undefined,
+    groupHistoryAccessFor: (event): GroupHistoryAccessScope => {
+      const lane = decodeTelegramLaneUserId(event.senderId);
+      const provider = `telegram-personal:${event.contextId}`;
+      return {
+        // 跨 lane 检索只给 DM(!lane, 上游已保证 DM 非 owner 不进业务链路)。
+        // 群轮次一律 lane-only —— 与上面 turnPermissionPolicyFor 的 2026-07-30
+        // 裁决同一信任模型: 群窗口/引用块把成员可控文本注入 owner 触发的轮次,
+        // 注入可借 owner 轮次把其它 lane 的历史检索出来回帖泄漏。owner 要跨
+        // lane 查, 走私聊(检索类调用无强确认卡, 不能靠确认兜底)。
+        access: lane ? 'lane' : 'owner',
+        provider,
+        lane: lane ? { provider, chatId: lane.chatId, threadId: lane.threadId } : null,
+      };
+    },
     prepareAgentTurnText: async (event) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const replyBlock = event.replyContext
@@ -140,7 +155,9 @@ export function buildTelegramAdapter(
       // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 发言人 → 用户正文。
       return {
         agentText: `${persona}${ambientBlock}${assembly.prefix}${replyBlock}${speakerLine}${event.text}`,
-        commit: assembly.commit,
+        commit: async () => {
+          await assembly.commit();
+        },
       };
     },
   };

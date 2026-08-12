@@ -480,7 +480,7 @@ P2 继续后移:
 | Pending interactions | `PermissionPrompt.tsx`, `AskUserQuestionPrompt.tsx`, `PlanViewerCard.tsx`, `PlanActionCard.tsx`;`IssueConfirmCard.tsx` 仅作为桌面反馈链路参考 | 定义权限、提问、计划评审的决策 shape 和 UI 优先级;Issue 确认在 mobile V1 只做 unsupported 兜底。 |
 | 自动化计划 | `SchedulerPage.tsx`, `TaskListPane.tsx`, `RunHistoryPane.tsx`, `ScheduleFormDialog.tsx`, `RunHistoryCard.tsx`, `schedulesStore.ts` | 定义自动化任务列表、运行历史、运行/暂停/恢复/删除、模板、fresh/persistent/bound。 |
 | 文件页和选项卡 | `workdir-browse/WorkdirBrowseRoute.tsx`, `FileBodyView.tsx`, `WorkdirBrowseSidebar.tsx`, `FileTreeView.tsx`, `FileTabsBar.tsx`, `SessionTabsBar.tsx` | 定义文件树、文件内容、打开文件 tabs、session tabs、chat rail、search、dirty/edit。 |
-| 协作 / Orca | `CollaborationModeToggle.tsx`, `OrcaWorkflowRoute.tsx`, `OrcaSplitView.tsx`, `CreateWorkerPopover.tsx`, `useWorkers.ts`, `useStopOrcaCollab.ts` | 定义协作不是单开关,而是 lead + worker + focus + split/toggle 的多会话系统。 |
+| 协作 / Orca | `ExtraDirsButton.tsx`（「+」菜单协同项）, `OrcaWorkflowRoute.tsx`, `OrcaSplitView.tsx`, `CreateWorkerPopover.tsx`, `useWorkers.ts`, `useStopOrcaCollab.ts` | 定义协作不是单开关,而是 lead + worker + focus + split/toggle 的多会话系统。 |
 
 ## 3. V1 总体信息架构
 
@@ -1176,7 +1176,7 @@ V2 再做:
 
 协作模式由多个模块组成:
 
-- `CollaborationModeToggle`: 输入器中的入口和关闭入口。
+- `ExtraDirsButton` 的协同模式项:输入器「+」菜单中的入口和关闭入口。
 - `CreateWorkerPopover`: 创建 worker,角色、agent、model、effort、fast、initial task。
 - `OrcaWorkflowRoute`: `/cc-agent/orca/:sessionId` 路由薄壳。
 - `OrcaSplitView`: lead + worker split/toggle。

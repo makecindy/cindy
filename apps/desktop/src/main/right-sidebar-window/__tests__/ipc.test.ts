@@ -15,7 +15,7 @@ vi.mock('electron', () => {
 
 import { ipcMain, type BrowserWindow } from 'electron';
 
-import { MAKER_INVOKE } from '../../maker-ipc/channels.js';
+import { MAKER_INVOKE, MAKER_SEND } from '../../maker-ipc/channels.js';
 import { registerRsbWindowIpc } from '../ipc.js';
 import type { RsbWindowController } from '../controller.js';
 
@@ -61,6 +61,37 @@ beforeEach(() => {
 });
 
 describe('right-sidebar-window IPC', () => {
+  it('forwards the optional device-link origin in window context', () => {
+    const controller = makeController();
+    const { mainWebContents } = registerController(controller);
+    const setContextCall = (ipcMain.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([channel]) => channel === MAKER_SEND.RSB_WINDOW_SET_CONTEXT,
+    );
+    const setContext = setContextCall?.[1] as
+      | ((event: { sender: unknown }, payload: unknown) => void)
+      | undefined;
+    if (!setContext) throw new Error('RSB_WINDOW_SET_CONTEXT handler not registered');
+
+    setContext(
+      { sender: mainWebContents },
+      {
+        sessionId: 's1',
+        workdir: '/remote/workdir',
+        remoteHostId: null,
+        deviceLinkDeviceId: 'device-1',
+        available: true,
+      },
+    );
+
+    expect(controller.setContext).toHaveBeenCalledWith({
+      sessionId: 's1',
+      workdir: '/remote/workdir',
+      remoteHostId: null,
+      deviceLinkDeviceId: 'device-1',
+      available: true,
+    });
+  });
+
   it('preserves missing vs explicit null worker focus hints in ensure commands', async () => {
     const controller = makeController();
     const { handler, mainWebContents } = registerController(controller);
@@ -185,6 +216,80 @@ describe('right-sidebar-window IPC', () => {
     ).rejects.toThrow(/searchJump/);
   });
 
+  it('validates and forwards the turn-review host bucket session', async () => {
+    // 协同面板里 worker 流的审查入口带宿主(lead)桶。sanitizer 重建命令对象,
+    // 漏透传 hostSessionId 会让 detached 窗口路径退回 worker 的不可见桶。
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-turn-review',
+          sessionId: 'worker-1',
+          changeSetIds: ['change-1'],
+          requestNonce: 1,
+          hostSessionId: 'lead-1',
+        },
+        allowOpen: true,
+      },
+    );
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-turn-review',
+          sessionId: 'worker-1',
+          changeSetIds: ['change-1'],
+          requestNonce: 2,
+        },
+        allowOpen: true,
+      },
+    );
+
+    expect(controller.routeCommand).toHaveBeenNthCalledWith(1, {
+      command: {
+        type: 'open-turn-review',
+        sessionId: 'worker-1',
+        changeSetIds: ['change-1'],
+        selectedDiffId: null,
+        selectedPath: null,
+        requestNonce: 1,
+        hostSessionId: 'lead-1',
+      },
+      allowOpen: true,
+    });
+    expect(controller.routeCommand).toHaveBeenNthCalledWith(2, {
+      command: {
+        type: 'open-turn-review',
+        sessionId: 'worker-1',
+        changeSetIds: ['change-1'],
+        selectedDiffId: null,
+        selectedPath: null,
+        requestNonce: 2,
+        hostSessionId: null,
+      },
+      allowOpen: true,
+    });
+
+    await expect(
+      handler(
+        { sender: mainWebContents },
+        {
+          command: {
+            type: 'open-turn-review',
+            sessionId: 'worker-1',
+            changeSetIds: ['change-1'],
+            requestNonce: 3,
+            hostSessionId: 42,
+          },
+          allowOpen: true,
+        },
+      ),
+    ).rejects.toThrow(/hostSessionId/);
+  });
+
   it('validates and forwards external-file browser commands', async () => {
     const controller = makeController();
     const { handler, mainWebContents } = registerController(controller);
@@ -225,36 +330,6 @@ describe('right-sidebar-window IPC', () => {
         },
       ),
     ).rejects.toThrow(/command.absPath required/);
-  });
-
-  it('validates and forwards open-ghost-tab commands (ghostId 走身份卡同一校验)', async () => {
-    const controller = makeController();
-    const { handler, mainWebContents } = registerController(controller);
-
-    await handler(
-      { sender: mainWebContents },
-      {
-        command: { type: 'open-ghost-tab', sessionId: 's1', ghostId: 'tab-demo-a' },
-        allowOpen: true,
-      },
-    );
-    expect(controller.routeCommand).toHaveBeenCalledWith({
-      command: { type: 'open-ghost-tab', sessionId: 's1', ghostId: 'tab-demo-a' },
-      allowOpen: true,
-    });
-
-    // 野值(路径穿越形状 / 缺失)进不了命令通道。
-    for (const ghostId of ['../escape', 'UPPER', '', undefined]) {
-      await expect(
-        handler(
-          { sender: mainWebContents },
-          {
-            command: { type: 'open-ghost-tab', sessionId: 's1', ghostId },
-            allowOpen: true,
-          },
-        ),
-      ).rejects.toThrow(/ghostId/);
-    }
   });
 
   it('drops commands from secondary renderers but still validates their payloads', async () => {
@@ -299,6 +374,64 @@ describe('right-sidebar-window IPC', () => {
     await expect(
       handler({ sender: mainWebContents }, { command, allowOpen: true, userInitiated: 'yes' }),
     ).rejects.toThrow(/request.userInitiated/);
+  });
+
+  it('requires a provider-scoped Subagent focus and forwards the pair together', async () => {
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-subagents-tab',
+          sessionId: 's1',
+          focusRunId: 'shared-native-id',
+          focusProvider: 'codex',
+          focusTab: true,
+        },
+        allowOpen: true,
+      },
+    );
+
+    expect(controller.routeCommand).toHaveBeenCalledWith({
+      command: {
+        type: 'open-subagents-tab',
+        sessionId: 's1',
+        focusRunId: 'shared-native-id',
+        focusProvider: 'codex',
+        focusTab: true,
+      },
+      allowOpen: true,
+    });
+
+    await expect(
+      handler(
+        { sender: mainWebContents },
+        {
+          command: {
+            type: 'open-subagents-tab',
+            sessionId: 's1',
+            focusRunId: 'shared-native-id',
+          },
+          allowOpen: true,
+        },
+      ),
+    ).rejects.toThrow(/focusRunId and command.focusProvider/);
+    await expect(
+      handler(
+        { sender: mainWebContents },
+        {
+          command: {
+            type: 'open-subagents-tab',
+            sessionId: 's1',
+            focusRunId: 'shared-native-id',
+            focusProvider: 'other-harness',
+          },
+          allowOpen: true,
+        },
+      ),
+    ).rejects.toThrow(/focusProvider/);
   });
 
   it('open payload:缺省/空 = 用户手势;显式 false 透传;野值拒绝', async () => {

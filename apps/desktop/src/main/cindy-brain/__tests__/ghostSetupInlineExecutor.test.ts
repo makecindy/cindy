@@ -24,7 +24,7 @@ const action: Extract<GhostSetupAllowedAction, { kind: 'inline_form' }> = {
   },
 };
 
-function manifest(source?: 'user' | 'oauth' | 'login-email'): GhostManifest {
+function manifest(source?: 'user' | 'oauth' | 'login-email' | 'gh-cli' | 'oidc-token'): GhostManifest {
   return {
     schemaVersion: 2,
     id: 'demo',
@@ -141,6 +141,8 @@ describe('executeGhostSetupInlineSubmission', () => {
       { current: assessment('inline_form:different'), currentManifest: manifest() },
       { current: assessment(), currentManifest: manifest('oauth') },
       { current: assessment(), currentManifest: manifest('login-email') },
+      { current: assessment(), currentManifest: manifest('gh-cli') },
+      { current: assessment(), currentManifest: manifest('oidc-token') },
     ]) {
       const storeSecret = vi.fn(() => true);
       const result = executeGhostSetupInlineSubmission(

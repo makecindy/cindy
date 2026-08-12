@@ -86,6 +86,8 @@ describe('AddMarketplaceDialog', () => {
           lastRevision: null,
           source: { type: 'git' as const, url: 'https://git.acme.test/private/repo.git', sparsePaths: [] },
           pluginCount: 1,
+          skippedCount: 0,
+          unreadableCount: 0,
           status: 'ok' as const,
           errorCode: null,
         },
@@ -111,6 +113,32 @@ describe('AddMarketplaceDialog', () => {
 
     auth.mode = 'cloud';
     auth.dataOwnerId = 'user-1';
+  });
+
+  it('shows the discovery receipt (with submodule hint) after a successful add', async () => {
+    // submodule 空目录形态:清单有条目、可用 0。回执必须点明成因而非静默。
+    addSource.mockResolvedValueOnce({
+      name: 'hub',
+      addedAt: '2026-08-08T00:00:00.000Z',
+      lastSyncedAt: '2026-08-08T00:00:00.000Z',
+      lastRevision: 'abc123',
+      source: { type: 'git', url: 'https://github.com/acme/hub.git', sparsePaths: [] },
+      pluginCount: 0,
+      skippedCount: 2,
+      unreadableCount: 0,
+      status: 'ok',
+      errorCode: null,
+    } as never);
+    render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
+    fireEvent.change(input('settings.ghosts.market.sources.sourcePlaceholder'), {
+      target: { value: 'acme/hub' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.market.sources.add' }));
+    await waitFor(() =>
+      expect(screen.getByText('settings.ghosts.market.sources.addedReceipt')).toBeTruthy(),
+    );
+    expect(screen.getByText('settings.ghosts.market.sources.emptyWithSkippedEntries')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.market.sources.skippedEntries')).toBeTruthy();
   });
 
   it('still forwards ref and sparse paths for git sources', async () => {

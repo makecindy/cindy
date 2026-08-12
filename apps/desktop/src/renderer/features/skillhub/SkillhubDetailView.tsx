@@ -45,6 +45,11 @@ import {
 } from './hooks/useSkillhub';
 import { triggerIncrementalSync } from './hooks/useSkillSync';
 import { type DetailState, deriveDetailActionState, deriveDetailState } from './lib/detailButtons';
+import {
+  buildLocalSkillRoute,
+  findLocalSkillByPath,
+  findLocalSkillRouteEntry,
+} from './lib/localRoutes';
 import { isMarketDeleted as checkMarketDeleted, getCachedInfo, invalidate as invalidateInfo, refreshInfo } from './lib/infoDedupe';
 import {
   activePublishedReviewFromVersions,
@@ -102,7 +107,7 @@ const KIND_ICON: Record<SkillhubKind, LucideIcon> = {
 };
 
 // Compact chip — tuned to sit cleanly to the right of the h2 title (text-lg).
-// h-5 + text-[11px] keeps the visual weight subdued so the title leads.
+// h-5 + text-11 keeps the visual weight subdued so the title leads.
 function KindChip({ kind }: { kind: SkillhubKind }) {
   const Icon = KIND_ICON[kind];
   return (
@@ -116,7 +121,7 @@ function KindChip({ kind }: { kind: SkillhubKind }) {
       {/* relative top-[1px]: optical correction — Inter's cap sits high in
           the line-box at small sizes, so text-only nudge gets it level
           with the icon center without affecting layout. */}
-      <span className="relative top-[0.5px] text-[11px] font-medium leading-none">{KIND_LABEL[kind]}</span>
+      <span className="relative top-[0.5px] text-11 font-medium leading-none">{KIND_LABEL[kind]}</span>
     </span>
   );
 }
@@ -132,7 +137,7 @@ function ScopeChip({ scope }: { scope: SkillhubScope }) {
       )}
     >
       <Icon size={11} className="shrink-0 text-[var(--settings-theme-icon)]" />
-      <span className="relative top-[0.5px] text-[11px] font-medium leading-none">
+      <span className="relative top-[0.5px] text-11 font-medium leading-none">
         {scope === 'global' ? t('skillhub.detail.scopeGlobal') : t('skillhub.detail.scopeProject')}
       </span>
     </span>
@@ -979,27 +984,10 @@ export function SkillhubDetailView() {
   const metaResize = useMetaColumnResize();
 
   const entry = useMemo(() => {
-    const { kind, projectHash, name } = params as Record<string, string | undefined>;
-    if (!kind || !name) return null;
-    const decodedName = decodeURIComponent(name);
-    const engine = searchParams.get('engine');
-    const matchEngine = (s: SkillhubSkill) => !engine || s.engine === engine;
-    if (projectHash) {
-      return (
-        skills.find(
-          (s) =>
-            s.kind === kind &&
-            s.scope === 'project' &&
-            s.projectHash === projectHash &&
-            s.name === decodedName &&
-            matchEngine(s),
-        ) ?? null
-      );
-    }
-    return (
-      skills.find(
-        (s) => s.kind === kind && s.scope === 'global' && s.name === decodedName && matchEngine(s),
-      ) ?? null
+    return findLocalSkillRouteEntry(
+      skills,
+      params as Record<string, string | undefined>,
+      searchParams,
     );
   }, [params, searchParams, skills]);
 
@@ -1870,19 +1858,32 @@ export function SkillhubDetailView() {
             </h2>
             <KindChip kind={entry.kind} />
             <ScopeChip scope={entry.scope} />
-            {entry.linkedEngines.map(le => (
-              <span
-                key={le.engine}
-                className={cn(
-                  'inline-flex h-5 shrink-0 items-center rounded-full px-2 whitespace-nowrap',
-                  'bg-[var(--settings-btn-secondary-bg)] text-[var(--msg-assistant-text)]',
-                )}
-              >
-                <span className="relative top-[0.5px] text-[11px] font-medium leading-none">
-                  {le.label}
+            {entry.linkedEngines.map(le => {
+              const statusKey = le.runtimeStatus === 'discovered'
+                ? 'skillhub.common.statusDiscovered'
+                : le.runtimeStatus === 'approved'
+                  ? 'skillhub.common.statusApproved'
+                  : le.runtimeStatus === 'loaded'
+                    ? 'skillhub.common.statusLoaded'
+                    : le.runtimeStatus === 'failed'
+                      ? 'skillhub.common.statusFailed'
+                      : le.runtimeStatus === 'unknown'
+                        ? 'skillhub.common.statusUnknown'
+                        : null;
+              return (
+                <span
+                  key={le.engine}
+                  className={cn(
+                    'inline-flex h-5 shrink-0 items-center rounded-full px-2 whitespace-nowrap',
+                    'bg-[var(--settings-btn-secondary-bg)] text-[var(--msg-assistant-text)]',
+                  )}
+                >
+                  <span className="relative top-[0.5px] text-11 font-medium leading-none">
+                    {statusKey ? `${le.label} · ${t(statusKey)}` : le.label}
+                  </span>
                 </span>
-              </span>
-            ))}
+              );
+            })}
             {detailState?.isMine && publishedStatus === 'rejected' && (
               <Tip text={t('skillhub.detail.rejectedTooltip')}>
                 <button
@@ -2068,7 +2069,7 @@ export function SkillhubDetailView() {
               ) : (
                 <span className={cn(
                   'inline-flex h-9 items-center gap-1.5 rounded-full border px-[14px]',
-                  'text-[13px] text-[var(--cmd-palette-item-meta)]',
+                  'text-13 text-[var(--cmd-palette-item-meta)]',
                   'border-[var(--confirm-btn-secondary-border)]',
                 )}>
                   <CheckCircle size={12} className="shrink-0" />
@@ -2080,7 +2081,7 @@ export function SkillhubDetailView() {
             {detailAction?.kind === 'installed-tag' && (
               <span className={cn(
                 'inline-flex h-9 items-center gap-1.5 rounded-full border px-[14px]',
-                'text-[13px] text-[var(--cmd-palette-item-meta)]',
+                'text-13 text-[var(--cmd-palette-item-meta)]',
                 'border-[var(--confirm-btn-secondary-border)]',
               )}>
                 <CheckCircle size={12} className="shrink-0" />
@@ -2564,20 +2565,13 @@ export function SkillhubDetailView() {
             // + 旧 name 的 info 缓存(让新 name 重新查),然后刷新 scanner,
             // 最后导航到新 URL。先 await refresh 才 navigate,确保新 URL 落地时
             // skills 已包含新 entry,免得短暂闪一下"未找到"。
-            const newId = entry
-              ? `${entry.kind}:${entry.scope}:${entry.scope === 'project' ? `${entry.projectHash}:` : ''}${newName}`
-              : null;
-            const newUrl = entry
-              ? entry.scope === 'global'
-                ? `/skillhub/local/${entry.kind}/global/${encodeURIComponent(newName)}`
-                : `/skillhub/local/${entry.kind}/project/${entry.projectHash}/${encodeURIComponent(newName)}`
-              : null;
             invalidateInfo(entry.name);
             invalidateHash(newAbsolutePath);
-            // 在新 URL 上替换 lastEntryId,避免下次启动还指向旧 id
-            if (newId) setLastEntryId(newId);
-            void refreshSkillhub().then(() => {
-              if (newUrl) navigate(newUrl, { replace: true });
+            void refreshSkillhub().then((scannedSkills) => {
+              const renamed = findLocalSkillByPath(scannedSkills, newAbsolutePath);
+              if (!renamed) return;
+              setLastEntryId(renamed.id);
+              navigate(buildLocalSkillRoute(renamed), { replace: true });
             });
           }}
           onScanResult={setScanResult}

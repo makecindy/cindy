@@ -1,6 +1,6 @@
 /**
  * Settings -> Personalization 的 Subagent 设置:默认模型(Claude Code / Codex)+
- * Codex 子代理护栏(总开关 / 并发上限 / 嵌套开关)。
+ * Codex 子代理护栏(总开关 / Cindy 策略 / 并发上限 / 嵌套开关)。
  *
  * main 进程 JSON store 是事实源;renderer 只展示并通过 IPC 提交覆盖值。
  * codex spawn 注入键的变更可能延迟生效(返回体 codexRestartDeferred=true 时
@@ -10,11 +10,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { connectedProvidersForAgent, getModel, isAgentSelectableModel, visibleModelUnion } from '@cindy/model-providers';
+import {
+  connectedProvidersForAgent,
+  effectiveSourceIdForModel,
+  getModel,
+  isModelSelectableForNewRoute,
+  visibleModelUnion,
+} from '@cindy/model-providers';
 
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
-import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { ModelSelector, type ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -22,6 +28,12 @@ import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
 import { toast } from '@/lib/toast';
+import {
+  getProviderModelEffort,
+  getProviderModelFast,
+  setProviderModelEffort,
+  setProviderModelFast,
+} from '@/state/providerModelMemory';
 import {
   CODEX_SUBAGENT_CONCURRENCY_INITIAL,
   CODEX_SUBAGENT_CONCURRENCY_MAX,
@@ -37,6 +49,17 @@ import {
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 const log = createLogger('SubagentModelSection');
+
+/**
+ * 标准模型面板把非选中行的配置写进模型级全局预设;Subagent 仍把实际派发值
+ * 原子落进自己的 settings store。Fast 回调未开启,这里只复用完整适配器契约。
+ */
+const CODEX_SUBAGENT_MODEL_MEMORY: ModelMemoryAccessors = {
+  getEffort: getProviderModelEffort,
+  setEffort: setProviderModelEffort,
+  getFast: getProviderModelFast,
+  setFast: setProviderModelFast,
+};
 
 type SubagentAgentKind = 'claude-code' | 'codex';
 
@@ -139,7 +162,7 @@ export function SubagentModelSection() {
       // image/audio/embedding 端点。
       const catalogModel = getModel(provider, modelId, agentKind);
       return catalogModel &&
-        isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
+        isModelSelectableForNewRoute(catalogModel, { userProvider: provider.source === 'user' })
         ? providerId
         : null;
     },
@@ -190,7 +213,7 @@ export function SubagentModelSection() {
   // Codex 三元组 (model, providerId, effort) 原子落库;「不指定」三键同清,
   // 不给 effort 留孤儿(IPC 层有意不强清 effort,见 shared 契约注释)。
   const setCodexModel = useCallback(
-    async (model: string | null, providerId: string | null) => {
+    async (model: string | null, providerId: string | null, reconciledEffort?: string) => {
       const current = settingsRef.current;
       if (!current) return;
       if (model === null) {
@@ -201,7 +224,21 @@ export function SubagentModelSection() {
         return;
       }
       const nextProviderId = providerId;
-      const nextEffort = resolveCodexEffort(model, current.codexEffort);
+      // 标准面板编辑非选中行时会先写模型级预设,再回调选中该行。这里必须优先
+      // 读取刚写入的 effort,才能把 (model, providerId, effort) 收敛成一次原子 patch。
+      const rememberedEffort = nextProviderId
+        ? getProviderModelEffort('codex', nextProviderId, model)
+        : undefined;
+      // ModelSelector 已按目标来源行的 catalog/记忆解析出统一选择结果；优先消费它，
+      // 只有旧调用方未提供第三参时才回落本地记忆/当前值。
+      const preferredEffort = reconciledEffort ?? rememberedEffort;
+      // 空串是共享选择器对“目标来源不支持 effort”的明确回传，不能被旧 effort 复活。
+      const nextEffort = reconciledEffort === ''
+        ? null
+        : resolveCodexEffort(
+          model,
+          isCodexSubagentEffort(preferredEffort) ? preferredEffort : current.codexEffort,
+        );
       if (
         model === current.codex &&
         nextProviderId === current.codexProviderId &&
@@ -219,9 +256,21 @@ export function SubagentModelSection() {
       const current = settingsRef.current;
       if (!current || !current.codex) return;
       if (!isCodexSubagentEffort(effort) || effort === current.codexEffort) return;
-      await persistPatch({ codexEffort: effort });
+      const saved = await persistPatch({ codexEffort: effort });
+      // 活跃行编辑走 onEffortChange,ModelSelector 不会代写 modelMemory。保存成功后
+      // 按选择器同一准入口径解析实际来源并同步全局模型预设;providerId=null 是合法
+      // 隐式来源,不能因此漏写,否则切走再切回会恢复旧档位。
+      const memoryProviderId = effectiveSourceIdForModel(
+        providers,
+        current.codexProviderId,
+        current.codex,
+        'codex',
+      );
+      if (saved && memoryProviderId) {
+        setProviderModelEffort('codex', memoryProviderId, current.codex, effort);
+      }
     },
-    [persistPatch],
+    [persistPatch, providers],
   );
 
   const resetCard = useCallback(
@@ -327,7 +376,7 @@ export function SubagentModelSection() {
           const catalogModel = getModel(p, model, agentKind);
           return (
             catalogModel !== undefined &&
-            isAgentSelectableModel(catalogModel, { userProvider: p.source === 'user' })
+            isModelSelectableForNewRoute(catalogModel, { userProvider: p.source === 'user' })
           );
         }),
     );
@@ -472,6 +521,7 @@ export function SubagentModelSection() {
             <ModelSelector
               modelId={settings.codex ?? ''}
               effort={settings.codexEffort ?? ''}
+              modelMemory={CODEX_SUBAGENT_MODEL_MEMORY}
               onModelChange={(modelId) => {
                 void setCodexModel(modelId, settings.codexProviderId);
               }}
@@ -492,10 +542,14 @@ export function SubagentModelSection() {
                   : () => navigate('/settings?tab=providers')
               }
               reselectEmitsChange
-              onProviderChange={(providerId, modelId) => {
+              onProviderChange={(providerId, modelId, reconciledEffort) => {
                 const nextModel = modelId ?? settings.codex;
                 if (!nextModel) return;
-                void setCodexModel(nextModel, resolveProviderId('codex', nextModel, providerId));
+                void setCodexModel(
+                  nextModel,
+                  resolveProviderId('codex', nextModel, providerId),
+                  reconciledEffort,
+                );
               }}
               switching={pending}
               disabled={providersLoading}
@@ -552,6 +606,32 @@ export function SubagentModelSection() {
         <p className="-mt-3 px-4 pb-3 text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
           {t('settings.subagentModels.guardrails.enableHint')}
         </p>
+
+        <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
+
+        <div
+          className={`flex items-center justify-between gap-3 px-4 py-4 ${subagentsEnabled ? '' : 'pointer-events-none opacity-50'}`}
+        >
+          <div className="flex min-w-0 flex-col gap-1">
+            <p
+              className="text-13 font-medium text-[var(--settings-section-sublabel)]"
+              style={{ letterSpacing: '0.12px' }}
+            >
+              {t('settings.subagentModels.guardrails.cindyPolicyLabel')}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.subagentModels.guardrails.cindyPolicyHint')}
+            </p>
+          </div>
+          <Switch
+            checked={settings.codexUseCindySubagentPolicy}
+            disabled={pending || !subagentsEnabled}
+            onCheckedChange={(next) => {
+              void persistPatch({ codexUseCindySubagentPolicy: next });
+            }}
+            aria-label={t('settings.subagentModels.guardrails.cindyPolicyAria')}
+          />
+        </div>
 
         <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
 

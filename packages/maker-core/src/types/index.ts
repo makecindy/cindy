@@ -5,5 +5,7 @@ export * from './events.js';
 export * from './permissions.js';
 export * from './palette.js';
 export * from './customizations.js';
+export * from './pi-runtime-capabilities.js';
 export * from './memory.js';
 export * from './account-rate-limits.js';
+export * from './pi-project-trust.js';

@@ -69,6 +69,9 @@ describe('native e2e environment', () => {
     expect(visualOfflineFlow).toContain('- inputText: "Offline visual draft"');
     expect(visualOfflineFlow).toContain('- hideKeyboard');
     expect(visualOfflineFlow).toContain('id: "session.sendButton"');
+    expect(visualOfflineFlow).toContain('id: "pendingSend.badge.uploading"');
+    expect(visualOfflineFlow).toContain('- assertNotVisible:');
+    expect(visualOfflineFlow).toContain('id: "connection.syncButton"');
     expect(visualOfflineFlow).not.toContain('session.collaborationReadOnlyComposer');
   });
 
@@ -135,6 +138,32 @@ describe('native e2e environment', () => {
     expect(mockHost.indexOf('applyPendingAgentSwitchIntent(id);')).toBeLessThan(
       mockHost.indexOf("const text = typeof queued?.text === 'string'"),
     );
+  });
+
+  it('keeps the mock host capable of exercising the native worktree two-step flow', () => {
+    const mockHost = readFileSync(resolve(process.cwd(), 'scripts/mock-device-link-host.mjs'), 'utf8');
+
+    for (const channel of [
+      'maker:get-new-maker-defaults',
+      'maker:apply-new-maker-worktree-pref',
+      'worktree:detect-cwd',
+      'worktree:list-branches',
+      'worktree:suggest-name',
+      'worktree:create',
+      'worktree:discard-precreated',
+    ]) {
+      expect(mockHost).toContain(`case '${channel}':`);
+    }
+    expect(mockHost).toContain("const MOCK_WORKTREE_BRANCHES = ['main', 'feature/mobile-worktree', 'release/mobile'];");
+    expect(mockHost).toContain('supportsRecoveryKeyDiscard: true');
+    expect(mockHost).toContain('branches: [...mockWorktree.branches]');
+    expect(mockHost).toContain('current: mockWorktree.currentBranch');
+    expect(mockHost).toContain("path: path.join(normalizedBaseRepo, '.cindy-worktrees', name)");
+    expect(mockHost).toContain('branch: `xdt/${name}`');
+    expect(mockHost).toContain('sourceBranch,');
+    expect(mockHost).toContain('worktreePath: claimedWorktree?.meta.path ?? null');
+    expect(mockHost).toContain("throw mockIpcError('PRECONDITION_FAILED', '会话已认领该 worktree，拒绝补偿回收')");
+    expect(mockHost).toContain('return { discarded: true, branchDeleted: true };');
   });
 
   it('can run reconnect smoke as a self-contained local relay gate', () => {

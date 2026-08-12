@@ -11,7 +11,9 @@ const mocks = vi.hoisted(() => {
     initialize: vi.fn(),
     getLoginState: vi.fn(),
     dispatchLoginAction: vi.fn(),
-    logout: vi.fn(async () => undefined),
+    logout: vi.fn<() => Promise<void>>(async () => undefined),
+    enterLocalMode: vi.fn(),
+    exitLocalMode: vi.fn(),
     consumeAccountDeletionRestoredNotice: vi.fn(async () => true),
     onAuthStateChange: vi.fn((listener: (state: unknown) => void) => {
       authStateListener = listener;
@@ -26,6 +28,8 @@ const mocks = vi.hoisted(() => {
     reset: vi.fn(),
     getMe: vi.fn(async () => ({ role: 'user' })),
     clearWorkersCache: vi.fn(),
+    invalidateProvidersSnapshot: vi.fn(),
+    preloadLocalCatalogSnapshot: vi.fn(async () => undefined),
     confirm: vi.fn(async () => true),
     emitAuth(state: unknown) {
       authStateListener?.(state);
@@ -52,6 +56,12 @@ vi.mock('@/lib/meService', () => ({ getMe: mocks.getMe }));
 vi.mock('@/features/cc-agent/hooks/useWorkers', () => ({
   clearWorkersCache: mocks.clearWorkersCache,
 }));
+vi.mock('@/lib/providersSnapshotStore', () => ({
+  invalidateProvidersSnapshot: mocks.invalidateProvidersSnapshot,
+}));
+vi.mock('@/lib/localCatalogSnapshot', () => ({
+  preloadLocalCatalogSnapshot: mocks.preloadLocalCatalogSnapshot,
+}));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: mocks.confirm }),
 }));
@@ -66,6 +76,10 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import {
+  __testing as dataOwnerGenerationTesting,
+  getDataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 
 function user(id: string) {
   return {
@@ -89,6 +103,7 @@ function authState(id: string | null, isCanary = false) {
     user: id ? user(id) : null,
     mode: id ? ('cloud' as const) : ('signed-out' as const),
     dataOwnerId: id,
+    ownerGeneration: id ? 1 : 2,
     canEnterApp: id !== null,
     isAuthenticated: id !== null,
     isCanary,
@@ -103,6 +118,7 @@ function localAuthState() {
     user: null,
     mode: 'local' as const,
     dataOwnerId: 'local-v1',
+    ownerGeneration: 3,
     canEnterApp: true,
     isAuthenticated: false,
     isCanary: false,
@@ -113,20 +129,25 @@ function localAuthState() {
 }
 
 describe('AuthContext session cache boundaries', () => {
-  const wrapper = ({ children }: PropsWithChildren) => (
-    <AuthProvider>{children}</AuthProvider>
-  );
+  const wrapper = ({ children }: PropsWithChildren) => <AuthProvider>{children}</AuthProvider>;
 
   beforeEach(() => {
     mocks.reset.mockClear();
     mocks.getMe.mockClear();
     mocks.clearWorkersCache.mockClear();
+    mocks.invalidateProvidersSnapshot.mockClear();
+    mocks.preloadLocalCatalogSnapshot.mockClear();
+    dataOwnerGenerationTesting.reset();
     mocks.service.consumeAccountDeletionRestoredNotice.mockClear();
     restoredToast.mockClear();
     mocks.confirm.mockClear();
     mocks.service.initialize.mockResolvedValue(authState('account-a'));
     mocks.service.logout.mockResolvedValue(undefined);
-    (window as unknown as { electronAPI: { onAuthSessionExpired: typeof mocks.registerExpired } }).electronAPI = {
+    mocks.service.enterLocalMode.mockResolvedValue(localAuthState());
+    mocks.service.exitLocalMode.mockResolvedValue(authState(null));
+    (
+      window as unknown as { electronAPI: { onAuthSessionExpired: typeof mocks.registerExpired } }
+    ).electronAPI = {
       onAuthSessionExpired: mocks.registerExpired,
     };
   });
@@ -140,15 +161,19 @@ describe('AuthContext session cache boundaries', () => {
     const view = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(view.result.current.user?.id).toBe('account-a'));
     expect(mocks.reset).toHaveBeenCalledTimes(1);
+    expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(1);
 
     act(() => mocks.emitAuth(authState('account-b')));
     expect(mocks.reset).toHaveBeenCalledTimes(2);
+    expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(2);
 
     act(() => mocks.emitAuth(authState('account-b')));
     expect(mocks.reset).toHaveBeenCalledTimes(2);
+    expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(2);
 
     act(() => mocks.emitAuth(authState(null)));
     expect(mocks.reset).toHaveBeenCalledTimes(3);
+    expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(3);
 
     await act(async () => {
       await view.result.current.logout();
@@ -163,6 +188,139 @@ describe('AuthContext session cache boundaries', () => {
     mocks.reset.mockClear();
     act(() => mocks.emitExpired());
     await waitFor(() => expect(mocks.reset).toHaveBeenCalledTimes(1));
+  });
+
+  it.each([
+    ['logout', 'account-a', authState('account-a')],
+    ['enterLocalMode', 'account-a', authState('account-a')],
+    ['exitLocalMode', 'local-v1', localAuthState()],
+  ] as const)(
+    'restores and reloads the current owner snapshot when %s fails',
+    async (action, expectedOwner, initialState) => {
+      mocks.service.initialize.mockResolvedValue(initialState);
+      mocks.service[action].mockRejectedValueOnce(new Error(`${action} failed`));
+      const view = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(view.result.current.dataOwnerId).toBe(expectedOwner));
+      const recoveryEpochBeforeFailure = view.result.current.dataOwnerRecoveryEpoch;
+
+      await act(async () => {
+        await expect(view.result.current[action]()).rejects.toThrow(`${action} failed`);
+      });
+
+      expect(view.result.current.dataOwnerId).toBe(expectedOwner);
+      expect(view.result.current.dataOwnerRecoveryEpoch).toBe(recoveryEpochBeforeFailure + 1);
+      expect(getDataOwnerGeneration().dataOwnerId).toBe(expectedOwner);
+      expect(mocks.preloadLocalCatalogSnapshot).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('keeps a newer pushed owner when an older auth boundary later rejects', async () => {
+    let rejectLogout!: (error: Error) => void;
+    mocks.service.logout.mockReturnValueOnce(
+      new Promise<void>((_resolve, reject) => {
+        rejectLogout = reject;
+      }),
+    );
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBe('account-a'));
+
+    let logout!: Promise<void>;
+    act(() => {
+      logout = view.result.current.logout();
+    });
+    act(() => mocks.emitAuth(authState('account-b')));
+    await act(async () => {
+      rejectLogout(new Error('logout failed'));
+      await expect(logout).rejects.toThrow('logout failed');
+    });
+
+    expect(view.result.current.dataOwnerId).toBe('account-b');
+    expect(getDataOwnerGeneration().dataOwnerId).toBe('account-b');
+    expect(mocks.preloadLocalCatalogSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it('restores the stable owner after overlapping auth boundaries both reject', async () => {
+    let rejectFirst!: (error: Error) => void;
+    let rejectSecond!: (error: Error) => void;
+    mocks.service.logout
+      .mockReturnValueOnce(
+        new Promise<void>((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<void>((_resolve, reject) => {
+          rejectSecond = reject;
+        }),
+      );
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBe('account-a'));
+
+    const first = view.result.current.logout();
+    const second = view.result.current.logout();
+    await act(async () => {
+      rejectFirst(new Error('first logout failed'));
+      await expect(first).rejects.toThrow('first logout failed');
+    });
+    await act(async () => {
+      rejectSecond(new Error('second logout failed'));
+      await expect(second).rejects.toThrow('second logout failed');
+    });
+
+    expect(getDataOwnerGeneration().dataOwnerId).toBe('account-a');
+    expect(mocks.preloadLocalCatalogSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('restores a locally committed owner when the next boundary fails before an auth push', async () => {
+    mocks.service.initialize.mockResolvedValue(authState(null));
+    mocks.service.exitLocalMode.mockRejectedValueOnce(new Error('exit failed'));
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBeNull());
+
+    await act(async () => {
+      await view.result.current.enterLocalMode();
+    });
+    expect(view.result.current.dataOwnerId).toBe('local-v1');
+
+    await act(async () => {
+      await expect(view.result.current.exitLocalMode()).rejects.toThrow('exit failed');
+    });
+    expect(getDataOwnerGeneration().dataOwnerId).toBe('local-v1');
+    expect(mocks.preloadLocalCatalogSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a successful overlapping owner transition when a sibling later rejects', async () => {
+    let resolveFirst!: (state: ReturnType<typeof authState>) => void;
+    let rejectSecond!: (error: Error) => void;
+    mocks.service.initialize.mockResolvedValue(localAuthState());
+    mocks.service.exitLocalMode
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          rejectSecond = reject;
+        }),
+      );
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.dataOwnerId).toBe('local-v1'));
+
+    const first = view.result.current.exitLocalMode();
+    const second = view.result.current.exitLocalMode();
+    await act(async () => {
+      resolveFirst(authState(null));
+      await first;
+    });
+    await act(async () => {
+      rejectSecond(new Error('second exit failed'));
+      await expect(second).rejects.toThrow('second exit failed');
+    });
+
+    expect(view.result.current.dataOwnerId).toBeNull();
+    expect(getDataOwnerGeneration().dataOwnerId).toBeNull();
+    expect(mocks.preloadLocalCatalogSnapshot).toHaveBeenCalledOnce();
   });
 
   it('updates Canary state without treating it as an account switch', async () => {

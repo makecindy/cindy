@@ -63,6 +63,12 @@ export interface ContextSheetGoalViewProps {
   onClearGoal: () => void;
   /** 打开表单时的默认目标内容(对齐桌面 NewGoalDialog:composer 里已有的文字带入)。 */
   initialObjective?: string;
+  /**
+   * 失败接回时的完整表单初始值(codex review P2):新建页 goal.set 失败跳转时经
+   * 路由参数带入 objective + limits;优先于 initialObjective(后者仅 composer 文字,
+   * 带不回 limits)。平时 undefined → 走 initialObjective / 空表单,与旧行为一致。
+   */
+  initial?: { objective: string; limits?: MobileGoalLimitsInput };
   testID?: string;
 }
 
@@ -75,6 +81,7 @@ export function ContextSheetGoalView({
   onResumeGoal,
   onClearGoal,
   initialObjective,
+  initial,
   testID,
 }: ContextSheetGoalViewProps) {
   return goal ? (
@@ -91,7 +98,7 @@ export function ContextSheetGoalView({
     <ContextSheetGoalCreateForm
       busy={busy}
       error={error}
-      initial={initialObjective ? { objective: initialObjective } : undefined}
+      initial={initial ?? (initialObjective ? { objective: initialObjective } : undefined)}
       onSetGoal={onSetGoal}
       testID={testID}
     />
@@ -104,6 +111,8 @@ export function ContextSheetGoalView({
  */
 export function ContextSheetGoalCreateForm({
   busy,
+  disabled = false,
+  disabledHint,
   error,
   onSetGoal,
   testID,
@@ -111,6 +120,9 @@ export function ContextSheetGoalCreateForm({
 }: Pick<ContextSheetGoalViewProps, 'busy' | 'error' | 'onSetGoal' | 'testID'> & {
   /** 表单初始值(objective 通常来自 composer 已有文字)。 */
   initial?: { objective: string; limits?: MobileGoalLimitsInput };
+  /** 外层创建合同尚未就绪时只禁用提交，目标草稿仍可编辑。 */
+  disabled?: boolean;
+  disabledHint?: string;
 }) {
   const styles = useThemedStyles(makeGoalStyles);
   const { colors } = useTheme();
@@ -131,7 +143,7 @@ export function ContextSheetGoalCreateForm({
 
   const submit = () => {
     const trimmed = objective.trim();
-    if (!trimmed || busy) return;
+    if (!trimmed || busy || disabled) return;
     onSetGoal({ objective: trimmed, ...(limitsTouched ? { limits } : {}) });
   };
 
@@ -196,14 +208,15 @@ export function ContextSheetGoalCreateForm({
       ) : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
       <Pressable
+        accessibilityHint={disabled ? disabledHint : undefined}
         accessibilityLabel={t('interaction.contextSheet.startGoal')}
         accessibilityRole="button"
-        accessibilityState={{ disabled: busy || !objective.trim() }}
-        disabled={busy || !objective.trim()}
+        accessibilityState={{ disabled: busy || disabled || !objective.trim() }}
+        disabled={busy || disabled || !objective.trim()}
         onPress={submit}
         style={({ pressed }) => [
           styles.ctaButton,
-          (busy || !objective.trim()) && styles.ctaButtonDisabled,
+          (busy || disabled || !objective.trim()) && styles.ctaButtonDisabled,
           pressed && styles.pressed,
         ]}
         testID="contextSheet.goalStartButton"

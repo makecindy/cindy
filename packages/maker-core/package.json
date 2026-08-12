@@ -24,6 +24,7 @@
     "@anthropic-ai/claude-agent-sdk": "0.2.112",
     "@anthropic-ai/sdk": "^0.91.1",
     "@cindy/maker-shared": "workspace:*",
+    "diff": "^8.0.4",
     "gray-matter": "^4.0.3"
   },
   "peerDependencies": {

@@ -477,14 +477,92 @@ function VersionDropdown({
 function AutoBody({
   releaseNotes,
   locale,
+  onStickyChange,
 }: {
   releaseNotes: ReleaseNotes[];
   locale: string;
+  onStickyChange: (version: string) => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const blockRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Sticky-header observer: track which version block is at the top of the
+  // scroll area so the header badge can follow. Only active for multi-version
+  // auto mode — single-version stays at its initial value.
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || releaseNotes.length <= 1) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let best: { v: string; top: number } | null = null;
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const v = (entry.target as HTMLElement).dataset.version;
+          if (!v) continue;
+          const top = entry.boundingClientRect.top;
+          // Pick the entry whose top is closest to the container top
+          // (largest top = nearest to 0, i.e. the version the user is reading).
+          if (best === null || top > best.top) best = { v, top };
+        }
+        if (best) onStickyChange(best.v);
+      },
+      { root, rootMargin: '0px 0px -99% 0px', threshold: 0 },
+    );
+    for (const el of blockRefs.current.values()) observer.observe(el);
+    return () => observer.disconnect();
+  }, [releaseNotes, onStickyChange]);
+
+  // Fallback: when scrolled to the bottom, pick the last version so the header
+  // badge updates even if the last version is too short to reach the observation
+  // zone at the top. When leaving the bottom, recompute the visible version so
+  // the badge doesn't stay stuck on the last version.
+  const lastVersion = releaseNotes[releaseNotes.length - 1]?.version;
+  const handleAutoScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !lastVersion) return;
+    // Guard: only apply the bottom override when the content is actually
+    // scrollable.  A +1 px threshold prevents sub-pixel rounding at
+    // non-integer zoom from making scrollHeight − clientHeight = 1 while
+    // the content is visually unscrollable; otherwise scrollTop is always
+    // 0 and the condition would trivially hold at the top, causing the
+    // header to show the last version.
+    if (
+      el.scrollHeight > el.clientHeight + 1 &&
+      el.scrollTop + el.clientHeight >= el.scrollHeight - 1
+    ) {
+      onStickyChange(lastVersion);
+      return;
+    }
+    // Leaving the bottom: find the version block currently closest to the
+    // container top. This mirrors the IntersectionObserver's sticky-header
+    // logic but runs on every scroll event when not at the very bottom,
+    // clearing the bottom override that the IO cannot undo on its own.
+    const containerTop = el.getBoundingClientRect().top;
+    let best: { v: string; top: number } | null = null;
+    for (const [version, blockEl] of blockRefs.current.entries()) {
+      const top = blockEl.getBoundingClientRect().top;
+      if (top > containerTop + 9) continue; // block far below container top (9px = py-2 padding + 1px tolerance)
+      if (best === null || top > best.top) best = { v: version, top };
+    }
+    if (best) onStickyChange(best.v);
+  }, [lastVersion, onStickyChange]);
+
   return (
-    <div className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text">
+    <div
+      ref={scrollRef}
+      onScroll={handleAutoScroll}
+      className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text"
+    >
       {releaseNotes.map((notes, i) => (
-        <div key={notes.version} className="flex flex-col">
+        <div
+          key={notes.version}
+          ref={(el) => {
+            if (el) blockRefs.current.set(notes.version, el);
+            else blockRefs.current.delete(notes.version);
+          }}
+          data-version={notes.version}
+          className="flex flex-col"
+        >
           {i > 0 && <div className="mx-auto h-px w-full max-w-[800px] bg-[var(--cmd-palette-border)]" />}
           <VersionBlock notes={notes} locale={locale} />
         </div>
@@ -529,7 +607,10 @@ function ManualBody({
     }
     return m;
   });
-  const inFlightRef = useRef<Set<string>>(new Set());
+  const inFlightRef = useRef<Map<string, number>>(new Map());
+  const localeGenerationRef = useRef(0);
+  const previousLocaleRef = useRef(locale);
+  const notesMapRef = useRef(notesMap);
   // Ref mirror of stateMap so `startLoad` doesn't need it in useCallback deps.
   // Without this, every setStateMap → new startLoad identity → observer
   // useEffect re-runs → new observer immediately fires callbacks for still-
@@ -537,6 +618,64 @@ function ManualBody({
   // again → infinite loading↔failed flicker (the bug this refactor fixes).
   const stateMapRef = useRef(stateMap);
   useEffect(() => { stateMapRef.current = stateMap; }, [stateMap]);
+  useEffect(() => { notesMapRef.current = notesMap; }, [notesMap]);
+
+  // Parent-owned seed notes change when the app locale changes. Merge them
+  // into the manual body's local map instead of remounting the scroll area.
+  useEffect(() => {
+    if (initialLoaded.size === 0) return;
+    setNotesMap((prev) => {
+      const next = new Map(prev);
+      for (const [version, notes] of initialLoaded) next.set(version, notes);
+      notesMapRef.current = next;
+      return next;
+    });
+    setStateMap((prev) => {
+      const next = new Map(prev);
+      for (const version of initialLoaded.keys()) next.set(version, 'loaded');
+      stateMapRef.current = next;
+      return next;
+    });
+  }, [initialLoaded]);
+
+  // Refresh every already-loaded history block in place on locale changes.
+  // Blocks that have never loaded stay idle and will use the new locale later.
+  useEffect(() => {
+    if (previousLocaleRef.current === locale) return;
+    previousLocaleRef.current = locale;
+    const generation = localeGenerationRef.current + 1;
+    localeGenerationRef.current = generation;
+    inFlightRef.current.clear();
+    setStateMap((prev) => {
+      const next = new Map(prev);
+      for (const [version, state] of next) {
+        if (state === 'loading') next.set(version, 'idle');
+      }
+      stateMapRef.current = next;
+      return next;
+    });
+
+    const loadedVersions = [...notesMapRef.current.keys()];
+    if (loadedVersions.length === 0) return;
+    let cancelled = false;
+    void Promise.all(loadedVersions.map((version) => loadVersion(version)))
+      .then((results) => {
+        if (cancelled || localeGenerationRef.current !== generation) return;
+        setNotesMap((prev) => {
+          const next = new Map(prev);
+          results.forEach((notes, index) => {
+            if (notes) next.set(loadedVersions[index], notes);
+          });
+          notesMapRef.current = next;
+          return next;
+        });
+      })
+      .catch(() => {
+        // Keep the previous-language content visible; individual retry/loading
+        // behavior remains unchanged and the next locale change can retry.
+      });
+    return () => { cancelled = true; };
+  }, [locale, loadVersion]);
 
   const startLoad = useCallback(
     async (version: string) => {
@@ -546,20 +685,29 @@ function ManualBody({
       // loading is already in flight (also guarded by inFlightRef), error is
       // sticky until user hits the retry button (see `retryVersion`).
       if (current === 'loaded' || current === 'loading' || current === 'error') return;
-      inFlightRef.current.add(version);
+      const generation = localeGenerationRef.current;
+      inFlightRef.current.set(version, generation);
       setStateMap((prev) => new Map(prev).set(version, 'loading'));
       try {
         const notes = await loadVersion(version);
+        if (localeGenerationRef.current !== generation) return;
         if (notes) {
-          setNotesMap((prev) => new Map(prev).set(version, notes));
+          setNotesMap((prev) => {
+            const next = new Map(prev).set(version, notes);
+            notesMapRef.current = next;
+            return next;
+          });
           setStateMap((prev) => new Map(prev).set(version, 'loaded'));
         } else {
           setStateMap((prev) => new Map(prev).set(version, 'error'));
         }
       } catch {
+        if (localeGenerationRef.current !== generation) return;
         setStateMap((prev) => new Map(prev).set(version, 'error'));
       } finally {
-        inFlightRef.current.delete(version);
+        if (inFlightRef.current.get(version) === generation) {
+          inFlightRef.current.delete(version);
+        }
       }
     },
     [loadVersion],
@@ -613,16 +761,15 @@ function ManualBody({
     // that band is by definition the topmost currently-scrolled-to element.
     const observer = new IntersectionObserver(
       (entries) => {
-        // Pick the most-recently-crossed intersecting entry. Multiple can
-        // report in a single callback during fast scrolls; take the one with
-        // the smallest positive `top` for stability.
+        // Pick the entry whose top is closest to the container top
+        // (largest top = nearest to 0, i.e. the version the user is reading).
         let best: { v: string; top: number } | null = null;
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
           const v = (entry.target as HTMLElement).dataset.version;
           if (!v) continue;
           const top = entry.boundingClientRect.top;
-          if (best === null || top < best.top) best = { v, top };
+          if (best === null || top > best.top) best = { v, top };
         }
         if (best) onStickyChange(best.v);
       },
@@ -631,6 +778,41 @@ function ManualBody({
     for (const el of blockRefs.current.values()) observer.observe(el);
     return () => observer.disconnect();
   }, [allVersions, onStickyChange]);
+
+  // Fallback: when scrolled to the bottom, pick the last version so the header
+  // badge updates even if the last version is too short to reach the top
+  // observation zone. When leaving the bottom, recompute the visible version so
+  // the badge doesn't stay stuck on the last version.
+  const lastVersion = allVersions[allVersions.length - 1];
+  const handleManualScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !lastVersion) return;
+    // Guard: only apply the bottom override when the content is actually
+    // scrollable.  A +1 px threshold prevents sub-pixel rounding at
+    // non-integer zoom from making scrollHeight − clientHeight = 1 while
+    // the content is visually unscrollable; otherwise scrollTop is always
+    // 0 and the condition would trivially hold at the top, causing the
+    // header to show the last version.
+    if (
+      el.scrollHeight > el.clientHeight + 1 &&
+      el.scrollTop + el.clientHeight >= el.scrollHeight - 1
+    ) {
+      onStickyChange(lastVersion);
+      return;
+    }
+    // Leaving the bottom: find the version block currently closest to the
+    // container top. This mirrors the IntersectionObserver's sticky-header
+    // logic but runs on every scroll event when not at the very bottom,
+    // clearing the bottom override that the IO cannot undo on its own.
+    const containerTop = el.getBoundingClientRect().top;
+    let best: { v: string; top: number } | null = null;
+    for (const [version, blockEl] of blockRefs.current.entries()) {
+      const top = blockEl.getBoundingClientRect().top;
+      if (top > containerTop + 9) continue; // block far below container top (9px = py-2 padding + 1px tolerance)
+      if (best === null || top > best.top) best = { v: version, top };
+    }
+    if (best) onStickyChange(best.v);
+  }, [lastVersion, onStickyChange]);
 
   // Programmatic jump handler exposed to parent (header dropdown).
   useEffect(() => {
@@ -645,7 +827,11 @@ function ManualBody({
   }, [registerJump, startLoad]);
 
   return (
-    <div ref={scrollRef} className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text">
+    <div
+      ref={scrollRef}
+      onScroll={handleManualScroll}
+      className="flex flex-1 min-h-0 flex-col overflow-y-auto py-2 select-text"
+    >
       {allVersions.map((v, i) => {
         const notes = notesMap.get(v);
         const state = stateMap.get(v) ?? 'idle';
@@ -738,8 +924,18 @@ export function UpdateNoticeDialog({
   }, [onDismiss]);
 
   // Reset sticky when dialog re-opens (avoids showing last-session's badge).
+  // Preserve the current sticky version across locale refreshes — when the
+  // dialog is already open and releaseNotes changes only because of a locale
+  // switch, the scroll position in ManualBody remains in place so the badge
+  // should not jump back to the newest version.
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (open) setStickyVersion(releaseNotes?.[0]?.version ?? '');
+    if (open) {
+      if (!wasOpenRef.current) {
+        setStickyVersion(releaseNotes?.[0]?.version ?? '');
+      }
+    }
+    wasOpenRef.current = open;
   }, [open, releaseNotes]);
 
   if (!releaseNotes || !mode || releaseNotes.length === 0) {
@@ -768,17 +964,10 @@ export function UpdateNoticeDialog({
         })
       : t('update.notice.ariaDescription', { version: newest.version });
 
-  // Header's right cell — a version count, and in manual mode the entry point
-  // for jumping across history. Version number, date and contributors all moved
-  // into each version's own block, so there is nothing else left up here.
-  //   - Manual:     "N versions" + dropdown
-  //   - Auto multi: "N versions", static
-  //   - Auto single: nothing (a single version's identity is in its block)
-  const versionCountLabel = isManual
-    ? t('update.notice.versionsSpan', { count: allVersions?.length ?? 1 })
-    : isAutoMulti
-      ? t('update.notice.versionsSpan', { count: releaseNotes.length })
-      : null;
+  // Header's right cell: version badge that follows scroll.
+  //   - Manual multi:   v<version> badge + dropdown for history navigation.
+  //   - Auto multi:     v<version> badge, updates as user scrolls.
+  //   - Auto / manual single: static v<version> badge.
 
   return (
     <AlertDialog.Root
@@ -846,11 +1035,11 @@ export function UpdateNoticeDialog({
               {t('update.notice.title')}
             </AlertDialog.Title>
             <div className="min-w-0 justify-self-end">
-              {isManual && allVersions && allVersions.length > 1 && versionCountLabel ? (
+              {isManual && allVersions && allVersions.length > 1 ? (
                 <VersionDropdown
                   versions={allVersions}
                   currentVersion={stickyVersion || newest.version}
-                  triggerLabel={versionCountLabel}
+                  triggerLabel={`v${stickyVersion || newest.version}`}
                   triggerAriaLabel={t('update.notice.versionJumpAria', {
                     count: allVersions.length,
                     version: stickyVersion || newest.version,
@@ -869,11 +1058,9 @@ export function UpdateNoticeDialog({
                     if (!dropOpen) dropdownClosedAtRef.current = Date.now();
                   }}
                 />
-              ) : versionCountLabel ? (
-                <span className="whitespace-nowrap text-13 text-[var(--cmd-palette-item-meta)]">
-                  {versionCountLabel}
-                </span>
-              ) : null}
+              ) : (
+                <VersionBadge label={`v${stickyVersion || newest.version}`} />
+              )}
             </div>
           </div>
 
@@ -893,7 +1080,11 @@ export function UpdateNoticeDialog({
               registerJump={registerJump}
             />
           ) : (
-            <AutoBody releaseNotes={releaseNotes} locale={i18n.language} />
+            <AutoBody
+              releaseNotes={releaseNotes}
+              locale={i18n.language}
+              onStickyChange={setStickyVersion}
+            />
           )}
 
           <div className="h-px bg-[var(--cmd-palette-border)]" />

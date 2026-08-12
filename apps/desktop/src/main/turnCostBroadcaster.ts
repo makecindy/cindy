@@ -24,7 +24,11 @@ import { BrowserWindow } from 'electron';
 import type { SendOrigin } from '@cindy/maker-core';
 
 import type { MessageTurnCostPayload } from '../shared/turnCostPayload.js';
-import type { TurnUsageDetails } from '../shared/turnUsageDetails.js';
+import {
+  mergeTurnUsageDetailsForMessage,
+  normalizeTurnUsageDetails,
+  type TurnUsageDetails,
+} from '../shared/turnUsageDetails.js';
 import {
   patchMessageAgentMetaWithResult,
   readPriorUserRoundCost,
@@ -32,7 +36,7 @@ import {
 } from './localDb/ipc/messages.js';
 import { enqueueDurableWrite } from './messagePersistBroadcaster.js';
 import { createLogger } from './logger.js';
-import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
+import * as broadcastTap from './device-link/broadcast-tap.js';
 import {
   applyScheduleRunCostMetaChange,
   recordScheduleRunCostDirect,
@@ -44,6 +48,7 @@ import {
 } from '../shared/regionalMoney.js';
 
 const log = createLogger('turnCostBroadcaster');
+type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 
 /** IPC channel: main → renderer 推单条消息的 per-turn 费用。 */
 export const MESSAGE_TURN_COST_CHANGED = 'usage:message-turn-cost';
@@ -71,6 +76,40 @@ export interface TurnCostDeps {
   }>;
   enqueue<T>(label: string, fn: () => Promise<T> | T): Promise<T>;
   broadcast(payload: MessageTurnCostPayload): void;
+  /** Optional owner-aware broadcast used by production; test doubles may omit it. */
+  broadcastWithOwnerScope?(
+    payload: MessageTurnCostPayload,
+    ownerScope: OwnerScope,
+  ): void;
+}
+
+function captureOwnerScope(): OwnerScope {
+  return broadcastTap.captureDataOwnerBroadcastScope?.() ?? null;
+}
+
+function isOwnerScopeCurrent(scope: OwnerScope): boolean {
+  return scope === null || broadcastTap.isDataOwnerBroadcastScopeCurrent?.(scope) !== false;
+}
+
+function broadcastTurnCostPayload(payload: MessageTurnCostPayload, ownerScope: OwnerScope): void {
+  if (ownerScope === null) {
+    broadcastTap.tapWindowBroadcast(MESSAGE_TURN_COST_CHANGED, payload);
+  } else {
+    broadcastTap.tapWindowBroadcast(
+      MESSAGE_TURN_COST_CHANGED,
+      payload,
+      ownerScope.ownerStamp,
+    );
+  }
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      if (ownerScope === null) {
+        win.webContents.send(MESSAGE_TURN_COST_CHANGED, payload);
+      } else {
+        win.webContents.send(MESSAGE_TURN_COST_CHANGED, payload, ownerScope.ownerStamp);
+      }
+    }
+  }
 }
 
 const defaultDeps: TurnCostDeps = {
@@ -79,14 +118,47 @@ const defaultDeps: TurnCostDeps = {
   readPriorUserRoundCost,
   enqueue: enqueueDurableWrite,
   broadcast(payload) {
-    tapWindowBroadcast(MESSAGE_TURN_COST_CHANGED, payload);
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) {
-        win.webContents.send(MESSAGE_TURN_COST_CHANGED, payload);
-      }
-    }
+    broadcastTurnCostPayload(payload, null);
+  },
+  broadcastWithOwnerScope(payload, ownerScope) {
+    broadcastTurnCostPayload(payload, ownerScope);
   },
 };
+
+async function patchAgentMetaPreservingTurnDuration(
+  deps: Pick<TurnCostDeps, 'patchAgentMeta'>,
+  sessionId: string,
+  clientId: string,
+  patch: Record<string, unknown>,
+  turnUsageDetails: TurnUsageDetails | null | undefined,
+): Promise<{
+  result: MessageAgentMetaPatchResult;
+  turnUsageDetails: TurnUsageDetails | null | undefined;
+} | null> {
+  const first = await deps.patchAgentMeta(sessionId, clientId, patch);
+  if (!first) return null;
+  if (!turnUsageDetails) return { result: first, turnUsageDetails };
+
+  const previousUsage = normalizeTurnUsageDetails(first.previous.turnUsageDetails);
+  if (!previousUsage) return { result: first, turnUsageDetails };
+  const mergedUsage = mergeTurnUsageDetailsForMessage(previousUsage, turnUsageDetails);
+  const needsMergePatch =
+    (turnUsageDetails.totalTokens <= 0 && previousUsage.totalTokens > 0) ||
+    (turnUsageDetails.outputTokens <= 0 && previousUsage.outputTokens > 0) ||
+    (previousUsage.turnDurationMs ?? 0) > (turnUsageDetails.turnDurationMs ?? 0);
+  if (!needsMergePatch) return { result: first, turnUsageDetails };
+  const second = await deps.patchAgentMeta(sessionId, clientId, {
+    turnUsageDetails: mergedUsage,
+  });
+  // The first patch already persisted the segment cost/usage. If the message
+  // is rewound between the two writes, keep the original success semantics so
+  // ledger side effects and broadcasts are not silently skipped.
+  if (!second) return { result: first, turnUsageDetails };
+  return {
+    result: { previous: first.previous, next: second.next },
+    turnUsageDetails: mergedUsage,
+  };
+}
 
 /**
  * 把一笔 SDK 分段费用写到指定消息，并同时写入从本轮用户消息累计的展示费用。
@@ -109,9 +181,11 @@ export async function recordTurnCostOnMessage(
   if (!sessionId || !clientId) return false;
   const normalized = normalizeRegionalMoney(money);
   if (!normalized || normalized.amount < 1e-10) return false;
+  const ownerScope = captureOwnerScope();
   try {
     let userTurnMoney = normalized;
     let userTurnCostIsEstimate = normalized.kind === 'value-estimate';
+    let persistedTurnUsageDetails = turnUsageDetails;
     const patched = await deps.enqueue(`turn-cost:${sessionId}:${clientId}`, async () => {
       // This runs in the durable FIFO after prior assistant cost patches, so
       // the query sees every earlier segment of this user round.
@@ -144,8 +218,16 @@ export async function recordTurnCostOnMessage(
         patch.origin = turnOrigin;
       }
       if (turnUsageDetails) patch.turnUsageDetails = turnUsageDetails;
-      const result = await deps.patchAgentMeta(sessionId, clientId, patch);
-      if (!result) return null;
+      const patchedMeta = await patchAgentMetaPreservingTurnDuration(
+        deps,
+        sessionId,
+        clientId,
+        patch,
+        turnUsageDetails,
+      );
+      if (!patchedMeta) return null;
+      const { result } = patchedMeta;
+      persistedTurnUsageDetails = patchedMeta.turnUsageDetails;
       try {
         await deps.applyScheduleRunCostChange(result.previous, result.next);
       } catch (err) {
@@ -155,22 +237,28 @@ export async function recordTurnCostOnMessage(
       return result;
     });
     if (!patched) return false;
+    // The patch and scheduler ledger side effect are already durable.  An
+    // owner switch only suppresses the stale renderer/device-link broadcast;
+    // report success so scheduler fallback cannot charge the same segment
+    // again.
+    if (!isOwnerScopeCurrent(ownerScope)) return true;
+    const payload: MessageTurnCostPayload = {
+      sessionId,
+      clientId,
+      turnMoney: normalized,
+      ...(normalized.currency === 'USD' ? { turnCostUsd: normalized.amount } : {}),
+      turnCostIsEstimate: normalized.kind === 'value-estimate',
+      userTurnMoney,
+      ...(userTurnMoney.currency === 'USD' ? { userTurnCostUsd: userTurnMoney.amount } : {}),
+      userTurnCostIsEstimate,
+      ...(persistedTurnUsageDetails ? { turnUsageDetails: persistedTurnUsageDetails } : {}),
+    };
     try {
-      deps.broadcast({
-        sessionId,
-        clientId,
-        turnMoney: normalized,
-        ...(normalized.currency === 'USD'
-          ? { turnCostUsd: normalized.amount }
-          : {}),
-        turnCostIsEstimate: normalized.kind === 'value-estimate',
-        userTurnMoney,
-        ...(userTurnMoney.currency === 'USD'
-          ? { userTurnCostUsd: userTurnMoney.amount }
-          : {}),
-        userTurnCostIsEstimate,
-        ...(turnUsageDetails ? { turnUsageDetails } : {}),
-      });
+      if (deps.broadcastWithOwnerScope) {
+        deps.broadcastWithOwnerScope(payload, ownerScope);
+      } else {
+        deps.broadcast(payload);
+      }
     } catch (err) {
       // The message cost is already durable; a broadcast failure must not
       // make scheduler fallback record the same segment a second time.
@@ -189,7 +277,11 @@ export async function recordTurnCostOnMessage(
  */
 export type TurnUsageDeps = Pick<
   TurnCostDeps,
-  'patchAgentMeta' | 'enqueue' | 'broadcast' | 'readPriorUserRoundCost'
+  | 'patchAgentMeta'
+  | 'enqueue'
+  | 'broadcast'
+  | 'broadcastWithOwnerScope'
+  | 'readPriorUserRoundCost'
 >;
 
 /**
@@ -205,7 +297,8 @@ export type TurnUsageDeps = Pick<
  * —— 而 readPriorUserRoundCost 的契约本来就是「让收尾消息承载整轮总额」。所以这里读一次
  * 往轮累计,有则连同 userTurnCost 一起投影到消息与 payload(仍不含当前无价 segment)。
  *
- * turnUsageDetails 为空(整轮 0 token)时直接跳过:没有可展示的事实,不写空对象。
+ * turnUsageDetails 为空时直接跳过。0 token 的最终 continuation 仍可携带整轮耗时，
+ * 并与该消息先前已落下的 token 明细合并。
  */
 export async function recordTurnUsageOnMessage(
   args: {
@@ -217,7 +310,9 @@ export async function recordTurnUsageOnMessage(
 ): Promise<boolean> {
   const { sessionId, clientId, turnUsageDetails } = args;
   if (!sessionId || !clientId || !turnUsageDetails) return false;
+  const ownerScope = captureOwnerScope();
   try {
+    let persistedTurnUsageDetails = turnUsageDetails;
     const outcome = await deps.enqueue(`turn-usage:${sessionId}:${clientId}`, async () => {
       // 与 recordTurnCostOnMessage 同一条 durable FIFO,所以这里看得到本用户轮此前
       // 每个 segment 已落库的费用。
@@ -232,17 +327,27 @@ export async function recordTurnUsageOnMessage(
           patch.userTurnCostUsd = userTurnMoney.amount;
         }
       }
-      const patched = await deps.patchAgentMeta(sessionId, clientId, patch);
-      if (!patched) return null;
+      const patchedMeta = await patchAgentMetaPreservingTurnDuration(
+        deps,
+        sessionId,
+        clientId,
+        patch,
+        turnUsageDetails,
+      );
+      if (!patchedMeta) return null;
+      persistedTurnUsageDetails = patchedMeta.turnUsageDetails ?? turnUsageDetails;
       return { userTurnMoney, userTurnCostIsEstimate: prior.hasEstimatedValue };
     });
     if (!outcome) return false;
+    // Usage metadata is durable even when the captured owner became stale;
+    // skip only the old-owner broadcast and keep the successful result.
+    if (!isOwnerScopeCurrent(ownerScope)) return true;
     try {
       const { userTurnMoney, userTurnCostIsEstimate } = outcome;
-      deps.broadcast({
+      const payload: MessageTurnCostPayload = {
         sessionId,
         clientId,
-        turnUsageDetails,
+        turnUsageDetails: persistedTurnUsageDetails,
         ...(userTurnMoney
           ? {
               userTurnMoney,
@@ -252,7 +357,12 @@ export async function recordTurnUsageOnMessage(
               userTurnCostIsEstimate,
             }
           : {}),
-      });
+      };
+      if (deps.broadcastWithOwnerScope) {
+        deps.broadcastWithOwnerScope(payload, ownerScope);
+      } else {
+        deps.broadcast(payload);
+      }
     } catch (err) {
       // 明细已落库,后开窗口走历史加载仍能读到;广播失败不影响持久事实。
       log.warn(

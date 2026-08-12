@@ -12,6 +12,7 @@ import {
   Workflow,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { deriveAgentTaskStatus } from '@cindy/maker-shared/agent-task';
 
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
@@ -28,6 +29,15 @@ import {
 import { useSidebarPanelReachable } from '@/features/cc-agent/embeddedSessionNavigation';
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
+import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
+import {
+  PI_SUBAGENT_TOOL_NAME,
+  subagentSpawnReceiptName,
+  subagentSpawnResultIndicatesRunning,
+} from '@cindy/maker-shared/agent-task';
+
+// 徽标可显示的思考强度档:协议全部合法档(效果词表 effortLevels 四语齐)。
+const EFFORT_BADGE_LEVELS = new Set<string>(['minimal', ...CODEX_SUBAGENT_EFFORTS]);
 
 interface AgentTaskCardProps {
   toolCall?: ChatMessage;
@@ -54,6 +64,13 @@ function readInputString(input: unknown, keys: string[]): string | undefined {
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+function readInputStringArray(input: unknown, key: string): string[] {
+  if (!input || typeof input !== 'object') return [];
+  const value = (input as Record<string, unknown>)[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0);
 }
 
 function compactText(text: string | undefined, max = 260): string | undefined {
@@ -127,9 +144,31 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   const { t } = useTranslation();
   const blockId = `task:${toolCall?.clientId ?? update?.taskId ?? 'unknown'}`;
   // subagent-model-chip: 子代理模型 —— 实时态优先 update.model(progress 事件
-  // 带),历史重载(update 缺省)回退到从子消息反查的 subagentModel。两者皆无
-  // (如 codex collab 任务 / 旧数据)则不渲染 chip。
-  const modelLabel = formatModelShortLabel(update?.model ?? subagentModel);
+  // 带),历史重载(update 缺省)回退到从子消息反查的 subagentModel;两者皆无时
+  // 再回退 spawn 参数里显式指定的 model(codex collab 卡,translator 透传
+  // item.model)。`model: null` 是实时聚合卡的显式清除指令,不能再落到历史/输入兜底,
+  // 否则多 receiver 模型冲突时旧徽标会被重新显示。V1 多 receiver 的实时聚合结论
+  // 不落库;重载后既无法证明所有 receiver 都已上报、也无法证明模型一致,所以历史态
+  // 同样不从首条子消息或 spawn 参数猜回单一徽标。默认继承主模型时 spawn 无 model
+  // 字段——不猜继承值,不渲染。
+  const receiverThreadIds = readInputStringArray(toolCall?.toolInput, 'receiverThreadIds');
+  const ambiguousMultiReceiverHistory =
+    !update && toolCall?.toolName?.startsWith('collab:') === true && receiverThreadIds.length > 1;
+  const modelLabel = formatModelShortLabel(
+    update?.model === null
+      ? undefined
+      : update?.model ?? (ambiguousMultiReceiverHistory
+        ? undefined
+        : subagentModel ?? readInputString(toolCall?.toolInput, ['model'])),
+  );
+  // codex spawn 可为子代理显式指定思考强度(translator 透传 reasoningEffort);
+  // 已知档位才走 effortLevels 词表,未知值不显示。CC 无此参数,行为不变。
+  // 显示集合含 minimal:设置页白名单(CODEX_SUBAGENT_EFFORTS)刻意不含它,但
+  // seed/glm 系模型的 spawn 参数可显式给 minimal(协议合法档),徽标不静默降级。
+  const effortRaw = readInputString(toolCall?.toolInput, ['reasoningEffort']);
+  const effortLabel =
+    effortRaw && EFFORT_BADGE_LEVELS.has(effortRaw) ? t(`effortLevels.${effortRaw}`) : undefined;
+  const chipLabel = [modelLabel, effortLabel].filter(Boolean).join(' · ');
   const { expanded, setExpanded } = useExpandedBlockMemory(blockId);
   const toggle = useCallback(() => setExpanded((v) => !v), [setExpanded]);
 
@@ -165,9 +204,13 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
     };
   }, [isWorkflow, update?.status, sessionId, workflowTaskId]);
 
-  const status =
-    update?.status ??
-    (isWorkflow ? (historyFileStatus ?? (result ? 'completed' : 'running')) : result ? 'completed' : 'running');
+  const status = isWorkflow
+    ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
+    : deriveAgentTaskStatus(update?.status, result, {
+        resultIsLaunchReceipt:
+          subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
+          || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
+      });
   const StatusIcon = statusIcon(status);
   const statusIconClassName = cn(
     'text-[var(--text-secondary)]',
@@ -189,16 +232,35 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
     update?.description ??
       readInputString(toolCall?.toolInput, ['prompt', 'description', 'task']),
   );
-  const summary = detailText(result, update?.summary);
+  // codex spawn 启动卡:translator 的 tool_result_full 只放结构化数据(agentPath
+  // 原文),用户可见句子在这里按 locale 组装。判据与 mobile 卡模型共用
+  // maker-shared 的 subagentSpawnReceiptName,不在端上内联复制。
+  const spawnReceiptName = subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result);
+  // 判据与抑制规则同 maker-shared 的 buildAgentTaskCardModel:有 live update 时不显示
+  // 「已启动」句子(title + 状态已表达),否则 codex 卡会比 Claude 卡多一行冗余文案。
+  const summary = spawnReceiptName
+    ? (update
+        ? detailText(update.summary)
+        : t('chat.agentTask.subagentStarted', { name: spawnReceiptName }))
+    : detailText(result, update?.summary);
   const duration = formatDuration(update?.usage?.durationMs);
-  const provider = update?.provider ?? (toolCall?.toolName?.startsWith('collab:') ? 'codex' : 'claude-code');
+  // provider 推断与 maker-shared 的 buildAgentTaskCardModel 同口径(裸 `subagent` 是 pi
+  // 扩展注册的工具名);历史回放没有 live update 时也不会把 pi 卡标成 Claude。
+  const provider = update?.provider
+    ?? (toolCall?.toolName?.startsWith('collab:')
+      ? 'codex'
+      : toolCall?.toolName === PI_SUBAGENT_TOOL_NAME
+        ? 'pi'
+        : 'claude-code');
   const providerLabel = isWorkflow
     ? t('chat.agentTask.provider.workflow')
     : isBash
       ? t('chat.agentTask.provider.shell')
       : provider === 'codex'
         ? t('chat.agentTask.provider.codex')
-        : t('chat.agentTask.provider.claude');
+        : provider === 'pi'
+          ? t('chat.agentTask.provider.pi')
+          : t('chat.agentTask.provider.claude');
 
   // 停止按钮:running + 本会话可定位 + claude-code(codex 无 stopTask 通道)。
   // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification 事件流收口
@@ -331,16 +393,16 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
               {meta.map((part) => (
                 <Fragment key={part.key}>
                   <span>{part.text}</span>
-                  {/* subagent-model-chip: 模型 chip 紧跟在 provider(Claude Code)之后,
-                      与 meta 文本同处第二行。 */}
-                  {part.key === 'provider' && modelLabel && (
+                  {/* subagent-model-chip: 模型(codex 卡可另含思考强度)chip 紧跟在
+                      provider 之后,与 meta 文本同处第二行。 */}
+                  {part.key === 'provider' && chipLabel && (
                     <span
                       data-agent-task-model-chip="true"
                       // 字体不特殊处理:size / weight / color 全部继承 meta 行
                       // (text-12 / normal / --text-tertiary),只保留 chip 的底色与圆角。
                       className="inline-flex items-center rounded-[4px] bg-[var(--surface-chip)] px-1.5 py-0.5"
                     >
-                      {modelLabel}
+                      {chipLabel}
                     </span>
                   )}
                 </Fragment>

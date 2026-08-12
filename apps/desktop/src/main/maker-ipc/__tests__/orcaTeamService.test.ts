@@ -159,6 +159,9 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
       ));
       return true;
     }),
+    cancelWorkerSessionOperations: vi.fn(async (sessionId) => {
+      calls.push(`cancelWorkerSessionOperations:${sessionId}`);
+    }),
     closeWorkerSession: vi.fn(async (sessionId) => {
       calls.push(`closeWorkerSession:${sessionId}`);
     }),
@@ -260,6 +263,58 @@ describe('OrcaTeamService', () => {
     });
 
     expect(leadMessages).toEqual(['[Auto-bridged: worker 完成但未调 send_to_lead]\n\n完成了']);
+  });
+
+  it('resumes a stale running worker before dispatching the next task', async () => {
+    const { deps, service, setWorker } = createDeps();
+    setWorker(createWorker({
+      status: 'running',
+      session: {
+        title: 'Worker',
+        agentKind: 'codex',
+        model: 'gpt-5.4',
+        effort: 'medium',
+        permissionMode: 'auto',
+        fastMode: false,
+      },
+    }));
+
+    await expect(
+      service.dispatchWorkerTask({
+        targetSessionId: 'worker-session-1',
+        message: '继续任务',
+        dispatchMeta: { source: 'test-source', context: 'stale-running-worker' },
+      }),
+    ).resolves.toMatchObject({ dispatched: true });
+
+    expect(deps.resumeWorkerSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'running',
+        session: expect.objectContaining({ permissionMode: 'auto' }),
+      }),
+      expect.objectContaining({ workerSessionId: 'worker-session-1' }),
+    );
+    expect(vi.mocked(deps.resumeWorkerSession).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.dispatchWorkerMessage).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('does not resume a running worker that still has a live session', async () => {
+    const { deps, service, setWorker } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
+    });
+    setWorker(createWorker({ status: 'running' }));
+
+    await expect(
+      service.dispatchWorkerTask({
+        targetSessionId: 'worker-session-1',
+        message: '继续任务',
+        dispatchMeta: { source: 'test-source', context: 'live-running-worker' },
+      }),
+    ).resolves.toMatchObject({ dispatched: true });
+
+    expect(deps.resumeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerMessage).toHaveBeenCalledOnce();
   });
 
   it('marks only a non-running worker session running on direct turn start', async () => {
@@ -1330,8 +1385,10 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
+      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
+      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);
@@ -1351,8 +1408,10 @@ describe('OrcaTeamService', () => {
 
     expect(deps.updateWorkerStatus).toHaveBeenCalledWith('worker-1', 'done');
     expect(calls).toEqual([
+      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
+      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);
@@ -1446,8 +1505,10 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
+      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
+      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);

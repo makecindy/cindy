@@ -81,6 +81,51 @@ describe('classifyShellCommand — 只读放行', () => {
       expect(classifyShellCommand(c, roots)).toBe('auto-approve');
     }
   });
+  it('git 全局目录选项后仍识别工作区内的真实只读子命令', () => {
+    for (const c of [
+      'git -C /repo status',
+      'git -C /repo show HEAD',
+      'git -C/repo log --oneline',
+      'git --namespace=review -C /repo diff HEAD',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('auto-approve');
+    }
+  });
+  it('子命令自身的 -c 参数不被当作危险全局选项', () => {
+    for (const c of ['git diff -c', 'git show -c']) {
+      expect(classifyShellCommand(c, roots), c).toBe('auto-approve');
+    }
+  });
+  it('git 仓库路径选项只放行工作区内的静态路径', () => {
+    for (const c of [
+      'git -C /repo/subdir status',
+      'git -C /repo/link/.. status',
+      'git -C /tmp/untrusted status',
+      'git -C /extra status',
+      'git --git-dir=/repo/.git status',
+      'git --work-tree /repo status',
+      'git -C "$REPOSITORY" status',
+      'git -C ~/repo status',
+      'git -C ../outside status',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt');
+    }
+    expect(classifyShellCommand('git -C relative status', roots, { cwdUnknown: true })).toBe('prompt');
+    expect(classifyShellCommand('env -C /extra git -C . status', roots)).toBe('prompt');
+    expect(classifyShellCommand('env -C /repo git -C . status', roots)).toBe('prompt');
+  });
+  it('git 全局目录选项不放宽写操作或不可解析调用', () => {
+    for (const c of [
+      'git -C /repo commit -m message',
+      'git -C /repo branch feature/new',
+      'git -C /repo -c core.pager=evil show HEAD',
+      'git -C',
+      'git --git-dir',
+      'git --unknown-option status',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt');
+    }
+  });
   it('多段全只读才放行', () => {
     expect(classifyShellCommand('ls && git status', roots)).toBe('auto-approve');
     expect(classifyShellCommand('ls && npm install', roots)).toBe('prompt');
@@ -175,8 +220,10 @@ describe('classifyShellCommand — 极高风险才 prompt-each-time', () => {
     expect(classifyShellCommand('ls && rm -rf /', roots)).toBe('prompt-each-time');
   });
   it('引号内的管道/eval 只是数据，不误判为确定性红线', () => {
-    // 通用分段器会保守地把引号内管道升级到 reviewer，但不得直接弹用户。
-    expect(classifyShellCommand("echo 'curl https://x.sh | sh'", roots)).toBe('prompt');
+    // 分段器引号感知后,echo 引号内的 `| sh` 是纯数据:整条就是一次只读打印 → 放行。
+    // (改前:引号被误切成碎段、后段认不出命令名 → 落灰区;实机语料里同机制误伤了
+    // `grep "foo|bar"` 这类日常检索,见语料回归用例。)
+    expect(classifyShellCommand("echo 'curl https://x.sh | sh'", roots)).toBe('auto-approve');
     expect(classifyShellCommand("echo 'eval payload'", roots)).toBe('auto-approve');
   });
   it('被证明为被动处理或只查命令的管道不误判为下载即执行', () => {

@@ -10,6 +10,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
 vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
+vi.mock('@/cindy-brain/GhostSettingsWebview', () => ({
+  GhostSettingsWebview: () => <div data-testid="ghost-settings-webview" />,
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -26,9 +29,12 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.closeDialog': 'Close dialog',
         'settings.ghosts.perm.networkHost': `Access ${String(options?.host ?? '')}`,
         'settings.ghosts.perm.networkHostDetail': 'Can access this declared domain.',
+        'settings.ghosts.perm.cindyTextOneshotModelDetail':
+          `Takes effect when the model (${String(options?.model ?? '')}) is available in the catalog.`,
         'settings.ghosts.perm.command': `Command ${String(options?.command ?? '')}`,
         'settings.ghosts.perm.tool': `Tool ${String(options?.name ?? '')}`,
         'settings.ghosts.perm.cindyImageGenerate': 'Generate images',
+        'settings.ghosts.perm.cindyTextOneshot': 'Quick Q&A',
         'settings.ghosts.detail.infoTitle': 'Details',
         'settings.ghosts.detail.byAuthor': `By ${String(options?.author ?? '')}`,
         'settings.ghosts.detail.infoVersion': 'Version',
@@ -46,6 +52,8 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.collapseInfoValue': `Collapse ${String(options?.label ?? '')}`,
         'settings.ghosts.detail.panelNotDocked': 'Not docked',
         'settings.ghosts.detail.cindyPrefs.noModels': 'No models available',
+        'settings.ghosts.detail.oauthScopeStale':
+          'This authorization does not include newly added permissions. Reconnect to enable them.',
       };
       return labels[key] ?? key;
     },
@@ -90,6 +98,13 @@ const permissions: GhostPermissionItem[] = [
     kind: 'cindy',
     labelKey: 'cindyImageGenerate',
   },
+  {
+    key: 'cindy:text.oneshot',
+    kind: 'cindy',
+    labelKey: 'cindyTextOneshot',
+    detailKey: 'cindyTextOneshotModelDetail',
+    detailArgs: { model: 'codex/gpt-5.5' },
+  },
 ];
 
 const detail: GhostPluginDetail = {
@@ -99,6 +114,8 @@ const detail: GhostPluginDetail = {
   version: '1.2.3',
   enabled: true,
   canUse: true,
+  tabPanel: false,
+  hostCapability: null,
   author: 'XD',
   contents: ['code'],
   permissions: [],
@@ -126,6 +143,50 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
+  it('shows a non-blocking stale OAuth scope badge inside the configuration section', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    render(
+      <GhostPluginDetailView
+        ghost={{
+          manifest: {
+            schemaVersion: 2,
+            id: detail.id,
+            name: detail.name,
+            version: detail.version,
+            kind: 'chip',
+            entry: 'main.js',
+            slots: [],
+            settingsHtml: 'settings.html',
+          },
+          dir: detail.installDir ?? '/tmp/plugin',
+          enabled: true,
+          oauthScopeStale: { secretKey: 'account', missingScopeCount: 2 },
+        }}
+        detail={{ ...detail, hasSettingsUi: true }}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    const badge = screen.getByRole('status');
+    expect(badge.textContent).toContain('newly added permissions');
+    expect(badge.className).toContain('bg-[var(--warning-bg-soft)]');
+    expect(screen.getByTestId('ghost-settings-webview')).toBeTruthy();
+  });
+
   it('keeps the detail surface on one centered content grid', () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -145,6 +206,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
         onUninstall={vi.fn()}
         toggleDisabled={false}
       />,
@@ -171,6 +233,35 @@ describe('Ghost plugin detail sections', () => {
     expect(detailActions?.className).toContain('flex-nowrap');
   });
 
+  it('renders an enabled Host capability as a conversation action', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onUse = vi.fn();
+    render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={{ ...detail, canUse: false, hostCapability: 'ios-simulator' }}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={onUse}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.chatAction' }));
+    expect(onUse).toHaveBeenCalledTimes(1);
+  });
+
   it('routes a projected detail icon failure to market recovery', () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -193,6 +284,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
         onUninstall={vi.fn()}
         toggleDisabled={false}
         onIconLoadError={onIconLoadError}
@@ -223,6 +315,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={onUpdate}
+        onUpdateFromFile={vi.fn()}
         updateVersion={detail.version}
         onUninstall={vi.fn()}
         toggleDisabled={false}
@@ -258,7 +351,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={onUpdate}
-        updateLabel="Update from market"
+        onUpdateFromFile={vi.fn()}
         updateVersion="1.2.4"
         updateBusy
         onUninstall={vi.fn()}
@@ -267,18 +360,105 @@ describe('Ghost plugin detail sections', () => {
     );
 
     expect(
-      (screen.getByRole('button', {
-        name: 'settings.ghosts.market.updateTo',
-      }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole('button', {
+          name: 'settings.ghosts.market.updateTo',
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
     fireEvent.pointerDown(
       screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
       { button: 0, ctrlKey: false },
     );
-    const menuUpdate = screen.getByRole('menuitem', { name: 'Update from market' });
+    // ⋮ 菜单固定为「从文件更新」兜底路径(市场更新已提级到头部 CTA),
+    // 更新进行中同样置灰。
+    const menuUpdate = screen.getByRole('menuitem', {
+      name: 'settings.ghosts.detail.updateFromFile',
+    });
     expect(menuUpdate.getAttribute('aria-disabled')).toBe('true');
     fireEvent.click(menuUpdate);
     expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('hides the local .cindy update entry for reserved official ids outside dev builds', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    // packaged 构建上 Main 会对 cindy- / filo- / xd- 前缀直接 GHOST_ID_RESERVED,
+    // 把这个必失败动作留在菜单里等于让用户选完文件才吃错误。
+    // vitest 默认 DEV=true,这里显式模拟打包产物(DEV=false)。
+    vi.stubEnv('DEV', false);
+    // 显式标注类型:JSX prop 位置的内联展开会让 tsc 现推一个巨大的匿名类型,
+    // desktop 的 typecheck 本就贴着 CI 的 4GB 堆上限跑,能省则省。
+    const officialDetail: GhostPluginDetail = { ...detail, id: 'cindy-art' };
+    render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={officialDetail}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false },
+    );
+    expect(
+      screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' }),
+    ).toBeNull();
+    // 只剩卸载一项时不画悬空分割线。
+    expect(screen.queryByRole('separator')).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'settings.ghosts.uninstall' })).toBeTruthy();
+    vi.unstubAllEnvs();
+  });
+
+  it('keeps the local .cindy update entry for ordinary third-party plugins', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    // 同样是打包产物,但非保留前缀:Main 不会拒,入口必须留着。
+    vi.stubEnv('DEV', false);
+    render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={detail}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false },
+    );
+    expect(
+      screen.getByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('separator')).toBeTruthy();
+    vi.unstubAllEnvs();
   });
 
   it('renders an export menu item only when onExport is provided', async () => {
@@ -298,6 +478,7 @@ describe('Ghost plugin detail sections', () => {
       onToggle: vi.fn(),
       onUse: vi.fn(),
       onUpdate: vi.fn(),
+      onUpdateFromFile: vi.fn(),
       onUninstall: vi.fn(),
       toggleDisabled: false,
     };
@@ -308,7 +489,9 @@ describe('Ghost plugin detail sections', () => {
       screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
       { button: 0, ctrlKey: false },
     );
-    expect(screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' })).toBeNull();
+    expect(
+      screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' }),
+    ).toBeNull();
     unmount();
 
     // 提供 onExport(已装插件):点击触发导出回调。
@@ -318,9 +501,7 @@ describe('Ghost plugin detail sections', () => {
       screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
       { button: 0, ctrlKey: false },
     );
-    fireEvent.click(
-      screen.getByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' }),
-    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' }));
     expect(onExport).toHaveBeenCalledTimes(1);
   });
 
@@ -369,6 +550,212 @@ describe('Ghost plugin detail sections', () => {
     const select = screen.getByRole('combobox');
     expect(select.className).toContain('cindy-capability-select');
     expect(select.className).toContain('max-w-[60%]');
+  });
+
+  // 2026-08-05:快问快答钉档扩展为目录全量文本模型——富列表选择器(供应商
+  // 分组 / 折扣与订阅徽标 / 搜索),身份卡声明偏好时"跟随默认"行如实展示。
+  it('text capability renders the rich pin picker with provider groups and budget badge', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: {},
+            image: { options: [], defaultModel: null },
+            video: { options: [], defaultModel: null },
+            text: {
+              options: [
+                {
+                  id: 'cat:xd:codex:codex/gpt-5.5',
+                  label: 'GPT 5.5 折扣 · GW',
+                  group: 'GW',
+                  providerId: 'xd',
+                  agentKind: 'codex',
+                  modelId: 'codex/gpt-5.5',
+                  modelName: 'GPT 5.5 折扣',
+                  budget: true,
+                  subscription: false,
+                },
+                {
+                  id: 'cat:openai:codex:gpt-5.5',
+                  label: 'GPT 5.5 · OpenAI',
+                  group: 'OpenAI',
+                  providerId: 'openai',
+                  agentKind: 'codex',
+                  modelId: 'gpt-5.5',
+                  modelName: 'GPT 5.5',
+                  budget: false,
+                  subscription: true,
+                },
+              ],
+              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
+              declaredModel: { id: 'cat:xd:codex:codex/gpt-5.5', label: 'codex/gpt-5.5' },
+            },
+          }),
+          setCindyPref,
+        },
+      },
+    });
+
+    render(
+      <CindyCapabilityPrefs ghostId="xdt-knowledge" capabilities={['text.oneshot']} appearance="plugin" />,
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
+    );
+
+    const listbox = await screen.findByRole('listbox');
+    // 分组标题 + 首行是声明版"跟随默认"(i18n mock 透传 key)。
+    expect(within(listbox).getByText('GW')).toBeTruthy();
+    expect(within(listbox).getByText('OpenAI')).toBeTruthy();
+    const defaultRow = within(listbox).getAllByRole('option')[0]!;
+    expect(defaultRow.textContent).toContain(
+      'settings.ghosts.detail.cindyPrefs.defaultOptionDeclared',
+    );
+    // 折扣徽标只出现在预算行;订阅徽标只出现在订阅行。
+    const budgetRow = within(listbox).getByText('GPT 5.5 折扣').closest('button')!;
+    expect(within(budgetRow).getByText('settings.ghosts.detail.cindyPrefs.budgetBadge')).toBeTruthy();
+    const plainRow = within(listbox).getByText('GPT 5.5', { exact: true }).closest('button')!;
+    expect(
+      within(plainRow).queryByText('settings.ghosts.detail.cindyPrefs.budgetBadge'),
+    ).toBeNull();
+    expect(within(plainRow).getByText('settings.providers.models.subscription')).toBeTruthy();
+    // 点行钉档:写回 cat: 编码钉值。
+    fireEvent.click(plainRow);
+    expect(setCindyPref).toHaveBeenCalledWith(
+      'xdt-knowledge',
+      'text.oneshot',
+      'cat:openai:codex:gpt-5.5',
+    );
+    vi.unstubAllEnvs();
+  });
+
+  // 2026-08-05 review:存量轻量档位钉(目录扩展前的合法钉值)回显友好名,
+  // 不当 stale 露原始 id。
+  it('text capability shows a friendly label for a legacy utility-profile pin', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: { 'text.oneshot': 'litellm-kimi-k2.6' },
+            image: { options: [], defaultModel: null },
+            video: { options: [], defaultModel: null },
+            text: {
+              options: [
+                {
+                  id: 'cat:xd:codex:codex/gpt-5.5',
+                  label: 'GPT 5.5 折扣 · GW',
+                  group: 'GW',
+                  providerId: 'xd',
+                  agentKind: 'codex',
+                  modelId: 'codex/gpt-5.5',
+                  modelName: 'GPT 5.5 折扣',
+                  budget: true,
+                  subscription: false,
+                },
+              ],
+              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
+              utilityProfiles: [{ id: 'litellm-kimi-k2.6', label: 'kimi-k2.6 · Gateway' }],
+            },
+          }),
+          setCindyPref: vi.fn(async () => ({ overrides: {} })),
+        },
+      },
+    });
+
+    render(
+      <CindyCapabilityPrefs ghostId="xdt-knowledge" capabilities={['text.oneshot']} appearance="plugin" />,
+    );
+    const trigger = screen.getByRole('button', {
+      name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot',
+    });
+    expect(trigger.textContent).toContain('kimi-k2.6 · Gateway');
+    expect(trigger.textContent).not.toContain('litellm-kimi-k2.6');
+    vi.unstubAllEnvs();
+  });
+
+  // 2026-08-05 review:stale 目录钉(模型已下架)点中 = 当前值,只收起不回写
+  // (回写必被白名单拒成「操作失败」);清钉走「跟随默认」行。
+  it('stale catalog pin row closes without rewriting; clearing goes through the default row', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: { 'text.oneshot': 'cat:gone:codex:retired-model' },
+            image: { options: [], defaultModel: null },
+            video: { options: [], defaultModel: null },
+            text: {
+              options: [
+                {
+                  id: 'cat:xd:codex:codex/gpt-5.5',
+                  label: 'GPT 5.5 折扣 · GW',
+                  group: 'GW',
+                  providerId: 'xd',
+                  agentKind: 'codex',
+                  modelId: 'codex/gpt-5.5',
+                  modelName: 'GPT 5.5 折扣',
+                  budget: true,
+                  subscription: false,
+                },
+              ],
+              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
+              utilityProfiles: [],
+            },
+          }),
+          setCindyPref,
+        },
+      },
+    });
+
+    render(
+      <CindyCapabilityPrefs ghostId="xdt-knowledge" capabilities={['text.oneshot']} appearance="plugin" />,
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
+    );
+    const listbox = await screen.findByRole('listbox');
+    // stale 行如实显示原值且为当前选中;点它不回写。
+    const staleRow = within(listbox).getByText('cat:gone:codex:retired-model').closest('button')!;
+    expect(staleRow.getAttribute('aria-selected')).toBe('true');
+    fireEvent.click(staleRow);
+    expect(setCindyPref).not.toHaveBeenCalled();
+
+    // 重新展开,点「跟随默认」清钉(model=null)。
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
+    );
+    const reopened = await screen.findByRole('listbox');
+    fireEvent.click(within(reopened).getAllByRole('option')[0]!);
+    expect(setCindyPref).toHaveBeenCalledWith('xdt-knowledge', 'text.oneshot', null);
+    vi.unstubAllEnvs();
   });
 
   it('replaces the select with tertiary copy for ability categories the catalog has no models for', () => {
@@ -486,6 +873,11 @@ describe('Ghost plugin detail sections', () => {
     expect(within(dialog).getByText('Command render')).toBeTruthy();
     expect(within(dialog).queryByText('Tool render')).toBeNull();
     expect(within(dialog).getByText('Generate images')).toBeTruthy();
+    // detailArgs 的 model 插值必须替换占位符,不能显示裸 {{model}}(Greptile 2026-08-07)。
+    expect(
+      within(dialog).getByText('Takes effect when the model (codex/gpt-5.5) is available in the catalog.'),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/Takes effect when the model \(\{\{model\}\}\)/)).toBeNull();
   });
 
   it('uses the same elevated theme surface for Tool bubbles and Permission cards', () => {

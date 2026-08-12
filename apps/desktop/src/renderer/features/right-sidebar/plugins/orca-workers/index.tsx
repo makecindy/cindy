@@ -6,7 +6,7 @@
  * disableOrca；body 未挂载时 onBeforeClose fail-closed,拒绝误关协同。
  */
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { UsersRound } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -14,14 +14,22 @@ import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { OrcaWorkerPanel } from '@/features/cc-agent/OrcaWorkerPanel';
+import { useOrcaWorkerAttentionByLeadIds } from '@/features/cc-agent/hooks/useOrcaWorkerAttentionWatcher';
 import { useStopOrcaCollab } from '@/features/cc-agent/hooks/useStopOrcaCollab';
-import { useWorkers } from '@/features/cc-agent/hooks/useWorkers';
+import {
+  revalidateActiveWorkerSettings,
+  revalidateActiveWorkersProjection,
+  useWorkerProjection,
+  useWorkerProjectionOwner,
+} from '@/features/cc-agent/hooks/workerProjectionStore';
 import { mergeSessionSources } from '@/features/cc-agent/lib/mergeSessionSources';
 import { useWorkerAttentionSnapshot } from '@/features/cc-agent/lib/workerAttentionStore';
 import { useDocumentVisible, useWindowVisible } from '@/hooks/useWindowVisible';
 import { isOrcaLeadSession } from '@/lib/orcaSessionIdentity';
+import { isSidebarWindow } from '@/lib/sidebarWindow';
 import * as sessionService from '@/lib/sessionService';
 import { createLogger } from '@/lib/logger';
+import { SidebarHostSessionProvider } from '../../lib/sidebarHostSession';
 import { registerTabKind } from '../../registry';
 import { hasTabCloseInterceptor } from '../../store';
 import type { TabKindPlugin } from '../../types';
@@ -58,8 +66,8 @@ function OrcaWorkersTabPillIcon({
 
 function OrcaWorkersAttentionDot({ sessionId }: { sessionId: string }) {
   const attention = useWorkerAttentionSnapshot();
-  const { workers } = useWorkers(sessionId);
-  const hasAttention = workers.some((worker) => attention.has(worker.workerId));
+  const projection = useWorkerProjection(sessionId);
+  const hasAttention = projection.workers.some((worker) => attention.has(worker.workerId));
   if (!hasAttention) return null;
 
   return (
@@ -84,10 +92,19 @@ function OrcaWorkersTabBody({
   active?: boolean;
   shellVisible?: boolean;
 }) {
+  useWorkerProjectionOwner(ctx.sessionId);
   const windowVisible = useWindowVisible(Boolean(active && shellVisible));
   const documentVisible = useDocumentVisible(Boolean(active && shellVisible));
   const viewVisible = Boolean(active && shellVisible && windowVisible);
   const chatRealtime = Boolean(active && shellVisible && documentVisible);
+  const detachedLeadSessionIds = useMemo(
+    () => (isSidebarWindow() ? [ctx.sessionId] : []),
+    [ctx.sessionId],
+  );
+  useOrcaWorkerAttentionByLeadIds(
+    detachedLeadSessionIds,
+    viewVisible ? ctx.sessionId : undefined,
+  );
   const { sessions, isLoading } = useCCSessions();
   const remoteSessions = useRemoteProjectSessions();
   const leadSession =
@@ -106,6 +123,11 @@ function OrcaWorkersTabBody({
   }, [closeDecision, requestStop]);
 
   useEffect(() => ctx.setCloseInterceptor(closeHandler), [closeHandler, ctx]);
+  useEffect(() => {
+    if (!active || !shellVisible || !windowVisible) return;
+    void revalidateActiveWorkersProjection(ctx.sessionId);
+    void revalidateActiveWorkerSettings(ctx.sessionId);
+  }, [active, ctx.sessionId, shellVisible, windowVisible]);
 
   const handleFocusWorkerSessionIdConsumed = useCallback(
     (revision: number) => {
@@ -136,6 +158,9 @@ function OrcaWorkersTabBody({
   );
 
   return (
+    // 内嵌 worker 流里的审查等入口据此把 RSB tab 开到 lead 的可见桶,
+    // 而不是 worker 自己的(协同视图下不可见的)桶。
+    <SidebarHostSessionProvider sessionId={ctx.sessionId}>
     <OrcaWorkerPanel
       leadSessionId={ctx.sessionId}
       deviceId={leadSession?.deviceLinkDeviceId}
@@ -151,6 +176,7 @@ function OrcaWorkersTabBody({
       onSelectionIntentCleared={handleSelectionIntentCleared}
       onSearchJumpConsumed={handleSearchJumpConsumed}
     />
+    </SidebarHostSessionProvider>
   );
 }
 

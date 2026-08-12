@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Schedule, SchedulerEvent } from '@cindy/maker-scheduler';
 
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
 import { isUnreadScheduleRun } from '../lib/runUnread';
 import { loadScheduleSidebarIndexRuns } from '../lib/scheduleSidebarIndexRuns';
@@ -48,7 +49,8 @@ export function useScheduleUnreadRunCounts(
 
   useEffect(() => {
     void refresh();
-    const off = window.electronAPI.maker.schedule.onEvent((raw) => {
+    const off = window.electronAPI.maker.schedule.onEvent((raw, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       const event = raw as SchedulerEvent;
       if (
         event.type === 'fired' ||

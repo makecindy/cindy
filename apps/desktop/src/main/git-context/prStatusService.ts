@@ -26,6 +26,19 @@ export interface PrStatusQuery {
   prNumber: number;
 }
 
+/** Restrict remote status reads to PRs already attached to the target session. */
+export function filterPrStatusQueriesForRefs(
+  queries: readonly PrStatusQuery[],
+  refs: readonly PrStatusQuery[],
+): PrStatusQuery[] {
+  const allowed = new Set(
+    refs.map((ref) => `${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}#${ref.prNumber}`),
+  );
+  return queries.filter((query) =>
+    allowed.has(`${query.owner.toLowerCase()}/${query.repo.toLowerCase()}#${query.prNumber}`),
+  );
+}
+
 export type PrStatusResult =
   | {
       ok: true;

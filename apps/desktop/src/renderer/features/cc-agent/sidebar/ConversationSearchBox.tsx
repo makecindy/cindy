@@ -52,7 +52,14 @@ import type {
 import { conversationSearchTitle } from '../../../../shared/conversationSearch';
 import { highlightSegments } from '../lib/highlightSegments';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
+import {
+  projectKeyComparisonKey,
+  type ProjectNode as ProjectNodeData,
+} from '../lib/projectGrouping';
+import {
+  buildProjectKeyComparisonSet,
+  isProjectHidden,
+} from '../lib/sidebarProjectVisibility';
 import {
   getRemoteProjectMachineIdentity,
   projectDisplayLabelWithMachine,
@@ -69,6 +76,31 @@ type Option<T extends string> = {
   value: T;
   labelKey: string;
 };
+
+export function reconcileProjectSelectionWithVisibleProjects(
+  selection: readonly string[],
+  visibleProjects: readonly Pick<ProjectNodeData, 'projectKey'>[],
+  localPlatform: string,
+): string[] {
+  const currentProjectKeyByComparison = new Map<string, string>();
+  for (const project of visibleProjects) {
+    const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
+    if (comparisonKey != null) currentProjectKeyByComparison.set(comparisonKey, project.projectKey);
+  }
+
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const selectedProjectKey of selection) {
+    const comparisonKey = projectKeyComparisonKey(selectedProjectKey, localPlatform);
+    const currentProjectKey = comparisonKey == null
+      ? null
+      : currentProjectKeyByComparison.get(comparisonKey) ?? null;
+    if (currentProjectKey == null || seen.has(currentProjectKey)) continue;
+    seen.add(currentProjectKey);
+    next.push(currentProjectKey);
+  }
+  return next;
+}
 
 /**
  * 排序三选项。与其它筛选选项同款:纯文字 + 选中勾,不配图标——它们只出现在筛选菜单的
@@ -127,6 +159,8 @@ export interface UseConversationSearchParams {
   enabled: boolean;
   navigate: NavigateFunction;
   allKnownProjects: ProjectNodeData[];
+  /** Bounds explicit project-scoped searches; global search remains unbounded. */
+  allowedSessionIds?: readonly string[];
   projectFilterRequest?: {
     projectKey: string;
     projectName: string;
@@ -149,11 +183,13 @@ export function useConversationSearch({
   enabled,
   navigate,
   allKnownProjects,
+  allowedSessionIds,
   projectFilterRequest,
   onProgrammaticOpen,
   onResultChosen,
 }: UseConversationSearchParams) {
   const { t } = useTranslation();
+  const localPlatform = window.electronAPI.platform;
   // 「尚未起名」会话的显示文案。main 拿它算标题匹配与命中下标、结果行拿它渲染
   // (两侧都过 conversationSearchTitle),所以它必须进请求 **和** effect 依赖:
   // 切语言后要重发一次搜索,否则下标还按旧语言的串算、高亮会错位。
@@ -180,23 +216,39 @@ export function useConversationSearch({
   const requestId = projectFilterRequest?.requestId ?? 0;
 
   const trimmed = query.trim();
+  const allowedSessionIdSet = useMemo(
+    () => (allowedSessionIds == null ? null : new Set(allowedSessionIds)),
+    [allowedSessionIds],
+  );
   const selectedProjectSessionIds = useMemo(() => {
     if (projectSelection === 'all') return null;
-    const selected = new Set(projectSelection);
-    const indexedSessionIds = allKnownProjects
-      .filter((project) => selected.has(project.projectKey))
+    const selected = buildProjectKeyComparisonSet(projectSelection, localPlatform);
+    let indexedSessionIds = allKnownProjects
+      .filter((project) => {
+        const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
+        return comparisonKey != null && selected.has(comparisonKey);
+      })
       .flatMap((project) => project.sessions.map((session) => session.id));
+    const lockedProjectComparisonKey = projectKeyComparisonKey(lockedProjectKey, localPlatform);
     if (
       indexedSessionIds.length === 0 &&
-      lockedProjectKey &&
+      lockedProjectComparisonKey &&
       selected.size === 1 &&
-      selected.has(lockedProjectKey) &&
+      selected.has(lockedProjectComparisonKey) &&
       lockedProjectSessionIds.length > 0
     ) {
-      return lockedProjectSessionIds;
+      indexedSessionIds = lockedProjectSessionIds;
     }
-    return indexedSessionIds;
-  }, [allKnownProjects, lockedProjectKey, lockedProjectSessionIds, projectSelection]);
+    if (allowedSessionIdSet == null) return indexedSessionIds;
+    return indexedSessionIds.filter((sessionId) => allowedSessionIdSet.has(sessionId));
+  }, [
+    allKnownProjects,
+    allowedSessionIdSet,
+    lockedProjectKey,
+    lockedProjectSessionIds,
+    localPlatform,
+    projectSelection,
+  ]);
   const activeFilterCount = useMemo(() => {
     let count = 0;
     if (statusFilter !== 'all') count += 1;
@@ -404,14 +456,14 @@ export function SearchResultsBody({
   const { t } = useTranslation();
   if (!trimmed) {
     return (
-      <div className="px-3 py-6 text-center text-[12px] text-[var(--cmd-palette-empty)]">
+      <div className="px-3 py-6 text-center text-12 text-[var(--cmd-palette-empty)]">
         {t('ccAgent.search.empty')}
       </div>
     );
   }
   if (status === 'searching') {
     return (
-      <div className="flex items-center justify-center gap-2 px-3 py-6 text-[12px] text-[var(--cmd-palette-item-meta)]">
+      <div className="flex items-center justify-center gap-2 px-3 py-6 text-12 text-[var(--cmd-palette-item-meta)]">
         <Spinner size={14} />
         {t('ccAgent.search.searching')}
       </div>
@@ -419,14 +471,14 @@ export function SearchResultsBody({
   }
   if (status === 'error') {
     return (
-      <div className="px-3 py-6 text-center text-[12px] text-[var(--error-fg)]">
+      <div className="px-3 py-6 text-center text-12 text-[var(--error-fg)]">
         {t('ccAgent.search.failed')}
       </div>
     );
   }
   if (results.length === 0) {
     return (
-      <div className="px-3 py-6 text-center text-[12px] text-[var(--cmd-palette-empty)]">
+      <div className="px-3 py-6 text-center text-12 text-[var(--cmd-palette-empty)]">
         {t('ccAgent.search.noResults')}
       </div>
     );
@@ -443,6 +495,8 @@ export function SearchResultsBody({
 export interface ConversationSearchBoxProps {
   navigate: NavigateFunction;
   allKnownProjects: ProjectNodeData[];
+  allowedSessionIds: readonly string[];
+  hiddenProjectKeys: ReadonlySet<string>;
   projectFilterRequest?: {
     projectKey: string;
     projectName: string;
@@ -463,6 +517,8 @@ export interface ConversationSearchBoxProps {
 export function ConversationSearchBox({
   navigate,
   allKnownProjects,
+  allowedSessionIds,
+  hiddenProjectKeys,
   projectFilterRequest,
   triggerClassName,
   onOpenChange,
@@ -490,12 +546,48 @@ export function ConversationSearchBox({
   const search = useConversationSearch({
     enabled: open,
     navigate,
+    allowedSessionIds,
     allKnownProjects,
     projectFilterRequest,
     onProgrammaticOpen: handleProgrammaticOpen,
     onResultChosen: handleResultChosen,
   });
   searchResetRef.current = search.reset;
+  useEffect(() => {
+    const lockedProjectKey = search.lockedProjectKey;
+    if (lockedProjectKey) {
+      if (
+        isProjectHidden(
+          lockedProjectKey,
+          hiddenProjectKeys,
+          window.electronAPI.platform,
+        )
+      ) {
+        search.reset();
+        search.clearLock();
+      }
+      return;
+    }
+    if (search.projectSelection === 'all') return;
+    const next = reconcileProjectSelectionWithVisibleProjects(
+      search.projectSelection,
+      allKnownProjects,
+      window.electronAPI.platform,
+    );
+    if (
+      next.length === search.projectSelection.length &&
+      next.every((projectKey, index) => projectKey === search.projectSelection[index])
+    ) return;
+    search.setProjectSelection(next.length > 0 ? next : 'all');
+  }, [
+    allKnownProjects,
+    hiddenProjectKeys,
+    search.clearLock,
+    search.lockedProjectKey,
+    search.projectSelection,
+    search.reset,
+    search.setProjectSelection,
+  ]);
 
   useEffect(() => {
     if (!open) return;
@@ -547,7 +639,7 @@ export function ConversationSearchBox({
               onChange={(event) => search.setQuery(event.target.value)}
               placeholder={t('ccAgent.search.placeholder')}
               aria-label={t('ccAgent.search.placeholder')}
-              className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+              className="min-w-0 flex-1 bg-transparent text-13 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
             />
             {search.query && (
               <Tip text={t('ccAgent.search.clear')} side="bottom">
@@ -641,12 +733,18 @@ export function SearchFilterMenu({
   onOpenChange?: (open: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const localPlatform = window.electronAPI.platform;
   const statusValue = optionLabel(STATUS_OPTIONS, status, t);
   const agentValue = optionLabel(AGENT_OPTIONS, agentKind, t);
   const lastActivityValue = optionLabel(LAST_ACTIVITY_OPTIONS, lastActivity, t);
   const sortValue = optionLabel(SORT_OPTIONS, sortBy, t);
-  const lockedProject = lockedProjectKey
-    ? allKnownProjects.find((project) => project.projectKey === lockedProjectKey) ?? null
+  const lockedProjectComparisonKey = projectKeyComparisonKey(lockedProjectKey, localPlatform);
+  const lockedProject = lockedProjectComparisonKey
+    ? allKnownProjects.find(
+        (project) =>
+          projectKeyComparisonKey(project.projectKey, localPlatform) ===
+          lockedProjectComparisonKey,
+      ) ?? null
     : null;
   const lockedProjectLabel = lockedProject
     ? projectDisplayLabelWithMachine(lockedProject)
@@ -657,7 +755,8 @@ export function SearchFilterMenu({
       : projects === 'all'
       ? t('ccAgent.search.filter.allProjects')
       : t('ccAgent.sidebar.filterSelectedProjects', { count: projects.length });
-  const selectedProjects = projects === 'all' ? null : new Set(projects);
+  const selectedProjects =
+    projects === 'all' ? null : buildProjectKeyComparisonSet(projects, localPlatform);
   const projectsLocked = lockedProjectKey !== null;
 
   return (
@@ -766,7 +865,8 @@ export function SearchFilterMenu({
           )}
           <div className="max-h-[280px] overflow-y-auto">
             {allKnownProjects.map((project) => {
-              const selected = selectedProjects?.has(project.projectKey) ?? false;
+              const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
+              const selected = comparisonKey != null && (selectedProjects?.has(comparisonKey) ?? false);
               const remoteIdentity = getRemoteProjectMachineIdentity(project);
               return (
                 <DropdownMenuItem
@@ -774,7 +874,9 @@ export function SearchFilterMenu({
                   onSelect={(event) => {
                     event.preventDefault();
                     if (projectsLocked) return;
-                    onProjectsChange(nextProjectSelection(projects, project.projectKey));
+                    onProjectsChange(
+                      nextProjectSelection(projects, project.projectKey, localPlatform),
+                    );
                   }}
                   disabled={projectsLocked}
                   className={MENU_ITEM_CLASS}
@@ -882,10 +984,18 @@ function optionLabel<T extends string>(
   return t(options.find((option) => option.value === value)?.labelKey ?? '');
 }
 
-function nextProjectSelection(prev: ProjectSelection, projectKey: string): ProjectSelection {
+function nextProjectSelection(
+  prev: ProjectSelection,
+  projectKey: string,
+  localPlatform: string,
+): ProjectSelection {
   if (prev === 'all') return [projectKey];
-  if (prev.includes(projectKey)) {
-    const next = prev.filter((key) => key !== projectKey);
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  if (comparisonKey == null) return prev;
+  if (prev.some((key) => projectKeyComparisonKey(key, localPlatform) === comparisonKey)) {
+    const next = prev.filter(
+      (key) => projectKeyComparisonKey(key, localPlatform) !== comparisonKey,
+    );
     return next.length > 0 ? next : 'all';
   }
   return [...prev, projectKey];
@@ -924,7 +1034,7 @@ function SearchResultRow({
     <div className="space-y-2">
       <div className="font-medium leading-snug">{displayTitle}</div>
       {primaryHit?.preview && (
-        <div className="border-t border-[var(--cmd-palette-border)] pt-2 text-[12px] leading-snug text-[var(--tooltip-text)]">
+        <div className="border-t border-[var(--cmd-palette-border)] pt-2 text-12 leading-snug text-[var(--tooltip-text)]">
           {renderSnippet(primaryHit.snippet, query) ?? renderKeywordHighlights(primaryHit.preview, query)}
         </div>
       )}
@@ -948,22 +1058,22 @@ function SearchResultRow({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--text-primary)]">
+              <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
                 {highlightSegments(displayTitle, item.titleMatchIndices)}
               </span>
               <Tip text={sourceText} side="top" delay={150}>
-                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--text-tertiary)]">
+                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 leading-none text-[var(--text-tertiary)]">
                   {t(`ccAgent.search.kind.${item.matchKind}`)}
                 </span>
               </Tip>
             </div>
             {meta && (
-              <div className="mt-1 truncate text-[11px] leading-none text-[var(--text-tertiary)]">
+              <div className="mt-1 truncate text-11 leading-none text-[var(--text-tertiary)]">
                 {meta}
               </div>
             )}
             {visibleHits.length === 0 && subtitle && (
-              <div className="mt-1.5 line-clamp-4 text-[12px] leading-snug text-[var(--text-secondary)]">
+              <div className="mt-1.5 line-clamp-4 text-12 leading-snug text-[var(--text-secondary)]">
                 {subtitle}
               </div>
             )}
@@ -989,7 +1099,7 @@ function SearchResultRow({
               }}
               className={cn(
                 'flex w-full items-center rounded-md border border-transparent px-2 py-1.5 text-left',
-                'text-[10px] leading-none text-[var(--text-tertiary)]',
+                'text-10 leading-none text-[var(--text-tertiary)]',
                 'transition-colors hover:border-[var(--border-default)] hover:bg-[var(--surface-elevated)] hover:text-[var(--text-primary)]',
               )}
             >
@@ -1029,10 +1139,10 @@ function SearchHitRow({
       )}
     >
       <span className="min-w-0 flex-1">
-        <span className="block line-clamp-2 text-[12px] leading-snug text-[var(--text-secondary)]">
+        <span className="block line-clamp-2 text-12 leading-snug text-[var(--text-secondary)]">
           {content}
         </span>
-        <span className="mt-0.5 block truncate text-[10px] leading-none text-[var(--text-tertiary)]">
+        <span className="mt-0.5 block truncate text-10 leading-none text-[var(--text-tertiary)]">
           {hitTime} · {sourceText}
         </span>
       </span>
@@ -1134,7 +1244,7 @@ const SEARCH_MARK_CLASS =
 
 const SEARCH_TOOL_BUTTON_CLASS = cn(
   'flex h-7 min-w-0 items-center gap-1.5 rounded-full border border-[var(--border-default)]',
-  'bg-[var(--surface-elevated)] px-2.5 text-[12px] text-[var(--text-secondary)]',
+  'bg-[var(--surface-elevated)] px-2.5 text-12 text-[var(--text-secondary)]',
   'transition-colors hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--text-primary)]',
 );
 

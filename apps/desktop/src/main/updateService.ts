@@ -49,6 +49,7 @@ import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
 import { disposeAndroidAdb } from './mcp-integrations/android';
+import { abortIOSSimulatorOperationsForExit } from './mcp-integrations/ios-simulator-exit';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
 import { cleanOldUpdateFiles } from './updateArtifacts';
 
@@ -243,7 +244,6 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
  * launched, so there is no in-flight agent turn / schedule / active session to
  * interrupt. We therefore relaunch into the updater as soon as a patch is ready,
  * gating only on the essentials:
- *   - `disabled`     — user turned the auto-update relaunch switch off; respect it.
  *   - `dev`          — the native updater replaces the *installed* app; it can't
  *                      sanely update a dev / electron-forge instance, so never
  *                      auto-launch it there.
@@ -255,7 +255,6 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
  * full policy via getAutoRelaunchBlockReasonForCurrentState.)
  */
 async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason | null> {
-  if (!readAutoUpdateSettings().autoRelaunchOnIdle) return 'disabled';
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
@@ -265,7 +264,7 @@ async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason 
 /**
  * Startup update checks apply a staged patch as soon as it is ready (the historic
  * behavior), gated only by the lightweight startup policy above. Whenever that
- * policy blocks (auto-update off / dev / not ready / already relaunching) the
+ * policy blocks (dev / not ready / relaunching) the
  * patch stays staged and the app enters normally, surfacing the UpdateBanner.
  */
 async function buildStartupReadyReply(version: string | undefined): Promise<{
@@ -379,13 +378,45 @@ const PATCH_INFO_FILE = 'patch-info.json';
 const UPDATE_LOCK_FILE = '.updating';
 
 /**
- * Snapshot of the current update lifecycle state. Used by callers that need to
- * gate side-effects (e.g. don't bring the FeishuBot online if an update is
- * actively downloading or staged for relaunch — it would just go offline again
- * within seconds and spam the owner with a needless online/offline pair).
+ * Snapshot of the current update lifecycle state. Prefer
+ * `isUpdateRelaunchImminent()` for gating side-effects — a staged patch does
+ * NOT imply a relaunch is coming (see below).
  */
 export function getUpdateStatus(): UpdateStatus {
   return currentStatus;
+}
+
+/**
+ * Whether this process is actually about to be replaced by the updater.
+ *
+ * Callers use this to gate side-effects that would be torn down seconds later
+ * (e.g. don't bring the FeishuBot online right before a relaunch — it would go
+ * offline again immediately and spam the owner with a needless online/offline
+ * pair).
+ *
+ * This is deliberately NOT `status === 'downloading' | 'ready'`: `ready` only
+ * means "a patch is staged", and a staged patch stays staged forever when the
+ * user turned auto-relaunch off (`getStartupRelaunchBlockReason() → 'disabled'`)
+ * or on a dev build. Gating on the raw status made every cold boot of an
+ * out-of-date install re-observe `ready` and skip the side-effect again, so the
+ * "we'll do it on the next cold boot" fallback could never fire — the IM
+ * transport stayed down permanently and `feishuBot:save` failed with
+ * `[IM_NOT_READY]` until the user manually applied the update.
+ *
+ * When auto-relaunch IS on, a `ready` patch that is currently blocked by the
+ * idle/busy policy still counts as imminent: the poller applies it once the app
+ * goes idle, and the following cold boot is up to date and ungated.
+ */
+export function isUpdateRelaunchImminent(): boolean {
+  // Already committed — the updater is spawning / windows are tearing down.
+  if (isRelaunching || autoRelaunchInProgress) return true;
+  // Nothing staged or being staged can relaunch us.
+  if (currentStatus !== 'downloading' && currentStatus !== 'ready') return false;
+  // The native updater replaces the *installed* app; it never runs in dev.
+  if (isDev()) return false;
+  // Respecting the user's switch: with auto-relaunch off the patch just sits
+  // there until they click the banner, which is not "imminent".
+  return readAutoUpdateSettings().autoRelaunchOnIdle;
 }
 
 export function setUpdateAutoRelaunchBusyProbe(
@@ -985,6 +1016,9 @@ function forceQuit(): void {
   // 绕过 onQuit 链意味着 disposeAndroidAdb 不会被自动调用——显式 fire-and-forget
   // 收掉自带 adb server,避免它锁住安装目录阻碍 updater 替换文件。
   disposeAndroidAdb();
+  // build_app uses detached process groups, so parent exit does not reliably
+  // reap xcodebuild. Abort synchronously before process.exit bypasses Host dispose.
+  abortIOSSimulatorOperationsForExit();
   // Node 子进程同理——before-quit 的 destroyAll 不会触发,这里同步 kill。
   try { getGhostNodeRuntimeBroker().destroyAll(); } catch { /* best-effort */ }
   for (const win of BrowserWindow.getAllWindows()) {

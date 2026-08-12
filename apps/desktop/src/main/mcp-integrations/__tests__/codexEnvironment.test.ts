@@ -106,22 +106,41 @@ describe('codexEnvironment', () => {
     expect(firstUrl.origin).toBe(secondUrl.origin);
     expect(firstUrl.pathname).toBe('/mcp/cindy_test');
     expect(secondUrl.pathname).toBe('/mcp/cindy_test');
+
+    expect(first.buildSessionMcpConfig).toBeTypeOf('function');
+    const boundConfig = first.buildSessionMcpConfig!('instance-1');
+    const boundUrl = new URL(boundConfig['mcp_servers.cindy_test.url'] as string);
+    expect(boundUrl.origin).toBe(firstUrl.origin);
+    expect(boundUrl.pathname).toBe('/mcp/cindy_test');
+    expect(boundUrl.searchParams.get('instance')).toBe('instance-1');
+    expect(boundUrl.searchParams.has('session')).toBe(false);
+
+    const replacementUrl = new URL(
+      first.buildSessionMcpConfig!('instance-2')['mcp_servers.cindy_test.url'] as string,
+    );
+    expect(replacementUrl.searchParams.get('instance')).toBe('instance-2');
+    expect(replacementUrl.toString()).not.toBe(boundUrl.toString());
   });
 
-  it('preserves a thread disabled-tool policy across context re-registration', async () => {
+  it('freezes policy within one session instance but replaces it on thread rebinding', async () => {
     const cfg = await getCodexExtraSpawnConfig({
       mcpProviders: [testProvider()],
       logger: noopLogger(),
     });
     const register = vi.spyOn(cfg.bridge!, 'registerThreadContext');
+    const unregister = vi.spyOn(cfg.bridge!, 'unregisterThreadContext');
 
     registerCodexMcpThreadContext('thread-1', {
       agentKind: 'codex',
+      sessionInstanceId: 'instance-old',
       workingDir: '/project',
       vendorOptions: { [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['cindy-ssh'] },
+      mcpCallerKind: 'descendant',
+      mcpCallerAttested: true,
     });
     registerCodexMcpThreadContext('thread-1', {
       agentKind: 'codex',
+      sessionInstanceId: 'instance-old',
       workingDir: '/project',
       vendorOptions: { [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: [] },
     });
@@ -129,12 +148,159 @@ describe('codexEnvironment', () => {
     expect(register).toHaveBeenLastCalledWith(
       'thread-1',
       expect.objectContaining({
+        mcpCallerKind: 'descendant',
+        mcpCallerAttested: true,
         vendorOptions: expect.objectContaining({
           [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['cindy-ssh'],
         }),
       }),
     );
-    unregisterCodexMcpThreadContext('thread-1');
+
+    registerCodexMcpThreadContext('thread-1', {
+      agentKind: 'codex',
+      sessionInstanceId: 'instance-new',
+      workingDir: '/project',
+      vendorOptions: { [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: [] },
+      mcpCallerKind: 'descendant',
+      mcpCallerAttested: true,
+    });
+    expect(register).toHaveBeenLastCalledWith(
+      'thread-1',
+      expect.objectContaining({
+        sessionInstanceId: 'instance-new',
+        mcpCallerKind: 'descendant',
+        mcpCallerAttested: true,
+        vendorOptions: expect.objectContaining({
+          [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: [],
+        }),
+      }),
+    );
+
+    unregisterCodexMcpThreadContext('thread-1', 'instance-old');
+    expect(unregister).not.toHaveBeenCalled();
+    unregisterCodexMcpThreadContext('thread-1', 'instance-new');
+    expect(unregister).toHaveBeenCalledWith('thread-1', 'instance-new');
+  });
+
+  it('does not carry provenance into a new session instance and preserves explicit unknown/false', async () => {
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [testProvider()],
+      logger: noopLogger(),
+    });
+    const register = vi.spyOn(cfg.bridge!, 'registerThreadContext');
+
+    registerCodexMcpThreadContext('thread-provenance', {
+      agentKind: 'codex',
+      sessionInstanceId: 'instance-old',
+      workingDir: '/project',
+      mcpCallerKind: 'descendant',
+      mcpCallerAttested: true,
+    });
+    registerCodexMcpThreadContext('thread-provenance', {
+      agentKind: 'codex',
+      sessionInstanceId: 'instance-new',
+      workingDir: '/project',
+    });
+    expect(register).toHaveBeenLastCalledWith(
+      'thread-provenance',
+      expect.objectContaining({
+        sessionInstanceId: 'instance-new',
+        mcpCallerKind: undefined,
+        mcpCallerAttested: undefined,
+      }),
+    );
+
+    registerCodexMcpThreadContext('thread-provenance', {
+      agentKind: 'codex',
+      sessionInstanceId: 'instance-new',
+      workingDir: '/project',
+      mcpCallerKind: 'unknown',
+      mcpCallerAttested: false,
+    });
+    registerCodexMcpThreadContext('thread-provenance', {
+      agentKind: 'codex',
+      sessionInstanceId: 'instance-new',
+      workingDir: '/project',
+    });
+    expect(register).toHaveBeenLastCalledWith(
+      'thread-provenance',
+      expect.objectContaining({
+        mcpCallerKind: 'unknown',
+        mcpCallerAttested: false,
+      }),
+    );
+  });
+
+  it('clears provenance on unregister so a reused thread starts unknown', async () => {
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [testProvider()],
+      logger: noopLogger(),
+    });
+    const register = vi.spyOn(cfg.bridge!, 'registerThreadContext');
+    const unregister = vi.spyOn(cfg.bridge!, 'unregisterThreadContext');
+
+    registerCodexMcpThreadContext('thread-reused', {
+      agentKind: 'codex',
+      sessionInstanceId: 'instance-old',
+      workingDir: '/project',
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
+    });
+    unregisterCodexMcpThreadContext('thread-reused', 'instance-old');
+    registerCodexMcpThreadContext('thread-reused', {
+      agentKind: 'codex',
+      sessionInstanceId: 'instance-new',
+      workingDir: '/project',
+    });
+
+    expect(unregister).toHaveBeenCalledWith('thread-reused', 'instance-old');
+    expect(register).toHaveBeenLastCalledWith(
+      'thread-reused',
+      expect.objectContaining({
+        sessionInstanceId: 'instance-new',
+        mcpCallerKind: undefined,
+        mcpCallerAttested: undefined,
+      }),
+    );
+  });
+
+  it('does not let an old unregister clear a new provenance generation without vendor policy', async () => {
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [testProvider()],
+      logger: noopLogger(),
+    });
+    const register = vi.spyOn(cfg.bridge!, 'registerThreadContext');
+    const unregister = vi.spyOn(cfg.bridge!, 'unregisterThreadContext');
+
+    registerCodexMcpThreadContext('thread-generation', {
+      agentKind: 'codex',
+      sessionInstanceId: 'instance-old',
+      workingDir: '/project',
+      mcpCallerKind: 'descendant',
+      mcpCallerAttested: true,
+    });
+    registerCodexMcpThreadContext('thread-generation', {
+      agentKind: 'codex',
+      sessionInstanceId: 'instance-new',
+      workingDir: '/project',
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
+    });
+
+    unregisterCodexMcpThreadContext('thread-generation', 'instance-old');
+    expect(unregister).not.toHaveBeenCalled();
+    registerCodexMcpThreadContext('thread-generation', {
+      agentKind: 'codex',
+      sessionInstanceId: 'instance-new',
+      workingDir: '/project',
+    });
+    expect(register).toHaveBeenLastCalledWith(
+      'thread-generation',
+      expect.objectContaining({
+        mcpCallerKind: 'root',
+        mcpCallerAttested: true,
+      }),
+    );
   });
 
   it('Slack 在 bridge 启动后完成绑定时，清缓存会按最新 provider gate 重建', async () => {

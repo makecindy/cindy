@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, lt, ne, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
 import { getDbClient } from '../localDb/client/current';
@@ -34,8 +34,13 @@ function defaultDb(): LedgerDb {
 /**
  * 引用方类型(多态引用,详见 schema.ts mediaRefs 注释)。
  * 'ghost-grant':用户显式引渡给某意识的图(随 ghost_call attachments
- * 过户 / 拖进面板)——授权按张、永久,refId = 意识 id;与画廊 ref 一样计入
- * 归属校验(ghostCanRead)与"不被回收"。
+ * 人工确认 / 拖进面板)——授权按张、永久,refId = 意识 id;与画廊 ref 一样
+ * 计入归属校验(ghostCanRead)与"不被回收"。
+ * 'ghost-tool-grant':Host 按工具权限代办的媒体交接(workdir 内直通、Full
+ * Access 自动交接、工具出生的聊天附件等),refId = 意识 id。它同样让意识
+ * 能按指纹取件,但**绝不**表示用户点过永久授权。刻意使用独立 refKind 而不是
+ * 只靠 originKind 区分:旧客户端的授权 shortcut 只认识 ghost-grant,回退后
+ * 会 fail closed，不会把新版自动交接误当成人工永久授权。
  * 'ghost-deposit':意识经 cindy 槽 deposit_media 寄存的媒体(用户在插件面板里
  * 粘贴/拖入的图等,makecindy/cindy#784),refId = 意识 id。与 gallery / grant
  * 一样计入归属校验与"不被回收",但**刻意独立成一类**,原因有三:
@@ -60,6 +65,7 @@ export type MediaRefKind =
   | 'im-inbox'
   | 'ghost-gallery'
   | 'ghost-grant'
+  | 'ghost-tool-grant'
   | 'ghost-deposit'
   | 'import'
   | 'integration-cache'
@@ -77,6 +83,8 @@ export interface RecordBlobParams {
 }
 
 export interface AddRefParams {
+  /** Stable row id supplied by staged writers so a lost commit acknowledgement can be rolled back. */
+  id?: string;
   hash: string;
   refKind: MediaRefKind;
   refId: string;
@@ -94,10 +102,14 @@ export interface AddRefParams {
  * 用户附件的 blob 当可再生缓存清掉(review P1);反向(false→true)不升,
  * 已有非 cache 引用的内容不因后来的缓存写入而变得可清。
  */
-export async function recordBlob(params: RecordBlobParams, db: LedgerDb = defaultDb()): Promise<void> {
+export async function recordBlob(
+  params: RecordBlobParams,
+  db: LedgerDb = defaultDb(),
+): Promise<void> {
   const now = Date.now();
   const isCache = params.isCache ?? false;
-  await db.insert(mediaBlobs)
+  await db
+    .insert(mediaBlobs)
     .values({
       hash: params.hash,
       ext: params.ext,
@@ -136,8 +148,9 @@ export async function addRef(params: AddRefParams, db: LedgerDb = defaultDb()): 
   if (params.refKind === 'message' && !params.originSessionId) {
     throw new Error('cindy-media: message ref requires originSessionId');
   }
-  const id = randomUUID();
-  await db.insert(mediaRefs)
+  const id = params.id ?? randomUUID();
+  await db
+    .insert(mediaRefs)
     .values({
       id,
       hash: params.hash,
@@ -179,7 +192,41 @@ export async function getIntegrationCacheHash(
 
 /** 某指纹在某引用方名下是否已有引用(commit 幂等去重用,避免重发消息刷重复行)。 */
 export async function hasRef(
-  params: { hash: string; refKind: MediaRefKind; refId: string },
+  params: {
+    hash: string;
+    refKind: MediaRefKind;
+    refId: string;
+    /** Optional provenance filter; omit to preserve the historical any-origin query. */
+    originKind?: MediaOriginKind;
+  },
+  db: LedgerDb = defaultDb(),
+): Promise<boolean> {
+  const predicates = [
+    eq(mediaRefs.hash, params.hash),
+    eq(mediaRefs.refKind, params.refKind),
+    eq(mediaRefs.refId, params.refId),
+  ];
+  if (params.originKind !== undefined) {
+    predicates.push(eq(mediaRefs.originKind, params.originKind));
+  }
+  const rows = await db
+    .select({ one: sql`1` })
+    .from(mediaRefs)
+    .where(and(...predicates))
+    .limit(1)
+    .all();
+  return rows.length > 0;
+}
+
+/**
+ * 某意识是否已有 Host 工具代办的附件交接记录。
+ *
+ * 新版使用独立的 ghost-tool-grant/tool；旧版曾把同一语义写成
+ * ghost-grant/tool。两者都只能作为工具 provenance 使用，不能被当成
+ * ghost-grant/user 的人工永久授权。集中兼容旧行，避免各调用点漏判或扩权。
+ */
+export async function hasGhostToolGrant(
+  params: { hash: string; ghostId: string },
   db: LedgerDb = defaultDb(),
 ): Promise<boolean> {
   const rows = await db
@@ -188,8 +235,9 @@ export async function hasRef(
     .where(
       and(
         eq(mediaRefs.hash, params.hash),
-        eq(mediaRefs.refKind, params.refKind),
-        eq(mediaRefs.refId, params.refId),
+        eq(mediaRefs.refId, params.ghostId),
+        eq(mediaRefs.originKind, 'tool'),
+        or(eq(mediaRefs.refKind, 'ghost-tool-grant'), eq(mediaRefs.refKind, 'ghost-grant')),
       ),
     )
     .limit(1)
@@ -199,27 +247,52 @@ export async function hasRef(
 
 /**
  * 删会话的引用清理(会话删除钩子唯一入口):
- *   - session-attachment / import:refId 就是会话 id,直接删;
+ *   - session-attachment:新格式 refId 就是会话 id；兼容旧 Simulator
+ *     复合 refId，额外按 originSessionId 连坐删；
+ *   - import:refId 就是会话 id,直接删;
  *   - message:refId 是消息 id,按出生会话(originSessionId)连坐删——
  *     会话没了,它名下消息的引用自然一起走;
- *   - **绝不**碰 ghost-gallery / ghost-grant / ghost-deposit:画廊/引渡/寄存
- *     是跨会话的持久引用,"删会话作品不陪葬"正是靠这几类 ref 存活
+ *   - **绝不**碰 ghost-gallery / ghost-grant / ghost-tool-grant /
+ *     ghost-deposit:画廊/引渡/工具交接/寄存是跨会话的持久引用,
+ *     "删会话作品不陪葬"正是靠这几类 ref 存活
  *     (寄存物同理:画布上的图不该因为删了某个会话就变得不能改)。
  * 引用删完后引用归零的 blob 交回收器,本函数不动字节仓。
  */
+function sessionOwnedRefCondition(sessionId: string) {
+  return or(
+    and(
+      eq(mediaRefs.refKind, 'session-attachment'),
+      or(eq(mediaRefs.refId, sessionId), eq(mediaRefs.originSessionId, sessionId)),
+    ),
+    and(eq(mediaRefs.refKind, 'import'), eq(mediaRefs.refId, sessionId)),
+    and(eq(mediaRefs.refKind, 'message'), eq(mediaRefs.originSessionId, sessionId)),
+  );
+}
+
 export async function removeSessionRefs(
   sessionId: string,
   db: LedgerDb = defaultDb(),
 ): Promise<number> {
+  const result = await db.delete(mediaRefs).where(sessionOwnedRefCondition(sessionId)).run();
+  return result.changes;
+}
+
+/**
+ * Delete session-owned refs only while the same stable DB still records the
+ * task as deleted. The EXISTS guard and DELETE share one SQLite statement, so
+ * restore/archive cannot race a separate status read and lose valid media.
+ */
+export async function removeSessionRefsIfDeleted(
+  sessionId: string,
+  db: LedgerDb = defaultDb(),
+): Promise<number> {
+  const deletedSession = db
+    .select({ id: schema.sessions.id })
+    .from(schema.sessions)
+    .where(and(eq(schema.sessions.id, sessionId), eq(schema.sessions.status, 'deleted')));
   const result = await db
     .delete(mediaRefs)
-    .where(
-      or(
-        and(eq(mediaRefs.refKind, 'session-attachment'), eq(mediaRefs.refId, sessionId)),
-        and(eq(mediaRefs.refKind, 'import'), eq(mediaRefs.refId, sessionId)),
-        and(eq(mediaRefs.refKind, 'message'), eq(mediaRefs.originSessionId, sessionId)),
-      ),
-    )
+    .where(and(sessionOwnedRefCondition(sessionId), exists(deletedSession)))
     .run();
   return result.changes;
 }
@@ -261,8 +334,40 @@ export async function removeRefs(
 }
 
 /**
+ * Remove one session-attachment ref only when no live message in that session
+ * still contains the blob hash.  The predicate is part of the DELETE so a
+ * concurrent message commit cannot turn a read-then-delete check into data
+ * loss; at worst a later commit recreates the coarse session ref.
+ */
+export async function removeSessionAttachmentRefIfUnreferencedByLiveMessage(
+  params: { sessionId: string; hash: string },
+  db: LedgerDb = defaultDb(),
+): Promise<number> {
+  if (!/^[0-9a-f]{64}$/.test(params.hash)) return 0;
+  const result = await db
+    .delete(mediaRefs)
+    .where(
+      and(
+        eq(mediaRefs.refKind, 'session-attachment'),
+        eq(mediaRefs.refId, params.sessionId),
+        eq(mediaRefs.hash, params.hash),
+        sql`NOT EXISTS (
+          SELECT 1
+            FROM messages
+           WHERE messages.session_id = ${params.sessionId}
+             AND messages.rewind_at IS NULL
+             AND messages.content LIKE ${`%${params.hash}%`}
+        )`,
+      ),
+    )
+    .run();
+  return result.changes;
+}
+
+/**
  * 意识面板供图归属校验:该指纹「出生自本意识」「挂在本意识画廊」「用户
- * 显式引渡给本意识(ghost-grant)」或「本意识寄存的(ghost-deposit)」才放行。
+ * 显式引渡给本意识(ghost-grant)」「Host 代办交接给本意识
+ * (ghost-tool-grant)」或「本意识寄存的(ghost-deposit)」才放行。
  * 查无此账 = 拒(不区分"不存在"与"不属于你",不给探测空间)。
  *
  * 寄存计入本校验正是 #784 要买的东西:用户粘进面板的图寄存后与生成图同权,
@@ -284,6 +389,7 @@ export async function ghostCanRead(
           and(eq(mediaRefs.originKind, 'ghost'), eq(mediaRefs.originId, ghostId)),
           and(eq(mediaRefs.refKind, 'ghost-gallery'), eq(mediaRefs.refId, ghostId)),
           and(eq(mediaRefs.refKind, 'ghost-grant'), eq(mediaRefs.refId, ghostId)),
+          and(eq(mediaRefs.refKind, 'ghost-tool-grant'), eq(mediaRefs.refId, ghostId)),
           and(eq(mediaRefs.refKind, 'ghost-deposit'), eq(mediaRefs.refId, ghostId)),
         ),
       ),
@@ -386,7 +492,9 @@ export async function listZeroRefBlobs(
       lastAccessAt: mediaBlobs.lastAccessAt,
     })
     .from(mediaBlobs)
-    .where(and(lt(mediaBlobs.createdAt, cutoffMs), lt(mediaBlobs.lastAccessAt, cutoffMs), noRefsExist()))
+    .where(
+      and(lt(mediaBlobs.createdAt, cutoffMs), lt(mediaBlobs.lastAccessAt, cutoffMs), noRefsExist()),
+    )
     .all();
 }
 

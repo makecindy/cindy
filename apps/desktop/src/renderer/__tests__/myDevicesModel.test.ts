@@ -4,6 +4,7 @@ import {
   canBeControlledPlatform,
   controlToggleState,
   inboundToggleState,
+  resolveActiveConnectionIssue,
 } from '@/components/settings/myDevicesModel';
 
 describe('canBeControlledPlatform（手机不展示「我控制它」）', () => {
@@ -59,5 +60,15 @@ describe('inboundToggleState（允许它控制本机）', () => {
   it('总开关关 → 置灰(黑名单值照旧反映)', () => {
     expect(inboundToggleState(false, false)).toEqual({ checked: true, disabled: true });
     expect(inboundToggleState(false, true)).toEqual({ checked: false, disabled: true });
+  });
+});
+
+describe('resolveActiveConnectionIssue（本机卡片的原因行）', () => {
+  it('普通 issue 在 online 后隐藏,unstable 即使 online 仍显示', () => {
+    const authFailed = { kind: 'auth-failed' as const };
+    const unstable = { kind: 'unstable' as const };
+    expect(resolveActiveConnectionIssue('connecting', authFailed)).toBe(authFailed);
+    expect(resolveActiveConnectionIssue('online', authFailed)).toBeNull();
+    expect(resolveActiveConnectionIssue('online', unstable)).toBe(unstable);
   });
 });

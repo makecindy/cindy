@@ -79,6 +79,8 @@ export interface RsbWebviewBackendOptions {
    * RsbWebviewArtifacts' bounded two-second default.
    */
   artifactDownloadGraceMs?: number;
+  /** Maximum time a backend switch waits for owned cleanup + in-flight calls. */
+  disposeGraceMs?: number;
   resolveUploadRoots?: (sessionId: string) => Promise<string[]>;
   /**
    * Timing overrides for the detached-window tab re-registration wait (tests
@@ -100,6 +102,9 @@ export interface RsbWebviewBackendOptions {
 const TAB_REATTACH_TOTAL_MS = 5000;
 const TAB_REATTACH_POLL_MS = 250;
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
+const DEFAULT_DISPOSE_GRACE_MS = 1_500;
+const RESTARTING_MESSAGE =
+  'embedded browser control is restarting; retry shortly. If this persists, open Settings > Automation and choose one-click recovery';
 
 /**
  * Standard error payload for an action we can't service. Keeps the shape
@@ -109,11 +114,12 @@ const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
 function actionFailed(
   action: BrowserControlRequest['action'],
   message: string,
+  errorCode: BrowserControlResult['errorCode'] = 'BROWSER_RUNTIME_ACTION_FAILED',
 ): BrowserControlResult {
   return {
     ok: false,
     action,
-    errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+    errorCode,
     message,
   };
 }
@@ -161,24 +167,39 @@ async function loadUrlWithTimeout(
   wc: WebContents,
   url: string,
   timeoutMs: number,
+  signal: AbortSignal,
 ): Promise<void> {
+  if (signal.aborted) throw new Error('embedded browser control generation was replaced');
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const stopNavigation = () => {
+    try {
+      wc.stop();
+    } catch {
+      // The guest may already be gone.
+    }
+  };
+  let rejectAbort: ((err: Error) => void) | undefined;
+  const abort = () => {
+    stopNavigation();
+    rejectAbort?.(new Error('embedded browser control generation was replaced'));
+  };
   try {
     await Promise.race([
       wc.loadURL(url),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
-          try {
-            wc.stop();
-          } catch {
-            // The guest may already be gone; the timeout must still settle.
-          }
+          stopNavigation();
           reject(new Error(`navigation timed out after ${timeoutMs}ms`));
         }, timeoutMs);
+      }),
+      new Promise<never>((_resolve, reject) => {
+        rejectAbort = reject;
+        signal.addEventListener('abort', abort, { once: true });
       }),
     ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+    signal.removeEventListener('abort', abort);
   }
 }
 
@@ -190,7 +211,11 @@ export class RsbWebviewBackend implements BrowserBackend {
   private readonly network: RsbWebviewNetwork;
   private readonly activity: BrowserActivity[] = [];
   private readonly activeCalls = new Set<Promise<BackendResult>>();
+  private readonly backgroundCalls = new Set<Promise<unknown>>();
+  private readonly pinLeases = new Set<() => void>();
+  private readonly lifecycleAbort = new AbortController();
   private disposing = false;
+  private disposePromise: Promise<void> | null = null;
 
   constructor(private readonly opts: RsbWebviewBackendOptions) {
     this.automation = new RsbWebviewAutomation(opts.logger);
@@ -217,10 +242,17 @@ export class RsbWebviewBackend implements BrowserBackend {
   }
 
   async call(request: BackendRequest): Promise<BackendResult> {
-    if (this.disposing) return actionFailed(request.action, 'browser backend is disposing');
+    if (this.disposing) {
+      return actionFailed(
+        request.action,
+        RESTARTING_MESSAGE,
+        'BROWSER_RUNTIME_UNAVAILABLE',
+      );
+    }
     const operation = (async (): Promise<BackendResult> => {
       try {
         const result = await this.dispatch(request);
+        this.assertActive();
         this.recordActivity(request, result.ok);
         return result;
       } catch (err) {
@@ -230,7 +262,14 @@ export class RsbWebviewBackend implements BrowserBackend {
         });
         const result = actionFailed(
           request.action,
-          err instanceof Error ? err.message : String(err),
+          this.disposing
+            ? RESTARTING_MESSAGE
+            : err instanceof Error
+              ? err.message
+              : String(err),
+          this.disposing
+            ? 'BROWSER_RUNTIME_UNAVAILABLE'
+            : 'BROWSER_RUNTIME_ACTION_FAILED',
         );
         this.recordActivity(request, false);
         return result;
@@ -245,16 +284,76 @@ export class RsbWebviewBackend implements BrowserBackend {
   }
 
   async dispose(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise;
     this.disposing = true;
-    await Promise.allSettled([...this.activeCalls]);
-    // Switching backends never closes the user's tabs. Only the listeners and
-    // debugger attachments owned by this backend are released.
-    await this.artifacts?.dispose();
-    this.dialogs.dispose();
-    this.network.dispose();
+    this.lifecycleAbort.abort();
+    this.disposePromise = this.performDispose();
+    return this.disposePromise;
+  }
+
+  private async performDispose(): Promise<void> {
+    // Switching backends never closes the user's tabs. Only listeners,
+    // captures and debugger attachments owned by this backend are released.
+    // Clean them first so bounded dialog/network/download waits are nudged to
+    // settle; helper instances are terminal and refuse to re-observe after it.
+    const shutdown = (async () => {
+      const cleanup = await Promise.allSettled([
+        Promise.resolve().then(() => this.automation.dispose()),
+        Promise.resolve().then(() => this.artifacts?.dispose()),
+        Promise.resolve().then(() => this.dialogs.dispose()),
+        Promise.resolve().then(() => this.network.dispose()),
+        Promise.resolve().then(() => this.releasePinLeases()),
+      ]);
+      for (const result of cleanup) {
+        if (result.status === 'rejected') {
+          this.opts.logger.warn('rsb-webview backend cleanup failed during dispose', result.reason);
+        }
+      }
+      await Promise.allSettled([
+        ...this.activeCalls,
+        ...this.backgroundCalls,
+      ]);
+    })();
+
+    const graceMs = Math.max(0, this.opts.disposeGraceMs ?? DEFAULT_DISPOSE_GRACE_MS);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const completed = await Promise.race([
+      shutdown.then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), graceMs);
+        timer.unref?.();
+      }),
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
+    if (!completed) {
+      this.opts.logger.warn('rsb-webview backend dispose grace elapsed; replacement may continue', {
+        graceMs,
+        activeCalls: this.activeCalls.size,
+        backgroundCalls: this.backgroundCalls.size,
+      });
+    }
   }
 
   // ── dispatch ──────────────────────────────────────────────────────────────
+
+  /** Health handshake across main → preload → renderer. */
+  async probeControl(options: { ensureHost?: boolean } = {}): Promise<void> {
+    this.assertActive();
+    const result = await dispatchTabOp(
+      { op: 'probe' },
+      this.opts.bridge,
+      () => this.assertActive(),
+      { ensureHost: options.ensureHost === true },
+    );
+    this.assertActive();
+    if (!result.ok) throw new Error(result.error);
+  }
+
+  private assertActive(): void {
+    if (this.disposing) {
+      throw new Error('embedded browser control generation was replaced');
+    }
+  }
 
   private async dispatch(request: BackendRequest): Promise<BackendResult> {
     switch (request.action) {
@@ -378,11 +477,12 @@ export class RsbWebviewBackend implements BrowserBackend {
     const result = await dispatchTabOp(
       { op: 'open', sessionId, url },
       this.opts.bridge,
+      () => this.assertActive(),
     );
     if (!result.ok) {
       return actionFailed(req.action, result.error);
     }
-    if (result.tabId) void this.observeOpenedTab(result.tabId);
+    if (result.tabId) this.trackBackground(this.observeOpenedTab(result.tabId));
     return actionOk(req.action, {
       targetId: result.tabId,
       tabId: result.tabId,
@@ -399,6 +499,7 @@ export class RsbWebviewBackend implements BrowserBackend {
     const result = await dispatchTabOp(
       { op: 'focus', sessionId, tabId },
       this.opts.bridge,
+      () => this.assertActive(),
     );
     if (!result.ok) return actionFailed(req.action, result.error);
     return actionOk(req.action, { tabId });
@@ -414,6 +515,7 @@ export class RsbWebviewBackend implements BrowserBackend {
     const result = await dispatchTabOp(
       { op: 'close', sessionId, tabId },
       this.opts.bridge,
+      () => this.assertActive(),
     );
     if (!result.ok) return actionFailed(req.action, result.error);
     this.automation.forgetTab(tabId);
@@ -432,10 +534,12 @@ export class RsbWebviewBackend implements BrowserBackend {
     return this.withTabPin(tabId, async () => {
       this.automation.forgetTab(tabId);
       await this.tryObservePageSignals(resolved.wc, tabId);
+      this.assertActive();
       await loadUrlWithTimeout(
         resolved.wc,
         url,
         req.timeoutMs ?? DEFAULT_NAVIGATION_TIMEOUT_MS,
+        this.lifecycleAbort.signal,
       );
       return actionOk(req.action, { tabId, url });
     });
@@ -466,15 +570,28 @@ export class RsbWebviewBackend implements BrowserBackend {
   private async handleScreenshot(req: BackendRequest): Promise<BackendResult> {
     const tabId = await this.resolveDirectActionTarget(req);
     if (!tabId) return actionFailed(req.action, 'targetId required');
+    if (req.fullPage) {
+      // The RSB webview backend captures the guest WebContents viewport only;
+      // full-page capture is not implemented here. Reject explicitly instead of
+      // silently returning a viewport crop (matches the vendored runtime's
+      // "explicitly reject unsupported params" contract).
+      return actionFailed(
+        req.action,
+        'fullPage is not supported by the RSB webview backend (captures the visible viewport only)',
+      );
+    }
     const resolved = await this.resolveTabForDirectAction(req, tabId);
     if (!resolved.ok) return resolved.result;
     return this.withTabPin(tabId, async () => {
       const image = await resolved.wc.capturePage();
-      const buffer = image.toPNG();
+      // Honor `type` instead of always encoding PNG: JPEG via toJPEG(85),
+      // matching the CDP path's default quality. MIME/bytes follow the buffer.
+      const type = req.type === 'jpeg' ? 'jpeg' : 'png';
+      const buffer = type === 'jpeg' ? image.toJPEG(85) : image.toPNG();
       return actionOk(req.action, {
         tabId,
-        mimeType: 'image/png',
-        // Base64-encoded PNG — same shape the vendored runtime returns for
+        mimeType: type === 'jpeg' ? 'image/jpeg' : 'image/png',
+        // Base64-encoded image — same shape the vendored runtime returns for
         // `screenshot` so MCP callers don't need to know which backend ran.
         data: buffer.toString('base64'),
         bytes: buffer.length,
@@ -624,6 +741,7 @@ export class RsbWebviewBackend implements BrowserBackend {
         }
         const actionPromise = this.automation.act(tabId, wc, automationRequest, {
           nativeKeyDispatch: async (type, keyCode, modifiers) => {
+            this.assertActive();
             const sendInputEvent = (wc as unknown as {
               sendInputEvent?: (event: {
                 type: 'keyDown' | 'keyUp';
@@ -633,6 +751,7 @@ export class RsbWebviewBackend implements BrowserBackend {
             }).sendInputEvent;
             if (!sendInputEvent) throw new Error('native keyboard input is unavailable');
             sendInputEvent({ type, keyCode, modifiers });
+            this.assertActive();
           },
           waitForNetworkIdle: (timeoutMs) => this.network.waitForIdle(wc, { timeoutMs }),
         });
@@ -681,10 +800,10 @@ export class RsbWebviewBackend implements BrowserBackend {
             err,
           });
         });
-        retainTabPin();
+        const releaseRetainedPin = retainTabPin();
         void actionPromise.then(
-          () => this.opts.registry.unpin(tabId),
-          () => this.opts.registry.unpin(tabId),
+          releaseRetainedPin,
+          releaseRetainedPin,
         );
         return {
           tabId,
@@ -885,6 +1004,7 @@ export class RsbWebviewBackend implements BrowserBackend {
     wc: WebContents,
     tabId: string,
   ): Promise<ReturnType<RsbWebviewDialogs['watchOpening']> | undefined> {
+    if (this.disposing) return undefined;
     try {
       await this.dialogs.observe(wc);
       return this.dialogs.watchOpening(wc);
@@ -897,6 +1017,7 @@ export class RsbWebviewBackend implements BrowserBackend {
   }
 
   private async tryObserveNetwork(wc: WebContents, tabId: string): Promise<void> {
+    if (this.disposing) return;
     try {
       await this.network.observe(wc);
     } catch (err) {
@@ -907,7 +1028,9 @@ export class RsbWebviewBackend implements BrowserBackend {
   }
 
   private async tryObservePageSignals(wc: WebContents, tabId: string): Promise<void> {
+    if (this.disposing) return;
     await this.tryObserveNetwork(wc, tabId);
+    if (this.disposing) return;
     try {
       await this.dialogs.observe(wc);
     } catch (err) {
@@ -924,6 +1047,7 @@ export class RsbWebviewBackend implements BrowserBackend {
     try {
       const deadline = Date.now() + 2_000;
       for (;;) {
+        if (this.disposing) return;
         const wc = this.opts.registry.getWebContentsByTabId(tabId);
         if (wc) {
           await this.tryObservePageSignals(wc, tabId);
@@ -945,6 +1069,14 @@ export class RsbWebviewBackend implements BrowserBackend {
     }
   }
 
+  private trackBackground(operation: Promise<unknown>): void {
+    this.backgroundCalls.add(operation);
+    void operation.then(
+      () => this.backgroundCalls.delete(operation),
+      () => this.backgroundCalls.delete(operation),
+    );
+  }
+
   /**
    * Per-action automation pin. Wraps an action body so the targeted tab is
    * pinned (LRU eviction skips it, see browserWebviewPool.evictLRU + the
@@ -963,26 +1095,45 @@ export class RsbWebviewBackend implements BrowserBackend {
    *     "tab not found / destroyed" error rather than holding the tab alive
    *     forever.
    *
-   * Concurrency: `TabRegistry.pin` is set semantics, NOT refcount. If two
-   * agent actions race against the same tabId (rare — agent calls are
-   * typically serial through a single MCP channel), the inner unpin will
-   * drop the pin while the outer action is still running. Treat that as
-   * acceptable until real concurrent use-cases emerge, then upgrade to
-   * refcount.
+   * Concurrency: each action owns a token-scoped registry lease. Concurrent
+   * calls and replacement backend generations can release only their own
+   * token, so a late finally cannot unpin another live operation.
    */
   private async withTabPin<T>(
     tabId: string,
-    body: (retainTabPin: () => void) => Promise<T>,
+    body: (retainTabPin: () => (() => void)) => Promise<T>,
   ): Promise<T> {
-    this.opts.registry.pin(tabId);
+    this.assertActive();
+    const releasePin = this.acquireTabPin(tabId);
     let retained = false;
     try {
-      return await body(() => {
+      this.assertActive();
+      const result = await body(() => {
         retained = true;
+        return releasePin;
       });
+      this.assertActive();
+      return result;
     } finally {
-      if (!retained) this.opts.registry.unpin(tabId);
+      if (!retained) releasePin();
     }
+  }
+
+  private acquireTabPin(tabId: string): () => void {
+    const releaseRegistryPin = this.opts.registry.acquirePinLease(tabId);
+    let active = true;
+    const release = () => {
+      if (!active) return;
+      active = false;
+      this.pinLeases.delete(release);
+      releaseRegistryPin();
+    };
+    this.pinLeases.add(release);
+    return release;
+  }
+
+  private releasePinLeases(): void {
+    for (const release of [...this.pinLeases]) release();
   }
 
   /**
@@ -1031,7 +1182,12 @@ export class RsbWebviewBackend implements BrowserBackend {
     const sessionId = this.resolveSessionId(req);
     if (!sessionId) return null;
     try {
-      const ensured = await dispatchTabOp({ op: 'ensure', sessionId }, this.opts.bridge);
+      const ensured = await dispatchTabOp(
+        { op: 'ensure', sessionId },
+        this.opts.bridge,
+        () => this.assertActive(),
+      );
+      this.assertActive();
       if (ensured.ok && typeof ensured.tabId === 'string') return ensured.tabId;
     } catch (err) {
       this.opts.logger.warn('targetless ensure tab-op failed', {
@@ -1072,7 +1228,9 @@ export class RsbWebviewBackend implements BrowserBackend {
     const ensureHost = this.opts.bridge.ensureHost;
     if (ensureHost) {
       try {
+        this.assertActive();
         await ensureHost();
+        this.assertActive();
       } catch (err) {
         // Window failed to come up (ready timeout etc.) — fall through, the
         // resolve below surfaces the concrete tab error to the agent.
@@ -1097,7 +1255,9 @@ export class RsbWebviewBackend implements BrowserBackend {
         const ensured = await dispatchTabOp(
           { op: 'ensure', sessionId, tabId },
           this.opts.bridge,
+          () => this.assertActive(),
         );
+        this.assertActive();
         if (!ensured.ok) return resolved;
       } catch (err) {
         // Dispatch timeout / host teardown — the renderer may still be
@@ -1117,6 +1277,7 @@ export class RsbWebviewBackend implements BrowserBackend {
     const deadline = Date.now() + wait.totalMs;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, wait.pollMs));
+      this.assertActive();
       resolved = this.resolveTabInActiveSession(req, tabId);
       if (resolved.ok) return resolved;
     }

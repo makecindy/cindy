@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const undiciFetchMock = vi.fn();
-vi.mock('undici', () => ({
-  fetch: (...args: unknown[]) => undiciFetchMock(...args),
-  Agent: class { /* no-op stub */ },
-}));
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    fetch: (...args: unknown[]) => undiciFetchMock(...args),
+  };
+});
 
 import { LiteLlmTextModelClient } from '../LiteLlmTextModelClient.js';
 import { isRefinerModelOutputError } from '../refinerErrorKind.js';

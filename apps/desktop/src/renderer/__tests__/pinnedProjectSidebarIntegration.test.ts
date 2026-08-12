@@ -23,18 +23,15 @@ describe('pinned project sidebar integration', () => {
     expect(sidebarSource).toContain(
       '<RailPanels\n        projects={visibleRailProjectsWithVendor}',
     );
-    expect(sidebarSource).toContain(
-      '<ProjectsSection\n              unclassified={visibleUnclassified}\n              projects={visibleProjectsWithVendor}',
+    expect(sidebarSource).toMatch(
+      /<ProjectsSection\s+unclassified=\{visibleUnclassified\}\s+projects=\{visibleProjectsWithVendor\}/,
     );
   });
 
   it('keeps all-pinned projects available while omitting their pinned child rows', () => {
-    expect(sidebarSource).toContain(
-      'const groupsWithPinnedProjects = useProjectGroups(',
-    );
-    expect(sidebarSource).toContain(
-      'if (filter.projectsAsSet === null) return groupsWithPinnedProjects.projects;',
-    );
+    expect(sidebarSource).toContain('const groupsWithPinnedProjects = useProjectGroups(');
+    expect(sidebarSource).toContain('const notHidden = visibleSidebarProjects(');
+    expect(sidebarSource).toContain('if (filter.projectsAsSet === null) return notHidden;');
     expect(sidebarSource).toContain(
       'sessions: matchingSessions.filter((session) => session.pinnedAt == null)',
     );
@@ -47,10 +44,10 @@ describe('pinned project sidebar integration', () => {
   });
 
   it('applies main-process pinned-order broadcasts to every mounted sidebar hook', () => {
-    expect(filterHookSource).toContain(
-      'window.electronAPI.sidebarSettingsOnPinnedOrderChanged((next) => {',
-    );
-    expect(filterHookSource).toContain('setManualPinnedOrderState((prev) =>');
+    expect(filterHookSource).toContain('window.electronAPI.sidebarSettings.onPinnedOrderChanged(');
+    expect(filterHookSource).toContain('isExactOwnerStampCurrent(nextOwnerStamp, ownerStamp)');
+    expect(filterHookSource).toContain('isDataOwnerPushStampCurrent(actual)');
+    expect(filterHookSource).toContain('durablePinnedOrderRef.current = snapshot;');
   });
 
   it('omits sessions belonging to pinned projects from date groups', () => {
@@ -63,6 +60,52 @@ describe('pinned project sidebar integration', () => {
     expect(dateBlock).toContain('pinnedProjectKeys.has(pinnedProjectKey)');
     expect(dateBlock).toContain(
       '[activityFilteredSessions, vendorPredicate, filter.projectsAsSet, pinnedProjectKeys]',
+    );
+  });
+
+  it('confirms before removing a project and keeps the rail open when cancelled', () => {
+    const removeStart = sidebarSource.indexOf(
+      'const handleRemoveProjectFromSidebar = useCallback(',
+    );
+    const removeEnd = sidebarSource.indexOf('/* ---- Pin / Unpin handler ---- */', removeStart);
+    const removeBlock = sidebarSource.slice(removeStart, removeEnd);
+    const railRemoveStart = sidebarSource.indexOf('onRemoveProjectFromSidebar(menuTarget);');
+    const railRemoveBlock = sidebarSource.slice(railRemoveStart - 120, railRemoveStart + 80);
+
+    expect(removeStart).toBeGreaterThanOrEqual(0);
+    expect(removeEnd).toBeGreaterThan(removeStart);
+    expect(railRemoveStart).toBeGreaterThanOrEqual(0);
+    expect(removeBlock).toContain('const confirmed = await confirmDialog({');
+    expect(removeBlock).toContain('if (!confirmed) return;');
+    expect(removeBlock.indexOf('if (!confirmed) return;')).toBeLessThan(
+      removeBlock.indexOf('await setProjectHidden(project.projectKey, true);'),
+    );
+    expect(removeBlock).not.toContain('filter.toggleProject(project.projectKey);');
+    expect(removeBlock.indexOf('await setProjectHidden(project.projectKey, true);')).toBeLessThan(
+      removeBlock.indexOf('railPanelStore.closeAll();'),
+    );
+    expect(railRemoveBlock).not.toContain('railPanelStore.closeAll();');
+  });
+
+  it('restores against the latest project catalogue and re-admits the active filter', () => {
+    expect(sidebarSource).toContain(
+      'const filter = useSidebarFilter(hiddenProjectKeys, sidebarSettingsSnapshot);',
+    );
+    expect(sidebarSource).toContain('collectRestorableProjectKeys({');
+    expect(sidebarSource).toContain('sessions: scopedSidebarSessions,');
+    expect(sidebarSource).toContain('const restored = await restoreHiddenProjectIfPresent({');
+    expect(sidebarSource).toContain(
+      'getCurrentProjectKeys: () => restorableProjectKeysRef.current,',
+    );
+    expect(sidebarSource).toContain('ensureProjectIncluded: filter.ensureProjectIncluded,');
+    expect(sidebarSource).toContain('localPlatform,');
+    expect(sidebarSource).toContain('if (restored) return;');
+  });
+
+  it('prunes hidden projects from filters in every renderer hook', () => {
+    expect(filterHookSource).toContain('const next = removeProjectsFromFilter(');
+    expect(filterHookSource).toContain(
+      'removeProjectsFromFilter(prev, hiddenProjectKeys, window.electronAPI.platform)',
     );
   });
 });

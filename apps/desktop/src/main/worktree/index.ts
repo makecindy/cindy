@@ -27,6 +27,7 @@ import type {
 export * as WorktreeManager from './WorktreeManager';
 export * as WorktreePool from './WorktreePool';
 export * as worktreeStore from './worktreeStore';
+export { resolveFreshSourceBranch, type FreshSourceResolution } from './freshBase';
 export {
   recycleWorktreeForRemovedSession,
   reconcileWorktreesForDeletedSessions,
@@ -96,9 +97,9 @@ export function registerWorktreeIpc(ipcMain: IpcMain = ipcMainType): void {
     }
   });
 
-  ipcMain.handle('worktree:suggest-name', (_e, req: SuggestNameReq) =>
-    WorktreeManager.suggestName(req.baseRepo),
-  );
+  ipcMain.handle('worktree:suggest-name', async (_e, req: SuggestNameReq) => ({
+    name: await WorktreeManager.suggestName(req.baseRepo),
+  }));
 
   ipcMain.handle('worktree:list-branches', (_e, req: ListBranchesReq) =>
     WorktreeManager.listBranches(req.baseRepo),

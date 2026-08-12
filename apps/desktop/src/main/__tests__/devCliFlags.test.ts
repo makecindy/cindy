@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 
 import {
   resolveDevCliFlags,
@@ -9,6 +11,22 @@ import {
   shouldRequestSingleInstanceLock,
 } from '../devCliFlags';
 
+
+// Windows 上创建 symlink 需要管理员或开发者模式;拿不到权限时(EPERM)按仓内
+// endpointManifestCache.test.ts 同款探测一次并降级 symlink 相关断言,其余检查照跑
+// (review 反馈第三十六轮)。
+const canSymlink = (() => {
+  const probeDir = mkdtempSync(join(tmpdir(), 'cindy-symlink-probe-'));
+  try {
+    symlinkSync(join(probeDir, 'target'), join(probeDir, 'link'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
 const base = {
   argv: ['electron', '.'] as readonly string[],
   isPackaged: false,
@@ -16,6 +34,7 @@ const base = {
   defaultUserDataDir: '/AppData/xdt-maker',
   envIsolated: undefined as string | undefined,
   envIsolationName: undefined as string | undefined,
+  envUserDataDirEpoch: undefined as string | undefined,
   envDeviceIdOverride: undefined as string | undefined,
   envSchedulerPassive: undefined as string | undefined,
   envEndpointsCdn: undefined as string | undefined,
@@ -27,6 +46,7 @@ describe('resolveDevCliFlags', () => {
       schedulerPassive: false,
       isolated: false,
       userDataDirOverride: null,
+      isolatedDirIsEpochDerived: false,
       needsIsolatedDeviceId: false,
       isolationName: null,
       invalidIsolationName: null,
@@ -51,17 +71,191 @@ describe('resolveDevCliFlags', () => {
     }
   });
 
-  it('--isolated 默认沙箱:目录 <userData>-dev,要求派生设备标识,无名字', () => {
+  it('CindyDev 纪元判定:派生路径与 env 传入同一路径命中,自定义目录不命中', () => {
+    // 标准 restart 脚本流程经 env 传入与派生一字不差的路径 → 命中;用户显式指向
+    // 其它目录 → 不命中(不标记 CindyDev,防多启动形态双身份互踩)。
+    const derived = resolveDevCliFlags({ ...base, argv: [...base.argv, '--isolated'] });
+    expect(derived.isolatedDirIsEpochDerived).toBe(true);
+    const viaEnvSame = resolveDevCliFlags({
+      ...base,
+      envIsolated: '1',
+      envUserDataDir: '/AppData/xdt-maker-dev2',
+      envUserDataDirEpoch: '1',
+    });
+    expect(viaEnvSame.isolatedDirIsEpochDerived).toBe(true);
+    // 同一路径但没有可信纪元信号(人肉覆写 / 旧 checkout 形态)→ 观察模式:
+    // 旧代码不认标记、以默认身份打开同一显式路径,认领 CindyDev 会双身份互写
+    // (#912 review P1 第三十二轮)。
+    const viaEnvUntrusted = resolveDevCliFlags({
+      ...base,
+      envIsolated: '1',
+      envUserDataDir: '/AppData/xdt-maker-dev2',
+    });
+    expect(viaEnvUntrusted.isolatedDirIsEpochDerived).toBe(false);
+    const custom = resolveDevCliFlags({
+      ...base,
+      argv: [...base.argv, '--isolated'],
+      envUserDataDir: '/tmp/my-own-dir',
+    });
+    expect(custom.isolated).toBe(true);
+    expect(custom.isolatedDirIsEpochDerived).toBe(false);
+    const notIsolated = resolveDevCliFlags({ ...base, envUserDataDir: '/AppData/xdt-maker-dev2' });
+    expect(notIsolated.isolatedDirIsEpochDerived).toBe(false);
+  });
+
+  it('纪元判定按规范化路径:尾斜杠 / "." 段的等价写法同样命中(#912 review P2 第十九轮)', () => {
+    // 字符串全等会把标准纪元目录的等价写法误判成"其它目录"→ 观察模式给空沙箱
+    // 抢注默认身份标记,该沙箱永久回到共享 Cindy 钥匙串。
+    for (const dir of [
+      '/AppData/xdt-maker-dev2/',
+      '/AppData/./xdt-maker-dev2',
+      '/AppData/other/../xdt-maker-dev2',
+    ]) {
+      const flags = resolveDevCliFlags({
+        ...base,
+        envIsolated: '1',
+        envUserDataDir: dir,
+        envUserDataDirEpoch: '1',
+      });
+      expect(flags.isolatedDirIsEpochDerived, dir).toBe(true);
+      // 覆写值本身保持原样传递(app.setPath 消化),只有判等做规范化。
+      expect(flags.userDataDirOverride, dir).toBe(dir);
+    }
+    // 真正的不同目录(前缀相同的兄弟目录)不受规范化影响,仍不命中。
+    const sibling = resolveDevCliFlags({
+      ...base,
+      envIsolated: '1',
+      envUserDataDir: '/AppData/xdt-maker-dev2-extra',
+      envUserDataDirEpoch: '1',
+    });
+    expect(sibling.isolatedDirIsEpochDerived).toBe(false);
+  });
+
+  it('大小写判定交给文件系统真值:不敏感卷收敛同一目录,敏感卷保持不同(#912 review 第二十/二十一轮)', () => {
+    // 大小写不敏感卷(macOS 默认 APFS / NTFS):realpath 把等价写法收敛到磁盘真实
+    // 大小写 → 命中;大小写敏感卷:仅大小写不同的是另一个真实目录,标成纪元目录
+    // 会让不认标记的旧 checkout 与 CindyDev 身份互写密文 → 必须不命中。
+    const insensitiveVolume = (p: string) => p.toLowerCase();
+    const hit = resolveDevCliFlags({
+      ...base,
+      envIsolated: '1',
+      envUserDataDir: '/AppData/XDT-Maker-DEV2',
+      envUserDataDirEpoch: '1',
+      canonicalizePath: insensitiveVolume,
+    });
+    expect(hit.isolatedDirIsEpochDerived).toBe(true);
+    const sensitiveVolume = (p: string) => p;
+    const miss = resolveDevCliFlags({
+      ...base,
+      envIsolated: '1',
+      envUserDataDir: '/AppData/XDT-Maker-DEV2',
+      envUserDataDirEpoch: '1',
+      canonicalizePath: sensitiveVolume,
+    });
+    expect(miss.isolatedDirIsEpochDerived).toBe(false);
+    // 缺省实现:路径与全部有字母的祖先都不存在时无从探测卷语义 → 保守不折叠
+    // (/AppData 在测试机不存在,最近存在祖先是根目录,无字母可翻转)。
+    const unprobeable = resolveDevCliFlags({
+      ...base,
+      envIsolated: '1',
+      envUserDataDir: '/AppData/XDT-Maker-DEV2',
+      envUserDataDirEpoch: '1',
+    });
+    expect(unprobeable.isolatedDirIsEpochDerived).toBe(false);
+  });
+
+  it('缺省实现:首启(目录不存在)按最近存在祖先的卷语义探测(#912 review P2 第二十二轮)', () => {
+    // 在真实文件系统上建一个临时祖先目录:目标 -dev2 目录不存在,大小写变体写法
+    // 是否命中应跟随该卷的真实语义——macOS 默认 APFS(不敏感)命中,linux(敏感)
+    // 不命中。期望值用同一套"翻转大小写后是否同一目录"探测独立求得,不猜平台。
+    const ancestor = mkdtempSync(join(tmpdir(), 'epoch-vol-Probe-'));
+    try {
+      const flippedAncestor = join(
+        dirname(ancestor),
+        basename(ancestor).replace(/[a-zA-Z]/g, (ch) =>
+          ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase(),
+        ),
+      );
+      let volumeInsensitive = false;
+      try {
+        volumeInsensitive =
+          realpathSync.native(flippedAncestor) === realpathSync.native(ancestor);
+      } catch {
+        volumeInsensitive = false;
+      }
+      const flags = resolveDevCliFlags({
+        ...base,
+        defaultUserDataDir: join(ancestor, 'xdt-maker'),
+        envIsolated: '1',
+        envUserDataDir: join(ancestor, 'XDT-MAKER-DEV2'),
+      envUserDataDirEpoch: '1',
+      });
+      expect(flags.isolatedDirIsEpochDerived).toBe(volumeInsensitive);
+      // 祖先是符号链接:canonical 以链接目标(realpath)为基,链接写法与真身
+      // 写法收敛到同一纪元路径(卷语义也按目标卷探测,#912 review P1 第二十四轮)。
+      const linkAncestor = join(dirname(ancestor), `${basename(ancestor)}-link`);
+      if (canSymlink) {
+        symlinkSync(ancestor, linkAncestor);
+        try {
+          const viaLink = resolveDevCliFlags({
+            ...base,
+            defaultUserDataDir: join(ancestor, 'xdt-maker'),
+            envIsolated: '1',
+            envUserDataDir: join(linkAncestor, 'xdt-maker-dev2'),
+            envUserDataDirEpoch: '1',
+          });
+          expect(viaLink.isolatedDirIsEpochDerived).toBe(true);
+        } finally {
+          // 指向目录的 symlink 要走 rmdir 语义:不带 recursive 的 rmSync 按
+          // unlink 处理,Windows 上直接抛 EISDIR(Path is a directory),把整个
+          // pnpm test:unit 门禁带红。只有拿到 symlink 权限的开发机(canSymlink
+          // 为 true)会走到这里,CI 拿不到权限所以看不见这条。recursive 对
+          // symlink 只删链接本身,不跟随进目标目录(已实测)。
+          rmSync(linkAncestor, { recursive: true, force: true });
+        }
+      }
+      // TOCTOU 稳定性:目录被并发进程创建前后,同一写法的判定结果一致——
+      // 存在与不存在分支产出同一种规范形式(#912 review P1 第二十六轮)。
+      const variantInput = {
+        ...base,
+        defaultUserDataDir: join(ancestor, 'xdt-maker'),
+        envIsolated: '1',
+        envUserDataDir: join(ancestor, 'XDT-MAKER-DEV2'),
+      envUserDataDirEpoch: '1',
+      };
+      const beforeCreate = resolveDevCliFlags(variantInput).isolatedDirIsEpochDerived;
+      mkdirSync(join(ancestor, 'xdt-maker-dev2'));
+      try {
+        const afterCreate = resolveDevCliFlags(variantInput).isolatedDirIsEpochDerived;
+        expect(afterCreate).toBe(beforeCreate);
+      } finally {
+        rmSync(join(ancestor, 'xdt-maker-dev2'), { recursive: true, force: true });
+      }
+      // 等价写法(尾斜杠)在同一缺省实现下不受卷语义影响,恒命中。
+      const slash = resolveDevCliFlags({
+        ...base,
+        defaultUserDataDir: join(ancestor, 'xdt-maker'),
+        envIsolated: '1',
+        envUserDataDir: join(ancestor, 'xdt-maker-dev2') + '/',
+      envUserDataDirEpoch: '1',
+      });
+      expect(slash.isolatedDirIsEpochDerived).toBe(true);
+    } finally {
+      rmSync(ancestor, { recursive: true, force: true });
+    }
+  });
+
+  it('--isolated 默认沙箱:目录 <userData>-dev2,要求派生设备标识,无名字', () => {
     const flags = resolveDevCliFlags({ ...base, argv: [...base.argv, '--isolated'] });
-    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev');
+    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev2');
     expect(flags.isolated).toBe(true);
     expect(flags.needsIsolatedDeviceId).toBe(true);
     expect(flags.isolationName).toBeNull();
   });
 
-  it('--isolated=<名字> 命名沙箱:目录 <userData>-dev-<名字>,带出名字', () => {
+  it('--isolated=<名字> 命名沙箱:目录 <userData>-dev2-<名字>,带出名字', () => {
     const flags = resolveDevCliFlags({ ...base, argv: [...base.argv, '--isolated=feature-a'] });
-    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev-feature-a');
+    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev2-feature-a');
     expect(flags.needsIsolatedDeviceId).toBe(true);
     expect(flags.isolationName).toBe('feature-a');
     expect(flags.invalidIsolationName).toBeNull();
@@ -69,7 +263,7 @@ describe('resolveDevCliFlags', () => {
 
   it('--isolated=<非法名字> 回落默认沙箱并带出非法名(不回落到不隔离)', () => {
     const bad = resolveDevCliFlags({ ...base, argv: [...base.argv, '--isolated=我的沙箱'] });
-    expect(bad.userDataDirOverride).toBe('/AppData/xdt-maker-dev');
+    expect(bad.userDataDirOverride).toBe('/AppData/xdt-maker-dev2');
     expect(bad.needsIsolatedDeviceId).toBe(true);
     expect(bad.isolationName).toBeNull();
     expect(bad.invalidIsolationName).toBe('我的沙箱');
@@ -79,19 +273,19 @@ describe('resolveDevCliFlags', () => {
       argv: [...base.argv, `--isolated=${'a'.repeat(33)}`],
     });
     expect(long.invalidIsolationName).toBe('a'.repeat(33));
-    expect(long.userDataDirOverride).toBe('/AppData/xdt-maker-dev');
+    expect(long.userDataDirOverride).toBe('/AppData/xdt-maker-dev2');
   });
 
   it('XDT_ISOLATED=1(restart 脚本默认沙箱路径)等价 --isolated', () => {
     const flags = resolveDevCliFlags({ ...base, envIsolated: '1' });
-    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev');
+    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev2');
     expect(flags.needsIsolatedDeviceId).toBe(true);
     expect(flags.isolationName).toBeNull();
   });
 
   it('XDT_ISOLATED=1 + XDT_ISOLATED_NAME(restart 脚本命名沙箱路径)等价 --isolated=<名字>', () => {
     const flags = resolveDevCliFlags({ ...base, envIsolated: '1', envIsolationName: 'feature-b' });
-    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev-feature-b');
+    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev2-feature-b');
     expect(flags.isolationName).toBe('feature-b');
   });
 
@@ -99,11 +293,11 @@ describe('resolveDevCliFlags', () => {
     // argv 路径
     const viaArgv = resolveDevCliFlags({ ...base, argv: [...base.argv, '--isolated=1'] });
     expect(viaArgv.isolationName).toBe('1');
-    expect(viaArgv.userDataDirOverride).toBe('/AppData/xdt-maker-dev-1');
+    expect(viaArgv.userDataDirOverride).toBe('/AppData/xdt-maker-dev2-1');
     // restart env 路径:开关与名字分离,名字 '1' 原样生效
     const viaEnv = resolveDevCliFlags({ ...base, envIsolated: '1', envIsolationName: '1' });
     expect(viaEnv.isolationName).toBe('1');
-    expect(viaEnv.userDataDirOverride).toBe('/AppData/xdt-maker-dev-1');
+    expect(viaEnv.userDataDirOverride).toBe('/AppData/xdt-maker-dev2-1');
   });
 
   it('XDT_ISOLATED 开关严格等于 "1" 才生效("0"/"false"/名字串都视为关)', () => {
@@ -116,7 +310,7 @@ describe('resolveDevCliFlags', () => {
 
   it('env 名字非法时回落默认沙箱并带出非法名', () => {
     const flags = resolveDevCliFlags({ ...base, envIsolated: '1', envIsolationName: '我的沙箱' });
-    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev');
+    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev2');
     expect(flags.invalidIsolationName).toBe('我的沙箱');
   });
 
@@ -136,7 +330,7 @@ describe('resolveDevCliFlags', () => {
       argv: [...base.argv, '--isolated'],
       envUserDataDir: '   ',
     });
-    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev');
+    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev2');
   });
 
   it('显式 XDT_DEVICE_ID_OVERRIDE 时隔离模式不再派生设备标识', () => {
@@ -185,6 +379,7 @@ describe('resolveDevCliFlags', () => {
       schedulerPassive: false,
       isolated: false,
       userDataDirOverride: null,
+      isolatedDirIsEpochDerived: false,
       needsIsolatedDeviceId: false,
       isolationName: null,
       invalidIsolationName: null,
@@ -217,7 +412,7 @@ describe('resolveDevCliFlags', () => {
     });
     expect(flags.schedulerPassive).toBe(true);
     expect(flags.isolated).toBe(true);
-    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev-feature-a');
+    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker-dev2-feature-a');
     expect(flags.isolationName).toBe('feature-a');
   });
 });

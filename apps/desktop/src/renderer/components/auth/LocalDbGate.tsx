@@ -61,6 +61,7 @@ export function LocalDbGate() {
     }
 
     (async () => {
+     const attemptStartedAt = performance.now();
      try {
       // ensureReady（按 userId 切换 db；失败 main 已弹对话框）
       const ready = await window.electronAPI.localDb.ensureReady(ownerId);
@@ -71,9 +72,15 @@ export function LocalDbGate() {
         return;
       }
 
-      // Signal main "user logged in + localDb is open" so the FeishuBot WS
-      // connection can come online safely. Gated and idempotent in main —
-      // re-mounts and account switches are no-ops after the first call.
+      log.info('startup readiness reached', {
+        event: 'renderer.local-db-gate.ready',
+        elapsedMs: Math.round(performance.now() - attemptStartedAt),
+        rendererUptimeMs: Math.round(performance.now()),
+      });
+
+      // Signal main "user logged in + localDb is open" so account integrations can
+      // come online after provider discovery. Gated and idempotent in main — re-mounts
+      // and account switches are no-ops after the first call.
       // Fire-and-forget: the gate decision below MUST NOT block on bot startup.
       void window.electronAPI.appReadyForBot().catch((err) => {
         log.warn('appReadyForBot signal failed (non-fatal)', err);

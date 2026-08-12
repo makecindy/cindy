@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { net } from 'electron';
 
 const MAX_PLUGIN_BYTES = 8 * 1024 * 1024;
+const PLUGIN_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 /** 下载并校验 `.cindy` 原始字节，写入调用方提供的临时路径。 */
 export async function downloadVerifiedPlugin(
@@ -18,6 +19,7 @@ export async function downloadVerifiedPlugin(
     method: 'GET',
     cache: 'no-store',
     redirect: 'error',
+    signal: AbortSignal.timeout(PLUGIN_DOWNLOAD_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`Plugin 下载失败 (${response.status})`);
   if (!response.body) throw new Error('Plugin 下载响应体为空');

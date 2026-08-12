@@ -40,6 +40,8 @@ export interface PiRpcSpawnOptions {
   /** 进程退出回调(exit code / signal;正常 close() 也会触发)。 */
   onExit: (info: { code: number | null; signal: NodeJS.Signals | null }) => void;
   onStderrLine?: (line: string) => void;
+  /** 本地进程生命周期观察器；返回值在该 spawn 的 error/close 时幂等调用。 */
+  onProcessSpawned?: (pid: number) => void | (() => void);
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -55,6 +57,7 @@ export class PiRpcProcess {
   }>();
   private closed = false;
   private readonly logger: Logger;
+  private disposeProcessRegistration: (() => void) | undefined;
 
   constructor(private readonly opts: PiRpcSpawnOptions) {
     this.logger = opts.logger;
@@ -63,6 +66,15 @@ export class PiRpcProcess {
       env: opts.env as NodeJS.ProcessEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    if (this.child.pid != null && this.child.pid > 0) {
+      try {
+        const dispose = opts.onProcessSpawned?.(this.child.pid);
+        if (typeof dispose === 'function') this.disposeProcessRegistration = dispose;
+      } catch {
+        // Observation failures must not block Pi startup. The process simply remains
+        // non-terminable in the resource usage panel.
+      }
+    }
 
     attachJsonlReader(this.child.stdout, (line) => this.handleStdoutLine(line));
     attachJsonlReader(this.child.stderr, (line) => {
@@ -72,14 +84,22 @@ export class PiRpcProcess {
     });
 
     this.child.on('error', (err) => {
+      this.disposeRegistration();
       this.logger.error('pi process error', { message: err.message });
       this.failAllPending(new Error(`pi process error: ${err.message}`));
     });
     this.child.on('close', (code, signal) => {
+      this.disposeRegistration();
       this.closed = true;
       this.failAllPending(new Error(`pi process exited (code=${code}, signal=${signal})`));
       opts.onExit({ code, signal });
     });
+  }
+
+  private disposeRegistration(): void {
+    const dispose = this.disposeProcessRegistration;
+    this.disposeProcessRegistration = undefined;
+    try { dispose?.(); } catch { /* best-effort diagnostic cleanup */ }
   }
 
   get pid(): number | undefined {

@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { cn } from '@/lib/utils';
 
 /**
@@ -85,6 +86,14 @@ interface MorphPopoverProps {
    * 换行内容无法稳定收敛;不提供则按 max-content 自适应(仅限 nowrap / 自带定宽的内容)。
    */
   panelWidth?: number;
+  /**
+   * 'trigger' = 面板宽度**严格等于** trigger 的实测宽度(忽略 panelWidth
+   * 与内容宽)。设置页的字段形态必须用它 —— DESIGN.md §4 Select & Dropdown:
+   * 「Panel width must bind to the trigger width — never narrower or wider than the
+   * control that opened it」。工具条形态保持 'content'(默认): trigger 按内容
+   * hug, 面板按内容/panelWidth 展开。
+   */
+  panelWidthMode?: 'content' | 'trigger';
   /** 面板形变起点底色/边色(= chip 的),默认 composer pill 规格。 */
   startBg?: string;
   startBorderColor?: string;
@@ -102,6 +111,8 @@ interface MorphPopoverProps {
   wrapperClassName?: string;
   /** 面板 aria-label(容器为 group 语义时可选)。 */
   panelAriaLabel?: string;
+  /** 打开完成后的外部焦点目标；未提供时按面板内默认规则聚焦。 */
+  autoFocusTarget?: () => HTMLElement | null;
 }
 
 /** 是否处于 reduced-motion(SSR/jsdom 无 matchMedia 时按 false) */
@@ -119,6 +130,7 @@ export function MorphPopover({
   side = 'top',
   align = 'start',
   panelWidth,
+  panelWidthMode = 'content',
   startBg = 'var(--composer-pill-bg)',
   startBorderColor = 'var(--border-default)',
   endBg = 'var(--model-dropdown-bg)',
@@ -127,6 +139,7 @@ export function MorphPopover({
   panelClassName,
   wrapperClassName,
   panelAriaLabel,
+  autoFocusTarget,
 }: MorphPopoverProps) {
   // mounted 独立于 open:关闭时先播收合动画,动画完再卸载 portal
   const [mounted, setMounted] = useState(false);
@@ -144,6 +157,9 @@ export function MorphPopover({
   const chipRectRef = useRef<DOMRect | null>(null);
   // 初始形变是否已完成(ResizeObserver 只在其后接管,避免和开场动画打架)
   const settledRef = useRef(false);
+  // 指针驱动的关闭(菜单动作、trigger toggle、outside 交接)不把焦点归还 trigger:
+  // 否则旧层会在收合结束时抢走下一层交互面的焦点。键盘关闭仍按 §14.2 回焦。
+  const pointerInteractionRef = useRef(false);
 
   const requestClose = useCallback(() => onOpenChange(false), [onOpenChange]);
 
@@ -156,7 +172,11 @@ export function MorphPopover({
       const prevH = panel.style.height;
       panel.style.height = 'auto';
       let desiredW: number;
-      if (panelWidth) {
+      if (panelWidthMode === 'trigger') {
+        // 字段形态: 面板与 trigger 逐像素同宽(不取 max —— 内容再宽也不得溢出
+        // 字段, 选项行自己 truncate)。
+        desiredW = chipRect.width;
+      } else if (panelWidth) {
         desiredW = Math.max(panelWidth, chipRect.width);
       } else {
         panel.style.width = 'max-content';
@@ -184,7 +204,7 @@ export function MorphPopover({
       panel.style.height = prevH;
       return { w: targetW, h: targetH };
     },
-    [align, panelWidth, side],
+    [align, panelWidth, panelWidthMode, side],
   );
 
   /**
@@ -251,6 +271,7 @@ export function MorphPopover({
 
     if (open) {
       settledRef.current = false;
+      pointerInteractionRef.current = false;
       const rect = wrap.getBoundingClientRect();
       chipRectRef.current = rect;
       // 1) 面板落到 chip 精确几何(与 chip 重合的起点),transition 关闭防测量污染。
@@ -303,6 +324,7 @@ export function MorphPopover({
         // (异步 capability / provider 列表在开场动画内返回时防面板卡旧尺寸)。
         syncPanelToContent();
         const target =
+          autoFocusTarget?.() ??
           panel.querySelector<HTMLElement>('[data-morph-autofocus]:not([disabled])') ??
           panel.querySelector<HTMLElement>('input, textarea') ??
           panel.querySelector<HTMLElement>(
@@ -343,6 +365,7 @@ export function MorphPopover({
         focusSnapTimerRef.current = null;
         const active = document.activeElement;
         ownedFocusAtClose =
+          !pointerInteractionRef.current &&
           active instanceof Node && (panel.contains(active) || wrap.contains(active));
         // 快照之后才上 inert(inert 会立刻 blur 面板内焦点,先上会破坏上面的判定):
         // pointer-events-none 只挡鼠标不挡 Tab,键盘用户 Esc/选完后立刻 Tab 会摸进
@@ -353,7 +376,17 @@ export function MorphPopover({
         () => {
           setMounted(false);
           if (ownedFocusAtClose) {
-            wrap.querySelector<HTMLElement>('button, [tabindex]')?.focus({ preventScroll: true });
+            const active = document.activeElement;
+            const focusClaimedElsewhere =
+              active instanceof Node &&
+              active !== document.body &&
+              !panel.contains(active) &&
+              !wrap.contains(active);
+            if (!focusClaimedElsewhere) {
+              wrap.querySelector<HTMLElement>('button, [tabindex]')?.focus({
+                preventScroll: true,
+              });
+            }
           }
         },
         reducedClose ? 0 : MORPH_MS + 20,
@@ -365,7 +398,17 @@ export function MorphPopover({
       if (openRaf1Ref.current !== null) cancelAnimationFrame(openRaf1Ref.current);
       if (openRaf2Ref.current !== null) cancelAnimationFrame(openRaf2Ref.current);
     };
-  }, [mounted, open, measure, applyChipGeometry, dockedAnchor, endBg, endBorderColor, syncPanelToContent]);
+  }, [
+    mounted,
+    open,
+    measure,
+    applyChipGeometry,
+    dockedAnchor,
+    endBg,
+    endBorderColor,
+    syncPanelToContent,
+    autoFocusTarget,
+  ]);
 
   /** 打开稳定后跟随内容尺寸变化(搜索过滤 / Edit 面板展宽),同曲线平滑过渡 */
   useEffect(() => {
@@ -394,16 +437,34 @@ export function MorphPopover({
   /** 打开期间的全局关闭手势:outside pointerdown / Esc(分层) / 窗口 resize */
   useEffect(() => {
     if (!mounted || !open) return;
+    const isWithinExternalFocusTarget = (target: Node): boolean => {
+      const externalFocusTarget = autoFocusTarget?.();
+      return Boolean(
+        externalFocusTarget &&
+          (externalFocusTarget === target || externalFocusTarget.contains(target)),
+      );
+    };
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node;
       if (panelRef.current?.contains(t) || wrapRef.current?.contains(t)) return;
       // 面板内容可能再弹 Radix 浮层(portal 到 body,如模型行的 effort/Fast 配置
       // 子面板)——点它不算 outside,否则子面板永远点不了(整个面板会先被关掉)
       if ((t as Element).closest?.('[data-radix-popper-content-wrapper]')) return;
+      // autoFocusTarget 是当前交互层的一部分(例如统一建议面板外的 composer)。
+      // 指针在该目标内调整光标时也不应按 outside pointerdown 收起。
+      if (isWithinExternalFocusTarget(t)) return;
+      // outside pointerdown 也是鼠标关闭。目标控件可能 preventDefault 阻止默认聚焦
+      // (如 AgentSelect 为维持 composer focus-within),不能因此把旧层误判成键盘关闭、
+      // 在收合结束后延迟抢回旧 trigger 焦点并关掉刚打开的相邻弹层。
+      pointerInteractionRef.current = true;
       requestClose();
     };
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        pointerInteractionRef.current = false;
+      }
       if (e.key !== 'Escape') return;
+      pointerInteractionRef.current = false;
       // 分层关闭(必须 capture,原因见文件头注释)
       if (document.querySelector('[data-radix-popper-content-wrapper] [role="dialog"]')) return;
       // Esc 时焦点仍在面板内,收合分支的 shouldRestoreFocus 会据此归还 trigger(§14.2)
@@ -417,6 +478,10 @@ export function MorphPopover({
       if (!(target instanceof Node) || target === document.body) return;
       if (panelRef.current?.contains(target) || wrapRef.current?.contains(target)) return;
       if ((target as Element).closest?.('[data-radix-popper-content-wrapper]')) return;
+      // 某些 MorphPopover（如 composer 的统一建议面板）有意把焦点留在
+      // 面板外的编辑器上，以便打开后直接输入筛选。这个显式目标仍属于当前
+      // 交互层，不能被“焦点离开即关闭”误判；其它外部焦点照常关闭。
+      if (isWithinExternalFocusTarget(target)) return;
       requestClose();
     };
     const onResize = () => requestClose();
@@ -430,11 +495,17 @@ export function MorphPopover({
       document.removeEventListener('focusin', onFocusIn, true);
       window.removeEventListener('resize', onResize);
     };
-  }, [mounted, open, requestClose]);
+  }, [autoFocusTarget, mounted, open, requestClose]);
 
   return (
     <>
-      <span ref={wrapRef} className={cn('relative inline-flex', wrapperClassName)}>
+      <span
+        ref={wrapRef}
+        className={cn('relative inline-flex', wrapperClassName)}
+        onPointerDownCapture={() => {
+          pointerInteractionRef.current = true;
+        }}
+      >
         {trigger}
       </span>
       {mounted &&
@@ -448,11 +519,16 @@ export function MorphPopover({
             role="group"
             aria-label={panelAriaLabel}
             tabIndex={-1}
+            onPointerDownCapture={() => {
+              pointerInteractionRef.current = true;
+            }}
             // data-[state=closed]:pointer-events-none —— 收合动画期间面板已透明但仍以
             // position:fixed 覆盖视口,不加会拦住底下点击(选完项 / Esc 后那 300ms)。
             className="group fixed z-50 overflow-hidden border outline-none data-[state=closed]:pointer-events-none"
-            // 初始几何由 useLayoutEffect 直写;这里只兜首帧不可见位置
-            style={{ left: -9999, bottom: -9999 }}
+            // 初始几何由 useLayoutEffect 直写;这里只兜首帧不可见位置。
+            // Electron 的 app-region 按视口几何命中；矮窗口里面板会顶到标题栏，
+            // 必须显式 no-drag 才能保留搜索框和首行模型的 pointer / focus 交互。
+            style={{ left: -9999, bottom: -9999, ...WINDOW_NO_DRAG_STYLE }}
           >
             {/* 面板内容: 随生长淡入(50ms 延迟 + 5px 浮入);形变期禁滚(防滚动条
                 闪现挤压行宽),settle 后由 JS 切回自滚 */}

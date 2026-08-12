@@ -85,6 +85,8 @@ export interface ProjectNodeProps {
   isProjectPinned: boolean;
   onToggleProjectPin: (project: ProjectNodeData, currentlyPinned: boolean) => void;
   onRenameProject: (project: ProjectNodeData, alias: string) => Promise<void>;
+  /** 仅隐藏本地项目的侧栏入口，不改变其中任务的生命周期。 */
+  onRemoveFromSidebar: (project: ProjectNodeData) => void;
   onSessionClick: SessionClickHandler;
   onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
@@ -126,6 +128,7 @@ export function ProjectNode({
   isProjectPinned,
   onToggleProjectPin,
   onRenameProject,
+  onRemoveFromSidebar,
   onSessionClick,
   onAction,
   onRename,
@@ -221,6 +224,11 @@ export function ProjectNode({
     setMenuPos(null);
     onArchiveAll(project);
   }, [onArchiveAll, project, projectWritesBlocked, t]);
+
+  const handleRemoveFromSidebar = useCallback(() => {
+    setMenuPos(null);
+    onRemoveFromSidebar(project);
+  }, [onRemoveFromSidebar, project]);
 
   return (
     // 两个 data 属性各自服务不同消费者:
@@ -335,7 +343,7 @@ export function ProjectNode({
           {!isEditingName && remoteIdentity ? (
             <span
               title={remoteIdentity.displayLabel}
-              className="max-w-[45%] shrink truncate text-[11px] text-[var(--cmd-palette-item-meta)]"
+              className="max-w-[45%] shrink truncate text-11 text-[var(--cmd-palette-item-meta)]"
             >
               {remoteIdentity.displayLabel}
             </span>
@@ -391,8 +399,7 @@ export function ProjectNode({
         )}
       </div>
 
-      {/* 右键菜单：与消息流图片右键菜单（ChatImageView）同款 DropdownMenu。
-          目前只有 Archived All 一项；点击交给父层处理二次确认 + 批量归档。 */}
+      {/* 右键菜单：与消息流图片右键菜单（ChatImageView）同款 DropdownMenu。 */}
       <DropdownMenu
         open={menuPos !== null}
         onOpenChange={(open) => {
@@ -501,6 +508,11 @@ export function ProjectNode({
             </>
           )}
           <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+          {project.scope === 'local' && (
+            <DropdownMenuItem onClick={handleRemoveFromSidebar} className={MENU_ITEM_CLASS}>
+              {t('ccAgent.sidebar.projectAction.removeFromSidebar')}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem
             disabled={projectWritesBlocked}
             onClick={() => {

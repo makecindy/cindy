@@ -41,12 +41,14 @@ import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
 import { FontFamilyPicker, type FontPreset } from './FontFamilyPicker';
+import { LayoutResetControl } from './LayoutResetControl';
 
 const log = createLogger('settings/AppearanceSection');
 
 /** IPC 错误码 → 专门文案；未列出的码落到通用 importFailed。 */
 const IMPORT_ERROR_KEYS: Record<string, string> = {
   THEME_UNSUPPORTED_FILE: 'settings.appearance.localThemes.importUnsupported',
+  THEME_CONTRAST_UNSUPPORTED: 'settings.appearance.localThemes.importContrastUnsupported',
   THEME_USES_INCLUDE: 'settings.appearance.localThemes.importUsesInclude',
   THEME_NOT_A_FILE: 'settings.appearance.localThemes.importNotAFile',
   THEME_FILE_TOO_LARGE: 'settings.appearance.localThemes.importTooLarge',
@@ -694,7 +696,7 @@ export function AppearanceSection() {
                 }
               }}
               className={cn(
-                'h-9 w-[72px] rounded-xl border px-3 text-right text-[13px] outline-none',
+                'h-9 w-[72px] rounded-xl border px-3 text-right text-13 outline-none',
                 'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
                 'font-mono text-[var(--settings-input-text)]',
                 'focus:border-[var(--settings-input-border-focus)]',
@@ -778,7 +780,7 @@ export function AppearanceSection() {
                 }
               }}
               className={cn(
-                'h-9 w-[72px] rounded-xl border px-3 text-right text-[13px] outline-none',
+                'h-9 w-[72px] rounded-xl border px-3 text-right text-13 outline-none',
                 'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
                 'font-mono text-[var(--settings-input-text)]',
                 'focus:border-[var(--settings-input-border-focus)]',
@@ -812,7 +814,7 @@ export function AppearanceSection() {
         <div
           role="radiogroup"
           aria-label={t('settings.appearance.sidebarCardMode.aria')}
-          className="flex shrink-0 items-center gap-0.5 rounded-lg border border-[var(--settings-theme-card-border)] p-0.5"
+          className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
         >
           {([
             { value: 'text', labelKey: 'ccAgent.sidebar.viewStyleList' },
@@ -826,7 +828,7 @@ export function AppearanceSection() {
               aria-checked={sidebarViewMode === opt.value}
               onClick={() => setSidebarViewMode(opt.value)}
               className={cn(
-                'rounded-md px-2.5 py-1 text-xs transition-colors',
+                'rounded-full px-2.5 py-1 text-xs transition-colors',
                 sidebarViewMode === opt.value
                   ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
                   : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
@@ -837,6 +839,8 @@ export function AppearanceSection() {
           ))}
         </div>
       </div>
+
+      <LayoutResetControl />
     </div>
   );
 }

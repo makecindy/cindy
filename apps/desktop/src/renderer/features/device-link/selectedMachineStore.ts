@@ -8,7 +8,8 @@
  * deviceId 是服务端下发的 UUID,不会与 'all' / 'local' 这两个 sentinel 撞值。
  *
  * 设计同 remoteProjectsStore:模块级 vanilla store + useSyncExternalStore。
- * 选择跨重启持久化到 localStorage(与侧边栏折叠态 useCollapsedProjects 同模式)。
+ * 选择按 Cindy data owner 隔离并跨重启持久化到 localStorage
+ * (与侧边栏折叠态 useCollapsedProjects 同模式)。
  * store 只存**原始勾选集**(raw),不做「设备掉线就裁剪」的写时清理——临时离线的设备
  * 必须留在勾选集里(重启 / 重连后自动生效),展示与过滤由消费侧(useMachineSwitcher)
  * 读时归一化(normalizeSelectedMachineId)按当前可选集回落。
@@ -16,6 +17,7 @@
 
 import { useSyncExternalStore } from 'react';
 import type { Session } from '@/lib/ccAgent.types';
+import { readSidebarOwnerStorage, writeSidebarOwnerStorage } from '@/lib/sidebarOwnerStorage';
 
 /** 「所有」:本机 + 全部已连接远程机器(默认)。 */
 export const MACHINE_ALL = 'all';
@@ -25,20 +27,8 @@ export const MACHINE_LOCAL = 'local';
 /** 切换栏选择值:MACHINE_ALL | 非空勾选集(MACHINE_LOCAL / <deviceId>,规范序)。 */
 export type MachineSelection = typeof MACHINE_ALL | readonly string[];
 
-/** localStorage key(选择态持久化;JSON: "all" 或 string[])。 */
+/** owner-scoped localStorage base key(选择态持久化;JSON: "all" 或 string[])。 */
 const STORAGE_KEY = 'cc-agent.sidebar.selectedMachines';
-
-/** 安全取 localStorage(node 测试环境 / 受限上下文可能没有)。 */
-function safeStorage(): Storage | null {
-  try {
-    if (typeof globalThis !== 'undefined' && typeof globalThis.localStorage !== 'undefined') {
-      return globalThis.localStorage;
-    }
-  } catch {
-    // 受限上下文访问 localStorage 本身就可能 throw
-  }
-  return null;
-}
 
 /** 勾选集规范化:去重 + 稳定排序(本机在前,设备按 id 字典序),保证同集合同引用语义可比。 */
 export function canonicalizeMachineEntries(entries: readonly string[]): string[] {
@@ -88,19 +78,16 @@ export function parseMachineSelection(raw: string | null): MachineSelection {
   return MACHINE_ALL;
 }
 
-function loadPersistedSelection(): MachineSelection {
-  return parseMachineSelection(safeStorage()?.getItem(STORAGE_KEY) ?? null);
+function loadPersistedSelection(ownerId: string | null): MachineSelection {
+  return parseMachineSelection(readSidebarOwnerStorage(STORAGE_KEY, ownerId));
 }
 
 function persistSelection(selection: MachineSelection): void {
-  try {
-    safeStorage()?.setItem(STORAGE_KEY, serializeMachineSelection(selection));
-  } catch {
-    // quota / private mode → 当前会话仍生效,重启回默认
-  }
+  writeSidebarOwnerStorage(STORAGE_KEY, activeOwnerId, serializeMachineSelection(selection));
 }
 
-let currentSelection: MachineSelection = loadPersistedSelection();
+let activeOwnerId: string | null = null;
+let currentSelection: MachineSelection = MACHINE_ALL;
 const subs = new Set<() => void>();
 
 function emit(): void {
@@ -114,6 +101,16 @@ function commit(next: MachineSelection): boolean {
   return true;
 }
 
+/** Rebind the module singleton before owner-scoped routes render. */
+export function setSelectedMachineOwner(ownerId: string | null): void {
+  if (activeOwnerId === ownerId) return;
+  activeOwnerId = ownerId;
+  const next = loadPersistedSelection(ownerId);
+  if (machineSelectionEquals(currentSelection, next)) return;
+  currentSelection = next;
+  emit();
+}
+
 /** 当前选择(默认 MACHINE_ALL)。 */
 export function getSelectedMachineId(): MachineSelection {
   return currentSelection;
@@ -121,6 +118,7 @@ export function getSelectedMachineId(): MachineSelection {
 
 /** 用户显式切换选择:更新 + 落盘。值未变时不通知,避免无谓重渲染。 */
 export function setSelectedMachineId(next: MachineSelection): void {
+  if (!activeOwnerId) return;
   if (commit(next)) persistSelection(currentSelection);
 }
 

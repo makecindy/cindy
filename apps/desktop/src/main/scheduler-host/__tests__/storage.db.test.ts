@@ -509,6 +509,108 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(deferred?.nextFireAt).toBe(due + 60_000);
       expect(deferred?.lastFiredAt).toBe(firedAt + 10);
       expect(deferred?.activeClaimRunId).toBeUndefined();
+
+      await harness.storage.insert(baseSchedule({
+        id: 'sch-complete-owner',
+        nextFireAt: undefined,
+        lastFiredAt: firedAt + 10,
+        activeClaimRunId: 'run-complete-owner',
+      }));
+      const completedOwner = await harness.storage.completeAutomaticClaim(
+        'sch-complete-owner',
+        'run-complete-owner',
+        firedAt,
+        { lastFinishedAt: due + 70_000, nextFireAt: due + 120_000 },
+      );
+      expect(completedOwner?.nextFireAt).toBe(due + 120_000);
+      expect(completedOwner?.lastFiredAt).toBe(firedAt + 10);
+      expect(completedOwner?.lastFinishedAt).toBe(due + 70_000);
+      expect(completedOwner?.activeClaimRunId).toBeUndefined();
+
+      await harness.storage.insert(baseSchedule({
+        id: 'sch-complete-stale',
+        nextFireAt: due + 45_000,
+        lastFiredAt: firedAt + 10,
+        activeClaimRunId: 'run-replacement-owner',
+      }));
+      const staleAfter = await harness.storage.completeAutomaticClaim(
+        'sch-complete-stale',
+        'run-stale-owner',
+        firedAt,
+        { lastFinishedAt: due + 70_000, nextFireAt: due + 120_000, status: 'expired' },
+      );
+      expect(staleAfter?.nextFireAt).toBe(due + 45_000);
+      expect(staleAfter?.lastFiredAt).toBe(firedAt + 10);
+      expect(staleAfter?.lastFinishedAt).toBe(due + 70_000);
+      expect(staleAfter?.status).toBe('expired');
+      expect(staleAfter?.activeClaimRunId).toBe('run-replacement-owner');
+
+      await harness.storage.insert(baseSchedule({
+        id: 'sch-defer-live',
+        nextFireAt: due + 45_000,
+        activeClaimRunId: 'run-defer-live',
+      }));
+      await harness.storage.insertRun({
+        id: 'run-defer-live',
+        scheduleId: 'sch-defer-live',
+        firedAt,
+        status: 'running',
+      });
+      const deferLive = await harness.storage.deferRunNowWithLiveClaimGuard(
+        'sch-defer-live',
+        undefined,
+        due + 90_000,
+      );
+      expect(deferLive?.nextFireAt).toBe(due + 45_000);
+      expect(deferLive?.lastFiredAt).toBeUndefined();
+      expect(deferLive?.activeClaimRunId).toBe('run-defer-live');
+
+      await harness.storage.insert(baseSchedule({
+        id: 'sch-defer-stale',
+        nextFireAt: undefined,
+        activeClaimRunId: 'run-defer-stale',
+      }));
+      const deferStale = await harness.storage.deferRunNowWithLiveClaimGuard(
+        'sch-defer-stale',
+        firedAt - 1_000,
+        due + 90_000,
+      );
+      expect(deferStale?.nextFireAt).toBe(due + 90_000);
+      expect(deferStale?.lastFiredAt).toBe(firedAt - 1_000);
+      expect(deferStale?.activeClaimRunId).toBeUndefined();
+
+      await harness.storage.insert(baseSchedule({
+        id: 'sch-pause-live',
+        nextFireAt: undefined,
+        activeClaimRunId: 'run-pause-live',
+      }));
+      await harness.storage.insertRun({
+        id: 'run-pause-live',
+        scheduleId: 'sch-pause-live',
+        firedAt,
+        status: 'running',
+      });
+      const pauseLive = await harness.storage.pauseWithLiveClaimGuard(
+        'sch-pause-live',
+        due + 95_000,
+      );
+      expect(pauseLive?.status).toBe('paused');
+      expect(pauseLive?.nextFireAt).toBeUndefined();
+      expect(pauseLive?.updatedAt).toBe(due + 95_000);
+      expect(pauseLive?.activeClaimRunId).toBe('run-pause-live');
+
+      await harness.storage.insert(baseSchedule({
+        id: 'sch-pause-stale',
+        nextFireAt: undefined,
+        activeClaimRunId: 'run-pause-stale',
+      }));
+      const pauseStale = await harness.storage.pauseWithLiveClaimGuard(
+        'sch-pause-stale',
+        due + 96_000,
+      );
+      expect(pauseStale?.status).toBe('paused');
+      expect(pauseStale?.updatedAt).toBe(due + 96_000);
+      expect(pauseStale?.activeClaimRunId).toBeUndefined();
     } finally {
       harness.close();
     }
@@ -645,6 +747,76 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(proxyDeferred?.nextFireAt).toBe(due + 60_000);
       expect(proxyDeferred?.lastFiredAt).toBe(firedAt + 10);
       expect(proxyDeferred?.activeClaimRunId).toBeUndefined();
+
+      await storage.insert(baseSchedule({
+        id: 'sch-proxy-complete-owner',
+        nextFireAt: undefined,
+        activeClaimRunId: 'run-proxy-complete-owner',
+      }));
+      const proxyComplete = await storage.completeAutomaticClaim(
+        'sch-proxy-complete-owner',
+        'run-proxy-complete-owner',
+        firedAt,
+        { lastFinishedAt: due + 70_000, nextFireAt: due + 120_000 },
+      );
+      expect(proxyComplete?.nextFireAt).toBe(due + 120_000);
+      expect(proxyComplete?.lastFiredAt).toBe(firedAt);
+      expect(proxyComplete?.activeClaimRunId).toBeUndefined();
+
+      await storage.insert(baseSchedule({
+        id: 'sch-proxy-complete-stale',
+        nextFireAt: due + 45_000,
+        activeClaimRunId: 'run-proxy-replacement-owner',
+      }));
+      const proxyStaleComplete = await storage.completeAutomaticClaim(
+        'sch-proxy-complete-stale',
+        'run-proxy-stale-owner',
+        firedAt,
+        { lastFinishedAt: due + 70_000, nextFireAt: due + 120_000, status: 'expired' },
+      );
+      expect(proxyStaleComplete?.nextFireAt).toBe(due + 45_000);
+      expect(proxyStaleComplete?.lastFiredAt).toBe(firedAt);
+      expect(proxyStaleComplete?.lastFinishedAt).toBe(due + 70_000);
+      expect(proxyStaleComplete?.status).toBe('expired');
+      expect(proxyStaleComplete?.activeClaimRunId).toBe('run-proxy-replacement-owner');
+
+      await storage.insert(baseSchedule({
+        id: 'sch-proxy-defer-live',
+        nextFireAt: due + 45_000,
+        activeClaimRunId: 'run-proxy-defer-live',
+      }));
+      await storage.insertRun({
+        id: 'run-proxy-defer-live',
+        scheduleId: 'sch-proxy-defer-live',
+        firedAt,
+        status: 'running',
+      });
+      const proxyDeferLive = await storage.deferRunNowWithLiveClaimGuard(
+        'sch-proxy-defer-live',
+        undefined,
+        due + 90_000,
+      );
+      expect(proxyDeferLive?.nextFireAt).toBe(due + 45_000);
+      expect(proxyDeferLive?.activeClaimRunId).toBe('run-proxy-defer-live');
+
+      await storage.insert(baseSchedule({
+        id: 'sch-proxy-pause-live',
+        nextFireAt: undefined,
+        activeClaimRunId: 'run-proxy-pause-live',
+      }));
+      await storage.insertRun({
+        id: 'run-proxy-pause-live',
+        scheduleId: 'sch-proxy-pause-live',
+        firedAt,
+        status: 'running',
+      });
+      const proxyPauseLive = await storage.pauseWithLiveClaimGuard(
+        'sch-proxy-pause-live',
+        due + 95_000,
+      );
+      expect(proxyPauseLive?.status).toBe('paused');
+      expect(proxyPauseLive?.nextFireAt).toBeUndefined();
+      expect(proxyPauseLive?.activeClaimRunId).toBe('run-proxy-pause-live');
 
       await storage.insert(
         baseSchedule({

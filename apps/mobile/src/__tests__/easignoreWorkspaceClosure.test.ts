@@ -76,8 +76,6 @@ describe('EAS .easignore covers apps/mobile workspace dependency closure', () =>
       /^!scripts\/shared\/client-endpoint-build-env\.cjs$/m,
     );
     expect(easignore).toMatch(/^!tools\/shared\/fetch-with-timeout\.mjs$/m);
-    expect(easignore).toMatch(/^!cindy-protocol$/m);
-    expect(easignore).toMatch(/^!cindy-protocol\/\*\*$/m);
     // beta EAS lane 已在 79013fcc 退役,eas.json 不再有 beta-base profile。
     for (const profile of [
       'store-cn-base',

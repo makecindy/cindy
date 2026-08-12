@@ -88,11 +88,6 @@ function readBindingsOrFail(): BindingRead {
   }
 }
 
-function readBindings(): BindingFile {
-  const read = readBindingsOrFail();
-  return read.ok ? read.bindings : {};
-}
-
 function writeBindings(value: BindingFile): void {
   const file = bindingPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -103,12 +98,25 @@ function writeBindings(value: BindingFile): void {
 
 /** Return true only when the native OAuth credential is explicitly bound to this owner. */
 export function isNativeProviderAuthBound(provider: NativeProviderId): boolean {
+  const read = readBindingsOrFail();
+  if (!read.ok) return false;
+  const bindings = read.bindings;
+  // Revocation describes the credential itself, not the current app owner. It must therefore
+  // remain authoritative during signed-out/bootstrap reads too; otherwise a residual local token
+  // can be treated as bound before an owner session has committed.
+  if (bindings.revoked && provider in bindings.revoked) return false;
   const owner = getActiveAppSession().dataOwnerId;
   // During unit/bootstrap code paths there may be no committed owner yet.
   // Owner-bound sessions are fail-closed; pre-session callers retain legacy
   // behavior until authentication commits an owner boundary.
   if (!owner) return true;
-  return readBindings()[provider] === owner;
+  return bindings[provider] === owner;
+}
+
+/** Whether an explicit durable revocation currently suppresses this provider credential. */
+export function isNativeProviderAuthRevoked(provider: NativeProviderId): boolean {
+  const read = readBindingsOrFail();
+  return Boolean(read.ok && read.bindings.revoked && provider in read.bindings.revoked);
 }
 
 /** Bind newly completed native OAuth to the current data owner. */
@@ -277,5 +285,28 @@ export function claimDetectedNativeProviderAuth(
   if (bindings.revoked && provider in bindings.revoked) return false;
   if (!hasCredential()) return false;
   writeBindings({ ...bindings, [provider]: owner });
+  return true;
+}
+
+/**
+ * Restore a provider binding only for the owner that was using the credential when it was
+ * invalidated. This is intentionally narrower than generic auto-claim: a renewed shared system
+ * credential is recovery of an existing owner relationship, so `legacyClaimOwner` must not strand
+ * that owner, while account switches and explicit revocation still fail closed.
+ */
+export function restoreNativeProviderAuthForRecovery(
+  provider: NativeProviderId,
+  expectedOwner: string,
+  hasCredential: () => boolean,
+): boolean {
+  const owner = getActiveAppSession().dataOwnerId;
+  if (!owner || owner !== expectedOwner || isAppSessionBoundaryPending()) return false;
+  const read = readBindingsOrFail();
+  if (!read.ok) return false;
+  const bindings = read.bindings;
+  if (bindings.revoked && provider in bindings.revoked) return false;
+  if (!hasCredential()) return false;
+  if (provider in bindings) return bindings[provider] === expectedOwner;
+  writeBindings({ ...bindings, [provider]: expectedOwner });
   return true;
 }

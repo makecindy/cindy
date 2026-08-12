@@ -412,25 +412,68 @@ export function mobileMarkdownImageUrlForWorkdir(
  * 它们承载非文本结构(横向滚动 / 边框 / 内嵌 View),不能进原生文本树,选择也天然止步于此。
  */
 export type MobileMarkdownTextRunBlock =
-  Extract<MobileMarkdownBlock, { type: 'paragraph' | 'heading' | 'list_item' }>;
+  Extract<MobileMarkdownBlock, { type: 'paragraph' | 'heading' | 'list_item' }>
+  & { textRunContinuation?: boolean };
 
 export type MobileMarkdownBlockGroup =
-  | { type: 'text_run'; key: string; blocks: MobileMarkdownTextRunBlock[] }
+  | { type: 'text_run'; key: string; blocks: MobileMarkdownTextRunBlock[]; textRunContinuation?: boolean }
   | { type: 'single'; key: string; block: MobileMarkdownBlock };
+
+export interface MobileMarkdownTextRunGroupingOptions {
+  /**
+   * Upper bound for one selectable native text view. Undefined keeps the
+   * historical "merge until a non-text block" behavior.
+   */
+  maxTextRunBlocks?: number;
+  /** Same guard by rendered inline text length, measured in JS UTF-16 units. */
+  maxTextRunUtf16Length?: number;
+}
+
+const MOBILE_MARKDOWN_TEXT_RUN_BLOCK_SEPARATOR_UTF16_LENGTH = 2;
+export const MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH = 256;
 
 export function groupMobileMarkdownSelectableBlocks(
   blocks: readonly MobileMarkdownBlock[],
+  options?: MobileMarkdownTextRunGroupingOptions,
 ): MobileMarkdownBlockGroup[] {
   const groups: MobileMarkdownBlockGroup[] = [];
   let run: MobileMarkdownTextRunBlock[] = [];
+  let runTextLength = 0;
+  const maxTextRunBlocks = normalizePositiveLimit(options?.maxTextRunBlocks);
+  const maxTextRunUtf16Length = normalizePositiveLimit(options?.maxTextRunUtf16Length);
   const flushRun = () => {
     if (run.length === 0) return;
-    groups.push({ type: 'text_run', key: `run:${run[0].key}`, blocks: run });
+    groups.push({
+      type: 'text_run',
+      key: `run:${run[0].key}`,
+      blocks: run,
+      ...(run[0].textRunContinuation ? { textRunContinuation: true } : {}),
+    });
     run = [];
+    runTextLength = 0;
   };
   for (const block of blocks) {
     if (isTextRunBlock(block)) {
-      run.push(block);
+      for (const chunk of splitOversizedTextRunBlock(block, maxTextRunUtf16Length)) {
+        const blockTextLength = mobileMarkdownTextRunBlockLength(chunk);
+        const separatorLength = run.length > 0 && !chunk.textRunContinuation
+          ? MOBILE_MARKDOWN_TEXT_RUN_BLOCK_SEPARATOR_UTF16_LENGTH
+          : 0;
+        if (
+          run.length > 0
+          && (
+            run.length >= maxTextRunBlocks
+            || runTextLength + separatorLength + blockTextLength > maxTextRunUtf16Length
+          )
+        ) {
+          flushRun();
+        }
+        const pushedSeparatorLength = run.length > 0 && !chunk.textRunContinuation
+          ? MOBILE_MARKDOWN_TEXT_RUN_BLOCK_SEPARATOR_UTF16_LENGTH
+          : 0;
+        run.push(chunk);
+        runTextLength += pushedSeparatorLength + blockTextLength;
+      }
     } else {
       flushRun();
       groups.push({ type: 'single', key: block.key, block });
@@ -448,6 +491,162 @@ function isTextRunBlock(block: MobileMarkdownBlock): block is MobileMarkdownText
   return !block.inlines.some(
     (inline) => inline.type === 'image' && isMobileMarkdownImageDirectUrl(inline.url),
   );
+}
+
+function normalizePositiveLimit(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : Number.POSITIVE_INFINITY;
+}
+
+function mobileMarkdownTextRunBlockLength(block: MobileMarkdownTextRunBlock): number {
+  const inlineLength = block.inlines.reduce((total, inline) => total + mobileMarkdownInlineTextLength(inline), 0);
+  if (block.type === 'list_item' && !block.textRunContinuation) {
+    return inlineLength + mobileMarkdownListMarkerText(block).length;
+  }
+  return inlineLength;
+}
+
+function mobileMarkdownInlineTextLength(inline: MobileMarkdownInline): number {
+  if (inline.type === 'image') {
+    return mobileMarkdownImageAltChipText(inline.alt).length;
+  }
+  return inline.text.length;
+}
+
+export function mobileMarkdownImageAltChipText(alt: string): string {
+  if (alt.length <= MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH) return alt;
+  const end = safeUtf16SliceEnd(alt, 0, MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH - 1);
+  return `${alt.slice(0, end)}…`;
+}
+
+function splitOversizedTextRunBlock(
+  block: MobileMarkdownTextRunBlock,
+  maxTextRunUtf16Length: number,
+): MobileMarkdownTextRunBlock[] {
+  if (
+    !Number.isFinite(maxTextRunUtf16Length)
+    || mobileMarkdownTextRunBlockLength(block) <= maxTextRunUtf16Length
+  ) {
+    return [block];
+  }
+
+  const chunks: MobileMarkdownInline[][] = [];
+  let current: MobileMarkdownInline[] = [];
+  let currentTextLength = 0;
+  const currentLimit = () => Math.max(
+    1,
+    maxTextRunUtf16Length - (chunks.length === 0 ? mobileMarkdownTextRunBlockPrefixLength(block) : 0),
+  );
+  const flushCurrent = () => {
+    if (current.length === 0) return;
+    chunks.push(current);
+    current = [];
+    currentTextLength = 0;
+  };
+  const appendInlineTextChunks = (
+    text: string,
+    buildInline: (text: string) => MobileMarkdownInline,
+  ) => {
+    let start = 0;
+    while (start < text.length) {
+      if (currentTextLength >= currentLimit()) flushCurrent();
+      const capacity = currentLimit() - currentTextLength;
+      if (
+        currentTextLength > 0
+        && capacity === 1
+        && startsWithSurrogatePair(text, start)
+      ) {
+        flushCurrent();
+        continue;
+      }
+      const end = safeUtf16SliceEnd(text, start, capacity);
+      current.push(buildInline(text.slice(start, end)));
+      currentTextLength += end - start;
+      start = end;
+    }
+  };
+
+  for (const inline of block.inlines) {
+    if (inline.type === 'image') {
+      const inlineLength = mobileMarkdownInlineTextLength(inline);
+      if (current.length > 0 && currentTextLength + inlineLength > currentLimit()) {
+        flushCurrent();
+      }
+      current.push(inline);
+      currentTextLength += inlineLength;
+      if (currentTextLength >= currentLimit()) flushCurrent();
+      continue;
+    }
+
+    appendInlineTextChunks(inline.text, (text) => ({ ...inline, text }));
+  }
+  flushCurrent();
+
+  if (chunks.length <= 1) return [block];
+  return chunks.map((inlines, index) => cloneTextRunBlockChunk(block, inlines, index));
+}
+
+function mobileMarkdownTextRunBlockPrefixLength(block: MobileMarkdownTextRunBlock): number {
+  if (block.type !== 'list_item' || block.textRunContinuation) return 0;
+  return mobileMarkdownListMarkerText(block).length;
+}
+
+function mobileMarkdownListMarkerText(block: Extract<MobileMarkdownTextRunBlock, { type: 'list_item' }>): string {
+  if (typeof block.checked === 'boolean') return block.checked ? '☑ ' : '☐ ';
+  return block.ordered ? `${block.marker} ` : '• ';
+}
+
+function cloneTextRunBlockChunk(
+  block: MobileMarkdownTextRunBlock,
+  inlines: MobileMarkdownInline[],
+  index: number,
+): MobileMarkdownTextRunBlock {
+  const key = index === 0 ? block.key : `${block.key}:split:${index}`;
+  const continuation = index > 0 ? { textRunContinuation: true } : {};
+  if (block.type === 'paragraph') return { ...block, key, inlines, ...continuation };
+  if (block.type === 'heading') return { ...block, key, inlines, ...continuation };
+  return {
+    ...block,
+    key,
+    inlines,
+    ...continuation,
+  };
+}
+
+function safeUtf16SliceEnd(text: string, start: number, maxLength: number): number {
+  const length = Math.max(1, maxLength);
+  if (length === 1 && startsWithSurrogatePair(text, start)) {
+    return start + 2;
+  }
+  let end = Math.min(text.length, start + length);
+  if (
+    end < text.length
+    && end > start
+    && isHighSurrogate(text.charCodeAt(end - 1))
+    && isLowSurrogate(text.charCodeAt(end))
+  ) {
+    end -= 1;
+  }
+  return end > start ? end : Math.min(text.length, start + 1);
+}
+
+function startsWithSurrogatePair(text: string, start: number): boolean {
+  return (
+    start + 1 < text.length
+    && isHighSurrogate(text.charCodeAt(start))
+    && isLowSurrogate(text.charCodeAt(start + 1))
+  );
+}
+
+function isHighSurrogate(value: number): boolean {
+  return value >= 0xD800 && value <= 0xDBFF;
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xDC00 && value <= 0xDFFF;
 }
 
 const MARKDOWN_INLINE_IMAGE_DEFAULT_WIDTH = 150;

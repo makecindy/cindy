@@ -3,6 +3,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
+  BillingPaymentOrder,
   BillingSubscription,
   BillingSubscriptionPortalResult,
 } from '../../../../shared/billing';
@@ -20,10 +21,16 @@ const uiMocks = vi.hoisted(() => ({
 
 const authState = vi.hoisted(() => ({ dataOwnerId: 'account-fixture' as string | null }));
 
+/**
+ * 计费页只用 useSearchParams 消费 `?intent=topup` 深链，不需要真的挂 Router：
+ * 用一个可读写的 URLSearchParams 替身，既能驱动深链分支，也能断言参数被摘除。
+ */
+const routerState = vi.hoisted(() => ({ search: '' as string }));
+
 const checkout = {
   state: {
     open: false,
-    kind: null,
+    kind: null as 'CREDIT_TOPUP' | 'SUBSCRIPTION' | null,
     phase: 'IDLE',
     intent: null,
     order: null,
@@ -62,6 +69,17 @@ vi.mock('@/features/feature-context', () => ({
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ dataOwnerId: authState.dataOwnerId }),
 }));
+// 只覆写 useSearchParams(深链 ?intent=topup 的读写口),其余导出保留真实实现 ——
+// 全量替换会让后续用到 Link / useNavigate 等导出的用例拿到 undefined 才炸在别处。
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useSearchParams: () => [
+    new URLSearchParams(routerState.search),
+    (next: URLSearchParams) => {
+      routerState.search = next.toString();
+    },
+  ],
+}));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: uiMocks.confirm }),
 }));
@@ -71,7 +89,10 @@ vi.mock('@/lib/toast', () => ({
     success: uiMocks.toastSuccess,
   },
 }));
-vi.mock('../useBillingCheckout', () => ({
+// 只替换 hook 本身:同模块的 phaseForOrder 是纯函数,订单记录的状态文案刻意复用它
+// (支付弹窗与列表必须由同一个判据推导),整模块 mock 掉会把那条依赖一起挖空。
+vi.mock('../useBillingCheckout', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../useBillingCheckout')>()),
   useBillingCheckout: () => checkout,
 }));
 vi.mock('qrcode', () => ({
@@ -86,14 +107,12 @@ beforeEach(() => {
   uiMocks.toastError.mockReset();
   uiMocks.toastSuccess.mockReset();
   authState.dataOwnerId = 'account-fixture';
+  routerState.search = '';
 });
 
 async function openSubscriptionManagementMenu() {
   const trigger = await screen.findByText('billing.settings.subscriptionCard.manageAction');
-  fireEvent.pointerDown(
-    trigger.closest('button')!,
-    { button: 0, ctrlKey: false },
-  );
+  fireEvent.pointerDown(trigger.closest('button')!, { button: 0, ctrlKey: false });
   await screen.findByRole('menu');
 }
 
@@ -361,6 +380,7 @@ describe('BillingPage remote catalog rendering', () => {
             ],
           })),
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
+          listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
         },
         openExternal: vi.fn(),
@@ -533,6 +553,11 @@ describe('BillingPage remote catalog rendering', () => {
     }).format(100);
     expect(offerButtons[0].textContent).toContain(twenty);
     expect(offerButtons[1].textContent).toContain(hundred);
+    expect(offerButtons[0].parentElement?.className).toContain('divide-y');
+    expect(offerButtons[0].parentElement?.className).toContain('rounded-xl');
+    expect(
+      within(offerButtons[0]).getByText(`billing.credits:{"amount":"${twenty}"}`),
+    ).toBeTruthy();
   });
 
   it('shows an end date for period-end cancellation and omits invalid dates', async () => {
@@ -820,6 +845,25 @@ describe('BillingPage remote catalog rendering', () => {
     );
   });
 
+  it('深链 ?intent=topup 直接打开充值弹窗，并把参数摘掉防返回/刷新重复弹', async () => {
+    // 供应商设置页的账户资产模块「余额充值」走的就是这条深链：充值弹窗依赖本页的
+    // 目录 / 选项 / checkout 状态，跨 feature 只投递意图。
+    routerState.search = 'tab=billing&intent=topup';
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('Configured top-up')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('tab')).toBe('billing');
+  });
+
+  it('没有 intent 参数时不自动弹充值弹窗', async () => {
+    render(<BillingPage />);
+
+    await screen.findByText('billing.settings.topupCard.action');
+    expect(screen.queryByText('Configured top-up')).toBeNull();
+  });
+
   it('shows server-visible unavailable offers and only enables purchasable offers', async () => {
     render(<BillingPage />);
 
@@ -852,12 +896,18 @@ describe('BillingPage remote catalog rendering', () => {
     expect(screen.queryByText('alipay')).toBeNull();
     expect(screen.queryByText('stripe')).toBeNull();
 
-    fireEvent.click(screen.getByText('Configured top-up').closest('button')!);
+    const configuredTopup = screen.getByText('Configured top-up').closest('button')!;
+    fireEvent.click(configuredTopup);
+    expect(configuredTopup.getAttribute('aria-pressed')).toBe('true');
+    expect(configuredTopup.className).not.toContain('shadow-[inset');
     expect(await screen.findByText('alipay')).toBeTruthy();
     expect(screen.queryByText('unknown_provider')).toBeNull();
     expect(screen.queryByText('stripe')).toBeNull();
 
-    fireEvent.click(screen.getByText('alipay').closest('button')!);
+    const alipayOption = screen.getByText('alipay').closest('button')!;
+    fireEvent.click(alipayOption);
+    expect(alipayOption.getAttribute('aria-pressed')).toBe('true');
+    expect(alipayOption.className).not.toContain('shadow-[inset');
     fireEvent.change(screen.getByPlaceholderText('billing.amount.placeholder'), {
       target: { value: '1.001' },
     });
@@ -909,7 +959,56 @@ describe('BillingPage remote catalog rendering', () => {
     expect(checkout.startSubscription).not.toHaveBeenCalled();
   });
 
-  it('marks the current subscription offer and prevents selecting it again', async () => {
+  it('keeps a Product enterable when its current Offer has another Offer', async () => {
+    window.electronAPI.billing.getCatalog = vi.fn(async () => ({
+      products: [
+        {
+          code: 'plus',
+          name: 'Configured subscription',
+          kind: 'SUBSCRIPTION' as const,
+          level: 1,
+          sortOrder: 1,
+          offers: [
+            {
+              code: 'plus_month',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '9',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '100',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'plus_month_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+            {
+              code: 'plus_month_more',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '20',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '250',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'plus_month_more_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
     window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({
       subscription: {
         subscriptionId: 'subscription_fixture',
@@ -939,15 +1038,289 @@ describe('BillingPage remote catalog rendering', () => {
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.action');
 
     const dialog = await screen.findByRole('dialog');
-    const currentPlan = within(dialog).getByRole('button', { name: /Configured subscription/ });
+    const product = within(dialog).getByRole('button', { name: /Configured subscription/ });
+    expect(product).toHaveProperty('disabled', false);
+    const currentPlan = within(dialog).getByText('billing.catalog.currentPlan').closest('button')!;
+    const alternativeOffer = within(dialog).getByText('$20.00').closest('button')!;
+    const alternativeCredits = new Intl.NumberFormat('en', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(250);
+    expect(
+      within(alternativeOffer).getByText(
+        `billing.credits:{"amount":"${alternativeCredits}"}`,
+      ).className,
+    ).toContain('text-12');
+    expect(within(dialog).queryByText('plus_month_more')).toBeNull();
     expect(currentPlan).toHaveProperty('disabled', true);
     expect(currentPlan.getAttribute('aria-current')).toBe('true');
-    expect(within(dialog).getByText('billing.catalog.currentPlan')).toBeTruthy();
-    expect(within(dialog).queryByText('billing.steps.channel.title')).toBeNull();
-    expect(within(dialog).queryByText('stripe')).toBeNull();
+    expect(alternativeOffer).toHaveProperty('disabled', false);
+    expect(alternativeOffer.getAttribute('aria-pressed')).toBe('true');
+    expect(alternativeOffer.className).not.toContain('shadow-[inset');
+    expect(within(dialog).getByText('billing.steps.channel.title')).toBeTruthy();
+    expect(within(dialog).getByText('stripe')).toBeTruthy();
 
-    fireEvent.click(currentPlan);
     expect(checkout.startSubscription).not.toHaveBeenCalled();
+  });
+
+  it('defaults within a Product and keeps unavailable state at the Offer level', async () => {
+    window.electronAPI.billing.getCatalog = vi.fn(async () => ({
+      products: [
+        {
+          code: 'pro',
+          name: 'Pro',
+          kind: 'SUBSCRIPTION' as const,
+          level: 1,
+          sortOrder: 1,
+          offers: [
+            {
+              code: 'pro_month_current',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '9',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '100',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'pro_current_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+            {
+              code: 'pro_month_more',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '20',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '250',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'pro_more_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+          ],
+        },
+        {
+          code: 'future',
+          name: 'Coming Soon',
+          kind: 'SUBSCRIPTION' as const,
+          level: 2,
+          sortOrder: 2,
+          offers: [
+            {
+              code: 'future_month',
+              salesState: 'COMING_SOON' as const,
+              purchasable: false,
+              unavailableReason: 'OFFER_COMING_SOON' as const,
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '30',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '500',
+              rolloverCap: '0',
+              purchaseOptions: [],
+            },
+          ],
+        },
+      ],
+    }));
+    window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({ subscription: null }));
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+
+    const dialog = await screen.findByRole('dialog');
+    const defaultOffer = within(dialog).getByText('$9.00').closest('button')!;
+    await waitFor(() =>
+      expect(document.activeElement).toBe(defaultOffer),
+    );
+    const proProduct = within(dialog).getByRole('button', { name: /Pro/ });
+    const futureProduct = within(dialog).getByRole('button', { name: /Coming Soon/ });
+    expect(proProduct).toHaveProperty('disabled', false);
+    expect(proProduct.closest('section')?.parentElement?.className).toContain('rounded-xl');
+    expect(proProduct.closest('section')?.className).not.toContain('border-[var(--text-primary)]');
+    expect(futureProduct).toHaveProperty('disabled', true);
+    expect(
+      within(futureProduct).getByText('billing.catalog.unavailableReasons.OFFER_COMING_SOON'),
+    ).toBeTruthy();
+
+    const secondOffer = within(dialog).getByText('$20.00').closest('button')!;
+    const defaultCredits = new Intl.NumberFormat('en', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(100);
+    expect(
+      within(defaultOffer).getByText(`billing.credits:{"amount":"${defaultCredits}"}`),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText('pro_month_current')).toBeNull();
+    expect(within(dialog).queryByText('pro_month_more')).toBeNull();
+    expect(defaultOffer).toHaveProperty('disabled', false);
+    expect(defaultOffer.getAttribute('aria-pressed')).toBe('true');
+    expect(defaultOffer.firstElementChild?.querySelector('svg')).toBeNull();
+    expect(defaultOffer.lastElementChild?.querySelector('svg')).toBeTruthy();
+    expect(secondOffer.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(secondOffer);
+    expect(secondOffer.getAttribute('aria-pressed')).toBe('true');
+    expect(secondOffer.className).not.toContain('shadow-[inset');
+  });
+
+  it('shows the server-default Offer price when a Product is collapsed', async () => {
+    const offer = (code: string, amount: string) => ({
+      code,
+      interval: 'MONTH' as const,
+      currency: 'usd',
+      amount,
+      minAmount: null,
+      maxAmount: null,
+      creditAmount: amount,
+      rolloverCap: '0',
+      purchaseOptions: [
+        {
+          id: `${code}_stripe`,
+          provider: 'stripe',
+          capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+          paymentAction: 'REDIRECT' as const,
+        },
+      ],
+    });
+    window.electronAPI.billing.getCatalog = vi.fn(async () => ({
+      products: [
+        {
+          code: 'pro',
+          name: 'Pro',
+          kind: 'SUBSCRIPTION' as const,
+          level: 1,
+          sortOrder: 1,
+          offers: [offer('pro_default', '20'), offer('pro_cheaper', '9')],
+        },
+        {
+          code: 'basic',
+          name: 'Basic',
+          kind: 'SUBSCRIPTION' as const,
+          level: 0,
+          sortOrder: 2,
+          offers: [offer('basic_default', '5')],
+        },
+      ],
+    }));
+    window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({ subscription: null }));
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+
+    const dialog = await screen.findByRole('dialog');
+    const defaultOffer = within(dialog).getByText('$20.00').closest('button')!;
+    expect(defaultOffer.getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Basic/ }));
+    const collapsedProduct = within(dialog).getByRole('button', { name: /Pro/ });
+    expect(within(collapsedProduct).getByText('$20.00')).toBeTruthy();
+    expect(within(collapsedProduct).queryByText('$9.00')).toBeNull();
+    expect(within(collapsedProduct).queryByText(/billing\.amount\.startingAt/)).toBeNull();
+  });
+
+  it('reselects the first valid Offer in the same Product after a catalog refresh', async () => {
+    const firstOffer = {
+      code: 'pro_month',
+      interval: 'MONTH' as const,
+      currency: 'usd',
+      amount: '9',
+      minAmount: null,
+      maxAmount: null,
+      creditAmount: '100',
+      rolloverCap: '0',
+      purchaseOptions: [
+        {
+          id: 'pro_month_stripe',
+          provider: 'stripe',
+          capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+          paymentAction: 'REDIRECT' as const,
+        },
+      ],
+    };
+    const secondOffer = {
+      ...firstOffer,
+      code: 'pro_month_more',
+      amount: '20',
+      creditAmount: '250',
+      purchaseOptions: [
+        {
+          ...firstOffer.purchaseOptions[0],
+          id: 'pro_month_more_stripe',
+        },
+      ],
+    };
+    const product = {
+      code: 'pro',
+      name: 'Pro',
+      kind: 'SUBSCRIPTION' as const,
+      level: 1,
+      sortOrder: 1,
+      offers: [firstOffer, secondOffer],
+    };
+    const otherProduct = {
+      code: 'basic',
+      name: 'Basic',
+      kind: 'SUBSCRIPTION' as const,
+      level: 0,
+      sortOrder: 2,
+      offers: [
+        {
+          ...firstOffer,
+          code: 'basic_month',
+          amount: '5',
+          creditAmount: '50',
+          purchaseOptions: [
+            {
+              ...firstOffer.purchaseOptions[0],
+              id: 'basic_month_stripe',
+            },
+          ],
+        },
+      ],
+    };
+    window.electronAPI.billing.getCatalog = vi
+      .fn()
+      .mockResolvedValueOnce({ products: [product, otherProduct] })
+      .mockResolvedValueOnce({ products: [{ ...product, offers: [firstOffer] }, otherProduct] })
+      .mockResolvedValueOnce({ products: [otherProduct] });
+    window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({ subscription: null }));
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /Pro/ }));
+    const secondOfferButton = within(dialog).getByText('$20.00').closest('button')!;
+    fireEvent.click(secondOfferButton);
+    expect(secondOfferButton.getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+    await waitFor(() =>
+      expect(
+        within(dialog).getByText('$9.00').closest('button')?.getAttribute('aria-pressed'),
+      ).toBe('true'),
+    );
+    expect(within(dialog).queryByText('pro_month')).toBeNull();
+    expect(within(dialog).queryByText('$20.00')).toBeNull();
+
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: /Basic/ })).toBeTruthy());
+    expect(within(dialog).queryByLabelText('settings.back')).toBeNull();
+    expect(within(dialog).queryByText('$9.00')).toBeNull();
   });
 
   it.each(['INCOMPLETE', 'CANCELED', 'INCOMPLETE_EXPIRED'] as const)(
@@ -968,9 +1341,7 @@ describe('BillingPage remote catalog rendering', () => {
       }));
 
       render(<BillingPage />);
-      expect(
-        await screen.findByText('billing.settings.subscriptionCard.emptyTitle'),
-      ).toBeTruthy();
+      expect(await screen.findByText('billing.settings.subscriptionCard.emptyTitle')).toBeTruthy();
       expect(screen.queryByText(`billing.subscriptionStatus.${status}`)).toBeNull();
       fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
 
@@ -1051,7 +1422,7 @@ describe('BillingPage remote catalog rendering', () => {
     ).toHaveProperty('disabled', true);
   });
 
-  it('renders multiple remote subscription offers as independent choices', async () => {
+  it('renders single-Offer subscription Products as direct rows', async () => {
     window.electronAPI.billing.getCatalog = vi.fn(async () => ({
       products: (['alipay', 'stripe', 'alipay'] as const).map((provider, index) => ({
         code: `plan_${index + 1}`,
@@ -1092,13 +1463,41 @@ describe('BillingPage remote catalog rendering', () => {
     const planButtons = await screen.findAllByRole('button', { name: /Remote plan/ });
     expect(planButtons).toHaveLength(3);
     expect(planButtons.map((button) => button.getAttribute('aria-pressed'))).toEqual([
-      'false',
+      'true',
       'false',
       'false',
     ]);
+    expect(planButtons.map((button) => button.getAttribute('aria-expanded'))).toEqual([
+      null,
+      null,
+      null,
+    ]);
+    expect(within(planButtons[0]).getByText(/1\.00/)).toBeTruthy();
+    expect(within(planButtons[0]).queryByText(/billing\.amount\.startingAt/)).toBeNull();
+    const firstPlanCredits = new Intl.NumberFormat('en', {
+      style: 'currency',
+      currency: 'CNY',
+    }).format(100);
+    expect(
+      within(planButtons[0]).getByText(`billing.credits:{"amount":"${firstPlanCredits}"}`),
+    ).toBeTruthy();
+    expect(screen.queryByText('plan_1_month')).toBeNull();
+    expect(screen.getByText('alipay')).toBeTruthy();
+    expect(screen.queryByText('stripe')).toBeNull();
 
     fireEvent.click(planButtons[1]);
-    expect(planButtons[1].getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByText('plan_1_month')).toBeNull();
+    expect(
+      (await screen.findAllByRole('button', { name: /Remote plan/ })).map((button) =>
+        button.getAttribute('aria-pressed'),
+      ),
+    ).toEqual(['false', 'true', 'false']);
+    expect(
+      screen
+        .getAllByRole('button', { name: /Remote plan/ })
+        .map((button) => button.getAttribute('aria-expanded')),
+    ).toEqual([null, null, null]);
+    expect(screen.queryByText('plan_2_month')).toBeNull();
     expect(await screen.findByText('stripe')).toBeTruthy();
     expect(screen.queryByText('alipay')).toBeNull();
   });
@@ -1373,6 +1772,7 @@ describe('BillingPage plan change', () => {
         subscription: activeSubscription(),
       }),
     ),
+    listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
     cancelCurrentSubscription: vi.fn(),
     quotePlanChange: vi.fn(),
     confirmPlanChange: vi.fn(),
@@ -1410,9 +1810,10 @@ describe('BillingPage plan change', () => {
     const billing = install(billingMocks());
     let resolvePortal!: (result: BillingSubscriptionPortalResult) => void;
     billing.openSubscriptionPortal.mockImplementation(
-      () => new Promise<BillingSubscriptionPortalResult>((resolve) => {
-        resolvePortal = resolve;
-      }),
+      () =>
+        new Promise<BillingSubscriptionPortalResult>((resolve) => {
+          resolvePortal = resolve;
+        }),
     );
 
     render(<BillingPage />);
@@ -1459,7 +1860,9 @@ describe('BillingPage plan change', () => {
     render(<BillingPage />);
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.portalAction');
     await waitFor(() => {
-      expect(uiMocks.toastError).toHaveBeenCalledWith('billing.settings.subscriptionCard.portalFailed');
+      expect(uiMocks.toastError).toHaveBeenCalledWith(
+        'billing.settings.subscriptionCard.portalFailed',
+      );
     });
 
     const catalogCalls = billing.getCatalog.mock.calls.length;
@@ -1715,7 +2118,7 @@ describe('BillingPage plan change', () => {
     ).toBeTruthy();
   });
 
-  it('offers same-provider monthly plans in upgrade, same-tier, downgrade order', async () => {
+  it('offers same-provider monthly Products in Catalog order', async () => {
     const billing = install(billingMocks());
     billing.quotePlanChange.mockResolvedValue({
       planChangeId: 'plan_change_1',
@@ -1733,7 +2136,6 @@ describe('BillingPage plan change', () => {
 
     await screen.findByText('billing.planChange.targetTitle');
     const dialog = screen.getByRole('dialog');
-    const currentPlanButton = within(dialog).getByText('Plus plan').closest('button')!;
     const maxButton = screen.getByText('Max plan').closest('button')!;
     const sameLevelButton = screen.getByText('Same-level plan').closest('button')!;
     const starterButton = screen.getByText('Starter plan').closest('button')!;
@@ -1744,9 +2146,7 @@ describe('BillingPage plan change', () => {
       sameLevelButton.compareDocumentPosition(starterButton) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(within(maxButton).getByText('billing.planChange.upgradeBadge')).toBeTruthy();
-    expect(currentPlanButton.hasAttribute('disabled')).toBe(true);
-    expect(currentPlanButton.getAttribute('aria-current')).toBe('true');
-    expect(within(currentPlanButton).getByText('billing.catalog.currentPlan')).toBeTruthy();
+    expect(within(dialog).getByText('billing.catalog.currentPlan')).toBeTruthy();
     expect(within(maxButton).getByText('stripe')).toBeTruthy();
     expect(within(sameLevelButton).getByText('billing.planChange.sameLevelBadge')).toBeTruthy();
     expect(within(starterButton).getByText('billing.planChange.downgradeBadge')).toBeTruthy();
@@ -1779,6 +2179,87 @@ describe('BillingPage plan change', () => {
     // APPLIED refreshes subscription, catalog, and balance exactly once more.
     await waitFor(() => expect(billing.getBalance).toHaveBeenCalledTimes(2));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2);
+  });
+
+  it('quotes the selected same-Product monthly Offer', async () => {
+    const billing = billingMocks();
+    billing.getCatalog = vi.fn(async () => ({
+      products: [
+        {
+          code: 'plus',
+          name: 'Plus plan',
+          kind: 'SUBSCRIPTION' as const,
+          level: 1,
+          sortOrder: 1,
+          offers: [
+            {
+              code: 'plus_month',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '9',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '100',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'listing_plus_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+            {
+              code: 'plus_month_more',
+              interval: 'MONTH' as const,
+              currency: 'usd',
+              amount: '20',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '250',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'listing_plus_more_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }));
+    billing.quotePlanChange.mockResolvedValue({
+      planChangeId: 'plan_change_1',
+      changeType: 'UPGRADE',
+      status: 'QUOTED',
+      quotedAmountMinor: 1100,
+      quotedCurrency: 'usd',
+      quoteExpiresAt: '2099-01-01T00:00:00.000Z',
+      effectiveAt: '2026-07-24T00:00:00.000Z',
+      paymentAction: null,
+    });
+    install(billing);
+
+    render(<BillingPage />);
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
+
+    const productButton = screen
+      .getAllByText('Plus plan')
+      .map((element) => element.closest('button'))
+      .find((button): button is HTMLButtonElement => button !== null)!;
+    expect(productButton).toHaveProperty('disabled', false);
+    fireEvent.click(productButton);
+
+    await waitFor(() =>
+      expect(billing.quotePlanChange).toHaveBeenCalledWith({
+        targetOfferCode: 'plus_month_more',
+        idempotencyKey: 'desktop:plan-change:00000000-0000-4000-8000-000000000042',
+      }),
+    );
   });
 
   it('opens a Stripe plan-change redirect automatically once and keeps the manual fallback', async () => {
@@ -1841,14 +2322,9 @@ describe('BillingPage plan change', () => {
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
 
     const dialog = await screen.findByRole('dialog');
-    const currentButton = within(dialog)
-      .getByText('billing.catalog.currentPlan')
-      .closest('button')!;
-    expect(within(currentButton).getByText('Plus plan')).toBeTruthy();
-    expect(within(currentButton).getByText('$7.00')).toBeTruthy();
-    expect(
-      within(currentButton).getByText('billing.credits:{"amount":"$80.00"}'),
-    ).toBeTruthy();
+    expect(within(dialog).getByText('billing.catalog.currentPlan')).toBeTruthy();
+    expect(within(dialog).getByText('$7.00')).toBeTruthy();
+    expect(within(dialog).getByText('billing.credits:{"amount":"$80.00"}')).toBeTruthy();
   });
 
   it('does not expose plan change for yearly subscriptions while server v1 is monthly-only', async () => {
@@ -1930,9 +2406,9 @@ describe('BillingPage plan change', () => {
   it('keeps new selection enabled when no current subscription exists (no INCOMPLETE task)', async () => {
     // 服务端不再把未支付的首购作为“当前订阅”下发；页面必须允许正常重新选择。
     const billing = billingMocks();
-    billing.getCurrentSubscription = vi.fn(
-      async () => ({ subscription: null }),
-    ) as unknown as typeof billing.getCurrentSubscription;
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: null,
+    })) as unknown as typeof billing.getCurrentSubscription;
     install(billing);
 
     render(<BillingPage />);
@@ -1951,9 +2427,9 @@ describe('BillingPage plan change', () => {
 
   it('stops treating the abandoned checkout subscription as current when the dialog closes', async () => {
     const billing = billingMocks();
-    billing.getCurrentSubscription = vi.fn(
-      async () => ({ subscription: null }),
-    ) as unknown as typeof billing.getCurrentSubscription;
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: null,
+    })) as unknown as typeof billing.getCurrentSubscription;
     install(billing);
     Object.assign(checkout.state, {
       open: true,
@@ -1980,7 +2456,9 @@ describe('BillingPage plan change', () => {
     fireEvent.click(await screen.findByLabelText('billing.actions.close'));
 
     expect(checkout.close).toHaveBeenCalled();
-    await waitFor(() => expect(billing.getCurrentSubscription.mock.calls.length).toBeGreaterThan(1));
+    await waitFor(() =>
+      expect(billing.getCurrentSubscription.mock.calls.length).toBeGreaterThan(1),
+    );
     fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
     fireEvent.click((await screen.findAllByText('Plus plan'))[0].closest('button')!);
     fireEvent.click(screen.getByText('stripe').closest('button')!);
@@ -2108,5 +2586,203 @@ describe('BillingPage plan change', () => {
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
     expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
     expect(billing.refreshPlanChange).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 订单记录组。回归的是「页面只讲现在还有多少，不讲钱是怎么来的」——用户查不到上次充了多少、
+ * 那笔没付成的还在不在。三条判据在这里各有用例:空态整组不渲染(不加空壳)、状态文案与支付
+ * 弹窗同一判据(phaseForOrder)、服务端还有下一页时只出提示条不出分页器。
+ */
+describe('BillingPage order history', () => {
+  const order = (over: Partial<BillingPaymentOrder> = {}): BillingPaymentOrder => ({
+    orderId: 'ord_8f21c4de9a',
+    productCode: 'credit_topup',
+    offerCode: 'credit_topup_custom',
+    // 刻意与余额 / 赠送池的数字不同:同一页里重复的金额会让断言抓错节点。
+    amount: '33',
+    currency: 'cny',
+    status: 'SUCCEEDED',
+    paymentAction: null,
+    createdAt: '2026-08-01T13:07:00.000Z',
+    updatedAt: '2026-08-01T13:09:00.000Z',
+    ...over,
+  });
+
+  const install = (
+    orders: BillingPaymentOrder[],
+    nextCursor: string | null = null,
+  ): ReturnType<typeof vi.fn> => {
+    const listOrders = vi.fn(async () => ({ orders, nextCursor }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        billing: {
+          getCreditUsage: vi.fn(async () => ({
+            available: '20',
+            plan: { remaining: '0', used: '0', total: '0' },
+            purchased: { remaining: '0', used: '0', total: '0' },
+            promotional: { remaining: '20', used: '0', total: '20' },
+            promotionalGrants: [],
+            promotionalGrantsComplete: true,
+            promotionalGrantConsistency: 'OBSERVED' as const,
+            ledgerUpdatedAt: null,
+            scale: 9 as const,
+            observedAt: '2026-08-01T00:00:00.000Z',
+          })),
+          getBalance: vi.fn(),
+          getCatalog: vi.fn(async () => ({ products: [] })),
+          getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
+          listOrders,
+          openPaymentRedirect: vi.fn(async () => ({ success: true })),
+        },
+        openExternal: vi.fn(),
+      },
+    });
+    return listOrders;
+  };
+
+  it('lists the most recent orders with amount, id and status', async () => {
+    install([order()]);
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('billing.orders.title')).toBeTruthy();
+    expect(screen.getByText('billing.orders.count:{"count":1}')).toBeTruthy();
+    expect(screen.getByText('billing.orders.description')).toBeTruthy();
+    // 订单号截断展示、完整值挂 title(客服场景要能复制全长)。
+    expect(screen.getByText('billing.orders.orderId:{"id":"ord_8f21"}').title).toBe(
+      'ord_8f21c4de9a',
+    );
+    expect(
+      screen.getByText(new Intl.NumberFormat('en', { style: 'currency', currency: 'CNY' }).format(33)),
+    ).toBeTruthy();
+    expect(screen.getByText('billing.orders.states.completed')).toBeTruthy();
+  });
+
+  it('asks the server for exactly the ten most recent orders', async () => {
+    const listOrders = install([order()]);
+
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    expect(listOrders).toHaveBeenCalledWith({ limit: 10 });
+  });
+
+  it('renders no group at all when there are no orders — the page keeps its current shape', async () => {
+    install([]);
+
+    render(<BillingPage />);
+    // 等页面其余部分落地,再断言这一组确实没渲染(不是还没到)。
+    await screen.findByText('billing.usage.promotionalDetails.title');
+    expect(screen.queryByText('billing.orders.title')).toBeNull();
+  });
+
+  it('renders no group when the order list cannot be fetched', async () => {
+    install([]);
+    window.electronAPI.billing.listOrders = vi.fn(async () => {
+      throw new Error('UNAVAILABLE');
+    });
+
+    render(<BillingPage />);
+    await screen.findByText('billing.usage.promotionalDetails.title');
+    expect(screen.queryByText('billing.orders.title')).toBeNull();
+  });
+
+  it('reloads the order history on every checkout phase landing, not only COMPLETED', async () => {
+    const listOrders = install([order()]);
+    const initialState = { ...checkout.state };
+
+    const { rerender } = render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    const baseline = listOrders.mock.calls.length;
+
+    // 订单一创建(AWAITING_PAYMENT)就已经是一条「待支付」记录,列表必须立刻能看到。
+    checkout.state = {
+      ...initialState,
+      open: true,
+      kind: 'CREDIT_TOPUP',
+      phase: 'AWAITING_PAYMENT',
+    };
+    rerender(<BillingPage />);
+    await waitFor(() => expect(listOrders.mock.calls.length).toBe(baseline + 1));
+
+    // 轮询落到失败终态时,那一行的状态 chip 也变了 —— 不能等用户手动刷新。
+    checkout.state = { ...checkout.state, phase: 'FAILED' };
+    rerender(<BillingPage />);
+    await waitFor(() => expect(listOrders.mock.calls.length).toBe(baseline + 2));
+
+    // 同一相位重复渲染不重拉:effect 只认「相位变化」,不是每次 render 都打接口。
+    rerender(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    expect(listOrders.mock.calls.length).toBe(baseline + 2);
+
+    checkout.state = initialState;
+  });
+
+  it('maps every payment status onto the checkout wording, not a second vocabulary', async () => {
+    install([
+      order({ orderId: 'o-succeeded', status: 'SUCCEEDED' }),
+      order({ orderId: 'o-created', status: 'CREATED' }),
+      order({ orderId: 'o-pending', status: 'PENDING' }),
+      order({ orderId: 'o-canceled', status: 'CANCELED' }),
+      order({ orderId: 'o-expired', status: 'EXPIRED' }),
+      order({ orderId: 'o-failed', status: 'FAILED' }),
+    ]);
+
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+
+    expect(screen.getByText('billing.orders.states.completed')).toBeTruthy();
+    // CREATED 与 PENDING 都是「还没付成」,与 checkout 的 phaseForOrder 同一判据。
+    expect(screen.getAllByText('billing.orders.states.awaitingPayment')).toHaveLength(2);
+    expect(screen.getByText('billing.orders.states.canceled')).toBeTruthy();
+    expect(screen.getByText('billing.orders.states.expired')).toBeTruthy();
+    expect(screen.getByText('billing.orders.states.failed')).toBeTruthy();
+  });
+
+  it('drops the payment-method column when no order still carries a payment action', async () => {
+    // 终态订单通常不再带 paymentAction;整批都没有时留一列破折号比不留更糟。
+    install([order({ paymentAction: null })]);
+
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    expect(screen.queryByText('billing.paymentActions.QR_CODE')).toBeNull();
+    expect(screen.queryByText('—')).toBeNull();
+  });
+
+  it('keeps the payment-method column when at least one order carries a payment action', async () => {
+    install([
+      order({
+        orderId: 'o-open',
+        status: 'CREATED',
+        paymentAction: {
+          type: 'QR_CODE',
+          value: 'https://example.invalid/qr',
+          expiresAt: '2026-08-01T14:07:00.000Z',
+        },
+      }),
+      order({ orderId: 'o-done' }),
+    ]);
+
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    expect(screen.getByText('billing.paymentActions.QR_CODE')).toBeTruthy();
+    // 缺支付方式的那一单占位,不把列整掉。
+    expect(screen.getByText('—')).toBeTruthy();
+  });
+
+  it('explains truncation instead of offering a pager when the server has older records', async () => {
+    install([order()], 'cursor-2');
+
+    render(<BillingPage />);
+    expect(await screen.findByText('billing.orders.incomplete:{"count":1}')).toBeTruthy();
+  });
+
+  it('does not explain truncation when the server has nothing older', async () => {
+    install([order()]);
+
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    expect(screen.queryByText('billing.orders.incomplete:{"count":1}')).toBeNull();
   });
 });

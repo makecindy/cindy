@@ -310,6 +310,15 @@ describe('withCodexUpstreamRecording', () => {
 });
 
 describe('codex gateway config', () => {
+  it('所有认证模式都让缺少 model metadata 的 Codex 模型使用 CodeModeOnly', async () => {
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+
+    for (const mode of ['oauth-bearer', 'env-key', 'provider-oauth'] as const) {
+      const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
+      expect(args).toContain('features.code_mode_only=true');
+    }
+  });
+
   it('oauth-bearer 模式: requires_openai_auth, 不带 env_key', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
 
@@ -375,24 +384,74 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   const compactionItem = { type: 'compaction', encrypted_content: 'ENC' };
   const contextCompactionItem = { type: 'context_compaction', id: 'cc_1', encrypted_content: 'ENC2' };
   const userMessage = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] };
+  const agentMessage = {
+    type: 'agent_message',
+    author: 'researcher',
+    recipient: 'parent',
+    content: [
+      { type: 'input_text', text: 'readable agent result' },
+      { type: 'encrypted_content', encrypted_content: 'AGENT_ENC' },
+    ],
+  };
+  const reasoningItem = {
+    type: 'reasoning',
+    content: null,
+    summary: [],
+    encrypted_content: 'REASONING_ENC',
+  };
 
-  it('把加密压缩块替换为明文占位 message(非 ChatGPT 上游)', async () => {
+  it('同时降级 compaction 与 agent 消息密文，保留可读正文和 reasoning(非 ChatGPT 上游)', async () => {
     const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     const out = transform(
-      { model: 'gpt-5.5', input: [compactionItem, contextCompactionItem, userMessage] },
+      {
+        model: 'gpt-5.5',
+        input: [compactionItem, contextCompactionItem, agentMessage, reasoningItem, userMessage],
+      },
       { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
     ) as { input: Array<Record<string, unknown>> };
 
     expect(out).not.toBeNull();
-    expect(out.input).toHaveLength(3);
+    expect(out.input).toHaveLength(5);
     expect(out.input[0].type).toBe('message');
     expect(out.input[1].type).toBe('message');
-    expect(JSON.stringify(out.input)).not.toContain('ENC');
     expect(JSON.stringify(out.input[0])).toContain('compacted into an encrypted snapshot');
-    // 压缩点之后的原有消息原样保留
-    expect(out.input[2]).toEqual(userMessage);
+    expect(out.input[2]).toEqual({
+      type: 'agent_message',
+      author: 'researcher',
+      recipient: 'parent',
+      content: [{ type: 'input_text', text: 'readable agent result' }],
+    });
+    expect(out.input[3]).toEqual(reasoningItem);
+    expect(out.input[4]).toEqual(userMessage);
+    expect(JSON.stringify(out.input)).not.toContain('AGENT_ENC');
+    expect(JSON.stringify(out.input)).toContain('REASONING_ENC');
+    // transform 不得原地污染 Codex 持有的历史对象。
+    expect(agentMessage.content).toHaveLength(2);
+  });
+
+  it('agent_message 只有密文时整条丢弃', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    const out = transform(
+      {
+        model: 'gpt-5.5',
+        input: [
+          {
+            type: 'agent_message',
+            author: 'researcher',
+            recipient: 'parent',
+            content: [{ type: 'encrypted_content', encrypted_content: 'ONLY_ENC' }],
+          },
+          userMessage,
+        ],
+      },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    ) as { input: Array<Record<string, unknown>> };
+
+    expect(out.input).toEqual([userMessage]);
   });
 
   it('ChatGPT 上游原样透传(远端压缩语义不受影响)', async () => {
@@ -400,7 +459,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform(
-      { model: 'gpt-5.5', input: [compactionItem, userMessage] },
+      { model: 'gpt-5.5', input: [compactionItem, agentMessage, reasoningItem, userMessage] },
       { ...CTX_BASE, upstreamBase: 'https://chatgpt.com/backend-api/codex' },
     )).toBeNull();
   });
@@ -614,6 +673,104 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     clearSessionProvider('session-kimi-image');
     setCustomProviderKeyReader(() => null);
     setCustomProviders([]);
+  });
+
+  it('strips agent message ciphertext before a cross-provider Chat bridge request', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'history-chat-provider',
+        name: 'History Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://chat-provider.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'history-model', name: 'History Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'history-provider-key');
+    host.registerComposed('session-history-chat', 'thread-history-chat', 'PRODUCT_PROMPT');
+    setSessionProvider('session-history-chat', 'history-chat-provider');
+    host.setCodexProxyAuthInjection('env-key');
+
+    const parsedBody = {
+      model: 'history-model',
+      input: [
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          recipient: 'parent',
+          content: [
+            { type: 'input_text', text: 'readable result' },
+            { type: 'encrypted_content', encrypted_content: 'AGENT_ENC' },
+          ],
+        },
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          recipient: 'parent',
+          content: [{ type: 'encrypted_content', encrypted_content: 'ONLY_ENC' }],
+        },
+        {
+          type: 'reasoning',
+          content: null,
+          summary: [],
+          encrypted_content: 'REASONING_ENC',
+        },
+      ],
+    };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-history-chat' },
+    };
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        parsedBody,
+        ctx,
+      ));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      if (!decision?.localHandler) throw new Error('expected Chat bridge local handler');
+
+      const res = {} as never;
+      await decision.localHandler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx,
+        res,
+      });
+      const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as
+        | { handle: ReturnType<typeof vi.fn> }
+        | undefined;
+      expect(bridge?.handle).toHaveBeenCalledWith({
+        parsedBody: {
+          ...parsedBody,
+          instructions: 'PRODUCT_PROMPT',
+          input: [
+            {
+              type: 'agent_message',
+              author: 'researcher',
+              recipient: 'parent',
+              content: [{ type: 'input_text', text: 'readable result' }],
+            },
+            parsedBody.input[2],
+          ],
+        },
+        res,
+      });
+    } finally {
+      clearSessionProvider('session-history-chat');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
   });
 
   it('routes a custom Codex Anthropic Messages runtime to the local bridge with provider-owned auth', async () => {
@@ -1107,6 +1264,285 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       clearSessionProvider('session-native-hot-path');
       setProviderViewsReader(async () => []);
       setXdGatewayModels([]);
+    }
+  });
+
+  it('routes the first collab_spawn request through its parent custom Responses provider', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'collab-spawn-provider',
+        name: 'Collab Spawn Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://collab-spawn.invalid/v1',
+            models: [{ id: 'collab-spawn-model', name: 'Collab Spawn Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'test-invalid-collab-spawn-key');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-collab-parent', 'thread-collab-parent', 'PRODUCT_PROMPT');
+    setSessionProvider('session-collab-parent', 'collab-spawn-provider');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'collab-spawn-model', input: [] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: {
+            'thread-id': 'thread-collab-child',
+            'x-openai-subagent': 'collab_spawn',
+            'x-codex-parent-thread-id': 'thread-collab-parent',
+          },
+        },
+      ));
+
+      expect(decision).toEqual({
+        upstreamOverride: 'https://collab-spawn.invalid/v1',
+        headerOverride: { authorization: 'Bearer test-invalid-collab-spawn-key' },
+        headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
+      });
+      expect(mockState.capturedRegistry?.get('thread-collab-child')).toBe('PRODUCT_PROMPT');
+    } finally {
+      host.unregister('session-collab-parent');
+      clearSessionProvider('session-collab-parent');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('fails closed when a collab_spawn request cannot resolve its parent route', async () => {
+    const host = await freshCodexProxyHost();
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'thread-collab-orphan',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-collab-missing-parent',
+      },
+    };
+
+    const decision = await Promise.resolve(host.createModelRoutingTransform()(
+      { model: 'collab-spawn-model', input: [] },
+      ctx,
+    ));
+
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
+    if (!decision?.localHandler) throw new Error('missing unresolved collab_spawn route handler');
+
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision.localHandler({
+      rawBody: Buffer.alloc(0),
+      parsedBody: { model: 'collab-spawn-model', input: [] },
+      ctx,
+      res: { writeHead, end } as never,
+    });
+
+    expect(writeHead).toHaveBeenCalledWith(503, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+    });
+    expect(JSON.parse(String(end.mock.calls[0]?.[0]))).toEqual({
+      error: {
+        type: 'server_error',
+        code: 'cindy_codex_parent_route_unavailable',
+        message: 'Cindy could not resolve the parent Provider route for this spawned Codex agent.',
+      },
+    });
+    expect(mockState.capturedRegistry?.get('thread-collab-orphan')).toBeUndefined();
+  });
+
+  it('does not use a matching x-client-request-id as a collab_spawn child identity', async () => {
+    const host = await freshCodexProxyHost();
+    host.registerComposed('session-collab-parent', 'thread-collab-parent', 'PARENT_PROMPT');
+    host.registerComposed('session-request-owner', 'request-collab-child', 'OWNER_PROMPT');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'collab-spawn-model', input: [] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: {
+            'x-client-request-id': 'request-collab-child',
+            'x-openai-subagent': 'collab_spawn',
+            'x-codex-parent-thread-id': 'thread-collab-parent',
+          },
+        },
+      ));
+
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      expect(host.registerChildThread('thread-collab-parent', 'request-collab-child')).toBe(false);
+    } finally {
+      host.unregister('session-collab-parent');
+      host.unregister('session-request-owner');
+    }
+  });
+
+  it('keeps an already-owned collab_spawn child on its existing session route', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'collab-parent-provider',
+        name: 'Collab Parent Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://collab-parent.invalid/v1',
+            models: [{ id: 'shared-collab-model', name: 'Shared Collab Model' }],
+          },
+        },
+      }),
+      buildUserProvider({
+        id: 'collab-owner-provider',
+        name: 'Collab Owner Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://collab-owner.invalid/v1',
+            models: [{ id: 'shared-collab-model', name: 'Shared Collab Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((providerId) => `test-invalid-${providerId}-key`);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-collab-parent', 'thread-collab-parent', 'PARENT_PROMPT');
+    host.registerComposed('session-collab-owner', 'thread-collab-owned', 'OWNER_PROMPT');
+    setSessionProvider('session-collab-parent', 'collab-parent-provider');
+    setSessionProvider('session-collab-owner', 'collab-owner-provider');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'shared-collab-model', input: [] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: {
+            'thread-id': 'thread-collab-owned',
+            'x-openai-subagent': 'collab_spawn',
+            'x-codex-parent-thread-id': 'thread-collab-parent',
+          },
+        },
+      ));
+
+      expect(decision).toEqual({
+        upstreamOverride: 'https://collab-owner.invalid/v1',
+        headerOverride: { authorization: 'Bearer test-invalid-collab-owner-provider-key' },
+        headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
+      });
+      expect(mockState.capturedRegistry?.get('thread-collab-owned')).toBe('OWNER_PROMPT');
+    } finally {
+      host.unregister('session-collab-parent');
+      host.unregister('session-collab-owner');
+      clearSessionProvider('session-collab-parent');
+      clearSessionProvider('session-collab-owner');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  const rejectedLazyInheritanceRequests: Array<{
+    name: string;
+    childThreadId: string;
+    headers: Readonly<Record<string, string>>;
+  }> = [
+    {
+      name: 'non-spawn request',
+      childThreadId: 'thread-review-child',
+      headers: {
+        'thread-id': 'thread-review-child',
+        'x-openai-subagent': 'review',
+        'x-codex-parent-thread-id': 'thread-collab-parent',
+      },
+    },
+    {
+      name: 'request id without a thread id',
+      childThreadId: 'request-collab-child',
+      headers: {
+        'x-client-request-id': 'request-collab-child',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-collab-parent',
+      },
+    },
+  ];
+
+  it.each(rejectedLazyInheritanceRequests)(
+    'does not lazily inherit the parent for a $name',
+    async ({ childThreadId, headers }) => {
+      const host = await freshCodexProxyHost();
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      host.registerComposed('session-collab-parent', 'thread-collab-parent', 'PARENT_PROMPT');
+
+      try {
+        await Promise.resolve(host.createModelRoutingTransform()(
+          { model: 'gpt-5.6', input: [] },
+          { reqId: 1, method: 'POST', url: '/responses', headers },
+        ));
+
+        expect(mockState.capturedRegistry?.get(childThreadId)).toBeUndefined();
+      } finally {
+        host.unregister('session-collab-parent');
+      }
+    },
+  );
+
+  it('does not register a Guardian request as a prompt-inheriting child thread', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-guardian-parent', 'thread-guardian-parent', 'PRODUCT_PROMPT');
+
+    try {
+      await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'codex-auto-review', input: [] },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: {
+            'thread-id': 'thread-guardian-child',
+            'x-openai-subagent': 'guardian',
+            'x-codex-parent-thread-id': 'thread-guardian-parent',
+          },
+        },
+      ));
+
+      expect(mockState.capturedRegistry?.get('thread-guardian-child')).toBeUndefined();
+    } finally {
+      host.unregister('session-guardian-parent');
     }
   });
 
@@ -2326,7 +2762,9 @@ describe('codex proxy host', () => {
       ],
       input: [
         { type: 'message', role: 'system', content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
-        { type: 'reasoning', id: 'rs_1', encrypted_content: 'gAAA' },
+        // summary 恒定补齐(缺省 []):xAI 要求回放的 reasoning 始终带 summary,
+        // 与 anthropic-responses-bridge 的回放形状同口径。
+        { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'gAAA' },
         {
           type: 'function_call',
           id: 'ctc_1',
@@ -2462,6 +2900,182 @@ describe('codex proxy host', () => {
         expect(out.tools).toEqual([{ type: 'function', name: 'read_file' }]);
       },
     );
+  });
+
+  // codex 的结构体会把自己没用上的 Option 字段一并序列化(实测 `content: null`),
+  // 那是 xAI 从没发过的键;带着它回放,上游判定「blob 被改过」→ 整轮 400
+  // "Could not decode the compaction blob. Ensure it is unmodified from the compact response."
+  // (2026-08-02 实测:新会话里首个把 reasoning 回放进 input[] 的请求必挂,重试同样挂。)
+  describe('xAI 加密 reasoning 回放形状', () => {
+    async function runXaiReasoningTransforms(
+      suffix: string,
+      body: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+      const host = await freshCodexProxyHost();
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      const sessionId = `session-reasoning-shape-${suffix}`;
+      const threadId = `thread-reasoning-shape-${suffix}`;
+      host.registerComposed(sessionId, threadId, 'PRODUCT_PROMPT');
+      setSessionProvider(sessionId, 'xai');
+
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
+      let current: unknown = body;
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      clearSessionProvider(sessionId);
+      return current as Record<string, unknown>;
+    }
+
+    const reasoningItemFrom = (input: unknown[]): Record<string, unknown> =>
+      input.find(
+        (item): item is Record<string, unknown> =>
+          typeof item === 'object' && item !== null && (item as { type?: unknown }).type === 'reasoning',
+      ) ?? {};
+
+    it('剥掉 codex 多序列化出来的键，只留 Responses 契约里的四个', async () => {
+      const out = await runXaiReasoningTransforms('strips-extra-keys', {
+        model: 'xai/grok-4.5',
+        input: [
+          {
+            type: 'reasoning',
+            id: 'rs_keep_me',
+            summary: [{ type: 'summary_text', text: 'thinking' }],
+            // codex 实际发出来的形态:自己没用上的 Option 字段照样序列化。
+            content: null,
+            internal_chat_message_metadata_passthrough: { turn_id: 't1' },
+            encrypted_content: 'BLOB-KEEP',
+          },
+        ],
+      });
+
+      const reasoning = reasoningItemFrom(out.input as unknown[]);
+      expect(Object.keys(reasoning).sort()).toEqual(['encrypted_content', 'id', 'summary', 'type']);
+      // blob 必须逐字不动 —— 改一个字节上游就解不开。
+      expect(reasoning.encrypted_content).toBe('BLOB-KEEP');
+      expect(reasoning.summary).toEqual([{ type: 'summary_text', text: 'thinking' }]);
+      expect(reasoning.id).toBe('rs_keep_me');
+    });
+
+    // 键名都在允许列表里、但 id 的值是空串:只数键名会判定「没变」,把原对象原样
+    // 发出去 —— 等于算出了规范形状又扔掉。
+    it('id 是空串时也要真的剥掉，而不是当作“没变”原样透传', async () => {
+      const out = await runXaiReasoningTransforms('empty-id', {
+        model: 'xai/grok-4.5',
+        input: [{ type: 'reasoning', id: '', summary: [], encrypted_content: 'BLOB-EMPTY-ID' }],
+      });
+
+      const reasoning = reasoningItemFrom(out.input as unknown[]);
+      expect(Object.keys(reasoning).sort()).toEqual(['encrypted_content', 'summary', 'type']);
+      expect(reasoning.encrypted_content).toBe('BLOB-EMPTY-ID');
+    });
+
+    it('codex 不发 id 时不编造一个（实测 xAI 不需要 id 也能解开 blob）', async () => {
+      const out = await runXaiReasoningTransforms('no-id', {
+        model: 'xai/grok-4.5',
+        input: [{ type: 'reasoning', summary: [], content: null, encrypted_content: 'BLOB-NO-ID' }],
+      });
+
+      const reasoning = reasoningItemFrom(out.input as unknown[]);
+      expect(Object.keys(reasoning).sort()).toEqual(['encrypted_content', 'summary', 'type']);
+      expect(reasoning.encrypted_content).toBe('BLOB-NO-ID');
+    });
+  });
+
+  // OpenAI/Codex collab 历史里的 agent_message 不是 xAI ModelInput 变体；跨源 resume
+  // 到 grok 时原样转发 → 422 "data did not match any variant of untagged enum ModelInput"。
+  // (2026-08-03 实测: gpt-5.6-sol collab 会话切 xai/grok-4.5 必挂;新建 grok 会话正常。)
+  describe('xAI collab agent_message 跨源回放', () => {
+    async function runXaiInputTransforms(
+      suffix: string,
+      body: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+      const host = await freshCodexProxyHost();
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      const sessionId = `session-agent-message-${suffix}`;
+      const threadId = `thread-agent-message-${suffix}`;
+      host.registerComposed(sessionId, threadId, 'PRODUCT_PROMPT');
+      setSessionProvider(sessionId, 'xai');
+
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
+      let current: unknown = body;
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      clearSessionProvider(sessionId);
+      return current as Record<string, unknown>;
+    }
+
+    it('把 agent_message 降级成 assistant message，丢掉 content 里的 encrypted_content', async () => {
+      const out = await runXaiInputTransforms('collab-to-message', {
+        model: 'xai/grok-4.5',
+        input: [
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'go' }] },
+          {
+            type: 'agent_message',
+            author: '/root/official_pr_rules',
+            recipient: '/root',
+            content: [
+              {
+                type: 'input_text',
+                text: 'Message Type: FINAL_ANSWER\nTask name: /root\nPayload:\n已完成只读审查',
+              },
+              { type: 'encrypted_content', encrypted_content: 'gAAAAA-openai-collab-blob' },
+            ],
+            internal_chat_message_metadata_passthrough: { turn_id: 't1' },
+          },
+        ],
+      });
+
+      const input = out.input as Array<Record<string, unknown>>;
+      expect(input).toHaveLength(2);
+      expect(input[0]).toMatchObject({ type: 'message', role: 'user' });
+      expect(input[1]).toEqual({
+        type: 'message',
+        role: 'assistant',
+        content: [
+          {
+            type: 'output_text',
+            text:
+              '[collab /root/official_pr_rules]\n'
+              + 'Message Type: FINAL_ANSWER\nTask name: /root\nPayload:\n已完成只读审查',
+          },
+        ],
+      });
+      // 不得残留 collab 专有键或 OpenAI 密文 part。
+      expect(JSON.stringify(input[1])).not.toContain('agent_message');
+      expect(JSON.stringify(input[1])).not.toContain('encrypted_content');
+      expect(JSON.stringify(input[1])).not.toContain('gAAAAA-openai-collab-blob');
+    });
+
+    it('未知 input type 直接丢掉，不原样透传给 xAI', async () => {
+      const out = await runXaiInputTransforms('drop-unknown', {
+        model: 'xai/grok-4.5',
+        input: [
+          { type: 'message', role: 'user', content: 'hi' },
+          { type: 'web_search_end', call_id: 'c1', query: 'x' },
+          { type: 'mcp_tool_call_end', call_id: 'c2' },
+        ],
+      });
+
+      const input = out.input as Array<Record<string, unknown>>;
+      expect(input).toHaveLength(1);
+      expect(input[0]).toMatchObject({ type: 'message', role: 'user' });
+    });
   });
 
   it('leaves custom_tool_call history untouched for non-xAI requests', async () => {

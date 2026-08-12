@@ -252,6 +252,31 @@ describe('mobile session-reference links', () => {
     );
   });
 
+  it('falls back to the raw link when the source device is offline', async () => {
+    const invoke = vi.fn(async (deviceId: string, channel: string) => {
+      if (channel === DL_SESSION_REFERENCE_CAPABILITY_CHANNEL) {
+        expect(deviceId).toBe('target-device');
+        return { supported: true, version: 1 };
+      }
+      expect(deviceId).toBe('source-device');
+      throw new DeviceLinkError('DEVICE_OFFLINE', 'source offline');
+    });
+
+    await expect(prepareMobileQueuedSessionReferences(
+      {
+        text: 'compare cindy://session/source',
+        sessionRefs: [{ sessionId: 'source', deviceId: 'source-device' }],
+      },
+      asInvoke(invoke),
+      () => undefined,
+      'target-device',
+    )).resolves.toEqual({ text: 'compare cindy://session/source' });
+    expect(console.warn).toHaveBeenCalledWith(
+      '[session-references] trusted history unavailable; preserving raw link text',
+      expect.objectContaining({ phase: 'source-resolution', code: 'SESSION_REFERENCE_OFFLINE' }),
+    );
+  });
+
   it('probes a new target before resolving source history', async () => {
     const channels: string[] = [];
     const invoke = asInvoke(async (_deviceId, channel, args) => {

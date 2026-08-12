@@ -13,6 +13,7 @@ import {
   isCapabilityRow,
   isRowDisabled,
   isRowDiverged,
+  loadCollapsedMap,
 } from '@/components/settings/UnifiedModelList';
 import { __resetForTest, setModelVisibility } from '@/state/modelVisibilityPrefs';
 
@@ -225,6 +226,25 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
   });
 
+  it('向量清单也合成能力行,可停用(否则停用轴有实现无入口)', () => {
+    // 派生侧(deriveCindyMediaConfig)一直按 isModelDisabled 过滤向量型号,但设置页
+    // 此前只为 image/video 合成行 —— 用户没法单独拦住某个向量型号的付费调用,只能
+    // 整家停用 XD(PR #1707 review)。
+    const withEmbedding = {
+      ...provider,
+      embeddingModels: [
+        { id: 'voyage/voyage-4', name: 'Voyage 4' },
+        { id: 'voyage/voyage-4-large', name: 'Voyage 4 Large', disabled: true },
+      ],
+    } as ProviderView;
+    const rows = buildUnionRows(withEmbedding);
+    const v4 = rows.find((r) => r.id === 'voyage/voyage-4')!;
+    expect(isCapabilityRow(v4, false)).toBe(true);
+    expect(isRowDisabled(v4)).toBe(false);
+    const large = rows.find((r) => r.id === 'voyage/voyage-4-large')!;
+    expect(isRowDisabled(large)).toBe(true);
+  });
+
   it('能力模型行按分组判定(image → 能力行;对话厂商/兜底分组 → 否)', () => {
     const withImage = {
       ...provider,
@@ -236,5 +256,52 @@ describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
     const rows = buildUnionRows(withImage);
     expect(isCapabilityRow(rows.find((r) => r.id === 'gpt-image-2')!, false)).toBe(true);
     expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
+  });
+});
+
+describe('折叠态 v1/v2 → v3 迁移(other 恢复旧语义,新增 ungrouped)', () => {
+  const V1 = 'xdt:modelListCollapsedGroups:v1';
+  const V2 = 'xdt:modelListCollapsedGroups:v2';
+  const V3 = 'xdt:modelListCollapsedGroups:v3';
+
+  afterEach(() => {
+    window.localStorage.removeItem(V1);
+    window.localStorage.removeItem(V2);
+    window.localStorage.removeItem(V3);
+  });
+
+  it('v2 的 non-chat 恢复成 other,旧 other 搬到 ungrouped,其余分组原样保留', () => {
+    window.localStorage.setItem(
+      V2,
+      JSON.stringify({ 'non-chat': true, other: false, image: false, china: true }),
+    );
+    expect(loadCollapsedMap()).toEqual({
+      other: true,
+      ungrouped: false,
+      image: false,
+      china: true,
+    });
+  });
+
+  it('v1 的 other 保留旧语义,不搬到 ungrouped', () => {
+    window.localStorage.setItem(V1, JSON.stringify({ other: true, embedding: false }));
+    expect(loadCollapsedMap()).toEqual({ other: true, embedding: false });
+  });
+
+  it('v2 已存在时优先迁移 v2,不再回读 v1', () => {
+    window.localStorage.setItem(V1, JSON.stringify({ other: true }));
+    window.localStorage.setItem(V2, JSON.stringify({ image: true }));
+    expect(loadCollapsedMap()).toEqual({ image: true });
+  });
+
+  it('v3 已存在时直接使用,不再回读旧版本', () => {
+    window.localStorage.setItem(V1, JSON.stringify({ other: true }));
+    window.localStorage.setItem(V2, JSON.stringify({ other: true }));
+    window.localStorage.setItem(V3, JSON.stringify({ ungrouped: true }));
+    expect(loadCollapsedMap()).toEqual({ ungrouped: true });
+  });
+
+  it('三代都没有 → 空表(全部跟随默认)', () => {
+    expect(loadCollapsedMap()).toEqual({});
   });
 });

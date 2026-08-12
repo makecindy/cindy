@@ -175,7 +175,7 @@ describe('importSharedCodexThread', () => {
     expect(fs.existsSync(path.join(rootDir, '..', 'tmp', 'evil.jsonl'))).toBe(false);
   });
 
-  it('re-import reuses existing rollout/state without overwriting; rollback keeps them (deleted-session re-import)', async () => {
+  it('re-import reuses existing rollout/state without overwriting; rollback restores changed state (deleted-session re-import)', async () => {
     const first = await importSharedCodexThread({
       threadId: THREAD_ID,
       stateRows: stateRows(),
@@ -203,6 +203,13 @@ describe('importSharedCodexThread', () => {
     expect(second.rolloutPath).toBe(first.rolloutPath);
     expect(second.rolloutWritten).toBe(false);
     expect(second.stateWritten).toBe(false); // 无新插入行
+    expect(second.previousState).toMatchObject({
+      dbPath: stateDbPath,
+      values: {
+        cwd: '/new/proj',
+        rollout_path: first.rolloutPath,
+      },
+    });
     expect(second.statePresent).toBe(true); // 行仍在,不该触发降档提示
     expect(fs.readFileSync(second.rolloutPath!, 'utf-8')).toBe('{"v":1}\n'); // 未被覆盖
 
@@ -217,10 +224,17 @@ describe('importSharedCodexThread', () => {
     expect(row.rollout_path).toBe(second.rolloutPath);
     expect(toolCount.n).toBe(1); // child 表未翻倍
 
-    // 第二次导入失败回滚:不得误删第一次落下的文件与 state 行
+    // 第二次导入失败回滚:不得误删第一次落下的文件/state 行，并恢复更新前的可变字段。
     await removeSharedCodexThread(THREAD_ID, second);
     expect(fs.existsSync(first.rolloutPath!)).toBe(true);
     expect(desktopThreadExists(THREAD_ID)).toBe(true);
+    const restoredDb = new Database(stateDbPath, { readonly: true });
+    const restoredRow = restoredDb
+      .prepare('SELECT cwd, rollout_path FROM threads WHERE id = ?')
+      .get(THREAD_ID) as { cwd: string; rollout_path: string };
+    restoredDb.close();
+    expect(restoredRow.cwd).toBe('/new/proj');
+    expect(restoredRow.rollout_path).toBe(first.rolloutPath);
   });
 
   it('removeSharedCodexThread rolls back rollout file and state rows', async () => {

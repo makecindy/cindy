@@ -62,6 +62,40 @@ describe('WechatIM host boundary', () => {
     expect(__testing.normalizeFinalOutputText('hello')).toBe('hello');
   });
 
+  it('distinguishes agent-unsupported from permission-mode-unsupported pre-dispatch failures', () => {
+    // Agent 未声明 turnPermissionPolicy(如 Pi):换权限模式无效,文案引导换 Agent。
+    expect(__testing.wechatPreDispatchFailureText('TURN_PERMISSION_POLICY_UNSUPPORTED:agent:ask')).toContain(
+      '换成 Claude Code 或 Codex',
+    );
+    expect(__testing.wechatPreDispatchFailureText('TURN_PERMISSION_POLICY_UNSUPPORTED:agent:auto')).not.toContain(
+      '权限模式',
+    );
+    // 当前权限模式若是换 Agent 后仍不兼容的档位(bypassPermissions / acceptEdits),
+    // 换 Agent 指引应附带 /permission 提示,避免新 Agent 再次命中权限模式错误。
+    expect(
+      __testing.wechatPreDispatchFailureText(
+        'TURN_PERMISSION_POLICY_UNSUPPORTED:agent:bypassPermissions',
+      ),
+    ).toContain('/permission');
+    expect(
+      __testing.wechatPreDispatchFailureText('TURN_PERMISSION_POLICY_UNSUPPORTED:agent:acceptEdits'),
+    ).toContain('/permission');
+    expect(__testing.wechatPreDispatchFailureText('TURN_PERMISSION_POLICY_UNSUPPORTED:agent:ask')).not.toContain(
+      '/permission',
+    );
+    // 权限模式在 unsupportedPermissionModes 里(如 bypassPermissions):文案引导调权限模式。
+    expect(
+      __testing.wechatPreDispatchFailureText('TURN_PERMISSION_POLICY_UNSUPPORTED:mode:bypassPermissions'),
+    ).toContain('权限模式');
+    // 旧格式 / 渠道侧 unsupported_turn_permission 兼容分支:同样按权限模式处理。
+    expect(__testing.wechatPreDispatchFailureText('TURN_PERMISSION_POLICY_UNSUPPORTED:ask')).toContain(
+      '权限模式',
+    );
+    expect(__testing.wechatPreDispatchFailureText('unsupported_turn_permission')).toContain('权限模式');
+    expect(__testing.wechatPreDispatchFailureText('missing_auth')).toContain('模型服务');
+    expect(__testing.wechatPreDispatchFailureText('boom')).toContain('稍后重试');
+  });
+
   it('dispatches attachment-only WeChat messages to the agent', () => {
     expect(__testing.hasWechatTaskContent('', [])).toBe(false);
     expect(
@@ -73,6 +107,26 @@ describe('WechatIM host boundary', () => {
         },
       ] as never),
     ).toBe(true);
+  });
+
+  it('排队等待 provider 受理时按 task session 回退微信 peer', () => {
+    const activeTasks = new Map<
+      string,
+      { routeSessionId?: string; task: { sessionId: string } }
+    >([
+      ['peer-queued', { task: { sessionId: 'wechat-task-session' } }],
+      ['peer-other', { task: { sessionId: 'other-session' } }],
+    ]);
+
+    expect(__testing.activePeerIdForSession(activeTasks, 'wechat-task-session')).toBe(
+      'peer-queued',
+    );
+
+    activeTasks.get('peer-queued')!.routeSessionId = 'accepted-route-session';
+    expect(__testing.activePeerIdForSession(activeTasks, 'wechat-task-session')).toBeNull();
+    expect(__testing.activePeerIdForSession(activeTasks, 'accepted-route-session')).toBe(
+      'peer-queued',
+    );
   });
 
   it('keeps staged files only for accepted poll tasks', () => {
@@ -153,6 +207,35 @@ describe('WechatIM host boundary', () => {
     expect(question).toEqual({
       kind: 'ask_user_question',
       answers: { 选择环境: '生产' },
+    });
+  });
+
+  it('cancels only the matching one-shot interaction when its central route closes', async () => {
+    const im = new WechatIM(deps());
+    vi.spyOn(im, 'sendText').mockResolvedValue({ messageId: 'interaction-prompt' });
+    const request = {
+      kind: 'permission' as const,
+      requestId: 'request-current',
+      toolName: 'bash',
+      input: { command: 'pnpm test' },
+    };
+    const pending = im.handleTextInteraction('peer-1', request, { timeoutMs: 60_000 });
+    await Promise.resolve();
+
+    expect(im.cancelTextInteraction('peer-1', 'request-stale', {
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'stale_route',
+    })).toBe(false);
+    expect(im.cancelTextInteraction('peer-1', 'request-current', {
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'interaction_route_released',
+    })).toBe(true);
+    await expect(pending).resolves.toEqual({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'interaction_route_released',
     });
   });
 

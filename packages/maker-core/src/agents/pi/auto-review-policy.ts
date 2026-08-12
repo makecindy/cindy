@@ -42,7 +42,16 @@ function describeOtherTool(toolName: string, input: Record<string, unknown>): st
   }
 }
 
-/** pi 只读内置工具(与 cindy-bridge READONLY_BUILTINS 同集)。入参路径字段统一为 `path`。 */
+/**
+ * pi 只读内置工具(与 cindy-bridge READONLY_BUILTINS 同集)。入参路径字段统一为 `path`。
+ *
+ * 注意可达面:bridge 对这四个工具在**非凭证路径**时直接放行、根本不冒泡
+ * (`cindy-bridge-source.ts` 的 `READONLY_BUILTINS.has(toolName) && !credentialRead` → return),
+ * 所以能走到本 adapter 的只读调用只有「命中凭证路径」那一类,下面的凭证分支已经把它收成
+ * `prompt-each-time`。因此这里不做 CC 那套 `scope:'file' | 'tree'` 的区分 —— 加了也不会执行。
+ * Pi 的区外目录级递归读(`grep`/`find`/`ls` 根在工作区外)当前确实不经 host 审阅,与 Claude
+ * 存在行为差异;真正修它要动 bridge 的只读快路径,属独立改动(见 PR 描述里的后续项)。
+ */
 const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['read', 'grep', 'find', 'ls']);
 
 /** 会改文件、带结构化 `path` 入参的 pi 内置工具。 */

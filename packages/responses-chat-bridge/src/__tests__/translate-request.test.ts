@@ -349,6 +349,89 @@ describe('translateResponsesRequest', () => {
     }))).toThrowError(UnsupportedResponsesFeatureError);
   });
 
+  it('converts replayed agent messages to assistant text', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: 'start' },
+        {
+          type: 'agent_message',
+          author: 'researcher\r\nreviewer',
+          content: [
+            { type: 'output_text', text: '  Findings' },
+            { type: 'encrypted_content', encrypted_content: 'opaque' },
+          ],
+        },
+        {
+          type: 'agent_message',
+          author: 'reviewer',
+          content: [{ type: 'encrypted_content', encrypted_content: 'opaque' }],
+        },
+        {
+          type: 'agent_message',
+          author: 'observer',
+          content: [{ type: 'output_text', text: '   ' }],
+        },
+        { type: 'message', role: 'assistant', content: 'Final answer' },
+        { type: 'message', role: 'user', content: 'finish' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'start' },
+      {
+        role: 'assistant',
+        content: [
+          '[collab researcher reviewer]\n  Findings',
+          '[collab message from reviewer; encrypted payload omitted]',
+          '[collab message from observer; empty content]',
+        ].join('\n'),
+      },
+      { role: 'assistant', content: 'Final answer' },
+      { role: 'user', content: 'finish' },
+    ]);
+  });
+
+  it.each(['input_text', 'output_text', 'text'])(
+    'reports a malformed agent message %s part by path',
+    (type) => {
+      expect(() => translateResponsesRequest(base({
+        input: [{ type: 'agent_message', content: [{ type }] }],
+      }))).toThrow(`input[0].content.${type}`);
+    },
+  );
+
+  it('reports an unknown agent message part by path', () => {
+    expect(() => translateResponsesRequest(base({
+      input: [{ type: 'agent_message', content: [{ type: 'image_url' }] }],
+    }))).toThrow('input[0].content.image_url');
+  });
+
+  it('keeps agent messages after the preceding tool result', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        { type: 'function_call', call_id: 'call_1', name: 'shell', arguments: '{}' },
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          content: [{ type: 'output_text', text: 'Findings' }],
+        },
+        { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'shell', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: 'done' },
+      { role: 'assistant', content: '[collab researcher]\nFindings' },
+    ]);
+  });
+
   it('round-trips replayed Codex tool_search items without breaking tool-call merging', () => {
     const out = translateResponsesRequest(base({
       input: [
@@ -489,6 +572,88 @@ describe('translateResponsesRequest', () => {
       { role: 'assistant', content: 'seen' },
       { role: 'user', content: 'continue' },
     ]);
+  });
+
+  it('drops unsupported images from replayed user history so a later text turn can recover', () => {
+    const imageUrl = 'data:image/png;base64,aW1hZ2U=';
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'describe this' },
+            { type: 'input_image', image_url: imageUrl },
+          ],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue in text' }] },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'describe this' },
+      { role: 'user', content: 'continue in text' },
+    ]);
+  });
+
+  it('drops untranslatable file_id images from replayed history on image-url routes', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'describe this' },
+            { type: 'input_image', file_id: 'file_1' },
+          ],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue in text' }] },
+      ],
+    }), { capabilities: { imageInput: 'image_url' } });
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'describe this' },
+      { role: 'user', content: 'continue in text' },
+    ]);
+  });
+
+  it('drops image-only replayed turns but keeps the newest unsupported image fail-closed', () => {
+    const imageUrl = 'data:image/png;base64,aW1hZ2U=';
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: imageUrl }],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue in text' }] },
+      ],
+    }));
+
+    expect(out.messages).toEqual([{ role: 'user', content: 'continue in text' }]);
+    expect(() => translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'history' }] },
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'describe this' },
+            { type: 'input_image', image_url: imageUrl },
+          ],
+        },
+      ],
+    }))).toThrow("input content part 'input_image'");
+    expect(() => translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: imageUrl }],
+        },
+        { type: 'message', role: 'latest_reminder', content: 'current-turn reminder' },
+      ],
+    }))).toThrow("input content part 'input_image'");
   });
 
   it('drops empty user messages produced by auto-compact collapsing image-only turns', () => {

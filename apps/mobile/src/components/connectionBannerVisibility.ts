@@ -13,11 +13,32 @@ export function resolveConnectionBannerVisibility(input: {
   offlineLongEnough: boolean;
   hasError: boolean;
   hasIssue: boolean;
+  hasUnstableIssue: boolean;
   deviceUnresponsive: boolean;
 }): boolean {
   return input.hasError
     || input.deviceUnresponsive
+    || input.hasUnstableIssue
     || (input.offline && (input.hasIssue || input.offlineLongEnough));
+}
+
+/**
+ * 连接类恢复全部由系统处理，不给用户一个与自动重连并行的“同步”按钮。
+ * 只有链路已在线、没有连接级 issue，且确实是非自动恢复的请求级同步失败时，
+ * 才保留手动重试入口。
+ */
+export function resolveConnectionBannerSyncActionVisibility(input: {
+  online: boolean;
+  hasActiveIssue: boolean;
+  deviceUnresponsive: boolean;
+  hasRequestError: boolean;
+  requestErrorAutoRecovering: boolean;
+}): boolean {
+  return input.online
+    && !input.hasActiveIssue
+    && !input.deviceUnresponsive
+    && input.hasRequestError
+    && !input.requestErrorAutoRecovering;
 }
 
 /**

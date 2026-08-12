@@ -25,14 +25,29 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   **不是**受隔离的凭证安全边界。bridge 里的凭证路径/`/proc/*/environ` 文本硬拦只是
   **defense-in-depth**,可被变形绕过(`ps eww -p $PPID`、`find /proc -exec`、变量拼接 /
   base64 / heredoc、重定向/`tee`/`cp`/`mv`/`python` 写文件等)。因此在 Full access 下:
-  - Pi 父进程环境里的代理 token / 网关 key / BYOM key **可能被读取**;
+  - Pi 父进程环境里的代理 token / 网关 key / BYOM key / 外部 MCP header **可能被读取**;
   - `readOnlyRoots`(Extra Dirs)**可能被写入**——只读语义靠 auto-review 提示与文本拦截,
     非 OS 强制。
   真正的强隔离需要 OS 级手段(macOS `sandbox-exec`、Linux 只读 bind mount / seccomp),
   **本阶段未接入**。选择 Full access 即接受上述风险;需要硬边界时用 ask/auto 档,或等 OS
   沙箱落地。改动权限相关代码时不要再堆「看起来能拦」的正则并当成安全边界。
-- **MCP 桥**:`piEnvironment.ts` 把 in-process MCP providers 暴露成 localhost streamable-HTTP,
-  bridge 用极简 client `tools/list` + `registerTool` 成 `mcp__<server>__<tool>`。
+  与 Claude Code／Codex 一致，Pi 会话的 Full Access 也会让插件 `ghost_call` 的
+  `attachments`／`dir`／`save_dir` 在 Host 侧免去额外过户确认；实现必须现读活跃 Session
+  的稳定状态并同时匹配其 runtime instance identity；权限切换或关闭在途、远程／缺会话／
+  实例不匹配／查询失败均 fail closed，且不得扩到 workspace、Setup、安装／更新、OAuth、
+  Secret／凭证等其它授权面。instance 仅作为 opaque query 写入 Host 生成的 Pi MCP URL；桥接
+  注册表不匹配时返回 401。旧 URL 缺 instance 时可兼容普通会话工具，但必须向工具隐藏
+  instance，使 Full Access 自动交接保持 fail closed。
+- **MCP 桥**:`piEnvironment.ts` 把 in-process MCP providers 暴露成 localhost streamable-HTTP，
+  并把用户显式配置的外部 HTTP / Streamable HTTP MCP 作为 direct remote server 装入；旧式
+  SSE transport 不在此链支持（但 Streamable HTTP 的 SSE response framing 受支持）。外部 URL
+  要求 HTTPS，只有明确 loopback endpoint 可用 HTTP；认证 header
+  真值仅经 Pi 父进程专用 env 传递，`CINDY_PI_MCP_BRIDGE` 只存 env 引用；这些 env 与描述符
+  都会在 bash spawn 边界剥离。bridge 并行执行外部 server 启动探测，每个 server 的
+  `initialize + tools/list` 总预算为 10s（低于 Pi RPC 30s ready 门槛）；探测完成后实际工具
+  调用保留 600s 长预算。SSE response 按 event 增量消费，不等待 server 关闭持续流。工具注册
+  为 `mcp__<server>__<tool>`。配置新增、修改、禁用或删除对下一新建/重启会话生效；旧活动
+  会话保留启动时 generation 快照至 close。
 - **plan 模式**:挂 pi 自带 plan-mode 扩展,`/plan` toggle 驱动;Cindy 维护镜像态并在 resume
   时从 `get_entries` 校正。
 
@@ -41,7 +56,8 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、启动时 RPC
 `set_auto_compaction{enabled:true}` / `set_thinking_level`。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
-`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理打穿本地 proxy 与 MCP bridge)。
+外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
+打穿本地 proxy 与 MCP bridge)。
 
 放任 pi 默认(未写 settings.json):`retry.*`(agent 级 3 次退避、provider 级 0)、
 `httpIdleTimeoutMs=300000`、`websocketConnectTimeoutMs`、`compaction.reserveTokens/keepRecentTokens`、
@@ -88,9 +104,23 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
 
 - [x] **平台分发**:pin 已升级到 Pi `v0.83.0`，darwin arm64/x64、linux arm64/x64、
       win32 arm64/x64 六份官方资产都进入 digest pin；下载器兼容 Unix `pi/` 嵌套包与
-      Windows 根目录平铺 zip。Forge 按目标平台下载、校验并把**完整目录分发**打进
-      `resources/pi/<platform>`，Windows `pi.exe` 进入签名扫描。当前 Mac 已完成六资产
-      SHA-256 下载验收；非本机 OS 的最终启动 smoke 仍由对应发布 runner 执行。
+      Windows 根目录平铺 zip。当前 Mac 已完成六资产 SHA-256 下载验收；非本机 OS 的
+      最终启动 smoke 仍由对应发布 runner 执行。2026-08 起 pi 与 cc/codex 一样只走
+      CDN 运行时分发链(`agent-binaries` + splash prepare):CDN manifest 的可选 `pi`
+      字段指向整包 tar.gz(归档根即完整目录分发,SHA256 为 tar.gz 的),启动时按
+      manifest 版本下载到 `userData/pi/<version>/` 并清旧版。正式安装包不内置 Pi；
+      manifest 缺字段或下载失败时**不阻塞启动**(splash 不进失败态),本次不注册 pi。
+      **不变量(刻意如此,别当 bug 改掉)**:`pi-host.resolvePiBinaryPath` 只读
+      `getReadyBinaryPath('pi')`——即本次启动 prepare 成功回填的路径,**不回落
+      `getCachedBinaryStatus`**,因此不会复用上一次启动下载的旧版本。`prepare()` 先取
+      CDN manifest、取不到就直接失败(不看本地存货),所以离线时 pi 本次不可用。这与
+      Claude Code 一致(同样只读 `getReadyBinaryPath`),但与 **Codex 不同**——codex 读
+      `getCachedBinaryStatus`,会接受早前已 `.verified` 的旧版本,离线仍可用。想让 pi
+      也离线可用属于行为变更,需先确认再改,不要以"和 codex 对齐"为由顺手改回。
+      发布入口**不在本仓**:
+      二进制发布统一走 cindy 同级目录的独立工程 `cindy-binary-release`
+      (`pnpm release:pi -- --region cn|global`,默认 canary 通道;配置与安全机制见
+      该工程 README)。本仓只保留版本 pin 与暂存(`pnpm update:pi` / `install:pi`)。
 - [x] **协议/模型兼容自动矩阵**:Anthropic Messages、OpenAI Responses、OpenAI Chat 三种
       Pi 原生 BYOM 映射均有契约测试；真实 Pi + fake gateway 覆盖 thinking/tool streaming、
       MCP bridge、redacted/usage 翻译，ChatGPT 订阅已做真实请求与 cacheRead 验收。发布账号的
@@ -108,6 +138,9 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
 
 ## 7. 上线后路线图(已与 Chris 对齐)
 
+项目 trust 的输入/输出契约见 [`pi-project-trust.md`](pi-project-trust.md)。该契约不改变本节
+所述运行时默认，也不授权 `--approve`、trust.json 或用户 Pi home 复用；这些属于后续装配 PR。
+
 > 续做指南(每项怎么接着做 + file:line 锚点 + 坑)见 `docs/dev-rules/pi-remaining-work.md`。
 
 - ✅ **HTML 导出**(已交付):`export_html` RPC 全链路,会话头部菜单「导出为 HTML」,
@@ -119,7 +152,7 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
   注:pi 斜杠转义后用户无法手输 `/compact`,此菜单是 pi 会话手动压缩的唯一入口。
 - ✅ **subagent 接 pi 轻量引擎**(已交付):Orca worker 可选 `pi` 引擎。核心链路(MCP
   schema / worker 创建服务 / 默认模型 claude-sonnet-4-6 / PiAgent 注册)本已按 AgentKind
-  接通;本次补齐 UI(CreateWorkerPopover / CollaborationModeToggle / draft 映射)、两个
+  接通;本次补齐 UI(CreateWorkerPopover / composer「+」菜单协同项 / draft 映射)、两个
   main IPC coercion(WORKER_CREATE / SESSION_ENABLE_ORCA)、worker 展示(π 而非 Claude 脸)。
   注:pi 二进制缺失时 buildPiAgent 返回 null,pi 不进 agents map,建 pi worker 会抛错。
 - ✅ **压缩即记忆**(已交付):新增 `digest` 记忆类型(与 curated 解耦)。pi `compaction_end`

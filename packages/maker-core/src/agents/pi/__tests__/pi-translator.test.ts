@@ -31,6 +31,134 @@ function makeQueue(): { queue: AsyncQueue<AgentEvent>; events: AgentEvent[] } {
 const ev = (e: Record<string, unknown>): PiRpcEvent => e as unknown as PiRpcEvent;
 
 describe('pi translator', () => {
+  it('marks only the Cindy subagent tool as a durable lifecycle', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(
+      ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'subagent', args: {} }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({ type: 'tool_execution_end', toolCallId: 'sa-1', result: 'done', isError: false }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({ type: 'tool_execution_start', toolCallId: 'read-1', toolName: 'read', args: {} }),
+      queue,
+      ctx,
+    );
+
+    const updates = events.filter((event) => event.type === 'agent_task_update');
+    expect(updates.map((event) => event.data)).toEqual([
+      expect.objectContaining({
+        taskId: 'sa-1',
+        status: 'running',
+        subagentObservation: expect.objectContaining({ kind: 'spawn' }),
+      }),
+      expect.objectContaining({
+        taskId: 'sa-1',
+        status: 'completed',
+        subagentObservation: expect.objectContaining({ kind: 'terminal' }),
+      }),
+    ]);
+  });
+
+  it.each([
+    ['failed', false, 'failed'],
+    ['stopped', false, 'stopped'],
+    ['stopped', true, 'stopped'],
+    ['completed', true, 'completed'],
+    ['running', true, 'failed'],
+  ] as const)(
+    'preserves a reported %s Subagent status when the wrapper ends (isError=%s)',
+    (reportedStatus, isError, expectedStatus) => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+
+      translatePiEvent(
+        ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'subagent', args: {} }),
+        queue,
+        ctx,
+      );
+      translatePiEvent(
+        ev({
+          type: 'tool_execution_update',
+          toolCallId: 'sa-1',
+          partialResult: {
+            details: {
+              __cindySubagent: 1,
+              taskId: 'sa-1',
+              status: reportedStatus,
+            },
+          },
+        }),
+        queue,
+        ctx,
+      );
+      translatePiEvent(
+        ev({ type: 'tool_execution_end', toolCallId: 'sa-1', result: 'done', isError }),
+        queue,
+        ctx,
+      );
+
+      const updates = events.filter((event) => event.type === 'agent_task_update');
+      expect(updates.at(-1)?.data).toMatchObject({
+        taskId: 'sa-1',
+        status: expectedStatus,
+        subagentObservation: expect.objectContaining({ kind: 'terminal' }),
+      });
+    },
+  );
+
+  it('emits live assistant deltas before the authoritative final text', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Hello ' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'world' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Hello world' }],
+          model: 'xai/grok-4.5',
+          stopReason: 'stop',
+        },
+      }),
+      queue,
+      ctx,
+    );
+
+    expect(events.filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', data: { text: 'Hello ', isFinal: false }, source: 'pi' },
+      { type: 'text', data: { text: 'world', isFinal: false }, source: 'pi' },
+      expect.objectContaining({
+        type: 'text',
+        data: { text: 'Hello world', isFinal: true, isFullText: true },
+        source: 'pi',
+      }),
+    ]);
+  });
+
   it('maps compaction_end (threshold) → compact_boundary with token deltas + updates contextTokens', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -60,6 +188,56 @@ describe('pi translator', () => {
     expect((cb!.data as { trigger: string }).trigger).toBe('manual');
   });
 
+  it('#1933 review:manual compaction 事件闭环 —— 收口 running 并把新 contextTokens 送回 renderer', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    // compaction_start 先把 running 置 true(与 pi 事件流一致)。
+    translatePiEvent(ev({ type: 'compaction_start' }), queue, ctx);
+    const startStatus = events.find(
+      (e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === true,
+    );
+    expect(startStatus).toBeDefined();
+
+    translatePiEvent(
+      ev({ type: 'compaction_end', reason: 'manual', result: { tokensBefore: 100, estimatedTokensAfter: 20 } }),
+      queue,
+      ctx,
+    );
+    // 闭环:manual compaction_end 必须补发 status(isRunning=false, Done),
+    // 携带压缩后的 contextTokens —— 否则 renderer 圆环永久卡 running、token 不刷新。
+    const endStatus = events.find(
+      (e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === false,
+    );
+    expect(endStatus).toBeDefined();
+    const endData = endStatus!.data as { status: string; contextTokens?: number };
+    expect(endData.status).toBe('Done');
+    expect(endData.contextTokens).toBe(20);
+  });
+
+  it('#1933 review:auto compaction 在活跃 turn 内不补发 status(false)(不得误收口 turn)', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = true; // auto compaction 发生在活跃 turn 内
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({ type: 'compaction_end', reason: 'threshold', result: { tokensBefore: 150000, estimatedTokensAfter: 32000 } }),
+      queue,
+      ctx,
+    );
+    // 只有 compact_boundary,没有 status 收口(turn 结束经 agent_settled 自然收口)。
+    expect(events.filter((e) => e.type === 'status')).toHaveLength(0);
+    expect(events.some((e) => e.type === 'compact_boundary')).toBe(true);
+    // 即便 manual 压缩期间用户已开始新 turn(isStreaming),也不收口。
+    const ctx2 = createPiTranslateContext(noopLogger);
+    ctx2.isStreaming = true;
+    const { queue: q2, events: ev2 } = makeQueue();
+    translatePiEvent(
+      ev({ type: 'compaction_end', reason: 'manual', result: { tokensBefore: 100, estimatedTokensAfter: 20 } }),
+      q2,
+      ctx2,
+    );
+    expect(ev2.filter((e) => e.type === 'status')).toHaveLength(0);
+  });
+
   it('accumulates turn usage and attaches it to the done event on agent_settled', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -67,7 +245,12 @@ describe('pi translator', () => {
     translatePiEvent(
       ev({
         type: 'message_end',
-        message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }], usage: { input: 100, output: 20, cacheRead: 5, cacheWrite: 3 } },
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'hi' }],
+          usage: { input: 100, output: 20, cacheRead: 5, cacheWrite: 3 },
+          duration: 1_200,
+        },
       }),
       queue,
       ctx,
@@ -81,6 +264,8 @@ describe('pi translator', () => {
     expect(usage.outputTokens).toBe(20);
     expect(usage.cacheReadTokens).toBe(5);
     expect(usage.cacheCreationTokens).toBe(3);
+    expect(usage.durationMs).toBeGreaterThanOrEqual(1_200);
+    expect(usage.turnDurationMs).toBeGreaterThanOrEqual(0);
     // 快照累计 input+output。
     expect(usageSnapshotOf(ctx).tokenUsage).toBe(120);
     // done.data.result 带上最终回复文本 —— register.ts 的 will-assistant-message 出口钩子
@@ -90,6 +275,83 @@ describe('pi translator', () => {
       type: 'status',
       data: expect.objectContaining({ status: 'Done', isRunning: false }),
     }));
+  });
+
+  it('reads Pi v0.83 generation duration from timestamp with a live heartbeat', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const timestamp = Date.now() - 1_200;
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'answer after a tool' }],
+          usage: { input: 10, output: 5 },
+          timestamp,
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const usage = (events.find((e) => e.type === 'done')!.data as { usage: Record<string, unknown> }).usage;
+    expect(usage.durationMs).toEqual(expect.any(Number));
+    expect(usage.durationMs).toBeGreaterThanOrEqual(1_200);
+    expect(usage.turnDurationMs).toEqual(expect.any(Number));
+  });
+
+  it('omits timestamp-derived timing after a suspend-sized heartbeat gap', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+      nowSpy.mockReturnValue(40_000);
+      translatePiEvent(
+        ev({
+          type: 'message_end',
+          message: { role: 'assistant', content: [], usage: { output: 5 }, timestamp: 1_000 },
+        }),
+        queue,
+        ctx,
+      );
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      const usage = (events.find((e) => e.type === 'done')!.data as { usage: Record<string, unknown> }).usage;
+      expect(usage).not.toHaveProperty('durationMs');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('omits timing when one of multiple output messages lacks duration', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: { role: 'assistant', content: [], usage: { output: 10 }, duration: 500 },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: { role: 'assistant', content: [], usage: { output: 5 } },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const usage = (events.find((e) => e.type === 'done')!.data as { usage: Record<string, unknown> }).usage;
+    expect(usage.outputTokens).toBe(15);
+    expect(usage).not.toHaveProperty('durationMs');
   });
 
   it('done.result carries the last assistant message text (multi-message turn) and resets per turn', () => {
@@ -322,7 +584,7 @@ describe('pi translator', () => {
       { type: 'text', data: { text: 'second section', isFinal: false }, source: 'pi' },
       expect.objectContaining({
         type: 'text',
-        data: { text: 'first section\n\nsecond section', isFinal: true },
+        data: { text: 'first section\n\nsecond section', isFinal: true, isFullText: true },
       }),
     ]);
   });
@@ -373,5 +635,161 @@ describe('pi translator', () => {
 
     expect(events).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  describe('delegated (subagent) usage accounting', () => {
+    const progressEvent = (taskId: string, usage: Record<string, number>, extra: Record<string, unknown> = {}) =>
+      ev({
+        type: 'tool_execution_update',
+        toolCallId: taskId,
+        partialResult: {
+          details: { __cindySubagent: 1, taskId, status: 'running', usage, ...extra },
+        },
+      });
+
+    it('folds subagent usage into the turn totals and done.data.usage', () => {
+      // 子代理是独立 pi 进程,它的请求不经过父进程的 usage 流。不显式并进来,done.data.usage
+      // 与 register.ts 持久化的 session token/cost 会漏掉全部委派花费(review)。
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+
+      translatePiEvent(
+        progressEvent('sa-1', { input: 100, output: 20, cacheRead: 5, cacheWrite: 2, cost: 0.01 }),
+        queue,
+        ctx,
+      );
+      expect(ctx.turnInput).toBe(100);
+      expect(ctx.turnOutput).toBe(20);
+      expect(ctx.turnCacheRead).toBe(5);
+      expect(ctx.turnCacheWrite).toBe(2);
+      expect(ctx.turnTokens).toBe(120);
+      expect(ctx.costUsd).toBeCloseTo(0.01, 10);
+      // 卡片帧照旧发出(用量记账是附加行为,不替代卡片)。
+      expect(events.some((e) => e.type === 'agent_task_update')).toBe(true);
+
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      const done = events.find((e) => e.type === 'done');
+      expect((done?.data as { usage?: unknown }).usage).toMatchObject({
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 5,
+        cacheCreationTokens: 2,
+      });
+      expect(
+        (done?.data as { usage?: { turnDurationMs?: unknown } }).usage?.turnDurationMs,
+      ).toEqual(expect.any(Number));
+      expect((done?.data as { usage?: Record<string, unknown> }).usage).not.toHaveProperty(
+        'durationMs',
+      );
+    });
+
+    it('omits parent-only timing after delegated output joins the turn', () => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(
+        ev({
+          type: 'message_end',
+          message: { role: 'assistant', content: [], usage: { output: 10 }, duration: 1_000 },
+        }),
+        queue,
+        ctx,
+      );
+      translatePiEvent(progressEvent('sa-1', { input: 100, output: 20 }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+      const usage = (events.find((e) => e.type === 'done')!.data as { usage: Record<string, unknown> }).usage;
+      expect(usage.outputTokens).toBe(30);
+      expect(usage).not.toHaveProperty('durationMs');
+    });
+
+    it('only counts the increment — progress frames report cumulative totals', () => {
+      // 进度帧报累计值(丢一帧不该让那段用量永久消失),所以父侧必须按 taskId 作差。
+      // 直接累加会让同一批 token 被反复计入,一次多帧的委派就能把 turn 用量翻好几倍。
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+
+      translatePiEvent(progressEvent('sa-1', { input: 100, output: 10, cost: 0.01 }), queue, ctx);
+      translatePiEvent(progressEvent('sa-1', { input: 250, output: 40, cost: 0.03 }), queue, ctx);
+      translatePiEvent(progressEvent('sa-1', { input: 250, output: 40, cost: 0.03 }), queue, ctx);
+
+      expect(ctx.turnInput).toBe(250);
+      expect(ctx.turnOutput).toBe(40);
+      expect(ctx.turnTokens).toBe(290);
+      expect(ctx.costUsd).toBeCloseTo(0.03, 10);
+    });
+
+    it('accumulates parallel delegations independently and never goes negative', () => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+
+      translatePiEvent(progressEvent('sa-1', { input: 100, output: 10, cost: 0.01 }), queue, ctx);
+      translatePiEvent(progressEvent('sa-2', { input: 200, output: 30, cost: 0.02 }), queue, ctx);
+      // 回退的累计值(理论上不该出现)不得产生负增量。
+      translatePiEvent(progressEvent('sa-2', { input: 5, output: 1, cost: 0 }), queue, ctx);
+
+      expect(ctx.turnInput).toBe(300);
+      expect(ctx.turnOutput).toBe(40);
+      expect(ctx.costUsd).toBeCloseTo(0.03, 10);
+    });
+
+    it('does not pollute contextTokens with the subagent context', () => {
+      // contextTokens = "最后一次 API 调用占了多少上下文"。子代理有自己独立的上下文窗口,
+      // 混进来会让父会话的上下文占用条虚高。
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(
+        ev({
+          type: 'message_end',
+          message: { role: 'assistant', content: [], usage: { input: 1_000, cacheRead: 500, cacheWrite: 0, output: 5 } },
+        }),
+        queue,
+        ctx,
+      );
+      const parentContext = ctx.contextTokens;
+      expect(parentContext).toBe(1_500);
+
+      translatePiEvent(progressEvent('sa-1', { input: 90_000, output: 9_000 }), queue, ctx);
+      expect(ctx.contextTokens).toBe(parentContext);
+    });
+
+    it('resets the delegated cumulative bookkeeping at the turn boundary', () => {
+      // 新 turn 的累计值不该跟上一 turn 作差(否则新 turn 的委派用量被吃掉);
+      // 也避免长会话里 taskId 条目无界堆积。
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(progressEvent('sa-1', { input: 100, output: 10 }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      expect(ctx.delegatedUsage.size).toBe(0);
+      translatePiEvent(progressEvent('sa-1', { input: 100, output: 10 }), queue, ctx);
+      expect(ctx.turnInput).toBe(100);
+      expect(ctx.turnOutput).toBe(10);
+    });
+
+    it('ignores progress frames without usage (card-only updates)', () => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(
+        ev({
+          type: 'tool_execution_update',
+          toolCallId: 'sa-1',
+          partialResult: { details: { __cindySubagent: 1, taskId: 'sa-1', status: 'running', toolUses: 3 } },
+        }),
+        queue,
+        ctx,
+      );
+      expect(ctx.turnInput).toBe(0);
+      expect(ctx.turnTokens).toBe(0);
+      expect(events.some((e) => e.type === 'agent_task_update')).toBe(true);
+      expect(usageSnapshotOf(ctx).tokenUsage).toBe(0);
+    });
   });
 });

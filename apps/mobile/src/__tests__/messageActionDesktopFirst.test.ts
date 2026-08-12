@@ -8,8 +8,10 @@ describe('mobile message actions desktop-first surface', () => {
     const sharedSource = readFileSync(resolve(process.cwd(), '../../packages/maker-shared/src/messagePresentation.ts'), 'utf8');
 
     expect(source).toContain('const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };');
+    expect(source).toContain('const MESSAGE_CONTROL_TOUCH_SIZE = 44;');
     expect(source).toContain('buildMessageActionBarPresentation');
     expect(sharedSource).toContain("input.canCopy ? 'copy' : null");
+    expect(sharedSource).toContain("input.canFork ? 'fork' : null");
     expect(sharedSource).toContain("input.hasMoreActions ? 'more' : null");
     expect(sharedSource).toContain("input.hasTime ? 'time' : null");
     expect(sharedSource).toContain("input.hasTurnCost ? 'cost' : null");
@@ -20,9 +22,15 @@ describe('mobile message actions desktop-first surface', () => {
     expect(source).toContain('hitSlop={MESSAGE_CONTROL_HIT_SLOP}');
     expect(source).toContain('buttonSize={actionBar.buttonSize}');
     expect(source).toContain('iconSize={actionBar.iconSize}');
-    expect(source).toContain("return id === 'copy';");
+    expect(source).toContain("return id === 'copy' || id === 'fork';");
+    expect(source).toContain('disabled={disabled && !forkBusy}');
+    expect(source).toContain("busy={id === 'fork' && forkBusy}");
+    expect(source).toContain("if (id === 'fork' && busy)");
+    expect(source).toContain("disabledActions={actionBusy ? ['rewind', 'delete'] : undefined}");
     expect(source).toContain('testID="message.moreButton"');
     expect(source).toContain('{ height: buttonSize, width: buttonSize }');
+    expect(source).toContain('minHeight: MESSAGE_CONTROL_TOUCH_SIZE');
+    expect(source).toContain('minWidth: MESSAGE_CONTROL_TOUCH_SIZE');
     expect(source).toContain('height: 24');
     expect(source).toContain('width: 24');
     expect(source).toContain('borderRadius: radius.pill');
@@ -53,7 +61,9 @@ describe('mobile message actions desktop-first surface', () => {
     // 行。手机版曾漏掉这条,跨 Agent 切换的分隔线药丸下多出一行「··· 刚刚」。
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
 
-    expect(source).toContain('const showCompletedActionBar = mobileMessageShowsActionBar({');
+    expect(source).toContain(
+      'const showCompletedActionBar = !shareSelectionActive && mobileMessageShowsActionBar({',
+    );
     expect(source).toContain('hasSystemCard: !!item.message.systemCardType,');
     expect(source).toContain('isTurnFinalAssistant: item.message.isTurnFinalAssistant === true,');
     // 时间、花费与 More 都必须由该判据统一 gate,不得绕过它单独计算。
@@ -84,12 +94,15 @@ describe('mobile message actions desktop-first surface', () => {
   it('keeps message controls outside the user bubble like the desktop action bar', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
     const bubbleStart = source.indexOf('const bubble = (');
-    const returnStart = source.indexOf('return (', bubbleStart);
-    const bubbleSource = source.slice(bubbleStart, returnStart);
-    const renderSource = source.slice(returnStart, source.indexOf('function copyActionLabel', returnStart));
+    const messageNodeStart = source.indexOf('const messageNode = (', bubbleStart);
+    const bubbleSource = source.slice(bubbleStart, messageNodeStart);
+    const renderSource = source.slice(
+      messageNodeStart,
+      source.indexOf('function copyActionLabel', messageNodeStart),
+    );
 
     expect(bubbleStart).toBeGreaterThan(-1);
-    expect(returnStart).toBeGreaterThan(bubbleStart);
+    expect(messageNodeStart).toBeGreaterThan(bubbleStart);
     expect(bubbleSource).toContain('testID={isUser ? \'message.userBubble\' : \'message.agentBubble\'}');
     expect(bubbleSource).not.toContain('testID="message.actionBar"');
     expect(renderSource).toContain('styles.messageItem');

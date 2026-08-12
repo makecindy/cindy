@@ -14,8 +14,8 @@
  *   4. a version that is merely queued (idle) does not claim to be loading.
  */
 
-import { cleanup, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import '@/i18n';
 import i18n from '@/i18n';
@@ -66,7 +66,19 @@ function renderDialog(notes: ReleaseNotes[]) {
   );
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+beforeEach(() => {
+  vi.stubGlobal('IntersectionObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    takeRecords() { return []; }
+  });
+});
 
 describe('UpdateNoticeDialog 单栏版式', () => {
   it('贡献者名单每个版本只渲染一次,不再 chrome 与子头各一份', () => {
@@ -137,10 +149,63 @@ describe('UpdateNoticeDialog 单栏版式', () => {
     expect(screen.getAllByText(i18n.t('update.notice.newFeatures'))).toHaveLength(1);
   });
 
-  it('单版本 auto 模式的版本号与日期在版本块里,不在标题栏', () => {
+  it('单版本 auto 模式:版本号出现在标题栏右上角与内容块两处', () => {
     renderDialog([topicNotes('0.1.21', ['Kafeifei'])]);
-    expect(screen.getByText('v0.1.21')).toBeTruthy();
-    // 标题栏右侧在单版本 auto 下不再显示日期或版本计数。
+    // v0.1.21 同时出现在标题栏 VersionBadge 和内容块 VersionBlock 的徽标中。
+    expect(screen.getAllByText('v0.1.21')).toHaveLength(2);
+    // 标题栏右侧不再显示版本计数。
     expect(screen.queryByText(i18n.t('update.notice.versionsSpan', { count: 1 }))).toBeNull();
+  });
+
+  it('手动历史在切换语言后原地刷新所有已加载版本,不重置滚动位置', async () => {
+    await act(async () => { await i18n.changeLanguage('en'); });
+    vi.stubGlobal('IntersectionObserver', class {
+      private readonly callback: IntersectionObserverCallback;
+      constructor(callback: IntersectionObserverCallback) {
+        this.callback = callback;
+      }
+      observe = (target: Element) => {
+        this.callback([{
+          isIntersecting: true,
+          target,
+          boundingClientRect: { top: 0 },
+        } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+      };
+      unobserve() {}
+      disconnect() {}
+      takeRecords() { return []; }
+    });
+
+    const localized = (version: string): ReleaseNotes => ({
+      ...topicNotes(version, []),
+      topics: [{
+        title: `${i18n.language}-${version}`,
+        text: '正文。',
+        contributors: [],
+      }],
+    });
+    const loadVersion = vi.fn(async (version: string) => localized(version));
+    render(
+      <UpdateNoticeDialog
+        open
+        mode="manual"
+        releaseNotes={[localized('0.1.21')]}
+        allVersions={['0.1.21', '0.1.20']}
+        loadVersion={loadVersion}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    const oldLocaleTitle = await screen.findByText('en-0.1.20');
+    const scrollBody = oldLocaleTitle.closest('.overflow-y-auto') as HTMLDivElement;
+    scrollBody.scrollTop = 123;
+
+    await act(async () => { await i18n.changeLanguage('ja'); });
+    await waitFor(() => expect(screen.getByText('ja-0.1.20')).toBeTruthy());
+    expect(screen.getByText('ja-0.1.21')).toBeTruthy();
+    expect(scrollBody.scrollTop).toBe(123);
+
+    vi.unstubAllGlobals();
+    await act(async () => { await i18n.changeLanguage('en'); });
   });
 });

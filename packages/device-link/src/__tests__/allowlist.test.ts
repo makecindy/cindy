@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   REMOTE_INVOKE_ALLOWLIST,
+  REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS,
   PUSH_FORWARD_ALLOWLIST,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   computeAllowlistHash,
@@ -21,6 +22,13 @@ import {
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
+  it('keeps every Review external-input classification inside the remote allowlist', () => {
+    for (const channel of REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    expect(REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS.has('maker:input:get-projection')).toBe(false);
+  });
+
   it('放行核心会话链路', () => {
     for (const ch of [
       'maker:create-session',
@@ -29,15 +37,27 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:resolve-interaction',
       'maker:get-pending-interactions',
       'maker:input:compact',
+      'maker:compact-session',
       'maker:set-model',
       'maker:switch-session-agent',
       'maker:get-session-agent-switch-intent',
       'local-db:sessions:list',
+      'local-db:conversations:search',
       DL_HISTORY_MESSAGES_CHANNEL,
       'local-db:messages:list',
       'local-db:messages:around',
       'local-db:messages:around-client-id',
       'maker:message:delete',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
+    }
+  });
+
+  it('允许远程会话读取被控端 Git / GitHub 上下文', () => {
+    for (const ch of [
+      'git-context:get-for-session',
+      'git-context:pr-refs:list',
+      'git-context:pr-status',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }
@@ -71,6 +91,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:orca-workflows:list-workers-by-leads')).toBe(false);
   });
 
   it('放行 workflow 逐 agent 进度树只读(记录文件真相在被控端 HOME,控制端本机读必落空)', () => {
@@ -95,10 +116,12 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
 
   it('放行 device-link 远程草稿镜像只读读(控制端 seed 被控端当前 New Maker 草稿)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-new-maker-defaults')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-new-maker-worktree-branch-pref')).toBe(true);
   });
 
   it('放行 device-link 模型列表 effort/fast 写穿(草稿 + 会话非选中,控制端→被控端)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:apply-new-maker-draft-pref')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:apply-new-maker-worktree-branch-pref')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:set-session-model-pref')).toBe(true);
   });
 
@@ -320,6 +343,7 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
 
   it('转发 device-link 模型列表变更(草稿全量 + 会话非选中)', () => {
     expect(PUSH_FORWARD_ALLOWLIST.has('maker:new-maker-draft:changed')).toBe(true);
+    expect(PUSH_FORWARD_ALLOWLIST.has('maker:new-maker-worktree-branch:changed')).toBe(true);
     expect(PUSH_FORWARD_ALLOWLIST.has('maker:session-model-pref:changed')).toBe(true);
   });
 
@@ -353,6 +377,13 @@ describe('INVOKE_TIMEOUT_OVERRIDES_MS', () => {
 
   it('worktree:discard-precreated 可等待同 session 创建锁且不沿用默认 30s', () => {
     expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:discard-precreated']).toBeGreaterThan(30_000);
+  });
+
+  it('maker:compact-session 隧道超时必须大于 pi 压缩执行预算(10min + 回程余量,不 30s 截断)', () => {
+    // 被控端在请求穿过 relay 后才开始跑 PI_COMPACT_TIMEOUT_MS(10min);控制端若只给
+    // 相同预算,压缩恰好到上限时会先 INVOKE_TIMEOUT 并被误判为设备无响应(codex P2)。
+    // 严格大于 10min,锁住「带余量」的语义,防止回退成无余量的同值。
+    expect(INVOKE_TIMEOUT_OVERRIDES_MS['maker:compact-session']).toBeGreaterThan(10 * 60_000);
   });
 });
 

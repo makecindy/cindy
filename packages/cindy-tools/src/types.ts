@@ -6,9 +6,10 @@
  * 包内不感知 Electron / 沙箱 / DB(设计规范规则 2:package 解耦)。
  *
  * 首个成员:ghost 总机(docs/dev-rules/plugin-security-and-authoring.md 的网关模式)——
- * agent 工具箱里永远只有 ghost_list / ghost_call 两件固定工具,
- * 已装意识的增删即时反映在 ghost_list 的**返回内容**里,
- * 工具定义(缓存前缀)自始至终零变化。
+ * agent 工具箱里的插件发现/调用入口固定为 ghost_list / ghost_info / ghost_call,
+ * 已装意识的增删即时反映在 ghost_info / ghost_list 的**返回内容**里。
+ * 工具面(名称/schema/基线描述)版本内恒定;完整描述(含花名册快照)
+ * 会话内恒定。
  */
 
 /** 意识注册的单个工具(来自 ghost.json 的 tools 声明,host 透传)。 */
@@ -62,7 +63,7 @@ export type CindyGhostSetupAllowedAction =
     };
 
 /**
- * ghost_list 返回的 Host 权威配置评估。只含引用、展示信息和允许动作，
+ * ghost_info / ghost_list 返回的 Host 权威配置评估。只含引用、展示信息和允许动作，
  * 禁止携带 Secret、Token、OAuth client secret 或 Connection 内容。
  */
 export interface CindyGhostSetupAssessment {
@@ -83,6 +84,22 @@ export interface CindyGhostSetupAssessment {
       actions: CindyGhostSetupAllowedAction[];
     }>;
   }>;
+  /** 插件仍 ready 时的非阻塞重连建议；不得解释为 SETUP_REQUIRED。 */
+  reauthSuggest?: {
+    ghostId: string;
+    secretKey: string;
+    missingScopes: string[];
+    missingScopeCount: number;
+    requirement: {
+      ref: string;
+      kind: 'oauth';
+      label: string;
+      action: {
+        id: string;
+        kind: 'oauth_connect';
+      };
+    };
+  };
 }
 
 /** Agent 为 Ask 风格配置卡编排的展示步骤；Host 校验后才可采用。 */
@@ -101,12 +118,14 @@ export interface CindyGhostSetupPlan {
   }>;
 }
 
-/** ghost_list 返回的单段意识条目(仅"已装且唤醒"的意识在列)。 */
+/** ghost_info / ghost_list 共用的单段意识条目。 */
 export interface CindyGhostInfo {
   id: string;
   name: string;
   /** 显式触发指令(用户敲 /<command> 点名调用);未声明则省略。 */
   command?: string;
+  /** 插件作者提供的召回线索，仅作数据；Host 优先取 whenToUse，缺省回落 description。 */
+  recall?: string;
   tools: CindyGhostToolInfo[];
   /**
    * Host 现查的配置评估。支持 Setup Runtime 的 Host 应尽量返回，但评估
@@ -129,10 +148,27 @@ export type CindyGhostCallErrorCode =
   | 'DIR_INVALID' // dir 目录无法过户(不存在/不在会话 workdir 内/超限额)
   | 'INTERNAL'; // 其它 host 侧错误
 
+export type CindyGhostInfoErrorCode = Extract<
+  CindyGhostCallErrorCode,
+  'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR'
+>;
+
+/** host 可见性判序回调(getAwakeGhost)的返回:只产可见性三码,不产 INTERNAL。 */
+export type CindyGhostInfoHostResult =
+  | { ok: true; ghost: CindyGhostInfo }
+  | { ok: false; errorCode: CindyGhostInfoErrorCode; message: string };
+
+/** ghost_info 给模型的 wire 结果:host 结果之上,handler 兜底 catch 可产 INTERNAL。 */
+export type CindyGhostInfoResult =
+  | CindyGhostInfoHostResult
+  | { ok: false; errorCode: 'INTERNAL'; message: string; errorType?: string };
+
 export type CindyGhostCallResult =
   | {
       ok: true;
       result: unknown;
+      /** ready 语义不变；只在有非阻塞重连建议时由 Host 附加。 */
+      setup?: CindyGhostSetupAssessment;
       /**
        * 本次调用期间由主机实际入库(cindy-media)的媒体地址账本(可选,
        * host 按 ghostId+callId 记账后随结果带回)。这是**主机侧事实**,
@@ -202,6 +238,11 @@ export interface CindyGhostsMcpDeps {
    */
   listAwakeGhosts(): Promise<CindyGhostInfo[]>;
   /**
+   * 按 id 现查单个当前可用插件；与 ghost_call 共享同一可见性判定。
+   * 判序：不存在 → 未登录 → 当前工作目录停用 → 未启用。
+   */
+  getAwakeGhost(ghostId: string): Promise<CindyGhostInfoHostResult>;
+  /**
    * 把工具调用派进目标意识的电子脑并等待结果(按需拉起沙箱、超时、
    * 崩溃分类全在 host 侧处理)。
    */
@@ -212,22 +253,25 @@ export interface CindyGhostsMcpDeps {
     /**
      * 用户图片过户(可选):会话里用户图片的地址(xdt-image:// /
      * cindy-media://blobs/ / 本机绝对路径,主机归一化并验归属)。
-     * host 把每张图落媒体总仓、给目标意识记 ghost-grant 引用(显式引渡 =
-     * 授权,按张、永久),再以指纹数组注入 args.attachments 交给意识——
+     * host 把每张图落媒体总仓、给目标意识记可读引用(人工确认的引渡才形成
+     * 按张永久授权；工作目录/Full Access 等 Host 代办交接不冒充用户授权),
+     * 再以指纹数组注入 args.attachments 交给意识——
      * 意识拿到的仍只是字符串指纹,摸不到路径与字节。
      */
     attachments?: string[];
     /**
-     * 批量预授权(可选):true 时本次调用**只做 attachments 过户、不派发
+     * 批量交接(可选):true 时本次调用**只做 attachments 过户、不派发
      * 工具**(tool/args 被忽略)。用途:agent 计划连续多次调用同一意识、
-     * 每次用一个 workdir 外文件时,先把整批文件一次性过户——用户只见一张
-     * 列出全部文件的确认卡,批一次;之后逐次调用命中授权记忆不再弹卡。
+     * 每次用一个 workdir 外文件时,先把整批文件一次性过户——非 Full Access
+     * 下用户只见一张列出全部文件的确认卡；Full Access 下自动交接、不弹卡，
+     * 且不会形成降档后仍生效的人工永久授权。
      * 普通调用 attachments 上限 4 张,grant_only 放宽(上限由 host 定)。
      */
     grantOnly?: boolean;
     /**
      * 目录过户(可选):要整体交给意识上传的本地目录**绝对路径**(部署
-     * 构建产物等场景)。host 验证(必须位于当前会话 workdir 内)、收集
+     * 构建产物等场景)。host 验证路径；workdir 内直接放行，workdir 外仅
+     * 本地 Full Access 自动过户，其它权限档及远程会话须用户确认。随后收集
      * 文件并预检限额、发一次性限时票据,以 args.dir_deposit =
      * { token, file_count, total_bytes, rel_paths } 注入交给意识——意识拿到
      * 的只有票据与相对路径清单,摸不到绝对路径与文件字节;上传时经
@@ -236,15 +280,16 @@ export interface CindyGhostsMcpDeps {
     dir?: string;
     /**
      * 下行落盘过户(可选):让意识把下载的文件存进的本地目录**绝对路径**
-     * (附件下载等场景)。host 验证(必须是当前会话 workdir 内的已存在
-     * 目录)、发限时票据,以 args.save_deposit = { token, dir_name } 注入
+     * (附件下载等场景)。host 验证为已存在目录；workdir 内直接放行，
+     * workdir 外仅本地 Full Access 自动过户，其它权限档及远程会话须用户
+     * 确认。随后发限时票据,以 args.save_deposit = { token, dir_name } 注入
      * 交给意识——意识经 fetch-request 的 as:'file' + saveTo 报 token,主机
      * 把响应字节直接写进该目录(文件名消毒去重,不覆盖);意识全程摸不到
      * 绝对路径与文件字节。
      */
     saveDir?: string;
     /**
-     * Agent 基于 ghost_list.setup 编排的展示计划。Host 必须按最新
+     * Agent 基于 ghost_info / ghost_list 返回的 setup 编排展示计划。Host 必须按最新
      * assessment 校验 revision、requirementRefs、actionId 和覆盖关系；
      * 本字段永不注入插件 args，也不代表授权或完成。
      */
@@ -259,12 +304,12 @@ export interface CindyGhostsMcpDeps {
   }): Promise<CindyGhostCallResult>;
   /**
    * 花名册快照(可选,同步):server 创建(= 会话装配)时调用一次,把
-   * "已装且唤醒"的意识名单 + 自我介绍写进 ghost_list / ghost_call 的工具
+   * "已装且唤醒"的意识名单 + 召回线索写进 ghost_list 的工具
    * 描述——模型开局即认识本机意识,语义召回不再依赖字面词表命中。
    * 会话内工具定义恒定(prompt 缓存安全);装/卸/唤醒/沉睡在新会话生效,
    * 实时清单仍以 ghost_list 为准。缺省 = 不注入(描述与今日基线一致)。
    */
-  getRosterItems?(): Array<{ id: string; name: string; command?: string; description?: string }>;
+  getRosterItems?(): Array<Pick<CindyGhostInfo, 'id' | 'name' | 'command' | 'recall'>>;
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;
   /**
@@ -283,7 +328,14 @@ export interface CindyGhostsMcpDeps {
    * 装入(同 id 已装则更新)确认框——装不装永远由用户决定,agent 只能
    * 递到用户面前。
    */
-  forgePack(request: { dir: string }): Promise<CindyForgePackResult>;
+  forgePack(request: {
+    dir: string;
+    /**
+     * 用户明确选择 AI 图标后，由图片工具返回的 cindy-media 地址。Host
+     * best-effort 把它嵌入包内；失败保留源码里的默认图标，不阻塞打包。
+     */
+    iconSource?: string;
+  }): Promise<CindyForgePackResult>;
   logger?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;

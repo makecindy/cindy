@@ -474,10 +474,147 @@ export function runDbValidate() {
 
 // ── macOS local signing ────────────────────────────────────────────────────
 
-export function writeMacEntitlements(destPath, { appleEvents = false } = {}) {
+const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/;
+const MAC_BUNDLE_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/;
+
+/** 正式签名包的 WebAuthn Touch ID keychain access group。 */
+export function macWebAuthnKeychainAccessGroup(teamId, bundleId) {
+  const normalizedTeamId = String(teamId ?? '').trim();
+  const normalizedBundleId = String(bundleId ?? '').trim();
+  if (!APPLE_TEAM_ID_PATTERN.test(normalizedTeamId)) {
+    throw new Error(`invalid Apple Team ID for WebAuthn: ${normalizedTeamId || '(empty)'}`);
+  }
+  if (!MAC_BUNDLE_ID_PATTERN.test(normalizedBundleId) || normalizedBundleId.includes('..')) {
+    throw new Error(`invalid macOS bundle id for WebAuthn: ${normalizedBundleId || '(empty)'}`);
+  }
+  return `${normalizedTeamId}.${normalizedBundleId}.webauthn`;
+}
+
+function entitlementValueAllows(values, requestedValue) {
+  return values.some((value) => {
+    if (typeof value !== 'string') return false;
+    if (value === requestedValue) return true;
+    return value.endsWith('*') && requestedValue.startsWith(value.slice(0, -1));
+  });
+}
+
+/** Validate the authorization carried by a decoded Developer ID profile. */
+export function assertMacWebAuthnProvisioningProfile(
+  profile,
+  { teamId, bundleId, keychainAccessGroup, now = new Date() },
+) {
+  const profileTeams = Array.isArray(profile?.TeamIdentifier) ? profile.TeamIdentifier : [];
+  if (!profileTeams.includes(teamId)) {
+    throw new Error(`WebAuthn provisioning profile does not authorize Apple Team ID ${teamId}`);
+  }
+  const expiresAt = new Date(profile?.ExpirationDate ?? Number.NaN);
+  if (!Number.isFinite(expiresAt.getTime()) || expiresAt <= now) {
+    throw new Error('WebAuthn provisioning profile is expired or has no valid expiration date');
+  }
+  const entitlements = profile?.Entitlements;
+  if (!entitlements || typeof entitlements !== 'object' || Array.isArray(entitlements)) {
+    throw new Error('WebAuthn provisioning profile has no entitlement allowlist');
+  }
+  if (entitlements['com.apple.developer.team-identifier'] !== teamId) {
+    throw new Error(`WebAuthn provisioning profile entitlement Team ID does not match ${teamId}`);
+  }
+  const requestedApplicationId = `${teamId}.${bundleId}`;
+  const applicationId =
+    entitlements['com.apple.application-identifier'] ?? entitlements['application-identifier'];
+  if (!entitlementValueAllows([applicationId], requestedApplicationId)) {
+    throw new Error(`WebAuthn provisioning profile does not authorize ${requestedApplicationId}`);
+  }
+  const keychainAccessGroups = entitlements['keychain-access-groups'];
+  if (
+    !Array.isArray(keychainAccessGroups) ||
+    !entitlementValueAllows(keychainAccessGroups, keychainAccessGroup)
+  ) {
+    throw new Error(
+      `WebAuthn provisioning profile does not authorize keychain group ${keychainAccessGroup}`,
+    );
+  }
+}
+
+/** Decode, validate and embed the profile required by keychain-access-groups. */
+export function embedMacWebAuthnProvisioningProfile(
+  appPath,
+  profilePath,
+  expected,
+  dependencies = {},
+) {
+  const spawnCommand = dependencies.spawnCommand ?? spawnSync;
+  const decodeResult = spawnCommand('/usr/bin/security', ['cms', '-D', '-i', profilePath], {
+    encoding: 'utf8',
+  });
+  if (decodeResult.error || decodeResult.status !== 0) {
+    throw new Error(
+      `failed to decode WebAuthn provisioning profile: ${decodeResult.error?.message ?? decodeResult.stderr?.trim() ?? `exit ${decodeResult.status}`}`,
+    );
+  }
+  const decodedProfileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-webauthn-profile-'));
+  const decodedProfilePath = path.join(decodedProfileDir, 'decoded.plist');
+  try {
+    fs.writeFileSync(decodedProfilePath, decodeResult.stdout);
+
+    const extractProfileField = (field, format) => {
+      const result = spawnCommand(
+        '/usr/bin/plutil',
+        ['-extract', field, format, '-o', '-', '--', decodedProfilePath],
+        { encoding: 'utf8' },
+      );
+      if (result.error || result.status !== 0) {
+        throw new Error(
+          `failed to inspect WebAuthn provisioning profile: ${field} extraction failed: ${result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`}`,
+        );
+      }
+      return result.stdout;
+    };
+
+    let profile;
+    try {
+      profile = {
+        TeamIdentifier: JSON.parse(extractProfileField('TeamIdentifier', 'json')),
+        ExpirationDate: extractProfileField('ExpirationDate', 'raw').trim(),
+        Entitlements: JSON.parse(extractProfileField('Entitlements', 'json')),
+      };
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(
+          'failed to inspect WebAuthn provisioning profile: plist field extraction returned invalid JSON',
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    assertMacWebAuthnProvisioningProfile(profile, expected);
+  } finally {
+    fs.rmSync(decodedProfileDir, { recursive: true, force: true });
+  }
+  const embeddedPath = path.join(appPath, 'Contents', 'embedded.provisionprofile');
+  fs.copyFileSync(profilePath, embeddedPath);
+  return embeddedPath;
+}
+
+function escapeXmlText(value) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+export function writeMacEntitlements(destPath, { appleEvents = false, keychainAccessGroup } = {}) {
   const appleEventsEntitlement = appleEvents
     ? `    <key>com.apple.security.automation.apple-events</key>
     <true/>
+`
+    : '';
+  const keychainAccessGroupEntitlement = keychainAccessGroup
+    ? `    <key>keychain-access-groups</key>
+    <array>
+        <string>${escapeXmlText(keychainAccessGroup)}</string>
+    </array>
 `
     : '';
   const content = `<?xml version="1.0" encoding="UTF-8"?>
@@ -492,7 +629,7 @@ export function writeMacEntitlements(destPath, { appleEvents = false } = {}) {
     <true/>
     <key>com.apple.security.device.audio-input</key>
     <true/>
-${appleEventsEntitlement}</dict>
+${appleEventsEntitlement}${keychainAccessGroupEntitlement}</dict>
 </plist>`;
   fs.writeFileSync(destPath, content);
 }
@@ -509,8 +646,38 @@ function readCodesignEntitlements(bundlePath) {
   return `${result.stdout || ''}${result.stderr || ''}`;
 }
 
+export function parseCodesignTeamIdentifier(output) {
+  return (
+    String(output ?? '')
+      .match(/^TeamIdentifier=(.+)$/m)?.[1]
+      ?.trim() ?? ''
+  );
+}
+
+function readCodesignTeamIdentifier(bundlePath) {
+  const result = spawnSync('/usr/bin/codesign', ['-dv', '--verbose=4', bundlePath], {
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `codesign identity inspection failed for ${bundlePath}: ${result.stderr || result.stdout}`,
+    );
+  }
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  return parseCodesignTeamIdentifier(output);
+}
+
 function hasAppleEventsEntitlement(entitlements) {
-  return /<key>com\.apple\.security\.automation\.apple-events<\/key>\s*<true\s*\/>/.test(entitlements);
+  return /<key>com\.apple\.security\.automation\.apple-events<\/key>\s*<true\s*\/>/.test(
+    entitlements,
+  );
+}
+
+function hasKeychainAccessGroup(entitlements, keychainAccessGroup) {
+  const escaped = keychainAccessGroup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(
+    `<key>keychain-access-groups<\\/key>\\s*<array>[\\s\\S]*?<string>${escaped}<\\/string>[\\s\\S]*?<\\/array>`,
+  ).test(entitlements);
 }
 
 function readPlistString(infoPlistPath, key) {
@@ -525,8 +692,12 @@ function readPlistString(infoPlistPath, key) {
   return result.stdout.trim();
 }
 
+export function readMacBundleIdentifier(appPath) {
+  return readPlistString(path.join(appPath, 'Contents', 'Info.plist'), 'CFBundleIdentifier');
+}
+
 /** Verify the packaged Contacts/JXA privacy contract after signing. */
-export function verifyMacContactsPermissions(appPath) {
+export function verifyMacContactsPermissions(appPath, { keychainAccessGroup, signingTeamId } = {}) {
   const infoPlistPath = path.join(appPath, 'Contents', 'Info.plist');
   const appleEventsUsage = readPlistString(infoPlistPath, 'NSAppleEventsUsageDescription');
   const contactsUsage = readPlistString(infoPlistPath, 'NSContactsUsageDescription');
@@ -539,8 +710,26 @@ export function verifyMacContactsPermissions(appPath) {
     }
   }
 
-  if (!hasAppleEventsEntitlement(readCodesignEntitlements(appPath))) {
+  const mainEntitlements = readCodesignEntitlements(appPath);
+  if (!hasAppleEventsEntitlement(mainEntitlements)) {
     throw new Error('main app is missing com.apple.security.automation.apple-events=true');
+  }
+  if (keychainAccessGroup && !hasKeychainAccessGroup(mainEntitlements, keychainAccessGroup)) {
+    throw new Error(`main app is missing WebAuthn keychain access group ${keychainAccessGroup}`);
+  }
+  if (signingTeamId) {
+    const actualTeamId = readCodesignTeamIdentifier(appPath);
+    if (actualTeamId !== signingTeamId) {
+      throw new Error(
+        `macOS signature TeamIdentifier mismatch: expected ${signingTeamId}, got ${actualTeamId || '(empty)'}`,
+      );
+    }
+  }
+  if (
+    keychainAccessGroup &&
+    !fs.existsSync(path.join(appPath, 'Contents', 'embedded.provisionprofile'))
+  ) {
+    throw new Error('main app is missing the WebAuthn provisioning profile');
   }
 
   const frameworksDir = path.join(appPath, 'Contents', 'Frameworks');
@@ -551,11 +740,218 @@ export function verifyMacContactsPermissions(appPath) {
     if (hasAppleEventsEntitlement(readCodesignEntitlements(helperApp))) {
       throw new Error(`helper app must not receive Apple Events entitlement: ${helperApp}`);
     }
+    if (
+      keychainAccessGroup &&
+      hasKeychainAccessGroup(readCodesignEntitlements(helperApp), keychainAccessGroup)
+    ) {
+      throw new Error(`helper app must not receive WebAuthn keychain access group: ${helperApp}`);
+    }
   }
-  console.log('==> Verified macOS Contacts usage descriptions and main-only Apple Events entitlement');
+  console.log(
+    `==> Verified macOS Contacts usage descriptions and main-only Apple Events${keychainAccessGroup ? ' / WebAuthn' : ''} entitlements`,
+  );
 }
 
-export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath) {
+const IOS_SIMULATOR_HELPER_RELATIVE_PATH = path.join(
+  'Contents',
+  'Helpers',
+  'Cindy iOS Simulator Helper.app',
+);
+const IOS_SIMULATOR_HELPER_EXECUTABLE = 'ios-simulator-sidecar';
+const IOS_SIMULATOR_SIDECAR_MANIFEST_RELATIVE_PATH = path.join(
+  'Contents',
+  'Resources',
+  'ios-simulator',
+  'native-sidecar-manifest.json',
+);
+const IOS_SIMULATOR_HELPER_BUILD_RESULT_RELATIVE_PATH = path.join(
+  'Contents',
+  'Resources',
+  'ios-simulator',
+  'native-helper-build-result.json',
+);
+const IOS_SIMULATOR_HELPER_UNSUPPORTED_REASON =
+  'simulator-kit-architecture-unavailable';
+
+function expectedIOSSimulatorHelperArchitecture(packageArch) {
+  switch (packageArch) {
+    case 'arm64':
+      return 'arm64';
+    case 'x64':
+      return 'x86_64';
+    case 'universal':
+      return 'universal';
+    default:
+      throw new Error(`unsupported packaged iOS Simulator helper architecture: ${packageArch}`);
+  }
+}
+
+export function inspectPackagedIOSSimulatorHelper(appPath, packageArch) {
+  const expectedArchitecture = expectedIOSSimulatorHelperArchitecture(packageArch);
+  const helperPath = path.join(appPath, IOS_SIMULATOR_HELPER_RELATIVE_PATH);
+  const executablePath = path.join(
+    helperPath,
+    'Contents',
+    'MacOS',
+    IOS_SIMULATOR_HELPER_EXECUTABLE,
+  );
+  const buildResultPath = path.join(
+    appPath,
+    IOS_SIMULATOR_HELPER_BUILD_RESULT_RELATIVE_PATH,
+  );
+  const hasExecutable = fs.existsSync(executablePath);
+  const hasBuildResult = fs.existsSync(buildResultPath);
+  if (hasExecutable) {
+    if (hasBuildResult) {
+      throw new Error('packaged iOS Simulator helper conflicts with unsupported build result');
+    }
+    return { status: 'present', helperPath, executablePath };
+  }
+  if (!hasBuildResult) {
+    throw new Error(`packaged iOS Simulator helper is missing: ${executablePath}`);
+  }
+
+  let result;
+  try {
+    result = JSON.parse(fs.readFileSync(buildResultPath, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `packaged iOS Simulator helper build result is invalid: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (
+    result?.schemaVersion !== 1 ||
+    result?.status !== 'unsupported' ||
+    result?.targetArchitecture !== 'x86_64' ||
+    result?.reason !== IOS_SIMULATOR_HELPER_UNSUPPORTED_REASON ||
+    !Array.isArray(result?.simulatorKitArchitectures) ||
+    result.simulatorKitArchitectures.length === 0 ||
+    result.simulatorKitArchitectures.includes('x86_64') ||
+    !result.simulatorKitArchitectures.every((architecture) => typeof architecture === 'string')
+  ) {
+    throw new Error('packaged iOS Simulator helper build result is invalid');
+  }
+  if (expectedArchitecture !== 'x86_64') {
+    throw new Error(
+      `packaged iOS Simulator helper fallback is allowed only for x64 packages, received ${packageArch}`,
+    );
+  }
+  return { status: 'unsupported', buildResultPath, result };
+}
+
+function runSigningCommand(command, args, label) {
+  const result = spawnSync(command, args, { encoding: 'utf8' });
+  if (result.error) {
+    throw new Error(`${label} could not execute: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`${label} failed: ${result.stderr || result.stdout}`);
+  }
+  return {
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
+}
+
+function inspectDesignatedRequirement(bundlePath) {
+  const result = runSigningCommand(
+    '/usr/bin/codesign',
+    ['-d', '-r', '-', bundlePath],
+    'iOS Simulator helper designated requirement inspection',
+  );
+  const output = `${result.stdout}\n${result.stderr}`;
+  const requirement = output.match(/designated\s*=>\s*(.+)/)?.[1]?.trim();
+  if (!requirement) {
+    throw new Error('iOS Simulator helper designated requirement is unavailable');
+  }
+  return requirement;
+}
+
+function inspectMachOArchitectures(executablePath) {
+  const { stdout } = runSigningCommand(
+    '/usr/bin/lipo',
+    ['-archs', executablePath],
+    'iOS Simulator helper architecture inspection',
+  );
+  const architectures = stdout
+    .trim()
+    .split(/\s+/)
+    .filter((architecture) => architecture === 'arm64' || architecture === 'x86_64');
+  if (architectures.length === 0) {
+    throw new Error('iOS Simulator helper has no supported architecture');
+  }
+  return [...new Set(architectures)].sort();
+}
+
+/**
+ * Writes the Host-private identity record after the nested Helper is signed.
+ * The main app is signed afterwards, sealing this resource into its code signature.
+ */
+export function writeIOSSimulatorSidecarManifest(appPath, signing) {
+  const helperPath = path.join(appPath, IOS_SIMULATOR_HELPER_RELATIVE_PATH);
+  const executablePath = path.join(
+    helperPath,
+    'Contents',
+    'MacOS',
+    IOS_SIMULATOR_HELPER_EXECUTABLE,
+  );
+  const infoPlistPath = path.join(helperPath, 'Contents', 'Info.plist');
+  if (!fs.existsSync(executablePath) || !fs.existsSync(infoPlistPath)) {
+    throw new Error('packaged iOS Simulator helper is incomplete');
+  }
+
+  const manifestPath = path.join(appPath, IOS_SIMULATOR_SIDECAR_MANIFEST_RELATIVE_PATH);
+  const manifest = {
+    schemaVersion: 1,
+    artifactId: 'cindy.ios-simulator-sidecar',
+    bundleIdentifier: readPlistString(infoPlistPath, 'CFBundleIdentifier'),
+    version: readPlistString(infoPlistPath, 'CFBundleShortVersionString'),
+    architectures: inspectMachOArchitectures(executablePath),
+    sha256: sha256(executablePath),
+    signing: {
+      mode: signing.mode,
+      teamIdentifier: signing.teamIdentifier ?? null,
+      designatedRequirement: inspectDesignatedRequirement(helperPath),
+      hardenedRuntime: true,
+    },
+  };
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+    mode: 0o644,
+  });
+  return manifestPath;
+}
+
+export function signIOSSimulatorHelper(appPath, signArgs, signing, packageArch) {
+  const helper = inspectPackagedIOSSimulatorHelper(appPath, packageArch);
+  if (helper.status === 'unsupported') {
+    fs.rmSync(path.join(appPath, IOS_SIMULATOR_SIDECAR_MANIFEST_RELATIVE_PATH), {
+      force: true,
+    });
+    console.warn(
+      '    Skipping iOS Simulator helper signing: x86_64 SimulatorKit slice unavailable; package will use WDA/MJPEG',
+    );
+    return false;
+  }
+  console.log('    Signing iOS Simulator helper executable...');
+  runSigningCommand(
+    '/usr/bin/codesign',
+    [...signArgs, helper.executablePath],
+    'iOS Simulator helper signing',
+  );
+  console.log('    Signing iOS Simulator helper bundle...');
+  runSigningCommand(
+    '/usr/bin/codesign',
+    [...signArgs, helper.helperPath],
+    'iOS Simulator helper bundle signing',
+  );
+  writeIOSSimulatorSidecarManifest(appPath, signing);
+  return true;
+}
+
+export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath, arch) {
   console.log('==> Ad-hoc signing macOS app for local packaged testing...');
   const signBase = '/usr/bin/codesign --force --options runtime --sign -';
   const frameworksDir = path.join(appPath, 'Contents', 'Frameworks');
@@ -574,9 +970,16 @@ export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlement
   exec(`find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
   exec(`find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" "{}" \\;`);
   exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} "{}" \\;`);
+  const iosSimulatorHelperSigned = signIOSSimulatorHelper(
+    appPath,
+    ['--force', '--options', 'runtime', '--sign', '-'],
+    { mode: 'adhoc', teamIdentifier: null },
+    arch,
+  );
   exec(`${signBase} --entitlements "${mainEntitlementsPath}" "${appPath}"`);
   exec(`/usr/bin/codesign --verify --deep --strict "${appPath}"`);
   verifyMacContactsPermissions(appPath);
+  return iosSimulatorHelperSigned;
 }
 
 // ── macOS 正式签名 / 公证 / DMG(单点实现;publish-macos 与 package-desktop 共用)──
@@ -585,9 +988,15 @@ export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlement
 
 /**
  * Developer ID 由内向外逐层签名(Electron app 不能依赖 --deep)。
- * @param {{ signIdentity: string }} identity
+ * @param {{ signIdentity: string, teamId: string }} identity
  */
-export function signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEntitlementsPath, identity) {
+export function signMacAppWithIdentity(
+  appPath,
+  helperEntitlementsPath,
+  mainEntitlementsPath,
+  identity,
+  { keychainAccessGroup, arch } = {},
+) {
   console.log('    Removing provenance attributes...');
   exec(`/usr/bin/xattr -dr com.apple.provenance "${appPath}" 2>/dev/null || true`);
 
@@ -623,26 +1032,191 @@ export function signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEnti
   console.log('    Signing frameworks...');
   exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} "{}" \\;`);
 
-  // 4. 主 app bundle
+  // 4. Host-owned iOS Simulator Helper uses Hardened Runtime but receives no
+  // Electron/V8 or main-app entitlements. Its manifest is written only after
+  // the final nested signature, then sealed by the outer app signature.
+  const iosSimulatorHelperSigned = signIOSSimulatorHelper(
+    appPath,
+    ['--force', '--timestamp', '--options', 'runtime', '--sign', identity.signIdentity],
+    { mode: 'developer-id', teamIdentifier: identity.teamId },
+    arch,
+  );
+
+  // 5. 主 app bundle
   console.log('    Signing main app...');
   exec(`${signBase} --entitlements "${mainEntitlementsPath}" "${appPath}"`);
 
   console.log('    Verifying signature...');
   exec(`/usr/bin/codesign --verify --deep --strict "${appPath}"`);
-  verifyMacContactsPermissions(appPath);
+  verifyMacContactsPermissions(appPath, {
+    keychainAccessGroup,
+    signingTeamId: identity.teamId,
+  });
+  return iosSimulatorHelperSigned;
+}
+
+const NOTARYTOOL_TIMEOUT_MS = 1800000;
+
+function spawnOutputText(value) {
+  if (Buffer.isBuffer(value)) return value.toString('utf8');
+  return value == null ? '' : String(value);
+}
+
+function redactApplePassword(value, applePassword) {
+  const text = spawnOutputText(value);
+  return applePassword ? text.split(applePassword).join('****') : text;
+}
+
+function logCapturedNotarytoolOutput(result, operation, identity, logger) {
+  const output = [result.stdout, result.stderr]
+    .map((value) => redactApplePassword(value, identity.applePassword).trim())
+    .filter(Boolean)
+    .join('\n');
+  if (output) {
+    logger.error(`    notarytool ${operation} output:`);
+    logger.error(output);
+  }
+}
+
+/**
+ * 把 notarytool 的原始输出挂到 error 上。notarytool 对 Invalid 提交的 exit code 随
+ * Xcode 版本变化(有的 0、有的非 0);非 0 那条路径也必须能从 stdout 里救回
+ * submission id,否则拿不到 Apple 的详细失败原因。
+ */
+function attachNotarytoolOutput(error, result) {
+  error.notarytoolStdout = spawnOutputText(result?.stdout);
+  error.notarytoolStderr = spawnOutputText(result?.stderr);
+  return error;
+}
+
+function runNotarytool(operation, args, identity, { spawnCommand, logger }) {
+  let result;
+  try {
+    result = spawnCommand('/usr/bin/xcrun', args, {
+      encoding: 'utf8',
+      timeout: NOTARYTOOL_TIMEOUT_MS,
+    });
+  } catch (error) {
+    const message = redactApplePassword(error?.message ?? error, identity.applePassword);
+    throw new Error(`notarytool ${operation} 无法执行:${message}`);
+  }
+
+  if (result.error || result.signal || result.status !== 0) {
+    logCapturedNotarytoolOutput(result, operation, identity, logger);
+  }
+  if (result.error) {
+    const message = redactApplePassword(result.error.message, identity.applePassword);
+    throw new Error(`notarytool ${operation} 无法执行:${message}`);
+  }
+  if (result.signal) {
+    throw attachNotarytoolOutput(
+      new Error(
+        `notarytool ${operation} 被信号 ${result.signal} 终止(可能公证超时);公证未通过。`,
+      ),
+      result,
+    );
+  }
+  if (result.status !== 0) {
+    throw attachNotarytoolOutput(
+      new Error(`notarytool ${operation} 失败(exit ${result.status});公证未通过。`),
+      result,
+    );
+  }
+  return {
+    stdout: spawnOutputText(result.stdout),
+    stderr: spawnOutputText(result.stderr),
+  };
+}
+
+function parseNotarytoolSubmitResponse(stdout) {
+  let response;
+  try {
+    response = JSON.parse(stdout);
+  } catch {
+    throw new Error('notarytool submit 未返回有效 JSON;公证结果无法确认。');
+  }
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    throw new Error('notarytool submit JSON 结构无效;公证结果无法确认。');
+  }
+  const status = typeof response.status === 'string' ? response.status.trim() : '';
+  const id = typeof response.id === 'string' ? response.id.trim() : '';
+  if (!status) {
+    throw new Error('notarytool submit JSON 缺少 status;公证结果无法确认。');
+  }
+  return { id, status };
+}
+
+/** 解析失败时返回 null(救援路径用):此时 exit code 已经说明公证没过。 */
+function tryParseNotarytoolSubmitResponse(stdout) {
+  try {
+    return parseNotarytoolSubmitResponse(stdout);
+  } catch {
+    return null;
+  }
+}
+
+function printNotarizationFailureLog(submissionId, status, identity, dependencies) {
+  const { logger } = dependencies;
+  if (!submissionId) {
+    logger.error(
+      `    Apple 公证返回 ${status}，但响应缺少 submission id，无法拉取详细日志。`,
+    );
+    return;
+  }
+
+  const logArgs = [
+    'notarytool',
+    'log',
+    submissionId,
+    '--apple-id',
+    identity.appleId,
+    '--password',
+    identity.applePassword,
+    '--team-id',
+    identity.teamId,
+  ];
+  logger.log(
+    `    $ /usr/bin/xcrun notarytool log ${JSON.stringify(submissionId)} ` +
+      `--apple-id ${JSON.stringify(identity.appleId)} --password "****" ` +
+      `--team-id ${JSON.stringify(identity.teamId)}`,
+  );
+  try {
+    const result = runNotarytool('log', logArgs, identity, dependencies);
+    const output = [result.stdout, result.stderr]
+      .map((value) => redactApplePassword(value, identity.applePassword).trim())
+      .filter(Boolean)
+      .join('\n');
+    logger.error('    Apple notarization log:');
+    logger.error(output || '(empty log)');
+  } catch (error) {
+    const message = redactApplePassword(error?.message ?? error, identity.applePassword);
+    logger.error(`    WARN: 无法获取 Apple notarization log: ${message}`);
+  }
 }
 
 /**
  * Apple notarytool 公证 + staple。
  * @param {{ appleId: string, teamId: string, applePassword: string }} identity
+ * @param {{
+ *   execCommand?: typeof exec,
+ *   spawnCommand?: typeof spawnSync,
+ *   unlinkFile?: typeof fs.unlinkSync,
+ *   logger?: Console,
+ * }} dependencies
  */
-export function notarizeMacApp(appPath, identity) {
+export function notarizeMacApp(appPath, identity, {
+  execCommand = exec,
+  spawnCommand = spawnSync,
+  unlinkFile = fs.unlinkSync,
+  logger = console,
+} = {}) {
   const zipPath = appPath + '.zip';
+  const dependencies = { spawnCommand, logger };
 
-  console.log('    Compressing for notarization...');
-  exec(`/usr/bin/ditto -c -k --keepParent "${appPath}" "${zipPath}"`);
+  logger.log('    Compressing for notarization...');
+  execCommand(`/usr/bin/ditto -c -k --keepParent "${appPath}" "${zipPath}"`);
 
-  console.log('    Submitting to Apple notarization service (this may take a few minutes)...');
+  logger.log('    Submitting to Apple notarization service (this may take a few minutes)...');
   // 密码作为 --password 值直接传给 notarytool——不再用 --password @env:VAR 间接:
   // 旧版 notarytool 不认 @env: 前缀,会把字面量 "@env:..." 当密码本身发出去而 401。
   // 走 spawnSync 参数数组:避免 shell 参与(无插值/无注入面),且日志回显时对密码
@@ -661,31 +1235,51 @@ export function notarizeMacApp(appPath, identity) {
     '--team-id',
     identity.teamId,
     '--wait',
+    '--output-format',
+    'json',
   ];
-  console.log(
-    `    $ /usr/bin/xcrun notarytool submit "${zipPath}" ` +
-      `--apple-id "${identity.appleId}" --password "****" --team-id "${identity.teamId}" --wait`,
+  logger.log(
+    `    $ /usr/bin/xcrun notarytool submit ${JSON.stringify(zipPath)} ` +
+      `--apple-id ${JSON.stringify(identity.appleId)} --password "****" ` +
+      `--team-id ${JSON.stringify(identity.teamId)} --wait --output-format json`,
   );
-  const submitResult = spawnSync('/usr/bin/xcrun', submitArgs, {
-    stdio: 'inherit',
-    timeout: 1800000, // 30 min
-  });
-  if (submitResult.error) {
-    throw new Error(`notarytool submit 无法执行:${submitResult.error.message}`);
+  let submitResult;
+  try {
+    submitResult = runNotarytool('submit', submitArgs, identity, dependencies);
+  } catch (error) {
+    // notarytool 自己以非 0 退出:原始输出已由 runNotarytool 打过一遍,这里再尽力从
+    // stdout 里救出 submission id 去拉 Apple 的详细失败原因。zip 保留不删。
+    const salvaged = tryParseNotarytoolSubmitResponse(error?.notarytoolStdout ?? '');
+    if (salvaged && salvaged.status !== 'Accepted') {
+      printNotarizationFailureLog(salvaged.id, salvaged.status, identity, dependencies);
+    }
+    throw error;
   }
-  if (submitResult.signal) {
-    // 被信号终止(如 30min 超时 kill → SIGTERM):status 为 null,单看 exit 会显示
-    // "exit null",这里显式报出 signal 便于定位。
-    throw new Error(`notarytool submit 被信号 ${submitResult.signal} 终止(可能公证超时);公证未通过。`);
+  let submission;
+  try {
+    submission = parseNotarytoolSubmitResponse(submitResult.stdout);
+  } catch (error) {
+    logCapturedNotarytoolOutput(submitResult, 'submit', identity, logger);
+    throw error;
   }
-  if (submitResult.status !== 0) {
-    throw new Error(`notarytool submit 失败(exit ${submitResult.status});公证未通过。`);
+  logger.log(
+    `    Apple notarization status: ${submission.status}` +
+      (submission.id ? ` (${submission.id})` : ''),
+  );
+
+  if (submission.status !== 'Accepted') {
+    printNotarizationFailureLog(submission.id, submission.status, identity, dependencies);
+    throw new Error(
+      `Apple 公证未通过: status=${submission.status}` +
+        (submission.id ? `, submission=${submission.id}` : '') +
+        '。',
+    );
   }
 
-  fs.unlinkSync(zipPath);
+  unlinkFile(zipPath);
 
-  console.log('    Stapling notarization ticket...');
-  exec(`/usr/bin/xcrun stapler staple "${appPath}"`);
+  logger.log('    Stapling notarization ticket...');
+  execCommand(`/usr/bin/xcrun stapler staple "${appPath}"`);
 }
 
 // ── DMG 安装界面(dmgbuild)─────────────────────────────────────────────────
@@ -806,6 +1400,40 @@ export function runSmokeTest(platform, arch, region = 'global') {
   if (result.status !== 0) {
     console.error('ERROR: packaged smoke test failed; aborting.');
     process.exit(1);
+  }
+}
+
+/**
+ * Runs the iOS Simulator qualification path against the final macOS .app.
+ * Callers must invoke this only after the app's final nested/outer signing
+ * (and notarization when applicable), but before wrapping it in a DMG/ZIP.
+ */
+export function runIOSSimulatorReleaseGate(appPath, arch, expectedTrust, requireNative = false) {
+  console.log(
+    `==> Running packaged iOS Simulator release gate (${expectedTrust}, ${
+      requireNative ? 'native' : 'static'
+    })...`,
+  );
+  const args = [
+    'scripts/ios-simulator-release-gate.mjs',
+    `--app-path=${appPath}`,
+    `--arch=${arch}`,
+    `--expected-trust=${expectedTrust}`,
+  ];
+  if (requireNative) args.push('--require-native');
+  const result = spawnSync('node', args, {
+    stdio: 'inherit',
+    cwd: DESKTOP_ROOT,
+    shell: false,
+  });
+  if (result.error) {
+    throw new Error(`packaged iOS Simulator release gate could not start: ${result.error.message}`);
+  }
+  if (result.signal) {
+    throw new Error(`packaged iOS Simulator release gate was terminated by ${result.signal}`);
+  }
+  if (result.status !== 0) {
+    throw new Error('packaged iOS Simulator release gate failed');
   }
 }
 

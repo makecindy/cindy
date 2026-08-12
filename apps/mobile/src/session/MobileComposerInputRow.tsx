@@ -1,6 +1,7 @@
 import {
   Animated,
   Easing,
+  Platform,
   StyleSheet,
   View,
   type GestureResponderHandlers,
@@ -25,6 +26,10 @@ import {
   COMPOSER_TEXT_STYLE,
   COMPOSER_TEXT_VERTICAL_PADDING,
 } from '@/session/composerTextMetrics';
+import {
+  COMPOSER_TEXT_PADDING_BOTTOM,
+  COMPOSER_TEXT_PADDING_TOP,
+} from '@/session/composerTextPlatformMetrics';
 
 /**
  * Composer 草稿文本的排版档。正本在 `composerTextMetrics`——原生输入框、WebView 富文本
@@ -568,14 +573,17 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     ...COMPOSER_TEXT_STYLE,
     maxHeight: MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
     minHeight: MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
+    paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM,
     paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING,
-    paddingVertical: MOBILE_COMPOSER_INPUT_VERTICAL_PADDING,
+    paddingTop: COMPOSER_TEXT_PADDING_TOP,
     textAlignVertical: 'top',
   },
   // 语音按钮的 absolute 锚点：简洁态贴输入行右侧垂直居中；
   // 有发送按钮时向左让位；卡片态下沉到底部工具排的占位上。
   voiceButtonAnchor: {
-    bottom: 11,
+    // iOS 的文字 padding 是 6/0,按钮随文字下移 3pt；Android 保持 3/3,
+    // 不应继承 iOS 的补偿。
+    bottom: Platform.OS === 'ios' ? 8 : 11,
     position: 'absolute',
     right: MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
     zIndex: 2,

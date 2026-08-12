@@ -120,18 +120,40 @@ describe('loadDeviceLinkExistingProjects', () => {
     ]);
   });
 
-  it('被控端返回 null/undefined → 空数组(不抛)', async () => {
+  it('被控端返回 null/undefined → 协议错误，不能伪装成权威空列表', async () => {
     invoke.mockResolvedValue(null);
-    expect(await loadDeviceLinkExistingProjects('dev-1')).toEqual([]);
+    await expect(loadDeviceLinkExistingProjects('dev-1')).rejects.toThrow(
+      'Invalid recent workdirs response',
+    );
+  });
+
+  it.each([
+    ['缺少 path', [{ lastUsedAt: '2026-06-15T00:00:00.000Z' }]],
+    ['空 path', [{ path: '', lastUsedAt: '2026-06-15T00:00:00.000Z' }]],
+    ['lastUsedAt 不是字符串', [{ path: '/remote/app', lastUsedAt: 42 }]],
+    [
+      'exists 不是布尔值',
+      [{ path: '/remote/app', lastUsedAt: '2026-06-15T00:00:00.000Z', exists: null }],
+    ],
+    [
+      '混入畸形元素',
+      [
+        { path: '/remote/app', lastUsedAt: '2026-06-15T00:00:00.000Z' },
+        { path: '/remote/bad', lastUsedAt: 42 },
+      ],
+    ],
+  ])('数组元素%s → 整份响应进入协议错误', async (_label, rows) => {
+    invoke.mockResolvedValue(rows);
+    await expect(loadDeviceLinkExistingProjects('dev-1')).rejects.toThrow(
+      'Invalid recent workdirs response',
+    );
   });
 
   it('从被控端最近项目列表移除路径,不调用本机 recent-workdirs API', async () => {
     invoke.mockResolvedValue({ deleted: true });
     await removeDeviceLinkExistingProject('dev-1', '/remote/app');
-    expect(invoke).toHaveBeenCalledWith(
-      'dev-1',
-      'local-db:recent-workdirs:remove',
-      [{ path: '/remote/app' }],
-    );
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:recent-workdirs:remove', [
+      { path: '/remote/app' },
+    ]);
   });
 });

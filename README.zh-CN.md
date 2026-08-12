@@ -62,7 +62,6 @@ monorepo 组织。
 | `apps/mobile` | Expo / React Native 手机客户端 |
 | `packages/*` | 客户端共享能力（鉴权、device-link、agent 编排、模型供应商等） |
 | `apps/*-bin` | 桌面端附带的工具二进制，均不入库；claude-code / codex / ripgrep 由 `pnpm install` 按平台自动下载，Android platform-tools 在 Windows 打包前按 pin 版本下载并校验 sha256 |
-| `cindy-protocol/` | 与服务端共用的协议（git submodule） |
 
 **服务端不在本仓库：** 服务端位于独立仓库，不属于本 monorepo。
 
@@ -79,16 +78,14 @@ monorepo 组织。
 
 ## 开始开发
 
-开发者安装、公开 submodule 初始化、Git LFS、依赖更新和权限说明统一见
-[`CONTRIBUTING.md`](CONTRIBUTING.md)。公开贡献者只需初始化公开的协议 submodule；
-插件通过 SkillHub 或手动安装，不要使用未列出的递归初始化命令。
+开发者安装、Git LFS、依赖更新和权限说明统一见
+[`CONTRIBUTING.md`](CONTRIBUTING.md)。插件通过 SkillHub 或手动安装。
 
 最短入口：
 
 ```bash
 git clone https://github.com/makecindy/cindy.git
 cd cindy
-git submodule update --init --recursive cindy-protocol
 git lfs pull
 pnpm install
 ```

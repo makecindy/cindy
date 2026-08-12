@@ -140,6 +140,20 @@ describe('注入基线 CSS(幽灵 token 防线 + 设置区卡片色对齐)', () 
     );
   });
 
+  it('面板下发功能性 motion token,插件无需硬编码交互与 spinner 时长', () => {
+    withDomStubs(
+      () => {
+        const css = buildGhostThemeCss();
+        expect(css).toContain('--motion-fast: 150ms');
+        expect(css).toContain('--motion-spinner-cycle: 1000ms');
+      },
+      {
+        tokenValue: (token) =>
+          token === '--motion-fast' ? '150ms' : token === '--motion-spinner-cycle' ? '1000ms' : '',
+      },
+    );
+  });
+
   it('设置区基线:背景 = 宿主设置卡片色(与相邻卡片无缝),fallback --surface', () => {
     withDomStubs(() => {
       expect(buildGhostSettingsThemeCss()).toContain(
@@ -256,7 +270,9 @@ describe('沙箱页明暗档下发(color-scheme,双模式门槛)', () => {
     injector.inject();
     await flush();
     expect(webview.insertCSS).toHaveBeenCalledTimes(2);
-    expect(webview.insertCSS).toHaveBeenLastCalledWith(expect.stringContaining('color-scheme: dark;'));
+    expect(webview.insertCSS).toHaveBeenLastCalledWith(
+      expect.stringContaining('color-scheme: dark;'),
+    );
   });
 });
 

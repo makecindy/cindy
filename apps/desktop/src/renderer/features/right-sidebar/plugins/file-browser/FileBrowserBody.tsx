@@ -35,6 +35,7 @@ import { ChevronsDownUp, FolderX, RefreshCw, Search, X as XIcon } from 'lucide-r
 import { cn } from '@/lib/utils';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { Tip } from '@/components/ui/tooltip';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import {
@@ -391,9 +392,17 @@ function FileBrowserBodyWithWorkdir({
   const handleOpenInBrowser = useCallback(
     async (entry: DirEntry) => {
       const abs = toOsAbsolutePath(workdir, entry.relPath);
-      const res = await window.electronAPI.openFileInBrowser(abs);
-      if (!res.success) {
-        toast.error(res.error ?? t('chat.markdownRenderer.openInBrowserFailed'));
+      try {
+        await window.electronAPI.openFileInBrowser(abs);
+      } catch (error) {
+        toast.error(
+          t(
+            mapIpcErrorToI18nKey(error, {
+              namespace: 'chat.markdownRenderer',
+              fallback: 'chat.markdownRenderer.openInBrowserFailed',
+            }),
+          ),
+        );
       }
     },
     [workdir, t],
@@ -808,7 +817,7 @@ function TreeLoadErrorPlaceholder({
   const { t } = useTranslation();
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-      <span className="text-[12px] text-[var(--text-tertiary)]">
+      <span className="text-12 text-[var(--text-tertiary)]">
         {t(
           kind === 'device-too-old'
             ? 'rightSidebar.fileBrowser.deviceTooOld'
@@ -819,7 +828,7 @@ function TreeLoadErrorPlaceholder({
         <button
           type="button"
           onClick={onRetry}
-          className="rounded-md px-2 py-1 text-[12px] text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
+          className="rounded-md px-2 py-1 text-12 text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
         >
           {t('ccAgent.workdirBrowse.treeAction.refresh')}
         </button>
@@ -835,7 +844,7 @@ function NoWorkdirPlaceholder() {
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--surface-elevated)]">
         <FolderX size={20} strokeWidth={1.5} className="text-[var(--text-tertiary)]" />
       </div>
-      <span className="text-[12px] text-[var(--text-tertiary)]">
+      <span className="text-12 text-[var(--text-tertiary)]">
         {t('rightSidebar.fileBrowser.noWorkdir')}
       </span>
     </div>

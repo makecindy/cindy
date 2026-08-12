@@ -2,7 +2,7 @@
 
 > 状态：Desktop 已实现并通过自动化与 Electron 真机视觉验收；外部授权完成回流待联调；Mobile 独立后续  
 > 关联 Issue：[makecindy/cindy#136](https://github.com/makecindy/cindy/issues/136)  
-> 适用范围：Desktop 的 `ghost_list` / `ghost_call`、插件配置宿主、聊天交互卡  
+> 适用范围：Desktop 的 `ghost_list` / `ghost_info` / `ghost_call`、插件配置宿主、聊天交互卡
 > 不改变：插件沙箱权限、Secret 存储边界、Agent system prompt
 
 ## 1. 背景与根需求
@@ -127,7 +127,7 @@ OAuth 授权：
 
 ### 3.1 Agent
 
-- 从 `ghost_list` 读取 Host 返回的 setup assessment；
+- 从 `ghost_info` / `ghost_list` 读取 Host 返回的 setup assessment；
 - 在 `ghost_call` 中可选提交 setup plan；
 - 决定对用户展示的步骤、顺序、标题和说明；
 - 只能引用 Host 已允许的 requirement ref 和 action id；
@@ -174,7 +174,7 @@ OAuth 授权：
 
 ### 4.1 Host assessment
 
-`ghost_list` 在每个插件条目中增加动态 `setup`。未配置内容只包含引用、展示信息、状态和可执行 Action，不包含值。
+`ghost_info` / `ghost_list` 在插件条目中返回动态 `setup`。未配置内容只包含引用、展示信息、状态和可执行 Action，不包含值。
 
 ```ts
 type PluginSetupRequirementKind =
@@ -265,7 +265,7 @@ Host 校验：
 - Agent 不得提供插件名、icon、step phase、revision 或完成状态；
 - 校验失败不执行任意 Action，Host 回落到按 assessment 生成的默认 plan。
 
-这次工具 schema 扩展会改变一次 MCP 工具定义和 prompt cache 前缀；上线后 schema 保持稳定。插件安装、配置和状态变化只影响 `ghost_list` 返回值，不再动态改变工具定义。
+这次工具 schema 扩展会改变一次 MCP 工具定义和 prompt cache 前缀；上线后 schema 保持稳定。插件安装、配置和状态变化只影响 `ghost_info` / `ghost_list` 的查询返回，不再动态改变工具定义。
 
 ### 4.3 Runtime interaction
 
@@ -362,7 +362,12 @@ Main → Renderer：
 
 禁止在 setup ready 前产生授权记忆、目录票据、沙箱副作用或插件调用。已经进入 dispatch 的调用不因后续配置变化自动重试。
 
-`grant_only` 只建立附件用户授权，不执行插件工具，并保持忽略 `tool` 的调用语义；但它同样必须先通过 Host-authoritative setup gate，禁止未配置插件提前获得持久授权。旧插件页 `GhostSetupStatus` 投影可保留兼容行为；真正的运行时 gate 遇到缺失声明或无法解析的 requirement 时不得 fail-open。
+`grant_only` 只建立附件交接，不执行插件工具，并保持忽略 `tool` 的调用语义。非
+Full Access 下，用户确认会建立人工 `ghost-grant`；本地 Full Access 下则只建立
+`ghost-tool-grant` 取件引用，不弹卡，也不形成降档后仍生效的人工永久授权。两种路径都必须
+先通过 Host-authoritative setup gate，禁止未配置插件提前获得任何媒体引用。旧插件页
+`GhostSetupStatus` 投影可保留兼容行为；真正的运行时 gate 遇到缺失声明或无法解析的
+requirement 时不得 fail-open。
 
 ### 5.2 Coordinator
 
@@ -452,7 +457,7 @@ Agent 只选择句柄，不能提供 URL、窗口参数、Secret key 路径或�
 - assessment 只返回 `saved / missing / expired / satisfied` 等状态；
 - Renderer store、interaction snapshot 和消息历史不接收 Secret 值、Token、OAuth code
   或连接详情；inline Secret 仅短暂存在于本地输入组件并通过专用 invoke 交给 Main；
-- Agent / `ghost_list` / `ghost_call` 不接收 Secret 值；
+- Agent / `ghost_list` / `ghost_info` / `ghost_call` 不接收 Secret 值；
 - Ghost 在 setup 阶段不启动，也不能参与 readiness 判定；
 - 插件 icon 由 Main 读取已安装包并转成受控 data URL；
 - Agent 文案必须做长度限制；Renderer 按纯文本渲染；
@@ -493,7 +498,7 @@ Desktop 功能 PR 必须明确 Mobile deferred，且注明 device-link allowlist
 | 任务                         | 状态                    | 交付边界                                                |
 | ---------------------------- | ----------------------- | ------------------------------------------------------- |
 | T1 公共类型与 assessment     | 已实现                  | Host 权威 group / item / action 与严格运行时判定        |
-| T2 Agent gateway             | 已实现                  | `ghost_list.setup`、可选 `ghost_call.setup_plan`        |
+| T2 Agent gateway             | 已实现                  | `ghost_list.setup` / `ghost_info.setup`、可选 `ghost_call.setup_plan` |
 | T3 Change bus 与写入源       | 已实现 / 自动化通过     | 插件定向 wake；共享 Host 配置广播 wake + 权威重判定     |
 | T4 Coordinator 与 preflight  | 已实现 / 自动化通过     | 竞态、取消、超时、恢复前二次校验                        |
 | T5 Desktop interaction / IPC | 已实现 / 自动化通过     | pending snapshot、Action、dismiss、session cleanup      |
@@ -522,7 +527,7 @@ Mobile 回归已通过；对抗复查无未解决 P0/P1。已用 remote endpoint
 
 范围：
 
-- `ghost_list` 返回每个插件的 setup assessment；
+- `ghost_list` 返回全量、`ghost_info` 返回单条插件的 setup assessment；
 - `ghost_call` 接受可选 `setup_plan`；
 - Host deps 接口透传 plan；
 - plan schema 长度和数量上限；
@@ -670,7 +675,7 @@ P1（本期必须收敛）：
 - `packages/cindy-tools/src/ghost/mcpServer.ts`
 - `packages/cindy-tools/src/__tests__/ghostMcp.test.ts`
 
-负责 T1、T2：脱敏 assessment、`ghost_list.setup`、`ghost_call.setup_plan` 和边界测试。
+负责 T1、T2：脱敏 assessment、`ghost_list.setup` / `ghost_info.setup`、`ghost_call.setup_plan` 和边界测试。
 
 ### B. Main runtime 与配置变更源
 

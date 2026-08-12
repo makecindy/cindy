@@ -14,6 +14,10 @@
  */
 
 import { BUNDLED_CATALOG, parseCatalog } from './catalog.js';
+import {
+  compareModelRegistryRevisions,
+  decideModelRegistrySnapshot,
+} from './modelRegistry.js';
 import type { AgentKind, Catalog, Provider, ProviderPreset } from './types.js';
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
@@ -163,7 +167,7 @@ function backfillPresetContextWindows(
   primary: ProviderPreset,
   bundled: ProviderPreset,
 ): ProviderPreset {
-  let changed = false;
+  let changed = primary.nameZhTW === undefined && bundled.nameZhTW !== undefined;
   const runtimes: ProviderPreset['runtimes'] = {};
   for (const [agent, runtime] of Object.entries(primary.runtimes) as [
     AgentKind,
@@ -185,7 +189,15 @@ function backfillPresetContextWindows(
     });
     runtimes[agent] = runtimeChanged ? { ...runtime, models } : runtime;
   }
-  return changed ? { ...primary, runtimes } : primary;
+  return changed
+    ? {
+        ...primary,
+        ...(primary.nameZhTW === undefined && bundled.nameZhTW !== undefined
+          ? { nameZhTW: bundled.nameZhTW }
+          : {}),
+        runtimes,
+      }
+    : primary;
 }
 
 /**
@@ -209,7 +221,25 @@ export function mergeWithBundled(primary: Catalog): Catalog {
       bundled.imageModels !== undefined &&
       bundledAccess !== undefined &&
       allowsBundledImageInheritance(p.access, bundledAccess);
-    if (!(p.access === undefined && bundledAccess !== undefined) && !inheritImage) {
+    // 向量清单与 xai 的图像清单同一个道理(PR #1707 review):xd 段的向量能力是
+    // 客户端新增的 bundled 元数据,而远端 / 本地目录里同 id 的 xd 可能还是升级前
+    // 的结构、根本没有 embeddingModels 这个字段。primary 整体优先的规则会让那份
+    // 旧结构把 bundled 的新字段整段遮掉 —— 结果是目录派生出空清单,设置页显示
+    // "无可用模型",所有 embed_text 直接 NO_CANDIDATE,能力等于没上线。
+    //
+    // 只在字段**缺席**时补,显式 `[]` 仍然是"这个供应商不提供向量"的停用语义,
+    // 与图像清单的既有契约一致。
+    const inheritEmbedding =
+      p.id === 'xd' &&
+      p.embeddingModels === undefined &&
+      bundled.embeddingModels !== undefined &&
+      bundledAccess !== undefined &&
+      allowsBundledImageInheritance(p.access, bundledAccess);
+    if (
+      !(p.access === undefined && bundledAccess !== undefined) &&
+      !inheritImage &&
+      !inheritEmbedding
+    ) {
       return p;
     }
     return {
@@ -220,6 +250,14 @@ export function mergeWithBundled(primary: Catalog): Catalog {
             imageModels: bundled.imageModels,
             ...(p.imageDefaults === undefined && bundled.imageDefaults !== undefined
               ? { imageDefaults: bundled.imageDefaults }
+              : {}),
+          }
+        : {}),
+      ...(inheritEmbedding
+        ? {
+            embeddingModels: bundled.embeddingModels,
+            ...(p.embeddingDefaults === undefined && bundled.embeddingDefaults !== undefined
+              ? { embeddingDefaults: bundled.embeddingDefaults }
               : {}),
           }
         : {}),
@@ -281,14 +319,14 @@ function selectNewerModelRegistry(
   primary: Catalog,
   fallback: Catalog,
 ): { modelRegistry: Catalog['modelRegistry']; fromFallback: boolean } {
-  const primaryUpdatedAt = registryUpdatedAt(primary);
-  const fallbackUpdatedAt = registryUpdatedAt(fallback);
-  if (
-    fallback.modelRegistry &&
-    fallbackUpdatedAt !== null &&
-    (primaryUpdatedAt === null || fallbackUpdatedAt > primaryUpdatedAt)
-  ) {
-    return { modelRegistry: fallback.modelRegistry, fromFallback: true };
+  if (primary.modelRegistry && fallback.modelRegistry) {
+    const relation = compareModelRegistryRevisions(primary.modelRegistry, fallback.modelRegistry);
+    if (relation === 'older' || relation === 'conflict' || relation === 'invalid-incoming') {
+      // 同 revision 异内容是非法重发；fallback 是已经随客户端发布/缓存验证过的
+      // LKG，启动期也必须保它，不能只在在线 refresh 路径防守。
+      return { modelRegistry: fallback.modelRegistry, fromFallback: true };
+    }
+    return { modelRegistry: primary.modelRegistry, fromFallback: false };
   }
   if (primary.modelRegistry) {
     return { modelRegistry: primary.modelRegistry, fromFallback: false };
@@ -296,19 +334,28 @@ function selectNewerModelRegistry(
   return { modelRegistry: fallback.modelRegistry, fromFallback: fallback.modelRegistry !== undefined };
 }
 
-function newerModelRegistry(primary: Catalog, fallback: Catalog): Catalog['modelRegistry'] {
-  return selectNewerModelRegistry(primary, fallback).modelRegistry;
-}
-
 /**
  * modelRegistry is the only monotonic revision carried by the Catalog today. If it proves the
  * LKG is newer, preserve that complete snapshot: combining its registry with older remote xAI
  * providers/presets would create a catalog version that never existed and can reintroduce retired
  * models. A future top-level Catalog revision may allow finer-grained arbitration.
+ *
+ * Equal `updatedAt` with different canonical registry content is an illegal republish
+ * (corrections must forward-fix with a higher updatedAt): keep the LKG snapshot so a
+ * quietly mutated remote revision can never win a tie. Callers log the conflict.
  */
-function preserveNewerCachedCatalog(remote: Catalog, cached: Catalog): Catalog {
-  const modelRegistry = newerModelRegistry(remote, cached);
-  return modelRegistry !== remote.modelRegistry ? cached : remote;
+function preserveNewerCachedCatalog(
+  remote: Catalog,
+  cached: Catalog,
+): { catalog: Catalog; tieConflict: boolean } {
+  const decision = decideModelRegistrySnapshot(remote.modelRegistry, cached.modelRegistry);
+  if (decision === 'preserve-current-conflict') {
+    return { catalog: cached, tieConflict: true };
+  }
+  if (decision === 'preserve-current') {
+    return { catalog: cached, tieConflict: false };
+  }
+  return { catalog: remote, tieConflict: false };
 }
 
 /**
@@ -370,15 +417,22 @@ export async function loadCatalogWithSource(
               const cachedText = await io.readCache(remoteUrl);
               if (cachedText !== null) {
                 const cached = parseRemoteCatalog(cachedText, allowLegacyModelMeta);
-                const merged = preserveNewerCachedCatalog(parsed, cached);
-                if (merged !== parsed) {
-                  parsed = merged;
-                  cacheText = JSON.stringify(merged);
-                  log(io, 'warn', 'remote catalog registry is older than LKG; preserving complete newer snapshot', {
-                    url: logUrl,
-                    remoteUpdatedAt: remoteRegistryUpdatedAt,
-                    cachedUpdatedAt: registryUpdatedAt(cached),
-                  });
+                const selected = preserveNewerCachedCatalog(parsed, cached);
+                if (selected.catalog !== parsed) {
+                  parsed = selected.catalog;
+                  cacheText = JSON.stringify(selected.catalog);
+                  log(
+                    io,
+                    'warn',
+                    selected.tieConflict
+                      ? 'remote registry republished the same updatedAt with different content; keeping LKG'
+                      : 'remote catalog registry is older than LKG; preserving complete newer snapshot',
+                    {
+                      url: logUrl,
+                      remoteUpdatedAt: remoteRegistryUpdatedAt,
+                      cachedUpdatedAt: registryUpdatedAt(cached),
+                    },
+                  );
                 }
               }
             } catch (err) {
@@ -393,7 +447,7 @@ export async function loadCatalogWithSource(
               const committedText = await io.writeCache(remoteUrl, cacheText);
               if (typeof committedText === 'string') {
                 const committed = parseRemoteCatalog(committedText, allowLegacyModelMeta);
-                const selected = preserveNewerCachedCatalog(parsed, committed);
+                const selected = preserveNewerCachedCatalog(parsed, committed).catalog;
                 if (selected !== parsed) {
                   parsed = selected;
                   log(io, 'warn', 'serialized LKG commit preserved a newer catalog snapshot', {

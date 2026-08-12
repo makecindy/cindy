@@ -7,6 +7,8 @@ import {
   findLatestMessageTodoInsertion,
   findMessageTodoInsertions,
   formatDuration,
+  getLatestMessageTodoState,
+  isSubagentParentToolUseId,
   type MessageRenderItem,
   type MessageRenderNormalizedMessage,
   type MessageRenderSourceMessageLike,
@@ -869,6 +871,369 @@ describe('message render todo grouping', () => {
     expect(findLatestMessageTodoInsertion([tool('t1', 'Bash', {})])).toBeNull();
   });
 
+  it('a terminal seal ends the plan session even when steps were left open', () => {
+    // 成功收尾常留未勾完的步骤。章之后的下一 turn 计划必须开新 session:
+    // 否则新计划把上一轮吞成续写,历史里上一轮的卡消失、面板复用旧 key。
+    const sealedOpen = {
+      ...tool('plan1', 'update_plan', {
+        plan: [{ step: 'Ship', status: 'in_progress' }],
+      }),
+      terminalPlanSnapshot: true,
+      terminalPlanAtMs: 1_700_000_000_000,
+    };
+    const nextTurnPlan = tool('plan2', 'update_plan', {
+      plan: [{ step: 'New task', status: 'in_progress' }],
+    });
+
+    expect(findLatestMessageTodoInsertion([sealedOpen, nextTurnPlan])).toMatchObject({
+      key: 'todo-plan2',
+      todos: [{ content: 'New task', status: 'in_progress' }],
+    });
+    // 章在持久化 content 里(mobile 渲染 main 广播行的形态)同样算边界。
+    const sealedInContent = {
+      ...tool('plan3', 'update_plan', { plan: [{ step: 'Ship', status: 'in_progress' }] }),
+      content: {
+        toolUseId: 'plan3',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'in_progress' }] },
+        terminalPlanSnapshot: true,
+        terminalPlanAtMs: 1_700_000_000_000,
+      },
+    };
+    const latest = findLatestMessageTodoInsertion([sealedInContent, nextTurnPlan]);
+    expect(latest).toMatchObject({ key: 'todo-plan2' });
+    expect(
+      findLatestMessageTodoInsertion([sealedInContent]),
+    ).toMatchObject({ sealed: true, sealedAtMs: 1_700_000_000_000 });
+  });
+
+  it('findLatestMessageTodoInsertion marks a plan whose turn failed as turnFailed', () => {
+    // persistCodexPlanOnDone 在中断/失败终态给计划行盖 turnCompleted:false。
+    // 面板据此不走"全勾完"兜底退场:任务还活着,计划必须留在屏幕上。
+    const failedPlan = {
+      ...tool('plan1', 'update_plan', {
+        plan: [{ step: 'Ship it', status: 'completed' }],
+      }),
+      turnCompleted: false,
+    };
+
+    expect(findLatestMessageTodoInsertion([failedPlan])).toMatchObject({
+      source: 'codex',
+      turnFailed: true,
+    });
+    // 正常行没有印记,不应引入该字段。
+    expect(
+      findLatestMessageTodoInsertion([
+        tool('plan2', 'update_plan', { plan: [{ step: 'Ship it', status: 'completed' }] }),
+      ]),
+    ).not.toHaveProperty('turnFailed');
+  });
+
+  /**
+   * 计划归属(ownership)。三个历史病根,都源于"同 source 的上一份计划没勾完
+   * 就无条件当续期":
+   *  1. 跨普通 user turn 串号——用户换了话题,新计划仍复用旧 session/key;
+   *  2. 子代理的计划工具调用与主线程平权,子计划能顶掉主计划;
+   *  3. Codex 不同 turn 的 update_plan 被并成同一 session。
+   */
+  describe('plan ownership boundaries', () => {
+    it('treats a bare legacy transcript parentUuid as top-level, not subagent', () => {
+      // 旧 Claude 导入把普通 transcript 链边也存在 agentMeta.parentUuid(裸 uuid
+      // 形态)。一律当子代理会让旧会话的顶层计划被面板与对账整段过滤掉;只认
+      // SDK tool-use id 形态(toolu_/call_ 前缀),与 latestMessageText 同判据。
+      const legacyTopLevelPlan: MessageRenderSourceMessageLike = {
+        ...tool('todo-legacy', 'TodoWrite', {
+          todos: [
+            { content: 'Legacy step', status: 'in_progress' },
+            { content: 'Legacy follow-up', status: 'pending' },
+          ],
+        }),
+        agentMeta: { parentUuid: '4f1c9a7e-3b2d-4c8a-9e5f-1a2b3c4d5e6f' },
+      };
+
+      expect(findLatestMessageTodoInsertion([legacyTopLevelPlan])).toMatchObject({
+        key: 'todo-todo-legacy',
+        todos: [
+          { content: 'Legacy step', status: 'in_progress' },
+          { content: 'Legacy follow-up', status: 'pending' },
+        ],
+      });
+
+      // 真正的 SDK tool 父级(toolu_ 前缀)仍然按子代理排除。
+      const realSubagentPlan: MessageRenderSourceMessageLike = {
+        ...tool('todo-sub2', 'TodoWrite', {
+          todos: [
+            { content: 'Subagent step', status: 'in_progress' },
+            { content: 'Subagent follow-up', status: 'pending' },
+          ],
+        }),
+        agentMeta: { parentUuid: 'toolu_01ABCDEF' },
+      };
+      expect(findLatestMessageTodoInsertion([realSubagentPlan])).toBeNull();
+
+      // 兼容模型归一化后的父调用 id(Task_x1)同样是真实 tool parent。
+      const compatSubagentPlan: MessageRenderSourceMessageLike = {
+        ...tool('todo-sub3', 'TodoWrite', {
+          todos: [
+            { content: 'Compat subagent step', status: 'in_progress' },
+            { content: 'Compat subagent follow-up', status: 'pending' },
+          ],
+        }),
+        agentMeta: { parentUuid: 'Task_x1' },
+      };
+      expect(findLatestMessageTodoInsertion([compatSubagentPlan])).toBeNull();
+    });
+
+    it('exports the same tool-parent shape check that projection sites must use', () => {
+      // desktop 渲染层的历史恢复会把裸 agentMeta.parentUuid 提升成显式
+      // parentToolUseId。提升前必须过这条判据,否则 legacy transcript 链边被当成
+      // 显式父归属,顶层计划在桌面端被过滤、在 mobile / main 端不被过滤,同一份
+      // 历史两端分组分叉(review P2)。判据与本文件内部的子代理归属同一份。
+      expect(isSubagentParentToolUseId('toolu_01ABCDEF')).toBe(true);
+      expect(isSubagentParentToolUseId('call_abc123')).toBe(true);
+      expect(isSubagentParentToolUseId('4f1c9a7e-3b2d-4c8a-9e5f-1a2b3c4d5e6f')).toBe(false);
+      expect(isSubagentParentToolUseId('preceding-user-uuid')).toBe(false);
+      // 兼容模型(kimi 系)的真实 tool-use id:`名字_序号`,以及 resume 前转录
+      // 归一化的产物 `_x` 顺延 / `_dupN` 去重。只认 toolu_/call_ 会把这类子代理
+      // 的计划当成顶层计划(review P2)。
+      expect(isSubagentParentToolUseId('Task_1')).toBe(true);
+      expect(isSubagentParentToolUseId('Task_x1')).toBe(true);
+      expect(isSubagentParentToolUseId('Bash_xx210')).toBe(true);
+      expect(isSubagentParentToolUseId('Bash_5_dup2')).toBe(true);
+    });
+
+    it('starts a new session when an ordinary user turn intervenes', () => {
+      const staleTodo = tool('todo-old', 'TodoWrite', {
+        todos: [
+          { content: 'Old work', status: 'in_progress' },
+          { content: 'Old follow-up', status: 'pending' },
+        ],
+      });
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-2',
+        content: '换个话题:帮我做另一件事',
+        createdAt: at(5),
+      };
+      const freshTodo = tool('todo-new', 'TodoWrite', {
+        todos: [{ content: 'New work', status: 'in_progress' }, { content: 'New follow-up', status: 'pending' }],
+      });
+
+      const latest = findLatestMessageTodoInsertion([staleTodo, newUserTurn, freshTodo]);
+      // 新 user turn 之后的计划是新 session:key 必须锚在新调用上,不复用旧 key。
+      expect(latest).toMatchObject({
+        key: 'todo-todo-new',
+        todos: [
+          { content: 'New work', status: 'in_progress' },
+          { content: 'New follow-up', status: 'pending' },
+        ],
+      });
+    });
+
+    it('does not cut a session at synthetic user rows (auto-resume / scheduler)', () => {
+      const staleTodo = tool('todo-live', 'TodoWrite', {
+        todos: [
+          { content: 'Long work', status: 'in_progress' },
+          { content: 'Long follow-up', status: 'pending' },
+        ],
+      });
+      const autoResumeRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'auto-resume-1',
+        content: '继续',
+        createdAt: at(5),
+        agentMeta: { autoResume: true },
+      };
+      const schedulerRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'sched-1',
+        content: '定时任务触发',
+        createdAt: at(6),
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 's1', scheduleName: 'n' } },
+      };
+      // desktop 渲染层投影后 agentMeta 被丢弃,只剩这两个字段——同样不得切边界。
+      const projectedSyntheticRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'projected-1',
+        content: '',
+        createdAt: at(7),
+        isSyntheticTrigger: true,
+      };
+      const projectedSchedulerRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'projected-2',
+        content: '定时活',
+        createdAt: at(8),
+        automationOrigin: { kind: 'scheduler', scheduleId: 's1' },
+      };
+      // 子代理内部的 user 行(agentMeta.parentUuid)同样不是用户开新话题。
+      const subagentUserRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'sub-user-1',
+        content: '子任务内部输入',
+        createdAt: at(9),
+        agentMeta: { parentUuid: 'toolu_parent_1' },
+      };
+      // 同轮 steer 插话(desktop 投影 delivery='steer')也不是新话题边界。
+      const steerUserRow: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'steer-1',
+        content: '顺便把日志也看下',
+        createdAt: at(10),
+        delivery: 'steer',
+      };
+      const progress = tool('todo-live-2', 'TodoWrite', {
+        todos: [
+          { content: 'Long work', status: 'completed' },
+          { content: 'Long follow-up', status: 'in_progress' },
+        ],
+      });
+
+      // 自动续跑/scheduler 落的 user 行不是"用户开新话题":同计划的后续更新
+      // 仍并入原 session,key 不变,不产生重复计划卡。
+      expect(
+        findLatestMessageTodoInsertion([
+          staleTodo,
+          autoResumeRow,
+          schedulerRow,
+          projectedSyntheticRow,
+          projectedSchedulerRow,
+          subagentUserRow,
+          steerUserRow,
+          progress,
+        ]),
+      ).toMatchObject({
+        key: 'todo-todo-live',
+        todos: [
+          { content: 'Long work', status: 'completed' },
+          { content: 'Long follow-up', status: 'in_progress' },
+        ],
+      });
+    });
+
+    it('keeps in-turn progress updates merged into one session (no user turn between)', () => {
+      const first = tool('todo-a', 'TodoWrite', {
+        todos: [{ content: 'Step', status: 'in_progress' }],
+      });
+      const second = tool('todo-b', 'TodoWrite', {
+        todos: [{ content: 'Step', status: 'completed' }],
+      });
+
+      // 同一 turn 内的进度更新仍是续期:key 锚定首次调用(现状契约,不能破坏)。
+      expect(findLatestMessageTodoInsertion([first, second])).toMatchObject({
+        key: 'todo-todo-a',
+        todos: [{ content: 'Step', status: 'completed' }],
+      });
+    });
+
+    it('ignores subagent plan calls for the top-level pinned panel', () => {
+      const mainPlan = tool('plan-main', 'update_plan', {
+        plan: [
+          { step: 'Main step', status: 'in_progress' },
+          { step: 'Main follow-up', status: 'pending' },
+        ],
+      });
+      const subagentTodo: MessageRenderSourceMessageLike = {
+        ...tool('todo-sub', 'TodoWrite', {
+          todos: [
+            { content: 'Subagent internal', status: 'in_progress' },
+            { content: 'Subagent extra', status: 'pending' },
+          ],
+        }),
+        parentToolUseId: 'agent-task-1',
+      };
+
+      // 子代理自己的清单不得顶掉主线程计划。
+      expect(findLatestMessageTodoInsertion([mainPlan, subagentTodo])).toMatchObject({
+        key: 'todo-plan-main',
+        todos: [
+          { content: 'Main step', status: 'in_progress' },
+          { content: 'Main follow-up', status: 'pending' },
+        ],
+      });
+    });
+
+    it('does not merge Codex plans from different turns into one session', () => {
+      const turn1Plan = tool('plan-t1', 'update_plan', {
+        plan: [
+          { step: 'Turn one work', status: 'in_progress' },
+          { step: 'Turn one rest', status: 'pending' },
+        ],
+      }, 'plan:turn-1');
+      const newUserTurn: MessageRenderSourceMessageLike = {
+        role: 'user',
+        clientId: 'user-3',
+        content: '下一个任务',
+        createdAt: at(6),
+      };
+      const turn2Plan = tool('plan-t2', 'update_plan', {
+        plan: [
+          { step: 'Turn two work', status: 'in_progress' },
+          { step: 'Turn two rest', status: 'pending' },
+        ],
+      }, 'plan:turn-2');
+
+      const latest = findLatestMessageTodoInsertion([turn1Plan, newUserTurn, turn2Plan]);
+      expect(latest).toMatchObject({
+        key: 'todo-plan-t2',
+        todos: [
+          { content: 'Turn two work', status: 'in_progress' },
+          { content: 'Turn two rest', status: 'pending' },
+        ],
+      });
+    });
+  });
+
+  it('does not infer completion from an ambiguous legacy Codex turn seal', () => {
+    const plan = {
+      ...tool('plan1', 'update_plan', {
+        plan: [
+          { step: 'Inspect', status: 'completed' },
+          { step: 'Start dev', status: 'in_progress' },
+        ],
+      }),
+      createdAt: at(1),
+    };
+    const completedBoundary: MessageRenderSourceMessageLike = {
+      role: 'assistant',
+      clientId: 'answer-1',
+      content: 'Dev server is running.',
+      createdAt: at(8),
+      turnCompleted: true,
+    };
+
+    expect(findLatestMessageTodoInsertion([plan, completedBoundary])).toMatchObject({
+      source: 'codex',
+      createdAt: at(1),
+      todos: [
+        { content: 'Inspect', status: 'completed' },
+        { content: 'Start dev', status: 'in_progress' },
+      ],
+    });
+  });
+
+  it('does not infer completion when an ambiguous legacy seal precedes the final plan update', () => {
+    const completedBoundary: MessageRenderSourceMessageLike = {
+      role: 'assistant',
+      clientId: 'answer-1',
+      content: 'The work is complete.',
+      createdAt: at(7),
+      turnCompleted: true,
+    };
+    const plan = {
+      ...tool('plan1', 'update_plan', {
+        plan: [{ step: 'Record the final state', status: 'in_progress' }],
+      }),
+      createdAt: at(8),
+    };
+
+    expect(findLatestMessageTodoInsertion([completedBoundary, plan])).toMatchObject({
+      source: 'codex',
+      createdAt: at(8),
+      todos: [{ content: 'Record the final state', status: 'in_progress' }],
+    });
+  });
+
   it('findLatestMessageTodoInsertion treats empty plan updates as clearing the pinned plan', () => {
     const first = tool('todo1', 'TodoWrite', {
       todos: [{ content: 'Read code', status: 'in_progress' }],
@@ -894,6 +1259,166 @@ describe('message render todo grouping', () => {
     const update = tool('task2', 'TaskUpdate', { taskId: 'abc', status: 'completed' }, 'update-1');
 
     expect(findLatestMessageTodoInsertion([todo, update])).toBeNull();
+  });
+
+  it('keeps a Task update unresolved when the loaded window only contains a different task', () => {
+    const visibleCreate = tool(
+      'task4',
+      'TaskCreate',
+      { subject: 'Fix existing tests' },
+      'create-4',
+    );
+    const olderTaskUpdate = tool(
+      'task3-update',
+      'TaskUpdate',
+      { taskId: '3', status: 'completed' },
+      'update-3',
+    );
+
+    expect(findLatestMessageTodoInsertion([
+      visibleCreate,
+      result('create-4', 'Task #4 created successfully: Fix existing tests'),
+      olderTaskUpdate,
+    ])).toBeNull();
+  });
+
+  it('keeps the Task window unresolved until every earlier updated task is reconstructed', () => {
+    const missingOlderUpdate = tool(
+      'task1-update',
+      'TaskUpdate',
+      { taskId: '1', status: 'completed' },
+      'update-1',
+    );
+    const visibleTarget = tool(
+      'task3',
+      'TaskCreate',
+      { subject: 'Run stress tests' },
+      'create-3',
+    );
+    const visiblePending = tool(
+      'task4',
+      'TaskCreate',
+      { subject: 'Fix existing tests' },
+      'create-4',
+    );
+    const latestUpdate = tool(
+      'task3-update',
+      'TaskUpdate',
+      { taskId: '3', status: 'completed' },
+      'update-3',
+    );
+
+    expect(findLatestMessageTodoInsertion([
+      visibleTarget,
+      result('create-3', 'Task #3 created successfully: Run stress tests'),
+      missingOlderUpdate,
+      visiblePending,
+      result('create-4', 'Task #4 created successfully: Fix existing tests'),
+      latestUpdate,
+    ])).toBeNull();
+  });
+
+  it('keeps a partial Task session unresolved while older messages may contain earlier creates', () => {
+    const create = tool('task2', 'TaskCreate', { subject: 'Fix renderer' }, 'create-2');
+    const update = tool(
+      'task2-update',
+      'TaskUpdate',
+      { taskId: '2', status: 'in_progress' },
+      'update-2',
+    );
+    const messages = [
+      create,
+      result('create-2', 'Task #2 created successfully: Fix renderer'),
+      update,
+    ];
+
+    expect(getLatestMessageTodoState(messages, { taskHistoryMayBeIncomplete: true })).toMatchObject({
+      insertion: null,
+      isResolved: false,
+    });
+    expect(getLatestMessageTodoState(messages, { taskHistoryMayBeIncomplete: false })).toMatchObject({
+      isResolved: true,
+      insertion: {
+        todos: [{ content: 'Fix renderer', status: 'in_progress' }],
+      },
+    });
+  });
+
+  it('keeps a titleless TaskList unresolved until the missing task title is reconstructed', () => {
+    const list = tool('task-list', 'TaskList', {}, 'list-1');
+    const listResult = result('list-1', JSON.stringify({
+      tasks: [
+        { id: 'abc', status: 'completed' },
+        { id: 'def', subject: 'Write summary', status: 'pending' },
+      ],
+    }));
+
+    expect(getLatestMessageTodoState([list, listResult])).toMatchObject({
+      insertion: null,
+      isResolved: false,
+    });
+
+    const create = tool('task-create', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    expect(getLatestMessageTodoState([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      list,
+      listResult,
+    ])).toMatchObject({
+      isResolved: true,
+      insertion: {
+        todos: [
+          { content: 'Collect logs', status: 'completed' },
+          { content: 'Write summary', status: 'pending' },
+        ],
+      },
+    });
+  });
+
+  it('preserves a completed task title when a later TaskList repeats the same id', () => {
+    const create = tool('task-create', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const complete = tool(
+      'task-complete',
+      'TaskUpdate',
+      { taskId: 'abc', status: 'completed' },
+      'update-1',
+    );
+    const list = tool('task-list', 'TaskList', {}, 'list-1');
+
+    expect(findLatestMessageTodoInsertion([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      complete,
+      list,
+      result('list-1', JSON.stringify({ tasks: [{ id: 'abc', status: 'completed' }] })),
+    ])).toMatchObject({
+      todos: [{ content: 'Collect logs', status: 'completed' }],
+    });
+  });
+
+  it('does not let an orphan completed update block a later complete task session', () => {
+    const orphanUpdate = tool(
+      'old-task-update',
+      'TaskUpdate',
+      { taskId: 'old', status: 'completed' },
+      'update-old',
+    );
+    const first = tool('new-task-1', 'TaskCreate', { subject: 'Inspect logs' }, 'create-new-1');
+    const second = tool('new-task-2', 'TaskCreate', { subject: 'Fix renderer' }, 'create-new-2');
+
+    expect(findLatestMessageTodoInsertion([
+      orphanUpdate,
+      first,
+      result('create-new-1', 'Task #new-1 created successfully: Inspect logs'),
+      second,
+      result('create-new-2', 'Task #new-2 created successfully: Fix renderer'),
+    ])).toMatchObject({
+      key: 'todo-new-task-1',
+      todos: [
+        { content: 'Inspect logs', status: 'pending' },
+        { content: 'Fix renderer', status: 'pending' },
+      ],
+    });
   });
 
   it('findLatestMessageTodoInsertion clears the pinned plan when the latest Task update deletes the last task', () => {
@@ -970,6 +1495,20 @@ describe('message render todo grouping', () => {
       result('create-1', 'Task #abc created successfully: Collect logs'),
       listEmpty,
       result('list-1', JSON.stringify({ tasks: [] })),
+    ])).toBeNull();
+  });
+
+  it('treats deleted-only TaskList snapshots as clearing the latest task plan', () => {
+    const create = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const listDeleted = tool('task2', 'TaskList', {}, 'list-1');
+
+    expect(findLatestMessageTodoInsertion([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      listDeleted,
+      result('list-1', JSON.stringify({
+        tasks: [{ id: 'abc', status: 'deleted' }],
+      })),
     ])).toBeNull();
   });
 

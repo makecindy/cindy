@@ -1,16 +1,18 @@
 /**
  * ghost.ts — cindy-tools ghost 总机的 host 侧接线(docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
- * 网关模式:agent 工具箱里永远只有 ghost_list / ghost_call 两件固定工具
- * (缓存前缀零变化),内容现查现报——本文件就是"现查"的真身:
+ * 网关模式:agent 工具箱里的插件发现/调用入口固定为
+ * ghost_list / ghost_info / ghost_call。工具面(名称/schema/基线描述)版本内
+ * 恒定;完整描述(含花名册快照)会话内恒定,内容现查现报——本文件就是
+ * "现查"的真身:
  *
- *   - listAwakeGhosts:每次调用都重新扫 GhostManager(不缓存),装/卸/唤醒/
- *     沉睡对新老会话"下一次查询即生效";
+ *   - listAwakeGhosts / getAwakeGhost:每次调用都重新扫 GhostManager(不缓存),
+ *     装/卸/唤醒/沉睡对新老会话"下一次查询即生效";
  *   - callGhostTool:透传给管子派发器(pipeDispatcher),资格审/按需拉起/
  *     配对超时/崩溃收卷全在那边,错误码两侧同构直接原样交回;
- *   - forgeGuide / forgePack:意识锻造(agent 帮用户做意识)——手册与打包
- *     真身在 cindy-brain/forge.ts,打包成功后经双击转交通道弹装入确认框
- *     (与拖入/双击完全同一个弹窗,装不装永远由用户点头)。
+ *   - forgeGuide / forgeScaffold / forgePack:意识锻造(agent 帮用户做意识)——
+ *     手册、骨架与打包真身在 cindy-brain/forge.ts,打包成功后经双击转交
+ *     通道弹装入确认框(与拖入/双击完全同一个弹窗,装不装永远由用户点头)。
  *
  * cindy-tools 是意识系统工具集,包内零 Electron
  * 依赖,全部能力经本文件注入(设计规范规则 2)。
@@ -20,12 +22,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
+import { buildGhostRosterPrompt } from 'cindy-tools';
 import type {
   CindyForgePackResult,
   CindyForgeScaffoldResult,
   CindyGhostInfo,
   CindyGhostsMcpDeps,
 } from 'cindy-tools';
+import type { PermissionMode } from '@cindy/maker-core';
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
 import {
@@ -49,7 +53,12 @@ import {
 import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
-import { deriveGhostSessionContext, type GhostSessionContextInjected } from '../../shared/ghost.js';
+import {
+  deriveGhostSessionContext,
+  type GhostSessionContextInjected,
+  type GhostSetupAssessment,
+  type InstalledGhost,
+} from '../../shared/ghost.js';
 import { withCardToken } from '../cindy-brain/cardService.js';
 import { drainGhostCallMedia } from '../cindy-brain/ghostMediaLedger.js';
 import {
@@ -60,6 +69,7 @@ import {
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
+import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
@@ -69,17 +79,44 @@ import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
 import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
+import { createForgeIconConverter } from './forgeIconConversion.js';
+import { forkForgeIconConversionHost } from './forgeIconConversionHost.js';
 import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('mcp/cindy');
+const MAX_FORGE_ICON_SOURCE_BYTES = 25 * 1024 * 1024;
+
+const convertForgeIconToPng = createForgeIconConverter({
+  fork: forkForgeIconConversionHost,
+});
 
 /* ────────────────────────────────────────────────────────────────────────
- * workdir 外过户确认(2026-07-14 与 Lizi 定案的两层策略):
+ * workdir 外过户确认:
  *   - 过户对象在会话 workdir 内 → 自动放行(与目录过户同信任等级);
- *   - workdir 外(含无 workdir 语境)→ 弹确认卡,用户点允许才继续。
- * 决定权在用户的点击上——被注入的模型只能发起请求,点不了按钮。
+ *   - 本地活跃会话当前为 Full Access(bypassPermissions) → Host 自动放行;
+ *   - 其余 workdir 外场景(含无会话/远程会话)→ 弹确认卡,用户点允许才继续。
+ * Full Access 只替代本处文件/目录交接确认,不扩大插件 manifest slot、网络、
+ * 凭证、Setup、安装/更新等其它授权边界。
  * ──────────────────────────────────────────────────────────────────────── */
+
+export interface GhostGrantLiveSessionState {
+  permissionMode: PermissionMode | null;
+  remoteHostId: string | null;
+}
+
+export interface CindyGhostsHostDeps {
+  /**
+   * 现读活跃 Maker Session 的运行时状态。不得回退 DB:权限热切换先作用于
+   * runtime、后持久化,DB 在合法窗口内会滞后;缺失/异常必须 fail closed。
+   */
+  getLiveSessionGrantState?: (
+    sessionId: string,
+    sessionInstanceId: string,
+  ) => GhostGrantLiveSessionState | null;
+}
+
+type GhostGrantApprovalSource = 'user' | 'full-access';
 
 /** 确认卡内嵌图片预览的文件体积上限(只是预览阈值,不是过户限制——超阈值
  *  照样可过户,卡片上退化为文件名 + 路径 + 大小)。 */
@@ -91,6 +128,10 @@ const GRANT_PREVIEW_MAX_ITEMS = 8;
 /** workdir 外附件单批总字节上限:过户流程会把整批字节读进内存并跨确认卡
  *  持有(最长 10 分钟),不设闸的话 32 张大视频能把 main 进程打到 OOM。 */
 const GRANT_BATCH_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
+
+function grantBatchTooLargeMessage(): string {
+  return `本批附件总体积过大(超过 ${Math.floor(GRANT_BATCH_MAX_TOTAL_BYTES / (1024 * 1024))}MB),请拆成多批过户`;
+}
 
 /** 已读入的文件字节 → dataURL 缩略预览(确认卡展示真实字节;非图/超阈值缺省)。 */
 function buildGrantPreviewDataUrl(buffer: Uint8Array, mimeType: string): string | undefined {
@@ -171,9 +212,38 @@ function isInsideSessionWorkdir(targetAbs: string, workdirAbs: string | null): b
 async function requestGrantConfirm(params: {
   ghostId: string;
   sessionId: string | null;
+  sessionInstanceId: string | null;
   lane: GhostGrantLane;
   items: GhostGrantFileItem[];
-}): Promise<{ ok: true; allowDirs?: boolean } | { ok: false; message: string }> {
+  getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+}): Promise<
+  | { ok: true; approvalSource: GhostGrantApprovalSource; allowDirs?: boolean }
+  | { ok: false; message: string }
+> {
+  if (params.sessionId && params.sessionInstanceId && params.getLiveSessionGrantState) {
+    try {
+      const live = params.getLiveSessionGrantState(params.sessionId, params.sessionInstanceId);
+      // 远程会话的 workingDir 是另一台机器上的路径。即使档位为 Full Access,
+      // 也不能据此静默读取本机同名/任意路径;保留原确认边界。
+      if (live?.permissionMode === 'bypassPermissions' && !live.remoteHostId) {
+        log.info('ghost grant: Full Access auto-approved outside-workdir handoff', {
+          ghostId: params.ghostId,
+          lane: params.lane,
+          count: params.items.length,
+          grantSource: 'full-access',
+        });
+        return { ok: true, approvalSource: 'full-access' };
+      }
+    } catch (error) {
+      // 自动扩权查询必须 fail closed:运行时状态读不到就继续走原确认路径,
+      // 绝不回退可能滞后的 DB permission_mode。
+      log.warn('ghost grant: live permission lookup failed; falling back to confirmation', {
+        ghostId: params.ghostId,
+        lane: params.lane,
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+    }
+  }
   const bridge = getGhostGrantConfirmBridge();
   if (!bridge) {
     return {
@@ -195,7 +265,9 @@ async function requestGrantConfirm(params: {
     lane: params.lane,
     items: params.items,
   });
-  if (decision.confirmed) return { ok: true, allowDirs: decision.allowDirs };
+  if (decision.confirmed) {
+    return { ok: true, approvalSource: 'user', allowDirs: decision.allowDirs };
+  }
   return {
     ok: false,
     message:
@@ -216,6 +288,8 @@ async function prepareLocalPathAttachments(params: {
   ghostId: string;
   workdirAbs: string | null;
   sessionId: string | null;
+  sessionInstanceId: string | null;
+  getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
   /** 张数上限(普通调用 MAX_GRANT_ATTACHMENTS;grant_only 批量预授权放宽)。 */
   maxCount: number;
 }): Promise<
@@ -265,12 +339,14 @@ async function prepareLocalPathAttachments(params: {
     if (totalBytes > GRANT_BATCH_MAX_TOTAL_BYTES) {
       return {
         ok: false,
-        message: `本批附件总体积过大(超过 ${Math.floor(GRANT_BATCH_MAX_TOTAL_BYTES / (1024 * 1024))}MB),请拆成多批过户`,
+        message: grantBatchTooLargeMessage(),
       };
     }
-    // 授权记忆(按张、永久):先算内容指纹查账本,该意识名下已有 ghost-grant
-    // 授权行的直接放行——同一张图允许过一次,后续调用不再重复弹卡。指纹
-    // 算法与 blobStore.writeBlob 同(sha256 hex),读到的字节顺便喂预览。
+    // 人工授权记忆(按张、永久):先算内容指纹查账本,该意识名下已有 user
+    // provenance 的 ghost-grant 授权行才直接放行。Full Access 自动交接写入
+    // 独立 ghost-tool-grant + tool provenance,热切回 ask/auto 后必须恢复确认。
+    // 指纹算法与
+    // blobStore.writeBlob 同(sha256 hex),读到的字节顺便喂预览。
     const needConfirm: Array<{
       url: string;
       absPath: string;
@@ -289,7 +365,12 @@ async function prepareLocalPathAttachments(params: {
       const hash = createHash('sha256').update(buffer).digest('hex');
       // 两级记忆:内容指纹永久授权(账本)→ 目录级会话授权(确认卡勾选)。
       const granted =
-        (await ledger.hasRef({ hash, refKind: 'ghost-grant', refId: params.ghostId })) ||
+        (await ledger.hasRef({
+          hash,
+          refKind: 'ghost-grant',
+          refId: params.ghostId,
+          originKind: 'user',
+        })) ||
         (params.sessionId !== null &&
           dirGrantMemory.has(
             dirGrantMemoryKey(
@@ -334,23 +415,26 @@ async function prepareLocalPathAttachments(params: {
       const confirm = await requestGrantConfirm({
         ghostId: params.ghostId,
         sessionId: params.sessionId,
+        sessionInstanceId: params.sessionInstanceId,
         lane: 'attachments',
         items,
+        getLiveSessionGrantState: params.getLiveSessionGrantState,
       });
       if (!confirm.ok) return confirm;
       for (const o of needConfirm) {
-        // 用户点了允许 = 显式授权,出生记 user(与拖图进聊天同语义);带 T1
-        // 字节落仓——确认卡预览的字节就是过户的字节,中途换文件无效。
+        // 人工确认记 user;Full Access 自动交接记 tool,不能伪装成用户点击。
+        // 两者都带 T1 字节落仓——确认/授权判定时读到的字节就是实际过户
+        // 的字节,中途换文件无效。
         resolved.set(o.url, {
           absPath: o.absPath,
           mimeType: o.mimeType,
-          originKind: 'user',
+          originKind: confirm.approvalSource === 'user' ? 'user' : 'tool',
           buffer: o.buffer,
         });
       }
       // 「允许该目录」勾选:把每张图的精确父目录记入会话级记忆,后续同目录
       // 媒体文件对该意识本会话免弹(跨调用批量任务只需点一次)。
-      if (confirm.allowDirs && params.sessionId) {
+      if (confirm.approvalSource === 'user' && confirm.allowDirs && params.sessionId) {
         for (const o of needConfirm) {
           dirGrantMemory.add(
             dirGrantMemoryKey(
@@ -362,27 +446,37 @@ async function prepareLocalPathAttachments(params: {
           );
         }
       }
-      log.info('ghost grant confirm: user approved outside-workdir attachments', {
-        ghostId: params.ghostId,
-        count: needConfirm.length,
-      });
+      if (confirm.approvalSource === 'user') {
+        log.info('ghost grant confirm: user approved outside-workdir attachments', {
+          ghostId: params.ghostId,
+          count: needConfirm.length,
+          grantSource: 'user-confirmation',
+        });
+      }
     }
   }
   return { ok: true, resolved };
 }
 
 /**
- * dir / save_dir 的 workdir 外确认:目标真实存在且在 workdir 外时弹卡,
- * 允许 → userGranted=true 交给票据库旁路钳制;目标不存在/类型不对时不弹
- * (直接交给 deposit 报标准错,别让用户为一个必失败的请求点允许)。
+ * dir / save_dir 的 workdir 外授权:目标真实存在且在 workdir 外时，人工确认
+ * 或本地活跃 Full Access 可令历史字段 userGranted=true，交给票据库旁路钳制；
+ * 目标不存在/类型不对时不弹卡(直接交给 deposit 报标准错，别让用户为一个
+ * 必失败的请求点允许)。
  */
 async function confirmDepositOutsideWorkdir(params: {
   ghostId: string;
   sessionId: string | null;
+  sessionInstanceId: string | null;
   lane: 'dir' | 'save_dir';
   dirAbs: string;
   workdirAbs: string | null;
-}): Promise<{ ok: true; userGranted: boolean } | { ok: false; message: string }> {
+  getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+}): Promise<
+  | { ok: true; userGranted: false }
+  | { ok: true; userGranted: true; approvedRealPath: string }
+  | { ok: false; message: string }
+> {
   if (!path.isAbsolute(params.dirAbs)) return { ok: true, userGranted: false };
   let real: string;
   let stat: fs.Stats;
@@ -399,7 +493,7 @@ async function confirmDepositOutsideWorkdir(params: {
     params.sessionId &&
     dirGrantMemory.has(dirGrantMemoryKey(params.sessionId, params.ghostId, params.lane, real))
   ) {
-    return { ok: true, userGranted: true };
+    return { ok: true, userGranted: true, approvedRealPath: real };
   }
 
   let item: GhostGrantFileItem;
@@ -428,18 +522,180 @@ async function confirmDepositOutsideWorkdir(params: {
   const confirm = await requestGrantConfirm({
     ghostId: params.ghostId,
     sessionId: params.sessionId,
+    sessionInstanceId: params.sessionInstanceId,
     lane: params.lane,
     items: [item],
+    getLiveSessionGrantState: params.getLiveSessionGrantState,
   });
   if (!confirm.ok) return confirm;
-  if (params.sessionId) {
+  // Full Access 是每次在实时档位上自动裁决,不伪造「用户确认过」的目录
+  // 记忆。这样热切回 ask/auto 后,同一路径的新过户会立刻恢复询问。
+  if (confirm.approvalSource === 'user' && params.sessionId) {
     dirGrantMemory.add(dirGrantMemoryKey(params.sessionId, params.ghostId, params.lane, real));
   }
-  log.info('ghost grant confirm: user approved outside-workdir deposit', {
+  if (confirm.approvalSource === 'user') {
+    log.info('ghost grant confirm: user approved outside-workdir deposit', {
+      ghostId: params.ghostId,
+      lane: params.lane,
+      grantSource: 'user-confirmation',
+    });
+  }
+  return { ok: true, userGranted: true, approvedRealPath: real };
+}
+
+type ManagedToolGrantCandidate = {
+  hash: string;
+  absPath: string;
+  mimeType: string;
+  buffer: Uint8Array;
+  urls: string[];
+};
+
+/**
+ * 总仓 blob 的工具交接必须先整批完成权限裁决，再交给 attachmentGrant
+ * 的两阶段解析/落仓。这样 grant_only 仍只弹一张确认卡，同时把确认前
+ * 读到的同一批字节限制在统一的内存上限内。
+ */
+async function prepareManagedToolGrantSources(params: {
+  urls: string[];
+  ghostId: string;
+  localResolved: Map<string, ResolvedGrantSource>;
+  maxCount: number;
+  sessionId: string | null;
+  sessionInstanceId: string | null;
+  getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+}): Promise<
+  { ok: true; resolved: Map<string, ResolvedGrantSource> } | { ok: false; message: string }
+> {
+  // Preserve attachmentGrant's standard count error and, importantly, do not
+  // read or confirm an over-limit batch before that error is produced.
+  if (params.urls.length > params.maxCount) return { ok: true, resolved: new Map() };
+
+  const candidates = new Map<string, ManagedToolGrantCandidate>();
+  let totalBytes = 0;
+  for (const source of params.localResolved.values()) {
+    if (source.buffer) totalBytes += source.buffer.byteLength;
+  }
+
+  for (const url of params.urls) {
+    if (params.localResolved.has(url)) continue;
+    let resolved: { absPath: string; mimeType: string; blobHash?: string };
+    try {
+      resolved = resolveGhostAttachmentUrl(url);
+    } catch {
+      continue;
+    }
+    if (!resolved.blobHash) continue;
+
+    let origin: 'user' | 'tool' | null;
+    let userGranted: boolean;
+    let toolGranted: boolean;
+    try {
+      origin = await chatAttachmentOrigin(resolved.blobHash);
+      if (origin) continue;
+      userGranted = await ledger.hasRef({
+        hash: resolved.blobHash,
+        refKind: 'ghost-grant',
+        refId: params.ghostId,
+        originKind: 'user',
+      });
+      if (userGranted) continue;
+      toolGranted = await ledger.hasGhostToolGrant({
+        hash: resolved.blobHash,
+        ghostId: params.ghostId,
+      });
+    } catch {
+      return { ok: false, message: '附件授权状态读取失败，请重试' };
+    }
+    if (!toolGranted) continue;
+
+    let candidate = candidates.get(resolved.blobHash);
+    if (!candidate) {
+      let stat: fs.Stats;
+      try {
+        stat = await fs.promises.stat(resolved.absPath);
+      } catch {
+        return {
+          ok: false,
+          message: `附件读取失败:${path.basename(resolved.absPath)}(文件不可读或已被移动)`,
+        };
+      }
+      if (!stat.isFile()) {
+        return {
+          ok: false,
+          message: `附件读取失败:${path.basename(resolved.absPath)}(文件不可读或已被移动)`,
+        };
+      }
+      if (totalBytes + stat.size > GRANT_BATCH_MAX_TOTAL_BYTES) {
+        return { ok: false, message: grantBatchTooLargeMessage() };
+      }
+      let buffer: Uint8Array;
+      try {
+        buffer = await fs.promises.readFile(resolved.absPath);
+      } catch {
+        return {
+          ok: false,
+          message: `附件读取失败:${path.basename(resolved.absPath)}(文件不可读或已被移动)`,
+        };
+      }
+      if (totalBytes + buffer.byteLength > GRANT_BATCH_MAX_TOTAL_BYTES) {
+        return { ok: false, message: grantBatchTooLargeMessage() };
+      }
+      totalBytes += buffer.byteLength;
+      candidate = {
+        hash: resolved.blobHash,
+        absPath: resolved.absPath,
+        mimeType: resolved.mimeType,
+        buffer,
+        urls: [],
+      };
+      candidates.set(resolved.blobHash, candidate);
+    }
+    candidate.urls.push(url);
+  }
+
+  if (candidates.size === 0) return { ok: true, resolved: new Map() };
+
+  let previewCount = 0;
+  const items: GhostGrantFileItem[] = [];
+  for (const candidate of candidates.values()) {
+    const canPreview =
+      candidate.mimeType.startsWith('image/') && previewCount < GRANT_PREVIEW_MAX_ITEMS;
+    const previewDataUrl = canPreview
+      ? buildGrantPreviewDataUrl(candidate.buffer, candidate.mimeType)
+      : undefined;
+    if (previewDataUrl) previewCount += 1;
+    items.push({
+      name: path.basename(candidate.absPath),
+      absPath: candidate.absPath,
+      size: candidate.buffer.byteLength,
+      mimeType: candidate.mimeType,
+      ...(previewDataUrl ? { previewDataUrl } : {}),
+    });
+  }
+
+  const confirm = await requestGrantConfirm({
     ghostId: params.ghostId,
-    lane: params.lane,
+    sessionId: params.sessionId,
+    sessionInstanceId: params.sessionInstanceId,
+    lane: 'attachments',
+    items,
+    getLiveSessionGrantState: params.getLiveSessionGrantState,
   });
-  return { ok: true, userGranted: true };
+  if (!confirm.ok) return confirm;
+
+  const originKind = confirm.approvalSource === 'user' ? 'user' : 'tool';
+  const resolved = new Map<string, ResolvedGrantSource>();
+  for (const candidate of candidates.values()) {
+    const source: ResolvedGrantSource = {
+      absPath: candidate.absPath,
+      mimeType: candidate.mimeType,
+      originKind,
+      buffer: candidate.buffer,
+    };
+    for (const url of candidate.urls) resolved.set(url, source);
+  }
+  return { ok: true, resolved };
 }
 
 /**
@@ -453,6 +709,8 @@ async function grantAttachmentUrls(params: {
   urls: string[];
   workdirAbs: string | null;
   sessionId: string | null;
+  sessionInstanceId: string | null;
+  getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
   maxCount: number;
 }): Promise<{ ok: true; hashes: string[] } | { ok: false; message: string }> {
   const { ghostId } = params;
@@ -461,9 +719,21 @@ async function grantAttachmentUrls(params: {
     ghostId,
     workdirAbs: params.workdirAbs,
     sessionId: params.sessionId,
+    sessionInstanceId: params.sessionInstanceId,
+    getLiveSessionGrantState: params.getLiveSessionGrantState,
     maxCount: params.maxCount,
   });
   if (!localGrant.ok) return localGrant;
+  const managedToolGrant = await prepareManagedToolGrantSources({
+    urls: params.urls,
+    ghostId,
+    localResolved: localGrant.resolved,
+    maxCount: params.maxCount,
+    sessionId: params.sessionId,
+    sessionInstanceId: params.sessionInstanceId,
+    getLiveSessionGrantState: params.getLiveSessionGrantState,
+  });
+  if (!managedToolGrant.ok) return managedToolGrant;
   return grantAttachmentsToGhost(
     {
       // 宽容解析:模型可能只有本地路径、缩图副本路径、或把 xdt-image
@@ -474,20 +744,35 @@ async function grantAttachmentUrls(params: {
       resolveImageUrl: async (url) => {
         const local = localGrant.resolved.get(url);
         if (local) return local;
+        const managed = managedToolGrant.resolved.get(url);
+        if (managed) return managed;
         const r = resolveGhostAttachmentUrl(url);
         if (!r.blobHash) return r;
         const origin = await chatAttachmentOrigin(r.blobHash);
         if (!origin) {
-          // 授权记忆:该内容此前已过户给本意识(ghost-grant 行在账)时,
-          // 模型拿总仓地址再引用直接放行——workdir 外确认流落仓后,
-          // 模型手里的地址就是总仓形态,不放行会逼它绕回原路径。
-          const granted = await ledger.hasRef({
+          // 交接记忆:该内容此前已过户给本意识时,模型拿总仓地址再引用
+          // 直接放行——workdir 外确认流落仓后,模型手里的地址就是总仓
+          // 形态,不放行会逼它绕回原路径。人工确认与 Host 工具代办必须
+          // 保留各自 provenance:后者仍是 ghost-tool-grant,绝不升级成人工
+          // 永久授权；这里只复用它本来就已经赋予插件的取件能力。
+          const userGranted = await ledger.hasRef({
             hash: r.blobHash,
             refKind: 'ghost-grant',
             refId: ghostId,
+            originKind: 'user',
           });
-          if (granted) {
+          if (userGranted) {
             return { absPath: r.absPath, mimeType: r.mimeType, originKind: 'user' };
+          }
+          const toolGranted = await ledger.hasGhostToolGrant({
+            hash: r.blobHash,
+            ghostId,
+          });
+          if (toolGranted) {
+            // The batch preflight above must have covered every tool grant.
+            // If the ledger changes during the async resolve phase, fail
+            // closed instead of silently opening a one-item confirmation path.
+            throw new GrantPolicyError('附件授权状态已变化，请重试');
           }
           // 策略拒绝标记:message 原样透给模型(落格式教学文案会误导自纠)。
           throw new GrantPolicyError('该图片不是聊天里出现过的附件,不可过户');
@@ -497,16 +782,86 @@ async function grantAttachmentUrls(params: {
       readFile: (absPath) => fs.promises.readFile(absPath),
       writeBlob: (p) => blobStore.writeBlob(p),
       recordBlob: (p) => ledger.recordBlob(p),
-      // 幂等化:同 (指纹, 意识) 已有授权行就不再插新行——授权语义是
-      // "存在即永久",重复过户同一张图不该让账本膨胀。
+      // 顺序调用幂等化:同 (指纹,意识,引用类型,来源) 已有交接行就不再插入。
+      // 并发 check-then-insert 仍可能产生重复账行,但不会改变归属或扩权语义。
       addRef: async (p) => {
-        const exists = await ledger.hasRef({ hash: p.hash, refKind: p.refKind, refId: p.refId });
+        const exists = await ledger.hasRef({
+          hash: p.hash,
+          refKind: p.refKind,
+          refId: p.refId,
+          originKind: p.originKind,
+        });
         return exists ? '' : ledger.addRef(p);
       },
       log,
     },
     { ghostId, urls: params.urls, maxCount: params.maxCount },
   );
+}
+
+function visibleChipGhosts(workdir: string | null): InstalledGhost[] {
+  return getGhostManager()
+    .list()
+    .filter(
+      (ghost) =>
+        ghost.enabled &&
+        isGhostAvailableForActiveSession(ghost.manifest.id) &&
+        ghost.manifest.kind === 'chip' &&
+        (ghost.manifest.tools?.length ?? 0) > 0 &&
+        !isGhostDisabledForWorkdir(ghost.manifest.id, workdir),
+    );
+}
+
+const ghostVisibilityDeps = {
+  listGhosts: () => getGhostManager().list(),
+  isAvailableForActiveSession: isGhostAvailableForActiveSession,
+  isDisabledForWorkdir: isGhostDisabledForWorkdir,
+};
+
+function ghostRecall(ghost: InstalledGhost): string | undefined {
+  return ghost.manifest.whenToUse ?? ghost.manifest.description;
+}
+
+/** 供各 harness 会话装配 system/developer 段；每次调用按 workdir 取一次数据。 */
+export function getGhostRosterPrompt({ workingDir }: { workingDir?: string }): string {
+  if (!workingDir) return '';
+  const items = visibleChipGhosts(workingDir).map((ghost) => {
+    const recall = ghostRecall(ghost);
+    return {
+      id: ghost.manifest.id,
+      name: ghost.manifest.name,
+      ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
+      ...(recall ? { recall } : {}),
+    };
+  });
+  return buildGhostRosterPrompt(items);
+}
+
+function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
+  const recall = ghostRecall(ghost);
+  let setup: CindyGhostInfo['setup'];
+  try {
+    setup = getGhostSetupAssessment(ghost.manifest.id);
+  } catch (error) {
+    // Discovery is best-effort per plugin. Keep this plugin discoverable
+    // without claiming it is ready; ghost_call retains the strict setup gate.
+    log.warn('ghost setup assessment omitted from discovery', {
+      ghostId: ghost.manifest.id,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+  }
+  return {
+    id: ghost.manifest.id,
+    name: ghost.manifest.name,
+    ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
+    ...(recall ? { recall } : {}),
+    ...(setup ? { setup } : {}),
+    tools: (ghost.manifest.tools ?? []).map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      ...(tool.parameters ? { parameters: tool.parameters } : {}),
+    })),
+  };
 }
 
 /**
@@ -518,39 +873,37 @@ async function grantAttachmentUrls(params: {
  * AsyncLocalStorage(getLiziMcpSessionContext)恢复——因此运行时取语境一律
  * "ALS 优先、闭包兜底"(见 resolveSessionContext)。
  */
-export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): CindyGhostsMcpDeps {
+export function getCindyGhostsMcpDeps(
+  sessionCtx?: LiziMcpSessionContext,
+  hostDeps: CindyGhostsHostDeps = {},
+): CindyGhostsMcpDeps {
   const resolveSessionContext = (): LiziMcpSessionContext | undefined =>
     getLiziMcpSessionContext() ?? sessionCtx;
   return {
     // 花名册快照(server 装配时取一次):唤醒的芯片意识 + 召回线索,进
-    // ghost_list/ghost_call 工具描述做语义召回。线索优先 whenToUse(给模型
+    // ghost_list 工具描述做语义召回。system 段由 getGhostRosterPrompt 在每个
+    // session 装配时按 workdir 单独取数,更准确;实时真相以 ghost_list 调用返回为准。
+    // 线索优先 whenToUse(给模型
     // 的场景枚举,可独立调优),缺省回落 description(给人的自我介绍);
     // 两者皆无的意识只列名字与指令(作者该去补——手册已教)。
     //
     // 目录级禁用(ghostWorkdirPrefs):被用户在本会话 workdir 停用的意识
-    // 不进花名册——语义召回从源头消失,"当它不存在"。装配时刻 ALS 未必
-    // 生效,workdir 取 ALS 优先、建线闭包兜底;Codex 共享 bridge 建线期
-    // 语境是全局空值(workingDir=''),此时不过滤(已知限制:codex 会话的
-    // 描述花名册全量,运行期 ghost_list / ghost_call 仍按真实 workdir 拦)。
+    // 不进花名册,ghost_list 也不返回;ghost_info / ghost_call 会明说当前
+    // 目录停用。装配时刻 ALS 未必生效,workdir 取 ALS 优先、建线闭包
+    // 兜底;若没有解析到 workingDir(包括 Codex/Pi bridge 建线期空值),花名册
+    // 宁缺勿全,不注入工具描述;Codex 正常 startSession 的 developerInstructions
+    // 会在拿到真实 workdir 后单独装配 system 段。
     getRosterItems() {
-      const workdir = resolveSessionContext()?.workingDir ?? null;
-      return getGhostManager()
-        .list()
-        .filter(
-          (g) =>
-            g.enabled &&
-            isGhostAvailableForActiveSession(g.manifest.id) &&
-            g.manifest.kind === 'chip' &&
-            (g.manifest.tools?.length ?? 0) > 0 &&
-            !isGhostDisabledForWorkdir(g.manifest.id, workdir),
-        )
+      const workdir = resolveSessionContext()?.workingDir;
+      if (!workdir) return [];
+      return visibleChipGhosts(workdir)
         .map((g) => {
-          const recall = g.manifest.whenToUse ?? g.manifest.description;
+          const recall = ghostRecall(g);
           return {
             id: g.manifest.id,
             name: g.manifest.name,
             ...(g.manifest.command ? { command: g.manifest.command } : {}),
-            ...(recall ? { description: recall } : {}),
+            ...(recall ? { recall } : {}),
           };
         });
     },
@@ -558,41 +911,24 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       // 现查同样按会话 workdir 滤掉目录级禁用的意识(ALS 恢复的真实语境
       // 优先)——模型主动 ghost_list 也看不到被禁用的条目,清单层面干净。
       const workdir = resolveSessionContext()?.workingDir ?? null;
-      return getGhostManager()
-        .list()
-        .filter(
-          (g) =>
-            g.enabled &&
-            isGhostAvailableForActiveSession(g.manifest.id) &&
-            g.manifest.kind === 'chip' &&
-            (g.manifest.tools?.length ?? 0) > 0 &&
-            !isGhostDisabledForWorkdir(g.manifest.id, workdir),
-        )
-        .map((g) => {
-          let setup: CindyGhostInfo['setup'];
-          try {
-            setup = getGhostSetupAssessment(g.manifest.id);
-          } catch (error) {
-            // Roster discovery is best-effort per plugin. Keep this plugin
-            // discoverable without claiming it is ready; ghost_call retains
-            // the strict setup gate and will fail before dispatch.
-            log.warn('ghost setup assessment omitted from roster', {
-              ghostId: g.manifest.id,
-              errorType: error instanceof Error ? error.name : typeof error,
-            });
-          }
-          return {
-            id: g.manifest.id,
-            name: g.manifest.name,
-            ...(g.manifest.command ? { command: g.manifest.command } : {}),
-            ...(setup ? { setup } : {}),
-            tools: (g.manifest.tools ?? []).map((t) => ({
-              name: t.name,
-              description: t.description,
-              ...(t.parameters ? { parameters: t.parameters } : {}),
-            })),
-          };
-        });
+      return visibleChipGhosts(workdir)
+        .map(toCindyGhostInfo);
+    },
+    async getAwakeGhost(ghostId) {
+      const workdir = resolveSessionContext()?.workingDir ?? null;
+      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
+      if (!visibility.ok) return visibility;
+      const visible = visibleChipGhosts(workdir).find(
+        (ghost) => ghost.manifest.id === ghostId,
+      );
+      if (visible) {
+        return { ok: true, ghost: toCindyGhostInfo(visible) };
+      }
+      return {
+        ok: false,
+        errorCode: 'GHOST_NOT_FOUND',
+        message: '该插件未声明任何可供调用的工具;不要重试,改用其它方式完成。',
+      };
     },
     async callGhostTool({
       ghostId,
@@ -605,53 +941,24 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       grantOnly,
       setupPlan,
     }) {
-      // Check the account/session capability before granting attachments or
-      // directory tickets. A stale roster from a cloud session must not let a
-      // local session create durable grants or wake an account-managed Ghost.
-      if (!isGhostAvailableForActiveSession(ghostId)) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_NOT_FOUND',
-          // 这条 message 是 model-visible 的 tool result,会被模型读到并可能回显进对话,
-          // 所以按用户可见口径写「未登录」而不是已废弃的「本地模式」(见
-          // i18n/glossary.json 的 not-signed-in 条目)。句尾的「本地可用方式」保留:
-          // 那个「本地」描述的是能力落在本机,不是账号状态名。
-          message: '该插件需要 Cindy 账号，未登录状态不可用；不要重试，改用本地可用方式。',
-        };
-      }
-      // 用户图片过户:attachments 里的地址逐张落媒体总仓 + 记
-      // ghost-grant 引用(显式引渡 = 授权,按张、永久),指纹注入
+      const sessionContext = resolveSessionContext();
+      const sessionIdForConfirm = sessionContext?.sessionId ?? null;
+      const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
+      const sessionWorkdir = sessionContext?.workingDir ?? null;
+      const initialVisibility = classifyGhostVisibility(
+        ghostId,
+        sessionWorkdir,
+        ghostVisibilityDeps,
+      );
+      if (!initialVisibility.ok) return initialVisibility;
+      const target = initialVisibility.ghost;
+      // 用户图片过户:attachments 里的地址逐张落媒体总仓 + 记可读引用
+      // (人工确认 = ghost-grant；Host 工具代办 = ghost-tool-grant),指纹注入
       // args.attachments 交给意识。任何一张失败整批拒(ATTACHMENT_INVALID),
       // 不做半成品授权。全链路见 grantAttachmentUrls。
       let mergedArgs = args;
-      const sessionContext = resolveSessionContext();
-      const sessionIdForConfirm = sessionContext?.sessionId ?? null;
-      const sessionWorkdir = sessionContext?.workingDir ?? null;
-      // 目录级禁用兜底(防御线):花名册/ghost_list 已过滤,正常路径走不到
-      // 这里——只有"会话开着时中途被禁"(快照已含自述)或模型凭上文记忆
-      // 硬调才会命中。message 是可直达模型的人话:停手改道,不要自纠重试。
-      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-          message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
-        };
-      }
-      // Runtime setup gate: resolve the target before creating any durable
-      // attachment grant, directory ticket, sandbox, card call, or dispatch.
-      const target = getGhostManager()
-        .list()
-        .find((g) => g.manifest.id === ghostId);
-      if (!target) {
-        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件不存在或已卸载' };
-      }
-      if (!target.enabled) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_ASLEEP',
-          message: '目标插件未启用,可提示用户到主界面侧边栏「插件」中启用',
-        };
-      }
+      // Runtime setup gate: the shared visibility check above runs before any
+      // durable attachment grant, directory ticket, sandbox, card call, or dispatch.
       // grant_only never dispatches and intentionally ignores its tool field.
       if (
         !grantOnly &&
@@ -689,33 +996,32 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
 
       // OAuth/settings may take minutes. Re-resolve mutable target facts after
       // the waiter completes and before beginning the existing side effects.
-      const refreshed = getGhostManager()
-        .list()
-        .find((g) => g.manifest.id === ghostId);
-      if (!refreshed || !isGhostAvailableForActiveSession(ghostId)) {
-        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
-      }
-      if (!refreshed.enabled) {
-        return { ok: false, errorCode: 'GHOST_ASLEEP', message: t('newChat.pluginSetup.targetDisabled') };
-      }
-      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
-        return {
-          ok: false,
-          errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-          message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
-        };
-      }
+      const refreshedVisibility = classifyGhostVisibility(
+        ghostId,
+        sessionWorkdir,
+        ghostVisibilityDeps,
+      );
+      if (!refreshedVisibility.ok) return refreshedVisibility;
+      const refreshed = refreshedVisibility.ghost;
       if (
         !grantOnly &&
         !(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool)
       ) {
-        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, refreshed.manifest.tools) };
+        return {
+          ok: false,
+          errorCode: 'TOOL_NOT_FOUND',
+          message: toolNotFoundMessage(ghostId, tool, refreshed.manifest.tools),
+        };
       }
       let finalAssessment;
       try {
         finalAssessment = getGhostSetupAssessment(ghostId);
       } catch {
-        return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: t('newChat.pluginSetup.assessmentReadFailed'),
+        };
       }
       if (finalAssessment.state !== 'ready') {
         return {
@@ -730,31 +1036,36 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       if (grantOnly) {
         // Full pre-grant gate: confirm target, workdir, and setup readiness
         // BEFORE grantAttachmentUrls creates durable ledger entries.
-        const grantTarget = getGhostManager()
-          .list()
-          .find((g) => g.manifest.id === ghostId);
-        if (!grantTarget || !isGhostAvailableForActiveSession(ghostId)) {
-          return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
-        }
-        if (!grantTarget.enabled) {
-          return { ok: false, errorCode: 'GHOST_ASLEEP', message: t('newChat.pluginSetup.targetDisabled') };
-        }
-        if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
-          return { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR', message: t('newChat.pluginSetup.targetDisabledInWorkdir') };
-        }
+        const grantVisibility = classifyGhostVisibility(
+          ghostId,
+          sessionWorkdir,
+          ghostVisibilityDeps,
+        );
+        if (!grantVisibility.ok) return grantVisibility;
         try {
           const grantOnlyAssessment = getGhostSetupAssessment(ghostId);
           if (grantOnlyAssessment.state !== 'ready') {
-            return { ok: false, errorCode: 'SETUP_REQUIRED', message: t('newChat.pluginSetup.setupIncomplete'), setup: grantOnlyAssessment };
+            return {
+              ok: false,
+              errorCode: 'SETUP_REQUIRED',
+              message: t('newChat.pluginSetup.setupIncomplete'),
+              setup: grantOnlyAssessment,
+            };
           }
         } catch {
-          return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
+          return {
+            ok: false,
+            errorCode: 'INTERNAL',
+            message: t('newChat.pluginSetup.assessmentReadFailed'),
+          };
         }
         const grant = await grantAttachmentUrls({
           ghostId,
           urls: attachments!,
           workdirAbs: sessionWorkdir,
           sessionId: sessionIdForConfirm,
+          sessionInstanceId: sessionInstanceIdForGrant,
+          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
           maxCount: MAX_GRANT_ONLY_ATTACHMENTS,
         });
         if (!grant.ok) {
@@ -762,35 +1073,40 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         }
         // Post-grant revalidation: the grant process includes an async user
         // confirmation step; re-check everything before returning success.
-        const postGrant = getGhostManager()
-          .list()
-          .find((g) => g.manifest.id === ghostId);
-        if (!postGrant || !isGhostAvailableForActiveSession(ghostId)) {
-          return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
-        }
-        if (!postGrant.enabled) {
-          return { ok: false, errorCode: 'GHOST_ASLEEP', message: t('newChat.pluginSetup.targetDisabled') };
-        }
-        if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
-          return { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR', message: t('newChat.pluginSetup.targetDisabledInWorkdir') };
-        }
+        const postGrantVisibility = classifyGhostVisibility(
+          ghostId,
+          sessionWorkdir,
+          ghostVisibilityDeps,
+        );
+        if (!postGrantVisibility.ok) return postGrantVisibility;
+        let postGrantAssessment: GhostSetupAssessment;
         try {
-          const postGrantAssessment = getGhostSetupAssessment(ghostId);
+          postGrantAssessment = getGhostSetupAssessment(ghostId);
           if (postGrantAssessment.state !== 'ready') {
-            return { ok: false, errorCode: 'SETUP_REQUIRED', message: t('newChat.pluginSetup.setupChangedDuringResume'), setup: postGrantAssessment };
+            return {
+              ok: false,
+              errorCode: 'SETUP_REQUIRED',
+              message: t('newChat.pluginSetup.setupChangedDuringResume'),
+              setup: postGrantAssessment,
+            };
           }
         } catch {
-          return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
+          return {
+            ok: false,
+            errorCode: 'INTERNAL',
+            message: t('newChat.pluginSetup.assessmentReadFailed'),
+          };
         }
         log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
         return {
           ok: true,
+          ...(postGrantAssessment.reauthSuggest ? { setup: postGrantAssessment } : {}),
           result: {
             ok: true,
             granted_count: grant.hashes.length,
             attachments: grant.hashes,
             guidance:
-              '整批文件已过户并获授权;继续逐次调用目标工具,引用原路径或这些指纹都不会再弹确认卡。不要向用户复述指纹列表。',
+              '整批文件已过户并获授权;在当前权限档位下继续逐次调用目标工具,可引用原路径或这些指纹。若热切回需要确认的权限档位,后续重新交接可能再次弹出确认卡。不要向用户复述指纹列表。',
           },
         };
       }
@@ -800,6 +1116,8 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           urls: attachments,
           workdirAbs: sessionWorkdir,
           sessionId: sessionIdForConfirm,
+          sessionInstanceId: sessionInstanceIdForGrant,
+          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
           maxCount: MAX_GRANT_ATTACHMENTS,
         });
         if (!grant.ok) {
@@ -815,18 +1133,21 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         const dirConfirm = await confirmDepositOutsideWorkdir({
           ghostId,
           sessionId: sessionIdForConfirm,
+          sessionInstanceId: sessionInstanceIdForGrant,
           lane: 'dir',
           dirAbs: dir,
           workdirAbs: sessionWorkdir,
+          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
         });
         if (!dirConfirm.ok) {
           return { ok: false, errorCode: 'DIR_INVALID', message: dirConfirm.message };
         }
         const deposited = getDirDepositVault().deposit({
           ghostId,
-          dirAbs: dir,
+          dirAbs: dirConfirm.userGranted ? dirConfirm.approvedRealPath : dir,
           workdirAbs: sessionWorkdir,
           userGranted: dirConfirm.userGranted,
+          ...(dirConfirm.userGranted ? { expectedRealPath: dirConfirm.approvedRealPath } : {}),
         });
         if (!deposited.ok) {
           return { ok: false, errorCode: 'DIR_INVALID', message: deposited.message };
@@ -840,18 +1161,21 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         const saveConfirm = await confirmDepositOutsideWorkdir({
           ghostId,
           sessionId: sessionIdForConfirm,
+          sessionInstanceId: sessionInstanceIdForGrant,
           lane: 'save_dir',
           dirAbs: saveDir,
           workdirAbs: sessionWorkdir,
+          getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
         });
         if (!saveConfirm.ok) {
           return { ok: false, errorCode: 'DIR_INVALID', message: saveConfirm.message };
         }
         const saveDeposited = getSaveDepositVault().deposit({
           ghostId,
-          dirAbs: saveDir,
+          dirAbs: saveConfirm.userGranted ? saveConfirm.approvedRealPath : saveDir,
           workdirAbs: sessionWorkdir,
           userGranted: saveConfirm.userGranted,
+          ...(saveConfirm.userGranted ? { expectedRealPath: saveConfirm.approvedRealPath } : {}),
         });
         if (!saveDeposited.ok) {
           return { ok: false, errorCode: 'DIR_INVALID', message: saveDeposited.message };
@@ -863,29 +1187,25 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       // "主机铸造、不可伪造";未声明槽的插件连剥除后的空位都不给。
       if ('session_context' in mergedArgs) {
         const { session_context: _dropped, ...rest } = mergedArgs;
+        void _dropped;
         mergedArgs = rest;
       }
       // Pre-dispatch revalidation: attachment grants and dir tickets may have
       // taken time; confirm the target is still available before committing the
       // callId and dispatching to the sandbox.
-      const preDispatch = getGhostManager()
-        .list()
-        .find((g) => g.manifest.id === ghostId);
-      if (!preDispatch || !isGhostAvailableForActiveSession(ghostId)) {
-        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
-      }
-      if (!preDispatch.enabled) {
-        return { ok: false, errorCode: 'GHOST_ASLEEP', message: t('newChat.pluginSetup.targetDisabled') };
-      }
-      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
+      const preDispatchVisibility = classifyGhostVisibility(
+        ghostId,
+        sessionWorkdir,
+        ghostVisibilityDeps,
+      );
+      if (!preDispatchVisibility.ok) return preDispatchVisibility;
+      const preDispatch = preDispatchVisibility.ghost;
+      if (!(preDispatch.manifest.tools ?? []).some((c) => c.name === tool)) {
         return {
           ok: false,
-          errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-          message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
+          errorCode: 'TOOL_NOT_FOUND',
+          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest.tools),
         };
-      }
-      if (!(preDispatch.manifest.tools ?? []).some((c) => c.name === tool)) {
-        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest.tools) };
       }
       try {
         const preDispatchAssessment = getGhostSetupAssessment(ghostId);
@@ -898,7 +1218,11 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           };
         }
       } catch {
-        return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: t('newChat.pluginSetup.assessmentReadFailed'),
+        };
       }
       // Session-context slot: use the revalidated manifest to decide injection.
       // Re-read manifest after the async buildGhostSessionContext to guard against
@@ -913,26 +1237,37 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         }
       }
       // Full revalidation after session-context await (DB query may take time)
-      const postCtx = getGhostManager().list().find((g) => g.manifest.id === ghostId);
-      if (!postCtx || !isGhostAvailableForActiveSession(ghostId)) {
-        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
-      }
-      if (!postCtx.enabled) {
-        return { ok: false, errorCode: 'GHOST_ASLEEP', message: t('newChat.pluginSetup.targetDisabled') };
-      }
-      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
-        return { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR', message: t('newChat.pluginSetup.targetDisabledInWorkdir') };
-      }
+      const postCtxVisibility = classifyGhostVisibility(
+        ghostId,
+        sessionWorkdir,
+        ghostVisibilityDeps,
+      );
+      if (!postCtxVisibility.ok) return postCtxVisibility;
+      const postCtx = postCtxVisibility.ghost;
       if (!(postCtx.manifest.tools ?? []).some((c) => c.name === tool)) {
-        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools) };
+        return {
+          ok: false,
+          errorCode: 'TOOL_NOT_FOUND',
+          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools),
+        };
       }
+      let postCtxAssessment: GhostSetupAssessment;
       try {
-        const postCtxAssessment = getGhostSetupAssessment(ghostId);
+        postCtxAssessment = getGhostSetupAssessment(ghostId);
         if (postCtxAssessment.state !== 'ready') {
-          return { ok: false, errorCode: 'SETUP_REQUIRED', message: t('newChat.pluginSetup.setupChangedDuringResume'), setup: postCtxAssessment };
+          return {
+            ok: false,
+            errorCode: 'SETUP_REQUIRED',
+            message: t('newChat.pluginSetup.setupChangedDuringResume'),
+            setup: postCtxAssessment,
+          };
         }
       } catch {
-        return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: t('newChat.pluginSetup.assessmentReadFailed'),
+        };
       }
       // ── 卡槽③:callId 在这里预铸并登记给卡片服务 ────────────────────
       // 时序契约:register(供片窗开)→ dispatch(意识拿到同一 callId,执行
@@ -961,7 +1296,12 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       // 在意识未声明媒体字段时以 xdt_media_produced 注入,兜底 IM/hook 送达。
       const producedMedia = drainGhostCallMedia(ghostId, callId);
       const finalized = withCardToken(result, cardService.finalizeCall(callId), callId);
-      return finalized.ok && producedMedia.length > 0 ? { ...finalized, producedMedia } : finalized;
+      if (!finalized.ok) return finalized;
+      // 附最后一道 gate(postCtx)的快照:它是派发前最新的 ready 判定。
+      const advisory = postCtxAssessment.reauthSuggest ? { setup: postCtxAssessment } : {};
+      return producedMedia.length > 0
+        ? { ...finalized, ...advisory, producedMedia }
+        : { ...finalized, ...advisory };
     },
     async forgeGuide(): Promise<string> {
       return FORGE_GUIDE;
@@ -978,8 +1318,42 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       }
       return result;
     },
-    async forgePack({ dir }): Promise<CindyForgePackResult> {
-      const packed = await packGhostDir(dir);
+    async forgePack({ dir, iconSource }): Promise<CindyForgePackResult> {
+      let iconPng: Buffer | undefined;
+      let iconNote = '';
+      if (iconSource !== undefined) {
+        try {
+          const resolved = blobStore.resolveSafe(iconSource);
+          if (!resolved.mimeType.startsWith('image/')) {
+            throw new Error('icon_source 不是图片');
+          }
+          const stat = await fs.promises.stat(resolved.absPath);
+          if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_FORGE_ICON_SOURCE_BYTES) {
+            throw new Error(`icon_source 体积必须在 1–${MAX_FORGE_ICON_SOURCE_BYTES} 字节之间`);
+          }
+          iconPng = await convertForgeIconToPng(resolved.absPath);
+          iconNote = 'AI 图标已嵌入安装包。';
+        } catch (err) {
+          iconNote = 'AI 图标处理失败，已保留默认图标并继续打包。';
+          log.warn('ghost forge icon fallback', {
+            dir,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      let packed = await packGhostDir(dir, iconPng ? { iconPng } : undefined);
+      // icon overlay 的任何失败都不是打包门槛：用原源码再打一次。若原源码
+      // 本身也不合法，则返回原本就会出现的结构化错误。
+      if (!packed.ok && iconPng) {
+        const fallbackPacked = await packGhostDir(dir);
+        if (fallbackPacked.ok) {
+          packed = fallbackPacked;
+          iconNote = 'AI 图标处理失败，已保留默认图标并继续打包。';
+        } else {
+          return fallbackPacked;
+        }
+      }
       if (!packed.ok) return packed;
       // 与双击 .cindy 同一条转交通道:renderer 弹标准确认框(同 id 已装则
       // 自动转"更新 vX → vY"),用户点头才真装。
@@ -991,7 +1365,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         id: packed.manifest.id,
         name: packed.manifest.name,
         version: packed.manifest.version,
-        note: '已打包并弹出装入/更新确认框,请告知用户在应用内确认(装入默认沉睡)。',
+        note: `${iconNote}已打包并弹出装入/更新确认框,请告知用户在应用内确认(装入默认沉睡)。`,
       };
     },
     logger: log,

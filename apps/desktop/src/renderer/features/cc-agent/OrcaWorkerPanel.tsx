@@ -6,7 +6,7 @@
  * 双栏布局与独立 resize/maximize。
  */
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -90,6 +90,19 @@ export function OrcaWorkerPanel({
   });
   const lastAgentIslandPayloadRef = useRef<string | string[] | null>(null);
 
+  const handleOpenCreate = useCallback(async () => {
+    const result = await refreshCreationState();
+    if (result.status !== 'applied') {
+      toast.error(t('newChat.collaboration.createWorkerRefreshFailed'));
+      return;
+    }
+    const activeCount = result.workers.filter((worker) =>
+      isActiveWorkerStatus(worker.status),
+    ).length;
+    if (result.hardLimit !== null && activeCount >= result.hardLimit) return;
+    setCreateOpen(true);
+  }, [refreshCreationState, setCreateOpen, t]);
+
   useEffect(() => {
     if (!viewVisible) return;
     let active = true;
@@ -142,7 +155,7 @@ export function OrcaWorkerPanel({
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-content-area">
-      <div className="flex h-8 shrink-0 items-center border-b border-border/40 px-3 text-[11px] font-medium leading-none text-muted-foreground">
+      <div className="flex h-8 shrink-0 items-center border-b border-border/40 px-3 text-11 font-medium leading-none text-muted-foreground">
         <WorkerListToolbar
           worker={selectedWorkerRecord ?? focusedWorker}
           workers={workers}
@@ -151,7 +164,7 @@ export function OrcaWorkerPanel({
           softLimit={softLimit}
           hardLimit={hardLimit}
           onSwitchFocus={handleSwitchFocus}
-          onOpenCreate={() => setCreateOpen(true)}
+          onOpenCreate={() => void handleOpenCreate()}
           onOpenSettings={() => navigate('/settings?section=collaboration')}
           settingsEnabled={!isSidebarWindow()}
           onArchiveWorker={handleArchiveWorker}

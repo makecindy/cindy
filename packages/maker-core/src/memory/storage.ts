@@ -94,11 +94,43 @@ export function memoryScopeDirName(scopeKey: string): string {
   return `ssh-${sanitizeWorkdir(hostSegment).slice(0, 24)}-${digest}`;
 }
 
-/** filename = `<type>_<slug>.md` */
+/** filename = `<type>_<slug>.md`; slug 误带 `<type>_` 前缀会被拒绝 (见 validateNoTypePrefix) */
 export function buildFilename(type: MemoryType, slug: string): string {
+  validateNoTypePrefix(type, slug);
   return `${type}_${slug}${SHARD_EXT}`;
 }
 
+/**
+ * 拒绝 slug 上误带的 `<type>_` 前缀 — memory_write 的调用方 (LLM) 常把 type
+ * 写进 name, 造成 `feedback_feedback_foo.md` 双前缀分片 (#1652 附带 bug, #205 审计亦命中)。
+ * **只报错不剥离**: 剥离会让存量双前缀分片在 update/append/consolidate 时定位错位 —
+ * parseFilename 把 `feedback_feedback_foo.md` 的 slug 解析为 `feedback_foo`, 剥离后
+ * 定位到 `feedback_foo.md`, 造成 not-found 或静默修改错误分片。报错让调用方传纯 slug,
+ * 存量双前缀分片由一次性改名/去重迁移清理 (另行处理)。
+ */
+function validateNoTypePrefix(type: MemoryType, slug: string): void {
+  if (slug === type) {
+    throw new MemoryError(
+      'invalid-slug',
+      `slug 不能等于 type 名 "${type}", 请传纯 slug (如 "${type}-brief")`,
+    );
+  }
+  if (slug.startsWith(`${type}_`)) {
+    throw new MemoryError(
+      'invalid-slug',
+      `slug "${slug}" 已带 type 前缀 "${type}_", 请传纯 slug (如 "${stripAllTypePrefixes(type, slug) || type + '-brief'}")`,
+    );
+  }
+}
+
+/** 剥掉 slug 上所有重复的 `<type>_` 前缀 — 错误信息示例必须本身可通过校验 */
+function stripAllTypePrefixes(type: MemoryType, slug: string): string {
+  let out = slug;
+  while (out.startsWith(`${type}_`)) {
+    out = out.slice(type.length + 1);
+  }
+  return out;
+}
 /** 解析 filename 反推 type + slug, 不匹配返 null */
 export function parseFilename(filename: string): { type: MemoryType; slug: string } | null {
   if (!filename.endsWith(SHARD_EXT)) return null;

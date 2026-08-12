@@ -5,7 +5,14 @@
  * 都依赖这份映射,回归必须显式。
  */
 import { describe, it, expect } from 'vitest';
-import { SESSION_ACTIVITY_CHANNEL, fsWatchTopic, parseFsWatchTopic, topicForPush } from '../topics.js';
+import {
+  MAKER_EVENT_BATCH_CHANNEL,
+  SESSION_ACTIVITY_CHANNEL,
+  expandMakerEventBatchPayload,
+  fsWatchTopic,
+  parseFsWatchTopic,
+  topicForPush,
+} from '../topics.js';
 
 describe('topicForPush', () => {
   it('会话列表级 channel → sessions', () => {
@@ -33,6 +40,11 @@ describe('topicForPush', () => {
     expect(topicForPush('maker:new-maker-draft:changed', { claudeCode: {}, codex: {} })).toBe(
       'sessions',
     );
+    expect(topicForPush('maker:new-maker-worktree-branch:changed', {
+      baseRepo: '/tmp/repo',
+      sourceBranch: 'feature/mobile',
+      revision: 2,
+    })).toBe('sessions');
   });
 
   it('learn:event → sessions(账号级:run 关联触发/蒸馏两个任务,单 sessionId 路由会漏)', () => {
@@ -121,5 +133,36 @@ describe('topicForPush', () => {
     expect(topicForPush('maker:event', null)).toBeNull();
     expect(topicForPush('maker:event', { sessionId: 123 })).toBeNull();
     expect(topicForPush('maker:event', undefined)).toBeNull();
+  });
+});
+
+describe('expandMakerEventBatchPayload', () => {
+  // 两个控制端(mobile store / desktop main)共用这一份拆包与 fail-closed 判据,
+  // 所以它的契约在这里定,不在任何一端的实现里。
+  it('原样返回批内事件,顺序即批内顺序', () => {
+    const events = [{ sessionId: 's1', event: { i: 0 } }, { sessionId: 's1', event: { i: 1 } }];
+    expect(expandMakerEventBatchPayload({ sessionId: 's1', events })).toEqual(events);
+  });
+
+  it('sessionId 与顶层不一致的条目跳过(topic 隔离不被绕过),其余照常消费', () => {
+    // 坏帧 / 恶意帧:批内混入未订阅会话的事件,会绕过按顶层 sessionId 的 topic 路由。
+    const ok = { sessionId: 's1', event: { keep: true } };
+    expect(expandMakerEventBatchPayload({
+      sessionId: 's1',
+      events: [ok, { sessionId: 's2', event: { leak: true } }, { event: { noSession: true } }],
+    })).toEqual([ok]);
+  });
+
+  it('形状不符 / 空批 → 空数组(不抛、不当批处理)', () => {
+    expect(expandMakerEventBatchPayload(null)).toEqual([]);
+    expect(expandMakerEventBatchPayload({ sessionId: 's1', events: [] })).toEqual([]);
+    expect(expandMakerEventBatchPayload({ sessionId: '', events: [{ sessionId: '' }] })).toEqual([]);
+    expect(expandMakerEventBatchPayload({ events: [{}] })).toEqual([]);
+    expect(expandMakerEventBatchPayload({ sessionId: 's1', events: 'nope' })).toEqual([]);
+  });
+
+  it('批 channel 常量与 topic 路由一致(顶层 sessionId → session:<id>)', () => {
+    expect(topicForPush(MAKER_EVENT_BATCH_CHANNEL, { sessionId: 's7', events: [{}] }))
+      .toBe('session:s7');
   });
 });

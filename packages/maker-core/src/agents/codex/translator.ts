@@ -26,6 +26,10 @@ import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import {
+  stableInternalWebCitationBoundary,
+  stripInternalWebCitations,
+} from '@cindy/maker-shared/internal-citation';
 
 import type { AgentEvent, AgentTaskStatus, AgentTaskUpdateEventData } from '../../types/events.js';
 import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limits.js';
@@ -37,12 +41,21 @@ import {
   formatOverloadRetryMessage,
   parseOverloadError,
 } from '../shared/overload-error.js';
+import {
+  CONTEXT_OVERFLOW_REASON,
+  isContextOverflowErrorMessage,
+} from '../shared/context-overflow-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
+import {
+  formatTerminalRateLimitRetryMessage,
+  TERMINAL_RATE_LIMIT_RETRY_REASON,
+} from './terminal-rate-limit-retry.js';
 import type {
   ItemCompletedNotification,
   ItemStartedNotification,
   ItemUpdatedNotification,
+  AgentMessageDeltaNotification,
   TurnPlanUpdatedNotification,
   ErrorNotification,
   ReasoningSummaryTextDeltaNotification,
@@ -63,6 +76,24 @@ export interface CodexRuntimeState {
   reasoningTextLen: Map<string, number>;
   /** item.id → agentMessage 已 emit 文本字符长度(citation 归一化后的空间,见 handleAgentMessage)。 */
   itemTextLen: Map<string, number>;
+  /** Current model-active interval start; null while tools/approvals own the turn. */
+  generationStartedAt: number | null;
+  /** Tool/approval boundaries currently owning the turn. Generation resumes after all finish. */
+  generationPendingToolIds: Set<string>;
+  /** Sum of model-active intervals for the current turn, including TTFT and thinking. */
+  generationDurationMs: number;
+  generationTurnId: string | null;
+  /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
+  generationTimingReliable: boolean;
+  /** Event-loop heartbeat while the model owns the turn; detects suspend/blocking gaps. */
+  generationHeartbeatAt: number | null;
+  generationHeartbeatTimer: ReturnType<typeof setInterval> | null;
+  /** item.id → 已接受且可安全追加到 UI 的原始全文。 */
+  itemRawText: Map<string, string>;
+  /** item.id → 专用 agentMessage delta 已对齐到的原始全文游标（可由快照补齐漏帧）。 */
+  itemDeltaText: Map<string, string>;
+  /** item.id → item/started 或 item/updated 最新原始全文快照。 */
+  itemSnapshotText: Map<string, string>;
   /** 已经 emit 过 tool_use 的 item.id (避免 started + 第一次 updated 重复)。 */
   emittedToolUse: Set<string>;
   /** 尚未 emit 的 Web Search 候选输入，供跨 started/updated/completed 快照补全。 */
@@ -93,12 +124,202 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     reasoningStartedAt: new Map(),
     reasoningTextLen: new Map(),
     itemTextLen: new Map(),
+    generationStartedAt: null,
+    generationPendingToolIds: new Set(),
+    generationDurationMs: 0,
+    generationTurnId: null,
+    generationTimingReliable: true,
+    generationHeartbeatAt: null,
+    generationHeartbeatTimer: null,
+    itemRawText: new Map(),
+    itemDeltaText: new Map(),
+    itemSnapshotText: new Map(),
     emittedToolUse: new Set(),
     pendingWebSearchInput: new Map(),
     emittedWebSearchInput: new Map(),
     lastAuthErrorKey: null,
     networkRetryNotice: null,
   };
+}
+
+const CODEX_GENERATION_HEARTBEAT_MS = 5_000;
+const CODEX_GENERATION_SUSPEND_GAP_MS = 30_000;
+
+function stopCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
+  if (rt.generationHeartbeatTimer !== null) clearInterval(rt.generationHeartbeatTimer);
+  rt.generationHeartbeatTimer = null;
+  rt.generationHeartbeatAt = null;
+}
+
+function sampleCodexGenerationHeartbeat(rt: CodexRuntimeState, now = Date.now()): void {
+  const previous = rt.generationHeartbeatAt;
+  if (
+    previous !== null &&
+    now - previous > CODEX_GENERATION_HEARTBEAT_MS + CODEX_GENERATION_SUSPEND_GAP_MS
+  ) {
+    rt.generationTimingReliable = false;
+  }
+  rt.generationHeartbeatAt = now;
+}
+
+function startCodexGenerationHeartbeat(rt: CodexRuntimeState): void {
+  stopCodexGenerationHeartbeat(rt);
+  rt.generationHeartbeatAt = Date.now();
+  const timer = setInterval(() => {
+    sampleCodexGenerationHeartbeat(rt);
+  }, CODEX_GENERATION_HEARTBEAT_MS);
+  timer.unref?.();
+  rt.generationHeartbeatTimer = timer;
+}
+
+/** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
+export function resetCodexGenerationTiming(rt: CodexRuntimeState): void {
+  stopCodexGenerationHeartbeat(rt);
+  rt.generationStartedAt = null;
+  rt.generationPendingToolIds.clear();
+  rt.generationDurationMs = 0;
+  rt.generationTurnId = null;
+  rt.generationTimingReliable = true;
+}
+
+function closeCodexGenerationInterval(rt: CodexRuntimeState, endedAt: number): void {
+  const startedAt = rt.generationStartedAt;
+  rt.generationStartedAt = null;
+  sampleCodexGenerationHeartbeat(rt);
+  stopCodexGenerationHeartbeat(rt);
+  if (startedAt === null) return;
+  if (endedAt < startedAt) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  rt.generationDurationMs += endedAt - startedAt;
+}
+
+export function beginCodexGenerationTurn(
+  rt: CodexRuntimeState,
+  turnId: string,
+  startedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) {
+    resetCodexGenerationTiming(rt);
+    rt.generationTurnId = turnId;
+  }
+  if (rt.generationStartedAt === null && rt.generationPendingToolIds.size === 0) {
+    rt.generationStartedAt = startedAt;
+    startCodexGenerationHeartbeat(rt);
+  }
+}
+
+export function finalizeCodexGenerationTurn(
+  rt: CodexRuntimeState,
+  turnId: string,
+  completedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) return;
+  if (rt.generationPendingToolIds.size > 0) {
+    rt.generationTimingReliable = false;
+    rt.generationStartedAt = null;
+    stopCodexGenerationHeartbeat(rt);
+    return;
+  }
+  closeCodexGenerationInterval(rt, completedAt);
+}
+
+export function codexGenerationDurationMs(rt: CodexRuntimeState): number | undefined {
+  return rt.generationTimingReliable && rt.generationDurationMs > 0
+    ? rt.generationDurationMs
+    : undefined;
+}
+
+export function pauseCodexGeneration(
+  rt: CodexRuntimeState,
+  turnId: string,
+  pauseId: string,
+  pausedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId) {
+    beginCodexGenerationTurn(rt, turnId, pausedAt);
+    // Keep the interaction pair consistent, but omit TPS because the missing
+    // turn-start boundary means TTFT/thinking before this pause is unknown.
+    rt.generationTimingReliable = false;
+  }
+  if (!pauseId) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  if (rt.generationPendingToolIds.has(pauseId)) return;
+  if (rt.generationPendingToolIds.size === 0) closeCodexGenerationInterval(rt, pausedAt);
+  rt.generationPendingToolIds.add(pauseId);
+}
+
+export function resumeCodexGeneration(
+  rt: CodexRuntimeState,
+  turnId: string,
+  pauseId: string,
+  resumedAt = Date.now(),
+): void {
+  if (rt.generationTurnId !== turnId || !rt.generationPendingToolIds.delete(pauseId)) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  if (rt.generationPendingToolIds.size === 0) rt.generationStartedAt = resumedAt;
+  if (rt.generationPendingToolIds.size === 0) startCodexGenerationHeartbeat(rt);
+}
+
+const CODEX_GENERATION_PAUSE_ITEM_TYPES: ReadonlySet<string> = new Set([
+  'commandExecution',
+  'mcpToolCall',
+  'dynamicToolCall',
+  'collabAgentToolCall',
+  'webSearch',
+  'imageGeneration',
+  'imageView',
+  'contextCompaction',
+]);
+// App-server v2 reports fileChange only after the patch is complete. With no
+// matching start event it is an output notification, not a pairable timing
+// boundary; handleFileChange still publishes its tool events below.
+// contextCompaction may likewise arrive completion-only. Keeping it in the
+// paired pause set makes that shape fail closed, while still excluding the
+// compaction interval if a future app-server supplies both boundaries.
+
+function noteCodexGenerationBoundary(
+  rt: CodexRuntimeState,
+  phase: ItemPhase,
+  item: { id?: unknown; type?: unknown },
+  notification: { turnId?: unknown },
+): void {
+  const turnId = notification.turnId;
+  if (typeof turnId !== 'string') return;
+  // App-server timestamps may originate on a remote SSH host whose wall clock
+  // differs from the desktop. Keep every generation boundary in the local
+  // receipt-time domain so interval subtraction never mixes remote clocks.
+  // A separate event-loop heartbeat fails closed on suspend-sized local jumps.
+  const receivedAt = Date.now();
+  if (rt.generationTurnId !== turnId) {
+    beginCodexGenerationTurn(rt, turnId, receivedAt);
+    // The authoritative local turn-start boundary was not observed. Starting
+    // at this item receipt would drop TTFT/thinking, so keep the state usable
+    // for pause pairing but fail closed for TPS.
+    rt.generationTimingReliable = false;
+  }
+  if (
+    typeof item.type !== 'string' ||
+    !CODEX_GENERATION_PAUSE_ITEM_TYPES.has(item.type)
+  ) {
+    return;
+  }
+  if (typeof item.id !== 'string' || item.id.length === 0) {
+    rt.generationTimingReliable = false;
+    return;
+  }
+  const pauseId = `item:${item.id}`;
+  if (phase === 'started') {
+    pauseCodexGeneration(rt, turnId, pauseId, receivedAt);
+    return;
+  }
+  if (phase !== 'completed') return;
+  resumeCodexGeneration(rt, turnId, pauseId, receivedAt);
 }
 
 // ── 上下文 ────────────────────────────────────────────────────────────────────
@@ -129,6 +350,14 @@ export interface CodexTranslateContext {
    * 会话是否已关), 而错误脱敏与 error 事件构造在 translator。缺省 = 不接管。
    */
   tryTakeOverOverload?: () => { attempt: number; maxAttempts: number } | null;
+  /**
+   * daemon 已耗尽内部 retry budget 的终态 429 接管钩子。agent 层负责严格分类、
+   * turn 归属、产出守卫与预算；translator 只编码独立 reason / 进度契约。
+   */
+  tryTakeOverTerminalRateLimit?: () => {
+    attempt: number;
+    maxAttempts: number;
+  } | null;
 }
 
 // ── 主入口: 三个 item.* notification 的统一分发 ────────────────────────────────
@@ -154,6 +383,12 @@ export function translateItemNotification(
     ctx.log.warn('item missing type field', { phase, itemKeys: Object.keys(item) });
     return;
   }
+  noteCodexGenerationBoundary(
+    ctx.rt,
+    phase,
+    item as { id?: unknown; type?: unknown },
+    notification as { turnId?: unknown },
+  );
 
   switch (itemType) {
     case 'agentMessage':
@@ -191,6 +426,9 @@ export function translateItemNotification(
       return;
     case 'contextCompaction':
       handleContextCompaction(phase, item as unknown as ContextCompactionItem, queue, ctx);
+      return;
+    case 'subAgentActivity':
+      handleSubAgentActivity(phase, item as unknown as SubAgentActivityItem, queue, ctx);
       return;
     // 以下 v2 item 类型故意不消费 (无 UI 对应概念, 不是 bug):
     //   userMessage:  SDK echo 用户输入, claude-code translator 也只挑 tool_result 包装的
@@ -334,6 +572,15 @@ export function translateErrorNotification(
   // 驱动)。不带的话 renderer 只能回退到文案匹配 —— codex 改一次措辞, 用户就会在整段
   // 重试窗口里看到英文原文, 也就是本次改动要消除的那个依赖在 UI 侧原样残留。
   const overloadReason = isCapacityError ? { reason: UPSTREAM_OVERLOAD_REASON } : {};
+  // 上下文超限同样带稳定 reason key(#1429): 原样重试必然再撞同一个 4xx, renderer 靠
+  // 它隐藏 Retry 并给出压缩 / 新开会话入口。结构化 contextWindowExceeded 优先，
+  // 文案匹配仅兼容旧版 app-server；与 capacity 互斥时 overload 优先 —— 它还驱动
+  // 退避重投接管，语义更具体。
+  const contextOverflowReason =
+    !isCapacityError &&
+    (errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(safeMessage))
+      ? { reason: CONTEXT_OVERFLOW_REASON }
+      : {};
   if (!params.willRetry && isCapacityError) {
     const progress = ctx.tryTakeOverOverload?.();
     if (progress) {
@@ -351,12 +598,34 @@ export function translateErrorNotification(
       return;
     }
   }
+  if (!params.willRetry && !isCapacityError) {
+    const progress = ctx.tryTakeOverTerminalRateLimit?.();
+    if (progress) {
+      queue.push({
+        type: 'error',
+        data: {
+          ...safeErrorData,
+          reason: TERMINAL_RATE_LIMIT_RETRY_REASON,
+          message: formatTerminalRateLimitRetryMessage(
+            safeMessage,
+            progress.attempt,
+            progress.maxAttempts,
+          ),
+          isTerminal: false,
+          willRetry: true,
+        },
+        source: 'codex',
+      });
+      return;
+    }
+  }
   ctx.log.warn('codex turn error', { message: safeMessage, willRetry: params.willRetry, isAuthMissing, threadId: params.threadId, turnId: params.turnId });
   queue.push({
     type: 'error',
     data: {
       ...safeErrorData,
       ...overloadReason,
+      ...contextOverflowReason,
       isTerminal: !params.willRetry,
       willRetry: params.willRetry,
     },
@@ -624,8 +893,8 @@ interface ContextCompactionItem {
 }
 
 // ── agentMessage → text {isFinal} ───────────────────────────────────────────
-// item.started / item.updated 出 delta (isFinal=false), item.completed 出 final 全文。
-// Phase 1 没订阅 item/agentMessage/delta, 增量靠 item.updated 的 text 全量字段算 diff。
+// 专用 item/agentMessage/delta 出增量(isFinal=false),item.started / item.updated 的全文
+// 快照作为兼容兜底并负责补齐漏帧,item.completed 出 final 全文校准。
 
 /**
  * Codex 正文里的内部文件引用标记 `:codex-file-citation{path="..." ...}`——对用户
@@ -741,20 +1010,112 @@ function findUnfinishedCitationOpen(text: string): number {
  * 规范形(见 localDb worker 的 canonicalizeCodexCitations)。
  */
 export function finalizeCodexCitationText(text: string): string {
-  const openAt = findUnfinishedCitationOpen(text);
-  return normalizeCodexFileCitations(openAt === -1 ? text : text.slice(0, openAt));
+  const fileOpenAt = findUnfinishedCitationOpen(text);
+  const fileStableEnd = fileOpenAt === -1 ? text.length : fileOpenAt;
+  const stableEnd = Math.min(fileStableEnd, stableInternalWebCitationBoundary(text));
+  return stripInternalWebCitations(normalizeCodexFileCitations(text.slice(0, stableEnd)));
 }
 
 export function stableCitationBoundary(text: string): number {
   const open = findUnfinishedCitationOpen(text);
   if (open !== -1) {
-    return open;
+    return Math.min(open, stableInternalWebCitationBoundary(text));
   }
   const maxProbe = Math.min(text.length, CODEX_FILE_CITATION_OPEN.length - 1);
   for (let k = maxProbe; k > 0; k -= 1) {
-    if (text.endsWith(CODEX_FILE_CITATION_OPEN.slice(0, k))) return text.length - k;
+    if (text.endsWith(CODEX_FILE_CITATION_OPEN.slice(0, k))) {
+      return Math.min(text.length - k, stableInternalWebCitationBoundary(text));
+    }
   }
-  return text.length;
+  return stableInternalWebCitationBoundary(text);
+}
+
+function emitAgentMessageProgress(
+  itemId: string,
+  rawText: string,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): void {
+  const previousRawText = ctx.rt.itemRawText.get(itemId) ?? '';
+  // AgentEvent.text 是只能追加的协议。快照和专用 delta 出现乱序或
+  // 分叉时不能把另一个版本的尾巴拼进已发正文；completed 的全文会做终态校准。
+  if (!rawText.startsWith(previousRawText)) return;
+
+  // itemTextLen 记录的是**归一化后已发出**的长度:citation 替换会改变文本长度,
+  // diff 必须在归一化空间里做,不能混用原文长度。
+  const prevLen = ctx.rt.itemTextLen.get(itemId) ?? 0;
+  const emitted = stripInternalWebCitations(
+    normalizeCodexFileCitations(rawText.slice(0, stableCitationBoundary(rawText))),
+  );
+  const delta = emitted.slice(prevLen);
+  ctx.rt.itemRawText.set(itemId, rawText);
+  ctx.rt.itemTextLen.set(itemId, emitted.length);
+  if (delta.length === 0) return;
+  queue.push({
+    type: 'text',
+    data: { text: delta, isFinal: false },
+    source: 'codex',
+  });
+}
+
+function reconcileAgentMessageProgress(
+  itemId: string,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): void {
+  const deltaText = ctx.rt.itemDeltaText.get(itemId);
+  const snapshotText = ctx.rt.itemSnapshotText.get(itemId);
+  const currentText = ctx.rt.itemRawText.get(itemId) ?? '';
+
+  let candidate: string | undefined;
+  if (deltaText === undefined) {
+    candidate = snapshotText;
+  } else if (snapshotText === undefined) {
+    candidate = deltaText;
+  } else if (deltaText.startsWith(snapshotText)) {
+    candidate = deltaText;
+  } else if (snapshotText.startsWith(deltaText)) {
+    candidate = snapshotText;
+  } else if (deltaText.startsWith(currentText)) {
+    // 两个源分叉后锁定仍能延续已发前缀的专用 delta，不混拼快照尾巴。
+    candidate = deltaText;
+  } else if (snapshotText.startsWith(currentText)) {
+    // 快照先到时同理锁定快照流；delta 追平后会自动恢复共识。
+    candidate = snapshotText;
+  }
+
+  if (candidate !== undefined) emitAgentMessageProgress(itemId, candidate, queue, ctx);
+}
+
+/**
+ * Codex 专用正文 delta。专用流与 item/updated 快照共用同一份已发长度，二者同时
+ * 出现时不会重复；快照缺席时也能保持与 Claude Code / Pi 相同的实时正文契约。
+ */
+export function translateAgentMessageDelta(
+  params: AgentMessageDeltaNotification['params'],
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): void {
+  if (!params.delta) return;
+  const currentText = ctx.rt.itemRawText.get(params.itemId) ?? '';
+  const previousDeltaText = ctx.rt.itemDeltaText.get(params.itemId) ?? '';
+  let rawText: string;
+  if (currentText.startsWith(previousDeltaText) && currentText.length > previousDeltaText.length) {
+    // 快照已经比 dedicated delta 游标超前：新 chunk 可能是延迟重放的补齐段，
+    // 也可能是漏帧之后的真新文本。先消费与快照 gap 的重叠，再把剩余部分追加。
+    const snapshotGap = currentText.slice(previousDeltaText.length);
+    if (snapshotGap.startsWith(params.delta)) {
+      rawText = previousDeltaText + params.delta;
+    } else if (params.delta.startsWith(snapshotGap)) {
+      rawText = currentText + params.delta.slice(snapshotGap.length);
+    } else {
+      rawText = currentText + params.delta;
+    }
+  } else {
+    rawText = previousDeltaText + params.delta;
+  }
+  ctx.rt.itemDeltaText.set(params.itemId, rawText);
+  reconcileAgentMessageProgress(params.itemId, queue, ctx);
 }
 
 function handleAgentMessage(
@@ -764,12 +1125,12 @@ function handleAgentMessage(
   ctx: CodexTranslateContext,
 ): void {
   const rawText = item.text ?? '';
-  // itemTextLen 记录的是**归一化后已发出**的长度:citation 替换会改变文本长度,
-  // diff 必须在归一化空间里做,不能混用原文长度。
-  const prevLen = ctx.rt.itemTextLen.get(item.id) ?? 0;
 
   if (phase === 'completed') {
     ctx.rt.itemTextLen.delete(item.id);
+    ctx.rt.itemRawText.delete(item.id);
+    ctx.rt.itemDeltaText.delete(item.id);
+    ctx.rt.itemSnapshotText.delete(item.id);
     // 既有契约:completed 只出 final 全文、不补 delta(desktop codexTranslator.test
     // 钉死 3 事件形状)。boundary 按住的尾段与「completed 才首次出现的文本」同一待遇:
     // 不进 delta 流,由 final 全文兜底(main 落库层 onAssistantTextEvent 的 isFinal
@@ -780,21 +1141,14 @@ function handleAgentMessage(
     // finalizeCodexCitationText 是与历史导入共用的统一口径。
     queue.push({
       type: 'text',
-      data: { text: finalizeCodexCitationText(rawText), isFinal: true },
+      data: { text: finalizeCodexCitationText(rawText), isFinal: true, isFullText: true },
       source: 'codex',
     });
     return;
   }
 
-  const emitted = normalizeCodexFileCitations(rawText.slice(0, stableCitationBoundary(rawText)));
-  const delta = emitted.slice(prevLen);
-  ctx.rt.itemTextLen.set(item.id, emitted.length);
-  if (delta.length === 0) return;
-  queue.push({
-    type: 'text',
-    data: { text: delta, isFinal: false },
-    source: 'codex',
-  });
+  ctx.rt.itemSnapshotText.set(item.id, rawText);
+  reconcileAgentMessageProgress(item.id, queue, ctx);
 }
 
 // ── reasoning → thinking {stage} ─────────────────────────────────────────────
@@ -1484,6 +1838,18 @@ function handleCollabAgentToolCall(
   }
 
   // completed
+  // Some app-server versions omit item/started and send only the terminal
+  // collab snapshot. Reconstruct the tool-use boundary before the result so
+  // the late background item still has a renderer/persistence anchor.
+  const hadToolUse = ctx.rt.emittedToolUse.has(item.id);
+  if (!hadToolUse) {
+    ctx.rt.emittedToolUse.add(item.id);
+    queue.push({
+      type: 'tool_use',
+      data: { toolUseId: item.id, toolName, input },
+      source: 'codex',
+    });
+  }
   ctx.rt.emittedToolUse.delete(item.id);
   const isError = item.status === 'failed';
   const fullText = formatCodexAgentStatesSummary(item.agentsStates) ?? (isError ? 'failed' : item.status);
@@ -1499,7 +1865,154 @@ function handleCollabAgentToolCall(
   });
   queue.push({
     type: 'agent_task_update',
-    data: toCodexTaskUpdate(item, isError ? 'failed' : 'completed', fullText),
+    data: toCodexTaskUpdate(
+      item,
+      isError ? 'failed' : 'completed',
+      fullText,
+      !hadToolUse,
+    ),
+    source: 'codex',
+  });
+}
+
+// ── subAgentActivity → tool_use + agent_task_update(spawn 可见性) ───────────
+// codex 0.145 multi-agent v2:spawn_agent 不发 collabAgentToolCall,只发瞬时
+// SubAgentActivityItem(kind=started/interacted/interrupted,无完成事件——子代理
+// 的等待与收口由后续 wait_agent 的 collab 卡承载)。不处理它,子代理启动在 UI
+// 完全不可见(实测:探索型任务 spawn 3 个子代理,等待窗口内聊天流零卡片)。
+// started 渲染成子代理卡并置 running:卡片本体与 Claude 子代理共用
+// AgentTaskCard,后续 tokens / 工具调用数 / 耗时与终态由 codex/index.ts 消费子
+// 线程 notification 后按同一 taskId 增量更新(见 descendantNotification)。
+// interacted 是 followup/send 调用的伴生事件、interrupted 由 interrupt 调用自身
+// 承载,均显式静默不再落 unhandled 告警。协议只给 id/kind/agentThreadId/
+// agentPath,没有 prompt/model/effort(上游 main 已改为 spawn 直发
+// collabAgentToolCall 富卡,vendored codex 升级后自动走上面
+// handleCollabAgentToolCall,本函数届时按 id 去重自然让位)。
+
+interface SubAgentActivityItem {
+  type: 'subAgentActivity';
+  id: string;
+  kind: string;
+  agentThreadId?: string;
+  agentPath?: string;
+  /** Newer Codex builds may include the selected child model on the activity. */
+  model?: string;
+}
+
+/**
+ * 从 spawn 类 item 抽出「子线程 id → 子代理卡 taskId」的登记信息,双轨通用:
+ * - V2(0.145):`subAgentActivity` kind=started,带 agentThreadId
+ * - V1 与上游 main:`collabAgentToolCall` 的 spawn 工具,派发目标在 receiverThreadIds
+ *
+ * 放在 translator 是因为 item 形状知识归它所有;codex/index.ts 只消费结果,不再
+ * 自己 narrow item 字段。返回 null = 不是 spawn(调用方直接忽略)。
+ */
+export function readCodexSubagentSpawnRegistration(item: unknown): {
+  taskId: string;
+  childThreadIds: string[];
+  agentPath?: string;
+  model?: string;
+  /**
+   * spawn **本身**收口为失败(V1 `collabAgentToolCall.status === 'failed'`)。
+   * translator 此时已推过 failed 帧,聚合器据此不得再用快照(仍是 running)盖回去。
+   * V2 的 subAgentActivity 没有 status 字段,恒为 undefined。
+   */
+  failed?: boolean;
+} | null {
+  if (!item || typeof item !== 'object') return null;
+  const record = item as Record<string, unknown>;
+  const taskId = typeof record.id === 'string' && record.id ? record.id : null;
+  if (!taskId) return null;
+
+  if (record.type === 'subAgentActivity') {
+    if (record.kind !== 'started') return null;
+    const childThreadId = typeof record.agentThreadId === 'string' ? record.agentThreadId : '';
+    if (!childThreadId) return null;
+    return {
+      taskId,
+      childThreadIds: [childThreadId],
+      ...(typeof record.agentPath === 'string' && record.agentPath ? { agentPath: record.agentPath } : {}),
+      ...(typeof record.model === 'string' && record.model ? { model: record.model } : {}),
+    };
+  }
+
+  if (record.type === 'collabAgentToolCall') {
+    // 工具名两轨拼写不同(V1 spawnAgent / 上游 main spawn),都以 spawn 前缀判定。
+    const tool = typeof record.tool === 'string' ? record.tool : '';
+    if (!tool.toLowerCase().startsWith('spawn')) return null;
+    const receivers = Array.isArray(record.receiverThreadIds)
+      ? record.receiverThreadIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+    if (receivers.length === 0) return null;
+    return {
+      taskId,
+      childThreadIds: receivers,
+      ...(typeof record.model === 'string' && record.model ? { model: record.model } : {}),
+      ...(record.status === 'failed' ? { failed: true } : {}),
+    };
+  }
+
+  return null;
+}
+
+function handleSubAgentActivity(
+  phase: ItemPhase,
+  item: SubAgentActivityItem,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): void {
+  if (item.kind !== 'started' || phase === 'updated') return;
+  // 瞬时 item:started/completed phase 各到一次,按 item.id 去重只发一张卡;
+  // completed 到达即清 Set(与 collab handler 同规——不清会随 spawn 次数无限增长)。
+  if (ctx.rt.emittedToolUse.has(item.id)) {
+    if (phase === 'completed') ctx.rt.emittedToolUse.delete(item.id);
+    return;
+  }
+  // started phase 登记等 completed 清理;只收到 completed(防御)时无后续 phase,不登记。
+  if (phase === 'started') ctx.rt.emittedToolUse.add(item.id);
+  const agentPath = typeof item.agentPath === 'string' ? item.agentPath : undefined;
+  const model = typeof item.model === 'string' && item.model ? item.model : undefined;
+  const input: Record<string, unknown> = {};
+  if (agentPath) input.name = agentPath;
+  if (item.agentThreadId) input.agentThreadId = item.agentThreadId;
+  if (model) input.model = model;
+  queue.push({
+    type: 'tool_use',
+    data: { toolUseId: item.id, toolName: 'collab:spawn', input },
+    source: 'codex',
+  });
+  // fullText 只放结构化数据(agentPath 原文):用户可见的「已启动」句子由 renderer
+  // 按 locale 组装(AgentTaskCard 以 result===input.name 识别本卡),translator 不
+  // 合成任何语言的句子——否则英文回执会持久化进历史(review r3698558356)。
+  queue.push({
+    type: 'tool_result_full',
+    data: { toolUseId: item.id, fullText: agentPath ?? '', isError: false },
+    source: 'codex',
+  });
+  queue.push({
+    type: 'tool_result',
+    data: { summary: 'started', toolUseIds: [item.id] },
+    source: 'codex',
+  });
+  // 卡片置 running:tool_result 已就地收口(不留悬空工具调用),而 AgentTaskCard 的
+  // status 以 update 优先,子代理仍显示为运行中,直到子线程 turn 收口把它翻成终态。
+  queue.push({
+    type: 'agent_task_update',
+    data: {
+      provider: 'codex',
+      taskId: item.id,
+      parentToolUseId: item.id,
+      status: 'running',
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: item.id,
+        parentToolUseId: item.id,
+        ...(item.agentThreadId ? { providerRunIds: [item.agentThreadId] } : {}),
+      },
+      ...(item.agentThreadId ? { receiverThreadIds: [item.agentThreadId] } : {}),
+      ...(agentPath ? { title: agentPath } : {}),
+      ...(model ? { model } : {}),
+    },
     source: 'codex',
   });
 }
@@ -1508,7 +2021,19 @@ function toCodexTaskUpdate(
   item: CollabAgentToolCallItem,
   status: AgentTaskStatus,
   summary?: string,
+  completedOnly = false,
 ): AgentTaskUpdateEventData {
+  const isSpawn = item.tool.toLowerCase().startsWith('spawn');
+  const subagentObservation = isSpawn && (status !== 'completed' || completedOnly)
+    ? {
+        kind: status === 'running' || completedOnly ? 'spawn' as const : 'terminal' as const,
+        logicalSubagentId: item.id,
+        parentToolUseId: item.id,
+        ...(status === 'running' || completedOnly
+          ? { providerRunIds: item.receiverThreadIds }
+          : {}),
+      }
+    : undefined;
   return {
     provider: 'codex',
     taskId: item.id,
@@ -1520,6 +2045,7 @@ function toCodexTaskUpdate(
     ...(item.model ? { model: item.model } : {}),
     ...(item.reasoningEffort ? { reasoningEffort: item.reasoningEffort } : {}),
     receiverThreadIds: item.receiverThreadIds,
+    ...(subagentObservation ? { subagentObservation } : {}),
     raw: { tool: item.tool, agentsStates: item.agentsStates },
   };
 }

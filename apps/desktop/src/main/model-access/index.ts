@@ -11,13 +11,8 @@ import {
   finalizeCodexAfterAuthModeChange,
   cancelCodexAuthModeChange,
 } from '../maker-host/index.js';
-import { getActiveCatalog, setXdGatewayModels } from '../maker-host/active-catalog.js';
-import { isDev } from '../manifestService.js';
-import { overlayModelRegistryMeta } from './devMetaOverlay.js';
-import {
-  replaceGatewayModelPricing,
-  trackGatewayModelPricingSync,
-} from '../usage/modelPricing.js';
+import { setXdGatewayModels } from '../maker-host/active-catalog.js';
+import { replaceGatewayModelPricing, trackGatewayModelPricingSync } from '../usage/modelPricing.js';
 import { isPricedGatewayModel } from '../../shared/modelPriceQuote.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
@@ -35,6 +30,7 @@ import {
 import {
   buildModelsSyncRequest,
   ensureCredentialsReadyForModelsRefresh,
+  parseModelsSyncPayload,
   withModelsSyncOverallDeadline,
   waitForModelsSyncRefresh,
 } from './modelsSyncRefresh.js';
@@ -128,7 +124,7 @@ function broadcastStatus(status: ModelAccessStatus): void {
   }
 }
 
-// ─── XD 网关模型目录同步(网关为准,目录仅补元数据)────────────────────
+// ─── XD 网关模型目录同步(`/models` 是模型、能力与价格的唯一事实源)─────────
 // 凭据同步成功后从 model-access-server 拉 GET /models(AIGateway /model-groups
 // 的 mode=chat 投影),整体重建 xd 供应商的模型列表(active-catalog
 // setXdGatewayModels)。拉取失败保留最后一次完整成功快照；成功空列表同时清空模型和价格。
@@ -150,12 +146,8 @@ let authGeneration = 0;
 let lastAuthUserId: string | null = null;
 let lastAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 
-function applyGatewayModels(
-  models: ModelAccessGatewayModel[],
-  authenticatedUserId?: string,
-): void {
-  // 同一次 /models 响应先建立 provider-scoped 价格投影，再做仅影响展示元数据的
-  // dev overlay。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
+function applyGatewayModels(models: ModelAccessGatewayModel[], authenticatedUserId?: string): void {
+  // 同一次 /models 响应建立 XD 模型与价格投影。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
   // 因而保留上一份完整成功快照。
   const pricing = replaceGatewayModelPricing(models, authenticatedUserId);
   // 分母只算会产生报价的条目:免费/无价条目按设计不出报价,不该把健康目录
@@ -168,18 +160,12 @@ function applyGatewayModels(
       `xd gateway pricing quotes cover ${quoteCount}/${pricedCount} priced models (${models.length} total)`,
     );
   }
-  // dev:本地统一 registry 的 XD 路由覆盖服务端下发的策展元数据;只覆盖同 id,
-  // 清单成员资格与价格仍以 Gateway 为准。packaged 不走此分支。
-  const overlaid =
-    isDev() && models.length > 0
-      ? overlayModelRegistryMeta(models, getActiveCatalog().modelRegistry, log)
-      : models;
   // 能力字段不在客户端二次转换 —— Model Access Server 已把 Gateway 的
   // contextLength / supportedEndpoints / reasoning / supportsServiceTier / architecture
   // 一次归一化成 contextWindow / agents / efforts / supportsFastMode / modalities,
   // 同一含义只下发一个字段。这里直接用下发值，唯一事实源在服务端。
   // active-catalog 统一收口会原地刷新 Maker capabilities，再广播同一 revision。
-  setXdGatewayModels(overlaid);
+  setXdGatewayModels(models);
 }
 
 async function runModelsSync(
@@ -187,17 +173,20 @@ async function runModelsSync(
   authenticatedUserId: string,
   myAttempt: number,
 ): Promise<void> {
-  let payload: { models: ModelAccessGatewayModel[] };
+  let models: ModelAccessGatewayModel[];
   try {
-    const request = buildModelsSyncRequest(() =>
-      getClientEndpoint('modelAccessApiBaseUrl'),
+    const request = buildModelsSyncRequest(() => getClientEndpoint('modelAccessApiBaseUrl'));
+    const payload = await withModelsSyncOverallDeadline(
+      serverApiFetch<unknown>(request.path, request.options),
     );
-    payload = await withModelsSyncOverallDeadline(
-      serverApiFetch<{ models: ModelAccessGatewayModel[] }>(
-        request.path,
-        request.options,
-      ),
-    );
+    const parsed = parseModelsSyncPayload(payload);
+    if (!parsed.ok) {
+      log.warn('xd gateway models response rejected (keeping last valid list)', {
+        error: parsed.error,
+      });
+      return;
+    }
+    models = parsed.models;
   } catch (err) {
     log.warn('xd gateway models fetch failed (keeping last valid list)', {
       error: err instanceof Error ? err.message : String(err),
@@ -205,8 +194,6 @@ async function runModelsSync(
     return;
   }
   if (myGen !== authGeneration) return; // 响应归属旧账号,丢弃
-  const models = (payload.models ?? [])
-    .filter((m) => typeof m?.id === 'string' && m.id);
   if (models.length === 0) {
     log.warn('xd gateway models fetch returned empty list; clearing current list');
     applyGatewayModels([], authenticatedUserId);

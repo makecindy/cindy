@@ -1,3 +1,5 @@
+import { piEditReplacements } from './toolUseDescriptor.js';
+
 export type PayloadKind = 'text' | 'diff' | 'media' | 'mermaid' | 'file';
 
 export interface PayloadToolDiffLike {
@@ -216,6 +218,14 @@ export function formatPayloadToolUseSummary(toolName: string, input: unknown): s
     Bash: ['command'],
     Glob: ['pattern'],
     Grep: ['pattern'],
+    // pi 内置工具:名字全小写、文件参数为 path(见 toolUseDescriptor.ts 数据来源约定)。
+    read: ['path'],
+    edit: ['path'],
+    write: ['path'],
+    ls: ['path'],
+    bash: ['command'],
+    grep: ['pattern'],
+    find: ['pattern'],
   };
   const keys = keyParamMap[toolName];
   if (!keys) return `${toolName}()`;
@@ -240,9 +250,20 @@ export function buildPayloadToolDiff(toolName: string, input: unknown): PayloadT
     const newString = typeof inp.new_string === 'string' ? inp.new_string : '';
     return createPayloadToolDiff(filePath, [{ key: 'edit:0', oldString, newString }]);
   }
-  if (toolName === 'Write') {
+  if (toolName === 'Write' || toolName === 'write') {
     const newString = typeof inp.content === 'string' ? inp.content : '';
     return createPayloadToolDiff(filePath, [{ key: 'write:0', oldString: '', newString }]);
+  }
+  // pi edit:两种入参形态由 piEditReplacements 统一归一化(edits[] + legacy 顶层单段)。
+  if (toolName === 'edit') {
+    const replacements = piEditReplacements(inp);
+    return createPayloadToolDiff(filePath, replacements.map((edit, index) => ({
+      key: `edit:${index}`,
+      oldString: edit.oldText,
+      newString: edit.newText,
+      // 单段时不标 1/1 —— 顶层 legacy 形态就是单段,标号只是噪音。
+      ...(replacements.length > 1 ? { label: `Edit ${index + 1}/${replacements.length}` } : {}),
+    })));
   }
   if (toolName === 'MultiEdit') {
     const edits = Array.isArray(inp.edits) ? inp.edits : [];

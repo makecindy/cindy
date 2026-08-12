@@ -105,7 +105,7 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   const reason = typeof signals.reason === 'string' ? signals.reason : '';
   // 例外先行：`upstream-overload` 是**已归类为可重试**的 reason，它本身就是比文案更可靠的
   // 权威判据（结构化优先于文案，与 overload-error.ts 的论证同源），直接放行、不再看文案。
-  if (reason === UPSTREAM_OVERLOAD_REASON) return true;
+  if (reason === UPSTREAM_OVERLOAD_REASON || reason === 'codex_reconnect_stalled') return true;
   if (reason.length > 0) return false;
   if (isStreamTruncationError(signals)) return true;
   const message = signals.message;
@@ -164,18 +164,22 @@ export function isSubstantiveProgressEvent(event: {
 /**
  * 一次中断事件里最多连续自动重连几次。
  *
- * 额度模型是**连续失败计数**，不是「每条人话买 N 次」：
+ * 额度模型是「连续失败上限 + 人工介入周期硬上限」两层：
  *  - 连续 5 次重连都没能让模型产出任何东西 → 判定真的连不上，停下等人。
  *  - 中间只要有一次**模型有实质产出**（assistant 文本 / 工具调用），计数归零，
  *    后面又可以再来 5 次。
- *  - **会话累计不设上限**：只要任务还在推进，就可以一直自愈；累计次数只用于展示
- *    （让用户看出这个会话的网络有多糟），不做限制。
+ *  - 但同一次人工介入之后最多自动重连 10 次；只有真人再发消息、手动 Retry 或重置
+ *    会话才重新充值。这样「每次只产出一点又断」也不可能无止境循环。
+ *  - 会话累计仍只用于展示，不直接做限制；真正的硬边界是本次人工介入周期。
  *
  * 为什么这样比「按人话充值」对：判据落在「是否在推进」而不是「人说了几句话」。长
  * 任务跑一小时不说话时不该被扣光额度；而真正连不上时，5 次退避（约 3+6+12+20+20
  * ≈ 61 秒）已经足够穿过瞬时抖动，再试下去只是烧钱。
  */
 export const INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS = 5;
+
+/** 一次真人介入之后最多允许多少次自动重连；有模型产出也不会重置。 */
+export const INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS = 10;
 
 /** 首次续跑前的退避基数。 */
 const RESUME_BACKOFF_BASE_MS = 3_000;
@@ -218,11 +222,22 @@ export interface InterruptedTurnResumeProgress {
   maxAttempts: number;
   /** 本会话累计自动重连次数（只增，不设上限，仅用于展示）。 */
   sessionTotal: number;
+  /** 当前自动重连 attempt 的进程内单调 token；只用于异步生命周期归属，不展示。 */
+  attemptToken: number;
+  /** 本次人工介入周期内第几次自动重连。 */
+  episodeAttempt: number;
+  /** 本次人工介入周期的硬上限。 */
+  maxEpisodeAttempts: number;
 }
 
 export type InterruptedTurnResumeDecision =
   | ({ action: 'resume'; delayMs: number } & InterruptedTurnResumeProgress)
-  | { action: 'exhausted'; consecutiveAttempts: number }
+  | {
+      action: 'exhausted';
+      reason: 'consecutive' | 'episode';
+      consecutiveAttempts: number;
+      episodeAttempts: number;
+    }
   | { action: 'skip'; why: 'disabled' | 'superseded' | 'pending' };
 
 interface GuardLogger {
@@ -233,11 +248,16 @@ interface GuardLogger {
 interface SessionGuardState {
   /** 本轮连续重连次数（模型有产出 / 人工介入即归零）。 */
   consecutiveAttempts: number;
+  /** 自上一次真人介入起的自动重连总数；模型有产出也不归零。 */
+  episodeAttempts: number;
   /** 会话累计自动重连次数（只增，仅展示）。 */
   sessionTotalResumes: number;
   lastTurnStartAt: number;
   lastUserSendAt: number;
-  pendingResume: boolean;
+  /** 最新获准 attempt；直到真人介入、会话重置或更新 attempt 才失效。 */
+  currentAttemptToken: number | null;
+  /** 尚未被新 turn 接走或明确失败的 attempt。 */
+  pendingAttemptToken: number | null;
   exhaustedWarned: boolean;
 }
 
@@ -254,9 +274,9 @@ export interface InterruptedTurnAutoResumeGuardDeps {
 /**
  * 中断自动续跑的决策器。
  *
- * 与 `SilentStopAutoResumeGuard` 保持相似形状（pendingResume 去重、陈旧保护、
- * 可注入依赖）好让两处一起读，但额度语义完全不同：这里是**连续失败计数 + 有进展
- * 就重置**，会话累计不限（见 `INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS`）。
+ * 与 `SilentStopAutoResumeGuard` 保持相似形状（pending attempt 去重、陈旧保护、
+ * 可注入依赖）好让两处一起读，但额度语义完全不同：这里同时限制连续失败与一次
+ * 人工介入周期的总次数，后者保证自动续跑绝对有限。
  *
  * 纯内存状态（app 重启即复位），无 IO；全部依赖可注入，便于单测。
  */
@@ -274,10 +294,12 @@ export class InterruptedTurnAutoResumeGuard {
     if (!s) {
       s = {
         consecutiveAttempts: 0,
+        episodeAttempts: 0,
         sessionTotalResumes: 0,
         lastTurnStartAt: 0,
         lastUserSendAt: 0,
-        pendingResume: false,
+        currentAttemptToken: null,
+        pendingAttemptToken: null,
         exhaustedWarned: false,
       };
       this.sessions.set(sessionId, s);
@@ -294,11 +316,20 @@ export class InterruptedTurnAutoResumeGuard {
    *
    * 热路径友好：O(1)、无 IO、无日志（每条 assistant 消息与每次工具调用都会调）。
    */
-  noteProgress(sessionId: string): void {
+  noteProgress(sessionId: string, attemptToken?: number): boolean {
     const s = this.sessions.get(sessionId);
-    if (!s || s.consecutiveAttempts === 0) return;
+    if (!s) return false;
+    // 显式 token 必须严格属于当前 attempt。真人发送 / clear 会把 current 清成 null；
+    // 这之后旧 turn 的迟到 text/tool 仍带旧 token，不能因为“当前没有 owner”就被接纳。
+    if (attemptToken !== undefined) {
+      if (s.currentAttemptToken !== attemptToken) return false;
+    } else if (s.currentAttemptToken !== null) {
+      return false;
+    }
+    if (s.consecutiveAttempts === 0) return true;
     s.consecutiveAttempts = 0;
     s.exhaustedWarned = false;
+    return true;
   }
 
   /**
@@ -309,23 +340,79 @@ export class InterruptedTurnAutoResumeGuard {
   noteUserSend(sessionId: string): void {
     const s = this.state(sessionId);
     s.consecutiveAttempts = 0;
+    s.episodeAttempts = 0;
+    s.currentAttemptToken = null;
+    s.pendingAttemptToken = null;
     s.exhaustedWarned = false;
     s.lastUserSendAt = this.now();
   }
 
-  /** 新 turn 开始。清 pendingResume，记录时间做陈旧判定。 */
-  noteTurnStarted(sessionId: string): void {
+  /**
+   * 新 turn 开始，记录时间做陈旧判定。
+   *
+   * 未携带 host token 的 status 可能只是 terminal error 之后补发的旧事件，不能清掉
+   * 已排期的自动续跑；生产事件转发会据 token 选择性清理，旧测试/其它显式调用保持
+   * 默认清 pending 的兼容语义。
+   */
+  noteTurnStarted(sessionId: string, opts?: { clearPending?: boolean }): void {
     const s = this.state(sessionId);
     s.lastTurnStartAt = this.now();
-    s.pendingResume = false;
+    if (opts?.clearPending === false) return;
+    s.pendingAttemptToken = null;
+  }
+
+  /**
+   * 自动续跑真正产生了属于自己的首个事件。
+   *
+   * 不能只依赖 status(isRunning=true)：Pi 进程退出、Claude 空响应等路径可能直接
+   * 发 terminal error。首个带 token 的事件就是 provider 已接受该 attempt 的最早
+   * 可靠边界；清 pending 后，下一次 terminal error 才能继续消耗预算，而旧 token
+   * 或真人接管后的迟到事件不会碰当前 attempt。
+   */
+  noteAttemptEvent(sessionId: string, attemptToken: number): boolean {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.currentAttemptToken !== attemptToken) return false;
+    if (s.pendingAttemptToken !== attemptToken) return false;
+    s.pendingAttemptToken = null;
+    s.lastTurnStartAt = this.now();
+    return true;
+  }
+
+  /**
+   * 自动续跑 turn 到达终态后退休 token owner。
+   *
+   * 首个 token 事件只证明 provider 已接受 attempt，不能在那里清 owner：同一个
+   * turn 后续的 text/tool_use 仍需用该 token 结算。终态之后再清 owner，既拒绝
+   * 迟到的旧 token 事件，也允许后续 scheduler/goal/Orca 等无 token 自动 turn 的
+   * 实质产出重置连续失败计数。
+   */
+  noteAttemptSettled(sessionId: string, attemptToken: number): boolean {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.currentAttemptToken !== attemptToken) return false;
+    s.currentAttemptToken = null;
+    s.pendingAttemptToken = null;
+    return true;
   }
 
   /**
    * 自动续跑投递失败时清 pending，避免卡死后续决策。
    * 计数不回退（安全方向：宁可少试一次，不可无限试）。
    */
-  noteResumeSendFailed(sessionId: string): void {
-    this.state(sessionId).pendingResume = false;
+  noteResumeSendFailed(sessionId: string, attemptToken: number): boolean {
+    const s = this.state(sessionId);
+    if (
+      s.currentAttemptToken !== attemptToken ||
+      s.pendingAttemptToken !== attemptToken
+    ) {
+      return false;
+    }
+    s.pendingAttemptToken = null;
+    // No provider event was observed for this attempt, so its token must not
+    // block substantive progress from a later untagged automatic turn
+    // (scheduler/goal/Orca). A stale tokened event is still rejected because
+    // currentAttemptToken is cleared here.
+    s.currentAttemptToken = null;
+    return true;
   }
 
   /**
@@ -335,10 +422,17 @@ export class InterruptedTurnAutoResumeGuard {
    */
   noteSessionReset(sessionId: string): void {
     const s = this.state(sessionId);
-    s.pendingResume = false;
+    s.currentAttemptToken = null;
+    s.pendingAttemptToken = null;
     s.consecutiveAttempts = 0;
+    s.episodeAttempts = 0;
     s.exhaustedWarned = false;
     s.lastUserSendAt = this.now();
+  }
+
+  /** 迟到的异步结果只能结算自己那一轮。 */
+  isCurrentAttempt(sessionId: string, attemptToken: number): boolean {
+    return this.sessions.get(sessionId)?.currentAttemptToken === attemptToken;
   }
 
   /**
@@ -354,7 +448,7 @@ export class InterruptedTurnAutoResumeGuard {
       this.deps.log.debug('interrupted-turn auto-resume disabled by kill switch', { sessionId });
       return { action: 'skip', why: 'disabled' };
     }
-    if (s.pendingResume) {
+    if (s.pendingAttemptToken !== null) {
       this.deps.log.debug('interrupted-turn duplicate error while resume pending', { sessionId });
       return { action: 'skip', why: 'pending' };
     }
@@ -367,33 +461,58 @@ export class InterruptedTurnAutoResumeGuard {
       });
       return { action: 'skip', why: 'superseded' };
     }
-    if (s.consecutiveAttempts >= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS) {
+    const exhaustedReason =
+      s.episodeAttempts >= INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS
+        ? 'episode'
+        : s.consecutiveAttempts >= INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS
+          ? 'consecutive'
+          : null;
+    if (exhaustedReason) {
       if (!s.exhaustedWarned) {
         s.exhaustedWarned = true;
         this.deps.log.warn(
-          'interrupted-turn auto-resume exhausted — no model output across consecutive attempts',
-          { sessionId, consecutiveAttempts: s.consecutiveAttempts },
+          'interrupted-turn auto-resume exhausted',
+          {
+            sessionId,
+            reason: exhaustedReason,
+            consecutiveAttempts: s.consecutiveAttempts,
+            episodeAttempts: s.episodeAttempts,
+          },
         );
       }
-      return { action: 'exhausted', consecutiveAttempts: s.consecutiveAttempts };
+      return {
+        action: 'exhausted',
+        reason: exhaustedReason,
+        consecutiveAttempts: s.consecutiveAttempts,
+        episodeAttempts: s.episodeAttempts,
+      };
     }
     s.consecutiveAttempts += 1;
+    s.episodeAttempts += 1;
     s.sessionTotalResumes += 1;
-    s.pendingResume = true;
+    const attemptToken = s.sessionTotalResumes;
+    s.currentAttemptToken = attemptToken;
+    s.pendingAttemptToken = attemptToken;
     const attempt = s.consecutiveAttempts;
     const delayMs = interruptedTurnResumeDelayMs(attempt, this.deps.random);
     this.deps.log.debug('interrupted-turn auto-resume granted', {
       sessionId,
       attempt,
       maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      episodeAttempt: s.episodeAttempts,
+      maxEpisodeAttempts: INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS,
       sessionTotal: s.sessionTotalResumes,
+      attemptToken,
       delayMs,
     });
     return {
       action: 'resume',
       attempt,
       maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
+      episodeAttempt: s.episodeAttempts,
+      maxEpisodeAttempts: INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS,
       sessionTotal: s.sessionTotalResumes,
+      attemptToken,
       delayMs,
     };
   }

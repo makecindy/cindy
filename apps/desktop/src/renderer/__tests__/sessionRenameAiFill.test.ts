@@ -51,6 +51,47 @@ async function renderAndGenerate(onCommit: (raw: string) => void, onCancel: () =
 }
 
 describe('SessionRenameInput AI rename fills edit state', () => {
+  it('uses a neutral pill editor and reserves blue focus for keyboard navigation', () => {
+    const onCommit = vi.fn();
+    const { container } = render(
+      createElement(SessionRenameInput, {
+        sessionId: 's1',
+        value: '旧标题',
+        onValueChange: () => {},
+        onCommit,
+        onCancel: () => {},
+      }),
+    );
+
+    const input = container.querySelector('input')!;
+    const button = container.querySelector('button')!;
+    expect(input.classList.contains('rounded-full')).toBe(true);
+    expect(input.classList.contains('border')).toBe(true);
+    expect(input.classList.contains('border-[var(--border-default)]')).toBe(true);
+    expect(input.classList.contains('border-[1.5px]')).toBe(false);
+    expect(input.classList.contains('border-[var(--focus-ring)]')).toBe(false);
+    expect(input.classList.contains('ring-2')).toBe(false);
+
+    // Tab 到 Magic 后 Shift+Tab 回到 input：这是键盘聚焦，应出现蓝色软环。
+    fireEvent.blur(input, { relatedTarget: button });
+    fireEvent.focus(button);
+    fireEvent.blur(button, { relatedTarget: input });
+    fireEvent.focus(input);
+    expect(input.classList.contains('ring-2')).toBe(true);
+    expect(input.classList.contains('ring-[var(--focus-ring-soft)]')).toBe(true);
+    expect(onCommit).not.toHaveBeenCalled();
+
+    // 鼠标在输入框或 Magic 上继续操作时隐去蓝环，保留中性描边。
+    fireEvent.pointerDown(button);
+    expect(input.classList.contains('ring-2')).toBe(false);
+
+    // Magic 保留原有的小圆角几何，只补键盘 focus-visible 反馈。
+    expect(button.classList.contains('rounded')).toBe(true);
+    expect(button.classList.contains('rounded-full')).toBe(false);
+    expect(button.classList.contains('focus-visible:ring-2')).toBe(true);
+    expect(button.classList.contains('focus-visible:ring-[var(--focus-ring-soft)]')).toBe(true);
+  });
+
   it('uses the active foreground for both rename controls on an active sidebar row', () => {
     const { container } = render(createElement(SessionRenameInput, {
       sessionId: 's1',
@@ -66,8 +107,43 @@ describe('SessionRenameInput AI rename fills edit state', () => {
     const button = container.querySelector('button')!;
     expect(input.classList.contains('text-sidebar-item-active-foreground')).toBe(true);
     expect(input.classList.contains('text-foreground')).toBe(false);
+    expect(input.classList.contains('border-[var(--border-default)]')).toBe(false);
+    expect(
+      input.classList.contains(
+        'border-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_28%,transparent)]',
+      ),
+    ).toBe(true);
     expect(button.classList.contains('text-sidebar-item-active-foreground')).toBe(true);
     expect(button.classList.contains('hover:text-sidebar-item-active-foreground')).toBe(true);
+  });
+
+  it('clears a stale pointer-focus marker when the input blurs before pointerup', () => {
+    const onCommit = vi.fn();
+    const { container } = render(
+      createElement(SessionRenameInput, {
+        sessionId: 's1',
+        value: '旧标题',
+        onValueChange: () => {},
+        onCommit,
+        onCancel: () => {},
+      }),
+    );
+
+    const input = container.querySelector('input')!;
+    const button = container.querySelector('button')!;
+
+    // 指针在 input 按下后拖出，pointerup 不再落回 input；Tab 到 Magic 时的 blur
+    // 必须清掉该标记，Shift+Tab 回来仍应识别为键盘聚焦并显示蓝环。
+    fireEvent.pointerDown(input);
+    fireEvent.blur(input, { relatedTarget: button });
+    fireEvent.focus(button);
+    fireEvent.pointerUp(button);
+    fireEvent.blur(button, { relatedTarget: input });
+    fireEvent.focus(input);
+
+    expect(input.classList.contains('ring-2')).toBe(true);
+    expect(input.classList.contains('ring-[var(--focus-ring-soft)]')).toBe(true);
+    expect(onCommit).not.toHaveBeenCalled();
   });
 
   it('generated title fills the input without committing; Enter commits it', async () => {

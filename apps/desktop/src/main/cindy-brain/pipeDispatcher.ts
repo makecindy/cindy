@@ -48,13 +48,27 @@ export interface PipeDispatcherDeps {
   };
 }
 
+interface PendingBindingClaim {
+  callerTool: string;
+  requestKey: string;
+  attempts: number;
+  active: boolean;
+  consumed: boolean;
+}
+
 interface PendingCall {
   ghostId: string;
   tool: string;
+  /** 宿主能力按用途绑定，允许同请求一次受控重试，禁止换参或无限消费。 */
+  claimedBindings: Map<string, PendingBindingClaim>;
   resolve: (result: GhostToolCallResult) => void;
   timer: ReturnType<typeof setTimeout> | undefined;
   /** 派发时刻(续命天花板从这里起算)。 */
   startedAt: number;
+  /** 本次调用的基础超时档；默认沿用全局档，宿主 UI 查询可显式收短。 */
+  baseTimeoutMs: number;
+  /** 显式短超时是绝对窗口，不接受 hold / tool-progress 续命。 */
+  timeoutExtensionsAllowed: boolean;
   /** 当前生效的超时时刻(hold / 心跳只延不缩,release 才收)。 */
   deadlineAt: number;
   /** 在途代办 hold 计数(同一卷可并发多单代办,全部收工才收窗)。 */
@@ -111,6 +125,13 @@ export class GhostPipeDispatcher {
     return this.pending.size;
   }
 
+  hasPendingCallsFor(ghostId: string): boolean {
+    for (const entry of this.pending.values()) {
+      if (entry.ghostId === ghostId) return true;
+    }
+    return false;
+  }
+
   /**
    * 派活主入口(ghost 总机的 callGhostTool 回调)。
    * 永不 reject——一切失败都折叠成结构化 GhostToolCallResult。
@@ -124,6 +145,8 @@ export class GhostPipeDispatcher {
      * callId,故由它铸好传入;缺省自铸,老调用方零改动)。
      */
     callId?: string;
+    /** 仅供可信宿主内部调用方收短等待时间；插件不能控制该值。 */
+    timeoutMs?: number;
   }): Promise<GhostToolCallResult> {
     const { ghostId, tool, args } = request;
 
@@ -157,13 +180,17 @@ export class GhostPipeDispatcher {
 
     return new Promise<GhostToolCallResult>((resolve) => {
       const startedAt = Date.now();
+      const baseTimeoutMs = this.baseTimeoutMs(request.timeoutMs);
       const entry: PendingCall = {
         ghostId,
         tool,
+        claimedBindings: new Map(),
         resolve,
         timer: undefined,
         startedAt,
-        deadlineAt: startedAt + this.baseTimeoutMs(),
+        baseTimeoutMs,
+        timeoutExtensionsAllowed: request.timeoutMs === undefined,
+        deadlineAt: startedAt + baseTimeoutMs,
         holds: 0,
       };
       this.pending.set(callId, entry);
@@ -176,9 +203,79 @@ export class GhostPipeDispatcher {
     });
   }
 
+  /**
+   * 认领真实在途 tool-call 的宿主能力绑定。
+   *
+   * callerTool 必须与派发器事实表逐字匹配；同一 binding 只允许同 requestKey
+   * 在暂态失败后重试一次，禁止换查询借用同一 callId 或无限消费付费通道。
+   */
+  claimPendingCall(
+    ghostId: string,
+    callId: string,
+    callerTool: string,
+    binding: string,
+    requestKey: string,
+  ): boolean {
+    const entry = this.pending.get(callId);
+    if (!entry || entry.ghostId !== ghostId || entry.tool !== callerTool) return false;
+    const existing = entry.claimedBindings.get(binding);
+    if (!existing) {
+      entry.claimedBindings.set(binding, {
+        callerTool,
+        requestKey,
+        attempts: 1,
+        active: true,
+        consumed: false,
+      });
+      return true;
+    }
+    if (
+      existing.callerTool !== callerTool ||
+      existing.requestKey !== requestKey ||
+      existing.active ||
+      existing.consumed ||
+      existing.attempts >= 2
+    ) {
+      return false;
+    }
+    existing.attempts += 1;
+    existing.active = true;
+    return true;
+  }
+
+  /** 收束一次能力尝试；仅首次暂态失败可重新认领同一请求。 */
+  settlePendingCallClaim(
+    ghostId: string,
+    callId: string,
+    callerTool: string,
+    binding: string,
+    requestKey: string,
+    allowRetry: boolean,
+  ): boolean {
+    const entry = this.pending.get(callId);
+    const claim = entry?.claimedBindings.get(binding);
+    if (
+      !entry ||
+      entry.ghostId !== ghostId ||
+      entry.tool !== callerTool ||
+      !claim ||
+      claim.callerTool !== callerTool ||
+      claim.requestKey !== requestKey ||
+      !claim.active
+    ) {
+      return false;
+    }
+    claim.active = false;
+    if (!allowRetry || claim.attempts >= 2) claim.consumed = true;
+    return true;
+  }
+
   /** 基础超时档(注入值钳到天花板内,保证初始 deadline 不越过绝对上限)。 */
-  private baseTimeoutMs(): number {
-    return Math.min(this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS, GHOST_PIPE_CALL_MAX_TOTAL_MS);
+  private baseTimeoutMs(override?: number): number {
+    const requested = Number.isFinite(override)
+      ? Math.max(1, Math.floor(override as number))
+      : this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    return Math.min(requested, GHOST_PIPE_CALL_MAX_TOTAL_MS);
   }
 
   /** 按 entry.deadlineAt 重挂超时闹钟(旧闹钟一并清掉)。 */
@@ -232,6 +329,7 @@ export class GhostPipeDispatcher {
   holdCall(ghostId: string, callId: string, budgetMs: number): void {
     const entry = this.pending.get(callId);
     if (!entry || entry.ghostId !== ghostId) return;
+    if (!entry.timeoutExtensionsAllowed) return;
     entry.holds += 1;
     this.extendDeadline(callId, entry, Date.now() + budgetMs + HOLD_SETTLE_GRACE_MS);
   }
@@ -246,7 +344,7 @@ export class GhostPipeDispatcher {
     if (!entry || entry.ghostId !== ghostId) return;
     entry.holds = Math.max(0, entry.holds - 1);
     if (entry.holds > 0) return;
-    const target = Math.max(entry.startedAt + this.baseTimeoutMs(), Date.now() + HOLD_SETTLE_GRACE_MS);
+    const target = Math.max(entry.startedAt + entry.baseTimeoutMs, Date.now() + HOLD_SETTLE_GRACE_MS);
     if (target < entry.deadlineAt) {
       entry.deadlineAt = target;
       this.armTimer(callId, entry);
@@ -270,7 +368,9 @@ export class GhostPipeDispatcher {
     if (entry.ghostId !== senderGhostId) {
       return { accepted: false, reason: '不是你的卷子' };
     }
-    this.extendDeadline(p.callId, entry, Date.now() + this.baseTimeoutMs());
+    if (entry.timeoutExtensionsAllowed) {
+      this.extendDeadline(p.callId, entry, Date.now() + entry.baseTimeoutMs);
+    }
     return { accepted: true };
   }
 
@@ -337,6 +437,14 @@ export class GhostPipeDispatcher {
     if (!entry) return;
     this.pending.delete(callId);
     (this.deps.clearTimeoutFn ?? clearTimeout)(entry.timer);
+    this.deps.log?.info('ghost tool call completed', {
+      ghostId: entry.ghostId,
+      tool: entry.tool,
+      callId,
+      ok: result.ok,
+      ...(result.ok ? {} : { errorCode: result.errorCode }),
+      totalMs: Date.now() - entry.startedAt,
+    });
     entry.resolve(result);
   }
 }

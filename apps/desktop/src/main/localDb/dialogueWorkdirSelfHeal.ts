@@ -112,7 +112,7 @@ export interface SweepLegacyDialogueWorkingDirsDeps {
   db: DialogueSweepDb;
   /** 当前 userData 绝对路径。 */
   userDataDir: string;
-  /** legacy userData 目录名候选(BRAND_IDENTITY.legacyUserDataDirNames)。 */
+  /** 当前区域的历史 dialogue userData 目录名候选。 */
   legacyUserDataDirNames: readonly string[];
   /** Explicit current owner dialogue root; defaults to userDataDir/dialogues. */
   currentDialoguesRoot?: string;

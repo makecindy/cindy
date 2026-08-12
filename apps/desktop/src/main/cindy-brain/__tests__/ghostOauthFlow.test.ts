@@ -75,7 +75,7 @@ async function pinnedPortCase<T extends readonly unknown[]>(
   attempts = 5,
 ): Promise<T> {
   let last!: T;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     last = await body(await probeFreePort());
     if (!isListenFailed(last[0])) return last;
   }
@@ -379,57 +379,63 @@ describe('startGhostOauthFlow', () => {
   });
 
   it('钉死端口:第二单顶掉第一单后立刻复用同一端口(自家僵尸监听自愈,无需回收器)', async () => {
-    const [firstResult, secondResult] = await pinnedPortCase(async (fixedPort) => {
-      let secondDone: Promise<unknown> = Promise.resolve();
-      const first = await startGhostOauthFlow({
-        config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
-        fetchImpl: vi.fn() as unknown as typeof fetch,
-        openExternal: () => {
-          // 第一单占着钉死端口等回调时,第二单同端口进场——必须等到第一单的
-          // 监听真正关闭后成功 listen,而不是 LISTEN_FAILED。
-          secondDone = startGhostOauthFlow({
-            config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
-            fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-heal' })) as unknown as typeof fetch,
-            openExternal: (url2) => {
-              browserRedirect(url2, (au) => ({ code: 'c-heal', state: au.searchParams.get('state') ?? '' }));
-            },
-          });
-        },
-      });
-      return [first, await secondDone];
+    let secondDone: Promise<unknown> = Promise.resolve();
+    const firstResult = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, pkce: false },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: (url) => {
+        const redirectUri = new URL(url).searchParams.get('redirect_uri');
+        if (!redirectUri) throw new Error('authorize URL 缺 redirect_uri');
+        const fixedPort = Number(new URL(redirectUri).port);
+        if (!fixedPort) throw new Error('redirect_uri 缺端口');
+
+        // 第一单已由系统分配并占住端口;第二单复用该端口进场——必须等到
+        // 第一单监听真正关闭后成功 listen,而不是 LISTEN_FAILED。
+        secondDone = startGhostOauthFlow({
+          config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
+          fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-heal' })) as unknown as typeof fetch,
+          openExternal: (url2) => {
+            browserRedirect(url2, (au) => ({ code: 'c-heal', state: au.searchParams.get('state') ?? '' }));
+          },
+        });
+      },
     });
+    const secondResult = await secondDone;
     expect(firstResult).toMatchObject({ ok: false, error: 'CANCELLED' });
     expect(secondResult).toMatchObject({ ok: true });
   });
 
   it('钉死端口:第二单还在排队时第三单进场——前两单 CANCELLED,最后一单赢', async () => {
     const neverOpen = vi.fn();
-    const [firstResult, secondResult, thirdResult] = await pinnedPortCase(
-      async (fixedPort) => {
-        let secondDone: Promise<unknown> = Promise.resolve();
-        let thirdDone: Promise<unknown> = Promise.resolve();
-        const first = await startGhostOauthFlow({
+    let secondDone: Promise<unknown> = Promise.resolve();
+    let thirdDone: Promise<unknown> = Promise.resolve();
+    const firstResult = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, pkce: false },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: (url) => {
+        const redirectUri = new URL(url).searchParams.get('redirect_uri');
+        if (!redirectUri) throw new Error('authorize URL 缺 redirect_uri');
+        const fixedPort = Number(new URL(redirectUri).port);
+        if (!fixedPort) throw new Error('redirect_uri 缺端口');
+
+        // 第一单已由系统分配并占住端口;第二单进场(排队等第一单收尾),
+        // 紧接着第三单进场顶掉排队中的第二单,两单都显式复用第一单的实际端口。
+        secondDone = startGhostOauthFlow({
           config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
           fetchImpl: vi.fn() as unknown as typeof fetch,
-          openExternal: () => {
-            // 第二单进场(排队等第一单收尾),紧接着第三单进场顶掉排队中的第二单。
-            secondDone = startGhostOauthFlow({
-              config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
-              fetchImpl: vi.fn() as unknown as typeof fetch,
-              openExternal: neverOpen,
-            });
-            thirdDone = startGhostOauthFlow({
-              config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
-              fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-third' })) as unknown as typeof fetch,
-              openExternal: (url3) => {
-                browserRedirect(url3, (au) => ({ code: 'c-third', state: au.searchParams.get('state') ?? '' }));
-              },
-            });
+          openExternal: neverOpen,
+        });
+        thirdDone = startGhostOauthFlow({
+          config: { ...BASE_CONFIG, pkce: false, redirectPort: fixedPort },
+          fetchImpl: vi.fn(async () => jsonResponse({ access_token: 'at-third' })) as unknown as typeof fetch,
+          openExternal: (url3) => {
+            browserRedirect(url3, (au) => ({ code: 'c-third', state: au.searchParams.get('state') ?? '' }));
           },
         });
-        return [first, await secondDone, await thirdDone];
       },
-    );
+    });
+    const secondResult = await secondDone;
+    const thirdResult = await thirdDone;
     expect(firstResult).toMatchObject({ ok: false, error: 'CANCELLED' });
     expect(secondResult).toMatchObject({ ok: false, error: 'CANCELLED' });
     expect(thirdResult).toMatchObject({ ok: true });

@@ -40,6 +40,12 @@ test("generated artifact notices are platform-scoped and disclose restricted com
   assert.doesNotMatch(windows, /@img\/sharp-darwin-/);
   assert.match(windows, /SECTION \d+: cargo packages/);
   assert.match(windows, /Android SDK Platform-Tools/);
+  // 安装包内资产和运行时受管下载的 agent 二进制，都必须出现在三个桌面平台声明里。
+  for (const notice of [windows, macos, linux]) {
+    assert.match(notice, /OpenAI Codex CLI \(runtime-downloaded binary\) \d/);
+    assert.match(notice, /pi coding agent \(runtime-downloaded binary\) \d/);
+    assert.match(notice, /ripgrep \(bundled binary\) \d/);
+  }
   assert.match(macos, /@img\/sharp-darwin-/);
   assert.doesNotMatch(macos, /Android SDK Platform-Tools/);
   assert.match(linux, /@img\/sharp-linux-x64@/);

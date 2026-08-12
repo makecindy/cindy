@@ -1,4 +1,11 @@
-import type { AgentKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
+import {
+  CodexResumePreparationBlockedError,
+  type AgentKind,
+  type SessionSendOptions,
+  type SessionSendResult,
+  type UserMessage,
+} from '@cindy/maker-core';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createMakerSendTransaction,
@@ -150,7 +157,7 @@ describe('maker SEND transaction', () => {
       { shouldBroadcast },
     );
     expect(onPersisted).toHaveBeenCalled();
-    expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1');
+    expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.commitUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
   });
@@ -233,6 +240,39 @@ describe('maker SEND transaction', () => {
     );
   });
 
+  it('persists Orca queue origin without sending the unsupported origin to maker-core', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    const origin = { kind: 'orca', senderLabel: 'Lead', displayText: 'hello' } as const;
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: 'orca prompt' },
+      undefined,
+      {
+        messageUuid: 'message-uuid',
+        persistUserMessage: {
+          clientId: 'client-1',
+          content: 'orca prompt',
+          delivery: 'turn',
+          origin,
+        },
+      },
+    );
+
+    expect(session.send).toHaveBeenCalledWith(
+      { type: 'user', content: 'orca prompt' },
+      expect.not.objectContaining({ origin }),
+    );
+    expect(deps.createDbMessage).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        agentMeta: expect.objectContaining({ origin }),
+      }),
+      undefined,
+    );
+  });
+
   it('threads the autoResume flag into persisted agentMeta', async () => {
     // 中断自动续跑补发的「继续」经 coordinator drain 透传 autoResume(见
     // AgentInputQueuedMessage.autoResume)。它必须落进 agentMeta:renderer 靠它隐藏气泡,
@@ -246,12 +286,14 @@ describe('maker SEND transaction', () => {
       undefined,
       {
         messageUuid: 'message-uuid',
+        turnAttemptToken: 7,
         persistUserMessage: {
           clientId: 'client-1',
           content: 'continue',
           sdkSessionId: 'sdk-1',
           delivery: 'turn',
           autoResume: true,
+          autoResumeInfo: { attempt: 1, maxAttempts: 5, sessionTotal: 7 },
         },
       },
     );
@@ -261,6 +303,49 @@ describe('maker SEND transaction', () => {
       expect.objectContaining({
         agentMeta: expect.objectContaining({ autoResume: true }),
       }),
+      undefined,
+    );
+    expect(
+      (deps.getSession('session-1')?.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[1],
+    ).toEqual(expect.objectContaining({ turnAttemptToken: 7 }));
+  });
+
+  it('persists the shared recovery checkpoint for manual retries too', async () => {
+    const { deps } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    const checkpoint = {
+      version: 1,
+      source: 'manual',
+      mode: 'checkpoint',
+      attempt: 2,
+      failedUserClientId: 'failed-1',
+      rootUserClientId: 'failed-0',
+      contextTokens: 180_000,
+      contextWindow: 200_000,
+      contextRatio: 0.9,
+      progressCount: 4,
+      createdAt: '2026-08-04T00:00:00.000Z',
+      recentProgress: [],
+    };
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: '[UI_ACTION_TRIGGER] continue' },
+      undefined,
+      {
+        messageUuid: 'message-uuid',
+        persistUserMessage: {
+          clientId: 'client-2',
+          content: '[UI_ACTION_TRIGGER] continue',
+          delivery: 'turn',
+          recoveryCheckpoint: checkpoint,
+        },
+      },
+    );
+
+    expect(deps.createDbMessage).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({ agentMeta: expect.objectContaining({ recoveryCheckpoint: checkpoint }) }),
       undefined,
     );
   });
@@ -308,6 +393,267 @@ describe('maker SEND transaction', () => {
 
     expect(events).toEqual(['baseline', 'send']);
     expect(beforeDispatchDirectUserTurn).toHaveBeenCalledWith('session-1');
+  });
+
+  it('materializes direct OSS attachments after session/workdir preflight', async () => {
+    const events: string[] = [];
+    const materializeDirectSendOssAttachments = vi.fn(async (
+      _sessionId: string,
+      message: unknown,
+      sendOpts: unknown,
+    ) => {
+      events.push('materialize');
+      return {
+        message: { ...(message as object), materialized: true },
+        sendOpts: { ...(sendOpts as object), materialized: true },
+      };
+    });
+    const session = createSession({
+      send: vi.fn(async (message) => {
+        events.push('send');
+        expect(message).toMatchObject({ materialized: true });
+        return { accepted: true } satisfies SessionSendResult;
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      materializeDirectSendOssAttachments,
+    });
+    deps.prepareSendUserMessage = vi.fn(async (_sessionId, message) => {
+      events.push('normalize');
+      return message as UserMessage;
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'hello' }, undefined, { marker: true }),
+    ).resolves.toMatchObject({ accepted: true });
+
+    expect(events).toEqual(['materialize', 'normalize', 'send']);
+    expect(materializeDirectSendOssAttachments).toHaveBeenCalledWith(
+      'session-1',
+      { type: 'user', content: 'hello' },
+      { marker: true },
+    );
+  });
+
+  it('cleans direct OSS materializations when normalization rejects before acceptance', async () => {
+    const cleanupBeforeAcceptance = vi.fn(async () => {});
+    const materializeDirectSendOssAttachments = vi.fn(async () => ({
+      message: { type: 'user', content: 'materialized' },
+      sendOpts: undefined,
+      cleanupBeforeAcceptance,
+    }));
+    const { deps } = createDeps({ materializeDirectSendOssAttachments });
+    deps.prepareSendUserMessage = vi.fn(async () => {
+      throw new Error('normalize failed');
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).rejects.toThrow('normalize failed');
+    expect(cleanupBeforeAcceptance).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans direct OSS materializations when vendor send is rejected before dispatch', async () => {
+    const cleanupBeforeAcceptance = vi.fn(async () => {});
+    const materializeDirectSendOssAttachments = vi.fn(async () => ({
+      message: { type: 'user', content: 'materialized' },
+      sendOpts: undefined,
+      cleanupBeforeAcceptance,
+    }));
+    const session = createSession({
+      send: vi.fn(async () => ({
+        accepted: false,
+        reason: 'cancelled-before-dispatch',
+      } satisfies SessionSendResult)),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      materializeDirectSendOssAttachments,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).resolves.toMatchObject({
+      accepted: false,
+    });
+    expect(cleanupBeforeAcceptance).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves local media when onAccepted persisted the row before a late abort returns accepted=false', async () => {
+    const cleanupBeforeAcceptance = vi.fn(async () => {});
+    const cleanupAfterAcceptance = vi.fn();
+    const materializeDirectSendOssAttachments = vi.fn(async () => ({
+      message: { type: 'user', content: 'materialized' },
+      sendOpts: undefined,
+      cleanupBeforeAcceptance,
+      cleanupAfterAcceptance,
+    }));
+    const session = createSession({
+      send: vi.fn(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        return {
+          accepted: false,
+          reason: 'cancelled-before-dispatch',
+        } satisfies SessionSendResult;
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      materializeDirectSendOssAttachments,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted(
+        'session-1',
+        { type: 'user', content: 'hello' },
+        undefined,
+        {
+          persistUserMessage: {
+            clientId: 'client-1',
+            content: 'hello',
+          },
+        },
+      ),
+    ).resolves.toMatchObject({ accepted: false });
+
+    expect(deps.createDbMessage).toHaveBeenCalledTimes(1);
+    expect(cleanupBeforeAcceptance).not.toHaveBeenCalled();
+    expect(cleanupAfterAcceptance).toHaveBeenCalledTimes(1);
+  });
+
+  it('rewinds a persisted user row when clear wins during onPersisted before dispatch', async () => {
+    let clearBoundaryCurrent = true;
+    let observedGeneration: number | undefined;
+    const rewindPersistedUserMessageAfterClear = vi.fn(async () => {});
+    const onPersisted = vi.fn(async () => {
+      clearBoundaryCurrent = false;
+      throw new Error('[SEND_CANCELLED_BEFORE_DISPATCH] clear won before dispatch');
+    });
+    const session = createSession({
+      send: vi.fn(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        return { accepted: true } satisfies SessionSendResult;
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      isClearBoundaryCurrent: vi.fn((_sessionId, _expectedBoundary, expectedGeneration) => {
+        observedGeneration = expectedGeneration;
+        return clearBoundaryCurrent;
+      }),
+      rewindPersistedUserMessageAfterClear,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('session-1', 'hello', undefined, {
+        persistUserMessage: {
+          clientId: 'client-clear-race',
+          content: 'hello',
+          expectedClearBoundaryMs: null,
+          expectedInputGeneration: 7,
+          onPersisted,
+        },
+      }),
+    ).rejects.toThrow('clear won before dispatch');
+
+    expect(deps.createDbMessage).toHaveBeenCalledTimes(1);
+    expect(onPersisted).toHaveBeenCalledTimes(1);
+    expect(observedGeneration).toBe(7);
+    expect(rewindPersistedUserMessageAfterClear).toHaveBeenCalledWith(
+      'session-1',
+      'client-clear-race',
+    );
+  });
+
+  it('cleans direct OSS materializations when vendor send throws before dispatch', async () => {
+    const cleanupBeforeAcceptance = vi.fn(async () => {});
+    const materializeDirectSendOssAttachments = vi.fn(async () => ({
+      message: { type: 'user', content: 'materialized' },
+      sendOpts: undefined,
+      cleanupBeforeAcceptance,
+    }));
+    const session = createSession({
+      send: vi.fn(async () => {
+        throw new Error('vendor send failed');
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      materializeDirectSendOssAttachments,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).rejects.toThrow(
+      'vendor send failed',
+    );
+    expect(cleanupBeforeAcceptance).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps local OSS materializations after accepted vendor dispatch', async () => {
+    const cleanupAfterAcceptance = vi.fn();
+    const cleanupBeforeAcceptance = vi.fn(async () => {});
+    const cleanupLocalMaterialization = vi.fn(async () => {});
+    const materializeDirectSendOssAttachments = vi.fn(async () => ({
+      message: { type: 'user', content: 'materialized' },
+      sendOpts: undefined,
+      cleanupAfterAcceptance,
+      cleanupBeforeAcceptance,
+      cleanupLocalMaterialization,
+    }));
+    const { deps } = createDeps({ materializeDirectSendOssAttachments });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('session-1', 'hello', undefined, {
+        persistUserMessage: {
+          clientId: 'client-1',
+          content: 'hello',
+        },
+      }),
+    ).resolves.toMatchObject({ accepted: true });
+    expect(cleanupAfterAcceptance).toHaveBeenCalledTimes(1);
+    expect(cleanupBeforeAcceptance).not.toHaveBeenCalled();
+    expect(cleanupLocalMaterialization).not.toHaveBeenCalled();
+  });
+
+  it('cleans local OSS materializations after accepted direct sends without persistence', async () => {
+    const cleanupAfterAcceptance = vi.fn();
+    const cleanupBeforeAcceptance = vi.fn(async () => {});
+    const cleanupLocalMaterialization = vi.fn(async () => {});
+    const materializeDirectSendOssAttachments = vi.fn(async () => ({
+      message: { type: 'user', content: 'materialized' },
+      sendOpts: undefined,
+      cleanupAfterAcceptance,
+      cleanupBeforeAcceptance,
+      cleanupLocalMaterialization,
+    }));
+    const { deps } = createDeps({ materializeDirectSendOssAttachments });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).resolves.toMatchObject({
+      accepted: true,
+    });
+
+    expect(cleanupAfterAcceptance).toHaveBeenCalledTimes(1);
+    expect(cleanupBeforeAcceptance).not.toHaveBeenCalled();
+    expect(cleanupLocalMaterialization).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not materialize direct OSS attachments when workdir preflight rejects', async () => {
+    const materializeDirectSendOssAttachments = vi.fn();
+    const { deps } = createDeps({
+      checkWorkDirExists: vi.fn(async () => false),
+      materializeDirectSendOssAttachments,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'hello' }),
+    ).resolves.toMatchObject({ accepted: false });
+
+    expect(materializeDirectSendOssAttachments).not.toHaveBeenCalled();
   });
 
   it('consumes the direct-send baseline when vendor dispatch is not accepted', async () => {
@@ -432,7 +778,8 @@ describe('maker SEND transaction', () => {
   });
 
   it('rejects a non-boolean interrupted-turn dispatch ack option before vendor dispatch', async () => {
-    const { deps, session } = createDeps();
+    const materializeDirectSendOssAttachments = vi.fn();
+    const { deps, session } = createDeps({ materializeDirectSendOssAttachments });
     const transaction = createMakerSendTransaction(deps);
 
     await expect(
@@ -442,6 +789,7 @@ describe('maker SEND transaction', () => {
     ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
 
     expect(session.send).not.toHaveBeenCalled();
+    expect(materializeDirectSendOssAttachments).not.toHaveBeenCalled();
   });
 
   it('rolls back the prompt preview if accepted persistence fails before dispatch', async () => {
@@ -502,6 +850,37 @@ describe('maker SEND transaction', () => {
 
     expect(deps.checkWorkDirExists).toHaveBeenCalledWith('session-1', 'C:\\repo', 'codex', null);
     expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds an error session through lazy bootstrap before dispatch', async () => {
+    const failedSession = createSession({
+      getStatus: vi.fn(() => 'error' as const),
+    });
+    const recoveredSession = createSession({ id: 'session-1', workDir: 'C:\\repo' });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+    };
+    const { deps } = createDeps({
+      getSession: vi.fn(() => failedSession),
+      bootstrapSession: vi.fn(async () => ({
+        session: recoveredSession,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello', createOpts)).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(failedSession.send).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(createOpts);
+    expect(recoveredSession.send).toHaveBeenCalled();
   });
 
   it('lazy-create adopts the DB working_dir when the caller-provided one is stale', async () => {
@@ -627,6 +1006,39 @@ describe('maker SEND transaction', () => {
     expect(deps.broadcastSessionCreated).not.toHaveBeenCalled();
   });
 
+  it('projects a stable marker with a safe fallback when lazy-create Codex resume preparation is blocked', async () => {
+    const diagnostic = 'Codex thread private-id is not safe to resume yet';
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      bootstrapSession: vi.fn(async () => {
+        throw new CodexResumePreparationBlockedError(diagnostic);
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('lazy-session', 'hello', {
+        id: 'lazy-session',
+        agentKind: 'codex',
+        workingDir: 'D:\\lazy',
+        model: 'gpt-5.4',
+      }),
+    ).resolves.toEqual({
+      accepted: false,
+      reason: 'LAZY_CREATE_FAILED',
+      outcome: {
+        kind: 'host-send',
+        accepted: false,
+        code: 'LAZY_CREATE_FAILED',
+        message: CODEX_RESUME_NOT_READY_WIRE_MESSAGE,
+      },
+    });
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      'send: Codex resume preparation blocked during lazy create',
+      { sessionId: 'lazy-session', error: diagnostic },
+    );
+  });
+
   it('maps lazy-create credential busy to CREDENTIAL_SWITCH_BUSY without dispatching', async () => {
     const { deps } = createDeps({
       getSession: vi.fn(() => undefined),
@@ -722,6 +1134,43 @@ describe('maker SEND transaction', () => {
       },
     });
 
+    expect(oldSession.send).not.toHaveBeenCalled();
+  });
+
+  it('projects a stable marker with a safe fallback when rehydrate Codex resume preparation is blocked', async () => {
+    const diagnostic = 'Codex thread private-id still has a live rollout writer';
+    const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      withRehydrateCloseSuppressed: vi.fn(async () => {
+        throw new CodexResumePreparationBlockedError(diagnostic);
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('orca-session', 'hello', {
+        id: 'orca-session',
+        agentKind: 'codex',
+        workingDir: 'C:\\repo',
+        model: 'gpt-5.4',
+      }),
+    ).resolves.toEqual({
+      accepted: false,
+      reason: 'REHYDRATE_FAILED',
+      outcome: {
+        kind: 'host-send',
+        accepted: false,
+        code: 'REHYDRATE_FAILED',
+        message: CODEX_RESUME_NOT_READY_WIRE_MESSAGE,
+      },
+    });
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      'send: Codex resume preparation blocked during rehydrate',
+      { sessionId: 'orca-session', error: diagnostic },
+    );
     expect(oldSession.send).not.toHaveBeenCalled();
   });
 
@@ -849,6 +1298,74 @@ describe('maker SEND transaction', () => {
   });
 });
 
+describe('mobile client prompt note', () => {
+  it('keeps ordinary mobile messages annotated on the wire but persists the original text', async () => {
+    const session = createSession({ agentKind: 'claude-code' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      isMobileClientInvoke: vi.fn(() => true),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', 'hello', undefined, {
+      persistUserMessage: { clientId: 'mobile-1', content: 'hello' },
+    });
+
+    const sent = vi.mocked(session.send).mock.calls[0]?.[0];
+    expect(sent).toEqual(expect.stringMatching(/^\[客户端说明\]/));
+    expect(sent).toEqual(expect.stringMatching(/\n\nhello$/));
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0]?.[1].content).toBe('hello');
+  });
+
+  it('sends mobile Claude Code /compact commands without a prepended note', async () => {
+    const session = createSession({ agentKind: 'claude-code' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      isMobileClientInvoke: vi.fn(() => true),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', '/compact focus on decisions');
+
+    expect(session.send).toHaveBeenCalledWith('/compact focus on decisions', expect.anything());
+  });
+
+  it('keeps the mobile note for /compact text sent to a non-Claude agent', async () => {
+    const session = createSession({ agentKind: 'pi' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      isMobileClientInvoke: vi.fn(() => true),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', '/compact');
+
+    const sent = vi.mocked(session.send).mock.calls[0]?.[0];
+    expect(sent).toEqual(expect.stringMatching(/^\[客户端说明\]/));
+  });
+
+  it('applies the same command bypass to coordinator-drained mobile messages', async () => {
+    const session = createSession({ agentKind: 'claude-code' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      isMobileClientInvoke: vi.fn(() => false),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: '/compact' },
+      undefined,
+      { fromMobileClient: true },
+    );
+
+    expect(session.send).toHaveBeenCalledWith(
+      { type: 'user', content: '/compact' },
+      expect.anything(),
+    );
+  });
+});
+
 describe('session-agent-switch handoff injection', () => {
   it('pending 命中时 wire payload 前置交接段,落库内容保持用户原文,accepted 后 consume', async () => {
     const consumePendingHandoff = vi.fn();
@@ -859,7 +1376,7 @@ describe('session-agent-switch handoff injection', () => {
     const transaction = createMakerSendTransaction(deps);
 
     await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {
-      persistUserMessage: { clientId: 'client-1', content: '新消息' },
+      persistUserMessage: { clientId: 'client-1', content: '{"text":"新消息","images":[],"files":[]}' },
     });
 
     // wire:前缀注入
@@ -869,7 +1386,7 @@ describe('session-agent-switch handoff injection', () => {
     );
     // 落库:用户原文,不带交接段(display 与 sent 分离)
     const persisted = vi.mocked(deps.createDbMessage).mock.calls[0]?.[1];
-    expect(persisted?.content).toBe('新消息');
+    expect(persisted?.content).toBe('{"text":"新消息","images":[],"files":[]}');
     expect(consumePendingHandoff).toHaveBeenCalledWith('session-1');
   });
 
@@ -900,6 +1417,183 @@ describe('session-agent-switch handoff injection', () => {
     await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {});
     expect(session.send).toHaveBeenCalledWith({ type: 'user', content: '新消息' }, expect.anything());
     expect(consumePendingHandoff).not.toHaveBeenCalled();
+  });
+
+  it('计划对账段命中时前置进 wire payload,落库内容保持用户原文', async () => {
+    const { deps, session } = createDeps({
+      peekPlanReconcileNote: vi.fn(async () => 'RECONCILE-NOTE'),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {
+      persistUserMessage: { clientId: 'client-1', content: '{"text":"新消息","images":[],"files":[]}' },
+    });
+
+    expect(session.send).toHaveBeenCalledWith(
+      { type: 'user', content: 'RECONCILE-NOTE\n\n新消息' },
+      expect.anything(),
+    );
+    const persisted = vi.mocked(deps.createDbMessage).mock.calls[0]?.[1];
+    expect(persisted?.content).toBe('{"text":"新消息","images":[],"files":[]}');
+  });
+
+  it('计划对账在交接段外层(对账在前、交接在后)', async () => {
+    const { deps, session } = createDeps({
+      peekPendingHandoff: vi.fn(async () => 'HANDOFF-TEXT'),
+      consumePendingHandoff: vi.fn(),
+      peekPlanReconcileNote: vi.fn(async () => 'RECONCILE-NOTE'),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {
+      persistUserMessage: { clientId: 'client-1', content: '{"text":"新消息","images":[],"files":[]}' },
+    });
+    expect(session.send).toHaveBeenCalledWith(
+      { type: 'user', content: 'RECONCILE-NOTE\n\nHANDOFF-TEXT\n\n新消息' },
+      expect.anything(),
+    );
+  });
+
+  it('内部派发(scheduler / 自动续跑)不注入对账', async () => {
+    const peekPlanReconcileNote = vi.fn(async () => 'RECONCILE-NOTE');
+    const { deps, session } = createDeps({ peekPlanReconcileNote });
+    const transaction = createMakerSendTransaction(deps);
+
+    // scheduler 定时消息(顶层 origin)
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '定时活' }, undefined, {
+      origin: { kind: 'scheduler', scheduleId: 's1', scheduleName: 'n' },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: '定时活' },
+      expect.anything(),
+    );
+
+    // 自动续跑(persistUserMessage.autoResume)
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '继续' }, undefined, {
+      persistUserMessage: { clientId: 'c2', content: '继续', autoResume: true },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: '继续' },
+      expect.anything(),
+    );
+
+    // /compact 等斜杠控制消息(落库是 stringifyUserContent 信封,判据须解开信封)
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '/compact' }, undefined, {
+      persistUserMessage: { clientId: 'c3', content: '{"text":"/compact","images":[],"files":[]}' },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: '/compact' },
+      expect.anything(),
+    );
+
+    // coordinator 的合成续跑指令([UI_ACTION_TRIGGER] 前缀,信封形态)
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '[UI_ACTION_TRIGGER]Continue' }, undefined, {
+      persistUserMessage: { clientId: 'c4', content: '{"text":"[UI_ACTION_TRIGGER]Continue"}' },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: '[UI_ACTION_TRIGGER]Continue' },
+      expect.anything(),
+    );
+
+    // 不落可显示 user 行的派发(无 persistUserMessage)
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '内部控制' }, undefined, {});
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: '内部控制' },
+      expect.anything(),
+    );
+
+    // 内部派发路径不应触发对账查询
+    expect(peekPlanReconcileNote).not.toHaveBeenCalled();
+  });
+
+  it('按信封里的 slash 范围区分控制指令与绝对路径开头的真实提问', async () => {
+    const peekPlanReconcileNote = vi.fn(async () => 'RECONCILE-NOTE');
+    const { deps, session } = createDeps({ peekPlanReconcileNote });
+    const transaction = createMakerSendTransaction(deps);
+
+    // `/tmp/build.log 为什么失败` 是普通提问:Composer 写了空的 slashCommandRanges
+    // (= 确认没有指令),不能因首字符 '/' 就绕过对账(review P2)。
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: '/tmp/build.log 为什么失败' },
+      undefined,
+      {
+        persistUserMessage: {
+          clientId: 'c-path',
+          content: '{"text":"/tmp/build.log 为什么失败","images":[],"files":[],"slashCommandRanges":[]}',
+        },
+      },
+    );
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: 'RECONCILE-NOTE\n\n/tmp/build.log 为什么失败' },
+      expect.anything(),
+    );
+
+    // 真正的控制指令带起点为 0 的范围:照旧排除。
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: '/compact' },
+      undefined,
+      {
+        persistUserMessage: {
+          clientId: 'c-cmd',
+          content: '{"text":"/compact","images":[],"files":[],"slashCommandRanges":[{"start":0,"end":8}]}',
+        },
+      },
+    );
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: '/compact' },
+      expect.anything(),
+    );
+
+    // 正文中段出现的指令形态(范围起点非 0)仍是真实提问。
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: '解释一下 /compact 做了什么' },
+      undefined,
+      {
+        persistUserMessage: {
+          clientId: 'c-mid',
+          content: '{"text":"解释一下 /compact 做了什么","images":[],"files":[],"slashCommandRanges":[{"start":5,"end":13}]}',
+        },
+      },
+    );
+    expect(session.send).toHaveBeenLastCalledWith(
+      { type: 'user', content: 'RECONCILE-NOTE\n\n解释一下 /compact 做了什么' },
+      expect.anything(),
+    );
+  });
+
+  it('计划对账覆盖仅附件轮次(正文空,带图片/文件)', async () => {
+    const peekPlanReconcileNote = vi.fn(async () => 'RECONCILE-NOTE');
+    const { deps, session } = createDeps({ peekPlanReconcileNote });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: [{ type: 'image', source: 'img-1' }] },
+      undefined,
+      {
+        persistUserMessage: {
+          clientId: 'att-1',
+          content: '{"text":"","images":["img-1"],"files":[]}',
+        },
+      },
+    );
+
+    expect(peekPlanReconcileNote).toHaveBeenCalledWith('session-1');
+  });
+
+  it('对账读取抛错时静默跳过,不挡发送', async () => {
+    const { deps, session } = createDeps({
+      peekPlanReconcileNote: vi.fn(async () => {
+        throw new Error('db unavailable');
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {});
+    expect(session.send).toHaveBeenCalledWith({ type: 'user', content: '新消息' }, expect.anything());
   });
 
   it('lazy-create 前调用 reconcileCreateOptsWithDb 以 DB 行校正 createOpts', async () => {

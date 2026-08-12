@@ -16,6 +16,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -311,6 +313,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('codex', {
       sourceSdkSessionId: 'codex-thread-source',
+      model: 'gpt-5.4',
+      providerId: 'xd',
       upToMessageId: undefined,
       tailTurnsToDrop: 2,
       title: '[Fork] Project A',
@@ -353,6 +357,27 @@ describe('forkSessionAtMessage', () => {
     expect(txCalls).toHaveLength(0);
   });
 
+  it('codex path: projects a blocked resume preparation without exposing diagnostics', async () => {
+    const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
+    selectQueue.push([makeSourceRow({
+      agentKind: 'codex',
+      sdkSessionId: 'imported-codex-thread',
+    })]);
+    selectQueue.push([target]);
+    queryMock.mockResolvedValue([{ role: 'user', content: '"target"' }]);
+    forkSdkSessionMock.mockRejectedValueOnce(
+      new CodexResumePreparationBlockedError('live writer at /private/codex/rollout.jsonl'),
+    );
+
+    await expect(
+      forkSessionAtMessage('src-session', 'target-user'),
+    ).rejects.toMatchObject({
+      code: 'CODEX_FORK_STATE_UNAVAILABLE',
+      message: CODEX_RESUME_NOT_READY_WIRE_MESSAGE,
+    });
+    expect(txCalls).toHaveLength(0);
+  });
+
   it('strip encrypted fork: codex-only path forks with strip flag and copies all messages', async () => {
     const source = makeSourceRow({
       agentKind: 'codex',
@@ -381,6 +406,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('codex', {
       sourceSdkSessionId: 'codex-thread-source',
+      model: 'gpt-5.5',
+      providerId: 'xd',
       upToMessageId: undefined,
       title: '[Fork·已剥离] Project A',
       workingDir: '/work',
@@ -725,6 +752,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('codex', {
       sourceSdkSessionId: 'parked-codex-thread',
+      model: 'gpt-5.4',
+      providerId: null,
       upToMessageId: undefined,
       tailTurnsToDrop: 2,
       title: '[Fork] Project A',
@@ -1068,6 +1097,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('codex', {
       sourceSdkSessionId: 'codex-thread-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: undefined,
       tailTurnsToDrop: 1,
       title: '[Fork] Project A',

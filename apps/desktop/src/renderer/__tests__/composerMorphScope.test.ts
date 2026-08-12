@@ -12,6 +12,8 @@ const extraDirsButton = read('components/new-chat/ExtraDirsButton.tsx');
 const settingsModel = read('components/settings/ImDefaultSettingsSection.tsx');
 const subagentModel = read('components/settings/SubagentModelSection.tsx');
 const createWorker = read('features/cc-agent/CreateWorkerPopover.tsx');
+const agentSelect = read('components/new-chat/AgentSelect.tsx');
+const workspacePrefs = read('components/settings/HookWorkspacePrefsEditor.tsx');
 
 // 2026-07-22:composer 工具条(含新建对话框 create-agent)统一走脱身上浮 morph;非 composer 场景
 // (settings / subagent / CreateWorker)仍用 Radix。取代 origin/main「morph 仅普通工具条 opt-in、
@@ -41,5 +43,29 @@ describe('composer morph scope', () => {
     expect(chatInput).toContain('const expandable = true;');
     expect(chatInput).toContain('return () => window.clearInterval(id);');
     expect(chatInput).toContain('inline-flex animate-pulse motion-reduce:animate-none');
+  });
+});
+
+// 设置场景复用工具条控件时的宽度契约(codex review #1490)。DESIGN.md §4
+// Select & Dropdown:「Panel width must bind to the trigger width — never narrower
+// or wider than the control that opened it」。工具条形态的 trigger 按内容 hug、
+// 面板固定 196px,直接放进设置字段会让短标签(Claude / Pi)下面板明显宽于 trigger。
+describe('设置字段里的 AgentSelect 宽度契约', () => {
+  it('两处设置场景都用 field 形态,不得把工具条形态塞进字段', () => {
+    for (const src of [settingsModel, workspacePrefs]) {
+      expect(src).toContain('<AgentSelect');
+      expect(src).toContain('triggerVariant="field"');
+    }
+  });
+
+  it('field 形态把面板宽度交给 trigger 实测值,工具条形态保持固定 196px', () => {
+    expect(agentSelect).toContain("panelWidthMode: 'trigger' as const");
+    expect(agentSelect).toContain('panelWidth: 196');
+  });
+
+  it('MorphPopover 支持 trigger 绑定宽度模式(严格等宽,不取 max)', () => {
+    const morph = read('components/ui/morph-popover.tsx');
+    expect(morph).toContain("panelWidthMode?: 'content' | 'trigger'");
+    expect(morph).toContain('desiredW = chipRect.width;');
   });
 });

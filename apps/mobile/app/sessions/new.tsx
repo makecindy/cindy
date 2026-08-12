@@ -3,7 +3,16 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { formatMobileBuildLabel, normalizeBuildInfo } from '@/config/buildInfo';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type SetStateAction,
+} from 'react';
 import {
   ActivityIndicator,
   AppState,
@@ -31,6 +40,7 @@ import {
   ChevronsUpDown,
   Folder,
   FolderPlus,
+  GitBranch,
   Image,
   Laptop,
   ListTodo,
@@ -62,6 +72,7 @@ import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
+import { fetchDeviceProvidersFresh, getCachedDeviceProviders, getDeviceProvidersGen, type DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import { evictDeviceProviders, useDeviceProviders } from '@/device-link/useDeviceProviders';
 import { useDeviceApiKeyStatus, useDeviceModelPricing } from '@/device-link/useDeviceModelMeta';
 import {
@@ -143,6 +154,11 @@ import {
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
   sessionFromCreateResult,
+  compensatePrecreatedWorktree,
+  reconcileEffortAfterFallback,
+  resolveRecentModelAndProvider,
+  resolveStartedDowngradeOrCommit,
+  resolveSubmitGuardCatalog,
   validateNewSessionDraft,
   type NewSessionAgentKind,
   type NewSessionDraft,
@@ -166,6 +182,7 @@ import {
   forgetPendingPrecreatedWorktree,
   holdPrecreatedWorktreeRegistration,
   isPrecreatedWorktreeRegistrationInFlight,
+  parseDiscardPrecreatedAck,
   recoverPendingPrecreatedWorktrees,
   registerPendingPrecreatedWorktree,
 } from '@/session/precreatedWorktreeRecovery';
@@ -176,6 +193,7 @@ import {
 } from '@/session/newSessionPreferenceStore';
 import {
   remoteSessionStore,
+  useRemoteNewMakerWorktreeBranchPreference,
   useRemoteNewMakerWorktreePreference,
   useRemoteSessions,
 } from '@/session/remoteSessionStore';
@@ -195,7 +213,6 @@ import {
   MOBILE_COMPOSER_INPUT_LINE_HEIGHT,
   MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
   MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
-  MOBILE_COMPOSER_INPUT_VERTICAL_PADDING,
   MOBILE_COMPOSER_MIN_TOUCH_TARGET,
   MobileComposerInputRow,
   VoiceMicWaveCaret,
@@ -216,6 +233,10 @@ import {
   shouldArmComposerVoiceHold,
 } from '@/session/composerVoiceHold';
 import { COMPOSER_TEXT_HORIZONTAL_PADDING } from '@/session/composerTextMetrics';
+import {
+  COMPOSER_TEXT_PADDING_BOTTOM,
+  COMPOSER_TEXT_PADDING_TOP,
+} from '@/session/composerTextPlatformMetrics';
 import {
   isMobileRealtimeAudioAvailable,
   prewarmMobileRealtimeAudio,
@@ -264,23 +285,34 @@ import {
 import {
   buildMobileModelSections,
   flattenProviderSections,
+  isFastRestorable,
   resolveRowSelection,
   type ProviderModelRow,
 } from '@/session/providerModelSections';
 import { ModelPickerSheet } from '@/session/ModelPickerSheet';
+import { MobileChoicePickerList } from '@/session/MobileChoicePickerList';
 import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import {
+  applyWorktreePreferenceOnHost,
   buildWorktreeCreateRequest,
+  classifyWorktreePreferenceSeed,
   formatWorktreeCreateFailure,
+  isExactRemoteSessionClaimed,
+  isValidWorktreeBranchPreferenceSnapshot,
+  isWorktreeChannelNotAllowedError,
+  parseWorktreeCreateResult,
   resolveWorktreeEligibility,
-  seedWorktreeEnabled,
+  shouldAcceptWorktreeBranchListResult,
+  shouldBlockNewSessionCreateForWorktree,
   shouldShowWorktreeToggle,
   worktreeEligibilityForTarget,
   worktreeEligibilityCaptionKey,
   worktreeEligibilityFromError,
+  worktreeSourceBranchFromPreference,
+  type NewSessionWorktreeEligibility,
   type NewSessionWorktreeProbeSnapshot,
 } from '@/session/newSessionWorktree';
 import { mobileAgentLabel, mobileAgentVendor } from '@/session/sessionAgentSwitch';
@@ -299,6 +331,61 @@ const COMPOSER_RESIZE_CHROME_HEIGHT = 34;
 const COMPOSER_CARD_CHROME_HEIGHT = 78;
 // Android 的 SafeAreaView 已经包含状态栏顶部 inset，不能再叠加一档顶部留白。
 const NEW_SESSION_SCREEN_TOP_PADDING = Platform.OS === 'android' ? 0 : spacing.xl;
+
+/**
+ * 目标 agent 的 Fast 能力门控取值:只认按 (设备, agent) 键控的缓存能力表——
+ * 切/恢复 agent 瞬间闭包里的 capabilities 属于切换前 agent(冷启动时为 null),
+ * 用它门控会把记忆 Fast 恢复给不支持的 agent、或把合法记忆永久清掉(codex
+ * review P1)。未就绪返回 false(保守):恢复点先置 false,由延迟恢复 effect 在
+ * 目标 caps 就绪后补评。
+ */
+function targetAgentHasFast(deviceId: string, agentKind: NewSessionAgentKind): boolean {
+  return getCachedAgentCapabilities(buildAgentCapabilitiesCacheKey(deviceId, agentKind))?.hasFastMode === true;
+}
+
+interface WorktreeBranchListSnapshot {
+  target: { deviceId: string; workingDir: string };
+  branches: string[];
+  loading: boolean;
+  failed: boolean;
+}
+
+interface WorktreePreferenceWriteTransaction {
+  seq: number;
+  deviceId: string;
+  enabled: boolean;
+  revisionAtStart: number;
+  status: 'writing' | 'reconciling' | 'committed';
+}
+
+interface PendingWorktreePreferenceAuthority {
+  enabled: boolean;
+  revisionAtStart: number;
+}
+
+interface WorktreeBranchPreferenceWriteTransaction {
+  seq: number;
+  key: string;
+  sourceBranch: string;
+  revisionAtStart: number;
+  status: 'writing' | 'unknown' | 'committed';
+}
+
+interface WorktreeBranchCompatibilitySelection {
+  key: string;
+  sourceBranch: string;
+}
+
+interface WorktreeCreateIntentSnapshot {
+  applicable: boolean;
+  enabled: boolean;
+  target: { deviceId: string; workingDir: string };
+  eligibility: NewSessionWorktreeEligibility;
+  sourceBranch: string;
+  preferenceSyncKey: string;
+  branchPreferenceKey: string;
+  branchPreferenceSyncKey: string;
+}
 
 export default function NewRemoteSessionScreen() {
   const styles = useThemedStyles(makeStyles);
@@ -332,6 +419,7 @@ export default function NewRemoteSessionScreen() {
   const router = useRouter();
   const auth = useAuth();
   const {
+    getPresenceAvailability,
     invoke,
     openLink,
     subscribe,
@@ -339,6 +427,8 @@ export default function NewRemoteSessionScreen() {
     connectionEpoch,
     presenceVersion,
   } = useDeviceLink();
+  const deviceLinkStatusRef = useRef(deviceLinkStatus);
+  deviceLinkStatusRef.current = deviceLinkStatus;
   const routeDeviceFallback = useMemo<NewSessionDeviceOption | null>(
     () => routeDeviceId ? { deviceId: routeDeviceId, name: routeDeviceName || routeDeviceId } : null,
     [routeDeviceId, routeDeviceName],
@@ -422,8 +512,63 @@ export default function NewRemoteSessionScreen() {
   // worktree 开关(project 模式 + 已选目录时显示):勾选值存工作端(get-new-maker-defaults
   // 播种 / 显式点击写穿),资格由 worktree:detect-cwd 探测(目录变化即重探,seq 防竞态)。
   const [worktreeProbe, setWorktreeProbe] = useState<NewSessionWorktreeProbeSnapshot | null>(null);
+  const [worktreeDetectRetryNonce, setWorktreeDetectRetryNonce] = useState(0);
+  const [worktreeBranchList, setWorktreeBranchList] =
+    useState<WorktreeBranchListSnapshot | null>(null);
+  const [worktreeBranchSheetOpen, setWorktreeBranchSheetOpen] = useState(false);
+  const [worktreeBranchSheetSnap, setWorktreeBranchSheetSnap] =
+    useState<ContextSheetSnap>('half');
+  const [worktreeBranchPreferenceSavingKey, setWorktreeBranchPreferenceSavingKey] =
+    useState<string | null>(null);
+  const [worktreeBranchPreferenceReadyKey, setWorktreeBranchPreferenceReadyKey] =
+    useState<string | null>(null);
+  const [worktreeBranchPreferencePullRetryNonce, setWorktreeBranchPreferencePullRetryNonce] =
+    useState(0);
+  const [worktreeBranchPreferenceErrorKey, setWorktreeBranchPreferenceErrorKey] =
+    useState<string | null>(null);
+  const [worktreeBranchCompatibilitySelection, setWorktreeBranchCompatibilitySelection] =
+    useState<WorktreeBranchCompatibilitySelection | null>(null);
   const worktreeDetectSeqRef = useRef(0);
+  const worktreeBranchListSeqRef = useRef(0);
+  const worktreeBranchPreferencePullSeqRef = useRef(0);
+  const worktreeBranchPreferenceWriteSeqRef = useRef(0);
+  const worktreeBranchPreferenceWriteTargetRef = useRef<string | null>(null);
+  const worktreeBranchPreferenceReadyKeyRef = useRef<string | null>(null);
+  const worktreeBranchPreferenceSyncKeyRef = useRef('');
+  const worktreeBranchPreferenceAuthorityReadRef = useRef<{
+    syncKey: string;
+    ignoredSnapshot: unknown;
+  } | null>(null);
+  const worktreeBranchPreferenceTransactionRef =
+    useRef<WorktreeBranchPreferenceWriteTransaction | null>(null);
+  const worktreeBranchRenderedRef = useRef({ key: '', sourceBranch: '' });
+  const worktreeBranchTargetRef = useRef({ deviceId: '', workingDir: '' });
+  const worktreeEligibilityRef = useRef<NewSessionWorktreeEligibility>({ status: 'probing' });
+  const worktreeSourceBranchRef = useRef('HEAD');
   const worktreeSeedSeqRef = useRef(0);
+  const [worktreeSeedRetryNonce, setWorktreeSeedRetryNonce] = useState(0);
+  const [worktreePreferenceReadyKey, setWorktreePreferenceReadyKey] = useState<string | null>(null);
+  const worktreePreferenceReadyKeyRef = useRef<string | null>(null);
+  const worktreePreferenceSyncKeyRef = useRef('');
+  const worktreePreferenceAuthorityReadRef = useRef<{ syncKey: string; revision: number } | null>(
+    null,
+  );
+  const worktreePreferenceWriteSeqRef = useRef(0);
+  // State updates are batched; this synchronous target fence closes the
+  // OFF→ON/ON→OFF then immediate Create gap before React renders the spinner.
+  const worktreePreferenceWriteTargetRef = useRef<string | null>(null);
+  const [worktreePreferenceSavingDeviceId, setWorktreePreferenceSavingDeviceId] =
+    useState<string | null>(null);
+  const worktreePreferenceTransactionRef = useRef<WorktreePreferenceWriteTransaction | null>(null);
+  const worktreePreferenceRenderedRef = useRef({
+    deviceId: selectedDeviceId,
+    enabled: worktreeEnabled,
+    revision: worktreePreference.revision,
+  });
+  const worktreePreferenceAuthorityUnknownByDeviceRef = useRef(
+    new Map<string, PendingWorktreePreferenceAuthority>(),
+  );
+  const [, setWorktreePreferenceAuthorityVersion] = useState(0);
   const [attachments, setAttachments] = useState<RemoteSerializedAttachment[]>([]);
   // create() 里 await 在途图片上传后闭包里的 attachments 已是旧值,经 ref 读最新列表。
   const attachmentsRef = useRef(attachments);
@@ -543,13 +688,22 @@ export default function NewRemoteSessionScreen() {
   const [firstMessageInputContentHeight, setFirstMessageInputContentHeight] = useState(MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT);
   const [firstMessageInputFocused, setFirstMessageInputFocused] = useState(false);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
-  // 自动默认运行配置(跟随最近会话 / 列表最上面)的守卫:用户一旦手动选过模型,就不再自动覆盖;
+  // 自动默认运行配置(跟随最近会话 / 区域默认 / 列表最上面)的守卫:用户一旦手动选过模型,就不再自动覆盖;
   // 记录已自动应用过的设备,切设备时(未手动选过)按新设备重算。
   const userTouchedRuntimeRef = useRef(false);
   // 只保护当前页面刚从 provider 目录显式选中的模型，避免旧 capabilities 在途结果误回退；
   // 持久草稿不会写入该 ref，因此已下架模型仍走 mobile 的首项降级。
   const explicitProviderModelSelectionRef = useRef<string | null>(null);
   const autoDefaultDeviceRef = useRef<string | null>(null);
+  // selectedDeviceId 的渲染期镜像:异步回调(权限确认 .then)提交前比对触发时捕获的设备,
+  // 不一致即放弃写入 —— 防止确认弹窗期间用户切了设备,回调把旧设备的来源/配置写进草稿
+  // (Greptile review P1:异步切换写入旧设备来源)。
+  const selectedDeviceRef = useRef(selectedDeviceId);
+  selectedDeviceRef.current = selectedDeviceId;
+  // 运行配置操作的代际计数:switchAgent / 恢复 agent / 手动选行每次触发 +1,
+  // 异步回调(权限确认 .then)提交前比对触发时捕获的代际,不等即放弃写入 ——
+  // 同一设备上的连续操作也是最新者胜(Greptile review P1:旧确认回调覆盖新选择)。
+  const runtimeActionSeqRef = useRef(0);
   const runtimeOptions = useMemo(
     () => buildSessionRuntimeOptions(draft, capabilities),
     [capabilities, draft.model],
@@ -577,6 +731,19 @@ export default function NewRemoteSessionScreen() {
     () => flattenProviderSections(modelSections.sections),
     [modelSections.sections],
   );
+  // modelRows / 目录就绪信号的渲染期镜像:create / createGoalSession 是长依赖数组的
+  // useCallback,闭包可能停在旧渲染——提交点终检必须读最新值,否则目录从未就绪变为
+  // 就绪后,旧回调仍以 catalogReady=false 放行已失效来源(Greptile review P1:
+  // 旧目录快照绕过终检)。
+  const modelRowsRef = useRef(modelRows);
+  modelRowsRef.current = modelRows;
+  const catalogReadyRef = useRef(deviceProviders.ready);
+  catalogReadyRef.current = deviceProviders.ready;
+  // 供应商目录本身的渲染期镜像:异步回调(权限确认 .then)提交时用它现场重建目标
+  // agent 的 rows——确认弹窗期间目录可能从未就绪变为就绪或同设备刷新,触发时捕获的
+  // rows 与最新 ready 不同代会误判/抄旧首项(codex review P2)。
+  const deviceProvidersRef = useRef(deviceProviders);
+  deviceProvidersRef.current = deviceProviders;
   // 发送前鉴权门禁(对齐桌面 useVendorAuthGate):选中 agent 在被控端没有已连接
   // 供应商时提前提示 + 拦截创建,不让用户发出注定失败的首条消息。unknown 不拦截。
   const agentAuthVerdict = useMemo(
@@ -590,14 +757,37 @@ export default function NewRemoteSessionScreen() {
   );
   // 创建前的 fresh 鉴权确认(绕过缓存现拉):true = 确认无已连接供应商,应拦截。
   // 空目录 / 拉取失败(旧被控端 / 瞬断)与 agentAuthGateVerdict 的 unknown 同语义,
-  // fail-open 返回 false 放行(review P2:不把空回包升级成硬拦截)。
-  const confirmAgentUnauthenticated = useCallback(async (agentKind: NewSessionAgentKind) => {
+  // fail-open 返回 unauthenticated=false 放行(review P2:不把空回包升级成硬拦截)。
+  // fresh = 本次现拉的工作站目录(管线鉴权后联合校验用,codex review P2)。
+  const confirmAgentUnauthenticated = useCallback(async (agentKind: NewSessionAgentKind, deviceId: string) => {
     try {
-      const fresh = await maker.listProviders();
-      return fresh.providers.length > 0
-        && connectedProvidersForAgent(fresh.providers, agentKind).length === 0;
+      // 经 fetchDeviceProvidersFresh 拉取(codex review P2:将最终鉴权目录同步回
+      // 供应商缓存)——直接 listProviders 只把响应交给管线,不更新/驱逐缓存:提交
+      // guard 已缓存来源 A、建链后鉴权终检看到 B 并用 B 创建时,跳转后
+      // useDeviceProviders 命中仍为 A 的缓存并标记 ready:true,UI 与后续选择与
+      // 实际创建脱节。fresh 拉取会按设备与代际写回同一缓存并通知订阅者。
+      const fresh = await fetchDeviceProvidersFresh(deviceId, () => maker.listProviders());
+      // 丢弃已换代的最终目录响应(codex review P2):fresh 在途期间若收到
+      // provider-changed / 登出驱逐 / 重连驱逐,代际变化只让它跳过缓存回写,
+      // Promise 仍正常返回旧响应——核对响应是否被采纳(被采纳 ⟺ 缓存就是该
+      // 响应对象;fresh 成功且 isCurrent 时 cache.set 的就是这个 payload)。
+      // 未采纳 → 目录已失效,按 unknown 处理(不交给 revalidateDraftAfterAuth,
+      // 避免普通创建管线按已删除来源 A 创建;下一轮 guard/重连会取最新目录)。
+      if (getCachedDeviceProviders(deviceId) !== fresh) {
+        return { unauthenticated: false, fresh: null };
+      }
+      return {
+        unauthenticated: fresh.providers.length > 0
+          && connectedProvidersForAgent(fresh.providers, agentKind).length === 0,
+        fresh: {
+          providers: fresh.providers,
+          ...(fresh.modelVisibilityOverrides !== undefined
+            ? { modelVisibilityOverrides: fresh.modelVisibilityOverrides }
+            : {}),
+        },
+      };
     } catch {
-      return false;
+      return { unauthenticated: false, fresh: null };
     }
   }, [maker]);
   // setDraft 函数式更新里拿不到最新 modelSections —— 用 ref 镜像当前高亮来源 id。
@@ -670,36 +860,57 @@ export default function NewRemoteSessionScreen() {
     // 该路径同时负责恢复 agent 权限，下面的通用权限记忆 effect 不再重复弹框。
     appliedPermissionMemoryRef.current = true;
     if (selectedDeviceId) autoDefaultDeviceRef.current = selectedDeviceId;
-    const rows = flattenProviderSections(
-      buildMobileModelSections({
-        providers: deviceProviders.providers,
-        agentKind: storedAgentKind,
-        visibilityOverrides: deviceProviders.modelVisibilityOverrides,
-      }).sections,
-    );
-    const rememberedPermissionMode =
-      newSessionPreferences?.permissionModeByAgent[storedAgentKind] ??
+    const storedPermissionMode = newSessionPreferences?.permissionModeByAgent[storedAgentKind];
+    const nextPermissionMode =
+      storedPermissionMode ??
       defaultPermissionModeForNewSessionAgent(storedAgentKind);
     let cancelled = false;
+    const deviceAtTrigger = selectedDeviceId;
+    const seqAtTrigger = ++runtimeActionSeqRef.current;
     void (async () => {
-      const confirmed = await confirmFullAccessChange(draft.permissionMode, rememberedPermissionMode);
+      const confirmed = await confirmFullAccessChange(draft.permissionMode, nextPermissionMode, {
+        restoringRememberedChoice: storedPermissionMode !== undefined,
+      });
       if (cancelled) return;
+      // 确认期间设备已切换 → 放弃本次写入,新设备自己的恢复/自动默认 effect 会接管。
+      if (deviceAtTrigger !== selectedDeviceRef.current) return;
+      // 确认期间用户又切了 agent / 手动选了模型 → 旧回调不得覆盖新选择。
+      if (seqAtTrigger !== runtimeActionSeqRef.current) return;
       setDraft((current) => {
+        // rows 与 ready 必须同一代(codex review P2):提交时用最新目录现场重建,
+        // 不用触发时捕获的旧 rows。
+        const rowsNow = flattenProviderSections(
+          buildMobileModelSections({
+            providers: deviceProvidersRef.current.providers,
+            agentKind: storedAgentKind,
+            visibilityOverrides: deviceProvidersRef.current.modelVisibilityOverrides,
+          }).sections,
+        );
         const next = pickAgentDefaultRuntime({
           agentKind: storedAgentKind,
           sessions,
           deviceId: selectedDeviceId || undefined,
-          modelRows: rows,
+          modelRows: rowsNow,
           currentEffort: current.effort,
+          catalogReady: catalogReadyRef.current,
         });
         return {
           ...current,
           agentKind: next.agentKind,
           model: next.model,
           effort: next.effort,
-          // 记忆的 Full access 必须经过一次明确确认；取消时保留当前安全档。
-          permissionMode: confirmed ? rememberedPermissionMode : current.permissionMode,
-          providerId: null,
+          // 上次明确选择过的权限直接沿用；内置默认若升级到 Full access 仍需确认。
+          permissionMode: confirmed ? nextPermissionMode : current.permissionMode,
+          providerId: next.providerId,
+          // fast 按 (agent, 来源, 模型) 记忆恢复,无记忆置 false;恢复前过与手动选行
+          // 同款的 fastEditable 门控(codex review P2:目录/能力变化后不得恢复出
+          // UI 显示关、实际发 true 的矛盾态)。agent 级门控只认目标 agent 的缓存
+          // 能力表(codex review P1:此刻闭包里的 capabilities 属于切换前 agent 或
+          // 为 null);目标 caps 未就绪 → false,由延迟恢复 effect 就绪后补评。
+          fastMode: next.providerId
+            && isFastRestorable(next.agentKind, next.providerId, next.model, rowsNow, targetAgentHasFast(selectedDeviceId, next.agentKind))
+            ? (draftMemory.getFast(next.agentKind, next.providerId, next.model) ?? false)
+            : false,
         };
       });
     })();
@@ -707,7 +918,6 @@ export default function NewRemoteSessionScreen() {
       cancelled = true;
     };
   }, [
-    confirmFullAccessChange,
     draft.permissionMode,
     deviceProviders.loading,
     deviceProviders.providers,
@@ -730,7 +940,9 @@ export default function NewRemoteSessionScreen() {
     const remembered = newSessionPreferences?.permissionModeByAgent[draft.agentKind];
     if (!remembered || remembered === draft.permissionMode) return;
     let cancelled = false;
-    void confirmFullAccessChange(draft.permissionMode, remembered).then((confirmed) => {
+    void confirmFullAccessChange(draft.permissionMode, remembered, {
+      restoringRememberedChoice: true,
+    }).then((confirmed) => {
       if (cancelled || !confirmed) return;
       setDraft((current) => ({ ...current, permissionMode: remembered }));
     });
@@ -739,8 +951,8 @@ export default function NewRemoteSessionScreen() {
     };
   }, [draft.agentKind, draft.permissionMode, newSessionPreferences, newSessionPreferencesLoaded]);
 
-  // 新建任务默认运行配置 = 跟随最近一次会话(整套 agent+model+effort,按所选设备 scope);没有最近会话则用
-  // 模型列表最上面那个(列表异步就绪后再设)。一旦用户手动选过模型即不再覆盖;切设备(未手动选过)按新设备重算。
+  // 新建任务默认运行配置 = 跟随最近一次会话(整套 agent+model+effort,按所选设备 scope);没有最近会话则
+  // 优先区域默认、再用模型列表最上面那个。一旦用户手动选过模型即不再覆盖;切设备(未手动选过)按新设备重算。
   // 决策逻辑全在纯函数 resolveNewSessionAutoDefault 里(便于单测);此 effect 只负责"调纯函数 → setDraft + 更新 ref"。
   // 最近会话路径同步可得(sessions 在内存);列表最上面依赖 providers 异步,故 modelRows 就绪后此 effect 再触发。
   useEffect(() => {
@@ -751,30 +963,89 @@ export default function NewRemoteSessionScreen() {
       selectedDeviceId,
       sessions,
       modelRows,
+      // modelRows 按当前 draft.agentKind 构建;最近会话若是另一个 agent,纯函数内不做来源校验。
+      rowsAgentKind: draft.agentKind,
+      catalogReady: deviceProviders.ready,
+      // 目录明确不可用(error 非空,旧被控端无 provider:list 通道等)→ 放行扁平回退
+      // (codex review P2);加载中/切设备间隙 error 为空,维持既有「不动等重算」语义。
+      providersUnavailable: deviceProviders.error != null,
+      // provider-aware 模式只用经过可见性过滤的 rows;目录确实不可用时才回退
+      // capabilities(上游 main 移植,merge 2026-08-07)。
+      availableModels: !deviceProviders.loading && modelSections.connected.length === 0
+        ? capabilities?.availableModels
+        : undefined,
       currentEffort: draft.effort,
     });
     if (!result) return;
     autoDefaultDeviceRef.current = result.appliedDeviceId;
     const nextAgentKind = result.patch.agentKind ?? draft.agentKind;
-    const rememberedPermissionMode =
-      appliedPermissionMemoryRef.current
-        ? draft.permissionMode
-        : newSessionPreferences?.permissionModeByAgent[nextAgentKind] ??
-          defaultPermissionModeForNewSessionAgent(nextAgentKind);
+    const storedPermissionMode = appliedPermissionMemoryRef.current
+      ? undefined
+      : newSessionPreferences?.permissionModeByAgent[nextAgentKind];
+    const nextPermissionMode = appliedPermissionMemoryRef.current
+      ? draft.permissionMode
+      : storedPermissionMode ?? defaultPermissionModeForNewSessionAgent(nextAgentKind);
     let cancelled = false;
-    void confirmFullAccessChange(draft.permissionMode, rememberedPermissionMode).then((confirmed) => {
+    void confirmFullAccessChange(draft.permissionMode, nextPermissionMode, {
+      restoringRememberedChoice: storedPermissionMode !== undefined,
+    }).then((confirmed) => {
       if (cancelled || userTouchedRuntimeRef.current) return;
-      setDraft((current) => ({
-        ...current,
-        ...result.patch,
-        // 自动恢复历史 Full access 也必须经过明确确认；取消时保留当前档位。
-        permissionMode: confirmed ? rememberedPermissionMode : current.permissionMode,
-      }));
+      setDraft((current) => {
+        // 自动默认重算(设备切换/最近会话变化)改了 (agent, model, providerId) 组合 →
+        // fastMode 按新组合重验(Codex review P2):A 设备记忆恢复的 fastMode:true 不得
+        // 随 `...current` 带进 B 的组合(若 B 的模型行不支持 Fast,终检/延迟恢复/能力
+        // 协调三条路径都不会处理它)。组合变化时保守关闭,由延迟恢复 effect 在 B 的
+        // 组合 + 能力就绪后按记忆重评(手动关过 → 记忆为 false,不会重新打开)。
+        const nextModel = result.patch.model ?? current.model;
+        // providerId 用 `!== undefined` 而非 `??`:patch 显式带 providerId:null(来源
+        // 切回默认路由)是真实的组合变化,`??` 会取回旧值抹掉该变化(Codex review P2)。
+        const nextProviderId = result.patch.providerId !== undefined
+          ? result.patch.providerId
+          : current.providerId;
+        const nextAgentKind = result.patch.agentKind ?? current.agentKind;
+        const comboChanged = nextModel !== current.model
+          || nextProviderId !== current.providerId
+          || nextAgentKind !== current.agentKind;
+        return {
+          ...current,
+          ...result.patch,
+          ...(comboChanged ? { fastMode: false } : {}),
+          // 自动恢复上次明确选择的权限不再重复确认；内置默认仍按升级规则确认。
+          permissionMode: confirmed ? nextPermissionMode : current.permissionMode,
+        };
+      });
     });
     return () => {
       cancelled = true;
     };
-  }, [draft.effort, draft.permissionMode, draft.agentKind, modelRows, newSessionPreferences, newSessionPreferencesLoaded, selectedDeviceId, sessions]);
+  }, [capabilities?.availableModels, deviceProviders.loading, draft.effort, draft.permissionMode, draft.agentKind, modelRows, deviceProviders.ready, modelSections.connected.length, newSessionPreferences, newSessionPreferencesLoaded, selectedDeviceId, sessions]);
+
+  // 目录就绪后的来源终检(codex review P1):自动默认/恢复在目录加载期信任的来源可能已失效
+  // (provider 被删/断开/模型下架),就绪后必须复核——联合回退整对 (model, providerId)
+  // (其他来源顶替 / 首项 / 内置默认),不留裸模型回落默认网关(codex review P2)。
+  // 无变化时返回原引用,不触发额外渲染。
+  useEffect(() => {
+    if (!deviceProviders.ready) return;
+    setDraft((current) => {
+      if (!current.providerId) return current;
+      const resolved = resolveRecentModelAndProvider(
+        modelRows,
+        { model: current.model, providerId: current.providerId },
+        current.agentKind,
+        true,
+      );
+      const pairChanged = resolved.model !== current.model || resolved.providerId !== current.providerId;
+      if (!pairChanged) return current;
+      // 组合变化时同步校准 effort(codex review P2)、fastMode 保守置 false(可手动重开)。
+      return {
+        ...current,
+        model: resolved.model,
+        providerId: resolved.providerId,
+        effort: reconcileEffortAfterFallback(modelRows, resolved, current.effort),
+        ...(current.fastMode ? { fastMode: false } : {}),
+      };
+    });
+  }, [deviceProviders.ready, modelRows]);
   const draftContent = useMemo(
     // pending(乐观上传中)也算数:拍完照立刻点创建是常见路径,create() 里会等它们落定。
     () => ({ attachmentCount: attachments.length + pendingUploads.length }),
@@ -806,23 +1077,302 @@ export default function NewRemoteSessionScreen() {
   );
   const WorkspaceIcon = draft.workspaceKind === 'dialogue' ? MessageCircle : Folder;
   const agentLabel = mobileAgentLabel(draft.agentKind);
-  // effect 在 commit 后才会把旧探测结果重置为 probing；render 期先按设备 + cwd 同步
-  // 对齐 target，切项目/设备后立即创建也拿不到上一仓库的 baseRepo/sourceBranch。
-  const worktreeEligibility = worktreeEligibilityForTarget(worktreeProbe, {
+  // effect 在 commit 后才会把旧探测结果重置为 probing；render 期先按设备 + cwd +
+  // 连接代次同步对齐 target，切项目/设备或同目标重连后立即创建也拿不到旧结果。
+  const worktreeTarget = {
     deviceId: selectedDeviceId ?? '',
     workingDir: draft.workspaceKind === 'project' ? draft.workingDir.trim() : '',
-  });
-  // worktree 开关行:project + 已选目录才显示;老被控端(unsupported)整行隐藏。
+    probeGeneration: `${connectionEpoch}\u0000${presenceVersion}`,
+  };
+  worktreeBranchTargetRef.current = worktreeTarget;
+  const worktreeEligibility = worktreeEligibilityForTarget(worktreeProbe, worktreeTarget);
+  worktreeEligibilityRef.current = worktreeEligibility;
+  const worktreeHostSupportsRecoveryKeyDiscard = worktreeProbe
+    && worktreeProbe.target.deviceId === worktreeTarget.deviceId
+    && worktreeProbe.target.workingDir.trim() === worktreeTarget.workingDir.trim()
+    ? worktreeProbe.supportsRecoveryKeyDiscard
+    : undefined;
+  const worktreeBranchBaseRepo = worktreeEligibility.status === 'eligible'
+    ? worktreeEligibility.baseRepo
+    : '';
+  const worktreeBranchPreferenceKey = selectedDeviceId && worktreeBranchBaseRepo
+    ? `${selectedDeviceId}\u0000${worktreeBranchBaseRepo}`
+    : '';
+  const remoteWorktreeBranchPreference = useRemoteNewMakerWorktreeBranchPreference(
+    selectedDeviceId,
+    worktreeBranchBaseRepo,
+  );
+  const authoritativeWorktreeSourceBranch = worktreeSourceBranchFromPreference(
+    remoteWorktreeBranchPreference,
+    worktreeEligibility,
+  );
+  const worktreeSourceBranch = worktreeBranchCompatibilitySelection?.key
+    === worktreeBranchPreferenceKey
+    ? worktreeBranchCompatibilitySelection.sourceBranch
+    : authoritativeWorktreeSourceBranch;
+  worktreeSourceBranchRef.current = worktreeSourceBranch;
+  const worktreeBranchListMatchesTarget = worktreeBranchList != null
+    && worktreeBranchList.target.deviceId === worktreeTarget.deviceId
+    && worktreeBranchList.target.workingDir.trim() === worktreeTarget.workingDir.trim();
+  const worktreeBranchOptions = useMemo(
+    () => worktreeBranchListMatchesTarget
+      ? worktreeBranchList.branches.map((branch) => ({ id: branch, label: branch }))
+      : [],
+    [worktreeBranchList, worktreeBranchListMatchesTarget],
+  );
+  // 老被控端通常隐藏开关；若工作端旧镜像仍为 ON，则保留显式关闭入口，避免
+  // fail-closed 后既不能创建、也不能解除状态。
   const worktreeRowVisible = shouldShowWorktreeToggle({
     workspaceKind: draft.workspaceKind,
     workingDir: draft.workingDir,
     eligibility: worktreeEligibility,
+    enabled: worktreeEnabled,
   });
-  const worktreeToggleDisabled = creating || worktreeEligibility.status !== 'eligible';
+  const worktreePreferenceSaving =
+    selectedDeviceId != null && (
+      worktreePreferenceSavingDeviceId === selectedDeviceId
+      || worktreePreferenceWriteTargetRef.current === selectedDeviceId
+    );
+  const worktreePreferenceSyncKey = selectedDeviceId
+    ? `${selectedDeviceId}\u0000${connectionEpoch}\u0000${presenceVersion}`
+    : '';
+  worktreePreferenceSyncKeyRef.current = worktreePreferenceSyncKey;
+  const worktreePreferenceReady = worktreePreferenceSyncKey.length > 0
+    && worktreePreferenceReadyKey === worktreePreferenceSyncKey
+    && worktreePreferenceReadyKeyRef.current === worktreePreferenceSyncKey;
+  const worktreePreferenceAuthorityUnknown = selectedDeviceId != null
+    && worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId);
+  const worktreeApplicable = draft.workspaceKind === 'project'
+    && draft.workingDir.trim().length > 0;
+  // ineligible(2026-08-07 裁决):确认目录不合格时无需等偏好就绪——反正不会
+  // 创建 worktree,GET 在途不应卡住普通会话创建。
+  const worktreePreferenceCreateBlocked = worktreeApplicable
+    && selectedDeviceId != null
+    && worktreeEligibility.status !== 'ineligible'
+    && (
+      worktreePreferenceSaving
+      || worktreePreferenceAuthorityUnknown
+      || !worktreePreferenceReady
+    );
+  // host preference 虽然持久化，连接代次仍属于权威读取 identity：桌面重启/重连后
+  // 即使 deviceId/repo 没变，也重新 GET，不能只相信手机内存里的旧快照。
+  const worktreeBranchPreferenceSyncKey = worktreeBranchPreferenceKey
+    ? `${worktreeBranchPreferenceKey}\u0000${connectionEpoch}\u0000${presenceVersion}`
+    : '';
+  worktreeBranchPreferenceSyncKeyRef.current = worktreeBranchPreferenceSyncKey;
+  const worktreeBranchPreferenceReady = worktreeBranchPreferenceSyncKey.length > 0
+    && worktreeBranchPreferenceReadyKey === worktreeBranchPreferenceSyncKey
+    && worktreeBranchPreferenceReadyKeyRef.current === worktreeBranchPreferenceSyncKey;
+  const worktreeBranchPreferenceError = worktreeBranchPreferenceKey.length > 0
+    && worktreeBranchPreferenceErrorKey === worktreeBranchPreferenceKey;
+  const worktreeBranchPreferenceSaving = worktreeBranchPreferenceKey.length > 0
+    && (
+      worktreeBranchPreferenceSavingKey === worktreeBranchPreferenceKey
+      || worktreeBranchPreferenceWriteTargetRef.current === worktreeBranchPreferenceKey
+    );
+  const worktreeToggleDisabled =
+    creating
+    || worktreePreferenceSaving
+    || (!worktreePreferenceReady && !worktreePreferenceAuthorityUnknown)
+    || (worktreeEligibility.status !== 'eligible' && !worktreeEnabled);
+  // 分支区与 checkbox 是两条独立轴：OFF 时也可先选源分支；保存 checkbox 偏好在途
+  // 同样不影响只读的分支枚举。只有目标尚不具备 worktree 资格或创建在途时禁用。
+  const worktreeBranchDisabled = creating
+    || worktreeBranchPreferenceSaving
+    || worktreeEligibility.status !== 'eligible'
+    || (!worktreeBranchPreferenceReady && !worktreeBranchPreferenceError);
+  const worktreeBranchSheetVisible = worktreeBranchSheetOpen
+    && worktreeEligibility.status === 'eligible'
+    && worktreeBranchListMatchesTarget;
   // 勾选展示 = 工作端记忆**原样直出**(2026-07-29 用户裁决:状态只属于用户,系统不做
-  // 视觉折叠);资格不满足只体现为禁用 + caption,创建时按「勾选 && 合格」静默降级。
+  // 视觉折叠);项目目标资格不满足时显示 caption 并阻止创建，不能静默降级普通目录。
   const worktreeChecked = worktreeEnabled;
   const worktreeCaptionKey = worktreeEligibilityCaptionKey(worktreeEligibility);
+  const worktreeCreateBlocked = shouldBlockNewSessionCreateForWorktree({
+    applicable: worktreeApplicable,
+    enabled: worktreeEnabled,
+    eligibility: worktreeEligibility,
+    preferenceSaving: worktreePreferenceSaving,
+  })
+    || worktreePreferenceCreateBlocked
+    || (worktreeEnabled && worktreeBranchPreferenceSaving)
+    || (worktreeEnabled
+      && worktreeEligibility.status === 'eligible'
+      && (!worktreeBranchPreferenceReady || worktreeBranchPreferenceError));
+  const worktreeControlCaptionKey = worktreeCaptionKey
+    ?? (worktreeBranchPreferenceError ? 'session.new.worktreeBranchSyncFailed' : null);
+
+  useLayoutEffect(() => {
+    worktreePreferenceRenderedRef.current = {
+      deviceId: selectedDeviceId,
+      enabled: worktreePreference.enabled,
+      revision: worktreePreference.revision,
+    };
+    const transaction = worktreePreferenceTransactionRef.current;
+    if (
+      !transaction
+      || (transaction.status !== 'reconciling' && transaction.status !== 'committed')
+      || transaction.deviceId !== selectedDeviceId
+      || worktreePreference.enabled !== transaction.enabled
+      || worktreePreference.revision <= transaction.revisionAtStart
+    ) return;
+    worktreePreferenceTransactionRef.current = null;
+    if (worktreePreferenceWriteTargetRef.current === transaction.deviceId) {
+      worktreePreferenceWriteTargetRef.current = null;
+    }
+    setWorktreePreferenceSavingDeviceId(null);
+  }, [selectedDeviceId, worktreePreference.enabled, worktreePreference.revision]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    const transaction = worktreePreferenceTransactionRef.current;
+    if (
+      transaction?.deviceId === selectedDeviceId
+      && transaction.status === 'reconciling'
+      && worktreePreference.revision > transaction.revisionAtStart
+      && worktreePreference.enabled !== transaction.enabled
+    ) {
+      // The host echoed a different authoritative value. Do not silently use
+      // it for this Create attempt: release the active spinner, retain the
+      // user's requested value as an unknown obligation, and allow a retry.
+      worktreePreferenceAuthorityUnknownByDeviceRef.current.set(selectedDeviceId, {
+        enabled: transaction.enabled,
+        revisionAtStart: transaction.revisionAtStart,
+      });
+      worktreePreferenceTransactionRef.current = null;
+      if (worktreePreferenceWriteTargetRef.current === selectedDeviceId) {
+        worktreePreferenceWriteTargetRef.current = null;
+      }
+      setWorktreePreferenceSavingDeviceId(null);
+      setWorktreePreferenceAuthorityVersion((value) => value + 1);
+    }
+    const pending = worktreePreferenceAuthorityUnknownByDeviceRef.current.get(selectedDeviceId);
+    if (
+      !pending
+      || worktreePreference.revision <= pending.revisionAtStart
+      || worktreePreference.enabled !== pending.enabled
+    ) return;
+    worktreePreferenceAuthorityUnknownByDeviceRef.current.delete(selectedDeviceId);
+    setWorktreePreferenceAuthorityVersion((value) => value + 1);
+  }, [selectedDeviceId, worktreePreference.enabled, worktreePreference.revision]);
+
+  const settleRenderedWorktreeBranchTransaction = useCallback((
+    key: string,
+    sourceBranch: string,
+    syncKey: string,
+  ) => {
+    const transaction = worktreeBranchPreferenceTransactionRef.current;
+    if (
+      !transaction
+      || transaction.status !== 'committed'
+      || transaction.key !== key
+      || transaction.sourceBranch !== sourceBranch
+    ) return false;
+    worktreeBranchPreferenceTransactionRef.current = null;
+    if (worktreeBranchPreferenceWriteTargetRef.current === transaction.key) {
+      worktreeBranchPreferenceWriteTargetRef.current = null;
+    }
+    setWorktreeBranchPreferenceSavingKey(null);
+    setWorktreeBranchPreferenceErrorKey(null);
+    worktreeBranchPreferenceReadyKeyRef.current = syncKey;
+    setWorktreeBranchPreferenceReadyKey(syncKey);
+    return true;
+  }, []);
+
+  useLayoutEffect(() => {
+    worktreeBranchRenderedRef.current = {
+      key: worktreeBranchPreferenceKey,
+      sourceBranch: worktreeSourceBranch,
+    };
+    settleRenderedWorktreeBranchTransaction(
+      worktreeBranchPreferenceKey,
+      worktreeSourceBranch,
+      worktreeBranchPreferenceSyncKey,
+    );
+  }, [
+    settleRenderedWorktreeBranchTransaction,
+    worktreeBranchPreferenceKey,
+    worktreeBranchPreferenceSyncKey,
+    worktreeSourceBranch,
+  ]);
+
+  const captureWorktreeCreateIntent = useCallback((): WorktreeCreateIntentSnapshot => {
+    const target = { ...worktreeBranchTargetRef.current };
+    const eligibility = worktreeEligibilityRef.current;
+    const branchPreferenceKey = target.deviceId && eligibility.status === 'eligible'
+      ? `${target.deviceId}\u0000${eligibility.baseRepo}`
+      : '';
+    return {
+      applicable: target.deviceId.length > 0 && target.workingDir.trim().length > 0,
+      enabled: target.deviceId
+        ? remoteSessionStore.getNewMakerWorktreePreference(target.deviceId).enabled
+        : false,
+      target,
+      eligibility,
+      sourceBranch: worktreeSourceBranchRef.current,
+      preferenceSyncKey: worktreePreferenceSyncKeyRef.current,
+      branchPreferenceKey,
+      branchPreferenceSyncKey: worktreeBranchPreferenceSyncKeyRef.current,
+    };
+  }, []);
+
+  const isWorktreeCreateIntentCurrent = useCallback((
+    intent: WorktreeCreateIntentSnapshot,
+  ): boolean => {
+    if (!intent.applicable) return true;
+    const currentTarget = worktreeBranchTargetRef.current;
+    if (
+      deviceLinkStatusRef.current !== 'online'
+      || currentTarget.deviceId !== intent.target.deviceId
+      || currentTarget.workingDir.trim() !== intent.target.workingDir.trim()
+    ) return false;
+    // ineligible 目标不创建 worktree,无需等偏好同步/就绪——提前返回,
+    // 避免偏好 GET 在途时被下方偏好守卫拦截;与 enabled 无关(2026-08-07 裁决)。
+    // 但快照不能替代实时状态:await 期间同目标可能被重探回 probing/eligible/
+    // detect-failed,旧 ineligible 快照必须复核 live ref 仍为 ineligible 才放行,
+    // 否则回到 fail closed(探测未定不等于确认不合格)。
+    if (intent.eligibility.status === 'ineligible') {
+      return worktreeEligibilityRef.current.status === 'ineligible';
+    }
+    if (
+      worktreePreferenceSyncKeyRef.current !== intent.preferenceSyncKey
+      || worktreePreferenceReadyKeyRef.current !== intent.preferenceSyncKey
+      || worktreePreferenceWriteTargetRef.current === intent.target.deviceId
+      || worktreePreferenceAuthorityUnknownByDeviceRef.current.has(intent.target.deviceId)
+    ) return false;
+    const currentEnabled = remoteSessionStore
+      .getNewMakerWorktreePreference(intent.target.deviceId).enabled;
+    if (currentEnabled !== intent.enabled) return false;
+    if (!intent.enabled) return true;
+    // ineligible 已在前面提前返回,此处只可能是 eligible(2026-08-07 裁决)。
+    if (intent.eligibility.status !== 'eligible') return false;
+    // 与 ineligible 快照同理:eligible 快照也必须复核 live 资格仍是同一 repo 的
+    // eligible,await 期间被重探成别的状态或换了 repo 都不能继续建 worktree。
+    const currentEligibility = worktreeEligibilityRef.current;
+    if (
+      currentEligibility.status !== 'eligible'
+      || currentEligibility.baseRepo !== intent.eligibility.baseRepo
+    ) return false;
+    const currentStoredBranch = remoteSessionStore.getNewMakerWorktreeBranchPreference(
+      intent.target.deviceId,
+      currentEligibility.baseRepo,
+    );
+    const currentSourceBranch = isValidWorktreeBranchPreferenceSnapshot(
+      currentStoredBranch,
+      currentEligibility.baseRepo,
+    )
+      ? currentStoredBranch.sourceBranch
+      : worktreeSourceBranchRef.current;
+    if (currentSourceBranch !== intent.sourceBranch) return false;
+    const branchTransaction = worktreeBranchPreferenceTransactionRef.current;
+    return worktreeBranchPreferenceSyncKeyRef.current === intent.branchPreferenceSyncKey
+      && worktreeBranchPreferenceReadyKeyRef.current === intent.branchPreferenceSyncKey
+      && worktreeBranchPreferenceWriteTargetRef.current !== intent.branchPreferenceKey
+      && !(
+        branchTransaction?.key === intent.branchPreferenceKey
+        && (branchTransaction.status === 'writing' || branchTransaction.status === 'unknown')
+      );
+  }, []);
   const createValidation = useMemo(
     () => validateNewSessionDraft(draft, draftContent),
     [draft, draftContent],
@@ -868,7 +1418,8 @@ export default function NewRemoteSessionScreen() {
   );
   const canCreate = (!createValidation || (voiceIsListening && createValidationIsMissingPayload))
     && !creating
-    && !voiceIsProcessing;
+    && !voiceIsProcessing
+    && !worktreeCreateBlocked;
   const voiceIsBusy = voiceIsListening || voiceIsProcessing;
   // 录音计时(红点+m:ss 胶囊,与会话页/桌面同形态);pillWidth 同步驱动工具排占位。
   // counting 只认真实采集,启动链路(权限弹窗等)不计入时长,pending 期显示 0:00。
@@ -1195,6 +1746,70 @@ export default function NewRemoteSessionScreen() {
     };
   }, [selectedDeviceId, draft.agentKind, maker, openLink]);
 
+  // Fast 记忆延迟恢复(codex review P1):切/恢复 agent 的瞬间,目标 agent 的能力表
+  // 尚未到达(或残留着切换前 agent 的),恢复点只能保守置 false;真正的恢复在这里——
+  // 目标 agent 的 capabilities 就绪后,按 (agent, 来源, 模型) 记忆 + 与手动选行同款的
+  // fastEditable 门控重评一次,通过才把 fastMode 打开。手动开关会写 draftMemory:
+  // 用户主动关过 → 记忆为 false → 本 effect 不会重新打开;创建路径拿到的 fastMode
+  // 永远已过目标 agent 门控,不会发出目标不支持的 fastMode:true。
+  // 关闭方向(codex review P2):已开启的 fastMode 在 (provider, model) 组合失去
+  // Fast 支持(provider revision 下架 / caps 撤销 hasFastMode)时必须同步关闭——
+  // 否则 UI 的 rowFastEditable 已显示关、创建仍发 fastMode:true 被拒。仅能力表
+  // 与目录均就绪时判定(缓存缺失/加载中不动作,避免切设备瞬间误关)。
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    // 来源 id 与 changeSelectedFastMode 同口径:显式选了来源用 providerId,默认路由
+    // (null)草稿可用推断来源(activeSourceIdRef)开启 Fast——撤销检查不得漏掉它
+    // (codex review P2:目录 revision 改变默认来源/移除 Fast 支持时,null-provider
+    // 草稿仍在发 fastMode:true)。
+    const pid = draft.providerId ?? activeSourceIdRef.current;
+    if (!pid) return;
+    const capsKnown = getCachedAgentCapabilities(buildAgentCapabilitiesCacheKey(selectedDeviceId, draft.agentKind)) !== undefined;
+    if (draft.fastMode) {
+      if (
+        capsKnown
+        && catalogReadyRef.current
+        && !isFastRestorable(
+          draft.agentKind,
+          pid,
+          draft.model,
+          modelRowsRef.current,
+          targetAgentHasFast(selectedDeviceId, draft.agentKind),
+        )
+      ) {
+        setDraft((current) => (
+          current.fastMode
+          && current.agentKind === draft.agentKind
+          && current.model === draft.model
+          && current.providerId === draft.providerId
+            ? { ...current, fastMode: false }
+            : current
+        ));
+      }
+      return;
+    }
+    if (draftMemory.getFast(draft.agentKind, pid, draft.model) !== true) return;
+    if (!isFastRestorable(
+      draft.agentKind,
+      pid,
+      draft.model,
+      modelRowsRef.current,
+      targetAgentHasFast(selectedDeviceId, draft.agentKind),
+    )) return;
+    setDraft((current) => (
+      !current.fastMode
+      && current.agentKind === draft.agentKind
+      && current.model === draft.model
+      && current.providerId === draft.providerId
+        ? { ...current, fastMode: true }
+        : current
+    ));
+    // capabilities / modelRows / deviceProviders.ready 是触发信号(能力表或目录变化
+    // 都重评);目标归属由 targetAgentHasFast 的 (设备, agent) 键控缓存校验,不靠
+    // state 身份判断。判定体内经 catalogReadyRef 读最新就绪态。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [capabilities, draft.agentKind, draft.model, draft.providerId, draft.fastMode, selectedDeviceId, draftMemory, modelRows, deviceProviders.ready]);
+
   // 拉被控端 runtime 已注册的 agent 集合(过滤新建 agent 入口)。fail-open:失败/无设备时置 null
   // (不过滤),真正的兜底是被控端 requireAgent。窗口/设备切换重拉,让按需下载补齐的 Pi 及时出现。
   useEffect(() => {
@@ -1463,6 +2078,7 @@ export default function NewRemoteSessionScreen() {
   // 同模型换来源不沿用当前档;fast 按 (来源, 模型) 记忆恢复,fastEditable 门控)。
   const selectProviderModelRow = useCallback((row: ProviderModelRow) => {
     userTouchedRuntimeRef.current = true; // 用户手动选了模型 → 不再自动覆盖运行配置
+    runtimeActionSeqRef.current += 1; // 使在途的切 agent/恢复回调失效(最新者胜)
     setDraft((current) => {
       const next = resolveRowSelection({
         row,
@@ -1490,6 +2106,7 @@ export default function NewRemoteSessionScreen() {
   // 扁平回退(被控端 0 供应商):只落 model、清来源(默认路由),effort 跟随 capabilities reconcile。
   const selectFlatModel = useCallback((option: MobileModelOption) => {
     userTouchedRuntimeRef.current = true; // 用户手动选了模型 → 不再自动覆盖运行配置
+    runtimeActionSeqRef.current += 1; // 使在途的切 agent/恢复回调失效(最新者胜)
     explicitProviderModelSelectionRef.current = null;
     setDraft((current) =>
       reconcileRuntimeDraftWithCapabilities({ ...current, model: option.id, providerId: null }, capabilities));
@@ -1519,6 +2136,7 @@ export default function NewRemoteSessionScreen() {
     setWorkspacePickerOpen(false);
     setAgentPickerOpen(false);
     setPermissionSheetOpen(false);
+    setWorktreeBranchSheetOpen(false);
     setModelSheetOpen(true);
   }, []);
 
@@ -1527,6 +2145,7 @@ export default function NewRemoteSessionScreen() {
     setWorkspacePickerOpen(false);
     setAgentPickerOpen(false);
     setModelSheetOpen(false);
+    setWorktreeBranchSheetOpen(false);
     setPermissionSheetSnap('half');
     setPermissionSheetOpen(true);
   }, []);
@@ -1552,38 +2171,67 @@ export default function NewRemoteSessionScreen() {
   }, [draft.agentKind, draft.permissionMode, patchDraft]);
 
   // —— worktree 资格探测:目录 / 设备 / 链路变化即重探(seq 防竞态,旧结果作废)。
-  // CHANNEL_NOT_ALLOWED(老被控端)→ unsupported 整行隐藏;其余失败保留行但禁用。
+  // CHANNEL_NOT_ALLOWED(老被控端)→ unsupported；OFF 时隐藏，旧 ON 镜像保留关闭
+  // 入口；其余失败保留行但禁用。
   useEffect(() => {
     const cwd = draft.workspaceKind === 'project' ? draft.workingDir.trim() : '';
     const seq = ++worktreeDetectSeqRef.current;
-    const target = { deviceId: selectedDeviceId ?? '', workingDir: cwd };
-    setWorktreeProbe({ target, eligibility: { status: 'probing' } });
+    const target = {
+      deviceId: selectedDeviceId ?? '',
+      workingDir: cwd,
+      probeGeneration: `${connectionEpoch}\u0000${presenceVersion}`,
+    };
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const probingEligibility: NewSessionWorktreeEligibility = { status: 'probing' };
+    worktreeEligibilityRef.current = probingEligibility;
+    setWorktreeProbe({ target, eligibility: probingEligibility });
     // Relay 离线时不把预期的 NOT_CONNECTED 固化成 detect-failed；online /
     // connectionEpoch / presenceVersion 变化后自动重探，覆盖手机重连和工作端
     // 重新上线两种路径。
-    if (!selectedDeviceId || !cwd || deviceLinkStatus !== 'online') return;
+    if (!selectedDeviceId || !cwd || deviceLinkStatus !== 'online') return undefined;
     void withTransientRemoteRetry(async () => {
       await openLink(selectedDeviceId);
       return maker.worktree.detectCwd(cwd);
     }, { maxAttempts: 2 })
       .then((result) => {
-        if (seq !== worktreeDetectSeqRef.current) return;
+        if (cancelled || seq !== worktreeDetectSeqRef.current) return;
+        const eligibility = resolveWorktreeEligibility(result, cwd);
+        worktreeEligibilityRef.current = eligibility;
         setWorktreeProbe({
           target,
-          eligibility: resolveWorktreeEligibility(result, cwd),
+          eligibility,
+          supportsRecoveryKeyDiscard: result.supportsRecoveryKeyDiscard === true,
         });
       })
       .catch((err: unknown) => {
-        if (seq !== worktreeDetectSeqRef.current) return;
+        if (cancelled || seq !== worktreeDetectSeqRef.current) return;
+        const eligibility = worktreeEligibilityFromError(err);
+        worktreeEligibilityRef.current = eligibility;
         setWorktreeProbe({
           target,
-          eligibility: worktreeEligibilityFromError(err),
+          eligibility,
+          ...(eligibility.status === 'unsupported'
+            ? { supportsRecoveryKeyDiscard: false }
+            : {}),
         });
+        if (eligibility.status === 'recovering') {
+          // 换网后 relay 可能已 online，但旧 peer link 仍在 ACK/握手恢复窗口；连接
+          // epoch/presence 未必再次变化，不能要求用户重选目录才能触发下一轮探测。
+          retryTimer = setTimeout(() => {
+            if (!cancelled) setWorktreeDetectRetryNonce((value) => value + 1);
+          }, 1_500);
+        }
       });
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [
     connectionEpoch,
     deviceLinkStatus,
     presenceVersion,
+    worktreeDetectRetryNonce,
     selectedDeviceId,
     draft.workspaceKind,
     draft.workingDir,
@@ -1591,16 +2239,467 @@ export default function NewRemoteSessionScreen() {
     openLink,
   ]);
 
+  // 换设备 / 工作目录 = 换 branch target：关闭旧 sheet，作废旧 pull/write，并清列表。
+  // 创建时直接从 repo-scoped host store 取分支，不保留组件内 selection 副本。
+  useEffect(() => {
+    worktreeBranchListSeqRef.current += 1;
+    worktreeBranchPreferencePullSeqRef.current += 1;
+    worktreeBranchPreferenceWriteSeqRef.current += 1;
+    worktreeBranchPreferenceWriteTargetRef.current = null;
+    worktreeBranchPreferenceTransactionRef.current = null;
+    worktreeBranchPreferenceAuthorityReadRef.current = null;
+    worktreeBranchPreferenceReadyKeyRef.current = null;
+    setWorktreeBranchPreferenceReadyKey(null);
+    setWorktreeBranchPreferenceSavingKey(null);
+    setWorktreeBranchPreferenceErrorKey(null);
+    setWorktreeBranchCompatibilitySelection(null);
+    setWorktreeBranchSheetOpen(false);
+    setWorktreeBranchList(null);
+  }, [selectedDeviceId, draft.workspaceKind, draft.workingDir]);
+
+  // Host 是 repo-scoped sourceBranch 的单一真相。先按 canonical baseRepo pull，随后
+  // maker:new-maker-worktree-branch:changed push 会更新同一 store 镜像；旧 pull 由
+  // host revision + 本地 target/seq 双重 fence 拒绝，不能盖过桌面端较新的选择。
+  useEffect(() => {
+    const seq = ++worktreeBranchPreferencePullSeqRef.current;
+    if (
+      !selectedDeviceId
+      || deviceLinkStatus !== 'online'
+      || worktreeEligibility.status !== 'eligible'
+    ) return;
+    const target = {
+      deviceId: selectedDeviceId,
+      workingDir: draft.workspaceKind === 'project' ? draft.workingDir.trim() : '',
+    };
+    const baseRepo = worktreeEligibility.baseRepo;
+    const syncKey = worktreeBranchPreferenceSyncKey;
+    const key = worktreeBranchPreferenceKey;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const currentRead = worktreeBranchPreferenceAuthorityReadRef.current;
+    if (currentRead?.syncKey !== syncKey) {
+      // A new host process may restart its repo revision from one. Suppress the
+      // snapshot rendered from the previous connection, clear it from the store,
+      // and require a fresh GET/push object for this connection generation.
+      worktreeBranchPreferenceAuthorityReadRef.current = {
+        syncKey,
+        ignoredSnapshot: remoteSessionStore.getNewMakerWorktreeBranchPreference(
+          selectedDeviceId,
+          baseRepo,
+        ),
+      };
+      worktreeBranchPreferenceReadyKeyRef.current = null;
+      setWorktreeBranchPreferenceReadyKey(null);
+      setWorktreeBranchPreferenceErrorKey(null);
+      remoteSessionStore.clearNewMakerWorktreeBranchPreference(selectedDeviceId, baseRepo);
+    } else if (worktreeBranchPreferenceReadyKeyRef.current === syncKey) {
+      return undefined;
+    }
+    const markReady = () => {
+      worktreeBranchPreferenceReadyKeyRef.current = syncKey;
+      setWorktreeBranchPreferenceReadyKey(syncKey);
+      setWorktreeBranchPreferenceErrorKey(null);
+    };
+    const markUnavailable = () => {
+      worktreeBranchPreferenceReadyKeyRef.current = null;
+      setWorktreeBranchPreferenceReadyKey(null);
+      setWorktreeBranchPreferenceErrorKey(key);
+    };
+    const scheduleRetry = () => {
+      if (retryTimer) return;
+      retryTimer = setTimeout(() => {
+        if (
+          !cancelled
+          && worktreeBranchPreferenceReadyKeyRef.current !== syncKey
+        ) {
+          setWorktreeBranchPreferencePullRetryNonce((value) => value + 1);
+        }
+      }, 1_500);
+    };
+    void withTransientRemoteRetry(async () => {
+      await openLink(selectedDeviceId);
+      return maker.getNewMakerWorktreeBranchPref(baseRepo);
+    }, { maxAttempts: 2 })
+      .then((snapshot) => {
+        const latestTarget = worktreeBranchTargetRef.current;
+        if (!shouldAcceptWorktreeBranchListResult({
+          requestSeq: seq,
+          latestSeq: worktreeBranchPreferencePullSeqRef.current,
+          requestTarget: target,
+          latestTarget,
+        })) return;
+        if (snapshot === null) {
+          // GET(null) 可能落在更晚的 branch push 之后。clear-at-start 已经
+          // 丢弃了旧 host revision；此时仍有 snapshot 就说明 push 属于当前
+          // connection epoch，不能让迟到的 null 擦掉它。
+          const newerPush = remoteSessionStore.getNewMakerWorktreeBranchPreference(
+            selectedDeviceId,
+            baseRepo,
+          );
+          if (newerPush !== null) return;
+          const transaction = worktreeBranchPreferenceTransactionRef.current;
+          if (transaction?.key === key && transaction.status === 'unknown') {
+            // A lost APPLY acknowledgement means null is not enough to prove
+            // whether the write committed before this read raced it. Keep ON
+            // closed, but leave the branch picker interactive for an explicit retry.
+            markUnavailable();
+            scheduleRetry();
+            return;
+          }
+          remoteSessionStore.clearNewMakerWorktreeBranchPreference(selectedDeviceId, baseRepo);
+          setWorktreeBranchCompatibilitySelection(null);
+          markReady();
+          return;
+        }
+        if (!isValidWorktreeBranchPreferenceSnapshot(snapshot, baseRepo)) {
+          const newerPush = remoteSessionStore.getNewMakerWorktreeBranchPreference(
+            selectedDeviceId,
+            baseRepo,
+          );
+          if (newerPush !== null) return;
+          markUnavailable();
+          scheduleRetry();
+          return;
+        }
+        setWorktreeBranchCompatibilitySelection(null);
+        // The hook-backed snapshot must reach a committed render before the
+        // ready fence opens. The observer below performs that final step.
+        remoteSessionStore.setNewMakerWorktreeBranchPreference(selectedDeviceId, snapshot);
+      })
+      .catch((err: unknown) => {
+        const latestTarget = worktreeBranchTargetRef.current;
+        if (!shouldAcceptWorktreeBranchListResult({
+          requestSeq: seq,
+          latestSeq: worktreeBranchPreferencePullSeqRef.current,
+          requestTarget: target,
+          latestTarget,
+        })) return;
+        // 只有明确的旧端 channel 不支持才允许兼容 fallback。超时、断链和
+        // 未知错误必须保持未就绪，避免创建读取旧 branch 状态。
+        if (isWorktreeChannelNotAllowedError(err)) {
+          const transaction = worktreeBranchPreferenceTransactionRef.current;
+          if (transaction?.key === key && transaction.status === 'unknown') {
+            transaction.status = 'committed';
+            setWorktreeBranchCompatibilitySelection({
+              key,
+              sourceBranch: transaction.sourceBranch,
+            });
+            return;
+          }
+          markReady();
+          return;
+        }
+        markUnavailable();
+        scheduleRetry();
+      });
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [
+    connectionEpoch,
+    deviceLinkStatus,
+    presenceVersion,
+    worktreeBranchPreferencePullRetryNonce,
+    selectedDeviceId,
+    draft.workspaceKind,
+    draft.workingDir,
+    maker,
+    openLink,
+    worktreeEligibility,
+    worktreeBranchPreferenceKey,
+    worktreeBranchPreferenceSyncKey,
+  ]);
+
+  // A fresh, valid host snapshot can arrive either as the GET result above or
+  // as a push after GET timed out. This effect runs after the hook value has
+  // committed, so it is also the render fence for branch APPLY completion.
+  useEffect(() => {
+    const read = worktreeBranchPreferenceAuthorityReadRef.current;
+    if (
+      !read
+      || !worktreeBranchPreferenceKey
+      || !worktreeBranchPreferenceSyncKey
+      || read.syncKey !== worktreeBranchPreferenceSyncKey
+      || remoteWorktreeBranchPreference === null
+      || remoteWorktreeBranchPreference === read.ignoredSnapshot
+      || !isValidWorktreeBranchPreferenceSnapshot(
+        remoteWorktreeBranchPreference,
+        worktreeBranchBaseRepo,
+      )
+    ) return;
+    const transaction = worktreeBranchPreferenceTransactionRef.current;
+    if (transaction?.key === worktreeBranchPreferenceKey) {
+      if (
+        remoteWorktreeBranchPreference.revision <= transaction.revisionAtStart
+        || remoteWorktreeBranchPreference.sourceBranch !== transaction.sourceBranch
+      ) return;
+      transaction.status = 'committed';
+      settleRenderedWorktreeBranchTransaction(
+        worktreeBranchPreferenceKey,
+        remoteWorktreeBranchPreference.sourceBranch,
+        worktreeBranchPreferenceSyncKey,
+      );
+      return;
+    }
+    setWorktreeBranchCompatibilitySelection(null);
+    setWorktreeBranchPreferenceErrorKey(null);
+    worktreeBranchPreferenceReadyKeyRef.current = worktreeBranchPreferenceSyncKey;
+    setWorktreeBranchPreferenceReadyKey(worktreeBranchPreferenceSyncKey);
+  }, [
+    remoteWorktreeBranchPreference,
+    settleRenderedWorktreeBranchTransaction,
+    worktreeBranchBaseRepo,
+    worktreeBranchPreferenceKey,
+    worktreeBranchPreferenceSyncKey,
+  ]);
+
+  // —— worktree 源分支：列表只属于当前设备 + cwd；OFF 也允许打开和选择。
+  // seq + render 期 target ref 防止切项目/设备时旧请求晚到覆盖新目标。
+  const loadWorktreeBranches = useCallback((force = false) => {
+    if (!selectedDeviceId || worktreeEligibility.status !== 'eligible') return;
+    const target = {
+      deviceId: selectedDeviceId,
+      workingDir: draft.workingDir.trim(),
+    };
+    const currentMatches = worktreeBranchList != null
+      && worktreeBranchList.target.deviceId === target.deviceId
+      && worktreeBranchList.target.workingDir.trim() === target.workingDir;
+    if (
+      !force
+      && currentMatches
+      && !worktreeBranchList.loading
+      && !worktreeBranchList.failed
+    ) return;
+
+    const seq = ++worktreeBranchListSeqRef.current;
+    setWorktreeBranchList({ target, branches: [], loading: true, failed: false });
+    void withTransientRemoteRetry(async () => {
+      await openLink(selectedDeviceId);
+      return maker.worktree.listBranches(worktreeEligibility.baseRepo);
+    }, { maxAttempts: 2 })
+      .then((result) => {
+        const latestTarget = worktreeBranchTargetRef.current;
+        if (!shouldAcceptWorktreeBranchListResult({
+          requestSeq: seq,
+          latestSeq: worktreeBranchListSeqRef.current,
+          requestTarget: target,
+          latestTarget,
+        })) return;
+        const branches = Array.from(new Set(
+          (result.branches ?? [])
+            .filter((branch): branch is string => typeof branch === 'string')
+            .map((branch) => branch.trim())
+            .filter(Boolean),
+        ));
+        setWorktreeBranchList({ target, branches, loading: false, failed: false });
+      })
+      .catch(() => {
+        const latestTarget = worktreeBranchTargetRef.current;
+        if (!shouldAcceptWorktreeBranchListResult({
+          requestSeq: seq,
+          latestSeq: worktreeBranchListSeqRef.current,
+          requestTarget: target,
+          latestTarget,
+        })) return;
+        setWorktreeBranchList({ target, branches: [], loading: false, failed: true });
+      });
+  }, [
+    draft.workingDir,
+    maker,
+    openLink,
+    selectedDeviceId,
+    worktreeBranchList,
+    worktreeEligibility,
+  ]);
+
+  const openWorktreeBranchPicker = useCallback(() => {
+    if (creatingRef.current || worktreeBranchDisabled) return;
+    setDevicePickerOpen(false);
+    setWorkspacePickerOpen(false);
+    setAgentPickerOpen(false);
+    setModelSheetOpen(false);
+    setPermissionSheetOpen(false);
+    setContextSheetOpen(false);
+    setBrowseOpen(false);
+    setWorktreeBranchSheetSnap('half');
+    setWorktreeBranchSheetOpen(true);
+    loadWorktreeBranches(false);
+  }, [loadWorktreeBranches, worktreeBranchDisabled]);
+
+  const selectWorktreeSourceBranch = useCallback((sourceBranch: string) => {
+    if (
+      creatingRef.current
+      || !selectedDeviceId
+      || worktreeEligibility.status !== 'eligible'
+    ) return;
+    const target = { ...worktreeBranchTargetRef.current };
+    const baseRepo = worktreeEligibility.baseRepo;
+    const normalizedSourceBranch = sourceBranch.trim();
+    if (!normalizedSourceBranch) return;
+    const key = `${selectedDeviceId}\u0000${baseRepo}`;
+    if (
+      worktreeBranchPreferenceSaving
+      || worktreeBranchPreferenceWriteTargetRef.current === key
+    ) return;
+    const writeSeq = worktreeBranchPreferenceWriteSeqRef.current + 1;
+    worktreeBranchPreferenceWriteSeqRef.current = writeSeq;
+    const revisionAtStart = remoteSessionStore.getNewMakerWorktreeBranchPreference(
+      selectedDeviceId,
+      baseRepo,
+    )?.revision ?? -1;
+    const transaction: WorktreeBranchPreferenceWriteTransaction = {
+      seq: writeSeq,
+      key,
+      sourceBranch: normalizedSourceBranch,
+      revisionAtStart,
+      status: 'writing',
+    };
+    worktreeBranchPreferenceTransactionRef.current = transaction;
+    // State 要到下一次 render 才可见；同步 ref 关闭“选择后立刻创建”读取旧 branch 的窗口。
+    worktreeBranchPreferenceWriteTargetRef.current = key;
+    setWorktreeBranchPreferenceSavingKey(key);
+    setWorktreeBranchPreferenceErrorKey(null);
+    setWorktreeBranchCompatibilitySelection({ key, sourceBranch: normalizedSourceBranch });
+    setWorktreeBranchSheetOpen(false);
+    // 选择分支只写 repo-scoped branch pref，绝不调用 checkbox 的 apply channel。
+    void withTransientRemoteRetry(async () => {
+      await openLink(selectedDeviceId);
+      return maker.applyNewMakerWorktreeBranchPref(baseRepo, normalizedSourceBranch);
+    }, { maxAttempts: 2 })
+      .then((snapshot) => {
+        if (writeSeq !== worktreeBranchPreferenceWriteSeqRef.current) return;
+        const latestTarget = worktreeBranchTargetRef.current;
+        if (
+          latestTarget.deviceId !== target.deviceId
+          || latestTarget.workingDir.trim() !== target.workingDir.trim()
+        ) return;
+        if (
+          !isValidWorktreeBranchPreferenceSnapshot(snapshot, baseRepo)
+          || snapshot.sourceBranch !== normalizedSourceBranch
+          || snapshot.revision <= revisionAtStart
+        ) {
+          throw new Error('Invalid worktree branch preference response');
+        }
+        transaction.status = 'committed';
+        remoteSessionStore.setNewMakerWorktreeBranchPreference(selectedDeviceId, snapshot);
+        const accepted = remoteSessionStore.getNewMakerWorktreeBranchPreference(
+          selectedDeviceId,
+          baseRepo,
+        );
+        if (!accepted || accepted.revision <= revisionAtStart) {
+          throw new Error('Worktree branch preference was not accepted');
+        }
+        transaction.sourceBranch = accepted.sourceBranch;
+        const rendered = worktreeBranchRenderedRef.current;
+        if (rendered.key === key && rendered.sourceBranch === accepted.sourceBranch) {
+          settleRenderedWorktreeBranchTransaction(
+            key,
+            accepted.sourceBranch,
+            worktreeBranchPreferenceSyncKeyRef.current,
+          );
+        }
+      })
+      .catch((err: unknown) => {
+        if (writeSeq !== worktreeBranchPreferenceWriteSeqRef.current) return;
+        const latestTarget = worktreeBranchTargetRef.current;
+        if (
+          latestTarget.deviceId === target.deviceId
+          && latestTarget.workingDir.trim() === target.workingDir.trim()
+        ) {
+          const current = remoteSessionStore.getNewMakerWorktreeBranchPreference(
+            selectedDeviceId,
+            baseRepo,
+          );
+          if (
+            isValidWorktreeBranchPreferenceSnapshot(current, baseRepo)
+            && current.revision > revisionAtStart
+            && current.sourceBranch === normalizedSourceBranch
+          ) {
+            transaction.status = 'committed';
+            transaction.sourceBranch = current.sourceBranch;
+            const rendered = worktreeBranchRenderedRef.current;
+            if (rendered.key === key && rendered.sourceBranch === current.sourceBranch) {
+              settleRenderedWorktreeBranchTransaction(
+                key,
+                current.sourceBranch,
+                worktreeBranchPreferenceSyncKeyRef.current,
+              );
+            }
+            return;
+          }
+          if (isWorktreeChannelNotAllowedError(err)) {
+            // Old hosts cannot persist this axis. Keep the explicit selection in
+            // this draft only; it still must not toggle the Worktree checkbox.
+            transaction.status = 'committed';
+            setWorktreeBranchCompatibilitySelection({
+              key,
+              sourceBranch: normalizedSourceBranch,
+            });
+            return;
+          }
+          // APPLY may have committed while its ACK was lost. A newer snapshot
+          // for a different branch does not satisfy this user's request: keep
+          // their branch visible for retry and leave Worktree ON fail-closed
+          // until the exact branch is echoed by the host.
+          transaction.status = 'unknown';
+          worktreeBranchPreferenceReadyKeyRef.current = null;
+          setWorktreeBranchPreferenceReadyKey(null);
+          setWorktreeBranchPreferenceErrorKey(key);
+          setWorktreeBranchCompatibilitySelection({
+            key,
+            sourceBranch: normalizedSourceBranch,
+          });
+          if (worktreeBranchPreferenceWriteTargetRef.current === key) {
+            worktreeBranchPreferenceWriteTargetRef.current = null;
+          }
+          setWorktreeBranchPreferenceSavingKey(null);
+          setError(formatRemoteError(err));
+          setWorktreeBranchPreferencePullRetryNonce((value) => value + 1);
+        }
+      });
+  }, [
+    maker,
+    openLink,
+    selectedDeviceId,
+    settleRenderedWorktreeBranchTransaction,
+    worktreeBranchPreferenceSaving,
+    worktreeEligibility,
+  ]);
+
   // —— worktree 勾选播种:选中设备后读工作端 get-new-maker-defaults 的 worktreeEnabled
   // (vendor 无关,agentKind 只是通道入参,经 ref 读当前值,不因切 agent 重播)。
-  // 设备切换 / 链路重连重新播种;老被控端 / 缺字段 → 未勾选。
+  // 设备切换 / 链路重连重新播种;老被控端 / 缺字段 / 拉取失败只保留当前镜像。
+  // 全新设备在 store 中没有镜像时本来就是默认未勾选,无需失败路径代替宿主写值。
   const worktreeSeedAgentKindRef = useRef(draft.agentKind);
   worktreeSeedAgentKindRef.current = draft.agentKind;
   useEffect(() => {
     const seq = ++worktreeSeedSeqRef.current;
-    if (!selectedDeviceId || deviceLinkStatus !== 'online') return;
+    const syncKey = worktreePreferenceSyncKey;
+    const previousRead = worktreePreferenceAuthorityReadRef.current;
+    if (previousRead?.syncKey !== syncKey) {
+      worktreePreferenceReadyKeyRef.current = null;
+      setWorktreePreferenceReadyKey(null);
+    }
+    if (!selectedDeviceId || !syncKey || deviceLinkStatus !== 'online') return undefined;
     const preferenceRevisionAtStart =
       remoteSessionStore.getNewMakerWorktreePreference(selectedDeviceId).revision;
+    worktreePreferenceAuthorityReadRef.current = {
+      syncKey,
+      revision: preferenceRevisionAtStart,
+    };
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const markReady = () => {
+      worktreePreferenceReadyKeyRef.current = syncKey;
+      setWorktreePreferenceReadyKey(syncKey);
+    };
+    const scheduleRetry = () => {
+      if (retryTimer) return;
+      retryTimer = setTimeout(() => {
+        if (!cancelled) setWorktreeSeedRetryNonce((value) => value + 1);
+      }, 1_500);
+    };
     // 与上面 detect effect 同款:先建链再拉,包瞬态重试——app 后台恢复时 relay 常在
     // 重连窗口,裸调会抛 NOT_CONNECTED 并把工作端持久化的勾选偏好静默播种成未勾。
     void withTransientRemoteRetry(async () => {
@@ -1608,47 +2707,209 @@ export default function NewRemoteSessionScreen() {
       return maker.getNewMakerDefaults(worktreeSeedAgentKindRef.current);
     }, { maxAttempts: 2 })
       .then((defaults) => {
-        if (seq !== worktreeSeedSeqRef.current) return;
+        if (
+          cancelled
+          || seq !== worktreeSeedSeqRef.current
+          || worktreePreferenceSyncKeyRef.current !== syncKey
+        ) return;
         // 请求发出后若已收到更晚的 push / 用户点击，旧 pull 不再有覆盖权。
         if (
           remoteSessionStore.getNewMakerWorktreePreference(selectedDeviceId).revision
           !== preferenceRevisionAtStart
         ) return;
-        remoteSessionStore.setNewMakerWorktreePreference(
-          selectedDeviceId,
-          seedWorktreeEnabled(defaults),
-        );
+        const classification = classifyWorktreePreferenceSeed(defaults);
+        if (classification.status === 'ready') {
+          // Store revision + committed render jointly release the ready gate via
+          // the observer below; do not expose the old checkbox value in-between.
+          remoteSessionStore.setNewMakerWorktreePreference(
+            selectedDeviceId,
+            classification.enabled,
+          );
+          return;
+        }
+        if (
+          classification.status === 'missing'
+          && worktreeHostSupportsRecoveryKeyDiscard === false
+        ) {
+          // Old hosts cannot persist this preference and also lack the recovery
+          // capability marker. A new host can transiently return `{}` before its
+          // renderer cache arrives, so missing alone must never authorize OFF.
+          markReady();
+          return;
+        }
+        scheduleRetry();
       })
       .catch((error: unknown) => {
-        // 只有已确认的旧端通道不兼容才回落未勾选。断连 / 超时保留最后镜像；
-        // connectionEpoch 变化后 effect 会重拉，不能把工作端拥有的 true 静默抹掉。
-        if (seq !== worktreeSeedSeqRef.current) return;
         if (
-          remoteSessionStore.getNewMakerWorktreePreference(selectedDeviceId).revision
-          !== preferenceRevisionAtStart
+          cancelled
+          || seq !== worktreeSeedSeqRef.current
+          || worktreePreferenceSyncKeyRef.current !== syncKey
         ) return;
-        if (worktreeEligibilityFromError(error).status !== 'unsupported') return;
-        remoteSessionStore.setNewMakerWorktreePreference(selectedDeviceId, false);
+        if (isWorktreeChannelNotAllowedError(error)) {
+          markReady();
+          return;
+        }
+        // Timeout/offline/unknown failures cannot authorize the default OFF.
+        // Keep both Create and Goal fail-closed and retry on this same link.
+        scheduleRetry();
       });
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [
     connectionEpoch,
     deviceLinkStatus,
     presenceVersion,
     selectedDeviceId,
+    worktreeHostSupportsRecoveryKeyDiscard,
+    worktreePreferenceSyncKey,
+    worktreeSeedRetryNonce,
     maker,
     openLink,
   ]);
 
-  // 用户显式点击开关:本地翻转 + fire-and-forget 写穿工作端记忆(失败吞掉,仅本次生效)。
-  // 资格不满足导致的禁用不会走到这里 —— 环境因素不抹掉用户偏好。
+  // A same-value push is still authoritative: the store deliberately advances
+  // revision for it. Only an observation newer than this connection/read start
+  // may release the initial checkbox authority gate.
+  useEffect(() => {
+    const read = worktreePreferenceAuthorityReadRef.current;
+    if (
+      !read
+      || !worktreePreferenceSyncKey
+      || read.syncKey !== worktreePreferenceSyncKey
+      || worktreePreference.revision <= read.revision
+    ) return;
+    worktreePreferenceReadyKeyRef.current = worktreePreferenceSyncKey;
+    setWorktreePreferenceReadyKey(worktreePreferenceSyncKey);
+  }, [worktreePreference.revision, worktreePreferenceSyncKey]);
+
+  // 用户显式点击开关:先写工作端,工作端接受后才更新手机内存镜像。
+  // 资格不满足导致的禁用不会走到这里 —— 环境因素不抹掉用户偏好;
+  // 写入失败也不在手机上制造一份假的持久状态。
   const toggleWorktree = useCallback(() => {
-    if (!selectedDeviceId) return;
-    const next = !worktreeEnabled;
-    remoteSessionStore.setNewMakerWorktreePreference(selectedDeviceId, next);
+    const pendingAuthority = selectedDeviceId
+      ? worktreePreferenceAuthorityUnknownByDeviceRef.current.get(selectedDeviceId)
+      : undefined;
+    if (
+      creatingRef.current
+      || !selectedDeviceId
+      || worktreePreferenceSaving
+      || worktreePreferenceWriteTargetRef.current === selectedDeviceId
+      || (
+        worktreePreferenceReadyKeyRef.current !== worktreePreferenceSyncKeyRef.current
+        && !pendingAuthority
+      )
+    ) return;
+    const targetDeviceId = selectedDeviceId;
+    const next = pendingAuthority?.enabled
+      ?? !remoteSessionStore.getNewMakerWorktreePreference(targetDeviceId).enabled;
     // 播种在途回包不得覆盖用户显式选择(seq 作废旧回包)。
     worktreeSeedSeqRef.current += 1;
-    void maker.applyNewMakerWorktreePref(next).catch(() => undefined);
-  }, [maker, selectedDeviceId, worktreeEnabled]);
+    const preferenceRevisionAtStart =
+      remoteSessionStore.getNewMakerWorktreePreference(targetDeviceId).revision;
+    const writeSeq = worktreePreferenceWriteSeqRef.current + 1;
+    worktreePreferenceWriteSeqRef.current = writeSeq;
+    if (worktreePreferenceAuthorityUnknownByDeviceRef.current.delete(targetDeviceId)) {
+      setWorktreePreferenceAuthorityVersion((value) => value + 1);
+    }
+    const transaction: WorktreePreferenceWriteTransaction = {
+      seq: writeSeq,
+      deviceId: targetDeviceId,
+      enabled: next,
+      revisionAtStart: preferenceRevisionAtStart,
+      status: 'writing',
+    };
+    worktreePreferenceTransactionRef.current = transaction;
+    // Set before the first await so an immediate Create/Goal press cannot read
+    // the previous checkbox state from a stale render closure.
+    worktreePreferenceWriteTargetRef.current = targetDeviceId;
+    setWorktreePreferenceSavingDeviceId(targetDeviceId);
+    const releaseWrite = () => {
+      if (worktreePreferenceWriteSeqRef.current !== writeSeq) return;
+      if (worktreePreferenceTransactionRef.current?.seq === writeSeq) {
+        worktreePreferenceTransactionRef.current = null;
+      }
+      if (worktreePreferenceWriteTargetRef.current === targetDeviceId) {
+        worktreePreferenceWriteTargetRef.current = null;
+      }
+      setWorktreePreferenceSavingDeviceId(null);
+    };
+    const markAuthorityUnknown = () => {
+      if (worktreePreferenceWriteSeqRef.current !== writeSeq) return;
+      worktreePreferenceAuthorityUnknownByDeviceRef.current.set(targetDeviceId, {
+        enabled: next,
+        revisionAtStart: preferenceRevisionAtStart,
+      });
+      setWorktreePreferenceAuthorityVersion((value) => value + 1);
+      releaseWrite();
+      setWorktreeSeedRetryNonce((value) => value + 1);
+    };
+    const armCommittedRender = () => {
+      if (worktreePreferenceWriteSeqRef.current !== writeSeq) return;
+      transaction.status = 'committed';
+      const rendered = worktreePreferenceRenderedRef.current;
+      if (
+        rendered.deviceId === targetDeviceId
+        && rendered.enabled === next
+        && rendered.revision > preferenceRevisionAtStart
+      ) releaseWrite();
+    };
+    void (async () => {
+      try {
+        const outcome = await applyWorktreePreferenceOnHost({
+          enabled: next,
+          apply: maker.applyNewMakerWorktreePref,
+          // unsupported 可能是“有偏好写穿、缺安全 worktree 能力”，也可能是最老端
+          // 连偏好 channel 都没有：先写 host；只有后者且用户明确点 OFF 时才清手机
+          // 保留的旧 ON 镜像。断连/超时不降级，仍保留 ON + fail closed。
+          allowUnsupportedDisableFallback:
+            !next && worktreeEligibility.status === 'unsupported',
+          mirror: (enabled) => {
+            if (worktreePreferenceWriteSeqRef.current !== writeSeq) return;
+            const current = remoteSessionStore.getNewMakerWorktreePreference(targetDeviceId);
+            if (current.revision === preferenceRevisionAtStart) {
+              remoteSessionStore.setNewMakerWorktreePreference(targetDeviceId, enabled);
+            }
+            const accepted = remoteSessionStore.getNewMakerWorktreePreference(targetDeviceId);
+            if (
+              accepted.revision > preferenceRevisionAtStart
+              && accepted.enabled === enabled
+            ) {
+              armCommittedRender();
+            } else {
+              markAuthorityUnknown();
+            }
+          },
+        });
+        if (worktreePreferenceWriteSeqRef.current !== writeSeq) return;
+        if (outcome === 'accepted') {
+          // Main only acknowledged the broadcast. Keep both Create paths
+          // closed until renderer persistence returns through push or GET.
+          transaction.status = 'reconciling';
+          setWorktreeSeedRetryNonce((value) => value + 1);
+        }
+      } catch (error) {
+        if (worktreePreferenceWriteSeqRef.current !== writeSeq) return;
+        if (isWorktreeChannelNotAllowedError(error)) {
+          // Explicit old-channel rejection proves this ON request did not
+          // commit. Keep the rendered value and let the user continue.
+          releaseWrite();
+          return;
+        }
+        // Lost ACK / disconnect may have committed remotely. Reconcile via
+        // push/GET; both Create and Goal remain blocked, while checkbox retry
+        // stays available once the active write spinner is released.
+        markAuthorityUnknown();
+      }
+    })();
+  }, [
+    maker,
+    selectedDeviceId,
+    worktreeEnabled,
+    worktreePreferenceSaving,
+    worktreeEligibility.status,
+  ]);
 
   useEffect(() => {
     const tracker = createMobileVoiceDictionaryLearningTracker({
@@ -2014,6 +3275,8 @@ export default function NewRemoteSessionScreen() {
       onPress={() => {
         setModelSheetOpen(false);
         setAgentPickerOpen(false);
+        setPermissionSheetOpen(false);
+        setWorktreeBranchSheetOpen(false);
         setContextSheetView('main');
         setContextSheetOpen(true);
       }}
@@ -2034,9 +3297,23 @@ export default function NewRemoteSessionScreen() {
   const renderCreateButton = () => (
     <Pressable
       accessibilityLabel={creating ? t('session.new.creatingSession') : t('session.new.createAndSend')}
-      accessibilityHint={createValidation ?? undefined}
+      accessibilityHint={createValidation
+        ?? (worktreePreferenceSaving
+          ? t('session.new.worktreeSettingsSaving')
+          : worktreeBranchPreferenceSaving
+            ? t('session.new.worktreeBranchSaving')
+            : worktreeCreateBlocked && worktreeControlCaptionKey
+              ? t(worktreeControlCaptionKey)
+              : undefined)}
       accessibilityRole="button"
-      accessibilityState={{ busy: creating || voiceIsProcessing || undefined, disabled: !canCreate || undefined }}
+      accessibilityState={{
+        busy: creating
+          || voiceIsProcessing
+          || worktreePreferenceSaving
+          || worktreeBranchPreferenceSaving
+          || undefined,
+        disabled: !canCreate || undefined,
+      }}
       disabled={!canCreate}
       hitSlop={10}
       onPress={() => void create()}
@@ -2223,41 +3500,61 @@ export default function NewRemoteSessionScreen() {
   );
 
   // 切 agent:跟随该 agent 的最近会话 → 否则该 agent 列表最上面 → 否则内置默认(见 pickAgentDefaultRuntime),
-  // 同时 reconcile effort、清来源(默认路由)。手动切 agent = 手动选运行配置 → 之后自动默认不再覆盖。
+  // 同时 reconcile effort、来源跟随 model 同源(最近会话来源校验后继承 / 首项行 provider / 兜底 null)。
+  // 手动切 agent = 手动选运行配置 → 之后自动默认不再覆盖。
   const switchAgent = useCallback((nextKind: NewSessionAgentKind) => {
     setAgentPickerOpen(false);
     if (draft.agentKind === nextKind) return;
     userTouchedRuntimeRef.current = true;
     explicitProviderModelSelectionRef.current = null;
+    const seqAtTrigger = ++runtimeActionSeqRef.current;
     void saveNewSessionPreferences({ agentKind: nextKind });
-    // 取目标 agent 自己的模型列表(providers 已加载时同步可得),用于"列表最上面"兜底 + effort reconcile。
-    const rows = flattenProviderSections(
-      buildMobileModelSections({
-        providers: deviceProviders.providers,
-        agentKind: nextKind,
-        visibilityOverrides: deviceProviders.modelVisibilityOverrides,
-      }).sections,
-    );
-    const rememberedPermissionMode =
-      newSessionPreferences?.permissionModeByAgent[nextKind] ??
+    const storedPermissionMode = newSessionPreferences?.permissionModeByAgent[nextKind];
+    const nextPermissionMode =
+      storedPermissionMode ??
       defaultPermissionModeForNewSessionAgent(nextKind);
-    void confirmFullAccessChange(draft.permissionMode, rememberedPermissionMode).then((confirmed) => {
+    void confirmFullAccessChange(draft.permissionMode, nextPermissionMode, {
+      restoringRememberedChoice: storedPermissionMode !== undefined,
+    }).then((confirmed) => {
+      // 确认期间设备已切换 → 放弃本次写入,新设备自己的 effect 会接管(Greptile P1)。
+      if (selectedDeviceId !== selectedDeviceRef.current) return;
+      // 确认期间用户又切了 agent / 手动选了模型 → 旧回调不得覆盖新选择(Greptile P1)。
+      if (seqAtTrigger !== runtimeActionSeqRef.current) return;
       setDraft((current) => {
+        // rows 与 ready 必须同一代(codex review P2):提交时用最新目录现场重建目标
+        // agent 的 rows,不用触发时捕获的旧 rows。
+        const rowsNow = flattenProviderSections(
+          buildMobileModelSections({
+            providers: deviceProvidersRef.current.providers,
+            agentKind: nextKind,
+            visibilityOverrides: deviceProvidersRef.current.modelVisibilityOverrides,
+          }).sections,
+        );
         const next = pickAgentDefaultRuntime({
           agentKind: nextKind,
           sessions,
           deviceId: selectedDeviceId || undefined,
-          modelRows: rows,
+          modelRows: rowsNow,
           currentEffort: current.effort,
+          catalogReady: catalogReadyRef.current,
         });
         return {
           ...current,
           agentKind: next.agentKind,
           model: next.model,
           effort: next.effort,
-          // 目标 agent 的记忆档若是 Full access，先经过明确确认；取消时保留当前档。
-          permissionMode: confirmed ? rememberedPermissionMode : current.permissionMode,
-          providerId: null,
+          // 切到该 agent 时沿用其上次明确选择；无记忆的内置默认仍按升级规则确认。
+          permissionMode: confirmed ? nextPermissionMode : current.permissionMode,
+          providerId: next.providerId,
+          // fast 按 (agent, 来源, 模型) 记忆恢复,无记忆置 false;恢复前过与手动选行
+          // 同款的 fastEditable 门控(codex review P2:目录/能力变化后不得恢复出
+          // UI 显示关、实际发 true 的矛盾态)。agent 级门控只认目标 agent 的缓存
+          // 能力表(codex review P1:此刻闭包里的 capabilities 属于切换前 agent 或
+          // 为 null);目标 caps 未就绪 → false,由延迟恢复 effect 就绪后补评。
+          fastMode: next.providerId
+            && isFastRestorable(next.agentKind, next.providerId, next.model, rowsNow, targetAgentHasFast(selectedDeviceId, next.agentKind))
+            ? (draftMemory.getFast(next.agentKind, next.providerId, next.model) ?? false)
+            : false,
         };
       });
     });
@@ -2525,6 +3822,55 @@ export default function NewRemoteSessionScreen() {
       setError(t('session.new.selectDeviceError'));
       return;
     }
+    // 旧协议 Plan 依赖会话级 permissionMode，不能安全进入断线创建 / 离线 FIFO。
+    // 保留草稿与 Plan 选择，等 relay 和目标电脑恢复后再走原有在线兼容路径。
+    if (
+      !planModeCapability
+      && draft.permissionMode === 'plan'
+      && (
+        deviceLinkStatus !== 'online'
+        || getPresenceAvailability(selectedDeviceId) === false
+      )
+    ) {
+      setError(t('session.menu.aiRenameOffline'));
+      return;
+    }
+    if (
+      worktreeApplicable
+      && worktreeEligibility.status !== 'ineligible'
+      && (
+        worktreePreferenceWriteTargetRef.current === selectedDeviceId
+        || worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId)
+        || worktreePreferenceReadyKeyRef.current !== worktreePreferenceSyncKeyRef.current
+      )
+    ) {
+      setError(t('session.new.worktreeSettingsSaving'));
+      return;
+    }
+    if (
+      worktreeEnabled
+      && (
+        worktreeBranchPreferenceWriteTargetRef.current === worktreeBranchPreferenceKey
+        || (
+          worktreeEligibility.status === 'eligible'
+          && worktreeBranchPreferenceReadyKeyRef.current !== worktreeBranchPreferenceSyncKey
+        )
+      )
+    ) {
+      setError(t('session.new.worktreeBranchSaving'));
+      return;
+    }
+    if (worktreeCreateBlocked) {
+      setError(worktreeCaptionKey
+        ? t(worktreeCaptionKey)
+        : t('session.new.worktreeSettingsSaving'));
+      return;
+    }
+    const worktreeIntent = captureWorktreeCreateIntent();
+    if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
+      setError(t('session.new.worktreeSettingsSaving'));
+      return;
+    }
     creatingRef.current = true;
     setCreating(true);
     setError(null);
@@ -2544,9 +3890,17 @@ export default function NewRemoteSessionScreen() {
     try {
       if (!isCurrentOwner()) return;
       let effectiveDraft = draft;
+      // ㉙ 设备守卫全程化(独立 review P1-1/P1-2):设备快照必须取自**闭包**
+      // selectedDeviceId(真正会创建会话的目标设备)——selectedDeviceRef 是渲染后
+      // 的最新值,若用户在渲染与点击之间切了设备,ref 已属新设备而闭包 maker/目录
+      // 仍属旧设备,用它当快照会让守卫全程失明。入口立即与 ref 核对:已切走 → 放弃。
+      const deviceAtCreate = selectedDeviceId;
+      if (selectedDeviceRef.current !== deviceAtCreate) return;
+      const ensureDeviceAlive = (): boolean => selectedDeviceRef.current === deviceAtCreate;
       if (voiceRecordingActiveRef.current || voiceState === 'listening') {
         const latestDraftText = await finishVoiceRecording();
         if (!isCurrentOwner()) return;
+        if (!ensureDeviceAlive()) return;
         if (latestDraftText === null) return;
         effectiveDraft = { ...draft, firstMessage: latestDraftText };
       }
@@ -2555,6 +3909,7 @@ export default function NewRemoteSessionScreen() {
       // 此时不该带着残缺附件去开新会话。
       const { failedCount } = await waitForPendingUploads();
       if (!isCurrentOwner()) return;
+      if (!ensureDeviceAlive()) return;
       if (failedCount > 0) return;
       // await 之后闭包里的 attachments 是旧值,经 ref 拿含刚落定图片的最新列表。
       const sendAttachments = attachmentsRef.current;
@@ -2567,15 +3922,19 @@ export default function NewRemoteSessionScreen() {
       // 目录缓存可能过期(用户刚在电脑端配好 key):拦截前现拉一遍确认;确认不了
       // (已连接 / 空目录 / 拉失败)时缓存判死已不可信,清掉重取并放行。
       if (agentAuthVerdict === 'unauthenticated') {
-        if (await confirmAgentUnauthenticated(effectiveDraft.agentKind)) {
+        if ((await confirmAgentUnauthenticated(effectiveDraft.agentKind, selectedDeviceId)).unauthenticated) {
           if (!isCurrentOwner()) return;
+          if (!ensureDeviceAlive()) return;
           setError(agentAuthGateHint(effectiveDraft.agentKind));
           return;
         }
         if (!isCurrentOwner()) return;
+        // 确认期间切设备 → 不再驱逐(驱逐的是旧设备缓存,继续创建也无意义)。
+        if (!ensureDeviceAlive()) return;
         evictDeviceProviders(selectedDeviceId);
       }
       if (!isCurrentOwner()) return;
+      if (!ensureDeviceAlive()) return;
       void saveNewSessionPreferences({
         agentKind: effectiveDraft.agentKind,
         device: {
@@ -2585,9 +3944,9 @@ export default function NewRemoteSessionScreen() {
       });
       const worktreeAccountId = authOwnerAtCreate.accountId;
       if (
-        effectiveDraft.workspaceKind === 'project'
-        && worktreeEnabled
-        && worktreeEligibility.status === 'eligible'
+        worktreeIntent.applicable
+        && worktreeIntent.enabled
+        && worktreeIntent.eligibility.status === 'eligible'
       ) {
         // 两步创建必须先有可归属的账号账本。不能先在工作端落盘，再发现本地
         // 无法按账号持久化 cleanup obligation。
@@ -2607,14 +3966,12 @@ export default function NewRemoteSessionScreen() {
           discardPrecreated: async (_deviceId, input) => (
             maker.worktree.discardPrecreated(input)
           ),
-          isSessionClaimed: async (_deviceId, pendingSessionId) => {
-            try {
-              const session = await maker.getSession(pendingSessionId);
-              return session?.id === pendingSessionId;
-            } catch {
-              return false;
-            }
-          },
+          isSessionClaimed: async (_deviceId, pendingSessionId) => (
+            isExactRemoteSessionClaimed(
+              pendingSessionId,
+              (id) => maker.getSession(id),
+            )
+          ),
           shouldDefer: (record) => (
             record.deviceId !== selectedDeviceId
             || obligationOwnedByLiveTask(record.sessionId)
@@ -2622,11 +3979,17 @@ export default function NewRemoteSessionScreen() {
           isCurrent: isCurrentOwner,
         });
         if (!isCurrentOwner()) return;
+        // ㉙ recovery await 期间切设备 → 放弃(独立 review P1-4:create 的 recovery 后漏 ensure)。
+        if (!ensureDeviceAlive()) return;
         if (
           !recovery.storageReadable
           || recovery.retained > 0
         ) {
           setError(t('session.new.worktreeCleanupPending'));
+          return;
+        }
+        if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
+          setError(t('session.new.worktreeSettingsSaving'));
           return;
         }
       }
@@ -2641,24 +4004,61 @@ export default function NewRemoteSessionScreen() {
         originalWorkingDir: string;
         createdAt?: number;
       } | undefined;
+      // ㉙ 设备切换中止助手(独立 review P1-2/P1-3):检测到设备已切换 → 已产生远端
+      // 副作用(precreated)走 compensatePrecreatedWorktree——**先 discardPrecreated
+      // 获严格 ACK 才 forget**(forget 删唯一账本,未 discard 就删 = 永久孤儿),
+      // ACK 失败/未知保留 ledger 交 recovery;返回 true 供调用方 return。
+      const abortIfDeviceSwitched = async (): Promise<boolean> => {
+        if (ensureDeviceAlive()) return false;
+        if (precreatedWorktree) {
+          const pwt = precreatedWorktree;
+          await compensatePrecreatedWorktree({
+            sessionId,
+            recoveryKey: pwt.recoveryKey,
+            createdAt: pwt.createdAt ?? Date.now(),
+            phase: 'precreated',
+            discard: () => maker.worktree.discardPrecreated({
+              sessionId,
+              recoveryKey: pwt.recoveryKey,
+            }),
+            parseAck: parseDiscardPrecreatedAck,
+            forget: () => forgetPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId,
+              recoveryKey: pwt.recoveryKey,
+              createdAt: pwt.createdAt ?? Date.now(),
+            }),
+            release: releasePrecreatedRegistration,
+          });
+        }
+        return true;
+      };
       // —— worktree 两步流第一步(对齐桌面远程流程 NewMakerDraftRoute:远程没有改已建
       // 会话 workingDir 的通道,顺序反过来 —— 先同步等工作端建好 worktree 拿路径,再以
       // 该路径 + 同一预生成 sessionId 走乐观管线)。worktree:create 对同 sessionId 重跑
       // 不幂等,不能放进管线的重试面 —— 失败(业务 {ok:false} / invoke 抛错)一律留在
       // 表单展示错误,不建会话(草稿原地保留,与桌面远程失败语义一致)。
-      if (effectiveDraft.workspaceKind === 'project' && worktreeEnabled && worktreeEligibility.status === 'eligible') {
+      if (
+        worktreeIntent.applicable
+        && worktreeIntent.enabled
+        && worktreeIntent.eligibility.status === 'eligible'
+      ) {
         try {
           // suggest-name 失败不阻断:走 auto- 兜底名(对齐桌面 :1316)。
           if (!isCurrentOwner()) return;
           let suggested: string | null = null;
           try {
             suggested = await maker.worktree
-              .suggestName(worktreeEligibility.baseRepo)
+              .suggestName(worktreeIntent.eligibility.baseRepo)
               .then((result) => result.name);
           } catch {
             suggested = null;
           }
           if (!isCurrentOwner()) return;
+          if (!ensureDeviceAlive()) return;
+          if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
+            setError(t('session.new.worktreeSettingsSaving'));
+            return;
+          }
           const recoveryKey = createNewSessionId();
           const createdAt = Date.now();
           releasePrecreatedRegistration = holdPrecreatedWorktreeRegistration(sessionId);
@@ -2672,21 +4072,50 @@ export default function NewRemoteSessionScreen() {
               deviceId: selectedDeviceId,
               recoveryKey,
               createdAt,
+              phase: 'reserved',
             },
           );
           if (!isCurrentOwner()) return;
+          // ㉙ 写盘 reservation 后切设备 → 清掉这份 obligation(reserved 无远端
+          // 目录,不产生孤儿,但会阻塞同设备下次创建的 recovery 直到被回收)。
+          if (!ensureDeviceAlive()) {
+            await forgetPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId,
+              recoveryKey,
+              createdAt,
+            }).catch(() => undefined);
+            return;
+          }
           if (!reservationRecorded) {
             setError(t('session.new.worktreeRecoveryStateFailed'));
             return;
           }
           if (!isCurrentOwner()) return;
-          const resp = await maker.worktree.create(buildWorktreeCreateRequest({
+          if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
+            await forgetPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId,
+              recoveryKey,
+              createdAt,
+            });
+            setError(t('session.new.worktreeSettingsSaving'));
+            return;
+          }
+          const createRequest = buildWorktreeCreateRequest({
             sessionId,
-            eligibility: worktreeEligibility,
+            eligibility: worktreeIntent.eligibility,
+            sourceBranch: worktreeIntent.sourceBranch,
             suggestedName: suggested,
             recoveryKey,
-          }));
+          });
+          const resp = parseWorktreeCreateResult(
+            await maker.worktree.create(createRequest),
+            createRequest,
+          );
           if (!isCurrentOwner()) return;
+          if (!resp) {
+            setError(t('session.new.worktreeCleanupPending'));
+            return;
+          }
           if (!resp.ok) {
             await forgetPendingPrecreatedWorktree(worktreeAccountId, {
               sessionId,
@@ -2703,6 +4132,9 @@ export default function NewRemoteSessionScreen() {
             originalWorkingDir: effectiveDraft.workingDir,
             createdAt,
           };
+          // ㉙ 远端目录已产生 → 切设备必须走 ledger 补偿(forget + 释放内存持有,
+          // 远端目录留给下次 recovery 对账回收)。
+          if (await abortIfDeviceSwitched()) return;
           // 回包后尽力把 path 补到账本；即使这次更新失败，首次已确认落盘的
           // recoveryKey reservation 仍足够让重启后的进程从被控端解析真实路径。
           await registerPendingPrecreatedWorktree(worktreeAccountId, {
@@ -2711,8 +4143,10 @@ export default function NewRemoteSessionScreen() {
             path: precreatedWorktree.path,
             recoveryKey,
             createdAt,
+            phase: 'precreated',
           });
           if (!isCurrentOwner()) return;
+          if (await abortIfDeviceSwitched()) return;
           effectiveDraft = { ...effectiveDraft, workingDir: resp.meta.path };
         } catch {
           if (!isCurrentOwner()) return;
@@ -2721,6 +4155,95 @@ export default function NewRemoteSessionScreen() {
           setError(t('session.new.worktreeCleanupPending'));
           return;
         }
+      }
+      // 提交点联合终检(Greptile/Codex review P1):目录就绪后的清理 effect 跑在渲染后,
+      // 用户可能在清理生效前点创建——创建路径自身必须守卫;来源失效时 model 随之一并
+      // 回退(其他来源顶替 / 首项 / 内置默认),并同步校准 effort、组合变化时 fastMode
+      // 保守置 false(codex review P2)。代际安全版(独立 review P1-1):唯一数据源 =
+      // 设备缓存 + 代际,不再读渲染期 rows(catalogReadyRef 是渲染镜像,驱逐窗口内
+      // 不可信);缓存命中即当前代已确认目录;未命中且曾驱逐 → join 在途重拉,await
+      // 前后核对代际,换代即弃用旧返回值 join 新代;拉失败 → 未知 → 信任。
+      // 设备/代际复核均已完成(abort 前置),循环后同步 ensureDeviceAlive 兜底——
+      // 已切换则放弃,precreated ledger 保留交 recovery(不做 ACK 补偿)。
+      {
+        // 独立 review round-21 Spec P1:所有可取消 await(abort)前置到终检循环之前;
+        // 终检循环每轮 await 返回后**同步**核对 genAt;最后一次核对后零 await 直至
+        // handoff(同一 turn)——杜绝「核对后让出微任务期间换代,再按旧目录应用」。
+        if (await abortIfDeviceSwitched()) return;
+        const guardDeviceId = deviceAtCreate;
+        const guardSelected = () => ({
+          model: effectiveDraft.model,
+          providerId: effectiveDraft.providerId,
+        });
+        const runGuard = () => resolveSubmitGuardCatalog({
+          cached: () => getCachedDeviceProviders(guardDeviceId),
+          gen: () => getDeviceProvidersGen(guardDeviceId),
+          // 强制刷新(codex review P2):fetchDeviceProviders 缓存命中直接返回旧目录,
+          // revalidate 拿不到工作站真相——必须绕过缓存读,成功后缓存层回写。
+          fetch: () => fetchDeviceProvidersFresh(guardDeviceId, () => maker.listProviders()),
+          buildRows: (payload) => flattenProviderSections(buildMobileModelSections({
+            providers: payload.providers,
+            agentKind: effectiveDraft.agentKind,
+            visibilityOverrides: payload.modelVisibilityOverrides,
+            // 选中行豁免与渲染期口径一致(独立 review P2)。
+            selectedModelId: effectiveDraft.model,
+            selectedProviderId: effectiveDraft.providerId,
+          }).sections),
+        });
+        const applyGuard = (g: { rows: readonly ProviderModelRow[]; catalogKnown: boolean }): void => {
+          const resolved = resolveRecentModelAndProvider(
+            g.rows,
+            guardSelected(),
+            effectiveDraft.agentKind,
+            g.catalogKnown,
+          );
+          const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
+          // 目录就绪时**始终**按 fresh 精确行校准(codex review P2:来源未变时也按
+          // 新目录校准运行选项)——provider revision 可能只改能力不删行(撤销 effort
+          // 档位 / Fast 支持),组合不变沿用旧 effort/fastMode 会发送目录已不支持的
+          // 参数被被控端拒绝。fail-open(catalogKnown=false)时 rows 不可信,保持
+          // 信任语义(不校准,仅组合变化保守关 fast)。
+          effectiveDraft = {
+            ...effectiveDraft,
+            ...resolved,
+            ...(g.catalogKnown ? {
+              effort: reconcileEffortAfterFallback(g.rows, resolved, effectiveDraft.effort),
+              ...(effectiveDraft.fastMode && (
+                pairChanged
+                || !resolved.providerId
+                || !isFastRestorable(
+                  effectiveDraft.agentKind,
+                  resolved.providerId,
+                  resolved.model,
+                  g.rows,
+                  targetAgentHasFast(guardDeviceId, effectiveDraft.agentKind),
+                )
+              ) ? { fastMode: false } : {}),
+            } : pairChanged ? {
+              ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
+            } : {}),
+          };
+        };
+        // 有界稳定循环:每轮 await 返回后同步核对 genAt,稳定才退出(≤3)。
+        // 哨兵初值必被首轮循环覆盖(for 循环体至少执行一次),消除 null 收窄。
+        let guardResult: { rows: readonly ProviderModelRow[]; catalogKnown: boolean; genAt: number } = {
+          rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+        };
+        for (let pass = 0; pass < 3; pass += 1) {
+          guardResult = await runGuard();
+          if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+        }
+        if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+          // 耗尽仍不稳定(独立 review round-22 Spec P1):不得采信最后已知 rows——
+          // 显式降为 unknown/fail-open(rows 空 + catalogKnown=false,信任既有绑定)。
+          guardResult = {
+            rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+          };
+        }
+        // 循环后同步设备复核(不让出微任务):已切换则放弃,precreated ledger 保留交
+        // recovery(不做 ACK 补偿,避免在循环末尾再引入可取消 await)。
+        if (!ensureDeviceAlive()) return;
+        applyGuard(guardResult);
       }
       const agentKindSnapshot = effectiveDraft.agentKind;
       const deviceIdSnapshot = selectedDeviceId;
@@ -2744,10 +4267,48 @@ export default function NewRemoteSessionScreen() {
         precreatedWorktree,
         precreatedWorktreeAccountId: worktreeAccountId,
         // stale-ready 防护(review P1):缓存判 ready/unknown 也可能已过期。管线内
-        // 与建链并行 revalidate;verdict 已是 unauthenticated 时上面刚现拉确认过,跳过。
-        confirmUnauthenticated: agentAuthVerdict === 'unauthenticated'
-          ? () => Promise.resolve(false)
-          : () => confirmAgentUnauthenticated(agentKindSnapshot),
+        // 与建链并行 revalidate。无条件让管线自做 fresh 检查(codex review P2):
+        // 表单内预检放行(新来源已连接/空响应/瞬断)后还要经历 worktree、目录
+        // guard、建链、订阅多个 await,期间来源可能再变——verdict 分支若把管线
+        // fresh 替换成 null 会绕过最后的联合终检。
+        confirmUnauthenticated: () => confirmAgentUnauthenticated(agentKindSnapshot, deviceIdSnapshot),
+        // 鉴权 fresh 之后联合校验 (model, providerId)(codex review P2):建链/鉴权
+        // 期间工作站可能已替换 provider——patch 覆盖本次创建,不再向已删除来源发。
+        revalidateDraftAfterAuth: async (fresh) => {
+          const rows = flattenProviderSections(buildMobileModelSections({
+            providers: fresh.providers,
+            agentKind: effectiveDraft.agentKind,
+            visibilityOverrides: fresh.modelVisibilityOverrides,
+            selectedModelId: effectiveDraft.model,
+            selectedProviderId: effectiveDraft.providerId,
+          }).sections);
+          const resolved = resolveRecentModelAndProvider(
+            rows,
+            { model: effectiveDraft.model, providerId: effectiveDraft.providerId },
+            effectiveDraft.agentKind,
+            true,
+          );
+          const pairChanged = resolved.model !== effectiveDraft.model
+            || resolved.providerId !== effectiveDraft.providerId;
+          // codex review P2:来源未变也按 fresh 精确行校准——fresh 目录就绪时始终
+          // 重校准 effort + Fast 支持(provider revision 只改能力不删行:撤销档位/
+          // Fast 时组合不变也要关),不得因 pairChanged=false 提前返回发旧参数。
+          return {
+            ...resolved,
+            effort: reconcileEffortAfterFallback(rows, resolved, effectiveDraft.effort),
+            ...(effectiveDraft.fastMode && (
+              pairChanged
+              || !resolved.providerId
+              || !isFastRestorable(
+                effectiveDraft.agentKind,
+                resolved.providerId,
+                resolved.model,
+                rows,
+                targetAgentHasFast(selectedDeviceId, effectiveDraft.agentKind),
+              )
+            ) ? { fastMode: false } : {}),
+          };
+        },
         authGateHint: agentAuthGateHint(agentKindSnapshot),
         onUnauthenticated: () => evictDeviceProviders(deviceIdSnapshot),
         isCurrentOwner,
@@ -2795,10 +4356,12 @@ export default function NewRemoteSessionScreen() {
     agentAuthVerdict,
     auth.user?.id,
     confirmAgentUnauthenticated,
+    deviceLinkStatus,
     selectedDeviceId,
     selectedDeviceName,
     draft,
     finishVoiceRecording,
+    getPresenceAvailability,
     maker,
     openLink,
     planModeCapability,
@@ -2811,7 +4374,14 @@ export default function NewRemoteSessionScreen() {
     voiceState,
     waitForPendingUploads,
     worktreeEligibility,
+    worktreeCreateBlocked,
+    worktreeApplicable,
+    worktreeBranchPreferenceKey,
+    worktreeBranchPreferenceSyncKey,
+    worktreeCaptionKey,
     worktreeEnabled,
+    captureWorktreeCreateIntent,
+    isWorktreeCreateIntentCurrent,
   ]);
 
   // 目标模式建会话(对齐桌面 handleCreateGoal):createSession → goal.set(被控端落
@@ -2832,24 +4402,291 @@ export default function NewRemoteSessionScreen() {
       setGoalError(t('session.new.enterModel'));
       return;
     }
+    if (
+      worktreeApplicable
+      && worktreeEligibility.status !== 'ineligible'
+      && (
+        worktreePreferenceWriteTargetRef.current === selectedDeviceId
+        || worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId)
+        || worktreePreferenceReadyKeyRef.current !== worktreePreferenceSyncKeyRef.current
+      )
+    ) {
+      setGoalError(t('session.new.worktreeSettingsSaving'));
+      return;
+    }
+    if (
+      worktreeEnabled
+      && (
+        worktreeBranchPreferenceWriteTargetRef.current === worktreeBranchPreferenceKey
+        || (
+          worktreeEligibility.status === 'eligible'
+          && worktreeBranchPreferenceReadyKeyRef.current !== worktreeBranchPreferenceSyncKey
+        )
+      )
+    ) {
+      setGoalError(t('session.new.worktreeBranchSaving'));
+      return;
+    }
+    // Goal 与普通创建共享同一 Worktree 门禁。分支偏好和 checkbox 仍是
+    // 独立轴：OFF 时直接走 base repo，ON 时必须等偏好/资格确认完成。
+    if (worktreeCreateBlocked) {
+      setGoalError(worktreeCaptionKey
+        ? t(worktreeCaptionKey)
+        : t('session.new.worktreeSettingsSaving'));
+      return;
+    }
+    const worktreeIntent = captureWorktreeCreateIntent();
+    if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
+      setGoalError(t('session.new.worktreeSettingsSaving'));
+      return;
+    }
+    // ㉙ 设备守卫入口(独立 review P1-1 + busy 泄漏):快照取自闭包 selectedDeviceId,
+    // 入口与 ref 核对必须发生在**加锁之前**——加锁后 return 会绕过 finally,busy
+    // 状态永久泄漏(独立 review round-20 Standards P1)。
+    const deviceAtCreate = selectedDeviceId;
+    if (selectedDeviceRef.current !== deviceAtCreate) return;
     creatingRef.current = true;
     setCreating(true);
     setGoalBusy(true);
     setGoalError(null);
+    let releasePrecreatedRegistration: (() => void) | null = null;
+    let precreatedWorktree: {
+      sessionId: string;
+      path: string;
+      recoveryKey: string;
+      originalWorkingDir: string;
+      createdAt?: number;
+    } | undefined;
+    let sessionId = '';
+    let sessionClaimed = false;
+    let sessionCreateStarted = false;
+    const accountIdAtCreate = auth.user?.id?.trim() ?? '';
+    const authOwnerAtCreate = getMobileAuthOwner();
+    const worktreeAccountId = authOwnerAtCreate.accountId;
+    const isCurrentOwner = () => (
+      authOwnerAtCreate.accountId === accountIdAtCreate
+      && isMobileAuthOwnerCurrent(authOwnerAtCreate)
+    );
+    // ㉙ 设备守卫全程化(独立 review P1-1/P1-2):此后每次 await 后、每个 device-scoped
+    // 副作用前、最终 createSession 前复核。
+    const ensureDeviceAlive = (): boolean => selectedDeviceRef.current === deviceAtCreate;
+    // ㉙ 设备切换中止助手(独立 review P1-3):precreated 阶段先 discardPrecreated 获
+    // 严格 ACK 才 forget(forget 删唯一账本,未 discard 就删 = 永久孤儿);ACK 失败/
+    // 未知保留 ledger 交 recovery。reserved 阶段由各写盘点的内联 forget 处理。
+    const abortIfDeviceSwitched = async (): Promise<boolean> => {
+      if (ensureDeviceAlive()) return false;
+      if (precreatedWorktree) {
+        const pwt = precreatedWorktree;
+        await compensatePrecreatedWorktree({
+          sessionId: pwt.sessionId,
+          recoveryKey: pwt.recoveryKey,
+          createdAt: pwt.createdAt ?? Date.now(),
+          phase: 'precreated',
+          discard: () => maker.worktree.discardPrecreated({
+            sessionId: pwt.sessionId,
+            recoveryKey: pwt.recoveryKey,
+          }),
+          parseAck: parseDiscardPrecreatedAck,
+          forget: () => forgetPendingPrecreatedWorktree(worktreeAccountId, {
+            sessionId: pwt.sessionId,
+            recoveryKey: pwt.recoveryKey,
+            createdAt: pwt.createdAt ?? Date.now(),
+          }),
+          release: releasePrecreatedRegistration,
+        });
+      }
+      return true;
+    };
     try {
+      if (!isCurrentOwner()) return;
       // 鉴权门禁(review P2:goal 模式与普通创建同屏同 agent,同样要拦):goal.set 会吞掉
       // fireTurn 的鉴权失败,用户会被带进一个永远跑不起来的目标会话——比普通路径更需要
       // 提前拦截。判定与 create() 完全同款:缓存判死先现拉确认;ready/unknown 与建链并行重验。
       if (agentAuthVerdict === 'unauthenticated') {
-        if (await confirmAgentUnauthenticated(draft.agentKind)) {
+        if ((await confirmAgentUnauthenticated(draft.agentKind, selectedDeviceId)).unauthenticated) {
+          if (!isCurrentOwner()) return;
+          if (!ensureDeviceAlive()) return;
           setGoalError(agentAuthGateHint(draft.agentKind));
           return;
         }
+        if (!isCurrentOwner()) return;
+        if (!ensureDeviceAlive()) return;
         evictDeviceProviders(selectedDeviceId);
       }
-      const freshUnauthenticated: Promise<boolean> = agentAuthVerdict === 'unauthenticated'
-        ? Promise.resolve(false)
-        : confirmAgentUnauthenticated(draft.agentKind);
+      const freshAuth: Promise<{ unauthenticated: boolean; fresh: DeviceProvidersPayload | null }> =
+        agentAuthVerdict === 'unauthenticated'
+          ? Promise.resolve({ unauthenticated: false, fresh: null })
+          : confirmAgentUnauthenticated(draft.agentKind, selectedDeviceId);
+      if (!isCurrentOwner()) return;
+      // Resolve the fresh auth check before any worktree副作用. A Goal auth
+      // rejection must not leave a managed directory behind just because its
+      // session path performs precreation before createSession.
+      const authResult = await freshAuth;
+      if (authResult.unauthenticated) {
+        if (!isCurrentOwner()) return;
+        if (!ensureDeviceAlive()) return;
+        evictDeviceProviders(selectedDeviceId);
+        setGoalError(agentAuthGateHint(draft.agentKind));
+        return;
+      }
+      if (!ensureDeviceAlive()) return;
+
+      // Worktree 预创建与普通创建保持同一 recovery 账本语义：先恢复旧
+      // obligation，再把 reservation 写盘，最后才产生 worktree:create 副作用。
+      // Goal 不能因为走 goal.set 就绕过这道门，否则会把会话落回 base repo。
+      if (
+        worktreeIntent.applicable
+        && worktreeIntent.enabled
+        && worktreeIntent.eligibility.status === 'eligible'
+      ) {
+        if (!worktreeAccountId) {
+          setGoalError(t('session.new.worktreeRecoveryStateFailed'));
+          return;
+        }
+        const sessionIsClaimed = (pendingSessionId: string) => (
+          getNewSessionCreationTask(pendingSessionId) !== null
+          || isPrecreatedWorktreeRegistrationInFlight(pendingSessionId)
+        );
+        const recovery = await recoverPendingPrecreatedWorktrees(worktreeAccountId, {
+          openLink,
+          discardPrecreated: async (_deviceId, recoveryInput) => (
+            maker.worktree.discardPrecreated(recoveryInput)
+          ),
+          isSessionClaimed: async (_deviceId, pendingSessionId) => (
+            isExactRemoteSessionClaimed(
+              pendingSessionId,
+              (id) => maker.getSession(id),
+            )
+          ),
+          shouldDefer: (record) => (
+            record.deviceId !== selectedDeviceId
+            || sessionIsClaimed(record.sessionId)
+          ),
+          isCurrent: isCurrentOwner,
+        });
+        if (!isCurrentOwner()) return;
+        if (!ensureDeviceAlive()) return;
+        if (!recovery.storageReadable || recovery.retained > 0) {
+          setGoalError(t('session.new.worktreeCleanupPending'));
+          return;
+        }
+        if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
+          setGoalError(t('session.new.worktreeSettingsSaving'));
+          return;
+        }
+      }
+
+      sessionId = createNewSessionId();
+      let effectiveDraft = draft;
+      if (
+        worktreeIntent.applicable
+        && worktreeIntent.enabled
+        && worktreeIntent.eligibility.status === 'eligible'
+      ) {
+        try {
+          if (!isCurrentOwner()) return;
+          let suggested: string | null = null;
+          try {
+            suggested = await maker.worktree
+              .suggestName(worktreeIntent.eligibility.baseRepo)
+              .then((result) => result.name);
+          } catch {
+            suggested = null;
+          }
+          if (!isCurrentOwner()) return;
+          if (!ensureDeviceAlive()) return;
+          if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
+            setGoalError(t('session.new.worktreeSettingsSaving'));
+            return;
+          }
+          const recoveryKey = createNewSessionId();
+          const createdAt = Date.now();
+          releasePrecreatedRegistration = holdPrecreatedWorktreeRegistration(sessionId);
+          const reservationRecorded = await registerPendingPrecreatedWorktree(
+            worktreeAccountId,
+            {
+              sessionId,
+              deviceId: selectedDeviceId,
+              recoveryKey,
+              createdAt,
+              phase: 'reserved',
+            },
+          );
+          if (!isCurrentOwner()) return;
+          // ㉙ 写盘 reservation 后切设备 → 清掉这份 obligation(reserved 无远端目录)。
+          if (!ensureDeviceAlive()) {
+            await forgetPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId,
+              recoveryKey,
+              createdAt,
+            }).catch(() => undefined);
+            return;
+          }
+          if (!reservationRecorded) {
+            setGoalError(t('session.new.worktreeRecoveryStateFailed'));
+            return;
+          }
+          if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
+            await forgetPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId,
+              recoveryKey,
+              createdAt,
+            });
+            setGoalError(t('session.new.worktreeSettingsSaving'));
+            return;
+          }
+          const createRequest = buildWorktreeCreateRequest({
+            sessionId,
+            eligibility: worktreeIntent.eligibility,
+            sourceBranch: worktreeIntent.sourceBranch,
+            suggestedName: suggested,
+            recoveryKey,
+          });
+          const response = parseWorktreeCreateResult(
+            await maker.worktree.create(createRequest),
+            createRequest,
+          );
+          if (!isCurrentOwner()) return;
+          if (!response) {
+            setGoalError(t('session.new.worktreeCleanupPending'));
+            return;
+          }
+          if (!response.ok) {
+            await forgetPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId,
+              recoveryKey,
+              createdAt,
+            });
+            setGoalError(formatWorktreeCreateFailure(response.error));
+            return;
+          }
+          precreatedWorktree = {
+            sessionId,
+            path: response.meta.path,
+            recoveryKey,
+            originalWorkingDir: draft.workingDir,
+            createdAt,
+          };
+          await registerPendingPrecreatedWorktree(worktreeAccountId, {
+            sessionId,
+            deviceId: selectedDeviceId,
+            path: response.meta.path,
+            recoveryKey,
+            createdAt,
+            phase: 'precreated',
+          });
+          if (!isCurrentOwner()) return;
+          // ㉙ 远端目录已产生 → 切设备走 ledger 补偿。
+          if (await abortIfDeviceSwitched()) return;
+          effectiveDraft = { ...draft, workingDir: response.meta.path };
+        } catch {
+          if (!isCurrentOwner()) return;
+          // create 回包前工作端可能已经完成副作用；reservation 保留给下一次
+          // recovery 对账，不能在这里静默当作普通目录继续创建。
+          setGoalError(t('session.new.worktreeCleanupPending'));
+          return;
+        }
+      }
       void saveNewSessionPreferences({
         agentKind: draft.agentKind,
         device: {
@@ -2857,34 +4694,324 @@ export default function NewRemoteSessionScreen() {
           name: selectedDeviceName || selectedDeviceId,
         },
       });
-      const createOpts = buildRemoteCreateSessionOptions(draft);
-      await withTransientRemoteRetry(async () => {
-        await openLink(selectedDeviceId);
-        await subscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']);
+      // 提交点联合终检(同 create(),代际安全版独立 review P1-1/P1-2):唯一数据源 =
+      // 设备缓存 + 代际;缓存命中即当前代已确认目录;未命中且曾驱逐 → join 在途重拉
+      // (await 前后核对代际);拉失败 → 未知 → 信任。started 落账后设备切换 →
+      // resolveStartedDowngradeOrCommit(降级成功 return / 失败恢复 volatile 后
+      // 重跑 guard 继续 commit);apply 后零 await 至 createSession。
+      if (!ensureDeviceAlive()) return;
+      const guardDeviceId = deviceAtCreate;
+      const guardSelected = () => ({
+        model: effectiveDraft.model,
+        providerId: effectiveDraft.providerId,
       });
-      if (await freshUnauthenticated) {
-        evictDeviceProviders(selectedDeviceId);
-        setGoalError(agentAuthGateHint(draft.agentKind));
+      const runGuard = () => resolveSubmitGuardCatalog({
+        cached: () => getCachedDeviceProviders(guardDeviceId),
+        gen: () => getDeviceProvidersGen(guardDeviceId),
+        // 强制刷新(同 create() 口径,codex review P2):revalidate 必须访问工作站。
+        fetch: () => fetchDeviceProvidersFresh(guardDeviceId, () => maker.listProviders()),
+        buildRows: (payload) => flattenProviderSections(buildMobileModelSections({
+          providers: payload.providers,
+          agentKind: effectiveDraft.agentKind,
+          visibilityOverrides: payload.modelVisibilityOverrides,
+          // 选中行豁免与渲染期口径一致(独立 review P2)。
+          selectedModelId: effectiveDraft.model,
+          selectedProviderId: effectiveDraft.providerId,
+        }).sections),
+      });
+      const applyGuard = (g: { rows: readonly ProviderModelRow[]; catalogKnown: boolean }): void => {
+        const resolved = resolveRecentModelAndProvider(
+          g.rows,
+          guardSelected(),
+          effectiveDraft.agentKind,
+          g.catalogKnown,
+        );
+        const pairChanged = resolved.model !== effectiveDraft.model || resolved.providerId !== effectiveDraft.providerId;
+        // codex review P2:目录就绪时**始终**按 fresh 精确行校准(来源未变也按新
+        // 目录校准运行选项)——provider revision 只改能力不删行(撤销 effort 档位
+        // /Fast 支持)时,组合不变沿用旧 effort/fastMode 会发送目录已不支持的参数
+        // 被被控端拒绝。fail-open(catalogKnown=false)时 rows 不可信,保持信任语义。
+        effectiveDraft = {
+          ...effectiveDraft,
+          ...resolved,
+          ...(g.catalogKnown ? {
+            effort: reconcileEffortAfterFallback(g.rows, resolved, effectiveDraft.effort),
+            ...(effectiveDraft.fastMode && (
+              pairChanged
+              || !resolved.providerId
+              || !isFastRestorable(
+                effectiveDraft.agentKind,
+                resolved.providerId,
+                resolved.model,
+                g.rows,
+                targetAgentHasFast(guardDeviceId, effectiveDraft.agentKind),
+              )
+            ) ? { fastMode: false } : {}),
+          } : pairChanged ? {
+            ...(effectiveDraft.fastMode ? { fastMode: false } : {}),
+          } : {}),
+        };
+      };
+      // ── prepare 段(可取消):连接 + abort 前置,终检循环每轮 await 后同步核对 genAt ──
+      await withTransientRemoteRetry(async () => {
+        if (!isCurrentOwner()) return;
+        await openLink(selectedDeviceId);
+        if (!isCurrentOwner()) return;
+        await subscribe(`new-session:${selectedDeviceId}`, selectedDeviceId, ['sessions']);
+        if (!isCurrentOwner()) return;
+      });
+      if (!isCurrentOwner()) return;
+      if (await abortIfDeviceSwitched()) return; // 可取消 await 全部在此
+      // 有界稳定循环(独立 review round-21 Spec P1):每轮 await 返回后**同步**核对
+      // genAt,稳定才退出(≤3)。
+      // 哨兵初值必被首轮循环覆盖(for 循环体至少执行一次),消除 null 收窄。
+      let guardResult: { rows: readonly ProviderModelRow[]; catalogKnown: boolean; genAt: number } = {
+        rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+      };
+      for (let pass = 0; pass < 3; pass += 1) {
+        guardResult = await runGuard();
+        if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+      }
+      if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+        // 耗尽仍不稳定(独立 review round-22 Spec P1):显式降为 unknown/fail-open,
+        // 不采信最后已知 rows。
+        guardResult = {
+          rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+        };
+      }
+      // 终检刷新(await 网络往返)期间设备可能已切换:进入 commit 段前复核
+      // (greptile P1:终检后遗漏设备复核)——precreatedWorktree 存在时补偿 ledger
+      // 后中止;不存在(无 worktree 的 Goal 路径)时直接中止。避免闭包绑定的旧设备
+      // 在界面已切换后仍创建当前界面未接管的会话。
+      // 同步快路径(codex 独立审核者 P1):abortIfDeviceSwitched 是 async,设备未
+      // 切换时 await 也会让出微任务——ref 更新排队时「复核通过 → 让出 → 设备切换 →
+      // continuation 不再复核」竞态。先同步 ensureDeviceAlive,未切换零 await 直达
+      // handoff(维持「最后核对后零 await」不变量);已切换才异步补偿并中止。
+      if (!ensureDeviceAlive()) {
+        await abortIfDeviceSwitched();
         return;
       }
+      // Goal 最终创建前重新执行鉴权门禁(codex review P2):freshAuth 在 worktree
+      // 创建/建链等异步步骤之前完成;guard 虽刷新目录却只校准草稿、不重算
+      // connectedProvidersForAgent——来源在准备期间断开时,仍会在无可用来源时
+      // 调用 createSession/goal.set。用最新目录行重验,目录就绪且无已连接来源 →
+      // 中止(与 create() 的鉴权门禁同口径)。fail-open(catalogKnown=false)时
+      // rows 不可信,保持信任语义不拦截。
+      if (guardResult.catalogKnown) {
+        // 用**未过滤**的原始目录计算连接数(codex review P2:用未过滤的目录执行
+        // Goal 最终鉴权)——guardResult.rows 经 buildMobileModelSections 只保留
+        // connectedProvidersForAgent 的供应商,来源全部断开时 rows 恰好为空,
+        // 「rows.length > 0」条件会让零已连接来源场景漏过门禁。fetchDeviceProvidersFresh
+        // 成功已按代际写回缓存,缓存即未过滤的原始 providers。
+        const rawProviders = getCachedDeviceProviders(guardDeviceId)?.providers ?? [];
+        if (rawProviders.length > 0
+          && connectedProvidersForAgent(rawProviders, draft.agentKind).length === 0) {
+          if (!isCurrentOwner()) return;
+          if (!ensureDeviceAlive()) return;
+          setGoalError(agentAuthGateHint(draft.agentKind));
+          return;
+        }
+      }
+      // ── commit 段:started 写盘(await)后同步核对 genAt;此后无裸 return ──
+      if (precreatedWorktree) {
+        const startedRecorded = await registerPendingPrecreatedWorktree(
+          worktreeAccountId,
+          {
+            sessionId: precreatedWorktree.sessionId,
+            deviceId: selectedDeviceId,
+            path: precreatedWorktree.path,
+            recoveryKey: precreatedWorktree.recoveryKey,
+            createdAt: precreatedWorktree.createdAt ?? Date.now(),
+            phase: 'session-create-started',
+          },
+        );
+        if (!startedRecorded) {
+          // 落账失败:register 在首个 await 前已把 volatile 升级为 started——
+          // 降级回 precreated(可回收阶段),避免 retain-only 卡死 recovery
+          // (独立 review round-21 Spec P1-3)。会话未创建,不得删账。
+          await registerPendingPrecreatedWorktree(worktreeAccountId, {
+            sessionId: precreatedWorktree.sessionId,
+            deviceId: selectedDeviceId,
+            path: precreatedWorktree.path,
+            recoveryKey: precreatedWorktree.recoveryKey,
+            createdAt: precreatedWorktree.createdAt ?? Date.now(),
+            phase: 'precreated',
+          }).catch(() => undefined);
+          setGoalError(t('session.new.worktreeRecoveryStateFailed'));
+          return;
+        }
+        sessionCreateStarted = true;
+        // started await 期间可能换代 → 每轮 await 后同步核对(≤2);耗尽仍不稳定
+        // → 显式降为 unknown/fail-open。
+        for (let pass = 0; pass < 2; pass += 1) {
+          if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+          guardResult = await runGuard();
+          if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+        }
+        if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+          guardResult = {
+            rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+          };
+        }
+        // started 写盘后重跑 guard 拿到新目录 → 再次执行鉴权门禁(codex review P2:
+        // 在 started 写盘后的目录重验中同步重跑鉴权)——供应商在前面的最终鉴权
+        // 通过后、registerPendingPrecreatedWorktree(session-create-started) 等待
+        // 期间可能全部断开,代际变化后这里重取到零已连接来源目录,但 4750 行门禁
+        // 已执行过不会重跑。中止按 started 账本语义走 resolveStartedDowngradeOrCommit
+        // (与下方设备切换同路径,不裸 return 留 retain-only)。
+        if (guardResult.catalogKnown) {
+          const rawProviders = getCachedDeviceProviders(guardDeviceId)?.providers ?? [];
+          if (rawProviders.length > 0
+            && connectedProvidersForAgent(rawProviders, draft.agentKind).length === 0) {
+            const pwt = precreatedWorktree;
+            const decision = await resolveStartedDowngradeOrCommit({
+              downgrade: () => registerPendingPrecreatedWorktree(worktreeAccountId, {
+                sessionId: pwt.sessionId,
+                deviceId: selectedDeviceId,
+                path: pwt.path,
+                recoveryKey: pwt.recoveryKey,
+                createdAt: pwt.createdAt ?? Date.now(),
+                phase: 'precreated',
+              }),
+              restoreStarted: () => registerPendingPrecreatedWorktree(worktreeAccountId, {
+                sessionId: pwt.sessionId,
+                deviceId: selectedDeviceId,
+                path: pwt.path,
+                recoveryKey: pwt.recoveryKey,
+                createdAt: pwt.createdAt ?? Date.now(),
+                phase: 'session-create-started',
+              }),
+            });
+            if (decision === 'downgraded') {
+              setGoalError(agentAuthGateHint(draft.agentKind));
+              return;
+            }
+            // 降级失败 → 继续 commit(与设备切换降级失败同语义:恢复 volatile 后
+            // 用捕获设备完成创建;目录虽空但创建可能仍成功,由 goal.set/外层
+            // catch 兜底呈现失败)。
+            // 降级/恢复 await 窗口可能换代(codex review P2):重跑有界 guard,
+            // 耗尽降 unknown/fail-open——来源恢复或替换为 B 时用新目录校准草稿,
+            // 不再按等待前的空/旧目录回退默认路由或携带失效来源创建(与下方设备
+            // 切换 commit 分支的 re-fence 同口径)。
+            for (let pass = 0; pass < 2; pass += 1) {
+              guardResult = await runGuard();
+              // re-fence 的 runGuard await 期间设备切换:提前 break,立即交下方
+              // 设备切换分支按 started 账本语义 resolveStartedDowngradeOrCommit
+              // 降级(不裸 return 留 retain-only,也不继续向旧设备 commit)。
+              if (!ensureDeviceAlive()) break;
+              if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+            }
+            if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+              guardResult = {
+                rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+              };
+            }
+          }
+        }
+        // started 可靠落账后设备切换:不裸 return(会留 started retain-only,recovery
+        // 对该 phase 拒绝 discard)——走 resolveStartedDowngradeOrCommit:
+        // 降级成功 → return(recovery 可回收);降级失败 → 恢复 volatile 回 started
+        // 后继续用捕获设备完成 commit(round-23 Spec P1-2:防 recovery 读到
+        // precreated 对未知创建做 destructive discard;动态 clientRef 残余已声明)。
+        if (!ensureDeviceAlive()) {
+          const pwt = precreatedWorktree;
+          const decision = await resolveStartedDowngradeOrCommit({
+            downgrade: () => registerPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId: pwt.sessionId,
+              deviceId: selectedDeviceId,
+              path: pwt.path,
+              recoveryKey: pwt.recoveryKey,
+              createdAt: pwt.createdAt ?? Date.now(),
+              phase: 'precreated',
+            }),
+            restoreStarted: () => registerPendingPrecreatedWorktree(worktreeAccountId, {
+              sessionId: pwt.sessionId,
+              deviceId: selectedDeviceId,
+              path: pwt.path,
+              recoveryKey: pwt.recoveryKey,
+              createdAt: pwt.createdAt ?? Date.now(),
+              phase: 'session-create-started',
+            }),
+          });
+          if (decision === 'downgraded') return;
+          // 降级失败 → commit;降级 await 窗口可能换代(round-23 Spec P1-1)→ 重跑
+          // 有界 guard,耗尽降 unknown/fail-open;此后零 await 应用 + createSession。
+          for (let pass = 0; pass < 2; pass += 1) {
+            guardResult = await runGuard();
+            if (getDeviceProvidersGen(guardDeviceId) === guardResult.genAt) break;
+          }
+          if (getDeviceProvidersGen(guardDeviceId) !== guardResult.genAt) {
+            guardResult = {
+              rows: [], catalogKnown: false, genAt: getDeviceProvidersGen(guardDeviceId),
+            };
+          }
+        }
+      }
+      // 同一 turn:同步应用 + createSession,零 await 间隔(独立 review round-21 Spec P1)。
+      // 注意:不用 authResult.fresh 再校验一次(codex review P2)——authResult 在
+      // worktree 创建/建链/guard 之前取得,比守卫目录旧;guard 已用
+      // fetchDeviceProvidersFresh 强制刷新(离创建最近的目录快照),旧快照只会把
+      // guard 的新结果回退成旧来源。
+      applyGuard(guardResult);
+      const finalDraft = {
+        ...effectiveDraft,
+      };
+      const createOpts = {
+        ...buildRemoteCreateSessionOptions(finalDraft),
+        // 与 worktree:create 共用预生成 id，确保被控端能把 managed path
+        // 绑定到这一个 Goal session，而不是另起一条 base-repo 会话。
+        id: sessionId,
+      };
       const created = await maker.createSession(createOpts);
       const result = normalizeCreateSessionResult(created);
       if (!result) {
         throw new Error(t('session.new.noSessionIdReturned'));
       }
+      if (result.sessionId !== sessionId) {
+        throw new Error(t('session.new.sessionIdNotAdopted'));
+      }
+      sessionClaimed = true;
+      // goal.set 前置(独立 review round-20 Spec P1-3):createSession 成功后立即完成
+      // goal.set,不留「已创建但无目标」的远端会话;本地同步/UI 属 settle 段,排在其后。
+      // 注(残余声明):maker 只绑定 deviceId 字符串,底层 invoke 每次读取
+      // clientRef.current——飞行中跨账号/设备切换时 createSession 与 goal.set 可能
+      // 落到不同 client,属已接受的传输层残余(host 原子 create-goal RPC 另列 issue)。
+      // 不做自动重试(codex review P2):goal.set 非幂等(被控端无请求幂等键,二次
+      // 调用进「编辑已有目标」分支会重落目标消息、停/重启轮次并重置计数)——仅
+      // 当首次请求确认未执行才可重试,故失败直接进入接回:继续 settle 落账并跳转,
+      // 目标未设置经 goalError 路由参数在会话页呈现,用户可在会话内重试设置目标。
+      let goalSetError: string | null = null;
+      try {
+        await maker.goal.set({ sessionId: result.sessionId, objective: input.objective, ...(input.limits ? { limits: input.limits } : {}) });
+      } catch (goalErr) {
+        goalSetError = formatRemoteError(goalErr);
+      }
+      // ── settle 段(可降级):本地同步/UI,owner + 设备检查恢复正常语义 ──
+      // 设备复核(greptile P1):goal.set 等待期间同账号可能切换设备——owner 检查
+      // 拦不住,settle 若继续用旧 selectedDeviceId 会把设备 A 的会话写进当前
+      // (设备 B)页面并跳转到设备 A 会话页,还可能让用户在 B 上重复创建;
+      // 设备已切换则直接中止 settle(不跳转、不写错设备),createSession 已认领
+      // worktree,无需 abortIfDeviceSwitched 补偿。
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       await subscribe(`session:${result.sessionId}`, selectedDeviceId, ['sessions', `session:${result.sessionId}`]).catch(() => undefined);
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       let session: RemoteSession;
       try {
+        if (!isCurrentOwner() || !ensureDeviceAlive()) return;
         session = await maker.getSession(result.sessionId);
+        if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       } catch {
-        session = sessionFromCreateResult(result, draft);
+        if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+        session = sessionFromCreateResult(result, finalDraft);
       }
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       remoteSessionStore.upsertDeviceSession(selectedDeviceId, selectedDeviceName, session);
-      await maker.goal.set({ sessionId: result.sessionId, objective: input.objective, ...(input.limits ? { limits: input.limits } : {}) });
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       // 目标流不带 composer 附件(与桌面一致),跳转即丢引用:已上传的中转对象在此
       // best-effort 回收,否则成为 OSS 孤儿直到桶生命周期清理(codex review #504)。
       // 先等在途乐观上传落定,否则「回收后才落地」的图会漏出这轮清理。
       await waitForPendingUploads();
+      if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       for (const attachment of attachmentsRef.current) {
         discardMobileUploadedAttachment(attachment, { getToken: () => auth.getAccessToken() });
       }
@@ -2896,16 +5023,125 @@ export default function NewRemoteSessionScreen() {
       patchDraft({ firstMessage: '' });
       router.replace({
         pathname: '/sessions/[sessionId]',
-        params: { sessionId: result.sessionId, deviceId: selectedDeviceId, deviceName: selectedDeviceName },
+        params: {
+          sessionId: result.sessionId,
+          deviceId: selectedDeviceId,
+          deviceName: selectedDeviceName,
+          // goal.set 失败接回(codex review P2:保留失败 Goal 的表单内容):草稿已
+          // 清空、目标页表单只从空 composer 初始化——把原输入经路由参数带到目标页,
+          // 用户无需重填;limits 序列化为 JSON(目标页解析带防护,坏数据忽略)。
+          ...(goalSetError ? {
+            goalError: goalSetError,
+            goalObjective: input.objective,
+            ...(input.limits ? { goalLimits: JSON.stringify(input.limits) } : {}),
+          } : {}),
+        },
       });
     } catch (err) {
+      if (!isCurrentOwner()) return;
+      // 只有 session 尚未认领 worktree 时才补偿回收；Goal 已建成后 goal.set
+      // 失败应保留会话和 managed path，不能误删用户正在使用的目录。
+      if (precreatedWorktree && !sessionClaimed && worktreeAccountId) {
+        try {
+          // create-session may have committed remotely while its reply was
+          // lost. Probe the exact pre-generated id before any destructive
+          // discard; an unknown probe is treated as cleanup-pending.
+          if (!isCurrentOwner()) return;
+          await openLink(selectedDeviceId);
+          if (!isCurrentOwner()) return;
+          const claimedAfterError = await isExactRemoteSessionClaimed(
+            precreatedWorktree.sessionId,
+            (id) => maker.getSession(id),
+          );
+          if (!isCurrentOwner()) return;
+          if (claimedAfterError) {
+            sessionClaimed = true;
+          }
+          if (sessionClaimed) {
+            setGoalError(formatRemoteError(err));
+            return;
+          }
+          if (sessionCreateStarted) {
+            // createSession crossed the durable retain-only fence. Even an
+            // exact NOT_FOUND cannot rule out a malformed/wrong-id host result,
+            // so neither retry nor destructive discard is safe.
+            setGoalError(t('session.new.worktreeCleanupPending'));
+            return;
+          }
+          if (!isCurrentOwner()) return;
+          await withTransientRemoteRetry(async () => {
+            if (!isCurrentOwner()) return;
+            const discardResult = await maker.worktree.discardPrecreated({
+              sessionId: precreatedWorktree!.sessionId,
+              recoveryKey: precreatedWorktree!.recoveryKey,
+            });
+            if (!isCurrentOwner()) return;
+            if (!parseDiscardPrecreatedAck(discardResult)) {
+              throw new Error('Invalid pre-created worktree discard acknowledgement');
+            }
+          }, { maxAttempts: 2 });
+          if (!isCurrentOwner()) return;
+          await forgetPendingPrecreatedWorktree(worktreeAccountId, {
+            sessionId: precreatedWorktree.sessionId,
+            recoveryKey: precreatedWorktree.recoveryKey,
+            ...(precreatedWorktree.createdAt !== undefined
+              ? { createdAt: precreatedWorktree.createdAt }
+              : {}),
+          });
+        } catch {
+          if (!isCurrentOwner()) return;
+          setGoalError(t('session.new.worktreeCleanupPending'));
+          return;
+        }
+      }
       setGoalError(formatRemoteError(err));
     } finally {
+      if (
+        isCurrentOwner()
+        && sessionClaimed
+        && precreatedWorktree
+        && worktreeAccountId
+      ) {
+        void forgetPendingPrecreatedWorktree(worktreeAccountId, {
+          // The reservation is keyed by the pre-generated session id. It is
+          // captured in the worktree request and remains stable for Goal.
+          sessionId: precreatedWorktree.sessionId,
+          recoveryKey: precreatedWorktree.recoveryKey,
+          ...(precreatedWorktree.createdAt !== undefined
+            ? { createdAt: precreatedWorktree.createdAt }
+            : {}),
+        }).catch(() => undefined);
+      }
+      releasePrecreatedRegistration?.();
       creatingRef.current = false;
       setCreating(false);
       setGoalBusy(false);
     }
-  }, [agentAuthVerdict, auth, confirmAgentUnauthenticated, draft, goalBusy, maker, openLink, patchDraft, router, selectedDeviceId, selectedDeviceName, subscribe, t, waitForPendingUploads]);
+  }, [
+    agentAuthVerdict,
+    auth,
+    confirmAgentUnauthenticated,
+    draft,
+    goalBusy,
+    maker,
+    openLink,
+    patchDraft,
+    router,
+    selectedDeviceId,
+    selectedDeviceName,
+    subscribe,
+    t,
+    waitForPendingUploads,
+    worktreeBranchPreferenceKey,
+    worktreeBranchPreferenceSyncKey,
+    worktreeCaptionKey,
+    worktreeCreateBlocked,
+    worktreeApplicable,
+    worktreeEligibility,
+    worktreeEnabled,
+    captureWorktreeCreateIntent,
+    isWorktreeCreateIntentCurrent,
+  ]);
 
   return (
     <SafeAreaView style={styles.safeArea} testID="newSession.screen">
@@ -3121,37 +5357,84 @@ export default function NewRemoteSessionScreen() {
               </View>
               {worktreeRowVisible ? (
                 <View style={styles.worktreeToggleWrap}>
-                  <Pressable
-                    accessibilityLabel={t('session.new.useWorktree')}
-                    accessibilityRole="checkbox"
-                    accessibilityState={{
-                      checked: worktreeChecked,
-                      disabled: worktreeToggleDisabled || undefined,
-                    }}
-                    disabled={worktreeToggleDisabled}
-                    onPress={toggleWorktree}
-                    style={({ pressed }) => [
-                      styles.worktreeToggleRow,
-                      pressed && styles.pressed,
-                      worktreeToggleDisabled && styles.disabled,
-                    ]}
-                    testID="newSession.worktreeToggle"
-                  >
-                    <View style={[
-                      styles.worktreeCheckbox,
-                      worktreeChecked && styles.worktreeCheckboxChecked,
-                    ]}>
-                      {worktreeChecked ? (
-                        <Check color={colors.ctaText} size={iconSize.xs} strokeWidth={iconStroke.bold} />
-                      ) : null}
+                  <View style={styles.worktreeControlTouchWrap}>
+                    <View style={styles.worktreeControl} testID="newSession.branchWorktreeControl">
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.worktreeControlBackground,
+                          worktreeChecked && styles.worktreeControlChecked,
+                        ]}
+                      />
+                      <Pressable
+                        accessibilityLabel={t('session.new.selectWorktreeBranchA11y', {
+                          branch: worktreeSourceBranch,
+                        })}
+                        accessibilityRole="button"
+                        accessibilityState={{
+                          busy: worktreeBranchPreferenceSaving || undefined,
+                          disabled: worktreeBranchDisabled || undefined,
+                          expanded: worktreeBranchSheetVisible || undefined,
+                        }}
+                        disabled={worktreeBranchDisabled}
+                        onPress={openWorktreeBranchPicker}
+                        style={({ pressed }) => [
+                          styles.worktreeBranchSegment,
+                          pressed && styles.pressed,
+                          worktreeBranchDisabled && styles.disabled,
+                        ]}
+                        testID="newSession.worktreeBranchPicker"
+                      >
+                        <GitBranch
+                          color={worktreeChecked ? colors.textPrimary : colors.textTertiary}
+                          size={iconSize.sm}
+                          strokeWidth={iconStroke.regular}
+                        />
+                        <Text style={styles.worktreeBranchLabel} numberOfLines={1}>
+                          {worktreeSourceBranch}
+                        </Text>
+                        {!worktreeBranchDisabled ? (
+                          <ChevronDown
+                            color={colors.textTertiary}
+                            size={iconSize.xs}
+                            strokeWidth={iconStroke.regular}
+                          />
+                        ) : null}
+                      </Pressable>
+                      <View style={styles.worktreeControlDivider} />
+                      <Pressable
+                        accessibilityLabel={t('session.new.useWorktree')}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{
+                          checked: worktreeChecked,
+                          disabled: worktreeToggleDisabled || undefined,
+                        }}
+                        disabled={worktreeToggleDisabled}
+                        onPress={toggleWorktree}
+                        style={({ pressed }) => [
+                          styles.worktreeToggleRow,
+                          pressed && styles.pressed,
+                          worktreeToggleDisabled && styles.disabled,
+                        ]}
+                        testID="newSession.worktreeToggle"
+                      >
+                        <View style={[
+                          styles.worktreeCheckbox,
+                          worktreeChecked && styles.worktreeCheckboxChecked,
+                        ]}>
+                          {worktreeChecked ? (
+                            <Check color={colors.ctaText} size={iconSize.xs} strokeWidth={iconStroke.bold} />
+                          ) : null}
+                        </View>
+                        <Text style={styles.worktreeToggleLabel} numberOfLines={1}>
+                          {t('session.new.worktreeShortLabel')}
+                        </Text>
+                      </Pressable>
                     </View>
-                    <Text style={styles.worktreeToggleLabel} numberOfLines={1}>
-                      {t('session.new.useWorktree')}
-                    </Text>
-                  </Pressable>
-                  {worktreeCaptionKey ? (
+                  </View>
+                  {worktreeControlCaptionKey ? (
                     <Text style={styles.worktreeCaption} testID="newSession.worktreeCaption">
-                      {t(worktreeCaptionKey)}
+                      {t(worktreeControlCaptionKey)}
                     </Text>
                   ) : null}
                 </View>
@@ -3491,6 +5774,17 @@ export default function NewRemoteSessionScreen() {
         ) : (
           <ContextSheetGoalCreateForm
             busy={goalBusy}
+            disabled={worktreeCreateBlocked}
+            disabledHint={worktreePreferenceSaving
+              ? t('session.new.worktreeSettingsSaving')
+              : worktreeBranchPreferenceSaving
+                || (worktreeEnabled
+                  && worktreeEligibility.status === 'eligible'
+                  && !worktreeBranchPreferenceReady)
+                ? t('session.new.worktreeBranchSaving')
+                : worktreeControlCaptionKey
+                  ? t(worktreeControlCaptionKey)
+                  : undefined}
             error={goalError}
             initial={draft.firstMessage.trim() ? { objective: draft.firstMessage.trim() } : undefined}
             onSetGoal={(input) => void createGoalSession(input)}
@@ -3498,6 +5792,54 @@ export default function NewRemoteSessionScreen() {
           />
         )}
       </ContextSheet>
+      <SheetModal
+        backdropTestID="newSession.worktreeBranchSheet.backdrop"
+        onBackdropPress={() => setWorktreeBranchSheetOpen(false)}
+        onRequestClose={() => setWorktreeBranchSheetOpen(false)}
+        visible={worktreeBranchSheetVisible}
+      >
+        <SheetSurface
+          bottomInset={safeAreaInsets.bottom}
+          heights={permissionSheetHeights}
+          onClose={() => setWorktreeBranchSheetOpen(false)}
+          onSnapChange={setWorktreeBranchSheetSnap}
+          snap={worktreeBranchSheetSnap}
+          testID="newSession.worktreeBranchSheet"
+          title={t('session.new.worktreeSourceBranch')}
+        >
+          {worktreeBranchList?.loading ? (
+            <View style={styles.worktreeBranchStatusRow}>
+              <ActivityIndicator color={colors.textSecondary} size="small" />
+              <Text style={styles.worktreeBranchStatusText}>
+                {t('session.new.worktreeBranchesLoading')}
+              </Text>
+            </View>
+          ) : worktreeBranchList?.failed || worktreeBranchOptions.length === 0 ? (
+            <Pressable
+              accessibilityLabel={t('session.new.worktreeBranchesRetry')}
+              accessibilityRole="button"
+              onPress={() => loadWorktreeBranches(true)}
+              style={({ pressed }) => [
+                styles.worktreeBranchStatusRow,
+                pressed && styles.pressed,
+              ]}
+              testID="newSession.worktreeBranchSheet.retry"
+            >
+              <Text style={styles.worktreeBranchStatusText}>
+                {t('session.new.worktreeBranchesRetry')}
+              </Text>
+            </Pressable>
+          ) : (
+            <MobileChoicePickerList
+              activeId={worktreeSourceBranch}
+              disabled={creating}
+              onSelect={selectWorktreeSourceBranch}
+              options={worktreeBranchOptions}
+              testID="newSession.worktreeBranchSheet.option"
+            />
+          )}
+        </SheetSurface>
+      </SheetModal>
       <ModelPickerSheet
         activeModelId={draft.model}
         activePermissionMode={displayPermissionMode}
@@ -3902,26 +6244,79 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     marginVertical: spacing.xs,
   },
-  // worktree 开关行(selectorStack 内、工作区选择器之后):自绘 checkbox 同 browseCheckbox
-  // 基因,行高与 selectorRow 对齐;caption 缩进到与文案左缘对齐。
+  // 分支 + worktree 是两个独立点击区组成的一枚紧凑 pill。点击区实高 44；背景绝对
+  // 内缩 5pt 后视觉高 34，既不牺牲触控面积，也不让「worktree」重新显得臃肿。
   worktreeToggleWrap: {
     gap: spacing.xs,
   },
-  worktreeToggleRow: {
+  worktreeControlTouchWrap: {
     alignItems: 'center',
     alignSelf: 'flex-start',
+    justifyContent: 'center',
+    maxWidth: '100%',
+    minHeight: 44,
+  },
+  worktreeControl: {
+    alignItems: 'stretch',
     flexDirection: 'row',
-    gap: spacing.md,
-    minHeight: 42,
+    height: 44,
+    maxWidth: '100%',
+    position: 'relative',
+  },
+  worktreeControlBackground: {
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    bottom: 5,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 5,
+  },
+  worktreeControlChecked: {
+    borderColor: colors.borderStrong,
+  },
+  worktreeBranchSegment: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 1,
+    gap: spacing.xs,
+    minHeight: 44,
+    minWidth: 72,
+    paddingLeft: spacing.sm,
+    paddingRight: spacing.xs,
+  },
+  worktreeBranchLabel: {
+    color: colors.textTertiary,
+    flexShrink: 1,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    minWidth: 0,
+  },
+  worktreeControlDivider: {
+    alignSelf: 'center',
+    backgroundColor: colors.border,
+    height: 16,
+    width: StyleSheet.hairlineWidth,
+  },
+  worktreeToggleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    minHeight: 44,
+    paddingLeft: spacing.xs,
+    paddingRight: spacing.sm,
   },
   worktreeCheckbox: {
     alignItems: 'center',
     borderColor: colors.borderStrong,
     borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
-    height: 20,
+    height: 18,
     justifyContent: 'center',
-    width: 20,
+    width: 18,
   },
   worktreeCheckboxChecked: {
     backgroundColor: colors.cta,
@@ -3930,16 +6325,30 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   worktreeToggleLabel: {
     color: colors.textTertiary,
     flexShrink: 1,
-    fontSize: typeScale.body,
+    fontSize: typeScale.footnote,
     fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.body,
+    lineHeight: lineHeight.caption,
     minWidth: 0,
   },
   worktreeCaption: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,
-    marginLeft: 20 + spacing.md,
+    marginLeft: spacing.sm,
+  },
+  worktreeBranchStatusRow: {
+    alignItems: 'center',
+    borderRadius: radius.pill,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 48,
+    paddingHorizontal: spacing.sm,
+  },
+  worktreeBranchStatusText: {
+    color: colors.textSecondary,
+    flex: 1,
+    fontSize: typeScale.body,
+    fontWeight: fontWeight.medium,
   },
   hint: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   errorText: {
@@ -4137,8 +6546,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   // 内边距与真实输入框同源:差一点就会让听写文字与非听写文字左右错位、换行位置不同。
   voiceDraftOverlayContent: {
+    paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM,
     paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING,
-    paddingVertical: MOBILE_COMPOSER_INPUT_VERTICAL_PADDING,
+    paddingTop: COMPOSER_TEXT_PADDING_TOP,
   },
   voiceDraftMeasuredBlock: {
     minHeight: MOBILE_COMPOSER_INPUT_LINE_HEIGHT,

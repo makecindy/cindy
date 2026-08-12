@@ -10,6 +10,8 @@
  */
 
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
+import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
+import type { PiRuntimeCapabilityManifest } from './pi-runtime-capabilities.js';
 
 export type AgentEventType =
   | 'text'                  // 流式文本输出（增量或完整）
@@ -20,6 +22,7 @@ export type AgentEventType =
   | 'agent_task_update'     // 子 agent / task 状态更新（Claude Code task_* + Codex collab agent）
   | 'image'                 // 模型查看 / 生成的图片 (codex 独有, claude SDK 不会发)
   | 'account_usage'         // vendor-specific 账号级用量 (codex rateLimits 等); data shape 由 emit 端自定, renderer 按 source/字段嗅探
+  | 'turn_diff'             // provider 对本轮工作区变更的累计 unified diff
   | 'interaction_request'   // 需要用户决策(permission / ask_user_question / plan_review)
   | 'interaction_dismissed' // pending interaction 被自动 resolve(如 setPermissionMode 切换)
   | 'plan_mode_changed'     // agent 自行切换计划模式(典型: 计划批准后自动退出), data: { enabled: boolean }; host 据此回写持久化 + 广播 UI
@@ -28,6 +31,17 @@ export type AgentEventType =
   | 'session_id'            // SDK session id 回填
   | 'done'                  // 一轮 turn 完成
   | 'error';                // 错误（是否结束 turn 由 error data 的 isTerminal 显式表达）
+
+export interface TurnDiffEventData {
+  /** Provider-owned turn identity. Same id updates replace, rather than append to, the prior diff. */
+  turnId: string;
+  /** Cumulative unified diff for this provider turn. */
+  diff: string;
+  /** Workspace root used when the provider computed the patch. */
+  cwd: string;
+  /** False when concurrent provider snapshots could not be safely composed. */
+  isComplete?: boolean;
+}
 
 export interface AgentErrorEventData {
   message: string;
@@ -74,9 +88,15 @@ export interface AgentTaskUpdateEventData {
   lastToolName?: string;
   taskType?: string;
   workflowName?: string;
-  model?: string;
+  /**
+   * 实际模型名；`null` 是子代理多 receiver 观测冲突/显式清除的合法值，
+   * 用于让下游清掉旧模型徽标，而不是回退到未经证明的旧值。
+   */
+  model?: string | null;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
+  /** Explicit durable-workspace identity; control/task-card-only updates omit it. */
+  subagentObservation?: SubagentObservation;
   /**
    * workflow 逐 agent 进度树(taskType=local_workflow 时 task_progress 事件携带,
    * 经 `@cindy/maker-shared/agent-task` 的 normalizeWorkflowProgressEntries 收窄截断)。
@@ -116,11 +136,34 @@ export interface AgentEvent {
   /** 事件来源标识，便于调试 */
   source?: 'claude-code' | 'codex' | 'pi';
   /**
+   * Events that finish work owned by a completed turn can still arrive after a
+   * later turn has started (for example, a V1 collab child). These are still
+   * useful to render, but must not inherit the later turn's attribution or
+   * watchdog state.
+   */
+  turnScope?: 'turn' | 'background';
+  /**
+   * Local start time of the turn that owns a background event. Main-process
+   * persistence uses this lifecycle evidence to keep pre-clear late work from
+   * repopulating a cleared conversation. Never expose it to renderer/device
+   * boundaries.
+   */
+  backgroundTurnStartedAt?: number;
+  /**
    * 本事件所属 turn 的发起来源,由 Session 在事件 fan-out 前打标(见 session.ts
    * 的 currentTurnOrigin)。turn 结束(isTerminalTurnEvent)后清空,不污染下一轮。
    * translator 不产生此字段;消费方(IM 转播等)按需读取,默认忽略。
    */
   turnOrigin?: SendOrigin;
+  /** Host-owned per-turn correlation for lifecycle bookkeeping; never comes from vendor metadata. */
+  turnAttemptToken?: number;
+  /**
+   * Provider-owned claim attached synchronously to a `done` boundary when that
+   * boundary has an automatic continuation. Consumers pass it back to the
+   * session lifecycle API; unlike a live task-map sample it cannot race later
+   * task notifications or a fast result-only continuation turn.
+   */
+  turnContinuationId?: number;
   /**
    * Vendor-specific 元数据透传 (claude-code 的 SDK uuid / parentUuid / sdkSessionId /
    * model / stopReason / requestId / usage 等)。host 落库时塞进 messages.agent_meta 列,
@@ -337,6 +380,13 @@ export interface ForkSdkSessionOptions {
   /** 源 session 的 SDK sessionId (从 sessions.sdk_session_id 取)。 */
   sourceSdkSessionId: string;
   /**
+   * 源原生 session 的模型与供应商来源。Codex 的隔离 fork host 需要用相同上下文
+   * 解析 credential mode；否则 provider-oauth 源任务在本机没有 fallback 凭证时会
+   * 被误判为未登录。Claude/PI 不消费这两个字段。
+   */
+  model?: string;
+  providerId?: string | null;
+  /**
    * 截断锚点 — 必须是 SDK assistant 消息的 uuid (调用方反查 + 跳 subagent)。
    * Claude 必填; Codex 协议无 message uuid, 此字段被 CodexAgent 忽略,
    * 调用方传 undefined 即可。
@@ -369,4 +419,6 @@ export interface ForkSdkSessionResult {
    * upToMessageId 锚点能在新 jsonl 里查到。
    */
   uuidMap: Map<string, string>;
+  /** Pi-only runtime command catalog captured from the forked runtime, if available. */
+  runtimeCapabilities?: PiRuntimeCapabilityManifest;
 }

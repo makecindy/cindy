@@ -25,8 +25,31 @@ describe('ChatInput Ghost snapshot contract', () => {
   it('uses the latest installed snapshot and workdir at send time', () => {
     expect(source).toContain('const installedGhostsRef = useRef(installedGhosts);');
     expect(source).toContain('installedGhostsRef.current = installedGhosts;');
+    expect(source).toMatch(
+      /const eligibleGhosts\s*=\s*filterGhostsForWorkdir\(\s*installedGhostsRef\.current,\s*workingDirRef\.current,\s*\);[\s\S]*?expandGhostCommand\(text,\s*eligibleGhosts\)/,
+    );
+  });
+
+  it('does not expose controller-local plugin rows in device-link sessions', () => {
+    expect(source).toContain('if (deviceLinkDeviceId) return [];');
     expect(source).toContain(
-      'const eligibleGhosts = filterGhostsForWorkdir(\n        installedGhostsRef.current,\n        workingDirRef.current,\n      );',
+      '[deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, remoteHostId, t]',
+    );
+  });
+
+  it('revalidates Host capability chips as enabled and local at send time', () => {
+    expect(source).toContain(
+      'const canUseLocalHostCapability = !remoteHostId && !deviceLinkDeviceId;',
+    );
+    expect(source).toMatch(
+      /serializedHostCapability && canUseLocalHostCapability[\s\S]*?candidate\.enabled &&[\s\S]*?candidate\.manifest\.id === serializedHostCapability\.ghostId/,
+    );
+    expect(source).toContain("toast.warning(t('newChat.pluginSetup.error.TARGET_UNAVAILABLE'));");
+  });
+
+  it('does not consume Host capability text as a local plan-mode command', () => {
+    expect(source).toMatch(
+      /if \(\s*!serializedHostCapability &&\s*isPlanModeComposerCommandText\(/,
     );
   });
 });

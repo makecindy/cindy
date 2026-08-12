@@ -37,7 +37,7 @@ export interface PluginMarketInstallationRecord {
    * "我装过"的声明,运行时的包在降级窗口可以被旧版换成任何东西(旧版不认识
    * custom 账本,卸载/本地重装都不会更新它)——认领运行时安装必须同时对上这个
    * 摘要,只凭 ghostId 存在就恢复所有权会把别人的包错误归属给本来源并放行其
-   * 更新覆盖。仅自定义安装记录携带。
+   * 更新覆盖。新写入的市场、自定义市场和 legacy adoption 记录均应携带。
    */
   manifestDigest?: string;
 }
@@ -225,6 +225,28 @@ export class PluginMarketLedger {
   upsertInstallation(record: PluginMarketInstallationRecord): void {
     const data = this.read();
     data.installations[record.ghostId] = record;
+    this.write(data);
+  }
+
+  /** 换源落位前失败时，将旧路由和原有默认安装退订状态一起原子恢复。 */
+  restoreInstallation(
+    record: PluginMarketInstallationRecord,
+    optOut?: { userId: string; suppressed: boolean },
+  ): void {
+    const data = this.read();
+    data.installations[record.ghostId] = record;
+    if (optOut) {
+      const suppressedPluginIds = data.defaultInstallOptOuts[optOut.userId] ?? [];
+      if (optOut.suppressed) {
+        data.defaultInstallOptOuts[optOut.userId] = [
+          ...new Set([...suppressedPluginIds, record.pluginId]),
+        ];
+      } else {
+        const restored = suppressedPluginIds.filter((pluginId) => pluginId !== record.pluginId);
+        if (restored.length > 0) data.defaultInstallOptOuts[optOut.userId] = restored;
+        else delete data.defaultInstallOptOuts[optOut.userId];
+      }
+    }
     this.write(data);
   }
 

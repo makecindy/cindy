@@ -498,6 +498,159 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return this.get(id);
   }
 
+  async completeAutomaticClaim(
+    id: string,
+    claimRunId: string,
+    firedAt: number,
+    patch: Partial<Pick<Schedule, 'lastFinishedAt' | 'nextFireAt' | 'status'>>,
+  ): Promise<Schedule | null> {
+    const db = this.getDb();
+    if (this.getDbClient) {
+      const updated = await this.getDbClient().tx('scheduler.completeAutomaticClaim', {
+        scheduleId: id,
+        claimRunId,
+        firedAt,
+        patch: {
+          ...('lastFinishedAt' in patch ? { lastFinishedAt: patch.lastFinishedAt ?? null } : {}),
+          ...('nextFireAt' in patch ? { nextFireAt: patch.nextFireAt ?? null } : {}),
+          ...(patch.status !== undefined ? { status: patch.status } : {}),
+        },
+      });
+      if (!updated) return null;
+      return this.get(id);
+    }
+
+    return db.transaction(() => {
+      const [row] = db.select().from(schedules).where(eq(schedules.id, id)).limit(1).all();
+      if (!row) return null;
+      const hasPatch = (key: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, key);
+      const result = db
+        .update(schedules)
+        .set({
+          lastFiredAt: sql`CASE
+            WHEN ${schedules.lastFiredAt} IS NULL OR ${schedules.lastFiredAt} <= ${firedAt}
+            THEN ${firedAt}
+            ELSE ${schedules.lastFiredAt}
+          END`,
+          activeClaimRunId: sql`CASE
+            WHEN ${schedules.activeClaimRunId} = ${claimRunId}
+            THEN NULL
+            ELSE ${schedules.activeClaimRunId}
+          END`,
+          ...(hasPatch('lastFinishedAt') ? { lastFinishedAt: patch.lastFinishedAt ?? null } : {}),
+          ...(hasPatch('nextFireAt')
+            ? {
+                nextFireAt: sql`CASE
+                  WHEN ${schedules.activeClaimRunId} = ${claimRunId}
+                  THEN ${patch.nextFireAt ?? null}
+                  ELSE ${schedules.nextFireAt}
+                END`,
+              }
+            : {}),
+          ...(patch.status !== undefined ? { status: patch.status } : {}),
+        })
+        .where(eq(schedules.id, id))
+        .run();
+      const changes = (result as unknown as { changes?: number }).changes;
+      if (typeof changes === 'number' && changes === 0) return null;
+      const [updated] = db.select().from(schedules).where(eq(schedules.id, id)).limit(1).all();
+      return updated ? scheduleToCamel(updated) : null;
+    });
+  }
+
+  async deferRunNowWithLiveClaimGuard(
+    id: string,
+    previousLastFiredAt: number | undefined,
+    retryAt: number,
+  ): Promise<Schedule | null> {
+    const db = this.getDb();
+    if (this.getDbClient) {
+      const updated = await this.getDbClient().tx('scheduler.deferRunNowWithLiveClaimGuard', {
+        scheduleId: id,
+        previousLastFiredAt: previousLastFiredAt ?? null,
+        retryAt,
+      });
+      if (!updated) return null;
+      return this.get(id);
+    }
+
+    return db.transaction(() => {
+      const [row] = db.select().from(schedules).where(eq(schedules.id, id)).limit(1).all();
+      if (!row) return null;
+      const liveClaim =
+        row.activeClaimRunId !== null &&
+        db
+          .select({ id: scheduleRuns.id })
+          .from(scheduleRuns)
+          .where(
+            and(
+              eq(scheduleRuns.id, row.activeClaimRunId),
+              eq(scheduleRuns.scheduleId, id),
+              eq(scheduleRuns.status, 'running'),
+            ),
+          )
+          .limit(1)
+          .all().length > 0;
+      const patch = liveClaim
+        ? {
+            lastFiredAt: previousLastFiredAt ?? null,
+            activeClaimRunId: row.activeClaimRunId,
+          }
+        : {
+            lastFiredAt: previousLastFiredAt ?? null,
+            nextFireAt: retryAt,
+            activeClaimRunId: null,
+          };
+      db.update(schedules).set(patch).where(eq(schedules.id, id)).run();
+      const [updated] = db.select().from(schedules).where(eq(schedules.id, id)).limit(1).all();
+      return updated ? scheduleToCamel(updated) : null;
+    });
+  }
+
+  async pauseWithLiveClaimGuard(
+    id: string,
+    updatedAt: number,
+  ): Promise<Schedule | null> {
+    const db = this.getDb();
+    if (this.getDbClient) {
+      const updated = await this.getDbClient().tx('scheduler.pauseWithLiveClaimGuard', {
+        scheduleId: id,
+        updatedAt,
+      });
+      if (!updated) return null;
+      return this.get(id);
+    }
+
+    return db.transaction(() => {
+      const [row] = db.select().from(schedules).where(eq(schedules.id, id)).limit(1).all();
+      if (!row) return null;
+      const liveClaim =
+        row.activeClaimRunId !== null &&
+        db
+          .select({ id: scheduleRuns.id })
+          .from(scheduleRuns)
+          .where(
+            and(
+              eq(scheduleRuns.id, row.activeClaimRunId),
+              eq(scheduleRuns.scheduleId, id),
+              eq(scheduleRuns.status, 'running'),
+            ),
+          )
+          .limit(1)
+          .all().length > 0;
+      db.update(schedules)
+        .set({
+          status: 'paused',
+          updatedAt,
+          activeClaimRunId: liveClaim ? row.activeClaimRunId : null,
+        })
+        .where(eq(schedules.id, id))
+        .run();
+      const [updated] = db.select().from(schedules).where(eq(schedules.id, id)).limit(1).all();
+      return updated ? scheduleToCamel(updated) : null;
+    });
+  }
+
   async resumeWithLiveClaimGuard(
     id: string,
     updatedAt: number,

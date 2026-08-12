@@ -21,8 +21,137 @@ import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SlashCommands');
+const shadowedUnavailableSkillsByCommands = new WeakMap<UnifiedCommand[], Set<string>>();
 
 export type { UnifiedCommand } from '@cindy/maker-core';
+
+export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000] as const;
+
+export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
+  return command.kind === 'agent-skill'
+    && command.scope === 'repo'
+    && command.runtimeStatus === 'discovered';
+}
+
+export function hasAvailableSlashCommand(commands: readonly UnifiedCommand[]): boolean {
+  return commands.some((command) => !isSlashCommandUnavailable(command));
+}
+
+export function slashCommandInvocationName(command: UnifiedCommand): string {
+  return command.kind === 'agent-skill' && command.runtimeCommandName
+    ? command.runtimeCommandName
+    : command.name;
+}
+
+/**
+ * Palette selection already inserts runtimeCommandName. Apply the same mapping
+ * to a matching command that the user typed or pasted directly before send.
+ */
+export function rewriteAgentSkillInvocationForDispatch(
+  message: string,
+  command: UnifiedCommand | undefined,
+): string {
+  if (
+    !command ||
+    command.kind !== 'agent-skill' ||
+    !command.runtimeCommandName ||
+    isSlashCommandUnavailable(command)
+  ) {
+    return message;
+  }
+  const match = message.match(/^\/(\S+)([\s\S]*)$/);
+  if (!match || match[1].toLowerCase() !== command.name.toLowerCase()) return message;
+  return `/${command.runtimeCommandName}${match[2]}`;
+}
+
+/**
+ * Rebase persisted/render-only inline ranges after the leading slash-command
+ * token grows or shrinks during runtime alias rewriting.
+ */
+export function rebaseInlineRangesAfterSlashCommandRewrite<T extends { start: number; end: number }>(
+  ranges: readonly T[],
+  originalMessage: string,
+  rewrittenMessage: string,
+): T[] {
+  if (originalMessage === rewrittenMessage) return [...ranges];
+  const originalCommand = originalMessage.match(/^\/\S+/)?.[0];
+  const rewrittenCommand = rewrittenMessage.match(/^\/\S+/)?.[0];
+  if (!originalCommand || !rewrittenCommand) return [...ranges];
+
+  const boundary = originalCommand.length;
+  const delta = rewrittenCommand.length - boundary;
+  if (delta === 0) return [...ranges];
+  return ranges.map((range) => ({
+    ...range,
+    start: range.start >= boundary ? range.start + delta : range.start,
+    end: range.end >= boundary ? range.end + delta : range.end,
+  }));
+}
+
+/** First available command index, or 0 when nothing is available/present. */
+export function firstAvailableSlashCommandIndex(commands: readonly UnifiedCommand[]): number {
+  const index = commands.findIndex((command) => !isSlashCommandUnavailable(command));
+  return index >= 0 ? index : 0;
+}
+
+/** Move with wraparound while skipping unavailable discovered project skills. */
+export function nextAvailableSlashCommandIndex(
+  commands: readonly UnifiedCommand[],
+  current: number,
+  delta: 1 | -1,
+): number {
+  if (commands.length === 0) return current;
+  let index = current;
+  for (let step = 0; step < commands.length; step++) {
+    index = (index + delta + commands.length) % commands.length;
+    if (!isSlashCommandUnavailable(commands[index])) return index;
+  }
+  return current;
+}
+
+export type SlashCommandRosterStatus = 'loading' | 'refreshing' | 'ready' | 'error';
+
+export interface SlashCommandRosterState {
+  contextKey: string;
+  status: SlashCommandRosterStatus;
+  commands: UnifiedCommand[];
+}
+
+/** Stable empty roster for initial and cross-context renders. */
+export const EMPTY_SLASH_COMMANDS: UnifiedCommand[] = [];
+
+export function beginSlashCommandRosterLoad(
+  current: SlashCommandRosterState,
+  contextKey: string,
+): SlashCommandRosterState {
+  if (
+    current.contextKey === contextKey &&
+    (current.status === 'ready' || current.status === 'refreshing')
+  ) {
+    return { ...current, status: 'refreshing' };
+  }
+  return { contextKey, status: 'loading', commands: EMPTY_SLASH_COMMANDS };
+}
+
+export function failSlashCommandRosterLoad(
+  current: SlashCommandRosterState,
+  contextKey: string,
+): SlashCommandRosterState {
+  if (current.contextKey === contextKey && current.status === 'refreshing') {
+    return { ...current, status: 'ready' };
+  }
+  return { contextKey, status: 'error', commands: EMPTY_SLASH_COMMANDS };
+}
+
+export function isSlashCommandRosterReady(
+  state: SlashCommandRosterState,
+  contextKey: string,
+): boolean {
+  return (
+    state.contextKey === contextKey &&
+    (state.status === 'ready' || state.status === 'refreshing')
+  );
+}
 
 // device-link 远程会话下 desktop 命令**全量可用**:业务语义在「会话归属设备」的命令
 // (/goal /learn /cmd)由控制端 main(commands/builtins.ts)按 ctx.deviceId 经隧道路由
@@ -48,26 +177,52 @@ export function mergeCommands(
 ): UnifiedCommand[] {
   const seen = new Set<string>();
   const result: UnifiedCommand[] = [];
+  const shadowedUnavailableSkills = new Set<string>();
+  const availableSkills = agentSkill.filter((command) => !isSlashCommandUnavailable(command));
+  const unavailableSkills = agentSkill.filter(isSlashCommandUnavailable);
   const tiers: UnifiedCommand[][] = [
-    [...agentSkill].sort((a, b) => a.name.localeCompare(b.name)),
+    availableSkills.sort((a, b) => a.name.localeCompare(b.name)),
     [...desktop].sort((a, b) => a.name.localeCompare(b.name)),
     [...agentBuiltin].sort((a, b) => a.name.localeCompare(b.name)),
+    unavailableSkills.sort((a, b) => a.name.localeCompare(b.name)),
   ];
   for (const tier of tiers) {
     for (const cmd of tier) {
       if (seen.has(cmd.name)) {
-        log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
+        if (isSlashCommandUnavailable(cmd)) {
+          shadowedUnavailableSkills.add(cmd.name.toLowerCase());
+        } else {
+          log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
+        }
         continue;
       }
       seen.add(cmd.name);
       result.push(cmd);
     }
   }
+  if (shadowedUnavailableSkills.size > 0) {
+    shadowedUnavailableSkillsByCommands.set(result, shadowedUnavailableSkills);
+  }
   return result;
 }
 
+function hasShadowedUnavailableSkill(
+  commands: UnifiedCommand[],
+  commandName: string,
+): boolean {
+  return shadowedUnavailableSkillsByCommands.get(commands)?.has(commandName.toLowerCase()) ?? false;
+}
+
+export function hasUnavailableProjectSkillPreview(commands: UnifiedCommand[]): boolean {
+  return commands.some(isSlashCommandUnavailable)
+    || (shadowedUnavailableSkillsByCommands.get(commands)?.size ?? 0) > 0;
+}
+
 /**
- * 前缀过滤(case-insensitive); 与 F1 spec 对齐 —— 不做 fuzzy match, 只做 startsWith。
+ * 包含过滤(case-insensitive); 精确匹配优先,其次是前缀匹配,最后是普通包含匹配。
+ *
+ * `/`、`$` 两类命令都复用这套筛选，输入命令中间的关键词也能命中，
+ * 与 `@` 资源面板的搜索体验保持一致。
  */
 export function filterSlashCommands(
   commands: UnifiedCommand[],
@@ -76,7 +231,15 @@ export function filterSlashCommands(
 ): UnifiedCommand[] {
   const q = query.trim().toLowerCase();
   const filtered = q
-    ? commands.filter((c) => c.name.toLowerCase().startsWith(q))
+    ? commands
+        .map((command, index) => {
+          const name = command.name.toLowerCase();
+          const rank = name === q ? 0 : name.startsWith(q) ? 1 : name.includes(q) ? 2 : -1;
+          return { command, index, rank };
+        })
+        .filter((entry) => entry.rank >= 0)
+        .sort((a, b) => a.rank - b.rank || a.index - b.index)
+        .map((entry) => entry.command)
     : commands;
   return filtered.length > limit ? filtered.slice(0, limit) : filtered;
 }
@@ -91,7 +254,7 @@ export function filterSlashCommands(
 export async function loadAllCommands(
   agentKind: AgentKind,
   workingDir: string | null | undefined,
-  opts?: { forceReload?: boolean; skipAgentSkills?: boolean },
+  opts?: { forceReload?: boolean; skipAgentSkills?: boolean; sessionId?: string },
   deviceId?: string,
 ): Promise<UnifiedCommand[]> {
   const api = window.electronAPI.maker;
@@ -113,6 +276,7 @@ export async function loadAllCommands(
   const skillParams = {
     ...(workingDir ? { workingDir } : {}),
     ...(opts?.forceReload !== undefined ? { forceReload: opts.forceReload } : {}),
+    ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
   };
   const skillP: Promise<SkillRes> = shouldLoadSkills
     ? (
@@ -131,6 +295,89 @@ export async function loadAllCommands(
   const agentBuiltin = (builtinRes.success && builtinRes.commands ? builtinRes.commands : []) as UnifiedCommand[];
   const agentSkill = (skillRes.success && skillRes.skills ? skillRes.skills : []) as UnifiedCommand[];
   return mergeCommands(desktop, agentBuiltin, agentSkill);
+}
+
+/**
+ * A Pi runtime catalog may finish after the palette/dispatch snapshot was
+ * created. Recheck desktop hits before executing them so a newly loaded
+ * same-name project skill keeps command ownership.
+ */
+export async function reconcilePiRuntimeCommandForDispatch(params: {
+  agentKind: AgentKind;
+  sessionId?: string;
+  commandName: string;
+  commands: UnifiedCommand[];
+  reload: () => Promise<UnifiedCommand[]>;
+}): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
+  const findCommand = (commands: UnifiedCommand[]) => commands.find(
+    (command) => command.name.toLowerCase() === params.commandName.toLowerCase(),
+  );
+  const current = findCommand(params.commands);
+  const shouldReload = !current
+    || current.kind === 'desktop'
+    || isSlashCommandUnavailable(current);
+  if (params.agentKind !== 'pi' || !params.sessionId || !shouldReload) {
+    return { command: current, commands: params.commands };
+  }
+  try {
+    const refreshed = await params.reload();
+    const refreshedCommand = findCommand(refreshed);
+    return refreshedCommand || !current
+      ? { command: refreshedCommand, commands: refreshed }
+      : { command: current, commands: params.commands };
+  } catch {
+    return { command: current, commands: params.commands };
+  }
+}
+
+export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
+  agentKind: AgentKind;
+  sessionId?: string;
+  commandName: string;
+  commands: UnifiedCommand[];
+  reload: () => Promise<UnifiedCommand[]>;
+  prepareRuntime?: () => Promise<void>;
+  retryDelaysMs?: readonly number[];
+  sleep?: (delayMs: number) => Promise<void>;
+}): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
+  if (params.agentKind !== 'pi' || !params.sessionId) {
+    return reconcilePiRuntimeCommandForDispatch(params);
+  }
+  const retryDelaysMs = params.retryDelaysMs ?? PI_RUNTIME_SKILL_RETRY_DELAYS_MS;
+  const sleep = params.sleep ?? ((delayMs: number) => new Promise<void>(
+    (resolve) => window.setTimeout(resolve, delayMs),
+  ));
+  const current = params.commands.find(
+    (command) => command.name.toLowerCase() === params.commandName.toLowerCase(),
+  );
+  const shouldPrepareRuntime = !current
+    || current.kind === 'desktop'
+    || isSlashCommandUnavailable(current);
+  if (
+    params.agentKind === 'pi'
+    && params.sessionId
+    && params.prepareRuntime
+    && shouldPrepareRuntime
+  ) {
+    await params.prepareRuntime();
+  }
+  let result = await reconcilePiRuntimeCommandForDispatch(params);
+  for (const delayMs of retryDelaysMs) {
+    const shouldRetry = result.command !== undefined && (
+      isSlashCommandUnavailable(result.command)
+      || (
+        result.command.kind === 'desktop'
+        && hasShadowedUnavailableSkill(result.commands, params.commandName)
+      )
+    );
+    if (!shouldRetry) return result;
+    await sleep(delayMs);
+    result = await reconcilePiRuntimeCommandForDispatch({
+      ...params,
+      commands: result.commands,
+    });
+  }
+  return result;
 }
 
 /**

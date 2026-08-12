@@ -3,7 +3,7 @@
  *
  * 覆盖 device-link 控制端内存层的核心不变量:
  *  - setDeviceSessions:打 device-link origin 标记 + 合并扁平列表 + sessionId→deviceId 注册 + 引用稳定
- *  - applyPatch:就地幂等合并 / status=deleted|archived 移出分片 / 落到未知 session 丢弃
+ *  - active/archived 分桶快照互不覆盖，applyPatch 在状态桶间迁移 / deleted 移出分片
  *  - epoch:旧 snapshot 不覆盖新 snapshot(乱序保护)
  *  - markDeviceDisconnected:断线保留快照 + 在线索引清理;removeDevice / clear:明确移除时清理
  */
@@ -13,7 +13,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   remoteProjectsStore,
   getSessionDeviceId,
+  retryRemoteSessionBootstrap,
+  retryRemoteSessionStatus,
+  requestRemoteSessionStatus,
   setRemoteReseedImpl,
+  setRemoteSessionBootstrapRetryImpl,
 } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -50,10 +54,21 @@ function mk(id: string, partial: Partial<Session> = {}): Session {
 describe('remoteProjectsStore', () => {
   beforeEach(() => {
     setRemoteReseedImpl(null);
+    setRemoteSessionBootstrapRetryImpl(null);
     remoteProjectsStore.clear();
     remoteProjectsStore.__resetPendingTitlePreviewForTest();
     // 钉子刻意不随 clear() 消失(见 pinnedOrigins),所以测试间必须显式清,否则会串用例。
     remoteProjectsStore.__resetPinnedOriginsForTest();
+  });
+
+  it('把用户的任务重试动作交给 listing tier 注册的 bootstrap 实现', () => {
+    const retry = vi.fn();
+    setRemoteSessionBootstrapRetryImpl(retry);
+
+    retryRemoteSessionBootstrap('dev-B');
+
+    expect(retry).toHaveBeenCalledWith('dev-B');
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   describe('origin 钉子(pinSessionOrigin)', () => {
@@ -116,6 +131,86 @@ describe('remoteProjectsStore', () => {
     expect(getSessionDeviceId('s2')).toBe('dev-C');
   });
 
+  it('active / archived 权威快照只替换自己的状态桶', () => {
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('active-1')], 'active');
+    remoteProjectsStore.setDeviceSessions(
+      'dev-B',
+      'B',
+      [mk('archived-1', { status: 'archived' })],
+      'archived',
+    );
+
+    expect(remoteProjectsStore.hasLoadedSessionStatus('dev-B', 'active')).toBe(true);
+    expect(remoteProjectsStore.hasLoadedSessionStatus('dev-B', 'archived')).toBe(true);
+    expect([...remoteProjectsStore.getArchivedLoadedDeviceIds()]).toEqual(['dev-B']);
+    expect(remoteProjectsStore.getDeviceSessions('dev-B', 'active').map((s) => s.id)).toEqual([
+      'active-1',
+    ]);
+    expect(remoteProjectsStore.getDeviceSessions('dev-B', 'archived').map((s) => s.id)).toEqual([
+      'archived-1',
+    ]);
+
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('active-2')], 'active');
+    expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual([
+      'active-2',
+      'archived-1',
+    ]);
+  });
+
+  it('归档桶按设备+状态去重，active 在途不拦请求且成功只清 archived loading', () => {
+    const reseed = vi.fn();
+    setRemoteReseedImpl(reseed);
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('active-1')]);
+    remoteProjectsStore.markBootstrapLoading('dev-B');
+
+    requestRemoteSessionStatus('dev-B', 'archived');
+    requestRemoteSessionStatus('dev-B', 'archived');
+    expect(reseed).toHaveBeenCalledTimes(1);
+    expect(reseed).toHaveBeenCalledWith('dev-B', 'archived');
+    expect(remoteProjectsStore.isSessionStatusLoading('dev-B', 'active')).toBe(true);
+    expect(remoteProjectsStore.isSessionStatusLoading('dev-B', 'archived')).toBe(true);
+    expect([...remoteProjectsStore.getBootstrapLoadingDeviceIds()]).toEqual(['dev-B']);
+
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [], 'archived');
+    expect(remoteProjectsStore.isSessionStatusLoading('dev-B', 'active')).toBe(true);
+    expect(remoteProjectsStore.isSessionStatusLoading('dev-B', 'archived')).toBe(false);
+    expect([...remoteProjectsStore.getBootstrapLoadingDeviceIds()]).toEqual(['dev-B']);
+    requestRemoteSessionStatus('dev-B', 'archived');
+    expect(reseed).toHaveBeenCalledTimes(1);
+  });
+
+  it('归档桶失败后显示失败态，并允许下一次按需请求自动重试', () => {
+    const reseed = vi.fn();
+    setRemoteReseedImpl(reseed);
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('active-1')]);
+
+    requestRemoteSessionStatus('dev-B', 'archived');
+    remoteProjectsStore.markSessionStatusFailed('dev-B', 'archived');
+
+    expect(remoteProjectsStore.isSessionStatusLoading('dev-B', 'archived')).toBe(false);
+    expect(remoteProjectsStore.getBootstrapFailedDeviceIds().size).toBe(0);
+    expect([...remoteProjectsStore.getArchivedFailedDeviceIds()]).toEqual(['dev-B']);
+
+    requestRemoteSessionStatus('dev-B', 'archived');
+
+    expect(reseed).toHaveBeenCalledTimes(2);
+    expect(remoteProjectsStore.isSessionStatusLoading('dev-B', 'archived')).toBe(true);
+    expect(remoteProjectsStore.getArchivedFailedDeviceIds().size).toBe(0);
+  });
+
+  it('已加载过 archived 桶后，失败恢复仍会强制重新拉取', () => {
+    const reseed = vi.fn();
+    setRemoteReseedImpl(reseed);
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [], 'archived');
+    remoteProjectsStore.markSessionStatusFailed('dev-B', 'archived');
+
+    retryRemoteSessionStatus('dev-B', 'archived');
+
+    expect(reseed).toHaveBeenCalledWith('dev-B', 'archived');
+    expect(remoteProjectsStore.isSessionStatusLoading('dev-B', 'archived')).toBe(true);
+    expect(remoteProjectsStore.getArchivedFailedDeviceIds().size).toBe(0);
+  });
+
   it('snapshot reference is stable across no-op (useSyncExternalStore safety)', () => {
     remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1')]);
     const a = remoteProjectsStore.getMergedRemoteSessions();
@@ -133,13 +228,17 @@ describe('remoteProjectsStore', () => {
       expect(getSessionDeviceId('s1')).toBe('dev-B'); // origin 标记不丢
     });
 
-    it('status=deleted / archived → 移出分片', () => {
+    it('status=deleted 移出分片，archived 保留完整行供归档筛选展示', () => {
       remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1'), mk('s2')]);
       remoteProjectsStore.applyPatch('dev-B', 's1', { status: 'deleted' });
       expect(remoteProjectsStore.getMergedRemoteSessions().map((x) => x.id)).toEqual(['s2']);
       remoteProjectsStore.applyPatch('dev-B', 's2', { status: 'archived' });
-      expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(0);
+      expect(remoteProjectsStore.getDeviceSessions('dev-B', 'active')).toHaveLength(0);
+      expect(remoteProjectsStore.getDeviceSessions('dev-B', 'archived')).toEqual([
+        expect.objectContaining({ id: 's2', status: 'archived' }),
+      ]);
       expect(getSessionDeviceId('s1')).toBeUndefined();
+      expect(getSessionDeviceId('s2')).toBe('dev-B');
     });
 
     it('unpin 后触发 reseed,让仅因 includePinned 补入的旧会话被后续 snapshot 剔除', () => {
@@ -152,7 +251,7 @@ describe('remoteProjectsStore', () => {
       remoteProjectsStore.applyPatch('dev-B', 'old-pinned', { pinnedAt: null });
 
       expect(remoteProjectsStore.getMergedRemoteSessions()[0].pinnedAt).toBeNull();
-      expect(reseed).toHaveBeenCalledWith('dev-B');
+      expect(reseed).toHaveBeenCalledWith('dev-B', 'active');
       expect(reseed).toHaveBeenCalledTimes(1);
     });
 
@@ -232,18 +331,36 @@ describe('remoteProjectsStore', () => {
 
   it('markDeviceDisconnected keeps sessions visible but removes the device from the online index', () => {
     remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1'), mk('s2')]);
+    remoteProjectsStore.setDeviceSessions(
+      'dev-B',
+      'B',
+      [mk('archived-1', { status: 'archived' })],
+      'archived',
+    );
     remoteProjectsStore.markDeviceDisconnected('dev-B');
 
     const merged = remoteProjectsStore.getMergedRemoteSessions();
-    expect(merged.map((s) => s.id)).toEqual(['s1', 's2']);
+    expect(merged.map((s) => s.id)).toEqual(['s1', 's2', 'archived-1']);
     expect(merged.every((s) => s.deviceLinkConnectionStatus === 'disconnected')).toBe(true);
+    // 旧 archived 行作缓存保留，但权威标记失效，重连后侧栏会重新校准断线期间变化。
+    expect(remoteProjectsStore.getArchivedLoadedDeviceIds().size).toBe(0);
     // origin 保留:打开会话仍知道要走哪个 device-link 隧道,连接状态由 banner / invoke 错误处理。
     expect(getSessionDeviceId('s1')).toBe('dev-B');
     // 在线索引清掉:useRemoteSessionConnection 会显示 host-offline。
     expect(remoteProjectsStore.getDeviceIds()).toEqual([]);
     expect(remoteProjectsStore.getDeviceList()).toEqual([
-      { deviceId: 'dev-B', deviceName: 'B', sessionCount: 2, connected: false },
+      { deviceId: 'dev-B', deviceName: 'B', sessionCount: 3, connected: false },
     ]);
+  });
+
+  it('markAllDisconnected invalidates archived authority for every cached device', () => {
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [], 'archived');
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [], 'archived');
+    expect([...remoteProjectsStore.getArchivedLoadedDeviceIds()]).toEqual(['dev-A', 'dev-B']);
+
+    remoteProjectsStore.markAllDisconnected();
+
+    expect(remoteProjectsStore.getArchivedLoadedDeviceIds().size).toBe(0);
   });
 
   it('setDeviceSessions reconnects a disconnected cached shard', () => {
@@ -251,16 +368,26 @@ describe('remoteProjectsStore', () => {
     remoteProjectsStore.markDeviceDisconnected('dev-B');
     remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1')]);
 
-    expect(remoteProjectsStore.getMergedRemoteSessions()[0].deviceLinkConnectionStatus).toBe('connected');
+    expect(remoteProjectsStore.getMergedRemoteSessions()[0].deviceLinkConnectionStatus).toBe(
+      'connected',
+    );
     expect(remoteProjectsStore.getDeviceIds()).toEqual(['dev-B']);
     expect(remoteProjectsStore.getDeviceList()).toEqual([
       { deviceId: 'dev-B', deviceName: 'B', sessionCount: 1, connected: true },
     ]);
   });
 
-  it('tracks terminal bootstrap failures with stable snapshots and clears them after a successful snapshot', () => {
+  it('tracks loading/error independently from an existing shard and clears both after a successful snapshot', () => {
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('old')]);
+    remoteProjectsStore.markBootstrapLoading('dev-B');
+    expect([...remoteProjectsStore.getBootstrapLoadingDeviceIds()]).toEqual(['dev-B']);
+    expect(remoteProjectsStore.getDeviceSessions('dev-B').map((session) => session.id)).toEqual([
+      'old',
+    ]);
+
     const before = remoteProjectsStore.getBootstrapFailedDeviceIds();
     remoteProjectsStore.markBootstrapFailed('dev-B');
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().size).toBe(0);
     const failed = remoteProjectsStore.getBootstrapFailedDeviceIds();
     expect(failed).not.toBe(before);
     expect([...failed]).toEqual(['dev-B']);
@@ -269,18 +396,48 @@ describe('remoteProjectsStore', () => {
     expect(remoteProjectsStore.getBootstrapFailedDeviceIds()).toBe(failed);
 
     remoteProjectsStore.setDeviceSessions('dev-B', 'B', []);
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().size).toBe(0);
     expect(remoteProjectsStore.getBootstrapFailedDeviceIds().size).toBe(0);
   });
 
-  it('removeDevice and clear discard bootstrap failure state even before a shard exists', () => {
-    remoteProjectsStore.markBootstrapFailed('dev-A');
-    remoteProjectsStore.removeDevice('dev-A');
-    expect(remoteProjectsStore.getBootstrapFailedDeviceIds().size).toBe(0);
+  it('disconnect, removeDevice and clear discard active / archived activity before a shard exists', () => {
+    remoteProjectsStore.markBootstrapLoading('dev-loading');
+    remoteProjectsStore.markSessionStatusLoading('dev-loading', 'archived');
+    remoteProjectsStore.markDeviceDisconnected('dev-loading');
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().size).toBe(0);
+    expect(remoteProjectsStore.getArchivedLoadingDeviceIds().size).toBe(0);
 
     remoteProjectsStore.markBootstrapFailed('dev-A');
-    remoteProjectsStore.markBootstrapFailed('dev-B');
-    remoteProjectsStore.clear();
+    remoteProjectsStore.markSessionStatusFailed('dev-A', 'archived');
+    remoteProjectsStore.removeDevice('dev-A');
     expect(remoteProjectsStore.getBootstrapFailedDeviceIds().size).toBe(0);
+    expect(remoteProjectsStore.getArchivedFailedDeviceIds().size).toBe(0);
+
+    remoteProjectsStore.setDeviceSessions('dev-loaded', 'Loaded', [], 'archived');
+    remoteProjectsStore.removeDevice('dev-loaded');
+    expect(remoteProjectsStore.getArchivedLoadedDeviceIds().size).toBe(0);
+
+    remoteProjectsStore.markBootstrapLoading('dev-A');
+    remoteProjectsStore.markBootstrapFailed('dev-B');
+    remoteProjectsStore.markSessionStatusLoading('dev-C', 'archived');
+    remoteProjectsStore.markSessionStatusFailed('dev-D', 'archived');
+    remoteProjectsStore.clear();
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().size).toBe(0);
+    expect(remoteProjectsStore.getBootstrapFailedDeviceIds().size).toBe(0);
+    expect(remoteProjectsStore.getArchivedLoadingDeviceIds().size).toBe(0);
+    expect(remoteProjectsStore.getArchivedFailedDeviceIds().size).toBe(0);
+    expect(remoteProjectsStore.getArchivedLoadedDeviceIds().size).toBe(0);
+  });
+
+  it('clears only a superseded bootstrap loading state', () => {
+    remoteProjectsStore.markBootstrapLoading('dev-loading');
+    remoteProjectsStore.clearBootstrapLoading('dev-loading');
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().size).toBe(0);
+    expect(remoteProjectsStore.getBootstrapFailedDeviceIds().size).toBe(0);
+
+    remoteProjectsStore.markBootstrapFailed('dev-failed');
+    remoteProjectsStore.clearBootstrapLoading('dev-failed');
+    expect([...remoteProjectsStore.getBootstrapFailedDeviceIds()]).toEqual(['dev-failed']);
   });
 
   it('clear resets everything', () => {
@@ -316,7 +473,8 @@ describe('remoteProjectsStore', () => {
 
     remoteProjectsStore.renameDevice('dev-B', 'New');
     expect(
-      remoteProjectsStore.getMergedRemoteSessions().find((x) => x.id === 's1')!.deviceLinkDeviceName,
+      remoteProjectsStore.getMergedRemoteSessions().find((x) => x.id === 's1')!
+        .deviceLinkDeviceName,
     ).toBe('New');
     expect(seen).toEqual([['dev-B', 'New']]);
 
@@ -396,7 +554,9 @@ describe('remoteProjectsStore pending title preview', () => {
   it('treats a user-named "[Fork] ..." session without parentSessionId as manual', () => {
     // 与被控端 getOverwritableAutoTitle 同一条判据:没有 parentSessionId 就不是
     // fork 占位,是用户自己起的名。
-    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1', { title: '[Fork] 我自己起的名' })]);
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [
+      mk('s1', { title: '[Fork] 我自己起的名' }),
+    ]);
 
     remoteProjectsStore.setPendingTitlePreview('s1', '这个报错怎么修');
 
@@ -494,9 +654,9 @@ describe('remoteProjectsStore pending title preview', () => {
       mk('s2', { title: 'New Maker' }),
     ]);
 
-    expect(
-      remoteProjectsStore.getMergedRemoteSessions().find((s) => s.id === 's1')?.title,
-    ).toBe('New Maker');
+    expect(remoteProjectsStore.getMergedRemoteSessions().find((s) => s.id === 's1')?.title).toBe(
+      'New Maker',
+    );
   });
 
   it('keeps overlays for sessions merged back by a partial anti-entropy window', () => {
@@ -509,9 +669,9 @@ describe('remoteProjectsStore pending title preview', () => {
     // 半窗口 anti-entropy:s1 不在本次窗口内,但 mergeDeviceSessions 会把它并回来。
     remoteProjectsStore.mergeDeviceSessions('dev-B', 'B', [mk('s2', { title: 'New Maker' })]);
 
-    expect(
-      remoteProjectsStore.getMergedRemoteSessions().find((s) => s.id === 's1')?.title,
-    ).toBe('帮我排查登录失败');
+    expect(remoteProjectsStore.getMergedRemoteSessions().find((s) => s.id === 's1')?.title).toBe(
+      '帮我排查登录失败',
+    );
   });
 
   it('clears stale synthesized provenance once a prose preview is confirmed', () => {

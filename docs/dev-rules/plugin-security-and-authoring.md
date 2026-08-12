@@ -24,17 +24,17 @@
 
 ## 事实来源
 
-| 内容 | 权威来源 |
-|---|---|
-| 编写手册（作者唯一教材，现拿现读） | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `FORGE_GUIDE`，经 `ghost_forge_guide` 工具下发 |
-| 身份卡字段与校验、管子协议类型 | `apps/desktop/src/shared/ghost.ts`（`validateGhostManifest`、`cindy.send` / `cindy.onHostMessage` 类型） |
-| 打包限制 | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir` |
-| 运行时、沙箱进程与生命周期 | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts` |
-| 能力 slot（网络／通知／确认／文件系统／技能／宿主等） | `apps/desktop/src/main/cindy-brain/networkSlot.ts`、`notifySlot.ts`、`confirmSlot.ts`（往返桥 `ghostConfirmDialogBridge.ts`，renderer 落地 `cindy-brain/GhostConfirmDialogHost.tsx`）、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`（派活执行链在 `maker-ipc/ghostErrandRunner.ts`，每插件配置在 `errandPrefsStore.ts`） |
-| 面板供片、注入主题 token 与协议 | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支 |
-| 权限注入／更新确认 UI | `apps/desktop/src/renderer/cindy-brain/GhostPermissionList.tsx` |
-| 远程／手机版能力准入白名单 | `packages/device-link/src/allowlist.ts` |
-| 行为与安全不变量 | `apps/desktop/src/main/cindy-brain/__tests__/`、`forge.test.ts` |
+| 内容                                                  | 权威来源                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 编写手册（作者唯一教材，现拿现读）                    | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `FORGE_GUIDE`，经 `ghost_forge_guide` 工具下发                                                                                                                                                                                                                                                                                                                                                                                           |
+| 身份卡字段与校验、管子协议类型                        | `apps/desktop/src/shared/ghost.ts`（`validateGhostManifest`、`cindy.send` / `cindy.onHostMessage` 类型）                                                                                                                                                                                                                                                                                                                                                                                 |
+| 打包限制                                              | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir`                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 运行时、沙箱进程与生命周期                            | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts`                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 能力 slot（网络／通知／确认／文件系统／技能／宿主等） | `apps/desktop/src/main/cindy-brain/networkSlot.ts`、`notifySlot.ts`、`badgeSlot.ts`（未读角标，落盘账本 `ghostUnreadStore.ts`）、`confirmSlot.ts`（往返桥 `ghostConfirmDialogBridge.ts`，renderer 落地 `cindy-brain/GhostConfirmDialogHost.tsx`）、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`（派活执行链在 `maker-ipc/ghostErrandRunner.ts`，每插件配置在 `errandPrefsStore.ts`）、`iosSimulatorSlot.ts`（当前台前任务的公开状态与 Host viewer 入口） |
+| 面板供片、注入主题 token 与协议                       | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 权限注入／更新确认 UI                                 | `apps/desktop/src/renderer/cindy-brain/GhostPermissionList.tsx`                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 远程／手机版能力准入白名单                            | `packages/device-link/src/allowlist.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 行为与安全不变量                                      | `apps/desktop/src/main/cindy-brain/__tests__/`、`forge.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 文档与实现冲突时以代码为准，但必须在同一改动内同步修正本文与手册。
 
@@ -74,6 +74,20 @@
 ## 4. 网络、凭证与资源交接
 
 - network 只允许 manifest 白名单域名；凭证由主机保险库注入，**无明文读回**给沙箱。
+- `source: "gh-cli"` 是只为官方 `cindy-github` 保留的宿主凭证来源：Host 优先读取
+  本机 `gh auth token`，不可用时才回落到同 key 经 `/secrets` 保存的 PAT。两种 token
+  均只在 Main 的 networkSlot 内存中注入 `api.github.com` 的
+  `Authorization: Bearer` 请求头，不得进入插件、Renderer、Agent、KV、日志或 Node
+  Worker。设置页只能读取 `hostAvailable` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
+  不允许 `exchange` 或 `setup.requires` 引用，第三方插件不得声明。
+- `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
+  Membership 生效；只有当前组织的 Plugin Market organization 安装记录仍有效、且
+  安装目录 manifest digest 与记录一致时，Host 才会根据当前组织和插件 id 推导 audience。
+  插件和 Node Worker 都不能读取或保存令牌。声明必须固定使用
+  `Authorization: Bearer {value}` 并显式列出非空 `inject.hosts`；其中只允许精确域名，
+  不允许通配。实际目标必须精确命中这份可信 manifest 声明的服务域名才会签发和注入。它没有用户输入、`url`、`exchange` 或
+  `setup.requires` 配置动作。Connection JWT 请求遇到 401 时，仅 GET / HEAD / OPTIONS
+  可自动换令牌重试一次；非幂等请求只作废缓存，不自动重放。
 - 插件 setup 的完成状态只由 Host 读取真实持久化状态后判定。简单的
   `source: "user"` Secret 可由 Host 在聊天 Setup 卡中生成 `inline_form` 并直接写入
   保险库；插件详情页的 `settings.js` 仍可通过 `/oauth`、`/kv`、`/secrets`、
@@ -104,7 +118,33 @@
 - 附件、媒体、目录和保存路径通过归属校验后的 grant／deposit／ledger 交接，**禁止把
   宿主绝对路径或不必要的字节暴露给沙箱**。媒体字节须走
   [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的统一入库。
+  `ghost_call` 的 `attachments`／`dir`／`save_dir` 在目标位于 workdir 外时，普通权限档
+  仍沿用现有确认与授权记忆策略；仅当 Host 能现读到**本地活跃会话**的运行时权限恰为
+  `bypassPermissions`（Full Access）时自动批准。该判定不得读取启动期 MCP context 快照，
+  也不得回退可能滞后的 DB `permission_mode`。business `sessionId` 不足以证明仍是同一内存
+  Session，必须同时匹配由 Maker 铸造、调用方不可覆盖的 instance identity；权限切换在途、
+  close／detach 已开始、会话缺失、实例不匹配、查询失败、远程会话均 fail closed。
+  对 Codex、Pi 与远端 Claude Code 这类进程外 harness，instance 只作为 opaque MCP route
+  identity 写入 Host 生成的 loopback URL；桥接层必须将 URL identity 与注册表中的当前实例
+  严格比对，不匹配直接 401。兼容旧客户端时，缺 instance 的 URL 可继续获得普通会话上下文，
+  但必须剥除 instance 能力，使 Full Access 自动交接继续 fail closed。
+  自动批准须在日志标明来源为 Full Access，不得伪装为用户点击，也不得写入人工目录授权
+  记忆。附件自动交接必须写独立 `ghost-tool-grant`，不得写 `ghost-grant`；这是回退兼容
+  边界——旧客户端只认识后者，降级时必须 fail closed，不能把新版自动交接误读成人工永久
+  授权。热切回其它档位后新请求必须恢复确认。此旁路**不适用于** workspace 创建、插件
+  Setup／安装／更新、OAuth、Secret／凭证或其它确认边界。
+  `dir`／`save_dir` 批准的是裁决时解析到的 canonical realpath 快照；出票必须使用该规范路径
+  并在票据库内重新解析核对，路径映射已变化时拒绝并要求重新确认。出票后真正读／写时仍须
+  再次核对根与目标真身；保存文件必须排他创建且不跟随最终 symlink，不能让短命票据留下消费期
+  TOCTOU。附件继续使用裁决前已读入的字节，不得在批准后重新跟随原始路径。
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
+- `ios-simulator` 槽只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有
+  Host viewer。请求协议不得出现插件自报 `sessionId`，可选 `instanceId` 必须重新匹配
+  当前任务的公开实例。视频帧、viewer lease、触控、Sidecar／Helper、artifact 路径、进程
+  句柄和私有诊断都不得跨进插件沙箱；Agent 侧构建／安装／控制继续走 Host 注册的
+  `cindy_ios_simulator` MCP。该能力是本机 Desktop 专属，不进入 device-link/mobile，
+  SSH／远程任务 fail closed。状态查询必须走脱敏、短缓存、无副作用的只读投影，不得借
+  panel 轮询执行 ownership reconcile、续租、启动 WDA／Sidecar 或创建 driver。
 
 ## 5. 存量插件兼容：升级必须无感（红线）
 
@@ -215,6 +255,10 @@
   （救不了「从引入版降到引入前」那一段，任何方案都救不了）。改动方向本身要过第 5 节红线
   评估：放宽校验等于让主机接受读不全的权限声明，不能顺手做。**触及 `validateGhostManifest()`
   的枚举白名单、或 `GhostManager.list()` 的跳过逻辑时必须一并考虑。**
+  新版 Host 的本地装入／更新／inspect 已先识别“未来 `schemaVersion`”与“形状合法但未知的
+  字符串 slot”，并以 `GHOST_HOST_UNSUPPORTED` 引导升级，不再把这两类新能力包误报为非法。
+  这只改善新版 Host 的错误分类，不改变严格校验，也无法追改已经发布的旧 Host；已装插件在
+  客户端降级后从列表消失的兼容缺口仍然存在。
 - `networkSlot.ts` 的 `as: 'media'` 不能只信任 Content-Type（GLB 常见
   `application/octet-stream`），需要安全的 magic-byte／扩展名嗅探。
 - SSH 远程场景必须让 `LiziMcpSessionContext` 携带 remote 标识；目录过户不得回退读取本机

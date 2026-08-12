@@ -19,9 +19,11 @@ import {
   brandExecutableName,
   resolveCindyRegion,
 } from '@cindy/maker-shared/brand-identity';
+import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 
 const _require = createRequire(__filename);
+const DESKTOP_PACKAGE_VERSION = (_require('./package.json') as { version: string }).version;
 
 // ── 构建期身份(2026-07-17 Cindy 渠道分叉) ─────────────────────────────────────
 // 区域默认 global;中国大陆包由发布脚本显式注入 CINDY_AUTH_REGION=cn。appId 随区域
@@ -618,9 +620,6 @@ function signPackagedExes(buildPath: string): void {
     // 未签名第三方 exe,会被运行时 spawn(项目内 grep/search),未签同样被严格策略 /
     // EDR 拦。扩到整个 tools/ 一次覆盖,新增工具免维护。
     ...collectExeFilesRecursively(path.join(buildPath, 'resources', 'tools')),
-    // Pi 是目录分发；Windows 主程序 pi.exe 位于 resources/pi/<platform>/，
-    // 不在 tools/ 下，必须一并签名，否则 Smart App Control 会拦截 agent 启动。
-    ...collectExeFilesRecursively(path.join(buildPath, 'resources', 'pi')),
   );
 
   for (const exe of exes) {
@@ -709,45 +708,6 @@ function ripgrepBinaryName(targetPlatform: string): string {
   return targetPlatform === 'win32' ? 'rg.exe' : 'rg';
 }
 
-function piBinaryName(targetPlatform: string): string {
-  return targetPlatform === 'win32' ? 'pi.exe' : 'pi';
-}
-
-/**
- * 把目标平台的完整 Pi 目录分发加入安装包。Pi 与单文件 agent 不同，运行时还依赖
- * themes/examples/native prebuilds；只复制 pi(.exe) 会在 RPC 启动期崩溃。
- */
-function stagePi(targetPlatform: string, targetArch: string): void {
-  const key = targetPlatformKey(targetPlatform, targetArch);
-  const file = piBinaryName(targetPlatform);
-  const srcDir = path.join(__dirname, '..', 'pi-bin', key);
-  const src = path.join(srcDir, file);
-  const stagingRoot = path.join(__dirname, 'resources', 'pi');
-  const destDir = path.join(stagingRoot, key);
-  const ensureScript = path.join(__dirname, '..', '..', 'scripts', 'ensure-agent-binaries.mjs');
-
-  console.log(`[forge:prePackage] ensuring pinned pi ${key} via ${ensureScript}...`);
-  const result = spawnSync(process.execPath, [ensureScript, '--kinds=pi', `--platform=${key}`], {
-    stdio: 'inherit',
-  });
-  if (result.status !== 0) {
-    throw new Error(`[forge] failed to ensure pinned pi ${key}; run "pnpm update:pi -- --platform=${key}" before packaging`);
-  }
-  if (!fs.existsSync(src)) {
-    throw new Error(`[forge] pi distribution missing main executable at ${src} after ensure`);
-  }
-
-  // Forge 的 extraResource 会复制整个 resources/pi；连续构建其它 target 时必须
-  // 清掉上一轮暂存，避免单个平台安装包误带六个平台的完整分发。
-  fs.rmSync(stagingRoot, { recursive: true, force: true });
-  fs.mkdirSync(destDir, { recursive: true });
-  fs.cpSync(srcDir, destDir, { recursive: true });
-  const dest = path.join(destDir, file);
-  if (targetPlatform !== 'win32') fs.chmodSync(dest, 0o755);
-  const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
-  console.log(`[forge:prePackage] pi ${key} -> ${destDir} (main ${sizeMb} MB)`);
-}
-
 function stageRipgrep(targetPlatform: string, targetArch: string): void {
   const key = targetPlatformKey(targetPlatform, targetArch);
   const file = ripgrepBinaryName(targetPlatform);
@@ -789,8 +749,6 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/cc-manager',
     'resources/anthropic-compat-proxy',
     'resources/remote-file-service',
-    // 目标平台完整 Pi 目录分发，由 prePackage/stagePi 写入。
-    'resources/pi',
     // .cindy 发布者/审核 Ed25519 公钥信任表(私钥永不进客户端)。
     'resources/ghost-trust.json',
     // 第三方开源声明,由 scripts/generate-third-party-notices.mjs 生成
@@ -802,6 +760,13 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
 
   if (targetPlatform === 'win32') {
     base.unshift(`resources/${UPDATER_EXE}`);
+  }
+
+  if (targetPlatform === 'darwin' || targetPlatform === 'mas') {
+    // WDA archive/manifest are runtime resources. The Host-owned Helper is
+    // temporarily copied here and moved to Contents/Helpers by postPackage so
+    // the signing pipeline can treat it as nested code.
+    base.push('resources/ios-simulator');
   }
 
   // macOS 「帮助 → 安装到命令行」symlink 的目标脚本(<App>/Contents/Resources/cli/cindy)。
@@ -895,9 +860,35 @@ function isMacForgePlatform(platform: ForgePlatform): boolean {
   return platform === 'darwin' || platform === 'mas';
 }
 
+function ensureMacIOSSimulatorWdaArchive(platform: ForgePlatform): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const script = path.join(__dirname, 'scripts', 'ensure-wda-source-archive.mjs');
+  console.log(`[forge:prePackage] preparing pinned iOS Simulator WDA archive via ${script}...`);
+  const result = spawnSync(process.execPath, [script], {
+    cwd: __dirname,
+    stdio: 'inherit',
+  });
+  if (result.error) {
+    throw new Error(
+      `[forge] iOS Simulator WDA archive preparation failed: ${result.error.message}`,
+    );
+  }
+  if (result.signal) {
+    throw new Error(
+      `[forge] iOS Simulator WDA archive preparation terminated by signal ${result.signal}`,
+    );
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `[forge] iOS Simulator WDA archive preparation failed with exit code ${result.status}`,
+    );
+  }
+}
+
 const MACOS_VOICE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 const MACOS_AGENT_ISLAND_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
 const MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET = 'macos13.0';
+const MACOS_SESSION_DRAG_RELEASE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 
 function swiftTargetTriple(cpuArch: 'arm64' | 'x86_64', deploymentTarget: string): string {
   return `${cpuArch}-apple-${deploymentTarget}`;
@@ -923,6 +914,52 @@ function swiftArchLabel(arch: ForgeArch, deploymentTarget: string): string {
   return swiftTargetTriplesForForgeArch(arch, deploymentTarget)
     .map((target) => target.split('-')[0])
     .join('+');
+}
+
+function iosSimulatorSidecarArch(arch: ForgeArch): 'arm64' | 'x86_64' | 'universal' {
+  switch (arch) {
+    case 'arm64':
+      return 'arm64';
+    case 'x64':
+      return 'x86_64';
+    case 'universal':
+      return 'universal';
+    default:
+      throw new Error(`[forge] unsupported iOS Simulator helper arch: ${arch}`);
+  }
+}
+
+function buildMacIOSSimulatorHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const script = path.join(
+    __dirname,
+    '..',
+    '..',
+    'packages',
+    'ios-simulator-runtime',
+    'scripts',
+    'build-native-sidecar.mjs',
+  );
+  const helperArch = iosSimulatorSidecarArch(arch);
+  const result = spawnSync(process.execPath, [script], {
+    cwd: path.join(__dirname, '..', '..'),
+    env: {
+      ...process.env,
+      CINDY_IOS_SIDECAR_ARCH: helperArch,
+      CINDY_IOS_SIDECAR_OUTPUT_MODE: 'helper',
+      CINDY_IOS_SIDECAR_BUNDLE_ID: `${CINDY_APP_ID}.ios-simulator-helper`,
+      CINDY_IOS_SIDECAR_VERSION: process.env.APP_VERSION ?? DESKTOP_PACKAGE_VERSION,
+    },
+    stdio: 'inherit',
+  });
+  if (result.error) {
+    throw new Error(`[forge] iOS Simulator helper build failed: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `[forge] iOS Simulator helper build failed for ${helperArch} with exit code ${result.status}`,
+    );
+  }
 }
 
 function runSwiftcForTarget(src: string, dest: string, target: string, extraArgs: string[], label: string): void {
@@ -1068,6 +1105,35 @@ function buildMacComputerPermissionGuideHelper(platform: ForgePlatform, arch: Fo
   fs.chmodSync(dest, 0o755);
   const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
   console.log(`[forge:prePackage] macOS computer permission guide helper (${swiftArchLabel(arch, MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET)}) -> ${dest} (${sizeMb} MB)`);
+}
+
+function buildMacSessionDragReleaseHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const src = path.join(
+    __dirname,
+    'native',
+    'session-drag-release',
+    'macos-session-drag-release-helper.swift',
+  );
+  const destDir = path.join(__dirname, 'resources', 'tools', 'session-drag-release');
+  const dest = path.join(destDir, 'xdt-macos-session-drag-release-helper');
+  if (!fs.existsSync(src)) {
+    throw new Error(`[forge] macOS session drag release helper source missing at ${src}`);
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  buildSwiftHelperForForgeArch(
+    src,
+    dest,
+    arch,
+    MACOS_SESSION_DRAG_RELEASE_HELPER_DEPLOYMENT_TARGET,
+    ['-O'],
+    'session drag release helper',
+  );
+  fs.chmodSync(dest, 0o755);
+  const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
+  console.log(
+    `[forge:prePackage] macOS session drag release helper (${swiftArchLabel(arch, MACOS_SESSION_DRAG_RELEASE_HELPER_DEPLOYMENT_TARGET)}) -> ${dest} (${sizeMb} MB)`,
+  );
 }
 
 // MakerNSIS is Windows-only (native dependency), conditionally require to
@@ -1339,16 +1405,18 @@ const config: ForgeConfig = {
     prePackage: async (_forgeConfig, platform, arch) => {
       const targetPlatform = requestedTargetPlatform();
       const targetArch = requestedTargetArch();
+      ensureMacIOSSimulatorWdaArchive(platform);
       if (targetPlatform === 'win32') {
         buildCindyUpdater();
       }
       stageRipgrep(targetPlatform, targetArch);
-      stagePi(targetPlatform, targetArch);
       stageAndroidPlatformTools(targetPlatform, targetArch);
+      buildMacIOSSimulatorHelper(platform, arch);
       buildMacVoiceInputTextInsertionHelper(platform, arch);
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);
+      buildMacSessionDragReleaseHelper(platform, arch);
     },
     // packaged dir 产出后、makers 跑之前签内部 .exe。这样 NSIS 包出来的
     // Setup.exe 内嵌的、和 publish 阶段从同一 packagedDir 打的热更 ZIP 内嵌的，
@@ -1358,6 +1426,7 @@ const config: ForgeConfig = {
         const noticeName = stagePackagedThirdPartyNotices(buildPath, opts.platform);
         console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
         signPackagedExes(buildPath);
+        stageMacIOSSimulatorHelper(buildPath, opts.platform, opts.arch);
         applyMacPackagedDisplayName(buildPath, opts.platform);
       }
     },
@@ -1394,6 +1463,20 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/mcp-integrations/forgeIconConversionProcess.ts',
+          config: 'vite.forge-icon-conversion-process.config.ts',
+          // Sharp/libvips 转换在一次性 utility process 中执行；超时可 kill，
+          // 不把不可取消的 native 任务留在 Electron main。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/reviewer/reviewPdfUtilityProcess.ts',
+          config: 'vite.review-pdf-process.config.ts',
+          // 正式包关闭 RunAsNode；PDF.js 在一次性 utility process 中执行，
+          // 超时直接 kill，不阻塞 Electron main。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/watcher-host/watcherHostProcess.ts',
           config: 'vite.watcher-host.config.ts',
           // 同 dbWorker:借 preload target 出 CJS 单文件；运行时是 Electron
@@ -1416,6 +1499,12 @@ const config: ForgeConfig = {
         },
         {
           entry: 'src/preload/preload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          // 资源用量独立窗不加载主应用的通用 bridge 与模块级同步初始化。
+          entry: 'src/preload/resourceUsagePreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
         },

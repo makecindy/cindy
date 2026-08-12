@@ -62,10 +62,10 @@ export interface EnvCheckContextValue {
   downloadProgress: number;
   downloadInfo: DownloadInfo;
   updateVersion?: string;
-  /** D 场景顺序下载阶段：1 / 2；B/C 场景未定义。 */
-  step?: 1 | 2;
-  /** D 场景固定为 2；B/C 场景未定义。 */
-  totalSteps?: 2;
+  /** D 场景顺序下载阶段：1 / 2 / 3；B/C 场景未定义。 */
+  step?: 1 | 2 | 3;
+  /** D 场景 = 本次需要下载的二进制段数(2 或 3);B/C 场景未定义。 */
+  totalSteps?: 2 | 3;
   /**
    * 自增 token——进度条需要无动画归零时 +1,供 SplashScreen 关闭 transition。
    * 触发时机:主进程发 reset payload(D 场景 claude→codex 切段),以及
@@ -100,8 +100,8 @@ export function EnvCheckProvider({ children }: { children: ReactNode }) {
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadInfo, setDownloadInfo] = useState<DownloadInfo>({ progress: 0 });
   const [updateVersion, setUpdateVersion] = useState<string | undefined>();
-  const [step, setStep] = useState<1 | 2 | undefined>(undefined);
-  const [totalSteps, setTotalSteps] = useState<2 | undefined>(undefined);
+  const [step, setStep] = useState<1 | 2 | 3 | undefined>(undefined);
+  const [totalSteps, setTotalSteps] = useState<2 | 3 | undefined>(undefined);
   const [resetSignal, setResetSignal] = useState(0);
 
   // Phase 2 IPC 在途标记:二进制进度事件只在这个窗口内合法(prepare 的所有广播
@@ -344,7 +344,11 @@ export function EnvCheckProvider({ children }: { children: ReactNode }) {
         try {
           const res = await window.electronAPI.checkEnvironment();
           setResult(res);
-          setStatus('passed');
+          // claude/codex 缺失在 dev 维持既有放行(注释见上:dev 跑检查只为让
+          // 路径就绪);但 bundled ripgrep 缺失不能放行 —— #1956 的启动期
+          // fail-fast 在 dev 同样要成立,否则 dev 缺 rg 会被这里的无条件
+          // passed 吞掉,直到首次 codex spawn / 文件搜索才炸。
+          setStatus(res.ripgrep?.status === 'failed' ? 'failed' : 'passed');
         } catch {
           setStatus('passed');
         }

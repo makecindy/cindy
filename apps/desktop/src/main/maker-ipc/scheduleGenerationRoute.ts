@@ -1,4 +1,5 @@
 import {
+  actualSourceIdForModel,
   effectiveSourceIdForModel,
   isAgentSelectableModel,
   type AgentKind,
@@ -17,15 +18,12 @@ export type ScheduleGenerationRoute = {
   model: string;
 };
 
-/** Session metadata should replace the submitted route only for follow-session requests. */
+/** Session metadata should fill missing route dimensions only for bound-session requests. */
 export function shouldResolveBoundSessionGenerationRoute(input: {
   targetSessionId: string | undefined;
-  providerId: string | undefined;
-  model: string | undefined;
+  resolveBoundSessionRoute?: boolean;
 }): boolean {
-  return Boolean(input.targetSessionId)
-    && !input.providerId?.trim()
-    && !input.model?.trim();
+  return Boolean(input.targetSessionId && input.resolveBoundSessionRoute);
 }
 
 /**
@@ -38,18 +36,27 @@ export function shouldResolveBoundSessionGenerationRoute(input: {
 export function resolveBoundSessionGenerationRoute(input: {
   session: BoundSessionGenerationMeta | null | undefined;
   sessionProviderId: string | null | undefined;
+  requestedProviderId?: string | null;
+  requestedModel?: string | null;
   providers: ProviderView[];
 }): ScheduleGenerationRoute | null {
-  const model = input.session?.model.trim() ?? '';
+  const model = input.requestedModel?.trim() || input.session?.model.trim() || '';
   const agentKind = input.session?.agentKind;
   if (!agentKind || !model) return null;
 
-  const explicitProviderId = input.sessionProviderId?.trim() || null;
+  // An explicit task provider overrides the bound session provider. When the
+  // task leaves providerId empty, preserve the session's route for inherited
+  // models, but resolve an explicit task model as a new route so retired or
+  // disabled copies do not pin generation to the stale session source.
+  const explicitProviderId = input.requestedProviderId?.trim()
+    || input.sessionProviderId?.trim()
+    || null;
   const explicitProvider = explicitProviderId
     ? input.providers.find((provider) =>
       provider.id === explicitProviderId
       && provider.agents.includes(agentKind)
-      // 只按 id 匹配会漏检 mode:同一 id 在该来源下若是非聊天类型模型的具体条目,
+      // 这是 follow-session 的 resume 路径，不是新选择：保留已绑定会话的 retired 模型，
+      // 但只按 id 匹配仍会漏检 mode。同一 id 在该来源下若是非聊天类型模型的具体条目,
       // 请求会被 fail-open 送进 image/audio/embedding 端点(2026-07 review 第 17 轮)。
       && (provider.models[agentKind] ?? []).some(
         (candidate) =>
@@ -63,7 +70,9 @@ export function resolveBoundSessionGenerationRoute(input: {
   // the generation request to another gateway.
   const providerId = explicitProviderId
     ? explicitProvider?.id ?? null
-    : effectiveSourceIdForModel(input.providers, null, model, agentKind);
+    : input.requestedModel?.trim()
+      ? effectiveSourceIdForModel(input.providers, null, model, agentKind)
+      : actualSourceIdForModel(input.providers, null, model, agentKind);
   if (!providerId) return null;
   return { providerId, agentKind, model };
 }

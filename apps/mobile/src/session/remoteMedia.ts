@@ -43,6 +43,18 @@ export interface MobileRemoteMediaResolveOptions {
   skipCache?: boolean;
   /** 只要聊天列表缩略图:被控端缩 1024px webp inline 回包;老被控端回落原图。 */
   thumbnail?: boolean;
+  /**
+   * 上传已成功、`ossKey` 已知,但 presign 还没做时**同步回调一次**。
+   *
+   * 给「用完就要把 OSS 对象删掉」的调用方用(HTML 渲染态的同目录资源取件):presign
+   * 失败会让本函数抛错,调用方拿不到 resolved 结果,于是围绕 `media.ossKey` 写的
+   * finally 根本不会执行 —— 对象已经上传却没人回收(review P1)。有了这个回调,key 一
+   * 出现就落到调用方手里,失败路径也能 best-effort DELETE。
+   *
+   * inline 回包(缩略图字节随帧回来、无 OSS 对象)**不触发**:那条路没有 key 可回收。
+   * 外层重试会让它按次触发,每次可能是不同的 key —— 调用方要**累加收集**,不能只记最后一个。
+   */
+  onOssKey?: (ossKey: string) => void;
 }
 
 /** inline 缩略图没有 presign 过期语义,给个远未来的过期时间(本地字节不过期)。 */
@@ -145,6 +157,13 @@ export async function resolveMobileRemoteMedia(
       previewable: canPreviewResolvedRemoteMedia(media.kind, fetched.mimeType),
       inlineBase64: fetched.inlineBase64,
     };
+  }
+  // **在校验之前就把 key 交出去**(review P1 第三轮)。判据是「有没有在世的 OSS 对象」,
+  // 不是「回包合不合法」—— 只要 ossKey 非空,被控端的 PUT 就已经完成了。放在 isValidFetchResult
+  // 之后会漏掉一整类:合法的**零字节**文件(空的 .css / .js 完全正常)会因为 `size > 0` 这条
+  // 校验先抛错,而对象已经上传 —— 调用方拿不到 key,那个对象永久遗留。
+  if (typeof fetched?.ossKey === 'string' && fetched.ossKey.length > 0) {
+    opts?.onOssKey?.(fetched.ossKey);
   }
   if (!isValidFetchResult(fetched)) {
     throw new Error(i18n.t('composer.attachments.mediaResultInvalid'));

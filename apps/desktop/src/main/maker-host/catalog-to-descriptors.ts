@@ -7,31 +7,60 @@
  * BUNDLED_CATALOG 派生每个 agent 的模型列表，经 capabilityAdditions 注入。
  *
  * union 规则：跳过 `routing[agent].disabled` 的 runtime，再按 `catalog.providers` 数组序
- * flatMap 各 provider 的 `models[agent]`，跳过非聊天模型(isAgentSelectableModel,issue #882 第 3 点:
- * 网关多返回的图像/视频/TTS/STT/实时/Embedding/压缩模型不进 Agent availableModels,但仍在
- * 模型管理设置页可见——那边走完整 catalog,不走这个函数),按 id **首见胜出**去重（provider 序即
- * anthropic → openai → xd）。禁用来源不占 seen，同 id 仍可由后续可用来源补上。
+ * flatMap 各 provider 的 `models[agent]`，按新路由统一准入跳过非聊天、停用与 retired 模型
+ * (issue #882 第 3 点:网关多返回的图像/视频/TTS/STT/实时/Embedding/压缩模型不进 Agent
+ * availableModels,但仍在模型管理设置页可见——那边走完整 catalog,不走这个函数),按 id
+ * **首见胜出**去重（provider 序即 anthropic → openai → xd）。不可选来源不占 seen，同 id
+ * 仍可由后续可用来源补上。例外有两项：Pi 的同 id 冲突涉及 user provider 时，扁平能力没有
+ * provider provenance，effort 必须收敛为各可选来源的交集；后见 XD 条目携带当前 agent 的
+ * 区域默认标记时，把该标记并入首见 descriptor，避免跨 provider 去重吞掉服务端策略。
  *
  * 顺序契约（no-break）：派生结果必须逐字逐序复现迁移前的有效列表
  * （cc = 旧 CLAUDE_MODELS 序 then XD 追加序；codex = 旧 CODEX_MODELS 序 then 折扣追加序）。
  * 由 maker-host 的 catalogDerivedModels.test.ts 守。
  */
 
-import { isAgentSelectableModel, type Catalog, type CatalogModel, type AgentKind } from '@cindy/model-providers';
+import {
+  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
+  type Catalog,
+  type CatalogModel,
+  type AgentKind,
+} from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
+import { resolveRetiredRegistryModelForPi } from './model-plane/modelPlanePolicy.js';
 
 /** Maker 能力读取面的最小形状；保留数组引用以让已创建 Session 同步看到新目录。 */
 interface ModelCapabilitiesTarget {
   getCapabilities(agent: AgentKind): { availableModels: ModelDescriptor[] };
 }
 
+interface DescriptorProjectionOptions {
+  preserveExplicitPiEfforts?: boolean;
+}
+
+interface SeenModelProjection {
+  index: number;
+  includesUserProvider: boolean;
+}
+
 /** CatalogModel → ModelDescriptor。仅透传 ModelDescriptor 需要的字段；可选字段缺省时不写键。 */
-function toDescriptor(m: CatalogModel, agent: AgentKind): ModelDescriptor {
+function toDescriptor(
+  m: CatalogModel,
+  agent: AgentKind,
+  options: DescriptorProjectionOptions = {},
+): ModelDescriptor {
   // Pi runtime 原生接受 minimal thinking level。目录里的同一模型常从 CC/Codex
   // 投影而来而未声明该档；只要模型有 reasoning 档，就把 Pi 的最小档补在最前。
-  const efforts = agent === 'pi' && m.efforts.length > 0 && !m.efforts.includes('minimal')
-    ? (['minimal', ...m.efforts] as const)
-    : m.efforts;
+  // BYOM 的 efforts 则是用户显式声明的协议能力，必须原样保留，不能对外宣称一个
+  // models.json 会禁用的档位。
+  const efforts =
+    agent === 'pi' &&
+    options.preserveExplicitPiEfforts !== true &&
+    m.efforts.length > 0 &&
+    !m.efforts.includes('minimal')
+      ? (['minimal', ...m.efforts] as const)
+      : m.efforts;
   const d: ModelDescriptor = {
     id: m.id,
     displayName: m.name,
@@ -52,28 +81,128 @@ function toDescriptor(m: CatalogModel, agent: AgentKind): ModelDescriptor {
   // 默认可见性要透传：渲染层的种子默认模型取「排序第一**且默认可见**」的那个，没有它就会
   // 把默认收起的 legacy 模型选成默认 —— 用户在选择器里根本看不到自己的默认模型。
   if (m.defaultEnabled !== undefined) d.defaultEnabled = m.defaultEnabled;
+  // 新对话默认种子标记要透传：渲染层 getDefaultModelForVendor 据它优先选中被标记的模型。
+  // pi tab 的条目多从 CC 投影而来，会带上 ['claude-code']，pi 侧按 'claude-code' 口径判定。
+  if (m.newSessionDefault !== undefined) d.newSessionDefault = m.newSessionDefault;
   if (m.cost !== undefined) d.cost = m.cost;
   if (m.maxOutput !== undefined) d.maxOutputTokens = m.maxOutput;
+  const supportsImageInput = m.supportsImageInput
+    ?? (m.modalities !== undefined ? m.modalities.input.includes('image') : undefined);
+  if (supportsImageInput !== undefined) d.supportsImageInput = supportsImageInput;
   return d;
 }
 
-/** 派生某 agent 的 availableModels：跨 provider union（数组序）+ 按 id 首见去重。 */
+/**
+ * Pi 的公开 availableModels 是按 id 拍平的旧协议，无法表达同 id 的 per-provider effort。
+ * 一旦冲突涉及 BYOM，只能公布各条可选路由都支持的交集；其余展示/窗口字段继续首见胜出。
+ * 内置来源之间仍由 catalog 一致性校验守住相同 effort，不改变其 legacy first-wins。
+ */
+function intersectPiEffortCapabilities(
+  first: ModelDescriptor,
+  next: ModelDescriptor,
+): ModelDescriptor {
+  const efforts = first.efforts.filter((effort) => next.efforts.includes(effort));
+  let defaultEffort = first.defaultEffort;
+  if (defaultEffort === null || !efforts.includes(defaultEffort)) {
+    defaultEffort =
+      next.defaultEffort !== null && efforts.includes(next.defaultEffort)
+        ? next.defaultEffort
+        : (efforts[0] ?? null);
+  }
+  return { ...first, efforts, defaultEffort };
+}
+
+/**
+ * availableModels 按 id 拍平后仍要保留 XD 区域策略。展示/能力字段继续首见胜出；这里只把
+ * 当前 agent 对应的默认标记并到首见 descriptor。Pi 按既有协议复用 claude-code 标记。
+ */
+function mergeNewSessionDefaultMarker(
+  first: ModelDescriptor,
+  next: ModelDescriptor,
+  agent: AgentKind,
+): ModelDescriptor {
+  const marker = agent === 'pi' ? 'claude-code' : agent;
+  if (
+    next.newSessionDefault?.includes(marker) !== true ||
+    first.newSessionDefault?.includes(marker) === true
+  ) {
+    return first;
+  }
+  return {
+    ...first,
+    newSessionDefault: [...(first.newSessionDefault ?? []), marker],
+  };
+}
+
+/** 派生 availableModels：字段按 id 首见胜出；另收敛 Pi BYOM effort 与 XD 区域默认标记。 */
 export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): ModelDescriptor[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, SeenModelProjection>();
   const out: ModelDescriptor[] = [];
   for (const provider of catalog.providers) {
     if (provider.routing[agent]?.disabled === true) continue;
     for (const m of provider.models[agent] ?? []) {
-      if (seen.has(m.id)) continue;
       // provider-aware 谓词:合并目录里 source:'user' 的自定义供应商显式配置的模型带
       // 未知 group,id 撞上能力启发式(如 flux-image-x)时不能被误杀(2026-07 review 第
       // 25 轮)。非聊天模型不占 seen,同 id 若被其它来源标为 chat 仍可补上。
-      if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' })) continue;
-      seen.add(m.id);
-      out.push(toDescriptor(m, agent));
+      // availableModels 是旧 mobile / device-link 等消费方的新选择清单，不能依赖下游
+      // 再理解 retired。运行中会话仍从持久化 model + 完整 catalog 解析实际路由。
+      const userProvider = provider.source === 'user';
+      if (!isModelSelectableForNewRoute(m, { userProvider })) continue;
+      const descriptor = toDescriptor(m, agent, {
+        preserveExplicitPiEfforts: userProvider,
+      });
+      const previous = seen.get(m.id);
+      if (previous) {
+        let merged = out[previous.index];
+        if (agent === 'pi' && (previous.includesUserProvider || userProvider)) {
+          merged = intersectPiEffortCapabilities(merged, descriptor);
+          previous.includesUserProvider ||= userProvider;
+        }
+        // 只有鉴权后的 XD /models 会被 active-catalog 投影成区域默认；公共 Registry 与
+        // user provider 均不能借同 id 碰撞改变默认策略。
+        if (provider.id === 'xd') {
+          merged = mergeNewSessionDefaultMarker(merged, descriptor, agent);
+        }
+        out[previous.index] = merged;
+        continue;
+      }
+      seen.set(m.id, { index: out.length, includesUserProvider: userProvider });
+      out.push(descriptor);
     }
   }
   return out;
+}
+
+/**
+ * 解析 Pi 当前持久化选择所需的运行时描述符,不参与公开模型清单或新路由准入。
+ * 优先使用完整目录中的实际来源实体(允许 disabled/retired 供续跑);纯 Registry retired
+ * 没有目录实体时,再按统一 model-plane policy 从其完整能力字段重建 Pi 投影。
+ * `cindy` 是内置 gateway 的复合路由：按内置 provider 顺序解析，明确排除同 id user/BYOM。
+ */
+export function resolvePiRuntimeModelDescriptor(
+  catalog: Catalog,
+  providerId: string | null | undefined,
+  modelId: string,
+): ModelDescriptor | null {
+  const providers = providerId === 'cindy'
+    ? catalog.providers.filter((provider) => provider.source !== 'user')
+    : providerId
+      ? catalog.providers.filter((provider) => provider.id === providerId)
+      : catalog.providers;
+  for (const provider of providers) {
+    const model = (provider.models.pi ?? []).find((candidate) => candidate.id === modelId);
+    if (model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
+      return toDescriptor(model, 'pi', {
+        preserveExplicitPiEfforts: provider.source === 'user',
+      });
+    }
+  }
+
+  for (const provider of providers) {
+    const retired = resolveRetiredRegistryModelForPi(catalog.modelRegistry, provider.id, modelId);
+    if (retired) return toDescriptor(retired, 'pi');
+  }
+  return null;
 }
 
 /**

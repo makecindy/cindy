@@ -17,7 +17,7 @@ export interface WorktreeMeta {
   path: string;
   /** 创建 worktree 时所在的 git repo 根目录（cwd）。 */
   baseRepo: string;
-  /** 新建的本地分支名,固定为 `xdt/<name>`。删除 worktree 时**不**带 -D, 分支保留。 */
+  /** 托管分支名；新建为 `cindy/<name>`，历史记录也可能为 `xdt/<name>`。回收目录时分支保留。 */
   branch: string;
   /** 用户在 worktree 创建表单选择的源分支（git worktree add -b <branch> <path> <sourceBranch>）。 */
   sourceBranch: string;
@@ -70,8 +70,7 @@ export interface CreateWorktreeReq {
 }
 
 export type CreateWorktreeResp =
-  | { ok: true; meta: WorktreeMeta }
-  | { ok: false; error: WorktreeError };
+  { ok: true; meta: WorktreeMeta } | { ok: false; error: WorktreeError };
 
 export interface DetectCwdReq {
   cwd: string;

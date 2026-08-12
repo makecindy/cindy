@@ -45,6 +45,79 @@ describe('mobile remote media', () => {
     expect(presignGet).toHaveBeenCalledWith('cindy/device-link/user-1/a.png');
   });
 
+  it('hands the ossKey to onOssKey before presign, so a presign failure is still recoverable', async () => {
+    // presign 失败会让本函数在返回之前抛错 —— 调用方拿不到 resolved 结果,围绕它写的
+    // finally 不会执行,已上传的对象永久遗留(review P1)。onOssKey 让 key 在上传成功那一刻
+    // 就交出去,失败路径也能 best-effort DELETE。
+    const order: string[] = [];
+    const fetchRemoteMedia = vi.fn(async () => {
+      order.push('upload');
+      return { ossKey: 'cindy/device-link/user-1/a.png', mimeType: 'image/png', size: 2048 };
+    });
+    const presignGet = vi.fn(async () => {
+      order.push('presign');
+      throw new Error('relay down');
+    });
+    const seen: string[] = [];
+
+    await expect(resolveMobileRemoteMedia(
+      { kind: 'image', url: 'xdt-image://cache/a.png' },
+      { fetchRemoteMedia, presignGet },
+      { onOssKey: (key) => { order.push('onOssKey'); seen.push(key); } },
+    )).rejects.toThrow('relay down');
+
+    expect(seen).toEqual(['cindy/device-link/user-1/a.png']);
+    // 顺序必须是 上传 → 交出 key → presign,否则失败窗口依旧漏。
+    expect(order).toEqual(['upload', 'onOssKey', 'presign']);
+  });
+
+  it('hands out the ossKey even when the fetch result fails validation (0-byte file)', async () => {
+    // 合法的零字节文件(空 .css / .js)会因 `size > 0` 这条校验先抛错,而被控端的 PUT
+    // 已经完成 —— key 必须在校验**之前**交出去,否则那个对象永久遗留(review P1)。
+    const fetchRemoteMedia = vi.fn(async () => ({
+      ossKey: 'cindy/device-link/user-1/empty.css',
+      mimeType: 'text/css',
+      size: 0,
+    }));
+    const seen: string[] = [];
+
+    await expect(resolveMobileRemoteMedia(
+      { kind: 'image', url: 'xdt-image://cache/empty.css' },
+      { fetchRemoteMedia, presignGet: vi.fn() },
+      { onOssKey: (key) => seen.push(key) },
+    )).rejects.toThrow();
+
+    expect(seen).toEqual(['cindy/device-link/user-1/empty.css']);
+  });
+
+  it('does not call onOssKey when there is no object at all (empty key)', async () => {
+    const fetchRemoteMedia = vi.fn(async () => ({ ossKey: '', mimeType: 'text/css', size: 0 }));
+    const onOssKey = vi.fn();
+    await expect(resolveMobileRemoteMedia(
+      { kind: 'image', url: 'xdt-image://cache/x.css' },
+      { fetchRemoteMedia, presignGet: vi.fn() },
+      { onOssKey },
+    )).rejects.toThrow();
+    expect(onOssKey).not.toHaveBeenCalled();
+  });
+
+  it('does not call onOssKey for inline results (no OSS object to reclaim)', async () => {
+    const fetchRemoteMedia = vi.fn(async () => ({
+      ossKey: '',
+      mimeType: 'image/webp',
+      size: 4096,
+      inlineBase64: 'aGVsbG8=',
+    }));
+    const onOssKey = vi.fn();
+
+    await resolveMobileRemoteMedia(
+      { kind: 'image', url: 'xdt-image://cache/a.png' },
+      { fetchRemoteMedia, presignGet: vi.fn() },
+      { thumbnail: true, onOssKey },
+    );
+    expect(onOssKey).not.toHaveBeenCalled();
+  });
+
   it('returns inline thumbnail bytes as a data uri without touching presign', async () => {
     const fetchRemoteMedia = vi.fn(async () => ({
       ossKey: '',

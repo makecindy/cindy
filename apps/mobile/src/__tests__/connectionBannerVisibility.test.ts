@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  resolveConnectionBannerSyncActionVisibility,
   resolveConnectionBannerVisibility,
   resolveEffectiveConnectionError,
 } from '@/components/connectionBannerVisibility';
@@ -9,6 +10,7 @@ const base = {
   offlineLongEnough: false,
   hasError: false,
   hasIssue: false,
+  hasUnstableIssue: false,
   deviceUnresponsive: false,
 };
 
@@ -35,6 +37,10 @@ describe('resolveConnectionBannerVisibility', () => {
   it('可分类连接问题(鉴权失效 / 被顶号等)在断线时立即显示,不等防闪窗口', () => {
     expect(resolveConnectionBannerVisibility({ ...base, offline: true, hasIssue: true })).toBe(true);
   });
+
+  it('unstable 即使 relay 瞬时 online 也保持可见', () => {
+    expect(resolveConnectionBannerVisibility({ ...base, hasUnstableIssue: true })).toBe(true);
+  });
 });
 
 describe('resolveEffectiveConnectionError', () => {
@@ -57,5 +63,36 @@ describe('resolveEffectiveConnectionError', () => {
     expect(resolveEffectiveConnectionError('[NOT_CONNECTED] offline', false)).toBe('[NOT_CONNECTED] offline');
     expect(resolveEffectiveConnectionError(null, false)).toBeNull();
     expect(resolveEffectiveConnectionError(null, true)).toBeNull();
+  });
+});
+
+describe('resolveConnectionBannerSyncActionVisibility', () => {
+  const actionBase = {
+    online: true,
+    hasActiveIssue: false,
+    deviceUnresponsive: false,
+    hasRequestError: true,
+    requestErrorAutoRecovering: false,
+  };
+
+  it('普通请求级同步失败仍可手动重试', () => {
+    expect(resolveConnectionBannerSyncActionVisibility(actionBase)).toBe(true);
+  });
+
+  it('断线、连接 issue、熔断与瞬时请求错误都交给系统自动恢复', () => {
+    expect(resolveConnectionBannerSyncActionVisibility({ ...actionBase, online: false })).toBe(false);
+    expect(resolveConnectionBannerSyncActionVisibility({ ...actionBase, hasActiveIssue: true })).toBe(false);
+    expect(resolveConnectionBannerSyncActionVisibility({ ...actionBase, deviceUnresponsive: true })).toBe(false);
+    expect(resolveConnectionBannerSyncActionVisibility({
+      ...actionBase,
+      requestErrorAutoRecovering: true,
+    })).toBe(false);
+  });
+
+  it('没有请求错误时不造一个常驻同步入口', () => {
+    expect(resolveConnectionBannerSyncActionVisibility({
+      ...actionBase,
+      hasRequestError: false,
+    })).toBe(false);
   });
 });

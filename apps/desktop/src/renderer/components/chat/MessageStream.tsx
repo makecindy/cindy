@@ -32,9 +32,18 @@ import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
 import {
+  deriveAgentTaskStatus,
+  subagentSpawnReceiptName,
+  subagentSpawnResultIndicatesRunning,
+} from '@cindy/maker-shared/agent-task';
+import {
   isAgentPlanToolName,
   isDeliveryProseText,
+  isSubagentParentToolUseId,
 } from '@cindy/maker-shared/message-render';
+// 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
+// (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
+import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
 
 import type {
   AgentTaskUpdate,
@@ -42,15 +51,27 @@ import type {
   ContinuationInFlightProjectionCapability,
 } from '@/hooks/useCCAgentChat';
 import { Spinner } from '@/components/ui/spinner';
+import { BrandLoadingMark } from '@/components/branding/BrandLoadingMark';
+import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
-import type { KnownLocalFileRef } from '@/lib/localPathResolver';
+import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
+import { collectGeneratedFiles, type GeneratedFileRef } from '@/lib/generatedFiles';
+import {
+  isRemoteSessionSticky,
+  subscribeTurnChangeSetUpdated,
+} from '@/lib/makerTransport';
+import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
+import { cn } from '@/lib/utils';
 import {
   readSessionScroll,
   saveSessionScroll,
   type SessionScrollSnapshot,
 } from '@/lib/sessionScrollStore';
+import { SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
+import { ShareMessageCheckbox } from './ShareMessageCheckbox';
+import { isShareableMessage, useShareSelectionActive } from './shareSelectionStore';
 
 // perf-baseline: 大 session 切换 first-paint 性能基线,保留用于回归监测。
 // 历史:commit ffff3603 (render-window 首引入) 因 687 条 session first-paint
@@ -91,28 +112,20 @@ const CARD_EXPAND_PIN_SUPPRESS_MS = 300;
 // 不用 index — DB prepend / 流式追加 / 客户端扩窗都会让 index 漂移,key 稳定。
 // export 供 render-window 集成单测复用同一基准值,避免测试里再定义一份靠注释手动同步。
 export const RENDER_WINDOW_INITIAL_ITEMS = 80;
-// 首屏两段式窗口:切会话(mount)首帧只画末尾 FIRST_PAINT 个 item,首帧提交后的
-// 空闲期再把默认窗口扩回 INITIAL —— 首屏 commit 体量近似减半,补窗那笔开销移出
-// 点击关键路径(实测切换大提交 50-116ms 的大头就是消息树首次挂载)。
+// 首屏窗口:切会话(mount)首帧只画末尾 FIRST_PAINT 个 item,首帧提交后的
+// 空闲期再把默认窗口扩回 INITIAL —— 首屏 commit 体量减少,补窗那笔开销移出
+// 点击关键路径。15 条足以覆盖典型视口(240px/条 × 15 = 3600px > 常见屏幕高度),
+// 且锚定恢复路径下 viewportTopKey 就是窗口首条,大小 ≥1 天然满足。
 // 安全约束:
 //   - 扩窗 = 在视口上方 prepend,仅在"仍钉在底部"时执行,pin-to-bottom layout
 //     effect 会在同一帧把视口重新钉回底,无视觉跳动;
 //   - 用户在 FIRST_PAINT 阶段就向上滚动时,走既有 expandWindow 锚点路径,
 //     默认窗口保持小尺寸不再自动扩(读历史的人不需要底部多 mount 50 条)。
-export const RENDER_WINDOW_FIRST_PAINT_ITEMS = 30;
+export const RENDER_WINDOW_FIRST_PAINT_ITEMS = 15;
 const RENDER_WINDOW_GROWTH_ITEMS = 80;
 const RENDER_WINDOW_BOUNDARY_LOOKBACK_ITEMS = 24;
-
-function isEditableKeyboardTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tagName = target.tagName;
-  return (
-    tagName === 'INPUT' ||
-    tagName === 'TEXTAREA' ||
-    tagName === 'SELECT' ||
-    target.isContentEditable
-  );
-}
+/** shell-first mount 的首帧空窗口。模块级常量保证引用稳定,不触发下游 memo 重算。 */
+const EMPTY_RENDER_ITEMS: RenderItem[] = [];
 
 function eventTargetElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof HTMLElement) return target;
@@ -150,6 +163,8 @@ import { NewMessageIndicator } from './NewMessageIndicator';
 import { ThinkingCard } from './ThinkingCard';
 import { AgentActionsBlock } from './AgentActionsBlock';
 import { AgentTaskCard } from './AgentTaskCard';
+import { TurnChangesCard } from './TurnChangesCard';
+import { GeneratedFilesCard } from './GeneratedFilesCard';
 import { WorkGroupBlock, type WorkGroupChild } from './WorkGroupBlock';
 import {
   extractAnchorCardId,
@@ -195,16 +210,21 @@ import {
   decideAutoFillAction,
   decideUserIntentFillAction,
   TOP_HISTORY_TRIGGER_PX,
+  NO_SCROLL_TOLERANCE_PX,
 } from './viewportFillDetect';
 import {
   resolveNearBottomOnScroll,
   resolveLastUserMessageObservation,
   resolveRenderPinDecision,
+  selectTailUserMessageId,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
 import { useNavigationKeyListener } from './useNavigationKeyListener';
 import { suppressScrollbarActivation } from '@/lib/scrollbarAutoHide';
+import { collectAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
+import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
+import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
   /** Active session id — used to reset scroll state on session switch. */
@@ -310,6 +330,19 @@ type ForkOriginRenderItem = {
   parentSessionId: string;
   forkedAtMessageId: string;
 };
+type TurnChangesRenderItem = {
+  /** Exact provider patches attached to one visible user turn. */
+  type: 'turn_changes';
+  key: string;
+  changeSet: TurnChangeSetSummary;
+};
+type GeneratedFilesRenderItem = {
+  type: 'generated_files';
+  key: string;
+  files: GeneratedFileRef[];
+  turnStartMs: number | null;
+  turnEndMs: number | null;
+};
 
 /** 原子工作子项:tool / agent task / thinking / assistant 工作文字。 */
 export type WorkChildItem = ToolSegmentRenderItem | AgentTaskRenderItem | MessageRenderItem;
@@ -339,6 +372,8 @@ export type RenderItem =
   | ToolSegmentRenderItem
   | AgentTaskRenderItem
   | ForkOriginRenderItem
+  | TurnChangesRenderItem
+  | GeneratedFilesRenderItem
   | {
       /** tool-result-media: 把 tool_result 里的 xdt_image_url(s) / xdt_video_urls
        *  提取出来作为独立视觉消息渲染,跳出 tool_segment 折叠卡片。统一容器,
@@ -386,6 +421,85 @@ function isRenderWindowBoundaryItem(item: RenderItem | undefined): boolean {
   return item?.type === 'fork_origin' || (item?.type === 'message' && item.message.role === 'user');
 }
 
+/**
+ * 首帧字节预算:单条 render item 的挂载成本估算(≈ markdown parse 体量)。
+ * message 正文按字符数计(react-markdown parse 成本与正文长度近似线性);
+ * 折叠类卡片(tool_segment / agent_task / work_group)默认收拢、不 parse 正文,
+ * 按小常量计;ghost_card 挂 html 卡体,按较大常量计。
+ */
+export function estimateRenderItemMountCost(item: RenderItem): number {
+  if (item.type === 'message') return 200 + item.message.content.length;
+  if (item.type === 'ghost_card') return 2000;
+  return 300;
+}
+
+/**
+ * 首帧窗口的内容预算(估算成本单位 ≈ 字符数)。
+ *
+ * 条数上限(FIRST_PAINT_ITEMS)防"多而小",本预算防"少而大"——单条 12KB
+ * 大表格的压测 session,15 条 = ~380ms(dev 构建实测,2026-08-10 perf 日志),
+ * 条数封顶对它无效。两者先到为准。64k ≈ 5 条大表格 ≈ ~130ms dev、release 减半;
+ * 普通 session(单条 <2KB)触不到本预算,照走条数上限。
+ * 被预算推迟的 item 由既有空闲扩窗(FIRST_PAINT → INITIAL)在 ~1s 内补回,
+ * 不影响内容完整性。
+ */
+export const RENDER_WINDOW_FIRST_PAINT_BUDGET = 64_000;
+
+/**
+ * 从末尾向前累计挂载成本,预算耗尽时把窗口起点向后收(渲染更少条)。
+ * 至少保留最后 1 条(单条超预算也要渲染它)。export 供单测。
+ */
+export function clampTailWindowStartByBudget(
+  items: readonly RenderItem[],
+  countStartIdx: number,
+  budget = RENDER_WINDOW_FIRST_PAINT_BUDGET,
+): number {
+  let cost = 0;
+  for (let i = items.length - 1; i >= countStartIdx; i--) {
+    cost += estimateRenderItemMountCost(items[i]);
+    if (cost > budget && i < items.length - 1) return i + 1;
+  }
+  return countStartIdx;
+}
+
+export function resolveAnchoredWindowItemCount(
+  startIdx: number,
+  anchorIdx: number,
+  desiredForwardItems: number,
+): number {
+  return desiredForwardItems + Math.max(0, anchorIdx - startIdx);
+}
+
+export function shouldBoostDefaultWindow({
+  allItemCount,
+  visibleItemCount,
+  defaultWindowItems,
+}: {
+  allItemCount: number;
+  visibleItemCount: number;
+  defaultWindowItems: number;
+}): boolean {
+  if (defaultWindowItems >= RENDER_WINDOW_INITIAL_ITEMS) return false;
+  return visibleItemCount < allItemCount;
+}
+
+export function resolveDefaultWindowStartIdx({
+  allItemCount,
+  defaultWindowItems,
+  visibleStartIdx,
+  visibleItemCount,
+}: {
+  allItemCount: number;
+  defaultWindowItems: number;
+  visibleStartIdx: number;
+  visibleItemCount: number;
+}): number {
+  // 首帧字节预算可能让实际 DOM 窗口比声明容量小。用户在 idle boost 前主动
+  // 向上滚动时，必须从真实 visibleStartIdx 扩，而不是用声明容量反算出 0。
+  if (visibleItemCount < allItemCount) return visibleStartIdx;
+  return Math.max(0, allItemCount - defaultWindowItems);
+}
+
 // export 仅供 render-window 集成单测使用。窗口默认/扩窗时如果刚好切在
 // agent_task / work_group / assistant 中间,顶部会出现无上下文的卡片。
 // 向前吸收同一 user turn 的开头,但限制 lookback 防止单个超长 turn 破坏首屏预算。
@@ -414,7 +528,7 @@ function ForkOriginMarker({ onClick }: { onClick?: () => void }) {
         type="button"
         onClick={onClick}
         disabled={!onClick}
-        className="group inline-flex shrink-0 items-center gap-2 bg-transparent p-0 text-[13px] font-medium leading-5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] hover:underline hover:underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-default disabled:text-[var(--text-tertiary)] disabled:hover:no-underline"
+        className="group inline-flex shrink-0 items-center gap-2 bg-transparent p-0 text-13 font-medium leading-5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] hover:underline hover:underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-default disabled:text-[var(--text-tertiary)] disabled:hover:no-underline"
       >
         <GitFork size={15} strokeWidth={2} className="shrink-0" aria-hidden="true" />
         <span>{t('chat.forkOrigin.label')}</span>
@@ -747,6 +861,20 @@ export function findRestorableViewportItemIdx(items: RenderItem[], viewportTopKe
 }
 
 /**
+ * Whether a restored viewport anchor still belongs to the bounded default tail.
+ * This is intentionally limited to the restore path; user-created anchored
+ * windows remain unbounded until the separate bidirectional-window change.
+ */
+export function isViewportAnchorWithinDefaultTail(
+  items: RenderItem[],
+  viewportTopKey: string,
+  windowSize = RENDER_WINDOW_INITIAL_ITEMS,
+): boolean {
+  const idx = findRestorableViewportItemIdx(items, viewportTopKey);
+  return idx >= Math.max(0, items.length - windowSize);
+}
+
+/**
  * 从全量 render items 里按渲染顺序抽出会话内所有图片的 src,作为 lightbox 翻图
  * 的数据源(全量,不受渲染窗口裁剪影响)。只收**结构化、确定会渲染成图**的三类:
  *   - tool-output 图(art 出图 / 飞书拉图等)→ tool_media item 的 image 项
@@ -828,11 +956,6 @@ export function collectSessionImageSrcs(
   return out;
 }
 
-// export 仅供单测(`buildRenderItemsKeyStability.test.ts`)使用,运行时无外部消费者。
-function isAgentTaskToolName(toolName: string): boolean {
-  return toolName === 'Agent' || toolName === 'Task' || toolName.startsWith('collab:');
-}
-
 // Workflow 工具(Claude Code SDK 多 agent 编排)在父会话事件流里 = 单个 local_workflow
 // 任务(内部子 agent 不发独立 task 事件,只有 workflow 级聚合进度)。与 Agent/Task 一样
 // 走 agent_task 渲染项;AgentTaskCard 内部按 taskType/toolName 识别为 workflow,展示
@@ -880,8 +1003,45 @@ export function buildSubagentModelMap(messages: ChatMessage[]): Map<string, stri
   return out;
 }
 
+/**
+ * 子代理内部消息判据:这条消息是不是某个 Agent/Task 调用**内部**产生的,而不是
+ * 父会话自己说的话。
+ *
+ * 数据来源与 buildSubagentModelMap 同一份:SDK 给子代理的每条消息都带
+ * `parent_tool_use_id`(= 派生它的 Agent 工具调用 id),经 makerChatStore 投影成
+ * 顶层 `parentToolUseId`(实时事件与历史重载两条路径都投影)。
+ *
+ * 形态判据不能省:legacy Claude 导入把普通 transcript 链边(`preceding-user-uuid`
+ * 这类非 tool-use id)也存进同一个字段,无条件当子代理会把父会话自己的正文一起
+ * 吞掉。只认 SDK tool-parent 形态,与 maker-shared 的投影判据共用同一个函数。
+ */
+export function isSubagentInternalMessage(message: ChatMessage): boolean {
+  const parent = message.parentToolUseId;
+  return typeof parent === 'string' && parent.length > 0 && isSubagentParentToolUseId(parent);
+}
+
+/**
+ * 「用户实际看得见的那份消息序列」——剔除子代理内部行后的视图。
+ *
+ * 所有**面向可见 UI 的派生**都必须吃这一份,不能各自去扫原始数组:turn 边界、
+ * 「最后一条 user 消息」这类判断一旦把不可见行算进去,可见气泡就会丢掉编辑入口、
+ * 运行态标记与 action bar —— 同一类坑此前已被 `isSyntheticTrigger` 行踩过一次
+ * (见 `findLastUserMessageClientId` 的注释),子代理内部行是第二类不可见行
+ * (review: codex P2)。
+ *
+ * 反面:`buildSubagentModelMap` 之类**按子代理归属反查**的派生必须继续吃原始序列,
+ * 它要的恰恰是这些被隐藏的行。
+ *
+ * 没有子代理消息时返回同一个引用,useMemo 下游不产生额外重算。
+ */
+export function selectVisibleMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.some(isSubagentInternalMessage)
+    ? messages.filter((m) => !isSubagentInternalMessage(m))
+    : messages;
+}
+
 export function buildRenderItems(
-  messages: ChatMessage[],
+  allMessages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
   ghostCards?: GhostCardSnapshot,
   opts?: {
@@ -890,11 +1050,52 @@ export function buildRenderItems(
      * 「父调用在不在 messages 里」做的归属判定都不可信,必须放宽而不是丢弃。
      */
     historyWindowIncomplete?: boolean;
+    /** Main-persisted exact patches, anchored to their visible user message. */
+    turnChangeSets?: readonly TurnChangeSetSummary[];
+    /** Session working directory for opaque generated-file fallback chips. */
+    workingDir?: string;
   },
 ): {
   items: RenderItem[];
   singleResultMap: Map<string, string>;
 } {
+  // ── Pass -1: 剔除子代理内部消息 ──
+  // 后台 Agent/Task 跑起来后,SDK 会把子代理自己的 thinking / 正文 / 工具调用一并
+  // echo 回主流(每条都带 parent_tool_use_id)。这些是**子任务内部的经过**,不是父
+  // 会话对用户说的话 —— 官方 CLI 界面从不显示它们,Cindy 逐条渲染就等于把整篇子代理
+  // 报告原样铺进聊天窗口(实测一条子代理正文 5.5k 字符直接刷屏)。
+  //
+  // 它们的去处是自己那张 AgentTaskCard(仍由 taskUpdates 正常渲染),不是主流。
+  // 过滤放在最前面:后续所有 pass(tool_result lookup、段落配对、turn 边界、work-group)
+  // 看到的都是同一份"用户可见"的消息序列,不会出现"查得到但不渲染"的半吊子状态。
+  const hasSubagentInternalMessages = allMessages.some(isSubagentInternalMessage);
+  // 过滤后下标 → 原始下标。**产物**类派生(生成文件 chip、媒体卡)必须回到原始序列取
+  // turn 切片:子代理用 Write / Bash 建的文件、出图出片工具返回的媒体都是真实产物,
+  // 只是承载它们的工具行不该渲染;只喂过滤后的切片会让这些卡静默消失(review: codex P2)。
+  const originalIndexByVisible: number[] = [];
+  const messages = hasSubagentInternalMessages
+    ? allMessages.filter((m, idx) => {
+        if (isSubagentInternalMessage(m)) return false;
+        originalIndexByVisible.push(idx);
+        return true;
+      })
+    : allMessages;
+
+  /**
+   * 把过滤后的 turn 区间 `[lo, hi)` 映射回原始序列的区间,使产物收集能看到被隐藏的
+   * 子代理工具调用。`hi` 落在末尾时右端取 `allMessages.length`,保证最后一个 turn
+   * 也覆盖到它后面的子代理尾巴。
+   */
+  const originalTurnSlice = (lo: number, hi: number): readonly ChatMessage[] => {
+    if (!hasSubagentInternalMessages) return messages.slice(lo, hi);
+    const start = originalIndexByVisible[lo];
+    if (start === undefined) return messages.slice(lo, hi);
+    const end = hi < originalIndexByVisible.length
+      ? originalIndexByVisible[hi]
+      : allMessages.length;
+    return allMessages.slice(start, end);
+  };
+
   // ── Pass 0: build toolUseId → tool_result.content lookup ──
   // Plan/task rendering and regular tool result pairing both need a stable
   // lookup by vendor toolUseId. Adjacency remains a fallback in Pass 2.
@@ -1034,9 +1235,97 @@ export function buildRenderItems(
     pendingSegmentGhostCards = [];
   };
 
+  let turnStartIdx = 0;
+  const flushTurnChanges = (lo: number, hi: number): void => {
+    if (hi <= lo) return;
+    const anchorClientId = messages[lo]?.clientId;
+    if (!anchorClientId) return;
+    const changeSets = (opts?.turnChangeSets ?? []).filter(
+      (changeSet) => changeSet.anchorClientId === anchorClientId,
+    );
+    const exactPaths = new Set<string>();
+    const pathKey = (value: string): string => {
+      const normalized = value.replace(/\\/g, '/');
+      const windowsShape = /^[a-zA-Z]:[\\/]/.test(value) || value.includes('\\');
+      return windowsShape ? normalized.toLowerCase() : normalized;
+    };
+    for (const changeSet of changeSets) {
+      for (const file of changeSet.files) {
+        exactPaths.add(pathKey(resolveToolFilePath(file.path, changeSet.cwd)));
+        if (file.oldPath) exactPaths.add(pathKey(resolveToolFilePath(file.oldPath, changeSet.cwd)));
+      }
+    }
+    for (const changeSet of changeSets) {
+      // Zero-file entries have nothing the user can inspect or act on. Keep their
+      // diagnostic sidecars in Main, but do not add a warning-only chat card.
+      if (!hasReviewableTurnChanges(changeSet)) continue;
+      items.push({
+        type: 'turn_changes',
+        key: `turnchanges-${changeSet.id}`,
+        changeSet,
+      });
+    }
+    // 子代理工具结果里的媒体产物(出图 / 视频 / 音频 / 模型)。这些工具行本身被隐藏,
+    // 不进 tool_segment,所以段级的 pendingSegmentMedia 收不到它们;而 AgentTaskUpdate
+    // 没有承载媒体的字段,不补这一路产物卡就会随内部工具行一起消失(review: codex P2)。
+    // 归属到 turn 一级,与产物文件卡同一处理方式。
+    //
+    // 只收**被隐藏的**那部分:可见工具行的媒体照旧走 tool_segment,不能在这里重复渲染。
+    // ghost_call 的锚卡逻辑不在这条路径上——子代理不参与意识卡片的开卡/锚定。
+    if (hasSubagentInternalMessages) {
+      const hiddenMedia: ToolMediaItem[] = [];
+      const seenMediaUrls = new Set<string>();
+      for (const message of originalTurnSlice(lo, hi)) {
+        if (message.role !== 'tool_result' || !isSubagentInternalMessage(message)) continue;
+        for (const item of extractToolResultMedia(message.content)) {
+          if (seenMediaUrls.has(item.url)) continue;
+          seenMediaUrls.add(item.url);
+          hiddenMedia.push(item);
+        }
+      }
+      if (hiddenMedia.length > 0) {
+        items.push({
+          type: 'tool_media',
+          key: `subagent-media-${anchorClientId}`,
+          items: hiddenMedia,
+        });
+      }
+    }
+
+    const workingDir = opts?.workingDir ?? '';
+    if (!workingDir || hi <= lo) return;
+    const slice = originalTurnSlice(lo, hi);
+    const generatedFiles = collectGeneratedFiles(slice, workingDir).filter((file) => {
+      const normalized = pathKey(file.path);
+      return !exactPaths.has(normalized) || changeSets.length === 0;
+    });
+    if (generatedFiles.length === 0) return;
+    let turnStartMs: number | null = null;
+    for (const message of slice) {
+      const timestamp = Date.parse(message.createdAt ?? '');
+      if (Number.isFinite(timestamp) && (turnStartMs === null || timestamp < turnStartMs)) {
+        turnStartMs = timestamp;
+      }
+    }
+    const boundaryTimestamp = Date.parse(messages[hi]?.createdAt ?? '');
+    items.push({
+      type: 'generated_files',
+      key: `genfiles-${messages[lo].clientId}`,
+      files: generatedFiles,
+      turnStartMs,
+      turnEndMs: Number.isFinite(boundaryTimestamp) ? boundaryTimestamp : null,
+    });
+  };
   let i = 0;
   while (i < messages.length) {
     const msg = messages[i];
+
+    // User turn boundary: attach the sealed patch after the turn it belongs to.
+    if (msg.role === 'user' && msg.delivery !== 'steer' && !msg.isSyntheticTrigger) {
+      flushSegment();
+      flushTurnChanges(turnStartIdx, i);
+      turnStartIdx = i;
+    }
 
     // ask_user: pending lives in the bottom input overlay; expired/unanswered
     // questions have no user selection to show. Only the answered state surfaces
@@ -1332,6 +1621,8 @@ export function buildRenderItems(
   // Flush trailing segment — important for streaming, where the turn often
   // ends mid-segment (no closing text yet).
   flushSegment();
+  // 末尾 turn 的产出文件卡(没有后续 user 边界触发)。
+  flushTurnChanges(turnStartIdx, messages.length);
 
   if (taskUpdates) {
     // 父会话自己的 Bash 调用集合:local_bash 任务卡(#247 的「后台命令」卡,含
@@ -1417,11 +1708,17 @@ function isWorkChild(it: RenderItem): it is WorkChildItem {
 /** 运行中(未到终态)的子 Agent 卡片 —— 折叠时视为"可见锚点",绝不折进
  *  「已工作 Xs」工作组:任务没完成就归档会谎报终态时长(典型:后台 workflow
  *  子 Agent 仍在跑,父 turn 却已产出最终正文)。status 派生口径与 AgentTaskCard
- *  完全一致(update.status 优先,否则有 result 视为 completed、无则 running),
- *  保证"卡片显示运行中"与"是否折叠"永远同步。终态 = completed/failed/stopped。 */
+ *  完全一致:配对的最终 result 会把 stale running 收敛为 completed,但不覆盖
+ *  failed/stopped 等明确终态,
+ *  保证"卡片显示运行中"与"是否折叠"永远同步。 */
+// A paired final result closes a stale running update; this must match AgentTaskCard.
 function isRunningAgentTask(it: RenderItem): boolean {
   if (it.type !== 'agent_task') return false;
-  const status = it.update?.status ?? (it.result ? 'completed' : 'running');
+  const status = deriveAgentTaskStatus(it.update?.status, it.result, {
+    resultIsLaunchReceipt:
+      subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !== undefined
+      || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
+  });
   return status === 'running';
 }
 
@@ -2074,6 +2371,7 @@ function renderWorkGroupChild(
     assistantsWithFollowingUserBoundary: ReadonlySet<string>;
     turnFinalAssistantClientIds: ReadonlySet<string>;
     subagentModelByToolUseId: ReadonlyMap<string, string>;
+    userTurnUsageDetailsByAssistantId: ReadonlyMap<string, TurnUsageDetails>;
   },
 ): ReactNode {
   if (item.type === 'agent_task') {
@@ -2108,6 +2406,7 @@ function renderWorkGroupChild(
         props.assistantsWithFollowingUserBoundary,
       )}
       assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
+      userTurnUsageDetails={props.userTurnUsageDetailsByAssistantId.get(item.message.clientId)}
       isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
       isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
       isLastUserInput={item.message.clientId === props.lastUserInputClientId}
@@ -2238,6 +2537,9 @@ export function MessageStream({
   // (见 sessionImageSrcs 处注释)。
   const sessionFileValue = useChatSessionFileValue(sessionId, workingDir, remoteHostId);
 
+  /** 分享选择模式:只驱动整列缩进(低频)。逐条的选中态由每个复选框自己订阅。 */
+  const shareSelectionActive = useShareSelectionActive(sessionId);
+
   // 滚动容器:原生 div + overflow-y-auto,样式由全局 .is-scrolling 体系接管
   // (lib/scrollbarAutoHide.ts 自动加/撤 .is-scrolling 类,globals.css 控制
   // thumb 显隐)。data-scroll-container 给 ImageLightbox 等四个 lightbox
@@ -2286,21 +2588,52 @@ export function MessageStream({
   // null = 默认窗口(取末尾 RENDER_WINDOW_INITIAL_ITEMS 个 item);非 null = 锚定到
   // 具体的 RenderItem.key,从那个 item 开始 slice 到末尾。expand 时把锚点往前挪
   // RENDER_WINDOW_GROWTH_ITEMS 个 item。
-  const [firstVisibleItemKey, setFirstVisibleItemKey] = useState<string | null>(() =>
-    restoringRef.current ? (restoreSnapshotRef.current?.windowAnchorKey ?? null) : null,
+  //
+  // 还原快照是"默认窗口 + 非贴底"(windowAnchorKey=null 且 isNearBottom=false)
+  // 时,直接把窗口锚定到 viewportTopKey(视口顶端那条 item):applyRestore 需要
+  // 的锚点必然在窗口内(就是第一条),位置恢复不漂;窗口 = 视口位置 → 末尾,
+  // 必然有界(该快照态意味着用户仍在末尾 INITIAL 窗口内,≤80 条、典型只有一半)。
+  // 此前(codex review P2)这种快照走"全量 INITIAL 默认窗口"保锚点命中,几万字
+  // 会话切回要全量渲染 73+ 条、首帧 ~400ms(2026-08-09 沙盒 perf 日志实测),
+  // 锚定后回落到与贴底切换同阶。viewportTopKey 缺失(老快照)才退回全量窗口。
+  const [firstVisibleItemKey, setFirstVisibleItemKey] = useState<string | null>(() => {
+    if (!restoringRef.current) return null;
+    const snap = restoreSnapshotRef.current;
+    if (!snap) return null;
+    if (snap.windowAnchorKey !== null) return snap.windowAnchorKey;
+    if (!snap.isNearBottom && snap.viewportTopKey) return snap.viewportTopKey;
+    return null;
+  });
+  const restoreDefaultViewportRef = useRef(
+    Boolean(
+      restoringRef.current &&
+        restoreSnapshotRef.current?.windowAnchorKey === null &&
+        restoreSnapshotRef.current?.isNearBottom === false &&
+        restoreSnapshotRef.current?.viewportTopKey,
+    ),
   );
   // 两段式默认窗口的当前尺寸(FIRST_PAINT → 空闲期扩到 INITIAL)。只影响
   // firstVisibleItemKey === null 的"默认窗口"分支;锚点窗口不看它。
-  //
-  // 还原例外(codex review P2):快照是"默认窗口 + 非贴底"(windowAnchorKey=null
-  // 且 isNearBottom=false)时,saved viewportTopKey 可能落在末尾第 31-80 条 —— 若首帧
-  // 只画 30 条,applyRestore 找不到锚点,会话回开位置漂移;且还原态 isNearBottomRef
-  // 为 false,空闲扩窗也不会补。这种快照首帧直接用全量 INITIAL 窗口(放弃两段式);
-  // 贴底快照 / 无快照 / 锚点快照(锚点分支不看本值)仍走 FIRST_PAINT 两段式。
+  // "默认窗口 + 非贴底"快照已在上面转为锚点窗口,不再进本分支;仅
+  // viewportTopKey 缺失的降级路径仍需全量 INITIAL 保命中率。
   const [defaultWindowItems, setDefaultWindowItems] = useState(() => {
     const snap = restoringRef.current ? restoreSnapshotRef.current : null;
-    if (snap && snap.windowAnchorKey === null && !snap.isNearBottom) {
+    if (snap && snap.windowAnchorKey === null && !snap.isNearBottom && !snap.viewportTopKey) {
       return RENDER_WINDOW_INITIAL_ITEMS;
+    }
+    return RENDER_WINDOW_FIRST_PAINT_ITEMS;
+  });
+  /**
+   * 锚点窗口向后的 item 上界（render-window-bidirectional 要点 1）。
+   * 仅 firstVisibleItemKey !== null 时生效；null（默认窗口）时不参与 slice。
+   * 锚点变化时重置为 FIRST_PAINT，expandWindow / 向下扩窗时增长。
+   * 初始化时从滚动快照恢复（P1 fix：否则扩窗后切走的浏览位置会丢失）。
+   */
+  const [anchoredForwardItems, setAnchoredForwardItems] = useState(() => {
+    if (!restoringRef.current) return RENDER_WINDOW_FIRST_PAINT_ITEMS;
+    const snap = restoreSnapshotRef.current;
+    if (snap?.anchoredForwardCount && snap.anchoredForwardCount > 0) {
+      return snap.anchoredForwardCount;
     }
     return RENDER_WINDOW_FIRST_PAINT_ITEMS;
   });
@@ -2345,6 +2678,48 @@ export function MessageStream({
     }
   }, [messages]);
 
+  const [turnChangeSets, setTurnChangeSets] = useState<TurnChangeSetSummary[]>([]);
+  useEffect(() => {
+    if (!sessionId || remoteHostId !== null || isRemoteSessionSticky(sessionId)) {
+      setTurnChangeSets([]);
+      return;
+    }
+    let cancelled = false;
+    setTurnChangeSets([]);
+    const off = subscribeTurnChangeSetUpdated(sessionId, ({ summary }) => {
+      if (cancelled) return;
+      setTurnChangeSets((current) => {
+        const next = current.filter((item) => item.id !== summary.id);
+        next.push(summary);
+        next.sort((a, b) => a.createdAt - b.createdAt);
+        return next;
+      });
+    });
+    void window.electronAPI.maker.listTurnChangeSets(sessionId)
+      .then((next) => {
+        if (cancelled) return;
+        setTurnChangeSets((current) => {
+          const merged = new Map(next.map((item) => [item.id, item]));
+          for (const item of current) merged.set(item.id, item);
+          return Array.from(merged.values()).sort((a, b) => a.createdAt - b.createdAt);
+        });
+      })
+      .catch(() => {
+        // A live push may already have arrived; keep it instead of clearing the card.
+      });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [remoteHostId, sessionId]);
+
+  // 「用户实际看得见的那份序列」。turn 边界与 last-user 这类**可见 UI 派生**统一吃它,
+  // 否则被隐藏的子代理行会被当成 turn 边界或「最后一条 user 消息」,让可见气泡丢掉编辑
+  // 入口与运行态标记(review: codex P2;同族的 isSyntheticTrigger 坑见
+  // findLastUserMessageClientId 注释)。按子代理归属反查的派生(buildSubagentModelMap)
+  // 仍吃原始 messages —— 它要的正是这些被隐藏的行。
+  const visibleMessages = useMemo(() => selectVisibleMessages(messages), [messages]);
+
   // 全量 build:折叠 / 丢弃 / 反向膨胀的所有规则一次性吸收 — 窗口看到的就是
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
   // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
@@ -2352,17 +2727,19 @@ export function MessageStream({
     () =>
       buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
         historyWindowIncomplete: Boolean(hasMoreMessages),
+        turnChangeSets,
+        workingDir,
       }),
-    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages],
+    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages, turnChangeSets, workingDir],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
-    () => collectAssistantsWithFollowingUserBoundary(messages),
-    [messages],
+    () => collectAssistantsWithFollowingUserBoundary(visibleMessages),
+    [visibleMessages],
   );
   // action bar 只挂每个 turn 的收尾 assistant 正文(见 collectTurnFinalAssistantClientIds)。
   const turnFinalAssistantClientIds = useMemo(
-    () => collectTurnFinalAssistantClientIds(messages),
-    [messages],
+    () => collectTurnFinalAssistantClientIds(visibleMessages),
+    [visibleMessages],
   );
   // subagent-model-chip: parentToolUseId(Agent/Task 行 id)→ 子代理模型,
   // 供 AgentActionsBlock 给 Agent/Task 行反查并渲染模型 chip。
@@ -2377,39 +2754,48 @@ export function MessageStream({
   );
 
   /**
-   * TODO(render-window-bidirectional): 锚定分支目前是 `slice(startIdx)` —— 从锚点切到
-   * 末尾、**没有上界**。这是 #676 review 反复指向的根因:补齐 / 跳转让 messages 变长后,
-   * 深跳会一次挂载"锚点 → 末尾"的全部 item。因为它无界,store 侧只能靠"跳转补齐预算"
-   * 间接限制挂载量,而那个预算必须逐一追平 buildRenderItems 的每种 item 展开规则
-   * (agent_task 卡、空洞切段、ghost_card、tool_media…),review 中已发现 5 种
-   * 被低估的路径 —— 是一条追不完的线。
-   *
-   * 决定:把锚定窗口做成双向有界 + 配套向下扩窗,作为紧随其后的独立改动(不塞进本 PR ——
-   * 它要动下面 5 处联动派生,且滚动手感必须实机验证,需要一个完整的实施与验证窗口)。
-   * 之前那套补齐预算是它落地前的过渡兜底,落地后可以大幅放宽甚至移除。
-   *
-   * 实施要点(照此改,别重新推导):
-   *   1. 新增 anchoredForwardItems state 作为锚点向后的 item 上界,锚点变化时重置;
-   *      锚定分支改为 slice(start, start + anchoredForwardItems)。
-   *   2. windowAtTop 现在是 `visible.length === all.length`,加上界后即使 start 已到 0
-   *      也恒为 false → decideUserIntentFillAction 再也走不到 load-from-db。必须改成
-   *      基于 startIdx === 0 判定,因此要把 startIdx 从这个 useMemo 里一并导出。
-   *   3. isNearBottom:窗口未覆盖末尾时 DOM 距底 <100px 会被误判成"贴底",auto-follow 与
-   *      jump-down chip 语义都会错。窗口未覆盖末尾时必须强制判为非贴底。
-   *   4. expandWindow(向上扩)必须同步把上界 +RENDER_WINDOW_GROWTH_ITEMS,否则 start 前移
-   *      而上界不动,会把用户视口下方的内容反向截掉。
-   *   5. handleScroll 已有 distanceFromBottom:距底 <threshold 且窗口未覆盖末尾时扩上界。
-   *      向下扩窗比向上简单 —— 在下方 append 不改变已有内容的滚动偏移,不需要 F-SYNC-2
-   *      那种 delta 补偿。上界扩到覆盖末尾后清除它,此后贴底语义与现状完全一致。
+   * render-window-bidirectional 已实施：锚定窗口改为双向有界
+   * `slice(startIdx, startIdx + anchoredForwardItems)`（要点 1）。
+   * 配合 expandWindow 同步扩上界（要点 4）、handleScroll 向下扩窗（要点 5）、
+   * windowAtTop 改 visibleStartIdx === 0（要点 2）、isNearBottom 强制非贴底（要点 3）。
+   * 之前那套 store 侧补齐预算是它落地前的过渡兜底，后续可大幅放宽甚至移除。
    */
-  const visibleRenderItems = useMemo(() => {
-    if (allRenderItems.length === 0) return allRenderItems;
+  /**
+   * render-window-bidirectional: 锚定窗口从 `slice(startIdx)` 改成
+   * `slice(startIdx, startIdx + anchoredForwardItems)`，配合向下扩窗（要点 1）。
+   * 同时导出 startIdx 供 windowAtTop 判定使用（要点 2）。
+   */
+  // ── 切换立即响应(shell-first mount)──
+  // 旧行为:点击切 session → 首个提交同步构建整个消息树 → 期间界面冻结(压测
+  // session 实测 ~380ms 无响应),体感是"卡住才切过去"。
+  // 新行为:首个提交只渲染外壳(标题栏/输入框/空消息区 + spinner),消息树推迟
+  // 到外壳绘制后的下一帧 —— 点击零冻结,先切进去再看到内容浮现(对齐 Codex
+  // Desktop 的加载体感)。挂载后的滚动定位不受影响:pin-to-bottom 与 applyRestore
+  // 都由 ResizeObserver 在内容真正挂载时驱动,首帧空内容它们自然 no-op。
+  // 各 auto-fill effect 均有 `visibleRenderItems.length === 0` 早退守卫,空帧不误触发。
+  const [firstMountDeferred, setFirstMountDeferred] = useState(true);
+  useEffect(() => {
+    // rAF 保证外壳那一帧真正上屏后才挂消息树;卸载时取消,防 setState-after-unmount。
+    const raf = requestAnimationFrame(() => setFirstMountDeferred(false));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const { items: visibleRenderItems, startIdx: visibleStartIdx } = useMemo(() => {
+    if (firstMountDeferred) return { items: EMPTY_RENDER_ITEMS, startIdx: 0 };
+    if (allRenderItems.length === 0) return { items: allRenderItems, startIdx: 0 };
     if (firstVisibleItemKey === null) {
-      const defaultStartIdx = snapRenderWindowStartIdx(
-        allRenderItems,
-        Math.max(0, allRenderItems.length - defaultWindowItems),
-      );
-      return allRenderItems.slice(defaultStartIdx);
+      // 首帧阶段(defaultWindowItems 还没被空闲扩窗抬到 INITIAL)叠加内容预算:
+      // 条数上限防"多而小",字节预算防"少而大"(单条 12KB 表格 × 15 条 = ~380ms)。
+      // 顺序:先 snap(边界吸附向前扩)再按预算收 —— 预算是硬上界,否则 snap 会把
+      // 刚裁掉的大条目又吸回来。预算收窄后的起点可能不在 turn 边界上(顶部短暂出现
+      // 无上下文卡片),空闲扩窗(→INITIAL)会在 ~1s 内带着正常 snap 重建窗口。
+      const countStartIdx = Math.max(0, allRenderItems.length - defaultWindowItems);
+      const snappedStartIdx = snapRenderWindowStartIdx(allRenderItems, countStartIdx);
+      const defaultStartIdx =
+        defaultWindowItems < RENDER_WINDOW_INITIAL_ITEMS
+          ? clampTailWindowStartByBudget(allRenderItems, snappedStartIdx)
+          : snappedStartIdx;
+      return { items: allRenderItems.slice(defaultStartIdx), startIdx: defaultStartIdx };
     }
     let idx = allRenderItems.findIndex((it) => it.key === firstVisibleItemKey);
     if (idx < 0) {
@@ -2426,21 +2812,81 @@ export function MessageStream({
           allRenderItems,
           Math.max(0, allRenderItems.length - RENDER_WINDOW_INITIAL_ITEMS),
         );
-        return allRenderItems.slice(defaultStartIdx);
+        return { items: allRenderItems.slice(defaultStartIdx), startIdx: defaultStartIdx };
       }
     }
-    return allRenderItems.slice(snapRenderWindowStartIdx(allRenderItems, idx));
-  }, [allRenderItems, firstVisibleItemKey, defaultWindowItems]);
+
+    // A default-tail snapshot can become stale while the session is in the
+    // background. If enough messages arrive, the saved viewport anchor is no
+    // longer in the bounded tail; prefer a bounded tail first paint over
+    // mounting the entire anchor-to-end range. The layout effect below clears
+    // the stale anchor state before the next paint.
+    if (
+      restoreDefaultViewportRef.current &&
+      restoringRef.current &&
+      idx < Math.max(0, allRenderItems.length - RENDER_WINDOW_INITIAL_ITEMS)
+    ) {
+      const defaultStartIdx = snapRenderWindowStartIdx(
+        allRenderItems,
+        Math.max(0, allRenderItems.length - RENDER_WINDOW_INITIAL_ITEMS),
+      );
+      return { items: allRenderItems.slice(defaultStartIdx), startIdx: defaultStartIdx };
+    }
+
+    const startIdx = snapRenderWindowStartIdx(allRenderItems, idx);
+    const windowItemCount = resolveAnchoredWindowItemCount(
+      startIdx,
+      idx,
+      anchoredForwardItems,
+    );
+    return {
+      items: allRenderItems.slice(startIdx, startIdx + windowItemCount),
+      startIdx,
+    };
+  }, [allRenderItems, firstVisibleItemKey, defaultWindowItems, anchoredForwardItems, firstMountDeferred]);
+
+  // If a restored default-tail anchor fell out of the tail while this session
+  // was backgrounded, permanently fall back to the bounded default window for
+  // this mount. This also prevents expandWindow from treating the stale key as
+  // a user-created anchored window.
+  useLayoutEffect(() => {
+    if (!restoreDefaultViewportRef.current || !restoringRef.current || firstVisibleItemKey === null) return;
+    const snap = restoreSnapshotRef.current;
+    if (!snap?.viewportTopKey) return;
+    if (allRenderItems.length === 0) return;
+    const anchorIdx = findRestorableViewportItemIdx(allRenderItems, snap.viewportTopKey);
+    // History hydration can temporarily omit the anchor; retain restore mode
+    // until a later render can locate it instead of treating it as deleted.
+    if (anchorIdx < 0) return;
+    if (isViewportAnchorWithinDefaultTail(allRenderItems, snap.viewportTopKey)) return;
+    restoreDefaultViewportRef.current = false;
+    restoringRef.current = false;
+    isNearBottomRef.current = false;
+    setIsNearBottom(false);
+    setFirstVisibleItemKey(null);
+    setDefaultWindowItems(RENDER_WINDOW_INITIAL_ITEMS);
+  }, [allRenderItems, firstVisibleItemKey]);
 
   // 两段式默认窗口第二段:首帧(非空)提交后,空闲期把默认窗口扩回 INITIAL。
   // 只在仍钉底时扩(prepend 在视口上方,pin-to-bottom layout effect 同帧重钉,
   // 无跳动);已向上滚离底部 / 已切到锚点窗口的,交给既有 expandWindow 路径。
   // requestIdleCallback 带 1s timeout 兜底;测试等无 ric 环境退化为 setTimeout。
   useEffect(() => {
-    if (defaultWindowItems >= RENDER_WINDOW_INITIAL_ITEMS) return;
     if (firstVisibleItemKey !== null) return;
     if (visibleRenderItems.length === 0) return;
-    if (allRenderItems.length <= defaultWindowItems) return; // 短会话无需扩
+    // 不能只比较 allItems <= defaultWindowItems。短会话的声明窗口容量可能已
+    // 覆盖全量，但首帧字节预算仍会把实际 DOM 起点向后裁；此时 visible.length
+    // 才是窗口是否完整的事实源。只要实际可见数 < 全量，就要在空闲期 boost，
+    // 将 defaultWindowItems 升到 INITIAL（预算仅在 <INITIAL 阶段生效），恢复全部 item。
+    if (
+      !shouldBoostDefaultWindow({
+        allItemCount: allRenderItems.length,
+        visibleItemCount: visibleRenderItems.length,
+        defaultWindowItems,
+      })
+    ) {
+      return;
+    }
     const boost = () => {
       if (isNearBottomRef.current) {
         setDefaultWindowItems(RENDER_WINDOW_INITIAL_ITEMS);
@@ -2487,6 +2933,7 @@ export function MessageStream({
     lastMissingFocusRef.current = null;
     if (!visibleRenderItems.some((item) => item.key === targetKey)) {
       setFirstVisibleItemKey(targetKey);
+      setAnchoredForwardItems(RENDER_WINDOW_FIRST_PAINT_ITEMS);
       return;
     }
     const root = scrollRef.current;
@@ -2564,11 +3011,19 @@ export function MessageStream({
   );
 
   // 把可见窗口往前(更早)推 RENDER_WINDOW_GROWTH_ITEMS 个 item,用于滚到顶时的客户端扩窗。
+  // render-window-bidirectional 要点 4: expandWindow 必须同步把上界 +GROWTH，
+  // 否则 start 前移而上界不动，会把用户视口下方的内容反向截掉。
   const expandWindow = useCallback(() => {
     if (allRenderItems.length === 0) return;
     let currentStartIdx: number;
-    if (firstVisibleItemKey === null) {
-      currentStartIdx = Math.max(0, allRenderItems.length - defaultWindowItems);
+    const wasDefaultWindow = firstVisibleItemKey === null;
+    if (wasDefaultWindow) {
+      currentStartIdx = resolveDefaultWindowStartIdx({
+        allItemCount: allRenderItems.length,
+        defaultWindowItems,
+        visibleStartIdx,
+        visibleItemCount: visibleRenderItems.length,
+      });
     } else {
       currentStartIdx = allRenderItems.findIndex((it) => it.key === firstVisibleItemKey);
       if (currentStartIdx < 0) {
@@ -2585,20 +3040,61 @@ export function MessageStream({
     const newIdx = Math.max(0, currentStartIdx - RENDER_WINDOW_GROWTH_ITEMS);
     const newAnchorIdx = snapRenderWindowStartIdx(allRenderItems, newIdx);
     const newAnchor = allRenderItems[newAnchorIdx]?.key ?? null;
-    if (newAnchor) setFirstVisibleItemKey(newAnchor);
-  }, [allRenderItems, firstVisibleItemKey, defaultWindowItems]);
+    if (newAnchor) {
+      setFirstVisibleItemKey(newAnchor);
+      if (wasDefaultWindow) {
+        // 默认窗口 → 锚定窗口：从新锚点到末尾全部可见（数量 = defaultWindowItems + GROWTH，有界）。
+        setAnchoredForwardItems(allRenderItems.length - newAnchorIdx);
+      } else {
+        // P1 fix: 按实际起点位移增长，而非固定 GROWTH。
+        // snapRenderWindowStartIdx 可能因边界吸附向前多移最多 RENDER_WINDOW_BOUNDARY_LOOKBACK_ITEMS，
+        // 若上界只 +GROWTH 会把尾部截掉差值条 item。
+        setAnchoredForwardItems((prev) => prev + (currentStartIdx - newAnchorIdx));
+      }
+    }
+  }, [
+    allRenderItems,
+    firstVisibleItemKey,
+    defaultWindowItems,
+    visibleStartIdx,
+    visibleRenderItems.length,
+  ]);
 
-  // 当前窗口是否已经覆盖到内存中所有 render item(用于 handleScroll 判断该走客户端
-  // 扩窗还是走 DB onLoadMore)。
-  const windowAtTop = visibleRenderItems.length === allRenderItems.length;
+  // render-window-bidirectional 要点 2: windowAtTop 改基于 visibleStartIdx === 0。
+  // 原定义 visible.length === all.length 在双向窗口下即使 start 已到 0 也恒为 false。
+  const windowAtTop = visibleStartIdx === 0;
+
+  // render-window-bidirectional 要点 3/5: 窗口是否已覆盖到内存末尾。
+  // 默认窗口(firstVisibleItemKey === null)始终覆盖末尾。
+  const windowCoversEnd =
+    firstVisibleItemKey === null ||
+    allRenderItems.length === 0 ||
+    visibleStartIdx + visibleRenderItems.length >= allRenderItems.length;
 
   // ── 滚动位置 保存 / 还原 的辅助 ──
   // unmount cleanup 与 ResizeObserver 回调里读不到最新的 visibleRenderItems /
   // firstVisibleItemKey(闭包会 stale),用 ref 镜像每次 render 同步一份,供它们读取。
   const visibleRenderItemsRef = useRef(visibleRenderItems);
   visibleRenderItemsRef.current = visibleRenderItems;
+  const windowCoversEndRef = useRef(windowCoversEnd);
+  windowCoversEndRef.current = windowCoversEnd;
   const firstVisibleItemKeyRef = useRef(firstVisibleItemKey);
   firstVisibleItemKeyRef.current = firstVisibleItemKey;
+  const anchoredForwardItemsRef = useRef(anchoredForwardItems);
+  anchoredForwardItemsRef.current = anchoredForwardItems;
+
+  // render-window-bidirectional P1 fix: 新消息导致锚定窗口不再覆盖末尾时，
+  // 重置 near-bottom 以触发未读提示（覆盖末尾→清锚回默认窗的逻辑在 handleScroll 里）。
+  const prevWindowCoversEndRef = useRef(windowCoversEnd);
+  useLayoutEffect(() => {
+    const wasCovering = prevWindowCoversEndRef.current;
+    prevWindowCoversEndRef.current = windowCoversEnd;
+
+    if (firstVisibleItemKey !== null && wasCovering && !windowCoversEnd) {
+      isNearBottomRef.current = false;
+      setIsNearBottom(false);
+    }
+  }, [firstVisibleItemKey, windowCoversEnd]);
 
   // 量出当前视口顶端那条 render-item 的 key + 它被滚到视口上方的像素数。
   // 用 children 索引 ↔ visibleRenderItems 索引的天然对应关系反查(map 一条 item
@@ -2662,6 +3158,10 @@ export function MessageStream({
       viewportTopKey: measured.viewportTopKey,
       offset: measured.offset,
       isNearBottom: isNearBottomRef.current,
+      anchoredForwardCount:
+        firstVisibleItemKeyRef.current !== null
+          ? anchoredForwardItemsRef.current
+          : undefined,
     });
   }, [sessionId, measureViewportTop]);
 
@@ -2786,6 +3286,17 @@ export function MessageStream({
         return;
       }
       case 'none':
+        // render-window-bidirectional: 锚定窗口未覆盖末尾且内容不溢出时，
+        // expandWindow 只向前扩（向最早方向）、保持窗口尾边不变；对向后
+        // 方向（锚点后的内容）没有帮助。这里从尾部扩 anchoredForwardItems
+        // 把锚点后内容逐步纳入 DOM，直到视口撑出滚动条或窗口触及全量末尾。
+        if (
+          firstVisibleItemKey !== null &&
+          !windowCoversEnd &&
+          Math.abs(el.scrollHeight - el.clientHeight) <= NO_SCROLL_TOLERANCE_PX
+        ) {
+          setAnchoredForwardItems((prev) => prev + RENDER_WINDOW_GROWTH_ITEMS);
+        }
         return;
     }
   }, [
@@ -2796,6 +3307,8 @@ export function MessageStream({
     onLoadMore,
     windowAtTop,
     expandWindow,
+    windowCoversEnd,
+    firstVisibleItemKey,
   ]);
 
   // ── F2 / new-message-indicator ──
@@ -3024,6 +3537,8 @@ export function MessageStream({
     setIsNearBottom(true);
     isNearBottomRef.current = true;
     programmaticScrollRef.current = true;
+    // render-window-bidirectional: 清除锚点回到默认尾部窗口（chip/jump-down 语义）。
+    setFirstVisibleItemKey(null);
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, []);
 
@@ -3066,19 +3581,53 @@ export function MessageStream({
   // result land.
   // biome-ignore lint/correctness/useExhaustiveDependencies: bottomPadding 是触发型依赖；overlay 高度变化时即使 effect 内不读取它，也必须重新 pin 到底。
   useLayoutEffect(() => {
-    // tail item 在 visibleRenderItems 与 allRenderItems 末尾完全一致(window 始终
-    // 包含最新的一段),用 visibleRenderItems 避免扩窗时多触发一次。
-    // 用户消息总是产出独立的 message item(不进 segment / 不被丢弃),所以这里
-    // 只需要解开 type==='message' && role==='user' 这一支。
-    const lastItem = visibleRenderItems[visibleRenderItems.length - 1];
+    const visibleLastItem = visibleRenderItems[visibleRenderItems.length - 1];
+    const realLastItem = allRenderItems[allRenderItems.length - 1];
+    const tailUserMessageId = selectTailUserMessageId({
+      windowCoversEnd,
+      visibleLastItem,
+      realLastItem,
+      userMessageId: (item) =>
+        item?.type === 'message' && item.message.role === 'user'
+          ? item.message.clientId
+          : null,
+    });
     const lastUserMsg =
-      lastItem?.type === 'message' && lastItem.message.role === 'user' ? lastItem.message : null;
+      tailUserMessageId === null
+        ? null
+        : realLastItem?.type === 'message' && realLastItem.message.clientId === tailUserMessageId
+          ? realLastItem.message
+          : visibleLastItem?.type === 'message' &&
+              visibleLastItem.message.clientId === tailUserMessageId
+            ? visibleLastItem.message
+            : null;
+
+    // 锚定窗口外检测到真实的新发送：当前 effect 的 visibleRenderItems 仍是旧切片，
+    // 不能同帧 pinToBottom。先清锚并恢复 near-bottom，下一次 render 切回默认尾窗
+    // 后再自然 pin；提前同步 lastUserMsgIdRef，防下一帧重复判成新发送。
+    let windowAnchorClearedOnSend = false;
+    const realTailUserSendOutsideWindow =
+      !restoringRef.current &&
+      firstVisibleItemKey !== null &&
+      !windowCoversEnd &&
+      lastUserMsg !== null &&
+      lastUserMsg.clientId !== lastUserMsgIdRef.current;
+    if (realTailUserSendOutsideWindow) {
+      setFirstVisibleItemKey(null);
+      isNearBottomRef.current = true;
+      setIsNearBottom(true);
+      setUnreadCount(0);
+      lastUserMsgIdRef.current = lastUserMsg.clientId;
+      windowAnchorClearedOnSend = true;
+    }
     const userMessageObservation = resolveLastUserMessageObservation({
       restoring: restoringRef.current,
       tailUserMessageId: lastUserMsg?.clientId ?? null,
       previousTailUserMessageId: lastUserMsgIdRef.current,
     });
-    lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
+    if (!windowAnchorClearedOnSend) {
+      lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
+    }
     const decision = resolveRenderPinDecision({
       restoring: restoringRef.current,
       newUserSend: userMessageObservation.isNewUserSend,
@@ -3092,11 +3641,11 @@ export function MessageStream({
       restoringRef.current = false;
       isNearBottomRef.current = true;
     }
-    if (decision.pinToBottom) pinToBottom();
+    if (decision.pinToBottom && !windowAnchorClearedOnSend) pinToBottom();
 
     const el = scrollRef.current;
     if (el) prevScrollTopRef.current = el.scrollTop;
-  }, [visibleRenderItems, bottomPadding, pinToBottom]);
+  }, [visibleRenderItems, bottomPadding, pinToBottom, firstVisibleItemKey, windowCoversEnd, allRenderItems]);
 
   // ── 还原浏览位置(layout effect,在上面的 pin-to-bottom effect 之后跑) ──
   // mount 首帧 + 还原期间窗口变化时把视口摆回锚点。settle(图片/markdown 异步加载
@@ -3294,12 +3843,21 @@ export function MessageStream({
         thresholdPx: threshold,
         directionDeadZonePx: SCROLL_DIRECTION_DEAD_ZONE_PX,
       });
-      if (nowNearBottom !== isNearBottomRef.current) {
-        isNearBottomRef.current = nowNearBottom;
-        setIsNearBottom(nowNearBottom);
-        if (nowNearBottom) setUnreadCount(0);
+      // render-window-bidirectional 要点 3: 窗口未覆盖末尾时强制判为非贴底。
+      // 否则 DOM 距底 <100px 会被误判成"贴底"，auto-follow 拽回底部、jump-down chip 不出现。
+      const effectiveNearBottom = !windowCoversEnd ? false : nowNearBottom;
+      if (effectiveNearBottom !== isNearBottomRef.current) {
+        isNearBottomRef.current = effectiveNearBottom;
+        setIsNearBottom(effectiveNearBottom);
+        if (effectiveNearBottom) setUnreadCount(0);
       }
-      if (nowNearBottom) {
+      // render-window-bidirectional P1 fix: 锚定窗口覆盖末尾 + 用户到达底部 →
+      // 切回默认尾窗。必须在 handleScroll 里而不是 layout effect 里做——
+      // 用户从"向上扩窗"滚回底部时 wasCovering 从始至终为 true，layout effect 捕不到。
+      if (effectiveNearBottom && firstVisibleItemKey !== null && windowCoversEnd) {
+        setFirstVisibleItemKey(null);
+      }
+      if (effectiveNearBottom) {
         // 到底了:无论方向都隐藏 chip,清掉 timer
         if (jumpDownIdleTimerRef.current !== null) {
           window.clearTimeout(jumpDownIdleTimerRef.current);
@@ -3323,6 +3881,18 @@ export function MessageStream({
           jumpDownIdleTimerRef.current = null;
         }
         setShowJumpDown((cur) => (cur ? false : cur));
+      }
+
+      // render-window-bidirectional 要点 5: 向下扩窗。
+      // 用户向下滚动接近当前窗口下缘时，扩 anchoredForwardItems 纳入更多 item。
+      // 向下 append 不改变已有内容的滚动偏移，不需要 F-SYNC-2 delta 补偿。
+      // 扩到覆盖末尾后直接清除锚点，回到默认贴底窗口。
+      if (!windowCoversEnd && delta > SCROLL_DIRECTION_DEAD_ZONE_PX && distanceFromBottom < threshold) {
+        const nextForward = anchoredForwardItems + RENDER_WINDOW_GROWTH_ITEMS;
+        // 最后一批照常渲染：不在此处清除锚点。用户真正滚到窗口底部后，
+        // 上面 effectiveNearBottom + windowCoversEnd 分支会自然清除锚点、
+        // 切回默认尾窗并恢复 near-bottom 状态。
+        setAnchoredForwardItems(nextForward);
       }
     }
     prevScrollTopRef.current = currentScrollTop;
@@ -3364,7 +3934,20 @@ export function MessageStream({
     prevScrollHeightRef.current = el.scrollHeight;
     prevScrollTopAtLoadRef.current = el.scrollTop;
     onLoadMore();
-  }, [onLoadMore, isLoadingMore, hasMoreMessages, windowAtTop, expandWindow, saveScrollSnapshot]);
+  }, [
+    onLoadMore,
+    isLoadingMore,
+    hasMoreMessages,
+    windowAtTop,
+    expandWindow,
+    saveScrollSnapshot,
+    windowCoversEnd,
+    anchoredForwardItems,
+    visibleStartIdx,
+    allRenderItems.length,
+    setFirstVisibleItemKey,
+    setAnchoredForwardItems,
+  ]);
 
   // 渲染窗口下移到 render-item 轴后,U2 "末尾窗口全是 orphan tool_result"
   // 死锁不可能复现:`buildRenderItems(messages)` 喂全量 → orphan / ask_user /
@@ -3440,7 +4023,11 @@ export function MessageStream({
   // 派生 —— 导航条要给整段历史画刻度)。目标可能在渲染窗口外,跳转走下面的
   // layout effect:复用 focus-jump 的"先扩窗到目标、下一轮再滚动"两段式,
   // 以及 chip-jump 的 expandWindow/onLoadMore 抑制协议。
-  const navRailEntries = useMemo(() => deriveNavRailEntries(messages), [messages]);
+  // 导航条是个性化可选功能(Settings → 个性化 → 小技巧),默认关闭;关闭时
+  // 不挂载组件(卸载时组件自会把 navRailCoversNav 报回 false,chip 兜底回归),
+  // 也不做下面的空闲补页。
+  const { enabled: navRailEnabled } = useMessageNavRailPreference();
+  const navRailEntries = useMemo(() => deriveNavRailEntries(visibleMessages), [visibleMessages]);
 
   // 入口去重:导航条**完整覆盖导航**(出场且刻度未截断)时抑制"跳到上一条
   // 提问"chip —— 同一个导航任务只保留一套入口。导航条缺席(短对话 / 窄窗 /
@@ -3454,7 +4041,9 @@ export function MessageStream({
   // shouldBackfillForNavRail 一族常量注释)。与"跳转补齐"同属程序化翻页,
   // prepend 的滚动补偿照走 F-SYNC-2 协议:调用前快照 scrollHeight/scrollTop。
   // 即使当下窗口太窄导航条没出场,补到的历史对搜索/上滚阅读同样有用,
-  // 且有轮数预算封顶,不做 eligible 门控。
+  // 且有轮数预算封顶,不做 eligible 门控。但**用户显式关闭导航条**(个性化
+  // 开关,默认关)时跳过:为一个不存在的 UI 自动翻页不符合默认克制,开关
+  // 打开后本 effect 依赖变化会重新评估补页。
   // 调度 effect 的依赖含 sessionId(与 MessageNavRail 的 resetKey 同款惯例):
   // 两个会话的条目数 / hasMore 恰好相同且 onLoadMore 身份未变时,切会话也要
   // 取消旧会话待发的空闲回调、并按归零后的轮数预算为新会话重新评估
@@ -3464,6 +4053,7 @@ export function MessageStream({
     navRailBackfillRoundsRef.current = 0;
   }, [sessionId]);
   useEffect(() => {
+    if (!navRailEnabled) return;
     if (!onLoadMore) return;
     if (
       !shouldBackfillForNavRail({
@@ -3490,7 +4080,14 @@ export function MessageStream({
     }
     const id = window.setTimeout(run, 300);
     return () => window.clearTimeout(id);
-  }, [sessionId, navRailEntries.length, hasMoreMessages, isLoadingMore, onLoadMore]);
+  }, [
+    sessionId,
+    navRailEnabled,
+    navRailEntries.length,
+    hasMoreMessages,
+    isLoadingMore,
+    onLoadMore,
+  ]);
 
   const railJumpSeqRef = useRef(0);
   const [railJumpRequest, setRailJumpRequest] = useState<{ id: string; seq: number } | null>(null);
@@ -3513,6 +4110,7 @@ export function MessageStream({
       // 目标在渲染窗口外:先把窗口锚到目标。本 effect 因 visibleRenderItems
       // 变化重跑,下一轮走下面的滚动分支(focus-jump 同款两段式)。
       setFirstVisibleItemKey(targetKey);
+      setAnchoredForwardItems(RENDER_WINDOW_FIRST_PAINT_ITEMS);
       return;
     }
     const root = scrollRef.current;
@@ -3562,14 +4160,35 @@ export function MessageStream({
   // edit-last-message: 最后一条 user 消息才显示编辑入口(编辑 = rewind 到该条
   // + 重发,更早的消息会连带丢弃后续轮次,v1 不开放)。与 first 同理用全量
   // messages 判定,不受窗口分页影响。
-  const lastUserMessageClientId = useMemo(() => findLastUserMessageClientId(messages), [messages]);
+  // 走 visibleMessages:子代理内部的 user 行渲染不出来,让它成为"最后一条 user"
+  // 会把编辑入口从真实的最后一条可见气泡上抢走 —— 与该 helper 里 isSyntheticTrigger
+  // 那条同源(review: codex P2)。
+  const lastUserMessageClientId = useMemo(
+    () => findLastUserMessageClientId(visibleMessages),
+    [visibleMessages],
+  );
   // 含合成行的"最后一条用户侧输入":自愈重连行据此判断自己是不是仍在飞(见 helper 注释)。
-  const lastUserInputClientId = useMemo(() => findLastUserInputClientId(messages), [messages]);
+  // 同样走可见序列:子代理内部的 user 行不是父会话某个 turn 的发起者,算进来会让
+  // 在飞的重连行被"夺走归属"、提前停转。
+  const lastUserInputClientId = useMemo(
+    () => findLastUserInputClientId(visibleMessages),
+    [visibleMessages],
+  );
+
+  // 刻意吃**原始** messages,不走 visibleMessages:子代理消耗的 token 是这个 turn 的
+  // 真实花费,过滤掉等于把子代理的账从用量里抹掉(成本失真,比显示问题更糟)。
+  // 归属键 turnFinalAssistantClientIds 已按可见序列算出,聚合区间仍落在正确的 turn 内。
+  const userTurnUsageDetailsByAssistantId = useMemo(() => {
+    return collectAssistantTurnUsageDetails(messages, turnFinalAssistantClientIds);
+  }, [messages, turnFinalAssistantClientIds]);
 
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
-  // 知道"是不是最后一条"来跳过重复渲染。
+  // 知道"是不是最后一条"来跳过重复渲染。走可见序列:尾部挂着子代理内部行时,
+  // 真实的最后一条可见 error 会因为"不是最后一条"而在流内重复渲染一遍。
   const lastMessageClientId =
-    messages.length > 0 ? messages[messages.length - 1].clientId : undefined;
+    visibleMessages.length > 0
+      ? visibleMessages[visibleMessages.length - 1].clientId
+      : undefined;
   const previousLocalFileRefsRef = useRef<readonly KnownLocalFileRef[]>([]);
   const localFileRefs = useMemo<readonly KnownLocalFileRef[]>(() => {
     return collectStableLocalFileRefs(messages, previousLocalFileRefsRef.current);
@@ -3590,7 +4209,12 @@ export function MessageStream({
   // 引用缓存:内容不变时复用上一个 Map 引用——UserMessage 顶层订阅该
   // context,流式期间 messages 每批 delta 都换引用,不缓存会让全部历史
   // 消息每批 token 重渲一遍(ghostCallMapsEqual 注释有完整推导)。
-  const ghostCallsByUserTurnRaw = useMemo(() => collectGhostCallsByUserTurn(messages), [messages]);
+  // 走可见序列:归属键是**可见的**那条 user 消息(软提示卡挂在它上面),被隐藏的
+  // 子代理 user 行不该成为归属键,否则该 turn 的召唤卡升级不到任何可见气泡上。
+  const ghostCallsByUserTurnRaw = useMemo(
+    () => collectGhostCallsByUserTurn(visibleMessages),
+    [visibleMessages],
+  );
   const ghostCallsCacheRef = useRef(ghostCallsByUserTurnRaw);
   if (!ghostCallMapsEqual(ghostCallsCacheRef.current, ghostCallsByUserTurnRaw)) {
     ghostCallsCacheRef.current = ghostCallsByUserTurnRaw;
@@ -3602,6 +4226,16 @@ export function MessageStream({
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <ImageGalleryContext.Provider value={sessionImageSrcs}>
           <div className="relative h-full w-full">
+            {/* shell-first mount:外壳帧(消息树推迟一帧挂载)的品牌加载指示。
+                挂在滚动容器外的 overlay 层,视口正中(absolute inset-0 center),
+                不随滚动内容移动,也不参与 contentH / pin-to-bottom 计算。
+                只在确有内容待挂时挂载;指示器自带延迟浮现(CSS animation-delay)
+                —— 小会话下一帧就挂载完,指示器从未可见,不闪 loading。 */}
+            {firstMountDeferred && messages.length > 0 && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+                <BrandLoadingMark />
+              </div>
+            )}
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
             {sessionId ? (
@@ -3645,10 +4279,48 @@ export function MessageStream({
               React `key` 一律取 item.key — stable across builds(派生约定见
               RenderItem 类型注释 / buildRenderItems),复用 DOM 节点避免折叠
               态丢失 / 滚动锚点漂走。 */}
-                <div ref={itemsRef} className="flex flex-col gap-3.5">
+                <div
+                  ref={itemsRef}
+                  data-share-selection-active={shareSelectionActive ? '' : undefined}
+                  className={cn(
+                    // msg-stream-items:直接子元素(每条 render item 的根节点)带
+                    // content-visibility:auto(globals.css)—— 视口外条目跳过布局
+                    // 与绘制,切入长 session 的首帧成本从「整个窗口 80 条」降到
+                    // 「一屏」。滚动恢复按条目锚定 + ResizeObserver 纠偏,估高
+                    // (240px)与真实高度的偏差在条目进入视口后被自动纠正。
+                    'msg-stream-items flex flex-col gap-3.5',
+                    // 分享选择模式:整列内容右移,左侧让出复选框那一列。缩进加在
+                    // 容器上(不是逐条消息),工具卡等不可选的 item 也跟着移,
+                    // 左边缘保持对齐。
+                    shareSelectionActive && 'pl-10',
+                    'transition-[padding] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
+                  )}
+                >
                   {visibleRenderItems.map((item) => {
                     if (item.type === 'fork_origin') {
                       return <ForkOriginMarker key={item.key} onClick={onOpenForkOrigin} />;
+                    }
+
+                    if (item.type === 'turn_changes') {
+                      if (!sessionId) return null;
+                      return (
+                        <TurnChangesCard
+                          key={item.key}
+                          sessionId={sessionId}
+                          changeSet={item.changeSet}
+                        />
+                      );
+                    }
+
+                    if (item.type === 'generated_files') {
+                      return (
+                        <GeneratedFilesCard
+                          key={item.key}
+                          files={item.files}
+                          turnStartMs={item.turnStartMs}
+                          turnEndMs={item.turnEndMs}
+                        />
+                      );
                     }
 
                     if (item.type === 'tool_segment') {
@@ -3728,6 +4400,7 @@ export function MessageStream({
                               assistantsWithFollowingUserBoundary,
                               turnFinalAssistantClientIds,
                               subagentModelByToolUseId,
+                              userTurnUsageDetailsByAssistantId,
                             }),
                         };
                       };
@@ -3815,16 +4488,32 @@ export function MessageStream({
                       );
                     }
 
+                    // 分享选择:复选框与光栅化定位属性都挂在这个**既有** wrapper 上,
+                    // 不新增 DOM 层级 —— 多包一层会让 AssistantMessage 子树在进出
+                    // 选择模式时 remount(mermaid 重渲、GhostToolCard iframe 重载)。
+                    const shareable =
+                      Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
+
                     return (
                       <div
                         key={item.key}
                         data-message-client-id={msg.clientId}
-                        className={
-                          highlightMessageClientId === msg.clientId
-                            ? 'scroll-mt-20 rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)] transition-colors'
-                            : 'scroll-mt-20 transition-colors'
-                        }
+                        {...(shareable
+                          ? {
+                              [SHARE_SESSION_ATTR]: sessionId,
+                              [SHARE_MESSAGE_ATTR]: msg.clientId,
+                            }
+                          : {})}
+                        className={cn(
+                          'scroll-mt-20 transition-colors',
+                          shareable && 'relative',
+                          highlightMessageClientId === msg.clientId &&
+                            'rounded-xl bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]',
+                        )}
                       >
+                        {shareable && shareSelectionActive ? (
+                          <ShareMessageCheckbox clientId={msg.clientId} />
+                        ) : null}
                         <MessageItem
                           message={msg}
                           toolResult={singleResultMap.get(msg.clientId)}
@@ -3840,6 +4529,7 @@ export function MessageStream({
                             assistantsWithFollowingUserBoundary,
                           )}
                           assistantIsTurnFinal={turnFinalAssistantClientIds.has(msg.clientId)}
+                          userTurnUsageDetails={userTurnUsageDetailsByAssistantId.get(msg.clientId)}
                           isFirstUserMessage={msg.clientId === firstUserMessageClientId}
                           isLastUserMessage={msg.clientId === lastUserMessageClientId}
                           isLastUserInput={msg.clientId === lastUserInputClientId}
@@ -3878,17 +4568,20 @@ export function MessageStream({
             />
 
             {/* message-nav-rail: 左缘提问导航条(每条提问一根刻度,当前项加深,
-          hover 预览,点击跳转)。显隐由组件自判:提问数 ≥4 且内容列左侧留白
-          足够;窄窗口 / 嵌入面板自然隐藏,绝不压在气泡上。 */}
-            <MessageNavRail
-              entries={navRailEntries}
-              scrollRef={scrollRef}
-              contentMaxWidth={contentWidth ?? 880}
-              bottomOffset={resolvedBottomPadding}
-              onJump={handleNavRailJump}
-              onNavCoverageChange={setNavRailCoversNav}
-              resetKey={sessionId}
-            />
+          hover 预览,点击跳转)。个性化开关(默认关)决定挂不挂载;挂载后的
+          显隐仍由组件自判:提问数 ≥4 且内容列左侧留白足够;窄窗口 / 嵌入面板
+          自然隐藏,绝不压在气泡上。 */}
+            {navRailEnabled && (
+              <MessageNavRail
+                entries={navRailEntries}
+                scrollRef={scrollRef}
+                contentMaxWidth={contentWidth ?? 880}
+                bottomOffset={resolvedBottomPadding}
+                onJump={handleNavRailJump}
+                onNavCoverageChange={setNavRailCoversNav}
+                resetKey={sessionId}
+              />
+            )}
 
             {/* prev-user-msg-jump: 右上角"跳到上一条提问"icon 按钮。
           通过 createPortal 挂到祖先的 TopRightChipStack 容器里,与 DiffPanelToggle
@@ -3931,6 +4624,7 @@ const MessageItem = memo(function MessageItem({
   sessionRunning,
   assistantForkBlocked,
   assistantIsTurnFinal,
+  userTurnUsageDetails,
   isFirstUserMessage,
   isLastUserMessage,
   isLastUserInput,
@@ -3961,6 +4655,8 @@ const MessageItem = memo(function MessageItem({
    *  (collectTurnFinalAssistantClientIds). Gates the hover action bar —
    *  mid-turn texts don't mount it, keeping the stream compact. */
   assistantIsTurnFinal?: boolean;
+  /** Aggregated token/cache/model details for this assistant's visible user turn. */
+  userTurnUsageDetails?: TurnUsageDetails;
   /** True iff this message is the first user message in the visible list.
    *  UserMessage hides the Rewind button for it (no prior assistant to
    *  resumeSessionAt anchor on — backend would throw NO_PRIOR_ASSISTANT). */
@@ -3992,6 +4688,7 @@ const MessageItem = memo(function MessageItem({
         cardType={message.systemCardType}
         data={message.systemCardData}
         sessionId={sessionId}
+        workingDir={workingDir}
         // 「这条自愈记录此刻真的在飞吗」：main 持有 vendor-turn owner，只有旧端缺省该字段时
         // 才回落到兼容启发式；supported / unknown 不再依赖 Renderer 的 sticky memory。
         autoResumeInFlight={isAutoResumeRowInFlight({
@@ -4041,6 +4738,7 @@ const MessageItem = memo(function MessageItem({
             cardType={message.systemCardType}
             data={message.systemCardData}
             sessionId={sessionId}
+            workingDir={workingDir}
           />
         );
       }
@@ -4068,6 +4766,7 @@ const MessageItem = memo(function MessageItem({
           userTurnCostUsd={message.userTurnCostUsd}
           userTurnCostIsEstimate={message.userTurnCostIsEstimate}
           turnUsageDetails={message.turnUsageDetails}
+          userTurnUsageDetails={userTurnUsageDetails}
           modelMismatch={message.modelMismatch}
           ghostReplyPending={message.ghostReplyPending}
         />

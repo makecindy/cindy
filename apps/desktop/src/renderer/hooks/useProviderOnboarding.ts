@@ -14,9 +14,8 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
-import { sortPresetsForLocale } from '@cindy/model-providers';
+import { sortPresetsForRegion } from '@cindy/model-providers';
 import type { ProviderPreset, ProviderView } from '@cindy/model-providers';
-import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { useProviders } from '@/hooks/useProviders';
@@ -34,8 +33,8 @@ import {
 // 连上又断开、期间从未回到首屏/会话视图时,dismiss 也必须被清,否则回到零连接后
 // 引导永远不再出现(Codex P1,2026-07-24)。与 hook 内 effect 并存:effect 覆盖
 // 挂载中的即时清理(含测试 mock 场景),此处覆盖未挂载窗口;reset 为幂等 no-op。
-const unsubscribeAutoReset = subscribeProvidersSnapshot((providers) => {
-  if (providers.some((p) => p.connected)) resetProviderOnboardingDismissal();
+const unsubscribeAutoReset = subscribeProvidersSnapshot((snapshot) => {
+  if (snapshot?.providers.some((p) => p.connected)) resetProviderOnboardingDismissal();
 });
 // HMR 下本模块会被重复执行:不 dispose 会累积 listener(reset 幂等,功能无害,
 // 但 dev 长跑会泄漏)。生产构建无 import.meta.hot,整段被摇树掉。
@@ -88,7 +87,6 @@ interface UseProviderOnboardingOptions {
 export function useProviderOnboarding(
   options?: UseProviderOnboardingOptions,
 ): UseProviderOnboardingReturn {
-  const { i18n } = useTranslation();
   const { mode } = useAuth();
   const { providers, loading } = useProviders();
 
@@ -163,8 +161,8 @@ export function useProviderOnboarding(
   }, [detections, providers]);
 
   const presets = useMemo(
-    () => (rawPresets ? sortPresetsForLocale(rawPresets, i18n.language) : []),
-    [rawPresets, i18n.language],
+    () => (rawPresets ? sortPresetsForRegion(rawPresets, CURRENT_CINDY_REGION) : []),
+    [rawPresets],
   );
 
   // 主列/折叠区装配(区域策略见 UseProviderOnboardingReturn.primaryRows 注释)。

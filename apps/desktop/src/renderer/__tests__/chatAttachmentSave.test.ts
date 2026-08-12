@@ -12,6 +12,10 @@ import {
 function makeDeps(overrides: Partial<ChatAttachmentSaveDeps> = {}): ChatAttachmentSaveDeps {
   return {
     platform: 'win32',
+    stageDangerous: vi.fn(async () => ({
+      success: true as const,
+      path: 'C:\\cache\\staged-setup.exe.bin',
+    })),
     fetchRemoteFile: vi.fn(async () => 'C:\\cache\\remote.bin'),
     saveAs: vi.fn(async () => ({
       status: 'saved' as const,
@@ -25,7 +29,13 @@ function makeDeps(overrides: Partial<ChatAttachmentSaveDeps> = {}): ChatAttachme
 }
 
 describe('safe attachment routing', () => {
-  it('only treats a mismatched .bin materialization as safety-downgraded', () => {
+  it('treats dangerous names and historical mismatched .bin materializations as download-only', () => {
+    expect(isSafetyDowngradedAttachment({ name: 'setup.exe', path: 'C:\\Downloads\\setup.exe' })).toBe(
+      true,
+    );
+    expect(isSafetyDowngradedAttachment({ name: 'attachment', path: 'C:\\Downloads\\setup.exe' })).toBe(
+      true,
+    );
     expect(isSafetyDowngradedAttachment({ name: 'setup.exe', path: 'C:\\cache\\random.bin' })).toBe(
       true,
     );
@@ -55,9 +65,22 @@ describe('safe attachment routing', () => {
       'utf8',
     );
     expect(source).toMatch(
-      /const downloadOnly = isSafetyDowngradedAttachment\(f\);[\s\S]+if \(downloadOnly\) \{[\s\S]+saveChatAttachmentWithToasts\(sessionFileCtx, f\)[\s\S]+shouldOpenTextLightboxForOrigin/,
+      /const downloadOnly = isSafetyDowngradedAttachment\(file\);[\s\S]+if \(downloadOnly\) \{[\s\S]+saveChatAttachmentWithToasts\(sessionFileCtx, file\)[\s\S]+shouldOpenTextLightboxForOrigin/,
     );
     expect(source).toContain('<Download size={14}');
+  });
+
+  it('gives the downgraded attachment chip a save-as-only context menu', () => {
+    const source = readFileSync(
+      resolve(__dirname, '..', 'components', 'chat', 'UserMessage.tsx'),
+      'utf8',
+    );
+    // 右键分流:降级附件只弹「另存为…」单项菜单,普通附件走共享文件 chip 菜单。
+    // 受控 .bin 副本路径不得经复制路径 / 打开所在目录外泄。
+    expect(source).toMatch(
+      /onContextMenu=\{\(e\) => \{[\s\S]+?if \(downloadOnly\) \{[\s\S]+?setSaveMenuPos\(\{ x: e\.clientX, y: e\.clientY \}\);[\s\S]+?ctxMenu\.onContextMenu\(e\);/,
+    );
+    expect(source).toContain("t('chat.media.saveAs')");
   });
 });
 
@@ -70,6 +93,7 @@ describe('saveChatAttachmentWithToasts', () => {
       deps,
     );
     expect(deps.fetchRemoteFile).not.toHaveBeenCalled();
+    expect(deps.stageDangerous).not.toHaveBeenCalled();
     expect(deps.saveAs).toHaveBeenCalledWith({
       sourcePath: 'C:\\cache\\random.bin',
       suggestedName: 'setup.exe',
@@ -77,6 +101,67 @@ describe('saveChatAttachmentWithToasts', () => {
     expect(deps.success).toHaveBeenCalledOnce();
     expect(deps.warning).not.toHaveBeenCalled();
     expect(result).toBe('saved');
+  });
+
+  it('stages a legacy local executable path before Save As', async () => {
+    const deps = makeDeps();
+    const result = await saveChatAttachmentWithToasts(
+      { origin: { kind: 'local' }, workingDir: 'C:\\work' },
+      { name: 'setup.exe', path: 'C:\\Downloads\\setup.exe' },
+      deps,
+    );
+    expect(deps.stageDangerous).toHaveBeenCalledWith({
+      sourcePath: 'C:\\Downloads\\setup.exe',
+      suggestedName: 'setup.exe',
+    });
+    expect(deps.saveAs).toHaveBeenCalledWith({
+      sourcePath: 'C:\\cache\\staged-setup.exe.bin',
+      suggestedName: 'setup.exe',
+    });
+    expect(result).toBe('saved');
+  });
+
+  it('stages a dangerous legacy source path even when its persisted display name is safe', async () => {
+    const deps = makeDeps();
+    const result = await saveChatAttachmentWithToasts(
+      { origin: { kind: 'local' }, workingDir: 'C:\\work' },
+      { name: 'attachment', path: 'C:\\Downloads\\setup.exe' },
+      deps,
+    );
+    expect(deps.stageDangerous).toHaveBeenCalledWith({
+      sourcePath: 'C:\\Downloads\\setup.exe',
+      suggestedName: 'attachment',
+    });
+    expect(deps.saveAs).toHaveBeenCalledWith({
+      sourcePath: 'C:\\cache\\staged-setup.exe.bin',
+      suggestedName: 'attachment',
+    });
+    expect(result).toBe('saved');
+  });
+
+  it('cleans the temporary legacy staging copy after Save As completes', async () => {
+    const cleanupStaged = vi.fn(async () => {});
+    const deps = makeDeps({ cleanupStaged });
+    await saveChatAttachmentWithToasts(
+      { origin: { kind: 'local' }, workingDir: 'C:\\work' },
+      { name: 'setup.exe', path: 'C:\\Downloads\\setup.exe' },
+      deps,
+    );
+    expect(cleanupStaged).toHaveBeenCalledWith(['C:\\cache\\staged-setup.exe.bin']);
+  });
+
+  it('cleans the temporary legacy staging copy when Save As fails', async () => {
+    const cleanupStaged = vi.fn(async () => {});
+    const deps = makeDeps({
+      cleanupStaged,
+      saveAs: vi.fn(async () => ({ status: 'error' as const, code: 'copy_failed' as const })),
+    });
+    await saveChatAttachmentWithToasts(
+      { origin: { kind: 'local' }, workingDir: 'C:\\work' },
+      { name: 'setup.exe', path: 'C:\\Downloads\\setup.exe' },
+      deps,
+    );
+    expect(cleanupStaged).toHaveBeenCalledWith(['C:\\cache\\staged-setup.exe.bin']);
   });
 
   it('fetches a remote copy first and warns when the type is unsupported locally', async () => {

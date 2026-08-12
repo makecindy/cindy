@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 
 import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,8 +78,18 @@ export async function openHtmlFileByPreference(
     await openInSidebar(sessionId, pathToFileUrl(absPath), t);
     return;
   }
-  const res = await window.electronAPI.openFileInBrowser(absPath);
-  if (!res.success) toast.error(res.error ?? t('chat.markdownRenderer.openInBrowserFailed'));
+  try {
+    await window.electronAPI.openFileInBrowser(absPath);
+  } catch (error) {
+    toast.error(
+      t(
+        mapIpcErrorToI18nKey(error, {
+          namespace: 'chat.markdownRenderer',
+          fallback: 'chat.markdownRenderer.openInBrowserFailed',
+        }),
+      ),
+    );
+  }
 }
 
 export interface UseOpenWithMenu {
@@ -136,6 +147,7 @@ export function useOpenWithMenu({ sessionId }: { sessionId?: string }): UseOpenW
       <DropdownMenuTrigger asChild>
         <span
           aria-hidden
+          data-fixed-menu-anchor
           style={{
             position: 'fixed',
             left: state?.x ?? 0,

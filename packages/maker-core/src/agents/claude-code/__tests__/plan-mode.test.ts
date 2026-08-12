@@ -74,15 +74,33 @@ function createDeps(overrides: Partial<AgentDeps> = {}): AgentDeps {
 }
 
 /** 最小可用的 SDK Query 假实现: 消息流永远挂起, 控制方法全部记录调用。 */
-function createFakeQuery() {
+function createFakeQuery(initMcpServerNames: readonly string[] = []) {
+  let initEmitted = false;
   return {
     [Symbol.asyncIterator]() {
-      // 消息流永远 pending — 这些用例只走控制面, 不消费流。
-      return { next: () => new Promise<IteratorResult<unknown>>(() => {}) };
+      return {
+        next: () => {
+          if (!initEmitted && initMcpServerNames.length > 0) {
+            initEmitted = true;
+            return Promise.resolve({
+              done: false as const,
+              value: {
+                type: 'system',
+                subtype: 'init',
+                session_id: 'sdk-plan-mode',
+                mcp_servers: initMcpServerNames.map((name) => ({ name, status: 'connected' })),
+              },
+            });
+          }
+          return new Promise<IteratorResult<unknown>>(() => {});
+        },
+      };
     },
     setPermissionMode: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
     applyFlagSettings: vi.fn(async () => {}),
+    mcpServerStatus: vi.fn(async () =>
+      initMcpServerNames.map((name) => ({ name, status: 'connected', scope: 'dynamic' }))),
     interrupt: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     rewindFiles: vi.fn(async () => ({ canRewind: false })),
@@ -105,6 +123,7 @@ async function startPlanSession(
   planMode: boolean,
   depOverrides: Partial<AgentDeps> = {},
   permissionMode: PermissionMode = 'acceptEdits',
+  reviewMode = false,
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -120,12 +139,29 @@ async function startPlanSession(
     workingDir,
     permissionMode,
     planMode,
+    ...(reviewMode ? { reviewMode: true as const } : {}),
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
-    | { permissionMode?: string; allowedTools?: string[]; canUseTool?: CanUseToolFn }
+    | {
+        permissionMode?: string;
+        allowedTools?: string[];
+        canUseTool?: CanUseToolFn;
+        settingSources?: string[];
+        allowDangerouslySkipPermissions?: boolean;
+        settings?: Record<string, unknown>;
+        hooks?: {
+          PreToolUse?: Array<{
+            hooks: Array<(input: Record<string, unknown>) => Promise<Record<string, unknown>>>;
+          }>;
+        };
+      }
     | undefined;
   if (!queryOptions) throw new Error('expected sdk query options');
-  return { agent, handle, fakeQuery, queryOptions };
+  const queryPrompt = sdkMock.query.mock.calls.at(-1)?.[0]?.prompt as
+    | AsyncIterable<{ message?: { content?: unknown } }>
+    | undefined;
+  if (!queryPrompt) throw new Error('expected sdk query prompt');
+  return { agent, handle, fakeQuery, queryOptions, queryPrompt, workingDir };
 }
 
 async function nextEvent(iterator: AsyncIterator<AgentEvent>): Promise<AgentEvent> {
@@ -151,6 +187,47 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent plan mode', () => {
+  it('keeps review text, Markdown, PDF, and image references in one real SDK turn', async () => {
+    const { handle, queryPrompt, workingDir } = await startPlanSession(
+      false,
+      {},
+      'acceptEdits',
+      true,
+    );
+    const markdownPath = path.join(workingDir, 'launch.md');
+    const pdfPath = path.join(workingDir, 'contract.pdf');
+    const imagePath = path.join(workingDir, 'poster.png');
+    await fs.writeFile(markdownPath, '# Launch\nBudget: 100 vs 80 + 50');
+    await fs.writeFile(pdfPath, '%PDF-1.4\n% review transport fixture');
+    await fs.writeFile(
+      imagePath,
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+        'base64',
+      ),
+    );
+    const realMarkdownPath = await fs.realpath(markdownPath);
+    const realPdfPath = await fs.realpath(pdfPath);
+    const realImagePath = await fs.realpath(imagePath);
+    const nextInput = queryPrompt[Symbol.asyncIterator]().next();
+
+    await handle.send({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'Review the Markdown, PDF, and image evidence.' },
+        { type: 'file', path: markdownPath, mimeType: 'text/markdown' },
+        { type: 'file', path: pdfPath, mimeType: 'application/pdf' },
+        { type: 'image', path: imagePath, mimeType: 'image/png' },
+      ],
+    });
+
+    const sdkInput = (await nextInput).value;
+    expect(sdkInput?.message?.content).toBe(
+      `@"${realMarkdownPath}" @"${realPdfPath}" @"${realImagePath}" Review the Markdown, PDF, and image evidence.`,
+    );
+    await handle.close();
+  });
+
   it('starts the SDK query in plan mode while keeping the underlying permission mode', async () => {
     const { handle, queryOptions } = await startPlanSession(true);
 
@@ -180,6 +257,209 @@ describe('ClaudeCodeAgent plan mode', () => {
       'mcp__cindy_memory__list_tools',
     ]);
     expect(queryOptions.allowedTools).not.toBe(source);
+    await handle.close();
+  });
+
+  it('locks Review sessions to fresh read-only SDK settings and ignores later widening', async () => {
+    const getGhostRosterPrompt = vi.fn(() => 'PRIVATE ROSTER');
+    const downstreamHook = vi.fn(async () => ({ continue: true }));
+    const { handle, queryOptions, fakeQuery, workingDir } = await startPlanSession(
+      true,
+      {
+        claudeAllowedTools: ['Bash', 'Write'],
+        getGhostRosterPrompt,
+        claudeHooks: { PreToolUse: [{ hooks: [downstreamHook] }] },
+      },
+      'bypassPermissions',
+      true,
+    );
+
+    expect(queryOptions.permissionMode).toBe('default');
+    expect(queryOptions.allowedTools).toEqual(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead']);
+    expect(queryOptions.settingSources).toEqual([]);
+    expect(queryOptions.allowDangerouslySkipPermissions).toBe(false);
+    expect(queryOptions.settings).toMatchObject({
+      autoMemoryEnabled: false,
+      permissions: {
+        deny: expect.arrayContaining([
+          'Read(**/.env.*)',
+          'Read(**/credentials.json)',
+          'Read(**/auth.json)',
+          'Read(**/*.pem)',
+        ]),
+      },
+    });
+    expect(getGhostRosterPrompt).not.toHaveBeenCalled();
+    expect(handle.getPlanMode?.()).toBe(false);
+
+    const reviewHook = queryOptions.hooks?.PreToolUse?.[0]?.hooks[0];
+    if (!reviewHook) throw new Error('expected Review read-only hook');
+    expect(queryOptions.hooks?.PreToolUse).toHaveLength(1);
+    const dotenvPath = path.join(workingDir, '.env.local');
+    const sourcePath = path.join(workingDir, 'source.ts');
+    const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), 'maker-core-review-outside-'));
+    tempDirs.push(externalDir);
+    await fs.writeFile(dotenvPath, 'SECRET=value');
+    await fs.writeFile(sourcePath, 'export const value = 1;');
+    await expect(handle.send({
+      type: 'user',
+      content: [{ type: 'image', path: dotenvPath, mimeType: 'image/png' }],
+    })).rejects.toThrow(/refused/i);
+    await expect(
+      reviewHook({ hook_event_name: 'PreToolUse', tool_name: 'Read' }),
+    ).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'allow',
+        updatedInput: { file_path: await fs.realpath(workingDir) },
+      },
+    });
+    await expect(reviewHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Read',
+      tool_input: { file_path: os.homedir() },
+    })).resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    await expect(
+      reviewHook({ hook_event_name: 'PreToolUse', tool_name: 'Bash' }),
+    ).resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    await expect(reviewHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Read',
+      tool_input: { file_path: dotenvPath },
+    })).resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    await expect(reviewHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Grep',
+      tool_input: { path: workingDir, pattern: 'value' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'allow',
+        updatedInput: { path: await fs.realpath(workingDir), pattern: 'value' },
+      },
+    });
+    await expect(reviewHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Grep',
+      tool_input: { path: externalDir, pattern: 'value' },
+    })).resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    await expect(reviewHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Grep',
+      tool_input: { path: sourcePath, pattern: 'value' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'allow',
+        updatedInput: { path: await fs.realpath(sourcePath), pattern: 'value' },
+      },
+    });
+    await expect(reviewHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Grep',
+      tool_input: { path: workingDir, pattern: 'value', glob: '**/*.ts' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'allow',
+        updatedInput: { path: await fs.realpath(workingDir), pattern: 'value', glob: '**/*.ts' },
+      },
+    });
+    for (const glob of ['**/*.pem', '**/.env*', '../../outside/**', '{src/**,/etc/**}']) {
+      await expect(reviewHook({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Grep',
+        tool_input: { path: workingDir, pattern: 'value', glob },
+      })).resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    }
+    await expect(reviewHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Glob',
+      tool_input: { pattern: '**/*.ts' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'allow',
+        updatedInput: { path: await fs.realpath(workingDir), pattern: '**/*.ts' },
+      },
+    });
+    await expect(reviewHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Glob',
+      tool_input: { pattern: '{src,test}/**/*.{ts,tsx}' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'allow',
+        updatedInput: {
+          path: await fs.realpath(workingDir),
+          pattern: '{src,test}/**/*.{ts,tsx}',
+        },
+      },
+    });
+    for (const pattern of [
+      '../../.ssh/*',
+      '{../../.ssh/*,**/*.ts}',
+      '{/etc/*,**/*.ts}',
+      '[.][.]/.ssh/*',
+      path.join(os.homedir(), '**', '*'),
+      String.raw`C:\\Users\\outside\\*`,
+      '**/*.pem',
+      '**/.env*',
+    ]) {
+      await expect(reviewHook({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Glob',
+        tool_input: { pattern },
+      })).resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    }
+
+    for (const [toolName, key, rawPath] of [
+      ['Read', 'file_path', sourcePath],
+      ['NotebookRead', 'notebook_path', sourcePath],
+      ['LS', 'path', workingDir],
+    ] as const) {
+      const result = await reviewHook({
+        hook_event_name: 'PreToolUse',
+        tool_name: toolName,
+        tool_input: { [key]: rawPath },
+      });
+      expect(result).toMatchObject({
+        hookSpecificOutput: {
+          permissionDecision: 'allow',
+          updatedInput: { [key]: await fs.realpath(rawPath) },
+        },
+      });
+    }
+
+    if (process.platform !== 'win32') {
+      const approvedPath = path.join(workingDir, 'approved.ts');
+      const swappedLink = path.join(workingDir, 'swapped.ts');
+      const outsidePath = path.join(externalDir, 'private.txt');
+      await fs.writeFile(approvedPath, 'approved');
+      await fs.writeFile(outsidePath, 'private');
+      await fs.symlink(approvedPath, swappedLink);
+
+      const decision = await reviewHook({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Read',
+        tool_input: { file_path: swappedLink },
+      });
+      await fs.unlink(swappedLink);
+      await fs.symlink(outsidePath, swappedLink);
+
+      expect(decision).toMatchObject({
+        hookSpecificOutput: {
+          permissionDecision: 'allow',
+          updatedInput: { file_path: await fs.realpath(approvedPath) },
+        },
+      });
+      expect(
+        (decision.hookSpecificOutput as { updatedInput: { file_path: string } }).updatedInput
+          .file_path,
+      ).not.toBe(swappedLink);
+    }
+    expect(downstreamHook).not.toHaveBeenCalled();
+
+    if (!handle.setPermissionMode) throw new Error('expected permission control');
+    await handle.setPermissionMode('bypassPermissions');
+    await handle.setPlanMode?.(true);
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    expect(handle.getPlanMode?.()).toBe(false);
     await handle.close();
   });
 
@@ -261,6 +541,100 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(env?.ANTHROPIC_API_KEY).toBe('k-route');
     expect(env?.ANTHROPIC_CUSTOM_HEADERS).toBe('authorization: Bearer k-route\nx-tenant: acme');
     expect(env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    await handle.close();
+  });
+
+  it('keeps remote OAuth Auto when every local MCP is filtered before transport', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const starts: Array<Record<string, unknown>> = [];
+    const fakeQuery = createFakeQuery();
+    const oauthAuth: AuthAdapter = {
+      async getState() {
+        return { authenticated: true, authSource: 'oauth' };
+      },
+      async triggerLogin() {
+        return { authenticated: true };
+      },
+      async logout() {},
+      async getAuthEnv() {
+        return {};
+      },
+    };
+
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth: oauthAuth,
+      mcpProviders: [{
+        name: 'local_sdk_only',
+        toClaudeSdkConfig: () => ({ type: 'sdk', name: 'local_sdk_only', instance: {} }) as never,
+      }],
+      resolveRemoteClaudeRoute: async () => ({
+        endpoint: 'https://api.anthropic.com',
+        env: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' },
+      }),
+      remoteCcQueryFactory: async (args) => {
+        starts.push(args.startParams);
+        return fakeQuery as never;
+      },
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-oauth-no-mcp',
+      model: 'claude-opus-4-6',
+      providerId: 'anthropic',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.mcpServers).toBeUndefined();
+    expect(starts[0]?.permissionMode).toBe('auto');
+    await handle.close();
+  });
+
+  it('tracks a factory-injected MCP downgrade as already default', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery(['cindy_orca']);
+    fakeQuery.setPermissionMode.mockRejectedValue(new Error('remote control RPC failed'));
+    const oauthAuth: AuthAdapter = {
+      async getState() { return { authenticated: true, authSource: 'oauth' }; },
+      async triggerLogin() { return { authenticated: true }; },
+      async logout() {},
+      async getAuthEnv() { return {}; },
+    };
+    let proposedMode: unknown;
+
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth: oauthAuth,
+      resolveRemoteClaudeRoute: async () => ({
+        endpoint: 'https://api.anthropic.com',
+        env: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' },
+      }),
+      remoteCcQueryFactory: async (args) => {
+        proposedMode = args.startParams.permissionMode;
+        args.startParams.permissionMode = 'default';
+        args.startParams.mcpServers = {
+          cindy_orca: { type: 'http', url: 'http://127.0.0.1/mcp/cindy_orca' },
+        };
+        return fakeQuery as never;
+      },
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-factory-downgrade',
+      model: 'claude-opus-4-6',
+      providerId: 'anthropic',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    expect(proposedMode).toBe('auto');
+    await vi.waitFor(() => expect(fakeQuery.mcpServerStatus).toHaveBeenCalled());
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    expect(fakeQuery.close).not.toHaveBeenCalled();
     await handle.close();
   });
 

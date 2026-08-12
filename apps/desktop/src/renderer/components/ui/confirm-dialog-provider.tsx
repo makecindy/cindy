@@ -13,6 +13,12 @@ export interface ConfirmOptions {
   maxWidth?: number;
   confirmText?: string;
   cancelText?: string;
+  /** 主按钮变体;destructive 走语义 destructive token(见 ConfirmDialogProps)。 */
+  confirmVariant?: 'default' | 'destructive';
+  /** 主按钮文字前的小图标(见 ConfirmDialogProps.confirmIcon)。 */
+  confirmIcon?: ReactNode;
+  /** 让屏幕阅读器开场朗读覆盖 content 清单(见 ConfirmDialogProps.describeContent)。 */
+  describeContent?: boolean;
   showCancel?: boolean;
   /**
    * 设了就在弹窗底部加一个"下次不再提示"复选框,并把勾选状态以 '1' 写入
@@ -66,7 +72,7 @@ export interface ConfirmWithCheckboxOptions extends Omit<ConfirmOptions, 'dontSh
 }
 
 interface ConfirmDialogContextValue {
-  confirm: (options: ConfirmOptions) => Promise<boolean>;
+  confirm: (options: ConfirmOptions, signal?: AbortSignal) => Promise<boolean>;
   /** 三状态 confirm — 用于「保存 / 不保存 / 取消」这类需要区分 cancel 与 negative 的场景。 */
   confirmThree: (options: ConfirmThreeOptions) => Promise<ConfirmThreeResult>;
   /** 带业务复选框(初始勾选态由 checkboxDefaultChecked 决定,缺省不勾;取消时 checked 恒为 false)。 */
@@ -110,6 +116,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     clearStaleSkipsOnce();
   }
   const queueRef = useRef<QueueItem[]>([]);
+  const currentItemRef = useRef<QueueItem | null>(null);
   const [currentItem, setCurrentItem] = useState<QueueItem | null>(null);
   const [open, setOpen] = useState(false);
   const isShowingRef = useRef(false);
@@ -118,6 +125,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   const processNext = useCallback(() => {
     const next = queueRef.current.shift();
     if (next) {
+      currentItemRef.current = next;
       setCurrentItem(next);
       setOpen(true);
       isShowingRef.current = true;
@@ -126,24 +134,47 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const confirm = useCallback(
-    (options: ConfirmOptions): Promise<boolean> => {
+    (options: ConfirmOptions, signal?: AbortSignal): Promise<boolean> => {
+      if (signal?.aborted) return Promise.resolve(false);
       // 用户曾勾过"下次不再提示" → 直接当成 confirm,不弹窗、不入队。
       if (options.dontShowAgainKey && isSkipped(options.dontShowAgainKey)) {
         return Promise.resolve(true);
       }
       return new Promise<boolean>((resolve) => {
+        let settled = false;
         // 二状态调用复用同一队列:把 'confirm'→true,其它→false 透传给原 boolean 契约。
         // 用户勾上"下次不再提示"且点 confirm 时,把 key 写入 localStorage。
         const item: QueueItem = {
           options,
           resolve: (r, dontShowAgain) => {
+            if (settled) return;
+            settled = true;
+            signal?.removeEventListener('abort', abort);
             if (r === 'confirm' && dontShowAgain && options.dontShowAgainKey) {
               markSkipped(options.dontShowAgainKey);
             }
             resolve(r === 'confirm');
           },
         };
+        const abort = () => {
+          const queuedIndex = queueRef.current.indexOf(item);
+          if (queuedIndex >= 0) {
+            queueRef.current.splice(queuedIndex, 1);
+            item.resolve('cancel');
+            return;
+          }
+          if (currentItemRef.current === item && !resolvedRef.current) {
+            resolvedRef.current = true;
+            item.resolve('cancel');
+            setOpen(false);
+          }
+        };
         queueRef.current.push(item);
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
         if (!isShowingRef.current) {
           processNext();
         }
@@ -221,6 +252,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     if (!open && currentItem !== null) {
       const timer = setTimeout(() => {
         isShowingRef.current = false;
+        currentItemRef.current = null;
         setCurrentItem(null);
         processNext();
       }, 200);
@@ -242,6 +274,11 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
           maxWidth={currentItem.options.maxWidth}
           confirmText={currentItem.options.confirmText}
           cancelText={currentItem.options.cancelText}
+          // confirmVariant 此前没有透传:GhostConfirmDialogHost 的 danger 分支
+          // 一直被静默丢掉(spread 绕过了多余属性检查),这里补上。
+          confirmVariant={currentItem.options.confirmVariant}
+          confirmIcon={currentItem.options.confirmIcon}
+          describeContent={currentItem.options.describeContent}
           showCancel={currentItem.options.showCancel}
           tertiaryText={currentItem.options.tertiaryText}
           autoFocusConfirm={currentItem.options.autoFocusConfirm}

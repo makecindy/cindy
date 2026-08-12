@@ -87,6 +87,8 @@ describe('MarketSourceManager local sources', () => {
     expect(added).toMatchObject({
       name: 'local-lib',
       pluginCount: 1,
+      skippedCount: 0,
+      unreadableCount: 0,
       status: 'ok',
     });
     expect(added.source).toEqual({ type: 'local', path: market });
@@ -94,6 +96,52 @@ describe('MarketSourceManager local sources', () => {
     const list = await manager.listSources();
     expect(list).toHaveLength(1);
     expect(list[0]?.name).toBe('local-lib');
+  });
+
+  it('reports skipped entries separately from an empty marketplace', async () => {
+    const root = makeRoot();
+    const market = path.join(root, 'my-market');
+    writeMarketplace(market, 'local-lib', [{ rel: 'plugins/a', id: 'alpha' }]);
+    const manifestPath = path.join(market, '.agents', 'plugins', 'marketplace.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+      plugins: Array<{ name: string; source: string }>;
+    };
+    manifest.plugins.push({ name: 'missing', source: 'plugins/missing' });
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const summary = await makeManager(root).addSource({ source: market });
+    expect(summary).toMatchObject({
+      pluginCount: 1,
+      skippedCount: 1,
+      unreadableCount: 0,
+      status: 'ok',
+    });
+  });
+
+  it('surfaces the submodule-shaped empty market (entries declared, dirs empty) in add and refresh summaries', async () => {
+    // Git submodule 未递归检出的典型形态:清单合法、插件目录存在但没有 ghost.json。
+    // 不触发任何错误码,summary 必须给出 pluginCount 0 + 全额 skippedCount,
+    // renderer 才有依据展示"插件目录为空(submodule)"的专门提示(B3)。
+    const root = makeRoot();
+    const market = path.join(root, 'my-market');
+    writeMarketplace(market, 'local-lib', [{ rel: 'plugins/a', id: 'alpha' }]);
+    // 掏空插件目录:目录保留,ghost.json 与入口都不在(= submodule 空壳)。
+    fs.rmSync(path.join(market, 'plugins', 'a', 'ghost.json'));
+    fs.rmSync(path.join(market, 'plugins', 'a', 'main.js'));
+    const manager = makeManager(root);
+
+    const added = await manager.addSource({ source: market });
+    expect(added).toMatchObject({
+      name: 'local-lib',
+      pluginCount: 0,
+      skippedCount: 1,
+      unreadableCount: 0,
+      status: 'ok',
+      errorCode: null,
+    });
+
+    const refreshed = await manager.refreshSource('local-lib');
+    expect(refreshed).toMatchObject({ pluginCount: 0, skippedCount: 1, unreadableCount: 0 });
   });
 
   it('rejects a local source that is not a directory', async () => {
@@ -145,6 +193,8 @@ describe('MarketSourceManager local sources', () => {
     const list = await manager.listSources();
     expect(list[0]?.status).toBe('error');
     expect(list[0]?.errorCode).toBe('MARKET_SOURCE_INVALID');
+    expect(list[0]?.skippedCount).toBe(0);
+    expect(list[0]?.unreadableCount).toBe(0);
   });
 
   it('refreshes local sources by rescanning the manifest', async () => {
@@ -478,7 +528,7 @@ describe('MarketSourceManager git sources', () => {
         ? discovered.result.marketplace.plugins[0]!.dir
         : '';
       // discover 返回 realpath(macOS 下 /var → /private/var),按 realpath 比对。
-      expect(pluginDir.startsWith(fs.realpathSync(heldDir))).toBe(true);
+      expect(pluginDir.startsWith(await fs.promises.realpath(heldDir))).toBe(true);
 
       await refresher.refreshSource('hub');
       const switched = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();

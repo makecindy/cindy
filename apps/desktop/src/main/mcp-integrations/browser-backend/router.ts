@@ -51,6 +51,11 @@ export class BackendRouter implements BrowserBackend {
     return this.current.kind;
   }
 
+  /** Verify the active backend's real control path when it exposes a probe. */
+  async probeActiveControl(options?: { ensureHost?: boolean }): Promise<void> {
+    await this.current.probeControl?.(options);
+  }
+
   /**
    * Hot-swap the active backend.
    *
@@ -74,6 +79,31 @@ export class BackendRouter implements BrowserBackend {
     } catch (err) {
       this.logger.warn('outgoing backend dispose threw (ignored)', err);
     }
+  }
+
+  /**
+   * Rebuild a backend without overlapping two instances of the same kind.
+   *
+   * RSB instances share Electron debugger attachments on the user's existing
+   * webview tabs. Installing the replacement before the old instance releases
+   * those attachments lets late old cleanup detach the new monitor. A
+   * same-kind recovery therefore disposes first; calls during the short grace
+   * period still hit the old backend and receive its actionable restarting
+   * result, then all later calls reach the replacement.
+   */
+  async restartBackend(next: BrowserBackend): Promise<void> {
+    if (this.current === next) return;
+    const previous = this.current;
+    if (previous.kind !== next.kind) {
+      throw new Error(`browser backend restart kind mismatch: ${previous.kind} -> ${next.kind}`);
+    }
+    try {
+      await previous.dispose();
+    } catch (err) {
+      this.logger.warn('restarted backend dispose threw (ignored)', err);
+    }
+    this.current = next;
+    this.logger.info('browser backend restarted', { kind: next.kind });
   }
 
   /**

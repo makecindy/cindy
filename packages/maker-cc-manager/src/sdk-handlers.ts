@@ -40,6 +40,7 @@ import {
   type AttachedNotify,
 } from './session-registry.js';
 import { encodeMessage } from './codec.js';
+import { prepareRemoteClaudeEnv } from './remote-claude-env.js';
 
 
 /**
@@ -132,7 +133,7 @@ export function wireSdkHandlers(server: ManagerServer, registry: SessionRegistry
         sessionId: p.sessionId!,
         cwd: p.cwd!,
         model: p.model!,
-        env: p.env as Record<string, string>,
+        env: prepareRemoteClaudeEnv(p.env as Record<string, string>),
         ...(p.mcpServers ? { mcpServers: p.mcpServers } : {}),
         ...(p.permissionMode ? { permissionMode: p.permissionMode } : {}),
         ...(p.systemPrompt !== undefined ? { systemPrompt: p.systemPrompt } : {}),
@@ -372,10 +373,11 @@ function validateToolGuards(value: unknown): QueryToolGuard[] | undefined {
     if (
       guard.invocation !== 'auto' &&
       guard.invocation !== 'explicit-only' &&
-      guard.invocation !== 'disabled'
+      guard.invocation !== 'disabled' &&
+      guard.invocation !== 'root-only'
     ) {
       throwInvalid(
-        `toolGuards[${index}].invocation must be auto, explicit-only, or disabled`,
+        `toolGuards[${index}].invocation must be auto, explicit-only, disabled, or root-only`,
       );
     }
     if (
@@ -399,9 +401,12 @@ function validateToolGuards(value: unknown): QueryToolGuard[] | undefined {
     }
     const toolNamePrefix = guard.toolNamePrefix.trim();
     const sourceServerId = guard.sourceServerId?.trim();
-    if (!/^mcp__[A-Za-z0-9_-]+__$/.test(toolNamePrefix)) {
+    const validToolName = guard.invocation === 'root-only'
+      ? /^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/.test(toolNamePrefix)
+      : /^mcp__[A-Za-z0-9_-]+__$/.test(toolNamePrefix);
+    if (!validToolName) {
       throwInvalid(
-        `toolGuards[${index}].toolNamePrefix must be a normalized Claude MCP tool prefix`,
+        `toolGuards[${index}].toolNamePrefix must be a normalized Claude MCP tool ${guard.invocation === 'root-only' ? 'name' : 'prefix'}`,
       );
     }
     return {

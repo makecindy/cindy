@@ -8,15 +8,13 @@
 import {
   connectedProvidersForAgent,
   getModel,
-  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
 } from '@cindy/model-providers';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { ClaudeMark } from '@/components/icons/ClaudeMark';
-import { CodexMark } from '@/components/icons/CodexMark';
-import { PiMark } from '@/components/icons/PiMark';
+import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
@@ -27,6 +25,7 @@ import { cn } from '@/lib/utils';
 import {
   IM_DEFAULT_EFFORT_OVERRIDES,
   IM_DEFAULT_SETTINGS,
+  isUnconditionalTurnPolicyChannel,
   type ImDefaultAgentKind,
   type ImDefaultEffort,
   type ImDefaultSettingsChannel,
@@ -35,19 +34,19 @@ import {
   isImDefaultEffort,
 } from '../../../shared/imDefaultSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
-import { buildAgentSettingsPatch, mergeSettingsPatch } from './imDefaultSettingsLogic';
-
-const AGENT_OPTIONS: Array<{
-  kind: ImDefaultAgentKind;
-  Mark: typeof ClaudeMark;
-}> = [
-  { kind: 'claude-code', Mark: ClaudeMark },
-  { kind: 'codex', Mark: CodexMark },
-  { kind: 'pi', Mark: PiMark },
-];
+import {
+  buildAgentSettingsPatch,
+  mergeSettingsPatch,
+  resolveAgentSwitchSettings,
+} from './imDefaultSettingsLogic';
 
 function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
   return agentKind === 'claude-code' ? 'cc' : agentKind;
+}
+
+/** AgentSelect 的 vendor → IM 默认配置的 agentKind。 */
+function agentKindOfVendor(vendor: string): ImDefaultAgentKind {
+  return vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex';
 }
 
 export interface ImDefaultSettingsSummary {
@@ -63,7 +62,14 @@ export function ImDefaultSettingsSection({
 }: {
   /** Omit to edit the global defaults used by official hook channels. */
   channel?: ImDefaultSettingsChannel;
-  /** Channel-specific copy to show when the persisted scope is global. */
+  /**
+   * 只换说明文案的键(不影响读写 scope)。
+   *
+   * 官方 hook 卡曾有一个 'officialHook' 变体(写 global scope), 已随「新对话配置」
+   * 区块一并移除 —— 它与目录行的 agent/model/effort 是同一份配置的两个入口, 画成
+   * 平级两套只会让人以为可以分别设。global scope 仍是目录行的兜底层, 只是不再有
+   * UI 入口(与 X 卡今天一致)。
+   */
   descriptionChannel?: ImDefaultSettingsChannel;
   embedded?: boolean;
   onSummaryChange?: (summary: ImDefaultSettingsSummary | null) => void;
@@ -138,7 +144,7 @@ export function ImDefaultSettingsSection({
       // image/audio/embedding 端点。
       const catalogModel = getModel(provider, modelId, agentKind);
       return catalogModel &&
-        isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
+        isModelSelectableForNewRoute(catalogModel, { userProvider: provider.source === 'user' })
         ? providerId
         : null;
     },
@@ -198,7 +204,7 @@ export function ImDefaultSettingsSection({
     return (
       <div
         className={cn(
-          'text-[13px] text-[var(--text-tertiary)]',
+          'text-13 text-[var(--text-tertiary)]',
           embedded
             ? 'py-2'
             : 'rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-5',
@@ -210,15 +216,66 @@ export function ImDefaultSettingsSection({
   }
 
   const activeSettings = settings.agents[settings.agentKind];
+  // 按选中 Agent 的 capabilities 判断:未声明 / 声明了但 supported.supported !== true
+  // 的 Agent(如 Pi)无法在「无条件挂逐条权限确认」的渠道(个人微信)使用。不写死 Pi——
+  // 未来 Pi 补上该 capability、或新增其它不支持的 Agent 时,此处自动跟随 main 侧
+  // 的 capability 真相,不会误警告 / 漏警告。(Telegram / 钉钉仅在群聊挂 policy,
+  // 主人私聊 Pi 可用,设置 UI 不区分群聊/私聊,故不整体警告。)
+  const selectedAgentCaps =
+    settings.agentKind === 'claude-code'
+      ? cc
+      : settings.agentKind === 'codex'
+        ? codex
+        : pi;
+  const selectedAgentCapabilitiesReady =
+    !selectedAgentCaps.loading &&
+    selectedAgentCaps.error === null &&
+    selectedAgentCaps.capabilities !== null;
+  const selectedTurnPolicy = selectedAgentCaps.capabilities?.turnPermissionPolicy;
+  const selectedAgentUnsupported =
+    selectedAgentCapabilitiesReady && selectedTurnPolicy?.supported.supported !== true;
+  const selectedPermissionModeUnsupported =
+    selectedAgentCapabilitiesReady &&
+    selectedTurnPolicy?.supported.supported === true &&
+    selectedTurnPolicy.unsupportedPermissionModes.includes(settings.permissionMode);
+  // 渠道默认权限模式若是换 Agent 后仍不兼容的档位(Claude Code / Codex 的
+  // unsupportedPermissionModes 并集:bypassPermissions / acceptEdits),仅换 Agent
+  // 会在新会话(/new)上再次命中权限模式错误,警告需附加 /permission 提示。
+  const modeUnsupportedAfterSwitch =
+    settings.permissionMode === 'bypassPermissions' || settings.permissionMode === 'acceptEdits';
+  const turnPolicyWarning =
+    channel !== undefined && isUnconditionalTurnPolicyChannel(channel)
+      ? selectedAgentUnsupported
+        ? 'agent'
+        : selectedPermissionModeUnsupported
+          ? 'mode'
+          : null
+      : null;
 
   const changeAgent = (agentKind: ImDefaultAgentKind) => {
     if (agentKind === settings.agentKind) return;
-    void persist({ agentKind });
+    // 只写 agentKind 会把目标 agent 上一次的模型原样带回来 —— 那个模型可能已停用
+    // 或供应商已断开, UI 照显而派发时静默降级。与 changeModel 同口径收敛。
+    const next = resolveAgentSwitchSettings({
+      current: settings.agents[agentKind],
+      available: modelsByAgent[agentKind],
+      // 与 changeModel 共用同一条解析链(model override / defaultEffort 先于 agent 出厂值)
+      resolveEffort: (modelId, requested) => resolveEffort(agentKind, modelId, requested),
+      resolveProviderId: (modelId, providerId) =>
+        resolveProviderId(agentKind, modelId, providerId),
+    });
+    void persist({ agentKind, ...buildAgentSettingsPatch(agentKind, next) });
   };
 
-  const changeModel = (model: string, providerId: string | null = activeSettings.providerId) => {
+  const changeModel = (
+    model: string,
+    providerId: string | null = activeSettings.providerId,
+    reconciledEffort?: Effort,
+  ) => {
     const nextProviderId = resolveProviderId(settings.agentKind, model, providerId);
-    const effort = resolveEffort(settings.agentKind, model, activeSettings.effort);
+    const effort = isImDefaultEffort(reconciledEffort)
+      ? reconciledEffort
+      : resolveEffort(settings.agentKind, model, activeSettings.effort);
     void persist(
       buildAgentSettingsPatch(settings.agentKind, {
         ...activeSettings,
@@ -259,10 +316,10 @@ export function ImDefaultSettingsSection({
             <MessageSquare size={18} className="text-[var(--settings-section-title)]" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-[14px] font-medium leading-none text-[var(--settings-section-title)]">
+            <h3 className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
               {t('settings.imBot.defaults.title')}
             </h3>
-            <p className="mt-2 text-[12px] leading-[1.45] text-[var(--settings-section-desc)]">
+            <p className="mt-2 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
               {t(`settings.imBot.defaults.channelDescriptions.${descriptionChannel}`)}
             </p>
           </div>
@@ -276,43 +333,25 @@ export function ImDefaultSettingsSection({
 
       <div className="grid gap-4 md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
         <div className="flex flex-col gap-2">
-          <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+          <span className="text-12 font-medium text-[var(--text-secondary)]">
             {t('settings.imBot.defaults.agentLabel')}
           </span>
-          <div
-            className="flex h-10 items-center gap-0.5 rounded-full bg-[var(--surface-chip)] p-[3px]"
-            role="tablist"
-            aria-label={t('settings.imBot.defaults.agentLabel')}
-          >
-            {AGENT_OPTIONS.map(({ kind, Mark }) => {
-              const active = kind === settings.agentKind;
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  disabled={pending}
-                  onClick={() => changeAgent(kind)}
-                  className={cn(
-                    'flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full px-3',
-                    'border text-[13px] leading-none transition-colors',
-                    active
-                      ? 'border-[var(--border-default)] bg-[var(--surface-elevated)] font-medium text-[var(--settings-section-title)]'
-                      : 'border-transparent font-normal text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-                    pending && 'cursor-not-allowed opacity-55',
-                  )}
-                >
-                  <Mark size={14} className="shrink-0" />
-                  <span className="truncate">{t(`settings.imBot.defaults.agents.${kind}`)}</span>
-                </button>
-              );
-            })}
-          </div>
+          {/* 与新建对话工具条同一个引擎下拉(AgentSelect, #1350): 手写三选一分段在
+              窄列里三等分 + truncate, 引擎一多就挤; 且未选中项置灰看着像不可用。 */}
+          <AgentSelect
+            value={vendorKeyFor(settings.agentKind)}
+            // 字段形态: 与右侧模型选择器同高同宽规格, 面板绑 trigger 宽度
+            // (DESIGN.md §4 Select & Dropdown 宽度铁则)。
+            triggerVariant="field"
+            side="bottom"
+            disabled={pending}
+            ariaContext={t('settings.imBot.defaults.agentLabel')}
+            onChange={(next) => changeAgent(agentKindOfVendor(next))}
+          />
         </div>
 
         <div className="flex flex-col gap-2">
-          <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+          <span className="text-12 font-medium text-[var(--text-secondary)]">
             {t('settings.imBot.defaults.modelLabel')}
           </span>
           <ModelSelector
@@ -322,8 +361,8 @@ export function ImDefaultSettingsSection({
             onEffortChange={changeEffort}
             vendorKey={vendorKeyFor(settings.agentKind)}
             currentProviderId={activeSettings.providerId}
-            onProviderChange={(providerId, modelId) => {
-              changeModel(modelId ?? activeSettings.model, providerId);
+            onProviderChange={(providerId, modelId, reconciledEffort) => {
+              changeModel(modelId ?? activeSettings.model, providerId, reconciledEffort);
             }}
             switching={pending}
             triggerVariant="field"
@@ -331,6 +370,41 @@ export function ImDefaultSettingsSection({
           />
         </div>
       </div>
+
+      {turnPolicyWarning && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2"
+        >
+          <AlertTriangle
+            size={14}
+            className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
+            aria-hidden
+          />
+          <div className="min-w-0">
+            {turnPolicyWarning === 'agent' ? (
+              <>
+                <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+                  {t('settings.imBot.defaults.agentUnsupportedOnChannelHint', {
+                    agent: t(`settings.imBot.defaults.agents.${settings.agentKind}`),
+                  })}
+                </p>
+                {modeUnsupportedAfterSwitch && (
+                  <p className="mt-1 text-11 leading-[1.45] text-[var(--text-secondary)]">
+                    {t('settings.imBot.defaults.agentUnsupportedOnChannelModeHint')}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+                {t('settings.imBot.defaults.permissionModeUnsupportedOnChannelHint')}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

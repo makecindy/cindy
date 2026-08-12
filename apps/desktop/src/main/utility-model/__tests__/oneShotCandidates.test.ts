@@ -51,9 +51,14 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: vi.fn(),
 }));
 
-vi.mock('undici', () => ({
-  fetch: vi.fn(),
+vi.mock('../../maker-host/outbound-proxy-resolver.js', () => ({
+  resolveDesktopOutboundProxy: vi.fn(async () => null),
 }));
+
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, fetch: vi.fn() };
+});
 
 // SUT 链(maker-host/runtime-configs → effectiveXdGatewayBaseUrl)运行期读
 // model-access 下发的 endpoint;mock 成 fixture 值。
@@ -176,6 +181,70 @@ describe('utility one-shot candidates', () => {
       max_tokens: 10,
       reasoning_effort: 'low',
     });
+  });
+
+  it('chat-completions 的 content 为 parts 数组时拼接文本段(思考模型形态)', async () => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: [{ type: 'text', text: '答' }, { type: 'text', text: '案' }] } }],
+      }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 10 });
+    expect(result).toMatchObject({ ok: true, text: '答案' });
+  });
+
+  it('parts 数组只拼正文段:reasoning/thinking 等带 text 的非正文段跳过,字符串元素直取', async () => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: [
+                { type: 'reasoning', text: '内部推理不给出' },
+                { type: 'text', text: '答' },
+                '字',
+                { text: '案' },
+                { type: 'tool_result', text: '工具输出不给出' },
+              ],
+            },
+          },
+        ],
+      }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 10 });
+    expect(result).toMatchObject({ ok: true, text: '答字案' });
+  });
+
+  it('parts 数组只有思考段(无正文)→ 如实 empty_response,不拿思维链冒充答案', async () => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: [{ type: 'reasoning', text: '在想…' }] }, finish_reason: 'length' }],
+      }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 10 });
+    expect(result).toMatchObject({ ok: false, reason: 'empty_response' });
+  });
+
+  it('思考烧光预算只留下 reasoning_content(content 空)→ 如实 empty_response,不拿思维链冒充答案', async () => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: '', reasoning_content: '在想…' }, finish_reason: 'length' }],
+      }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 10 });
+    expect(result).toMatchObject({ ok: false, reason: 'empty_response' });
   });
 
   it('pinnedProfileId 钉住某一档时只用它,绕开默认链', async () => {
@@ -899,6 +968,100 @@ describe('utility one-shot candidates', () => {
     expect(init.headers['anthropic-version']).toBeUndefined();
   });
 
+  it('clamps the requested maxTokens to the catalog model maxOutput (Codex 2026-08-06)', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD',
+        source: 'builtin',
+        agents: ['codex', 'claude-code'],
+        auth: { method: 'api-key' },
+        routing: {
+          codex: { upstream: 'https://xd.example/v1', authStrategy: 'api-key-header' },
+        },
+        models: { codex: [{ id: 'claude-opus-4-5', name: 'Opus', contextWindow: 100_000, maxOutput: 64_000 }] },
+      }],
+    } as never);
+    readKey.mockReturnValue('xd-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', {
+      providerId: 'xd',
+      agentKind: 'codex',
+      model: 'claude-opus-4-5',
+      maxTokens: 81_920,
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'ok' });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.max_tokens).toBe(64_000);
+  });
+
+  it('缺省不传 maxTokens 时,Anthropic wire 用模型目录 maxOutput 兜底(协议必填,非宿主上限)', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: {
+          'claude-code': { upstream: 'https://anthropic.example/api/v1', authStrategy: 'oauth-passthrough' },
+        },
+        models: {
+          'claude-code': [{ id: 'claude-opus-4-5', name: 'Opus', contextWindow: 200_000, maxOutput: 64_000 }],
+        },
+      }],
+    } as never);
+    readClaudeOAuth.mockResolvedValue({ accessToken: 'anthropic-token' });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'script' }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', {
+      providerId: 'anthropic',
+      agentKind: 'claude-code',
+      model: 'claude-opus-4-5',
+    });
+
+    expect(result).toMatchObject({ ok: true, providerId: 'anthropic' });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.max_tokens).toBe(64_000);
+  });
+
+  it('缺省不传 maxTokens 时,xd wire 不发送输出上限(模型自然输出)', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'api-key' },
+        routing: { codex: { upstream: 'https://xd.example/v1', authStrategy: 'api-key-header' } },
+        models: { codex: [{ id: 'claude-sonnet-4-6', name: 'Sonnet', contextWindow: 100_000, maxOutput: 64_000 }] },
+      }],
+    } as never);
+    readKey.mockReturnValue('xd-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', {
+      providerId: 'xd',
+      agentKind: 'codex',
+      model: 'claude-sonnet-4-6',
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'ok' });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body).not.toHaveProperty('max_tokens');
+  });
+
   it('routes a descriptor-backed no-auth builtin through the generic utility transport', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
@@ -942,6 +1105,32 @@ describe('utility one-shot candidates', () => {
       expect.anything(),
     );
     expect(readCustomKey).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicit builtin provider whose routing is disabled (Codex 2026-08-06)', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD',
+        source: 'builtin',
+        agents: ['codex', 'claude-code'],
+        auth: { method: 'api-key' },
+        routing: {
+          codex: { upstream: 'https://xd.example/v1', authStrategy: 'api-key-header', disabled: true },
+        },
+        models: { codex: [{ id: 'gpt-5.5', name: 'GPT 5.5', contextWindow: 100_000 }] },
+      }],
+    } as never);
+    readKey.mockReturnValue('xd-key');
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'xd',
+      agentKind: 'codex',
+      model: 'gpt-5.5',
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: 'no_candidate' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('can infer a unique custom provider when an older caller omits providerId', async () => {

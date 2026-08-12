@@ -29,15 +29,15 @@
  *   Agent → Timer 沿用原 Clock 的 gap-1.5(6px),Timer → 标题同为 6px。
  */
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Play, Undo } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import type { Session } from '@/lib/ccAgent.types';
+import { makerChatStore } from '@/lib/makerChatStore';
 import { WorktreeBadge } from '@/components/sidebar/WorktreeBadge';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { SessionRenameInput } from '../SessionRenameInput';
@@ -73,7 +73,10 @@ import {
   isEmptyDraftSession,
 } from '../lib/sessionDisplayTitle';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
-import { loadScheduleSidebarIndexRuns, type ScheduleSidebarIndexRun } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import {
+  loadScheduleSidebarIndexRuns,
+  type ScheduleSidebarIndexRun,
+} from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { useSchedulesSnapshot } from '@/features/scheduler/lib/schedulesStore';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
@@ -90,6 +93,14 @@ import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyC
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
+import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
+import {
+  finishSessionDrag,
+  isSplitGroupDragSource,
+  needsDedicatedSplitGroupDragHandle,
+  startSessionDrag,
+} from '../splitGroupDnd';
+import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
 // When many ungrouped automation rows mount simultaneously they all need the
@@ -109,6 +120,108 @@ function loadScheduleSidebarIndexRunsCached(): Promise<ScheduleSidebarIndexRun[]
 }
 
 const log = createLogger('SessionItem');
+
+interface SidebarTitleMarqueeProps {
+  children: ReactNode;
+  className?: string;
+  title: string;
+}
+
+/**
+ * 标题保持原生省略号，只有实际溢出且鼠标停留在标题区域时才播放一次横向滚动。
+ * 通过 DOM 属性和 CSS 变量驱动，避免给高密度侧栏行增加 React 状态订阅。
+ */
+function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarqueeProps) {
+  const containerRef = useRef<HTMLSpanElement>(null);
+  const trackRef = useRef<HTMLSpanElement>(null);
+  const isHoveredRef = useRef(false);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+
+  const stopMarquee = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    delete container.dataset.titleOverflowing;
+    container.style.removeProperty('--sidebar-title-marquee-shift');
+    container.style.removeProperty('--sidebar-title-marquee-duration');
+  }, []);
+
+  const startMarquee = useCallback(() => {
+    const container = containerRef.current;
+    const track = trackRef.current;
+    if (!container || !track) return;
+
+    delete container.dataset.titleOverflowing;
+    container.style.removeProperty('--sidebar-title-marquee-shift');
+    container.style.removeProperty('--sidebar-title-marquee-duration');
+    if (track.scrollWidth <= container.clientWidth + 1) return;
+
+    const viewportCount = Math.max(
+      1,
+      Math.ceil(track.scrollWidth / Math.max(container.clientWidth, 1)),
+    );
+    container.style.setProperty(
+      '--sidebar-title-marquee-shift',
+      `${container.clientWidth - track.scrollWidth}px`,
+    );
+    container.style.setProperty(
+      '--sidebar-title-marquee-duration',
+      `calc(var(--motion-sidebar-title-marquee-per-viewport) * ${viewportCount})`,
+    );
+    container.dataset.titleOverflowing = 'true';
+  }, []);
+
+  const stopObserving = useCallback(() => {
+    resizeObserverRef.current?.disconnect();
+    resizeObserverRef.current = null;
+  }, []);
+
+  const startObserving = useCallback(() => {
+    stopObserving();
+    const container = containerRef.current;
+    const track = trackRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver(() => {
+      if (isHoveredRef.current) startMarquee();
+    });
+    observer.observe(container);
+    if (track) observer.observe(track);
+    resizeObserverRef.current = observer;
+  }, [startMarquee, stopObserving]);
+
+  useLayoutEffect(() => {
+    if (isHoveredRef.current) startMarquee();
+  }, [startMarquee, title]);
+
+  useEffect(() => () => stopObserving(), [stopObserving]);
+
+  return (
+    <span
+      ref={containerRef}
+      className="sidebar-title-marquee min-w-0 max-w-full shrink overflow-hidden"
+      title={title}
+      onMouseEnter={() => {
+        isHoveredRef.current = true;
+        startMarquee();
+        startObserving();
+      }}
+      onMouseLeave={() => {
+        isHoveredRef.current = false;
+        stopObserving();
+        stopMarquee();
+      }}
+    >
+      <span className={cn('sidebar-title-marquee__ellipsis', className)}>{children}</span>
+      <span
+        ref={trackRef}
+        aria-hidden="true"
+        className={cn('sidebar-title-marquee__track', className)}
+      >
+        {children}
+      </span>
+    </span>
+  );
+}
 
 export interface SessionItemProps {
   session: Session;
@@ -246,16 +359,22 @@ export const SessionItem = memo(function SessionItem({
           : remoteActivity.phase === 'running'
             ? ('running' as const)
             : ('done' as const);
-  const rightStatusKind = remoteRightStatus ?? resolveSidebarRightStatus({
-    attentionKind,
-    isUrgentFromContext,
-    isRunning,
-    hasAttentionNotification,
-  });
+  const rightStatusKind =
+    remoteRightStatus ??
+    resolveSidebarRightStatus({
+      attentionKind,
+      isUrgentFromContext,
+      isRunning,
+      hasAttentionNotification,
+    });
   const showRightStatus = rightStatusKind !== 'time';
-  const remoteIconKind = session.deviceLinkDeviceId ? 'device-link' : session.remoteHostId ? 'ssh' : null;
+  const remoteIconKind = session.deviceLinkDeviceId
+    ? 'device-link'
+    : session.remoteHostId
+      ? 'ssh'
+      : null;
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
-    ? session.deviceLinkConnectionStatus ?? 'connected'
+    ? (session.deviceLinkConnectionStatus ?? 'connected')
     : null;
   const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
@@ -286,7 +405,9 @@ export const SessionItem = memo(function SessionItem({
   // 组件卸载后 setState。null 明确表示「查过但没映射」,undefined 表示「还没查」——
   // 两者都不显示按钮,避免闪现。
   const shouldResolveSchedule = isAutomationGenerated && !insideAutomationGroup;
-  const [resolvedScheduleId, setResolvedScheduleId] = useState<string | null | undefined>(undefined);
+  const [resolvedScheduleId, setResolvedScheduleId] = useState<string | null | undefined>(
+    undefined,
+  );
   useEffect(() => {
     if (!shouldResolveSchedule) return;
     let cancelled = false;
@@ -312,8 +433,7 @@ export const SessionItem = memo(function SessionItem({
   const schedulesSnapshot = useSchedulesSnapshot();
   const scheduleStillExists =
     resolvedScheduleId != null &&
-    (schedulesSnapshot == null ||
-      schedulesSnapshot.some((s) => s.id === resolvedScheduleId));
+    (schedulesSnapshot == null || schedulesSnapshot.some((s) => s.id === resolvedScheduleId));
   const effectiveScheduleId = scheduleStillExists ? resolvedScheduleId : null;
   const handleAutomationRunClick = useCallback(async () => {
     if (!effectiveScheduleId) {
@@ -332,6 +452,17 @@ export const SessionItem = memo(function SessionItem({
   }, [effectiveScheduleId, t]);
   const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));
   const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
+  const titleContent =
+    matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
+      ? highlightSegments(session.title, matchIndices, {
+          highlightClassName: cn(
+            'bg-transparent font-semibold',
+            isActive
+              ? 'text-[var(--sidebar-item-active-foreground)]'
+              : 'text-[var(--msg-assistant-text)]',
+          ),
+        })
+      : displayTitle;
   // F-PJ-10：archived 视图下的 session 走特殊视觉/菜单分支
   //   - 左侧 status icon 由 CircleDashed 换成 Archive
   //   - 右侧 ⋮ 菜单只显示 Rename + Unarchive（屏蔽 Pin/Delete/Archive 等无意义项）
@@ -370,6 +501,7 @@ export const SessionItem = memo(function SessionItem({
   //      也不会触发。这种"用户明确想再看一眼"的语义由调用方通过
   //      imperative 路径(querySelector + scrollIntoNearestView)补一刀
   const rowRef = useRef<HTMLDivElement>(null);
+  const dragStartTargetRef = useRef<Element | null>(null);
 
   // ── Double-click rename ──
   const [isEditing, setIsEditing] = useState(false);
@@ -426,12 +558,52 @@ export const SessionItem = memo(function SessionItem({
     [displayTitle, isEditing, remoteWritesBlocked, t],
   );
 
+  // 置顶段使用原生 Sortable DnD：Sortable 负责侧栏内排序，原生 dragstart 同时写入
+  // 分屏 MIME，因此同一整行可以根据落点完成排序或拖入右侧。普通 forceFallback
+  // 列表仍保留原来的专用标题起手区，项目子任务则继续由 data-no-drag 隔离。
+  // 首帧先按 Sortable 容器处理，避免 ref effect 运行前短暂开启原生拖拽。
+  const [dragContainerState, setDragContainerState] = useState({
+    inSortableContainer: true,
+    sortableDragBlocked: false,
+    nativeSortable: false,
+  });
+  useEffect(() => {
+    const row = rowRef.current;
+    setDragContainerState({
+      inSortableContainer: Boolean(row?.closest('[data-sortable-id]')),
+      sortableDragBlocked: Boolean(row?.closest('[data-no-drag]')),
+      nativeSortable: Boolean(row?.closest('[data-sortable-native-dnd]')),
+    });
+  }, []);
+  const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
+  const splitDragEnabled = isSplitGroupDragSource({
+    editing: isEditing,
+    orcaRole: session.orcaRole,
+    ...dragContainerState,
+    hasDedicatedHandle: true,
+  });
+  const splitDragHandleActive = splitDragEnabled && needsSplitDragHandle;
+
+  const handleDragStart = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      startSessionDrag(event, {
+        sessionId: session.id,
+        deviceId: session.deviceLinkDeviceId,
+        label: displayTitle,
+        enabled: splitDragEnabled,
+        needsDedicatedHandle: needsSplitDragHandle,
+        dragStartTarget: dragStartTargetRef.current,
+      });
+      dragStartTargetRef.current = null;
+    },
+    [displayTitle, needsSplitDragHandle, session.deviceLinkDeviceId, session.id, splitDragEnabled],
+  );
+
   // isActive 由 false → true(或初次 mount 时即为 true)→ 把行滚进 viewport。
   // 同 active 重渲染 / 其它字段更新不触发(useEffect deps 只有 isActive)。
   useEffect(() => {
     if (isActive) scrollIntoNearestView(rowRef.current);
   }, [isActive]);
-
 
   // archivePending 生命周期：进入 pending → 起 4s 自动撤回 timer + document mousedown
   // 监听（点击不在 confirm 胶囊上就立刻撤回）。退出 pending → 全部清理。这两条退路确保
@@ -533,8 +705,8 @@ export const SessionItem = memo(function SessionItem({
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
-    void window.electronAPI.maker.openSessionInNewWindow(session.id);
-  }, [remoteWritesBlocked, session.id, t]);
+    void window.electronAPI.maker.openSessionInNewWindow(session.id, session.deviceLinkDeviceId);
+  }, [remoteWritesBlocked, session.deviceLinkDeviceId, session.id, t]);
 
   // 复制 cindy://session/<id> 深度链接到剪贴板。三个变体(标准/Pinned/Archived/Draft)
   // 共用此 handler — sessionId 始终存在(draft 也是 DB-backed 的 Session row)。
@@ -554,14 +726,10 @@ export const SessionItem = memo(function SessionItem({
   // 渲染成会话 chip)。原「复制会话 ID」二级菜单(深度链接 / 仅 ID / Agent)已按
   // 产品决策收敛为这一项;不自带分隔线,分组由各使用点决定,避免菜单被切得过碎。
   const copySessionIdSubmenu = (
-    <DropdownMenuItem
-      onSelect={() => void handleCopyDeepLinkSelect()}
-      className={MENU_ITEM_CLASS}
-    >
+    <DropdownMenuItem onSelect={() => void handleCopyDeepLinkSelect()} className={MENU_ITEM_CLASS}>
       {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
     </DropdownMenuItem>
   );
-
   const canMoveToProject =
     Boolean(onMoveSession) &&
     !isEmpty &&
@@ -569,10 +737,14 @@ export const SessionItem = memo(function SessionItem({
     !session.deviceLinkDeviceId &&
     session.status !== 'archived';
 
-  // 导出 .cshare 的可见性:draft 无内容、remote 转录在远端、orca 协同关系
-  // 不可移植、device-link 数据在被控端 —— 全部隐藏入口。
+  // 导出 .cshare 的可见性:draft 无内容、remote 转录在远端、device-link 数据在
+  // 被控端 —— 隐藏入口。Orca lead 可导出(整个协同随包);Worker 不进 sidebar,
+  // 无需在此排除。
   const canExportShare =
-    !isEmpty && !session.remoteHostId && !session.orcaRole && !session.deviceLinkDeviceId;
+    !isEmpty &&
+    !session.remoteHostId &&
+    session.orcaRole !== 'worker' &&
+    !session.deviceLinkDeviceId;
 
   const exportShareMenuItem = canExportShare ? (
     <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>
@@ -608,8 +780,29 @@ export const SessionItem = memo(function SessionItem({
       ref={rowRef}
       data-session-id={session.id}
       data-sidebar-session-row="true"
+      data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
+      draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
       tabIndex={0}
+      onPointerDownCapture={(event) => {
+        dragStartTargetRef.current = event.target instanceof Element ? event.target : null;
+      }}
+      onPointerUpCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
+      onPointerCancelCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
+      onDragStart={handleDragStart}
+      onDragEnd={(event) => {
+        dragStartTargetRef.current = null;
+        finishSessionDrag(event, session.id, session.deviceLinkDeviceId);
+      }}
+      onPointerDown={(e) => {
+        if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
+          makerChatStore.ensureInitialMessages(session.id);
+        }
+      }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {
@@ -648,7 +841,8 @@ export const SessionItem = memo(function SessionItem({
         // 否则归档/取消归档后 DOM 列表重排,原 hover bg 在前一个屏幕位置上要
         // 跑完 150ms 渐变才褪掉,视觉上像是"旧行仍然选中,延迟才切到新行"。
         // 用 ProjectAction 同款瞬时反馈,跟 Cursor / Codex sidebar 的体感一致。
-        'text-sm font-medium text-left cursor-pointer',
+        'text-left text-sm font-medium',
+        !isEditing && 'cursor-pointer',
         // active 描边必须画在盒内且不参与布局。真实 border 会让固定宽高的
         // border-box 内容区四边各缩 1px,导致选中行的左侧 icon / 标题整体右移。
         isActive
@@ -698,7 +892,15 @@ export const SessionItem = memo(function SessionItem({
         //   也会直接返回原 string,所以两路渲染最终都走 truncate 容器。
         // 远程项目 icon 跟项目标题同口径:直接贴在标题右侧。标题过长时标题截断,
         // icon shrink-0 保持可见;右侧槽位只保留 worktree + 时间 + hover action。
-        <span className="min-w-0 flex flex-1 items-center gap-1.5">
+        <span
+          data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+          data-no-drag={splitDragHandleActive ? 'true' : undefined}
+          draggable={splitDragHandleActive}
+          className={cn(
+            'min-w-0 flex flex-1 items-center gap-1.5',
+            splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
+          )}
+        >
           {/* 绑定徽章优先于普通自动化 Timer:persistentSession 会话两者皆真,
               主图标统一为 Timer，绑定态额外承载频率/暂停信息。 */}
           {boundSchedules.length > 0 ? (
@@ -718,25 +920,21 @@ export const SessionItem = memo(function SessionItem({
               <AutomationTimerIcon size={10} activeForeground={isActive} />
             </button>
           ) : null}
-          <span className="min-w-0 truncate">
-            {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
-              ? highlightSegments(session.title, matchIndices, {
-                  highlightClassName: cn(
-                    'bg-transparent font-semibold',
-                    isActive
-                      ? 'text-[var(--sidebar-item-active-foreground)]'
-                      : 'text-[var(--msg-assistant-text)]',
-                  ),
-                })
-              : displayTitle}
-          </span>
+          <SidebarTitleMarquee
+            title={displayTitle}
+            className={isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground'}
+          >
+            {titleContent}
+          </SidebarTitleMarquee>
           {remoteIconKind && (
             <RemoteProjectIcon
               kind={remoteIconKind}
               size={12}
               strokeWidth={1.8}
               connectionStatus={remoteIconConnectionStatus}
-              className={cn(isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon')}
+              className={cn(
+                isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
+              )}
             />
           )}
         </span>
@@ -774,58 +972,7 @@ export const SessionItem = memo(function SessionItem({
           >
             <WorktreeBadge sessionId={session.id} size={12} className="size-4" />
             {showRightStatus ? (
-              rightStatusKind === 'error' ? (
-                <span
-                  role="img"
-                  className="inline-flex size-4 items-center justify-center"
-                  aria-label={t('ccAgent.sidebar.status.error', 'Failed — click to view')}
-                  title={t('ccAgent.sidebar.status.error', 'Failed — click to view')}
-                >
-                  <span
-                    className="size-2 rounded-full"
-                    style={{ backgroundColor: isActive ? 'var(--sidebar-item-active-foreground)' : 'var(--card-status-error)' }}
-                    aria-hidden
-                  />
-                </span>
-              ) : rightStatusKind === 'awaiting' ? (
-                <span
-                  role="img"
-                  className="inline-flex size-4 items-center justify-center"
-                  aria-label={t('ccAgent.sidebar.status.needsAttention', 'Awaiting your input')}
-                  title={t('ccAgent.sidebar.status.needsAttention', 'Awaiting your input')}
-                >
-                  <span
-                    className="size-2 rounded-full"
-                    style={{ backgroundColor: isActive ? 'var(--sidebar-item-active-foreground)' : 'var(--card-status-awaiting)' }}
-                    aria-hidden
-                  />
-                </span>
-              ) : rightStatusKind === 'running' ? (
-                <Spinner
-                  role="img"
-                  size={12}
-                  strokeWidth={2}
-                  className={cn(
-                    'size-4',
-                    isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
-                  )}
-                  aria-label={t('ccAgent.sidebar.status.running', 'Running')}
-                  title={t('ccAgent.sidebar.status.running', 'Running')}
-                />
-              ) : (
-                <span
-                  role="img"
-                  className="inline-flex size-4 items-center justify-center"
-                  aria-label={t('ccAgent.sidebar.status.done', 'Completed — click to view')}
-                  title={t('ccAgent.sidebar.status.done', 'Completed — click to view')}
-                >
-                  <span
-                    className="size-2 rounded-full"
-                    style={{ backgroundColor: isActive ? 'var(--sidebar-item-active-foreground)' : 'var(--card-status-done)' }}
-                    aria-hidden
-                  />
-                </span>
-              )
+              <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
             ) : (
               <time
                 dateTime={activityIso}
@@ -892,15 +1039,20 @@ export const SessionItem = memo(function SessionItem({
                   未归档 + 非 draft + 非远程只读。Edit 与左侧 Timer chip 同链路,不再重复
                   暴露;Run 走 main.maker.schedule.runNow,与 AutomationSessionGroupItem
                   组头 [Run ▶️][More ⋮] 保持高频直点、低频收纳的同构。 */}
-              {isAutomationGenerated && !insideAutomationGroup && !isArchived && !isEmpty && !remoteWritesBlocked && effectiveScheduleId && (
-                <SessionAction
-                  label={t('ccAgent.sidebar.automationGroup.menu.runNow')}
-                  onClick={() => void handleAutomationRunClick()}
-                  isActive={isActive}
-                >
-                  <Play size={14} strokeWidth={2} />
-                </SessionAction>
-              )}
+              {isAutomationGenerated &&
+                !insideAutomationGroup &&
+                !isArchived &&
+                !isEmpty &&
+                !remoteWritesBlocked &&
+                effectiveScheduleId && (
+                  <SessionAction
+                    label={t('ccAgent.sidebar.automationGroup.menu.runNow')}
+                    onClick={() => void handleAutomationRunClick()}
+                    isActive={isActive}
+                  >
+                    <Play size={14} strokeWidth={2} />
+                  </SessionAction>
+                )}
               <SessionAction
                 label={t('ccAgent.sidebar.sessionMenu.moreActions')}
                 onClick={(e) => {

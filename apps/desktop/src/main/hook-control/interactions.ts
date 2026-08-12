@@ -12,14 +12,20 @@
  *   - answers 的 question 全文匹配等易碎约定(见 im/shared/cardActionHandler
  *     的 qKey 注释)不过网线, 单端维护。
  *
- * 卡片合成语义对齐 im/shared/cardBuilders 的 v1 简化(同一产品能力的两个
- * 渠道不该有体验分叉): ask 只渲染第一道问题、至多 6 个选项、multiSelect
- * 降级单选; plan 正文截断 1500。
+ * 卡片合成语义(ask 只渲染第一道问题、至多 6 个选项、multiSelect 降级单选、
+ * plan 正文截断 1500、按钮->决策对象)已收进 im/shared/interactionCardModel ——
+ * 与 IM 渠道同一份语义(同一产品能力的两个渠道不该有体验分叉), 本文件只做
+ * hook 协议卡的渲染与挂起注册表。
  *
  * 超时与收口: hook 是无人值守链路, 任何交互都必须有界 —— 注册时挂 30min
- * 超时(短于 session-runner 的 60min 整 turn 硬超时, 保证超时后 turn 还能
- * 正常收口), 超时按 kind 的安全默认自决并通知调用方发 interaction.cancel
- * 改写卡片; turn 结束时未决交互同样按默认收口(cancelForRequest)。
+ * 超时, 按 kind 的安全默认自决并通知调用方发 interaction.cancel 改写卡片;
+ * turn 结束时未决交互同样按默认收口(cancelForRequest)。
+ *
+ * (原文写这 30min 是"短于 session-runner 的 60min 整 turn 硬超时"。**那条硬超时
+ * 2026-08-01 已撤**, 见 session-runner 的「turn 时长策略」——所以它现在不是抢在别人
+ * 前面, 而是**这条链路上唯一的有界兜底**: maker-core 的 turn stall 看门狗刻意把
+ * "等用户回应交互"排除在静默之外, 不会来救。个人 IM 那侧没有等价定时器, 见
+ * docs/product-rules/telegram-bot-parity.md 缺口 2g。)
  *
  * 纯逻辑模块: 不做 IO, 帧的发送由调用方(session-runner + dispatcher)注入的
  * 回调承担, 单测直接驱动(规则 14)。
@@ -28,33 +34,32 @@
 import type { InteractionButton, InteractionRequestPayload } from '@cindy/slack-hook-protocol';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 
-/** ask 卡渲染的最大选项数(与 im/shared/cardBuilders MAX_OPTIONS 一致)。 */
-const MAX_OPTIONS = 6;
-/** plan 正文截断长度(与 im/shared/cardBuilders MAX_PLAN_LEN 一致)。 */
-const MAX_PLAN_LEN = 1500;
-/** 按钮文案截断(Slack plain_text 上限 75, 对齐 IM 的 30)。 */
-const BTN_LABEL_MAX = 30;
-/** permission 卡的工具入参摘要截断(JSON 全文可能巨大, 卡片只要能看清意图)。 */
-const PERM_INPUT_SUMMARY_MAX = 600;
+import {
+  composeInteractionModel,
+  truncateInline as truncate,
+  BTN_LABEL_MAX,
+  HOOK_PERMISSION_INPUT_SUMMARY_MAX,
+  MAX_PLAN_LEN,
+} from '../im/shared/interactionCardModel.js';
+
+/** 卡片标题截断(hook 协议卡标题一行放得下的量)。 */
+const TITLE_MAX = 60;
+/** 超时 / 收口自决时写进决策的 reason(系统代码, 非用户反馈)。 */
+const TIMEOUT_REASON = 'hook_interaction_timeout';
 
 /** 工具入参 -> 单行 JSON 摘要(不可序列化时降级为空串, 卡片少一行而已)。 */
 function summarizeInput(input: Record<string, unknown>): string {
   try {
     const json = JSON.stringify(input);
     if (!json || json === '{}') return '';
-    return truncate(json, PERM_INPUT_SUMMARY_MAX);
+    return truncate(json, HOOK_PERMISSION_INPUT_SUMMARY_MAX);
   } catch {
     return '';
   }
 }
 
-/** 未决交互超时(必须短于 session-runner 的整 turn 硬超时 60min)。 */
+/** 未决交互超时: 到点按安全默认收口并撤卡。理由与边界见模块头「超时与收口」。 */
 export const HOOK_INTERACTION_TIMEOUT_MS = 30 * 60_000;
-
-function truncate(s: string, max: number): string {
-  if (!s) return '';
-  return s.length > max ? `${s.slice(0, max)}…` : s;
-}
 
 /** 合成结果: 过网线的卡片 + 留在本端的按钮->决策映射与安全默认。 */
 export interface ComposedInteractionCard {
@@ -75,123 +80,83 @@ export interface ComposedInteractionCard {
  * **拒绝**(用户显式选了收紧档, 放行才是意外)。
  */
 export function composeInteractionCard(req: InteractionRequest): ComposedInteractionCard | null {
-  if (req.kind === 'ask_user_question') {
-    const question = req.questions[0];
-    if (!question) return null;
-    const headerText = question.header || question.question;
-    const options = (question.options ?? []).slice(0, MAX_OPTIONS);
-    const bodyExtra =
-      question.header && question.header !== question.question ? question.question : '';
+  const model = composeInteractionModel(req);
+  // ask 没有问题项 / 未来未知 kind: 不出卡
+  if (!model) return null;
 
+  if (model.kind === 'ask_user_question') {
+    // buttonId 是过网线的兼容契约, 由本端从语义 choice 映射:
+    // 无选项降级 -> ask:continue(空答案), 有选项 -> ask:<序号>。
     const decisions = new Map<string, InteractionDecision>();
-    const buttons: InteractionButton[] = [];
-    if (options.length === 0) {
-      // 自由问答无选项: 无人值守链路给不了自由文本, 只能"继续"(空答案) ——
-      // 与 IM 渠道的 noOptions 降级一致
-      buttons.push({ id: 'ask:continue', label: '继续', style: 'default' });
-      decisions.set('ask:continue', {
-        kind: 'ask_user_question',
-        // answers key 必须是 question.question 全文(SDK 按全文匹配, 见
-        // im/shared/cardActionHandler.decisionFromPress 的 qKey 注释)
-        answers: { [question.question]: '' },
-      });
-    } else {
-      options.forEach((opt, i) => {
-        const id = `ask:${i}`;
-        buttons.push({ id, label: truncate(opt.label, BTN_LABEL_MAX), style: 'default' });
-        decisions.set(id, {
-          kind: 'ask_user_question',
-          answers: { [question.question]: opt.label },
-        });
-      });
-    }
+    const buttons: InteractionButton[] = model.choices.map((choice) => {
+      const id = model.degraded ? 'ask:continue' : `ask:${choice.index}`;
+      decisions.set(id, choice.decision);
+      return { id, label: truncate(choice.label ?? '', BTN_LABEL_MAX), style: choice.style };
+    });
     return {
       card: {
-        kind: req.kind,
-        title: `❓ ${truncate(headerText, 60)}`,
-        body: bodyExtra,
+        kind: 'ask_user_question',
+        title: `❓ ${truncate(model.headerText, TITLE_MAX)}`,
+        body: model.questionBody,
         buttons,
       },
       decisions,
-      defaultDecision: { kind: 'ask_user_question', answers: {} },
+      defaultDecision: model.buildDefaultDecision(TIMEOUT_REASON),
       fallbackReason: '等待回答超时, 任务已按“未回答”继续',
     };
   }
 
-  if (req.kind === 'plan_review') {
-    const decisions = new Map<string, InteractionDecision>([
-      ['plan:approve', { kind: 'plan_review', behavior: 'allow' }],
-      [
-        'plan:reject',
-        { kind: 'plan_review', behavior: 'deny', reason: 'user_rejected', dismissed: true },
-      ],
-    ]);
+  if (model.kind === 'plan_review') {
+    const [approve, reject] = model.choices;
     return {
       card: {
-        kind: req.kind,
+        kind: 'plan_review',
         title: '📋 计划待审阅',
-        body: truncate(req.plan, MAX_PLAN_LEN),
+        body: truncate(model.plan, MAX_PLAN_LEN),
         buttons: [
-          { id: 'plan:approve', label: '批准执行', style: 'primary' },
-          { id: 'plan:reject', label: '打回', style: 'danger' },
+          { id: 'plan:approve', label: '批准执行', style: approve.style },
+          { id: 'plan:reject', label: '打回', style: reject.style },
         ],
       },
-      decisions,
-      defaultDecision: {
-        kind: 'plan_review',
-        behavior: 'deny',
-        reason: 'hook_interaction_timeout',
-        // 系统性 dismissal: 别让 codex 把超时 reason 当用户反馈发起修订 turn
-        dismissed: true,
-      },
+      decisions: new Map<string, InteractionDecision>([
+        ['plan:approve', approve.decision],
+        ['plan:reject', reject.decision],
+      ]),
+      // 超时按安全默认 deny;恒带 dismissed(系统性 dismissal, 别让 codex 把超时
+      // reason 当用户反馈发起修订 turn) —— 见 interactionCardModel。
+      defaultDecision: model.buildDefaultDecision(TIMEOUT_REASON),
       fallbackReason: '等待审阅超时, 计划未获批准',
     };
   }
 
-  if (req.kind === 'permission') {
-    const decisions = new Map<string, InteractionDecision>([
-      ['perm:allow', { kind: 'permission', behavior: 'allow' }],
-      [
-        'perm:always',
-        {
-          kind: 'permission',
-          behavior: 'allow',
-          // 会话级 addRules: claude-code 直接消费; codex 把非空 permissionUpdates
-          // 视为会话级放行(见 maker-core events.ts 的 permissionUpdates 注释)
-          permissionUpdates: [
-            { type: 'addRules', rules: [{ toolName: req.toolName }], behavior: 'allow', destination: 'session' },
-          ],
-        },
+  const [allowOnce, allowAlways, deny] = model.choices;
+  const inputSummary = summarizeInput(model.input);
+  const body = [
+    model.description,
+    `工具: \`${model.toolName}\``,
+    inputSummary ? `\`\`\`${inputSummary}\`\`\`` : '',
+  ]
+    .filter((s) => s.length > 0)
+    .join('\n');
+  return {
+    card: {
+      kind: 'permission',
+      title: `🔐 权限请求: ${truncate(model.displayTitle, TITLE_MAX)}`,
+      body,
+      buttons: [
+        { id: 'perm:allow', label: '允许一次', style: allowOnce.style },
+        { id: 'perm:always', label: '本任务总是允许', style: allowAlways.style },
+        { id: 'perm:deny', label: '拒绝', style: deny.style },
       ],
-      ['perm:deny', { kind: 'permission', behavior: 'deny', reason: 'user_denied' }],
-    ]);
-    const inputSummary = summarizeInput(req.input);
-    const body = [
-      req.description ?? '',
-      `工具: \`${req.toolName}\``,
-      inputSummary ? `\`\`\`${inputSummary}\`\`\`` : '',
-    ]
-      .filter((s) => s.length > 0)
-      .join('\n');
-    return {
-      card: {
-        kind: req.kind,
-        title: `🔐 权限请求: ${truncate(req.displayName ?? req.title ?? req.toolName, 60)}`,
-        body,
-        buttons: [
-          { id: 'perm:allow', label: '允许一次', style: 'primary' },
-          { id: 'perm:always', label: '本任务总是允许', style: 'default' },
-          { id: 'perm:deny', label: '拒绝', style: 'danger' },
-        ],
-      },
-      decisions,
-      defaultDecision: { kind: 'permission', behavior: 'deny', reason: 'hook_interaction_timeout' },
-      fallbackReason: '等待授权超时, 已拒绝该权限请求',
-    };
-  }
-
-  // 未来未知 kind: 不出卡, 调用方按 kind 安全默认就地自决
-  return null;
+    },
+    decisions: new Map<string, InteractionDecision>([
+      ['perm:allow', allowOnce.decision],
+      ['perm:always', allowAlways.decision],
+      ['perm:deny', deny.decision],
+    ]),
+    defaultDecision: model.buildDefaultDecision(TIMEOUT_REASON),
+    fallbackReason: '等待授权超时, 已拒绝该权限请求',
+  };
 }
 
 /** 挂起交互条目。 */

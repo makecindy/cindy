@@ -8,9 +8,18 @@
  * 所有跨端模型元数据统一进入严格版本化的 `modelRegistry`;目录顶层不接受旁路元数据块。
  */
 
-import { parseModelRegistry } from '@cindy/model-access-protocol';
+import { parseModelRegistry } from './modelAccessValidator.js';
 
-import type { Catalog, Provider, CatalogModel, AgentKind, Effort, ProviderPreset } from './types.js';
+import { PI_REASONING_EFFORTS } from './types.js';
+import type {
+  Catalog,
+  Provider,
+  CatalogModel,
+  AgentKind,
+  Effort,
+  ProviderPreset,
+  PresetSortRegion,
+} from './types.js';
 import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
 import { isProviderRequestPath } from './provider-url.js';
@@ -31,6 +40,24 @@ function isAgentKind(v: unknown): v is AgentKind {
 
 function isEffort(v: unknown): v is Effort {
   return typeof v === 'string' && (EFFORTS as readonly string[]).includes(v);
+}
+
+function hasValidPresetReasoningCapability(
+  agent: AgentKind,
+  model: Record<string, unknown>,
+): boolean {
+  const hasCapability = model.reasoning !== undefined || model.reasoningEfforts !== undefined;
+  if (!hasCapability) return true;
+  if (agent !== 'pi' || typeof model.reasoning !== 'boolean') return false;
+  if (model.reasoning !== true) return model.reasoningEfforts === undefined;
+  if (!Array.isArray(model.reasoningEfforts) || model.reasoningEfforts.length === 0) return false;
+  const efforts = model.reasoningEfforts;
+  return (
+    efforts.every(
+      (effort) =>
+        typeof effort === 'string' && (PI_REASONING_EFFORTS as readonly string[]).includes(effort),
+    ) && new Set(efforts).size === efforts.length
+  );
 }
 
 function assert(cond: unknown, msg: string): asserts cond {
@@ -189,7 +216,8 @@ function validateProvider(p: Provider): void {
   // 图像通道直调,不需要任何 agent 路由;没有媒体清单的空 agents 仍是无效数据。
   const hasMediaModels =
     (Array.isArray(p.imageModels) && p.imageModels.length > 0) ||
-    (Array.isArray(p.videoModels) && p.videoModels.length > 0);
+    (Array.isArray(p.videoModels) && p.videoModels.length > 0) ||
+    (Array.isArray(p.embeddingModels) && p.embeddingModels.length > 0);
   assert(
     Array.isArray(p.agents) && (p.agents.length > 0 || hasMediaModels),
     `provider.agents missing for '${p.id}'`,
@@ -274,6 +302,17 @@ function validateProvider(p: Provider): void {
   // agent runtime);默认选型必须与清单配套且每个值指向在册 id。
   validateMediaModels(p.id, 'imageModels', p.imageModels, 'imageDefaults', p.imageDefaults);
   validateMediaModels(p.id, 'videoModels', p.videoModels, 'videoDefaults', p.videoDefaults);
+  // 向量清单同一套规则(PR #1707 review):不校验的话,远端把 embeddingModels 写成
+  // 对象、给重复/空 id、或让 embeddingDefaults 指向清单外型号,都能通过
+  // parseCatalog();前一种随后在 deriveCindyMediaConfig 的 for...of 里抛错,被上层
+  // 降级成空清单 —— 表现是所有插件向量请求变 NO_CANDIDATE,而真正的坏数据在目录里。
+  validateMediaModels(
+    p.id,
+    'embeddingModels',
+    p.embeddingModels,
+    'embeddingDefaults',
+    p.embeddingDefaults,
+  );
   validateAccess(p);
   validateOAuthDescriptor(p);
 }
@@ -378,6 +417,10 @@ function isValidPreset(v: unknown): v is ProviderPreset {
         mm.contextWindow !== undefined
         && (typeof mm.contextWindow !== 'number' || !Number.isFinite(mm.contextWindow) || mm.contextWindow <= 0)
       ) return false;
+      if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
+        return false;
+      }
+      if (!hasValidPresetReasoningCapability(agent, mm)) return false;
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
     if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;
@@ -452,6 +495,11 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
       const { nameEn: _drop, ...rest } = preset as ProviderPreset & { nameEn: unknown };
       preset = rest as ProviderPreset;
     }
+    // 繁中展示名非法时只剥掉该字段，保留预设本体并回落到 name。
+    if (preset.nameZhTW !== undefined && (typeof preset.nameZhTW !== 'string' || preset.nameZhTW.trim().length === 0)) {
+      const { nameZhTW: _drop, ...rest } = preset as ProviderPreset & { nameZhTW: unknown };
+      preset = rest as ProviderPreset;
+    }
     out.push(normalizePresetRuntimeOptions(preset));
   }
   return out;
@@ -462,10 +510,14 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
  * (缺省回落 `name`)。纯呈现选择,不影响预设 id / 创建后的供应商命名语义。
  */
 export function presetDisplayName(
-  preset: Pick<ProviderPreset, 'name' | 'nameEn'>,
+  preset: Pick<ProviderPreset, 'name' | 'nameEn' | 'nameZhTW'>,
   locale: string,
 ): string {
-  return locale.toLowerCase().startsWith('zh') ? preset.name : (preset.nameEn ?? preset.name);
+  const normalizedLocale = locale.toLowerCase().replaceAll('_', '-');
+  if (normalizedLocale === 'zh-tw' || normalizedLocale.startsWith('zh-hant')) {
+    return preset.nameZhTW ?? preset.name;
+  }
+  return normalizedLocale.startsWith('zh') ? preset.name : (preset.nameEn ?? preset.name);
 }
 
 /** 预设的厂商分组键：id 去掉区域后缀（`zhipu-glm-cn`/`zhipu-glm-global` → `zhipu-glm`）。 */
@@ -478,12 +530,15 @@ function presetVendorKey(p: ProviderPreset): string {
 /**
  * 预设列表排序（稳定，纯呈现层）：
  *   - 按**厂商分组**（id 去区域后缀），厂商间按分组键首字母升序；
- *   - 同一厂商的国内/国际条目**相邻**，组内按用户语言排先后（zh → cn 在前，其它 → global 在前）；
+ *   - 同一厂商的国内/国际条目**相邻**，组内按客户端构建区域排先后（cn/dev → cn 在前，global → global 在前）；
  *   - 组内无 regionHint 的条目居中，保持目录原始顺序。
  * 只排序不过滤 —— 所有预设对所有用户可见可选，可达性由「测试连接」实测裁决。
  */
-export function sortPresetsForLocale(presets: ProviderPreset[], locale: string): ProviderPreset[] {
-  const cnFirst = locale.toLowerCase().startsWith('zh');
+export function sortPresetsForRegion(
+  presets: ProviderPreset[],
+  region: PresetSortRegion,
+): ProviderPreset[] {
+  const cnFirst = region !== 'global';
   const regionRank = (p: ProviderPreset): number => {
     if (p.regionHint === undefined) return 1;
     if (p.regionHint === 'cn') return cnFirst ? 0 : 2;

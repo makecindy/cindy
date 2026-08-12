@@ -11,9 +11,9 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { describe, expect, it } from 'vitest';
 
 import { normalizeMarkdownImageSrc } from '@/lib/localPathResolver';
-import remarkPreserveLocalImagePaths, {
+import remarkPreserveRawLocalDestinations, {
   RAW_LOCAL_IMAGE_SRC_PROP,
-} from '../components/chat/remarkPreserveLocalImagePaths';
+} from '../components/chat/remarkPreserveRawLocalDestinations';
 
 function normalizedImageSrc(markdown: string, workingDir = '/repo'): string | undefined {
   let normalized: string | undefined;
@@ -30,7 +30,7 @@ function normalizedImageSrc(markdown: string, workingDir = '/repo'): string | un
           return null;
         },
       },
-      remarkPlugins: [remarkPreserveLocalImagePaths],
+      remarkPlugins: [remarkPreserveRawLocalDestinations],
       urlTransform: defaultUrlTransform,
       children: markdown,
     }),
@@ -99,7 +99,15 @@ describe('Markdown local image path encoding', () => {
   });
 
   it('blocks privileged local paths in untrusted Markdown previews', () => {
-    expect(normalizeMarkdownImageSrc('/tmp/private.png', '/repo', false)).toBeUndefined();
+    for (const src of [
+      '/tmp/private.png',
+      'C:\\Users\\alice\\private.png',
+      'relative/private.png',
+      'file:///tmp/private.png',
+      'xdt-file://local/?path=%2Ftmp%2Fprivate.png',
+    ]) {
+      expect(normalizeMarkdownImageSrc(src, '/repo', false)).toBeUndefined();
+    }
     expect(normalizeMarkdownImageSrc('https://example.com/public.png', '/repo', false)).toBe(
       'https://example.com/public.png',
     );

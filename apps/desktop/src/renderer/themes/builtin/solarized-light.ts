@@ -77,6 +77,7 @@ const slotOverrides = {
   'accent-soft': GREEN_DEEP,
   'accent-hover': GREEN_DEEP,
   'accent-pure-cta-fg': '#FFFFFF',
+  'switch-track-on': GREEN_DEEP, // 官方绿 #859900 对 thumb 2.97/对 surface 2.62 低于 3:1,取深绿变体(用户裁决 2026-08-05)
 } as const;
 
 const singletonOverrides = {
@@ -103,7 +104,7 @@ const singletonOverrides = {
   // base3、圆底由模板规则落回 base2(CHIP),两态均可分(codex P1 3671457570)。
   'create-agent-quick-card-icon-bg': SURFACE_BG,
   // send 不用 accent(green) 底:共享 send token 还渲染 10-12px 文本
-  // (VoiceInputOverlay / CollaborationModeToggle / SessionHandoffCard),白字仅
+  // (VoiceInputOverlay / SessionHandoffCard),白字仅
   // 3.20:1,不达 DESIGN.md §10 小字 4.5:1;回退 registry 反相中性(codex P1
   // 3671457561),故本主题不覆盖 send-btn-*。
   'create-agent-quick-card-text': TEXT_PRIMARY,

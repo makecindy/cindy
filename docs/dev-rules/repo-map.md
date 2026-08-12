@@ -13,10 +13,9 @@
 |---|---|
 | `apps/` | 终端产品（desktop、mobile）与随包分发的二进制资产 |
 | `packages/` | 客户端共享能力包（与 render／main 解耦，详见下表） |
-| `cindy-protocol/` | git submodule：客户端与服务端共享 wire protocol 的唯一权威源（`device-link-protocol` 中继层协议、`slack-hook-protocol` 任务协议）；升级规则见 [`protocol-and-submodules.md`](protocol-and-submodules.md) |
 | `config/` | 运行期端点清单（`endpoint.json` / `endpoint.dev.json` / `endpoint.global.json`：auth、device-link 等线上 base URL） |
 | `scripts/` | 仓库级工程脚本：dev 启动包装、agent 二进制拉取（`ensure-agent-binaries.mjs`）、i18n／endpoint／文档等校验 guard、worktree 管理 |
-| `tools/` | claude／codex／ripgrep 三个自带 CLI 的版本 pin（`latest.json`）与更新器（`update.mjs`） |
+| `tools/` | claude／codex／ripgrep／pi 四个 Desktop runtime 的版本 pin（`latest.json`）与更新器（`update.mjs`） |
 | `docs/` | 规则文档：`dev-rules/`（工程）、`product-rules/`（产品）、`design-rules/`（设计入口）、`legal/` 等 |
 
 ## apps/
@@ -45,10 +44,10 @@
 | `auth-client` | 平台无关的 Cindy auth-server 客户端契约（zod） | desktop + mobile |
 | `model-providers` | 模型供应商目录 + 路由抽象（Anthropic／OpenAI／XD），纯逻辑 | desktop + mobile |
 | `anthropic-compat-proxy` | 本地回环 HTTP 代理：剥离 Anthropic 专有字段，让 Claude Code SDK 可经网关访问非 Anthropic 后端 | desktop |
-| `anthropic-responses-bridge` | 本地回环 HTTP 桥：Anthropic Messages API ↔ OpenAI Responses API 转换 | desktop |
+| `anthropic-responses-bridge` | 挂载在 `anthropic-compat-proxy` 回环 HTTP 代理内部的进程内协议转换处理器：作为 `RoutingDecision.localHandler` 完成 Anthropic Messages API ↔ OpenAI Responses API 转换 | desktop |
 | `responses-anthropic-bridge` | 本地 Responses → Anthropic Messages 桥：请求、图片／工具／thinking 转换与 Responses SSE 回译 | desktop |
 | `lizi-mcps` | 可复用 MCP server 集合（Google 套件、GitHub／GitLab、浏览器、scheduler 等） | desktop |
-| `cindy-tools` | 意识（Ghost）系统内部工具集（MCP），含 ghost 总机（`ghost_list` / `ghost_call`） | desktop |
+| `cindy-tools` | 意识（Ghost）系统内部工具集（MCP），含 ghost 总机（`ghost_list` / `ghost_info` / `ghost_call`） | desktop |
 | `browser-control-runtime` | 浏览器自动化运行时适配层（playwright-core + MCP） | desktop、lizi-mcps |
 | `file-browser-core` | 文件浏览核心：workdir 扫描、ignore 匹配、ripgrep 搜索；本地后端与远程守护进程共享 | desktop、remote-file-service |
 | `remote-file-service` | 远程文件服务：跑在远程 SSH 机器上的 NDJSON RPC 守护进程，封装 file-browser-core | desktop |

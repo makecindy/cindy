@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createGitSnapshotCoordinator } from '../maker-host/git-snapshot-host';
-import type { CreateSnapshotInput } from '../git-snapshot/gitSnapshotService';
+import type {
+  CreateShadowSavepointInput,
+  ShadowSavepointResult,
+} from '../git-snapshot/gitSnapshotService';
 
 const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
 
@@ -25,38 +28,51 @@ function makeMaker(overrides: Partial<{
 }
 
 describe('createGitSnapshotCoordinator', () => {
-  it('creates a local after-edit snapshot with anchor and prompt context', async () => {
+  it('creates a local after-edit savepoint with anchor and prompt context', async () => {
     const maker = makeMaker();
     const getLatestUserMessage = vi.fn().mockResolvedValue({
       clientId: 'msg-1',
       text: 'please update login',
     });
-    const createSnapshot = vi.fn().mockImplementation(
-      async (_repo: string, input: CreateSnapshotInput) => {
+    const createShadowSavepoint = vi.fn().mockImplementation(
+      async (_repo: string, input: CreateShadowSavepointInput): Promise<ShadowSavepointResult> => {
         if (typeof input.label === 'function') {
           await input.label({ diffStat: ' src/a.ts | 1 +', diffText: '+x' });
         }
-        return 'hash123';
+        return {
+          commit: 'hash123',
+          tree: 'tree123',
+          includedFiles: [],
+          skippedFiles: [],
+          skippedFingerprints: [],
+        };
       },
     );
-    const isWorktreeDirty = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const coordinator = createGitSnapshotCoordinator(maker, {
       readAutoSnapshotEnabled: () => true,
       detectRepoRoot: vi.fn().mockResolvedValue('/workspace/project'),
-      isWorktreeDirty,
       getLatestUserMessage,
-      createSnapshot,
+      createShadowSavepoint,
       logger,
     });
 
     await coordinator.onTurnStart('s1');
     await coordinator.onTurnEnd('s1');
 
-    expect(isWorktreeDirty).toHaveBeenCalledTimes(2);
-    expect(createSnapshot).toHaveBeenCalledOnce();
-    const [repoRoot, input] = createSnapshot.mock.calls[0] as [string, CreateSnapshotInput];
+    // turn-start 基线 + after-edit 各一次。
+    expect(createShadowSavepoint).toHaveBeenCalledTimes(2);
+    const [repoRoot, input] = createShadowSavepoint.mock.calls[1] as [
+      string,
+      CreateShadowSavepointInput,
+    ];
     expect(repoRoot).toBe('/workspace/project');
-    expect(input.meta).toMatchObject({ sessionId: 's1', kind: 'after-edit', anchor: 'msg-1' });
+    expect(input.sessionId).toBe('s1');
+    expect(input.meta).toMatchObject({
+      kind: 'after-edit',
+      anchor: 'msg-1',
+      baselineCommit: 'hash123',
+    });
+    expect(input.skipIfTreeEquals).toBe('hash123');
     expect(getLatestUserMessage).toHaveBeenCalledOnce();
     expect(maker.oneShot).toHaveBeenCalledWith('codex', expect.stringContaining('please update login'), {
       maxTokens: 80,
@@ -73,17 +89,17 @@ describe('createGitSnapshotCoordinator', () => {
       }),
     });
     const detectRepoRoot = vi.fn().mockResolvedValue('/remote/repo');
-    const createSnapshot = vi.fn();
+    const createShadowSavepoint = vi.fn();
 
     await createGitSnapshotCoordinator(maker, {
       readAutoSnapshotEnabled: () => true,
       detectRepoRoot,
-      createSnapshot,
+      createShadowSavepoint,
       logger,
     }).onTurnEnd('s1');
 
     expect(detectRepoRoot).not.toHaveBeenCalled();
-    expect(createSnapshot).not.toHaveBeenCalled();
+    expect(createShadowSavepoint).not.toHaveBeenCalled();
   });
 
   it('skips sessions without a working directory', async () => {
@@ -91,29 +107,35 @@ describe('createGitSnapshotCoordinator', () => {
       getSessionMeta: vi.fn().mockResolvedValue({ agentKind: 'claude-code', workDir: '' }),
     });
     const detectRepoRoot = vi.fn().mockResolvedValue('/repo');
-    const createSnapshot = vi.fn();
+    const createShadowSavepoint = vi.fn();
 
     await createGitSnapshotCoordinator(maker, {
       readAutoSnapshotEnabled: () => true,
       detectRepoRoot,
-      createSnapshot,
+      createShadowSavepoint,
       logger,
     }).onTurnEnd('s1');
 
     expect(detectRepoRoot).not.toHaveBeenCalled();
-    expect(createSnapshot).not.toHaveBeenCalled();
+    expect(createShadowSavepoint).not.toHaveBeenCalled();
   });
 
   it('passes the turn-start Git safety decision into project bootstrap', async () => {
     let enabled = true;
     const maker = makeMaker();
     const initializeProjectGit = vi.fn().mockResolvedValue({ repoRoot: '/workspace/project' });
-    const isWorktreeDirty = vi.fn().mockResolvedValue(false);
+    const createShadowSavepoint = vi.fn().mockResolvedValue({
+      commit: 'hash-t1',
+      tree: 'tree-t1',
+      includedFiles: [],
+      skippedFiles: [],
+      skippedFingerprints: [],
+    } satisfies ShadowSavepointResult);
     const coordinator = createGitSnapshotCoordinator(maker, {
       readAutoSnapshotEnabled: vi.fn(() => enabled),
       detectRepoRoot: vi.fn().mockResolvedValue(null),
       initializeProjectGit,
-      isWorktreeDirty,
+      createShadowSavepoint,
       logger,
     });
 
@@ -129,19 +151,25 @@ describe('createGitSnapshotCoordinator', () => {
       }),
       { autoSnapshotEnabled: true },
     );
-    expect(isWorktreeDirty).toHaveBeenCalledWith('/workspace/project');
+    expect(createShadowSavepoint).toHaveBeenCalledWith(
+      '/workspace/project',
+      expect.objectContaining({
+        sessionId: 's1',
+        meta: expect.objectContaining({ kind: 'turn-start' }),
+      }),
+    );
   });
 
   it('defaults to disabled until a host setting enables it', async () => {
     const maker = makeMaker();
-    const createSnapshot = vi.fn();
+    const createShadowSavepoint = vi.fn();
 
     await createGitSnapshotCoordinator(maker, {
-      createSnapshot,
+      createShadowSavepoint,
       logger,
     }).onTurnEnd('s1');
 
     expect(maker.getSessionMeta).not.toHaveBeenCalled();
-    expect(createSnapshot).not.toHaveBeenCalled();
+    expect(createShadowSavepoint).not.toHaveBeenCalled();
   });
 });

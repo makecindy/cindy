@@ -230,7 +230,32 @@ export function resolveTurnCost(args: {
     };
   }
 
-  // 第三方供应商 / 未知路由:SDK 值是 USD 口径,投影到账本币种而不是构建区域,
+  const providerQuote =
+    context.billingRoute === 'provider-api'
+      ? getModelPriceQuote(pricing, context.providerId, model, 'claude-code')
+      : undefined;
+  const hasTokenDeltas =
+    tokens.inputTokens > 0 ||
+    tokens.outputTokens > 0 ||
+    tokens.cacheReadTokens > 0 ||
+    tokens.cacheCreateTokens > 0;
+  // DeepSeek 的缓存命中价与未命中价相差数十倍。Claude SDK 的 costUSD 是客户端
+  // 对第三方模型的估值，不是 DeepSeek 账单事实；一旦把缓存 token 按普通输入价算，
+  // 前台金额就会被成倍放大。有 token 增量且官方参考价存在时，按实际 token/cache
+  // 分桶重算并保留 value-estimate 标记；只有 cost 增量或目录价格不覆盖本轮时仍退回
+  // SDK，避免把有费用但无 token 明细的轮次误算成 $0。
+  if (context.providerId === 'deepseek' && providerQuote && hasTokenDeltas) {
+    const referenceMoney = computePriceQuoteTurnMoney(tokens, providerQuote, ledgerCurrency);
+    if (referenceMoney) {
+      return {
+        model,
+        money: referenceMoney,
+        source: 'reference',
+      };
+    }
+  }
+
+  // 其它第三方供应商 / 未知路由:SDK 值是 USD 口径,投影到账本币种而不是构建区域,
   // 否则 USD 结算账号上这些花费会变成 CNY 并被账本守卫丢弃。
   const sdkAmount = Math.max(0, sdkCostDelta ?? 0);
   if (sdkAmount > 0) {
@@ -240,10 +265,6 @@ export function resolveTurnCost(args: {
       source: context.billingRoute === 'provider-api' ? 'sdk' : 'sdk-fallback',
     };
   }
-  const providerQuote =
-    context.billingRoute === 'provider-api'
-      ? getModelPriceQuote(pricing, context.providerId, model, 'claude-code')
-      : undefined;
   return {
     model,
     money: providerQuote ? computePriceQuoteTurnMoney(tokens, providerQuote, ledgerCurrency) : null,
@@ -338,6 +359,8 @@ export function buildClaudeTurnUsageDetails(
   deltas: ModelUsageDeltaEntry[] | undefined,
   fallbackModel: string,
   perModel?: ResolvedModelCost[],
+  durationMs?: number,
+  turnDurationMs?: number,
 ): TurnUsageDetails | null {
   const hasModelUsageDeltas = Boolean(deltas && deltas.length > 0);
   const perModelCost = perModel
@@ -359,5 +382,7 @@ export function buildClaudeTurnUsageDetails(
     model: deltas?.length === 1 ? deltas[0].model : hasModelUsageDeltas ? undefined : fallbackModel,
     models: hasModelUsageDeltas ? deltas?.map((delta) => delta.model) : undefined,
     perModelCost: perModelCost && perModelCost.length > 0 ? perModelCost : undefined,
+    durationMs,
+    turnDurationMs,
   });
 }

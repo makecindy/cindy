@@ -70,7 +70,9 @@ describe('maker auth IPC handlers', () => {
       identity: { email: 'dev@example.test' },
     });
     expect(onCodexAuthChange).toHaveBeenCalledOnce();
-    expect(refreshAgentLocalModels).toHaveBeenCalledWith('codex');
+    expect(refreshAgentLocalModels).toHaveBeenCalledWith('codex', {
+      credentialMode: 'oauth-bearer',
+    });
     expect(onCodexAuthChange).toHaveBeenCalledWith(true, true, expect.any(Function));
     expect(broadcast).toHaveBeenNthCalledWith(1, MAKER_PUSH.AUTH_LOGIN_PROGRESS, {
       agentKind: 'codex',
@@ -1194,6 +1196,7 @@ describe('maker usage IPC handlers', () => {
       readClaudeAccountUsageSnapshot: vi.fn(),
       triggerClaudeAccountUsageRefresh: vi.fn(),
       readModelPricing: vi.fn(),
+      readReferenceModelPricing: vi.fn(() => ({})),
       readUsageHistory: vi.fn().mockResolvedValue(emptyHistory),
       emptyUsageHistory: vi.fn(() => emptyHistory),
       ...over,
@@ -1267,6 +1270,36 @@ describe('maker usage IPC handlers', () => {
     });
     await expect(harness.invoke(MAKER_INVOKE.USAGE_MODEL_PRICING_V2)).resolves.toEqual(pricing);
     expect(readModelPricing).toHaveBeenCalledTimes(2);
+  });
+
+  it('serves non-XD reference prices on a channel independent from XD pricing', async () => {
+    const harness = new IpcHarness();
+    const referencePricing = {
+      anthropic: {
+        'claude-sonnet-4-6': {
+          providerId: 'anthropic',
+          modelId: 'claude-sonnet-4-6',
+          currency: 'USD',
+          source: 'provider-reference',
+          approximate: true,
+          inputPerMtok: 3,
+          outputPerMtok: 15,
+        },
+      },
+    };
+    const readReferenceModelPricing = vi.fn(() => referencePricing);
+    const readModelPricing = vi.fn();
+
+    registerMakerUsageHandlers(
+      harness,
+      makeUsageDeps({ readReferenceModelPricing, readModelPricing }),
+    );
+
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_REFERENCE_MODEL_PRICING)).resolves.toEqual(
+      referencePricing,
+    );
+    expect(readReferenceModelPricing).toHaveBeenCalledOnce();
+    expect(readModelPricing).not.toHaveBeenCalled();
   });
 
   it('reads Codex reset credits and consumes only a UUID offer key', async () => {

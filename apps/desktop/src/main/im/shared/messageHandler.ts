@@ -27,7 +27,7 @@ import {
 } from '../accountBoundary';
 
 import { getControlScope, isInControl } from './controlState';
-import { isStopCommand } from './controlCommands';
+import { isCommandAuthorized, isStopCommand } from './controlCommands';
 import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
 import type { ImTurnRunner } from './turnRunner';
@@ -61,6 +61,33 @@ export function createMessageHandler(
         `textLen=${event.text.length} att=${event.attachments.length} unsupported=${event.unsupported.length}`,
     );
 
+    // ── 控制命令的主人门: 群成员的 !stop / slash 静默丢弃 ────────────────────
+    // 群消息的 senderId 是**群 lane**(telegram g/<chatId>、钉钉
+    // encodeLaneUserId(conversationId)), 所以群成员发的 !stop 会解析到同一个群
+    // 会话 —— 等于掐掉主人正在跑的那一轮; slash 则会去动主人的目录/会话。
+    // 静默(不回提示)与 telegram 入站层同口径: 群里不可被探测。也不落到 agent,
+    // 否则命令会变成一句普通 prompt。
+    //
+    // 放在 /ctr 拦截**之前**: 否则主人正走 /ctr 时, 群成员发命令会收到一句
+    // "控制流程中" —— 等于把主人的状态回给了没有权限的人。
+    //
+    // 只有**纯文本**才算控制命令: 附件与 unsupported(音视频/超限/未知类型等)都要
+    // 让消息走 unsupportedNotice / unsupportedOnly / agent 的原有路径, 不能被当成
+    // 一句裸命令吞掉 —— 那会连"你那个音频我处理不了"的反馈一起吃掉。
+    // 这个判据必须与下面两条命令分支**逐字一致**: 门比分支窄一点, 非主人的
+    // `!stop` + unsupported 就会穿过门再被分支执行, 洞等于没堵。
+    const pureTextCommandInput =
+      event.text.length > 0 && event.attachments.length === 0 && event.unsupported.length === 0;
+    const commandLike =
+      pureTextCommandInput && (isStopCommand(event.text) || looksLikeSlashCommand(event.text));
+    if (commandLike && !isCommandAuthorized(event)) {
+      log.info(
+        `dropped non-owner command sender=...${event.senderId.slice(-8)} ` +
+          `speaker=...${(event.speaker?.id ?? '').slice(-8)}`,
+      );
+      return;
+    }
+
     // ── /ctr 原子化拦截 ────────────────────────────────────────────────
     // 该 (bot, owner) 处于 /ctr 流程中 → 任何消息都不路由到 slash/agent,
     // 直接回提示让用户走卡片按钮 (back/exit/session-pick) 退出。包括重复
@@ -89,10 +116,10 @@ export function createMessageHandler(
     }
 
     // ── !stop 控制指令: 中止当前 turn, 绝不作为普通消息入队 ─────────────────
-    // 放在 slash 之前; 与 slash 同口径只认无附件的纯文本。turn 运行期间
-    // userLocks 并不持锁(runAgentTurn 在 dispatch 后即返回), 所以这里能在
+    // 放在 slash 之前; 与 slash 同口径只认纯文本(见 pureTextCommandInput)。turn
+    // 运行期间 userLocks 并不持锁(runAgentTurn 在 dispatch 后即返回), 所以这里能在
     // 上一轮仍在跑时立刻执行, 而不是排到它后面。
-    if (event.text && event.attachments.length === 0 && isStopCommand(event.text)) {
+    if (pureTextCommandInput && isStopCommand(event.text)) {
       let reply: string;
       try {
         const result = await turnRunner.stopActiveTurn({
@@ -118,8 +145,8 @@ export function createMessageHandler(
       return;
     }
 
-    // ── slash command (only on plain text, no attachments) ──────────────────
-    if (event.text && event.attachments.length === 0 && looksLikeSlashCommand(event.text)) {
+    // ── slash command (only on plain text: no attachments, no unsupported) ──
+    if (pureTextCommandInput && looksLikeSlashCommand(event.text)) {
       try {
         await slash.handleSlashCommand(event.text, {
           botContextId: event.contextId,
@@ -166,7 +193,7 @@ export function createMessageHandler(
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
-    let prepared: { agentText: string; commit?: () => void } | null = null;
+    let prepared: { agentText: string; commit?: () => void | Promise<void> } | null = null;
     if (adapter.prepareAgentTurnText) {
       try {
         prepared = await adapter.prepareAgentTurnText(event);
@@ -177,19 +204,26 @@ export function createMessageHandler(
     }
     // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
     const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
+    const groupHistoryAccess = adapter.groupHistoryAccessFor?.(event);
     try {
       await turnRunner.runAgentTurn({
         botContextId: event.contextId,
         userId: event.senderId,
         userMessageId: event.messageId,
         text: event.text,
+        // 受保护群的触发消息照常起 turn, 但不进会话存档(渠道侧已挡住群历史池,
+        // 这里挡住第二条路径)。
+        ...(event.protectedContent === true ? { protectedContent: true } : {}),
         ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
+        ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
         ...(prepared?.commit
           ? {
-              // 路由解析成功 = 消息确定会被派发/排队 — 群窗口游标此刻才推进,
-              // 路由失败(鉴权缺失等)不推进, 上下文批次下次仍进 prompt。
-              onRouteResolved: () => prepared?.commit?.(),
+              // turnRunner 只在 provider 真正接受消息后调用；排队、停止与
+              // teardown 都不推进游标, 受理前失败时上下文批次下次仍进 prompt。
+              onRouteResolved: async () => {
+                await prepared?.commit?.();
+              },
             }
           : {}),
         attachments: event.attachments,

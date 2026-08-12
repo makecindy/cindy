@@ -302,6 +302,112 @@ describe('anthropic-compat-proxy tool_use provider field compatibility', () => {
 });
 
 describe('anthropic-compat-proxy encrypted content retry', () => {
+  it('preserves readable agent progress when foreign reasoning ciphertext triggers recovery', async () => {
+    const upstream = await startFakeUpstream((_idx, rawBody, res) => {
+      const body = JSON.parse(rawBody) as {
+        input?: Array<{ type?: string; content?: unknown[]; encrypted_content?: unknown }>;
+      };
+      const encryptedParts = (body.input ?? [])
+        .filter((item) => item.type === 'agent_message' && Array.isArray(item.content))
+        .flatMap((item) => item.content ?? [])
+        .filter((part): part is Record<string, unknown> => (
+          typeof part === 'object'
+          && part !== null
+          && 'type' in part
+          && part.type === 'encrypted_content'
+        ));
+      const foreignReasoning = (body.input ?? []).some((item) => (
+        item.type === 'reasoning'
+        && item.encrypted_content === 'gAAAAA-foreign-reasoning'
+      ));
+      if (encryptedParts.some((part) => typeof part.encrypted_content !== 'string')) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: {
+            message: "Missing required parameter: 'input[2].content[1].encrypted_content'.",
+            code: 'missing_required_parameter',
+          },
+        }));
+      } else if (foreignReasoning) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(ENC_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    upstreamClose = upstream.close;
+    const controller = createThreadStripController();
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [createActiveStripTransform({
+        controller,
+        enabled: () => true,
+        strip: stripEncryptedContentFromBody,
+      })],
+      recoveryRules: [createEncryptedContentRecoveryRule({
+        enabled: () => true,
+        onRetry: (threadId, model) => controller.markActive(threadId, model),
+      })],
+    });
+    const request = {
+      model: 'gpt-5.6-sol',
+      input: [
+        { type: 'message', role: 'user', content: 'go' },
+        {
+          type: 'reasoning',
+          id: 'foreign-reasoning',
+          summary: [],
+          encrypted_content: 'gAAAAA-foreign-reasoning',
+        },
+        {
+          type: 'agent_message',
+          author: '/root/progress_test',
+          recipient: '/root',
+          content: [
+            { type: 'input_text', text: 'progress' },
+            { type: 'encrypted_content', encrypted_content: 'gAAAAA-progress' },
+          ],
+          internal_chat_message_metadata_passthrough: { source: 'send_message' },
+        },
+        {
+          type: 'agent_message',
+          author: '/root/progress_test',
+          recipient: '/root',
+          content: [{ type: 'input_text', text: 'complete' }],
+        },
+        {
+          type: 'agent_message',
+          author: '/root/opaque',
+          content: [{ type: 'encrypted_content', encrypted_content: 'gAAAAA-only' }],
+        },
+      ],
+    };
+
+    expect((await post(proxy.url, request)).status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(JSON.parse(upstream.bodies[1]).input).toEqual([
+      { type: 'message', role: 'user', content: 'go' },
+      {
+        type: 'agent_message',
+        author: '/root/progress_test',
+        recipient: '/root',
+        content: [{ type: 'input_text', text: 'progress' }],
+        internal_chat_message_metadata_passthrough: { source: 'send_message' },
+      },
+      {
+        type: 'agent_message',
+        author: '/root/progress_test',
+        recipient: '/root',
+        content: [{ type: 'input_text', text: 'complete' }],
+      },
+    ]);
+
+    expect((await post(proxy.url, request)).status).toBe(200);
+    expect(upstream.bodies).toHaveLength(3);
+    expect(upstream.bodies[2]).toBe(upstream.bodies[1]);
+  });
+
   it('retries invalid_encrypted_content once when enabled and marks the thread active', async () => {
     const upstream = await startFakeUpstream((idx, _body, res) => {
       if (idx === 0) {
@@ -2131,5 +2237,335 @@ describe('anthropic-compat-proxy 入站请求体 dump 开关(debugDumpRequestBod
     const inbound = debugs.find((d) => d.msg.includes('inbound request'));
     expect(inbound).toBeDefined();
     expect(inbound?.ctx).not.toHaveProperty('body');
+  });
+});
+
+describe('tool_use id 响应流去重改写(kimi 撞车自愈)', () => {
+  const SSE_BODY =
+    'event: message_start\n' +
+    'data: {"type":"message_start","message":{"id":"chatcmpl-x","role":"assistant","content":[]}}\n\n' +
+    'event: content_block_start\n' +
+    'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"想"}}\n\n' +
+    'event: content_block_start\n' +
+    'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n\n' +
+    'event: content_block_start\n' +
+    'data: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"Bash_999","name":"Bash","input":{}}}\n\n' +
+    'event: message_stop\n' +
+    'data: {"type":"message_stop"}\n\n';
+
+  function sseUpstream() {
+    return startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(SSE_BODY);
+    });
+  }
+
+  it('请求历史带铸造形态 id 时, 响应里撞车的 tool_use id 被改名, 新 id 不动', async () => {
+    const upstream = await sseUpstream();
+    upstreamClose = upstream.close;
+    const infos: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      logger: { info: (msg, ctx) => infos.push({ msg, ctx }) },
+    });
+
+    const res = await post(proxy.url, {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'user', content: '分析' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Bash_210', content: 'ok' }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    // 撞车 id 被改名; 新 id(Bash_999)与历史无关 → 不动
+    expect(res.text).toContain('"id":"Bash_210_dup2"');
+    expect(res.text).toContain('"id":"Bash_999"');
+    expect(res.text).not.toContain('"id":"Bash_210"');
+    // thinking / 事件框架行原样
+    expect(res.text).toContain('event: message_stop');
+    expect(
+      infos.some(
+        (l) => l.msg.includes('renamed duplicate tool_use id') && l.ctx?.from === 'Bash_210' && l.ctx?.to === 'Bash_210_dup2',
+      ),
+    ).toBe(true);
+  });
+
+  it('请求历史无铸造形态 id 时, 响应流字节透传(零干预)', async () => {
+    const upstream = await sseUpstream();
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const res = await post(proxy.url, {
+      model: 'claude-sonnet-4',
+      messages: [
+        { role: 'user', content: '分析' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_01Jx4AbC', name: 'Bash', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01Jx4AbC', content: 'ok' }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.text).toBe(SSE_BODY);
+  });
+
+  it('非 SSE 响应不接管(字节透传)', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          id: 'chatcmpl-x',
+          content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }],
+        }),
+      );
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const res = await post(proxy.url, {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('"id":"Bash_210"');
+  });
+
+  it('SSE 改写长度变化时自动剥离 content-length,客户端不截断(GPT-5.5 第 5 轮 P1)', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      const sseBody =
+        'event: content_block_start\n' +
+        'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n\n' +
+        'event: message_stop\n' +
+        'data: {"type":"message_stop"}\n\n';
+      // upstream 发出定长 content-length(改写后 body 会变得更长)
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'content-length': String(Buffer.byteLength(sseBody)),
+      });
+      res.end(sseBody);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const res = await post(proxy.url, {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    // 改写后 id 被改名,且完整的 SSE 帧无截断(message_stop 存在)
+    expect(res.text).toContain('"id":"Bash_210_dup2"');
+    expect(res.text).toContain('"type":"message_stop"');
+  });
+});
+
+describe('压缩 SSE 不接管(Greptile review)', () => {
+  it('content-encoding 存在时保持字节透传,不改名、不删 content-length', async () => {
+    const { gzipSync } = await import('node:zlib');
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      const sseBody =
+        'event: content_block_start\n' +
+        'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n\n';
+      // 真实 gzip 压缩的 SSE:改写器不得接管(压缩字节按明文行切分会漏改/误改)
+      const gzipped = gzipSync(Buffer.from(sseBody, 'utf8'));
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'content-encoding': 'gzip',
+        'content-length': String(gzipped.length),
+      });
+      res.end(gzipped);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const res = await post(proxy.url, {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    // 字节透传:客户端自解压后内容完整、id 不改名(未进入改写器)
+    expect(res.text).toContain('"id":"Bash_210"');
+    expect(res.text).not.toContain('Bash_210_dup2');
+  });
+
+  it('content-encoding: identity(明文,不压缩)仍接管改写(Greptile P1)', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      const sseBody =
+        'event: content_block_start\n' +
+        'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n\n';
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'content-encoding': 'identity',
+        'content-length': String(Buffer.byteLength(sseBody)),
+      });
+      res.end(sseBody);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const res = await post(proxy.url, {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    // identity 是明文:必须接管并改名(改写后长度变化,content-length 被剥离)
+    expect(res.text).toContain('"id":"Bash_210_dup2"');
+  });
+});
+
+describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 id 时仍拦截重铸)', () => {
+  const MINTED_SSE =
+    'event: content_block_start\n' +
+    'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n\n';
+
+  function mintingUpstream() {
+    return startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(MINTED_SSE);
+    });
+  }
+
+  // per-thread 缓存需要**同一 proxy 实例**跨请求累积(每个请求独立建 proxy 会丢缓存),
+  // 因此 postAs 复用同一个 upstream + proxy。
+  async function setupSingleProxy(): Promise<void> {
+    const upstream = await mintingUpstream();
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [] });
+  }
+
+  async function postAs(sessionId: string, body: unknown): Promise<string> {
+    const res = await fetch(`${proxy!.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-claude-code-session-id': sessionId },
+      body: JSON.stringify(body),
+    });
+    return res.text();
+  }
+
+  it('全新 kimi 会话(无 minted id 历史)仍接管并记录首个 streamed id(codex-connector P1)', async () => {
+    await setupSingleProxy();
+    // 全新 kimi 会话: 请求体无任何铸造形态 id → requestedIds null, cache 空;
+    // 修复前 responseToolUseIds 也 null → 不接管 → 首 fresh id 未记录。
+    // 修复后: 请求体 model=kimi 判定接管, onObserved 记录 Bash_210。
+    const r1 = await postAs('sess-fresh', {
+      model: 'moonshot/kimi-k3',
+      messages: [{ role: 'user', content: '你好' }],
+    });
+    expect(r1).toContain('"id":"Bash_210"'); // fresh id 透传(无撞车)
+
+    // 第二次请求(同 session, 无铸造 id 历史, 模拟 rewind): 缓存里已有 Bash_210
+    // → 响应铸 Bash_210 仍被拦截改名
+    const r2 = await postAs('sess-fresh', {
+      model: 'moonshot/kimi-k3',
+      messages: [{ role: 'user', content: '继续' }],
+    });
+    expect(r2).not.toContain('"id":"Bash_210"');
+    expect(r2).toMatch(/Bash_210_dup\d+/);
+  });
+
+  it('Kimi Code 的 k3 模型 id 同样判定为 kimi 会话(codex-connector P1)', async () => {
+    await setupSingleProxy();
+    // catalog 里 moonshot-kimi-code provider 的 claude-code runtime model id 是裸 `k3`
+    // (Kimi K3), 不带 kimi 前缀 —— 修复前 isKimiRequest 对 k3 返回 false → 不接管
+    const r1 = await postAs('sess-k3', {
+      model: 'k3',
+      messages: [{ role: 'user', content: '你好' }],
+    });
+    expect(r1).toContain('"id":"Bash_210"'); // fresh id 透传(无撞车)
+
+    // 第二次请求(同 session, 模拟 rewind): 缓存里已有 Bash_210 → 拦截改名
+    const r2 = await postAs('sess-k3', {
+      model: 'k3',
+      messages: [{ role: 'user', content: '继续' }],
+    });
+    expect(r2).not.toContain('"id":"Bash_210"');
+    expect(r2).toMatch(/Bash_210_dup\d+/);
+  });
+
+  it('请求1(历史含 Bash_210)改名;请求2(同 session,历史不含 Bash_210)仍拦截重铸', async () => {
+    await setupSingleProxy();
+    // 请求1: 历史带 Bash_210 → 响应铸 Bash_210 → 撞车 → 改名; Bash_210 进线程缓存
+    const r1 = await postAs('sess-1', {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(r1).toContain('"id":"Bash_210_dup2"');
+
+    // 请求2: 同 session, 历史**不含** Bash_210(模拟 rewind 后历史缺席)
+    // → 若只从请求体建 usedIds, 该 id 会被当「新 id」放行; per-thread 缓存必须拦截
+    const r2 = await postAs('sess-1', {
+      model: 'kimi-k3',
+      messages: [{ role: 'user', content: '继续分析' }],
+    });
+    // 缓存让 r2 仍设防:响应铸 Bash_210 被改名(后缀可能顺延为 _dup3,因为 r1
+    // 的 onRename 已把 _dup2 写进缓存),绝不能原样放行 Bash_210
+    expect(r2).not.toContain('"id":"Bash_210"');
+    expect(r2).toMatch(/Bash_210_dup\d+/);
+  });
+
+  it('请求2 仍含部分铸造 id 时,缓存里缺席的旧 id 也并入种子(codex-connector P1)', async () => {
+    await setupSingleProxy();
+    // 请求1: 历史带 Bash_210 → 改名 → 进缓存
+    const r1 = await postAs('sess-partial', {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(r1).toContain('"id":"Bash_210_dup2"');
+
+    // 请求2: 同 session, 请求体**仍含另一个**铸造 id(Read_5, 使 requestedIds 非空),
+    // 但 Bash_210 缺席 —— 若只从请求体建种子, Bash_210 会漏; 缓存必须并入。
+    // fake upstream 恒铸 Bash_210 → 必须仍被改名, 不得原样放行。
+    const r2 = await postAs('sess-partial', {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Read_5', name: 'Read', input: {} }] },
+      ],
+    });
+    expect(r2).not.toContain('"id":"Bash_210"');
+    expect(r2).toMatch(/Bash_210_dup\d+/);
+  });
+
+  it('不同 session 的缓存互不串扰', async () => {
+    await setupSingleProxy();
+    // 请求1 在 sess-A 铸 Bash_210(缓存入 sess-A)
+    await postAs('sess-A', {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    // 请求2 在 sess-B(全新会话, 无缓存)铸 Bash_210 → 请求体不带历史 id → 应放行
+    const r2 = await postAs('sess-B', {
+      model: 'kimi-k3',
+      messages: [{ role: 'user', content: '你好' }],
+    });
+    expect(r2).toContain('"id":"Bash_210"');
+    expect(r2).not.toContain('Bash_210_dup2');
   });
 });

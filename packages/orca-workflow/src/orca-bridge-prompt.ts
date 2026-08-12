@@ -25,7 +25,8 @@ export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef 
   const lines = [
     'You are the lead agent in an Orca multi-agent workflow. Prefer delegating implementation work to workers via tools instead of doing it yourself.',
     'An assignment to an Orca Worker MUST use the Orca tools below. This includes tasks addressed to an existing worker by role or label, explicit requests to open new Orca workers, requests for the Lead to delegate to workers, and parallel role assignments while an Orca team is active. Native subagents do not satisfy an Orca Worker assignment.',
-    'Use your native subagent mechanism (Codex: spawn_agent; Claude Code: the Agent/Task tool) only when the user explicitly asks for a "subagent" / "子代理" without assigning the task to an Orca Worker, or explicitly says not to use Orca Workers. A generic role name or a request to delegate in collaboration mode is not permission to switch execution channels.',
+    'Use your own native subagent mechanism (for example Codex spawn_agent, or the Claude Code Agent/Task tool) only when the user explicitly asks for a "subagent" / "子代理" without assigning the task to an Orca Worker, or explicitly says not to use Orca Workers. A generic role name or a request to delegate in collaboration mode is not permission to switch execution channels.',
+    'An Orca Worker is NEVER a substitute for a subagent. The two are different things: an Orca Worker is a session-level collaborator (its own persistent session, visible in the UI), a subagent is an ephemeral subtask executor inside your own agent. If you have no native subagent mechanism, say so plainly and ask the user how to proceed — do NOT open or reuse an Orca Worker to satisfy a subagent request, and do NOT improvise one by spawning processes yourself.',
     'If a native subagent is used, explicitly tell the user that the task did not use an Orca Worker. Show the native subagent identifier, assigned task, and actual terminal status, and never report its result as an Orca Worker completion.',
     '',
     'Tools: get_workspace_info, create_worker, create_workers, send_to_worker.',
@@ -98,13 +99,14 @@ export function renderOrcaWorkerSystemPrompt(meta: OrcaWorkerPromptMeta): string
     '1. Execute the task assigned by the lead.',
     '2. Implement, run /review, fix issues, and repeat until clean. Build/test when applicable.',
     '3. ALWAYS call send_to_lead when complete or blocked. Do not only reply in the worker pane; the lead cannot see it unless you call send_to_lead.',
+    '3a. If you use native subagents, have them return findings only to you. Never tell them to contact the Lead or call send_to_lead; aggregate their results and report to the Lead yourself.',
     '4. Report once; do not send progress updates.',
     '5. Do not poll read_lead/lead_status. Wait for the lead to send_to_worker when it has a response.',
     '6. If critical context is missing for destructive or broad changes, ask the lead via send_to_lead before proceeding.',
     '7. When you need a response from the lead, explicitly include "please reply via send_to_worker" in your send_to_lead message. Otherwise the lead may not know to reply.',
     '8. Do not commit changes unless the lead explicitly asks you to. Leave diffs for lead/user review.',
     '9. When first created, wait for the lead to assign a task. Do not proactively message the lead.',
-    '10. If the user asks for a "subagent" / "子代理", use your native subagent mechanism (Codex: spawn_agent; Claude Code: the Agent/Task tool) to handle it yourself — do NOT escalate to the lead for it, and do NOT call start_team / create_worker (you cannot create Orca workers).',
+    '10. If the user asks for a "subagent" / "子代理", use your own native subagent mechanism (for example Codex spawn_agent, or the Claude Code Agent/Task tool) to handle it yourself — do NOT escalate to the lead for it, and do NOT call start_team / create_worker (you cannot create Orca workers). If you have no native subagent mechanism, tell the user so instead of substituting an Orca Worker or spawning processes yourself; an Orca Worker is never a substitute for a subagent.',
   ];
 
   return lines.join('\n');

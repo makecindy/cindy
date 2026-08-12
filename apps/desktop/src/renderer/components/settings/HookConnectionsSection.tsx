@@ -35,9 +35,9 @@
  * 颜色全部走主题 token; 状态徽章沿用「个人」栏的 --settings-badge-* 语义色。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Plus, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, Plus, Trash2 } from 'lucide-react';
 
 import { Switch } from '@/components/ui/switch';
 import {
@@ -48,7 +48,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
+import type {
+  ImDefaultAgentKind,
+  ImDefaultSettingsState,
+} from '../../../shared/imDefaultSettings';
+import { acknowledgeXUsage, isXUsageAcknowledged } from '@/state/xUsageNotice';
+import { XUsageGuide } from './XUsageGuide';
 import {
   HOOK_BIND_REASON_ALREADY_BOUND,
   HOOK_BIND_REASON_NOT_INSTALLED,
@@ -64,7 +71,6 @@ import {
 type NeutralCardProvider = 'telegram' | 'x';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
-import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import {
   TelegramBehaviorSettings,
   TelegramGroupActivationSettings,
@@ -120,6 +126,264 @@ function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: st
       <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} aria-hidden />
       {label}
     </span>
+  );
+}
+
+/**
+ * 存量 global override 的收尾入口（**只对升级用户可见**）。
+ *
+ * 官方卡的「新对话配置」区块删掉后, 用户此前在那里改过的 agent / model / effort 仍以
+ * global scope 落在盘上, 并继续被 session-runner(`readImDefaultSettings(undefined)`)与
+ * 目录行的生效值解析当作 fallback —— 于是旧设置照旧影响所有没显式配置的目录、以及
+ * 以后新加的目录, 而用户再也看不到、也改不了它(review 指出)。
+ *
+ * 不选"静默清除": 那会在升级瞬间悄悄改掉用户已保存的 agent / 模型。也不选"把区块留
+ * 着": 那等于把这次要消除的重叠原样放回来。折中是**仅当确实存在 override 时**露出这
+ * 一条: 说清它还在生效、显示它是什么、给一个恢复默认的按钮; 恢复后它永久消失, 从未
+ * 设过的用户一次都看不到。
+ *
+ * **两张 provider-neutral 卡都挂**: global scope 是官方 Telegram 与 X 共用的那一份
+ * (`session-runner` 对两者都读 `readImDefaultSettings(undefined)`)。只挂在 Telegram 上,
+ * 曾设过 override 后关掉 Telegram、只用 X 的升级用户就没有入口, 旧值继续被 X 任务消费,
+ * 而他只能猜"要重新打开 Telegram 才能清"(review 指出)。
+ */
+/** 「恢复默认」实际会清掉的一条 override(供 UI 逐条列出; 纯数据, 文案在组件里)。 */
+export type LegacyOverrideRow =
+  | { kind: 'agentKind'; current: string; fallback: string }
+  | { kind: 'permissionMode'; current: string; fallback: string }
+  | {
+      kind: 'agent';
+      agent: string;
+      fields: Array<{ field: 'model' | 'effort' | 'source'; current: string; fallback: string }>;
+    };
+
+/**
+ * 把 `customizedKeys` 展开成「这次会清掉什么」的完整清单。
+ *
+ * 为什么不能只显示当前 agentKind 的 model: `imDefaultSettingsReset()` 清的是**整个**
+ * global scope, 包含 `agents` 里其它 agent 的 model / effort / 来源。用户可能曾切到另一个
+ * agent 改过这些再切回来 —— 那些值此刻正被"显式选了该 agent、但模型档位仍跟随默认"的目录
+ * 消费, 只报当前 agent 一行就等于让他在不知道范围的情况下改掉目录路由(review 指出)。
+ */
+export function legacyOverrideRows(state: ImDefaultSettingsState): LegacyOverrideRow[] {
+  const rows: LegacyOverrideRow[] = [];
+  for (const key of state.customizedKeys) {
+    if (key === 'agentKind') {
+      rows.push({ kind: 'agentKind', current: state.agentKind, fallback: state.defaults.agentKind });
+      continue;
+    }
+    if (key === 'permissionMode') {
+      rows.push({
+        kind: 'permissionMode',
+        current: state.permissionMode,
+        fallback: state.defaults.permissionMode,
+      });
+      continue;
+    }
+    if (!key.startsWith('agents.')) continue;
+    const agent = key.slice('agents.'.length) as ImDefaultAgentKind;
+    const current = state.agents[agent];
+    const fallback = state.defaults.agents[agent];
+    if (!current || !fallback) continue;
+    // 只列真的不一样的子字段 —— 把三项全列出来会让人以为都被改过。
+    const fields: Array<{ field: 'model' | 'effort' | 'source'; current: string; fallback: string }> =
+      [];
+    if (current.model !== fallback.model) {
+      fields.push({ field: 'model', current: current.model, fallback: fallback.model });
+    }
+    if (current.effort !== fallback.effort) {
+      fields.push({ field: 'effort', current: current.effort, fallback: fallback.effort });
+    }
+    if (current.providerId !== fallback.providerId) {
+      fields.push({
+        field: 'source',
+        current: current.providerId ?? '',
+        fallback: fallback.providerId ?? '',
+      });
+    }
+    if (fields.length > 0) rows.push({ kind: 'agent', agent, fields });
+  }
+  return rows;
+}
+
+function useLegacyGlobalDefaults(onCleared: () => void): {
+  state: ImDefaultSettingsState | null;
+  pending: boolean;
+  restore: () => Promise<void>;
+} {
+  const { t } = useTranslation();
+  const [state, setState] = useState<ImDefaultSettingsState | null>(null);
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void window.electronAPI.maker
+      .imDefaultSettingsGet()
+      .then((next) => {
+        if (active) setState(next);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const restore = useCallback(async () => {
+    if (pending) return;
+    setPending(true);
+    try {
+      setState(await window.electronAPI.maker.imDefaultSettingsReset());
+      // 两张卡的目录行都以 global scope 为生效值解析源 —— 只刷新当前这张会让另一张
+      // 继续显示磁盘上已经不存在的旧默认(review 指出)。
+      onCleared();
+      toast.success(t('settings.defaults.restored'));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
+    } finally {
+      setPending(false);
+    }
+  }, [onCleared, pending, t]);
+
+  return { state, pending, restore };
+}
+
+/** 上面那条提示的纯展示部分(状态由 useLegacyGlobalDefaults 单点持有, 两张卡共用)。 */
+function LegacyGlobalDefaultsNotice({
+  state,
+  pending,
+  onRestore,
+}: {
+  state: ImDefaultSettingsState | null;
+  pending: boolean;
+  onRestore: () => void;
+}) {
+  const { t } = useTranslation();
+  if (state === null || !state.isCustomized) return null;
+  return (
+    <div
+      data-testid="hook-legacy-global-defaults"
+      className="flex flex-col gap-1.5 rounded-xl border border-[var(--border-default)] p-2.5"
+    >
+      <span className="text-12 font-medium text-[var(--text-secondary)]">
+        {t('settings.remoteControl.hook.form.legacyDefaultsTitle')}
+      </span>
+      <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+        {t('settings.remoteControl.hook.form.legacyDefaultsDescription')}
+      </span>
+      {/* 逐条列出**这次实际会清掉的全部** override(见 legacyOverrideRows 注释):
+          只报当前 agent 的模型, 等于让用户在不知道范围的情况下改掉目录路由。 */}
+      <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+        {legacyOverrideRows(state).map((row) => (
+          <li
+            key={row.kind === 'agent' ? `agent:${row.agent}` : row.kind}
+            data-testid="hook-legacy-global-defaults-row"
+            className="text-11 leading-relaxed text-[var(--text-tertiary)]"
+          >
+            {row.kind === 'agent'
+              ? t('settings.remoteControl.hook.form.legacyDefaultsRowAgent', {
+                  agent: row.agent,
+                  fields: row.fields
+                    .map((f) =>
+                      t(`settings.remoteControl.hook.form.legacyDefaultsField.${f.field}`, {
+                        current:
+                          f.current ||
+                          t('settings.remoteControl.hook.form.legacyDefaultsSourceFollowsGlobal'),
+                        fallback:
+                          f.fallback ||
+                          t('settings.remoteControl.hook.form.legacyDefaultsSourceFollowsGlobal'),
+                      }),
+                    )
+                    .join(t('settings.remoteControl.hook.form.legacyDefaultsFieldSeparator')),
+                })
+              : t(`settings.remoteControl.hook.form.legacyDefaultsRow.${row.kind}`, {
+                  current: row.current,
+                  fallback: row.fallback,
+                })}
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        data-testid="hook-legacy-global-defaults-restore"
+        onClick={onRestore}
+        disabled={pending}
+        className="mt-0.5 flex h-7 w-fit items-center rounded-full border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] disabled:opacity-50"
+      >
+        {t('settings.defaults.restore')}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * 单选组的方向键导航(WAI-ARIA radio group: 方向键同时移动焦点与选中项)。
+ *
+ * roving tabIndex 只解决"Tab 一次进组"; 组内换项必须靠方向键 —— 只给 tabIndex 的话
+ * 键盘用户进组后就再也切不出去(review 指出)。禁用项(未落盘的新目录行)跳过。
+ * 复用各项自己的 onClick 完成写入, 不在这里重复一条写路径。
+ */
+function handleRadioGroupKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
+  // 单选组容器同时包着别名输入框与「换目录」按钮 —— 事件不是从 radio 冒上来的就一律
+  // 放行。漏这一步会让在别名输入框里按 ←/→ 移动光标变成"焦点跳到相邻 radio 并点击它",
+  // 于是用户改个名字就把默认工作目录换成了另一个(review 指出)。
+  if ((e.target as HTMLElement).closest('[role="radio"]') === null) return;
+  const forward = e.key === 'ArrowDown' || e.key === 'ArrowRight';
+  const backward = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
+  if (!forward && !backward) return;
+  const options = [
+    ...e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]:not([disabled])'),
+  ];
+  if (options.length === 0) return;
+  const current = options.indexOf(document.activeElement as HTMLButtonElement);
+  // 焦点还不在任何一项上(例如刚点进容器): 从选中项开始, 没有选中项就从头。
+  const from = current >= 0 ? current : Math.max(0, options.findIndex((o) => o.getAttribute('aria-checked') === 'true'));
+  const next = options[(from + (forward ? 1 : -1) + options.length) % options.length];
+  e.preventDefault();
+  next.focus();
+  next.click();
+}
+
+/**
+ * 目录行头部的「设为默认工作目录」单选(row 形态; Telegram 用)。
+ *
+ * 视觉沿用 LanguageSection 的选中态范式与 --settings-menu-* 语义 token —— 双模式
+ * 由 token 自动覆盖, 不写任何硬编码色; 选中用对勾, 与 DESIGN.md §16.3 协议 radio
+ * 的仓内口径一致。模块级组件而非内联: 内联组件每次渲染都会重建类型导致子树
+ * remount, 别名输入框会在输入中途失焦(同 renderWorkdirSection 的理由)。
+ */
+function DefaultWorkspaceRadio({
+  selected,
+  label,
+  onSelect,
+  disabled = false,
+}: {
+  selected: boolean;
+  label: string;
+  onSelect: () => void;
+  /** true = 这一行还没落盘, 不能当默认目录(别名尚未进 workspaces)。 */
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      aria-label={label}
+      aria-disabled={disabled || undefined}
+      disabled={disabled}
+      title={label}
+      tabIndex={selected ? 0 : -1}
+      onClick={onSelect}
+      className={cn(
+        'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors',
+        selected
+          ? 'border-[var(--settings-menu-border-selected)] bg-[var(--settings-menu-bg-selected)] text-[var(--settings-menu-text-selected)]'
+          : 'border-[var(--border-default)] text-transparent hover:border-[var(--settings-menu-border-selected)]',
+        disabled && 'cursor-not-allowed opacity-40 hover:border-[var(--border-default)]',
+      )}
+    >
+      <Check size={12} aria-hidden />
+    </button>
   );
 }
 
@@ -310,17 +574,21 @@ export function HookConnectionsSection() {
   );
 
   /**
-   * X 的默认工作目录写入。
+   * 默认工作目录写入(Telegram / X)。
    *
-   * 只有 X 有这个控件: Slack / Telegram 能在会话里当场挑目录, X 一次交互只允许
-   * 回一条公开推文, 没有承载选择面板的位置 —— 不预设的话所有任务都只能落在
-   * 「对话」上, 碰不到本地仓库。
+   * 生效顺序恒为 **会话显式映射 > 这里的默认值 > 「对话」**, 判定在 hook server。
+   * X 一次交互只允许回一条公开推文, 没有承载目录选择面板的位置; Telegram 虽有
+   * inline keyboard 可以当场 /workspace, 但那是**每会话各自**设的 —— 用户在设置页
+   * 绑好目录后进一个新群, agent 仍在无仓库模式跑, 与他的预期不符。
    */
-  const setXDefaultWorkspace = useCallback(
-    async (alias: string | null) => {
+  const setProviderDefaultWorkspace = useCallback(
+    async (provider: 'telegram' | 'x', alias: string | null) => {
       try {
         const requestedAtRevision = ++viewRevisionRef.current;
-        const res = await window.electronAPI.hookControl.setXDefaultWorkspace(alias);
+        const res = await window.electronAPI.hookControl.setProviderDefaultWorkspace(
+          provider,
+          alias,
+        );
         if (viewRevisionRef.current === requestedAtRevision) applyView(res.hook);
       } catch (err) {
         toast.error(
@@ -429,6 +697,56 @@ export function HookConnectionsSection() {
     })();
   }, [awaitingInstall, confirm, handleToggle, runHookAction, t]);
 
+  /**
+   * X 的「用法与公开风险」确认门:绑定成功那一刻拦一次, 让用户明确点过「我明白」。
+   *
+   * 为什么不只靠卡内那一节:X 的回复是**公开推文**, 而且所有 X 任务都落在用户设的默认
+   * 工作目录里(agent 能读写其中文件, 结论会公开回帖)—— 这两条后果只写在展开区里,
+   * 不展开的人就永远看不到, 而它们恰恰是开启前就该知道的。
+   *
+   * 只在「未确认 → confirmed」那一沿弹一次:
+   *   - promptedPrincipalRef 记住正在弹或已弹过的 principalId, 状态广播导致的重渲染
+   *     不重复弹(同上方"等安装"确认框的 ref 用法);
+   *   - 记账落在 principalId 上, 所以换绑到另一个 X 账号会再确认一次(新账号 = 新的
+   *     公开面), 同账号解绑重绑则不打扰;
+   *   - **只有真的点了「我明白」才记账**。confirm-dialog 在 Esc / 点遮罩时 resolve 成
+   *     cancel(即 ok=false), 那种情况下用户并没有读到告知, 下次仍该弹。
+   */
+  const xBinding = hook?.x?.binding ?? null;
+  const xConfirmedPrincipalId =
+    xBinding !== null && xBinding.state === 'confirmed' ? xBinding.principalId : null;
+  const promptedXPrincipalRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (xConfirmedPrincipalId === null) {
+      // 解绑 / 转入非 confirmed: 清掉本沿的记录, 下次绑定成功可以重新判定
+      promptedXPrincipalRef.current = null;
+      return;
+    }
+    if (promptedXPrincipalRef.current === xConfirmedPrincipalId) return;
+    if (isXUsageAcknowledged(xConfirmedPrincipalId)) return;
+    promptedXPrincipalRef.current = xConfirmedPrincipalId;
+    void (async () => {
+      const ok = await confirm({
+        title: t('settings.remoteControl.hook.x.guide.ackTitle'),
+        content: <XUsageGuide />,
+        confirmText: t('settings.remoteControl.hook.x.guide.ackConfirm'),
+        showCancel: false,
+        // 主操作非破坏性(只是"我明白"), 焦点直接落在它上面
+        autoFocusConfirm: true,
+        maxWidth: 520,
+      });
+      if (!ok) {
+        // Esc / 遮罩关掉 = 没读到, 允许下次再弹
+        if (promptedXPrincipalRef.current === xConfirmedPrincipalId) {
+          promptedXPrincipalRef.current = null;
+        }
+        return;
+      }
+      // 卸载后也照常落盘: 用户确实点过了, 少记一次会让他下次再被拦一遍
+      acknowledgeXUsage(xConfirmedPrincipalId);
+    })();
+  }, [xConfirmedPrincipalId, confirm, t]);
+
   const handleAddWorkspace = async () => {
     const res = await window.electronAPI.showOpenDirectoryDialog();
     if (res.canceled || !res.path) return;
@@ -468,6 +786,13 @@ export function HookConnectionsSection() {
   const slackPrefsState = useHookWorkspacePrefs(hook, 'slack');
   const telegramPrefsState = useHookWorkspacePrefs(hook, 'telegram');
   const xPrefsState = useHookWorkspacePrefs(hook, 'x');
+  // 存量 global override(见 useLegacyGlobalDefaults 上方注释): 状态单点持有, 两张
+  // provider-neutral 卡共用同一份; 清掉后两张卡的生效值解析源都要重读。
+  const reloadGlobalDefaults = useCallback(() => {
+    void telegramPrefsState.reloadImDefaults();
+    void xPrefsState.reloadImDefaults();
+  }, [telegramPrefsState, xPrefsState]);
+  const legacyGlobalDefaults = useLegacyGlobalDefaults(reloadGlobalDefaults);
 
   /** 复制授权链接(远程控制兜底: 到本机浏览器打开, 规则 26)。 */
   const handleCopyLink = async () => {
@@ -739,11 +1064,29 @@ export function HookConnectionsSection() {
    * 渠道切换 chip。用普通函数而非内联子组件渲染: 内联组件每次渲染都会
    * 重建类型导致子树 remount, 别名输入框会在输入中途失焦。
    */
+  /**
+   * 该目录当前**已保存**的别名(null = 这一行还没落盘, 或别名正在编辑中)。
+   *
+   * 默认工作目录写的是别名, 而 store 只接受 workspaces 里已有的别名 —— 所以选中态
+   * 与写入都必须以落盘的那份映射为准, 不能用别名输入框的临时值。目录路径在一次渲染
+   * 里是稳定键(rows 就按 dir 去重), 用它反查别名。
+   */
+  const savedAliasOf = (dir: string): string | null =>
+    Object.keys(hook.workspaces).find((alias) => hook.workspaces[alias] === dir) ?? null;
+
   const renderWorkdirSection = (
     prefsState: ReturnType<typeof useHookWorkspacePrefs>,
     chatMaxVisibleModelRows?: number,
-    /** 非空 = 该卡显示「默认目录」选择器(目前只有 X 传)。 */
-    defaultWorkspace?: { value: string | null },
+    /**
+     * 非空 = 该卡显示默认工作目录选择器。
+     * `chip` = 标题行右侧的下拉 chip(X 沿用); `row` = 目录行内的选中态单选
+     * (Telegram: 目录本来就一行一个, 行内选中比再开一个下拉更直白)。
+     */
+    defaultWorkspace?: {
+      value: string | null;
+      mode: 'chip' | 'row';
+      provider: 'telegram' | 'x';
+    },
   ) => (
     <>
       <div className="h-px w-full bg-[var(--border-default)]" />
@@ -783,9 +1126,9 @@ export function HookConnectionsSection() {
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
-          {/* X 专属: 默认工作目录。X 一条推文里没有目录选择面板的位置, 不预设
-              就只能永远落在「对话」上、碰不到本地仓库(见 setXDefaultWorkspace)。 */}
-          {defaultWorkspace ? (
+          {/* chip 形态(X): 一条推文里没有目录选择面板的位置, 不预设就只能永远
+              落在「对话」上、碰不到本地仓库(见 setProviderDefaultWorkspace)。 */}
+          {defaultWorkspace?.mode === 'chip' ? (
             <DropdownMenu>
               <DropdownMenuTrigger
                 aria-label={t('settings.remoteControl.hook.form.defaultWorkspaceAria')}
@@ -799,11 +1142,18 @@ export function HookConnectionsSection() {
                 <ChevronDown size={12} />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => void setXDefaultWorkspace(null)}>
+                <DropdownMenuItem
+                  onClick={() => void setProviderDefaultWorkspace(defaultWorkspace.provider, null)}
+                >
                   {t('settings.tina.chat.title')}
                 </DropdownMenuItem>
                 {Object.keys(hook.workspaces).map((alias) => (
-                  <DropdownMenuItem key={alias} onClick={() => void setXDefaultWorkspace(alias)}>
+                  <DropdownMenuItem
+                    key={alias}
+                    onClick={() =>
+                      void setProviderDefaultWorkspace(defaultWorkspace.provider, alias)
+                    }
+                  >
                     {alias}
                   </DropdownMenuItem>
                 ))}
@@ -814,6 +1164,13 @@ export function HookConnectionsSection() {
         <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
           {t('settings.remoteControl.hook.form.workspacesCardDescription')}
         </span>
+        {/* row 形态才需要解释"选中即默认"这层语义, 并把权限档的后果说在选之前。
+            文案不用方位词指代("下面的目录") —— 同一区块也渲染进确认门弹窗。 */}
+        {defaultWorkspace?.mode === 'row' ? (
+          <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+            {t('settings.remoteControl.hook.form.defaultWorkspaceRowHint')}
+          </span>
+        ) : null}
         {prefsState.hint !== null && (
           <div className="flex items-center gap-2 text-11 text-[var(--text-tertiary)]">
             <span>{prefsState.hint}</span>
@@ -828,10 +1185,31 @@ export function HookConnectionsSection() {
             )}
           </div>
         )}
+        {/* row 形态: 整个目录清单是一组单选 —— 选中的那个就是默认工作目录。
+            aria 分组挂在这里, 各行头部的 role="radio" 按钮是它的选项。 */}
+        <div
+          className="flex flex-col gap-2"
+          {...(defaultWorkspace?.mode === 'row'
+            ? {
+                role: 'radiogroup',
+                'aria-label': t('settings.remoteControl.hook.form.defaultWorkspaceAria'),
+                onKeyDown: handleRadioGroupKeyDown,
+              }
+            : {})}
+        >
         {/* 内置「对话」伪目录: 与真实目录同级, 常驻第一位, 不可改名/删除;
             Slack 那头对应保留别名 chat, 偏好与 /model 选 chat 同一份 */}
         <div className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-2.5">
           <div className="flex items-center gap-1.5">
+            {defaultWorkspace?.mode === 'row' ? (
+              <DefaultWorkspaceRadio
+                selected={defaultWorkspace.value === null}
+                label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', {
+                  name: t('settings.tina.chat.title'),
+                })}
+                onSelect={() => void setProviderDefaultWorkspace(defaultWorkspace.provider, null)}
+              />
+            ) : null}
             <span className="w-36 shrink-0 px-2.5 py-1.5 text-13 font-medium text-[var(--text-primary)]">
               {t('settings.tina.chat.title')}
             </span>
@@ -851,6 +1229,27 @@ export function HookConnectionsSection() {
             className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] p-2.5"
           >
             <div className="flex items-center gap-1.5">
+              {defaultWorkspace?.mode === 'row' ? (
+                <DefaultWorkspaceRadio
+                  // **只认已保存的 alias → dir 映射**, 不看输入框里的临时值: 别名改了
+                  // 但还没 blur 落盘时, 拿它当选中判据会把未保存的名字显示成已选中,
+                  // 点下去还会把 workspaces 里不存在的别名发给 store(直接抛校验错)。
+                  // 未保存的新行(还没有对应映射)不给选 —— 先落盘再设默认。
+                  selected={
+                    savedAliasOf(row.dir) !== null &&
+                    defaultWorkspace.value === savedAliasOf(row.dir)
+                  }
+                  disabled={savedAliasOf(row.dir) === null}
+                  label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', {
+                    name: savedAliasOf(row.dir) ?? row.alias.trim(),
+                  })}
+                  onSelect={() => {
+                    const saved = savedAliasOf(row.dir);
+                    if (saved === null) return;
+                    void setProviderDefaultWorkspace(defaultWorkspace.provider, saved);
+                  }}
+                />
+              ) : null}
               <input
                 value={row.alias}
                 onChange={(e) => {
@@ -883,6 +1282,7 @@ export function HookConnectionsSection() {
             <WorkspacePrefsEditor alias={row.alias.trim()} state={prefsState} />
           </div>
         ))}
+        </div>
         <button
           type="button"
           onClick={() => void handleAddWorkspace()}
@@ -1043,20 +1443,40 @@ export function HookConnectionsSection() {
             </div>
           ) : null}
 
+          {/* X 专属: 用法与公开风险。两个刻意的选择 ——
+              · 放在工作目录区**之前**: 风险那条讲的就是这张卡上那个默认工作目录,
+                顺序必须是先看到后果再碰控件。注意这只是**排布**上的先后 ——
+                文案本身不许用方位指代(「下面」/「below」), 因为同一组件也渲染进
+                确认门弹窗, 那里根本没有目录选择器;
+              · **不按 view.enabled / cs.confirmed 收起**: 正在评估要不要打开的人
+                最需要看到「回帖是公开的」, 那时候两个条件都还不成立。 */}
+          {provider === 'x' ? <XUsageGuide /> : null}
+
           {/* 工作目录映射(清单共享, 偏好取本 provider 那份) */}
           {view.enabled
-            ? renderWorkdirSection(
-                prefsState,
-                undefined,
-                provider === 'x' ? { value: view.defaultWorkspace } : undefined,
-              )
+            ? renderWorkdirSection(prefsState, undefined, {
+                value: view.defaultWorkspace,
+                // Telegram 的目录本来就一行一个, 行内选中比再开一个下拉更直白;
+                // X 沿用标题行的 chip(它的卡上没有别的行内控件可对齐)。
+                mode: provider === 'telegram' ? 'row' : 'chip',
+                provider,
+              })
             : null}
+          {/* 存量 global override 的收尾入口。刻意不按 provider 也不按 cs.confirmed 收:
+              global scope 是 Telegram 与 X 共用的那一份, 旧设置在绑定确认之前就已经在盘上
+              影响解析了 —— 要能看见才谈得上"可管理"。从未改过的设备一次都不会渲染。 */}
+          {view.enabled ? (
+            <LegacyGlobalDefaultsNotice
+              state={legacyGlobalDefaults.state}
+              pending={legacyGlobalDefaults.pending}
+              onRestore={() => void legacyGlobalDefaults.restore()}
+            />
+          ) : null}
           {provider === 'telegram' && cs.confirmed ? (
             <div
               key={cs.binding?.bindingId ?? 'telegram-unbound'}
               className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
             >
-              <ImDefaultSettingsSection descriptionChannel="telegram" embedded />
               {view.behaviorAvailable === true ? (
                 <>
                   <TelegramBehaviorSettings

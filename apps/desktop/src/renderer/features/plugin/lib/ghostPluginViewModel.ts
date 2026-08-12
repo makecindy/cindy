@@ -16,6 +16,17 @@ import {
 } from '../../../../shared/ghost';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
+/**
+ * cindy 详单里**可钉后端**的类目 —— 详情页给每个申请到的动作渲染一行模型选择。
+ *
+ * 新增 cindy 能力类目时必须回到这里登记,否则那个类目在详情页**完全没有选型
+ * 入口**(不是少个下拉:`cindyCapabilities` 为空时整张卡片都不渲染),插件只能
+ * 吃全局默认档。2026-08-04 加 `embed` 时就漏过一次。
+ *
+ * `media` 有意不在其中:寄存(deposit)不经模型,没有"用哪个型号"可选。
+ */
+const PINNABLE_CINDY_CATEGORIES = ['image', 'video', 'text', 'embed'] as const;
+
 export interface GhostPluginListItem {
   id: string;
   name: string;
@@ -23,8 +34,31 @@ export interface GhostPluginListItem {
   version: string;
   enabled: boolean;
   canUse: boolean;
+  /** 声明了插件页内独占面板(panel.position:'tab'),主动作为「使用」(打开面板)。 */
+  tabPanel: boolean;
+  /** 声明了由 Host 承载、但可从插件 UI 主动进入的能力。 */
+  hostCapability: 'ios-simulator' | null;
   trust?: GhostTrustInfo;
   iconDataUrl?: string;
+}
+
+/**
+ * 卡片主动作的四分法:
+ * - `panel`:有页签面板 → 「使用」直接打开面板;
+ * - `command`:只有 $指令 → 「对话」把指令插进输入框起话题;
+ * - `capability`:Host 承载的能力 → 「对话」进入该能力的工作流;
+ * - `manage`:纯工具型(Agent 对话中自动调用)→ 无主按钮,点卡片进管理页。
+ * 停靠形态(left/right)的面板由布局树承载,不算 panel 主动作。
+ */
+export type GhostPrimaryAction = 'panel' | 'command' | 'capability' | 'manage';
+
+export function ghostPrimaryAction(
+  item: Pick<GhostPluginListItem, 'tabPanel' | 'canUse' | 'hostCapability'>,
+): GhostPrimaryAction {
+  if (item.tabPanel) return 'panel';
+  if (item.canUse) return 'command';
+  if (item.hostCapability) return 'capability';
+  return 'manage';
 }
 export interface GhostPluginDetail extends GhostPluginListItem {
   trust: GhostTrustInfo;
@@ -43,8 +77,8 @@ export interface GhostPluginDetail extends GhostPluginListItem {
 /**
  * 展示投影只覆盖用户能看到的四个字段；运行时仍完全来自本地安装包。
  *
- * `iconDataUrl` 是有意要求存在的字段：市场项的 `icon: null` 也必须覆盖本地
- * 包图标，而不是因为缺少 URL 又显示旧图标。
+ * `iconDataUrl` 是有意要求存在的字段：服务端市场项的 `icon: null` 仍覆盖本地
+ * 包图标。Git 市场是窄例外：精确匹配到已安装版本时，可复用安装包里已验证的图标。
  */
 export interface GhostPluginMarketPresentation {
   name: string;
@@ -59,11 +93,18 @@ export interface GhostPluginMarketPresentation {
  * market item, or a pending version update must keep using its local manifest.
  */
 export function marketPresentationForInstalledGhost(
-  ghost: Pick<InstalledGhost, 'manifest'>,
+  ghost: Pick<InstalledGhost, 'manifest' | 'iconDataUrl'>,
   marketItem:
     | Pick<
         PluginMarketItem,
-        'ghostId' | 'installState' | 'version' | 'name' | 'description' | 'author' | 'icon'
+        | 'ghostId'
+        | 'installState'
+        | 'version'
+        | 'name'
+        | 'description'
+        | 'author'
+        | 'icon'
+        | 'sourceType'
       >
     | null
     | undefined,
@@ -80,7 +121,10 @@ export function marketPresentationForInstalledGhost(
     name: marketItem.name,
     description: marketItem.description ?? '',
     author: marketItem.author,
-    iconDataUrl: marketItem.icon?.url,
+    iconDataUrl:
+      marketItem.sourceType === 'git-market' && !marketItem.icon
+        ? ghost.iconDataUrl
+        : marketItem.icon?.url,
   };
 }
 
@@ -112,9 +156,7 @@ export function filterGhostPluginItems<T extends GhostPluginListItem>(
 ): T[] {
   const normalizedQuery = query.trim().toLocaleLowerCase();
   return items.filter((item) =>
-    `${item.name} ${item.description} ${item.id}`
-      .toLocaleLowerCase()
-      .includes(normalizedQuery),
+    `${item.name} ${item.description} ${item.id}`.toLocaleLowerCase().includes(normalizedQuery),
   );
 }
 
@@ -143,6 +185,62 @@ export function sortGhostPluginItemsByRecentUse<T extends Pick<GhostPluginListIt
 }
 
 /**
+ * Ranks the installed shortcut row for display. Three lexicographic tiers:
+ *   1. Plugins with an unread notification (notify.badge) first, newest badge (larger `at`) on top.
+ *      A pushed notification has no other entry point, so surfacing it is the whole point.
+ *   2. Then recently used (host-recorded MRU), newest first.
+ *   3. Then base install order, stably.
+ * `marketUpdate` is deliberately NOT a key: the updates banner already surfaces updatable plugins,
+ * so letting them jump the row would only bury the unread signal.
+ * Pure and reactive — recompute freely from current signals; there is no frozen snapshot to go stale.
+ */
+export function sortInstalledForDisplay<T extends Pick<GhostPluginListItem, 'id'>>(
+  items: readonly T[],
+  {
+    recentIds,
+    unreadAtById,
+  }: { recentIds: readonly string[]; unreadAtById: ReadonlyMap<string, number> },
+): T[] {
+  const recentIndex = new Map(recentIds.map((id, index) => [id, index]));
+  return items
+    .map((item, stableIndex) => ({ item, stableIndex }))
+    .sort((a, b) => {
+      // Tier 1 — unread notifications, newest badge first.
+      const aAt = unreadAtById.get(a.item.id);
+      const bAt = unreadAtById.get(b.item.id);
+      if ((aAt !== undefined) !== (bAt !== undefined)) return aAt !== undefined ? -1 : 1;
+      if (aAt !== undefined && bAt !== undefined && aAt !== bAt) return bAt - aAt;
+      // Tier 2 — recently used, newest first.
+      const aRecent = recentIndex.get(a.item.id);
+      const bRecent = recentIndex.get(b.item.id);
+      if (aRecent !== undefined || bRecent !== undefined) {
+        if (aRecent === undefined) return 1;
+        if (bRecent === undefined) return -1;
+        if (aRecent !== bRecent) return aRecent - bRecent;
+      }
+      // Tier 3 — base install order, stable.
+      return a.stableIndex - b.stableIndex;
+    })
+    .map(({ item }) => item);
+}
+
+/**
+ * Size of the always-visible installed window: at least `cap`, expanded to also cover every
+ * plugin carrying an unread notification. Because `sortInstalledForDisplay` ranks unread items
+ * first, taking this many from the front guarantees no unread plugin is ever folded away — even
+ * when the user has many plugins. Updatable-but-read plugins can still fold (the banner surfaces
+ * updates).
+ */
+export function installedVisibleCount<T extends Pick<GhostPluginListItem, 'id'>>(
+  items: readonly T[],
+  unreadAtById: ReadonlyMap<string, number>,
+  cap: number,
+): number {
+  const unreadCount = items.reduce((count, item) => count + (unreadAtById.has(item.id) ? 1 : 0), 0);
+  return Math.max(cap, unreadCount);
+}
+
+/**
  * 将安装清单转换成列表卡片需要的最小字段。
  *
  * 这里刻意不加入安装量、使用量、认证徽章等旧原型字段;这些字段在 Ghost
@@ -165,6 +263,8 @@ export function toGhostPluginListItem(
     version: manifest.version,
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
+    tabPanel: manifest.panel?.position === 'tab',
+    hostCapability: manifest.slots.includes('ios-simulator') ? 'ios-simulator' : null,
     trust: ghost.trust ?? {
       level: 'unverified',
       publisherSigned: false,
@@ -188,20 +288,43 @@ export function toGhostPluginDetail(
   return {
     ...listItem,
     trust: listItem.trust!,
-    author: presentation ? presentation.author : manifest.author ?? null,
+    author: presentation ? presentation.author : (manifest.author ?? null),
     contents: ghostContentKeys(manifest),
     permissions: ghostPermissionItems(manifest),
     tools: manifest.tools ?? [],
     hasSettingsUi: Boolean(manifest.settingsHtml),
-    cindyCapabilities: [
-      ...(manifest.cindy?.image ?? []).map((action) => `image.${action}`),
-      ...(manifest.cindy?.video ?? []).map((action) => `video.${action}`),
-      // 文本类(快问快答)同样可钉后端:漏掉它,声明了 cindy.text 的插件在
-      // 详情页就没有任何选型入口,只能吃全局轻量链的默认档。
-      ...(manifest.cindy?.text ?? []).map((action) => `text.${action}`),
-    ],
+    cindyCapabilities: PINNABLE_CINDY_CATEGORIES.flatMap((category) =>
+      (manifest.cindy?.[category] ?? []).map((action) => `${category}.${action}`),
+    ),
     hasErrand: manifest.agent?.errand === true,
     panelMinWidth: manifest.panel ? (manifest.panel.minWidth ?? 280) : null,
     installDir: ghost.dir,
   };
+}
+
+/**
+ * 插件页内面板宿主的数据归属键。
+ *
+ * 面板承载的是 webview,里面可能存着账号 A 的登录态、表单、已加载数据。
+ * 两个账号装了**同 id、同版本、同入口**的插件时,只按 ghostId 做宿主 key
+ * 会让 React 复用同一实例——切到账号 B 后 A 的 DOM 与内存态原样留着。
+ * 所以 key 必须含 owner 代际:换身份即卸载重建。
+ */
+export function ghostPanelOwnerKey(
+  mode: 'signed-out' | 'local' | 'cloud',
+  dataOwnerId: string | null,
+): string {
+  return `${mode}:${dataOwnerId ?? ''}`;
+}
+
+/**
+ * owner 变化时在开的面板应保留还是关闭。
+ * 返回下一个 openPanelId:身份变了一律关(返回 null),没变则原样保留。
+ */
+export function nextOpenPanelIdForOwner(
+  previousOwnerKey: string,
+  nextOwnerKey: string,
+  currentOpenPanelId: string | null,
+): string | null {
+  return previousOwnerKey === nextOwnerKey ? currentOpenPanelId : null;
 }

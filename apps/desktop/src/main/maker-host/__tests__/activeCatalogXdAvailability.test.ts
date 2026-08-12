@@ -47,6 +47,29 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex')).toEqual([]);
   });
 
+  it('远端 Catalog 不能覆盖 XD Provider 壳或注入 XD 模型', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
+    const catalogXd = catalog.providers.find((provider) => provider.id === 'xd');
+    const builtinXd = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd');
+    if (!catalogXd || !builtinXd) throw new Error('missing XD provider fixture');
+    catalogXd.name = 'Catalog-supplied XD';
+    catalogXd.models['claude-code'] = [
+      {
+        id: 'catalog-only-model',
+        name: 'Catalog-only model',
+        contextWindow: 1,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ];
+
+    setActiveCatalog(catalog);
+
+    const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(activeXd?.name).toBe(builtinXd.name);
+    expect(xdModels('claude-code')).toEqual([]);
+  });
+
   it('未登记模型按 Claude-only 兜底并投影到 Codex bridge:3 档 effort + fast=false + 200k 窗口', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{ id: 'brand-new-model' }]);
@@ -185,6 +208,32 @@ describe('XD 网关权威模型清单重建', () => {
     expect('icon' in (cc.find((m) => m.id === 'plain-model') ?? {})).toBe(false);
   });
 
+  it('把网关图片输入 modalities 投影到 Pi 的 provider-model 能力', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'gateway-vision',
+        modalities: { input: ['text', 'image'], output: ['text'] },
+      },
+      {
+        id: 'gateway-text',
+        modalities: { input: ['text'], output: ['text'] },
+      },
+      { id: 'gateway-unknown' },
+    ]);
+
+    const pi = deriveAvailableModels(getActiveCatalog(), 'pi');
+    expect(pi.find((model) => model.id === 'gateway-vision')).toMatchObject({
+      supportsImageInput: true,
+    });
+    expect(pi.find((model) => model.id === 'gateway-text')).toMatchObject({
+      supportsImageInput: false,
+    });
+    expect(pi.find((model) => model.id === 'gateway-unknown')).not.toHaveProperty(
+      'supportsImageInput',
+    );
+  });
+
   it('把标准 token 价投影为每百万 token 的折后展示价', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
@@ -295,13 +344,20 @@ describe('Anthropic 权威模型清单注入', () => {
     status: 'active',
   };
 
-  it('未注入时 anthropic 不暴露任何模型(不用静态数据冒充)', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
+  /** registry-free 基线:本组验 discovery 注入机制;registry 实体化层见 modelPlane.test.ts。 */
+  function bundledWithoutRegistry() {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
+    delete (catalog as { modelRegistry?: unknown }).modelRegistry;
+    return catalog;
+  }
+
+  it('未注入且无 registry 时 anthropic 不暴露任何模型(不用静态数据冒充)', () => {
+    setActiveCatalog(bundledWithoutRegistry());
     expect(anthropicModels()).toEqual([]);
   });
 
   it('注入后整体重建 claude-code 清单;清空后回到空', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
+    setActiveCatalog(bundledWithoutRegistry());
     setAnthropicDiscoveredModels([opus]);
     expect(anthropicModels().map((m) => m.id)).toEqual(['claude-opus-4-8']);
     expect(anthropicModels()[0]).toMatchObject({ name: 'Opus 4.8', supportsFastMode: true });

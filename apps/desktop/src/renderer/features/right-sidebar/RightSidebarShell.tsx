@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'r
 import { useTranslation } from 'react-i18next';
 
 import { createLogger } from '@/lib/logger';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
@@ -30,12 +31,7 @@ import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 import { TabBar, TabStrip } from './TabBar';
 import { EmptyState } from './EmptyState';
-import {
-  getTabKind,
-  hydrateTabState,
-  listGhostTabMenuMetas,
-  useTabKindRegistryVersion,
-} from './registry';
+import { getTabKind, hydrateTabState } from './registry';
 import {
   addOrFocusSingletonTab,
   addTab,
@@ -48,24 +44,20 @@ import {
   setTabCloseInterceptor,
   subscribe,
 } from './store';
-import {
-  AUTO_PINNED_GHOST_TAB_STATE,
-  getLastFocusedPinnedGhostKind,
-  ghostIdOfTabKind,
-  isAutoPinnedGhostTabState,
-  isGhostTabPinned,
-  setLastFocusedPinnedGhostKind,
-  useGhostTabPinsVersion,
-} from './lib/pinnedGhostTabs';
 import type { TabKindHostContext, TabKindId, TabState } from './types';
 // Side-effect import:触发各 plugin 模块顶层 registerTabKind(...)。Phase 3 注册
 // file-browser;Phase 5 注册 web-browser。Shell 不直接消费 plugin 实例,只通过
 // getTabKind 查 registry。
 import './plugins';
 import { initRsbBrowserBridge } from './lib/rsbBrowserBridge';
+import { initIOSSimulatorFocusBridge } from './lib/iosSimulatorFocusBridge';
 import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
-import { requestRightSidebarVisibility } from './lib/sidebarCommands';
-import { readPanelCollapsed } from '@/layout/collapsePrefs';
+import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import {
+  isIOSSimulatorPluginAvailable,
+  mergeIOSSimulatorVisibleTabOrder,
+  projectIOSSimulatorTabs,
+} from './iosSimulatorPluginAvailability';
 
 const log = createLogger('rightSidebar.shell');
 /**
@@ -92,6 +84,8 @@ interface RightSidebarShellProps {
   workdir: string;
   /** 非空 = SSH remote 会话(workdir 为远端路径);见 TabKindHostContext.remoteHostId。 */
   remoteHostId: string | null;
+  /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
+  deviceLinkDeviceId?: string | null;
   /** RightSidebar aside 当前是否真实展开。折叠时 keep-alive body 仍挂载但不可见。 */
   shellVisible?: boolean;
   isMac: boolean;
@@ -136,6 +130,7 @@ export function RightSidebarShell({
   sessionId,
   workdir,
   remoteHostId,
+  deviceLinkDeviceId,
   shellVisible = true,
   isMac,
   unifiedTopbar = false,
@@ -167,6 +162,15 @@ export function RightSidebarShell({
       ? CHROME_ACTIONS_GEOMETRY.clusterWidth
       : 0;
   const { t } = useTranslation();
+  const installedGhosts = useInstalledGhosts();
+  const iosSimulatorPluginAvailable = useMemo(
+    // Session secondary windows do not own the Main/RSB capability family and
+    // intentionally skip the Host focus bridge. Hide (but preserve) persisted
+    // Simulator tabs there instead of exposing an authorization action that
+    // can never succeed.
+    () => !isSecondaryWindow() && isIOSSimulatorPluginAvailable(installedGhosts),
+    [installedGhosts],
+  );
 
   // RSB browser bridge (Phase 2):在 Shell 整个生命周期内只 init 一次。bridge 内部
   // 自带 idempotent guard,strict-mode 双 effect / 重复挂载都安全。bridge 绑定
@@ -176,6 +180,7 @@ export function RightSidebarShell({
   // 就断了。Shell 真的退出场景在 app quit,进程整体下线无所谓。
   useEffect(() => {
     initRsbBrowserBridge();
+    initIOSSimulatorFocusBridge();
   }, []);
 
   // 订阅当前 sessionId 桶变化 —— useSyncExternalStore 在 sessionId 变化时,
@@ -210,110 +215,88 @@ export function RightSidebarShell({
     });
   }, [sessionId]);
 
-  const tabs = bucket.tabs;
-  const activeTabId = bucket.activeTabId;
+  const projectedTabs = useMemo(
+    () => projectIOSSimulatorTabs(bucket.tabs, bucket.activeTabId, iosSimulatorPluginAvailable),
+    [bucket.activeTabId, bucket.tabs, iosSimulatorPluginAvailable],
+  );
+  const tabs = projectedTabs.tabs;
+  const activeTabId = projectedTabs.activeTabId;
 
-  // 插件页签(panel.position:'tab')随装/卸/停用动态注册,版本号驱动重渲——
-  // EmptyState 的插件行与「+」菜单动态分组都吃这份数据。
-  const tabRegistryVersion = useTabKindRegistryVersion();
-  // 注册表是模块级 Map,不在 React 数据流里 —— 版本号是唯一变化信号,拿它当 dep。
-  const ghostTabMetas = useMemo(() => listGhostTabMenuMetas(), [tabRegistryVersion]);
-
-  // 钉住偏好版本号:钉/取消钉都要驱动下方维护 effect 与 pill 重渲。
-  const ghostPinsVersion = useGhostTabPinsVersion();
-
-  // 钉住面板页签的跨会话维护(hydrate 之后跑,幂等,串行 await 防 reorder 竞态):
-  //  1) 清扫:自动补挂(state 带 autoPinned 标记)但插件已不再钉住的页签关掉
-  //     —— 取消钉住在别的会话里也要收干净,不留残影;用户手动开的页签无标记,
-  //     不受清扫影响(取消钉住 = 回到"仅当前会话"语义)。
-  //  2) 补挂:钉住且已注册(启用中)的面板页签,本会话没有 → 追加。默认
-  //     activate:false 不抢焦点;会话本来就没有激活 tab 时兜底激活,避免
-  //     "有 pill 无内容"的空面板。
-  //  3) 粘性激活:上一会话正看着某钉住面板 → 切会话后把同一面板带到前台
-  //     (每个 sessionId 只做一次,用户随后在本会话内的切换不被打扰)。
-  //     「带到前台」包括把收着的侧栏打开:目标会话侧栏收着(新会话默认收)时,
-  //     只激活 tab 用户什么都看不见,钉住的"跨对话保留"承诺就断了。仅在
-  //     上一会话侧栏是展开的(用户确实正看着)时才请求展开;上一会话本来就
-  //     收着 → 用户没在看面板,切会话不弹窗打扰。detached 形态下该请求走
-  //     userInitiated:false 语义,不会把子窗口抢到前台。
-  // 插件被停用时 kind 未注册 → 跳过补挂;已存在的页签保留(落 Placeholder,
-  // 与"停用隐藏、重启用复活"的既有语义一致)。
-  const stickyAppliedSessionRef = useRef<string | null>(null);
+  // If a now-hidden simulator tab owned the active marker, move the persisted
+  // marker to a visible tab (or null). The simulator tab itself remains stored
+  // and returns when the plugin is enabled again.
   useEffect(() => {
-    if (!sessionId || !bucket.hydrated) return;
-    let cancelled = false;
-    const run = async () => {
-      // 1) 清扫
-      for (const tab of bucket.tabs) {
-        if (cancelled) return;
-        const gid = ghostIdOfTabKind(tab.kind);
-        if (!gid) continue;
-        if (isAutoPinnedGhostTabState(tab.state) && !isGhostTabPinned(gid)) {
-          try {
-            await closeTab(sessionId, tab.id);
-          } catch (err) {
-            log.error('pinned ghost tab sweep failed', { sessionId, tabId: tab.id, err });
-          }
-        }
-      }
-      // 2) 补挂
-      for (const meta of listGhostTabMenuMetas()) {
-        if (cancelled) return;
-        const gid = ghostIdOfTabKind(meta.kind);
-        if (!gid || !isGhostTabPinned(gid)) continue;
-        if (getBucket(sessionId).tabs.some((t) => t.kind === meta.kind)) continue;
+    if (!bucket.hydrated || !sessionId || bucket.activeTabId === activeTabId) return;
+    void setActiveTab(sessionId, activeTabId).catch((err) => {
+      log.error('hidden simulator active-tab reconciliation failed', {
+        sessionId,
+        activeTabId,
+        err,
+      });
+    });
+  }, [activeTabId, bucket.activeTabId, bucket.hydrated, sessionId]);
+
+  const prevTabCountRef = useRef<number | null>(null);
+  useEffect(() => {
+    prevTabCountRef.current = null;
+  }, [sessionId]);
+
+  // A historical simulator-only bucket must not leave an empty public sidebar
+  // open before the plugin is installed. Preserve the hidden tab, but collapse
+  // the shell each time the user/session makes it visible in this state.
+  const hiddenOnlyCollapseRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!shellVisible) {
+      hiddenOnlyCollapseRef.current = null;
+      return;
+    }
+    const shouldCollapse =
+      bucket.hydrated &&
+      bucket.tabs.length > 0 &&
+      tabs.length === 0 &&
+      bucket.tabs.some((tab) => tab.kind === 'ios-simulator') &&
+      !iosSimulatorPluginAvailable &&
+      prevTabCountRef.current === null;
+    if (!shouldCollapse || !sessionId) {
+      hiddenOnlyCollapseRef.current = null;
+      return;
+    }
+    if (hiddenOnlyCollapseRef.current === sessionId) return;
+    hiddenOnlyCollapseRef.current = sessionId;
+    onAllTabsClosed?.();
+  }, [
+    bucket.hydrated,
+    bucket.tabs,
+    iosSimulatorPluginAvailable,
+    onAllTabsClosed,
+    sessionId,
+    shellVisible,
+    tabs.length,
+  ]);
+
+  // 面板收束(2026-08):插件页签不再注册进右侧栏。历史会话里持久化的
+  // `ghost:*` tab 是旧形态残留,发现即静默关闭 —— 这些 kind 已无渲染方,
+  // 留着只会落到 PlaceholderBody 变成"敬请期待"的死页签。
+  useEffect(() => {
+    if (!bucket.hydrated || !sessionId) return;
+    const legacyGhostTabs = bucket.tabs.filter((tab) => tab.kind.startsWith('ghost:'));
+    if (legacyGhostTabs.length === 0) return;
+    void (async () => {
+      for (const tab of legacyGhostTabs) {
         try {
-          await addTab(sessionId, meta.kind, AUTO_PINNED_GHOST_TAB_STATE, { activate: false });
+          await closeTab(sessionId, tab.id);
         } catch (err) {
-          // 典型失败:MAX_TABS_PER_SESSION 满。补挂失败不重试,本会话手动管理。
-          log.error('pinned ghost tab auto-add failed', { sessionId, kind: meta.kind, err });
+          log.error('legacy ghost tab prune failed', { sessionId, tabId: tab.id, err });
         }
       }
-      if (cancelled) return;
-      // 3) 粘性激活 + 空激活位兜底
-      const applySticky = stickyAppliedSessionRef.current !== sessionId;
-      const prevSessionId = stickyAppliedSessionRef.current;
-      stickyAppliedSessionRef.current = sessionId;
-      const now = getBucket(sessionId);
-      let target: string | null = null;
-      const stickyKind = applySticky ? getLastFocusedPinnedGhostKind() : null;
-      if (stickyKind) {
-        target = now.tabs.find((t) => t.kind === stickyKind)?.id ?? null;
-        if (
-          target !== null &&
-          prevSessionId !== null && // 首帧(启动进第一个会话)不算"切换",不弹
-          !readPanelCollapsed('right-tabs', { sessionId: prevSessionId }, true) &&
-          readPanelCollapsed('right-tabs', { sessionId }, true)
-        ) {
-          requestRightSidebarVisibility('open', { sessionId, userInitiated: false });
-        }
-      }
-      if (!target && now.activeTabId === null && now.tabs.length > 0) {
-        target = now.tabs[0].id;
-      }
-      if (target && target !== now.activeTabId) {
-        try {
-          await setActiveTab(sessionId, target);
-        } catch (err) {
-          log.error('pinned ghost tab activate failed', { sessionId, target, err });
-        }
-      }
-    };
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, bucket.hydrated, bucket.tabs, ghostPinsVersion, tabRegistryVersion]);
+    })();
+  }, [bucket.hydrated, bucket.tabs, sessionId]);
 
   // 关掉最后一个 tab → 通知 host 自动收起侧栏。只在 tab 数「从 >0 变 0」的转变时
   // 触发,不是"等于 0"就触发:
   //   - hydrated 后首帧 prev===null 不触发(区分"刚加载出来就是空"与"关到空");
   //   - 展开一个本就 0-tab 的 session 也不会被立刻折叠,用户仍能在 EmptyState 加 tab。
   // sessionId 变化时重置计数,避免"切到一个空 session"被误判成"关空"。
-  const prevTabCountRef = useRef<number | null>(null);
-  useEffect(() => {
-    prevTabCountRef.current = null;
-  }, [sessionId]);
   useEffect(() => {
     if (!bucket.hydrated) return; // 未 hydrate 的空数组不算"关空"
     const prev = prevTabCountRef.current;
@@ -329,6 +312,10 @@ export function RightSidebarShell({
         log.warn('handleAdd ignored: sessionId is null', { kind });
         return;
       }
+      if (kind === 'ios-simulator' && !iosSimulatorPluginAvailable) {
+        log.warn('handleAdd ignored: iOS Simulator plugin is unavailable');
+        return;
+      }
       const plugin = getTabKind(kind);
       // Plugin 未注册的 kind(早期 Phase 还没接的 web-browser / terminal):
       // 仍允许建 tab,但 TabBody 会落到 PlaceholderBody。用户体感上点了「+」总有
@@ -340,15 +327,12 @@ export function RightSidebarShell({
       const action = isSingleton
         ? addOrFocusSingletonTab(sessionId, kind, initialState)
         : addTab(sessionId, kind, initialState);
-      // 新开 tab 即成为焦点:是钉住面板 → 记粘性焦点,其余 → 清。
-      // (addOrFocusSingletonTab 已同步写入默认钉住条目,此处读到的是新状态。)
-      setLastFocusedPinnedGhostKind(kind);
       void action.catch((err) => {
         // TODO(Phase 7): toast 暴露 RIGHT_SIDEBAR_TOO_MANY_TABS / STATE_TOO_LARGE 等错误码。
         log.error('handleAdd failed', { sessionId, kind, err });
       });
     },
-    [sessionId],
+    [iosSimulatorPluginAvailable, sessionId],
   );
 
   const handleClose = useCallback(
@@ -364,9 +348,6 @@ export function RightSidebarShell({
   const handleActivate = useCallback(
     (tabId: string) => {
       if (!sessionId) return;
-      // 用户显式聚焦:钉住面板 → 记粘性焦点(切会话跟着走);其它 tab → 清。
-      const kind = getBucket(sessionId).tabs.find((t) => t.id === tabId)?.kind ?? null;
-      setLastFocusedPinnedGhostKind(kind);
       void setActiveTab(sessionId, tabId).catch((err) => {
         log.error('handleActivate failed', { sessionId, tabId, err });
       });
@@ -377,11 +358,16 @@ export function RightSidebarShell({
   const handleReorder = useCallback(
     (orderedIds: string[]) => {
       if (!sessionId) return;
-      void reorderTabs(sessionId, orderedIds).catch((err) => {
+      const fullOrder = mergeIOSSimulatorVisibleTabOrder(
+        bucket.tabs,
+        orderedIds,
+        iosSimulatorPluginAvailable,
+      );
+      void reorderTabs(sessionId, fullOrder).catch((err) => {
         log.error('handleReorder failed', { sessionId, orderedIds, err });
       });
     },
-    [sessionId],
+    [bucket.tabs, iosSimulatorPluginAvailable, sessionId],
   );
 
   const handleCycleTab = useCallback(
@@ -398,8 +384,6 @@ export function RightSidebarShell({
           : (activeIndex + (direction === 'next' ? 1 : -1) + tabs.length) % tabs.length;
       const nextTabId = tabs[nextIndex]?.id;
       if (!nextTabId || nextTabId === activeTabId) return false;
-      // 快捷键轮换也是显式聚焦 —— 与 handleActivate 同口径维护粘性焦点。
-      setLastFocusedPinnedGhostKind(tabs[nextIndex]?.kind ?? null);
       void setActiveTab(sessionId, nextTabId).catch((err) => {
         log.error('cycle right sidebar tab failed', { sessionId, direction, nextTabId, err });
       });
@@ -423,7 +407,7 @@ export function RightSidebarShell({
   const handleCloseOthers = useCallback(
     async (keepTabId: string) => {
       if (!sessionId) return;
-      const targets = bucket.tabs.filter((t) => t.id !== keepTabId).map((t) => t.id);
+      const targets = tabs.filter((t) => t.id !== keepTabId).map((t) => t.id);
       for (const tabId of targets) {
         try {
           await closeTab(sessionId, tabId);
@@ -433,13 +417,13 @@ export function RightSidebarShell({
         }
       }
     },
-    [sessionId, bucket.tabs],
+    [sessionId, tabs],
   );
 
   // 右键菜单"关闭所有":关掉本 session 的全部 tab。
   const handleCloseAll = useCallback(async () => {
     if (!sessionId) return;
-    const targets = bucket.tabs.map((t) => t.id);
+    const targets = tabs.map((t) => t.id);
     for (const tabId of targets) {
       try {
         await closeTab(sessionId, tabId);
@@ -448,7 +432,7 @@ export function RightSidebarShell({
         break;
       }
     }
-  }, [sessionId, bucket.tabs]);
+  }, [sessionId, tabs]);
 
   // popup 路由已挪到窗口级常驻模块(lib/popupRouter.ts):订阅不随 Shell 生命
   // 周期,用户离开聊天视图 / main 端归属等待期间 route 切换都不再丢 popup。
@@ -541,6 +525,7 @@ export function RightSidebarShell({
             onCloseAll={handleCloseAll}
             pillVariant="chip"
             addButtonWrapperClassName="h-[30px]"
+            iosSimulatorAvailable={iosSimulatorPluginAvailable}
           />
           {/* 右端两态(M2,2026-07-09 Lizi 口径修订):
               - 贴右(默认)/ maximize 撑满:MainLayout 的 mac 浮层按钮钉在窗口
@@ -589,6 +574,7 @@ export function RightSidebarShell({
           onCloseOthers={handleCloseOthers}
           onCloseAll={handleCloseAll}
           chromeWindowDrag={chromeWindowDrag}
+          iosSimulatorAvailable={iosSimulatorPluginAvailable}
         />
       )}
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--panel-bg)]">
@@ -601,11 +587,10 @@ export function RightSidebarShell({
           <EmptyState
             onAddFileTab={() => handleAdd('file-browser')}
             onAddReviewTab={() => handleAdd('review')}
+            onAddSubagentsTab={() => handleAdd('subagents')}
             onAddBackgroundTasksTab={() => handleAdd('background-tasks')}
             onAddBrowserTab={() => handleAdd('web-browser')}
             onAddTerminalTab={() => handleAdd('terminal')}
-            ghostTabMetas={ghostTabMetas}
-            onAddGhostTab={handleAdd}
           />
         ) : (
           // 所有 tab 都挂载,只切换可见性(规则 7:杜绝切顶层 tab 时 plugin 内部 state /
@@ -619,6 +604,7 @@ export function RightSidebarShell({
               sessionId={sessionId}
               workdir={workdir}
               remoteHostId={remoteHostId}
+              deviceLinkDeviceId={deviceLinkDeviceId}
               shellVisible={shellVisible}
               t={t}
             />
@@ -635,6 +621,7 @@ interface PluginBodyHostProps {
   sessionId: string | null;
   workdir: string;
   remoteHostId: string | null;
+  deviceLinkDeviceId?: string | null;
   shellVisible: boolean;
   t: ReturnType<typeof useTranslation>['t'];
 }
@@ -654,6 +641,7 @@ function PluginBodyHost({
   sessionId,
   workdir,
   remoteHostId,
+  deviceLinkDeviceId,
   shellVisible,
   t,
 }: PluginBodyHostProps) {
@@ -671,6 +659,7 @@ function PluginBodyHost({
       sessionId: sessionId ?? '',
       workdir,
       remoteHostId,
+      deviceLinkDeviceId,
       patchState: (patch: unknown) => {
         if (!sessionId) return;
         void patchTabState(sessionId, tab.id, (current) => {
@@ -694,10 +683,9 @@ function PluginBodyHost({
       onVisibilityChange: () => {
         // Phase 4/5 真消费(webview mute / 暂停媒体);v1 noop。
       },
-      setCloseInterceptor: (interceptor) =>
-        setTabCloseInterceptor(tab.id, interceptor),
+      setCloseInterceptor: (interceptor) => setTabCloseInterceptor(tab.id, interceptor),
     }),
-    [sessionId, workdir, remoteHostId, tab.id],
+    [sessionId, workdir, remoteHostId, deviceLinkDeviceId, tab.id],
   );
 
   // active 切换:走 effect 通知 plugin(plugin 自己内部用 ctx.onVisibilityChange
@@ -734,7 +722,7 @@ function PluginBodyHost({
 /** Plugin 未注册的兜底。 */
 function PlaceholderBody({ tab, t }: { tab: TabState; t: ReturnType<typeof useTranslation>['t'] }) {
   return (
-    <div className="flex flex-1 items-center justify-center text-[12px] text-[var(--text-tertiary)]">
+    <div className="flex flex-1 items-center justify-center text-12 text-[var(--text-tertiary)]">
       <span>{t('rightSidebar.tabs.placeholderHint', { kind: tab.kind })}</span>
     </div>
   );

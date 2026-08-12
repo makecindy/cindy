@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import { LOCAL_PROFILE_DATA_OWNER_ID } from './profile/profileRegistryModel.js';
+import type { DataOwnerPushStamp } from '../shared/dataOwnerPush.js';
 
 export type AppSessionMode = 'signed-out' | 'local' | 'cloud';
 
@@ -97,6 +98,15 @@ function ensureLoaded(): ActiveAppSession {
 /** Read the last committed stable session. */
 export function getActiveAppSession(): ActiveAppSession {
   return { ...ensureLoaded() };
+}
+
+/** Snapshot the owner boundary for a live main → renderer/device-link frame. */
+export function getActiveDataOwnerPushStamp(): DataOwnerPushStamp {
+  const session = ensureLoaded();
+  return {
+    dataOwnerId: session.dataOwnerId,
+    ownerGeneration: session.generation,
+  };
 }
 
 /**

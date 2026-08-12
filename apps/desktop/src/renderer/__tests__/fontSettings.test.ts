@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 
 import {
@@ -15,34 +15,34 @@ import {
   useFontSettings,
 } from '@/hooks/useFontSettings';
 
+const UI_TEXT_TOKEN_SIZES = [10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28] as const;
+const REMOVED_UI_TEXT_TOKEN_SIZES = [9, 17, 19, 21, 22, 23, 25, 26, 27] as const;
+const SCALED_TAILWIND_TOKENS = {
+  xs: 12,
+  sm: 14,
+  base: 16,
+  lg: 18,
+  xl: 20,
+  '2xl': 24,
+  '3xl': 30,
+  '4xl': 36,
+  '5xl': 48,
+} as const;
+
 function resetRootStyles() {
-  document.documentElement.style.removeProperty('--app-font-ui');
-  document.documentElement.style.removeProperty('--app-font-code');
-  document.documentElement.style.removeProperty('--app-code-font-size');
-  document.documentElement.style.removeProperty('--app-ui-font-size');
-  for (const tokenSize of [
-    9,
-    10,
-    11,
-    12,
-    13,
-    14,
-    15,
-    16,
-    17,
-    18,
-    19,
-    20,
-    21,
-    22,
-    23,
-    24,
-    25,
-    26,
-    27,
-    28,
-  ]) {
-    document.documentElement.style.removeProperty(`--text-${tokenSize}`);
+  const targets = [document.documentElement, document.body];
+  for (const target of targets) {
+    target.style.removeProperty('--app-font-ui');
+    target.style.removeProperty('--app-font-code');
+    target.style.removeProperty('--app-code-font-size');
+    target.style.removeProperty('--app-ui-font-size');
+    for (const tokenSize of [...UI_TEXT_TOKEN_SIZES, ...REMOVED_UI_TEXT_TOKEN_SIZES]) {
+      target.style.removeProperty(`--text-${tokenSize}`);
+    }
+    for (const token of Object.keys(SCALED_TAILWIND_TOKENS)) {
+      target.style.removeProperty(`--text-${token}`);
+      target.style.removeProperty(`--text-${token}-line-height`);
+    }
   }
 }
 
@@ -61,17 +61,17 @@ describe('font settings', () => {
     });
   });
 
-  it('falls back when stored font sizes are invalid', () => {
+  it('ignores legacy renderer storage after the clean cut-over', () => {
     localStorage.setItem('font.uiFamily', '  "Segoe UI"  ');
     localStorage.setItem('font.codeFamily', '  Consolas  ');
     localStorage.setItem('font.uiSize', 'not-a-number');
     localStorage.setItem('font.codeSize', '99');
 
     expect(getInitialFontSettings()).toEqual({
-      uiFamily: '"Segoe UI"',
-      codeFamily: 'Consolas',
+      uiFamily: '',
+      codeFamily: '',
       uiSize: DEFAULT_UI_FONT_SIZE,
-      codeSize: 24,
+      codeSize: DEFAULT_CODE_FONT_SIZE,
     });
   });
 
@@ -101,6 +101,10 @@ describe('font settings', () => {
       'Consolas, var(--app-font-code-default)',
     );
     expect(rootStyle.getPropertyValue('--app-code-font-size')).toBe('16px');
+    expect(document.body.style.getPropertyValue('--app-font-ui')).toBe(
+      '"Segoe UI", var(--app-font-ui-default)',
+    );
+    expect(document.body.style.getPropertyValue('--app-code-font-size')).toBe('16px');
   });
 
   it('writes UI font-size tokens with the default scale', () => {
@@ -115,30 +119,18 @@ describe('font settings', () => {
 
     const rootStyle = document.documentElement.style;
     expect(rootStyle.getPropertyValue('--app-ui-font-size')).toBe(`${DEFAULT_UI_FONT_SIZE}px`);
-    for (const tokenSize of [
-      9,
-      10,
-      11,
-      12,
-      13,
-      14,
-      15,
-      16,
-      17,
-      18,
-      19,
-      20,
-      21,
-      22,
-      23,
-      24,
-      25,
-      26,
-      27,
-      28,
-    ]) {
+    for (const tokenSize of UI_TEXT_TOKEN_SIZES) {
       expect(rootStyle.getPropertyValue(`--text-${tokenSize}`)).toBe(`${tokenSize}px`);
     }
+    for (const tokenSize of REMOVED_UI_TEXT_TOKEN_SIZES) {
+      expect(rootStyle.getPropertyValue(`--text-${tokenSize}`)).toBe('');
+      expect(document.body.style.getPropertyValue(`--text-${tokenSize}`)).toBe('');
+    }
+    for (const [token, base] of Object.entries(SCALED_TAILWIND_TOKENS)) {
+      expect(rootStyle.getPropertyValue(`--text-${token}`)).toBe(`${base}px`);
+    }
+    expect(rootStyle.getPropertyValue('--text-sm-line-height')).toBe('20px');
+    expect(document.body.style.getPropertyValue('--text-sm-line-height')).toBe('20px');
   });
 
   it('scales UI font-size tokens from uiSize', () => {
@@ -153,32 +145,21 @@ describe('font settings', () => {
 
     const rootStyle = document.documentElement.style;
     expect(rootStyle.getPropertyValue('--app-ui-font-size')).toBe('18px');
-    for (const tokenSize of [
-      9,
-      10,
-      11,
-      12,
-      13,
-      14,
-      15,
-      16,
-      17,
-      18,
-      19,
-      20,
-      21,
-      22,
-      23,
-      24,
-      25,
-      26,
-      27,
-      28,
-    ]) {
+    for (const tokenSize of UI_TEXT_TOKEN_SIZES) {
       expect(rootStyle.getPropertyValue(`--text-${tokenSize}`)).toBe(
         `${Math.round((tokenSize * 18) / DEFAULT_UI_FONT_SIZE)}px`,
       );
     }
+    for (const tokenSize of REMOVED_UI_TEXT_TOKEN_SIZES) {
+      expect(rootStyle.getPropertyValue(`--text-${tokenSize}`)).toBe('');
+    }
+    for (const [token, base] of Object.entries(SCALED_TAILWIND_TOKENS)) {
+      expect(rootStyle.getPropertyValue(`--text-${token}`)).toBe(
+        `${Math.round((base * 18) / DEFAULT_UI_FONT_SIZE)}px`,
+      );
+    }
+    expect(rootStyle.getPropertyValue('--text-sm-line-height')).toBe('26px');
+    expect(document.body.style.getPropertyValue('--text-sm-line-height')).toBe('26px');
   });
 
   it('removes font overrides and keeps code size clamped', () => {
@@ -196,6 +177,8 @@ describe('font settings', () => {
     expect(rootStyle.getPropertyValue('--app-font-ui')).toBe('');
     expect(rootStyle.getPropertyValue('--app-font-code')).toBe('');
     expect(rootStyle.getPropertyValue('--app-code-font-size')).toBe(`${DEFAULT_CODE_FONT_SIZE}px`);
+    expect(document.body.style.getPropertyValue('--app-font-ui')).toBe('');
+    expect(document.body.style.getPropertyValue('--app-font-code')).toBe('');
   });
 
   it('resets UI font size to the default', () => {
@@ -207,7 +190,7 @@ describe('font settings', () => {
       result.current.setUiSize(18);
     });
     expect(result.current.uiSize).toBe(18);
-    expect(localStorage.getItem('font.uiSize')).toBe('18');
+    expect(localStorage.getItem('font.uiSize')).toBeNull();
 
     act(() => {
       result.current.resetUiSize();
@@ -215,5 +198,67 @@ describe('font settings', () => {
 
     expect(result.current.uiSize).toBe(DEFAULT_UI_FONT_SIZE);
     expect(localStorage.getItem('font.uiSize')).toBeNull();
+  });
+
+  it('keeps newer optimistic font updates when an older main snapshot arrives', async () => {
+    let onChanged:
+      | ((settings: {
+          uiFamily: string;
+          codeFamily: string;
+          uiSize: number;
+          codeSize: number;
+          windowZoom: number;
+        }) => void)
+      | undefined;
+    const setPatch = vi.fn(() => new Promise<void>(() => undefined));
+    const originalElectronApi = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        appearanceSettings: {
+          getSync: () => ({
+            uiFamily: '',
+            codeFamily: '',
+            uiSize: DEFAULT_UI_FONT_SIZE,
+            codeSize: DEFAULT_CODE_FONT_SIZE,
+            windowZoom: 1,
+          }),
+          setPatch,
+          onChanged: (callback: typeof onChanged) => {
+            onChanged = callback;
+            return () => undefined;
+          },
+        },
+      },
+    });
+
+    try {
+      const wrapper = ({ children }: { children: ReactNode }) =>
+        createElement(FontSettingsProvider, null, children);
+      const { result } = renderHook(() => useFontSettings(), { wrapper });
+
+      act(() => {
+        result.current.setUiSize(16);
+        result.current.setUiSize(18);
+      });
+      expect(result.current.uiSize).toBe(18);
+      await waitFor(() => expect(setPatch).toHaveBeenCalledTimes(1));
+
+      act(() => {
+        onChanged?.({
+          uiFamily: '',
+          codeFamily: '',
+          uiSize: 16,
+          codeSize: DEFAULT_CODE_FONT_SIZE,
+          windowZoom: 1,
+        });
+      });
+      expect(result.current.uiSize).toBe(18);
+    } finally {
+      Object.defineProperty(window, 'electronAPI', {
+        configurable: true,
+        value: originalElectronApi,
+      });
+    }
   });
 });

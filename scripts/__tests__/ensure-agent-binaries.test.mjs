@@ -16,6 +16,7 @@ import {
   isValidDirDist,
   listSiblingWorktreeRoots,
   readInstalledVersion,
+  SUPPORTED_BINARY_KINDS,
   supportsCdnFallback,
   tryReuseFromSiblingWorktree,
 } from '../ensure-agent-binaries.mjs';
@@ -24,6 +25,16 @@ import { verifyDirDistManifest, writeDirDistManifest } from '../../tools/shared/
 test('directory distributions never use the single-binary CDN fallback', () => {
   assert.equal(supportsCdnFallback('pi'), false);
   assert.equal(supportsCdnFallback('codex'), true);
+});
+
+test('dev startup prepares every supported runtime, including Pi', () => {
+  assert.deepEqual(SUPPORTED_BINARY_KINDS, ['claude', 'codex', 'ripgrep', 'pi']);
+
+  const devGuard = fs.readFileSync(
+    new URL('../ensure-dev-runtime-assets.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(devGuard, /const AGENT_KINDS = SUPPORTED_BINARY_KINDS;/);
 });
 
 const LFS_POINTER = [
@@ -220,7 +231,7 @@ test('listSiblingWorktreeRoots: lists other worktrees of the same repo, excludin
   git('worktree', 'add', wt, '-b', 'wt-a');
 
   const fromMain = listSiblingWorktreeRoots(repo);
-  assert.deepEqual(fromMain, [fs.realpathSync(wt)]);
+  assert.deepEqual(fromMain, [fs.realpathSync.native(wt)]);
   const fromWt = listSiblingWorktreeRoots(wt);
-  assert.deepEqual(fromWt, [fs.realpathSync(repo)]);
+  assert.deepEqual(fromWt, [fs.realpathSync.native(repo)]);
 });

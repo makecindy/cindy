@@ -168,6 +168,7 @@ describe('newMakerDraft store', () => {
           model: 'claude-opus-4-7',
           effort: 'high',
           fast: true,
+          workerPermissionMode: 'bypassPermissions',
           initialTask: '先跑一遍测试',
         },
       },
@@ -186,8 +187,33 @@ describe('newMakerDraft store', () => {
       model: 'claude-opus-4-7',
       effort: 'high',
       fast: true,
+      workerPermissionMode: 'bypassPermissions',
     });
     expect(wc?.initialTask).toBeUndefined();
+  });
+
+  it('另起干净任务时只关闭协同，不覆盖 Worker 创建偏好', async () => {
+    const { getDraft, patchDraft, resetDraftWorkspaceTargets } = await loadModule();
+    patchDraft({
+      collab: {
+        enabled: true,
+        worker: 'codex',
+        workerConfig: {
+          role: 'developer',
+          model: 'gpt-5.5',
+          workerPermissionMode: 'bypassPermissions',
+        },
+      },
+    });
+
+    resetDraftWorkspaceTargets();
+
+    expect(getDraft().collab.enabled).toBe(false);
+    expect(getDraft().collab.workerConfig).toMatchObject({
+      role: 'developer',
+      model: 'gpt-5.5',
+      workerPermissionMode: 'bypassPermissions',
+    });
   });
 
   it('patchDraft: Cindy worktree 路径会折回项目根目录', async () => {
@@ -249,6 +275,37 @@ describe('newMakerDraft store', () => {
     expect(d.lastByVendor.cc.permissionMode).toBe('plan');
     // 新 vendor(codex)的 prefs 不变(等待用户在 codex 下继续操作)
     expect(d.lastByVendor.codex.permissionMode).toBe('auto');
+  });
+
+  it('switchVendor:选中的引擎跨重启保留(模拟 app 重启后仍是上次选的)', async () => {
+    const m1 = await loadModule();
+    expect(m1.getDraft().vendor).toBe('cc');
+    m1.switchVendor('codex', m1.getDraft().lastByVendor.cc);
+    expect(m1.getDraft().vendor).toBe('codex');
+
+    vi.resetModules();
+    const m2 = await loadModule();
+    expect(m2.getDraft().vendor).toBe('codex');
+  });
+
+  it('sanitize:引擎白名单按 SELECTABLE_VENDORS 校验,表内的值一律保留', async () => {
+    const { SELECTABLE_VENDORS } = await import('@/lib/agentVendors');
+    for (const vendor of SELECTABLE_VENDORS) {
+      memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
+      vi.resetModules();
+      const { getDraft } = await loadModule();
+      // 逐个写死白名单时,新上线的引擎在这里会被静默重置回 'cc' —— 用户选中后重启就丢。
+      expect(getDraft().vendor).toBe(vendor);
+    }
+  });
+
+  it("sanitize:表外的引擎值(历史 'orca' / 未知 / 非字符串)回退默认", async () => {
+    for (const vendor of ['orca', 'unknown-engine', '', 42, null]) {
+      memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
+      vi.resetModules();
+      const { getDraft } = await loadModule();
+      expect(getDraft().vendor).toBe('cc');
+    }
   });
 
   it('switchVendor:相同 vendor 不变(no-op,避免误覆盖)', async () => {
@@ -473,6 +530,20 @@ describe('newMakerDraft store', () => {
       expect(getDraft().worktreeEnabled).toBe(false);
       expect(getDraft().worktreePreferenceCustomized).toBe(false);
     }
+  });
+
+  it('通用草稿 patch 不能改动 worktree 偏好', async () => {
+    vi.resetModules();
+    const { getDraft, patchDraft, setWorktreePreference } = await loadModule();
+
+    patchDraft({ worktreeEnabled: true, worktreePreferenceCustomized: true });
+    expect(getDraft().worktreeEnabled).toBe(false);
+    expect(getDraft().worktreePreferenceCustomized).toBe(false);
+
+    setWorktreePreference(true);
+    patchDraft({ worktreeEnabled: false, worktreePreferenceCustomized: false });
+    expect(getDraft().worktreeEnabled).toBe(true);
+    expect(getDraft().worktreePreferenceCustomized).toBe(true);
   });
 
   it('旧 false 快照不固化默认,旧 true 迁移为显式 override', async () => {
@@ -738,15 +809,13 @@ describe('newMakerDraft store', () => {
       expect(getDraft().deviceLinkDeviceName).toBeNull();
     });
 
-    // issue #1170:device-link 草稿曾被硬编码禁用协同,而同一个项目建成会话后入口又出现。
-    // 现在草稿与会话页共用同一份判定(resolveCollabEntryPolicy),device-link **项目**可开协同;
-    // 关掉协同的只剩「对话模式」这一条(workingDir == null)。
-    it('选设备但没选项目(对话模式)→ 协同仍然关闭', async () => {
+    // 协同与项目/对话形态正交:切设备后落到该设备的对话态也不能静默关掉用户选择。
+    it('选设备但没选项目(对话模式)→ 协同开关保留', async () => {
       const { getDraft, patchDraft } = await loadModule();
       patchDraft({ workingDir: '/local/proj' });
       patchDraft({ collab: { enabled: true, worker: 'cc' } });
       patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: null });
-      expect(getDraft().collab.enabled).toBe(false);
+      expect(getDraft().collab.enabled).toBe(true);
     });
 
     it('选设备上的项目 → 协同开关保留(不再被 device-link 一刀切关掉)', async () => {

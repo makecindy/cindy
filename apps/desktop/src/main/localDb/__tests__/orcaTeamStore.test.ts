@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
+import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
 import * as schema from '../schema.js';
 
 const h = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ vi.mock('electron', () => ({
   },
 }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({
+  getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
 vi.mock('../agentIslandSessionPatch.js', () => ({
@@ -104,6 +106,55 @@ describe('orcaTeamStore', () => {
     });
   });
 
+  it('never archives or broadcasts a worker task that is already deleted', async () => {
+    const { archiveWorkersByTeam } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    await client.exec('UPDATE sessions SET status = ? WHERE id = ?', [
+      'deleted',
+      'worker-session-2',
+    ]);
+
+    await expect(archiveWorkersByTeam('team-1')).resolves.toEqual(['worker-session-1']);
+    await expect(
+      client.queryOne<{ status: string }>('SELECT status FROM sessions WHERE id = ?', [
+        'worker-session-2',
+      ]),
+    ).resolves.toEqual({ status: 'deleted' });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'worker-session-2',
+      patch: { status: 'archived' },
+    });
+  });
+
+  it('reconciles only still-active workers from inactive teams', async () => {
+    const { reconcileInactiveTeamWorkersForLead } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    await client.exec('UPDATE orca_teams SET status = ? WHERE id = ?', ['completed', 'team-1']);
+    await client.exec('UPDATE sessions SET status = ? WHERE id = ?', [
+      'deleted',
+      'worker-session-2',
+    ]);
+
+    await expect(reconcileInactiveTeamWorkersForLead('lead-session-1')).resolves.toEqual([
+      'worker-session-1',
+    ]);
+    await expect(
+      client.query<{ id: string; status: string }>(
+        'SELECT id, status FROM sessions WHERE id IN (?, ?) ORDER BY id',
+        ['worker-session-1', 'worker-session-2'],
+      ),
+    ).resolves.toEqual([
+      { id: 'worker-session-1', status: 'archived' },
+      { id: 'worker-session-2', status: 'deleted' },
+    ]);
+  });
+
   it('preserves Pi worker identity in Orca projections', async () => {
     const { listWorkersByLead } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();
@@ -112,8 +163,43 @@ describe('orcaTeamStore', () => {
     await seedOrcaWorkers(client);
     const workers = await listWorkersByLead('lead-session-1');
 
-    expect(workers.find((worker) => worker.sessionId === 'worker-session-2')?.session.agentKind)
-      .toBe('pi');
+    expect(
+      workers.find((worker) => worker.sessionId === 'worker-session-2')?.session.agentKind,
+    ).toBe('pi');
+  });
+
+  it('returns complete active worker projections grouped by lead in one batch', async () => {
+    const { listWorkersByLeads } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    const now = Date.now();
+    await client.exec(
+      'INSERT INTO sessions (id, title, agent_kind, orca_role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['lead-session-2', 'Lead 2', 'codex', 'lead', now, now],
+    );
+    await client.exec(
+      'INSERT INTO sessions (id, title, agent_kind, orca_role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['worker-session-3', 'Worker 3', 'claude-code', 'worker', now, now],
+    );
+    await client.exec(
+      'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ['team-2', 'lead-session-2', 'active', now, now],
+    );
+    await client.exec(
+      'INSERT INTO orca_workers (id, team_id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ['worker-3', 'team-2', 'worker-session-3', now, now],
+    );
+
+    const grouped = await listWorkersByLeads(['lead-session-1', 'lead-session-2', 'lead-empty']);
+
+    expect(grouped['lead-session-1'].map((worker) => worker.id).sort()).toEqual([
+      'worker-1',
+      'worker-2',
+    ]);
+    expect(grouped['lead-session-2'].map((worker) => worker.id)).toEqual(['worker-3']);
+    expect(grouped['lead-empty']).toEqual([]);
   });
 
   it('executes worker status CAS updates and only rolls back idle acknowledgements', async () => {
@@ -220,9 +306,8 @@ describe('orcaTeamStore', () => {
       queryOne: async <T = unknown>(sql: string, params: unknown[] = []) =>
         dbHandle.prepare(sql).get(...params) as T | undefined,
       exec: async (sql, params = []) => dbHandle.prepare(sql).run(...params),
-      tx: async () => {
-        throw new Error('tx is not used by this test');
-      },
+      tx: (async (name: string, args: unknown) =>
+        runInprocTx(dbHandle, { name, args })) as DbClient['tx'],
       drizzle: db,
       vecAvailable: false,
       dispose: async () => {},

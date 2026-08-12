@@ -25,6 +25,7 @@ import {
   Sparkles,
   Target,
 } from 'lucide-react';
+import { readAgentInputReferences } from '@cindy/maker-shared/agent-input-projection';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { cn } from '@/lib/utils';
@@ -69,14 +70,24 @@ import { ChatImageView } from './ChatImageView';
 import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
+import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
-import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
+import {
+  isInteractiveSessionNavigationMode,
+  useSessionNavigationMode,
+} from '@/features/cc-agent/embeddedSessionNavigation';
 import { RewindPreviewDialog } from './RewindPreviewDialog';
 import { UserMessageEditBox } from './UserMessageEditBox';
 import HookTaskCard from './HookTaskCard';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
   LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
@@ -91,6 +102,7 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@/lib/mentionRefFormat';
 import { parseGhostCommandWord, splitGhostDirective } from '@/cindy-brain/ghostCommand';
+import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvocation';
 import {
   GhostFulfillmentContext,
   GhostSummonCard,
@@ -100,6 +112,7 @@ import { AutomationOriginBadge } from './AutomationOriginBadge';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
+import { SentAgentReferenceChip, sentAgentReferenceDisplayLabel } from './SentAgentReferenceChip';
 import { parseOrcaCommunicationContent, resolveUserDisplayText } from './userMessageDisplayText';
 
 /**
@@ -236,6 +249,118 @@ function UserFileChip({
 }
 
 /**
+ * UserAttachmentChip — 用户消息下方的文件附件 chip(与正文里的 `@file` 引用
+ * chip 是两种呈现;此前只有 onClick,右键无反应,与 UserFileChip 交互不一致,
+ * Issue #1811 讨论中实捉)。左键保持既有行为:安全降级附件走另存流程,其余
+ * 文本预览 / 交系统默认应用。右键:
+ *   - 普通附件 → 共享文件 chip 菜单(复制 / 路径 / 定位等,与 UserFileChip 同款);
+ *   - 安全降级附件 → 仅「另存为…」单项。受控 `.bin` 副本的路径不该经「复制
+ *     文件路径 / 打开所在目录」外泄,打开类动作更会绕过降级本身。
+ */
+function UserAttachmentChip({
+  file,
+  onOpenTextPreview,
+}: {
+  file: { name: string; path: string };
+  /** 文本预览分支的回调:父组件记录 chip 元素(关闭预览后焦点复位)并开 lightbox。 */
+  onOpenTextPreview: (chip: HTMLElement) => void;
+}) {
+  const { t } = useTranslation();
+  const sessionFileCtx = useChatSessionFile();
+  const downloadOnly = isSafetyDowngradedAttachment(file);
+  // Rules-of-hooks:两个菜单 hook/状态都无条件建,按 downloadOnly 选用其一。
+  const ctxMenu = useFileChipContextMenu({
+    getAbsPath: () => file.path,
+    canOpenInBrowser: isBrowserOpenablePath(file.path),
+  });
+  const [saveMenuPos, setSaveMenuPos] = useState<{ x: number; y: number } | null>(null);
+
+  const saveOnlyMenu = (
+    <DropdownMenu
+      open={saveMenuPos !== null}
+      onOpenChange={(open) => {
+        if (!open) setSaveMenuPos(null);
+      }}
+    >
+      <DropdownMenuTrigger asChild>
+        <span
+          aria-hidden
+          data-fixed-menu-anchor
+          style={{
+            position: 'fixed',
+            left: saveMenuPos?.x ?? 0,
+            top: saveMenuPos?.y ?? 0,
+            width: 0,
+            height: 0,
+            pointerEvents: 'none',
+          }}
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" sideOffset={2} onClick={(e) => e.stopPropagation()}>
+        <DropdownMenuItem
+          onClick={() => {
+            setSaveMenuPos(null);
+            void saveChatAttachmentWithToasts(sessionFileCtx, file);
+          }}
+        >
+          <Download className="mr-2 h-4 w-4" />
+          {t('chat.media.saveAs')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={
+          downloadOnly ? t('chat.userMessage.saveAttachmentAs', { name: file.name }) : undefined
+        }
+        onClick={async (e) => {
+          if (downloadOnly) {
+            await saveChatAttachmentWithToasts(sessionFileCtx, file);
+            return;
+          }
+          const chip = e.currentTarget;
+          if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, file.path))) return;
+          onOpenTextPreview(chip);
+        }}
+        onContextMenu={(e) => {
+          if (downloadOnly) {
+            e.preventDefault();
+            e.stopPropagation();
+            setSaveMenuPos({ x: e.clientX, y: e.clientY });
+            return;
+          }
+          ctxMenu.onContextMenu(e);
+        }}
+        className={cn(
+          'inline-flex items-center gap-1.5',
+          'h-7 px-2.5 py-1.5',
+          'rounded-[9999px]',
+          'bg-[var(--msg-user-bg)]',
+          'border border-[var(--msg-user-border)]',
+          'text-13 font-medium',
+          'text-[var(--msg-user-text)]',
+          'hover:bg-[var(--cmd-palette-item-hover)]',
+          'transition-colors cursor-pointer',
+          'max-w-[280px]',
+        )}
+      >
+        {downloadOnly ? (
+          <Download size={14} className="shrink-0 text-[var(--msg-user-text)]" />
+        ) : (
+          <FileText size={14} className="shrink-0 text-[var(--msg-user-text)]" />
+        )}
+        <span className="truncate">{file.name}</span>
+      </button>
+      {downloadOnly ? saveOnlyMenu : ctxMenu.menu}
+    </>
+  );
+}
+
+/**
  * Render a plain-text segment, converting:
  *   - http(s) URLs into links that follow the user's opening preference
  *   - bare absolute image paths into clickable buttons that open the
@@ -245,10 +370,13 @@ function UserFileChip({
 function renderTextWithLinks(
   text: string,
   keyPrefix: string,
-  onImageClick: (xdtFileUrl: string) => void,
+  onImageClick: ((xdtFileUrl: string) => void) | undefined,
   sessionId?: string,
   sessionReferences?: readonly PersistedSessionReferenceMetadata[],
+  interactive = true,
 ): React.ReactNode[] {
+  if (!interactive) return [text];
+
   const result: React.ReactNode[] = [];
   const matches = findLinkifyMatches(text);
   let lastIndex = 0;
@@ -301,7 +429,7 @@ function renderTextWithLinks(
         <button
           key={`${keyPrefix}-img-${match.index}`}
           type="button"
-          onClick={() => onImageClick(toLocalFileUrl(p))}
+          onClick={() => onImageClick?.(toLocalFileUrl(p))}
           // 同 UserMessageUrlLink:可点 = 正文色 + 常显下划线,不再靠 --msg-link 颜色。
           className="underline underline-offset-2 cursor-pointer break-all"
         >
@@ -377,14 +505,16 @@ function looksLikeCommand(word: string): boolean {
 function renderContentWithoutPastedText(
   content: string,
   workingDir: string,
-  onFileChipClick: (abs: string, name: string, chip: HTMLElement) => void | Promise<void>,
-  onImageClick: (xdtFileUrl: string) => void,
+  onFileChipClick:
+    ((abs: string, name: string, chip: HTMLElement) => void | Promise<void>) | undefined,
+  onImageClick: ((xdtFileUrl: string) => void) | undefined,
   t: TFunction,
   sessionId?: string,
   /** remote 会话:@-chip 点击跳过本机 smart resolve,按 workdir 风格直接 join。 */
   remoteJoin = false,
   renderLegacySlashCommands = true,
   sessionReferences?: readonly PersistedSessionReferenceMetadata[],
+  interactive = true,
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   const lines = content.split('\n');
@@ -421,14 +551,32 @@ function renderContentWithoutPastedText(
         // A real mention is always preceded by whitespace or sits at line start.
         const prev = parts[pi - 1];
         if (prev && prev.length > 0 && !/\s$/.test(prev)) {
-          nodes.push(...renderTextWithLinks(part, `${li}-${pi}`, onImageClick, sessionId, sessionReferences));
+          nodes.push(
+            ...renderTextWithLinks(
+              part,
+              `${li}-${pi}`,
+              onImageClick,
+              sessionId,
+              sessionReferences,
+              interactive,
+            ),
+          );
           continue;
         }
 
         // Only render as chip if it looks like a real path
         if (!looksLikePath(ref)) {
           // Not a path — render as plain text
-          nodes.push(...renderTextWithLinks(part, `${li}-${pi}`, onImageClick, sessionId, sessionReferences));
+          nodes.push(
+            ...renderTextWithLinks(
+              part,
+              `${li}-${pi}`,
+              onImageClick,
+              sessionId,
+              sessionReferences,
+              interactive,
+            ),
+          );
           continue;
         }
 
@@ -464,42 +612,65 @@ function renderContentWithoutPastedText(
           const fileName = ref.split(/[\\/]/).pop() || ref;
           // v7: 右键菜单(复制 / 复制文件路径 / 打开文件所在目录) 由 UserFileChip 提供。
           nodes.push(
-            <UserFileChip
-              key={key}
-              refText={ref}
-              fileName={fileName}
-              workingDir={workingDir}
-              onClick={async (e) => {
-                // Capture currentTarget before the await: `currentTarget` is only
-                // set while the DOM event is being dispatched, so it reads back as
-                // null once the IPC resolves. (Not React event pooling — that was
-                // removed in React 17; this is plain DOM Event semantics.) The
-                // element is needed later to restore focus when the lightbox closes.
-                const chip = e.currentTarget;
-                if (remoteJoin) {
-                  // remote:本机 BFS 无意义,join 出远端绝对路径,存在性由
-                  // 点击后的远程取回链路兜底。
-                  await onFileChipClick(resolveLocalPath(ref, workingDir), fileName, chip);
-                  return;
-                }
-                // markdown-monorepo-resolve: smart resolve so a chip like
-                // `@src/App.tsx` resolves to the right sub-package even
-                // though session.workingDir points at the workspace root.
-                const result = await resolveLocalPathSmart(ref, workingDir);
-                if (result.status === 'multiple') {
-                  toast.error(
-                    t('chat.markdownRenderer.duplicateFiles', { count: result.candidates.length }),
-                  );
-                  return;
-                }
-                const abs = result.status === 'unique' ? result.absPath : result.fallbackAbsPath;
-                await onFileChipClick(abs, fileName, chip);
-              }}
-            />,
+            interactive && onFileChipClick ? (
+              <UserFileChip
+                key={key}
+                refText={ref}
+                fileName={fileName}
+                workingDir={workingDir}
+                onClick={async (e) => {
+                  // Capture currentTarget before the await: `currentTarget` is only
+                  // set while the DOM event is being dispatched, so it reads back as
+                  // null once the IPC resolves. (Not React event pooling — that was
+                  // removed in React 17; this is plain DOM Event semantics.) The
+                  // element is needed later to restore focus when the lightbox closes.
+                  const chip = e.currentTarget;
+                  if (remoteJoin) {
+                    // remote:本机 BFS 无意义,join 出远端绝对路径,存在性由
+                    // 点击后的远程取回链路兜底。
+                    await onFileChipClick(resolveLocalPath(ref, workingDir), fileName, chip);
+                    return;
+                  }
+                  // markdown-monorepo-resolve: smart resolve so a chip like
+                  // `@src/App.tsx` resolves to the right sub-package even
+                  // though session.workingDir points at the workspace root.
+                  const result = await resolveLocalPathSmart(ref, workingDir);
+                  if (result.status === 'multiple') {
+                    toast.error(
+                      t('chat.markdownRenderer.duplicateFiles', {
+                        count: result.candidates.length,
+                      }),
+                    );
+                    return;
+                  }
+                  const abs = result.status === 'unique' ? result.absPath : result.fallbackAbsPath;
+                  await onFileChipClick(abs, fileName, chip);
+                }}
+              />
+            ) : (
+              <InlineReferenceChip
+                key={key}
+                label={fileName}
+                icon={<FileIcon aria-hidden />}
+                tooltip={ref}
+                tooltipMono
+                ariaLabel={fileName}
+                className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+              />
+            ),
           );
         }
       } else {
-        nodes.push(...renderTextWithLinks(part, `${li}-${pi}`, onImageClick, sessionId, sessionReferences));
+        nodes.push(
+          ...renderTextWithLinks(
+            part,
+            `${li}-${pi}`,
+            onImageClick,
+            sessionId,
+            sessionReferences,
+            interactive,
+          ),
+        );
       }
     }
   }
@@ -509,18 +680,50 @@ function renderContentWithoutPastedText(
 export type SentInlineToken =
   | { kind: 'text'; text: string }
   | { kind: 'slash'; text: string }
-  | { kind: 'pasted'; text: string; display: string };
+  | { kind: 'pasted'; text: string; display: string }
+  | { kind: 'agent-reference'; text: string; reference: AgentInputReference };
+
+type SentInlineRange =
+  | { tokenKind: 'pasted'; start: number; end: number; display: string }
+  | { tokenKind: 'slash'; start: number; end: number }
+  | {
+      tokenKind: 'agent-reference';
+      start: number;
+      end: number;
+      reference: AgentInputReference;
+    };
 
 /** Split exact persisted ranges without guessing from repeated text. */
 export function buildSentInlineTokens(
   content: string,
   pastedTextRanges: readonly PastedTextRange[] = [],
   slashCommandRanges: readonly SlashCommandRange[] = [],
+  agentReferences: readonly AgentInputReference[] = [],
 ): SentInlineToken[] {
-  const ranges = [
-    ...pastedTextRanges.map((range) => ({ ...range, kind: 'pasted' as const })),
-    ...slashCommandRanges.map((range) => ({ ...range, kind: 'slash' as const })),
-  ].sort((a, b) => a.start - b.start || a.end - b.end);
+  const ranges: SentInlineRange[] = [
+    ...pastedTextRanges.map(({ start, end, display }): SentInlineRange => ({
+      tokenKind: 'pasted',
+      start,
+      end,
+      display,
+    })),
+    ...slashCommandRanges.map(({ start, end }): SentInlineRange => ({
+      tokenKind: 'slash',
+      start,
+      end,
+    })),
+    ...agentReferences.map((reference): SentInlineRange => ({
+      tokenKind: 'agent-reference',
+      start: reference.start,
+      end: reference.end,
+      reference,
+    })),
+  ].sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    if (a.tokenKind === 'agent-reference' && b.tokenKind !== 'agent-reference') return -1;
+    if (b.tokenKind === 'agent-reference' && a.tokenKind !== 'agent-reference') return 1;
+    return a.end - b.end;
+  });
   const tokens: SentInlineToken[] = [];
   let cursor = 0;
   for (const range of ranges) {
@@ -535,10 +738,12 @@ export function buildSentInlineTokens(
     if (range.start > cursor)
       tokens.push({ kind: 'text', text: content.slice(cursor, range.start) });
     const text = content.slice(range.start, range.end);
-    if (range.kind === 'pasted') {
+    if (range.tokenKind === 'pasted') {
       tokens.push({ kind: 'pasted', text, display: range.display });
-    } else {
+    } else if (range.tokenKind === 'slash') {
       tokens.push({ kind: 'slash', text });
+    } else {
+      tokens.push({ kind: 'agent-reference', text, reference: range.reference });
     }
     cursor = range.end;
   }
@@ -547,12 +752,12 @@ export function buildSentInlineTokens(
 }
 
 /**
- * 收起态渲染与镜像测量共用的纯文本投影:粘贴段折叠成它自己的胶囊文案。
+ * 收起判定与镜像测量共用的纯文本投影:粘贴段折叠成它自己的胶囊文案。
  *
  * 展开态里粘贴段是一个胶囊(点击看全文),收起态却按原文纯文本裁剪 —— 用户看到的
- * 是"收起还能看到日志前 10 行、展开只剩一个胶囊"的反向落差(issue #946)。两侧共用
- * 同一份投影后,收起与展开只差一个 line-clamp,内容形状一致;测量也不再被折叠掉的
- * 几百行原文顶穿阈值,「只粘一段」的消息直接以胶囊呈现,不再多套一层收起。
+ * 是"收起还能看到日志前 10 行、展开只剩一个胶囊"的反向落差(issue #946)。测量
+ * 使用同一份投影避免被折叠掉的几百行原文顶穿阈值；实际收起态则复用静态 chip
+ * renderer，保证它与展开态的内容形状一致。
  *
  * 只在 range 偏移确定精确时调用(见 UserMessage 的 collapseMeasureBody):
  * buildSentInlineTokens 本身会丢弃越界 / 逆序的 range,偏移不准最坏退化成"不折叠",
@@ -565,6 +770,24 @@ export function projectSentPastedPlainText(
   if (pastedTextRanges.length === 0) return content;
   return buildSentInlineTokens(content, pastedTextRanges)
     .map((token) => (token.kind === 'pasted' ? token.display : token.text))
+    .join('');
+}
+
+/** Project rich inline ranges to the labels users see when a long message is collapsed. */
+export function projectSentInlinePlainText(
+  content: string,
+  pastedTextRanges: readonly PastedTextRange[] = [],
+  agentReferences: readonly AgentInputReference[] = [],
+): string {
+  if (pastedTextRanges.length === 0 && agentReferences.length === 0) return content;
+  return buildSentInlineTokens(content, pastedTextRanges, [], agentReferences)
+    .map((token) =>
+      token.kind === 'pasted'
+        ? token.display
+        : token.kind === 'agent-reference'
+          ? sentAgentReferenceDisplayLabel(token.reference)
+          : token.text,
+    )
     .join('');
 }
 
@@ -605,11 +828,12 @@ export function projectSentRanges<T extends { start: number; end: number }>(
 }
 
 /** Replace persisted presentation ranges with read-only sent chips. */
-function renderContent(
+export function renderContent(
   content: string,
   workingDir: string,
-  onFileChipClick: (abs: string, name: string, chip: HTMLElement) => void | Promise<void>,
-  onImageClick: (xdtFileUrl: string) => void,
+  onFileChipClick:
+    ((abs: string, name: string, chip: HTMLElement) => void | Promise<void>) | undefined,
+  onImageClick: ((xdtFileUrl: string) => void) | undefined,
   t: TFunction,
   sessionId?: string,
   remoteJoin = false,
@@ -621,8 +845,15 @@ function renderContent(
    * tooltip —— 那正是"发出去就再也看不到全文"的旧行为,新调用点都应该传。
    */
   onPastedTextChipClick?: (text: string, chip: HTMLElement) => void,
+  agentReferences: readonly AgentInputReference[] = [],
+  interactive = true,
 ): React.ReactNode[] {
-  const tokens = buildSentInlineTokens(content, pastedTextRanges, slashCommandRanges ?? []);
+  const tokens = buildSentInlineTokens(
+    content,
+    pastedTextRanges,
+    slashCommandRanges ?? [],
+    agentReferences,
+  );
   const useLegacySlashHeuristic = slashCommandRanges === undefined;
   return tokens.map((token, index) => {
     if (token.kind === 'slash') {
@@ -649,12 +880,20 @@ function renderContent(
           // 点击打开只读全文(与 composer 侧 pastedTextChip → ToolPayloadLightbox
           // 对齐)。hover tooltip 是 320×256 的小浮层,几百行日志在里面读不了,
           // 也无法选中复制,不能当作查看全文的唯一出口(issue #946)。
-          {...(onPastedTextChipClick
+          {...(interactive && onPastedTextChipClick
             ? {
-                onClick: (event) =>
-                  onPastedTextChipClick(token.text, event.currentTarget),
+                onClick: (event) => onPastedTextChipClick(token.text, event.currentTarget),
               }
             : {})}
+        />
+      );
+    }
+    if (token.kind === 'agent-reference') {
+      return (
+        <SentAgentReferenceChip
+          key={`agent-reference-chip-${index}`}
+          interactive={interactive}
+          reference={token.reference}
         />
       );
     }
@@ -670,6 +909,7 @@ function renderContent(
           remoteJoin,
           useLegacySlashHeuristic,
           sessionReferences,
+          interactive,
         )}
       </span>
     );
@@ -708,7 +948,8 @@ export function UserMessage({
   // Capability gate: 没传 agentKind (调用方未升级) → 默认两者都允许 (兼容旧路径)
   // 传了 agentKind → 按 capabilities.fork/rewind.supported 决定 icon 显示
   // renderer 'cc' ↔ maker 'claude-code' 别名映射 (DB / Session 用 'cc', maker IPC 用 'claude-code')
-  const makerKind: MakerAgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+  const makerKind: MakerAgentKind =
+    agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
   // device-link 远程会话:fork/rewind 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // 媒体来源(device/ssh)用于把附件/文件预览 URL 改写到 cindy-remote-media://(入方向媒体)。
   // 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,deviceId 迟到注册时
@@ -763,12 +1004,19 @@ export function UserMessage({
   // 与提问导航条预览共用同一实现,规则见 userMessageDisplayText.ts;上面已
   // 解析过的 Orca 结果传入复用,渲染热路径不重复 JSON.parse(Copilot review)。
   const displayContent = resolveUserDisplayText({ content, hookSource }, orcaCommunication);
+  const validAgentReferences = useMemo(
+    () => readAgentInputReferences(agentReferences, content),
+    [agentReferences, content],
+  );
   // ghost-summon-card:意识指令/提示的机器追加段从气泡正文尾部剥离,交给
   // GhostSummonCard 渲染(splitGhostDirective 与 expandGhostCommand 同模板,
   // 对不上模板按普通文本原样显示)。copy / fork / rewind / 编辑预填全部用
   // 剥离后的正文——这些路径重发都走发送期再展开,带着旧指令会叠加双份。
   // orca / hook 消息不经意识展开,跳过解析。
-  const ghostSplit = orcaCommunication || hookSource ? null : splitGhostDirective(displayContent);
+  const ghostSplit =
+    orcaCommunication || hookSource
+      ? null
+      : (splitGhostDirective(displayContent) ?? splitHostCapabilityDirective(displayContent));
   const ghostDirective = ghostSplit?.directive ?? null;
   const ghostBody = ghostSplit?.body ?? displayContent;
   // quotesEncoded 消息按正文顺序解析全部引用块,支持引用与回复交错。
@@ -858,16 +1106,22 @@ export function UserMessage({
       projectSentRanges(pastedTextRanges ?? [], displayBubbleSourceStart, displayBubbleBody.length),
     [displayBubbleBody.length, displayBubbleSourceStart, pastedTextRanges],
   );
-  // 测量与收起态渲染共用的投影正文:粘贴段按胶囊文案计量,不再拿被折叠掉的
-  // 几百行原文去撞收起阈值(issue #946)。偏移只在 bubbleBody 与 ghostBody 同源
+  const bubbleAgentReferences = useMemo(
+    () =>
+      projectSentRanges(validAgentReferences, displayBubbleSourceStart, displayBubbleBody.length),
+    [displayBubbleBody.length, displayBubbleSourceStart, validAgentReferences],
+  );
+  // 收起判定与测量镜像共用的投影正文:粘贴段按胶囊文案计量,不再拿被折叠掉的
+  // 几百行原文去撞收起阈值(issue #946)。实际正文由同一套结构化 renderer 渲染,
+  // 偏移只在 bubbleBody 与 ghostBody 同源
   // (无引用交错)时精确 —— quote 块被 join 掉的消息偏移会整体前移,保持原文
   // 测量;硬指令剥 $token 不影响精确性(displayBubbleSourceStart 已重定位)。
   const collapseMeasureBody = useMemo(
     () =>
       bubbleBody === ghostBody
-        ? projectSentPastedPlainText(displayBubbleBody, bubblePastedRanges)
+        ? projectSentInlinePlainText(displayBubbleBody, bubblePastedRanges, bubbleAgentReferences)
         : displayBubbleBody,
-    [bubbleBody, ghostBody, displayBubbleBody, bubblePastedRanges],
+    [bubbleAgentReferences, bubbleBody, bubblePastedRanges, displayBubbleBody, ghostBody],
   );
   const collapseMeasureEnabled =
     !orcaCommunication &&
@@ -902,6 +1156,15 @@ export function UserMessage({
     insertSessionLinkIntoComposer({ targetSessionId: sessionId, href: messageDeepLink });
   }, [messageDeepLink, sessionId]);
 
+  // 分享为图片:进入选择模式并预选本条(入口那条天然该已勾选,省一次点击)。
+  const handleShareAsImage = useMemo(
+    () =>
+      sessionId && messageClientId
+        ? () => shareSelectionStore.enter(sessionId, messageClientId)
+        : undefined,
+    [messageClientId, sessionId],
+  );
+
   // fork-from-here: only wire when both sessionId + messageClientId are
   // present (older code paths that render UserMessage without these props
   // simply won't show the Fork button). 流程收敛在 useForkAtMessage —
@@ -924,7 +1187,7 @@ export function UserMessage({
   // 同时按 capabilities.fork.supported gate (Codex 现支持; 未来若 agent 不支持自动隐藏)。
   const navigationMode = useSessionNavigationMode();
   const canFork =
-    navigationMode === 'route-owner' &&
+    isInteractiveSessionNavigationMode(navigationMode) &&
     Boolean(sessionId && messageClientId) &&
     !isFirstUserMessage &&
     forkSupported &&
@@ -1033,6 +1296,17 @@ export function UserMessage({
   // 重渲都重建,连带"等待停止接力" effect 无谓重跑(bot review 指出)。
   const exitEditing = useCallback(() => setEditing(false), []);
 
+  // 分享选择模式只克隆已发送消息的只读 DOM。仅在本条实际处于编辑态时订阅
+  // share store,避免让所有 user 消息都因选择模式切换而重渲染。
+  useEffect(() => {
+    if (!editing || !sessionId) return;
+    const exitWhenSharing = () => {
+      if (shareSelectionStore.isActive(sessionId)) exitEditing();
+    };
+    exitWhenSharing();
+    return shareSelectionStore.subscribe(exitWhenSharing);
+  }, [editing, exitEditing, sessionId]);
+
   // 编辑期间会话来了新消息(自动化任务注入等) → 本条不再是最后一条,继续
   // 发送会把那条新消息一起回退掉。直接退出编辑态(文本是从原消息预填的,
   // 退出无内容损失风险 —— 用户改到一半的文本被放弃,但这是极罕见路径,
@@ -1077,47 +1351,16 @@ export function UserMessage({
           hookSource ? 'justify-start' : 'justify-end',
         )}
       >
-        {files.map((f, idx) => {
-          const downloadOnly = isSafetyDowngradedAttachment(f);
-          return (
-            <button
-              key={`file-${idx}-${f.path}`}
-              type="button"
-              aria-label={
-                downloadOnly ? t('chat.userMessage.saveAttachmentAs', { name: f.name }) : undefined
-              }
-              onClick={async (e) => {
-                if (downloadOnly) {
-                  await saveChatAttachmentWithToasts(sessionFileCtx, f);
-                  return;
-                }
-                const chip = e.currentTarget;
-                if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, f.path))) return;
-                activeFileChipRef.current = chip;
-                setTextLightboxFile({ path: f.path, name: f.name });
-              }}
-              className={cn(
-                'inline-flex items-center gap-1.5',
-                'h-7 px-2.5 py-1.5',
-                'rounded-[9999px]',
-                'bg-[var(--msg-user-bg)]',
-                'border border-[var(--msg-user-border)]',
-                'text-[13px] font-medium',
-                'text-[var(--msg-user-text)]',
-                'hover:bg-[var(--cmd-palette-item-hover)]',
-                'transition-colors cursor-pointer',
-                'max-w-[280px]',
-              )}
-            >
-              {downloadOnly ? (
-                <Download size={14} className="shrink-0 text-[var(--msg-user-text)]" />
-              ) : (
-                <FileText size={14} className="shrink-0 text-[var(--msg-user-text)]" />
-              )}
-              <span className="truncate">{f.name}</span>
-            </button>
-          );
-        })}
+        {files.map((f, idx) => (
+          <UserAttachmentChip
+            key={`file-${idx}-${f.path}`}
+            file={f}
+            onOpenTextPreview={(chip) => {
+              activeFileChipRef.current = chip;
+              setTextLightboxFile({ path: f.path, name: f.name });
+            }}
+          />
+        ))}
       </div>
     ) : null;
 
@@ -1163,7 +1406,7 @@ export function UserMessage({
               type="button"
               className={cn(
                 'flex w-full items-center gap-2 px-3 py-2 text-left',
-                'text-[13px] font-medium leading-none',
+                'text-13 font-medium leading-none',
                 'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
               )}
               aria-expanded={orcaExpanded}
@@ -1206,7 +1449,7 @@ export function UserMessage({
             {/* /goal 目标设定/更新:气泡上方右对齐渲一个徽标(不进气泡、不入 copyText)。 */}
             {goalBadge && (
               <span
-                className="inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                className="inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
                 style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
               >
                 <Target size={11} strokeWidth={2} aria-hidden className="shrink-0" />
@@ -1315,7 +1558,8 @@ export function UserMessage({
                       <div
                         className={cn(
                           'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
-                          longMessageCollapsed && (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),
+                          longMessageCollapsed &&
+                            (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
                       >
                         {quoteSegments.map((segment, index) =>
@@ -1332,12 +1576,12 @@ export function UserMessage({
                               // biome-ignore lint/suspicious/noArrayIndexKey: 已发送消息内容不可变,顺序稳定。
                               key={index}
                             >
-                              {longMessageCollapsed
-                        ? segment.text
-                                : renderContent(
-                                    segment.text,
-                                    workingDir,
-                                    async (abs, name, chip) => {
+                              {renderContent(
+                                segment.text,
+                                workingDir,
+                                longMessageCollapsed
+                                  ? undefined
+                                  : async (abs, name, chip) => {
                                       if (
                                         !(await shouldOpenTextLightboxForOrigin(
                                           sessionFileCtx,
@@ -1348,31 +1592,42 @@ export function UserMessage({
                                       activeFileChipRef.current = chip;
                                       setTextLightboxFile({ path: abs, name });
                                     },
-                                    (xdtFileUrl) => setLightboxSrc(xdtFileUrl),
-                                    t,
-                                    sessionId,
-                                    isRemoteFileOrigin(sessionFileCtx.origin),
-                                    projectSentRanges(
-                                      pastedTextRanges ?? [],
+                                longMessageCollapsed
+                                  ? undefined
+                                  : (xdtFileUrl) => setLightboxSrc(xdtFileUrl),
+                                t,
+                                sessionId,
+                                isRemoteFileOrigin(sessionFileCtx.origin),
+                                projectSentRanges(
+                                  pastedTextRanges ?? [],
+                                  quoteTextSegmentStarts[index] === null ||
+                                    ghostBodySourceStart === null
+                                    ? null
+                                    : ghostBodySourceStart + quoteTextSegmentStarts[index]!,
+                                  segment.text.length,
+                                ),
+                                slashCommandRanges === undefined
+                                  ? undefined
+                                  : projectSentRanges(
+                                      slashCommandRanges,
                                       quoteTextSegmentStarts[index] === null ||
                                         ghostBodySourceStart === null
                                         ? null
                                         : ghostBodySourceStart + quoteTextSegmentStarts[index]!,
                                       segment.text.length,
                                     ),
-                                    slashCommandRanges === undefined
-                                      ? undefined
-                                      : projectSentRanges(
-                                          slashCommandRanges,
-                                          quoteTextSegmentStarts[index] === null ||
-                                            ghostBodySourceStart === null
-                                            ? null
-                                            : ghostBodySourceStart + quoteTextSegmentStarts[index]!,
-                                          segment.text.length,
-                                        ),
-                                    sessionReferences,
-                                    handlePastedTextChipClick,
-                                  )}
+                                sessionReferences,
+                                longMessageCollapsed ? undefined : handlePastedTextChipClick,
+                                projectSentRanges(
+                                  validAgentReferences,
+                                  quoteTextSegmentStarts[index] === null ||
+                                    ghostBodySourceStart === null
+                                    ? null
+                                    : ghostBodySourceStart + quoteTextSegmentStarts[index]!,
+                                  segment.text.length,
+                                ),
+                                !longMessageCollapsed,
+                              )}
                             </span>
                           ),
                         )}
@@ -1381,16 +1636,32 @@ export function UserMessage({
                       <div
                         className={cn(
                           'whitespace-pre-wrap [overflow-wrap:anywhere]',
-                          longMessageCollapsed && (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),
+                          longMessageCollapsed &&
+                            (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
                       >
                         {longMessageCollapsed
-                          ? // Collapsed chips render as plain text on purpose: otherwise
-                            // clipped links/file chips can remain focusable behind the
-                            // visual clamp. Expanding restores the rich chip rendering.
-                            // 粘贴段用胶囊文案(而非原文)投影:与展开态同形状,
-                            // 且与上方测量镜像同一份文本(issue #946)。
-                            collapseMeasureBody
+                          ? renderContent(
+                              displayBubbleBody,
+                              workingDir,
+                              undefined,
+                              undefined,
+                              t,
+                              sessionId,
+                              isRemoteFileOrigin(sessionFileCtx.origin),
+                              bubblePastedRanges,
+                              slashCommandRanges === undefined
+                                ? undefined
+                                : projectSentRanges(
+                                    slashCommandRanges,
+                                    displayBubbleSourceStart,
+                                    displayBubbleBody.length,
+                                  ),
+                              sessionReferences,
+                              undefined,
+                              bubbleAgentReferences,
+                              false,
+                            )
                           : renderContent(
                               displayBubbleBody,
                               workingDir,
@@ -1417,6 +1688,7 @@ export function UserMessage({
                                   ),
                               sessionReferences,
                               handlePastedTextChipClick,
+                              bubbleAgentReferences,
                             )}
                       </div>
                     ) : null}
@@ -1427,7 +1699,7 @@ export function UserMessage({
                         onClick={() => setLongMessageExpanded((expanded) => !expanded)}
                         className={cn(
                           'mt-2 inline-flex items-center gap-1 rounded-full px-1 py-0.5',
-                          'text-[12px] font-medium leading-5',
+                          'text-12 font-medium leading-5',
                           'text-[var(--msg-user-text)] opacity-65 transition-opacity',
                           'hover:opacity-100',
                           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
@@ -1464,7 +1736,7 @@ export function UserMessage({
                   </div>
                 )}
                 {/* message-actions V1.2: hover-revealed bar below the bubble,
-            right-aligned, order [time][copy][edit][undo][more]。被拦消息只保留
+                right-aligned, order [time][copy][fork][edit][undo][more]。被拦消息只保留
             编辑和链接复制,fork/rewind/delete 对未发消息无意义。 */}
                 <MessageActionBar
                   createdAt={createdAt}
@@ -1474,6 +1746,7 @@ export function UserMessage({
                   hovered={hovered}
                   onFork={!isBlocked && canFork ? handleFork : undefined}
                   onAddToChat={!isBlocked && messageDeepLink ? handleAddToChat : undefined}
+                  onShareAsImage={handleShareAsImage}
                   onDelete={!isBlocked && sessionId && messageClientId ? handleDelete : undefined}
                   onEdit={canEdit ? handleEdit : undefined}
                   onRewind={!isBlocked && canRewind ? handleRewind : undefined}

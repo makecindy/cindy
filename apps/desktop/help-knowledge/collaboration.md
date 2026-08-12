@@ -3,12 +3,13 @@ id: collaboration
 title: Collaboration mode (lead + workers)
 summary: Turn on Collab to bring one or more worker agents in beside your session and delegate tasks to them.
 ---
+
 Collaboration ("协同" / Collab) lets one session — the **lead** — bring in one or more **worker** agents to run alongside it (a "team"). The lead delegates tasks to workers through a built-in MCP, and you can watch and steer each worker.
 
 **Turning it on:**
 
-- In a project session — local or SSH remote — click the **Collab** pill in the composer toolbar. Both Claude Code and Codex sessions can be the lead, on either side.
-- Pick the first worker's agent (Claude Code or Codex), and optionally its role / model / effort / an initial task.
+- In any regular project or dialogue session, open the composer's **+** menu and choose **Collaboration mode**. You can also choose it before sending the first message of a new task. Claude Code and Codex can lead locally or over SSH; Pi can lead in local sessions.
+- Pick the first worker's agent (Claude Code, Codex, or Pi), and optionally its role / model / effort / an initial task. SSH remote leads currently use Claude Code or Codex workers. If you have not chosen a Worker permission before, the initial default is **Full access** — it is a selectable default, not a fixed mode. You can choose **Auto-review** instead. Once you create a Worker with either mode, Cindy remembers that choice for the next Worker instead of replacing it with the product default.
 - Start. This creates the team plus that first worker.
 
 **Adding more workers:**
@@ -18,7 +19,7 @@ Collaboration ("协同" / Collab) lets one session — the **lead** — bring in
 
 **While collaborating:**
 
-- Each worker is a full session with its own history, tools, working directory, and model, and runs with permissions bypassed so it doesn't stop to ask. It inherits the lead's working directory by default (or shares the worktree when the lead uses one).
+- Each worker is a full session with its own history, tools, working directory, and model. **Full access** skips routine approvals; **Auto-review** lets safe work proceed automatically while higher-risk actions may still be denied or require confirmation. The Worker creation panel remembers your last permission choice alongside its Agent and model preferences. The same remembered choice is used when an agent tool creates a Worker; an explicit `start_team` permission updates that shared choice. Raising it from Auto-review to Full access waits for your confirmation first; cancelling or letting the confirmation time out leaves the preference and team unchanged. Changing it does not affect the lead or workers that already exist. Workers inherit the lead's working directory by default (or share the worktree when the lead uses one).
 - A worker's model defaults to your last new-session choice for that vendor, falling back to the lead's model.
 - Only one worker is **focused** (shown) at a time — switch between them with the worker tabs / dropdown. You can intervene in any worker directly, and archive workers individually.
 
@@ -28,5 +29,5 @@ Collaboration ("协同" / Collab) lets one session — the **lead** — bring in
 
 **Notes:**
 
-- The lead must be a Claude Code / Codex **project** session — local **or SSH remote**. On a remote lead, workers are spawned on the **same remote host**, and the collaboration MCP reaches the remote side over an SSH remote-forward to the local bridge (with a persistent bearer token). A worker can't start its own sub-collab (no nesting).
+- A local lead can be a Claude Code, Codex, or Pi **project or dialogue** session. On an SSH remote lead, the lead and workers currently use Claude Code or Codex; Pi sessions are local-only. Remote workers are spawned on the **same remote host**, and the collaboration MCP reaches the remote side over an SSH remote-forward to the local bridge (with a persistent bearer token). A worker can't start its own sub-collab (no nesting).
 - A lead can have only **one active collaboration workflow** at a time. If you have two clients open on the same account (e.g. dev + release) and start collab on the same session in both, the second fails with "开启协同失败" because a workflow is already active — close one client or end the existing collab.

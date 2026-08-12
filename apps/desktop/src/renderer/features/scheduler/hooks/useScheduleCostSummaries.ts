@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Schedule, SchedulerEvent } from '@cindy/maker-scheduler';
 
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
 import type { RegionalMoney } from '../../../../shared/regionalMoney';
 
@@ -79,7 +80,8 @@ export function useScheduleCostSummaries(
 
   useEffect(() => {
     void refresh();
-    const offSchedule = window.electronAPI.maker.schedule.onEvent((raw) => {
+    const offSchedule = window.electronAPI.maker.schedule.onEvent((raw, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       const event = raw as SchedulerEvent;
       if (
         event.type === 'fired' ||
@@ -92,10 +94,12 @@ export function useScheduleCostSummaries(
         void refresh();
       }
     });
-    const offSpend = window.electronAPI.onUsageSessionSpendChanged(() => {
+    const offSpend = window.electronAPI.onUsageSessionSpendChanged((_payload, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       void refresh();
     });
-    const offTurnCost = window.electronAPI.onUsageMessageTurnCost?.(() => {
+    const offTurnCost = window.electronAPI.onUsageMessageTurnCost?.((_payload, ownerStamp) => {
+      if (!isDataOwnerPushCurrent(ownerStamp)) return;
       void refresh();
     });
     return () => {

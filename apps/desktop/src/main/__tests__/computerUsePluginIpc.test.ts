@@ -62,6 +62,22 @@ describe('computer use plugin IPC invariants', () => {
     );
   });
 
+  it('schedules a retry when the shared host is busy', async () => {
+    const onDeferred = vi.fn();
+
+    await expect(
+      refreshCodexMcpEnvironment({
+        restartCodex: vi.fn(async () => {
+          throw new Error('codex busy');
+        }),
+        shutdownCodexEnvironment: vi.fn(async () => undefined),
+        onDeferred,
+      }),
+    ).resolves.toEqual({ codexMcpRefreshed: false });
+
+    expect(onDeferred).toHaveBeenCalledOnce();
+  });
+
   it('returns the non-blocking refresh result after global plugin persistence', () => {
     const registerSource = fs.readFileSync(
       path.resolve(__dirname, '../maker-ipc/register.ts'),
@@ -86,6 +102,7 @@ describe('computer use plugin IPC invariants', () => {
 
     for (const body of [setEnabledBody, clearEnabledBody]) {
       expect(body).toContain('GLOBAL_PLUGIN_IDS.has(id)');
+      expect(body).toContain("id !== 'browser'");
       expect(body).toContain('await getPluginRegistry()');
       expect(body).toContain('return { codexMcpRefreshed: true };');
       expect(body).toContain('return refreshCodexMcpEnvironment({');
@@ -110,6 +127,28 @@ describe('computer use plugin IPC invariants', () => {
     );
     expect(providersSource).toContain(
       "context?.agentKind === 'codex' || pluginRegistry.isEnabled('computer')",
+    );
+  });
+
+  it('keeps the @ desktop-window gate machine-scoped', () => {
+    const registerSource = fs.readFileSync(
+      path.resolve(__dirname, '../maker-ipc/register.ts'),
+      'utf-8',
+    );
+    const handlerStart = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.AT_CONTEXT_LIST',
+    );
+    const handlerEnd = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.LIST_CUSTOMIZATIONS',
+      handlerStart,
+    );
+    const handlerBody = registerSource.slice(handlerStart, handlerEnd);
+
+    expect(handlerStart).toBeGreaterThanOrEqual(0);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    expect(handlerBody).toContain("getPluginRegistry().isEnabled('computer')");
+    expect(handlerBody).not.toContain(
+      "getPluginRegistry().isEnabled('computer', request.workingDir)",
     );
   });
 

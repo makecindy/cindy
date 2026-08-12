@@ -32,8 +32,15 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
+        'newChat.modelSelector.modelListAria': '模型列表',
+        'newChat.modelSelector.hidden': '已隐藏',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
+        'newChat.modelSelector.remoteLoading': '正在从远程设备读取模型…',
+        'newChat.modelSelector.remoteLoadFailed': '无法读取远程设备上的模型。请检查连接后重试。',
+        'newChat.modelSelector.remoteLoadFailedShort': '模型读取失败',
+        'newChat.modelSelector.retryRemoteModels': '重新读取模型',
+        'newChat.modelSelector.search.noResults': '没有匹配的模型',
       };
       if (key === 'newChat.modelSelector.priceTip') {
         return `Input ${options?.input} · Output ${options?.output} per 1M tokens`;
@@ -179,10 +186,21 @@ const agentCapabilitiesRef = vi.hoisted(() => {
     effortLevels: [{ id: 'xhigh', displayName: 'X-High' }],
     hasFastMode: false,
   };
-  return { DEFAULT_CAPABILITIES, capabilities: DEFAULT_CAPABILITIES as unknown };
+  return {
+    DEFAULT_CAPABILITIES,
+    capabilities: DEFAULT_CAPABILITIES as unknown,
+    loading: false,
+    error: null as string | null,
+  };
 });
 vi.mock('@/hooks/useAgentCapabilities', () => ({
-  useAgentCapabilities: () => ({ capabilities: agentCapabilitiesRef.capabilities }),
+  evictDeviceCapabilities: vi.fn(),
+  prefetchDeviceCapabilities: vi.fn(async () => {}),
+  useAgentCapabilities: () => ({
+    capabilities: agentCapabilitiesRef.capabilities,
+    loading: agentCapabilitiesRef.loading,
+    error: agentCapabilitiesRef.error,
+  }),
 }));
 
 vi.mock('@/hooks/useApiKey', () => ({
@@ -219,10 +237,11 @@ const pricingRef = vi.hoisted(() => {
   return { DEFAULT_PRICING, pricing: DEFAULT_PRICING as unknown, renderCalls: 0 };
 });
 vi.mock('@/hooks/useModelPricing', () => ({
-  useModelPricing: () => {
+  useGatewayModelPricing: () => {
     pricingRef.renderCalls += 1;
     return pricingRef.pricing;
   },
+  useReferenceModelPricing: () => pricingRef.pricing,
 }));
 
 // 可变 providers mock:默认 = anthropic fixture(分段/hover 用例依赖),
@@ -266,15 +285,40 @@ const providersRef = vi.hoisted(() => {
       },
     },
   ] as unknown[];
-  return { DEFAULT_PROVIDERS, providers: DEFAULT_PROVIDERS };
+  return {
+    DEFAULT_PROVIDERS,
+    providers: DEFAULT_PROVIDERS,
+    providerOrder: [] as string[],
+    loading: false,
+  };
 });
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: providersRef.providers }),
+  useProviders: () => ({
+    providers: providersRef.providers,
+    providerOrder: providersRef.providerOrder,
+    loading: providersRef.loading,
+  }),
 }));
 
-const deviceProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
+const deviceProvidersRef = vi.hoisted(() => ({
+  providers: [] as unknown[],
+  loading: false,
+  error: null as string | null,
+  unsupported: false,
+  modelVisibilityOverrides: undefined as Record<string, boolean> | undefined,
+  prefetch: vi.fn(async () => {}),
+}));
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  useDeviceProviders: () => ({ providers: deviceProvidersRef.providers, loading: false }),
+  evictDeviceProviders: vi.fn(),
+  prefetchDeviceProviders: (...args: Parameters<typeof deviceProvidersRef.prefetch>) =>
+    deviceProvidersRef.prefetch(...args),
+  useDeviceProviders: () => ({
+    providers: deviceProvidersRef.providers,
+    loading: deviceProvidersRef.loading,
+    error: deviceProvidersRef.error,
+    unsupported: deviceProvidersRef.unsupported,
+    modelVisibilityOverrides: deviceProvidersRef.modelVisibilityOverrides,
+  }),
 }));
 
 interface VisibleModelFixture {
@@ -297,6 +341,15 @@ vi.mock('@/lib/providerModels', () => ({
   // #245 新增:ModelSelector 渲染路径直接调用;fixture providers 无 routing,按不过滤透传。
   isChatBridgedCodexProvider: () => false,
   filterChatBridgedCodexProviders: (providers: unknown[]) => providers,
+  isDeviceModelVisible: (
+    overrides: Record<string, boolean> | undefined,
+    agent: string,
+    providerId: string,
+    model: { id: string; defaultEnabled?: boolean },
+  ) =>
+    overrides === undefined
+      ? true
+      : (overrides[`${agent}:${providerId}:${model.id}`] ?? model.defaultEnabled !== false),
   resolveVisibleModelAgentKind: ({ agentKind }: { agentKind: 'claude-code' | 'codex' | null }) =>
     agentKind ?? 'claude-code',
   selectVisibleModels: ({ agentKind }: { agentKind: 'claude-code' | 'codex' | null }) => {
@@ -369,6 +422,8 @@ import {
   ModelSelectorContent,
   modelEffortLabel,
   modelListMaxHeightForRows,
+  modelTagDensityForWidth,
+  resolveRemoteModelListStatus,
   resolveModelSelectorAgentIdentity,
 } from '@/components/new-chat/ModelSelector';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -377,12 +432,109 @@ const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const 
 
 beforeEach(() => {
   requestProviderModelsAutoRefresh.mockClear();
+  modelVisibilityRef.isEnabled = () => true;
+  providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+  providersRef.providerOrder = [];
+  providersRef.loading = false;
+  agentCapabilitiesRef.loading = false;
+  agentCapabilitiesRef.error = null;
+  deviceProvidersRef.loading = false;
+  deviceProvidersRef.error = null;
+  deviceProvidersRef.unsupported = false;
+  deviceProvidersRef.modelVisibilityOverrides = undefined;
+  deviceProvidersRef.prefetch.mockReset();
+  deviceProvidersRef.prefetch.mockResolvedValue(undefined);
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: { requestProviderModelsAutoRefresh },
   };
 });
 
+describe('resolveRemoteModelListStatus', () => {
+  const ready = { capabilities: {}, loading: false, error: null };
+  const pending = { capabilities: null, loading: true, error: null };
+  const failed = { capabilities: null, loading: false, error: 'offline' };
+
+  it('requires the selected agent capability and provider result before declaring ready', () => {
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-a',
+        agentKind: 'claude-code',
+        cc: pending,
+        codex: failed,
+        pi: failed,
+        providers: { loading: false, error: null },
+      }),
+    ).toBe('loading');
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-a',
+        agentKind: 'claude-code',
+        cc: ready,
+        codex: failed,
+        pi: failed,
+        providers: { loading: false, error: null },
+      }),
+    ).toBe('ready');
+  });
+
+  it('reports capability or connection failures instead of authoritative empty', () => {
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-a',
+        agentKind: 'claude-code',
+        cc: failed,
+        codex: ready,
+        pi: ready,
+        providers: { loading: false, error: null },
+      }),
+    ).toBe('error');
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-a',
+        agentKind: null,
+        cc: ready,
+        codex: failed,
+        pi: ready,
+        providers: { loading: false, error: null },
+      }),
+    ).toBe('error');
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-a',
+        agentKind: 'claude-code',
+        cc: ready,
+        codex: ready,
+        pi: ready,
+        providers: { loading: false, error: 'timeout', unsupported: false },
+      }),
+    ).toBe('error');
+  });
+
+  it('only treats an unsupported provider channel as a compatible flat-list fallback', () => {
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-old',
+        agentKind: 'claude-code',
+        cc: ready,
+        codex: ready,
+        pi: ready,
+        providers: { loading: false, error: 'channel not allowed', unsupported: true },
+      }),
+    ).toBe('ready');
+  });
+});
+
 describe('ModelSelector trigger variants', () => {
+  it('keeps required model status tags as the fluid picker narrows', () => {
+    expect(modelTagDensityForWidth(null)).toBe('full');
+    // 320px pane 还要扣掉图标、effort、勾选和左右 padding；英文 Subscription
+    // 会把模型名压成 GPT-...，所以此时只保留当前模型的已隐藏标识。
+    expect(modelTagDensityForWidth(320)).toBe('hidden');
+    expect(modelTagDensityForWidth(370)).toBe('subscription');
+    expect(modelTagDensityForWidth(449)).toBe('subscription');
+    expect(modelTagDensityForWidth(450)).toBe('full');
+  });
+
   // 打开选择器既发起刷新、又把「发现在途」状态推给内容区(见 useModelDiscoveryPending),
   // 所以点击要走 act:那次刷新 resolve 后还有一次 setPending(false) 落在微任务里。
   const clickTrigger = async (): Promise<void> => {
@@ -390,6 +542,126 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
     });
   };
+
+  it('remote loading replaces the placeholder and no-results empty state', async () => {
+    const originalCapabilities = agentCapabilitiesRef.capabilities;
+    const originalModels = visibleModelsRef.models;
+    agentCapabilitiesRef.capabilities = null;
+    agentCapabilitiesRef.loading = true;
+    deviceProvidersRef.loading = true;
+    visibleModelsRef.models = [];
+    const view = render(
+      React.createElement(ModelSelector, {
+        modelId: 'remote-model',
+        effort: 'medium',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        deviceId: 'dev-a',
+      }),
+    );
+    try {
+      const trigger = screen.getByRole('button', { name: /正在从远程设备读取模型/ });
+      expect(trigger.textContent).toContain('正在从远程设备读取模型…');
+      await act(async () => {
+        fireEvent.click(trigger);
+      });
+      expect(screen.getAllByText('正在从远程设备读取模型…').length).toBeGreaterThan(1);
+      expect(screen.queryByText('没有匹配的模型')).toBeNull();
+    } finally {
+      view.unmount();
+      agentCapabilitiesRef.capabilities = originalCapabilities;
+      agentCapabilitiesRef.loading = false;
+      deviceProvidersRef.loading = false;
+      visibleModelsRef.models = originalModels;
+    }
+  });
+
+  it('remote failures show an explicit retry state instead of no matching models', async () => {
+    const originalCapabilities = agentCapabilitiesRef.capabilities;
+    const originalModels = visibleModelsRef.models;
+    agentCapabilitiesRef.capabilities = null;
+    agentCapabilitiesRef.error = 'offline';
+    visibleModelsRef.models = [];
+    const view = render(
+      React.createElement(ModelSelector, {
+        modelId: 'remote-model',
+        effort: 'medium',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        deviceId: 'dev-a',
+      }),
+    );
+    try {
+      const trigger = screen.getByRole('button', { name: /模型读取失败/ });
+      expect(trigger.textContent).toContain('模型读取失败');
+      await act(async () => {
+        fireEvent.click(trigger);
+      });
+      expect(screen.getByText('无法读取远程设备上的模型。请检查连接后重试。')).toBeTruthy();
+      expect(screen.getByRole('button', { name: '重新读取模型' })).toBeTruthy();
+      expect(screen.queryByText('没有匹配的模型')).toBeNull();
+      deviceProvidersRef.prefetch.mockRejectedValueOnce(new Error('offline'));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '重新读取模型' }));
+        await Promise.resolve();
+      });
+      expect(deviceProvidersRef.prefetch).toHaveBeenCalledWith('dev-a');
+    } finally {
+      view.unmount();
+      agentCapabilitiesRef.capabilities = originalCapabilities;
+      agentCapabilitiesRef.error = null;
+      visibleModelsRef.models = originalModels;
+    }
+  });
+
+  it('orders local provider sections by the Settings display preference', () => {
+    providersRef.providers = [
+      ...providersRef.DEFAULT_PROVIDERS,
+      {
+        id: 'zeta',
+        name: 'Zeta',
+        source: 'user',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: 'claude-zeta',
+              name: 'Zeta Model',
+              contextWindow: 100000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+            },
+          ],
+        },
+      },
+    ];
+    providersRef.providerOrder = ['zeta', 'anthropic'];
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+        }),
+      );
+
+      const modelRows = screen.getAllByRole('option');
+      expect(modelRows[0]?.textContent).toContain('Zeta Model');
+      expect(modelRows[1]?.textContent).toContain('Opus 4.8');
+    } finally {
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      providersRef.providerOrder = [];
+    }
+  });
 
   it('requests a silent refresh when a local selector opens, but not for a remote device', async () => {
     const local = render(
@@ -830,7 +1102,7 @@ describe('ModelSelector trigger variants', () => {
     expect(trigger.querySelector('[data-model-promotion-badge]')).toBeNull();
   });
 
-  it('keeps a long subscription-backed field menu bounded and wheel-scrollable', () => {
+  it('keeps a long subscription-backed field menu bounded and wheel-scrollable', async () => {
     const models: VisibleModelFixture[] = Array.from({ length: 40 }, (_, index) => ({
       id: `subscription-model-${index + 1}`,
       displayName: `Subscription Model ${index + 1}`,
@@ -877,8 +1149,10 @@ describe('ModelSelector trigger variants', () => {
         }),
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /Current: Subscription Model 1/ }));
-      const list = screen.getByRole('listbox', { name: 'Model list' });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /Current: Subscription Model 1/ }));
+      });
+      const list = screen.getByRole('listbox', { name: '模型列表' });
 
       expect(list.className).toContain('max-h-[300px]');
       expect(list.className).toContain('overflow-y-auto');
@@ -894,7 +1168,63 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
-  it('reuses the parent pricing snapshot when the model content opens', () => {
+  it('keeps the user scroll position when selection changes', () => {
+    const rect = (top: number, bottom: number): DOMRect =>
+      ({
+        top,
+        bottom,
+        left: 0,
+        right: 320,
+        width: 320,
+        height: bottom - top,
+        x: 0,
+        y: top,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      callback(0);
+      return 0;
+    });
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.getAttribute('role') === 'listbox') return rect(0, 300);
+        if (this.getAttribute('data-model-selected') === 'true') return rect(120, 160);
+        return rect(0, 0);
+      });
+
+    try {
+      const view = render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+        }),
+      );
+      const list = screen.getByRole('listbox', { name: '模型列表' });
+      Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 80 });
+
+      view.rerender(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-sonnet-4-6',
+          effort: 'medium',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+        }),
+      );
+
+      expect(list.scrollTop).toBe(80);
+      view.unmount();
+    } finally {
+      rectSpy.mockRestore();
+      rafSpy.mockRestore();
+    }
+  });
+
+  it('reuses the parent pricing snapshot when the model content opens', async () => {
     pricingRef.renderCalls = 0;
     render(
       React.createElement(ModelSelector, {
@@ -908,8 +1238,12 @@ describe('ModelSelector trigger variants', () => {
     expect(pricingRef.renderCalls).toBe(1);
 
     pricingRef.renderCalls = 0;
-    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
-    expect(pricingRef.renderCalls).toBe(1);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    });
+    // Opening and the discovery-pending settle each re-render the parent once. The content must
+    // reuse that parent's pricing snapshot; calling useModelPricing inside it would double this.
+    expect(pricingRef.renderCalls).toBe(2);
   });
 
   it('does not show Gateway promotions in the selected-model trigger', () => {
@@ -990,7 +1324,9 @@ describe('ModelSelector trigger variants', () => {
         }),
       );
       expect(
-        within(screen.getByRole('button', { name: /Current: Sonnet 4\.6/ })).queryByText('限时免费'),
+        within(screen.getByRole('button', { name: /Current: Sonnet 4\.6/ })).queryByText(
+          '限时免费',
+        ),
       ).toBeNull();
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
@@ -1070,6 +1406,7 @@ describe('ModelSelector trigger variants', () => {
       expect(row.textContent).not.toContain('¥12 / ¥36');
       expect(row.textContent).not.toContain('¥6 / ¥18');
       expect(row.querySelector('[data-model-promotion-badge]')).toBeNull();
+      expect(row.querySelector('[data-model-hidden-label]')).toBeNull();
 
       fireEvent.pointerEnter(row);
       expect(
@@ -1130,7 +1467,15 @@ describe('ModelSelector trigger variants', () => {
     },
   ])(
     'renders the corrected XD effort defaults without Fast markers for $agentKind',
-    ({ agentKind, vendorKey, currentModel, seedEfforts, seedDefaultEffort, seedLabel, glmEfforts }) => {
+    ({
+      agentKind,
+      vendorKey,
+      currentModel,
+      seedEfforts,
+      seedDefaultEffort,
+      seedLabel,
+      glmEfforts,
+    }) => {
       const targetModels: VisibleModelFixture[] = [
         {
           id: 'bytedance-seed/seed-2.1-pro',
@@ -1242,8 +1587,12 @@ describe('ModelSelector trigger variants', () => {
           '超高',
         );
         expect(screen.getByRole('option', { name: /GLM-5\.2/ }).textContent).toContain('Max');
-        expect(screen.getByRole('option', { name: /DeepSeek V4 Pro/ }).textContent).toContain('High');
-        expect(screen.getByRole('option', { name: /DeepSeek V4 Flash/ }).textContent).toContain('High');
+        expect(screen.getByRole('option', { name: /DeepSeek V4 Pro/ }).textContent).toContain(
+          'High',
+        );
+        expect(screen.getByRole('option', { name: /DeepSeek V4 Flash/ }).textContent).toContain(
+          'High',
+        );
         expect(screen.queryByLabelText('newChat.modelSelector.meta.fastBadge')).toBeNull();
       } finally {
         visibleModelsRef.models = null;
@@ -1401,9 +1750,7 @@ describe('ModelSelector trigger variants', () => {
           expect(detailText.indexOf('1M context')).toBeLessThan(
             detailText.indexOf('Codex compatibility mode'),
           );
-          expect(compatibilityLabel).not.toBe(
-            within(details).getByText(sourceText).parentElement,
-          );
+          expect(compatibilityLabel).not.toBe(within(details).getByText(sourceText).parentElement);
           expect(compatibilityLabel).not.toBe(
             within(details).getByText('1M context').parentElement,
           );
@@ -1510,7 +1857,7 @@ describe('ModelSelector trigger variants', () => {
     expect(screen.getByRole('group', { name: /Opus 4\.8/ })).toBeTruthy();
 
     // 列表滚动不派发 pointerleave,浮层会跟着滚出视口的锚点行跑到菜单外 → 用户滚动必须立即收起。
-    fireEvent.scroll(screen.getByRole('listbox', { name: 'Model list' }));
+    fireEvent.scroll(screen.getByRole('listbox', { name: '模型列表' }));
     expect(screen.queryByRole('group', { name: /Opus 4\.8/ })).toBeNull();
     vi.useRealTimers();
   });
@@ -1542,10 +1889,250 @@ describe('ModelSelector trigger variants', () => {
       expect(
         within(tags as HTMLElement).getByText('settings.providers.models.subscription'),
       ).toBeTruthy();
+      expect(row.querySelector('[data-model-hidden-label]')).toBeNull();
       expect(row.textContent).not.toContain('$3 / $15');
       expect(row.querySelector('[data-model-promotion-badge]')).toBeNull();
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
+  it('renders selected hidden status before its subscription label', () => {
+    providersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        access: { kind: 'subscription', product: 'Claude Pro' },
+      },
+    ];
+    modelVisibilityRef.isEnabled = () => false;
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+          fluidWidth: true,
+        }),
+      );
+
+      const row = screen.getByRole('option', { name: /Opus 4\.8/ });
+      const tags = row.querySelector('[data-model-tags]');
+      expect(tags).not.toBeNull();
+      const hidden = within(tags as HTMLElement).getByText('已隐藏');
+      const subscription = within(tags as HTMLElement).getByText(
+        'settings.providers.models.subscription',
+      );
+      expect(
+        hidden.compareDocumentPosition(subscription) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(row.querySelector('[data-model-hidden-label]')).toBe(hidden);
+      expect(screen.queryByRole('option', { name: /Sonnet 4\.6/ })).toBeNull();
+    } finally {
+      modelVisibilityRef.isEnabled = () => true;
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
+  it('keeps only the selected hidden model in the flat picker', () => {
+    providersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        access: { kind: 'subscription', product: 'Claude Pro' },
+      },
+    ];
+    modelVisibilityRef.isEnabled = () => false;
+
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        currentProviderId: 'anthropic',
+        fluidWidth: true,
+      }),
+    );
+
+    const selected = screen.getByRole('option', { name: /Opus 4\.8/ });
+    expect(selected.querySelector('[data-model-hidden-label]')?.textContent).toBe('已隐藏');
+    expect(within(selected).getByText('settings.providers.models.subscription')).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /Sonnet 4\.6/ })).toBeNull();
+    expect(screen.queryByRole('option', { name: /Haiku 4\.5/ })).toBeNull();
+  });
+
+  it('prioritizes the full selected model name in the fixed 320px picker', () => {
+    providersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        access: { kind: 'subscription', product: 'Claude Pro' },
+      },
+    ];
+    modelVisibilityRef.isEnabled = (_agent: string, _providerId: string, model: { id: string }) =>
+      model.id !== 'claude-opus-4-8';
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+        }),
+      );
+
+      const selected = screen.getByRole('option', { name: /Opus 4\.8/ });
+      expect(selected.querySelector('[data-model-hidden-label]')?.textContent).toBe('已隐藏');
+      expect(selected.textContent).not.toContain('settings.providers.models.subscription');
+      expect(
+        within(screen.getByRole('option', { name: /Sonnet 4\.6/ })).getByText(
+          'settings.providers.models.subscription',
+        ),
+      ).toBeTruthy();
+    } finally {
+      modelVisibilityRef.isEnabled = () => true;
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
+  it('uses the remote visibility snapshot for the selected hidden status', () => {
+    deviceProvidersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        access: { kind: 'subscription', product: 'Claude Pro' },
+      },
+    ];
+    deviceProvidersRef.modelVisibilityOverrides = {
+      'claude-code:anthropic:claude-opus-4-8': false,
+    };
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          deviceId: 'remote-device',
+          currentProviderId: 'anthropic',
+        }),
+      );
+
+      const row = screen.getByRole('option', { name: /Opus 4\.8/ });
+      expect(row.querySelector('[data-model-hidden-label]')?.textContent).toBe('已隐藏');
+    } finally {
+      deviceProvidersRef.providers = [];
+      deviceProvidersRef.modelVisibilityOverrides = undefined;
+    }
+  });
+
+  it('binds the pane observer when providers arrive after the empty state', async () => {
+    type ObserverInstance = {
+      callback: ResizeObserverCallback;
+      observe: ReturnType<typeof vi.fn>;
+      disconnect: ReturnType<typeof vi.fn>;
+    };
+    const instances: ObserverInstance[] = [];
+    const originalResizeObserver = globalThis.ResizeObserver;
+    class MockResizeObserver {
+      readonly callback: ResizeObserverCallback;
+      readonly observe = vi.fn();
+      readonly unobserve = vi.fn();
+      readonly disconnect = vi.fn();
+
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+        instances.push(this);
+      }
+    }
+    Object.defineProperty(globalThis, 'ResizeObserver', {
+      configurable: true,
+      writable: true,
+      value: MockResizeObserver,
+    });
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          top: 0,
+          bottom: 100,
+          left: 0,
+          right: 500,
+          width: 500,
+          height: 100,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    providersRef.providers = [];
+
+    try {
+      const props = {
+        modelId: 'claude-opus-4-8',
+        effort: 'high' as Effort,
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc' as const,
+        currentProviderId: 'anthropic',
+        onProviderChange: vi.fn(),
+        fluidWidth: true,
+      };
+      const view = render(React.createElement(ModelSelectorContent, props));
+
+      expect(screen.getByText('newChat.modelSelector.source.emptyTitle')).toBeTruthy();
+      expect(instances).toHaveLength(0);
+
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      view.rerender(React.createElement(ModelSelectorContent, props));
+
+      await waitFor(() => expect(instances).toHaveLength(1));
+      const firstPane = document.querySelector<HTMLElement>('[data-model-tag-density]');
+      expect(firstPane).not.toBeNull();
+      expect(instances[0].observe).toHaveBeenCalledWith(firstPane);
+      expect(firstPane?.getAttribute('data-model-tag-density')).toBe('full');
+
+      act(() => {
+        instances[0].callback(
+          [
+            {
+              target: firstPane,
+              contentRect: { width: 320 },
+            } as unknown as ResizeObserverEntry,
+          ],
+          instances[0] as unknown as ResizeObserver,
+        );
+      });
+      expect(firstPane?.getAttribute('data-model-tag-density')).toBe('hidden');
+
+      providersRef.providers = [];
+      view.rerender(React.createElement(ModelSelectorContent, props));
+      await waitFor(() => expect(instances[0].disconnect).toHaveBeenCalledTimes(1));
+
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      view.rerender(React.createElement(ModelSelectorContent, props));
+      await waitFor(() => expect(instances).toHaveLength(2));
+      const secondPane = document.querySelector<HTMLElement>('[data-model-tag-density]');
+      expect(secondPane).not.toBeNull();
+      expect(instances[1].observe).toHaveBeenCalledWith(secondPane);
+
+      view.unmount();
+      expect(instances[1].disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      rectSpy.mockRestore();
+      Object.defineProperty(globalThis, 'ResizeObserver', {
+        configurable: true,
+        writable: true,
+        value: originalResizeObserver,
+      });
     }
   });
 
@@ -1605,7 +2192,7 @@ describe('ModelSelector trigger variants', () => {
       const row = screen.getByRole('option', { name: /Qwen 3\.7/ });
       expect(row.className).toContain('min-h-9');
       expect(within(row).getByText('Qwen 3.7').className).toContain('leading-5');
-      expect(screen.getByRole('listbox', { name: 'Model list' }).style.maxHeight).toBe('226px');
+      expect(screen.getByRole('listbox', { name: '模型列表' }).style.maxHeight).toBe('226px');
       expect(row.textContent).not.toContain('¥6 / ¥18');
       expect(row.textContent).not.toContain('¥12 / ¥36');
       const rowBadge = within(row).getByText('立省 50%');
@@ -1723,12 +2310,37 @@ describe('ModelSelector trigger variants', () => {
     expect(within(information).queryByRole('option')).toBeNull();
   });
 
+  it('opens the selected model configuration when the caller opts into click access', () => {
+    const onEffortChange = vi.fn();
+    const onDismiss = vi.fn();
+
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange,
+        onDismiss,
+        vendorKey: 'cc',
+        selectedRowClickOpensConfiguration: true,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('option', { name: /Opus 4\.8/ }));
+
+    const options = screen.getByRole('group', { name: /Opus 4\.8/ });
+    fireEvent.click(within(options).getByRole('option', { name: 'low' }));
+
+    expect(onEffortChange).toHaveBeenCalledWith('low');
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
   it('selects an inactive provider row after its effort preset is clicked', () => {
     const onProviderChange = vi.fn();
     const onDismiss = vi.fn();
     const setEffort = vi.fn();
     const modelMemory = {
-      getEffort: vi.fn(),
+      getEffort: vi.fn(() => 'high'),
       setEffort,
       getFast: vi.fn(),
       setFast: vi.fn(),
@@ -1761,11 +2373,39 @@ describe('ModelSelector trigger variants', () => {
     fireEvent.click(within(options).getByRole('option', { name: 'high' }));
 
     expect(setEffort).toHaveBeenCalledWith('claude-code', 'anthropic', 'claude-sonnet-4-6', 'high');
-    expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6');
+    expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6', 'high');
     expect(onDismiss).not.toHaveBeenCalled();
     expect(setEffort.mock.invocationCallOrder[0]).toBeLessThan(
       onProviderChange.mock.invocationCallOrder[0],
     );
+  });
+
+  it('lets provider-based callers choose inactive-row effort without a global memory store', () => {
+    const onProviderChange = vi.fn();
+    const onDismiss = vi.fn();
+
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        currentProviderId: 'anthropic',
+        onProviderChange,
+        onDismiss,
+      }),
+    );
+
+    const sonnetRow = screen.getByRole('option', { name: /Sonnet 4\.6/ });
+    fireEvent.pointerEnter(sonnetRow);
+
+    const options = screen.getByRole('group', { name: /Sonnet 4\.6/ });
+    expect(within(options).getByRole('option', { name: 'high' })).toBeTruthy();
+    fireEvent.click(within(options).getByRole('option', { name: 'high' }));
+
+    expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6', 'high');
+    expect(onDismiss).not.toHaveBeenCalled();
   });
 
   it('selects an inactive provider row after its Fast toggle is clicked', () => {
@@ -1818,7 +2458,7 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Fast Mode' }));
 
       expect(setFast).toHaveBeenCalledWith('claude-code', 'anthropic', 'claude-sonnet-4-6', true);
-      expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6');
+      expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6', 'medium');
       expect(onDismiss).not.toHaveBeenCalled();
       expect(setFast.mock.invocationCallOrder[0]).toBeLessThan(
         onProviderChange.mock.invocationCallOrder[0],
@@ -1845,8 +2485,7 @@ describe('ModelSelector trigger variants', () => {
       return React.createElement(ModelSelector, {
         modelId: selection.modelId,
         effort: 'high',
-        onModelChange: (modelId: string) =>
-          setSelection((current) => ({ ...current, modelId })),
+        onModelChange: (modelId: string) => setSelection((current) => ({ ...current, modelId })),
         onEffortChange: vi.fn(),
         vendorKey: 'cc',
         currentProviderId: selection.providerId,
@@ -1919,12 +2558,8 @@ describe('ModelSelector trigger variants', () => {
     expect(searchInput.hasAttribute('disabled')).toBe(true);
     expect(searchInput.className).toContain('cursor-not-allowed');
     expect(searchInput.className).toContain('text-[var(--text-disabled)]');
-    expect(searchInput.className).toContain(
-      'placeholder:text-[var(--text-disabled-tertiary)]',
-    );
-    expect(searchInput.parentElement?.className).toContain(
-      'bg-[var(--surface-elevated-soft)]',
-    );
+    expect(searchInput.className).toContain('placeholder:text-[var(--text-disabled-tertiary)]');
+    expect(searchInput.parentElement?.className).toContain('bg-[var(--surface-elevated-soft)]');
 
     fireEvent.click(opusRow);
     fireEvent.pointerEnter(opusRow);
@@ -2020,9 +2655,7 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(within(options).getByRole('option', { name: 'low' }));
       expect(setEffort).toHaveBeenCalledWith('codex', 'zeta-codex', 'gpt-5.5', 'low');
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
-      await waitFor(() =>
-        expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex'),
-      );
+      await waitFor(() => expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex'));
       expect(onDismiss).not.toHaveBeenCalled();
       // 配置点击同时选中目标模型；确认门仍只在 Agent 分段切换。
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
@@ -2038,13 +2671,7 @@ describe('ModelSelector trigger variants', () => {
       // 第一笔事务仍在途时，后一次配置也立即交给调用方；调用方会同步登记目标
       // session 的 pending token，再由 session 级协调器保证同会话顺序。
       expect(onSwitch).toHaveBeenCalledTimes(2);
-      expect(setEffort).toHaveBeenNthCalledWith(
-        2,
-        'codex',
-        'zeta-codex',
-        'gpt-5.5',
-        'high',
-      );
+      expect(setEffort).toHaveBeenNthCalledWith(2, 'codex', 'zeta-codex', 'gpt-5.5', 'high');
 
       await act(async () => {
         releaseFirstSwitch();

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "66ddc4b6-9449-474f-95b4-513096a4baf5",
+  "id": "cb0166d9-e42c-4135-8658-f291594a7c81",
   "prevId": "daddbf8c-2d5f-48e4-8f12-f760511b47fa",
   "tables": {
     "account_usage_snapshots": {
@@ -652,6 +652,52 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "hook_group_context_cursors": {
+      "name": "hook_group_context_cursors",
+      "columns": {
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cursor_key": {
+          "name": "cursor_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cursor_id": {
+          "name": "cursor_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "hook_group_context_cursors_provider_cursor_key_pk": {
+          "columns": [
+            "provider",
+            "cursor_key"
+          ],
+          "name": "hook_group_context_cursors_provider_cursor_key_pk"
+        }
+      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
@@ -2173,13 +2219,6 @@
         "last_fired_at": {
           "name": "last_fired_at",
           "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "active_claim_run_id": {
-          "name": "active_claim_run_id",
-          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ModelUsageDeltaEntry } from '../modelUsageDelta';
 import {
+  LEDGER_CURRENCY_FALLBACK,
   __resetActiveLedgerCurrencyForTesting,
   setActiveLedgerCurrency,
 } from '../ledgerCurrency';
@@ -19,7 +20,6 @@ import {
   type TurnPricingContext,
 } from '../turnCostCalculator';
 import {
-  DEFAULT_USAGE_CURRENCY,
   type ModelPriceQuote,
   type ModelPricingCatalog,
   type RegionalMoney,
@@ -299,11 +299,11 @@ describe('resolveTurnCost', () => {
     expect(claude.money?.amount).toBe(5);
   });
 
-  it('lets the build default ledger currency decide the SDK fallback when the Gateway quote is missing', () => {
-    // 没有活动账本币种(冷启动、目录还没同步下来)时由构建默认币种定夺,断言因此
-    // 跟着构建区域走:Global(USD 账本)直接按 SDK 的 USD 兜底记账;中国大陆版
-    // (CNY 账本)按 resolveTurnCost 里 sdk-fallback 的币种守卫这一轮不记。
-    // 不能写死 USD —— 那样只有 Global 构建下能过,等于把构建默认值当成了常量。
+  it('falls back to USD for the SDK amount when the ledger currency is unknown — never the build region', () => {
+    // 没有活动账本币种(冷启动、目录还没同步下来)时按 ledgerCurrency.ts 的回退链
+    // 落到 USD,绝不按构建区域猜(#1302:按区域回落会让同一账号的账本币种反复翻转,
+    // 覆盖当天累计)。SDK 的 costDelta 本来就是 USD 口径,与兜底币种同口径,因此
+    // 无论 cn / global 构建,这一轮都按 USD 原值兜底记账,断言两种构建下同形。
     __resetActiveLedgerCurrencyForTesting();
     const result = resolveTurnCost({
       rawModel: 'unknown-model',
@@ -318,16 +318,13 @@ describe('resolveTurnCost', () => {
       context: XD_GATEWAY,
     });
     expect(result.source).toBe('sdk-fallback');
-    expect(result.money).toEqual(
-      DEFAULT_USAGE_CURRENCY === 'USD'
-        ? {
-            amount: 1.23,
-            currency: 'USD',
-            approximate: false,
-            kind: 'actual-cost',
-          }
-        : null,
-    );
+    expect(LEDGER_CURRENCY_FALLBACK).toBe('USD');
+    expect(result.money).toEqual({
+      amount: 1.23,
+      currency: 'USD',
+      approximate: false,
+      kind: 'actual-cost',
+    });
   });
 
   it('falls back to the SDK USD amount for a USD-settled account on a CN build', () => {
@@ -498,6 +495,73 @@ describe('resolveTurnCost', () => {
       currency: 'USD',
       approximate: false,
       kind: 'actual-cost',
+    });
+  });
+
+  it('recomputes DeepSeek BYOK cost from cache-aware official pricing instead of SDK estimates', () => {
+    const result = resolveTurnCost({
+      rawModel: 'deepseek-v4-pro[1m]',
+      tokens: {
+        inputTokens: 2_000,
+        outputTokens: 500,
+        cacheReadTokens: 118_000,
+        cacheCreateTokens: 0,
+      },
+      // 模拟 SDK 把 12 万输入 token 全按 cache miss 估出的高值。
+      sdkCostDelta: 0.052635,
+      pricing: catalog(
+        quote('deepseek-v4-pro', 0.435, 0.87, {
+          providerId: 'deepseek',
+          cacheReadPerMtok: 0.003625,
+          source: 'provider-reference',
+          approximate: true,
+        }),
+      ),
+      context: { providerId: 'deepseek', billingRoute: 'provider-api', region: 'global' },
+    });
+
+    expect(result).toMatchObject({
+      model: 'deepseek-v4-pro',
+      source: 'reference',
+      money: {
+        currency: 'USD',
+        approximate: true,
+        kind: 'value-estimate',
+      },
+    });
+    expect(result.money?.amount).toBeCloseTo(0.00173275, 10);
+  });
+
+  it('keeps the DeepSeek SDK cost when token deltas are unavailable', () => {
+    const result = resolveTurnCost({
+      rawModel: 'deepseek-v4-pro',
+      tokens: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      },
+      sdkCostDelta: 0.052635,
+      pricing: catalog(
+        quote('deepseek-v4-pro', 0.435, 0.87, {
+          providerId: 'deepseek',
+          cacheReadPerMtok: 0.003625,
+          source: 'provider-reference',
+          approximate: true,
+        }),
+      ),
+      context: { providerId: 'deepseek', billingRoute: 'provider-api', region: 'global' },
+    });
+
+    expect(result).toEqual({
+      model: 'deepseek-v4-pro',
+      source: 'sdk',
+      money: {
+        amount: 0.052635,
+        currency: 'USD',
+        approximate: false,
+        kind: 'actual-cost',
+      },
     });
   });
 
@@ -868,5 +932,17 @@ describe('subscription value and usage details', () => {
       { model: 'claude-opus-4-8', money: usdMoney(0.94) },
       { model: 'claude-haiku-4-5', money: usdMoney(0.8) },
     ]);
+  });
+
+  it('keeps generation and full-turn durations separate', () => {
+    const details = buildClaudeTurnUsageDetails(
+      { input_tokens: 10, output_tokens: 25 },
+      undefined,
+      'claude-opus-4-8',
+      undefined,
+      1_250,
+      8_500,
+    );
+    expect(details).toMatchObject({ durationMs: 1_250, turnDurationMs: 8_500 });
   });
 });

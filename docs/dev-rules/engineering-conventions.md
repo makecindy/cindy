@@ -89,6 +89,33 @@ UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 V
 `scripts/__tests__/test-workspaces.test.mjs` 是 tier 边界的可执行契约；调整测试命名、include
 或 exclude 时必须同步更新并运行 `pnpm test:runner`。
 
+### 3.2 路径断言的跨平台宪法
+
+测试必须先区分路径代表的语义，不能把当前开发机的路径表示误当成跨平台事实：
+
+- **宿主文件系统路径**：传给或来自 Node `fs`、Electron、子进程 `cwd` 等本机 API 的路径，
+  期望值必须用 `path.join`／`path.resolve`／`path.relative` 构造；按被测语义使用
+  `path.normalize`，涉及软链、junction 或物理文件身份时使用 `realpath` 后比较。禁止在这类
+  断言中把 `/` 或 `\` 写成固定期望，也禁止只为让断言通过而把整段输出统一
+  `replace(/\\/g, '/')`——整段替换会掩盖产品代码返回了错误路径格式，并可能误改 URL、转义
+  内容或其它非路径文本。
+- **逻辑路径**：URL／URI、远程 POSIX 路径、归档条目、wire protocol，以及契约明确规定用
+  `/` 的 repo-relative 路径，不跟随宿主分隔符。这类测试可以固定写 `/`，但测试名称、类型或
+  邻近注释必须明确它是稳定协议格式，不能仅凭字符串“看起来像路径”就归入例外。
+- **模拟目标平台**：验证 Windows／POSIX 路径算法时使用 `path.win32`／`path.posix`，或把目标
+  platform／path API 注入被测函数；禁止只 mock `process.platform` 后继续调用由宿主系统决定的
+  默认 `path` 实现。Windows 大小写折叠也只在被测契约明确需要时进行，不能作为所有路径断言的
+  通用归一化。
+- **平台能力差异**：symlink、junction、文件权限等能力先做 capability probe。宿主确实不支持
+  时可以跳过真实文件系统用例，但核心语义必须在支持该能力的受控 CI 平台继续实跑，或通过
+  依赖注入／纯函数用例保留等价覆盖；禁止按 `process.platform` 大面积跳过后让整个 CI 矩阵
+  失去相应回归保护。
+
+PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`；两个分片的并集必须等价于
+未分片的全量测试，且由稳定的汇总检查统一阻断。`scripts/__tests__/dev-docs-contract.test.mjs` 锁住
+该 CI 契约。不能用静态扫描“测试字符串是否含斜杠”代替 Windows 实跑，因为它无法可靠区分宿主
+路径与逻辑路径。
+
 ## 4. 跨平台双端兼容（macOS / Windows）
 
 任何功能都必须同时考虑 macOS / Windows，并在两端做到最优性能。
@@ -113,12 +140,12 @@ UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 V
 一种语言。本节管“文案怎么落地进 i18n”，文案的语气／措辞见 `DESIGN.md` 的 Voice & Content。
 
 - 资源在 `renderer/i18n/locales/<locale>/common.json`，语言由 `shared/locale.ts` 的
-  `SUPPORTED_LOCALES` 定义（当前 `zh-CN` / `en` / `ja` / `ko`），组件通过 `react-i18next` 的
+  `SUPPORTED_LOCALES` 定义（当前 `zh-CN` / `zh-TW` / `en` / `ja` / `ko`），组件通过 `react-i18next` 的
   `t('<嵌套.key>')` 消费，单 namespace `common`。
 - **新增**：复用已有嵌套分组选 key，组件用 `t('key')`，绝不写 `<div>保存</div>` 裸文案。
-- **修改**：改某 key 文案时 4 种语言同步更新，不要只改中文留其它语言旧值。
+- **修改**：改某 key 文案时 5 种语言同步更新，不要只改中文留其它语言旧值。
 - **删除**：删 UI 时把对应 key 从全部 locale 一起删掉，不留孤儿 key。
-- **翻译准确性**：`fallbackLng = 'en'`，缺 key 会静默回退英文。4 种语言都必须补齐并给出
+- **翻译准确性**：`fallbackLng = 'en'`，缺 key 会静默回退英文。5 种语言都必须补齐并给出
   **准确**翻译，不留空、占位或“待校对”；ja / ko 没把握时先查证再写。
 - **术语一致性**：写任何术语前先查 `i18n/GLOSSARY.md`。同一个概念在不同界面译法不一致
   是用户直接可见的质量问题（引入术语表时实测：162 个英文短语存在多种中文译法，反向
@@ -145,7 +172,7 @@ UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 V
   - `pnpm check:i18n-glossary` 校验译文术语与标点，并检查 `GLOSSARY.md` 是否与术语表同步。
   - 两者互补：前者管「key 齐不齐」，后者管「词译得一不一致」，谁也替代不了谁。改
     i18n 后两个都要跑（CI 已强制）。
-- **影子 catalog**：有几批不走 i18next 的手写四语 catalog，根脚本只扫 locale JSON、扫不到
+- **影子 catalog**：有几批不走 i18next 的手写五语 catalog，根脚本只扫 locale JSON、扫不到
   这些 `.ts`。它们由 vitest 直接 import 运行时对象覆盖，复用
   `scripts/shared/glossary-rules.mjs` 的同一套判定，随 `test:unit` 阻断：
   - mobile：`src/auth/loginMessages.ts`、`src/session/newSessionMessages.ts`、
@@ -247,7 +274,7 @@ UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 V
    tier，并保留了低成本默认 smoke？
 5. 路径、子进程、FS、性能、快捷键是否在 macOS / Windows 两端都成立？未实测平台是否
    标注？
-6. UI 文案是否全部走 `t()`、4 种语言齐全且翻译准确、无孤儿 key？术语是否照 `i18n/GLOSSARY.md`
+6. UI 文案是否全部走 `t()`、5 种语言齐全且翻译准确、无孤儿 key？术语是否照 `i18n/GLOSSARY.md`
    写、没有自造译法？是否跑过 `pnpm check:i18n` 与 `pnpm check:i18n-glossary`？
 7. 新增类／核心逻辑是否有职责注释？
 8. 新增常驻动画是否 compositor-only（HTML 元素 + `transform`/`opacity` + wrapper）、

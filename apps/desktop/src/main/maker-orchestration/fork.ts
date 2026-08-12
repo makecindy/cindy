@@ -10,6 +10,8 @@
 
 import { eq, and, lt, gt, asc, isNull, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
 import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
@@ -41,6 +43,13 @@ function forkError(code: ForkErrorCode, message: string): Error {
   const err = new Error(message);
   (err as { code?: string }).code = code;
   return err;
+}
+
+function codexForkFailureDetail(err: unknown): string {
+  if (err instanceof CodexResumePreparationBlockedError) {
+    return CODEX_RESUME_NOT_READY_WIRE_MESSAGE;
+  }
+  return err instanceof Error ? err.message : String(err);
 }
 
 function normalizePositiveInt(value: unknown): number {
@@ -559,6 +568,7 @@ export async function forkSessionAtMessage(
     const agentKind = dbToMakerAgentKind(forkSource.agentKind);
     const forkResult = await getMaker().forkSdkSession(agentKind, {
       sourceSdkSessionId: forkSource.sdkSessionId,
+      ...(isCodex ? { model: forkSource.model, providerId: forkSource.providerId } : {}),
       upToMessageId: assistantUuid,
       ...(tailTurnsToDrop !== undefined ? { tailTurnsToDrop } : {}),
       title: newTitle,
@@ -568,7 +578,7 @@ export async function forkSessionAtMessage(
       // 错误码 + 文案,只有真 codex 失败才包装。pi 与 cc 一样裸抛原始错误(不会拿到指名道姓
       // 错对象的 "Codex 状态不可用" 提示)。改成 usesTailTurnFork 会让 pi 误报成 codex 错误。
       if (!isCodex) throw err;
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = codexForkFailureDetail(err);
       throw forkError(
         'CODEX_FORK_STATE_UNAVAILABLE',
         detail,
@@ -695,12 +705,14 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     : `[Fork·已剥离] ${source.title}`;
   const { newSdkSessionId, uuidMap } = await getMaker().forkSdkSession('codex', {
     sourceSdkSessionId: source.sdkSessionId,
+    model: source.model,
+    providerId: source.providerId,
     upToMessageId: undefined,
     title: newTitle,
     workingDir: source.workingDir ?? undefined,
     stripEncryptedReasoning: true,
   }).catch((err: unknown) => {
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = codexForkFailureDetail(err);
     throw forkError(
       'CODEX_FORK_STATE_UNAVAILABLE',
       detail,

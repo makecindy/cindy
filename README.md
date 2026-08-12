@@ -63,7 +63,6 @@ Ready out of the box, never boxed in — start with
 | `apps/mobile` | Expo / React Native mobile client |
 | `packages/*` | Shared client capabilities (auth, device-link, agent orchestration, model providers, …) |
 | `apps/*-bin` | Tool binaries shipped with the desktop app; none are committed — claude-code, codex, and ripgrep are downloaded per platform by `pnpm install`, and the Android platform-tools binaries are fetched (pinned version, sha256-verified) before Windows packaging |
-| `cindy-protocol/` | Wire protocol shared with the server (git submodule) |
 
 **Not in this repo:** the backend service lives in a separate
 repository and is not part of this monorepo.
@@ -81,18 +80,15 @@ repository and is not part of this monorepo.
 
 ## Getting started
 
-Contributor setup, public submodule initialization, Git LFS, dependency updates,
-and access requirements are maintained in
+Contributor setup, Git LFS, dependency updates, and access requirements are maintained in
 [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md).
-The public checkout only needs the protocol submodule; plugins are installed through
-SkillHub or manually.
+Plugins are installed through SkillHub or manually.
 
 Minimal entry point:
 
 ```bash
 git clone https://github.com/makecindy/cindy.git
 cd cindy
-git submodule update --init --recursive cindy-protocol
 git lfs pull
 pnpm install
 ```

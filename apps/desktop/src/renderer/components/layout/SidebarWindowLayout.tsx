@@ -8,7 +8,7 @@
  *     主窗收广播后恢复内嵌侧栏)。
  *   - 挂 RightSidebarShell(零改动复用:Shell 自带 store 订阅 / rsbBrowserBridge
  *     init / setActiveSession / popup 订阅)。
- *   - 渲染上下文(sessionId / workdir / remoteHostId)不自查 —— 主窗 MainLayout
+ *   - 渲染上下文(sessionId / workdir / remoteHostId / deviceLinkDeviceId)不自查 —— 主窗 MainLayout
  *     是唯一真相(草稿会话 / remote 会话语义只有主窗路由视图知道),经 main 中转:
  *     mount 时 invoke getContext 拉一次,此后订阅 context-changed 推送跟随主窗切换。
  *   - mount 后 invoke ready() 握手:main 的 ensureOpenForAutomation(agent tab-op
@@ -51,14 +51,15 @@ interface SidebarWindowContext {
   sessionId: string | null;
   workdir: string | null;
   remoteHostId: string | null;
+  deviceLinkDeviceId?: string | null;
   available: boolean;
 }
 
 export function SidebarWindowLayout() {
   const { t } = useTranslation();
   useDeviceLinkRemoteProjects();
-  // 意识页签注册:子窗口没有 LayoutRoot,必须自行初始化 ghost 面板/页签注册表
-  // 并订阅 ghosts:changed,否则 open-ghost-tab 命令路由到这里时 kind 未注册。
+  // 意识面板注册:子窗口没有 LayoutRoot,必须自行初始化 ghost 面板注册表
+  // 并订阅 ghosts:changed(停靠形态所需;历史持久化的 ghost 页签也靠它识别 kind)。
   ensureGhostPanelsRegistered();
   useGhostPanelsSync();
   const isMac = window.electronAPI?.platform === 'darwin';
@@ -151,7 +152,7 @@ export function SidebarWindowLayout() {
         <div className={isMac ? 'w-20 shrink-0' : 'w-3 shrink-0'} />
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <PanelRight size={14} className="shrink-0 text-[var(--text-tertiary)]" />
-          <span className="truncate text-[13px] text-[var(--text-secondary)]">
+          <span className="truncate text-13 text-[var(--text-secondary)]">
             {t('rightSidebar.window.title')}
           </span>
         </div>
@@ -169,7 +170,7 @@ export function SidebarWindowLayout() {
             }}
             title={t('rightSidebar.window.mergeBack')}
             aria-label={t('rightSidebar.window.mergeBack')}
-            className="inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+            className="inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-12 text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
           >
             <PanelRight size={14} />
             <span>{t('rightSidebar.window.mergeBack')}</span>
@@ -193,11 +194,12 @@ export function SidebarWindowLayout() {
           sessionId={sessionId}
           workdir={ctx?.workdir ?? ''}
           remoteHostId={ctx?.remoteHostId ?? null}
+          deviceLinkDeviceId={ctx?.deviceLinkDeviceId}
           isMac={isMac}
         />
         {!sessionId && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <span className="text-[13px] text-[var(--text-tertiary)]">
+            <span className="text-13 text-[var(--text-tertiary)]">
               {t('rightSidebar.window.followPlaceholder')}
             </span>
           </div>

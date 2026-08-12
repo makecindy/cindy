@@ -21,6 +21,15 @@ vi.mock('electron', () => ({
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
+const ownerScopeState = vi.hoisted(() => ({
+  current: true,
+  scope: { ownerScopeKey: 'owner-a', ownerStamp: undefined },
+}));
+vi.mock('../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: vi.fn(() => ownerScopeState.scope),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => ownerScopeState.current),
+  tapWindowBroadcast: vi.fn(),
+}));
 vi.mock('../localDb/ipc/messages.js', () => ({
   patchMessageAgentMetaWithResult: vi.fn(async (_sessionId: string, _clientId: string, patch: Record<string, unknown>) => ({
     previous: {},
@@ -128,9 +137,22 @@ const DETAILS = buildTurnUsageDetails({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  ownerScopeState.current = true;
 });
 
 describe('recordTurnCostOnMessage', () => {
+  it('owner boundary after patch keeps success and suppresses stale broadcast', async () => {
+    const { deps, broadcasts } = makeDeps(true);
+    deps.enqueue = vi.fn(async (_label, fn) => {
+      const result = await fn();
+      ownerScopeState.current = false;
+      return result;
+    });
+
+    await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(true);
+    expect(broadcasts).toHaveLength(0);
+  });
+
   it('patch 成功 → 写入原始分段与本用户轮累计，并广播同值', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true);
     await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(true);
@@ -185,6 +207,66 @@ describe('recordTurnCostOnMessage', () => {
       userTurnCostIsEstimate: false,
       turnUsageDetails: DETAILS,
     });
+  });
+
+  it('较晚到达的 token 明细保留同消息先落下的完整整轮耗时', async () => {
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+    const { deps, broadcasts, patchCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: terminal },
+    );
+
+    await recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps);
+
+    expect(patchCalls).toHaveLength(2);
+    expect(patchCalls[1]?.patch).toEqual({
+      turnUsageDetails: { ...DETAILS, turnDurationMs: 6_500 },
+    });
+    expect(broadcasts[0]?.turnUsageDetails).toEqual({
+      ...DETAILS,
+      turnDurationMs: 6_500,
+    });
+  });
+
+  it('已有明细无需补耗时时不做冗余二次写入', async () => {
+    const { deps, patchCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: DETAILS },
+    );
+
+    await expect(
+      recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps),
+    ).resolves.toBe(true);
+
+    expect(patchCalls).toHaveLength(1);
+  });
+
+  it('补耗时的二次写入失效时保留第一次成功结果', async () => {
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+    const { deps, broadcasts, runCostCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: terminal },
+    );
+    let callCount = 0;
+    deps.patchAgentMeta = vi.fn(async (_sessionId, _clientId, patch) => {
+      callCount += 1;
+      if (callCount > 1) return null;
+      return {
+        previous: { turnUsageDetails: terminal },
+        next: { turnUsageDetails: terminal, ...patch },
+      };
+    });
+
+    await expect(
+      recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps),
+    ).resolves.toBe(true);
+
+    expect(callCount).toBe(2);
+    expect(runCostCalls).toHaveLength(1);
+    expect(broadcasts[0]?.turnUsageDetails).toEqual(DETAILS);
   });
 
   it('价格未知时仍可单独持久化并广播 token/cache 明细', async () => {
@@ -390,6 +472,79 @@ describe('recordTurnUsageOnMessage', () => {
     expect(broadcasts).toHaveLength(0);
   });
 
+  it('0 token 终段把完整耗时合并到同消息已有 token 明细', async () => {
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+    const { deps, broadcasts, patchCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: DETAILS },
+    );
+
+    await expect(
+      recordTurnUsageOnMessage(
+        { sessionId: 's1', clientId: 'm1', turnUsageDetails: terminal },
+        deps,
+      ),
+    ).resolves.toBe(true);
+
+    expect(patchCalls).toHaveLength(2);
+    expect(patchCalls[0]?.patch).toEqual({ turnUsageDetails: terminal });
+    expect(patchCalls[1]?.patch).toEqual({
+      turnUsageDetails: {
+        ...DETAILS,
+        models: ['claude-sonnet-4-6'],
+        turnDurationMs: 6_500,
+      },
+    });
+    expect(broadcasts[0]?.turnUsageDetails).toEqual({
+      ...DETAILS,
+      models: ['claude-sonnet-4-6'],
+      turnDurationMs: 6_500,
+    });
+  });
+
+  it('仅输入/cache 的 continuation 终段保留同消息已有输出与生成耗时', async () => {
+    const previous = buildTurnUsageDetails({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 10,
+      durationMs: 1_200,
+      turnDurationMs: 2_000,
+      model: 'claude-sonnet-4-6',
+    }) as TurnUsageDetails;
+    const terminal = buildTurnUsageDetails({
+      inputTokens: 5,
+      cacheReadTokens: 95,
+      turnDurationMs: 6_500,
+      model: 'claude-sonnet-4-6',
+    }) as TurnUsageDetails;
+    const expected = buildTurnUsageDetails({
+      inputTokens: 105,
+      outputTokens: 20,
+      cacheReadTokens: 105,
+      durationMs: 1_200,
+      turnDurationMs: 6_500,
+      model: 'claude-sonnet-4-6',
+      models: ['claude-sonnet-4-6'],
+    });
+    const { deps, broadcasts, patchCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: previous },
+    );
+
+    await expect(
+      recordTurnUsageOnMessage(
+        { sessionId: 's1', clientId: 'm1', turnUsageDetails: terminal },
+        deps,
+      ),
+    ).resolves.toBe(true);
+
+    expect(patchCalls).toHaveLength(2);
+    expect(patchCalls[1]?.patch).toEqual({ turnUsageDetails: expected });
+    expect(broadcasts[0]?.turnUsageDetails).toEqual(expected);
+  });
+
   it('sessionId / clientId 缺失 → 直接跳过', async () => {
     const { deps, patchCalls } = makeDeps(true);
     await expect(
@@ -501,6 +656,28 @@ describe('recordSchedulerTurnCost', () => {
     )).resolves.toBeNull();
 
     expect(recordOnMessage).toHaveBeenCalledOnce();
+    expect(recordDirect).not.toHaveBeenCalled();
+  });
+
+  it('owner boundary after message ledger commit does not fall back to direct charging', async () => {
+    const { deps } = makeDeps(true);
+    deps.enqueue = vi.fn(async (_label, fn) => {
+      const result = await fn();
+      ownerScopeState.current = false;
+      return result;
+    });
+    const recordOnMessage: typeof recordTurnCostOnMessage = (args) =>
+      recordTurnCostOnMessage(args, deps);
+    const recordDirect = vi.fn(async () => 'schedule-1');
+
+    await expect(recordSchedulerTurnCost(
+      {
+        ...ARGS,
+        turnOrigin: schedulerOrigin,
+      },
+      { recordOnMessage, recordDirect },
+    )).resolves.toBeNull();
+
     expect(recordDirect).not.toHaveBeenCalled();
   });
 

@@ -513,6 +513,11 @@ function argumentWriteTargets(tokens: string[]): string[] {
  * (`cmd > /dev/null`、`2>/dev/null`、`>/dev/null 2>&1`)。必须排除在系统红线外,否则 Auto 档会对
  * 几乎每条带静音重定向的命令弹窗,严重违反"尽量不打扰"(实机语料探针发现:44 条良性命令误拦 9 条)。
  * 块设备/内存设备(`/dev/sda`、`/dev/mem` 等)**不在**此列,仍按系统红线拦。
+ *
+ * 注意本常量只回答「**是不是受保护系统路径**」——写 `/dev/stdout`、`/dev/fd/3` 不等于写
+ * `/etc`,不该升成确定性红线。「这个重定向目标能不能证明无副作用」是**另一个问题**,由
+ * `segmentHasSideEffectRedirectOrSubstitution` 里那条更窄的剥离正则回答(只有真正的
+ * 丢弃型设备才剥)。两者故意不同口径。
  */
 const SAFE_DEVICE_PATH = /^\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/\d+)$/i;
 
@@ -535,8 +540,161 @@ export function isProtectedSystemPath(target: string): boolean {
  * 无法由主 Agent 换安全做法绕开的高影响同意边界。命中才 `prompt-each-time`：
  * 提权 / 系统与磁盘控制 / 凭证访问 / fork bomb / 全局权限放宽。
  */
+/**
+ * 把「结构上确定是数据」的引号字面量替换成占位符,供确定性红线扫描使用。
+ *
+ * 背景:`ALWAYS_ASK_PATTERNS` 是在**整条命令去引号后**的字符串上扫的 —— 引号内的散文
+ * 因此被当代码看。实机语料里剩余红线的绝大多数由此产生,而且全是误报:
+ *   - `B1="……永久 link-close(收到对端 user/toggle-off/shutdown/revoked……)"`
+ *     —— PR 回复正文里的 `shutdown` 是一个**枚举值的名字**,被当成关机命令;
+ *   - `git commit -m "fix: …… 清理 ……"` —— 中文提交说明整段被当命令扫;
+ *   - `git diff --name-only | grep -E "\.env|\.pem|credential|secret"`
+ *     —— 这条命令的用途正是**阻止**把凭证提交上去,却因为 pattern 里写了这些词
+ *     被判成「读凭证文件」。
+ *
+ * 只剥三类**结构上**可判定的数据位,不做「看起来像散文」这种启发式:
+ *   1. 纯变量赋值的值(`NAME='…'` / `NAME="…"`);
+ *   2. 消息**正文**类 flag 的值(`-m` / `--message` / `--body` / `--title`);
+ *   3. grep 家族的搜索模式(要**找**的正则,不是要读的路径)。
+ *
+ * ## 两道安全护栏(缺一就是凭证绕过,review P1 实证)
+ *
+ * **护栏一:凭证路径永不被抹掉。** 第 1、2 类的值**可能是一个路径**,一旦抹掉,
+ * 「读凭证文件」这条红线就查不到证据。实证形态:
+ *
+ *     git commit -F "/home/user/.ssh/id_rsa"       ← 加引号 = 灰区(错)
+ *     git commit -F /home/user/.ssh/id_rsa         ← 不加引号 = 红线(对)
+ *
+ * 只差一对引号结论就反了。所以这两类走 `maskUnlessCredential`:字面量命中
+ * `isSensitiveCredentialPath` 时**原样保留**,让后面的 ALWAYS_ASK 照常命中。
+ * 第 3 类不加这道护栏 —— grep 的模式串结构上是「要找什么」,不是「要读哪个文件」,
+ * 它要读的文件是后面的操作数,那些从不参与本函数的替换(所以
+ * `grep -E "\.env|\.pem" ~/.ssh/id_rsa` 里的凭证路径仍然可见)。
+ *
+ * **护栏二:`-F` 不是消息正文 flag。** `git commit -F` 是 `--file`、
+ * `gh issue create -F` 是 `--body-file` —— 两个都是**从文件读正文**,值是路径。
+ * 把它当文案抹掉就是上面那条 P1 的直接成因。同理,`--body-file` / `--message-file`
+ * 一律不进这张表;进表的只有值**就是正文本身**的 flag。
+ *
+ * **执行面不在这条链路上**:`sh -c "…"`、`eval "…"`、管道到解释器都由更前面的
+ * `highImpactExecutionNeedsConsent` 判定(它按引号外的真实执行结构分析,不读本函数
+ * 的产物)。这里剥掉的只是纯字符串实参。
+ */
+/**
+ * grep 家族里「值是**要启动的外部程序**」的选项:rg 的 `--pre COMMAND` /
+ * `--hostname-bin PROG`、ag 的 `--pager COMMAND`。这些位置的值不是搜索模式,抹成 DATA
+ * 就把执行证据抹没了 —— 而这几个工具又都在只读白名单里,结果是**直接放行**(review 报:
+ * `ag --pager "sudo cat /etc/shadow" foo .` 实测由确定性必问降成了 auto-approve)。
+ *
+ * 只登记**真实存在且已实测**的选项。不按臆想的命名惯例预扩(`*-bin`/`*-cmd` 之类)——
+ * 保留字面量是 fail-closed 方向,凭空放宽会把普通 grep/rg 命令误报成红线。
+ */
+const RG_EXECUTABLE_OPTIONS = /(?:^|\s)--(?:pre|pager|hostname-bin)$/;
+
+function stripDataLiterals(command: string): string {
+  const QUOTED = String.raw`(?:"[^"]*"|'[^']*')`;
+  /**
+   * 抹成占位符,但两种情况原样留下:
+   *  - **凭证路径**:值可能是一个路径,抹了红线就失去证据(护栏一);
+   *  - **含 `$` 展开或命令替换的双引号值**:双引号里的 `$(…)` / 反引号 / `<(…)` **会执行**,
+   *    `$VAR` / `${VAR}` **会展开**,都不是纯数据:
+   *      · `git commit -m "$(cat ~/.aws/credentials)"` 把凭证明文写进 commit,抹掉整个值
+   *        会让替换体里的凭证路径消失(替换体的递归检查只查执行类红线,不查凭证路径);
+   *      · `git commit -m "$GITHUB_TOKEN"` 同理 —— 敏感环境变量名是后面红线的判据,
+   *        抹成 DATA 之后那条正则什么也看不到(review 二轮 P1)。
+   *    单引号里这些不生效,但这里不区分引号种类:多留几个字面量进扫描面是 fail-closed
+   *    方向,代价只是极少数误报(含 `$` 的散文不再被剥离)。
+   */
+  // `>(…)`(输出进程替换)与 `<(…)` 同样在双引号内**执行**,漏了它等于给一个换方向就
+  // 绕过的口子(review 报)。
+  const EXECUTABLE_INSIDE_QUOTES = /\$|`|<\(|>\(/;
+  const maskUnlessCredential = (prefix: string, literal: string): string => (
+    isSensitiveCredentialPath(literal) || EXECUTABLE_INSIDE_QUOTES.test(literal)
+      ? `${prefix}${literal}`
+      : `${prefix}DATA`
+  );
+  return command
+    // 1) NAME='…' / NAME="…" —— 赋值的右值是数据(除非它是凭证路径)。
+    .replace(
+      new RegExp(String.raw`(^|[\s;&|(])([A-Za-z_]\w*)=(${QUOTED})`, 'g'),
+      (_m, sep: string, name: string, literal: string) => {
+        // 同一条命令里若之后又把这个变量**展开**出来(`CMD="sudo"; $CMD cat /etc/shadow`),
+        // 那个值就不是纯数据 —— shell 会把它展开成真实命令,遮蔽后红线只看到 `$CMD`。
+        // 被引用就整段保留给红线扫描(review 报:字面 `sudo` 原本逐次确认,遮蔽后降灰区)。
+        const referenced = new RegExp(String.raw`\$\{?${name}\b`).test(command);
+        if (referenced) return `${sep}${name}=${literal}`;
+        // 通过**环境隐式**交给子进程执行的赋值同样不是数据:`GIT_PAGER="sudo …" git log`
+        // 里没有任何 `$GIT_PAGER` 展开,git 却会真的把它当程序启动(review 报)。
+        if (ENV_EXECUTION_NAME.test(name)) return `${sep}${name}=${literal}`;
+        return maskUnlessCredential(`${sep}${name}=`, literal);
+      },
+    )
+    // 2) 消息**正文**类 flag 的值。只收「值就是正文」的 flag:`-F`/`--body-file`/
+    //    `--message-file` 的值是**路径**,不在此列(见上方护栏二)。
+    .replace(
+      new RegExp(String.raw`(\s(?:-m|--message|--body|--title)(?:=|\s+))(${QUOTED})`, 'g'),
+      (_m, prefix: string, literal: string) => maskUnlessCredential(prefix, literal),
+    )
+    // 3) grep 家族的搜索模式:要找的正则,不是要读的文件。要读的文件是后面的操作数,
+    //    不参与替换,所以这里不需要凭证护栏(加了反而会让「扫描凭证特征」的命令重新误报)。
+    //
+    //    **但 `-f`/`--file` 是例外**:那个位置的值是「模式文件的路径」,不是模式本身。
+    //    `grep -f "~/.ssh/id_rsa" package.json` 抹掉之后凭证路径消失,而 grep 又在只读
+    //    白名单里 → 整条变成 auto-approve;同一路径不加引号却仍必问(review 三轮 P1)。
+    //    紧贴的短选项簇(`-nf`)同样以 `f` 结尾吃下一个参数,一并识别。
+    .replace(
+      new RegExp(String.raw`(\b(?:grep|egrep|fgrep|rg|ag)\b(?:\s+-{1,2}[\w-]+(?:=\S+)?)*\s+)(${QUOTED})`, 'g'),
+      (_m, prefix: string, literal: string) => (
+        // `-f`/`--file` 位置的值是模式**文件路径**;含 `$`/命令替换的模式是**动态值**——
+        // `grep "$(cat ~/.aws/credentials)" f` 会真的读凭证、`grep "$GITHUB_TOKEN" f` 会把
+        // 令牌摊到命令行。两类都必须原样留给红线扫描(review P1)。
+        // 不加「静态凭证路径」护栏:模式位是「要找什么」,不是「读哪个文件」(要读的文件是
+        // 后面的操作数,从不参与替换),加了会让 `grep -E "\.env|\.pem|credential"` 这条
+        // **防止**凭证误提交的扫描命令重新误报成红线。
+        // 文件型选项统一按「后面那个值是**被读取的路径**」处理:`-f`/`--file`(模式文件)、
+        // `--exclude-from`/`--include-from`(grep 的排除/包含清单)、`--ignore-file`(rg)。
+        // 判据取「以 file / from 结尾的长选项」+ 以 f 结尾的短选项簇,一次覆盖同族,
+        // 不逐个登记(review 五轮 P1:`grep --exclude-from "~/.ssh/id_rsa" foo src`
+        // 原来整条是 auto-approve)。
+        /(?:^|\s)(?:-[a-zA-Z]*f|--[\w-]*(?:file|from))$/.test(prefix.trimEnd())
+          // rg 的 `--pre` / `--hostname-bin`:值是**要启动的外部程序**,不是搜索模式。
+          // 与文件型选项同理,抹成 DATA 就把执行证据抹没了(review 报)。
+          || RG_EXECUTABLE_OPTIONS.test(prefix.trimEnd())
+          || EXECUTABLE_INSIDE_QUOTES.test(literal)
+          ? `${prefix}${literal}`
+          : `${prefix}DATA`
+      ),
+    );
+}
+
 const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   /\b(?:sudo|doas|runuser)\b/,                           // 提权(runuser 名字独特,直接词界)
+  // `--show-token` = 把**可复用的凭证**打进 stdout,从而进模型上下文与会话记录。等同于
+  // 读凭证文件,按凭证同级作**确定性必问** —— 只把它挡在 gh 只读白名单外还不够:落灰区
+  // 意味着可能被轻量审阅器静默放行(`gh auth status` 看起来就是一条状态查询)。
+  // 覆盖 `--show-token` / `--show-token=true` 两种形态(review 二轮 P1)。
+  // **必须限定在 `gh auth` 命令位**:这个字符串出现在别处只是普通文本或参数,
+  // `echo --show-token`、`grep -rn -- --show-token src` 原本是直接放行的,不限定就被打成
+  // 硬弹窗 —— 正是本 PR 要消灭的那类误报(review 报)。命令位写法与下面的短选项一致。
+  // 首尾边界要**对称**:命令位允许分隔符开头(`ls;gh auth …`),flag 后面同样可以紧跟
+  // `;` `|` `&` `)` 而不带空格 —— 只补开头是把同一条边界修了一半(review 报)。
+  /(?:^|[\s|&;(])(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*[^|;&\n]*?\s--show-token(?:$|[\s=|&;)])/,
+  // 短选项形态:`gh auth status -t` 与含 `t` 的簇写(`-wt`/`-tw`)是同一个 flag,只把它挡在
+  // gh 只读白名单外不够 —— 落灰区就可能被轻量审阅器静默放行(review 三轮 P1)。`-t` 本身
+  // 在别的命令里含义完全不同(`docker -t`、`tar -t`),所以**限定在 `gh auth` 命令位**上匹配。
+  // `(?:\S*\/)?` 让绝对/相对路径调用同样命中(`/usr/bin/gh auth status -t`,review 四轮 P1)——
+  // 只匹配裸 `gh` 等于给一个换写法就绕过的口子。
+  // 子命令与 `-t` 之间允许**任意**中间参数:`gh auth status --hostname github.com -t` 是
+  // 合法组合,原来只允许非选项 token 会漏(review 报)。用 `[^|;&\n]*?` 限定在同一段内。
+  // 结尾的 `(?:=[^\s|;&]*)?` 覆盖 `-t=true` 这类**带等号的 truthy 布尔值** —— gh 照常接受,
+  // 而原来的 `(?![\w=-])` 把等号形态排除在外,令牌仍会被打进模型上下文(review 报)。
+  // 命令位判据用 `(?:^|[\s|&;(])` 而不是 `(?:^|\s)`:分隔符后可以不带空格
+  // (`ls;gh auth token`、`ls&&gh auth token`、`(gh auth token)`),而分段之后不会再重扫
+  // 确定性红线 —— 只认空白等于给一个删空格就绕过的口子(review 报)。与本表里 `su`
+  // 那条的边界写法一致。
+  /(?:^|[\s|&;(])(?:\S*\/)?gh\s+auth\s+[a-z][\w-]*[^|;&\n]*?\s-[a-zA-Z]*t[a-zA-Z]*(?:=[^\s|;&]*)?(?![\w-])/,
+  // `gh auth token` 直接把令牌打到 stdout,与 `--show-token` 同级(同族一次收完)。
+  /(?:^|[\s|&;(])(?:\S*\/)?gh\s+auth\s+token\b/,
   // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
   // 已知启动器后)匹配,避免 `git commit -m "su"` 之类误升(自审补:sudo/doas 已红线,漏了同级的 su)。
   /(?:^|[\n|&;(]\s*|\b(?:sudo|doas|xargs|nohup|setsid|env|command|exec|time|timeout|nice|ionice|stdbuf|chrt|builtin|watch|flock)\s+(?:-\S+\s+)*)su\b(?![\w.-])/,
@@ -561,12 +719,44 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
  * 直接打断用户：reviewer 可 allow（明确、范围受控）、block（让 Agent 重试）或只在确实
  * 跨越高影响边界时 ask。
  */
+/**
+ * 值会被下游命令**当程序执行 / 解释**的环境变量名。两个消费者共用这一份口径:
+ *  - `REVIEW_REQUIRED_PATTERNS`:出现这类赋值即不得直接放行;
+ *  - `stripDataLiterals`:这类赋值的值**不能被遮蔽成 DATA** —— 它就是要执行的命令,
+ *    抹掉后红线什么也看不到(`GIT_PAGER="sudo cat /etc/shadow" git --paginate log`
+ *    实测由确定性必问降进灰区,review 报)。
+ *
+ * 两处必须同源:一处认得、另一处认不得,正是「遮蔽把证据抹掉」这类漏判的成因。
+ * 分页器 / 编辑器按**整族**登记(`(?:[A-Z][A-Z0-9_]*)?PAGER` / `…EDITOR`):每个 CLI 都有
+ * 自己的一份(`GIT_PAGER`、`GH_PAGER`、`GH_EDITOR`、`GIT_SEQUENCE_EDITOR`、`HGEDITOR`…),
+ * 逐个登记等于给一个换前缀就绕过的口子。前缀里的下划线也是**可选**的 —— `HGEDITOR`
+ * 这种连写形态同样存在。
+ */
+const ENV_VARS_EXECUTING_THEIR_VALUE = 'LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+'
+  + '|(?:[A-Z][A-Z0-9_]*)?PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL'
+  // `GIT_CONFIG_VALUE_<n>` 配合 `GIT_CONFIG_KEY_<n>=diff.external`(或 core.pager /
+  // sequence.editor …)注入的配置值会被 git 当外部程序启动 —— 不能遮蔽成 DATA,否则
+  // `GIT_CONFIG_VALUE_0="sudo …" git diff` 会连红线带审阅一起绕过、直接放行(review 报)。
+  + '|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM|VALUE_\\d+)|BASH_ENV'
+  + '|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS'
+  // 编辑器族与分页器同理:值是 git / 其它 CLI 会**启动的程序**
+  // (`GIT_EDITOR="sudo …" git commit`),不是数据。**按整族登记**,与 PAGER 同写法 ——
+  // 每个 CLI 都有自己的 `<TOOL>_EDITOR`(gh 的 `GH_EDITOR`、git 的 `GIT_SEQUENCE_EDITOR`…),
+  // 只列 `GIT_` 前缀等于给一个换前缀就绕过的口子(review 报,与 PAGER 那次同一个错误)。
+  + '|(?:[A-Z][A-Z0-9_]*)?EDITOR|VISUAL'
+  + '|RUBYOPT|PATH';
+// 命令位边界必须认 shell 分隔符,不能只认空白:`true;GH_PAGER='…' gh pr view 1` 里
+// 分号后不带空格,原 `(?:^|\s)` 匹配不到,整条直接放行(review 报)。与本文件 `su` /
+// `gh auth` 两处命令位判据同一写法 —— 那两处早就是 `[\s|&;(]`,这里当初漏了对齐。
+const ENV_EXECUTION_ASSIGNMENT = new RegExp(`(?:^|[\\s|&;(])(?:${ENV_VARS_EXECUTING_THEIR_VALUE})=`);
+const ENV_EXECUTION_NAME = new RegExp(`^(?:${ENV_VARS_EXECUTING_THEIR_VALUE})$`);
+
 const REVIEW_REQUIRED_PATTERNS: readonly RegExp[] = [
   /\brm\b[^|;&]*(?:\s-\w*[rRfF]|\s--(?:recursive|force|dir))/, // rm 递归/强制删除
   /\bfind\b[^|;&]*\s-delete\b/,                          // find -delete 批量删除
 
   // 执行影响型环境变量赋值：让“看似只读”的命令运行其它程序，应由 reviewer 静默拦截或判定。
-  /(?:^|\s)(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|GIT_PAGER|PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS|RUBYOPT|PATH)=/,
+  ENV_EXECUTION_ASSIGNMENT,
   /\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|--force-with-lease\b|\s-f\b|\+)/, // 强推
   /\bgit\b[^|;&]*\breset\b[^|;&]*--hard/,                 // git reset --hard
   /\bgit\b[^|;&]*\bclean\b[^|;&]*\s-\w*f/,                // git clean -f
@@ -672,13 +862,34 @@ const SAFE_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
 
 /** 顶层 shell 分隔符:`&&` `||` `;` `|` 换行,以及作为后台操作符的独立 `&`。 */
 function splitTopLevelSegments(command: string): string[] {
-  // 保守拆分:引号内的分隔符会被误切,但只导致"多切几段、每段各自判定"——对不确定 fail-closed,
-  // 过度拆分不放宽任何东西。独立 `&`(后台)才拆;`2>&1`/`>&`/`&>` 里的 `&` 是 fd 复制、不是
-  // 分隔符,用前后不邻接 `>`/`&` 的条件把它们排除,避免把 `ls 2>&1` 这类常见命令误切成碎段。
-  return command
-    .split(/&&|\|\||[;\n|]|(?<![>&])&(?![>&])/g)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  // 引号感知拆分(复用 splitExecutableSegments 的状态机):引号内的 `|`/`;`/`&` 是**数据**不是
+  // 分隔符 —— 旧的正则拆分会把 `grep "foo|bar" src` 切成 `grep "foo` + `bar" src` 两个碎段,
+  // 后者认不出命令名→整条落灰区,是实机语料里最大的误报源(grep/rg 的 alternation pattern)。
+  // 安全性不放宽:红线(highImpactExecutionNeedsConsent / ALWAYS_ASK / scopedDestruction /
+  // REVIEW_REQUIRED)都在**整条命令**的去引号变体上先跑(见 classifyShellCommand),藏在引号里的
+  // 危险关键词照样命中;引号内容对真实 bash 也是数据,eval / `sh -c` 的执行面另有红线拦截。
+  return splitExecutableSegments(command).map((s) => s.text);
+}
+
+/**
+ * 该段是否带**有副作用的**输出重定向或命令替换。
+ *
+ * 抽出来是因为它有两个调用点,漏任一个都是绕过:`classifyShellSegment` 的常规路径,以及
+ * `classifyShellCommand` 里 `cd <区内目录>` 的快捷放行分支 —— 后者原来直接 `continue`,
+ * 于是 `cd /repo > /tmp/out && ls` 整条被判 `auto-approve`,重定向从未被看到(review P1)。
+ *
+ * 判定前先去掉引号内容(引号内的 `>` 是数据,如 `git log --format='%h>%s'`),再抹掉指向
+ * 安全伪设备的重定向(`2>/dev/null`、`&>/dev/fd/1`):写伪设备等同丢弃、无落盘副作用,
+ * 与 `SAFE_DEVICE_PATH` / `isProtectedSystemPath` 的白名单同口径。`/dev/null/x`、
+ * `/dev/nullx`、`/dev/null.tmp`、`/dev/null-foo` 等相近路径不匹配(`(?![\w/.-])`),
+ * 仍按普通文件写升级 —— 边界要把 `.` 和 `-` 一并挡住,否则这条正则会比它自称对齐的
+ * `SAFE_DEVICE_PATH`(精确匹配设备名)更宽(review 报)。
+ */
+function segmentHasSideEffectRedirectOrSubstitution(segment: string): boolean {
+  const redirectScan = segment
+    .replace(/'[^']*'|"[^"]*"/g, '')
+    .replace(/(?:\d*|&)>{1,2}\s*\/dev\/(?:null|zero|full|random|urandom|tty)(?![\w/.-])/gi, '');
+  return OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment);
 }
 
 /** 轻量 shell tokenizer：引号外按空白切，拼接相邻的 quoted/unquoted 片段并保留反斜杠。 */
@@ -1138,6 +1349,16 @@ function splitExecutableSegments(command: string): ExecutableSegment[] {
     if (char === "'" && !doubleQuoted) { singleQuoted = !singleQuoted; continue; }
     if (char === '"' && !singleQuoted) { doubleQuoted = !doubleQuoted; continue; }
     if (singleQuoted || doubleQuoted) continue;
+    // shell 注释:词首的 `#` 到行尾都被忽略。**必须在引号状态更新之后处理** —— 注释里的
+    // 未闭合引号(`echo ok # "`)否则会把后续换行吞进 quoted 状态,令下一行命令不再单独
+    // 切分、整段按第一行放行(review 报)。只在词边界(行首 / 空白 / `;|&(` 之后)才算注释,
+    // `foo#bar` 里的 `#` 是普通字符。
+    if (char === '#' && (i === 0 || /[\s;|&(]/.test(command[i - 1] ?? ''))) {
+      const newline = command.indexOf('\n', i);
+      if (newline === -1) break;      // 注释一直到命令末尾:后面没有可执行内容
+      i = newline - 1;                // 跳过注释体,让循环下一步照常把 `\n` 当分隔符处理
+      continue;
+    }
     // `$(` 命令替换、`<(`/`>(` 进程替换都成组,组内的 `|`/`;` 不是顶层分隔符 → 一并按深度跳过
     // (自审补:此前漏了输出进程替换 `>(`,`>(cmd1; cmd2)` 里的 `;` 会被误当顶层分隔)。
     if ((char === '$' || char === '<' || char === '>') && command[i + 1] === '(') {
@@ -1198,6 +1419,494 @@ function isPipeExecutor(bin: string): boolean {
     || /^(?:guile|racket)(?:-\d+(?:\.\d+)*)?$/.test(normalized);
 }
 
+/**
+ * 这个管道右侧的解释器会不会**把 stdin 当成程序执行**。
+ *
+ * 这是 `curl … | sh` 与 `grep … | awk '{print $1}'` 的本质区别,此前被压成同一条红线:
+ * 只要右侧 bin 在 PIPE_EXECUTORS 里就一律 `prompt-each-time`。实机语料实测,该判据产出的
+ * 65 条红线里**真正管道到 shell 的是 0 条** —— 46 条是 `| awk '字面脚本'`、
+ * `| python3 -m json.tool`、`| xargs grep -l foo` 这类日常数据处理被误判。
+ *
+ * 判据:程序来源是否为 stdin。
+ *  - `sh` / `bash`(无 `-c`)、裸 `python3` / `node` / `ruby`:stdin 就是源码 → **是**;
+ *  - `python3 -c '…'` / `node -e '…'` / `bash -c '…'`:程序是字面量参数,静态可见
+ *    (且各自另有 payload 递归审查)→ 否;
+ *  - `python3 -m json.tool`:程序是具名模块 → 否;
+ *  - `awk '脚本'` / `awk -f f.awk`:awk 的程序**永远**是显式操作数,从不来自 stdin → 否;
+ *  - `xargs` / `parallel`:stdin 变成的是**参数**而非程序,且下方有专门的 xargs 递归分析
+ *    (此前这条捷径把它抢先判红,专门分析根本跑不到)→ 否;
+ *  - 带脚本文件操作数(`python3 run.py`)→ 否。
+ *
+ * 安全性不放宽:凡「远端内容流进解释器」仍由调用点的 `pipeCarriesRemoteContent` 分支
+ * 保持红线 —— `curl … | python3 -c '…'` 照旧必问。本函数只负责把**本地**数据处理
+ * 从红线里摘出来。
+ */
+/**
+ * awk 字面脚本里「把数据交出去执行」的出口。命中即按「stdin 会被当命令跑」处理。
+ *
+ * `system(…)` 与 `print … | "cmd"` 只是其中两种;review 指出 `awk '$0 | getline'` 同样
+ * 把每一行当 shell 命令执行(GNU awk 实测有真实文件副作用),而它既没有 `system(` 也没有
+ * 引号紧邻的 `|`。凡是 `getline` / `close(` 参与的形态都可能接管道命令,一并纳入 ——
+ * 代价是 `awk '{getline; print}'` 这类纯读下一行也会落红线(fail-closed 方向,可接受)。
+ * 刻意**不**用「脚本里出现任意 `|`」作判据:那会把 `awk '/foo|bar/'` 这种正则 alternation
+ * 全部误升。
+ */
+const AWK_SCRIPT_EXECUTES_COMMANDS =
+  /\bsystem\s*\(|\bENVIRON\b|\bgetline\b|\bclose\s*\(|\|\s*["']|["']\s*\||\b(?:print|printf)\b[^;}\n]*\|/;
+
+/**
+ * 解释器里**确定不吃参数**的开关。判据方向刻意反过来:登记「无值选项」,其余一律按
+ * 「可能吃掉下一个参数」处理。
+ *
+ * 为什么不登记「吃参数的选项」:那是一场赢不了的枚举竞赛,而且每漏一个都是**安全降级**。
+ * review 连续两轮实证:
+ *   - `printf 'rm -rf /outside' | bash -O extglob` —— `extglob` 是 `-O` 的值;
+ *   - `printf '…' | node --title hi` —— `hi` 是 `--title` 的值(node 24 实测会消费它)。
+ * 两次都是「值被当成脚本文件 → 认定程序来自文件 → 这条 **stdin 即程序** 的命令从红线
+ * 降进灰区」。第二次是同一条意见的重新提出 —— 说明补表的做法堵不住,必须换判据方向。
+ *
+ * 现在:只要出现表外的选项,就认为它可能吃掉后面的 token,于是「找不到可信的脚本文件
+ * 操作数」→ 按 stdin 即程序处理(红线)。代价是 `cat x | node --some-new-flag run.js`
+ * 这类会误升成必问 —— fail-closed 方向,且实测对语料零影响(见 corpus 用例)。
+ */
+const INTERPRETER_VALUELESS_OPTIONS: readonly { match: RegExp; opts: ReadonlySet<string> }[] = [
+  {
+    match: /^(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh)$/,
+    opts: new Set(['-x', '-e', '-u', '-v', '-n', '-l', '-i', '-s', '-h', '-p', '-r', '-a', '-f', '-m',
+      '--login', '--posix', '--norc', '--noprofile', '--noediting', '--restricted', '--verbose', '--debug']),
+  },
+  {
+    match: /^(?:python|pypy)\d*(?:\.\d+)*$/,
+    opts: new Set(['-u', '-B', '-E', '-I', '-O', '-OO', '-S', '-s', '-v', '-b', '-bb', '-d', '-q',
+      '-R', '-x', '-h', '-V', '--version', '--help']),
+  },
+  {
+    match: /^(?:node|nodejs|bun|deno)$/,
+    opts: new Set(['-i', '--interactive', '-v', '--version', '-h', '--help', '--no-warnings',
+      '--trace-warnings', '--trace-uncaught', '--experimental-vm-modules', '--experimental-modules',
+      '--experimental-strip-types', '--zero-fill-buffers', '--abort-on-uncaught-exception',
+      '--preserve-symlinks', '--frozen-intrinsics', '--no-deprecation', '--throw-deprecation']),
+  },
+  { match: /^perl$/, opts: new Set(['-w', '-W', '-c', '-n', '-p', '-l', '-a', '-s', '-T', '-U', '-v']) },
+  { match: /^ruby\d*(?:\.\d+)*$/, opts: new Set(['-w', '-W', '-c', '-n', '-p', '-l', '-a', '-s', '-v', '--verbose']) },
+];
+
+/**
+ * 解释器参数里能被当作**脚本文件**的操作数。
+ *
+ * 返回空数组 = 找不到可信脚本文件(要么本来就没有,要么被表外选项吃掉了)→ 调用方按
+ * 「stdin 即程序」处理。`--opt=value` 自带值,不吃后面的 token,单独放行。
+ */
+function analyzeInterpreterArgs(
+  bin: string,
+  args: readonly string[],
+): {
+  scriptOperands: string[];
+  usesModuleSelector: boolean;
+  usesInlineCode?: boolean;
+  usesInteractive?: boolean;
+} {
+  // 表里没有这个解释器 ≠ 它的选项都不吃参数。**同一套解析对所有会执行 stdin 的解释器生效**:
+  // 未建模的族(php 的 `-d display_errors=1`、lua、pwsh、julia…)一样按「表外选项 → fail-closed」
+  // 处理,否则 `printf '<?php …' | php -d display_errors=1` 会把 `display_errors=1` 当脚本文件,
+  // 让 stdin 代码执行从红线降进灰区(review P1)。空集合 = 该族没有已知的无值开关。
+  const entry = INTERPRETER_VALUELESS_OPTIONS.find((e) => e.match.test(bin));
+  const valueless = entry?.opts ?? new Set<string>();
+  // 只有 python 家族的 `-m` 是「用具名模块当程序」;其它解释器的同名短选项各有各的含义
+  // (bash `-m` = job control),不能共用一套判据。
+  const supportsModuleStartup = /^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin);
+  // 该解释器承载「程序正文」的 flag 集合。取自 interpreterInlineCodePayload 的同一份口径,
+  // 这里只需要名字(用来判**位置**),载荷本身仍由那个函数取。
+  const inlineCodeFlags = new Set(INTERPRETER_INLINE_CODE_FLAGS(bin).map((f) => f.toLowerCase()));
+  const operands: string[] = [];
+  let usesInteractive = false;
+  let usesInlineCode = false;
+  let optionsEnded = false;
+  // 按**索引**扫描:命中内联代码 flag 后要跳过它的值、继续往后找交互开关,`for…of` 做不到。
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i] as string;
+    // `--` 是**选项结束**标记,不是可以跳过的噪声:之后即使以 `-` 开头也是真实操作数
+    // (`python3 -- -weird.py` 跑的就是名为 `-weird.py` 的脚本)。原来只 `continue`,
+    // 于是它后面的操作数继续走选项分支、撞上 fail-closed,把脚本文件误判成不存在
+    // (copilot 报;与本文件 `positionalOperands` 的处理也不一致)。
+    if (!optionsEnded && token === '--') { optionsEnded = true; continue; }
+    if (!optionsEnded && token.startsWith('-')) {
+      // 交互模式 = 把 stdin 当 REPL 输入逐行执行,**无论有没有脚本或内联代码**
+      // (`node -i -e 'x'`、`node -i run.js` 都仍然会跑 stdin 送进来的代码)。
+      // 只对 node 家族判:这一族把 `-i` / `--interactive` 登记成了普通无值开关,于是
+      // 「有内联代码 / 有脚本文件 → 程序不来自 stdin」的结论被错误地套了上去(review 报)。
+      // python 的 `-i` 走的是表外 fail-closed、ruby/perl 的 `-i` 是**就地改文件**而非
+      // 交互,语义不同不能共用一套判据。
+      if (/^(?:node|nodejs|bun|deno)$/.test(bin) && (token === '-i' || token === '--interactive')) {
+        usesInteractive = true;
+        continue;
+      }
+      // `-m` / `--module`:程序来自具名模块,不读 stdin。两重限定缺一不可:
+      //  - **只对真正支持模块启动的解释器生效**(python / pypy)。`bash -m` 是 job control
+      //    开关、`node -m` / `ruby -m` 根本没有模块启动语义 —— 一律按模块选择器处理会让
+      //    `printf 'rm -rf /outside' | bash -m` 这条 stdin 即程序的命令从红线降进灰区
+      //    (review 六轮 P1)。
+      //  - **必须在这次按位扫描里判**,不能在外面对整串 args 做 `some(t => t === '-m')`:
+      //    `python3 -X -m` 里的 `-m` 是 `-X` 的值而不是选项位(review 五轮 P1)。
+      if (supportsModuleStartup && (token === '-m' || token === '--module')) {
+        return { scriptOperands: operands, usesModuleSelector: true, usesInteractive };
+      }
+      // 内联代码不能**提前返回**:交互开关可以写在它后面(`node -e 'x' -i`),提前返回就
+      // 永远看不到。实测 node v22 下 `node -e CODE -i` 会先跑 CODE、再把 stdin 当 REPL
+      // 输入逐行执行 —— 与 `-i -e` 同样危险(review 报,已用真实 node 复现)。
+      // 记下结论、跳过它的值,继续扫完剩余选项。
+      if (inlineCodeFlags.has(token.toLowerCase())) {
+        usesInlineCode = true;
+        i += 1;                       // 载荷本身不是选项,不参与后续判定
+        continue;
+      }
+      // 已知无值开关、或 `--opt=value` 自带值 → 不影响后面的 token。
+      if (valueless.has(token) || token.includes('=')) continue;
+      // 表外选项:可能吃掉下一个参数 → 无法证明后面还有真正的脚本文件,fail-closed。
+      // 这一步同时吃掉「`-m` 是某个未知选项的值」那种形态:扫描在此终止,`-m` 永远走不到
+      // 上面的模块分支。
+      return { scriptOperands: [], usesModuleSelector: false, usesInlineCode, usesInteractive };
+    }
+    operands.push(token);
+  }
+  return { scriptOperands: operands, usesModuleSelector: false, usesInlineCode, usesInteractive };
+}
+
+/**
+ * `xargs -I<占位符>` 的替换值是否落在**命令位**(而不是普通参数位)。
+ *
+ * 落在命令位 = stdin 决定跑哪个程序 = 动态代码执行,必须逐次确认。两种形态都要认:
+ *  1. **占位符就是命令名**:`xargs -I{} env {} -rf /outside` —— 剥掉包装器 `env` 之后
+ *     bin 就是 `{}`;
+ *  2. **占位符被塞进会重新解析成命令的参数**:`xargs -I{} env -S "{}"` —— `env -S` 会把
+ *     整个字符串拆成命令再执行,占位符在参数位却仍是命令来源。只看剥离后的 bin 接不住
+ *     这一类(review 五轮 P1)。
+ */
+/** 会把字符串参数**重新解析成命令**的包装器选项(`env -S`)。占位符进到这里即动态执行。 */
+const STRING_REPARSING_WRAPPER_OPTIONS = /^(?:-S|--split-string(?:=.*)?)$/;
+
+/**
+ * 占位符是否被注入到某个解释器的**源码 / 模块参数**里。
+ *
+ * `xargs -I{} node -e '{}'` 与 `xargs -I{} sh -c "{}"` 是同一件事:stdin 的每一行都会作为
+ * **程序正文**被执行。原来只列了 `-S`/`--split-string`/`-c` 三个字面选项,于是
+ * node 的 `-e`/`--eval`/`-p`、perl 的 `-e`/`-E`、ruby/lua 的 `-e`、php 的 `-r`、
+ * pwsh 的 `-Command`/`-EncodedCommand`、python 的 `-m <模块>` 全部漏判(实测 11 种形态)。
+ *
+ * 这里不再自己列表 —— 直接复用既有的两份「哪个 flag 承载程序正文」真源:
+ * `interpreterInlineCodePayload`(各解释器的内联代码 flag)与 `shellCommandPayload`
+ * (shell 的 `-c`)。它们本就是 `interpreterReadsProgramFromStdin` 判「程序是不是字面量」
+ * 用的同一份知识,复用即同族一次覆盖,将来加解释器也不会再漏这一侧。
+ */
+function replacementFeedsInterpreterSource(
+  argv: string[],
+  matches: (token: string) => boolean,
+): boolean {
+  const inlineCode = interpreterInlineCodePayload(argv);
+  if (inlineCode !== null && matches(inlineCode)) return true;
+  const shellPayload = shellCommandPayload(argv);
+  if (shellPayload !== null && matches(shellPayload)) return true;
+  // `python3 -m {}`:模块名由 stdin 决定 = stdin 选择跑哪个程序,与源码注入同级。
+  const bin = executableName(argv[0] ?? '');
+  if (/^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin)) {
+    const moduleIndex = argv.findIndex((t) => t === '-m' || t === '--module');
+    if (moduleIndex >= 0 && matches(argv[moduleIndex + 1] ?? '')) return true;
+  }
+  return false;
+}
+/**
+ * 不用 `-I` 也能让 stdin 决定跑什么:xargs 把输入项**追加**到 `COMMAND [INITIAL-ARGS]` 后面。
+ * 如果命令末尾正好是一个「等着接程序正文」的选项,那个空位就由 stdin 补上:
+ *
+ *     printf 'touch /outside/pwn' | xargs env -S       ← 输入被 env -S 拆成命令执行
+ *     printf 'evilmod'            | xargs python3 -m   ← 输入选择跑哪个模块
+ *     printf '…'                  | xargs node -e      ← 输入就是源码
+ *
+ * 判据仍复用同一份真源:`interpreterInlineCodePayload` / `shellCommandPayload` 在 flag 存在
+ * 但**没有值**时返回空串 —— 那正是「值等着 stdin 来填」的信号(review 报的新变体)。
+ */
+function xargsStdinFillsProgramSlot(tokens: string[]): boolean {
+  const nested = xargsCommandTokens(tokens);
+  if (nested === null || nested.length === 0) return false;
+  const variants = [nested, unwrapWrappers(nested)];
+  for (let i = 0; i < nested.length; i++) {
+    if (isPipeExecutor(executableName(nested[i] ?? ''))) variants.push(nested.slice(i));
+  }
+  for (const argv of variants) {
+    const last = argv[argv.length - 1] ?? '';
+    // `env -S` / `--split-string` 结尾:stdin 被当命令串拆开执行。
+    if (STRING_REPARSING_WRAPPER_OPTIONS.test(last)) return true;
+    // 内联代码 / shell -c flag 存在但缺值 → 空位由 stdin 填。
+    const inlineCode = interpreterInlineCodePayload(argv);
+    if (inlineCode === '') return true;
+    const shellPayload = shellCommandPayload(argv);
+    if (shellPayload === '') return true;
+    // `python3 -m` 结尾:模块名由 stdin 决定。
+    if ((last === '-m' || last === '--module')
+      && /^(?:python|pypy)\d*(?:\.\d+)*$/.test(executableName(argv[0] ?? ''))) return true;
+  }
+  return false;
+}
+
+/**
+ * GNU parallel 的替换串:`{}` `{.}` `{/}` `{//}` `{/.}` `{#}` `{%}` `{1}` `{2.}`,以及含空白的
+ * **Perl 表达式替换串** `{= $_ =}`(review 报:只认无空白形态会让它完全不可见)。
+ * 与 xargs 的 `-I` 占位符是同一件事 —— 值由 stdin 的输入行填,只是 parallel 缺省就带。
+ */
+const PARALLEL_REPLACEMENT = /\{=[^{}]*=\}|\{[^{}\s]*\}/;
+
+/**
+ * 占位符是否落在**程序位**(命令名 / 模块名 / 内联源码 / 第一个脚本操作数)。
+ *
+ * xargs 的 `-I` 与 parallel 的 `{}` 共用这一个入口 —— 两者的语义完全一样:替换值来自
+ * stdin,落在程序位就等于「跑什么由 stdin 决定」。`matches` 由调用方给:xargs 传具体
+ * 占位符的包含判定,parallel 传替换串正则。
+ */
+function replacementDrivesProgramSlot(
+  nested: string[],
+  matches: (token: string) => boolean,
+): boolean {
+  // 形态 2:占位符虽在**参数位**,却仍是程序来源。两类都要判(带包装器与不带各查一遍,
+  // `xargs -I{} env node -e '{}'` 只有剥掉 `env` 之后才看得见 node 的 `-e`):
+  //   a) 会把字符串重新解析成命令的包装器选项(`env -S "{}"`);
+  //   b) 解释器的源码 / 模块参数(`node -e '{}'`、`php -r '{}'`、`python3 -m {}` …)。
+  // 包装链形态很多(`env node -e`、`env FOO=1 node -e`、`nohup node -e`、`timeout 5 node -e`),
+  // `unwrapWrappers` 只认得其中一部分 —— 实测 `xargs -I{} env node -e '{}'` 剥不出来。
+  // 与其依赖它,不如**从每个解释器起点扫后缀**:任意前缀是什么包装器都不影响判定。
+  const argvVariants = [nested, unwrapWrappers(nested)];
+  for (let i = 0; i < nested.length; i++) {
+    if (isPipeExecutor(executableName(nested[i] ?? ''))) argvVariants.push(nested.slice(i));
+  }
+  for (const argv of argvVariants) {
+    if (argv.some((t, k) => STRING_REPARSING_WRAPPER_OPTIONS.test(t)
+      && (matches(argv[k + 1] ?? '') || matches(t)))) return true;
+    if (replacementFeedsInterpreterSource(argv, matches)) return true;
+    // c) 占位符落在解释器的**脚本操作数位**(`xargs -I{} python3 {}`、`parallel python3 {}`):
+    //    跑哪个脚本由 stdin 决定,与「程序位空着等 stdin 补」是同一件事的显式写法。
+    //    只看**第一个**操作数 —— 它才是程序;后面的操作数是传给脚本的 argv,
+    //    `xargs -I{} node run.js {}` 跑的始终是 run.js,占位符在那里只是数据。
+    const abin = executableName(argv[0] ?? '');
+    const firstOperand = analyzeInterpreterArgs(abin, argv.slice(1)).scriptOperands[0];
+    if (isPipeExecutor(abin) && firstOperand !== undefined && matches(firstOperand)) return true;
+  }
+  // 形态 1:占位符就是命令名(包装器剥离前后的首个 token)。
+  // 比对**原 token 与归一化后的 bin 两者**:`executableName` 会做小写/取基名等归一化,
+  // 只比归一化结果时 `-I PH … PH`(大小写)与 `-I{} … {}`(特殊字符)会漏判 —— 实测
+  // 只有 `-I % … %` 这种恰好归一化不变的形态能命中,等于判据大半失效。
+  // `unwrapWrappers` 还会改写某些形态的首 token,所以剥与不剥都要比。
+  return [nested[0] ?? '', unwrapWrappers(nested)[0] ?? '']
+    .some((t) => matches(t) || matches(executableName(t)));
+}
+
+/**
+ * parallel 的替换串是否落在程序位。与 xargs 的区别只在:占位符是缺省的、而且 parallel
+ * 的选项集合没有建模 —— 所以命令位从 `positionalOperands` 取,解释器位仍靠后缀扫描,
+ * 两条路都不依赖完整的选项表。
+ */
+function parallelReplacementDrivesCommand(tokens: string[]): boolean {
+  const rest = tokens.slice(1);
+  if (!rest.some((t) => PARALLEL_REPLACEMENT.test(t))) return false;
+  const matches = (t: string) => PARALLEL_REPLACEMENT.test(t);
+  const operands = positionalOperands(rest);
+  if (operands.length > 0 && replacementDrivesProgramSlot(operands, matches)) return true;
+  return replacementDrivesProgramSlot(rest, matches);
+}
+
+function xargsReplacementDrivesCommand(tokens: string[]): boolean {
+  // 占位符解析必须区分「吃下一个参数」和「用缺省 {}」两类,否则会把命令名当成占位符:
+  //   -I R / -I{}         GNU xargs 的 -I **必须**带参数(分离或紧贴);
+  //   -i / -i{}           已废弃的 -i,参数**可选**,裸写时缺省 `{}` —— 裸 `-i` 后面那个
+  //                       token 是命令名,不能当占位符消费(review P1:`xargs -i env {} -rf`
+  //                       原来把 `env` 认成占位符,判据整个失效);
+  //   --replace / --replace=R  同 -i,参数可选。
+  let placeholder: string | null = null;
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i] as string;
+    if (t === '-I') placeholder = tokens[i + 1] ?? '{}';
+    else if (/^-I./.test(t)) placeholder = t.slice(2);
+    // macOS / BSD xargs 的 `-J replstr` 是同一件事(替换参数里首次出现的 replstr),
+    // `xargsCommandTokens` 早已把它登记成带值选项,却没接进动态程序位判定(review 报)。
+    else if (t === '-J') placeholder = tokens[i + 1] ?? '';
+    else if (/^-J./.test(t)) placeholder = t.slice(2);
+    else if (t === '-i' || t === '--replace') placeholder = '{}';
+    else if (/^-i./.test(t)) placeholder = t.slice(2);
+    else if (t.startsWith('--replace=')) placeholder = t.slice('--replace='.length) || '{}';
+    if (placeholder) break;
+  }
+  if (!placeholder) return false;
+  const nested = xargsCommandTokens(tokens);
+  if (nested === null) return false;                              // 选项形态未知,交既有分支处理
+  return replacementDrivesProgramSlot(nested, (t) => t.includes(placeholder as string));
+}
+
+/**
+ * 字面量程序(`-e` / `-c` 的载荷)自己**去读 stdin**。
+ *
+ * 这类写法的字面源码只是个引导器,真正执行的是输入内容:
+ *
+ *     printf '…' | node -e "eval(require('fs').readFileSync(0,'utf8'))"
+ *     printf '…' | python3 -c "exec(open(0).read())"
+ *
+ * 判据必须**两个条件同时成立**:载荷既引用 stdin,又对它做动态求值。
+ *
+ * 先试过只判「碰没碰 stdin」(理由是「能证明不读输入」才该降级),实测把语料里 7 条
+ * `… | python3 -c "data=json.load(sys.stdin) …"` 打成了红线 —— 那是**把 stdin 当数据
+ * 读**,是 agent 处理 JSON 的日常写法,正是本 PR 要消除的那类误报。「读输入」和
+ * 「把输入当代码跑」必须分开。
+ *
+ * 求值那半是尽力而为的黑名单,所以只在**已经引用了 stdin** 的载荷上生效 —— 两个条件
+ * 叠加后误报面很小,漏判也仍有灰区 AI 审阅器兜底。名字按**族**写而不是逐个列:
+ * `exec\w*` / `spawn\w*` 一次覆盖 `execSync` / `execFile` / `spawnSync` 等全部变体,
+ * 并直接认 `child_process` / `subprocess` 这两个模块名 —— 只列 `eval` 和少数几个方法名
+ * 是漏判的直接成因(review 报)。
+ */
+const PROGRAM_READS_STDIN = /\bstdin\b|\bSTDIN\b|<STDIN>|\/dev\/stdin|\b(?:read|open|createReadStream)\w*\s*\(\s*0\b|\bgets\b/;
+const PROGRAM_EVALUATES_INPUT = /\b(?:eval|exec\w*|spawn\w*|system|popen|compile|instance_eval|class_eval|module_eval|assert)\s*\(|\b(?:new\s+)?Function\s*\(|\bvm\.runIn|\bchild_process\b|\bsubprocess\b|\beval\s+|\bsource\s+/;
+
+function interpreterProgramConsumesStdin(tokens: string[]): boolean {
+  const payload = interpreterInlineCodePayload(tokens) ?? shellSourceSelectorPayload(tokens);
+  if (payload === null) return false;
+  return PROGRAM_READS_STDIN.test(payload) && PROGRAM_EVALUATES_INPUT.test(payload);
+}
+
+function interpreterReadsProgramFromStdin(tokens: string[]): boolean {
+  const bin = executableName(tokens[0] ?? '');
+  if (!isPipeExecutor(bin)) return false;
+  // stdin → 参数(不是程序);真正要跑的命令交下方 xargsCommandTokens 递归审查。两个例外:
+  //  - `xargs sh -c`:stdin 直接变成 shell 的命令串 = 任意命令执行;
+  //  - 裸 `parallel`(无命令操作数):GNU parallel 把 stdin 的每一行**当命令执行**
+  //    (裸 `xargs` 不同,它缺省是 echo,无副作用)。
+  //
+  // 注意顺序:这一分支与下面的 awk 必须排在裸 `-` 判据**之前** —— 对这三个 bin,`-` 是
+  // 「stdin 作为**数据**输入」的占位符,不是「stdin 作为程序」(review 指出:
+  // `… | awk -f script.awk -` 会被误升成确定性红线)。
+  if (bin === 'xargs' || bin === 'parallel') {
+    if (tokens.slice(1).some((t) => SHELL_EXECUTORS.has(executableName(t)))) return true;
+    // xargs / parallel 把输入项**追加**到命令后面。解释器的脚本操作数位空着时,那个位置就
+    // 由 stdin 补上 —— `printf '/tmp/evil.py' | xargs python3` 会真的去执行那个脚本
+    // (review 报)。问的是同一个问题「程序位是不是空的」,所以直接对嵌套命令递归。
+    // 反面同样重要:`printf 'x' | xargs python3 run.py` 里 stdin 只是 run.py 的 argv,
+    // 程序位已被静态脚本占住 —— 递归自然返回 false,不回退成本 PR 已消除的那条误报。
+    // parallel 的选项集合没有建模(`--pipe`、`-j 2`、`--colsep …`),直接拿 `tokens.slice(1)`
+    // 会让首个选项挡住真正的 COMMAND —— `parallel --pipe python3` 把输入送进每个 job 的
+    // stdin,那就是 python 的源码,却因为递归只看到 `--pipe` 而落灰区(review 报)。
+    // 与其逐个登记选项(登记必漏,这一轮已经证明过),不如**从每个非选项 token 起扫后缀**:
+    // 真正的 COMMAND 一定是其中之一,任意前缀是什么选项都不影响判定。
+    const candidates: string[][] = [];
+    if (bin === 'xargs') {
+      const parsed = xargsCommandTokens(tokens);
+      if (parsed !== null && parsed.length > 0) candidates.push(parsed);
+    } else {
+      const rest = tokens.slice(1);
+      rest.forEach((t, i) => { if (!t.startsWith('-')) candidates.push(rest.slice(i)); });
+    }
+    for (const nested of candidates) {
+      const inner = unwrapWrappers(nested);
+      // **包装器自己就缺 COMMAND**(`xargs env`、`xargs nohup`、`xargs timeout 5`、
+      // `xargs env FOO=1`):剥完壳什么都不剩 = 命令位空着,由 stdin 的第一个输入项填上,
+      // 那一项就是真正被执行的程序(review 报)。这一族按「剥壳后还剩不剩命令」统一判,
+      // 不逐个登记包装器名 —— 包装器集合已经在 `COMMAND_WRAPPERS` 里维护了一份。
+      // 前提必须是**真的以包装器开头**:后缀扫描会产生 `{}` 这种候选,它剥完同样是空,
+      // 但那是占位符不是包装器 —— 少了这道前提会把 `parallel echo {}` 误升成红线(自查)。
+      if (inner.length === 0
+        && COMMAND_WRAPPERS.has(executableName(nested[0] ?? ''))) return true;
+      if (interpreterReadsProgramFromStdin(inner)) return true;
+    }
+    // 注:parallel 的 `{}` 占位符判定同样**不在这里** —— 与 xargs 一样,本分支拿到的
+    // tokens 已被 `unwrapCommand` 剥掉 parallel 自己,挂在这里就是死代码。真正的调用点
+    // 在 `highImpactExecutionNeedsConsent`,按未剥离的 literalTokens 判。
+    // 注:`-I` 占位符落在命令位的判定**不在这里** —— 本分支拿到的 tokens 已被
+    // `unwrapCommand` 剥掉 xargs 本身,挂在这里是死代码。真正的调用点在
+    // `highImpactExecutionNeedsConsent` 的 xargs 块(按 rawTokens 判)。
+    return bin === 'parallel' && positionalOperands(tokens.slice(1)).length === 0;
+  }
+  // awk 家族:程序是第一个操作数或 -f 脚本文件,不可能来自 stdin —— **除非**那段字面脚本
+  // 自己把数据交出去执行(`awk '{system($0)}'` 逐行当 shell 命令跑,`print | "sh"` 同理)。
+  // 脚本是静态可见的,直接查这几个出口即可,不必把整个 awk 打成红线。
+  if (/^(?:(?:g|m|n|go)?awk)\d*(?:\.\d+)*$/.test(bin)) {
+    return tokens.slice(1).some((t) => AWK_SCRIPT_EXECUTES_COMMANDS.test(t));
+  }
+  // 裸 `-` 操作数是各解释器「从 stdin 读**程序**」的通用写法(`powershell -Command -`、
+  // `python3 -`、`sh -`)。放在 awk/xargs/parallel 之后:对它们 `-` 是数据占位符。
+  if (tokens.slice(1).some((t) => t === '-')) return true;
+  // 字面量程序(shell -c / 解释器 -e/-c/--eval):静态可见,且各自另有递归审查。
+  // 例外:载荷正好是 `-`(如 `powershell -Command -`、`python -c -`)是**从 stdin 读程序**
+  // 的标准写法,不是字面量代码 —— 放行它等于把 `下载 | 解释器` 整条漏掉。
+  // shell 的 `-s`(含簇写)= **强制从 stdin 读脚本**,后面的操作数只是位置参数、不是脚本
+  // 文件。必须在操作数判定之前直接收口,否则 `printf 'rm -rf /outside' | bash -s arg` 里的
+  // `arg` 会被当脚本文件、把「stdin 即程序」降进灰区(review 报)。
+  if (SHELL_EXECUTORS.has(bin)
+    && tokens.slice(1).some((t) => /^-[a-zA-Z]*s[a-zA-Z]*$/.test(t))) return true;
+  // 「有字面量程序 → 程序独立于 stdin」只在那段字面源码**不碰 stdin** 时成立。必须排在
+  // 下面所有「有源码 / 有脚本 → 返回 false」的分支之前,否则永远走不到(review 报)。
+  if (interpreterProgramConsumesStdin(tokens)) return true;
+  // 源码选择器必须按位解析:`bash --rcfile -c` 里的 `-c` 是 `--rcfile` 的值,shell 仍读 stdin。
+  const shellPayload = shellSourceSelectorPayload(tokens);
+  if (shellPayload !== null && shellPayload.trim() !== '-') return false;
+  // 选项与操作数**按位**解析一次,同时得出「有没有模块选择器」和「有没有可信脚本文件」——
+  // 两者必须同源,否则 `python3 -X -m` 里作为 `-X` 值的 `-m` 会被误当模块选择器,绕过
+  // fail-closed(review 五轮 P1)。裸 `-` 是 stdin 占位符,不算脚本文件
+  // (`curl … | python3 -` 仍必须是红线)。
+  const { scriptOperands, usesModuleSelector, usesInlineCode, usesInteractive } =
+    analyzeInterpreterArgs(bin, tokens.slice(1));
+  if (usesInteractive) return true;                     // `node -i …`:stdin 进 REPL 直接执行
+  if (usesModuleSelector) return false;                 // `python3 -m json.tool`:具名模块
+  if (usesInlineCode) return false;                     // `python3 -c '…'`:程序是字面量
+  if (scriptOperands.filter((t) => t !== '-').length > 0) return false;
+  return true;
+}
+
+/**
+ * shell **不吃参数**的短选项字符 / 长选项。与解释器表同一个 fail-closed 方向:只登记确定
+ * 无值的,其余(`-o option`、`-O shopt`、`--rcfile FILE`、zsh `--emulate SHELL`…)一律当作
+ * 「可能吃掉下一个 token」。
+ */
+const SHELL_VALUELESS_SHORT_FLAGS: ReadonlySet<string> = new Set(
+  ['a', 'b', 'e', 'f', 'h', 'i', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'u', 'v', 'x',
+    'B', 'C', 'D', 'E', 'H', 'P', 'T'],
+);
+const SHELL_VALUELESS_LONG_OPTIONS: ReadonlySet<string> = new Set([
+  '--login', '--interactive', '--norc', '--noprofile', '--noediting', '--posix',
+  '--restricted', '--verbose', '--debug', '--debugger', '--dump-strings',
+  '--dump-po-strings', '--protected', '--pretty-print', '--no-rcs', '--no-globalrcs',
+  '--help', '--version',
+]);
+
+/**
+ * shell 的源码选择器(`-c`)是否落在**真实选项位**;落在选项位时返回它的命令字符串。
+ *
+ * 与 `analyzeInterpreterArgs` 同一套按位解析:`bash --rcfile -c` 里的 `-c` 是 `--rcfile`
+ * 的**值**,bash 仍然从 stdin 执行 —— 位置无关地搜 `-c` 会把这条「stdin 即程序」误判成
+ * 「程序是字面量」、从确定性必问降进灰区(review 报)。表外选项即 fail-closed 返回 null,
+ * 由调用方按「找不到可信的源码选择器」处理。
+ *
+ * 只服务于 stdin 判定;取**载荷**仍用 `shellCommandPayload`(那边的宽松搜索是为了把内层
+ * 命令递归交出去审,收紧它反而会漏掉内层红线)。
+ */
+function shellSourceSelectorPayload(tokens: string[]): string | null {
+  if (!SHELL_EXECUTORS.has(executableName(tokens[0] ?? ''))) return null;
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i] as string;
+    if (token === '--') return null;
+    if (token === '--command') return tokens[i + 1] ?? '';
+    if (token.startsWith('--')) {
+      if (token.includes('=') || SHELL_VALUELESS_LONG_OPTIONS.has(token)) continue;
+      return null;                                    // 表外长选项:可能吃掉下一个 token
+    }
+    if (!/^[-+][A-Za-z]+$/.test(token)) return null;  // 操作数位:后面不会再有选项
+    const chars = token.slice(1).split('');
+    const cAt = chars.indexOf('c');
+    // 簇写里只有 `c` **之前**全是无值开关时(`-lc` / `-xec`),下一个 token 才确定是命令字符串。
+    if (cAt >= 0) {
+      return chars.slice(0, cAt).every((ch) => SHELL_VALUELESS_SHORT_FLAGS.has(ch))
+        ? tokens[i + 1] ?? '' : null;
+    }
+    if (chars.every((ch) => SHELL_VALUELESS_SHORT_FLAGS.has(ch))) continue;
+    return null;                                      // 表外短选项:同样 fail-closed
+  }
+  return null;
+}
+
 /** shell 的 `-c` 可与其它短选项组合（如 `-lc` / `-xec`）；返回其命令字符串。 */
 function shellCommandPayload(tokens: string[]): string | null {
   if (!SHELL_EXECUTORS.has(executableName(tokens[0] ?? ''))) return null;
@@ -1211,11 +1920,14 @@ function shellCommandPayload(tokens: string[]): string | null {
   return null;
 }
 
-/** 常见解释器把下一参数当源码执行的 flag / 子命令。 */
-function interpreterInlineCodePayload(tokens: string[]): string | null {
-  const bin = executableName(tokens[0] ?? '');
-  if (bin === 'deno' && tokens[1]?.toLowerCase() === 'eval') return tokens[2] ?? '';
-  const flags = /^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin) ? ['-c']
+/**
+ * 各解释器「把下一参数当源码执行」的 flag 名。抽成单点是因为有两个消费者:
+ * `interpreterInlineCodePayload` 取**载荷**,`analyzeInterpreterArgs` 判**位置**
+ * (`python3 -X -c` 里的 `-c` 是 `-X` 的值,不是源码选项)。两边必须同源,否则又会出现
+ * 「一个位置无关、一个位置相关」的错配。
+ */
+function INTERPRETER_INLINE_CODE_FLAGS(bin: string): string[] {
+  return /^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin) ? ['-c']
     : /^(?:node|nodejs|bun)$/.test(bin) ? ['-e', '--eval', '-p', '--print']
       : /^(?:ruby|lua|luajit)\d*(?:\.\d+)*$/.test(bin) ? ['-e']
         : bin === 'perl' ? ['-e', '-E']
@@ -1223,12 +1935,28 @@ function interpreterInlineCodePayload(tokens: string[]): string | null {
             : /^(?:pwsh|powershell)$/.test(bin) ? ['-c', '-command', '-e', '-encodedcommand']
               : /^(?:r|rscript|julia|groovy|swift|osascript)$/.test(bin) ? ['-e', '--eval']
                 : [];
+}
+
+/** 常见解释器把下一参数当源码执行的 flag / 子命令。 */
+function interpreterInlineCodePayload(tokens: string[]): string | null {
+  const bin = executableName(tokens[0] ?? '');
+  if (bin === 'deno' && tokens[1]?.toLowerCase() === 'eval') return tokens[2] ?? '';
+  const flags = INTERPRETER_INLINE_CODE_FLAGS(bin);
+  // 两遍扫描:**先把所有 flag 的精确匹配试完,再试紧贴值形态**。
+  // 单遍按 flag 顺序会让短选项的紧贴分支抢在长选项的精确匹配之前 —— pwsh 的 `-Command`
+  // 被 `-c` 当成「紧贴值 `ommand`」吃掉,于是拿不到真正的载荷,
+  // `xargs -I{} pwsh -Command '{}'` 这类占位符注入源码的形态判不出来(review 七轮)。
   for (let i = 1; i < tokens.length; i++) {
-    const token = tokens[i];
+    const lower = (tokens[i] as string).toLowerCase();
+    for (const flag of flags) {
+      if (lower === flag.toLowerCase()) return tokens[i + 1] ?? '';
+    }
+  }
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i] as string;
     const lower = token.toLowerCase();
     for (const flag of flags) {
       const normalizedFlag = flag.toLowerCase();
-      if (lower === normalizedFlag) return tokens[i + 1] ?? '';
       if (normalizedFlag.startsWith('--') && lower.startsWith(`${normalizedFlag}=`)) {
         return token.slice(flag.length + 1);
       }
@@ -1286,8 +2014,13 @@ function xargsCommandTokens(tokens: string[]): string[] | null {
   const longFlags = new Set([
     '--null', '--no-run-if-empty', '--verbose', '--interactive', '--exit',
     '--show-limits', '--open-tty', '--help', '--version',
+    // `--replace` 的参数是**可选**的(等同已废弃的 `-i`),裸写时缺省 `{}` 而**不**消费
+    // 下一个 token —— 原来把它登记成「必带参数」,于是 `xargs --replace env {} -rf /outside`
+    // 里的命令名 `env` 被当成占位符吃掉,嵌套命令整个看不见(review P1)。
+    // 带值形态由下面的 `--replace=` 分支处理。
+    '--replace',
   ]);
-  const longWithValue = /^(?:--arg-file|--delimiter|--eof|--replace|--max-lines|--max-args|--max-procs|--max-chars|--process-slot-var)$/;
+  const longWithValue = /^(?:--arg-file|--delimiter|--eof|--max-lines|--max-args|--max-procs|--max-chars|--process-slot-var)$/;
   const longAttachedValue = /^(?:--arg-file|--delimiter|--eof|--replace|--max-lines|--max-args|--max-procs|--max-chars|--process-slot-var)=/;
   let i = 1;
   while (i < tokens.length) {
@@ -1437,14 +2170,41 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     if (unwrapped.wrapperUnresolved) return true;
     const bin = executableName(tokens[0] ?? '');
     const rawTokens = unwrapCommand(tokenize(text)).tokens;
+    // `xargs -I<占位符>` 的判定必须用**未剥包装器**的 token:`unwrapCommand` 会把 xargs 自己
+    // 剥掉(`tokens` / `rawTokens` 的首元素已经是内层命令),挂在剥离后的形态上就是死代码。
+    // 自查发现:`cat e.txt | xargs -I{} {} --version` 一直落灰区 —— 之前误以为已修,
+    // 那两条变红是被区外破坏目标与 wrapperUnresolved 撞上的,不是这条判据生效(review 五轮)。
+    const literalTokens = tokenize(text);
+    if (executableName(literalTokens[0] ?? '') === 'xargs'
+      && (xargsReplacementDrivesCommand(literalTokens)
+        || xargsStdinFillsProgramSlot(literalTokens))) return true;
+    // parallel 的 `{}` 与 xargs 的 `-I` 占位符是同一件事(值由 stdin 的输入行填),只是
+    // parallel 缺省就带 —— 落在程序位同样是「跑什么由 stdin 决定」(review 报)。
+    // 与上面同理:必须用未剥离的 literalTokens,parallel 自己已经被 unwrapCommand 剥掉了。
+    if (executableName(literalTokens[0] ?? '') === 'parallel'
+      && parallelReplacementDrivesCommand(literalTokens)) return true;
     // 去引号+去反斜杠的 normalized 会抹掉 Windows 盘符路径的 `\` 分隔符,令 `"C:\…\pwsh.exe"` 这类
     // 完整路径解释器识别不出(copilot 报)→ 额外用保留反斜杠的 rawTokens 求一次 bin,任一命中即算执行器。
     const rawBin = executableName(rawTokens[0] ?? '');
     if (fromPipe && !unwrapped.inspectionOnly) {
-      if (isPipeExecutor(bin) || isPipeExecutor(rawBin)) return true;
-      // An incomplete interpreter enum must never turn remote "download and
-      // execute" into a model-allowable gray action. Only consumers proven
-      // passive by the existing read-only classifier may keep the pipeline in Auto.
+      // 确定性红线只留一种形状:**stdin 就是被执行的程序**(`curl … | sh`)。
+      //
+      // 程序为字面量/具名模块/脚本文件的解释器(`| awk '…'`、`| python3 -m json.tool`、
+      // `| python3 -c '…'`、`| xargs grep`)一律降到灰区交审阅器判 —— 包括管道左侧是
+      // curl/wget 的情形。理由:
+      //  - 这一层是三个 harness 共用的 **fallback**,不是唯一防线;灰区背后有轻量审阅器,
+      //    「AI 看一眼」严格优于「不可跳过的硬弹窗」;
+      //  - 实机语料实测,这条规则产出的红线里真正管道到 shell 的是 0 条,却把
+      //    `curl 本机 devtools | python3 -m json.tool` 这类日常调试打成必问;
+      //  - 对照 Claude Code:它的 auto 档把判定整个交给分类器,本地**没有**任何
+      //    「下载即执行」确定性表,`Bash(curl *)` 还是官方示例里的常规放行规则。
+      if (interpreterReadsProgramFromStdin(tokens)
+        || interpreterReadsProgramFromStdin(rawTokens)) return true;
+      // 但「下载的内容喂给一个**无法证明是被动读取**的消费者」仍是红线:`curl … | ./run`、
+      // `xargs curl … | ./run` —— 消费者是未知可执行文件时,静态无从判断它拿 stdin 干什么。
+      // 只有被只读分类器证明为被动的消费者(jq / head / tee 之外的只读集)才留在灰区。
+      // 代价:`curl 本机 devtools | python3 -m json.tool` 这类仍必问(语料里 1 条),
+      // 换取「远端内容进未知消费者」这条边界不塌 —— 这是本次放宽里唯一保留的 curl 相关红线。
       if (pipeCarriesRemoteContent && !isSafeReadonlyBin(bin, normalized, tokens)) return true;
     }
     if (bin === 'eval' || rawBin === 'eval') return true;
@@ -1999,6 +2759,73 @@ function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): bool
 }
 
 /**
+ * sed 的**纯读文件**形态(`sed -n 495,545p file`):agent 最高频的分页读文件方式,实机语料
+ * 里大量出现,不该每次都进灰区审阅。只放行静态可证只读的窄子集:
+ *   - flag 仅允许 -n/-E/-r(及其组合);-i/-e/-f/-s 等一律不放(改文件/多脚本/脚本文件);
+ *   - 脚本操作数必须是**纯数字地址 + p**(`1p`、`1,80p`、`10,$p`)—— 正则地址、s///、w、e 等
+ *     全部落灰区(w 写文件、e 执行命令,正则地址静态难证边界);
+ *   - 其余操作数是输入文件(读凭证文件由 ALWAYS_ASK_PATTERNS 在整条命令上先行拦截)。
+ */
+function isSafeReadonlySed(tokens: string[]): boolean {
+  let script: string | null = null;
+  for (const t of tokens.slice(1)) {
+    if (t === '--') continue;
+    if (t.startsWith('-')) {
+      if (!/^-[nEr]+$/.test(t)) return false;
+      continue;
+    }
+    if (script === null) {
+      script = t;
+      continue;
+    }
+    // 文件操作数:任意路径都可(只读);凭证路径已被整条命令级红线拦下。
+  }
+  return script !== null && /^\d+(?:,(?:\d+|\$))?p$/.test(script);
+}
+
+/**
+ * gh CLI 的只读子命令(`gh pr view` / `gh issue list` / `gh run list` 等):纯查询、不改远端
+ * 状态,实机语料的高频段。放行条件:
+ *   - `gh <command> <subcommand>` 精确命中白名单读操作对(`gh api` **不在列** —— 可发任意
+ *     mutation;`gh pr create/merge/close` 等写操作不在列);
+ *   - 不带 `--web`/`-w`(转浏览器打开,行为出静态审查面,fail-closed 不放)。
+ * 查询串发往 GitHub API 属用户自己账号的读操作,与 isSafeFetch 拦的「GET 查询串 exfil」
+ * 不同源(攻击者读不到用户的查询),不因带 --search 升级。
+ */
+const SAFE_GH_READONLY_SUBCOMMANDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['pr', new Set(['view', 'list', 'diff', 'checks', 'status'])],
+  ['issue', new Set(['view', 'list', 'status'])],
+  ['run', new Set(['view', 'list'])],
+  ['release', new Set(['view', 'list'])],
+  ['repo', new Set(['view'])],
+  ['workflow', new Set(['view', 'list'])],
+  ['label', new Set(['list'])],
+  ['gist', new Set(['view', 'list'])],
+  ['search', new Set(['repos', 'issues', 'prs', 'code', 'commits'])],
+  ['auth', new Set(['status'])],
+]);
+
+function isSafeReadonlyGh(tokens: string[]): boolean {
+  const command = tokens[1];
+  const sub = tokens[2];
+  if (!command || command.startsWith('-') || !sub || sub.startsWith('-')) return false;
+  const safeSubs = SAFE_GH_READONLY_SUBCOMMANDS.get(command.toLowerCase());
+  if (!safeSubs || !safeSubs.has(sub.toLowerCase())) return false;
+  return tokens.slice(3).every((t) => {
+    // --web 把结果转到浏览器打开,行为出静态审查面。
+    // 等号形态 `--web=true` 是同一个 flag,gh 照常接受(review 报)。
+    if (/^--web(?:$|=)/.test(t)) return false;
+    // `gh auth status --show-token` 会把**可复用的 GitHub 令牌**打进工具输出、进而进模型
+    // 上下文 —— 这是凭证读取,必须逐次确认,不能因为 `auth status` 在只读表里就放行
+    // (review P1)。等号形态 `--show-token=true` 是同一个 flag,必须一并拦(review 二轮)。
+    if (/^--show-token(?:$|=)/.test(t)) return false;
+    // 短选项可簇写(`-wt`、`-tw`),按**包含**判定 fail-closed:`w` = --web,`t` = --show-token。
+    if (/^-[a-zA-Z]*[wt]/.test(t)) return false;
+    return true;
+  });
+}
+
+/**
  * curl/wget 的只读 GET → 放行(命令行浏览器场景;stdout 默认)。放行条件全部满足:
  *   - 无上传 / 非 GET 方法(bin 各自的 upload flag),无落盘到文件(-o/-O/--output);
  *   - **能认出一个 URL/host 目标**——认不出(无位置参数 / 参数不像 URL)一律 fail-closed 升级,
@@ -2202,7 +3029,88 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   return true;
 }
 
-function classifyGit(tokens: string[], segment: string): ReviewVerdict {
+const SAFE_GIT_GLOBAL_FLAGS: ReadonlySet<string> = new Set([
+  '--no-pager', '--no-replace-objects', '--bare',
+  '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs',
+  '--icase-pathspecs', '--no-optional-locks',
+]);
+
+function isTrustedGitCwdPath(
+  target: string | undefined,
+  workspaceRoots: string[],
+  cwd: string | undefined,
+  cwdUnknown: boolean,
+  platform: NodeJS.Platform | undefined,
+): boolean {
+  // Git 会从 -C 指向的仓库读取配置；配置可激活外部 helper。纯词法检查无法确认工作区
+  // 子目录不是指向区外的 symlink，因此只允许它精确等于宿主已确认的 cwd（无 cwd 时为主工作区根）。
+  if (!target || /[$`~{}*?[\]]/.test(target) || cwdUnknown) return false;
+  const forward = toForwardSlashes(target);
+  // `chdir` 先跟随 symlink、再处理 `..`。词法 normalize 会把 `/repo/link/..` 错折成
+  // `/repo`，所以只允许不含 `.`/`..`/空分量的绝对路径，且必须精确等于宿主确认 cwd。
+  if (!isAbsolutePath(forward) || forward.split('/').slice(1).some((part) => part === '' || part === '.' || part === '..')) return false;
+  const base = cwd ?? workspaceRoots[0];
+  if (!base) return false;
+  const aliasFirmlinks = (platform ?? process.platform) === 'darwin';
+  return canonicalPath(forward, aliasFirmlinks) === canonicalPath(base, aliasFirmlinks);
+}
+
+function parseGitInvocation(
+  tokens: string[],
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): { sub?: string; args: string[] } | undefined {
+  // Git 的全局选项位于子命令之前。`git -C /repo show` 中 `/repo` 不是子命令；若直接
+  // 寻找第一个非 `-` token，会把它误判为子命令而把只读 show 降级为 prompt。
+  // 这里只消费能够静态确认的全局选项。未知/缺值选项一律返回 undefined，让调用方 fail-closed。
+  let index = 1;
+  while (index < tokens.length) {
+    const token = tokens[index];
+    if (token === '--') {
+      index++;
+      break;
+    }
+    if (!token.startsWith('-')) {
+      return { sub: token, args: tokens.slice(index + 1) };
+    }
+    if (token === '-C') {
+      if (!isTrustedGitCwdPath(tokens[index + 1], workspaceRoots, opts.cwd, opts.cwdUnknown === true, opts.platform)) return undefined;
+      index += 2;
+      continue;
+    }
+    if (token === '--git-dir' || token === '--work-tree') return undefined;
+    if (token === '--namespace') {
+      if (index + 1 >= tokens.length || tokens[index + 1] === '') return undefined;
+      index += 2;
+      continue;
+    }
+    const attachedCwd = /^-C=?(.*)$/.exec(token);
+    if (attachedCwd) {
+      if (!isTrustedGitCwdPath(attachedCwd[1], workspaceRoots, opts.cwd, opts.cwdUnknown === true, opts.platform)) return undefined;
+      index++;
+      continue;
+    }
+    if (/^--(?:git-dir|work-tree)=/.test(token)) return undefined;
+    if (/^--namespace=.+/.test(token)) {
+      index++;
+      continue;
+    }
+    if (SAFE_GIT_GLOBAL_FLAGS.has(token)) {
+      index++;
+      continue;
+    }
+    return undefined;
+  }
+  if (index >= tokens.length) return undefined;
+  return { sub: tokens[index], args: tokens.slice(index + 1) };
+}
+
+function classifyGit(
+  tokens: string[],
+  segment: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): ReviewVerdict {
   // 高风险 git(强推/硬重置/clean -f)已在 REVIEW_REQUIRED_PATTERNS 命中,这里分只读 vs 写。
   // 写文件 / 跑外部程序的选项(即便子命令"只读")→ 升级:
   //   -o/--output(diff/format-patch/show 写文件,无 shell `>` 可捕获);
@@ -2225,23 +3133,16 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
   // 远程助手传输 `ext::<cmd>` / `fd::` 会把 URL 里的命令交给 shell 执行(RCE);即便 ls-remote 最终报错,
   // 命令也已跑(codex 报:`git ls-remote 'ext::sh -c …'`)。任何 git 命令带 ext::/fd:: 传输 → 升级。
   if (/(?:^|[\s'"=])(?:ext|fd)::/.test(segment)) return 'prompt';
-  const rest = tokens.slice(1); // 'git' 之后
-  // 子命令**之前**的内联全局选项可执行任意程序(RCE)→ 升级:
-  //   -c core.pager=… / -c diff.external=… / --config-env[=…](内联 config);
-  //   --exec-path[=<dir>](把 git 子命令的查找目录指到可写目录 → `git --exec-path=/tmp/evil status` 跑 /tmp/evil/git-status)。
-  // 等号形式是单 token(如 `--config-env=…` / `--exec-path=…`),用 startsWith 一并拦。
-  const subIdx = rest.findIndex((t) => !t.startsWith('-'));
-  const preSub = subIdx >= 0 ? rest.slice(0, subIdx) : rest;
-  if (preSub.some((t) => t === '-c' || t.startsWith('--config-env') || t.startsWith('--exec-path'))) return 'prompt';
-  const sub = rest.find((t) => !t.startsWith('-'));
-  if (!sub || !SAFE_GIT_SUBCOMMANDS.has(sub)) {
+  const invocation = parseGitInvocation(tokens, workspaceRoots, opts);
+  if (!invocation?.sub || !SAFE_GIT_SUBCOMMANDS.has(invocation.sub)) {
     // `git config --get/--list` 只读;其它 git(commit/checkout/merge/fetch/config 写…)升级。
-    if (sub === 'config' && /--(?:get|list|get-all)\b/.test(segment)) return 'auto-approve';
+    if (invocation?.sub === 'config' && /--(?:get|list|get-all)\b/.test(segment)) return 'auto-approve';
     return 'prompt';
   }
+  const { sub, args } = invocation;
   // reflog 有破坏性写模式:expire / delete / drop 删除恢复历史(不可逆);只放行 show/exists/裸 reflog(默认 show)。
   if (sub === 'reflog') {
-    const next = rest.slice(rest.indexOf(sub) + 1).find((t) => !t.startsWith('-'));
+    const next = args.find((t) => !t.startsWith('-'));
     if (next && /^(?:expire|delete|drop)$/.test(next)) return 'prompt';
     return 'auto-approve'; // 裸 / show / exists
   }
@@ -2250,26 +3151,41 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
     // 删除/改名/复制/强制 flag,或子命令后带位置参数(= 新建分支/标签)→ 写。
     // --edit-description invokes $EDITOR(可执行任意外部程序)→ 升级(copilot P1)。
     if (/\s-(?:d|D|m|M|c|C)\b|\s--(?:delete|move|copy|force|edit-description)\b/.test(segment)) return 'prompt';
-    const after = rest.slice(rest.indexOf(sub) + 1).filter((t) => !t.startsWith('-'));
+    const after = args.filter((t) => !t.startsWith('-'));
     if (after.length > 0) return 'prompt';
     return 'auto-approve';
   }
   if (sub === 'remote') {
-    const afterRemote = rest.slice(rest.indexOf(sub) + 1);
-    const next = afterRemote.find((t) => !t.startsWith('-'));
+    const next = args.find((t) => !t.startsWith('-'));
     if (next && /^(?:add|remove|rm|rename|set-url|set-head|set-branches|prune|update)$/.test(next)) {
       return 'prompt';
     }
     // `remote show` 不带 -n 会联系远端(ext:://insteadOf 可执行 payload,codex P1)→ 升级;带 -n 只读本地配置放行。
-    if (next === 'show' && !afterRemote.includes('-n')) return 'prompt';
+    if (next === 'show' && !args.includes('-n')) return 'prompt';
     return 'auto-approve'; // bare / -v / get-url / show -n 等不触网的只读形态
   }
   return 'auto-approve';
 }
 
-function classifyShellSegment(segment: string): ReviewVerdict {
+function classifyShellSegment(
+  segment: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): ReviewVerdict {
   const rawTokens = tokenize(segment);
-  const tokens = unwrapWrappers(rawTokens);
+  const unwrapped = unwrapCommand(
+    rawTokens,
+    opts.cwd ?? workspaceRoots[0],
+    opts.cwdUnknown === true,
+  );
+  const tokens = unwrapped.tokens;
+  // 包装器可改变内层 cwd（如 `env -C /extra git …`）。不能把该路径当作可信审批基准；
+  // 只要 Git 前经过改目录或 cwd 变得未知，保守交给 prompt。
+  const initialCwd = opts.cwd ?? workspaceRoots[0];
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
+  const wrapperChangedCwd = unwrapped.cwdUnknown
+    || (unwrapped.cwd !== undefined && initialCwd !== undefined
+      && canonicalPath(unwrapped.cwd, aliasFirmlinks) !== canonicalPath(initialCwd, aliasFirmlinks));
   // 裸 env / 未指定 VARIABLE 的 printenv 会输出整个进程环境(含 provider API key)，不能交给
   // reviewer 自行静默 allow。`-0` / `--null` 只改分隔符，不缩小输出范围；只有存在非选项
   // VARIABLE 参数时才算具名读取并留在灰区。`env FOO=bar cmd` 仍按内层命令分类。
@@ -2300,10 +3216,18 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   // 执行 flag 被藏在展开里、审查漏放行、bash 展开成空后才执行。flag/命令检测都在此串上跑。
   const deQuoted = stripExpansions(segment.replace(/['"\\]/g, ''));
   // 去引号内容:判重定向时引号内的 `>` 是数据不是重定向(如 git log --format='%h>%s')。
-  const redirectScan = segment.replace(/'[^']*'|"[^"]*"/g, '');
+  // 再抹掉指向安全伪设备的重定向(`2>/dev/null`、`>/dev/null`、`&>/dev/null`):写 /dev/null
+  // 等同丢弃、无落盘副作用,是实机语料里最高频的静音写法,不该把整段只读命令拖进灰区。
+  //
+  // **只剥真正的丢弃 / 终端型设备**。`/dev/stdin` `/dev/stdout` `/dev/stderr` `/dev/fd/N`
+  // 是**继承描述符的别名** —— 进程的 stdout 若被重定向到文件,`>/dev/stdout` 就会截断那个
+  // 文件,凭命令字符串证明不了安全(review 报:这几种形态原本落灰区,被一起剥掉后变成了
+  // 直接放行)。它们不剥即可 —— 落回灰区交 AI 审阅器判,与基线同档,不升红线。
+  // (与 SAFE_DEVICE_PATH / isProtectedSystemPath 的伪设备白名单同口径)。`/dev/null/x`、
+  // `/dev/nullx` / `/dev/null.tmp` / `/dev/null-foo` 等相近路径不匹配,仍按普通文件写升级。
   // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。
   // 必须挡在 git/fetch/readonly 判定之前 —— 否则 `curl x > ~/.bashrc`、`cat f > /etc/y` 会被误放行。
-  if (OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment)) return 'prompt';
+  if (segmentHasSideEffectRedirectOrSubstitution(segment)) return 'prompt';
   // 带替换/默认值的参数展开(${X:-ec} 等)可代入任意文本、拼出危险 flag/命令,静态不可求值 → 升级
   // (codex 报:`-ex${UNSET:-ec}` 抹空后是 -ex、bash 代入 ec 成 -exec)。挡在 readonly/git/fetch 放行前。
   if (SUBSTITUTION_EXPANSION.test(segment)) return 'prompt';
@@ -2331,9 +3255,16 @@ function classifyShellSegment(segment: string): ReviewVerdict {
         .join('/')
     : cmd0Raw;
   if (cmd0.includes('/') && !/^\/(?:usr\/s?bin|s?bin)\//.test(cmd0)) return 'prompt';
-  if (bin === 'git') return classifyGit(tokens, deQuoted);
+  if (bin === 'git') {
+    if (wrapperChangedCwd) return 'prompt';
+    return classifyGit(tokens, deQuoted, workspaceRoots, opts);
+  }
   if (isSafeFetch(bin, deQuoted, tokens)) return 'auto-approve';
   if (isSafeReadonlyBin(bin, deQuoted, tokens)) return 'auto-approve';
+  // sed 的纯数字地址打印(`sed -n 1,80p f`)与 gh 的只读查询子命令:实机语料的高频只读段,
+  // 静态可证安全,不进灰区(误报源自实机语料回归,见 auto-review.corpus 测试)。
+  if (bin === 'sed' && isSafeReadonlySed(tokens)) return 'auto-approve';
+  if (bin === 'gh' && isSafeReadonlyGh(tokens)) return 'auto-approve';
   // 其余(含所有写操作、未知命令)进入灰区，由轻量 reviewer 静默 allow/block/ask。
   return 'prompt';
 }
@@ -2343,6 +3274,32 @@ function classifyShellSegment(segment: string): ReviewVerdict {
  * 再拆顶层段,每段都要过 —— 任一段明确红线→prompt-each-time;任一段需 reviewer→prompt;
  * 全部只读→auto-approve。空/畸形命令 → prompt(交 reviewer，故障时静默 block)。
  */
+/**
+ * 一条命令实际会调起的**可执行文件名**集合(去包装器、去路径、含各管道/串联段)。
+ *
+ * 供批准记忆做「命令名级」规则用(对齐 Claude Code 的 `Bash(pnpm:*)`):用户批准过
+ * `cd /repo && pnpm test` 后,记住的是 {cd, pnpm} —— 后续 `cd /repo && pnpm build`
+ * 因为用到的可执行文件都在已批准集合里而直接放行,`cd /repo && rm -rf x` 则不在。
+ *
+ * 比 CC 的「取第一个词 + `:*`」更贴合真实用法:我们的命令大量以 `cd X && …` 开头,
+ * 按首词生成规则会变成 `cd:*`,那等于放行**所有** `cd X && 任意命令`。
+ */
+export function commandExecutableNames(command: string): string[] {
+  if (typeof command !== 'string' || command.trim().length === 0) return [];
+  const names = new Set<string>();
+  for (const { text } of splitExecutableSegments(command)) {
+    // unwrapWrappers 已经剥掉 `env` / 环境变量赋值前缀等包装,`NODE_OPTIONS=… pnpm test`
+    // 到这里 tokens[0] 就是 `pnpm`(有用例钉住)。这里只需兜住取不到 bin 的段。
+    const tokens = unwrapWrappers(tokenize(text));
+    const bin = executableName(tokens[0] ?? '');
+    // 仍取不到可执行文件名的段(空段、纯赋值段如 `FOO=1`)不贡献名字。**不是**跳过整条命令:
+    // 其余段照常收集,所以 `FOO=1 rm -rf x && ls` 得到 {rm, ls},破坏性 bin 不会隐身。
+    if (!bin || /^[A-Za-z_]\w*=/.test(bin)) continue;
+    names.add(bin);
+  }
+  return [...names];
+}
+
 export function classifyShellCommand(
   command: string,
   workspaceRoots: string[],
@@ -2358,8 +3315,13 @@ export function classifyShellCommand(
   //    (greptile 报)。去掉 `[]{}` 让 `.ss[h]`→`.ssh`、`id_[r]sa`→`id_rsa` 现形;去 `*?` 让 `*.pem`
   //    等也归一。会造成个别良性命令过度升级(fail-closed 方向,可接受);`?`/`*` 作单字符替身的
   //    残口(`.ss?`→`.ss` 不复原)属静态不可闭合、极冷门,不追。
-  const deEscaped = command.replace(/['"\\]/g, '');
-  const quotesOnly = command.replace(/['"]/g, '');
+  // 确定性红线只扫**代码位**:结构上确定是数据的引号字面量(赋值右值 / 消息 flag 值 /
+  // grep 搜索模式)先换成占位符,否则中文提交说明与 PR 回复正文会被当命令扫(见
+  // stripDataLiterals)。执行面判定不用这份 —— highImpactExecutionNeedsConsent 已在上面
+  // 按引号外的真实结构判过。
+  const scannable = stripDataLiterals(command);
+  const deEscaped = scannable.replace(/['"\\]/g, '');
+  const quotesOnly = scannable.replace(/['"]/g, '');
   const deGlobbed = deEscaped.replace(/[[\]{}*?]/g, '');
   // deExpanded:抹掉参数展开(见 stripExpansions)—— 防 `s${X}udo`/`rm -r${X}f /` 这类把关键词拆开、
   // bash 展开成空后才成形的绕过。**必须从 deEscaped 派生**(保留 `${...}` 完整):若先去 glob 会把
@@ -2407,8 +3369,35 @@ export function classifyShellCommand(
   const segments = splitTopLevelSegments(command);
   if (segments.length === 0) return 'prompt';
   let needsPrompt = false;
+  // 跨段跟踪 cd:`cd <区内目录> && <只读命令>` 是实机语料的最高频形态之一,此前 cd 段本身
+  // 认不出命令名→整条落灰区。**只放行**静态可证「目标落在工作区/只读引用目录内」的 cd/pushd
+  // 段(相对目标按跟踪 cwd 解析);目标区外/动态(`$VAR`、`~`、`-`)/source/popd 维持灰区不变。
+  // 安全性:破坏类(`cd /etc && cp payload hosts`)由前面的 scopedDestructionNeedsConsent 以
+  // 自己的跨段 cwd 跟踪先行拦截;这里只影响「全段只读」时 cd 段自身的档位。
+  let trackedCwd: string | undefined = opts.cwd ?? workspaceRoots[0];
+  let trackedCwdUnknown = opts.cwdUnknown === true;
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
   for (const seg of segments) {
-    const v = classifyShellSegment(seg);
+    const segTokens = stripShellControlTokens(tokenize(seg));
+    const dirChange = directoryChangeTarget(segTokens);
+    if (dirChange.changesDirectory) {
+      const segBin = executableName(segTokens[0] ?? '');
+      const next = resolveCwdTarget(dirChange.target, trackedCwd, trackedCwdUnknown);
+      trackedCwd = next.cwd;
+      trackedCwdUnknown = next.cwdUnknown;
+      if ((segBin === 'cd' || segBin === 'pushd')
+        && !next.cwdUnknown && next.cwd
+        && isInsideWorkspace(next.cwd, workspaceRoots, aliasFirmlinks)
+        // 快捷放行只针对「切目录」这个动作本身。同一段里仍可能挂着输出重定向或命令替换
+        // (`cd /repo > /tmp/out`),那属于写文件/执行任意内容,不能被这条捷径绕过 ——
+        // 复用与 classifyShellSegment 同一份判据(安全伪设备已排除),review P1。
+        && !segmentHasSideEffectRedirectOrSubstitution(seg)) {
+        continue; // 区内目录切换且无副作用:该段放行。
+      }
+      needsPrompt = true; // 区外/动态目标、source/popd:与改动前同档(灰区)。
+      continue;
+    }
+    const v = classifyShellSegment(seg, workspaceRoots, opts);
     if (v === 'prompt-each-time') return 'prompt-each-time';
     if (v === 'prompt') needsPrompt = true;
   }

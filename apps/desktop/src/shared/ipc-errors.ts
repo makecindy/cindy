@@ -41,6 +41,7 @@ export type IpcErrorCode =
   | 'REWIND_GIT_FAILED'
   | 'REWIND_UNSUPPORTED_HISTORY'
   | 'REWIND_TARGET_NOT_LATEST'
+  | 'TURN_CHANGE_GIT_UNAVAILABLE'
   // multi-worker
   | 'DUPLICATE_LABEL'
   | 'WORKER_CREATION_IN_PROGRESS'
@@ -62,6 +63,10 @@ export type IpcErrorCode =
   | 'SSH_AUTH_FAILED'
   | 'SSH_CONFIG_IO_FAILED'
   | 'SSH_HOST_NOT_FOUND'
+  // remote-ssh：配置的私钥文件在磁盘上不存在/不可读。与 SSH_CONNECT_FAILED 分开——
+  // 这是本机路径问题（缺失 / ~ 未展开 / 路径被改写），不是网络或服务器错误，renderer
+  // 据此显示明确的路径错误并允许重新选择密钥 / 编辑主机。
+  | 'SSH_KEY_FILE_NOT_FOUND'
   // remote-ssh：远端 agent 阶段
   | 'SSH_NOT_CONNECTED'
   | 'SSH_INSTALL_FAILED'
@@ -92,6 +97,7 @@ export type IpcErrorCode =
   | 'DEVICE_LINK_ACCESS_REVOKED' // 目标设备已撤销本机的访问权限(逐设备黑名单)
   | 'DEVICE_LINK_CONTROL_DISABLED' // 本机已关闭对该目标设备的控制(控制端本地偏好)
   | 'DEVICE_LINK_TIMEOUT' // 等待远端响应超时
+  | 'DEVICE_LINK_DEVICE_UNRESPONSIVE' // 目标设备连续超时被熔断判定无响应(弱网 / 对端卡死),快速失败中
   | 'DEVICE_LINK_VERSION_MISMATCH' // 两端协议/版本不匹配
   | 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' // 远程媒体经 OSS 中转失败(出方向附件上传 / 入方向取媒体)
   | 'REMOTE_WORKDIR_INVALID' // 被控端工作目录路径非法
@@ -104,6 +110,46 @@ export type IpcErrorCode =
   | 'RIGHT_SIDEBAR_TOO_MANY_TABS' // 单 session 超 20 个 tab
   | 'RIGHT_SIDEBAR_UNKNOWN_KIND' // kind 不在 plugin registry 里
   | 'RIGHT_SIDEBAR_STATE_TOO_LARGE' // 单 tab state JSON 序列化 > 16KB
+  // iOS Simulator Host。code 是可跨 IPC 暴露的稳定业务分类；底层命令、路径和
+  // subprocess message 必须只留在 Main 日志，不能作为 IpcError.message 返回。
+  | 'INVALID_ARGUMENT'
+  | 'INSTANCE_NOT_FOUND'
+  | 'INSTANCE_NOT_OWNED'
+  | 'SIMULATOR_ATTACHED_ELSEWHERE'
+  | 'SESSION_INSTANCE_LIMIT_REACHED'
+  | 'DEVICE_CONTROL_NOT_GRANTED'
+  | 'DEVICE_BUSY'
+  | 'AGENT_MUTATION_PAUSED'
+  | 'MUTATION_CANCELLED'
+  | 'LEASE_EXPIRED'
+  | 'STALE_GENERATION'
+  | 'STALE_UI_SNAPSHOT'
+  | 'UI_WAIT_TIMEOUT'
+  | 'NATIVE_INPUT_UNAVAILABLE'
+  | 'INVALID_INSTANCE_STATE'
+  | 'SIMULATOR_NOT_FOUND'
+  | 'SIMULATOR_BOOT_FAILED'
+  | 'SIMULATOR_BOOT_TIMEOUT'
+  | 'SIMULATOR_SHUTDOWN_FAILED'
+  | 'SIMULATOR_CONTROL_FAILED'
+  | 'SIMULATOR_CREATE_FAILED'
+  | 'SIMULATOR_DELETE_FORBIDDEN'
+  | 'SIMULATOR_DELETE_FAILED'
+  | 'PROJECT_NOT_FOUND'
+  | 'AMBIGUOUS_XCODE_PROJECT'
+  | 'APP_BUILD_FAILED'
+  | 'APP_ARTIFACT_INVALID'
+  | 'APP_INSTALL_FAILED'
+  | 'APP_LAUNCH_FAILED'
+  | 'METRO_NOT_READY'
+  | 'APP_TERMINATE_FAILED'
+  | 'OPEN_URL_FAILED'
+  | 'SCREENSHOT_CAPTURE_FAILED'
+  | 'RESOURCE_LIMIT_REACHED'
+  | 'MEMORY_PRESSURE'
+  | 'RECORDING_ALREADY_ACTIVE'
+  | 'RECORDING_NOT_FOUND'
+  | 'RECORDING_FAILED'
   // RSB terminal tab(PTY 后端 + xterm.js)
   | 'TERMINAL_NOT_FOUND' // 指定 ptyId 不存在(可能已 dispose / 从未创建)
   | 'TERMINAL_SPAWN_FAILED' // node-pty spawn 抛错(权限 / 路径不可达等)
@@ -111,6 +157,7 @@ export type IpcErrorCode =
   | 'TERMINAL_ALREADY_DISPOSED' // 在已 dispose 的 session 上调 restart 等操作
   // 意识(.cindy 装入)
   | 'GHOST_FILE_INVALID' // 不是合法 zip / 缺 ghost.json / 清单不合格 / 超限
+  | 'GHOST_HOST_UNSUPPORTED' // 插件包合法，但当前 Cindy 不认识其 schema / capability slot
   | 'GHOST_COMMAND_CONFLICT' // 显式指令与已装意识撞名(装入拒绝)
   | 'GHOST_ID_RESERVED' // id 属官方保留前缀(cindy-),用户通道拒装(防抢注蹭凭证别名)
   // 自定义插件市场源(Git / 本地文件夹)
@@ -132,6 +179,12 @@ export type IpcErrorCode =
   // 个人资料自助修改(settings → 用户卡片;服务端直写)
   | 'PROFILE_AVATAR_UPLOAD_FAILED' // 头像经 oss-server 预签名直传失败(presign 或 PUT 阶段)
   | 'PROFILE_UPDATE_FAILED' // PATCH /api/me/profile 失败(网络 / 服务端拒绝)
+  // 本机 HTML 页面打开到系统浏览器
+  | 'BROWSER_FILE_INVALID_TARGET'
+  | 'BROWSER_FILE_PATH_NOT_ALLOWED'
+  | 'BROWSER_FILE_UNSUPPORTED_TYPE'
+  | 'BROWSER_FILE_NOT_FOUND'
+  | 'BROWSER_FILE_OPEN_FAILED'
   // 会话分享(.cshare 导出/导入)
   | 'SHARE_FILE_INVALID' // 不是 .cshare / 头或 manifest 损坏 / payload 不是 zip
   | 'SHARE_PASSWORD_REQUIRED' // 文件已加密但未提供密码
@@ -146,9 +199,17 @@ export type IpcErrorCode =
   | 'THEME_NOT_A_FILE' // 选中路径不是普通文件
   | 'THEME_FILE_TOO_LARGE' // 超 4MB 上限
   | 'THEME_UNSUPPORTED_FILE' // 无法识别为 VSCode / Obsidian 主题
+  | 'THEME_CONTRAST_UNSUPPORTED' // 主题色板无法满足控件对比度约束
   | 'THEME_USES_INCLUDE' // VSCode 主题含 include(需基底才能完整解析)
   | 'THEME_WRITE_ERROR' // 落盘失败(权限/磁盘)
-  | 'THEME_IMPORT_INTERNAL'; // 意外异常
+  | 'THEME_IMPORT_INTERNAL' // 意外异常
+  // 客户端日志上报(log-upload:upload-now)。四种失败要能被 renderer 区分成不同文案:
+  // 「本构建没配上报目标」「还没同意隐私政策」「采到 0 条」「网络失败」是四种不同的用户处置。
+  | 'LOG_UPLOAD_UNAVAILABLE' // 本构建未配置上报目标 = 功能整体关闭
+  | 'PRIVACY_CONSENT_REQUIRED' // 未明示同意《隐私政策》
+  | 'LOG_UPLOAD_EMPTY' // 采集后没有任何可上报的记录
+  | 'LOG_UPLOAD_FAILED' // 上传失败(离线 / 被拒 / 超时)
+  | 'LOG_UPLOAD_BUSY'; // 已有一次上报在进行中
 
 export interface IpcError {
   code: IpcErrorCode;
@@ -186,6 +247,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'REWIND_GIT_FAILED',
   'REWIND_UNSUPPORTED_HISTORY',
   'REWIND_TARGET_NOT_LATEST',
+  'TURN_CHANGE_GIT_UNAVAILABLE',
   'DUPLICATE_LABEL',
   'WORKER_CREATION_IN_PROGRESS',
   'WORKER_LIMIT_HARD_EXCEEDED',
@@ -203,6 +265,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SSH_AUTH_FAILED',
   'SSH_CONFIG_IO_FAILED',
   'SSH_HOST_NOT_FOUND',
+  'SSH_KEY_FILE_NOT_FOUND',
   'SSH_NOT_CONNECTED',
   'SSH_INSTALL_FAILED',
   'SSH_EXEC_FAILED',
@@ -222,6 +285,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'DEVICE_LINK_ACCESS_REVOKED',
   'DEVICE_LINK_CONTROL_DISABLED',
   'DEVICE_LINK_TIMEOUT',
+  'DEVICE_LINK_DEVICE_UNRESPONSIVE',
   'DEVICE_LINK_VERSION_MISMATCH',
   'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
   'REMOTE_WORKDIR_INVALID',
@@ -233,11 +297,50 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'RIGHT_SIDEBAR_TOO_MANY_TABS',
   'RIGHT_SIDEBAR_UNKNOWN_KIND',
   'RIGHT_SIDEBAR_STATE_TOO_LARGE',
+  'INVALID_ARGUMENT',
+  'INSTANCE_NOT_FOUND',
+  'INSTANCE_NOT_OWNED',
+  'SIMULATOR_ATTACHED_ELSEWHERE',
+  'SESSION_INSTANCE_LIMIT_REACHED',
+  'DEVICE_CONTROL_NOT_GRANTED',
+  'DEVICE_BUSY',
+  'AGENT_MUTATION_PAUSED',
+  'MUTATION_CANCELLED',
+  'LEASE_EXPIRED',
+  'STALE_GENERATION',
+  'STALE_UI_SNAPSHOT',
+  'UI_WAIT_TIMEOUT',
+  'NATIVE_INPUT_UNAVAILABLE',
+  'INVALID_INSTANCE_STATE',
+  'SIMULATOR_NOT_FOUND',
+  'SIMULATOR_BOOT_FAILED',
+  'SIMULATOR_BOOT_TIMEOUT',
+  'SIMULATOR_SHUTDOWN_FAILED',
+  'SIMULATOR_CONTROL_FAILED',
+  'SIMULATOR_CREATE_FAILED',
+  'SIMULATOR_DELETE_FORBIDDEN',
+  'SIMULATOR_DELETE_FAILED',
+  'PROJECT_NOT_FOUND',
+  'AMBIGUOUS_XCODE_PROJECT',
+  'APP_BUILD_FAILED',
+  'APP_ARTIFACT_INVALID',
+  'APP_INSTALL_FAILED',
+  'APP_LAUNCH_FAILED',
+  'METRO_NOT_READY',
+  'APP_TERMINATE_FAILED',
+  'OPEN_URL_FAILED',
+  'SCREENSHOT_CAPTURE_FAILED',
+  'RESOURCE_LIMIT_REACHED',
+  'MEMORY_PRESSURE',
+  'RECORDING_ALREADY_ACTIVE',
+  'RECORDING_NOT_FOUND',
+  'RECORDING_FAILED',
   'TERMINAL_NOT_FOUND',
   'TERMINAL_SPAWN_FAILED',
   'TERMINAL_SHELL_NOT_FOUND',
   'TERMINAL_ALREADY_DISPOSED',
   'GHOST_FILE_INVALID',
+  'GHOST_HOST_UNSUPPORTED',
   'GHOST_COMMAND_CONFLICT',
   'GHOST_ID_RESERVED',
   'MARKET_SOURCE_INVALID',
@@ -255,6 +358,11 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'DINGTALK_STREAM_CONNECTION_FAILED',
   'PROFILE_AVATAR_UPLOAD_FAILED',
   'PROFILE_UPDATE_FAILED',
+  'BROWSER_FILE_INVALID_TARGET',
+  'BROWSER_FILE_PATH_NOT_ALLOWED',
+  'BROWSER_FILE_UNSUPPORTED_TYPE',
+  'BROWSER_FILE_NOT_FOUND',
+  'BROWSER_FILE_OPEN_FAILED',
   'SHARE_FILE_INVALID',
   'SHARE_PASSWORD_REQUIRED',
   'SHARE_PASSWORD_WRONG',
@@ -267,9 +375,15 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'THEME_NOT_A_FILE',
   'THEME_FILE_TOO_LARGE',
   'THEME_UNSUPPORTED_FILE',
+  'THEME_CONTRAST_UNSUPPORTED',
   'THEME_USES_INCLUDE',
   'THEME_WRITE_ERROR',
   'THEME_IMPORT_INTERNAL',
+  'LOG_UPLOAD_UNAVAILABLE',
+  'PRIVACY_CONSENT_REQUIRED',
+  'LOG_UPLOAD_EMPTY',
+  'LOG_UPLOAD_FAILED',
+  'LOG_UPLOAD_BUSY',
 ]);
 
 export function isIpcErrorCode(code: unknown): code is IpcErrorCode {

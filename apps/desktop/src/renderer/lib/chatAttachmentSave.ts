@@ -7,6 +7,10 @@
  */
 
 import { i18n } from '@/i18n';
+import {
+  attachmentExtension,
+  isDangerousAttachmentName,
+} from '../../shared/attachmentSafety';
 import { toast } from './toast';
 import { fetchChatFileWithToasts } from './remoteFileOpen';
 import { isRemoteFileOrigin, type SessionFileOrigin } from './sessionFileOrigin';
@@ -22,6 +26,11 @@ type SaveResult = Awaited<ReturnType<typeof window.electronAPI.saveChatAttachmen
 /** 安全另存流程依赖；默认接真实 IPC/toast，单测可注入确定性 fake。 */
 export interface ChatAttachmentSaveDeps {
   platform: string;
+  stageDangerous(params: {
+    sourcePath: string;
+    suggestedName: string;
+  }): ReturnType<typeof window.electronAPI.stageChatAttachment>;
+  cleanupStaged?: (filePaths: readonly string[]) => Promise<void>;
   fetchRemoteFile(
     origin: Exclude<SessionFileOrigin, { kind: 'local' }>,
     workingDir: string,
@@ -33,23 +42,21 @@ export interface ChatAttachmentSaveDeps {
   error(message: string): void;
 }
 
-function extensionOf(value: string): string {
-  const base = value.split(/[\\/]/).pop() ?? '';
-  const dot = base.lastIndexOf('.');
-  return dot > 0 ? base.slice(dot).toLowerCase() : '';
-}
-
 /**
- * 展示名与实际缓存扩展不一致且实际为 `.bin`，即物化阶段执行过安全降级。
- * 原名本来就是 `.bin` 时保持历史打开行为，不误判为恢复扩展名场景。
+ * 危险原始类型无论当前物理路径是什么都只能另存；历史版本已经把安全格式
+ * 降级成 `.bin` 的附件也继续走另存，以便恢复原始扩展名。
  */
 export function isSafetyDowngradedAttachment(file: ChatAttachmentFile): boolean {
-  return extensionOf(file.path) === '.bin' && extensionOf(file.name) !== '.bin';
+  return (
+    isDangerousAttachmentName(file.name) ||
+    isDangerousAttachmentName(file.path) ||
+    (attachmentExtension(file.path) === '.bin' && attachmentExtension(file.name) !== '.bin')
+  );
 }
 
 /** 已知不能由当前桌面平台直接使用的安装/可执行格式。 */
 export function isAttachmentUnsupportedOnPlatform(fileName: string, platform: string): boolean {
-  const ext = extensionOf(fileName);
+  const ext = attachmentExtension(fileName);
   if (platform === 'darwin') return ext === '.exe' || ext === '.msi';
   if (platform === 'win32') return ext === '.dmg' || ext === '.pkg' || ext === '.app';
   if (platform === 'linux') {
@@ -61,6 +68,8 @@ export function isAttachmentUnsupportedOnPlatform(fileName: string, platform: st
 function defaultDeps(): ChatAttachmentSaveDeps {
   return {
     platform: window.electronAPI.platform,
+    stageDangerous: (params) => window.electronAPI.stageChatAttachment(params),
+    cleanupStaged: (filePaths) => window.electronAPI.cleanupStagedChatAttachments(filePaths),
     fetchRemoteFile: fetchChatFileWithToasts,
     saveAs: (params) => window.electronAPI.saveChatAttachmentAs(params),
     success: (message) => {
@@ -84,18 +93,52 @@ export async function saveChatAttachmentWithToasts(
   file: ChatAttachmentFile,
   deps: ChatAttachmentSaveDeps = defaultDeps(),
 ): Promise<'saved' | 'canceled' | 'failed'> {
-  const sourcePath = isRemoteFileOrigin(ctx.origin)
+  let sourcePath = isRemoteFileOrigin(ctx.origin)
     ? await deps.fetchRemoteFile(ctx.origin, ctx.workingDir, file.path)
     : file.path;
   if (!sourcePath) return 'failed';
+  let stagedForSave: string | null = null;
+
+  // Messages sent before the staging fix may still reference the user's
+  // original executable path. Copy those legacy local sources into the inert
+  // cache on demand before invoking the cache-only Save As handler.
+  if (
+    !isRemoteFileOrigin(ctx.origin) &&
+    (isDangerousAttachmentName(file.name) || isDangerousAttachmentName(sourcePath)) &&
+    attachmentExtension(sourcePath) !== '.bin'
+  ) {
+    try {
+      const staged = await deps.stageDangerous({
+        sourcePath,
+        suggestedName: file.name,
+      });
+      if (!staged.success) {
+        deps.error(i18n.t('chat.userMessage.attachmentSaveForbidden'));
+        return 'failed';
+      }
+      sourcePath = staged.path;
+      stagedForSave = staged.path;
+    } catch {
+      deps.error(i18n.t('chat.userMessage.attachmentSaveFailed'));
+      return 'failed';
+    }
+  }
+
+  const cleanupStagedForSave = () => {
+    if (!stagedForSave || !deps.cleanupStaged) return;
+    void deps.cleanupStaged([stagedForSave]).catch(() => undefined);
+  };
 
   let result: SaveResult;
   try {
     result = await deps.saveAs({ sourcePath, suggestedName: file.name });
   } catch {
+    cleanupStagedForSave();
     deps.error(i18n.t('chat.userMessage.attachmentSaveFailed'));
     return 'failed';
   }
+
+  cleanupStagedForSave();
 
   if (result.status === 'canceled') return 'canceled';
   if (result.status === 'saved') {

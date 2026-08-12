@@ -13,6 +13,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 
 import { gitExec } from './gitExec';
+import { boundedNetworkGitOpts, NET_TOTAL_BUDGET_MS } from './freshBase';
 import { isWorktreeDirty } from './dirty';
 import { copyClaudeSiviDirs } from './WorktreeManager';
 import * as WorktreeManager from './WorktreeManager';
@@ -54,6 +55,13 @@ function repoKey(baseRepo: string): string {
  */
 export async function acquireWorktree(
   req: CreateWorktreeReq,
+  opts?: {
+    /** 调用方已在本次创建流程内完成对 sourceBranch 的网络刷新尝试(成功、失败或
+     * 预算耗尽放弃都算,如 scheduler 路径的 resolveFreshSourceBranch):池复用重置
+     * 时一律不再二次 fetch——离线时首次尝试已耗掉整份网络预算,这里再开一份新预算
+     * 就把总等待翻倍了。 */
+    sourceFetchAlreadyAttempted?: boolean;
+  },
 ): Promise<CreateWorktreeResp> {
   const key = repoKey(req.baseRepo);
   inflight.add(key);
@@ -63,14 +71,24 @@ export async function acquireWorktree(
     if (entry) {
       pool.delete(key);
 
-      const newBranch = getBranchName(req.name);
       try {
-        await resetWorktree(entry.meta.path, entry.meta.baseRepo, req.sourceBranch, newBranch);
+        const resolvedName = await WorktreeManager.resolveAvailableWorktreeName(
+          entry.meta.baseRepo,
+          req.name,
+        );
+        const newBranch = getBranchName(resolvedName);
+        await resetWorktree(
+          entry.meta.path,
+          entry.meta.baseRepo,
+          req.sourceBranch,
+          newBranch,
+          opts,
+        );
 
         const meta: WorktreeMeta = {
           ...entry.meta,
           sessionId: req.sessionId,
-          name: req.name,
+          name: resolvedName,
           branch: newBranch,
           sourceBranch: req.sourceBranch,
           createdAt: new Date().toISOString(),
@@ -89,10 +107,12 @@ export async function acquireWorktree(
         if (await isWorktreeDirty(entry.meta.path)) {
           log.warn(`[WorktreePool] dirty worktree preserved at ${entry.meta.path}`);
         } else {
-          const drained = await drainEntry(entry.meta).then(() => true).catch(async () => {
-            await gitExec(['worktree', 'prune'], entry.meta.baseRepo).catch(() => {});
-            return false;
-          });
+          const drained = await drainEntry(entry.meta)
+            .then(() => true)
+            .catch(async () => {
+              await gitExec(['worktree', 'prune'], entry.meta.baseRepo).catch(() => {});
+              return false;
+            });
           if (drained) store.del(entry.meta.sessionId);
         }
       }
@@ -115,17 +135,28 @@ async function resetWorktree(
   baseRepo: string,
   sourceBranch: string,
   newBranch: string,
+  opts?: { sourceFetchAlreadyAttempted?: boolean },
 ): Promise<void> {
   // 防御性断言：池中 worktree 理论上必定 clean
   if (await isWorktreeDirty(worktreePath)) {
     throw new Error(`[WorktreePool] BUG: attempted to reset dirty worktree at ${worktreePath}`);
   }
 
-  // 1. 如果 sourceBranch 引用远端（如 origin/main），先 fetch 确保本地有最新
-  if (sourceBranch.startsWith('origin/')) {
-    const remoteBranch = sourceBranch.slice('origin/'.length);
+  // 1. 如果 sourceBranch 引用远端（如 origin/main），先 fetch 确保本地有最新。
+  //    调用方声明本次创建已做过网络刷新尝试时跳过——成功则二次 fetch 纯浪费,失败
+  //    (离线)则重试也会再挂满一份预算,把承诺的总等待上限翻倍;仅对未声明的调用方
+  //    保留该 fetch,且受限(真超时 + 禁终端凭证提问),失败非致命退 stale ref——池化
+  //    复用不允许被网络或凭证 helper 无限卡住。
+  // sourceBranch 可能是完整远端跟踪引用(refs/remotes/origin/x,freshBase 为消除
+  // 与同名本地分支的歧义所产出)或历史短名(origin/x),两种形态都要识别。
+  const remoteBranch = /^(?:refs\/remotes\/)?origin\/(.+)$/.exec(sourceBranch)?.[1];
+  if (!opts?.sourceFetchAlreadyAttempted && remoteBranch !== undefined) {
     try {
-      await gitExec(['fetch', 'origin', remoteBranch], baseRepo);
+      await gitExec(
+        ['fetch', 'origin', remoteBranch],
+        baseRepo,
+        boundedNetworkGitOpts(NET_TOTAL_BUDGET_MS),
+      );
     } catch (err) {
       log.warn(
         `[WorktreePool] git fetch failed (non-fatal, using stale ref):`,
@@ -134,8 +165,9 @@ async function resetWorktree(
     }
   }
 
-  // 2. 切换分支并重置文件（-B 强制覆盖已有同名分支）
-  await gitExec(['checkout', '-B', newBranch, sourceBranch], worktreePath);
+  // 2. 非覆盖式创建并切换分支。查重后的 TOCTOU 竞态会让 -b 安全失败，
+  //    绝不能用 -B 重置一个不属于池条目的已有分支。
+  await gitExec(['checkout', '--no-track', '-b', newBranch, sourceBranch], worktreePath);
 
   // 3. 确保 index 与 HEAD 一致（上次 agent 可能 git add 了文件但未 commit）
   await gitExec(['reset', '--hard', sourceBranch], worktreePath);
@@ -207,7 +239,9 @@ export async function releaseWorktree(sessionId: string): Promise<'pooled' | 'pr
     if (hasLiveSessionReference(existing.meta, liveSessionPathKeys)) {
       logPreservedLiveSessionWorktree(existing.meta);
     } else {
-      const drained = await drainEntry(existing.meta).then(() => true).catch(() => false);
+      const drained = await drainEntry(existing.meta)
+        .then(() => true)
+        .catch(() => false);
       if (drained) {
         store.del(existing.meta.sessionId);
       }
@@ -236,16 +270,17 @@ export async function releaseWorktree(sessionId: string): Promise<'pooled' | 'pr
 async function evictIfOverLimit(liveSessionPathKeys?: LiveSessionPathKeys): Promise<void> {
   if (store.getAll().length <= MAX_WORKTREES) return;
 
-  const liveRefs = liveSessionPathKeys === undefined
-    ? await loadLiveSessionPathKeys()
-    : liveSessionPathKeys;
+  const liveRefs =
+    liveSessionPathKeys === undefined ? await loadLiveSessionPathKeys() : liveSessionPathKeys;
 
   // 每轮重新读 store 取最旧的 clean 候选，避免 stale snapshot 问题
   while (store.getAll().length > MAX_WORKTREES) {
     const candidate = await findOldestCleanCandidate(liveRefs);
     if (!candidate) break; // 剩余全是 dirty / 池中在用，允许超限
 
-    const drained = await drainEntry(candidate).then(() => true).catch(() => false);
+    const drained = await drainEntry(candidate)
+      .then(() => true)
+      .catch(() => false);
     if (drained) store.del(candidate.sessionId);
     else break;
   }
@@ -304,7 +339,7 @@ async function drainEntry(meta: WorktreeMeta): Promise<void> {
       throw err;
     }
 
-    // 兜底：只允许删除 xdt 已登记的托管 worktree 目录
+    // 兜底：只允许删除 Cindy 已登记的托管 worktree 目录
     try {
       await fs.rm(meta.path, { recursive: true, force: true });
       await gitExec(['worktree', 'prune'], meta.baseRepo).catch(() => {});
@@ -371,14 +406,18 @@ export async function recoverPool(): Promise<void> {
 
     // 2. 哨兵: 用户声明保留，不入池不清理
     if (hasKeepSentinel(meta.path)) {
-      log.info(`[WorktreePool] preserved sentinel worktree at ${meta.path} (session ${meta.sessionId})`);
+      log.info(
+        `[WorktreePool] preserved sentinel worktree at ${meta.path} (session ${meta.sessionId})`,
+      );
       continue;
     }
 
     // 3. 检查 dirty
     const dirty = await isWorktreeDirty(meta.path);
     if (dirty) {
-      log.warn(`[WorktreePool] preserved dirty worktree at ${meta.path} (session ${meta.sessionId})`);
+      log.warn(
+        `[WorktreePool] preserved dirty worktree at ${meta.path} (session ${meta.sessionId})`,
+      );
       continue;
     }
 
@@ -396,7 +435,9 @@ export async function recoverPool(): Promise<void> {
         if (hasLiveSessionReference(meta, liveSessionPathKeys)) {
           logPreservedLiveSessionWorktree(meta);
         } else {
-          const drained = await drainEntry(meta).then(() => true).catch(() => false);
+          const drained = await drainEntry(meta)
+            .then(() => true)
+            .catch(() => false);
           if (drained) store.del(meta.sessionId);
         }
       }

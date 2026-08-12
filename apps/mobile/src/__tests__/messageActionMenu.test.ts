@@ -15,10 +15,8 @@ describe('mobile message action menu', () => {
       canAddToChat: true,
       canCopyLink: true,
       canDelete: true,
-      canFork: true,
       canRewind: true,
     })).toEqual([
-      { id: 'fork', label: '开启一个新任务' },
       { id: 'add-to-chat', label: '添加到对话' },
       { id: 'copy-link', label: '复制当前消息链接' },
       { id: 'rewind', label: '回到此处' },

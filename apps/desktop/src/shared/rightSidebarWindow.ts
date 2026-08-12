@@ -5,6 +5,8 @@
  * (主窗镜像 store + 子窗口根组件)。只放纯类型,不放运行时代码。
  */
 
+import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
+
 import type { ConversationSearchJump } from './conversationSearchJump.js';
 
 /** 子窗口全局状态:detached 是持久化偏好,lastOpen 是重启恢复用的状态,open 是运行时窗口开闭。 */
@@ -25,6 +27,8 @@ export interface RsbWindowContext {
   sessionId: string | null;
   workdir: string | null;
   remoteHostId: string | null;
+  /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
+  deviceLinkDeviceId?: string | null;
   /** 当前主窗视图是否有侧边栏语义(设置页等无会话视图为 false,子窗口显示占位空态)。 */
   available: boolean;
 }
@@ -33,8 +37,6 @@ export interface RsbWindowContext {
 export type RsbWindowCommand =
   | { type: 'open-terminal'; sessionId: string }
   | { type: 'open-web-browser'; sessionId: string; url: string }
-  /** 打开/聚焦插件页签(panel.position:'tab',每会话单例;装入即开与未来入口共用)。 */
-  | { type: 'open-ghost-tab'; sessionId: string; ghostId: string }
   | {
       type: 'ensure-orca-workers-tab';
       sessionId: string;
@@ -48,6 +50,30 @@ export type RsbWindowCommand =
       type: 'open-background-tasks-tab';
       sessionId: string;
       focusTaskId?: string | null;
+    }
+  /** 打开/聚焦 Cindy 持久化的 Subagent 工作区(每个父任务单例)。 */
+  | {
+      type: 'open-subagents-tab';
+      sessionId: string;
+      focusRunId?: string | null;
+      focusProvider?: SubagentProvider | null;
+      /** False adds the singleton without replacing the user's active tab. */
+      focusTab?: boolean;
+      /** False persists the tab without expanding the sidebar. */
+      revealSidebar?: boolean;
+    }
+  | {
+      type: 'open-turn-review';
+      sessionId: string;
+      changeSetIds: string[];
+      selectedDiffId?: string | null;
+      selectedPath?: string | null;
+      requestNonce: number;
+      /**
+       * 承载 review tab 的 RSB 桶(缺省 = sessionId 自身)。协同面板里 worker
+       * 流的入口传 lead sessionId:worker 自己的桶在协同视图下不可见。
+       */
+      hostSessionId?: string | null;
     }
   | {
       type: 'open-file-browser';

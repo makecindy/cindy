@@ -348,13 +348,12 @@ describe('startup update relaunch safety', () => {
     });
   });
 
-  it('keeps the patch staged (no relaunch) when auto-update is disabled', async () => {
-    await expect(runStartupUpdate({ enabled: false })).resolves.toMatchObject({ action: 'none' });
-    expect(logInfo).toHaveBeenCalledWith(
-      'startup update relaunch deferred (%s); patch v%s remains ready',
-      'disabled',
-      '0.0.65',
-    );
+  it('auto-applies startup updates even when idle auto-install is disabled', async () => {
+    await expect(runStartupUpdate({ enabled: false })).resolves.toMatchObject({
+      hasUpdate: true,
+      action: 'relaunch',
+      version: '0.0.65',
+    });
   });
 
   it('never runs the startup update flow (nor the native updater) on a dev build', async () => {
@@ -364,7 +363,7 @@ describe('startup update relaunch safety', () => {
     await expect(runStartupUpdate()).resolves.toMatchObject({ hasUpdate: false, action: 'none' });
   });
 
-  it('re-checks the startup policy at the apply boundary, keeping manual apply separate', async () => {
+  it('keeps startup and manual relaunch IPC paths separate', async () => {
     vi.useFakeTimers();
     fetchManifest.mockResolvedValue(updateManifest());
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
@@ -385,18 +384,87 @@ describe('startup update relaunch safety', () => {
 
       await expect(startupHandler?.()).resolves.toMatchObject({ action: 'relaunch' });
 
-      // User flips the auto-update switch off during the renderer's presentation
-      // delay → the apply boundary must still honor it and defer (no relaunch).
+      // Startup/Splash relaunch is independent from the background idle setting.
       readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
-      await expect(autoApplyHandler?.({}, 'dark')).resolves.toEqual({
-        accepted: false,
-        blockReason: 'disabled',
-      });
       expect(service.getUpdateStatus()).toBe('ready');
-      expect(logInfo).toHaveBeenCalledWith(
-        'startup automatic relaunch deferred at apply boundary (%s)',
-        'disabled',
-      );
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  /** Boots the startup flow (staging a patch) and hands back the live module. */
+  async function bootWithStagedPatch(options: { enabled?: boolean } = {}) {
+    vi.useFakeTimers();
+    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: options.enabled ?? true });
+    fetchManifest.mockResolvedValue(updateManifest());
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.join(TEST_USER_DATA, 'updates'), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+
+    const service = await freshUpdateService('darwin');
+    service.initUpdateService();
+    const handler = ipcHandlers.get('update-check-startup');
+    if (!handler) throw new Error('update-check-startup handler not registered');
+    await handler();
+    return service;
+  }
+
+  it('is false with nothing staged', async () => {
+    const service = await freshUpdateService('darwin');
+    try {
+      expect(service.getUpdateStatus()).toBe('idle');
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  // Regression: a staged patch used to read as "about to relaunch" purely from
+  // status==='ready'. With auto-relaunch off the patch sits there indefinitely,
+  // so every cold boot re-observed 'ready' and callers (startImConnection) kept
+  // deferring to a "next cold boot" that behaved identically — the FeishuBot
+  // never came online and feishuBot:save failed with [IM_NOT_READY] forever.
+  it('is false for a patch staged while auto-relaunch is off', async () => {
+    const service = await bootWithStagedPatch({ enabled: false });
+    try {
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('is true for a patch staged while auto-relaunch is on', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    try {
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(service.isUpdateRelaunchImminent()).toBe(true);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('re-reads the auto-relaunch switch on every call', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    try {
+      expect(service.isUpdateRelaunchImminent()).toBe(true);
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
+      expect(service.isUpdateRelaunchImminent()).toBe(true);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('is false on a dev build even with a staged patch', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    try {
+      expect(service.getUpdateStatus()).toBe('ready');
+      isDev.mockReturnValue(true);
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
     } finally {
       service.stopUpdateService();
     }

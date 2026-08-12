@@ -132,7 +132,7 @@ export function GhostErrandPrefs({
         <p
           className={cn(
             'font-medium text-[var(--text-primary)]',
-            appearance === 'plugin' ? 'text-14 leading-[22px]' : 'text-13',
+            appearance === 'plugin' ? 'text-14 leading-[1.571]' : 'text-13',
           )}
         >
           {t('settings.ghosts.detail.errandPrefs.title')}
@@ -195,11 +195,14 @@ export function GhostErrandPrefs({
           onFastModeChange={(enabled) =>
             void save({ ...config, agentKind: vendor, model: shownModel, fastMode: enabled })
           }
-          onProviderChange={(providerId, modelId) =>
+          onProviderChange={(providerId, modelId, reconciledEffort) =>
             void save({
               ...config,
               agentKind: vendor,
               model: modelId ?? shownModel,
+              effort: ERRAND_EFFORTS.has(reconciledEffort ?? '')
+                ? reconciledEffort
+                : undefined,
               providerId: providerId ?? undefined,
             })
           }

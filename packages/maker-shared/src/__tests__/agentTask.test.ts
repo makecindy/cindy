@@ -4,9 +4,12 @@ import {
   buildAgentTaskCardModel,
   findAgentTaskUpdate,
   isAgentTaskToolName,
+  isSubagentSpawnToolName,
   mergeAgentTaskUpdate,
+  PI_SUBAGENT_TOOL_NAME,
   normalizeAgentTaskUpdate,
   normalizeWorkflowProgressEntries,
+  subagentSpawnResultIndicatesRunning,
   type AgentTaskUpdate,
   type WorkflowProgressEntry,
 } from '../agentTask.js';
@@ -21,6 +24,39 @@ describe('isAgentTaskToolName', () => {
     expect(isAgentTaskToolName('Read')).toBe(false);
     expect(isAgentTaskToolName('TodoWrite')).toBe(false);
     expect(isAgentTaskToolName('')).toBe(false);
+  });
+
+  it('matches the PI subagent tool so its card renders like Claude / Codex', () => {
+    // 这条判据是三家 harness 唯一的卡片入口:漏了 PI 的工具名,子代理调用会**静默**落进普通
+    // 工具组 —— 不报错、不缺数据,只是卡片不出现,极难从日志发现(review 要求补覆盖)。
+    expect(isAgentTaskToolName(PI_SUBAGENT_TOOL_NAME)).toBe(true);
+    // 用字面量再钉一次:常量与判据一起被改坏时,只断言常量的测试会一起变绿。
+    expect(isAgentTaskToolName('subagent')).toBe(true);
+    expect(PI_SUBAGENT_TOOL_NAME).toBe('subagent');
+    // 大小写与近似名不得误命中(pi 工具名是精确匹配,不是前缀/模糊)。
+    expect(isAgentTaskToolName('Subagent')).toBe(false);
+    expect(isAgentTaskToolName('subagents')).toBe(false);
+    expect(isAgentTaskToolName('sub-agent')).toBe(false);
+  });
+});
+
+describe('isSubagentSpawnToolName', () => {
+  it('separates real launches from Codex control cards', () => {
+    for (const name of ['Task', 'Agent', 'subagent', 'collab:spawn', 'collab:spawnAgent']) {
+      expect(isSubagentSpawnToolName(name)).toBe(true);
+    }
+    for (const name of ['collab:wait', 'collab:sendInput', 'collab:resumeAgent', 'collab:closeAgent']) {
+      expect(isSubagentSpawnToolName(name)).toBe(false);
+      expect(isAgentTaskToolName(name)).toBe(true);
+    }
+  });
+});
+
+describe('subagentSpawnResultIndicatesRunning', () => {
+  it('fails closed when a tool result is missing', () => {
+    expect(subagentSpawnResultIndicatesRunning('Agent', undefined)).toBe(false);
+    expect(subagentSpawnResultIndicatesRunning('Task', null)).toBe(false);
+    expect(subagentSpawnResultIndicatesRunning('collab:spawnAgent', undefined)).toBe(false);
   });
 });
 
@@ -69,6 +105,22 @@ describe('mergeAgentTaskUpdate', () => {
   it('returns next verbatim when there is no prior', () => {
     const next: AgentTaskUpdate = { provider: 'codex', taskId: 't1', status: 'running' };
     expect(mergeAgentTaskUpdate(undefined, next)).toBe(next);
+  });
+
+  it('clears a stale model when a live update explicitly sends null', () => {
+    const first = applyAgentTaskUpdateEvent(
+      undefined,
+      { provider: 'codex', taskId: 't1', status: 'running', model: 'codex/gpt-5.5' },
+      'codex',
+      NOW,
+    )!;
+    const cleared = applyAgentTaskUpdateEvent(
+      first,
+      { provider: 'codex', taskId: 't1', status: 'running', model: null },
+      'codex',
+      '2026-06-24T00:00:01.000Z',
+    )!;
+    expect(cleared.get('t1')?.model).toBeNull();
   });
 });
 
@@ -264,6 +316,107 @@ describe('findAgentTaskUpdate', () => {
 });
 
 describe('buildAgentTaskCardModel', () => {
+  it('REPRO: treats a paired final result as terminal when the live update is stale running', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawnAgent',
+      result: 'child-thread: completed',
+      update: {
+        provider: 'codex',
+        taskId: 'collab-1',
+        parentToolUseId: 'collab-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('completed');
+  });
+
+  it('REPRO: keeps a V1 spawn running when its paired result is a running state summary', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawnAgent',
+      result: 'child-thread: running',
+      update: {
+        provider: 'codex',
+        taskId: 'collab-1',
+        parentToolUseId: 'collab-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+  });
+
+  it('REPRO: keeps an async Claude Agent running for its launch receipt', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Agent',
+      toolInput: { run_in_background: true, prompt: 'keep working' },
+      result: 'Async agent launched successfully.',
+      update: {
+        provider: 'claude-code',
+        taskId: 'agent-1',
+        parentToolUseId: 'agent-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+  });
+
+  it('REPRO: recognizes the full async Claude Agent launch receipt', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Agent',
+      toolInput: { run_in_background: true, prompt: 'keep working' },
+      result: [
+        'Async agent launched successfully.',
+        "agentId: agent-1 (internal ID - do not mention to user. Use SendMessage with to: 'agent-1' to continue this agent.)",
+        'The agent is working in the background. You will be notified automatically when it completes.',
+        'Briefly tell the user what you launched and end your response.',
+      ].join('\n'),
+      update: {
+        provider: 'claude-code',
+        taskId: 'agent-1',
+        parentToolUseId: 'agent-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+  });
+
+  it.each(['in_progress', 'in-progress', 'started', 'active'])(
+    'keeps a V1 spawn running for the %s state summary',
+    (state) => {
+      const model = buildAgentTaskCardModel({
+        toolName: 'collab:spawnAgent',
+        result: `child-thread: ${state}`,
+        update: {
+          provider: 'codex',
+          taskId: 'collab-1',
+          parentToolUseId: 'collab-1',
+          status: 'running',
+        },
+      });
+
+      expect(model.status).toBe('running');
+    },
+  );
+
+  it('preserves explicit failed and stopped terminal states when a result is present', () => {
+    const input = {
+      toolName: 'collab:spawnAgent',
+      result: 'child-thread: terminal',
+      update: {
+        provider: 'codex' as const,
+        taskId: 'collab-1',
+        parentToolUseId: 'collab-1',
+      },
+    };
+    expect(buildAgentTaskCardModel({ ...input, update: { ...input.update, status: 'failed' } }).status)
+      .toBe('failed');
+    expect(buildAgentTaskCardModel({ ...input, update: { ...input.update, status: 'stopped' } }).status)
+      .toBe('stopped');
+  });
+
   it('falls back the title through update → tool input description → prompt', () => {
     expect(buildAgentTaskCardModel({ update: { provider: 'codex', taskId: 't', status: 'running', title: 'From update' } }).title)
       .toBe('From update');
@@ -296,5 +449,53 @@ describe('buildAgentTaskCardModel', () => {
     const model = buildAgentTaskCardModel({ toolName: 'Task', toolInput: { description: 'x' } });
     expect(model.status).toBe('running');
     expect(model.provider).toBe('claude-code');
+  });
+
+  it('surfaces the codex spawn receipt as structured spawnedAgentName, not raw summary', () => {
+    // translator 约定:collab:spawn 的 tool_result 只放 agentPath(= input.name)。
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      toolInput: { name: '/root/survey_startup', agentThreadId: 't-2' },
+      result: '/root/survey_startup',
+    });
+    expect(model.spawnedAgentName).toBe('/root/survey_startup');
+    // 裸路径不进 summary,各端用 spawnedAgentName 按 locale 组装句子。
+    expect(model.summary).toBeUndefined();
+    expect(model.status).toBe('completed');
+    expect(model.provider).toBe('codex');
+  });
+
+  it('drops the spawn receipt once live subagent state exists (card parity with claude)', () => {
+    // 子线程送来 tokens / 工具数后,title + 运行状态已表达同样信息;再显示
+    // 「Subagent X 已启动」会让 codex 卡比 Claude 子代理卡多一行冗余文案。
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      toolInput: { name: '/root/survey_startup', agentThreadId: 't-2' },
+      result: '/root/survey_startup',
+      update: {
+        provider: 'codex',
+        taskId: 'spawn-1',
+        status: 'running',
+        title: '/root/survey_startup',
+        usage: { totalTokens: 1200, toolUses: 3, durationMs: 4200 },
+      },
+    });
+    expect(model.spawnedAgentName).toBeUndefined();
+    // 裸 agentPath 同样不许漏进 summary。
+    expect(model.summary).toBeUndefined();
+    expect(model.status).toBe('running');
+    expect(model.totalTokens).toBe(1200);
+    expect(model.toolUses).toBe(3);
+    expect(model.durationMs).toBe(4200);
+  });
+
+  it('leaves future rich collab:spawn results (agentsStates summaries) untouched', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      toolInput: { name: '/root/survey_startup' },
+      result: 'thread-2: done',
+    });
+    expect(model.spawnedAgentName).toBeUndefined();
+    expect(model.summary).toBe('thread-2: done');
   });
 });

@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-linux",
-  "documentNamespace": "https://cindy.app/spdx/desktop-linux/fcc47c4d85d315735bdaff4cdddbea8e47ff9bb01830e8ae9458f0a8fbfe5728",
+  "documentNamespace": "https://cindy.app/spdx/desktop-linux/8151ecd512d84f855fdd8838bf5948fc9b37ad5b84e05bfde10182cf77f14a3b",
   "creationInfo": {
-    "created": "2026-07-30T07:20:40Z",
+    "created": "2026-08-02T09:08:05Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -43,8 +43,8 @@
     },
     {
       "name": "Electron (bundled runtime)",
-      "SPDXID": "SPDXRef-Package-e01faf6cc0ab33f1",
-      "versionInfo": "41.2.0",
+      "SPDXID": "SPDXRef-Package-e57785feb130dc56",
+      "versionInfo": "41.10.3",
       "downloadLocation": "https://github.com/electron/electron",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -72,8 +72,8 @@
       "copyrightText": "NOASSERTION"
     },
     {
-      "name": "OpenAI Codex CLI (bundled binary)",
-      "SPDXID": "SPDXRef-Package-2533cecb0b1ad2d4",
+      "name": "OpenAI Codex CLI (runtime-downloaded binary)",
+      "SPDXID": "SPDXRef-Package-4f22132a77577bcb",
       "versionInfo": "0.145.0",
       "downloadLocation": "https://github.com/openai/codex",
       "filesAnalyzed": false,
@@ -86,6 +86,16 @@
       "SPDXID": "SPDXRef-Package-4e840ef8561a058f",
       "versionInfo": "vendored",
       "downloadLocation": "https://github.com/openclaw/openclaw",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "pi coding agent (runtime-downloaded binary)",
+      "SPDXID": "SPDXRef-Package-04c1add3e48a9e5c",
+      "versionInfo": "0.83.0",
+      "downloadLocation": "https://github.com/earendil-works/pi",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -155,23 +165,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40antfu/install-pkg@1.1.0"
-        }
-      ]
-    },
-    {
-      "name": "@anthropic-ai/sdk",
-      "SPDXID": "SPDXRef-Package-69d311a72cf4a3c3",
-      "versionInfo": "0.81.0",
-      "downloadLocation": "https://github.com/anthropics/anthropic-sdk-typescript",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40anthropic-ai/sdk@0.81.0"
         }
       ]
     },
@@ -1158,6 +1151,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40isaacs/cliui@8.0.2"
+        }
+      ]
+    },
+    {
+      "name": "@isaacs/fs-minipass",
+      "SPDXID": "SPDXRef-Package-97d240f40344ec43",
+      "versionInfo": "4.0.1",
+      "downloadLocation": "https://github.com/npm/fs-minipass",
+      "filesAnalyzed": false,
+      "licenseConcluded": "ISC",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40isaacs/fs-minipass@4.0.1"
         }
       ]
     },
@@ -4456,6 +4466,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/chownr@1.1.4"
+        }
+      ]
+    },
+    {
+      "name": "chownr",
+      "SPDXID": "SPDXRef-Package-7dfd744a612fd9bb",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "https://github.com/isaacs/chownr",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BlueOak-1.0.0",
+      "licenseDeclared": "BlueOak-1.0.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/chownr@3.0.0"
         }
       ]
     },
@@ -10019,6 +10046,23 @@
       ]
     },
     {
+      "name": "minizlib",
+      "SPDXID": "SPDXRef-Package-8ce1e429d2efadea",
+      "versionInfo": "3.1.0",
+      "downloadLocation": "https://github.com/isaacs/minizlib",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/minizlib@3.1.0"
+        }
+      ]
+    },
+    {
       "name": "mkdirp",
       "SPDXID": "SPDXRef-Package-4676dc17f68efad3",
       "versionInfo": "0.5.6",
@@ -12586,6 +12630,23 @@
       ]
     },
     {
+      "name": "tar",
+      "SPDXID": "SPDXRef-Package-da81b03287f1279a",
+      "versionInfo": "7.5.22",
+      "downloadLocation": "https://github.com/isaacs/node-tar",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BlueOak-1.0.0",
+      "licenseDeclared": "BlueOak-1.0.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/tar@7.5.22"
+        }
+      ]
+    },
+    {
       "name": "tar-fs",
       "SPDXID": "SPDXRef-Package-50b2e8b027599681",
       "versionInfo": "2.1.5",
@@ -13487,6 +13548,23 @@
       ]
     },
     {
+      "name": "yallist",
+      "SPDXID": "SPDXRef-Package-25126929995410cf",
+      "versionInfo": "5.0.0",
+      "downloadLocation": "https://github.com/isaacs/yallist",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BlueOak-1.0.0",
+      "licenseDeclared": "BlueOak-1.0.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/yallist@5.0.0"
+        }
+      ]
+    },
+    {
       "name": "yargs",
       "SPDXID": "SPDXRef-Package-21406978061a0749",
       "versionInfo": "15.4.1",
@@ -13591,7 +13669,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e01faf6cc0ab33f1"
+      "relatedSpdxElement": "SPDXRef-Package-e57785feb130dc56"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -13606,12 +13684,17 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-2533cecb0b1ad2d4"
+      "relatedSpdxElement": "SPDXRef-Package-4f22132a77577bcb"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4e840ef8561a058f"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-04c1add3e48a9e5c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -13642,11 +13725,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-90a75350ac517909"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-69d311a72cf4a3c3"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -13937,6 +14015,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-40e45c962a7c40a3"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-97d240f40344ec43"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -14907,6 +14990,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-3ff4ca23766c70e5"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-7dfd744a612fd9bb"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -16546,6 +16634,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-8ce1e429d2efadea"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4676dc17f68efad3"
     },
     {
@@ -17301,6 +17394,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-da81b03287f1279a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-50b2e8b027599681"
     },
     {
@@ -17566,6 +17664,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-25126929995410cf"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-21406978061a0749"
     },
     {
@@ -17591,16 +17694,16 @@
   ],
   "hasExtractedLicensingInfos": [
     {
-      "licenseId": "LicenseRef-BSD-Variant",
-      "extractedText": "Copyright (c) 2012-2014, Bram Stein\nAll rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions\nare met:\n\n 1. Redistributions of source code must retain the above copyright\n    notice, this list of conditions and the following disclaimer.\n 2. Redistributions in binary form must reproduce the above copyright\n    notice, this list of conditions and the following disclaimer in the\n    documentation and/or other materials provided with the distribution.\n 3. The name of the author may not be used to endorse or promote products\n    derived from this software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE AUTHOR \"AS IS\" AND ANY EXPRESS OR IMPLIED\nWARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF\nMERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO\nEVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,\nINDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,\nBUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,\nDATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY\nOF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING\nNEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,\nEVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE."
+      "licenseId": "LicenseRef-Sharp-Third-Party-Licenses",
+      "extractedText": "### bundled:@img/sharp-libvips-linux-arm64 embedded native libraries@1.3.2\n\n# `@img/sharp-libvips-linux-arm64`\n\nPrebuilt libvips and dependencies for use with sharp on Linux (glibc) 64-bit ARM.\n\n## Licensing\n\nThis software contains third-party libraries\nused under the terms of the following licenses:\n\n| Library       | Used under the terms of                                                                                   |\n|---------------|-----------------------------------------------------------------------------------------------------------|\n| aom           | BSD 2-Clause + [Alliance for Open Media Patent License 1.0](https://aomedia.org/license/patent-license/)  |\n| cairo         | Mozilla Public License 2.0                                                                                |\n| cgif          | MIT License                                                                                               |\n| expat         | MIT License                                                                                               |\n| fontconfig    | [fontconfig License](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |\n| freetype      | [freetype License](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |\n| fribidi       | LGPLv3                                                                                                    |\n| glib          | LGPLv3                                                                                                    |\n| harfbuzz      | MIT License                                                                                               |\n| highway       | BSD 3-Clause                                                                                              |\n| lcms          | MIT License                                                                                               |\n| libarchive    | BSD 2-Clause                                                                                              |\n| libexif       | LGPLv3                                                                                                    |\n| libffi        | MIT License                                                                                               |\n| libheif       | LGPLv3                                                                                                    |\n| libimagequant | [BSD 2-Clause](https://github.com/lovell/libimagequant/blob/main/COPYRIGHT)                               |\n| libnsgif      | MIT License                                                                                               |\n| libpng        | [libpng License](https://github.com/pnggroup/libpng/blob/master/LICENSE)                                  |\n| librsvg       | LGPLv3                                                                                                    |\n| libtiff       | [libtiff License](https://gitlab.com/libtiff/libtiff/blob/master/LICENSE.md) (BSD-like)                   |\n| libultrahdr   | MIT License                                                                                               |\n| libvips       | LGPLv3                                                                                                    |\n| libwebp       | New BSD License                                                                                           |\n| libxml2       | MIT License                                                                                               |\n| mozjpeg       | [zlib License, IJG License, BSD 3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |\n| pango         | LGPLv3                                                                                                    |\n| pixman        | MIT License                                                                                               |\n| proxy-libintl | LGPLv3                                                                                                    |\n| zlib-ng       | [zlib License](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |\n\nUse of libraries under the terms of the LGPLv3 is via the\n\"any later version\" clause of the LGPLv2 or LGPLv2.1.\n\nPlease report any errors or omissions via\nhttps://github.com/lovell/sharp-libvips/issues/new\n\nExact bundled library versions:\n{\n  \"aom\": \"3.14.1\",\n  \"archive\": \"3.8.8\",\n  \"cairo\": \"1.18.4\",\n  \"cgif\": \"0.5.3\",\n  \"exif\": \"0.6.26\",\n  \"expat\": \"2.8.2\",\n  \"ffi\": \"3.6.0\",\n  \"fontconfig\": \"2.18.1\",\n  \"freetype\": \"2.14.3\",\n  \"fribidi\": \"1.0.16\",\n  \"glib\": \"2.89.1\",\n  \"harfbuzz\": \"14.2.1\",\n  \"heif\": \"1.23.1\",\n  \"highway\": \"1.4.0\",\n  \"imagequant\": \"2.4.1\",\n  \"lcms\": \"2.19.1\",\n  \"mozjpeg\": \"0826579\",\n  \"pango\": \"1.58.0\",\n  \"pixman\": \"0.46.4\",\n  \"png\": \"1.6.58\",\n  \"proxy-libintl\": \"0.5\",\n  \"rsvg\": \"2.62.90\",\n  \"tiff\": \"d01a94b\",\n  \"uhdr\": \"1acdbed\",\n  \"vips\": \"8.18.3\",\n  \"webp\": \"1.6.0\",\n  \"xml2\": \"2.15.3\",\n  \"zlib-ng\": \"2.3.3\"\n}\n\nCorresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. The bundled libvips version is 8.18.3.\n\n------------------------------------------------------------------------\n\n### bundled:@img/sharp-libvips-linux-x64 embedded native libraries@1.3.2\n\n# `@img/sharp-libvips-linux-x64`\n\nPrebuilt libvips and dependencies for use with sharp on Linux (glibc) x64.\n\n## Licensing\n\nThis software contains third-party libraries\nused under the terms of the following licenses:\n\n| Library       | Used under the terms of                                                                                   |\n|---------------|-----------------------------------------------------------------------------------------------------------|\n| aom           | BSD 2-Clause + [Alliance for Open Media Patent License 1.0](https://aomedia.org/license/patent-license/)  |\n| cairo         | Mozilla Public License 2.0                                                                                |\n| cgif          | MIT License                                                                                               |\n| expat         | MIT License                                                                                               |\n| fontconfig    | [fontconfig License](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |\n| freetype      | [freetype License](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |\n| fribidi       | LGPLv3                                                                                                    |\n| glib          | LGPLv3                                                                                                    |\n| harfbuzz      | MIT License                                                                                               |\n| highway       | BSD 3-Clause                                                                                              |\n| lcms          | MIT License                                                                                               |\n| libarchive    | BSD 2-Clause                                                                                              |\n| libexif       | LGPLv3                                                                                                    |\n| libffi        | MIT License                                                                                               |\n| libheif       | LGPLv3                                                                                                    |\n| libimagequant | [BSD 2-Clause](https://github.com/lovell/libimagequant/blob/main/COPYRIGHT)                               |\n| libnsgif      | MIT License                                                                                               |\n| libpng        | [libpng License](https://github.com/pnggroup/libpng/blob/master/LICENSE)                                  |\n| librsvg       | LGPLv3                                                                                                    |\n| libtiff       | [libtiff License](https://gitlab.com/libtiff/libtiff/blob/master/LICENSE.md) (BSD-like)                   |\n| libultrahdr   | MIT License                                                                                               |\n| libvips       | LGPLv3                                                                                                    |\n| libwebp       | New BSD License                                                                                           |\n| libxml2       | MIT License                                                                                               |\n| mozjpeg       | [zlib License, IJG License, BSD 3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |\n| pango         | LGPLv3                                                                                                    |\n| pixman        | MIT License                                                                                               |\n| proxy-libintl | LGPLv3                                                                                                    |\n| zlib-ng       | [zlib License](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |\n\nUse of libraries under the terms of the LGPLv3 is via the\n\"any later version\" clause of the LGPLv2 or LGPLv2.1.\n\nPlease report any errors or omissions via\nhttps://github.com/lovell/sharp-libvips/issues/new\n\nExact bundled library versions:\n{\n  \"aom\": \"3.14.1\",\n  \"archive\": \"3.8.8\",\n  \"cairo\": \"1.18.4\",\n  \"cgif\": \"0.5.3\",\n  \"exif\": \"0.6.26\",\n  \"expat\": \"2.8.2\",\n  \"ffi\": \"3.6.0\",\n  \"fontconfig\": \"2.18.1\",\n  \"freetype\": \"2.14.3\",\n  \"fribidi\": \"1.0.16\",\n  \"glib\": \"2.89.1\",\n  \"harfbuzz\": \"14.2.1\",\n  \"heif\": \"1.23.1\",\n  \"highway\": \"1.4.0\",\n  \"imagequant\": \"2.4.1\",\n  \"lcms\": \"2.19.1\",\n  \"mozjpeg\": \"0826579\",\n  \"pango\": \"1.58.0\",\n  \"pixman\": \"0.46.4\",\n  \"png\": \"1.6.58\",\n  \"proxy-libintl\": \"0.5\",\n  \"rsvg\": \"2.62.90\",\n  \"tiff\": \"d01a94b\",\n  \"uhdr\": \"1acdbed\",\n  \"vips\": \"8.18.3\",\n  \"webp\": \"1.6.0\",\n  \"xml2\": \"2.15.3\",\n  \"zlib-ng\": \"2.3.3\"\n}\n\nCorresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. The bundled libvips version is 8.18.3."
     },
     {
       "licenseId": "LicenseRef-Public-Domain",
       "extractedText": "SQLite is in the public domain. See https://sqlite.org/copyright.html"
     },
     {
-      "licenseId": "LicenseRef-Sharp-Third-Party-Licenses",
-      "extractedText": "### bundled:@img/sharp-libvips-linux-arm64 embedded native libraries@1.3.2\n\n# `@img/sharp-libvips-linux-arm64`\n\nPrebuilt libvips and dependencies for use with sharp on Linux (glibc) 64-bit ARM.\n\n## Licensing\n\nThis software contains third-party libraries\nused under the terms of the following licenses:\n\n| Library       | Used under the terms of                                                                                   |\n|---------------|-----------------------------------------------------------------------------------------------------------|\n| aom           | BSD 2-Clause + [Alliance for Open Media Patent License 1.0](https://aomedia.org/license/patent-license/)  |\n| cairo         | Mozilla Public License 2.0                                                                                |\n| cgif          | MIT License                                                                                               |\n| expat         | MIT License                                                                                               |\n| fontconfig    | [fontconfig License](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |\n| freetype      | [freetype License](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |\n| fribidi       | LGPLv3                                                                                                    |\n| glib          | LGPLv3                                                                                                    |\n| harfbuzz      | MIT License                                                                                               |\n| highway       | BSD 3-Clause                                                                                              |\n| lcms          | MIT License                                                                                               |\n| libarchive    | BSD 2-Clause                                                                                              |\n| libexif       | LGPLv3                                                                                                    |\n| libffi        | MIT License                                                                                               |\n| libheif       | LGPLv3                                                                                                    |\n| libimagequant | [BSD 2-Clause](https://github.com/lovell/libimagequant/blob/main/COPYRIGHT)                               |\n| libnsgif      | MIT License                                                                                               |\n| libpng        | [libpng License](https://github.com/pnggroup/libpng/blob/master/LICENSE)                                  |\n| librsvg       | LGPLv3                                                                                                    |\n| libtiff       | [libtiff License](https://gitlab.com/libtiff/libtiff/blob/master/LICENSE.md) (BSD-like)                   |\n| libultrahdr   | MIT License                                                                                               |\n| libvips       | LGPLv3                                                                                                    |\n| libwebp       | New BSD License                                                                                           |\n| libxml2       | MIT License                                                                                               |\n| mozjpeg       | [zlib License, IJG License, BSD 3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |\n| pango         | LGPLv3                                                                                                    |\n| pixman        | MIT License                                                                                               |\n| proxy-libintl | LGPLv3                                                                                                    |\n| zlib-ng       | [zlib License](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |\n\nUse of libraries under the terms of the LGPLv3 is via the\n\"any later version\" clause of the LGPLv2 or LGPLv2.1.\n\nPlease report any errors or omissions via\nhttps://github.com/lovell/sharp-libvips/issues/new\n\nExact bundled library versions:\n{\n  \"aom\": \"3.14.1\",\n  \"archive\": \"3.8.8\",\n  \"cairo\": \"1.18.4\",\n  \"cgif\": \"0.5.3\",\n  \"exif\": \"0.6.26\",\n  \"expat\": \"2.8.2\",\n  \"ffi\": \"3.6.0\",\n  \"fontconfig\": \"2.18.1\",\n  \"freetype\": \"2.14.3\",\n  \"fribidi\": \"1.0.16\",\n  \"glib\": \"2.89.1\",\n  \"harfbuzz\": \"14.2.1\",\n  \"heif\": \"1.23.1\",\n  \"highway\": \"1.4.0\",\n  \"imagequant\": \"2.4.1\",\n  \"lcms\": \"2.19.1\",\n  \"mozjpeg\": \"0826579\",\n  \"pango\": \"1.58.0\",\n  \"pixman\": \"0.46.4\",\n  \"png\": \"1.6.58\",\n  \"proxy-libintl\": \"0.5\",\n  \"rsvg\": \"2.62.90\",\n  \"tiff\": \"d01a94b\",\n  \"uhdr\": \"1acdbed\",\n  \"vips\": \"8.18.3\",\n  \"webp\": \"1.6.0\",\n  \"xml2\": \"2.15.3\",\n  \"zlib-ng\": \"2.3.3\"\n}\n\nCorresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. The bundled libvips version is 8.18.3.\n\n------------------------------------------------------------------------\n\n### bundled:@img/sharp-libvips-linux-x64 embedded native libraries@1.3.2\n\n# `@img/sharp-libvips-linux-x64`\n\nPrebuilt libvips and dependencies for use with sharp on Linux (glibc) x64.\n\n## Licensing\n\nThis software contains third-party libraries\nused under the terms of the following licenses:\n\n| Library       | Used under the terms of                                                                                   |\n|---------------|-----------------------------------------------------------------------------------------------------------|\n| aom           | BSD 2-Clause + [Alliance for Open Media Patent License 1.0](https://aomedia.org/license/patent-license/)  |\n| cairo         | Mozilla Public License 2.0                                                                                |\n| cgif          | MIT License                                                                                               |\n| expat         | MIT License                                                                                               |\n| fontconfig    | [fontconfig License](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |\n| freetype      | [freetype License](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |\n| fribidi       | LGPLv3                                                                                                    |\n| glib          | LGPLv3                                                                                                    |\n| harfbuzz      | MIT License                                                                                               |\n| highway       | BSD 3-Clause                                                                                              |\n| lcms          | MIT License                                                                                               |\n| libarchive    | BSD 2-Clause                                                                                              |\n| libexif       | LGPLv3                                                                                                    |\n| libffi        | MIT License                                                                                               |\n| libheif       | LGPLv3                                                                                                    |\n| libimagequant | [BSD 2-Clause](https://github.com/lovell/libimagequant/blob/main/COPYRIGHT)                               |\n| libnsgif      | MIT License                                                                                               |\n| libpng        | [libpng License](https://github.com/pnggroup/libpng/blob/master/LICENSE)                                  |\n| librsvg       | LGPLv3                                                                                                    |\n| libtiff       | [libtiff License](https://gitlab.com/libtiff/libtiff/blob/master/LICENSE.md) (BSD-like)                   |\n| libultrahdr   | MIT License                                                                                               |\n| libvips       | LGPLv3                                                                                                    |\n| libwebp       | New BSD License                                                                                           |\n| libxml2       | MIT License                                                                                               |\n| mozjpeg       | [zlib License, IJG License, BSD 3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |\n| pango         | LGPLv3                                                                                                    |\n| pixman        | MIT License                                                                                               |\n| proxy-libintl | LGPLv3                                                                                                    |\n| zlib-ng       | [zlib License](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |\n\nUse of libraries under the terms of the LGPLv3 is via the\n\"any later version\" clause of the LGPLv2 or LGPLv2.1.\n\nPlease report any errors or omissions via\nhttps://github.com/lovell/sharp-libvips/issues/new\n\nExact bundled library versions:\n{\n  \"aom\": \"3.14.1\",\n  \"archive\": \"3.8.8\",\n  \"cairo\": \"1.18.4\",\n  \"cgif\": \"0.5.3\",\n  \"exif\": \"0.6.26\",\n  \"expat\": \"2.8.2\",\n  \"ffi\": \"3.6.0\",\n  \"fontconfig\": \"2.18.1\",\n  \"freetype\": \"2.14.3\",\n  \"fribidi\": \"1.0.16\",\n  \"glib\": \"2.89.1\",\n  \"harfbuzz\": \"14.2.1\",\n  \"heif\": \"1.23.1\",\n  \"highway\": \"1.4.0\",\n  \"imagequant\": \"2.4.1\",\n  \"lcms\": \"2.19.1\",\n  \"mozjpeg\": \"0826579\",\n  \"pango\": \"1.58.0\",\n  \"pixman\": \"0.46.4\",\n  \"png\": \"1.6.58\",\n  \"proxy-libintl\": \"0.5\",\n  \"rsvg\": \"2.62.90\",\n  \"tiff\": \"d01a94b\",\n  \"uhdr\": \"1acdbed\",\n  \"vips\": \"8.18.3\",\n  \"webp\": \"1.6.0\",\n  \"xml2\": \"2.15.3\",\n  \"zlib-ng\": \"2.3.3\"\n}\n\nCorresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. The bundled libvips version is 8.18.3."
+      "licenseId": "LicenseRef-BSD-Variant",
+      "extractedText": "Copyright (c) 2012-2014, Bram Stein\nAll rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions\nare met:\n\n 1. Redistributions of source code must retain the above copyright\n    notice, this list of conditions and the following disclaimer.\n 2. Redistributions in binary form must reproduce the above copyright\n    notice, this list of conditions and the following disclaimer in the\n    documentation and/or other materials provided with the distribution.\n 3. The name of the author may not be used to endorse or promote products\n    derived from this software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE AUTHOR \"AS IS\" AND ANY EXPRESS OR IMPLIED\nWARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF\nMERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO\nEVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,\nINDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,\nBUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,\nDATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY\nOF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING\nNEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,\nEVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE."
     }
   ]
 }

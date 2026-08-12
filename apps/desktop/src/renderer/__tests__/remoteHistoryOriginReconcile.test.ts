@@ -34,6 +34,7 @@ vi.mock('@/lib/sessionService', () => ({
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
+import * as sessionService from '@/lib/sessionService';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 
 const DEVICE_ID = 'dev-A';
@@ -175,6 +176,41 @@ describe('makerChatStore.reconcileOpenSessionOrigins (device-link 历史竞速)'
     makerChatStore.reconcileOpenSessionOrigins();
     await flush();
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(1);
+  });
+
+  it('来源漂移后丢弃旧 sessions:get 响应，避免本机 metadata 覆盖远程状态', async () => {
+    const s = sid();
+    let resolveStaleMetadata!: (session: unknown) => void;
+    vi.mocked(sessionService.get).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveStaleMetadata = resolve;
+      }) as never,
+    );
+
+    // 首拉先按本机来源完成，metadata 请求故意留在途。
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    expect(makerChatStore.getSnapshot(s).historyLoaded).toBe(true);
+
+    // 来源解析后触发新一轮远程首拉，旧 metadata Promise 必须失效。
+    remoteHistory = [dbMessage(s, 'r1', 'remote')];
+    seedRemote(s);
+    makerChatStore.reconcileOpenSessionOrigins();
+    await flush();
+
+    resolveStaleMetadata({
+      agentKind: 'codex',
+      remoteHostId: null,
+      sdkSessionId: 'stale-local-session',
+      fastMode: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      totalCostUsd: 0,
+    });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).agentKind).toBe('claude-code');
+    expect(makerChatStore.getSnapshot(s).sdkSessionId).toBeNull();
   });
 
   it('purge 后丢弃此前发起的旧投影查询', async () => {

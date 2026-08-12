@@ -1,7 +1,7 @@
 /**
  * cc-remote-mcp 的 buildCcRemoteHttpMcpServers:
  * bridge 不可用时降级为空;server 名单按白名单过滤;session ctx 注册进 bridge
- * 并以 ?session= query + persistent token 下发;cleanup 注销 ctx;同 session
+ * 并以 ?session=&instance= query + persistent token 下发;cleanup 注销 ctx;同 session
  * 重建直接覆盖注册不累积。
  */
 
@@ -13,9 +13,19 @@ import type { CodexHttpBridge } from '../../mcp-integrations/codexHttpBridge.js'
 import { buildCcRemoteHttpMcpServers } from '../cc-remote-mcp.js';
 
 function fakeBridge() {
-  const registered = new Map<string, { sessionId: string; agentKind: string; vendorOptions: unknown }>();
+  const registered = new Map<string, {
+    sessionId: string;
+    sessionInstanceId?: string;
+    agentKind: string;
+    vendorOptions: unknown;
+  }>();
   const bridge = {
-    registerSessionCtx: vi.fn((sessionId: string, ctx: { sessionId: string; agentKind: string; vendorOptions: unknown }) => {
+    registerSessionCtx: vi.fn((sessionId: string, ctx: {
+      sessionId: string;
+      sessionInstanceId?: string;
+      agentKind: string;
+      vendorOptions: unknown;
+    }) => {
       registered.set(sessionId, ctx);
     }),
     unregisterSessionCtx: vi.fn((sessionId: string, expectedCtx?: unknown) => {
@@ -183,10 +193,15 @@ describe('buildCcRemoteHttpMcpServers', () => {
     expect(needsFreshStart).toBe(true);
   });
 
-  it('injects only whitelisted servers with the persistent token and ?session= routing', async () => {
+  it('injects only whitelisted servers with persistent token and instance-bound routing', async () => {
     const { bridge, registered } = fakeBridge();
     const { servers } = await buildCcRemoteHttpMcpServers(
-      { host: HOST, sessionId: 's1', workingDir: '/remote/repo' },
+      {
+        host: HOST,
+        sessionId: 's1',
+        sessionInstanceId: 'instance-1',
+        workingDir: '/remote/repo',
+      },
       {
         ensureBridgeStarted: async () => ({
           port: 38080,
@@ -202,13 +217,16 @@ describe('buildCcRemoteHttpMcpServers', () => {
     expect(Object.keys(servers).sort()).toEqual(['cindy_orca', 'orca_worker_bridge']);
     expect(servers.cindy_orca).toEqual({
       type: 'http',
-      url: 'http://127.0.0.1:47921/mcp/cindy_orca?session=s1',
+      url: 'http://127.0.0.1:47921/mcp/cindy_orca?session=s1&instance=instance-1',
       headers: { Authorization: 'Bearer persistent-test-token' },
     });
     // ctx 以 sessionId 为 key 注册,带 agentKind / vendorOptions。
     expect(registered.get('s1')).toMatchObject({
       sessionId: 's1',
+      sessionInstanceId: 'instance-1',
       agentKind: 'claude-code',
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
       vendorOptions: { orcaRole: 'lead', orcaLeadSessionId: 's1' },
     });
   });
@@ -423,5 +441,41 @@ describe('buildCcRemoteHttpMcpServers', () => {
     // 开关翻转 = 注入集合变化 = 新代际, attach 回旧集合的 alive query 必须
     // 被判 drift 重建。
     expect(withMemory.fingerprint).not.toBe(withoutMemory.fingerprint);
+  });
+
+  it('changes the generation fingerprint when the Session instance changes', async () => {
+    const { bridge } = fakeBridge();
+    const deps = {
+      ensureBridgeStarted: async () => ({
+        port: 38080,
+        serverNames: ['cindy_orca'],
+        bridge,
+      }),
+      ensureForward: vi.fn(async () => 47921),
+      getBridgeToken: async () => 'persistent-test-token',
+      synthesizeVendorOptions: async () => ({}),
+    };
+    const first = await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'same-business-session',
+        sessionInstanceId: 'instance-old',
+        workingDir: '/remote/repo',
+      },
+      deps,
+    );
+    const replacement = await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'same-business-session',
+        sessionInstanceId: 'instance-new',
+        workingDir: '/remote/repo',
+      },
+      deps,
+    );
+
+    expect(first.fingerprint).toBeDefined();
+    expect(replacement.fingerprint).toBeDefined();
+    expect(first.fingerprint).not.toBe(replacement.fingerprint);
   });
 });

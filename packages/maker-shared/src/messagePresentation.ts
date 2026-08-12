@@ -84,11 +84,12 @@ export interface TodoCardPresentation {
 
 export type MessageActionBarAlignment = 'left' | 'right';
 
-export type MessageActionBarItemId = 'copy' | 'cost' | 'more' | 'streaming' | 'time';
+export type MessageActionBarItemId = 'copy' | 'cost' | 'fork' | 'more' | 'streaming' | 'time';
 
 export interface MessageActionBarPresentationInput {
   align: 'agent' | 'user';
   canCopy: boolean;
+  canFork: boolean;
   hasMoreActions?: boolean;
   hasTime: boolean;
   hasTurnCost: boolean;
@@ -359,16 +360,18 @@ export function buildMessageActionBarPresentation(
   }
 
   const agentItems: Array<MessageActionBarItemId | null> = [
-      input.canCopy ? 'copy' : null,
-      input.hasMoreActions ? 'more' : null,
-      input.hasTime ? 'time' : null,
-      input.hasTurnCost ? 'cost' : null,
-    ];
+    input.canCopy ? 'copy' : null,
+    input.canFork ? 'fork' : null,
+    input.hasMoreActions ? 'more' : null,
+    input.hasTime ? 'time' : null,
+    input.hasTurnCost ? 'cost' : null,
+  ];
   const userItems: Array<MessageActionBarItemId | null> = [
-      input.hasTime ? 'time' : null,
-      input.canCopy ? 'copy' : null,
-      input.hasMoreActions ? 'more' : null,
-    ];
+    input.hasTime ? 'time' : null,
+    input.canCopy ? 'copy' : null,
+    input.canFork ? 'fork' : null,
+    input.hasMoreActions ? 'more' : null,
+  ];
   const items = (input.align === 'agent' ? agentItems : userItems).filter(isMessageActionBarItemId);
 
   return {

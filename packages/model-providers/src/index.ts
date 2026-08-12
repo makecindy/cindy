@@ -24,16 +24,20 @@ export type {
   CustomProviderConfig,
   CustomProviderRuntimeConfig,
   ProviderRuntimeModelConfig,
+  PiReasoningEffort,
   ProviderPreset,
   ProviderPresetRuntime,
+  PresetSortRegion,
   OAuthAuthorizationCodeDescriptor,
   OAuthDeviceCodeDescriptor,
   OAuthProviderDescriptor,
 } from './types.js';
 
+export { PI_REASONING_EFFORTS } from './types.js';
+
 export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 
-export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForLocale } from './catalog.js';
+export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from './catalog.js';
 
 export { buildUserProvider, DEFAULT_CUSTOM_CONTEXT_WINDOW } from './user-provider.js';
 export {
@@ -55,20 +59,24 @@ export {
 } from './source.js';
 
 export {
+  compareModelRegistryRevisions,
+  decideModelRegistrySnapshot,
   findModelRegistryRoute,
   resolveModelReferencePrice,
 } from './modelRegistry.js';
+export { modelRegistryCanonicalJson } from './modelRegistryCanonical.js';
+export {
+  isModelCurrency,
+  parseListModelsResponse,
+  parseModelRegistry,
+} from './modelAccessValidator.js';
 export type {
   ResolvedModelReferencePrice,
   ResolveModelReferencePriceOptions,
+  ModelRegistryRevisionRelation,
+  ModelRegistrySnapshotDecision,
 } from './modelRegistry.js';
-export type {
-  ModelReferencePrice,
-  ModelReferencePriceSource,
-  ModelRegistry,
-  ModelRegistryEntry,
-  ModelRegistryRoute,
-} from '@cindy/model-access-protocol';
+export * from './modelAccessBean.js';
 export type {
   CatalogSourceConfig,
   CatalogIO,
@@ -145,6 +153,7 @@ export {
   isChatEligible,
   groupOf,
   isAgentSelectableModel,
+  isModelSelectableForNewRoute,
   groupModelsForDisplay,
   isBudgetModel,
   modelBadges,

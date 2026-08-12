@@ -41,6 +41,10 @@ import {
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
+import {
+  attributeRsbNativePopupSurface,
+  createRsbNativePopupSurface,
+} from './rsb-browser-bridge/native-popup-surfaces.js';
 
 /**
  * RSB 浏览器 webview 的 guest 注入层(页面评论 overlay)产物路径。
@@ -280,6 +284,8 @@ export interface RsbBrowserPopupPayload {
    *  bucket——没有它时只能落在"用户正在看的 session",agent 后台 session 触发的
    *  popup 会串进无关会话。 */
   openerSessionId?: string;
+  /** Main-owned WebContentsView surface that preserves the popup browsing context. */
+  nativePopupSurfaceId?: string;
 }
 
 /**
@@ -412,28 +418,36 @@ function routeBrowserPopup(
   openerWebContentsId: number | undefined,
   payload: RsbBrowserPopupPayload,
 ): void {
+  const finish = (opener: ResolvedPopupOpener | null) => {
+    if (payload.nativePopupSurfaceId && opener) {
+      attributeRsbNativePopupSurface(payload.nativePopupSurfaceId, {
+        tabId: opener.openerTabId,
+      });
+    }
+    sendBrowserPopup(hostContents, { ...payload, ...(opener ?? {}) });
+  };
   if (openerWebContentsId === undefined || !popupOpenerResolver) {
-    sendBrowserPopup(hostContents, payload);
+    finish(null);
     return;
   }
   const opener = resolvePopupOpener(openerWebContentsId);
   if (opener) {
-    sendBrowserPopup(hostContents, { ...payload, ...opener });
+    finish(opener);
     return;
   }
   void waitForPopupOpener(openerWebContentsId).then((late) => {
-    sendBrowserPopup(hostContents, { ...payload, ...(late ?? {}) });
+    finish(late);
   });
 }
 
 /**
- * about:blank deferred popup 的隐藏中转 BrowserWindow 的 webPreferences。
- * 完整安全集,对齐 docs/dev-rules/electron-security-and-process-boundaries.md
- * 第 3 节的 BrowserWindow 契约 —— 这是一个真实的(隐藏)BrowserWindow,即使
- * 只活到"偷到第一个真实 URL"也不许比主窗宽松。导出供单测钉住字段完整性。
+ * Chromium child popup 的完整安全集。Electron 用这些偏好创建传给
+ * `createWindow` 的真实 popup WebContents；main 随后把同一个 context 放进
+ * WebContentsView。字段对齐 BrowserWindow 安全契约，导出供单测钉住。
  */
 export const BLANK_POPUP_WINDOW_WEB_PREFERENCES = Object.freeze({
   sandbox: true,
+  devTools: true,
   nodeIntegration: false,
   nodeIntegrationInSubFrames: false,
   nodeIntegrationInWorker: false,
@@ -442,6 +456,7 @@ export const BLANK_POPUP_WINDOW_WEB_PREFERENCES = Object.freeze({
   allowRunningInsecureContent: false,
   experimentalFeatures: false,
   plugins: false,
+  disableDialogs: false,
   navigateOnDragDrop: false,
   partition: BROWSER_PARTITION,
   webviewTag: false,
@@ -555,15 +570,12 @@ export function installDeferredPopupRouter(
  * 模块入口(bootstrap-electron)在 app ready 前调一次即可,所有现在 / 未来创建的窗口
  * 都生效。
  *
- * setWindowOpenHandler 路由策略(对齐 Codex `main-cC-d0ezP.js:48849` 智能路由,
- * 但简化为 RSB tab):
- *   - guest 内 `window.open(url)` / `<a target="_blank">` / window.location 跨 host:
- *     若 url 已经是 http(s),直接 deny 真窗口并把 url + disposition 推给 host
- *     webContents(主窗 renderer),由 RightSidebarShell 收到后 `store.addTab` 创建
- *     新的 web-browser RSB tab。
- *   - 若 popup 先打开 about:blank,再由 opener 脚本写入真实地址(典型登录流),
- *     临时允许一个隐藏 BrowserWindow,只用于捕获后续 will-navigate URL;捕获后
- *     立即关闭隐藏窗口并路由成 RSB tab。用户不会看到原生弹窗。
+ * setWindowOpenHandler 路由策略:
+ *   - http(s) 与 about:blank popup 都让 Chromium 创建真实 child WebContents;
+ *   - `createWindow` 接管 Electron 预创建的 `options.webContents`,把**同一个**
+ *     browsing context 放进 main-owned WebContentsView,再路由成 RSB tab;
+ *   - 不能另建 `<webview>`:那会让 opener 手里的 WindowProxy 指向已关闭的旧
+ *     context,破坏 OAuth/SSO 对 closed/location/close 的依赖。
  *   - 推消息走 channel `rsb:browser-popup`,renderer 端通过 preload 的 fanOut 订阅。
  *
  * 这里 `contents` 闭包指向 host webContents(主窗 renderer),`guestContents` 是
@@ -571,6 +583,76 @@ export function installDeferredPopupRouter(
  * 触发),但回调里用 host 的 contents.send 发消息——renderer 端收到的就是主窗 renderer
  * 进程。
  */
+export function installBrowserGuestHandlers(
+  hostContents: WebContents,
+  guestContents: WebContents,
+): void {
+  guestContents.setWindowOpenHandler((details) => {
+    if (!isRoutablePopupUrl(details.url) && !isInitialBlankPopupUrl(details.url)) {
+      return { action: 'deny' };
+    }
+    return {
+      action: 'allow',
+      outlivesOpener: false,
+      overrideBrowserWindowOptions: {
+        show: false,
+        autoHideMenuBar: true,
+        webPreferences: { ...BLANK_POPUP_WINDOW_WEB_PREFERENCES },
+      },
+      createWindow: (options) => {
+        // Electron supplies this runtime-only field when createWindow is used
+        // to adopt Chromium's already-created popup browsing context. It is
+        // intentionally absent from BrowserWindowConstructorOptions.d.ts.
+        const popupContents = (
+          options as typeof options & { webContents?: WebContents }
+        ).webContents;
+        if (!popupContents) {
+          throw new Error('Electron did not provide popup WebContents to createWindow');
+        }
+        const surfaceId = createRsbNativePopupSurface(hostContents, popupContents);
+        if (!surfaceId) {
+          popupContents.close();
+          return popupContents;
+        }
+        // Popup-of-popup keeps the same security and WindowProxy semantics.
+        installBrowserGuestHandlers(hostContents, popupContents);
+        routeBrowserPopup(hostContents, guestContents.id, {
+          url: details.url,
+          disposition: details.disposition,
+          nativePopupSurfaceId: surfaceId,
+        });
+        return popupContents;
+      },
+    };
+  });
+
+  // Chromium guest key events do not bubble to the host renderer. Forward the
+  // browser-level shortcuts through the existing host channel for both
+  // ordinary webviews and adopted popup WebContents.
+  guestContents.on('before-input-event', (event, input) => {
+    if (!isGuestShortcutKeyDownType(input.type)) return;
+    const store = getAppShortcutStore();
+    const action = resolveGuestShortcutAction(input, (id) =>
+      store.getEffectiveCombos(id),
+    );
+    if (!action) return;
+    event.preventDefault();
+    let target: WebContents | null = null;
+    try {
+      target = popupHostResolver?.() ?? null;
+    } catch {
+      target = null;
+    }
+    target = target && !target.isDestroyed() ? target : hostContents;
+    if (target.isDestroyed()) return;
+    if (action.kind === 'focus-url-bar') {
+      target.send(RSB_BROWSER_FOCUS_URL_BAR_CHANNEL, null);
+    } else {
+      target.send(RSB_BROWSER_COMMAND_CHANNEL, { command: action.command });
+    }
+  });
+}
+
 export function installWebviewHardener(): void {
   app.on('web-contents-created', (_event, contents) => {
     // will-attach → did-attach 对同一个 guest 同步成对触发;用闭包变量把
@@ -625,56 +707,7 @@ export function installWebviewHardener(): void {
         });
         return;
       }
-      guestContents.setWindowOpenHandler((details) => {
-        if (isRoutablePopupUrl(details.url)) {
-          routeBrowserPopup(contents, guestContents.id, {
-            url: details.url,
-            disposition: details.disposition,
-          });
-          return { action: 'deny' };
-        }
-
-        if (isInitialBlankPopupUrl(details.url)) {
-          return {
-            action: 'allow',
-            overrideBrowserWindowOptions: {
-              show: false,
-              autoHideMenuBar: true,
-              webPreferences: { ...BLANK_POPUP_WINDOW_WEB_PREFERENCES },
-            },
-          };
-        }
-
-        return { action: 'deny' };
-      });
-      guestContents.on('did-create-window', (popupWindow, details) => {
-        installDeferredPopupRouter(contents, popupWindow, details.disposition, guestContents.id);
-      });
-      // 拦截 webview guest 内的"浏览器级"快捷键 —— Electron webview 是独立
-      // webContents,guest 触发的 keydown 不冒泡到 host 的 window,host renderer
-      // 的全局监听器拿不到。要让 Ctrl/Cmd+L 在用户焦点在 guest 网页内时也能
-      // 触发 chrome 的 URL bar 聚焦,必须在 main 端拦截 before-input-event,推
-      // 消息给 host renderer。Codex `main-cC-d0ezP.js:48846` 也用同一事件做同
-      // 一件事。
-      //
-      // 组合键从 app-shortcuts store 实时读生效值 (默认 + 用户 override),与
-      // host 侧 BrowserTabBody 的监听保持同一份 registry,改绑后两端行为一致。
-      // 命中即 preventDefault + 转发,guest 网页不会再收到这次按键。
-      guestContents.on('before-input-event', (event, input) => {
-        if (!isGuestShortcutKeyDownType(input.type)) return;
-        const store = getAppShortcutStore();
-        const action = resolveGuestShortcutAction(input, (id) =>
-          store.getEffectiveCombos(id),
-        );
-        if (!action) return;
-        event.preventDefault();
-        if (contents.isDestroyed()) return;
-        if (action.kind === 'focus-url-bar') {
-          contents.send(RSB_BROWSER_FOCUS_URL_BAR_CHANNEL, null);
-        } else {
-          contents.send(RSB_BROWSER_COMMAND_CHANNEL, { command: action.command });
-        }
-      });
+      installBrowserGuestHandlers(contents, guestContents);
     });
   });
 }

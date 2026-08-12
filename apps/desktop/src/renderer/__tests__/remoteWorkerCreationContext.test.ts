@@ -13,7 +13,28 @@ describe('remote Orca Worker creation context', () => {
     expect(popover).toContain("useAgentCapabilities('claude-code', deviceId)");
     expect(popover).toContain("useAgentCapabilities('codex', deviceId)");
     expect(popover).toContain('useDeviceProviders(deviceId)');
+    expect(popover).toContain(
+      'providersUnsupported: deviceId ? remoteProviders.unsupported : false',
+    );
+    expect(popover).toContain('!remoteModelListBlocked');
     expect(popover).toContain('deviceId={deviceId}');
+  });
+
+  it('blocks existing remote session sends while the model catalog is loading or failed', () => {
+    const chatInput = read('components/new-chat/ChatInput.tsx');
+
+    expect(chatInput).toContain('const remoteModelListStatus = resolveRemoteModelListStatus({');
+    expect(chatInput).toContain("remoteModelListStatus !== 'ready'");
+    expect(chatInput).toContain('if (remoteModelListBlocked) {');
+    expect(chatInput).toContain('remoteModelListBlocked ||');
+
+    const sendPreflightStart = chatInput.indexOf('// 预检(通用、provider-aware)');
+    const sendPreflightEnd = chatInput.indexOf('// 评论截图并入发送附件', sendPreflightStart);
+    expect(sendPreflightStart).toBeGreaterThan(-1);
+    expect(sendPreflightEnd).toBeGreaterThan(sendPreflightStart);
+    expect(chatInput.slice(sendPreflightStart, sendPreflightEnd)).toContain(
+      '!(deviceLinkDeviceId && remoteProviders.unsupported)',
+    );
   });
 
   it('passes the same device context through both Worker creation entry points', () => {
@@ -29,12 +50,19 @@ describe('remote Orca Worker creation context', () => {
   it('never uses the controller API key to gate a remote model row', () => {
     const selector = read('components/new-chat/ModelSelector.tsx');
 
-    // 本地会话仍只按 codex/ + hasSavedKey 准入;SSH 远程额外按订阅直连前缀禁用
-    // (不可路由),两者都不得回退到 controller key 判定。
+    // 本地会话按 codex/ + hasSavedKey 准入,但该 key gate 只属于 XD 网关折扣路由,
+    // 自定义(user)供应商的同前缀模型不受 Cindy 登录门禁(#1568);SSH 远程额外按订阅
+    // 直连前缀禁用(不可路由)。device-link 远程在目录未就绪或真实读取失败时禁用旧行，
+    // 只有明确判定老被控端不支持 provider:list 时才回退 capabilities flat list；
+    // 任一远程路径都不得回退到 controller key 判定。
     expect(selector).toContain('if (!deviceId) {');
     expect(selector).toContain('if (subscriptionDirectDisabledReason(id)) return true;');
+    expect(selector).toContain("if (provider?.source === 'user') return false;");
     expect(selector).toContain("return id.startsWith('codex/') && !hasSavedKey;");
-    expect(selector).toContain('if (remoteProviders.error) return false;');
+    expect(selector).toContain("if (remoteModelListStatus !== 'ready') return true;");
+    expect(selector).toContain(
+      'if (remoteProviders.error) return remoteProviders.unsupported ? false : true;',
+    );
     expect(selector).toContain('const rowAgentKind = resolveVisibleModelAgentKind({');
     expect(selector).toContain('providerOffersModel(provider, id, rowAgentKind)');
   });

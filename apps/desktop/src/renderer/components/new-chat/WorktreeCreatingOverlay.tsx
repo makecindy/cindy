@@ -22,7 +22,7 @@ import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 
 interface WorktreeCreatingOverlayProps {
-  /** 当前正在创建的目标分支名 (含 xdt/ 前缀)。 */
+  /** 当前正在创建的目标托管分支名。 */
   branchName: string;
 }
 
@@ -50,10 +50,10 @@ export function WorktreeCreatingOverlay({ branchName }: WorktreeCreatingOverlayP
           <Spinner size={16} className="text-[var(--workingdir-icon)]" />
         </div>
         <div className="flex flex-col gap-[2px]">
-          <div className="text-[14px] font-medium leading-tight text-[var(--msg-assistant-text)]">
+          <div className="text-14 font-medium leading-tight text-[var(--msg-assistant-text)]">
             {t('newChat.worktreeCreatingOverlay.heading')}
           </div>
-          <div className="text-[12px] font-normal leading-tight text-[var(--workingdir-text)]">
+          <div className="text-12 font-normal leading-tight text-[var(--workingdir-text)]">
             {t('newChat.worktreeCreatingOverlay.subtitle', { branch: branchName })}
           </div>
         </div>

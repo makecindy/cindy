@@ -53,6 +53,15 @@ export const PLUGIN_MANAGEMENT_FRAME_CLASS = 'mx-auto w-full max-w-[920px] px-8 
 export const PLUGIN_MANAGEMENT_CARD_GRID_CLASS =
   'grid grid-cols-[repeat(auto-fit,minmax(min(100%,22.5rem),1fr))] gap-3';
 
+export const PLUGIN_MANAGEMENT_CONTENT_CONTAINER_CLASS = 'plugin-management-content-frame';
+
+/**
+ * Installed cards keep the two-column catalog track even when only one card is
+ * present, so a lone installed plugin does not stretch across the whole page.
+ * The plugin catalog container collapses this to one column at narrow widths.
+ */
+export const PLUGIN_INSTALLED_CARD_GRID_CLASS = 'plugin-installed-card-grid grid grid-cols-2 gap-3';
+
 const PLUGIN_MANAGEMENT_STACKED_MAX_WIDTH = 720;
 
 export function PluginManagementLayout({
@@ -227,7 +236,14 @@ export function PluginManagementHeader({
 /** Shared breathing room and page-enter hook for both top-level catalogs. */
 export function PluginManagementPage({ children, className }: PluginManagementPageProps) {
   return (
-    <div className={cn(PLUGIN_MANAGEMENT_FRAME_CLASS, 'flex flex-col pb-16 pt-8', className)}>
+    <div
+      className={cn(
+        PLUGIN_MANAGEMENT_FRAME_CLASS,
+        PLUGIN_MANAGEMENT_CONTENT_CONTAINER_CLASS,
+        'flex flex-col pb-16 pt-8',
+        className,
+      )}
+    >
       {children}
     </div>
   );
@@ -252,17 +268,9 @@ function TabButton({
         'plugin-management-tab h-8 min-w-[88px] select-none rounded-full border border-transparent px-4 text-13 font-medium transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         active
-          ? 'plugin-motion-selected text-[var(--text-primary)] shadow-[var(--plugin-card-shadow)]'
+          ? 'plugin-motion-selected text-[var(--text-primary)]'
           : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
       )}
-      style={
-        active
-          ? {
-              background: 'color-mix(in srgb, var(--surface-elevated) 86%, transparent)',
-              borderColor: 'color-mix(in srgb, var(--border-default) 48%, transparent)',
-            }
-          : undefined
-      }
     >
       {label}
     </button>

@@ -86,6 +86,11 @@ export interface GhostOauthAccountView {
    * 上下文(networkSlot 只走 getFreshAccessToken)。
    */
   avatarDataUrl: string | null;
+  /**
+   * 当前账号有经宿主校验的真实缺权证据，或当前清单新增了该账号全量授权
+   * 时未申请的 scope。没有证据时，老账号与主动降面账号仍不猜。
+   */
+  scopeStale: boolean;
 }
 
 /** 保险库最小面(providerSecretStore 在接线处适配;测试喂内存假体)。 */
@@ -118,7 +123,7 @@ export interface GhostOauthAccountManagerDeps {
    * 授权成功钩子(2026-07-14):新连与同身份重连两个成功出口都触发,调用方
    * 拿它广播"授权成功"的主机代言 tips(label = 账号展示标签,声明 identity
    * 且拉取成功才有)。抛错不许影响连接结果,实现侧自兜。
-  */
+   */
   onAccountConnected?: (info: { ghostId: string; secretKey: string; label: string | null }) => void;
   /**
    * Refresh-path status transition hook. It deliberately carries no token,
@@ -135,11 +140,7 @@ export interface GhostOauthAccountManagerDeps {
    * verifies that the plugin and the exact OAuth declaration still exist
    * before any callback result is persisted.
    */
-  isConnectTargetCurrent?: (
-    ghostId: string,
-    secretKey: string,
-    decl: GhostOauthDecl,
-  ) => boolean;
+  isConnectTargetCurrent?: (ghostId: string, secretKey: string, decl: GhostOauthDecl) => boolean;
   /** 延时器(仅 invalid_grant 轮换探测用;测试注入即时假体,生产缺省 setTimeout)。 */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -177,6 +178,12 @@ interface AccountRow {
   displayLabel: string | null;
   status: GhostOauthAccountStatus;
   createdAt: number;
+  /** 本次浏览器授权 URL 实际携带的 scope 面；旧账号没有该快照。 */
+  authScopes?: string[];
+  /** full = 当时清单全量；subset = 用户主动选择了降面授权。 */
+  authFace?: 'full' | 'subset';
+  /** 插件从真实 API 权限错误中上报、且已由宿主按当前声明校验的缺失 scope。 */
+  insufficientScopes?: string[];
 }
 
 interface AccountsManifest {
@@ -217,13 +224,27 @@ function parseManifest(raw: string | null): AccountsManifest {
       accounts.push({
         id: r.id,
         label: typeof r.label === 'string' && r.label.length > 0 ? r.label : null,
-        displayLabel: typeof r.displayLabel === 'string' && r.displayLabel.length > 0 ? r.displayLabel : null,
+        displayLabel:
+          typeof r.displayLabel === 'string' && r.displayLabel.length > 0 ? r.displayLabel : null,
         status: r.status === 'expired' ? 'expired' : 'connected',
-        createdAt: typeof r.createdAt === 'number' && Number.isFinite(r.createdAt) ? r.createdAt : 0,
+        createdAt:
+          typeof r.createdAt === 'number' && Number.isFinite(r.createdAt) ? r.createdAt : 0,
+        ...(Array.isArray(r.authScopes) && r.authScopes.every((scope) => typeof scope === 'string')
+          ? { authScopes: [...r.authScopes] }
+          : {}),
+        ...(r.authFace === 'full' || r.authFace === 'subset' ? { authFace: r.authFace } : {}),
+        // 与 authScopes 同风格宽松读取:上限由写侧(端点校验 + 合并裁剪)钳制,
+        // 库里的坏值对消费方惰性(判定前先按当前声明过滤),不整包丢弃证据。
+        ...(Array.isArray(r.insufficientScopes) &&
+        r.insufficientScopes.length > 0 &&
+        r.insufficientScopes.every((scope) => typeof scope === 'string')
+          ? { insufficientScopes: [...new Set(r.insufficientScopes)] }
+          : {}),
       });
     }
     const defaultAccountId =
-      typeof parsed.defaultAccountId === 'string' && accounts.some((a) => a.id === parsed.defaultAccountId)
+      typeof parsed.defaultAccountId === 'string' &&
+      accounts.some((a) => a.id === parsed.defaultAccountId)
         ? parsed.defaultAccountId
         : accounts.length > 0
           ? accounts[0].id
@@ -238,6 +259,7 @@ function toView(
   row: AccountRow,
   defaultAccountId: string | null,
   avatarDataUrl: string | null,
+  declScopes: readonly string[] = [],
 ): GhostOauthAccountView {
   return {
     id: row.id,
@@ -246,7 +268,38 @@ function toView(
     isDefault: row.id === defaultAccountId,
     createdAt: row.createdAt,
     avatarDataUrl,
+    scopeStale: accountMissingScopes(declScopes, row).length > 0,
   };
+}
+
+/**
+ * 快照推断分量:仅在可证明“当时拿的是全量面”时列出新增 scope；老数据与
+ * 降面授权不猜(返回空数组)。合并后的判定入口是 accountMissingScopes
+ * (真实错误证据优先,本函数只做无证据时的兜底)。
+ */
+export function missingAuthScopes(
+  declScopes: readonly string[],
+  row: { authScopes?: readonly string[]; authFace?: 'full' | 'subset' },
+): string[] {
+  if (row.authFace !== 'full' || row.authScopes === undefined) return [];
+  const granted = new Set(row.authScopes);
+  return declScopes.filter((scope) => !granted.has(scope));
+}
+
+/** 真实错误证据优先；没有证据时才退回授权面快照推断。 */
+function accountMissingScopes(declScopes: readonly string[], row: AccountRow): string[] {
+  if (row.insufficientScopes?.length) {
+    const declared = new Set(declScopes);
+    const currentEvidence = row.insufficientScopes.filter((scope) => declared.has(scope));
+    if (currentEvidence.length > 0) return currentEvidence;
+  }
+  return missingAuthScopes(declScopes, row);
+}
+
+function sameScopeFace(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const expected = new Set(left);
+  return expected.size === new Set(right).size && right.every((scope) => expected.has(scope));
 }
 
 interface CachedAccessToken {
@@ -295,7 +348,12 @@ export class GhostOauthAccountManager {
    * 可省略——纯 PKCE 公共客户端)。改 client 后既有 access token 缓存作废
    * (旧 client 换的令牌不该再续命)。
    */
-  setClientConfig(ghostId: string, secretKey: string, clientId: string, clientSecret?: string): boolean {
+  setClientConfig(
+    ghostId: string,
+    secretKey: string,
+    clientId: string,
+    clientSecret?: string,
+  ): boolean {
     if (!this.deps.vault.store(ghostId, clientIdKey(secretKey), clientId)) return false;
     if (clientSecret !== undefined && clientSecret.length > 0) {
       if (!this.deps.vault.store(ghostId, clientSecretKey(secretKey), clientSecret)) return false;
@@ -334,7 +392,9 @@ export class GhostOauthAccountManager {
     // client 无意义且必错(自填 id 配服务端 secret = invalid_client),
     // 一律忽略自填。缺省用内置 clientId;connect 可传已经过清单白名单
     // 复验的备用 clientId,供同一意识按 region 选择不同 OAuth App。
-    const customId = decl.tokenBroker ? null : this.deps.vault.read(ghostId, clientIdKey(secretKey));
+    const customId = decl.tokenBroker
+      ? null
+      : this.deps.vault.read(ghostId, clientIdKey(secretKey));
     let clientId: string | null;
     let clientSecret: string | null | undefined;
     if (clientIdOverride !== undefined) {
@@ -374,11 +434,46 @@ export class GhostOauthAccountManager {
 
   /* ------------------------------ 账号清单 ------------------------------ */
 
-  listAccounts(ghostId: string, secretKey: string): GhostOauthAccountView[] {
+  listAccounts(ghostId: string, secretKey: string, decl?: GhostOauthDecl): GhostOauthAccountView[] {
     const manifest = parseManifest(this.deps.vault.read(ghostId, accountsKey(secretKey)));
     return manifest.accounts.map((a) =>
-      toView(a, manifest.defaultAccountId, this.readAvatar(ghostId, secretKey, a.id)),
+      toView(a, manifest.defaultAccountId, this.readAvatar(ghostId, secretKey, a.id), decl?.scopes),
     );
+  }
+
+  /** 默认账号相对当前声明缺失的 scope；空数组 = 无需重连或判不准。 */
+  defaultMissingScopes(ghostId: string, secretKey: string, decl: GhostOauthDecl): string[] {
+    const manifest = parseManifest(this.deps.vault.read(ghostId, accountsKey(secretKey)));
+    const row = manifest.accounts.find((account) => account.id === manifest.defaultAccountId);
+    return row ? accountMissingScopes(decl.scopes ?? [], row) : [];
+  }
+
+  /**
+   * 把真实权限错误证据合并到当前默认账号,并按当前声明面裁剪——顺手淘汰清单
+   * 换代后的过期证据,恒有条数 ≤ 声明上限(GHOST_OAUTH_SCOPES_MAX)。返回
+   * 'unchanged' = 证据已在库未重写(调用方据此跳过广播);false = 无默认账号
+   * 或写失败。
+   */
+  reportInsufficientScopes(
+    ghostId: string,
+    secretKey: string,
+    scopes: readonly string[],
+    declScopes: readonly string[],
+  ): 'stored' | 'unchanged' | false {
+    const manifest = parseManifest(this.deps.vault.read(ghostId, accountsKey(secretKey)));
+    const row = manifest.accounts.find((account) => account.id === manifest.defaultAccountId);
+    if (!row) return false;
+    const declared = new Set(declScopes);
+    const merged = [...new Set([...(row.insufficientScopes ?? []), ...scopes])].filter((scope) =>
+      declared.has(scope),
+    );
+    if (row.insufficientScopes && sameScopeFace(row.insufficientScopes, merged)) {
+      return 'unchanged';
+    }
+    row.insufficientScopes = merged;
+    return this.deps.vault.store(ghostId, accountsKey(secretKey), JSON.stringify(manifest))
+      ? 'stored'
+      : false;
   }
 
   /** 头像 data URL 读取(形状校验兜底:库里的坏值当无头像,不喂给 <img>)。 */
@@ -473,10 +568,18 @@ export class GhostOauthAccountManager {
     if (opts?.scopes !== undefined) {
       const declared = new Set(decl.scopes ?? []);
       if (opts.scopes.length === 0 || opts.scopes.some((sc) => !declared.has(sc))) {
-        return { ok: false, error: 'INVALID_CONFIG', detail: '申请的 scope 必须是清单声明的非空子集' };
+        return {
+          ok: false,
+          error: 'INVALID_CONFIG',
+          detail: '申请的 scope 必须是清单声明的非空子集',
+        };
       }
       config.scopes = [...opts.scopes];
     }
+    const authScopes = [...config.scopes];
+    const authFace: AccountRow['authFace'] = sameScopeFace(decl.scopes ?? [], authScopes)
+      ? 'full'
+      : 'subset';
 
     const flow = await startGhostOauthFlow({
       config,
@@ -524,7 +627,10 @@ export class GhostOauthAccountManager {
       // 等于给第三方意识一个"主机代发 GET + 小图字节回沙箱"的 SSRF 读原语。
       // 下载本身不带任何凭证(CDN 域名不在注入白名单);失败降级无头像。
       if (identity.avatarUrl !== null && isOfficialGhostId(ghostId)) {
-        avatar = await fetchGhostOauthAvatar({ url: identity.avatarUrl, fetchImpl: this.deps.fetchImpl });
+        avatar = await fetchGhostOauthAvatar({
+          url: identity.avatarUrl,
+          fetchImpl: this.deps.fetchImpl,
+        });
       }
     }
 
@@ -549,7 +655,13 @@ export class GhostOauthAccountManager {
     const existing = label !== null ? manifest.accounts.find((a) => a.label === label) : undefined;
     if (existing) {
       if (flow.bundle.refreshToken !== null) {
-        if (!this.deps.vault.store(ghostId, refreshTokenKey(secretKey, existing.id), flow.bundle.refreshToken)) {
+        if (
+          !this.deps.vault.store(
+            ghostId,
+            refreshTokenKey(secretKey, existing.id),
+            flow.bundle.refreshToken,
+          )
+        ) {
           return { ok: false, error: 'VAULT_WRITE_FAILED' };
         }
       }
@@ -564,8 +676,23 @@ export class GhostOauthAccountManager {
         existing.displayLabel = display;
         manifestDirty = true;
       }
-      if (manifestDirty) {
-        this.deps.vault.store(ghostId, accountsKey(secretKey), JSON.stringify(manifest));
+      if (existing.authScopes === undefined || !sameScopeFace(existing.authScopes, authScopes)) {
+        existing.authScopes = authScopes;
+        manifestDirty = true;
+      }
+      if (existing.authFace !== authFace) {
+        existing.authFace = authFace;
+        manifestDirty = true;
+      }
+      if (existing.insufficientScopes !== undefined) {
+        delete existing.insufficientScopes;
+        manifestDirty = true;
+      }
+      if (
+        manifestDirty &&
+        !this.deps.vault.store(ghostId, accountsKey(secretKey), JSON.stringify(manifest))
+      ) {
+        return { ok: false, error: 'VAULT_WRITE_FAILED' };
       }
       // 重连顺带刷新头像(用户可能换过头像;写失败不影响连接结果)。
       if (avatar !== null) {
@@ -575,7 +702,11 @@ export class GhostOauthAccountManager {
         accessToken: flow.bundle.accessToken,
         expiresAt: flow.bundle.expiresAt,
       });
-      this.deps.logger?.info('ghost oauth 账号已重连(同身份合并)', { ghostId, secretKey, accountId: existing.id });
+      this.deps.logger?.info('ghost oauth 账号已重连(同身份合并)', {
+        ghostId,
+        secretKey,
+        accountId: existing.id,
+      });
       this.notifyConnected(ghostId, secretKey, existing.displayLabel ?? existing.label);
       return {
         ok: true,
@@ -583,6 +714,7 @@ export class GhostOauthAccountManager {
           existing,
           manifest.defaultAccountId,
           avatar ?? this.readAvatar(ghostId, secretKey, existing.id),
+          decl.scopes,
         ),
       };
     }
@@ -599,13 +731,21 @@ export class GhostOauthAccountManager {
       displayLabel: display,
       status: 'connected',
       createdAt: Date.now(),
+      authScopes,
+      authFace,
     };
 
     // refresh token 先落库再挂清单:清单是"账号存在"的事实源,顺序反了
     // 可能出现"清单有账号但无 rt"的半身位。没有 rt 的服务商(罕见)照样
     // 挂账号,access token 走内存缓存,过期后 AUTH_EXPIRED 引导重连。
     if (flow.bundle.refreshToken !== null) {
-      if (!this.deps.vault.store(ghostId, refreshTokenKey(secretKey, account.id), flow.bundle.refreshToken)) {
+      if (
+        !this.deps.vault.store(
+          ghostId,
+          refreshTokenKey(secretKey, account.id),
+          flow.bundle.refreshToken,
+        )
+      ) {
         return { ok: false, error: 'VAULT_WRITE_FAILED' };
       }
     }
@@ -628,7 +768,10 @@ export class GhostOauthAccountManager {
     });
     this.deps.logger?.info('ghost oauth 账号已连接', { ghostId, secretKey, accountId: account.id });
     this.notifyConnected(ghostId, secretKey, account.displayLabel ?? account.label);
-    return { ok: true, account: toView(account, nextManifest.defaultAccountId, avatar) };
+    return {
+      ok: true,
+      account: toView(account, nextManifest.defaultAccountId, avatar, decl.scopes),
+    };
   }
 
   /** 授权成功通知(自兜异常:提示挂了不影响连接结果)。 */
@@ -720,7 +863,11 @@ export class GhostOauthAccountManager {
         // 已被服务商作废,下一次刷新注定 invalid_grant → 重新授权。
         if (result.bundle.refreshToken !== null && result.bundle.refreshToken !== refreshToken) {
           if (
-            !this.deps.vault.store(ghostId, refreshTokenKey(secretKey, accountId), result.bundle.refreshToken)
+            !this.deps.vault.store(
+              ghostId,
+              refreshTokenKey(secretKey, accountId),
+              result.bundle.refreshToken,
+            )
           ) {
             this.deps.logger?.warn(
               'ghost oauth 轮换后的新 refresh token 落库失败——新令牌仅存内存,重启后需要重新授权',
@@ -736,7 +883,13 @@ export class GhostOauthAccountManager {
         this.markConnected(ghostId, secretKey, accountId);
         // 展示名/头像回填(fire-and-forget,不拖累令牌热路径):displayTemplate /
         // avatarPath 上线前连的老账号缺这些,借下一次令牌刷新顺路补上,无需重连。
-        void this.backfillIdentityExtras(ghostId, secretKey, decl, accountId, result.bundle.accessToken);
+        void this.backfillIdentityExtras(
+          ghostId,
+          secretKey,
+          decl,
+          accountId,
+          result.bundle.accessToken,
+        );
         return { ok: true, accessToken: result.bundle.accessToken, accountId };
       }
 
@@ -748,7 +901,12 @@ export class GhostOauthAccountManager {
       }
 
       if (attempt === 0) {
-        const rotated = await this.readRotatedRefreshToken(ghostId, secretKey, accountId, refreshToken);
+        const rotated = await this.readRotatedRefreshToken(
+          ghostId,
+          secretKey,
+          accountId,
+          refreshToken,
+        );
         if (rotated !== null) {
           this.deps.logger?.info(
             'ghost oauth invalid_grant 后检测到 refresh token 已被其它实例轮换,用新令牌重试',
@@ -839,7 +997,10 @@ export class GhostOauthAccountManager {
         this.deps.logger?.info('ghost oauth 账号展示名已回填', { ghostId, secretKey, accountId });
       }
       if (needAvatar && identity.avatarUrl !== null) {
-        const avatar = await fetchGhostOauthAvatar({ url: identity.avatarUrl, fetchImpl: this.deps.fetchImpl });
+        const avatar = await fetchGhostOauthAvatar({
+          url: identity.avatarUrl,
+          fetchImpl: this.deps.fetchImpl,
+        });
         // 存前重验账号仍在清单(拉取期间可能被断开;断开后不再写孤儿头像键)。
         if (avatar !== null) {
           const fresh = parseManifest(this.deps.vault.read(ghostId, accountsKey(secretKey)));
@@ -873,11 +1034,7 @@ export class GhostOauthAccountManager {
     const manifest = parseManifest(this.deps.vault.read(ghostId, accountsKey(secretKey)));
     const row = manifest.accounts.find((a) => a.id === accountId);
     if (!row || !mutator(row)) return false;
-    return this.deps.vault.store(
-      ghostId,
-      accountsKey(secretKey),
-      JSON.stringify(manifest),
-    );
+    return this.deps.vault.store(ghostId, accountsKey(secretKey), JSON.stringify(manifest));
   }
 
   private markExpired(ghostId: string, secretKey: string, accountId: string): void {
@@ -906,15 +1063,12 @@ export class GhostOauthAccountManager {
     try {
       this.deps.onAccountStatusChanged?.({ ghostId, secretKey, status });
     } catch (err) {
-      this.deps.logger?.warn?.(
-        'ghost oauth onAccountStatusChanged 通知失败(不影响状态写入)',
-        {
-          ghostId,
-          secretKey,
-          status,
-          err: String(err),
-        },
-      );
+      this.deps.logger?.warn?.('ghost oauth onAccountStatusChanged 通知失败(不影响状态写入)', {
+        ghostId,
+        secretKey,
+        status,
+        err: String(err),
+      });
     }
   }
 

@@ -107,6 +107,21 @@ describe('imageCacheStore lifecycle metadata', () => {
     expect(await exists(absPath)).toBe(true);
   });
 
+  it('removeFile removes the image and its lifecycle metadata', async () => {
+    const cached = await imageCacheStore.writeBuffer({
+      sessionId: 'session-a',
+      buffer: new Uint8Array([1, 2, 3]),
+      mimeType: 'image/png',
+      lifecycle: 'committed',
+    });
+    const { absPath } = imageCacheStore.resolveSafe(cached.url);
+
+    await imageCacheStore.removeFile(cached.url);
+
+    expect(await exists(absPath)).toBe(false);
+    expect(await exists(`${absPath}.xdt-meta.json`)).toBe(false);
+  });
+
   it('markFilesCommitted turns a draft image into a sweep-safe history image', async () => {
     const cached = await imageCacheStore.writeBuffer({
       sessionId: 'session-a',
@@ -134,5 +149,15 @@ describe('imageCacheStore lifecycle metadata', () => {
     });
 
     expect(urls).toEqual(['xdt-image://session-a/a.png', 'xdt-image://session-b/c.webp']);
+  });
+
+  it('keeps the legacy session cleanup IPC out of the cindy-media ledger', async () => {
+    const source = await fs.readFile(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
+    const start = source.indexOf("'image-cache:cleanup-session'");
+    const end = source.indexOf('// F7: cleanup a list of files', start);
+    const handler = source.slice(start, end);
+
+    expect(handler).toContain('imageCacheStore.removeSession(sessionId)');
+    expect(handler).not.toContain('removeSessionMediaRefs');
   });
 });

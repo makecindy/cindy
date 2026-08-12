@@ -28,6 +28,22 @@ export function defaultSshConfigPath(): string {
   return path.join(os.homedir(), '.ssh', 'config');
 }
 
+/**
+ * Expand a leading `~` (or `~/`, `~\`) to the user's home directory.
+ *
+ * Exported so the ADD/UPDATE IPC boundary can normalize `identityFile` the
+ * same way the config-read path does — Node never expands `~`, so a literal
+ * `~/.ssh/...` stored in the pool host config would fail `fs.readFile` /
+ * ssh-add. The `~\` prefix normalizes backslashes to `/` (a no-op on Windows,
+ * but required on POSIX where backslash is a filename character).
+ */
+export function expandHome(p: string): string {
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
+  if (p.startsWith('~\\')) return path.join(os.homedir(), p.slice(2).replace(/\\/g, '/'));
+  return p;
+}
+
 interface SshConfigSection {
   type?: number;
   before?: string;
@@ -73,6 +89,10 @@ function readAuthMarker(section: SshConfigSection): 'agent' | 'key' | null {
   return null;
 }
 
+function isHostDirective(section: SshConfigSection): boolean {
+  return section.param?.toLowerCase() === 'host';
+}
+
 /**
  * Read and parse ~/.ssh/config (or any path). Returns a list of concrete
  * hosts — wildcards and `Match` blocks are skipped. Missing file → [].
@@ -90,7 +110,7 @@ export async function readSshConfig(filePath = defaultSshConfigPath()): Promise<
   const hosts: HostConfig[] = [];
 
   for (const section of parsed) {
-    if (section.param !== 'Host') continue;
+    if (!isHostDirective(section)) continue;
     const aliases = Array.isArray(section.value) ? section.value : [section.value];
     for (const aliasRaw of aliases) {
       if (typeof aliasRaw !== 'string') continue;
@@ -142,19 +162,30 @@ export async function upsertHost(
   filePath = defaultSshConfigPath(),
 ): Promise<void> {
   const existing = await readRawConfig(filePath);
-  const parsed = SSHConfig.parse(existing) as unknown as { remove(query: { Host: string }): void };
+  const parsed = SSHConfig.parse(existing) as SshConfigSection[];
 
-  // ssh-config's `remove({Host: alias})` is the documented way to drop a block.
-  // We always drop then re-append so values stay in a known order.
-  parsed.remove({ Host: host.id });
+  // Remove the complete block before appending the replacement. The ssh-config
+  // library's `remove({ Host: alias })` matcher is case-sensitive on the
+  // directive name, while OpenSSH treats keywords case-insensitively.
+  removeHostSections(parsed, host.id);
 
-  const append = SSHConfig.parse(formatHostBlock(host)) as unknown as SshConfigSection[];
+  const append = SSHConfig.parse(formatHostBlock(host)) as SshConfigSection[];
   for (const node of append) {
     (parsed as unknown as { push(node: unknown): void }).push(node);
   }
 
   const out = (parsed as unknown as { toString(): string }).toString();
   await writeAtomic(filePath, out);
+}
+
+/** Remove all concrete Host blocks for an alias, regardless of keyword casing. */
+function removeHostSections(parsed: SshConfigSection[], alias: string): void {
+  for (let index = parsed.length - 1; index >= 0; index -= 1) {
+    const section = parsed[index];
+    if (!isHostDirective(section)) continue;
+    const values = Array.isArray(section.value) ? section.value : [section.value];
+    if (values.includes(alias)) parsed.splice(index, 1);
+  }
 }
 
 /**
@@ -231,7 +262,7 @@ function findHostSection(
   alias: string,
 ): SshConfigSection | null {
   for (const section of parsed) {
-    if (section.param !== 'Host') continue;
+    if (!isHostDirective(section)) continue;
     const values = Array.isArray(section.value) ? section.value : [section.value];
     if (values.includes(alias)) return section;
   }
@@ -334,9 +365,9 @@ export async function removeHost(
 ): Promise<void> {
   const existing = await readRawConfig(filePath);
   if (!existing) return;
-  const parsed = SSHConfig.parse(existing) as unknown as { remove(q: { Host: string }): void; toString(): string };
-  parsed.remove({ Host: alias });
-  await writeAtomic(filePath, parsed.toString());
+  const parsed = SSHConfig.parse(existing) as SshConfigSection[];
+  removeHostSections(parsed, alias);
+  await writeAtomic(filePath, (parsed as unknown as { toString(): string }).toString());
 }
 
 // ── internals ──────────────────────────────────────────────────────────────
@@ -382,10 +413,4 @@ function parseIntSafe(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const n = parseInt(value, 10);
   return Number.isFinite(n) ? n : fallback;
-}
-
-function expandHome(p: string): string {
-  if (p === '~') return os.homedir();
-  if (p.startsWith('~/') || p.startsWith('~\\')) return path.join(os.homedir(), p.slice(2));
-  return p;
 }

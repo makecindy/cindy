@@ -90,7 +90,10 @@ const THROTTLE_MS = 10_000;
 const IDLE_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 let snapshot: ClaudeAccountUsageSnapshot | null = null;
+let snapshotOwnerKey: string | null = null;
 let fetchInFlight = false;
+let fetchOwnerKey: string | null = null;
+let refreshQueued = false;
 let lastFetchAt = 0;
 let idlePollTimer: NodeJS.Timeout | null = null;
 
@@ -105,6 +108,24 @@ interface LiteLlmDailyActivity {
     date?: string;
     metrics?: { spend?: number };
   }>;
+}
+
+interface QuotaOwner {
+  key: string;
+  authenticatedUserId?: string;
+}
+
+/** 组织账号与 local 手填网关可读周期配额；个人账号只读额度池账本。 */
+function currentQuotaOwner(): QuotaOwner | null {
+  const auth = getAuthState();
+  if (auth.mode === 'cloud') {
+    if (auth.user?.membershipKind !== 'org' || !auth.dataOwnerId) return null;
+    return { key: `cloud:${auth.dataOwnerId}`, authenticatedUserId: auth.user.id };
+  }
+  if (auth.mode === 'local' && auth.dataOwnerId) {
+    return { key: `local:${auth.dataOwnerId}` };
+  }
+  return null;
 }
 
 /** UTC YYYY-MM-DD。跟 web 看板 的 daily 边界对齐。 */
@@ -180,13 +201,13 @@ function resolveDailyActivitySpend(activity: LiteLlmDailyActivity): { todaySpend
   return { todaySpend: Number.isFinite(totalSpend) ? totalSpend : 0 };
 }
 
-async function fetchOnce(): Promise<ClaudeAccountUsageSnapshot | null> {
+async function fetchOnce(authenticatedUserId?: string): Promise<ClaudeAccountUsageSnapshot | null> {
   // 币种优先取账号目录声明。取不到时**不放弃整个快照**,回落本地账本币种:
   // 手填 XD key 是明确支持的兜底流程(Model Access 处于 disabled / failed 时),那时没有
   // 目录可推导,若直接 return 会让这些会话永久看不到账号配额 —— 比"币种按账本回落"更糟。
   // 回落值与账本写入侧同源(currentLedgerCurrency),不会与同一行的其它金额混排。
   const currency =
-    (await getGatewayAccountCurrency(getAuthState().user?.id)) ?? currentLedgerCurrency();
+    (await getGatewayAccountCurrency(authenticatedUserId)) ?? currentLedgerCurrency();
   const apiKey = readClaudeApiKey();
   // 直连真上游,不走本地 anthropic-compat-proxy —— 这条账号查询路径跟 Claude Code 子进程
   // 无关,proxy 只服务于子进程的 chat completion 请求。
@@ -231,19 +252,32 @@ async function fetchOnce(): Promise<ClaudeAccountUsageSnapshot | null> {
  *   - 首次成功 fetch 后启动空闲轮询定时器 (5 分钟周期, 保活 dailyBaselineStore.lastSeenSpend)
  */
 export async function triggerClaudeAccountUsageRefresh(force = false): Promise<void> {
-  if (fetchInFlight) return;
+  const owner = currentQuotaOwner();
+  if (!owner) return;
+  if (fetchInFlight) {
+    if (fetchOwnerKey !== owner.key) refreshQueued = true;
+    return;
+  }
   if (!force && Date.now() - lastFetchAt < THROTTLE_MS) return;
 
   fetchInFlight = true;
+  fetchOwnerKey = owner.key;
   lastFetchAt = Date.now();
   try {
-    const next = await fetchOnce();
+    const next = await fetchOnce(owner.authenticatedUserId);
     if (!next) return;
+    if (currentQuotaOwner()?.key !== owner.key) return;
     snapshot = next;
+    snapshotOwnerKey = owner.key;
     broadcast(next);
     ensureIdlePoll();
   } finally {
     fetchInFlight = false;
+    fetchOwnerKey = null;
+    if (refreshQueued) {
+      refreshQueued = false;
+      void triggerClaudeAccountUsageRefresh(true);
+    }
   }
 }
 
@@ -263,7 +297,8 @@ function ensureIdlePoll(): void {
 }
 
 export function readClaudeAccountUsageSnapshot(): ClaudeAccountUsageSnapshot | null {
-  return snapshot;
+  const owner = currentQuotaOwner();
+  return owner && snapshotOwnerKey === owner.key ? snapshot : null;
 }
 
 function broadcast(payload: ClaudeAccountUsageSnapshot): void {

@@ -48,13 +48,18 @@ export const CONTINUE_AFTER_ERROR_PROMPT =
 /**
  * 合成指令的遮蔽标签语义(对齐桌面 pendingQueueRowPresentation 的 review P2:
  * 不能把「续跑」文案套到所有合成触发上——Mivo 图片按钮的合成消息语义是图片操作):
- *  - 'continue':error-tail / app-exit 续跑指令(精确匹配共享常量);
+ *  - 'continue':error-tail / app-exit 续跑指令(包括有界 recovery checkpoint);
  *  - 'generic' :其它合成触发 → 中性「系统指令」标签;
  *  - null      :不是合成指令。
  */
 export function syntheticTriggerKind(text: string): 'continue' | 'generic' | null {
   if (!isSyntheticTriggerText(text)) return null;
-  return text === CONTINUE_AFTER_APP_EXIT_PROMPT || text === CONTINUE_AFTER_ERROR_PROMPT
+  const isCheckpointContinuation =
+    text.startsWith(`${CONTINUE_AFTER_APP_EXIT_PROMPT}\n\n[CINDY_RECOVERY_CHECKPOINT v1]`) ||
+    text.startsWith(`${CONTINUE_AFTER_ERROR_PROMPT}\n\n[CINDY_RECOVERY_CHECKPOINT v1]`);
+  return text === CONTINUE_AFTER_APP_EXIT_PROMPT ||
+    text === CONTINUE_AFTER_ERROR_PROMPT ||
+    isCheckpointContinuation
     ? 'continue'
     : 'generic';
 }

@@ -31,7 +31,7 @@ describe('resetDraftWorkspaceTargets', () => {
     expect(getDraft().extraDirs).toEqual([]);
   });
 
-  it('清空工作目录,并级联清掉远程目标与协同开关', () => {
+  it('清空工作目录和远程目标,并显式消费本次协同选择', () => {
     patchDraft({ workingDir: '/Users/someone/project' });
     patchDraft({ remoteHostId: 'host-1' });
     patchCollab({ enabled: true });

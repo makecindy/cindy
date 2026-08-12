@@ -33,6 +33,13 @@ vi.mock('@/features/learn/LearnStatusCard', () => ({
   LearnStatusCard: () => null,
 }));
 
+// This suite exercises only the auto-resume rows. Keep the Review card's
+// Markdown dependency out of the fixture so its i18n/bootstrap imports do not
+// leak into this focused component test.
+vi.mock('@/components/chat/MarkdownRenderer', () => ({
+  MarkdownRenderer: () => null,
+}));
+
 import { SystemCard } from '@/components/chat/SystemCard';
 
 afterEach(() => {
@@ -51,7 +58,10 @@ describe('SystemCard auto-resume 行', () => {
       'chat.systemCard.autoResume.labelNeutral',
       'chat.systemCard.autoResume.labelFailed',
     ]) {
-      expect(screen.queryByText(reconnectKey), `${reconnectKey} 属于重连行,不该出现在分隔条上`).toBeNull();
+      expect(
+        screen.queryByText(reconnectKey),
+        `${reconnectKey} 属于重连行,不该出现在分隔条上`,
+      ).toBeNull();
     }
   });
 
@@ -84,7 +94,9 @@ describe('SystemCard auto-resume 行', () => {
       />,
     );
     expect(
-      screen.getByText('chat.systemCard.autoResumePending.labelWithProgress({"attempt":1,"total":5})'),
+      screen.getByText(
+        'chat.systemCard.autoResumePending.labelWithProgress({"attempt":1,"total":5})',
+      ),
     ).toBeTruthy();
     expect(
       screen.queryByText('chat.systemCard.autoResume.labelNeutral'),
@@ -102,13 +114,18 @@ describe('SystemCard auto-resume 行', () => {
     );
     expect(screen.getByText('chat.systemCard.autoResume.label')).toBeTruthy();
     expect(
-      screen.queryByText('chat.systemCard.autoResumePending.labelWithProgress({"attempt":2,"total":5})'),
+      screen.queryByText(
+        'chat.systemCard.autoResumePending.labelWithProgress({"attempt":2,"total":5})',
+      ),
     ).toBeNull();
   });
 
   it('带中断信息但 outcome 未回填 → 中性文案(落库记录永不显示"进行中",不变量 I6)', () => {
     render(
-      <SystemCard cardType="auto-resume" data={{ error: 'socket hang up', attempt: 1, maxAttempts: 5 }} />,
+      <SystemCard
+        cardType="auto-resume"
+        data={{ error: 'socket hang up', attempt: 1, maxAttempts: 5 }}
+      />,
     );
     expect(screen.getByText('chat.systemCard.autoResume.labelNeutral')).toBeTruthy();
   });
@@ -118,7 +135,7 @@ describe('SystemCard auto-resume 行', () => {
   // 就是把 autoResume.label 的值改成了「已重新连接」,第一次修的时候只换回了组件、
   // 没换 key,回归就藏在 i18n 层活了下来。这条直接读四个 locale 的 JSON 补上那一层。
   it('四个 locale 里分隔条文案与重连文案是两条独立的 key(值不得相同)', () => {
-    const locales = ['zh-CN', 'en', 'ja', 'ko'] as const;
+    const locales = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const;
     for (const locale of locales) {
       const raw = readFileSync(
         resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'),
@@ -137,7 +154,12 @@ describe('SystemCard auto-resume 行', () => {
     render(
       <SystemCard
         cardType="auto-resume"
-        data={{ error: 'API Error: 502 upstream unreachable', attempt: 1, maxAttempts: 5, outcome: 'succeeded' }}
+        data={{
+          error: 'API Error: 502 upstream unreachable',
+          attempt: 1,
+          maxAttempts: 5,
+          outcome: 'succeeded',
+        }}
       />,
     );
     const button = screen.getByRole('button');

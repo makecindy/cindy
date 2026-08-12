@@ -750,7 +750,7 @@ describe('skillhub/installService', () => {
     fs.writeFileSync(path.join(externalDir, 'SKILL.md'), 'external content');
     makeDirectoryLink(physicalDir, externalDir);
     makeDirectoryLink(logicalDir, physicalDir);
-    const externalRegistryPath = fs.realpathSync(physicalDir);
+    const externalRegistryPath = await fs.promises.realpath(physicalDir);
 
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     await setupInstallDownload(skillName, zipBuf);
@@ -842,7 +842,7 @@ describe('skillhub/installService', () => {
     fs.mkdirSync(physicalDir, { recursive: true });
     fs.writeFileSync(path.join(physicalDir, 'SKILL.md'), 'old content');
     makeDirectoryLink(logicalDir, physicalDir);
-    const physicalRegistryPath = fs.realpathSync(physicalDir);
+    const physicalRegistryPath = await fs.promises.realpath(physicalDir);
 
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     await setupInstallDownload(skillName, zipBuf);

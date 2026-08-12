@@ -14,6 +14,10 @@ import {
 } from '@/features/device-link/selectedMachineStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
+  resolveSelectableIdsForNormalize,
+  selectRemoteSessionBootstrapFailures,
+  selectRemoteSessionBootstrapLoadingDevices,
+  shouldShowMachineSwitcher,
   shouldShowSelectedMachineConnectingPlaceholder,
   shouldWaitForRemoteSessionBootstrap,
 } from '@/features/device-link/useMachineSwitcher';
@@ -48,11 +52,7 @@ function mkSession(id: string, deviceLinkDeviceId?: string): Session {
 
 describe('selectVisibleSessions', () => {
   const local = [mkSession('l1'), mkSession('l2')];
-  const remote = [
-    mkSession('r1', 'dev-a'),
-    mkSession('r2', 'dev-a'),
-    mkSession('r3', 'dev-b'),
-  ];
+  const remote = [mkSession('r1', 'dev-a'), mkSession('r2', 'dev-a'), mkSession('r3', 'dev-b')];
 
   it('所有(默认)→ 本机 + 全部远程合并(顺序:本地在前)', () => {
     expect(selectVisibleSessions(local, remote, MACHINE_ALL).map((s) => s.id)).toEqual([
@@ -77,9 +77,9 @@ describe('selectVisibleSessions', () => {
   });
 
   it('多选:本机 + 某台远程 → 二者并集(本地在前)', () => {
-    expect(
-      selectVisibleSessions(local, remote, [MACHINE_LOCAL, 'dev-b']).map((s) => s.id),
-    ).toEqual(['l1', 'l2', 'r3']);
+    expect(selectVisibleSessions(local, remote, [MACHINE_LOCAL, 'dev-b']).map((s) => s.id)).toEqual(
+      ['l1', 'l2', 'r3'],
+    );
   });
 
   it('多选:两台远程 → 按勾选集过滤,排除本地', () => {
@@ -121,14 +121,36 @@ describe('normalizeSelectedMachineId', () => {
   });
 });
 
+describe('断网后远端选择的逃生路径', () => {
+  it('设备目录尚未结算时保留 raw 选择；终态不可用时回落「所有」', () => {
+    const raw = ['dev-a'];
+    const loadingSelectable = resolveSelectableIdsForNormalize(null, false, []);
+    const stoppedSelectable = resolveSelectableIdsForNormalize(null, true, []);
+
+    expect(loadingSelectable).toBeNull();
+    expect(normalizeSelectedMachineId(raw, loadingSelectable)).toBe(raw);
+    expect(stoppedSelectable).toEqual([]);
+    expect(normalizeSelectedMachineId(raw, stoppedSelectable)).toBe(MACHINE_ALL);
+  });
+
+  it('目录不可用但仍记着远端选择时保留切换入口，用户可显式切回本机', () => {
+    expect(shouldShowMachineSwitcher(['dev-a'], [])).toBe(true);
+    expect(shouldShowMachineSwitcher([MACHINE_LOCAL], [])).toBe(false);
+    expect(shouldShowMachineSwitcher(MACHINE_ALL, [])).toBe(false);
+    expect(
+      shouldShowMachineSwitcher(MACHINE_ALL, [
+        { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' },
+      ]),
+    ).toBe(true);
+  });
+});
+
 describe('toggleMachineSelection(菜单多选点选)', () => {
   const selectable = ['dev-a', 'dev-b'];
 
   it('「所有」下点选一项 → 收窄为只看该项(与旧单选直觉一致)', () => {
     expect(toggleMachineSelection(MACHINE_ALL, 'dev-a', selectable)).toEqual(['dev-a']);
-    expect(toggleMachineSelection(MACHINE_ALL, MACHINE_LOCAL, selectable)).toEqual([
-      MACHINE_LOCAL,
-    ]);
+    expect(toggleMachineSelection(MACHINE_ALL, MACHINE_LOCAL, selectable)).toEqual([MACHINE_LOCAL]);
   });
 
   it('未勾选 → 追加;已勾选 → 取消', () => {
@@ -141,9 +163,7 @@ describe('toggleMachineSelection(菜单多选点选)', () => {
   });
 
   it('勾满本机 + 全部可选设备 → 收敛回「所有」(未来新设备自动包含)', () => {
-    expect(
-      toggleMachineSelection([MACHINE_LOCAL, 'dev-a'], 'dev-b', selectable),
-    ).toBe(MACHINE_ALL);
+    expect(toggleMachineSelection([MACHINE_LOCAL, 'dev-a'], 'dev-b', selectable)).toBe(MACHINE_ALL);
   });
 
   it('勾选集规范序:本机在前,设备按 id 字典序', () => {
@@ -160,9 +180,11 @@ describe('toggleMachineSelection(菜单多选点选)', () => {
 
   it('隐藏半保留:勾选集中暂时不可选的设备不因无关点选被冲掉(codex P2)', () => {
     // dev-offline 不在可选集(离线/未加载),点选 dev-a 后仍留在勾选集里。
-    expect(
-      toggleMachineSelection([MACHINE_LOCAL, 'dev-offline'], 'dev-a', selectable),
-    ).toEqual([MACHINE_LOCAL, 'dev-a', 'dev-offline']);
+    expect(toggleMachineSelection([MACHINE_LOCAL, 'dev-offline'], 'dev-a', selectable)).toEqual([
+      MACHINE_LOCAL,
+      'dev-a',
+      'dev-offline',
+    ]);
     // 取消可见项同样不动隐藏半。
     expect(
       toggleMachineSelection([MACHINE_LOCAL, 'dev-a', 'dev-offline'], 'dev-a', selectable),
@@ -171,9 +193,9 @@ describe('toggleMachineSelection(菜单多选点选)', () => {
 
   it('隐藏半的两个收敛例外:可见半清空 → 回落「所有」;可见半勾满 → 收敛「所有」', () => {
     // 可见半只剩 local,取消它 → 视觉上清空 → 回落「所有」(隐藏半一并放下,「所有」已覆盖)。
-    expect(
-      toggleMachineSelection([MACHINE_LOCAL, 'dev-offline'], MACHINE_LOCAL, selectable),
-    ).toBe(MACHINE_ALL);
+    expect(toggleMachineSelection([MACHINE_LOCAL, 'dev-offline'], MACHINE_LOCAL, selectable)).toBe(
+      MACHINE_ALL,
+    );
     // 可见半勾满本机 + 全部可选设备 → 收敛「所有」。
     expect(
       toggleMachineSelection([MACHINE_LOCAL, 'dev-a', 'dev-offline'], 'dev-b', selectable),
@@ -184,9 +206,10 @@ describe('toggleMachineSelection(菜单多选点选)', () => {
 describe('机器选择持久化(serialize / parse 往返)', () => {
   it('MACHINE_ALL 与勾选集均可往返', () => {
     expect(parseMachineSelection(serializeMachineSelection(MACHINE_ALL))).toBe(MACHINE_ALL);
-    expect(
-      parseMachineSelection(serializeMachineSelection([MACHINE_LOCAL, 'dev-a'])),
-    ).toEqual([MACHINE_LOCAL, 'dev-a']);
+    expect(parseMachineSelection(serializeMachineSelection([MACHINE_LOCAL, 'dev-a']))).toEqual([
+      MACHINE_LOCAL,
+      'dev-a',
+    ]);
   });
 
   it('null / 损坏 JSON / 非法形状 → 回落「所有」', () => {
@@ -222,12 +245,10 @@ describe('机器选择持久化(serialize / parse 往返)', () => {
 describe('buildSwitcherDevices', () => {
   it('已连接(已同步)/ 连接中(在线可控未同步)/ 被拒(已撤销)三态分类', () => {
     const result = buildSwitcherDevices({
-      fullList: [
-        mkDevice('dev-connected'),
-        mkDevice('dev-connecting'),
-        mkDevice('dev-rejected'),
+      fullList: [mkDevice('dev-connected'), mkDevice('dev-connecting'), mkDevice('dev-rejected')],
+      syncedDevices: [
+        { deviceId: 'dev-connected', deviceName: 'Connected', sessionCount: 1, connected: true },
       ],
-      syncedDevices: [{ deviceId: 'dev-connected', deviceName: 'Connected', sessionCount: 1, connected: true }],
       revoked: new Set(['dev-rejected']),
     });
     const byId = Object.fromEntries(result.map((d) => [d.deviceId, d.status]));
@@ -316,7 +337,9 @@ describe('buildSwitcherDevices', () => {
   it('仅有断线缓存的设备仍显示,但状态为 connecting', () => {
     const result = buildSwitcherDevices({
       fullList: [],
-      syncedDevices: [{ deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 2, connected: false }],
+      syncedDevices: [
+        { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 2, connected: false },
+      ],
       revoked: new Set(),
     });
     expect(result).toEqual([{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting' }]);
@@ -349,7 +372,12 @@ describe('compareDevicesByName（切换栏与设置共用,稳定身份排序）'
       { name: 'alpha', deviceId: 'a1' },
       { name: 'Mike', deviceId: 'm' },
     ];
-    expect(arr.slice().sort(compareDevicesByName).map((d) => d.deviceId)).toEqual([
+    expect(
+      arr
+        .slice()
+        .sort(compareDevicesByName)
+        .map((d) => d.deviceId),
+    ).toEqual([
       'a1', // alpha + deviceId 兜底(a1 < a2)
       'a2',
       'm',
@@ -527,6 +555,81 @@ describe('shouldWaitForRemoteSessionBootstrap', () => {
   });
 });
 
+describe('selectRemoteSessionBootstrapFailures', () => {
+  const devices = [
+    { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const },
+    { deviceId: 'dev-b', name: 'Mac B', status: 'connected' as const },
+    { deviceId: 'dev-c', name: 'Mac C', status: 'rejected' as const },
+  ];
+  const failures = new Set(['dev-a', 'dev-b', 'dev-c']);
+
+  it('所有机器返回全部可见失败设备，但不把已拒绝设备混成读取失败', () => {
+    expect(
+      selectRemoteSessionBootstrapFailures({
+        selectedMachineId: MACHINE_ALL,
+        devices,
+        bootstrapFailedDeviceIds: failures,
+      }).map((device) => device.deviceId),
+    ).toEqual(['dev-a', 'dev-b']);
+  });
+
+  it('显式多选只返回勾选范围内的失败设备；仅本机忽略远端失败', () => {
+    expect(
+      selectRemoteSessionBootstrapFailures({
+        selectedMachineId: ['dev-b'],
+        devices,
+        bootstrapFailedDeviceIds: failures,
+      }).map((device) => device.deviceId),
+    ).toEqual(['dev-b']);
+    expect(
+      selectRemoteSessionBootstrapFailures({
+        selectedMachineId: [MACHINE_LOCAL],
+        devices,
+        bootstrapFailedDeviceIds: failures,
+      }),
+    ).toEqual([]);
+    expect(
+      selectRemoteSessionBootstrapFailures({
+        selectedMachineId: [MACHINE_LOCAL, 'dev-a'],
+        devices,
+        bootstrapFailedDeviceIds: failures,
+      }).map((device) => device.deviceId),
+    ).toEqual(['dev-a']);
+  });
+});
+
+describe('selectRemoteSessionBootstrapLoadingDevices', () => {
+  const devices = [
+    { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const },
+    { deviceId: 'dev-b', name: 'Mac B', status: 'connected' as const },
+  ];
+  const loading = new Set(['dev-a', 'dev-b']);
+
+  it('已有 shard 的设备重读时仍属于 loading，并按当前机器范围过滤', () => {
+    expect(
+      selectRemoteSessionBootstrapLoadingDevices({
+        selectedMachineId: MACHINE_ALL,
+        devices,
+        bootstrapLoadingDeviceIds: loading,
+      }).map((device) => device.deviceId),
+    ).toEqual(['dev-a', 'dev-b']);
+    expect(
+      selectRemoteSessionBootstrapLoadingDevices({
+        selectedMachineId: ['dev-b'],
+        devices,
+        bootstrapLoadingDeviceIds: loading,
+      }).map((device) => device.deviceId),
+    ).toEqual(['dev-b']);
+    expect(
+      selectRemoteSessionBootstrapLoadingDevices({
+        selectedMachineId: [MACHINE_LOCAL],
+        devices,
+        bootstrapLoadingDeviceIds: loading,
+      }),
+    ).toEqual([]);
+  });
+});
+
 describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
   const noBootstrapFailures = new Set<string>();
 
@@ -567,7 +670,7 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
     ).toBe(true);
   });
 
-  it('选中设备的 bootstrap 已终态失败 → 停止连接中占位并进入真实空态', () => {
+  it('选中设备的 bootstrap 已终态失败 → 停止连接中占位，交给独立错误态', () => {
     expect(
       shouldShowSelectedMachineConnectingPlaceholder({
         rawSelection: ['dev-a'],
@@ -681,7 +784,11 @@ describe('applyDeviceRename(切换栏全量设备就地改名)', () => {
     // buildSwitcherDevices 应立刻吐出新名(此前会停在旧名直到无关 refresh — Codex P2 修复点)。
     const fullList = [mkDevice('dev-c', { name: 'Old C' })];
     const renamed = applyDeviceRename(fullList, 'dev-c', 'New C') as DeviceLinkDeviceView[];
-    const devices = buildSwitcherDevices({ fullList: renamed, syncedDevices: [], revoked: new Set() });
+    const devices = buildSwitcherDevices({
+      fullList: renamed,
+      syncedDevices: [],
+      revoked: new Set(),
+    });
     expect(devices).toEqual([{ deviceId: 'dev-c', name: 'New C', status: 'connecting' }]);
   });
 });

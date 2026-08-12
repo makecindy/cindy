@@ -1,5 +1,10 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { SESSION_ACTIVITY_CHANNEL, type SessionActivityPayload } from '@cindy/device-link';
+import {
+  MAKER_EVENT_BATCH_CHANNEL,
+  SESSION_ACTIVITY_CHANNEL,
+  expandMakerEventBatchPayload,
+  type SessionActivityPayload,
+} from '@cindy/device-link';
 import {
   applyAgentTaskUpdateEvent,
   isSameAgentTaskAlias,
@@ -7,9 +12,13 @@ import {
   type AgentTaskUpdate,
 } from '@cindy/maker-shared/agent-task';
 import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
-import { applyCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
+import { applyCodexPlanSnapshotOnDone, markCodexPlanTurnFailed } from '@cindy/maker-shared/message-render';
 import type { RemoteSessionLiveActivity } from '@cindy/maker-shared/session-list';
 import { buildDeviceIdentity, resolveCanonicalDeviceId } from '@cindy/maker-shared/mobile-home';
+import {
+  isProductTurnDoneEvent,
+  isTurnContinuationBoundaryEvent,
+} from '@cindy/maker-shared/turn-continuation';
 import { EMPTY_INPUT_PROJECTION, normalizeInputProjection } from '@/session/inputProjection';
 import { sortPendingInteractions } from '@/session/interactionModel';
 import { applySessionModelPrefPush } from '@/session/sessionModelMirror';
@@ -44,6 +53,16 @@ const EMPTY_NEW_MAKER_WORKTREE_PREFERENCE: RemoteNewMakerWorktreePreference =
   Object.freeze({ enabled: false, revision: 0 });
 
 /**
+ * 工作端拥有的 New Maker worktree 源分支镜像。null 表示该 device + canonical
+ * baseRepo 尚无显式选择；revision 完全采用工作端快照，手机不自行递增。
+ */
+export type RemoteNewMakerWorktreeBranchPreference = {
+  baseRepo: string;
+  sourceBranch: string;
+  revision: number;
+} | null;
+
+/**
  * 会话元数据在途写登记(app 级单例):首页乐观写(置顶/归档/删除/重命名)begin 时
  * track、settle 时 release;`sessions:patched` push 应用前经 filterPatch 遮蔽在途
  * 字段,防止同字段旧写的 push 回流把本机更新的乐观意图滚回(review P2)。
@@ -71,13 +90,13 @@ export interface RemoteSessionReconnectAttempt {
   attempt: number;
   maxAttempts: number;
   /**
-   * 重试原因。`'overload'` = 上游模型没有可用容量、agent 正在退避重投
-   * (maker-core 的 `(auto-retry N/M)` 标记); 缺省 / `'reconnect'` = 传输层重连。
+   * 重试原因。`'overload'` = 上游模型没有可用容量；`'rate-limit'` = Codex daemon
+   * 已耗尽内部 retry budget 后的受限外层重投；缺省 / `'reconnect'` = 传输层重连。
    *
    * 刻意复用同一个字段而不是新加一个: 这个 attempt 有 6 处清理点(turn 边界 / 快照 /
    * 收口 / 活动流), 拆成两个字段就得在每处各清一次, 漏一处就会残留一个假状态。
    */
-  kind?: 'reconnect' | 'overload';
+  kind?: 'reconnect' | 'overload' | 'rate-limit';
 }
 
 interface SessionMessageSyncMarker {
@@ -114,14 +133,33 @@ const EMPTY_SESSION_RUN_STATUS: RemoteSessionRunStatus = Object.freeze({
 });
 
 const shards = new Map<string, DeviceShard>();
-// 工作端拥有的 New Maker worktree 偏好按设备隔离；push 属 sessions topic，无 sessionId。
+// 工作端拥有的 New Maker worktree 偏好按设备隔离；这里只是不持久化的显示镜像，
+// push 属 sessions topic，无 sessionId。唯一持久副本仍在被控端现有 Cindy 配置里。
 const newMakerWorktreePreferences = new Map<string, RemoteNewMakerWorktreePreference>();
+// deviceId → canonical baseRepo → 工作端权威分支快照。分支与 checkbox 是两份独立镜像；
+// 任一分支 pull / push / write-back 都不得改动 newMakerWorktreePreferences。
+const newMakerWorktreeBranchPreferences = new Map<
+  string,
+  Map<string, Exclude<RemoteNewMakerWorktreeBranchPreference, null>>
+>();
 const messages = new Map<string, RemoteMessage[]>();
 // The maker event is broadcast before its async DB create/update completes. Keep the latest
 // plan snapshot briefly in the session mirror so a late initial `messages:created` row cannot
 // overwrite a newer live state with the first stale 0/N snapshot.
 const livePlanSnapshots = new Map<string, Map<string, LivePlanSnapshot>>();
 const pendingInteractions = new Map<string, PendingInteraction[]>();
+/**
+ * 这个会话的 pending 列表当前是不是**权威**的(来自被控端的一次全量快照)。
+ *
+ * 空列表有两种来源,消费方光看 `getPendingInteractions()` 分辨不了:
+ * - 权威的空:被控端确认所有请求都已回答 / 撤销;
+ * - 非权威的空:`markDeviceOffline` / `removeDevice` 按设计清掉了这份投影(它依赖
+ *   实时连接),此刻我们其实不知道被控端还在等什么。
+ *
+ * 凡是「空快照才能做的清理」都必须先问这里,否则短暂离线会被误判成「都处理完了」。
+ * 不能退化成看全局 relay status:目标设备 offline 时 relay 仍可能 online(#1493 review)。
+ */
+const pendingInteractionsAuthoritative = new Set<string>();
 /**
  * 乐观 resolve 在途抑制集合:交互卡批准 / 拒绝已在本地乐观撤卡、被控端还没有
  * 确认的 requestId。这个窗口里权威流(全量快照 setPendingInteractions / push
@@ -222,6 +260,12 @@ function interactionsByRequestId(list: readonly PendingInteraction[]): Map<strin
   return byId;
 }
 const inputProjections = new Map<string, InputProjection>();
+// Projection queries can resolve after a newer push or terminal boundary. Keep
+// a monotonic per-session authority epoch so late snapshots cannot overwrite
+// current queue / continuation state (mirrors Desktop makerChatStore).
+const inputProjectionAuthorityEpochs = new Map<string, number>();
+let nextInputProjectionAuthorityEpoch = 0;
+let inputProjectionAuthorityEpochFloor = 0;
 const sessionLiveActivity = new Map<string, RemoteSessionLiveActivity>();
 const sessionRunning = new Map<string, boolean>();
 const sessionRunStatus = new Map<string, RemoteSessionRunStatus>();
@@ -479,6 +523,19 @@ function emit(): void {
   for (const sub of subs) sub();
 }
 
+function bumpInputProjectionAuthorityEpoch(sessionId: string): number {
+  const epoch = ++nextInputProjectionAuthorityEpoch;
+  inputProjectionAuthorityEpochs.set(sessionId, epoch);
+  return epoch;
+}
+
+function commitInputProjection(sessionId: string, next: InputProjection): boolean {
+  if (deepValueEqual(inputProjections.get(sessionId) ?? EMPTY_INPUT_PROJECTION, next)) return false;
+  inputProjections.set(sessionId, next);
+  emit();
+  return true;
+}
+
 function recomputeSessions(): void {
   sessionDeviceIndex.clear();
   // 跨 shard 去重 + 设备身份归一化。re-link 后同一 session.id 可能同时存在于 stale / current 两个 shard;
@@ -606,6 +663,7 @@ function completeLivePlanSnapshotOnDone(
   snapshot: unknown,
   turnId: string | null,
   terminalStatus: string | null,
+  cancelled: boolean,
 ): boolean {
   if (!turnId) return false;
   const toolUseId = `plan:${turnId}`;
@@ -617,6 +675,8 @@ function completeLivePlanSnapshotOnDone(
     snapshot,
     turnId,
     terminalStatus,
+    undefined,
+    cancelled,
   );
   const content = completed.messages[0]?.content;
   if (!completed.changed || !isRecord(content)) return false;
@@ -1788,8 +1848,13 @@ export const remoteSessionStore = {
     const streamingChanged = options.finalizeStreaming === true && next.length > 0
       ? flushAndFinalizeRemoteStreamingMessages(sessionId)
       : false;
+    // 权威性先落:哪怕内容一字未变(典型是重连后的 [] → []),消费方也必须知道
+    // 「这份空列表已经被被控端确认过」——否则离线期收起态的清理永远等不到时机
+    // (#1493 review)。因此 authority 的翻转本身就是一次需要通知的变化。
+    const authorityChanged = !pendingInteractionsAuthoritative.has(sessionId);
+    pendingInteractionsAuthoritative.add(sessionId);
     if (deepValueEqual(pendingInteractions.get(sessionId) ?? emptyPendingInteractions, next)) {
-      if (streamingChanged) emit();
+      if (streamingChanged || authorityChanged) emit();
       return;
     }
     pendingInteractions.set(sessionId, next);
@@ -1798,9 +1863,31 @@ export const remoteSessionStore = {
 
   setInputProjection(sessionId: string, projection: unknown): void {
     const next = normalizeInputProjection(projection, sessionId);
-    if (deepValueEqual(inputProjections.get(sessionId) ?? EMPTY_INPUT_PROJECTION, next)) return;
-    inputProjections.set(sessionId, next);
-    emit();
+    bumpInputProjectionAuthorityEpoch(sessionId);
+    commitInputProjection(sessionId, next);
+  },
+
+  captureInputProjectionAuthorityEpoch(sessionId: string): number {
+    return inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
+  },
+
+  setInputProjectionIfCurrent(
+    sessionId: string,
+    projection: unknown,
+    expectedEpoch: number,
+  ): boolean {
+    const currentEpoch = inputProjectionAuthorityEpochs.get(sessionId) ?? inputProjectionAuthorityEpochFloor;
+    if (currentEpoch !== expectedEpoch) {
+      return false;
+    }
+    const next = normalizeInputProjection(projection, sessionId);
+    bumpInputProjectionAuthorityEpoch(sessionId);
+    commitInputProjection(sessionId, next);
+    return true;
+  },
+
+  invalidateInputProjectionAuthority(sessionId: string): void {
+    bumpInputProjectionAuthorityEpoch(sessionId);
   },
 
   setSessionRunning(
@@ -1809,6 +1896,24 @@ export const remoteSessionStore = {
     boundaryAgentMeta?: Record<string, unknown> | null,
   ): void {
     if (!sessionId) return;
+    // A maker turn boundary supersedes any projection query that started
+    // before it. This is the terminal fence for late owner snapshots.
+    bumpInputProjectionAuthorityEpoch(sessionId);
+    // The terminal event is also authoritative for the continuation owner. A
+    // paired projection clear push may be lost during a disconnect, so clear a
+    // known owner here instead of leaving the mobile row live until rehydrate.
+    let continuationOwnerCleared = false;
+    if (!running) {
+      const currentProjection = inputProjections.get(sessionId);
+      if (currentProjection?.continuationTurnClientId) {
+        const nextProjection: InputProjection = {
+          ...currentProjection,
+          continuationTurnClientId: null,
+        };
+        continuationOwnerCleared = !deepValueEqual(currentProjection, nextProjection);
+        if (continuationOwnerCleared) inputProjections.set(sessionId, nextProjection);
+      }
+    }
     // 本方法只被 maker 权威信号调用(done / terminal error / status-changed closed),
     // 与 maker turn 边界同步;activity / 快照流走 writeSessionRunStatus,不经过这里。
     // 边界变化必须独立参与 emit 判定:activity 流可能已把宽 run status 置 false,此时
@@ -1825,7 +1930,10 @@ export const remoteSessionStore = {
       sideTaskRunning: running ? current.sideTaskRunning : false,
       startedAt: running ? (current.startedAt ?? Date.now()) : null,
     };
-    if (writeSessionRunStatus(sessionId, next) || turnBoundaryChanged || streamingChanged) emit();
+    if (writeSessionRunStatus(sessionId, next)
+      || turnBoundaryChanged
+      || streamingChanged
+      || continuationOwnerCleared) emit();
   },
 
   captureActiveSessionSnapshotEpoch(): number {
@@ -1967,6 +2075,17 @@ export const remoteSessionStore = {
     emit();
   },
 
+  /**
+   * 单条 maker:event push payload 的消费(逐帧与微批拆包**共用**唯一实现——
+   * 两条路径若各自解析,批的语义就会随逐帧演进而漂移)。
+   */
+  applyMakerEventPush(payload: Record<string, unknown>): void {
+    const sessionId = readString(payload, 'sessionId');
+    const event = isRecord(payload.event) ? payload.event : null;
+    const persistId = readString(payload, 'persistId') ?? undefined;
+    if (sessionId && event) this.applyMakerEvent(sessionId, event, persistId);
+  },
+
   applyRemotePush(deviceId: string, channel: string, payload: unknown): void {
     if (channel === SESSION_ACTIVITY_CHANNEL) {
       this.applySessionActivity(deviceId, payload);
@@ -1975,6 +2094,11 @@ export const remoteSessionStore = {
     if (channel === 'maker:new-maker-draft:changed') {
       const enabled = readPushedNewMakerWorktreeEnabled(payload);
       if (enabled !== null) this.setNewMakerWorktreePreference(deviceId, enabled);
+      return;
+    }
+    if (channel === 'maker:new-maker-worktree-branch:changed') {
+      const snapshot = readPushedNewMakerWorktreeBranchPreference(payload);
+      if (snapshot !== null) this.setNewMakerWorktreeBranchPreference(deviceId, snapshot);
       return;
     }
     if (channel === 'local-db:sessions:created') {
@@ -2059,10 +2183,20 @@ export const remoteSessionStore = {
       return;
     }
     if (channel === 'maker:event' && isRecord(payload)) {
-      const sessionId = readString(payload, 'sessionId');
-      const event = isRecord(payload.event) ? payload.event : null;
-      const persistId = readString(payload, 'persistId') ?? undefined;
-      if (sessionId && event) this.applyMakerEvent(sessionId, event, persistId);
+      this.applyMakerEventPush(payload);
+      return;
+    }
+    // 微批帧:被控端把同一会话的连续 maker:event 合并成一帧(能力协商见
+    // CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1)。逐条按原顺序走与逐帧**完全
+    // 相同**的处理路径——批只是传输层的聚合,不引入新的应用语义;单条形状不符
+    // 时跳过该条而不丢整批。
+    if (channel === MAKER_EVENT_BATCH_CHANNEL) {
+      // 拆包与 fail-closed 的 topic 隔离判据在共享包里(desktop 作为控制端时也用
+      // 同一份,见 expandMakerEventBatchPayload 注释)。
+      for (const event of expandMakerEventBatchPayload(payload)) {
+        if (!isRecord(event)) continue;
+        this.applyMakerEventPush(event);
+      }
       return;
     }
     if (channel === 'maker:status-changed' && isRecord(payload)) {
@@ -2286,25 +2420,32 @@ export const remoteSessionStore = {
 
     // setSessionRunning owns the final flush/finalize and run-state transition;
     // keeping the done path in one call avoids notifying subscribers twice.
-    if (type === 'done' || isTerminalMakerErrorEvent(event)) {
+    if (
+      isProductTurnDoneEvent(event)
+      || (!isTurnContinuationBoundaryEvent(event) && isTerminalMakerErrorEvent(event))
+    ) {
       let terminalPlanChanged = false;
       if (type === 'done' && readString(event, 'source') === 'codex') {
         const data = isRecord(event.data) ? event.data : null;
         const rawTurn = isRecord(data?.raw) ? data.raw : null;
         const turnId = readString(rawTurn, 'id');
         const turnStatus = readString(rawTurn, 'status');
+        const turnCancelled = data?.cancelled === true;
         const currentMessages = messages.get(sessionId) ?? [];
         const completed = applyCodexPlanSnapshotOnDone(
           currentMessages,
           data?.plan,
           turnId,
           turnStatus,
+          undefined,
+          turnCancelled,
         );
         completeLivePlanSnapshotOnDone(
           sessionId,
           data?.plan,
           turnId,
           turnStatus,
+          turnCancelled,
         );
         terminalPlanChanged = completed.changed;
         if (completed.changed) {
@@ -2319,6 +2460,27 @@ export const remoteSessionStore = {
               completed.toolUseId,
               completedMessage.content,
             );
+          }
+        }
+      } else if (readString(event, 'source') === 'codex') {
+        // 没有 done 的 codex 终态 error:这一轮的计划行等不到章,也等不到
+        // persistCodexPlanOnDone 的 turnCompleted:false。与 desktop renderer 的
+        // markCodexPlanTurnFailed 同款补印记,否则全勾完的失败计划会按旧数据
+        // 兜底退场——任务还活着,用户正要接着指挥。
+        const currentMessages = messages.get(sessionId) ?? [];
+        const failed = markCodexPlanTurnFailed(currentMessages);
+        terminalPlanChanged = failed.changed;
+        if (failed.changed) {
+          messages.set(sessionId, [...failed.messages]);
+          const failedMessage = failed.messages.find((message) => {
+            if (message.toolUseId === failed.toolUseId) return true;
+            return readString(message.content, 'toolUseId') === failed.toolUseId;
+          });
+          // 印记也要进 live-plan 缓存:overlayLivePlanSnapshot 用缓存内容整体
+          // 替换 content,缓存不补就会把 main 随后广播的落库 turnCompleted:false
+          // 盖回去,本连接周期内再也纠不回来。
+          if (failed.toolUseId && isRecord(failedMessage?.content)) {
+            rememberLivePlanContent(sessionId, failed.toolUseId, failedMessage.content);
           }
         }
       }
@@ -2338,7 +2500,10 @@ export const remoteSessionStore = {
     if (type === 'error') {
       const data = isRecord(event.data) ? event.data : null;
       const reconnectAttempt = data?.willRetry === true
-        ? parseReconnectAttemptMessage(readString(data, 'message') ?? '')
+        ? parseReconnectAttemptMessage(
+            readString(data, 'message') ?? '',
+            readString(data, 'reason'),
+          )
         : null;
       const current = readSessionRunStatus(sessionId);
       const changed = writeSessionRunStatus(sessionId, {
@@ -2428,6 +2593,13 @@ export const remoteSessionStore = {
       const data = isRecord(event.data) ? event.data : null;
       const current = readSessionRunStatus(sessionId);
       const isRunning = typeof data?.isRunning === 'boolean' ? data.isRunning : current.isRunning;
+      if (!isRunning && isTurnContinuationBoundaryEvent(event)) {
+        // A claimed status(false) closes only the provider SDK segment. Keep the
+        // mobile product turn and its streaming projection alive until an
+        // unclaimed terminal event arrives, matching the desktop lifecycle.
+        if (textFlushed || reconnectCleared) emit();
+        return;
+      }
       const rawTokenUsage = readNumber(data, 'tokenUsage');
       const rawStatus = readString(data, 'status');
       // turn-start 检测用 maker 自己的边界(不用 current.isRunning):activity 推送 / 活跃
@@ -2489,7 +2661,10 @@ export const remoteSessionStore = {
       changed = livePlanSnapshots.delete(sessionId) || changed;
       changed = pendingRefreshSessions.delete(sessionId) || changed;
       changed = pendingInteractions.delete(sessionId) || changed;
+      // 投影没了,这份(空)列表就不再权威:重连拿到全量快照前不许据此做清理。
+      changed = pendingInteractionsAuthoritative.delete(sessionId) || changed;
       changed = inputProjections.delete(sessionId) || changed;
+      bumpInputProjectionAuthorityEpoch(sessionId);
       changed = sessionLiveActivity.delete(sessionId) || changed;
       changed = sessionGoalStatus.delete(sessionId) || changed;
       changed = sessionTaskUpdates.delete(sessionId) || changed;
@@ -2507,6 +2682,7 @@ export const remoteSessionStore = {
   removeDevice(deviceId: string): void {
     const hadShard = shards.delete(deviceId);
     const hadWorktreePreference = newMakerWorktreePreferences.delete(deviceId);
+    const hadWorktreeBranchPreferences = newMakerWorktreeBranchPreferences.delete(deviceId);
     // Sweep per-session maps for this device regardless of whether the shard still exists, and
     // drop the index entries too — otherwise sessionDeviceIndex (and any maps it points at)
     // leak orphans when the shard was already pruned.
@@ -2516,7 +2692,9 @@ export const remoteSessionStore = {
         messages.delete(sessionId);
         livePlanSnapshots.delete(sessionId);
         pendingInteractions.delete(sessionId);
+        pendingInteractionsAuthoritative.delete(sessionId);
         inputProjections.delete(sessionId);
+        bumpInputProjectionAuthorityEpoch(sessionId);
         sessionLiveActivity.delete(sessionId);
         sessionRunning.delete(sessionId);
         sessionRunStatus.delete(sessionId);
@@ -2543,7 +2721,12 @@ export const remoteSessionStore = {
         removedSession = true;
       }
     }
-    if (!hadShard && !removedSession && !hadWorktreePreference) return;
+    if (
+      !hadShard
+      && !removedSession
+      && !hadWorktreePreference
+      && !hadWorktreeBranchPreferences
+    ) return;
     bumpMessageVersion();
     recomputeSessions();
   },
@@ -2551,13 +2734,19 @@ export const remoteSessionStore = {
   clear(): void {
     shards.clear();
     newMakerWorktreePreferences.clear();
+    newMakerWorktreeBranchPreferences.clear();
     messages.clear();
     livePlanSnapshots.clear();
     pendingInteractions.clear();
+    pendingInteractionsAuthoritative.clear();
     inFlightInteractionResolves.clear();
     confirmedInteractionDismissals.clear();
     interactionRevisionFloors.clear();
     inputProjections.clear();
+    inputProjectionAuthorityEpochFloor = ++nextInputProjectionAuthorityEpoch;
+    inputProjectionAuthorityEpochs.clear();
+    // Keep authority tombstones monotonic across a global store reset so an
+    // old in-flight query cannot be accepted after the session is recreated.
     sessionLiveActivity.clear();
     sessionRunning.clear();
     sessionRunStatus.clear();
@@ -2642,8 +2831,76 @@ export const remoteSessionStore = {
       ?? EMPTY_NEW_MAKER_WORKTREE_PREFERENCE;
   },
 
+  setNewMakerWorktreeBranchPreference(
+    deviceId: string,
+    snapshot: RemoteNewMakerWorktreeBranchPreference,
+  ): void {
+    if (!deviceId || snapshot === null) return;
+    const baseRepo = snapshot.baseRepo.trim();
+    const sourceBranch = snapshot.sourceBranch.trim();
+    if (
+      !baseRepo
+      || !sourceBranch
+      || !Number.isInteger(snapshot.revision)
+      || snapshot.revision < 0
+    ) return;
+
+    let byRepo = newMakerWorktreeBranchPreferences.get(deviceId);
+    const current = byRepo?.get(baseRepo);
+    if (current) {
+      // revision 由 host 按 canonical repo 单调递增。旧快照不能覆盖；相等只接受
+      // 完全相同的幂等 echo，同 revision 的冲突值也必须拒绝。
+      if (snapshot.revision < current.revision) return;
+      if (snapshot.revision === current.revision) return;
+    }
+    if (!byRepo) {
+      byRepo = new Map();
+      newMakerWorktreeBranchPreferences.set(deviceId, byRepo);
+    }
+    byRepo.set(baseRepo, {
+      baseRepo,
+      sourceBranch,
+      revision: snapshot.revision,
+    });
+    // 同一 sourceBranch 的新 host revision 也必须发布：它给在途 pull / apply 回包做 fence。
+    emit();
+  },
+
+  /**
+   * GET 的 null 是工作端对该 repo「当前没有偏好」的权威回答，不是漏包。
+   * 桌面进程重启后 host revision 会从头开始；先删掉手机保存的旧高 revision，
+   * 后续 rev1 snapshot / push 才有资格成为新进程的真相。
+   */
+  clearNewMakerWorktreeBranchPreference(
+    deviceId: string,
+    baseRepo: string,
+  ): void {
+    const normalizedBaseRepo = baseRepo.trim();
+    if (!deviceId || !normalizedBaseRepo) return;
+    const byRepo = newMakerWorktreeBranchPreferences.get(deviceId);
+    if (!byRepo?.delete(normalizedBaseRepo)) return;
+    if (byRepo.size === 0) newMakerWorktreeBranchPreferences.delete(deviceId);
+    emit();
+  },
+
+  getNewMakerWorktreeBranchPreference(
+    deviceId: string | null | undefined,
+    baseRepo: string | null | undefined,
+  ): RemoteNewMakerWorktreeBranchPreference {
+    if (!deviceId || !baseRepo?.trim()) return null;
+    return newMakerWorktreeBranchPreferences.get(deviceId)?.get(baseRepo.trim()) ?? null;
+  },
+
   getPendingInteractions(sessionId: string): PendingInteraction[] {
     return pendingInteractions.get(sessionId) ?? emptyPendingInteractions;
+  },
+
+  /**
+   * pending 列表当前是否权威(见 pendingInteractionsAuthoritative 的注释)。
+   * 空列表要用来做清理判断时必须先问这里。
+   */
+  hasAuthoritativePendingInteractions(sessionId: string): boolean {
+    return pendingInteractionsAuthoritative.has(sessionId);
   },
 
   getInputProjection(sessionId: string): InputProjection {
@@ -2767,17 +3024,30 @@ function parseAttemptPair(
 /**
  * 非终止 error 的 message → 重试进度。
  *
- * 两类各有自己的标记:
+ * 三类各有自己的标记:
  *  - 传输层重连: `Reconnecting... N/M`;
  *  - 上游过载退避重投: `(auto-retry N/M)`(maker-core 的
  *    agents/shared/overload-error.ts 统一后缀, Codex 与 Claude 两侧同款)。
+ *  - daemon 终态 429 外层重投: reason=`terminal-rate-limit-retry` +
+ *    `(rate-limit-retry N/M)`；reason 与 marker 必须同时命中。
  *
- * 后者不认的话, 整个退避窗口(交互式最长约 30s)手机端只显示笼统的「思考中」, 用户看不出
+ * 过载 marker 不认的话, 整个退避窗口(交互式最长约 30s)手机端只显示笼统的「思考中」, 用户看不出
  * 是在等上游容量(review #844 codex P1)。这里刻意在 mobile 侧独立实现一份判定, 与
  * renderer 的 utils/overloadError.ts 同规 —— maker-core 是 desktop/node 侧包, 不跨
  * bundle 共享。
  */
-function parseReconnectAttemptMessage(message: string): RemoteSessionReconnectAttempt | null {
+const TERMINAL_RATE_LIMIT_RETRY_REASON = 'terminal-rate-limit-retry';
+
+function parseReconnectAttemptMessage(
+  message: string,
+  reason?: string | null,
+): RemoteSessionReconnectAttempt | null {
+  if (reason === TERMINAL_RATE_LIMIT_RETRY_REASON) {
+    const rateLimit = parseAttemptPair(
+      /\(rate-limit-retry\s+(\d+)\s*\/\s*(\d+)\)\s*$/i.exec(message),
+    );
+    return rateLimit ? { ...rateLimit, kind: 'rate-limit' } : null;
+  }
   const reconnect = parseAttemptPair(
     /\bReconnecting(?:\.{3}|…)\s*(\d+)\s*\/\s*(\d+)\b/i.exec(message),
   );
@@ -2929,6 +3199,28 @@ function readPushedNewMakerWorktreeEnabled(payload: unknown): boolean | null {
   return null;
 }
 
+function readPushedNewMakerWorktreeBranchPreference(
+  payload: unknown,
+): RemoteNewMakerWorktreeBranchPreference {
+  if (!isRecord(payload)) return null;
+  const baseRepo = payload.baseRepo;
+  const sourceBranch = payload.sourceBranch;
+  const revision = payload.revision;
+  if (
+    typeof baseRepo !== 'string'
+    || !baseRepo.trim()
+    || typeof sourceBranch !== 'string'
+    || !sourceBranch.trim()
+    || !Number.isInteger(revision)
+    || (revision as number) < 0
+  ) return null;
+  return {
+    baseRepo: baseRepo.trim(),
+    sourceBranch: sourceBranch.trim(),
+    revision: revision as number,
+  };
+}
+
 function hasDeviceLinkTruncationMarker(value: Record<string, unknown> | null): boolean {
   return value?.[DEVICE_LINK_TRUNCATED_FLAG] === true;
 }
@@ -3051,10 +3343,27 @@ export function useRemoteNewMakerWorktreePreference(
   );
 }
 
+export function useRemoteNewMakerWorktreeBranchPreference(
+  deviceId: string | null | undefined,
+  baseRepo: string | null | undefined,
+): RemoteNewMakerWorktreeBranchPreference {
+  return useSyncExternalStore(
+    remoteSessionStore.subscribe,
+    () => remoteSessionStore.getNewMakerWorktreeBranchPreference(deviceId, baseRepo),
+  );
+}
+
 export function useSessionPendingInteractions(sessionId: string): PendingInteraction[] {
   return useSyncExternalStore(
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getPendingInteractions(sessionId),
+  );
+}
+
+export function useSessionPendingInteractionsAuthoritative(sessionId: string): boolean {
+  return useSyncExternalStore(
+    remoteSessionStore.subscribe,
+    () => remoteSessionStore.hasAuthoritativePendingInteractions(sessionId),
   );
 }
 
