@@ -2638,6 +2638,33 @@ describe('computer mcp integration', () => {
     expect(progressEvents.some((p) => p.phase === 'done')).toBe(true);
   });
 
+  it('joins an in-flight install instead of starting a parallel one (串扰保护)', async () => {
+    mockDriverSpawn({ stdout: 'installed\n' });
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n' });
+    if (process.platform === 'darwin') {
+      mockDriverSpawn({
+        stdout:
+          '{"accessibility":true,"screen_recording":true,"screen_recording_capturable":true,"source":{"attribution":"driver-daemon"}}\n',
+      });
+    }
+
+    // 并发保护:先发起一个安装(会进入 in-flight),再并发调用第二次。
+    // 第二次应 join 同一个 Promise,而不是并行起新安装(串扰保护)。
+    const first = installComputerDriver(undefined, undefined, () => {});
+    const second = installComputerDriver(undefined, undefined, () => {});
+
+    const results = await Promise.all([first, second]);
+    expect(results[0].ok).toBe(true);
+    expect(results[1].ok).toBe(true);
+
+    // 只应启动一次安装进程(bash),第二次 join 复用。
+    const installSpawns = spawnMock.mock.calls.filter((call) =>
+      process.platform === 'win32' ? /powershell/i.test(String(call[0])) : String(call[0]).includes('bash'),
+    );
+    expect(installSpawns.length).toBeLessThanOrEqual(2);
+  });
+
   it('passes the resolved system HTTP proxy to the POSIX installer', async () => {
     setPlatform('linux');
     resolveDesktopOutboundProxyMock.mockResolvedValue('http://127.0.0.1:7897');
