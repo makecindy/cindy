@@ -49,13 +49,14 @@
  * turn 主流程。
  */
 
-import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, like, lt, sql } from 'drizzle-orm';
 
 import { getDbClient } from './client/current';
 import { messages, sessions } from './schema';
 import { createLogger } from '../logger';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { boundedSummary } from '../maker-ipc/recoveryCoordinator.js';
+import type { RecoveryPredecessorPlan } from '../../shared/agentInputQueue.js';
 
 const log = createLogger('session-active-turn');
 
@@ -511,6 +512,7 @@ export async function getRecoveryContextSnapshot(
     role: 'assistant' | 'tool_use' | 'thinking' | 'ask_user' | 'plan_review';
     summary: string;
   }>;
+  predecessorPlan: RecoveryPredecessorPlan | null;
 }> {
   const db = getDbClient().drizzle;
   const progressRoles = ['assistant', 'tool_use', 'thinking', 'ask_user', 'plan_review'] as const;
@@ -528,7 +530,7 @@ export async function getRecoveryContextSnapshot(
     isNull(messages.rewindAt),
     afterUser,
   );
-  const [session, countRow, recentRows] = await Promise.all([
+  const [session, countRow, recentRows, planRows] = await Promise.all([
     db
       .select({ contextTokens: sessions.contextTokens, contextWindow: sessions.contextWindow })
       .from(sessions)
@@ -544,6 +546,24 @@ export async function getRecoveryContextSnapshot(
       .where(visibleProgress)
       .orderBy(desc(messages.createdAt), desc(sql.raw('"messages"."rowid"')))
       .limit(6),
+    db
+      .select({
+        clientId: messages.clientId,
+        toolUseId: messages.toolUseId,
+        content: messages.content,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.sessionId, sessionId),
+          eq(messages.role, 'tool_use'),
+          like(messages.toolUseId, 'plan:%'),
+          isNull(messages.rewindAt),
+          afterUser,
+        ),
+      )
+      .orderBy(desc(messages.createdAt), desc(sql.raw('"messages"."rowid"')))
+      .limit(6),
   ]);
 
   return {
@@ -554,7 +574,38 @@ export async function getRecoveryContextSnapshot(
       role: normalizeRecoveryRole(row.role),
       summary: summarizeRecoveryContent(row.content),
     })),
+    predecessorPlan: findRecoveryPredecessorPlan(planRows),
   };
+}
+
+function findRecoveryPredecessorPlan(
+  rows: Array<{ clientId: string; toolUseId: string | null; content: string }>,
+): RecoveryPredecessorPlan | null {
+  for (const row of rows) {
+    if (!row.toolUseId?.startsWith('plan:')) continue;
+    try {
+      const content = JSON.parse(row.content) as Record<string, unknown>;
+      const input = content.input;
+      if (
+        content.toolName !== 'update_plan' ||
+        !input ||
+        typeof input !== 'object' ||
+        Array.isArray(input) ||
+        !Array.isArray((input as Record<string, unknown>).plan)
+      )
+        continue;
+      if (content.terminalPlanSnapshot === true) return null;
+      return {
+        clientId: row.clientId,
+        toolUseId: row.toolUseId,
+        turnId: row.toolUseId.slice('plan:'.length),
+        input: input as Record<string, unknown>,
+      };
+    } catch {
+      // Ignore malformed legacy rows and continue to the next exact plan row.
+    }
+  }
+  return null;
 }
 
 function normalizeRecoveryRole(

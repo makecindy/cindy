@@ -45,6 +45,32 @@ describe('recoveryCoordinator', () => {
     expect(automatic.source).toBe('automatic');
   });
 
+  it('carries the exact predecessor plan identity across recovery attempts', () => {
+    const predecessorPlan = {
+      clientId: 'plan-row-client',
+      toolUseId: 'plan:failed-turn',
+      turnId: 'failed-turn',
+      input: { plan: [{ step: 'Recover', status: 'in_progress' }] },
+    };
+    const first = buildRecoveryCheckpoint('automatic', 'failed-user', undefined, {
+      contextTokens: 10_000,
+      contextWindow: 200_000,
+      progressCount: 1,
+      recentProgress: [],
+      predecessorPlan,
+    });
+    const repeated = buildRecoveryCheckpoint('automatic', 'recovery-user', first, {
+      contextTokens: 12_000,
+      contextWindow: 200_000,
+      progressCount: 1,
+      recentProgress: [],
+      predecessorPlan: null,
+    });
+
+    expect(first.predecessorPlan).toEqual(predecessorPlan);
+    expect(repeated.predecessorPlan).toEqual(predecessorPlan);
+  });
+
   it('adds a bounded handoff only in checkpoint mode', () => {
     const checkpoint = buildRecoveryCheckpoint('manual', 'failed-1', undefined, {
       contextTokens: 180_000,

@@ -44,6 +44,8 @@ describe('sessionActiveTurn', () => {
         active_turn_started_at INTEGER,
         active_turn_pid INTEGER,
         last_turn_ended_at INTEGER,
+        context_tokens INTEGER NOT NULL DEFAULT 0,
+        context_window INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -56,6 +58,7 @@ describe('sessionActiveTurn', () => {
         content TEXT NOT NULL,
         tool_use_id TEXT,
         agent_meta TEXT,
+        agent_kind TEXT,
         created_at INTEGER NOT NULL,
         rewind_at INTEGER
       );
@@ -113,6 +116,42 @@ describe('sessionActiveTurn', () => {
       [id],
     );
   }
+
+  it('captures the exact latest unsealed Codex plan generation for recovery', async () => {
+    const { getRecoveryContextSnapshot } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-plan');
+    await client.exec(
+      'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['u1', 'failed-user', 's-plan', 'user', 'do work', 100],
+    );
+    await client.exec(
+      'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        'p1',
+        'plan-row-client',
+        's-plan',
+        'tool_use',
+        JSON.stringify({
+          toolUseId: 'plan:failed-turn',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Recover', status: 'in_progress' }] },
+          turnCompleted: false,
+        }),
+        'plan:failed-turn',
+        'codex',
+        110,
+      ],
+    );
+
+    const snapshot = await getRecoveryContextSnapshot('s-plan', 'failed-user');
+    expect(snapshot.predecessorPlan).toEqual({
+      clientId: 'plan-row-client',
+      toolUseId: 'plan:failed-turn',
+      turnId: 'failed-turn',
+      input: { plan: [{ step: 'Recover', status: 'in_progress' }] },
+    });
+  });
 
   it('markSessionTurnStarted / markSessionTurnEnded write the two timestamps', async () => {
     const { markSessionTurnStarted, markSessionTurnEnded } = await import('../sessionActiveTurn.js');

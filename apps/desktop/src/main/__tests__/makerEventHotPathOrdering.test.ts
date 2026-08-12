@@ -22,6 +22,41 @@ const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts'
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
+  it('settles recovery plans only from the owning current provider generation', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const lifecycleStart = wireSessionSource.indexOf(
+      'onTerminal: ({ turnGeneration, event, isCurrentGeneration }) => {',
+    );
+    const recoveryDoneIndex = wireSessionSource.indexOf('recoveryPlanSettlement.settleDone(');
+
+    expect(lifecycleStart).toBeGreaterThanOrEqual(0);
+    expect(recoveryDoneIndex).toBeGreaterThan(lifecycleStart);
+    expect(wireSessionSource.slice(recoveryDoneIndex, recoveryDoneIndex + 700)).toContain(
+      'turnGeneration',
+    );
+    expect(wireSessionSource.slice(recoveryDoneIndex, recoveryDoneIndex + 700)).toContain(
+      'isCurrentGeneration',
+    );
+    const recoveryErrorIndex = wireSessionSource.indexOf('recoveryPlanSettlement.settleError(');
+    expect(recoveryErrorIndex).toBeGreaterThanOrEqual(0);
+    expect(wireSessionSource.slice(recoveryErrorIndex, recoveryErrorIndex + 700)).toContain(
+      'turnGeneration',
+    );
+    expect(wireSessionSource.slice(recoveryErrorIndex, recoveryErrorIndex + 700)).toContain(
+      'isCurrentGeneration',
+    );
+  });
+
+  it('routes recovery user persistence through the pre-await plan closure boundary', () => {
+    expect(source).toContain('recoveryPlanSettlement.persistUserBoundary({');
+    expect(source).toContain(
+      'closePlanUpdates: () => closeCodexPlanUpdatesForRecovery(sessionId, predecessorPlan)',
+    );
+    expect(source).toContain('persist: persistUserMessage');
+    expect(source).toContain('providerGeneration,');
+    expect(source).toContain('recoveryPlanSettlement.teardown(sessionId);');
+  });
+
   it('rewires a replacement Session instance that retains the same business id', () => {
     const wireSessionSource = extractWireSessionSource();
 

@@ -27,10 +27,14 @@ const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 // (确认 fork 把对的 sourceSdkSessionId / upToMessageId / title / workingDir 传下去)
 // 和返回值 (uuidMap 决定 messages.agentMeta remap 结果)。
 const forkSdkSessionMock = vi.fn();
+const drainPersistQueueMock = vi.fn(async () => {});
 vi.mock('../maker-host/index.js', () => ({
   getMaker: () => ({
     forkSdkSession: forkSdkSessionMock,
   }),
+}));
+vi.mock('../messagePersistBroadcaster.js', () => ({
+  drainPersistQueue: drainPersistQueueMock,
 }));
 
 // fake drizzle: select 链返回 thenable。写入侧 MR2.2 后走 DbClient.tx。
@@ -93,6 +97,7 @@ beforeEach(async () => {
   queryMock.mockReset();
   queryMock.mockResolvedValue([]);
   forkSdkSessionMock.mockReset();
+  drainPersistQueueMock.mockClear();
   // 默认空 uuidMap 让 agentMeta 字段被去掉 (无映射)。具体测试按需 override。
   forkSdkSessionMock.mockResolvedValue({
     newSdkSessionId: 'sdk-new-session-uuid',
@@ -187,6 +192,25 @@ async function writeClaudeJsonlInConfigDir(
 // ── tests ──────────────────────────────────────────────────────────────────
 
 describe('forkSessionAtMessage', () => {
+  it('waits for pending main persistence before reading the fork snapshot', async () => {
+    let releaseDrain!: () => void;
+    drainPersistQueueMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseDrain = resolve;
+        }),
+    );
+    const selectsBeforeFork = fakeDb.select.mock.calls.length;
+
+    const pending = forkSessionAtMessage('src-session', 'target-user');
+    await vi.waitFor(() => expect(drainPersistQueueMock).toHaveBeenCalledTimes(1));
+    expect(fakeDb.select.mock.calls.length).toBe(selectsBeforeFork);
+
+    releaseDrain();
+    await expect(pending).rejects.toMatchObject({ code: 'SOURCE_NOT_FOUND' });
+    expect(fakeDb.select.mock.calls.length).toBeGreaterThan(selectsBeforeFork);
+  });
+
   it('happy path: fork copies prior messages, calls maker.forkSdkSession with assistant uuid, seeds context snapshot', async () => {
     const target = makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 });
     const priorAssistant = makeMessageRow({
@@ -227,6 +251,7 @@ describe('forkSessionAtMessage', () => {
 
     const result = await forkSessionAtMessage('src-session', 'target-user');
 
+    expect(drainPersistQueueMock).toHaveBeenCalledTimes(1);
     // maker 入参: 用最近一条带 uuid 的 assistant
     expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', {
       sourceSdkSessionId: 'sdk-uuid-source',

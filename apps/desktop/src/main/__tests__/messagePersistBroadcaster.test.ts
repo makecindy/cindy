@@ -58,6 +58,9 @@ import {
 import {
   onToolUseEvent,
   persistCodexPlanOnDone,
+  persistRecoveredCodexPlanOnDone,
+  closeCodexPlanUpdatesForRecovery,
+  isCodexPlanUpdateClosed,
   persistCodexPlanOnTerminalError,
   onToolResultEvent,
   onToolResultFullEvent,
@@ -84,6 +87,7 @@ import {
   saveTurnStartedAtForDeferred,
   preserveTurnPersistStateForBackground,
 } from '../messagePersistBroadcaster.js';
+import { RecoveryPlanSettlement } from '../maker-ipc/recoveryPlanSettlement.js';
 
 const SESSION = 'sess-tr';
 const FULL =
@@ -271,6 +275,94 @@ describe('update_plan tool_use persistence', () => {
       terminalPlanSnapshot: true,
       terminalPlanAtMs: expect.any(Number),
     });
+  });
+
+  it('seals an exact predecessor plan row after a successful recovery turn', async () => {
+    vi.mocked(updateMessageContent).mockResolvedValueOnce({
+      clientId: 'plan-row-client',
+    } as never);
+    expect(
+      persistRecoveredCodexPlanOnDone(SESSION, {
+        clientId: 'plan-row-client',
+        toolUseId: 'plan:failed-turn',
+        turnId: 'failed-turn',
+        input: { plan: [{ step: 'Finish recovery', status: 'in_progress' }] },
+      }),
+    ).toBe(true);
+    expect(isCodexPlanUpdateClosed(SESSION, 'plan:failed-turn')).toBe(true);
+
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, 'plan-row-client', {
+      toolUseId: 'plan:failed-turn',
+      toolName: 'update_plan',
+      input: { plan: [{ step: 'Finish recovery', status: 'in_progress' }] },
+      terminalPlanSnapshot: true,
+      terminalPlanAtMs: expect.any(Number),
+    });
+  });
+
+  it('rejects late update_plan events once recovery owns the predecessor plan', () => {
+    closeCodexPlanUpdatesForRecovery(SESSION, {
+      clientId: 'plan-row-client',
+      toolUseId: 'plan:failed-turn',
+      turnId: 'failed-turn',
+      input: { plan: [{ step: 'Finish recovery', status: 'in_progress' }] },
+    });
+
+    expect(isCodexPlanUpdateClosed(SESSION, 'plan:failed-turn')).toBe(true);
+    expect(
+      onToolUseEvent(
+        SESSION,
+        {
+          toolUseId: 'plan:failed-turn',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Finish recovery', status: 'pending' }] },
+        },
+        null,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('closes predecessor updates while the recovery user durable write is blocked', async () => {
+    const plan = {
+      clientId: 'blocked-plan-row',
+      toolUseId: 'plan:blocked-failed-turn',
+      turnId: 'blocked-failed-turn',
+      input: { plan: [{ step: 'Preserve latest fact', status: 'in_progress' }] },
+    };
+    const settlement = new RecoveryPlanSettlement();
+    let releaseDurableWrite!: () => void;
+    const durableWrite = new Promise<void>((resolve) => {
+      releaseDurableWrite = resolve;
+    });
+
+    const pending = settlement.persistUserBoundary({
+      sessionId: SESSION,
+      recoveryUserClientId: 'blocked-recovery-user',
+      attemptToken: 7,
+      providerGeneration: 11,
+      plan,
+      closePlanUpdates: () => closeCodexPlanUpdatesForRecovery(SESSION, plan),
+      persist: () => durableWrite,
+    });
+
+    expect(isCodexPlanUpdateClosed(SESSION, plan.toolUseId)).toBe(true);
+    expect(
+      onToolUseEvent(
+        SESSION,
+        {
+          toolUseId: plan.toolUseId,
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Late stale update', status: 'pending' }] },
+        },
+        null,
+      ),
+    ).toBeUndefined();
+    expect(settlement.hasPending(SESSION)).toBe(false);
+
+    releaseDurableWrite();
+    await pending;
+    expect(settlement.hasPending(SESSION)).toBe(true);
   });
 
   it('still seals after a continuation boundary cleared the per-segment maps', async () => {
