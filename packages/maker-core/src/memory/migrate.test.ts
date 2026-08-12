@@ -512,4 +512,40 @@ describe('runLegacyShardMigration — 执行', () => {
       fs.readFile = origReadFile;
     }
   });
+
+  it('同数替换 (删 A 建 B) → 文件名集合对比兜底, 源目录保留 (Codex 第六轮)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+
+    await makeShard(mainDir, { absPath: mainRepo, files: { 'feedback_a.md': 'X' } });
+    const wtPath = await makeShard(wtDir, {
+      absPath: worktree,
+      files: { 'feedback_a.md': 'X' },
+    });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    // 模拟 mergeFilesInto 快照后存量会话同数替换: 删 feedback_a.md 建 project_b.md。
+    // patch fs.readdir: 第 1 次 (mergeFilesInto 快照) 返回真实 [feedback_a.md];
+    // 之后 (diffShardFilenames 复查) 返回 [project_b.md] — 数量不变 (1→1)。
+    const origReaddir = fs.readdir.bind(fs);
+    let dirReads = 0;
+    // @ts-expect-error 测试注入
+    fs.readdir = async (p) => {
+      if (typeof p === 'string' && p === wtPath) {
+        dirReads += 1;
+        return dirReads === 1 ? ['feedback_a.md', 'meta.json'] : ['project_b.md', 'meta.json'];
+      }
+      return origReaddir(p);
+    };
+    try {
+      const result = await runLegacyShardMigration(plan);
+      // added=1 (project_b.md) + missing=1 (feedback_a.md) → 保留源目录
+      expect(result.results[0].error).toContain('filename set changed');
+      await expect(fs.stat(wtPath)).resolves.toBeTruthy();
+    } finally {
+      fs.readdir = origReaddir;
+    }
+  });
 });

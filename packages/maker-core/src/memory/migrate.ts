@@ -352,18 +352,18 @@ export async function runLegacyShardMigration(
         //  1. 有冲突 — 同名不同内容绝不静默覆盖 (#2400)
         //  2. 有未识别文件 — 不参与合并的任何遗留内容 (含非 Markdown),
         //     删掉源目录会永久丢失 (Greptile review on #2519)
-        //  3. 快照后新增合法分片 — mergeFilesInto 快照源文件名之后才复制,
-        //     期间新写入的 <type>_<slug>.md 既没被复制也不算未识别,
-        //     直接删会丢 (Codex review on #2519 第四轮)
+        //  3. 快照后合法分片集合变化 — 新增/缺失/同数替换 (删 A 建 B):
+        //     数量复查检测不到同数替换, 文件名集合对比兜底 (Codex review
+        //     on #2519 第六轮)
         //  4. 复制后已有分片被更新 — 存量会话在复制后、删源前改写了同名
         //     记忆, 数量复查检测不到, 内容对比兜底 (Greptile review on
         //     #2519 第五轮)
         const hasConflict = merged.some((m) => m.outcome === 'conflict-skipped');
+        const snapshotNames = new Set(merged.map((m) => m.filename));
         const unrecognized = await findUnrecognizedMdFiles(shard.dir);
-        // 新增合法分片 = 当前合法数 − 快照时合法数 (merged.length); 源目录的
-        // 合法文件在合并后仍保留 (删除是最后的整目录 rm), 只有超出快照数的
-        // 部分才是 mergeFilesInto 期间新写入的。
-        const gainedValid = (await countShardFiles(shard.dir)) - merged.length;
+        // 当前合法文件名集合 vs 快照集合: added = 快照后新增, missing =
+        // 快照后消失 (被替换删掉) — 任一存在都说明快照后源目录被写过
+        const { added, missing } = await diffShardFilenames(shard.dir, snapshotNames);
         // 内容复查: 已合并的合法分片, 源与目标逐字节对比 — 源文件在复制后
         // 被存量会话更新过则源 ≠ 目标, 保留源目录 (目标保留的是旧数据)。
         const contentChanged = await findChangedAfterMerge(shard.dir, targetDir, merged);
@@ -373,9 +373,9 @@ export async function runLegacyShardMigration(
           result.results.push(r);
           continue;
         }
-        if (gainedValid > 0) {
+        if (added.length > 0 || missing.length > 0) {
           r.action = 'merged';
-          r.error = `${gainedValid} valid shard file(s) appeared after merge snapshot, source dir kept`;
+          r.error = `shard filename set changed after snapshot (added ${added.length}, missing ${missing.length}), source dir kept`;
           result.results.push(r);
           continue;
         }
@@ -385,12 +385,29 @@ export async function runLegacyShardMigration(
           result.results.push(r);
           continue;
         }
-        if (!hasConflict) {
-          await fs.rm(shard.dir, { recursive: true, force: true });
-        } else {
+        if (hasConflict) {
           r.action = 'merged';
           r.error = 'conflicts remain in source dir (kept for manual review)';
+          result.results.push(r);
+          continue;
         }
+        // 全部复查通过 → rename-then-remove: rename 后源目录不在原路径,
+        // 复查窗口内新写入只能落到原名 (已不存在), 无法进入待删目录;
+        // rename 后对 trash 再做一次最终复查兜底 (Greptile review on #2519
+        // 第六轮: 复查完成后 fs.rm 前的写入仍会被删)。
+        const trashName = `${path.basename(shard.dir)}.trash-${now().replace(/[:.]/g, '-')}`;
+        const trashDir = path.join(path.dirname(shard.dir), trashName);
+        await fs.rename(shard.dir, trashDir);
+        const trashUnrecognized = await findUnrecognizedMdFiles(trashDir);
+        const trashDiff = await diffShardFilenames(trashDir, snapshotNames);
+        if (trashUnrecognized.length > 0 || trashDiff.added.length > 0 || trashDiff.missing.length > 0) {
+          await fs.rename(trashDir, shard.dir);
+          r.action = 'merged';
+          r.error = 'content appeared before remove, source dir restored';
+          result.results.push(r);
+          continue;
+        }
+        await fs.rm(trashDir, { recursive: true, force: true });
       }
     } catch (e) {
       r.action = 'skipped';
@@ -487,6 +504,26 @@ async function countShardFiles(dir: string): Promise<number> {
     return files.filter((f) => parseFilename(f)).length;
   } catch {
     return 0;
+  }
+}
+
+/**
+ * 对比目录当前合法分片文件名集合与快照集合 (Codex review on #2519 第六轮)。
+ * added = 快照后新增的文件名; missing = 快照后消失的文件名 (被存量会话
+ * 删掉/替换)。同数替换 (删 A 建 B) 时数量不变, 集合对比兜底。
+ * 目录读失败 (并发删除) 返回空差异 — 调用方后续 rm 会失败兜底。
+ */
+async function diffShardFilenames(
+  dir: string,
+  snapshot: Set<string>,
+): Promise<{ added: string[]; missing: string[] }> {
+  try {
+    const current = new Set((await fs.readdir(dir)).filter((f) => parseFilename(f)));
+    const added = [...current].filter((f) => !snapshot.has(f));
+    const missing = [...snapshot].filter((f) => !current.has(f));
+    return { added, missing };
+  } catch {
+    return { added: [], missing: [] };
   }
 }
 
