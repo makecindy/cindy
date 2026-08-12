@@ -42,17 +42,23 @@ describe('XD tool-result image notice', () => {
     () => 'https://gateway.example.com/anthropic/',
   );
 
-  it('replaces XD-routed tool-result images without exposing image bytes', () => {
-    const output = transform(request(), context('https://gateway.example.com:443/anthropic'));
-    const json = JSON.stringify(output);
+  it.each(['codex/gpt-5.6-sol', 'gpt-5.6-sol'])(
+    'replaces XD-routed %s tool-result images without exposing image bytes',
+    (model) => {
+      const output = transform(
+        request(model),
+        context('https://gateway.example.com:443/anthropic'),
+      );
+      const json = JSON.stringify(output);
 
-    expect(output).not.toBeNull();
-    expect(json).toContain('image metadata');
-    expect(json).toContain('current route cannot deliver images inside tool results');
-    expect(json).toContain('attach it directly to the conversation');
-    expect(json).not.toContain('SECRET_IMAGE_BYTES');
-    expect(json).not.toContain('text-only');
-  });
+      expect(output).not.toBeNull();
+      expect(json).toContain('image metadata');
+      expect(json).toContain('current route cannot deliver images inside tool results');
+      expect(json).toContain('attach it directly to the conversation');
+      expect(json).not.toContain('SECRET_IMAGE_BYTES');
+      expect(json).not.toContain('text-only');
+    },
+  );
 
   it('does not change the same model on a custom provider route', () => {
     expect(transform(request(), context('https://custom.example.com/v1'))).toBeNull();
