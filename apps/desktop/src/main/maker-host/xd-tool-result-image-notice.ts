@@ -33,13 +33,9 @@ export function createXdToolResultImageNoticeTransform(
   readXdUpstream: () => string,
 ): RequestTransform {
   return (body, ctx) => {
-    if (
-      !isPlainObject(body) ||
-      typeof body.model !== 'string' ||
-      !XD_TOOL_RESULT_IMAGE_MODELS.has(body.model)
-    ) {
-      return null;
-    }
+    if (!isPlainObject(body) || typeof body.model !== 'string') return null;
+    const model = body.model.endsWith('[1m]') ? body.model.slice(0, -4) : body.model;
+    if (!XD_TOOL_RESULT_IMAGE_MODELS.has(model)) return null;
     const actualUpstream = ctx.upstreamBase ? normalizeUpstreamBase(ctx.upstreamBase) : null;
     const xdUpstream = normalizeUpstreamBase(readXdUpstream());
     if (!actualUpstream || actualUpstream !== xdUpstream) return null;
