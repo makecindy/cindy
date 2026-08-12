@@ -607,7 +607,7 @@ function TabPill({
           )}
         >
           {IconNode ? (
-            <IconNode state={hydratedState} sessionId={sessionId} active={active} />
+            <IconNode state={hydratedState} sessionId={sessionId} active={active} tabId={tab.id} />
           ) : (
             <FallbackIcon size={13} />
           )}

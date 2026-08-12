@@ -112,6 +112,8 @@ export interface TabPillIconRenderProps<TState = unknown> {
   state: TState;
   sessionId: string | null;
   active: boolean;
+  /** Stable tab id for runtime-only pill signals (for example browser loading). */
+  tabId?: string;
 }
 
 /**
