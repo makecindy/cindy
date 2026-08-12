@@ -2608,6 +2608,14 @@ export async function installComputerDriver(
   targetVersion?: string,
   onProgress?: (progress: ComputerDriverUpdateProgress) => void,
 ): Promise<ComputerDriverInstallResult> {
+  // 并发保护:首次安装(无 targetVersion)时,若已有安装/更新在进行,
+  // join 同一个 in-flight(与更新路径共用同一把锁),避免并行安装导致
+  // 进度事件串扰。更新路径调用本函数时会传 targetVersion,不触发此分支。
+  if (!targetVersion && driverUpdateInstallInFlight) {
+    const result = await driverUpdateInstallInFlight;
+    onProgress?.({ phase: 'done', downloadedBytes: null, totalBytes: null });
+    return result;
+  }
   // 首次安装(无 targetVersion)时,后台预取最新 release 的 asset 列表填充缓存,
   // 让进度采样器能换算已下载/总字节。预取不 await(不阻塞安装启动),
   // 结果异步到达;失败仅影响进度条精度(退化为不定态)。
