@@ -387,4 +387,46 @@ describe('runLegacyShardMigration — 执行', () => {
     );
     expect(plan.mergeCandidates[0].canonicalScopeKey).toBe(path.join(mainRepo, 'apps', 'a'));
   });
+
+  it('Windows 正斜杠路径的托管 worktree 静态推导 (Codex 第四轮: Desktop 归一化路径)', async () => {
+    // Desktop 存储把 Windows workingDir 归一化为正斜杠 — 静态推导必须能认
+    const archivedWt = 'C:/repo/.cindy-worktrees/wt/apps/a';
+    const wtDir = sanitizeWorkdir(archivedWt);
+    await makeShard(wtDir, { absPath: archivedWt, files: { 'feedback_a.md': 'X' } });
+
+    const plan = await planLegacyShardMigration(memoryRoot);
+    expect(plan.mergeCandidates).toHaveLength(1);
+    expect(plan.mergeCandidates[0].canonicalScopeKey).toBe(
+      path.join('C:', 'repo', 'apps', 'a'),
+    );
+    expect(plan.mergeCandidates[0].isLegacy).toBe(true);
+  });
+
+  it('慢路径合并: plan 后写入的合法分片被一并合并, 数据不丢 (Codex 第四轮: 快照后写入)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+
+    await makeShard(mainDir, { absPath: mainRepo, files: { 'feedback_a.md': 'X' } });
+    const wtPath = await makeShard(wtDir, {
+      absPath: worktree,
+      files: { 'feedback_a.md': 'X' },
+    });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    expect(plan.mergeCandidates).toHaveLength(1);
+    // plan 后、run 前写入合法分片 — mergeFilesInto 快照时它会被一并合并
+    await fs.writeFile(
+      path.join(wtPath, 'project_late.md'),
+      '---\ntitle: L\ndescription: DL\ntype: project\nupdatedAt: t\n---\n\nLATE',
+      'utf8',
+    );
+    const result = await runLegacyShardMigration(plan);
+    // 无冲突 → 源目录删除; 新增文件已合并进目标
+    expect(result.results[0].error).toBeUndefined();
+    const target = path.join(memoryRoot, mainDir);
+    expect(await fs.readFile(path.join(target, 'project_late.md'), 'utf8')).toContain('LATE');
+    await expect(fs.stat(wtPath)).rejects.toThrow();
+  });
 });

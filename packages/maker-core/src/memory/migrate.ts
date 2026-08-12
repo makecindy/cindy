@@ -246,20 +246,18 @@ async function buildSkippedInfo(dir: string, entry: string): Promise<LegacyShard
 const MANAGED_WORKTREE_DIRS = ['.cindy-worktrees', '.xdt-worktrees'];
 
 export function deriveCanonicalFromCindyWorktreePath(absPath: string): string | null {
-  const sep = path.sep;
-  for (const markerDir of MANAGED_WORKTREE_DIRS) {
-    const marker = `${sep}${markerDir}${sep}`;
-    const idx = absPath.indexOf(marker);
-    if (idx < 0) continue;
-    // 段后紧跟 worktree 名; 该名不存在 → 不是托管形态
-    const rest = absPath.slice(idx + marker.length);
-    if (rest.length === 0) continue;
-    const worktreeNameEnd = rest.indexOf(sep);
-    const worktreeName = worktreeNameEnd < 0 ? rest : rest.slice(0, worktreeNameEnd);
+  // Desktop 存储会把 Windows workingDir 归一化为正斜杠 (C:/repo/.cindy-...),
+  // 而 path.sep 在 Windows 是反斜杠 — 只认一种分隔符会漏掉归一化后的路径
+  // (Codex review on #2519 第四轮)。统一按段解析, 两种分隔符都接受。
+  const segments = absPath.split(/[\\/]/);
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    if (!MANAGED_WORKTREE_DIRS.includes(segments[i])) continue;
+    // segments[i] = 托管段; segments[i+1] = worktree 名 (必须存在)
+    const worktreeName = segments[i + 1];
     if (worktreeName.length === 0) continue;
-    const mainRoot = absPath.slice(0, idx);
+    const mainRoot = segments.slice(0, i).join(path.sep);
     if (mainRoot.length === 0) continue;
-    const subPath = worktreeNameEnd < 0 ? '' : rest.slice(worktreeNameEnd + 1);
+    const subPath = segments.slice(i + 2).join(path.sep);
     return subPath ? path.join(mainRoot, subPath) : mainRoot;
   }
   return null;
@@ -352,11 +350,24 @@ export async function runLegacyShardMigration(
         //  1. 有冲突 — 同名不同内容绝不静默覆盖 (#2400)
         //  2. 有未识别文件 — 不符合 <type>_<slug>.md 规则但仍含内容的 .md,
         //     不参与合并, 删掉源目录会永久丢失 (Greptile review on #2519)
+        //  3. 快照后新增合法分片 — mergeFilesInto 快照源文件名之后才复制,
+        //     期间新写入的 <type>_<slug>.md 既没被复制也不算未识别,
+        //     直接删会丢 (Codex review on #2519 第四轮)
         const hasConflict = merged.some((m) => m.outcome === 'conflict-skipped');
         const unrecognized = await findUnrecognizedMdFiles(shard.dir);
+        // 新增合法分片 = 当前合法数 − 快照时合法数 (merged.length); 源目录的
+        // 合法文件在合并后仍保留 (删除是最后的整目录 rm), 只有超出快照数的
+        // 部分才是 mergeFilesInto 期间新写入的。
+        const gainedValid = (await countShardFiles(shard.dir)) - merged.length;
         if (unrecognized.length > 0) {
           r.action = 'merged';
           r.error = `unrecognized files kept in source dir for manual review: ${unrecognized.join(', ')}`;
+          result.results.push(r);
+          continue;
+        }
+        if (gainedValid > 0) {
+          r.action = 'merged';
+          r.error = `${gainedValid} valid shard file(s) appeared after merge snapshot, source dir kept`;
           result.results.push(r);
           continue;
         }
