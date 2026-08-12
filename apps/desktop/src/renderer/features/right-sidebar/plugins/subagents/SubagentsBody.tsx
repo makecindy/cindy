@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import {
   AlertCircle,
   ArrowLeft,
   Bot,
   CheckCircle2,
+  ChevronRight,
   CircleStop,
   LoaderCircle,
   RefreshCw,
+  Square,
   type LucideIcon,
 } from 'lucide-react';
 import type {
@@ -19,11 +20,12 @@ import type {
   SubagentRunDetail,
 } from '@cindy/maker-shared/subagent-workspace';
 
+import { TranscriptSection } from './TranscriptSection';
+
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { cn } from '@/lib/utils';
-import { formatCompactTokens } from '@/lib/usageFormat';
 import type { TabKindHostContext } from '../../types';
 import type { SubagentsState } from './index';
 import {
@@ -41,38 +43,18 @@ function statusIcon(status: SubagentRun['status']): LucideIcon {
   return LoaderCircle;
 }
 
-function formatDuration(ms: number | undefined): string | undefined {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
-  const seconds = Math.max(1, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
-}
-
 function providerLabel(provider: SubagentProvider): string {
   if (provider === 'claude-code') return 'Claude Code';
   if (provider === 'codex') return 'Codex';
   return 'PI';
 }
 
-function runTitle(run: SubagentRun, fallback: string): string {
+function runPrimaryLabel(run: SubagentRun, fallback: string): string {
   return run.title?.trim() || run.description?.trim() || fallback;
 }
 
-function metadata(run: SubagentRun, t: TFunction): string[] {
-  const parts = [providerLabel(run.provider)];
-  if (run.model) parts.push(run.model);
-  const duration = formatDuration(run.usage?.durationMs);
-  if (duration) parts.push(duration);
-  if (typeof run.usage?.totalTokens === 'number') {
-    parts.push(
-      t('rightSidebar.subagents.tokens', {
-        value: formatCompactTokens(run.usage.totalTokens),
-      }),
-    );
-  }
-  return parts;
+function runProgressLabel(run: SubagentRun, fallback: string): string {
+  return run.summary?.trim() || run.description?.trim() || fallback;
 }
 
 function StatusGlyph({ status, label }: { status: SubagentRun['status']; label: string }) {
@@ -89,33 +71,71 @@ function StatusGlyph({ status, label }: { status: SubagentRun['status']; label: 
   );
 }
 
-function RunRow({ run, onOpen }: { run: SubagentRun; onOpen: (run: SubagentRun) => void }) {
+function StopButton({
+  run,
+  stopping,
+  onStop,
+}: {
+  run: SubagentRun;
+  stopping: boolean;
+  onStop: (run: SubagentRun) => void;
+}) {
   const { t } = useTranslation();
-  const title = runTitle(run, t('rightSidebar.subagents.untitled'));
-  const statusLabel = t(`chat.agentTask.status.${run.status}`);
+  if (run.status !== 'running' || !run.capabilities.stop) return null;
   return (
     <button
       type="button"
-      onClick={() => onOpen(run)}
-      className="flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+      disabled={stopping}
+      onClick={(event) => {
+        event.stopPropagation();
+        onStop(run);
+      }}
+      title={t('rightSidebar.subagents.stop')}
+      aria-label={t('rightSidebar.subagents.stop')}
+      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
     >
-      <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)]">
-        <StatusGlyph status={run.status} label={statusLabel} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-13 font-medium leading-5 text-[var(--text-primary)]">
-          {title}
-        </span>
-        <span className="mt-0.5 block truncate text-11 leading-4 text-[var(--text-tertiary)]">
-          {metadata(run, t).join(' · ')}
-        </span>
-        {run.summary ? (
-          <span className="mt-0.5 block line-clamp-2 text-12 leading-4 text-[var(--text-secondary)]">
-            {run.summary}
-          </span>
-        ) : null}
-      </span>
+      <Spinner icon={Square} spinning={stopping} size={13} />
     </button>
+  );
+}
+
+function RunRow({
+  run,
+  stopping,
+  onOpen,
+  onStop,
+}: {
+  run: SubagentRun;
+  stopping: boolean;
+  onOpen: (run: SubagentRun) => void;
+  onStop: (run: SubagentRun) => void;
+}) {
+  const { t } = useTranslation();
+  const primary = runPrimaryLabel(run, t('rightSidebar.subagents.untitled'));
+  const progress = runProgressLabel(run, t(`chat.agentTask.status.${run.status}`));
+  const statusLabel = t(`chat.agentTask.status.${run.status}`);
+  return (
+    <div className="group flex h-14 w-full items-center gap-2 rounded-lg px-2 transition-colors hover:bg-[var(--surface-hover)]">
+      <button
+        type="button"
+        onClick={() => onOpen(run)}
+        className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+      >
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)]">
+          <StatusGlyph status={run.status} label={statusLabel} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-13 font-medium leading-5 text-[var(--text-primary)]">
+            {primary}
+          </span>
+          <span className="block truncate text-11 leading-4 text-[var(--text-tertiary)]">
+            {progress}
+          </span>
+        </span>
+      </button>
+      <StopButton run={run} stopping={stopping} onStop={onStop} />
+      <ChevronRight size={14} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden="true" />
+    </div>
   );
 }
 
@@ -155,12 +175,16 @@ function DetailView({
   loading,
   workdir,
   allowPrivilegedLinks,
+  stopping,
+  onStop,
   onBack,
 }: {
   detail: SubagentRunDetail | null;
   loading: boolean;
   workdir: string;
   allowPrivilegedLinks: boolean;
+  stopping: boolean;
+  onStop: (run: SubagentRun) => void;
   onBack: () => void;
 }) {
   const { t } = useTranslation();
@@ -176,10 +200,15 @@ function DetailView({
       </div>
     );
   }
-  const title = runTitle(detail, t('rightSidebar.subagents.untitled'));
+  const title = runPrimaryLabel(detail, t('rightSidebar.subagents.untitled'));
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <HeaderBack onBack={onBack} title={title} status={detail.status} />
+      <HeaderBack
+        onBack={onBack}
+        title={title}
+        status={detail.status}
+        action={<StopButton run={detail} stopping={stopping} onStop={onStop} />}
+      />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-3">
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-12">
           <dt className="text-[var(--text-tertiary)]">{t('rightSidebar.subagents.harness')}</dt>
@@ -198,16 +227,19 @@ function DetailView({
           </dd>
         </dl>
 
-        {detail.description ? (
-          <section className="mt-5">
-            <SectionTitle>{t('rightSidebar.subagents.assignment')}</SectionTitle>
-            <p className="whitespace-pre-wrap text-12 leading-5 text-[var(--text-secondary)]">
-              {detail.description}
-            </p>
-          </section>
-        ) : null}
+        <TranscriptSection
+          sessionId={detail.parentSessionId}
+          provider={detail.provider}
+          runId={detail.id}
+          supported={detail.capabilities.viewFullTranscript}
+          workdir={workdir}
+          allowPrivilegedLinks={allowPrivilegedLinks}
+          refreshKey={detail.updatedAt}
+        />
 
-        {detail.capabilities.viewReturnedResult && detail.returnedResult ? (
+        {!detail.capabilities.viewFullTranscript &&
+        detail.capabilities.viewReturnedResult &&
+        detail.returnedResult ? (
           <section className="mt-5">
             <SectionTitle>{t('rightSidebar.subagents.returnedResult')}</SectionTitle>
             <div className="text-13 leading-5 text-[var(--text-primary)]">
@@ -233,10 +265,12 @@ function DetailView({
         ) : null}
 
         {detail.capabilities.viewActivity ? (
-          <section className="mt-5">
-            <SectionTitle>{t('rightSidebar.subagents.activity')}</SectionTitle>
+          <details className="mt-5 border-t border-[var(--border-default)] pt-3">
+            <summary className="cursor-pointer select-none text-11 font-medium text-[var(--text-tertiary)]">
+              {t('rightSidebar.subagents.activity')}
+            </summary>
             {detail.activity.length > 0 ? (
-              <div className="mt-1">
+              <div className="mt-3">
                 {detail.activity.map((entry) => (
                   <ActivityRow key={entry.sequence} entry={entry} />
                 ))}
@@ -246,13 +280,7 @@ function DetailView({
                 {t('rightSidebar.subagents.noActivity')}
               </p>
             )}
-          </section>
-        ) : null}
-
-        {!detail.capabilities.viewFullTranscript ? (
-          <p className="mt-5 rounded-lg bg-[var(--surface-subtle)] px-3 py-2 text-11 leading-4 text-[var(--text-tertiary)]">
-            {t('rightSidebar.subagents.transcriptUnavailable')}
-          </p>
+          </details>
         ) : null}
       </div>
     </div>
@@ -263,10 +291,12 @@ function HeaderBack({
   onBack,
   title,
   status,
+  action,
 }: {
   onBack: () => void;
   title: string;
   status?: SubagentRun['status'];
+  action?: ReactNode;
 }) {
   const { t } = useTranslation();
   return (
@@ -283,6 +313,7 @@ function HeaderBack({
       <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
         {title}
       </span>
+      {action}
       {status ? <StatusGlyph status={status} label={t(`chat.agentTask.status.${status}`)} /> : null}
     </div>
   );
@@ -357,6 +388,7 @@ function ScopedSubagentsBody({
   const [detail, setDetail] = useState<SubagentRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailRefreshVersion, setDetailRefreshVersion] = useState(0);
+  const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
   const selectedRunAlias = state.selectedRunId ?? null;
   const selectedProviderHint = state.selectedProvider ?? null;
   const remoteDevice = ctx.deviceLinkDeviceId !== null;
@@ -379,7 +411,7 @@ function ScopedSubagentsBody({
         run.providerRunIds.includes(selectedRunAlias),
     );
     const providers = new Set(matches.map((run) => run.provider));
-    return providers.size === 1 ? matches[0]?.provider ?? null : null;
+    return providers.size === 1 ? (matches[0]?.provider ?? null) : null;
   }, [runs, selectedProviderHint, selectedRunAlias]);
 
   const loadRuns = useCallback(
@@ -460,8 +492,8 @@ function ScopedSubagentsBody({
         if (disposed || !isCurrentSubagentReadOwner(requestOwner)) return;
         setDetail(response.supported ? response.run : null);
         if (
-          response.run
-          && (response.run.id !== selectedRunAlias || response.run.provider !== selectedProviderHint)
+          response.run &&
+          (response.run.id !== selectedRunAlias || response.run.provider !== selectedProviderHint)
         ) {
           ctx.patchState({
             selectedRunId: response.run.id,
@@ -497,15 +529,28 @@ function ScopedSubagentsBody({
   );
 
   const openRun = useCallback(
-    (run: SubagentRun) => ctx.patchState({
-      selectedRunId: run.id,
-      selectedProvider: run.provider,
-    }),
+    (run: SubagentRun) =>
+      ctx.patchState({
+        selectedRunId: run.id,
+        selectedProvider: run.provider,
+      }),
     [ctx],
   );
   const back = useCallback(
     () => ctx.patchState({ selectedRunId: null, selectedProvider: null }),
     [ctx],
+  );
+  const stopRun = useCallback(
+    async (run: SubagentRun) => {
+      if (run.status !== 'running' || !run.capabilities.stop || stoppingRunId) return;
+      setStoppingRunId(run.id);
+      try {
+        await window.electronAPI.maker.stopAgentTask(ctx.sessionId, run.logicalAgentId);
+      } finally {
+        setStoppingRunId(null);
+      }
+    },
+    [ctx.sessionId, stoppingRunId],
   );
 
   if (loadState === 'idle' || loadState === 'loading') {
@@ -529,6 +574,8 @@ function ScopedSubagentsBody({
         loading={detailLoading}
         workdir={ctx.workdir}
         allowPrivilegedLinks={ctx.deviceLinkDeviceId === null && !ctx.remoteHostId}
+        stopping={detail?.id === stoppingRunId}
+        onStop={(run) => void stopRun(run)}
         onBack={back}
       />
     );
@@ -576,7 +623,13 @@ function ScopedSubagentsBody({
               {t('rightSidebar.subagents.running')}
             </div>
             {grouped.running.map((run) => (
-              <RunRow key={run.id} run={run} onOpen={openRun} />
+              <RunRow
+                key={run.id}
+                run={run}
+                stopping={run.id === stoppingRunId}
+                onOpen={openRun}
+                onStop={(item) => void stopRun(item)}
+              />
             ))}
           </section>
         ) : null}
@@ -586,7 +639,13 @@ function ScopedSubagentsBody({
               {t('rightSidebar.subagents.finished')}
             </div>
             {grouped.finished.map((run) => (
-              <RunRow key={run.id} run={run} onOpen={openRun} />
+              <RunRow
+                key={run.id}
+                run={run}
+                stopping={run.id === stoppingRunId}
+                onOpen={openRun}
+                onStop={(item) => void stopRun(item)}
+              />
             ))}
           </section>
         ) : null}

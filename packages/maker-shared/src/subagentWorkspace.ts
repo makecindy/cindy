@@ -8,21 +8,21 @@
  * may add opaque `providerRunIds` without changing the product model.
  */
 
-export type SubagentProvider = 'claude-code' | 'codex' | 'pi';
+export type SubagentProvider = "claude-code" | "codex" | "pi";
 
-export type SubagentRunStatus = 'running' | 'completed' | 'failed' | 'stopped';
+export type SubagentRunStatus = "running" | "completed" | "failed" | "stopped";
 
 export type SubagentActivityKind =
-  | 'started'
-  | 'progress'
-  | 'message'
-  | 'question'
-  | 'decision'
-  | 'resumed'
-  | 'steered'
-  | 'completed'
-  | 'failed'
-  | 'stopped';
+  | "started"
+  | "progress"
+  | "message"
+  | "question"
+  | "decision"
+  | "resumed"
+  | "steered"
+  | "completed"
+  | "failed"
+  | "stopped";
 
 export interface SubagentActivityEntry {
   /** Monotonic within one Cindy run. */
@@ -46,7 +46,7 @@ export interface SubagentCapabilities {
   resume: boolean;
   steer: boolean;
   stop: boolean;
-  parentContext: 'unknown' | 'snapshot' | 'live';
+  parentContext: "unknown" | "snapshot" | "live";
 }
 
 export interface SubagentRunUsage {
@@ -81,7 +81,7 @@ export interface SubagentRun {
   endedAt?: number;
 }
 
-export type SubagentTranscriptRole = 'parent' | 'subagent' | 'tool' | 'system';
+export type SubagentTranscriptRole = "parent" | "subagent" | "tool";
 
 /**
  * Harness-neutral transcript entry. PR1 leaves this capability disabled, but
@@ -156,7 +156,7 @@ export interface SubagentRunsChangedPayload {
   firstForSession: boolean;
 }
 
-export const SUBAGENT_RUNS_CHANGED_CHANNEL = 'local-db:subagent-runs:changed';
+export const SUBAGENT_RUNS_CHANGED_CHANNEL = "local-db:subagent-runs:changed";
 
 export const SUBAGENT_PR1_CAPABILITIES: Readonly<SubagentCapabilities> =
   Object.freeze({
@@ -166,5 +166,16 @@ export const SUBAGENT_PR1_CAPABILITIES: Readonly<SubagentCapabilities> =
     resume: false,
     steer: false,
     stop: false,
-    parentContext: 'unknown',
+    parentContext: "unknown",
+  });
+
+export const SUBAGENT_TRANSCRIPT_CAPABILITIES: Readonly<SubagentCapabilities> =
+  Object.freeze({
+    viewActivity: true,
+    viewReturnedResult: true,
+    viewFullTranscript: true,
+    resume: false,
+    steer: false,
+    stop: false,
+    parentContext: "unknown",
   });

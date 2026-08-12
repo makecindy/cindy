@@ -20,6 +20,7 @@ const h = vi.hoisted(() => {
     ipcHandlers: new Map<string, (event: unknown, payload: unknown) => unknown>(),
     getSubagentRunDetail: vi.fn(),
     listSubagentRuns: vi.fn(),
+    pruneInvisibleSubagentTranscripts: vi.fn(async () => 0),
     scopeCurrent: true,
     activeStamp: { dataOwnerId: 'active-owner', ownerGeneration: 2 },
   };
@@ -51,6 +52,7 @@ vi.mock('../../client/current.js', () => ({
 vi.mock('../../subagentRuns.js', () => ({
   getSubagentRunDetail: h.getSubagentRunDetail,
   listSubagentRuns: h.listSubagentRuns,
+  pruneInvisibleSubagentTranscripts: h.pruneInvisibleSubagentTranscripts,
 }));
 
 import { SUBAGENT_RUNS_CHANGED_CHANNEL } from '@cindy/maker-shared/subagent-workspace';
@@ -126,6 +128,7 @@ describe('Subagent runs broadcast boundary', () => {
   it('broadcasts a session-level invalidation for clear and rewind boundaries', () => {
     broadcastSubagentRunsInvalidated('session-1');
 
+    expect(h.pruneInvisibleSubagentTranscripts).toHaveBeenCalledWith('session-1');
     expect(h.trusted.webContents.send).toHaveBeenCalledWith(
       SUBAGENT_RUNS_CHANGED_CHANNEL,
       {
@@ -144,24 +147,26 @@ describe('Subagent runs broadcast boundary', () => {
     if (!detail) throw new Error('Subagent detail handler not registered');
 
     await expect(
-      detail({}, {
-        sessionId: 'session-1',
-        provider: 'codex',
-        runIdOrAlias: 'shared-native-id',
-      }),
+      detail(
+        {},
+        {
+          sessionId: 'session-1',
+          provider: 'codex',
+          runIdOrAlias: 'shared-native-id',
+        },
+      ),
     ).resolves.toEqual({ supported: true, run: null });
-    expect(h.getSubagentRunDetail).toHaveBeenCalledWith(
-      'session-1',
-      'codex',
-      'shared-native-id',
-    );
+    expect(h.getSubagentRunDetail).toHaveBeenCalledWith('session-1', 'codex', 'shared-native-id');
 
     await expect(
-      detail({}, {
-        sessionId: 'session-1',
-        provider: 'other-harness',
-        runIdOrAlias: 'shared-native-id',
-      }),
+      detail(
+        {},
+        {
+          sessionId: 'session-1',
+          provider: 'other-harness',
+          runIdOrAlias: 'shared-native-id',
+        },
+      ),
     ).rejects.toThrow(/provider/);
   });
 });

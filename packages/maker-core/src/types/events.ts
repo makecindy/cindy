@@ -9,7 +9,10 @@
  * 与现有 ccAgent.types StreamEvent 接近，但精简了未启用字段。
  */
 
-import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
+import type {
+  SubagentTranscriptEntryInput,
+  WorkflowProgressEntry,
+} from '@cindy/maker-shared/agent-task';
 import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
 import type { PiRuntimeCapabilityManifest } from './pi-runtime-capabilities.js';
 
@@ -103,6 +106,12 @@ export interface AgentTaskUpdateEventData {
    * CLI 对纯心跳帧节流省略本字段(undefined = 沿用上一帧),下游 merge 不得清空。
    */
   workflowProgress?: WorkflowProgressEntry[];
+  /**
+   * Child-session content captured during the run, attached on the terminal
+   * frame only. The host persists it; it does not cross the renderer boundary
+   * on the live event path.
+   */
+  transcriptEntries?: SubagentTranscriptEntryInput[];
   raw?: unknown;
 }
 

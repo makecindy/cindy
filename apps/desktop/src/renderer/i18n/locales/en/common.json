@@ -5081,6 +5081,7 @@
       "untitled": "Subagent",
       "notFound": "Subagent not found",
       "back": "Back",
+      "stop": "Stop",
       "harness": "Harness",
       "model": "Model",
       "context": "Parent context",
@@ -5101,9 +5102,11 @@
       "transcriptRoles": {
         "parent": "Parent",
         "subagent": "Subagent",
-        "tool": "Tool",
-        "system": "System"
+        "tool": "Tool"
       },
+      "transcriptLoading": "Loading transcript…",
+      "transcriptLoadMore": "Load more",
+      "transcriptEmpty": "No content captured",
       "lastTool": "Last tool: {{tool}}",
       "tokens": "{{value}} tokens",
       "activityKinds": {

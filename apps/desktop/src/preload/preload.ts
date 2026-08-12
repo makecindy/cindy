@@ -4602,6 +4602,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       detail: (
         input: import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailRequest,
       ): Promise<unknown> => ipcRenderer.invoke('local-db:subagent-runs:detail', input),
+      /** Paginated child session content for one durable Subagent record. */
+      transcript: (
+        input: import('@cindy/maker-shared/subagent-workspace').SubagentTranscriptPageRequest,
+      ): Promise<unknown> => ipcRenderer.invoke('local-db:subagent-runs:transcript', input),
       /** Small invalidation push; consumers re-read through list/detail. */
       onChanged: createIpcFanOut('local-db:subagent-runs:changed'),
     },

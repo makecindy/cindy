@@ -5075,6 +5075,7 @@
       "untitled": "Subagent",
       "notFound": "未找到该 Subagent",
       "back": "返回",
+      "stop": "停止",
       "harness": "Harness",
       "model": "模型",
       "context": "父任务上下文",
@@ -5095,9 +5096,11 @@
       "transcriptRoles": {
         "parent": "父任务",
         "subagent": "Subagent",
-        "tool": "工具",
-        "system": "系统"
+        "tool": "工具"
       },
+      "transcriptLoading": "加载中…",
+      "transcriptLoadMore": "加载更多",
+      "transcriptEmpty": "未捕获内容",
       "lastTool": "最近工具：{{tool}}",
       "tokens": "{{value}} tokens",
       "activityKinds": {

@@ -34,27 +34,27 @@
  */
 
 /** 工具名 —— 与 `@cindy/maker-shared` 的 `PI_SUBAGENT_TOOL_NAME` 必须一致(卡片判据靠它)。 */
-export const CINDY_SUBAGENT_TOOL_NAME = 'subagent';
+export const CINDY_SUBAGENT_TOOL_NAME = "subagent";
 
-export const CINDY_SUBAGENT_EXTENSION_FILENAME = 'cindy-subagent.ts';
+export const CINDY_SUBAGENT_EXTENSION_FILENAME = "cindy-subagent.ts";
 
 /** Cindy 注入给子进程的 env 名:pi 二进制路径、递归深度、子代理模型。 */
 export const CINDY_SUBAGENT_ENV = {
-  binary: 'CINDY_PI_SUBAGENT_BINARY',
-  depth: 'CINDY_PI_SUBAGENT_DEPTH',
+  binary: "CINDY_PI_SUBAGENT_BINARY",
+  depth: "CINDY_PI_SUBAGENT_DEPTH",
   /**
    * 子代理运行期快照文件({model?, provider?})。刻意不用 env 传 model:env 在 spawn 时
    * 定型,会话中途 setModel 后子代理会继续用旧模型;provider 不一起传还会让同名模型落到
    * 错误 endpoint。扩展每次派子代理现读本文件(与权限档同机制)。
    */
-  runtimeFile: 'CINDY_PI_SUBAGENT_RUNTIME_FILE',
+  runtimeFile: "CINDY_PI_SUBAGENT_RUNTIME_FILE",
 } as const;
 
 /**
  * 父进程 pid —— 由**父扩展**在 spawn 子代理时注入(不是 host 注入,所以不在
  * `CINDY_SUBAGENT_ENV` 里)。子进程里的看门狗靠它判断父进程是否还活着。
  */
-export const CINDY_SUBAGENT_PARENT_PID_ENV = 'CINDY_PI_SUBAGENT_PARENT_PID';
+export const CINDY_SUBAGENT_PARENT_PID_ENV = "CINDY_PI_SUBAGENT_PARENT_PID";
 
 /** 看门狗轮询间隔:也是父进程死亡后子代理最长残留时间。 */
 export const CINDY_SUBAGENT_PARENT_WATCHDOG_INTERVAL_MS = 2000;
@@ -505,7 +505,13 @@ function runTask(binary, task, runtime, signal, onProgress) {
       if (!event || typeof event !== 'object') return;
       if (event.type === 'tool_execution_start') {
         toolUses += 1;
-        onProgress({ toolUses: toolUses, tokens: totals.tokens, usage: totals });
+        const toolName = event.toolName || (event.tool && event.tool.name) || '';
+        onProgress({
+          toolUses: toolUses,
+          tokens: totals.tokens,
+          usage: totals,
+          transcript: { role: 'tool', content: toolName ? 'Using ' + toolName : 'Using a tool', toolName: toolName },
+        });
         return;
       }
       if (event.type === 'message_end') {
@@ -515,7 +521,12 @@ function runTask(binary, task, runtime, signal, onProgress) {
           const text = assistantTextOf(message);
           // 覆盖为最新一条有文本的 assistant 回复 = 子代理的结论。
           if (text.trim().length > 0) finalText = text;
-          onProgress({ toolUses: toolUses, tokens: totals.tokens, usage: totals });
+          onProgress({
+            toolUses: toolUses,
+            tokens: totals.tokens,
+            usage: totals,
+            transcript: text.trim().length > 0 ? { role: 'subagent', content: text } : undefined,
+          });
         }
       }
     });
@@ -617,6 +628,21 @@ export default async function cindySubagent(pi: any) {
       const taskId = String(toolCallId || 'subagent');
       const totals = { toolUses: 0, tokens: 0, usage: emptyUsage() };
       const perTask = tasks.map(function () { return { toolUses: 0, tokens: 0, usage: emptyUsage() }; });
+      // 子代理工作过程只存在于本子进程内;在完整消息/工具边界随进度快照交给 host。
+      // 上限与 host 侧收窄一致,避免长会话把事件撑爆。
+      const transcript: Array<Record<string, unknown>> = [];
+      const noteTranscript = function (role: string, content: string, toolName?: string) {
+        if (transcript.length >= 500) return;
+        const text = typeof content === 'string' ? content : '';
+        if (!text) return;
+        const entry: Record<string, unknown> = {
+          role: role,
+          content: text.length > 65536 ? text.slice(0, 65535) + '…' : text,
+          occurredAt: Date.now(),
+        };
+        if (toolName) entry.toolName = toolName;
+        transcript.push(entry);
+      };
 
       const report = function (status: string, summary?: string) {
         if (typeof onUpdate !== 'function') return;
@@ -642,6 +668,7 @@ export default async function cindySubagent(pi: any) {
         details[MARKER] = 1;
         if (summary) details.summary = summary;
         if (runtime.model) details.model = runtime.model;
+        if (transcript.length > 0) details.transcript = transcript;
         try {
           onUpdate({ content: [{ type: 'text', text: status === 'running' ? 'Running subagent…' : status }], details: details });
         } catch (err) {
@@ -700,6 +727,9 @@ export default async function cindySubagent(pi: any) {
           if (index >= tasks.length) return;
           results[index] = await runTask(binary, tasks[index], runtime, signal, function (progress: any) {
             perTask[index] = { toolUses: progress.toolUses, tokens: progress.tokens, usage: progress.usage };
+            if (progress.transcript) {
+              noteTranscript(progress.transcript.role, progress.transcript.content, progress.transcript.toolName);
+            }
             recompute();
             report('running');
           });

@@ -435,6 +435,7 @@ export const subagentRuns = sqliteTable(
     totalTokens: integer('total_tokens'),
     toolUses: integer('tool_uses'),
     durationMs: integer('duration_ms'),
+    transcriptFile: text('transcript_file'),
     /** JSON SubagentCapabilities; optional fields are fail-closed by readers. */
     capabilities: text('capabilities').notNull().default('{}'),
     /** JSON SubagentActivityEntry[]; writer enforces count/text bounds. */

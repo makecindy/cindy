@@ -16,10 +16,11 @@ import {
   subagentSpawnResultIndicatesRunning,
   type AgentTaskUpdate,
 } from '@cindy/maker-shared/agent-task';
-import { and, desc, eq, gt, inArray, isNull, lt, ne, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
 
 import { getDbClient } from './client/current.js';
 import { messages, sessions, subagentRunAliases, subagentRuns } from './schema.js';
+import { deleteSubagentTranscript, writeSubagentTranscript } from './subagentTranscriptStore.js';
 
 const MAX_ALIAS_COUNT = 128;
 const MAX_PROVIDER_RUN_IDS = 64;
@@ -163,6 +164,23 @@ function mergeUnique(
 
 function terminal(status: SubagentRunStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'stopped';
+}
+
+function capabilitiesForRun(
+  existing: string | undefined,
+  update: AgentTaskUpdate,
+  status: SubagentRunStatus,
+  hasTranscript: boolean,
+): string {
+  const stored = existing ? parseCapabilities(existing) : SUBAGENT_PR1_CAPABILITIES;
+  const capabilities: SubagentCapabilities = {
+    ...stored,
+    viewFullTranscript: hasTranscript,
+    // The existing precise stop bridge currently has a reliable task-level
+    // implementation only for a live local Claude task.
+    stop: status === 'running' && update.provider === 'claude-code' && Boolean(update.taskId),
+  };
+  return JSON.stringify(capabilities);
 }
 
 function mergeStatus(
@@ -379,9 +397,10 @@ export async function persistSubagentTaskUpdate(
     ],
     MAX_ALIAS_COUNT,
   );
-  const incomingProviderRunIds = observation.kind === 'spawn'
-    ? mergeUnique([], observation.providerRunIds ?? [], MAX_PROVIDER_RUN_IDS)
-    : [];
+  const incomingProviderRunIds =
+    observation.kind === 'spawn'
+      ? mergeUnique([], observation.providerRunIds ?? [], MAX_PROVIDER_RUN_IDS)
+      : [];
   const lookupAliases = mergeUnique(
     incomingIdentityAliases,
     incomingProviderRunIds,
@@ -433,9 +452,13 @@ export async function persistSubagentTaskUpdate(
     !existing,
   );
   const parentToolUseId =
-    boundedText(observation.parentToolUseId, TEXT_LIMITS.id) ??
-    existing?.parentToolUseId ??
-    null;
+    boundedText(observation.parentToolUseId, TEXT_LIMITS.id) ?? existing?.parentToolUseId ?? null;
+  const runId = existing?.id ?? createId();
+  const transcriptFile = await persistTranscriptIfPresent(
+    runId,
+    update,
+    existing?.transcriptFile ?? null,
+  );
   const values = {
     parentToolUseId,
     aliases: JSON.stringify(aliases),
@@ -456,7 +479,12 @@ export async function persistSubagentTaskUpdate(
     totalTokens: boundedNumber(update.usage?.totalTokens) ?? existing?.totalTokens ?? null,
     toolUses: boundedNumber(update.usage?.toolUses) ?? existing?.toolUses ?? null,
     durationMs: boundedNumber(update.usage?.durationMs) ?? existing?.durationMs ?? null,
-    capabilities: existing?.capabilities ?? JSON.stringify(SUBAGENT_PR1_CAPABILITIES),
+    capabilities: capabilitiesForRun(
+      existing?.capabilities,
+      update,
+      status,
+      Boolean(transcriptFile),
+    ),
     activity: JSON.stringify(activity),
     startedAt,
     updatedAt: Math.max(existing?.updatedAt ?? 0, updatedAt),
@@ -471,7 +499,10 @@ export async function persistSubagentTaskUpdate(
       mergeUnique(aliases, providerRunIds, MAX_INDEXED_ALIAS_COUNT),
       now,
     );
-    await db.update(subagentRuns).set(values).where(eq(subagentRuns.id, existing.id));
+    await db
+      .update(subagentRuns)
+      .set({ ...values, transcriptFile })
+      .where(eq(subagentRuns.id, existing.id));
     return { runId: existing.id, created: false, firstForSession: false };
   }
 
@@ -487,20 +518,51 @@ export async function persistSubagentTaskUpdate(
       ),
     )
     .limit(1);
-  const id = createId();
   await db.insert(subagentRuns).values({
-    id,
+    id: runId,
     sessionId,
     provider: update.provider,
     logicalAgentId: observation.logicalSubagentId,
     ...values,
+    ...(transcriptFile ? { transcriptFile } : {}),
   });
   await persistAliasProjection(
-    { id, sessionId, provider: update.provider },
+    { id: runId, sessionId, provider: update.provider },
     mergeUnique(aliases, providerRunIds, MAX_INDEXED_ALIAS_COUNT),
     now,
   );
-  return { runId: id, created: true, firstForSession: !visibleBefore };
+  return { runId, created: true, firstForSession: !visibleBefore };
+}
+
+/**
+ * Writes captured child-session content on the frame that carries it.
+ *
+ * Adapters attach bounded snapshots at complete-message boundaries. Each write
+ * atomically replaces the prior snapshot so a running detail can refresh without
+ * appending duplicate deltas. A failed write keeps the previous readable file.
+ */
+async function persistTranscriptIfPresent(
+  runId: string,
+  update: AgentTaskUpdate,
+  existingFile: string | null,
+): Promise<string | null> {
+  const entries = update.transcriptEntries
+    ? [
+        ...(update.description && !update.transcriptEntries.some((entry) => entry.role === 'parent')
+          ? [
+              {
+                role: 'parent' as const,
+                content: update.description,
+                occurredAt: finiteTime(update.createdAt, Date.now()),
+              },
+            ]
+          : []),
+        ...update.transcriptEntries,
+      ]
+    : undefined;
+  if (!entries || entries.length === 0) return null;
+  const written = await writeSubagentTranscript(runId, entries);
+  return written ?? existingFile;
 }
 
 async function readableSession(sessionId: string): Promise<{ clearedAt: number | null } | null> {
@@ -569,6 +631,72 @@ async function visibleParentToolUseIds(
   return new Set(rows.flatMap((row) => (row.toolUseId ? [row.toolUseId] : [])));
 }
 
+/**
+ * Removes transcript pointers for runs that the parent task can no longer show.
+ *
+ * Clear, rewind and task deletion intentionally preserve audit rows. Their
+ * potentially user-authored transcript payloads must not remain as unreachable
+ * files, so invalidation boundaries call this best-effort pruning pass.
+ */
+export async function pruneInvisibleSubagentTranscripts(sessionId: string): Promise<number> {
+  const db = getDbClient().drizzle;
+  const [session] = await db
+    .select({ status: sessions.status, clearedAt: sessions.clearedAt })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  const rows = await db
+    .select({
+      id: subagentRuns.id,
+      parentToolUseId: subagentRuns.parentToolUseId,
+      transcriptFile: subagentRuns.transcriptFile,
+      capabilities: subagentRuns.capabilities,
+      startedAt: subagentRuns.startedAt,
+      rewindAt: subagentRuns.rewindAt,
+      deletedAt: subagentRuns.deletedAt,
+    })
+    .from(subagentRuns)
+    .where(and(eq(subagentRuns.sessionId, sessionId), isNotNull(subagentRuns.transcriptFile)));
+  if (rows.length === 0) return 0;
+
+  const sessionVisible = Boolean(session && session.status !== 'deleted');
+  const parentCandidates = sessionVisible
+    ? rows.flatMap((row) => (row.parentToolUseId ? [row.parentToolUseId] : []))
+    : [];
+  const visibleParents = sessionVisible
+    ? await visibleParentToolUseIds(sessionId, parentCandidates, session?.clearedAt ?? null)
+    : new Set<string>();
+  let pruned = 0;
+
+  for (const row of rows) {
+    const transcriptFile = row.transcriptFile;
+    if (!transcriptFile) continue;
+    const invisible =
+      !sessionVisible ||
+      row.rewindAt !== null ||
+      row.deletedAt !== null ||
+      (session?.clearedAt !== null &&
+        session?.clearedAt !== undefined &&
+        row.startedAt <= session.clearedAt) ||
+      (Boolean(row.parentToolUseId) && !visibleParents.has(row.parentToolUseId!));
+    if (!invisible) continue;
+
+    const capabilities = {
+      ...parseCapabilities(row.capabilities),
+      viewFullTranscript: false,
+    } satisfies SubagentCapabilities;
+    const result = await db
+      .update(subagentRuns)
+      .set({ transcriptFile: null, capabilities: JSON.stringify(capabilities) })
+      .where(and(eq(subagentRuns.id, row.id), eq(subagentRuns.transcriptFile, transcriptFile)))
+      .run();
+    if (result.changes !== 1) continue;
+    pruned += 1;
+    await deleteSubagentTranscript(transcriptFile);
+  }
+  return pruned;
+}
+
 interface SubagentListCursor {
   startedAt: number;
   id: string;
@@ -635,10 +763,7 @@ export async function listSubagentRuns(
       conditions.push(
         or(
           lt(subagentRuns.startedAt, scanCursor.startedAt),
-          and(
-            eq(subagentRuns.startedAt, scanCursor.startedAt),
-            lt(subagentRuns.id, scanCursor.id),
-          ),
+          and(eq(subagentRuns.startedAt, scanCursor.startedAt), lt(subagentRuns.id, scanCursor.id)),
         )!,
       );
     }
@@ -656,9 +781,7 @@ export async function listSubagentRuns(
       session.clearedAt,
     );
     visibleRows.push(
-      ...batch.filter(
-        (row) => !row.parentToolUseId || visibleToolUseIds.has(row.parentToolUseId),
-      ),
+      ...batch.filter((row) => !row.parentToolUseId || visibleToolUseIds.has(row.parentToolUseId)),
     );
     const lastScanned = batch[batch.length - 1];
     scanCursor = { startedAt: lastScanned.startedAt, id: lastScanned.id };
@@ -733,6 +856,29 @@ async function resolveDetailRow(
   return aliased?.run;
 }
 
+/** Returns the file pointer only while the run is still visible in its parent task. */
+export async function getVisibleSubagentTranscriptFile(
+  sessionId: string,
+  provider: SubagentProvider,
+  runIdOrAlias: string,
+): Promise<string | null> {
+  const session = await readableSession(sessionId);
+  if (!session) return null;
+  const normalizedIdentifier = boundedText(runIdOrAlias, TEXT_LIMITS.id);
+  if (!normalizedIdentifier) return null;
+  const row = await resolveDetailRow(sessionId, provider, normalizedIdentifier, session.clearedAt);
+  if (!row?.transcriptFile) return null;
+  if (row.parentToolUseId) {
+    const visibleToolUseIds = await visibleParentToolUseIds(
+      sessionId,
+      [row.parentToolUseId],
+      session.clearedAt,
+    );
+    if (!visibleToolUseIds.has(row.parentToolUseId)) return null;
+  }
+  return row.transcriptFile;
+}
+
 export async function getSubagentRunDetail(
   sessionId: string,
   provider: SubagentProvider,
@@ -788,10 +934,10 @@ export async function getSubagentRunDetail(
     const text = result ? parseMessageText(result.content) : undefined;
     // Claude's background Agent tool result is only a launch receipt. Once the
     // task reaches terminal state, expose the task_notification summary instead.
-    const returnedText = row.provider === 'claude-code'
-      && subagentSpawnResultIndicatesRunning('Agent', text)
-      ? row.summary ?? undefined
-      : text;
+    const returnedText =
+      row.provider === 'claude-code' && subagentSpawnResultIndicatesRunning('Agent', text)
+        ? (row.summary ?? undefined)
+        : text;
     if (returnedText) {
       const bounded = truncateUtf8(returnedText, MAX_RETURNED_RESULT_BYTES);
       returnedResult = bounded.value;

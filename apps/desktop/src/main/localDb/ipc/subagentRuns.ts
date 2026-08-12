@@ -7,6 +7,7 @@ import {
   type SubagentRunDetailResponse,
   type SubagentRunsChangedPayload,
   type SubagentRunsListResponse,
+  type SubagentTranscriptPageResponse,
 } from '@cindy/maker-shared/subagent-workspace';
 
 import { getActiveDataOwnerPushStamp } from '../../appSessionState.js';
@@ -24,7 +25,12 @@ import {
   requireObject,
   requireString,
 } from '../../utils/ipcValidate.js';
-import { getSubagentRunDetail, listSubagentRuns } from '../subagentRuns.js';
+import {
+  getSubagentRunDetail,
+  listSubagentRuns,
+  pruneInvisibleSubagentTranscripts,
+} from '../subagentRuns.js';
+import { resolveSubagentTranscript } from '../subagentTranscriptResolvers/index.js';
 
 const SUBAGENT_PROVIDERS = [
   'claude-code',
@@ -38,9 +44,7 @@ export function broadcastSubagentRunsChanged(
 ): void {
   if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
-  const ownerStamp = hasCapturedScope
-    ? ownerScope.ownerStamp
-    : getActiveDataOwnerPushStamp();
+  const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getActiveDataOwnerPushStamp();
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed() && isTrustedAppRendererWindow(window)) {
       try {
@@ -56,6 +60,9 @@ export function broadcastSubagentRunsInvalidated(
   sessionId: string,
   ownerScope?: DataOwnerBroadcastScope | null,
 ): void {
+  void pruneInvisibleSubagentTranscripts(sessionId).catch(() => {
+    // Cleanup is best-effort; invalidation must still reach the renderer.
+  });
   broadcastSubagentRunsChanged(
     {
       sessionId,
@@ -93,5 +100,20 @@ export function registerSubagentRunsIpc(): void {
       supported: run !== undefined,
       run: run ?? null,
     } satisfies SubagentRunDetailResponse;
+  });
+
+  ipcMain.handle('local-db:subagent-runs:transcript', async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const body = requireObject(input, 'subagent transcript input');
+    const sessionId = requireString(body.sessionId, 'sessionId');
+    const provider = requireEnum(body.provider, SUBAGENT_PROVIDERS, 'provider');
+    const runIdOrAlias = requireString(body.runIdOrAlias, 'runIdOrAlias');
+    const cursor = body.cursor === undefined ? undefined : requireString(body.cursor, 'cursor');
+    const limit = body.limit === undefined ? undefined : requireNonNegativeInt(body.limit, 'limit');
+    const page = await resolveSubagentTranscript(sessionId, provider, runIdOrAlias, {
+      cursor,
+      limit,
+    });
+    return page satisfies SubagentTranscriptPageResponse;
   });
 }

@@ -138,6 +138,7 @@ import {
   createSubagentLiveCardTracker,
   type SubagentLiveCardUpdate,
 } from './subagent-live-cards.js';
+import { SubagentTranscriptAccumulator } from './subagent-transcript-accumulator.js';
 import {
   TurnRetryTracker,
   RETRY_ESCALATION_MAX_ELAPSED_MS,
@@ -4158,6 +4159,7 @@ export class CodexAgent extends BaseAgent {
       // Cindy metadata accessor; absence must remain an honest no-model state.
       subagentModelFallback: host.getSubagentModelFallback?.(),
     });
+    const subagentTranscripts = new SubagentTranscriptAccumulator();
 
     const emitSubagentCardUpdate = (
       update: SubagentLiveCardUpdate,
@@ -4171,6 +4173,11 @@ export class CodexAgent extends BaseAgent {
       // (review)。子线程有进展 ≠ 主 turn 已恢复。
       //
       // push 是同步的,所以这个标志在 set 与 clear 之间不会被别的事件穿插。
+      // Complete child messages/tool boundaries refresh the running transcript;
+      // the terminal frame returns the same bounded snapshot and releases it.
+      const transcriptEntries = update.status === 'running'
+        ? subagentTranscripts.getEntries(update.taskId)
+        : subagentTranscripts.serialize(update.taskId) ?? undefined;
       emittingDescendantUpdate = true;
       try {
         eventQueue.push({
@@ -4192,6 +4199,7 @@ export class CodexAgent extends BaseAgent {
             ...(update.toolUses > 0 ? { toolUses: update.toolUses } : {}),
             durationMs: update.durationMs,
           },
+          ...(transcriptEntries && transcriptEntries.length > 0 ? { transcriptEntries } : {}),
           },
           source: 'codex',
           ...lifecycle,
@@ -4367,7 +4375,16 @@ export class CodexAgent extends BaseAgent {
         }
       }
       const update = subagentLiveCards.handleDescendantNotification(childThreadId, method, params);
-      if (update) emitSubagentCardUpdate(update, descendantUpdateLifecycle(childThreadId));
+      if (update) {
+        // 内容捕获挂在既有聚合结果上:卡片是 taskId 的唯一权威来源,而子线程内容
+        // 跑完即散,只能在通知流经这里时留存。捕获失败不得影响卡片本身。
+        try {
+          subagentTranscripts.noteNotification(update.taskId, method, params);
+        } catch {
+          // 观察链路的问题不能拖垮子代理运行。
+        }
+        emitSubagentCardUpdate(update, descendantUpdateLifecycle(childThreadId));
+      }
 
       if (method === 'turn/completed') {
         const status = record?.turn && typeof record.turn === 'object'
@@ -4422,6 +4439,9 @@ export class CodexAgent extends BaseAgent {
       // 这条路径(thread cleanup failure / 强制 retire)恰恰是最容易留下永久转圈卡的。
       for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
       subagentLiveCards.clear();
+      // The terminal frames above already drained what they carry; whatever is
+      // left belongs to cards that never reached one and has no consumer now.
+      subagentTranscripts.clear();
       abandonBufferedTurns(reason);
       abandonPendingCapabilitySteers();
       try { dismissAllPending(reason, 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
@@ -9793,6 +9813,9 @@ export class CodexAgent extends BaseAgent {
       // 永久转圈(review)。
       for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
       subagentLiveCards.clear();
+      // The terminal frames above already drained what they carry; whatever is
+      // left belongs to cards that never reached one and has no consumer now.
+      subagentTranscripts.clear();
       // close 时 buffer 里可能还有等对账的挂起请求 (codex R17 P2):
       // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
       // 永不返回, server 侧请求卡死。

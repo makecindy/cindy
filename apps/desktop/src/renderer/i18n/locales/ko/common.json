@@ -5079,6 +5079,7 @@
       "untitled": "하위 에이전트",
       "notFound": "하위 에이전트를 찾을 수 없습니다",
       "back": "뒤로",
+      "stop": "중지",
       "harness": "Harness",
       "model": "모델",
       "context": "상위 작업 컨텍스트",
@@ -5099,9 +5100,11 @@
       "transcriptRoles": {
         "parent": "상위 작업",
         "subagent": "하위 에이전트",
-        "tool": "도구",
-        "system": "시스템"
+        "tool": "도구"
       },
+      "transcriptLoading": "불러오는 중…",
+      "transcriptLoadMore": "더 불러오기",
+      "transcriptEmpty": "캡처된 내용 없음",
       "lastTool": "최근 도구: {{tool}}",
       "tokens": "{{value}} tokens",
       "activityKinds": {

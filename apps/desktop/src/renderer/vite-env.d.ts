@@ -4180,6 +4180,11 @@ interface ElectronAPI {
       detail: (
         input: import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailRequest,
       ) => Promise<import('@cindy/maker-shared/subagent-workspace').SubagentRunDetailResponse>;
+      transcript: (
+        input: import('@cindy/maker-shared/subagent-workspace').SubagentTranscriptPageRequest,
+      ) => Promise<
+        import('@cindy/maker-shared/subagent-workspace').SubagentTranscriptPageResponse
+      >;
       onChanged: (
         callback: (
           payload: import('@cindy/maker-shared/subagent-workspace').SubagentRunsChangedPayload,

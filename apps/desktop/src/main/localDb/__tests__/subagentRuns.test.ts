@@ -1,15 +1,26 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const transcriptStoreMocks = vi.hoisted(() => ({
+  deleteSubagentTranscript: vi.fn(async () => {}),
+}));
+
+vi.mock('../subagentTranscriptStore.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../subagentTranscriptStore.js')>()),
+  deleteSubagentTranscript: transcriptStoreMocks.deleteSubagentTranscript,
+}));
 
 import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
 import * as schema from '../schema.js';
 import {
   getSubagentRunDetail,
+  getVisibleSubagentTranscriptFile,
   listVisibleSubagentObservationIdentities,
   listSubagentRuns,
   persistSubagentTaskUpdate,
+  pruneInvisibleSubagentTranscripts,
 } from '../subagentRuns.js';
 
 describe('durable Subagent runs', () => {
@@ -17,6 +28,7 @@ describe('durable Subagent runs', () => {
   let client: DbClient;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     rawDb = new Database(':memory:');
     rawDb.exec(`
       PRAGMA foreign_keys = ON;
@@ -52,6 +64,7 @@ describe('durable Subagent runs', () => {
         total_tokens INTEGER,
         tool_uses INTEGER,
         duration_ms INTEGER,
+        transcript_file TEXT,
         capabilities TEXT NOT NULL DEFAULT '{}',
         activity TEXT NOT NULL DEFAULT '[]',
         started_at INTEGER NOT NULL,
@@ -105,31 +118,37 @@ describe('durable Subagent runs', () => {
 
     const created = await persistSubagentTaskUpdate(
       'session-1',
-      observed({
-        provider: 'pi',
-        taskId: 'pi-child-1',
-        parentToolUseId: 'parent-tool-1',
-        status: 'running',
-        title: 'Research plugins',
-        description: 'Survey durable Subagent patterns',
-        model: 'anthropic/claude-opus-5',
-        updatedAt: '1970-01-01T00:00:01.000Z',
-      }, { providerRunIds: ['pi-session-1'] }),
+      observed(
+        {
+          provider: 'pi',
+          taskId: 'pi-child-1',
+          parentToolUseId: 'parent-tool-1',
+          status: 'running',
+          title: 'Research plugins',
+          description: 'Survey durable Subagent patterns',
+          model: 'anthropic/claude-opus-5',
+          updatedAt: '1970-01-01T00:00:01.000Z',
+        },
+        { providerRunIds: ['pi-session-1'] },
+      ),
       'pi',
     );
     expect(created).toMatchObject({ created: true, firstForSession: true });
 
     const merged = await persistSubagentTaskUpdate(
       'session-1',
-      observed({
-        provider: 'pi',
-        taskId: 'parent-tool-1',
-        parentToolUseId: 'parent-tool-1',
-        status: 'completed',
-        summary: 'Found the reusable lifecycle contract',
-        usage: { totalTokens: 1234, toolUses: 7, durationMs: 8000 },
-        updatedAt: '1970-01-01T00:00:02.000Z',
-      }, { kind: 'terminal', logicalSubagentId: 'pi-child-1' }),
+      observed(
+        {
+          provider: 'pi',
+          taskId: 'parent-tool-1',
+          parentToolUseId: 'parent-tool-1',
+          status: 'completed',
+          summary: 'Found the reusable lifecycle contract',
+          usage: { totalTokens: 1234, toolUses: 7, durationMs: 8000 },
+          updatedAt: '1970-01-01T00:00:02.000Z',
+        },
+        { kind: 'terminal', logicalSubagentId: 'pi-child-1' },
+      ),
       'pi',
     );
     expect(merged).toEqual({
@@ -178,18 +197,24 @@ describe('durable Subagent runs', () => {
   });
 
   it('keeps equal native aliases from different harnesses as separate Cindy runs', async () => {
-    const claude = await persistSubagentTaskUpdate('session-1', observed({
-      provider: 'claude-code',
-      taskId: 'shared-native-id',
-      status: 'running',
-      updatedAt: '1970-01-01T00:00:01.000Z',
-    }));
-    const codex = await persistSubagentTaskUpdate('session-1', observed({
-      provider: 'codex',
-      taskId: 'shared-native-id',
-      status: 'running',
-      updatedAt: '1970-01-01T00:00:02.000Z',
-    }));
+    const claude = await persistSubagentTaskUpdate(
+      'session-1',
+      observed({
+        provider: 'claude-code',
+        taskId: 'shared-native-id',
+        status: 'running',
+        updatedAt: '1970-01-01T00:00:01.000Z',
+      }),
+    );
+    const codex = await persistSubagentTaskUpdate(
+      'session-1',
+      observed({
+        provider: 'codex',
+        taskId: 'shared-native-id',
+        status: 'running',
+        updatedAt: '1970-01-01T00:00:02.000Z',
+      }),
+    );
 
     expect(claude).toMatchObject({ created: true, firstForSession: true });
     expect(codex).toMatchObject({ created: true, firstForSession: false });
@@ -198,9 +223,9 @@ describe('durable Subagent runs', () => {
       'codex',
       'claude-code',
     ]);
-    expect(
-      (await getSubagentRunDetail('session-1', 'claude-code', 'shared-native-id'))?.id,
-    ).toBe(claude!.runId);
+    expect((await getSubagentRunDetail('session-1', 'claude-code', 'shared-native-id'))?.id).toBe(
+      claude!.runId,
+    );
     expect((await getSubagentRunDetail('session-1', 'codex', 'shared-native-id'))?.id).toBe(
       codex!.runId,
     );
@@ -266,9 +291,9 @@ describe('durable Subagent runs', () => {
       1100,
     );
 
-    expect(
-      (await getSubagentRunDetail('session-1', 'codex', spawned!.runId))?.returnedResult,
-    ).toBe('The audit found no upstream conflict.');
+    expect((await getSubagentRunDetail('session-1', 'codex', spawned!.runId))?.returnedResult).toBe(
+      'The audit found no upstream conflict.',
+    );
   });
 
   it('uses the terminal Claude summary instead of an async launch receipt', async () => {
@@ -301,12 +326,14 @@ describe('durable Subagent runs', () => {
     insertMessage(
       'claude-launch-receipt',
       'tool_result',
-      JSON.stringify([
-        'Async agent launched successfully.',
-        "agentId: claude-child (internal ID - do not mention to user. Use SendMessage with to: 'claude-child' to continue this agent.)",
-        'The agent is working in the background. You will be notified automatically when it completes.',
-        'Briefly tell the user what you launched and end your response.',
-      ].join('\n')),
+      JSON.stringify(
+        [
+          'Async agent launched successfully.',
+          "agentId: claude-child (internal ID - do not mention to user. Use SendMessage with to: 'claude-child' to continue this agent.)",
+          'The agent is working in the background. You will be notified automatically when it completes.',
+          'Briefly tell the user what you launched and end your response.',
+        ].join('\n'),
+      ),
       'claude-agent',
       1100,
     );
@@ -319,13 +346,7 @@ describe('durable Subagent runs', () => {
   it('creates a completed-only Codex spawn before later progress and terminal updates', async () => {
     // The translator reconstructs this parent tool boundary before emitting
     // the completed-only task update.
-    insertMessage(
-      'completed-only-tool-use',
-      'tool_use',
-      '{}',
-      'completed-only-spawn',
-      900,
-    );
+    insertMessage('completed-only-tool-use', 'tool_use', '{}', 'completed-only-spawn', 900);
     const completedOnly = await persistSubagentTaskUpdate(
       'session-1',
       observed(
@@ -389,13 +410,16 @@ describe('durable Subagent runs', () => {
   it('honors message rewind and clear boundaries without deleting audit rows', async () => {
     insertMessage('tool-use-2', 'tool_use', '{}', 'parent-tool-2', 900);
     insertMessage('tool-result-before-clear', 'tool_result', 'old result', 'parent-tool-2', 950);
-    const created = await persistSubagentTaskUpdate('session-1', observed({
-      provider: 'claude-code',
-      taskId: 'claude-child-1',
-      parentToolUseId: 'parent-tool-2',
-      status: 'running',
-      updatedAt: '1970-01-01T00:00:01.000Z',
-    }));
+    const created = await persistSubagentTaskUpdate(
+      'session-1',
+      observed({
+        provider: 'claude-code',
+        taskId: 'claude-child-1',
+        parentToolUseId: 'parent-tool-2',
+        status: 'running',
+        updatedAt: '1970-01-01T00:00:01.000Z',
+      }),
+    );
     expect((await listSubagentRuns('session-1'))?.runs).toHaveLength(1);
 
     rawDb.prepare('UPDATE messages SET rewind_at = 1100 WHERE id = ?').run('tool-use-2');
@@ -404,48 +428,44 @@ describe('durable Subagent runs', () => {
     rawDb.prepare('UPDATE sessions SET cleared_at = 1500 WHERE id = ?').run('session-1');
     expect((await listSubagentRuns('session-1'))?.runs).toEqual([]);
 
-    const afterClear = await persistSubagentTaskUpdate('session-1', observed({
-      provider: 'claude-code',
-      taskId: 'claude-child-after-clear',
-      status: 'running',
-      updatedAt: '1970-01-01T00:00:02.000Z',
-    }));
+    const afterClear = await persistSubagentTaskUpdate(
+      'session-1',
+      observed({
+        provider: 'claude-code',
+        taskId: 'claude-child-after-clear',
+        status: 'running',
+        updatedAt: '1970-01-01T00:00:02.000Z',
+      }),
+    );
     expect(afterClear).toMatchObject({ created: true, firstForSession: true });
 
-    const reusedParent = await persistSubagentTaskUpdate('session-1', observed({
-      provider: 'claude-code',
-      taskId: 'claude-child-reused-parent',
-      parentToolUseId: 'parent-tool-2',
-      status: 'completed',
-      updatedAt: '1970-01-01T00:00:02.100Z',
-    }));
+    const reusedParent = await persistSubagentTaskUpdate(
+      'session-1',
+      observed({
+        provider: 'claude-code',
+        taskId: 'claude-child-reused-parent',
+        parentToolUseId: 'parent-tool-2',
+        status: 'completed',
+        updatedAt: '1970-01-01T00:00:02.100Z',
+      }),
+    );
     // A pre-clear tool row with the same provider id must not make the new run
     // visible or expose the old returned result.
     expect((await listSubagentRuns('session-1'))?.runs.map((run) => run.id)).toEqual([
       afterClear!.runId,
     ]);
-    expect(
-      await getSubagentRunDetail('session-1', 'claude-code', reusedParent!.runId),
-    ).toBeNull();
+    expect(await getSubagentRunDetail('session-1', 'claude-code', reusedParent!.runId)).toBeNull();
 
     insertMessage('tool-use-after-clear', 'tool_use', '{}', 'parent-tool-2', 2200);
     expect((await listSubagentRuns('session-1'))?.runs.map((run) => run.id)).toContain(
       reusedParent!.runId,
     );
     expect(
-      (await getSubagentRunDetail('session-1', 'claude-code', reusedParent!.runId))
-        ?.returnedResult,
+      (await getSubagentRunDetail('session-1', 'claude-code', reusedParent!.runId))?.returnedResult,
     ).toBeUndefined();
-    insertMessage(
-      'tool-result-after-clear',
-      'tool_result',
-      'new result',
-      'parent-tool-2',
-      2300,
-    );
+    insertMessage('tool-result-after-clear', 'tool_result', 'new result', 'parent-tool-2', 2300);
     expect(
-      (await getSubagentRunDetail('session-1', 'claude-code', reusedParent!.runId))
-        ?.returnedResult,
+      (await getSubagentRunDetail('session-1', 'claude-code', reusedParent!.runId))?.returnedResult,
     ).toBe('new result');
 
     expect(
@@ -539,9 +559,7 @@ describe('durable Subagent runs', () => {
     expect(lateProgress).toMatchObject({ runId: spawned!.runId, created: false });
     expect(duplicateTerminal).toMatchObject({ runId: spawned!.runId, created: false });
     expect((await listSubagentRuns('session-1'))?.runs).toHaveLength(1);
-    expect(
-      await getSubagentRunDetail('session-1', 'claude-code', spawned!.runId),
-    ).toMatchObject({
+    expect(await getSubagentRunDetail('session-1', 'claude-code', spawned!.runId)).toMatchObject({
       status: 'completed',
       title: 'Inspect the lifecycle',
       summary: 'Lifecycle captured',
@@ -595,20 +613,26 @@ describe('durable Subagent runs', () => {
 
   it('excludes background Bash and Workflow aggregation from the Subagent workspace', async () => {
     expect(
-      await persistSubagentTaskUpdate('session-1', observed({
-        provider: 'claude-code',
-        taskId: 'bash-1',
-        taskType: 'local_bash',
-        status: 'running',
-      })),
+      await persistSubagentTaskUpdate(
+        'session-1',
+        observed({
+          provider: 'claude-code',
+          taskId: 'bash-1',
+          taskType: 'local_bash',
+          status: 'running',
+        }),
+      ),
     ).toBeNull();
     expect(
-      await persistSubagentTaskUpdate('session-1', observed({
-        provider: 'claude-code',
-        taskId: 'workflow-1',
-        taskType: 'local_workflow',
-        status: 'running',
-      })),
+      await persistSubagentTaskUpdate(
+        'session-1',
+        observed({
+          provider: 'claude-code',
+          taskId: 'workflow-1',
+          taskType: 'local_workflow',
+          status: 'running',
+        }),
+      ),
     ).toBeNull();
     expect((await listSubagentRuns('session-1'))?.runs).toEqual([]);
   });
@@ -668,12 +692,15 @@ describe('durable Subagent runs', () => {
 
   it('paginates newest-first without making older runs unreachable', async () => {
     for (let index = 0; index < 55; index += 1) {
-      await persistSubagentTaskUpdate('session-1', observed({
-        provider: 'pi',
-        taskId: `pi-child-${index}`,
-        status: 'completed',
-        updatedAt: new Date(1_000 + index).toISOString(),
-      }));
+      await persistSubagentTaskUpdate(
+        'session-1',
+        observed({
+          provider: 'pi',
+          taskId: `pi-child-${index}`,
+          status: 'completed',
+          updatedAt: new Date(1_000 + index).toISOString(),
+        }),
+      );
     }
 
     const first = await listSubagentRuns('session-1');
@@ -687,26 +714,170 @@ describe('durable Subagent runs', () => {
   });
 
   it('filters rewound or missing parents before applying the page limit', async () => {
-    const visible = await persistSubagentTaskUpdate('session-1', observed({
-      provider: 'pi',
-      taskId: 'visible-older-run',
-      status: 'completed',
-      updatedAt: '1970-01-01T00:00:01.000Z',
-    }));
-    for (let index = 0; index < 50; index += 1) {
-      await persistSubagentTaskUpdate('session-1', observed({
-        provider: 'claude-code',
-        taskId: `hidden-run-${index}`,
-        parentToolUseId: `missing-parent-${index}`,
+    const visible = await persistSubagentTaskUpdate(
+      'session-1',
+      observed({
+        provider: 'pi',
+        taskId: 'visible-older-run',
         status: 'completed',
-        updatedAt: new Date(2_000 + index).toISOString(),
-      }));
+        updatedAt: '1970-01-01T00:00:01.000Z',
+      }),
+    );
+    for (let index = 0; index < 50; index += 1) {
+      await persistSubagentTaskUpdate(
+        'session-1',
+        observed({
+          provider: 'claude-code',
+          taskId: `hidden-run-${index}`,
+          parentToolUseId: `missing-parent-${index}`,
+          status: 'completed',
+          updatedAt: new Date(2_000 + index).toISOString(),
+        }),
+      );
     }
 
     const first = await listSubagentRuns('session-1');
     expect(first?.runs.map((run) => run.id)).toEqual([visible!.runId]);
     expect(first?.nextCursor).toBeUndefined();
   });
+
+  it('does not advertise transcript or stop controls without captured content or support', async () => {
+    const created = await persistSubagentTaskUpdate(
+      'session-1',
+      observed({
+        provider: 'pi',
+        taskId: 'capability-run',
+        status: 'running',
+        updatedAt: '1970-01-01T00:00:01.000Z',
+      }),
+    );
+
+    expect((await getSubagentRunDetail('session-1', 'pi', created!.runId))?.capabilities).toEqual({
+      viewActivity: true,
+      viewReturnedResult: true,
+      viewFullTranscript: false,
+      resume: false,
+      steer: false,
+      stop: false,
+      parentContext: 'unknown',
+    });
+  });
+
+  it('only grants exact stop while a local Claude task is running', async () => {
+    const running = await persistSubagentTaskUpdate(
+      'session-1',
+      observed({
+        provider: 'claude-code',
+        taskId: 'claude-running',
+        status: 'running',
+        updatedAt: '1970-01-01T00:00:01.000Z',
+      }),
+    );
+    expect(
+      (await getSubagentRunDetail('session-1', 'claude-code', running!.runId))?.capabilities.stop,
+    ).toBe(true);
+
+    await persistSubagentTaskUpdate(
+      'session-1',
+      observed(
+        {
+          provider: 'claude-code',
+          taskId: 'claude-running',
+          status: 'completed',
+          updatedAt: '1970-01-01T00:00:02.000Z',
+        },
+        { kind: 'terminal' },
+      ),
+    );
+
+    expect(
+      (await getSubagentRunDetail('session-1', 'claude-code', running!.runId))?.capabilities.stop,
+    ).toBe(false);
+  });
+
+  it('prunes transcript files hidden by clear boundaries', async () => {
+    const run = await createTranscriptBackedRun('clear-run');
+    rawDb.prepare('UPDATE sessions SET cleared_at = ? WHERE id = ?').run(2_000, 'session-1');
+
+    await expect(pruneInvisibleSubagentTranscripts('session-1')).resolves.toBe(1);
+
+    expect(transcriptRow(run.runId)).toMatchObject({ transcript_file: null });
+    expect(JSON.parse(transcriptRow(run.runId).capabilities)).toMatchObject({
+      viewFullTranscript: false,
+    });
+    expect(transcriptStoreMocks.deleteSubagentTranscript).toHaveBeenCalledWith(run.file);
+  });
+
+  it('denies transcript reads immediately when a run loses parent visibility', async () => {
+    const parentToolUseId = 'visible-parent';
+    const run = await createTranscriptBackedRun('visibility-run', parentToolUseId);
+
+    await expect(getVisibleSubagentTranscriptFile('session-1', 'pi', run.runId)).resolves.toBe(
+      run.file,
+    );
+
+    rawDb
+      .prepare('UPDATE messages SET rewind_at = ? WHERE tool_use_id = ?')
+      .run(2_000, parentToolUseId);
+    await expect(
+      getVisibleSubagentTranscriptFile('session-1', 'pi', run.runId),
+    ).resolves.toBeNull();
+  });
+
+  it('prunes rewound and orphaned transcripts but preserves visible runs', async () => {
+    const visible = await createTranscriptBackedRun('visible-run');
+    const rewound = await createTranscriptBackedRun('rewound-run');
+    const orphaned = await createTranscriptBackedRun('orphaned-run', 'missing-parent');
+    rawDb.prepare('UPDATE subagent_runs SET rewind_at = ? WHERE id = ?').run(3_000, rewound.runId);
+
+    await expect(pruneInvisibleSubagentTranscripts('session-1')).resolves.toBe(2);
+
+    expect(transcriptRow(visible.runId).transcript_file).toBe(visible.file);
+    expect(transcriptRow(rewound.runId).transcript_file).toBeNull();
+    expect(transcriptRow(orphaned.runId).transcript_file).toBeNull();
+    expect(transcriptStoreMocks.deleteSubagentTranscript).toHaveBeenCalledTimes(2);
+  });
+
+  it('prunes all transcript files after the parent task is deleted', async () => {
+    const run = await createTranscriptBackedRun('deleted-session-run');
+    rawDb.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('session-1');
+
+    await expect(pruneInvisibleSubagentTranscripts('session-1')).resolves.toBe(1);
+
+    expect(transcriptRow(run.runId).transcript_file).toBeNull();
+    expect(transcriptStoreMocks.deleteSubagentTranscript).toHaveBeenCalledWith(run.file);
+  });
+
+  async function createTranscriptBackedRun(
+    taskId: string,
+    parentToolUseId?: string,
+  ): Promise<{ runId: string; file: string }> {
+    if (parentToolUseId && parentToolUseId !== 'missing-parent') {
+      insertMessage(`${parentToolUseId}-message`, 'tool_use', '{}', parentToolUseId, 900);
+    }
+    const created = await persistSubagentTaskUpdate(
+      'session-1',
+      observed({
+        provider: 'pi',
+        taskId,
+        ...(parentToolUseId ? { parentToolUseId } : {}),
+        status: 'completed',
+        updatedAt: '1970-01-01T00:00:01.000Z',
+      }),
+    );
+    if (!created) throw new Error('expected Subagent run');
+    const file = `subagent-transcripts/${taskId}.json`;
+    rawDb
+      .prepare('UPDATE subagent_runs SET transcript_file = ?, capabilities = ? WHERE id = ?')
+      .run(file, JSON.stringify({ viewFullTranscript: true }), created.runId);
+    return { runId: created.runId, file };
+  }
+
+  function transcriptRow(runId: string): { transcript_file: string | null; capabilities: string } {
+    return rawDb
+      .prepare('SELECT transcript_file, capabilities FROM subagent_runs WHERE id = ?')
+      .get(runId) as { transcript_file: string | null; capabilities: string };
+  }
 
   function insertMessage(
     id: string,

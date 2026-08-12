@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -64,6 +64,7 @@ describe('SubagentsBody', () => {
     supported: true,
     run: currentDetail,
   }));
+  const stopAgentTask = vi.fn(async () => ({ ok: true as const }));
 
   beforeEach(() => {
     dataOwnerTesting.reset();
@@ -71,9 +72,11 @@ describe('SubagentsBody', () => {
     currentDetail = detail('initial progress');
     list.mockClear();
     loadDetail.mockClear();
+    stopAgentTask.mockClear();
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
+        maker: { stopAgentTask },
         localDb: {
           subagentRuns: {
             list,
@@ -168,6 +171,40 @@ describe('SubagentsBody', () => {
     await waitFor(() => {
       expect(screen.queryByText('initial progress')).toBeNull();
       expect(list).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('shows exact stop only for a capable running run and passes its logical task id', async () => {
+    currentDetail = {
+      ...detail('still working'),
+      provider: 'claude-code',
+      logicalAgentId: 'claude-task-42',
+      capabilities: {
+        ...detail('still working').capabilities,
+        stop: true,
+      },
+    };
+
+    render(
+      <SubagentsBody
+        state={{}}
+        ctx={{
+          tabId: 'tab-1',
+          sessionId: 'session-1',
+          workdir: '/workspace',
+          remoteHostId: null,
+          deviceLinkDeviceId: null,
+          patchState: vi.fn(),
+          onVisibilityChange: vi.fn(),
+          setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    const stop = await screen.findByRole('button', { name: 'rightSidebar.subagents.stop' });
+    fireEvent.click(stop);
+    await waitFor(() => {
+      expect(stopAgentTask).toHaveBeenCalledWith('session-1', 'claude-task-42');
     });
   });
 });
