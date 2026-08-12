@@ -34,7 +34,7 @@ describe('Ghost tool-permission read IPC security contract', () => {
     expect(handler).toContain('manager.list().find(');
     expect(handler).toContain('undeclaredToolPermissionKeys(config, installed.manifest.tools)');
     expect(handler).toContain("throwIpcError('NOT_FOUND'");
-    expect(handler).toContain("throwIpcError(\n        'INVALID_PARAMS'");
+    expect(handler).toMatch(/throwIpcError\(\r?\n\s*'INVALID_PARAMS'/);
     expect(handler.indexOf('manager.list().find(')).toBeLessThan(
       handler.indexOf('writeGhostToolPermissions('),
     );
