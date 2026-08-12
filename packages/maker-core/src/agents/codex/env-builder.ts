@@ -11,7 +11,7 @@
  * 由调用方原样传给 new Codex({ env })。
  */
 
-import { existsSync } from 'node:fs';
+import { access } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { AgentCredentialMode, AuthAdapter } from '../../interfaces/auth-adapter.js';
@@ -39,26 +39,50 @@ function prependPath(env: Record<string, string>, prepends: string[]): void {
  * with the generated arguments. Prefer the first exact pwsh.exe already on the
  * user's PATH while preserving every other entry and its relative order.
  */
-function prioritizeWindowsPwshExecutable(env: Record<string, string>): void {
+function isUncPathEntry(directory: string): boolean {
+  return directory.startsWith('\\\\') || directory.startsWith('//');
+}
+
+const PWSH_PATH_PROBE_TIMEOUT_MS = 1_000;
+
+async function hasAccessiblePwshExecutable(directory: string): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      access(path.join(directory, 'pwsh.exe')).then(
+        () => true,
+        () => false,
+      ),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), PWSH_PATH_PROBE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function prioritizeWindowsPwshExecutable(env: Record<string, string>): Promise<void> {
   if (process.platform !== 'win32') return;
 
   const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path');
   if (!pathKey || !env[pathKey]) return;
 
   const entries = env[pathKey].split(path.delimiter);
-  const executableIndex = entries.findIndex((entry) => {
+  const executableChecks = entries.map(async (entry) => {
     const trimmed = entry.trim();
     const directory =
       trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')
         ? trimmed.slice(1, -1).trim()
         : trimmed;
-    if (directory.length === 0) return false;
+    if (directory.length === 0 || isUncPathEntry(directory)) return false;
 
     const normalized = path.win32.normalize(directory).replace(/[\\/]+$/, '').toLowerCase();
     if (normalized.endsWith('\\microsoft\\windowsapps')) return false;
 
-    return existsSync(path.join(directory, 'pwsh.exe'));
+    return hasAccessiblePwshExecutable(directory);
   });
+  const executableIndex = (await Promise.all(executableChecks)).findIndex(Boolean);
   if (executableIndex <= 0) return;
 
   const [executableDir] = entries.splice(executableIndex, 1);
@@ -94,8 +118,8 @@ export async function buildCodexEnv(
     ? { credentialMode: options.credentialMode }
     : undefined;
   Object.assign(env, await auth.getAuthEnv(authOptions));
+  await prioritizeWindowsPwshExecutable(env);
   prependPath(env, runtimeConfig.pathPrepends ?? []);
-  prioritizeWindowsPwshExecutable(env);
 
   // Windows 下 Python piped stdout 默认走 locale encoding(cp936/GBK), 不看 chcp 65001。
   // 强制 UTF-8 避免 Bash 工具执行 python 命令时中文乱码。跨平台设置无副作用。

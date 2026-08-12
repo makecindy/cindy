@@ -141,6 +141,72 @@ describe('buildCodexEnv', () => {
     },
   );
 
+  it.runIf(process.platform === 'win32')(
+    'keeps host-managed PATH prepends ahead of the prioritized PowerShell directory',
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), 'cindy-codex-host-path-'));
+      const hostToolsDir = path.join(root, 'host-tools');
+      const shimDir = path.join(root, 'shim');
+      const executableDir = path.join(root, 'PowerShell', '7');
+
+      try {
+        await mkdir(hostToolsDir, { recursive: true });
+        await mkdir(shimDir, { recursive: true });
+        await mkdir(executableDir, { recursive: true });
+        await writeFile(path.join(hostToolsDir, 'rg.exe'), 'host-managed tool');
+        await writeFile(path.join(shimDir, 'pwsh.cmd'), '@echo off\r\n');
+        await writeFile(path.join(executableDir, 'pwsh.exe'), 'test executable placeholder');
+
+        for (const key of Object.keys(process.env)) {
+          if (key.toLowerCase() === 'path') delete process.env[key];
+        }
+        process.env.Path = [shimDir, executableDir].join(path.delimiter);
+
+        const env = await buildCodexEnv(createAuthAdapter(), {
+          pathPrepends: [hostToolsDir],
+        });
+        const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path');
+
+        expect(pathKey).toBeDefined();
+        expect(env[pathKey!]?.split(path.delimiter)).toEqual([
+          hostToolsDir,
+          executableDir,
+          shimDir,
+        ]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'skips arbitrary UNC PATH entries while locating pwsh.exe',
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), 'cindy-codex-unc-pwsh-'));
+      const executableDir = path.join(root, 'PowerShell', '7');
+
+      try {
+        await mkdir(executableDir, { recursive: true });
+        await writeFile(path.join(executableDir, 'pwsh.exe'), 'test executable placeholder');
+        for (const key of Object.keys(process.env)) {
+          if (key.toLowerCase() === 'path') delete process.env[key];
+        }
+        process.env.Path = [String.raw`\\offline.example\share`, executableDir].join(
+          path.delimiter,
+        );
+
+        const env = await buildCodexEnv(createAuthAdapter(), {});
+        const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path');
+        expect(env[pathKey!]?.split(path.delimiter)).toEqual([
+          executableDir,
+          String.raw`\\offline.example\share`,
+        ]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('defaults command output to plain text across common CLI color controls', async () => {
     delete process.env.NO_COLOR;
     delete process.env.CLICOLOR;
