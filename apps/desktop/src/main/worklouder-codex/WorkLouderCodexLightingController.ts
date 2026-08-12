@@ -325,6 +325,12 @@ export class WorkLouderCodexLightingController {
             commandId: clockwise ? 'conversation.scrollUp' : 'conversation.scrollDown',
           });
           break;
+        case 'session-switch':
+          this.dispatchRendererAction({
+            type: 'command',
+            commandId: clockwise ? 'session.selectNext' : 'session.selectPrevious',
+          });
+          break;
         case 'composer-navigation':
           this.dispatchRendererAction({
             type: 'keyboard',
@@ -365,6 +371,7 @@ export class WorkLouderCodexLightingController {
       case 'conversation-scroll':
         this.dispatchRendererAction({ type: 'command', commandId: 'conversation.scrollBottom' });
         break;
+      case 'session-switch':
       case 'composer-navigation':
       case 'reasoning':
         this.dispatchRendererAction({ type: 'keyboard', key: 'Enter' });

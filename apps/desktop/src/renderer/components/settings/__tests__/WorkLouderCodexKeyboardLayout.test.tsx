@@ -222,6 +222,30 @@ describe('WorkLouderCodexKeycapPicker', () => {
   });
 });
 
+describe('default stick and encoder bindings', () => {
+  it('maps the stick to the two axes of the screen and the encoder to the task list', () => {
+    // These defaults were wrong once (plan mode, history back/forward), which
+    // no test caught. Pin them: the stick scrolls the conversation up/down and
+    // opens the panel on whichever side it is pushed toward.
+    const { layout } = createWorkLouderCodexDefaultSettings();
+
+    expect(layout.analogStick.up).toEqual({
+      type: 'command',
+      commandId: 'conversation.scrollUp',
+    });
+    expect(layout.analogStick.down).toEqual({
+      type: 'command',
+      commandId: 'conversation.scrollDown',
+    });
+    expect(layout.analogStick.left).toEqual({ type: 'command', commandId: 'toggleSidebar' });
+    expect(layout.analogStick.right).toEqual({
+      type: 'command',
+      commandId: 'toggleRightSidebar',
+    });
+    expect(layout.encoderMode).toBe('session-switch');
+  });
+});
+
 describe('WorkLouderCodexKeycapGlyph', () => {
   it('draws Codex artwork for every keycap the hardware can wear', () => {
     for (const keycapId of WORKLOUDER_CODEX_KEYCAP_IDS) {

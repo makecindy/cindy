@@ -277,6 +277,38 @@ describe('WorkLouderCodexLightingController', () => {
     }
   });
 
+  it('turns the encoder through the task list in its default mode', () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const dispatch = vi.fn();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
+    controller.start();
+
+    // Clockwise is the same direction `custom` mode maps to `right`.
+    hidRef.current?.({ key: 'ENC_CW', act: 2 });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      type: 'command',
+      commandId: 'session.selectNext',
+    });
+
+    hidRef.current?.({ key: 'ENC_CC', act: 2 });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      type: 'command',
+      commandId: 'session.selectPrevious',
+    });
+  });
+
   it('delegates shutdown so the host can turn the device off', async () => {
     const sink = {
       update: vi.fn(),

@@ -164,6 +164,7 @@ import {
   getVisibleSidebarSessionIds,
   pickSessionIdAfterRemoval,
 } from './lib/sessionRemovalNavigation';
+import { onRequestSessionSwitch, pickAdjacentSessionId } from './lib/sessionSwitchCommands';
 import type {
   AutomationScheduleAction,
   AutomationScheduleSessionInfo,
@@ -2108,6 +2109,25 @@ function ExpandedView({
     },
     [handleSessionClick],
   );
+  /* Codex Micro 旋钮:左转上一个任务,右转下一个。序号口径与 mod+1..9 完全相同
+   * —— 都取 getVisibleSidebarSessionIds 的真实渲染顺序,所以分组、置顶区、折叠
+   * 与搜索过滤天然一致,所见即所得。到头停住不回绕:旋钮是连续控件,从末尾绕回
+   * 开头会把用户甩到看不见的地方,还感觉不到列表已经到边。 */
+  useEffect(() => {
+    if (!sessionSwitchEnabled) return;
+    return onRequestSessionSwitch((direction) => {
+      const visibleIds = getVisibleSidebarSessionIds(sidebarScrollRef.current);
+      const targetId = pickAdjacentSessionId(
+        visibleIds,
+        activeSessionIdRef.current ?? null,
+        direction,
+      );
+      if (!targetId) return;
+      // 同样复用行点击唯一入口,继承清通知 / 同对话去重 / Orca 角色路由。
+      void handleSessionClick(targetId);
+    });
+  }, [handleSessionClick, sessionSwitchEnabled]);
+
   useAppShortcut('switch-session-1', () => handleSwitchSessionSlot(0), {
     enabled: sessionSwitchEnabled,
   });

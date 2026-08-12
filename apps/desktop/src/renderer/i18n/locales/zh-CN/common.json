@@ -3237,6 +3237,18 @@
       "editAria": "修改 {{name}} 的快捷键",
       "workLouderCodex": {
         "commands": {
+          "session.selectPrevious": {
+            "name": "上一个任务",
+            "description": "打开侧边栏里当前任务上面的那个"
+          },
+          "session.selectNext": {
+            "name": "下一个任务",
+            "description": "打开侧边栏里当前任务下面的那个"
+          },
+          "toggleRightSidebar": {
+            "name": "切换右侧栏",
+            "description": "显示或隐藏右侧栏"
+          },
           "composer.toggleFastMode": {
             "name": "切换快速模式",
             "description": "在当前输入框中开启或关闭快速模式"
@@ -3467,6 +3479,7 @@
             "label": "旋钮模式",
             "description": "选择旋转和按下旋钮时控制的功能。",
             "options": {
+              "session-switch": "切换任务",
               "composer-navigation": "导航输入框",
               "reasoning": "推理强度",
               "conversation-scroll": "滚动对话",

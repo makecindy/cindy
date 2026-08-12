@@ -36,6 +36,7 @@ export const WORKLOUDER_CODEX_COMMAND_SLOTS = [
 export const WORKLOUDER_CODEX_ANALOG_DIRECTIONS = ['up', 'right', 'down', 'left'] as const;
 export const WORKLOUDER_CODEX_ENCODER_ACTIONS = ['left', 'right', 'click', 'longPress'] as const;
 export const WORKLOUDER_CODEX_ENCODER_MODES = [
+  'session-switch',
   'composer-navigation',
   'reasoning',
   'conversation-scroll',
@@ -67,11 +68,14 @@ export const WORKLOUDER_CODEX_COMMAND_IDS = [
   'composer.togglePlanMode',
   'navigateForward',
   'toggleSidebar',
+  'toggleRightSidebar',
   'navigateBack',
   'composer.focus',
   'conversation.scrollUp',
   'conversation.scrollDown',
   'conversation.scrollBottom',
+  'session.selectPrevious',
+  'session.selectNext',
 ] as const;
 
 export const WORKLOUDER_CODEX_KEYCAP_IDS = [
@@ -250,14 +254,16 @@ export const WORKLOUDER_CODEX_DEFAULT_LAYOUT: WorkLouderCodexLayout = {
     ACT10_ACT11: { keycapId: 'MIC', action: null },
     ACT12: { keycapId: 'CODEX', action: null },
   },
+  // The stick maps to the two axes of the screen: up/down moves through the
+  // conversation, left/right opens and closes the panel on that side.
   analogStick: {
-    up: { type: 'command', commandId: 'composer.togglePlanMode' },
-    right: { type: 'command', commandId: 'navigateForward' },
-    down: { type: 'command', commandId: 'toggleSidebar' },
-    left: { type: 'command', commandId: 'navigateBack' },
+    up: { type: 'command', commandId: 'conversation.scrollUp' },
+    right: { type: 'command', commandId: 'toggleRightSidebar' },
+    down: { type: 'command', commandId: 'conversation.scrollDown' },
+    left: { type: 'command', commandId: 'toggleSidebar' },
   },
   encoder: { left: null, right: null, click: null, longPress: null },
-  encoderMode: 'composer-navigation',
+  encoderMode: 'session-switch',
   separateMicrophoneKeys: false,
 };
 

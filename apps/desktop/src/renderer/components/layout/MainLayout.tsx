@@ -91,6 +91,7 @@ import {
   requestRightSidebarVisibility,
   shouldAnimateSidebarVisibilityRequest,
 } from '@/features/right-sidebar/lib/sidebarCommands';
+import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchCommands';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
@@ -1165,13 +1166,25 @@ export function MainLayout() {
         case 'toggleSidebar':
           handleToggleSidebar();
           return true;
+        case 'toggleRightSidebar':
+          // Goes through the same handler as the UI button so the detached
+          // (separate window) preference keeps its open/close semantics.
+          handleToggleRightSidebar();
+          return true;
+        case 'session.selectPrevious':
+          requestSessionSwitch('previous');
+          return true;
+        case 'session.selectNext':
+          requestSessionSwitch('next');
+          return true;
         case 'toggleTerminal':
           return openTerminalForCurrentTask();
         case 'openBrowserTab': {
           const sessionId = rightSidebarSessionIdRef.current;
           if (!sessionId) return false;
-          void openUrlInSidebarBrowser(sessionId, 'about:blank')
-            .catch((error) => applicationMenuLog.warn('Codex Micro browser action failed', error));
+          void openUrlInSidebarBrowser(sessionId, 'about:blank').catch((error) =>
+            applicationMenuLog.warn('Codex Micro browser action failed', error),
+          );
           return true;
         }
         case 'toggleReviewTab': {
@@ -1190,7 +1203,7 @@ export function MainLayout() {
           return false;
       }
     });
-  }, [handleToggleSidebar, navigate, openTerminalForCurrentTask]);
+  }, [handleToggleRightSidebar, handleToggleSidebar, navigate, openTerminalForCurrentTask]);
 
   // ⌘W / Ctrl+W ('close-tab-or-window', 不可改绑): 用户"在右侧栏内"且有激活
   // tab → 只关那个 tab (与点 tab 上的 × 同路径, terminal 走 onBeforeClose

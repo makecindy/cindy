@@ -3237,6 +3237,18 @@
       "editAria": "{{name}} 단축키 변경",
       "workLouderCodex": {
         "commands": {
+          "session.selectPrevious": {
+            "name": "이전 작업",
+            "description": "사이드바에서 현재 작업 바로 위의 작업을 엽니다"
+          },
+          "session.selectNext": {
+            "name": "다음 작업",
+            "description": "사이드바에서 현재 작업 바로 아래의 작업을 엽니다"
+          },
+          "toggleRightSidebar": {
+            "name": "오른쪽 사이드바 전환",
+            "description": "오른쪽 사이드바를 표시하거나 숨깁니다"
+          },
           "composer.toggleFastMode": {
             "name": "빠른 모드 전환",
             "description": "현재 입력창에서 빠른 모드를 켜거나 끕니다"
@@ -3467,6 +3479,7 @@
             "label": "인코더 모드",
             "description": "인코더를 돌리거나 눌렀을 때 제어할 기능을 선택합니다.",
             "options": {
+              "session-switch": "작업 전환",
               "composer-navigation": "입력창 이동",
               "reasoning": "추론 강도",
               "conversation-scroll": "대화 스크롤",

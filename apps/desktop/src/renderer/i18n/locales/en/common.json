@@ -3238,6 +3238,18 @@
       "editAria": "Change shortcut for {{name}}",
       "workLouderCodex": {
         "commands": {
+          "session.selectPrevious": {
+            "name": "Previous task",
+            "description": "Open the task above the current one in the sidebar"
+          },
+          "session.selectNext": {
+            "name": "Next task",
+            "description": "Open the task below the current one in the sidebar"
+          },
+          "toggleRightSidebar": {
+            "name": "Toggle right sidebar",
+            "description": "Show or hide the right sidebar"
+          },
           "composer.toggleFastMode": {
             "name": "Toggle Fast mode",
             "description": "Turn Fast mode on or off in the current composer"
@@ -3468,6 +3480,7 @@
             "label": "Encoder mode",
             "description": "Choose what turning and pressing the encoder controls.",
             "options": {
+              "session-switch": "Switch tasks",
               "composer-navigation": "Navigate the composer",
               "reasoning": "Reasoning effort",
               "conversation-scroll": "Scroll the conversation",

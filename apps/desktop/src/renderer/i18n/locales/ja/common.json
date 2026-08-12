@@ -3237,6 +3237,18 @@
       "editAria": "{{name}} のショートカットを変更",
       "workLouderCodex": {
         "commands": {
+          "session.selectPrevious": {
+            "name": "前のタスク",
+            "description": "サイドバーで現在のタスクの上にあるタスクを開きます"
+          },
+          "session.selectNext": {
+            "name": "次のタスク",
+            "description": "サイドバーで現在のタスクの下にあるタスクを開きます"
+          },
+          "toggleRightSidebar": {
+            "name": "右サイドバーの切り替え",
+            "description": "右サイドバーを表示/非表示にします"
+          },
           "composer.toggleFastMode": {
             "name": "高速モードの切り替え",
             "description": "現在の入力欄で高速モードをオン/オフにします"
@@ -3467,6 +3479,7 @@
             "label": "エンコーダーモード",
             "description": "エンコーダーの回転と押下で操作する機能を選択します。",
             "options": {
+              "session-switch": "タスクを切り替え",
               "composer-navigation": "コンポーザーを移動",
               "reasoning": "推論強度",
               "conversation-scroll": "会話をスクロール",
