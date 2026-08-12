@@ -362,18 +362,23 @@ async function readJournalRecord(
   operationId: string,
   ownerStorageKey: string,
 ): Promise<RefCompensationRecord | null> {
-  const before = await lstat(filePath);
-  if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_JOURNAL_BYTES) return null;
+  const before = await lstat(filePath, { bigint: true });
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.size > BigInt(MAX_JOURNAL_BYTES)
+  ) {
+    return null;
+  }
   const flags = constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW);
   const handle = await open(filePath, flags);
   let raw: string;
-  let opened: Awaited<ReturnType<typeof handle.stat>>;
   try {
-    opened = await handle.stat();
+    const opened = await handle.stat({ bigint: true });
     if (
       !opened.isFile() ||
       !samePathAndHandleFileIdentity(before, opened) ||
-      opened.size > MAX_JOURNAL_BYTES
+      opened.size > BigInt(MAX_JOURNAL_BYTES)
     ) {
       return null;
     }

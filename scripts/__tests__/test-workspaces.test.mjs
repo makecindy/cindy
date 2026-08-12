@@ -235,7 +235,8 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 	]);
 	assert.equal(desktopUnitWorkerCount(1), 1);
 	assert.equal(desktopUnitWorkerCount(4), 4);
-	assert.equal(desktopUnitWorkerCount(32), 8);
+	assert.equal(desktopUnitWorkerCount(32, "win32"), 4);
+	assert.equal(desktopUnitWorkerCount(32, "darwin"), 8);
 	assert.equal(desktopUnitWorkerCount(Number.NaN), 1);
 	assert.equal(mobile.tiers.unit.execution, "exclusive");
 	assert.deepEqual(mobile.tiers.unit.command.args, [

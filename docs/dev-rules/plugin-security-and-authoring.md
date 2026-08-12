@@ -104,7 +104,8 @@ manifest 的 `tool` 槽只回答"这个插件**能**暴露哪些工具"。装入
    交出去"这一个用途，直接拒；显式点名了一个已声明且被禁的工具同样拒。判据本身是
    `ghostToolBlockVerdict`（`ghostToolPermissionsStore.ts`），可注入 resolver 直测。
    `grantAttachmentUrls` 中间夹着用户确认卡，期间用户可能刚把工具改成 `blocked`，
-   所以过户后还要**再判一次**——这条路没有派发器兜底。
+   所以确认返回后、写任何 blob / ledger / ref 之前必须**再判一次**；写完才拒绝
+   会留下已生效的授权副作用，不算拦住。这条路没有派发器兜底。
 
 这也是 `cindy` 这个 server 至今**不进** `TRUSTED_MCP_SERVERS` 的原因没有变：
 `ghost_call` 转发进第三方插件沙箱，server 级整体静默永远不可接受；能免审批的只有

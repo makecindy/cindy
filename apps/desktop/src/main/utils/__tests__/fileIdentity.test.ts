@@ -27,6 +27,13 @@ describe('samePathAndHandleFileIdentity', () => {
     ).toBe(false);
   });
 
+  it('Windows dev 缺失分支只接受不会舍入 64-bit FileId 的 bigint stat', () => {
+    expect(
+      samePathAndHandleFileIdentity({ dev: 0, ino: 20 }, { dev: 10, ino: 20 }, 'win32'),
+    ).toBe(false);
+    expect(sameFileIdentity({ dev: 0, ino: 20 }, { dev: 0, ino: 20 }, 'win32')).toBe(false);
+  });
+
   it('两边 dev 都缺失或任一 inode 缺失时拒绝', () => {
     expect(
       samePathAndHandleFileIdentity({ dev: 0n, ino: 20n }, { dev: 0n, ino: 20n }, 'win32'),

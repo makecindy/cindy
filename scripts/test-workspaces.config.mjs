@@ -81,11 +81,16 @@ const desktopGitIntegrationInclude = [
 
 export function desktopUnitWorkerCount(
   availableParallelism = os.availableParallelism(),
+  platform = process.platform,
 ) {
   const available = Number.isFinite(availableParallelism)
     ? Math.floor(availableParallelism)
     : 1;
-  return Math.max(1, Math.min(8, available));
+  // Windows keeps desktop on fork workers because threads can crash there.
+  // Four forks avoid CPU starvation and temp-file rename contention observed
+  // with eight concurrent Windows workers, without reducing test coverage.
+  const maxWorkers = platform === 'win32' ? 4 : 8;
+  return Math.max(1, Math.min(maxWorkers, available));
 }
 
 const noCollectableWorkspace = (name, cwd, reason = noCollectableTestsReason) => ({
@@ -121,7 +126,8 @@ export default {
           execution: 'exclusive',
           // Desktop unit tests spawn many Git/filesystem subprocesses. Benchmarking
           // found eight workers to be the best complexity/resource tradeoff.
-          // Lower-CPU hosts stay capped by their available parallelism.
+          // Windows stays at four fork workers to avoid CPU and temporary-file
+          // contention; lower-CPU hosts stay capped by available parallelism.
           // It runs exclusively so these workers never overlap outer workspaces.
           // The pool follows the webstorage flag, because the flag cannot
           // coexist with worker threads — see scripts/shared/node-webstorage.mjs

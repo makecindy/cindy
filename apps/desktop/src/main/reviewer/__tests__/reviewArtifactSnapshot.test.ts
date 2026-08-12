@@ -51,7 +51,10 @@ async function grantFor(paths: string[]): Promise<ReviewExplicitArtifactGrant> {
       await Promise.all(
         paths.map(
           async (artifactPath) =>
-            [artifactPath, reviewArtifactPathIdentity(await fs.lstat(artifactPath))] as const,
+            [
+              artifactPath,
+              reviewArtifactPathIdentity(await fs.lstat(artifactPath, { bigint: true })),
+            ] as const,
         ),
       ),
     ),
@@ -68,8 +71,8 @@ describe('materializeReviewArtifactSnapshots', () => {
     const dir = await tempDir();
     const file = path.join(dir, 'draft.md');
     await fs.writeFile(file, 'draft');
-    const before = await fs.stat(file);
-    const after = { ...before, mode: before.mode ^ 0o100 } as typeof before;
+    const before = await fs.stat(file, { bigint: true });
+    const after = { ...before, mode: before.mode ^ 0o100n } as typeof before;
 
     expect(reviewArtifactSnapshotStatMatches(before, before)).toBe(true);
     expect(reviewArtifactSnapshotStatMatches(before, after)).toBe(false);

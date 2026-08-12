@@ -121,6 +121,12 @@ export interface CindyGhostsHostDeps {
 }
 
 type GhostGrantApprovalSource = 'user' | 'full-access';
+type GhostGrantPolicyBlock = {
+  ok: false;
+  errorCode: 'PERMISSION_DENIED';
+  message: string;
+};
+type GhostGrantPolicyRecheck = () => GhostGrantPolicyBlock | null;
 
 /** 确认卡内嵌图片预览的文件体积上限(只是预览阈值,不是过户限制——超阈值
  *  照样可过户,卡片上退化为文件名 + 路径 + 大小)。 */
@@ -220,9 +226,10 @@ async function requestGrantConfirm(params: {
   lane: GhostGrantLane;
   items: GhostGrantFileItem[];
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+  recheckPolicy?: GhostGrantPolicyRecheck;
 }): Promise<
   | { ok: true; approvalSource: GhostGrantApprovalSource; allowDirs?: boolean }
-  | { ok: false; message: string }
+  | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' }
 > {
   if (params.sessionId && params.sessionInstanceId && params.getLiveSessionGrantState) {
     try {
@@ -230,6 +237,8 @@ async function requestGrantConfirm(params: {
       // 远程会话的 workingDir 是另一台机器上的路径。即使档位为 Full Access,
       // 也不能据此静默读取本机同名/任意路径;保留原确认边界。
       if (live?.permissionMode === 'bypassPermissions' && !live.remoteHostId) {
+        const policyBlock = params.recheckPolicy?.();
+        if (policyBlock) return policyBlock;
         log.info('ghost grant: Full Access auto-approved outside-workdir handoff', {
           ghostId: params.ghostId,
           lane: params.lane,
@@ -270,6 +279,10 @@ async function requestGrantConfirm(params: {
     items: params.items,
   });
   if (decision.confirmed) {
+    // 确认卡等待期间用户可能把工具切换为 blocked。在返回给
+    // 调用方写 blob / ledger / ref 或记目录授权之前现读重判。
+    const policyBlock = params.recheckPolicy?.();
+    if (policyBlock) return policyBlock;
     return { ok: true, approvalSource: 'user', allowDirs: decision.allowDirs };
   }
   return {
@@ -294,10 +307,12 @@ async function prepareLocalPathAttachments(params: {
   sessionId: string | null;
   sessionInstanceId: string | null;
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+  recheckPolicy?: GhostGrantPolicyRecheck;
   /** 张数上限(普通调用 MAX_GRANT_ATTACHMENTS;grant_only 批量预授权放宽)。 */
   maxCount: number;
 }): Promise<
-  { ok: true; resolved: Map<string, ResolvedGrantSource> } | { ok: false; message: string }
+  | { ok: true; resolved: Map<string, ResolvedGrantSource> }
+  | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' }
 > {
   const resolved = new Map<string, ResolvedGrantSource>();
   // 超张数上限时不弹确认,直接交给 grant 流程报标准错(别让用户白点一次)。
@@ -423,6 +438,7 @@ async function prepareLocalPathAttachments(params: {
         lane: 'attachments',
         items,
         getLiveSessionGrantState: params.getLiveSessionGrantState,
+        recheckPolicy: params.recheckPolicy,
       });
       if (!confirm.ok) return confirm;
       for (const o of needConfirm) {
@@ -476,10 +492,11 @@ async function confirmDepositOutsideWorkdir(params: {
   dirAbs: string;
   workdirAbs: string | null;
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+  recheckPolicy?: GhostGrantPolicyRecheck;
 }): Promise<
   | { ok: true; userGranted: false }
   | { ok: true; userGranted: true; approvedRealPath: string }
-  | { ok: false; message: string }
+  | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' }
 > {
   if (!path.isAbsolute(params.dirAbs)) return { ok: true, userGranted: false };
   let real: string;
@@ -530,6 +547,7 @@ async function confirmDepositOutsideWorkdir(params: {
     lane: params.lane,
     items: [item],
     getLiveSessionGrantState: params.getLiveSessionGrantState,
+    recheckPolicy: params.recheckPolicy,
   });
   if (!confirm.ok) return confirm;
   // Full Access 是每次在实时档位上自动裁决,不伪造「用户确认过」的目录
@@ -568,8 +586,10 @@ async function prepareManagedToolGrantSources(params: {
   sessionId: string | null;
   sessionInstanceId: string | null;
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+  recheckPolicy?: GhostGrantPolicyRecheck;
 }): Promise<
-  { ok: true; resolved: Map<string, ResolvedGrantSource> } | { ok: false; message: string }
+  | { ok: true; resolved: Map<string, ResolvedGrantSource> }
+  | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' }
 > {
   // Preserve attachmentGrant's standard count error and, importantly, do not
   // read or confirm an over-limit batch before that error is produced.
@@ -685,6 +705,7 @@ async function prepareManagedToolGrantSources(params: {
     lane: 'attachments',
     items,
     getLiveSessionGrantState: params.getLiveSessionGrantState,
+    recheckPolicy: params.recheckPolicy,
   });
   if (!confirm.ok) return confirm;
 
@@ -715,8 +736,12 @@ async function grantAttachmentUrls(params: {
   sessionId: string | null;
   sessionInstanceId: string | null;
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
+  recheckPolicy?: GhostGrantPolicyRecheck;
   maxCount: number;
-}): Promise<{ ok: true; hashes: string[] } | { ok: false; message: string }> {
+}): Promise<
+  | { ok: true; hashes: string[] }
+  | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' }
+> {
   const { ghostId } = params;
   const localGrant = await prepareLocalPathAttachments({
     urls: params.urls,
@@ -725,6 +750,7 @@ async function grantAttachmentUrls(params: {
     sessionId: params.sessionId,
     sessionInstanceId: params.sessionInstanceId,
     getLiveSessionGrantState: params.getLiveSessionGrantState,
+    recheckPolicy: params.recheckPolicy,
     maxCount: params.maxCount,
   });
   if (!localGrant.ok) return localGrant;
@@ -736,8 +762,13 @@ async function grantAttachmentUrls(params: {
     sessionId: params.sessionId,
     sessionInstanceId: params.sessionInstanceId,
     getLiveSessionGrantState: params.getLiveSessionGrantState,
+    recheckPolicy: params.recheckPolicy,
   });
   if (!managedToolGrant.ok) return managedToolGrant;
+  // 已有授权记忆可能让上面两个 prepare 都不弹卡，但其间仍有异步
+  // 读盘/查账。落任何持久副作用前再做一次无 await 的最终重判。
+  const policyBlock = params.recheckPolicy?.();
+  if (policyBlock) return policyBlock;
   return grantAttachmentsToGhost(
     {
       // 宽容解析:模型可能只有本地路径、缩图副本路径、或把 xdt-image
@@ -1085,10 +1116,16 @@ export function getCindyGhostsMcpDeps(
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+          recheckPolicy: () =>
+            ghostToolBlockVerdict(ghostId, tool, target.manifest.tools, true),
           maxCount: MAX_GRANT_ONLY_ATTACHMENTS,
         });
         if (!grant.ok) {
-          return { ok: false, errorCode: 'ATTACHMENT_INVALID', message: grant.message };
+          return {
+            ok: false,
+            errorCode: grant.errorCode ?? 'ATTACHMENT_INVALID',
+            message: grant.message,
+          };
         }
         // Post-grant revalidation: the grant process includes an async user
         // confirmation step; re-check everything before returning success.
@@ -1098,15 +1135,6 @@ export function getCindyGhostsMcpDeps(
           ghostVisibilityDeps,
         );
         if (!postGrantVisibility.ok) return postGrantVisibility;
-        // grantAttachmentUrls 中间夹着用户确认卡,期间用户可能刚把工具改成「已阻止」。
-        // 现读现判:这条路走不到派发器,重判只能在这里做。
-        const postGrantBlock = ghostToolBlockVerdict(
-          ghostId,
-          tool,
-          postGrantVisibility.ghost.manifest.tools,
-          true,
-        );
-        if (postGrantBlock) return postGrantBlock;
         let postGrantAssessment: GhostSetupAssessment;
         try {
           postGrantAssessment = getGhostSetupAssessment(ghostId);
@@ -1146,10 +1174,16 @@ export function getCindyGhostsMcpDeps(
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+          recheckPolicy: () =>
+            ghostToolBlockVerdict(ghostId, tool, target.manifest.tools, false),
           maxCount: MAX_GRANT_ATTACHMENTS,
         });
         if (!grant.ok) {
-          return { ok: false, errorCode: 'ATTACHMENT_INVALID', message: grant.message };
+          return {
+            ok: false,
+            errorCode: grant.errorCode ?? 'ATTACHMENT_INVALID',
+            message: grant.message,
+          };
         }
         mergedArgs = { ...args, attachments: grant.hashes };
       }
@@ -1166,9 +1200,15 @@ export function getCindyGhostsMcpDeps(
           dirAbs: dir,
           workdirAbs: sessionWorkdir,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+          recheckPolicy: () =>
+            ghostToolBlockVerdict(ghostId, tool, target.manifest.tools, false),
         });
         if (!dirConfirm.ok) {
-          return { ok: false, errorCode: 'DIR_INVALID', message: dirConfirm.message };
+          return {
+            ok: false,
+            errorCode: dirConfirm.errorCode ?? 'DIR_INVALID',
+            message: dirConfirm.message,
+          };
         }
         const deposited = getDirDepositVault().deposit({
           ghostId,
@@ -1194,9 +1234,15 @@ export function getCindyGhostsMcpDeps(
           dirAbs: saveDir,
           workdirAbs: sessionWorkdir,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
+          recheckPolicy: () =>
+            ghostToolBlockVerdict(ghostId, tool, target.manifest.tools, false),
         });
         if (!saveConfirm.ok) {
-          return { ok: false, errorCode: 'DIR_INVALID', message: saveConfirm.message };
+          return {
+            ok: false,
+            errorCode: saveConfirm.errorCode ?? 'DIR_INVALID',
+            message: saveConfirm.message,
+          };
         }
         const saveDeposited = getSaveDepositVault().deposit({
           ghostId,

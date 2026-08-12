@@ -651,16 +651,21 @@ export function ToolsSection({
   // (副作用不能塞进 setState updater:StrictMode 下 updater 会跑两遍,IPC 写会重发。)
   const configRef = useRef(config);
   configRef.current = config;
+  // IPC invoke 的 Promise 可能乱序落定。只有该 Ghost 的最新一次保存
+  // 失败才能回滚；旧请求的 catch 若回滚，会覆盖已经成功落盘的较新状态。
+  const persistSequenceRef = useRef(0);
 
   /**
    * 落盘 + 失败回滚。这是安全设置:写盘失败却把 UI 留在新档位,等于告诉用户
    * "已阻止"而实际没拦,所以不能 fire-and-forget。
    */
   const persist = (next: GhostToolPermissionConfig) => {
+    const sequence = ++persistSequenceRef.current;
     const rollbackTo = configRef.current;
     configRef.current = next;
     setLoaded({ ghostId, config: next });
     void window.electronAPI.ghosts.setToolPermissions(ghostId, next).catch(() => {
+      if (persistSequenceRef.current !== sequence) return;
       configRef.current = rollbackTo;
       setLoaded((current) =>
         current.ghostId === ghostId ? { ghostId, config: rollbackTo } : current,

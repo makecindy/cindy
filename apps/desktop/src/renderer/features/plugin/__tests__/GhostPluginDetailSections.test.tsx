@@ -921,6 +921,38 @@ describe('Ghost plugin detail sections', () => {
     );
   });
 
+  it('does not let an older failed save roll back a newer successful policy', async () => {
+    let rejectFirst!: (reason?: unknown) => void;
+    const firstSave = new Promise<unknown>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const setToolPermissions = vi
+      .fn()
+      .mockImplementationOnce(() => firstSave)
+      .mockResolvedValueOnce({ config: {} });
+    stubToolPermissionApi({ setToolPermissions });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    const secondGroup = screen.getAllByRole('group', { name: /tool_1/ })[0];
+    fireEvent.click(within(firstGroup).getByRole('button', { name: 'Blocked' }));
+    fireEvent.click(within(secondGroup).getByRole('button', { name: 'Always allow' }));
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(2));
+
+    rejectFirst(new Error('older write failed late'));
+    await Promise.resolve();
+
+    expect(
+      within(firstGroup).getByRole('button', { name: 'Blocked' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(
+      within(secondGroup)
+        .getByRole('button', { name: 'Always allow' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(toastMocks.error).not.toHaveBeenCalled();
+  });
+
   it('shows every host permission except Tools and opens the same complete details', async () => {
     render(<PermissionSummary items={permissions} />);
 

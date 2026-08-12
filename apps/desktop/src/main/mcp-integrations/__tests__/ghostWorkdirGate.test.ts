@@ -160,6 +160,9 @@ const { getCindyGhostsMcpDeps, getGhostRosterPrompt } = await import('../ghost')
 const { createCindyGhostsMcpServer } = await import('cindy-tools');
 const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisabledForWorkdir } =
   await import('../../cindy-brain/ghostWorkdirPrefs');
+const { writeGhostToolPermissions } = await import(
+  '../../cindy-brain/ghostToolPermissionsStore'
+);
 import type { LiziMcpSessionContext } from '@cindy/mcps';
 
 function chipGhost(
@@ -212,6 +215,7 @@ function clearAllPrefs(): void {
 }
 
 beforeEach(() => {
+  writeGhostToolPermissions('art', {});
   fs.mkdirSync(outsideDir, { recursive: true });
   listMock.mockReset();
   listMock.mockReturnValue([chipGhost('art'), chipGhost('other')]);
@@ -699,6 +703,31 @@ describe('ghost_call 兜底拒绝', () => {
     );
     expect(ensureReadyMock.mock.calls[0]?.[0]).not.toHaveProperty('tool');
     expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('grant_only 确认期间切换 blocked 时在 blob/ledger/ref 副作用前拒绝', async () => {
+    const file = path.join(outsideDir, 'blocked-during-confirm.png');
+    fs.writeFileSync(file, 'blocked-before-commit');
+    confirmRequestMock.mockImplementationOnce(async () => {
+      writeGhostToolPermissions('art', {
+        globalPolicy: 'blocked',
+        tools: { run: 'blocked' },
+      });
+      return { confirmed: true, allowDirs: false };
+    });
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: [file],
+      grantOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(ledgerRefs).toEqual([]);
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 

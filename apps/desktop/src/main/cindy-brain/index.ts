@@ -5227,6 +5227,7 @@ export function registerGhostIpc(): void {
 
   // ── 插件/连接器工具粒度授权配置 (ghosts:tool-permissions) ──
   ipcMain.on('ghosts:tool-permissions', (event, ghostId: unknown) => {
+    assertTrustedAppRendererEvent(event);
     event.returnValue = {
       config: typeof ghostId === 'string' ? readGhostToolPermissions(ghostId) : {},
     };

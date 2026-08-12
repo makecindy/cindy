@@ -30,7 +30,7 @@ export interface KeychainMarkerIoDeps {
      * 语义为 **lstat**(不跟随符号链接):路径项若在读取期间被换成链接,跟随式
      * stat 会拿到链接目标、与 fd 同源,校验形同虚设(review 第三十七轮)。
      */
-    statSync?: (path: string) => fs.Stats;
+    statSync?: (path: string) => fs.BigIntStats;
     /** readMarker 的有界读(测试注入模拟"同 inode 原地改写")。 */
     readSync?: typeof fs.readSync;
   };
@@ -40,7 +40,8 @@ export function createKeychainMarkerIo(deps: KeychainMarkerIoDeps): KeychainIden
   const { markerPath, profileDir } = deps;
   const linkSync = deps.fsOverrides?.linkSync ?? fs.linkSync;
   const writeSync = deps.fsOverrides?.writeSync ?? fs.writeSync;
-  const statPath = deps.fsOverrides?.statSync ?? ((p: string) => fs.lstatSync(p));
+  const statPath =
+    deps.fsOverrides?.statSync ?? ((p: string) => fs.lstatSync(p, { bigint: true }));
   const readSync = deps.fsOverrides?.readSync ?? fs.readSync;
 
   // fsync profile 目录(claimMarker 与 flushProfileDir 共用同一实现)。
@@ -98,7 +99,7 @@ export function createKeychainMarkerIo(deps: KeychainMarkerIoDeps): KeychainIden
           (fs.constants.O_NONBLOCK ?? 0),
       );
       try {
-        const opened = fs.fstatSync(fd);
+        const opened = fs.fstatSync(fd, { bigint: true });
         if (!opened.isFile()) return { kind: 'unreadable' };
         const maxBytes = 256;
         const boundedRead = (): Buffer | null => {

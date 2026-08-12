@@ -161,9 +161,10 @@ export function getDesktopMcpToolApprovalPolicy(
       ? 'auto-approve'
       : 'prompt-each-time';
   }
-  // 插件工具的用户自定档位。toolName 缺省（Codex 省略）时不进这条分支，自然
-  // 回落到下面的 server 级判定：`cindy` 不在 TRUSTED 表里 → prompt，fail closed。
-  if (serverName === 'cindy' && toolName === 'ghost_call') {
+  // 插件工具的用户自定档位。部分 Codex app-server 会省略外层 toolName，
+  // 但保留经 schema 校验的 ghost_call payload；此时仍可凭 ghost_id + tool
+  // 精确到用户配置。坐标缺失/形态不对会在 ghostCallApprovalPolicy 内 fail closed。
+  if (serverName === 'cindy' && (toolName === 'ghost_call' || toolName === undefined)) {
     return ghostCallApprovalPolicy(toolParams);
   }
   if (serverName === 'cindy_ios_simulator') {

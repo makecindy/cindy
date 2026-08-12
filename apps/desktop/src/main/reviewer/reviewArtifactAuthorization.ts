@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { promises as fs, type Stats } from 'node:fs';
+import { promises as fs, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 
 import { reviewFileLinkLayoutIsSafe } from '@cindy/maker-core';
@@ -28,12 +28,12 @@ export interface ReviewArtifactConfirmationItem {
 }
 
 export interface ReviewArtifactPathIdentity {
-  dev: number;
-  ino: number;
-  size: number;
-  mode: number;
-  mtimeMs: number;
-  ctimeMs: number;
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mode: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
 }
 
 export interface ReviewExplicitArtifactGrant {
@@ -48,27 +48,27 @@ export interface ReviewExplicitArtifactGrant {
 
 export class ReviewArtifactAuthorizationError extends Error {}
 
-export function reviewArtifactPathIdentity(stat: Stats): ReviewArtifactPathIdentity {
+export function reviewArtifactPathIdentity(stat: BigIntStats): ReviewArtifactPathIdentity {
   return {
     dev: stat.dev,
     ino: stat.ino,
     size: stat.size,
     mode: stat.mode,
-    mtimeMs: stat.mtimeMs,
-    ctimeMs: stat.ctimeMs,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
   };
 }
 
 export function reviewArtifactPathIdentityMatches(
   expected: ReviewArtifactPathIdentity,
-  actual: Stats,
+  actual: BigIntStats,
 ): boolean {
   return (
     sameFileIdentity(expected, actual) &&
     expected.size === actual.size &&
     expected.mode === actual.mode &&
-    expected.mtimeMs === actual.mtimeMs &&
-    expected.ctimeMs === actual.ctimeMs
+    expected.mtimeNs === actual.mtimeNs &&
+    expected.ctimeNs === actual.ctimeNs
   );
 }
 
@@ -119,7 +119,7 @@ export function isPathWithinReviewWorkspace(workingDir: string, candidate: strin
 export async function reviewArtifactFileLinkLayoutIsSafe(
   artifactPath: string,
   canonicalWorkingDir: string | null,
-  stat: Stats,
+  stat: BigIntStats,
 ): Promise<boolean> {
   if (stat.nlink <= 1) return true;
   return Boolean(
@@ -150,7 +150,7 @@ export async function authorizeReviewExplicitArtifacts(input: {
   const addResolved = async (rawPath: string, label: string): Promise<boolean> => {
     const resolved = await input.resolvePath(rawPath, input.workingDir);
     if (!resolved) return false;
-    const stat = await fs.lstat(resolved.absPath).catch(() => null);
+    const stat = await fs.lstat(resolved.absPath, { bigint: true }).catch(() => null);
     if (!stat || stat.isSymbolicLink()) {
       throw new ReviewArtifactAuthorizationError(
         'A review artifact changed while permission was being prepared',

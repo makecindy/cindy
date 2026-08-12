@@ -1,4 +1,4 @@
-import { promises as fs, type Stats } from "node:fs";
+import { promises as fs, type BigIntStats, type Stats } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,8 +34,17 @@ function ancestorsWithin(start: string, root: string): string[] {
   return ancestors;
 }
 
-function statsReferToSameFile(left: Stats, right: Stats): boolean {
-  return left.ino !== 0 && left.dev === right.dev && left.ino === right.ino;
+function statsReferToSameFile(
+  left: Stats | BigIntStats,
+  right: Stats | BigIntStats,
+): boolean {
+  if (typeof left.ino === "bigint" && typeof right.ino === "bigint") {
+    return left.ino !== 0n && left.dev === right.dev && left.ino === right.ino;
+  }
+  if (typeof left.ino === "number" && typeof right.ino === "number") {
+    return left.ino !== 0 && left.dev === right.dev && left.ino === right.ino;
+  }
+  return false;
 }
 
 const PACKAGE_MANIFEST_MAX_BYTES = 256 * 1024;
@@ -102,11 +111,12 @@ async function readDeclaredPackageName(
 export async function reviewFileLinkLayoutIsSafe(
   realPath: string,
   confinementRoot: string,
-  stat: Stats,
+  stat: Stats | BigIntStats,
 ): Promise<boolean> {
   if (!stat.isFile()) return stat.isDirectory();
-  if (stat.nlink <= 1) return true;
-  if (stat.nlink !== 2 || !isPathWithin(confinementRoot, realPath)) {
+  const nlink = typeof stat.nlink === "bigint" ? Number(stat.nlink) : stat.nlink;
+  if (nlink <= 1) return true;
+  if (nlink !== 2 || !isPathWithin(confinementRoot, realPath)) {
     return false;
   }
 
@@ -153,12 +163,20 @@ export async function reviewFileLinkLayoutIsSafe(
 
   for (const candidate of candidates) {
     if (!isReviewSensitiveCredentialPath(candidate)) continue;
-    const candidateStat = await fs.lstat(candidate).catch(() => null);
+    const candidateStat =
+      typeof stat.ino === "bigint"
+        ? await fs.lstat(candidate, { bigint: true }).catch(() => null)
+        : await fs.lstat(candidate).catch(() => null);
+    const candidateNlink = candidateStat
+      ? typeof candidateStat.nlink === "bigint"
+        ? Number(candidateStat.nlink)
+        : candidateStat.nlink
+      : 0;
     if (
       !candidateStat ||
       candidateStat.isSymbolicLink() ||
       !candidateStat.isFile() ||
-      candidateStat.nlink !== 2 ||
+      candidateNlink !== 2 ||
       !statsReferToSameFile(stat, candidateStat)
     ) {
       continue;

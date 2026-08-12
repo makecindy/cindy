@@ -8,6 +8,18 @@ function isZero(value: number | bigint): boolean {
   return value === 0 || value === 0n;
 }
 
+function hasExactBigIntIdentity(
+  left: FileIdentity<number | bigint>,
+  right: FileIdentity<number | bigint>,
+): boolean {
+  return (
+    typeof left.dev === 'bigint' &&
+    typeof left.ino === 'bigint' &&
+    typeof right.dev === 'bigint' &&
+    typeof right.ino === 'bigint'
+  );
+}
+
 /**
  * 比较两个文件身份。Windows 的路径 stat 可能令双方 dev 都为 0；只要两边
  * 非零 FileId 相等即可继续比较其它版本字段。其它平台或缺失 FileId 时拒绝。
@@ -18,8 +30,15 @@ export function sameFileIdentity<T extends number | bigint>(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   if (isZero(left.ino) || isZero(right.ino) || left.ino !== right.ino) return false;
-  if (left.dev === right.dev) return !isZero(left.dev) || platform === 'win32';
-  return platform === 'win32' && (isZero(left.dev) || isZero(right.dev));
+  if (left.dev === right.dev) {
+    if (!isZero(left.dev)) return true;
+    return platform === 'win32' && hasExactBigIntIdentity(left, right);
+  }
+  return (
+    platform === 'win32' &&
+    (isZero(left.dev) || isZero(right.dev)) &&
+    hasExactBigIntIdentity(left, right)
+  );
 }
 
 /**

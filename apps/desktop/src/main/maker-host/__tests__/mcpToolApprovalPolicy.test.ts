@@ -304,16 +304,26 @@ describe('desktop MCP approval policy', () => {
       expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing' })).toBe('prompt');
     });
 
-    // Codex 的 elicitation 会省略 toolName。那时进不了 ghost_call 分支,回落到
-    // server 级判定——`cindy` 不在 TRUSTED 表里,所以仍然弹窗。
-    it('Codex 省略 toolName 时回落到 server 级判定并保持弹窗', () => {
+    it('Codex 省略 toolName 时仍用已校验的内层坐标应用 always-allow', () => {
       resolveToolApprovalMode.mockReturnValue('always-allow');
       expect(
         getDesktopMcpToolApprovalPolicy({
           serverName: 'cindy',
           toolParams: { ghost_id: 'demo', tool: 'do_thing' },
         }),
+      ).toBe('auto-approve');
+      expect(resolveToolApprovalMode).toHaveBeenCalledWith('demo', 'do_thing');
+    });
+
+    it('Codex 省略 toolName 且内层坐标不完整时仍 fail closed', () => {
+      resolveToolApprovalMode.mockReturnValue('always-allow');
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy',
+          toolParams: { ghost_id: 'demo' },
+        }),
       ).toBe('prompt');
+      expect(resolveToolApprovalMode).not.toHaveBeenCalled();
     });
 
     // cindy 是插件宿主,ghost_call 转发进第三方沙箱,永远不能整体静默。
