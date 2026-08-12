@@ -128,6 +128,20 @@ describe('Work Louder Codex settings IPC business body', () => {
     });
   });
 
+  it('still accepts a layout saved before voiceButtonMode was removed', () => {
+    const { ipc } = makeIpc();
+
+    // Older builds stored a microphone mode. The key now follows Cindy's own
+    // microphone, but a settings object round-tripped from such a build must
+    // not be rejected outright.
+    const state = ipc.set(EVENT, {
+      layout: { ...DEFAULT_SETTINGS.layout, voiceButtonMode: 'push-to-talk' },
+    });
+
+    expect(state.settings.layout).not.toHaveProperty('voiceButtonMode');
+    expect(state.settings.layout.separateMicrophoneKeys).toBe(false);
+  });
+
   it('resets all settings through the dedicated reset operation', () => {
     const { ipc, resetSettings, applySettings } = makeIpc();
 

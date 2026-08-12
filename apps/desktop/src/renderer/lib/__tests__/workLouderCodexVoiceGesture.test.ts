@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VoiceInputState } from '@cindy/voice-input-core';
 import { createWorkLouderCodexVoiceGesture } from '../workLouderCodexVoiceGesture';
 
-const press = { mode: 'push-to-talk' as const, phase: 'press' as const };
-const release = { mode: 'push-to-talk' as const, phase: 'release' as const };
+const press = { phase: 'press' as const };
+const release = { phase: 'release' as const };
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;

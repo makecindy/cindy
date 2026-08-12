@@ -3446,15 +3446,7 @@
           "builtIn": "キーキャップの組み込みアクションを使用"
         },
         "microphone": {
-          "mode": {
-            "label": "マイクモード",
-            "description": "マイクキーをプッシュ・トゥ・トークにするか、ボイスチャットの切り替えにするかを選択します。",
-            "options": {
-              "push-to-talk": "プッシュ・トゥ・トーク",
-              "voice-chat": "ボイスチャット"
-            }
-          },
-          "separate": {
+"separate": {
             "label": "マイクキーを分ける",
             "description": "ACT10 と ACT11 を 1 つの MIC キーにまとめず、別々に使います。"
           }

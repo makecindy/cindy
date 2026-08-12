@@ -14,7 +14,6 @@ import {
   isWorkLouderCodexCommandId,
   isWorkLouderCodexEncoderMode,
   isWorkLouderCodexKeycapId,
-  isWorkLouderCodexVoiceButtonMode,
   type WorkLouderCodexAction,
   type WorkLouderCodexKeyAssignment,
   type WorkLouderCodexLayout,
@@ -106,9 +105,6 @@ function normalizeLayout(raw: unknown): WorkLouderCodexLayout {
     encoderMode: isWorkLouderCodexEncoderMode(value.encoderMode)
       ? value.encoderMode
       : WORKLOUDER_CODEX_DEFAULT_LAYOUT.encoderMode,
-    voiceButtonMode: isWorkLouderCodexVoiceButtonMode(value.voiceButtonMode)
-      ? value.voiceButtonMode
-      : WORKLOUDER_CODEX_DEFAULT_LAYOUT.voiceButtonMode,
     separateMicrophoneKeys:
       typeof value.separateMicrophoneKeys === 'boolean'
         ? value.separateMicrophoneKeys

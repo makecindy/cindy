@@ -3447,15 +3447,7 @@
           "builtIn": "Use the keycap's built-in action"
         },
         "microphone": {
-          "mode": {
-            "label": "Microphone mode",
-            "description": "Choose whether the microphone key is push-to-talk or a voice-chat toggle.",
-            "options": {
-              "push-to-talk": "Push to talk",
-              "voice-chat": "Voice chat"
-            }
-          },
-          "separate": {
+"separate": {
             "label": "Use separate microphone keys",
             "description": "Keep ACT10 and ACT11 separate instead of combining them into one MIC key."
           }

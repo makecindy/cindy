@@ -6528,20 +6528,9 @@ export function ChatInput({
         return true;
       }
       if (action.type === 'voice') {
-        if (action.mode === 'voice-chat') {
-          if (action.phase !== 'press') return true;
-          const currentState = voiceInputStateRef.current;
-          if (currentState === 'listening' || voiceInput.isBusy) {
-            void handleVoiceInputPlainStop();
-          } else if (isVoiceInputIdleLike(currentState)) {
-            void handleVoiceInputStart();
-          }
-          return true;
-        }
-        workLouderVoiceGestureRef.current?.handle({
-          mode: 'push-to-talk',
-          phase: action.phase,
-        });
+        // One path for the key: the gesture already covers tap-to-start,
+        // tap-again-to-stop, and hold-to-talk, matching Cindy's microphone.
+        workLouderVoiceGestureRef.current?.handle({ phase: action.phase });
         return true;
       }
       if (action.type !== 'command') return false;

@@ -38,7 +38,6 @@ import {
   WORKLOUDER_CODEX_ENCODER_ACTIONS,
   WORKLOUDER_CODEX_ENCODER_MODES,
   WORKLOUDER_CODEX_KEYCAP_IDS,
-  WORKLOUDER_CODEX_VOICE_BUTTON_MODES,
   cloneWorkLouderCodexLayout,
   type WorkLouderCodexAction,
   type WorkLouderCodexAgentSource,
@@ -701,29 +700,9 @@ function MicrophoneControls({
   const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-3">
-      <SettingsRow
-        label={t('settings.shortcuts.workLouderCodex.microphone.mode.label')}
-        description={t('settings.shortcuts.workLouderCodex.microphone.mode.description')}
-        control={
-          <SelectControl
-            value={settings.layout.voiceButtonMode}
-            disabled={!state || saving}
-            ariaLabel={t('settings.shortcuts.workLouderCodex.microphone.mode.label')}
-            onChange={(value) =>
-              patchLayout((layout) => {
-                layout.voiceButtonMode = value as WorkLouderCodexLayout['voiceButtonMode'];
-              })
-            }
-          >
-            {WORKLOUDER_CODEX_VOICE_BUTTON_MODES.map((mode) => (
-              <option key={mode} value={mode}>
-                {t(`settings.shortcuts.workLouderCodex.microphone.mode.options.${mode}`)}
-              </option>
-            ))}
-          </SelectControl>
-        }
-      />
-      <SettingsDivider />
+      {/* How the key listens is not configurable: it behaves like Cindy's own
+          microphone, taking both a tap and a hold. All that is left is whether
+          the board splits this position into two keys. */}
       <SettingsRow
         label={t('settings.shortcuts.workLouderCodex.microphone.separate.label')}
         description={t('settings.shortcuts.workLouderCodex.microphone.separate.description')}

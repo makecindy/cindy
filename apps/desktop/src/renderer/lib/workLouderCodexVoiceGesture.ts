@@ -1,7 +1,6 @@
 import type { VoiceInputState } from '@cindy/voice-input-core';
 
 export type WorkLouderPushToTalkAction = {
-  mode: 'push-to-talk';
   phase: 'press' | 'release';
 };
 

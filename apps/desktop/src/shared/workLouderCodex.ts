@@ -41,7 +41,6 @@ export const WORKLOUDER_CODEX_ENCODER_MODES = [
   'conversation-scroll',
   'custom',
 ] as const;
-export const WORKLOUDER_CODEX_VOICE_BUTTON_MODES = ['push-to-talk', 'voice-chat'] as const;
 
 export const WORKLOUDER_CODEX_COMMAND_IDS = [
   'composer.toggleFastMode',
@@ -123,7 +122,6 @@ export type WorkLouderCodexCommandSlot = (typeof WORKLOUDER_CODEX_COMMAND_SLOTS)
 export type WorkLouderCodexAnalogDirection = (typeof WORKLOUDER_CODEX_ANALOG_DIRECTIONS)[number];
 export type WorkLouderCodexEncoderAction = (typeof WORKLOUDER_CODEX_ENCODER_ACTIONS)[number];
 export type WorkLouderCodexEncoderMode = (typeof WORKLOUDER_CODEX_ENCODER_MODES)[number];
-export type WorkLouderCodexVoiceButtonMode = (typeof WORKLOUDER_CODEX_VOICE_BUTTON_MODES)[number];
 export type WorkLouderCodexCommandId = (typeof WORKLOUDER_CODEX_COMMAND_IDS)[number];
 export type WorkLouderCodexKeycapId = (typeof WORKLOUDER_CODEX_KEYCAP_IDS)[number];
 
@@ -147,7 +145,6 @@ export interface WorkLouderCodexLayout {
   analogStick: Record<WorkLouderCodexAnalogDirection, WorkLouderCodexAction | null>;
   encoder: Record<WorkLouderCodexEncoderAction, WorkLouderCodexAction | null>;
   encoderMode: WorkLouderCodexEncoderMode;
-  voiceButtonMode: WorkLouderCodexVoiceButtonMode;
   separateMicrophoneKeys: boolean;
 }
 
@@ -204,11 +201,10 @@ export interface WorkLouderCodexState {
 
 export type WorkLouderCodexRendererAction =
   | Exclude<WorkLouderCodexAction, { type: 'task' }>
-  | {
-      type: 'voice';
-      mode: WorkLouderCodexVoiceButtonMode;
-      phase: 'press' | 'release';
-    }
+  // The microphone key behaves like Cindy's own microphone: a tap starts and a
+  // second tap stops, holding it records until release. Both come out of the
+  // same press/release pair, so the key has no mode to choose between.
+  | { type: 'voice'; phase: 'press' | 'release' }
   | { type: 'keyboard'; key: 'ArrowUp' | 'ArrowDown' | 'Enter' };
 
 /** Built-in Cindy behavior printed on each official Work Louder keycap. */
@@ -262,7 +258,6 @@ export const WORKLOUDER_CODEX_DEFAULT_LAYOUT: WorkLouderCodexLayout = {
   },
   encoder: { left: null, right: null, click: null, longPress: null },
   encoderMode: 'composer-navigation',
-  voiceButtonMode: 'push-to-talk',
   separateMicrophoneKeys: false,
 };
 
@@ -343,12 +338,6 @@ export function isWorkLouderCodexKeycapId(value: unknown): value is WorkLouderCo
 
 export function isWorkLouderCodexEncoderMode(value: unknown): value is WorkLouderCodexEncoderMode {
   return isStringOption(value, WORKLOUDER_CODEX_ENCODER_MODES);
-}
-
-export function isWorkLouderCodexVoiceButtonMode(
-  value: unknown,
-): value is WorkLouderCodexVoiceButtonMode {
-  return isStringOption(value, WORKLOUDER_CODEX_VOICE_BUTTON_MODES);
 }
 
 export function workLouderCodexAutoDimMs(value: WorkLouderCodexAutoDim): number | null {

@@ -3446,15 +3446,7 @@
           "builtIn": "使用鍵帽預設動作"
         },
         "microphone": {
-          "mode": {
-            "label": "麥克風模式",
-            "description": "選擇麥克風鍵使用按住說話，或切換語音對話。",
-            "options": {
-              "push-to-talk": "按住說話",
-              "voice-chat": "語音對話"
-            }
-          },
-          "separate": {
+"separate": {
             "label": "拆分麥克風鍵",
             "description": "保持 ACT10 和 ACT11 分開，不合併為一個 MIC 鍵。"
           }

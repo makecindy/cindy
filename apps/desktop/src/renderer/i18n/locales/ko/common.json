@@ -3446,15 +3446,7 @@
           "builtIn": "키캡 기본 동작 사용"
         },
         "microphone": {
-          "mode": {
-            "label": "마이크 모드",
-            "description": "마이크 키를 눌러 말하기로 사용할지, 음성 채팅 전환으로 사용할지 선택합니다.",
-            "options": {
-              "push-to-talk": "눌러서 말하기",
-              "voice-chat": "음성 채팅"
-            }
-          },
-          "separate": {
+"separate": {
             "label": "마이크 키 분리",
             "description": "ACT10과 ACT11을 하나의 MIC 키로 합치지 않고 따로 사용합니다."
           }

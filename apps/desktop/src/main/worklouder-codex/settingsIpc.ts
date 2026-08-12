@@ -10,7 +10,6 @@ import {
   isWorkLouderCodexCommandId,
   isWorkLouderCodexEncoderMode,
   isWorkLouderCodexKeycapId,
-  isWorkLouderCodexVoiceButtonMode,
   type WorkLouderCodexAction,
   type WorkLouderCodexLayout,
   type WorkLouderCodexSettings,
@@ -98,6 +97,9 @@ function parseLayout(value: unknown): WorkLouderCodexLayout {
       'analogStick',
       'encoder',
       'encoderMode',
+      // `voiceButtonMode` was dropped: the microphone key follows Cindy's own
+      // microphone and has no mode. Still accepted so a settings object saved
+      // by an older build round-trips instead of being rejected outright.
       'voiceButtonMode',
       'separateMicrophoneKeys',
     ],
@@ -141,9 +143,6 @@ function parseLayout(value: unknown): WorkLouderCodexLayout {
   if (!isWorkLouderCodexEncoderMode(record.encoderMode)) {
     throwIpcError('INVALID_PARAMS', 'encoderMode is invalid');
   }
-  if (!isWorkLouderCodexVoiceButtonMode(record.voiceButtonMode)) {
-    throwIpcError('INVALID_PARAMS', 'voiceButtonMode is invalid');
-  }
   if (typeof record.separateMicrophoneKeys !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'separateMicrophoneKeys must be a boolean');
   }
@@ -153,7 +152,6 @@ function parseLayout(value: unknown): WorkLouderCodexLayout {
     analogStick,
     encoder,
     encoderMode: record.encoderMode,
-    voiceButtonMode: record.voiceButtonMode,
     separateMicrophoneKeys: record.separateMicrophoneKeys,
   };
 }

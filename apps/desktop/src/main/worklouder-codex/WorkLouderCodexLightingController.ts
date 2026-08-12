@@ -283,7 +283,6 @@ export class WorkLouderCodexLightingController {
       if (event.act === 1 || event.act === 0) {
         this.dispatchRendererAction({
           type: 'voice',
-          mode: this.settings.layout.voiceButtonMode,
           phase: event.act === 1 ? 'press' : 'release',
         });
       }
