@@ -75,7 +75,7 @@ export function WorkLouderCodexEntry({ state, loading, onOpen }: WorkLouderCodex
       aria-label={t('settings.shortcuts.workLouderCodex.openAria')}
     >
       <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
-        <Keyboard size={20} aria-hidden="true" />
+        <CodexMicroGlyph />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="truncate text-13 font-medium text-[var(--text-primary)]">
@@ -936,6 +936,62 @@ function ConnectionStatus({
       <span className={cn('size-1.5 rounded-full', dotClass)} aria-hidden="true" />
       {t(`settings.shortcuts.workLouderCodex.connection.status.${effectiveStatus}`)}
     </span>
+  );
+}
+
+/**
+ * Icon for the Codex Micro entry row: the device's own silhouette rather than a
+ * generic keyboard. Round controls in the top corners, six task keys, a row of
+ * command keys, and the double-width microphone — the same shape as the board
+ * on the detail page, reduced to what still reads at 20px.
+ *
+ * Drawn as SVG so the 4.5-unit keys stay crisp, and in `currentColor` so it
+ * picks up the chip's text colour in both themes.
+ */
+function CodexMicroGlyph() {
+  // Four columns of 4.5 with 1 between them, inset half a unit.
+  const track = [0.5, 6, 11.5, 17];
+  return (
+    <svg width={20} height={20} viewBox="0 0 22 22" fill="none" aria-hidden="true">
+      {/* Row 1 — encoder, two task keys, analog stick. */}
+      <circle cx={2.75} cy={2.75} r={2.25} fill="currentColor" opacity={0.55} />
+      <rect x={6} y={0.5} width={4.5} height={4.5} rx={1} fill="currentColor" opacity={0.95} />
+      <rect x={11.5} y={0.5} width={4.5} height={4.5} rx={1} fill="currentColor" opacity={0.95} />
+      <circle cx={19.25} cy={2.75} r={2.25} fill="currentColor" opacity={0.55} />
+
+      {/* Row 2 — the remaining four task keys, the brightest caps on the board. */}
+      {track.map((x) => (
+        <rect
+          key={`task-${x}`}
+          x={x}
+          y={6}
+          width={4.5}
+          height={4.5}
+          rx={1}
+          fill="currentColor"
+          opacity={0.95}
+        />
+      ))}
+
+      {/* Row 3 — the four command keys. */}
+      {track.map((x) => (
+        <rect
+          key={`command-${x}`}
+          x={x}
+          y={11.5}
+          width={4.5}
+          height={4.5}
+          rx={1}
+          fill="currentColor"
+          opacity={0.45}
+        />
+      ))}
+
+      {/* Row 4 — status lights, the double-width microphone key, Codex. */}
+      <circle cx={2.75} cy={19.25} r={1} fill="currentColor" opacity={0.45} />
+      <rect x={6} y={17} width={10} height={4.5} rx={1} fill="currentColor" opacity={0.45} />
+      <rect x={17} y={17} width={4.5} height={4.5} rx={1} fill="currentColor" opacity={0.45} />
+    </svg>
   );
 }
 
