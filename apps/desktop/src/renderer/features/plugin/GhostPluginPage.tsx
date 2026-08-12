@@ -22,7 +22,7 @@ import {
   AlertTriangle,
   ArrowUp,
   ChevronDown,
-  AlertTriangle,
+  Check,
   Link,
   MessageCircle,
   Plus,
