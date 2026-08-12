@@ -50,6 +50,20 @@ describe('deriveNavRailEntries', () => {
     expect(deriveNavRailEntries([])).toEqual([]);
   });
 
+  it('保留自动化来源标记,供导航条用短刻度区分', () => {
+    const entries = deriveNavRailEntries([
+      msg({ clientId: 'u1', role: 'user', content: '手动提问' }),
+      msg({
+        clientId: 'u2',
+        role: 'user',
+        content: '自动提问',
+        automationOrigin: { kind: 'scheduler', scheduleId: 'schedule-1' },
+      }),
+      msg({ clientId: 'u3', role: 'user', content: '普通提问', automationOrigin: undefined }),
+    ]);
+    expect(entries.map((entry) => entry.isAutomation)).toEqual([false, true, false]);
+  });
+
   it('运行中插话(delivery=steer)不算新一轮,不产生刻度', () => {
     const messages = [
       msg({ clientId: 'u1', role: 'user', content: '第一问' }),

@@ -1,0 +1,23 @@
+{
+  "name": "@cindy/slack-hook-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "slack-hook-server <-> desktop duplex task protocol: envelope, message types, runtime validation, builders. Zero runtime deps",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/node": "*",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}

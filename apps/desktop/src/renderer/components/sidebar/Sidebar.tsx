@@ -24,6 +24,7 @@ import type { SidebarPeekDrawerProps, SidebarPeekState } from '@/hooks/useSideba
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { useFeatureSidebarUpper } from '@/features/feature-context';
 import { ConversationSearchProvider } from '@/features/cc-agent/sidebar/conversationSearchContext';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 import { SidebarTopNav } from './SidebarTopNav';
 import { UpdateBanner } from './UpdateBanner';
@@ -93,6 +94,10 @@ export function Sidebar({
   // peek 抽屉态(fixed overlay,不占流内布局)。矩形与正常展开态逐像素一致,
   // 因此 pin 时(pinning → idle)fixed↔static 的交换帧不产生视觉跳变。
   const isPeek = peekState != null;
+  // 副窗口默认完全隐藏侧栏。此时不挂载任务列表及其搜索 Provider，避免开窗
+  // 首帧为了不可见内容发起两份大列表查询；展开、rail 与 peek 都仍需完整内容。
+  // 主窗口保持原有常驻挂载语义，避免改变切换与缓存体验。
+  const shouldMountFeatureContent = !isSecondaryWindow() || !isCollapsed || isPeek;
 
   // 离开 peek 的交换帧必须禁用宽度过渡:peekClosing → idle(收起)时,aside 带着
   // 上一帧的 width=展开宽 回流为流内 width=0,若 transition-[width] 还挂着,这次
@@ -204,21 +209,23 @@ export function Sidebar({
       {/* ConversationSearchProvider:在顶部导航行(SidebarTopNav 的「搜索」行)与功能槽
           (CCAgentSidebarUpper 的结果 overlay)这两个兄弟子树的共同祖先处,只实例化一次
           会话搜索状态,经 context 共享。外壳本身仍不感知搜索细节,只负责放置 Provider。 */}
-      <ConversationSearchProvider>
-        {/* 顶部常驻动作/导航列表(新建 / 自动任务 / Skill / 搜索)。
-            取代原 HorizontalTabbar:同级等权列表行,无单独项目 Tab。
-            rail（收窄）态放不下,隐藏——rail 自身承担入口;展开后回归。
-            完全隐藏态 w-0 自然裁掉。 */}
-        {!isRail && <SidebarTopNav />}
+      {shouldMountFeatureContent && (
+        <ConversationSearchProvider>
+          {/* 顶部常驻动作/导航列表(新建 / 自动任务 / Skill / 搜索)。
+              取代原 HorizontalTabbar:同级等权列表行,无单独项目 Tab。
+              rail（收窄）态放不下,隐藏——rail 自身承担入口;展开后回归。
+              完全隐藏态 w-0 自然裁掉。 */}
+          {!isRail && <SidebarTopNav />}
 
-        {/* Upper: feature-injected content slot.
-            The current Feature Layout injects either an expanded or collapsed
-            sidebar tree through the FeatureSidebarSlotContext. Shell renders
-            whatever it's given. If no feature is active (e.g. /settings with
-            the intentionally empty SettingsSidebarUpper), this simply leaves
-            the upper area blank. */}
-        <div className="flex flex-1 flex-col overflow-hidden">{upperContent}</div>
-      </ConversationSearchProvider>
+          {/* Upper: feature-injected content slot.
+              The current Feature Layout injects either an expanded or collapsed
+              sidebar tree through the FeatureSidebarSlotContext. Shell renders
+              whatever it's given. If no feature is active (e.g. /settings with
+              the intentionally empty SettingsSidebarUpper), this simply leaves
+              the upper area blank. */}
+          <div className="flex flex-1 flex-col overflow-hidden">{upperContent}</div>
+        </ConversationSearchProvider>
+      )}
 
       {/* Update banner: shown only when a verified update is ready
           peek 抽屉视同展开(否则横幅在抽屉里消失,与「预览完整列表」语义相悖)。 */}

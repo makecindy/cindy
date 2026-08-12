@@ -163,6 +163,10 @@ export function shouldShowBranchBaseLabel(rowWidth: number, hasBranchBaseControl
   return hasBranchBaseControl && Number.isFinite(rowWidth) && rowWidth >= REVIEW_BRANCH_BASE_LABEL_MIN_WIDTH_PX;
 }
 
+export function shouldOfferReviewOpenFile(remoteHostId: string | null, deviceLinkDeviceId: string | null): boolean {
+  return remoteHostId === null && deviceLinkDeviceId === null;
+}
+
 export type ReviewCommitActionDisabledReason =
   | 'no-message'
   | 'write-disabled'
@@ -560,7 +564,7 @@ function TurnChangeSetReviewBody({ state, ctx, setSource, setSelectedCommitOid }
           onViewModeChange={(diffViewMode) => ctx.patchState({ diffViewMode })}
           onRichMarkdownPreviewChange={(richMarkdownPreview) => ctx.patchState({ richMarkdownPreview })}
           wordWrap={state.wordWrap ?? false}
-          wordDiff={state.wordDiff ?? true}
+          wordDiff={state.wordDiff ?? false}
           fileTreeVisible={state.fileTreeVisible ?? false}
           jumpRequest={jumpRequest}
           loadImagePreview={unavailablePreview}
@@ -608,7 +612,7 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
   const diffViewMode: DiffViewMode = state.diffViewMode ?? 'unified';
   const fileTreeVisible = state.fileTreeVisible ?? false;
   const wordWrap = state.wordWrap ?? false;
-  const wordDiff = state.wordDiff ?? true;
+  const wordDiff = state.wordDiff ?? false;
   const richMarkdownPreview = state.richMarkdownPreview ?? true;
   const collapsedSet = useMemo(() => new Set(state.collapsedPaths ?? []), [state.collapsedPaths]);
   const rawUnstaged = data?.diffs.unstaged ?? [];
@@ -775,8 +779,8 @@ function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, se
         toast.error(t('rightSidebar.review.openFileFailed', { error: message }));
       });
   }, [sessionId, t]);
-  // device-link 远程会话没有本机文件可打开:传 undefined 让「打开文件」入口整体不渲染。
-  const openFileHandler = deviceLinkDeviceId ? undefined : openReviewFile;
+  // device-link 与 SSH 工作区都没有可由控制端 shell 打开的本机文件。
+  const openFileHandler = shouldOfferReviewOpenFile(ctx.remoteHostId, deviceLinkDeviceId) ? openReviewFile : undefined;
   // 次级视图(提交 / 分支 / 单文件)错误串的 OVERSIZE 标记 → 可读文案;其余原样。
   const localizeReviewError = useCallback(<T extends string | null>(message: T): T | string => {
     if (message && isReviewRemoteOversizeError(message)) return t('rightSidebar.review.remote.oversizeDesc');

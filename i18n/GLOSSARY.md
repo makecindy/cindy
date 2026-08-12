@@ -175,6 +175,10 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 
 Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。
 
+### China
+
+模型目录中由服务端显式 group:"china" 标记的来源分组。它描述模型或供应商来自中国，不表示相对于当前用户或发行区域的‘国内’；英文词条保持自然大小写 China，设置页分组头由统一 uppercase 样式显示为 CHINA。
+
 ### Cindy Codex home
 
 远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。
@@ -304,6 +308,10 @@ macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Ci
 ### Token Plan
 
 阿里云百炼与小米 MiMo 的外部订阅产品名称，四语统一保留官方英文写法；与 Coding Plan 是不同套餐和凭证类型，先登记为 proposed，避免供应商预设中混用产品名。
+
+### Ungrouped
+
+模型目录中没有可信厂商 group、但仍可用于对话的兜底分组。它不推断产地或厂商；服务端补充明确 group 后模型会自动归入对应分组。与不能用于对话、沿用原短名称的 Other（其它）分开。
 
 ### Upload code
 

@@ -38,6 +38,7 @@ describe('devStartupStatus', () => {
       rootDir: path.join(tempDir, 'repo'),
       commit: 'abc123',
       mode: 'remote',
+      region: 'cn',
       passive: true,
       isolated: false,
       pid: 4242,
@@ -67,6 +68,7 @@ describe('devStartupStatus', () => {
       state: 'ready',
       rootDir: path.join(tempDir, 'repo'),
       mode: 'remote',
+      region: 'cn',
       passive: true,
     });
   });

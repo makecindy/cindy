@@ -448,6 +448,7 @@ describe('Maker session close events', () => {
 
     await maker.closeSession('session-1', 'agent-switch');
 
+    expect(maker.getSessionCloseReason(session)).toBe('agent-switch');
     expect(closed).toHaveBeenCalledWith({
       type: 'session:closed',
       sessionId: 'session-1',
@@ -484,6 +485,7 @@ describe('Maker session close events', () => {
     maker.on((event) => {
       if (event.type === 'session:closed' && event.sessionId === 'session-crash') {
         expect(event.reason).toBe('unexpected');
+        expect(maker.getSessionCloseReason(event.session)).toBe('unexpected');
         resolveClosed();
       }
     });

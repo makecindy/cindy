@@ -8,16 +8,23 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { Element, Root, Text } from 'hast';
 
 import {
+  _resetWordFadeStateCacheForTests,
   createWordFadeState,
+  getOrCreateWordFadeState,
   markSettledFromAnimationEnd,
+  releaseWordFadeState,
   rehypeStreamWordFade,
   splitWords,
   type WordFadeState,
 } from '../rehypeStreamWordFade';
+
+afterEach(() => {
+  _resetWordFadeStateCacheForTests();
+});
 
 function textNode(value: string): Text {
   return { type: 'text', value };
@@ -78,6 +85,31 @@ describe('splitWords', () => {
 });
 
 describe('rehypeStreamWordFade', () => {
+  it('同一条流式消息 remount 后沿用原时间线，已有词不从头重播', () => {
+    const cacheKey = 'session-1\u0000message-1';
+    const firstMount = getOrCreateWordFadeState(cacheKey);
+    const tree1 = root(el('p', [textNode('one two')]));
+    run(tree1, firstMount, 0);
+    const firstKeys = collectWords(tree1).map((word) => word.key);
+
+    const remount = getOrCreateWordFadeState(cacheKey);
+    const tree2 = root(el('p', [textNode('one two three')]));
+    run(tree2, remount, 1000);
+    const words = collectWords(tree2);
+
+    expect(remount).toBe(firstMount);
+    expect(words.slice(0, 2).map((word) => word.key)).toEqual(firstKeys);
+    expect(words.slice(0, 2).every((word) => word.delay < -150)).toBe(true);
+    expect(words[2].delay).toBe(0);
+  });
+
+  it('消息进入终态后释放 remount 状态', () => {
+    const cacheKey = 'session-1\u0000message-1';
+    const active = getOrCreateWordFadeState(cacheKey);
+    releaseWordFadeState(cacheKey);
+    expect(getOrCreateWordFadeState(cacheKey)).not.toBe(active);
+  });
+
   it('文本节点被切成带 --wf-delay 的 stream-word span,首词 0ms 起、24ms/词递进', () => {
     const state = createWordFadeState();
     const tree = root(el('p', [textNode('one two three')]));

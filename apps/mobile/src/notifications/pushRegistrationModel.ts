@@ -3,7 +3,7 @@
  *
  * 链路:手机拿 APNs device token → PUT device-link server /push-token 注册;
  * 桌面端任务终态发 notify 帧 → server 查账号 token → APNs 下发。
- * 契约见 cindy-server docs/device-link-server.md 与协议仓 device-link-protocol.md。
+ * 契约见本仓 packages/device-link-protocol 与 cindy-server docs/device-link-server.md。
  */
 
 export type PushAppVariant = 'cn' | 'global';

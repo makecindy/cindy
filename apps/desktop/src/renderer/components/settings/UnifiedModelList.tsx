@@ -13,7 +13,7 @@
  *       · **底部「已停用」分区 = 停用状态**:停用的行离开原分组、沉到列表底部的
  *         折叠区(复用分组折叠交互,默认展开),行内「启用此模型」即飞回原分组。
  *         "下沉"是停用在整个设置页的统一隐喻(左栏停用的供应商同样沉底)。
- *   - **能力模型组**(图像/音频/视频/向量/其它):不能当 agent 用,永远不进对话模型
+ *   - **能力模型组**(图像/音频/视频/向量/其它端点):不能当 agent 用,永远不进对话模型
  *     选择面板(modelList.ts 硬排除),没有显示轴 ⇒ 行内**没有开关**,只有「⋯」停用;
  *     其启用状态控制媒体生成等专属链路能否使用它。
  *   - 普通模式:对话模型行恒为一个开关,一次拨动同时写该模型全部可用 agent 的可见性
@@ -63,13 +63,15 @@ const AGENT_LABEL: Record<AgentKind, string> = {
 
 /**
  * 分组折叠态(仅 UI 展示,按设备记忆)。非对话类型组(图像/视频/语音合成/语音转写/
- * 实时音频/向量/压缩/其它)默认折叠——它们是网关多出的、不能当 agent 用的模型,默认
- * 收起让列表清爽;对话厂商组默认展开;底部「已停用」分区(key = '__disabled')默认
- * **展开**——区里有东西说明是用户主动停的,找回路径要一眼可见。只存用户显式改过的组
- * (与 modelVisibilityPrefs 同哲学:未改的跟随默认),搜索时强制全展开。
+ * 实时音频/向量/压缩/其它端点)默认折叠——它们是网关多出的、不能当 agent 用的模型,默认
+ * 收起让列表清爽;对话厂商组(含认不出厂商的「未分组」)默认展开;底部「已停用」分区
+ * (key = '__disabled')默认**展开**——区里有东西说明是用户主动停的,找回路径要一眼可见。
+ * 只存用户显式改过的组(与 modelVisibilityPrefs 同哲学:未改的跟随默认),搜索时强制全展开。
  * CAPABILITY_CATEGORIES 同时就是「能力模型组」的判定(成员 = classification 的非 agent 分组)。
  */
-const COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v1';
+const COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v3';
+const LEGACY_COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v2';
+const LEGACY_V1_COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v1';
 const DISABLED_GROUP_KEY = '__disabled';
 const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'image',
@@ -83,11 +85,29 @@ const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
 ]);
 const DEFAULT_COLLAPSED_CATEGORIES = CAPABILITY_CATEGORIES;
 
-function loadCollapsedMap(): Record<string, boolean> {
+function readCollapsedMap(key: string): Record<string, boolean> | null {
+  const raw = window.localStorage.getItem(key);
+  const parsed: unknown = raw ? JSON.parse(raw) : null;
+  return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : null;
+}
+
+/** 导出仅供单测:v1/v2 → v3 的一次性搬迁只跑在升级后的首次挂载上,值得有回归锁。 */
+export function loadCollapsedMap(): Record<string, boolean> {
   try {
-    const raw = window.localStorage.getItem(COLLAPSE_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : null;
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : {};
+    const current = readCollapsedMap(COLLAPSE_STORAGE_KEY);
+    if (current) return current;
+    // v2 → v3:旧 v2 的 'other' 是认不出厂商的聊天模型,新 v3 改名为 'ungrouped';
+    // 旧 v2 的 'non-chat' 是其它端点,恢复为 wire 语义的 'other'。
+    const legacyV2 = readCollapsedMap(LEGACY_COLLAPSE_STORAGE_KEY);
+    if (legacyV2) {
+      const next: Record<string, boolean> = {};
+      for (const [key, value] of Object.entries(legacyV2)) {
+        next[key === 'non-chat' ? 'other' : key === 'other' ? 'ungrouped' : key] = value;
+      }
+      return next;
+    }
+    // v1 从未改变 other 的 wire 语义,直接保留。
+    return readCollapsedMap(LEGACY_V1_COLLAPSE_STORAGE_KEY) ?? {};
   } catch {
     return {};
   }
@@ -271,7 +291,7 @@ function rowModelIds(row: UnionModelRow): string[] {
 /** 该行的厂商分组(用代表条目判;已停用分区里标注来源分组也用它)。 */
 function rowCategory(row: UnionModelRow): ModelCategory {
   const rep = row.byAgent[row.avail[0]];
-  return rep ? groupOf(rep) : 'other';
+  return rep ? groupOf(rep) : 'ungrouped';
 }
 
 export function UnifiedModelList({

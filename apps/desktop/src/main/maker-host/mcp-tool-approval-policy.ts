@@ -13,7 +13,7 @@
  * 判定顺序（从最窄到最宽）：
  *   1. READ_ONLY_MCP_TOOLS —— 精确到工具的只读发现入口，server 未整体可信也放行
  *   2. cindy_contacts     —— 按内层 action 细粒度判定（见 contacts/approval.ts）
- *   3. cindy::ghost_call  —— 按用户在插件详情页为**该插件的该工具**选的授权档位判定
+ *   3. cindy::ghost_call  —— 按用户在插件详情页为该插件的该工具选的授权档位判定
  *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
  *   5. 其余                —— 逐次弹窗（第三方 server、cindy_ssh…）
  */
@@ -23,7 +23,7 @@ import type {
   McpToolApprovalPolicy,
   McpToolApprovalPresentation,
 } from '@cindy/maker-core';
-import { canAutoApproveContactsMcpTool } from '@cindy/mcps';
+import { canAutoApproveContactsMcpTool, canonicalIOSSimulatorToolName } from '@cindy/mcps';
 
 import { resolveToolApprovalMode } from '../cindy-brain/ghostToolPermissionsStore.js';
 import { t } from '../i18n.js';
@@ -91,34 +91,39 @@ const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * 按「Host 最终会拿到的那个值」读取 payload。
+ *
+ * `call_tool` 的 `args` 走 `jsonObjectArg`（见 lizi-mcps/json-object-arg.ts）：Claude Code
+ * 的 in-process bridge 会把嵌套 payload 先 `JSON.stringify`（issue #350），入参校验前
+ * 会再 parse 回对象。审批若只看原始字符串，判定的就不是 Host 实际执行的那个值。
+ */
+function readJsonObject(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
  * `cindy::ghost_call` 的免审批判定 —— 唯一依据是用户在插件详情页亲手选的档位。
  *
- * 这是对本文件既有边界的一次**用户可控**放宽：`cindy` 仍然不进
- * TRUSTED_MCP_SERVERS（`ghost_call` 转发到第三方插件沙箱，server 级静默始终
- * 不可接受），但用户对具体某个插件的某个工具选了「总是允许」时，宿主必须照办，
- * 否则设置项就是空转的假承诺。
- *
- * 免掉的只有「要不要让 Agent 调用这个工具」这一张权限卡。工作目录外的文件/目录
- * 交接是**另一条独立闸门**（mcp-integrations/ghost.ts 的 requestGrantConfirm），
- * 不受本档位影响——该边界曾被误接进 always-allow，已在 2026-08 撤销，不要再接。
- *
- * 三条 fail-closed：
- *   - 拿不到 ghost_id / tool 坐标（Codex 的 elicitation 会省略参数，见下方
- *     getDesktopMcpToolApprovalPolicy 注释）→ 不放行；
- *   - grant_only 调用做的是真实过户与 ledger 落账，不吃 always-allow；
- *   - 读配置抛错 → 不放行。
- *
- * `blocked` 在这里只当作「不免审批」。审批策略枚举没有 deny 档，返回
- * prompt-each-time 等于允许用户点同意、把禁用变成可绕过——硬拦截由派发层
- * (cindy-brain/pipeDispatcher.ts 的资格审) 独占，那里是所有调用方的唯一收口。
+ * `cindy` 仍然不进 TRUSTED_MCP_SERVERS：它转发到第三方插件沙箱，不能 server 级静默。
+ * 本函数只兑现用户对某个插件工具的 always-allow 选择；工作目录外附件/目录交接仍由
+ * mcp-integrations/ghost.ts 的独立确认闸控制。坐标缺失、grant_only 或读取失败均 fail closed。
  */
 function ghostCallApprovalPolicy(toolParams: unknown): McpToolApprovalPolicy {
-  const params =
-    toolParams && typeof toolParams === 'object' && !Array.isArray(toolParams)
-      ? (toolParams as Record<string, unknown>)
-      : null;
-  if (!params) return 'prompt';
-  if (params.grant_only === true) return 'prompt';
+  const params = readJsonObject(toolParams);
+  if (!params || params.grant_only === true) return 'prompt';
   const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
   const innerTool = typeof params.tool === 'string' ? params.tool.trim() : '';
   if (!ghostId || !innerTool) return 'prompt';
@@ -129,6 +134,60 @@ function ghostCallApprovalPolicy(toolParams: unknown): McpToolApprovalPolicy {
   } catch {
     return 'prompt';
   }
+}
+
+/**
+ * 取 iOS Simulator progressive 调用的内层动作。
+ *
+ * 内层名一律过 canonical 化：改名后旧名仍是可调用的隐藏别名，别名必须命中与新名
+ * 完全相同的审批判定，否则旧名就成了绕过设备授权的口子。
+ */
+function readIOSSimulatorInnerCall(
+  context: McpToolApprovalContext,
+): { name: string | undefined; args: unknown } | undefined {
+  if (context.serverName !== 'cindy_ios_simulator') return undefined;
+  // Some Codex app-server versions omit the outer tool name but retain the
+  // validated progressive payload. Preserve the inner action's stricter policy
+  // instead of falling back to a persistable generic server prompt.
+  if (context.toolName !== 'call_tool' && context.toolName !== undefined) {
+    return undefined;
+  }
+  const params = readJsonObject(context.toolParams);
+  const rawName = typeof params?.name === 'string' ? params.name.trim() : '';
+  return {
+    name: rawName ? canonicalIOSSimulatorToolName(rawName) : undefined,
+    args: params?.args,
+  };
+}
+
+/**
+ * 设备级动作必须自带它要操作的那条 owned instance 路由。
+ */
+function hasIOSSimulatorInstanceRoute(args: Record<string, unknown>): boolean {
+  const { instanceId, generation, leaseId } = args;
+  return (
+    typeof instanceId === 'string' &&
+    instanceId.trim() !== '' &&
+    typeof generation === 'number' &&
+    Number.isInteger(generation) &&
+    generation > 0 &&
+    typeof leaseId === 'string' &&
+    leaseId.trim() !== ''
+  );
+}
+
+/**
+ * 只有「能确凿读出、且确实没有 owned 路由」的调用才免掉设备授权卡：那种调用到不了
+ * 任何设备（registry 的严格参数校验先拒，Host 收不到），弹窗纯属噪音 —— 无关任务把
+ * 「打开一个网址」误路由到模拟器时正是这个形状。
+ *
+ * 读不出形状时一律 fail closed 照旧弹窗：判定不能依赖「传输层此刻恰好也会拒」这种
+ * 外部前提，否则哪天入口多加一层 coercion，读不懂就会变成静默放行。
+ */
+function skipsRoutelessDeviceApproval(args: unknown): boolean {
+  const parsed = readJsonObject(args);
+  if (!parsed) return false;
+  return !hasIOSSimulatorInstanceRoute(parsed);
 }
 
 /** Claude SDK 工具名格式固定为 `mcp__<server>__<tool>`。 */
@@ -161,28 +220,26 @@ export function getDesktopMcpToolApprovalPolicy(
       ? 'auto-approve'
       : 'prompt-each-time';
   }
-  // 插件工具的用户自定档位。部分 Codex app-server 会省略外层 toolName，
-  // 但保留经 schema 校验的 ghost_call payload；此时仍可凭 ghost_id + tool
-  // 精确到用户配置。坐标缺失/形态不对会在 ghostCallApprovalPolicy 内 fail closed。
+  // Codex app-server may omit the outer toolName while retaining the validated
+  // ghost_call payload. The coordinates inside it remain sufficient for an
+  // exact user-selected policy; malformed payloads fail closed in the helper.
   if (serverName === 'cindy' && (toolName === 'ghost_call' || toolName === undefined)) {
     return ghostCallApprovalPolicy(toolParams);
   }
-  if (serverName === 'cindy_ios_simulator') {
-    // Some Codex app-server versions omit the outer tool name but retain the
-    // validated progressive payload. Preserve the inner action's stricter
-    // policy instead of falling back to a persistable generic server prompt.
-    if (toolName === 'call_tool' || toolName === undefined) {
-      const innerName =
-        toolParams && typeof toolParams === 'object'
-          ? (toolParams as { name?: unknown }).name
-          : undefined;
-      return innerName === 'build_app' ||
-        innerName === 'open_url' ||
-        innerName === 'create_instance' ||
-        innerName === 'attach_device'
-        ? 'prompt-each-time'
-        : 'auto-approve';
+  const iosSimulatorCall = readIOSSimulatorInnerCall(context);
+  if (iosSimulatorCall) {
+    const innerName = iosSimulatorCall.name;
+    // Taking control of a device is itself the authorization step, so it asks
+    // even before any route exists.
+    if (innerName === 'create_instance' || innerName === 'attach_device') {
+      return 'prompt-each-time';
     }
+    if (innerName === 'build_app' || innerName === 'open_simulator_url') {
+      return skipsRoutelessDeviceApproval(iosSimulatorCall.args)
+        ? 'auto-approve'
+        : 'prompt-each-time';
+    }
+    return 'auto-approve';
   }
   if (TRUSTED_MCP_SERVERS.has(serverName)) {
     return 'auto-approve';
@@ -197,13 +254,7 @@ export function getDesktopMcpToolApprovalPolicy(
 export function getDesktopMcpToolApprovalPresentation(
   context: McpToolApprovalContext,
 ): McpToolApprovalPresentation | undefined {
-  const innerName =
-    context.serverName === 'cindy_ios_simulator' &&
-    (context.toolName === 'call_tool' || context.toolName === undefined) &&
-    context.toolParams &&
-    typeof context.toolParams === 'object'
-      ? (context.toolParams as { name?: unknown }).name
-      : undefined;
+  const innerName = readIOSSimulatorInnerCall(context)?.name;
   if (innerName === 'build_app') {
     return {
       title: t('rightSidebar.iosSimulator.buildApproval.title'),

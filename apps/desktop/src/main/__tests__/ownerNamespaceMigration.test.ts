@@ -146,6 +146,163 @@ describe('claimLegacyOwnerNamespace', () => {
     await expect(fs.access(path.join(root, __testing.CLAIM_MARKER))).rejects.toThrow();
   });
 
+  it('ignores a live pid that OS provenance proves was reused by another app', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await writeDevInstanceRecord(root, 4242, root, {
+      startedAtMs,
+      rootDir: '/Applications/Old Cindy.app/Contents/Resources/app.asar',
+    });
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 120_000,
+          command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({ status: 'migrated' });
+    await expect(
+      fs.readFile(
+        path.join(root, 'owners', dataOwnerStorageKey('cloud-a'), 'slack-hook.json'),
+        'utf-8',
+      ),
+    ).resolves.toBe('legacy-hook');
+  });
+
+  it('does not permanently defer when a pid is reused by another app shortly after exit', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 2_500,
+          command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({ status: 'migrated' });
+  });
+
+  it('warms stale-pid provenance before side-channel importers inspect a completed claim', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    await fs.writeFile(
+      path.join(root, __testing.CLAIM_MARKER),
+      JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: true }),
+    );
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 120_000,
+          command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        }),
+      }),
+    );
+
+    expect(result).toEqual({ status: 'migrated', moved: 0, conflicts: 0 });
+    // Omit the synchronous identity reader: this assertion must consume the
+    // proof produced by claimLegacyOwnerNamespace's async warm-up.
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
+  });
+
+  it('warms stale-pid provenance for local startup before synchronous guards inspect it', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+
+    await __testing.warmStaleProcessProvenance(
+      root,
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 120_000,
+          command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        }),
+      }),
+    );
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
+  });
+
+  it('keeps local startup fail-closed when provenance warmup cannot read identity', async () => {
+    const root = await tempRoot();
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs: 1_000_000 });
+
+    await __testing.warmStaleProcessProvenance(
+      root,
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => {
+          throw new Error('process inspection denied');
+        },
+      }),
+    );
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+  });
+
+  it('keeps deferring when a reused pid now belongs to another Cindy process', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 120_000,
+          command: '/Applications/Cindy.app/Contents/MacOS/Cindy',
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'deferred',
+      deferredReason: 'concurrent-live-instances',
+    });
+    await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
+  });
+
+  it('fails closed when process identity cannot be read', async () => {
+    const root = await tempRoot();
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs: 1_000_000 });
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => {
+          throw new Error('process inspection denied');
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 'deferred',
+      deferredReason: 'concurrent-live-instances',
+    });
+    await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
+  });
+
   it('fails closed (defers) when a registry record exists but cannot be read', async () => {
     const root = await tempRoot();
     await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
@@ -281,6 +438,30 @@ describe('claimLegacyOwnerNamespace', () => {
     expect(result).toMatchObject({ status: 'migrated' });
     const targetRoot = path.join(root, 'owners', dataOwnerStorageKey('cloud-a'));
     await expect(fs.readFile(path.join(targetRoot, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
+  });
+
+  it('ignores a stale SingletonLock whose live pid has been reused by another app', async () => {
+    const root = await tempRoot();
+    await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
+    await writeSingletonLock(root, 4242);
+    const lockMtimeMs = (await fs.lstat(path.join(root, 'SingletonLock'))).mtimeMs;
+
+    const result = await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(
+        root,
+        {
+          isPidAlive: (pid) => pid === 4242,
+          readProcessIdentity: () => ({
+            startedAtMs: lockMtimeMs + 120_000,
+            command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          }),
+        },
+        { readlink: () => Promise.resolve('myhost-4242') },
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 'migrated' });
   });
 
   it('interrupts a long directory merge when an instance registers mid-recursion', async () => {
@@ -1281,6 +1462,34 @@ describe('legacy Ghost plugin recovery', () => {
     ).resolves.toContain('"id":"valid-plugin"');
   });
 
+  it('recovers plugins when a live registry pid was reused by another app', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    const startedAtMs = 1_000_000;
+    await writeGhostDir(root, 'cindy-brain', 'valid-plugin');
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+
+    const result = await recoverLegacyGhostPlugins(
+      { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 120_000,
+          command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({ status: 'migrated', moved: 1 });
+    await expect(
+      fs.readFile(
+        path.join(root, 'owners', ownerKey, 'cindy-brain', 'valid-plugin', 'ghost.json'),
+        'utf-8',
+      ),
+    ).resolves.toContain('"id":"valid-plugin"');
+  });
+
   it('interrupts plugin recovery when an instance registers before the next plugin move', async () => {
     const root = await tempRoot();
     await writeGhostDir(root, 'cindy-brain', 'first-plugin');
@@ -1538,6 +1747,47 @@ describe('hasExclusiveSharedLegacyUserDataAccess', () => {
     expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
     expect(hasExclusiveSharedLegacyUserDataAccess(root, () => false)).toBe(true);
   });
+
+  it('ignores a registry pid that was reused by another app', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+
+    expect(
+      hasExclusiveSharedLegacyUserDataAccess(
+        root,
+        (pid) => pid === 4242,
+        () => ({
+          startedAtMs: startedAtMs + 120_000,
+          command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('reuses async stale-pid proof in sync guards and invalidates it when the record changes', async () => {
+    const root = await tempRoot();
+    const startedAtMs = 1_000_000;
+    await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
+
+    await claimLegacyOwnerNamespace(
+      { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => ({
+          startedAtMs: startedAtMs + 120_000,
+          command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        }),
+      }),
+    );
+
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
+
+    await writeDevInstanceRecord(root, 4242, root, {
+      startedAtMs: startedAtMs + 1,
+    });
+    expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(false);
+  });
 });
 
 describe('isSameUserDataDir', () => {
@@ -1594,6 +1844,7 @@ function realFsDeps(
     passiveSharedUserData: () => false,
     selfPid: () => process.pid,
     isPidAlive: () => false,
+    readProcessIdentity: () => null,
     ...guardOverrides,
     ...fsOverrides,
   };
@@ -1603,18 +1854,20 @@ interface GuardDeps {
   passiveSharedUserData: () => boolean;
   selfPid: () => number;
   isPidAlive: (pid: number) => boolean;
+  readProcessIdentity: (pid: number) => { startedAtMs: number; command: string } | null;
 }
 
 async function writeDevInstanceRecord(
   root: string,
   pid: number,
   userDataDir: string = root,
+  options: { startedAtMs?: number; rootDir?: string } = {},
 ): Promise<void> {
   const registryDir = path.join(root, '.dev-instances');
   await fs.mkdir(registryDir, { recursive: true });
   await fs.writeFile(
     path.join(registryDir, `${pid}.json`),
-    JSON.stringify({ schemaVersion: 1, pid, userDataDir, passive: false }),
+    JSON.stringify({ schemaVersion: 1, pid, userDataDir, passive: false, ...options }),
     'utf-8',
   );
 }

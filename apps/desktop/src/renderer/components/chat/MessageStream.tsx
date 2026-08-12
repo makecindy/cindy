@@ -4150,6 +4150,7 @@ export function MessageStream({
               态丢失 / 滚动锚点漂走。 */}
                 <div
                   ref={itemsRef}
+                  data-share-selection-active={shareSelectionActive ? '' : undefined}
                   className={cn(
                     // msg-stream-items:直接子元素(每条 render item 的根节点)带
                     // content-visibility:auto(globals.css)—— 视口外条目跳过布局

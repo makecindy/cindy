@@ -19,10 +19,12 @@ import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
+import {
+  desktopUserDataDirForRegion,
+  resolveDesktopDevRegion,
+} from '../../../scripts/shared/desktop-dev-region.mjs';
 
-// 新装身份是 Cindy;旧 xdt-maker 目录仅在用户显式 --db 指过去时才碰,不再默认扫描。
-const DEFAULT_APP_SUPPORT = join(homedir(), 'Library', 'Application Support', 'Cindy');
 const DEFAULT_OUT_DIR = join(tmpdir(), 'cindy-mobile-realdata');
 const DEFAULT_LIMIT = 100;
 const DEFAULT_MESSAGE_LIMIT = 80;
@@ -39,7 +41,7 @@ const repoRoot = resolve(options.repo ?? join(import.meta.dirname, '..'));
 const requireFromRepo = createRequire(join(repoRoot, 'package.json'));
 const Database = requireFromRepo('better-sqlite3');
 
-const sourceDb = resolveDbPath(options.db, Boolean(options.confirmSensitive));
+const sourceDb = resolveDbPath(options.db, Boolean(options.confirmSensitive), options.region);
 // 私有输出目录:0700,只有当前用户可进。
 const outDir = resolve(options.outDir ?? DEFAULT_OUT_DIR);
 mkdirSync(outDir, { recursive: true });
@@ -313,7 +315,7 @@ function messageRow(row) {
 
 // DB 来源解析:显式 --db 直接用;auto 扫描属"从真实库导出敏感数据",必须显式 --confirm-sensitive
 // 才允许,避免脚本被无意运行就把整库聊天导出来。
-function resolveDbPath(input, confirmSensitive) {
+function resolveDbPath(input, confirmSensitive, region) {
   if (input && input !== 'auto') {
     const explicit = resolve(input);
     if (!existsSync(explicit)) throw new Error(`--db 指定的文件不存在: ${explicit}`);
@@ -325,17 +327,18 @@ function resolveDbPath(input, confirmSensitive) {
         '或加 `--confirm-sensitive` 明确确认要从默认目录导出敏感数据。',
     );
   }
+  const appSupport = desktopUserDataDirForRegion(region);
   const entries = [];
-  for (const name of safeReaddir(DEFAULT_APP_SUPPORT)) {
+  for (const name of safeReaddir(appSupport)) {
     if (!/^(xdt-maker|cindy)-.+\.db$/i.test(name)) continue;
-    const full = join(DEFAULT_APP_SUPPORT, name);
+    const full = join(appSupport, name);
     try {
       const stat = statSync(full);
       if (stat.isFile()) entries.push({ full, mtimeMs: stat.mtimeMs, size: stat.size });
     } catch {}
   }
   entries.sort((a, b) => b.mtimeMs - a.mtimeMs || b.size - a.size);
-  if (!entries[0]) throw new Error(`no cindy/xdt-maker *.db found in ${DEFAULT_APP_SUPPORT}`);
+  if (!entries[0]) throw new Error(`no cindy/xdt-maker *.db found in ${appSupport}`);
   return entries[0].full;
 }
 
@@ -352,10 +355,19 @@ function copySqliteBundle(source, target) {
 }
 
 function parseArgs(args) {
-  const parsed = {};
+  const parsed = {
+    region: resolveDesktopDevRegion(args, {
+      ...process.env,
+      CINDY_AUTH_REGION:
+        process.env.CINDY_AUTH_REGION ??
+        process.env.EXPO_PUBLIC_CINDY_AUTH_REGION,
+    }),
+  };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--db') parsed.db = args[++i];
+    else if (arg === '--region') i += 1;
+    else if (arg.startsWith('--region=')) continue;
     else if (arg === '--out') parsed.out = args[++i];
     else if (arg === '--out-dir') parsed.outDir = args[++i];
     else if (arg === '--repo') parsed.repo = args[++i];
@@ -377,7 +389,8 @@ function parseArgs(args) {
           'dev-only 工具:导出真实会话为移动端视觉预览快照(含敏感聊天数据)。',
           '',
           '  --db <path>           指定 SQLite 库路径(推荐);省略需配 --confirm-sensitive',
-          '  --confirm-sensitive   确认从默认 Cindy 目录自动扫描真实库并导出',
+          '  --region <cn|global|dev> 选择默认 userData 区域(默认读取区域环境变量，再默认 global)',
+          '  --confirm-sensitive   确认从所选区域的默认 profile 自动扫描真实库并导出',
           '  --serve               启动 token 门禁的本地 HTTP(仅回环 + Origin 白名单)',
           '  --port <n>            serve 端口(默认 3344)',
           '  --token <str>         固定 serve token(默认每次随机生成)',

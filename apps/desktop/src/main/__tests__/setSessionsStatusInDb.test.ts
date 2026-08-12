@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   webContentsSend: vi.fn(),
   closeSession: vi.fn(),
+  isSessionAlive: vi.fn(),
   withSendToSessionLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
@@ -66,7 +67,7 @@ vi.mock('../agent-island/service.js', () => ({
 }));
 vi.mock('../imageCacheStore', () => ({ removeSession: vi.fn() }));
 vi.mock('../maker-host/index.js', () => ({
-  getMakerIfReady: () => ({ closeSession: h.closeSession }),
+  getMakerIfReady: () => ({ closeSession: h.closeSession, isSessionAlive: h.isSessionAlive }),
 }));
 vi.mock('../maker-ipc/register.js', () => ({
   withSendToSessionLock: h.withSendToSessionLock,
@@ -87,6 +88,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-set-sessions-status-'));
   h.closeSession.mockResolvedValue(undefined);
+  h.isSessionAlive.mockReturnValue(false);
   h.isSessionStillRemovable.mockResolvedValue(true);
   h.cancelSessionOperations.mockResolvedValue(undefined);
   h.cleanupRemovedSession.mockResolvedValue(undefined);
@@ -240,7 +242,12 @@ describe('setSessionsStatusInDb', () => {
     expect(h.cancelSessionOperations).toHaveBeenCalledWith('s1');
     expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
       's1',
-      expect.objectContaining({ db: h.drizzle, isOwnerCurrent: expect.any(Function) }),
+      expect.objectContaining({
+        scanOwners: true,
+        recycleOwner: expect.any(Function),
+        db: h.drizzle,
+        isOwnerCurrent: expect.any(Function),
+      }),
     );
   });
 
@@ -268,7 +275,12 @@ describe('setSessionsStatusInDb', () => {
     await vi.waitFor(() => {
       expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
         's1',
-        expect.objectContaining({ db: h.drizzle, isOwnerCurrent: expect.any(Function) }),
+        expect.objectContaining({
+          scanOwners: true,
+          recycleOwner: expect.any(Function),
+          db: h.drizzle,
+          isOwnerCurrent: expect.any(Function),
+        }),
       );
     });
 
@@ -368,7 +380,12 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     expect(h.removeSessionRefs).toHaveBeenCalledWith('s1', h.drizzle);
     expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
       's1',
-      expect.objectContaining({ db: h.drizzle, isOwnerCurrent: expect.any(Function) }),
+      expect.objectContaining({
+        scanOwners: true,
+        recycleOwner: expect.any(Function),
+        db: h.drizzle,
+        isOwnerCurrent: expect.any(Function),
+      }),
     );
     expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
     expect(order).toEqual(['cancel', 'cleanup', 'remove-media-refs', 'recycle-worktree']);
@@ -408,6 +425,95 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
     expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
+  });
+
+  it('routes scanned owners through lock and close before low-level recycle', async () => {
+    const order: string[] = [];
+    h.withSendToSessionLock.mockImplementation(
+      async (sessionId: string, task: () => Promise<unknown>) => {
+        order.push(`lock:${sessionId}`);
+        const result = await task();
+        order.push(`unlock:${sessionId}`);
+        return result;
+      },
+    );
+    h.closeSession.mockImplementation(async (sessionId: string) => {
+      order.push(`close:${sessionId}`);
+    });
+    h.recycleWorktreeForRemovedSession.mockImplementation(
+      async (
+        sessionId: string,
+        options?: { recycleOwner?: (ownerId: string) => Promise<void> },
+      ) => {
+        order.push(`remove:${sessionId}`);
+        if (sessionId === 'shared') await options?.recycleOwner?.('owner');
+      },
+    );
+
+    await recycleSessionWorktreeForStatusChange('shared', 'archived');
+
+    expect(order).toEqual([
+      'lock:shared',
+      'close:shared',
+      'remove:shared',
+      'lock:owner',
+      'close:owner',
+      'remove:owner',
+      'unlock:owner',
+      'unlock:shared',
+    ]);
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenNthCalledWith(
+      2,
+      'owner',
+      expect.objectContaining({
+        scanOwners: false,
+        isSessionRuntimeAlive: expect.any(Function),
+        recycleOwner: expect.any(Function),
+      }),
+    );
+  });
+
+  it('passes current Maker runtime liveness into the low-level live-reference guard', async () => {
+    h.isSessionAlive.mockImplementation((sessionId: string) => sessionId === 'borrower');
+
+    await recycleSessionWorktreeForStatusChange('owner', 'archived');
+
+    const options = h.recycleWorktreeForRemovedSession.mock.calls[0]?.[1] as
+      | { isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined }
+      | undefined;
+    expect(options?.isSessionRuntimeAlive?.('borrower')).toBe(true);
+    expect(options?.isSessionRuntimeAlive?.('closed')).toBe(false);
+  });
+
+  it('still recycles a scanned owner when its runtime close throws (error is swallowed)', async () => {
+    h.closeSession.mockImplementation(async (sessionId: string) => {
+      if (sessionId === 'owner') throw new Error('runtime still alive');
+    });
+    h.recycleWorktreeForRemovedSession.mockImplementation(
+      async (
+        sessionId: string,
+        options?: { recycleOwner?: (ownerId: string) => Promise<void> },
+      ) => {
+        if (sessionId === 'shared') await options?.recycleOwner?.('owner');
+      },
+    );
+
+    await recycleSessionWorktreeForStatusChange('shared', 'archived');
+
+    expect(h.closeSession).toHaveBeenCalledWith('owner');
+    // Close errors are caught (.catch(() => undefined)), so owner is still recycled.
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledTimes(2);
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
+      'shared',
+      expect.objectContaining({ scanOwners: true, recycleOwner: expect.any(Function) }),
+    );
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
+      'owner',
+      expect.objectContaining({ scanOwners: false, recycleOwner: expect.any(Function) }),
+    );
+    expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', {
+      sessionId: 'shared',
+    });
   });
 
   it('fails closed before closing or recycling when Host cleanup is not configured', async () => {

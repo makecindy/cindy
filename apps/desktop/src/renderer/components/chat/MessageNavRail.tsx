@@ -438,6 +438,21 @@ export function MessageNavRail({
           // 该轮次的内容当前正显示在视口里 → 提亮(Codex 同款"屏上内容高亮");
           // 当前项在提亮之上再加长,两个信号分工:范围 = 在看什么,长刻度 = 读到哪。
           const inView = rangeStartIdx >= 0 && fullIdx >= rangeStartIdx && fullIdx <= rangeEndIdx;
+          // 自动化提问是系统注入的重复性消息,用更短的刻度保留其导航入口,
+          // 同时让手动提问成为更容易扫到的主节奏。当前项仍比普通自动刻度更长,
+          // 保持点击跳转后的定位反馈。
+          const tickWidthClass = isActive
+            ? entry.isAutomation
+              ? 'w-3'
+              : 'w-4'
+            : inView
+              ? entry.isAutomation
+                ? 'w-2.5'
+                : 'w-3'
+              : entry.isAutomation
+                ? 'w-2'
+                : 'w-3';
+          const tickHoverWidthClass = entry.isAutomation ? 'group-hover:w-3' : 'group-hover:w-3.5';
           return (
             <Tooltip.Root key={entry.id}>
               <Tooltip.Trigger asChild>
@@ -448,6 +463,7 @@ export function MessageNavRail({
                     preview,
                   })}
                   aria-current={isActive ? 'true' : undefined}
+                  data-message-nav-automation={entry.isAutomation ? 'true' : undefined}
                   onClick={() => handleTickClick(entry.id)}
                   onMouseEnter={handleTickMouseEnter}
                   onMouseLeave={handleTickMouseLeave}
@@ -468,11 +484,11 @@ export function MessageNavRail({
                       'h-[2px] rounded-full',
                       'transition-[width,background-color] duration-[var(--motion-base)]',
                       'ease-[var(--motion-ease-move)]',
-                      isActive
-                        ? 'w-4 bg-[var(--text-primary)]'
-                        : inView
-                          ? 'w-3 bg-[var(--text-primary)] group-hover:w-3.5'
-                          : 'w-3 bg-[var(--border-default)] group-hover:w-3.5 group-hover:bg-[var(--text-secondary)]',
+                      tickWidthClass,
+                      inView || isActive
+                        ? 'bg-[var(--text-primary)]'
+                        : 'bg-[var(--border-default)] group-hover:bg-[var(--text-secondary)]',
+                      tickHoverWidthClass,
                     )}
                   />
                 </button>

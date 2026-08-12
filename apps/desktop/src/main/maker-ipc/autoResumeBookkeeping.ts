@@ -701,6 +701,23 @@ export class AutoResumeBookkeeping {
     return this.schedules.has(sessionId);
   }
 
+  /**
+   * Whether the exact attempt is still waiting for its timer to fire.
+   *
+   * `hasSchedule()` intentionally also returns true while the callback is
+   * awaiting DB/coordinator work. Session-close handoff must distinguish that
+   * execution phase from the pre-fire rebuild window; once the timer has fired,
+   * the old Session is no longer safe to preserve.
+   */
+  hasWaitingSchedule(sessionId: string, attemptToken: number): boolean {
+    const scheduled = this.schedules.get(sessionId);
+    return (
+      scheduled?.attemptToken === attemptToken &&
+      scheduled.timer !== null &&
+      this.currentAttempts.get(sessionId) === attemptToken
+    );
+  }
+
   // ── 会话终止收尾 ───────────────────────────────────────────────────────────
 
   /**

@@ -15,6 +15,8 @@ import { resolveUserDisplayText } from './userMessageDisplayText';
 export interface NavRailEntry {
   /** user 消息的 clientId,同时是 data-message-client-id 锚点值。 */
   id: string;
+  /** scheduler 注入的自动化提问;导航条用更短的刻度与手动提问区分。 */
+  isAutomation?: boolean;
   /**
    * 提问的单行预览。不是原文首行:user 消息可能带 composer 引用标记行
    * (`> <!-- cindy-composer-quote -->`),直接截原文会把内部标记裸奔进
@@ -154,11 +156,16 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       if (!preview) preview = attachmentNames.join(' · ');
       const attachmentCount = (m.images?.length ?? 0) + (m.files?.length ?? 0);
       if (preview) {
-        entries.push({ id: m.clientId, preview });
+        entries.push({ id: m.clientId, preview, isAutomation: Boolean(m.automationOrigin) });
       } else if (attachmentCount > 0) {
         // 有附件但一个名字都取不到(粘贴截图):仍是真实提问,保留刻度,
         // 预览文案由组件按 attachmentsOnly 用 i18n 兜底。
-        entries.push({ id: m.clientId, preview: '', attachmentsOnly: attachmentCount });
+        entries.push({
+          id: m.clientId,
+          preview: '',
+          attachmentsOnly: attachmentCount,
+          isAutomation: Boolean(m.automationOrigin),
+        });
       }
       // 无文本、无附件 → 无法识别的空刻度,不当成提问(PR #830 review)。
       continue;

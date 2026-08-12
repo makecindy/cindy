@@ -3020,6 +3020,21 @@ export class CodexAgent extends BaseAgent {
     // turn id 在同一 thread 内唯一;墓碑随 session handle 释放,不跨 session 泄漏。
     const completedTurnIds = new Set<string>();
     const terminalErroredTurnIds = new Set<string>();
+    // Keep one authoritative interrupt origin per turn until turn/completed.
+    // A host-policy ACK proves only request acceptance, not that the command
+    // stopped; explicit user Stop overrides that provenance and cannot be
+    // reclassified by late blocked-item notifications. Failed policy ACKs stay
+    // provenance-only so output remains visible until completion decides.
+    const turnInterruptOrigins = new Map<
+      string,
+      | {
+          source: 'host-policy';
+          reason: string;
+          itemId: string;
+          acknowledgement: 'pending' | 'acknowledged' | 'failed';
+        }
+      | { source: 'user-stop' }
+    >();
     // daemon 后端 retry-loop 的终局升级 (issue #677): 远端摸不到 Codex 后端时
     // daemon 无限 willRetry, turn 永不收口。同 turn 重试超阈值 → 合成终态错误,
     // 走与终态 error 完全相同的收口路径 (terminalErroredTurnIds + Done status)。
@@ -7680,6 +7695,45 @@ export class CodexAgent extends BaseAgent {
 
     function handleTurnCompleted(params: TurnCompletedParams): void {
       const turn = params.turn;
+      const interruptOrigin = turnInterruptOrigins.get(turn.id);
+      turnInterruptOrigins.delete(turn.id);
+      if (
+        interruptOrigin?.source === 'host-policy'
+        && !terminalErroredTurnIds.has(turn.id)
+        && !completedTurnIds.has(turn.id)
+        && turn.status === 'interrupted'
+      ) {
+        // The provider completion is the first proof that the denied command is
+        // actually finished. Close the turn with the policy error and Codex's
+        // required idle tail; the tombstone keeps interrupted from becoming a
+        // user-Stop done(cancelled:true). Completed/failed fall through to the
+        // provider-authoritative path regardless of interrupt ACK state.
+        // This path deliberately tombstones the provider completion, so the
+        // normal interrupted-turn branch below cannot end a plan cycle for us.
+        // Clear it here before the next send inherits stale Plan Mode state.
+        if (currentTurnPlanModeActive) {
+          proposedPlanText = null;
+          planCycleActive = false;
+          currentTurnPlanModeActive = false;
+        }
+        terminalErroredTurnIds.add(turn.id);
+        eventQueue.push({
+          type: 'error',
+          data: {
+            message: interruptOrigin.reason,
+            isTerminal: true,
+            reason: 'host-shell-command-blocked',
+          },
+          source: 'codex',
+        });
+        handleTurnCompleted(params);
+        eventQueue.push({
+          type: 'status',
+          data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+          source: 'codex',
+        });
+        return;
+      }
       if (reconnectStallCleanupTurnId === turn.id) {
         // The watchdog already published the terminal error and is still
         // waiting for turn/interrupt. Keep the local busy guard until the
@@ -8967,18 +9021,67 @@ export class CodexAgent extends BaseAgent {
           });
           if (hostPolicy?.decision === 'deny') {
             discardPendingSpawnLineageIds(reservedChildThreadIds);
+            const existingInterruptOrigin = turnInterruptOrigins.get(params.turnId);
+            // Explicit user Stop owns the terminal attribution until the
+            // authoritative completion. Late blocked items must not reclassify
+            // that cancellation as a policy interruption.
+            if (existingInterruptOrigin?.source === 'user-stop') return;
+            // Deduplicate only the same blocked item while its interrupt RPC is
+            // still in flight. A different blocked item is fresh proof that the
+            // turn is still executing and must issue another bounded interrupt,
+            // even if the previous request has not acknowledged yet.
+            if (
+              existingInterruptOrigin?.acknowledgement === 'pending' &&
+              existingInterruptOrigin.itemId === params.item.id
+            ) {
+              return;
+            }
             log.warn('command execution interrupted by host policy', {
               turnId: params.turnId,
               reason: hostPolicy.reason,
             });
-            void host
-              .request(Method.TurnInterrupt, { threadId, turnId: params.turnId })
-              .catch(() => undefined);
+            const pendingInterrupt: {
+              source: 'host-policy';
+              reason: string;
+              itemId: string;
+              acknowledgement: 'pending' | 'acknowledged' | 'failed';
+            } = {
+              source: 'host-policy',
+              reason: hostPolicy.reason,
+              itemId: params.item.id,
+              acknowledgement: 'pending',
+            };
+            turnInterruptOrigins.set(params.turnId, pendingInterrupt);
+            // Keep the task visibly running until provider completion proves the
+            // command stopped. This non-terminal warning survives the ACK window
+            // without arming Session's terminal-error drain.
             eventQueue.push({
               type: 'error',
-              data: { message: hostPolicy.reason, isTerminal: false },
+              data: {
+                message: pendingInterrupt.reason,
+                isTerminal: false,
+                reason: 'host-shell-command-blocked',
+              },
               source: 'codex',
             });
+            void (async () => {
+              const interrupted = await interruptTurnForPermissionTighten(params.turnId, {
+                suppressFailureEvent: true,
+              });
+              if (turnInterruptOrigins.get(params.turnId) !== pendingInterrupt) return;
+              if (interrupted) {
+                pendingInterrupt.acknowledgement = 'acknowledged';
+                return;
+              }
+              pendingInterrupt.acknowledgement = 'failed';
+              if (closed) return;
+              // The command may still be running. This provenance marker is not
+              // a tombstone, so later output remains visible; completion status
+              // decides whether the interrupt actually took effect.
+              log.error('host policy could not interrupt running command', {
+                turnId: params.turnId,
+              });
+            })();
             return;
           }
         }
@@ -10456,6 +10559,12 @@ export class CodexAgent extends BaseAgent {
         const hadPendingRetry = overloadRetryPending();
         discardOverloadRetry('aborted');
         if (closed) return;
+        if (currentTurnId) {
+          // User intent wins terminal attribution. Keep an explicit marker
+          // instead of merely deleting policy provenance so late blocked-item
+          // notifications cannot re-arm it before turn/completed arrives.
+          turnInterruptOrigins.set(currentTurnId, { source: 'user-stop' });
+        }
         // 有挂起重投时的 Stop **必须**由这里显式收口逻辑 turn —— desktop 的
         // SessionTurnActivityTracker 只在收到终态事件后才释放派发闩，Codex
         // coordinator 也刻意等这个事件而不自己解锁，hook runner 同样等到一小时硬

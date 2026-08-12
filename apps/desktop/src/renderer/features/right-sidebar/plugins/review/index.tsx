@@ -43,7 +43,7 @@ export interface ReviewState {
   fileTreeVisible: boolean;
   /** diff 行是否自动换行。默认关闭,保留横向滚动。 */
   wordWrap: boolean;
-  /** 是否显示行内文字差异强调。对齐 Codex,默认开启。 */
+  /** 是否显示行内文字差异强调。默认关闭,避免大文件审查时增加渲染开销。 */
   wordDiff: boolean;
   /** 是否用忽略空白模式读取 diff。默认关闭,避免影响 patch 类操作。 */
   hideWhitespace: boolean;
@@ -59,7 +59,7 @@ const DEFAULT_STATE: ReviewState = {
   diffViewMode: 'unified',
   fileTreeVisible: false,
   wordWrap: false,
-  wordDiff: true,
+  wordDiff: false,
   hideWhitespace: false,
   richMarkdownPreview: true,
   branchBaseRef: null,

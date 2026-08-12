@@ -1624,6 +1624,30 @@
         "ko": "프로세스"
       },
       "note": "OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。"
+    },
+    {
+      "id": "china-model-group",
+      "status": "proposed",
+      "en": "China",
+      "translations": {
+        "zh-CN": "中国",
+        "zh-TW": "中國",
+        "ja": "中国",
+        "ko": "중국"
+      },
+      "note": "模型目录中由服务端显式 group:\"china\" 标记的来源分组。它描述模型或供应商来自中国，不表示相对于当前用户或发行区域的‘国内’；英文词条保持自然大小写 China，设置页分组头由统一 uppercase 样式显示为 CHINA。"
+    },
+    {
+      "id": "ungrouped",
+      "status": "proposed",
+      "en": "Ungrouped",
+      "translations": {
+        "zh-CN": "未分组",
+        "zh-TW": "未分組",
+        "ja": "未分類",
+        "ko": "미분류"
+      },
+      "note": "模型目录中没有可信厂商 group、但仍可用于对话的兜底分组。它不推断产地或厂商；服务端补充明确 group 后模型会自动归入对应分组。与不能用于对话、沿用原短名称的 Other（其它）分开。"
     }
   ]
 }

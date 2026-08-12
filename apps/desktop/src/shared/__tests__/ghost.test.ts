@@ -343,7 +343,7 @@ describe('ghost · 清单校验', () => {
     }).ok).toBe(false);
   });
 
-  it('locale description / whenToUse 共用协议仓字符上限', () => {
+  it('locale description / whenToUse 共用本地协议包字符上限', () => {
     const manifest = validateGhostManifest({
       ...goodManifest(),
       description: 'Base description',
