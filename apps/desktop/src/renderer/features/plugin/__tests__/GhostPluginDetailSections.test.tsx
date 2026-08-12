@@ -834,8 +834,9 @@ describe('Ghost plugin detail sections', () => {
     config?: Record<string, unknown> | ((id: string) => Record<string, unknown>);
     setToolPermissions?: (id: string, config: unknown) => Promise<unknown>;
   }) {
-    const setToolPermissions =
-      overrides?.setToolPermissions ?? vi.fn(async () => ({ config: {} }));
+    const setToolPermissions = vi.fn(
+      overrides?.setToolPermissions ?? (async () => ({ config: {} })),
+    );
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -935,6 +936,26 @@ describe('Ghost plugin detail sections', () => {
         tool_6: 'blocked',
       },
     });
+  });
+
+  it('drops permission keys removed from the current manifest when saving', async () => {
+    const setToolPermissions = stubToolPermissionApi({
+      config: {
+        globalPolicy: 'custom',
+        tools: { removed_tool: 'always-allow', tool_0: 'blocked' },
+      },
+    });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    fireEvent.click(within(firstGroup).getByRole('button', { name: 'Always allow' }));
+
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(1));
+    const saved = setToolPermissions.mock.calls[0]?.[1] as {
+      tools?: Record<string, unknown>;
+    };
+    expect(saved.tools).not.toHaveProperty('removed_tool');
+    expect(Object.keys(saved.tools ?? {})).toEqual(sevenTools.map((tool) => tool.name));
   });
 
   it('collapses the tool list without losing the global policy control', () => {

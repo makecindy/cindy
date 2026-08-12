@@ -709,7 +709,7 @@ export function ToolsSection({
     // custom 不能依赖全局继承。先把当前 manifest 所有工具的有效档位
     // 实体化，再改目标行；否则从全局 blocked 切成 custom 时，未显式
     // 入表的新工具会静默回落 needs-approval，等价于被意外解禁。
-    const nextTools = { ...(configRef.current.tools ?? {}) };
+    const nextTools: Record<string, ToolApprovalMode> = {};
     for (const tool of tools) {
       nextTools[tool.name] = toolModeFromConfig(configRef.current, tool.name);
     }

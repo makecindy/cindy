@@ -59,6 +59,24 @@ function normalizeConfig(raw: unknown): GhostToolPermissionConfig {
   return cfg;
 }
 
+/**
+ * 找出 renderer 试图为当前 manifest 未声明工具写入的预授权键。
+ * 必须在 IPC 写入边界用已安装 manifest 调用；只在读取时默认
+ * needs-approval 不够，否则攻击者可预埋未来工具名的 always-allow。
+ */
+export function undeclaredToolPermissionKeys(
+  config: unknown,
+  declaredTools: readonly GhostToolDecl[] | undefined,
+): string[] {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return [];
+  const rawTools = (config as { tools?: unknown }).tools;
+  if (!rawTools || typeof rawTools !== 'object' || Array.isArray(rawTools)) return [];
+  const allowed = new Set((declaredTools ?? []).map((tool) => tool.name));
+  return Object.keys(rawTools as Record<string, unknown>).filter(
+    (toolName) => !allowed.has(toolName),
+  );
+}
+
 function normalize(raw: unknown): GhostToolPermissionsData {
   if (!raw || typeof raw !== 'object') return { permissions: {} };
   const rawPerms = (raw as { permissions?: unknown }).permissions;
@@ -191,4 +209,9 @@ export function ghostToolBlockVerdict(
  * 依赖 electron,单测不碰真实文件——落盘链路由 IPC 层与派发器测试覆盖,这里只
  * 锁清洗与档位解析(与 errandPrefsStore 同口径)。
  */
-export const __testing = { normalizeConfig, normalize, resolveModeFromConfig };
+export const __testing = {
+  normalizeConfig,
+  normalize,
+  resolveModeFromConfig,
+  undeclaredToolPermissionKeys,
+};

@@ -20,4 +20,26 @@ describe('Ghost tool-permission read IPC security contract', () => {
       handler.indexOf('readGhostToolPermissions('),
     );
   });
+
+  it('validates installed ghost and manifest tool allowlist before persisting permissions', () => {
+    const main = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
+      'utf8',
+    );
+    const handlerStart = main.indexOf("ipcMain.handle('ghosts:tool-permissions:set'");
+    const handlerEnd = main.indexOf('\n  });', handlerStart);
+    const handler = main.slice(handlerStart, handlerEnd);
+
+    expect(handlerStart).toBeGreaterThanOrEqual(0);
+    expect(handler).toContain('manager.list().find(');
+    expect(handler).toContain('undeclaredToolPermissionKeys(config, installed.manifest.tools)');
+    expect(handler).toContain("throwIpcError('NOT_FOUND'");
+    expect(handler).toContain("throwIpcError(\n        'INVALID_PARAMS'");
+    expect(handler.indexOf('manager.list().find(')).toBeLessThan(
+      handler.indexOf('writeGhostToolPermissions('),
+    );
+    expect(handler.indexOf('undeclaredToolPermissionKeys(')).toBeLessThan(
+      handler.indexOf('writeGhostToolPermissions('),
+    );
+  });
 });

@@ -15,7 +15,8 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
 
 const storeModule = await import('../ghostToolPermissionsStore');
 const { __testing, ghostToolBlockVerdict } = storeModule;
-const { normalizeConfig, normalize, resolveModeFromConfig } = __testing;
+const { normalizeConfig, normalize, resolveModeFromConfig, undeclaredToolPermissionKeys } =
+  __testing;
 
 describe('normalizeConfig(单插件授权配置清洗)', () => {
   it('合法档位保留,非法档位逐项丢弃(= 回到默认 needs-approval)', () => {
@@ -45,6 +46,33 @@ describe('normalizeConfig(单插件授权配置清洗)', () => {
     expect(normalizeConfig(null)).toEqual({});
     expect(normalizeConfig('always-allow')).toEqual({});
     expect(normalizeConfig({ tools: ['always-allow'] })).toEqual({});
+  });
+});
+
+describe('undeclaredToolPermissionKeys(manifest 写入白名单)', () => {
+  const declared = [
+    { name: 'read', description: '' },
+    { name: 'write', description: '' },
+  ];
+
+  it('只允许当前已安装 manifest 声明的工具键', () => {
+    expect(
+      undeclaredToolPermissionKeys(
+        { tools: { read: 'blocked', write: 'needs-approval' } },
+        declared,
+      ),
+    ).toEqual([]);
+    expect(
+      undeclaredToolPermissionKeys(
+        { tools: { read: 'blocked', new_sensitive: 'always-allow', future: 'blocked' } },
+        declared,
+      ),
+    ).toEqual(['new_sensitive', 'future']);
+  });
+
+  it('空配置与无 tools 的全局收紧策略不会产生伪键', () => {
+    expect(undeclaredToolPermissionKeys(null, declared)).toEqual([]);
+    expect(undeclaredToolPermissionKeys({ globalPolicy: 'blocked' }, declared)).toEqual([]);
   });
 });
 

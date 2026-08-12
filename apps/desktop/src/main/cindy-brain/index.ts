@@ -203,6 +203,7 @@ import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStor
 import {
   readGhostToolPermissions,
   resolveToolApprovalMode,
+  undeclaredToolPermissionKeys,
   writeGhostToolPermissions,
 } from './ghostToolPermissionsStore.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
@@ -5249,11 +5250,26 @@ export function registerGhostIpc(): void {
   });
   ipcMain.handle('ghosts:tool-permissions:set', (event, ghostId: unknown, config: unknown) => {
     assertTrustedAppRendererEvent(event);
-    if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
-      throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
+    if (
+      typeof ghostId !== 'string' ||
+      ghostId.trim().length === 0 ||
+      ghostId !== ghostId.trim()
+    ) {
+      throwIpcError('INVALID_PARAMS', 'ghostId must be an exact non-empty installed plugin id');
     }
     if (config !== null && (typeof config !== 'object' || Array.isArray(config))) {
       throwIpcError('INVALID_PARAMS', 'config must be an object or null');
+    }
+    const installed = manager.list().find((ghost) => ghost.manifest.id === ghostId);
+    if (!installed) {
+      throwIpcError('NOT_FOUND', 'ghostId must identify an installed plugin');
+    }
+    const undeclaredKeys = undeclaredToolPermissionKeys(config, installed.manifest.tools);
+    if (undeclaredKeys.length > 0) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        `tool permission keys are not declared by the installed plugin: ${undeclaredKeys.join(', ')}`,
+      );
     }
     const saved = writeGhostToolPermissions(ghostId, config);
     getGhostSetupChangeBus().emit(ghostId, {
