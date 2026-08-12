@@ -538,9 +538,18 @@ async function countShardFiles(dir: string): Promise<number> {
  * .cindy-worktrees 下、会话 workdir 是子目录时 (如 /home/me/.cindy-worktrees/
  * proj/apps/a), `.git` 在祖先 proj/ 下 — 只查 `<p>/.git` 会误判非活仓库并
  * 推导成错误主仓根 (Codex review on #2519 第十二轮 + 第十四轮)。
+ *
+ * 但遍历祖先对**已归档的托管 worktree** 误伤: /repo/.cindy-worktrees/<name>/
+ * 的 <name> 已删除后 worktree 无 .git, 而主仓 /repo/.git 仍存在 — 遍历命中
+ * 主仓标记会判活仓库、跳过静态推导, 记忆永远孤儿 (Codex review on #2519
+ * 第十五轮)。因此遍历**止步于托管 worktree 根 (含 worktree 名)**: 该根
+ * 及以下有 .git 才算活仓库, 主仓祖先不参与判定。非托管形态 (无
+ * .cindy-worktrees/.xdt-worktrees 段) 保持遍历到根的行为。
  */
 async function isLiveGitRepo(p: string): Promise<boolean> {
-  let cur = path.resolve(p);
+  const abs = path.resolve(p);
+  const stop = managedWorktreeRoot(abs); // null = 非托管形态, 遍历到根
+  let cur = abs;
   for (;;) {
     try {
       const s = await fs.stat(path.join(cur, '.git'));
@@ -548,10 +557,27 @@ async function isLiveGitRepo(p: string): Promise<boolean> {
     } catch {
       // 继续向上
     }
+    if (stop !== null && cur === stop) return false; // 托管根未命中 → 非活仓库
     const parent = path.dirname(cur);
     if (parent === cur) return false;
     cur = parent;
   }
+}
+
+/**
+ * 托管 worktree 根 (含 worktree 名) — 解析 absPath 中 `.cindy-worktrees/<name>`
+ * 或 `.xdt-worktrees/<name>` 段 (两种分隔符), 返回该段整体路径; 无托管段
+ * 返回 null。
+ */
+function managedWorktreeRoot(absPath: string): string | null {
+  const segments = absPath.split(/[\\/]/);
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    if (!MANAGED_WORKTREE_DIRS.includes(segments[i])) continue;
+    const worktreeName = segments[i + 1];
+    if (worktreeName.length === 0) continue;
+    return segments.slice(0, i + 2).join(path.sep);
+  }
+  return null;
 }
 
 /**
