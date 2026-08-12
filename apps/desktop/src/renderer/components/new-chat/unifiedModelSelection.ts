@@ -1,0 +1,424 @@
+/**
+ * unifiedModelSelection —— 统一模型选择器(模型优先)面板的**纯逻辑层**:行生效配置合成、
+ * 收藏/分组陈列、rail 派生、配置浮层定位。规格见
+ * `docs/product-rules/model-selector-unified.md` §1.2 / §1.3 / §1.5 / §2。
+ *
+ * 为什么单独一层:M3 的行三元组(引擎图标 + 推理强度 + Fast)与 M4 浮层里的每一个控件,
+ * 显示的都是**同一份合成结果** —— 推荐引擎(M1 纯逻辑) ⊕ 引擎 override(M2 store) ⊕
+ * providerModelMemory 的既有深度 / Fast 槽。合成规则若在行与浮层各写一遍,必然漂移成
+ * 「行上写着 high、浮层滑杆停在 medium」。这里是那份规则的单点实现,组件只负责画。
+ *
+ * 三条边界:
+ *   1. **零 IO**:store 的读取(引擎 override / 收藏 / 记忆)由调用方注入取值函数,本模块
+ *      不 import 任何 store —— 同一套规则要能在 jsdom 之外直接单测。
+ *   2. **推荐永远来自 M1**:本模块不自己推导推荐引擎,只消费 `UnifiedModelEntry.recommended`
+ *      与 `capabilities`(它们已按生效来源解析,禁止读拍平列表 —— 见 unifiedSelection 头注)。
+ *   3. **深度只存 canonical key**:`Effort` 全程是 `EFFORT_VALUES` 里的键,显示文案另查
+ *      (i18n `effortLevels.*`),绝不把翻译过的文案回灌进配置。
+ */
+
+import type {
+  ModelCategory,
+  UnifiedAgentCapability,
+  UnifiedModelEntry,
+} from '@cindy/model-providers';
+import { classifyModel } from '@cindy/model-providers';
+
+import type { AgentKind } from '@/hooks/useAgentCapabilities';
+import type { SelectableVendor } from '@/lib/agentVendors';
+import type { Effort } from '@/lib/userPreferences.types';
+import type { ModelFavoriteItem } from '@/state/modelFavorites';
+
+/** 引擎在**选择器 / 草稿链路**里的口径(vendor);catalog / capabilities 侧是 AgentKind。 */
+export type UnifiedEngine = SelectableVendor;
+
+/** vendor → AgentKind(查目录 / 能力 / 记忆时用)。 */
+export function agentKindOfEngine(engine: UnifiedEngine): AgentKind {
+  return engine === 'cc' ? 'claude-code' : engine === 'codex' ? 'codex' : 'pi';
+}
+
+/** AgentKind → vendor(落 store / draft 时用)。未知值回落 cc,与既有 sanitize 方向一致。 */
+export function engineOfAgentKind(agent: AgentKind): UnifiedEngine {
+  return agent === 'codex' ? 'codex' : agent === 'pi' ? 'pi' : 'cc';
+}
+
+/**
+ * 行 / 浮层的锚点(规格 §1.5):模型行按 (来源, 模型) 定位,收藏条目按**独立 uid** 定位。
+ * 同模型的多条收藏互不牵连,靠的就是这个 uid —— 选中 / hover / 浮层绑定 / 删除全走锚点。
+ */
+export type UnifiedAnchor =
+  | { kind: 'model'; providerId: string; modelId: string }
+  | { kind: 'fav'; uid: string; providerId: string; modelId: string };
+
+/** 锚点的字符串键(React key / DOM data 属性 / 相等比较)。 */
+export function anchorKey(anchor: UnifiedAnchor): string {
+  return anchor.kind === 'fav'
+    ? `fav::${anchor.uid}`
+    : `model::${anchor.providerId}::${anchor.modelId}`;
+}
+
+export function sameAnchor(a: UnifiedAnchor | null, b: UnifiedAnchor | null): boolean {
+  if (!a || !b) return a === b;
+  return anchorKey(a) === anchorKey(b);
+}
+
+/** 一行(或一条收藏)当前**生效**的完整配置。 */
+export interface UnifiedRowConfig {
+  engine: UnifiedEngine;
+  agent: AgentKind;
+  /** 该 (模型, 引擎) 真实支持的档位;**空数组 = 不可调**(浮层不画滑杆,行不显示档字)。 */
+  efforts: readonly Effort[];
+  /** 生效档位;不可调时为 null。 */
+  effort: Effort | null;
+  /** 生效的 Fast 开关(不具备能力时恒 false —— 不做假按钮)。 */
+  fast: boolean;
+  /** 该 (模型, 引擎) 是否真的支持 Fast(目录能力 × agent 运行时能力)。 */
+  fastCapable: boolean;
+  /** 用户是否在这一行上留下过与推荐不同的配置(行内三元组提亮 / 浮层底栏三态)。 */
+  customized: boolean;
+  capability: UnifiedAgentCapability | null;
+}
+
+export interface ResolveRowConfigArgs {
+  entry: UnifiedModelEntry;
+  /** 用户显式选定的引擎(modelEnginePrefs);不在候选内视同没有(推荐必须是候选)。 */
+  engineOverride?: UnifiedEngine | undefined;
+  /** 该 (agent, 来源, 模型) 的深度记忆(providerModelMemory 既有槽)。 */
+  memoryEffort?: (agent: AgentKind) => Effort | undefined;
+  /** 该 (agent, 来源, 模型) 的 Fast 记忆(providerModelMemory 既有槽)。 */
+  memoryFast?: (agent: AgentKind) => boolean | undefined;
+  /** agent 运行时是否具备 Fast 能力(useAgentCapabilities.hasFastMode);缺省视为具备。 */
+  agentFastModeCapable?: (agent: AgentKind) => boolean;
+  /**
+   * 会话内的**默认落点引擎**(= 当前会话正在跑的引擎,规格 §1.6)。命中候选时**顶替推荐**
+   * 作为该行的缺省引擎 —— 会话内切引擎是有损的,一个两边都能跑的模型应当默认落在当前引擎上
+   * (无损直切),而不是按"新会话推荐"把用户推去重建上下文。
+   *
+   * 优先级刻意排在**用户显式 override 之下**:用户在浮层里点过引擎胶囊,那是显式意图,
+   * 会话内也要照显示(此时该行就是一次跨引擎选择,由调用方走 performAgentSwitch)。
+   * 把 pinned 排在 override 之上会造出「点了没反应」的假按钮。
+   */
+  pinnedEngine?: UnifiedEngine | undefined;
+}
+
+function pickEffort(
+  capability: UnifiedAgentCapability | null,
+  remembered: Effort | undefined,
+): Effort | null {
+  // 目录侧 Effort 是字面量联合、renderer 侧是 string 别名 —— 这里统一按 string 比较,
+  // 免得每个 includes 都要断言;值域校验由 store 的 sanitize(EFFORT_VALUES)负责。
+  const efforts: readonly string[] = capability?.efforts ?? [];
+  if (efforts.length === 0) return null;
+  if (remembered && efforts.includes(remembered)) return remembered;
+  const fallback: string | null = capability?.defaultEffort ?? null;
+  return fallback && efforts.includes(fallback) ? fallback : (efforts[0] ?? null);
+}
+
+/**
+ * 模型行的生效配置 = **推荐引擎 ⊕ 引擎 override ⊕ 深度 / Fast 记忆**。
+ *
+ * 引擎:override 命中候选才采用 —— 候选集是「真能路由」的集合(M1 约束 2),放行一个不在
+ * 候选里的历史 override 就是造假按钮(用户重启后发现选不出去)。落不到候选时静默回落推荐,
+ * **不清 store**:候选可能只是当前来源没连上,连回来后用户的选择应当照旧生效。
+ *
+ * 深度:记忆值必须被该 (模型, 引擎) 真实支持才采用 —— 同一模型跨引擎档位集合不同
+ * (如 codex 有 xhigh、cc 没有),照搬会显示一个发不出去的档。
+ */
+export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowConfig {
+  const { entry, engineOverride, memoryEffort, memoryFast, agentFastModeCapable } = args;
+  const candidateEngines = entry.candidates.map(engineOfAgentKind);
+  const overrideUsable =
+    engineOverride !== undefined && candidateEngines.includes(engineOverride);
+  const pinned =
+    args.pinnedEngine !== undefined && candidateEngines.includes(args.pinnedEngine)
+      ? args.pinnedEngine
+      : undefined;
+  const baseline = pinned ?? engineOfAgentKind(entry.recommended);
+  const engine = overrideUsable ? engineOverride : baseline;
+  const agent = agentKindOfEngine(engine);
+  const capability = entry.capabilities[agent] ?? null;
+  const effort = pickEffort(capability, memoryEffort?.(agent));
+  const fastCapable =
+    capability?.supportsFastMode === true && (agentFastModeCapable?.(agent) ?? true);
+  const fast = fastCapable ? (memoryFast?.(agent) ?? false) : false;
+  const customized =
+    // 「已自定义」是相对**该行此刻的缺省**说的:会话内 pinned 生效时,落在当前引擎上
+    // 是缺省而不是自定义(否则会话里几乎每一行都被标成已自定义,提亮就失去信息量)。
+    (overrideUsable && engine !== baseline) ||
+    (effort !== null && capability?.defaultEffort != null && effort !== capability.defaultEffort) ||
+    fast;
+  return {
+    engine,
+    agent,
+    efforts: capability?.efforts ?? [],
+    effort,
+    fast,
+    fastCapable,
+    customized,
+    capability,
+  };
+}
+
+/**
+ * 收藏条目的生效配置 —— 与模型行**不同源**:收藏是配置副本,只读条目自己存的
+ * (引擎 / 深度 / Fast),不读该模型的 override 与记忆(规格 §1.5「模型默认不受影响」)。
+ * 条目里存的值若已不被目录支持(引擎掉出候选 / 档位被服务端下架),按同一套回落规则收敛,
+ * 但**不改写条目**:目录变回来时用户的收藏应当照旧。
+ */
+export function resolveFavoriteRowConfig(args: {
+  entry: UnifiedModelEntry;
+  item: ModelFavoriteItem;
+  agentFastModeCapable?: (agent: AgentKind) => boolean;
+}): UnifiedRowConfig {
+  const { entry, item, agentFastModeCapable } = args;
+  const candidateEngines = entry.candidates.map(engineOfAgentKind);
+  const engine = candidateEngines.includes(item.agent)
+    ? item.agent
+    : engineOfAgentKind(entry.recommended);
+  const agent = agentKindOfEngine(engine);
+  const capability = entry.capabilities[agent] ?? null;
+  const effort = pickEffort(capability, item.effort);
+  const fastCapable =
+    capability?.supportsFastMode === true && (agentFastModeCapable?.(agent) ?? true);
+  const fast = fastCapable && item.fast === true;
+  return {
+    engine,
+    agent,
+    efforts: capability?.efforts ?? [],
+    effort,
+    fast,
+    fastCapable,
+    // 收藏条目恒按「收藏配置」呈现(底栏第三态),不参与「已自定义」的提亮语义。
+    customized: false,
+    capability,
+  };
+}
+
+/**
+ * 该收藏是否**就是**该模型的推荐配置 —— 决定收藏行右侧要不要挂 `引擎 · 深度 [⚡]` 后缀
+ * (规格 §1.5「非默认配置条目右侧显示后缀」)。
+ */
+export function isRecommendedFavoriteConfig(
+  entry: UnifiedModelEntry,
+  config: UnifiedRowConfig,
+): boolean {
+  if (config.engine !== engineOfAgentKind(entry.recommended)) return false;
+  if (config.fast) return false;
+  const defaultEffort = config.capability?.defaultEffort ?? null;
+  if (config.effort === null || defaultEffort === null) return true;
+  return config.effort === defaultEffort;
+}
+
+// ── 列表陈列 ────────────────────────────────────────────────────────────────
+
+/**
+ * rail 的一格。`provider` 格按行的来源供应商派生,不写死内置三家;
+ * `engine` 格只在**会话内**出现(规格 §1.6:图标 = 当前会话引擎,默认选中)。
+ */
+export type UnifiedRailItem =
+  | { kind: 'favorites' }
+  | { kind: 'engine'; agent: AgentKind }
+  | { kind: 'all' }
+  | { kind: 'provider'; providerId: string };
+
+export type UnifiedRailFilter = UnifiedRailItem;
+
+export function railItemKey(item: UnifiedRailItem): string {
+  if (item.kind === 'provider') return `provider:${item.providerId}`;
+  if (item.kind === 'engine') return `engine:${item.agent}`;
+  return item.kind;
+}
+
+/**
+ * rail 项派生:★收藏(有收藏条目才出现) → 同引擎(仅会话内) → 全部 → 各来源供应商
+ * (按行首次出现序,即联合列表的引擎优先序 × catalog 序)。
+ *
+ * 「同引擎」格刻意排在 ★ 之下、全部之上(规格 §1.6):它是会话内的**默认视图**,
+ * 但收藏仍是用户自己钉的东西,优先级更高。
+ */
+export function buildUnifiedRail(
+  entries: readonly UnifiedModelEntry[],
+  favorites: readonly ModelFavoriteItem[],
+  sessionAgent?: AgentKind,
+): UnifiedRailItem[] {
+  const items: UnifiedRailItem[] = [];
+  if (favorites.length > 0) items.push({ kind: 'favorites' });
+  if (sessionAgent) items.push({ kind: 'engine', agent: sessionAgent });
+  items.push({ kind: 'all' });
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (seen.has(entry.providerId)) continue;
+    seen.add(entry.providerId);
+    items.push({ kind: 'provider', providerId: entry.providerId });
+  }
+  return items;
+}
+
+export interface UnifiedListRow {
+  anchor: UnifiedAnchor;
+  entry: UnifiedModelEntry;
+  /** 收藏区行才有;模型行为 undefined。 */
+  favorite?: ModelFavoriteItem;
+}
+
+export interface UnifiedListSection {
+  key: string;
+  kind: 'favorites' | 'group';
+  /** 分组行才有(分组标题按 CATEGORY_LABEL_KEY 查 i18n)。 */
+  category?: ModelCategory;
+  rows: UnifiedListRow[];
+}
+
+function matchesQuery(entry: UnifiedModelEntry, q: string): boolean {
+  if (!q) return true;
+  return (
+    entry.displayName.toLowerCase().includes(q) ||
+    entry.modelId.toLowerCase().includes(q) ||
+    (entry.description?.toLowerCase().includes(q) ?? false)
+  );
+}
+
+function entryKeyOf(providerId: string, modelId: string): string {
+  return `${providerId} ${modelId}`;
+}
+
+/**
+ * 面板列表:**收藏区置顶** → 服务端下发分组(group / sortOrder,走 classifyModel + sortOrder)。
+ *
+ * 收藏条目**不**从供应商组里去重移除(规格 §1.2):收藏是配置副本,模型本体仍在原地 ——
+ * 移除会让用户在「全部」视图里找不到那个模型。
+ *
+ * 排序不自己发明:组内按 `sortOrder` 升序(缺省排末尾、相等保持入参序),组的先后 = 组内
+ * 首个模型在已排序清单里的位置 —— 与 `groupModelsForDisplay` 同一套规则,这里只是要
+ * 携带 UnifiedModelEntry 的完整行数据,故就地实现同构逻辑而非拿它的裁剪结果。
+ */
+export function buildUnifiedListSections(args: {
+  entries: readonly UnifiedModelEntry[];
+  favorites: readonly ModelFavoriteItem[];
+  query: string;
+  rail: UnifiedRailFilter;
+}): UnifiedListSection[] {
+  const { entries, favorites, rail } = args;
+  const q = args.query.trim().toLowerCase();
+  const byKey = new Map<string, UnifiedModelEntry>();
+  for (const entry of entries) byKey.set(entryKeyOf(entry.providerId, entry.modelId), entry);
+
+  const sections: UnifiedListSection[] = [];
+
+  // ── 收藏区 ── 恒置顶,在任何 rail 视图下都显示;按供应商筛选时只留该来源的收藏。
+  const favRows: UnifiedListRow[] = [];
+  for (const item of favorites) {
+    const entry = byKey.get(entryKeyOf(item.providerId, item.modelId));
+    // 收藏指向的模型已不可路由(来源断开 / 目录下架)→ 本轮不显示;**不删条目**:
+    // 连回来就该回来,静默删掉用户存过的配置是不可逆的。
+    if (!entry) continue;
+    if (rail.kind === 'provider' && entry.providerId !== rail.providerId) continue;
+    // 同引擎视图:收藏也按引擎过滤(规格 §1.6「只显示 引擎匹配的收藏 + 同引擎模型」)。
+    // 判据是**这条收藏自己存的引擎**,不是模型能不能跑在该引擎上 —— 收藏是配置副本,
+    // 一条 Codex 配置在 Claude 会话里点下去仍然是跨引擎切换,不该混进「无损」视图。
+    if (rail.kind === 'engine' && item.agent !== engineOfAgentKind(rail.agent)) continue;
+    if (!matchesQuery(entry, q)) continue;
+    favRows.push({
+      anchor: {
+        kind: 'fav',
+        uid: item.uid,
+        providerId: item.providerId,
+        modelId: item.modelId,
+      },
+      entry,
+      favorite: item,
+    });
+  }
+  if (favRows.length > 0) {
+    sections.push({ key: 'favorites', kind: 'favorites', rows: favRows });
+  }
+
+  if (rail.kind === 'favorites') return sections;
+
+  // ── 分组区 ──
+  // 同引擎视图的判据是**候选**而不是生效引擎:候选里有当前引擎 = 选它可以留在本会话的
+  // 引擎上(无损直切),这正是该视图要回答的问题。行落到哪个引擎由 pinnedEngine 决定
+  // (见 resolveUnifiedRowConfig)——两者是同一条规则的两半,改一处必须改另一处。
+  const visible = entries.filter(
+    (entry) =>
+      matchesQuery(entry, q) &&
+      (rail.kind !== 'provider' || entry.providerId === rail.providerId) &&
+      (rail.kind !== 'engine' || entry.candidates.includes(rail.agent)),
+  );
+  const sorted = [...visible].sort(
+    (a, b) =>
+      (a.sortOrder ?? Number.POSITIVE_INFINITY) - (b.sortOrder ?? Number.POSITIVE_INFINITY),
+  );
+  const buckets = new Map<ModelCategory, UnifiedListRow[]>();
+  for (const entry of sorted) {
+    const category = classifyModel({
+      id: entry.modelId,
+      ...(entry.group !== undefined ? { group: entry.group } : {}),
+    });
+    const rows = buckets.get(category) ?? [];
+    rows.push({
+      anchor: { kind: 'model', providerId: entry.providerId, modelId: entry.modelId },
+      entry,
+    });
+    buckets.set(category, rows);
+  }
+  for (const [category, rows] of buckets) {
+    sections.push({ key: `group:${category}`, kind: 'group', category, rows });
+  }
+  return sections;
+}
+
+// ── 浮层定位 ────────────────────────────────────────────────────────────────
+
+export interface FlyoutRect {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+export interface FlyoutPlacement {
+  left: number;
+  top: number;
+  side: 'left' | 'right';
+}
+
+/**
+ * 配置浮层的定位(规格 §1.3「跟随行垂直位置、视口夹紧」)。
+ *
+ * 水平:默认贴在面板**左**外侧(设计稿形态);左边放不下才翻到右侧;两侧都放不下时
+ * 取能露出更多的一侧并夹到视口内 —— 宁可压住面板边缘,也不能把浮层丢到屏幕外。
+ * 垂直:顶端对齐锚点行(上抬 `rowOffset` 让标题与行大致齐平),再夹到视口安全区内。
+ *
+ * 纯函数:定位是「滑杆一动面板就抖」这类问题的高发区,必须能脱离浏览器直接测。
+ */
+export function computeFlyoutPlacement(args: {
+  anchor: FlyoutRect;
+  panel: FlyoutRect;
+  size: { width: number; height: number };
+  viewport: { width: number; height: number };
+  gap?: number;
+  margin?: number;
+  rowOffset?: number;
+}): FlyoutPlacement {
+  const gap = args.gap ?? 10;
+  const margin = args.margin ?? 8;
+  const rowOffset = args.rowOffset ?? 12;
+  const { anchor, panel, size, viewport } = args;
+
+  const leftCandidate = panel.left - gap - size.width;
+  const rightCandidate = panel.right + gap;
+  let side: 'left' | 'right';
+  if (leftCandidate >= margin) side = 'left';
+  else if (rightCandidate + size.width <= viewport.width - margin) side = 'right';
+  else side = leftCandidate >= viewport.width - (rightCandidate + size.width) ? 'left' : 'right';
+  const rawLeft = side === 'left' ? leftCandidate : rightCandidate;
+  const left = Math.min(
+    Math.max(margin, rawLeft),
+    Math.max(margin, viewport.width - size.width - margin),
+  );
+
+  const maxTop = Math.max(margin, viewport.height - size.height - margin);
+  const top = Math.min(Math.max(margin, anchor.top - rowOffset), maxTop);
+  return { left, top, side };
+}

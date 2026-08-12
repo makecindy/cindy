@@ -277,6 +277,7 @@ import {
   plainTextToComposerDocument,
 } from '@/lib/composerListDocument';
 import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabilities';
+import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
@@ -692,6 +693,38 @@ interface ChatInputProps {
    * 状态完全由 parent 持有 (controlled);ChatInput 只做展示与事件转发。
    */
   collaboration?: CollaborationMenuConfig;
+  /**
+   * 新会话统一模型选择器(model-selector-unified M5)的**选中直通**。
+   *
+   * 传入 = 这条 composer 的模型 pill 用统一面板,而且它是**草稿**:面板里的一行自带引擎
+   * (推荐 ⊕ 用户 override ⊕ 收藏副本),所以选中要连引擎一起落 —— ChatInput 把
+   * (vendor, providerId, modelId, effort, fast, 收藏锚点) 一次交给草稿层写 newMakerDraft,
+   * 不走 onProviderDidChange / onModelDidChange 那条按「当前引擎」二次解析的链路(它在
+   * 跨引擎行上会拿旧引擎的档位表把档清空)。
+   *
+   * 已建会话不传:那边换引擎有损,跨引擎行走 performAgentSwitch 事务(M6)。
+   */
+  onUnifiedDraftSelect?: (selection: {
+    vendor: 'cc' | 'codex' | 'pi';
+    providerId: string;
+    modelId: string;
+    effort?: Effort;
+    fast: boolean;
+    favoriteUid: string | null;
+  }) => void;
+  /**
+   * 统一面板里被选中的收藏锚点 uid(与 onUnifiedDraftSelect 成对,由草稿层持有)。
+   * 语义见 ModelSelectorProps.selectedFavoriteUid。
+   */
+  selectedFavoriteUid?: string | null;
+}
+
+/** 统一模型选择器联合列表的候选引擎全集(与 SELECTABLE_VENDORS 同一顺序)。 */
+const UNIFIED_AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+
+/** AgentKind → NewMaker vendor(useAvailableAgents 用 vendor 口径)。 */
+function agentKindToVendor(kind: AgentKind): 'cc' | 'codex' | 'pi' {
+  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
 }
 
 function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
@@ -1003,6 +1036,8 @@ export function ChatInput({
   compactMiddleToolbarSlot,
   topSlot,
   collaboration,
+  onUnifiedDraftSelect,
+  selectedFavoriteUid = null,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -1543,6 +1578,28 @@ export function ChatInput({
   const providersLoading = deviceLinkDeviceId
     ? remoteModelListStatus === 'loading'
     : localProvidersLoading;
+  // 统一模型选择器(model-selector-unified M5 / M6)在 composer 上的开关。
+  //
+  // 唯一的降级条件是**没有供应商目录可用**:联合列表(unifiedModelEntries)只认目录里的
+  // (provider, agent) 条目,而老被控端不支持 provider:list 时控制端只有一份拍平的
+  // capabilities —— 那种情况下开了统一面板就是一张空列表(见 ModelSelector.unifiedPanel
+  // 的「已知边界」)。unsupported 是**结构化**判定(isDeviceProvidersUnsupportedError),
+  // 不是 providers.length===0:后者在首帧加载中恒成立,拿它当条件会让面板每次打开先闪
+  // 一下旧版布局。
+  const unifiedModelPanelEnabled = !deviceLinkDeviceId || !remoteProviders.unsupported;
+  // 联合列表参与哪些引擎 —— 以**运行时注册结果**为准(device-link 取被控端的)。
+  // 撤掉新会话工具条的 AgentSelect 后,它的 hiddenVendors 门禁就落到这里:Pi 二进制缺失
+  // 时模型目录照样投影 Pi 模型,只看目录会让用户一路选到 requireAgent 的 not-registered。
+  // 未加载完成 → 传 undefined(fail-open,不隐藏任何引擎);当前引擎恒在列。
+  const { availableVendors: runtimeAvailableVendors, loaded: runtimeAgentsLoaded } =
+    useAvailableAgents(deviceLinkDeviceId);
+  const unifiedAgents = useMemo<readonly AgentKind[] | undefined>(() => {
+    if (!runtimeAgentsLoaded) return undefined;
+    const kinds = UNIFIED_AGENT_KINDS.filter(
+      (kind) => kind === agentKind || runtimeAvailableVendors.has(agentKindToVendor(kind)),
+    );
+    return kinds.length > 0 ? kinds : undefined;
+  }, [runtimeAgentsLoaded, runtimeAvailableVendors, agentKind]);
   // 已有 device-link 任务在断链时仍有 pinned deviceId + renderer outbox 可接住发送，
   // 不能因为被控端 provider 目录暂时拉不到就禁用 composer。远程草稿没有既有 session
   // 可以排队，仍与本地任务一样保留来源门禁。
@@ -5586,6 +5643,111 @@ export function ChatInput({
   const performAgentSwitchRef = useRef(performAgentSwitch);
   performAgentSwitchRef.current = performAgentSwitch;
 
+  // ── 统一模型选择器 · 会话内形态(model-selector-unified M6)────────────────────
+  // 旧的两步分段(先切引擎 tab、再选模型)在统一面板下不渲染,取而代之的是
+  // 「同引擎视图默认 + 显式跨引擎入口 + 行浮层引擎胶囊」。**执行链路一个字没变**:
+  // 跨引擎选中仍然是 confirmAgentBrowseSwitch(同一份确认与「不再提示」偏好)
+  // → performAgentSwitch(意图登记、上下文容量护栏、fastMode 不跨引擎带入,全在那边)。
+  //
+  // 刻意不给 performAgentSwitch 传 fastMode override:它会按**目标**(引擎, 来源, 模型)
+  // 的能力与预设重新解析,旧引擎开着的 Fast 不会被带过去 —— 这正是规格要的语义,
+  // 这里若把行上显示的 fast 传下去反而会把它带过引擎。
+  // effort 则显式传:面板行(以及收藏副本)已经按目标引擎解析好档位,那是用户看着点下去的值。
+  const sessionEngineFilter = useMemo(() => {
+    if (!unifiedModelPanelEnabled) return undefined;
+    if (!sessionId || !vendorKey || remoteHostId || !sessionAgentSwitchSupported) return undefined;
+    const currentAgent = vendorKeyToAgentKind(vendorKey);
+    if (!currentAgent) return undefined;
+    return {
+      currentAgent,
+      onCrossEngineSelect: async ({
+        providerId,
+        modelId,
+        targetAgent,
+        effort,
+      }: {
+        providerId: string;
+        modelId: string;
+        targetAgent: AgentKind;
+        effort: Effort | '';
+      }): Promise<boolean> => {
+        // 取消 = 什么都不改;返回 false 让选择器留在原地(用户还能挑别的行)。
+        if (!(await confirmAgentBrowseSwitch())) return false;
+        // 与旧两步分段一致地 fire-and-forget:切换事务自己有 session 级串行锁与
+        // in-flight 置灰,不在这里 await 把面板钉住。
+        void performAgentSwitchRef.current(
+          targetAgent,
+          modelId,
+          providerId,
+          effort ? { effort } : undefined,
+        );
+        return true;
+      },
+    };
+  }, [
+    unifiedModelPanelEnabled,
+    sessionId,
+    vendorKey,
+    remoteHostId,
+    sessionAgentSwitchSupported,
+    confirmAgentBrowseSwitch,
+  ]);
+
+  // 会话内拿不到跨引擎切换事务(SSH 远程会话 / 被控端不支持 session-agent-switch)时,
+  // 统一面板**不能**摆出其它引擎的行:useUnifiedRowActions.selectRow 只有在传了
+  // sessionEngineFilter 时才把跨引擎行改道给切换事务,没有它时跨引擎行会被当普通选中
+  // 交给单引擎链路(onProviderChange 只换 model / provider),等于把另一个引擎的模型
+  // 直接塞进当前会话。与旧面板同待遇:这类会话把联合列表锁定在当前引擎(旧版本来就是
+  // 单引擎列表);连当前引擎都解析不出的会话直接回落旧面板,不冒险。
+  const inSessionEngineLocked = Boolean(sessionId) && !sessionEngineFilter;
+  const unifiedPanelActive =
+    unifiedModelPanelEnabled && (!inSessionEngineLocked || agentKind !== null);
+  const effectiveUnifiedAgents = useMemo<readonly AgentKind[] | undefined>(
+    () => (inSessionEngineLocked && agentKind ? [agentKind] : unifiedAgents),
+    [inSessionEngineLocked, agentKind, unifiedAgents],
+  );
+
+  // ── 统一模型选择器 · 新会话形态(model-selector-unified M5)────────────────────
+  // 草稿里换引擎是无损的(会话还没建),所以选中一行 = 直接把它整份配置写下去。
+  // 深度 / Fast 记忆按**目标引擎**槽写:草稿的生效 Fast 是从这份记忆派生的
+  // (NewMakerDraftRoute.resolveDraftFast),收藏副本带来的 Fast 只有落进这里才真生效;
+  // 不写就会出现「选了收藏的 Opus·Fast,pill 上却没有闪电」。
+  const handleUnifiedDraftSelect = useCallback(
+    (selection: {
+      providerId: string;
+      modelId: string;
+      effort?: Effort;
+      engine: 'cc' | 'codex' | 'pi';
+      fast: boolean;
+      favoriteUid: string | null;
+    }) => {
+      if (sessionId || settingsLocked) return;
+      const targetKind = vendorKeyToAgentKind(selection.engine);
+      if (targetKind && selection.providerId) {
+        if (selection.effort) {
+          modelMemory?.setEffort(
+            targetKind,
+            selection.providerId,
+            selection.modelId,
+            selection.effort,
+          );
+        }
+        modelMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast);
+      }
+      // 乐观来源:草稿没有 SSoT 回流,pill 的来源图标靠这份本地态即时跟上。
+      setSelectedProviderId(selection.providerId);
+      onUnifiedDraftSelect?.({
+        vendor: selection.engine,
+        providerId: selection.providerId,
+        modelId: selection.modelId,
+        ...(selection.effort ? { effort: selection.effort } : {}),
+        fast: selection.fast,
+        favoriteUid: selection.favoriteUid,
+      });
+    },
+    [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect],
+  );
+
   const performModelChange = useCallback(
     async (newModelId: string, expectedAgentSwitchRevision?: number) => {
       if (settingsLocked) return false;
@@ -6991,12 +7153,37 @@ export function ChatInput({
                           )
                         : undefined
                     }
+                    // 统一模型选择器(M5 新会话 / M6 会话内)。composer 是它的两个真实入口;
+                    // 其余 7 个消费者(scheduler / IM / Hook / Subagent / Worker /
+                    // GhostErrand / 设置)本版一律不开。
+                    unifiedPanel={unifiedPanelActive}
+                    // 联合列表只列**运行时已注册**的引擎(撤掉 AgentSelect 后接住它的
+                    // hiddenVendors 门禁);未加载时不传 = 不隐藏任何引擎。会话内没有
+                    // 跨引擎切换事务可走时锁定当前引擎(见 inSessionEngineLocked)。
+                    unifiedAgents={effectiveUnifiedAgents}
+                    // 会话内:同引擎过滤 + 跨引擎走 performAgentSwitch(见 sessionEngineFilter)。
+                    sessionEngineFilter={sessionEngineFilter}
+                    // 新会话:选中直通,引擎跟着模型一起落进草稿(见 handleUnifiedDraftSelect)。
+                    onUnifiedSelect={
+                      !sessionId && unifiedPanelActive && onUnifiedDraftSelect
+                        ? handleUnifiedDraftSelect
+                        : undefined
+                    }
+                    selectedFavoriteUid={selectedFavoriteUid}
                     // session-agent-switch:已建会话提供显式两步引擎切换(列表顶部
                     // Claude/Codex 分段,先选 Agent 再选模型)。device-link 远程会话同样
                     // 支持(隧道到被控端执行,与手机端同一套 channel),入口按被控端能力位
                     // 门控。草稿(无 sessionId)与 SSH 远程会话仍不传。
+                    //
+                    // 统一面板下**刻意不传**:那两步分段已被「同引擎默认 + 显式跨引擎入口 +
+                    // 行浮层引擎胶囊」完整取代(见 ModelSelectorContentProps.sessionEngineFilter
+                    // 的 prop 说明),两者同时传会得到一个永远不渲染的分段。
                     agentSwitch={
-                      sessionId && vendorKey && !remoteHostId && sessionAgentSwitchSupported
+                      !unifiedPanelActive &&
+                      sessionId &&
+                      vendorKey &&
+                      !remoteHostId &&
+                      sessionAgentSwitchSupported
                         ? {
                             currentVendor: vendorKey,
                             confirmBrowseSwitch: confirmAgentBrowseSwitch,

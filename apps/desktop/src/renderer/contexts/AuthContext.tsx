@@ -34,6 +34,8 @@ import { bootstrapMemorySettingsFromMain, setMemorySettingsOwner } from '@/lib/m
 import { sessionsStore } from '@/lib/sessionsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
+import { setModelEnginePrefsOwner } from '@/state/modelEnginePrefs';
+import { setModelFavoritesOwner } from '@/state/modelFavorites';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
@@ -172,6 +174,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       activeDataOwnerIdRef.current = state.dataOwnerId;
       activeDataOwnerGenerationRef.current = state.ownerGeneration;
       setNewMakerDraftOwner(state.dataOwnerId);
+      // 统一模型选择器的两根新轴与 newMakerDraft 同待遇:同一处、同一个 dataOwnerId、
+      // 登出时同样传 null(state.dataOwnerId 在 signed-out 快照里就是 null,分区键退回
+      // 无后缀的默认槽)。漏接 = 多账号串号(providerModelMemory 的旧教训)。
+      setModelEnginePrefsOwner(state.dataOwnerId);
+      setModelFavoritesOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
       setPendingHandoffOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);

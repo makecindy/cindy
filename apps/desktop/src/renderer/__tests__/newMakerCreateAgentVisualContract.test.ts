@@ -28,10 +28,17 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('data-testid="create-agent-quick-starts"');
     expect(source).toContain('createAgentQuickStarts.map');
     expect(source).toContain('<ChatInput');
-    expect(source).toContain('<AgentSelect');
-    // 引擎切换在工具条上已由分段器换成下拉(定宽触发器,引擎数量不影响布局)
+    // 引擎切换控件在新建对话工具条上**常态已撤除**(model-selector-unified §1.1):
+    // 分段器 → 下拉(AgentSelect)→ 统一模型选择器把引擎收进模型行。工具条上的
+    // AgentSelect 只在 device-link 老被控端(capabilities-only,统一面板会空列表)
+    // 的降级分支里才注入 —— 那条链路上 composer 回落旧的「先选引擎再选模型」面板,
+    // 引擎下拉不跟着回来就换不了引擎。
     expect(source).not.toContain('<VendorSegmentedSwitcher');
-    expect(source).toContain('middleToolbarSlot={');
+    expect(source).toContain('unifiedModelPanelEnabled ? undefined : (');
+    expect(source).toMatch(/middleToolbarSlot=\{\s*\n\s*unifiedModelPanelEnabled \? undefined : \(/);
+    expect(source).toMatch(
+      /compactMiddleToolbarSlot=\{\s*\n\s*unifiedModelPanelEnabled \? undefined : \(/,
+    );
     expect(source).not.toContain('<HomeUsageDashboard');
     expect(source).not.toContain('newChat.createAgent.more');
     expect(source).not.toContain('data-testid="create-agent-sidebar"');
@@ -124,7 +131,10 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'onRememberedEffortChange={',
       'isDeviceLinkDraft ? undefined : handleRememberedEffortChange',
       'placeholder="Hi Cindy!"',
-      'middleToolbarSlot={',
+      // 统一模型选择器(M5):新会话的选中直通 + 收藏锚点选中态。撤掉 AgentSelect 后,
+      // 「换引擎」这件事只剩这一条路径 —— 掉了它草稿就再也换不了引擎。
+      'onUnifiedDraftSelect={handleUnifiedDraftSelect}',
+      'selectedFavoriteUid={selectedFavoriteUid}',
     ]) {
       expect(chatInputBlock).toContain(invariant);
     }

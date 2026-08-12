@@ -680,8 +680,15 @@ describe('ChatInput 的入口门控与调用路由', () => {
   });
 
   it('入口按被控端能力位门控:device-link 不再被排除,SSH 远程仍排除', () => {
+    // 2026-08-12 统一模型选择器(M6):会话内换引擎有了两种形态,门禁必须**逐字一致** ——
+    //   · 统一面板(现在的常态):sessionEngineFilter 提供跨引擎入口;
+    //   · 旧两步分段(仅 device-link 老被控端 capabilities-only 降级时还会渲染):agentSwitch。
+    // 任一处放松,SSH 远程或缺 CAS 能力的被控端就会露出一个必然失败的切换入口。
     expect(source).toContain(
-      'sessionId && vendorKey && !remoteHostId && sessionAgentSwitchSupported',
+      '!sessionId || !vendorKey || remoteHostId || !sessionAgentSwitchSupported',
+    );
+    expect(source).toMatch(
+      /!unifiedPanelActive &&\s*\n\s*sessionId &&\s*\n\s*vendorKey &&\s*\n\s*!remoteHostId &&\s*\n\s*sessionAgentSwitchSupported/,
     );
     expect(source).toContain('ccCaps.capabilities?.supportsSessionAgentSwitch === true');
     expect(source).toContain('ccCaps.capabilities.supportsSessionAgentSwitchCas === true');

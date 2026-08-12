@@ -5554,6 +5554,23 @@
       },
       "agentSwitch": {
         "hint": "Pick the model to use after switching to {{agent}}"
+      },
+      "unified": {
+        "railFavorites": "Favorites",
+        "railAll": "All",
+        "favoritesGroup": "Favorites",
+        "addFavorite": "Save to favorites",
+        "removeFavorite": "Remove from favorites",
+        "favoriteConfig": "Saved setup",
+        "recommended": "Recommended",
+        "recommendedConfig": "Recommended setup",
+        "customized": "Customized",
+        "reset": "Reset to recommended",
+        "fastTip": "Fast · priority speed · uses more quota",
+        "effortEndFast": "Faster",
+        "effortEndSmart": "Smarter",
+        "railSameEngine": "{{agent}} only",
+        "crossEngineWarning": "Switching engines rebuilds context and may lose content"
       }
     },
     "permissionSelector": {

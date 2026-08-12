@@ -1,4 +1,5 @@
 import { registerColor } from './color-registry';
+import { EFFORT_TIER_COLORS } from './effortTierColors';
 
 function createNotAllowedCursor(stroke: string): string {
   const encodedStroke = stroke.startsWith('#')
@@ -1063,6 +1064,17 @@ registerColor('model-section-label', {
   light: 'var(--text-secondary)',
   dark: 'var(--text-secondary)',
 }, 'Stone — "Effort" header');
+// 统一模型选择器(model-selector-unified §1.3 / §1.5)
+registerColor('favorite-star', {
+  light: '#d99a06',
+  dark: '#e8b425',
+}, 'Gold — 收藏 ☆ 点亮态');
+// 推理强度档位绝对色:同一档在 Light / Dark 下必须是同一个颜色(档色表达「这一档有多强」,
+// 不表达界面明暗层次),故 light === dark。数值正本在 themes/effortTierColors.ts —— 滑杆拖动
+// 要在相邻档色之间逐帧插值,必须拿到数值 hex,故那份表是源、这里从它注册,两处不可能漂移。
+for (const [tier, hex] of Object.entries(EFFORT_TIER_COLORS)) {
+  registerColor(`effort-tier-${tier}`, { light: hex, dark: hex }, `推理强度档位色 — ${tier}`);
+}
 // Permission selector
 registerColor('perm-item-selected-bg', {
   light: '#f8f8f6',

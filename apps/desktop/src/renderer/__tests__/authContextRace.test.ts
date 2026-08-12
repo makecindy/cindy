@@ -29,6 +29,22 @@ describe('AuthContext auth-state races', () => {
     expect(source).not.toContain('getMe(');
   });
 
+  it('repartitions every owner-scoped renderer store at the same boundary', () => {
+    // 统一模型选择器新增的两根轴(引擎 override / 收藏副本)与 newMakerDraft 同待遇:
+    // 同一处、同一个 state.dataOwnerId(登出快照里就是 null)。漏接任一个 = 多账号串号 ——
+    // 这正是 providerModelMemory 不分账号踩过的坑,不能在新 store 上重演。
+    const applyStart = source.indexOf('const applyIncomingState = useCallback');
+    expect(applyStart).toBeGreaterThan(-1);
+    const applyBlock = source.slice(applyStart, source.indexOf('[applyIncomingUser]', applyStart));
+    for (const call of [
+      'setNewMakerDraftOwner(state.dataOwnerId);',
+      'setModelEnginePrefsOwner(state.dataOwnerId);',
+      'setModelFavoritesOwner(state.dataOwnerId);',
+    ]) {
+      expect(applyBlock).toContain(call);
+    }
+  });
+
   it('ignores initialize results after a newer pushed auth event', () => {
     expect(source).toContain('authStateVersionRef.current += 1;');
     expect(source).toContain('authStateVersionRef.current !== initializeVersion');

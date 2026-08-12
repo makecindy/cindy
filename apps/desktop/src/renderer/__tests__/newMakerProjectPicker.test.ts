@@ -469,12 +469,24 @@ describe('Shared create project picker', () => {
       /opt\.vendor === value \|\| !hiddenVendors\.includes\(opt\.vendor\)/,
     );
 
-    // 路由:以被控端(deviceId)为准计算 hidden;两处开关都传;选中值被隐藏时 coerce 到首个可用。
+    // 路由:以被控端(deviceId)为准计算 hidden;选中值被隐藏时 coerce 到首个可用。
     expect(newMakerDraftRouteSource).toMatch(
       /useAvailableAgents\(\s*effectiveDeviceLinkDeviceId,?\s*\)/,
     );
-    expect(newMakerDraftRouteSource).toContain('hiddenVendors={hiddenSwitcherVendors}');
     expect(newMakerDraftRouteSource).toMatch(/hiddenSwitcherVendors\.includes\(draft\.vendor\)/);
+
+    // 2026-08-12 统一模型选择器(M5):新会话工具条上的引擎下拉常态已撤除(只在
+    // device-link 老被控端的降级分支里保留),上面那条 hiddenVendors 断言因此不再是
+    // 常态路径的门禁。**门禁没放松,只是换了承载物**:ChatInput 按同一个 runtime 注册
+    // 结果算出 unifiedAgents 交给联合列表,未注册的引擎连行都不出现。
+    expect(newMakerDraftRouteSource).toContain('hiddenVendors={hiddenSwitcherVendors}');
+    expect(chatInputSource).toMatch(/useAvailableAgents\(deviceLinkDeviceId\)/);
+    expect(chatInputSource).toContain('unifiedAgents={effectiveUnifiedAgents}');
+    // fail-open:注册结果没回来之前不隐藏任何引擎;当前引擎恒在列。
+    expect(chatInputSource).toContain('if (!runtimeAgentsLoaded) return undefined;');
+    expect(chatInputSource).toContain(
+      'kind === agentKind || runtimeAvailableVendors.has(agentKindToVendor(kind)),',
+    );
   });
 
   it('hides SSH targets for Pi and fail-closed guards Pi+SSH session creation', () => {
@@ -1534,7 +1546,10 @@ describe('Shared create project picker', () => {
       newMakerDraftRouteSource.indexOf('const handleModelDidChange = useCallback('),
       newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir'),
     );
-    expect((runtimeHandlers.match(/dlRuntimeTouchedRef\.current = true;/g) ?? []).length).toBe(5);
+    // 5 → 6:统一模型选择器(M5)新增 handleUnifiedDraftSelect —— 它同样是一次
+    // 控制端对远程运行配置的显式编辑,漏打这个标记的话下一次 capabilities 刷新
+    // 会把用户刚选的模型重种回被控端默认。
+    expect((runtimeHandlers.match(/dlRuntimeTouchedRef\.current = true;/g) ?? []).length).toBe(6);
   });
 
   // #807 review 第二十七轮:设备菜单行原来只有 hover / disabled 两态,且 outline-none 去掉了浏览器

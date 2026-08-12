@@ -5552,6 +5552,23 @@
       },
       "agentSwitch": {
         "hint": "{{agent}} に切り替えた後に使用するモデルを選択してください"
+      },
+      "unified": {
+        "railFavorites": "お気に入り",
+        "railAll": "すべて",
+        "favoritesGroup": "お気に入り",
+        "addFavorite": "お気に入りに保存",
+        "removeFavorite": "お気に入りから削除",
+        "favoriteConfig": "保存した設定",
+        "recommended": "推奨",
+        "recommendedConfig": "推奨設定",
+        "customized": "カスタム済み",
+        "reset": "推奨に戻す",
+        "fastTip": "Fast · 優先処理で高速 · 使用量が増えます",
+        "effortEndFast": "高速",
+        "effortEndSmart": "高精度",
+        "railSameEngine": "{{agent}} のみ",
+        "crossEngineWarning": "エンジンを切り替えるとコンテキストが再構築され、内容が失われる場合があります"
       }
     },
     "permissionSelector": {

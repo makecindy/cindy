@@ -46,6 +46,7 @@ import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { FastModeToggle } from './FastModeToggle';
+import { UnifiedModelPanel, type UnifiedModelPanelProps } from './UnifiedModelPanel';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
 import { VendorSegmentedSwitcher } from './VendorSegmentedSwitcher';
 import {
@@ -70,6 +71,7 @@ import {
 } from '@/lib/modelPriceFormat';
 import {
   filterChatBridgedCodexProviders,
+  isChatBridgedCodexProvider,
   isDeviceModelVisible,
   providerMonogram,
   resolveVisibleModelAgentKind,
@@ -615,6 +617,16 @@ interface ModelSelectorProps {
   maxVisibleModelRows?: number;
   /** 关闭模型的 effort / Fast 编辑入口；只选择模型 id 的设置项使用。 */
   configurationEnabled?: boolean;
+  /** 语义同 ModelSelectorContentProps.unifiedPanel（统一模型选择器面板，opt-in）。 */
+  unifiedPanel?: boolean;
+  /** 语义同 ModelSelectorContentProps.sessionEngineFilter（统一面板的会话内形态）。 */
+  sessionEngineFilter?: UnifiedModelPanelProps['sessionEngineFilter'];
+  /** 语义同 ModelSelectorContentProps.unifiedAgents（参与联合列表的引擎集合）。 */
+  unifiedAgents?: readonly AgentKind[];
+  /** 语义同 ModelSelectorContentProps.selectedFavoriteUid（统一面板的收藏锚点选中态）。 */
+  selectedFavoriteUid?: string | null;
+  /** 语义同 ModelSelectorContentProps.onUnifiedSelect（统一面板选中直通）。 */
+  onUnifiedSelect?: ModelSelectorContentProps['onUnifiedSelect'];
   /** 可选的列表首行兜底值，例如“不指定（使用原逻辑）”。 */
   fallbackOption?: { active: boolean; label: string; onSelect: () => void };
   /**
@@ -699,6 +711,80 @@ interface ModelSelectorContentProps {
   followSession?: { active: boolean; label: string; onFollow: () => void };
   /** 是否显示模型的 effort / Fast 编辑入口。 */
   configurationEnabled?: boolean;
+  /**
+   * **统一模型选择器面板**(模型优先,model-selector-unified M3 / M4)。opt-in:
+   * true = 列表换成跨引擎联合清单(行 = (来源, 模型),右侧常驻「引擎图标 · 推理强度 · ⚡」
+   * 三元组,收藏区置顶,hover 出行配置浮层);缺省 false = 既有「先选引擎再选模型」面板,
+   * 逐像素不变。
+   *
+   * 为什么做成开关而不是直接换掉:新会话入口撤 AgentSelect(M5)与会话内同引擎过滤(M6)
+   * 还没接线,而本组件有 9 个消费入口(会话 / 草稿 / scheduler / IM / Hook / Subagent /
+   * Worker / GhostErrand / 设置)。先让面板可用、再逐个入口切过去,任何一轮都不会出现
+   * 「某个入口的模型列表突然换了一套语义」。
+   *
+   * 已知边界(开这个开关前必须确认不适用):联合列表的数据源是**供应商目录**
+   * (unifiedModelEntries),device-link 老被控端的 capabilities-only 扁平兜底没有目录 →
+   * 该场景下开了会得到空列表。
+   *
+   * 会话内形态见 `sessionEngineFilter`;`followSession` 已在统一面板等价渲染;
+   * `agentSwitch` 的两步分段在统一面板下**刻意不渲染**(见该 prop 的说明)。
+   */
+  unifiedPanel?: boolean;
+  /**
+   * 统一面板的**会话内形态**(model-selector-unified §1.6,M6 面板侧)。仅在
+   * `unifiedPanel` 为 true 时生效;新会话 / 草稿不传。
+   *
+   * 传入后:rail 顶部出现「同引擎」过滤(默认选中)、该视图内的行默认落在当前引擎上、
+   * 离开该视图时列表顶部出现有损警示、选中跨引擎行时走 `onCrossEngineSelect`
+   * (调用方在那里执行既有的 performAgentSwitch 事务)。
+   *
+   * 与 `agentSwitch` 的关系:两者**不要同时用**。旧的两步分段(先选引擎 tab、再选模型)
+   * 被这套「同引擎默认 + 显式跨引擎入口 + 行浮层引擎胶囊」完整取代,统一面板下不渲染
+   * 分段。切换的执行链路没变,仍是调用方的 performAgentSwitch。
+   */
+  sessionEngineFilter?: UnifiedModelPanelProps['sessionEngineFilter'];
+  /**
+   * 参与统一面板联合列表的引擎集合。缺省 = 三个引擎全参与。
+   *
+   * **刻意不按 `vendorKey` 收窄**:vendorKey 在这里是「当前正在用哪个引擎」,不是
+   * 「只准看这个引擎」—— 拿它收窄会把跨引擎联合列表压回单引擎,统一面板也就没了。
+   * 当前引擎的身份由 `liveAgentKind` / `sessionEngineFilter.currentAgent` 表达。
+   *
+   * 调用方该传什么:**运行时已注册**的引擎(maker:list-available-agents),不是模型目录
+   * 里出现过的。Pi 二进制缺失时目录照样投影 Pi 模型,只看目录会让用户一路选到
+   * `requireAgent` 的 not-registered —— 这条门禁原本挂在新会话工具条的 AgentSelect
+   * (hiddenVendors)上,工具条撤了就得由这里接住。未加载完成时**不传**(fail-open,
+   * 不隐藏任何引擎);当前引擎必须始终在列。
+   */
+  unifiedAgents?: readonly AgentKind[];
+  /**
+   * 统一面板里被选中的**收藏锚点** uid(规格 §1.5:选中的是那一条收藏副本,不是模型本体)。
+   * 由调用方持有(草稿层),因为它与 (来源, 模型) 一样属于「当前选了什么」这份状态。
+   * 传 null / 不传 = 当前选中的是模型行;锚点在收藏里查无此条时面板自动回落模型行。
+   */
+  selectedFavoriteUid?: string | null;
+  /**
+   * 统一面板的**选中直通**(M5 新会话接线)。传入后,联合列表里的每一次行选中都原样交给
+   * 调用方 —— (来源, 模型, 深度, 该行生效引擎, Fast, 收藏锚点) 一次给全,不再走
+   * `onProviderChange` / `onModelChange` 那条**单引擎**链路。
+   *
+   * 为什么必须直通:那条链路的下游按「当前正在用的引擎」查目录解析档位
+   * (ChatInput.resolveModelEfforts 在显式来源下是 fail-closed 的),而统一面板的一行可能
+   * 落在**另一个**引擎上 —— 会拿旧引擎的档位表去校验目标行,把面板已经解析好的档清成空。
+   * 草稿换引擎无损(会话还没建),所以直接写下去,不经切换事务。
+   *
+   * 只有**草稿**传;已建会话用 `sessionEngineFilter`(跨引擎走 performAgentSwitch)。
+   * 两者不要同时传:同时传时本 prop 生效,跨引擎行就不会再走切换事务了。
+   */
+  onUnifiedSelect?: (selection: {
+    providerId: string;
+    modelId: string;
+    /** 该行生效档位;该 (模型, 引擎) 不可调档时为 undefined。 */
+    effort?: Effort;
+    engine: 'cc' | 'codex' | 'pi';
+    fast: boolean;
+    favoriteUid: string | null;
+  }) => void;
   /** 语义同 ModelSelectorProps.reselectEmitsChange(点当前行照常回调)。 */
   reselectEmitsChange?: boolean;
   /** 点击当前已选模型行时打开该行的配置浮层，而不是直接收起选择器。 */
@@ -823,6 +909,11 @@ function ModelSelectorContentView({
   onNavigateToProviders,
   followSession,
   configurationEnabled = true,
+  unifiedPanel = false,
+  sessionEngineFilter,
+  unifiedAgents,
+  selectedFavoriteUid = null,
+  onUnifiedSelect,
   reselectEmitsChange = false,
   selectedRowClickOpensConfiguration = false,
   pointerRevealRequiresIntent = false,
@@ -1174,28 +1265,35 @@ function ModelSelectorContentView({
   // ── 模型单价 ─────────────────────────────────────────────────────────────
   // XD 实际报价与非 XD Catalog 参考价是两份独立快照。这里只按行来源选择快照，
   // 相同 modelId 不跨 Provider 复用或兜底。
-  const pricePresentationOf = (providerId: string | null, id: string) => {
+  // agentOverride:统一面板的行各自有自己的生效引擎(不共用面板级 currentAgentKind),
+  // 报价必须按**该行的引擎**查(同一 id 跨引擎可以是两条不同的路由 / 两份不同的价)。
+  const pricePresentationOf = (
+    providerId: string | null,
+    id: string,
+    agentOverride?: AgentKind,
+  ) => {
     // device-link 只同步被控端 provider 目录，不同步价格快照；不能把控制端价格与
     // 被控端 CatalogModel.cost 拼成一个展示结果。在协议补齐前远程选择器不展示价格。
     if (deviceId) return null;
+    const priceAgentKind = agentOverride ?? currentAgentKind;
     const effectiveProviderId =
       providerId ??
-      (currentAgentKind
-        ? resolveCurrentSourceId(providers, currentProviderId, id, currentAgentKind)
+      (priceAgentKind
+        ? resolveCurrentSourceId(providers, currentProviderId, id, priceAgentKind)
         : null);
     const pricing = effectiveProviderId === 'xd' ? gatewayPricing : referencePricing;
     const quote = getModelPriceQuote(
       pricing,
       effectiveProviderId,
       id,
-      currentAgentKind ?? undefined,
+      priceAgentKind ?? undefined,
     );
     if (effectiveProviderId === 'xd' && (!quote || quote.source === 'gateway')) {
       if (!quote && gatewayPricing == null) return null;
       const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);
       const effectiveCost =
-        effectiveProvider && currentAgentKind
-          ? getModel(effectiveProvider, id, currentAgentKind)?.cost
+        effectiveProvider && priceAgentKind
+          ? getModel(effectiveProvider, id, priceAgentKind)?.cost
           : undefined;
       return modelPricePresentation(quote ?? null, effectiveCost);
     }
@@ -2099,6 +2197,181 @@ function ModelSelectorContentView({
   const showRemoteStatusFooter =
     remoteStatusInList !== null && (hasAnyModel || trimmedQuery.length > 0);
 
+  // 搜索框 —— 药丸样式。两种面板形态(既有分段 / 统一联合列表)共用同一份,
+  // 避免两处各写一遍后 placeholder、禁用态、a11y 名慢慢漂移。
+  const searchField = (
+    <div
+      className={cn(
+        'flex items-center gap-2 rounded-full border border-[var(--model-dropdown-border)] px-3 py-[7px] transition-colors',
+        interactionDisabled
+          ? 'cursor-not-allowed bg-[var(--surface-elevated-soft)]'
+          : 'bg-[var(--surface)]',
+      )}
+    >
+      <Search
+        size={16}
+        className={cn(
+          'shrink-0',
+          interactionDisabled
+            ? 'text-[var(--text-disabled-tertiary)]'
+            : 'text-[var(--text-tertiary)]',
+        )}
+      />
+      <input
+        type="text"
+        disabled={interactionDisabled}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={t('newChat.modelSelector.search.placeholderAll')}
+        className={cn(
+          'min-w-0 flex-1 bg-transparent text-14 outline-none',
+          interactionDisabled
+            ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled-tertiary)]'
+            : 'text-[var(--model-item-text)] placeholder:text-[var(--text-tertiary)]',
+        )}
+        aria-label={t('newChat.modelSelector.search.placeholderAll')}
+      />
+    </div>
+  );
+
+  // ── 统一模型选择器面板(opt-in,M3 / M4)────────────────────────────────────
+  // 联合列表的可见性 / 排除口径必须与既有面板**逐条对齐**(否则「统一面板里能看到、
+  // 切回旧面板就没了」),故这里复用同一批判定函数,只是补上 agent 维度。
+  if (unifiedPanel) {
+    const unifiedIsVisible = (
+      providerId: string,
+      model: { id: string; defaultEnabled?: boolean },
+      agent: AgentKind,
+    ): boolean =>
+      deviceId
+        ? isDeviceModelVisible(remoteProviders.modelVisibilityOverrides, agent, providerId, model)
+        : isModelEnabled(agent, providerId, model);
+    const unifiedProviderLabel = (providerId: string): string => {
+      const provider = providers.find((entry) => entry.id === providerId);
+      return provider ? providerDisplayName(provider, t) : providerId;
+    };
+    // 档名多语言按**该行自己的引擎**取 capabilities 兜底名(不同 agent 的同名档可能有
+    // 各自的英文名),优先仍是 i18n 词表 effortLevels.*。
+    const unifiedEffortLabel = (agent: AgentKind, value: Effort): string => {
+      const levels =
+        agent === 'claude-code'
+          ? (cc.capabilities?.effortLevels ?? [])
+          : agent === 'codex'
+            ? (codex.capabilities?.effortLevels ?? [])
+            : (pi.capabilities?.effortLevels ?? []);
+      return modelEffortLabel(t, null, value, levels.find((e) => e.id === value)?.displayName);
+    };
+    const unifiedAgentFastCapable = (agent: AgentKind): boolean =>
+      agent === 'claude-code'
+        ? !!cc.capabilities?.hasFastMode
+        : agent === 'codex'
+          ? !!codex.capabilities?.hasFastMode
+          : !!pi.capabilities?.hasFastMode;
+    return (
+      <div
+        ref={bindPaneElement}
+        data-model-tag-density={modelTagDensity}
+        data-unified-model-panel="true"
+        className={cn(
+          'flex min-h-0 flex-col gap-1.5 p-2',
+          // 宽度自适应(规格 §1.2):长模型名先把面板撑宽,到上限才截断,不硬砍名字。
+          fluidWidth
+            ? 'w-full min-w-0'
+            : 'w-max min-w-[460px] max-w-[min(600px,calc(100vw-48px))]',
+        )}
+      >
+        {searchField}
+        <UnifiedModelPanel
+          providers={providers}
+          {...(unifiedAgents ? { agents: unifiedAgents } : {})}
+          scope={actualRoute ? 'session' : 'draft'}
+          isVisible={unifiedIsVisible}
+          {...(excludeChatBridgedCodex
+            ? {
+                excludeProvider: (provider: ProviderView, agent: AgentKind) =>
+                  agent === 'codex' && isChatBridgedCodexProvider(provider),
+              }
+            : {})}
+          {...(excludeSubscriptionDirect
+            ? { excludeModel: (model: { id: string }) => isSubscriptionDirectModel(model.id) }
+            : {})}
+          sourceVersion={[
+            visibilityVersion,
+            deviceId ?? '',
+            excludeSubscriptionDirect ? 1 : 0,
+            excludeChatBridgedCodex ? 1 : 0,
+            remoteProviders.modelVisibilityOverrides ? 'ov' : 'no-ov',
+          ].join('|')}
+          query={query}
+          selected={{ providerId: activeSourceId, modelId }}
+          selectedFavoriteUid={selectedFavoriteUid}
+          liveAgentKind={currentAgentKind}
+          fastMode={fastMode}
+          selectedEffort={effort}
+          {...(modelMemory ? { modelMemory } : {})}
+          agentFastModeCapable={unifiedAgentFastCapable}
+          priceOf={(providerId, id, agent) => pricePresentationOf(providerId, id, agent)}
+          providerLabel={unifiedProviderLabel}
+          effortLabelOf={unifiedEffortLabel}
+          {...(constrainedListMaxHeight !== undefined
+            ? { listMaxHeight: constrainedListMaxHeight }
+            : {})}
+          interactionDisabled={interactionDisabled}
+          configurationEnabled={configurationEnabled}
+          {...(sessionEngineFilter ? { sessionEngineFilter } : {})}
+          {...(followSession ? { followSession } : {})}
+          onSelect={(providerId, id, rowEffort, rowConfig) => {
+            const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
+            // 草稿(M5):整行原样直通给调用方 —— 引擎跟着模型一起落，中途不再被单引擎
+            // 链路重解析一次(见 onUnifiedSelect 的说明)。
+            if (onUnifiedSelect) {
+              onUnifiedSelect({
+                providerId,
+                modelId: id,
+                ...(rowEffortValue ? { effort: rowEffortValue } : {}),
+                engine: rowConfig.engine,
+                fast: rowConfig.fast,
+                favoriteUid: rowConfig.favoriteUid,
+              });
+              closeOptionsPanel();
+              onDismiss?.();
+              return;
+            }
+            // 已建会话(M6):同引擎行照旧走 onProviderChange 直切;跨引擎行在 selectRow
+            // 里就已经改道 sessionEngineFilter.onCrossEngineSelect,到不了这里。
+            handleRowSelect(providerId, id, true, rowEffortValue);
+          }}
+          {...(onEffortChange ? { onEffortChangeLive: onEffortChange } : {})}
+          {...(onFastModeChange ? { onFastModeChangeLive: onFastModeChange } : {})}
+          panelElement={paneElement}
+          {...(overlayContentClassName !== undefined
+            ? { overlayClassName: overlayContentClassName }
+            : {})}
+        />
+        {/* 「连接来源」footer —— 与既有面板同规则(device-link 远程隐藏)。 */}
+        {onNavigateToProviders && !deviceId && (
+          <>
+            <div className="mx-1 h-px bg-[var(--model-dropdown-border)]" />
+            <button
+              type="button"
+              disabled={interactionDisabled}
+              onClick={onNavigateToProviders}
+              className={cn(
+                'flex w-full items-center gap-1.5 rounded-[8px] px-3 py-2',
+                'transition-colors hover:bg-[var(--model-item-hover)]',
+              )}
+            >
+              <Plus size={14} className="shrink-0 text-[var(--text-tertiary)]" />
+              <span className="truncate text-13 font-normal text-[var(--text-tertiary)]">
+                {t('newChat.modelSelector.source.connect')}
+              </span>
+            </button>
+          </>
+        )}
+      </div>
+    );
+  }
+
   // ── 主菜单:固定 320 宽(field 形态改绑 trigger 宽度,见 fluidWidth),选项浮层
   //    portal 到 body,hover 时主菜单完全不重排 ─────
   const pane = (
@@ -2162,39 +2435,7 @@ function ModelSelectorContentView({
           <div className="mx-1 h-px bg-[var(--model-dropdown-border)]" />
         </>
       )}
-      {/* 搜索框 —— 药丸样式。 */}
-      <div
-        className={cn(
-          'flex items-center gap-2 rounded-full border border-[var(--model-dropdown-border)] px-3 py-[7px] transition-colors',
-          interactionDisabled
-            ? 'cursor-not-allowed bg-[var(--surface-elevated-soft)]'
-            : 'bg-[var(--surface)]',
-        )}
-      >
-        <Search
-          size={16}
-          className={cn(
-            'shrink-0',
-            interactionDisabled
-              ? 'text-[var(--text-disabled-tertiary)]'
-              : 'text-[var(--text-tertiary)]',
-          )}
-        />
-        <input
-          type="text"
-          disabled={interactionDisabled}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={t('newChat.modelSelector.search.placeholderAll')}
-          className={cn(
-            'min-w-0 flex-1 bg-transparent text-14 outline-none',
-            interactionDisabled
-              ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled-tertiary)]'
-              : 'text-[var(--model-item-text)] placeholder:text-[var(--text-tertiary)]',
-          )}
-          aria-label={t('newChat.modelSelector.search.placeholderAll')}
-        />
-      </div>
+      {searchField}
 
       {/* 模型列表 —— 单栏;分段(供应商)或 flat。 */}
       <div
@@ -2334,6 +2575,11 @@ export function ModelSelector({
   popoverSide = 'top',
   maxVisibleModelRows,
   configurationEnabled = true,
+  unifiedPanel = false,
+  sessionEngineFilter,
+  unifiedAgents,
+  selectedFavoriteUid = null,
+  onUnifiedSelect,
   fallbackOption,
   reselectEmitsChange = false,
   selectedRowClickOpensConfiguration = false,
@@ -2429,6 +2675,31 @@ export function ModelSelector({
       },
     };
   }, [agentSwitch, setOpenWithoutAutoRefresh]);
+
+  // 统一面板下没有「先切分段再选模型」那一步,跨引擎的确认落在**真正选中那一行**的这一下。
+  // 确认用的 AlertDialog 同样会被 Popover 当成外部交互顺手把面板收掉,所以复用上面那把
+  // 保命锁;区别只在收尾:
+  //   · 调用方执行了切换(返回非 false)→ 收起面板(与旧两步分段选完即收一致);
+  //   · 用户在确认框上取消(返回 false)→ 面板留在原地,他还能接着挑别的行。
+  const contentSessionEngineFilter = useMemo(() => {
+    if (!sessionEngineFilter) return undefined;
+    const { onCrossEngineSelect } = sessionEngineFilter;
+    return {
+      ...sessionEngineFilter,
+      onCrossEngineSelect: async (
+        args: Parameters<typeof onCrossEngineSelect>[0],
+      ): Promise<boolean> => {
+        setKeepOpenForAgentConfirmation(true);
+        try {
+          const applied = await onCrossEngineSelect(args);
+          setOpenWithoutAutoRefresh(applied !== false);
+          return applied !== false;
+        } finally {
+          setKeepOpenForAgentConfirmation(false);
+        }
+      },
+    };
+  }, [sessionEngineFilter, setOpenWithoutAutoRefresh]);
 
   const agentKind = vendorKeyToAgentKind(vendorKey);
   const cc = useAgentCapabilities('claude-code', deviceId);
@@ -2921,6 +3192,11 @@ export function ModelSelector({
       onProviderChange={onProviderChange}
       onNavigateToProviders={onNavigateToProviders}
       configurationEnabled={configurationEnabled}
+      unifiedPanel={unifiedPanel}
+      sessionEngineFilter={contentSessionEngineFilter}
+      unifiedAgents={unifiedAgents}
+      selectedFavoriteUid={selectedFavoriteUid}
+      onUnifiedSelect={onUnifiedSelect}
       reselectEmitsChange={reselectEmitsChange}
       selectedRowClickOpensConfiguration={selectedRowClickOpensConfiguration}
       pointerRevealRequiresIntent={morphEnabled}

@@ -1,0 +1,218 @@
+/**
+ * useUnifiedRowActions —— 统一模型选择器面板里**所有会改用户数据的动作**的单点集合
+ * (model-selector-unified §1.4 / §1.5 / §1.6)。
+ *
+ * 集中在一个文件里的理由:这几条规则彼此纠缠,散在组件里就没法逐条对着规格审 ——
+ *   - 引擎:模型行写 `modelEnginePrefs` override;收藏行改的是**那一条收藏**;
+ *   - 深度 / Fast:**live 选中行**交给调用方的实时状态(绝不预写记忆 —— device-link
+ *     写穿失败会污染被控端草稿),其余行写 `providerModelMemory` 既有槽;
+ *   - 恢复推荐:删 override(随版本跟随新推荐)+ 把深度 / Fast 收回目录默认;
+ *   - 收藏:☆ 是单向「存一份当前生效配置的副本」,收藏行的 ☆ 才是删除;
+ *   - 选中:跨引擎的那一下**不走**普通 onSelect,交给调用方的切换事务。
+ *
+ * 本 hook 不持有状态(点亮反馈的计时器留在组件里,经 `onFavoriteFlash` 回调触发)。
+ */
+
+import type { UnifiedModelEntry } from '@cindy/model-providers';
+
+import type { AgentKind } from '@/hooks/useAgentCapabilities';
+import type { Effort } from '@/lib/userPreferences.types';
+import {
+  clearModelEngineOverride,
+  setModelEngineOverride,
+} from '@/state/modelEnginePrefs';
+import {
+  addModelFavorite,
+  removeModelFavorite,
+  updateModelFavorite,
+  type ModelFavoriteItem,
+} from '@/state/modelFavorites';
+
+import type { ModelMemoryAccessors } from './ModelSelector';
+import type { UnifiedSelectedRow } from './UnifiedModelPanel';
+import {
+  anchorKey,
+  type UnifiedAnchor,
+  type UnifiedEngine,
+  type UnifiedRowConfig,
+} from './unifiedModelSelection';
+
+export interface UnifiedRowActionsOptions {
+  interactionDisabled: boolean;
+  /** 这一行是不是当前会话 / 草稿正在用的那一行(来源 + 模型 + 引擎都对上)。 */
+  isLiveRow: (entry: UnifiedModelEntry, config: UnifiedRowConfig) => boolean;
+  modelMemory?: ModelMemoryAccessors | undefined;
+  onEffortChangeLive?: ((effort: Effort) => void) | undefined;
+  onFastModeChangeLive?: ((enabled: boolean) => void | Promise<void>) | undefined;
+  onSelect: (
+    providerId: string,
+    modelId: string,
+    effort: Effort | '',
+    config: UnifiedSelectedRow,
+  ) => void;
+  sessionEngineFilter?:
+    | {
+        currentAgent: AgentKind;
+        onCrossEngineSelect: (args: {
+          providerId: string;
+          modelId: string;
+          targetAgent: AgentKind;
+          effort: Effort | '';
+        }) => void | boolean | Promise<void | boolean>;
+      }
+    | undefined;
+  sessionAgent?: AgentKind | undefined;
+  /** ☆ 的 0.7s 点亮反馈(计时器在组件里)。 */
+  onFavoriteFlash: (anchorKeyValue: string) => void;
+  /** 删除收藏前的收尾(如收起绑在该锚点上的浮层)。 */
+  onBeforeRemoveFavorite: (anchor: UnifiedAnchor) => void;
+}
+
+export interface UnifiedRowActions {
+  applyEngine: (anchor: UnifiedAnchor, engine: UnifiedEngine) => void;
+  applyEffort: (
+    anchor: UnifiedAnchor,
+    entry: UnifiedModelEntry,
+    config: UnifiedRowConfig,
+    effort: Effort,
+  ) => void;
+  applyFast: (
+    anchor: UnifiedAnchor,
+    entry: UnifiedModelEntry,
+    config: UnifiedRowConfig,
+    enabled: boolean,
+  ) => void;
+  resetToRecommended: (
+    anchor: UnifiedAnchor,
+    entry: UnifiedModelEntry,
+    config: UnifiedRowConfig,
+  ) => void;
+  addFavorite: (anchor: UnifiedAnchor, config: UnifiedRowConfig) => void;
+  removeFavorite: (anchor: UnifiedAnchor) => void;
+  selectRow: (
+    anchor: UnifiedAnchor,
+    config: UnifiedRowConfig,
+    favorite?: ModelFavoriteItem,
+  ) => void;
+}
+
+export function useUnifiedRowActions(options: UnifiedRowActionsOptions): UnifiedRowActions {
+  const {
+    interactionDisabled,
+    isLiveRow,
+    modelMemory,
+    onEffortChangeLive,
+    onFastModeChangeLive,
+    onSelect,
+    sessionEngineFilter,
+    sessionAgent,
+    onFavoriteFlash,
+    onBeforeRemoveFavorite,
+  } = options;
+
+  const applyEngine: UnifiedRowActions['applyEngine'] = (anchor, engine) => {
+    if (interactionDisabled) return;
+    if (anchor.kind === 'fav') {
+      updateModelFavorite(anchor.uid, { agent: engine });
+      return;
+    }
+    setModelEngineOverride(anchor.providerId, anchor.modelId, engine);
+  };
+
+  const applyEffort: UnifiedRowActions['applyEffort'] = (anchor, entry, config, effort) => {
+    if (interactionDisabled) return;
+    if (anchor.kind === 'fav') {
+      updateModelFavorite(anchor.uid, { effort });
+      return;
+    }
+    if (isLiveRow(entry, config) && onEffortChangeLive) {
+      // 选中行的深度是会话实时状态,交给调用方持久化(与旧版 handleEditEffort 同语义)。
+      onEffortChangeLive(effort);
+      return;
+    }
+    modelMemory?.setEffort(config.agent, anchor.providerId, anchor.modelId, effort);
+  };
+
+  const applyFast: UnifiedRowActions['applyFast'] = (anchor, entry, config, enabled) => {
+    if (interactionDisabled) return;
+    if (anchor.kind === 'fav') {
+      updateModelFavorite(anchor.uid, { fast: enabled });
+      return;
+    }
+    if (isLiveRow(entry, config) && onFastModeChangeLive) {
+      // 选中行的 Fast 必须等调用方持久化成功后再由上层同步草稿;这里绝不预写 modelMemory
+      // (device-link 远程失败会污染被控端草稿 —— 与旧版同一条禁令)。
+      void onFastModeChangeLive(enabled);
+      return;
+    }
+    modelMemory?.setFast(config.agent, anchor.providerId, anchor.modelId, enabled);
+  };
+
+  const resetToRecommended: UnifiedRowActions['resetToRecommended'] = (anchor, entry, config) => {
+    if (interactionDisabled || anchor.kind === 'fav') return;
+    clearModelEngineOverride(anchor.providerId, anchor.modelId);
+    const recommendedAgent = entry.recommended;
+    const defaultEffort = entry.capabilities[recommendedAgent]?.defaultEffort ?? null;
+    // 记忆槽没有「删」的语义(providerModelMemory 是 (agent, model) → 值的表);把它写回
+    // 目录默认 = 用户看到的就是推荐配置。真正的「跟随服务端新默认」由引擎 override 的删除
+    // 承担 —— 深度默认变了,用户下次进浮层看到的仍是自己这次确认过的档,不会被静默改。
+    if (defaultEffort) {
+      modelMemory?.setEffort(recommendedAgent, anchor.providerId, anchor.modelId, defaultEffort);
+    }
+    if (config.fast) {
+      modelMemory?.setFast(recommendedAgent, anchor.providerId, anchor.modelId, false);
+    }
+  };
+
+  const addFavorite: UnifiedRowActions['addFavorite'] = (anchor, config) => {
+    if (interactionDisabled) return;
+    addModelFavorite({
+      providerId: anchor.providerId,
+      modelId: anchor.modelId,
+      agent: config.engine,
+      ...(config.effort ? { effort: config.effort } : {}),
+      ...(config.fast ? { fast: true as const } : {}),
+    });
+    onFavoriteFlash(anchorKey(anchor));
+  };
+
+  const removeFavorite: UnifiedRowActions['removeFavorite'] = (anchor) => {
+    if (interactionDisabled || anchor.kind !== 'fav') return;
+    onBeforeRemoveFavorite(anchor);
+    removeModelFavorite(anchor.uid);
+  };
+
+  const selectRow: UnifiedRowActions['selectRow'] = (anchor, config, favorite) => {
+    if (interactionDisabled) return;
+    const effort = config.effort ?? '';
+    // 跨引擎选择不走普通 onSelect(那条链路只换 model / provider):交给调用方的切换事务
+    // (performAgentSwitch —— 确认弹窗、上下文重建、fastMode 不跨引擎带入等语义都在那边)。
+    // 草稿场景没有 sessionEngineFilter,换引擎没有代价,恒走 onSelect。
+    if (sessionEngineFilter && sessionAgent !== undefined && config.agent !== sessionAgent) {
+      sessionEngineFilter.onCrossEngineSelect({
+        providerId: anchor.providerId,
+        modelId: anchor.modelId,
+        targetAgent: config.agent,
+        effort,
+      });
+      return;
+    }
+    // 生效引擎 / Fast / 收藏锚点随选中一起交出去:调用方(M5 新会话)要按它派生
+    // newMakerDraft 的 vendor,再重推一遍必然与行上显示的三元组漂移。
+    onSelect(anchor.providerId, anchor.modelId, effort, {
+      engine: config.engine,
+      fast: config.fast,
+      favoriteUid: favorite ? favorite.uid : null,
+    });
+  };
+
+  return {
+    applyEngine,
+    applyEffort,
+    applyFast,
+    resetToRecommended,
+    addFavorite,
+    removeFavorite,
+    selectRow,
+  };
+}

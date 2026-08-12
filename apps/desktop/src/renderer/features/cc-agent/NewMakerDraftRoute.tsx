@@ -64,9 +64,10 @@ import { InheritedSubscriptionNotice } from '@/components/onboarding/InheritedSu
 import { PromotionalGrantNotice } from '@/components/onboarding/PromotionalGrantNotice';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
-import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { getBranchName } from '../../../shared/managedWorktreeBranches';
+import { AgentSelect } from '@/components/new-chat/AgentSelect';
+import { getModelFavorite } from '@/state/modelFavorites';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -79,6 +80,7 @@ import {
   patchDraft,
   patchCollab,
   patchCurrentVendorPrefs,
+  patchVendorPrefs,
   resetDraftWorkspaceTargets,
   getFastModeForModel,
   setFastModeForModel,
@@ -643,6 +645,9 @@ export function NewMakerDraftRoute() {
   // 当前 vendor 对应的 prefs(切 vendor 后这里自动重算 → 透传到 ChatInput initial*)
   const currentPrefs = draft.lastByVendor[draft.vendor];
   const chatPrefs = currentPrefs;
+  // 统一模型选择器里选中的收藏锚点(规格 §1.5)。组件态:它描述「这次草稿选中的是哪一条
+  // 副本」,不是要跨重启保留的偏好 —— 详见 handleUnifiedDraftSelect 里的取舍说明。
+  const [selectedFavoriteUid, setSelectedFavoriteUid] = useState<string | null>(null);
   const persistedAgentKind: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
   const authVendor: 'cc' | 'codex' | 'pi' = persistedAgentKind;
   const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
@@ -1126,6 +1131,12 @@ export function NewMakerDraftRoute() {
     unsupported: deviceProvidersUnsupported,
   } = useDeviceProviders(effectiveDeviceLinkDeviceId);
   const providers = effectiveDeviceLinkDeviceId ? deviceProviders : localProviders;
+  // 与 ChatInput.unifiedModelPanelEnabled **逐字同一条判据**:统一面板的联合列表只认供应商
+  // 目录,老被控端(不支持 provider:list)只有一份拍平 capabilities → 开了就是空列表,
+  // composer 那边会降级回旧面板。旧面板是「先选引擎再选模型」,所以这一路必须把工具条上的
+  // 引擎下拉一起还回来 —— 否则那条链路上根本换不了引擎。常态不注入(引擎跟着模型走)。
+  const unifiedModelPanelEnabled =
+    !effectiveDeviceLinkDeviceId || !deviceProvidersUnsupported;
   const remoteModelListStatus = !isDeviceLinkDraft
     ? 'idle'
     : capabilitiesError || (deviceProvidersError && !deviceProvidersUnsupported)
@@ -1897,6 +1908,19 @@ export function NewMakerDraftRoute() {
     capabilityAgentKind,
   ]);
 
+  // 收藏锚点的失效兜底:选中一条收藏后,如果草稿的 (模型, 引擎) 又被别的路径改掉
+  // (引擎不可用 coerce、模型校准、浮层里换来源…),这个锚点就不再描述当前选择了 ——
+  // 留着它面板会在一条不相干的收藏上打勾。锚点本身被删 / 换账号后查无此条的情形,
+  // 由面板侧的 activeFavoriteUid 兜底,这里只管「还在,但已经不是它了」。
+  useEffect(() => {
+    if (!selectedFavoriteUid) return;
+    const favorite = getModelFavorite(selectedFavoriteUid);
+    if (!favorite) return;
+    if (favorite.modelId !== draftInitialModel || favorite.agent !== draft.vendor) {
+      setSelectedFavoriteUid(null);
+    }
+  }, [selectedFavoriteUid, draftInitialModel, draft.vendor]);
+
   /**
    * 把草稿转移到一个新的运行目标(设备 + 工作区)——**四条路径唯一的转移动作**。
    *
@@ -2478,6 +2502,68 @@ export function NewMakerDraftRoute() {
       patchActivePrefs({ providerId: newProviderId });
     },
     [isDeviceLinkDraft, patchActivePrefs],
+  );
+
+  // ─── 统一模型选择器:一次选中 = 一次完整写入 ─────────────────────────────
+  // (model-selector-unified §2.4 / M5)
+  //
+  // 面板里的一行自带引擎(推荐 ⊕ 用户 override ⊕ 收藏副本),所以选中要连引擎一起落。
+  // 顺序是硬要求:**先 switchVendor,再写 pref** —— patchVendorPrefs 按 vendor 分槽,
+  // 反过来会把目标行写进上一个引擎的槽里,切回去时才发现模型串了。
+  //
+  // 深度 / Fast 的每模型记忆已由 ChatInput 按目标引擎槽写过(见 onUnifiedDraftSelect
+  // 的 prop 说明);这里只负责草稿自身的四元组 (vendor, model, effort, providerId)。
+  const handleUnifiedDraftSelect = useCallback(
+    (selection: {
+      vendor: MakerVendor;
+      providerId: string;
+      modelId: string;
+      effort?: Effort;
+      fast: boolean;
+      favoriteUid: string | null;
+    }) => {
+      // 收藏锚点是**组件态**:它描述的是「这次草稿选中的是哪一条副本」,不属于要跨重启
+      // 保留的偏好(重进首页从模型行重新开始即可)。放这里天然随路由卸载失效,也不必为
+      // 切账号 / 切设备再补一条清理 —— 面板侧另有一道兜底:uid 在当前 owner 的收藏里
+      // 查不到就自动回落模型行(UnifiedModelPanel.activeFavoriteUid)。
+      setSelectedFavoriteUid(selection.favoriteUid);
+      if (selection.vendor !== draft.vendor) switchVendor(selection.vendor, currentPrefs);
+      if (isDeviceLinkDraft) {
+        dlRuntimeTouchedRef.current = true;
+        setDlSel((prev) => ({
+          ...(prev ?? {}),
+          model: selection.modelId,
+          effort: selection.effort ?? prev?.effort ?? deviceLinkInitial?.effort ?? 'medium',
+          fastMode: selection.fast,
+          ...(prev?.permissionMode !== undefined
+            ? { permissionMode: prev.permissionMode }
+            : {}),
+          providerId: selection.providerId,
+        }));
+        // 选中模型的 effort/fast 写穿被控端(active=true):与既有 handleEffortDidChange /
+        // handleFastModeChange 同一条通道,缺了它被控端 trigger 的激活档不会跟着变。
+        pushActiveDraftPref({
+          ...(selection.effort ? { effort: selection.effort } : {}),
+          fast: selection.fast,
+        });
+        return;
+      }
+      // 本地草稿:一次写进目标 vendor 的槽。走 patchVendorPrefs(不是 Preserving 版)——
+      // 这是用户在 New Maker picker 里的**显式**模型选择,modelChosenByVendor 必须打标
+      // (scheduler 的成本兜底默认模型依赖它)。
+      patchVendorPrefs(selection.vendor, {
+        model: selection.modelId,
+        providerId: selection.providerId,
+        ...(selection.effort ? { effort: selection.effort } : {}),
+      });
+    },
+    [
+      draft.vendor,
+      currentPrefs,
+      isDeviceLinkDraft,
+      deviceLinkInitial,
+      pushActiveDraftPref,
+    ],
   );
 
   // ─── 用户改 workingDir(FolderPicker)→ 写回 draft ─────────────────────
@@ -4578,16 +4664,25 @@ export function NewMakerDraftRoute() {
                     folderPickerOpen={folderPickerOpen}
                     onFolderPickerOpenChange={handleFolderPickerOpenChange}
                     showFolderPicker={false}
+                    // 统一模型选择器(model-selector-unified §1.1):引擎不再是工具条上的
+                    // 独立控件 —— 它跟着模型走(推荐映射自动配好,并在模型 pill 与每一行
+                    // 右侧常驻显示),高级调整收进行配置浮层。唯一的例外是 device-link 老
+                    // 被控端的 capabilities-only 降级(见 unifiedModelPanelEnabled):那条
+                    // 链路上 composer 回落旧面板,引擎下拉必须一起回来。
                     middleToolbarSlot={
-                      <AgentSelect
-                        value={draft.vendor}
-                        onChange={handleVendorChange}
-                        visualVariant="create-agent"
-                        className="shrink-0"
-                        disabled={wtCreating}
-                        hiddenVendors={hiddenSwitcherVendors}
-                      />
+                      unifiedModelPanelEnabled ? undefined : (
+                        <AgentSelect
+                          value={draft.vendor}
+                          onChange={handleVendorChange}
+                          visualVariant="create-agent"
+                          className="shrink-0"
+                          disabled={wtCreating}
+                          hiddenVendors={hiddenSwitcherVendors}
+                        />
+                      )
                     }
+                    onUnifiedDraftSelect={handleUnifiedDraftSelect}
+                    selectedFavoriteUid={selectedFavoriteUid}
                     // 「+」菜单协同模式项:普通 Lead 的项目/对话 draft 都可用 —— eligible 由
                     // resolveCollabEntryPolicy 单点判定,与会话视图同一份(issue #1170)。Lead = 当前
                     // vendor(上方 VendorSegmentedSwitcher)。onOpenDetails 打开「开启协同」富弹窗
@@ -4631,15 +4726,17 @@ export function NewMakerDraftRoute() {
                         : undefined
                     }
                     compactMiddleToolbarSlot={
-                      <AgentSelect
-                        value={draft.vendor}
-                        onChange={handleVendorChange}
-                        iconOnly
-                        visualVariant="create-agent"
-                        className="shrink-0"
-                        disabled={wtCreating}
-                        hiddenVendors={hiddenSwitcherVendors}
-                      />
+                      unifiedModelPanelEnabled ? undefined : (
+                        <AgentSelect
+                          value={draft.vendor}
+                          onChange={handleVendorChange}
+                          iconOnly
+                          visualVariant="create-agent"
+                          className="shrink-0"
+                          disabled={wtCreating}
+                          hiddenVendors={hiddenSwitcherVendors}
+                        />
+                      )
                     }
                     narrowToolbar={isDraftToolbarNarrow}
                     paletteMaxHeight={240}
