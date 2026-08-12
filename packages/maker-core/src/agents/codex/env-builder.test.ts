@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
@@ -19,6 +23,9 @@ function createAuthAdapter(env: Record<string, string> = {}): AuthAdapter {
 }
 
 describe('buildCodexEnv', () => {
+  const originalPathEntries = Object.entries(process.env).filter(
+    ([key]) => key.toLowerCase() === 'path',
+  );
   const originalNoColor = process.env.NO_COLOR;
   const originalCliColor = process.env.CLICOLOR;
   const originalForceColor = process.env.FORCE_COLOR;
@@ -35,7 +42,71 @@ describe('buildCodexEnv', () => {
     restore('FORCE_COLOR', originalForceColor);
     restore('TERM', originalTerm);
     restore('PSStyle__OutputRendering', originalPsOutputRendering);
+    for (const key of Object.keys(process.env)) {
+      if (key.toLowerCase() === 'path') delete process.env[key];
+    }
+    for (const [key, value] of originalPathEntries) {
+      if (value !== undefined) process.env[key] = value;
+    }
   });
+
+  it.runIf(process.platform === 'win32')(
+    'prioritizes a real pwsh.exe over an earlier pwsh.cmd shim',
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), 'cindy-codex-pwsh-'));
+      const shimDir = path.join(root, 'shim');
+      const executableDir = path.join(root, 'PowerShell', '7');
+
+      try {
+        await mkdir(shimDir, { recursive: true });
+        await mkdir(executableDir, { recursive: true });
+        await writeFile(path.join(shimDir, 'pwsh.cmd'), '@echo off\r\n');
+        await writeFile(path.join(executableDir, 'pwsh.exe'), 'test executable placeholder');
+
+        for (const key of Object.keys(process.env)) {
+          if (key.toLowerCase() === 'path') delete process.env[key];
+        }
+        process.env.Path = [shimDir, executableDir].join(path.delimiter);
+
+        const env = await buildCodexEnv(createAuthAdapter(), {});
+        const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path');
+
+        expect(pathKey).toBeDefined();
+        expect(env[pathKey!]?.split(path.delimiter)).toEqual([executableDir, shimDir]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'skips a WindowsApps pwsh.exe alias when a real executable follows it',
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), 'cindy-codex-pwsh-alias-'));
+      const aliasDir = path.join(root, 'Microsoft', 'WindowsApps');
+      const executableDir = path.join(root, 'PowerShell', '7');
+
+      try {
+        await mkdir(aliasDir, { recursive: true });
+        await mkdir(executableDir, { recursive: true });
+        await writeFile(path.join(aliasDir, 'pwsh.exe'), 'test app execution alias placeholder');
+        await writeFile(path.join(executableDir, 'pwsh.exe'), 'test executable placeholder');
+
+        for (const key of Object.keys(process.env)) {
+          if (key.toLowerCase() === 'path') delete process.env[key];
+        }
+        process.env.Path = [aliasDir, executableDir].join(path.delimiter);
+
+        const env = await buildCodexEnv(createAuthAdapter(), {});
+        const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path');
+
+        expect(pathKey).toBeDefined();
+        expect(env[pathKey!]?.split(path.delimiter)).toEqual([executableDir, aliasDir]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('defaults command output to plain text across common CLI color controls', async () => {
     delete process.env.NO_COLOR;

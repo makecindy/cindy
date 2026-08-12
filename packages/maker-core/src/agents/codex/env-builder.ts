@@ -11,6 +11,7 @@
  * 由调用方原样传给 new Codex({ env })。
  */
 
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import type { AgentCredentialMode, AuthAdapter } from '../../interfaces/auth-adapter.js';
@@ -30,6 +31,35 @@ function prependPath(env: Record<string, string>, prepends: string[]): void {
   }
 
   env[key] = [...cleaned, current].filter(Boolean).join(path.delimiter);
+}
+
+/**
+ * Codex resolves `pwsh` from PATH before its absolute Windows fallback. A batch
+ * shim found first is accepted as the shell path, but Rust cannot launch it
+ * with the generated arguments. Prefer the first exact pwsh.exe already on the
+ * user's PATH while preserving every other entry and its relative order.
+ */
+function prioritizeWindowsPwshExecutable(env: Record<string, string>): void {
+  if (process.platform !== 'win32') return;
+
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path');
+  if (!pathKey || !env[pathKey]) return;
+
+  const entries = env[pathKey].split(path.delimiter);
+  const executableIndex = entries.findIndex((entry) => {
+    const trimmed = entry.trim();
+    if (trimmed.length === 0) return false;
+
+    const normalized = path.win32.normalize(trimmed).replace(/[\\/]+$/, '').toLowerCase();
+    if (normalized.endsWith('\\microsoft\\windowsapps')) return false;
+
+    return existsSync(path.join(trimmed, 'pwsh.exe'));
+  });
+  if (executableIndex <= 0) return;
+
+  const [executableDir] = entries.splice(executableIndex, 1);
+  entries.unshift(executableDir);
+  env[pathKey] = entries.join(path.delimiter);
 }
 
 export async function buildCodexEnv(
@@ -61,6 +91,7 @@ export async function buildCodexEnv(
     : undefined;
   Object.assign(env, await auth.getAuthEnv(authOptions));
   prependPath(env, runtimeConfig.pathPrepends ?? []);
+  prioritizeWindowsPwshExecutable(env);
 
   // Windows 下 Python piped stdout 默认走 locale encoding(cp936/GBK), 不看 chcp 65001。
   // 强制 UTF-8 避免 Bash 工具执行 python 命令时中文乱码。跨平台设置无副作用。
