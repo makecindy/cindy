@@ -184,6 +184,122 @@ describe('releaseNotesService', () => {
     expect(requestMock).toHaveBeenCalledTimes(2);
   });
 
+  describe('重试逻辑', () => {
+    it('网络错误后重试成功', async () => {
+      vi.useFakeTimers();
+      const { fetchReleaseNotes } = await import('../releaseNotesService');
+
+      const req1 = new MockRequest();
+      const req2 = new MockRequest();
+      const resp2 = new MockResponse();
+      requestMock.mockReturnValueOnce(req1).mockReturnValueOnce(req2);
+
+      const promise = fetchReleaseNotes('0.2.1');
+      // 第一次：网络错误（retryable）
+      req1.emit('error', new Error('ECONNRESET'));
+
+      // 推进重试延迟 1s + 让微任务执行
+      await vi.advanceTimersByTimeAsync(1_000);
+      // 再多推进一帧确保 fetchCdnJsonOnce 的 Promise 链已执行到 requestMock()
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 第二次：成功
+      req2.emit('response', resp2);
+      resp2.emit('data', Buffer.from(JSON.stringify({
+        version: '0.2.1',
+        date: '2026-08-10',
+        topics: [{ title: '重试成功', text: '第二次请求返回了数据。' }],
+      }), 'utf8'));
+      resp2.emit('end');
+
+      const notes = await promise;
+      expect(notes).not.toBeNull();
+      expect(notes?.version).toBe('0.2.1');
+      expect(requestMock).toHaveBeenCalledTimes(2);
+
+      vi.useRealTimers();
+    });
+
+    it('HTTP 404 不重试，直接返回 null', async () => {
+      const { fetchReleaseNotes } = await import('../releaseNotesService');
+
+      const req = new MockRequest();
+      const resp = new MockResponse();
+      resp.statusCode = 404;
+      requestMock.mockReturnValueOnce(req);
+
+      const promise = fetchReleaseNotes('0.2.2');
+      req.emit('response', resp);
+
+      const notes = await promise;
+      expect(notes).toBeNull();
+      expect(requestMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('全部重试耗尽后返回 null', async () => {
+      vi.useFakeTimers();
+      const { fetchReleaseNotes } = await import('../releaseNotesService');
+
+      // 4 次全部网络错误（首次 + 3 次重试 = 4 次）
+      const reqs = Array.from({ length: 4 }, () => new MockRequest());
+      reqs.forEach((r) => requestMock.mockReturnValueOnce(r));
+
+      const promise = fetchReleaseNotes('0.2.3');
+
+      for (let i = 0; i < 4; i++) {
+        reqs[i].emit('error', new Error('ETIMEDOUT'));
+        // 推进重试延迟（最后一次不需要，但无害）
+        if (i < 3) {
+          // 指数退避：1s, 2s, 4s
+          const delay = 1000 * 2 ** i;
+          await vi.advanceTimersByTimeAsync(delay);
+          await vi.advanceTimersByTimeAsync(0);
+        }
+      }
+
+      const notes = await promise;
+      expect(notes).toBeNull();
+      expect(requestMock).toHaveBeenCalledTimes(4);
+
+      vi.useRealTimers();
+    });
+
+    it('超时视为可重试，第二次成功', async () => {
+      vi.useFakeTimers();
+      const { fetchReleaseNotes } = await import('../releaseNotesService');
+
+      const req1 = new MockRequest();
+      const req2 = new MockRequest();
+      const resp2 = new MockResponse();
+      requestMock.mockReturnValueOnce(req1).mockReturnValueOnce(req2);
+
+      const promise = fetchReleaseNotes('0.2.4');
+
+      // 快进到 15s 超时
+      await vi.advanceTimersByTimeAsync(15_000);
+      // 推进重试延迟 1s
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 第二次成功
+      req2.emit('response', resp2);
+      resp2.emit('data', Buffer.from(JSON.stringify({
+        version: '0.2.4',
+        date: '2026-08-10',
+        topics: [{ title: '超时重试', text: '第二次成功。' }],
+      }), 'utf8'));
+      resp2.emit('end');
+
+      const notes = await promise;
+      expect(notes).not.toBeNull();
+      expect(notes?.version).toBe('0.2.4');
+      expect(requestMock).toHaveBeenCalledTimes(2);
+      expect(req1.abort).toHaveBeenCalled();
+
+      vi.useRealTimers();
+    });
+  });
+
   it('sections 非空但全部畸形(无任何有效 bullet)同样按失败处理不缓存', async () => {
     const { fetchReleaseNotes } = await import('../releaseNotesService');
 
