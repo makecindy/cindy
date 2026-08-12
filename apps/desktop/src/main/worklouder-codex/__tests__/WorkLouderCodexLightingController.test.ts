@@ -311,6 +311,89 @@ describe('WorkLouderCodexLightingController', () => {
     });
   });
 
+  describe('joystick scrolling', () => {
+    function makeStick() {
+      const stickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
+        current: null,
+      };
+      const dispatch = vi.fn();
+      const sink = {
+        update: vi.fn(),
+        setAgentKeyPressHandler: vi.fn(),
+        setDeviceActivityHandler: vi.fn(),
+        setConnectionStatusHandler: vi.fn(),
+        setHidInputHandler: vi.fn(),
+        setJoystickInputHandler: vi.fn((handler: typeof stickRef.current) => {
+          stickRef.current = handler;
+        }),
+        dispose: vi.fn(async () => undefined),
+      };
+      const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
+      controller.start();
+      return { stickRef, dispatch, controller };
+    }
+
+    // Angles come from joystickDirection(): up is 0.625–0.875.
+    const up = (distance: number) => ({ angle: 0.75, distance });
+    const centre = { angle: 0.75, distance: 0 };
+
+    it('keeps scrolling while the stick is held, carrying how hard it is pushed', () => {
+      const { stickRef, dispatch } = makeStick();
+
+      stickRef.current?.(up(0.75));
+      stickRef.current?.(up(1));
+
+      // Both events scroll — the old code only fired as the stick crossed into
+      // a direction, so holding it did nothing after the first report.
+      const scrolls = dispatch.mock.calls.filter((call) => call[0].type === 'scroll');
+      expect(scrolls).toHaveLength(2);
+      expect(scrolls[0][0].direction).toBe('up');
+      // Pushed further reads as more pressure.
+      expect(scrolls[1][0].intensity).toBeGreaterThan(scrolls[0][0].intensity);
+    });
+
+    it('stops when the stick returns to centre', () => {
+      const { stickRef, dispatch } = makeStick();
+
+      stickRef.current?.(up(1));
+      dispatch.mockClear();
+      stickRef.current?.(centre);
+
+      expect(dispatch).toHaveBeenCalledWith({ type: 'scroll-stop' });
+    });
+
+    it('stops on its own if the stick goes silent', () => {
+      vi.useFakeTimers();
+      try {
+        const { stickRef, dispatch } = makeStick();
+
+        stickRef.current?.(up(1));
+        dispatch.mockClear();
+        // The SDK only reports movement, so a held-still stick can stop
+        // reporting — and a release can be missed if the device is unplugged
+        // mid-push. Without this the page would scroll forever.
+        vi.advanceTimersByTime(1_000);
+
+        expect(dispatch).toHaveBeenCalledWith({ type: 'scroll-stop' });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('leaves the sideways directions as one-shot actions', () => {
+      const { stickRef, dispatch } = makeStick();
+
+      // Left is 0.375–0.625; it toggles a sidebar, which must not repeat.
+      stickRef.current?.({ angle: 0.5, distance: 1 });
+      stickRef.current?.({ angle: 0.5, distance: 1 });
+
+      const commands = dispatch.mock.calls.filter((call) => call[0].type === 'command');
+      expect(commands).toHaveLength(1);
+      expect(commands[0][0].commandId).toBe('toggleSidebar');
+      expect(dispatch.mock.calls.some((call) => call[0].type === 'scroll')).toBe(false);
+    });
+  });
+
   it('delegates shutdown so the host can turn the device off', async () => {
     const sink = {
       update: vi.fn(),

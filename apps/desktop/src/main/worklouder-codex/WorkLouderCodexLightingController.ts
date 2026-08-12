@@ -28,11 +28,19 @@ import {
   type WorkLouderCodexLightingFrame,
 } from './protocol.js';
 import type { WorkLouderCodexTaskCatalog } from './taskSlots.js';
+import {
+  WORKLOUDER_JOYSTICK_ACTIVATION_DISTANCE,
+  normalizeJoystickIntensity,
+} from '../../shared/workLouderCodexScroll.js';
 
 const TASK_SLOT_REFRESH_DEBOUNCE_MS = 250;
 const AGENT_KEY_DOUBLE_TAP_MS = 350;
 const ENCODER_LONG_PRESS_MS = 500;
-const JOYSTICK_ACTIVATION_DISTANCE = 0.5;
+/**
+ * How long a held stick may go silent before we treat it as released. The SDK
+ * only reports movement, so a still stick can stop reporting entirely.
+ */
+const JOYSTICK_RELEASE_TIMEOUT_MS = 300;
 type Timer = ReturnType<typeof setTimeout>;
 
 export interface WorkLouderCodexLightingSink {
@@ -83,6 +91,8 @@ export class WorkLouderCodexLightingController {
   private encoderPressed = false;
   private encoderLongPressed = false;
   private joystickDirection: WorkLouderCodexAnalogDirection | null = null;
+  private joystickReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  private scrollActive = false;
   private started = false;
 
   constructor(
@@ -222,6 +232,7 @@ export class WorkLouderCodexLightingController {
     this.clearSlotRefreshTimer();
     this.clearEncoderLongPressTimer();
     this.clearAutoDimTimer();
+    this.stopJoystickScroll();
     this.slotRefreshVersion += 1;
     this.taskSlotsEnabled = false;
     this.slotRefreshQueued = false;
@@ -387,10 +398,71 @@ export class WorkLouderCodexLightingController {
   private handleJoystickInput(event: WorkLouderCodexJoystickEvent): void {
     this.handleDeviceActivity();
     const direction = joystickDirection(event);
+
+    // Scrolling follows the stick continuously — held means keep scrolling, and
+    // pushing further means faster — so it cannot go through the one-shot path
+    // below, which only fires as the stick crosses into a direction.
+    const scrollDirection = direction ? this.scrollDirectionFor(direction) : null;
+    if (scrollDirection) {
+      this.joystickDirection = direction;
+      this.armJoystickReleaseWatchdog();
+      this.scrollActive = true;
+      this.dispatchRendererAction({
+        type: 'scroll',
+        direction: scrollDirection,
+        intensity: normalizeJoystickIntensity(event.distance),
+      });
+      return;
+    }
+
+    // Anything else (including the stick returning to centre) ends a scroll.
+    this.stopJoystickScroll();
+
     if (direction === this.joystickDirection) return;
     this.joystickDirection = direction;
     if (!direction) return;
     this.executeNullableAction(this.settings.layout.analogStick[direction], true);
+  }
+
+  /**
+   * The scroll direction this stick axis drives, or null if it is bound to
+   * something else. Rebinding up/down to an ordinary command keeps the
+   * one-shot behaviour — only actual scrolling wants to repeat.
+   */
+  private scrollDirectionFor(direction: WorkLouderCodexAnalogDirection): 'up' | 'down' | null {
+    const action = this.settings.layout.analogStick[direction];
+    if (action?.type !== 'command') return null;
+    if (action.commandId === 'conversation.scrollUp') return 'up';
+    if (action.commandId === 'conversation.scrollDown') return 'down';
+    return null;
+  }
+
+  /**
+   * Stop scrolling if the stick goes quiet.
+   *
+   * The SDK hook is `onJoystickMove`, so a stick held perfectly still may stop
+   * reporting entirely — and a release event can be missed outright if the
+   * device sleeps or is unplugged mid-push. Without this the page would scroll
+   * forever.
+   */
+  private armJoystickReleaseWatchdog(): void {
+    if (this.joystickReleaseTimer) clearTimeout(this.joystickReleaseTimer);
+    this.joystickReleaseTimer = setTimeout(() => {
+      this.joystickReleaseTimer = null;
+      this.joystickDirection = null;
+      this.stopJoystickScroll();
+    }, JOYSTICK_RELEASE_TIMEOUT_MS);
+    this.joystickReleaseTimer.unref?.();
+  }
+
+  private stopJoystickScroll(): void {
+    if (this.joystickReleaseTimer) {
+      clearTimeout(this.joystickReleaseTimer);
+      this.joystickReleaseTimer = null;
+    }
+    if (!this.scrollActive) return;
+    this.scrollActive = false;
+    this.dispatchRendererAction({ type: 'scroll-stop' });
   }
 
   private executeNullableAction(action: WorkLouderCodexAction | null, focusTask: boolean): void {
@@ -625,7 +697,7 @@ function activityPriority(activity: AgentIslandSessionActivity): number {
 function joystickDirection(
   event: WorkLouderCodexJoystickEvent,
 ): WorkLouderCodexAnalogDirection | null {
-  if (event.distance < JOYSTICK_ACTIVATION_DISTANCE) return null;
+  if (event.distance < WORKLOUDER_JOYSTICK_ACTIVATION_DISTANCE) return null;
   if (event.angle >= 0.625 && event.angle < 0.875) return 'up';
   if (event.angle >= 0.125 && event.angle < 0.375) return 'down';
   if (event.angle >= 0.375 && event.angle < 0.625) return 'left';

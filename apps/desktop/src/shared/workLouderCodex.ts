@@ -210,6 +210,17 @@ export type WorkLouderCodexRendererAction =
   // second tap stops, holding it records until release. Both come out of the
   // same press/release pair, so the key has no mode to choose between.
   | { type: 'voice'; phase: 'press' | 'release' }
+  // Held-stick scrolling. The stick reports how far it is pushed, and scrolling
+  // should follow that continuously rather than jumping once per flick, so this
+  // carries the pressure instead of collapsing to a one-shot command. Renderers
+  // scroll every frame until `scroll-stop` arrives.
+  | {
+      type: 'scroll';
+      direction: 'up' | 'down';
+      /** How hard the stick is pushed, 0 at the activation point to 1 at full. */
+      intensity: number;
+    }
+  | { type: 'scroll-stop' }
   | { type: 'keyboard'; key: 'ArrowUp' | 'ArrowDown' | 'Enter' };
 
 /** Built-in Cindy behavior printed on each official Work Louder keycap. */

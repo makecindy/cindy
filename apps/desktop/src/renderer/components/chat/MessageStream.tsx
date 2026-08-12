@@ -60,6 +60,7 @@ import { isRemoteSessionSticky, subscribeTurnChangeSetUpdated } from '@/lib/make
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
+import { joystickScrollDelta } from '../../../shared/workLouderCodexScroll';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
 import { cn } from '@/lib/utils';
 import {
@@ -4308,13 +4309,58 @@ export function MessageStream({
     }, CHIP_JUMP_SAFETY_MS);
   }, [beginProgrammaticScroll, cancelFocusJump, finishChipJump, finishProgrammaticScroll, refreshViewportAnchor]);
 
+  // ── Codex Micro 摇杆:按住持续滚动 ──
+  // 摇杆推住时主进程持续送 { type:'scroll', intensity },这里逐帧按速度改
+  // scrollTop —— 像拖鼠标滚轮,而不是每拨一下跳一屏。速度走平方曲线(见
+  // shared/workLouderCodexScroll.ts):轻推能微调,推到底才最快。
+  // 不用 behavior:'smooth' —— 逐帧位移叠加缓动会互相打架,松手后还会惯性飘。
+  const joystickScrollRef = useRef<{ direction: 'up' | 'down'; intensity: number } | null>(null);
+  const joystickScrollFrameRef = useRef<number | null>(null);
+  const stopJoystickScroll = useCallback(() => {
+    joystickScrollRef.current = null;
+    if (joystickScrollFrameRef.current !== null) {
+      cancelAnimationFrame(joystickScrollFrameRef.current);
+      joystickScrollFrameRef.current = null;
+    }
+  }, []);
+  useEffect(() => stopJoystickScroll, [stopJoystickScroll]);
+
   useEffect(() => {
     return subscribeWorkLouderCodexAction((action) => {
+      if (action.type === 'scroll-stop') {
+        stopJoystickScroll();
+        return true;
+      }
+      if (action.type === 'scroll') {
+        joystickScrollRef.current = { direction: action.direction, intensity: action.intensity };
+        if (joystickScrollFrameRef.current !== null) return true;
+        let lastAt = performance.now();
+        const step = (now: number): void => {
+          joystickScrollFrameRef.current = null;
+          const active = joystickScrollRef.current;
+          const el = scrollRef.current;
+          if (!active || !el) return;
+          const delta = joystickScrollDelta(active.intensity, now - lastAt);
+          lastAt = now;
+          if (active.direction === 'up') {
+            // 程序化改 scrollTop 不发 wheel 事件,所以不会自动解除 auto-follow;
+            // 不显式解除的话,向上滚会被跟随逻辑一路拽回底部。
+            unpinAutoFollowForUserUpIntent();
+            el.scrollTop -= delta;
+          } else {
+            el.scrollTop += delta;
+          }
+          joystickScrollFrameRef.current = requestAnimationFrame(step);
+        };
+        joystickScrollFrameRef.current = requestAnimationFrame(step);
+        return true;
+      }
       if (action.type !== 'command') return false;
       if (action.commandId === 'conversation.scrollBottom') {
         scrollToBottomSmooth();
         return true;
       }
+      // 键盘快捷键与改绑到其它键的场景仍走这条一次性路径。
       if (
         action.commandId !== 'conversation.scrollUp' &&
         action.commandId !== 'conversation.scrollDown'
@@ -4324,13 +4370,14 @@ export function MessageStream({
       const el = scrollRef.current;
       if (!el) return false;
       const direction = action.commandId === 'conversation.scrollUp' ? -1 : 1;
+      if (direction < 0) unpinAutoFollowForUserUpIntent();
       el.scrollBy({
         top: direction * Math.max(160, el.clientHeight * 0.7),
         behavior: 'smooth',
       });
       return true;
     });
-  }, [scrollToBottomSmooth]);
+  }, [scrollToBottomSmooth, stopJoystickScroll, unpinAutoFollowForUserUpIntent]);
 
   // F2: messages diff → 按角色累计 unreadCount
   //   - 计数规则抽成纯函数 countUnreadAdded（见 unreadCount.ts）：新 clientId 才计、
