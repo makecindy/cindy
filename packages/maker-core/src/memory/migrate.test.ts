@@ -1,0 +1,275 @@
+/**
+ * migrate.ts — 存量 worktree 分片迁移 (P0 第二阶段, #2379) 的单元测试。
+ *
+ * 默认 unit tier: fake resolver (不 spawn git) + 临时目录构造分片布局,
+ * 覆盖计划生成 / 空分片删除 / 合并语义 (同名同内容跳过、同名不同内容冲突) /
+ * 冲突保留源目录 / SSH 跳过 / 无 meta 跳过 / 备份 / 幂等。
+ *
+ * 真实 git worktree 端到端 (resolver 真跑) 在
+ * migrate.git-integration.test.ts, 由 `pnpm test:git-integration` 执行。
+ */
+
+import { promises as fs } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import {
+  planLegacyShardMigration,
+  runLegacyShardMigration,
+  type LegacyShardMigrationDeps,
+} from './migrate.js';
+import { sanitizeWorkdir } from './storage.js';
+
+/** 临时 memory 根; 每个用例前重建。 */
+let tmpRoot: string;
+let memoryRoot: string;
+
+beforeEach(async () => {
+  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'migrate-unit-'));
+  memoryRoot = path.join(tmpRoot, 'maker-memory');
+  await fs.mkdir(memoryRoot, { recursive: true });
+});
+
+afterEach(async () => {
+  await fs.rm(tmpRoot, { recursive: true, force: true });
+});
+
+/** 假 resolver: 把 worktree 路径映射到主仓对应子路径 (与 #2399 语义一致)。 */
+function fakeResolver(mainRepo: string, worktree: string): LegacyShardMigrationDeps {
+  return {
+    resolveScopeKey: async (wd: string) => {
+      if (wd === worktree) return mainRepo;
+      return wd;
+    },
+  };
+}
+
+/** 在 memoryRoot 下建一个分片目录 + meta.json + 若干分片文件。 */
+async function makeShard(
+  dirName: string,
+  opts: { absPath: string; files?: Record<string, string>; withMeta?: boolean },
+): Promise<string> {
+  const dir = path.join(memoryRoot, dirName);
+  await fs.mkdir(dir, { recursive: true });
+  if (opts.withMeta !== false) {
+    await fs.writeFile(
+      path.join(dir, 'meta.json'),
+      JSON.stringify({ absPath: opts.absPath, createdAt: 't0', lastUsedAt: 't0' }),
+      'utf8',
+    );
+  }
+  for (const [name, body] of Object.entries(opts.files ?? {})) {
+    await fs.writeFile(
+      path.join(dir, name),
+      `---\ntitle: T ${name}\ndescription: D ${name}\ntype: ${name.split('_')[0]}\nupdatedAt: 2026-08-12T00:00:00.000Z\n---\n\n${body}`,
+      'utf8',
+    );
+  }
+  return dir;
+}
+
+describe('planLegacyShardMigration — 计划生成', () => {
+  it('worktree 分片 (目录名 ≠ canonical) 归入 merge/empty, 主仓分片跳过', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+
+    await makeShard(mainDir, { absPath: mainRepo, files: { 'feedback_a.md': 'body-a' } });
+    // worktree 空分片 (只有 meta.json)
+    await makeShard(wtDir, { absPath: worktree });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    expect(plan.all.length).toBe(2);
+    const main = plan.all.find((s) => s.dir.endsWith(mainDir))!;
+    const wt = plan.all.find((s) => s.dir.endsWith(wtDir))!;
+    expect(main.isLegacy).toBe(false);
+    expect(wt.isLegacy).toBe(true);
+    expect(plan.emptyToDelete).toHaveLength(1);
+    expect(plan.emptyToDelete[0].dir).toBe(wt.dir);
+    expect(plan.mergeCandidates).toHaveLength(0);
+  });
+
+  it('有内容的 worktree 分片归入 mergeCandidates', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const wtDir = sanitizeWorkdir(worktree);
+
+    await makeShard(wtDir, {
+      absPath: worktree,
+      files: { 'feedback_a.md': 'body-a', 'project_b.md': 'body-b' },
+    });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    expect(plan.mergeCandidates).toHaveLength(1);
+    expect(plan.mergeCandidates[0].recordCount).toBe(2);
+    expect(plan.emptyToDelete).toHaveLength(0);
+  });
+
+  it('SSH 分片 (目录名 ssh- 前缀) 一律跳过不迁移', async () => {
+    const sshDir = `ssh-host-${'a'.repeat(16)}`;
+    await makeShard(sshDir, { absPath: '/remote/repo', files: { 'feedback_a.md': 'x' } });
+
+    const plan = await planLegacyShardMigration(memoryRoot);
+    expect(plan.skipped).toHaveLength(1);
+    expect(plan.skipped[0].dir.endsWith(sshDir)).toBe(true);
+    expect(plan.mergeCandidates).toHaveLength(0);
+    expect(plan.emptyToDelete).toHaveLength(0);
+  });
+
+  it('无 meta.json 的目录 → skipped (不猜不删)', async () => {
+    const orphan = path.join(memoryRoot, 'orphan-dir');
+    await fs.mkdir(orphan, { recursive: true });
+    await fs.writeFile(path.join(orphan, 'feedback_a.md'), 'x', 'utf8');
+
+    const plan = await planLegacyShardMigration(memoryRoot);
+    expect(plan.skipped).toHaveLength(1);
+    expect(plan.skipped[0].dir).toBe(orphan);
+    expect(plan.mergeCandidates).toHaveLength(0);
+  });
+
+  it('canonical 目录名 == 当前目录名 → 非 legacy (归一化幂等)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    await makeShard(mainDir, { absPath: mainRepo, files: { 'feedback_a.md': 'x' } });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, ''));
+    expect(plan.all).toHaveLength(1);
+    expect(plan.all[0].isLegacy).toBe(false);
+  });
+});
+
+describe('runLegacyShardMigration — 执行', () => {
+  it('空分片直接删除 (含 meta.json)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const wtDir = sanitizeWorkdir(worktree);
+    const wtPath = await makeShard(wtDir, { absPath: worktree });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    const result = await runLegacyShardMigration(plan);
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].action).toBe('removed-empty');
+    await expect(fs.stat(wtPath)).rejects.toThrow();
+  });
+
+  it('canonical 分片不存在 → rename 整个目录 + meta.absPath 更新', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const wtDir = sanitizeWorkdir(worktree);
+    const mainDir = sanitizeWorkdir(mainRepo);
+    await makeShard(wtDir, { absPath: worktree, files: { 'feedback_a.md': 'body-a' } });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    const result = await runLegacyShardMigration(plan);
+    expect(result.results[0].action).toBe('renamed');
+
+    // 源目录消失, canonical 目录存在
+    await expect(fs.stat(path.join(memoryRoot, wtDir))).rejects.toThrow();
+    const target = path.join(memoryRoot, mainDir);
+    const meta = JSON.parse(await fs.readFile(path.join(target, 'meta.json'), 'utf8'));
+    expect(meta.absPath).toBe(mainRepo);
+    // 分片文件原样保留
+    const rec = await fs.readFile(path.join(target, 'feedback_a.md'), 'utf8');
+    expect(rec).toContain('body-a');
+  });
+
+  it('canonical 已存在 → 同名同内容跳过, 新文件复制, MEMORY.md 重建', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+
+    // 主仓分片已有 feedback_a.md (内容 X)
+    await makeShard(mainDir, { absPath: mainRepo, files: { 'feedback_a.md': 'X' } });
+    // worktree 分片: feedback_a.md 内容 X (重复) + project_b.md (新)
+    await makeShard(wtDir, {
+      absPath: worktree,
+      files: { 'feedback_a.md': 'X', 'project_b.md': 'Y' },
+    });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    const result = await runLegacyShardMigration(plan);
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].mergedFiles).toEqual(
+      expect.arrayContaining([
+        { filename: 'feedback_a.md', outcome: 'same-skipped' },
+        { filename: 'project_b.md', outcome: 'copied' },
+      ]),
+    );
+
+    const target = path.join(memoryRoot, mainDir);
+    // 目标仍有 feedback_a.md 且内容未变 (不覆盖)
+    expect(await fs.readFile(path.join(target, 'feedback_a.md'), 'utf8')).toContain('X');
+    // project_b.md 已复制
+    expect(await fs.readFile(path.join(target, 'project_b.md'), 'utf8')).toContain('Y');
+    // 源目录被删 (无冲突)
+    await expect(fs.stat(path.join(memoryRoot, wtDir))).rejects.toThrow();
+    // MEMORY.md 含两个条目 (feedback + project)
+    const index = await fs.readFile(path.join(target, 'MEMORY.md'), 'utf8');
+    expect(index).toContain('feedback_a.md');
+    expect(index).toContain('project_b.md');
+  });
+
+  it('同名不同内容 → 冲突跳过且源目录保留 (不静默覆盖)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+
+    await makeShard(mainDir, { absPath: mainRepo, files: { 'feedback_a.md': 'MAIN-VERSION' } });
+    const wtPath = await makeShard(wtDir, {
+      absPath: worktree,
+      files: { 'feedback_a.md': 'WORKTREE-VERSION' },
+    });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    const result = await runLegacyShardMigration(plan);
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0].filename).toBe('feedback_a.md');
+    expect(result.results[0].mergedFiles).toEqual([
+      { filename: 'feedback_a.md', outcome: 'conflict-skipped' },
+    ]);
+    // 目标内容未被覆盖
+    const target = path.join(memoryRoot, mainDir);
+    expect(await fs.readFile(path.join(target, 'feedback_a.md'), 'utf8')).toContain('MAIN-VERSION');
+    // 源目录保留 (冲突待人工)
+    expect(await fs.readFile(path.join(wtPath, 'feedback_a.md'), 'utf8')).toContain(
+      'WORKTREE-VERSION',
+    );
+  });
+
+  it('指定 backupRoot 时删除/rename 前先备份', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const wtDir = sanitizeWorkdir(worktree);
+    const backupRoot = path.join(tmpRoot, 'backup');
+    await makeShard(wtDir, { absPath: worktree });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    await runLegacyShardMigration(plan, { backupRoot });
+    const entries = await fs.readdir(backupRoot);
+    expect(entries.length).toBe(1);
+    expect(entries[0]).toContain(wtDir);
+  });
+
+  it('幂等: 已迁移的分片再次扫描不再归入计划', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const wtDir = sanitizeWorkdir(worktree);
+    const mainDir = sanitizeWorkdir(mainRepo);
+    await makeShard(wtDir, { absPath: worktree, files: { 'feedback_a.md': 'X' } });
+
+    const plan1 = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    await runLegacyShardMigration(plan1);
+
+    // 第二次扫描: canonical 目录 (mainDir) 存在且 isLegacy=false
+    const plan2 = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    expect(plan2.mergeCandidates).toHaveLength(0);
+    expect(plan2.emptyToDelete).toHaveLength(0);
+    const canonical = plan2.all.find((s) => s.dir.endsWith(mainDir));
+    expect(canonical?.isLegacy).toBe(false);
+  });
+});
