@@ -225,10 +225,30 @@ export default {
     requiredUnitWorkspace('@cindy/mcps', 'packages/lizi-mcps'),
     requiredUnitWorkspace('@cindy/ios-simulator-runtime', 'packages/ios-simulator-runtime'),
     requiredUnitWorkspace('@cindy/maker-cc-manager', 'packages/maker-cc-manager'),
-    // Stays on forks: palette-scanner's tests stub HOME and the scanner resolves
-    // it through os.homedir(), which a worker thread cannot see (see
-    // UNIT_POOL_DEFAULT above).
-    requiredUnitWorkspace('@cindy/maker-core', 'packages/maker-core', { pool: 'forks' }),
+    {
+      name: '@cindy/maker-core',
+      cwd: 'packages/maker-core',
+      status: 'required',
+      tiers: {
+        unit: {
+          status: 'required',
+          // Stays on forks: palette-scanner's tests stub HOME and the scanner
+          // resolves it through os.homedir(), which a worker thread cannot see
+          // (see UNIT_POOL_DEFAULT above).
+          command: unitVitestCommand(1, 'forks'),
+          // Real-Git combination matrices live in the explicit git-integration
+          // tier (engineering-conventions §3.1); unit keeps only one smoke.
+          exclude: ['**/*.git-integration.test.ts'],
+        },
+        'git-integration': {
+          status: 'manual',
+          reason: 'Full real-Git coverage is explicit because each case builds temporary repos, linked worktrees and separate-git-dir clones via git subprocesses.',
+          coverage: 'allowlist',
+          command: vitestBin('run', '--maxWorkers=1'),
+          include: ['src/**/*.git-integration.test.ts'],
+        },
+      },
+    },
     requiredUnitWorkspace('@cindy/maker-remote-ssh', 'packages/maker-remote-ssh'),
     requiredUnitWorkspace('@cindy/maker-scheduler', 'packages/maker-scheduler'),
     requiredUnitWorkspace('@cindy/maker-shared', 'packages/maker-shared'),
