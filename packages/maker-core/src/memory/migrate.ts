@@ -305,12 +305,16 @@ export async function runLegacyShardMigration(
       const trashName = `${path.basename(shard.dir)}.trash-${now().replace(/[:.]/g, '-')}`;
       const trashDir = path.join(path.dirname(shard.dir), trashName);
       await fs.rename(shard.dir, trashDir);
+      // 最终复查 (rename 后, 删前): 合法分片 + 未识别 .md 都要查 — 首次复查
+      // 之后、rename 之前写入的 notes.md 等未识别文件同样不能被删 (Greptile
+      // review on #2519 第三轮)。
       const afterRename = await countShardFiles(trashDir);
-      if (afterRename > 0) {
-        // 极端: rename 前已写入的文件 — 恢复原目录名并报告
+      const unrecognizedAfterRename = await findUnrecognizedMdFiles(trashDir);
+      if (afterRename > 0 || unrecognizedAfterRename.length > 0) {
+        // 极端: rename 前已写入的内容 — 恢复原目录名并报告
         await fs.rename(trashDir, shard.dir);
         r.action = 'skipped';
-        r.error = `dir gained ${afterRename} shard file(s) before rename, kept`;
+        r.error = `dir gained content before rename (${afterRename} shard file(s), ${unrecognizedAfterRename.length} unrecognized md), kept`;
         result.results.push(r);
         continue;
       }

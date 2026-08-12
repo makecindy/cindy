@@ -323,6 +323,23 @@ describe('runLegacyShardMigration — 执行', () => {
     expect(await fs.readFile(path.join(wtPath, 'feedback_race.md'), 'utf8')).toContain('NEW');
   });
 
+  it('空分片删除前竞态校验: 扫描后新增未识别 .md → 跳过删除并报告 (Greptile 第三轮)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const wtDir = sanitizeWorkdir(worktree);
+    const wtPath = await makeShard(wtDir, { absPath: worktree });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    expect(plan.emptyToDelete).toHaveLength(1);
+    // 模拟首查后、rename 前写入未识别文件 (notes.md) — 最终复查必须拦下
+    await fs.writeFile(path.join(wtPath, 'notes.md'), '# 手写笔记\n\n重要内容', 'utf8');
+    const result = await runLegacyShardMigration(plan);
+    expect(result.results[0].action).toBe('skipped');
+    expect(result.results[0].error).toContain('unrecognized');
+    // 目录保留, notes.md 内容完好
+    expect(await fs.readFile(path.join(wtPath, 'notes.md'), 'utf8')).toContain('重要内容');
+  });
+
   it('Cindy 托管 worktree 路径静态推导: 已归档 worktree 仍可识别为 legacy', async () => {
     const mainRepo = path.join(tmpRoot, 'repo');
     // 已归档/删除的 worktree: resolver live 探测会回落原样 (fake resolver 返回自身)
