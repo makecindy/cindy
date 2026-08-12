@@ -362,6 +362,30 @@ describe('nativeAgentForProviderModel(原生底座)', () => {
     expect(nativeAgentForProviderModel(xd, 'claude-opus-5')).toBe('claude-code');
   });
 
+  it('device-link 投影(routing 无 authStrategy)下折扣行的 native 仍是 codex', () => {
+    // 远程供应商投影会剥掉 routing.authStrategy(执行细节不出被控端,
+    // providerListProjection 测试锁),isGatewayProvider 在控制端必然 false。
+    // 折扣判定必须只看条目数据,否则远程会话里 codex/ 行的 native 错落 cc,
+    // 推荐引擎与同引擎视图排序双双出错(2026-08-13 远程会话实测)。
+    const projected = view({
+      id: 'xd',
+      models: {
+        'claude-code': [m('codex/gpt-5.5')],
+        codex: [m('codex/gpt-5.5', { supportsFastMode: true })],
+      },
+    });
+    // 夹具默认 authStrategy 非 gateway-key,与投影后的效果一致:isGatewayProvider=false。
+    expect(projected.routing['claude-code']?.authStrategy).not.toBe('gateway-key');
+    expect(nativeAgentForProviderModel(projected, 'codex/gpt-5.5')).toBe('codex');
+    expect(recommendedAgentForModel([projected], 'xd', 'codex/gpt-5.5')).toBe('codex');
+    // 非折扣网关行在投影下 native 判不出(null),由调用方回落 recommended —— 不误判成 codex。
+    const projectedPlain = view({
+      id: 'xd',
+      models: { 'claude-code': [m('gpt-5.5-nonbudget', { group: 'gpt' })] },
+    });
+    expect(nativeAgentForProviderModel(projectedPlain, 'gpt-5.5-nonbudget')).toBeNull();
+  });
+
   it('用户自定义供应商没有 root 概念 → null(由调用方回落 recommended)', () => {
     const byom = view({
       id: 'byom',

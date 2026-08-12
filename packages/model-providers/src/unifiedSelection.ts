@@ -289,13 +289,27 @@ export function nativeAgentForProviderModel(
   if (!provider) return null;
   const builtin = BUILTIN_ROOT_PREFERENCE.get(provider.id);
   if (builtin) return builtin;
-  if (isGatewayProvider(provider)) {
-    const probe =
-      findCatalogModel(provider, modelId, 'codex') ??
-      findCatalogModel(provider, modelId, 'claude-code') ??
-      findCatalogModel(provider, modelId, 'pi');
-    return gatewayRootPreference(probe, modelId);
-  }
+  // 折扣路由条目(`codex/` 前缀或服务端显式 `group:'gpt-budget'`)天生属于 Codex 侧。
+  // 这个判定**只看条目数据,刻意不依赖 isGatewayProvider**:device-link 的供应商投影
+  // 会剥掉 routing.authStrategy(执行细节不出被控端,providerListProjection 测试锁),
+  // 控制端拿网关判定必然 false —— 只挂在网关分支下,远程会话里折扣行的 native 会错落
+  // 到 claude-code,推荐引擎与同引擎视图的排序双双出错(2026-08-13 远程会话实测)。
+  const probe =
+    findCatalogModel(provider, modelId, 'codex') ??
+    findCatalogModel(provider, modelId, 'claude-code') ??
+    findCatalogModel(provider, modelId, 'pi');
+  const normalizedId = normalizeModelIdForClassification(modelId);
+  const budget = probe
+    ? isBudgetModel({
+        id: normalizedId,
+        ...(probe.group !== undefined ? { group: probe.group } : {}),
+      })
+    : isBudgetModel({ id: normalizedId });
+  if (budget) return 'codex';
+  // 非折扣的网关条目 → claude-code(既有语义:网关 /v1/messages 翻译面覆盖最广)。
+  // 网关判定失败(如上面的远程投影)时落到 null,由调用方回落 recommended —— 非折扣
+  // 网关行的 recommended 本就是 cc,可见结果一致。
+  if (isGatewayProvider(provider)) return gatewayRootPreference(probe, modelId);
   return null;
 }
 

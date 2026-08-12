@@ -257,6 +257,7 @@ export function UnifiedModelPanel({
   // 选中行对齐是程序化滚动,它触发的 scroll 事件不代表用户意图,不该收起浮层。
   const suppressScrollDismissRef = useRef(false);
   const previousSelectionRef = useRef<string | null>(null);
+  const previousViewRef = useRef<string | null>(null);
 
   // 谓词走 ref:它们每次 render 都是新闭包,直接进依赖会让 hover(改 flyAnchor state)
   // 也重建整张联合列表。重算时机由 sourceVersion / providers / agentsKey / scope 决定。
@@ -304,8 +305,11 @@ export function UnifiedModelPanel({
   );
 
   // 列表变化时只在选中行跑出可视区时做**最小滚动**(与既有面板同一条规则):
-  // 选中项自身变化(用户刚点了一行)不做任何对齐,否则点完列表会当场跳位;真正的过滤 /
-  // rail 切换 / 目录刷新仍保留「确保选中项可见」。
+  // 选中项自身变化(用户刚点了一行)不做任何对齐,否则点完列表会当场跳位;**只有视图
+  // 本身变化**(rail 切换 / 搜索词变化 / 首次打开)才做「确保选中项可见」——数据刷新
+  // (目录轮询 / 收藏增删)不夺走用户的滚动位置(2026-08-13 实测:浏览到列表深处时,
+  // 后台目录刷新重建 sections 会把人拽回顶部的选中行)。
+  const viewKey = `${railItemKey(rail)}::${query.trim().toLowerCase()}`;
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
@@ -313,10 +317,13 @@ export function UnifiedModelPanel({
       const selectionKey = `${selected.providerId ?? ''}::${selected.modelId}::${selectedFavoriteUid ?? ''}`;
       const previous = previousSelectionRef.current;
       previousSelectionRef.current = selectionKey;
+      const previousView = previousViewRef.current;
+      previousViewRef.current = viewKey;
       if (previous !== null && previous !== selectionKey) {
         flashScrollbar(el);
         return;
       }
+      if (previousView !== null && previousView === viewKey) return;
       const row = el.querySelector<HTMLElement>('[data-model-selected="true"]');
       if (row) {
         const listRect = el.getBoundingClientRect();
@@ -336,7 +343,7 @@ export function UnifiedModelPanel({
       flashScrollbar(el);
     });
     return () => cancelAnimationFrame(raf);
-  }, [sections, selected.modelId, selected.providerId, selectedFavoriteUid]);
+  }, [sections, viewKey, selected.modelId, selected.providerId, selectedFavoriteUid]);
 
   const closeFlyout = useCallback(() => {
     setFlyAnchor(null);
