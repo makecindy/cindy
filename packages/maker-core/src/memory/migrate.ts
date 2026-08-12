@@ -398,12 +398,22 @@ export async function runLegacyShardMigration(
         const trashName = `${path.basename(shard.dir)}.trash-${now().replace(/[:.]/g, '-')}`;
         const trashDir = path.join(path.dirname(shard.dir), trashName);
         await fs.rename(shard.dir, trashDir);
+        // 最终复查 (rename 后, 删前): 未识别 + 文件名集合 + **内容对比** —
+        // 存量会话在 findChangedAfterMerge 之后、rename 之前更新同名记忆时,
+        // trash 集合不变但内容新, 只查集合会删掉新版本 (Greptile/Codex
+        // review on #2519 第七轮)。
         const trashUnrecognized = await findUnrecognizedMdFiles(trashDir);
         const trashDiff = await diffShardFilenames(trashDir, snapshotNames);
-        if (trashUnrecognized.length > 0 || trashDiff.added.length > 0 || trashDiff.missing.length > 0) {
+        const trashChanged = await findChangedAfterMerge(trashDir, targetDir, merged);
+        if (
+          trashUnrecognized.length > 0 ||
+          trashDiff.added.length > 0 ||
+          trashDiff.missing.length > 0 ||
+          trashChanged.length > 0
+        ) {
           await fs.rename(trashDir, shard.dir);
           r.action = 'merged';
-          r.error = 'content appeared before remove, source dir restored';
+          r.error = 'content appeared or changed before remove, source dir restored';
           result.results.push(r);
           continue;
         }

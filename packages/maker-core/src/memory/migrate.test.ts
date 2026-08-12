@@ -513,6 +513,48 @@ describe('runLegacyShardMigration — 执行', () => {
     }
   });
 
+  it('rename 后最终复查检测内容更新 → 恢复原目录 (Greptile/Codex 第七轮)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+
+    await makeShard(mainDir, { absPath: mainRepo, files: { 'feedback_a.md': 'X' } });
+    const wtPath = await makeShard(wtDir, {
+      absPath: worktree,
+      files: { 'feedback_a.md': 'X' },
+    });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    // 模拟存量会话在 rename 前、首次内容复查后改写同名记忆:
+    // 第 1 次读源 (mergeFilesInto) → 真实 (same-skipped);
+    // 第 2 次 (rename 前 findChangedAfterMerge) → 真实 (通过);
+    // 第 3 次起 (rename 后最终复查) → X2 → trashChanged 命中 → 恢复源目录。
+    const origReadFile = fs.readFile.bind(fs);
+    let srcReads = 0;
+    // @ts-expect-error 测试注入
+    fs.readFile = async (...args) => {
+      const [p] = args;
+      if (
+        typeof p === 'string' &&
+        (p.startsWith(wtPath + path.sep) || p.includes('.trash-')) &&
+        p.endsWith('feedback_a.md')
+      ) {
+        srcReads += 1;
+        return srcReads >= 3 ? Buffer.from('X2') : origReadFile(...args);
+      }
+      return origReadFile(...args);
+    };
+    try {
+      const result = await runLegacyShardMigration(plan);
+      expect(result.results[0].error).toContain('content appeared or changed before remove');
+      // 源目录保留 (trash 被恢复回原名)
+      await expect(fs.stat(wtPath)).resolves.toBeTruthy();
+    } finally {
+      fs.readFile = origReadFile;
+    }
+  });
+
   it('同数替换 (删 A 建 B) → 文件名集合对比兜底, 源目录保留 (Codex 第六轮)', async () => {
     const mainRepo = path.join(tmpRoot, 'repo');
     const worktree = path.join(tmpRoot, 'repo-wt');
