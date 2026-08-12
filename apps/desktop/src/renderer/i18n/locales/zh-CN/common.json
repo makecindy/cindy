@@ -3381,6 +3381,25 @@
           "skills": "技能"
         },
         "layout": {
+          "editor": {
+            "title": "编辑键帽",
+            "description": "选择这个实体按键上显示的键帽。",
+            "searchPlaceholder": "搜索键帽",
+            "close": "关闭键帽编辑器",
+            "cancel": "取消",
+            "save": "保存",
+            "assignedShortcut": "已分配动作",
+            "noAssignment": "未分配动作",
+            "selectKeycap": "选择键帽 {{keycap}}"
+          },
+          "keyboard": {
+            "title": "布局",
+            "description": "点击键帽，选择它的标签和预置动作。",
+            "editHint": "选择一个按键来编辑键帽。",
+            "codexMicro": "Codex Micro",
+            "analogStick": "摇杆",
+            "encoder": "旋钮"
+          },
           "reset": {
             "title": "恢复键位布局",
             "description": "恢复键帽、摇杆、旋钮和麦克风分配，不改变任务顺序或灯光设置。",

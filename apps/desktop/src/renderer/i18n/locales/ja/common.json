@@ -3381,6 +3381,25 @@
           "skills": "スキル"
         },
         "layout": {
+          "editor": {
+            "title": "キーキャップを編集",
+            "description": "この物理キーに表示するキーキャップを選択します。",
+            "searchPlaceholder": "キーキャップを検索",
+            "close": "キーキャップエディターを閉じる",
+            "cancel": "キャンセル",
+            "save": "保存",
+            "assignedShortcut": "割り当てられたアクション",
+            "noAssignment": "アクション未割り当て",
+            "selectKeycap": "キーキャップ {{keycap}} を選択"
+          },
+          "keyboard": {
+            "title": "配置",
+            "description": "キーキャップをクリックしてラベルと組み込みアクションを選択します。",
+            "editHint": "キーを選択してキーキャップを編集します。",
+            "codexMicro": "Codex Micro",
+            "analogStick": "ジョイスティック",
+            "encoder": "エンコーダー"
+          },
           "reset": {
             "title": "キー配置をリセット",
             "description": "タスク順序やライト設定を変えずに、キーキャップ、ジョイスティック、エンコーダー、マイクの割り当てを初期状態に戻します。",

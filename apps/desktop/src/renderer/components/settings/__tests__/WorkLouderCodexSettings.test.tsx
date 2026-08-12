@@ -99,8 +99,8 @@ describe('WorkLouderCodexSettings', () => {
   it('shows the six recent-task slots and writes each supported setting', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
-    expect(screen.getByText('AG00')).toBeTruthy();
-    expect(screen.getByText('AG05')).toBeTruthy();
+    expect(screen.getByRole('img', { name: /AG00/ })).toBeTruthy();
+    expect(screen.getByRole('img', { name: /AG05/ })).toBeTruthy();
 
     const slider = screen.getByRole('slider', {
       name: 'settings.shortcuts.workLouderCodex.lighting.brightness.aria',
@@ -131,5 +131,40 @@ describe('WorkLouderCodexSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings.shortcuts.reset' }));
 
     expect(mocks.resetSettings).toHaveBeenCalledOnce();
+  });
+
+  it('saves a graphical keycap choice and swaps a duplicate assignment', () => {
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'ACT06 FAST' }));
+    fireEvent.click(screen.getByRole('button', { name: 'APPR' }));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.editor.save',
+      }),
+    );
+
+    expect(mocks.setSettings).toHaveBeenCalledWith({
+      layout: expect.objectContaining({
+        slots: expect.objectContaining({
+          ACT06: expect.objectContaining({ keycapId: 'APPR' }),
+          ACT07: expect.objectContaining({ keycapId: 'FAST' }),
+        }),
+      }),
+    });
+  });
+
+  it('cancels graphical keycap editing without writing settings', () => {
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'ACT06 FAST' }));
+    fireEvent.click(screen.getByRole('button', { name: 'GIT' }));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.editor.cancel',
+      }),
+    );
+
+    expect(mocks.setSettings).not.toHaveBeenCalled();
   });
 });

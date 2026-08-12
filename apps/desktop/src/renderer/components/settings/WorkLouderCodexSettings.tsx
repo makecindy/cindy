@@ -15,6 +15,11 @@ import { useWorkLouderCodex } from '@/hooks/useWorkLouderCodex';
 import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
 import { cn } from '@/lib/utils';
 import {
+  WorkLouderCodexKeyboardLayout,
+  WorkLouderCodexKeycapPicker,
+  type WorkLouderCodexEditableKey,
+} from './WorkLouderCodexKeyboardLayout';
+import {
   WORKLOUDER_CODEX_AGENT_SOURCES,
   WORKLOUDER_CODEX_ANALOG_DIRECTIONS,
   WORKLOUDER_CODEX_AUTO_DIM_OPTIONS,
@@ -99,6 +104,9 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
   } = useWorkLouderCodex();
   const { skills, bootstrapped, refresh: refreshSkills } = useSkillhub();
   const [brightnessDraft, setBrightnessDraft] = useState(100);
+  const [editingSlot, setEditingSlot] = useState<WorkLouderCodexCommandSlot | null>(null);
+  const [editingKeycapId, setEditingKeycapId] = useState<WorkLouderCodexKeycapId | null>(null);
+  const [keycapQuery, setKeycapQuery] = useState('');
   const settings = state?.settings ?? WORKLOUDER_CODEX_DEFAULT_SETTINGS;
   const enabledSkills = useMemo(
     () => skills.filter((skill) => skill.kind === 'skill' && !skill.parseError),
@@ -147,6 +155,22 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
       if (duplicate) layout.slots[duplicate] = previous;
     });
   };
+
+  const openKeycapEditor = (key: WorkLouderCodexEditableKey): void => {
+    if (!key.startsWith('ACT')) return;
+    const slot = key as WorkLouderCodexCommandSlot;
+    setEditingSlot(slot);
+    setEditingKeycapId(settings.layout.slots[slot].keycapId);
+    setKeycapQuery('');
+  };
+
+  const closeKeycapEditor = (): void => {
+    setEditingSlot(null);
+    setEditingKeycapId(null);
+    setKeycapQuery('');
+  };
+
+  const editingAssignment = editingSlot ? settings.layout.slots[editingSlot] : null;
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -212,6 +236,62 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
           )}
         </div>
       </SettingsCard>
+
+      <SettingsCard className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1">
+          <h3 className="text-13 font-medium text-[var(--text-primary)]">
+            {t('settings.shortcuts.workLouderCodex.layout.keyboard.title')}
+          </h3>
+          <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
+            {t('settings.shortcuts.workLouderCodex.layout.keyboard.description')}
+          </p>
+        </div>
+        <WorkLouderCodexKeyboardLayout
+          layout={settings.layout}
+          agentSlots={state?.agentSlots ?? []}
+          disabled={!state || saving}
+          footer={t('settings.shortcuts.workLouderCodex.layout.keyboard.editHint')}
+          labels={{
+            analogStick: t('settings.shortcuts.workLouderCodex.layout.keyboard.analogStick'),
+            encoder: t('settings.shortcuts.workLouderCodex.layout.keyboard.encoder'),
+            codexMicro: t('settings.shortcuts.workLouderCodex.layout.keyboard.codexMicro'),
+          }}
+          onEditKeycap={openKeycapEditor}
+        />
+      </SettingsCard>
+
+      <WorkLouderCodexKeycapPicker
+        open={editingSlot !== null}
+        slot={editingSlot}
+        selectedKeycapId={editingKeycapId}
+        query={keycapQuery}
+        onQueryChange={setKeycapQuery}
+        onOpenChange={(open) => {
+          if (!open) closeKeycapEditor();
+        }}
+        onSelect={setEditingKeycapId}
+        onCancel={closeKeycapEditor}
+        onSave={() => {
+          if (editingSlot && editingKeycapId) changeCommandKeycap(editingSlot, editingKeycapId);
+        }}
+        assignedAction={
+          editingAssignment?.action
+            ? actionValue(editingAssignment.action)
+            : t('settings.shortcuts.workLouderCodex.layout.editor.noAssignment')
+        }
+        copy={{
+          title: t('settings.shortcuts.workLouderCodex.layout.editor.title'),
+          description: t('settings.shortcuts.workLouderCodex.layout.editor.description'),
+          searchPlaceholder: t(
+            'settings.shortcuts.workLouderCodex.layout.editor.searchPlaceholder',
+          ),
+          close: t('settings.shortcuts.workLouderCodex.layout.editor.close'),
+          cancel: t('settings.shortcuts.workLouderCodex.layout.editor.cancel'),
+          save: t('settings.shortcuts.workLouderCodex.layout.editor.save'),
+          assignedShortcut: t('settings.shortcuts.workLouderCodex.layout.editor.assignedShortcut'),
+          noAssignment: t('settings.shortcuts.workLouderCodex.layout.editor.noAssignment'),
+        }}
+      />
 
       {error && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--error-border)] bg-[var(--error-bg)] px-4 py-3 text-12 text-[var(--error-fg)]">

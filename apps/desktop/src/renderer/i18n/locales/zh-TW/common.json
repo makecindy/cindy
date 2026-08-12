@@ -3381,6 +3381,25 @@
           "skills": "技能"
         },
         "layout": {
+          "editor": {
+            "title": "編輯鍵帽",
+            "description": "選擇這個實體按鍵上顯示的鍵帽。",
+            "searchPlaceholder": "搜尋鍵帽",
+            "close": "關閉鍵帽編輯器",
+            "cancel": "取消",
+            "save": "儲存",
+            "assignedShortcut": "已分配動作",
+            "noAssignment": "未分配動作",
+            "selectKeycap": "選擇鍵帽 {{keycap}}"
+          },
+          "keyboard": {
+            "title": "配置",
+            "description": "點選鍵帽，選擇它的標籤和預設動作。",
+            "editHint": "選擇一個按鍵來編輯鍵帽。",
+            "codexMicro": "Codex Micro",
+            "analogStick": "搖桿",
+            "encoder": "旋鈕"
+          },
           "reset": {
             "title": "恢復鍵位配置",
             "description": "恢復鍵帽、搖桿、旋鈕和麥克風分配，不變更任務順序或燈光設定。",

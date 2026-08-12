@@ -3382,6 +3382,25 @@
           "skills": "Skills"
         },
         "layout": {
+          "editor": {
+            "title": "Edit keycap",
+            "description": "Choose the keycap shown on this physical key.",
+            "searchPlaceholder": "Search keycaps",
+            "close": "Close keycap editor",
+            "cancel": "Cancel",
+            "save": "Save",
+            "assignedShortcut": "Assigned action",
+            "noAssignment": "No action assigned",
+            "selectKeycap": "Select keycap {{keycap}}"
+          },
+          "keyboard": {
+            "title": "Layout",
+            "description": "Click a keycap to choose its label and built-in action.",
+            "editHint": "Select a key to edit its keycap.",
+            "codexMicro": "Codex Micro",
+            "analogStick": "Joystick",
+            "encoder": "Encoder"
+          },
           "reset": {
             "title": "Reset key layout",
             "description": "Restore keycaps, joystick, encoder, and microphone assignments without changing task order or lighting.",

@@ -3381,6 +3381,25 @@
           "skills": "스킬"
         },
         "layout": {
+          "editor": {
+            "title": "키캡 편집",
+            "description": "이 물리 키에 표시할 키캡을 선택합니다.",
+            "searchPlaceholder": "키캡 검색",
+            "close": "키캡 편집기 닫기",
+            "cancel": "취소",
+            "save": "저장",
+            "assignedShortcut": "할당된 동작",
+            "noAssignment": "할당된 동작 없음",
+            "selectKeycap": "키캡 {{keycap}} 선택"
+          },
+          "keyboard": {
+            "title": "배치",
+            "description": "키캡을 클릭해 레이블과 기본 동작을 선택합니다.",
+            "editHint": "키를 선택해 키캡을 편집합니다.",
+            "codexMicro": "Codex Micro",
+            "analogStick": "조이스틱",
+            "encoder": "인코더"
+          },
           "reset": {
             "title": "키 배치 초기화",
             "description": "작업 순서나 조명 설정은 유지하고 키캡, 조이스틱, 인코더, 마이크 할당을 초기 상태로 되돌립니다.",
