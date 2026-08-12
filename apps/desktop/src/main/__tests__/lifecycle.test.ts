@@ -27,10 +27,16 @@ vi.mock('electron', () => ({
 }));
 
 const nativePopupWebContentsIds = vi.hoisted(() => new Set<number>());
+const resourceUsageWebContentsIds = vi.hoisted(() => new Set<number>());
 
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   isRsbNativePopupWebContentsId: (webContentsId: number) =>
     nativePopupWebContentsIds.has(webContentsId),
+}));
+
+vi.mock('../resource-usage-window/registry.js', () => ({
+  isResourceUsageWebContentsId: (webContentsId: number) =>
+    resourceUsageWebContentsIds.has(webContentsId),
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -482,6 +488,7 @@ describe('installQuitHandler render-process-gone', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     nativePopupWebContentsIds.clear();
+    resourceUsageWebContentsIds.clear();
   });
 
   type RenderGoneHandler = (
@@ -544,6 +551,22 @@ describe('installQuitHandler render-process-gone', () => {
       expect(app.exit).not.toHaveBeenCalled();
       expect(mocks.logger.warn).toHaveBeenCalledWith(
         expect.stringContaining('native popup render-process-gone'),
+      );
+      expect(mocks.logger.error).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it('resource usage renderer crash does NOT shut the app down', async () => {
+    resourceUsageWebContentsIds.add(44);
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(undefined, { id: 44, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('resource usage render-process-gone'),
       );
       expect(mocks.logger.error).not.toHaveBeenCalled();
     } finally {

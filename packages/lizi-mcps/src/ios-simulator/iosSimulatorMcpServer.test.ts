@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { IOSSimulatorMcpDeps } from "../types.js";
 import { createIOSSimulatorMcpServer } from "./server.js";
+import { IOS_SIMULATOR_DEPRECATED_TOOL_ALIASES } from "./tool-names.js";
 
 async function connect(
   deps: IOSSimulatorMcpDeps,
@@ -71,7 +72,7 @@ describe("createIOSSimulatorMcpServer", () => {
     expect(payload.tools.map((tool: { name: string }) => tool.name)).toEqual([
       "check_environment",
       "doctor",
-      "list_devices",
+      "list_simulator_devices",
       "list_instances",
       "create_instance",
       "attach_device",
@@ -84,13 +85,13 @@ describe("createIOSSimulatorMcpServer", () => {
       "wait_for_ui",
       "tap",
       "swipe",
-      "drag",
+      "drag_on_simulator",
       "long_press",
-      "key_press",
+      "press_simulator_key",
       "batch",
       "touch_path",
       "touch2_path",
-      "type_text",
+      "type_simulator_text",
       "press_home",
       "set_orientation",
       "set_appearance",
@@ -110,8 +111,8 @@ describe("createIOSSimulatorMcpServer", () => {
       "install_app",
       "launch_app",
       "terminate_app",
-      "open_url",
-      "take_screenshot",
+      "open_simulator_url",
+      "take_simulator_screenshot",
       "capture_visual_baseline",
       "visual_diff",
       "capture_state",
@@ -138,7 +139,10 @@ describe("createIOSSimulatorMcpServer", () => {
       tools: {
         doctor: { state: "available" as const, backend: "host" as const },
         wait_for_ui: { state: "available" as const, backend: "wda" as const },
-        drag: { state: "available" as const, backend: "native-hid" as const },
+        drag_on_simulator: {
+          state: "available" as const,
+          backend: "native-hid" as const,
+        },
       },
     }));
     const { client, server } = await connect(
@@ -159,7 +163,9 @@ describe("createIOSSimulatorMcpServer", () => {
       runningInstanceCount: 1,
     });
     expect(
-      payload.tools.find((tool: { name: string }) => tool.name === "drag"),
+      payload.tools.find(
+        (tool: { name: string }) => tool.name === "drag_on_simulator",
+      ),
     ).toMatchObject({
       availability: { state: "available", backend: "native-hid" },
     });
@@ -188,7 +194,7 @@ describe("createIOSSimulatorMcpServer", () => {
         name: "long_press",
         args: { ...route, elementId: "element-a", durationMs: 299 },
       },
-      { name: "key_press", args: { ...route, key: "space" } },
+      { name: "press_simulator_key", args: { ...route, key: "space" } },
       {
         name: "batch",
         args: {
@@ -297,6 +303,87 @@ describe("createIOSSimulatorMcpServer", () => {
     const payload = JSON.parse(readResultText(result));
     expect(result.isError).toBe(true);
     expect(payload.errorCode).toBe("UNSUPPORTED_SESSION_KIND");
+    await Promise.all([client.close(), server.close()]);
+  });
+
+  it("scopes every advertised description to the simulator domain", async () => {
+    const { client, server } = await connect(
+      { callTool: vi.fn() },
+      "session-a",
+    );
+    const result = await client.callTool({ name: "list_tools", arguments: {} });
+    const payload = JSON.parse(readResultText(result));
+
+    // The model sees the inner name next to generic host and browser tools, so
+    // the domain must be on every description, not only the renamed ones.
+    for (const tool of payload.tools as { name: string; description: string }[]) {
+      expect(tool.description.startsWith("[iOS Simulator] ")).toBe(true);
+    }
+    const openUrl = (payload.tools as { name: string; description: string }[]).find(
+      (tool) => tool.name === "open_simulator_url",
+    );
+    expect(openUrl?.description).toContain("browser and fetch tools instead");
+    await Promise.all([client.close(), server.close()]);
+  });
+
+  it("keeps superseded tool names callable without advertising them", async () => {
+    const callTool = vi.fn(async () => ({ ok: true, data: {} }));
+    const { client, server } = await connect({ callTool }, "session-a");
+
+    const listed = JSON.parse(
+      readResultText(await client.callTool({ name: "list_tools", arguments: {} })),
+    );
+    const advertised = new Set(
+      (listed.tools as { name: string }[]).map((tool) => tool.name),
+    );
+    for (const deprecated of Object.keys(
+      IOS_SIMULATOR_DEPRECATED_TOOL_ALIASES,
+    )) {
+      expect(advertised.has(deprecated)).toBe(false);
+      expect(
+        advertised.has(IOS_SIMULATOR_DEPRECATED_TOOL_ALIASES[deprecated]!),
+      ).toBe(true);
+    }
+
+    // A plugin or saved prompt written against the old name must keep working.
+    const route = { instanceId: "instance-a", generation: 1, leaseId: "lease-a" };
+    const result = await client.callTool({
+      name: "call_tool",
+      arguments: { name: "open_url", args: { ...route, url: "https://example.com" } },
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(callTool).toHaveBeenCalledWith(
+      "open_url",
+      { ...route, url: "https://example.com" },
+      { sessionId: "session-a", origin: "agent" },
+    );
+    await Promise.all([client.close(), server.close()]);
+  });
+
+  it("rejects a routeless simulator URL open before reaching the Host", async () => {
+    const callTool = vi.fn();
+    const { client, server } = await connect({ callTool }, "session-a");
+
+    // This is what a mis-routed "open a web page" call looks like. It must fail
+    // on argument validation, which is why Desktop can skip the device
+    // authorization prompt for it instead of asking about a device that this
+    // task never attached.
+    const result = await client.callTool({
+      name: "call_tool",
+      arguments: {
+        name: "open_simulator_url",
+        args: { url: "https://example.com" },
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(readResultText(result))).toMatchObject({
+      ok: false,
+      errorCode: "INVALID_ARGS",
+      data: { tool: "open_simulator_url" },
+    });
+    expect(callTool).not.toHaveBeenCalled();
     await Promise.all([client.close(), server.close()]);
   });
 });

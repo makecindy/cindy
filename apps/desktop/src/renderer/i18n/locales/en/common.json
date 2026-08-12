@@ -4426,6 +4426,7 @@
     "close": "Close",
     "menuItems": {
       "settings": "Settings",
+      "resourceUsage": "Resource Usage",
       "help": "Help",
       "issues": "Issues",
       "checkForUpdates": "Check for Updates"
@@ -5518,7 +5519,7 @@
         "budget": "GPT Discount",
         "grok": "xAI",
         "google": "Google",
-        "china": "Domestic",
+        "china": "China",
         "image": "Image",
         "video": "Video",
         "tts": "Text to Speech",
@@ -5526,6 +5527,7 @@
         "realtime": "Realtime Audio",
         "embedding": "Embeddings",
         "compression": "Compression",
+        "ungrouped": "Ungrouped",
         "other": "Other"
       },
       "search": {
@@ -6633,7 +6635,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "Remote connection interrupted (the daemon may be upgrading or restarting). The turn has ended — please resend.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
-      "AUTO_REVIEW_UNAVAILABLE": "Auto-review is temporarily unavailable, so actions that need review are being denied. Switch this task to Default permissions if you want to approve them yourself.",
+      "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision (network or service hiccup), so actions that need review are being handed to you to confirm. Switch this task to Default permissions if you would rather not be interrupted.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote Claude Code sessions can't route through the local compat proxy (internal error).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
@@ -8255,7 +8257,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "Available after you trust this project"
+    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
   },
   "skillhub": {
     "home": {
@@ -8882,6 +8884,7 @@
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
+      "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",
       "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
       "codexCompactionNotConverging": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. What's taking up the space usually isn't the conversation — the system prompt and tool definitions can't be compacted away. Start a new task to continue.",
       "codexCompactionNotConvergingModelSwitch": "Codex kept compacting the context without making progress, so this turn was interrupted to stop the loop. This task switched model midway, and Codex still evaluates the context limit against the previous model. Switch back to that model to continue, or start a new task.",
@@ -9010,17 +9013,9 @@
     "dropHint": "Drop to Open the Session Here",
     "loadingTask": "Loading Session…",
     "resizeAria": "Resize Session Panes",
-    "openInSplit": "Open in Split",
-    "openSide": {
-      "left": "Open Session on Left",
-      "right": "Open Session on Right",
-      "top": "Open Session Above",
-      "bottom": "Open Session Below"
-    },
     "alreadyOpen": "This session is already open in the split. Choose another session.",
     "limitReached": "A split can contain up to {{count}} sessions. Close one pane and try again.",
-    "addUnavailable": "This session can’t be opened in the current split. Open a session in the main area and try again.",
-    "workerUnavailable": "A Worker can’t open in a separate pane. Open its Lead session instead."
+    "addUnavailable": "This session can’t be opened in the current split. Open a session in the main area and try again."
   },
   "extraDirs": {
     "menuAria": "Composer actions",

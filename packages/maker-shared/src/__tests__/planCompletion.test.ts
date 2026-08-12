@@ -294,6 +294,36 @@ describe('markCodexPlanTurnFailed', () => {
     expect(metaResult.messages[0]).toMatchObject({ turnCompleted: false });
   });
 
+  it('does not stop the failure scan at a synthetic (auto-resume / scheduler / subagent) user row', () => {
+    // 计划 → 自动续跑的合成 user 行 → 终态 error:合成行不是"用户开口",回扫
+    // 必须穿过它命中本轮计划,否则全勾完的失败计划先按旧数据退场、等 main 的
+    // 异步印记广播才复活(手机端断连要到重新加载,review P2)。判据与计划分组
+    // 边界共用同一份,四类合成形态逐一覆盖。
+    const syntheticRows = [
+      { clientId: 'u-auto', agentMeta: { autoResume: true } },
+      { clientId: 'u-sched', agentMeta: { origin: 'scheduler' } },
+      { clientId: 'u-proj', isSyntheticTrigger: true },
+      { clientId: 'u-auto-origin', automationOrigin: 'cron' },
+      { clientId: 'u-sub', agentMeta: { parentUuid: 'toolu_01AbCdEf' } },
+    ];
+    for (const extra of syntheticRows) {
+      const plan = planMessage(`plan:${extra.clientId}`, [{ step: 'Ship', status: 'completed' }]);
+      const result = markCodexPlanTurnFailed([
+        plan,
+        { role: 'user' as const, content: 'continue', ...extra },
+      ]);
+      expect(result.changed, extra.clientId).toBe(true);
+      expect(result.messages[0]).toMatchObject({ turnCompleted: false });
+    }
+
+    // 普通 user 行仍是硬边界:上一段历史里的计划不得被本轮失败顺手盖印记。
+    const historic = planMessage('plan:historic', [{ step: 'Ship', status: 'completed' }]);
+    expect(markCodexPlanTurnFailed([
+      historic,
+      { role: 'user' as const, clientId: 'u-real', content: '换个话题' },
+    ]).changed).toBe(false);
+  });
+
   it('never reaches past the latest user message into an older turn plan', () => {
     // 所有权边界:本次失败的 turn 没发过 update_plan 时,不得把上一段历史里
     // 未盖章的旧计划(如升级前已全勾完退场的行)标成失败复活——main 侧对应

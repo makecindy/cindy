@@ -4423,6 +4423,7 @@
     "close": "關閉",
     "menuItems": {
       "settings": "設定",
+      "resourceUsage": "資源用量",
       "help": "幫助",
       "issues": "問題反饋",
       "checkForUpdates": "檢查更新"
@@ -5515,7 +5516,7 @@
         "budget": "GPT 折扣",
         "grok": "xAI",
         "google": "Google",
-        "china": "國內",
+        "china": "中國",
         "image": "影像",
         "video": "影片",
         "tts": "語音合成",
@@ -5523,6 +5524,7 @@
         "realtime": "即時語音",
         "embedding": "向量",
         "compression": "壓縮",
+        "ungrouped": "未分組",
         "other": "其它"
       },
       "search": {
@@ -6629,7 +6631,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "遠端連線已中斷（daemon 可能正在升級或重啟）。本輪已結束 — 請重新傳送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法訪問本地檔案/圖片附件。請直接貼上內容。",
-      "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時不可用，需要審批的操作會被拒絕。想自己確認這些操作，可以把任務切到「預設權限」。",
+      "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時無法給出判斷（網路或服務波動），需要審批的操作已轉由你來確認。想少被打斷，可以把任務切到「預設權限」自行掌控。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "遠端 Claude Code 會話無法透過本地相容 Proxy 路由(內部錯誤，請反饋)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 憑據尚未就緒(登入後由服務端自動下發)。請稍候重試；若持續出現，請到 設定 → 模型供應商 檢查 Cindy AI 連線狀態。",
       "DEVICE_LINK_CONTROL_DISABLED": "已關閉對該裝置的控制，訊息未傳送。",
@@ -8241,7 +8243,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "信任此專案後即可使用"
+    "projectSkillNotLoaded": "目前的 Pi 任務尚未載入此專案 Skill，新任務會自動嘗試載入"
   },
   "skillhub": {
     "home": {
@@ -8868,6 +8870,7 @@
       "silentStopExhausted": "模型連續多次返回空響應，自動續跑已暫停。點選「繼續」恢復任務。",
       "permissionTightenInterruptFailed": "收緊權限時未能停止正在執行的任務，它可能會繼續免確認執行直到結束；如有需要請手動停止。",
       "codexAutoReviewUnavailable": "自動審批暫時不可用，當前操作已阻止並切換為預設權限。請重試，需要時會詢問你。",
+      "hostShellCommandBlocked": "Cindy 已阻止會繞過內嵌模擬器的 Shell 命令。請改用模擬器工具控制裝置、啟動 App、操作介面、截圖和診斷。",
       "upstreamResponseIdleTimeout": "模型長時間沒有任何響應，本輪已自動中斷以免無限等待。已完成的工具呼叫都保留，可以直接發下一條訊息繼續。",
       "codexCompactionNotConverging": "Codex 反覆壓縮上下文卻壓不動，本輪已自動中斷以免無限迴圈。壓不動的部分通常不在對話裡——system prompt 與工具定義佔掉的空間壓縮清不掉。新開一個任務可以繼續。",
       "codexCompactionNotConvergingModelSwitch": "Codex 反覆壓縮上下文卻壓不動，本輪已自動中斷以免無限迴圈。本任務中途切換過模型，而 Codex 仍按切換前那個模型的上下文上限來判斷。切回原模型可以繼續，或者新開一個任務。",
@@ -8995,17 +8998,9 @@
     "dropHint": "鬆開以在此分欄開啟任務",
     "loadingTask": "正在載入任務…",
     "resizeAria": "調整任務分欄大小",
-    "openInSplit": "在分欄中開啟",
-    "openSide": {
-      "left": "在左側開啟任務",
-      "right": "在右側開啟任務",
-      "top": "在上方開啟任務",
-      "bottom": "在下方開啟任務"
-    },
     "alreadyOpen": "該任務已在當前分欄中開啟，請選擇其他任務",
     "limitReached": "一個分欄最多可開啟 {{count}} 個任務，請先關閉一個任務分欄再重試",
-    "addUnavailable": "當前無法在分欄中開啟該任務，請先在主區域開啟一個任務再重試",
-    "workerUnavailable": "Worker 任務不能單獨在分欄中開啟，請改為開啟所屬 Lead 任務"
+    "addUnavailable": "當前無法在分欄中開啟該任務，請先在主區域開啟一個任務再重試"
   },
   "extraDirs": {
     "menuAria": "操作選單",

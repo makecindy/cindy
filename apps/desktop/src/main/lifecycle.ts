@@ -49,6 +49,7 @@ import {
 import { noteQuitDisposersCompleted, noteShutdownBegin } from './startup-diagnostics';
 import { isGhostSandboxWebContentsId } from './cindy-brain/runtime/electronSandboxAdapter';
 import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup-surfaces';
+import { isResourceUsageWebContentsId } from './resource-usage-window/registry.js';
 
 /**
  * 瞬时网络错误的 wire payload (main → renderer)。code 永远存在 (Node 的 ErrnoException
@@ -634,6 +635,7 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // (VS Code / Cursor 的边界都是 guest 崩溃不退 Workbench)。
   // 例外 3:RSB popup 虽然是 `window` 类型,但它是局部网页 surface；崩溃时由
   // native popup manager 回收并让对应 tab 展示恢复态,不能拖垮主窗口。
+  // 例外 4:资源用量窗是预热复用的辅助 renderer；Controller 会有限重建，崩溃不影响主界面。
   app.on('render-process-gone', (_event, webContents, details) => {
     if (isGhostSandboxWebContentsId(webContents.id)) {
       log.warn(
@@ -653,7 +655,13 @@ export function installQuitHandler(timeoutMs = 2000): void {
       );
       return;
     }
-    // arm-first(review P1):沙箱/webview 两个不退出的分支在上面已 return,
+    if (isResourceUsageWebContentsId(webContents.id)) {
+      log.warn(
+        `resource usage render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
+      );
+      return;
+    }
+    // arm-first(review P1):所有可隔离恢复的 renderer 分支在上面已 return,
     // 走到这里必然退出。
     armShutdownHardKillWatchdog();
     log.error(`render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`);

@@ -18,8 +18,8 @@
  * Safety guarantees:
  *   - Current-session cleanup only targets `claude` processes whose parent is
  *     the current Electron main process.
- *   - Historical cleanup requires both an xdt-maker bundled Claude binary path
- *     marker and a dead parent, so an active second xdt-maker instance is left
+ *   - Historical cleanup requires both a bundled Claude path marker owned by
+ *     this build region and a dead parent, so an active peer instance is left
  *     alone.
  *   - External Claude installs (for example `/usr/local/bin/claude`) do not
  *     contain the xdt-maker marker and are not historical-orphan candidates.
@@ -41,10 +41,9 @@ const log = createLogger('claude-orphan-reaper');
  * normalize (e.g. `appdata\roaming\...`) still match. Update the path shape if
  * the packaged Claude binary ever moves out of `userData/claude-code/`.
  *
- * Markers cover every current + historical userData dir name (brand-identity
- * `legacyUserDataDirNames`): while retaining compatibility with legacy profiles, orphans
- * spawned by the pre-rename install still carry the old dir name in their
- * command line and must keep being recognized.
+ * Markers cover the current + historical userData dir names owned by this build
+ * region. The old `xdt-maker` install belonged to the CN release lineage; a
+ * Global build must not use it to claim or kill the other edition's processes.
  */
 export function buildClaudePathMarkers(dirNames: readonly string[]): string[] {
   return dirNames.flatMap((dirName) => {
@@ -281,7 +280,7 @@ export function killProcessTree(pid: number, childrenByParent: Map<number, numbe
 
 /**
  * Synchronously reaps Claude Code process trees owned by this app instance, plus
- * historical xdt-maker bundled Claude processes whose parent has already died.
+ * historical same-region bundled Claude processes whose parent has already died.
  */
 export function reapClaudeOrphansSync(): ReaperResult {
   const start = Date.now();

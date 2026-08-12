@@ -758,6 +758,8 @@ export type IOSSimulatorMcpErrorCode =
   | 'SESSION_CONTEXT_REQUIRED'
   | 'SESSION_NOT_FOUND'
   | 'UNSUPPORTED_SESSION_KIND'
+  | 'IOS_SIMULATOR_PLUGIN_REQUIRED'
+  | 'IOS_SIMULATOR_PLUGIN_DISABLED'
   | 'IOS_SIMULATOR_DISABLED'
   | 'WDA_UNAVAILABLE'
   | 'XCODE_BUILD_FAILED'
@@ -782,7 +784,21 @@ export interface IOSSimulatorToolAvailabilityReport {
   instanceCount: number;
   runningInstanceCount: number;
   tools: Record<string, IOSSimulatorToolAvailability>;
+  notice?: {
+    errorCode: IOSSimulatorMcpErrorCode;
+    message: string;
+    data?: Record<string, unknown>;
+  };
 }
+
+export type IOSSimulatorMcpAccessDecision =
+  | { allowed: true }
+  | {
+      allowed: false;
+      errorCode: IOSSimulatorMcpErrorCode;
+      message: string;
+      data?: Record<string, unknown>;
+    };
 
 export type IOSSimulatorMcpToolName =
   | 'check_environment'

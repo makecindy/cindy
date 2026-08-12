@@ -4424,6 +4424,7 @@
     "close": "닫기",
     "menuItems": {
       "settings": "설정",
+      "resourceUsage": "리소스 사용량",
       "help": "도움말",
       "issues": "이슈",
       "checkForUpdates": "업데이트 확인"
@@ -5516,7 +5517,7 @@
         "budget": "GPT 할인",
         "grok": "xAI",
         "google": "Google",
-        "china": "국내",
+        "china": "중국",
         "image": "이미지",
         "video": "비디오",
         "tts": "음성 합성",
@@ -5524,6 +5525,7 @@
         "realtime": "실시간 음성",
         "embedding": "임베딩",
         "compression": "압축",
+        "ungrouped": "미분류",
         "other": "기타"
       },
       "search": {
@@ -6630,7 +6632,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "원격 연결이 중단되었습니다(daemon이 업그레이드 또는 재시작 중일 수 있습니다). 턴이 종료되었습니다 — 다시 전송하세요.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "원격 세션에서는 로컬 파일/이미지 첨부에 접근할 수 없습니다. 내용을 직접 붙여넣으세요.",
-      "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰를 일시적으로 사용할 수 없어 검토가 필요한 작업이 거부됩니다. 직접 승인하려면 이 세션을 기본 권한으로 전환하세요.",
+      "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰가 판단을 내리지 못했습니다(네트워크 또는 서비스 일시 장애). 검토가 필요한 작업은 직접 확인하도록 전환되었습니다. 중단을 줄이려면 이 작업을 기본 권한으로 전환하세요.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "원격 Claude Code 세션은 로컬 호환 프록시를 통해 라우팅할 수 없습니다(내부 오류).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
@@ -8242,7 +8244,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "이 프로젝트를 신뢰하면 사용할 수 있습니다"
+    "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
   },
   "skillhub": {
     "home": {
@@ -8869,6 +8871,7 @@
       "silentStopExhausted": "모델이 빈 응답을 반복해서 반환하여 자동 재개가 일시 중지되었습니다. \"계속\"을 클릭하여 작업을 재개하세요.",
       "permissionTightenInterruptFailed": "권한을 강화하는 동안 실행 중인 작업을 중지하지 못했습니다. 작업이 끝날 때까지 확인 없이 계속 실행될 수 있습니다. 필요하면 수동으로 중지하세요.",
       "codexAutoReviewUnavailable": "자동 리뷰를 일시적으로 사용할 수 없습니다. 현재 작업을 차단하고 기본 권한으로 전환했습니다. 다시 시도하세요. 필요한 경우 확인을 요청합니다.",
+      "hostShellCommandBlocked": "Cindy가 내장 iOS 시뮬레이터를 우회하는 셸 명령을 차단했습니다. 기기 제어, 앱 실행, 화면 조작, 스크린샷, 진단에는 iOS 시뮬레이터 도구를 사용하세요.",
       "upstreamResponseIdleTimeout": "모델이 오랫동안 응답하지 않아 무한 대기를 막기 위해 이번 턴을 자동으로 중단했습니다. 완료된 도구 호출은 유지되며, 다음 메시지를 보내 계속할 수 있습니다.",
       "codexCompactionNotConverging": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 공간을 차지하는 것은 대화가 아니라 압축으로 줄일 수 없는 시스템 프롬프트와 도구 정의인 경우가 대부분입니다. 새 세션을 시작하세요.",
       "codexCompactionNotConvergingModelSwitch": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 이 세션은 도중에 모델을 변경했고, Codex는 변경 전 모델의 컨텍스트 한도로 계속 판단하고 있습니다. 원래 모델로 되돌리거나 새 세션을 시작하세요.",
@@ -8996,17 +8999,9 @@
     "dropHint": "여기에 세션을 놓아 열기",
     "loadingTask": "세션 불러오는 중…",
     "resizeAria": "세션 분할 창 크기 조절",
-    "openInSplit": "분할로 열기",
-    "openSide": {
-      "left": "세션을 왼쪽에 열기",
-      "right": "세션을 오른쪽에 열기",
-      "top": "세션을 위쪽에 열기",
-      "bottom": "세션을 아래쪽에 열기"
-    },
     "alreadyOpen": "이 세션은 이미 분할 창에 열려 있습니다. 다른 세션을 선택하세요.",
     "limitReached": "한 분할 창에는 세션을 최대 {{count}}개까지 열 수 있습니다. 분할 창 하나를 닫고 다시 시도하세요.",
-    "addUnavailable": "현재 분할 창에서 이 세션을 열 수 없습니다. 기본 영역에서 세션을 연 후 다시 시도하세요.",
-    "workerUnavailable": "Worker는 별도의 분할 창에서 열 수 없습니다. 소속 Lead 세션을 대신 여세요."
+    "addUnavailable": "현재 분할 창에서 이 세션을 열 수 없습니다. 기본 영역에서 세션을 연 후 다시 시도하세요."
   },
   "extraDirs": {
     "menuAria": "작업 메뉴",

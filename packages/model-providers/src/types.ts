@@ -17,7 +17,7 @@
  * 本包零运行时依赖：`AgentKind` / `Effort` 在此就地定义（与 maker-core 的同名
  * 联合保持一致），不 import maker-core，保证可作为独立能力复用。
  */
-import type { ModelRegistry } from '@cindy/model-access-protocol';
+import type { ModelRegistry } from './modelAccessBean.js';
 
 /** 承载模型的 agent runtime —— 与 maker-core AgentKind 对齐。 */
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
@@ -229,7 +229,9 @@ export interface CatalogModel {
   family?: string;
   /**
    * 厂商分组 id —— 决定模型在选择器右栏的分组归属（替代渲染层按 id 前缀硬猜）。
-   * 当前取值与渲染层 ModelCategory 对齐：'anthropic' | 'gpt' | 'gpt-budget' | 'google' | 'china'。
+   * 当前取值与渲染层 ModelCategory 对齐：'anthropic' | 'gpt' | 'gpt-budget' | 'grok' |
+   * 'google' | 'china' | 'ungrouped' | 'image' | 'video' | 'tts' | 'stt' | 'realtime' |
+   * 'embedding' | 'compression' | 'other'。
    * 缺省时渲染层回退到 id 前缀归类（categorize）。新增未知分组需在渲染层补 i18n 标签。
    */
   group?: string;

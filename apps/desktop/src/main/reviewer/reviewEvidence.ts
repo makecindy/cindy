@@ -11,12 +11,13 @@ import { messages } from '../localDb/schema.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
-import { readReviewData } from '../git-review/ipc.js';
+import { readReviewBranchDiff, readReviewData } from '../git-review/ipc.js';
 import { getTurnChangeSets, listTurnChangeSets } from '../turn-change-set/store.js';
 import type { TurnChangeSetDetail } from '../../shared/turnChangeSet.js';
 import { readReviewRunFromAgentMeta } from '../../shared/reviewRun.js';
 import type {
   ReviewArtifactLabel,
+  ReviewBranchEvidence,
   ReviewContextMessage,
   ReviewWorkspaceEvidence,
 } from './reviewPrompt.js';
@@ -66,6 +67,8 @@ export interface LoadedReviewEvidence {
   contextFingerprint: string;
   workspace: ReviewWorkspaceEvidence | null;
   workspaceFingerprint: string | null;
+  branch: ReviewBranchEvidence | null;
+  branchUnavailableReason?: string;
   changeSet: TurnChangeSetDetail | null;
   artifacts: ReviewArtifactLabel[];
   artifactExcerpts: ReviewArtifactExcerpt[];
@@ -103,6 +106,85 @@ function mapReviewWorkspace(
   };
 }
 
+/**
+ * The branch's own commits, read only when the tree is clean.
+ *
+ * With uncommitted work present that work is the review target. Once it is
+ * committed the tree goes clean and the last turn is no longer a faithful
+ * stand-in for the branch — reviewing it would silently cover one turn while
+ * appearing to cover the whole branch.
+ */
+async function loadReviewBranchEvidence(
+  sessionId: string,
+  readBranchDiff: typeof readReviewBranchDiff,
+): Promise<{ branch: ReviewBranchEvidence | null; unavailableReason?: string }> {
+  let data: Awaited<ReturnType<typeof readReviewBranchDiff>>;
+  try {
+    data = await readBranchDiff(sessionId, null);
+  } catch (error) {
+    return { branch: null, unavailableReason: error instanceof Error ? error.message : '读取失败' };
+  }
+  if (!data.baseRef || !data.mergeBaseOid) {
+    return { branch: null, unavailableReason: data.warning?.code ?? '未找到基线分支' };
+  }
+  // Nobody picks the base here — unlike the Git review pane, this runs
+  // unattended. With no recognized default present, the picker just takes the
+  // first remaining candidate in sort order, which can be an unrelated sibling
+  // (`some-feature`, `origin/foo`); presenting that comparison as "the branch's
+  // work" is worse than presenting nothing.
+  //
+  // So require a base that identifies itself rather than one that merely sorted
+  // first: the repository's default branch, or the branch's own upstream. The
+  // default flag comes from the branch reader because `init.defaultBranch` can
+  // name anything — recognizing defaults by name here would reject a repository
+  // that calls its default `stable`.
+  const chosen = data.candidates.find((candidate) => candidate.refName === data.baseRef);
+  const baseIdentifiesItself =
+    !chosen ||
+    chosen.isDefaultBranch === true ||
+    chosen.kind === 'remote-default' ||
+    chosen.kind === 'upstream';
+  if (!baseIdentifiesItself) {
+    return { branch: null, unavailableReason: 'ambiguous-base' };
+  }
+  const sanitized = sanitizeReviewDiffBucket({
+    staged: data.diffs,
+    unstaged: [],
+    capped: { staged: data.capped, unstaged: null },
+  });
+  const diffs = sanitized.value.staged;
+  const capped = sanitized.value.capped?.staged ?? null;
+  // Count what the branch changed, not what survived redaction. `capped.stats`
+  // is already a pre-redaction total, so deriving the uncapped count from the
+  // sanitized list would make the two paths disagree — and a branch whose
+  // every changed path is sensitive would report zero, which
+  // `resolveTargetKind` reads as "no changes" and downgrades the run to a
+  // `task` review even though the branch is the selected evidence. The count
+  // is coverage metadata; the content stays excluded either way, and the
+  // prompt states how many were withheld via `sensitiveFilesOmitted`.
+  const fileCount = capped ? capped.stats.fileCount : data.diffs.length;
+  if (fileCount === 0) {
+    // A guard like `too-many-files` also yields zero entries, but it means the
+    // branch changed too much to load — not that it changed nothing. Falling
+    // through silently would present one turn as the branch review.
+    if (data.warning) return { branch: null, unavailableReason: data.warning.code };
+    // Nothing of its own to review; fall through to the last turn.
+    return { branch: null };
+  }
+  return {
+    branch: {
+      baseRef: data.baseRef,
+      baseOid: data.baseOid,
+      mergeBaseOid: data.mergeBaseOid,
+      fileCount,
+      diffs,
+      capped,
+      sensitiveFilesOmitted: sanitized.omittedSensitiveFiles,
+      ...(data.warning ? { unavailableReason: data.warning.code } : {}),
+    },
+  };
+}
+
 interface ReviewWorkspaceSnapshot {
   workspace: ReviewWorkspaceEvidence;
   fingerprint: string | null;
@@ -119,12 +201,50 @@ const defaultReviewWorkspaceSnapshotDeps: ReviewWorkspaceSnapshotDeps = {
   fingerprintCappedWorkspaceFiles: fingerprintReviewCappedWorkspaceFiles,
 };
 
-function cappedWorkspacePaths(workspace: ReviewWorkspaceEvidence): string[] {
-  return [workspace.diffs.capped?.staged, workspace.diffs.capped?.unstaged].flatMap((capped) =>
-    capped
-      ? capped.files.flatMap((file) => [file.path, file.oldPath].filter(Boolean) as string[])
-      : [],
+/**
+ * Dirty paths whose Git evidence does not carry their content.
+ *
+ * A capped bucket replaces patches with summaries, and a binary, submodule or
+ * over-limit file is recorded with an empty patch and no blob oids — only path,
+ * kind and size. Swapping such a file for different bytes of the same size
+ * leaves the Git digest identical, so the reviewer could read the old bytes and
+ * still pass both freshness gates. These paths need a content hash of their own.
+ */
+function workspacePathsWithoutContent(workspace: ReviewWorkspaceEvidence): string[] {
+  const capped = [workspace.diffs.capped?.staged, workspace.diffs.capped?.unstaged].flatMap(
+    (bucket) =>
+      bucket
+        ? bucket.files.flatMap((file) => [file.path, file.oldPath].filter(Boolean) as string[])
+        : [],
   );
+  const contentless = [...workspace.diffs.staged, ...workspace.diffs.unstaged]
+    // Submodules are excluded on purpose: a gitlink is a directory, and the
+    // content fingerprinter only accepts regular files, so passing one would
+    // abort evidence loading outright — an initialized submodule anywhere in
+    // the workspace would make Review refuse to run at all.
+    //
+    // The accepted cost, stated plainly: edits living *inside* a dirty
+    // submodule are not bound. Porcelain v2 spends one boolean on "the
+    // submodule has modified content" and FileStatus keeps neither that flag
+    // nor any object id, so replacing one internal edit with another leaves
+    // every value this digest sees unchanged. Closing it needs an identity
+    // read this layer does not have — the gitlink oid plus a recursive digest
+    // of the inner worktree — which is a submodule-aware reader, not another
+    // path added to the file fingerprinter. That reader is out of scope here
+    // and tracked in #2463; do not "fix" this by feeding the directory back
+    // in, which is the crash described above.
+    //
+    // What bounds the exposure meanwhile: inner content is never part of the
+    // evidence (diffReader classifies every submodule entry as `submodule`
+    // with an empty patch, so no inner bytes reach the prompt), and a file
+    // inside a submodule that is explicitly attached lands in reviewReadPaths
+    // and is fully content-hashed by fingerprintReviewArtifacts. The unbound
+    // case is the reviewer opening an inner file that is neither — the same
+    // class as opening any unchanged tracked file, which no fingerprint here
+    // covers either.
+    .filter((diff) => !diff.rawPatch && !diff.isSubmodule)
+    .flatMap((diff) => [diff.path, diff.oldPath].filter(Boolean) as string[]);
+  return [...new Set([...capped, ...contentless])];
 }
 
 async function buildReviewWorkspaceSnapshot(
@@ -132,13 +252,13 @@ async function buildReviewWorkspaceSnapshot(
   fingerprintCappedWorkspaceFiles: typeof fingerprintReviewCappedWorkspaceFiles,
 ): Promise<ReviewWorkspaceSnapshot> {
   const workspace = mapReviewWorkspace(reviewData);
-  const hasCappedDiff = Boolean(workspace.diffs.capped?.staged || workspace.diffs.capped?.unstaged);
+  const contentlessPaths = workspacePathsWithoutContent(workspace);
+  // Whichever files needed their own content hash also need the stability
+  // re-read below: both are answering "did these bytes hold still?".
+  const hasCappedDiff = contentlessPaths.length > 0;
   const cappedContentFingerprint =
     hasCappedDiff && reviewData.scope.repoRoot
-      ? await fingerprintCappedWorkspaceFiles(
-          reviewData.scope.repoRoot,
-          cappedWorkspacePaths(workspace),
-        )
+      ? await fingerprintCappedWorkspaceFiles(reviewData.scope.repoRoot, contentlessPaths)
       : null;
   return {
     workspace,
@@ -217,6 +337,35 @@ export async function reviewWorkspaceFingerprintIsCurrent(
   if (!expectedFingerprint) return true;
   const current = await readReviewWorkspaceSnapshot(sourceSessionId, depsInput);
   return current?.fingerprint === expectedFingerprint;
+}
+
+/**
+ * Whether the branch is still being compared against the same point.
+ *
+ * The workspace fingerprint covers the source HEAD, not the base: fetching or
+ * moving the base branch advances the merge base and changes what the branch
+ * diff means, while HEAD stays put. Without this a review could publish
+ * findings drawn from a comparison that no longer exists.
+ */
+export async function reviewBranchBaselineIsCurrent(
+  sourceSessionId: string,
+  branch: ReviewBranchEvidence | null,
+  readBranchDiff: typeof readReviewBranchDiff = readReviewBranchDiff,
+): Promise<boolean> {
+  if (!branch) return true;
+  try {
+    const current = await readBranchDiff(sourceSessionId, branch.baseRef);
+    // The patch runs from the merge base to the source HEAD, so only those two
+    // define the evidence. The base tip is deliberately not compared: fetching
+    // commits onto the base after this branch diverged moves it without moving
+    // the merge base, and failing the review there would discard a result whose
+    // content is byte-for-byte the same. HEAD is covered by the workspace
+    // fingerprint.
+    return current.baseRef === branch.baseRef && current.mergeBaseOid === branch.mergeBaseOid;
+  } catch {
+    // An unreadable baseline cannot be proven unchanged.
+    return false;
+  }
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | null {
@@ -464,6 +613,12 @@ export async function loadReviewEvidence(input: {
   const changeSet = sanitizeReviewChangeSet(rawChangeSet).value;
   const workspaceSnapshot = await readReviewWorkspaceSnapshot(input.sourceSessionId);
   const workspace = workspaceSnapshot?.workspace ?? null;
+  // Only when there is no uncommitted work: that work, when present, is what
+  // the user is asking about, and reading the branch as well would bury it.
+  const branchEvidence =
+    workspace && !workspace.dirty && !workspace.disabledReason
+      ? await loadReviewBranchEvidence(input.sourceSessionId, readReviewBranchDiff)
+      : { branch: null };
 
   const artifacts: ReviewArtifactLabel[] = [];
   const artifactExcerpts: ReviewArtifactExcerpt[] = [];
@@ -652,6 +807,10 @@ export async function loadReviewEvidence(input: {
     contextFingerprint: fingerprintReviewContextRows(visibleRows),
     workspace,
     workspaceFingerprint: workspaceSnapshot?.fingerprint ?? null,
+    branch: branchEvidence.branch,
+    ...(branchEvidence.unavailableReason
+      ? { branchUnavailableReason: branchEvidence.unavailableReason }
+      : {}),
     changeSet,
     artifacts,
     artifactExcerpts,

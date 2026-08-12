@@ -650,6 +650,11 @@ export const MAKER_INVOKE = {
    * 自动同步。窗口生命周期见 main/secondary-windows.ts。
    */
   OPEN_SESSION_IN_NEW_WINDOW: 'maker:open-session-in-new-window',
+  /** Native task drag released outside every Cindy app window. */
+  OPEN_SESSION_IN_NEW_WINDOW_IF_DROPPED_OUTSIDE:
+    'maker:open-session-in-new-window-if-dropped-outside',
+  /** Start the transient task drag preview shown outside Cindy windows. */
+  SESSION_DRAG_PREVIEW_START: 'maker:session-drag-preview:start',
   /**
    * 右侧栏独立子窗口(RSB window)——「侧边栏在新窗口中显示」全局偏好 + 窗口生命周期。
    * 状态机 / 窗口管理见 main/right-sidebar-window/controller.ts。
@@ -702,6 +707,11 @@ export const MAKER_INVOKE = {
  * (typically localStorage 镜像) 推给 main, main 只更新内存缓存供后续工具调用读。
  */
 export const MAKER_SEND = {
+  /**
+   * Stop the transient task drag preview. Release feedback is latency-sensitive
+   * and has no response payload, so it must not pay an invoke/ack round trip.
+   */
+  SESSION_DRAG_PREVIEW_END: 'maker:session-drag-preview:end',
   /**
    * macOS permission coach: begin a native drag of the real Computer Use app
    * bundle into System Settings. Main validates that the sender is the

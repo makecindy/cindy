@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildMobileModelSwitchConfirmation,
   buildSessionRuntimeOptions,
+  categorizeMobileModel,
   normalizeMobileAgentCapabilities,
   reconcileRuntimeDraftWithCapabilities,
 } from '../agentCapabilities';
@@ -214,6 +215,45 @@ describe('agent capabilities shared model', () => {
       targetModelId: 'gpt-5.5',
       toCategory: 'gpt',
       toLabel: 'GPT',
+    });
+  });
+
+  it('categorizeMobileModel:折扣路由判在 gpt 之前,命名空间形态与裸 id 同等对待', () => {
+    // codex/gpt-5.5 的尾段是 gpt-5.5;判定顺序反了会把「GPT 折扣」读成「GPT」,
+    // 而这个分类名会原样出现在切换确认框的标题与说明里。
+    expect(categorizeMobileModel('codex/gpt-5.5')).toBe('gpt-budget');
+    expect(categorizeMobileModel('codex/gpt-5.6-sol')).toBe('gpt-budget');
+    expect(categorizeMobileModel('gpt-5.5')).toBe('gpt');
+    // 目录下发的 id 带命名空间,尾段也要认,否则整批模型掉进兜底分类。
+    expect(categorizeMobileModel('anthropic/claude-opus-5')).toBe('anthropic');
+    expect(categorizeMobileModel('openai/gpt-5.5')).toBe('gpt');
+    expect(categorizeMobileModel('google/gemini-3.5-flash')).toBe('google');
+    // 认不出厂商就落中性组,不猜产地(手机端这条链拿不到目录 group)。
+    expect(categorizeMobileModel('qwen/qwen3.7-max')).toBe('ungrouped');
+    expect(categorizeMobileModel('mistral-large-latest')).toBe('ungrouped');
+  });
+
+  it('切换确认框把折扣路由读成「GPT 折扣」,不读成「GPT」', () => {
+    expect(buildMobileModelSwitchConfirmation({
+      currentModelId: 'claude-sonnet-4-6',
+      targetModelId: 'codex/gpt-5.5',
+      messageCount: 12,
+    })).toMatchObject({
+      fromCategory: 'anthropic',
+      toCategory: 'gpt-budget',
+      toLabel: 'GPT 折扣',
+    });
+  });
+
+  it('切到未知厂商模型时显示「未分组」,不再显示含厂商断言的旧兜底名', () => {
+    expect(buildMobileModelSwitchConfirmation({
+      currentModelId: 'claude-sonnet-4-6',
+      targetModelId: 'moonshot/kimi-k3',
+      messageCount: 12,
+    })).toMatchObject({
+      fromCategory: 'anthropic',
+      toCategory: 'ungrouped',
+      toLabel: '未分组',
     });
   });
 });

@@ -88,6 +88,7 @@ import {
   executeGhostSetupInlineAction,
   getGhostManager,
   getGhostSetupAssessment,
+  getIOSSimulatorPluginAccessDecision,
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
 import {
@@ -187,6 +188,7 @@ import {
   listReviewHistoricalAttachments,
   loadReviewEvidence,
   readReviewContextFingerprint,
+  reviewBranchBaselineIsCurrent,
   reviewWorkspaceFingerprintIsCurrent,
   resolveReviewArtifactPath,
   SensitiveReviewPathError,
@@ -206,6 +208,7 @@ import {
   ReviewArtifactFingerprintChangedError,
   ReviewArtifactFingerprintLimitError,
 } from '../reviewer/reviewArtifactFingerprint.js';
+import { reviewChangeSetContentPaths } from '../reviewer/reviewEvidenceSafety.js';
 import { enforceReviewCreateOptions } from '../reviewer/reviewSessionPolicy.js';
 import { reviewSourceIdentityMatches } from '../reviewer/reviewSourceIdentity.js';
 import { buildReviewSessionTitle } from '../reviewer/reviewSessionTitle.js';
@@ -643,6 +646,7 @@ import {
 } from './agentHandoff.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
+import { buildPlanReconcileNote, summarizeOpenPlan } from './planReconcile.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
@@ -7057,15 +7061,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         throw error;
       }
+      // A committed branch is reviewable content on its own: opening an existing
+      // worktree and running /review has no conversation, no dirty tree and no
+      // turn of its own, yet the branch's commits are exactly what to review.
       if (
         evidence.context.length === 0 &&
         !evidence.workspace?.dirty &&
+        !evidence.branch &&
         !evidence.changeSet &&
         evidence.artifacts.length === 0 &&
         !request.focus
       ) {
         await cleanupPreparedArtifacts?.();
-        throwIpcError('INVALID_PARAMS', 'The current task has no reviewable content yet');
+        // "Nothing to review" and "the branch was there but could not be read"
+        // are different answers, and only the second one tells the user what to
+        // do about it. The prompt-level warning never runs on this path.
+        throwIpcError(
+          'INVALID_PARAMS',
+          evidence.branchUnavailableReason
+            ? `Review could not load this branch's changes (${evidence.branchUnavailableReason})`
+            : 'The current task has no reviewable content yet',
+        );
       }
       let builtPrompt: ReturnType<typeof buildReviewPrompt>;
       try {
@@ -7073,6 +7089,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           focus: evidence.focusPath ? `审查路径：${evidence.focusPath}` : request.focus,
           context: evidence.context,
           workspace: evidence.workspace,
+          branch: evidence.branch,
+          ...(evidence.branchUnavailableReason
+            ? { branchUnavailableReason: evidence.branchUnavailableReason }
+            : {}),
           changeSet: evidence.changeSet,
           artifacts: evidence.artifacts,
           artifactsOmitted: evidence.artifactsOmitted,
@@ -7115,11 +7135,52 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               }
             }
           }
-          // Every harness grants read access to the source working directory.
-          // Git identity/diff fingerprints do not cover ignored build output,
-          // caches or nested-submodule contents, so the reusable result must
-          // also bind the complete non-sensitive readable workspace content.
-          const artifactPaths = [...reviewReadPaths, sourceWorkingDir];
+          // Fingerprint what the review actually covers, not the whole
+          // workspace: explicit artifacts, attachments and the reviewed change
+          // set. The reviewer still reads the full workspace through workingDir,
+          // but an unrelated file edit must not invalidate a completed review,
+          // and a full-workspace content hash cannot stay inside its byte budget
+          // on a real checkout.
+          //
+          // Change-set paths are bound even when Git evidence exists: the Git
+          // fingerprint hashes identity, porcelain status and patches, so an
+          // ignored deliverable built by the reviewed turn (dist/report.html)
+          // is covered by neither unless it is included here.
+          // The change set is the review target only when nothing better was
+          // selected. With uncommitted work or a branch diff in hand it is not
+          // part of the evidence, so neither its gaps nor its paths belong
+          // here — those commits are already represented by the selected
+          // evidence, and binding unreviewed paths would let an unrelated turn
+          // refuse the review or invalidate its result.
+          //
+          // The accepted cost: a branch review does not bind an ignored file
+          // the latest turn happened to produce, so editing that file mid-review
+          // will not invalidate the result. Binding it would mean an unrelated
+          // turn — one whose content is not being reviewed — could refuse the
+          // review outright or expire it. Between "an unreviewed file went
+          // unwatched" and "an unreviewed file blocked a valid review", this
+          // takes the first. Reviewing that deliverable is still available by
+          // attaching it explicitly, which puts it in reviewReadPaths.
+          const changeSetIsReviewed = !evidence.workspace?.dirty && !evidence.branch;
+          const changeSetContent = changeSetIsReviewed
+            ? reviewChangeSetContentPaths(evidence.changeSet, sourceWorkingDir)
+            : { paths: [], truncated: false };
+          // A change set that cannot account for everything the turn changed —
+          // whether it was summarized away or never enumerable in the first
+          // place — cannot serve as a baseline. Refuse instead of publishing a
+          // conclusion whose freshness check silently skipped the remainder.
+          //
+          // A Git fingerprint is not an exemption: it hashes tracked evidence
+          // only, so a missing entry that happens to be an ignored deliverable
+          // is covered by neither side — exactly the gap this change closes.
+          if (changeSetContent.truncated) {
+            throw new ReviewPreconditionError({
+              code: 'artifact-unavailable',
+              message:
+                'The reviewed change set cannot account for every file the turn changed, so Review cannot bind a complete content baseline',
+            });
+          }
+          const artifactPaths = [...new Set([...reviewReadPaths, ...changeSetContent.paths])];
           const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };
           let artifactFingerprint: string;
           try {
@@ -7215,6 +7276,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                     'The task files changed before Review started. Run /review again for the current result.',
                 };
               }
+              // The workspace fingerprint pins HEAD, not the base it is compared
+              // against; a moved base changes the branch diff without touching it.
+              if (!(await reviewBranchBaselineIsCurrent(source.id, evidence.branch))) {
+                return {
+                  code: 'source-files-changed',
+                  message:
+                    'The branch comparison base changed before Review started. Run /review again for the current result.',
+                };
+              }
               if (
                 !(await artifactFingerprintIsCurrent(
                   authorizedArtifactPaths,
@@ -7264,6 +7334,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                   code: 'source-files-changed',
                   message:
                     'The task files changed while Review was running. Run /review again for the current result.',
+                };
+              }
+              if (!(await reviewBranchBaselineIsCurrent(source.id, evidence.branch))) {
+                return {
+                  code: 'source-files-changed',
+                  message:
+                    'The branch comparison base changed while Review was running. Run /review again for the current result.',
                 };
               }
               if (
@@ -9877,6 +9954,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     reconcileCreateOptsWithDb: reconcileCreateOptsAgainstDb,
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
+    // 计划对账:未收口的旧计划让 agent 在下一轮顺手交代。读近段历史现算,
+    // 无 pending 状态(清单被更新/清掉后下一轮自然不再注入)。
+    // 窗口 1000 行(交接用 400):计划行被长工具流挤出窗口时 summarize 返回
+    // null → 本轮不注入——降级方向是"少提醒",不会误提醒,可接受;不做全量
+    // 分页回溯,避免每次发送为一个提示扫全历史。
+    peekPlanReconcileNote: async (sessionId) => {
+      // 读排在同一条持久化 FIFO 之后:终态章(persistCodexPlanOnDone)与失败印记
+      // 只是 enqueueWrite 入队,不等它们落库就查,会读到未盖章的旧快照 → 给已经
+      // 收口的计划多注入一次对账;反过来,全勾完但失败的计划可能因 turnCompleted:false
+      // 还没写进去而漏掉唯一的收口通道(review P2)。调用方对失败已经 catch 成 null,
+      // 队列被 app-session 边界打断时最多这一轮不注入。
+      const rows = await enqueueDurableWrite(`plan-reconcile-read:${sessionId}`, () =>
+        listMessagesForAgentHandoff(sessionId, 1000),
+      );
+      const summary = summarizeOpenPlan(rows);
+      return summary ? buildPlanReconcileNote(summary) : null;
+    },
     // 手机客户端说明的开关:被控端盖章的来源判据(本机 renderer / 桌面控制端 / 平台
     // 未知一律 false)。必须在这里现取,不能提前求值缓存——同一个装配好的事务会服务
     // 后续所有 send,来源是逐次调用的属性。
@@ -13246,6 +13340,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // ── iOS Simulator pane / Agent discovery ────────────────────────────────
   registerIOSSimulatorHandlers(
     createElectronIpcHandlerRegistry(),
+    {
+      isPluginAvailable: (workingDir) =>
+        getIOSSimulatorPluginAccessDecision(workingDir).allowed,
+      getSessionContext: async (sessionId) => {
+        const liveSession = maker.getSession(sessionId);
+        if (liveSession) return { workingDir: liveSession.workDir };
+        const snapshot = await getSessionRowSnapshotStrict(sessionId);
+        return snapshot ? { workingDir: snapshot.workingDir } : null;
+      },
+    },
   );
 
   // ── Browser automation (Settings →「电脑使用」) ───────────────────────────

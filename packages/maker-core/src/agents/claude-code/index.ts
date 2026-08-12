@@ -1817,15 +1817,17 @@ export class ClaudeCodeAgent extends BaseAgent {
         } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'allow') {
           return { behavior: 'allow', updatedInput: input };
         } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'block') {
-          // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,用户有权知道并接管,
-          // 后者按 Auto 本意保持静默(只把 reason 喂给模型)。动作两种都仍然 deny。
-          if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
+          // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默,只把 reason 喂给模型。
+          // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这条分支。)
           return {
             behavior: 'deny',
             message: autoDecision.reason ?? 'Cindy Auto Review blocked this action. Choose a safer alternative.',
           };
         } else {
           // AI `ask` and deterministic red-line verdicts are never persisted.
+          // 审阅器故障降级来的 ask 额外发一条会话级提示:用户需要知道自己为什么
+          // 突然开始被问,否则 Auto 档看起来像坏了。
+          if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
           forcePrompt = true;
         }
       } else {
@@ -2847,14 +2849,15 @@ export class ClaudeCodeAgent extends BaseAgent {
                 return { kind: 'permission', behavior: 'allow' };
               }
               if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'block') {
-                // 与本地分支同口径:审阅器故障要提示一次,模型判定保持静默。
-                if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
+                // 与本地分支同口径:模型判定保持静默(审阅器故障已降级成 ask)。
                 return {
                   kind: 'permission',
                   behavior: 'deny',
                   reason: autoDecision.reason ?? 'Cindy Auto Review blocked this action. Choose a safer alternative.',
                 };
               }
+              // 与本地分支同口径:故障降级来的 ask 提示一次,让用户知道为何开始被问。
+              if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
               remoteForcePrompt = true;
             } else {
               if (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt) {

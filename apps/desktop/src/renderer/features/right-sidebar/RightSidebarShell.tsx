@@ -589,7 +589,6 @@ export function RightSidebarShell({
             onAddReviewTab={() => handleAdd('review')}
             onAddSubagentsTab={() => handleAdd('subagents')}
             onAddBackgroundTasksTab={() => handleAdd('background-tasks')}
-            onAddResourceUsageTab={() => handleAdd('resource-usage')}
             onAddBrowserTab={() => handleAdd('web-browser')}
             onAddTerminalTab={() => handleAdd('terminal')}
           />

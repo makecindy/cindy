@@ -59,10 +59,17 @@ Cindy 内部而拒绝重启，或因目标 userData 被其他 checkout 占用而
   passive 停止续期，会使它的 access token 过期后再无替换途径（primary 的续期只更新磁盘
   token，不更新 passive 进程的内存态，而直接走 `apiFetch` 的路径没有 401 refresh/retry）。
 - `--preserve-running`：并行 dev，不停止任何已有 Cindy dev 进程，每个新实例强制 passive
-  并共享当前 userData／登录态；仅供能证明实例归属的上层编排，或用户明确「不要关当前
-  实例／不要重新登录」时用。仅支持 remote，禁止与 `--isolated` 组合。
+  并共享当前区域的 userData／登录态；启动前必须由 `.dev-instances` 存活记录证明已运行
+  实例与目标区域一致，旧记录没有 region 或跨区域都会 fail closed。仅供能证明实例归属的
+  上层编排，或用户明确「不要关当前实例／不要重新登录」时用。仅支持 remote，禁止与
+  `--isolated` 组合。共享实例若只发现没有 realm 的旧版裸 refresh token，也不得猜区域迁移
+  或轮换，保持本进程登出，交给同区域独占实例完成凭证迁移。
 
-已手动设 `XDT_USER_DATA_DIR` 时尊重用户值，不覆盖。
+已手动设 `XDT_USER_DATA_DIR` 时尊重用户值，不覆盖，也不探测或迁移正式区域目录。
+
+正式版目录保持历史兼容：CN → `Cindy`，Global → `CindyGlobal`，不在启动时改名或搬迁用户数据。
+非隔离 dev 也使用当前区域对应的正式 profile；`--isolated` 沙箱再按相同区域映射派生目录。
+跨区域共享、登录态迁移或旧版本回滚应使用显式隔离目录，避免不同构建误用同一 profile。
 
 ### 并行多开 dev
 

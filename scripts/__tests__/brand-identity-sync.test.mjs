@@ -48,7 +48,9 @@ function extractRegionMap(source, mapName, label) {
   const block = blockRe.exec(source);
   assert.ok(block, `pattern not found: ${label} (${blockRe})`);
   const map = {};
-  for (const [, key, value] of block[1].matchAll(/(cn|global|dev):\s*'([^']+)'/g)) {
+  for (const [, key, , value] of block[1].matchAll(
+    /(cn|global|dev):\s*(['"])([^'"]+)\2/g,
+  )) {
     map[key] = value;
   }
   assert.deepEqual(Object.keys(map).sort(), ['cn', 'dev', 'global'], `${label} 缺区域键`);
@@ -88,6 +90,21 @@ test('restart-desktop-remote.mjs BRAND_USER_DATA_DIR_NAME mirrors brandIdentity.
     'restart-desktop-remote.mjs BRAND_USER_DATA_DIR_NAME',
   );
   assert.equal(value, USER_DATA_DIR_NAME);
+});
+
+test('desktop dev userData region map mirrors brandIdentity.userDataDirNameByRegion', () => {
+  const expected = extractRegionMap(
+    brandIdentitySource,
+    'userDataDirNameByRegion',
+    'brandIdentity.ts userDataDirNameByRegion',
+  );
+  const regionSource = readSource('scripts/shared/desktop-dev-region.mjs');
+  const actual = extractRegionMap(
+    regionSource,
+    'DESKTOP_USER_DATA_DIR_NAME_BY_REGION',
+    'desktop-dev-region.mjs DESKTOP_USER_DATA_DIR_NAME_BY_REGION',
+  );
+  assert.deepEqual(actual, expected);
 });
 
 test('desktop package.json productName mirrors brandIdentity.userDataDirName', () => {
