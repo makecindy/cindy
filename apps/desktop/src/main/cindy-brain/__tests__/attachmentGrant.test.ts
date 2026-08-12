@@ -22,6 +22,7 @@ function makeDeps(overrides: Partial<AttachmentGrantDeps> = {}): {
   }));
   const recordBlob = vi.fn(async () => {});
   const addRef = vi.fn(async (_params: Parameters<AttachmentGrantDeps['addRef']>[0]) => {});
+  const removeRefById = vi.fn(async (_id: string) => {});
   const deps: AttachmentGrantDeps = {
     resolveImageUrl: (url: string) => {
       if (!url.startsWith('xdt-image://')) throw new Error('xdt-image: invalid url');
@@ -31,6 +32,8 @@ function makeDeps(overrides: Partial<AttachmentGrantDeps> = {}): {
     writeBlob,
     recordBlob,
     addRef,
+    removeRefById,
+    withRefCompensation: async ({ perform }) => perform(),
     ...overrides,
   };
   return { deps, writeBlob, recordBlob, addRef };
@@ -116,6 +119,15 @@ describe('grantAttachmentsToGhost', () => {
     const { deps } = makeDeps({
       addRef,
       removeRefById,
+      withRefCompensation: async ({ refIds, perform, compensate }) => {
+        expect(refIds).toEqual([expect.any(String)]);
+        try {
+          return await perform();
+        } catch (error) {
+          await Promise.all(refIds.map((id) => compensate(id)));
+          throw error;
+        }
+      },
       assertStillAllowed: () => {
         if (blocked) throw new GrantPolicyError('该插件工具已被用户阻止');
       },
@@ -129,6 +141,63 @@ describe('grantAttachmentsToGhost', () => {
     expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
     expect(addRef).toHaveBeenCalledWith(expect.objectContaining({ id: expect.any(String) }));
     expect(removeRefById).toHaveBeenCalledWith(createdRefId);
+  });
+
+  it('即时回滚失败时由持久补偿保留精确 id，后续重放删掉残留授权', async () => {
+    let blocked = false;
+    const liveRefs = new Set<string>();
+    const pendingRecovery = new Set<string>();
+    const addRef = vi.fn(async (params: Parameters<AttachmentGrantDeps['addRef']>[0]) => {
+      liveRefs.add(params.id);
+      blocked = true;
+    });
+    const removeRefById = vi
+      .fn<(id: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error('DB worker disposed'))
+      .mockImplementation(async (id) => {
+        liveRefs.delete(id);
+      });
+    const withRefCompensation: AttachmentGrantDeps['withRefCompensation'] = async ({
+      refIds,
+      perform,
+      compensate,
+    }) => {
+      refIds.forEach((id) => pendingRecovery.add(id));
+      try {
+        const result = await perform();
+        refIds.forEach((id) => pendingRecovery.delete(id));
+        return result;
+      } catch (error) {
+        const rollback = await Promise.allSettled(refIds.map(compensate));
+        rollback.forEach((result, index) => {
+          if (result.status === 'fulfilled') pendingRecovery.delete(refIds[index]!);
+        });
+        throw error;
+      }
+    };
+    const { deps } = makeDeps({
+      addRef,
+      removeRefById,
+      withRefCompensation,
+      assertStillAllowed: () => {
+        if (blocked) throw new GrantPolicyError('该插件工具已被用户阻止');
+      },
+    });
+
+    const result = await grantAttachmentsToGhost(deps, {
+      ghostId: 'cindy-art',
+      urls: ['xdt-image://s1/a.png'],
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(liveRefs).toHaveLength(1);
+    expect(pendingRecovery).toEqual(liveRefs);
+
+    // 模拟同 owner DB 下次 ready 时 journal reconcile 的幂等重放。
+    await Promise.all([...pendingRecovery].map((id) => removeRefById(id)));
+    pendingRecovery.clear();
+    expect(liveRefs).toHaveLength(0);
+    expect(pendingRecovery).toHaveLength(0);
   });
 
   it('账本闸策略拒(GrantPolicyError)→ 整批拒零副作用,拒绝理由原样透出不落格式教学文案', async () => {

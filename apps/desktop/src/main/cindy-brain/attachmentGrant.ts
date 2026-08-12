@@ -58,7 +58,16 @@ export interface AttachmentGrantDeps {
     label?: string;
   }): Promise<void>;
   /** 精确回滚本次预留的授权行；不触碰旧交接或其它并发调用的引用。 */
-  removeRefById?(id: string): Promise<unknown>;
+  removeRefById(id: string): Promise<unknown>;
+  /**
+   * 在任何 addRef 前先持久化整批精确 id；perform 失败时即时补偿，
+   * 补偿失败也必须留下可由同 owner DB 重启重放的日志。
+   */
+  withRefCompensation<T>(params: {
+    refIds: readonly string[];
+    perform: () => Promise<T>;
+    compensate: (refId: string) => Promise<unknown>;
+  }): Promise<T>;
   /**
    * 调用方提供的同步实时授权断言。它会在每个异步持久化边界前后执行，
    * 确保工具在落仓期间切为 blocked 时不留下可读 grant ref。
@@ -102,13 +111,15 @@ export async function grantAttachmentsToGhost(
   if (urls.length > maxCount) {
     return { ok: false, message: `附件过多(单次上限 ${maxCount} 张)` };
   }
-  // 两阶段:先整批解析(纯校验零副作用,最常见的"地址不对"在这里整批拒,
-  // 不留半批授权),再逐张落库(读盘/落仓/记账,中途失败仍整批报错;已写入
-  // 的授权行无害——那张图确实是用户随消息给出的,留着不构成越权)。
+  // 三阶段:先整批解析(零副作用),再落 blob/元数据(仍未授权),
+  // 最后才在持久补偿日志保护下整批挂 ref。任何一张失败都不能留下
+  // 半批可读授权;孤立的内容寻址 blob 不构成插件读权。
   const resolved: ResolvedGrantSource[] = [];
   for (const url of urls) {
     try {
+      deps.assertStillAllowed?.();
       resolved.push(await deps.resolveImageUrl(url));
+      deps.assertStillAllowed?.();
     } catch (err) {
       deps.log?.warn('ghost attachment grant: resolve failed', {
         ghostId,
@@ -117,7 +128,7 @@ export async function grantAttachmentsToGhost(
       // 策略拒绝(格式对但不可过户)原样透出,别的落格式教学文案——
       // 让模型看到错误后能一次自纠,不用瞎猜。
       if (err instanceof GrantPolicyError) {
-        return { ok: false, message: err.message };
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: err.message };
       }
       return {
         ok: false,
@@ -125,8 +136,13 @@ export async function grantAttachmentsToGhost(
       };
     }
   }
-  const hashes: string[] = [];
-  const stagedRefIds: string[] = [];
+  const prepared: Array<{
+    id: string;
+    hash: string;
+    refKind: 'ghost-grant' | 'ghost-tool-grant';
+    refId: string;
+    originKind: 'user' | 'tool';
+  }> = [];
   try {
     for (const r of resolved) {
       deps.assertStillAllowed?.();
@@ -145,12 +161,10 @@ export async function grantAttachmentsToGhost(
       });
       deps.assertStillAllowed?.();
       const originKind = r.originKind ?? 'user';
-      // 在 await 前预留 id：即使 DB 已提交但 worker 回执丢失，回滚也只会
-      // 删除这次尝试的精确行，而不会误删此前已存在的授权。
-      const refId = randomUUID();
-      stagedRefIds.push(refId);
-      await deps.addRef({
-        id: refId,
+      prepared.push({
+        // 在首个 INSERT 前预留整批 id：即使 DB 已提交但 worker
+        // 回执丢失，持久补偿也只会删除这次尝试的精确行。
+        id: randomUUID(),
         hash: written.hash,
         // refKind 本身就是回退兼容边界:旧客户端只把 ghost-grant 当成人工
         // 永久授权，因而工具自动交接必须落到它不认识的独立类型。
@@ -158,29 +172,31 @@ export async function grantAttachmentsToGhost(
         refId: ghostId,
         originKind,
       });
-      deps.assertStillAllowed?.();
-      hashes.push(written.hash);
     }
+
+    // 整批授权行共用一个持久补偿事务。日志必须在第一个
+    // addRef 前落盘；中途 blocked、DB 丢 ACK、即时删除失败或进程
+    // 崩溃都能由同 owner 的下次 DB ready 精确补偿。
+    await deps.withRefCompensation({
+      refIds: prepared.map((grant) => grant.id),
+      compensate: deps.removeRefById,
+      perform: async () => {
+        for (const grant of prepared) {
+          deps.assertStillAllowed?.();
+          await deps.addRef(grant);
+          deps.assertStillAllowed?.();
+        }
+      },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const rollbackResults = await Promise.allSettled(
-      stagedRefIds.map((refId) => deps.removeRefById?.(refId)),
-    );
-    rollbackResults.forEach((result, index) => {
-      if (result.status === 'rejected') {
-        deps.log?.warn('ghost attachment grant: exact reference rollback failed', {
-          ghostId,
-          refId: stagedRefIds[index],
-          error: String(result.reason),
-        });
-      }
-    });
     deps.log?.warn('ghost attachment grant: import failed', { ghostId, error: message });
     if (err instanceof GrantPolicyError) {
       return { ok: false, errorCode: 'PERMISSION_DENIED', message: err.message };
     }
     return { ok: false, message: `附件过户失败:${message}` };
   }
+  const hashes = prepared.map((grant) => grant.hash);
   deps.log?.info('ghost attachment grant: done', { ghostId, count: hashes.length });
   return { ok: true, hashes };
 }

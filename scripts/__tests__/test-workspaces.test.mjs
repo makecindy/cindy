@@ -6,7 +6,9 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import manifest, {
+	desktopUnitPool,
 	desktopUnitWorkerCount,
+	nodeNeedsExperimentalStripTypes,
 	unitTestShardArgs,
 } from "../test-workspaces.config.mjs";
 import { nodeWebstorageEnabled } from "../shared/node-webstorage.mjs";
@@ -183,7 +185,7 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 		"run",
 		// win32 pins forks: threads segfaults the desktop suite there, and the
 		// LaunchServices churn that threads exists to avoid is macOS-only.
-		`--pool=${nodeWebstorageEnabled() || process.platform === "win32" ? "forks" : "threads"}`,
+		`--pool=${desktopUnitPool()}`,
 		`--maxWorkers=${desktopUnitWorkerCount()}`,
 		...unitTestShardArgs(),
 	]);
@@ -220,7 +222,7 @@ test("unit tier pins an explicit vitest pool, forks only by documented exception
 	// finalizers crashing in isolate teardown) and no launchservicesd exists
 	// for the churn to hurt.
 	const forksByException = [
-		...(nodeWebstorageEnabled() || process.platform === "win32"
+		...(desktopUnitPool() === "forks"
 			? ["apps/desktop"]
 			: []),
 		"packages/maker-core",
@@ -250,6 +252,29 @@ test("nodeWebstorageEnabled detects the globals that force the webstorage flag",
 	assert.equal(
 		nodeWebstorageEnabled({ localStorage: Object.create(null) }),
 		true,
+	);
+});
+
+test("desktop unit pool keeps strip-types Node 22 workers on forks", () => {
+	assert.equal(nodeNeedsExperimentalStripTypes("22.12.0"), true);
+	assert.equal(nodeNeedsExperimentalStripTypes("22.17.1"), true);
+	assert.equal(nodeNeedsExperimentalStripTypes("22.18.0"), false);
+	assert.equal(nodeNeedsExperimentalStripTypes("23.0.0"), false);
+	assert.equal(
+		desktopUnitPool({
+			nodeVersion: "22.17.1",
+			platform: "darwin",
+			globalObject: {},
+		}),
+		"forks",
+	);
+	assert.equal(
+		desktopUnitPool({
+			nodeVersion: "22.18.0",
+			platform: "darwin",
+			globalObject: {},
+		}),
+		"threads",
 	);
 });
 

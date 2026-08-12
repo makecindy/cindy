@@ -706,10 +706,15 @@ export function ToolsSection({
   };
 
   const handleSetToolMode = (toolName: string, mode: ToolApprovalMode) => {
-    const nextTools = { ...(configRef.current.tools ?? {}), [toolName]: mode };
-    const allSame = tools.every((tool) =>
-      (nextTools[tool.name] ?? toolModeFromConfig(configRef.current, tool.name)) === mode,
-    );
+    // custom 不能依赖全局继承。先把当前 manifest 所有工具的有效档位
+    // 实体化，再改目标行；否则从全局 blocked 切成 custom 时，未显式
+    // 入表的新工具会静默回落 needs-approval，等价于被意外解禁。
+    const nextTools = { ...(configRef.current.tools ?? {}) };
+    for (const tool of tools) {
+      nextTools[tool.name] = toolModeFromConfig(configRef.current, tool.name);
+    }
+    nextTools[toolName] = mode;
+    const allSame = tools.every((tool) => nextTools[tool.name] === mode);
     persist({ globalPolicy: allSame ? mode : 'custom', tools: nextTools });
   };
 

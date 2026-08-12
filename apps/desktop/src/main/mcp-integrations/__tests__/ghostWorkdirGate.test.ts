@@ -72,6 +72,7 @@ const resolvedAttachmentOrigins: Array<'user' | 'tool' | undefined> = [];
 vi.mock('electron', () => ({ app: { getPath: () => tmpUserData } }));
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(tmpUserData, ...parts),
+  activeOwnerScopeKey: () => 'local:test-owner:0',
 }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
@@ -146,6 +147,9 @@ vi.mock('../../cindy-brain/openFileInstall.js', () => ({ handleIncomingCindyFile
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionFsSnapshot: sessionSnapshotMock,
 }));
+vi.mock('../../localDb/client/current.js', () => ({
+  getDbClient: () => ({ drizzle: {} }),
+}));
 vi.mock('../../cindy-media/blobStore.js', () => ({ mimeForExt: () => 'image/png' }));
 vi.mock('../../cindy-media/ledger.js', () => ({
   hasRef: ledgerHasRefMock,
@@ -153,6 +157,15 @@ vi.mock('../../cindy-media/ledger.js', () => ({
   addRef: ledgerAddRefMock,
 }));
 vi.mock('../../cindy-media/attachmentGrantGate.js', () => ({ chatAttachmentOrigin: vi.fn() }));
+vi.mock('../../cindy-media/refCompensationJournal.js', () => ({
+  captureMediaRefCompensationScope: () => ({
+    journalDir: '/tmp/ref-compensation',
+    ownerStorageKey: '0'.repeat(20),
+    assertStillValid: () => undefined,
+  }),
+  withMediaRefCompensation: async ({ perform }: { perform: () => Promise<unknown> }) =>
+    perform(),
+}));
 vi.mock('../ghostAttachmentResolve.js', () => ({
   resolveGhostAttachmentUrl: resolveGhostAttachmentUrlMock,
 }));
@@ -674,6 +687,32 @@ describe('ghost_call 兜底拒绝', () => {
       message: '插件配置状态读取失败',
     });
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('授权策略读取抛错时 fail closed，不做 setup、附件过户或派发副作用', async () => {
+    const result = await makeDeps('claude-code', 'policy-read-failed', 'instance', {
+      resolveToolApprovalMode: () => {
+        throw new Error('permission store unreadable');
+      },
+    }).callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: ['/tmp/must-not-be-granted.png'],
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalledWith(
+      'ghost tool approval lookup failed at grant gate; denying call',
+      expect.objectContaining({
+        ghostId: 'art',
+        tool: 'run',
+        error: 'permission store unreadable',
+      }),
+    );
   });
 
   it('grant_only 在任何附件授权副作用前完成 setup gate，且忽略 tool', async () => {

@@ -910,6 +910,33 @@ describe('Ghost plugin detail sections', () => {
     expect(pressed[0].getAttribute('aria-label')).toBe('Needs approval');
   });
 
+  it('materializes inherited blocked tools before saving one customized row', async () => {
+    const setToolPermissions = stubToolPermissionApi({
+      config: {
+        globalPolicy: 'blocked',
+        tools: { tool_0: 'blocked' },
+      },
+    });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    fireEvent.click(within(firstGroup).getByRole('button', { name: 'Always allow' }));
+
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(1));
+    expect(setToolPermissions).toHaveBeenCalledWith('demo-ghost', {
+      globalPolicy: 'custom',
+      tools: {
+        tool_0: 'always-allow',
+        tool_1: 'blocked',
+        tool_2: 'blocked',
+        tool_3: 'blocked',
+        tool_4: 'blocked',
+        tool_5: 'blocked',
+        tool_6: 'blocked',
+      },
+    });
+  });
+
   it('collapses the tool list without losing the global policy control', () => {
     stubToolPermissionApi();
     render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
@@ -1022,7 +1049,9 @@ describe('Ghost plugin detail sections', () => {
     const lastConfig = setToolPermissions.mock.calls[1]?.[1] as {
       tools?: Record<string, unknown>;
     };
-    expect(lastConfig.tools).not.toHaveProperty('tool_0');
+    // 当前 manifest 的所有工具会被实体化；tool_0 必须是 ghost-b
+    // 自己的默认 needs-approval，不能泄入 ghost-a 的 blocked。
+    expect(lastConfig.tools).toHaveProperty('tool_0', 'needs-approval');
     expect(toastMocks.error).not.toHaveBeenCalled();
   });
 

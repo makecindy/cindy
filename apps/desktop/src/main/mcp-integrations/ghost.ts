@@ -32,6 +32,7 @@ import type {
 import type { PermissionMode } from '@cindy/maker-core';
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import {
   GrantPolicyError,
   grantAttachmentsToGhost,
@@ -81,6 +82,11 @@ import { handleIncomingCindyFile } from '../cindy-brain/openFileInstall.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
+import {
+  captureMediaRefCompensationScope,
+  withMediaRefCompensation,
+} from '../cindy-media/refCompensationJournal.js';
+import { getDbClient } from '../localDb/client/current.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
 import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
 import { createForgeIconConverter } from './forgeIconConversion.js';
@@ -774,9 +780,39 @@ async function grantAttachmentUrls(params: {
   // 读盘/查账。落任何持久副作用前再做一次无 await 的最终重判。
   const policyBlock = params.recheckPolicy?.();
   if (policyBlock) return policyBlock;
+  // 从此到整批 ref 事务收口始终固定同一 owner scope 与 DB
+  // 句柄。defaultDb 逐次现取会让切号窗口把旧请求落到新账号。
+  const grantRuntime = (() => {
+    try {
+      const ownerScopeKey = activeOwnerScopeKey();
+      return {
+        compensationScope: captureMediaRefCompensationScope(ownerScopeKey),
+        db: getDbClient().drizzle,
+      };
+    } catch (error) {
+      log.warn('ghost attachment grant: cannot capture stable owner transaction', {
+        ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  })();
+  if (!grantRuntime) {
+    return {
+      ok: false,
+      errorCode: 'PERMISSION_DENIED',
+      message: '附件授权环境未就绪，为了安全未执行工具，请重试。',
+    };
+  }
+  const { compensationScope, db } = grantRuntime;
   const assertStillAllowed = (): void => {
+    compensationScope.assertStillValid();
     const block = params.recheckPolicy?.();
     if (block) throw new GrantPolicyError(block.message);
+  };
+  const guardedCompensationScope = {
+    ...compensationScope,
+    assertStillValid: assertStillAllowed,
   };
   return grantAttachmentsToGhost(
     {
@@ -792,7 +828,7 @@ async function grantAttachmentUrls(params: {
         if (managed) return managed;
         const r = resolveGhostAttachmentUrl(url);
         if (!r.blobHash) return r;
-        const origin = await chatAttachmentOrigin(r.blobHash);
+        const origin = await chatAttachmentOrigin(r.blobHash, db);
         if (!origin) {
           // 交接记忆:该内容此前已过户给本意识时,模型拿总仓地址再引用
           // 直接放行——workdir 外确认流落仓后,模型手里的地址就是总仓
@@ -804,14 +840,14 @@ async function grantAttachmentUrls(params: {
             refKind: 'ghost-grant',
             refId: ghostId,
             originKind: 'user',
-          });
+          }, db);
           if (userGranted) {
             return { absPath: r.absPath, mimeType: r.mimeType, originKind: 'user' };
           }
           const toolGranted = await ledger.hasGhostToolGrant({
             hash: r.blobHash,
             ghostId,
-          });
+          }, db);
           if (toolGranted) {
             // The batch preflight above must have covered every tool grant.
             // If the ledger changes during the async resolve phase, fail
@@ -825,9 +861,16 @@ async function grantAttachmentUrls(params: {
       },
       readFile: (absPath) => fs.promises.readFile(absPath),
       writeBlob: (p) => blobStore.writeBlob(p),
-      recordBlob: (p) => ledger.recordBlob(p),
+      recordBlob: (p) => ledger.recordBlob(p, db),
       assertStillAllowed,
-      removeRefById: (id) => ledger.removeRefById(id),
+      removeRefById: (id) => ledger.removeRefById(id, db),
+      withRefCompensation: ({ refIds, perform, compensate }) =>
+        withMediaRefCompensation({
+          scope: guardedCompensationScope,
+          refIds,
+          perform,
+          compensate,
+        }),
       // 顺序调用幂等化:同 (指纹,意识,引用类型,来源) 已有交接行就不再插入。
       // 并发 check-then-insert 仍可能产生重复账行,但不会改变归属或扩权语义。
       addRef: async (p) => {
@@ -836,11 +879,11 @@ async function grantAttachmentUrls(params: {
           refKind: p.refKind,
           refId: p.refId,
           originKind: p.originKind,
-        });
+        }, db);
         // hasRef 本身是 async；返回后再读一次当前工具策略，不能把这段 I/O
         // 变成 blocked 后仍插入持久 grant ref 的窗口。
         assertStillAllowed();
-        if (!exists) await ledger.addRef(p);
+        if (!exists) await ledger.addRef(p, db);
       },
       log,
     },
@@ -1004,14 +1047,30 @@ export function getCindyGhostsMcpDeps(
       const blockedToolVerdict = (
         declaredTools: typeof target.manifest.tools,
         isGrantOnly: boolean,
-      ) =>
-        ghostToolBlockVerdict(
-          ghostId,
-          tool,
-          declaredTools,
-          isGrantOnly,
-          hostDeps.resolveToolApprovalMode ?? resolveToolApprovalMode,
-        );
+      ): GhostGrantPolicyBlock | null => {
+        try {
+          return ghostToolBlockVerdict(
+            ghostId,
+            tool,
+            declaredTools,
+            isGrantOnly,
+            hostDeps.resolveToolApprovalMode ?? resolveToolApprovalMode,
+          );
+        } catch (error) {
+          // 这是授权执法点,不是可选 UI 偏好。读取失败时无法证明
+          // 当前工具未被 blocked,setup/过户/出票副作用都必须 fail closed。
+          log.warn('ghost tool approval lookup failed at grant gate; denying call', {
+            ghostId,
+            tool,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: `无法读取 ${ghostId} 的工具 ${tool} 授权策略;为了安全未执行该工具,请重试或检查插件设置。`,
+          };
+        }
+      };
       // 用户图片过户:attachments 里的地址逐张落媒体总仓 + 记可读引用
       // (人工确认 = ghost-grant；Host 工具代办 = ghost-tool-grant),指纹注入
       // args.attachments 交给意识。任何一张失败整批拒(ATTACHMENT_INVALID),
