@@ -5085,7 +5085,10 @@ export function registerGhostIpc(): void {
       throwIpcError('INVALID_PARAMS', 'ids must be an array');
     }
     // 防御纵深:拒绝超长数组,防止受控 renderer 在导航期间发送百万级条目让主进程无界遍历。
-    const MAX_SETUP_PROFILE_IDS = 200;
+    // 上限以已装插件数量与 200 的较大值为准:正常请求不会超过已装数量,
+    // 已装超过 200 个插件时上限自动放宽,避免正常的 setup-profiles 请求被拒绝后
+    // renderer 清空全部 profile 导致所有卡片回退为默认 ready 颜色。
+    const MAX_SETUP_PROFILE_IDS = Math.max(availableGhosts().length, 200);
     if (ids.length > MAX_SETUP_PROFILE_IDS) {
       throwIpcError(
         'INVALID_PARAMS',
