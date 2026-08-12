@@ -403,6 +403,16 @@ describe('CINDY · ⑦ WCAG 复算 + U2 例外 allowlist + text-secondary 反向
     }
   });
 
+  it('2026-08 地板:light 信息类文字 × surface/surface-hover 对比度 ≥3.0(用户裁决,决策表 §9.4;dark 仍属 U2 例外不设此门)', () => {
+    // 覆盖面取 §9.4 声明的地板范围(页底/通用 hover);菜单 hover 上 2.90 为已登记 watch 项,不入门禁。
+    for (const id of ['text-secondary', 'cmd-palette-item-meta', 'sidebar-list-muted'] as const) {
+      for (const bgId of ['surface', 'surface-hover'] as const) {
+        const r = contrast(light[id]!, light[bgId]!);
+        expect(r, `light ${id} × ${bgId} 应 ≥3.0,实测 ${r.toFixed(2)}:1`).toBeGreaterThanOrEqual(3.0);
+      }
+    }
+  });
+
   it('反向冻结:text-secondary 必须恰等于定稿值 #888883(light,用户裁决 2026-08-13 暖化+抬至≥3.0,取代 2026-07-20 调参)/#6F6F6F(dark),RGB 归一', () => {
     expect(
       rgbEqual(toRgb(light['text-secondary']), toRgb('#888883'), 1),
