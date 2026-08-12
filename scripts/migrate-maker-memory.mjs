@@ -197,6 +197,15 @@ async function main() {
       }
     }
   }
+  // 迁移后复查宿主 (Greptile review on #2519 第十三轮: 进程快照通过后宿主
+  // 可能启动 — 迁移期间活动会话向已删除的原目录写入会 ENOENT)。CLI 侧无法
+  // 提供持续排他锁 (宿主 barrier 需 #2388 后集成), 至少提示用户复查/重跑。
+  if (await isHostRunning()) {
+    const warn = (msg) => (opts.json ? process.stderr : process.stdout).write(`${msg}\n`);
+    warn('⚠️ 检测到宿主 (Cindy) 在迁移期间启动 — 迁移中已删除/移动的分片若有');
+    warn('   活动会话写入, 记忆会写入失败 (ENOENT)。备份目录可回滚, 或重跑');
+    warn('   迁移以合并遗漏内容。');
+  }
   process.stdout.write(
     `RESULT ${JSON.stringify({ mode: 'apply', backupDir: opts.backupDir ?? null, shards: lines, conflicts })}\n`,
   );
@@ -220,10 +229,14 @@ async function isHostRunning() {
     if (process.platform === 'win32') {
       const r = await run('tasklist', ['/FO', 'CSV', '/NH']);
       out = r.stdout;
-      // Windows: CSV 行 → 精确匹配 "cindy.exe" / "desktop.exe" / "electron.exe"
-      // (image name 字段), 避免子串误命中无关进程
+      // Windows: CSV 行 → 精确匹配 "cindy.exe" / "cindydev.exe" /
+      // "desktop.exe" / "electron.exe" (image name 字段), 避免子串误命中
+      // 无关进程。CindyDev.exe = Windows dev build 可执行名 (Codex review
+      // on #2519 第十三轮)。
       const names = new Set(out.toLowerCase().match(/"?[a-z0-9_.\- ]+\.exe"?/g) ?? []);
-      return ['cindy.exe', 'desktop.exe', 'electron.exe'].some((p) => names.has(`"${p}"`));
+      return ['cindy.exe', 'cindydev.exe', 'desktop.exe', 'electron.exe'].some((p) =>
+        names.has(`"${p}"`),
+      );
     }
     const r = await run('ps', ['-eo', 'comm']);
     out = r.stdout;

@@ -588,7 +588,11 @@ async function findChangedAfterMerge(
     try {
       [srcBuf, dstBuf] = await Promise.all([fs.readFile(src), fs.readFile(dst)]);
     } catch {
-      continue; // 任一缺失 → 跳过 (源被并发删/目标异常, 交给别处兜底)
+      // 读取失败 (源被并发删/目标异常) → 无法证明源与目标一致, 保守记为
+      // changed → 调用方保留源目录 (Greptile review on #2519 第十三轮:
+      // 跳过会删掉未经验证的最新记忆)
+      changed.push(m.filename);
+      continue;
     }
     if (!srcBuf.equals(dstBuf)) changed.push(m.filename);
   }

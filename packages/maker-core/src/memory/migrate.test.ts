@@ -554,6 +554,44 @@ describe('runLegacyShardMigration — 执行', () => {
     }
   });
 
+  it('findChangedAfterMerge 读取失败 → 视为 changed, 保留源目录 (Greptile 第十三轮)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+
+    await makeShard(mainDir, { absPath: mainRepo, files: { 'feedback_a.md': 'X' } });
+    const wtPath = await makeShard(wtDir, {
+      absPath: worktree,
+      files: { 'feedback_a.md': 'X' },
+    });
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    // 模拟内容复查读目标失败 (源被并发删/目标异常) — 无法证明一致时必须
+    // 保留源目录, 而不是跳过校验删掉未验证的最新记忆
+    const origReadFile = fs.readFile.bind(fs);
+    let reads = 0;
+    // @ts-expect-error 测试注入
+    fs.readFile = async (...args) => {
+      const [p] = args;
+      if (typeof p === 'string' && p.endsWith('feedback_a.md')) {
+        reads += 1;
+        // mergeFilesInto 内比较读源+目标 (前 2 次) 正常; findChangedAfterMerge
+        // 内容复查 (第 3 次起) 抛错 → 触发 catch → changed
+        if (reads >= 3) throw new Error('ENOENT: simulated read failure');
+      }
+      return origReadFile(...args);
+    };
+    try {
+      const result = await runLegacyShardMigration(plan);
+      expect(result.results[0].error).toContain('updated after copy');
+      // 源目录保留
+      await expect(fs.stat(wtPath)).resolves.toBeTruthy();
+    } finally {
+      fs.readFile = origReadFile;
+    }
+  });
+
   it('rename 后最终复查检测内容更新 → 恢复原目录 (Greptile/Codex 第七轮)', async () => {
     const mainRepo = path.join(tmpRoot, 'repo');
     const worktree = path.join(tmpRoot, 'repo-wt');
