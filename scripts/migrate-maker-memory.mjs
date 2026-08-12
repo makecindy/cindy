@@ -221,8 +221,14 @@ async function isHostRunning() {
       out = r.stdout;
     }
     const lower = out.toLowerCase();
-    // Cindy 桌面应用: 主进程名 (cindy / desktop), Electron 子进程 (electron)
-    return ['cindy.exe', 'cindy ', 'desktop.exe', 'electron.exe'].some((p) => lower.includes(p));
+    // Cindy 桌面应用进程名 (跨平台):
+    //  - Windows: tasklist CSV → "cindy.exe" / "desktop.exe" / "electron.exe"
+    //  - macOS/Linux: ps -eo comm → 裸名 "cindy" / "desktop" / "electron"
+    //    (CindyDev / Electron 变体也命中) — 用子串包含而非精确匹配,
+    //    Greptile/Codex review on #2519 第十轮
+    return ['cindy.exe', 'cindydev', 'desktop.exe', 'electron.exe', 'electron', 'desktop'].some(
+      (p) => lower.includes(p),
+    );
   } catch {
     return false; // 检测工具缺失 → 不阻塞
   }

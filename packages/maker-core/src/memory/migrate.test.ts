@@ -390,6 +390,26 @@ describe('runLegacyShardMigration — 执行', () => {
     expect(await fs.readFile(path.join(target, 'notes.md'), 'utf8')).toContain('重要内容');
   });
 
+  it('只有非 Markdown 遗留文件 (notes.txt) 的分片不按空删 (Codex 第十轮)', async () => {
+    const mainRepo = path.join(tmpRoot, 'repo');
+    const worktree = path.join(tmpRoot, 'repo-wt');
+    const mainDir = sanitizeWorkdir(mainRepo);
+    const wtDir = sanitizeWorkdir(worktree);
+    const wtPath = await makeShard(wtDir, { absPath: worktree });
+    // 只有非 Markdown 遗留内容, 无合法分片
+    await fs.writeFile(path.join(wtPath, 'notes.txt'), '手写笔记 txt', 'utf8');
+
+    const plan = await planLegacyShardMigration(memoryRoot, fakeResolver(mainRepo, worktree));
+    // 不进 emptyToDelete (会递归删掉 notes.txt), 归入 mergeCandidates
+    expect(plan.emptyToDelete).toHaveLength(0);
+    expect(plan.mergeCandidates).toHaveLength(1);
+    const result = await runLegacyShardMigration(plan);
+    // canonical 不存在 → rename 快路径: 整个目录 (含 notes.txt) 搬进 canonical
+    expect(result.results[0].action).toBe('renamed');
+    const target = path.join(memoryRoot, mainDir);
+    expect(await fs.readFile(path.join(target, 'notes.txt'), 'utf8')).toContain('txt');
+  });
+
   it('.xdt-worktrees 旧形态同样静态推导 (Codex 第二轮: 品牌迁移前布局)', async () => {
     const mainRepo = path.join(tmpRoot, 'repo');
     const archivedWt = path.join(mainRepo, '.xdt-worktrees', 'feat-x', 'apps', 'a');

@@ -185,28 +185,30 @@ export async function planLegacyShardMigration(
       recordCount: 0,
     };
 
-    // 统计合法分片数 + 未识别 .md 文件 (数据保全: 只有未识别文件的目录
-    // 不是「空」— 删掉会永久丢失用户内容, Greptile review on #2519 第二轮)
+    // 统计合法分片数 + 未识别遗留内容 (数据保全: 只有遗留文件 (含非
+    // Markdown) 的目录不是「空」— 删掉会永久丢失用户内容; Greptile review
+    // on #2519 第二轮 + Codex 第十轮: 只含 notes.txt/data.yaml 的分片同样
+    // 不能按空删)。
     let files: string[];
     try {
       files = await fs.readdir(dir);
     } catch {
       files = [];
     }
-    let hasUnrecognizedMd = false;
+    let hasUnrecognizedContent = false;
     for (const f of files) {
       if (parseFilename(f)) {
         info.recordCount += 1;
-      } else if (f.endsWith('.md') && f !== 'MEMORY.md') {
-        hasUnrecognizedMd = true;
+      } else if (f !== 'MEMORY.md' && f !== 'meta.json' && f !== 'fts.db') {
+        hasUnrecognizedContent = true;
       }
     }
 
     plan.all.push(info);
     if (!isLegacy) continue;
-    // recordCount === 0 但存在未识别 .md → 不按空删 (内容可能就在里面),
+    // recordCount === 0 但存在未识别遗留内容 → 不按空删 (内容可能就在里面),
     // 归入 mergeCandidates 走慢路径合并 (那边有未识别文件保留源目录的保护)
-    if (info.recordCount === 0 && !hasUnrecognizedMd) {
+    if (info.recordCount === 0 && !hasUnrecognizedContent) {
       plan.emptyToDelete.push(info);
     } else {
       plan.mergeCandidates.push(info);
