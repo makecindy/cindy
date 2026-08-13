@@ -3497,24 +3497,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       );
     },
     onTerminal: ({ turnGeneration, event, isCurrentGeneration }) => {
-      if (session.remoteHostId) return;
-      const turnLeaseId = providerTurnLeaseId(session.instanceId, turnGeneration);
       const isSilentStop =
         event.type === 'done' &&
         (event.data as { silentStop?: unknown } | null | undefined)?.silentStop === true;
-      if (isSilentStop && isCurrentGeneration) {
-        // The provider turn ended, but the product turn remains occupied while
-        // the bounded auto-resume decision runs. Its exact lease is either
-        // replaced by the next provider generation or released by settle.
-        const scheduled = silentStopTurnLeaseGate.schedule(session.id, event, turnLeaseId);
-        if (!scheduled) {
-          log.debug('ignored duplicate silent-stop terminal for the current turn', {
-            sessionId: session.id,
-            turnLeaseId,
-          });
-        }
-        return;
-      }
       if (event.source === 'codex' && !isSilentStop) {
         const attemptToken =
           typeof event.turnAttemptToken === 'number' ? event.turnAttemptToken : null;
@@ -3542,6 +3527,25 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             isCurrentGeneration,
           );
         }
+      }
+      // SSH-backed sessions intentionally skip the local turn-lease bookkeeping
+      // below, but their Codex lifecycle still owns the same durable recovery
+      // plan settlement. Keep this return after the generation-scoped terminal
+      // handling so remote successes seal the exact predecessor row as well.
+      if (session.remoteHostId) return;
+      const turnLeaseId = providerTurnLeaseId(session.instanceId, turnGeneration);
+      if (isSilentStop && isCurrentGeneration) {
+        // The provider turn ended, but the product turn remains occupied while
+        // the bounded auto-resume decision runs. Its exact lease is either
+        // replaced by the next provider generation or released by settle.
+        const scheduled = silentStopTurnLeaseGate.schedule(session.id, event, turnLeaseId);
+        if (!scheduled) {
+          log.debug('ignored duplicate silent-stop terminal for the current turn', {
+            sessionId: session.id,
+            turnLeaseId,
+          });
+        }
+        return;
       }
       if (isCurrentGeneration) silentStopTurnLeaseGate.supersede(session.id);
       void sessionTurnLeaseTracker.markTurnEnded(session.id, turnLeaseId);
@@ -10956,11 +10960,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       publishUiContinuation(sessionId, clientId);
     },
-    // 新消息进队 → 作废该会话的待续跑记账(渠道那条旧消息已被别的内容取代)。
-    // 用 enqueue 入口而不是消息文本: 零产出重试重发的是原文, 文本上无从区分,
-    // 而它走 unshift 不经这里, 于是不会把自己的回流作废掉。
+    // 新消息进队 → 作废该会话的渠道待续跑记账(渠道那条旧消息已被别的内容取代)。
+    // 已 dispatch 的计划恢复结算必须继续归属于当前 provider generation；普通 follow-up
+    // 只会排在它后面，不能在这里拆掉。真正未派发的恢复项由下面两个精确 item/clientId
+    // 回调 cancelUndispatched，Stop/关闭则走显式 teardown。
     onUserEnqueue: (sessionId) => {
-      recoveryPlanSettlement.teardown(sessionId);
       autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);
       // The user turn can dispatch before the backoff callback observes that its
       // recovery was superseded. Fail the scheduler waiter synchronously so it
@@ -10969,7 +10973,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       publishUiSessionIntervention(sessionId);
     },
     onAutomaticEnqueue: (sessionId) => {
-      recoveryPlanSettlement.teardown(sessionId);
       // Orca 等自动输入会推进同一会话，必须撤销旧 retry owner，避免它消费这轮事件；
       // 但预算充值仍只发生在真人消息的持久化路径，自动输入不会重置 episode。
       autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);
