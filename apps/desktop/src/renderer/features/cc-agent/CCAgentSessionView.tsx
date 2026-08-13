@@ -701,7 +701,6 @@ export function CCAgentSessionView({
     ownsRoute ||
     (Boolean(sessionId) &&
       viewVisible &&
-      !orcaMode &&
       navigationMode !== 'split-pane' &&
       navigationMode !== 'sidebar-embedded');
   const showComposerControlledBanner = ownsRoute || showControlledBanner;

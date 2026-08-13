@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   reload: vi.fn(),
   /** Which rule the six task keys follow; drives whether they are clickable. */
   agentSource: 'recent' as string,
+  layout: null as ReturnType<typeof createWorkLouderCodexDefaultSettings>['layout'] | null,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -31,6 +32,7 @@ vi.mock('@/hooks/useWorkLouderCodex', () => ({
         ...createWorkLouderCodexDefaultSettings(),
         lightingBrightness: 70,
         agentSource: mocks.agentSource,
+        layout: mocks.layout ?? createWorkLouderCodexDefaultSettings().layout,
       },
       agentSlots: Array.from({ length: 6 }, (_, slot) => ({
         slot,
@@ -65,6 +67,7 @@ describe('WorkLouderCodexSettings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.agentSource = 'recent';
+    mocks.layout = createWorkLouderCodexDefaultSettings().layout;
   });
 
   it('renders a keyboard-shortcuts entry with live connection status', () => {
@@ -246,6 +249,13 @@ describe('WorkLouderCodexSettings', () => {
   });
 
   it('keeps existing single keys when only the microphone split is saved', () => {
+    mocks.layout = {
+      ...createWorkLouderCodexDefaultSettings().layout,
+      slots: {
+        ...createWorkLouderCodexDefaultSettings().layout.slots,
+        ACT10: { keycapId: 'FAST', action: { type: 'command', commandId: 'newTask' } },
+      },
+    };
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /^MIC/ }));
@@ -264,7 +274,10 @@ describe('WorkLouderCodexSettings', () => {
       layout: expect.objectContaining({
         separateMicrophoneKeys: true,
         slots: expect.objectContaining({
-          ACT10: expect.objectContaining({ keycapId: 'MIC1' }),
+          ACT10: expect.objectContaining({
+            keycapId: 'FAST',
+            action: { type: 'command', commandId: 'newTask' },
+          }),
           ACT11: expect.objectContaining({ keycapId: 'EMPT1' }),
           ACT10_ACT11: expect.objectContaining({ keycapId: 'MIC' }),
         }),

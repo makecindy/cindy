@@ -227,17 +227,17 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
       sourceSlot,
       editingSeparateMicrophoneKeys,
     );
+    const previous = settings.layout.slots[sourceSlot];
+    const draftChanged =
+      previous.keycapId !== keycapId ||
+      JSON.stringify(previous.action) !== JSON.stringify(editingAction);
     const nextKeycapId = compatibleKeycapForSlot(slot, keycapId);
     const nextAction = isWorkLouderCodexMicrophoneKeycap(nextKeycapId) ? null : editingAction;
     patchLayout((layout) => {
-      const previous = layout.slots[sourceSlot];
-      const assignmentChanged =
-        previous.keycapId !== nextKeycapId ||
-        JSON.stringify(previous.action) !== JSON.stringify(nextAction);
       layout.separateMicrophoneKeys = editingSeparateMicrophoneKeys;
       // Crossing merged/split changes which slot is visible. Keep the newly
       // revealed keys as they were unless this save also changed the keycap.
-      if (slot === sourceSlot || assignmentChanged) {
+      if (slot === sourceSlot || draftChanged) {
         applyCommandKeycap(layout, slot, nextKeycapId);
         layout.slots[slot].action = nextAction;
       }
