@@ -28,18 +28,27 @@ export function useChatEmbedding(): {
 
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.maker.chatEmbeddingGet()
-      .then((settings) => {
-        if (cancelled) return;
+    let refreshVersion = 0;
+    const refresh = async () => {
+      const version = ++refreshVersion;
+      try {
+        const settings = await window.electronAPI.maker.chatEmbeddingGet();
+        if (cancelled || version !== refreshVersion) return;
         setChatEmbeddingEnabled(settings.enabled);
-        setEnabledState(settings.enabled);
         setIsCustomized(Boolean(settings.isCustomized));
-      })
-      .catch(() => undefined);
+      } catch {
+        // Main may still be starting; the next provider change or mount retries.
+      }
+    };
     const unsubscribe = subscribeChatEmbeddingEnabled(setEnabledState);
+    const unsubscribeProviders = window.electronAPI.maker.onProvidersChanged(() => {
+      void refresh();
+    });
+    void refresh();
     return () => {
       cancelled = true;
       unsubscribe();
+      unsubscribeProviders();
     };
   }, []);
 

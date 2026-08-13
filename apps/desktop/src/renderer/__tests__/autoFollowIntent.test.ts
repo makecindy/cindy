@@ -174,6 +174,7 @@ describe('resolveRenderPinDecision', () => {
     expect(resolveRenderPinDecision({
       restoring: true,
       newUserSend: true,
+      sentFromThisRenderer: true,
       nearBottom: false,
     })).toEqual({ clearRestoring: true, pinToBottom: true });
   });
@@ -182,6 +183,7 @@ describe('resolveRenderPinDecision', () => {
     expect(resolveRenderPinDecision({
       restoring: true,
       newUserSend: false,
+      sentFromThisRenderer: false,
       nearBottom: false,
     })).toEqual({ clearRestoring: false, pinToBottom: false });
   });
@@ -190,11 +192,42 @@ describe('resolveRenderPinDecision', () => {
     expect(resolveRenderPinDecision({
       restoring: false,
       newUserSend: false,
+      sentFromThisRenderer: false,
       nearBottom: true,
     })).toEqual({ clearRestoring: false, pinToBottom: true });
     expect(resolveRenderPinDecision({
       restoring: false,
       newUserSend: false,
+      sentFromThisRenderer: false,
+      nearBottom: false,
+    })).toEqual({ clearRestoring: false, pinToBottom: false });
+  });
+
+  // #2194: IM 渠道 / 手机端 / 定时任务注入的 user 消息没有本端发送意图，
+  // 不应夺走视口——按普通新内容处理（贴底才跟随）。
+  it('externally injected user message does not steal a scrolled-up viewport', () => {
+    expect(resolveRenderPinDecision({
+      restoring: false,
+      newUserSend: true,
+      sentFromThisRenderer: false,
+      nearBottom: false,
+    })).toEqual({ clearRestoring: false, pinToBottom: false });
+  });
+
+  it('externally injected user message still follows while near the bottom', () => {
+    expect(resolveRenderPinDecision({
+      restoring: false,
+      newUserSend: true,
+      sentFromThisRenderer: false,
+      nearBottom: true,
+    })).toEqual({ clearRestoring: false, pinToBottom: true });
+  });
+
+  it('externally injected user message does not take ownership from a restored anchor', () => {
+    expect(resolveRenderPinDecision({
+      restoring: true,
+      newUserSend: true,
+      sentFromThisRenderer: false,
       nearBottom: false,
     })).toEqual({ clearRestoring: false, pinToBottom: false });
   });

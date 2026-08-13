@@ -149,15 +149,21 @@ function flatten(obj, prefix, out) {
 
 /**
  * 加载一个 locale 的全部文案。
- * key 前缀区分来源,便于 exempt 精确定位:desktop:a.b / mobile/session:x.y
+ * key 前缀区分来源,便于 exempt 精确定位:desktop:a.b /
+ * desktop/namespace:a.b / mobile/session:x.y
  */
 function loadLocale(locale) {
   const out = new Map();
 
-  const desktopFile = path.join(DESKTOP_LOCALES, locale, 'common.json');
-  if (fs.existsSync(desktopFile)) {
-    for (const [k, v] of flatten(readJson(desktopFile), '', new Map())) {
-      out.set(`desktop:${k}`, v);
+  const desktopDir = path.join(DESKTOP_LOCALES, locale);
+  if (fs.existsSync(desktopDir)) {
+    for (const file of fs.readdirSync(desktopDir).sort()) {
+      if (!file.endsWith('.json')) continue;
+      const ns = file.slice(0, -'.json'.length);
+      const source = ns === 'common' ? 'desktop' : `desktop/${ns}`;
+      for (const [k, v] of flatten(readJson(path.join(desktopDir, file)), '', new Map())) {
+        out.set(`${source}:${k}`, v);
+      }
     }
   }
 

@@ -196,9 +196,9 @@ describe('未知 group 的例外只限用户供应商', () => {
     expect(ids).toEqual(['gpt-4o-audio-preview', 'flux-image-x']);
   });
 
-  it('builtin 网关补的 custom:xd 未知组**不**豁免:无分组下发的图像模型仍被硬排除', () => {
-    // active-catalog 对缺 group 的网关条目补 `custom:xd`(见 active-catalog.ts)——
-    // 若无条件放行未知组,这类图像/音频模型会绕过能力分类重新漏进对话清单。
+  it('builtin 网关显式下发的 custom:xd 未知组**不**豁免:图像模型仍被硬排除', () => {
+    // 即使服务端显式下发未知组,也不能像用户自定义供应商一样获得豁免；否则这类
+    // 图像/音频模型会绕过能力分类重新漏进对话清单。
     const views = buildRegistry(
       {
         providers: [

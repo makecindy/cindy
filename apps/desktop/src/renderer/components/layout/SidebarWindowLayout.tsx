@@ -24,7 +24,7 @@
  * 来源路由到被控端。
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PanelRight } from 'lucide-react';
 
@@ -37,15 +37,21 @@ import {
   getBucket,
 } from '@/features/right-sidebar/store';
 import { WindowControls } from '@/components/title-bar/WindowControls';
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
+import { useLocale } from '@/hooks/useLocale';
 import { createLogger } from '@/lib/logger';
+import { makerChatStore } from '@/lib/makerChatStore';
+import { GhostMediaLightboxHost } from '@/cindy-brain/GhostMediaLightboxHost';
 import {
   ensureGhostPanelsRegistered,
   useGhostPanelsSync,
 } from '@/cindy-brain/ghostPanels';
 
 const log = createLogger('SidebarWindowLayout');
+
+const SIDEBAR_CONTEXT_REFRESH_RETRY_DELAYS_MS = [250, 750] as const;
 
 interface SidebarWindowContext {
   sessionId: string | null;
@@ -57,29 +63,44 @@ interface SidebarWindowContext {
 
 export function SidebarWindowLayout() {
   const { t } = useTranslation();
+  const { effectiveLocale, setLocale } = useLocale();
   useDeviceLinkRemoteProjects();
   // 意识面板注册:子窗口没有 LayoutRoot,必须自行初始化 ghost 面板注册表
   // 并订阅 ghosts:changed(停靠形态所需;历史持久化的 ghost 页签也靠它识别 kind)。
   ensureGhostPanelsRegistered();
   useGhostPanelsSync();
+  useEffect(() => {
+    // 子窗口需要实时事件来维护面板内容，但认证失败后的凭证读取、会话重启与消息重发
+    // 必须只由主 renderer 执行，避免多个 renderer 对同一远程任务并发重试。
+    makerChatStore.initGlobalListeners({ ownsRemoteAuthRetry: false });
+  }, []);
   const isMac = window.electronAPI?.platform === 'darwin';
   const [ctx, setCtx] = useState<SidebarWindowContext | null>(null);
+  // 预热窗口初始隐藏；由 main 的 visibility push 驱动 Shell 内各子面板暂停/恢复。
+  const [windowVisible, setWindowVisible] = useState(false);
+  const visibilityRevisionRef = useRef(0);
+  const contextRevisionRef = useRef(0);
+  const presentationReadySentRef = useRef(false);
+  // 复用隐藏窗口时，Chromium 可能保留上一次关闭按钮的 focus / :hover 状态。
+  // 与资源用量窗口一致，隐藏时重挂载 chrome，确保再次显示从干净状态开始。
+  const [windowChromeRevision, setWindowChromeRevision] = useState(0);
 
-  // mount:拉一次 context + 订阅跟随推送 + ready 握手。
+  // mount:拉一次 context + 订阅跟随推送 + renderer-ready 握手。
   useEffect(() => {
     let cancelled = false;
     void window.electronAPI.rightSidebarWindow
       .getContext()
       .then((initial) => {
-        // 订阅推送里可能先到更新 —— 已有值时不用 stale 的 getContext 结果覆盖
         if (!cancelled) setCtx((prev) => prev ?? initial);
       })
       .catch((err) => log.warn('getContext failed', err));
     const offCtx = window.electronAPI.rightSidebarWindow.onContextChanged((next) => {
+      contextRevisionRef.current += 1;
       setCtx(next);
     });
-    void window.electronAPI.rightSidebarWindow.ready().catch((err) => {
-      log.warn('ready handshake failed', err);
+    // renderer-ready:Shell 已挂载,controller 可知 React 组件树就绪。
+    void window.electronAPI.rightSidebarWindow.rendererReady().catch((err) => {
+      log.warn('renderer-ready handshake failed', err);
     });
     return () => {
       cancelled = true;
@@ -87,22 +108,118 @@ export function SidebarWindowLayout() {
     };
   }, []);
 
+  useEffect(() => {
+    return window.electronAPI.onLocaleChanged?.((locale) => {
+      if (locale !== effectiveLocale) setLocale(locale);
+    }) ?? undefined;
+  }, [effectiveLocale, setLocale]);
+
+  // presentation-ready 只代表轻量壳已经提交首帧。不能等待主窗 context:
+  // 隐藏预热阶段 Chromium 可能节流 renderer，而 context 又由主窗异步上推；
+  // 把二者绑定会形成「等 context 才 ready、等 ready 才显示」的循环，最终只能
+  // 命中 controller 的 5s fallback。真实任务上下文继续由 getContext / 推送恢复。
+  useEffect(() => {
+    if (presentationReadySentRef.current) return;
+    presentationReadySentRef.current = true;
+    void window.electronAPI.rightSidebarWindow.presentationReady().catch((err) => {
+      log.warn('presentation-ready handshake failed', err);
+    });
+  }, []);
+
+  // 隐藏/显示时刷新 context(主窗 session 可能已切换)并重置瞬时交互态。
+  // 重新显示不能先恢复交互再异步收 context：否则媒体预览等宿主能力会在短暂窗口内
+  // 沿用隐藏前的 session。这里先保持 Shell 不可交互并撤销旧 context，拿到 main 的
+  // 当前快照后才恢复；revision 防止快速 hide/show 时迟到的请求重新激活窗口。
+  useEffect(() => {
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+
+    const clearRetryTimer = () => {
+      if (retryTimer === null) return;
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    };
+
+    const refreshForRevision = (revision: number, contextRevision: number, attempt: number) => {
+      void window.electronAPI.rightSidebarWindow
+        .getContext()
+        .then((next) => {
+          if (cancelled || visibilityRevisionRef.current !== revision) return;
+          // 请求期间若已有更新的 context-changed 推送，以推送为准，避免迟到的
+          // invoke 快照把新会话覆盖回旧会话。
+          if (contextRevisionRef.current === contextRevision) setCtx(next);
+          setWindowVisible(true);
+        })
+        .catch((err) => {
+          if (cancelled || visibilityRevisionRef.current !== revision) return;
+          log.warn('refresh context on show failed', { err, attempt });
+          if (contextRevisionRef.current !== contextRevision) {
+            // A newer push won the race, so its context is safe to reveal.
+            setWindowVisible(true);
+            return;
+          }
+          const delay = SIDEBAR_CONTEXT_REFRESH_RETRY_DELAYS_MS[attempt];
+          if (delay === undefined) {
+            // Keep the shell visible as a safe placeholder for recovery, but
+            // never expose the previous session after all refresh attempts
+            // fail. A later context-changed push can populate the shell
+            // without requiring another native visibility transition.
+            setCtx(null);
+            setWindowVisible(true);
+            return;
+          }
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            refreshForRevision(revision, contextRevision, attempt + 1);
+          }, delay);
+        });
+    };
+
+    const offVisibility = window.electronAPI.rightSidebarWindow.onVisibilityChanged((payload) => {
+      const revision = ++visibilityRevisionRef.current;
+      if (!payload.visible) {
+        clearRetryTimer();
+        setWindowVisible(false);
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        setWindowChromeRevision((revision) => revision + 1);
+      } else {
+        clearRetryTimer();
+        setWindowVisible(false);
+        const contextRevision = contextRevisionRef.current;
+        // controller 在发送 visible:true 前已经切换为可见态，getContext 此时返回
+        // main 缓存的最新快照；与单向 refresh push 相比，可明确等待本轮刷新完成。
+        refreshForRevision(revision, contextRevision, 0);
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      clearRetryTimer();
+      offVisibility();
+    };
+  }, []);
+
+  // ctx 同时是 keep-alive 宿主：隐藏期间保留旧 session，让 webview / terminal / review
+  // 等标签主体继续挂载，只通过 shellVisible 暂停其工作。涉及用户操作的宿主能力
+  // 必须另行受 windowVisible 门控，不能把挂载上下文当成交互授权。
   const sessionId = ctx?.available ? ctx.sessionId : null;
+  const interactiveSessionId = windowVisible ? sessionId : null;
 
   // agent tab-op 触发的可见性请求(本窗口内 rsbBrowserBridge 派发):
   //  - 'close'(最后一个 tab 被关)且目标是当前会话 → 收起 = 关本窗口
   //  - 'open' → no-op(窗口已开);异会话请求忽略(tab 已入库,切过去自然可见)
   useEffect(() => {
     return onRequestRightSidebarVisibility((visibility, opts) => {
-      const target = opts.sessionId ?? sessionId;
-      if (!target || target !== sessionId) return;
+      const target = opts.sessionId ?? interactiveSessionId;
+      if (!target || target !== interactiveSessionId) return;
       if (visibility === 'close') {
         void window.electronAPI.rightSidebarWindow.close().catch((err) => {
           log.warn('close via visibility request failed', err);
         });
       }
     });
-  }, [sessionId]);
+  }, [interactiveSessionId]);
 
   // 主窗命令转发:
   // - open-terminal 快捷键:必须先 hydrate 再 add/focus,语义对齐 MainLayout。
@@ -124,10 +241,10 @@ export function SidebarWindowLayout() {
   // 声明壳层所有权 —— App 根的 useCloseWindowFallbackShortcut 让路给本消费点。
   useCloseShortcutShellOwner();
   useAppShortcut('close-tab-or-window', () => {
-    if (sessionId) {
-      const bucket = getBucket(sessionId);
+    if (interactiveSessionId) {
+      const bucket = getBucket(interactiveSessionId);
       if (bucket.activeTabId) {
-        void closeTab(sessionId, bucket.activeTabId).catch((err) => {
+        void closeTab(interactiveSessionId, bucket.activeTabId).catch((err) => {
           log.warn('close tab via shortcut failed', err);
         });
         return true;
@@ -157,12 +274,11 @@ export function SidebarWindowLayout() {
           </span>
         </div>
         <div
-          className="flex shrink-0 items-center gap-1 pr-2"
+          className="flex shrink-0 items-center gap-0.5 pr-2"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           {/* 合并回主窗口:关偏好 + 关本窗,主窗恢复内嵌展开 */}
-          <button
-            type="button"
+          <ChromeIconButton
             onClick={() => {
               void window.electronAPI.rightSidebarWindow.setDetached(false).catch((err) => {
                 log.warn('merge back failed', err);
@@ -170,18 +286,23 @@ export function SidebarWindowLayout() {
             }}
             title={t('rightSidebar.window.mergeBack')}
             aria-label={t('rightSidebar.window.mergeBack')}
-            className="inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-12 text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
           >
             <PanelRight size={14} />
-            <span>{t('rightSidebar.window.mergeBack')}</span>
-          </button>
+          </ChromeIconButton>
         </div>
         {!isMac && (
           <div
             className="flex h-full shrink-0 items-center"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            <WindowControls />
+            <WindowControls
+              key={windowChromeRevision}
+              onClose={() =>
+                window.electronAPI.rightSidebarWindow.close().catch((err) => {
+                  log.warn('close window via title bar failed', err);
+                })
+              }
+            />
           </div>
         )}
       </div>
@@ -195,16 +316,21 @@ export function SidebarWindowLayout() {
           workdir={ctx?.workdir ?? ''}
           remoteHostId={ctx?.remoteHostId ?? null}
           deviceLinkDeviceId={ctx?.deviceLinkDeviceId}
+          shellVisible={windowVisible}
           isMac={isMac}
         />
-        {!sessionId && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        {(!windowVisible || !sessionId) && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--panel-bg)]">
             <span className="text-13 text-[var(--text-tertiary)]">
               {t('rightSidebar.window.followPlaceholder')}
             </span>
           </div>
         )}
       </div>
+      <GhostMediaLightboxHost
+        key={interactiveSessionId ?? 'hidden'}
+        sessionId={interactiveSessionId ?? undefined}
+      />
     </div>
   );
 }

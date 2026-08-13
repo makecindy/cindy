@@ -2428,7 +2428,8 @@
       "toast": {
         "enabled": "채팅 기록 의미 색인이 활성화됨",
         "disabled": "채팅 기록 의미 색인이 중지됨",
-        "toggleFailed": "채팅 임베딩 전환 실패"
+        "unavailable": "이 계정 또는 지역에서는 채팅 기록 의미 색인을 사용할 수 없습니다",
+        "toggleFailed": "채팅 기록 의미 색인 전환 실패"
       }
     },
     "messageNavRail": {
@@ -4464,12 +4465,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "\"{{name}}\" 플러그인을 비활성화할까요?",
-      "body": "이 패널을 닫으면 플러그인 전체가 비활성화되어 패널과 기능이 중지됩니다. 사이드바의 '플러그인'에서 언제든지 다시 활성화할 수 있습니다.",
+      "body": "이 패널을 닫으면 플러그인이 비활성화되고 기능이 중지됩니다. 사이드바의 '플러그인'에서 언제든지 다시 활성화할 수 있습니다.",
       "confirm": "비활성화"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "메인 창으로 되돌리기",
+    "mergeBack": "메인 창으로 돌아가기",
     "unavailable": "이 플러그인 패널은 현재 사용할 수 없습니다"
   },
   "ghostPanelBubble": {
@@ -4479,6 +4480,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "오른쪽 사이드바",
+    "panelError": {
+      "title": "패널을 불러오지 못했습니다",
+      "description": "이 패널은 지금 표시할 수 없습니다. 다른 패널은 계속 사용할 수 있습니다.",
+      "reload": "패널 다시 불러오기"
+    },
     "window": {
       "title": "사이드바",
       "mergeBack": "메인 창으로 되돌리기",
@@ -4509,6 +4515,7 @@
         "ghostPanel": "플러그인 패널"
       },
       "controls": {
+        "showAria": "사이드바 표시",
         "maximizeAria": "사이드바 최대화",
         "restoreAria": "최대화 해제",
         "closeAria": "사이드바 닫기",

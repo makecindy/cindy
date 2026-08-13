@@ -1,4 +1,7 @@
-import { parseListModelsResponse } from '@cindy/model-providers';
+import {
+  MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  parseListModelsResponse,
+} from '@cindy/model-providers';
 import type {
   ModelAccessGatewayModel,
   ModelAccessModelsResponse,
@@ -8,6 +11,7 @@ import type { CredentialsSync } from './credentialsSync.js';
 
 /** Bound the shared single-flight so a black-hole connection cannot block later refreshes. */
 export const XD_MODELS_SYNC_TIMEOUT_MS = 20_000;
+export const XD_MODELS_SYNC_PATH = '/api/model-access/models?schemaVersion=3' as const;
 
 export type ModelsSyncPayloadParseResult =
   { ok: true; models: ModelAccessGatewayModel[] } | { ok: false; error: string };
@@ -20,6 +24,12 @@ export type ModelsSyncPayloadParseResult =
 export function parseModelsSyncPayload(value: unknown): ModelsSyncPayloadParseResult {
   const parsed = parseListModelsResponse(value);
   if (!parsed.ok) return parsed;
+  if (parsed.value.schemaVersion !== MODEL_ACCESS_CATALOG_SCHEMA_VERSION) {
+    return {
+      ok: false,
+      error: `response.schemaVersion must be ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION} for Desktop model sync`,
+    };
+  }
   const response: ModelAccessModelsResponse = parsed.value;
   return { ok: true, models: response.models };
 }
@@ -48,11 +58,11 @@ export function withModelsSyncOverallDeadline<T>(
 }
 
 export function buildModelsSyncRequest(baseUrl: string | (() => string)): {
-  path: '/api/model-access/models';
+  path: typeof XD_MODELS_SYNC_PATH;
   options: { baseUrl: string | (() => string); timeoutMs: number };
 } {
   return {
-    path: '/api/model-access/models',
+    path: XD_MODELS_SYNC_PATH,
     options: {
       baseUrl,
       timeoutMs: XD_MODELS_SYNC_TIMEOUT_MS,

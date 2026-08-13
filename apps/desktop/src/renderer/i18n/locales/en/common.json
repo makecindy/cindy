@@ -2429,7 +2429,8 @@
       "toast": {
         "enabled": "Chat semantic indexing enabled",
         "disabled": "Chat semantic indexing stopped",
-        "toggleFailed": "Failed to toggle chat embedding"
+        "unavailable": "Chat semantic indexing is unavailable for this account or region",
+        "toggleFailed": "Failed to toggle chat semantic indexing"
       }
     },
     "messageNavRail": {
@@ -4466,12 +4467,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "Disable \"{{name}}\"?",
-      "body": "Closing this panel disables the whole plugin — its panel and capabilities will pause. You can re-enable it anytime from Plugins in the sidebar.",
+      "body": "Closing this panel disables the plugin and pauses its capabilities. You can re-enable it anytime from Plugins in the sidebar.",
       "confirm": "Disable"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "Merge back into main window",
+    "mergeBack": "Return to main window",
     "unavailable": "This plugin panel is currently unavailable"
   },
   "ghostPanelBubble": {
@@ -4481,6 +4482,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "Right sidebar",
+    "panelError": {
+      "title": "Panel failed to load",
+      "description": "This panel is unavailable right now. Other panels are still available.",
+      "reload": "Reload panel"
+    },
     "window": {
       "title": "Sidebar",
       "mergeBack": "Merge back to main window",
@@ -4511,6 +4517,7 @@
         "ghostPanel": "Plugin panel"
       },
       "controls": {
+        "showAria": "Show sidebar",
         "maximizeAria": "Maximize sidebar",
         "restoreAria": "Restore sidebar",
         "closeAria": "Close sidebar",

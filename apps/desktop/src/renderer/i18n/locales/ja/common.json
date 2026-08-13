@@ -2428,7 +2428,8 @@
       "toast": {
         "enabled": "チャット履歴の意味索引を有効にしました",
         "disabled": "チャット履歴の意味索引を停止しました",
-        "toggleFailed": "チャット埋め込みの切り替えに失敗しました"
+        "unavailable": "このアカウントまたは地域ではチャット履歴の意味索引を利用できません",
+        "toggleFailed": "チャット履歴の意味索引の切り替えに失敗しました"
       }
     },
     "messageNavRail": {
@@ -4464,12 +4465,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "「{{name}}」を無効にしますか？",
-      "body": "このパネルを閉じるとプラグイン全体が無効になり、パネルと機能が停止します。サイドバーの「プラグイン」からいつでも再度有効にできます。",
+      "body": "このパネルを閉じるとプラグインが無効になり、機能が停止します。サイドバーの「プラグイン」からいつでも再度有効にできます。",
       "confirm": "無効にする"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "メインウィンドウに戻す",
+    "mergeBack": "メインウィンドウに戻る",
     "unavailable": "このプラグインパネルは現在利用できません"
   },
   "ghostPanelBubble": {
@@ -4479,6 +4480,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "右サイドバー",
+    "panelError": {
+      "title": "パネルの読み込みに失敗しました",
+      "description": "このパネルは現在表示できません。他のパネルは引き続き利用できます。",
+      "reload": "パネルを再読み込み"
+    },
     "window": {
       "title": "サイドバー",
       "mergeBack": "メインウィンドウに戻す",
@@ -4509,6 +4515,7 @@
         "ghostPanel": "プラグインパネル"
       },
       "controls": {
+        "showAria": "サイドバーを表示",
         "maximizeAria": "サイドバーを最大化",
         "restoreAria": "最大化を解除",
         "closeAria": "サイドバーを閉じる",

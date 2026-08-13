@@ -1,12 +1,16 @@
 /** Cindy-owned durable Subagent workspace tab. */
 
+import { lazy } from 'react';
 import { Bot } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
-import { SubagentsBody } from './SubagentsBody';
+
+const SubagentsBody = lazy(() =>
+  import('./SubagentsBody').then((module) => ({ default: module.SubagentsBody })),
+);
 
 export interface SubagentsState {
   selectedRunId?: string | null;

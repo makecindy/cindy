@@ -2424,7 +2424,8 @@
       "toast": {
         "enabled": "对话记录语义索引已启用",
         "disabled": "对话记录语义索引已停止",
-        "toggleFailed": "切换对话嵌入失败"
+        "unavailable": "当前账号或地区暂不支持对话记录语义索引",
+        "toggleFailed": "切换对话记录语义索引失败"
       }
     },
     "messageNavRail": {
@@ -4460,12 +4461,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "停用「{{name}}」？",
-      "body": "关闭这个面板会停用整个插件，它的面板和能力都会暂停。之后可以随时在侧边栏「插件」里重新开启。",
+      "body": "关闭这个面板会停用插件并暂停其能力。你可以随时在侧边栏「插件」中重新启用。",
       "confirm": "停用"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "合并回主窗口",
+    "mergeBack": "返回主窗口",
     "unavailable": "该插件面板当前不可用"
   },
   "ghostPanelBubble": {
@@ -4475,6 +4476,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "右侧边栏",
+    "panelError": {
+      "title": "面板加载失败",
+      "description": "这个面板暂时无法显示，其他面板仍可继续使用。",
+      "reload": "重新加载面板"
+    },
     "window": {
       "title": "侧边栏",
       "mergeBack": "合并回主窗口",
@@ -4505,6 +4511,7 @@
         "ghostPanel": "插件面板"
       },
       "controls": {
+        "showAria": "显示侧栏",
         "maximizeAria": "最大化侧栏",
         "restoreAria": "退出最大化",
         "closeAria": "关闭侧栏",
