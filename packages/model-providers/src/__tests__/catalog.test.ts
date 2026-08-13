@@ -28,6 +28,7 @@ const DYNAMIC_PROVIDER_IDS = ['anthropic', 'openai', 'xd'] as const;
 
 /** xai 静态清单(唯一活在目录文件里的模型清单)。 */
 const EXPECTED_XAI_IDS = [
+  'xai/grok-4.6',
   'xai/grok-4.5',
   'xai/grok-4.3',
   'xai/grok-build-0.1',

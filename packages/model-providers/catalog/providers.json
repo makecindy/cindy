@@ -42,6 +42,17 @@
       "models": {
         "claude-code": [
           {
+            "id": "xai/grok-4.6",
+            "name": "Grok 4.6",
+            "group": "grok",
+            "sortOrder": 48,
+            "description": "xAI Grok 4.6 新旗舰,编码/agent/知识任务最强,500k 上下文(SuperGrok 订阅直连)",
+            "contextWindow": 500000,
+            "efforts": ["low", "medium", "high", "xhigh"],
+            "defaultEffort": "high",
+            "status": "active"
+          },
+          {
             "id": "xai/grok-4.5",
             "name": "Grok 4.5",
             "group": "grok",
@@ -137,6 +148,17 @@
           }
         ],
         "codex": [
+          {
+            "id": "xai/grok-4.6",
+            "name": "Grok 4.6",
+            "group": "grok",
+            "sortOrder": 48,
+            "description": "xAI Grok 4.6 新旗舰,编码/agent/知识任务最强,500k 上下文(SuperGrok 订阅直连)",
+            "contextWindow": 500000,
+            "efforts": ["low", "medium", "high", "xhigh"],
+            "defaultEffort": "high",
+            "status": "active"
+          },
           {
             "id": "xai/grok-4.5",
             "name": "Grok 4.5",
