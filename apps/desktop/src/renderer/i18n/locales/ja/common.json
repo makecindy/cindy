@@ -5565,6 +5565,7 @@
         "railFavorites": "お気に入り",
         "railAll": "すべて",
         "favoritesGroup": "お気に入り",
+        "authGroup": "ログイン済みアカウント",
         "addFavorite": "お気に入りに保存",
         "removeFavorite": "お気に入りから削除",
         "favoriteConfig": "保存した設定",

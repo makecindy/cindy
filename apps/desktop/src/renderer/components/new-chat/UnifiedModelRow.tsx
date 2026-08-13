@@ -145,13 +145,12 @@ export function UnifiedModelRow({
           />
         </span>
         <span
-          // 设计稿 .m-name:内容宽、不 grow —— 徽标/钱串紧贴模型名左排,
+          // 布局同设计稿 .m-name:内容宽、不 grow —— 徽标/钱串紧贴模型名左排,
           // 右侧三元组由 ml-auto 推到最右;空间不足时名字先收缩截断,title 给全名。
+          // 字号/字重**不跟设计稿的 13.5px/normal**,按旧选择器恢复(text-14 + medium):
+          // Chris 2026-08-13 实测裁决 —— 名字变小去粗后与描述行难以区分。
           title={entry.displayName}
-          className={cn(
-            'min-w-0 truncate text-13 leading-5 text-[var(--model-item-text)]',
-            selected ? 'font-medium' : 'font-normal',
-          )}
+          className="min-w-0 truncate text-14 font-medium leading-5 text-[var(--model-item-text)]"
         >
           {entry.displayName}
         </span>
@@ -293,9 +292,11 @@ export function UnifiedModelRow({
       {entry.description && (
         // 单行截断 + title 全文;宽度上限收紧到约等于最长模型名的量级(~30ch)——
         // 描述是辅助信息,不该比模型名更长地占据视线(2026-08-13 实测反馈)。
+        // 颜色按旧选择器恢复用 --text-secondary(同日裁决:tertiary 太淡看不清;
+        // 与名字的区分靠名字的 14px/medium,不靠把描述压淡)。
         <div
           title={entry.description}
-          className="min-w-0 max-w-[30ch] truncate pl-[26px] pt-px text-12 text-[var(--text-tertiary)]"
+          className="min-w-0 max-w-[30ch] truncate pl-[26px] pt-px text-12 leading-[1.4] text-[var(--text-secondary)]"
         >
           {entry.description}
         </div>

@@ -26,7 +26,6 @@ import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFly
 // ModelSelector 反过来也 import 本文件 —— ESM 循环 import 在这里安全:两边用到的都是
 // **函数声明**(提升),且只在 render 时求值,不在模块求值期互相读值。
 import type { ModelMemoryAccessors } from './ModelSelector';
-import { CATEGORY_LABEL_KEY } from './sourceSwitch';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions } from './useUnifiedRowActions';
@@ -298,11 +297,12 @@ export function UnifiedModelPanel({
       buildUnifiedListSections({
         entries,
         favorites,
+        providers,
         query,
         rail,
         ...(isDefaultSeed ? { isDefaultSeed } : {}),
       }),
-    [entries, favorites, isDefaultSeed, query, rail],
+    [entries, favorites, isDefaultSeed, providers, query, rail],
   );
 
   // 列表变化时只在选中行跑出可视区时做**最小滚动**(与既有面板同一条规则):
@@ -581,13 +581,18 @@ export function UnifiedModelPanel({
     });
   };
 
-  /** 小节标题:收藏 / 默认 / 服务端分组。三者都走 i18n,分组名另查 CATEGORY_LABEL_KEY。 */
+  /**
+   * 小节标题:收藏 / 默认 / 供应商分组(Chris 2026-08-13 裁决:按供应商,不按模型家族)。
+   * 「授权登录」合并组走 i18n,单供应商组直接用供应商名(providerLabel)。
+   */
   const sectionLabel = (section: (typeof sections)[number]): string =>
     section.kind === 'favorites'
       ? t('newChat.modelSelector.unified.favoritesGroup')
       : section.kind === 'defaults'
         ? t('newChat.modelSelector.unified.defaultsGroup')
-        : t(CATEGORY_LABEL_KEY[section.category ?? 'ungrouped']);
+        : section.group?.type === 'provider'
+          ? providerLabel(section.group.providerId)
+          : t('newChat.modelSelector.unified.authGroup');
 
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;

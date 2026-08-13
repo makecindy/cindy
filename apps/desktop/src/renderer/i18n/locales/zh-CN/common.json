@@ -5561,6 +5561,7 @@
         "railFavorites": "收藏",
         "railAll": "全部",
         "favoritesGroup": "收藏",
+        "authGroup": "授权登录",
         "addFavorite": "存为收藏",
         "removeFavorite": "取消收藏",
         "favoriteConfig": "收藏配置",

@@ -10,7 +10,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { UnifiedAgentCapability, UnifiedModelEntry } from '@cindy/model-providers';
+import type {
+  ProviderView,
+  UnifiedAgentCapability,
+  UnifiedModelEntry,
+} from '@cindy/model-providers';
 
 import {
   UNIFIED_FLYOUT_GAP,
@@ -63,6 +67,29 @@ function entryOf(over: Partial<UnifiedModelEntry> = {}): UnifiedModelEntry {
     ...over,
   };
 }
+
+/** 分组判据只读 id / auth.method / name,其余字段本层不消费 —— 最小夹具即可。 */
+function providerViewOf(id: string, method: 'oauth' | 'managed' | 'apiKey'): ProviderView {
+  return {
+    id,
+    name: id,
+    source: method === 'apiKey' ? 'user' : 'builtin',
+    agents: ['claude-code'],
+    auth: { method },
+    routing: {},
+    models: {},
+    connected: true,
+  } as unknown as ProviderView;
+}
+
+/** 与 entryOf 夹具们配套的供应商表:三家 OAuth 授权登录 + 网关 + 一个自定义。 */
+const PROVIDERS: readonly ProviderView[] = [
+  providerViewOf('anthropic', 'oauth'),
+  providerViewOf('openai', 'oauth'),
+  providerViewOf('xai', 'oauth'),
+  providerViewOf('xd', 'managed'),
+  providerViewOf('custom-a', 'apiKey'),
+];
 
 function favoriteOf(over: Partial<ModelFavoriteItem> = {}): ModelFavoriteItem {
   return {
@@ -254,6 +281,7 @@ describe('buildUnifiedListSections', () => {
   it('收藏区置顶,且不把模型本体从供应商组里移走', () => {
     const sections = buildUnifiedListSections({
       entries: [opus, gpt],
+      providers: PROVIDERS,
       favorites: [favoriteOf()],
       query: '',
       rail: { kind: 'all' },
@@ -269,14 +297,46 @@ describe('buildUnifiedListSections', () => {
     expect(modelRows.map((row) => row.entry.modelId)).toEqual(['claude-opus-5', 'gpt-5.5']);
   });
 
-  it('分组按 sortOrder 决定组内与组间顺序', () => {
+  it('分组按供应商:OAuth 来源合并「授权登录」组,网关与自定义各自成组(2026-08-13 裁决)', () => {
+    const xdModel = entryOf({
+      providerId: 'xd',
+      modelId: 'deepseek-v4-pro',
+      displayName: 'DeepSeek V4 Pro',
+      sortOrder: 1,
+    });
+    const customModel = entryOf({ providerId: 'custom-a', modelId: 'my-model' });
     const sections = buildUnifiedListSections({
-      entries: [gpt, opus],
+      entries: [opus, gpt, xdModel, customModel],
+      providers: PROVIDERS,
       favorites: [],
       query: '',
       rail: { kind: 'all' },
     });
-    expect(sections.map((section) => section.category)).toEqual(['anthropic', 'gpt']);
+    // 供应商决定价格:网关上的模型与订阅登录的模型绝不混进同一组。
+    expect(sections.map((section) => section.group)).toEqual([
+      { type: 'auth' },
+      { type: 'provider', providerId: 'xd' },
+      { type: 'provider', providerId: 'custom-a' },
+    ]);
+    expect(sections[0].rows.map((row) => row.entry.providerId)).toEqual(['anthropic', 'openai']);
+  });
+
+  it('供应商簇内按 sortOrder 排,簇间保持首见序(不做全局 sortOrder 混排)', () => {
+    const opusLate = entryOf({ modelId: 'claude-sonnet-5', sortOrder: 9 });
+    const opusEarly = entryOf({ sortOrder: 1 });
+    const sections = buildUnifiedListSections({
+      // openai 条目先出现 → openai 簇在前;anthropic 簇内 9/1 倒序入参。
+      entries: [gpt, opusLate, opusEarly],
+      providers: PROVIDERS,
+      favorites: [],
+      query: '',
+      rail: { kind: 'all' },
+    });
+    expect(sections[0].rows.map((row) => row.entry.modelId)).toEqual([
+      'gpt-5.5',
+      'claude-opus-5',
+      'claude-sonnet-5',
+    ]);
   });
 
   it('搜索命中名称 / id / 描述', () => {
@@ -284,6 +344,7 @@ describe('buildUnifiedListSections', () => {
     for (const query of ['opus', 'CLAUDE-OPUS', '长上下文']) {
       const sections = buildUnifiedListSections({
         entries: [described, gpt],
+        providers: PROVIDERS,
         favorites: [],
         query,
         rail: { kind: 'all' },
@@ -296,6 +357,7 @@ describe('buildUnifiedListSections', () => {
   it('rail 按供应商筛选时,收藏区也只留该来源', () => {
     const sections = buildUnifiedListSections({
       entries: [opus, gpt],
+      providers: PROVIDERS,
       favorites: [favoriteOf()],
       query: '',
       rail: { kind: 'provider', providerId: 'openai' },
@@ -307,6 +369,7 @@ describe('buildUnifiedListSections', () => {
   it('rail = 收藏时只出收藏区', () => {
     const sections = buildUnifiedListSections({
       entries: [opus, gpt],
+      providers: PROVIDERS,
       favorites: [favoriteOf()],
       query: '',
       rail: { kind: 'favorites' },
@@ -318,6 +381,7 @@ describe('buildUnifiedListSections', () => {
   it('收藏指向的模型当前不可路由时该条不显示(但不删条目)', () => {
     const sections = buildUnifiedListSections({
       entries: [gpt],
+      providers: PROVIDERS,
       favorites: [favoriteOf()],
       query: '',
       rail: { kind: 'all' },
@@ -328,6 +392,7 @@ describe('buildUnifiedListSections', () => {
   it('同模型多条收藏各占一行、锚点互不相同', () => {
     const sections = buildUnifiedListSections({
       entries: [opus],
+      providers: PROVIDERS,
       favorites: [
         favoriteOf({ uid: 'fav-1', effort: 'high' }),
         favoriteOf({ uid: 'fav-2', effort: 'low' }),
@@ -385,6 +450,7 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
   it('同引擎视图按**候选**过滤模型(能留在本会话引擎上的都算无损)', () => {
     const sections = buildUnifiedListSections({
       entries: [dual, codexOnly],
+      providers: PROVIDERS,
       favorites: [],
       query: '',
       rail: { kind: 'engine', agent: 'claude-code' },
@@ -403,6 +469,7 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
     });
     const sections = buildUnifiedListSections({
       entries: [dual],
+      providers: PROVIDERS,
       favorites: [favCc, favCodex],
       query: '',
       rail: { kind: 'engine', agent: 'claude-code' },
@@ -414,6 +481,7 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
   it('「全部」视图不做引擎过滤(跨引擎是显式入口)', () => {
     const sections = buildUnifiedListSections({
       entries: [dual, codexOnly],
+      providers: PROVIDERS,
       favorites: [],
       query: '',
       rail: { kind: 'all' },
@@ -458,14 +526,14 @@ describe('computeFlyoutPlacement', () => {
 
   it('默认贴面板左外侧,顶端跟随锚点行', () => {
     const placement = computeFlyoutPlacement({
-      anchor: { top: 240, bottom: 280, left: 410, right: 780 },
+      anchor: { top: 150, bottom: 190, left: 410, right: 780 },
       panel,
       size,
       viewport,
     });
     expect(placement.side).toBe('left');
     expect(placement.left).toBe(400 - UNIFIED_FLYOUT_GAP - 264);
-    expect(placement.top).toBe(240 - 12);
+    expect(placement.top).toBe(150 - 12);
   });
 
   it('左边放不下时翻到右侧', () => {
@@ -479,22 +547,35 @@ describe('computeFlyoutPlacement', () => {
     expect(placement.left).toBe(380 + UNIFIED_FLYOUT_GAP);
   });
 
-  it('垂直方向夹到视口安全区内', () => {
+  it('垂直钳制在面板内:底部行 → 与面板底对齐,顶部行不高过面板顶(设计稿 flyFinish)', () => {
+    // 锚点在面板底部附近:浮层底不越过面板底(500),top = 500 - 300 = 200。
     const low = computeFlyoutPlacement({
-      anchor: { top: 880, bottom: 900, left: 410, right: 780 },
+      anchor: { top: 470, bottom: 500, left: 410, right: 780 },
       panel,
       size,
       viewport,
     });
-    expect(low.top).toBe(900 - 300 - 8);
+    expect(low.top).toBe(500 - 300);
 
+    // 锚点在面板顶(带 rowOffset 会高过面板顶):钳回面板顶(100)。
     const high = computeFlyoutPlacement({
-      anchor: { top: 0, bottom: 40, left: 410, right: 780 },
+      anchor: { top: 100, bottom: 140, left: 410, right: 780 },
       panel,
       size,
       viewport,
     });
-    expect(high.top).toBe(8);
+    expect(high.top).toBe(100);
+  });
+
+  it('面板贴近屏幕边缘时视口安全区仍兜底', () => {
+    // 面板底伸到视口外:面板钳制想给 top=880-300=580… 视口钳制把它压回 900-300-8。
+    const placement = computeFlyoutPlacement({
+      anchor: { top: 860, bottom: 880, left: 410, right: 780 },
+      panel: { ...panel, top: 400, bottom: 1000 },
+      size,
+      viewport,
+    });
+    expect(placement.top).toBe(900 - 300 - 8);
   });
 
   it('两侧都放不下时仍留在视口内', () => {
@@ -603,6 +684,7 @@ describe('合并行:行身份 vs wire id', () => {
     });
     const sections = buildUnifiedListSections({
       entries: [merged],
+      providers: PROVIDERS,
       favorites: [legacy],
       query: '',
       rail: { kind: 'all' },
@@ -639,6 +721,7 @@ describe('默认种子置顶与原生底座排序', () => {
   it('默认种子提到独立小节,位置在收藏之下、普通分组之上,且不在原分组里重复', () => {
     const sections = buildUnifiedListSections({
       entries: [opus, gpt, seed],
+      providers: PROVIDERS,
       favorites: [favoriteOf()],
       query: '',
       rail: { kind: 'all' },
@@ -660,6 +743,7 @@ describe('默认种子置顶与原生底座排序', () => {
     const sections = buildUnifiedListSections({
       // 入参顺序:opus(native cc)在前,gpt(native codex)在后。
       entries: [opus, gpt],
+      providers: PROVIDERS,
       favorites: [],
       query: '',
       rail: { kind: 'engine', agent: 'codex' },
@@ -684,6 +768,7 @@ describe('默认种子置顶与原生底座排序', () => {
     });
     const mixed = buildUnifiedListSections({
       entries: [bothCandidates, gpt],
+      providers: PROVIDERS,
       favorites: [],
       query: '',
       rail: { kind: 'engine', agent: 'codex' },
@@ -698,6 +783,7 @@ describe('默认种子置顶与原生底座排序', () => {
   it('新会话全量视图不按原生底座重排(服务端编排说了算)', () => {
     const sections = buildUnifiedListSections({
       entries: [opus, gpt],
+      providers: PROVIDERS,
       favorites: [],
       query: '',
       rail: { kind: 'all' },

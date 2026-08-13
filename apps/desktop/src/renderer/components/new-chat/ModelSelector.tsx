@@ -2299,6 +2299,13 @@ function ModelSelectorContentView({
           ? !!codex.capabilities?.hasFastMode
           : !!pi.capabilities?.hasFastMode;
     return (
+      // 外层多包一层「百分比钳制」:面板列自身的 max-h 公式(560px/100vh)不知道宿主
+      // popover 实际给了多少纵向空间 —— morph 弹层按锚点位置算出的可用高度可能更小,
+      // 面板列超出的部分被宿主 overflow-hidden 裁掉,最后一行和 footer 永远缺一截
+      // (2026-08-13 实测:外层 456px、面板列 511px,底部 55px 被裁)。这层 max-h-full
+      // 在宿主高度**确定**时把面板列钳到宿主内(flex 拉伸 → 列内 min-h-0 让列表收缩滚动),
+      // 宿主高度不确定时百分比落空为 none,由面板列自己的绝对上限兜底 —— 两个分支各管一头。
+      <div className="flex max-h-full min-h-0 min-w-0">
       <div
         ref={bindPaneElement}
         data-model-tag-density={modelTagDensity}
@@ -2428,6 +2435,7 @@ function ModelSelectorContentView({
             </button>
           </div>
         )}
+      </div>
       </div>
     );
   }

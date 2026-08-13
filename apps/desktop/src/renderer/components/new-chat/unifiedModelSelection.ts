@@ -18,11 +18,11 @@
  */
 
 import type {
-  ModelCategory,
+  ProviderView,
   UnifiedAgentCapability,
   UnifiedModelEntry,
 } from '@cindy/model-providers';
-import { classifyModel, sortEntriesForAgent } from '@cindy/model-providers';
+import { sortEntriesForAgent } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { SelectableVendor } from '@/lib/agentVendors';
@@ -307,8 +307,13 @@ export interface UnifiedListSection {
   key: string;
   /** `defaults` = 服务端标记的新会话默认种子小节(收藏之下、普通分组之上)。 */
   kind: 'favorites' | 'defaults' | 'group';
-  /** 分组行才有(分组标题按 CATEGORY_LABEL_KEY 查 i18n)。 */
-  category?: ModelCategory;
+  /**
+   * 分组小节的口径 —— **按供应商,不按模型家族**(Chris 2026-08-13 实测裁决:供应商决定
+   * 价格,同名模型跨来源混排会让用户没法选):
+   *   - `{ type: 'auth' }`:所有 OAuth 授权登录来源合并的「授权登录」组;
+   *   - `{ type: 'provider' }`:单供应商组(网关 / 自定义),标题用 providerLabel。
+   */
+  group?: { type: 'auth' } | { type: 'provider'; providerId: string };
   rows: UnifiedListRow[];
 }
 
@@ -326,18 +331,25 @@ function entryKeyOf(providerId: string, modelId: string): string {
 }
 
 /**
- * 面板列表:**收藏区置顶** → 服务端下发分组(group / sortOrder,走 classifyModel + sortOrder)。
+ * 面板列表:**收藏区置顶** → 默认种子 → **按供应商分组**。
+ *
+ * 分组口径(Chris 2026-08-13 实测裁决):供应商决定价格,不能按模型家族归类把
+ * 网关上的 Claude 和订阅登录的 Claude 揉进同一组。OAuth 授权登录来源合并成
+ * 「授权登录」一组;网关与自定义供应商各自成组(标题 = 供应商名)。判据是
+ * `provider.auth.method === 'oauth'` —— 供应商级元数据,device-link 投影下保留
+ * (投影只剥 routing 执行字段),两端同结果。
  *
  * 收藏条目**不**从供应商组里去重移除(规格 §1.2):收藏是配置副本,模型本体仍在原地 ——
  * 移除会让用户在「全部」视图里找不到那个模型。
  *
- * 排序不自己发明:组内按 `sortOrder` 升序(缺省排末尾、相等保持入参序),组的先后 = 组内
- * 首个模型在已排序清单里的位置 —— 与 `groupModelsForDisplay` 同一套规则,这里只是要
- * 携带 UnifiedModelEntry 的完整行数据,故就地实现同构逻辑而非拿它的裁剪结果。
+ * 排序不自己发明:**供应商簇内**按 `sortOrder` 升序(缺省排末尾、相等保持入参序),
+ * 簇与组的先后 = 首个条目在入参清单里的位置(= unifiedModelEntries 的供应商迭代序)。
  */
 export function buildUnifiedListSections(args: {
   entries: readonly UnifiedModelEntry[];
   favorites: readonly ModelFavoriteItem[];
+  /** 分组判据(auth.method)与组标题都要供应商元数据;只读,不改变本模块零 IO 边界。 */
+  providers: readonly ProviderView[];
   query: string;
   rail: UnifiedRailFilter;
   /**
@@ -347,7 +359,7 @@ export function buildUnifiedListSections(args: {
    */
   isDefaultSeed?: (entry: UnifiedModelEntry) => boolean;
 }): UnifiedListSection[] {
-  const { entries, favorites, rail, isDefaultSeed } = args;
+  const { entries, favorites, providers, rail, isDefaultSeed } = args;
   const q = args.query.trim().toLowerCase();
   const byKey = new Map<string, UnifiedModelEntry>();
   for (const entry of entries) byKey.set(entryKeyOf(entry.providerId, entry.modelId), entry);
@@ -401,23 +413,36 @@ export function buildUnifiedListSections(args: {
       (rail.kind !== 'provider' || entry.providerId === rail.providerId) &&
       (rail.kind !== 'engine' || entry.candidates.includes(rail.agent)),
   );
-  const byCatalogOrder = [...visible].sort(
-    (a, b) =>
-      (a.sortOrder ?? Number.POSITIVE_INFINITY) - (b.sortOrder ?? Number.POSITIVE_INFINITY),
-  );
-  // 单引擎视图(会话内的「同引擎」格)把**原生底座 == 该引擎**的行提到前面,仅兼容的
-  // 排后面 —— codex 会话里先看到 GPT 系、claude 会话里先看到 Claude 系,才符合直觉。
-  // 排序是稳定的:两拨各自保持服务端 group / sortOrder 序。
-  // 新会话的全量视图**不动**服务端排序:那里没有"当前引擎"这个参照系,擅自重排等于
-  // 用客户端偏好覆盖服务端的编排。
-  const sorted =
-    rail.kind === 'engine' ? sortEntriesForAgent(byCatalogOrder, rail.agent) : byCatalogOrder;
+  // 供应商簇内按 sortOrder 排,簇间保持入参首见序 —— 全局按 sortOrder 排会把不同
+  // 供应商的条目按服务端编号交错混排,正是要修掉的形态。
+  const clusterOrder: string[] = [];
+  const clusters = new Map<string, UnifiedModelEntry[]>();
+  for (const entry of visible) {
+    let cluster = clusters.get(entry.providerId);
+    if (!cluster) {
+      cluster = [];
+      clusters.set(entry.providerId, cluster);
+      clusterOrder.push(entry.providerId);
+    }
+    cluster.push(entry);
+  }
+  const base: UnifiedModelEntry[] = [];
+  for (const providerId of clusterOrder) {
+    base.push(
+      ...[...clusters.get(providerId)!].sort(
+        (a, b) =>
+          (a.sortOrder ?? Number.POSITIVE_INFINITY) - (b.sortOrder ?? Number.POSITIVE_INFINITY),
+      ),
+    );
+  }
   // 服务端默认种子提升到独立小节:**从普通分组里移走**(不像收藏那样两处都留)——
   // 收藏是配置副本、模型本体仍在原地;默认种子是同一行的位置提升,两处都出现只会让
   // 用户以为有两个同名模型。
+  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const defaultRows: UnifiedListRow[] = [];
-  const buckets = new Map<ModelCategory, UnifiedListRow[]>();
-  for (const entry of sorted) {
+  const bucketOrder: string[] = [];
+  const buckets = new Map<string, { group: UnifiedListSection['group']; items: UnifiedModelEntry[] }>();
+  for (const entry of base) {
     if (isDefaultSeed?.(entry)) {
       defaultRows.push({
         anchor: { kind: 'model', providerId: entry.providerId, modelId: entry.modelId },
@@ -425,22 +450,40 @@ export function buildUnifiedListSections(args: {
       });
       continue;
     }
-    const category = classifyModel({
-      id: entry.modelId,
-      ...(entry.group !== undefined ? { group: entry.group } : {}),
-    });
-    const rows = buckets.get(category) ?? [];
-    rows.push({
-      anchor: { kind: 'model', providerId: entry.providerId, modelId: entry.modelId },
-      entry,
-    });
-    buckets.set(category, rows);
+    const isAuth = providerById.get(entry.providerId)?.auth?.method === 'oauth';
+    const key = isAuth ? 'auth' : `provider:${entry.providerId}`;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = {
+        group: isAuth
+          ? { type: 'auth' as const }
+          : { type: 'provider' as const, providerId: entry.providerId },
+        items: [],
+      };
+      buckets.set(key, bucket);
+      bucketOrder.push(key);
+    }
+    bucket.items.push(entry);
   }
   if (defaultRows.length > 0) {
     sections.push({ key: 'defaults', kind: 'defaults', rows: defaultRows });
   }
-  for (const [category, rows] of buckets) {
-    sections.push({ key: `group:${category}`, kind: 'group', category, rows });
+  for (const key of bucketOrder) {
+    const bucket = buckets.get(key)!;
+    // 单引擎视图(会话内的「同引擎」格)在**组内**把原生底座 == 该引擎的行提前、
+    // 客串行(主场明确在别处)排后,无主场行不降级 —— codex 会话里先看到 GPT 系。
+    // 新会话的全量视图**不动**簇内排序:那里没有"当前引擎"这个参照系。
+    const items =
+      rail.kind === 'engine' ? sortEntriesForAgent(bucket.items, rail.agent) : bucket.items;
+    sections.push({
+      key: `group:${key}`,
+      kind: 'group',
+      group: bucket.group,
+      rows: items.map((entry) => ({
+        anchor: { kind: 'model', providerId: entry.providerId, modelId: entry.modelId },
+        entry,
+      })),
+    });
   }
   return sections;
 }
@@ -468,11 +511,14 @@ export interface FlyoutPlacement {
 export const UNIFIED_FLYOUT_GAP = 4;
 
 /**
- * 配置浮层的定位(规格 §1.3「跟随行垂直位置、视口夹紧」)。
+ * 配置浮层的定位(规格 §1.3「跟随行垂直位置、面板内夹紧」)。
  *
  * 水平:默认贴在面板**左**外侧(设计稿形态);左边放不下才翻到右侧;两侧都放不下时
  * 取能露出更多的一侧并夹到视口内 —— 宁可压住面板边缘,也不能把浮层丢到屏幕外。
- * 垂直:顶端对齐锚点行(上抬 `rowOffset` 让标题与行大致齐平),再夹到视口安全区内。
+ * 垂直(设计稿 flyFinish 算法):顶端对齐锚点行(上抬 `rowOffset` 让标题与行大致齐平),
+ * 但**钳制在面板纵向范围内** —— 浮层底不越过面板底(hover 底部行时自然变成与面板
+ * 底对齐),浮层顶不高过面板顶;浮层比面板还高时顶对齐面板。视口安全区仍是最外层
+ * 兜底(2026-08-13 实测:只按视口夹,底部行的浮层整体滑到面板下方)。
  *
  * 纯函数:定位是「滑杆一动面板就抖」这类问题的高发区,必须能脱离浏览器直接测。
  */
@@ -504,8 +550,13 @@ export function computeFlyoutPlacement(args: {
   // 窗口太窄、两侧都塞不下时上面的钳制会把浮层推到视口边:此时它可能与面板叠一部分,
   // 这是**有意的**取舍 —— 压住面板边缘还能用,飘到屏幕外就彻底不可用了(§1.3 视口夹紧)。
 
-  const maxTop = Math.max(margin, viewport.height - size.height - margin);
-  const top = Math.min(Math.max(margin, anchor.top - rowOffset), maxTop);
+  // 设计稿:top = clamp(rowTop - rowOffset, min(panelTop, panelBottom - flyH), panelBottom - flyH)。
+  const panelMaxTop = panel.bottom - size.height;
+  let top = Math.min(anchor.top - rowOffset, panelMaxTop);
+  top = Math.max(top, Math.min(panel.top, panelMaxTop));
+  // 视口安全区兜底(面板本身贴近屏幕边缘时不让浮层出屏)。
+  const viewportMaxTop = Math.max(margin, viewport.height - size.height - margin);
+  top = Math.min(Math.max(margin, top), viewportMaxTop);
   return { left, top, side };
 }
 
