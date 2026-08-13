@@ -174,6 +174,8 @@ export interface AgentInputSendOpts {
   userName?: string;
   throwOnStartFailure?: boolean;
   signal?: AbortSignal;
+  /** Main-owned marker invoked by the final Session dispatch hook. */
+  onDispatching?: () => void;
   /** 自动续跑的 runtime turn 归属；只进入 AgentEvent，不写入用户可见文本。 */
   turnAttemptToken?: number;
   /**
@@ -268,6 +270,8 @@ export interface AgentInputCoordinatorDeps {
   hasPendingInteraction: (sessionId: string) => boolean;
   getAgentKind: (sessionId: string) => AgentInputCreateOpts['agentKind'] | null;
   getSdkSessionId: (sessionId: string) => Promise<string | undefined>;
+  /** Keep a terminal Orca fence from being evicted during async pre-vendor hooks. */
+  reserveOrcaTeamPreVendorDispatch?: (teamId: string) => () => void;
   /** Read a bounded, durable progress snapshot before a retry is re-enqueued. */
   getRecoveryContextSnapshot?: (
     sessionId: string,
@@ -279,7 +283,7 @@ export interface AgentInputCoordinatorDeps {
    * injects its FIFO writer so steer and drain persistence share one ordering.
    */
   createUserMessage?: typeof createDbMessage;
-  /** Hide a user row that was written after `/clear` won the persistence race. */
+  /** Hide a user row whose turn was cancelled after persistence but before vendor dispatch. */
   rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string) => Promise<void>;
   /**
    * interrupted-turn-resume:判断某条已派发 user 消息之后 agent 是否已产出内容
@@ -480,6 +484,15 @@ export interface AgentInputCoordinatorDeps {
     items: AgentInputQueuedMessage[],
   ) => void | Promise<void>;
   loadQueueSnapshot?: (sessionId: string) => Promise<AgentInputQueuedMessage[]>;
+  /**
+   * Durable lifecycle fence applied while restoring a crash snapshot. It is
+   * intentionally item-scoped so Orca can drop an ended team's traffic without
+   * disturbing ordinary user input (or any future restorable automation kind).
+   */
+  isQueueSnapshotItemCurrent?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+  ) => Promise<boolean>;
   getPersistedClientIds?: (sessionId: string, clientIds: string[]) => Promise<Set<string>>;
 }
 
@@ -798,10 +811,8 @@ function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
 
 function isActiveTurnBeforeVendorDispatch(active: ActiveTurn): boolean {
   return (
-    !isActiveTurnDispatched(active) &&
-    (!active.sendStarted ||
-      active.persisting ||
-      active.dispatchLifecycle === 'awaiting-dispatch-hooks')
+    active.dispatchLifecycle === 'preparing' ||
+    active.dispatchLifecycle === 'awaiting-dispatch-hooks'
   );
 }
 
@@ -809,6 +820,25 @@ function isSendDispatched(
   result: AgentInputSendResult,
 ): result is Extract<AgentInputSendResult, { kind: 'session-dispatch'; dispatched: true }> {
   return result.kind === 'session-dispatch' && result.dispatched;
+}
+
+function isInactiveOrcaTeamSendFailure(
+  item: AgentInputQueuedMessage,
+  result: AgentInputSendFailure,
+): boolean {
+  if (item.origin?.kind !== 'orca') return false;
+  if (result.kind === 'host-send') {
+    return isInactiveOrcaTeamMessage(result.message);
+  }
+  return result.context.startsWith('ORCA_TEAM_INACTIVE/');
+}
+
+function isInactiveOrcaTeamMessage(message: string): boolean {
+  return message.replace(/^\[[^\]]+\]\s*/, '').startsWith('ORCA_TEAM_INACTIVE:');
+}
+
+function isInactiveOrcaTeamError(item: AgentInputQueuedMessage, err: unknown): boolean {
+  return item.origin?.kind === 'orca' && isInactiveOrcaTeamMessage(errorMessage(err));
 }
 
 function sendFailureMessage(result: AgentInputSendFailure): string {
@@ -863,6 +893,14 @@ export class AgentInputCoordinator {
   private readonly pendingAutoResumeRecoveries = new Map<string, PendingAutoResumeRecovery>();
   /** transient busy 期间同一 auto item 已尝试过的派发次数。 */
   private readonly autoResumeDispatchAttempts = new Map<string, number>();
+  /** Selective invalidation waits for the superseded send promise to unwind before draining tail. */
+  private readonly drainAfterStaleActiveTurns = new WeakSet<ActiveTurn>();
+  /**
+   * A cancelled pre-vendor item may already be inside an awaited accepted hook.
+   * Team cleanup must not race those writes, so selective invalidation waits for
+   * the owning drain call (including host rollback) to settle.
+   */
+  private readonly activeTurnSettlements = new WeakMap<ActiveTurn, Promise<void>>();
 
   constructor(private readonly deps: AgentInputCoordinatorDeps) {}
 
@@ -990,6 +1028,48 @@ export class AgentInputCoordinator {
       this.maybePersistQueueSnapshot(sessionId);
       return;
     }
+    const staleLifecycleItems: AgentInputQueuedMessage[] = [];
+    if (this.deps.isQueueSnapshotItemCurrent && items.length > 0) {
+      const lifecycleResults = await Promise.all(
+        items.map(async (item) => {
+          try {
+            return {
+              item,
+              current: await this.deps.isQueueSnapshotItemCurrent!(sessionId, item),
+            };
+          } catch (err) {
+            log.warn('queue snapshot lifecycle check failed; will retry entire restore', {
+              sessionId,
+              clientId: item.clientId,
+              error: errorMessage(err),
+            });
+            throw err;
+          }
+        }),
+      );
+      const currentState = this.getState(sessionId);
+      if (currentState !== preState || currentState.generation !== preGeneration) {
+        this.restoredQueueSessions.add(sessionId);
+        this.queueRestorePromises.delete(sessionId);
+        for (const item of items) {
+          this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        }
+        this.maybePersistQueueSnapshot(sessionId);
+        return;
+      }
+      items = lifecycleResults.flatMap(({ item, current }) => {
+        if (current) return [item];
+        staleLifecycleItems.push(item);
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        return [];
+      });
+      if (staleLifecycleItems.length > 0) {
+        log.info('dropped lifecycle-stale queue item(s) from crash snapshot', {
+          sessionId,
+          dropped: staleLifecycleItems.length,
+        });
+      }
+    }
     // 去重:内存态 + DB 已落库的消息。DB 查询覆盖"消息已被 agent 接受落库但删快照
     // 写尚未提交"的崩溃窗口——该 clientId 已属 interrupted-turn 辖区,不应二次恢复。
     const existingIds = new Set(state.pendingQueue.map((q) => q.clientId));
@@ -1060,7 +1140,7 @@ export class AgentInputCoordinator {
     // 用读回内容预热变更检测缓存:没有丢弃/去重项时(最常见:空快照 + 空队列)
     // 收口点直接跳过,避免每次打开会话都发一次冗余覆盖写/删除。只要有丢弃项就
     // 留空，让 maybePersistQueueSnapshot 把清理后的快照写回盘面。
-    if (staleClearItems.length === 0) {
+    if (staleClearItems.length === 0 && staleLifecycleItems.length === 0) {
       this.lastQueueSnapshotJson.set(sessionId, JSON.stringify(items));
     } else {
       this.lastQueueSnapshotJson.delete(sessionId);
@@ -1532,7 +1612,6 @@ export class AgentInputCoordinator {
 
     try {
       active.sendStarted = true;
-      active.dispatchLifecycle = 'sending';
       const result = await this.deps.sendToAgent(
         sessionId,
         { type: 'user', content: '/compact' },
@@ -1543,6 +1622,11 @@ export class AgentInputCoordinator {
           throwOnStartFailure: true,
           expectedClearBoundaryMs: active.clearBoundaryMs,
           expectedInputGeneration: active.generation,
+          onDispatching: () => {
+            if (this.isActiveTurnCurrent(sessionId, active)) {
+              active.dispatchLifecycle = 'sending';
+            }
+          },
         },
       );
       if (!this.isActiveTurnCurrent(sessionId, active)) return this.getProjection(sessionId);
@@ -2426,6 +2510,126 @@ export class AgentInputCoordinator {
     return this.getProjection(sessionId);
   }
 
+  /**
+   * Selectively invalidate queued traffic that belongs to an ended lifecycle.
+   * Unlike Stop/clear this preserves unrelated user and scheduler inputs. The
+   * active item is cancellable only before vendor dispatch becomes irreversible.
+   */
+  async discardQueuedItemsWhere(
+    sessionId: string,
+    predicate: (item: AgentInputQueuedMessage) => boolean,
+  ): Promise<{
+    pendingDiscarded: number;
+    activeCancelled: boolean;
+    recoveryDiscarded: boolean;
+  }> {
+    try {
+      await this.ensureQueueRestored(sessionId);
+    } catch (err) {
+      // The durable restore filter will apply on the next successful read. We
+      // still have to close the current process-local dispatch window now.
+      log.warn('queue restore failed during selective invalidation', {
+        sessionId,
+        error: errorMessage(err),
+      });
+    }
+
+    const state = this.getState(sessionId);
+    const removed = state.pendingQueue.filter(predicate);
+    const removedIds = new Set(removed.map((item) => item.clientId));
+    if (removed.length > 0) {
+      state.pendingQueue = state.pendingQueue.filter((item) => !removedIds.has(item.clientId));
+      for (const item of removed) {
+        this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        this.removePendingCompactWaitClientId(state, item.clientId);
+      }
+      state.recentEnqueuedClientIds = state.recentEnqueuedClientIds.filter(
+        (clientId) => !removedIds.has(clientId),
+      );
+      state.queueEditLocks = state.queueEditLocks.filter(
+        (clientId) => !removedIds.has(clientId),
+      );
+      if (
+        state.credentialSwitchWait &&
+        removedIds.has(state.credentialSwitchWait.clientId)
+      ) {
+        this.clearCredentialSwitchWait(state);
+      }
+    }
+
+    let activeCancelled = false;
+    let cancelledActiveSettlement: Promise<void> | null = null;
+    const persistedItemsToRewind = new Map<string, AgentInputQueuedMessage>();
+    const active = state.activeTurn;
+    if (active?.item && isActiveTurnBeforeVendorDispatch(active) && predicate(active.item)) {
+      activeCancelled = true;
+      cancelledActiveSettlement = this.activeTurnSettlements.get(active) ?? null;
+      this.drainAfterStaleActiveTurns.add(active);
+      this.abortInputBoundary(sessionId);
+      state.generation += 1;
+      state.activeTurn = null;
+      if (active.persisted) {
+        this.notifyUndispatchedUserTurn(sessionId, active.item, 'cancelled');
+        persistedItemsToRewind.set(active.item.clientId, active.item);
+      } else {
+        this.deps.onDiscardedQueuedMessage?.(sessionId, active.item);
+      }
+      this.removePendingCompactWaitClientId(state, active.item.clientId);
+      state.recentEnqueuedClientIds = state.recentEnqueuedClientIds.filter(
+        (clientId) => clientId !== active.item?.clientId,
+      );
+      state.queueEditLocks = state.queueEditLocks.filter(
+        (clientId) => clientId !== active.item?.clientId,
+      );
+    }
+
+    let recoveryDiscarded = false;
+    if (
+      state.recovery?.kind === 'queue-head' &&
+      removedIds.has(state.recovery.clientId)
+    ) {
+      recoveryDiscarded = true;
+      state.recovery = null;
+      state.error = null;
+      state.stickyError = null;
+    } else if (
+      state.recovery?.kind === 'active-turn' &&
+      predicate(state.recovery.item)
+    ) {
+      recoveryDiscarded = true;
+      this.deps.onDiscardedQueuedMessage?.(sessionId, state.recovery.item);
+      persistedItemsToRewind.set(state.recovery.item.clientId, state.recovery.item);
+      state.recovery = null;
+      state.error = null;
+      state.stickyError = null;
+    }
+
+    for (const item of persistedItemsToRewind.values()) {
+      await this.rewindUndispatchedPersistedUserMessage(
+        sessionId,
+        item,
+        'selective invalidation',
+      );
+    }
+
+    if (state.pendingQueue.length === 0 && !state.activeTurn) {
+      state.queuePaused = false;
+      state.queuePausedByRestore = false;
+    }
+    this.emit(sessionId);
+    if (!state.queuePaused && !activeCancelled) {
+      this.scheduleDrain(sessionId, 'selective-queue-invalidation');
+    }
+    if (cancelledActiveSettlement) {
+      await cancelledActiveSettlement;
+    }
+    return {
+      pendingDiscarded: removed.length,
+      activeCancelled,
+      recoveryDiscarded,
+    };
+  }
+
   updateText(
     sessionId: string,
     clientId: string,
@@ -3193,6 +3397,11 @@ export class AgentInputCoordinator {
       continuationOwnerClientId: isUiContinuationItem(head) ? head.clientId : null,
     };
     state.activeTurn = active;
+    let resolveActiveSettlement!: () => void;
+    const activeSettlement = new Promise<void>((resolve) => {
+      resolveActiveSettlement = resolve;
+    });
+    this.activeTurnSettlements.set(active, activeSettlement);
     this.emit(sessionId);
 
     try {
@@ -3207,7 +3416,7 @@ export class AgentInputCoordinator {
           getAgentFacingText(head),
           head,
         );
-        if (!this.isActiveTurnCurrent(sessionId, active)) return;
+        if (this.discardOnStaleActiveTurn(sessionId, active)) return;
         if (verdict.action === 'block') {
           this.getState(sessionId).activeTurn = null;
           this.deps.onUserMessageBlocked?.(sessionId, head, verdict);
@@ -3243,9 +3452,8 @@ export class AgentInputCoordinator {
         }
       }
       const sdkSessionId = await this.deps.getSdkSessionId(sessionId).catch(() => undefined);
-      if (!this.isActiveTurnCurrent(sessionId, active)) return;
+      if (this.discardOnStaleActiveTurn(sessionId, active)) return;
       active.sendStarted = true;
-      active.dispatchLifecycle = 'sending';
       // Freeze side-effect timestamps before entering vendor code. A dispatch
       // may synchronously emit the new turn's started marker before it returns;
       // post-dispatch acknowledgements must remain older than that marker.
@@ -3255,11 +3463,17 @@ export class AgentInputCoordinator {
         head.persistedContent,
         referenceContexts,
       );
-      const result = await this.deps.sendToAgent(
-        sessionId,
-        buildMakerUserMessage(head, referenceContexts),
-        head.createOpts,
-        {
+      const releaseOrcaTeamReservation =
+        head.origin?.kind === 'orca' && head.origin.teamId
+          ? this.deps.reserveOrcaTeamPreVendorDispatch?.(head.origin.teamId)
+          : undefined;
+      let result: AgentInputSendResult;
+      try {
+        result = await this.deps.sendToAgent(
+          sessionId,
+          buildMakerUserMessage(head, referenceContexts),
+          head.createOpts,
+          {
           messageUuid: active.messageUuid,
           userName: head.userName,
           throwOnStartFailure: true,
@@ -3323,7 +3537,6 @@ export class AgentInputCoordinator {
                   '[SEND_CANCELLED_BEFORE_DISPATCH] User turn was cancelled before vendor dispatch',
                 );
               }
-              active.dispatchLifecycle = 'sending';
             },
             onPersistFailed: () => {
               this.notifyUserMessagePersistenceFailed(sessionId, head, {
@@ -3331,8 +3544,16 @@ export class AgentInputCoordinator {
               });
             },
           },
-        },
-      );
+          onDispatching: () => {
+            if (this.isActiveTurnCurrent(sessionId, active)) {
+              active.dispatchLifecycle = 'sending';
+            }
+          },
+          },
+        );
+      } finally {
+        releaseOrcaTeamReservation?.();
+      }
       if (this.discardOnStaleActiveTurn(sessionId, active, isSendDispatched(result))) return;
       active.persisting = false;
       if (!isSendDispatched(result)) {
@@ -3391,6 +3612,19 @@ export class AgentInputCoordinator {
       // 放在分支之前 —— 三条出口都不会再走到接管决策。
       this.discardDeferredResumableCandidate(sessionId, active);
       const latest = this.getState(sessionId);
+      // The final Orca team fence throws from makerSendTransaction.onDispatching.
+      // Only a committed terminal transition is permanent. A pending DB
+      // transition uses ORCA_TEAM_TERMINATING and intentionally falls through
+      // to the ordinary queue-head / active-turn recovery below: rollback can
+      // make the team active again, while commit's selective invalidation will
+      // remove that recovery before disableOrca returns.
+      if (isInactiveOrcaTeamError(head, err)) {
+        await this.discardInactiveOrcaInputWithoutRecovery(sessionId, active, head, {
+          kind: 'thrown-final-fence',
+          error: errorMessage(err),
+        });
+        return;
+      }
       if (!active.persisted) {
         if (isSessionRunningError(err)) {
           this.deferQueueHeadAfterSessionRunning(
@@ -3448,6 +3682,9 @@ export class AgentInputCoordinator {
       // (persisted path). If no other work is pending, any deferred completion must
       // be replayed now; otherwise Agent Island stays in "running" indefinitely.
       this.deps.onQueueEmptied?.(sessionId);
+    } finally {
+      this.activeTurnSettlements.delete(active);
+      resolveActiveSettlement();
     }
   }
 
@@ -3465,6 +3702,11 @@ export class AgentInputCoordinator {
     const latest = this.getState(sessionId);
     const message = sendFailureMessage(result);
     const logFields = sendFailureLogFields(result);
+
+    if (isInactiveOrcaTeamSendFailure(item, result)) {
+      this.discardInactiveOrcaInputWithoutRecovery(sessionId, active, item, logFields);
+      return;
+    }
 
     if (!active.persisted) {
       if (isSessionRunningSendFailure(result)) {
@@ -3549,6 +3791,62 @@ export class AgentInputCoordinator {
     // Thread 3 fix: item was removed from the queue by drain but not put back
     // (persisted path). If no other work is pending, any deferred completion must
     // be replayed now; otherwise Agent Island stays in "running" indefinitely.
+    this.deps.onQueueEmptied?.(sessionId);
+  }
+
+  private async rewindUndispatchedPersistedUserMessage(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    reason: string,
+  ): Promise<void> {
+    try {
+      await this.deps.rewindPersistedUserMessageAfterClear?.(sessionId, item.clientId);
+    } catch (err) {
+      log.warn('rewind undispatched persisted user row failed', {
+        sessionId,
+        clientId: item.clientId,
+        reason,
+        error: errorMessage(err),
+      });
+    }
+  }
+
+  private async discardInactiveOrcaInputWithoutRecovery(
+    sessionId: string,
+    active: ActiveTurn,
+    item: AgentInputQueuedMessage,
+    logFields: Record<string, unknown>,
+  ): Promise<void> {
+    const latest = this.getState(sessionId);
+    latest.activeTurn = null;
+    latest.error = null;
+    latest.stickyError = null;
+    latest.recovery = null;
+    this.clearCredentialSwitchWait(latest);
+    this.removePendingCompactWaitClientId(latest, item.clientId);
+    latest.recentEnqueuedClientIds = latest.recentEnqueuedClientIds.filter(
+      (clientId) => clientId !== item.clientId,
+    );
+    latest.queueEditLocks = latest.queueEditLocks.filter(
+      (clientId) => clientId !== item.clientId,
+    );
+    if (active.persisted) {
+      this.notifyUndispatchedUserTurn(sessionId, item, 'cancelled');
+      await this.rewindUndispatchedPersistedUserMessage(
+        sessionId,
+        item,
+        'inactive Orca terminal fence',
+      );
+    } else {
+      this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+    }
+    log.info('inactive Orca input discarded without recovery', {
+      sessionId,
+      clientId: item.clientId,
+      ...logFields,
+    });
+    this.emit(sessionId);
+    this.scheduleDrain(sessionId, 'inactive-orca-input-discarded');
     this.deps.onQueueEmptied?.(sessionId);
   }
 
@@ -4522,6 +4820,10 @@ export class AgentInputCoordinator {
       }
     }
     this.discardDeferredResumableCandidate(sessionId, active, { surfaceError: false });
+    if (this.drainAfterStaleActiveTurns.has(active)) {
+      this.drainAfterStaleActiveTurns.delete(active);
+      this.scheduleDrain(sessionId, 'selectively-invalidated-active-settled');
+    }
     return true;
   }
 

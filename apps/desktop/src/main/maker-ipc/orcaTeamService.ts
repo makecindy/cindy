@@ -182,6 +182,8 @@ export interface OrcaTeamServiceDeps {
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerRecordSnapshot[]>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null;
   resumeWorkerSession(worker: OrcaWorkerRecordSnapshot, link: OrcaWorkerLinkSnapshot): Promise<void>;
+  /** Visible to end_team before dormant worker rehydrate begins; release after host dispatch settles. */
+  reserveTeamDispatchSettlement(teamId: string): () => void;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
@@ -203,6 +205,7 @@ export interface OrcaTeamServiceDeps {
   broadcastOrcaWorkerChanged(leadSessionId: string): void;
   dispatchWorkerMessage(params: {
     targetSessionId: string;
+    teamId: string;
     message: string;
     workerId: string;
     dispatchMeta: {
@@ -212,7 +215,12 @@ export interface OrcaTeamServiceDeps {
     onAccepted?: () => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
   }): Promise<DispatchWorkerMessageResult>;
-  sendAutoBridgeToLead(leadSessionId: string, message: string, workerId: string): Promise<{ accepted: boolean }>;
+  sendAutoBridgeToLead(
+    leadSessionId: string,
+    message: string,
+    workerId: string,
+    teamId: string,
+  ): Promise<{ accepted: boolean }>;
   /**
    * 读取目标 session 输入队列的当前快照(pendingQueue + steering 中的 clientId)。
    * 实现方(register.ts)须先 ensureQueueRestored 再读,保证崩溃恢复条目可见。
@@ -273,6 +281,7 @@ interface AutoBridgeState {
   version: number;
   workerId: string;
   leadSessionId: string;
+  teamId: string;
   capturedText: string;
   retryAfterRejectedDelivery: boolean;
   deferred?: {
@@ -338,7 +347,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     });
   }
 
-  function setPending(sessionId: string, input: { workerId: string; leadSessionId: string }): AutoBridgeState {
+  function setPending(
+    sessionId: string,
+    input: { workerId: string; leadSessionId: string; teamId: string },
+  ): AutoBridgeState {
     const previous = autoBridge.get(sessionId);
     const state: AutoBridgeState = {
       pending: true,
@@ -347,6 +359,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       version: (previous?.version ?? 0) + 1,
       workerId: input.workerId,
       leadSessionId: input.leadSessionId,
+      teamId: input.teamId,
       capturedText: '',
       retryAfterRejectedDelivery: false,
     };
@@ -404,7 +417,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       : '[Auto-bridged: worker 完成但未调 send_to_lead]';
     const bridgeText = `${header}\n\n${finalText}`;
     try {
-      const result = await deps.sendAutoBridgeToLead(state.leadSessionId, bridgeText, state.workerId);
+      const result = await deps.sendAutoBridgeToLead(
+        state.leadSessionId,
+        bridgeText,
+        state.workerId,
+        state.teamId,
+      );
       const latest = autoBridge.get(sessionId);
       if (latest !== state || latest.version !== version) return 'skipped';
       if (result.accepted) {
@@ -571,8 +589,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       };
     }
 
-    await reserveWorkerDispatch(target.id);
+    let releaseTeamDispatch: (() => void) | undefined;
     try {
+      releaseTeamDispatch = deps.reserveTeamDispatchSettlement(link.teamId);
+    } catch (err) {
+      return {
+        dispatched: false,
+        dispatchOutcome: dispatchFailureFromThrown(err, params.dispatchMeta),
+      };
+    }
+    let workerDispatchReserved = false;
+    try {
+      await reserveWorkerDispatch(target.id);
+      workerDispatchReserved = true;
       let acceptedSnapshot: {
         previousStatus: OrcaWorkerStatus;
         previousPending: AutoBridgeState | undefined;
@@ -600,6 +629,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         }
         result = await deps.dispatchWorkerMessage({
           targetSessionId: params.targetSessionId,
+          teamId: link.teamId,
           message: params.message,
           workerId: link.workerId,
           dispatchMeta: params.dispatchMeta,
@@ -616,6 +646,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             currentPending = setPending(params.targetSessionId, {
               workerId: target.id,
               leadSessionId: link.leadSessionId,
+              teamId: link.teamId,
             });
             await markPendingReady(params.targetSessionId, currentPending);
           },
@@ -659,7 +690,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         targetLastUserSendAt: result.targetLastUserSendAt,
       };
     } finally {
-      await releaseWorkerDispatch(target.id);
+      try {
+        if (workerDispatchReserved) await releaseWorkerDispatch(target.id);
+      } finally {
+        releaseTeamDispatch();
+      }
     }
   }
 

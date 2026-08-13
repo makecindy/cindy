@@ -8,6 +8,7 @@ import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from './agentIslandSessionPatch.js';
+import { orcaTeamTerminalFence } from '../orcaTeamTerminalFence.js';
 
 const log = createLogger('orca-team-store');
 
@@ -32,6 +33,30 @@ export interface OrcaTeamRecord {
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface OrcaDuplicateTeamReconciliation {
+  leadSessionId: string;
+  keptTeamId: string;
+  staleTeamIds: string[];
+  staleWorkerSessionIds: string[];
+}
+
+type OrcaDuplicateTeamReconciliationHandler = (
+  reconciliation: OrcaDuplicateTeamReconciliation,
+) => void | Promise<void>;
+
+let duplicateTeamReconciliationHandler: OrcaDuplicateTeamReconciliationHandler | null = null;
+
+/**
+ * Inject the process-local queue cleanup owned by maker-ipc.  The store emits
+ * lifecycle facts only; it must not import the AgentInputCoordinator back into
+ * localDb and invert the dependency boundary.
+ */
+export function setOrcaDuplicateTeamReconciliationHandler(
+  handler: OrcaDuplicateTeamReconciliationHandler | null,
+): void {
+  duplicateTeamReconciliationHandler = handler;
 }
 
 export interface OrcaWorkerRecord {
@@ -179,19 +204,51 @@ export async function getActiveTeamByLead(
 
   // 罕见: 同一 lead 出现多个 active team(partial unique 约束缺失 / drift 时)。
   // 高频路径(0 或 1 个 team)走上面的纯 async select, 不付 worker 事务开销;
-  // 只有真出现重复时才走原子的 cancelStaleTeams 兜底, 取消除 latest 外的全部。
+  // 只有真出现重复时才走原子的 cancelStaleTeams 兜底, 仅取消本次预读并 fenced
+  // 的 stale IDs。事务不能使用更宽的 `id != latest` 谓词，否则预读后并发插入
+  // 的新 team 会被取消，却没有对应 terminal fence 与 reconciliation scope。
   // (DbClient.drizzle 是 worker-thread 异步代理, 不支持同步 db.transaction —
   //  需要原子性的多语句写必须走命名事务, 见 client/tx/types.ts。)
   if (rows.length > 1) {
-    await getDbClient().tx('orca.cancelStaleTeams', {
+    const staleTeamIds = rows.slice(1).map((team) => team.id);
+    // reconciliation 的完整作用域必须在终态写入前采集。否则事务提交后这里若因
+    // DB worker 重启而查询失败，下一次读取只剩 kept team，永远无法重建旧 team
+    // 对应的 queue/recovery 清理范围。
+    const staleWorkerRows = await db
+      .select({ sessionId: orcaWorkers.sessionId })
+      .from(orcaWorkers)
+      .where(inArray(orcaWorkers.teamId, staleTeamIds));
+    const staleWorkerSessionIds = [
+      ...new Set(staleWorkerRows.map((worker) => worker.sessionId)),
+    ];
+    const terminalTransitions = staleTeamIds.map((teamId) =>
+      orcaTeamTerminalFence.begin(teamId),
+    );
+    try {
+      await getDbClient().tx('orca.cancelStaleTeams', {
+        leadSessionId,
+        staleTeamIds,
+        now: Date.now(),
+      });
+    } catch (err) {
+      for (const transition of terminalTransitions) {
+        orcaTeamTerminalFence.rollback(transition);
+      }
+      throw err;
+    }
+    for (const transition of terminalTransitions) {
+      orcaTeamTerminalFence.commit(transition);
+    }
+    await duplicateTeamReconciliationHandler?.({
       leadSessionId,
-      keepTeamId: latest.id,
-      now: Date.now(),
+      keptTeamId: latest.id,
+      staleTeamIds,
+      staleWorkerSessionIds,
     });
     log.warn('cancelled stale duplicate active orca teams', {
       leadSessionId,
       keptTeamId: latest.id,
-      staleTeamIds: rows.slice(1).map((team) => team.id),
+      staleTeamIds,
     });
   }
 
@@ -234,10 +291,17 @@ export async function markTeamEnded(
 ): Promise<void> {
   const db = getDbClient().drizzle;
   const now = Date.now();
-  await db
-    .update(orcaTeams)
-    .set({ status, completedAt: now, updatedAt: now })
-    .where(eq(orcaTeams.id, teamId));
+  const terminalTransition = orcaTeamTerminalFence.begin(teamId);
+  try {
+    await db
+      .update(orcaTeams)
+      .set({ status, completedAt: now, updatedAt: now })
+      .where(eq(orcaTeams.id, teamId));
+  } catch (err) {
+    orcaTeamTerminalFence.rollback(terminalTransition);
+    throw err;
+  }
+  orcaTeamTerminalFence.commit(terminalTransition);
 }
 
 /**
@@ -527,6 +591,17 @@ export async function setSessionOrcaRole(
   const db = getDbClient().drizzle;
   await db.update(sessions).set({ orcaRole: role }).where(eq(sessions.id, sessionId));
   broadcastSessionPatch(sessionId, { orcaRole: role });
+}
+
+/** Durable lifecycle truth used by Orca queue ingress and crash recovery. */
+export async function isOrcaTeamActive(teamId: string): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const [row] = await db
+    .select({ id: orcaTeams.id })
+    .from(orcaTeams)
+    .where(and(eq(orcaTeams.id, teamId), eq(orcaTeams.status, 'active')))
+    .limit(1);
+  return Boolean(row);
 }
 
 async function getTeamById(id: string): Promise<OrcaTeamRecord | null> {

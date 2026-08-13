@@ -106,6 +106,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
       workers.filter((worker) => worker.leadSessionId === leadSessionId)
     )),
     getLiveSession: vi.fn(() => null),
+    reserveTeamDispatchSettlement: vi.fn(() => vi.fn()),
     resumeWorkerSession: vi.fn(async () => {}),
     updateWorkerStatus: vi.fn(async (workerId, status) => {
       calls.push(`updateWorkerStatus:${status}`);
@@ -297,6 +298,66 @@ describe('OrcaTeamService', () => {
     expect(vi.mocked(deps.resumeWorkerSession).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(deps.dispatchWorkerMessage).mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('holds the team settlement reservation across dormant worker resume', async () => {
+    let notifyResumeEntered!: () => void;
+    let releaseResume!: () => void;
+    const resumeEntered = new Promise<void>((resolve) => {
+      notifyResumeEntered = resolve;
+    });
+    const resumeRelease = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    const releaseTeamDispatch = vi.fn();
+    const { deps, service } = createDeps({
+      reserveTeamDispatchSettlement: vi.fn(() => releaseTeamDispatch),
+      resumeWorkerSession: vi.fn(async () => {
+        notifyResumeEntered();
+        await resumeRelease;
+      }),
+    });
+
+    const dispatch = service.dispatchWorkerTask({
+      targetSessionId: 'worker-session-1',
+      message: 'resume safely',
+      dispatchMeta: { source: 'test-source', context: 'team-resume-reservation' },
+    });
+    await resumeEntered;
+
+    expect(deps.reserveTeamDispatchSettlement).toHaveBeenCalledWith('team-1');
+    expect(vi.mocked(deps.reserveTeamDispatchSettlement).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(deps.resumeWorkerSession).mock.invocationCallOrder[0]!,
+    );
+    expect(releaseTeamDispatch).not.toHaveBeenCalled();
+
+    releaseResume();
+    await expect(dispatch).resolves.toMatchObject({ dispatched: true });
+    expect(releaseTeamDispatch).toHaveBeenCalledOnce();
+  });
+
+  it('does not resume a dormant worker when the team reservation is rejected', async () => {
+    const { deps, service } = createDeps({
+      reserveTeamDispatchSettlement: vi.fn(() => {
+        throw new Error('ORCA_TEAM_INACTIVE: team team-1 has already ended');
+      }),
+    });
+
+    await expect(
+      service.dispatchWorkerTask({
+        targetSessionId: 'worker-session-1',
+        message: 'too late',
+        dispatchMeta: { source: 'test-source', context: 'terminal-team-resume' },
+      }),
+    ).resolves.toMatchObject({
+      dispatched: false,
+      dispatchOutcome: expect.objectContaining({
+        kind: 'host-send',
+        message: expect.stringContaining('ORCA_TEAM_INACTIVE'),
+      }),
+    });
+    expect(deps.resumeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerMessage).not.toHaveBeenCalled();
   });
 
   it('does not resume a running worker that still has a live session', async () => {

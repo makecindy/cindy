@@ -27,6 +27,30 @@ const defaultLog = createLogger('maker-ipc');
 
 type OrcaInterAgentDispatchMode = 'dispatched' | 'queued';
 
+function stripIpcErrorPrefix(message: string): string {
+  const match = message.match(/^\[[^\]]+\]\s*(.*)$/);
+  return match?.[1] ?? message;
+}
+
+function isInactiveOrcaTeamSendFailure(result: AgentInputSendResult): boolean {
+  if (result.kind === 'host-send') {
+    return stripIpcErrorPrefix(result.message).startsWith('ORCA_TEAM_INACTIVE:');
+  }
+  return (
+    !result.dispatched &&
+    result.reason === 'cancelled-before-dispatch' &&
+    result.context.startsWith('ORCA_TEAM_INACTIVE/')
+  );
+}
+
+function thrownMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isPendingOrcaTeamTransitionError(err: unknown): boolean {
+  return stripIpcErrorPrefix(thrownMessage(err)).startsWith('ORCA_TEAM_TERMINATING:');
+}
+
 /** Orca lead/worker 派发结果，保留底层 dispatch outcome 供 MCP/IPC 区分排队、直发和失败根因。 */
 export type DispatchOrcaInterAgentMessageResult =
   | {
@@ -42,12 +66,18 @@ export type DispatchOrcaInterAgentMessageResult =
       dispatchOutcome: CollabDispatchFailureOutcome;
     };
 
+type DispatchOrcaInterAgentMessageAttemptResult = DispatchOrcaInterAgentMessageResult & {
+  retryAfterTerminalTransition?: true;
+};
+
 /** Orca 消息的发送方类型，决定持久化协议和 agent 可见提示头。 */
 export type OrcaInterAgentMessageSource = 'lead' | 'worker';
 
 /** 一次 lead/worker 间消息派发请求，accepted 回调用于把业务副作用绑定到真正派发边界。 */
 export interface DispatchOrcaInterAgentMessageParams {
   targetSessionId: string;
+  /** Durable workflow scope; every automatic Orca message belongs to one team. */
+  teamId: string;
   rawContent: string;
   source: OrcaInterAgentMessageSource;
   senderLabel: string;
@@ -139,7 +169,10 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     sessionId: string,
     meta: TSessionMeta,
   ) => Promise<AgentInputCreateOpts>;
-  enqueueQueuedMessage: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  enqueueQueuedMessage: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+  ) => void | Promise<void>;
   sendToSessionInternal: (
     params: OrcaInterAgentSendToSessionInternalParams,
   ) => Promise<OrcaInterAgentSendToSessionInternalResult>;
@@ -147,9 +180,17 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     sessionId: string,
     message: { clientId: string; role: 'user'; content: string },
   ) => Promise<unknown>;
+  rewindPersistedUserMessage: (sessionId: string, clientId: string) => Promise<void>;
   beginDirectTurnChangeSet: (sessionId: string, clientId: string) => Promise<void>;
   abortDirectTurnChangeSet: (sessionId: string) => void;
   resolveWorkerSenderLabel: (workerId: string, fallback: string) => Promise<string>;
+  isOrcaTeamActive: (teamId: string) => Promise<boolean>;
+  /** Retain the terminal fence entry until this pre-vendor attempt settles. */
+  reserveOrcaTeamPreVendorDispatch: (teamId: string) => () => void;
+  /** Wait until an in-flight terminal transition either commits or rolls back. */
+  waitForOrcaTeamTerminalTransition: (teamId: string) => Promise<'open' | 'terminal'>;
+  /** Process-local last-moment fence for the DB-check-to-vendor race. */
+  assertOrcaTeamActiveBeforeVendorDispatch?: (teamId: string) => void;
   isSessionRunningError: (err: unknown) => boolean;
   log?: OrcaInterAgentDispatcherLogger;
 }
@@ -185,6 +226,8 @@ export interface OrcaInterAgentDispatcher {
     result: AgentInputSendResult,
   ) => Promise<void>;
   discardQueuedOrcaInterAgentAcceptedCallback: (clientId: string) => void;
+  reserveTeamDispatchSettlement: (teamId: string) => () => void;
+  waitForTeamDispatchSettlements: (teamId: string) => Promise<void>;
 }
 
 export function createOrcaInterAgentDispatcher<TSessionMeta>(
@@ -192,6 +235,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
 ): OrcaInterAgentDispatcher {
   const log = deps.log ?? defaultLog;
   const queuedOrcaInterAgentAcceptedCallbacks = new Map<string, QueuedOrcaInterAgentAcceptedCallback>();
+  const teamDispatchSettlements = new Map<string, Set<Promise<void>>>();
 
   const registerQueuedOrcaInterAgentAcceptedCallback = (
     clientId: string,
@@ -229,6 +273,13 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
       return;
     }
+    if (isInactiveOrcaTeamSendFailure(result)) {
+      queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
+      if (callback.didRun) {
+        await runAcceptedRollback(callback.rollback, sessionId, clientId, log);
+      }
+      return;
+    }
     if (callback.didRun) {
       queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
       await runAcceptedRollback(callback.rollback, sessionId, clientId, log);
@@ -249,9 +300,61 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
   };
 
+  const trackTeamDispatchSettlement = (teamId: string, settlement: Promise<void>): void => {
+    const teamSettlements = teamDispatchSettlements.get(teamId) ?? new Set();
+    teamSettlements.add(settlement);
+    teamDispatchSettlements.set(teamId, teamSettlements);
+    void settlement.then(() => {
+      teamSettlements.delete(settlement);
+      if (teamSettlements.size === 0 && teamDispatchSettlements.get(teamId) === teamSettlements) {
+        teamDispatchSettlements.delete(teamId);
+      }
+    });
+  };
+
+  const reserveTeamDispatchSettlement = (teamId: string): (() => void) => {
+    const releaseReservation = deps.reserveOrcaTeamPreVendorDispatch(teamId);
+    let resolveSettlement!: () => void;
+    const settlement = new Promise<void>((resolve) => {
+      resolveSettlement = resolve;
+    });
+    trackTeamDispatchSettlement(teamId, settlement);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      releaseReservation();
+      resolveSettlement();
+    };
+  };
+
   const dispatchOrEnqueueOrcaInterAgentMessage = async (
     params: DispatchOrcaInterAgentMessageParams,
-  ): Promise<DispatchOrcaInterAgentMessageResult> => {
+  ): Promise<DispatchOrcaInterAgentMessageAttemptResult> => {
+    try {
+      if (!(await deps.isOrcaTeamActive(params.teamId))) {
+        return {
+          ok: false,
+          dispatchOutcome: {
+            ...createHostSendFailure(
+              'SEND_FAILED',
+              `ORCA_TEAM_INACTIVE: team ${params.teamId} has already ended`,
+            ),
+            source: params.meta.source,
+            context: params.meta.context,
+          },
+        };
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        dispatchOutcome: {
+          ...createHostSendFailure('SEND_FAILED', err instanceof Error ? err.message : String(err)),
+          source: params.meta.source,
+          context: params.meta.context,
+        },
+      };
+    }
     const [meta, dbRow] = await Promise.all([
       deps.getSessionMeta(params.targetSessionId).catch(() => null),
       deps.getSessionRowSnapshot(params.targetSessionId),
@@ -285,12 +388,27 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       acceptedDidRun = true;
       await params.onAccepted?.();
     };
-    const failureResult = async (dispatchOutcome: CollabDispatchFailureOutcome): Promise<DispatchOrcaInterAgentMessageResult> => {
+    const failureResult = async (
+      dispatchOutcome: CollabDispatchFailureOutcome,
+      retryAfterTerminalTransition = false,
+    ): Promise<DispatchOrcaInterAgentMessageAttemptResult> => {
       if (acceptedDidRun) {
         await runAcceptedRollback(params.onAcceptedRollback, params.targetSessionId, clientId, log);
       }
-      return { ok: false, dispatchOutcome };
+      return {
+        ok: false,
+        dispatchOutcome,
+        ...(retryAfterTerminalTransition ? { retryAfterTerminalTransition: true as const } : {}),
+      };
     };
+    const failureFromThrown = (err: unknown): CollabDispatchFailureOutcome => ({
+      ...createHostSendFailure(
+        deps.isSessionRunningError(err) ? 'SESSION_RUNNING' : 'SEND_FAILED',
+        err instanceof Error ? err.message : String(err),
+      ),
+      source: params.meta.source,
+      context: params.meta.context,
+    });
     const dispatchReceipt = {
       targetTitle: dbRow.title,
       targetLastUserSendAt: dbRow.userSendAt !== null
@@ -306,20 +424,33 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         return params.senderLabel;
       }
     };
-    const enqueueQueuedMessage = async (logEvent: string): Promise<DispatchOrcaInterAgentMessageResult> => {
+    const enqueueQueuedMessage = async (
+      logEvent: string,
+    ): Promise<DispatchOrcaInterAgentMessageAttemptResult> => {
       const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
       const queued = buildQueuedOrcaInterAgentMessage({
         clientId,
         agentMessageText,
         persistedContent,
         rawContent: params.rawContent,
+        teamId: params.teamId,
         senderLabel: await resolveSenderLabel(),
         createOpts,
       });
+      try {
+        deps.assertOrcaTeamActiveBeforeVendorDispatch?.(params.teamId);
+      } catch (err) {
+        return failureResult(failureFromThrown(err), isPendingOrcaTeamTransitionError(err));
+      }
       if (params.onAccepted) {
         registerQueuedOrcaInterAgentAcceptedCallback(clientId, params.onAccepted, params.onAcceptedRollback);
       }
-      deps.enqueueQueuedMessage(params.targetSessionId, queued);
+      try {
+        await deps.enqueueQueuedMessage(params.targetSessionId, queued);
+      } catch (err) {
+        discardQueuedOrcaInterAgentAcceptedCallback(clientId);
+        return failureResult(failureFromThrown(err), isPendingOrcaTeamTransitionError(err));
+      }
       log.info(logEvent, {
         targetSessionId: params.targetSessionId,
         clientId,
@@ -354,6 +485,8 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           source: params.meta.source,
           context: params.meta.context,
           onAccepted: runAccepted,
+          beforeVendorDispatch: () =>
+            deps.assertOrcaTeamActiveBeforeVendorDispatch?.(params.teamId),
         });
         if (result.dispatched) {
           return { ok: true, mode: 'dispatched', clientId, dispatchOutcome: result.dispatchOutcome, ...dispatchReceipt };
@@ -361,7 +494,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         if (result.dispatchOutcome.kind === 'host-send' && result.dispatchOutcome.code === 'SESSION_RUNNING') {
           return enqueueQueuedMessage('orca inter-agent message queued after SESSION_RUNNING race');
         }
-        return failureResult(result.dispatchOutcome);
+        return failureResult(result.dispatchOutcome, result.terminalTransitionPending === true);
       }
 
       const result = await deps.sendToSessionInternal({
@@ -373,6 +506,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         onAcceptedRollback: params.onAcceptedRollback,
         origin: {
           kind: 'orca',
+          teamId: params.teamId,
           senderLabel: await resolveSenderLabel(),
           displayText: params.rawContent,
         },
@@ -393,27 +527,89 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           targetLastUserSendAt: result.targetLastUserSendAt,
         };
       }
-      return failureResult({
-        ...createHostSendFailure(result.errorCode === 'BUSY' ? 'SESSION_RUNNING' : 'SEND_FAILED', result.message),
-        source: params.meta.source,
-        context: params.meta.context,
-      });
+      return failureResult(
+        {
+          ...createHostSendFailure(result.errorCode === 'BUSY' ? 'SESSION_RUNNING' : 'SEND_FAILED', result.message),
+          source: params.meta.source,
+          context: params.meta.context,
+        },
+        isPendingOrcaTeamTransitionError(result.message),
+      );
     } catch (err) {
-      return failureResult({
-        ...createHostSendFailure(deps.isSessionRunningError(err) ? 'SESSION_RUNNING' : 'SEND_FAILED', err instanceof Error ? err.message : String(err)),
-        source: params.meta.source,
-        context: params.meta.context,
-      });
+      return failureResult(failureFromThrown(err), isPendingOrcaTeamTransitionError(err));
     }
   };
 
+  const dispatchOrEnqueueOrcaInterAgentMessageWithSettlement = (
+    params: DispatchOrcaInterAgentMessageParams,
+  ): Promise<DispatchOrcaInterAgentMessageResult> => {
+    const terminalTransitionFailure = (message: string): DispatchOrcaInterAgentMessageResult => ({
+      ok: false,
+      dispatchOutcome: {
+        ...createHostSendFailure('SEND_FAILED', message),
+        source: params.meta.source,
+        context: params.meta.context,
+      },
+    });
+    const run = (async () => {
+      while (true) {
+        let releaseReservation: (() => void) | null = null;
+        while (!releaseReservation) {
+          try {
+            releaseReservation = reserveTeamDispatchSettlement(params.teamId);
+          } catch (err) {
+            if (!isPendingOrcaTeamTransitionError(err)) {
+              return terminalTransitionFailure(thrownMessage(err));
+            }
+            try {
+              const state = await deps.waitForOrcaTeamTerminalTransition(params.teamId);
+              if (state === 'terminal') {
+                return terminalTransitionFailure(
+                  `ORCA_TEAM_INACTIVE: team ${params.teamId} has already ended`,
+                );
+              }
+            } catch (waitErr) {
+              return terminalTransitionFailure(thrownMessage(waitErr));
+            }
+          }
+        }
+        let result: DispatchOrcaInterAgentMessageAttemptResult;
+        try {
+          result = await dispatchOrEnqueueOrcaInterAgentMessage(params);
+        } finally {
+          releaseReservation();
+        }
+        if (!result.retryAfterTerminalTransition) return result;
+        try {
+          const state = await deps.waitForOrcaTeamTerminalTransition(params.teamId);
+          if (state === 'terminal') {
+            return terminalTransitionFailure(
+              `ORCA_TEAM_INACTIVE: team ${params.teamId} has already ended`,
+            );
+          }
+        } catch (waitErr) {
+          return terminalTransitionFailure(thrownMessage(waitErr));
+        }
+      }
+    })();
+    return run;
+  };
+
+  const waitForTeamDispatchSettlements = async (teamId: string): Promise<void> => {
+    const settlements = teamDispatchSettlements.get(teamId);
+    if (!settlements || settlements.size === 0) return;
+    await Promise.all([...settlements]);
+  };
+
   return {
-    dispatchOrEnqueueOrcaInterAgentMessage,
+    dispatchOrEnqueueOrcaInterAgentMessage: dispatchOrEnqueueOrcaInterAgentMessageWithSettlement,
     registerQueuedOrcaInterAgentAcceptedCallback,
     runQueuedOrcaInterAgentAcceptedCallback,
     rollbackQueuedOrcaInterAgentAcceptedCallback,
     settleQueuedOrcaInterAgentAcceptedCallback,
     discardQueuedOrcaInterAgentAcceptedCallback,
+    reserveTeamDispatchSettlement,
+    waitForTeamDispatchSettlements,
   };
 }
 
@@ -427,10 +623,13 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     source: string;
     context: string;
     onAccepted?: () => void | Promise<void>;
+    beforeVendorDispatch?: () => void;
   },
-): Promise<CollabDirectDispatchResult> {
+): Promise<CollabDirectDispatchResult & { terminalTransitionPending?: true }> {
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, onAccepted } = params;
+  let userMessagePersisted = false;
   let turnChangeSetStarted = false;
+  let terminalTransitionPending = false;
   const result = await resolveCollabDispatchResult(
     () => session.send(agentMessage, {
       planMode: false,
@@ -442,9 +641,18 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
           role: 'user',
           content: dbContent,
         });
+        userMessagePersisted = true;
         await deps.beginDirectTurnChangeSet(session.id, clientId);
         turnChangeSetStarted = true;
         await runAcceptedCallback(onAccepted, session.id, clientId, deps.log ?? defaultLog);
+      },
+      onDispatching: () => {
+        try {
+          params.beforeVendorDispatch?.();
+        } catch (err) {
+          terminalTransitionPending = isPendingOrcaTeamTransitionError(err);
+          throw err;
+        }
       },
     }),
     { source, context },
@@ -452,7 +660,21 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
   if (turnChangeSetStarted && !result.dispatched) {
     deps.abortDirectTurnChangeSet(session.id);
   }
-  return result;
+  if (userMessagePersisted && !result.dispatched) {
+    try {
+      await deps.rewindPersistedUserMessage(session.id, clientId);
+    } catch (err) {
+      (deps.log ?? defaultLog).warn('direct Orca user row rewind failed', {
+        sessionId: session.id,
+        clientId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return {
+    ...result,
+    ...(terminalTransitionPending ? { terminalTransitionPending: true as const } : {}),
+  };
 }
 
 function makeQueuedDispatchOutcome(source: string): CollabDispatchQueuedOutcome {
@@ -497,6 +719,7 @@ function buildQueuedOrcaInterAgentMessage(params: {
   agentMessageText: string;
   persistedContent: string;
   rawContent: string;
+  teamId: string;
   senderLabel: string;
   createOpts: AgentInputCreateOpts;
 }): AgentInputQueuedMessage {
@@ -519,6 +742,7 @@ function buildQueuedOrcaInterAgentMessage(params: {
     createOpts: params.createOpts,
     origin: {
       kind: 'orca',
+      teamId: params.teamId,
       senderLabel: params.senderLabel,
       displayText: params.rawContent,
     },

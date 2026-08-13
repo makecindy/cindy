@@ -38,6 +38,8 @@ type MakerSendOptions = {
   messageUuid?: string;
   userName?: string;
   throwOnStartFailure?: boolean;
+  /** Main-owned callback forwarded to Session's final synchronous dispatch hook. */
+  onDispatching?: unknown;
   /** Host-owned per-turn lifecycle correlation; maker-core stamps it on AgentEvent. */
   turnAttemptToken?: number;
   /**
@@ -91,6 +93,8 @@ type MakerSendOptions = {
   expectedClearBoundaryMs?: unknown;
   /** Main-owned input generation used by the final vendor fence. */
   expectedInputGeneration?: unknown;
+  /** Main-owned Orca lifecycle fence; stripped from every external send boundary. */
+  orcaTeamId?: unknown;
 };
 
 export interface MakerSendTransactionSession {
@@ -189,6 +193,8 @@ export interface MakerSendTransactionDeps {
   beforeDispatchDirectUserTurn?: (sessionId: string) => void | Promise<void>;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
   assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
+  /** Durable active-team check for queued Orca traffic, before any rehydrate side effect. */
+  isOrcaTeamInputActive?: (sessionId: string, teamId: string) => Promise<boolean>;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;
   ackInterruptedTurnDispatched?: (sessionId: string, endedAt: number) => void | Promise<void>;
   previewUserPrompt?(
@@ -590,6 +596,46 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       sendOpts,
     ): Promise<DesktopMakerSendResult> {
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+      const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
+      const requestedOrigin = requestedSendOpts.persistUserMessage?.origin;
+      const isOrcaInput =
+        Boolean(requestedOrigin) &&
+        typeof requestedOrigin === 'object' &&
+        !Array.isArray(requestedOrigin) &&
+        (requestedOrigin as Record<string, unknown>).kind === 'orca';
+      const originTeamId = isOrcaInput
+        ? (requestedOrigin as Record<string, unknown>).teamId
+        : undefined;
+      const legacyWorkflowId =
+        createOpts && typeof createOpts === 'object'
+          ? (createOpts as { vendorOptions?: Record<string, unknown> }).vendorOptions
+              ?.orcaWorkflowId
+          : undefined;
+      const orcaTeamId =
+        typeof originTeamId === 'string' && originTeamId.length > 0
+          ? originTeamId
+          : typeof legacyWorkflowId === 'string' && legacyWorkflowId.length > 0
+            ? legacyWorkflowId
+            : null;
+      if (isOrcaInput && deps.isOrcaTeamInputActive) {
+        const active = orcaTeamId
+          ? await deps.isOrcaTeamInputActive(sessionId, orcaTeamId)
+          : false;
+        if (!active) {
+          return toCompatibleMakerSendResult(
+            toDesktopSessionDispatchOutcome(
+              {
+                accepted: false,
+                reason: 'cancelled-before-dispatch',
+              },
+              {
+                source: 'maker-ipc',
+                context: `ORCA_TEAM_INACTIVE/${sessionId}/${orcaTeamId ?? 'unknown'}`,
+              },
+            ),
+          );
+        }
+      }
       // session-agent-switch:pending 切换在发送时刻生效(用户语义:「消息真正发出
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
       // 让下方走 lazy-create 按 DB 新值 spawn 新引擎。
@@ -657,7 +703,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (sess.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
-      const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
       if (
         requestedSendOpts.ackInterruptedTurnOnDispatch !== undefined &&
         typeof requestedSendOpts.ackInterruptedTurnOnDispatch !== 'boolean'
@@ -858,6 +903,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         };
       }
       const finalFenceOverrides: Record<string, unknown> = {};
+      if (isOrcaInput && orcaTeamId) finalFenceOverrides.orcaTeamId = orcaTeamId;
       if (
         topLevelClearBoundary === undefined &&
         persistUserMessage?.expectedClearBoundaryMs !== undefined
@@ -1050,6 +1096,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 userPromptPreviewSessionId,
                 userPromptPreviewClientId ?? undefined,
               );
+            }
+            if (typeof so.onDispatching === 'function') {
+              so.onDispatching();
             }
           },
         });

@@ -79,6 +79,52 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
 }
 
 describe('maker SEND transaction', () => {
+  it('rejects an inactive queued Orca team before session rehydrate has side effects', async () => {
+    const isOrcaTeamInputActive = vi.fn(async () => false);
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      isOrcaTeamInputActive,
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'lead-session',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      vendorOptions: {
+        orcaRole: 'lead',
+        orcaWorkflowId: 'team-old',
+        orcaLeadSessionId: 'lead-session',
+      },
+    };
+
+    await expect(
+      transaction.sendToAgentAccepted('lead-session', 'old worker report', createOpts, {
+        persistUserMessage: {
+          clientId: 'orca-old',
+          content: 'old worker report',
+          origin: {
+            kind: 'orca',
+            teamId: 'team-old',
+            senderLabel: 'Reviewer',
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+      outcome: {
+        message: expect.stringContaining('ORCA_TEAM_INACTIVE'),
+      },
+    });
+
+    expect(isOrcaTeamInputActive).toHaveBeenCalledWith('lead-session', 'team-old');
+    expect(deps.getSession).not.toHaveBeenCalled();
+    expect(deps.ensureRemoteReadyForSessionStart).not.toHaveBeenCalled();
+    expect(deps.synthesizeOrcaVendorOptionsFromDb).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid sessionId before touching transaction dependencies', async () => {
     const { deps } = createDeps();
     const transaction = createMakerSendTransaction(deps);
@@ -160,6 +206,41 @@ describe('maker SEND transaction', () => {
     expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.commitUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
+  });
+
+  it('forwards the caller dispatch marker after the final fence and prompt preview', async () => {
+    const events: string[] = [];
+    const session = createSession({
+      send: vi.fn(async (_message, opts) => {
+        await opts?.onAccepted?.();
+        opts?.onDispatching?.();
+        events.push('vendor-send');
+        return { accepted: true } satisfies SessionSendResult;
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      assertBeforeVendorDispatch: vi.fn(() => events.push('final-fence')),
+      dispatchUserPromptPreview: vi.fn(() => events.push('prompt-preview')),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('session-1', 'hello', undefined, {
+        persistUserMessage: {
+          clientId: 'client-dispatch-marker',
+          content: 'hello',
+        },
+        onDispatching: () => events.push('caller-marker'),
+      }),
+    ).resolves.toMatchObject({ accepted: true });
+
+    expect(events).toEqual([
+      'final-fence',
+      'prompt-preview',
+      'caller-marker',
+      'vendor-send',
+    ]);
   });
 
   it('links attachment messages to the accepted Pi transcript entry only for Pi attachments', async () => {

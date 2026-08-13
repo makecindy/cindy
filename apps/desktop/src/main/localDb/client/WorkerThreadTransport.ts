@@ -815,11 +815,15 @@ function orcaRemoveWorker(readyDb, args) {
 function orcaCancelStaleTeams(readyDb, args) {
   const payload = asRecord(args, 'orca.cancelStaleTeams args');
   const leadSessionId = expectString(payload.leadSessionId, 'leadSessionId');
-  const keepTeamId = expectString(payload.keepTeamId, 'keepTeamId');
+  const staleTeamIds = expectArray(payload.staleTeamIds, 'staleTeamIds').map((teamId) =>
+    expectString(teamId, 'staleTeamIds[]'),
+  );
   const now = expectNumber(payload.now, 'now');
-  const cancel = readyDb.prepare("UPDATE orca_teams SET status = 'cancelled', completed_at = ?, updated_at = ? WHERE lead_session_id = ? AND status = 'active' AND id != ?");
+  const cancel = readyDb.prepare("UPDATE orca_teams SET status = 'cancelled', completed_at = ?, updated_at = ? WHERE lead_session_id = ? AND status = 'active' AND id = ?");
   readyDb.transaction(() => {
-    cancel.run(now, now, leadSessionId, keepTeamId);
+    for (const teamId of staleTeamIds) {
+      cancel.run(now, now, leadSessionId, teamId);
+    }
   })();
 }
 

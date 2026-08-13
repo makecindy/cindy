@@ -83,4 +83,57 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     const calls = registerSource.match(/await clearLeadOrcaRoleState\(leadSessionId\)/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('ends the active team before selectively invalidating only that team queued input', () => {
+    const endedAt = registerSource.indexOf("await markTeamEnded(team.id, 'completed')");
+    const invalidatedAt = registerSource.indexOf('await discardOrcaTeamQueuedInputs({');
+    const directSettledAt = registerSource.indexOf(
+      'await orcaInterAgentDispatcher.waitForTeamDispatchSettlements(team.id)',
+      invalidatedAt,
+    );
+    const clearedAt = registerSource.indexOf('await clearLeadOrcaRoleState(leadSessionId)', endedAt);
+
+    expect(endedAt).toBeGreaterThan(-1);
+    expect(invalidatedAt).toBeGreaterThan(endedAt);
+    expect(directSettledAt).toBeGreaterThan(invalidatedAt);
+    expect(clearedAt).toBeGreaterThan(directSettledAt);
+  });
+
+  it('uses the legacy workflow id fallback for both end-team invalidation and snapshot restore', () => {
+    expect(registerSource).toContain(
+      'function resolveOrcaQueueItemTeamId(item: AgentInputQueuedMessage)',
+    );
+    expect(registerSource).toContain(
+      'const legacyTeamId = item.createOpts.vendorOptions?.orcaWorkflowId;',
+    );
+    expect(registerSource).toContain(
+      '(item) => resolveOrcaQueueItemTeamId(item) === input.teamId',
+    );
+    expect(registerSource).toContain('const teamId = resolveOrcaQueueItemTeamId(item);');
+    const resolverCalls = registerSource.match(/resolveOrcaQueueItemTeamId\(item\)/g) ?? [];
+    expect(resolverCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('serializes Lead start/end independently from the input-send lock', () => {
+    expect(registerSource).toContain('function withOrcaLeadLifecycleLock<T>(');
+    expect(registerSource).toContain(
+      'const orcaLeadLifecycleLocks = new Map<string, Promise<void>>();',
+    );
+    const lockStart = registerSource.indexOf('function withOrcaLeadLifecycleLock<T>(');
+    const lockEnd = registerSource.indexOf(
+      'function resolveOrcaQueueItemTeamId',
+      lockStart,
+    );
+    const lockSource = registerSource.slice(lockStart, lockEnd);
+    expect(lockSource).toContain('const previous = orcaLeadLifecycleLocks.get(leadSessionId)');
+    expect(lockSource).not.toContain('withSendToSessionLock');
+    expect(registerSource).toContain('enableOrca: enableOrcaWithLeadLifecycleLock');
+    expect(registerSource).toContain('disableOrca: disableOrcaWithLeadLifecycleLock');
+    expect(registerSource).toMatch(
+      /startTeam: \(params\) =>\s+withOrcaLeadLifecycleLock\(params\.leadSessionId, \(\) =>\s+orcaLifecycleService\.startTeam\(params\)/,
+    );
+    const lockedDisableCalls =
+      registerSource.match(/disableOrcaWithLeadLifecycleLock\(leadSessionId\)/g) ?? [];
+    expect(lockedDisableCalls.length).toBeGreaterThanOrEqual(3);
+  });
 });

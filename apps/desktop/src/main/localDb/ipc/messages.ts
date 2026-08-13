@@ -973,9 +973,9 @@ export function broadcastMessageDeleted(
 }
 
 /**
- * Hide a user row that was persisted after the session crossed `/clear`.
+ * Hide a user row that was persisted before a clear or selective pre-vendor cancellation won.
  *
- * This is deliberately narrower than `commitMessageDeletion`: a clear-race
+ * This is deliberately narrower than `commitMessageDeletion`: pre-vendor
  * cleanup must not create a context-rebuild marker, reset the native session,
  * or touch any other turn.  The row stays as a rewind tombstone so the same
  * clientId remains idempotent across a weak-link retry.

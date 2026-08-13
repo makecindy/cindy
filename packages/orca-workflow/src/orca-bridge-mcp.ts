@@ -154,6 +154,7 @@ export interface OrcaBridgeMcpDeps {
   }) => Promise<OrcaLeadHistoryPage>;
   dispatchInterAgentMessage?: (params: {
     targetSessionId: string;
+    teamId: string;
     rawContent: string;
     source: 'lead' | 'worker';
     senderLabel: string;
@@ -335,6 +336,7 @@ async function dispatchOrcaToolMessage(input: {
   message: Parameters<Session['send']>[0];
   deps?: OrcaBridgeMcpDeps;
   rawContent?: string;
+  teamId?: string;
   source?: 'lead' | 'worker';
   senderLabel?: string;
   log: Logger;
@@ -349,9 +351,16 @@ async function dispatchOrcaToolMessage(input: {
     ...input.meta,
     ...input.getLogState?.(),
   });
-  if (input.deps?.dispatchInterAgentMessage && input.rawContent && input.source && input.senderLabel) {
+  if (
+    input.deps?.dispatchInterAgentMessage &&
+    input.rawContent &&
+    input.teamId &&
+    input.source &&
+    input.senderLabel
+  ) {
     const result = await input.deps.dispatchInterAgentMessage({
       targetSessionId: input.session.id,
+      teamId: input.teamId,
       rawContent: input.rawContent,
       source: input.source,
       senderLabel: input.senderLabel,
@@ -368,7 +377,12 @@ async function dispatchOrcaToolMessage(input: {
     logOrcaSendNotDispatched(input.log, meta, 'send-rejected', {
       dispatchOutcome: result.dispatchOutcome,
     });
-    return makeOrcaRejectedToolError(meta, new Error('host dispatch failed'), input.errorExtra);
+    return makeOrcaRejectedToolError(meta, new Error('host dispatch failed'), {
+      ...(input.errorExtra ?? {}),
+      ...(result.dispatchOutcome !== undefined
+        ? { dispatch_outcome: result.dispatchOutcome }
+        : {}),
+    });
   }
   try {
     const result = await input.session.send(input.message, {
@@ -786,6 +800,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
             message: { type: 'user', content: formatAgentMessage('worker', message) },
             deps,
             rawContent: message,
+            teamId: link.workflowId,
             source: 'worker',
             senderLabel: link.workerId,
             log,

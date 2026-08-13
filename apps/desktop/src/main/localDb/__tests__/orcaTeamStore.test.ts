@@ -10,6 +10,9 @@ import * as schema from '../schema.js';
 const h = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   notifyAgentIslandSessionPatch: vi.fn(),
+  terminalFenceBegin: vi.fn((teamId: string) => ({ teamId, token: Symbol(teamId) })),
+  terminalFenceCommit: vi.fn(),
+  terminalFenceRollback: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -24,12 +27,23 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 vi.mock('../agentIslandSessionPatch.js', () => ({
   notifyAgentIslandSessionPatch: h.notifyAgentIslandSessionPatch,
 }));
+vi.mock('../../orcaTeamTerminalFence.js', () => ({
+  orcaTeamTerminalFence: {
+    begin: h.terminalFenceBegin,
+    commit: h.terminalFenceCommit,
+    rollback: h.terminalFenceRollback,
+  },
+}));
 
 describe('orcaTeamStore', () => {
   let currentClient: DbClient | null = null;
   let rawDb: Database.Database | null = null;
 
   afterEach(async () => {
+    const { setOrcaDuplicateTeamReconciliationHandler } = await import(
+      '../orcaTeamStore.js'
+    );
+    setOrcaDuplicateTeamReconciliationHandler(null);
     vi.clearAllMocks();
     if (currentClient) {
       clearCurrentDbClient(currentClient);
@@ -166,6 +180,119 @@ describe('orcaTeamStore', () => {
     expect(
       workers.find((worker) => worker.sessionId === 'worker-session-2')?.session.agentKind,
     ).toBe('pi');
+  });
+
+  it('fences duplicate active teams before committing read-time reconciliation', async () => {
+    const {
+      getActiveTeamByLead,
+      setOrcaDuplicateTeamReconciliationHandler,
+    } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedDuplicateActiveTeams(client);
+    const staleTransition = { teamId: 'team-stale', token: Symbol('team-stale') };
+    h.terminalFenceBegin.mockReturnValueOnce(staleTransition);
+    const reconcileInputs = vi.fn(async () => {});
+    setOrcaDuplicateTeamReconciliationHandler(reconcileInputs);
+
+    client.tx = (async (name: string, args: unknown) => {
+      expect(name).toBe('orca.cancelStaleTeams');
+      expect(args).toMatchObject({
+        leadSessionId: 'lead-duplicate',
+        staleTeamIds: ['team-stale'],
+      });
+      expect(h.terminalFenceBegin).toHaveBeenCalledWith('team-stale');
+      expect(h.terminalFenceCommit).not.toHaveBeenCalled();
+      await client.exec(
+        "UPDATE orca_teams SET status = 'cancelled' WHERE lead_session_id = ? AND status = 'active' AND id != ?",
+        ['lead-duplicate', 'team-latest'],
+      );
+    }) as DbClient['tx'];
+
+    await expect(getActiveTeamByLead('lead-duplicate')).resolves.toMatchObject({
+      id: 'team-latest',
+    });
+    expect(h.terminalFenceCommit).toHaveBeenCalledWith(staleTransition);
+    expect(h.terminalFenceRollback).not.toHaveBeenCalled();
+    expect(reconcileInputs).toHaveBeenCalledWith({
+      leadSessionId: 'lead-duplicate',
+      keptTeamId: 'team-latest',
+      staleTeamIds: ['team-stale'],
+      staleWorkerSessionIds: ['worker-stale-session'],
+    });
+  });
+
+  it('does not cancel an active team inserted after duplicate reconciliation is captured', async () => {
+    const { getActiveTeamByLead } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedDuplicateActiveTeams(client);
+    const originalTx = client.tx.bind(client);
+    client.tx = (async (name: string, args: unknown) => {
+      const now = Date.now() + 1;
+      await client.exec(
+        'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        ['team-concurrent', 'lead-duplicate', 'active', now, now],
+      );
+      return originalTx(name, args);
+    }) as DbClient['tx'];
+
+    await expect(getActiveTeamByLead('lead-duplicate')).resolves.toMatchObject({
+      id: 'team-latest',
+    });
+
+    expect(
+      await client.query<{ id: string; status: string }>(
+        'SELECT id, status FROM orca_teams ORDER BY id',
+      ),
+    ).toEqual([
+      { id: 'team-concurrent', status: 'active' },
+      { id: 'team-latest', status: 'active' },
+      { id: 'team-stale', status: 'cancelled' },
+    ]);
+    expect(h.terminalFenceBegin).toHaveBeenCalledTimes(1);
+    expect(h.terminalFenceBegin).toHaveBeenCalledWith('team-stale');
+  });
+
+  it('rolls back duplicate-team fences when reconciliation persistence fails', async () => {
+    const { getActiveTeamByLead } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedDuplicateActiveTeams(client);
+    const staleTransition = { teamId: 'team-stale', token: Symbol('team-stale') };
+    h.terminalFenceBegin.mockReturnValueOnce(staleTransition);
+    client.tx = (async () => {
+      throw new Error('cancel stale teams failed');
+    }) as DbClient['tx'];
+
+    await expect(getActiveTeamByLead('lead-duplicate')).rejects.toThrow(
+      'cancel stale teams failed',
+    );
+    expect(h.terminalFenceRollback).toHaveBeenCalledWith(staleTransition);
+    expect(h.terminalFenceCommit).not.toHaveBeenCalled();
+  });
+
+  it('does not commit duplicate-team cancellation when cleanup scope lookup fails', async () => {
+    const { getActiveTeamByLead } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedDuplicateActiveTeams(client);
+    await client.exec('DROP TABLE orca_workers');
+    const txSpy = vi.fn(client.tx);
+    client.tx = txSpy as DbClient['tx'];
+
+    await expect(getActiveTeamByLead('lead-duplicate')).rejects.toThrow(/orca_workers/);
+
+    expect(txSpy).not.toHaveBeenCalled();
+    expect(h.terminalFenceBegin).not.toHaveBeenCalled();
+    expect(
+      await client.query<{ id: string; status: string }>(
+        'SELECT id, status FROM orca_teams ORDER BY id',
+      ),
+    ).toEqual([
+      { id: 'team-latest', status: 'active' },
+      { id: 'team-stale', status: 'active' },
+    ]);
   });
 
   it('returns complete active worker projections grouped by lead in one batch', async () => {
@@ -342,5 +469,28 @@ async function seedOrcaWorkers(client: DbClient): Promise<void> {
   await client.exec(
     'INSERT INTO orca_workers (id, team_id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
     ['worker-2', 'team-1', 'worker-session-2', now, now],
+  );
+}
+
+async function seedDuplicateActiveTeams(client: DbClient): Promise<void> {
+  await client.exec(
+    'INSERT INTO sessions (id, title, agent_kind, orca_role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ['lead-duplicate', 'Duplicate Lead', 'codex', 'lead', 1, 2],
+  );
+  await client.exec(
+    'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ['team-stale', 'lead-duplicate', 'active', 1, 1],
+  );
+  await client.exec(
+    'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ['team-latest', 'lead-duplicate', 'active', 2, 2],
+  );
+  await client.exec(
+    'INSERT INTO sessions (id, title, agent_kind, orca_role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ['worker-stale-session', 'Stale Worker', 'codex', 'worker', 1, 1],
+  );
+  await client.exec(
+    'INSERT INTO orca_workers (id, team_id, session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ['worker-stale', 'team-stale', 'worker-stale-session', 1, 1],
   );
 }
