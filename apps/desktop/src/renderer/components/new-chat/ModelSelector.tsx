@@ -95,6 +95,7 @@ import {
   resolveCodexCompatibilityWireProtocol,
   sourcesForModel,
   visibleModelUnion,
+  groupModelsForDisplay,
   type ProviderView,
 } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
@@ -1314,7 +1315,12 @@ function ModelSelectorContentView({
             });
           },
       query,
-    });
+    }).map((section) => ({
+      ...section,
+      // 供应商顺序仍由 providerOrder 决定；仅整理每个来源自己的模型，使同类模型
+      // （如 Codex / GPT / DeepSeek）相邻，并遵从目录的 sortOrder。
+      models: groupModelsForDisplay(section.models).flatMap((group) => group.models),
+    }));
     // visibilityVersion 仅作刷新触发器(设置页改显示开关后强制重算);deviceId 切换需重算分段。
   }, [
     sourcesEnabled,

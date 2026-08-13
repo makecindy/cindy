@@ -374,6 +374,70 @@ describe('ModelSelector provider groups', () => {
     expect(within(dashscopeGroup).queryByText('Opus 4.8')).toBeNull();
   });
 
+  it('keeps models of the same family together within one provider group', async () => {
+    providersRef.providers = [
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'api-key' },
+        routing: { 'claude-code': {} },
+        connected: true,
+        models: {
+          'claude-code': [
+            {
+              id: 'codex/gpt-5.6-sol',
+              name: 'Codex GPT-5.6 Sol',
+              group: 'gpt-budget',
+              sortOrder: 10,
+              contextWindow: 200000,
+              efforts: ['low', 'medium', 'high'],
+              defaultEffort: 'high',
+            },
+            {
+              id: 'deepseek-v4-pro',
+              name: 'DeepSeek V4 Pro',
+              group: 'ungrouped',
+              sortOrder: 20,
+              contextWindow: 200000,
+              efforts: ['low', 'medium', 'high'],
+              defaultEffort: 'high',
+            },
+            {
+              id: 'codex/gpt-5.6-terra',
+              name: 'Codex GPT-5.6 Terra',
+              group: 'gpt-budget',
+              sortOrder: 11,
+              contextWindow: 200000,
+              efforts: ['low', 'medium', 'high'],
+              defaultEffort: 'medium',
+            },
+          ],
+        },
+      },
+    ] as unknown[];
+
+    try {
+      renderSelector({
+        modelId: 'codex/gpt-5.6-sol',
+        currentProviderId: 'xd',
+      });
+      await openDropdown();
+
+      const rows = within(screen.getByRole('group', { name: 'Cindy AI' }))
+        .getAllByRole('option')
+        .map((row) => row.textContent);
+      expect(rows).toEqual([
+        expect.stringContaining('Codex GPT-5.6 Sol'),
+        expect.stringContaining('Codex GPT-5.6 Terra'),
+        expect.stringContaining('DeepSeek V4 Pro'),
+      ]);
+    } finally {
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
   it('keeps the create-agent secondary panel at the original left/center position with layout coordinates', async () => {
     renderSelector({ visualVariant: 'create-agent', useMorphPopover: true });
     await openDropdown();
