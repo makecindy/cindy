@@ -30,6 +30,7 @@ export type SdkAttachmentBlock = {
   path?: string;
   base64?: string;
   mimeType?: string;
+  pathOrigin?: 'desktop-host';
   originalName?: string;
   /**
    * 显式文件附件的原始磁盘路径(path 为 xdt-image:// 缓存 URL 时携带):
@@ -122,7 +123,11 @@ function buildImageAttachment(file: AttachedFile): RenderImageAttachment | null 
 export function buildUserMessageAttachmentPayload(
   files?: readonly AttachedFile[],
 ): UserMessageAttachmentPayload {
-  const serializedFiles = serializeAttachedFiles(files);
+  const serializedFiles = serializeAttachedFiles(files)?.map((file) => (
+    getAgentInputAttachmentBlockType(file.category, file.ext) === 'image'
+      ? { ...file, pathOrigin: 'desktop-host' as const }
+      : file
+  ));
   const imageAttachments = files
     ?.map(buildImageAttachment)
     .filter((image): image is RenderImageAttachment => image !== null);
@@ -143,6 +148,7 @@ export function buildUserMessageAttachmentPayload(
 
 function buildAttachmentBlock(file: SerializedAttachedFile): SdkAttachmentBlock | null {
   const type = getAgentInputAttachmentBlockType(file.category, file.ext);
+  const pathOrigin = type === 'image' ? { pathOrigin: 'desktop-host' as const } : {};
   if (file.url) {
     // 显式文件(选择器/拖拽)拷入缓存后 url 与原始磁盘 path 并存:把原始路径一并
     // 带上,message 形态的远程发送才能识别「字节精确」语义不压缩(队列形态的
@@ -154,6 +160,7 @@ function buildAttachmentBlock(file: SerializedAttachedFile): SdkAttachmentBlock 
       type,
       path: file.url,
       mimeType: file.mimeType,
+      ...pathOrigin,
       originalName: file.originalName ?? file.name,
       ...(originalPath ? { originalPath } : {}),
     };
@@ -163,6 +170,7 @@ function buildAttachmentBlock(file: SerializedAttachedFile): SdkAttachmentBlock 
       type,
       path: file.path,
       mimeType: file.mimeType,
+      ...pathOrigin,
       originalName: file.originalName ?? file.name,
     };
   }
@@ -173,6 +181,7 @@ function buildAttachmentBlock(file: SerializedAttachedFile): SdkAttachmentBlock 
       type,
       base64: legacyBase64,
       mimeType: file.mimeType,
+      ...pathOrigin,
       originalName: file.originalName ?? file.name,
     };
   }
