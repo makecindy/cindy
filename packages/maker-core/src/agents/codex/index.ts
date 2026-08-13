@@ -8824,6 +8824,10 @@ export class CodexAgent extends BaseAgent {
         return;
       }
       if (params.review.status === 'denied') {
+        // Guardian reviews are asynchronous. If the user has already left Auto,
+        // the late verdict belongs to the old permission mode and must not
+        // produce a user-facing Auto-block notice or terminal marker.
+        if (mutablePermissionMode !== 'auto') return;
         // Match Claude Auto: a real classifier verdict is authoritative. Codex has
         // already blocked the action and returned the denial to the model; do not
         // weaken Auto by offering a user override prompt.

@@ -11987,6 +11987,79 @@ describe('CodexAgent MCP thread context hooks', () => {
     await consumeEvents;
   });
 
+  it.each([
+    ['Ask', 'ask'],
+    ['Full access', 'bypassPermissions'],
+  ] as const)(
+    'ignores a delayed Guardian denial after switching from Auto to %s',
+    async (_label, permissionMode) => {
+      const turnId = `turn-guardian-late-${permissionMode}`;
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: turnId } };
+        if (method === Method.TurnInterrupt) return {};
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: `session-guardian-late-${permissionMode}`,
+        model: 'gpt-5.5',
+        providerId: 'openai',
+        workingDir: '/repo',
+        permissionMode: 'auto',
+      });
+      const events: AgentEvent[] = [];
+      const consumeEvents = (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      await handle.send({ type: 'user', content: 'do work' });
+      if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
+      await handle.setPermissionMode(permissionMode);
+
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.autoApprovalReviewCompleted) {
+        throw new Error('expected autoApprovalReviewCompleted');
+      }
+      handlers.autoApprovalReviewCompleted({
+        threadId: 'start-thread-id',
+        turnId,
+        startedAtMs: 1_000,
+        completedAtMs: 1_042,
+        reviewId: `review-late-${permissionMode}`,
+        targetItemId: `item-late-${permissionMode}`,
+        decisionSource: 'agent',
+        review: {
+          status: 'denied',
+          riskLevel: 'high',
+          userAuthorization: 'low',
+          rationale: 'The command removes persistent data.',
+        },
+        action: {
+          type: 'command',
+          source: 'shell',
+          command: 'rm -f /tmp/data.db',
+          cwd: '/repo',
+        },
+      });
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: turnId, status: 'completed' },
+      });
+
+      await waitForExpectation(() => {
+        expect(events).toContainEqual(expect.objectContaining({ type: 'done' }));
+      });
+      expect(events.some((event) =>
+        event.type === 'error' &&
+        String((event.data as { message?: unknown }).message).includes('[AUTO_REVIEW_BLOCKED]'),
+      )).toBe(false);
+      const done = events.find((event) => event.type === 'done');
+      expect(done?.data).not.toHaveProperty('autoReviewBlocked');
+
+      await handle.close();
+      await consumeEvents;
+    },
+  );
+
   it('keeps Auto and switches to the current-model fallback when Guardian times out', async () => {
     const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
     const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
