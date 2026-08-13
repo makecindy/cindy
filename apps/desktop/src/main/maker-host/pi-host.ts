@@ -43,7 +43,7 @@ import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { desktopCodexAuthAdapter, readClaudeApiKey } from './auth-adapters.js';
 import { getClaudeEndpoint } from './anthropic-compat-proxy-host.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
-import { getGrokAccessToken, hasGrokOAuthLogin } from './grok-oauth-login.js';
+import { hasGrokOAuthLogin } from './grok-oauth-login.js';
 import hostSystemPrompt from './host-system-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
@@ -59,6 +59,8 @@ import { resolveXdPiGatewayWireProtocol } from './active-catalog.js';
 const log = createLogger('pi-host');
 
 const PI_API_KEY_ENV = 'CINDY_PI_API_KEY';
+const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
+const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_PROVIDER_AUTH_PLACEHOLDER_KEY = 'cindy-pi-provider-auth-placeholder';
 
 /**
@@ -247,27 +249,52 @@ export function piNativeModelId(providerId: string, model: string): string {
     : model;
 }
 
-function officialPiModels(
-  providerId: string,
-  selectedIds?: ReadonlySet<string>,
-): PiNativeModelSpec[] | null {
+function officialPiModels(providerId: string): PiNativeModelSpec[] | null {
   const models = piModelCatalog.providers[providerId];
   if (!models) return null;
-  return models
-    .filter((model) => !selectedIds || selectedIds.has(model.id))
-    .map((model) => ({
-      id: model.id,
-      name: model.name,
-      api: model.api,
-      reasoning: model.reasoning,
-      thinkingLevelMap: model.thinkingLevelMap,
-      input: model.input,
-      cost: model.cost,
-      contextWindow: model.contextWindow,
-      maxTokens: model.maxTokens,
-      compat: model.compat,
-      samplingParams: model.samplingParams,
-    }));
+  return models.map((model) => ({
+    id: model.id,
+    name: model.name,
+    api: model.api,
+    reasoning: model.reasoning,
+    thinkingLevelMap: model.thinkingLevelMap,
+    input: model.input,
+    cost: model.cost,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+    compat: model.compat,
+    samplingParams: model.samplingParams,
+  }));
+}
+
+function configuredPiModel(model: {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  supportsImageInput?: boolean;
+  reasoning?: boolean;
+  reasoningEfforts?: PiReasoningEffort[];
+}): PiNativeModelSpec {
+  const supportedEfforts = new Set(model.reasoningEfforts ?? []);
+  return {
+    id: model.id,
+    name: model.name,
+    contextWindow: model.contextWindow,
+    ...(model.supportsImageInput === true
+      ? { input: ['text', 'image'] as Array<'text' | 'image'> }
+      : {}),
+    ...(model.reasoning === true
+      ? {
+          reasoning: true,
+          thinkingLevelMap: Object.fromEntries(
+            PI_REASONING_EFFORTS.map((effort) => [
+              effort,
+              supportedEfforts.has(effort) ? effort : null,
+            ]),
+          ),
+        }
+      : {}),
+  };
 }
 
 /**
@@ -361,77 +388,97 @@ export function buildPiNativeProvidersFromConfigs(
       api: wireProtocolToPiApi(rt.wireProtocol),
       apiKeyEnvVar,
       ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
-      models: rt.piCatalogProviderId
-        ? officialPiModels(rt.piCatalogProviderId, new Set(rt.models.map((model) => model.id))) ?? []
-        : rt.models.map((m) => {
-            const supportedEfforts = new Set(m.reasoningEfforts ?? []);
-            return {
-              id: m.id,
-              name: m.name,
-              contextWindow: m.contextWindow,
-              ...(m.supportsImageInput === true
-                ? { input: ['text', 'image'] as Array<'text' | 'image'> }
-                : {}),
-              ...(m.reasoning === true
-                ? {
-                    reasoning: true,
-                    thinkingLevelMap: Object.fromEntries(
-                      PI_REASONING_EFFORTS.map((effort) => [
-                        effort,
-                        supportedEfforts.has(effort) ? effort : null,
-                      ]),
-                    ),
-                  }
-                : {}),
-            };
-        }),
+      models: (() => {
+        const official = rt.piCatalogProviderId
+          ? officialPiModels(rt.piCatalogProviderId)
+          : null;
+        const officialById = new Map((official ?? []).map((model) => [model.id, model]));
+        // The catalog marker proves metadata only for exact matches. Models added by the user,
+        // returned by modelsUrl, or retained from an older snapshot keep their saved fields.
+        return rt.models.map((model) => officialById.get(model.id) ?? configuredPiModel(model));
+      })(),
     });
   }
   return { providers, env };
 }
 
-export async function buildXaiPiNativeProvider(model: string): Promise<PiNativeProvidersResult> {
-  const nativeModelId = piNativeModelId('xai', model);
-  const models = officialPiModels('xai');
-  const selected = models?.find((candidate) => candidate.id === nativeModelId);
-  if (!selected) throw new Error(`Pi official xAI catalog does not contain model '${model}'`);
-  const envVar = piNativeKeyEnvVar('xai');
+export async function buildXaiPiNativeProvider(
+  model?: string,
+  allowHistoricalResume = false,
+): Promise<PiNativeProvidersResult> {
+  const officialModels = officialPiModels('xai') ?? [];
+  const models = officialModels.map((candidate) => ({
+    ...candidate,
+    id: `xai/${candidate.id}`,
+    // Keep the xai/ prefix on the wire so the existing compat proxy selects its Responses
+    // bridge, which refreshes OAuth per request, recovers 401/403, and injects x_search.
+    api: 'anthropic-messages' as const,
+  }));
+  const aliases = Object.fromEntries(
+    officialModels.flatMap((candidate) => [
+      [candidate.id, `xai/${candidate.id}`],
+      [`xai/${candidate.id}`, `xai/${candidate.id}`],
+    ]),
+  );
+  if (model) {
+    const namespacedModel = model.startsWith('xai/') ? model : `xai/${model}`;
+    if (!models.some((candidate) => candidate.id === namespacedModel)) {
+      if (!allowHistoricalResume) {
+        throw new Error(`Pi official xAI catalog does not contain model '${model}'`);
+      }
+      // Resume compatibility only: preserve the historical id and route it through the same
+      // proxy without asserting unverified vision/reasoning capabilities or publishing it.
+      models.push({ id: namespacedModel, name: namespacedModel, api: 'anthropic-messages' });
+      aliases[model] = namespacedModel;
+      aliases[piNativeModelId('xai', model)] = namespacedModel;
+    }
+  }
   return {
     providers: [{
       id: 'xai',
       name: 'xAI',
-      baseUrl: 'https://api.x.ai/v1',
-      api: selected.api ?? 'openai-completions',
-      apiKeyEnvVar: envVar,
-      models: models ?? [],
-      modelIdAliases: Object.fromEntries(
-        (models ?? []).map((candidate) => [`xai/${candidate.id}`, candidate.id]),
-      ),
+      baseUrl: getClaudeEndpoint(),
+      api: 'anthropic-messages',
+      apiKeyEnvVar: PI_API_KEY_ENV,
+      headers: {
+        'x-cindy-pi-session-id': `$${PI_SESSION_ID_ENV}`,
+        'x-cindy-pi-session-token': `$${PI_SESSION_TOKEN_ENV}`,
+      },
+      models,
+      modelIdAliases: aliases,
     }],
-    env: { [envVar]: await getGrokAccessToken() },
+    env: {},
   };
 }
 
 /** BYOM:读 DB 自定义 provider + safeStorage key → pi 原生 provider spec。IO 外壳,逻辑在上面。 */
 async function resolvePiNativeProviders(
-  ctx: { providerId?: string | null; model: string },
+  ctx: { providerId?: string | null; model: string; resumeSessionId?: string },
 ): Promise<PiNativeProvidersResult> {
-  if (ctx.providerId === 'xai') return buildXaiPiNativeProvider(ctx.model);
-  let configs;
+  let configs: CustomProviderConfig[] = [];
   try {
     configs = await listCustomProvidersWithSecureHeaders();
   } catch (err) {
-    log.warn('resolvePiNativeProviders: listCustomProviders failed, gateway-only', {
+    log.warn('resolvePiNativeProviders: listCustomProviders failed, continuing without custom providers', {
       message: err instanceof Error ? err.message : String(err),
     });
-    return { providers: [], env: {} };
   }
-  const selectedConfigs = ctx.providerId
-    ? configs.filter((config: CustomProviderConfig) => config.id === ctx.providerId)
-    : configs;
-  return buildPiNativeProvidersFromConfigs(selectedConfigs, readCustomProviderKey, (id, reason) =>
+  const custom = buildPiNativeProvidersFromConfigs(
+    configs.filter((config: CustomProviderConfig) => config.id !== 'xai'),
+    readCustomProviderKey,
+    (id, reason) =>
     log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
   );
+  if (ctx.providerId === 'xai' || hasGrokOAuthLogin()) {
+    const selectedXaiModel = ctx.providerId === 'xai'
+      || (!ctx.providerId && ctx.model.startsWith('xai/'))
+      ? ctx.model
+      : undefined;
+    const xai = await buildXaiPiNativeProvider(selectedXaiModel, !!ctx.resumeSessionId);
+    custom.providers.push(...xai.providers);
+    Object.assign(custom.env, xai.env);
+  }
+  return custom;
 }
 
 /** pi 二进制缺失时返回 null(调用方跳过注册);其余情况构造 PiAgent。 */

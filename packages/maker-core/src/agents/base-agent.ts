@@ -455,6 +455,8 @@ export interface AgentDeps {
       remoteHostId?: string | null;
       providerId?: string | null;
       model: string;
+      /** Present only when restoring an existing Pi session; permits private compatibility ids. */
+      resumeSessionId?: string;
     },
   ) => Promise<PiNativeProvidersResult | null>;
 

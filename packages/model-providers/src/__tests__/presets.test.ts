@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 
 import { BUNDLED_CATALOG, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from '../catalog.js';
 import { mergeWithBundled } from '../source.js';
-import type { Catalog } from '../types.js';
+import type { AgentKind, Catalog } from '../types.js';
 
 /** 最小合法目录（单 provider）。 */
 function minimalCatalog(extra?: Partial<Catalog>): Catalog {
@@ -738,9 +738,9 @@ describe('官方渠道预设契约', () => {
     expect(pi?.models.find((model) => model.id === 'kimi-k2.7-code')).toMatchObject({
       contextWindow: 262_144,
       supportsImageInput: true,
-      reasoning: true,
-      reasoningEfforts: ['minimal', 'low', 'medium', 'high'],
     });
+    expect(pi?.models.find((model) => model.id === 'kimi-k2.7-code'))
+      .not.toHaveProperty('reasoningEfforts');
   });
 
   it.each([

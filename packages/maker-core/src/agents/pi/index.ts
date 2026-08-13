@@ -599,6 +599,7 @@ export class PiAgent extends BaseAgent {
           remoteHostId: opts.remoteHostId,
           providerId: opts.providerId,
           model: opts.model,
+          resumeSessionId: opts.resumeSessionId,
         });
         nativeProviders = resolved?.providers ?? [];
         nativeEnv = resolved?.env ?? {};

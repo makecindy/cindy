@@ -53,12 +53,10 @@ function catalogEntries(providerId, value) {
 }
 
 function supportedEfforts(model) {
-  if (model.reasoning !== true) return [];
+  if (model.reasoning !== true || !model.thinkingLevelMap) return [];
   return PI_LEVELS.filter((level) => {
     const mapped = model.thinkingLevelMap?.[level];
-    if (mapped === null) return false;
-    if (level === 'xhigh' || level === 'max') return mapped !== undefined;
-    return true;
+    return mapped !== undefined && mapped !== null;
   });
 }
 

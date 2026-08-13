@@ -7,8 +7,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { derivePiRuntimeFromClaudeRuntime } from '../../../shared/piRuntimeInitialization.js';
 
 vi.mock('../grok-oauth-login.js', () => ({
-  getGrokAccessToken: async () => 'grok-oauth-token',
   hasGrokOAuthLogin: () => true,
+}));
+
+vi.mock('../anthropic-compat-proxy-host.js', () => ({
+  getClaudeEndpoint: () => 'http://127.0.0.1:18765',
 }));
 
 vi.mock('electron', () => ({
@@ -35,7 +38,7 @@ const piRuntime = (over: Partial<NonNullable<Cfg['runtimes']['pi']>> = {}) => ({
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
-  it('reuses Pi official metadata and keeps only the models selected in Cindy', () => {
+  it('reuses exact Pi official metadata and preserves unmatched configured models', () => {
     const { providers } = buildPiNativeProvidersFromConfigs(
       [{
         id: 'deepseek-local',
@@ -45,25 +48,29 @@ describe('buildPiNativeProvidersFromConfigs', () => {
           pi: piRuntime({
             baseUrl: 'https://proxy.example/v1',
             piCatalogProviderId: 'deepseek',
-            models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+            models: [
+              { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+              { id: 'models-url-only', name: 'Models URL Only', contextWindow: 64_000 },
+            ],
           }),
         },
       }],
       () => 'secret',
     );
-    expect(providers[0]).toMatchObject({
-      id: 'deepseek-local',
-      baseUrl: 'https://proxy.example/v1',
-      models: [{
-        id: 'deepseek-v4-pro',
-        api: 'openai-completions',
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        reasoning: true,
-        thinkingLevelMap: { low: null, high: 'high', max: 'max' },
-      }],
+    expect(providers[0]).toMatchObject({ id: 'deepseek-local', baseUrl: 'https://proxy.example/v1' });
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'deepseek-v4-pro',
+      api: 'openai-completions',
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      reasoning: true,
+      thinkingLevelMap: { low: null, high: 'high', max: 'max' },
     });
-    expect(providers[0]?.models).toHaveLength(1);
+    expect(providers[0]?.models[1]).toEqual({
+      id: 'models-url-only',
+      name: 'Models URL Only',
+      contextWindow: 64_000,
+    });
   });
 
   it('maps historical xAI namespaced ids to Pi official bare ids', () => {
@@ -77,12 +84,17 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers).toHaveLength(1);
     expect(providers[0]).toMatchObject({
       id: 'xai',
-      baseUrl: 'https://api.x.ai/v1',
-      api: 'openai-completions',
-      modelIdAliases: { 'xai/grok-4.6': 'grok-4.6' },
+      baseUrl: 'http://127.0.0.1:18765',
+      api: 'anthropic-messages',
+      apiKeyEnvVar: 'CINDY_PI_API_KEY',
+      headers: {
+        'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
+        'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
+      },
+      modelIdAliases: { 'grok-4.6': 'xai/grok-4.6' },
     });
-    expect(providers[0]?.models.find((model) => model.id === 'grok-4.6')).toMatchObject({
-      api: 'openai-completions',
+    expect(providers[0]?.models.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
+      api: 'anthropic-messages',
       contextWindow: 500_000,
       maxTokens: 500_000,
       input: ['text', 'image'],
@@ -93,7 +105,18 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         supportsReasoningEffort: false,
       },
     });
-    expect(env).toEqual({ CINDY_PI_KEY_XAI: 'grok-oauth-token' });
+    expect(env).toEqual({});
+  });
+
+  it('adds a private conservative xAI descriptor only when resuming a historical namespaced id', async () => {
+    await expect(buildXaiPiNativeProvider('xai/grok-retired')).rejects.toThrow(/does not contain/);
+    const { providers } = await buildXaiPiNativeProvider('xai/grok-retired', true);
+    expect(providers[0]?.models.find((model) => model.id === 'xai/grok-retired')).toEqual({
+      id: 'xai/grok-retired',
+      name: 'xai/grok-retired',
+      api: 'anthropic-messages',
+    });
+    expect(providers[0]?.modelIdAliases?.['grok-retired']).toBe('xai/grok-retired');
   });
   it('turns a Claude-derived wizard runtime and copied Pi key into a callable native provider', () => {
     const derived = derivePiRuntimeFromClaudeRuntime({
