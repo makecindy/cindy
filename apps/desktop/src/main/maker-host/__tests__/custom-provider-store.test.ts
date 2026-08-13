@@ -393,6 +393,76 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     }).ok).toBe(false);
   });
 
+  it('clears the Pi catalog marker when any write path changes saved model metadata', async () => {
+    mountDb();
+    const original = await createCustomProvider({
+      id: 'official-pi-edited',
+      name: 'Official Pi',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          wireProtocol: 'openai-chat',
+          piCatalogProviderId: 'deepseek',
+          models: [{
+            id: 'deepseek-v4-pro',
+            name: 'DeepSeek V4 Pro',
+            contextWindow: 1_000_000,
+            reasoning: true,
+            reasoningEfforts: ['high', 'max'],
+            reasoningDefaultEffort: 'high',
+          }],
+        },
+      },
+    });
+    const edited: CustomProviderConfig = {
+      ...original,
+      runtimes: {
+        ...original.runtimes,
+        pi: {
+          ...original.runtimes.pi!,
+          models: [{
+            ...original.runtimes.pi!.models[0]!,
+            name: 'My DeepSeek',
+            contextWindow: 64_000,
+            supportsImageInput: true,
+            reasoningEfforts: ['low'],
+            reasoningDefaultEffort: 'low',
+          }],
+        },
+      },
+    };
+    expect((await updateCustomProvider('official-pi-edited', {
+      ...original,
+      name: 'Renamed provider only',
+    }))?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    expect((await updateCustomProvider('official-pi-edited', edited))?.runtimes.pi)
+      .not.toHaveProperty('piCatalogProviderId');
+
+    const second = await createCustomProvider({
+      ...original,
+      id: 'official-pi-discovered',
+    });
+    expect(await updateCustomProviderIfUnchanged(
+      second.id,
+      second,
+      {
+        ...second,
+        runtimes: {
+          ...second.runtimes,
+          pi: {
+            ...second.runtimes.pi!,
+            models: [
+              ...second.runtimes.pi!.models,
+              { id: 'new-from-models-url', name: 'New model' },
+            ],
+          },
+        },
+      },
+    )).toBe(true);
+    expect((await getCustomProvider(second.id))?.runtimes.pi?.piCatalogProviderId)
+      .toBe('deepseek');
+  });
+
   it('round-trips only an explicitly enabled Pi reasoning capability', async () => {
     mountDb();
     await createCustomProvider({

@@ -99,6 +99,46 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[0]?.models[0]).not.toHaveProperty('thinkingLevelMap');
   });
 
+  it('preserves explicit model overrides after the catalog marker is cleared', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'deepseek-customized',
+        name: 'DeepSeek Customized',
+        auth: { method: 'apiKey' },
+        runtimes: {
+          pi: piRuntime({
+            baseUrl: 'https://api.deepseek.com',
+            wireProtocol: 'openai-chat',
+            models: [{
+              id: 'deepseek-v4-pro',
+              name: 'My DeepSeek',
+              contextWindow: 64_000,
+              supportsImageInput: true,
+              reasoning: true,
+              reasoningEfforts: ['low'],
+            }],
+          }),
+        },
+      }],
+      () => 'secret',
+    );
+    expect(providers[0]?.models[0]).toEqual({
+      id: 'deepseek-v4-pro',
+      name: 'My DeepSeek',
+      contextWindow: 64_000,
+      input: ['text', 'image'],
+      reasoning: true,
+      thinkingLevelMap: {
+        minimal: null,
+        low: 'low',
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: null,
+      },
+    });
+  });
+
   it('maps historical xAI namespaced ids to Pi official bare ids', () => {
     expect(piNativeModelId('xai', 'xai/grok-4.6')).toBe('grok-4.6');
     expect(piNativeModelId('xai', 'grok-4.6')).toBe('grok-4.6');

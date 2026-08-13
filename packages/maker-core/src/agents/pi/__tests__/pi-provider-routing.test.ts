@@ -302,6 +302,102 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('applies each native provider alias during provider-less compatibility routing', async () => {
+    const provider = (id: string, aliases?: Record<string, string>) => ({
+      id,
+      name: id,
+      baseUrl: `http://${id}.test`,
+      api: 'anthropic-messages' as const,
+      ...(aliases ? { modelIdAliases: aliases } : {}),
+      models: [{ id: id === 'xai' ? 'xai/grok-4.6' : 'other-model' }],
+    });
+    const agent = new PiAgent({
+      auth: {
+        getState: async (options) => ({
+          authenticated: true,
+          identity: options?.providerId === 'xai' ? 'SuperGrok' : 'test',
+          authSource: 'oauth' as const,
+        }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          provider('other'),
+          provider('xai', {
+            'grok-4.6': 'xai/grok-4.6',
+            'xai/grok-4.6': 'xai/grok-4.6',
+          }),
+        ],
+        env: {},
+      }),
+    });
+
+    const bare = await agent.startSession({
+      sessionId: 'providerless-grok-bare',
+      workingDir: cwd,
+      model: 'grok-4.6',
+    });
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
+      .toEqual(['--provider', 'xai']);
+    expect(captured.args.slice(captured.args.indexOf('--model'), captured.args.indexOf('--model') + 2))
+      .toEqual(['--model', 'xai/grok-4.6']);
+    await bare.close();
+
+    const namespaced = await agent.startSession({
+      sessionId: 'providerless-grok-namespaced',
+      workingDir: cwd,
+      model: 'xai/grok-4.6',
+    });
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
+      .toEqual(['--provider', 'xai']);
+    await namespaced.close();
+  });
+
+  it('fails closed when provider-less aliases are ambiguous', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [
+        {
+          id: 'native-a',
+          name: 'Native A',
+          baseUrl: 'http://a.test',
+          api: 'openai-completions',
+          modelIdAliases: { legacy: 'native-a-model' },
+          models: [{ id: 'native-a-model' }],
+        },
+        {
+          id: 'native-b',
+          name: 'Native B',
+          baseUrl: 'http://b.test',
+          api: 'openai-completions',
+          modelIdAliases: { legacy: 'native-b-model' },
+          models: [{ id: 'native-b-model' }],
+        },
+      ],
+      env: {},
+    })));
+    await expect(agent.startSession({
+      sessionId: 'providerless-alias-conflict',
+      workingDir: cwd,
+      model: 'legacy',
+    })).rejects.toThrow(/matches multiple native providers.*refusing to guess an endpoint/);
+    expect(captured.args).toEqual([]);
+  });
+
   it('fails closed when an explicit xAI selection cannot build the Pi native provider', async () => {
     const deps: AgentDeps = {
       auth: {

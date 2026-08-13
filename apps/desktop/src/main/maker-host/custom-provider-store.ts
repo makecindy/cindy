@@ -479,6 +479,46 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
 }
 
 /**
+ * 官方目录标记只适用于用户尚未改写的预设快照。所有写入口都在 main 再比一次旧值，
+ * 避免非当前设置页（移动端、旧 renderer、异步发现）改了路由或模型后仍保留 marker，
+ * 继而在 Pi 启动时用官方模型整条覆盖用户显式配置。
+ */
+function invalidateEditedPiCatalogMarker(
+  previous: CustomProviderConfig,
+  next: CustomProviderConfig,
+): CustomProviderConfig {
+  const previousPi = previous.runtimes.pi;
+  const nextPi = next.runtimes.pi;
+  if (
+    !previousPi?.piCatalogProviderId
+    || !nextPi?.piCatalogProviderId
+    || previousPi.piCatalogProviderId !== nextPi.piCatalogProviderId
+  ) return next;
+  const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
+  const nextModelById = new Map(nextPi.models.map((model) => [model.id, model]));
+  const modelOverridesChanged = previousPi.models.some((model) => {
+    const candidate = nextModelById.get(model.id);
+    if (!candidate) return false;
+    const projectedFields = (value: ProviderRuntimeModelConfig) => ({
+      name: value.name,
+      contextWindow: value.contextWindow,
+      supportsImageInput: value.supportsImageInput,
+      reasoning: value.reasoning,
+      reasoningEfforts: value.reasoningEfforts,
+      reasoningDefaultEffort: value.reasoningDefaultEffort,
+    });
+    return JSON.stringify(projectedFields(model)) !== JSON.stringify(projectedFields(candidate));
+  });
+  const unchanged = normalizeBaseUrl(previousPi.baseUrl) === normalizeBaseUrl(nextPi.baseUrl)
+    && previousPi.wireProtocol === nextPi.wireProtocol
+    && !modelOverridesChanged;
+  if (unchanged) return next;
+  const pi = { ...nextPi };
+  delete pi.piCatalogProviderId;
+  return { ...next, runtimes: { ...next.runtimes, pi } };
+}
+
+/**
  * 把授权后自动发现的模型 additions-only 合并进自定义供应商配置的指定 runtime（纯函数）。
  * 已有 id first-wins（用户手填 / 上次发现的条目不被覆盖）；无新增返回 null（调用方免写库）。
  * 持久化发现结果是自定义 OAuth 供应商「重启后模型仍在」的保证——内存 augment 会随进程消失。
@@ -662,10 +702,13 @@ export async function updateCustomProvider(
   config: CustomProviderConfig,
   now: number = Date.now(),
 ): Promise<CustomProviderConfig | null> {
-  const c = normalizeConfig({ ...config, id });
   const db = getDbClient().drizzle;
   const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
   if (!existing) return null;
+  const c = invalidateEditedPiCatalogMarker(
+    rowToConfig(existing),
+    normalizeConfig({ ...config, id }),
+  );
   await db
     .update(customProviders)
     .set({
@@ -689,7 +732,10 @@ export async function updateCustomProviderIfUnchanged(
   now: number = Date.now(),
 ): Promise<boolean> {
   const expectedConfig = normalizeConfig({ ...expected, id });
-  const nextConfig = normalizeConfig({ ...config, id });
+  const nextConfig = invalidateEditedPiCatalogMarker(
+    expectedConfig,
+    normalizeConfig({ ...config, id }),
+  );
   const db = getDbClient().drizzle;
   const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
   if (!existing) return false;

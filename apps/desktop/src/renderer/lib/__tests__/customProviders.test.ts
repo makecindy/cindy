@@ -59,6 +59,50 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
       }),
     ).toBeUndefined();
   });
+
+  it('clears the marker after any model metadata is edited', () => {
+    const withModels: {
+      baseUrl: string;
+      wireProtocol: 'anthropic-messages';
+      piCatalogProviderId: string;
+      models: ProviderRuntimeModelConfig[];
+    } = {
+      ...official,
+      models: [{
+        id: 'model-a',
+        name: 'Model A',
+        contextWindow: 128_000,
+        supportsImageInput: true,
+        reasoning: true,
+        reasoningEfforts: ['low', 'high'],
+        reasoningDefaultEffort: 'high',
+      }],
+    };
+    expect(piCatalogProviderIdAfterRouteEdit('pi', withModels, withModels)).toBe('example');
+    const editedModels: ProviderRuntimeModelConfig[] = [
+      { ...withModels.models[0], name: 'Renamed' },
+      { ...withModels.models[0], contextWindow: 64_000 },
+      { ...withModels.models[0], supportsImageInput: false },
+      { ...withModels.models[0], reasoningEfforts: ['low'] },
+    ];
+    for (const model of editedModels) {
+      expect(piCatalogProviderIdAfterRouteEdit('pi', withModels, {
+        ...withModels,
+        models: [model],
+      })).toBeUndefined();
+    }
+    expect(piCatalogProviderIdAfterRouteEdit('pi', withModels, {
+      ...withModels,
+      models: [
+        ...withModels.models,
+        { id: 'models-url-only', name: 'Models URL Only', defaultEnabled: false },
+      ],
+    })).toBe('example');
+    expect(piCatalogProviderIdAfterRouteEdit('pi', withModels, {
+      ...withModels,
+      models: [{ ...withModels.models[0], defaultEnabled: false }],
+    })).toBe('example');
+  });
 });
 
 describe('replaceCustomProviderModelId', () => {

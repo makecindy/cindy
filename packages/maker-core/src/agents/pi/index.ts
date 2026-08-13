@@ -636,10 +636,22 @@ export class PiAgent extends BaseAgent {
           : PI_PROVIDER_ID;
       }
       if (providerId === null) return PI_PROVIDER_ID;
-      return nativeProviders.find(
-        (provider) => provider.id !== PI_PROVIDER_ID
-          && provider.models.some((candidate) => candidate.id === model),
-      )?.id ?? PI_PROVIDER_ID;
+      // 旧会话/旧客户端没有 providerId 时，只能按启动快照做兼容回退。每个 provider
+      // 必须先应用自己的 alias：例如 xAI 的裸 `grok-4.6` 实际对应
+      // `xai/grok-4.6`。若多个 native provider 都能解释同一个 id，则来源并不唯一，
+      // 直接拒绝恢复，不能靠数组顺序猜一个端点，更不能把提示词改发到默认网关。
+      const matches = nativeProviders.filter((provider) => {
+        if (provider.id === PI_PROVIDER_ID) return false;
+        const candidateModel = provider.modelIdAliases?.[model] ?? model;
+        return provider.models.some((candidate) => candidate.id === candidateModel);
+      });
+      if (matches.length > 1) {
+        throw new Error(
+          `pi: provider-less model '${model}' matches multiple native providers `
+          + `(${matches.map((provider) => provider.id).join(', ')}); refusing to guess an endpoint.`,
+        );
+      }
+      return matches[0]?.id ?? PI_PROVIDER_ID;
     };
     // 显式 BYOM 路由必须 fail closed:当调用方钉了一个既非 Cindy 网关(cindy/xd)也非
     // 订阅直连(openai/anthropic/xai)的自定义/本地 provider 时,该来源必须在本次解析出的
