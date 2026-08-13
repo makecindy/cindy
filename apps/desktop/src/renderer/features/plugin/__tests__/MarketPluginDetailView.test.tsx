@@ -87,6 +87,21 @@ describe('MarketPluginDetailView', () => {
     }) as HTMLButtonElement;
     expect(action.disabled).toBe(false);
     expect(action.getAttribute('aria-describedby')).toBe(reason.id);
+    // 冲突态主按钮显示「重启」图标(RotateCw),而非安装下载图标。
+    expect(action.querySelector('.lucide-rotate-cw')).toBeTruthy();
+    expect(action.querySelector('.lucide-download')).toBeNull();
+  });
+
+  it('shows an upward arrow for an available update', () => {
+    renderDetail({ installState: 'update-available' });
+
+    const action = screen.getByRole('button', {
+      name: /settings\.ghosts\.market\.update$/,
+    }) as HTMLButtonElement;
+    expect(action.disabled).toBe(false);
+    // 升级态主按钮显示「向上」图标(ArrowUp),而非安装下载图标。
+    expect(action.querySelector('.lucide-arrow-up')).toBeTruthy();
+    expect(action.querySelector('.lucide-download')).toBeNull();
   });
 
   it('falls back to the ghostId when a plugin has no description', () => {

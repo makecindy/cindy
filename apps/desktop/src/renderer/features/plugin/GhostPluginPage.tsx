@@ -20,12 +20,13 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
+  ArrowRight,
   ArrowUp,
   ChevronDown,
-  Check,
   Link,
   MessageCircle,
   Plus,
+  RotateCw,
   Sparkles,
   Store,
   Upload,
@@ -1797,11 +1798,14 @@ export function MarketPluginCard({
               replacementDescription ? replacementDescriptionId : undefined
             }
             className={cn(
-              'relative z-[1] inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 text-12 font-medium text-[var(--text-primary)]',
+              'relative z-[1] inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 text-12 font-medium text-[var(--text-primary)]',
               'transition-[background-color,border-color,transform,opacity] duration-150 hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
             )}
           >
+            {item.installState === 'conflict' ? (
+              <RotateCw size={14} aria-hidden="true" />
+            ) : null}
             {t(
               item.installState === 'conflict'
                 ? 'settings.ghosts.market.replace'
@@ -1942,12 +1946,14 @@ export function GhostPluginCard({
   // 右侧图标与动作:
   // - 授权过期/失败显示 AlertTriangle(红色警告)→配置
   // - 未配置显示 Link→配置
-  // - 可对话/可使用显示 MessageCircle→对话/使用
+  // - 面板型显示 ArrowRight→使用
+  // - 可对话/能力型显示 MessageCircle→对话
   // - 纯工具型插件不显示右侧图标(只能由 Agent 自动调用,不能对话)
   // - 停用不显示图标
   const needsAttention = item.hasSetupRequirements && !item.setupReady;
   const setupFailed = item.setupState === 'failed';
-  const isActionable = item.canUse || item.tabPanel || Boolean(item.hostCapability);
+  const primaryAction = ghostPrimaryAction(item);
+  const isActionable = primaryAction !== 'manage';
   const rightAction = needsAttention ? onConfigure : onChat;
   const showRightIcon = enabled && (needsAttention || isActionable);
 
@@ -2013,17 +2019,11 @@ return (
         </span>
         <span className="mt-1 block min-w-0 truncate text-11 text-[var(--text-tertiary)]">
           {sourceLabel ? `${sourceLabel} · ` : ''}v{item.version}
-{item.oauthAuthorizationExpired ? (
+          {item.oauthAuthorizationExpired ? (
             <span className="inline-flex items-center gap-1 text-[var(--warning-fg)]">
               {' · '}
               <AlertTriangle size={11} className="inline" aria-hidden="true" />
               <span>{t('settings.ghosts.page.oauthAuthorizationExpired')}</span>
-            </span>
-          ) : !updateVersion ? (
-            <span className="inline-flex items-center gap-1">
-              {' · '}
-              <Check size={11} className="inline" aria-hidden="true" />
-              {t('settings.ghosts.page.upToDate')}
             </span>
           ) : null}
           {!enabled ? ` · ${t('settings.ghosts.disabledTag')}` : ''}
@@ -2052,7 +2052,9 @@ return (
                 ? setupFailed
                   ? t('settings.ghosts.page.reauthAria', { name: item.name })
                   : t('settings.ghosts.page.manageAria', { name: item.name })
-                : t('settings.ghosts.page.chatAria', { name: item.name })
+                : primaryAction === 'panel'
+                  ? t('settings.ghosts.page.useAria', { name: item.name })
+                  : t('settings.ghosts.page.chatAria', { name: item.name })
             }
             className={cn(
               'grid size-8 place-items-center rounded-full transition-colors duration-150',
@@ -2066,6 +2068,8 @@ return (
               ) : (
                 <Link size={16} aria-hidden="true" className="text-[var(--warning-fg)]" />
               )
+            ) : primaryAction === 'panel' ? (
+              <ArrowRight size={16} aria-hidden="true" />
             ) : (
               <MessageCircle size={16} aria-hidden="true" />
             )}

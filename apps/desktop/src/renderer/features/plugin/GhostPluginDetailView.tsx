@@ -12,6 +12,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import {
   AppWindow,
   AlertTriangle,
+  ArrowRight,
   ArrowUp,
   Bot,
   ChevronDown,
@@ -296,7 +297,9 @@ export function GhostPluginDetailView({
                     'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
                   )}
                 >
-                  {primaryAction === 'command' || primaryAction === 'capability' ? (
+                  {primaryAction === 'panel' ? (
+                    <ArrowRight size={14} aria-hidden="true" />
+                  ) : primaryAction === 'command' || primaryAction === 'capability' ? (
                     <MessageCircle size={14} aria-hidden="true" />
                   ) : null}
                   {t(

@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { Download, ShieldCheck } from 'lucide-react';
+import { ArrowUp, Download, RotateCw, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -101,7 +101,13 @@ export function MarketPluginDetailView({
                 'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
               )}
             >
-              <Download size={15} aria-hidden="true" />
+              {detail.installState === 'conflict' ? (
+                <RotateCw size={15} aria-hidden="true" />
+              ) : detail.installState === 'update-available' ? (
+                <ArrowUp size={15} aria-hidden="true" />
+              ) : (
+                <Download size={15} aria-hidden="true" />
+              )}
               {t(actionKey)}
             </button>
           </div>

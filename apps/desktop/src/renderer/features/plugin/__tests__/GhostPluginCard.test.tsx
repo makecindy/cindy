@@ -138,6 +138,23 @@ describe('GhostPluginCard', () => {
     ).toBeTruthy();
   });
 
+  it('面板型插件右侧显示使用图标(ArrowRight)', () => {
+    render(
+      <GhostPluginCard
+        item={panelPlugin}
+        onConfigure={vi.fn()}
+        onChat={vi.fn()}
+        onOpenDetail={vi.fn()}
+      />,
+    );
+
+    // 面板型主动作是「使用」,aria-label 走 useAria(而非 chatAria)。
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'settings.ghosts.page.useAria' }),
+    ).toBeTruthy();
+  });
+
   it('offers a conversation entry for a Host capability plugin', () => {
     const onOpenDetail = vi.fn();
     render(
@@ -220,7 +237,7 @@ describe('GhostPluginCard', () => {
     expect(onOpenDetail).not.toHaveBeenCalled();
   });
 
-it('shows an expired OAuth status instead of the up-to-date status', () => {
+  it('shows an expired OAuth status', () => {
     render(
       <GhostPluginCard
         item={{ ...commandPlugin, oauthAuthorizationExpired: true }}
@@ -231,7 +248,6 @@ it('shows an expired OAuth status instead of the up-to-date status', () => {
     );
 
     expect(screen.getByText('settings.ghosts.page.oauthAuthorizationExpired')).toBeTruthy();
-    expect(screen.queryByText(/upToDate/)).toBeNull();
   });
 
   it('blocks the update pill while a market operation is running', () => {
@@ -500,6 +516,8 @@ describe('MarketPluginCard', () => {
     expect((replaceAction as HTMLButtonElement).disabled).toBe(false);
     expect(replaceAction.getAttribute('aria-describedby')).toBe(replacementDescription.id);
     expect(replaceAction.textContent).toBe('settings.ghosts.market.replace');
+    // 冲突态「覆盖」胶囊带重启图标(RotateCw)。
+    expect(replaceAction.querySelector('.lucide-rotate-cw')).toBeTruthy();
     fireEvent.click(replaceAction);
     expect(onInstall).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'settings.ghosts.page.installAria' })).toBeNull();
