@@ -2670,3 +2670,90 @@ describe('streaming response validity gate (#2242)', () => {
     await expect(post(proxy.url, { model: 'test-model', stream: true })).rejects.toThrow();
   });
 });
+
+describe('流式响应空闲看门狗(上游半开兜底)', () => {
+  it('SSE 响应开始后持续无数据时,看门狗 destroy 上游并让客户端失败收尾', async () => {
+    const warns: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('event: message_start\ndata: {}\n\n');
+      // 不发送 end,也不 destroy —— 模拟上游半开(连接挂着但不输出)。
+      // 看门狗必须在 idleMs 后主动掐断,而不是永远悬挂。
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      // 测试用短 idle:50ms 无数据即掐断。
+      upstreamStreamIdleTimeoutMs: 50,
+      logger: {
+        warn: (msg, ctx) => warns.push({ msg, ctx }),
+      },
+    });
+
+    const controller = new AbortController();
+    let clientError: unknown = null;
+    const operation = fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', stream: true }),
+      signal: controller.signal,
+    }).then(async (res) => {
+      await res.text();
+      return 'resolved' as const;
+    }).catch((err: unknown) => {
+      clientError = err;
+      return 'rejected' as const;
+    });
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      operation,
+      new Promise<'timeout'>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve('timeout'), 2000);
+      }),
+    ]);
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    if (outcome === 'timeout') controller.abort();
+
+    // 看门狗触发 → 客户端收到截断(失败),而不是悬挂到 2s 超时。
+    expect(outcome).toBe('rejected');
+    expect(clientError).toBeInstanceOf(Error);
+    expect(warns.some((w) => w.msg.includes('upstream stream idle watchdog fired'))).toBe(true);
+  });
+
+  it('数据持续到达时看门狗不触发(正常流不受影响)', async () => {
+    const warns: string[] = [];
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      // 周期写事件,间隔远小于 idle(100ms),模拟正常 LLM 生成流。
+      const timer = setInterval(() => {
+        res.write('event: content_block_delta\ndata: {}\n\n');
+      }, 30);
+      setTimeout(() => {
+        clearInterval(timer);
+        res.end();
+      }, 300);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      upstreamStreamIdleTimeoutMs: 50,
+      logger: {
+        warn: (msg) => warns.push(msg),
+      },
+    });
+
+    const controller = new AbortController();
+    const result = await Promise.race([
+      post(proxy.url, { model: 'test-model', stream: true }),
+      new Promise<'timeout'>((resolve) => {
+        setTimeout(() => resolve('timeout'), 2000);
+      }).then(() => {
+        controller.abort();
+        return 'timeout' as const;
+      }),
+    ]);
+
+    expect(result).not.toBe('timeout');
+    expect(warns.some((w) => w.includes('upstream stream idle watchdog fired'))).toBe(false);
+  });
+});

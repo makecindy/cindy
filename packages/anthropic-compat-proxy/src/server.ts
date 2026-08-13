@@ -63,6 +63,14 @@ const REQUEST_TOO_LARGE_DRAIN_TIMEOUT_MS = 10 * 1000;
 // 转发请求的客户端不响应超时(socket 级别);LLM 请求经常 60s+,这里保守给 10 分钟。
 const UPSTREAM_SOCKET_TIMEOUT_MS = 10 * 60 * 1000;
 
+// 流式响应期间的「无数据」空闲看门狗。socket 级 timeout 只覆盖连接空闲,但上游
+// 半开(TCP 已建连、无数据、不 close,如网关假死 / 中间设备丢包)时内核不会触发
+// 任何超时,客户端会永远挂在流式响应上(pi/CC 会话「生成中」卡死,重启才能恢复)。
+// 这里在响应已开始、但持续 idleMs 收不到任何字节时主动 destroy 上游请求,让客户端
+// 收到截断并立即失败收尾。默认 90s —— 远小于 10 分钟 socket 超时,又足够容纳 LLM
+// 首 token 的正常延迟;可经 ProxyOptions.upstreamStreamIdleTimeoutMs 覆盖(测试用短值)。
+const UPSTREAM_STREAM_IDLE_TIMEOUT_MS = 90 * 1000;
+
 // WebSocket 这里只等 HTTP 101 握手，不应沿用允许长时间生成的 10 分钟超时。
 // 中间代理静默丢弃 Upgrade 时尽快回 426，让 Codex 原生 transport 降到 HTTP。
 const WEBSOCKET_UPGRADE_TIMEOUT_MS = 15 * 1000;
@@ -775,6 +783,9 @@ function forward(
   // 为 true 时启用 2xx 成功响应的流式有效性门(#2242):空 2xx / 非 SSE 2xx /
   // 零事件 SSE 不再原样透传给客户端,转成结构化 502。false 保持字节级透传。
   requestDeclaredStream = false,
+  // 流式响应空闲看门狗(ms)。>0 时在响应已开始但持续无数据时 destroy 上游请求;
+  // 0 = 禁用。上游半开(socket 空闲超时不触发)时这是防止客户端永久悬挂的兜底。
+  streamIdleTimeoutMs = UPSTREAM_STREAM_IDLE_TIMEOUT_MS,
 ): void {
   // 客户端已断开(典型:400 缓冲期间断开后走到透明重试)——'close' 已经发过,
   // 下面挂的中断传播 listener 永远不会触发,直接不发起上游请求。
@@ -1030,6 +1041,7 @@ function forward(
             responseToolUseIds,
             threadMintedIdCache,
             requestDeclaredStream,
+            streamIdleTimeoutMs,
           );
           return;
         }
@@ -1223,6 +1235,61 @@ function forward(
       toolUseIdRewrite.on('error', (err) => failStreamingResponse('error', err));
     }
 
+    // ── 流式响应空闲看门狗 ────────────────────────────────────────────────────
+    // 上游半开(TCP 已建连、无数据、不 close)时,socket 级 timeout 不会触发,客户端
+    // 会永远挂在流式响应上(pi/CC 会话「生成中」卡死,重启才能恢复)。响应开始后,只要
+    // 持续 streamIdleTimeoutMs 收不到任何字节就 destroy 上游请求 → 触发
+    // failStreamingResponse → 客户端收到截断立即失败收尾。数据块一到就重置计时。
+    // 仅在流式响应路径上启用(SSE 请求 + 2xx),非流式 / 错误响应不引入额外行为。
+    let streamIdleTimer: NodeJS.Timeout | null = null;
+    let streamIdleFired = false;
+    const isStreamingResponse =
+      requestDeclaredStream && status >= 200 && status < 300 && isSse;
+    if (isStreamingResponse && streamIdleTimeoutMs > 0) {
+      const armStreamIdle = (): void => {
+        if (upstreamResponseTerminal !== null || streamIdleFired) return;
+        streamIdleTimer?.unref?.();
+        streamIdleTimer = setTimeout(() => {
+          streamIdleTimer = null;
+          if (upstreamResponseTerminal !== null || streamIdleFired) return;
+          streamIdleFired = true;
+          logger.warn?.('upstream stream idle watchdog fired — destroying half-open upstream response', {
+            reqId,
+            method,
+            path: upstreamPathname,
+            status,
+            idleMs: streamIdleTimeoutMs,
+            bytes: totalBytes,
+          });
+          // destroy 上游请求触发 failStreamingResponse('close'|'error'),把截断传给客户端。
+          try {
+            upstreamReq.destroy(new Error(`upstream stream idle timeout after ${streamIdleTimeoutMs}ms`));
+          } catch {
+            /* already destroyed */
+          }
+        }, streamIdleTimeoutMs);
+      };
+      // 数据块一到就重置计时器;end/error/close 后清理。
+      const resetStreamIdle = (): void => {
+        if (streamIdleTimer) {
+          clearTimeout(streamIdleTimer);
+          streamIdleTimer = null;
+        }
+        if (upstreamResponseTerminal === null && !streamIdleFired) armStreamIdle();
+      };
+      const clearStreamIdle = (): void => {
+        if (streamIdleTimer) {
+          clearTimeout(streamIdleTimer);
+          streamIdleTimer = null;
+        }
+      };
+      // 响应阶段刚开始就武装;之后每次数据重置。
+      armStreamIdle();
+      // 挂到 upstreamRes 上,由下方 'data' / 'end' / 'error' / 'close' 监听调用。
+      (upstreamRes as unknown as { __streamIdleReset?: () => void }).__streamIdleReset = resetStreamIdle;
+      (upstreamRes as unknown as { __streamIdleClear?: () => void }).__streamIdleClear = clearStreamIdle;
+    }
+
     // ── 流式请求的成功响应有效性门(#2242)──────────────────────────────
     // 请求显式声明 stream:true 时,2xx 响应不再「先 writeHead 再 pipe」:上游或
     // 网关产生的**正常结束的空 2xx / 非 SSE 2xx / 零事件 SSE** 会被客户端(Claude
@@ -1294,6 +1361,8 @@ function forward(
       totalBytes += chunk.length;
       lastChunkBytes = chunk.length;
       lastChunkAt = Date.now();
+      // 有数据 → 重置流式空闲看门狗(未启用时为 no-op)。
+      (upstreamRes as unknown as { __streamIdleReset?: () => void }).__streamIdleReset?.();
       observerData(chunk);
       if (collectErrBody && errBufBytes < ERROR_RESPONSE_DUMP_MAX_BYTES) {
         const remain = ERROR_RESPONSE_DUMP_MAX_BYTES - errBufBytes;
@@ -1338,6 +1407,7 @@ function forward(
       }
     });
     upstreamRes.on('end', () => {
+      (upstreamRes as unknown as { __streamIdleClear?: () => void }).__streamIdleClear?.();
       if (upstreamResponseTerminal !== null) return;
       upstreamResponseTerminal = 'end';
       if (clientAborted || clientRes.destroyed || upstreamFailureHandled) return;
@@ -1396,9 +1466,16 @@ function forward(
       }
       observerEnd();
     });
-    upstreamRes.on('error', (err) => failStreamingResponse('error', err));
-    upstreamRes.on('aborted', () => failStreamingResponse('aborted'));
+    upstreamRes.on('error', (err) => {
+      (upstreamRes as unknown as { __streamIdleClear?: () => void }).__streamIdleClear?.();
+      failStreamingResponse('error', err);
+    });
+    upstreamRes.on('aborted', () => {
+      (upstreamRes as unknown as { __streamIdleClear?: () => void }).__streamIdleClear?.();
+      failStreamingResponse('aborted');
+    });
     upstreamRes.on('close', () => {
+      (upstreamRes as unknown as { __streamIdleClear?: () => void }).__streamIdleClear?.();
       if (upstreamResponseTerminal !== null || upstreamRes.complete) return;
       failStreamingResponse('close');
     });
@@ -1464,6 +1541,14 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   const logger = opts.logger ?? {};
   const host = opts.host ?? '127.0.0.1';
   const maxBodyBytes = opts.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
+  // 流式响应空闲看门狗(ms):上游半开时兜底掐流,避免客户端永久挂在流式响应上。
+  // 0 / 负值 = 禁用(恢复扩展前的悬挂行为);默认见 UPSTREAM_STREAM_IDLE_TIMEOUT_MS。
+  const streamIdleTimeoutMs =
+    opts.upstreamStreamIdleTimeoutMs !== undefined && opts.upstreamStreamIdleTimeoutMs > 0
+      ? opts.upstreamStreamIdleTimeoutMs
+      : opts.upstreamStreamIdleTimeoutMs === 0 || opts.upstreamStreamIdleTimeoutMs === undefined
+        ? UPSTREAM_STREAM_IDLE_TIMEOUT_MS
+        : 0;
   // 入站请求 body dump 默认关(仅显式诊断时开):高并发下 64KiB×每请求的日志
   // 构造/落盘/终端镜像会占满宿主 main event loop,详见 ProxyOptions 注释。
   const dumpRequestBody = opts.debugDumpRequestBody === true;
@@ -1780,7 +1865,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     // review: Treat Kimi Code k3 as a Kimi stream)。
     const isKimiRequest =
       isRecord(parsedForRewrite) && typeof parsedForRewrite.model === 'string'
-        ? /(^|[\/_-])(kimi|k3)([\/_-]|$)/i.test(parsedForRewrite.model)
+        ? /(^|[/_-])(kimi|k3)([/_-]|$)/i.test(parsedForRewrite.model)
         : false;
 
     // per-thread 已见 id 缓存(跨请求并入 usedIds):rewind / 中断 / CLI 压缩会让
@@ -1846,6 +1931,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       responseToolUseIds,
       threadMintedIdCache,
       requestDeclaredStream,
+      streamIdleTimeoutMs,
     );
   });
 
