@@ -730,6 +730,7 @@ interface AgentMessageItem {
   type: 'agentMessage';
   id: string;
   text: string;
+  phase?: 'commentary' | 'final_answer';
 }
 
 interface ReasoningItem {
@@ -1053,7 +1054,7 @@ function emitAgentMessageProgress(
   if (delta.length === 0) return;
   queue.push({
     type: 'text',
-    data: { text: delta, isFinal: false },
+    data: { text: delta, isFinal: false, agentMessageId: itemId },
     source: 'codex',
   });
 }
@@ -1141,7 +1142,13 @@ function handleAgentMessage(
     // finalizeCodexCitationText 是与历史导入共用的统一口径。
     queue.push({
       type: 'text',
-      data: { text: finalizeCodexCitationText(rawText), isFinal: true, isFullText: true },
+      data: {
+        text: finalizeCodexCitationText(rawText),
+        isFinal: true,
+        isFullText: true,
+        agentMessageId: item.id,
+        ...(item.phase ? { phase: item.phase } : {}),
+      },
       source: 'codex',
     });
     return;
