@@ -90,6 +90,18 @@ const COLORS = {
   brand: 0xb40a12,
 } as const;
 
+/**
+ * Temporary preview swatches — played in order on window reveal so we
+ * can pick one on the hardware. Index 1 is the current favourite.
+ * Agent keys light 1–4 to say which swatch is on.
+ */
+export const WORKLOUDER_WINDOW_REVEAL_SWATCHES = [
+  0xb40a12, // 1 current crimson
+  0xd0060c, // 2 hotter red
+  0xff1a00, // 3 pure red-orange
+  0x8a050c, // 4 deep blood
+] as const;
+
 const OFF_SIDE: WorkLouderLightingSide = {
   effect: WorkLouderLightingEffect.Off,
   brightness: 0,
@@ -246,16 +258,20 @@ export function createWorkLouderCodexOffFrame(): WorkLouderCodexLightingFrame {
  * effects already proven on this hardware (running / waiting). Rainbow is
  * not: on an idle board it can look like the lights never came on.
  */
-export function createWorkLouderCodexWindowRevealFrame(): WorkLouderCodexLightingFrame {
+export function createWorkLouderCodexWindowRevealFrame(
+  color: number = COLORS.brand,
+  swatchIndex = 0,
+): WorkLouderCodexLightingFrame {
+  const markedSlots = Math.min(swatchIndex + 1, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
   return {
-    ambient: side(WorkLouderLightingEffect.Snake, 0.78, 0.55, COLORS.brand),
-    keys: side(WorkLouderLightingEffect.Breath, 0.34, 0.55, COLORS.brand),
+    ambient: side(WorkLouderLightingEffect.Snake, 0.78, 0.55, color),
+    keys: side(WorkLouderLightingEffect.Breath, 0.34, 0.55, color),
     threads: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, id) => ({
       id,
-      color: COLORS.brand,
-      brightness: 0.72,
-      effect: WorkLouderLightingEffect.Breath,
-      speed: 0.55,
+      color,
+      brightness: id < markedSlots ? 0.72 : 0,
+      effect: id < markedSlots ? WorkLouderLightingEffect.Breath : WorkLouderLightingEffect.Off,
+      speed: id < markedSlots ? 0.55 : 0,
       syncKeysLighting: false,
       syncAmbientLighting: false,
     })),

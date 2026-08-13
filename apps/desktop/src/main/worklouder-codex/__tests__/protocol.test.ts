@@ -127,10 +127,16 @@ describe('Work Louder lighting settings', () => {
     expect(frame.ambient.color).toBe(0xb40a12);
     expect(frame.keys.effect).toBe(WorkLouderLightingEffect.Breath);
     expect(frame.keys.color).toBe(0xb40a12);
-    expect(frame.threads.every((thread) => thread.color === 0xb40a12)).toBe(true);
-    expect(frame.threads).toHaveLength(6);
-    expect(frame.threads.every((thread) => thread.effect === WorkLouderLightingEffect.Breath)).toBe(
+    expect(frame.threads.map((thread) => thread.brightness > 0)).toEqual([
       true,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(createWorkLouderCodexWindowRevealFrame(0xff1a00, 2).threads.map((t) => t.brightness > 0)).toEqual(
+      [true, true, true, false, false, false],
     );
     expect(isWorkLouderCodexLightingFrameOff(frame)).toBe(false);
   });

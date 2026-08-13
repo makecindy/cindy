@@ -24,6 +24,7 @@ import {
   createWorkLouderCodexLightingFrame,
   createWorkLouderCodexWindowRevealFrame,
   isWorkLouderCodexLightingFrameOff,
+  WORKLOUDER_WINDOW_REVEAL_SWATCHES,
   type WorkLouderCodexHidEvent,
   type WorkLouderCodexJoystickEvent,
   type WorkLouderCodexLightingFrame,
@@ -37,8 +38,10 @@ import {
 const TASK_SLOT_REFRESH_DEBOUNCE_MS = 250;
 const AGENT_KEY_DOUBLE_TAP_MS = 350;
 const ENCODER_LONG_PRESS_MS = 500;
-/** How long the window-reopen greeting stays on the board. */
-const WINDOW_REVEAL_MS = 2_000;
+/** How long each preview swatch stays on the board. */
+const WINDOW_REVEAL_SWATCH_MS = 1_800;
+/** Brief blackout between swatches so the next colour is obvious. */
+const WINDOW_REVEAL_GAP_MS = 350;
 /**
  * How long a held stick may go silent before we give up on it.
  *
@@ -94,6 +97,7 @@ export class WorkLouderCodexLightingController {
   private autoDimTimer: Timer | null = null;
   private lightingDimmed = false;
   private windowRevealTimer: Timer | null = null;
+  private windowRevealSwatch: number | null = null;
   private lastBaseFrameKey = '';
   private pendingAgentKeyTap: { slot: number; at: number } | null = null;
   private encoderLongPressTimer: Timer | null = null;
@@ -177,15 +181,34 @@ export class WorkLouderCodexLightingController {
   playWindowReveal(): void {
     this.lightingDimmed = false;
     this.clearWindowRevealTimer();
-    // Same greeting twice in a row would otherwise be dropped as a duplicate.
-    this.lastFrameKey = '';
-    this.windowRevealTimer = setTimeout(() => {
-      this.windowRevealTimer = null;
-      this.updateLightingFrame();
-    }, WINDOW_REVEAL_MS);
-    this.windowRevealTimer.unref?.();
-    this.updateLightingFrame();
+    this.playWindowRevealSwatch(0);
     this.resetAutoDimTimer(this.currentBrightnessAdjustedFrame());
+  }
+
+  /**
+   * Walk the preview swatches: colour → brief blackout → next colour.
+   * Agent keys light 1–4 so you can tell which option is on.
+   */
+  private playWindowRevealSwatch(index: number): void {
+    if (index >= WORKLOUDER_WINDOW_REVEAL_SWATCHES.length) {
+      this.windowRevealSwatch = null;
+      this.updateLightingFrame();
+      return;
+    }
+    this.windowRevealSwatch = index;
+    this.lastFrameKey = '';
+    this.updateLightingFrame();
+    this.windowRevealTimer = setTimeout(() => {
+      this.windowRevealSwatch = null;
+      this.lastFrameKey = '';
+      this.updateLightingFrame();
+      this.windowRevealTimer = setTimeout(() => {
+        this.windowRevealTimer = null;
+        this.playWindowRevealSwatch(index + 1);
+      }, WINDOW_REVEAL_GAP_MS);
+      this.windowRevealTimer.unref?.();
+    }, WINDOW_REVEAL_SWATCH_MS);
+    this.windowRevealTimer.unref?.();
   }
 
   async refreshTaskSlots(): Promise<void> {
@@ -576,12 +599,16 @@ export class WorkLouderCodexLightingController {
       baseFrame,
       this.settings.lightingBrightness,
     );
-    const overlay = this.windowRevealTimer
-      ? applyWorkLouderCodexLightingBrightness(
-          createWorkLouderCodexWindowRevealFrame(),
-          this.settings.lightingBrightness,
-        )
-      : null;
+    const overlay =
+      this.windowRevealSwatch !== null
+        ? applyWorkLouderCodexLightingBrightness(
+            createWorkLouderCodexWindowRevealFrame(
+              WORKLOUDER_WINDOW_REVEAL_SWATCHES[this.windowRevealSwatch],
+              this.windowRevealSwatch,
+            ),
+            this.settings.lightingBrightness,
+          )
+        : null;
     const frame = this.lightingDimmed
       ? createWorkLouderCodexOffFrame()
       : (overlay ?? brightnessAdjusted);
@@ -679,9 +706,11 @@ export class WorkLouderCodexLightingController {
   }
 
   private clearWindowRevealTimer(): void {
-    if (!this.windowRevealTimer) return;
-    clearTimeout(this.windowRevealTimer);
-    this.windowRevealTimer = null;
+    if (this.windowRevealTimer) {
+      clearTimeout(this.windowRevealTimer);
+      this.windowRevealTimer = null;
+    }
+    this.windowRevealSwatch = null;
   }
 
   private emitState(): void {

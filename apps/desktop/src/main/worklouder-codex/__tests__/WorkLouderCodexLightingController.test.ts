@@ -473,8 +473,14 @@ describe('WorkLouderCodexLightingController', () => {
       ]);
       expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Snake);
 
-      await vi.advanceTimersByTimeAsync(2_000);
+      // Four swatches with a blackout between each; status lighting returns
+      // only after the last one.
+      await vi.advanceTimersByTimeAsync(1_800 * 4 + 350 * 4);
       expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Breath);
+      const colours = sink.update.mock.calls
+        .map((call) => call[0]?.ambient.color)
+        .filter((color): color is number => typeof color === 'number' && color > 0);
+      expect(new Set(colours).size).toBeGreaterThanOrEqual(4);
     } finally {
       vi.useRealTimers();
     }
