@@ -791,7 +791,7 @@ import {
   resetSchedulerReady,
 } from './maker-ipc/schedule.js';
 import { registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
-import { startGoalController, getGoalController } from './goal-host/index.js';
+import { startGoalController, getGoalController, resetGoalController } from './goal-host/index.js';
 import { startLearnHost, getLearnController, resetLearnController } from './learn-host/index.js';
 import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
@@ -1120,6 +1120,15 @@ async function ensureLifecycleDbClient(userId: string) {
 }
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
+  // 账号边界一开始就停 goal controller:在途 goal turn 立即走 input coordinator 的
+  // Stop 边界(dispose 内 stopActiveGoalTurn),避免旧 agent 在后续长 await(缓存
+  // purge / hook / ghost / scheduler 重置)期间继续跑、消耗 token 或产生副作用
+  // (Codex P1)。recorder 同步清环,防用户 A 的 sessionId/reason 泄漏给用户 B。
+  try {
+    resetGoalController();
+  } catch (err) {
+    authBoundaryLog.error(`resetGoalController on ${reason} failed (non-fatal):`, err);
+  }
   // The boundary is already marked pending by every caller. New actions now
   // fail closed; drain an action that crossed the boundary before closing its DB.
   await waitForTurnChangeSetActions();
@@ -1203,6 +1212,8 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   } catch (err) {
     authBoundaryLog.error(`resetScheduler on ${reason} failed (non-fatal):`, err);
   }
+  // resetGoalController 已提前到 teardown 开头(账号边界一开始就停 in-flight
+  // goal turn + 清观测环)——见函数头部注释(Codex P1)。
   // attemptStartScheduler 的 WeakSet 也要给新 scheduler 实例留位置 — 老实例被
   // resetScheduler 置 null 后会被 GC,WeakSet 自动清理;新实例从未 add 过,
   // attempt 时会重新 attach。这里无需手动操作 WeakSet。

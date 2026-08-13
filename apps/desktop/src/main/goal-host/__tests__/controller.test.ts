@@ -446,7 +446,7 @@ describe('GoalController', () => {
     expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
   });
 
-  it('migrates the Goal listener to the switched session so the new engine turn can finalize (reviewer P1)', async () => {
+  it('migrates the Goal listener to the switched session so the new engine turn can finalize', async () => {
     const oldSession = new FakeSession('s1', 'claude-code');
     const switchedSession = new FakeSession('s1', 'codex');
     let live: FakeSession = oldSession;
@@ -3251,6 +3251,247 @@ describe('GoalController', () => {
     const st = await h.storage.get('s1');
     expect(st?.usageResetAt).toBe(3_601_000);
     expect(st?.lastReason).toBe('usage limit reached');
+  });
+
+  // ── Goal run observation events (#2105 P0) ───────────────────────────────
+  it('records turn-dispatched when the first turn fires', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    await local.controller.setGoal({ sessionId: 's1', objective: 'ship it' });
+    await tick();
+    const dispatched = events.filter((e) => e.type === 'turn-dispatched');
+    expect(dispatched.length).toBeGreaterThanOrEqual(1);
+    // 首轮 dispatch 的 generation = 2:setGoal 创建路径换代一次(resetTurn)
+    // + fireTurn 内再换代一次(统一"每轮 dispatch 前换代"语义)。
+    expect(dispatched[0]).toMatchObject({
+      goalSessionId: 's1',
+      generation: 2,
+      turnIndex: 1,
+    });
+  });
+
+  it('records turn-finalized on a continue verdict without a state-transition (active→active)', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"keep going"}\n```', tokens: 100 });
+    await tick();
+    const finalized = events.filter((e) => e.type === 'turn-finalized');
+    expect(finalized.length).toBeGreaterThanOrEqual(1);
+    expect(finalized.at(-1)).toMatchObject({ from: 'active', to: 'active' });
+    expect(events.some((e) => e.type === 'state-transition')).toBe(false);
+  });
+
+  it('records turn-finalized + state-transition + terminal on a complete verdict', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"complete","reason":"all green"}\n```', tokens: 50 });
+    await tick();
+    const types = events.map((e) => e.type);
+    expect(types).toContain('turn-finalized');
+    expect(types).toContain('state-transition');
+    expect(types).toContain('terminal');
+    const terminal = events.find((e) => e.type === 'terminal');
+    expect(terminal).toMatchObject({ to: 'complete', reason: 'all green' });
+  });
+
+  it('records stall-detected when noProgressLimit is hit (no tool use)', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    // noProgressLimit=1:第一轮无 tool_use 即撞线。
+    await local.storage.upsert(seededGoal({ noProgressLimit: 1 }));
+    await local.controller.setGoal({ sessionId: 's1', objective: 'stall me' });
+    await tick();
+    local.session.emitGoalTurn({ toolUse: false, verdictJson: '```json\n{"goal_status":"continue","reason":"thinking"}\n```' });
+    await tick();
+    expect(events.some((e) => e.type === 'stall-detected')).toBe(true);
+    const stall = events.find((e) => e.type === 'stall-detected');
+    expect(stall).toMatchObject({ from: 'active', to: 'paused' });
+  });
+
+  it('records resumed when resumeActiveGoals re-hooks an active goal', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    await local.storage.upsert(seededGoal({ status: 'active', objective: 'resume me' }));
+    await local.controller.resumeActiveGoals();
+    await tick();
+    expect(events.some((e) => e.type === 'resumed')).toBe(true);
+    expect(events.find((e) => e.type === 'resumed')).toMatchObject({ to: 'active' });
+  });
+
+  it('records decision-post counters on finalize events (turnIndex=1 / budget.turnsUsed=1 on first completion)', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"complete","reason":"all green"}\n```', tokens: 50 });
+    await tick();
+    const finalized = events.find((e) => e.type === 'turn-finalized');
+    const terminal = events.find((e) => e.type === 'terminal');
+    // 决策后快照:首轮收口 turnIndex=1、budget.turnsUsed=1、tokensUsed=50(不得落后一轮为 0)。
+    expect(finalized).toMatchObject({ turnIndex: 1, from: 'active', to: 'complete' });
+    expect(finalized?.budget).toMatchObject({ turnsUsed: 1, tokensUsed: 50 });
+    expect(terminal).toMatchObject({ turnIndex: 1, to: 'complete' });
+    expect(terminal?.budget).toMatchObject({ turnsUsed: 1, tokensUsed: 50 });
+  });
+
+  it('records resumed with reason manual-resume on manual resumeGoal', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    await local.storage.upsert(seededGoal({ status: 'paused', objective: 'resume me' }));
+    await local.controller.resumeGoal('s1');
+    await tick();
+    const resumed = events.filter((e) => e.type === 'resumed');
+    expect(resumed.length).toBeGreaterThanOrEqual(1);
+    // 手动恢复路径也必须产出 resumed(此前只有 resumeActiveGoals 记录),且不递增 turnIndex。
+    expect(resumed.at(-1)).toMatchObject({ to: 'active', reason: 'manual-resume', turnIndex: 0 });
+  });
+
+  it('keeps the goal state machine intact when recordRunEvent throws (best-effort observation)', async () => {
+    const local = makeController({
+      recordRunEvent: () => {
+        throw new Error('sink boom');
+      },
+    });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"complete","reason":"still works"}\n```', tokens: 10 });
+    await tick();
+    // 观测抛错不得中断终态收口:达成记录落账 + goal 行清除。
+    expect(local.completions).toHaveLength(1);
+    expect(local.completions[0].summary).toMatchObject({ turnsUsed: 1, reason: 'still works' });
+    expect(await local.storage.get('s1')).toBeNull();
+  });
+
+  it('records resumed with the same generation as the dispatch it triggers', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    await local.storage.upsert(seededGoal({ status: 'paused', objective: 'resume me' }));
+    await local.controller.resumeGoal('s1');
+    await tick();
+    const resumed = events.find((e) => e.type === 'resumed');
+    const dispatched = events.find((e) => e.type === 'turn-dispatched');
+    expect(resumed).toBeDefined();
+    expect(dispatched).toBeDefined();
+    // resumeGoal 的 resumed 必须与其触发的首轮派发同代(此前 gen 0 vs gen 1 脱节)。
+    expect(resumed?.generation).toBe(dispatched?.generation);
+    expect(resumed?.generation).toBeGreaterThanOrEqual(1);
+  });
+
+  it('records a corrective state-transition when quota override moves active to usageLimited', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    local.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"keep going"}\n```', tokens: 30 });
+    await tick();
+    const st = await local.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    const transitions = events.filter((e) => e.type === 'state-transition');
+    // verdict 应 continue,但 quota override 改写为 usageLimited——事件流必须补真实迁移。
+    expect(transitions.at(-1)).toMatchObject({
+      from: 'active',
+      to: 'usageLimited',
+      reason: 'usage limit reached',
+    });
+  });
+
+  it('records budget-consumed + terminal on preflight budget stop', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    // maxTurns 已耗尽:resumeActiveGoals → fireTurn 的 preflight 守卫撞线 → budgetLimited。
+    await local.storage.upsert(seededGoal({ status: 'active', turnsUsed: 5, maxTurns: 5, objective: 'preflight' }));
+    await local.controller.resumeActiveGoals();
+    await tick();
+    const st = await local.storage.get('s1');
+    expect(st?.status).toBe('budgetLimited');
+    expect(events.some((e) => e.type === 'budget-consumed')).toBe(true);
+    const terminal = events.find((e) => e.type === 'terminal');
+    expect(terminal).toMatchObject({ to: 'budgetLimited' });
+  });
+
+  it('does not record resumed when auto-resume finds the session busy (no orphan resume events)', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    await local.storage.upsert(seededGoal({ status: 'usageLimited', usageResetAt: 0, objective: 'busy resume' }));
+    local.session.running = true; // busy → fireTurn 被跳过,resumed 也不得记录
+    await local.controller.resumeGoal('s1', { auto: true });
+    await tick();
+    expect(events.some((e) => e.type === 'resumed')).toBe(false);
+    expect(events.some((e) => e.type === 'turn-dispatched')).toBe(false);
+  });
+
+  it('records budget-consumed + terminal when updateGoal lowers limits below current usage', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    await local.storage.upsert(seededGoal({ status: 'active', turnsUsed: 3, tokensUsed: 900, budgetTokens: 1000, objective: 'edit me' }));
+    await local.controller.updateGoal('s1', { budgetTokens: 100 });
+    await tick();
+    const st = await local.storage.get('s1');
+    expect(st?.status).toBe('budgetLimited');
+    expect(events.some((e) => e.type === 'budget-consumed')).toBe(true);
+    const terminal = events.find((e) => e.type === 'terminal');
+    expect(terminal).toMatchObject({ to: 'budgetLimited' });
+  });
+
+  it('does not record resumed when resume hits a preflight budget stop (no orphan resume events)', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    // maxTurns 已耗尽:resumeGoal → fireTurn preflight 撞线 → budgetLimited,无实际派发。
+    await local.storage.upsert(seededGoal({ status: 'paused', turnsUsed: 5, maxTurns: 5, objective: 'resume preflight' }));
+    await local.controller.resumeGoal('s1');
+    await tick();
+    const st = await local.storage.get('s1');
+    expect(st?.status).toBe('budgetLimited');
+    // 恢复未触发派发:不得有孤儿 resumed(有 budget 终态事件,但无 resumed/dispatch 对)。
+    expect(events.some((e) => e.type === 'resumed')).toBe(false);
+    expect(events.some((e) => e.type === 'turn-dispatched')).toBe(false);
+    expect(events.some((e) => e.type === 'terminal')).toBe(true);
+  });
+
+  it('does not emit finalize events when the turn is cleared during the quota lookup', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    let releaseQuota: (() => void) | null = null;
+    const quotaGate = new Promise<void>((resolve) => {
+      releaseQuota = () => resolve();
+    });
+    const local = makeController({
+      recordRunEvent: (e) => void events.push(e),
+      getAccountLimit: async () => {
+        await quotaGate;
+        return { limited: false, resetAtMs: null };
+      },
+    });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```', tokens: 20 });
+    await tick();
+    // finalizeTurn 已卡在 getAccountLimit;用户此刻清目标。
+    await local.controller.clearGoal('s1');
+    expect(await local.storage.get('s1')).toBeNull();
+    if (releaseQuota) (releaseQuota as () => void)();
+    await tick();
+    // abandoned generation:不得出现未提交的假收口事件。
+    expect(events.some((e) => e.type === 'turn-finalized')).toBe(false);
+    expect(events.some((e) => e.type === 'terminal')).toBe(false);
+    expect(events.some((e) => e.type === 'state-transition')).toBe(false);
+  });
+
+  it('does not leak a stale resume intent into a new goal on the same session', async () => {
+    const events: Array<import('../runEvents').GoalRunEvent> = [];
+    const local = makeController({ recordRunEvent: (e) => void events.push(e) });
+    // 恢复预算已耗尽的 goal:登记 resumed 意图 → fireTurn preflight 拦截(无派发)。
+    await local.storage.upsert(seededGoal({ status: 'paused', turnsUsed: 5, maxTurns: 5, objective: 'old goal' }));
+    await local.controller.resumeGoal('s1');
+    await tick();
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'budgetLimited' });
+    expect(events.some((e) => e.type === 'resumed')).toBe(false);
+    // 同 sessionId 新目标(clear 后重建——预算耗尽的旧 goal 无法续跑,setGoal
+    // 编辑路径保留耗尽计数会被 preflight 拦截,与 913 的竞态语义一致):
+    // 首轮派发不得消费上一个 Goal 的旧恢复标记。
+    await local.controller.clearGoal('s1');
+    await local.controller.setGoal({ sessionId: 's1', objective: 'new goal' });
+    await tick();
+    expect(events.filter((e) => e.type === 'resumed')).toHaveLength(0);
+    expect(events.filter((e) => e.type === 'turn-dispatched').length).toBeGreaterThanOrEqual(1);
   });
 
 });
