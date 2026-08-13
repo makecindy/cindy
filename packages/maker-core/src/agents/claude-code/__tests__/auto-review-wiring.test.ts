@@ -778,6 +778,43 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     await handle.close();
   });
 
+  it('still reports the current Auto denial when Plan is armed for the next turn', async () => {
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    const events: Array<{ type: string; data: unknown }> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push({ type: event.type, data: event.data });
+    })();
+
+    await handle.send({ type: 'user', content: 'Run this in Auto mode.' });
+    await handle.setPlanMode?.(true);
+    fakeQuery.emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      duration_ms: 1,
+      duration_api_ms: 1,
+      num_turns: 1,
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: {},
+      permission_denials: [{ tool_name: 'Bash', tool_use_id: 'current-auto-denial', tool_input: {} }],
+    });
+    await settle();
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({ message: expect.stringContaining('[AUTO_REVIEW_BLOCKED]') }),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'done',
+      data: expect.objectContaining({ autoReviewBlocked: true }),
+    }));
+    await handle.close();
+  });
+
   it('ignores a native Auto denial drained from a rewound Query', async () => {
     const { handle, fakeQuery } = await startSession('auto', {
       providerId: 'anthropic',

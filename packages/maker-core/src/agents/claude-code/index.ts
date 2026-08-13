@@ -4080,9 +4080,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 汇总 permission_denials；只认 native Auto Query，避免误报普通工具失败。
             const isNativeAutoReviewBlockedResult =
               rawType === 'result'
-              && mutablePermissionMode === 'auto'
-              && !mutablePlanMode
-              && !planTurnActive
+              && currentTurnSdkPermissionMode() === 'auto'
               && nativeAutoQueries.has(currentQ)
               && Array.isArray((rawMsg as { permission_denials?: unknown }).permission_denials)
               && (rawMsg as { permission_denials: unknown[] }).permission_denials.length > 0;
