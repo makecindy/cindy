@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -581,18 +581,28 @@ function findFixedLeadingWithScalingToken(text: string): Hit[] {
 
 // ── 文件遍历 ────────────────────────────────────────────────────────
 
-function collectFiles(exts: RegExp): string[] {
-  const files: string[] = [];
+interface ScanFile {
+  rel: string;
+  kind: 'source' | 'css';
+}
+
+function collectScanFiles(): ScanFile[] {
+  const files: ScanFile[] = [];
   const walk = (dir: string) => {
-    for (const name of readdirSync(dir)) {
-      const p = join(dir, name);
-      if (statSync(p).isDirectory()) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) {
         walk(p);
         continue;
       }
-      if (!exts.test(name)) continue;
+      const kind = /\.(ts|tsx|html)$/.test(entry.name)
+        ? 'source'
+        : /\.css$/.test(entry.name)
+          ? 'css'
+          : undefined;
+      if (!kind) continue;
       const rel = relative(ROOT, p).split(sep).join('/');
-      if (!SKIP_FILES.some((re) => re.test(rel))) files.push(rel);
+      if (!SKIP_FILES.some((re) => re.test(rel))) files.push({ rel, kind });
     }
   };
   walk(SCAN_DIR);
@@ -628,26 +638,28 @@ function scan(): Violation[] {
       });
   };
 
-  for (const rel of collectFiles(/\.(ts|tsx|html)$/)) {
-    const text = prepareTsContent(readFileSync(join(ROOT, rel), 'utf8'));
-    push(rel, text, 'tw-weight', findTwWeightViolations(text));
-    push(rel, text, 'arb-size', findArbitrarySizes(text));
-    push(rel, text, 'token-size', findOffLadderTokenSizes(text));
-    push(rel, text, 'inline-weight', findInlineWeightViolations(text));
-    push(rel, text, 'inline-size', findInlineSizeViolations(text));
-    push(rel, text, 'string-weight', findStringWeightViolations(text));
-    push(rel, text, 'font-shorthand', findFontShorthands(text));
-    push(rel, text, 'fixed-leading', findFixedLeadingWithScalingToken(text));
-  }
-  for (const rel of collectFiles(/\.css$/)) {
-    const text = stripCssComments(readFileSync(join(ROOT, rel), 'utf8'));
-    push(
-      rel,
-      text,
-      'css-weight',
-      findStringWeightViolations(text, { includeSelectorContext: true }),
-    );
-    push(rel, text, 'font-shorthand', findFontShorthands(text));
+  for (const { rel, kind } of collectScanFiles()) {
+    const raw = readFileSync(join(ROOT, rel), 'utf8');
+    if (kind === 'source') {
+      const text = prepareTsContent(raw);
+      push(rel, text, 'tw-weight', findTwWeightViolations(text));
+      push(rel, text, 'arb-size', findArbitrarySizes(text));
+      push(rel, text, 'token-size', findOffLadderTokenSizes(text));
+      push(rel, text, 'inline-weight', findInlineWeightViolations(text));
+      push(rel, text, 'inline-size', findInlineSizeViolations(text));
+      push(rel, text, 'string-weight', findStringWeightViolations(text));
+      push(rel, text, 'font-shorthand', findFontShorthands(text));
+      push(rel, text, 'fixed-leading', findFixedLeadingWithScalingToken(text));
+    } else {
+      const text = stripCssComments(raw);
+      push(
+        rel,
+        text,
+        'css-weight',
+        findStringWeightViolations(text, { includeSelectorContext: true }),
+      );
+      push(rel, text, 'font-shorthand', findFontShorthands(text));
+    }
   }
   return violations;
 }
