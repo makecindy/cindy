@@ -204,8 +204,41 @@ describe('parity: buildProviderSections 薄壳 vs 历史实现', () => {
 
   it('全用例深等(含顺序与字段存在性)', () => {
     for (const args of cases) {
-      expect(buildProviderSections(args)).toEqual(legacyBuildProviderSections(args));
+      const current = buildProviderSections(args);
+      // 新增的展示排序元数据不属于历史实现；先剥离它们，继续锁住旧的字段/顺序语义。
+      expect(
+        current.map(({ provider, models }) => ({
+          provider,
+          models: models.map(({ group: _group, mode: _mode, sortOrder: _sortOrder, ...model }) => model),
+        })),
+      ).toEqual(legacyBuildProviderSections(args));
     }
+  });
+
+  it('透传模型分组与目录排序元数据', () => {
+    const metadataProvider = provider('metadata', ['codex'], {
+      codex: [
+        model('metadata-model', {
+          group: 'gpt-budget',
+          mode: 'chat',
+          sortOrder: 7,
+        }),
+      ],
+    });
+    const sections = buildProviderSections({
+      providers: [metadataProvider],
+      agent: 'codex',
+      isVisible: () => true,
+    });
+
+    expect(sections[0]?.models).toEqual([
+      expect.objectContaining({
+        id: 'metadata-model',
+        group: 'gpt-budget',
+        mode: 'chat',
+        sortOrder: 7,
+      }),
+    ]);
   });
 });
 
