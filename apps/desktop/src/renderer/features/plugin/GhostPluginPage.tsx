@@ -1908,6 +1908,7 @@ function GhostPluginActions({
 /**
  * 已安装插件卡片(设计定稿 2026-08-06):
  * - 整卡可点 → 进入插件详情;
+ * - 左下角:有市场新版本时显示版本号角标(ArrowUp + v版本号,可点触发更新);
  * - 右侧中间:动作图标按状态细分——升级 ArrowUp、授权失败 AlertTriangle(红)、
  *   未配置 Link(黄)、面板型 ArrowRight(使用)、指令/能力型 MessageCircle(对话)、
  *   纯工具型与停用不显示;
@@ -1982,6 +1983,31 @@ return (
         !enabled && 'opacity-60',
       )}
     >
+      {/* 左下角更新角标:有市场新版本时渲染(ArrowUp + 版本号,可点触发更新)。 */}
+      {updateVersion && onUpdate ? (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onUpdate();
+          }}
+          disabled={updateBusy}
+          aria-label={t('settings.ghosts.page.updateAria', {
+            name: item.name,
+            version: updateVersion,
+          })}
+          className={cn(
+            'absolute bottom-0 left-0 z-10 inline-flex items-center gap-0.5 rounded-br-lg rounded-tl-xl bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-primary)]',
+            'transition-colors duration-150 hover:bg-[var(--surface-hover)]',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            'disabled:cursor-wait disabled:opacity-40',
+          )}
+        >
+          <ArrowUp size={11} aria-hidden="true" />
+          v{updateVersion}
+        </button>
+      ) : null}
+
       <GhostPluginIcon
         iconDataUrl={item.iconDataUrl}
         iconId={item.id}

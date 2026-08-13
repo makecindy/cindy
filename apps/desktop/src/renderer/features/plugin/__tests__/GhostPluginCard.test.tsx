@@ -218,7 +218,7 @@ describe('GhostPluginCard', () => {
     expect(onChat).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the update action on the right and keeps it from triggering the card action', () => {
+  it('升级态保留左下角角标与右侧图标两个更新入口,点击触发更新而非进详情', () => {
     const onOpenDetail = vi.fn();
     const onUpdate = vi.fn();
     render(
@@ -232,7 +232,10 @@ describe('GhostPluginCard', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.updateAria' }));
+    // 左下角版本号角标 + 右侧图标,两个入口都指向更新。
+    const updateButtons = screen.getAllByRole('button', { name: 'settings.ghosts.page.updateAria' });
+    expect(updateButtons.length).toBe(2);
+    fireEvent.click(updateButtons[0]);
     expect(onUpdate).toHaveBeenCalledTimes(1);
     expect(onOpenDetail).not.toHaveBeenCalled();
   });
@@ -250,7 +253,7 @@ describe('GhostPluginCard', () => {
     expect(screen.getByText('settings.ghosts.page.oauthAuthorizationExpired')).toBeTruthy();
   });
 
-  it('blocks the update action while a market operation is running', () => {
+  it('升级态更新进行中,两个更新入口都禁用', () => {
     render(
       <GhostPluginCard
         item={commandPlugin}
@@ -263,13 +266,11 @@ describe('GhostPluginCard', () => {
       />,
     );
 
-    expect(
-      (
-        screen.getByRole('button', {
-          name: 'settings.ghosts.page.updateAria',
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+    const updateButtons = screen.getAllByRole('button', { name: 'settings.ghosts.page.updateAria' });
+    expect(updateButtons.length).toBe(2);
+    updateButtons.forEach((button) => {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+    });
   });
 
   it('停用插件点击卡片同样进入详情', () => {
