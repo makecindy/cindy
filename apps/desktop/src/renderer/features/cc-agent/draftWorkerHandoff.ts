@@ -1,8 +1,9 @@
 /**
- * 新建任务页会先拉起 Worker，再把 Lead 的首条输入交给会话视图发送。此时 Lead history
- * 还是空的，因此 UI handoff 需要把这条待发送输入随既有 delegateTask 一起交给 Worker。
+ * New-task flows create the Worker before the Lead's first input is sent. Older controlled
+ * devices cannot defer assignment until that input is queryable, so preserve the pending text
+ * inline for that mixed-version path. New peers use the Worker-scoped Lead history bridge.
  *
- * pendingLeadInput 只是任务上下文：没有显式 Worker 任务时不能用它擅自起一份新工作。
+ * pendingLeadInput is context only: without an explicit Worker task it cannot start new work.
  */
 export function buildDraftWorkerInitialTask(
   initialTask: string | undefined,

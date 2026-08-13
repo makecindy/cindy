@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { buildDraftWorkerInitialTask } from '../draftWorkerHandoff';
 
 describe('buildDraftWorkerInitialTask', () => {
-  it('includes the pending Lead input that is not available in session history yet', () => {
+  it('includes pending Lead input for a controlled device that cannot query it yet', () => {
     expect(buildDraftWorkerInitialTask(' Review the current work ', ' Implement sidebar filters '))
       .toBe(`Review the current work
 

@@ -5700,6 +5700,7 @@
       "startFailed": "協同の開始に失敗しました",
       "startFailedContinue": "協同の開始に失敗しました。単一セッションとして続行します。",
       "createWorkerRefreshFailed": "Worker の状態を更新できませんでした。もう一度お試しください。",
+      "assignmentFailed": "Worker は作成されましたが、タスクが割り当てられたか確認できません。再試行する前に Worker パネルを確認してください。",
       "openHint": "Worker を呼んで協同する",
       "disabledHint": "協同モードは無効です。設定で有効にしてください。",
       "unavailableHint": "協同設定を確認できません。しばらくしてから再試行してください。",

@@ -29,6 +29,8 @@ export interface OrcaEnableTeamParams {
   /** 显式选定的模型来源;语义见 OrcaWorkerCreateParams.providerId。 */
   providerId?: string | null;
   delegateTask?: string;
+  /** UI 新建 Lead 时先建 Worker，把首任务留到 Lead 首条输入可查询后再派。 */
+  deferDelegateTask?: boolean;
   /** 本次首个 Worker 权限；缺省读取 Worker 创建偏好。显式值同时更新后续默认。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
 }
@@ -65,6 +67,8 @@ export type OrcaEnableTeamResult =
       workerSessionId: string;
       workerId: string;
       dispatched: boolean;
+      /** 由 Worker 所在主机生成，供后续 history gate 避免跨设备时钟偏差。 */
+      uiAssignmentSnapshotBeforeMs: number;
       workerPermissionMode: OrcaWorkerPermissionMode;
       dispatchOutcome?: DispatchWorkerTaskResult['dispatchOutcome'];
     }
@@ -374,7 +378,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     }
 
     let dispatchResult: DispatchWorkerTaskResult | undefined;
-    if (normalized.initialTask) {
+    if (normalized.initialTask && !params.deferDelegateTask) {
       dispatchResult = await dispatchInitialTask({
         workerSessionId: created.workerSessionId,
         message: buildUiAssignmentInitialTask({
@@ -383,7 +387,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
         }),
         context: `enable_collab_mode/${created.workerSessionId}/delegate_task`,
       });
-    } else {
+    } else if (!normalized.initialTask) {
       try {
         await deps.sendWorkerReadyPlaceholder({
           workerSessionId: created.workerSessionId,
@@ -411,6 +415,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       workerSessionId: created.workerSessionId,
       workerId: created.workerId,
       dispatched: dispatchResult?.dispatched ?? false,
+      uiAssignmentSnapshotBeforeMs: Date.now(),
       workerPermissionMode,
       ...(dispatchResult ? { dispatchOutcome: dispatchResult.dispatchOutcome } : {}),
     };

@@ -19,6 +19,7 @@
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+import type { DeferredUiAssignment } from '@/features/cc-agent/deferredUiAssignment';
 
 /**
  * device-link 草稿开了协同时,把「开协同」这件事一起交接给 SessionView(issue #1170)。
@@ -34,6 +35,8 @@ export interface PendingRemoteCollab {
   deviceId: string;
   /** enableOrca 入参,已按被控端的模型 / 供应商目录收窄。 */
   options: Record<string, unknown>;
+  /** 老被控端不支持延迟派单时，保留新建 Lead 的待发送输入作为兼容上下文。 */
+  pendingLeadInput?: string;
 }
 
 export interface PendingPayload {
@@ -47,6 +50,8 @@ export interface PendingPayload {
   slashCommandRanges?: SlashCommandRange[];
   /** 非空 = 发首轮之前先在被控端开协同(见 PendingRemoteCollab)。 */
   remoteCollab?: PendingRemoteCollab;
+  /** 本机 Worker 已创建但尚未派单；首条消息 accepted 后再派。 */
+  deferredUiAssignment?: DeferredUiAssignment;
   /** 调试用——createPending 时刻,过期清理时可参考(目前未做 GC,实际场景 navigate 立即消费)。 */
   createdAt: number;
 }

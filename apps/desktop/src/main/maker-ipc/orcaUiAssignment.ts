@@ -5,8 +5,8 @@
 export function buildUiAssignmentInitialTask(params: {
   leadSessionId: string;
   initialTask: string;
+  snapshotBeforeMs?: number;
 }): string {
-  const sessionIds = JSON.stringify([params.leadSessionId]);
   return [
     '[Orca UI Assignment]',
     '',
@@ -16,9 +16,10 @@ export function buildUiAssignmentInitialTask(params: {
     'Context handoff:',
     'This Worker was created directly from the collaboration UI. The task may depend on work already in progress in the Lead session.',
     `Lead session id: ${JSON.stringify(params.leadSessionId)}`,
-    'Decide whether that context is needed before acting. If the task refers to current work, continuing work, this PR, or another relative scope, inspect the Lead session with cindy_helper history tools:',
-    `- By content: search_chat_history, args {"query":"<keywords>","session_ids":${sessionIds}}`,
-    `- By time/role: get_chat_history, args {"session_ids":${sessionIds},"roles":["user","assistant"]} (page through with nextCursor when hasMore)`,
+    ...(params.snapshotBeforeMs !== undefined
+      ? [`snapshot_before_ms: ${params.snapshotBeforeMs}`]
+      : []),
+    'Decide whether that context is needed before acting. If the task refers to current work, continuing work, this PR, or another relative scope, call orca_worker_bridge.read_lead_history with your worker_id. When snapshot_before_ms is present, pass it as from_ms. Page through next_cursor when has_more is true.',
     'Use those tools only when needed. If the task is self-contained, proceed directly without reading the Lead history.',
     "For code work, recover the intended repository, worktree, branch, and review range from the Lead's context and verify them on disk; do not assume the process cwd is the Lead's active worktree.",
   ].join('\n');

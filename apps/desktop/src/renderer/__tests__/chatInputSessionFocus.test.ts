@@ -163,7 +163,11 @@ describe('ChatInput session switch focus contract', () => {
     expect(chatInputSource).toContain('onAccepted: markRecentPluginUsage');
     expect(successfulSendBlock).toContain('markRecentPluginUsage();');
     expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(3);
-    expect(worktreeSendBlock).toContain('if (accepted) opts?.onAccepted?.();');
+    expect(worktreeSendBlock).toContain('if (accepted) {');
+    expect(worktreeSendBlock).toContain('opts?.onAccepted?.();');
+    expect(worktreeSendBlock).toContain(
+      'dispatchDeferredUiAssignment(newSession.id, deferredUiAssignment)',
+    );
   });
 
   it('optimistically clears device-link composer state before awaiting send and restores without dropping newer input', () => {

@@ -570,6 +570,7 @@ describe('OrcaLifecycleService', () => {
       ok: true,
       workerId: 'worker-1',
       dispatched: false,
+      uiAssignmentSnapshotBeforeMs: expect.any(Number),
     });
 
     expect(calls).toEqual([
@@ -621,16 +622,41 @@ describe('OrcaLifecycleService', () => {
     const dispatchedMessage = vi.mocked(deps.dispatchWorkerTask).mock.calls[0]?.[0].message;
     expect(dispatchedMessage).toContain('Task:\nReview PR #42 now');
     expect(dispatchedMessage).toContain('Lead session id: "lead-1"');
-    expect(dispatchedMessage).toContain(
-      'search_chat_history, args {"query":"<keywords>","session_ids":["lead-1"]}',
-    );
-    expect(dispatchedMessage).toContain(
-      'get_chat_history, args {"session_ids":["lead-1"],"roles":["user","assistant"]}',
-    );
+    expect(dispatchedMessage).toContain('orca_worker_bridge.read_lead_history');
     expect(dispatchedMessage).toContain('If the task is self-contained, proceed directly');
     expect(dispatchedMessage).toContain(
       "do not assume the process cwd is the Lead's active worktree",
     );
+  });
+
+  it('creates an idle Worker without dispatch or placeholder when the UI defers its task', async () => {
+    const { calls, deps, service } = createDeps();
+
+    await expect(
+      service.enableTeam({
+        leadSessionId: 'lead-1',
+        workerAgent: 'codex',
+        role: 'Code Review',
+        delegateTask: 'Review the attached spec',
+        deferDelegateTask: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      workerId: 'worker-1',
+      dispatched: false,
+    });
+
+    expect(calls).toEqual([
+      'createActiveTeam:lead-1',
+      'createWorkerInTeam:team-1:code-review',
+      'setSessionOrcaRole:lead-1:lead',
+      'clearKnownNonOrcaSession:lead-1',
+      'setLeadVendorOptions:lead-1:worker-session-1',
+      'broadcastSessionCreated:worker-session-1',
+      'broadcastOrcaWorkerChanged:lead-1',
+    ]);
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+    expect(deps.sendWorkerReadyPlaceholder).not.toHaveBeenCalled();
   });
 
   it('falls back to worker when the worker role cannot produce a label slug', async () => {

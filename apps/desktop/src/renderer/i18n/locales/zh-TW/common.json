@@ -5699,6 +5699,7 @@
       "startFailed": "開啟協同失敗",
       "startFailedContinue": "開啟協同失敗，已改為單任務繼續",
       "createWorkerRefreshFailed": "Worker 狀態重新整理失敗，請稍後重試",
+      "assignmentFailed": "Worker 已建立，但無法確認任務是否派發成功。請先查看 Worker 面板，再決定是否重試",
       "openHint": "召集 Worker 協作",
       "disabledHint": "協同模式已關閉，請在設定中重新啟用",
       "unavailableHint": "暫時無法確認協同設定，請稍後重試",
