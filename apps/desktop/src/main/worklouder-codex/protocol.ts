@@ -84,23 +84,11 @@ const COLORS = {
   error: 0xff453a,
   /**
    * Window-reopen red tuned for these LEDs.
-   * UI brand red `#DF0C27` / `#A61629` share the same hue and wash pink
-   * on the board; drop the blue channel so it stays crimson.
+   * UI brand red `#DF0C27` / `#A61629` wash pink on the board.
+   * `#D0060C` was the hotter of the four hardware swatches.
    */
-  brand: 0xb40a12,
+  brand: 0xd0060c,
 } as const;
-
-/**
- * Temporary preview swatches — played in order on window reveal so we
- * can pick one on the hardware. Index 1 is the current favourite.
- * Agent keys light 1–4 to say which swatch is on.
- */
-export const WORKLOUDER_WINDOW_REVEAL_SWATCHES = [
-  0xb40a12, // 1 current crimson
-  0xd0060c, // 2 hotter red
-  0xff1a00, // 3 pure red-orange
-  0x8a050c, // 4 deep blood
-] as const;
 
 const OFF_SIDE: WorkLouderLightingSide = {
   effect: WorkLouderLightingEffect.Off,
@@ -258,20 +246,16 @@ export function createWorkLouderCodexOffFrame(): WorkLouderCodexLightingFrame {
  * effects already proven on this hardware (running / waiting). Rainbow is
  * not: on an idle board it can look like the lights never came on.
  */
-export function createWorkLouderCodexWindowRevealFrame(
-  color: number = COLORS.brand,
-  swatchIndex = 0,
-): WorkLouderCodexLightingFrame {
-  const markedSlots = Math.min(swatchIndex + 1, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+export function createWorkLouderCodexWindowRevealFrame(): WorkLouderCodexLightingFrame {
   return {
-    ambient: side(WorkLouderLightingEffect.Snake, 0.78, 0.55, color),
-    keys: side(WorkLouderLightingEffect.Breath, 0.34, 0.55, color),
+    ambient: side(WorkLouderLightingEffect.Snake, 0.78, 0.55, COLORS.brand),
+    keys: side(WorkLouderLightingEffect.Breath, 0.34, 0.55, COLORS.brand),
     threads: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, id) => ({
       id,
-      color,
-      brightness: id < markedSlots ? 0.72 : 0,
-      effect: id < markedSlots ? WorkLouderLightingEffect.Breath : WorkLouderLightingEffect.Off,
-      speed: id < markedSlots ? 0.55 : 0,
+      color: COLORS.brand,
+      brightness: 0.72,
+      effect: WorkLouderLightingEffect.Breath,
+      speed: 0.55,
       syncKeysLighting: false,
       syncAmbientLighting: false,
     })),
