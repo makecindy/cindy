@@ -433,6 +433,31 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     await next.handle.close();
   });
 
+  it('uses the new mode while the SDK permission-mode RPC is still pending', async () => {
+    let releasePermissionMode: (() => void) | undefined;
+    const { handle, canUseTool, fakeQuery, seen } = await startSession('auto', {
+      reviewer: vi.fn(async () => ({ verdict: 'allow' as const, reason: 'reviewed' })),
+    });
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releasePermissionMode = resolve; }),
+    );
+
+    const modeChange = handle.setPermissionMode!('ask');
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default'));
+
+    const result = await canUseTool(
+      'Write',
+      { file_path: '/tmp/rpc-pending-mode.conf' },
+      { toolUseID: 'rpc-pending-mode' },
+    );
+    expect(result.behavior).toBe('allow');
+    expect(seen.filter((request) => request.kind === 'permission')).toHaveLength(1);
+
+    releasePermissionMode!();
+    await modeChange;
+    await handle.close();
+  });
+
   it('reviewer allow → proceeds silently without hitting the resolver', async () => {
     const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
       reviewVerdict: 'allow',

@@ -2133,6 +2133,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       : null;
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode = reviewMode ? 'ask' : opts.permissionMode ?? 'default';
+    // 权限档切换先更新本地事实源，再等待 SDK 控制 RPC。异步 reviewer 可能在 RPC
+    // 返回前完成；若继续保留旧值，旧 Auto 裁决会绕过用户刚选的 Ask/Full 档位。
+    // 代次用于在并发切档时只回滚仍然属于当前写入的失败，不覆盖更新的用户意图。
+    let permissionModeWriteGeneration = 0;
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
     // "武装"态 —— send 消耗它并立即 emit plan_mode_changed(false) 让勾选熄灭;
     // 本轮 plan turn 由 planTurnActive 承载(SDK 保持 plan 档): ExitPlanMode 批准
@@ -5929,21 +5933,25 @@ export class ClaudeCodeAgent extends BaseAgent {
           });
           return;
         }
+        const previousPermissionMode = mutablePermissionMode;
+        const modeChanged = newMode !== previousPermissionMode;
+        const writeGeneration = ++permissionModeWriteGeneration;
         // 用户自己动过权限档之后,「自动审核不可用」这条一次性提示重新武装:再回到 Auto
         // 又不可用时,他有权再看到一次(否则一个会话里只提示一次会显得像偶发)。
         // 档位变了 → 连**裁决缓存**一起清。缓存 key 不含 permissionMode,切离 Auto 再切回时
         // 会命中先前那条 `unavailable` block —— 审阅器早就恢复了,同一个动作还是被拒
         // (greptile P1 of #1574)。一次性提示同步重新武装:用户既然接管过,之后又不可用
         // 值得再提醒一次。
-        if (newMode !== mutablePermissionMode) {
+        if (modeChanged) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
+          // 先发布逻辑档位，避免下面的异步 SDK RPC 期间 reviewer 读取到旧值。
+          mutablePermissionMode = newMode;
         }
         // 计划模式武装中 / 本轮 plan turn 进行中 SDK 恒在 plan 档: 只记录底层权限档
         // (循环收尾切回时生效), 不 push SDK、不动挂起交互(挂着的多半是 plan_review)。
         if (mutablePlanMode || planTurnActive) {
-          log.debug('setPermissionMode (deferred, plan mode active)', { from: mutablePermissionMode, to: newMode });
-          mutablePermissionMode = newMode;
+          log.debug('setPermissionMode (deferred, plan mode active)', { from: previousPermissionMode, to: newMode });
           return;
         }
         // 老 agentManager.ts:1850-1893 的"切到更宽松 mode 时挂着的 ask 自动 allow,
@@ -5958,11 +5966,22 @@ export class ClaudeCodeAgent extends BaseAgent {
         // SDK 侧把 ask 当 default —— 与 startSession 的处理一致。
         const sdkMode = toSdkPermissionMode(newMode);
         const isControlBlocked = controlRequestsBlocked();
-        log.debug('setPermissionMode', { from: mutablePermissionMode, to: newMode, sdk: sdkMode, dismissedAs: moreOpen ? 'allow' : 'deny', controlRequestsBlocked: isControlBlocked });
+        log.debug('setPermissionMode', { from: previousPermissionMode, to: newMode, sdk: sdkMode, dismissedAs: moreOpen ? 'allow' : 'deny', controlRequestsBlocked: isControlBlocked });
         if (!isControlBlocked) {
-          await q.setPermissionMode(sdkMode);
+          try {
+            await q.setPermissionMode(sdkMode);
+          } catch (error) {
+            // SDK 控制 RPC 失败时恢复旧事实源，但不能覆盖更晚的切档请求。
+            if (
+              modeChanged
+              && permissionModeWriteGeneration === writeGeneration
+              && mutablePermissionMode === newMode
+            ) {
+              mutablePermissionMode = previousPermissionMode;
+            }
+            throw error;
+          }
         }
-        mutablePermissionMode = newMode;
       },
 
       async useCindyAutoReviewFallback() {
