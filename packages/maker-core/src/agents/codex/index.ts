@@ -3554,6 +3554,10 @@ export class CodexAgent extends BaseAgent {
      */
     let mutableProviderId: string | null | undefined = opts.providerId;
     let currentAutoReviewIntent = '';
+    // A blocked Auto decision is surfaced as a non-terminal notice immediately,
+    // and carried on the terminal done event so downstream surfaces (IM/Desktop)
+    // cannot lose the product-turn outcome.
+    let autoReviewBlockedForTurn = false;
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
@@ -3574,6 +3578,7 @@ export class CodexAgent extends BaseAgent {
       });
     });
     const autoReviewBlockedNotice = createAutoReviewBlockedNotice((message) => {
+      autoReviewBlockedForTurn = true;
       eventQueue.push({
         type: 'error',
         data: { message, isTerminal: false },
@@ -8066,7 +8071,12 @@ export class CodexAgent extends BaseAgent {
         }
         eventQueue.push({
           type: 'done',
-          data: { type: 'codex/event/task_complete', cancelled: turn.status === 'interrupted', raw: turn },
+          data: {
+            type: 'codex/event/task_complete',
+            cancelled: turn.status === 'interrupted',
+            raw: turn,
+            ...(autoReviewBlockedForTurn ? { autoReviewBlocked: true } : {}),
+          },
           source: 'codex',
         });
         latestPlanByTurn.delete(turn.id);
@@ -8106,6 +8116,7 @@ export class CodexAgent extends BaseAgent {
           usage: codexDoneUsage,
           raw: turn,
           plan: latestPlanByTurn.get(turn.id) ?? null,
+          ...(autoReviewBlockedForTurn ? { autoReviewBlocked: true } : {}),
         },
         source: 'codex',
       });
@@ -9867,6 +9878,7 @@ export class CodexAgent extends BaseAgent {
         clearReconnectStall();
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         resetAutoReviewNoticesForNewTurn();
+        autoReviewBlockedForTurn = false;
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
         const capabilitySelectionText =
           (sendOpts as CodexInternalSendOptions | undefined)?.[

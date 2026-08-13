@@ -11897,6 +11897,16 @@ describe('CodexAgent MCP thread context hooks', () => {
         event.type === 'error' && String((event.data as { message?: unknown }).message).includes('[AUTO_REVIEW_BLOCKED]'),
       )).toHaveLength(1);
     });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-policy-unclassifiable', status: 'completed' },
+    });
+    await waitForExpectation(() => {
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'done',
+        data: expect.objectContaining({ autoReviewBlocked: true }),
+      }));
+    });
     await handle.close();
   });
 
