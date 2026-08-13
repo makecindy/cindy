@@ -262,6 +262,36 @@ describe('runMemoryCleanup', () => {
     }
   });
 
+  it('rebuilds MEMORY.md on repair rerun even when nothing new is archived', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 第一次 apply: 归档成功但索引重建失败 (exit 4 场景)。
+    const spy = vi
+      .spyOn(MemoryStorage.prototype, 'rebuildIndex')
+      .mockRejectedValueOnce(new Error('disk full'));
+    try {
+      const first = await runMemoryCleanup(plan);
+      expect(first.archived).toHaveLength(1);
+      expect(first.indexRebuildError).toContain('disk full');
+    } finally {
+      spy.mockRestore();
+    }
+
+    // 修复后重跑: plan 已无 archiveItems (feedback_a 已在 .archive), 但索引
+    // 重建必须仍执行 — 否则旧 MEMORY.md 继续引用已归档文件且 CLI 误报成功
+    // (Codex P2 on #2561: rebuild MEMORY.md on repair reruns)。
+    const rerunPlan = await planMemoryCleanup(dir);
+    expect(rerunPlan.archiveItems).toHaveLength(0);
+    const second = await runMemoryCleanup(rerunPlan);
+    expect(second.archived).toHaveLength(0);
+    expect(second.indexRebuildError).toBeUndefined();
+    const index = await readFile(path.join(dir, 'MEMORY.md'), 'utf8');
+    expect(index).not.toContain('feedback_a.md');
+    expect(index).toContain('feedback_b.md');
+  });
+
   it('surfaces EPERM lock errors instead of retrying forever', async () => {
     await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');

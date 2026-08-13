@@ -432,16 +432,20 @@ export async function runMemoryCleanup(
     }
   }
 
-  // 归档改变了 list() 结果 → 重建 MEMORY.md (移除已归档条目的索引行),
-  // 让下一次会话的 getIndex() 立即反映瘦身后的索引。失败必须暴露 — 静默吞掉
-  // 会让旧索引继续把已归档文件注入后续会话, 且 store.init() 只修 FTS 不会
-  // 重建 MEMORY.md (Codex P2 on #2561)。
-  if (result.archived.length > 0) {
-    try {
-      await new MemoryStorage(plan.shardDir).rebuildIndex();
-    } catch (e) {
-      result.indexRebuildError = String(e);
-    }
+  // 重建 MEMORY.md, 让下一次会话的 getIndex() 立即反映清理后的索引 (移除已
+  // 归档条目的索引行)。失败必须暴露 — 静默吞掉会让旧索引继续把已归档文件
+  // 注入后续会话, 且 store.init() 只修 FTS 不会重建 MEMORY.md (Codex P2 on
+  // #2561)。
+  //
+  // 不设「仅当有归档才重建」的 guard: 首次 --apply 归档后 rebuildIndex 失败
+  // (exit 4), 用户修复后重跑时 plan 已无 archiveItems、archived 为空 — 若
+  // 跳过重建, 重跑会 exit 0 但旧 MEMORY.md 仍引用已归档文件 (Codex P2 on
+  // #2561: rebuild MEMORY.md on repair reruns)。rebuildIndex 幂等, 无新归档
+  // 时执行也安全。
+  try {
+    await new MemoryStorage(plan.shardDir).rebuildIndex();
+  } catch (e) {
+    result.indexRebuildError = String(e);
   }
 
   return result;
