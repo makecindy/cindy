@@ -233,6 +233,13 @@ export interface IMMessageEvent {
   };
   /** Channel-specific raw event for debug. */
   raw?: unknown;
+  /**
+   * 群历史上下文的取数 lane, 与路由 lane(senderId)分离。仅 feishu 群主流 @
+   * 开新话题时设置: 出站路由进新话题 lane, 但上下文前缀仍按触发时所在 lane
+   * (群主流, threadId='')拉取 — 新话题是空的, 按它过滤会丢掉「总结上面」等
+   * 依赖的群主流上文。其它场景/渠道恒 undefined(上下文按 senderId lane 取)。
+   */
+  groupContextLane?: { chatId: string; threadId: string };
 }
 
 export interface IMCardActionEvent {

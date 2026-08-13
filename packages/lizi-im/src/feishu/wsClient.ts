@@ -679,13 +679,34 @@ async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): P
     return;
   }
 
-  // 群 lane: senderId = g/{chatId}[/{threadId}], 出站按 lane 解码回群;
-  // 记录回挂锚点让本轮回复(引用式)挂回触发消息(话题内回复顺带落回话题)。
-  const laneUserId = isGroup
-    ? encodeLaneUserId(chatId, data.message.thread_id)
-    : null;
-  if (laneUserId) {
-    outbound.pushReplyAnchor(laneUserId, messageId);
+  // 群 lane: senderId = g/{chatId}[/{threadId}], 出站按 lane 解码回群。
+  // 话题内触发直接进话题 lane(锚点=触发消息, 回复自动落回话题); 群主流
+  // 触发先以触发消息为根开话题再进新话题 lane(锚点=开场白消息) — 每话题
+  // 独立 session, 群主流保持干净; 开话题失败才降级回群 lane 旧行为。
+  let laneUserId: string | null = null;
+  let groupContextLane: { chatId: string; threadId: string } | undefined;
+  if (isGroup) {
+    const incomingThreadId = data.message.thread_id;
+    if (incomingThreadId) {
+      laneUserId = encodeLaneUserId(chatId, incomingThreadId);
+      outbound.pushReplyAnchor(laneUserId, messageId);
+    } else {
+      const opener = await outbound.openThread(messageId);
+      if (opener) {
+        laneUserId = encodeLaneUserId(chatId, opener.threadId);
+        outbound.pushReplyAnchor(laneUserId, opener.messageId);
+        // 开场白卡是本轮流式卡: streamingText.start 认领后直接 patch,
+        // 话题里不会多出一条占位消息。
+        outbound.pushPatchableOpener(laneUserId, opener.messageId);
+        // 上下文取数 lane 与路由 lane 分离: 新话题是空的, 群历史前缀仍按
+        // 触发时所在的群主流拉取(「总结上面」等依赖上文的消息才能拿到
+        // 群主流历史), 由 host adapter 消费(IMMessageEvent.groupContextLane)。
+        groupContextLane = { chatId, threadId: '' };
+      } else {
+        laneUserId = encodeLaneUserId(chatId, null);
+        outbound.pushReplyAnchor(laneUserId, messageId);
+      }
+    }
   }
 
   // Emit raw fields — orchestrator decides how to render unsupported (it owns
@@ -704,6 +725,7 @@ async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): P
           speaker: { id: senderOpenId, name: '', isOwner: true },
         }
       : {}),
+    ...(groupContextLane ? { groupContextLane } : {}),
     attachments,
     unsupported,
     raw: data,

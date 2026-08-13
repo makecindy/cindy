@@ -262,7 +262,8 @@ import {
 import { ConnectionTokenProvider, type IssuedConnectionToken } from './connectionTokenProvider.js';
 import { GhostFsSlot } from './fsSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
-import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
+import { getSessionFsSnapshot, getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
+import { getTeamByWorkerSession } from '../localDb/orcaTeamStore.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
 import { readInstalledGhostManifest } from '../installedGhostManifest.js';
 import {
@@ -274,10 +275,13 @@ import {
   GhostSubscriptionGateway,
   GhostActivityTracker,
   GhostTurnTranslator,
+  createGhostPrimarySessionFocusTracker,
   createGhostSessionFocusTracker,
   GhostTapPendingQueue,
   GhostTurnOriginTracker,
   isGhostEligibleSessionRow,
+  isGhostSessionSwitchEligibleRow,
+  resolveGhostPrimarySessionId,
   type GhostInteractionActivityKind,
   type GhostScreenResult,
   type MinimalAgentEvent,
@@ -1707,8 +1711,8 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
 }
 
 /**
- * 会话是否在订阅事件的投递范围(用户主会话:desktop/shared 来源、非 orca;
- * 行级判定见 subscriptionGateway.isGhostEligibleSessionRow)。
+ * 会话是否在订阅事件的投递范围。默认只允许非 Orca 用户主任务；session-switch
+ * 额外允许已归一后的 Orca Lead，行级判定见 subscriptionGateway。
  * outcome 三值:eligible / ineligible(查到行且明确不合格,可终身缓存)/
  * retry(DB 未就绪、查询抛错、行还没落库——都是暂时态,调用方稍后重试;
  * 2026-07-12 实测:启动期会话接线早于 DbClient 就绪,一次性判定会把
@@ -1716,6 +1720,7 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
  */
 async function isGhostEligibleSession(
   sessionId: string,
+  scope: 'default' | 'session-switch' = 'default',
 ): Promise<
   | { outcome: 'eligible'; agentKind?: string; workdir?: string }
   | { outcome: 'ineligible' }
@@ -1736,7 +1741,11 @@ async function isGhostEligibleSession(
       .limit(1);
     const row = rows[0];
     if (!row) return { outcome: 'retry' }; // 行未落库(极早期)→ 暂时态
-    if (isGhostEligibleSessionRow(row)) {
+    const isEligible =
+      scope === 'session-switch'
+        ? isGhostSessionSwitchEligibleRow(row)
+        : isGhostEligibleSessionRow(row);
+    if (isEligible) {
       return {
         outcome: 'eligible',
         agentKind: row.agentKind ?? undefined,
@@ -2174,6 +2183,8 @@ export function runGhostAssistantReplyHook(
 export function notifyGhostSessionEvent(
   kind: 'created' | 'archived' | 'switched',
   data: { sessionId: string; workdir?: string },
+  shouldPublish: () => boolean | Promise<boolean> = () => true,
+  onRetry: () => void = () => {},
 ): void {
   void (async () => {
     try {
@@ -2182,16 +2193,24 @@ export function notifyGhostSessionEvent(
         (g) => g.enabled && g.manifest.subscribe?.topics?.includes('session'),
       );
       if (!hasSubscriber) return;
-      // 投递范围与 turn 事件同口径:只投用户主会话(retry 视为不投,
-      // 生命周期事件不值得重试机制)。
-      const info = await isGhostEligibleSession(data.sessionId);
-      if (info.outcome !== 'eligible') return;
+      // created / archived 与 turn 事件同口径；switched 额外允许归一后的 Orca Lead。
+      // retry 视为不投，生命周期事件不值得引入重试机制。
+      const info = await isGhostEligibleSession(
+        data.sessionId,
+        kind === 'switched' ? 'session-switch' : 'default',
+      );
+      if (info.outcome !== 'eligible') {
+        if (info.outcome === 'retry') onRetry();
+        return;
+      }
       // switched 的调用方(renderer 路由上报)只有 sessionId,workdir 从资格
       // 查询顺手补上,与 created/archived 的载荷形状对齐。
       const payload =
         data.workdir === undefined && info.workdir !== undefined
           ? { ...data, workdir: info.workdir }
           : data;
+      // switched 在异步归一、资格查询完成后再确认一次焦点代次；确认与去重在同一步完成。
+      if (!(await shouldPublish())) return;
       getGhostSubscriptionGateway().publish(
         'session',
         kind === 'created'
@@ -2209,13 +2228,26 @@ export function notifyGhostSessionEvent(
 
 /**
  * 会话切换上报入口(renderer MainLayout 路由 effect 经 'ghosts:session-focused'
- * 调,平台无关):去重后发 did-session-switched。连续同 id / 非会话页(null)
- * 不发;切走再切回算新切换(去重语义见 createGhostSessionFocusTracker)。
+ * 调,平台无关):Worker 归一到 Lead 后发 did-session-switched。连续指向同一主任务 / 非会话页
+ * (null)不发；切走再切回算新切换。原始焦点仍单独保留给旧 preview 缺省落点。
  */
-const ghostSessionFocusTracker = createGhostSessionFocusTracker((sessionId) =>
-  notifyGhostSessionEvent('switched', { sessionId }),
+const ghostPrimarySessionFocusTracker = createGhostPrimarySessionFocusTracker(
+  (sessionId) =>
+    resolveGhostPrimarySessionId(
+      sessionId,
+      getSessionRowSnapshot,
+      async (workerSessionId) =>
+        (await getTeamByWorkerSession(workerSessionId))?.leadSessionId ?? null,
+    ),
+  (sessionId, claim, releaseRaw) =>
+    notifyGhostSessionEvent('switched', { sessionId }, claim, releaseRaw),
 );
+// 原始焦点只供 preview 使用；不能用它的 raw-id 去重阻断 primary tracker 的重试。
+const ghostSessionFocusTracker = createGhostSessionFocusTracker(() => {});
 export function noteGhostSessionFocused(sessionId: string | null): void {
+  // 两个 tracker 都必须收到每次上报：raw tracker 负责 preview，primary tracker
+  // 负责 Worker → Lead 归一、异步乱序和失败后的重试。
+  ghostPrimarySessionFocusTracker.note(sessionId);
   ghostSessionFocusTracker.note(sessionId);
 }
 
@@ -2226,17 +2258,20 @@ function noteGhostWindowSessionFocused(sender: WebContents, sessionId: string | 
   // Renderer route reports are not an authority to grant Simulator access. They
   // may only remove a stale Main-owned grant when this window family moves away
   // from the task for which it was explicitly authorized.
-  revokeIOSSimulatorRendererAccessForSessionChange(sender, sessionId);
   const previous = ghostSessionFocusByWebContents.get(sender.id);
-  if (previous === sessionId) return;
-  ghostSessionFocusByWebContents.set(sender.id, sessionId);
-  if (!ghostSessionFocusTrackedWebContents.has(sender.id)) {
-    ghostSessionFocusTrackedWebContents.add(sender.id);
-    sender.once('destroyed', () => {
-      ghostSessionFocusByWebContents.delete(sender.id);
-      ghostSessionFocusTrackedWebContents.delete(sender.id);
-    });
+  if (previous !== sessionId) {
+    revokeIOSSimulatorRendererAccessForSessionChange(sender, sessionId);
+    ghostSessionFocusByWebContents.set(sender.id, sessionId);
+    if (!ghostSessionFocusTrackedWebContents.has(sender.id)) {
+      ghostSessionFocusTrackedWebContents.add(sender.id);
+      sender.once('destroyed', () => {
+        ghostSessionFocusByWebContents.delete(sender.id);
+        ghostSessionFocusTrackedWebContents.delete(sender.id);
+      });
+    }
   }
+  // Keep forwarding same-id reports: the primary tracker may have cleared its
+  // raw-id dedupe marker after a transient resolution failure and needs a retry.
   noteGhostSessionFocused(sessionId);
 }
 

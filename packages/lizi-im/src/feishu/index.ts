@@ -35,6 +35,8 @@ import { feishuEvents } from './events.js';
 import { cancelAppRegistration, reconnectSavedCredentials, registerFeishuIpc } from './ipc.js';
 import * as outbound from './outbound.js';
 import * as streamingText from './streamingText.js';
+import { downloadAttachments, type DownloadResult } from './attachmentDownloader.js';
+import type { AttachmentRef } from './incomingContent.js';
 
 export class FeishuIM extends BaseIM implements ChannelIM {
   constructor(host: IMHost) {
@@ -153,14 +155,46 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   }
 
   /**
-   * 拉群会话最近历史(群 lane 触发时 adapter 拼上下文前缀用)。权限不足或
-   * 调用失败返回空数组 — 上下文降级, turn 照跑。
+   * 按页拉群/话题历史(群 lane 触发时 adapter 拼上下文用)。话题 lane 传
+   * threadId 走 thread 容器。**权限不足/调用失败直接抛错** — 调用方据此
+   * 区分「无历史」与「拉取失败」并给 owner 可见提示;turn 降级照跑由调用方兜。
    */
-  fetchRecentChatMessages(
-    chatId: string,
-    opts?: { limit?: number },
-  ): Promise<outbound.RecentChatMessage[]> {
-    return outbound.fetchRecentChatMessages(chatId, opts);
+  fetchChatHistoryPage(args: {
+    chatId: string;
+    threadId?: string;
+    pageToken?: string;
+    pageSize?: number;
+  }): Promise<outbound.ChatHistoryPage> {
+    return outbound.fetchChatHistoryPage(args);
+  }
+
+  /**
+   * 拉群名称(群 lane 会话标题用)。需要「获取群基本信息」权限;失败/无权限
+   * 返回 null(调用方回落 chatId 后 6 位)。
+   */
+  getChatName(chatId: string): Promise<string | null> {
+    return outbound.getChatName(chatId);
+  }
+
+  /**
+   * 下载任意历史消息的附件(群历史图片/文件进上下文用)。复用私聊入站的
+   * messageResource 下载与 mediaStore 缓存;client 未就绪时全部进 unsupported。
+   */
+  async downloadMessageAttachments(
+    messageId: string,
+    refs: AttachmentRef[],
+  ): Promise<DownloadResult> {
+    const c = outbound.getBoundClient();
+    if (!c) {
+      return {
+        attachments: [],
+        unsupported: refs.map((ref) => ({
+          type: 'no_client',
+          label: `${ref.kind === 'file' ? ref.fileName : '图片'} 下载失败：客户端未就绪`,
+        })),
+      };
+    }
+    return downloadAttachments(c, messageId, refs);
   }
 
   /**

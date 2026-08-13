@@ -132,6 +132,8 @@ describe('sidebarWindowPreload 椤跺眰濂戠害', () => {
     expect(topLevel).toEqual(expect.arrayContaining(['localThemes']));
     expect(topLevel).toEqual(expect.arrayContaining(['appShortcuts']));
     expect(topLevel).toEqual(expect.arrayContaining(['theme']));
+    expect(topLevel).toEqual(expect.arrayContaining(['onFullscreenChange']));
+    expect(topLevel).toEqual(expect.arrayContaining(['getFullscreenState']));
     expect(topLevel).toEqual(expect.arrayContaining(['search']));
   });
 
@@ -274,6 +276,7 @@ describe('rightSidebarWindow 鍛藉悕绌洪棿', () => {
     expect(rswKeys).toEqual(expect.arrayContaining(['refreshContext']));
     expect(rswKeys).toEqual(expect.arrayContaining(['onStateChanged']));
     expect(rswKeys).toEqual(expect.arrayContaining(['onContextChanged']));
+    expect(rswKeys).toEqual(expect.arrayContaining(['onTabHandoff']));
     expect(rswKeys).toEqual(expect.arrayContaining(['onCommand']));
     expect(rswKeys).toEqual(expect.arrayContaining(['sendCommand']));
     expect(rswKeys).toEqual(expect.arrayContaining(['onVisibilityChanged']));

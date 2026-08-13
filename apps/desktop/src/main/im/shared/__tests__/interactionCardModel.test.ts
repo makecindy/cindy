@@ -309,4 +309,19 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
     const hookAsk = composeInteractionCard(ASK_NO_OPTIONS)!;
     expect(hookAsk.defaultDecision).toEqual({ kind: 'ask_user_question', answers: {} });
   });
+
+  it('授权卡收口(buildResolvedPermissionCard): 保留原始正文, 去按钮, 追加决策结果', () => {
+    const im = cards.buildPermissionCard(PERMISSION_RICH);
+    const resolved = cards.buildResolvedPermissionCard(
+      { title: im.title ?? '', body: im.body ?? '' },
+      '✅ 已允许（仅本次）',
+    );
+    // 原始正文(工具名 + 参数预览)完整保留
+    expect(resolved.body).toContain(im.body!);
+    expect(resolved.title).toBe(im.title);
+    // 决策结果追加在末尾
+    expect(resolved.body!.endsWith('✅ 已允许（仅本次）')).toBe(true);
+    // 按钮清空 — 已决策的卡不能再点
+    expect(resolved.buttons).toEqual([]);
+  });
 });

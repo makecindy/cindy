@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 
 import {
   GHOST_MANIFEST_FILE,
@@ -178,9 +179,37 @@ function isRealDirectoryPath(absPath: string, allowMissingLeaf = false): boolean
       }
       return false;
     }
-    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    if (stat.isSymbolicLink()) {
+      if (!isExternalTempAncestor(current, resolved)) return false;
+      try {
+        if (!fs.statSync(current).isDirectory()) return false;
+      } catch {
+        return false;
+      }
+      continue;
+    }
+    if (!stat.isDirectory()) return false;
   }
   return true;
+}
+
+/**
+ * macOS exposes the temporary directory through a system alias (`/var` →
+ * `/private/var`).  That alias is outside the caller-controlled directory and
+ * is safe to traverse; links at or below the temporary root remain rejected.
+ */
+function isExternalTempAncestor(segment: string, target: string): boolean {
+  const tempRoot = path.resolve(os.tmpdir());
+  const targetRel = path.relative(tempRoot, target);
+  if (targetRel.startsWith(`..${path.sep}`) || path.isAbsolute(targetRel)) return false;
+  try {
+    const realSegment = fs.realpathSync.native(segment);
+    const realTempRoot = fs.realpathSync.native(tempRoot);
+    const tempRel = path.relative(realSegment, realTempRoot);
+    return tempRel !== '' && !tempRel.startsWith(`..${path.sep}`) && !path.isAbsolute(tempRel);
+  } catch {
+    return false;
+  }
 }
 
 /** Verify that an approval source is the exact, link-free bundled seed directory for an id. */

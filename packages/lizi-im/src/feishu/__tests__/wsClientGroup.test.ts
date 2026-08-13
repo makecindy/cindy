@@ -1,6 +1,6 @@
 /**
  * 群消息入站门禁: @ 检测、owner 门、非 owner 礼貌回应(冷却)、lane senderId、
- * mention 占位符剥离、thread_id → 话题 lane。
+ * mention 占位符剥离、thread_id → 话题 lane、群主流 @ 入站开话题。
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,7 +18,14 @@ const mocks = {
   getBoundClient: vi.fn(() => null),
   sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
   replyText: vi.fn(async () => ({ messageId: 'om_reply' })),
+  openThread: vi.fn(
+    async (): Promise<{ messageId: string; threadId: string } | null> => ({
+      messageId: 'om_opener',
+      threadId: 'omt_new',
+    }),
+  ),
   pushReplyAnchor: vi.fn(),
+  pushPatchableOpener: vi.fn(),
   firstAllowed: vi.fn<() => string | null>(() => null),
   readOwnerOpenId: vi.fn<() => string | null>(() => null),
   clearOwner: vi.fn(),
@@ -63,7 +70,9 @@ vi.doMock('../outbound.js', () => ({
   getBoundClient: mocks.getBoundClient,
   sendText: mocks.sendText,
   replyText: mocks.replyText,
+  openThread: mocks.openThread,
   pushReplyAnchor: mocks.pushReplyAnchor,
+  pushPatchableOpener: mocks.pushPatchableOpener,
 }));
 
 vi.doMock('../ownerGuard.js', () => ({
@@ -193,28 +202,48 @@ describe('feishu group inbound gate', () => {
     expect(events).toHaveLength(0);
   });
 
-  it('owner mention emits a lane event with speaker and strips the bot placeholder', async () => {
+  it('owner mention in main stream opens a thread and emits into the new topic lane', async () => {
+    await connect();
+    const events = collectEvents();
+    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+
+    expect(mocks.openThread).toHaveBeenCalledWith('om_msg1');
+    expect(events).toHaveLength(1);
+    const event = events[0]!;
+    expect(event.senderId).toBe('g/oc_chat1/omt_new');
+    expect(event.chatId).toBe('oc_chat1');
+    expect(event.text).toBe('帮我看看');
+    expect(event.speaker).toEqual({ id: OWNER, name: '', isOwner: true });
+    // 锚点是开场白消息(话题内合法锚点), 不是触发消息。
+    expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
+    // 开场白卡登记为可补丁锚点 — 本轮流式卡直接 patch 它, 不发占位消息。
+    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
+    // 路由进新话题 lane, 但上下文取数 lane 仍是群主流(新话题是空的)。
+    expect(event.groupContextLane).toEqual({ chatId: 'oc_chat1', threadId: '' });
+  });
+
+  it('falls back to the plain group lane when thread creation fails', async () => {
+    mocks.openThread.mockResolvedValueOnce(null);
     await connect();
     const events = collectEvents();
     await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
 
     expect(events).toHaveLength(1);
-    const event = events[0]!;
-    expect(event.senderId).toBe('g/oc_chat1');
-    expect(event.chatId).toBe('oc_chat1');
-    expect(event.text).toBe('帮我看看');
-    expect(event.speaker).toEqual({ id: OWNER, name: '', isOwner: true });
+    expect(events[0]!.senderId).toBe('g/oc_chat1');
+    expect(events[0]!.groupContextLane).toBeUndefined();
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1', 'om_msg1');
   });
 
-  it('routes topic messages into a topic lane', async () => {
+  it('routes topic messages into a topic lane without opening a new thread', async () => {
     await connect();
     const events = collectEvents();
     await mocks.eventHandlers['im.message.receive_v1']!(
       groupMessage({ threadId: 'omt_topic7' }),
     );
     expect(events[0]!.senderId).toBe('g/oc_chat1/omt_topic7');
+    expect(events[0]!.groupContextLane).toBeUndefined();
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1/omt_topic7', 'om_msg1');
+    expect(mocks.openThread).not.toHaveBeenCalled();
   });
 
   it('replaces other-user mention placeholders with sanitized display names', async () => {

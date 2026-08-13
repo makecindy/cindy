@@ -659,6 +659,40 @@ export function isGhostEligibleSessionRow(row: {
   return (row.source === 'desktop' || row.source === 'shared' || row.source === 'plugin') && row.orcaRole == null;
 }
 
+/** did-session-switched 可投递 Orca Lead，但绝不暴露 Worker。 */
+export function isGhostSessionSwitchEligibleRow(row: {
+  source: string | null | undefined;
+  orcaRole: string | null | undefined;
+}): boolean {
+  return (
+    (row.source === 'desktop' || row.source === 'shared' || row.source === 'plugin') &&
+    (row.orcaRole == null || row.orcaRole === 'lead')
+  );
+}
+
+/** 将焦点任务归一为用户可见的主任务；无法可靠归一时静默丢弃。 */
+export async function resolveGhostPrimarySessionId(
+  sessionId: string,
+  readSession: (
+    sessionId: string,
+  ) => Promise<{ orcaRole?: string | null } | null>,
+  resolveWorkerLead: (workerSessionId: string) => Promise<string | null>,
+): Promise<string | null> {
+  try {
+    const row = await readSession(sessionId);
+    if (!row) return null;
+    if (row.orcaRole == null || row.orcaRole === 'lead') return sessionId;
+    if (row.orcaRole !== 'worker') return null;
+
+    const leadSessionId = await resolveWorkerLead(sessionId);
+    return typeof leadSessionId === 'string' && leadSessionId.length > 0
+      ? leadSessionId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 会话切换去重器(did-session-switched 的入口滤波,抽成工厂便于单测):
  * renderer 的路由 effect 每次路由变化都上报"当前台前会话"(路由重渲/非会话
@@ -678,6 +712,74 @@ export function createGhostSessionFocusTracker(
     // 台前会话快照(preview 槽缺省落点等"当前会话"语境用;非会话页为 null)。
     current() {
       return last;
+    },
+  };
+}
+
+/**
+ * did-session-switched 的异步焦点归一器：只接受最新一次归一结果，并在
+ * Worker -> Lead 归一之后去重。
+ */
+export function createGhostPrimarySessionFocusTracker(
+  resolve: (sessionId: string) => Promise<string | null>,
+  notify: (
+    sessionId: string,
+    claim: () => Promise<boolean>,
+    releaseRaw: () => void,
+  ) => void,
+): { note(sessionId: string | null): void } {
+  let lastRawSessionId: string | null = null;
+  let lastPrimarySessionId: string | null = null;
+  let generation = 0;
+
+  return {
+    note(sessionId) {
+      if (sessionId === lastRawSessionId) return;
+      lastRawSessionId = sessionId;
+      const currentGeneration = ++generation;
+
+      if (sessionId === null) {
+        lastPrimarySessionId = null;
+        return;
+      }
+
+      void resolve(sessionId)
+        .then((primarySessionId) => {
+          if (currentGeneration !== generation) return;
+          if (primarySessionId === null) {
+            // 解析失败不应占用 raw focus；同一焦点的后续上报需要能够重试。
+            lastRawSessionId = null;
+            return;
+          }
+          notify(primarySessionId, async () => {
+            if (currentGeneration !== generation) return false;
+            // Team 归属也可能在首次解析后变化；发布前重新解析，绝不投递过期 Lead。
+            let recheckedPrimarySessionId: string | null;
+            try {
+              recheckedPrimarySessionId = await resolve(sessionId);
+            } catch {
+              if (currentGeneration === generation) lastRawSessionId = null;
+              return false;
+            }
+            if (recheckedPrimarySessionId !== primarySessionId) {
+              // 发布前复查失败或映射已变化时，释放 raw marker；同一焦点的后续
+              // 上报必须能够重新归一，而已发布的 primary 去重状态保持不变。
+              if (currentGeneration === generation) lastRawSessionId = null;
+              return false;
+            }
+            if (currentGeneration !== generation) return false;
+            if (primarySessionId === lastPrimarySessionId) return false;
+            lastPrimarySessionId = primarySessionId;
+            return true;
+          }, () => {
+            if (currentGeneration === generation) lastRawSessionId = null;
+          });
+        })
+        .catch(() => {
+          if (currentGeneration === generation) {
+            lastRawSessionId = null;
+          }
+        });
     },
   };
 }

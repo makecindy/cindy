@@ -15,6 +15,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { promisify } from 'node:util';
 
 import JSZip from 'jszip';
@@ -84,7 +85,29 @@ async function pathHasLinkSegment(inputPath: string): Promise<boolean> {
   const relative = path.relative(root, resolved);
   for (const segment of relative.split(path.sep).filter(Boolean)) {
     current = path.join(current, segment);
-    if ((await fs.promises.lstat(current)).isSymbolicLink()) return true;
+    const stat = await fs.promises.lstat(current);
+    if (!stat.isSymbolicLink()) continue;
+    // macOS exposes os.tmpdir() under `/var` while realpath resolves it to
+    // `/private/var`. This system alias is safe; links created below the temp
+    // root remain rejected by the ordinary segment check.
+    const tempRoot = path.resolve(os.tmpdir());
+    const targetRel = path.relative(tempRoot, resolved);
+    if (targetRel.startsWith(`..${path.sep}`) || path.isAbsolute(targetRel)) return true;
+    try {
+      const realSegment = await realpathNative(current);
+      const realTempRoot = await realpathNative(tempRoot);
+      const tempRel = path.relative(realSegment, realTempRoot);
+      if (
+        tempRel === '' ||
+        tempRel.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(tempRel) ||
+        !(await fs.promises.stat(current)).isDirectory()
+      ) {
+        return true;
+      }
+    } catch {
+      return true;
+    }
   }
   return false;
 }

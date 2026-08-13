@@ -27,6 +27,7 @@ import { browserWebviewPool } from './lib/browserWebviewPool';
 import { unmarkPopupSpawnedTab } from './lib/popupTabs';
 import { closeNativePopupForTab } from './lib/nativePopupTabs';
 import type { TabKindId, TabState } from './types';
+import type { RsbWindowTabSnapshot } from '../../../shared/rightSidebarWindow';
 
 const log = createLogger('rightSidebar.store');
 
@@ -47,6 +48,12 @@ const inflight = new Map<string, Promise<void>>();
 const singletonInflight = new Map<string, Promise<TabState>>();
 const listeners = new Set<Listener>();
 const memoryOnlySessions = new Set<string>();
+/**
+ * Handoff snapshots survive the attached renderer's cache invalidation that
+ * accompanies a detached → attached transition. They are renderer-local and
+ * never persisted; a newer handoff for the same session replaces the old one.
+ */
+const pendingHandoffBuckets = new Map<string, TabBucket>();
 const closeInterceptors = new Map<string, TabCloseInterceptor>();
 const patchRevisions = new Map<string, number>();
 /**
@@ -476,6 +483,52 @@ export function getBucket(sessionId: string | null | undefined): TabBucket {
   return cache.get(sessionId) ?? EMPTY_BUCKET;
 }
 
+/** Export the current renderer-owned tab bucket for a merge-back handoff. */
+export function getTabSnapshot(sessionId: string | null | undefined): RsbWindowTabSnapshot | null {
+  if (!sessionId) return null;
+  const bucket = cache.get(sessionId);
+  if (!bucket?.hydrated || shouldPersist(sessionId)) return null;
+  return {
+    sessionId,
+    tabs: bucket.tabs.map(({ id, kind, state }) => ({ id, kind, state })),
+    activeTabId: bucket.activeTabId,
+    persistable: false,
+  };
+}
+
+/** Import a non-persistable tab bucket received before the previous host is destroyed. */
+export function importTabSnapshot(snapshot: RsbWindowTabSnapshot): void {
+  if (snapshot.persistable || !snapshot.sessionId) return;
+  const seen = new Set<string>();
+  const tabs: TabState[] = snapshot.tabs.filter((tab) => {
+    if (!tab.id || !tab.kind || seen.has(tab.id)) return false;
+    seen.add(tab.id);
+    return true;
+  }).map((tab) => ({ ...tab, kind: tab.kind as TabKindId }));
+  const activeTabId = snapshot.activeTabId && seen.has(snapshot.activeTabId)
+    ? snapshot.activeTabId
+    : null;
+  const bucket: TabBucket = { hydrated: true, tabs, activeTabId };
+  memoryOnlySessions.add(snapshot.sessionId);
+  pendingHandoffBuckets.set(snapshot.sessionId, bucket);
+  setBucket(snapshot.sessionId, bucket);
+}
+
+/**
+ * 宿主切换时清掉旧 renderer cache，并同步恢复 main 已转发到本 renderer 的快照。
+ *
+ * React 的父 effect(MainLayout)晚于子 effect(RightSidebarShell)执行；若只 clear cache
+ * 再期待子组件重新触发 ensureHydrated，已挂载 Shell 不一定会再跑 hydration effect。
+ * 这里在同一个同步步骤里消费 pending handoff，避免合并后永久停在 EMPTY_BUCKET。
+ */
+export function resetCachesForHostTransition(): void {
+  invalidateSessionCaches();
+  for (const [sessionId, bucket] of pendingHandoffBuckets) {
+    pendingHandoffBuckets.delete(sessionId);
+    setBucket(sessionId, bucket);
+  }
+}
+
 /**
  * 按 tabId 反查所属 sessionId(只扫已水合进本 renderer 的 bucket)。
  * guest 自关(window.close)路径用:pool 的 close 事件只带 tabId,要落到
@@ -494,6 +547,11 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
   if (!sessionId) return;
   const current = cache.get(sessionId);
   if (current?.hydrated) return;
+  const pending = pendingHandoffBuckets.get(sessionId);
+  if (pending) {
+    setBucket(sessionId, pending);
+    return;
+  }
   const existing = inflight.get(sessionId);
   if (existing) return existing;
   const ipc = ipcApi();
@@ -503,9 +561,13 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
     setBucket(sessionId, { hydrated: true, tabs: [], activeTabId: null });
     return;
   }
+  const generation = cacheGeneration;
   const promise = (async () => {
     try {
       const result = (await ipc.list({ sessionId })) as RightSidebarTabsListResult;
+      // 宿主迁移或 handoff 在 list IPC 期间发生时，本次结果属于旧宿主视图。
+      // 特别是 persistable:false 返回的空列表，不能覆盖 main 已转发的内存快照。
+      if (generation !== cacheGeneration || pendingHandoffBuckets.has(sessionId)) return;
       if (result.persistable === false) {
         markMemoryOnlySession(sessionId);
       } else {
@@ -1082,6 +1144,7 @@ export function _resetStore(): void {
   inflight.clear();
   singletonInflight.clear();
   memoryOnlySessions.clear();
+  pendingHandoffBuckets.clear();
   closeInterceptors.clear();
   pendingTabCreates.clear();
   closeMutationQueues.clear();

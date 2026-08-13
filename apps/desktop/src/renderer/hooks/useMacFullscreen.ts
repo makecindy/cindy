@@ -24,7 +24,10 @@ export function useMacFullscreen(): { isMac: boolean; isFullscreen: boolean } {
     window.electronAPI?.getFullscreenState?.().then((fs) => {
       if (!cancelled) setIsFullscreen(fs);
     });
-    const unsub = window.electronAPI?.onFullscreenChange((fs: boolean) => {
+    // Older packaged preload scripts (or a renderer/preload mismatch during an
+    // update) may not expose the fullscreen bridge yet. The layout can safely
+    // fall back to the non-fullscreen spacing; it must not crash the window.
+    const unsub = window.electronAPI?.onFullscreenChange?.((fs: boolean) => {
       setIsFullscreen(fs);
     });
     return () => {
