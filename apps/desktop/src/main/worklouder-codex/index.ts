@@ -182,10 +182,11 @@ const windowRevealGates = new WeakMap<
 >();
 
 /**
- * Flash the keyboard when this Cindy window comes back from hide/minimize.
+ * Flash the keyboard when this Cindy window becomes visible.
  *
- * First appearance after create is ignored — that is just the window
- * opening, not a reopen. Focus while already visible is also ignored.
+ * Hide / minimize / Dock close all count. Focus while already visible
+ * does not. Attach after `ready-to-show` so a missed first `show` is
+ * recovered from the current visibility.
  */
 export function attachWorkLouderCodexWindowReveal(win: BrowserWindow): void {
   if (windowRevealGates.has(win)) return;
@@ -207,8 +208,5 @@ export function attachWorkLouderCodexWindowReveal(win: BrowserWindow): void {
   win.once('closed', () => {
     windowRevealGates.delete(win);
   });
-  // The first `show` can fire before we attach (`ready-to-show` is wired
-  // earlier). Seed the gate from the current visibility so a missed first
-  // appearance does not swallow the first real reopen.
   sync();
 }

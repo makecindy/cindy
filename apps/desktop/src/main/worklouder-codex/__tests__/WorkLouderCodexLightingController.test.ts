@@ -434,7 +434,7 @@ describe('WorkLouderCodexLightingController', () => {
     });
   });
 
-  it('flashes a rainbow greeting when the window comes back, then returns to status lighting', async () => {
+  it('flashes a greeting when the window comes back, then returns to status lighting', async () => {
     vi.useFakeTimers();
     try {
       const sink = {
@@ -460,7 +460,7 @@ describe('WorkLouderCodexLightingController', () => {
       sink.update.mockClear();
 
       controller.playWindowReveal();
-      expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Rainbow);
+      expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Snake);
 
       // Status lighting must not punch through the greeting mid-sweep.
       controller.updateSessionActivity([
@@ -471,9 +471,9 @@ describe('WorkLouderCodexLightingController', () => {
           attention: false,
         },
       ]);
-      expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Rainbow);
+      expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Snake);
 
-      await vi.advanceTimersByTimeAsync(1_400);
+      await vi.advanceTimersByTimeAsync(2_000);
       expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Breath);
     } finally {
       vi.useRealTimers();
@@ -496,7 +496,7 @@ describe('WorkLouderCodexLightingController', () => {
       const controller = new WorkLouderCodexLightingController(sink, vi.fn());
       controller.start();
       controller.playWindowReveal();
-      expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Rainbow);
+      expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Snake);
 
       activityHandlerRef.current?.();
       expect(isWorkLouderCodexLightingFrameOff(sink.update.mock.lastCall?.[0])).toBe(true);

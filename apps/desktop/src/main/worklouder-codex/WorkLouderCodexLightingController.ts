@@ -38,7 +38,7 @@ const TASK_SLOT_REFRESH_DEBOUNCE_MS = 250;
 const AGENT_KEY_DOUBLE_TAP_MS = 350;
 const ENCODER_LONG_PRESS_MS = 500;
 /** How long the window-reopen greeting stays on the board. */
-const WINDOW_REVEAL_MS = 1_400;
+const WINDOW_REVEAL_MS = 2_000;
 /**
  * How long a held stick may go silent before we give up on it.
  *
@@ -177,6 +177,8 @@ export class WorkLouderCodexLightingController {
   playWindowReveal(): void {
     this.lightingDimmed = false;
     this.clearWindowRevealTimer();
+    // Same greeting twice in a row would otherwise be dropped as a duplicate.
+    this.lastFrameKey = '';
     this.windowRevealTimer = setTimeout(() => {
       this.windowRevealTimer = null;
       this.updateLightingFrame();

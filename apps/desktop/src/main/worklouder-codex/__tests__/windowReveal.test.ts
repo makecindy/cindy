@@ -6,16 +6,16 @@ import {
 } from '../windowReveal.js';
 
 describe('noteWorkLouderCodexWindowVisibility', () => {
-  it('ignores the first time the window appears', () => {
+  it('plays the first time the window appears', () => {
     const gate = createWorkLouderCodexWindowRevealGate();
 
-    expect(noteWorkLouderCodexWindowVisibility(gate, true)).toBe(false);
+    expect(noteWorkLouderCodexWindowVisibility(gate, true)).toBe(true);
   });
 
   it('plays only when the window comes back after being hidden', () => {
     const gate = createWorkLouderCodexWindowRevealGate();
 
-    expect(noteWorkLouderCodexWindowVisibility(gate, true)).toBe(false);
+    expect(noteWorkLouderCodexWindowVisibility(gate, true)).toBe(true);
     expect(noteWorkLouderCodexWindowVisibility(gate, true)).toBe(false);
     expect(noteWorkLouderCodexWindowVisibility(gate, false)).toBe(false);
     expect(noteWorkLouderCodexWindowVisibility(gate, true)).toBe(true);
