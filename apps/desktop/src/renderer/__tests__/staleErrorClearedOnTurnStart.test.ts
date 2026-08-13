@@ -204,6 +204,56 @@ describe('残留终态 error 在新 turn 启动时清除', () => {
     );
   });
 
+  it('非终止 marker 在无 done 的终态错误后仍可见,下一轮再清除', () => {
+    makerChatStore.__applyStreamEventForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      type: 'error',
+      source: 'codex',
+      data: {
+        message: '[AUTO_REVIEW_BLOCKED] fallback',
+        isTerminal: false,
+      },
+    });
+    const afterNotice = makerChatStore.getSnapshot(SESSION_ID);
+    const notice = i18n.t('chat.remoteError.AUTO_REVIEW_BLOCKED');
+    expect(afterNotice.autoReviewBlocked).toBe(true);
+    expect(afterNotice.recoverableError).toBe(notice);
+
+    makerChatStore.__applyStreamEventForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      type: 'error',
+      source: 'codex',
+      data: { message: 'capacity exhausted', isTerminal: true },
+    });
+    const afterTerminalError = makerChatStore.getSnapshot(SESSION_ID);
+    expect(afterTerminalError.error).toContain('capacity exhausted');
+    expect(afterTerminalError.error).toContain(notice);
+    expect(afterTerminalError.autoReviewBlocked).toBe(true);
+
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'Done',
+      isRunning: false,
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain(notice);
+
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'Working',
+      isRunning: true,
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+    });
+    const nextTurn = makerChatStore.getSnapshot(SESSION_ID);
+    expect(nextTurn.autoReviewBlocked).toBe(false);
+    expect(nextTurn.error).toBeNull();
+    expect(nextTurn.recoverableError).toBeNull();
+  });
+
   it('skipTurnReset 的 side-channel running 信号不清 error(banner 保留)', () => {
     emitTerminalError();
     expect(makerChatStore.getSnapshot(SESSION_ID).error).not.toBeNull();

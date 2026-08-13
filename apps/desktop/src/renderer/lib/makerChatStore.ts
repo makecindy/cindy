@@ -198,6 +198,29 @@ const AGENT_RUNTIME_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'AUTO_REVIEW_BLOCKED',
   'AUTO_REVIEW_UNAVAILABLE',
 ] as const);
+const AUTO_REVIEW_BLOCKED_NOTICE_PREFIX = '[AUTO_REVIEW_BLOCKED]';
+
+/**
+ * Auto-review block is carried as a stable, renderer-consumed error marker.
+ * Keep this check local instead of importing maker-core at runtime: the
+ * renderer already has a narrow error-code decoder and should not pull the
+ * agent runtime bundle into its hot path.
+ */
+function isAutoReviewBlockedNoticeMessage(message: unknown): boolean {
+  return (
+    typeof message === 'string' && message.startsWith(AUTO_REVIEW_BLOCKED_NOTICE_PREFIX)
+  );
+}
+
+function localizedAutoReviewBlockedNotice(): string {
+  return decodeRemoteErrorMessage(AUTO_REVIEW_BLOCKED_NOTICE_PREFIX);
+}
+
+function appendAutoReviewBlockedNotice(message: string): string {
+  const notice = localizedAutoReviewBlockedNotice();
+  if (!message) return notice;
+  return message.includes(notice) ? message : `${message}\n\n${notice}`;
+}
 const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   'maker:event',
   'maker:status-changed',
@@ -301,6 +324,7 @@ export function decodeRemoteErrorMessage(msg: string): string {
   const fallback = m[2] || msg;
   return i18n.t(`chat.remoteError.${m[1]}`, { defaultValue: fallback });
 }
+
 // 专门给"出现在用户面前的红色 ErrorBanner"打日志,scope 以 `maker/` 开头
 // 是为了让它落在统一 agent 流(agent-*.ndjson,跟 agent runtime 抛出的底层错误同一份,
 // 且带 sessionId 可按 session 过滤),用户截图反馈时直接拉这一份就能看到完整因果链。
@@ -5064,6 +5088,13 @@ export function handleStreamEvent(
         reason?: string;
         errorStatus?: number | null;
       };
+      const errorData = event.data as {
+        autoReviewBlocked?: unknown;
+      } | null | undefined;
+      const autoReviewBlocked =
+        state.autoReviewBlocked ||
+        errorData?.autoReviewBlocked === true ||
+        isAutoReviewBlockedNoticeMessage(errMsgRaw);
       const safeErrMsgRaw = redactSensitiveText(errMsgRaw);
       const safeErrMsg =
         typeof errorStatus === 'number' &&
@@ -5118,6 +5149,7 @@ export function handleStreamEvent(
             errorReason: null,
             recoverableError: null,
             errorRetryText: null,
+            autoReviewBlocked,
             isStreaming: hasAutoResumePendingCard ? state.isStreaming : true,
             agentStatus: {
               ...(hasAutoResumePendingCard
@@ -5141,6 +5173,7 @@ export function handleStreamEvent(
           errorReason: reason ?? null,
           recoverableError: errMsg,
           errorRetryText: null,
+          autoReviewBlocked,
           isStreaming: true,
           agentStatus: {
             ...state.agentStatus,
@@ -5179,6 +5212,15 @@ export function handleStreamEvent(
         event.source === 'codex'
           ? markCodexPlanTurnFailed(finalized.messages).messages
           : finalized.messages;
+      const preserveAutoReviewNotice =
+        autoReviewBlocked && !isPlannedUpgradeClose && !suppressAutoResumeBroadcastError;
+      const terminalError = suppressAutoResumeBroadcastError
+        ? null
+        : isPlannedUpgradeClose
+          ? null
+          : preserveAutoReviewNotice
+            ? appendAutoReviewBlockedNotice(errMsg)
+            : errMsg;
       return {
         ...finalized,
         messages: suppressAutoResumeBroadcastError
@@ -5189,15 +5231,16 @@ export function handleStreamEvent(
         // coordinator 已经先发 autoResumePending projection 时，终态 maker:event
         // 只是同一次失败的广播回声，不能把接管态重新点成红色横幅。若接管失败，
         // projection 会先撤掉 pending 行并带 error 到达，此处仍正常落红。
-        error: isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : errMsg,
+        error: terminalError,
         usageLimitRecovery:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError
             ? null
             : extractUsageLimitRecoveryHint(event.data),
         errorReason:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (reason ?? null),
-        recoverableError: null,
+        recoverableError: preserveAutoReviewNotice ? localizedAutoReviewBlockedNotice() : null,
         errorRetryText: derivedRetryText ?? preservedRetryText,
+        autoReviewBlocked,
         isStreaming: false,
         activeTurnRetryText: null,
         continuationTurnClientId: null,
