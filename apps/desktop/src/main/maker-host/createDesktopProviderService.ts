@@ -23,7 +23,6 @@ import path from 'node:path';
 
 import {
   BUNDLED_CATALOG,
-  buildUserProvider,
   compareModelRegistryRevisions,
   decideModelRegistrySnapshot,
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
@@ -43,6 +42,7 @@ import {
   getActiveCatalog,
   getModelPlaneWarnings,
   setActiveCatalog,
+  setCustomProviderConfigs,
   setCustomProviders,
   setDiscoveredCodexModels,
   setLocalCatalogOverrides,
@@ -684,7 +684,7 @@ export async function refreshCustomProvidersIntoCatalog(
       log.info('discarded stale custom provider catalog refresh');
       return;
     }
-    setCustomProviders(configs.map((c) => buildUserProvider(c)));
+    setCustomProviderConfigs(configs);
     log.info('custom providers merged into active catalog', { count: configs.length });
   } catch (err) {
     if (!shouldApply()) {
