@@ -2957,10 +2957,19 @@ export class ClaudeCodeAgent extends BaseAgent {
                 ),
                 'linux',
               );
-              if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'allow') {
+              // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)
+              // 或放宽(→Full)。和本地 canUseTool 保持同一语义:按 await 返回后的最新档位
+              // 决策，不能继续使用发起审核时的旧 Auto 快照。
+              const modeAfterReview = mutablePermissionMode as PermissionMode;
+              if (modeAfterReview === 'bypassPermissions') {
                 return { kind: 'permission', behavior: 'allow' };
               }
-              if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'block') {
+              if (modeAfterReview !== 'auto') {
+                // 已切到 Ask/更严:忽略旧 Auto verdict，强制走用户确认。
+                remoteForcePrompt = true;
+              } else if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'allow') {
+                return { kind: 'permission', behavior: 'allow' };
+              } else if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'block') {
                 // 与本地分支同口径:保留 fail-closed 拒绝，并通知用户是自动审核拦截。
                 autoReviewBlockedNotice.notify();
                 return {
@@ -2970,8 +2979,10 @@ export class ClaudeCodeAgent extends BaseAgent {
                 };
               }
               // 与本地分支同口径:故障降级来的 ask 提示一次,让用户知道为何开始被问。
-              if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
-              remoteForcePrompt = true;
+              if (modeAfterReview === 'auto') {
+                if (autoDecision.unavailable) autoReviewUnavailableNotice.notify();
+                remoteForcePrompt = true;
+              }
             } else {
               if (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt) {
                 return { kind: 'permission', behavior: 'allow' };

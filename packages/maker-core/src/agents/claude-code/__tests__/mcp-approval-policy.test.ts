@@ -1029,6 +1029,7 @@ describe('remote sessions share the same permission semantics', () => {
     policy: (context: McpToolApprovalContext) => McpToolApprovalPolicy,
     options?: {
       attachResolver?: (req: InteractionRequest) => InteractionDecision;
+      reviewer?: AgentDeps['reviewAutoPermissionAction'];
       capabilityRouting?: CapabilityRoutingPolicy;
       mcpServerNames?: readonly string[];
       permissionMode?: PermissionMode;
@@ -1044,6 +1045,7 @@ describe('remote sessions share the same permission semantics', () => {
 
     let onApprovalRequest: ((raw: unknown) => Promise<{ behavior?: string }>) | undefined;
     const deps = createDeps(policy);
+    deps.reviewAutoPermissionAction = options?.reviewer;
     deps.getGhostRosterPrompt = options?.getGhostRosterPrompt;
     deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
     deps.capabilityRouting = options?.capabilityRouting;
@@ -1131,6 +1133,60 @@ describe('remote sessions share the same permission semantics', () => {
     });
 
     expect(result.behavior).toBe('allow');
+    expect(seen).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('rechecks the latest permission mode after an in-flight remote Auto review', async () => {
+    let resolveReview: ((decision: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const reviewer = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+      resolveReview = resolve;
+    }));
+    const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'prompt', {
+      permissionMode: 'auto',
+      reviewer,
+      attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
+    });
+
+    const pending = onApprovalRequest({
+      requestId: 'r-remote-late-ask',
+      kind: 'permission',
+      toolName: 'Write',
+      input: { file_path: '/tmp/remote-late-ask.conf' },
+    });
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+
+    await handle.setPermissionMode!('ask');
+    resolveReview!({ verdict: 'allow', reason: 'stale Auto allow' });
+
+    await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
+    expect(permissionRequests(seen)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('allows immediately when remote Auto review completes after Full access is selected', async () => {
+    let resolveReview: ((decision: { verdict: 'block'; reason: string }) => void) | undefined;
+    const reviewer = vi.fn(() => new Promise<{ verdict: 'block'; reason: string }>((resolve) => {
+      resolveReview = resolve;
+    }));
+    const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'prompt', {
+      permissionMode: 'auto',
+      reviewer,
+      attachResolver: () => ({ kind: 'permission', behavior: 'deny' }),
+    });
+
+    const pending = onApprovalRequest({
+      requestId: 'r-remote-late-full',
+      kind: 'permission',
+      toolName: 'Bash',
+      input: { command: 'npm install left-pad' },
+    });
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+
+    await handle.setPermissionMode!('bypassPermissions');
+    resolveReview!({ verdict: 'block', reason: 'stale Auto block' });
+
+    await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
     expect(seen).toHaveLength(0);
     await handle.close();
   });
