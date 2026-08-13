@@ -1997,6 +1997,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       : {};
     const showThinkingSummaries = opts.displayReasoning === 'summarized';
 
+    // Claude Code 把 availableModels 当成组织白名单。目录 + 当前/目标模型都走同一
+    // 个 catalog-id → wire-string 映射,启动与热切共用,后加载的网关模型(如
+    // x-ai/grok-4.6)也能进名单。
+    const currentAvailableSdkModels = (selectedModel: string): string[] => [
+      ...new Set([
+        ...this.capabilities.availableModels.map(({ id }) => sdkModelFor(id)),
+        sdkModelFor(selectedModel),
+      ]),
+    ];
+
     // SDK settings 对象 (优先级最高, 覆盖 user/project/local 文件层) — 本地分支
     // 和远端分支必须**保持一致** , 否则同 session setting 跨本地 / 远端表现不同
     // (eg. summarized reasoning UI 本地有 remote 没)。getter 让 memOverride /
@@ -2005,17 +2015,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const buildSettings = (): Settings => {
       const settings = buildClaudeFlagSettings({
         showThinkingSummaries,
-        // availableModels is the SDK's highest-priority allowlist. Convert the
-        // whole current catalog and the selected model through the one
-        // catalog-id → wire-string mapper so startup and live switches share
-        // the same [1m] and legacy conversion rules. Keep the selected model
-        // even when it is temporarily outside the catalog.
-        availableModels: [
-          ...new Set([
-            ...this.capabilities.availableModels.map(({ id }) => sdkModelFor(id)),
-            sdkModelFor(mutableModel),
-          ]),
-        ],
+        availableModels: currentAvailableSdkModels(mutableModel),
         // Do not carry the local manager's native-memory suppression across the
         // SSH boundary: the remote host retains its own Claude memory
         // configuration. Maker Memory on remote sessions is injected via the
@@ -4707,6 +4707,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           replayed = true;
           const targetModel = mutableModel;
           try {
+            // 与 live setModel 同序:先扩白名单再切。buildQuery await 期间切到的
+            // 目录外模型,新 Query 的启动名单还是旧快照,直接 setModel 会撞组织限制。
+            await q.applyFlagSettings({
+              availableModels: currentAvailableSdkModels(targetModel),
+            });
             await q.setModel(sdkModelFor(targetModel));
             snapshot.model = targetModel;
             log.debug(`${label}: replayed setModel`, { model: targetModel });
@@ -5774,6 +5779,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         const isControlBlocked = controlRequestsBlocked();
         log.debug('setModel', { from: mutableModel, to: newModel, sdk: sdkModel, controlRequestsBlocked: isControlBlocked });
         if (!isControlBlocked) {
+          // flag settings 只在 Query 创建时写入。热切若只调 setModel,Claude Code
+          // 仍按启动时的组织白名单校验,后加载的网关模型会报
+          // "restricted by your organization's settings"(2026-08-13)。applyFlagSettings
+          // 是 merge,先把当前目录 + 目标模型并进去再切。
+          await q.applyFlagSettings({
+            availableModels: currentAvailableSdkModels(newModel),
+          });
           await q.setModel(sdkModel);
         }
         const usedNativeAutoReview = usesNativeClaudeAutoReview();

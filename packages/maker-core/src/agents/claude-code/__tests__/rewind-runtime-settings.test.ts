@@ -250,7 +250,37 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     ]);
 
     await handle.setModel?.('claude-sonnet-5');
+    expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({
+      availableModels: ['claude-opus-4-6[1m]', 'claude-sonnet-5'],
+    });
     expect(firstQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+    expect(firstQuery.applyFlagSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      firstQuery.setModel.mock.invocationCallOrder[0],
+    );
+
+    await handle.close();
+  });
+
+  it('widens the live Claude allowlist before switching to a later-loaded gateway model', async () => {
+    const { handle, firstQuery, agent } = await startRewindableSession();
+
+    agent.capabilities.availableModels.push({
+      id: 'x-ai/grok-4.6',
+      displayName: 'Grok 4.6',
+      contextWindow: 256_000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+
+    await handle.setModel?.('x-ai/grok-4.6');
+
+    expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({
+      availableModels: ['claude-opus-4-6[1m]', 'claude-sonnet-5', 'x-ai/grok-4.6'],
+    });
+    expect(firstQuery.setModel).toHaveBeenCalledWith('x-ai/grok-4.6');
+    expect(firstQuery.applyFlagSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      firstQuery.setModel.mock.invocationCallOrder[0],
+    );
 
     await handle.close();
   });
@@ -268,11 +298,11 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
 
   it('falls back to the model-supported xhigh when an older runtime rejects max', async () => {
     const { handle, firstQuery } = await startRewindableSession();
+
+    await handle.setModel?.('claude-sonnet-5');
     firstQuery.applyFlagSettings
       .mockRejectedValueOnce(new Error('invalid effortLevel: max'))
       .mockResolvedValueOnce(undefined);
-
-    await handle.setModel?.('claude-sonnet-5');
     await expect(handle.setEffort?.('max')).resolves.toBeUndefined();
 
     expect(firstQuery.applyFlagSettings.mock.calls.slice(-2)).toEqual([
@@ -423,7 +453,13 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     const rebuildArgs = sdkMock.query.mock.calls[1]?.[0] as { options: Record<string, unknown> };
     expect(rebuildArgs.options.model).toBe('claude-opus-4-6[1m]');
     // sonnet-5 fixture 窗口 500K < 1M → wire 串不带 [1m](窗口驱动规则)。
+    expect(secondQuery.applyFlagSettings).toHaveBeenCalledWith({
+      availableModels: ['claude-opus-4-6[1m]', 'claude-sonnet-5'],
+    });
     expect(secondQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+    expect(secondQuery.applyFlagSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      secondQuery.setModel.mock.invocationCallOrder[0],
+    );
 
     await handle.close();
   });
