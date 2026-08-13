@@ -266,7 +266,7 @@ describe('update_plan tool_use persistence', () => {
     );
   });
 
-  it('seals a successful turn plan as-is so reload cannot resurrect it', async () => {
+  it('keeps a successful turn with open plan steps available for reconciliation', async () => {
     const persistId = onToolUseEvent(
       SESSION,
       {
@@ -298,7 +298,7 @@ describe('update_plan tool_use persistence', () => {
         { step: 'Inspect', status: 'completed' },
         { step: 'Start dev', status: 'in_progress' },
       ],
-      state: 'sealed',
+      state: 'interrupted',
     });
     expect(updateMessageContent).toHaveBeenCalledWith(
       SESSION,
@@ -525,6 +525,11 @@ describe('update_plan tool_use persistence', () => {
     })).toBe(true);
 
     await flushWrites();
+    expect(writeCodexPlanTerminal).toHaveBeenCalledWith(SESSION, {
+      turnId: 'turn-complete',
+      plan: [{ step: 'Ship', status: 'completed' }],
+      state: 'sealed',
+    });
     expect(updateMessageContent).toHaveBeenCalledWith(
       SESSION,
       persistId,

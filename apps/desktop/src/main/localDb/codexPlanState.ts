@@ -97,10 +97,14 @@ export function parseCodexPlanTerminal(
   const plan = data?.plan === undefined || data.plan === null
     ? null
     : normalizeCodexPlanEntries(data.plan);
+  const planCompleted = plan !== null && plan.every((item) => item.status === 'completed');
   return {
     turnId,
     plan,
-    state: data?.cancelled !== true && data?.raw?.status === 'completed' ? 'sealed' : 'interrupted',
+    state:
+      data?.cancelled !== true && data?.raw?.status === 'completed' && planCompleted
+        ? 'sealed'
+        : 'interrupted',
   };
 }
 
