@@ -535,4 +535,82 @@ describe('runMemoryCleanup', () => {
       spy.mockRestore();
     }
   });
+
+  it('keeps retained reachable when restore collides with a recreated src', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟: open fd 在 move 后写 retained (二次校验不一致), 且宿主同时重建了
+    // src — copyFile EXCL 恢复会 EEXIST, retained 必须保留 (open-fd 新内容
+    // 不可因恢复失败被 unlink 删除, Greptile P1 / Codex P1 on #2561 第十五轮)。
+    const realRename = fs.rename.bind(fs);
+    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
+      const r = await realRename(src as string, dst as string);
+      if (String(src).endsWith('feedback_a.md') && String(dst).includes('cleanup-trash')) {
+        // 宿主在 src 移到 trash 后立即重建 src (新写入)。
+        await writeFile(
+          String(src),
+          "---\ntitle: RECREATED\ndescription: new\ntype: feedback\nupdatedAt: '2026-03-02T00:00:00.000Z'\n---\nrecreated by host\n",
+          'utf8',
+        );
+      }
+      if (
+        String(dst).includes(ARCHIVE_DIR_NAME) &&
+        String(src).includes('cleanup-trash') &&
+        !String(dst).endsWith('.archive')
+      ) {
+        await writeFile(String(dst), 'WRITTEN AFTER MOVE BY OPEN FD', 'utf8');
+      }
+      return r;
+    });
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // 恢复 EEXIST 失败 → retained 保留可达 (在 .archive), failed 记录。
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain(
+        'recreated',
+      );
+      const archived = await archiveContents();
+      const retained = archived.find((f) => f.startsWith('feedback_a.md.'));
+      expect(retained).toBeDefined();
+      await expect(
+        readFile(path.join(dir, ARCHIVE_DIR_NAME, retained as string), 'utf8'),
+      ).resolves.toContain('WRITTEN AFTER MOVE');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('surfaces unreadable retained as failed instead of reporting archived', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟 Windows 锁: 二次校验 readFile(retained) 抛 EACCES — 不能当 null
+    // 走成功分支 (src 已 rename 走、MEMORY.md 重建, writer 分片退出正常路径
+    // 却报成功), 必须 failed + 保留 retained (Codex P1 on #2561 第十五轮)。
+    // 只拦 .archive 下的 retained 读; trash 第一次对比读 (分片根目录) 保持正常,
+    // 否则流程会走 restoreTrash 而非二次校验分支。
+    const realReadFile = fs.readFile.bind(fs);
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(async (p, ...rest) => {
+      const str = String(p);
+      if (str.includes(ARCHIVE_DIR_NAME)) {
+        throw Object.assign(new Error('locked by writer'), { code: 'EACCES' });
+      }
+      return realReadFile(p as string, ...rest);
+    });
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // 不标成功: archived 为空, 报 failed; retained 内容经 copyFile 恢复回
+      // src (数据不丢, 活动分片可见)。
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      expect(result.archived).toHaveLength(0);
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('same');
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

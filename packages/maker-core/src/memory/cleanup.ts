@@ -436,17 +436,34 @@ export async function runMemoryCleanup(
         // 内容写进 retained inode。重读 retained 对比快照 A — 不一致说明
         // writer 已写入, 必须把新内容复制回活动 src (绝不让它只落在 .archive
         // 随机副本、退出 MEMORY.md/FTS 正常路径), 并记 failed。
+        //
+        // readFile 失败 (EPERM/EACCES/瞬态锁 — retained 是刚移动出来的文件,
+        // 不存在 ENOENT 场景) 不能当「已归档」成功处理: src 已 rename 走、
+        // MEMORY.md 将重建, 若标成功 writer 的分片退出正常路径但 CLI 报成功
+        // (Codex P1 on #2561 第十五轮: do not treat unreadable retained shards
+        // as archived)。
         const retainedContent = await fs.readFile(retained).catch(() => null);
-        if (retainedContent !== null && !retainedContent.equals(srcContent)) {
-          // src 在 rename 后为空 (宿主未重建), copyFile EXCL 把新内容放回
-          // 活动分片; 若宿主已重建 src (EEXIST) 则不覆盖, 新内容保留在
-          // retained (.archive 可达) 并记 failed。
-          await fs.copyFile(retained, src, fs.constants.COPYFILE_EXCL).catch(() => {});
-          await fs.unlink(retained).catch(() => {});
+        if (retainedContent === null || !retainedContent.equals(srcContent)) {
+          // writer 已写入或 retained 不可读 → 尝试把 retained 内容恢复回 src。
+          // copyFile EXCL 成功才允许 unlink retained; EEXIST (宿主已重建 src)
+          // 时不覆盖、retained 保留可达 — open-fd 新内容绝不能因恢复失败被删
+          // (Greptile P1 / Codex P1 on #2561 第十五轮: 排他恢复失败后不得删除
+          // 新内容)。
+          let restored = false;
+          try {
+            await fs.copyFile(retained, src, fs.constants.COPYFILE_EXCL);
+            restored = true;
+          } catch (e) {
+            if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+          }
+          if (restored) {
+            await fs.unlink(retained).catch(() => {});
+          }
           result.failed.push({
             filename: item.filename,
-            error:
-              'source written during archive; restored to active shard (archive holds reviewed copy)',
+            error: restored
+              ? 'source written during archive; restored to active shard (archive holds reviewed copy)'
+              : 'source written during archive; src recreated by host — newer copy kept, retained reachable in .archive for manual recovery',
           });
           continue;
         }
