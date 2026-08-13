@@ -748,18 +748,46 @@ export class IOSSimulatorNativeSidecarProcessManager {
       this.#lastFailure.set(input.instanceId, error.message);
       throw error;
     }
-    await this.#verifyBinaryIntegrity(input.instanceId);
-    if (!this.#options.createChannel) {
-      try {
-        await access(this.#options.binaryPath, constants.X_OK);
-      } catch {
-        throw new IOSSimulatorNativeSidecarProcessManagerError(
-          "BINARY_UNAVAILABLE",
-          "Native sidecar executable is unavailable",
+    // Resolve all pre-channel launch requirements inside the same failure
+    // boundary as the actual sidecar startup.  A missing artifact, failed
+    // integrity check, or unavailable sandbox must settle the admission to
+    // `failed`; otherwise the preflight `idle/AWAITING_PROBE` decision leaks
+    // to route-status consumers and the renderer can remain stuck on
+    // "detecting" even though WDA has already selected its fallback route.
+    let sandbox: IOSSimulatorNativeSidecarSandboxLaunchState;
+    try {
+      await this.#verifyBinaryIntegrity(input.instanceId);
+      if (!this.#options.createChannel) {
+        try {
+          await access(this.#options.binaryPath, constants.X_OK);
+        } catch {
+          throw new IOSSimulatorNativeSidecarProcessManagerError(
+            "BINARY_UNAVAILABLE",
+            "Native sidecar executable is unavailable",
+          );
+        }
+      }
+      sandbox = await this.#prepareSandbox(input, operation);
+    } catch (error) {
+      this.#lastAdmission.set(
+        input.instanceId,
+        evaluateIOSSimulatorNativeCapabilityAdmission({
+          policy,
+          processState: "failed",
+          now: this.#options.now,
+        }),
+      );
+      if (!this.#lastFailure.has(input.instanceId)) {
+        this.#lastFailure.set(
+          input.instanceId,
+          safeProcessManagerFailure(
+            error,
+            "Native sidecar process failed before launch.",
+          ).message,
         );
       }
+      throw error;
     }
-    const sandbox = await this.#prepareSandbox(input, operation);
     const channel =
       this.#options.createChannel?.(input) ??
       new IOSSimulatorNativeSidecarChannel(

@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost.js';
-import { resolveIOSSimulatorPluginAccess } from '../iosSimulatorPluginGate.js';
+import {
+  resolveIOSSimulatorCapabilityLossCleanupScope,
+  resolveIOSSimulatorPluginAccess,
+} from '../iosSimulatorPluginGate.js';
 
 function ghost(id: string, enabled: boolean, slots: string[] = ['ios-simulator']): InstalledGhost {
   return {
@@ -65,5 +68,69 @@ describe('iOS Simulator plugin Host gate', () => {
       allowed: false,
       errorCode: 'IOS_SIMULATOR_PLUGIN_REQUIRED',
     });
+  });
+});
+
+describe('iOS Simulator capability-loss cleanup scope', () => {
+  it('retries an active Host after an earlier disable cleanup failed', () => {
+    const scope = resolveIOSSimulatorCapabilityLossCleanupScope({
+      wasEnabled: false,
+      retryIfHostActive: true,
+      hostRuntimeActive: true,
+      hasActiveProvider: false,
+      hasEnabledProviderForProject: () => false,
+    });
+
+    expect(scope).toEqual({});
+  });
+
+  it('does not retry when the capability was already disabled and no Host remains', () => {
+    expect(
+      resolveIOSSimulatorCapabilityLossCleanupScope({
+        wasEnabled: false,
+        retryIfHostActive: true,
+        hostRuntimeActive: false,
+        hasActiveProvider: false,
+        hasEnabledProviderForProject: () => false,
+      }),
+    ).toBeNull();
+  });
+
+  it('cleans only projects that lost their last effective provider', () => {
+    expect(
+      resolveIOSSimulatorCapabilityLossCleanupScope({
+        wasEnabled: true,
+        retryIfHostActive: false,
+        hostRuntimeActive: true,
+        hasActiveProvider: true,
+        projectWorkingDirs: ['/project-a', '/project-b'],
+        hasEnabledProviderForProject: (workingDir) => workingDir === '/project-b',
+      }),
+    ).toEqual({ projectWorkingDirs: ['/project-a'] });
+  });
+
+  it('evaluates provider access per binding when the mutation has no project scope', () => {
+    const scope = resolveIOSSimulatorCapabilityLossCleanupScope({
+      wasEnabled: true,
+      retryIfHostActive: false,
+      hostRuntimeActive: true,
+      hasActiveProvider: true,
+      hasEnabledProviderForProject: (workingDir) => workingDir === '/project-b',
+    });
+
+    expect(scope?.shouldReleaseProject?.('/project-a')).toBe(true);
+    expect(scope?.shouldReleaseProject?.('/project-b')).toBe(false);
+  });
+
+  it('keeps the last-provider cleanup unscoped so pending creates are reconciled', () => {
+    expect(
+      resolveIOSSimulatorCapabilityLossCleanupScope({
+        wasEnabled: true,
+        retryIfHostActive: false,
+        hostRuntimeActive: true,
+        hasActiveProvider: false,
+        hasEnabledProviderForProject: () => false,
+      }),
+    ).toEqual({});
   });
 });

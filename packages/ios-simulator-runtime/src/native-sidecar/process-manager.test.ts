@@ -322,6 +322,8 @@ describe("IOSSimulatorNativeSidecarProcessManager", () => {
       binaryPath: "/private/fake/ios-simulator-sidecar",
       createChannel,
       verifyBinaryIntegrity,
+      enableH264Stream: true,
+      enableContinuousInput: true,
     });
 
     await expect(manager.start(input())).rejects.toMatchObject({
@@ -330,6 +332,17 @@ describe("IOSSimulatorNativeSidecarProcessManager", () => {
     });
     expect(verifyBinaryIntegrity).toHaveBeenCalledTimes(1);
     expect(createChannel).not.toHaveBeenCalled();
+    expect(manager.diagnostics("instance-a")).toMatchObject({
+      running: false,
+      state: "failed",
+      admission: {
+        processState: "failed",
+        capabilities: {
+          h264Stream: { reasonCode: "PROCESS_NOT_RUNNING" },
+          continuousInput: { reasonCode: "PROCESS_NOT_RUNNING" },
+        },
+      },
+    });
   });
 
   it("rechecks packaged artifact integrity before a channel restart", async () => {
@@ -793,6 +806,35 @@ describe("IOSSimulatorNativeSidecarProcessManager", () => {
         launch: {
           allowed: false,
           reasonCode: "ARTIFACT_UNTRUSTED",
+        },
+        fallbackRoute: "wda-mjpeg",
+      },
+    });
+  });
+
+  it("settles a missing development sidecar to fallback instead of awaiting a probe", async () => {
+    const manager = new IOSSimulatorNativeSidecarProcessManager({
+      binaryPath: "/private/fake/missing-ios-simulator-sidecar",
+      enableH264Stream: true,
+      enableContinuousInput: true,
+    });
+
+    await expect(manager.start(input())).rejects.toMatchObject({
+      code: "BINARY_UNAVAILABLE",
+    });
+    expect(manager.diagnostics("instance-a")).toMatchObject({
+      running: false,
+      state: "failed",
+      lastFailure: "Native sidecar executable is unavailable",
+      admission: {
+        processState: "failed",
+        launch: { active: false, reasonCode: "PROCESS_NOT_RUNNING" },
+        capabilities: {
+          h264Stream: { active: false, reasonCode: "PROCESS_NOT_RUNNING" },
+          continuousInput: {
+            active: false,
+            reasonCode: "PROCESS_NOT_RUNNING",
+          },
         },
         fallbackRoute: "wda-mjpeg",
       },

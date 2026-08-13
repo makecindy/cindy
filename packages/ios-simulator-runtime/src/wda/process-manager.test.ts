@@ -1125,4 +1125,70 @@ describe("WdaProcessManager", () => {
     await harness.manager.stop("instance-a");
     expect(nativeManager.stop).toHaveBeenCalledWith("instance-a");
   });
+
+  it("keeps WDA active and reports a settled Native fallback after sidecar startup fails", async () => {
+    const nativeAdmission = evaluateIOSSimulatorNativeCapabilityAdmission({
+      policy: createIOSSimulatorNativeDevelopmentAdmissionPolicy({
+        enableH264Stream: true,
+        enableContinuousInput: true,
+      }),
+      processState: "failed",
+    });
+    const nativeManager = {
+      providerId: "cindy.bundled-ios-simulator",
+      diagnostics: vi.fn(() => ({
+        running: false,
+        state: "failed" as const,
+        crashCount: 0,
+        probe: null,
+        lastFailure: "Native sidecar executable is unavailable",
+        lastTermination: null,
+        admission: nativeAdmission,
+      })),
+      admission: vi.fn(() => nativeAdmission),
+      get: vi.fn(() => null),
+      start: vi.fn(async () => {
+        throw new Error("Native sidecar executable is unavailable");
+      }),
+      recover: vi.fn(async () => {
+        throw new Error("Native sidecar executable is unavailable");
+      }),
+      stop: vi.fn(async () => undefined),
+    } satisfies WdaProcessManagerOptions["nativeCapabilityProvider"];
+    const harness = await createHarness(nativeManager);
+
+    const running = await harness.manager.start({
+      instanceId: "instance-a",
+      simulatorUdid: UDID,
+      generation: 9,
+      runtimeIdentifier: "runtime",
+      runtimeBuildVersion: "runtime-build",
+      xcodeBuild: "build",
+      architecture: "arm64",
+    });
+
+    expect(harness.driver.createSession).toHaveBeenCalledOnce();
+    expect(running.driverRouter?.capabilityReport()).toMatchObject({
+      nativeSidecar: {
+        available: false,
+        admission: {
+          processState: "failed",
+          capabilities: {
+            h264Stream: { reasonCode: "PROCESS_NOT_RUNNING" },
+            continuousInput: { reasonCode: "PROCESS_NOT_RUNNING" },
+          },
+        },
+      },
+      routes: {
+        continuousInput: { selected: "wda", fallback: true },
+        stream: {
+          h264: { selected: "wda", fallback: true },
+        },
+      },
+    });
+    expect(running.driverRouter?.continuousInput()).toBeNull();
+    expect(running.driverRouter?.discreteInput()).toBe(harness.driver);
+
+    await harness.manager.stop("instance-a");
+  });
 });

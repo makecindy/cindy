@@ -279,6 +279,26 @@ export class IOSSimulatorInstanceActor {
     return this.#store.listAll();
   }
 
+  /** Whether lifecycle or mutation work is still queued/in flight. */
+  hasPendingOperations(): boolean {
+    return (
+      this.#tails.size > 0 ||
+      this.#activeMutations.size > 0 ||
+      this.#activeLifecycleStarts.size > 0
+    );
+  }
+
+  /** Session ids with a lifecycle start that has not settled yet. */
+  listPendingLifecycleStartSessionIds(): string[] {
+    return [
+      ...new Set(
+        [...this.#activeLifecycleStarts.values()]
+          .flatMap((records) => [...records])
+          .map((record) => record.sessionId),
+      ),
+    ];
+  }
+
   /** Remove a persisted binding after orphan policy has decided its fate. */
   forget(instanceId: string, sessionId: string): IOSSimulatorInstance {
     this.#store.requireOwned(instanceId, sessionId);

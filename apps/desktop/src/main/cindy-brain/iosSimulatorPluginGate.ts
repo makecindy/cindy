@@ -23,6 +23,38 @@ function pluginActionData(
   };
 }
 
+export interface IOSSimulatorCapabilityLossCleanupScope {
+  projectWorkingDirs?: readonly string[];
+  shouldReleaseProject?: (workingDir: string) => boolean;
+}
+
+/**
+ * Select only projects that lost their last effective provider. An alternative
+ * provider may remain enabled globally while being disabled in the binding's
+ * project, so capability teardown must not use a process-wide provider check
+ * to skip every binding.
+ */
+export function resolveIOSSimulatorCapabilityLossCleanupScope(input: {
+  wasEnabled: boolean;
+  retryIfHostActive: boolean;
+  hostRuntimeActive: boolean;
+  hasActiveProvider: boolean;
+  projectWorkingDirs?: readonly string[];
+  hasEnabledProviderForProject: (workingDir: string) => boolean;
+}): IOSSimulatorCapabilityLossCleanupScope | null {
+  if (!input.wasEnabled && !(input.retryIfHostActive && input.hostRuntimeActive)) return null;
+  if (input.projectWorkingDirs) {
+    const projectWorkingDirs = input.projectWorkingDirs.filter(
+      (workingDir) => !input.hasEnabledProviderForProject(workingDir),
+    );
+    return projectWorkingDirs.length > 0 ? { projectWorkingDirs } : null;
+  }
+  if (!input.hasActiveProvider) return {};
+  return {
+    shouldReleaseProject: (workingDir) => !input.hasEnabledProviderForProject(workingDir),
+  };
+}
+
 /**
  * Resolve the live product gate for Cindy's Host-owned iOS Simulator.
  *
@@ -41,7 +73,7 @@ export function resolveIOSSimulatorPluginAccess(
       allowed: false,
       errorCode: 'IOS_SIMULATOR_PLUGIN_REQUIRED',
       message:
-        "Cindy's embedded iOS Simulator requires the iOS Simulator plugin. The embedded route is unavailable until the user installs and enables “iOS Simulator” from Plugins → Marketplace; other iOS workflows are unaffected.",
+        "Cindy's embedded iOS Simulator requires the iOS Simulator plugin. Ask the user to open Plugins → Marketplace, install “iOS Simulator”, and enable it. Do not retry until the plugin is installed.",
       data: pluginActionData('not-installed', 'install-plugin'),
     };
   }
@@ -61,7 +93,7 @@ export function resolveIOSSimulatorPluginAccess(
       allowed: false,
       errorCode: 'IOS_SIMULATOR_DISABLED',
       message:
-        'The embedded iOS Simulator plugin is disabled for the current project. Enable it for this working directory before retrying the embedded tool; other iOS workflows are unaffected.',
+        'The iOS Simulator plugin is disabled for the current project. Ask the user to enable it for this working directory before retrying.',
       data: pluginActionData('disabled-in-workdir', 'enable-plugin', workdirDisabled),
     };
   }
@@ -72,7 +104,7 @@ export function resolveIOSSimulatorPluginAccess(
       allowed: false,
       errorCode: 'IOS_SIMULATOR_PLUGIN_DISABLED',
       message:
-        'The embedded iOS Simulator plugin is installed but disabled. Enable it on the Plugins page before retrying the embedded tool; other iOS workflows are unaffected.',
+        'The iOS Simulator plugin is installed but disabled. Ask the user to enable it on the Plugins page before retrying.',
       data: pluginActionData('disabled', 'enable-plugin', disabled),
     };
   }
@@ -81,7 +113,7 @@ export function resolveIOSSimulatorPluginAccess(
     allowed: false,
     errorCode: 'IOS_SIMULATOR_PLUGIN_DISABLED',
     message:
-      'The installed embedded iOS Simulator plugin is unavailable in the current Cindy session. Make it available from the Plugins page before retrying the embedded tool; other iOS workflows are unaffected.',
+      'The installed iOS Simulator plugin is unavailable in the current Cindy session. Ask the user to open the Plugins page and make the plugin available before retrying.',
     data: pluginActionData('session-unavailable', 'enable-plugin', candidates[0]),
   };
 }

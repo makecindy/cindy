@@ -3,7 +3,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
@@ -11,7 +11,10 @@ import * as schema from '../../localDb/schema.js';
 import { PluginRegistry } from '../../maker-host/plugins/plugin-registry.js';
 import { SettingsReader } from '../../maker-host/plugins/settings-reader.js';
 import { MAKER_INVOKE } from '../channels.js';
-import { registerProjectPluginPolicyHandlers } from '../projectPluginPolicyHandlers.js';
+import {
+  registerProjectPluginPolicyHandlers,
+  resolveMainOwnedIOSSimulatorProject,
+} from '../projectPluginPolicyHandlers.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
 
 /** Lifecycle rows that must remain unchanged after a project policy toggle. */
@@ -39,6 +42,29 @@ describe('project plugin policy handlers', () => {
     }
   });
 
+  it('derives the Simulator project scope only from Main-owned local sessions', () => {
+    const owned = path.resolve('owned-project');
+    const remote = path.resolve('remote-project');
+
+    expect(
+      resolveMainOwnedIOSSimulatorProject(`${owned}${path.sep}`, [
+        { workDir: owned },
+        { workDir: remote, remoteHostId: 'remote-host' },
+      ]),
+    ).toBe(owned);
+    expect(
+      resolveMainOwnedIOSSimulatorProject(remote, [
+        { workDir: remote, remoteHostId: 'remote-host' },
+      ]),
+    ).toBeNull();
+    expect(
+      resolveMainOwnedIOSSimulatorProject(path.resolve('unknown'), [{ workDir: owned }]),
+    ).toBeNull();
+    expect(
+      resolveMainOwnedIOSSimulatorProject('relative-project', [{ workDir: owned }]),
+    ).toBeNull();
+  });
+
   it('disables future collab sessions without ending the active team or worker', async () => {
     workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-collab-policy-'));
     const client = createTestDbClient();
@@ -54,6 +80,8 @@ describe('project plugin policy handlers', () => {
     const harness = new IpcHarness();
     registerProjectPluginPolicyHandlers(harness, {
       getPluginRegistry: () => pluginRegistry,
+      assertTrustedSender: () => undefined,
+      resolveIOSSimulatorProjectWorkingDir: async (candidate) => candidate,
     });
     const before = await readLifecycleSnapshot(client);
 
@@ -68,6 +96,117 @@ describe('project plugin policy handlers', () => {
       ],
       teams: [{ id: 'team-1', status: 'active', completed_at: null }],
       workers: [{ id: 'worker-1', status: 'running' }],
+    });
+  });
+
+  it('notifies the host lifecycle after a project override changes', async () => {
+    workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-ios-policy-callback-'));
+    const pluginRegistry = new PluginRegistry({
+      settingsReader: new SettingsReader({
+        userDataPath: workingDir,
+        logger: { warn: () => undefined },
+      }),
+    });
+    const changed: Array<{ workingDir: string; id: string; effectiveEnabled: boolean }> = [];
+    const harness = new IpcHarness();
+    registerProjectPluginPolicyHandlers(harness, {
+      getPluginRegistry: () => pluginRegistry,
+      assertTrustedSender: () => undefined,
+      resolveIOSSimulatorProjectWorkingDir: async () => workingDir,
+      onProjectPolicyChanged: (input) => {
+        changed.push(input);
+      },
+    });
+
+    await harness.invoke(
+      MAKER_INVOKE.PLUGINS_SET_PROJECT_ENABLED,
+      workingDir,
+      'ios-simulator',
+      false,
+    );
+    await harness.invoke(MAKER_INVOKE.PLUGINS_CLEAR_PROJECT_ENABLED, workingDir, 'ios-simulator');
+
+    expect(changed).toEqual([
+      { workingDir, id: 'ios-simulator', effectiveEnabled: false },
+      { workingDir, id: 'ios-simulator', effectiveEnabled: true },
+    ]);
+  });
+
+  it('rejects an untrusted sender before persisting or notifying a project mutation', async () => {
+    const setProjectEnabled = vi.fn(async () => true);
+    const clearProjectEnabled = vi.fn(async () => true);
+    const isEnabled = vi.fn(() => false);
+    const onProjectPolicyChanged = vi.fn();
+    const harness = new IpcHarness();
+    registerProjectPluginPolicyHandlers(harness, {
+      getPluginRegistry: () => ({ setProjectEnabled, clearProjectEnabled, isEnabled }),
+      assertTrustedSender: () => {
+        throw new Error('[PERMISSION_DENIED] untrusted renderer');
+      },
+      resolveIOSSimulatorProjectWorkingDir: vi.fn(async (candidate: string) => candidate),
+      onProjectPolicyChanged,
+    });
+
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.PLUGINS_SET_PROJECT_ENABLED,
+        '/owned-project',
+        'ios-simulator',
+        false,
+      ),
+    ).rejects.toThrow('untrusted renderer');
+
+    expect(setProjectEnabled).not.toHaveBeenCalled();
+    expect(clearProjectEnabled).not.toHaveBeenCalled();
+    expect(onProjectPolicyChanged).not.toHaveBeenCalled();
+  });
+
+  it('uses the Main-owned project path and rejects an unknown Simulator project', async () => {
+    const setProjectEnabled = vi.fn(async () => true);
+    const clearProjectEnabled = vi.fn(async () => true);
+    const isEnabled = vi.fn(() => true);
+    const onProjectPolicyChanged = vi.fn();
+    const requested = '/renderer-project-alias';
+    const owned = '/main-owned-project';
+    const harness = new IpcHarness();
+    registerProjectPluginPolicyHandlers(harness, {
+      getPluginRegistry: () => ({ setProjectEnabled, clearProjectEnabled, isEnabled }),
+      assertTrustedSender: () => undefined,
+      resolveIOSSimulatorProjectWorkingDir: vi.fn(async (candidate: string) =>
+        candidate === requested ? owned : null,
+      ),
+      onProjectPolicyChanged,
+    });
+
+    await harness.invoke(
+      MAKER_INVOKE.PLUGINS_SET_PROJECT_ENABLED,
+      requested,
+      'ios-simulator',
+      false,
+    );
+    await harness.invoke(MAKER_INVOKE.PLUGINS_CLEAR_PROJECT_ENABLED, requested, 'ios-simulator');
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.PLUGINS_SET_PROJECT_ENABLED,
+        '/unknown-project',
+        'ios-simulator',
+        false,
+      ),
+    ).rejects.toThrow('Project scope is not available');
+
+    expect(setProjectEnabled).toHaveBeenCalledTimes(1);
+    expect(setProjectEnabled).toHaveBeenCalledWith('ios-simulator', owned, false);
+    expect(clearProjectEnabled).toHaveBeenCalledWith('ios-simulator', owned);
+    expect(isEnabled).toHaveBeenCalledWith('ios-simulator', owned);
+    expect(onProjectPolicyChanged).toHaveBeenNthCalledWith(1, {
+      workingDir: owned,
+      id: 'ios-simulator',
+      effectiveEnabled: false,
+    });
+    expect(onProjectPolicyChanged).toHaveBeenNthCalledWith(2, {
+      workingDir: owned,
+      id: 'ios-simulator',
+      effectiveEnabled: true,
     });
   });
 

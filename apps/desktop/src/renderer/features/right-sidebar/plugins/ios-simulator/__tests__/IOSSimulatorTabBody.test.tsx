@@ -107,6 +107,50 @@ function readyStatus(instance = readyInstance()): IOSSimulatorSessionStatus {
   };
 }
 
+function nativeActiveRouteStatus(instance = readyInstance()): IOSSimulatorRouteStatusPush {
+  return {
+    sessionId: instance.sessionId,
+    instanceId: instance.instanceId,
+    generation: instance.generation,
+    updatedAt: '2026-08-12T00:00:00.000Z',
+    stream: {
+      adapter: 'wda',
+      encoding: 'jpeg',
+      state: 'active',
+      reasonCode: 'wda-active',
+    },
+    input: {
+      adapter: 'native-sidecar',
+      state: 'active',
+      continuous: true,
+      multiTouch: true,
+      reasonCode: 'native-active',
+    },
+  };
+}
+
+function wdaFallbackRouteStatus(instance = readyInstance()): IOSSimulatorRouteStatusPush {
+  return {
+    sessionId: instance.sessionId,
+    instanceId: instance.instanceId,
+    generation: instance.generation,
+    updatedAt: '2026-08-12T00:00:00.000Z',
+    stream: {
+      adapter: 'wda',
+      encoding: 'jpeg',
+      state: 'active',
+      reasonCode: 'wda-active',
+    },
+    input: {
+      adapter: 'wda',
+      state: 'fallback',
+      continuous: false,
+      multiTouch: false,
+      reasonCode: 'native-sidecar-unavailable',
+    },
+  };
+}
+
 function multiReadyStatus(
   mutationStates: IOSSimulatorMutationState[] = [],
 ): IOSSimulatorSessionStatus {
@@ -827,8 +871,19 @@ describe('IOSSimulatorTabBody', () => {
     fireEvent.pointerDown(image, { pointerId: 9, button: 0, clientX: 20, clientY: 40 });
     fireEvent.pointerUp(image, { pointerId: 9, clientX: 180, clientY: 360 });
     await waitFor(() => {
-      expect(api.liveTouch.mock.calls.map(([request]) => request.phase)).toEqual(['begin', 'end']);
+      expect(api.call).toHaveBeenCalledWith({
+        sessionId: 'session-a',
+        name: 'swipe',
+        args: expect.objectContaining({
+          instanceId: instance.instanceId,
+          startXRatio: 0.1,
+          startYRatio: 0.1,
+          endXRatio: 0.9,
+          endYRatio: 0.9,
+        }),
+      });
     });
+    expect(api.liveTouch).not.toHaveBeenCalled();
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 300));
     });
@@ -1458,51 +1513,10 @@ describe('IOSSimulatorTabBody', () => {
   });
 
   it('streams pointer samples through native touch and temporarily boosts frame rate', async () => {
-    const api = installStatus({
-      ok: true,
-      sessionId: 'session-a',
-      deviceGrants: [],
-      mutationStates: [],
-      instances: [
-        {
-          instanceId: 'instance-a',
-          sessionId: 'session-a',
-          sessionKind: 'local',
-          sourceFingerprint: 'fingerprint-a',
-          simulatorUdid: 'DEVICE-UDID-123',
-          simulatorName: 'iPhone 17 Pro',
-          runtimeIdentifier: 'runtime',
-          deviceTypeIdentifier: 'type',
-          creationProvenance: 'external',
-          bootProvenance: 'preexisting',
-          generation: 2,
-          lifecycleState: 'ready',
-          viewerState: 'attached',
-          healthState: 'healthy',
-          lease: {
-            id: 'lease-a',
-            issuedAt: '2026-07-23T00:00:00.000Z',
-            expiresAt: '2026-07-23T00:10:00.000Z',
-          },
-          createdAt: '2026-07-23T00:00:00.000Z',
-          lastActiveAt: '2026-07-23T00:00:00.000Z',
-          stoppedAt: null,
-          graceExpiresAt: null,
-          errorCode: null,
-        },
-      ],
-      environment: {
-        platform: 'darwin',
-        supported: true,
-        ready: true,
-        xcodeVersion: 'Xcode 26.4',
-        runtimes: [],
-        devices: [],
-        issue: null,
-        error: null,
-        setupSteps: [],
-      },
-    });
+    const statusValue = readyStatus();
+    if (!statusValue.ok) throw new Error('Expected a ready simulator status.');
+    statusValue.routeStatuses = [nativeActiveRouteStatus()];
+    const api = installStatus(statusValue);
     api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
     api.latestFrame.mockResolvedValue(streamingJpegResult());
     const rendered = render(
@@ -1535,7 +1549,7 @@ describe('IOSSimulatorTabBody', () => {
       sessionId: 'session-a',
       instanceId: 'instance-a',
       generation: 2,
-      leaseId: 'lease-a',
+      leaseId: 'lease-2',
       phase: 'begin',
       xRatio: 0.1,
       yRatio: 0.1,
@@ -1566,7 +1580,10 @@ describe('IOSSimulatorTabBody', () => {
   });
 
   it('finishes a captured gesture when pointer movement reports that the button is released', async () => {
-    const api = installStatus(readyStatus());
+    const statusValue = readyStatus();
+    if (!statusValue.ok) throw new Error('Expected a ready simulator status.');
+    statusValue.routeStatuses = [nativeActiveRouteStatus()];
+    const api = installStatus(statusValue);
     api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
     api.latestFrame.mockResolvedValue(streamingJpegResult());
     const rendered = render(
@@ -1606,7 +1623,10 @@ describe('IOSSimulatorTabBody', () => {
   });
 
   it('cancels native touch when pointer capture is lost', async () => {
-    const api = installStatus(readyStatus());
+    const statusValue = readyStatus();
+    if (!statusValue.ok) throw new Error('Expected a ready simulator status.');
+    statusValue.routeStatuses = [nativeActiveRouteStatus()];
+    const api = installStatus(statusValue);
     api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
     api.latestFrame.mockResolvedValue(streamingJpegResult());
     const rendered = render(
@@ -1636,7 +1656,10 @@ describe('IOSSimulatorTabBody', () => {
   });
 
   it('releases a partially delivered native gesture without replaying the swipe', async () => {
-    const api = installStatus(readyStatus());
+    const statusValue = readyStatus();
+    if (!statusValue.ok) throw new Error('Expected a ready simulator status.');
+    statusValue.routeStatuses = [nativeActiveRouteStatus()];
+    const api = installStatus(statusValue);
     api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
     api.latestFrame.mockResolvedValue(streamingJpegResult());
     api.liveTouch.mockImplementation(async (request): Promise<IOSSimulatorToolResponse> =>
@@ -1699,15 +1722,13 @@ describe('IOSSimulatorTabBody', () => {
     });
   });
 
-  it('uses the discrete compatibility route only when native touch never began', async () => {
-    const api = installStatus(readyStatus());
+  it('routes compatibility gestures directly through WDA without a native attempt', async () => {
+    const statusValue = readyStatus();
+    if (!statusValue.ok) throw new Error('Expected a ready simulator status.');
+    statusValue.routeStatuses = [wdaFallbackRouteStatus()];
+    const api = installStatus(statusValue);
     api.setViewerVisibility.mockResolvedValue(streamingJpegResult());
     api.latestFrame.mockResolvedValue(streamingJpegResult());
-    api.liveTouch.mockResolvedValue({
-      ok: false,
-      errorCode: 'NATIVE_INPUT_UNAVAILABLE',
-      message: 'Continuous native input is unavailable.',
-    });
     const rendered = render(
       <IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} active shellVisible />,
     );
@@ -1736,7 +1757,38 @@ describe('IOSSimulatorTabBody', () => {
         }),
       });
     });
-    expect(api.liveTouch.mock.calls.map(([request]) => request.phase)).toEqual(['begin']);
+    expect(api.liveTouch).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(image, {
+      pointerId: 13,
+      button: 0,
+      buttons: 1,
+      clientX: 20,
+      clientY: 40,
+    });
+    fireEvent.pointerUp(image, { pointerId: 13, clientX: 20, clientY: 40 });
+    await waitFor(() => {
+      expect(api.call).toHaveBeenCalledWith({
+        sessionId: 'session-a',
+        name: 'tap',
+        args: expect.objectContaining({
+          instanceId: 'instance-a',
+          xRatio: 0.1,
+          yRatio: 0.1,
+        }),
+      });
+    });
+  });
+
+  it('does not show native detection while the route status is missing', async () => {
+    const api = installStatus(readyStatus());
+    render(<IOSSimulatorTabBody state={{ instanceId: 'instance-a' }} ctx={ctx} />);
+
+    await waitFor(() => expect(api.status).toHaveBeenCalledOnce());
+    expect(screen.queryByText('rightSidebar.iosSimulator.route.state.detecting')).toBeNull();
+    expect(
+      screen.getAllByText('rightSidebar.iosSimulator.route.state.unavailable').length,
+    ).toBeGreaterThan(0);
   });
 
   it('rejects a frame that belongs to an obsolete simulator generation', async () => {

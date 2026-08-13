@@ -140,6 +140,19 @@ describe('PluginRegistry — scoped priority', () => {
     });
   });
 
+  it('keeps an explicitly enabled iOS Simulator project enabled after the user default is disabled', async () => {
+    await registry.setEnabled('ios-simulator', false);
+    await registry.setProjectEnabled('ios-simulator', workingDir, true);
+
+    expect(registry.isEnabled('ios-simulator')).toBe(false);
+    expect(registry.isEnabled('ios-simulator', workingDir)).toBe(true);
+    await expect(registry.getEnableState('ios-simulator', workingDir)).resolves.toMatchObject({
+      effectiveEnabled: true,
+      userOverride: { enabled: false },
+      projectOverride: { enabled: true, workingDir },
+    });
+  });
+
   it('returns true by default with workingDir', () => {
     expect(registry.isEnabled('ssh', workingDir)).toBe(true);
   });

@@ -205,7 +205,15 @@ import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostScheduleSlot, isMainShellWindowUrl } from './scheduleSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import { GhostIOSSimulatorSlot, type IOSSimulatorSlotFocusContext } from './iosSimulatorSlot.js';
-import { resolveIOSSimulatorPluginAccess } from './iosSimulatorPluginGate.js';
+import {
+  resolveIOSSimulatorCapabilityLossCleanupScope,
+  resolveIOSSimulatorPluginAccess,
+} from './iosSimulatorPluginGate.js';
+import {
+  acquireIOSSimulatorManifestMutation,
+  runIOSSimulatorCapabilityMutation,
+  runIOSSimulatorManifestMutation,
+} from './iosSimulatorCapabilityMutation.js';
 import {
   clearIOSSimulatorRendererAccess,
   focusIOSSimulatorRendererSession,
@@ -213,7 +221,11 @@ import {
   requestIOSSimulatorRendererSessionAccess,
   revokeIOSSimulatorRendererAccessForSessionChange,
 } from '../mcp-integrations/ios-simulator-renderer-access.js';
-import { getIOSSimulatorPluginStatus } from '../mcp-integrations/ios-simulator.js';
+import {
+  deactivateIOSSimulatorHost,
+  getIOSSimulatorPluginStatus,
+  isIOSSimulatorHostRuntimeActive,
+} from '../mcp-integrations/ios-simulator.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
 import { GhostBadgeSlot } from './badgeSlot.js';
@@ -461,6 +473,7 @@ function getGhostSetupManifestTracker(): GhostSetupManifestTracker {
 }
 
 const ghostMutationCoordinator = new GhostMutationCoordinator();
+export { runIOSSimulatorCapabilityMutation } from './iosSimulatorCapabilityMutation.js';
 
 /**
  * Capture the stable owner before a mutation performs any asynchronous
@@ -710,6 +723,129 @@ export function waitForGhostMutations(): Promise<void> {
 /** Account-managed built-ins are unavailable outside a verified cloud session. */
 export function isGhostAvailableForActiveSession(id: string): boolean {
   return !isCindyAccountGhostId(id) || getAppCapabilities().canUseCindyAccountServices;
+}
+
+function hasEnabledIOSSimulatorCapability(ghosts = getGhostManager().list()): boolean {
+  return ghosts.some(
+    (ghost) =>
+      ghost.enabled === true &&
+      ghost.manifest.slots.includes('ios-simulator') &&
+      isGhostAvailableForActiveSession(ghost.manifest.id),
+  );
+}
+
+function hasEnabledIOSSimulatorCapabilityForProject(
+  workingDir: string,
+  ghosts = getGhostManager().list(),
+): boolean {
+  return resolveIOSSimulatorPluginAccess(ghosts, workingDir, {
+    isAvailableForActiveSession: isGhostAvailableForActiveSession,
+    isDisabledForWorkdir: isGhostDisabledForWorkdir,
+  }).allowed;
+}
+
+interface IOSSimulatorActiveProviderResolver {
+  hasActiveProvider(): boolean;
+  isEnabledForProject(workingDir: string): boolean;
+}
+
+let iosSimulatorActiveProviderResolver: IOSSimulatorActiveProviderResolver | null = null;
+
+/** Inject the Maker project-policy half without making cindy-brain import Maker. */
+export function configureIOSSimulatorActiveProviderResolver(
+  resolver: IOSSimulatorActiveProviderResolver,
+): void {
+  iosSimulatorActiveProviderResolver = resolver;
+}
+
+function isIOSSimulatorProviderEnabledForProject(workingDir: string): boolean {
+  return (
+    iosSimulatorActiveProviderResolver?.isEnabledForProject(workingDir) ??
+    hasEnabledIOSSimulatorCapabilityForProject(workingDir)
+  );
+}
+
+function hasActiveIOSSimulatorProvider(): boolean {
+  return (
+    iosSimulatorActiveProviderResolver?.hasActiveProvider() ??
+    hasEnabledIOSSimulatorCapability()
+  );
+}
+
+async function releaseIOSSimulatorAfterCapabilityLoss(
+  wasEnabled: boolean,
+  options: { projectWorkingDirs?: readonly string[] } = {},
+  retryIfHostActive = false,
+): Promise<void> {
+  const scope = resolveIOSSimulatorCapabilityLossCleanupScope({
+    wasEnabled,
+    retryIfHostActive,
+    hostRuntimeActive: isIOSSimulatorHostRuntimeActive(),
+    hasActiveProvider: hasActiveIOSSimulatorProvider(),
+    projectWorkingDirs: options.projectWorkingDirs,
+    hasEnabledProviderForProject: isIOSSimulatorProviderEnabledForProject,
+  });
+  if (!scope) return;
+  try {
+    await deactivateIOSSimulatorHost({
+      ...scope,
+      allowHostRelease: true,
+      shouldReleaseHost: () => !hasActiveIOSSimulatorProvider(),
+    });
+  } catch (error) {
+    // The durable preference has already changed. Keep the Host singleton and
+    // ownership writer lease until cleanup can be retried safely.
+    log.warn('iOS Simulator Host cleanup remains pending after capability loss', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Settings → 内置工具 user-default disable has no project scope, so it
+ * retires every current binding. This is exported to keep the settings IPC
+ * adapter independent from Ghost filesystem internals.
+ */
+export async function deactivateIOSSimulatorForBuiltinToolDefault(options: {
+  shouldReleaseProject?: (workingDir: string) => boolean;
+  shouldReleaseHost?: () => boolean;
+} = {}): Promise<void> {
+  try {
+    // Pending-create evidence is profile-scoped. Sweeping it while an explicit
+    // project override still provides the capability could delete that
+    // retained project's marker between `simctl create` and binding persist.
+    // If the last provider disappears later, the armed evidence keeps the Host
+    // responsible for cleanup and a later teardown retry performs the full sweep.
+    const reconcilePendingCreates = options.shouldReleaseHost?.() !== false;
+    await deactivateIOSSimulatorHost({
+      ...options,
+      reconcilePendingCreates,
+      allowHostRelease: true,
+    });
+  } catch (error) {
+    log.warn('iOS Simulator Host cleanup remains pending after built-in tool disable', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** Project-scoped built-in-tool disable only retires bindings in that project. */
+export async function deactivateIOSSimulatorForBuiltinToolProject(
+  workingDir: string,
+  shouldReleaseHost?: () => boolean,
+): Promise<void> {
+  try {
+    await deactivateIOSSimulatorHost({
+      projectWorkingDirs: [workingDir],
+      allowHostRelease: true,
+      shouldReleaseHost,
+    });
+  } catch (error) {
+    log.warn('iOS Simulator project cleanup remains pending after built-in tool disable', {
+      workingDir,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /** Live Host capability gate shared by Agent transports and Renderer IPC. */
@@ -3800,12 +3936,18 @@ export async function installAndDock(
    */
   opts: {
     ghostId: string;
+    incomingManifest: GhostManifest;
     enable?: boolean;
     expectedPackageSha256?: string;
     trustOverride?: GhostHostTrustOverride;
   },
 ): Promise<InstalledGhost> {
-  return withGhostInstallLock(opts.ghostId, () => installAndDockLocked(manager, lizFilePath, opts));
+  return withGhostInstallLock(opts.ghostId, () =>
+    runIOSSimulatorManifestMutation(
+      [opts.enable === true ? opts.incomingManifest : undefined],
+      () => installAndDockLocked(manager, lizFilePath, opts),
+    ),
+  );
 }
 
 async function installAndDockLocked(
@@ -3813,6 +3955,7 @@ async function installAndDockLocked(
   lizFilePath: string,
   opts: {
     ghostId: string;
+    incomingManifest: GhostManifest;
     enable?: boolean;
     expectedPackageSha256?: string;
     trustOverride?: GhostHostTrustOverride;
@@ -3913,6 +4056,7 @@ async function installOrUpdateMarketGhostPackageLocked(
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
   let releaseMutation: (() => void) | null = null;
+  let releaseIOSMutation: (() => void) | null = null;
   try {
     const manager = getGhostManager();
     const inspected = await manager.inspect(cindyFilePath);
@@ -3986,13 +4130,19 @@ async function installOrUpdateMarketGhostPackageLocked(
     }
     rejectUnauthorizedTokenBroker(inspected.canonicalManifest);
 
+    releaseIOSMutation = await acquireIOSSimulatorManifestMutation([
+      installed?.manifest,
+      inspected.canonicalManifest,
+    ]);
     // Node 高风险条目由 renderer 装入确认卡权限清单如实展示;
     // 2026-07-24 Lizi 定案:不再有 Main 侧原生二次确认弹窗(PR #333,本处为其
     // 漏删的市场安装路径调用点,一并对齐)。
     // Hold the owner-stability lease only for the actual Ghost filesystem
     // mutation.
     releaseMutation = beginGhostMutation(mutationOwner);
-    if (!installed) {
+    const installedAtMutation =
+      manager.list().find((ghost) => ghost.manifest.id === expected.ghostId) ?? installed;
+    if (!installedAtMutation) {
       // 2026-07-26 定案:市场首装一律装完即开(defaultInstall 与手动安装归一),
       // 用户不必再手动点一次开关。市场包走官方分发链路(服务端校验 + sha256
       // 校验下载),且确认框如实展示权限清单,确认安装即授权运行;本地 .cindy
@@ -4003,8 +4153,9 @@ async function installOrUpdateMarketGhostPackageLocked(
       // 所有前置校验(保留前缀/审阅比对/签名/解压上限)都会作用在旧字节上。
       // 本地 .cindy 装入通道已强制此对账,市场通道同一口径。
       expected.beforeCommitInLock?.();
-      return installAndDock(manager, cindyFilePath, {
+      return installAndDockLocked(manager, cindyFilePath, {
         ghostId: expected.ghostId,
+        incomingManifest: inspected.canonicalManifest,
         enable: true,
         expectedPackageSha256: inspected.packageSha256,
         ...(trustOverride ? { trustOverride } : {}),
@@ -4012,6 +4163,10 @@ async function installOrUpdateMarketGhostPackageLocked(
     }
 
     expected.beforeCommitInLock?.();
+    const hadEnabledIOSSimulatorCapability = hasEnabledIOSSimulatorCapability(manager.list());
+    const removedIOSSimulatorCapability =
+      installedAtMutation.manifest.slots.includes('ios-simulator') &&
+      !inspected.canonicalManifest.slots.includes('ios-simulator');
     const runtime = getGhostRuntime();
     runtime.stop(expected.ghostId);
     // 无法确认旧进程已退出时保持停止态，不能启动第二份 resident。只有旧进程
@@ -4030,7 +4185,7 @@ async function installOrUpdateMarketGhostPackageLocked(
         ...(trustOverride ? { trustOverride } : {}),
         beforePackageCommit: () => {
           getGhostOauthAccountManager().expireAccountsForChangedClients(
-            withRuntimeFiloGoogleClient(installed.manifest),
+            withRuntimeFiloGoogleClient(installedAtMutation.manifest),
             withRuntimeFiloGoogleClient(inspected.canonicalManifest),
           );
         },
@@ -4041,7 +4196,7 @@ async function installOrUpdateMarketGhostPackageLocked(
       });
     } catch (error) {
       if (!packagePlaced) {
-        spawnIfResident(installed);
+        spawnIfResident(installedAtMutation);
         throw error;
       }
       const placed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
@@ -4053,7 +4208,7 @@ async function installOrUpdateMarketGhostPackageLocked(
       result = { ghost: placed };
     }
     if ('rejection' in result) {
-      spawnIfResident(installed);
+      spawnIfResident(installedAtMutation);
       throwInstallError(result.rejection);
     }
     runtime.resetFuse(expected.ghostId);
@@ -4069,9 +4224,15 @@ async function installOrUpdateMarketGhostPackageLocked(
       }
     }
     spawnIfResident(result.ghost);
+    await releaseIOSSimulatorAfterCapabilityLoss(
+      hadEnabledIOSSimulatorCapability,
+      {},
+      removedIOSSimulatorCapability,
+    );
     return result.ghost;
   } finally {
     releaseMutation?.();
+    releaseIOSMutation?.();
   }
 }
 
@@ -4098,7 +4259,18 @@ export async function uninstallGhostAndCleanup(
 ): Promise<void> {
   // 按 ghostId 与装入/更新互斥:卸载与同 id 的市场/本地装入不得交错,否则
   // 市场装入的"目标是否已装"判定会被本卸载在其落位前抽走(反之亦然)。
-  return withGhostInstallLock(id, () => uninstallGhostAndCleanupLocked(id, options));
+  return withGhostInstallLock(id, () => {
+    const changesIOSSimulatorCapability = getGhostManager()
+      .list()
+      .some(
+        (ghost) =>
+          ghost.manifest.id === id && ghost.manifest.slots.includes('ios-simulator'),
+      );
+    const uninstall = () => uninstallGhostAndCleanupLocked(id, options);
+    return changesIOSSimulatorCapability
+      ? runIOSSimulatorCapabilityMutation(uninstall)
+      : uninstall();
+  });
 }
 
 async function uninstallGhostAndCleanupLocked(
@@ -4113,6 +4285,12 @@ async function uninstallGhostAndCleanupLocked(
         ? null
         : (prepareGhostUninstallLedgerCompletion?.(id) ?? null);
     const manager = getGhostManager();
+    const ghostsBeforeUninstall = manager.list();
+    const hadEnabledIOSSimulatorCapability = hasEnabledIOSSimulatorCapability(ghostsBeforeUninstall);
+    const removedIOSSimulatorCapability = ghostsBeforeUninstall.some(
+      (ghost) =>
+        ghost.manifest.id === id && ghost.manifest.slots.includes('ios-simulator'),
+    );
     const runtime = getGhostRuntime();
     runtime.stop(id);
     getGhostNodeRuntimeBroker().stop(id);
@@ -4177,6 +4355,11 @@ async function uninstallGhostAndCleanupLocked(
     // 卸载刚落地,manager.list() 就是当下的全部事实(哪怕是空表)——标权威,
     // 好让「卸掉最后一个插件」也能把账本里的孤儿记录一并清掉。
     broadcastGhostsChanged(manager.list(), true);
+    await releaseIOSSimulatorAfterCapabilityLoss(
+      hadEnabledIOSSimulatorCapability,
+      {},
+      removedIOSSimulatorCapability,
+    );
     if (recentIds) broadcastGhostRecentUsageChanged(recentIds);
     try {
       await completeLedger?.();
@@ -5165,7 +5348,8 @@ export function registerGhostIpc(): void {
   });
   ipcMain.handle(
     'ghosts:workdir-prefs:set',
-    (_event, workdir: unknown, ghostId: unknown, disabled: unknown) => {
+    async (event, workdir: unknown, ghostId: unknown, disabled: unknown) => {
+      assertTrustedAppRendererEvent(event);
       if (typeof workdir !== 'string' || workdir.trim().length === 0) {
         throwIpcError('INVALID_PARAMS', 'workdir must be a non-empty string');
       }
@@ -5175,18 +5359,38 @@ export function registerGhostIpc(): void {
       if (typeof disabled !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'disabled must be a boolean');
       }
-      const wasDisabled = isGhostDisabledForWorkdir(ghostId, workdir);
-      const next = setGhostDisabledForWorkdir(workdir, ghostId, disabled);
-      // A setup card may already be waiting for this plugin in the affected
-      // project. Wake all waiters for the plugin; each one revalidates its own
-      // captured workdir and only the matching scope is rejected.
-      if (wasDisabled !== disabled) {
-        getGhostSetupChangeBus().emit(ghostId, { source: 'workdir_policy' });
-      }
-      // 生效面变了(新会话花名册 / $ 菜单),借 ghosts:changed 通知所有窗口
-      // 重拉——载荷仍是完整已装清单,消费方按需再 sendSync 取目录级清单。
-      broadcastGhostsChanged(manager.list());
-      return { disabled: next };
+      const changesIOSSimulatorCapability = manager
+        .list()
+        .some(
+          (ghost) =>
+            ghost.manifest.id === ghostId && ghost.manifest.slots.includes('ios-simulator'),
+        );
+      const mutate = async () => {
+        const hadEnabledIOSSimulatorCapability =
+          hasEnabledIOSSimulatorCapabilityForProject(workdir);
+        const wasDisabled = isGhostDisabledForWorkdir(ghostId, workdir);
+        const next = setGhostDisabledForWorkdir(workdir, ghostId, disabled);
+        // A setup card may already be waiting for this plugin in the affected
+        // project. Wake all waiters for the plugin; each one revalidates its own
+        // captured workdir and only the matching scope is rejected.
+        if (wasDisabled !== disabled) {
+          getGhostSetupChangeBus().emit(ghostId, { source: 'workdir_policy' });
+        }
+        // 生效面变了(新会话花名册 / $ 菜单),借 ghosts:changed 通知所有窗口
+        // 重拉——载荷仍是完整已装清单,消费方按需再 sendSync 取目录级清单。
+        broadcastGhostsChanged(manager.list());
+        if (disabled && changesIOSSimulatorCapability) {
+          await releaseIOSSimulatorAfterCapabilityLoss(
+            hadEnabledIOSSimulatorCapability,
+            { projectWorkingDirs: [workdir] },
+            true,
+          );
+        }
+        return { disabled: next };
+      };
+      return changesIOSSimulatorCapability
+        ? runIOSSimulatorCapabilityMutation(mutate)
+        : mutate();
     },
   );
 
@@ -5276,6 +5480,7 @@ export function registerGhostIpc(): void {
     return {
       ghost: await installAndDock(manager, lizFilePath, {
         ghostId: probe.manifest.id,
+        incomingManifest: probe.canonicalManifest,
         enable,
         expectedPackageSha256,
       }),
@@ -5313,9 +5518,20 @@ export function registerGhostIpc(): void {
     // 与市场装入/本地装入/卸载共用按 ghostId 的互斥:换目录期间同 id 的其它
     // 装入/卸载不得插入(否则并发装入会与本次 rename 竞争、留下不一致态)。
     return withGhostInstallLock(inspected.manifest.id, async () => {
-      const releaseMutation = beginGhostMutation(mutationOwner);
       const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
+      const releaseIOSMutation = await acquireIOSSimulatorManifestMutation(
+        [previousGhost?.manifest, inspected.canonicalManifest],
+      );
+      let releaseMutation: (() => void) | null = null;
       try {
+        releaseMutation = beginGhostMutation(mutationOwner);
+        const previousGhostAtMutation =
+          manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id) ??
+          previousGhost;
+        const hadEnabledIOSSimulatorCapability = hasEnabledIOSSimulatorCapability(manager.list());
+        const removedIOSSimulatorCapability =
+          previousGhostAtMutation?.manifest.slots.includes('ios-simulator') === true &&
+          !inspected.canonicalManifest.slots.includes('ios-simulator');
         runtime.stop(inspected.manifest.id);
         // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
         // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
@@ -5338,7 +5554,7 @@ export function registerGhostIpc(): void {
               : false;
           }
         } catch (error) {
-          if (previousGhost) spawnIfResident(previousGhost);
+          if (previousGhostAtMutation) spawnIfResident(previousGhostAtMutation);
           log.warn('failed to verify Plugin provenance before local update', {
             ghostId: inspected.manifest.id,
             error: error instanceof Error ? error.message : String(error),
@@ -5377,7 +5593,7 @@ export function registerGhostIpc(): void {
             marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject);
           } catch (error) {
             restoreMarketRecord();
-            if (previousGhost) spawnIfResident(previousGhost);
+            if (previousGhostAtMutation) spawnIfResident(previousGhostAtMutation);
             log.warn('failed to detach Plugin market provenance before local update', {
               ghostId: inspected.manifest.id,
               error: error instanceof Error ? error.message : String(error),
@@ -5410,10 +5626,12 @@ export function registerGhostIpc(): void {
           if (!packagePlaced) {
             restoreMarketRecord();
             // 更新失败:恢复旧版本的常驻 Node 工作进程(如果是 resident 且已启用)
-            if (previousGhost) spawnIfResident(previousGhost);
+            if (previousGhostAtMutation) spawnIfResident(previousGhostAtMutation);
             throw err;
           }
-          const placed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
+          const placed = manager
+            .list()
+            .find((ghost) => ghost.manifest.id === inspected.manifest.id);
           if (!placed) throw err;
           log.warn('local ghost post-placement notification failed', {
             ghostId: inspected.manifest.id,
@@ -5423,7 +5641,7 @@ export function registerGhostIpc(): void {
         }
         if ('rejection' in result) {
           restoreMarketRecord();
-          if (previousGhost) spawnIfResident(previousGhost);
+          if (previousGhostAtMutation) spawnIfResident(previousGhostAtMutation);
           throwInstallError(result.rejection);
         }
         runtime.resetFuse(inspected.manifest.id); // 换了代码,给新版本干净的熔断记账
@@ -5439,9 +5657,15 @@ export function registerGhostIpc(): void {
           }
         }
         spawnIfResident(result.ghost); // 常驻意识:换完代码立即用新版本点火
+        await releaseIOSSimulatorAfterCapabilityLoss(
+          hadEnabledIOSSimulatorCapability,
+          {},
+          removedIOSSimulatorCapability,
+        );
         return { ghost: result.ghost };
       } finally {
-        releaseMutation();
+        releaseMutation?.();
+        releaseIOSMutation();
       }
     });
   });
@@ -5610,29 +5834,46 @@ export function registerGhostIpc(): void {
     if (typeof enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
     }
-    if (!enabled) {
-      runtime.stop(id); // 沉睡立即熄灯
-      getGhostNodeRuntimeBroker().stop(id); // 随包 Node 也立即关闭
-      getGhostSubscriptionGateway().dropGhost(id); // 订阅态清零(缓冲/熔断/seq)
-    }
-    const result = await manager.setEnabled(id, enabled);
-    if ('rejection' in result) throwUninstallError(result.rejection);
-    if (enabled) {
-      runtime.resetFuse(id); // 重新唤醒 = 清熔断记账,可再拉起
-      const ghost = findAvailableGhost(id);
-      if (ghost) spawnIfResident(ghost); // 常驻意识:唤醒即启动
-      resumeGhostUnreadProjection(id); // 沉睡期间保留的那颗点回来
-    } else {
-      // 未读停止投影(记录保留):沉睡的意识没法把面板里的内容给你看,留一颗点
-      // 只是噪声;但用户是"先别烦我"不是"这条我读过了",唤醒要能找回来。
-      //
-      // **必须在 setEnabled 成功之后**:写 `.disabled` 可能失败(目录只读 / IO
-      // 错误),那时插件仍是启用态,可提前熄灭的话未读点就被错误清掉、且不会自愈
-      // (要等插件再次上报或重启)。熄灯类操作(runtime/node/订阅)放在前面是既有
-      // 行为且幂等,唯独这条会留下用户可见的错状态(copilot + codex review)。
-      suspendGhostUnreadProjection(id);
-    }
-    return { ok: true };
+    const changesIOSSimulatorCapability = manager
+      .list()
+      .some(
+        (ghost) =>
+          ghost.manifest.id === id && ghost.manifest.slots.includes('ios-simulator'),
+      );
+    const mutate = async () => {
+      const hadEnabledIOSSimulatorCapability = hasEnabledIOSSimulatorCapability(manager.list());
+      if (!enabled) {
+        runtime.stop(id); // 沉睡立即熄灯
+        getGhostNodeRuntimeBroker().stop(id); // 随包 Node 也立即关闭
+        getGhostSubscriptionGateway().dropGhost(id); // 订阅态清零(缓冲/熔断/seq)
+      }
+      const result = await manager.setEnabled(id, enabled);
+      if ('rejection' in result) throwUninstallError(result.rejection);
+      if (enabled) {
+        runtime.resetFuse(id); // 重新唤醒 = 清熔断记账,可再拉起
+        const ghost = findAvailableGhost(id);
+        if (ghost) spawnIfResident(ghost); // 常驻意识:唤醒即启动
+        resumeGhostUnreadProjection(id); // 沉睡期间保留的那颗点回来
+      } else {
+        // 未读停止投影(记录保留):沉睡的意识没法把面板里的内容给你看,留一颗点
+        // 只是噪声;但用户是"先别烦我"不是"这条我读过了",唤醒要能找回来。
+        //
+        // **必须在 setEnabled 成功之后**:写 `.disabled` 可能失败(目录只读 / IO
+        // 错误),那时插件仍是启用态,可提前熄灭的话未读点就被错误清掉、且不会自愈
+        // (要等插件再次上报或重启)。熄灯类操作(runtime/node/订阅)放在前面是既有
+        // 行为且幂等,唯独这条会留下用户可见的错状态(copilot + codex review)。
+        suspendGhostUnreadProjection(id);
+        await releaseIOSSimulatorAfterCapabilityLoss(
+          hadEnabledIOSSimulatorCapability,
+          {},
+          true,
+        );
+      }
+      return { ok: true };
+    };
+    return changesIOSSimulatorCapability
+      ? runIOSSimulatorCapabilityMutation(mutate)
+      : mutate();
   });
 
   // 运行时状态快照(面板错误接管态的首帧数据源;广播只覆盖后续变化)。

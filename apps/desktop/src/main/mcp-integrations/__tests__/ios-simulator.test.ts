@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -29,16 +29,19 @@ import {
 } from '@cindy/ios-simulator-runtime';
 import { IOSSimulatorToolRegistry, registerIOSSimulatorTools } from '@cindy/mcps';
 import type { IOSSimulatorPublicRouteStatus } from '../../../shared/iosSimulatorIpc';
+import { normalizeWorkingDirForProjectSettings } from '../../../shared/workingDir';
 import {
   cancelIOSSimulatorSessionOperations,
   cleanupIOSSimulatorRemovedSession,
   createIOSSimulatorHost,
   createRegistryBackedIOSSimulatorDeviceGrantStore,
   createRegistryBackedIOSSimulatorActor,
+  deactivateIOSSimulatorHost,
   disposeIOSSimulatorHost,
   flushIOSSimulatorOwnershipRegistry,
   getIOSSimulatorPluginStatus,
   getIOSSimulatorMcpDeps,
+  initializeIOSSimulatorHost,
   reconcilePersistedIOSSimulatorOwnership,
   type IOSSimulatorAppLifecycleAdapter,
   type IOSSimulatorMediaCaptureAdapter,
@@ -296,8 +299,10 @@ describe('iOS Simulator host', () => {
       await mkdir(path.dirname(evidencePath), { recursive: true });
       await writeFile(evidencePath, '{"version":1,"armedAt":"2026-08-11T00:00:00.000Z"}');
       const competingRegistry = new IOSSimulatorOwnershipRegistryFile(registryPath);
-      let finishRecovery: (value: { recovered: readonly string[]; complete: boolean }) => void =
-        () => undefined;
+      let finishRecovery: (value: {
+        recovered: readonly string[];
+        complete: boolean;
+      }) => void = () => undefined;
       const recoverPendingCreatesAtStartup = vi.fn(
         (_owned: readonly { udid: string; name: string }[], _signal?: AbortSignal) =>
           new Promise<{ recovered: readonly string[]; complete: boolean }>((resolve) => {
@@ -450,8 +455,8 @@ describe('iOS Simulator host', () => {
   );
 
   it('gates an already-created Host on one startup pending-create recovery', async () => {
-    let finishRecovery: (value: { recovered: readonly string[]; complete: boolean }) => void =
-      () => undefined;
+    let finishRecovery: (value: { recovered: readonly string[]; complete: boolean }) => void = () =>
+      undefined;
     const recoverPendingCreatesAtStartup = vi.fn(
       (_owned: readonly { udid: string; name: string }[], _signal?: AbortSignal) =>
         new Promise<{ recovered: readonly string[]; complete: boolean }>((resolve) => {
@@ -911,9 +916,7 @@ describe('iOS Simulator host', () => {
       .recommendedActions;
     expect(recommended).toContain('list_simulator_devices');
     for (const action of recommended) {
-      expect(advertised.has(action) || action === 'create_instance_or_attach_device').toBe(
-        true,
-      );
+      expect(advertised.has(action) || action === 'create_instance_or_attach_device').toBe(true);
     }
   });
 
@@ -993,6 +996,18 @@ describe('iOS Simulator host', () => {
           generation: attached.generation + 1,
           viewerState: 'detached',
           healthState: 'healthy',
+        },
+      ],
+      routeStatuses: [
+        {
+          instanceId: attached.instanceId,
+          input: {
+            adapter: null,
+            state: 'unavailable',
+            continuous: false,
+            multiTouch: false,
+            reasonCode: 'route-error',
+          },
         },
       ],
     });
@@ -2698,6 +2713,606 @@ describe('iOS Simulator host', () => {
     await Promise.all([reconciling, disposing]);
     expect(disposed).toBe(true);
     expect(inspect).not.toHaveBeenCalled();
+  });
+
+  it('deactivates only bindings in the requested project and preserves other projects', async () => {
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(
+        async (udid) => READY_REPORT.devices.find((device) => device.udid === udid) ?? null,
+      ),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    actor.attach({
+      sessionId: 'project-a-session',
+      worktreeRoot: '/repo/.cindy-worktrees/task-a',
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+      bootProvenance: 'preexisting',
+    });
+    actor.attach({
+      sessionId: 'project-b-session',
+      worktreeRoot: '/other/project',
+      sourceFingerprint: 'fingerprint-b',
+      device: { ...READY_REPORT.devices[0]!, udid: '9A9D41E0-E031-4AD0-A8B5-847480802E8E' },
+      bootProvenance: 'preexisting',
+    });
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(),
+        stop: vi.fn(async () => undefined),
+      },
+      getSession: vi.fn(async (id) => localSession(id)),
+      mediaCapture: {
+        discardInstance: vi.fn(async () => undefined),
+        discardSession: vi.fn(async () => undefined),
+      } as unknown as IOSSimulatorMediaCaptureAdapter,
+    });
+
+    await expect(host.deactivate({ projectWorkingDirs: ['/repo'] })).resolves.toEqual({
+      hostCanBeReleased: false,
+      cleanedInstanceCount: 1,
+    });
+    expect(actor.listAll().map((instance) => instance.sessionId)).toEqual(['project-b-session']);
+  });
+
+  it('matches a logical project path to a binding persisted under its real path', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-project-symlink-'));
+    const realProject = path.join(root, 'real-project');
+    const linkedProject = path.join(root, 'linked-project');
+    await mkdir(realProject);
+    try {
+      await symlink(realProject, linkedProject, 'dir');
+    } catch {
+      await rm(root, { recursive: true, force: true });
+      return;
+    }
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(async () => READY_REPORT.devices[0]!),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    actor.attach({
+      sessionId: 'symlink-session',
+      worktreeRoot: realProject,
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+      bootProvenance: 'preexisting',
+    });
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(),
+        stop: vi.fn(async () => undefined),
+      },
+      getSession: vi.fn(async (id) => ({ ...localSession(id), workDir: linkedProject })),
+      mediaCapture: {
+        discardInstance: vi.fn(async () => undefined),
+        discardSession: vi.fn(async () => undefined),
+      } as unknown as IOSSimulatorMediaCaptureAdapter,
+    });
+    try {
+      await expect(host.deactivate({ projectWorkingDirs: [linkedProject] })).resolves.toEqual({
+        hostCanBeReleased: true,
+        cleanedInstanceCount: 1,
+      });
+      expect(actor.listAll()).toEqual([]);
+    } finally {
+      await host.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('checks project policy through the logical path while matching its physical binding', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-project-policy-symlink-'));
+    const realProject = path.join(root, 'real-project');
+    const linkedProject = path.join(root, 'linked-project');
+    await mkdir(realProject);
+    try {
+      await symlink(realProject, linkedProject, 'dir');
+    } catch {
+      await rm(root, { recursive: true, force: true });
+      return;
+    }
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(async () => READY_REPORT.devices[0]!),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    actor.attach({
+      sessionId: 'symlink-policy-session',
+      worktreeRoot: realProject,
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+      bootProvenance: 'preexisting',
+    });
+    const logicalProjectForPolicy = normalizeWorkingDirForProjectSettings(linkedProject)!;
+    const shouldReleaseProject = vi.fn(
+      (workingDir: string) => workingDir !== logicalProjectForPolicy,
+    );
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => ({ ...localSession(id), workDir: linkedProject })),
+    });
+    try {
+      await expect(host.deactivate({ shouldReleaseProject })).resolves.toEqual({
+        hostCanBeReleased: false,
+        cleanedInstanceCount: 0,
+      });
+      expect(shouldReleaseProject).toHaveBeenCalledWith(logicalProjectForPolicy);
+      expect(actor.list('symlink-policy-session')).toHaveLength(1);
+    } finally {
+      await host.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reconciles pending-create evidence during an unscoped capability shutdown', async () => {
+    let armed = true;
+    const pendingCreateEvidence = {
+      arm: vi.fn(() => 9),
+      isArmed: vi.fn(() => armed),
+      generation: vi.fn(() => 9),
+      clearIfUnchanged: vi.fn(() => {
+        armed = false;
+      }),
+    };
+    const recoverPendingCreatesAtStartup = vi.fn(async () => ({
+      recovered: [] as readonly string[],
+      complete: true,
+    }));
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      recoverPendingCreatesAtStartup,
+      deleteExact: vi.fn(),
+    };
+    const host = createIOSSimulatorHost({
+      lifecycle,
+      pendingCreateEvidence,
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => localSession(id)),
+    });
+
+    await expect(host.deactivate()).resolves.toEqual({
+      hostCanBeReleased: true,
+      cleanedInstanceCount: 0,
+    });
+    expect(recoverPendingCreatesAtStartup).toHaveBeenCalledWith([], expect.any(AbortSignal));
+    expect(pendingCreateEvidence.clearIfUnchanged).toHaveBeenCalledWith(9);
+    await host.dispose();
+  });
+
+  it('keeps another project status and tools available during scoped deactivation', async () => {
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(async () => READY_REPORT.devices[0]!),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    actor.attach({
+      sessionId: 'project-a-session',
+      worktreeRoot: '/repo/project-a',
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+      bootProvenance: 'preexisting',
+    });
+    actor.attach({
+      sessionId: 'project-b-session',
+      worktreeRoot: '/repo/project-b',
+      sourceFingerprint: 'fingerprint-b',
+      device: { ...READY_REPORT.devices[0]!, udid: '9A9D41E0-E031-4AD0-A8B5-847480802E8E' },
+      bootProvenance: 'preexisting',
+    });
+    let signalDriverStop!: () => void;
+    const driverStopStarted = new Promise<void>((resolve) => {
+      signalDriverStop = resolve;
+    });
+    let releaseDriverStop!: () => void;
+    const driverStopReleased = new Promise<void>((resolve) => {
+      releaseDriverStop = resolve;
+    });
+    const inspect = vi.fn(async () => READY_REPORT);
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect },
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(),
+        stop: vi.fn(async (instanceId: string) => {
+          if (
+            actor.list('project-a-session').some((instance) => instance.instanceId === instanceId)
+          ) {
+            signalDriverStop();
+            await driverStopReleased;
+          }
+        }),
+      },
+      getSession: vi.fn(async (id) => ({
+        ...localSession(id),
+        workDir: id === 'project-a-session' ? '/repo/project-a' : '/repo/project-b',
+      })),
+      mediaCapture: {
+        discardInstance: vi.fn(async () => undefined),
+        discardSession: vi.fn(async () => undefined),
+      } as unknown as IOSSimulatorMediaCaptureAdapter,
+    });
+
+    const deactivation = host.deactivate({ projectWorkingDirs: ['/repo/project-a'] });
+    await driverStopStarted;
+
+    await expect(host.getStatus('project-a-session')).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MUTATION_CANCELLED',
+    });
+    await expect(host.getStatus('project-b-session')).resolves.toMatchObject({
+      ok: true,
+      sessionId: 'project-b-session',
+      instances: [{ instanceId: expect.any(String) }],
+    });
+    await expect(host.getPluginStatus('project-b-session')).resolves.toMatchObject({ ok: true });
+    await expect(
+      host.callTool('list_instances', {}, { sessionId: 'project-b-session' }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: { instances: [{ instanceId: expect.any(String) }] },
+    });
+    const projectBInstance = actor.list('project-b-session')[0]!;
+    await expect(
+      host.setViewerVisibility(
+        'project-b-session',
+        {
+          instanceId: projectBInstance.instanceId,
+          generation: projectBInstance.generation,
+          leaseId: projectBInstance.lease.id,
+        },
+        false,
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    releaseDriverStop();
+
+    await expect(deactivation).resolves.toEqual({
+      hostCanBeReleased: false,
+      cleanedInstanceCount: 1,
+    });
+    expect(inspect).toHaveBeenCalled();
+    expect(actor.listAll().map((instance) => instance.sessionId)).toEqual(['project-b-session']);
+    await host.dispose();
+  });
+
+  it('completes a scoped cleanup once it has been admitted', async () => {
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(async () => READY_REPORT.devices[0]!),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    actor.attach({
+      sessionId: 'project-a-session',
+      worktreeRoot: '/repo/project-a',
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+      bootProvenance: 'preexisting',
+    });
+    let releaseDriverStop!: () => void;
+    const driverStopReleased = new Promise<void>((resolve) => {
+      releaseDriverStop = resolve;
+    });
+    let signalDriverStop!: () => void;
+    const driverStopStarted = new Promise<void>((resolve) => {
+      signalDriverStop = resolve;
+    });
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(),
+        stop: vi.fn(async () => {
+          signalDriverStop();
+          await driverStopReleased;
+        }),
+      },
+      getSession: vi.fn(async (id) => ({ ...localSession(id), workDir: '/repo/project-a' })),
+      mediaCapture: {
+        discardInstance: vi.fn(async () => undefined),
+        discardSession: vi.fn(async () => undefined),
+      } as unknown as IOSSimulatorMediaCaptureAdapter,
+    });
+
+    const deactivation = host.deactivate({ projectWorkingDirs: ['/repo/project-a'] });
+    await driverStopStarted;
+    releaseDriverStop();
+
+    await expect(deactivation).resolves.toEqual({
+      hostCanBeReleased: true,
+      cleanedInstanceCount: 1,
+    });
+    expect(actor.list('project-a-session')).toEqual([]);
+    expect(lifecycle.shutdownExact).not.toHaveBeenCalled();
+    expect(lifecycle.deleteExact).not.toHaveBeenCalled();
+    await host.dispose();
+  });
+
+  it('keeps an enabled project while default disable cleans disabled projects', async () => {
+    const projectBDevice = {
+      ...READY_REPORT.devices[0]!,
+      udid: '9A9D41E0-E031-4AD0-A8B5-847480802E8E',
+    };
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(
+        async (udid) =>
+          [READY_REPORT.devices[0]!, projectBDevice].find((device) => device.udid === udid) ?? null,
+      ),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    actor.attach({
+      sessionId: 'project-a-session',
+      worktreeRoot: '/repo/project-a',
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+      bootProvenance: 'preexisting',
+    });
+    actor.attach({
+      sessionId: 'project-b-session',
+      worktreeRoot: '/repo/project-b',
+      sourceFingerprint: 'fingerprint-b',
+      device: projectBDevice,
+      bootProvenance: 'preexisting',
+    });
+    const projectAInstanceId = actor.list('project-a-session')[0]!.instanceId;
+    let releaseProjectAStop!: () => void;
+    const projectAStopReleased = new Promise<void>((resolve) => {
+      releaseProjectAStop = resolve;
+    });
+    let signalProjectAStop!: () => void;
+    const projectAStopStarted = new Promise<void>((resolve) => {
+      signalProjectAStop = resolve;
+    });
+    const enabledProjects = new Set(['/repo/project-b']);
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(),
+        stop: vi.fn(async (instanceId: string) => {
+          if (instanceId !== projectAInstanceId) return;
+          signalProjectAStop();
+          await projectAStopReleased;
+        }),
+      },
+      getSession: vi.fn(async (id) => ({
+        ...localSession(id),
+        workDir: id === 'project-a-session' ? '/repo/project-a' : '/repo/project-b',
+      })),
+      mediaCapture: {
+        discardInstance: vi.fn(async () => undefined),
+        discardSession: vi.fn(async () => undefined),
+      } as unknown as IOSSimulatorMediaCaptureAdapter,
+    });
+
+    const deactivation = host.deactivate({
+      shouldReleaseProject: (workingDir) => !enabledProjects.has(workingDir),
+    });
+    await projectAStopStarted;
+    releaseProjectAStop();
+
+    await expect(deactivation).resolves.toEqual({
+      hostCanBeReleased: false,
+      cleanedInstanceCount: 1,
+    });
+    expect(actor.listAll().map((instance) => instance.sessionId)).toEqual(['project-b-session']);
+    await host.dispose();
+  });
+
+  it('shares an admitted policy cleanup with a racing permanent task removal', async () => {
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(async () => READY_REPORT.devices[0]!),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    actor.attach({
+      sessionId: 'removed-project-session',
+      worktreeRoot: '/repo/project-a',
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+      bootProvenance: 'preexisting',
+    });
+    let releaseDriverStop!: () => void;
+    const driverStopReleased = new Promise<void>((resolve) => {
+      releaseDriverStop = resolve;
+    });
+    let signalDriverStop!: () => void;
+    const driverStopStarted = new Promise<void>((resolve) => {
+      signalDriverStop = resolve;
+    });
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(),
+        stop: vi.fn(async () => {
+          signalDriverStop();
+          await driverStopReleased;
+        }),
+      },
+      getSession: vi.fn(async (id) => ({ ...localSession(id), workDir: '/repo/project-a' })),
+      mediaCapture: {
+        discardInstance: vi.fn(async () => undefined),
+        discardSession: vi.fn(async () => undefined),
+      } as unknown as IOSSimulatorMediaCaptureAdapter,
+    });
+
+    const deactivation = host.deactivate({ projectWorkingDirs: ['/repo/project-a'] });
+    await driverStopStarted;
+    const permanentRemoval = host.cleanupRemovedSession('removed-project-session');
+    releaseDriverStop();
+
+    await expect(permanentRemoval).resolves.toBeUndefined();
+    await expect(deactivation).resolves.toEqual({
+      hostCanBeReleased: true,
+      cleanedInstanceCount: 1,
+    });
+    expect(actor.listAll()).toEqual([]);
+    await host.dispose();
+  });
+
+  it('cancels a target create before its delayed task lookup can register an actor lifecycle', async () => {
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(async () => READY_REPORT.devices[0]!),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    let resolveSessionLookup!: (session: ReturnType<typeof localSession>) => void;
+    const sessionLookup = new Promise<ReturnType<typeof localSession>>((resolve) => {
+      resolveSessionLookup = resolve;
+    });
+    const inspect = vi.fn(async () => READY_REPORT);
+    const getSession = vi.fn(async () => sessionLookup);
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect },
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(),
+        stop: vi.fn(async () => undefined),
+      },
+      getSession,
+      mediaCapture: {
+        discardInstance: vi.fn(async () => undefined),
+        discardSession: vi.fn(async () => undefined),
+      } as unknown as IOSSimulatorMediaCaptureAdapter,
+    });
+
+    const create = host.callTool(
+      'create_instance',
+      { templateUdid: READY_REPORT.devices[0]!.udid, name: 'Delayed create' },
+      { sessionId: 'project-a-session' },
+    );
+    await vi.waitFor(() => expect(getSession).toHaveBeenCalledOnce());
+    const deactivation = host.deactivate({ projectWorkingDirs: ['/repo/project-a'] });
+    resolveSessionLookup({ ...localSession('project-a-session'), workDir: '/repo/project-a' });
+
+    await expect(create).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MUTATION_CANCELLED',
+    });
+    await expect(deactivation).resolves.toEqual({
+      hostCanBeReleased: true,
+      cleanedInstanceCount: 0,
+    });
+    expect(lifecycle.createExact).not.toHaveBeenCalled();
+    expect(actor.listAll()).toEqual([]);
+    await host.dispose();
+  });
+
+  it('keeps ownership when capability deactivation cleanup fails', async () => {
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(async () => READY_REPORT.devices[0]!),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore({ createId: () => crypto.randomUUID() }),
+      lifecycle,
+    });
+    actor.attach({
+      sessionId: 'cleanup-failure-session',
+      worktreeRoot: '/tmp/cleanup-failure',
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+      bootProvenance: 'preexisting',
+    });
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      driverManager: {
+        get: vi.fn(() => null),
+        start: vi.fn(),
+        stop: vi.fn(async () => {
+          throw new Error('driver cleanup failed');
+        }),
+      },
+      getSession: vi.fn(async (id) => localSession(id)),
+      mediaCapture: {
+        discardInstance: vi.fn(async () => undefined),
+        discardSession: vi.fn(async () => undefined),
+      } as unknown as IOSSimulatorMediaCaptureAdapter,
+    });
+
+    await expect(host.deactivate()).rejects.toMatchObject({ code: 'DEVICE_BUSY' });
+    expect(actor.listAll()).toHaveLength(1);
+    await expect(
+      host.callTool('list_instances', {}, { sessionId: 'cleanup-failure-session' }),
+    ).resolves.toMatchObject({ ok: true });
   });
 
   it('disposes WDA and recording resources on host shutdown without changing ownership', async () => {
@@ -4564,6 +5179,87 @@ describe('iOS Simulator host', () => {
     expect(driverManager.recoverNativeSidecar).toHaveBeenLastCalledWith(started.instanceId, {
       rearm: true,
     });
+  });
+
+  it('reports input detection only while Native is actually awaiting its capability probe', async () => {
+    const lifecycle: IOSSimulatorSimctlLifecycle = {
+      findExact: vi.fn(),
+      bootExact: vi.fn(),
+      shutdownExact: vi.fn(),
+      createExact: vi.fn(),
+      deleteExact: vi.fn(),
+    };
+    const actor = new IOSSimulatorInstanceActor({
+      store: new IOSSimulatorOwnershipStore(),
+      lifecycle,
+    });
+    const attached = actor.attach({
+      sessionId: 'session-a',
+      worktreeRoot: '/tmp/session-a',
+      sourceFingerprint: 'fingerprint-a',
+      device: READY_REPORT.devices[0]!,
+    });
+    const started = await actor.start({
+      sessionId: 'session-a',
+      instanceId: attached.instanceId,
+      generation: attached.generation,
+      leaseId: attached.lease.id,
+    });
+    const nativeAdmission = evaluateIOSSimulatorNativeCapabilityAdmission({
+      policy: createIOSSimulatorNativeDevelopmentAdmissionPolicy({
+        enableContinuousInput: true,
+      }),
+      processState: 'idle',
+      now: () => new Date('2026-08-12T00:00:00.000Z'),
+    });
+    const running = {
+      instanceId: started.instanceId,
+      simulatorUdid: started.simulatorUdid,
+      pid: 42,
+      driver: {},
+      driverRouter: {
+        capabilityReport: vi.fn(() => ({
+          nativeSidecar: { available: false, admission: nativeAdmission },
+          routes: {
+            continuousInput: {
+              selected: 'wda',
+              fallback: true,
+              reason: 'Native capability is awaiting the sidecar handshake.',
+            },
+            stream: {},
+          },
+        })),
+      },
+      driverSessionId: 'wda-session',
+    } as unknown as WdaRunningInstance;
+    const host = createIOSSimulatorHost({
+      actor,
+      lifecycle,
+      driverManager: {
+        get: vi.fn(() => running),
+        start: vi.fn(),
+        stop: vi.fn(async () => undefined),
+      },
+      runtime: { inspect: vi.fn(async () => READY_REPORT) },
+      getSession: vi.fn(async (id) => localSession(id)),
+    });
+
+    const status = await host.getStatus('session-a');
+    expect(status).toMatchObject({
+      ok: true,
+      routeStatuses: [
+        {
+          instanceId: started.instanceId,
+          input: {
+            adapter: 'wda',
+            state: 'detecting',
+            continuous: false,
+            reasonCode: 'native-probe-pending',
+          },
+        },
+      ],
+    });
+    await host.dispose();
   });
 
   it('stops the embedded viewer when the exact external simulator is shut down', async () => {
@@ -8207,6 +8903,63 @@ describe('iOS Simulator host', () => {
     ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_ARGUMENT' });
   });
 
+  itMac.each([
+    ['Host dispose', 'dispose'],
+    ['the final registry flush', 'final-flush'],
+  ] as const)(
+    'releases an idle default Host after %s fails and allows reinitialization',
+    async (_failure, failurePoint) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-ios-host-idle-release-failure-'));
+      const registryPath = path.join(root, 'ios-simulator', 'ownership-registry.json');
+      const getPath = vi.spyOn(app, 'getPath').mockReturnValue(root);
+      const competingRegistry = new IOSSimulatorOwnershipRegistryFile(registryPath);
+      const host = initializeIOSSimulatorHost();
+      const dispose =
+        failurePoint === 'dispose'
+          ? vi.spyOn(host, 'dispose').mockRejectedValueOnce(new Error('dispose failed'))
+          : null;
+      const save = vi.spyOn(IOSSimulatorOwnershipRegistryFile.prototype, 'saveSync');
+      if (failurePoint === 'final-flush') {
+        save
+          .mockImplementationOnce(() => undefined)
+          .mockImplementationOnce(() => {
+            throw new Error('final flush failed');
+          });
+      }
+
+      try {
+        await expect(
+          deactivateIOSSimulatorHost({
+            projectWorkingDirs: ['/repo/disabled-project'],
+            allowHostRelease: true,
+            shouldReleaseHost: () => true,
+          }),
+        ).resolves.toEqual({ hostReleased: true, cleanedInstanceCount: 0 });
+
+        expect(competingRegistry.acquireWriterSync()).toBe(true);
+        competingRegistry.releaseWriterSync();
+        const replacementHost = initializeIOSSimulatorHost();
+        expect(replacementHost).not.toBe(host);
+
+        save.mockRestore();
+        dispose?.mockRestore();
+        await expect(
+          deactivateIOSSimulatorHost({
+            projectWorkingDirs: ['/repo/replacement-project'],
+            allowHostRelease: true,
+            shouldReleaseHost: () => true,
+          }),
+        ).resolves.toEqual({ hostReleased: true, cleanedInstanceCount: 0 });
+      } finally {
+        save.mockRestore();
+        dispose?.mockRestore();
+        competingRegistry.releaseWriterSync();
+        getPath.mockRestore();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   itMac(
     'retries persisted removed-task cleanup after another registry writer releases its lease',
     async () => {
@@ -8276,6 +9029,17 @@ describe('iOS Simulator host', () => {
           instances: unknown[];
         };
         expect(persisted.instances).toEqual([]);
+
+        const retainedHost = initializeIOSSimulatorHost();
+        await expect(
+          deactivateIOSSimulatorHost({
+            projectWorkingDirs: ['/repo/enabled-without-binding'],
+            allowHostRelease: true,
+            shouldReleaseHost: () => false,
+          }),
+        ).resolves.toEqual({ hostReleased: false, cleanedInstanceCount: 0 });
+        expect(initializeIOSSimulatorHost()).toBe(retainedHost);
+        expect(writerLeaseHeld).toBe(true);
       } finally {
         await disposeIOSSimulatorHost();
         expect(writerLeaseHeld).toBe(false);

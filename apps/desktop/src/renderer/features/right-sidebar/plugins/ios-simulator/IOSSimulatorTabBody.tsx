@@ -527,6 +527,14 @@ export function IOSSimulatorTabBody({
   const viewerInteractive = Boolean(
     viewerVisible && streamState === 'streaming' && presentationMatchesRoute && frameFresh && !busy,
   );
+  // WDA is the stable compatibility input route.  Pointer gestures still use
+  // the same tap/swipe fallback path, but must not first send a live native
+  // touch that is guaranteed to fail with NATIVE_INPUT_UNAVAILABLE.
+  const nativeContinuousInputActive = Boolean(
+    routeStatus?.input.adapter === 'native-sidecar' &&
+    routeStatus.input.continuous &&
+    routeStatus.input.state === 'active',
+  );
   const streamRouteLabel =
     routeStatus?.stream.adapter === 'native-sidecar' && routeStatus.stream.encoding === 'h264'
       ? t('rightSidebar.iosSimulator.route.nativeH264')
@@ -541,10 +549,10 @@ export function IOSSimulatorTabBody({
         : t('rightSidebar.iosSimulator.route.hidden');
   const streamRouteStateLabel = routeStatus
     ? t(`rightSidebar.iosSimulator.route.state.${routeStatus.stream.state}`)
-    : t('rightSidebar.iosSimulator.route.state.detecting');
+    : t('rightSidebar.iosSimulator.route.state.unavailable');
   const inputRouteStateLabel = routeStatus
     ? t(`rightSidebar.iosSimulator.route.state.${routeStatus.input.state}`)
-    : t('rightSidebar.iosSimulator.route.state.detecting');
+    : t('rightSidebar.iosSimulator.route.state.unavailable');
   const formatActionError = useCallback(
     (result: Extract<IOSSimulatorToolResponse, { ok: false }>) =>
       t(actionErrorI18nKey(result.errorCode), {
@@ -1450,13 +1458,19 @@ export function IOSSimulatorTabBody({
         idleTimer: null,
         tail: Promise.resolve(),
       };
-      gesture.tail = invokeLiveTouch(gesture, 'begin', point)
-        .then(() => {
-          gesture.beginAcknowledged = true;
-        })
-        .catch(() => {
-          gesture.failed = true;
-        });
+      if (nativeContinuousInputActive) {
+        gesture.tail = invokeLiveTouch(gesture, 'begin', point)
+          .then(() => {
+            gesture.beginAcknowledged = true;
+          })
+          .catch(() => {
+            gesture.failed = true;
+          });
+      } else {
+        // Keep the gesture locally so pointer-up can classify it as tap or
+        // swipe, while routing the actual action straight through WDA.
+        gesture.failed = true;
+      }
       pointerGestureRef.current = gesture;
       beginInteractiveFrameRate();
       armPointerGestureWatchdog(gesture);
@@ -1467,6 +1481,7 @@ export function IOSSimulatorTabBody({
       attachedInstance,
       beginInteractiveFrameRate,
       invokeLiveTouch,
+      nativeContinuousInputActive,
       pointerRatio,
       viewerInteractive,
     ],
