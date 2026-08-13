@@ -141,10 +141,11 @@ export function UnifiedModelRow({
           withMargin={false}
         />
         <span
-          // 超长模型名先撑宽面板、到上限才截断(规格 §1.2);截断后靠 title 给全名。
+          // 设计稿 .m-name:内容宽、不 grow —— 徽标/钱串紧贴模型名左排,
+          // 右侧三元组由 ml-auto 推到最右;空间不足时名字先收缩截断,title 给全名。
           title={entry.displayName}
           className={cn(
-            'min-w-0 flex-1 truncate text-13 leading-5 text-[var(--model-item-text)]',
+            'min-w-0 truncate text-13 leading-5 text-[var(--model-item-text)]',
             selected ? 'font-medium' : 'font-normal',
           )}
         >
@@ -256,12 +257,13 @@ export function UnifiedModelRow({
         >
           <Star size={14} fill={isFavoriteRow || justFavorited ? 'currentColor' : 'none'} />
         </button>
-        {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。 */}
+        {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。
+            设计稿 .l1-right:margin-left auto 把右侧簇推到最右,左侧簇贴名字排。 */}
         <span
           title={tripleTitle}
           data-unified-triple
           className={cn(
-            'flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12',
+            'ml-auto flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12',
             emphasizeTriple ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
           )}
         >
