@@ -458,6 +458,114 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     await handle.close();
   });
 
+  it('keeps Auto active until a Full access SDK switch succeeds', async () => {
+    let resolveReview: ((value: { verdict: 'block'; reason: string }) => void) | undefined;
+    let rejectPermissionMode: ((reason?: unknown) => void) | undefined;
+    const reviewer = vi.fn(() => new Promise<{ verdict: 'block'; reason: string }>((resolve) => {
+      resolveReview = resolve;
+    }));
+    const { handle, canUseTool, fakeQuery, seen } = await startSession('auto', { reviewer });
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => { rejectPermissionMode = reject; }),
+    );
+
+    const pending = canUseTool(
+      'Write',
+      { file_path: '/tmp/rpc-failed-full-access.conf' },
+      { toolUseID: 'rpc-failed-full-access' },
+    );
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+
+    const modeChange = handle.setPermissionMode!('bypassPermissions');
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    resolveReview!({ verdict: 'block', reason: 'reviewed' });
+
+    await expect(pending).resolves.toMatchObject({ behavior: 'deny', message: 'reviewed' });
+    expect(permissionRequests(seen)).toHaveLength(0);
+
+    rejectPermissionMode!(new Error('permission transport failed'));
+    await expect(modeChange).rejects.toThrow('permission transport failed');
+    await handle.close();
+  });
+
+  it('serializes a superseding Ask after an in-flight Full access SDK switch', async () => {
+    let releaseFullAccess: (() => void) | undefined;
+    const reviewer = vi.fn(async () => ({ verdict: 'block' as const, reason: 'reviewed' }));
+    const { handle, canUseTool, fakeQuery, seen } = await startSession('auto', { reviewer });
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseFullAccess = resolve; }),
+    );
+
+    const widening = handle.setPermissionMode!('bypassPermissions');
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    const tightening = handle.setPermissionMode!('ask');
+    await Promise.resolve();
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalledWith('default');
+
+    releaseFullAccess!();
+    await Promise.all([widening, tightening]);
+    expect(fakeQuery.setPermissionMode.mock.calls.map(([mode]) => mode)).toEqual([
+      'bypassPermissions',
+      'default',
+    ]);
+
+    const pending = canUseTool(
+      'Write',
+      { file_path: '/tmp/superseded-full-access.conf' },
+      { toolUseID: 'superseded-full-access' },
+    );
+    await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
+    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(reviewer).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('continues a queued Ask SDK switch after an earlier Full access RPC fails', async () => {
+    let rejectFullAccess: ((reason?: unknown) => void) | undefined;
+    const { handle, fakeQuery } = await startSession('auto');
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => { rejectFullAccess = reject; }),
+    );
+
+    const widening = handle.setPermissionMode!('bypassPermissions');
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    const tightening = handle.setPermissionMode!('ask');
+
+    rejectFullAccess!(new Error('permission transport failed'));
+    await expect(widening).rejects.toThrow('permission transport failed');
+    await expect(tightening).resolves.toBeUndefined();
+    expect(fakeQuery.setPermissionMode.mock.calls.map(([mode]) => mode)).toEqual([
+      'bypassPermissions',
+      'default',
+    ]);
+    await handle.close();
+  });
+
+  it('does not publish Full access from a Query retired while its SDK RPC was pending', async () => {
+    let releaseFullAccess: (() => void) | undefined;
+    const reviewer = vi.fn(async () => ({ verdict: 'block' as const, reason: 'reviewed' }));
+    const { handle, canUseTool, fakeQuery, seen } = await startSession('auto', { reviewer });
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseFullAccess = resolve; }),
+    );
+
+    const modeChange = handle.setPermissionMode!('bypassPermissions');
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    await handle.commitRewindFiles?.('user-uuid', 'assistant-uuid');
+
+    releaseFullAccess!();
+    await expect(modeChange).rejects.toThrow('Claude Query changed before Full access was confirmed');
+
+    const pending = canUseTool(
+      'Write',
+      { file_path: '/tmp/retired-query-full-access.conf' },
+      { toolUseID: 'retired-query-full-access' },
+    );
+    await expect(pending).resolves.toMatchObject({ behavior: 'deny', message: 'reviewed' });
+    expect(permissionRequests(seen)).toHaveLength(0);
+    await handle.close();
+  });
+
   it('reviewer allow → proceeds silently without hitting the resolver', async () => {
     const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
       reviewVerdict: 'allow',

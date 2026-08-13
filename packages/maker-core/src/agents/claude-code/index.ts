@@ -2147,9 +2147,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       : null;
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode = reviewMode ? 'ask' : opts.permissionMode ?? 'default';
-    // 权限档切换先更新本地事实源，再等待 SDK 控制 RPC。异步 reviewer 可能在 RPC
-    // 返回前完成；若继续保留旧值，旧 Auto 裁决会绕过用户刚选的 Ask/Full 档位。
-    // 代次用于在并发切档时只回滚仍然属于当前写入的失败，不覆盖更新的用户意图。
+    // 收紧权限时先更新本地事实源，让异步 reviewer 立即看到 Ask 等新约束；切到
+    // Full access 则必须等 SDK 控制 RPC 成功后才发布，避免失败的放宽请求先行放过工具。
+    // 代次用于阻止较早 RPC 的迟到结果覆盖更新的用户意图。
     let permissionModeWriteGeneration = 0;
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
     // "武装"态 —— send 消耗它并立即 emit plan_mode_changed(false) 让勾选熄灭;
@@ -2187,12 +2187,28 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (mode === 'auto') nativeAutoQueries.add(query);
       else nativeAutoQueries.delete(query);
     };
+    // SDK 权限控制请求按 Query 串行提交。否则较早的 Full access RPC 若比后来的
+    // Ask/Auto 更晚完成，会把 SDK 最终档位反向覆盖回 bypassPermissions；本地的
+    // generation guard 只能阻止状态发布，无法撤销已乱序落到 SDK 的控制请求。
+    // 按 Query 分链，避免已退役 Query 的慢请求阻塞 replacement Query。
+    const queryPermissionModeWriteChains = new WeakMap<Query, Promise<void>>();
     const setQuerySdkPermissionMode = async (
       query: Query,
       mode: SdkPermissionMode,
     ): Promise<void> => {
-      await query.setPermissionMode(mode);
-      recordQuerySdkPermissionMode(query, mode);
+      const previousWrite = queryPermissionModeWriteChains.get(query) ?? Promise.resolve();
+      const operation = previousWrite.catch(() => undefined).then(async () => {
+        await query.setPermissionMode(mode);
+        recordQuerySdkPermissionMode(query, mode);
+      });
+      queryPermissionModeWriteChains.set(
+        query,
+        operation.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      await operation;
     };
 
     /**
@@ -5979,13 +5995,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (modeChanged) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
-          // 先发布逻辑档位，避免下面的异步 SDK RPC 期间 reviewer 读取到旧值。
-          mutablePermissionMode = newMode;
         }
-        // 计划模式武装中 / 本轮 plan turn 进行中 SDK 恒在 plan 档: 只记录底层权限档
-        // (循环收尾切回时生效), 不 push SDK、不动挂起交互(挂着的多半是 plan_review)。
-        if (mutablePlanMode || planTurnActive) {
+        // SDK 当前确实处于 plan 档时只记录底层权限档(循环收尾切回时生效)，不 push
+        // SDK、不动挂起交互(挂着的多半是 plan_review)。若 Plan 只是在当前普通 turn
+        // 中为下一轮武装，sdkInPlanMode 仍为 false，权限切换必须照常作用于当前 Query。
+        if (planTurnActive || sdkInPlanMode) {
           log.debug('setPermissionMode (deferred, plan mode active)', { from: previousPermissionMode, to: newMode });
+          mutablePermissionMode = newMode;
           return;
         }
         // 老 agentManager.ts:1850-1893 的"切到更宽松 mode 时挂着的 ask 自动 allow,
@@ -5995,19 +6011,37 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 否则等于把待确认的越界动作橡皮图章掉。只有 bypassPermissions(Full access)才是
         // 真"全开"。与 Codex 侧 #767"切档时挂起请求统一拒绝"对称。
         const moreOpen = newMode === 'bypassPermissions';
-        dismissAllPending(`permission_mode_changed_to_${newMode}`, moreOpen ? 'allow' : 'deny');
         // SDK PermissionMode union 没有 'ask' (我们对 ChatInput 暴露的统一名字),
         // SDK 侧把 ask 当 default —— 与 startSession 的处理一致。
         const sdkMode = toSdkPermissionMode(newMode);
         const isControlBlocked = controlRequestsBlocked();
-        log.debug('setPermissionMode', { from: previousPermissionMode, to: newMode, sdk: sdkMode, dismissedAs: moreOpen ? 'allow' : 'deny', controlRequestsBlocked: isControlBlocked });
-        if (!isControlBlocked) {
+        // Full access 是唯一会让审批逻辑无条件放行的档位。当前 Query 可写时，必须等
+        // SDK 明确应用成功后，才能把它发布为实时档位并批量允许挂起审批。其余档位
+        // 保持 fail-closed：先让 reviewer 看到新约束，并立即拒绝旧的挂起请求。
+        const publishAfterSdk = modeChanged && moreOpen && !isControlBlocked;
+        if (modeChanged && !publishAfterSdk) {
+          mutablePermissionMode = newMode;
+        }
+        if (!publishAfterSdk) {
+          dismissAllPending(`permission_mode_changed_to_${newMode}`, moreOpen ? 'allow' : 'deny');
+        }
+        log.debug('setPermissionMode', {
+          from: previousPermissionMode,
+          to: newMode,
+          sdk: sdkMode,
+          dismissedAs: publishAfterSdk ? 'allow_after_sdk' : moreOpen ? 'allow' : 'deny',
+          controlRequestsBlocked: isControlBlocked,
+        });
+        const permissionModeQuery = isControlBlocked ? null : q;
+        if (permissionModeQuery) {
           try {
-            await setQuerySdkPermissionMode(q, sdkMode);
+            await setQuerySdkPermissionMode(permissionModeQuery, sdkMode);
           } catch (error) {
-            // SDK 控制 RPC 失败时恢复旧事实源，但不能覆盖更晚的切档请求。
+            // 先发布的收紧档位在 RPC 失败时恢复旧事实源，但不能覆盖更晚的切档请求。
+            // Full access 尚未发布，不需要回滚。
             if (
               modeChanged
+              && !publishAfterSdk
               && permissionModeWriteGeneration === writeGeneration
               && mutablePermissionMode === newMode
             ) {
@@ -6015,6 +6049,21 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
             throw error;
           }
+        }
+        // 较新的请求已经接管事实源时，旧 RPC 即使迟到成功也不能再发布状态或处理审批。
+        if (permissionModeWriteGeneration !== writeGeneration) return;
+        // Full access 只能由仍在服役的同一个 Query 确认。RPC 等待期间若 rewind / resume
+        // 恢复已让当前 Query 进入替换窗口，旧 Query 的成功响应不能证明新 Query 已放宽。
+        if (
+          publishAfterSdk
+          && permissionModeQuery
+          && (q !== permissionModeQuery || controlRequestsBlocked())
+        ) {
+          throw new Error('Claude Query changed before Full access was confirmed');
+        }
+        if (publishAfterSdk) {
+          mutablePermissionMode = newMode;
+          dismissAllPending(`permission_mode_changed_to_${newMode}`, 'allow');
         }
       },
 

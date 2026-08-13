@@ -257,6 +257,7 @@ async function startSession(
     agent,
     handle,
     canUseTool: queryOptions.canUseTool,
+    fakeQuery,
     hooks: queryOptions.hooks,
     seen,
     workingDir,
@@ -841,6 +842,56 @@ describe('prompt-each-time never turns into a persisted grant', () => {
 
     expect((await pending).behavior).toBe('allow');
     await handle.close();
+  });
+
+  it('waits for the Full access SDK switch before allowing pending prompts', async () => {
+    let releasePermissionMode: (() => void) | undefined;
+    const { handle, canUseTool, fakeQuery, seen } = await startSession(() => 'prompt', {
+      decide: () => undefined,
+    });
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releasePermissionMode = resolve; }),
+    );
+
+    const pending = canUseTool('mcp__cindy_ssh__call_tool', { name: 'ssh_exec' }, {
+      toolUseID: 't-pending-after-sdk',
+    });
+    await vi.waitFor(() => expect(permissionRequests(seen)).toHaveLength(1));
+
+    let pendingSettled = false;
+    void pending.finally(() => { pendingSettled = true; });
+    const modeChange = handle.setPermissionMode!('bypassPermissions');
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    await Promise.resolve();
+    expect(pendingSettled).toBe(false);
+
+    releasePermissionMode!();
+    await modeChange;
+    await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
+    await handle.close();
+  });
+
+  it('does not allow pending prompts when the Full access SDK switch fails', async () => {
+    const { handle, canUseTool, fakeQuery, seen } = await startSession(() => 'prompt', {
+      decide: () => undefined,
+    });
+    fakeQuery.setPermissionMode.mockRejectedValueOnce(new Error('permission transport failed'));
+
+    const pending = canUseTool('mcp__cindy_ssh__call_tool', { name: 'ssh_exec' }, {
+      toolUseID: 't-pending-failed-sdk',
+    });
+    await vi.waitFor(() => expect(permissionRequests(seen)).toHaveLength(1));
+
+    let pendingSettled = false;
+    void pending.finally(() => { pendingSettled = true; });
+    await expect(handle.setPermissionMode!('bypassPermissions')).rejects.toThrow(
+      'permission transport failed',
+    );
+    await Promise.resolve();
+    expect(pendingSettled).toBe(false);
+
+    await handle.close();
+    await expect(pending).resolves.toMatchObject({ behavior: 'deny' });
   });
 });
 
