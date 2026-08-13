@@ -4,7 +4,10 @@ import { resolve } from 'node:path';
 import { parseGetPluginResponse } from '@cindy/plugin-protocol';
 import { describe, expect, it } from 'vitest';
 
-import { isPluginManifestIncompatibilityError } from '../protocolErrors';
+import {
+  isPluginHostUnsupportedError,
+  isPluginManifestIncompatibilityError,
+} from '../protocolErrors';
 
 function parserError(parse: () => unknown): unknown {
   try {
@@ -15,7 +18,10 @@ function parserError(parse: () => unknown): unknown {
   throw new Error('Expected the protocol parser to reject the response');
 }
 
-function invalidManifestResponse(schemaVersion = 2): Record<string, unknown> {
+function invalidManifestResponse(
+  schemaVersion = 2,
+  manifestOverrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     schemaVersion,
     plugin: {
@@ -42,6 +48,7 @@ function invalidManifestResponse(schemaVersion = 2): Record<string, unknown> {
           entry: 'index.js',
           slots: ['tool'],
           tools: 'not an array',
+          ...manifestOverrides,
         },
       },
     },
@@ -110,6 +117,20 @@ describe('Plugin Market IPC error boundary', () => {
     expect(isPluginManifestIncompatibilityError(manifestError)).toBe(true);
     expect(isPluginManifestIncompatibilityError(schemaError)).toBe(false);
     expect(isPluginManifestIncompatibilityError(new Error('network failed'))).toBe(false);
+  });
+
+  it('preserves future manifest schema and capability errors as host incompatibilities', () => {
+    const futureSchemaError = parserError(() =>
+      parseGetPluginResponse(invalidManifestResponse(2, { schemaVersion: 99 })),
+    );
+    const unknownSlotError = parserError(() =>
+      parseGetPluginResponse(invalidManifestResponse(2, { slots: ['future-capability'] })),
+    );
+
+    expect(isPluginHostUnsupportedError(futureSchemaError)).toBe(true);
+    expect(isPluginHostUnsupportedError(unknownSlotError)).toBe(true);
+    expect(isPluginManifestIncompatibilityError(futureSchemaError)).toBe(false);
+    expect(isPluginManifestIncompatibilityError(unknownSlotError)).toBe(false);
   });
 
   it('guards removal notice consumption and signals trusted app windows only', () => {
