@@ -35,6 +35,7 @@ vi.mock('../../client/current', () => ({
 }));
 
 import { createDrizzleProxy } from '../../client/drizzleProxy';
+import { tx as runDbTx } from '../../worker/opHandlers/tx';
 import { upsertRecentWorkdir } from '../recentWorkdirs';
 
 function createTransport(): DbTransport {
@@ -75,37 +76,7 @@ beforeEach(() => {
   h.warns = [];
   h.client = {
     drizzle: createDrizzleProxy(() => createTransport()),
-    tx: async (name: string, args: unknown) => {
-      if (name !== 'recentWorkdirs.mergeWindowsIdentity') throw new Error(`unexpected tx: ${name}`);
-      const input = args as { path: string; lastUsedAt: number };
-      return h.sqlite!.transaction(() => {
-        h.sqlite!.prepare(
-          `INSERT INTO recent_workdirs (path, last_used_at)
-             SELECT COALESCE(
-                      (SELECT path FROM recent_workdirs
-                       WHERE LOWER(path) = LOWER(?)
-                       ORDER BY last_used_at DESC, rowid ASC LIMIT 1),
-                      ?
-                    ),
-                    MAX(?, COALESCE(MAX(last_used_at), 0))
-             FROM recent_workdirs
-             WHERE LOWER(path) = LOWER(?)
-             ON CONFLICT(path) DO UPDATE SET
-               last_used_at = MAX(recent_workdirs.last_used_at, excluded.last_used_at)`,
-        ).run(input.path, input.path, input.lastUsedAt, input.path);
-        h.sqlite!
-          .prepare(
-            `DELETE FROM recent_workdirs
-             WHERE LOWER(path) = LOWER(?)
-               AND path != (
-                 SELECT path FROM recent_workdirs
-                 WHERE LOWER(path) = LOWER(?)
-                 ORDER BY last_used_at DESC, rowid ASC LIMIT 1
-               )`,
-          )
-          .run(input.path, input.path);
-      })();
-    },
+    tx: async (name: string, args: unknown) => runDbTx(h.sqlite!, { name, args }),
   };
 });
 
@@ -144,6 +115,13 @@ describe('upsertRecentWorkdir retention', () => {
       { path: '//Server/Share/Project-B', last_used_at: 5_000 },
       { path: 'D:/Work/Project-A', last_used_at: 3_000 },
     ]);
+  });
+
+  it('deduplicates non-ASCII Windows casing with JavaScript comparison identity', async () => {
+    await upsertRecentWorkdir('D:/École/Project-A', 3_000, 'win32');
+    await upsertRecentWorkdir('d:/école/project-a', 4_000, 'win32');
+
+    expect(rows()).toEqual([{ path: 'D:/École/Project-A', last_used_at: 4_000 }]);
   });
 
   it('keeps POSIX path casing distinct', async () => {

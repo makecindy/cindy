@@ -82,4 +82,27 @@ describe('collapsed project owner state', () => {
     expect(window.localStorage.getItem(ownerAKey)).toBe(ownerAValue);
     expect(window.localStorage.getItem(ownerBKey)).toBe('{}');
   });
+
+  it('keeps and expands a stored Windows collapse entry through live casing changes', () => {
+    const storedProject = 'local:D:/École/Project-A';
+    const liveProject = 'local:d:/école/project-a';
+    const ownerKey = sidebarOwnerStorageKey(STORAGE_KEY, 'owner-a');
+    window.localStorage.setItem(
+      ownerKey,
+      JSON.stringify({
+        [storedProject]: {
+          collapsed: true,
+          lastSeenAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(),
+        },
+      }),
+    );
+
+    const hook = renderHook(() => useCollapsedProjects([liveProject], 'owner-a', 'win32'));
+    expect(hook.result.current.collapsed).toEqual(new Set([storedProject]));
+    expect(hook.result.current.isAllCollapsed).toBe(true);
+
+    act(() => hook.result.current.expand(liveProject));
+    expect(hook.result.current.collapsed.size).toBe(0);
+    expect(window.localStorage.getItem(ownerKey)).toBe('{}');
+  });
 });

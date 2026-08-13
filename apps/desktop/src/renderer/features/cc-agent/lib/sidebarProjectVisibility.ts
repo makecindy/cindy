@@ -63,6 +63,21 @@ export function projectKeyComparisonSetHas(
   return comparisonKey != null && comparisonKeys.has(comparisonKey);
 }
 
+/** Resolve an external/deep-link key to the exact representative rendered in the sidebar. */
+export function findProjectRepresentativeKey(
+  projects: readonly Pick<ProjectNode, 'projectKey'>[],
+  projectKey: string,
+  localPlatform: string,
+): string | null {
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  if (comparisonKey == null) return null;
+  return (
+    projects.find(
+      (project) => projectKeyComparisonKey(project.projectKey, localPlatform) === comparisonKey,
+    )?.projectKey ?? null
+  );
+}
+
 /** Session-level project selectors must use the same comparison identity as project nodes. */
 export function isSessionInProjectComparisonSet(
   session: SidebarProjectSession,

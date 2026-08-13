@@ -68,6 +68,20 @@ describe('sidebar project sorting', () => {
     expect(sorted.map((p) => p.workingDir)).toEqual(['/p/gamma', '/p/alpha', '/p/beta']);
   });
 
+  it('applies a stored Windows manual order to representatives with different casing', () => {
+    const sorted = sortProjectsForSidebar(
+      [
+        project({ workingDir: 'd:/école/alpha', displayName: 'alpha' }),
+        project({ workingDir: 'd:/école/beta', displayName: 'beta' }),
+      ],
+      'manual',
+      ['local:D:/École/BETA', 'local:D:/École/ALPHA'],
+      'win32',
+    );
+
+    expect(sorted.map((p) => p.workingDir)).toEqual(['d:/école/beta', 'd:/école/alpha']);
+  });
+
   it('sorts projects alphabetically by display name', () => {
     const sorted = sortProjectsForSidebar(
       [

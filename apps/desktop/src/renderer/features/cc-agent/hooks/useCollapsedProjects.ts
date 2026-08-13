@@ -16,7 +16,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createLogger } from '@/lib/logger';
 import { readSidebarOwnerStorage, writeSidebarOwnerStorage } from '@/lib/sidebarOwnerStorage';
-import { normalizeProjectKey } from '../lib/projectGrouping';
+import { normalizeProjectKey, projectKeyComparisonKey } from '../lib/projectGrouping';
 
 const log = createLogger('UseCollapsedProjects');
 
@@ -33,6 +33,21 @@ interface StoredEntry {
 
 type Stored = Record<string, StoredEntry>;
 
+function storedProjectKeyForIdentity(
+  stored: Stored,
+  projectKeyOrWorkingDir: string,
+  localPlatform: string,
+): string | null {
+  const projectKey = normalizeProjectKey(projectKeyOrWorkingDir);
+  if (!projectKey) return null;
+  const identity = projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey;
+  return (
+    Object.keys(stored).find(
+      (storedKey) => (projectKeyComparisonKey(storedKey, localPlatform) ?? storedKey) === identity,
+    ) ?? null
+  );
+}
+
 interface UseCollapsedProjectsReturn {
   collapsed: Set<string>;
   toggle: (projectKeyOrWorkingDir: string) => void;
@@ -44,7 +59,7 @@ interface UseCollapsedProjectsReturn {
   isAllCollapsed: boolean;
 }
 
-function loadFromStorage(ownerId: string | null): Stored {
+function loadFromStorage(ownerId: string | null, localPlatform: string): Stored {
   try {
     const raw = readSidebarOwnerStorage(STORAGE_KEY, ownerId);
     if (!raw) return {};
@@ -58,7 +73,15 @@ function loadFromStorage(ownerId: string | null): Stored {
           if (entry.collapsed === true && typeof entry.lastSeenAt === 'string') {
             const projectKey = normalizeProjectKey(k);
             if (projectKey) {
-              out[projectKey] = { collapsed: true, lastSeenAt: entry.lastSeenAt };
+              const storedKey = storedProjectKeyForIdentity(out, projectKey, localPlatform);
+              if (storedKey == null) {
+                out[projectKey] = { collapsed: true, lastSeenAt: entry.lastSeenAt };
+              } else if (
+                new Date(entry.lastSeenAt).getTime() >
+                new Date(out[storedKey]!.lastSeenAt).getTime()
+              ) {
+                out[storedKey] = { collapsed: true, lastSeenAt: entry.lastSeenAt };
+              }
             }
           }
         }
@@ -82,8 +105,9 @@ function writeToStorage(next: Stored, ownerId: string | null): void {
 export function useCollapsedProjects(
   activeWorkingDirs: readonly string[],
   ownerId: string | null,
+  localPlatform: string = '',
 ): UseCollapsedProjectsReturn {
-  const [stored, setStored] = useState<Stored>(() => loadFromStorage(ownerId));
+  const [stored, setStored] = useState<Stored>(() => loadFromStorage(ownerId, localPlatform));
   const loadedOwnerRef = useRef(ownerId);
   const currentOwnerRef = useRef(ownerId);
   currentOwnerRef.current = ownerId;
@@ -109,9 +133,13 @@ export function useCollapsedProjects(
   // active 集合的条目。layout effect 避免把上一个 owner 的折叠态绘制一帧。
   useLayoutEffect(() => {
     const cutoff = Date.now() - GC_MS;
-    const activeSet = new Set(activeDirsRef.current);
+    const activeSet = new Set(
+      activeDirsRef.current.map(
+        (projectKey) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
+      ),
+    );
     const ownerChanged = loadedOwnerRef.current !== ownerId;
-    const ownerStored = ownerChanged ? loadFromStorage(ownerId) : null;
+    const ownerStored = ownerChanged ? loadFromStorage(ownerId, localPlatform) : null;
     loadedOwnerRef.current = ownerId;
     setStored((prev) => {
       const source = ownerStored ?? prev;
@@ -120,7 +148,8 @@ export function useCollapsedProjects(
       for (const [dir, entry] of Object.entries(source)) {
         const lastSeen = new Date(entry.lastSeenAt).getTime();
         const fresh = Number.isFinite(lastSeen) && lastSeen >= cutoff;
-        if (fresh || activeSet.has(dir)) {
+        const identity = projectKeyComparisonKey(dir, localPlatform) ?? dir;
+        if (fresh || activeSet.has(identity)) {
           next[dir] = entry;
         } else {
           changed = true;
@@ -132,7 +161,7 @@ export function useCollapsedProjects(
       }
       return source;
     });
-  }, [ownerId]);
+  }, [localPlatform, ownerId]);
 
   const collapsed = useMemo(() => new Set(Object.keys(stored)), [stored]);
 
@@ -143,8 +172,9 @@ export function useCollapsedProjects(
       if (!projectKey) return;
       updateForOwner((prev, writeOwnerId) => {
         const next: Stored = { ...prev };
-        if (next[projectKey]) {
-          delete next[projectKey];
+        const storedKey = storedProjectKeyForIdentity(next, projectKey, localPlatform);
+        if (storedKey != null) {
+          delete next[storedKey];
         } else {
           next[projectKey] = { collapsed: true, lastSeenAt: new Date().toISOString() };
         }
@@ -152,7 +182,7 @@ export function useCollapsedProjects(
         return next;
       });
     },
-    [updateForOwner],
+    [localPlatform, updateForOwner],
   );
 
   // 幂等展开：仅当目标目录当前在折叠集中时才写入，避免无意义的 setState/写盘。
@@ -161,14 +191,15 @@ export function useCollapsedProjects(
       const projectKey = normalizeProjectKey(projectKeyOrWorkingDir);
       if (!projectKey) return;
       updateForOwner((prev, writeOwnerId) => {
-        if (!prev[projectKey]) return prev;
+        const storedKey = storedProjectKeyForIdentity(prev, projectKey, localPlatform);
+        if (storedKey == null) return prev;
         const next: Stored = { ...prev };
-        delete next[projectKey];
+        delete next[storedKey];
         writeToStorage(next, writeOwnerId);
         return next;
       });
     },
-    [updateForOwner],
+    [localPlatform, updateForOwner],
   );
 
   const setCollapsed = useCallback(
@@ -176,19 +207,20 @@ export function useCollapsedProjects(
       const projectKey = normalizeProjectKey(projectKeyOrWorkingDir);
       if (!projectKey) return;
       updateForOwner((prev, writeOwnerId) => {
-        const isCollapsed = Boolean(prev[projectKey]);
+        const storedKey = storedProjectKeyForIdentity(prev, projectKey, localPlatform);
+        const isCollapsed = storedKey != null;
         if (isCollapsed === nextCollapsed) return prev;
         const next: Stored = { ...prev };
         if (nextCollapsed) {
           next[projectKey] = { collapsed: true, lastSeenAt: new Date().toISOString() };
-        } else {
-          delete next[projectKey];
+        } else if (storedKey != null) {
+          delete next[storedKey];
         }
         writeToStorage(next, writeOwnerId);
         return next;
       });
     },
-    [updateForOwner],
+    [localPlatform, updateForOwner],
   );
 
   // collapseAll/expandAll read the latest activeWorkingDirs through the ref;
@@ -200,12 +232,13 @@ export function useCollapsedProjects(
       for (const dir of activeDirsRef.current) {
         const projectKey = normalizeProjectKey(dir);
         if (!projectKey) continue;
-        next[projectKey] = { collapsed: true, lastSeenAt: now };
+        const storedKey = storedProjectKeyForIdentity(next, projectKey, localPlatform);
+        next[storedKey ?? projectKey] = { collapsed: true, lastSeenAt: now };
       }
       writeToStorage(next, writeOwnerId);
       return next;
     });
-  }, [updateForOwner]);
+  }, [localPlatform, updateForOwner]);
 
   const expandAll = useCallback(() => {
     updateForOwner((prev, writeOwnerId) => {
@@ -213,21 +246,35 @@ export function useCollapsedProjects(
       for (const dir of activeDirsRef.current) {
         const projectKey = normalizeProjectKey(dir);
         if (!projectKey) continue;
-        delete next[projectKey];
+        const storedKey = storedProjectKeyForIdentity(next, projectKey, localPlatform);
+        if (storedKey != null) delete next[storedKey];
       }
       writeToStorage(next, writeOwnerId);
       return next;
     });
-  }, [updateForOwner]);
+  }, [localPlatform, updateForOwner]);
+
+  const collapsedComparisonKeys = useMemo(
+    () =>
+      new Set(
+        Array.from(collapsed).map(
+          (projectKey) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
+        ),
+      ),
+    [collapsed, localPlatform],
+  );
 
   const isAllCollapsed = useMemo(
     () =>
       activeWorkingDirs.length > 0 &&
       activeWorkingDirs.every((d) => {
         const projectKey = normalizeProjectKey(d);
-        return projectKey ? collapsed.has(projectKey) : false;
+        if (!projectKey) return false;
+        return collapsedComparisonKeys.has(
+          projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
+        );
       }),
-    [activeWorkingDirs, collapsed],
+    [activeWorkingDirs, collapsedComparisonKeys, localPlatform],
   );
 
   return { collapsed, toggle, expand, setCollapsed, collapseAll, expandAll, isAllCollapsed };

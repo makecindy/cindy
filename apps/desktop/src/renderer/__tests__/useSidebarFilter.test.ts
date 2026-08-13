@@ -484,6 +484,12 @@ describe('gcProjectsAgainstActive', () => {
     const prev: FilterProjects = ['local:/a'];
     expect(gcProjectsAgainstActive(prev, [])).toBe('all');
   });
+
+  it('preserves the stored Windows spelling when the active representative has different casing', () => {
+    const prev: FilterProjects = ['local:D:/École/Project-A'];
+
+    expect(gcProjectsAgainstActive(prev, ['local:d:/école/project-a'], 'win32')).toBe(prev);
+  });
 });
 
 describe('manual project ordering', () => {
@@ -525,6 +531,29 @@ describe('manual project ordering', () => {
       ),
     ).toEqual(['local:/a', 'local:/b', 'local:/c']);
   });
+
+  it('matches Windows active projects by comparison identity without rewriting stored spelling', () => {
+    expect(
+      normalizeManualProjectOrder(
+        ['local:D:/École/B', 'local:D:/École/A'],
+        ['local:d:/école/a', 'local:d:/école/b'],
+        'win32',
+      ),
+    ).toEqual(['local:D:/École/B', 'local:D:/École/A']);
+  });
+
+  it('preserves stored Windows spelling when moving a differently-cased live project', () => {
+    expect(
+      moveManualProjectOrder(
+        ['local:D:/École/A', 'local:D:/École/B'],
+        ['local:d:/école/a', 'local:d:/école/b'],
+        'local:d:/école/b',
+        'local:d:/école/a',
+        'before',
+        'win32',
+      ),
+    ).toEqual(['local:D:/École/B', 'local:D:/École/A']);
+  });
 });
 
 describe('mergeVisibleReorder（机器/vendor 过滤下拖拽:可见项原位重排,不可见项保位;置顶 / 项目共用）', () => {
@@ -557,6 +586,17 @@ describe('mergeVisibleReorder（机器/vendor 过滤下拖拽:可见项原位重
     const fullActive = ['a', 'b', 'c'];
     const currentFull = normalizeManualPinnedOrder(['a', 'b', 'c'], fullActive);
     expect(mergeVisibleReorder(currentFull, ['c', 'a'])).toEqual(['c', 'b', 'a']);
+  });
+
+  it('keeps persisted Windows representatives while reordering live casing variants', () => {
+    const comparisonKey = (projectKey: string) => projectKey.toLowerCase();
+    expect(
+      mergeVisibleReorder(
+        ['local:D:/École/A', 'local:D:/École/B'],
+        ['local:d:/école/b', 'local:d:/école/a'],
+        comparisonKey,
+      ),
+    ).toEqual(['local:D:/École/B', 'local:D:/École/A']);
   });
 });
 

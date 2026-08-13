@@ -1,4 +1,5 @@
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from './dataOwnerPush.js';
+import { projectKeyComparisonKey } from './projectKeys.js';
 
 export const SIDEBAR_PINNED_ORDER_MAX_ENTRIES = 10_000;
 export const SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH = 4_096;
@@ -31,6 +32,16 @@ export type SidebarPinnedOrderMutation =
   | { readonly kind: 'promote'; readonly entryId: string }
   | { readonly kind: 'remove'; readonly entryId: string }
   | { readonly kind: 'migrate-legacy'; readonly order: readonly string[] };
+
+const PINNED_PROJECT_ENTRY_PREFIX = 'project:';
+
+/** Project pins compare by local Windows identity; conversation ids stay exact. */
+export function sidebarPinnedEntryComparisonKey(entryId: string, localPlatform: string): string {
+  if (!entryId.startsWith(PINNED_PROJECT_ENTRY_PREFIX)) return entryId;
+  const projectKey = entryId.slice(PINNED_PROJECT_ENTRY_PREFIX.length);
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  return comparisonKey == null ? entryId : `${PINNED_PROJECT_ENTRY_PREFIX}${comparisonKey}`;
+}
 
 export interface SidebarPinnedOrderWriteRequest extends DataOwnerPushStamp {
   readonly mutation: SidebarPinnedOrderMutation;

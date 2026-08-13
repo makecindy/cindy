@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildProjectKeyComparisonSet,
+  findProjectRepresentativeKey,
   isProjectHidden,
   isSessionInProject,
   isSessionInProjectComparisonSet,
@@ -32,6 +33,15 @@ function project(projectKey: string): ProjectNode {
 }
 
 describe('sidebar project visibility', () => {
+  it('resolves a Windows deep-link casing variant to the rendered representative key', () => {
+    const projects = [project('local:d:/école/project-a')];
+
+    expect(findProjectRepresentativeKey(projects, 'local:D:/ÉCOLE/PROJECT-A', 'win32')).toBe(
+      'local:d:/école/project-a',
+    );
+    expect(findProjectRepresentativeKey(projects, 'local:D:/ÉCOLE/PROJECT-A', 'linux')).toBeNull();
+  });
+
   it('keeps local, SSH, and device projects with the same path isolated', () => {
     const hidden = new Set(['local:/repo']);
 

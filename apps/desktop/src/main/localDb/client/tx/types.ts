@@ -20,6 +20,8 @@ export type DbTxName =
   | 'sessions.renameTitles'
   | 'sessions.setStatus'
   | 'recentWorkdirs.mergeWindowsIdentity'
+  | 'recentWorkdirs.removeWindowsIdentity'
+  | 'projectAliases.replaceIdentity'
   | 'session.agentSwitchFallback'
   | 'message.delete'
   | 'im.deleteBindings'
@@ -738,9 +740,22 @@ export interface WechatUnbindCleanupResult {
 }
 
 export interface RecentWorkdirsMergeWindowsIdentityArgs {
-  /** Canonical lowercase Windows drive or UNC path. */
+  /** Normalized Windows drive or UNC path; the worker computes its Unicode comparison identity. */
   path: string;
   lastUsedAt: number;
+}
+
+export interface RecentWorkdirsRemoveWindowsIdentityArgs {
+  /** Normalized Windows drive or UNC path; the worker computes its Unicode comparison identity. */
+  path: string;
+}
+
+export interface ProjectAliasesReplaceIdentityArgs {
+  projectKey: string;
+  comparisonKey: string;
+  foldCase: boolean;
+  alias: string | null;
+  updatedAt: number;
 }
 
 export type DbTxArgsByName = {
@@ -765,6 +780,8 @@ export type DbTxArgsByName = {
   'sessions.renameTitles': SessionsRenameTitlesArgs;
   'sessions.setStatus': SessionsSetStatusArgs;
   'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
+  'recentWorkdirs.removeWindowsIdentity': RecentWorkdirsRemoveWindowsIdentityArgs;
+  'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
@@ -811,6 +828,12 @@ export type DbTxResultByName = {
   'sessions.renameTitles': SessionsRenameTitleResult[];
   'sessions.setStatus': SessionsSetStatusResultItem[];
   'recentWorkdirs.mergeWindowsIdentity': undefined;
+  'recentWorkdirs.removeWindowsIdentity': { changes: number };
+  'projectAliases.replaceIdentity': {
+    projectKey: string;
+    alias: string;
+    updatedAt: number;
+  } | null;
   'session.agentSwitchFallback': undefined;
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;

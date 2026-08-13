@@ -588,6 +588,30 @@ describe('sidebarSettingsStore', () => {
     expect(loadSnapshot().pinnedOrder).toEqual(['project:b', 'project:a']);
   });
 
+  it('removes every legacy Windows project-pin casing variant in one mutation', async () => {
+    await pinnedHandler(
+      request({
+        mutation: {
+          kind: 'migrate-legacy',
+          order: [
+            'project:local:D:/École/Project-A',
+            'session-a',
+            'project:local:d:/école/project-a',
+          ],
+        },
+      }),
+    );
+
+    await expect(
+      pinnedHandler(
+        request({
+          mutation: { kind: 'remove', entryId: 'project:local:D:/ÉCOLE/PROJECT-A' },
+        }),
+      ),
+    ).resolves.toEqual(['session-a']);
+    expect(loadSnapshot().pinnedOrder).toEqual(['session-a']);
+  });
+
   it('does not let a delayed legacy migration overwrite newer pinned state', async () => {
     await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'new-session' } }));
 
@@ -726,6 +750,73 @@ describe('sidebarSettingsStore', () => {
         }),
       ),
     ).resolves.toEqual(['session-c', 'session-b', 'session-a']);
+  });
+
+  it('rebases legacy Windows project variants by identity after a concurrent promote', async () => {
+    const storedProject = 'project:local:D:/École/Project-A';
+    const duplicateVariant = 'project:local:d:/école/project-a';
+    const baseOrder = [storedProject, duplicateVariant, 'session-a'];
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: baseOrder } }));
+    await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-c' } }));
+
+    await expect(
+      pinnedHandler(
+        request({
+          mutation: {
+            kind: 'reorder',
+            baseOrder,
+            order: ['session-a', duplicateVariant, storedProject],
+          },
+        }),
+      ),
+    ).resolves.toEqual(['session-c', 'session-a', storedProject]);
+  });
+
+  it('keeps a concurrent pin in its deduplicated durable slot during a legacy Windows rebase', async () => {
+    const storedProject = 'project:local:D:/École/Project-A';
+    const duplicateVariant = 'project:local:d:/école/project-a';
+    await pinnedHandler(
+      request({
+        mutation: {
+          kind: 'migrate-legacy',
+          order: [storedProject, duplicateVariant, 'session-c', 'session-a'],
+        },
+      }),
+    );
+
+    await expect(
+      pinnedHandler(
+        request({
+          mutation: {
+            kind: 'reorder',
+            baseOrder: [storedProject, duplicateVariant, 'session-a'],
+            order: ['session-a', duplicateVariant, storedProject],
+          },
+        }),
+      ),
+    ).resolves.toEqual(['session-a', 'session-c', storedProject]);
+  });
+
+  it('does not let a stale reorder resurrect a concurrently removed Windows project identity', async () => {
+    const storedProject = 'project:local:D:/École/Project-A';
+    const duplicateVariant = 'project:local:d:/école/project-a';
+    const baseOrder = [storedProject, 'session-a', duplicateVariant];
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: baseOrder } }));
+    await pinnedHandler(
+      request({ mutation: { kind: 'remove', entryId: 'project:local:D:/ÉCOLE/PROJECT-A' } }),
+    );
+
+    await expect(
+      pinnedHandler(
+        request({
+          mutation: {
+            kind: 'reorder',
+            baseOrder,
+            order: [duplicateVariant, 'session-a', storedProject],
+          },
+        }),
+      ),
+    ).resolves.toEqual(['session-a']);
   });
 
   it('treats repeated hidden intents as no-ops without broadcasting', async () => {

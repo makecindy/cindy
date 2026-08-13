@@ -23,7 +23,10 @@ import {
   normalizeManualPinnedOrder,
   normalizeManualProjectOrder,
 } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
-import { pinnedProjectEntryId } from '@/features/cc-agent/lib/pinnedSidebarOrder';
+import {
+  pinnedProjectEntryId,
+  pinnedSidebarEntryComparisonKey,
+} from '@/features/cc-agent/lib/pinnedSidebarOrder';
 import type { Session } from '@/lib/ccAgent.types';
 
 /* ---------------- helpers ---------------- */
@@ -262,8 +265,8 @@ describe('groupSessions', () => {
     });
   });
 
-  it('keeps Windows project filter, alias, pin, and order identity after the last session disappears', () => {
-    const projectKey = 'local:d:/aiwork/project-a';
+  it('keeps stored Windows project selectors when the retained representative uses different casing', () => {
+    const projectKey = 'local:D:/AIWork/Project-A';
     const retainedProject = {
       workingDir: 'd:/aiwork/project-a',
       lastUsedAt: '2026-08-12T08:00:00.000Z',
@@ -284,13 +287,39 @@ describe('groupSessions', () => {
     expect(afterDelete.projectKey).toBe(withSession.projectKey);
     expect(withSession.workingDir).toBe('d:/aiwork/project-a');
     expect(afterDelete.displayName).toBe('Stable project');
-    expect(gcProjectsAgainstActive([projectKey], [afterDelete.projectKey])).toEqual([projectKey]);
-    expect(normalizeManualProjectOrder([projectKey], [afterDelete.projectKey])).toEqual([
+    expect(gcProjectsAgainstActive([projectKey], [afterDelete.projectKey], 'win32')).toEqual([
+      projectKey,
+    ]);
+    expect(normalizeManualProjectOrder([projectKey], [afterDelete.projectKey], 'win32')).toEqual([
       projectKey,
     ]);
     const pinEntry = pinnedProjectEntryId(projectKey);
-    expect(normalizeManualPinnedOrder([pinEntry], [pinnedProjectEntryId(afterDelete.projectKey)]))
-      .toEqual([pinEntry]);
+    expect(
+      normalizeManualPinnedOrder(
+        [pinEntry],
+        [pinnedProjectEntryId(afterDelete.projectKey)],
+        (entryId) => pinnedSidebarEntryComparisonKey(entryId, 'win32'),
+      ),
+    ).toEqual([pinEntry]);
+  });
+
+  it('uses the newest stored alias when legacy Windows casing variants coexist', () => {
+    const project = groupSessions([], {
+      persistentLocalProjects: [
+        {
+          workingDir: 'd:/école/project-a',
+          lastUsedAt: '2026-08-12T08:00:00.000Z',
+          knownAgentKinds: [],
+        },
+      ],
+      projectAliases: new Map([
+        ['local:D:/École/Project-A', 'Newest alias'],
+        ['local:d:/école/project-a', 'Older alias'],
+      ]),
+      localPlatform: 'win32',
+    }).projects[0]!;
+
+    expect(project.displayName).toBe('Newest alias');
   });
 
   it('applies last-activity cutoff to persistent projects using lastUsedAt', () => {

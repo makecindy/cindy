@@ -144,14 +144,21 @@ export function persistProjects(p: FilterProjects, ownerId: string | null): void
  * 返回值如果与 prev 引用相同（语义上无变化），调用方可短路不写 storage。
  * 实际上本函数总是返回新对象（除非语义无变化才返回 prev）。
  */
-export function nextProjectsAfterToggle(prev: FilterProjects, workingDir: string): FilterProjects {
+export function nextProjectsAfterToggle(
+  prev: FilterProjects,
+  workingDir: string,
+  localPlatform: string = '',
+): FilterProjects {
   const projectKey = normalizeProjectKey(workingDir);
   if (!projectKey) return prev;
   if (prev === 'all') {
     return [projectKey];
   }
-  const normalizedPrev = normalizeProjectKeyList(prev);
-  const idx = normalizedPrev.indexOf(projectKey);
+  const normalizedPrev = normalizeProjectKeyList(prev, localPlatform);
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  const idx = normalizedPrev.findIndex(
+    (candidate) => projectKeyComparisonKey(candidate, localPlatform) === comparisonKey,
+  );
   if (idx >= 0) {
     if (normalizedPrev.length === 1) {
       return 'all';
@@ -167,12 +174,21 @@ export function nextProjectsAfterToggle(prev: FilterProjects, workingDir: string
  * `'all'` already includes every project. Array filters append only when the
  * project is missing, unlike the user-facing toggle action.
  */
-export function includeProjectInFilter(prev: FilterProjects, workingDir: string): FilterProjects {
+export function includeProjectInFilter(
+  prev: FilterProjects,
+  workingDir: string,
+  localPlatform: string = '',
+): FilterProjects {
   if (prev === 'all') return prev;
   const projectKey = normalizeProjectKey(workingDir);
   if (!projectKey) return prev;
-  const normalizedPrev = normalizeProjectKeyList(prev);
-  if (normalizedPrev.includes(projectKey)) {
+  const normalizedPrev = normalizeProjectKeyList(prev, localPlatform);
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  if (
+    normalizedPrev.some(
+      (candidate) => projectKeyComparisonKey(candidate, localPlatform) === comparisonKey,
+    )
+  ) {
     return arraysEqual(normalizedPrev, prev) ? prev : normalizedPrev;
   }
   return normalizedPrev.concat(projectKey);
@@ -370,22 +386,28 @@ export function persistManualProjectOrder(order: readonly string[], ownerId: str
 export function normalizeManualProjectOrder(
   prev: readonly string[],
   activeWorkingDirs: readonly string[],
+  localPlatform: string = '',
 ): string[] {
-  const activeKeys = normalizeProjectKeyList(activeWorkingDirs);
-  const activeSet = new Set(activeKeys);
+  const activeKeys = normalizeProjectKeyList(activeWorkingDirs, localPlatform);
+  const activeSet = new Set(
+    activeKeys.map((key) => projectKeyComparisonKey(key, localPlatform) ?? key),
+  );
   const seen = new Set<string>();
   const next: string[] = [];
 
   for (const wd of prev) {
     const key = normalizeProjectKey(wd);
-    if (!key || !activeSet.has(key) || seen.has(key)) continue;
-    seen.add(key);
+    if (!key) continue;
+    const comparisonKey = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (!activeSet.has(comparisonKey) || seen.has(comparisonKey)) continue;
+    seen.add(comparisonKey);
     next.push(key);
   }
 
   for (const key of activeKeys) {
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const comparisonKey = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (seen.has(comparisonKey)) continue;
+    seen.add(comparisonKey);
     next.push(key);
   }
 
@@ -398,21 +420,32 @@ export function moveManualProjectOrder(
   sourceWorkingDir: string,
   targetWorkingDir: string,
   position: ManualProjectDropPosition,
+  localPlatform: string = '',
 ): string[] {
-  const normalized = normalizeManualProjectOrder(prev, activeWorkingDirs);
+  const normalized = normalizeManualProjectOrder(prev, activeWorkingDirs, localPlatform);
   const sourceKey = normalizeProjectKey(sourceWorkingDir);
   const targetKey = normalizeProjectKey(targetWorkingDir);
-  if (!sourceKey || !targetKey || sourceKey === targetKey) return normalized;
-  const sourceIndex = normalized.indexOf(sourceKey);
-  const targetIndex = normalized.indexOf(targetKey);
+  if (!sourceKey || !targetKey) return normalized;
+  const sourceComparisonKey = projectKeyComparisonKey(sourceKey, localPlatform) ?? sourceKey;
+  const targetComparisonKey = projectKeyComparisonKey(targetKey, localPlatform) ?? targetKey;
+  if (sourceComparisonKey === targetComparisonKey) return normalized;
+  const sourceIndex = normalized.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === sourceComparisonKey,
+  );
+  const targetIndex = normalized.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === targetComparisonKey,
+  );
   if (sourceIndex < 0 || targetIndex < 0) return normalized;
 
+  const sourceRepresentative = normalized[sourceIndex] as string;
   const withoutSource = normalized.slice();
   withoutSource.splice(sourceIndex, 1);
-  const targetIndexAfterRemoval = withoutSource.indexOf(targetKey);
+  const targetIndexAfterRemoval = withoutSource.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === targetComparisonKey,
+  );
   if (targetIndexAfterRemoval < 0) return normalized;
   const insertIndex = position === 'after' ? targetIndexAfterRemoval + 1 : targetIndexAfterRemoval;
-  withoutSource.splice(insertIndex, 0, sourceKey);
+  withoutSource.splice(insertIndex, 0, sourceRepresentative);
   return withoutSource;
 }
 
@@ -494,20 +527,23 @@ export function finishManualPinnedOrderLegacyMigration(ownerId: string | null): 
 export function normalizeManualPinnedOrder(
   prev: readonly string[],
   activeEntryIds: readonly string[],
+  comparisonKey: (entryId: string) => string = (entryId) => entryId,
 ): string[] {
-  const activeSet = new Set(activeEntryIds);
+  const activeSet = new Set(activeEntryIds.map(comparisonKey));
   const seen = new Set<string>();
   const next: string[] = [];
 
   for (const id of prev) {
-    if (!activeSet.has(id) || seen.has(id)) continue;
-    seen.add(id);
+    const identity = comparisonKey(id);
+    if (!activeSet.has(identity) || seen.has(identity)) continue;
+    seen.add(identity);
     next.push(id);
   }
 
   for (const id of activeEntryIds) {
-    if (seen.has(id)) continue;
-    seen.add(id);
+    const identity = comparisonKey(id);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     next.push(id);
   }
 
@@ -530,12 +566,18 @@ export function normalizeManualPinnedOrder(
 export function mergeVisibleReorder(
   currentFullOrder: readonly string[],
   visibleNewOrder: readonly string[],
+  comparisonKey: (id: string) => string = (id) => id,
 ): string[] {
-  const visibleSet = new Set(visibleNewOrder);
-  const queue = [...visibleNewOrder];
+  const storedRepresentatives = new Map<string, string>();
+  for (const id of currentFullOrder) {
+    const identity = comparisonKey(id);
+    if (!storedRepresentatives.has(identity)) storedRepresentatives.set(identity, id);
+  }
+  const visibleSet = new Set(visibleNewOrder.map(comparisonKey));
+  const queue = visibleNewOrder.map((id) => storedRepresentatives.get(comparisonKey(id)) ?? id);
   const result: string[] = [];
   for (const id of currentFullOrder) {
-    if (visibleSet.has(id)) {
+    if (visibleSet.has(comparisonKey(id))) {
       // 可见项槽位:按新顺序依次填;queue 异常耗尽时保留原 id 不丢。
       result.push(queue.length > 0 ? (queue.shift() as string) : id);
     } else {
@@ -556,24 +598,33 @@ export function mergeVisibleReorder(
 export function gcProjectsAgainstActive(
   prev: FilterProjects,
   activeWorkingDirs: readonly string[],
+  localPlatform: string = '',
 ): FilterProjects {
   if (prev === 'all') return prev;
-  const activeSet = new Set(normalizeProjectKeyList(activeWorkingDirs));
-  const normalizedPrev = normalizeProjectKeyList(prev);
-  const filtered = normalizedPrev.filter((wd) => activeSet.has(wd));
+  const activeSet = new Set(
+    normalizeProjectKeyList(activeWorkingDirs, localPlatform).map(
+      (key) => projectKeyComparisonKey(key, localPlatform) ?? key,
+    ),
+  );
+  const normalizedPrev = normalizeProjectKeyList(prev, localPlatform);
+  const filtered = normalizedPrev.filter((key) =>
+    activeSet.has(projectKeyComparisonKey(key, localPlatform) ?? key),
+  );
   if (filtered.length === 0) return 'all';
   if (filtered.length === normalizedPrev.length && arraysEqual(normalizedPrev, prev)) return prev;
   if (filtered.length === normalizedPrev.length) return normalizedPrev;
   return filtered;
 }
 
-function normalizeProjectKeyList(values: readonly unknown[]): string[] {
+function normalizeProjectKeyList(values: readonly unknown[], localPlatform: string = ''): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
     const key = typeof value === 'string' ? normalizeProjectKey(value) : null;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
+    if (!key) continue;
+    const comparisonKey = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (seen.has(comparisonKey)) continue;
+    seen.add(comparisonKey);
     out.push(key);
   }
   return out;

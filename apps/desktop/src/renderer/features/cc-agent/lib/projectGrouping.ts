@@ -355,7 +355,10 @@ function extractDisplayNameFromIndex(
   return { name: fallback, segments: maxSegments };
 }
 
-function normalizeProjectAliases(raw: GroupSessionsOptions['projectAliases']): Map<string, string> {
+function normalizeProjectAliases(
+  raw: GroupSessionsOptions['projectAliases'],
+  localPlatform: string,
+): Map<string, string> {
   const out = new Map<string, string>();
   if (!raw) return out;
   const entries = raw instanceof Map ? raw.entries() : Object.entries(raw);
@@ -363,7 +366,10 @@ function normalizeProjectAliases(raw: GroupSessionsOptions['projectAliases']): M
     const projectKey = normalizeProjectKey(key);
     const alias = typeof value === 'string' ? value.trim() : '';
     if (!projectKey || alias.length === 0) continue;
-    out.set(projectKey, alias);
+    const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey;
+    // Alias rows arrive newest-first. Legacy Windows casing variants collapse
+    // to one identity without allowing an older duplicate to overwrite it.
+    if (!out.has(comparisonKey)) out.set(comparisonKey, alias);
   }
   return out;
 }
@@ -472,7 +478,8 @@ export function groupSessions(
   sessions: readonly Session[],
   options: GroupSessionsOptions = {},
 ): ProjectGroupsResult {
-  const aliases = normalizeProjectAliases(options.projectAliases);
+  const localPlatform = options.localPlatform ?? '';
+  const aliases = normalizeProjectAliases(options.projectAliases, localPlatform);
   if ((!sessions || sessions.length === 0) && !options.persistentLocalProjects?.length) {
     return { pinned: [], dialogues: [], unclassified: [], projects: [] };
   }
@@ -544,10 +551,7 @@ export function groupSessions(
         : projectIdentityKey(scope, dir, s.remoteHostId ?? null);
       let identityWorkingDir = dir;
       if (scope === 'local') {
-        const comparisonKey = projectKeyComparisonKey(
-          projectKey,
-          options.localPlatform ?? '',
-        );
+        const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
         const representative = comparisonKey
           ? persistentRepresentativeByComparison.get(comparisonKey)
           : undefined;
@@ -582,14 +586,14 @@ export function groupSessions(
   const localProjectKeyByComparison = new Map<string, string>();
   for (const [projectKey, identity] of identityByKey) {
     if (identity.scope !== 'local') continue;
-    const comparisonKey = projectKeyComparisonKey(projectKey, options.localPlatform ?? '');
+    const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
     if (comparisonKey) localProjectKeyByComparison.set(comparisonKey, projectKey);
   }
   for (const project of options.persistentLocalProjects ?? []) {
     const workingDir = normalizeWorkingDir(project.workingDir);
     if (!workingDir) continue;
     const seedKey = projectIdentityKey('local', workingDir, null);
-    const comparisonKey = projectKeyComparisonKey(seedKey, options.localPlatform ?? '');
+    const comparisonKey = projectKeyComparisonKey(seedKey, localPlatform);
     const projectKey = (comparisonKey && localProjectKeyByComparison.get(comparisonKey)) ?? seedKey;
     if (!groups.has(projectKey)) {
       groups.set(projectKey, []);
@@ -709,7 +713,7 @@ export function groupSessions(
 
     let name: string;
     let segments: number;
-    const alias = aliases.get(projectKey);
+    const alias = aliases.get(projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey);
     if (alias) {
       name = alias;
       segments = 0;

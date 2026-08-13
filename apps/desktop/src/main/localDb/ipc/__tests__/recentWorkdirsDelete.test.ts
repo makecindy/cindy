@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   webContentsSend: null as ReturnType<typeof vi.fn> | null,
+  tx: null as ((name: string, args: unknown) => Promise<unknown>) | null,
 }));
 
 vi.mock('electron', () => ({
@@ -36,9 +37,10 @@ vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../client/current', () => ({
-  getDbClient: () => ({ drizzle: h.db }),
+  getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
 }));
 
+import { tx as runDbTx } from '../../worker/opHandlers/tx';
 import { registerRecentWorkdirsIpc, removeRecentWorkdir } from '../recentWorkdirs';
 
 function createDb(): void {
@@ -61,6 +63,7 @@ function createDb(): void {
   `);
   h.sqlite = sqlite;
   h.db = drizzle(sqlite);
+  h.tx = async (name: string, args: unknown) => runDbTx(sqlite, { name, args });
 }
 
 function seed(path: string, lastUsedAt: number): void {
@@ -134,6 +137,15 @@ describe('local-db:recent-workdirs:remove', () => {
 
     await removeRecentWorkdir('D:\\WORK\\PROJECT-A', 'win32');
     await removeRecentWorkdir('\\\\SERVER\\SHARE\\PROJECT-B', 'win32');
+
+    expect(rows()).toEqual([]);
+  });
+
+  it('removes every non-ASCII Windows casing variant for the same identity', async () => {
+    seed('D:/École/Project-A', 1_000);
+    seed('d:/école/project-a', 2_000);
+
+    await removeRecentWorkdir('D:/ÉCOLE/PROJECT-A', 'win32');
 
     expect(rows()).toEqual([]);
   });

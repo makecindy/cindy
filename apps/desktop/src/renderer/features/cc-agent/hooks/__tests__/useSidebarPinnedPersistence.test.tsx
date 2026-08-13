@@ -120,6 +120,24 @@ function renderFilter() {
 }
 
 describe('pinned sidebar persistence', () => {
+  it('optimistically removes every legacy Windows project-pin casing variant', () => {
+    (window.electronAPI as { platform: string }).platform = 'win32';
+    durablePinnedOrder = [
+      'project:local:D:/École/Project-A',
+      'session-a',
+      'project:local:d:/école/project-a',
+    ];
+    pinnedOrderIsAuthoritative = true;
+    mutatePinnedOrder.mockImplementationOnce(() => new Promise<string[]>(() => {}));
+    const view = renderFilter();
+
+    act(() => {
+      void view.result.current.removePin('project:local:D:/ÉCOLE/PROJECT-A');
+    });
+
+    expect(view.result.current.manualPinnedOrder).toEqual(['session-a']);
+  });
+
   it('rolls back an optimistic project pin when durable persistence fails', async () => {
     mutatePinnedOrder.mockRejectedValueOnce(new Error('disk full'));
     const view = renderFilter();

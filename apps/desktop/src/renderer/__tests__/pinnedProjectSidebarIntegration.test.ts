@@ -38,9 +38,12 @@ describe('pinned project sidebar integration', () => {
   });
 
   it('exposes project pin toggling from the collapsed rail project menu', () => {
-    expect(sidebarSource).toContain('pinnedProjectKeys={pinnedProjectKeys}');
+    expect(sidebarSource).toContain('pinnedProjectComparisonKeys={pinnedProjectComparisonKeys}');
+    expect(sidebarSource).toContain('localPlatform={localPlatform}');
     expect(sidebarSource).toContain('onToggleProjectPin={handleToggleProjectPin}');
-    expect(sidebarSource).toContain('pinnedProjectKeys.has(menuTarget.projectKey)');
+    expect(sidebarSource).toContain(
+      'projectKeyComparisonSetHas(\n                        pinnedProjectComparisonKeys,\n                        menuTarget.projectKey,\n                        localPlatform,',
+    );
   });
 
   it('applies main-process pinned-order broadcasts to every mounted sidebar hook', () => {
@@ -122,6 +125,24 @@ describe('pinned project sidebar integration', () => {
     );
     expect(sidebarSource.slice(archiveStart, archiveEnd)).toContain(
       'isSessionInProject(session, targetProjectKey, localPlatform)',
+    );
+  });
+
+  it('resolves a deep-link comparison match to the rendered project representative', () => {
+    const focusStart = sidebarSource.indexOf('const pendingFocus = usePendingProjectFocus();');
+    const focusEnd = sidebarSource.indexOf('/* ---- 自动展开', focusStart);
+    const focusBlock = sidebarSource.slice(focusStart, focusEnd);
+
+    expect(focusStart).toBeGreaterThanOrEqual(0);
+    expect(focusEnd).toBeGreaterThan(focusStart);
+    expect(focusBlock).toContain('const representativeKey = findProjectRepresentativeKey(');
+    expect(focusBlock).toContain('collapse.expand(representativeKey);');
+    expect(focusBlock).toContain('CSS.escape(representativeKey)');
+  });
+
+  it('builds persisted pinned ranks without letting later identity variants overwrite the first', () => {
+    expect(sidebarSource).toContain(
+      'const rank = buildPinnedSidebarRank(order, localPlatform);',
     );
   });
 

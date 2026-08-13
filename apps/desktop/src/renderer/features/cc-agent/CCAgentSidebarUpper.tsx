@@ -144,6 +144,7 @@ import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarPro
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import {
   buildProjectKeyComparisonSet,
+  findProjectRepresentativeKey,
   isProjectHidden,
   isSessionInProject,
   isSessionInProjectComparisonSet,
@@ -210,7 +211,9 @@ import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { normalizeManualPinnedOrder, mergeVisibleReorder } from './hooks/helpers/sidebarFilterCore';
 import {
   activePinnedSidebarEntryIds,
+  buildPinnedSidebarRank,
   pinnedProjectEntryId,
+  pinnedSidebarEntryComparisonKey,
   projectKeyFromPinnedEntryId,
 } from './lib/pinnedSidebarOrder';
 import { createLogger } from '@/lib/logger';
@@ -620,15 +623,22 @@ export function CCAgentSidebarUpper() {
       const fullActivePinnedIds = activePinnedSidebarEntryIds(
         filter.manualPinnedOrder,
         pinnedSessionIds,
+        localPlatform,
       );
-      const baseOrder = normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds);
-      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder);
+      const baseOrder = normalizeManualPinnedOrder(
+        filter.manualPinnedOrder,
+        fullActivePinnedIds,
+        (entryId) => pinnedSidebarEntryComparisonKey(entryId, localPlatform),
+      );
+      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder, (entryId) =>
+        pinnedSidebarEntryComparisonKey(entryId, localPlatform),
+      );
       void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist rail pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
     },
-    [sessionsHook.sessions, remoteProjectSessions, filter, t],
+    [sessionsHook.sessions, remoteProjectSessions, filter, localPlatform, t],
   );
 
   return (
@@ -1354,7 +1364,15 @@ function ExpandedView({
     () => allProjectGroups.projects.map((p) => p.projectKey),
     [allProjectGroups.projects],
   );
-  const collapse = useCollapsedProjects(activeWorkingDirs, sidebarSettingsSnapshot.dataOwnerId);
+  const collapse = useCollapsedProjects(
+    activeWorkingDirs,
+    sidebarSettingsSnapshot.dataOwnerId,
+    localPlatform,
+  );
+  const collapsedProjectComparisonKeys = useMemo(
+    () => buildProjectKeyComparisonSet(collapse.collapsed, localPlatform),
+    [collapse.collapsed, localPlatform],
+  );
 
   // 项目过滤 GC 的「宇宙」用**全量**(不按机器过滤)项目键 —— 否则在某机器作用域下 remount,
   // gcProjectsAgainstActive 会把其它机器的项目从已保存的项目过滤里误删(它们只是被切换栏隐藏、
@@ -1402,13 +1420,19 @@ function ExpandedView({
     if (isLoadingSessions) return; // 等首次加载完
     const targetDir = pendingFocus.workingDir;
     const targetKey = normalizeProjectKey(targetDir) ?? `local:${targetDir}`;
-    const exists = groupsWithPinnedProjects.projects.some((p) => p.projectKey === targetKey);
-    if (exists) {
-      collapse.expand(targetKey);
+    const representativeKey = findProjectRepresentativeKey(
+      groupsWithPinnedProjects.projects,
+      targetKey,
+      localPlatform,
+    );
+    if (representativeKey != null) {
+      collapse.expand(representativeKey);
       // RAF 等 expand 触发的 re-render 完成 (project header DOM 在折叠态下已渲染,
       // 这里 RAF 主要给"刚 mount"的场景一帧时间让 querySelector 拿到节点)。
       requestAnimationFrame(() => {
-        const node = document.querySelector(`[data-project-workingdir="${CSS.escape(targetKey)}"]`);
+        const node = document.querySelector(
+          `[data-project-workingdir="${CSS.escape(representativeKey)}"]`,
+        );
         if (node) node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       });
     } else if (selectedMachineId !== MACHINE_ALL) {
@@ -1428,6 +1452,7 @@ function ExpandedView({
     groupsWithPinnedProjects.projects,
     collapse,
     isLoadingSessions,
+    localPlatform,
     selectedMachineId,
     t,
   ]);
@@ -1479,8 +1504,10 @@ function ExpandedView({
       localPlatform,
     );
     if (filter.projectsAsSet === null) return notHidden;
-    const allowed = filter.projectsAsSet;
-    return notHidden.filter((p) => allowed.has(p.projectKey));
+    const allowed = buildProjectKeyComparisonSet(filter.projectsAsSet, localPlatform);
+    return notHidden.filter((project) =>
+      projectKeyComparisonSetHas(allowed, project.projectKey, localPlatform),
+    );
   }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet, localPlatform]);
 
   /* ---- M41: Vendor 过滤 — 应用到 pinned / unclassified / project sessions ---- */
@@ -1506,8 +1533,9 @@ function ExpandedView({
         lastActivityCutoff: cutoffForLastActivity(filter.lastActivity),
         pinnedProjectKeys,
         vendorPredicate,
+        localPlatform,
       }),
-    [filter.lastActivity, pinnedProjectKeys, scopedSidebarSessions, vendorPredicate],
+    [filter.lastActivity, localPlatform, pinnedProjectKeys, scopedSidebarSessions, vendorPredicate],
   );
   const restorableProjectKeysRef = useRef(restorableProjectKeys);
   restorableProjectKeysRef.current = restorableProjectKeys;
@@ -1542,15 +1570,21 @@ function ExpandedView({
   }, [allGroups.pinned, vendorPredicate, allowedProjectComparisonKeys, localPlatform]);
 
   const visiblePinnedProjects = useMemo(() => {
-    const allowedProjects = filter.projectsAsSet;
     return allProjectGroups.projects.flatMap((project) => {
       if (
         projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey, localPlatform)
       ) {
         return [];
       }
-      if (!pinnedProjectKeys.has(project.projectKey)) return [];
-      if (allowedProjects !== null && !allowedProjects.has(project.projectKey)) return [];
+      if (
+        !projectKeyComparisonSetHas(pinnedProjectComparisonKeys, project.projectKey, localPlatform)
+      )
+        return [];
+      if (
+        allowedProjectComparisonKeys !== null &&
+        !projectKeyComparisonSetHas(allowedProjectComparisonKeys, project.projectKey, localPlatform)
+      )
+        return [];
 
       const matchingSessions = vendorPredicate
         ? project.sessions.filter(vendorPredicate)
@@ -1575,9 +1609,10 @@ function ExpandedView({
   }, [
     allProjectGroups.projects,
     hiddenProjectComparisonKeys,
-    pinnedProjectKeys,
-    filter.projectsAsSet,
+    pinnedProjectComparisonKeys,
+    allowedProjectComparisonKeys,
     filter.vendor,
+    localPlatform,
     vendorPredicate,
   ]);
 
@@ -1600,14 +1635,15 @@ function ExpandedView({
     // without a rank remain at the end in their existing pinnedAt order.
     const order = filter.manualPinnedOrder;
     if (order.length === 0) return entries;
-    const rank = new Map<string, number>();
-    order.forEach((id, idx) => rank.set(id, idx));
+    const rank = buildPinnedSidebarRank(order, localPlatform);
     return entries.sort((a, b) => {
-      const ra = rank.get(a.id) ?? Number.MAX_SAFE_INTEGER;
-      const rb = rank.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+      const ra =
+        rank.get(pinnedSidebarEntryComparisonKey(a.id, localPlatform)) ?? Number.MAX_SAFE_INTEGER;
+      const rb =
+        rank.get(pinnedSidebarEntryComparisonKey(b.id, localPlatform)) ?? Number.MAX_SAFE_INTEGER;
       return ra - rb;
     });
-  }, [visiblePinnedSessions, visiblePinnedProjects, filter.manualPinnedOrder]);
+  }, [visiblePinnedSessions, visiblePinnedProjects, filter.manualPinnedOrder, localPlatform]);
 
   const visibleUnclassified = useMemo(() => {
     const sessions = vendorPredicate
@@ -1639,7 +1675,8 @@ function ExpandedView({
 
   const visibleProjectsWithVendor = useMemo(() => {
     const unpinnedProjects = visibleProjects.filter(
-      (project) => !pinnedProjectKeys.has(project.projectKey),
+      (project) =>
+        !projectKeyComparisonSetHas(pinnedProjectComparisonKeys, project.projectKey, localPlatform),
     );
     const projects = unpinnedProjects.flatMap((project) => {
       const matchingSessions = vendorPredicate
@@ -1659,14 +1696,20 @@ function ExpandedView({
         },
       ];
     });
-    return sortProjectsForSidebar(projects, filter.sortBy, filter.manualProjectOrder);
+    return sortProjectsForSidebar(
+      projects,
+      filter.sortBy,
+      filter.manualProjectOrder,
+      localPlatform,
+    );
   }, [
     visibleProjects,
-    pinnedProjectKeys,
+    pinnedProjectComparisonKeys,
     vendorPredicate,
     filter.vendor,
     filter.sortBy,
     filter.manualProjectOrder,
+    localPlatform,
   ]);
 
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
@@ -1690,8 +1733,20 @@ function ExpandedView({
         },
       ];
     });
-    return sortProjectsForSidebar(projects, filter.sortBy, filter.manualProjectOrder);
-  }, [visibleProjects, vendorPredicate, filter.vendor, filter.sortBy, filter.manualProjectOrder]);
+    return sortProjectsForSidebar(
+      projects,
+      filter.sortBy,
+      filter.manualProjectOrder,
+      localPlatform,
+    );
+  }, [
+    visibleProjects,
+    vendorPredicate,
+    filter.vendor,
+    filter.sortBy,
+    filter.manualProjectOrder,
+    localPlatform,
+  ]);
 
   /**
    * Pinned 拖拽落定回调。SortableList 给的是当前 visible（含 vendor / projectsFilter
@@ -1713,15 +1768,22 @@ function ExpandedView({
       const fullActivePinnedIds = activePinnedSidebarEntryIds(
         filter.manualPinnedOrder,
         pinnedSessionIds,
+        localPlatform,
       );
-      const baseOrder = normalizeManualPinnedOrder(filter.manualPinnedOrder, fullActivePinnedIds);
-      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder);
+      const baseOrder = normalizeManualPinnedOrder(
+        filter.manualPinnedOrder,
+        fullActivePinnedIds,
+        (entryId) => pinnedSidebarEntryComparisonKey(entryId, localPlatform),
+      );
+      const merged = mergeVisibleReorder(baseOrder, visibleNewOrder, (entryId) =>
+        pinnedSidebarEntryComparisonKey(entryId, localPlatform),
+      );
       void filter.setManualPinnedOrder(merged, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
     },
-    [sessions, remoteProjectSessions, filter, t],
+    [sessions, remoteProjectSessions, filter, localPlatform, t],
   );
 
   const visibleDateSessions = useMemo(() => {
@@ -2372,7 +2434,13 @@ function ExpandedView({
       const entryId = pinnedProjectEntryId(project.projectKey);
       try {
         if (currentlyPinned) {
-          await filter.removePin(entryId);
+          const entryIdentity = pinnedSidebarEntryComparisonKey(entryId, localPlatform);
+          const storedEntryId =
+            filter.manualPinnedOrder.find(
+              (candidate) =>
+                pinnedSidebarEntryComparisonKey(candidate, localPlatform) === entryIdentity,
+            ) ?? entryId;
+          await filter.removePin(storedEntryId);
         } else {
           // New and re-pinned projects lead the unified project/conversation list.
           await filter.promotePin(entryId);
@@ -2382,7 +2450,7 @@ function ExpandedView({
         toast.error(t('ccAgent.sidebar.pinFailed'));
       }
     },
-    [filter, t],
+    [filter, localPlatform, t],
   );
 
   const handleMoveSession = useCallback(
@@ -2436,7 +2504,11 @@ function ExpandedView({
         const normalized = normalizeWorkingDir(targetWorkingDir);
         if (normalized) {
           expandedProjectKey = projectIdentityKey('local', normalized, null);
-          wasExpandedProjectCollapsed = collapse.collapsed.has(expandedProjectKey);
+          wasExpandedProjectCollapsed = projectKeyComparisonSetHas(
+            collapsedProjectComparisonKeys,
+            expandedProjectKey,
+            localPlatform,
+          );
           collapse.expand(expandedProjectKey);
         }
       }
@@ -2470,10 +2542,11 @@ function ExpandedView({
     // 同理只依赖用到的三个成员,不要整个 collapse —— useCollapsedProjects 也返回
     // 新对象字面量。collapsed 是 Set,仅用户手动折叠/展开时换引用,频率可忽略。
     [
-      collapse.collapsed,
+      collapsedProjectComparisonKeys,
       collapse.expand,
       collapse.setCollapsed,
       effectiveRunningSessionIds,
+      localPlatform,
       patchLocal,
       t,
     ],
@@ -3183,7 +3256,11 @@ function ExpandedView({
                     displaySessions={displaySessions}
                     sessionVariant={sessionVariant}
                     statusFilter={filter.status}
-                    isCollapsed={collapse.collapsed.has(project.projectKey)}
+                    isCollapsed={projectKeyComparisonSetHas(
+                      collapsedProjectComparisonKeys,
+                      project.projectKey,
+                      localPlatform,
+                    )}
                     parentSectionCollapsed={parentSectionCollapsed}
                     activeSessionId={activeSessionId}
                     runningSessionIds={displayRunningSessionIds}
@@ -3369,7 +3446,8 @@ function ExpandedView({
           与「显示全部」),见 railPanelStore 头注。 */}
       <RailPanels
         projects={visibleRailProjectsWithVendor}
-        pinnedProjectKeys={pinnedProjectKeys}
+        pinnedProjectComparisonKeys={pinnedProjectComparisonKeys}
+        localPlatform={localPlatform}
         unclassified={railUnclassified}
         dialogues={railDialogues}
         activeSessionId={activeSessionId}
@@ -3634,7 +3712,8 @@ function RailPanelShell({
 
 interface RailPanelsProps {
   projects: ProjectNode[];
-  pinnedProjectKeys: ReadonlySet<string>;
+  pinnedProjectComparisonKeys: ReadonlySet<string>;
+  localPlatform: string;
   /** 未分类(草稿等)会话——展开态 UnclassifiedSection 同源,面板内平铺在项目列表之上。 */
   unclassified: Session[];
   dialogues: Session[];
@@ -3678,7 +3757,8 @@ interface RailPanelsProps {
  */
 function RailPanels({
   projects,
-  pinnedProjectKeys,
+  pinnedProjectComparisonKeys,
+  localPlatform,
   unclassified,
   dialogues,
   activeSessionId,
@@ -4263,12 +4343,24 @@ function RailPanels({
                   onSelect={() => {
                     setProjectMenu(null);
                     if (!menuTarget) return;
-                    onToggleProjectPin(menuTarget, pinnedProjectKeys.has(menuTarget.projectKey));
+                    onToggleProjectPin(
+                      menuTarget,
+                      projectKeyComparisonSetHas(
+                        pinnedProjectComparisonKeys,
+                        menuTarget.projectKey,
+                        localPlatform,
+                      ),
+                    );
                   }}
                   className="cursor-pointer text-sm text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)]"
                 >
                   {t(
-                    menuTarget && pinnedProjectKeys.has(menuTarget.projectKey)
+                    menuTarget &&
+                      projectKeyComparisonSetHas(
+                        pinnedProjectComparisonKeys,
+                        menuTarget.projectKey,
+                        localPlatform,
+                      )
                       ? 'ccAgent.sidebar.projectAction.unpin'
                       : 'ccAgent.sidebar.projectAction.pin',
                   )}

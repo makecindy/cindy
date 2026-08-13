@@ -55,6 +55,9 @@ export function normalizeRecentWorkdirPath(
   raw: string | null | undefined,
   localPlatform: NodeJS.Platform = process.platform,
 ): string | null {
+  // Kept in the public helper signature for callers/tests that inject a platform;
+  // platform now affects comparison identity only, never persisted path spelling.
+  void localPlatform;
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
@@ -213,16 +216,19 @@ export async function removeRecentWorkdir(
 ): Promise<{ deleted: boolean; normalizedPath: string }> {
   const normalized = normalizeRecentWorkdirPath(rawPath, localPlatform);
   if (!normalized) return { deleted: false, normalizedPath: rawPath };
-  const db = getDbClient().drizzle;
+  const client = getDbClient();
+  if (isCaseInsensitiveWindowsPath(normalized, localPlatform)) {
+    const result = await client.tx('recentWorkdirs.removeWindowsIdentity', {
+      path: normalized,
+    });
+    return { deleted: result.changes > 0, normalizedPath: normalized };
+  }
+  const db = client.drizzle;
   // 必须显式 .run():worker 代理的 DbClient 对隐式 await 的 DML 走 executeAll,
   // 会丢弃 RunResult(见 drizzleProxy.test.ts),导致真删了也报 deleted:false。
   const result = (await db
     .delete(recentWorkdirs)
-    .where(
-      isCaseInsensitiveWindowsPath(normalized, localPlatform)
-        ? sql`lower(${recentWorkdirs.path}) = lower(${normalized})`
-        : eq(recentWorkdirs.path, normalized),
-    )
+    .where(eq(recentWorkdirs.path, normalized))
     .run()) as { changes?: number } | undefined;
   return { deleted: (result?.changes ?? 0) > 0, normalizedPath: normalized };
 }
