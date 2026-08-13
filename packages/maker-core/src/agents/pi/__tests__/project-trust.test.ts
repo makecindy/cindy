@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { evaluatePiProjectTrust, piProjectKey } from '../project-trust.js';
+import {
+  evaluatePiProjectTrust,
+  piCanonicalPathIsWithin,
+  piCanonicalPathsEqual,
+  piProjectKey,
+} from '../project-trust.js';
 import type {
   PiProjectApprovalSnapshot,
   PiProjectDiscoveredResources,
@@ -50,6 +55,24 @@ function expectSettingsDiscovered(result: ReturnType<typeof evaluatePiProjectTru
 }
 
 describe('Pi project trust contract', () => {
+  it('compares launch-time realpaths with the approval platform identity', () => {
+    expect(piCanonicalPathsEqual(identity, '/repo/Skill', '/repo/Skill')).toBe(true);
+    expect(piCanonicalPathsEqual(identity, '/repo/Skill', '/repo/skill')).toBe(false);
+    expect(piCanonicalPathsEqual({
+      platform: 'win32',
+      windowsCaseComparison: 'ordinal-insensitive',
+    }, 'C:\\Repo\\Skill', 'c:/repo/skill')).toBe(true);
+  });
+
+  it('checks canonical containment without prefix or Windows case aliases', () => {
+    expect(piCanonicalPathIsWithin(identity, '/repo', '/repo/skills/demo')).toBe(true);
+    expect(piCanonicalPathIsWithin(identity, '/repo', '/repository/skills/demo')).toBe(false);
+    expect(piCanonicalPathIsWithin({
+      platform: 'win32',
+      windowsCaseComparison: 'ordinal-insensitive',
+    }, 'C:\\Repo', 'c:\\repo\\skills\\demo')).toBe(true);
+  });
+
   it('uses canonical repo root + workingDir and isolates sibling workingDirs', () => {
     expect(piProjectKey(identity)).toBe('/repo\0/repo/packages/app');
     expect(evaluatePiProjectTrust({ identity, approval: approval(), discovered }).status).toBe('approved');
