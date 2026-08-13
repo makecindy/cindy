@@ -1,6 +1,7 @@
 import type { AgentKind } from '@cindy/maker-core';
 
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
+import { buildUiAssignmentInitialTask } from './orcaUiAssignment.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort } from './orcaTeamService.js';
 import { normalizeOrcaWorkerLabel } from './orcaWorkerCreationService.js';
 import type {
@@ -376,7 +377,10 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     if (normalized.initialTask) {
       dispatchResult = await dispatchInitialTask({
         workerSessionId: created.workerSessionId,
-        message: normalized.initialTask,
+        message: buildUiAssignmentInitialTask({
+          leadSessionId: params.leadSessionId,
+          initialTask: normalized.initialTask,
+        }),
         context: `enable_collab_mode/${created.workerSessionId}/delegate_task`,
       });
     } else {

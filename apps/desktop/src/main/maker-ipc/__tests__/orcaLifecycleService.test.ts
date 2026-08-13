@@ -585,7 +585,7 @@ describe('OrcaLifecycleService', () => {
   });
 
   it('keeps the worker role slug as the default label when a delegate task exists', async () => {
-    const { calls, service } = createDeps();
+    const { calls, deps, service } = createDeps();
 
     await expect(
       service.enableTeam({
@@ -610,6 +610,27 @@ describe('OrcaLifecycleService', () => {
       'broadcastSessionCreated:worker-session-1',
       'broadcastOrcaWorkerChanged:lead-1',
     ]);
+    expect(deps.dispatchWorkerTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('[Orca UI Assignment]'),
+        dispatchMeta: expect.objectContaining({
+          context: 'enable_collab_mode/worker-session-1/delegate_task',
+        }),
+      }),
+    );
+    const dispatchedMessage = vi.mocked(deps.dispatchWorkerTask).mock.calls[0]?.[0].message;
+    expect(dispatchedMessage).toContain('Task:\nReview PR #42 now');
+    expect(dispatchedMessage).toContain('Lead session id: "lead-1"');
+    expect(dispatchedMessage).toContain(
+      'search_chat_history, args {"query":"<keywords>","session_ids":["lead-1"]}',
+    );
+    expect(dispatchedMessage).toContain(
+      'get_chat_history, args {"session_ids":["lead-1"],"roles":["user","assistant"]}',
+    );
+    expect(dispatchedMessage).toContain('If the task is self-contained, proceed directly');
+    expect(dispatchedMessage).toContain(
+      "do not assume the process cwd is the Lead's active worktree",
+    );
   });
 
   it('falls back to worker when the worker role cannot produce a label slug', async () => {
