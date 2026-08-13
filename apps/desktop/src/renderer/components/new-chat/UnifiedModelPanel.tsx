@@ -39,6 +39,7 @@ import {
   buildUnifiedListSections,
   buildUnifiedRail,
   isRecommendedFavoriteConfig,
+  priceTierOf,
   railItemKey,
   resolveFavoriteRowConfig,
   resolveUnifiedRowConfig,
@@ -689,22 +690,39 @@ export function UnifiedModelPanel({
               {section.rows.map((row) => {
                 const config = configOf(row.entry, row.favorite);
                 const key = anchorKey(row.anchor);
-                // 行内折扣徽标:只在真有折扣 / 限免时渲染,别把每一行都加宽。
+                // 行内价格(设计稿 v4 定稿 F 样式):付费行显示 $ 档串,折扣行亮段按
+                // 折后价比例填充并尾随 ↓X%;限免显示淡染小徽标;无报价不渲染节点。
                 // 价格按**该行生效引擎的 wire id**查(同一逻辑模型换引擎可能换一条报价)。
                 const price = priceOf(
                   row.entry.providerId,
                   config.wireModelId ?? row.entry.modelId,
                   config.agent,
                 );
-                const discountLabel =
-                  price?.kind === 'free'
-                    ? t('newChat.modelSelector.pricing.free')
-                    : price?.kind === 'priced' && price.discount !== undefined
-                      ? t(
-                          'newChat.modelSelector.pricing.discount',
-                          modelPriceDiscountLabelValues(price.discount),
-                        )
-                      : null;
+                let priceDisplay:
+                  | NonNullable<Parameters<typeof UnifiedModelRow>[0]['priceDisplay']>
+                  | null = null;
+                if (price?.kind === 'free') {
+                  priceDisplay = { kind: 'free' };
+                } else if (price?.kind === 'priced') {
+                  // 档位按**标准价**判(original;折扣不改变模型的价格档),亮段比例按折扣算。
+                  const basis = price.original ?? price.current;
+                  const discountPct =
+                    price.discount !== undefined ? Math.round(price.discount * 100) : 0;
+                  priceDisplay = {
+                    kind: 'tier',
+                    tier: priceTierOf(basis.outputPerMtok, basis.currency),
+                    ...(discountPct > 0 && discountPct < 100
+                      ? {
+                          discountPct,
+                          paidPct: 100 - discountPct,
+                          title: t(
+                            'newChat.modelSelector.pricing.discount',
+                            modelPriceDiscountLabelValues(price.discount ?? 0),
+                          ),
+                        }
+                      : {}),
+                  };
+                }
                 return (
                   <UnifiedModelRow
                     key={key}
@@ -722,7 +740,7 @@ export function UnifiedModelPanel({
                         : config.customized
                     }
                     justFavorited={justFavorited === key}
-                    {...(discountLabel ? { discountLabel } : {})}
+                    {...(priceDisplay ? { priceDisplay } : {})}
                     {...(section.kind === 'defaults'
                       ? { defaultBadge: t('newChat.modelSelector.unified.defaultBadge') }
                       : {})}

@@ -40,6 +40,18 @@ export const EFFORT_TIER_FALLBACK_COLOR = EFFORT_TIER_COLORS.medium;
 /** Fast(插队加速)开启态的蓝 —— 只在配置浮层内部使用(外侧闪电保持中性色,§1.3)。 */
 export const FAST_ACCENT_COLOR = '#3B9EFF';
 
+/**
+ * 价格档($ 串)的档位色 —— 设计稿 v4 定稿(saveStyle F)的三档:便宜绿 / 中档琥珀 /
+ * 高价红。与档位色同理是跨主题固定的功能色(价格档表达「这个模型贵不贵」,不随明暗
+ * 主题变),同值注册进 colors.ts(`price-tier-*`)。t1 与推理强度 low 共用同一支绿 ——
+ * 折扣填充亮段也是它,同一支绿在面板里统一表达「省」。
+ */
+export const PRICE_TIER_COLORS = {
+  t1: EFFORT_TIER_COLORS.low,
+  t2: '#B58A1F',
+  t3: '#C05353',
+} as const satisfies Record<string, string>;
+
 /** 取某档位的绝对色;未知档回落中间档色。 */
 export function effortTierColor(effort: string | null | undefined): string {
   if (!effort) return EFFORT_TIER_FALLBACK_COLOR;

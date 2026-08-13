@@ -508,3 +508,19 @@ export function computeFlyoutPlacement(args: {
   const top = Math.min(Math.max(margin, anchor.top - rowOffset), maxTop);
   return { left, top, side };
 }
+
+/**
+ * 价格档($ 串)分档 —— 设计稿 v4 定稿的行内价格样式(F):每个付费行显示 $×1-3,
+ * 折扣行在其上做亮段填充。
+ *
+ * 档位按**标准输出价**判(USD / Mtok;CNY 报价按 ~7 折算),折扣不改变模型的价格档 ——
+ * 档表达「这个模型本身贵不贵」,省了多少由亮段比例与 ↓X% 表达。分界取自当前目录的
+ * 真实价带:轻量模型(DeepSeek / Haiku / GPT mini 级,输出 ≤$3)一档,主力模型
+ * (Sonnet / GPT 5.6 级,≤$15)二档,旗舰(Opus / Fable 级)三档。
+ */
+export function priceTierOf(outputPerMtok: number, currency: string): 1 | 2 | 3 {
+  const usd = currency === 'CNY' ? outputPerMtok / 7 : outputPerMtok;
+  if (usd <= 3) return 1;
+  if (usd <= 15) return 2;
+  return 3;
+}

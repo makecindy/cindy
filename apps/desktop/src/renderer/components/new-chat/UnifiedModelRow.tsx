@@ -8,7 +8,7 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
 import type { Effort } from '@/lib/userPreferences.types';
 
-import { EFFORT_TIER_COLORS } from '@/themes/effortTierColors';
+import { EFFORT_TIER_COLORS, PRICE_TIER_COLORS } from '@/themes/effortTierColors';
 
 import { agentOptionOf } from './agentOptions';
 // 图标规则(模型条目 icon 优先、缺省回落来源供应商标)只有一份实现,复用它而不是抄一份。
@@ -34,7 +34,7 @@ export function UnifiedModelRow({
   onSelect,
   onStar,
   onRevealForKeyboard,
-  discountLabel,
+  priceDisplay,
   defaultBadge,
 }: {
   entry: UnifiedModelEntry;
@@ -57,8 +57,23 @@ export function UnifiedModelRow({
   onStar: () => void;
   /** ← 键:打开该行的配置浮层并把焦点送进去(键盘用户的浮层入口,与既有面板同键位)。 */
   onRevealForKeyboard: (anchor: UnifiedAnchor, element: HTMLElement) => void;
-  /** 已本地化的折扣 / 限免文案;**只在真有折扣时传**(没有就不渲染,别把每行都加宽)。 */
-  discountLabel?: string;
+  /**
+   * 行内价格展示(设计稿 v4 定稿的 F 样式):
+   *   - `free` → 「限时免费」淡染小徽标;
+   *   - `tier` → $ 档串($×1-3,档位色);**有折扣时** $ 串双层互补裁切 —— 亮段(绿)
+   *     宽度 = 折后价比例(`paidPct`),灰段是省掉的部分,尾随「↓X%」淡染小字。
+   * 不传 = 无报价,行内不渲染任何价格节点(别把每行都加宽)。
+   */
+  priceDisplay?: {
+    kind: 'free' | 'tier';
+    tier?: 1 | 2 | 3;
+    /** 折扣行:折后价占比(0-100,亮段宽度);无折扣不传。 */
+    paidPct?: number;
+    /** 折扣行:↓X% 的 X。 */
+    discountPct?: number;
+    /** 已本地化的悬停说明(折扣幅度全文)。 */
+    title?: string;
+  };
   /** 已本地化的「默认」标识;仅默认小节的行传。 */
   defaultBadge?: string;
 }) {
@@ -132,19 +147,63 @@ export function UnifiedModelRow({
             {defaultBadge}
           </span>
         )}
-        {discountLabel && (
+        {priceDisplay?.kind === 'free' && (
           <span
-            data-discount-badge
-            title={discountLabel}
-            // 折扣用淡染绿(与档位色表里的 low 同一支绿),不抢模型名的注意力,也不占
-            // 固定宽度 —— 没折扣的行完全不渲染这个节点。
+            data-price-free
             className="inline-flex shrink-0 items-center rounded-full px-1.5 py-[1px] text-10 font-semibold"
             style={{
               color: EFFORT_TIER_COLORS.low,
               backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
             }}
           >
-            {discountLabel}
+            {t('newChat.modelSelector.pricing.free')}
+          </span>
+        )}
+        {priceDisplay?.kind === 'tier' && priceDisplay.tier !== undefined && (
+          <span
+            data-price-tier
+            className="flex shrink-0 items-center gap-1"
+            {...(priceDisplay.title ? { title: priceDisplay.title } : {})}
+          >
+            {priceDisplay.paidPct !== undefined && priceDisplay.discountPct !== undefined ? (
+              <>
+                {/* 折扣画在钱上(设计稿 F):$ 串双层同文互补裁切 —— 亮段(绿)宽度 =
+                    折后价比例,灰段是省掉的部分,分界可以落在字形中间。 */}
+                <span
+                  aria-hidden
+                  className="relative inline-block text-11 font-semibold leading-none tracking-[0.5px]"
+                >
+                  <span className="invisible">{'$'.repeat(priceDisplay.tier)}</span>
+                  <span className="absolute inset-0 text-[var(--text-tertiary)] opacity-55">
+                    {'$'.repeat(priceDisplay.tier)}
+                  </span>
+                  <span
+                    className="absolute inset-0"
+                    style={{
+                      color: PRICE_TIER_COLORS.t1,
+                      clipPath: `inset(0 ${100 - priceDisplay.paidPct}% 0 0)`,
+                    }}
+                  >
+                    {'$'.repeat(priceDisplay.tier)}
+                  </span>
+                </span>
+                <span
+                  data-discount-badge
+                  className="inline-flex shrink-0 items-center text-11 font-semibold tracking-[0.2px]"
+                  style={{ color: EFFORT_TIER_COLORS.low }}
+                >
+                  {`↓${priceDisplay.discountPct}%`}
+                </span>
+              </>
+            ) : (
+              // 无折扣:$ 串按档位色(便宜绿 / 中档琥珀 / 高价红)。
+              <span
+                className="text-11 font-semibold leading-none tracking-[0.5px]"
+                style={{ color: PRICE_TIER_COLORS[`t${priceDisplay.tier}`] }}
+              >
+                {'$'.repeat(priceDisplay.tier)}
+              </span>
+            )}
           </span>
         )}
         <button
@@ -202,10 +261,11 @@ export function UnifiedModelRow({
         />
       </div>
       {entry.description && (
-        // 单行截断 + title 全文:英文长描述在窄面板下撑破布局是实测反馈的问题。
+        // 单行截断 + title 全文;宽度上限收紧到约等于最长模型名的量级(~30ch)——
+        // 描述是辅助信息,不该比模型名更长地占据视线(2026-08-13 实测反馈)。
         <div
           title={entry.description}
-          className="min-w-0 max-w-full truncate pl-[26px] pt-px text-12 text-[var(--text-tertiary)]"
+          className="min-w-0 max-w-[30ch] truncate pl-[26px] pt-px text-12 text-[var(--text-tertiary)]"
         >
           {entry.description}
         </div>

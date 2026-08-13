@@ -762,15 +762,52 @@ describe('统一面板 · 行内折扣徽标', () => {
       onSelect: vi.fn(),
       onStar: vi.fn(),
     };
+    // 设计稿 v4 定稿(F):折扣行 = $ 串亮段填充(亮段宽度 = 折后价比例)+ ↓X% 小字。
     const withBadge = render(
-      React.createElement(UnifiedModelRow, { ...common, discountLabel: '立省 60%' }),
+      React.createElement(UnifiedModelRow, {
+        ...common,
+        priceDisplay: {
+          kind: 'tier' as const,
+          tier: 2 as const,
+          paidPct: 40,
+          discountPct: 60,
+          title: '立省 60%',
+        },
+      }),
     );
     const badge = withBadge.container.querySelector('[data-discount-badge]') as HTMLElement;
-    expect(badge?.textContent).toBe('立省 60%');
-    expect(badge.getAttribute('title')).toBe('立省 60%');
+    expect(badge?.textContent).toBe('↓60%');
+    const tierNode = withBadge.container.querySelector('[data-price-tier]') as HTMLElement;
+    expect(tierNode.getAttribute('title')).toBe('立省 60%');
+    // 亮段裁切:右侧裁掉的比例 = 100 - paidPct。
+    expect(tierNode.innerHTML).toContain('inset(0 60% 0 0)');
     withBadge.unmount();
 
+    // 无折扣付费行:$ 串按档位色渲染,无 ↓ 徽标。
+    const plain = render(
+      React.createElement(UnifiedModelRow, {
+        ...common,
+        priceDisplay: { kind: 'tier' as const, tier: 3 as const },
+      }),
+    );
+    expect(plain.container.querySelector('[data-discount-badge]')).toBeNull();
+    expect(plain.container.querySelector('[data-price-tier]')?.textContent).toBe('$$$');
+    plain.unmount();
+
+    // 限时免费:淡染小徽标。
+    const free = render(
+      React.createElement(UnifiedModelRow, {
+        ...common,
+        priceDisplay: { kind: 'free' as const },
+      }),
+    );
+    expect(free.container.querySelector('[data-price-free]')).not.toBeNull();
+    free.unmount();
+
+    // 不传 = 无报价,不渲染任何价格节点。
     const without = render(React.createElement(UnifiedModelRow, common));
     expect(without.container.querySelector('[data-discount-badge]')).toBeNull();
+    expect(without.container.querySelector('[data-price-tier]')).toBeNull();
+    expect(without.container.querySelector('[data-price-free]')).toBeNull();
   });
 });

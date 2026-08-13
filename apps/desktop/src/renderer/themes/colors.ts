@@ -1,5 +1,5 @@
 import { registerColor } from './color-registry';
-import { EFFORT_TIER_COLORS } from './effortTierColors';
+import { EFFORT_TIER_COLORS, PRICE_TIER_COLORS } from './effortTierColors';
 
 function createNotAllowedCursor(stroke: string): string {
   const encodedStroke = stroke.startsWith('#')
@@ -1074,6 +1074,11 @@ registerColor('favorite-star', {
 // 要在相邻档色之间逐帧插值,必须拿到数值 hex,故那份表是源、这里从它注册,两处不可能漂移。
 for (const [tier, hex] of Object.entries(EFFORT_TIER_COLORS)) {
   registerColor(`effort-tier-${tier}`, { light: hex, dark: hex }, `推理强度档位色 — ${tier}`);
+}
+// 价格档($ 串)三档色:同为跨主题固定功能色(价格档表达「贵不贵」,不随明暗主题变),
+// 数值正本同在 themes/effortTierColors.ts。
+for (const [tier, hex] of Object.entries(PRICE_TIER_COLORS)) {
+  registerColor(`price-tier-${tier}`, { light: hex, dark: hex }, `价格档位色 — ${tier}`);
 }
 // Permission selector
 registerColor('perm-item-selected-bg', {
