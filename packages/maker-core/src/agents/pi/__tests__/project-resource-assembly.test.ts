@@ -704,7 +704,7 @@ describe('Pi approved project resource assembly', () => {
         name: 'skill:demo',
         source: 'skill',
         sourceInfo: {
-          scope: 'temporary',
+          scope: 'project',
           source: 'local',
           baseDir: skillPath,
           path: `${skillPath}/SKILL.md`,

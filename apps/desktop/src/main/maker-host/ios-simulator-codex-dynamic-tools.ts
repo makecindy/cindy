@@ -18,7 +18,7 @@ const TOOLS = [
     type: 'function',
     name: LIST_TOOLS_NAME,
     description:
-      "Discover Cindy's embedded iOS Simulator tools. Use this deterministic Host gateway for iOS app work instead of probing MCP resources or opening macOS Simulator.app. Every tool behind it acts on a simulated Apple device: never use it to browse the web, fetch HTTP data, or automate this Mac. Start with check_environment.",
+      "Discover Cindy's embedded iOS Simulator tools. Use this deterministic Host gateway when the embedded route is selected for iOS app work. Every tool behind it acts on a simulated Apple device: never use it to browse the web, fetch HTTP data, or automate this Mac. Start with check_environment.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,

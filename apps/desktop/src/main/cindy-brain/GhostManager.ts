@@ -10,6 +10,8 @@ import {
   GHOST_ICON_MAX_BYTES,
   GHOST_INSTALL_MANIFEST_MAX_BYTES,
   GHOST_SLOTS,
+  GHOST_MANUAL_ENTRY_FILE,
+  GHOST_MANUAL_MD_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
   ghostLocalePathFor,
   ghostIconMimeType,
@@ -29,6 +31,11 @@ import {
   readBoundedFileNoFollowSync,
 } from '../utils/readBoundedFile.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
+import { parseInstalledGhostManifest } from '../installedGhostManifest.js';
+import {
+  decodeGhostManualMarkdown,
+  ghostManualLogicalPathForEntry,
+} from './ghostManualValidation.js';
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 export const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
@@ -44,6 +51,12 @@ export const MAX_NODE_ZIP_ENTRIES = 2_048;
 const DISABLED_MARKER_FILE = '.disabled';
 /** 安装时由主机写入的信任快照与权限 receipt；作者包不能提供。 */
 export const TRUST_METADATA_FILE = '.cindy-trust.json';
+
+function isZipSymbolicLink(entry: JSZip.JSZipObject): boolean {
+  return (
+    typeof entry.unixPermissions === 'number' && (entry.unixPermissions & 0o170000) === 0o120000
+  );
+}
 
 /** 只有宿主安装/播种路径可以写入的 Cindy 官方身份。 */
 export const CINDY_OFFICIAL_GHOST_TRUST: GhostTrustInfo = Object.freeze({
@@ -198,7 +211,14 @@ export class GhostManager {
         });
         continue;
       }
-      const v = validateGhostManifest(raw);
+      const parsedInstalled = parseInstalledGhostManifest(raw);
+      const v = parsedInstalled;
+      if (parsedInstalled.ok && parsedInstalled.legacyManualIgnored) {
+        this.options.log?.warn('ghost legacy manual metadata ignored', {
+          code: 'LEGACY_MANUAL_METADATA_IGNORED',
+          manifestId: parsedInstalled.manifest.id,
+        });
+      }
       if (!v.ok) {
         this.options.log?.warn('ghost dir skipped: invalid manifest', { dir, reason: v.reason });
         continue;
@@ -710,6 +730,77 @@ export class GhostManager {
             reason: `skill 条目 ${skillItem.dir}:${consistencyError}`,
           },
         };
+      }
+    }
+
+    // 5.5) manual:声明目录内只允许普通 Markdown 文件；逐文件限量并严格
+    // 校验 UTF-8/二进制内容。入口固定为 MANUAL.md，装入前一次性对账。
+    const validatedManualEntries = new Set<string>();
+    for (const manualItem of v.manifest.manual?.items ?? []) {
+      const unitPrefix = `${prefix}${manualItem.dir}/`;
+      const entryPath = `${unitPrefix}${GHOST_MANUAL_ENTRY_FILE}`;
+      const entry = zip.file(entryPath);
+      if (!entry || entry.dir || isZipSymbolicLink(entry)) {
+        return {
+          rejection: {
+            code: 'file-invalid',
+            reason: `manual 条目声明了 ${manualItem.dir},但压缩包内缺少普通文件 ${manualItem.dir}/${GHOST_MANUAL_ENTRY_FILE}`,
+          },
+        };
+      }
+      const unitEntries = allEntries.filter(
+        (candidate) => {
+          const normalizedName = candidate.name.replace(/\\/g, '/');
+          return normalizedName.startsWith(unitPrefix) && normalizedName !== unitPrefix;
+        },
+      );
+      for (const manualEntry of unitEntries) {
+        const normalizedEntryName = manualEntry.name.replace(/\\/g, '/');
+        const relativePath = normalizedEntryName.slice(unitPrefix.length).replace(/\/$/, '');
+        if (relativePath.length === 0) continue;
+        if (
+          manualEntry.name.includes('\\') ||
+          isZipSymbolicLink(manualEntry) ||
+          ghostManualLogicalPathForEntry(
+            manualItem.name,
+            relativePath,
+            manualEntry.dir ? 'directory' : 'file',
+          ) === null
+        ) {
+          return {
+            rejection: {
+              code: 'file-invalid',
+              reason: `manual 条目无法形成合法 ghost_manual 路径:${manualItem.dir}/${relativePath}`,
+            },
+          };
+        }
+        if (manualEntry.dir) continue;
+        if (validatedManualEntries.has(manualEntry.name)) continue;
+        let manualBytes: Buffer;
+        try {
+          manualBytes = await readZipEntryBufferWithLimit(
+            manualEntry,
+            GHOST_MANUAL_MD_MAX_BYTES,
+            `manual ${manualItem.dir}/${relativePath}`,
+          );
+        } catch {
+          return {
+            rejection: {
+              code: 'file-invalid',
+              reason: `${manualItem.dir}/${relativePath} 过大(上限 ${GHOST_MANUAL_MD_MAX_BYTES} 字节)`,
+            },
+          };
+        }
+        const decoded = decodeGhostManualMarkdown(manualBytes);
+        if (!decoded.ok) {
+          return {
+            rejection: {
+              code: 'file-invalid',
+              reason: `manual 文件不合格(${manualItem.dir}/${relativePath}):${decoded.reason}`,
+            },
+          };
+        }
+        validatedManualEntries.add(manualEntry.name);
       }
     }
 

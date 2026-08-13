@@ -207,7 +207,7 @@ export function registerIOSSimulatorTools(
   register({
     name: "attach_device",
     description:
-      "Attach one exact simulator UDID to the current Cindy embedded-simulator session. Resource admission is enforced by the host; do not open Simulator.app.",
+      "Attach one exact simulator UDID to the current Cindy embedded-simulator session. Resource admission is enforced by the host; this operation does not open Simulator.app.",
     inputShape: { udid: z.string().uuid() },
     handler: async (args) =>
       callHost(deps, "attach_device", args, getContext?.()),
@@ -247,7 +247,7 @@ export function registerIOSSimulatorTools(
   register({
     name: "start_instance",
     description:
-      "Boot the exact simulator attached to this Cindy embedded-simulator session and invalidate stale generations. Keep the device in Cindy's viewer rather than opening Simulator.app.",
+      "Boot the exact simulator attached to this Cindy embedded-simulator session, invalidate stale generations, and display it in Cindy's viewer without opening Simulator.app.",
     inputShape: routeShape,
     handler: async (args) =>
       callHost(deps, "start_instance", args, getContext?.()),

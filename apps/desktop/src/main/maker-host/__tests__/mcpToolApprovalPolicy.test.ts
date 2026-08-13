@@ -15,6 +15,7 @@ describe('desktop Claude read-only allowlist', () => {
       expect.arrayContaining([
         'mcp__cindy__ghost_list',
         'mcp__cindy__ghost_info',
+        'mcp__cindy__ghost_manual',
         'mcp__cindy__ghost_forge_guide',
         'mcp__cindy_ios_simulator__list_tools',
         'mcp__cindy_helper__list_tools',
@@ -48,6 +49,7 @@ describe('desktop Claude read-only allowlist', () => {
     expect(getDesktopClaudeReadOnlyAllowedTools()).toEqual([
       'mcp__cindy__ghost_list',
       'mcp__cindy__ghost_info',
+      'mcp__cindy__ghost_manual',
       'mcp__cindy__ghost_forge_guide',
       'mcp__cindy_browser__list_tools',
       'mcp__cindy_android__list_tools',
@@ -305,6 +307,9 @@ describe('desktop MCP approval policy', () => {
       'auto-approve',
     );
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_info' })).toBe(
+      'auto-approve',
+    );
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_manual' })).toBe(
       'auto-approve',
     );
 

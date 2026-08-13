@@ -22,7 +22,6 @@ import {
   GHOST_CARD_HEIGHT_MAX,
   GHOST_CARD_HEIGHT_MIN,
   GHOST_INSTALL_MANIFEST_MAX_BYTES,
-  GHOST_MANIFEST_FILE,
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
   diffGhostPermissionItems,
@@ -34,7 +33,6 @@ import {
   isOfficialGhostId,
   isValidGhostId,
   layoutWithGhostPanel,
-  validateGhostManifest,
   type GhostHostNoticeKey,
   type GhostImageAspectRatio,
   type GhostManifest,
@@ -244,7 +242,7 @@ import { GhostFsSlot } from './fsSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
-import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
+import { readInstalledGhostManifest } from '../installedGhostManifest.js';
 import {
   ghostManifestDigest,
   PluginMarketLedger,
@@ -2063,17 +2061,8 @@ function readInstalledGhostManifestDigest(ghostId: string): string | null {
     .list()
     .find((candidate) => candidate.manifest.id === ghostId);
   if (!ghost) return null;
-  try {
-    const bytes = readBoundedFileNoFollowSync(
-      path.join(ghost.dir, GHOST_MANIFEST_FILE),
-      GHOST_INSTALL_MANIFEST_MAX_BYTES,
-    );
-    if (bytes === null) return null;
-    const validated = validateGhostManifest(JSON.parse(bytes.toString('utf8')) as unknown);
-    return validated.ok ? ghostManifestDigest(validated.manifest) : null;
-  } catch {
-    return null;
-  }
+  const parsed = readInstalledGhostManifest(ghost.dir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
+  return parsed.ok ? ghostManifestDigest(parsed.manifest) : null;
 }
 
 /** Resolve Connection metadata only from a trusted organization market install. */

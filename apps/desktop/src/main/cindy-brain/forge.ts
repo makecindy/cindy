@@ -21,13 +21,23 @@ import JSZip from 'jszip';
 import {
   GHOST_ICON_MAX_BYTES,
   GHOST_INSTALL_MANIFEST_MAX_BYTES,
+  GHOST_MANUAL_ENTRY_FILE,
+  GHOST_MANUAL_MD_MAX_BYTES,
   GHOST_MANIFEST_FILE,
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_SKILL_MD_MAX_BYTES,
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
-import { GHOST_MANIFEST_MAX_BYTES, readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
+import {
+  GHOST_MANIFEST_MAX_BYTES,
+  readBoundedFileNoFollow,
+  readBoundedFileNoFollowWithStat,
+} from '../utils/readBoundedFile.js';
+import {
+  decodeGhostManualMarkdown,
+  ghostManualLogicalPathForEntry,
+} from './ghostManualValidation.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
@@ -725,6 +735,122 @@ async function buildGhostPackage(
       }
     }
 
+    // 3.6) manual:每个声明单元必须以 MANUAL.md 为入口，目录内只允许普通
+    // Markdown 文件；逐文件限量、严格 UTF-8，并拒绝并发截短与二进制内容。
+    // 缓存本次校验过的字节，生成 zip 时直接使用同一份快照，避免“预检一份、
+    // 入包时又读到另一份”的竞态。嵌套单元共享缓存，同一物理文件只校验一次。
+    const manualFileSnapshots = new Map<string, Buffer>();
+    for (const item of manifest.manual?.items ?? []) {
+      const unitRoot = path.join(dir, ...item.dir.split('/'));
+      const validateManualDir = async (
+        currentDir: string,
+        relativeDir: string,
+        preloadedEntries?: fs.Dirent[],
+      ): Promise<Exclude<ForgePackResult, { ok: true }> | null> => {
+        let entries: fs.Dirent[];
+        if (preloadedEntries) {
+          entries = preloadedEntries;
+        } else {
+          try {
+            entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+          } catch {
+            return {
+              ok: false,
+              errorCode: 'ENTRY_MISSING',
+              message: `读取手册目录失败:${item.dir}${relativeDir ? `/${relativeDir}` : ''}`,
+            };
+          }
+        }
+        for (const entry of entries) {
+          if (shouldSkip(entry.name)) continue;
+          const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+          const logicalPath = `${item.dir}/${relativePath}`;
+          const absolutePath = path.join(currentDir, entry.name);
+          if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) {
+            return {
+              ok: false,
+              errorCode: 'MANIFEST_INVALID',
+              message: `manual 单元只允许普通 Markdown 文件:${logicalPath}`,
+            };
+          }
+          if (entry.isDirectory()) {
+            if (ghostManualLogicalPathForEntry(item.name, relativePath, 'directory') === null) {
+              return {
+                ok: false,
+                errorCode: 'MANIFEST_INVALID',
+                message: `manual 目录无法形成合法 ghost_manual 路径:${logicalPath}`,
+              };
+            }
+            const nestedError = await validateManualDir(absolutePath, relativePath);
+            if (nestedError) return nestedError;
+            continue;
+          }
+          if (ghostManualLogicalPathForEntry(item.name, relativePath, 'file') === null) {
+            return {
+              ok: false,
+              errorCode: 'MANIFEST_INVALID',
+              message: `manual 文件无法形成合法 ghost_manual Markdown 路径:${logicalPath}`,
+            };
+          }
+          if (manualFileSnapshots.has(logicalPath)) continue;
+          let read;
+          try {
+            read = await readBoundedFileNoFollowWithStat(
+              absolutePath,
+              GHOST_MANUAL_MD_MAX_BYTES,
+              {
+                containWithin: realDir,
+                verifyContentStability: true,
+              },
+            );
+          } catch {
+            return {
+              ok: false,
+              errorCode: 'MANIFEST_INVALID',
+              message: `读取 manual 文件失败:${logicalPath}`,
+            };
+          }
+          if (read === null) {
+            return {
+              ok: false,
+              errorCode: 'MANIFEST_INVALID',
+              message: `${logicalPath} 不是普通文件或超过 ${GHOST_MANUAL_MD_MAX_BYTES} 字节上限`,
+            };
+          }
+          const decoded = decodeGhostManualMarkdown(read.bytes);
+          if (!decoded.ok) {
+            return {
+              ok: false,
+              errorCode: 'MANIFEST_INVALID',
+              message: `manual 文件不合格(${logicalPath}):${decoded.reason}`,
+            };
+          }
+          manualFileSnapshots.set(logicalPath, read.bytes);
+        }
+        return null;
+      };
+      let rootEntries: fs.Dirent[];
+      try {
+        rootEntries = await fs.promises.readdir(unitRoot, { withFileTypes: true });
+      } catch {
+        return {
+          ok: false,
+          errorCode: 'ENTRY_MISSING',
+          message: `读取手册目录失败:${item.dir}`,
+        };
+      }
+      const manualEntry = rootEntries.find((entry) => entry.name === GHOST_MANUAL_ENTRY_FILE);
+      if (!manualEntry?.isFile() || manualEntry.isSymbolicLink()) {
+        return {
+          ok: false,
+          errorCode: 'ENTRY_MISSING',
+          message: `清单声明的文件不存在:${item.dir}/${GHOST_MANUAL_ENTRY_FILE}`,
+        };
+      }
+      const manualError = await validateManualDir(unitRoot, '', rootEntries);
+      if (manualError) return manualError;
+    }
+
     // 4) 收集文件(递归,跳过开发残留),数量/体积设限。
     const files: Array<{ rel: string; abs: string }> = [];
     let totalBytes = 0;
@@ -780,6 +906,23 @@ async function buildGhostPackage(
     };
     const tooLarge = await walk(dir, '');
     if (tooLarge) return tooLarge;
+    if (manifest.manual !== undefined) {
+      const isWithinManualUnit = (rel: string): boolean =>
+        manifest.manual!.items.some((item) => rel.startsWith(`${item.dir}/`));
+      const packedManualPaths = new Set(
+        files.filter((file) => isWithinManualUnit(file.rel)).map((file) => file.rel),
+      );
+      const changedManualPath =
+        [...packedManualPaths].find((rel) => !manualFileSnapshots.has(rel)) ??
+        [...manualFileSnapshots.keys()].find((rel) => !packedManualPaths.has(rel));
+      if (changedManualPath !== undefined) {
+        return {
+          ok: false,
+          errorCode: 'MANIFEST_INVALID',
+          message: `manual 目录在打包期间发生变化:${changedManualPath}`,
+        };
+      }
+    }
     // AI icon overlay changes both the manifest snapshot and the icon bytes. A
     // source tree carrying a publisher/reviewer signature cannot be modified
     // here without re-signing, so let the host fall back to the original icon
@@ -831,6 +974,8 @@ async function buildGhostPackage(
         content = manifestBytes;
       } else if (iconPng !== undefined && f.rel === FORGE_AI_ICON_PATH) {
         content = iconPng;
+      } else if (manualFileSnapshots.has(f.rel)) {
+        content = manualFileSnapshots.get(f.rel)!;
       } else {
         let bytes: Buffer | null;
         try {
@@ -1099,21 +1244,24 @@ my-ghost/
 \`\`\`
 
 不要为“当前开发环境版本”机械填写 \`minCindyVersion\`。旧插件和不依赖新版宿主能力的
-插件应省略它；只有确认更早版本无法解析或安装时，才填写能工作的最早正式版本。
+插件应省略它；当更早版本无法正确安装，或虽能安装但缺少新版宿主能力、导致插件无法按
+设计正常工作时，必须填写最早可正常工作的正式版本。\`manual\` / \`ghost_manual\` 属于后者。
 
 ### whenToUse:只写发现线索,不写使用规则
 
 在作者契约里,\`whenToUse\` 是专门给模型做插件发现与判断的唯一字段;
 \`description\` 给人看(装入确认框/详情页),不要拿它兼任模型路由说明。
-\`whenToUse\` 最多 ${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符,花名册会完整展示有效内容,折叠连续空白并对异常数据做防御性截断。模型从花名册命中目标后,
-正常发现链是**花名册 → \`ghost_info\` → \`ghost_call\`**;只有不知道用户装了什么时才查
-\`ghost_list\`。未声明 \`whenToUse\` 时宿主会用 \`description\` 兼容回落,但高质量插件
+\`whenToUse\` 最多 ${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符,花名册会完整展示有效内容,折叠连续空白并对异常数据做防御性截断。花名册命中已知 \`ghost_id\` 时用
+\`ghost_info\` 精准现查单条;未命中或需要全量实时回查时用 \`ghost_list\`。两者都返回完整
+\`CindyGhostInfo\`,取得信息后再按任务交叉读取 Manual 与插件工具目录,信息足够即可调用。
+未声明 \`whenToUse\` 时宿主会用 \`description\` 兼容回落,但高质量插件
 必须单独写好 \`whenToUse\`,不要依赖回落。
 
 只写用户意图、业务对象和常见说法的**场景枚举**,回答"什么情况下应该想到这个插件"。
 禁止塞入"必须/不得"式行为规则、工具调用顺序、参数协议、错误码与重试策略。
-跨工具或类目共用的规则放进 §3.5 的 **\`list_tools(category)\` RULES**;
-单个工具怎么调用放进工具及参数 \`description\`。
+单个工具怎么调用放进工具及参数 \`description\`;同一类别内、紧贴当前工具集合与参数的
+动态规则放进 §3.5 的 **\`list_tools(category)\` RULES**;多工具组合、跨类别完整流程、
+长期稳定的共同原则与深入用法放进 §3.6 的 Manual。不要在三处复制同一份规则。
 
 反例(错把使用规则塞进发现面):
 
@@ -1266,6 +1414,18 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 }
 \`\`\`
 
+**manual 随包手册**(独立顶层字段,不是 slot、不是权限项,详见 §3.6):
+
+\`\`\`json
+"manual": {
+  "items": [{                         // 1–8 条
+    "dir": "manual/getting-started", // 包内物理目录,必须有 MANUAL.md
+    "name": "getting-started",        // ghost_manual path 的逻辑首段,不暴露物理 dir
+    "description": "从安装到首次运行" // 一级轻量索引,1–300 字
+  }]
+}
+\`\`\`
+
 **cindy 能力详单**:声明"这个意识被允许点主机代办菜单上的哪些菜"——只有类目和
 动作,**没有任何具体模型/供应商信息**(选型权在主机与用户,意识只表达意图)。
 类目与动作:\`image\`(\`generate\`=出图 / \`edit\`=改图)、\`video\`(\`generate\`=
@@ -1375,8 +1535,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 
 措辞套路(实测有效):description 写清"干什么 + 返回什么";参数 description 里直接
 写该工具自己的行为规则(如"用户原话透传,不要扩写"、"仅当用户显式说 X 才传 Y")——
-AI 会照做。直接声明工具时,工具/参数 description 是使用规则的落点;两段式目录的
-跨工具规则走 §3.5 的类目 RULES。两者都不要塞进 \`whenToUse\`。
+AI 会照做。直接声明工具时,工具/参数 description 是单工具局部契约的落点;两段式目录中,
+当前类别内、随实时工具集合与参数变化的规则走 §3.5 的类目 RULES。多工具或跨类别的完整
+工作流与长期稳定共同原则走 §3.6 的 Manual。都不要塞进 \`whenToUse\`,也不要重复维护。
 
 ### 3.1 @ 插件入口
 
@@ -1434,8 +1595,58 @@ tools**——本插件的 \`ghost_info\` 单条详情会被撑大,不知道装�
   看不出背后有多少操作。把给人看的能力范围如实写进 ghost.json 的 description,
   再把模型应在什么场景发现你的场景枚举写进 whenToUse,别让人或模型装完才发现。
 
+\`list_tools\` 是插件声明的顶层工具,不是 Host 固定工具;实际通过
+\`ghost_call({ ghost_id: "my-ghost", tool: "list_tools", args: { category: "deploy" } })\`
+调用。类别 RULES 如果依赖跨工具/跨类别工作流或深入说明,不要复制正文,而应给出完整
+\`ghost_manual({ ghost_id: "my-ghost", path: "operations/references/deploy.md" })\` 调用。
+反过来,Manual 也可以用上面的完整 \`ghost_call(... list_tools ...)\` 调用指向实时工具目录。
+两条路径可以反复交叉,没有固定先后顺序;信息足够时,用 \`ghost_call\` 调顶层工具,
+或由两段式插件的 \`call_tool\` 执行具体操作。
+
 分界线的手感:一打以内、意图级 → 直接声明;几十以上、端点级 → 两段式。两段式首次
 使用多一跳(先翻目录),目录进上下文后,同一会话的后续调用与直接声明无异。
+
+## 3.6 manual:按需披露复杂工作流与分层资料
+
+Manual 的归属不按篇幅长短判断。它对标 Skill 正文与 references,承载多工具组合编排、
+跨类别完整工作流、复杂工具深入用法、前置检查、顺序与分支、失败恢复、交付标准、
+跨工具/跨类别长期稳定的共同原则,以及需要分层展开的参考资料。短但决定多个工具如何协作的
+关键原则应进入 Manual;很长但只是在枚举某一个工具的参数,仍应留在该工具 description 或
+所属类别的工具说明/RULES,不能只因内容长就搬进 Manual。
+
+使用顶层 \`manual.items\` 声明手册单元,不要把上述内容塞进 \`whenToUse\` 或 system 提示。
+每个单元目录必须有普通 Markdown \`MANUAL.md\` 入口;目录树可以任意深,但所有非目录条目
+都必须是普通 \`.md\` 文件,单文件不超过 64KB。Markdown 不写 frontmatter;二进制、非法
+UTF-8、符号链接和其它扩展名都会在打包与装入两侧拒绝。
+
+四层信息各司其职:
+
+- \`whenToUse\`:只放系统提示词区插件花名册需要的召回场景;
+- 工具/参数 description:放单个工具的局部契约,包括用途、输入输出与调用前限制;
+- 插件 \`list_tools(category)\` 返回的工具说明与 \`result.rules\`:放当前 category 内、
+  紧贴实时工具集合的动态规则与参数;
+- \`manual\`:放多工具/跨类别编排、复杂工具深入用法、完整工作流、失败恢复、交付标准、
+  长期稳定的共同原则与分层资料。
+
+同一规则只选一个权威落点,不要在工具 description、类别 RULES 与 Manual 复制三份。
+需要另一层信息时给出完整调用互相指路:Manual 可指向
+\`ghost_call({ ghost_id: "my-ghost", tool: "list_tools", args: { category: "deploy" } })\`,
+工具说明或 RULES 可指向 \`ghost_manual\`。两者并行且可以反复交叉,不是固定读取顺序;
+信息够用时即可执行。
+
+导航尽量浅:默认让 \`MANUAL.md\` 一层直达完整任务;内容确需分层展开时再拆深层文件,入口
+直接列出下一步完整调用,例如
+\`ghost_manual({ ghost_id: "my-ghost", path: "getting-started/references/deploy.md" })\`。
+不要让多个索引文件互相指回形成循环。手册正文只作为 tool-result 按需进入上下文,不进入
+生产 system/developer prompt;它是插件作者数据,不是系统规则、用户意图或权限授权,作者不得
+用它伪造授权或绕过工具自身的运行期门禁。
+
+**发布硬门槛**:首个依赖 \`manual\` / \`ghost_manual\` 的插件版本，必须等包含该工具的
+Cindy 先发布，确认首个支持它的**正式版本号**后，再把 \`minCindyVersion\` 设为不低于
+该正式版本并发布插件。开发期版本号未定时只保留这条契约，不猜占位版本。移除
+\`skill.items\` 的迁移版本也必须设置上述 \`minCindyVersion\`，并遵守 Cindy 先发、插件
+后发的顺序；服务端还要保留上一份带 Skill 的历史 release，使旧客户端能通过历史版本回退
+继续取得兼容包。
 
 ## 4. main.js 电子脑(沙箱后台逻辑)
 
@@ -3208,11 +3419,21 @@ if (!opened.ok) console.warn(opened.errorCode, opened.message);
 
 ## 4.16 捆绑 Agent Skills(skill 槽)
 
-想让插件"自带一份教 Agent 怎么用好自己的说明书"(或任何领域技能),把技能目录
-随包携带并声明 \`skill\` 槽 + \`skill.items\` 详单(见 §2)。装入且启用后,主机把
-每个技能目录链接进共享技能根 \`~/.agents/skills/<插件id>--<技能name>\`(Windows 用
-junction),Claude Code 与 Codex 都能自动发现——不复制字节,插件更新技能跟着更新,
-停用/卸载即撤链。
+插件随包 Skill **当前已停止新增,未来计划全部废弃**。新插件不要声明 \`skill\` 槽
+或新增 \`skill.items\`。迁移时按职责映射,不是按篇幅搬运:
+
+- Skill frontmatter 的 \`name + description\` 所承担的身份/召回作用,对标系统提示词区
+  插件花名册的身份与 \`recall\`;插件侧用 \`name\` + \`whenToUse\` 提供这层信息;
+- \`manual.items\` 只是插件容器级一级目录,不对标 Skill frontmatter;
+- \`MANUAL.md\` 与深层 Markdown 承接 Skill 正文、references、复杂工作流与深入用法,
+  只经 \`ghost_manual\` tool-result 按需进入上下文,不进入生产 system/developer prompt;
+- 单工具局部契约下沉到工具/参数 description;当前类别内贴近实时工具集合的动态规则与参数
+  下沉到 \`list_tools(category)\` 的工具说明和 \`result.rules\`;跨工具/跨类别编排与长期
+  稳定原则进入 Manual。Manual 与 \`list_tools\` 用完整调用互相指路,不复制同一段规则。
+
+以下只解释存量包的兼容形态,用于维护与迁移,**不要照抄到新插件**。存量插件装入且
+启用后,主机仍会把每个技能目录链接进共享技能根
+\`~/.agents/skills/<插件id>--<技能name>\`(Windows 用 junction),停用/卸载即撤链。
 
 目录形态(每条 item 一个目录,内必须有 SKILL.md):
 
@@ -3402,12 +3623,14 @@ const opened = await cindy.iosSimulator.request({
   在 Host 面板里选择设备;连续请求会限速;
 - panel.html 保持零桥。面板要使用本槽时,按 §5 先 \`/wake\`,再用同源
   BroadcastChannel 把请求交给 main.js,由 main.js 调 \`cindy.iosSimulator.request\`;
-- Agent 构建、安装、启动与 UI 操作继续调用 Host 注册的 \`cindy_ios_simulator\` MCP。
-  插件 Skill 可以编排这套工作流,但不要用 shell 打开外部 Simulator.app,也不要重复
-  打包一份 WDA/Sidecar;
+- 插件 Skill 选择内嵌路线后,Agent 构建、安装、启动与 UI 操作调用 Host 注册的
+  \`cindy_ios_simulator\` MCP,不要重复打包一份 WDA/Sidecar。内嵌能力不存在或不可用时,
+  Skill 可以按用户目标与普通权限规则改走外部 Xcode、Simulator.app、\`simctl\` 或
+  Computer Use;Host 不会把这些外部操作自动转换为内嵌调用;
 - 本能力仅存在于带该槽的 Cindy Desktop。当前 Host 遇到未来 schema 或未知 capability
   slot 时会把包识别为“需要更新 Cindy”,而不是误报插件非法。已发布的旧 Host 无法追改;
-  Skill 在 MCP 不存在时仍必须引导用户升级 Cindy,不要降级成 shell 或 Node 替代实现。
+  Skill 在 MCP 不存在时必须说明内嵌路线不可用;如果用户目标不依赖 Cindy viewer,
+  可以继续使用正常的外部工具链,否则再引导用户升级 Cindy。
 
 ## 5. 面板(panel.html/css/js)
 

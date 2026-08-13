@@ -868,7 +868,7 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
         sourceInfo: expect.objectContaining({
           path: path.join(explicitSkill, 'SKILL.md'),
           source: 'local',
-          scope: 'temporary',
+          scope: 'project',
         }),
       }),
     ]));
@@ -901,7 +901,7 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
           baseDir: snapshotSkill,
           path: path.join(snapshotSkill, 'SKILL.md'),
           source: 'local',
-          scope: 'temporary',
+          scope: 'project',
         }),
       }),
     ]));
@@ -932,7 +932,7 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
           baseDir: path.dirname(explicitSkill),
           path: explicitSkill,
           source: 'local',
-          scope: 'temporary',
+          scope: 'project',
         }),
       }),
     ]));
@@ -962,7 +962,7 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
     expect(duplicates).toHaveLength(1);
     expect(duplicates[0]).toMatchObject({
       source: 'skill',
-      sourceInfo: { baseDir: first, source: 'local', scope: 'temporary' },
+      sourceInfo: { baseDir: first, source: 'local', scope: 'project' },
     });
   });
 

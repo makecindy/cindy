@@ -3509,6 +3509,7 @@
         "metaWithAuthor": "제작자 {{author}} · 버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "enableNow": "설치 후 바로 활성화",
         "enableNowOpenPanel": "설치 후 바로 활성화하고 패널 열기",
+        "manualCount": "번들 매뉴얼 {{count}}개",
         "expandDescription": "전체 소개 보기",
         "collapseDescription": "소개 접기"
       },

@@ -3508,6 +3508,7 @@
         "metaWithAuthor": "作者 {{author}} · 版本 {{version}}。將安裝到本機，可隨時解除安裝。",
         "enableNow": "安裝後立即生效",
         "enableNowOpenPanel": "安裝後立即生效並打開面板",
+        "manualCount": "隨包手冊 {{count}} 篇",
         "expandDescription": "展開完整介紹",
         "collapseDescription": "收起介紹"
       },

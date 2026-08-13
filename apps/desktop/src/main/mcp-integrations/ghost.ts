@@ -2,7 +2,7 @@
  * ghost.ts — cindy-tools ghost 总机的 host 侧接线(docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
  * 网关模式:agent 工具箱里的插件发现/调用入口固定为
- * ghost_list / ghost_info / ghost_call。工具面(名称/schema/基线描述)版本内
+ * ghost_list / ghost_info / ghost_manual / ghost_call。工具面(名称/schema/基线描述)版本内
  * 恒定;完整描述(含花名册快照)会话内恒定,内容现查现报——本文件就是
  * "现查"的真身:
  *
@@ -70,6 +70,7 @@ import {
 } from '../cindy-brain/index.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
@@ -86,6 +87,8 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('mcp/cindy');
 const MAX_FORGE_ICON_SOURCE_BYTES = 25 * 1024 * 1024;
+const GHOST_NO_TOOLS_MESSAGE =
+  '该插件未声明任何可供调用的工具;不要重试,改用其它方式完成。';
 
 const convertForgeIconToPng = createForgeIconConverter({
   fork: forkForgeIconConversionHost,
@@ -799,6 +802,10 @@ async function grantAttachmentUrls(params: {
   );
 }
 
+function ghostHasTools(ghost: InstalledGhost): boolean {
+  return (ghost.manifest.tools?.length ?? 0) > 0;
+}
+
 function visibleChipGhosts(workdir: string | null): InstalledGhost[] {
   return getGhostManager()
     .list()
@@ -807,7 +814,7 @@ function visibleChipGhosts(workdir: string | null): InstalledGhost[] {
         ghost.enabled &&
         isGhostAvailableForActiveSession(ghost.manifest.id) &&
         ghost.manifest.kind === 'chip' &&
-        (ghost.manifest.tools?.length ?? 0) > 0 &&
+        ghostHasTools(ghost) &&
         !isGhostDisabledForWorkdir(ghost.manifest.id, workdir),
     );
 }
@@ -855,6 +862,14 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
     name: ghost.manifest.name,
     ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
     ...(recall ? { recall } : {}),
+    ...(ghost.manifest.manual
+      ? {
+          manual: ghost.manifest.manual.items.map(({ name, description }) => ({
+            name,
+            description,
+          })),
+        }
+      : {}),
     ...(setup ? { setup } : {}),
     tools: (ghost.manifest.tools ?? []).map((tool) => ({
       name: tool.name,
@@ -927,8 +942,31 @@ export function getCindyGhostsMcpDeps(
       return {
         ok: false,
         errorCode: 'GHOST_NOT_FOUND',
-        message: '该插件未声明任何可供调用的工具;不要重试,改用其它方式完成。',
+        message: GHOST_NO_TOOLS_MESSAGE,
       };
+    },
+    async readGhostManual({ ghostId, path: manualPath }) {
+      const workdir = resolveSessionContext()?.workingDir ?? null;
+      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
+      if (!visibility.ok) {
+        return {
+          ok: false,
+          manual: [],
+          content: '',
+          errorCode: visibility.errorCode,
+          message: visibility.message,
+        };
+      }
+      if (!ghostHasTools(visibility.ghost)) {
+        return {
+          ok: false,
+          manual: [],
+          content: '',
+          errorCode: 'GHOST_NOT_FOUND',
+          message: GHOST_NO_TOOLS_MESSAGE,
+        };
+      }
+      return readInstalledGhostManual(visibility.ghost, manualPath);
     },
     async callGhostTool({
       ghostId,
