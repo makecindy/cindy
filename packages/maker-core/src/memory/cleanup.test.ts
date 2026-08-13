@@ -530,7 +530,11 @@ describe('runMemoryCleanup', () => {
       await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain(
         'WRITTEN AFTER MOVE',
       );
-      expect((await archiveContents()).some((f) => f.startsWith('feedback_a.md'))).toBe(true);
+      const archived = await archiveContents();
+      expect(archived.some((f) => f.startsWith('feedback_a.md'))).toBe(true);
+      // 恢复成功后 retained 仍保留 (writer open fd 后续写入可达, 不 unlink —
+      // Codex P1 on #2561 第十七轮: keep retained files until writers close)。
+      expect(archived.some((f) => f.startsWith('feedback_a.md.'))).toBe(true);
     } finally {
       spy.mockRestore();
     }

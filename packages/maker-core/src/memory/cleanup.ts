@@ -445,19 +445,18 @@ export async function runMemoryCleanup(
         const retainedContent = await fs.readFile(retained).catch(() => null);
         if (retainedContent === null || !retainedContent.equals(srcContent)) {
           // writer 已写入或 retained 不可读 → 尝试把 retained 内容恢复回 src。
-          // 恢复成功才允许 unlink retained; 失败 (EEXIST 宿主重建 / EACCES /
-          // EPERM / ENOSPC …) 一律不抛错 — retained 保留 .archive 可达, 数据
-          // 不丢 (Greptile P1 / Codex P1 on #2561 第十五/十六轮: 恢复失败后
-          // 不得删除新内容、活动分片不能缺失)。
-          const restored = await restoreRetained(retained, src);
-          if (restored) {
-            await fs.unlink(retained).catch(() => {});
-          }
+          // 恢复成功也**不 unlink retained**: writer 的 open fd 仍指向 retained
+          // inode, copy 后删除会让后续写入落到无路径 inode — 内容既不在 src
+          // 也不在 .archive, writer 报成功但记忆丢失 (Codex P1 on #2561 第十七
+          // 轮: keep retained files until writers close)。retained 在 .archive
+          // 内, list 跳过, 不污染索引, 数据保全优先。失败 (EEXIST 宿主重建 /
+          // EACCES / EPERM / ENOSPC …) 一律不抛错 — retained 同样保留可达
+          // (Greptile P1 on #2561 第十五/十六轮: 恢复失败后活动分片不能缺失)。
+          await restoreRetained(retained, src);
           result.failed.push({
             filename: item.filename,
-            error: restored
-              ? 'source written during archive; restored to active shard (archive holds reviewed copy)'
-              : 'source written during archive; restore failed — retained kept reachable in .archive for manual recovery',
+            error:
+              'source written during archive; restored to active shard (retained kept reachable in .archive)',
           });
           continue;
         }
@@ -467,15 +466,11 @@ export async function runMemoryCleanup(
         // 校验同样处理 (恢复 src + failed), 绝不标成功。
         const finalContent = await fs.readFile(retained).catch(() => null);
         if (finalContent === null || !finalContent.equals(srcContent)) {
-          const restored = await restoreRetained(retained, src);
-          if (restored) {
-            await fs.unlink(retained).catch(() => {});
-          }
+          await restoreRetained(retained, src);
           result.failed.push({
             filename: item.filename,
-            error: restored
-              ? 'source written during archive; restored to active shard (archive holds reviewed copy)'
-              : 'source written during archive; restore failed — retained kept reachable in .archive for manual recovery',
+            error:
+              'source written during archive; restored to active shard (retained kept reachable in .archive)',
           });
           continue;
         }
