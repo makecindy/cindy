@@ -310,6 +310,45 @@ describe('runMemoryCleanup', () => {
     }
   });
 
+  it('does not overwrite a recreated source during restore', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟宿主并发写: rename 前写新内容 B (trash 将持有 B ≠ 快照 A), 并在
+    // src 移到 trash 后重建 src (新写入) — restoreTrash 的 link 排他恢复会
+    // EEXIST, 不覆盖新写入 (Greptile P1 / Codex P1 on #2561 第十一轮)。
+    const realRename = fs.rename.bind(fs);
+    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
+      if (String(dst).includes('cleanup-trash')) {
+        await writeFile(
+          String(src),
+          "---\ntitle: B\ndescription: b\ntype: feedback\nupdatedAt: '2026-03-01T00:00:00.000Z'\n---\nUPDATED\n",
+          'utf8',
+        );
+        const r = await realRename(src as string, dst as string);
+        await writeFile(
+          String(src),
+          "---\ntitle: RECREATED\ndescription: new\ntype: feedback\nupdatedAt: '2026-03-02T00:00:00.000Z'\n---\nrecreated by host\n",
+          'utf8',
+        );
+        return r;
+      }
+      return realRename(src as string, dst as string);
+    });
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // 宿主重建的 src 不被覆盖, 报 failed, trash 保留供人工找回。
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('recreated');
+      const files = await readdir(dir);
+      expect(files.some((f) => f.includes('cleanup-trash'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('fails items whose source changed after plan (recheck before move)', async () => {
     await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');

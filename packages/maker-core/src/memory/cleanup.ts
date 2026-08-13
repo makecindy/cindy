@@ -403,35 +403,29 @@ export async function runMemoryCleanup(
       }
 
       // 归档 = 排他写快照 + rename 原子移动 + 对比恢复。三件事各司其职
-      // (Greptile/Codex on #2561 第六/七/九/十轮收敛的最终形态):
+      // (Greptile/Codex on #2561 第六/七/九/十轮收敛的形态):
       //   1) writeExclusive 把审阅时点快照 A 写入 .archive ('wx' 排他,
       //      严格 no-clobber — 不覆盖已有归档);
       //   2) rename(src, trash) 原子移动 src — 移动后 src 路径即空, 宿主
       //      并发写落到新 src 文件; 无 link 的共享 inode 污染 (Codex P1 on
       //      #2561 第十轮: avoid hard-linking live shards);
-      //   3) 对比 trash 与快照 A: 一致 → 删 trash (归档完成); 不一致 (宿主在
-      //      rename 前写了新内容 B) → 恢复 src (B 保留, 归档保留审阅快照 A)。
+      //   3) 对比 trash 与快照 A: 一致 → 删 trash (归档完成); 不一致或 trash
+      //      读失败 (宿主并发写的新内容) → no-clobber 恢复 src (见
+      //      restoreTrash — Greptile P1 / Codex P1 on #2561 第十一轮)。
       await writeExclusive(archiveDir, item.filename, stamp, srcContent);
       const trash = path.join(plan.shardDir, `${item.filename}.cleanup-trash-${stamp}`);
       await fs.rename(src, trash);
-      let trashContent: Buffer;
-      try {
-        trashContent = await fs.readFile(trash);
-      } catch (e) {
-        // trash 读失败 (罕见竞态) → 保守恢复 src, 归档快照已落盘, 数据不丢
-        await fs.rename(trash, src).catch(() => {});
-        throw e;
-      }
-      if (trashContent.equals(srcContent)) {
-        await fs.unlink(trash);
+      const trashContent = await fs.readFile(trash).catch(() => null);
+      if (trashContent !== null && trashContent.equals(srcContent)) {
+        // 归档完成 → 删 trash; 删除失败 (Windows 锁/瞬态权限) 视为已归档,
+        // trash 残留无害 (不符合合法分片名, list 跳过) — 不阻断归档与索引
+        // 重建 (Codex P2 on #2561 第十一轮: rebuild or restore when trash
+        // cleanup fails)。
+        await fs.unlink(trash).catch(() => {});
         result.archived.push(item);
       } else {
-        // 宿主并发写的新内容 → 恢复 src, 归档保留审阅快照 A
-        await fs.rename(trash, src);
-        result.failed.push({
-          filename: item.filename,
-          error: 'source changed during archive; restored (archive holds reviewed copy)',
-        });
+        // 宿主并发写的新内容 (或 trash 读失败) → no-clobber 恢复 src
+        await restoreTrash(trash, src, item, result);
       }
     } catch (e) {
       result.failed.push({ filename: item.filename, error: String(e) });
@@ -505,6 +499,43 @@ async function writeExclusive(
   }
 }
 
+/**
+ * no-clobber 恢复 trash 到 src — 归档对比不一致时, 宿主并发写的新内容
+ * (或 trash 读失败) 要放回 src, 保留活动分片。
+ *
+ * 用 `fs.link` 排他恢复: src 已存在 (宿主在 src 被移到 trash 后重建并写入
+ * 新内容) 则 link 抛 EEXIST, **绝不覆盖新写入** — POSIX rename 会静默覆盖
+ * 已存在目标 (Greptile P1 / Codex P1 on #2561 第十一轮: 恢复重命名覆盖最新
+ * 写入)。src 不存在时 link + unlink(trash) 完成恢复。
+ */
+async function restoreTrash(
+  trash: string,
+  src: string,
+  item: ArchiveItem,
+  result: CleanupRunResult,
+): Promise<void> {
+  try {
+    await fs.link(trash, src);
+    await fs.unlink(trash).catch(() => {});
+    result.failed.push({
+      filename: item.filename,
+      error: 'source changed during archive; restored (archive holds reviewed copy)',
+    });
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') {
+      // src 已被宿主重建 (新写入) → 不覆盖, 保留 trash 供人工找回
+      result.failed.push({
+        filename: item.filename,
+        error: 'source recreated during archive; newer copy kept, trash kept for manual review',
+      });
+      return;
+    }
+    throw e;
+  }
+}
+
 // 注: 归档移动逻辑内联在 runMemoryCleanup (writeExclusive 快照 + rename 原子
 // 移动 + 对比恢复), 不再使用 link+unlink — link 共享 inode, 宿主并发写会
-// 污染归档副本 (Codex P1 on #2561 第十轮)。
+// 污染归档副本 (Codex P1 on #2561 第十轮)。restoreTrash 用 link 仅是「排他
+// 探测 + 恢复」, link 后立即 unlink(trash), 不保留共享 inode 状态。
