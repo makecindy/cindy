@@ -69,6 +69,7 @@ import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupIn
 
 import {
   isTerminalAgentErrorEvent,
+  isAutoReviewBlockedNotice,
   TurnPermissionPolicyUnsupportedError,
 } from '@cindy/maker-core';
 import type {
@@ -1799,6 +1800,16 @@ export function createTurnRunner(
           }
           return handleTurnDoneAsync(state, userId);
         case 'error':
+          // The marker is emitted as a non-terminal side-channel error. A
+          // provider may then settle with a terminal error before the
+          // marker-bearing done arrives, so latch it immediately on the
+          // active product turn.
+          turn.autoReviewBlocked =
+            turn.autoReviewBlocked ||
+            (event.data as { autoReviewBlocked?: unknown } | null | undefined)?.autoReviewBlocked === true ||
+            isAutoReviewBlockedNotice(
+              (event.data as { message?: unknown } | null | undefined)?.message,
+            );
           // 可重试错误只是进行中状态；保持当前 turn、卡片和排队消息不动，
           // 等后续 text / done 或终止型 error 正常收口。顺带把「正在自动重试」透进
           // 过程区——Codex 的网络重连(#790)与两侧的过载自动重试都走这条，零产出时
@@ -2639,6 +2650,9 @@ export function createTurnRunner(
     // hook runner 与调度转播共用同一个 helper，三条渠道链路口径一致；上游原文留在
     // 本地日志。
     const msg = terminalErrorText(errData);
+    const finalMsg = turn?.autoReviewBlocked
+      ? `${msg}\n\n> ⚠️ ${autoReviewBlockedFinalNotice()}`
+      : msg;
     if (turn) clearSilentStopSettleWait(turn);
     if (turn) clearActivityTicker(turn);
     if (turn) {
@@ -2667,7 +2681,7 @@ export function createTurnRunner(
     if (turn?.streamingHandle) {
       try {
         const view = composeStreamingView(turn);
-        const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
+        const body = view ? `${view}\n\n❌ 错误：${finalMsg}` : `❌ 错误：${finalMsg}`;
         await turn.streamingHandle.finalize(body);
       } catch {
         /* swallow */
@@ -2677,14 +2691,14 @@ export function createTurnRunner(
         if (output.kind === 'chunked-text') {
           await output.commitFinal({
             userId,
-            text: `❌ 错误：${msg}`,
+            text: `❌ 错误：${finalMsg}`,
             terminal: 'error',
             threadTs: state.scopeKey,
             errorCode: turn?.terminalErrorCode ?? 'agent_turn_error',
             ...(turn && turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          await output.im.sendText(userId, `❌ 错误：${msg}`, {
+          await output.im.sendText(userId, `❌ 错误：${finalMsg}`, {
             threadTs: state.scopeKey,
           });
         }

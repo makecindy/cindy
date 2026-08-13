@@ -22,7 +22,10 @@
  */
 
 import type { AgentEvent, TurnContinuationState } from '@cindy/maker-core';
-import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import {
+  isAutoReviewBlockedNotice,
+  isTerminalAgentErrorEvent,
+} from '@cindy/maker-core';
 
 import {
   createTurnPresenter,
@@ -156,6 +159,24 @@ export function observeHookTurn(
   });
   let autoReviewBlocked = false;
 
+  const retainAutoReviewBlockedMarker = (ev: AgentEvent): void => {
+    if (ev.type !== 'error' && ev.type !== 'done') return;
+    const data = ev.data as {
+      message?: unknown;
+      autoReviewBlocked?: unknown;
+    } | null | undefined;
+    autoReviewBlocked =
+      autoReviewBlocked
+      || data?.autoReviewBlocked === true
+      || (ev.type === 'error' && isAutoReviewBlockedNotice(data?.message));
+  };
+
+  const appendAutoReviewBlockedNotice = (body: string): string => {
+    if (!autoReviewBlocked) return body;
+    const notice = autoReviewBlockedFinalNotice();
+    return body.includes(notice) ? body : `${body}\n\n> ⚠️ ${notice}`;
+  };
+
   let stopListening: (() => void) | undefined;
   const finished = new Promise<void>((resolve, reject) => {
     let turnTerminalNotified = false;
@@ -193,7 +214,7 @@ export function observeHookTurn(
     const failTurn = (err: Error): void => {
       notifyTurnTerminal();
       teardown();
-      reject(err);
+      reject(new Error(appendAutoReviewBlockedNotice(err.message)));
     };
     // 会话已死(见 ObservableSession.onStatusChange)。终态事件永远不会来了,
     // 按失败收口 —— 已累积的正文不足以判定这一轮真的完成了。
@@ -202,6 +223,7 @@ export function observeHookTurn(
       failTurn(new Error(`hook turn session ended without a terminal event (${status})`));
     });
     const off = session.onEvent((ev: AgentEvent) => {
+      retainAutoReviewBlockedMarker(ev);
       if (ev.type === 'text') {
         // 正文累积(isFinal 逐条契约 / 定稿段按消息切开 / fallbackTail 自成段 /
         // uuid 缺失退 requestId)都在 presenter 的 finalized-segments 策略里。
@@ -345,9 +367,9 @@ export function observeHookTurn(
     },
     finalText(): string {
       const body = presenter.finalText();
-      if (!autoReviewBlocked) return body;
-      const notice = autoReviewBlockedFinalNotice();
-      return body ? `${body}\n\n> ⚠️ ${notice}` : `> ⚠️ ${notice}`;
+      return autoReviewBlocked
+        ? appendAutoReviewBlockedNotice(body || `> ⚠️ ${autoReviewBlockedFinalNotice()}`)
+        : body;
     },
   };
 }

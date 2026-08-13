@@ -753,6 +753,45 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     await handle.close();
   });
 
+  it('ignores a native Auto denial drained from a rewound Query', async () => {
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    const events: Array<{ type: string; data: unknown }> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push({ type: event.type, data: event.data });
+    })();
+
+    await handle.commitRewindFiles?.('user-uuid', 'assistant-uuid');
+    const replacementQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(replacementQuery);
+    await handle.send({ type: 'user', content: 'Start the replacement turn.' });
+
+    // The old Query may still drain buffered provider output after rewind.
+    // It must remain silent and must not consume the replacement turn's
+    // once-per-turn Auto block notice.
+    fakeQuery.emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      duration_ms: 1,
+      duration_api_ms: 1,
+      num_turns: 1,
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: {},
+      permission_denials: [{ tool_name: 'Bash', tool_use_id: 'stale-denial', tool_input: {} }],
+    });
+    await settle();
+
+    expect(events.some((event) =>
+      event.type === 'error'
+      && String((event.data as { message?: unknown }).message).includes('[AUTO_REVIEW_BLOCKED]'),
+    )).toBe(false);
+    await handle.close();
+  });
+
   it('does not re-arm a blocked notice after an in-flight permission-mode change', async () => {
     const { handle, canUseTool } = await startSession('auto', {
       reviewVerdict: 'block',

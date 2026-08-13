@@ -2185,6 +2185,36 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(String(handle.finalize.mock.calls[0][0])).toContain('process exited with code 1');
   });
 
+  it('retains the Auto block notice when terminal error arrives before done', async () => {
+    const handle = {
+      messageId: 'stream-auto-blocked-terminal',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
+    await flushMicrotasks();
+    h.emit({
+      type: 'error',
+      data: { message: '[AUTO_REVIEW_BLOCKED] fallback', isTerminal: false },
+    });
+    h.emit({ type: 'error', data: { message: 'provider failed', isTerminal: true } });
+
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    const finalView = String(handle.finalize.mock.calls[0][0]);
+    expect(finalView).toContain('provider failed');
+    expect(finalView).toContain('自动审批已阻止');
+    expect(finalView).toContain('默认权限');
+  });
+
   it('keeps streaming resumed-turn output into the same turn after a silentStop resume', async () => {
     const handle = {
       messageId: 'stream-resume',

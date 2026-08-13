@@ -4071,9 +4071,6 @@ export class ClaudeCodeAgent extends BaseAgent {
               && nativeAutoQueries.has(currentQ)
               && Array.isArray((rawMsg as { permission_denials?: unknown }).permission_denials)
               && (rawMsg as { permission_denials: unknown[] }).permission_denials.length > 0;
-            if (isNativeAutoReviewBlockedResult) {
-              autoReviewBlockedNotice.notify();
-            }
             const isTerminalTaskNotification =
               rawType === 'system' &&
               rawSubtype === 'task_notification' &&
@@ -4100,6 +4097,13 @@ export class ClaudeCodeAgent extends BaseAgent {
                 cancellationGeneration: continuationCancellationGeneration,
               });
               continue;
+            }
+            // Only surface native Auto denials from a live Query. A cancelled
+            // bridge / rewind Query may still drain a late result after a new
+            // turn has re-armed the notice; tombstone and cancellation fences
+            // above must win before this side effect runs.
+            if (isNativeAutoReviewBlockedResult) {
+              autoReviewBlockedNotice.notify();
             }
             if (noteSdkInitMcpServerNames(rawMsg)) {
               // User/project/local settings MCPs are only revealed by the SDK init
