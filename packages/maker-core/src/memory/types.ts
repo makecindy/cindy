@@ -142,7 +142,8 @@ export type MemoryErrorCode =
   | 'already-exists'
   | 'not-found'
   | 'path-traversal'
-  | 'io-error';
+  | 'io-error'
+  | 'not-ready';
 
 export class MemoryError extends Error {
   constructor(

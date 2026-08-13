@@ -1,21 +1,16 @@
 /**
- * right-sidebar-window settings-store —— 「侧边栏在新窗口中显示」的持久化。
+ * right-sidebar-window 进程内状态。
  *
- * File: <userData>/right-sidebar-window-settings.json
- *
- * 两个字段语义不同但同生命周期、同读写方(都只由 main 的 RsbWindowController 写),
- * 所以放同一文件:
- *  - detached: **偏好**(default false)。用户显式选择「侧边栏在新窗口打开」;
- *    走 override 模型(未自定义时跟随版本默认值,见 docs/dev-rules/configuration-and-overrides.md)。
- *  - lastOpen: **状态**(default false)。退出时子窗口是否处于打开态,供下次启动
- *    恢复(detached && lastOpen → 主窗 mount 后自动重开子窗口)。不经 Settings UI。
+ * detached / lastOpen 只服务当前客户端进程，用于窗口状态机和隐藏复用；客户端重启后
+ * 一律回到主窗口。启动时还会删除旧版本留下的分离偏好文件，避免继续恢复历史状态。
+ * 窗口尺寸与位置由独立的 window-state 文件管理，不受这里影响。
  */
 
 import { app } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
-import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 
 const log = desktopMakerLogger.child('right-sidebar-window-settings-store');
 
@@ -28,6 +23,8 @@ const DEFAULTS: RsbWindowSettings = {
   detached: false,
   lastOpen: false,
 };
+
+let runtimeSettings: RsbWindowSettings = { ...DEFAULTS };
 
 function settingsFilePath(): string {
   return path.join(app.getPath('userData'), 'right-sidebar-window-settings.json');
@@ -42,18 +39,21 @@ export function normalizeRsbWindowSettings(raw: unknown): RsbWindowSettings {
   };
 }
 
-const store = createOverrideSettingsFile<RsbWindowSettings>({
-  filePath: settingsFilePath,
-  defaults: DEFAULTS,
-  normalize: normalizeRsbWindowSettings,
-  log,
-  label: 'right-sidebar-window',
-});
-
 export function readRsbWindowSettings(): RsbWindowSettings {
-  return store.read();
+  return { ...runtimeSettings };
 }
 
 export function writeRsbWindowSettingsPatch(patch: Partial<RsbWindowSettings>): void {
-  store.writePatch(patch);
+  runtimeSettings = normalizeRsbWindowSettings({ ...runtimeSettings, ...patch });
+}
+
+/** 新进程重置分离状态，并清理旧版本遗留的持久化偏好。 */
+export function resetRsbWindowSettingsForStartup(): void {
+  runtimeSettings = { ...DEFAULTS };
+  const legacyFile = settingsFilePath();
+  try {
+    fs.rmSync(legacyFile, { force: true });
+  } catch (err) {
+    log.warn('failed to remove legacy right-sidebar window settings', { legacyFile, err });
+  }
 }

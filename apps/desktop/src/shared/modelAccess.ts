@@ -94,6 +94,8 @@ export interface ModelAccessAgentOverride {
   defaultEffort?: string | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
+  /** v3 runtime transport; required by the contract for every listed Agent. */
+  wireProtocol?: 'anthropic-messages' | 'openai-responses';
 }
 
 export interface ModelGroupTieredPricing {
@@ -177,8 +179,8 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
    * 消费方一律以本字段(或其派生的 currentLedgerCurrency)为准,不按区域推断。
    */
   currency?: 'USD' | 'CNY';
-  /** 进哪些 runtime tab;缺省 = 仅 claude-code(网关 /v1/messages 翻译覆盖面最广)。 */
-  agents?: ('claude-code' | 'codex')[];
+  /** 进哪些 runtime tab；Desktop 固定使用 v3，本字段由服务端明确下发。 */
+  agents?: ('claude-code' | 'codex' | 'pi')[];
   name?: string;
   group?: string;
   description?: string;
@@ -189,23 +191,23 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
   efforts?: string[];
   defaultEffort?: string | null;
   sortOrder?: number;
-  /** Fast(加速档)支持;缺省按 false 处理(上游未声明时不猜测能力)。 */
+  /** Fast(加速档)支持；缺省表示服务端未声明，客户端不物化能力。 */
   supportsFastMode?: boolean;
   /** 是否默认出现在模型选择器;缺省按 true(默认可见)。 */
   defaultEnabled?: boolean;
   /**
    * 该模型是哪些 agent 的**新对话默认种子**（源自协议 ListModels v2 的 newSessionDefault，
    * 服务端权威、按区域下发)。与 sortOrder / defaultEnabled 独立;客户端据它选新对话默认。
-   * 缺省 = 不作为任何 agent 的默认。pi 由客户端从 'claude-code' 投影(见 active-catalog)。
+   * 缺省 = 不作为任何 agent 的默认。
    */
-  newSessionDefault?: ('claude-code' | 'codex')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
   /**
    * 展示图标 id(AI Gateway 侧登记,见 @cindy/model-providers CatalogModel.icon /
    * resolveModelIconKind);缺省或未知值客户端回落来源供应商标。
    */
   icon?: string;
   /** per-tab 能力覆盖(基线字段之上按 agent 应用)。 */
-  perAgent?: Partial<Record<'claude-code' | 'codex', ModelAccessAgentOverride>>;
+  perAgent?: Partial<Record<'claude-code' | 'codex' | 'pi', ModelAccessAgentOverride>>;
 }
 
 /**
@@ -216,6 +218,6 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
  * remain a runtime-parser concern.
  */
 export interface ModelAccessModelsResponse {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   models: ModelAccessGatewayModel[];
 }

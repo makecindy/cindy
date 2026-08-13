@@ -49,7 +49,7 @@ function modelRow(
   id: string,
   efforts: readonly string[] = [],
   defaultEffort: string | null = null,
-  newSessionDefault?: readonly ('claude-code' | 'codex')[],
+  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi')[],
 ): ProviderModelRow {
   return {
     provider: { id: `prov-${id}`, name: id } as ProviderModelRow['provider'],
@@ -522,10 +522,11 @@ describe('pickAgentDefaultRuntime', () => {
     expect(runtime).toEqual({ agentKind: 'codex', model: 'gpt-5.4', effort: 'low', providerId: 'prov-gpt-5.4' });
   });
 
-  it('uses the regional default before the top row, with Pi sharing the claude-code marker', () => {
+  it('uses the regional default before the top row, including the explicit Pi v3 marker', () => {
     const rows = [
       modelRow('top', ['low'], 'low'),
-      modelRow('regional', ['medium'], 'medium', ['claude-code']),
+      modelRow('cc-regional', ['medium'], 'medium', ['claude-code']),
+      modelRow('pi-regional', ['high'], 'high', ['pi']),
     ];
     // 区域默认来自 provider 行 → 携带该行 provider(#1898 语义,merge main 后适配)
     expect(pickAgentDefaultRuntime({
@@ -534,14 +535,32 @@ describe('pickAgentDefaultRuntime', () => {
       modelRows: rows,
       currentEffort: 'high',
       catalogReady: true,
-    })).toEqual({ agentKind: 'claude-code', model: 'regional', effort: 'medium', providerId: 'prov-regional' });
+    })).toEqual({ agentKind: 'claude-code', model: 'cc-regional', effort: 'medium', providerId: 'prov-cc-regional' });
     expect(pickAgentDefaultRuntime({
       agentKind: 'pi',
       sessions: [],
       modelRows: rows,
       currentEffort: 'high',
       catalogReady: true,
-    })).toEqual({ agentKind: 'pi', model: 'regional', effort: 'medium', providerId: 'prov-regional' });
+    })).toEqual({ agentKind: 'pi', model: 'pi-regional', effort: 'high', providerId: 'prov-pi-regional' });
+  });
+
+  it('uses only the explicit Pi regional default marker', () => {
+    expect(pickAgentDefaultRuntime({
+      agentKind: 'pi',
+      sessions: [],
+      modelRows: [
+        modelRow('top', ['low'], 'low'),
+        modelRow('pi-regional', ['high'], 'high', ['pi']),
+      ],
+      currentEffort: 'medium',
+      catalogReady: true,
+    })).toEqual({
+      agentKind: 'pi',
+      model: 'pi-regional',
+      effort: 'high',
+      providerId: 'prov-pi-regional',
+    });
   });
 
   it('keeps the marked provider row when another provider offers the same modelId earlier (codex P2)', () => {

@@ -367,6 +367,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }
 
@@ -420,6 +421,62 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         // usage:input 42 + output 7(anthropic 流里的 usage 记账)
         const usage = handle.getUsageSnapshot();
         expect(usage.tokenUsage).toBeGreaterThan(0);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'keeps provider cindy and sends a gateway Responses model to /v1/responses',
+    { timeout: 60_000 },
+    async () => {
+      const deps = buildDeps();
+      deps.capabilityAdditions = {
+        ...deps.capabilityAdditions,
+        availableModels: [
+          ...(deps.capabilityAdditions?.availableModels ?? []),
+          {
+            id: 'pi-responses-model',
+            displayName: 'Pi Responses Model',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      };
+      deps.resolvePiGatewayModelApi = (_providerId, modelId) =>
+        modelId === 'pi-responses-model' ? 'openai-responses' : 'anthropic-messages';
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-responses-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      const requestsBefore = seenRequests.length;
+      scriptedResponses.push(responsesStreamBody('pong from responses gateway', 'pi-responses-model'));
+      try {
+        handle = await agent.startSession({
+          sessionId: 'itest-responses-session',
+          workingDir,
+          model: 'pi-responses-model',
+          providerId: 'xd',
+        });
+        const events: AgentEvent[] = [];
+        const collected = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+
+        await handle.send({ type: 'user', content: 'ping responses' });
+        await collected;
+
+        expect(seenRequests.slice(requestsBefore).some((request) => request.url === '/v1/responses'))
+          .toBe(true);
+        expect(events.some((event) =>
+          event.type === 'text'
+          && (event.data as { text?: string }).text?.includes('pong from responses gateway'),
+        )).toBe(true);
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });

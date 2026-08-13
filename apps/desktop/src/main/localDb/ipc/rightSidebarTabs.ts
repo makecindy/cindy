@@ -26,6 +26,7 @@ import { and, asc, eq } from 'drizzle-orm';
 
 import { getDbClient } from '../client/current.js';
 import { rightSidebarTabs, sessions } from '../schema.js';
+import { MAX_STATE_JSON_BYTES } from '../../../shared/rightSidebarTabState.js';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import { createLogger } from '../../logger.js';
@@ -34,10 +35,6 @@ const log = createLogger('rightSidebarTabs');
 
 /** 单 session 最多 20 个 tab,超抛 RIGHT_SIDEBAR_TOO_MANY_TABS。 */
 const MAX_TABS_PER_SESSION = 20;
-/** 单行 state JSON 序列化字节上限,超抛 RIGHT_SIDEBAR_STATE_TOO_LARGE。
-    16KB 已远超浏览器 tab(url + title + favicon URL ~400B)/ 文件 tab(~500B)实际需要,
-    够防 plugin 误塞 dataURL / 大对象。 */
-const MAX_STATE_JSON_BYTES = 16 * 1024;
 const SINGLETON_TAB_KINDS = new Set(['subagents']);
 
 export interface TabRow {
@@ -83,7 +80,16 @@ function requireInt(value: unknown, name: string): number {
 function serializeState(value: unknown): string {
   // undefined → 用默认 '{}';其它一律 stringify(包含 null,plugin 真要存 null 也能存)
   if (value === undefined) return '{}';
-  const json = JSON.stringify(value);
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    throwIpcError('INVALID_PARAMS', 'tab state must be JSON-serializable');
+  }
+  // JSON.stringify 顶层 function / symbol 时不抛错而返回 undefined,不能交给 DB。
+  if (typeof json !== 'string') {
+    throwIpcError('INVALID_PARAMS', 'tab state must be JSON-serializable');
+  }
   const bytes = Buffer.byteLength(json, 'utf8');
   if (bytes > MAX_STATE_JSON_BYTES) {
     throwIpcError(

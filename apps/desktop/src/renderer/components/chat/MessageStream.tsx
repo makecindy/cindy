@@ -220,6 +220,7 @@ import {
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
+import { countUnreadAdded } from './unreadCount';
 import { useNavigationKeyListener } from './useNavigationKeyListener';
 import { suppressScrollbarActivation } from '@/lib/scrollbarAutoHide';
 import { collectAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
@@ -278,6 +279,15 @@ interface MessageStreamProps {
   } | null;
   /** Opens the parent conversation and focuses the original fork point. */
   onOpenForkOrigin?: () => void;
+  /**
+   * #2194: whether a user message (by clientId) was sent from this renderer's
+   * composer. Only such messages force-pin the viewport to the tail; user
+   * messages injected by other entries (IM channels, a mobile client driving
+   * the session, scheduler runs) follow the ordinary near-bottom rule.
+   * Optional — consumers that cannot tell (tests, storybook) keep the legacy
+   * behavior of treating every new tail user message as a local send.
+   */
+  isLocalUserSend?: (clientId: string) => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -2526,6 +2536,7 @@ export function MessageStream({
   focusMessageRequestId,
   forkOrigin,
   onOpenForkOrigin,
+  isLocalUserSend,
 }: MessageStreamProps) {
   // 右上角 chip 栈插槽 —— PrevMessageJumpChip 通过 portal 挂到这里,
   // 与 DiffPanelToggle 在同一栈中各占一行。Provider 不存在时返回 null,
@@ -3543,28 +3554,24 @@ export function MessageStream({
   }, []);
 
   // F2: messages diff → 按角色累计 unreadCount
-  //   - 用 Set 做 O(n) diff，流式 token 追加（同一 clientId 的 content 变化）不计数
-  //   - 只在 isNearBottomRef.current === false 时累计；底部时 auto-follow 接手
-  //   - 角色过滤：user / tool_use / tool_result 跳过；assistant / ask_user / plan_review 计数
+  //   - 计数规则抽成纯函数 countUnreadAdded（见 unreadCount.ts）：新 clientId 才计、
+  //     贴底不计、assistant/ask_user/plan_review 计；#2194 起非本端发送的 user 也计。
   useEffect(() => {
     const prev = prevMessageIdsRef.current;
     const currentIds = new Set<string>();
-    let addedVisible = 0;
+    for (const m of messages) currentIds.add(m.clientId);
 
-    for (const m of messages) {
-      currentIds.add(m.clientId);
-      if (prev.has(m.clientId)) continue;
-      // 新出现的 clientId：按角色过滤
-      if (m.role === 'assistant' || m.role === 'ask_user' || m.role === 'plan_review') {
-        if (!isNearBottomRef.current) addedVisible += 1;
-      }
-    }
-
+    const addedVisible = countUnreadAdded({
+      prevIds: prev,
+      messages,
+      nearBottom: isNearBottomRef.current,
+      isLocalUserSend,
+    });
     if (addedVisible > 0) {
       setUnreadCount((c) => c + addedVisible);
     }
     prevMessageIdsRef.current = currentIds;
-  }, [messages]);
+  }, [messages, isLocalUserSend]);
 
   // ── Synchronous pin-to-bottom on every relevant change. ──
   // useLayoutEffect fires before paint, so a new message / bottomPadding change
@@ -3631,6 +3638,14 @@ export function MessageStream({
     const decision = resolveRenderPinDecision({
       restoring: restoringRef.current,
       newUserSend: userMessageObservation.isNewUserSend,
+      // #2194: 未提供回调时按既有语义视为本端发送（测试 / 其它消费方不变）；
+      // 提供了回调就严格以其返回值为准——实现方误返回 undefined（如被 as any
+      // 绕过）时按外部注入处理，不用 ?? true 掩盖（Copilot review nit）。
+      sentFromThisRenderer: lastUserMsg
+        ? isLocalUserSend
+          ? isLocalUserSend(lastUserMsg.clientId) === true
+          : true
+        : false,
       nearBottom: isNearBottomRef.current,
     });
 

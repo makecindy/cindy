@@ -85,6 +85,7 @@ import {
   deriveAvailableModels,
   refreshCatalogDerivedModels,
   resolvePiRuntimeModelDescriptor,
+  resolvePiGatewayDescriptorProviderId,
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
@@ -254,6 +255,13 @@ function autoReviewBudgetFor(request: AutoReviewRequest) {
   ));
 }
 
+let providerAccessRuntimeRefreshListener: (() => void) | null = null;
+
+/** Register the bootstrap-owned runtime reconciliation that follows provider access changes. */
+export function setProviderAccessRuntimeRefreshListener(listener: (() => void) | null): void {
+  providerAccessRuntimeRefreshListener = listener;
+}
+
 const reviewAutoPermissionAction = createAutoPermissionReviewer({
   logger: desktopMakerLogger,
   // 重试守卫必须按同一份额度计时,否则放宽额度的那一档会被自己的守卫切断。
@@ -284,6 +292,13 @@ let _codexModelBackfill: CodexModelBackfillCoordinator | null = null;
 /** Refresh selectable model capabilities, then notify every local/remote renderer. */
 function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {
   if (_maker) refreshCatalogDerivedModels(_maker, getDesktopSelectableCatalog());
+  try {
+    providerAccessRuntimeRefreshListener?.();
+  } catch (error) {
+    desktopMakerLogger.warn('provider access runtime refresh listener failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
@@ -1626,8 +1641,15 @@ export function getMaker(): Maker {
       },
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
         resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId),
-      resolvePiGatewayModelDescriptor: (modelId) =>
-        resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), 'cindy', modelId),
+      resolvePiGatewayModelDescriptor: (providerId, modelId) => {
+        // `cindy` / null 是 Pi 的默认 gateway 路由；其 wire 由 v3 XD runtime plan
+        // 决定，因此描述符也必须锁定 XD，不能让复合 `cindy` 按目录顺序命中同 id 订阅模型。
+        return resolvePiRuntimeModelDescriptor(
+          getDesktopSelectableCatalog(),
+          resolvePiGatewayDescriptorProviderId(providerId),
+          modelId,
+        );
+      },
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
       getGhostRosterPrompt,

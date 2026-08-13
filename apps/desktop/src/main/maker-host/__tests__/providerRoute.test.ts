@@ -247,7 +247,7 @@ describe('resolveSessionRouteDecision (per-session 选择 → 路由;no-break fa
     });
   });
 
-  it('codex 会话选 XD:原生模型保持 Responses,Claude-only 投影模型派生 Anthropic bridge wire', async () => {
+  it('codex 会话选 XD:不根据模型归属切换到 Anthropic Messages', async () => {
     setXdGatewayModels([
       { id: 'gpt-native', agents: ['claude-code', 'codex'] },
       { id: 'claude-bridge', agents: ['claude-code'] },
@@ -264,15 +264,16 @@ describe('resolveSessionRouteDecision (per-session 选择 → 路由;no-break fa
     expect(getSessionRoutingDescriptor('s-xd-model-wire', 'codex', 'claude-bridge[1m]'))
       .toMatchObject({
         authStrategy: 'gateway-key',
-        wireProtocol: 'anthropic-messages',
       });
+    expect(
+      getSessionRoutingDescriptor('s-xd-model-wire', 'codex', 'claude-bridge[1m]')?.wireProtocol,
+    ).toBeUndefined();
     await expect(resolveSessionRoute('s-xd-model-wire', 'codex', 'claude-bridge[1m]'))
       .resolves.toMatchObject({
         providerId: 'xd',
         providerSource: 'builtin',
         routing: {
           authStrategy: 'gateway-key',
-          wireProtocol: 'anthropic-messages',
         },
       });
   });

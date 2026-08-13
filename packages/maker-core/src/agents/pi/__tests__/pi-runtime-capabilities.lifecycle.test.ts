@@ -109,6 +109,7 @@ describe('Pi runtime capability lifecycle', () => {
       },
       runtimeConfig: { endpoint: 'http://127.0.0.1:9' }, binaryPath: '/mock/pi', logger: noopLogger,
       capabilityAdditions: { availableModels: [{ id: 'm', displayName: 'M', contextWindow: 200_000, efforts: [], defaultEffort: null }] },
+      resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => home,
     };
   }

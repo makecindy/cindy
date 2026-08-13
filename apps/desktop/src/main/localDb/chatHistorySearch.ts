@@ -12,7 +12,7 @@
  *      工具输出不进索引——与 UI 会话搜索、语义嵌入的白名单对齐)。把自然语言
  *      query 拆成 token 做 OR 召回, bm25 排序。永远可用, 是检索地基。
  *   2. vector arm —— chat_messages_vec_v1(0034 迁移, voyage-4/1024d)。增益项:
- *      sqlite-vec 未加载 / 用户没开"聊天记录语义索引"(向量表空)/ embedding host
+ *      sqlite-vec 未加载 / 聊天语义索引运行时未启用 / 向量表空 / embedding host
  *      未起 / query 嵌入失败 / KNN 失败 —— 任一条件命中即**静默跳过**(记 skipReason,
  *      绝不冒泡), 整体退化为纯 FTS。这是产品硬约束: 没开 embedding 也要能搜。
  *   3. RRF 融合 —— Reciprocal Rank Fusion, 无需归一化两路异构分数, 鲁棒。
@@ -44,7 +44,11 @@ import { fuseRRF, buildFtsMatch } from './chatHistorySearch.pure';
 import { resolveStoredWorkingDirCandidates } from './workingDirHistoryFilter';
 import { createLogger } from '../logger';
 import { getEmbeddingService } from '../embedding-host';
-import { CHAT_EMBED_MODEL_ID, CHAT_VEC_TABLE } from '../embedders/chat-history-embedder';
+import {
+  CHAT_EMBED_MODEL_ID,
+  CHAT_VEC_TABLE,
+  isChatEmbeddingEnabled,
+} from '../embedders/chat-history-embedder';
 import type { SessionSource } from '../../shared/sessionSource.js';
 
 const log = createLogger('chat-history-search');
@@ -271,11 +275,15 @@ async function runVectorArm(
   if (args.skipVector === true) {
     return { rows: [], skipReason: '本次请求已禁用语义检索, 仅用 FTS。' };
   }
-  // gate 1: sqlite-vec 扩展加载?
+  // gate 1: 聊天语义索引运行时可用且已启用?
+  if (!isChatEmbeddingEnabled()) {
+    return { rows: [], skipReason: '聊天记录语义索引未启用, 本次仅用 FTS 全文检索。' };
+  }
+  // gate 2: sqlite-vec 扩展加载?
   if (!isDbClientVecAvailable()) {
     return { rows: [], skipReason: 'sqlite-vec 扩展未加载, 本次仅用 FTS 全文检索。' };
   }
-  // gate 2: 向量表里有无数据? 无 → 用户没开"聊天记录语义索引"或尚未嵌完,
+  // gate 3: 向量表里有无数据? 无 → 用户没开"聊天记录语义索引"或尚未嵌完,
   // 提前短路, 不浪费一次 query embedding 的 API 调用。
   try {
     const probe = await getDbClient().queryOne<{ rowid: number }>(
@@ -294,7 +302,7 @@ async function runVectorArm(
   const cacheKey = queryEmbeddingCacheKey(args.query);
   let queryVec = args.queryEmbeddingCache?.get(cacheKey);
   if (!queryVec) {
-    // gate 3: embedding host 起了吗?
+    // gate 4: embedding host 起了吗?
     let service: ReturnType<typeof getEmbeddingService>;
     try {
       service = getEmbeddingService();
