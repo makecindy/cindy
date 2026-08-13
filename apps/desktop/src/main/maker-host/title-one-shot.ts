@@ -391,6 +391,12 @@ async function tryCustomProviderTitle(
       log.debug('title oneShot skipped: route disabled before dispatch', { providerId, model: model.id });
       return { status: 'failed' };
     }
+    // 派发紧前重查路由变更门禁:首次 gate 与本次 HTTP 之间供应商可能已被编辑/删除,
+    // 仍用此前捕获的 route + 刚读到的凭证会形成旧 endpoint 配新 key 的错发(review P1)。
+    if (isProviderRouteMutationInProgress(providerId)) {
+      log.debug('title oneShot skipped: provider route mutation in progress before dispatch', { providerId, agentKind: args.agentKind });
+      return { status: 'failed' };
+    }
     const text = await requestCustomProviderText({
       agentKind: args.agentKind,
       baseUrl: routing.upstream,

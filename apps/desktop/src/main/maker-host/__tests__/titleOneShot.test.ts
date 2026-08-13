@@ -1153,6 +1153,28 @@ describe('generateTitleViaProvider — 用户/预设供应商(DeepSeek 数据驱
     });
   });
 
+  it('首次 gate 通过后、派发前路由变更窗口开启 → failed(fail-closed),不发请求', async () => {
+    await withDeepSeekCatalog(async () => {
+      // 模拟 TOCTOU:第一次(初始 gate)未见变更,第二次(派发紧前)才进入 mutation 窗口。
+      // 有 key 也必须 fail-closed,避免把旧 route 配新凭证发到错误 upstream(review P1)。
+      mockProviderRouteMutationInProgress
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce(true);
+      mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
+      const fetchImpl = fakeFetch(() => ({ json: { content: [{ type: 'text', text: '不应出现' }] } }));
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'ds-mut-race', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'failed' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  });
+
   it('供应商有路由但无可选聊天模型 → unsupported-provider', async () => {
     // 注入一个 models 为空的 deepseek(不经过 withDeepSeekCatalog,直接造空模型 catalog)。
     const deepseek: Provider = {
