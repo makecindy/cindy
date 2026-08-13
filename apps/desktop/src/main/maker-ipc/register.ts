@@ -9967,17 +9967,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
       if (!snapshot) return null;
       if (snapshot.state === 'sealed') {
-        await enqueueDurableWrite(`plan-seal-consume:${sessionId}`, () =>
-          clearSealedCodexPlanState(sessionId, snapshot.turnId),
-        );
-        return buildCompletedPlanGuardNote();
+        return {
+          note: buildCompletedPlanGuardNote(),
+          sealedTurnId: snapshot.turnId,
+        };
       }
       const openSteps = snapshot.plan
         .filter((item) => item.status !== 'completed')
         .map((item) => item.step);
       if (openSteps.length === 0 && snapshot.state !== 'interrupted') return null;
-      return buildPlanReconcileNote({ openSteps, totalSteps: snapshot.plan.length });
+      return {
+        note: buildPlanReconcileNote({ openSteps, totalSteps: snapshot.plan.length }),
+      };
     },
+    consumeSealedPlanReconcileNote: (sessionId, turnId) =>
+      enqueueDurableWrite(`plan-seal-consume:${sessionId}:${turnId}`, () =>
+        clearSealedCodexPlanState(sessionId, turnId),
+      ),
     // 手机客户端说明的开关:被控端盖章的来源判据(本机 renderer / 桌面控制端 / 平台
     // 未知一律 false)。必须在这里现取,不能提前求值缓存——同一个装配好的事务会服务
     // 后续所有 send,来源是逐次调用的属性。

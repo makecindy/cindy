@@ -222,12 +222,14 @@ export interface MakerSendTransactionDeps {
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
   /**
-   * 计划对账:会话里若有未收口的旧计划(未盖终态章且有未完成步骤),返回一段
-   * "顺手收拾"指示文本,与交接同通道前置进 wire payload(不进落库显示)。每次
-   * 发送现算,无 pending 状态、无 consume——旧清单被 agent 更新/清掉后,下一轮
-   * 自然算不出注入。undefined = 不启用(测试最小 harness)。
+   * 计划对账:会话里若有待处理计划,返回一段只进 wire payload 的指示文本。
+   * sealedTurnId 只用于已完成计划的一次性保护,跨过 accepted 后才消费。
    */
-  peekPlanReconcileNote?(sessionId: string): Promise<string | null>;
+  peekPlanReconcileNote?(sessionId: string): Promise<{
+    note: string;
+    sealedTurnId?: string;
+  } | null>;
+  consumeSealedPlanReconcileNote?(sessionId: string, turnId: string): void | Promise<void>;
   /**
    * 本次调用是否来自手机控制端(缺省 = 否)。**纯体验分流,不是安全判据。**
    *
@@ -813,11 +815,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         (reconcilePersistText.length > 0 || reconcileHasAttachments) &&
         !startsWithSlashCommand &&
         !reconcilePersistText.startsWith('[UI_ACTION_TRIGGER]');
-      const planReconcileNote = isOrdinaryUserTurn
+      const planReconcile = isOrdinaryUserTurn
         ? ((await deps.peekPlanReconcileNote?.(sessionId).catch(() => null)) ?? null)
         : null;
-      const withPlanReconcile = planReconcileNote
-        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, planReconcileNote)
+      const withPlanReconcile = planReconcile
+        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, planReconcile.note)
         : withHandoff;
       const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
@@ -1076,6 +1078,17 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (pendingHandoff && sendResult.accepted) {
           // 只有跨过不可逆 dispatch 边界才消费;未派发保留 pending 下次重试。
           deps.consumePendingHandoff?.(sessionId);
+        }
+        if (planReconcile?.sealedTurnId && sendResult.accepted) {
+          try {
+            await deps.consumeSealedPlanReconcileNote?.(sessionId, planReconcile.sealedTurnId);
+          } catch (err) {
+            deps.log.warn('send: completed plan guard consume failed', {
+              sessionId,
+              turnId: planReconcile.sealedTurnId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
         if (userPromptPreviewSessionId && userPromptPreviewClientId) {
           if (sendResult.accepted) {

@@ -143,6 +143,24 @@ describe('update_plan tool_use persistence', () => {
     });
   });
 
+  it('does not restore a queued plan update after /clear advances the session boundary', async () => {
+    noteSessionAgentKind(SESSION, 'codex');
+    onToolUseEvent(
+      SESSION,
+      {
+        toolUseId: 'plan:turn-before-clear',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Old plan', status: 'in_progress' }] },
+      },
+      null,
+    );
+    noteSessionClearBoundary(SESSION, Date.now());
+
+    await flushWrites();
+
+    expect(writeCodexPlanUpdate).not.toHaveBeenCalled();
+  });
+
   it('updates the existing tool_use row when Codex repeats update_plan with the same toolUseId', async () => {
     const firstPersistId = onToolUseEvent(
       SESSION,
