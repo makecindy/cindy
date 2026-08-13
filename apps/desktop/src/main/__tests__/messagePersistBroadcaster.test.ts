@@ -161,6 +161,33 @@ describe('update_plan tool_use persistence', () => {
     expect(writeCodexPlanUpdate).not.toHaveBeenCalled();
   });
 
+  it('rejects a late old-turn plan update that arrives after /clear', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      noteTurnStarted(SESSION);
+      noteSessionAgentKind(SESSION, 'codex');
+
+      nowSpy.mockReturnValue(1_700_000_001_000);
+      noteSessionClearBoundary(SESSION, Date.now());
+      onToolUseEvent(
+        SESSION,
+        {
+          toolUseId: 'plan:late-old-turn',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Late old plan', status: 'in_progress' }] },
+        },
+        null,
+      );
+
+      await flushWrites();
+
+      expect(writeCodexPlanUpdate).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('updates the existing tool_use row when Codex repeats update_plan with the same toolUseId', async () => {
     const firstPersistId = onToolUseEvent(
       SESSION,

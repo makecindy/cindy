@@ -722,10 +722,14 @@ export function onToolUseEvent(
 
   if (scope === 'turn' && getSessionDbAgentKind(sessionId) === 'codex') {
     const planUpdate = parseCodexPlanUpdate(data);
-    if (planUpdate) {
+    const turnStartedAt = _turnStartedAtBySession.get(sessionId);
+    if (planUpdate && !backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)) {
       const clearBoundaryAtEnqueue = clearBoundaryBySession.get(sessionId);
       enqueueWrite(`codex_plan_state_update:${sessionId}:${planUpdate.turnId}`, () => {
-        if (clearBoundaryBySession.get(sessionId) !== clearBoundaryAtEnqueue) {
+        if (
+          clearBoundaryBySession.get(sessionId) !== clearBoundaryAtEnqueue ||
+          backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)
+        ) {
           return Promise.resolve();
         }
         return writeCodexPlanUpdate(sessionId, planUpdate);
