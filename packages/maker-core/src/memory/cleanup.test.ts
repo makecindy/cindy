@@ -500,4 +500,39 @@ describe('runMemoryCleanup', () => {
       );
     }
   });
+
+  it('restores to active src when open-fd write lands after move (second check)', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟 open fd (storage.ts:294 writeFile) 在 trash 移入 .archive 后写入
+    // retained inode: 第一次对比通过, 二次校验发现内容 ≠ 快照 → 新内容必须
+    // 复制回活动 src 并 failed, 不能只落在 .archive 随机副本退出正常路径
+    // (Codex P1 on #2561 第十四轮)。
+    const realRename = fs.rename.bind(fs);
+    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
+      const r = await realRename(src as string, dst as string);
+      if (
+        String(dst).includes(ARCHIVE_DIR_NAME) &&
+        String(src).includes('cleanup-trash') &&
+        !String(dst).endsWith('.archive')
+      ) {
+        await writeFile(String(dst), 'WRITTEN AFTER MOVE BY OPEN FD', 'utf8');
+      }
+      return r;
+    });
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // 新内容回活动 src (产品内可见), 报 failed, 归档保留审阅快照。
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain(
+        'WRITTEN AFTER MOVE',
+      );
+      expect((await archiveContents()).some((f) => f.startsWith('feedback_a.md'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

@@ -424,12 +424,32 @@ export async function runMemoryCleanup(
         // 把 trash 移入 .archive (保留路径名, 后续 open fd 写入仍可达), 与
         // 快照 A 并存; 移动失败 (Windows 锁/瞬态权限) 则保留原位 — trash
         // 名非合法分片 (<type>_<slug>.md), list 跳过, 不污染索引。
-        await fs
-          .rename(
-            trash,
-            path.join(archiveDir, `${item.filename}.${stamp}.${randomBytes(4).toString('hex')}`),
-          )
-          .catch(() => {});
+        let retained =
+          path.join(archiveDir, `${item.filename}.${stamp}.${randomBytes(4).toString('hex')}`);
+        await fs.rename(trash, retained).catch(() => {
+          // 移动失败 (Windows 锁 = 活跃 writer 仍持有 fd) → trash 保留原位,
+          // 二次校验改读原位 trash。
+          retained = trash;
+        });
+        // 二次校验 (Codex P1 on #2561 第十四轮: 不要把仍可能被写入的 trash
+        // 标成已归档): 对比只证明「那一刻」没写入, open fd 可能在移动后把新
+        // 内容写进 retained inode。重读 retained 对比快照 A — 不一致说明
+        // writer 已写入, 必须把新内容复制回活动 src (绝不让它只落在 .archive
+        // 随机副本、退出 MEMORY.md/FTS 正常路径), 并记 failed。
+        const retainedContent = await fs.readFile(retained).catch(() => null);
+        if (retainedContent !== null && !retainedContent.equals(srcContent)) {
+          // src 在 rename 后为空 (宿主未重建), copyFile EXCL 把新内容放回
+          // 活动分片; 若宿主已重建 src (EEXIST) 则不覆盖, 新内容保留在
+          // retained (.archive 可达) 并记 failed。
+          await fs.copyFile(retained, src, fs.constants.COPYFILE_EXCL).catch(() => {});
+          await fs.unlink(retained).catch(() => {});
+          result.failed.push({
+            filename: item.filename,
+            error:
+              'source written during archive; restored to active shard (archive holds reviewed copy)',
+          });
+          continue;
+        }
         result.archived.push(item);
       } else {
         // 宿主并发写的新内容 (或 trash 读失败) → no-clobber 恢复 src
