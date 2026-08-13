@@ -159,7 +159,11 @@ export function buildFeishuAdapter(
     prepareAgentTurnText: async (event) => {
       const lane = decodeFeishuLaneUserId(event.senderId);
       if (!lane) return null;
-      const prefix = await buildFeishuGroupContextPrefix(feishuIm, lane, event.messageId);
+      // 群主流 @ 开新话题: 上下文取数 lane 与路由 lane 分离(见
+      // IMMessageEvent.groupContextLane) — 新话题是空的, 群历史仍按群主流
+      // 拉取, 「总结上面」等依赖上文的消息才能拿到上下文。
+      const contextLane = event.groupContextLane ?? lane;
+      const prefix = await buildFeishuGroupContextPrefix(feishuIm, contextLane, event.messageId);
       if (!prefix) return null;
       return { agentText: `${prefix}${event.text}` };
     },

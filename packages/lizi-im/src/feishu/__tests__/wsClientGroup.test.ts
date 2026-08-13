@@ -214,6 +214,8 @@ describe('feishu group inbound gate', () => {
     expect(event.speaker).toEqual({ id: OWNER, name: '', isOwner: true });
     // 锚点是开场白消息(话题内合法锚点), 不是触发消息。
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
+    // 路由进新话题 lane, 但上下文取数 lane 仍是群主流(新话题是空的)。
+    expect(event.groupContextLane).toEqual({ chatId: 'oc_chat1', threadId: '' });
   });
 
   it('falls back to the plain group lane when thread creation fails', async () => {
@@ -224,6 +226,7 @@ describe('feishu group inbound gate', () => {
 
     expect(events).toHaveLength(1);
     expect(events[0]!.senderId).toBe('g/oc_chat1');
+    expect(events[0]!.groupContextLane).toBeUndefined();
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1', 'om_msg1');
   });
 
@@ -234,6 +237,7 @@ describe('feishu group inbound gate', () => {
       groupMessage({ threadId: 'omt_topic7' }),
     );
     expect(events[0]!.senderId).toBe('g/oc_chat1/omt_topic7');
+    expect(events[0]!.groupContextLane).toBeUndefined();
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1/omt_topic7', 'om_msg1');
     expect(mocks.openThread).not.toHaveBeenCalled();
   });

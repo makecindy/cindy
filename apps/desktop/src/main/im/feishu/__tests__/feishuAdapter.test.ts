@@ -192,6 +192,23 @@ describe('feishu group lane adapter hooks', () => {
     expect(result?.agentText).not.toContain('别的话题');
   });
 
+  it('prepareAgentTurnText: 群主流 @ 开的新话题按群主流取上下文(总结上面不失忆)', async () => {
+    fetchRecentChatMessages.mockResolvedValueOnce([
+      historyEntry({ messageId: 'om_h1', threadId: '', text: '部署挂了' }),
+      historyEntry({ messageId: 'om_h2', threadId: 'omt_new', text: '开场白(新话题内)' }),
+      historyEntry({ messageId: 'om_h3', threadId: 'omt_other', text: '别的话题' }),
+    ]);
+    const result = await adapter.prepareAgentTurnText?.(
+      groupEvent({
+        senderId: 'g/oc_chat1/omt_new',
+        groupContextLane: { chatId: 'oc_chat1', threadId: '' },
+      }),
+    );
+    expect(result?.agentText).toContain('部署挂了');
+    expect(result?.agentText).not.toContain('开场白(新话题内)');
+    expect(result?.agentText).not.toContain('别的话题');
+  });
+
   it('prepareAgentTurnText: 发言人名字消毒(控制字符剥除), 栅栏标签中和', async () => {
     fetchRecentChatMessages.mockResolvedValueOnce([
       historyEntry({

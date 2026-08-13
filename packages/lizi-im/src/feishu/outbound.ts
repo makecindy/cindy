@@ -187,15 +187,71 @@ export async function replyText(
   );
 }
 
+// ── openThread (群主流 @ 开话题) ────────────────────────────────────────────
+// 开话题对同一触发消息幂等: 飞书可能重复投递同一条群主流 @ 事件(WS 重连等),
+// 不合并就会同一条消息开出多个话题、重复 agent 回答。进行中的请求共享同一
+// promise, 已完成的按 TTL 短缓存 — 重投事件直接复用同一个话题。缓存键是
+// 触发消息 id(平台内唯一), 不随 unbindClient 清空(换代不会重放别的消息 id)。
+
+interface OpenThreadResult {
+  messageId: string;
+  threadId: string;
+}
+
+const OPEN_THREAD_DEDUP_TTL_MS = 10 * 60_000;
+const OPEN_THREAD_DEDUP_MAX_ENTRIES = 200;
+const openThreadByTrigger = new Map<
+  string,
+  { ts: number; promise: Promise<OpenThreadResult | null> }
+>();
+
+function pruneOpenThreadDedup(): void {
+  const now = Date.now();
+  for (const [triggerId, entry] of openThreadByTrigger) {
+    if (now - entry.ts > OPEN_THREAD_DEDUP_TTL_MS) openThreadByTrigger.delete(triggerId);
+  }
+  while (openThreadByTrigger.size > OPEN_THREAD_DEDUP_MAX_ENTRIES) {
+    let oldestKey: string | undefined;
+    let oldestTs = Number.POSITIVE_INFINITY;
+    for (const [triggerId, entry] of openThreadByTrigger) {
+      if (entry.ts < oldestTs) {
+        oldestTs = entry.ts;
+        oldestKey = triggerId;
+      }
+    }
+    if (oldestKey === undefined) break;
+    openThreadByTrigger.delete(oldestKey);
+  }
+}
+
 /**
  * 以 reply_in_thread 回复触发消息, 用它作为根开一个新话题。返回开场白消息
- * id + 新话题 thread_id(话题内合法锚点); API 失败或响应缺 id 返回 null —
- * 调用方降级回群 lane 旧行为(引用回复 + chat_id 直发)。
+ * id + 新话题 thread_id(话题内合法锚点)。同一触发消息并发/重复调用共享同
+ * 一次开话题 — 防飞书重投事件开出多个话题(含进程重启: uuid 走服务端去重)。
+ *
+ * 失败语义: API 失败或响应缺 message_id → null(没有可确认已发出的开场白);
+ * 响应有 message_id 但缺 thread_id → 用 message.get 补查话题 id, 查不到就
+ * 撤回开场白再返回 null — 不让「回复都在里面」的开场白承诺落空。调用方在
+ * null 时降级回群 lane 旧行为(引用回复 + chat_id 直发)。
  */
-export async function openThread(
+export function openThread(
   replyToMessageId: string,
   text: string,
-): Promise<{ messageId: string; threadId: string } | null> {
+): Promise<OpenThreadResult | null> {
+  const now = Date.now();
+  const cached = openThreadByTrigger.get(replyToMessageId);
+  if (cached && now - cached.ts <= OPEN_THREAD_DEDUP_TTL_MS) return cached.promise;
+
+  const promise = doOpenThread(replyToMessageId, text);
+  openThreadByTrigger.set(replyToMessageId, { ts: now, promise });
+  pruneOpenThreadDedup();
+  return promise;
+}
+
+async function doOpenThread(
+  replyToMessageId: string,
+  text: string,
+): Promise<OpenThreadResult | null> {
   const log = getLog();
   try {
     const res = await ensureClient().im.v1.message.reply({
@@ -204,21 +260,54 @@ export async function openThread(
         content: JSON.stringify({ text }),
         msg_type: 'text',
         reply_in_thread: true,
+        // 服务端幂等键: 同一触发消息重复开话题(重投事件、进程重启后重放)时,
+        // 飞书按 uuid 去重(1 小时内同 uuid 至多发一条, 重复调用返回原消息
+        // id), 不会开出第二个话题。
+        uuid: replyToMessageId,
       },
     });
     const messageId = res.data?.message_id ?? '';
     const threadId = res.data?.thread_id ?? '';
-    if (!messageId || !threadId) {
+    if (!messageId) {
       log.warn(
-        `[feishu/outbound] openThread: response missing id(s) messageId=${messageId ? 'yes' : 'no'} threadId=${threadId ? 'yes' : 'no'}`,
+        '[feishu/outbound] openThread: no message_id in response — nothing provably sent',
       );
       return null;
     }
-    return { messageId, threadId };
+    if (threadId) return { messageId, threadId };
+    // 部分成功: 开场白已发出但响应缺 thread_id — 补查消息详情恢复话题 id。
+    const recovered = await tryFetchMessageThreadId(messageId);
+    if (recovered) return { messageId, threadId: recovered };
+    // 恢复不了: 撤回开场白再降级, 避免「回复都在里面」的开场白留在群里误导。
+    try {
+      await ensureClient().im.v1.message.delete({ path: { message_id: messageId } });
+      log.warn(
+        '[feishu/outbound] openThread: thread_id unrecoverable — opener recalled, fallback to group lane',
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(
+        `[feishu/outbound] openThread: thread_id unrecoverable, opener recall failed (non-fatal): ${msg}`,
+      );
+    }
+    return null;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`[feishu/outbound] openThread failed (fallback to group lane): ${msg}`);
     return null;
+  }
+}
+
+/** 用 message.get 补查开场白消息的 thread_id(部分成功恢复);失败返回 ''。 */
+async function tryFetchMessageThreadId(messageId: string): Promise<string> {
+  const log = getLog();
+  try {
+    const res = await ensureClient().im.v1.message.get({ path: { message_id: messageId } });
+    return res.data?.items?.[0]?.thread_id ?? '';
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[feishu/outbound] openThread: thread_id recovery via message.get failed: ${msg}`);
+    return '';
   }
 }
 
