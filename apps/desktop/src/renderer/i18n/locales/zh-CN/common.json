@@ -3370,7 +3370,7 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "entryDescription": "用 6 个 Agent 键打开侧边栏从上到下的前 6 个任务，并用灯光显示任务状态。",
+        "entryDescription": "用 Agent 键打开任务，并用灯光显示任务状态。",
         "openAria": "打开 Work Louder Codex Micro 设置",
         "back": "返回键盘快捷键",
         "retry": "重试",
@@ -3439,6 +3439,12 @@
           "source": {
             "label": "任务顺序",
             "description": "AG00～AG05 就是侧边栏从上到下的前 6 个任务，顺序与那里一致。",
+            "descriptions": {
+              "recent": "AG00～AG05 就是侧边栏从上到下的前 6 个任务，顺序与那里一致。",
+              "pinned": "AG00～AG05 对应前 6 个置顶任务。",
+              "priority": "AG00～AG05 对应前 6 个优先任务。",
+              "custom": "AG00～AG05 各自打开你指定的任务。"
+            },
             "value": "最近 6 个",
             "options": {
               "recent": "侧边栏顺序",

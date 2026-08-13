@@ -40,6 +40,7 @@ import {
   WORKLOUDER_CODEX_KEYCAP_ACTIONS,
   WORKLOUDER_CODEX_KEYCAP_IDS,
   cloneWorkLouderCodexLayout,
+  isWorkLouderCodexMicrophoneKeycap,
   type WorkLouderCodexAction,
   type WorkLouderCodexAgentSource,
   type WorkLouderCodexAutoDim,
@@ -53,6 +54,17 @@ import {
 } from '../../../shared/workLouderCodex';
 
 const DOUBLE_KEYCAPS = new Set<WorkLouderCodexKeycapId>(['MIC', 'EMPT5']);
+
+/** After a merge/split, write the edited assignment onto the still-visible slot. */
+function visibleCommandSlotAfterMicrophoneSplit(
+  slot: WorkLouderCodexCommandSlot,
+  separateMicrophoneKeys: boolean,
+): WorkLouderCodexCommandSlot {
+  if (separateMicrophoneKeys) {
+    return slot === 'ACT10_ACT11' ? 'ACT10' : slot;
+  }
+  return slot === 'ACT10' || slot === 'ACT11' ? 'ACT10_ACT11' : slot;
+}
 
 interface WorkLouderCodexEntryProps {
   state: WorkLouderCodexState | null;
@@ -201,18 +213,32 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
 
   const saveKeycapEditor = (): void => {
     if (!editingSlot || !editingKeycapId) return;
-    const slot = editingSlot;
+    const sourceSlot = editingSlot;
     const keycapId = editingKeycapId;
+    const slot = visibleCommandSlotAfterMicrophoneSplit(
+      sourceSlot,
+      editingSeparateMicrophoneKeys,
+    );
     patchLayout((layout) => {
-      applyCommandKeycap(layout, slot, keycapId);
-      layout.slots[slot].action = editingAction;
+      const previous = layout.slots[sourceSlot];
+      const assignmentChanged =
+        previous.keycapId !== keycapId ||
+        JSON.stringify(previous.action) !== JSON.stringify(editingAction);
       layout.separateMicrophoneKeys = editingSeparateMicrophoneKeys;
+      // Crossing merged/split changes which slot is visible. Keep the newly
+      // revealed keys as they were unless this save also changed the keycap.
+      if (slot === sourceSlot || assignmentChanged) {
+        applyCommandKeycap(layout, slot, keycapId);
+        layout.slots[slot].action = editingAction;
+      }
     });
     closeKeycapEditor();
   };
 
-  /** The microphone slots double as the voice-input control, so they get its options too. */
-  const editingMicrophone =
+  /** Voice-only at runtime when the printed keycap is a microphone. */
+  const editingMicrophoneKeycap = isWorkLouderCodexMicrophoneKeycap(editingKeycapId);
+  /** Split/merge lives on the physical microphone position, not the keycap. */
+  const editingMicrophoneSlot =
     editingSlot === 'ACT10' || editingSlot === 'ACT11' || editingSlot === 'ACT10_ACT11';
 
   const hintFor = (key: WorkLouderCodexEditableKey): WorkLouderCodexKeyHint | null => {
@@ -253,7 +279,7 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
     const slot = key as WorkLouderCodexCommandSlot;
     const assignment = settings.layout.slots[slot];
     const action = assignment.action ?? WORKLOUDER_CODEX_KEYCAP_ACTIONS[assignment.keycapId] ?? null;
-    if (assignment.keycapId === 'MIC' || assignment.keycapId === 'MIC1') {
+    if (isWorkLouderCodexMicrophoneKeycap(assignment.keycapId)) {
       return {
         legend: assignment.keycapId,
         name: t('settings.shortcuts.workLouderCodex.microphone.title'),
@@ -369,7 +395,9 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
       <SettingsGroup title={t('settings.shortcuts.workLouderCodex.agentKeys.title')}>
         <SettingsRow
           label={t('settings.shortcuts.workLouderCodex.agentKeys.source.label')}
-          description={t('settings.shortcuts.workLouderCodex.agentKeys.source.description')}
+          description={t(
+            `settings.shortcuts.workLouderCodex.agentKeys.source.descriptions.${settings.agentSource}`,
+          )}
           control={
             <SelectControl
               value={settings.agentSource}
@@ -434,9 +462,9 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
                 action={editingAction}
                 state={state}
                 skills={enabledSkills}
-                disabled={!state || saving || !editingSlot || editingMicrophone}
+                disabled={!state || saving || !editingSlot || editingMicrophoneKeycap}
                 emptyLabel={
-                  editingMicrophone
+                  editingMicrophoneKeycap
                     ? t('settings.shortcuts.workLouderCodex.microphone.title')
                     : t('settings.shortcuts.workLouderCodex.commandKeys.builtIn')
                 }
@@ -444,7 +472,7 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
               />
             }
           />
-          {editingMicrophone && (
+          {editingMicrophoneSlot && (
             <>
               <SettingsDivider />
               <MicrophoneControls

@@ -5,6 +5,7 @@ import {
   WORKLOUDER_CODEX_KEYCAP_ACTIONS,
   cloneWorkLouderCodexSettings,
   createWorkLouderCodexDefaultSettings,
+  isWorkLouderCodexMicrophoneKeycap,
   workLouderCodexAutoDimMs,
   type WorkLouderCodexAction,
   type WorkLouderCodexAgentSlotState,
@@ -323,7 +324,7 @@ export class WorkLouderCodexLightingController {
     const slot = this.commandSlotForKey(event.key);
     if (!slot) return;
     const assignment = this.settings.layout.slots[slot];
-    if (assignment.keycapId === 'MIC' || assignment.keycapId === 'MIC1') {
+    if (isWorkLouderCodexMicrophoneKeycap(assignment.keycapId)) {
       if (event.act === 1 || event.act === 0) {
         this.dispatchRendererAction({
           type: 'voice',

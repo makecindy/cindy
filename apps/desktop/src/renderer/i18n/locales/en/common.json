@@ -3371,7 +3371,7 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "entryDescription": "Open the first six sidebar tasks with the Agent keys and mirror their status with lighting.",
+        "entryDescription": "Open tasks with the Agent keys and mirror their status with lighting.",
         "openAria": "Open Work Louder Codex Micro settings",
         "back": "Back to keyboard shortcuts",
         "retry": "Try again",
@@ -3440,6 +3440,12 @@
           "source": {
             "label": "Task order",
             "description": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+            "descriptions": {
+              "recent": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+              "pinned": "AG00–AG05 follow the first six pinned tasks.",
+              "priority": "AG00–AG05 follow the first six priority tasks.",
+              "custom": "AG00–AG05 each open the task you assign."
+            },
             "value": "Most recent 6",
             "options": {
               "recent": "Sidebar order",

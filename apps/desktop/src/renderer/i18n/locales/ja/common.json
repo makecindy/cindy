@@ -3370,7 +3370,7 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "entryDescription": "6 個の Agent キーでサイドバー上から 6 件のタスクを開き、ライトで状態を表示します。",
+        "entryDescription": "Agent キーでタスクを開き、ライトで状態を表示します。",
         "openAria": "Work Louder Codex Micro の設定を開く",
         "back": "キーボードショートカットに戻る",
         "retry": "再試行",
@@ -3439,6 +3439,12 @@
           "source": {
             "label": "タスクの順序",
             "description": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
+            "descriptions": {
+              "recent": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
+              "pinned": "AG00～AG05 はピン留めしたタスクの上から 6 件です。",
+              "priority": "AG00～AG05 は優先タスクの上から 6 件です。",
+              "custom": "AG00～AG05 はそれぞれ指定したタスクを開きます。"
+            },
             "value": "最近の 6 件",
             "options": {
               "recent": "サイドバー順",

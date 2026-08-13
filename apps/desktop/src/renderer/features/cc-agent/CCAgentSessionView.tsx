@@ -1488,8 +1488,11 @@ export function CCAgentSessionView({
           return true;
         }
       }
+      // Only the focused split pane / route owner should consume hardware
+      // task commands; other mounted panes stay subscribed for approvals.
+      if (!sessionId || !ownsRoute) return false;
       if (action.commandId === 'forkTask') {
-        if (!sessionId || !canNavigateSession) return false;
+        if (!canNavigateSession) return false;
         void forkCurrentTaskFromKeyboard(sessionId, {
           navigate,
           t,
@@ -1497,7 +1500,6 @@ export function CCAgentSessionView({
         return true;
       }
       if (action.commandId === 'copyConversationMarkdown') {
-        if (!sessionId) return false;
         void copyCurrentTaskMarkdown(sessionId, { navigate, t });
         return true;
       }
@@ -1506,6 +1508,7 @@ export function CCAgentSessionView({
   }, [
     canNavigateSession,
     cancelPlanReview,
+    ownsRoute,
     navigate,
     pendingPermission,
     pendingPlanReview,

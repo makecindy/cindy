@@ -53,14 +53,14 @@ function isRenderedVisible(node: HTMLElement): boolean {
 /** Sidebar search sits on top of the real list without hiding it. */
 function isCoveredBySearchOverlay(node: HTMLElement): boolean {
   if (typeof node.closest !== 'function') return false;
-  if (node.closest('[data-conversation-search-surface]')) return false;
+  if (node.closest('[data-conversation-search-overlay]')) return false;
   const root = node.ownerDocument;
   if (!root) return false;
-  for (const surface of root.querySelectorAll('[data-conversation-search-surface]')) {
-    if (!(surface instanceof HTMLElement)) continue;
-    if (surface.contains(node)) continue;
+  for (const overlay of root.querySelectorAll('[data-conversation-search-overlay]')) {
+    if (!(overlay instanceof HTMLElement)) continue;
+    if (overlay.contains(node)) continue;
     const ancestor = node.closest('aside, [data-sidebar], nav');
-    if (ancestor && ancestor.contains(surface)) return true;
+    if (ancestor && ancestor.contains(overlay)) return true;
   }
   return false;
 }

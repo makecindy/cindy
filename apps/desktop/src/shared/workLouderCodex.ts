@@ -363,6 +363,12 @@ export function isWorkLouderCodexKeycapId(value: unknown): value is WorkLouderCo
   return isStringOption(value, WORKLOUDER_CODEX_KEYCAP_IDS);
 }
 
+export function isWorkLouderCodexMicrophoneKeycap(
+  keycapId: WorkLouderCodexKeycapId | null | undefined,
+): boolean {
+  return keycapId === 'MIC' || keycapId === 'MIC1';
+}
+
 export function isWorkLouderCodexEncoderMode(value: unknown): value is WorkLouderCodexEncoderMode {
   return isStringOption(value, WORKLOUDER_CODEX_ENCODER_MODES);
 }

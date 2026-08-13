@@ -3370,7 +3370,7 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "entryDescription": "6개의 Agent 키로 사이드바 위에서부터 6개 작업을 열고 조명으로 상태를 표시합니다.",
+        "entryDescription": "Agent 키로 작업을 열고 조명으로 상태를 표시합니다.",
         "openAria": "Work Louder Codex Micro 설정 열기",
         "back": "키보드 단축키로 돌아가기",
         "retry": "다시 시도",
@@ -3439,6 +3439,12 @@
           "source": {
             "label": "작업 순서",
             "description": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
+            "descriptions": {
+              "recent": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
+              "pinned": "AG00~AG05는 고정한 작업 위쪽 6개입니다.",
+              "priority": "AG00~AG05는 우선 작업 위쪽 6개입니다.",
+              "custom": "AG00~AG05는 각각 지정한 작업을 엽니다."
+            },
             "value": "최근 6개",
             "options": {
               "recent": "사이드바 순서",

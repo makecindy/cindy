@@ -70,4 +70,23 @@ describe('workLouderCodexTaskActions', () => {
     expect(writeText).toHaveBeenCalledWith('## User\n\nhello\n\n## Cindy\n\nworld');
     expect(mocks.toast.success).toHaveBeenCalled();
   });
+
+  it('shows an error when there is no assistant reply to fork from', async () => {
+    mocks.listMessagesFor.mockResolvedValue([{ role: 'user', clientId: 'u1', content: 'hello' }]);
+
+    await forkCurrentTaskFromKeyboard('session-1', { navigate: vi.fn(), t: (key) => key });
+
+    expect(mocks.forkAtMessage).not.toHaveBeenCalled();
+    expect(mocks.toast.error).toHaveBeenCalledWith('chat.userMessage.forkErrors.noPriorAssistant');
+  });
+
+  it('warns when there is no conversation text to copy', async () => {
+    mocks.listMessagesFor.mockResolvedValue([]);
+
+    await copyCurrentTaskMarkdown('session-1', { navigate: vi.fn(), t: (key) => key });
+
+    expect(mocks.toast.warning).toHaveBeenCalledWith(
+      'settings.shortcuts.workLouderCodex.commands.copyConversationMarkdown.empty',
+    );
+  });
 });

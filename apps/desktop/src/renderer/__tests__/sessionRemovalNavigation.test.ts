@@ -165,6 +165,7 @@ describe('getVisibleSidebarSessionIds', () => {
 
     const overlay = document.createElement('div');
     overlay.dataset.conversationSearchSurface = '';
+    overlay.dataset.conversationSearchOverlay = '';
     const hit = document.createElement('div');
     hit.dataset.sidebarSessionRow = 'true';
     hit.dataset.sessionId = 'hit';
@@ -174,6 +175,22 @@ describe('getVisibleSidebarSessionIds', () => {
     document.body.append(aside);
     try {
       expect(getVisibleSidebarSessionIds()).toEqual(['hit']);
+    } finally {
+      aside.remove();
+    }
+  });
+
+  it('keeps the real sidebar list when only the resident search input is marked', () => {
+    const aside = document.createElement('aside');
+    const search = document.createElement('div');
+    search.dataset.conversationSearchSurface = '';
+    const row = document.createElement('div');
+    row.dataset.sidebarSessionRow = 'true';
+    row.dataset.sessionId = 'visible';
+    aside.append(search, row);
+    document.body.append(aside);
+    try {
+      expect(getVisibleSidebarSessionIds()).toEqual(['visible']);
     } finally {
       aside.remove();
     }

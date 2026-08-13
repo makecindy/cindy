@@ -3368,6 +3368,7 @@ function ExpandedView({
           {searchActive ? (
             <div
               data-conversation-search-surface
+              data-conversation-search-overlay
               onContextMenu={(event) => event.stopPropagation()}
             >
               <SearchResultsBody

@@ -244,4 +244,73 @@ describe('WorkLouderCodexSettings', () => {
 
     expect(mocks.setSettings).not.toHaveBeenCalled();
   });
+
+  it('keeps existing single keys when only the microphone split is saved', () => {
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^MIC/ }));
+    fireEvent.click(
+      screen.getByRole('switch', {
+        name: 'settings.shortcuts.workLouderCodex.microphone.separate.label',
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.editor.save',
+      }),
+    );
+
+    expect(mocks.setSettings).toHaveBeenCalledWith({
+      layout: expect.objectContaining({
+        separateMicrophoneKeys: true,
+        slots: expect.objectContaining({
+          ACT10: expect.objectContaining({ keycapId: 'MIC1' }),
+          ACT11: expect.objectContaining({ keycapId: 'EMPT1' }),
+          ACT10_ACT11: expect.objectContaining({ keycapId: 'MIC' }),
+        }),
+      }),
+    });
+  });
+
+  it('writes a merged-to-split save onto the newly visible left key', () => {
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^MIC/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'EMPT5' }));
+    fireEvent.click(
+      screen.getByRole('switch', {
+        name: 'settings.shortcuts.workLouderCodex.microphone.separate.label',
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.editor.save',
+      }),
+    );
+
+    expect(mocks.setSettings).toHaveBeenCalledWith({
+      layout: expect.objectContaining({
+        separateMicrophoneKeys: true,
+        slots: expect.objectContaining({
+          ACT10: expect.objectContaining({ keycapId: 'EMPT5' }),
+          ACT10_ACT11: expect.objectContaining({ keycapId: 'MIC' }),
+        }),
+      }),
+    });
+  });
+
+  it('disables assigned actions for a microphone keycap on a regular command slot', () => {
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^FAST/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'MIC1' }));
+
+    expect(
+      (
+        screen.getByRole('combobox', {
+          name: 'settings.shortcuts.workLouderCodex.actions.choose',
+        }) as HTMLSelectElement
+      ).disabled,
+    ).toBe(true);
+  });
 });
