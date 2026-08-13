@@ -113,6 +113,7 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
 import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker';
 import {
+  pluginMarketOwnedInstall,
   pluginPresentationOrigin,
   pluginUpdateForInstalledVersion,
   type PluginPresentationOrigin,
@@ -694,8 +695,10 @@ export function GhostPluginPage() {
   const selectedDetail = selectedGhost
     ? toGhostPluginDetail(selectedGhost, selectedPresentation)
     : null;
+  // not-installed 的市场条目(含内容一致的可收养投影)不拥有这份本地安装;
+  // 拿它路由卸载会去市场账本查不存在的记录,让文件装的插件永远卸不掉。
   const selectedMarketInstall = selectedDetail
-    ? (marketByGhostId.get(selectedDetail.id) ?? null)
+    ? pluginMarketOwnedInstall(marketByGhostId.get(selectedDetail.id))
     : null;
   const selectedMarketUpdate = selectedDetail
     ? pluginUpdateForInstalledVersion(selectedMarketInstall)
