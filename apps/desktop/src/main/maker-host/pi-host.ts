@@ -255,6 +255,7 @@ function officialPiModels(providerId: string): PiNativeModelSpec[] | null {
   return models.map((model) => ({
     id: model.id,
     name: model.name,
+    ...(model.headers && Object.keys(model.headers).length > 0 ? { headers: model.headers } : {}),
     api: model.api,
     reasoning: model.reasoning,
     thinkingLevelMap: model.thinkingLevelMap,

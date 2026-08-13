@@ -98,6 +98,29 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[0]?.models[0]).not.toHaveProperty('thinkingLevelMap');
   });
 
+  it('preserves per-model headers from the official Pi catalog', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'kimi-coding-local',
+        name: 'Kimi Coding Local',
+        auth: { method: 'apiKey' },
+        runtimes: {
+          pi: piRuntime({
+            baseUrl: 'https://api.kimi.com/coding',
+            wireProtocol: 'anthropic-messages',
+            piCatalogProviderId: 'kimi-coding',
+            models: [{ id: 'k3', name: 'Kimi K3' }],
+          }),
+        },
+      }],
+      () => 'secret',
+    );
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'k3',
+      headers: { 'User-Agent': 'KimiCLI/1.5' },
+    });
+  });
+
   it('preserves explicit overrides for an exact official model after the catalog marker is cleared', () => {
     const { providers } = buildPiNativeProvidersFromConfigs(
       [{

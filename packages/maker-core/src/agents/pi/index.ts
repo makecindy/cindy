@@ -560,6 +560,7 @@ export class PiAgent extends BaseAgent {
         models: np.models.map((m) => ({
           id: m.id,
           name: m.name ?? m.id,
+          ...(m.headers && Object.keys(m.headers).length > 0 ? { headers: m.headers } : {}),
           ...(m.api ? { api: m.api } : {}),
           reasoning: m.reasoning ?? false,
           ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),

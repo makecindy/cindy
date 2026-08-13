@@ -200,6 +200,8 @@ export interface PiNativeModelCost {
 export interface PiNativeModelSpec {
   id: string;
   name?: string;
+  /** Per-model request headers from the authoritative Pi catalog. */
+  headers?: Record<string, string>;
   /** Per-model API from Pi's official catalog; providers may mix protocols. */
   api?: PiNativeApi;
   reasoning?: boolean;
