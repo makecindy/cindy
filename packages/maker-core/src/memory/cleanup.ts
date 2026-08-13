@@ -94,6 +94,12 @@ export interface ArchiveItem {
   reason: 'duplicate' | 'stale' | 'digest-retention';
   /** 人类可读说明 (命中信号 / 重复于 / digest 超出保留数)。 */
   detail: string;
+  /**
+   * plan 时源文件内容的 sha256 — run 移动前重读对比, 源被并发更新
+   * (--force 场景) 则 fail/replan, 不归档非预期内容 (Codex P1 on #2561:
+   * recheck the shard before moving it)。读失败 (并发删除) 为 null。
+   */
+  expectedHash: string | null;
 }
 
 /** 完全重复组 (title+description+body 三者一致, 仅 filename 不同)。 */
@@ -240,6 +246,7 @@ export async function planMemoryCleanup(
         filename: f,
         reason: 'duplicate',
         detail: `duplicate of ${keep.filename}`,
+        expectedHash: await fileSha256(path.join(shardDir, f)),
       });
     }
   }
@@ -313,6 +320,7 @@ export async function planMemoryCleanup(
       filename: f,
       reason: 'digest-retention',
       detail: `digest beyond keep-latest-${keepDigests}`,
+      expectedHash: await fileSha256(path.join(shardDir, f)),
     });
   }
 
@@ -333,6 +341,7 @@ export async function runMemoryCleanup(
   const stamp = now().replace(/[:.]/g, '-');
 
   // 待归档 = 默认的确定性项 (重复 + digest) 加上 (可选) 终态候选。
+  // 终态候选在 run 阶段才构造, 同样记录 plan 时点的内容 hash 供移动前校验。
   const items: ArchiveItem[] = [...plan.archiveItems];
   if (opts.archiveStale) {
     for (const c of plan.staleCandidates) {
@@ -342,6 +351,7 @@ export async function runMemoryCleanup(
         detail: c.matchedSignal
           ? `matches stale signal "${c.matchedSignal}"`
           : 'age-expired project/reference',
+        expectedHash: await fileSha256(path.join(plan.shardDir, c.filename)),
       });
     }
   }
@@ -349,9 +359,19 @@ export async function runMemoryCleanup(
   for (const item of items) {
     const src = path.join(plan.shardDir, item.filename);
     try {
-      // 幂等: 源已不存在 (已被上次运行归档) → 跳过不报错。
+      // 幂等 + 移动前校验: 源已不存在 (已被上次运行归档) → 跳过不报错;
+      // 源内容与 plan 时不一致 (--force 场景被并发更新) → fail/replan,
+      // 不归档非预期内容 (Codex P1 on #2561: recheck the shard before
+      // moving it — 归档的必须是用户批准清理的那份内容)。
       const srcContent = await fs.readFile(src).catch(() => null);
       if (srcContent === null) continue;
+      if (sha256(srcContent) !== item.expectedHash) {
+        result.failed.push({
+          filename: item.filename,
+          error: 'source changed since plan; kept, re-run to replan',
+        });
+        continue;
+      }
 
       // 可选真备份: 归档前写一份到 backupRoot (数据保全)。用 writeFile 'wx'
       // 原子预留目标, 同名冲突 (重复 backup-dir / 同 clock rerun / 并发) 递增
@@ -360,10 +380,8 @@ export async function runMemoryCleanup(
         await writeExclusive(opts.backupRoot, item.filename, stamp, srcContent);
       }
 
-      // 归档 = rename 原子移动进 .archive (对齐 #2519 migrate 的 rename-then-
-      // remove 哲学)。rename 是单个原子系统调用, 不存在「复制/校验/删源」的
-      // 多步窗口 — 移动后 src 路径即空, 宿主并发写会落到新的 src 文件, 已
-      // 移动的旧内容不受影响, 新内容绝不丢失 (Greptile P1 on #2561 第五/六轮)。
+      // 归档 = link 排他预留 + unlink 删源 (严格 no-clobber, 见 moveExclusive
+      // 注释 — Codex P2 on #2561)。
       await moveExclusive(src, archiveDir, item.filename, stamp);
       result.archived.push(item);
     } catch (e) {
@@ -395,6 +413,20 @@ function contentHash(rec: MemoryRecord): string {
     rec.body.trim(),
   ].join('\u0000');
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
+}
+
+/** Buffer 的 sha256 (用于 plan 时点 vs run 时点的源内容对比)。 */
+function sha256(buf: Buffer): string {
+  return createHash('sha256').update(buf).digest('hex');
+}
+
+/** 读文件并返回内容 sha256; 读失败 (并发删除) 返回 null。 */
+async function fileSha256(p: string): Promise<string | null> {
+  try {
+    return sha256(await fs.readFile(p));
+  } catch {
+    return null;
+  }
 }
 
 /**

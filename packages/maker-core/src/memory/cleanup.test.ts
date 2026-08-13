@@ -283,4 +283,23 @@ describe('runMemoryCleanup', () => {
       spy.mockRestore();
     }
   });
+
+  it('fails items whose source changed after plan (recheck before move)', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // plan 后、run 前, 源被并发更新 (--force 场景) — 内容已非计划批准的重复项。
+    await writeFile(
+      path.join(dir, 'feedback_a.md'),
+      "---\ntitle: NEW\ndescription: new\ntype: feedback\nupdatedAt: '2026-03-01T00:00:00.000Z'\n---\ncompletely different\n",
+      'utf8',
+    );
+
+    const result = await runMemoryCleanup(plan);
+    // 源变更 → failed + 保留, 不归档非预期内容 (Codex P1 on #2561)。
+    expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+    expect(result.archived).toHaveLength(0);
+    await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('different');
+  });
 });
