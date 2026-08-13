@@ -445,17 +445,11 @@ export async function runMemoryCleanup(
         const retainedContent = await fs.readFile(retained).catch(() => null);
         if (retainedContent === null || !retainedContent.equals(srcContent)) {
           // writer 已写入或 retained 不可读 → 尝试把 retained 内容恢复回 src。
-          // copyFile EXCL 成功才允许 unlink retained; EEXIST (宿主已重建 src)
-          // 时不覆盖、retained 保留可达 — open-fd 新内容绝不能因恢复失败被删
-          // (Greptile P1 / Codex P1 on #2561 第十五轮: 排他恢复失败后不得删除
-          // 新内容)。
-          let restored = false;
-          try {
-            await fs.copyFile(retained, src, fs.constants.COPYFILE_EXCL);
-            restored = true;
-          } catch (e) {
-            if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-          }
+          // 恢复成功才允许 unlink retained; 失败 (EEXIST 宿主重建 / EACCES /
+          // EPERM / ENOSPC …) 一律不抛错 — retained 保留 .archive 可达, 数据
+          // 不丢 (Greptile P1 / Codex P1 on #2561 第十五/十六轮: 恢复失败后
+          // 不得删除新内容、活动分片不能缺失)。
+          const restored = await restoreRetained(retained, src);
           if (restored) {
             await fs.unlink(retained).catch(() => {});
           }
@@ -463,7 +457,25 @@ export async function runMemoryCleanup(
             filename: item.filename,
             error: restored
               ? 'source written during archive; restored to active shard (archive holds reviewed copy)'
-              : 'source written during archive; src recreated by host — newer copy kept, retained reachable in .archive for manual recovery',
+              : 'source written during archive; restore failed — retained kept reachable in .archive for manual recovery',
+          });
+          continue;
+        }
+        // 三次确认 (Codex P1 on #2561 第十六轮: keep active shards until live
+        // writers are ruled out): 二次校验通过后、标 archived 前再读一次 —
+        // 排除「reread 之后 open fd 写入」的窗口。仍不一致或不可读则与二次
+        // 校验同样处理 (恢复 src + failed), 绝不标成功。
+        const finalContent = await fs.readFile(retained).catch(() => null);
+        if (finalContent === null || !finalContent.equals(srcContent)) {
+          const restored = await restoreRetained(retained, src);
+          if (restored) {
+            await fs.unlink(retained).catch(() => {});
+          }
+          result.failed.push({
+            filename: item.filename,
+            error: restored
+              ? 'source written during archive; restored to active shard (archive holds reviewed copy)'
+              : 'source written during archive; restore failed — retained kept reachable in .archive for manual recovery',
           });
           continue;
         }
@@ -609,6 +621,22 @@ async function restoreTrash(
       // 外层重建索引后记忆退出正常路径但磁盘数据可人工找回。
       throw e2;
     }
+  }
+}
+
+/**
+ * 尝试把 retained 内容排他复制回活动 src (恢复), 返回是否成功。
+ *
+ * 任何失败 (EEXIST 宿主已重建 src / EACCES / EPERM / ENOSPC …) 都返回
+ * false 而非抛错: retained 保留在 .archive 可达, 数据不丢 — 恢复失败不能再
+ * 让活动分片缺失或删除新内容 (Greptile P1 / Codex P1 on #2561 第十五/十六轮)。
+ */
+async function restoreRetained(retained: string, src: string): Promise<boolean> {
+  try {
+    await fs.copyFile(retained, src, fs.constants.COPYFILE_EXCL);
+    return true;
+  } catch {
+    return false;
   }
 }
 
