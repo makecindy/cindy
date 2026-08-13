@@ -403,19 +403,102 @@ function hasMentionText(existingText: string, block: { path: string; kind?: 'fil
   return existingText.includes(rawMentionText(block)) || existingText.includes(quotedMentionText(block));
 }
 
+type ClaudeImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+
+type ClaudeSdkContentBlock =
+  | {
+      type: 'image';
+      source: {
+        type: 'base64';
+        media_type: ClaudeImageMediaType;
+        data: string;
+      };
+    }
+  | { type: 'text'; text: string };
+
+interface ClaudeInputImageResizer {
+  process(absPath: string): Promise<string>;
+  validateBuffer(data: Buffer): Promise<boolean>;
+}
+
+const CLAUDE_INLINE_IMAGE_MAX_ENCODED_BYTES = 5 * 1024 * 1024;
+
+function base64EncodedByteLength(rawByteLength: number): number {
+  return Math.ceil(rawByteLength / 3) * 4;
+}
+
+function detectClaudeImageMediaType(data: Buffer): ClaudeImageMediaType | null {
+  if (
+    data.length >= 8
+    && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  ) {
+    return 'image/png';
+  }
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (data.length >= 6) {
+    const signature = data.toString('ascii', 0, 6);
+    if (signature === 'GIF87a' || signature === 'GIF89a') return 'image/gif';
+  }
+  if (
+    data.length >= 12
+    && data.toString('ascii', 0, 4) === 'RIFF'
+    && data.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return null;
+}
+
+async function toClaudeImageBlock(
+  imagePath: string,
+  validateBuffer: (data: Buffer) => Promise<boolean>,
+): Promise<ClaudeSdkContentBlock | null> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(imagePath, 'r');
+    const stat = await handle.stat();
+    if (
+      !stat.isFile()
+      || stat.size <= 0
+      || base64EncodedByteLength(stat.size) > CLAUDE_INLINE_IMAGE_MAX_ENCODED_BYTES
+    ) {
+      return null;
+    }
+    const data = await handle.readFile();
+    if (
+      data.length === 0
+      || base64EncodedByteLength(data.length) > CLAUDE_INLINE_IMAGE_MAX_ENCODED_BYTES
+    ) return null;
+    const mediaType = detectClaudeImageMediaType(data);
+    if (!mediaType) return null;
+    if (!(await validateBuffer(data))) return null;
+    const encodedData = data.toString('base64');
+    return {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: mediaType,
+        data: encodedData,
+      },
+    };
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 /**
  * 把 maker-core 的 UserMessage content 装配成 Claude SDK 接受的形式。
- *
- * Async 而非 sync —— image block 的 absPath 会先经过 image-resizer 透明替换为
- * 缩好的缓存副本路径(命中走缓存近乎 0ms, miss 后台 sharp 处理 ~200-500ms),
- * 再以 @"resizedAbsPath" 形态注入到 prefix。Claude SDK 后续读 mention 引用的
- * 就是缩好的文件, 显著节省 vision token。
- *
- * 失败 (sharp 不可用 / 文件不存在 / GIF / 超时) 安全降级回原 path, 不阻塞 send。
+ * 图片按需压缩后统一发送为原生 image block；无法安全内联时回退为原有路径引用。
  */
 export async function toClaudeSdkContent(
   content: UserMessage['content'],
-): Promise<string | Array<{ type: string; [k: string]: unknown }>> {
+  imageResizer: ClaudeInputImageResizer = getDefaultImageResizer(),
+  readImagePathsLocally = true,
+): Promise<string | ClaudeSdkContentBlock[]> {
   if (typeof content === 'string') return content;
 
   const textParts = content
@@ -424,18 +507,32 @@ export async function toClaudeSdkContent(
   const existingText = textParts.join('\n');
   const refs: string[] = [];
 
-  // 先把所有 image block 的 path 收集出来批量 resize (并发由 resizer 内部 semaphore 控)。
-  // 同 turn 多张图能并发处理, 不需要在这里串行 await。
-  const resizer = getDefaultImageResizer();
-  const imagePathPromises = new Map<number, Promise<string>>();
+  const imageBlockPromises = new Map<
+    number,
+    Promise<{ block: ClaudeSdkContentBlock | null; finalPath: string }>
+  >();
   content.forEach((block, idx) => {
-    if (block.type === 'image') {
-      imagePathPromises.set(idx, resizer.process(block.path));
+    if (block.type === 'image' && readImagePathsLocally) {
+      imageBlockPromises.set(
+        idx,
+        imageResizer.process(block.path).then(async (finalPath) => {
+          return {
+            block: await toClaudeImageBlock(
+              finalPath,
+              (data) => imageResizer.validateBuffer(data),
+            ),
+            finalPath,
+          };
+        }),
+      );
     }
   });
-  const resizedPaths = new Map<number, string>();
-  for (const [idx, p] of imagePathPromises) {
-    resizedPaths.set(idx, await p);
+  const resolvedImages = new Map<
+    number,
+    { block: ClaudeSdkContentBlock | null; finalPath: string }
+  >();
+  for (const [idx, promise] of imageBlockPromises) {
+    resolvedImages.set(idx, await promise);
   }
 
   content.forEach((block, idx) => {
@@ -444,7 +541,9 @@ export async function toClaudeSdkContent(
     if (block.type === 'mention') {
       mentionBlock = { path: block.path, kind: block.kind };
     } else if (block.type === 'image') {
-      mentionBlock = { path: resizedPaths.get(idx) ?? block.path, kind: 'file' as const };
+      const resolvedImage = resolvedImages.get(idx);
+      if (resolvedImage?.block) return;
+      mentionBlock = { path: resolvedImage?.finalPath ?? block.path, kind: 'file' as const };
     } else {
       mentionBlock = { path: block.path, kind: 'file' as const };
     }
@@ -455,7 +554,9 @@ export async function toClaudeSdkContent(
 
   const prefix = refs.length > 0 ? `${refs.join(' ')} ` : '';
   const text = `${prefix}${textParts.join('\n')}`.trim();
-  return text || prefix.trim();
+  const imageBlocks = [...resolvedImages.values()].flatMap(({ block }) => (block ? [block] : []));
+  if (imageBlocks.length === 0) return text || prefix.trim();
+  return text ? [...imageBlocks, { type: 'text', text }] : imageBlocks;
 }
 
 function userMessageTextForCapabilityRouting(content: UserMessage['content']): string {
@@ -1303,7 +1404,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // checkpoint snapshot 的 messageId (cli.js:7086382), rewind preview 反查同款 uuid。
     type SdkUserInput = {
       type: 'user';
-      message: { role: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
+      message: { role: 'user'; content: string | ClaudeSdkContentBlock[] };
       parent_tool_use_id: null;
       uuid?: string;
     };
@@ -4747,6 +4848,27 @@ export class ClaudeCodeAgent extends BaseAgent {
         releaseCancellationRebuildGate?.();
       }
     }
+    const warnIfRemoteDesktopAttachment = (content: UserMessage['content']): void => {
+      if (!opts.remoteHostId || !Array.isArray(content)) return;
+      const hasDesktopLocalAttachment = content.some(
+        (block) => block.type === 'file'
+          || block.type === 'mention'
+          || (block.type === 'image' && block.pathOrigin === 'desktop-host'),
+      );
+      if (!hasDesktopLocalAttachment) return;
+      log.warn('cc remote: local attachment not accessible on remote session', {
+        sessionId: opts.sessionId,
+        hostId: opts.remoteHostId,
+      });
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message: '[REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED] Local file attachments are not accessible on remote sessions. Paste content directly instead.',
+          isTerminal: false,
+        },
+        source: 'claude-code',
+      });
+    };
     const handle: AgentSessionHandle = {
       get id() { return sdkSessionId ?? '<pending>'; },
       agentKind: 'claude-code',
@@ -5054,34 +5176,21 @@ export class ClaudeCodeAgent extends BaseAgent {
               reviewReadGrants,
             );
           }
-          const content = await toClaudeSdkContent(message.content);
+          // SSH 图片路径属于远端主机，不能在桌面端压缩或读取；保留路径引用交给远端 SDK。
+          const content = await toClaudeSdkContent(
+            message.content,
+            undefined,
+            !opts.remoteHostId,
+          );
           if (sendOpts?.signal?.aborted) {
             throw new Error('Claude send cancelled before acceptance');
           }
           // **Remote attachment guard (MVP)**: 远端 session 走 cc 进程在 SSH host 上跑,
-          // 本地图片/文件附件转出来的 `@"<desktop-local-path>"` 引用在远端找不到文件,
+          // 本地文件附件转出来的 `@"<desktop-local-path>"` 引用在远端找不到文件,
           // 模型看不见 → silent context loss。完整修法是 upload 文件到远端 (follow-up),
           // 这里 MVP 检测到附件就 emit warn event 让用户知道,实际请求里把附件 ref 留着
           // (daemon 端 SDK 读不到就跳过, 不会 crash)。
-          if (opts.remoteHostId && Array.isArray(message.content)) {
-            const hasAttachment = message.content.some(
-              (b) => b.type === 'image' || b.type === 'file' || b.type === 'mention',
-            );
-            if (hasAttachment) {
-              log.warn('cc remote: local file/image attachment not accessible on remote session', {
-                sessionId: opts.sessionId,
-                hostId: opts.remoteHostId,
-              });
-              eventQueue.push({
-                type: 'error',
-                data: {
-                  message: '[REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED] Local file/image attachments are not accessible on remote sessions. Paste content directly instead.',
-                  isTerminal: false,
-                },
-                source: 'claude-code',
-              });
-            }
-          }
+          warnIfRemoteDesktopAttachment(message.content);
           // Claude Code streaming-input 协议要求 message 包装层,漏掉会 exit code 1。
           // sendOpts.messageUuid 注入到 SDK input.uuid — SDK 透传当作 file checkpoint
           // snapshot 的 messageId, rewind preview 拿同款 uuid 调 rewindFiles dryRun。
@@ -5151,7 +5260,12 @@ export class ClaudeCodeAgent extends BaseAgent {
             reviewReadGrants,
           );
         }
-        const content = await toClaudeSdkContent(message.content);
+        // steer 与 send 保持同一来源边界：SSH 图片路径只由远端 SDK 读取。
+        const content = await toClaudeSdkContent(
+          message.content,
+          undefined,
+          !opts.remoteHostId,
+        );
         if (sendOpts?.signal?.aborted) {
           throw new Error('Claude steer cancelled before acceptance');
         }
@@ -5161,6 +5275,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // keeps the original queue/composer content and lets the user retry.
           throw new Error('No active Claude turn to steer');
         }
+        warnIfRemoteDesktopAttachment(message.content);
         // Same-turn steering deliberately does NOT call beginTurn(), reset the
         // tool-loop guard, or emit a new running status. Those are turn-start
         // side effects; doing them here would corrupt usage attribution and make

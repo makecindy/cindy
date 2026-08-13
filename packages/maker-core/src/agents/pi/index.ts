@@ -87,6 +87,12 @@ import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
 import { capturePiRuntimeCapabilityManifest } from './runtime-capabilities.js';
 import {
+  assembleApprovedPiProjectResources,
+  reconcilePiProjectResourceRuntime,
+  stageApprovedPiProjectResources,
+  unavailablePiProjectResourceAssembly,
+} from './project-resource-assembly.js';
+import {
   createPiTranslateContext,
   disposePiTranslateContext,
   translatePiEvent,
@@ -792,18 +798,14 @@ export class PiAgent extends BaseAgent {
     // 与 models.json 同放隔离 configHome(Pi 从 PI_CODING_AGENT_DIR/extensions 扫描)。
     const extensionsDir = path.join(configHome, 'extensions');
     await fs.mkdir(extensionsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME),
-      CINDY_BRIDGE_EXTENSION_SOURCE,
-    );
+    const bridgeExtensionPath = path.join(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME);
+    await fs.writeFile(bridgeExtensionPath, CINDY_BRIDGE_EXTENSION_SOURCE);
     // cindy-subagent extension:与 bridge 并列的独立扩展(职责分离 —— bridge 管权限门与
     // MCP 桥,这个只管子代理)。子进程继承 PI_CODING_AGENT_DIR,因此同样加载 bridge,
     // 权限门对子代理照样生效;递归由扩展内的 depth env 自己截断。
+    const subagentExtensionPath = path.join(extensionsDir, CINDY_SUBAGENT_EXTENSION_FILENAME);
     if (!reviewMode) {
-      await fs.writeFile(
-        path.join(extensionsDir, CINDY_SUBAGENT_EXTENSION_FILENAME),
-        CINDY_SUBAGENT_EXTENSION_SOURCE,
-      );
+      await fs.writeFile(subagentExtensionPath, CINDY_SUBAGENT_EXTENSION_SOURCE);
     }
 
     // 权限档文件:extension 每次 tool_call 现读(热切换);读不到按 ask fail-closed。
@@ -1110,14 +1112,63 @@ export class PiAgent extends BaseAgent {
       /* 缺失 → 不挂载 plan-mode */
     }
 
+    // Project resources have exactly one authority: the host-owned PR3 trust
+    // snapshot. Freeze it once per new runtime, then assemble only its eligible
+    // skills. Missing/throwing authorities and paths fail closed; never infer
+    // approval from permission mode, MCP/plugin state, or caller vendor options.
+    let projectResourceAssembly = unavailablePiProjectResourceAssembly(
+      reviewMode
+        ? 'review-mode-project-resources-disabled'
+        : 'approval-resolver-unavailable',
+    );
+    if (!reviewMode && this.deps.resolvePiProjectTrustInput) {
+      try {
+        const trustInput = await this.deps.resolvePiProjectTrustInput({
+          ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+          workingDir: opts.workingDir,
+          ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
+        });
+        projectResourceAssembly = await assembleApprovedPiProjectResources(
+          trustInput,
+          opts.workingDir,
+        );
+        projectResourceAssembly = await stageApprovedPiProjectResources(
+          projectResourceAssembly,
+          configHome,
+        );
+      } catch {
+        projectResourceAssembly = unavailablePiProjectResourceAssembly(
+          'approval-resolver-failed',
+        );
+        this.deps.logger.warn('pi project approval resolver failed closed', {
+          sessionId: opts.sessionId ?? null,
+        });
+      }
+    }
+    this.deps.logger.debug('pi project resource assembly snapshot', {
+      sessionId: opts.sessionId ?? null,
+      status: projectResourceAssembly.diagnostic.status,
+      reason: projectResourceAssembly.diagnostic.reason,
+      approvalRevision: projectResourceAssembly.diagnostic.approvalRevision,
+      requestedSkillCount: projectResourceAssembly.diagnostic.requestedSkillCount,
+    });
+
     const args = [
       '--mode', 'rpc',
+      // Keep Pi's project trust and implicit extension discovery disabled even
+      // when project settings declare packages/extensions. Cindy-owned/pinned
+      // extensions and approved skills are the only explicit additions below.
+      '--no-approve',
+      '--no-extensions',
       '--session-dir', sessionDir,
       '--provider', initialProvider,
       '--model', opts.model,
       ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
       ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
+      '--extension', bridgeExtensionPath,
+      ...(!reviewMode ? ['--extension', subagentExtensionPath] : []),
       ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+      ...projectResourceAssembly.launchSkillPaths.flatMap((skillPath) => ['--skill', skillPath]),
     ];
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
@@ -1522,7 +1573,7 @@ export class PiAgent extends BaseAgent {
       stage: 'ready' | 'switch_session' | 'fork',
     ): Promise<void> => {
       const generation = ++runtimeCapabilityGeneration;
-      const manifest = await capturePiRuntimeCapabilityManifest(
+      const capturedManifest = await capturePiRuntimeCapabilityManifest(
         proc,
         {
           ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
@@ -1531,6 +1582,13 @@ export class PiAgent extends BaseAgent {
         generation,
         stage,
       );
+      const manifest = {
+        ...capturedManifest,
+        projectResources: reconcilePiProjectResourceRuntime(
+          projectResourceAssembly,
+          capturedManifest,
+        ),
+      };
       if (!closed && generation === runtimeCapabilityGeneration) publishRuntimeCapabilities(manifest);
     };
     let runtimeCaptureStage: 'ready' | 'switch_session' = 'ready';
@@ -2376,6 +2434,8 @@ export class PiAgent extends BaseAgent {
       binaryPath: this.deps.binaryPath,
       args: [
         '--mode', 'rpc',
+        '--no-approve',
+        '--no-extensions',
         '--session-dir', sessionDir,
         '--session', opts.sourceSdkSessionId,
         '--provider', PI_PROVIDER_ID,
