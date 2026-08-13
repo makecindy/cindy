@@ -53,12 +53,42 @@ export async function listWorkLouderCodexTaskCatalog(
     .orderBy(desc(sql`COALESCE(${sessions.userSendAt}, ${sessions.updatedAt})`), desc(sessions.id))
     .limit(TASK_OPTION_LIMIT);
 
-  const catalogRows: WorkLouderCodexTaskCatalogRow[] = rows.map((row) => ({
-    id: row.id,
-    title: row.title,
-    pinned: row.pinnedAt !== null,
-    pinnedAt: row.pinnedAt,
-  }));
+  return buildWorkLouderCodexTaskCatalog(
+    rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      pinnedAt: row.pinnedAt,
+    })),
+  );
+}
+
+/** One task as the keyboard needs to see it, already in display order. */
+export interface WorkLouderCodexTaskCatalogInput {
+  id: string;
+  title: string | null;
+  pinnedAt: number | null;
+}
+
+/**
+ * Shape an ordered task list into the catalog the keyboard projects from.
+ *
+ * Split out from the database query because the rows can also come from the
+ * renderer: tasks on a linked machine live only in its store, so reading the
+ * local table alone leaves the agent keys empty on a machine that is driving
+ * someone else's sessions.
+ */
+export function buildWorkLouderCodexTaskCatalog(
+  rows: readonly WorkLouderCodexTaskCatalogInput[],
+): WorkLouderCodexTaskCatalog {
+  const catalogRows: WorkLouderCodexTaskCatalogRow[] = rows
+    .slice(0, TASK_OPTION_LIMIT)
+    .map((row) => ({
+      id: row.id,
+      // An untitled task still gets a key; the UI supplies its own placeholder.
+      title: row.title ?? '',
+      pinned: row.pinnedAt !== null,
+      pinnedAt: row.pinnedAt,
+    }));
   const recent = catalogRows.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(stripPinnedAt);
   const pinned = sortPinnedRows(catalogRows.filter((row) => row.pinned)).map(stripPinnedAt);
   return {

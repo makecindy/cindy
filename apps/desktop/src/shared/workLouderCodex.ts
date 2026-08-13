@@ -6,6 +6,15 @@ export const WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL = 'worklouder-codex:reset-s
 export const WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL =
   'worklouder-codex:open-input-monitoring-settings';
 export const WORKLOUDER_CODEX_PROBE_CHANNEL = 'worklouder-codex:probe';
+export const WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL = 'worklouder-codex:publish-tasks';
+
+/** One sidebar task, as the renderer reports it for the agent keys. */
+export interface WorkLouderCodexPublishedTask {
+  id: string;
+  title: string | null;
+  /** Epoch ms when it was pinned, or null when it is not. */
+  pinnedAt: number | null;
+}
 export const WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL = 'worklouder-codex:state-changed';
 export const WORKLOUDER_CODEX_ACTION_CHANNEL = 'worklouder-codex:action';
 

@@ -48,6 +48,7 @@ function makeIpc(options?: {
   });
   const openInputMonitoringSettings = vi.fn(async () => undefined);
   const probeDevice = vi.fn();
+  const publishTasks = vi.fn();
   const ipc = createWorkLouderCodexSettingsIpc({
     assertTrustedSender,
     getState,
@@ -56,6 +57,7 @@ function makeIpc(options?: {
     applySettings,
     openInputMonitoringSettings,
     probeDevice,
+    publishTasks,
   });
   return {
     ipc,
@@ -66,6 +68,7 @@ function makeIpc(options?: {
     applySettings,
     openInputMonitoringSettings,
     probeDevice,
+    publishTasks,
   };
 }
 
@@ -145,6 +148,30 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(() => ipc.probe(EVENT)).toThrow('untrusted');
     // Rejected before reaching the device.
     expect(probeDevice).toHaveBeenCalledOnce();
+  });
+
+  it('takes the sidebar task list, including tasks on linked machines', () => {
+    const { ipc, publishTasks } = makeIpc();
+
+    ipc.publishTasks(EVENT, [
+      { id: 'local-1', title: 'Local task', pinnedAt: null },
+      // Main cannot see this one at all — it lives in the renderer's remote store.
+      { id: 'remote-1', title: 'Remote task', pinnedAt: 1_700_000_000_000 },
+    ]);
+
+    expect(publishTasks).toHaveBeenCalledWith([
+      { id: 'local-1', title: 'Local task', pinnedAt: null },
+      { id: 'remote-1', title: 'Remote task', pinnedAt: 1_700_000_000_000 },
+    ]);
+  });
+
+  it('rejects a malformed task list rather than projecting garbage onto the keys', () => {
+    const { ipc, publishTasks } = makeIpc();
+
+    expect(() => ipc.publishTasks(EVENT, 'nope')).toThrow();
+    expect(() => ipc.publishTasks(EVENT, [{ id: '', title: 'x', pinnedAt: null }])).toThrow();
+    expect(() => ipc.publishTasks(EVENT, [{ id: 'a', title: 5, pinnedAt: null }])).toThrow();
+    expect(publishTasks).not.toHaveBeenCalled();
   });
 
   it('still accepts a layout saved before voiceButtonMode was removed', () => {

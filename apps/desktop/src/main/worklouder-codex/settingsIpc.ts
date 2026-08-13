@@ -14,6 +14,7 @@ import {
   type WorkLouderCodexLayout,
   type WorkLouderCodexSettings,
   type WorkLouderCodexSettingsPatch,
+  type WorkLouderCodexPublishedTask,
   type WorkLouderCodexState,
 } from '../../shared/workLouderCodex.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -35,6 +36,7 @@ export interface WorkLouderCodexSettingsIpcDeps {
   applySettings(settings: WorkLouderCodexSettings): void;
   openInputMonitoringSettings(): Promise<void>;
   probeDevice(): void;
+  publishTasks(tasks: readonly WorkLouderCodexPublishedTask[]): void;
 }
 
 function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
@@ -255,6 +257,39 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
       deps.assertTrustedSender(event);
       deps.probeDevice();
       return deps.getState();
+    },
+
+    /**
+     * Take the sidebar's task list for the agent keys. The renderer is the only
+     * side that sees tasks on linked machines, and the only side that knows
+     * which machine filter is applied.
+     */
+    publishTasks(event: unknown, value: unknown): void {
+      deps.assertTrustedSender(event);
+      if (!Array.isArray(value)) {
+        throwIpcError('INVALID_PARAMS', 'Work Louder Codex task list must be an array');
+      }
+      const tasks: WorkLouderCodexPublishedTask[] = value.map((item) => {
+        const row = requireRecord(item, 'Work Louder Codex task must be an object');
+        if (typeof row.id !== 'string' || row.id.length === 0 || row.id.length > 256) {
+          throwIpcError('INVALID_PARAMS', 'Work Louder Codex task id is invalid');
+        }
+        if (row.title !== null && typeof row.title !== 'string') {
+          throwIpcError('INVALID_PARAMS', 'Work Louder Codex task title is invalid');
+        }
+        if (
+          row.pinnedAt !== null &&
+          (typeof row.pinnedAt !== 'number' || !Number.isFinite(row.pinnedAt))
+        ) {
+          throwIpcError('INVALID_PARAMS', 'Work Louder Codex task pinnedAt is invalid');
+        }
+        return {
+          id: row.id,
+          title: typeof row.title === 'string' ? row.title.slice(0, 512) : null,
+          pinnedAt: typeof row.pinnedAt === 'number' ? row.pinnedAt : null,
+        };
+      });
+      deps.publishTasks(tasks);
     },
   };
 }

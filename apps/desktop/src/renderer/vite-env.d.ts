@@ -1821,6 +1821,13 @@ interface ElectronAPI {
     openInputMonitoringSettings: () => Promise<void>;
     /** Re-check whether the device is still attached; the SDK never says so itself. */
     probe: () => Promise<WorkLouderCodexState>;
+    /**
+     * Hand the sidebar's task list to the agent keys. Main cannot see tasks on
+     * linked machines, nor which machine filter is applied.
+     */
+    publishTasks: (
+      tasks: import('../shared/workLouderCodex').WorkLouderCodexPublishedTask[],
+    ) => Promise<void>;
     onStateChanged: (callback: (state: WorkLouderCodexState) => void) => () => void;
     onAction: (callback: (action: WorkLouderCodexRendererAction) => void) => () => void;
   };

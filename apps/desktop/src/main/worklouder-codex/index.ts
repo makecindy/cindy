@@ -10,6 +10,7 @@ import {
   WORKLOUDER_CODEX_GET_STATE_CHANNEL,
   WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL,
   WORKLOUDER_CODEX_PROBE_CHANNEL,
+  WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL,
   WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
@@ -31,7 +32,11 @@ import {
   resetWorkLouderCodexSettings,
   writeWorkLouderCodexSettingsPatch,
 } from './settingsStore.js';
-import { listWorkLouderCodexTaskCatalog } from './taskSlots.js';
+import {
+  buildWorkLouderCodexTaskCatalog,
+  listWorkLouderCodexTaskCatalog,
+  type WorkLouderCodexTaskCatalogInput,
+} from './taskSlots.js';
 
 const log = createLogger('worklouder-codex');
 const requireFromMain = createRequire(__filename);
@@ -77,10 +82,24 @@ const hostClient = new WorkLouderCodexHostClient({
   log,
 });
 
+/**
+ * Tasks as the sidebar currently shows them, published by the renderer.
+ *
+ * The local table is not the whole picture: sessions on a linked machine live
+ * only in the renderer's remote store, so a machine driving someone else's
+ * sessions would show six empty agent keys. The renderer is also the only side
+ * that knows which machine filter is applied, so what it sends is what the user
+ * sees. Null until it reports — until then the local table is the best guess.
+ */
+let rendererTaskCatalog: WorkLouderCodexTaskCatalogInput[] | null = null;
+
 export const workLouderCodexLightingController = new WorkLouderCodexLightingController(
   hostClient,
   (sessionId, focus = true) => openMainWindowSession(sessionId, { focus }),
-  listWorkLouderCodexTaskCatalog,
+  async () =>
+    rendererTaskCatalog
+      ? buildWorkLouderCodexTaskCatalog(rendererTaskCatalog)
+      : listWorkLouderCodexTaskCatalog(),
   dispatchRendererAction,
 );
 
@@ -106,6 +125,10 @@ export function registerWorkLouderCodexSettingsIpc(): void {
       );
     },
     probeDevice: () => hostClient.probe(),
+    publishTasks: (tasks) => {
+      rendererTaskCatalog = tasks.map((task) => ({ ...task }));
+      void workLouderCodexLightingController.refreshTaskSlots().catch(() => undefined);
+    },
   });
 
   ipcMain.handle(WORKLOUDER_CODEX_GET_STATE_CHANNEL, (event) => handlers.get(event));
@@ -117,6 +140,9 @@ export function registerWorkLouderCodexSettingsIpc(): void {
     handlers.openInputMonitoringSettings(event),
   );
   ipcMain.handle(WORKLOUDER_CODEX_PROBE_CHANNEL, (event) => handlers.probe(event));
+  ipcMain.handle(WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL, (event, tasks: unknown) =>
+    handlers.publishTasks(event, tasks),
+  );
 
   workLouderCodexLightingController.subscribeState((state) => {
     broadcastState(state);

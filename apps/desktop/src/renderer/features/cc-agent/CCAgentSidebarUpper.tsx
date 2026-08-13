@@ -616,6 +616,32 @@ export function CCAgentSidebarUpper() {
     [statusFilteredSessionsWithRemote, hiddenProjectKeys, localPlatform],
   );
 
+  /* Codex Micro 的 6 个任务键跟这份列表走。主进程只能查本地 sessions 表,看不见
+   * 被控机器上的任务(它们只活在渲染端的 remote store 里),也不知道用户当前选了
+   * 哪台机器 —— 光靠主进程投影,连着远程用时 6 个键会全是空的。所以由这里上报。
+   * 只送键盘需要的三个字段,不整份 session 过 IPC。 */
+  const publishedTaskKeyRef = useRef<string>('');
+  useEffect(() => {
+    if (isSecondaryWindow()) return;
+    const tasks = visibleSessionsWithRemote.map((session) => {
+      // 渲染端存 ISO 字符串,键盘那边按毫秒排置顶顺序。
+      const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
+      return {
+        id: session.id,
+        title: session.title ?? null,
+        pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
+      };
+    });
+    // 侧栏会因为各种无关状态重算;内容没变就不打扰主进程。
+    const key = JSON.stringify(tasks);
+    if (key === publishedTaskKeyRef.current) return;
+    publishedTaskKeyRef.current = key;
+    void window.electronAPI?.workLouderCodex?.publishTasks?.(tasks)?.catch(() => {
+      // 键盘没接或 IPC 不可用都不影响侧栏本身。
+      publishedTaskKeyRef.current = '';
+    });
+  }, [visibleSessionsWithRemote]);
+
   // rail 未读集与展开态(ExpandedView.sidebarNotifications)同口径:把"定时任务有未读运行"的
   // 会话并入 attention 未读集。否则 rail 模式下,靠 scheduleSessionIndex 恢复的定时任务
   // 完成未读(如重启后 attention store 还没填充)会丢绿点(codex review)。
