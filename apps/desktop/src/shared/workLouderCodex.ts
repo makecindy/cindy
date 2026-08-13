@@ -1,5 +1,30 @@
 /** Work Louder Codex Micro settings, device state, and IPC contracts. */
 
+import {
+  INPUT_DEVICE_COMMAND_IDS,
+  isInputDeviceCommandId,
+  type InputDeviceAction,
+  type InputDeviceCommandId,
+  type InputDeviceDescriptor,
+  type InputDevicePublishedTask,
+  type InputDeviceRendererAction,
+} from './inputDevices';
+
+export const WORKLOUDER_CODEX_DEVICE_ID = 'worklouder-codex-micro';
+
+export const WORKLOUDER_CODEX_DEVICE: InputDeviceDescriptor = {
+  id: WORKLOUDER_CODEX_DEVICE_ID,
+  label: 'Work Louder Codex Micro',
+  capabilities: [
+    { kind: 'task-slots', count: 6 },
+    { kind: 'commands' },
+    { kind: 'voice' },
+    { kind: 'encoder' },
+    { kind: 'stick' },
+    { kind: 'lighting', model: 'task-slots' },
+  ],
+};
+
 export const WORKLOUDER_CODEX_GET_STATE_CHANNEL = 'worklouder-codex:get-state';
 export const WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL = 'worklouder-codex:set-settings';
 export const WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL = 'worklouder-codex:reset-settings';
@@ -9,12 +34,7 @@ export const WORKLOUDER_CODEX_PROBE_CHANNEL = 'worklouder-codex:probe';
 export const WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL = 'worklouder-codex:publish-tasks';
 
 /** One sidebar task, as the renderer reports it for the agent keys. */
-export interface WorkLouderCodexPublishedTask {
-  id: string;
-  title: string | null;
-  /** Epoch ms when it was pinned, or null when it is not. */
-  pinnedAt: number | null;
-}
+export type WorkLouderCodexPublishedTask = InputDevicePublishedTask;
 export const WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL = 'worklouder-codex:state-changed';
 export const WORKLOUDER_CODEX_ACTION_CHANNEL = 'worklouder-codex:action';
 
@@ -53,40 +73,7 @@ export const WORKLOUDER_CODEX_ENCODER_MODES = [
   'custom',
 ] as const;
 
-export const WORKLOUDER_CODEX_COMMAND_IDS = [
-  'composer.toggleFastMode',
-  'approval.approve',
-  'approval.decline',
-  'forkTask',
-  'composer.submit',
-  'feedback',
-  'toggleTerminal',
-  'copyConversationMarkdown',
-  'archiveTask',
-  'newTask',
-  'openBrowserTab',
-  'toggleTaskPin',
-  'toggleReviewTab',
-  'composer.addPhotos',
-  'settings',
-  'manageTasks',
-  'composer.increaseReasoningEffort',
-  'composer.decreaseReasoningEffort',
-  'openFolder',
-  'composer.addFiles',
-  'openSkills',
-  'composer.togglePlanMode',
-  'navigateForward',
-  'toggleSidebar',
-  'toggleRightSidebar',
-  'navigateBack',
-  'composer.focus',
-  'conversation.scrollUp',
-  'conversation.scrollDown',
-  'conversation.scrollBottom',
-  'session.selectPrevious',
-  'session.selectNext',
-] as const;
+export const WORKLOUDER_CODEX_COMMAND_IDS = INPUT_DEVICE_COMMAND_IDS;
 
 export const WORKLOUDER_CODEX_KEYCAP_IDS = [
   'FAST',
@@ -136,16 +123,12 @@ export type WorkLouderCodexCommandSlot = (typeof WORKLOUDER_CODEX_COMMAND_SLOTS)
 export type WorkLouderCodexAnalogDirection = (typeof WORKLOUDER_CODEX_ANALOG_DIRECTIONS)[number];
 export type WorkLouderCodexEncoderAction = (typeof WORKLOUDER_CODEX_ENCODER_ACTIONS)[number];
 export type WorkLouderCodexEncoderMode = (typeof WORKLOUDER_CODEX_ENCODER_MODES)[number];
-export type WorkLouderCodexCommandId = (typeof WORKLOUDER_CODEX_COMMAND_IDS)[number];
+export type WorkLouderCodexCommandId = InputDeviceCommandId;
 export type WorkLouderCodexKeycapId = (typeof WORKLOUDER_CODEX_KEYCAP_IDS)[number];
 
 export type WorkLouderCodexAction =
-  | { type: 'command'; commandId: WorkLouderCodexCommandId }
-  | { type: 'task'; sessionId: string }
-  | { type: 'keycap'; keycapId: WorkLouderCodexKeycapId }
-  | { type: 'skill'; skillId: string; name: string }
-  | { type: 'composer-text'; text: string }
-  | { type: 'external-url'; url: string };
+  | InputDeviceAction
+  | { type: 'keycap'; keycapId: WorkLouderCodexKeycapId };
 
 export interface WorkLouderCodexKeyAssignment {
   keycapId: WorkLouderCodexKeycapId;
@@ -214,23 +197,8 @@ export interface WorkLouderCodexState {
 }
 
 export type WorkLouderCodexRendererAction =
-  | Exclude<WorkLouderCodexAction, { type: 'task' }>
-  // The microphone key behaves like Cindy's own microphone: a tap starts and a
-  // second tap stops, holding it records until release. Both come out of the
-  // same press/release pair, so the key has no mode to choose between.
-  | { type: 'voice'; phase: 'press' | 'release' }
-  // Held-stick scrolling. The stick reports how far it is pushed, and scrolling
-  // should follow that continuously rather than jumping once per flick, so this
-  // carries the pressure instead of collapsing to a one-shot command. Renderers
-  // scroll every frame until `scroll-stop` arrives.
-  | {
-      type: 'scroll';
-      direction: 'up' | 'down';
-      /** How hard the stick is pushed, 0 at the activation point to 1 at full. */
-      intensity: number;
-    }
-  | { type: 'scroll-stop' }
-  | { type: 'keyboard'; key: 'ArrowUp' | 'ArrowDown' | 'Enter' };
+  | InputDeviceRendererAction
+  | { type: 'keycap'; keycapId: WorkLouderCodexKeycapId };
 
 /** Built-in Cindy behavior printed on each official Work Louder keycap. */
 export const WORKLOUDER_CODEX_KEYCAP_ACTIONS: Readonly<
@@ -356,7 +324,7 @@ export function isWorkLouderCodexAgentSource(value: unknown): value is WorkLoude
 }
 
 export function isWorkLouderCodexCommandId(value: unknown): value is WorkLouderCodexCommandId {
-  return isStringOption(value, WORKLOUDER_CODEX_COMMAND_IDS);
+  return isInputDeviceCommandId(value);
 }
 
 export function isWorkLouderCodexKeycapId(value: unknown): value is WorkLouderCodexKeycapId {

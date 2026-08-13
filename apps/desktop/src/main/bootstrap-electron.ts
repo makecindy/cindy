@@ -352,9 +352,15 @@ import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
 import {
   attachWorkLouderCodexWindowReveal,
-  registerWorkLouderCodexSettingsIpc,
-  workLouderCodexLightingController,
 } from './worklouder-codex/index.js';
+import {
+  disposeInputDevices,
+  resumeInputDeviceTaskSlots,
+  startInputDeviceRuntime,
+  startInputDevices,
+  suspendInputDeviceTaskSlots,
+  updateInputDeviceSessionActivity,
+} from './input-devices/index.js';
 import {
   isAppContentWindow,
   isFocusedAppContentWindow,
@@ -1304,7 +1310,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   resetSchedulerReady();
   const agentIslandService = getAgentIslandService();
   agentIslandService?.resetRuntimeState();
-  workLouderCodexLightingController.suspendTaskSlots();
+  suspendInputDeviceTaskSlots();
   // ② 再停旧 scheduler。scheduler 持有旧 user 的 storage drizzle 引用,必须在
   // closeLocalDb 之前先 stop;否则下一秒 tick 会撞 'localDb not ready'。
   // resetScheduler 把 scheduler-host 的 _scheduler 单例置 null,下一次
@@ -3294,7 +3300,7 @@ const registerIpcHandlers = () => {
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
     onSessionActivityChange: (activity) => {
-      workLouderCodexLightingController.updateSessionActivity(activity);
+      updateInputDeviceSessionActivity(activity);
     },
   })?.setAppFocused(hasFocusedAppWindow());
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
@@ -6875,7 +6881,8 @@ app.on('ready', async () => {
   });
 
   registerIpcHandlers();
-  registerWorkLouderCodexSettingsIpc();
+  startInputDeviceRuntime();
+  startInputDevices();
   // 本机 FS 目录浏览(项目选择器「添加远程项目」逐级浏览;device-link 经隧道在被控端执行)。
   // 无 DB / 无登录依赖,随其它顶层 handler 一起注册即可。
   registerFsBrowseIpc();
@@ -6978,9 +6985,9 @@ app.on('ready', async () => {
         return;
       }
       try {
-        await workLouderCodexLightingController.resumeTaskSlots();
+        await resumeInputDeviceTaskSlots();
       } catch (error) {
-        dbClientLog.warn('Work Louder task slot refresh failed (non-fatal)', {
+        dbClientLog.warn('Input device task slot refresh failed (non-fatal)', {
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -7321,8 +7328,8 @@ app.on('ready', async () => {
   registerModelVisibilitySyncIpc();
   registerSidebarSettingsIpc({
     onPinnedOrderChanged: () => {
-      void workLouderCodexLightingController.refreshTaskSlots().catch((error) => {
-        dbClientLog.warn('Work Louder task slot refresh failed after pinned-order change', {
+      void resumeInputDeviceTaskSlots().catch((error) => {
+        dbClientLog.warn('Input device task slot refresh failed after pinned-order change', {
           error: error instanceof Error ? error.message : String(error),
         });
       });
@@ -7542,7 +7549,7 @@ onQuit('rsb-window', () => rsbWindowController.dispose(), 'sync');
 onQuit('ghost-panel-windows', () => ghostPanelWindowsController.dispose(), 'sync');
 onQuit('app-badge-clear', () => clearAllSessionAttention(), 'sync');
 onQuit('session-drag-preview', () => disposeSessionDragPreview(), 'sync');
-onQuit('worklouder-codex-lighting', () => workLouderCodexLightingController.dispose(), 'async');
+onQuit('input-devices', () => disposeInputDevices(), 'async');
 // 自带 adb 的常驻 server 守护进程随退出收掉(fire-and-forget detached spawn,
 // 不阻塞)。不收会一直锁安装目录里的 adb.exe,弄挂增量更新(os error 32)。
 onQuit('android-adb-kill-server', () => disposeAndroidAdb(), 'sync');

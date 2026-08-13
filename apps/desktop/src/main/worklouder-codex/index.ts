@@ -5,8 +5,10 @@ import { BrowserWindow, ipcMain, shell, utilityProcess } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { openMainWindowSession, sendMainWindowMessage } from '../deepLink.js';
+import { registerInputDevice } from '../input-devices/registry.js';
 import {
   WORKLOUDER_CODEX_ACTION_CHANNEL,
+  WORKLOUDER_CODEX_DEVICE,
   WORKLOUDER_CODEX_GET_STATE_CHANNEL,
   WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL,
   WORKLOUDER_CODEX_PROBE_CHANNEL,
@@ -108,6 +110,30 @@ export const workLouderCodexLightingController = new WorkLouderCodexLightingCont
 );
 
 let settingsIpcRegistered = false;
+let inputDeviceRegistered = false;
+
+/** Register this board as one input-device adapter, not as the host keyboard layer. */
+export function registerWorkLouderCodexInputDevice(): void {
+  if (inputDeviceRegistered) return;
+  inputDeviceRegistered = true;
+  registerInputDevice({
+    descriptor: WORKLOUDER_CODEX_DEVICE,
+    start: () => {
+      registerWorkLouderCodexSettingsIpc();
+    },
+    updateSessionActivity: (activity) => {
+      workLouderCodexLightingController.updateSessionActivity(activity);
+    },
+    playWindowReveal: () => {
+      workLouderCodexLightingController.playWindowReveal();
+    },
+    resumeTaskSlots: () => workLouderCodexLightingController.resumeTaskSlots(),
+    suspendTaskSlots: () => {
+      workLouderCodexLightingController.suspendTaskSlots();
+    },
+    dispose: () => workLouderCodexLightingController.dispose(),
+  });
+}
 
 /** Registers the local-desktop-only device settings bridge after Electron is ready. */
 export function registerWorkLouderCodexSettingsIpc(): void {
