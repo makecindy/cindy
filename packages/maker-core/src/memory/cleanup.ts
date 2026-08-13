@@ -126,6 +126,12 @@ export interface StaleCandidate {
   /** 命中的信号词 (reason 为 signal / weak-signal 时)。 */
   matchedSignal?: string;
   updatedAt: string;
+  /**
+   * plan (用户审阅) 时点源文件内容的 sha256 — `--archive-stale` 执行时对比,
+   * 源在审阅后被更新则 fail/replan, 不归档用户未审阅的新版本 (Greptile P1 /
+   * Codex P1 on #2561: 终态计划未绑定文件版本)。
+   */
+  expectedHash: string | null;
 }
 
 /** digest 保留策略结果。 */
@@ -272,6 +278,11 @@ export async function planMemoryCleanup(
     // 「归档」语义 (digest 走第 4 步单独处理)。
     if (type !== 'project' && type !== 'reference') continue;
 
+    // 记录 plan (用户审阅) 时点的源内容 hash — --archive-stale 执行时对比,
+    // 审阅后被更新则 fail/replan, 不归档未审阅的新版本 (Greptile P1 / Codex
+    // P1 on #2561)。
+    const expectedHash = await fileSha256(path.join(shardDir, rec.filename));
+
     const haystack = `${rec.frontmatter.description}\n${rec.body}`.toLowerCase();
     const strong = STALE_STRONG_SIGNALS.find((s) => haystack.includes(s.toLowerCase()));
     if (strong) {
@@ -280,6 +291,7 @@ export async function planMemoryCleanup(
         reason: 'signal',
         matchedSignal: strong,
         updatedAt: rec.frontmatter.updatedAt,
+        expectedHash,
       });
       continue;
     }
@@ -290,6 +302,7 @@ export async function planMemoryCleanup(
         reason: 'weak-signal',
         matchedSignal: weak,
         updatedAt: rec.frontmatter.updatedAt,
+        expectedHash,
       });
       continue;
     }
@@ -299,6 +312,7 @@ export async function planMemoryCleanup(
         filename: rec.filename,
         reason: 'age',
         updatedAt: rec.frontmatter.updatedAt,
+        expectedHash,
       });
     }
   }
@@ -341,7 +355,8 @@ export async function runMemoryCleanup(
   const stamp = now().replace(/[:.]/g, '-');
 
   // 待归档 = 默认的确定性项 (重复 + digest) 加上 (可选) 终态候选。
-  // 终态候选在 run 阶段才构造, 同样记录 plan 时点的内容 hash 供移动前校验。
+  // 终态候选用 plan 阶段记录的 expectedHash (用户审阅时点的版本), 而非 run
+  // 时重读 — 审阅后被更新则移动前校验不通过 (Greptile P1 / Codex P1 on #2561)。
   const items: ArchiveItem[] = [...plan.archiveItems];
   if (opts.archiveStale) {
     for (const c of plan.staleCandidates) {
@@ -351,7 +366,7 @@ export async function runMemoryCleanup(
         detail: c.matchedSignal
           ? `matches stale signal "${c.matchedSignal}"`
           : 'age-expired project/reference',
-        expectedHash: await fileSha256(path.join(plan.shardDir, c.filename)),
+        expectedHash: c.expectedHash,
       });
     }
   }
@@ -359,12 +374,19 @@ export async function runMemoryCleanup(
   for (const item of items) {
     const src = path.join(plan.shardDir, item.filename);
     try {
-      // 幂等 + 移动前校验: 源已不存在 (已被上次运行归档) → 跳过不报错;
-      // 源内容与 plan 时不一致 (--force 场景被并发更新) → fail/replan,
-      // 不归档非预期内容 (Codex P1 on #2561: recheck the shard before
-      // moving it — 归档的必须是用户批准清理的那份内容)。
-      const srcContent = await fs.readFile(src).catch(() => null);
-      if (srcContent === null) continue;
+      // 幂等 + 移动前校验: 只对 ENOENT (源已被上次运行归档) 静默跳过;
+      // 其他读错误 (EACCES/EPERM/瞬态锁定) 必须暴露为 failed, 不能伪装成
+      // 幂等 — 否则 CLI 报成功但分片仍在索引里, 自动化不重试 (Codex P2 on
+      // #2561)。源内容与 plan 时不一致 (--force 场景被并发更新) 同样
+      // fail/replan, 不归档非预期内容。
+      let srcContent: Buffer;
+      try {
+        srcContent = await fs.readFile(src);
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') continue;
+        throw e;
+      }
       if (sha256(srcContent) !== item.expectedHash) {
         result.failed.push({
           filename: item.filename,

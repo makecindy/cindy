@@ -302,4 +302,44 @@ describe('runMemoryCleanup', () => {
     expect(result.archived).toHaveLength(0);
     await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('different');
   });
+
+  it('fails stale archives whose source changed after review', async () => {
+    await shard('project_done.md', 'project', 'Done', 'hook', '这个项目已归档',
+      '2026-01-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 用户审阅终态候选后、执行 --archive-stale 前文件被更新 — plan 已绑定
+    // 审阅时点的 expectedHash, 新版本不应被归档 (Greptile P1 / Codex P1 on
+    // #2561: 终态计划未绑定文件版本)。
+    await writeFile(
+      path.join(dir, 'project_done.md'),
+      "---\ntitle: NEW\ndescription: new\ntype: project\nupdatedAt: '2026-03-01T00:00:00.000Z'\n---\nactive now\n",
+      'utf8',
+    );
+
+    const result = await runMemoryCleanup(plan, { archiveStale: true });
+    expect(result.failed.some((f) => f.filename === 'project_done.md')).toBe(true);
+    expect(result.archived).toHaveLength(0);
+    await expect(readFile(path.join(dir, 'project_done.md'), 'utf8')).resolves.toContain('active');
+  });
+
+  it('surfaces non-ENOENT read errors as failed (not idempotent skip)', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // readFile 抛 EACCES (真实 IO 错误) — 必须暴露为 failed, 不能伪装成
+    // ENOENT 幂等跳过 (Codex P2 on #2561)。
+    const spy = vi
+      .spyOn(fs, 'readFile')
+      .mockRejectedValue(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      expect(result.archived).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
