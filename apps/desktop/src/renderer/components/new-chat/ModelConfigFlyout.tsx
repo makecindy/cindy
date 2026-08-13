@@ -10,7 +10,7 @@ import {
   type ModelPricePresentation,
 } from '@/lib/modelPriceFormat';
 import type { Effort } from '@/lib/userPreferences.types';
-import { FAST_ACCENT_COLOR } from '@/themes/effortTierColors';
+import { EFFORT_TIER_COLORS, FAST_ACCENT_COLOR } from '@/themes/effortTierColors';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 
 import { agentOptionOf } from './agentOptions';
@@ -84,12 +84,26 @@ export function ModelConfigFlyout({
   const starred = state === 'favorite' || justFavorited;
 
   const discount = price?.kind === 'priced' ? price.discount : undefined;
-  const promotionLabel =
-    price?.kind === 'free'
-      ? t('newChat.modelSelector.pricing.free')
-      : discount !== undefined
-        ? t('newChat.modelSelector.pricing.discount', modelPriceDiscountLabelValues(discount))
-        : null;
+  const priceRows = price?.kind === 'priced' ? modelPriceDetailRows(price.current, price.original) : [];
+  // 折后价那一行的 hover 全文:逐项「标准价 X」;没有原价对比时不挂 title。
+  const priceDetailTitle =
+    priceRows.some((row) => row.originalValue)
+      ? priceRows
+          .filter((row) => row.originalValue)
+          .map(
+            (row) =>
+              `${t(`newChat.modelSelector.pricing.${row.kind}`)} ${row.value} ← ${row.originalValue}`,
+          )
+          .join(' · ')
+      : null;
+  const priceFootnote =
+    price?.kind === 'priced'
+      ? price.current.source === 'subscription-reference'
+        ? t('newChat.modelSelector.pricing.subscriptionEstimate')
+        : price.current.approximate
+          ? t('newChat.modelSelector.pricing.fixedFx')
+          : null
+      : null;
 
   return (
     <div
@@ -206,9 +220,12 @@ export function ModelConfigFlyout({
               data-engine-capsule={engine}
               data-engine-active={active ? 'true' : undefined}
               className={cn(
-                'inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-full px-2.5 text-12 transition-colors',
+                // 设计稿 `.h-seg-btn`:高 26、左右 11、图标与名之间 5、圆角胶囊、无边框。
+                'inline-flex h-[26px] shrink-0 items-center gap-[5px] rounded-full px-[11px] text-12 transition-colors',
                 active
-                  ? 'bg-[var(--surface-chip)] font-medium text-[var(--model-item-text)]'
+                  // 选中态的「浮起感」:chip 底 + 一圈极淡的内描边 + 贴地阴影,
+                  // 让它从同色系的胶囊行里浮出来(纯换底色在 Dark 下几乎看不出)。
+                  ? 'bg-[var(--surface-chip)] font-medium text-[var(--model-item-text)] shadow-[var(--shadow-chip-raised)] ring-1 ring-inset ring-[var(--model-dropdown-border)]'
                   : 'text-[var(--text-tertiary)]',
                 !active && multiEngine && 'hover:bg-[var(--model-item-hover)]',
                 // 推荐项(未选中时)细描边指路;不写「Recommended」字样(英文太长,§1.7)。
@@ -228,33 +245,53 @@ export function ModelConfigFlyout({
       </div>
 
       {price && (
-        <div className="mt-2.5 border-t border-[var(--model-dropdown-border)] pt-2 text-12 text-[var(--text-tertiary)]">
-          <div className="flex items-center gap-1.5">
+        // 价格区(设计稿 v4 定稿):**紧凑两行**,不画删除线表格。
+        //   第 1 行:每百万 token · 折扣中,较标准价省 X%(省 X% 绿色加粗)
+        //   第 2 行:折后价单行排列 —— 输入 ¥32 · 输出 ¥162 · 缓存读取 ¥3.2
+        // 原价对比收进 title(hover 才看):浮层是「选之前扫一眼」的地方,一张对照表
+        // 会把它变成账单页,且删除线在 12px 下几乎看不清。
+        <div className="mt-2.5 border-t border-[var(--model-dropdown-border)] pt-2 text-12 leading-[1.7] text-[var(--text-tertiary)]">
+          <div className="flex flex-wrap items-baseline gap-x-1">
             <span>{t('newChat.modelSelector.pricing.title')}</span>
-            {promotionLabel && (
-              <span className="ml-auto inline-flex shrink-0 items-center rounded-full bg-[var(--accent-cta-bg)] px-2 py-[1px] text-11 font-medium text-[var(--accent-pure-cta-fg)]">
-                {promotionLabel}
+            {price.kind === 'free' ? (
+              <span
+                className="font-semibold"
+                style={{ color: EFFORT_TIER_COLORS.low }}
+              >
+                · {t('newChat.modelSelector.pricing.free')}
               </span>
+            ) : (
+              discount !== undefined && (
+                <span
+                  className="font-semibold"
+                  style={{ color: EFFORT_TIER_COLORS.low }}
+                >
+                  ·{' '}
+                  {t(
+                    'newChat.modelSelector.pricing.discountedVsStandard',
+                    modelPriceDiscountLabelValues(discount),
+                  )}
+                </span>
+              )
             )}
           </div>
           {price.kind === 'priced' && (
-            <div className="mt-1 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 leading-[1.4]">
-              {modelPriceDetailRows(price.current, price.original).map((row) => (
-                <div key={row.kind} className="contents">
-                  <span className="text-[var(--text-secondary)]">
-                    {t(`newChat.modelSelector.pricing.${row.kind}`)}
-                  </span>
-                  <span className="flex items-center justify-end gap-1.5 tabular-nums">
-                    <span className="text-[var(--model-item-text)]">{row.value}</span>
-                    {row.originalValue && (
-                      <span className="text-[var(--text-tertiary)] line-through">
-                        {row.originalValue}
-                      </span>
-                    )}
-                  </span>
-                </div>
+            <div
+              // 原价与折扣幅度的完整说明留在 title 里(设计稿:详情写全「折扣中 · 标准价 X」)。
+              title={priceDetailTitle ?? undefined}
+              className="flex flex-wrap items-baseline gap-x-1.5 tabular-nums text-[var(--text-secondary)]"
+            >
+              {priceRows.map((row, index) => (
+                <span key={row.kind} className="whitespace-nowrap">
+                  {index > 0 && <span className="pr-1.5 opacity-60">·</span>}
+                  {t(`newChat.modelSelector.pricing.${row.kind}`)}{' '}
+                  <span className="font-medium text-[var(--model-item-text)]">{row.value}</span>
+                </span>
               ))}
             </div>
+          )}
+          {priceFootnote && (
+            <div className="text-11 leading-[1.5] text-[var(--text-tertiary)]">{priceFootnote}</div>
           )}
         </div>
       )}

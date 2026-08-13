@@ -5501,7 +5501,8 @@
         "discount": "立省 {{percent}}%",
         "perMillion": "模型标准价格",
         "fixedFx": "按固定汇率 1 USD = 6.7 CNY 约算",
-        "subscriptionEstimate": "价值估算，不代表实际账单"
+        "subscriptionEstimate": "价值估算，不代表实际账单",
+        "discountedVsStandard": "折扣中，较标准价省 {{percent}}%"
       },
       "trigger": {
         "placeholder": "选择模型",

@@ -36,6 +36,7 @@ export function UnifiedModelRow({
   onRevealForKeyboard,
   priceDisplay,
   defaultBadge,
+  subscriptionLabel,
 }: {
   entry: UnifiedModelEntry;
   anchor: UnifiedAnchor;
@@ -67,6 +68,11 @@ export function UnifiedModelRow({
   priceDisplay?: {
     kind: 'free' | 'tier';
     tier?: 1 | 2 | 3;
+    /**
+     * 档串用的货币符号,按**该行报价的币种**取(CNY → ¥、USD → $)。设计稿里中文报价
+     * 是 ¥¥¥,写死 $ 会让国内用户看到一串对不上账单的美元号。
+     */
+    symbol?: string;
     /** 折扣行:折后价占比(0-100,亮段宽度);无折扣不传。 */
     paidPct?: number;
     /** 折扣行:↓X% 的 X。 */
@@ -76,9 +82,15 @@ export function UnifiedModelRow({
   };
   /** 已本地化的「默认」标识;仅默认小节的行传。 */
   defaultBadge?: string;
+  /**
+   * 已本地化的「订阅」小签(设计稿 `.badge.sub`)。仅**订阅接入且无按量报价**的行传 ——
+   * 那类模型走套餐额度,行内画 $ 档串会误导成按量计费。
+   */
+  subscriptionLabel?: string;
 }) {
   const { t } = useTranslation();
   const provider = providers.find((item) => item.id === entry.providerId);
+  const priceSymbol = priceDisplay?.symbol ?? '$';
   const engineOption = agentOptionOf(config.engine);
   const reveal = (event: ReactPointerEvent<HTMLDivElement>) => onReveal(anchor, event.currentTarget);
   const tripleTitle = `${engineOption.label}${
@@ -127,7 +139,6 @@ export function UnifiedModelRow({
           {...(provider?.logoKind !== undefined ? { logoKind: provider.logoKind } : {})}
           colorClass="text-[var(--text-secondary)]"
           withMargin={false}
-          dense
         />
         <span
           // 超长模型名先撑宽面板、到上限才截断(规格 §1.2);截断后靠 title 给全名。
@@ -147,10 +158,18 @@ export function UnifiedModelRow({
             {defaultBadge}
           </span>
         )}
+        {subscriptionLabel && (
+          <span
+            data-subscription-badge
+            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-10 font-normal leading-[1.45] text-[var(--text-secondary)]"
+          >
+            {subscriptionLabel}
+          </span>
+        )}
         {priceDisplay?.kind === 'free' && (
           <span
             data-price-free
-            className="inline-flex shrink-0 items-center rounded-full px-1.5 py-[1px] text-10 font-semibold"
+            className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-10 font-medium leading-[1.45]"
             style={{
               color: EFFORT_TIER_COLORS.low,
               backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
@@ -173,9 +192,9 @@ export function UnifiedModelRow({
                   aria-hidden
                   className="relative inline-block text-11 font-semibold leading-none tracking-[0.5px]"
                 >
-                  <span className="invisible">{'$'.repeat(priceDisplay.tier)}</span>
+                  <span className="invisible">{priceSymbol.repeat(priceDisplay.tier)}</span>
                   <span className="absolute inset-0 text-[var(--text-tertiary)] opacity-55">
-                    {'$'.repeat(priceDisplay.tier)}
+                    {priceSymbol.repeat(priceDisplay.tier)}
                   </span>
                   <span
                     className="absolute inset-0"
@@ -184,13 +203,18 @@ export function UnifiedModelRow({
                       clipPath: `inset(0 ${100 - priceDisplay.paidPct}% 0 0)`,
                     }}
                   >
-                    {'$'.repeat(priceDisplay.tier)}
+                    {priceSymbol.repeat(priceDisplay.tier)}
                   </span>
                 </span>
                 <span
                   data-discount-badge
-                  className="inline-flex shrink-0 items-center text-11 font-semibold tracking-[0.2px]"
-                  style={{ color: EFFORT_TIER_COLORS.low }}
+                  // 设计稿 `.badge.save-tint`:淡染胶囊(14% 底 + 同色字),不是裸绿字 ——
+                  // 裸字在长模型名旁边会被读成名字的一部分。
+                  className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-10 font-medium leading-[1.45]"
+                  style={{
+                    color: EFFORT_TIER_COLORS.low,
+                    backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
+                  }}
                 >
                   {`↓${priceDisplay.discountPct}%`}
                 </span>
@@ -201,7 +225,7 @@ export function UnifiedModelRow({
                 className="text-11 font-semibold leading-none tracking-[0.5px]"
                 style={{ color: PRICE_TIER_COLORS[`t${priceDisplay.tier}`] }}
               >
-                {'$'.repeat(priceDisplay.tier)}
+                {priceSymbol.repeat(priceDisplay.tier)}
               </span>
             )}
           </span>
@@ -230,7 +254,7 @@ export function UnifiedModelRow({
               : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--favorite-star)]',
           )}
         >
-          <Star size={13} fill={isFavoriteRow || justFavorited ? 'currentColor' : 'none'} />
+          <Star size={14} fill={isFavoriteRow || justFavorited ? 'currentColor' : 'none'} />
         </button>
         {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。 */}
         <span

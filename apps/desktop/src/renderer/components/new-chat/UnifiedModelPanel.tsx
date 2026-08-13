@@ -701,7 +701,16 @@ export function UnifiedModelPanel({
                 let priceDisplay:
                   | NonNullable<Parameters<typeof UnifiedModelRow>[0]['priceDisplay']>
                   | null = null;
-                if (price?.kind === 'free') {
+                // 订阅接入且拿不到按量报价的行:画「订阅」小签,不画 $ 档串(那类模型
+                // 走套餐额度,画钱会被读成按量计费)。判定用 provider.access.kind +
+                // 报价来源(subscription-reference = 只是价值估算,不是账单价)。
+                const rowProvider = providers.find((item) => item.id === row.entry.providerId);
+                const subscriptionRow =
+                  rowProvider?.access?.kind === 'subscription' &&
+                  (price === null || price.kind !== 'priced' || price.current.source === 'subscription-reference');
+                if (subscriptionRow) {
+                  priceDisplay = null;
+                } else if (price?.kind === 'free') {
                   priceDisplay = { kind: 'free' };
                 } else if (price?.kind === 'priced') {
                   // 档位按**标准价**判(original;折扣不改变模型的价格档),亮段比例按折扣算。
@@ -711,6 +720,8 @@ export function UnifiedModelPanel({
                   priceDisplay = {
                     kind: 'tier',
                     tier: priceTierOf(basis.outputPerMtok, basis.currency),
+                    // 档串符号跟**报价币种**走(设计稿:中文报价是 ¥¥¥)。
+                    symbol: basis.currency === 'CNY' ? '¥' : '$',
                     ...(discountPct > 0 && discountPct < 100
                       ? {
                           discountPct,
@@ -741,6 +752,9 @@ export function UnifiedModelPanel({
                     }
                     justFavorited={justFavorited === key}
                     {...(priceDisplay ? { priceDisplay } : {})}
+                    {...(subscriptionRow
+                      ? { subscriptionLabel: t('settings.providers.models.subscription') }
+                      : {})}
                     {...(section.kind === 'defaults'
                       ? { defaultBadge: t('newChat.modelSelector.unified.defaultBadge') }
                       : {})}

@@ -5505,7 +5505,8 @@
         "discount": "{{percent}}%お得",
         "perMillion": "モデル標準価格",
         "fixedFx": "固定レート 1 USD = 6.7 CNY による概算",
-        "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません"
+        "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません",
+        "discountedVsStandard": "割引中 · 標準価格から {{percent}}% お得"
       },
       "trigger": {
         "placeholder": "モデルを選択",

@@ -5505,7 +5505,8 @@
         "discount": "{{percent}}% 절약",
         "perMillion": "모델 표준 가격",
         "fixedFx": "고정 환율 1 USD = 6.7 CNY 기준 추정",
-        "subscriptionEstimate": "가치 추정치이며 실제 청구 금액이 아닙니다"
+        "subscriptionEstimate": "가치 추정치이며 실제 청구 금액이 아닙니다",
+        "discountedVsStandard": "할인 중 · 표준가 대비 {{percent}}% 절약"
       },
       "trigger": {
         "placeholder": "모델 선택",

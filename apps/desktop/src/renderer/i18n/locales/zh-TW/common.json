@@ -5504,7 +5504,8 @@
         "discount": "立省 {{percent}}%",
         "perMillion": "模型標準價格",
         "fixedFx": "按固定匯率 1 USD = 6.7 CNY 約算",
-        "subscriptionEstimate": "價值估算，不代表實際帳單"
+        "subscriptionEstimate": "價值估算，不代表實際帳單",
+        "discountedVsStandard": "折扣中，較標準價省 {{percent}}%"
       },
       "trigger": {
         "placeholder": "選擇模型",

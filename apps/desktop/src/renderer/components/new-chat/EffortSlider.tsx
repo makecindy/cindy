@@ -170,8 +170,14 @@ export function EffortSlider({
             <div
               key={stop}
               aria-hidden
-              className="absolute z-[2] h-[5px] w-[5px] -translate-x-1/2 rounded-full bg-[var(--model-dropdown-bg)] opacity-70"
-              style={{ left: `${(index / lastIndex) * 100}%` }}
+              // 档位停点:设计稿是「用面板底色打孔」的实心点(color-mix(card 65%)),
+              // 之前用 opacity 让它糊在轨道色里,拖动时几乎看不见档位在哪。
+              className="absolute z-[2] h-[5px] w-[5px] -translate-x-1/2 rounded-full"
+              style={{
+                left: `${(index / lastIndex) * 100}%`,
+                backgroundColor:
+                  'color-mix(in srgb, var(--model-dropdown-bg) 65%, transparent)',
+              }}
             />
           ),
         )}
@@ -181,7 +187,14 @@ export function EffortSlider({
             'absolute z-[3] h-[21px] w-[21px] -translate-x-1/2 rounded-full border-[2.5px] border-[var(--model-dropdown-bg)]',
             dragging && 'scale-110',
           )}
-          style={{ left: `${percent}%`, backgroundColor: color, transition }}
+          style={{
+            left: `${percent}%`,
+            backgroundColor: color,
+            // 设计稿的滑块「描边环」:2.5px 面板底色描边 + 4px 同色 22% 外晕。
+            // 外晕是滑块在深浅两种轨道色上都能被一眼找到的原因,不是装饰。
+            boxShadow: `0 0 0 4px color-mix(in srgb, ${color} 22%, transparent)`,
+            transition: `${transition}, box-shadow var(--motion-fast) var(--motion-ease-out)`,
+          }}
         >
           <div
             className={cn(

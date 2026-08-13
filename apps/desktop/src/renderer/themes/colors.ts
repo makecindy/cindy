@@ -2031,6 +2031,12 @@ registerColor('text-selection-bg', {
   light: 'var(--focus-ring-soft)',
   dark: 'var(--focus-ring-soft)',
 }, '文字选中背景(焦点离开宿主窗口时仍保持清晰可见)');
+// 小胶囊(引擎选择、rail 格)的选中「浮起」阴影 —— 比 shadow-menu 轻一个量级:
+// 26px 高的 chip 套 4px/16px 的菜单阴影会糊成一团灰。Dark 下加深,否则在深底上看不见。
+registerColor('shadow-chip-raised', {
+  light: '0 1px 2px rgba(0, 0, 0, 0.12)',
+  dark: '0 1px 2px rgba(0, 0, 0, 0.4)',
+}, '小胶囊选中态的浮起 shadow');
 registerColor('shadow-menu', {
   light: '0 4px 16px rgba(0, 0, 0, 0.15)',
   dark: '0 4px 16px rgba(0, 0, 0, 0.5)',
