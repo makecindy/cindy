@@ -200,6 +200,8 @@ export interface BuildPiAgentOpts {
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
   resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+  /** Trusted project-approval authority; omitted until the host has one, which fails closed. */
+  resolvePiProjectTrustInput?: AgentDeps['resolvePiProjectTrustInput'];
 }
 
 /** Cindy wire protocol → pi models.json api 形态。 */
@@ -394,5 +396,6 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       return resolveXdPiGatewayWireProtocol(modelId);
     },
     getGhostRosterPrompt: opts.getGhostRosterPrompt,
+    resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
   });
 }

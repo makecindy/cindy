@@ -1,22 +1,195 @@
-import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { toClaudeSdkContent } from '../../../../../packages/maker-core/src/agents/claude-code/index';
 import type { UserMessage } from '../../../../../packages/maker-core/src/types/common';
 
-// 注意: toClaudeSdkContent 自 image-resizer 接通后改为 async。image block 的 path
-// 会先经 resizer.process() 透明替换 — 但测试里用的虚拟 path (C:\tmp\shot.png) 在
-// 磁盘上不存在, fs.stat 失败后 resizer 直接返回原 path, 期望值不变。
 describe('Claude Code SDK input', () => {
-  it('keeps file and image attachments as @path refs instead of inline blocks', async () => {
+  const tempDirs: string[] = [];
+
+  async function createTempDir(): Promise<string> {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-claude-input-'));
+    tempDirs.push(tempDir);
+    return tempDir;
+  }
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((tempDir) => fs.rm(tempDir, { recursive: true })));
+  });
+
+  it('inlines an original image while keeping file attachments as path refs', async () => {
+    const tempDir = await createTempDir();
+    const imagePath = path.join(tempDir, 'small.png');
+    const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await fs.writeFile(imagePath, imageBytes);
+    const imageResizer = {
+      process: vi.fn(async (inputPath: string) => inputPath),
+      validateBuffer: vi.fn(async () => true),
+    };
     const content: UserMessage['content'] = [
       { type: 'text', text: 'Inspect these' },
       { type: 'file', path: 'E:\\repo\\large.txt', mimeType: 'text/plain' },
-      { type: 'image', path: 'C:\\tmp\\shot.png', mimeType: 'image/png' },
+      { type: 'image', path: imagePath, mimeType: 'image/png' },
     ];
 
-    expect(await toClaudeSdkContent(content)).toBe(
-      '@"E:\\repo\\large.txt" @"C:\\tmp\\shot.png" Inspect these',
+    expect(await toClaudeSdkContent(content, imageResizer)).toEqual([
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: imageBytes.toString('base64'),
+        },
+      },
+      { type: 'text', text: '@"E:\\repo\\large.txt" Inspect these' },
+    ]);
+    expect(imageResizer.process).toHaveBeenCalledWith(imagePath);
+  });
+
+  it('uses the resized file format and bytes for the native image block', async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, 'large.png');
+    const resizedPath = path.join(tempDir, 'large.webp');
+    const resizedBytes = Buffer.from('RIFF0000WEBP', 'ascii');
+    await fs.writeFile(resizedPath, resizedBytes);
+    const imageResizer = {
+      process: vi.fn(async () => resizedPath),
+      validateBuffer: vi.fn(async () => true),
+    };
+    const content: UserMessage['content'] = [
+      { type: 'image', path: sourcePath, mimeType: 'image/png' },
+      { type: 'text', text: 'Read the image' },
+    ];
+
+    expect(await toClaudeSdkContent(content, imageResizer)).toEqual([
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/webp',
+          data: resizedBytes.toString('base64'),
+        },
+      },
+      { type: 'text', text: 'Read the image' },
+    ]);
+    expect(imageResizer.process).toHaveBeenCalledWith(sourcePath);
+  });
+
+  it('uses image bytes instead of a misleading extension or declared MIME type', async () => {
+    const tempDir = await createTempDir();
+    const imagePath = path.join(tempDir, 'misleading.png');
+    const imageBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+    await fs.writeFile(imagePath, imageBytes);
+    const imageResizer = {
+      process: vi.fn(async () => imagePath),
+      validateBuffer: vi.fn(async () => true),
+    };
+    const content: UserMessage['content'] = [
+      { type: 'image', path: imagePath, mimeType: 'image/webp' },
+      { type: 'text', text: 'Inspect this' },
+    ];
+
+    expect(await toClaudeSdkContent(content, imageResizer)).toEqual([
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/jpeg',
+          data: imageBytes.toString('base64'),
+        },
+      },
+      { type: 'text', text: 'Inspect this' },
+    ]);
+  });
+
+  it('falls back to a quoted path when the final image cannot be read', async () => {
+    const tempDir = await createTempDir();
+    const missingPath = path.join(tempDir, 'missing.png');
+    const imageResizer = {
+      process: vi.fn(async () => missingPath),
+      validateBuffer: vi.fn(async () => true),
+    };
+    const content: UserMessage['content'] = [
+      { type: 'image', path: missingPath, mimeType: 'image/png' },
+      { type: 'text', text: 'Inspect this' },
+    ];
+
+    expect(await toClaudeSdkContent(content, imageResizer)).toBe(
+      `@"${missingPath}" Inspect this`,
     );
+  });
+
+  it('falls back to a quoted path when the final image is too large to embed', async () => {
+    const tempDir = await createTempDir();
+    const imagePath = path.join(tempDir, 'too-large.png');
+    const imageBytes = Buffer.alloc(Math.floor((5 * 1024 * 1024) / 4) * 3 + 1);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(imageBytes);
+    await fs.writeFile(imagePath, imageBytes);
+    const imageResizer = {
+      process: vi.fn(async () => imagePath),
+      validateBuffer: vi.fn(async () => true),
+    };
+    const content: UserMessage['content'] = [
+      { type: 'image', path: imagePath, mimeType: 'image/png' },
+      { type: 'text', text: 'Inspect this' },
+    ];
+
+    expect(await toClaudeSdkContent(content, imageResizer)).toBe(
+      `@"${imagePath}" Inspect this`,
+    );
+  });
+
+  it('allows image data exactly at the encoded inline limit', async () => {
+    const tempDir = await createTempDir();
+    const imagePath = path.join(tempDir, 'inline-limit.png');
+    const imageBytes = Buffer.alloc(Math.floor((5 * 1024 * 1024) / 4) * 3);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(imageBytes);
+    await fs.writeFile(imagePath, imageBytes);
+    const imageResizer = {
+      process: vi.fn(async () => imagePath),
+      validateBuffer: vi.fn(async () => true),
+    };
+    const content: UserMessage['content'] = [
+      { type: 'image', path: imagePath, mimeType: 'image/png' },
+    ];
+
+    const result = await toClaudeSdkContent(content, imageResizer);
+
+    expect(result).toEqual([
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: imageBytes.toString('base64'),
+        },
+      },
+    ]);
+  });
+
+  it('keeps SSH image paths remote even when the same path exists on the desktop', async () => {
+    const tempDir = await createTempDir();
+    const imagePath = path.join(tempDir, 'remote.png');
+    await fs.writeFile(
+      imagePath,
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    const imageResizer = {
+      process: vi.fn(async () => imagePath),
+      validateBuffer: vi.fn(async () => true),
+    };
+    const content: UserMessage['content'] = [
+      { type: 'image', path: imagePath, mimeType: 'image/png' },
+      { type: 'text', text: 'Inspect this' },
+    ];
+
+    expect(await toClaudeSdkContent(content, imageResizer, false)).toBe(
+      `@"${imagePath}" Inspect this`,
+    );
+    expect(imageResizer.process).not.toHaveBeenCalled();
   });
 
   it('does not duplicate mention chips already serialized in text', async () => {

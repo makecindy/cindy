@@ -75,6 +75,7 @@ import type {
   ListCustomizationsResult,
 } from '../types/customizations.js';
 import type { PiRuntimeCapabilityManifest } from '../types/pi-runtime-capabilities.js';
+import type { PiProjectTrustInputSnapshot } from '../types/pi-project-trust.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
 import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
 
@@ -382,6 +383,17 @@ export interface AgentDeps {
    * 其它 agent 不消费此字段。
    */
   resolvePiAgentHome?: () => string | undefined;
+
+  /**
+   * Pi-only: resolve the immutable Cindy project-approval input for one new
+   * runtime. The host owns identity canonicalization, approval audit/revocation,
+   * and discovered-resource provenance. Missing/throwing resolvers fail closed.
+   */
+  resolvePiProjectTrustInput?: (ctx: {
+    sessionId?: string;
+    workingDir: string;
+    remoteHostId?: string;
+  }) => Promise<PiProjectTrustInputSnapshot | null>;
 
   /**
    * pi 专用钩子:把 mcpProviders 转成 pi 子进程可消费的 MCP 桥配置。
