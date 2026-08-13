@@ -138,6 +138,61 @@ describe('xAI account model discovery', () => {
     expect(applySnapshot).not.toHaveBeenCalled();
   });
 
+  it('does not reuse an older account flight when the token changes under the same owner scope', async () => {
+    let token = 'token-a';
+    let releaseAUser!: () => void;
+    const aUserReleased = new Promise<void>((resolve) => {
+      releaseAUser = resolve;
+    });
+    let aUserStarted!: () => void;
+    const aUserStartedPromise = new Promise<void>((resolve) => {
+      aUserStarted = resolve;
+    });
+    const applySnapshot = vi.fn();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get('authorization');
+      if (String(input) === XAI_ACCOUNT_USER_URL && auth === 'Bearer token-a') {
+        aUserStarted();
+        await aUserReleased;
+        return jsonResponse({ userId: 'user-a' });
+      }
+      if (String(input) === XAI_ACCOUNT_USER_URL && auth === 'Bearer token-b') {
+        return jsonResponse({ userId: 'user-b' });
+      }
+      if (String(input) === XAI_ACCOUNT_MODELS_URL && auth === 'Bearer token-b') {
+        return jsonResponse({ data: [{ model: 'grok-4.6' }] });
+      }
+      throw new Error(`unexpected request ${String(input)} ${auth}`);
+    });
+    const deps = {
+      fetchImpl: fetchImpl as typeof fetch,
+      getAccessToken: async () => token,
+      peekAccessToken: () => token,
+      hasLogin: () => true,
+      getConnectionSource: () => 'explicit-provider-oauth' as const,
+      getScopeKey: () => 'owner-a:1',
+      cacheFilePath: () => '/unused',
+      applySnapshot,
+      invalidateAuth: vi.fn(),
+      log: { info: vi.fn(), warn: vi.fn() },
+    };
+
+    const accountA = refreshXaiModelsFromHttp(deps);
+    await aUserStartedPromise;
+    token = 'token-b';
+    const accountB = refreshXaiModelsFromHttp({
+      ...deps,
+      getAccessToken: async () => token,
+      peekAccessToken: () => token,
+    });
+    await expect(accountB).resolves.toBe(true);
+    expect(applySnapshot).toHaveBeenCalledWith([{ id: 'xai/grok-4.6' }]);
+
+    releaseAUser();
+    await expect(accountA).resolves.toBe(false);
+    expect(applySnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshes a rejected token once and restarts the user-model chain', async () => {
     let token = 'token-old';
     const applySnapshot = vi.fn();

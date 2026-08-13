@@ -38,6 +38,7 @@ let cacheMutationQueue: Promise<void> = Promise.resolve();
 let cacheTempSequence = 0;
 let refreshInflight: Promise<boolean> | null = null;
 let refreshInflightScope: string | number | null = null;
+let refreshInflightToken: string | null = null;
 
 export interface XaiModelDiscoveryDeps {
   fetchImpl: typeof fetch;
@@ -376,15 +377,29 @@ export async function refreshXaiModelsFromHttp(
 ): Promise<boolean> {
   const deps = { ...DEFAULT_DEPS, ...injected };
   const scopeKey = deps.getScopeKey();
-  if (refreshInflight && refreshInflightScope === scopeKey) return refreshInflight;
+  // The owner scope remains stable across an xAI account switch. Only reuse a
+  // flight when it belongs to the same currently-bound access token; otherwise
+  // the new account must start its own discovery immediately. The old flight
+  // is still guarded by isCurrent and cannot apply or persist its late result.
+  const currentToken = deps.peekAccessToken();
+  if (
+    refreshInflight &&
+    currentToken &&
+    refreshInflightScope === scopeKey &&
+    refreshInflightToken === currentToken
+  ) {
+    return refreshInflight;
+  }
   const flight = runRefresh(deps).finally(() => {
     if (refreshInflight === flight) {
       refreshInflight = null;
       refreshInflightScope = null;
+      refreshInflightToken = null;
     }
   });
   refreshInflight = flight;
   refreshInflightScope = scopeKey;
+  refreshInflightToken = currentToken;
   return flight;
 }
 
@@ -408,5 +423,6 @@ export function waitForXaiDiscoveryIdleForTest(): Promise<void> {
 export function resetXaiDiscoveryForTest(): void {
   refreshInflight = null;
   refreshInflightScope = null;
+  refreshInflightToken = null;
   cacheMutationQueue = Promise.resolve();
 }
