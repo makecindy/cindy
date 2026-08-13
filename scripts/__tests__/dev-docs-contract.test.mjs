@@ -284,6 +284,41 @@ test("runtime versions and the docs contract are code-owned", () => {
 	assert.match(rootPackage.scripts["test:runner"], /scripts\/__tests__\/dev-docs-contract\.test\.mjs/);
 });
 
+test("the final gate binds every required check to one frozen tree", () => {
+	const workflow = readText("docs/dev-rules/development-workflow.md");
+	const section = workflow.match(
+		/- \*\*最终门禁必须绑定冻结快照\*\*：([\s\S]*?)(?=\n  - \*\*)/,
+	)?.[1];
+	assert.ok(section, "development workflow must define the frozen final gate");
+	assert.match(section, /git write-tree/);
+	assert.match(section, /最终有效的受影响 package typecheck、专项数据库门禁与根\s+`pnpm test:unit`/);
+	assert.match(section, /由该 tree[\s\S]*同一干净 checkout 中\s+执行/);
+	assert.match(section, /冻结前跑过的同名检查只作为快速反馈，不能充当最终凭证/);
+	assert.match(section, /该 tree ID 的全部强制检查都取得退出码 `0`/);
+});
+
+test("the dependency reuse contract tracks agent-binary download environment inputs", () => {
+	const workflow = readText("docs/dev-rules/development-workflow.md");
+	const section = workflow.match(
+		/- \*\*最终门禁环境要可复现且与产品故障分层\*\*：([\s\S]*?)(?=\n  - \*\*)/,
+	)?.[1];
+	assert.ok(section, "development workflow must define the dependency reuse contract");
+	const timeoutSource = readText("tools/shared/fetch-with-timeout.mjs");
+	const agentBinaryEnvironmentInputs = new Set(
+		[...timeoutSource.matchAll(/envInt(?:AllowZero)?\(\s*["'](XDT_AGENTBIN_[A-Z0-9_]+)["']/g)]
+			.map((match) => match[1]),
+	);
+	assert.ok(agentBinaryEnvironmentInputs.size > 0, "download helper must expose its environment inputs");
+	for (const name of [
+		"XDT_SKIP_AGENT_BIN_INSTALL",
+		"XDT_CDN_BASE_URL",
+		"CINDY_AUTH_REGION",
+		...agentBinaryEnvironmentInputs,
+	]) {
+		assert.match(section, new RegExp(`\\b${name}\\b`), `${name} must be part of the dependency reuse contract`);
+	}
+});
+
 test("client CI keeps the complete two-shard unit gate on Windows", () => {
 	const workflow = readText(".github/workflows/ci.yml");
 	const shards = workflowJob(workflow, "windows-unit-shards");

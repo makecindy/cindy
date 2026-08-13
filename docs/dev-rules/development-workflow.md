@@ -85,17 +85,19 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
     互不影响。`guard` tier 和 CI／GitHub Actions 不参与。等待超过 15 分钟以退出码 `75`
     结束，表示测试尚未运行，不得当作测试失败排查；排队是正常状态，不要 kill 后重跑。
     只有明确确认资源足够且需要有意重叠时，才可追加 `--no-lock` 作为逃生口。
-  - **最终门禁必须绑定冻结快照**：准备提交或提 PR 时，先完成实现、定向测试、受影响 package
-    typecheck 与专项数据库门禁；由 agent／自动化主持且已安排独立 review 的工作，还必须先将
-    review 的 P0／P1 清零。随后显式暂存完整待提交集合（包括新增文件），确认没有混入无关用户
-    改动，并以 `git write-tree` 生成的 index tree ID 冻结快照。根 `pnpm test:unit` 必须在由该
-    tree（或由它生成的临时 commit）物化出的干净 checkout 中执行；未跟踪但不属于本次提交的
+  - **最终门禁必须绑定冻结快照**：准备提交或提 PR 时，先完成实现与用于快速反馈的定向测试；
+    由 agent／自动化主持且已安排独立 review 的工作，还必须先将 review 的 P0／P1 清零。随后
+    显式暂存完整待提交集合（包括新增文件），确认没有混入无关用户改动，并以 `git write-tree`
+    生成的 index tree ID 冻结快照。最终有效的受影响 package typecheck、专项数据库门禁与根
+    `pnpm test:unit` 必须在由该 tree（或由它生成的临时 commit）物化出的同一干净 checkout 中
+    执行；冻结前跑过的同名检查只作为快速反馈，不能充当最终凭证。未跟踪但不属于本次提交的
     用户文件可以留在作者 worktree，但不得出现在门禁 checkout，也不得在不重跑门禁的情况下
     随后加入提交。门禁启动后，任何 `git add`／`git reset` 或 index tree ID 变化都会使旧结果
     立即失效。旧快照、无退出码、被调用端终止、只看到「暂无失败输出」都不算通过，唯一有效
-    凭证是该 tree ID 取得退出码 `0`。通过后再次确认待提交 index tree ID 与受测 tree 一致，
-    直接按 DCO 流程 commit／push；若不一致，回到相应 review 与门禁阶段。普通 PR 仍可按仓库
-    既有流程先提交，再接受 GitHub 自动 review；本条不为所有贡献者新增提交前独立 review 硬门。
+    凭证是该 tree ID 的全部强制检查都取得退出码 `0`。通过后再次确认待提交 index tree ID 与
+    受测 tree 一致，直接按 DCO 流程 commit／push；若不一致，回到相应 review 与门禁阶段。
+    普通 PR 仍可按仓库既有流程先提交，再接受 GitHub 自动 review；本条不为所有贡献者新增
+    提交前独立 review 硬门。
   - **最终门禁环境要可复现且与产品故障分层**：同一批并行任务可将冻结快照依次物化到一个
     已验证、无已知路径污染的专用门禁 checkout，重型门禁严格串行，不让多个 agent／worktree
     同时争抢共享锁。复用该 checkout 已安装的依赖前，当前仓库的依赖指纹必须完全一致：根及
@@ -106,8 +108,11 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
     `scripts/shared/client-endpoint-build-env.mjs`、`scripts/fix-node-pty-perms.mjs`、
     `tools/{claude,codex,ripgrep,pi}/update.mjs`、`tools/shared/**`、各
     `tools/<kind>/latest.json` 与 `config/endpoint*.json`；还要保持会改变 postinstall 结果的
-    `XDT_SKIP_AGENT_BIN_INSTALL`、`XDT_CDN_BASE_URL`、`CINDY_AUTH_REGION` 一致，并确认已安装
-    runtime 的版本标记与对应 pin 相符。任一输入变化或无法证明一致，都必须重新执行
+    `XDT_SKIP_AGENT_BIN_INSTALL`、`XDT_CDN_BASE_URL`、`CINDY_AUTH_REGION`，以及上游下载所用的
+    `XDT_AGENTBIN_CONNECT_TIMEOUT_MS`、`XDT_AGENTBIN_STALL_TIMEOUT_MS`、
+    `XDT_AGENTBIN_TOTAL_TIMEOUT_MS`、`XDT_AGENTBIN_MIN_THROUGHPUT_BPS`、
+    `XDT_AGENTBIN_THROUGHPUT_WINDOW_MS` 一致，并确认已安装 runtime 的版本标记与对应 pin 相符。
+    任一输入变化或无法证明一致，都必须重新执行
     `pnpm install`，不得复用现有 `node_modules`。普通独立 worktree 仍遵守第 1 节的独立安装
     原则。安装或运行异常必须记录它发生在
     测试启动前、fixture／worker 启动期还是断言阶段；只有取得指向具体外部原因的环境归因证据
