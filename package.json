@@ -85,6 +85,7 @@
     "update:codex": "node tools/codex/update.mjs",
     "update:ripgrep": "node tools/ripgrep/update.mjs",
     "update:pi": "node tools/pi/update.mjs",
+    "sync:pi-model-catalog": "node tools/pi/sync-model-catalog.mjs",
     "update:vendors": "node tools/claude/update.mjs && node tools/codex/update.mjs && node tools/ripgrep/update.mjs && node tools/pi/update.mjs",
     "install:claude": "node scripts/ensure-agent-binaries.mjs --kinds=claude",
     "install:codex": "node scripts/ensure-agent-binaries.mjs --kinds=codex",

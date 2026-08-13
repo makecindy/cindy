@@ -177,6 +177,36 @@ describe('customProviderModelConfigFromCatalogModel', () => {
   });
 });
 
+describe('providerViewToCustomProviderConfig Pi catalog metadata', () => {
+  it('preserves the hidden Pi official catalog provider id', () => {
+    const provider = {
+      id: 'deepseek',
+      name: 'DeepSeek',
+      source: 'user',
+      agents: ['pi'],
+      auth: { method: 'apiKey' },
+      routing: {
+        pi: {
+          upstream: 'https://api.deepseek.com',
+          authStrategy: 'api-key-header',
+          piCatalogProviderId: 'deepseek',
+        },
+      },
+      models: {
+        pi: [{
+          id: 'deepseek-v4-pro',
+          name: 'DeepSeek V4 Pro',
+          contextWindow: 1_000_000,
+          efforts: ['high', 'max'],
+          defaultEffort: 'high',
+        }],
+      },
+    } as ProviderView;
+    expect(providerViewToCustomProviderConfig(provider).runtimes.pi?.piCatalogProviderId)
+      .toBe('deepseek');
+  });
+});
+
 describe('providerViewToCustomProviderConfig', () => {
   it('preserves no-auth and exact request-path fields through the edit round trip', () => {
     const provider = {

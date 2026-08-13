@@ -442,6 +442,10 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       if (Object.values(r.headers as Record<string, unknown>).some((x) => typeof x !== 'string')) return false;
     }
     if (r.baseUrlEditable !== undefined && typeof r.baseUrlEditable !== 'boolean') return false;
+    if (
+      r.piCatalogProviderId !== undefined
+      && (agent !== 'pi' || typeof r.piCatalogProviderId !== 'string' || !/^[a-z0-9-]+$/.test(r.piCatalogProviderId))
+    ) return false;
     // modelsUrl / requestPath 不在此淘汰整条——非法值由 sanitizePresets 剥字段。
   }
   return true;

@@ -109,10 +109,10 @@ import {
 import type { PiRuntimeCapabilityManifest } from '../../types/pi-runtime-capabilities.js';
 
 const PI_PROVIDER_ID = 'cindy';
-// 既非 Cindy 网关(cindy/xd)也非订阅直连(openai/anthropic/xai)的 providerId = 显式 BYOM
+// 既非 Cindy 网关(cindy/xd)也非经 compat proxy 的订阅直连(openai/anthropic)的 providerId = 显式 BYOM
 // 路由,必须在本会话解析出的 nativeProviders 里;缺席时不得静默回落网关(见 startSession /
-// setModel 的 fail-closed)。
-const NON_BYOM_PROVIDER_IDS = new Set([PI_PROVIDER_ID, 'xd', 'openai', 'anthropic', 'xai']);
+// setModel 的 fail-closed)。xAI 已改走 Pi 原生 provider，同样必须解析成功。
+const NON_BYOM_PROVIDER_IDS = new Set([PI_PROVIDER_ID, 'xd', 'openai', 'anthropic']);
 const PI_API_KEY_ENV = 'CINDY_PI_API_KEY';
 const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
@@ -560,11 +560,15 @@ export class PiAgent extends BaseAgent {
         models: np.models.map((m) => ({
           id: m.id,
           name: m.name ?? m.id,
+          ...(m.api ? { api: m.api } : {}),
           reasoning: m.reasoning ?? false,
           ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
           input: m.input ?? ['text'],
           contextWindow: m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000,
           maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : 16_000,
+          ...(m.cost ? { cost: m.cost } : {}),
+          ...(m.compat ? { compat: m.compat } : {}),
+          ...(m.samplingParams ? { samplingParams: m.samplingParams } : {}),
         })),
       };
     }
@@ -593,6 +597,8 @@ export class PiAgent extends BaseAgent {
         const resolved = await this.deps.resolvePiNativeProviders({
           workingDir: opts.workingDir,
           remoteHostId: opts.remoteHostId,
+          providerId: opts.providerId,
+          model: opts.model,
         });
         nativeProviders = resolved?.providers ?? [];
         nativeEnv = resolved?.env ?? {};
@@ -608,6 +614,8 @@ export class PiAgent extends BaseAgent {
         .filter((provider) => provider.id !== PI_PROVIDER_ID)
         .map((provider) => [provider.id, provider] as const),
     );
+    const resolveNativeModelId = (providerId: string, model: string): string =>
+      nativeProviderById.get(providerId)?.modelIdAliases?.[model] ?? model;
     // providerId 是模型来源的主键；同名模型可同时存在于 Cindy 网关和多个 BYOM provider。
     // 三态语义(与 session-provider-store 对齐):
     //   - 显式 BYOM id → 该 native provider(经上面的 model-combo fail-closed 校验);
@@ -621,7 +629,8 @@ export class PiAgent extends BaseAgent {
     ): string => {
       if (providerId) {
         const native = nativeProviderById.get(providerId);
-        return native?.models.some((candidate) => candidate.id === model)
+        const nativeModel = resolveNativeModelId(providerId, model);
+        return native?.models.some((candidate) => candidate.id === nativeModel)
           ? native.id
           : PI_PROVIDER_ID;
       }
@@ -652,7 +661,8 @@ export class PiAgent extends BaseAgent {
       if (!providerId || NON_BYOM_PROVIDER_IDS.has(providerId)) return false;
       if (resolveFailed) return true;
       const native = nativeProviderById.get(providerId);
-      return !native || !native.models.some((candidate) => candidate.id === model);
+      const nativeModel = resolveNativeModelId(providerId, model);
+      return !native || !native.models.some((candidate) => candidate.id === nativeModel);
     };
     if (explicitByomUnresolvable(opts.providerId, opts.model, nativeResolveFailed)) {
       throw new Error(
@@ -664,6 +674,7 @@ export class PiAgent extends BaseAgent {
       );
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
+    const initialPiModel = resolveNativeModelId(initialProvider, opts.model);
     // 先解析 native provider 再做 auth：老会话/远端控制端可能没有持久化 providerId，
     // 仍必须能从 model→provider 映射识别纯 BYOM，不能误落 Cindy gateway 登录门。
     // startup effort 快照也使用同一来源，因此必须在快照 resolver 之前完成初始化。
@@ -731,7 +742,9 @@ export class PiAgent extends BaseAgent {
     ): readonly Effort[] | undefined => {
       if (providerId !== PI_PROVIDER_ID) {
         return startupEffortsOfNativeModel(
-          nativeProviderById.get(providerId)?.models.find((model) => model.id === modelId),
+          nativeProviderById.get(providerId)?.models.find(
+            (model) => model.id === resolveNativeModelId(providerId, modelId),
+          ),
         );
       }
       const gatewayModel = modelId === opts.model && selectedRuntimeModel
@@ -1009,7 +1022,7 @@ export class PiAgent extends BaseAgent {
       }
     };
     // 会话暴露前先落初始快照(await:模型第一次调 subagent 时文件必须已经在)。
-    if (subagentRoutingEnabled && !(await writeSubagentRuntimeFile({ model: opts.model, provider: initialProvider }))) {
+    if (subagentRoutingEnabled && !(await writeSubagentRuntimeFile({ model: initialPiModel, provider: initialProvider }))) {
       subagentRoutingEnabled = false;
     }
 
@@ -1162,7 +1175,7 @@ export class PiAgent extends BaseAgent {
       '--no-extensions',
       '--session-dir', sessionDir,
       '--provider', initialProvider,
-      '--model', opts.model,
+      '--model', initialPiModel,
       ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
       ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
       '--extension', bridgeExtensionPath,
@@ -1718,7 +1731,9 @@ export class PiAgent extends BaseAgent {
         ? gatewayImageInputByModel.get(mutableModel) === true
         : nativeProviderById
           .get(mutablePiProviderId)
-          ?.models.find((candidate) => candidate.id === mutableModel)
+          ?.models.find(
+            (candidate) => candidate.id === resolveNativeModelId(mutablePiProviderId, mutableModel),
+          )
           ?.input?.includes('image') === true;
       if (supportsImageInput) return;
       throw new PiImageInputUnsupportedError();
@@ -1800,8 +1815,12 @@ export class PiAgent extends BaseAgent {
       // 所以这一步落的是**带 pending 标记的**新路由:内容已经就位(证明可写、内容可回滚),但
       // 扩展见到 `pending: true` 就拒绝派发。等待窗口里一个子进程都起不来,既不会用未确认的新
       // 路由、也不会用与父不一致的旧路由;确认后再清掉标记放行。
-      const previousSnapshot = { model: mutableModel, provider: mutablePiProviderId };
-      if (!(await writeSubagentRuntimeFile({ model, provider, pending: true }))) {
+      const previousSnapshot = {
+        model: resolveNativeModelId(mutablePiProviderId, mutableModel),
+        provider: mutablePiProviderId,
+      };
+      const nativeModel = resolveNativeModelId(provider, model);
+      if (!(await writeSubagentRuntimeFile({ model: nativeModel, provider, pending: true }))) {
         throw new Error(
           'pi: 无法持久化子代理路由快照,已取消本次模型切换(避免父会话切到新 provider 而子代理仍按旧路由派发)。'
           + '请检查运行目录是否可写后重试。',
@@ -1809,7 +1828,11 @@ export class PiAgent extends BaseAgent {
       }
       let resp;
       try {
-        resp = await proc.request({ type: 'set_model', provider, modelId: model });
+        resp = await proc.request({
+          type: 'set_model',
+          provider,
+          modelId: nativeModel,
+        });
       } catch (err) {
         // RPC **reject / 超时 / 写 stdin 失败 / 进程已退出**:与 `success:false` 有本质区别 ——
         // 那种情况我们**知道**没生效,可以回滚;这里我们**不知道** pi 侧到底切没切。
@@ -1878,7 +1901,7 @@ export class PiAgent extends BaseAgent {
       // pi 已确认 → 清掉 pending 标记放行派发。写失败时**不**抛错:模型切换本身确实成功了,
       // 谎报失败会让上层与 UI 状态和 pi 真实状态背离。代价是这个会话的子代理一直被 pending
       // 挡住(可见的降级、拒绝时有明确文案),而它是安全方向 —— 绝不会把委派发到错误 endpoint。
-      if (!(await writeSubagentRuntimeFile({ model, provider }))) {
+      if (!(await writeSubagentRuntimeFile({ model: nativeModel, provider }))) {
         deps.logger.error(
           'pi: model switch confirmed but the subagent routing snapshot stayed pending; '
           + 'subagent delegation stays disabled for this session (fail-closed)',

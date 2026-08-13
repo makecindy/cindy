@@ -172,6 +172,8 @@ interface RuntimeFields extends RuntimeFillDraft {
   headers: HeaderRow[];
   /** 隐藏字段：列模型端点（预设 / 已存配置快照进来），「获取模型列表」用；不在表单展示。 */
   modelsUrl: string;
+  /** 隐藏字段：从 Pi 官方目录生成该 runtime；编辑保存必须无损保留。 */
+  piCatalogProviderId?: string;
 }
 
 /** 每个 runtime Tab 的「测试连接」状态（idle → testing → ok/fail）。 */
@@ -192,6 +194,7 @@ function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
     models: [{ id: '', name: '' }],
     headers: [{ name: '', value: '' }],
     modelsUrl: '',
+    piCatalogProviderId: undefined,
   };
 }
 
@@ -216,6 +219,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
             ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
             : [{ name: '', value: '' }],
         modelsUrl: rc.modelsUrl ?? '',
+        piCatalogProviderId: rc.piCatalogProviderId,
         headersState: rc.headersState,
       };
     }
@@ -1408,6 +1412,9 @@ export function CustomProviderDialog({
         models,
         ...(Object.keys(savedHeaders).length > 0 ? { headers: savedHeaders } : {}),
         ...(rf.modelsUrl.trim() ? { modelsUrl: rf.modelsUrl.trim() } : {}),
+        ...(a === 'pi' && rf.piCatalogProviderId
+          ? { piCatalogProviderId: rf.piCatalogProviderId }
+          : {}),
       };
       // OAuth 形态不收集 per-runtime API key（鉴权走 Runner 的 Bearer）。
       if (

@@ -104,6 +104,7 @@ function toRouting(
   strategy: 'api-key-header' | 'oauth-token' | 'none',
   modelsUrl?: string,
   wireProtocol?: 'anthropic-messages' | 'openai-responses' | 'openai-chat',
+  piCatalogProviderId?: string,
 ): RoutingDescriptor {
   const r: RoutingDescriptor = {
     upstream: baseUrl,
@@ -124,6 +125,7 @@ function toRouting(
   }
   // 列模型端点回带（编辑表单从 routing 重建配置时不丢；路由器不消费本字段）。
   if (modelsUrl) r.modelsUrl = modelsUrl;
+  if (piCatalogProviderId) r.piCatalogProviderId = piCatalogProviderId;
   return r;
 }
 
@@ -154,6 +156,7 @@ export function buildUserProvider(config: CustomProviderConfig): Provider {
       strategy,
       rt.modelsUrl,
       rt.wireProtocol,
+      rt.piCatalogProviderId,
     );
     models[agent] = rt.models.map((m) => toCatalogModel(m, config.id, agent));
   }

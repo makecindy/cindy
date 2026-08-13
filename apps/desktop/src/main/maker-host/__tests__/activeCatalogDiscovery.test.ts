@@ -103,8 +103,14 @@ describe('active-catalog discovered augment', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
     expect(xai?.agents).toContain('pi');
-    expect(xai?.routing.pi?.modelPrefixes).toEqual(['xai/']);
-    expect(xai?.models.pi).toEqual(xai?.models['claude-code']);
+    expect(xai?.routing.pi?.upstream).toBe('https://api.x.ai/v1');
+    expect(xai?.models.pi?.map((model) => model.id)).toEqual([
+      'grok-4.3',
+      'grok-4.5',
+      'grok-4.6',
+      'grok-build-0.1',
+    ]);
+    expect(xai?.models.pi).not.toEqual(xai?.models['claude-code']);
   });
 
   it('bridge 投影剔除 max/ultra:codex 侧保留、claude-code 侧封顶 xhigh(issue #352)', () => {

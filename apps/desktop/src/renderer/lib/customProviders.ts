@@ -161,6 +161,7 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
         : {}),
       ...(routing?.headerOverrideState ? { headersState: routing.headerOverrideState } : {}),
       ...(routing?.modelsUrl ? { modelsUrl: routing.modelsUrl } : {}),
+      ...(routing?.piCatalogProviderId ? { piCatalogProviderId: routing.piCatalogProviderId } : {}),
     };
   }
   return {

@@ -476,18 +476,21 @@ function computeMerged(): Catalog {
   const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
   const providerSources = b.providers.filter((provider) => provider.id !== 'xd');
   if (builtinXd) providerSources.splice(Math.max(0, remoteXdIndex), 0, builtinXd);
+  const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
   let providers: Provider[] = providerSources.map((provider): Provider => {
     if (provider.id !== 'xai') return provider;
-    const claudeRoute = provider.routing['claude-code'];
-    const claudeModels = provider.models['claude-code'] ?? [];
-    if (!claudeRoute) return provider;
+    // Pi 的 xAI 清单来自随包同步的 Pi 官方目录，独立于 Claude/Codex 的 Registry root。
+    // 即使调用方直接 setActiveCatalog 绕过 source merge，也不能把 Pi 再镜像成旧 Grok 表。
+    const piRoute = bundledXai?.routing.pi;
+    const piModels = bundledXai?.models.pi;
+    if (!piRoute || !piModels) return provider;
     return {
       ...provider,
       agents: provider.agents.includes('pi')
         ? provider.agents
         : [...provider.agents, 'pi' as AgentKind],
-      routing: { ...provider.routing, pi: provider.routing.pi ?? claudeRoute },
-      models: { ...provider.models, pi: provider.models.pi ?? claudeModels },
+      routing: { ...provider.routing, pi: piRoute },
+      models: { ...provider.models, pi: piModels },
     };
   });
 
@@ -596,8 +599,8 @@ function computeMerged(): Catalog {
           ...p.models,
           'claude-code': claudeRoot,
           codex: codexRoot,
-          // Pi 恒定镜像 claude-code root(拿满 root 能力,如 grok-4.20 的 xhigh 档)。
-          ...(p.agents.includes('pi') ? { pi: claudeRoot } : {}),
+          // Pi 保留自己的官方目录裸 ID、协议与能力，不镜像 namespaced Claude root。
+          ...(p.agents.includes('pi') ? { pi: p.models.pi ?? [] } : {}),
         },
       };
     }
@@ -728,10 +731,19 @@ export function setActiveCatalog(catalog: Catalog): void {
 export function commitModelPlaneFromCatalog(catalog: Catalog): void {
   const current = base ?? BUNDLED_CATALOG;
   const incomingXai = catalog.providers.find((provider) => provider.id === 'xai');
+  const currentXai = current.providers.find((provider) => provider.id === 'xai');
   const providers =
     incomingXai && current.providers.some((provider) => provider.id === 'xai')
       ? current.providers.map((provider) =>
-          provider.id === 'xai' ? { ...provider, models: incomingXai.models } : provider,
+          provider.id === 'xai'
+            ? {
+                ...provider,
+                models: {
+                  ...incomingXai.models,
+                  ...(currentXai?.models.pi ? { pi: currentXai.models.pi } : {}),
+                },
+              }
+            : provider,
         )
       : current.providers;
   base = {

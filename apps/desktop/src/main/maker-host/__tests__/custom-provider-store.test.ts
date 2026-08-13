@@ -366,6 +366,33 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     ]);
   });
 
+  it('round-trips the Pi official catalog provider id without adding it to other runtimes', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'official-pi',
+      name: 'Official Pi',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          piCatalogProviderId: 'deepseek',
+          models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+        },
+      },
+    });
+    expect((await getCustomProvider('official-pi'))?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    expect(validateCustomProviderConfig({
+      id: 'bad-catalog-runtime',
+      name: 'Bad',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          piCatalogProviderId: 'deepseek',
+          models: [{ id: 'm', name: 'M' }],
+        },
+      },
+    }).ok).toBe(false);
+  });
+
   it('round-trips only an explicitly enabled Pi reasoning capability', async () => {
     mountDb();
     await createCustomProvider({

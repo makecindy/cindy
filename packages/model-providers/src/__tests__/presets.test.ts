@@ -45,6 +45,30 @@ const VALID_PRESET = {
 };
 
 describe('sanitizePresets', () => {
+  it('accepts Pi official catalog provider ids only on Pi runtimes', () => {
+    const valid = {
+      ...VALID_PRESET,
+      id: 'pi-catalog',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          piCatalogProviderId: 'deepseek',
+          models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+        },
+      },
+    };
+    expect(sanitizePresets([valid])).toEqual([valid]);
+    expect(sanitizePresets([{
+      ...valid,
+      id: 'wrong-runtime',
+      runtimes: { codex: valid.runtimes.pi },
+    }])).toEqual([]);
+    expect(sanitizePresets([{
+      ...valid,
+      id: 'bad-id',
+      runtimes: { pi: { ...valid.runtimes.pi, piCatalogProviderId: '../xai' } },
+    }])).toEqual([]);
+  });
   it('accepts explicit Pi reasoning metadata and rejects ambiguous capability declarations', () => {
     const piReasoning = {
       ...VALID_PRESET,
@@ -246,6 +270,28 @@ describe('parseCatalog presets 容错', () => {
 });
 
 describe('mergeWithBundled presets 兜底', () => {
+  it('远端 xAI 目录不能覆盖客户端随 Pi 官方目录同步的原生模型清单', () => {
+    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!;
+    const remoteXai = {
+      ...bundledXai,
+      agents: ['claude-code', 'codex'] as AgentKind[],
+      routing: {
+        'claude-code': bundledXai.routing['claude-code']!,
+        codex: bundledXai.routing.codex!,
+      },
+      models: {
+        'claude-code': bundledXai.models['claude-code']!,
+        codex: bundledXai.models.codex!,
+      },
+    };
+    const merged = mergeWithBundled(minimalCatalog({ providers: [remoteXai] }));
+    const xai = merged.providers.find((provider) => provider.id === 'xai');
+    expect(xai?.agents).toContain('pi');
+    expect(xai?.routing.pi).toEqual(bundledXai.routing.pi);
+    expect(xai?.models.pi).toEqual(bundledXai.models.pi);
+    expect(xai?.models.pi?.some((model) => model.id === 'grok-4.6')).toBe(true);
+  });
+
   it('远端 presets 与 bundled 按 id 合并：远端同 id 优先，bundled 缺项不丢', () => {
     const merged = mergeWithBundled(minimalCatalog({ presets: [VALID_PRESET] }));
     expect(merged.presets?.find((preset) => preset.id === 'openrouter')).toEqual(VALID_PRESET);
@@ -657,33 +703,44 @@ describe('官方渠道预设契约', () => {
     });
   });
 
-  it('DeepSeek 为 Pi 提供 1M 上下文、真实三档推理强度并默认 high', () => {
-    expect(preset('deepseek')?.runtimes.pi?.models).toEqual([
-      {
-        id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_000_000,
-        reasoning: true, reasoningEfforts: ['low', 'high', 'max'], reasoningDefaultEffort: 'high',
-      },
-      {
-        id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_000_000,
-        reasoning: true, reasoningEfforts: ['low', 'high', 'max'], reasoningDefaultEffort: 'high',
-      },
-    ]);
+  it('DeepSeek 的 Pi runtime 来自官方目录并保留逐模型推理档位', () => {
+    const pi = preset('deepseek')?.runtimes.pi;
+    expect(pi?.piCatalogProviderId).toBe('deepseek');
+    expect(pi?.models.find((model) => model.id === 'deepseek-v4-flash')).toMatchObject({
+      contextWindow: 1_000_000,
+      reasoning: true,
+      reasoningEfforts: ['low', 'high', 'max'],
+      reasoningDefaultEffort: 'high',
+    });
+    expect(pi?.models.find((model) => model.id === 'deepseek-v4-pro')).toMatchObject({
+      contextWindow: 1_000_000,
+      reasoning: true,
+      reasoningEfforts: ['high', 'max'],
+      reasoningDefaultEffort: 'high',
+    });
   });
 
   it.each([
     ['moonshot-kimi-cn', 'https://api.moonshot.cn/v1'],
     ['moonshot-kimi-global', 'https://api.moonshot.ai/v1'],
-  ])('%s 为 Pi 提供 Kimi 官方上下文、视觉能力与 K3 推理档位', (id, baseUrl) => {
+  ])('%s 为 Pi 同步完整 Kimi 官方目录与逐模型能力', (id, baseUrl) => {
     const pi = preset(id)?.runtimes.pi;
     expect(pi?.baseUrl).toBe(baseUrl);
-    expect(pi?.models).toEqual([
-      {
-        id: 'kimi-k3', name: 'Kimi K3', contextWindow: 1_000_000, supportsImageInput: true,
-        reasoning: true, reasoningEfforts: ['low', 'high', 'max'], reasoningDefaultEffort: 'max',
-      },
-      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', contextWindow: 262_144, supportsImageInput: true },
-      { id: 'kimi-k2.6', name: 'Kimi K2.6', contextWindow: 262_144, supportsImageInput: true },
-    ]);
+    expect(pi?.piCatalogProviderId).toBe(id === 'moonshot-kimi-cn' ? 'moonshotai-cn' : 'moonshotai');
+    expect(pi?.models.length).toBeGreaterThan(3);
+    expect(pi?.models.find((model) => model.id === 'kimi-k3')).toMatchObject({
+      contextWindow: 1_048_576,
+      supportsImageInput: true,
+      reasoning: true,
+      reasoningEfforts: ['low', 'high', 'max'],
+      reasoningDefaultEffort: 'max',
+    });
+    expect(pi?.models.find((model) => model.id === 'kimi-k2.7-code')).toMatchObject({
+      contextWindow: 262_144,
+      supportsImageInput: true,
+      reasoning: true,
+      reasoningEfforts: ['minimal', 'low', 'medium', 'high'],
+    });
   });
 
   it.each([

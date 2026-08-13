@@ -153,7 +153,13 @@ describe('mergeWithBundled', () => {
     expect(merged.modelRegistry).toBe(newerRegistry);
     expect(merged.modelRegistry?.models).toHaveLength(1);
     expect(merged.modelRegistry?.models[0]?.status).toBe('retired');
-    expect(merged.providers.find((provider) => provider.id === 'xai')).toBe(newerXai);
+    const mergedXai = merged.providers.find((provider) => provider.id === 'xai');
+    expect(mergedXai).toMatchObject({
+      ...newerXai,
+      agents: expect.arrayContaining(['claude-code', 'codex', 'pi']),
+      routing: expect.objectContaining({ pi: bundledXai.routing.pi }),
+      models: expect.objectContaining({ pi: bundledXai.models.pi }),
+    });
   });
 
   it('orders result by bundled provider order (v2 远端只带 xai 时不得窜位)', () => {

@@ -6,6 +6,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { derivePiRuntimeFromClaudeRuntime } from '../../../shared/piRuntimeInitialization.js';
 
+vi.mock('../grok-oauth-login.js', () => ({
+  getGrokAccessToken: async () => 'grok-oauth-token',
+  hasGrokOAuthLogin: () => true,
+}));
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
@@ -14,7 +19,12 @@ vi.mock('electron', () => ({
   },
 }));
 
-import { buildPiNativeProvidersFromConfigs, piNativeKeyEnvVar } from '../pi-host.js';
+import {
+  buildXaiPiNativeProvider,
+  buildPiNativeProvidersFromConfigs,
+  piNativeKeyEnvVar,
+  piNativeModelId,
+} from '../pi-host.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
 
@@ -25,6 +35,66 @@ const piRuntime = (over: Partial<NonNullable<Cfg['runtimes']['pi']>> = {}) => ({
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
+  it('reuses Pi official metadata and keeps only the models selected in Cindy', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'deepseek-local',
+        name: 'DeepSeek Local',
+        auth: { method: 'apiKey' },
+        runtimes: {
+          pi: piRuntime({
+            baseUrl: 'https://proxy.example/v1',
+            piCatalogProviderId: 'deepseek',
+            models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+          }),
+        },
+      }],
+      () => 'secret',
+    );
+    expect(providers[0]).toMatchObject({
+      id: 'deepseek-local',
+      baseUrl: 'https://proxy.example/v1',
+      models: [{
+        id: 'deepseek-v4-pro',
+        api: 'openai-completions',
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        reasoning: true,
+        thinkingLevelMap: { low: null, high: 'high', max: 'max' },
+      }],
+    });
+    expect(providers[0]?.models).toHaveLength(1);
+  });
+
+  it('maps historical xAI namespaced ids to Pi official bare ids', () => {
+    expect(piNativeModelId('xai', 'xai/grok-4.6')).toBe('grok-4.6');
+    expect(piNativeModelId('xai', 'grok-4.6')).toBe('grok-4.6');
+    expect(piNativeModelId('deepseek', 'xai/grok-4.6')).toBe('xai/grok-4.6');
+  });
+
+  it('builds Grok 4.6 from the Pi official xAI catalog without losing protocol metadata', async () => {
+    const { providers, env } = await buildXaiPiNativeProvider('xai/grok-4.6');
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({
+      id: 'xai',
+      baseUrl: 'https://api.x.ai/v1',
+      api: 'openai-completions',
+      modelIdAliases: { 'xai/grok-4.6': 'grok-4.6' },
+    });
+    expect(providers[0]?.models.find((model) => model.id === 'grok-4.6')).toMatchObject({
+      api: 'openai-completions',
+      contextWindow: 500_000,
+      maxTokens: 500_000,
+      input: ['text', 'image'],
+      reasoning: true,
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+      },
+    });
+    expect(env).toEqual({ CINDY_PI_KEY_XAI: 'grok-oauth-token' });
+  });
   it('turns a Claude-derived wizard runtime and copied Pi key into a callable native provider', () => {
     const derived = derivePiRuntimeFromClaudeRuntime({
       baseUrl: 'https://api.example/anthropic',

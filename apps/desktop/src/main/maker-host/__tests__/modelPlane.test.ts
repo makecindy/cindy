@@ -105,6 +105,7 @@ describe('registry presence 实体化', () => {
     setActiveCatalog(generatedCatalog);
     expect(models('xai', 'claude-code')).toEqual(expected.models['claude-code']);
     expect(models('xai', 'codex')).toEqual(expected.models.codex);
+    expect(models('xai', 'pi')).toEqual(expected.models.pi);
   });
 
   it('远端宣告 GPT-6(status+能力自洽)→ 免发现进入 codex root,并自动派生 claude/pi bridge', () => {
@@ -524,7 +525,7 @@ describe('本地 override(local 永远最高)', () => {
     expect(models('xai', 'codex').map((model) => model.id)).toEqual(xaiOrder);
   });
 
-  it('一条 perAgent.codex patch 只修 xAI Codex 档位,claude root 与 pi 镜像不动', () => {
+  it('一条 perAgent.codex patch 只修 xAI Codex 档位,claude root 与 Pi 官方目录不动', () => {
     setActiveCatalog(baseCatalog([grokEntry()]));
     setLocalCatalogOverrides(
       overridesOf({
@@ -541,8 +542,8 @@ describe('本地 override(local 永远最高)', () => {
     });
     const claude = models('xai', 'claude-code').find((m) => m.id === 'xai/grok-test');
     expect(claude).toMatchObject({ efforts: ['low', 'medium', 'high', 'xhigh'] });
-    // Pi 恒定镜像 claude-code root,拿满 root 档位。
-    expect(models('xai', 'pi').find((m) => m.id === 'xai/grok-test')).toEqual(claude);
+    expect(models('xai', 'pi').find((m) => m.id === 'xai/grok-test')).toBeUndefined();
+    expect(models('xai', 'pi').some((m) => m.id === 'grok-4.6')).toBe(true);
   });
 
   it('本地 perAgent 也在 bridge 目标端生效,且不能写展示/status 字段', () => {

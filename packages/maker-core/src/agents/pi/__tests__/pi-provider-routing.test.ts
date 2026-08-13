@@ -184,6 +184,121 @@ describe('Pi provider-aware model routing', () => {
     await nativeHandle.close();
   });
 
+  it('starts a namespaced Grok 4.6 selection on Pi native xAI and snapshots the bare id', async () => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'xai/grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: ['minimal', 'low', 'medium', 'high'],
+          defaultEffort: 'medium',
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'xai',
+          name: 'xAI',
+          baseUrl: 'https://api.x.ai/v1',
+          api: 'openai-completions',
+          apiKeyEnvVar: 'CINDY_PI_KEY_XAI',
+          modelIdAliases: { 'xai/grok-4.6': 'grok-4.6' },
+          models: [{
+            id: 'grok-4.6',
+            api: 'openai-completions',
+            contextWindow: 500_000,
+            maxTokens: 500_000,
+            input: ['text', 'image'],
+            reasoning: true,
+            compat: {
+              supportsStore: false,
+              supportsDeveloperRole: false,
+              supportsReasoningEffort: false,
+            },
+          }],
+        }],
+        env: { CINDY_PI_KEY_XAI: 'oauth-token' },
+      }),
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'grok-46-native',
+      workingDir: cwd,
+      model: 'xai/grok-4.6',
+      providerId: 'xai',
+      effort: 'medium',
+    });
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
+      .toEqual(['--provider', 'xai']);
+    expect(captured.args.slice(captured.args.indexOf('--model'), captured.args.indexOf('--model') + 2))
+      .toEqual(['--model', 'grok-4.6']);
+    expect(captured.env.CINDY_PI_KEY_XAI).toBe('oauth-token');
+
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, { models: Array<Record<string, unknown>> }> };
+    expect(models.providers.xai?.models.find((model) => model.id === 'grok-4.6')).toMatchObject({
+      api: 'openai-completions',
+      contextWindow: 500_000,
+      maxTokens: 500_000,
+      input: ['text', 'image'],
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+      },
+    });
+    expect(JSON.parse(readFileSync(runtimeFileOf('subagent', 'grok-46-native'), 'utf8'))).toEqual({
+      model: 'grok-4.6',
+      provider: 'xai',
+    });
+    await handle.close();
+  });
+
+  it('fails closed when an explicit xAI selection cannot build the Pi native provider', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: ['minimal', 'low', 'medium', 'high'],
+          defaultEffort: 'medium',
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => {
+        throw new Error('xAI token unavailable');
+      },
+    };
+    await expect(new PiAgent(deps).startSession({
+      sessionId: 'grok-46-native-failed',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+    })).rejects.toThrow(/BYOM provider 'xai' cannot serve model 'grok-4.6'.*refusing to fall back/);
+    expect(captured.args).toEqual([]);
+  });
+
   it('keeps built-in gateway reasoning when a same-id non-reasoning BYOM empties the flat effort intersection', async () => {
     const resolver = vi.fn((_providerId: string | null | undefined, modelId: string) => {
       if (modelId !== 'shared-model') return null;

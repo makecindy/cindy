@@ -24,11 +24,17 @@ import type {
   AgentRuntimeConfig,
   AuthAdapterOptions,
   PiNativeApi,
+  PiNativeModelSpec,
   PiNativeProviderSpec,
   PiNativeProvidersResult,
 } from '@cindy/maker-core';
 import { PI_REASONING_EFFORTS } from '@cindy/model-providers';
-import type { PiReasoningEffort, ProviderWireProtocol } from '@cindy/model-providers';
+import piModelCatalogJson from '@cindy/model-providers/pi-model-catalog' with { type: 'json' };
+import type {
+  CustomProviderConfig,
+  PiReasoningEffort,
+  ProviderWireProtocol,
+} from '@cindy/model-providers';
 
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
@@ -37,7 +43,7 @@ import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { desktopCodexAuthAdapter, readClaudeApiKey } from './auth-adapters.js';
 import { getClaudeEndpoint } from './anthropic-compat-proxy-host.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
-import { hasGrokOAuthLogin } from './grok-oauth-login.js';
+import { getGrokAccessToken, hasGrokOAuthLogin } from './grok-oauth-login.js';
 import hostSystemPrompt from './host-system-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
@@ -224,6 +230,46 @@ export function piNativeKeyEnvVar(providerId: string): string {
   return `CINDY_PI_KEY_${providerId.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`;
 }
 
+interface PiCatalogModel extends PiNativeModelSpec {
+  provider: string;
+  baseUrl: string;
+}
+
+const piModelCatalog = piModelCatalogJson as unknown as {
+  generatedAt: string;
+  providers: Record<string, PiCatalogModel[]>;
+};
+
+/** Keep Cindy's historical xai/ ids while Pi's official native provider uses bare model ids. */
+export function piNativeModelId(providerId: string, model: string): string {
+  return providerId === 'xai' && model.startsWith('xai/')
+    ? model.slice('xai/'.length)
+    : model;
+}
+
+function officialPiModels(
+  providerId: string,
+  selectedIds?: ReadonlySet<string>,
+): PiNativeModelSpec[] | null {
+  const models = piModelCatalog.providers[providerId];
+  if (!models) return null;
+  return models
+    .filter((model) => !selectedIds || selectedIds.has(model.id))
+    .map((model) => ({
+      id: model.id,
+      name: model.name,
+      api: model.api,
+      reasoning: model.reasoning,
+      thinkingLevelMap: model.thinkingLevelMap,
+      input: model.input,
+      cost: model.cost,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      compat: model.compat,
+      samplingParams: model.samplingParams,
+    }));
+}
+
 /**
  * 纯映射:自定义 provider 配置(含 pi runtime)→ pi 原生 provider spec + env。
  * key 读取经 `readKey` 注入(便于单测)。规则:
@@ -244,6 +290,7 @@ export function buildPiNativeProvidersFromConfigs(
         baseUrl: string;
         wireProtocol?: ProviderWireProtocol;
         headers?: Record<string, string>;
+        piCatalogProviderId?: string;
         models: Array<{
           id: string;
           name?: string;
@@ -314,35 +361,62 @@ export function buildPiNativeProvidersFromConfigs(
       api: wireProtocolToPiApi(rt.wireProtocol),
       apiKeyEnvVar,
       ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
-      models: rt.models.map((m) => {
-        const supportedEfforts = new Set(m.reasoningEfforts ?? []);
-        return {
-          id: m.id,
-          name: m.name,
-          contextWindow: m.contextWindow,
-          ...(m.supportsImageInput === true
-            ? { input: ['text', 'image'] as Array<'text' | 'image'> }
-            : {}),
-          ...(m.reasoning === true
-            ? {
-                reasoning: true,
-                thinkingLevelMap: Object.fromEntries(
-                  PI_REASONING_EFFORTS.map((effort) => [
-                    effort,
-                    supportedEfforts.has(effort) ? effort : null,
-                  ]),
-                ),
-              }
-            : {}),
-        };
-      }),
+      models: rt.piCatalogProviderId
+        ? officialPiModels(rt.piCatalogProviderId, new Set(rt.models.map((model) => model.id))) ?? []
+        : rt.models.map((m) => {
+            const supportedEfforts = new Set(m.reasoningEfforts ?? []);
+            return {
+              id: m.id,
+              name: m.name,
+              contextWindow: m.contextWindow,
+              ...(m.supportsImageInput === true
+                ? { input: ['text', 'image'] as Array<'text' | 'image'> }
+                : {}),
+              ...(m.reasoning === true
+                ? {
+                    reasoning: true,
+                    thinkingLevelMap: Object.fromEntries(
+                      PI_REASONING_EFFORTS.map((effort) => [
+                        effort,
+                        supportedEfforts.has(effort) ? effort : null,
+                      ]),
+                    ),
+                  }
+                : {}),
+            };
+        }),
     });
   }
   return { providers, env };
 }
 
+export async function buildXaiPiNativeProvider(model: string): Promise<PiNativeProvidersResult> {
+  const nativeModelId = piNativeModelId('xai', model);
+  const models = officialPiModels('xai');
+  const selected = models?.find((candidate) => candidate.id === nativeModelId);
+  if (!selected) throw new Error(`Pi official xAI catalog does not contain model '${model}'`);
+  const envVar = piNativeKeyEnvVar('xai');
+  return {
+    providers: [{
+      id: 'xai',
+      name: 'xAI',
+      baseUrl: 'https://api.x.ai/v1',
+      api: selected.api ?? 'openai-completions',
+      apiKeyEnvVar: envVar,
+      models: models ?? [],
+      modelIdAliases: Object.fromEntries(
+        (models ?? []).map((candidate) => [`xai/${candidate.id}`, candidate.id]),
+      ),
+    }],
+    env: { [envVar]: await getGrokAccessToken() },
+  };
+}
+
 /** BYOM:读 DB 自定义 provider + safeStorage key → pi 原生 provider spec。IO 外壳,逻辑在上面。 */
-async function resolvePiNativeProviders(): Promise<PiNativeProvidersResult> {
+async function resolvePiNativeProviders(
+  ctx: { providerId?: string | null; model: string },
+): Promise<PiNativeProvidersResult> {
+  if (ctx.providerId === 'xai') return buildXaiPiNativeProvider(ctx.model);
   let configs;
   try {
     configs = await listCustomProvidersWithSecureHeaders();
@@ -352,7 +426,10 @@ async function resolvePiNativeProviders(): Promise<PiNativeProvidersResult> {
     });
     return { providers: [], env: {} };
   }
-  return buildPiNativeProvidersFromConfigs(configs, readCustomProviderKey, (id, reason) =>
+  const selectedConfigs = ctx.providerId
+    ? configs.filter((config: CustomProviderConfig) => config.id === ctx.providerId)
+    : configs;
+  return buildPiNativeProvidersFromConfigs(selectedConfigs, readCustomProviderKey, (id, reason) =>
     log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
   );
 }
@@ -383,7 +460,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiAgentHome: () => path.join(app.getPath('userData'), 'pi-agent-home'),
     preparePiExtraSpawnConfig: (providers, ctx) => getPiExtraSpawnConfig(providers, opts.logger, ctx),
     registerPiProxySession,
-    resolvePiNativeProviders: () => resolvePiNativeProviders(),
+    resolvePiNativeProviders: (ctx) => resolvePiNativeProviders(ctx),
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
     resolvePiGatewayModelApi: (providerId, modelId) => {

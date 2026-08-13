@@ -37,6 +37,7 @@ const EXPECTED_XAI_IDS = [
   'xai/grok-4.20',
   'xai/grok-code-fast',
 ];
+const EXPECTED_XAI_PI_IDS = ['grok-4.3', 'grok-4.5', 'grok-4.6', 'grok-build-0.1'];
 
 function provider(id: string) {
   const p = BUNDLED_CATALOG.providers.find((x) => x.id === id);
@@ -119,6 +120,13 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     const xai = provider('xai');
     expect((xai.models['claude-code'] ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_IDS);
     expect((xai.models.codex ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_IDS);
+    expect((xai.models.pi ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_PI_IDS);
+    expect(xai.models.pi?.find((m) => m.id === 'grok-4.6')).toMatchObject({
+      contextWindow: 500_000,
+      maxOutput: 500_000,
+      supportsImageInput: true,
+      efforts: ['minimal', 'low', 'medium', 'high'],
+    });
   });
 
   it('xai ships both Grok Imagine subscription image models', () => {
@@ -197,11 +205,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     ).toBe(1_000_000);
   });
 
-  it('Kimi Code(编程计划)预设的每个模型都带 contextWindow(k3 缺失曾回落 200K)', () => {
-    // k3 此前没带 contextWindow → buildUserProvider 回落 200K 保守默认:选择器
-    // 显示 200K 且压缩阈值过早触发(用户反馈「动不动就压缩」)。取 262144 与同
-    // 套餐 kimi-for-coding 口径一致(K3 开放平台规格 1M,但编程计划端点是否限窗
-    // 无公开文档,保守取值;实测放开后可上调)。
+  it('Kimi Code(编程计划)按各 harness 的权威目录保留 contextWindow', () => {
     const presets = BUNDLED_CATALOG.presets ?? [];
     const kimiCode = presets.find((p) => p.id === 'moonshot-kimi-code');
     expect(kimiCode).toBeDefined();
@@ -212,7 +216,9 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
           `${agent}/${m.id} 缺 contextWindow`,
         ).toBe(true);
       }
-      expect(rt!.models.find((m) => m.id === 'k3')?.contextWindow, `${agent}/k3`).toBe(262_144);
+      expect(rt!.models.find((m) => m.id === 'k3')?.contextWindow, `${agent}/k3`).toBe(
+        agent === 'pi' ? 1_048_576 : 262_144,
+      );
     }
   });
 

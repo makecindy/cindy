@@ -217,6 +217,16 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       return invalid(`runtime '${agent}' modelsUrl is not a valid URL`);
     }
   }
+  if (
+    r.piCatalogProviderId !== undefined
+    && (
+      agent !== 'pi'
+      || typeof r.piCatalogProviderId !== 'string'
+      || !/^[a-z0-9-]+$/.test(r.piCatalogProviderId)
+    )
+  ) {
+    return invalid(`runtime '${agent}' piCatalogProviderId invalid`);
+  }
   return { ok: true };
 }
 
@@ -420,6 +430,7 @@ function normalizeRuntime(
     out.requestPath = rt.requestPath.trim();
   }
   if (rt.modelsUrl && rt.modelsUrl.trim()) out.modelsUrl = rt.modelsUrl.trim();
+  if (agent === 'pi' && rt.piCatalogProviderId) out.piCatalogProviderId = rt.piCatalogProviderId;
   return out;
 }
 
@@ -570,6 +581,13 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       entry.headers = r.headers as Record<string, string>;
     }
     if (typeof r.modelsUrl === 'string' && r.modelsUrl.length > 0) entry.modelsUrl = r.modelsUrl;
+    if (
+      agent === 'pi'
+      && typeof r.piCatalogProviderId === 'string'
+      && /^[a-z0-9-]+$/.test(r.piCatalogProviderId)
+    ) {
+      entry.piCatalogProviderId = r.piCatalogProviderId;
+    }
     out[agent] = entry;
   }
   return out;

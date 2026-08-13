@@ -63,8 +63,10 @@ function injectedCatalog(): Catalog {
 describe('deriveAvailableModels — dynamic-first catalog contract', () => {
   it('adds native minimal thinking to reasoning-capable Pi models only', () => {
     const pi = deriveAvailableModels(BUNDLED_CATALOG, 'pi');
-    expect(pi.find((m) => m.id === 'xai/grok-4.3')?.efforts[0]).toBe('minimal');
-    expect(pi.find((m) => m.id === 'xai/grok-code-fast')?.efforts).toEqual([]);
+    expect(pi.find((m) => m.id === 'grok-4.3')?.efforts[0]).toBe('minimal');
+    expect(pi.find((m) => m.id === 'grok-4.6')?.efforts).toEqual([
+      'minimal', 'low', 'medium', 'high',
+    ]);
   });
 
   it('preserves the explicit effort subset of a Pi BYOM model in remote capabilities', () => {
@@ -114,13 +116,13 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
             wireProtocol: 'openai-responses',
             models: [
               {
-                id: 'xai/grok-4.3',
+                id: 'grok-4.3',
                 name: 'Grok 4.3 through BYOM',
                 reasoning: true,
                 reasoningEfforts: ['low'],
               },
               {
-                id: 'xai/grok-4.5',
+                id: 'grok-4.5',
                 name: 'Grok 4.5 without declared reasoning',
               },
             ],
@@ -130,25 +132,25 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     );
 
     const flatModels = deriveAvailableModels(catalog, 'pi');
-    const flat = flatModels.filter((m) => m.id === 'xai/grok-4.3');
+    const flat = flatModels.filter((m) => m.id === 'grok-4.3');
     expect(flat).toHaveLength(1);
     expect(flat[0]).toMatchObject({
       efforts: ['low'],
       defaultEffort: 'low',
     });
     expect(
-      resolvePiRuntimeModelDescriptor(catalog, 'colliding-reasoning', 'xai/grok-4.3'),
+      resolvePiRuntimeModelDescriptor(catalog, 'colliding-reasoning', 'grok-4.3'),
     ).toMatchObject({
       efforts: ['low'],
       defaultEffort: 'low',
     });
-    expect(flatModels.find((m) => m.id === 'xai/grok-4.5')).toMatchObject({
+    expect(flatModels.find((m) => m.id === 'grok-4.5')).toMatchObject({
       efforts: [],
       defaultEffort: null,
     });
   });
 
-  it('resolves the cindy gateway descriptor from built-ins when a non-reasoning BYOM claims the same id first', () => {
+  it('resolves the native xAI descriptor when a non-reasoning BYOM claims the same id first', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     catalog.providers.unshift(
       buildUserProvider({
@@ -159,22 +161,22 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
           pi: {
             baseUrl: 'http://127.0.0.1:11434/v1',
             wireProtocol: 'openai-responses',
-            models: [{ id: 'xai/grok-4.5', name: 'Grok 4.5 without reasoning' }],
+            models: [{ id: 'grok-4.5', name: 'Grok 4.5 without reasoning' }],
           },
         },
       }),
     );
 
-    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'xai/grok-4.5')).toMatchObject({
+    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'grok-4.5')).toMatchObject({
       efforts: [],
       defaultEffort: null,
     });
     expect(
-      resolvePiRuntimeModelDescriptor(catalog, 'colliding-non-reasoning', 'xai/grok-4.5'),
+      resolvePiRuntimeModelDescriptor(catalog, 'colliding-non-reasoning', 'grok-4.5'),
     ).toMatchObject({ efforts: [], defaultEffort: null });
-    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'xai/grok-4.5')).toMatchObject({
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'xai', 'grok-4.5')).toMatchObject({
       efforts: ['minimal', 'low', 'medium', 'high'],
-      defaultEffort: 'high',
+      defaultEffort: 'medium',
     });
   });
 
