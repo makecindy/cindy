@@ -222,17 +222,33 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     // 草稿里持久化的来源/模型按**目标设备**的目录收窄:device-link 分支必须用
     // deviceProviders,拿控制端的 localProviders 收窄等于用错机器的目录。
     const collapsed = source.replace(/\s+/g, ' ');
-    const remoteNarrowing =
-      collapsed.match(
-        /draftEnableOrcaOptions\( effectiveCollab, deviceProviders, !deviceProvidersLoading, \)/g,
-      ) ?? [];
-    expect(remoteNarrowing).toHaveLength(2);
-    // 本机 / SSH 的四条路径仍按控制端目录收窄,不能被一起改掉。
     expect(
       collapsed.match(
-        /draftEnableOrcaOptions\(\s*effectiveCollab,\s*localProviders,\s*!localProvidersLoading,?\s*\)/g,
+        /draftEnableOrcaOptions\( effectiveCollab, deviceProviders, !deviceProvidersLoading, message, \)/g,
       ) ?? [],
-    ).toHaveLength(4);
+    ).toHaveLength(1);
+    expect(
+      collapsed.match(
+        /draftEnableOrcaOptions\( effectiveCollab, deviceProviders, !deviceProvidersLoading, objective, \)/g,
+      ) ?? [],
+    ).toHaveLength(1);
+    // 本机 / SSH 仍按控制端目录收窄。真正提交首条输入的三条路径同时把它交给 Worker;
+    // 「添加远程项目」只迁移未发送的 composer 草稿,不应擅自把它暴露成 Worker 上下文。
+    expect(
+      collapsed.match(
+        /draftEnableOrcaOptions\( effectiveCollab, localProviders, !localProvidersLoading, message, \)/g,
+      ) ?? [],
+    ).toHaveLength(2);
+    expect(
+      collapsed.match(
+        /draftEnableOrcaOptions\( effectiveCollab, localProviders, !localProvidersLoading, objective, \)/g,
+      ) ?? [],
+    ).toHaveLength(1);
+    expect(
+      collapsed.match(
+        /draftEnableOrcaOptions\(\s*effectiveCollab, localProviders, !localProvidersLoading\)/g,
+      ) ?? [],
+    ).toHaveLength(1);
   });
 
   it('re-validates the worker agent against the target device catalog', () => {

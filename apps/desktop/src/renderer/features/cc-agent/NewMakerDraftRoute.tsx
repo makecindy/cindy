@@ -131,6 +131,7 @@ import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
+import { buildDraftWorkerInitialTask } from './draftWorkerHandoff';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import {
@@ -368,6 +369,7 @@ function draftEnableOrcaOptions(
   collab: CollabDraft,
   providers: ProviderView[],
   providersReady: boolean,
+  pendingLeadInput?: string,
 ) {
   const preferredAgent: 'claude-code' | 'codex' | 'pi' =
     collab.worker === 'codex' ? 'codex' : collab.worker === 'pi' ? 'pi' : 'claude-code';
@@ -396,7 +398,7 @@ function draftEnableOrcaOptions(
       workerAgent,
       role: cfg.role,
       label: createWorkerLabel(cfg.role, []),
-      delegateTask: cfg.initialTask || undefined,
+      delegateTask: buildDraftWorkerInitialTask(cfg.initialTask, pendingLeadInput),
       workerPermissionMode: cfg.workerPermissionMode,
     };
   }
@@ -432,7 +434,7 @@ function draftEnableOrcaOptions(
     effort: cfg.effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined,
     fast: cfg.fast,
     providerId,
-    delegateTask: cfg.initialTask || undefined,
+    delegateTask: buildDraftWorkerInitialTask(cfg.initialTask, pendingLeadInput),
     workerPermissionMode: cfg.workerPermissionMode,
   };
 }
@@ -3294,6 +3296,7 @@ export function NewMakerDraftRoute() {
                         effectiveCollab,
                         deviceProviders,
                         !deviceProvidersLoading,
+                        message,
                       ),
                     },
                   }
@@ -3501,6 +3504,7 @@ export function NewMakerDraftRoute() {
                         effectiveCollab,
                         localProviders,
                         !localProvidersLoading,
+                        message,
                       ),
                     );
                     // worktree 创建在后台完成,组件可能已经切走;这里读取当前 URL,
@@ -3623,7 +3627,12 @@ export function NewMakerDraftRoute() {
             try {
               const result = await window.electronAPI.maker.enableOrca(
                 newSession.id,
-                draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
+                draftEnableOrcaOptions(
+                  effectiveCollab,
+                  localProviders,
+                  !localProvidersLoading,
+                  message,
+                ),
               );
               orcaNavTarget = `/cc-agent/${newSession.id}`;
               orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
@@ -4027,6 +4036,7 @@ export function NewMakerDraftRoute() {
                       effectiveCollab,
                       deviceProviders,
                       !deviceProvidersLoading,
+                      objective,
                     ),
                   },
                 }
@@ -4205,7 +4215,12 @@ export function NewMakerDraftRoute() {
           try {
             const result = await window.electronAPI.maker.enableOrca(
               newSession.id,
-              draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
+              draftEnableOrcaOptions(
+                effectiveCollab,
+                localProviders,
+                !localProvidersLoading,
+                objective,
+              ),
             );
             orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
           } catch (err) {

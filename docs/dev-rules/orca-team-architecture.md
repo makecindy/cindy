@@ -131,9 +131,11 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
 - renderer 开启协同走 `CCAgentSessionView.tsx` 的 `requestEnableCollab`，MCP 工具通过 `cindy_orca` callback 进入同一组 service。
 - renderer 通过 UI 开启协同且填写了首个任务时，`OrcaLifecycleService.enableTeam` 在既有
   `initial_task` 派发正文中附带 Lead session id 和 `cindy_helper` history 工具的按需回查
-  指引。Worker 只有在任务依赖「当前工作／继续／这个 PR」等相对上下文时才查 Lead 历史；
-  自包含任务直接执行。该 handoff 不向 Lead 发消息、不唤醒 Lead，也不改写 MCP
-  `create_worker` / `create_workers` 已由 Lead 组织好的 `initial_task`。
+  指引。新建任务页在 Lead 首条输入尚未写进 history 时，还会把这条待发送输入作为
+  `initial_task` 的上下文一并交接；没有显式 Worker 任务时不会用 Lead 输入擅自起任务。
+  Worker 只有在任务依赖「当前工作／继续／这个 PR」等相对上下文时才查 Lead 历史；自包含
+  任务直接执行。该 handoff 不向 Lead 发消息、不唤醒 Lead，也不改写 MCP `create_worker` /
+  `create_workers` 已由 Lead 组织好的 `initial_task`。
 
 ### Codex Lead 机制
 
