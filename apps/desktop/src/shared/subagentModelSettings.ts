@@ -19,6 +19,10 @@
  * 请求的凭证路由。
  */
 export interface SubagentModelSettings {
+  /** false = keep the original model behavior when an image is attached. */
+  visionFallbackEnabled: boolean;
+  /** null = use Cindy's automatic vision fallback model. */
+  visionFallbackModel: string | null;
   claudeCode: string | null;
   claudeCodeProviderId: string | null;
   codex: string | null;
@@ -34,6 +38,9 @@ export interface SubagentModelSettings {
   /** true → 注入 `-c agents.max_depth=2`。上游该键仅 V1 生效，V2 忽略（UI hint 已注明）。 */
   codexAllowNestedSubagents: boolean;
 }
+
+/** 自动视觉兜底模型；用户可在设置中覆盖。 */
+export const DEFAULT_VISION_FALLBACK_MODEL = 'codex/gpt-5.6-luna';
 
 /**
  * 与 codex-model-discovery.ts 的 CODEX_EFFORTS 透传白名单一致（不含 minimal——codex
@@ -72,6 +79,8 @@ export type SubagentModelSettingsWriteResult = SubagentModelSettingsState & {
 };
 
 export const SUBAGENT_MODEL_SETTINGS_DEFAULTS: SubagentModelSettings = {
+  visionFallbackEnabled: true,
+  visionFallbackModel: null,
   claudeCode: null,
   claudeCodeProviderId: null,
   codex: null,

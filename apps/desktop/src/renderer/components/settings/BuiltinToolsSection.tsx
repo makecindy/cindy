@@ -38,6 +38,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { VisionFallbackRow } from './VisionFallbackSection';
 
 const log = createLogger('BuiltinToolsSection');
 
@@ -221,6 +222,10 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
           'border border-[var(--settings-theme-card-border)]',
         )}
       >
+        <VisionFallbackRow />
+        {plugins.length > 0 && (
+          <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
+        )}
         {plugins.map((plugin, index) => (
           <PluginRow
             key={plugin.id}

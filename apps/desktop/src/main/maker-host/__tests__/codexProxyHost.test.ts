@@ -309,6 +309,96 @@ describe('withCodexUpstreamRecording', () => {
   });
 });
 
+describe('withCodexVisionFallback', () => {
+  const ctxFor = (threadId?: string) => ({
+    reqId: 1,
+    method: 'POST',
+    url: '/responses',
+    headers: threadId ? { 'thread-id': threadId } : {},
+  }) as never;
+
+  const imageBody = (model: string) => ({
+    model,
+    input: [{
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_image', image_url: 'data:image/png;base64,eA==' }],
+    }],
+  });
+
+  it('switches a text-only model to the vision fallback when the request contains an image', async () => {
+    const host = await freshCodexProxyHost();
+    const wrapped = host.withCodexVisionFallback(() => null);
+
+    const decision = await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-vision'));
+
+    expect(decision).toEqual({ bodyModelOverride: 'codex/gpt-5.6-luna' });
+  });
+
+  it('does not fall back when the body has no image', async () => {
+    const host = await freshCodexProxyHost();
+    const wrapped = host.withCodexVisionFallback(() => null);
+
+    const decision = await wrapped(
+      { model: 'deepseek/deepseek-v4-pro', input: 'hello' },
+      ctxFor('t-text'),
+    );
+
+    expect(decision).toBeNull();
+  });
+
+  it('does not fall back for a vision-capable model', async () => {
+    const host = await freshCodexProxyHost();
+    const wrapped = host.withCodexVisionFallback(() => null);
+
+    const decision = await wrapped(imageBody('gpt-5.6-sol'), ctxFor('t-vision-model'));
+
+    expect(decision).toBeNull();
+  });
+
+  it('keeps an upstreamOverride decision untouched (custom provider / OAuth direct)', async () => {
+    const host = await freshCodexProxyHost();
+    const inner = { upstreamOverride: 'https://api.x.ai/v1' };
+    const wrapped = host.withCodexVisionFallback(() => inner);
+
+    const decision = await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-custom'));
+
+    expect(decision).toBe(inner);
+  });
+
+  it('keeps a localHandler decision untouched', async () => {
+    const host = await freshCodexProxyHost();
+    const inner = { localHandler: { handle: async () => undefined } } as never;
+    const wrapped = host.withCodexVisionFallback(() => inner);
+
+    const decision = await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-local'));
+
+    expect(decision).toBe(inner);
+  });
+
+  it('preserves a gateway key headerOverride while adding the fallback model', async () => {
+    const host = await freshCodexProxyHost();
+    const inner = { headerOverride: { authorization: 'Bearer sk-gateway' } };
+    const wrapped = host.withCodexVisionFallback(() => inner);
+
+    const decision = await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-header'));
+
+    expect(decision).toEqual({
+      headerOverride: { authorization: 'Bearer sk-gateway' },
+      bodyModelOverride: 'codex/gpt-5.6-luna',
+    });
+  });
+
+  it('applies through an async inner decision', async () => {
+    const host = await freshCodexProxyHost();
+    const wrapped = host.withCodexVisionFallback(() => Promise.resolve(null));
+
+    await expect(wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-async'))).resolves.toEqual({
+      bodyModelOverride: 'codex/gpt-5.6-luna',
+    });
+  });
+});
+
 describe('codex gateway config', () => {
   it('所有认证模式都让缺少 model metadata 的 Codex 模型使用 CodeModeOnly', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');

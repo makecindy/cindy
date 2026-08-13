@@ -93,7 +93,16 @@ export interface RoutingDecision {
    */
   headerDelete?: string[];
   /**
-   * 本地 handler(见 LocalRequestHandler)。与上面四个转发字段**互斥**:设了 handler 时其余
+   * 转发前**替换** JSON 请求体顶层的 `model` 字段(仅对 application/json 请求生效;
+   * 非 JSON / localHandler 分支不应用)。典型用途: host 检测到「纯文本模型 + 本轮含图」
+   * 时,把整轮请求切到可识图模型再转发,而不是让上游网关直接 400。
+   * 替换发生在 request transform 链**之后**、`forward` 之前,所以 transform 仍基于原始
+   * model 做兼容改写;`forward` 的 clientModel 仍保留替换前的原值,recovery 规则据此与
+   * 下一轮主动 strip 看到的入站 model 对齐。
+   */
+  bodyModelOverride?: string;
+  /**
+   * 本地 handler(见 LocalRequestHandler)。与上面几个转发字段**互斥**:设了 handler 时其余
    * 字段忽略、不发生任何上游转发。省略 = 转发语义,与本字段引入前字节级一致。
    */
   localHandler?: LocalRequestHandler;

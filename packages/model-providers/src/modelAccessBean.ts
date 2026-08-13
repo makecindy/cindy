@@ -75,6 +75,7 @@ export interface ModelAgentOverride {
   efforts?: ModelEffort[];
   defaultEffort?: ModelEffort;
   supportsFastMode?: boolean;
+  supportsImageInput?: boolean;
   defaultEnabled?: boolean;
   wireProtocol?: ModelAccessWireProtocol;
 }
@@ -92,6 +93,7 @@ interface ModelRegistryEntryBase {
   defaultEffort?: ModelEffort;
   sortOrder?: number;
   supportsFastMode?: boolean;
+  supportsImageInput?: boolean;
   defaultEnabled?: boolean;
   perAgent?: Partial<Record<ModelAgent, ModelAgentOverride>>;
 }

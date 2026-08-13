@@ -1759,6 +1759,34 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const transformed = runTransforms(rawBody, contentType, transforms, transformCtx, logger);
     const outBody = transformed ?? rawBody;
 
+    // 原始 client model(transform 链与 bodyModelOverride 之前),recovery 规则据此与
+    // 下一轮主动 strip 看到的入站 model 对齐 —— 必须保留替换前的原值,不能用覆盖后的值。
+    const originalClientModel = extractBodyModel(rawBody);
+
+    // 纯文本模型 + 本轮含图 → host 让整轮切到可识图模型。替换发生在 transform 链**之后**,
+    // 所以 provider 兼容改写仍基于原始 model;非 JSON / 解析失败时保持 outBody 透传。
+    let forwardBody = outBody;
+    if (
+      decision?.bodyModelOverride
+      && decision.bodyModelOverride !== originalClientModel
+      && contentType.toLowerCase().startsWith('application/json')
+    ) {
+      try {
+        const overrideParsed: unknown = JSON.parse(outBody.toString('utf8'));
+        if (isRecord(overrideParsed) && typeof overrideParsed.model === 'string') {
+          overrideParsed.model = decision.bodyModelOverride;
+          forwardBody = Buffer.from(JSON.stringify(overrideParsed), 'utf8');
+          logger.info?.('overriding request model via bodyModelOverride', {
+            reqId,
+            fromModel: originalClientModel,
+            toModel: decision.bodyModelOverride,
+          });
+        }
+      } catch {
+        // 保留 outBody 透传,绝不因覆盖失败中断转发。
+      }
+    }
+
     let parsedForRewrite: unknown = rawParsed;
     if (parsedForRewrite === undefined && contentType.toLowerCase().startsWith('application/json')) {
       try {
@@ -1830,7 +1858,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       method,
       url,
       headers,
-      outBody,
+      forwardBody,
       res,
       logger,
       opts.recoveryRules ?? [],
@@ -1840,7 +1868,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       route.headerOverride,
       route.headerDelete,
       opts.responseObserver,
-      extractBodyModel(rawBody),
+      originalClientModel,
       await resolveOutboundForTarget(route.target, reqId),
       route.pathOverride,
       responseToolUseIds,

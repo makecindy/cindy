@@ -248,6 +248,8 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
 }));
 
 const DEFAULTS = {
+  visionFallbackEnabled: true,
+  visionFallbackModel: null,
   claudeCode: null,
   claudeCodeProviderId: null,
   codex: null,
@@ -839,7 +841,7 @@ describe('SubagentModelSection per-card override controls', () => {
     render(<SubagentModelSection />);
     const controls = await screen.findAllByTestId('override-reset');
     expect(controls).toHaveLength(2);
-    // 第一个在模型卡(Claude 行),第二个在护栏卡头部。
+    // 第一个在模型卡,第二个在护栏卡头部。
     expect(controls[0]?.dataset.customized).toBe('false');
     expect(controls[1]?.dataset.customized).toBe('true');
   });

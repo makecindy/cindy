@@ -86,6 +86,12 @@ import {
   recordClaudeApiActivity,
 } from './claude-session-background-activity.js';
 import { authenticatePiProxySession } from './pi-proxy-session-auth.js';
+import { readSubagentModelSettings } from './subagent-model-settings-store.js';
+import {
+  anthropicRequestBodyContainsImage,
+  configuredVisionFallbackModel,
+  isTextOnlyModel,
+} from './vision-fallback.js';
 
 // scope = 'cc-proxy' → logger.ts 的 emit() 路由把这条流量并入统一 agent 流
 // (agent-*.ndjson, source=proxy)。child(sub) 会继续保持 'cc-proxy/sub' 前缀, routing 一致。
@@ -315,8 +321,29 @@ export function createModelRoutingTransform(): RoutingTransform {
     }
     return null;
   };
+  const routeWithVisionFallback: RoutingTransform = (body, ctx) => {
+    const result = route(body, ctx);
+    const apply = (decision: RoutingDecision | null): RoutingDecision | null => {
+      if (decision?.localHandler || decision?.upstreamOverride) return decision;
+      if (
+        ctx.method !== 'POST'
+        || !isPlainObject(body)
+        || typeof body.model !== 'string'
+        || !isTextOnlyModel(body.model)
+        || !anthropicRequestBodyContainsImage(body)
+        || readSubagentModelSettings().visionFallbackEnabled === false
+      ) return decision;
+      const visionModel = configuredVisionFallbackModel(readSubagentModelSettings().visionFallbackModel);
+      log.info('claude vision fallback: text-only model + image → switching model', {
+        fromModel: body.model,
+        toModel: visionModel,
+      });
+      return { ...(decision ?? {}), bodyModelOverride: visionModel };
+    };
+    return result instanceof Promise ? result.then(apply) : apply(result);
+  };
   return (body, ctx) => {
-    const decision = route(body, ctx);
+    const decision = routeWithVisionFallback(body, ctx);
     const hasInternalPiHeader =
       headerValue(ctx.headers, 'x-cindy-pi-session-id') !== null
       || headerValue(ctx.headers, 'x-cindy-pi-session-token') !== null;

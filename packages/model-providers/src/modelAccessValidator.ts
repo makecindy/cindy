@@ -84,6 +84,7 @@ const MODEL_CATALOG_ENTRY_V1_FIELDS = [
   'defaultEffort',
   'sortOrder',
   'supportsFastMode',
+  'supportsImageInput',
   'defaultEnabled',
   'perAgent',
   ...PRICING_FIELDS,
@@ -99,6 +100,7 @@ const MODEL_AGENT_OVERRIDE_FIELDS = [
   'efforts',
   'defaultEffort',
   'supportsFastMode',
+  'supportsImageInput',
   'defaultEnabled',
 ] as const;
 const MODEL_AGENT_OVERRIDE_V3_FIELDS = [...MODEL_AGENT_OVERRIDE_FIELDS, 'wireProtocol'] as const;
@@ -125,6 +127,7 @@ const MODEL_REGISTRY_ENTRY_V1_FIELDS = [
   'defaultEffort',
   'sortOrder',
   'supportsFastMode',
+  'supportsImageInput',
   'defaultEnabled',
   'perAgent',
 ] as const;
@@ -346,7 +349,7 @@ function overrideError(
   ) {
     return `${path}.efforts must include the inherited base defaultEffort`;
   }
-  for (const key of ['supportsFastMode', 'defaultEnabled'] as const) {
+  for (const key of ['supportsFastMode', 'supportsImageInput', 'defaultEnabled'] as const) {
     if (value[key] !== undefined && typeof value[key] !== 'boolean') {
       return `${path}.${key} must be a boolean when present`;
     }
@@ -515,7 +518,7 @@ function modelEntryError(
   }
   error = optionalFiniteNumberError(value.sortOrder, `${path}.sortOrder`);
   if (error) return error;
-  for (const key of ['supportsFastMode', 'defaultEnabled'] as const) {
+  for (const key of ['supportsFastMode', 'supportsImageInput', 'defaultEnabled'] as const) {
     if (value[key] !== undefined && typeof value[key] !== 'boolean') {
       return `${path}.${key} must be a boolean when present`;
     }
@@ -820,7 +823,7 @@ function registryEntryError(
   }
   error = optionalFiniteNumberError(value.sortOrder, `${path}.sortOrder`);
   if (error) return error;
-  for (const key of ['supportsFastMode', 'defaultEnabled'] as const) {
+  for (const key of ['supportsFastMode', 'supportsImageInput', 'defaultEnabled'] as const) {
     if (value[key] !== undefined && typeof value[key] !== 'boolean') {
       return `${path}.${key} must be a boolean when present`;
     }

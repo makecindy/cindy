@@ -74,6 +74,11 @@ import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
+import { readSubagentModelSettings } from './subagent-model-settings-store.js';
+import {
+  configuredVisionFallbackModel,
+  isTextOnlyModel,
+} from './vision-fallback.js';
 
 // scope = 'codex-proxy'。保持独立 scope,方便后续 E2E 日志脚本按 codex proxy 过滤。
 const log = createMakerLogger('codex-proxy');
@@ -89,6 +94,25 @@ const CODEX_AUTO_REVIEW_MODEL = 'codex-auto-review';
 const CODEX_GUARDIAN_SUBAGENT = 'guardian';
 const CODEX_COLLAB_SPAWN_SUBAGENT = 'collab_spawn';
 const CODEX_COLLAB_ROUTE_UNAVAILABLE_CODE = 'cindy_codex_parent_route_unavailable';
+
+/**
+ * 纯文本模型 + 本轮含图 → 整轮切到的可识图兜底模型(方案 B:不回填描述,直接换模型回答)。
+ *
+ * 选型:XD 网关预算版 gpt-5.6-luna 是当前可识图模型里单价最低的(0.2 in / 1.2 out,
+ * costDiscount 0.85)。gateway wire model 以 model-access-server 运行时下发为准;
+ * 若实测 400,再据下发目录修正为 `gpt-5.6-luna` 或其它等价 id。
+ */
+
+/**
+ * Responses content part 里表示图像的 type(标准 `input_image` 及个别 bridge 的变体)。
+ * 只用于「本轮含图」的旁路判定,不影响任何改写逻辑。
+ */
+const CODEX_IMAGE_PART_TYPES = new Set(['input_image', 'image_url', 'image']);
+
+/**
+ * 纯文本(无视觉)模型的 deny-list。命中才兜底,其余模型(灰色地带)一律 fail-closed 维持现状。
+ * 覆盖带 / 不带供应商命名空间两种形态;`[1m]` 后缀在比对前归一化剥除(目录 1M 窗口追加)。
+ */
 
 let _handle: ProxyHandle | null = null;
 let _startPromise: Promise<void> | null = null;
@@ -2396,6 +2420,96 @@ export function withCodexUpstreamRecording(
   };
 }
 
+/**
+ * 「本轮含图」旁路判定:只认 `input[].content` 与顶层 `instructions`(用户可见的图像),
+ * 不递归进 tool input 之类的不透明业务数据,避免把工具参数里的字符串误判成图。
+ */
+function codexContentArrayContainsImage(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some(
+    (part) => isPlainObject(part)
+      && typeof part.type === 'string'
+      && CODEX_IMAGE_PART_TYPES.has(part.type),
+  );
+}
+
+function codexRequestBodyContainsImage(body: unknown): boolean {
+  if (!isPlainObject(body)) return false;
+  const input = body.input;
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (isPlainObject(item) && codexContentArrayContainsImage(item.content)) return true;
+    }
+  }
+  return codexContentArrayContainsImage(body.instructions);
+}
+
+/** 纯文本模型 deny-list 判定;`[1m]`(目录 1M 窗口)后缀先归一化剥除。 */
+/**
+ * 视觉兜底包装层(方案 B):纯文本模型 + 本轮含图 → 整轮切到可识图兜底模型回答。
+ *
+ * 只在「请求会落到默认网关」时兜底 —— inner 返回 null(env-key 默认网关)或仅换 header
+ * 的网关路由(gateway key)都算网关;`upstreamOverride`(OAuth 直连/自定义供应商)与
+ * `localHandler`(chat/anthropic bridge,桥接自己处理图)一律不动,避免把用户显式选的
+ * 供应商或本地桥接误切。
+ */
+export function withCodexVisionFallback(inner: RoutingTransform): RoutingTransform {
+  return (body, ctx) => {
+    const result = inner(body, ctx);
+    const apply = (decision: RoutingDecision | null): RoutingDecision | null => {
+      if (!decision) {
+        // inner 返回 null = 默认网关(env-key 态的纯文本模型正是这条路)。命中才转成覆盖。
+        if (
+          ctx.method === 'POST'
+          && isPlainObject(body)
+          && typeof body.model === 'string'
+          && isTextOnlyModel(body.model)
+          && codexRequestBodyContainsImage(body)
+          && readSubagentModelSettings().visionFallbackEnabled !== false
+        ) {
+          log.info('codex vision fallback: text-only model + image → switching model', {
+            threadId: selectedThreadIdFromHeaders(ctx.headers),
+            sessionId: sessionIdFromHeaders(ctx.headers),
+            fromModel: body.model,
+            toModel: configuredVisionFallbackModel(readSubagentModelSettings().visionFallbackModel),
+          });
+          return {
+            bodyModelOverride: configuredVisionFallbackModel(
+              readSubagentModelSettings().visionFallbackModel,
+            ),
+          };
+        }
+        return null;
+      }
+      // localHandler / upstreamOverride 不兜底(桥接自己处理图;供应商路由保留用户选择)。
+      if (decision.localHandler || decision.upstreamOverride) return decision;
+      if (
+        ctx.method === 'POST'
+        && isPlainObject(body)
+        && typeof body.model === 'string'
+        && isTextOnlyModel(body.model)
+        && codexRequestBodyContainsImage(body)
+        && readSubagentModelSettings().visionFallbackEnabled !== false
+      ) {
+        log.info('codex vision fallback: text-only model + image → switching model', {
+          threadId: selectedThreadIdFromHeaders(ctx.headers),
+          sessionId: sessionIdFromHeaders(ctx.headers),
+          fromModel: body.model,
+          toModel: configuredVisionFallbackModel(readSubagentModelSettings().visionFallbackModel),
+        });
+        return {
+          ...decision,
+          bodyModelOverride: configuredVisionFallbackModel(
+            readSubagentModelSettings().visionFallbackModel,
+          ),
+        };
+      }
+      return decision;
+    };
+    return result instanceof Promise ? result.then(apply) : apply(result);
+  };
+}
+
 function createCodexProxyHandle(
   frozenAuthInjection?: CodexProxyAuthInjection,
 ): Promise<ProxyHandle> {
@@ -2406,7 +2520,7 @@ function createCodexProxyHandle(
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
     // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
     routingTransform: withCodexUpstreamRecording(
-      createModelRoutingTransform(frozenAuthInjection),
+      withCodexVisionFallback(createModelRoutingTransform(frozenAuthInjection)),
       () => buildCodexGatewayBaseUrl(),
     ),
     responseObserver: composeResponseObservers(

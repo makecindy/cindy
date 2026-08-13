@@ -7330,13 +7330,25 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
   const input = raw as Record<string, unknown>;
   const patch: SubagentModelSettingsPatch = {};
   // providerId 与 model id 同约束(短标识串),共用同一套校验/归一化。
-  for (const key of ['claudeCode', 'claudeCodeProviderId', 'codex', 'codexProviderId'] as const) {
+  for (const key of [
+    'visionFallbackModel',
+    'claudeCode',
+    'claudeCodeProviderId',
+    'codex',
+    'codexProviderId',
+  ] as const) {
     if (!(key in input)) continue;
     const value = input[key];
     if (!isValidSubagentModelIdInput(value)) {
       throwIpcError('INVALID_PARAMS', `subagent model ${key} must be a valid string or null`);
     }
     patch[key] = normalizeSubagentModelId(value);
+  }
+  if ('visionFallbackEnabled' in input && typeof input.visionFallbackEnabled !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'subagent visionFallbackEnabled must be a boolean');
+  }
+  if ('visionFallbackEnabled' in input) {
+    patch.visionFallbackEnabled = input.visionFallbackEnabled as boolean;
   }
   // 护栏/effort 字段类型各异(enum / boolean / number|null),逐字段分支校验。
   if ('codexEffort' in input) {

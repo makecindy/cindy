@@ -21,6 +21,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: true }),
 }));
+vi.mock('../subagent-model-settings-store', () => ({
+  readSubagentModelSettings: () => ({ visionFallbackModel: null }),
+}));
 
 vi.mock('../logger-adapter', () => ({
   createMakerLogger: () => ({
@@ -152,6 +155,25 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
     expect(readClaudeSessionRoute('sess-grok')).toBe('gateway');
+  });
+
+  it('纯文本模型收到 Anthropic 图片时应切到视觉兜底模型', () => {
+    const transform = createModelRoutingTransform();
+    const decision = transform(
+      {
+        model: 'deepseek/deepseek-v4-pro',
+        messages: [{
+          role: 'user',
+          content: [{
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'eA==' },
+          }],
+        }],
+      },
+      ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
+    );
+
+    expect(decision).toEqual({ bodyModelOverride: 'codex/gpt-5.6-luna' });
   });
 });
 

@@ -973,6 +973,35 @@ describe('anthropic-compat-proxy routingTransform', () => {
     expect(JSON.parse(gateway.bodies[0]).model).toBe('gpt-5.5'); // 发上游已去前缀
   });
 
+  it('applies bodyModelOverride after request transforms while preserving the routing model', async () => {
+    const gateway = await startFakeUpstream((_i, _b, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); });
+    const chatgpt = await startFakeUpstream((_i, _b, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); });
+    upstreamClose = async () => { await gateway.close(); await chatgpt.close(); };
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: chatgpt.url,
+      transformRequest: [(body) => {
+        const request = body as { model?: string; transformed?: boolean };
+        return { ...request, transformed: true };
+      }],
+      routingTransform: (body) => {
+        const model = (body as { model?: string }).model ?? '';
+        return model === 'deepseek/deepseek-v4-pro'
+          ? { upstreamOverride: gateway.url, bodyModelOverride: 'codex/gpt-5.6-luna' }
+          : null;
+      },
+    });
+
+    await post(proxy.url, { model: 'deepseek/deepseek-v4-pro', input: [] });
+
+    expect(gateway.bodies).toHaveLength(1);
+    expect(chatgpt.bodies).toHaveLength(0);
+    expect(JSON.parse(gateway.bodies[0])).toMatchObject({
+      model: 'codex/gpt-5.6-luna',
+      transformed: true,
+    });
+  });
+
   it('without routingTransform, always uses default upstream (backward compat)', async () => {
     const gateway = await startFakeUpstream((_i, _b, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); });
     upstreamClose = gateway.close;
