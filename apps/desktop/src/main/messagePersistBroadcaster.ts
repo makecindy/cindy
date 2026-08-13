@@ -40,6 +40,13 @@ import {
   updateMessageContent as updateDbMessageContent,
 } from './localDb/ipc/messages.js';
 import { getDbClient } from './localDb/client/current.js';
+import {
+  markCodexPlanInterrupted,
+  parseCodexPlanTerminal,
+  parseCodexPlanUpdate,
+  writeCodexPlanTerminal,
+  writeCodexPlanUpdate,
+} from './localDb/codexPlanState.js';
 import { isTopLevelTitleAssistant } from './localDb/latestMessageText.logic.js';
 import { messages as messagesTable } from './localDb/schema.js';
 import { createLogger } from './logger.js';
@@ -713,6 +720,15 @@ export function onToolUseEvent(
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
   const toolName = typeof data.toolName === 'string' ? data.toolName : '';
 
+  if (scope === 'turn' && getSessionDbAgentKind(sessionId) === 'codex') {
+    const planUpdate = parseCodexPlanUpdate(data);
+    if (planUpdate) {
+      enqueueWrite(`codex_plan_state_update:${sessionId}:${planUpdate.turnId}`, () =>
+        writeCodexPlanUpdate(sessionId, planUpdate),
+      );
+    }
+  }
+
   if (scope === 'background') {
     if (backgroundTurnPredatesSessionClear(sessionId, backgroundTurnStartedAt)) {
       return undefined;
@@ -804,6 +820,12 @@ export function persistCodexPlanOnDone(
     | null
     | undefined,
 ): boolean {
+  const planTerminal = parseCodexPlanTerminal(data);
+  if (planTerminal) {
+    enqueueWrite(`codex_plan_state_terminal:${sessionId}:${planTerminal.turnId}`, () =>
+      writeCodexPlanTerminal(sessionId, planTerminal),
+    );
+  }
   const turnId = typeof data?.raw?.id === 'string' ? data.raw.id : null;
   if (!turnId) return false;
 
@@ -883,6 +905,12 @@ export function persistCodexPlanOnTerminalError(sessionId: string, turnId?: stri
       ? planRow.input as Record<string, unknown>
       : null;
     if (!input || !Array.isArray(input.plan)) continue;
+    const ownedTurnId = toolUseId.startsWith('plan:') ? toolUseId.slice('plan:'.length) : '';
+    if (ownedTurnId) {
+      enqueueWrite(`codex_plan_state_error:${sessionId}:${ownedTurnId}`, () =>
+        markCodexPlanInterrupted(sessionId, ownedTurnId),
+      );
+    }
     enqueueWrite(`codex_plan_terminal_error:${sessionId}:${persistId}`, async (ownerScope) => {
       const updated = await updateDbMessageContent(sessionId, persistId, {
         toolUseId,

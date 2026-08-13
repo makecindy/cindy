@@ -631,6 +631,13 @@
       "when": 1786257834139,
       "tag": "0089_rich_power_pack",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "6",
+      "when": 1786594350432,
+      "tag": "0090_slow_big_bertha",
+      "breakpoints": true
     }
   ]
 }

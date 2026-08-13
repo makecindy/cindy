@@ -909,6 +909,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
     .update(sessions)
     .set({
       sdkSessionId: null,
+      codexPlanJson: null,
       // Concurrent /clear calls may finish their DB awaits out of order. Keep
       // both persisted boundaries monotonic so the older completion cannot
       // make pre-clear history visible again or invalidate a newer input token.
