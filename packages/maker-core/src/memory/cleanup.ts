@@ -425,13 +425,19 @@ async function writeExclusive(
 }
 
 /**
- * rename 原子移动 src 到 dir 下, 目标路径带「时间戳 + 随机后缀」保证唯一,
+ * link + unlink 原子排他移动 src 到 dir 下, 目标路径带「时间戳 + 随机后缀」,
  * 返回最终目标路径。
  *
- * rename 是单个原子系统调用 — 移动后 src 路径即空, 宿主并发写会落到新的
- * src 文件而非覆盖已移动内容; 随机后缀 (32-bit) 使目标在并发/同 clock 下
- * 几乎不可能已存在, 因此既不覆盖已有归档、也无「探测→写」的 TOCTOU 竞态
- * (Greptile P1 on #2561 第四/五/六轮: 并发未排他 + 复制删源窗口)。
+ * 用 `fs.link` 实现严格 no-clobber: link 到已存在目标抛 EEXIST (排他预留),
+ * 不同于 POSIX `rename` 会静默覆盖已存在目标 (Codex P2 on #2561)。link 成功
+ * 后 unlink 删源 — src 路径即空, 宿主并发写落到新的 src 文件, 已移动内容
+ * 不受影响 (对齐 #2519 migrate rename-then-remove 哲学, Greptile P1 on #2561
+ * 第五/六轮: 复制/校验+unlink 的多步窗口)。
+ *
+ * 错误区分: 只对「目标已存在」重试 (EEXIST, 或 EPERM 且目标确实存在);
+ * EPERM 也可能是源被锁定/权限拒绝 (Windows --force 下宿主占用源文件),
+ * 或文件系统不支持硬链接 — 目标不存在时必须暴露而非无限重试
+ * (Greptile P1 / Codex P2 on #2561: EPERM 无限重试卡死)。
  */
 async function moveExclusive(
   src: string,
@@ -443,15 +449,31 @@ async function moveExclusive(
   for (let attempt = 0; ; attempt += 1) {
     const target = path.join(dir, `${filename}.${stamp}.${randomBytes(4).toString('hex')}`);
     try {
-      await fs.rename(src, target);
-      return target;
+      await fs.link(src, target);
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
-      // Windows: 目标已存在 → 撞随机后缀 (极低概率), 重试; POSIX rename 会
-      // 覆盖同名目标但随机后缀使其几乎不可能发生。
-      if (code === 'EEXIST' || code === 'EPERM' || code === 'ENOTEMPTY') continue;
-      throw e;
+      if (code === 'EEXIST') continue; // 目标冲突 → 换随机后缀重试
+      if (
+        (code === 'EPERM' || code === 'ENOTSUP' || code === 'ENOTEMPTY') &&
+        (await pathExists(target))
+      ) {
+        continue; // 目标确实存在 → 冲突重试
+      }
+      throw e; // 目标不存在但失败 → 源锁定/权限/fs 不支持, 暴露
     }
+    // link 成功 (目标已排他预留), 删源; unlink 失败 (宿主锁定) 抛错由外层
+    // 记 failed — 归档副本已落盘, 源保留, 下次重跑可再次处理。
+    await fs.unlink(src);
+    return target;
+  }
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.stat(p);
+    return true;
+  } catch {
+    return false;
   }
 }
 

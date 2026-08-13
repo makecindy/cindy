@@ -7,6 +7,7 @@
  */
 
 import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -256,6 +257,28 @@ describe('runMemoryCleanup', () => {
       // 归档本身成功, 但索引重建失败必须暴露 (Codex P2 on #2561)。
       expect(result.archived).toHaveLength(1);
       expect(result.indexRebuildError).toContain('disk full');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('surfaces EPERM lock errors instead of retrying forever', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟 Windows --force 下宿主锁定源文件: fs.link 持续 EPERM 且目标不存在
+    // → 必须暴露为 failed, 而非把 EPERM 当目标冲突无限重试 (Greptile P1 /
+    // Codex P2 on #2561)。
+    const spy = vi
+      .spyOn(fs, 'link')
+      .mockRejectedValue(Object.assign(new Error('source locked'), { code: 'EPERM' }));
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      // 源保留 (未被删)。
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('same');
     } finally {
       spy.mockRestore();
     }
