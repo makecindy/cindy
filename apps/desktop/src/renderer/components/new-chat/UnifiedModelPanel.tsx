@@ -615,7 +615,9 @@ export function UnifiedModelPanel({
         aria-label={t('newChat.modelSelector.modelListAria')}
         className={cn(
           // 设计稿 .model-list:8px 内边距、行与行之间无额外间距(行自身 py 8 提供呼吸感)。
-          'morph-panel-list-scroll flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2 [scrollbar-gutter:stable]',
+          // 底部加宽到 12px:滚到底时最后一行不贴着面板底边/footer(Chris 2026-08-13:
+          // 「最底部稍微放宽一点高度」)。
+          'morph-panel-list-scroll flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2 pb-3 [scrollbar-gutter:stable]',
           // min-h-0 是能不能滚到底的关键:flex item 的默认 min-height:auto 会让它按内容
           // 撑开、拒绝收缩,于是超出面板的部分被外层裁掉且**滚不到**(2026-08-13 实测:
           // 列表翻不到最下面)。加上 min-h-0 后,面板高度受限时列表自己收缩并内部滚动,

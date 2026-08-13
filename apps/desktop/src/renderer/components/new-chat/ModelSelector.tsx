@@ -3334,8 +3334,13 @@ export function ModelSelector({
         onOpenChange={handleOpenChange}
         side={popoverSide}
         align="end"
+        // flex-col + min-h-0:morph 外层按可用空间钳了显式高度,但内容包装本身
+        // height:auto + max-h-full 对子元素来说不是"确定高度",百分比钳制解析不出 ——
+        // 面板列比可用空间高时被 overflow-hidden 裁掉底部(2026-08-13 实测:最后一行
+        // 与 footer 缺一截)。改成弹性列后 flex 布局用 max-height 钳出的容器主轴尺寸
+        // 收缩子项(min-h-0 链),列表在自己内部滚动,搜索行与 footer 完整露出。
         wrapperClassName="min-w-0 max-w-full shrink"
-        panelClassName="p-0"
+        panelClassName="flex min-h-0 flex-col p-0"
         panelAriaLabel={ariaLabel}
         trigger={trigger}
       >
