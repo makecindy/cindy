@@ -5139,19 +5139,29 @@ export function registerGhostIpc(): void {
           }
         },
         oauthStatus: (key) => {
+          const decl = runtimeManifest.network?.secrets?.find((s) => s.key === key)?.oauth;
+          // clientConfigured 只判断 OAuth 客户端是否已配置,不读账号清单;单独探,
+          // 别让账号清单读取失败把「已配置」误判成「未配置」。
+          let clientConfigured = false;
           try {
-            const decl = runtimeManifest.network?.secrets?.find((s) => s.key === key)?.oauth;
+            clientConfigured = oauthManager.clientConfigured(ghostId, key, decl);
+          } catch (err) {
+            log.warn('[ghosts:setup-profiles] oauth client-config probe failed', { ghostId, key, err });
+            return { clientConfigured: false, connected: 0, expired: 0 };
+          }
+          try {
             const accounts = oauthManager.listAccounts(ghostId, key);
             return {
-              clientConfigured: oauthManager.clientConfigured(ghostId, key, decl),
+              clientConfigured,
               connected: accounts.filter((a) => a.status === 'connected').length,
               expired: accounts.filter((a) => a.status === 'expired').length,
             };
           } catch (err) {
-            // 单个插件 OAuth 账号探针异常不中止整批查询:JSON 损坏/解密失败时
-            // 退化为全零(视为未连接/未配置),不让一个插件的 OAuth 故障拖垮整批 IPC。
+            // 账号清单损坏/解密失败:已配置 OAuth 的插件应报「需重新授权」(failed),
+            // 而不是「未配置」(missing)。用 expired=1 让判定走 expired → reauth,
+            // 卡片显示红色 AlertTriangle 而非黄色 Link,用户才能识别授权存储已损坏。
             log.warn('[ghosts:setup-profiles] oauth probe failed', { ghostId, key, err });
-            return { clientConfigured: false, connected: 0, expired: 0 };
+            return { clientConfigured, connected: 0, expired: clientConfigured ? 1 : 0 };
           }
         },
         connectionCount: (key) => {
