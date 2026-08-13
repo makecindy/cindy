@@ -124,7 +124,10 @@ describe('Work Louder lighting settings', () => {
     const frame = createWorkLouderCodexWindowRevealFrame();
 
     expect(frame.ambient.effect).toBe(WorkLouderLightingEffect.Snake);
+    expect(frame.ambient.color).toBe(0xdf0c27);
     expect(frame.keys.effect).toBe(WorkLouderLightingEffect.Breath);
+    expect(frame.keys.color).toBe(0xdf0c27);
+    expect(frame.threads.every((thread) => thread.color === 0xdf0c27)).toBe(true);
     expect(frame.threads).toHaveLength(6);
     expect(frame.threads.every((thread) => thread.effect === WorkLouderLightingEffect.Breath)).toBe(
       true,

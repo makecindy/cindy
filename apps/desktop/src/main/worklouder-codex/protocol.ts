@@ -82,6 +82,8 @@ const COLORS = {
   'needs-interaction': 0xffa000,
   completed: 0x35c759,
   error: 0xff453a,
+  /** Cindy brand red (`#DF0C27`, DESIGN.md §15.2). Hardware LEDs, not a UI token. */
+  brand: 0xdf0c27,
 } as const;
 
 const OFF_SIDE: WorkLouderLightingSide = {
@@ -242,11 +244,11 @@ export function createWorkLouderCodexOffFrame(): WorkLouderCodexLightingFrame {
  */
 export function createWorkLouderCodexWindowRevealFrame(): WorkLouderCodexLightingFrame {
   return {
-    ambient: side(WorkLouderLightingEffect.Snake, 0.95, 0.55, COLORS.running),
-    keys: side(WorkLouderLightingEffect.Breath, 0.42, 0.55, COLORS.running),
+    ambient: side(WorkLouderLightingEffect.Snake, 0.95, 0.55, COLORS.brand),
+    keys: side(WorkLouderLightingEffect.Breath, 0.42, 0.55, COLORS.brand),
     threads: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, id) => ({
       id,
-      color: COLORS.running,
+      color: COLORS.brand,
       brightness: 0.9,
       effect: WorkLouderLightingEffect.Breath,
       speed: 0.55,
