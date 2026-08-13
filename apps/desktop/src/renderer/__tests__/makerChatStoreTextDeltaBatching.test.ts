@@ -2187,6 +2187,50 @@ describe('makerChatStore text delta batching', () => {
     );
   });
 
+  it('keeps remote auth retry side effects in the primary renderer', async () => {
+    makerChatStore.__teardownGlobalListeners();
+    makerChatStore.initGlobalListeners({ ownsRemoteAuthRetry: false });
+    vi.mocked(sessionService.get).mockResolvedValue({
+      agentKind: 'cc',
+      remoteHostId: 'remote-host',
+      sdkSessionId: null,
+      fastMode: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      totalCostUsd: 0,
+      workingDir: WORKING_DIR,
+      model: MODEL,
+      effort: EFFORT,
+      permissionMode: PERMISSION_MODE,
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    emitDbMessageCreated({
+      id: 'user-row',
+      clientId: 'user-client',
+      role: 'user',
+      content: 'retry only in primary renderer',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { sdkError: 'authentication_failed', message: '401 expired' },
+        agentMeta: { sdkSessionId: 'sdk-1' },
+      },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.safeStorageRead).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.closeSession).not.toHaveBeenCalled();
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('401 expired');
+  });
+
   it('persists the original remote auth error when retry enqueue rejects asynchronously', async () => {
     vi.mocked(sessionService.get).mockResolvedValue({
       agentKind: 'cc',

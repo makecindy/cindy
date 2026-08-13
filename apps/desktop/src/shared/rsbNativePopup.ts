@@ -22,6 +22,7 @@ export interface RsbNativePopupBounds {
 export interface RsbNativePopupSnapshot {
   url: string;
   title: string;
+  /** null = 尚未观测到 / 无可持久化候选;空串 = 明确无图标;非空 = 可持久化 URL。 */
   favicon: string | null;
   isLoading: boolean;
   canGoBack: boolean;

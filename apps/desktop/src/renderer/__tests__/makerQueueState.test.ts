@@ -73,6 +73,7 @@ const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => (
   agentStatus: agentStatus(false),
   error: null,
   recoverableError: null,
+  inputRecovery: null,
   activeTurnRetryText: null,
   errorRetryText: null,
   credentialSwitchWait: null,

@@ -72,6 +72,20 @@ describe('Pi provider-aware model routing', () => {
 
   it('uses providerId as the primary key when duplicate model ids exist', async () => {
     const authProviderIds: Array<string | null | undefined> = [];
+    const apiResolver = vi.fn((providerId: string | null | undefined) =>
+      providerId === 'openai' ? 'anthropic-messages' as const : 'openai-responses' as const,
+    );
+    const descriptorResolver = vi.fn((providerId: string | null | undefined, modelId: string) => ({
+      id: modelId,
+      displayName: providerId === 'openai' ? 'Subscription Shared' : 'XD Shared',
+      contextWindow: providerId === 'openai' ? 128_000 : 200_000,
+      maxOutputTokens: providerId === 'openai' ? 16_000 : 32_000,
+      cost: providerId === 'openai'
+        ? { input: 1, output: 2 }
+        : { input: 9, output: 10 },
+      efforts: [],
+      defaultEffort: null,
+    }));
     const deps: AgentDeps = {
       auth: {
         getState: async (options) => {
@@ -91,6 +105,8 @@ describe('Pi provider-aware model routing', () => {
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelDescriptor: descriptorResolver,
+      resolvePiGatewayModelApi: apiResolver,
       resolvePiNativeProviders: async () => ({
         providers: [
           { id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-completions', models: [{ id: 'shared-model' }] },
@@ -116,11 +132,37 @@ describe('Pi provider-aware model routing', () => {
     const models = JSON.parse(
       readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
     ) as {
-      providers: Record<string, { models: Array<{ id: string }> }>;
+      providers: Record<string, {
+        models: Array<{
+          id: string;
+          name?: string;
+          api?: string;
+          contextWindow?: number;
+          maxTokens?: number;
+          cost?: Record<string, number>;
+        }>;
+      }>;
     };
-    expect(models.providers.cindy?.models.some((model) => model.id === 'shared-model')).toBe(true);
+    expect(apiResolver).toHaveBeenCalledWith('openai', 'shared-model');
+    expect(descriptorResolver).toHaveBeenCalledWith('openai', 'shared-model');
+    expect(models.providers.cindy?.models.find((model) => model.id === 'shared-model')).toMatchObject({
+      name: 'Subscription Shared',
+      api: 'anthropic-messages',
+      contextWindow: 128_000,
+      maxTokens: 16_000,
+      cost: { input: 1, output: 2 },
+    });
     expect(models.providers['native-a']?.models.some((model) => model.id === 'shared-model')).toBe(true);
     expect(models.providers['native-b']?.models.some((model) => model.id === 'shared-model')).toBe(true);
+
+    await expect(handle.setModel!('shared-model', { providerId: 'xd' })).rejects.toThrow(
+      /restart the Pi session to change provider wire protocol/,
+    );
+    expect(captured.requests).not.toContainEqual({
+      type: 'set_model',
+      provider: 'cindy',
+      modelId: 'shared-model',
+    });
 
     await handle.setModel!('shared-model', { providerId: 'native-b' });
     expect(captured.requests).toContainEqual({
@@ -143,7 +185,7 @@ describe('Pi provider-aware model routing', () => {
   });
 
   it('keeps built-in gateway reasoning when a same-id non-reasoning BYOM empties the flat effort intersection', async () => {
-    const resolver = vi.fn((modelId: string) => {
+    const resolver = vi.fn((_providerId: string | null | undefined, modelId: string) => {
       if (modelId !== 'shared-model') return null;
       return {
         id: modelId,
@@ -170,6 +212,7 @@ describe('Pi provider-aware model routing', () => {
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => 'anthropic-messages',
       resolvePiNativeProviders: async () => ({
         providers: [
           {
@@ -199,7 +242,7 @@ describe('Pi provider-aware model routing', () => {
     ) as {
       providers: Record<string, { models: Array<{ id: string; reasoning: boolean }> }>;
     };
-    expect(resolver).toHaveBeenCalledWith('shared-model');
+    expect(resolver).toHaveBeenCalledWith('openai', 'shared-model');
     expect(models.providers.cindy?.models.find((model) => model.id === 'shared-model')).toMatchObject({
       reasoning: true,
     });
@@ -208,6 +251,156 @@ describe('Pi provider-aware model routing', () => {
     });
     expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'high' });
     await handle.close();
+  });
+
+  it('keeps provider cindy while applying a model-level Responses API and /v1 base URL', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: 'responses-model',
+            displayName: 'Responses Model',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: (_providerId, modelId) =>
+        modelId === 'responses-model' ? 'openai-responses' : 'anthropic-messages',
+    };
+
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'gateway-responses-model',
+      workingDir: cwd,
+      model: 'responses-model',
+      providerId: 'xd',
+    });
+
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
+      .toEqual(['--provider', 'cindy']);
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as {
+      providers: Record<string, {
+        api: string;
+        models: Array<{ id: string; api?: string; baseUrl?: string }>;
+      }>;
+    };
+    expect(models.providers.cindy?.api).toBe('anthropic-messages');
+    expect(models.providers.cindy?.models.find((model) => model.id === 'responses-model'))
+      .toMatchObject({
+        api: 'openai-responses',
+        baseUrl: 'http://127.0.0.1:9988/v1',
+      });
+    await handle.close();
+  });
+
+  it('keeps BYOM startup when the model is outside the XD v3 Pi catalog', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: 'byom-only-model',
+            displayName: 'BYOM Only Model',
+            contextWindow: 128_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      // undefined = 该模型不受 XD v3 管理；不是 XD 协议缺失。
+      resolvePiGatewayModelApi: () => undefined,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: 'my-local',
+            name: 'My Local',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            api: 'openai-completions',
+            models: [{ id: 'byom-only-model' }],
+          },
+        ],
+        env: {},
+      }),
+    };
+
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'byom-outside-xd-v3',
+      workingDir: cwd,
+      model: 'byom-only-model',
+      providerId: 'my-local',
+    });
+
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
+      .toEqual(['--provider', 'my-local']);
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as {
+      providers: Record<string, {
+        models: Array<{ id: string; api?: string }>;
+      }>;
+    };
+    expect(models.providers.cindy?.models.find((model) => model.id === 'byom-only-model'))
+      .toMatchObject({ api: 'anthropic-messages' });
+    expect(models.providers['my-local']?.models.find((model) => model.id === 'byom-only-model'))
+      .toMatchObject({ id: 'byom-only-model' });
+    await handle.close();
+  });
+
+  it('still fails closed when an XD Pi model has no valid v3 wire protocol', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: 'invalid-xd-model',
+            displayName: 'Invalid XD Model',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => null,
+    };
+
+    await expect(new PiAgent(deps).startSession({
+      sessionId: 'invalid-xd-v3-wire',
+      workingDir: cwd,
+      model: 'invalid-xd-model',
+      providerId: 'xd',
+    })).rejects.toThrow(/Model Access v3 did not provide a Pi wire protocol/);
+    expect(captured.args).toEqual([]);
   });
 
   it('reconciles a stale persisted effort to the selected BYOM model default before startup', async () => {
@@ -243,6 +436,7 @@ describe('Pi provider-aware model routing', () => {
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => 'anthropic-messages',
       resolvePiNativeProviders: async () => ({
         providers: [
           {
@@ -470,6 +664,7 @@ describe('Pi provider-aware model routing', () => {
       availableModels,
     },
     resolvePiAgentHome: () => agentHome,
+    resolvePiGatewayModelApi: () => 'anthropic-messages',
     resolvePiNativeProviders,
   });
 
@@ -603,7 +798,7 @@ describe('Pi provider-aware model routing', () => {
         defaultEffort: null,
       },
     ];
-    const resolveGatewayModel = vi.fn((modelId: string) =>
+    const resolveGatewayModel = vi.fn((_providerId: string | null | undefined, modelId: string) =>
       gatewayModels.find((candidate) => candidate.id === modelId) ?? null,
     );
     const agent = new PiAgent({

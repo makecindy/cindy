@@ -40,6 +40,7 @@ import {
   applyCodexPlanSnapshotOnDone,
   getLatestMessageTodoState,
   isAgentPlanToolName,
+  isSubagentParentToolUseId,
   markCodexPlanTurnFailed,
 } from '@cindy/maker-shared/message-render';
 import {
@@ -57,6 +58,7 @@ import type {
   AgentInputCreateOpts,
   AgentInputProjection,
   AgentInputQueuedMessage,
+  AgentInputRecovery,
   AgentInputSessionRef,
   AgentInputReference,
 } from '../../shared/agentInputQueue';
@@ -2281,6 +2283,13 @@ export interface SessionChatState {
   errorReason?: string | null;
   recoverableError: string | null;
   /**
+   * 输入投影自带的 recovery 镜像（main 的 retry 权威状态）。renderer 侧人工
+   * Retry 登记本端意图时用它区分 queue-head（原样重发既有队首项）与
+   * active-turn（克隆 / 续跑指令）——projection 线上本就有该字段，仅镜像，
+   * 不改协议。
+   */
+  inputRecovery: AgentInputRecovery;
+  /**
    * 当前已派发 turn 的 retry 候选文本。
    *
    * 这个字段在 dispatchToSdk 那一刻从 QueuedMessage snapshot 写入，done/error/stop
@@ -2571,6 +2580,7 @@ function createInitialState(): SessionChatState {
     usageLimitRecovery: null,
     errorReason: null,
     recoverableError: null,
+    inputRecovery: null,
     activeTurnRetryText: null,
     errorRetryText: null,
     credentialSwitchWait: null,
@@ -2638,6 +2648,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   usageLimitRecovery: null,
   errorReason: null,
   recoverableError: null,
+  inputRecovery: null,
   activeTurnRetryText: null,
   errorRetryText: null,
   credentialSwitchWait: null,
@@ -2689,6 +2700,99 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
 const sessions = new Map<string, SessionChatState>();
 const listeners = new Map<string, Set<() => void>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
+
+/**
+ * #2194: clientIds of user messages sent from THIS renderer's composer.
+ * sendMessageCore / steerMessageCore are the choke points every local send
+ * (composer send, edit-resend, steer, device-link send initiated on this
+ * desktop) passes through, so those local user messages are recorded there.
+ * Further paths register separately: local UI triggers (silent-stop Continue /
+ * app-exit Continue / Mivo) in sendUiTriggerCore; a manual Retry in
+ * retryLastError (clone via the receipt's supersedesUserClientId, hidden
+ * continue via originalSyntheticTrigger, queue-head redispatch via the
+ * mirrored inputRecovery captured at click time); and queue actions that
+ * dispatch a restored/externally-queued row (resumeQueue, steerQueuedMessage)
+ * at click time.
+ * MessageStream uses this to tell an explicit local send — which force-pins
+ * the viewport to the tail — apart from user messages injected by other
+ * entries (IM channels, a mobile client driving the session remotely,
+ * scheduler runs), which must not steal the reading position. Memory-only
+ * by design: the force-pin only matters at send time; after a renderer
+ * restart the restore path owns the viewport anchor.
+ */
+const localSentUserMessageIds = new Map<string, Set<string>>();
+/** Generous per-session cap — the lookup only matters right after sending. */
+const LOCAL_SENT_IDS_CAP = 200;
+
+function markLocalSentUserMessage(sessionId: string, clientId: string): void {
+  let ids = localSentUserMessageIds.get(sessionId);
+  if (!ids) {
+    ids = new Set();
+    localSentUserMessageIds.set(sessionId, ids);
+  }
+  // 已存在时直接返回：重复登记不该无谓逐出最旧 id（容量会掉到 CAP-1，
+  //  Copilot review nit）。
+  if (ids.has(clientId)) return;
+  if (ids.size >= LOCAL_SENT_IDS_CAP) {
+    const oldest = ids.values().next().value;
+    if (oldest !== undefined) ids.delete(oldest);
+  }
+  ids.add(clientId);
+}
+
+/**
+ * Roll back a speculative mark (e.g. queued steer marked before the IPC when
+ * main persists before resolving). Never recreates a purged session's entry.
+ */
+function unmarkLocalSentUserMessage(sessionId: string, clientId: string): void {
+  localSentUserMessageIds.get(sessionId)?.delete(clientId);
+}
+
+/** Whether the given user message was sent from this renderer's composer. */
+function isLocalSentUserMessage(sessionId: string, clientId: string): boolean {
+  return localSentUserMessageIds.get(sessionId)?.has(clientId) ?? false;
+}
+
+/**
+ * #2194: 人工 Retry（active-turn）的一次性本端意图。main 的
+ * performRetryLastError 在返回 projection 前就 emit 并 scheduleDrain
+ * （queueMicrotask），续跑 / 克隆行可能抢在 retry 的 IPC 回执前经
+ * localDb.messages.onCreated 落库、被 MessageStream 基线化为外部
+ * （Codex review P1）。但 main 的 emit 先于 scheduleDrain，投影事件必然
+ * 先于落库广播携带本次产物——点击时记下意图（含点击时刻的队列快照），
+ * applyInputProjection 时凭意图同步认领新 clientId，不等回执。
+ * 回执 settle 时无条件清意图（兜底清理）。
+ */
+const pendingLocalRetryIntents = new Map<string, { queueIds: Set<string> }>();
+
+/**
+ * 与 retryLastError 回执扫描同口径：retry 生效（resumed）时 main 在 unshift
+ * 前同步清掉 error / recovery，投影必然双空，且 unshift → emit 同步、队首
+ * 必然是本次产物；未生效的投影（含 superseded）里没有本次产物，意图继续
+ * pending 等生效投影或回执清理。点击后首个 error/recovery 双空的投影就是
+ * 本次生效投影（其它路径并发清 error 本身就让本次 retry superseded），
+ * 无论是否认领到产物都消费意图——一次性语义。
+ */
+function claimLocalRetryProductFromProjection(projection: AgentInputProjection): void {
+  const intent = pendingLocalRetryIntents.get(projection.sessionId);
+  if (!intent) return;
+  if (projection.error !== null || projection.recovery !== null) return;
+  pendingLocalRetryIntents.delete(projection.sessionId);
+  if (!sessions.has(projection.sessionId)) return;
+  const headClientId = projection.pendingQueue[0]?.clientId;
+  for (const item of projection.pendingQueue) {
+    if (intent.queueIds.has(item.clientId)) continue;
+    if (item.supersedesUserClientId) {
+      markLocalSentUserMessage(projection.sessionId, item.clientId);
+    } else if (
+      item.originalSyntheticTrigger === 'continue' &&
+      item.autoResume !== true &&
+      headClientId === item.clientId
+    ) {
+      markLocalSentUserMessage(projection.sessionId, item.clientId);
+    }
+  }
+}
 
 /**
  * F-SB-7: Global listeners — notified whenever ANY session's state changes.
@@ -3071,6 +3175,8 @@ function _purgeSession(sessionId: string): void {
   bumpRendererClearGeneration(sessionId);
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
   sessions.delete(sessionId);
+  localSentUserMessageIds.delete(sessionId);
+  pendingLocalRetryIntents.delete(sessionId);
   // 状态快照同步失效:该会话若有 running / pending / 待投递 transition 条目,
   // 不能在缓存里残留(purge 不走 setState,需单独置位)。
   _stopTransitions.delete(sessionId);
@@ -3518,6 +3624,9 @@ function applyInputProjection(
   if (opts.supersedeQueries !== false) {
     supersedeInputProjectionRequests(projection.sessionId);
   }
+  // #2194: 人工 Retry 的一次性意图认领——必须在落库广播（onCreated）可能
+  // 到达之前完成登记，main 的 emit 先于 scheduleDrain，这里一定更早。
+  claimLocalRetryProductFromProjection(projection);
   // wire 上「字段缺省」就是旧被控端的能力信号；新版没有续跑项时也会显式发 null。
   // 必须在 `?? null` 归一化前按 own property 读取，不能让 undefined/null 混淆版本。
   const continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability =
@@ -3702,6 +3811,9 @@ function applyInputProjection(
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
       continuationTurnClientId: projectedContinuationTurnClientId,
       continuationInFlightProjectionCapability,
+      // 线上字段镜像（旧被控端缺省回落 null），供人工 Retry 区分 queue-head /
+      // active-turn 归属（#2194 本端意图登记）。
+      inputRecovery: projection.recovery ?? null,
       ...(authRetryProjectionError ? { _authRetryPersistOnProjectionError: undefined } : {}),
     };
   });
@@ -6128,9 +6240,19 @@ export function parsePendingPluginSetup(request: {
   };
 }
 
-function initGlobalListeners(): void {
+interface GlobalListenerOptions {
+  /**
+   * Only the primary renderer owns legacy remote-auth recovery. Auxiliary renderers still
+   * consume the shared event stream, but must not read credentials, restart sessions, resend
+   * messages, or persist a retry failure independently.
+   */
+  ownsRemoteAuthRetry?: boolean;
+}
+
+function initGlobalListeners(options: GlobalListenerOptions = {}): void {
   if (globalListenersInitialized) return; // idempotent for StrictMode / HMR
   globalListenersInitialized = true;
+  const ownsRemoteAuthRetry = options.ownsRemoteAuthRetry !== false;
 
   // ── Maker 主事件流: 一根管子接所有 vendor → maker AgentEvent ──
   // 老链路是 8 个独立 IPC channel; 新链路一个 maker:event 通道,按 event.type 分发。
@@ -6204,6 +6326,7 @@ function initGlobalListeners(): void {
       const preSnap = getOrCreateState(sessionId);
       const authRetryCount = preSnap._authRetryCount ?? 0;
       if (
+        ownsRemoteAuthRetry &&
         isAuthError &&
         preSnap.remoteHostId &&
         preSnap.agentKind === 'claude-code' &&
@@ -6325,6 +6448,7 @@ function initGlobalListeners(): void {
       //     是否正在 retry；贸然落库若 retry 成功会留下虚假错误卡，不落库则
       //     等价于旧行为（重启后错误丢失）—— 保守起见不做 deferred。
       if (
+        ownsRemoteAuthRetry &&
         isAuthError &&
         preSnap.remoteHostId &&
         preSnap.agentKind === 'claude-code' &&
@@ -10863,10 +10987,44 @@ function setQueueExpanded(sessionId: string, expanded: boolean): void {
 
 function resumeQueue(sessionId: string): void {
   if (!sessionId) return;
+  // #2194 (Codex review P2): 暂停队列的「继续」是本端点击意图——恢复后 drain
+  // 派发的队首项落库时会作为新尾部 user 行出现，不登记则门控误判为外部注入，
+  // 续跑在屏幕外开始（队列可能来自上一次 renderer 生命周期或外部入口）。
+  // 点击时刻快照队首。main 的 resume 在返回 projection 前就会 emit 并
+  // scheduleDrain，快的恢复队列上队首行可能抢在回执回调前落库、被基线化为
+  // 外部（Codex review P2）：点击意图在点击时刻已确定，先登记，回执确认未
+  // 生效（仍 paused / 队首已不在队列）或 IPC 失败再回滚（会话已 purge 时
+  // 回滚为 no-op，不会复活条目）。
+  const preResumeState = sessions.get(sessionId);
+  const preResumeHeadClientId =
+    preResumeState?.queuePaused === true
+      ? (preResumeState.pendingQueue[0]?.clientId ?? null)
+      : null;
+  if (preResumeHeadClientId) {
+    markLocalSentUserMessage(sessionId, preResumeHeadClientId);
+  }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.resume(sessionId, boundaryOpts) : input.resume(sessionId),
-  ).catch((err) => log.warn('resumeQueue failed:', err));
+  )
+    .then(({ projection }) => {
+      if (
+        preResumeHeadClientId &&
+        !(
+          sessions.has(sessionId) &&
+          projection.queuePaused === false &&
+          projection.pendingQueue.some((item) => item.clientId === preResumeHeadClientId)
+        )
+      ) {
+        unmarkLocalSentUserMessage(sessionId, preResumeHeadClientId);
+      }
+    })
+    .catch((err) => {
+      if (preResumeHeadClientId) {
+        unmarkLocalSentUserMessage(sessionId, preResumeHeadClientId);
+      }
+      log.warn('resumeQueue failed:', err);
+    });
 }
 
 function setQueueInteractionLock(sessionId: string, lockId: string, locked: boolean): void {
@@ -11350,6 +11508,10 @@ async function sendMessageCore(
     opts,
     identity,
   );
+  // #2194: 登记本端发送——MessageStream 的强 pin 只认这个集合，外部入口
+  // （IM / 手机端 / 定时任务）注入的 user 消息不抢视口。后续路径 return false
+  // （如 beforeEnqueue 回滚）会留下一个永不渲染的 id，无害。
+  markLocalSentUserMessage(sessionId, queued.clientId);
 
   const deviceLinkRemote = remoteScopeAtStart !== null;
   const remoteRecord = remoteScopeAtStart
@@ -11734,6 +11896,8 @@ async function steerMessageCore(
     opts,
     identity,
   );
+  // #2194: 与 sendMessageCore 相同——本端 steer 也是明确的本地发送意图。
+  markLocalSentUserMessage(sessionId, queued.clientId);
   const deviceLinkRemote = remoteScopeAtStart !== null;
   const remoteDeviceId = remoteScopeAtStart?.deviceId;
   const remoteRecord = remoteScopeAtStart
@@ -11970,17 +12134,24 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
   return withAgentSendDispatch(
     sessionId,
     () => Promise.resolve(false),
-    () =>
-      steerApi.input
+    () => {
+      // #2194 (Codex review P1): main 的 steer 在返回成功**之前**就
+      // persistAcceptedUserMessage，onCreated 推送可能抢在回执登记前把该行
+      // 基线化为外部消息——校验通过后、IPC 之前先登记，确定失败再回滚
+      // （unmark 不会复活已 purge 会话的条目）。
+      markLocalSentUserMessage(sessionId, clientId);
+      return steerApi.input
         .steer(sessionId, queued, {
           removeFromQueue: true,
           ...getRemoteInputClearBoundaryOpts(sessionId),
         })
         .then((ok) => {
+          if (!ok) unmarkLocalSentUserMessage(sessionId, clientId);
           requestInputProjection(sessionId);
           return ok;
         })
         .catch((err) => {
+          unmarkLocalSentUserMessage(sessionId, clientId);
           // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
           // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
           const message = decodeRemoteErrorMessage(
@@ -11994,7 +12165,8 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
             errorRetryText: null,
           }));
           return false;
-        }),
+        });
+    },
   );
 }
 
@@ -12176,10 +12348,106 @@ function retryLastError(sessionId: string): Promise<void> {
   // renderer 不传文案、不做判定。
   // retryLastError 在 main 内会先 await 历史查询再入队，必须从点击时刻起占住与
   // Agent 切换共享的发送 token；否则后点的切换能越过这段查询，让重试改由新 Agent 执行。
+  // #2194 (review P1): 人工 Retry 是本地意图，但重试项由 main 在
+  // performRetryLastError 以**新 clientId** 生成，发送侧登记不到。权威归属：
+  // 人工 retry 的零产出克隆项自带 `supersedesUserClientId`（仅 manual 非 auto
+  // 路径设置，见 agent-input-coordinator.ts），直接按字段辨认——不猜队首差分
+  // （异步窗口内可能混入外部入队）、不做文本猜测（维护者口径，#2222）。
+  // 有产出分支的隐藏续跑指令由 main 显式清掉 supersedes 字段，但它同样是本次
+  // 点击的产物：按 `originalSyntheticTrigger === 'continue'` 且非 autoResume
+  // 辨认（auto 自动续跑不是用户动作，不标记；Codex review P1）。
+  // queue-head（派发前失败）分支 main 原样重发**既有队首项**——没有新
+  // clientId、没有 supersedesUserClientId。以点击时刻镜像的 inputRecovery
+  // （projection 线上自带字段）取权威 clientId；重载后内存标记丢失时，续跑
+  // 落库的新行仍能识别为本端意图（Codex review P2）。
+  const preRetryRecovery = sessions.get(sessionId)?.inputRecovery ?? null;
+  const preRetryQueueHeadClientId =
+    preRetryRecovery?.kind === 'queue-head' ? preRetryRecovery.clientId : null;
+  // 点击时刻的队列快照：回执里只登记**新出现**的项。点击前就在队列里的外部
+  // 入队项（例如被 main 按文本标记 originalSyntheticTrigger='continue' 的
+  // 外部项）不属于本次点击的产物，不能误认（Greptile review P1）。
+  const preRetryQueueIds = new Set(
+    (sessions.get(sessionId)?.pendingQueue ?? []).map((item) => item.clientId),
+  );
+  // active-turn 重试的产物 clientId 由 main 生成、点击时刻未知，而 main 的
+  // scheduleDrain（queueMicrotask）可能抢在 IPC 回执前把产物行落库——但
+  // main 的 emit 先于 scheduleDrain，投影事件更早。记下一次性意图（含点击
+  // 时刻队列快照），applyInputProjection 凭意图同步认领（Codex review P1）；
+  // 回执 settle 时清理。queue-head 分支不产生新项，走下面的 id 预登记。
+  if (preRetryRecovery?.kind === 'active-turn') {
+    pendingLocalRetryIntents.set(sessionId, { queueIds: preRetryQueueIds });
+  }
+  // queue-head 重试的 clientId 点击时刻已知，但 main 的 scheduleDrain 经
+  // queueMicrotask 在返回 projection 前就会跑，重发的队首行可能抢在回执
+  // 回调前落库、被基线化为外部（Codex review P2）：先预登记，回执确认未
+  // 生效或 IPC 失败再回滚（会话已 purge 时回滚为 no-op）。
+  if (preRetryQueueHeadClientId) {
+    markLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
+  }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
-  ).then(() => undefined);
+  ).then(
+    ({ projection }) => {
+      // 一次性意图的兜底清理：正常路径下 applyInputProjection 已凭意图认领
+      // 并消费；未消费时（投影 stale 被丢 / 顺序异常）回执扫描仍是 fallback。
+      pendingLocalRetryIntents.delete(sessionId);
+      // 扫**回执自带的投影快照**而非当前 state：回执由 main 在 scheduleDrain 之前
+      // 同步生成（agent-input-coordinator.ts performRetryLastError 末尾），必然含
+      // 本次克隆；drain 可能抢在本回调前消费克隆并推送新投影覆盖 state
+      // （Greptile review P1），那时扫 state.pendingQueue 会漏记。
+      // 会话在 retry settle 前被 purge 时不登记——否则会把 localSentUserMessageIds
+      // 条目重新创建出来（泄漏 + 同 id 会话重建后旧标记复活，Copilot review nit）。
+      // purge 本身会清掉预登记，这里直接返回即可。
+      if (!sessions.has(sessionId)) return;
+      // 本次 retry 生效（outcome 'resumed'）时 main 在 unshift 前同步清掉
+      // error / recovery，回执必然双空；superseded / no-op 时 recovery 原样
+      // 保留，回执里根本没有本次点击的产物——并发出现在队首的外部 continue
+      // 项不得误认（Greptile review P1）。
+      const retryTookEffect = projection.error === null && projection.recovery === null;
+      if (retryTookEffect) {
+        for (const item of projection.pendingQueue) {
+          if (preRetryQueueIds.has(item.clientId)) continue;
+          if (item.supersedesUserClientId) {
+            markLocalSentUserMessage(sessionId, item.clientId);
+          } else if (
+            item.originalSyntheticTrigger === 'continue' &&
+            item.autoResume !== true &&
+            projection.pendingQueue[0]?.clientId === item.clientId
+          ) {
+            // 有产出人工 retry 的隐藏续跑指令：合成行渲染 null，不登记则续跑产出
+            // 在屏幕外开始（Codex review P1）。auto 自动续跑不标记。
+            // 还须是回执队首：retry 生效时 main 把本次续跑指令 unshift 到队首，
+            // 且 unshift → getProjection 之间无 await（同步），队首必然是本次
+            // 产物；并发的外部入队项只会被压在下面（Greptile review P1）。
+            markLocalSentUserMessage(sessionId, item.clientId);
+          }
+        }
+      }
+      // queue-head 重试的预登记确认：仅当回执确认本次重试生效（error 清空且
+      // recovery 已清）且**队首项仍在回执队列**（被本次 retry 重新武装，main
+      // 同步 getProjection 先于 drain）才保留；若已被并发 drain 消费派发
+      // （不在队列）或本次 retry 实为 superseded / no-op，回滚预登记——留着
+      // 会让该外部行落库时误触发强制回底（Greptile review P1）。
+      if (
+        preRetryQueueHeadClientId &&
+        !(
+          retryTookEffect &&
+          projection.pendingQueue.some((item) => item.clientId === preRetryQueueHeadClientId)
+        )
+      ) {
+        unmarkLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
+      }
+    },
+    (err) => {
+      // IPC 失败：本次点击没有产生任何效果，清意图 + 回滚 queue-head 预登记。
+      pendingLocalRetryIntents.delete(sessionId);
+      if (preRetryQueueHeadClientId) {
+        unmarkLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
+      }
+      throw err;
+    },
+  );
 }
 
 /**
@@ -13399,6 +13667,12 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
         // 远端 SSH 会话:重启后 lazy-create 缺它会把远端 workingDir 当本地路径。
         ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
       };
+      // #2194 (Codex review P1): 本地 UI 触发器（silent-stop「继续」/ 中断横幅
+      // 「继续任务」/ Mivo 触发）是本端点击意图——合成行虽不渲染气泡，但点击后
+      // 用户要看到续跑产出，必须按本端发送登记以触发强制回底；未读计数对
+      // isSyntheticTrigger 行一律跳过，不会因此产生幻影未读。direct-send 兜底
+      // 分支的 clientId 由执行端生成，renderer 无从登记（行缺失的稀有路径）。
+      markLocalSentUserMessage(sessionId, queued.clientId);
       const operation = beginInputProjectionOperation(sessionId, remoteDeviceId);
       return operation.api.input
         .enqueue(sessionId, queued, { sendAtMs: Date.now() })
@@ -13499,7 +13773,12 @@ function getAgentSwitchIntentRev(sessionId: string): number {
 function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
-  if (item.targetAgentKind !== 'claude-code' && item.targetAgentKind !== 'codex') return null;
+  if (
+    item.targetAgentKind !== 'claude-code' &&
+    item.targetAgentKind !== 'codex' &&
+    item.targetAgentKind !== 'pi'
+  )
+    return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
   // providerId 缺失按 null(与 main projectPendingAgentSwitchIntent 的 `?? null` 对齐);
   // 只有出现非 string / 非空值的脏值才判非法,避免协议演进时静默丢掉合法意图。
@@ -13696,6 +13975,8 @@ export const makerChatStore = {
   loadAroundMessage,
   loadAroundMessageClientId,
   sendMessage,
+  /** #2194: MessageStream 强 pin 门控——区分本端发送与外部注入的 user 消息。 */
+  isLocalSentUserMessage,
   beginRemoteOptimisticComposerTransition,
   cancelRemoteOptimisticSendsForDataOwnerBoundary,
   // /goal 从首页新建的会话不经普通发送路径,自动起名漏触发 —— 暴露此动作让调用方用目标文案补起名。
@@ -14299,14 +14580,17 @@ function isHiddenThinkingRow(m: Message): boolean {
 /**
  * 该服务端行**渲染后不会留下可见锚点**(初始页全是这类行时必须继续往前翻页)。
  *
- * 四类:
+ * 五类:
  *   - `tool_result`:配对的 tool_use 父消息可能在更老的页里,MessageStream 会丢弃 orphan;
  *   - 被 `isHiddenThinkingRow` 过滤掉的行:直接不进渲染列表;
  *   - 计划工具调用:MessageStream 会吞掉,只更新 composer 上方的计划胶囊;
  *   - 合成指令行(`isSyntheticTriggerRow`):MessageStream 渲染 null、content 置空,
  *     与 `loadOlderMessages` 的可见锚点判定同口径(见该处「合成指令行渲染 null,不算可见
  *     锚点」)。少了这一类,一页里只要混进一条合成 user 行就会被当成锚点提前停止回填,
- *     而它映射后同样不产生可见内容 —— 症状与完全不回填一样。
+ *     而它映射后同样不产生可见内容 —— 症状与完全不回填一样;
+ *   - 子代理内部行(`isSubagentInternalHistoryRow`):`buildRenderItems` 在入口整体剔除,
+ *     一条都不进渲染列表。子代理密集的会话最新一页可能**全部**是这类行(实测本机库里
+ *     单会话可达上万条),漏登记就会重现上面那种「DB 里有几千条、重开渲染 0 项」的症状。
  *
  * 任何组合占满整页,都会让映射结果为空,而 MessageStream 在 `visibleRenderItems.length === 0`
  * 时不触发自动翻页 —— 结果是 DB 里有几千条消息、重开会话却渲染 0 项,更老的用户/助手消息
@@ -14317,8 +14601,20 @@ function isNonAnchorHistoryRow(m: Message): boolean {
     m.role === 'tool_result' ||
     isHiddenThinkingRow(m) ||
     isAgentPlanHistoryToolUseRow(m) ||
-    isSyntheticTriggerRow(m)
+    isSyntheticTriggerRow(m) ||
+    isSubagentInternalHistoryRow(m)
   );
+}
+
+/**
+ * 服务端行是子代理内部消息(`buildRenderItems` 会整体剔除,见该处 Pass -1)。
+ *
+ * 判据与渲染侧共用同一个形态函数:只认 SDK tool-parent 形态,legacy Claude 导入存在
+ * 同一字段上的普通 transcript 链边不算 —— 否则父会话自己的正文会被当成无锚点行。
+ */
+function isSubagentInternalHistoryRow(m: Message): boolean {
+  const parent = m.agentMeta?.parentUuid;
+  return typeof parent === 'string' && parent.length > 0 && isSubagentParentToolUseId(parent);
 }
 
 function isAgentPlanHistoryToolUseRow(m: Message): boolean {
@@ -14380,7 +14676,12 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(typeof m.agentMeta?.model === 'string' && m.agentMeta.model
           ? { model: m.agentMeta.model }
           : {}),
-        ...(typeof m.agentMeta?.parentUuid === 'string' && m.agentMeta.parentUuid
+        // 只提升 SDK tool-parent 形态(toolu_ / call_):legacy Claude 导入把
+        // transcript 链边(preceding-user-uuid 这类非 RFC 串)也存在 parentUuid 上,
+        // 无条件提升会让顶层计划行被判成子代理、普通 user 行被当成合成边界,而
+        // 保留裸字段的 mobile / main 不会——同一份历史两端分组分叉(review P2)。
+        ...(typeof m.agentMeta?.parentUuid === 'string' &&
+        isSubagentParentToolUseId(m.agentMeta.parentUuid)
           ? { parentToolUseId: m.agentMeta.parentUuid }
           : {}),
       };
@@ -14460,7 +14761,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(typeof m.agentMeta?.model === 'string' && m.agentMeta.model
           ? { model: m.agentMeta.model }
           : {}),
-        ...(typeof m.agentMeta?.parentUuid === 'string' && m.agentMeta.parentUuid
+        ...(typeof m.agentMeta?.parentUuid === 'string' &&
+        isSubagentParentToolUseId(m.agentMeta.parentUuid)
           ? { parentToolUseId: m.agentMeta.parentUuid }
           : {}),
       };
@@ -14634,6 +14936,16 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(delivery === 'turn' || delivery === 'steer' ? { delivery } : {}),
         ...(goalObjective ? { goalBadge: goalObjective } : {}),
         ...(hookSource ? { hookSource } : {}),
+        // 子代理内部的 user 行(SDK parent_tool_use_id):投影给计划归属判定,
+        // 否则 maker-shared 会把它当成"用户开新话题"切断主线程计划 session。
+        // 只提升 SDK tool-parent 形态:legacy Claude 导入把 transcript 链边
+        // (preceding-user-uuid 这类非 RFC 串)也存在 parentUuid 上,无条件提升会
+        // 反过来把**普通 user 行**当成子代理内部消息,新计划继续复用旧 session/key、
+        // 跨话题合并计划卡(review P1)。
+        ...(typeof m.agentMeta?.parentUuid === 'string' &&
+        isSubagentParentToolUseId(m.agentMeta.parentUuid)
+          ? { parentToolUseId: m.agentMeta.parentUuid }
+          : {}),
       };
     }
     // /goal 达成记录:持久消息(role:'assistant' + 空 content + agentMeta.goalCompletion)
@@ -14769,7 +15081,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...(typeof m.agentMeta?.model === 'string' && m.agentMeta.model
         ? { model: m.agentMeta.model }
         : {}),
-      ...(typeof m.agentMeta?.parentUuid === 'string' && m.agentMeta.parentUuid
+      ...(typeof m.agentMeta?.parentUuid === 'string' &&
+      isSubagentParentToolUseId(m.agentMeta.parentUuid)
         ? { parentToolUseId: m.agentMeta.parentUuid }
         : {}),
       isStreaming: false,

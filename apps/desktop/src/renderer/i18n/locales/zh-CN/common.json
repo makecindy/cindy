@@ -2424,7 +2424,8 @@
       "toast": {
         "enabled": "对话记录语义索引已启用",
         "disabled": "对话记录语义索引已停止",
-        "toggleFailed": "切换对话嵌入失败"
+        "unavailable": "当前账号或地区暂不支持对话记录语义索引",
+        "toggleFailed": "切换对话记录语义索引失败"
       }
     },
     "messageNavRail": {
@@ -3310,6 +3311,7 @@
         "manageAria": "管理 {{name}}",
         "agentInvoked": "Agent 自动调用",
         "upToDate": "已是最新",
+        "oauthAuthorizationExpired": "授权已失效，需重新连接",
         "installAria": "安装 {{name}}"
       },
       "market": {
@@ -3552,6 +3554,7 @@
         "metaWithAuthor": "作者 {{author}} · 版本 {{version}}。将安装到本机，可随时卸载。",
         "enableNow": "安装后立即生效",
         "enableNowOpenPanel": "安装后立即生效并打开面板",
+        "manualCount": "随包手册 {{count}} 篇",
         "expandDescription": "展开完整介绍",
         "collapseDescription": "收起介绍"
       },
@@ -3784,6 +3787,7 @@
       "updateConfirm": {
         "title": "更新插件「{{name}}」？",
         "body": "版本 {{from}} → {{to}}。将替换现有版本；生效状态与面板位置保持不变。",
+        "oauthClientChanged": "本次更新更换了 OAuth 客户端。使用插件内置授权的已连接账号将在更新后失效，需要重新连接。",
         "confirm": "更新",
         "cancel": "取消"
       },
@@ -4469,6 +4473,7 @@
     "close": "关闭",
     "menuItems": {
       "settings": "设置",
+      "resourceUsage": "资源用量",
       "help": "帮助",
       "issues": "问题反馈",
       "checkForUpdates": "检查更新"
@@ -4506,12 +4511,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "停用「{{name}}」？",
-      "body": "关闭这个面板会停用整个插件，它的面板和能力都会暂停。之后可以随时在侧边栏「插件」里重新开启。",
+      "body": "关闭这个面板会停用插件并暂停其能力。你可以随时在侧边栏「插件」中重新启用。",
       "confirm": "停用"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "合并回主窗口",
+    "mergeBack": "返回主窗口",
     "unavailable": "该插件面板当前不可用"
   },
   "ghostPanelBubble": {
@@ -4521,6 +4526,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "右侧边栏",
+    "panelError": {
+      "title": "面板加载失败",
+      "description": "这个面板暂时无法显示，其他面板仍可继续使用。",
+      "reload": "重新加载面板"
+    },
     "window": {
       "title": "侧边栏",
       "mergeBack": "合并回主窗口",
@@ -4551,6 +4561,7 @@
         "ghostPanel": "插件面板"
       },
       "controls": {
+        "showAria": "显示侧栏",
         "maximizeAria": "最大化侧栏",
         "restoreAria": "退出最大化",
         "closeAria": "关闭侧栏",
@@ -5561,7 +5572,7 @@
         "budget": "GPT 折扣",
         "grok": "xAI",
         "google": "Google",
-        "china": "国内",
+        "china": "中国",
         "image": "图像",
         "video": "视频",
         "tts": "语音合成",
@@ -5569,6 +5580,7 @@
         "realtime": "实时语音",
         "embedding": "向量",
         "compression": "压缩",
+        "ungrouped": "未分组",
         "other": "其它"
       },
       "search": {
@@ -6675,7 +6687,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "远端连接已中断（daemon 可能正在升级或重启）。本轮已结束 — 请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
-      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时不可用，需要审批的操作会被拒绝。想自己确认这些操作，可以把任务切到「默认权限」。",
+      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。想少被打断，可以把任务切到「默认权限」自行掌控。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 会话无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
@@ -8287,7 +8299,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "需要信任此项目后可用"
+    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
   },
   "skillhub": {
     "home": {
@@ -8914,6 +8926,7 @@
       "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
+      "hostShellCommandBlocked": "Cindy 已阻止会绕过内嵌模拟器的 Shell 命令。请改用模拟器工具控制设备、启动应用、操作界面、截图和诊断。",
       "upstreamResponseIdleTimeout": "模型长时间没有任何响应，本轮已自动中断以免无限等待。已完成的工具调用都保留，可以直接发下一条消息继续。",
       "codexCompactionNotConverging": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。压不动的部分通常不在对话里——system prompt 与工具定义占掉的空间压缩清不掉。新开一个任务可以继续。",
       "codexCompactionNotConvergingModelSwitch": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。本任务中途切换过模型，而 Codex 仍按切换前那个模型的上下文上限来判断。切回原模型可以继续，或者新开一个任务。",
@@ -9041,17 +9054,9 @@
     "dropHint": "松开以在此分栏打开任务",
     "loadingTask": "正在加载任务…",
     "resizeAria": "调整任务分栏大小",
-    "openInSplit": "在分栏中打开",
-    "openSide": {
-      "left": "在左侧打开任务",
-      "right": "在右侧打开任务",
-      "top": "在上方打开任务",
-      "bottom": "在下方打开任务"
-    },
     "alreadyOpen": "该任务已在当前分栏中打开，请选择其他任务",
     "limitReached": "一个分栏最多可打开 {{count}} 个任务，请先关闭一个任务分栏再重试",
-    "addUnavailable": "当前无法在分栏中打开该任务，请先在主区域打开一个任务再重试",
-    "workerUnavailable": "Worker 任务不能单独在分栏中打开，请改为打开所属 Lead 任务"
+    "addUnavailable": "当前无法在分栏中打开该任务，请先在主区域打开一个任务再重试"
   },
   "extraDirs": {
     "menuAria": "操作菜单",
@@ -9429,7 +9434,8 @@
     },
     "currentSubscription": {
       "title": "当前订阅",
-      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。"
+      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。",
+      "purchaseBlockedUntilPeriodEnd": "当前套餐将于 {{date}} 结束，届时可购买新套餐。"
     },
     "subscriptionStatus": {
       "INCOMPLETE": "等待完成支付",

@@ -31,6 +31,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { AlertTriangle, Gauge, RotateCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { normalizePersistableFavicon } from '../../../../../shared/faviconPersistence';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { createLogger } from '@/lib/logger';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
@@ -198,10 +199,20 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   }, [browser.title, ctx, state.title]);
 
   useEffect(() => {
-    // null 表示当前 webview 代际尚未观测到 favicon，不能据此清掉持久化图标；
-    // 空串才是 page-favicon-updated 明确报告 "无图标"。
+    // null 表示当前 webview 代际尚未观测到 favicon,或观测到但全部候选不可
+    // 持久化(如只有 blob:)——两种都不能据此清掉 / 覆盖已持久化图标。
     if (browser.favicon === null) return;
-    const nextFavicon = browser.favicon || null;
+    // 空串才是 page-favicon-updated 明确报告 "页面无图标" → 清空持久化 favicon。
+    if (browser.favicon === '') {
+      if (state.favicon === null) return;
+      ctx.patchState({ favicon: null });
+      return;
+    }
+    // 非空候选:WebView 和原生 popup 两套事件源必须在共用写入边界再做一次
+    // 过滤,避免 blob: / 超长 / 非白名单 scheme 进入 tab state。
+    // 不可持久化 → 保留已有图标,不写不清。
+    const nextFavicon = normalizePersistableFavicon(browser.favicon);
+    if (nextFavicon === null) return;
     if (nextFavicon === state.favicon) return;
     ctx.patchState({ favicon: nextFavicon });
   }, [browser.favicon, ctx, state.favicon]);

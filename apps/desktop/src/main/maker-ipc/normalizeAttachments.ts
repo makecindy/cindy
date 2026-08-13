@@ -272,6 +272,7 @@ type AttachmentBlock = {
   path?: string;
   base64?: string;
   mimeType?: string;
+  pathOrigin?: 'desktop-host';
 };
 type UserMessageShape = string | { type: 'user'; content: string | RawBlock[] };
 
@@ -299,6 +300,16 @@ export async function normalizeUserMessage(
     }
 
     const block = { ...raw } as AttachmentBlock & { type: 'image' | 'file' };
+    const isDesktopHostImage = block.type === 'image' && (
+      block.pathOrigin === 'desktop-host'
+      || Boolean(block.base64)
+      || (typeof block.path === 'string' && (
+        block.path.startsWith('xdt-image://')
+        || block.path.startsWith('cindy-media://')
+        || isAttachmentOssRef(block.path)
+      ))
+    );
+    if (isDesktopHostImage) block.pathOrigin = 'desktop-host';
 
     // 0) device-link 出方向 OSS 引用(控制端发来的附件)→ presign-get 下载物化到临时文件,
     //    用后删 OSS。新引用下载/校验失败 → 整条不发；旧引用保留历史的单附件降级语义。
@@ -399,7 +410,24 @@ export async function normalizeUserMessage(
 // device-link 出方向:被控端入队消息的 OSS 引用一次性物化(files[] + persistedContent 共用下载)
 // ───────────────────────────────────────────────────────────────────────────
 
-type SerializedFileLike = { url?: unknown; path?: unknown; base64?: unknown; mimeType?: unknown };
+type SerializedFileLike = {
+  url?: unknown;
+  path?: unknown;
+  base64?: unknown;
+  mimeType?: unknown;
+  type?: unknown;
+  category?: unknown;
+  ext?: unknown;
+};
+
+function isQueuedImageFile(file: SerializedFileLike): boolean {
+  if (file.type === 'image') return true;
+  return (
+    file.category === 'image'
+    && typeof file.ext === 'string'
+    && file.ext.toLowerCase() !== '.gif'
+  );
+}
 
 /** 该字段是 device-link 出方向附件 OSS 引用串。 */
 function isOssRefField(v: unknown): v is string {
@@ -428,6 +456,24 @@ function isLocalImagePathField(v: unknown): v is string {
 /** persistedContent images[].url 需要物化:OSS 引用,或被控端本机绝对路径图片。 */
 function needsImageMaterialize(v: unknown): v is string {
   return isOssRefField(v) || isLocalImagePathField(v);
+}
+
+function isManagedImageUrl(v: unknown): v is string {
+  return (
+    typeof v === 'string'
+    && (v.startsWith('xdt-image://') || v.startsWith('cindy-media://'))
+  );
+}
+
+function queuedFileMaterializeRef(file: SerializedFileLike): string | null {
+  if (isOssRefField(file.url)) return file.url;
+  // url 是队列实际消费的图片；path 只是文件选择器保留的原始磁盘来源。
+  if (isQueuedImageFile(file) && isManagedImageUrl(file.url)) return null;
+  if (isOssRefField(file.path)) return file.path;
+  if (!isQueuedImageFile(file)) return null;
+  if (isLocalImagePathField(file.url)) return file.url;
+  if (isLocalImagePathField(file.path)) return file.path;
+  return null;
 }
 
 /** persistedContent JSON 串里是否含需物化引用(images[].url / files[].path)。解析失败 → 视作无。 */
@@ -532,15 +578,14 @@ async function materializeQueuedOssAttachmentsInternal(
   const files = Array.isArray(it.files) ? it.files : null;
   const pcStr = typeof it.persistedContent === 'string' ? it.persistedContent : null;
 
-  const filesHaveOss =
+  const filesNeedMaterialize =
     files?.some(
       (f) =>
         !!f &&
         typeof f === 'object' &&
-        (isOssRefField((f as SerializedFileLike).url) ||
-          isOssRefField((f as SerializedFileLike).path)),
+        queuedFileMaterializeRef(f as SerializedFileLike) !== null,
     ) ?? false;
-  if (!filesHaveOss && !(pcStr && persistedContentNeedsMaterialize(pcStr))) return { item }; // 无需物化 → 原样
+  if (!filesNeedMaterialize && !(pcStr && persistedContentNeedsMaterialize(pcStr))) return { item }; // 无需物化 → 原样
 
   const byRef = new Map<string, MaterializedRef>(); // 引用串 → 物化结果(同串只下载/拷贝+入库一次)
   const ossKeys = new Set<string>();
@@ -686,7 +731,7 @@ async function materializeQueuedOssAttachmentsInternal(
           continue;
         }
         const sf = f as SerializedFileLike;
-        const refStr = isOssRefField(sf.url) ? sf.url : isOssRefField(sf.path) ? sf.path : null;
+        const refStr = queuedFileMaterializeRef(sf);
         if (!refStr) {
           out.push(f);
           continue;
@@ -695,7 +740,15 @@ async function materializeQueuedOssAttachmentsInternal(
           refStr,
           typeof sf.mimeType === 'string' ? sf.mimeType : undefined,
         );
-        out.push(m ? { ...(f as object), url: m.url, path: m.absPath, base64: undefined } : f);
+        out.push(m
+          ? {
+              ...(f as object),
+              url: m.url,
+              path: m.absPath,
+              ...(isQueuedImageFile(sf) ? { pathOrigin: 'desktop-host' as const } : {}),
+              base64: undefined,
+            }
+          : f);
       }
       nextFiles = out;
     }
@@ -852,9 +905,11 @@ export async function materializeDirectSendOssAttachments(
       typeof pathValue === 'string' &&
       pathValue !== originalPath
     ) {
+      const isImage = (original as { type?: unknown }).type === 'image';
       nextContent[attachmentIndexes[index]] = {
         ...(original as object),
         path: pathValue,
+        ...(isImage ? { pathOrigin: 'desktop-host' as const } : {}),
         base64: undefined,
       };
     }

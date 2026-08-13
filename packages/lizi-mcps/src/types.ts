@@ -596,26 +596,8 @@ export interface ComputerMcpCallContext {
   agentKind?: string;
 }
 
-export interface ComputerProcessIdentity {
-  pid: number;
-  name?: string;
-  command?: string;
-  executable?: string;
-  bundleId?: string;
-}
-
-export interface ComputerProcessIdentityResolveOptions {
-  /** Bypass any host-side process snapshot cache before a side effect. */
-  forceFresh?: boolean;
-}
-
 export interface ComputerMcpDeps {
   getStatus(): Promise<ComputerDriverStatus>;
-  /** Resolve process provenance without trusting model-supplied app labels. */
-  resolveProcessIdentity?(
-    pid: number,
-    options?: ComputerProcessIdentityResolveOptions,
-  ): Promise<ComputerProcessIdentity | null>;
   callTool(
     name: ComputerMcpToolName,
     args: Record<string, unknown>,
@@ -758,6 +740,8 @@ export type IOSSimulatorMcpErrorCode =
   | 'SESSION_CONTEXT_REQUIRED'
   | 'SESSION_NOT_FOUND'
   | 'UNSUPPORTED_SESSION_KIND'
+  | 'IOS_SIMULATOR_PLUGIN_REQUIRED'
+  | 'IOS_SIMULATOR_PLUGIN_DISABLED'
   | 'IOS_SIMULATOR_DISABLED'
   | 'WDA_UNAVAILABLE'
   | 'XCODE_BUILD_FAILED'
@@ -782,7 +766,21 @@ export interface IOSSimulatorToolAvailabilityReport {
   instanceCount: number;
   runningInstanceCount: number;
   tools: Record<string, IOSSimulatorToolAvailability>;
+  notice?: {
+    errorCode: IOSSimulatorMcpErrorCode;
+    message: string;
+    data?: Record<string, unknown>;
+  };
 }
+
+export type IOSSimulatorMcpAccessDecision =
+  | { allowed: true }
+  | {
+      allowed: false;
+      errorCode: IOSSimulatorMcpErrorCode;
+      message: string;
+      data?: Record<string, unknown>;
+    };
 
 export type IOSSimulatorMcpToolName =
   | 'check_environment'

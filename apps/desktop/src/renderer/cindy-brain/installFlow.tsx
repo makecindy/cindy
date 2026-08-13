@@ -93,7 +93,13 @@ async function confirmAndRunUpdate(
       from: installed.manifest.version,
       to: manifest.version,
     }),
-    content: <GhostUpdateReview trust={trust} diff={diff} />,
+    content: (
+      <GhostUpdateReview
+        trust={trust}
+        diff={diff}
+        manualCount={manifest.manual?.items.length ?? 0}
+      />
+    ),
     maxWidth: GHOST_CONFIRM_MAX_WIDTH,
     confirmText: t('settings.ghosts.updateConfirm.confirm'),
     cancelText: t('settings.ghosts.updateConfirm.cancel'),
@@ -167,6 +173,7 @@ export async function confirmAndInstallGhost(
         meta={factsLine}
         trust={trust}
         items={ghostPermissionItems(manifest)}
+        manualCount={manifest.manual?.items.length ?? 0}
       />
     ),
     maxWidth: GHOST_CONFIRM_MAX_WIDTH,

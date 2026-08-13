@@ -46,7 +46,7 @@ export const COMPUTER_TOOLS: readonly ComputerToolDef[] = [
   {
     name: 'launch_app',
     description:
-      'Launch or locate a desktop application without stealing focus. Prefer this over shell open/Start-Process for GUI apps. For iOS work, use cindy_ios_simulator for Cindy\'s embedded viewer; launching Xcode or macOS Simulator.app is unavailable until Cindy can issue an explicit host authorization. Use list_windows with {"process_name":"Simulator"} for read-only external Simulator window discovery.',
+      'Launch or locate an application without stealing focus. Prefer this over shell open/Start-Process for GUI apps. If an already-running app such as Simulator is not discoverable here, use list_windows with {"process_name":"Simulator"}.',
     inputShape: {
       name: z.string().optional(),
       bundle_id: z.string().optional(),
@@ -66,7 +66,7 @@ export const COMPUTER_TOOLS: readonly ComputerToolDef[] = [
   {
     name: 'list_windows',
     description:
-      'List known top-level desktop windows. Use only for external desktop UI work; Cindy iOS app work should use cindy_ios_simulator and its embedded viewer. For an explicitly requested external Simulator.app window, filter with {"process_name":"Simulator"}. Hosts may enrich results with process provenance and generic identity hints.',
+      'List known top-level windows. Use before choosing a target window; for example, {"process_name":"Simulator"}. Hosts may enrich results with process provenance and generic identity hints.',
     readOnly: true,
     inputShape: {
       on_screen_only: z.boolean().optional(),

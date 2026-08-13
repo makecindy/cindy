@@ -42,7 +42,7 @@ const CARGO_MANIFEST = path.join(
 /** 与 pnpm-workspace.yaml 的客户端 workspace 范围保持一致。 */
 function discoverWorkspaceDirs() {
   const dirs = [];
-  for (const parentName of ["apps", "packages", "cindy-protocol/packages"]) {
+  for (const parentName of ["apps", "packages"]) {
     const parentDir = path.join(REPO_ROOT, parentName);
     for (const entry of fs.readdirSync(parentDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;

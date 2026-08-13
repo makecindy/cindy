@@ -663,8 +663,8 @@ export interface GhostSecretExchangeDecl {
 
 /**
  * OAuth 凭证:scopes 条数上限(超出拒装;确认框逐条展示要可读)。
- * 数值正本在 cindy-protocol 的 plugin-protocol(manifest.ts,发布服务端同读),
- * 客户端只 re-export 不再手抄副本;调整上限一律改协议仓再 bump submodule。
+ * 数值正本在本仓 packages/plugin-protocol(manifest.ts)，服务端仓维护兼容副本。
+ * 客户端只 re-export 不再手抄副本；调整上限须同步两仓并先确认 wire 兼容性。
  * 本校验取值级"严出"(plugin-security-and-authoring.md §7):超上限的包在旧版
  * 客户端拒装,插件市场铺开须等携带新上限的客户端先行发布。
  *
@@ -969,6 +969,15 @@ export const GHOST_SKILL_NAME_MAX_CHARS = 64;
  */
 export const GHOST_SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/** manual:单插件最多声明的渐进披露手册单元数。 */
+export const GHOST_MANUAL_MAX_ITEMS = 8;
+/** manual:每个声明单元固定的入口文件名。 */
+export const GHOST_MANUAL_ENTRY_FILE = 'MANUAL.md';
+/** manual:单个 Markdown 文件的字节上限。打包与装入两侧共用。 */
+export const GHOST_MANUAL_MD_MAX_BYTES = 64 * 1024;
+/** manual:一级索引说明的字符上限。 */
+export const GHOST_MANUAL_DESCRIPTION_MAX_CHARS = GHOST_MANIFEST_SUMMARY_MAX_CHARS;
+
 /** skill 槽单条技能声明(全声明式:确认框展示的就是这里的字段)。 */
 export interface GhostSkillItem {
   /** 包内技能目录(安全相对路径,目录内必须有 SKILL.md)。 */
@@ -988,6 +997,21 @@ export interface GhostSkillItem {
  */
 export interface GhostSkillNeeds {
   items: GhostSkillItem[];
+}
+
+/** manual 单条手册声明。name 是模型调用时使用的逻辑路径首段，dir 是包内物理目录。 */
+export interface GhostManualItem {
+  /** 包内手册目录(安全相对路径，目录内必须有 MANUAL.md)。 */
+  dir: string;
+  /** 逻辑名称；沿用 skill name 的小写连字符规则。 */
+  name: string;
+  /** ghost_info / ghost_manual 根索引展示的手册说明。 */
+  description: string;
+}
+
+/** 插件随包提供、由 Host 按需读取的渐进披露手册索引。 */
+export interface GhostManualNeeds {
+  items: GhostManualItem[];
 }
 
 /**
@@ -1391,6 +1415,11 @@ export interface GhostManifest {
    */
   skill?: GhostSkillNeeds;
   /**
+   * 随包渐进披露手册。它不是能力 slot 或授权项；Host 只把索引投影给模型，
+   * 正文经 ghost_manual 按需读取。旧客户端忽略这一可选顶层字段。
+   */
+  manual?: GhostManualNeeds;
+  /**
    * 就绪声明(使用前置检查,见 GhostSetupDecl 块注释):作者声明「用之前
    * 必须配好什么」,宿主点「使用」时确定性检查并引导配置。缺省 = 启发式
    * (声明过凭证/连接的意识任一项就绪即 ready)。
@@ -1467,6 +1496,10 @@ export interface InstalledGhost {
   oauthScopeStale?: {
     secretKey: string;
     missingScopeCount: number;
+  };
+  /** 插件列表所需的失效授权投影；不暴露账号身份或凭证内容。 */
+  oauthAuthorizationExpired?: {
+    expiredAccountCount: number;
   };
 }
 
@@ -2069,6 +2102,38 @@ export interface GhostPermissionDiff {
   added: GhostPermissionItem[];
   removed: GhostPermissionItem[];
   unchanged: GhostPermissionItem[];
+  /** 同一凭证槽的内置直连 OAuth clientId 发生变化。 */
+  builtinOauthClientChanged: boolean;
+}
+
+/**
+ * 返回同一插件内置直连 OAuth clientId 发生变化的凭证槽。
+ * tokenBroker 可能按区域选择不同 clientId，仅凭 manifest 无法判断账号实际
+ * 使用哪一个，因此不把 broker 默认值变化判成确定失效。
+ */
+export function changedBuiltinOauthClientSecretKeys(
+  previousManifest: GhostManifest,
+  currentManifest: GhostManifest,
+): string[] {
+  if (previousManifest.id !== currentManifest.id) return [];
+  const previousSecrets = new Map(
+    (previousManifest.network?.secrets ?? []).map((secret) => [secret.key, secret]),
+  );
+  const changed: string[] = [];
+  for (const current of currentManifest.network?.secrets ?? []) {
+    if (current.source !== 'oauth' || !current.oauth) continue;
+    const previous = previousSecrets.get(current.key);
+    if (previous?.source !== 'oauth' || !previous.oauth) continue;
+    if (current.oauth.tokenBroker || previous.oauth.tokenBroker) continue;
+    const previousClientId = previous.oauth.clientId?.trim() || null;
+    const currentClientId = current.oauth.clientId?.trim() || null;
+    // 旧版没有内置 clientId 时，存量账号只能来自用户自定义配置；新增默认值
+    // 不会让这些令牌失效。只有旧内置客户端真实存在时才属于迁移。
+    if (previousClientId !== null && previousClientId !== currentClientId) {
+      changed.push(current.key);
+    }
+  }
+  return changed;
 }
 
 /**
@@ -2148,7 +2213,12 @@ export function diffGhostPermissionItems(
       removed.push(item);
     }
   }
-  return { added, removed, unchanged };
+  return {
+    added,
+    removed,
+    unchanged,
+    builtinOauthClientChanged: changedBuiltinOauthClientSecretKeys(prev, next).length > 0,
+  };
 }
 
 /** 返回真实包中既未在安装前展示、也未被当前已装版本覆盖的权限。 */
@@ -2914,6 +2984,21 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   ) {
     return { ok: false, reason: 'author 必须是 1–64 字符的非空字符串' };
   }
+  const declaredFilePathFolds = [
+    GHOST_MANIFEST_FILE,
+    raw.entry,
+    raw.icon,
+    raw.settingsHtml,
+    isPlainObject(raw.panel) ? raw.panel.html : undefined,
+    isPlainObject(raw.node) ? raw.node.entry : undefined,
+    ...(isPlainObject(raw.node) && Array.isArray(raw.node.entries) ? raw.node.entries : []),
+  ]
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.toLowerCase());
+  const isSameOrDescendant = (path: string, ancestor: string): boolean =>
+    path === ancestor || path.startsWith(`${ancestor}/`);
+  const pathsConflict = (left: string, right: string): boolean =>
+    isSameOrDescendant(left, right) || isSameOrDescendant(right, left);
   let locales: GhostManifest['locales'];
   if (raw.locales !== undefined) {
     if (!isPlainObject(raw.locales)) {
@@ -2933,16 +3018,12 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
     const normalized: Partial<Record<GhostLocale, string>> = {};
     const seenPaths = new Set<string>();
-    const nonLocalePaths = [
-      GHOST_MANIFEST_FILE,
-      raw.entry,
-      raw.icon,
-      raw.settingsHtml,
-      isPlainObject(raw.panel) ? raw.panel.html : undefined,
-      isPlainObject(raw.node) ? raw.node.entry : undefined,
-      ...(isPlainObject(raw.node) && Array.isArray(raw.node.entries) ? raw.node.entries : []),
-    ].filter((value): value is string => typeof value === 'string');
-    const nonLocalePathFolds = new Set(nonLocalePaths.map((value) => value.toLowerCase()));
+    const manualDirFolds = (
+      isPlainObject(raw.manual) && Array.isArray(raw.manual.items) ? raw.manual.items : []
+    )
+      .map((item) => (isPlainObject(item) ? item.dir : undefined))
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.toLowerCase());
     for (const locale of GHOST_LOCALES) {
       const localePath = raw.locales[locale];
       if (localePath === undefined) continue;
@@ -2957,7 +3038,11 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         };
       }
       const normalizedLocalePath = localePath.toLowerCase();
-      if (nonLocalePathFolds.has(normalizedLocalePath)) {
+      const conflictsWithFile = declaredFilePathFolds.includes(normalizedLocalePath);
+      const conflictsWithManualDir = manualDirFolds.some((dir) =>
+        pathsConflict(dir, normalizedLocalePath),
+      );
+      if (conflictsWithFile || conflictsWithManualDir) {
         return {
           ok: false,
           reason: `locales.${locale} 路径 ${JSON.stringify(localePath)} 与插件其他声明文件大小写折叠后冲突`,
@@ -3821,6 +3906,96 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
   if (slots.includes('skill') && skill === undefined) {
     return { ok: false, reason: 'slots 声明了 "skill" 但缺少 skill 详单(items 技能清单必填)' };
+  }
+
+  // manual 是独立顶层字段，不是能力 slot 或授权项。这里只校验一级逻辑索引；
+  // MANUAL.md 存在性、Markdown 文本与逐文件 64KB 上限由打包/装入两侧校验。
+  let manual: GhostManualNeeds | undefined;
+  if (raw.manual !== undefined) {
+    if (!isPlainObject(raw.manual)) {
+      return {
+        ok: false,
+        reason:
+          'manual 必须是对象(如 { "items": [{ "dir": "manual/getting-started", "name": "getting-started", "description": "..." }] })',
+      };
+    }
+    const manualRaw = raw.manual as Record<string, unknown>;
+    const unknownManualField = Object.keys(manualRaw).find((key) => key !== 'items');
+    if (unknownManualField !== undefined) {
+      return { ok: false, reason: `manual 含不允许的字段 ${JSON.stringify(unknownManualField)}` };
+    }
+    if (!Array.isArray(manualRaw.items) || manualRaw.items.length === 0) {
+      return { ok: false, reason: 'manual.items 必须是非空数组(随包手册索引)' };
+    }
+    if (manualRaw.items.length > GHOST_MANUAL_MAX_ITEMS) {
+      return { ok: false, reason: `manual.items 最多 ${GHOST_MANUAL_MAX_ITEMS} 条` };
+    }
+    const manualItems: GhostManualItem[] = [];
+    const seenManualNames = new Set<string>();
+    const seenManualDirs = new Set<string>();
+    for (const item of manualRaw.items) {
+      if (!isPlainObject(item)) {
+        return { ok: false, reason: 'manual.items 每项必须是对象({ dir, name, description })' };
+      }
+      const itemRaw = item as Record<string, unknown>;
+      const unknownItemField = Object.keys(itemRaw).find(
+        (key) => key !== 'dir' && key !== 'name' && key !== 'description',
+      );
+      if (unknownItemField !== undefined) {
+        return {
+          ok: false,
+          reason: `manual.items 条目含不允许的字段 ${JSON.stringify(unknownItemField)}`,
+        };
+      }
+      if (!isSafeGhostRelativePath(itemRaw.dir)) {
+        return {
+          ok: false,
+          reason: `manual.items[].dir 必须是包内安全相对路径(如 "manual/getting-started"),得到 ${JSON.stringify(itemRaw.dir)}`,
+        };
+      }
+      const dirFold = itemRaw.dir.toLowerCase();
+      if (declaredFilePathFolds.some((path) => pathsConflict(dirFold, path))) {
+        return {
+          ok: false,
+          reason: `manual.items[].dir ${JSON.stringify(itemRaw.dir)} 与插件声明文件路径大小写折叠后冲突`,
+        };
+      }
+      if (
+        typeof itemRaw.name !== 'string' ||
+        itemRaw.name.length > GHOST_SKILL_NAME_MAX_CHARS ||
+        !GHOST_SKILL_NAME_RE.test(itemRaw.name)
+      ) {
+        return {
+          ok: false,
+          reason: `manual.items[].name 必须是小写字母/数字加单连字符分段(禁首尾/连续连字符)、长度 1–${GHOST_SKILL_NAME_MAX_CHARS},得到 ${JSON.stringify(itemRaw.name)}`,
+        };
+      }
+      if (
+        typeof itemRaw.description !== 'string' ||
+        itemRaw.description.trim().length === 0 ||
+        itemRaw.description.length > GHOST_MANUAL_DESCRIPTION_MAX_CHARS
+      ) {
+        return {
+          ok: false,
+          reason: `manual.items[].description 必须是 1–${GHOST_MANUAL_DESCRIPTION_MAX_CHARS} 字符的非空字符串`,
+        };
+      }
+      const nameFold = itemRaw.name.toLowerCase();
+      if (seenManualNames.has(nameFold)) {
+        return { ok: false, reason: `manual.items 含重复 name ${JSON.stringify(itemRaw.name)}` };
+      }
+      seenManualNames.add(nameFold);
+      if (seenManualDirs.has(dirFold)) {
+        return { ok: false, reason: `manual.items 含重复 dir ${JSON.stringify(itemRaw.dir)}` };
+      }
+      seenManualDirs.add(dirFold);
+      manualItems.push({
+        dir: itemRaw.dir,
+        name: itemRaw.name,
+        description: itemRaw.description,
+      });
+    }
+    manual = { items: manualItems };
   }
 
   // 订阅槽详单(卡槽①):与 slots 含 'subscribe' 成对(有详单必有槽;有槽
@@ -5004,6 +5179,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       ...(network !== undefined ? { network } : {}),
       ...(preview !== undefined ? { preview } : {}),
       ...(skill !== undefined ? { skill } : {}),
+      ...(manual !== undefined ? { manual } : {}),
       ...(setup !== undefined ? { setup } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),

@@ -18,6 +18,11 @@ import type {
   RsbWindowCommandRouteRequest,
   RsbWindowContext,
 } from '../../shared/rightSidebarWindow.js';
+import {
+  RSB_WINDOW_PRESENTATION_READY_CHANNEL,
+  RSB_WINDOW_REFRESH_CONTEXT_CHANNEL,
+  RSB_WINDOW_RENDERER_READY_CHANNEL,
+} from '../../shared/rightSidebarWindow.js';
 import { parseConversationSearchJump } from '../../shared/conversationSearchJump.js';
 import { hasActiveRsbNativePopupSurfaces } from '../rsb-browser-bridge/native-popup-surfaces.js';
 import type { RsbWindowController } from './controller.js';
@@ -281,14 +286,45 @@ export function registerRsbWindowIpc(opts: {
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_GET_CONTEXT, () => controller.getContext());
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_READY, (event) => {
-    // 只有子窗口 renderer 的握手才算数,主窗误调不置 ready(避免 ensureOpen 提前放行)
+    // 存量 READY 握手映射到 renderer-ready:renderer shell 已挂载。
     const sidebarWc = controller.getSidebarWebContents();
     if (!sidebarWc || event.sender !== sidebarWc) {
       log.warn('RSB_WINDOW_READY from non-sidebar sender, ignored');
       return;
     }
-    controller.markReady();
+    controller.markRendererReady(event.sender);
   });
+
+  // ── 双阶段就绪 + context 刷新(对齐 PR #2434 基线) ────────────────
+
+  ipcMain.handle(RSB_WINDOW_RENDERER_READY_CHANNEL, (event) => {
+    const sidebarWc = controller.getSidebarWebContents();
+    if (!sidebarWc || event.sender !== sidebarWc) {
+      log.warn('RSB_WINDOW_RENDERER_READY from non-sidebar sender, ignored');
+      return;
+    }
+    controller.markRendererReady(event.sender);
+  });
+
+  ipcMain.handle(RSB_WINDOW_PRESENTATION_READY_CHANNEL, (event) => {
+    const sidebarWc = controller.getSidebarWebContents();
+    if (!sidebarWc || event.sender !== sidebarWc) {
+      log.warn('RSB_WINDOW_PRESENTATION_READY from non-sidebar sender, ignored');
+      return;
+    }
+    controller.markPresentationReady(event.sender);
+  });
+
+  ipcMain.handle(RSB_WINDOW_REFRESH_CONTEXT_CHANNEL, (event) => {
+    const sidebarWc = controller.getSidebarWebContents();
+    if (!sidebarWc || event.sender !== sidebarWc) {
+      log.warn('RSB_WINDOW_REFRESH_CONTEXT from non-sidebar sender, ignored');
+      return;
+    }
+    controller.refreshContext(event.sender);
+  });
+
+  // ── 命令路由 ─────────────────────────────────────────────────────
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_SEND_COMMAND, async (event, payload: unknown) => {
     // 参数错误无论 sender 身份都按 IPC 契约抛 INVALID_PARAMS。

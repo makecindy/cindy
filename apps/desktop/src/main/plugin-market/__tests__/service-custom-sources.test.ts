@@ -2216,6 +2216,6 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     );
     expect(source).not.toMatch(/fs\.promises\.readFile\(/);
     expect(source).not.toMatch(/readFileSync\(/);
-    expect(source).toMatch(/readBoundedFileNoFollowSync/);
+    expect(source).toMatch(/readInstalledGhostManifest/);
   });
 });

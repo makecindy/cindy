@@ -47,7 +47,8 @@ import {
  */
 function autoReviewUnavailableNotice(message: string): string | null {
   return isAutoReviewUnavailableNotice(message)
-    ? '自动审批暂时不可用，需要审批的操作会被拒绝。想自己确认这些操作，可以把这个任务切到「默认权限」。'
+    ? '自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。'
+      + '想少被打断，可以把这个任务切到「默认权限」自行掌控。'
     : null;
 }
 

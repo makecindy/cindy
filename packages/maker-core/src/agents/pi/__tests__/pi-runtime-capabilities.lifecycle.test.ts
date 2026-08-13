@@ -7,6 +7,7 @@ const captured = vi.hoisted(() => ({
   instances: [] as Array<{
     sessionId: string;
     sdkSessionId: string;
+    args: string[];
     requests: Array<Record<string, unknown>>;
     closed: boolean;
     onExit?: (info: { code: number | null; signal: string | null }) => void;
@@ -23,6 +24,7 @@ vi.mock('../rpc-client.js', () => ({
     private readonly state: (typeof captured.instances)[number];
     isClosed = false;
     constructor(opts: {
+      args: string[];
       env: Record<string, string | undefined>;
       onEvent: (event: unknown) => void;
       onExit?: (info: { code: number | null; signal: string | null }) => void;
@@ -30,6 +32,7 @@ vi.mock('../rpc-client.js', () => ({
       this.state = {
         sessionId: opts.env.CINDY_PI_SESSION_ID ?? '',
         sdkSessionId: `/mock/${opts.env.CINDY_PI_SESSION_ID || 'fork'}.jsonl`,
+        args: [...opts.args],
         requests: [],
         closed: false,
         onExit: opts.onExit,
@@ -109,6 +112,7 @@ describe('Pi runtime capability lifecycle', () => {
       },
       runtimeConfig: { endpoint: 'http://127.0.0.1:9' }, binaryPath: '/mock/pi', logger: noopLogger,
       capabilityAdditions: { availableModels: [{ id: 'm', displayName: 'M', contextWindow: 200_000, efforts: [], defaultEffort: null }] },
+      resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => home,
     };
   }
@@ -261,6 +265,9 @@ describe('Pi runtime capability lifecycle', () => {
       sourceSdkSessionId: '/mock/source.jsonl', upToMessageId: undefined, workingDir: cwd,
     });
     expect(fork.runtimeCapabilities).toBeUndefined();
+    expect(captured.instances.at(-1)?.args).toEqual(expect.arrayContaining([
+      '--no-approve', '--no-extensions',
+    ]));
     expect(captured.instances.at(-1)?.requests.filter((request) => request.type === 'get_commands')).toHaveLength(0);
 
     const forkedHandle = await new PiAgent(deps()).startSession({

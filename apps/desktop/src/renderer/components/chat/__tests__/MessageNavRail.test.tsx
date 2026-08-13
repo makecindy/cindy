@@ -81,6 +81,14 @@ const ENTRIES: NavRailEntry[] = [
   { id: 'u5', preview: '第五问' },
 ];
 
+const MIXED_ENTRIES: NavRailEntry[] = [
+  { id: 'u1', preview: '第一问' },
+  { id: 'u2', preview: '自动任务提问', isAutomation: true },
+  { id: 'u3', preview: '第三问' },
+  { id: 'u4', preview: '第四问' },
+  { id: 'u5', preview: '第五问' },
+];
+
 describe('MessageNavRail', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
@@ -170,6 +178,33 @@ describe('MessageNavRail', () => {
     fireEvent.click(screen.getAllByRole('button')[4]);
     expect(onJump).toHaveBeenCalledWith('u5');
     expect(screen.getAllByRole('button')[4].getAttribute('aria-current')).toBe('true');
+  });
+
+  it('自动化提问使用更短的刻度,但保留相同点击定位入口', async () => {
+    const root = buildScrollContainer(1000, [
+      { id: 'u1', top: -400 },
+      { id: 'u2', top: 50 },
+      { id: 'u3', top: 400 },
+      { id: 'u4', top: 600 },
+      { id: 'u5', top: 900 },
+    ]);
+    render(
+      <MessageNavRail
+        entries={MIXED_ENTRIES}
+        scrollRef={{ current: root }}
+        contentMaxWidth={880}
+        bottomOffset={200}
+        onJump={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByRole('button')).toHaveLength(5);
+    });
+    const buttons = screen.getAllByRole('button');
+    expect(buttons[1].getAttribute('data-message-nav-automation')).toBe('true');
+    expect(buttons[0].getAttribute('data-message-nav-automation')).toBeNull();
+    expect(buttons[1].querySelector('span')?.className).toContain('w-2');
+    expect(buttons[0].querySelector('span')?.className).toContain('w-3');
   });
 
   it('渲染窗口外的锚点(DOM 缺失)视作已越过阈值', async () => {

@@ -87,6 +87,12 @@ import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
 import { capturePiRuntimeCapabilityManifest } from './runtime-capabilities.js';
 import {
+  assembleApprovedPiProjectResources,
+  reconcilePiProjectResourceRuntime,
+  stageApprovedPiProjectResources,
+  unavailablePiProjectResourceAssembly,
+} from './project-resource-assembly.js';
+import {
   createPiTranslateContext,
   disposePiTranslateContext,
   translatePiEvent,
@@ -118,6 +124,12 @@ const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 const PI_COMPACT_TIMEOUT_MS = 600_000;
 /** 分支摘要同样可能触发一次完整 LLM 调用。 */
 const PI_BRANCH_NAVIGATION_TIMEOUT_MS = 600_000;
+
+/** PI 的 OpenAI Responses client 以 baseUrl 为 `/v1` 根；Anthropic client 则自行追加 `/v1/messages`。 */
+function piResponsesBaseUrl(endpoint: string): string {
+  const trimmed = endpoint.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
+}
 
 class PiImageInputUnsupportedError extends Error {
   readonly code = PI_IMAGE_INPUT_UNSUPPORTED_CODE;
@@ -456,7 +468,11 @@ export class PiAgent extends BaseAgent {
     agentHome: string,
     nativeProviders: PiNativeProviderSpec[] = [],
     retainedRuntimeModel?: ModelDescriptor,
-  ): Promise<Map<string, boolean>> {
+    gatewayProviderId?: string | null,
+  ): Promise<{
+    gatewayImageInputByModel: Map<string, boolean>;
+    gatewayApiByModel: Map<string, 'anthropic-messages' | 'openai-responses'>;
+  }> {
     const endpoint = this.deps.runtimeConfig.endpoint;
     if (!endpoint) {
       this.deps.logger.warn('pi: runtimeConfig.endpoint missing — models.json will have no usable provider');
@@ -466,20 +482,46 @@ export class PiAgent extends BaseAgent {
       ? [...publicModels, retainedRuntimeModel]
       : publicModels;
     const gatewayImageInputByModel = new Map<string, boolean>();
+    const gatewayApiByModel = new Map<string, 'anthropic-messages' | 'openai-responses'>();
     const models = runtimeModels.map((publicModel: ModelDescriptor) => {
       // availableModels 为跨 provider 拍平的公开能力；BYOM 同 id 冲突时 effort
       // 会按设计收敛成交集。cindy gateway 块则代表内置路由，必须回查其
       // provider-aware 描述符，不能被同名 non-reasoning BYOM 清空 reasoning。
       // host 未注入 resolver 或只有 BYOM 条目时保留旧 flat fallback。
-      const m = this.deps.resolvePiGatewayModelDescriptor?.(publicModel.id) ?? publicModel;
+      const m = this.deps.resolvePiGatewayModelDescriptor?.(
+        gatewayProviderId,
+        publicModel.id,
+      ) ?? publicModel;
+      const resolvedApi = this.deps.resolvePiGatewayModelApi?.(gatewayProviderId, m.id);
+      if (
+        resolvedApi === null ||
+        (resolvedApi !== undefined &&
+          resolvedApi !== 'anthropic-messages' &&
+          resolvedApi !== 'openai-responses')
+      ) {
+        throw new Error(`Model Access v3 did not provide a Pi wire protocol for model: ${m.id}`);
+      }
+      // undefined 明确表示该模型不属于 XD Pi 目录。订阅直连及 BYOM-only 模型仍需出现在
+      // cindy compat provider 的模型表中，沿用它们既有的 Messages 前门；只有 null 才是
+      // “属于 XD 但 v3 配置不完整”，上面已 fail closed。
+      const api = resolvedApi ?? 'anthropic-messages';
+      gatewayApiByModel.set(m.id, api);
       const supportsImageInput = m.supportsImageInput === true;
       gatewayImageInputByModel.set(m.id, supportsImageInput);
       return {
         id: m.id,
         name: m.displayName,
+        // Pi 0.83 支持同一 provider 下逐模型覆盖 API/baseUrl。provider 身份仍是
+        // `cindy`；Model Access v3 让 PI 固定命中 Gateway 的 `/v1/responses` 前门。
+        // 该前门可由 Gateway 翻译到不同上游，不代表底层模型原生实现 Responses。
+        api,
+        ...(api === 'openai-responses' && endpoint
+          ? { baseUrl: piResponsesBaseUrl(endpoint) }
+          : {}),
         reasoning: m.efforts.length > 0,
         input: supportsImageInput ? ['text', 'image'] : ['text'],
-        contextWindow: m.contextWindow > 0 ? m.contextWindow : 200_000,
+        // Model Access v3 requires this value; never replace the server limit with a client guess.
+        contextWindow: m.contextWindow,
         maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : 32_000,
         // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
         cost: {
@@ -528,7 +570,7 @@ export class PiAgent extends BaseAgent {
     }
     await fs.mkdir(agentHome, { recursive: true });
     await fs.writeFile(path.join(agentHome, 'models.json'), JSON.stringify({ providers }, null, 2) + '\n');
-    return gatewayImageInputByModel;
+    return { gatewayImageInputByModel, gatewayApiByModel };
   }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
@@ -622,6 +664,18 @@ export class PiAgent extends BaseAgent {
       );
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
+    // 先解析 native provider 再做 auth：老会话/远端控制端可能没有持久化 providerId，
+    // 仍必须能从 model→provider 映射识别纯 BYOM，不能误落 Cindy gateway 登录门。
+    // startup effort 快照也使用同一来源，因此必须在快照 resolver 之前完成初始化。
+    const authProviderId =
+      opts.providerId ??
+      (initialProvider !== PI_PROVIDER_ID
+        ? initialProvider
+        : opts.model.startsWith('chatgpt/')
+          ? 'openai'
+          : opts.model.startsWith('xai/')
+            ? 'xai'
+            : null);
 
     // availableModels 是跨 provider 拍平的公开选择面；启动旧任务时必须按实际来源重查
     // provider-aware 描述符，不能拿同 id 的内置/BYOM 首见条目校验持久化 effort。
@@ -682,7 +736,7 @@ export class PiAgent extends BaseAgent {
       }
       const gatewayModel = modelId === opts.model && selectedRuntimeModel
         ? selectedRuntimeModel
-        : this.deps.resolvePiGatewayModelDescriptor?.(modelId)
+        : this.deps.resolvePiGatewayModelDescriptor?.(authProviderId, modelId)
           ?? this.capabilities.availableModels.find((model) => model.id === modelId);
       return gatewayModel?.efforts;
     };
@@ -701,17 +755,6 @@ export class PiAgent extends BaseAgent {
       );
     };
 
-    // 先解析 native provider 再做 auth：老会话/远端控制端可能没有持久化 providerId，
-    // 仍必须能从 model→provider 映射识别纯 BYOM，不能误落 Cindy gateway 登录门。
-    const authProviderId =
-      opts.providerId ??
-      (initialProvider !== PI_PROVIDER_ID
-        ? initialProvider
-        : opts.model.startsWith('chatgpt/')
-          ? 'openai'
-          : opts.model.startsWith('xai/')
-            ? 'xai'
-            : null);
     const credentialMode =
       resolveAgentCredentialMode({ agentKind: 'pi', providerId: authProviderId, model: opts.model }) ??
       'gateway-key';
@@ -742,10 +785,11 @@ export class PiAgent extends BaseAgent {
       configHomeCleaned = true;
       void fs.rm(configHome, { recursive: true, force: true }).catch(() => {});
     };
-    const gatewayImageInputByModel = await this.writeModelsJson(
+    const { gatewayImageInputByModel, gatewayApiByModel } = await this.writeModelsJson(
       configHome,
       nativeProviders,
       retainedRuntimeModel,
+      authProviderId,
     );
     const sessionDir = path.join(agentHome, 'sessions');
     await fs.mkdir(sessionDir, { recursive: true });
@@ -754,18 +798,14 @@ export class PiAgent extends BaseAgent {
     // 与 models.json 同放隔离 configHome(Pi 从 PI_CODING_AGENT_DIR/extensions 扫描)。
     const extensionsDir = path.join(configHome, 'extensions');
     await fs.mkdir(extensionsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME),
-      CINDY_BRIDGE_EXTENSION_SOURCE,
-    );
+    const bridgeExtensionPath = path.join(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME);
+    await fs.writeFile(bridgeExtensionPath, CINDY_BRIDGE_EXTENSION_SOURCE);
     // cindy-subagent extension:与 bridge 并列的独立扩展(职责分离 —— bridge 管权限门与
     // MCP 桥,这个只管子代理)。子进程继承 PI_CODING_AGENT_DIR,因此同样加载 bridge,
     // 权限门对子代理照样生效;递归由扩展内的 depth env 自己截断。
+    const subagentExtensionPath = path.join(extensionsDir, CINDY_SUBAGENT_EXTENSION_FILENAME);
     if (!reviewMode) {
-      await fs.writeFile(
-        path.join(extensionsDir, CINDY_SUBAGENT_EXTENSION_FILENAME),
-        CINDY_SUBAGENT_EXTENSION_SOURCE,
-      );
+      await fs.writeFile(subagentExtensionPath, CINDY_SUBAGENT_EXTENSION_SOURCE);
     }
 
     // 权限档文件:extension 每次 tool_call 现读(热切换);读不到按 ask fail-closed。
@@ -1072,14 +1112,63 @@ export class PiAgent extends BaseAgent {
       /* 缺失 → 不挂载 plan-mode */
     }
 
+    // Project resources have exactly one authority: the host-owned PR3 trust
+    // snapshot. Freeze it once per new runtime, then assemble only its eligible
+    // skills. Missing/throwing authorities and paths fail closed; never infer
+    // approval from permission mode, MCP/plugin state, or caller vendor options.
+    let projectResourceAssembly = unavailablePiProjectResourceAssembly(
+      reviewMode
+        ? 'review-mode-project-resources-disabled'
+        : 'approval-resolver-unavailable',
+    );
+    if (!reviewMode && this.deps.resolvePiProjectTrustInput) {
+      try {
+        const trustInput = await this.deps.resolvePiProjectTrustInput({
+          ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+          workingDir: opts.workingDir,
+          ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
+        });
+        projectResourceAssembly = await assembleApprovedPiProjectResources(
+          trustInput,
+          opts.workingDir,
+        );
+        projectResourceAssembly = await stageApprovedPiProjectResources(
+          projectResourceAssembly,
+          configHome,
+        );
+      } catch {
+        projectResourceAssembly = unavailablePiProjectResourceAssembly(
+          'approval-resolver-failed',
+        );
+        this.deps.logger.warn('pi project approval resolver failed closed', {
+          sessionId: opts.sessionId ?? null,
+        });
+      }
+    }
+    this.deps.logger.debug('pi project resource assembly snapshot', {
+      sessionId: opts.sessionId ?? null,
+      status: projectResourceAssembly.diagnostic.status,
+      reason: projectResourceAssembly.diagnostic.reason,
+      approvalRevision: projectResourceAssembly.diagnostic.approvalRevision,
+      requestedSkillCount: projectResourceAssembly.diagnostic.requestedSkillCount,
+    });
+
     const args = [
       '--mode', 'rpc',
+      // Keep Pi's project trust and implicit extension discovery disabled even
+      // when project settings declare packages/extensions. Cindy-owned/pinned
+      // extensions and approved skills are the only explicit additions below.
+      '--no-approve',
+      '--no-extensions',
       '--session-dir', sessionDir,
       '--provider', initialProvider,
       '--model', opts.model,
       ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
       ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
+      '--extension', bridgeExtensionPath,
+      ...(!reviewMode ? ['--extension', subagentExtensionPath] : []),
       ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+      ...projectResourceAssembly.launchSkillPaths.flatMap((skillPath) => ['--skill', skillPath]),
     ];
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
@@ -1484,7 +1573,7 @@ export class PiAgent extends BaseAgent {
       stage: 'ready' | 'switch_session' | 'fork',
     ): Promise<void> => {
       const generation = ++runtimeCapabilityGeneration;
-      const manifest = await capturePiRuntimeCapabilityManifest(
+      const capturedManifest = await capturePiRuntimeCapabilityManifest(
         proc,
         {
           ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
@@ -1493,6 +1582,13 @@ export class PiAgent extends BaseAgent {
         generation,
         stage,
       );
+      const manifest = {
+        ...capturedManifest,
+        projectResources: reconcilePiProjectResourceRuntime(
+          projectResourceAssembly,
+          capturedManifest,
+        ),
+      };
       if (!closed && generation === runtimeCapabilityGeneration) publishRuntimeCapabilities(manifest);
     };
     let runtimeCaptureStage: 'ready' | 'switch_session' = 'ready';
@@ -1654,6 +1750,30 @@ export class PiAgent extends BaseAgent {
         );
       }
       const provider = resolveProviderForModel(model, requestedProviderId);
+      if (provider === PI_PROVIDER_ID) {
+        const routeProviderId = requestedProviderId !== undefined
+          ? requestedProviderId
+          : mutableProviderId;
+        const resolvedApi = this.deps.resolvePiGatewayModelApi?.(routeProviderId, model);
+        if (
+          resolvedApi === null ||
+          (resolvedApi !== undefined &&
+            resolvedApi !== 'anthropic-messages' &&
+            resolvedApi !== 'openai-responses')
+        ) {
+          throw new Error(
+            `Model Access v3 did not provide a Pi wire protocol for model: ${model}`,
+          );
+        }
+        const desiredApi = resolvedApi ?? 'anthropic-messages';
+        const configuredApi = gatewayApiByModel.get(model);
+        if (configuredApi && configuredApi !== desiredApi) {
+          throw new Error(
+            `pi: provider switch for model '${model}' requires API '${desiredApi}', but this session ` +
+              `started with '${configuredApi}'; restart the Pi session to change provider wire protocol.`,
+          );
+        }
+      }
       // effort 能力校验必须排在写路由快照**之前**:它会抛错中止本次切换,而快照一旦落盘就
       // 指向了新 provider —— 那正是父子路由分叉的形状(upstream #1451 与本 PR 的合并点)。
       const nextEffortSnapshot = resolveStartupEffortSnapshot(provider, model);
@@ -2314,6 +2434,8 @@ export class PiAgent extends BaseAgent {
       binaryPath: this.deps.binaryPath,
       args: [
         '--mode', 'rpc',
+        '--no-approve',
+        '--no-extensions',
         '--session-dir', sessionDir,
         '--session', opts.sourceSdkSessionId,
         '--provider', PI_PROVIDER_ID,
@@ -2805,26 +2927,33 @@ export class PiAgent extends BaseAgent {
             return;
           }
           if (decision.verdict === 'ask') {
+            // 审阅器故障降级来的 ask 提示一次:用户需要知道自己为何突然开始被问,
+            // 否则 Auto 档看起来像坏了。模型判定的 ask 不提示(那是正常工作)。
+            if (decision.unavailable) notifyAutoReviewUnavailable();
             // policy turn + auto 的灰区语义对齐 Codex:只有渠道 policy 明确命中的调用
             // 才打扰 owner；普通 Auto-Review ask 直接 fail-closed，不再额外弹微信确认。
             // 无 policy 的 Desktop auto 会话维持既有逐次确认行为。
+            //
+            // **故障降级(unavailable)例外**:上面刚告诉用户"已转由你确认",若这里仍按
+            // policy 静默拒绝,提示与行为就自相矛盾 —— 用户看到可接管的说明却没有确认
+            // 入口,操作照样被拒(PR #2474 review)。故障不是"模型判定该问",而是基础
+            // 设施失灵,用户有权亲自决定,所以走真实确认。
+            const askNeedsUserDecision = decision.unavailable || !turnPermissionPolicy;
             proc.send({
               type: 'extension_ui_response',
               id,
-              confirmed: turnPermissionPolicy
-                ? false
-                : await requestUserConfirmation({ forcePrompt: true }),
+              confirmed: askNeedsUserDecision
+                ? await requestUserConfirmation({ forcePrompt: true })
+                : false,
             });
             return;
           }
           if (decision.verdict === 'block') {
-            // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
-            // 后者按 Auto 本意保持静默。动作两种都仍然 confirmed:false。
-            if (decision.unavailable) notifyAutoReviewUnavailable();
+            // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默。
+            // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这里。)
             this.deps.logger.debug('pi auto-review blocked tool call', {
               toolName,
               reason: decision.reason,
-              unavailable: decision.unavailable === true,
             });
           }
           proc.send({

@@ -49,6 +49,8 @@ export interface BoundedFileRead {
   bytes: Buffer;
   /** 与 bytes 来自同一已打开句柄，且读取前后版本字段保持不变。 */
   stat: fs.BigIntStats;
+  /** 同一文件句柄在读取前校验过的字节长度。 */
+  expectedSize: number;
 }
 
 export class BoundedFileReadUncertainError extends Error {
@@ -75,7 +77,7 @@ export class BoundedFileReadChangedError extends Error {
 }
 
 /** realpath 产物是否落在同为 realpath 产物的根内(含根本身)。 */
-function isWithinRoot(realFilePath: string, realRoot: string): boolean {
+export function isRealPathWithinRoot(realFilePath: string, realRoot: string): boolean {
   if (realFilePath === realRoot) return true;
   const rootWithSep = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
   return realFilePath.startsWith(rootWithSep);
@@ -133,7 +135,7 @@ async function verifyStillWithinRoot(
       fs.promises.realpath(filePath),
     ]);
     if (!sameInode(pathStat, handleStat)) return false;
-    return isWithinRoot(realFilePath, realRoot);
+    return isRealPathWithinRoot(realFilePath, realRoot);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;
     if (code !== 'ENOENT' && code !== 'ENOTDIR' && code !== 'ELOOP') {
@@ -210,9 +212,9 @@ export async function readBoundedFileNoFollowWithStat(
       ) {
         throw new BoundedFileReadChangedError();
       }
-      return { bytes, stat: verificationStat };
+      return { bytes, stat: verificationStat, expectedSize: Number(stat.size) };
     }
-    return { bytes, stat: finalStat };
+    return { bytes, stat: finalStat, expectedSize: Number(stat.size) };
   } finally {
     await handle.close();
   }
@@ -279,7 +281,7 @@ export function readBoundedFileNoFollowSync(
         const pathStat = fs.statSync(filePath, { bigint: true });
         const realFilePath = fs.realpathSync(filePath);
         if (!sameInode(pathStat, stat)) return null;
-        if (!isWithinRoot(realFilePath, options.containWithin)) return null;
+        if (!isRealPathWithinRoot(realFilePath, options.containWithin)) return null;
       } catch {
         return null;
       }

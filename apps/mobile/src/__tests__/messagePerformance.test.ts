@@ -98,25 +98,28 @@ describe('message render performance', () => {
     expect(rawMessages).toHaveLength(1000);
     expect(durationMs).toBeLessThan(1500);
     // 桌面共享实现把 transcript 中的 plan/todo 卡拆成顶层独立项,较旧的「折叠进 work_group」多出 1 项。
-    expect(items).toHaveLength(601);
+    // 计划所有权边界后,20 个隔着 user turn 的未完成 TodoWrite 不再被串成一张卡
+    // (那是历史串号病),而是每个 turn 各自一张:601 + 19 = 620。
+    expect(items).toHaveLength(620);
+    // turn 0 是 todo turn:所有权边界后它的清单卡锚在本 turn(不再被后续 turn
+    // 的更新拖到 transcript 尾部合并),紧跟在 work_group 之后。
     expect(items.slice(0, 6).map((item) => item.type)).toEqual([
       'message',
       'work_group',
+      'todo',
       'message',
       'message',
       'work_group',
-      'message',
     ]);
 
     const keys = items.map((item) => item.key);
     expect(new Set(keys).size).toBe(keys.length);
-    expect(keys.slice(0, 6)).toEqual([
+    expect(keys.slice(0, 5)).toEqual([
       'message-user-0',
       'work-thinking-0',
+      'todo-tool-0',
       'message-assistant-0',
       'message-user-1',
-      'work-thinking-1',
-      'message-assistant-1',
     ]);
   });
 

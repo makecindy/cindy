@@ -24,7 +24,7 @@
 import catalogJson from '../catalog/providers.json' with { type: 'json' };
 import modelRegistryJson from '../catalog/model-registry.json' with { type: 'json' };
 
-import type { ModelRegistry } from '@cindy/model-access-protocol';
+import type { ModelRegistry } from './modelAccessBean.js';
 import type { Catalog, Provider } from './types.js';
 
 /** 仓内 v2 目录文件(xai 清单 + presets;同一文件发布到 OSS `cfg/providers.json`)。 */

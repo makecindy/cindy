@@ -50,16 +50,14 @@ packages/*
 !packages/auth-client/**
 !packages/device-link
 !packages/device-link/**
+!packages/device-link-protocol
+!packages/device-link-protocol/**
 !packages/maker-shared
 !packages/maker-shared/**
 !packages/model-providers
 !packages/model-providers/**
 !packages/voice-input-core
 !packages/voice-input-core/**
-
-# mobile 的 device-link 传递依赖 cindy-protocol submodule；EAS 上传必须带源码。
-!cindy-protocol
-!cindy-protocol/**
 
 tools/*
 !tools/shared

@@ -8,7 +8,7 @@
 >
 > 适用平台：macOS
 >
-> 更新时间：2026-08-05
+> 更新时间：2026-08-13
 
 ## 0. 当前实施状态
 
@@ -17,8 +17,8 @@
 - 新增 host-neutral `@cindy/ios-simulator-runtime`，通过 argv 方式调用 Apple 工具并解析 `simctl list -j`，不执行 shell。
 - Desktop main 以真实 Session 记录为准，local macOS 会话可发现环境；缺失、已删除、SSH/remote Session 均 fail-closed。
 - 新增默认启用、允许用户或项目显式关闭的 `cindy_ios_simulator` Agent provider，已经覆盖环境/设备/实例生命周期、screen map、基础输入、App build/install/launch/terminate/open URL、截图录屏和诊断工具。这样 iOS 请求可直接进入内嵌流程，而无需用户先为每个项目手动开启插件。
-- 新增宿主级 shell hard gate：对 Agent 发出的 `open -a Simulator`、Simulator.app 直接可执行路径和会改变设备状态的 `xcrun simctl` 命令确定性拒绝，并将请求引导回 `cindy_ios_simulator`；只读 `simctl list/listapps`、Xcode build 和关闭外部 Simulator 不受影响。不同 Agent runtime 分别通过 PATH shim、command approval deny、item-start interrupt 或 pre-tool hook 覆盖 Full access 免审批命令与绝对路径兜底，避免旧 skill 或恢复会话绕过内嵌路由。
-- 新增 Computer MCP 外部 iOS 工作流硬闸：`launch_app(Xcode/Simulator)` 直接返回 `EMBEDDED_IOS_SIMULATOR_PREFERRED`；对 PID 定向的 click/hotkey/type 等修改操作先由 Desktop 使用 OS 进程快照解析真实 provenance，命中 Xcode 或 Simulator.app 时同样引导到 `cindy_ios_simulator`，无法验证 provenance 时 fail closed。只读窗口检查和其它已验证身份的应用操作保持可用；在 Cindy 建立 host-issued、按任务绑定的显式授权流之前，不向模型暴露外部 iOS 修改操作的 override 参数。
+- 内嵌与外部模拟器的路线选择由插件 Skill/Agent 负责：内嵌能力可用且适合任务时优先使用 `cindy_ios_simulator`，不可用或用户需要系统窗口时可以走普通 shell、Xcode、Simulator.app、`simctl` 或 Computer Use。Desktop 不再注入 iOS 专用 shell policy、Claude hook 或 Codex PATH shim；外部命令继续服从 Agent 原有权限与审批机制。
+- Computer MCP 不再对 Xcode/Simulator.app 设置 iOS 专用路由硬闸；启动、点击、快捷键和轨迹回放均走普通桌面驱动。工作目录路径边界、窗口快照代际、轨迹不可变预检、取消与执行预算等通用安全保护保持不变。内嵌 Host 的 session ownership、generation、lease、设备准入、跨任务隔离与 cleanup 仍由 Host 强制执行，不依赖 Skill 自觉。
 - 新增非 singleton 的 `ios-simulator` right-sidebar plugin；用户可手动打开、attach、启动/停止/解绑设备、管理 Agent 设备授权，并查看 main 内存中的实时 JPEG stream 与 FPS/连接状态。
 - manual pane 与 Agent tool gate 分离：关闭实验性 Agent tool 不影响用户查看本机设备状态。
 - 已覆盖 runtime parser、MCP envelope/session context、main host/IPC、远程会话拒绝、renderer 状态展示和 plugin provider 映射测试。
@@ -982,7 +982,7 @@ MVP 规则：
 | 工具                      | 作用                                                 |
 | ------------------------- | ---------------------------------------------------- |
 | `check_environment`       | 检查 Xcode/runtime/WDA/project adapter               |
-| `list_devices`            | 列出名称、UDID、OS、boot/attachment 状态             |
+| `list_simulator_devices`  | 列出名称、UDID、OS、boot/attachment 状态             |
 | `list_instances`          | 只列 caller Session 拥有的实例                       |
 | `create_instance`         | 创建并绑定 Session/worktree                          |
 | `attach_device`           | 将已有设备绑定当前 Session，歧义或占用时拒绝         |
@@ -993,11 +993,11 @@ MVP 规则：
 | `install_app`             | 安装已验证来源的 `.app`                              |
 | `launch_app`              | 启动 bundle，支持受控 args/env                       |
 | `terminate_app`           | 停止当前 bundle                                      |
-| `open_url`                | 经 Session permission mode 打开 deep link/URL        |
+| `open_simulator_url`      | 经 Session permission mode 在模拟设备内打开 deep link/URL |
 | `get_screen_map`          | 返回精简可访问性元素                                 |
 | `tap`                     | selector 优先、坐标兜底                              |
 | `swipe`                   | 方向或明确起止点                                     |
-| `type_text`               | 向当前焦点输入文本                                   |
+| `type_simulator_text`     | 向模拟设备内当前焦点输入文本                         |
 | `press_button`            | Home/lock 等受支持按钮                               |
 | `set_appearance`          | 设置浅色/深色系统外观                                |
 | `set_increase_contrast`   | 开关 Increase Contrast 辅助功能                      |
@@ -1013,7 +1013,7 @@ MVP 规则：
 | `visual_diff`             | 返回当前截图与基线的像素差异指标                     |
 | `capture_state`           | 原子诊断快照                                         |
 | `set_stream_profile`      | 调整 FPS、resolution、encoding、FPS overlay          |
-| `take_screenshot`         | 显式持久化截图到 `cindy-media`                       |
+| `take_simulator_screenshot` | 显式持久化模拟设备截图到 `cindy-media`             |
 | `start_recording`         | 开始显式录屏                                         |
 | `stop_recording`          | 停止并摄入 `cindy-media`                             |
 
@@ -1029,7 +1029,7 @@ MVP 规则：
 
 `list_tools` 在 MCP 和 Codex dynamic gateway 两条入口都带 Host 计算出的 capability availability（`available`、`requires-instance`、`instance-dependent`、`unavailable` 以及 backend/reasonCode）。availability 只用于发现和解释，最终执行仍由 Host 的 ownership、lease、generation 和 admission policy 再次校验。
 
-Agent 对设备的控制、install/launch、tap/type 和模型截图在首次使用设备时必须先经过 UI 的 per-device consent；授权操作本身不暴露给 Agent 工具。用户拒绝后，pane 的查看和手动输入仍可用，Agent mutation 返回 `DEVICE_CONTROL_NOT_GRANTED`。`build_app` 与 `open_url` 还要分别经过现有 Session permission mode，设备授权不能替代它们。
+Agent 对设备的控制、install/launch、tap/type 和模型截图在首次使用设备时必须先经过 UI 的 per-device consent；授权操作本身不暴露给 Agent 工具。用户拒绝后，pane 的查看和手动输入仍可用，Agent mutation 返回 `DEVICE_CONTROL_NOT_GRANTED`。`build_app` 与 `open_simulator_url` 还要分别经过现有 Session permission mode，设备授权不能替代它们；两者在调用未携带 owned instance 路由时不再抬起设备授权卡（Host 会在路由校验直接拒绝），避免无关任务被误路由时弹出无意义的授权请求。
 
 ### 13.2 后续工具
 

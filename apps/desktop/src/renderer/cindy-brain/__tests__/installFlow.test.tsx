@@ -67,6 +67,25 @@ afterEach(() => {
 });
 
 describe('installFlow · 装入确认', () => {
+  it('带 manual 的包把篇数传给装入确认信息行', async () => {
+    const manifest = {
+      ...baseManifest,
+      manual: {
+        items: [
+          { dir: 'manual/ops', name: 'ops', description: '操作手册' },
+          { dir: 'manual/faq', name: 'faq', description: '常见问题' },
+        ],
+      },
+    };
+    setupWindow(manifest);
+    const d = deps(vi.fn(async () => true));
+    await confirmAndInstallGhost('/tmp/manual.cindy', d);
+    const options = (d.confirmWithCheckbox as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      content?: { props?: { manualCount?: number } };
+    };
+    expect(options.content?.props?.manualCount).toBe(2);
+  });
+
   it('Renderer 权限清单确认后把 Node 插件安装交给 Main,并提示装入完成', async () => {
     const { install } = setupWindow(baseManifest);
     const confirm = vi.fn(async () => true);

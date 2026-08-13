@@ -39,6 +39,7 @@ vi.mock('../../logger', () => ({
 }));
 
 import { searchChatHistoryHybrid } from '../chatHistorySearch';
+import { setChatEmbeddingEnabled } from '../../embedders/chat-history-embedder';
 
 describe('searchChatHistoryHybrid', () => {
   beforeEach(() => {
@@ -46,6 +47,7 @@ describe('searchChatHistoryHybrid', () => {
     dbMocks.queryOne.mockReset();
     dbMocks.select.mockReset();
     embeddingMocks.embedSync.mockReset();
+    setChatEmbeddingEnabled(true);
   });
 
   it('skips vector probing and embedding when requested', async () => {
@@ -70,6 +72,33 @@ describe('searchChatHistoryHybrid', () => {
     expect(embeddingMocks.embedSync).not.toHaveBeenCalled();
     expect(result.vectorUsed).toBe(false);
     expect(result.vectorSkipReason).toBe('本次请求已禁用语义检索, 仅用 FTS。');
+  });
+
+  it('skips chat vector search when its runtime consumer is disabled', async () => {
+    setChatEmbeddingEnabled(false);
+    dbMocks.query.mockResolvedValue([]);
+    dbMocks.queryOne.mockResolvedValue({ rowid: 1 });
+
+    const result = await searchChatHistoryHybrid({
+      query: 'billing',
+      sessionIds: null,
+      workdir: null,
+      fromMs: null,
+      toMs: null,
+      agentKind: null,
+      roles: null,
+      contextRadius: 0,
+      limit: 10,
+      offset: 0,
+    });
+
+    expect(dbMocks.query).toHaveBeenCalledTimes(1);
+    expect(dbMocks.queryOne).not.toHaveBeenCalled();
+    expect(embeddingMocks.embedSync).not.toHaveBeenCalled();
+    expect(result.vectorUsed).toBe(false);
+    expect(result.vectorSkipReason).toBe(
+      '聊天记录语义索引未启用, 本次仅用 FTS 全文检索。',
+    );
   });
 
   it('short-circuits before both arms when the workdir filter matches no stored directory', async () => {

@@ -15,8 +15,8 @@ import {
   Maker,
   ClaudeCodeAgent,
   CodexAgent,
-  DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   configureDefaultImageResizer,
+  type AutoReviewRequest,
   type McpProvider,
 } from '@cindy/maker-core';
 import {
@@ -29,7 +29,7 @@ import {
   type CodexModelBackfillCoordinator,
 } from './codex-model-backfill.js';
 import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cindy/orca-workflow';
-import { LspServerPool } from '@cindy/mcps';
+import { LspServerPool, type IOSSimulatorMcpCallContext } from '@cindy/mcps';
 
 import { createMessage } from '../localDb/ipc/messages.js';
 import { getWorkerLink, updateWorkerStatus } from '../localDb/orcaTeamStore.js';
@@ -49,6 +49,7 @@ import { remoteInvoke } from '../device-link/index.js';
 import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { getIOSSimulatorPluginAccessDecision } from '../cindy-brain/index.js';
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
@@ -74,15 +75,13 @@ import {
   mergeClaudeHooks,
 } from './claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
-import { createIOSSimulatorShellGuardHook } from './claude-hooks/ios-simulator-shell-hook.js';
-import { getDesktopShellCommandPolicy } from './shell-command-policy.js';
-import { ensureAgentShellGuards } from './agent-shell-guards.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
   deriveAvailableModels,
   refreshCatalogDerivedModels,
   resolvePiRuntimeModelDescriptor,
+  resolvePiGatewayDescriptorProviderId,
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
@@ -110,6 +109,7 @@ import {
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
+import { findCatalogModel, resolveAutoReviewBudget } from './auto-review-budget.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { accountProviderReadinessBarrier } from './account-provider-readiness-barrier.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
@@ -234,18 +234,42 @@ type RemoteCcQuery = Awaited<
 
 let _maker: Maker | null = null;
 
+/**
+ * 本次审核请求的额度。按模型能力自适应:能关思考的走紧凑档,强制思考的
+ * (以及目录里查不到的)给足思考+结论的空间 —— 固定 384 token 会让 DeepSeek
+ * 这类模型正文恒为空。详见 auto-review-budget.ts。
+ */
+function autoReviewBudgetFor(request: AutoReviewRequest) {
+  return resolveAutoReviewBudget(findCatalogModel(
+    getActiveCatalog().providers,
+    request.providerId,
+    request.agentKind,
+    request.model,
+  ));
+}
+
+let providerAccessRuntimeRefreshListener: (() => void) | null = null;
+
+/** Register the bootstrap-owned runtime reconciliation that follows provider access changes. */
+export function setProviderAccessRuntimeRefreshListener(listener: (() => void) | null): void {
+  providerAccessRuntimeRefreshListener = listener;
+}
+
 const reviewAutoPermissionAction = createAutoPermissionReviewer({
   logger: desktopMakerLogger,
+  // 重试守卫必须按同一份额度计时,否则放宽额度的那一档会被自己的守卫切断。
+  resolveRequestTimeoutMs: (request) => autoReviewBudgetFor(request).timeoutMs,
   requestText: async (request, prompt) => {
     const maker = _maker;
     if (!maker) return null;
+    const budget = autoReviewBudgetFor(request);
     const result = await requestUtilityText(maker, prompt, {
       providerId: request.providerId?.trim() || undefined,
       agentKind: request.agentKind,
       model: request.model,
-      maxTokens: 384,
-      timeoutMs: DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.requestTimeoutMs,
-      reasoningEffort: 'low',
+      maxTokens: budget.maxTokens,
+      timeoutMs: budget.timeoutMs,
+      ...(budget.reasoningEffort ? { reasoningEffort: budget.reasoningEffort } : {}),
     });
     return result.ok ? result.text : null;
   },
@@ -261,6 +285,13 @@ let _codexModelBackfill: CodexModelBackfillCoordinator | null = null;
 /** Refresh selectable model capabilities, then notify every local/remote renderer. */
 function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {
   if (_maker) refreshCatalogDerivedModels(_maker, getDesktopSelectableCatalog());
+  try {
+    providerAccessRuntimeRefreshListener?.();
+  } catch (error) {
+    desktopMakerLogger.warn('provider access runtime refresh listener failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
@@ -649,10 +680,32 @@ export function getMaker(): Maker {
     // 和项目 .claude/settings.json, mtime-based 缓存, 只在 session start 时同步检查。
     const pluginRegistry = createPluginRegistry();
 
+    const resolveIOSSimulatorAccess = (context?: IOSSimulatorMcpCallContext) => {
+      const workingDir = context?.workingDir?.trim() || null;
+      const pluginAccess = getIOSSimulatorPluginAccessDecision(workingDir);
+      if (!pluginAccess.allowed) return pluginAccess;
+      if (!pluginRegistry.isEnabled('ios-simulator', workingDir ?? undefined)) {
+        return {
+          allowed: false as const,
+          errorCode: 'IOS_SIMULATOR_DISABLED' as const,
+          message:
+            'The embedded iOS Simulator capability is disabled for the current project. Enable it in the project plugin settings before retrying the embedded tool; other iOS workflows are unaffected.',
+          data: {
+            reason: 'disabled-in-workdir',
+            action: 'enable-plugin',
+            pluginId: 'ios-simulator',
+            pluginName: 'iOS Simulator',
+          },
+        };
+      }
+      return { allowed: true as const };
+    };
+
     const makerMemoryProviderDeps = {
       getMakerMemoryManager: () => makerMemoryManager,
       lspPool: getLspPool(),
       pluginRegistry,
+      resolveIOSSimulatorAccess,
       invokeRemote: remoteInvoke,
       // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
       // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
@@ -840,10 +893,6 @@ export function getMaker(): Maker {
       claudeHooks: mergeClaudeHooks(
         {
           PreToolUse: [
-            {
-              matcher: 'Bash|PowerShell',
-              hooks: [createIOSSimulatorShellGuardHook(desktopMakerLogger)],
-            },
             {
               matcher: 'Read',
               hooks: [createReadImageHook(desktopMakerLogger)],
@@ -1112,10 +1161,8 @@ export function getMaker(): Maker {
       },
       makerMemory: makerMemoryManager,
       codexHostDynamicToolProvider: createIOSSimulatorCodexDynamicToolProvider({
-        deps: getIOSSimulatorMcpDeps(),
-        isEnabled: (workingDir) => getPluginRegistry().isEnabled('ios-simulator', workingDir),
+        deps: getIOSSimulatorMcpDeps({ resolveAccess: resolveIOSSimulatorAccess }),
       }),
-      getShellCommandPolicy: ({ command }) => getDesktopShellCommandPolicy(command),
       // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
       // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
       // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
@@ -1215,12 +1262,6 @@ export function getMaker(): Maker {
             // bridge 整体缺席 = cindy_contacts 必然不可达
             codexAppliedContactsEnabled = false;
           }
-        }
-        const shellGuardDir = ensureAgentShellGuards();
-        if (shellGuardDir) {
-          mcpExtraEnv.PATH = [shellGuardDir, mcpExtraEnv.PATH ?? process.env.PATH]
-            .filter((value): value is string => Boolean(value))
-            .join(path.delimiter);
         }
         const browserCompanion = usesIsolatedProxy
           ? null
@@ -1561,8 +1602,15 @@ export function getMaker(): Maker {
       },
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
         resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId),
-      resolvePiGatewayModelDescriptor: (modelId) =>
-        resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), 'cindy', modelId),
+      resolvePiGatewayModelDescriptor: (providerId, modelId) => {
+        // `cindy` / null 是 Pi 的默认 gateway 路由；其 wire 由 v3 XD runtime plan
+        // 决定，因此描述符也必须锁定 XD，不能让复合 `cindy` 按目录顺序命中同 id 订阅模型。
+        return resolvePiRuntimeModelDescriptor(
+          getDesktopSelectableCatalog(),
+          resolvePiGatewayDescriptorProviderId(providerId),
+          modelId,
+        );
+      },
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
       getGhostRosterPrompt,

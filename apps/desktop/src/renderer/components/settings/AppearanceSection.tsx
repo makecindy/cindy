@@ -683,6 +683,7 @@ export function AppearanceSection() {
             />
             <input
               type="number"
+              aria-label={t('settings.appearance.font.uiSize.label')}
               min={12}
               max={24}
               step={1}
@@ -767,6 +768,7 @@ export function AppearanceSection() {
             />
             <input
               type="number"
+              aria-label={t('settings.appearance.font.codeSize.label')}
               min={10}
               max={24}
               step={1}

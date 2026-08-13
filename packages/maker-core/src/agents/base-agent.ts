@@ -75,6 +75,7 @@ import type {
   ListCustomizationsResult,
 } from '../types/customizations.js';
 import type { PiRuntimeCapabilityManifest } from '../types/pi-runtime-capabilities.js';
+import type { PiProjectTrustInputSnapshot } from '../types/pi-project-trust.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
 import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
 
@@ -384,6 +385,17 @@ export interface AgentDeps {
   resolvePiAgentHome?: () => string | undefined;
 
   /**
+   * Pi-only: resolve the immutable Cindy project-approval input for one new
+   * runtime. The host owns identity canonicalization, approval audit/revocation,
+   * and discovered-resource provenance. Missing/throwing resolvers fail closed.
+   */
+  resolvePiProjectTrustInput?: (ctx: {
+    sessionId?: string;
+    workingDir: string;
+    remoteHostId?: string;
+  }) => Promise<PiProjectTrustInputSnapshot | null>;
+
+  /**
    * pi 专用钩子:把 mcpProviders 转成 pi 子进程可消费的 MCP 桥配置。
    *
    * 与 prepareCodexExtraSpawnConfig 同因:pi 是独立子进程,没法消费 in-process
@@ -431,11 +443,28 @@ export interface AgentDeps {
   ) => ModelDescriptor | null;
 
   /**
-   * Pi-only:为 `cindy` gateway 的 models.json 块解析内置 provider-aware 描述符。
+   * Pi-only:为 `cindy` gateway 的 models.json 块按会话实际来源解析 provider-aware 描述符。
    * 与上面的续跑私有解析器分开，避免生成 gateway 配置放宽 retired/disabled
    * 准入或改变新会话的私有解析时机。缺省时 Pi 保留 flat descriptor fallback。
    */
-  resolvePiGatewayModelDescriptor?: (modelId: string) => ModelDescriptor | null;
+  resolvePiGatewayModelDescriptor?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => ModelDescriptor | null;
+
+  /**
+   * Pi-only:解析 `cindy` gateway 内某模型应使用的 PI API。provider 仍保持 `cindy`，
+   * 但同一 model id 可能同时存在于 XD 与订阅来源，必须同时按当前会话来源落实 wire
+   * protocol，不能只按 model id 猜。三态语义：
+   * - `openai-responses`：Model Access v3 明确指定的 Cindy AI Pi 路由；
+   * - `anthropic-messages`：非 XD compat proxy 路由；
+   * - `null`：模型属于 Cindy AI Pi 目录，但协议缺失或不匹配，Pi fail closed；
+   * - `undefined`：模型不属于当前来源的 XD Pi 目录，保留既有 Messages 协议。
+   */
+  resolvePiGatewayModelApi?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => PiNativeApi | null | undefined;
 
   /**
    * Host-provided capability descriptor additions.

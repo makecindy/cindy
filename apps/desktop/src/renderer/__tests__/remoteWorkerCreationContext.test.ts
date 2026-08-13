@@ -40,11 +40,13 @@ describe('remote Orca Worker creation context', () => {
   it('passes the same device context through both Worker creation entry points', () => {
     const sessionView = read('features/cc-agent/CCAgentSessionView.tsx');
     const workerPanel = read('features/cc-agent/OrcaWorkerPanel.tsx');
-    const workersPlugin = read('features/right-sidebar/plugins/orca-workers/index.tsx');
+    const workersTabBody = read(
+      'features/right-sidebar/plugins/orca-workers/OrcaWorkersTabBody.tsx',
+    );
 
     expect(sessionView).toContain('deviceId={remoteDeviceId}');
     expect(workerPanel).toContain('deviceId={deviceId}');
-    expect(workersPlugin).toContain('deviceId={leadSession?.deviceLinkDeviceId}');
+    expect(workersTabBody).toContain('deviceId: leadSession?.deviceLinkDeviceId');
   });
 
   it('never uses the controller API key to gate a remote model row', () => {

@@ -101,7 +101,14 @@ function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?
   if (previousOwnerId !== dataOwnerId) invalidateProvidersSnapshot();
 }
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+export function AuthProvider({
+  children,
+  enableSessionExpiredPrompt = true,
+}: {
+  children: ReactNode;
+  /** Secondary renderers keep auth state for owner scoping but do not own global prompts. */
+  enableSessionExpiredPrompt?: boolean;
+}) {
   const [user, setUser] = useState<User | null>(null);
   const [mode, setMode] = useState<'signed-out' | 'local' | 'cloud'>('signed-out');
   const [dataOwnerId, setDataOwnerId] = useState<string | null>(null);
@@ -274,6 +281,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [accountDeletionRestored, isAuthenticated, t]);
 
   useEffect(() => {
+    if (!enableSessionExpiredPrompt) return;
     let handling = false;
     return window.electronAPI.onAuthSessionExpired((payload) => {
       if (handling) return;
@@ -307,7 +315,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         handling = false;
       });
     });
-  }, [confirm, t]);
+  }, [confirm, enableSessionExpiredPrompt, t]);
 
   const loadLoginState = useCallback(async (): Promise<DesktopLoginActionResult> => {
     const result = await authServiceRef.current!.getLoginState();

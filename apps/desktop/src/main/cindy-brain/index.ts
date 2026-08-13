@@ -22,7 +22,6 @@ import {
   GHOST_CARD_HEIGHT_MAX,
   GHOST_CARD_HEIGHT_MIN,
   GHOST_INSTALL_MANIFEST_MAX_BYTES,
-  GHOST_MANIFEST_FILE,
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
   diffGhostPermissionItems,
@@ -34,7 +33,6 @@ import {
   isOfficialGhostId,
   isValidGhostId,
   layoutWithGhostPanel,
-  validateGhostManifest,
   type GhostHostNoticeKey,
   type GhostImageAspectRatio,
   type GhostManifest,
@@ -207,6 +205,7 @@ import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostScheduleSlot, isMainShellWindowUrl } from './scheduleSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import { GhostIOSSimulatorSlot, type IOSSimulatorSlotFocusContext } from './iosSimulatorSlot.js';
+import { resolveIOSSimulatorPluginAccess } from './iosSimulatorPluginGate.js';
 import {
   clearIOSSimulatorRendererAccess,
   focusIOSSimulatorRendererSession,
@@ -243,7 +242,7 @@ import { GhostFsSlot } from './fsSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
-import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
+import { readInstalledGhostManifest } from '../installedGhostManifest.js';
 import {
   ghostManifestDigest,
   PluginMarketLedger,
@@ -713,6 +712,16 @@ export function isGhostAvailableForActiveSession(id: string): boolean {
   return !isCindyAccountGhostId(id) || getAppCapabilities().canUseCindyAccountServices;
 }
 
+/** Live Host capability gate shared by Agent transports and Renderer IPC. */
+export function getIOSSimulatorPluginAccessDecision(
+  workingDir: string | null = null,
+) {
+  return resolveIOSSimulatorPluginAccess(getGhostManager().list(), workingDir, {
+    isAvailableForActiveSession: isGhostAvailableForActiveSession,
+    isDisabledForWorkdir: isGhostDisabledForWorkdir,
+  });
+}
+
 function availableGhosts(): InstalledGhost[] {
   return getGhostManager()
     .list()
@@ -721,9 +730,22 @@ function availableGhosts(): InstalledGhost[] {
 
 function projectGhostForRenderer(ghost: InstalledGhost): InstalledGhost {
   try {
-    const suggest = getGhostOauthReauthSuggest(withRuntimeFiloGoogleClient(ghost.manifest));
+    const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
+    const oauthManager = getGhostOauthAccountManager();
+    const expiredAccountCount = (runtimeManifest.network?.secrets ?? []).reduce(
+      (count, secret) =>
+        secret.source === 'oauth' && secret.oauth
+          ? count +
+            oauthManager.clientMigrationExpiredAccountCount(runtimeManifest.id, secret.key)
+          : count,
+      0,
+    );
+    const suggest = getGhostOauthReauthSuggest(runtimeManifest);
     return {
       ...ghost,
+      ...(expiredAccountCount > 0
+        ? { oauthAuthorizationExpired: { expiredAccountCount } }
+        : {}),
       ...(suggest
         ? {
             oauthScopeStale: {
@@ -734,8 +756,8 @@ function projectGhostForRenderer(ghost: InstalledGhost): InstalledGhost {
         : {}),
     };
   } catch (error) {
-    // 详情页角标是提示面，保险库异常不能让插件清单整体消失。
-    log.warn('ghost oauth scope stale projection omitted', {
+    // OAuth 展示投影是提示面，保险库异常不能让插件清单整体消失。
+    log.warn('ghost oauth renderer projection omitted', {
       ghostId: ghost.manifest.id,
       errorType: error instanceof Error ? error.name : typeof error,
     });
@@ -2039,17 +2061,8 @@ function readInstalledGhostManifestDigest(ghostId: string): string | null {
     .list()
     .find((candidate) => candidate.manifest.id === ghostId);
   if (!ghost) return null;
-  try {
-    const bytes = readBoundedFileNoFollowSync(
-      path.join(ghost.dir, GHOST_MANIFEST_FILE),
-      GHOST_INSTALL_MANIFEST_MAX_BYTES,
-    );
-    if (bytes === null) return null;
-    const validated = validateGhostManifest(JSON.parse(bytes.toString('utf8')) as unknown);
-    return validated.ok ? ghostManifestDigest(validated.manifest) : null;
-  } catch {
-    return null;
-  }
+  const parsed = readInstalledGhostManifest(ghost.dir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
+  return parsed.ok ? ghostManifestDigest(parsed.manifest) : null;
 }
 
 /** Resolve Connection metadata only from a trusted organization market install. */
@@ -3370,9 +3383,13 @@ function getGhostOauthReauthSuggest(
   runtimeManifest: GhostManifest,
 ): GhostSetupReauthSuggest | undefined {
   const oauthManager = getGhostOauthAccountManager();
-  return findGhostOauthReauthSuggest(runtimeManifest, (secretKey, decl) =>
-    oauthManager.defaultMissingScopes(runtimeManifest.id, secretKey, decl),
-  );
+  return findGhostOauthReauthSuggest(runtimeManifest, (secretKey, decl) => {
+    const defaultAccount = oauthManager
+      .listAccounts(runtimeManifest.id, secretKey)
+      .find((account) => account.isDefault);
+    if (defaultAccount?.status === 'expired') return [];
+    return oauthManager.defaultMissingScopes(runtimeManifest.id, secretKey, decl);
+  });
 }
 
 /**
@@ -3941,9 +3958,10 @@ async function installOrUpdateMarketGhostPackageLocked(
             )
           : [];
       const needsReview =
-        expected.permissionPolicy.mode === 'manual'
+        permissionDiff?.builtinOauthClientChanged === true ||
+        (expected.permissionPolicy.mode === 'manual'
           ? permissionDiff === null || permissionDiff.added.length > 0
-          : unreviewed.length > 0;
+          : unreviewed.length > 0);
       if (needsReview && expected.approvedPackageSha256 === undefined) {
         const reviewKeys =
           expected.permissionPolicy.mode === 'manual'
@@ -3961,6 +3979,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           ghostId: expected.ghostId,
           mode: expected.permissionPolicy.mode,
           keys: reviewKeys,
+          builtinOauthClientChanged: permissionDiff?.builtinOauthClientChanged === true,
         });
         throw new GhostPackagePermissionReviewRequiredError(review);
       }
@@ -3995,16 +4014,26 @@ async function installOrUpdateMarketGhostPackageLocked(
     expected.beforeCommitInLock?.();
     const runtime = getGhostRuntime();
     runtime.stop(expected.ghostId);
-    getGhostNodeRuntimeBroker().stop(expected.ghostId);
-    getGhostAgentSlot().clearGhost(expected.ghostId);
-    getGhostErrandSlot().clearGhost(expected.ghostId);
+    // 无法确认旧进程已退出时保持停止态，不能启动第二份 resident。只有旧进程
+    // 已确认退出、后续目录更新失败时，才恢复原版本。
+    await getGhostNodeRuntimeBroker().stopAndWait(expected.ghostId);
     let result: Awaited<ReturnType<typeof manager.update>>;
     let packagePlaced = false;
     try {
+      // 市场更新同样会原位 rename 插件目录。Windows 上不能只发停止信号，
+      // 必须确认旧 utilityProcess 已离开，否则入口文件仍可能被占用而报 EPERM。
+      getGhostAgentSlot().clearGhost(expected.ghostId);
+      getGhostErrandSlot().clearGhost(expected.ghostId);
       // 与首装分支同一口径:钉住 inspect 时校验过的包字节(见上)。
       result = await manager.update(cindyFilePath, {
         expectedPackageSha256: inspected.packageSha256,
         ...(trustOverride ? { trustOverride } : {}),
+        beforePackageCommit: () => {
+          getGhostOauthAccountManager().expireAccountsForChangedClients(
+            withRuntimeFiloGoogleClient(installed.manifest),
+            withRuntimeFiloGoogleClient(inspected.canonicalManifest),
+          );
+        },
         onPackagePlaced: () => {
           packagePlaced = true;
           expected.onPackagePlacedInLock?.();
@@ -5285,8 +5314,12 @@ export function registerGhostIpc(): void {
     // 装入/卸载不得插入(否则并发装入会与本次 rename 竞争、留下不一致态)。
     return withGhostInstallLock(inspected.manifest.id, async () => {
       const releaseMutation = beginGhostMutation(mutationOwner);
+      const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
       try {
-        const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
+        runtime.stop(inspected.manifest.id);
+        // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
+        // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
+        await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
         let marketRecord: PluginMarketInstallationRecord | null;
         let marketInstallSubject: string | null = null;
         let marketRecordWasSuppressed = false;
@@ -5305,6 +5338,7 @@ export function registerGhostIpc(): void {
               : false;
           }
         } catch (error) {
+          if (previousGhost) spawnIfResident(previousGhost);
           log.warn('failed to verify Plugin provenance before local update', {
             ghostId: inspected.manifest.id,
             error: error instanceof Error ? error.message : String(error),
@@ -5343,6 +5377,7 @@ export function registerGhostIpc(): void {
             marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject);
           } catch (error) {
             restoreMarketRecord();
+            if (previousGhost) spawnIfResident(previousGhost);
             log.warn('failed to detach Plugin market provenance before local update', {
               ghostId: inspected.manifest.id,
               error: error instanceof Error ? error.message : String(error),
@@ -5350,8 +5385,6 @@ export function registerGhostIpc(): void {
             throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');
           }
         }
-        runtime.stop(inspected.manifest.id);
-        getGhostNodeRuntimeBroker().stop(inspected.manifest.id);
         getGhostAgentSlot().clearGhost(inspected.manifest.id);
         getGhostErrandSlot().clearGhost(inspected.manifest.id);
         let result: Awaited<ReturnType<typeof manager.update>>;
@@ -5359,6 +5392,16 @@ export function registerGhostIpc(): void {
         try {
           result = await manager.update(lizFilePath, {
             expectedPackageSha256,
+            ...(previousGhost
+              ? {
+                  beforePackageCommit: () => {
+                    getGhostOauthAccountManager().expireAccountsForChangedClients(
+                      withRuntimeFiloGoogleClient(previousGhost.manifest),
+                      withRuntimeFiloGoogleClient(inspected.canonicalManifest),
+                    );
+                  },
+                }
+              : {}),
             onPackagePlaced: () => {
               packagePlaced = true;
             },

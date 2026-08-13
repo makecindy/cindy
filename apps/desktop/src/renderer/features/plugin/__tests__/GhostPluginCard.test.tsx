@@ -57,6 +57,7 @@ const commandPlugin: GhostPluginListItem = {
   canUse: true,
   tabPanel: false,
   hostCapability: null,
+  oauthAuthorizationExpired: false,
 };
 
 const panelPlugin: GhostPluginListItem = {
@@ -159,6 +160,19 @@ describe('GhostPluginCard', () => {
     expect(onUpdate).toHaveBeenCalledTimes(1);
     expect(onPrimary).not.toHaveBeenCalled();
     // 有更新时不显示「已是最新」。
+    expect(screen.queryByText(/upToDate/)).toBeNull();
+  });
+
+  it('shows an expired OAuth status instead of the up-to-date status', () => {
+    render(
+      <GhostPluginCard
+        item={{ ...commandPlugin, oauthAuthorizationExpired: true }}
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('settings.ghosts.page.oauthAuthorizationExpired')).toBeTruthy();
     expect(screen.queryByText(/upToDate/)).toBeNull();
   });
 

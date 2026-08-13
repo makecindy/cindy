@@ -6,7 +6,8 @@
  * 包内不感知 Electron / 沙箱 / DB(设计规范规则 2:package 解耦)。
  *
  * 首个成员:ghost 总机(docs/dev-rules/plugin-security-and-authoring.md 的网关模式)——
- * agent 工具箱里的插件发现/调用入口固定为 ghost_list / ghost_info / ghost_call,
+ * agent 工具箱里的插件发现/调用入口固定为 ghost_list / ghost_info / ghost_manual /
+ * ghost_call,
  * 已装意识的增删即时反映在 ghost_info / ghost_list 的**返回内容**里。
  * 工具面(名称/schema/基线描述)版本内恒定;完整描述(含花名册快照)
  * 会话内恒定。
@@ -126,6 +127,8 @@ export interface CindyGhostInfo {
   command?: string;
   /** 插件作者提供的召回线索，仅作数据；Host 优先取 whenToUse，缺省回落 description。 */
   recall?: string;
+  /** 随包手册的轻量一级索引；正文必须另行调用 ghost_manual 按需读取。 */
+  manual?: CindyGhostManualIndexItem[];
   tools: CindyGhostToolInfo[];
   /**
    * Host 现查的配置评估。支持 Setup Runtime 的 Host 应尽量返回，但评估
@@ -162,6 +165,28 @@ export type CindyGhostInfoHostResult =
 export type CindyGhostInfoResult =
   | CindyGhostInfoHostResult
   | { ok: false; errorCode: 'INTERNAL'; message: string; errorType?: string };
+
+/** ghost_info 与 ghost_manual 共用的手册索引/候选条目。 */
+export interface CindyGhostManualIndexItem {
+  /** 根索引为逻辑单元 name；未命中候选为可直接回填 path 的完整逻辑路径。 */
+  name: string;
+  description: string;
+}
+
+export type CindyGhostManualErrorCode =
+  | CindyGhostInfoErrorCode
+  | "MANUAL_PATH_NOT_FOUND"
+  | "MANUAL_UNAVAILABLE"
+  | "INTERNAL";
+
+/** ghost_manual 固定信封；失败态额外携带稳定 errorCode/message。 */
+export interface CindyGhostManualResult {
+  ok: boolean;
+  manual: CindyGhostManualIndexItem[];
+  content: string;
+  errorCode?: CindyGhostManualErrorCode;
+  message?: string;
+}
 
 export type CindyGhostCallResult =
   | {
@@ -242,6 +267,13 @@ export interface CindyGhostsMcpDeps {
    * 判序：不存在 → 未登录 → 当前工作目录停用 → 未启用。
    */
   getAwakeGhost(ghostId: string): Promise<CindyGhostInfoHostResult>;
+  /**
+   * 读取已声明的随包手册；Host 每次调用都重新执行插件可见性判定，且不启动沙箱。
+   */
+  readGhostManual(request: {
+    ghostId: string;
+    path?: string;
+  }): Promise<CindyGhostManualResult>;
   /**
    * 把工具调用派进目标意识的电子脑并等待结果(按需拉起沙箱、超时、
    * 崩溃分类全在 host 侧处理)。

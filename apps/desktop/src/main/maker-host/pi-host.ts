@@ -48,6 +48,7 @@ import {
   getDesktopMcpToolApprovalPresentation,
 } from './mcp-tool-approval-policy.js';
 import { getRipgrepBinaryPath } from './runtime-configs.js';
+import { resolveXdPiGatewayWireProtocol } from './active-catalog.js';
 
 const log = createLogger('pi-host');
 
@@ -199,6 +200,8 @@ export interface BuildPiAgentOpts {
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
   resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+  /** Trusted project-approval authority; omitted until the host has one, which fails closed. */
+  resolvePiProjectTrustInput?: AgentDeps['resolvePiProjectTrustInput'];
 }
 
 /** Cindy wire protocol → pi models.json api 形态。 */
@@ -383,6 +386,16 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiNativeProviders: () => resolvePiNativeProviders(),
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
+    resolvePiGatewayModelApi: (providerId, modelId) => {
+      const source = providerId?.trim();
+      // Anthropic / OpenAI / xAI 订阅都经既有 compat proxy Messages 前门。即使它们与 XD
+      // 共享 model id，也不能被 XD v3 的 Responses 配置覆盖；models.json 是每会话隔离的，
+      // 因此按本次实际来源生成。自定义 BYOM 走独立 native provider，此分支只配置它不使用
+      // 的 cindy 块，并保持 Messages 安全默认。
+      if (source && source !== 'cindy' && source !== 'xd') return 'anthropic-messages';
+      return resolveXdPiGatewayWireProtocol(modelId);
+    },
     getGhostRosterPrompt: opts.getGhostRosterPrompt,
+    resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
   });
 }

@@ -16,7 +16,8 @@ function devicesJson(
     udid: string;
     name: string;
     state?: string;
-    deviceTypeIdentifier?: string;
+    /** `null` reproduces a listing that omits the device type. */
+    deviceTypeIdentifier?: string | null;
   }>,
 ): string {
   return JSON.stringify({
@@ -33,7 +34,11 @@ function devicesJson(
         ...device,
         state: device.state ?? "Shutdown",
         isAvailable: true,
-        deviceTypeIdentifier: device.deviceTypeIdentifier ?? DEVICE_TYPE,
+        ...(device.deviceTypeIdentifier === null
+          ? {}
+          : {
+              deviceTypeIdentifier: device.deviceTypeIdentifier ?? DEVICE_TYPE,
+            }),
       })),
     },
   });
@@ -41,6 +46,23 @@ function devicesJson(
 
 function listJson(state: string): string {
   return devicesJson([{ udid: UDID, name: "iPhone 17 Pro", state }]);
+}
+
+/** Records the arm/retire calls a lifecycle makes on the create breadcrumb. */
+function createEvidenceSpy(events?: string[]) {
+  const spy = {
+    armed: 0,
+    cleared: [] as number[],
+    arm(): number {
+      spy.armed += 1;
+      events?.push("arm");
+      return spy.armed;
+    },
+    clearIfUnchanged(generation: number): void {
+      spy.cleared.push(generation);
+    },
+  };
+  return spy;
 }
 
 describe("createIOSSimulatorSimctlLifecycle", () => {
@@ -416,7 +438,7 @@ describe("createIOSSimulatorSimctlLifecycle", () => {
 
     await expect(
       lifecycle.recoverPendingCreatesAtStartup?.([]),
-    ).resolves.toEqual([UDID]);
+    ).resolves.toEqual({ recovered: [UDID], complete: true });
     expect(run.mock.calls.filter(([, args]) => args[1] === "delete")).toEqual([
       expect.arrayContaining(["/usr/bin/xcrun", ["simctl", "delete", UDID]]),
     ]);
@@ -518,7 +540,7 @@ describe("createIOSSimulatorSimctlLifecycle", () => {
       lifecycle.recoverPendingCreatesAtStartup?.([
         { udid: ownedUdid, name: "Cindy Restored iPhone" },
       ]),
-    ).resolves.toEqual([UDID, ownedUdid]);
+    ).resolves.toEqual({ recovered: [UDID, ownedUdid], complete: true });
     expect(run.mock.calls.filter(([, args]) => args[1] === "delete")).toEqual([
       expect.arrayContaining(["/usr/bin/xcrun", ["simctl", "delete", UDID]]),
     ]);
@@ -569,13 +591,101 @@ describe("createIOSSimulatorSimctlLifecycle", () => {
 
     await expect(
       lifecycle.recoverPendingCreatesAtStartup?.([]),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ recovered: [], complete: false });
     expect(
       run.mock.calls.filter(([, args]) => args[1] === "list"),
     ).toHaveLength(2);
     expect(run.mock.calls.filter(([, args]) => args[1] === "delete")).toEqual(
       [],
     );
+  });
+
+  it("reports incomplete startup recovery when marker metadata is missing", async () => {
+    const markerName =
+      "__CindyPending__profilealpha__11111111-2222-4333-8444-555555555555";
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        if (args[1] === "list") {
+          return {
+            stdout: devicesJson([
+              { udid: UDID, name: markerName, deviceTypeIdentifier: null },
+            ]),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[1] === "delete") {
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }
+        throw new Error(`unexpected ${args.join(" ")}`);
+      },
+    );
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "profilealpha",
+    });
+
+    await expect(
+      lifecycle.recoverPendingCreatesAtStartup?.([]),
+    ).resolves.toEqual({ recovered: [], complete: false });
+    expect(
+      run.mock.calls.filter(([, args]) => args[1] === "list"),
+    ).toHaveLength(2);
+    expect(run.mock.calls.filter(([, args]) => args[1] === "delete")).toEqual(
+      [],
+    );
+  });
+
+  it("does not let a later settled create retire older incomplete startup evidence", async () => {
+    const oldMarkerName =
+      "__CindyPending__profilealpha__11111111-2222-4333-8444-555555555555";
+    const newUdid = "2A9D41E0-E031-4AD0-A8B5-847480802E8E";
+    let listCount = 0;
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        if (args[1] === "list") {
+          listCount += 1;
+          return {
+            stdout: devicesJson([
+              {
+                udid: UDID,
+                name: oldMarkerName,
+                deviceTypeIdentifier: null,
+              },
+            ]),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args[1] === "create") {
+          return { stdout: `${newUdid}\n`, stderr: "", exitCode: 0 };
+        }
+        if (args[1] === "rename") {
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }
+        throw new Error(`unexpected ${args.join(" ")}`);
+      },
+    );
+    const evidence = createEvidenceSpy();
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "profilealpha",
+      pendingCreateEvidence: evidence,
+    });
+
+    await expect(
+      lifecycle.recoverPendingCreatesAtStartup?.([]),
+    ).resolves.toEqual({ recovered: [], complete: false });
+    expect(listCount).toBe(2);
+
+    const created = await lifecycle.createExact({
+      name: "Cindy iPhone",
+      deviceTypeIdentifier: DEVICE_TYPE,
+      runtimeIdentifier: RUNTIME,
+    });
+    await lifecycle.renameExact?.(created.udid, "Cindy iPhone");
+
+    expect(evidence.cleared).toEqual([]);
   });
 
   it("cancels create and deletes only an exact late-created UDID", async () => {
@@ -968,5 +1078,223 @@ describe("createIOSSimulatorSimctlLifecycle", () => {
       code: "INVALID_ARGUMENT",
     });
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it("arms interrupted-create evidence before issuing simctl create", async () => {
+    const events: string[] = [];
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        events.push(`run:${args[1]}`);
+        if (args[1] === "create") {
+          return { stdout: "", stderr: "interrupted", exitCode: 1 };
+        }
+        return { stdout: devicesJson([]), stderr: "", exitCode: 0 };
+      },
+    );
+    const evidence = createEvidenceSpy(events);
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "testprofile",
+      pendingCreateEvidence: evidence,
+    });
+
+    // A create that fails once CoreSimulator may already have committed the
+    // device must still leave startup-recovery evidence behind.
+    await expect(
+      lifecycle.createExact({
+        name: "Cindy iPhone",
+        deviceTypeIdentifier: DEVICE_TYPE,
+        runtimeIdentifier: RUNTIME,
+      }),
+    ).rejects.toMatchObject({ code: "SIMULATOR_CREATE_FAILED" });
+
+    expect(events[0]).toBe("arm");
+    expect(events).toContain("run:create");
+    // The post-create list proved nothing was committed, so the profile must not
+    // keep paying a startup sweep that has nothing to clean.
+    expect(evidence.cleared).toEqual([1]);
+  });
+
+  it("keeps evidence when a failed create cannot be verified", async () => {
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(async (_command, args) => {
+      if (args[1] === "create") {
+        return { stdout: "", stderr: "interrupted", exitCode: 1 };
+      }
+      // The verification list itself fails: nothing is proven either way.
+      return { stdout: "", stderr: "list failed", exitCode: 1 };
+    });
+    const evidence = createEvidenceSpy();
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "testprofile",
+      pendingCreateEvidence: evidence,
+    });
+
+    await expect(
+      lifecycle.createExact({
+        name: "Cindy iPhone",
+        deviceTypeIdentifier: DEVICE_TYPE,
+        runtimeIdentifier: RUNTIME,
+      }),
+    ).rejects.toMatchObject({ code: "SIMULATOR_CREATE_FAILED" });
+
+    expect(evidence.armed).toBe(1);
+    expect(evidence.cleared).toEqual([]);
+  });
+
+  it("keeps evidence when a marker device exists but cannot be attributed", async () => {
+    let markerName = "";
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(async (_command, args) => {
+      if (args[1] === "create") {
+        markerName = args[2]!;
+        return { stdout: "", stderr: "interrupted", exitCode: 1 };
+      }
+      if (args[1] === "list") {
+        // The device really was committed under this exact random marker, but the
+        // listing omits its device type, so it cannot be uniquely recovered.
+        return {
+          stdout: devicesJson([
+            { udid: UDID, name: markerName, deviceTypeIdentifier: null },
+          ]),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const evidence = createEvidenceSpy();
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "testprofile",
+      pendingCreateEvidence: evidence,
+    });
+
+    await expect(
+      lifecycle.createExact({
+        name: "Cindy iPhone",
+        deviceTypeIdentifier: DEVICE_TYPE,
+        runtimeIdentifier: RUNTIME,
+      }),
+    ).rejects.toMatchObject({ code: "SIMULATOR_CREATE_FAILED" });
+
+    // Retiring here would strand a hidden simulator: empty registry plus no
+    // evidence means the next startup skips recovery entirely.
+    expect(evidence.armed).toBe(1);
+    expect(evidence.cleared).toEqual([]);
+    // Attribution stayed strict, so nothing was deleted on a guess.
+    expect(run).not.toHaveBeenCalledWith(
+      "/usr/bin/xcrun",
+      ["simctl", "delete", UDID],
+      expect.anything(),
+    );
+  });
+
+  it("retires evidence when a failed create is rolled back", async () => {
+    let markerName = "";
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(async (_command, args) => {
+      if (args[1] === "create") {
+        markerName = args[2]!;
+        return { stdout: "", stderr: "cancelled", exitCode: 1 };
+      }
+      if (args[1] === "list") {
+        return {
+          stdout: devicesJson([{ udid: UDID, name: markerName }]),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const evidence = createEvidenceSpy();
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "testprofile",
+      pendingCreateEvidence: evidence,
+    });
+
+    await expect(
+      lifecycle.createExact({
+        name: "Cindy iPhone",
+        deviceTypeIdentifier: DEVICE_TYPE,
+        runtimeIdentifier: RUNTIME,
+      }),
+    ).rejects.toMatchObject({ code: "SIMULATOR_CREATE_FAILED" });
+
+    expect(run).toHaveBeenCalledWith(
+      "/usr/bin/xcrun",
+      ["simctl", "delete", UDID],
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+    );
+    expect(evidence.cleared).toEqual([1]);
+  });
+
+  it("retires evidence once a created device is renamed away from its marker", async () => {
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(async (_command, args) => {
+      if (args[1] === "create") {
+        return { stdout: `${UDID}\n`, stderr: "", exitCode: 0 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const evidence = createEvidenceSpy();
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "testprofile",
+      pendingCreateEvidence: evidence,
+    });
+
+    const created = await lifecycle.createExact({
+      name: "Cindy iPhone",
+      deviceTypeIdentifier: DEVICE_TYPE,
+      runtimeIdentifier: RUNTIME,
+    });
+    // The caller persists ownership before finalizing the name, so evidence is
+    // still required here.
+    expect(evidence.cleared).toEqual([]);
+
+    await lifecycle.renameExact?.(created.udid, "Cindy iPhone");
+    expect(evidence.cleared).toEqual([1]);
+  });
+
+  it("keeps evidence while another create is still inside its ownership window", async () => {
+    let creates = 0;
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(async (_command, args) => {
+      if (args[1] === "create") {
+        creates += 1;
+        return creates === 1
+          ? { stdout: `${UDID}\n`, stderr: "", exitCode: 0 }
+          : { stdout: "", stderr: "blocked", exitCode: 1 };
+      }
+      if (args[1] === "list") {
+        return { stdout: devicesJson([]), stderr: "", exitCode: 0 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const evidence = createEvidenceSpy();
+    const lifecycle = createIOSSimulatorSimctlLifecycle({
+      commandRunner: { run },
+      createMarkerNamespace: "testprofile",
+      pendingCreateEvidence: evidence,
+    });
+
+    const first = await lifecycle.createExact({
+      name: "Cindy iPhone",
+      deviceTypeIdentifier: DEVICE_TYPE,
+      runtimeIdentifier: RUNTIME,
+    });
+
+    // A second create fails cleanly while the first is still between create and
+    // its ownership write. Retiring now would strand the first marker.
+    await expect(
+      lifecycle.createExact({
+        name: "Cindy iPhone 2",
+        deviceTypeIdentifier: DEVICE_TYPE,
+        runtimeIdentifier: RUNTIME,
+      }),
+    ).rejects.toMatchObject({ code: "SIMULATOR_CREATE_FAILED" });
+    expect(evidence.armed).toBe(2);
+    expect(evidence.cleared).toEqual([]);
+
+    await lifecycle.renameExact?.(first.udid, "Cindy iPhone");
+    expect(evidence.cleared).toEqual([2]);
   });
 });

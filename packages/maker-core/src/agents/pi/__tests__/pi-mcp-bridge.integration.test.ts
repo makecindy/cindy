@@ -380,6 +380,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           { id: 'pi-test-model', displayName: 'Pi Test', contextWindow: 200_000, efforts: [], defaultEffort: null },
         ],
       },
+      // 本 fixture 的假网关只实现 Anthropic Messages；协议路由由独立 Responses 集成覆盖。
+      resolvePiGatewayModelApi: () => 'anthropic-messages',
       resolvePiAgentHome: () => agentHome,
       // host MCP bridge 出口:指向本测试的假 MCP server。把 ctx.sessionId 打进
       // `?session=` —— 既验 PiAgent.startSession 把 opts.sessionId 透传进 ctx,

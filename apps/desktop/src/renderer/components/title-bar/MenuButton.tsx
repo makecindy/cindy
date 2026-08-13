@@ -62,6 +62,18 @@ export function MenuButton() {
         <DropdownMenuItem
           className="focus:bg-titlebar-button-hover"
           onSelect={() => {
+            void window.electronAPI.resourceUsageWindow
+              .open()
+              .catch((err: unknown) => {
+                log.error('Failed to open resource usage window', err);
+              });
+          }}
+        >
+          {t('titleBar.menuItems.resourceUsage')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="focus:bg-titlebar-button-hover"
+          onSelect={() => {
             log.info('Help clicked');
             navigate('/settings?tab=help');
           }}

@@ -2793,4 +2793,119 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(mocks.persistUserMessage).toHaveBeenCalled();
     });
   });
+
+describe('初始流式输出面创建失败的收口降级(#2164)', () => {
+  it('startStreamingText 拒绝 + 短文本:正文经 sendText 一次性送达,turn 正常完成', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete);
+    h.emit({ type: 'text', data: { text: 'recovered answer', isFinal: true }, source: 'claude-code' });
+    await flushMicrotasks();
+    h.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+        'ou_user',
+        'recovered answer',
+        expect.anything(),
+      );
+    });
+    const fallbackSends = mocks.feishuIm.sendText.mock.calls.filter(
+      (call) => call[1] === 'recovered answer',
+    );
+    expect(fallbackSends).toHaveLength(1);
+  });
+
+  it('拒绝后多个连续 text delta:不重复调用 startStreamingText,降级仍只发一次', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete);
+    h.emit({ type: 'text', data: { text: 'part-1 ' }, source: 'claude-code' });
+    await flushMicrotasks();
+    h.emit({ type: 'text', data: { text: 'part-2 ' }, source: 'claude-code' });
+    await flushMicrotasks();
+    h.emit({ type: 'text', data: { text: 'part-3' }, source: 'claude-code' });
+    await flushMicrotasks();
+    h.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      // onTurnComplete 在收口开头触发,降级发送在其后 —— 断言必须一起等。
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+        'ou_user',
+        'part-1 part-2 part-3',
+        expect.anything(),
+      );
+    });
+    // 失败标记抑制重试:密集 delta 不造成 API 风暴 / 孤儿卡。
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    const fallbackSends = mocks.feishuIm.sendText.mock.calls.filter(
+      (call) => call[1] === 'part-1 part-2 part-3',
+    );
+    expect(fallbackSends).toHaveLength(1);
+  });
+
+  it('拒绝 + 降级发送也失败:completion / 收口仍各执行一次,不阻塞', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
+    mocks.feishuIm.sendText.mockRejectedValue(new Error('plain send down'));
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete);
+    h.emit({ type: 'text', data: { text: 'never delivered', isFinal: true }, source: 'claude-code' });
+    await flushMicrotasks();
+    h.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('正常建卡成功:finalize 收口,不触发纯文本降级', async () => {
+    const streamingHandle = {
+      messageId: 'stream-ok',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(streamingHandle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete);
+    h.emit({ type: 'text', data: { text: 'streamed fine', isFinal: true }, source: 'claude-code' });
+    await flushMicrotasks();
+    h.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await waitForAssertion(() => {
+      expect(streamingHandle.finalize).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.feishuIm.sendText).not.toHaveBeenCalledWith(
+      'ou_user',
+      'streamed fine',
+      expect.anything(),
+    );
+  });
+
+  it('空正文 + 建卡失败:保留「本轮无文本输出」提示', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete);
+    // 只有 tool_use 会惰性触发建卡,不产生正文。
+    h.emit({
+      type: 'tool_use',
+      data: { name: 'Bash', input: { command: 'ls' } },
+      source: 'claude-code',
+    });
+    await flushMicrotasks();
+    h.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+        'ou_user',
+        expect.stringContaining('本轮无文本输出'),
+        expect.anything(),
+      );
+    });
+  });
+});
 });

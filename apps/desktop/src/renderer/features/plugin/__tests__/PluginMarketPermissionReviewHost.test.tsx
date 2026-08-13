@@ -12,7 +12,12 @@ import type { PluginMarketPackageReviewRequest } from '../../../../shared/plugin
 import { PluginMarketPermissionReviewHost } from '../PluginMarketPermissionReviewHost';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string, args?: Record<string, unknown>) =>
+      key === 'settings.ghosts.installConfirm.manualCount'
+        ? `${key}:${String(args?.count)}`
+        : key,
+  }),
 }));
 
 describe('PluginMarketPermissionReviewHost', () => {
@@ -133,5 +138,41 @@ describe('PluginMarketPermissionReviewHost', () => {
       expect(resolveReview).toHaveBeenCalledWith('stale-review', false);
     });
     expect(screen.queryByText('settings.ghosts.market.installConfirmTitle')).toBeNull();
+  });
+
+  it('shows the real package manual count for an update without treating it as a permission item', async () => {
+    render(
+      <ConfirmDialogProvider>
+        <PluginMarketPermissionReviewHost />
+      </ConfirmDialogProvider>,
+    );
+
+    act(() => {
+      reviewListener?.({
+        requestId: 'manual-update',
+        ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+        manifest: {
+          schemaVersion: 2,
+          id: 'manual-plugin',
+          name: 'Manual Plugin',
+          version: '2.0.0',
+          kind: 'chip',
+          entry: 'main.js',
+          slots: ['tool'],
+          manual: {
+            items: [
+              { dir: 'manual/ops', name: 'ops', description: 'Operations' },
+              { dir: 'manual/faq', name: 'faq', description: 'FAQ' },
+            ],
+          },
+        },
+        permissionDiff: { added: [], removed: [], unchanged: [], builtinOauthClientChanged: false },
+        isUpdate: true,
+        sourceType: 'server',
+      });
+    });
+
+    expect(await screen.findByText('settings.ghosts.installConfirm.manualCount:2')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.updateConfirm.title')).toBeTruthy();
   });
 });

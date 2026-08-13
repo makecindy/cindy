@@ -37,6 +37,12 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     );
   });
 
+  it('maps host shell-command policy blocks to stable localized copy', () => {
+    expect(ERROR_REASON_I18N_KEYS['host-shell-command-blocked']).toBe(
+      'logic.errors.hostShellCommandBlocked',
+    );
+  });
+
   it('maps upstream overload to the same copy the tail banner uses', () => {
     // 本表注释的一致性诉求: 同一条过载错误不能出现「尾部红条本地化、历史静态卡
     // 英文原文」的分裂。复用 banner 那条 key(不新增文案), 且 codex 改措辞也不影响
