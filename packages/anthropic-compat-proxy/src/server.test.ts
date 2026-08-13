@@ -2720,6 +2720,35 @@ describe('流式响应空闲看门狗(上游半开兜底)', () => {
     expect(warns.some((w) => w.msg.includes('upstream stream idle watchdog fired'))).toBe(true);
   });
 
+  it('upstreamStreamIdleTimeoutMs: 0 时禁用看门狗(半开悬挂保持旧行为)', async () => {
+    const warns: string[] = [];
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('event: message_start\ndata: {}\n\n');
+      // 悬挂:不 end、不 destroy。禁用看门狗时客户端应保持等待(不被掐断)。
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      upstreamStreamIdleTimeoutMs: 0,
+      logger: { warn: (msg) => warns.push(msg) },
+    });
+
+    const controller = new AbortController();
+    const outcome = await Promise.race([
+      post(proxy.url, { model: 'test-model', stream: true }).then(() => 'resolved' as const),
+      new Promise<'watchdog' | 'timeout'>((resolve) => {
+        // 500ms 内若看门狗触发(错误地)会先 settle;否则视为保持悬挂语义。
+        setTimeout(() => resolve('timeout'), 500);
+      }),
+    ]);
+    controller.abort();
+
+    // 显式 0 = 禁用:看门狗不得触发(无 watchdog 日志),请求保持悬挂(这里用 abort 收尾)。
+    expect(outcome).toBe('timeout');
+    expect(warns.some((w) => w.includes('upstream stream idle watchdog fired'))).toBe(false);
+  });
+
   it('数据持续到达时看门狗不触发(正常流不受影响)', async () => {
     const warns: string[] = [];
     const upstream = await startFakeUpstream((_idx, _body, res) => {
@@ -2743,15 +2772,17 @@ describe('流式响应空闲看门狗(上游半开兜底)', () => {
     });
 
     const controller = new AbortController();
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const result = await Promise.race([
       post(proxy.url, { model: 'test-model', stream: true }),
       new Promise<'timeout'>((resolve) => {
-        setTimeout(() => resolve('timeout'), 2000);
+        timeoutHandle = setTimeout(() => resolve('timeout'), 2000);
       }).then(() => {
         controller.abort();
         return 'timeout' as const;
       }),
     ]);
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
 
     expect(result).not.toBe('timeout');
     expect(warns.some((w) => w.includes('upstream stream idle watchdog fired'))).toBe(false);

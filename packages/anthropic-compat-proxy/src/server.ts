@@ -1542,12 +1542,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
   const host = opts.host ?? '127.0.0.1';
   const maxBodyBytes = opts.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
   // 流式响应空闲看门狗(ms):上游半开时兜底掐流,避免客户端永久挂在流式响应上。
-  // 0 / 负值 = 禁用(恢复扩展前的悬挂行为);默认见 UPSTREAM_STREAM_IDLE_TIMEOUT_MS。
+  // 0 / 负值 = 禁用(恢复扩展前的悬挂行为);undefined = 默认见 UPSTREAM_STREAM_IDLE_TIMEOUT_MS。
+  // 显式 0 必须保持禁用语义(契约见 ProxyOptions.upstreamStreamIdleTimeoutMs),不能当未设置。
   const streamIdleTimeoutMs =
-    opts.upstreamStreamIdleTimeoutMs !== undefined && opts.upstreamStreamIdleTimeoutMs > 0
-      ? opts.upstreamStreamIdleTimeoutMs
-      : opts.upstreamStreamIdleTimeoutMs === 0 || opts.upstreamStreamIdleTimeoutMs === undefined
-        ? UPSTREAM_STREAM_IDLE_TIMEOUT_MS
+    opts.upstreamStreamIdleTimeoutMs === undefined
+      ? UPSTREAM_STREAM_IDLE_TIMEOUT_MS
+      : opts.upstreamStreamIdleTimeoutMs > 0
+        ? opts.upstreamStreamIdleTimeoutMs
         : 0;
   // 入站请求 body dump 默认关(仅显式诊断时开):高并发下 64KiB×每请求的日志
   // 构造/落盘/终端镜像会占满宿主 main event loop,详见 ProxyOptions 注释。
