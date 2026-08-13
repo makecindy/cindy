@@ -79,6 +79,7 @@ function createFakeQuery(
   rejectPermissionModeChange = false,
 ) {
   let initEmitted = false;
+  let pendingNext: ((result: IteratorResult<unknown>) => void) | null = null;
   return {
     [Symbol.asyncIterator]() {
       return {
@@ -95,9 +96,16 @@ function createFakeQuery(
               },
             });
           }
-          return new Promise<IteratorResult<unknown>>(() => {});
+          return new Promise<IteratorResult<unknown>>((resolve) => {
+            pendingNext = resolve;
+          });
         },
       };
+    },
+    emit(message: unknown) {
+      const resolve = pendingNext;
+      pendingNext = null;
+      resolve?.({ done: false, value: message });
     },
     setPermissionMode: vi.fn(async () => {
       if (rejectPermissionModeChange) throw new Error('permission transport failed');
@@ -603,6 +611,20 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     await handle.close();
   });
 
+  it('does not re-arm a blocked notice when the user steers the same turn', async () => {
+    const { handle, canUseTool } = await startSession('auto', { reviewVerdict: 'block' });
+    const { notices } = startNoticeCollector(handle);
+
+    await handle.send({ type: 'user', content: 'Install this package.' });
+    await canUseTool('Bash', { command: 'npm install first-package' }, { toolUseID: 'steer-1' });
+    await handle.steer({ type: 'user', content: 'Use the safer option if possible.' });
+    await canUseTool('Bash', { command: 'npm install second-package' }, { toolUseID: 'steer-2' });
+    await settle();
+
+    expect(notices.filter((notice) => notice.includes('[AUTO_REVIEW_BLOCKED]'))).toHaveLength(1);
+    await handle.close();
+  });
+
   /**
    * 裁决缓存的 key 不含 permissionMode。用户切离 Auto、等审阅器恢复、再切回 Auto 时,
    * 同一个动作会命中先前那条 `unavailable` block —— 审阅器早就好了,动作还是被拒
@@ -658,6 +680,32 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     await canUseTool('Write', { file_path: '/tmp/t3.conf' }, { toolUseID: 'turn2-a' });
     await settle();
     expect(notices).toHaveLength(2); // 新一轮 → 重新武装
+    await handle.close();
+  });
+
+  it('notifies when Claude native Auto reports permission denials in its result', async () => {
+    const { handle, fakeQuery, queryPermissionMode } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    expect(queryPermissionMode).toBe('auto');
+    const { notices } = startNoticeCollector(handle);
+
+    fakeQuery.emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      duration_ms: 1,
+      duration_api_ms: 1,
+      num_turns: 1,
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: {},
+      permission_denials: [{ tool_name: 'Bash', tool_use_id: 'native-denial', tool_input: {} }],
+    });
+    await settle();
+
+    expect(notices).toContainEqual(expect.stringContaining('[AUTO_REVIEW_BLOCKED]'));
     await handle.close();
   });
 

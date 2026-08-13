@@ -1191,10 +1191,9 @@ export class PiAgent extends BaseAgent {
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
-    // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
-    // (renderer 的 handleStreamEvent 会清 recoverableError),所以「整个会话只说一次」
-    // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
-    // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
+    };
+    // 同轮 steer 仅更新审核意图，不得重复武装一次性提示。
+    const resetAutoReviewNoticesForNewTurn = (): void => {
       autoReviewUnavailableNotice.reset();
       autoReviewBlockedNotice.reset();
     };
@@ -1944,6 +1943,7 @@ export class PiAgent extends BaseAgent {
       async send(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'send');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
+        resetAutoReviewNoticesForNewTurn();
         // 本轮策略覆盖:无策略显式清 null,不继承上一轮渠道策略(§7.2.5);内部续跑
         // (plan 审批实施轮 / 自动继续)不经 send,仍读这份闭包值继承(§7.10)。
         // provider 接受前任何失败都必须撤销,避免"任务显示已开始、实际未启动"却残留策略。

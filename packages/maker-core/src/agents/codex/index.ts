@@ -3558,10 +3558,9 @@ export class CodexAgent extends BaseAgent {
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
-    // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
-    // (renderer 的 handleStreamEvent 会清 recoverableError),所以「整个会话只说一次」
-    // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
-    // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
+    };
+    // steer、澄清和计划批准仍属同一 turn，只有新 send 才重新武装提示。
+    const resetAutoReviewNoticesForNewTurn = (): void => {
       autoReviewUnavailableNotice.reset();
       autoReviewBlockedNotice.reset();
     };
@@ -5530,6 +5529,7 @@ export class CodexAgent extends BaseAgent {
             );
             // 无人值守:只接受 core 判为 auto-approve 的安全动作。prompt / prompt-each-time 都意味着
             // "需人确认"而此路径无人在场 → 一律 fail-closed decline(AGENTS.md 无人值守安全底线)。
+            if (verdict !== 'auto-approve') autoReviewBlockedNotice.notify();
             return verdict === 'auto-approve' ? Promise.resolve('accept') : Promise.resolve('decline');
           }
           // 命令/文件类审批却没有可分类的 action(如 permissions 能力升级)——无法审查的高权限动作 →
@@ -9865,6 +9865,7 @@ export class CodexAgent extends BaseAgent {
         // 用户开启新 turn = 旧重连序列作废；deadline 不得跨 turn 误伤新请求。
         clearReconnectStall();
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
+        resetAutoReviewNoticesForNewTurn();
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
         const capabilitySelectionText =
           (sendOpts as CodexInternalSendOptions | undefined)?.[

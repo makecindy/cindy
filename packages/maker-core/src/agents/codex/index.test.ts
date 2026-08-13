@@ -11774,6 +11774,10 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
       permissionMode: 'auto',
     });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
     // forceConfirmToolCall 恒 false:不靠宿主自带 policy 拦,专门验证 Cindy core 在无人值守下的兜底。
     const policy: TurnPermissionPolicy = {
       origin: { kind: 'im', channel: 'wechat', taskId: 'task-danger' },
@@ -11802,6 +11806,15 @@ describe('CodexAgent MCP thread context hooks', () => {
       })).resolves.toEqual({ decision: 'accept' });
     }
     expect(resolver).not.toHaveBeenCalled();
+    await waitForExpectation(() => {
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          isTerminal: false,
+          message: expect.stringContaining('[AUTO_REVIEW_BLOCKED]'),
+        }),
+      }));
+    });
     await handle.close();
   });
 

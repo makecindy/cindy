@@ -2079,10 +2079,9 @@ export class ClaudeCodeAgent extends BaseAgent {
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
-    // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
-    // (renderer 的 handleStreamEvent 会清 recoverableError),所以「整个会话只说一次」
-    // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
-    // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
+    };
+    // steer、澄清和计划批准也会更新 intent，但仍在同一 turn；只有新 send 才重置提示。
+    const resetAutoReviewNoticesForNewTurn = (): void => {
       autoReviewUnavailableNotice.reset();
       autoReviewBlockedNotice.reset();
     };
@@ -4060,6 +4059,16 @@ export class ClaudeCodeAgent extends BaseAgent {
             const rawType = (rawMsg as { type?: string } | null)?.type;
             const rawSubtype = (rawMsg as { subtype?: string } | null)?.subtype;
             const rawStatus = (rawMsg as { status?: string } | null)?.status;
+            // Claude OAuth 的原生 Auto classifier 绕过 canUseTool。SDK 会在 result
+            // 汇总 permission_denials；只认 native Auto Query，避免误报普通工具失败。
+            if (
+              rawType === 'result'
+              && nativeAutoQueries.has(currentQ)
+              && Array.isArray((rawMsg as { permission_denials?: unknown }).permission_denials)
+              && (rawMsg as { permission_denials: unknown[] }).permission_denials.length > 0
+            ) {
+              autoReviewBlockedNotice.notify();
+            }
             const isTerminalTaskNotification =
               rawType === 'system' &&
               rawSubtype === 'task_notification' &&
@@ -4909,6 +4918,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           throw new Error('Claude send cancelled before acceptance');
         }
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
+        resetAutoReviewNoticesForNewTurn();
         let bridgeCompactQueued = false;
         // 保持普通 send / rewind send 原有的同步前置语义：即使 async helper 立即
         // return，裸 await 也会让出一个 microtask，导致调用方在 Query rebuild 真正
