@@ -343,10 +343,16 @@ describe('candidateAgentsForModel', () => {
 // ── nativeAgentForProviderModel ───────────────────────────────────────────────
 
 describe('nativeAgentForProviderModel(原生底座)', () => {
-  it('内置 root 表:anthropic → cc,openai → codex,xai → cc', () => {
+  it('内置 root 表只标确有主场的:anthropic → cc,openai → codex', () => {
     expect(nativeAgentForProviderModel(anthropic, 'claude-opus-5')).toBe('claude-code');
     expect(nativeAgentForProviderModel(openai, 'gpt-5.6-luna')).toBe('codex');
-    expect(nativeAgentForProviderModel(xai, 'grok-4.5')).toBe('claude-code');
+  });
+
+  it('xai 多 root 全能 → null(无主场,任何视图不降级 —— Chris 2026-08-13 裁决)', () => {
+    // 上游给 grok 硬选一个主场会让它在其余引擎视图被错误降到「仅兼容」层;
+    // #2572 后 grok 三引擎皆正式成员,主场判定必须留空。
+    expect(nativeAgentForProviderModel(xai, 'grok-4.5')).toBeNull();
+    expect(nativeAgentForProviderModel(xai, 'xai/grok-4.5')).toBeNull();
   });
 
   it('原生底座不与候选求交:Claude 模型只在 codex 下可选时 native 仍是 cc', () => {
@@ -356,17 +362,20 @@ describe('nativeAgentForProviderModel(原生底座)', () => {
     expect(recommendedAgentForModel([codexOnlyClaude], 'anthropic', 'claude-opus-5')).toBe('codex');
   });
 
-  it('网关按条目判:codex/ 折扣 → codex,其余 → cc', () => {
+  it('网关按条目判:codex/ 折扣 → codex,非折扣 → null(无主场)', () => {
     expect(nativeAgentForProviderModel(xd, 'codex/gpt-5.5')).toBe('codex');
-    expect(nativeAgentForProviderModel(xd, 'gpt-5.5')).toBe('claude-code');
-    expect(nativeAgentForProviderModel(xd, 'claude-opus-5')).toBe('claude-code');
+    // 旧版把网关非折扣行代理成 cc(「翻译面覆盖最广」),但那不是主场事实:XD 上的
+    // GPT 非折扣行会在 codex 视图被错误降级,且判定依赖 authStrategy 导致本地/远程
+    // 投影结果不一致 —— 网关行除折扣数据外一律无主场。
+    expect(nativeAgentForProviderModel(xd, 'gpt-5.5')).toBeNull();
+    expect(nativeAgentForProviderModel(xd, 'claude-opus-5')).toBeNull();
   });
 
-  it('device-link 投影(routing 无 authStrategy)下折扣行的 native 仍是 codex', () => {
+  it('device-link 投影(routing 无 authStrategy)与本地同结果:判定链不依赖 authStrategy', () => {
     // 远程供应商投影会剥掉 routing.authStrategy(执行细节不出被控端,
-    // providerListProjection 测试锁),isGatewayProvider 在控制端必然 false。
-    // 折扣判定必须只看条目数据,否则远程会话里 codex/ 行的 native 错落 cc,
-    // 推荐引擎与同引擎视图排序双双出错(2026-08-13 远程会话实测)。
+    // providerListProjection 测试锁)。折扣判定只看条目数据,非折扣一律 null ——
+    // 判定链里没有任何依赖 authStrategy 的分支,两端天然同结果
+    // (2026-08-13 远程会话实测教训的一般化)。
     const projected = view({
       id: 'xd',
       models: {
@@ -374,19 +383,20 @@ describe('nativeAgentForProviderModel(原生底座)', () => {
         codex: [m('codex/gpt-5.5', { supportsFastMode: true })],
       },
     });
-    // 夹具默认 authStrategy 非 gateway-key,与投影后的效果一致:isGatewayProvider=false。
+    // 夹具默认 authStrategy 非 gateway-key,与投影后的效果一致。
     expect(projected.routing['claude-code']?.authStrategy).not.toBe('gateway-key');
     expect(nativeAgentForProviderModel(projected, 'codex/gpt-5.5')).toBe('codex');
     expect(recommendedAgentForModel([projected], 'xd', 'codex/gpt-5.5')).toBe('codex');
-    // 非折扣网关行在投影下 native 判不出(null),由调用方回落 recommended —— 不误判成 codex。
     const projectedPlain = view({
       id: 'xd',
       models: { 'claude-code': [m('gpt-5.5-nonbudget', { group: 'gpt' })] },
     });
+    // 与本地 xd 夹具(带 gateway-key)的判定一致:非折扣 → null。
     expect(nativeAgentForProviderModel(projectedPlain, 'gpt-5.5-nonbudget')).toBeNull();
+    expect(nativeAgentForProviderModel(xd, 'gpt-5.5')).toBeNull();
   });
 
-  it('用户自定义供应商没有 root 概念 → null(由调用方回落 recommended)', () => {
+  it('用户自定义供应商没有 root 概念 → null(无主场,不降级)', () => {
     const byom = view({
       id: 'byom',
       source: 'user',
@@ -676,7 +686,7 @@ describe('unifiedModelEntries', () => {
     );
   });
 
-  it('user provider:custom 分组模型不被能力启发式误杀,nativeAgent 回落 recommended', () => {
+  it('user provider:custom 分组模型不被能力启发式误杀,nativeAgent 无主场', () => {
     const byom = view({
       id: 'byom',
       source: 'user',
@@ -690,7 +700,8 @@ describe('unifiedModelEntries', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].candidates).toEqual(['codex', 'pi']);
     expect(entries[0].recommended).toBe('codex');
-    expect(entries[0].nativeAgent).toBe('codex');
+    // BYOM 没有 root 概念 → 无主场(null),在任何引擎视图都不降级。
+    expect(entries[0].nativeAgent).toBeNull();
   });
 
   it('XD 独占存在性:网关没有的模型不会被补出来', () => {
@@ -806,28 +817,45 @@ describe('unifiedModelEntries', () => {
 
 // ── 原生底座排序 ──────────────────────────────────────────────────────────────
 
-describe('sortEntriesForAgent(原生底座优先)', () => {
+describe('sortEntriesForAgent(原生底座优先,无主场不降级)', () => {
   const providers = [anthropic, openai, xai, xd];
+  /** 新语义的降级判据:只有「主场明确在别处」的行是客串。 */
+  const isGuest = (e: UnifiedModelEntry, agent: AgentKind) =>
+    e.nativeAgent !== null && e.nativeAgent !== agent;
 
-  it('codex 视图:GPT 系(native=codex)排在 Claude 系之前', () => {
+  it('codex 视图:Claude 系(主场在 cc)降级垫底,GPT 系与无主场行按入参序在前', () => {
     const entries = unifiedModelEntries({ providers, isVisible: alwaysVisible });
     const sorted = sortEntriesForAgent(entries, 'codex');
-    const nativeCodex = entries.filter((e) => e.nativeAgent === 'codex');
-    expect(nativeCodex.length).toBeGreaterThan(0);
-    expect(sorted.slice(0, nativeCodex.length)).toEqual(nativeCodex);
-    expect(sorted.slice(nativeCodex.length).every((e) => e.nativeAgent !== 'codex')).toBe(true);
-    // openai 的 GPT 行原本排在第 2 位,codex 视图里升到首位。
+    const guests = entries.filter((e) => isGuest(e, 'codex'));
+    expect(guests.length).toBeGreaterThan(0);
+    // 客串行整体垫底,组内保持入参序;上组 = 原生 + 无主场,同样保持入参序。
+    expect(sorted.slice(sorted.length - guests.length)).toEqual(guests);
+    expect(sorted.slice(0, sorted.length - guests.length).every((e) => !isGuest(e, 'codex'))).toBe(
+      true,
+    );
+    // anthropic(主场 cc)原本排首位,codex 视图里让位给 openai 的 GPT 行。
     expect(sorted[0].providerId).toBe('openai');
     expect(entries[0].providerId).toBe('anthropic');
   });
 
-  it('claude 视图:Claude 系在前,GPT 往下排', () => {
+  it('claude 视图:GPT 系(主场在 codex)垫底,Claude 系与无主场行在前', () => {
     const entries = unifiedModelEntries({ providers, isVisible: alwaysVisible });
     const sorted = sortEntriesForAgent(entries, 'claude-code');
     expect(sorted[0].modelId).toBe('claude-opus-5');
-    const flags = sorted.map((e) => e.nativeAgent === 'claude-code');
-    // true 全部排在 false 之前。
+    const flags = sorted.map((e) => !isGuest(e, 'claude-code'));
+    // 非客串(true)全部排在客串(false)之前。
     expect(flags.indexOf(false) === -1 || flags.lastIndexOf(true) < flags.indexOf(false)).toBe(true);
+  });
+
+  it('无主场行(xai 三栖)在三个引擎视图都不降级(Chris 2026-08-13 裁决)', () => {
+    const entries = unifiedModelEntries({ providers, isVisible: alwaysVisible });
+    const grok = entries.find((e) => e.providerId === 'xai');
+    expect(grok).toBeDefined();
+    expect(grok!.nativeAgent).toBeNull();
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const { native } = partitionEntriesByNativeAgent(entries, agent);
+      expect(native).toContain(grok!);
+    }
   });
 
   it('组内保持入参顺序(服务端 group/sortOrder 陈列序不被打乱)', () => {

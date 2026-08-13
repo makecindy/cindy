@@ -76,6 +76,12 @@
 - 候选引擎 = 该模型在最终 catalog 中出现的所有 `(provider, agent)` 组合(`Provider.models: Record<AgentKind, CatalogModel[]>`),经现有可见/准入/区域/SSH 过滤后。
 - 推荐引擎 = 模型**生效来源** provider 的主 root(`MODEL_PLANE_POLICIES`:openai→codex、anthropic→claude-code;xd 按 gateway `perAgent`/membership;user provider 按其 runtime)。同名多来源时先 `effectiveSourceIdForModel` 解析生效来源再推导——**禁止读拍平去重后的列表**(registry.ts 明示)。
 - Pi 恒为候选(客户端投影,wire enum 无 pi,维持现状)。
+- **原生底座(排序用,与推荐引擎分离)只标确有主场的,可空**(Chris 2026-08-13 裁决):
+  anthropic→cc、openai→codex、折扣条目→codex;**多 root 全能模型(xai 系)、网关非折扣行、
+  BYOM 一律 null = 无主场**——任何引擎视图都不降级,只有「主场明确在别处」的行才降到
+  「仅兼容」层。理由:给 grok 这类三栖模型硬选主场,会让它在其余引擎视图被错误降级;
+  判定链不依赖 `routing.authStrategy`,device-link 投影下本地/远程排序天然一致。
+  服务端未来下发 `nativeAgent` 字段沿用同语义(可空,空=全场平等),数据覆盖客户端推导。
 
 ### 2.2 (模型,引擎) 上下文与能力
 

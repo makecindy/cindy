@@ -90,18 +90,23 @@ const BRIDGE_NAMESPACE_PREFIXES: readonly string[] = [CHATGPT_MODEL_PREFIX, XAI_
  * (apps/desktop/src/main/maker-host/model-plane/modelPlanePolicy.ts:50):
  *   - openai:    roots ['codex']                → codex(cc / pi 上的是 `chatgpt/` bridge 投影)
  *   - anthropic: roots ['claude-code']          → claude-code(codex 上的是 anthropic-messages bridge)
- *   - xai:       roots ['claude-code','codex']  → 双 root,piRoot = claude-code ⇒ 取 claude-code
  *
  * 为什么是抄一份表而不是 import:本包是零依赖的下层(apps/desktop 依赖它,反向依赖是
  * 架构不变量禁止的)。host 那张表还承载实体化 / membership / transforms 三件事,本表只
  * 取其中「canonical root 落在哪个 agent」这一维。新增内置供应商时两处都要加。
  *
- * **xd 刻意不在表内**,与 host 同因:网关独占存在性,root 概念不适用(见 `gatewayRootPreference`)。
+ * **只标确有主场的**(Chris 2026-08-13 裁决):xai 是多 root 全能选手(host 表
+ * roots ['claude-code','codex'] 且 #2572 后三引擎皆正式成员),硬选一个会让它在
+ * 其余引擎视图被错误降到「仅兼容」层 —— 刻意不入表,落 null = 无主场,任何视图
+ * 不降级(`partitionEntriesByNativeAgent`)。服务端未来的 nativeAgent 字段同语义:可空,
+ * 空 = 全场平等。
+ *
+ * **xd 刻意不在表内**,与 host 同因:网关独占存在性,root 概念不适用(非折扣网关行
+ * 同样落 null,见 `nativeAgentForProviderModel` 头注)。
  */
 const BUILTIN_ROOT_PREFERENCE: ReadonlyMap<string, AgentKind> = new Map([
   ['openai', 'codex'],
   ['anthropic', 'claude-code'],
-  ['xai', 'claude-code'],
 ]);
 
 /**
@@ -243,34 +248,6 @@ export function candidateAgentsForModel(
 }
 
 /**
- * 网关(XD)的 root 偏好 —— 网关同时服务 cc / codex 两个面,没有 root 概念,按**条目本身**判:
- *   - 折扣路由条目(`codex/` 前缀,或服务端显式下发 `group:'gpt-budget'`)→ codex:
- *     `codex/` 是网关转发给 OpenAI Responses 那条低价路由的命名空间(见 types.ts
- *     `RoutingDescriptor.modelIdRewrite` 示例与 classification.ts `categorize` 的
- *     「`codex/` 前缀 ⇒ gpt-budget」判定),归属天然是 Codex 侧;
- *   - 其余 → claude-code:网关 `/v1/messages` 翻译面覆盖最广,也是服务端未声明 `agents`
- *     时的默认 tab(active-catalog.ts `xdGatewayTargetAgents` 默认 `['claude-code']`)。
- *
- * 折扣判定复用 `isBudgetModel`(数据优先:合法 `group` 说了算,否则 `codex/` 前缀兜底),
- * 不自己再抄一遍前缀判断。
- */
-function gatewayRootPreference(model: CatalogModel | undefined, modelId: string): AgentKind {
-  const id = normalizeModelIdForClassification(modelId);
-  const budget = model
-    ? isBudgetModel({ id, ...(model.group !== undefined ? { group: model.group } : {}) })
-    : isBudgetModel({ id });
-  return budget ? 'codex' : 'claude-code';
-}
-
-/**
- * 该供应商是否为「共享网关」形态 —— 数据判定,不是 id 白名单:任一 runtime 的鉴权策略是
- * `gateway-key` 即网关(XD 的三个 runtime 都是,见 builtin.ts XD_PROVIDER.routing)。
- */
-function isGatewayProvider(provider: Provider | ProviderView): boolean {
-  return Object.values(provider.routing).some((routing) => routing?.authStrategy === 'gateway-key');
-}
-
-/**
  * **原生底座(native agent)** —— 这个模型"生来跑在哪个引擎上",与候选集**无关**。
  *
  * 与推荐引擎的区别:推荐必须落在候选内(可选才推),原生底座是模型的固有属性 ——
@@ -278,9 +255,19 @@ function isGatewayProvider(provider: Provider | ProviderView): boolean {
  * 排序用它:codex 会话优先展示 GPT 系,claude 会话优先展示 Claude 系,兼容行往下排
  * (`sortEntriesForAgent`)。
  *
- * 取值来源:内置 root 表 → 网关按条目判 → 都不适用(用户自定义供应商)时 null,
- * 由调用方回落(`unifiedModelEntries` 回落到 `recommended`:BYOM 模型的"原生底座"
- * 就是用户为它配的那个 runtime)。
+ * **null = 无主场**(Chris 2026-08-13 裁决):多 root 全能模型(xai)、BYOM 与判不出的
+ * 一律 null —— 不是"未知待回落",而是明确的"全场平等":任何引擎视图都不降级
+ * (`partitionEntriesByNativeAgent` 只降级「主场明确在别处」的行)。推荐引擎照常由
+ * `pickRecommendedAgent` 的候选回落链兜底,不受影响。
+ *
+ * 取值来源:内置 root 表(只标确有主场的)→ 折扣条目判 codex → null。
+ *
+ * **网关(XD)非折扣行也是 null**:网关同时服务三个面,root 概念不适用(host 侧 xd 同样
+ * 不入 MODEL_PLANE_POLICIES)。旧版曾按「/v1/messages 翻译面覆盖最广」代理成 cc,但那
+ * 不是主场事实,还带来两个错:XD 上的 GPT 非折扣行在 codex 视图被降级;device-link 投影
+ * 剥掉 authStrategy 后网关判定失败,本地/远程排序不一致。判定链里因此**没有任何依赖
+ * `routing.authStrategy` 的分支**,两端天然同结果。服务端目录未来按条目下发 nativeAgent
+ * 字段时,以数据覆盖此推导。
  */
 export function nativeAgentForProviderModel(
   provider: Provider | ProviderView | undefined,
@@ -290,10 +277,8 @@ export function nativeAgentForProviderModel(
   const builtin = BUILTIN_ROOT_PREFERENCE.get(provider.id);
   if (builtin) return builtin;
   // 折扣路由条目(`codex/` 前缀或服务端显式 `group:'gpt-budget'`)天生属于 Codex 侧。
-  // 这个判定**只看条目数据,刻意不依赖 isGatewayProvider**:device-link 的供应商投影
-  // 会剥掉 routing.authStrategy(执行细节不出被控端,providerListProjection 测试锁),
-  // 控制端拿网关判定必然 false —— 只挂在网关分支下,远程会话里折扣行的 native 会错落
-  // 到 claude-code,推荐引擎与同引擎视图的排序双双出错(2026-08-13 远程会话实测)。
+  // 这个判定**只看条目数据**(device-link 投影会剥掉 routing.authStrategy,执行细节
+  // 不出被控端 —— providerListProjection 测试锁,2026-08-13 远程会话实测)。
   const probe =
     findCatalogModel(provider, modelId, 'codex') ??
     findCatalogModel(provider, modelId, 'claude-code') ??
@@ -306,10 +291,6 @@ export function nativeAgentForProviderModel(
       })
     : isBudgetModel({ id: normalizedId });
   if (budget) return 'codex';
-  // 非折扣的网关条目 → claude-code(既有语义:网关 /v1/messages 翻译面覆盖最广)。
-  // 网关判定失败(如上面的远程投影)时落到 null,由调用方回落 recommended —— 非折扣
-  // 网关行的 recommended 本就是 cc,可见结果一致。
-  if (isGatewayProvider(provider)) return gatewayRootPreference(probe, modelId);
   return null;
 }
 
@@ -470,9 +451,10 @@ export interface UnifiedModelEntry {
   /**
    * ★**原生底座**:这个模型生来属于哪个引擎,**不与候选求交**(Claude 模型即便 codex 可跑,
    * native 仍是 claude-code)。会话内「同引擎视图」按它排序(`sortEntriesForAgent`)。
-   * 用户自定义供应商无 root 概念时回落 `recommended`。
+   * **null = 无主场**(多 root 全能模型 / BYOM):任何引擎视图都不降级,详见
+   * `nativeAgentForProviderModel` 头注(Chris 2026-08-13 裁决)。
    */
-  nativeAgent: AgentKind;
+  nativeAgent: AgentKind | null;
   /** 逐候选引擎已解析的能力。键集 = candidates。 */
   capabilities: Partial<Record<AgentKind, UnifiedAgentCapability>>;
 }
@@ -622,7 +604,7 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       sourceConnected: draft.connected,
       candidates,
       recommended,
-      nativeAgent: nativeAgentForProviderModel(provider, draft.keyModelId) ?? recommended,
+      nativeAgent: nativeAgentForProviderModel(provider, draft.keyModelId),
       capabilities,
     });
   }
@@ -632,6 +614,10 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
 /**
  * 按**原生底座**把行分成两组(会话内「同引擎视图」的排序依据,Chris 2026-08-13 裁决):
  * codex 会话优先展示 GPT 系,claude 会话优先展示 Claude 系;只是"兼容能跑"的往下排。
+ *
+ * **只降级「主场明确在别处」的行**:`nativeAgent === null`(无主场 —— 多 root 全能模型 /
+ * BYOM)留在上组,与原生行按入参序混排 —— 上游给 grok 这类三栖模型硬选一个主场再也不会
+ * 把它在其余引擎视图错误降级(同日裁决,与 `nativeAgentForProviderModel` 头注同源)。
  *
  * 两组内部**保持入参顺序**(= 服务端 group / sortOrder 的陈列序)。调用方若要再做分组
  * 展示(`groupModelsForDisplay`),应**分别在两组内**做,不要先分组再排序 —— 那会把
@@ -644,7 +630,8 @@ export function partitionEntriesByNativeAgent(
   const native: UnifiedModelEntry[] = [];
   const compatible: UnifiedModelEntry[] = [];
   for (const entry of entries) {
-    (entry.nativeAgent === targetAgent ? native : compatible).push(entry);
+    const guestElsewhere = entry.nativeAgent !== null && entry.nativeAgent !== targetAgent;
+    (guestElsewhere ? compatible : native).push(entry);
   }
   return { native, compatible };
 }
