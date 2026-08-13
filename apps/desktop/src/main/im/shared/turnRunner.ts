@@ -131,7 +131,11 @@ import {
   setActivityNotice,
   type TurnActivityState,
 } from './turnActivity';
-import { terminalErrorText, turnRetryNotice } from './turnRetryNotice';
+import {
+  autoReviewBlockedFinalNotice,
+  terminalErrorText,
+  turnRetryNotice,
+} from './turnRetryNotice';
 import { createTurnPresenter, DEFAULT_PRESENTER_POLICY, type TurnPresenter } from './turnPresenter';
 import {
   toCoreAgentKind,
@@ -185,6 +189,8 @@ interface TurnState {
   /** Current session root used to confine model-authored local file links. */
   workingDir: string;
   done: boolean;
+  /** Claude 原生 Auto 在 result 终态汇总了 permission denial。 */
+  autoReviewBlocked: boolean;
   /** 过程区耗时刷新的低频 ticker(首个 tool_use 启动, 收口清除)。 */
   activityTicker: ReturnType<typeof setInterval> | null;
   outputCardMessageId: string | null;
@@ -687,6 +693,7 @@ export function createTurnRunner(
       mediaAbsPaths: [],
       workingDir: row.workingDir,
       done: false,
+      autoReviewBlocked: false,
       activityTicker: null,
       outputCardMessageId: args.outputCardMessageId ?? null,
       outputCardPrefix: args.outputCardPrefix ?? '',
@@ -1787,6 +1794,8 @@ export function createTurnRunner(
           if ((event.data as { silentStop?: boolean } | null)?.silentStop === true) {
             return handleSilentStopDone(state, userId);
           }
+          turn.autoReviewBlocked =
+            (event.data as { autoReviewBlocked?: unknown } | null)?.autoReviewBlocked === true;
           return handleTurnDoneAsync(state, userId);
         case 'error':
           // 可重试错误只是进行中状态；保持当前 turn、卡片和排队消息不动，
@@ -1923,7 +1932,11 @@ export function createTurnRunner(
     // External-channel safeguard: maker-core normally strips these tokens,
     // while this boundary also protects old continuations and future adapters.
     const body = stripInternalWebCitations(rawBody);
-    if (turn.done) return body;
+    if (turn.done) {
+      if (!turn.autoReviewBlocked) return body;
+      const notice = autoReviewBlockedFinalNotice();
+      return body ? `${body}\n\n> ⚠️ ${notice}` : `> ⚠️ ${notice}`;
+    }
     // 过程区在上、正文在下的合成骨架与官方 bot 共用(presenter.composeRunning →
     // composeProgressView); 纯文本快答无 tool_use 时过程区为空, 视图与旧行为逐字一致。
     return turn.presenter.composeRunning(body);
@@ -2551,7 +2564,7 @@ export function createTurnRunner(
           `streamingHandle.finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-    } else if (turn.presenter.wholeText().length === 0) {
+    } else if (composeStreamingView(turn).length === 0) {
       // No streamed text at all — send a one-shot text so the user knows the
       // turn ended. (Rare; normally agents emit at least one text block.)
       try {

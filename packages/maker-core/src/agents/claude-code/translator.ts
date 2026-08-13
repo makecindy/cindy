@@ -448,6 +448,12 @@ interface TranslateContext {
   getModelContextWindow?: () => number | undefined;
   getEffort: () => string;
   getPermissionMode: () => string;
+  /**
+   * 当前 result 是否来自 Claude OAuth 原生 Auto，且 SDK 汇总了 permission denial。
+   * 调用方在消费原始 result 时判定；translator 只把稳定布尔 marker 投影到 done，
+   * 让 Desktop / IM 在终态收口后仍能保留提示，而不改写或持久化 SDK 原始 payload。
+   */
+  autoReviewBlockedResult?: boolean;
   /** SDK session_id 第一次出现时的回调, agent 用来回填 sdkSessionId */
   onSessionId: (sdkSessionId: string | undefined) => void;
   /**
@@ -1846,12 +1852,18 @@ function handleResult(
   const resultWithAssistantMessageId = ctx.turn.lastAssistantRequestId
     ? { ...safeResult, assistant_message_id: ctx.turn.lastAssistantRequestId }
     : safeResult;
+  const autoReviewBlocked = ctx.autoReviewBlockedResult === true;
+  const doneData =
+    isSilentStopTurn || autoReviewBlocked
+      ? {
+          ...resultWithAssistantMessageId,
+          ...(isSilentStopTurn ? { silentStop: true } : {}),
+          ...(autoReviewBlocked ? { autoReviewBlocked: true } : {}),
+        }
+      : resultWithAssistantMessageId;
   queue.push({
     type: 'done',
-    data:
-      isSilentStopTurn
-        ? { ...resultWithAssistantMessageId, silentStop: true }
-        : resultWithAssistantMessageId,
+    data: doneData,
     source: 'claude-code',
   });
   // reset turn 累积 (tracker 内部已经在 endTurn 里 reset 了 currentTurn,这里只清非 usage 状态)

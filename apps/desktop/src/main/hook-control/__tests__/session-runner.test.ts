@@ -2776,6 +2776,22 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     expect(observer.finalText()).toBe('确认后结论。');
   });
 
+  it('Claude 原生 Auto 的终态拒绝会保留在官方 hook 最终正文', async () => {
+    const session = makeManualSession('sess-native-auto-blocked');
+    const observer = observeHookTurn(session as never, {
+      onSilentStopSettled: () => () => {},
+      log,
+    });
+    const cb = h.eventCbs.get('sess-native-auto-blocked')!;
+    cb({ type: 'text', data: { text: '安全范围内的结果。', isFinal: true } });
+    cb({ type: 'done', data: { autoReviewBlocked: true } });
+
+    await expect(observer.finished).resolves.toBeUndefined();
+    expect(observer.finalText()).toContain('安全范围内的结果。');
+    expect(observer.finalText()).toContain('自动审批已阻止');
+    expect(observer.finalText()).toContain('默认权限');
+  });
+
   it('会话不在进程里 -> 立刻 onAbandon(dispatcher 会把记账还回去), 撤销函数不炸', () => {
     // 本调用发生在 vendor dispatch **之前**, live session 正常必然已就绪, 所以这是
     // 兜底而非常规路径。放弃是安全方向, 且 dispatcher 收到 onAbandon 会还记账 ——

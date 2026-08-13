@@ -66,6 +66,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 
 import { makerChatStore } from '@/lib/makerChatStore';
+import { i18n } from '@/i18n';
 
 const SESSION_ID = 'stale-error-turn-start';
 
@@ -159,6 +160,29 @@ describe('残留终态 error 在新 turn 启动时清除', () => {
     // 本轮成功结束: running→stopped 判定读到的 error 为空 → done 而非「执行失败」。
     emitStatus({ isRunning: false, status: 'Done', contextTokens: 0, contextWindow: 0 });
     expect(makerChatStore.hasSessionTerminalError(SESSION_ID)).toBe(false);
+  });
+
+  it('Claude 原生 Auto 的 done marker 在终态后保留本地化提示,下一轮再清除', () => {
+    makerChatStore.__applyStreamEventForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      type: 'done',
+      source: 'claude-code',
+      data: { autoReviewBlocked: true },
+    });
+    const afterDone = makerChatStore.getSnapshot(SESSION_ID);
+    expect(afterDone.agentStatus.isRunning).toBe(false);
+    expect(afterDone.recoverableError).toBe(i18n.t('chat.remoteError.AUTO_REVIEW_BLOCKED'));
+
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'Working',
+      isRunning: true,
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+    });
+    const nextTurn = makerChatStore.getSnapshot(SESSION_ID);
+    expect(nextTurn.recoverableError).toBeNull();
   });
 
   it('skipTurnReset 的 side-channel running 信号不清 error(banner 保留)', () => {

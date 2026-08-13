@@ -2091,6 +2091,54 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(finalView).not.toContain('自动重试');
   });
 
+  it('keeps a Claude native Auto block notice in the final IM card after done', async () => {
+    const handle = {
+      messageId: 'stream-auto-blocked',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    h.emit({ type: 'text', data: { text: '已完成安全范围内的部分。', isFinal: false } });
+    h.emit({
+      type: 'error',
+      data: {
+        message: '[AUTO_REVIEW_BLOCKED] fallback',
+        isTerminal: false,
+      },
+    });
+    h.emit({ type: 'done', data: { autoReviewBlocked: true } });
+
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    const finalView = String(handle.finalize.mock.calls[0][0]);
+    expect(finalView).toContain('已完成安全范围内的部分。');
+    expect(finalView).toContain('自动审批已阻止');
+    expect(finalView).toContain('默认权限');
+  });
+
+  it('sends the Claude native Auto block notice when the turn has no assistant text', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    h.emit({ type: 'done', data: { autoReviewBlocked: true } });
+
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.sendText).toHaveBeenCalled();
+    });
+    const sentText = mocks.feishuIm.sendText.mock.calls.map(([, text]) => String(text)).join('\n');
+    expect(sentText).toContain('自动审批已阻止');
+    expect(sentText).toContain('默认权限');
+    expect(sentText).not.toContain('本轮无文本输出');
+  });
+
   it('still finalizes as failed on a terminal error', async () => {
     const handle = {
       messageId: 'stream-fatal',

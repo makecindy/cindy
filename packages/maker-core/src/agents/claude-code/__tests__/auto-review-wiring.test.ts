@@ -689,7 +689,14 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
       authSource: 'oauth',
     });
     expect(queryPermissionMode).toBe('auto');
-    const { notices } = startNoticeCollector(handle);
+    const events: Array<{ type: string; data: unknown }> = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        events.push({ type: event.type, data: event.data });
+      }
+    })().catch(() => {
+      /* 队列在 teardown 时被丢弃,不是测试失败 */
+    });
 
     fakeQuery.emit({
       type: 'result',
@@ -705,7 +712,14 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     });
     await settle();
 
-    expect(notices).toContainEqual(expect.stringContaining('[AUTO_REVIEW_BLOCKED]'));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({ message: expect.stringContaining('[AUTO_REVIEW_BLOCKED]') }),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'done',
+      data: expect.objectContaining({ autoReviewBlocked: true }),
+    }));
     await handle.close();
   });
 

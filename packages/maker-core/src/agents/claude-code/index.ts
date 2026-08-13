@@ -4061,12 +4061,12 @@ export class ClaudeCodeAgent extends BaseAgent {
             const rawStatus = (rawMsg as { status?: string } | null)?.status;
             // Claude OAuth 的原生 Auto classifier 绕过 canUseTool。SDK 会在 result
             // 汇总 permission_denials；只认 native Auto Query，避免误报普通工具失败。
-            if (
+            const isNativeAutoReviewBlockedResult =
               rawType === 'result'
               && nativeAutoQueries.has(currentQ)
               && Array.isArray((rawMsg as { permission_denials?: unknown }).permission_denials)
-              && (rawMsg as { permission_denials: unknown[] }).permission_denials.length > 0
-            ) {
+              && (rawMsg as { permission_denials: unknown[] }).permission_denials.length > 0;
+            if (isNativeAutoReviewBlockedResult) {
               autoReviewBlockedNotice.notify();
             }
             const isTerminalTaskNotification =
@@ -4220,6 +4220,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               getModelContextWindow: () => modelContextWindows.get(mutableModel),
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,
+              autoReviewBlockedResult: isNativeAutoReviewBlockedResult,
               getSdkSessionId: () => sdkSessionId,
               getLogTitle: () => lastSendTitle,
               tracker: usageTracker,

@@ -28,7 +28,10 @@ import {
   createTurnPresenter,
   type ProgressBodyMode,
 } from '../im/shared/turnPresenter.js';
-import { overloadFailureNotice } from '../im/shared/turnRetryNotice.js';
+import {
+  autoReviewBlockedFinalNotice,
+  overloadFailureNotice,
+} from '../im/shared/turnRetryNotice.js';
 
 /*
  * ── 为什么这里**没有**整轮静默兜底 ──────────────────────────────────────────
@@ -151,6 +154,7 @@ export function observeHookTurn(
     onProgress,
     progressBodyMode,
   });
+  let autoReviewBlocked = false;
 
   let stopListening: (() => void) | undefined;
   const finished = new Promise<void>((resolve, reject) => {
@@ -253,6 +257,8 @@ export function observeHookTurn(
           });
           return;
         }
+        autoReviewBlocked =
+          (ev.data as { autoReviewBlocked?: unknown } | null | undefined)?.autoReviewBlocked === true;
         presenter.seal();
         // Telegram 的 turn.end 仍要经过 server 发布队列。先把节流窗里的最新安全
         // 快照冲进既有 progress 载体，避免客户端在 teardown 时直接吞掉最后一帧。
@@ -337,7 +343,10 @@ export function observeHookTurn(
       return presenter.wholeText();
     },
     finalText(): string {
-      return presenter.finalText();
+      const body = presenter.finalText();
+      if (!autoReviewBlocked) return body;
+      const notice = autoReviewBlockedFinalNotice();
+      return body ? `${body}\n\n> ⚠️ ${notice}` : `> ⚠️ ${notice}`;
     },
   };
 }

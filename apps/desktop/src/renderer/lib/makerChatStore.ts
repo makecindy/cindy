@@ -4973,9 +4973,15 @@ export function handleStreamEvent(
       });
 
       const terminalData = event.data as
-        { cancelled?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
+        {
+          autoReviewBlocked?: unknown;
+          cancelled?: unknown;
+          plan?: unknown;
+          raw?: { id?: unknown; status?: unknown };
+        }
         | null
         | undefined;
+      const terminalAutoReviewBlocked = terminalData?.autoReviewBlocked === true;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
       const terminalTurnStatus =
         typeof terminalData?.raw?.status === 'string' ? terminalData.raw.status : null;
@@ -5001,7 +5007,12 @@ export function handleStreamEvent(
         messages: [...doneMessages],
         streamingText: '',
         isStreaming: false,
-        recoverableError: null,
+        // Claude 原生 Auto 直到 SDK result 才汇总 permission_denials；其前一拍
+        // 非终止 error 会被紧随其后的 status(false) 清掉。done marker 是终态真相，
+        // 在 turn 已停止后恢复本地化说明；下一轮 status(true) 会按既有逻辑清除。
+        recoverableError: terminalAutoReviewBlocked
+          ? decodeRemoteErrorMessage('[AUTO_REVIEW_BLOCKED]')
+          : null,
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
@@ -5731,7 +5742,7 @@ function handleStatusUpdate(
     usageLimitRecovery: isTurnStart ? null : state.usageLimitRecovery,
     errorReason: isTurnStart ? null : state.errorReason,
     errorRetryText: isTurnStart || (isTurnComplete && !state.error) ? null : state.errorRetryText,
-    recoverableError: isTurnComplete ? null : state.recoverableError,
+    recoverableError: isTurnStart || isTurnComplete ? null : state.recoverableError,
     isStreaming: update.isRunning
       ? true
       : !update.isRunning && state.isStreaming
