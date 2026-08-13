@@ -31,7 +31,7 @@
  * runMemoryCleanup() 执行归档 (幂等, 可重复跑)。
  */
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 
@@ -402,10 +402,37 @@ export async function runMemoryCleanup(
         await writeExclusive(opts.backupRoot, item.filename, stamp, srcContent);
       }
 
-      // 归档 = link 排他预留 + unlink 删源 (严格 no-clobber, 见 moveExclusive
-      // 注释 — Codex P2 on #2561)。
-      await moveExclusive(src, archiveDir, item.filename, stamp);
-      result.archived.push(item);
+      // 归档 = 排他写快照 + rename 原子移动 + 对比恢复。三件事各司其职
+      // (Greptile/Codex on #2561 第六/七/九/十轮收敛的最终形态):
+      //   1) writeExclusive 把审阅时点快照 A 写入 .archive ('wx' 排他,
+      //      严格 no-clobber — 不覆盖已有归档);
+      //   2) rename(src, trash) 原子移动 src — 移动后 src 路径即空, 宿主
+      //      并发写落到新 src 文件; 无 link 的共享 inode 污染 (Codex P1 on
+      //      #2561 第十轮: avoid hard-linking live shards);
+      //   3) 对比 trash 与快照 A: 一致 → 删 trash (归档完成); 不一致 (宿主在
+      //      rename 前写了新内容 B) → 恢复 src (B 保留, 归档保留审阅快照 A)。
+      await writeExclusive(archiveDir, item.filename, stamp, srcContent);
+      const trash = path.join(plan.shardDir, `${item.filename}.cleanup-trash-${stamp}`);
+      await fs.rename(src, trash);
+      let trashContent: Buffer;
+      try {
+        trashContent = await fs.readFile(trash);
+      } catch (e) {
+        // trash 读失败 (罕见竞态) → 保守恢复 src, 归档快照已落盘, 数据不丢
+        await fs.rename(trash, src).catch(() => {});
+        throw e;
+      }
+      if (trashContent.equals(srcContent)) {
+        await fs.unlink(trash);
+        result.archived.push(item);
+      } else {
+        // 宿主并发写的新内容 → 恢复 src, 归档保留审阅快照 A
+        await fs.rename(trash, src);
+        result.failed.push({
+          filename: item.filename,
+          error: 'source changed during archive; restored (archive holds reviewed copy)',
+        });
+      }
     } catch (e) {
       result.failed.push({ filename: item.filename, error: String(e) });
     }
@@ -478,56 +505,6 @@ async function writeExclusive(
   }
 }
 
-/**
- * link + unlink 原子排他移动 src 到 dir 下, 目标路径带「时间戳 + 随机后缀」,
- * 返回最终目标路径。
- *
- * 用 `fs.link` 实现严格 no-clobber: link 到已存在目标抛 EEXIST (排他预留),
- * 不同于 POSIX `rename` 会静默覆盖已存在目标 (Codex P2 on #2561)。link 成功
- * 后 unlink 删源 — src 路径即空, 宿主并发写落到新的 src 文件, 已移动内容
- * 不受影响 (对齐 #2519 migrate rename-then-remove 哲学, Greptile P1 on #2561
- * 第五/六轮: 复制/校验+unlink 的多步窗口)。
- *
- * 错误区分: 只对「目标已存在」重试 (EEXIST, 或 EPERM 且目标确实存在);
- * EPERM 也可能是源被锁定/权限拒绝 (Windows --force 下宿主占用源文件),
- * 或文件系统不支持硬链接 — 目标不存在时必须暴露而非无限重试
- * (Greptile P1 / Codex P2 on #2561: EPERM 无限重试卡死)。
- */
-async function moveExclusive(
-  src: string,
-  dir: string,
-  filename: string,
-  stamp: string,
-): Promise<string> {
-  await fs.mkdir(dir, { recursive: true });
-  for (let attempt = 0; ; attempt += 1) {
-    const target = path.join(dir, `${filename}.${stamp}.${randomBytes(4).toString('hex')}`);
-    try {
-      await fs.link(src, target);
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code === 'EEXIST') continue; // 目标冲突 → 换随机后缀重试
-      if (
-        (code === 'EPERM' || code === 'ENOTSUP' || code === 'ENOTEMPTY') &&
-        (await pathExists(target))
-      ) {
-        continue; // 目标确实存在 → 冲突重试
-      }
-      throw e; // 目标不存在但失败 → 源锁定/权限/fs 不支持, 暴露
-    }
-    // link 成功 (目标已排他预留), 删源; unlink 失败 (宿主锁定) 抛错由外层
-    // 记 failed — 归档副本已落盘, 源保留, 下次重跑可再次处理。
-    await fs.unlink(src);
-    return target;
-  }
-}
-
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.stat(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
+// 注: 归档移动逻辑内联在 runMemoryCleanup (writeExclusive 快照 + rename 原子
+// 移动 + 对比恢复), 不再使用 link+unlink — link 共享 inode, 宿主并发写会
+// 污染归档副本 (Codex P1 on #2561 第十轮)。

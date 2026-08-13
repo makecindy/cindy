@@ -152,8 +152,8 @@ describe('runMemoryCleanup', () => {
 
     expect(result.archived.map((a) => a.filename)).toEqual(['feedback_a.md']);
     expect(result.failed).toHaveLength(0);
-    // 归档文件名带时间戳+随机后缀 (rename 原子移动)。
-    expect((await archiveContents()).some((f) => f.startsWith('feedback_a.md.'))).toBe(true);
+    // 归档 = 排他写快照 (base 名, 冲突时递增后缀)。
+    expect((await archiveContents()).some((f) => f.startsWith('feedback_a.md'))).toBe(true);
     await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).rejects.toThrow();
     await expect(readFile(path.join(dir, 'feedback_b.md'), 'utf8')).resolves.toContain('same');
     const index = await readFile(path.join(dir, 'MEMORY.md'), 'utf8');
@@ -181,7 +181,7 @@ describe('runMemoryCleanup', () => {
     const result = await runMemoryCleanup(plan, { archiveStale: true });
 
     expect(result.archived.map((a) => a.filename)).toEqual(['project_done.md']);
-    expect((await archiveContents()).some((f) => f.startsWith('project_done.md.'))).toBe(true);
+    expect((await archiveContents()).some((f) => f.startsWith('project_done.md'))).toBe(true);
   });
 
   it('is idempotent — re-running yields an empty plan archive set', async () => {
@@ -267,11 +267,11 @@ describe('runMemoryCleanup', () => {
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
 
     const plan = await planMemoryCleanup(dir);
-    // 模拟 Windows --force 下宿主锁定源文件: fs.link 持续 EPERM 且目标不存在
-    // → 必须暴露为 failed, 而非把 EPERM 当目标冲突无限重试 (Greptile P1 /
-    // Codex P2 on #2561)。
+    // 模拟 Windows --force 下宿主锁定源文件: rename (移动 src → trash) 持续
+    // EPERM → 必须暴露为 failed, 而非把 EPERM 当目标冲突无限重试 (Greptile
+    // P1 / Codex P2 on #2561)。
     const spy = vi
-      .spyOn(fs, 'link')
+      .spyOn(fs, 'rename')
       .mockRejectedValue(Object.assign(new Error('source locked'), { code: 'EPERM' }));
 
     try {
@@ -279,6 +279,32 @@ describe('runMemoryCleanup', () => {
       expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
       // 源保留 (未被删)。
       await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('same');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('restores source when it changed during archive (rename captured new content)', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟宿主在 hash 校验后、rename 前写 src (新内容 B): rename 执行时先写
+    // 新内容再移动 → trash 内容 ≠ 快照 → 应恢复 src, 归档保留审阅快照。
+    const realRename = fs.rename.bind(fs);
+    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
+      if (String(src).endsWith('feedback_a.md') && String(dst).includes('cleanup-trash')) {
+        await writeFile(String(src), "---\ntitle: NEW\ndescription: new\ntype: feedback\nupdatedAt: '2026-03-01T00:00:00.000Z'\n---\nUPDATED\n", 'utf8');
+      }
+      return realRename(src as string, dst as string);
+    });
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // 源被恢复 (新内容保留在 src), 归档保留审阅快照, 记录 failed。
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('UPDATED');
+      expect((await archiveContents()).some((f) => f.startsWith('feedback_a.md'))).toBe(true);
     } finally {
       spy.mockRestore();
     }
