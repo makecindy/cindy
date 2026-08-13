@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -7,7 +8,9 @@ import {
   desktopUserDataDirNameForRegion,
   resolveDesktopDevRegion,
   resolveDesktopDevStartupConfig,
+  resolveWorktreeIsolationFromCwd,
   stripDesktopDevRegionArgs,
+  worktreeNameFromPath,
 } from "../shared/desktop-dev-region.mjs";
 
 test("desktop shared userData follows the region identity", () => {
@@ -187,5 +190,119 @@ test("an explicit endpoint manifest override remains higher priority than the re
       endpointsCdn: false,
       endpointManifestFile: "config/custom-endpoint.json",
     },
+  );
+});
+
+// ── worktree 自动隔离（issue #2635）──────────────────────────────────────────
+
+const worktreeCwd = (...segments) => path.join(".cindy-worktrees", ...segments);
+
+test("worktreeNameFromPath extracts the name from worktree root and nested cwd", () => {
+  assert.equal(worktreeNameFromPath(worktreeCwd("epic-thompson")), "epic-thompson");
+  assert.equal(
+    worktreeNameFromPath(worktreeCwd("epic-thompson", "apps", "desktop")),
+    "epic-thompson",
+  );
+  // 迁移前的旧目录形态同样识别
+  assert.equal(
+    worktreeNameFromPath(path.join(".xdt-worktrees", "legacy-tree")),
+    "legacy-tree",
+  );
+  // 非 worktree 路径一律 null
+  assert.equal(worktreeNameFromPath(path.join("somewhere", "else")), null);
+  assert.equal(worktreeNameFromPath("."), null);
+});
+
+test("worktree dev launch auto-derives the named isolation sandbox", () => {
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: {},
+    }),
+    { worktreeName: "epic-thompson" },
+  );
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson", "apps", "desktop"),
+      argv: ["start", "--"],
+      env: {},
+    }),
+    { worktreeName: "epic-thompson" },
+  );
+  // 旧目录形态同样命中
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: path.join(".xdt-worktrees", "legacy-tree"),
+      argv: [],
+      env: {},
+    }),
+    { worktreeName: "legacy-tree" },
+  );
+});
+
+test("worktree dev launch honors explicit isolation/sharing intent and never overrides it", () => {
+  for (const argv of [
+    ["--isolated"],
+    ["--isolated=feature-a"],
+    ["--passive"],
+    ["--preserve-running"],
+    ["start", "--", "--isolated=feature-a"],
+  ]) {
+    assert.equal(
+      resolveWorktreeIsolationFromCwd({
+        cwd: worktreeCwd("epic-thompson"),
+        argv,
+        env: {},
+      }),
+      null,
+      `argv ${JSON.stringify(argv)} must suppress auto-isolation`,
+    );
+  }
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_ISOLATED: "1" },
+    }),
+    null,
+  );
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("epic-thompson"),
+      argv: [],
+      env: { XDT_USER_DATA_DIR: "C:\\custom\\profile" },
+    }),
+    null,
+  );
+});
+
+test("worktree dev launch outside a managed worktree keeps the shared-profile semantics", () => {
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({ cwd: path.join("base", "repo"), argv: [], env: {} }),
+    null,
+  );
+  assert.equal(
+    resolveWorktreeIsolationFromCwd({ cwd: ".", argv: [], env: {} }),
+    null,
+  );
+});
+
+test("worktree dev launch falls back to the default sandbox for invalid names", () => {
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("invalid-name-with-1234567890-1234567890-1234567890-123"),
+      argv: [],
+      env: {},
+    }),
+    { worktreeName: null },
+  );
+  assert.deepEqual(
+    resolveWorktreeIsolationFromCwd({
+      cwd: worktreeCwd("has space"),
+      argv: [],
+      env: {},
+    }),
+    { worktreeName: null },
   );
 });

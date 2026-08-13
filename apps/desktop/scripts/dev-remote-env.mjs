@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 
 import {
   applyDesktopDevStartupConfig,
+  resolveWorktreeIsolationFromCwd,
   stripDesktopDevRegionArgs,
 } from '../../../scripts/shared/desktop-dev-region.mjs';
 
@@ -30,6 +31,29 @@ const env = {
   XDT_DESKTOP_DEV_MODE: 'remote',
   VITE_CINDY_AUTH_REGION: startupConfig.region,
 };
+
+// 内置 worktree 会话里的裸 dev 启动默认按隔离沙箱处理（issue #2635）：worktree 内
+// 不带 --isolated 裸启动会沿用区域默认 profile + 物理机 deviceId，dev 登录会把同机
+// release 的服务端 refresh token 顶掉、把 release 挤下线。显式传了 --isolated /
+// --passive / --preserve-running（或已设 XDT_ISOLATED=1 / XDT_USER_DATA_DIR）时不干预；
+// baseRepo 直跑保持既有共库语义。
+const worktreeIsolation = resolveWorktreeIsolationFromCwd({
+  argv: rawArgs,
+  env: process.env,
+});
+if (worktreeIsolation) {
+  env.XDT_ISOLATED = '1';
+  if (worktreeIsolation.worktreeName) {
+    env.XDT_ISOLATED_NAME = worktreeIsolation.worktreeName;
+  }
+  console.log(
+    `[dev-remote-env] managed worktree detected → isolated sandbox` +
+      (worktreeIsolation.worktreeName
+        ? ` "${worktreeIsolation.worktreeName}"`
+        : ' (default)') +
+      ' (独立 userData / 登录态 / 设备身份，不影响正式版)',
+  );
+}
 const isWindows = process.platform === 'win32';
 
 // Windows 下 electron-forge 等 .cmd shim 需要经 shell 解析;shell 模式下 Node 不转义
