@@ -695,6 +695,15 @@ export function CCAgentSessionView({
   // 实例拥有右栏 / header 主权。SplitGroup 的常驻 pane 可用 routeOwner 显式转移
   // 主权；其它内嵌复用实例(doc rail / Orca worker)不传，行为保持不变。
   const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);
+  // Header/right-sidebar ownership is narrower than hardware task actions.
+  // A visible file-browse rail is still the open task, even when it is compact.
+  const ownsHardwareTaskActions =
+    ownsRoute ||
+    (Boolean(sessionId) &&
+      viewVisible &&
+      !orcaMode &&
+      navigationMode !== 'split-pane' &&
+      navigationMode !== 'sidebar-embedded');
   const showComposerControlledBanner = ownsRoute || showControlledBanner;
   const controlledBy = useControlledBy();
   const hasControlledBanner = showComposerControlledBanner && controlledBy.length > 0;
@@ -1490,7 +1499,7 @@ export function CCAgentSessionView({
       }
       // Only the focused split pane / route owner should consume hardware
       // task commands; other mounted panes stay subscribed for approvals.
-      if (!sessionId || !ownsRoute) return false;
+      if (!sessionId || !ownsHardwareTaskActions) return false;
       if (action.commandId === 'forkTask') {
         if (!canNavigateSession) return false;
         void forkCurrentTaskFromKeyboard(sessionId, {
@@ -1508,7 +1517,7 @@ export function CCAgentSessionView({
   }, [
     canNavigateSession,
     cancelPlanReview,
-    ownsRoute,
+    ownsHardwareTaskActions,
     navigate,
     pendingPermission,
     pendingPlanReview,

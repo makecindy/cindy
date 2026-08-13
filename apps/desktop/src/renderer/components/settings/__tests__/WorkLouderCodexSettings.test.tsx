@@ -272,7 +272,7 @@ describe('WorkLouderCodexSettings', () => {
     });
   });
 
-  it('writes a merged-to-split save onto the newly visible left key', () => {
+  it('writes a compatible single-width keycap when a merged key is split', () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /^MIC/ }));
@@ -282,6 +282,7 @@ describe('WorkLouderCodexSettings', () => {
         name: 'settings.shortcuts.workLouderCodex.microphone.separate.label',
       }),
     );
+    fireEvent.click(screen.getByRole('button', { name: 'MIC1' }));
     fireEvent.click(
       screen.getByRole('button', {
         name: 'settings.shortcuts.workLouderCodex.layout.editor.save',
@@ -292,7 +293,7 @@ describe('WorkLouderCodexSettings', () => {
       layout: expect.objectContaining({
         separateMicrophoneKeys: true,
         slots: expect.objectContaining({
-          ACT10: expect.objectContaining({ keycapId: 'EMPT5' }),
+          ACT10: expect.objectContaining({ keycapId: 'MIC1', action: null }),
           ACT10_ACT11: expect.objectContaining({ keycapId: 'MIC' }),
         }),
       }),
@@ -312,5 +313,18 @@ describe('WorkLouderCodexSettings', () => {
         }) as HTMLSelectElement
       ).disabled,
     ).toBe(true);
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.editor.save',
+      }),
+    );
+    expect(mocks.setSettings).toHaveBeenCalledWith({
+      layout: expect.objectContaining({
+        slots: expect.objectContaining({
+          ACT06: expect.objectContaining({ keycapId: 'MIC1', action: null }),
+        }),
+      }),
+    });
   });
 });

@@ -40,6 +40,7 @@ import {
   WORKLOUDER_CODEX_KEYCAP_ACTIONS,
   WORKLOUDER_CODEX_KEYCAP_IDS,
   cloneWorkLouderCodexLayout,
+  isWorkLouderCodexDoubleKeycap,
   isWorkLouderCodexMicrophoneKeycap,
   type WorkLouderCodexAction,
   type WorkLouderCodexAgentSource,
@@ -53,8 +54,6 @@ import {
   type WorkLouderCodexState,
 } from '../../../shared/workLouderCodex';
 
-const DOUBLE_KEYCAPS = new Set<WorkLouderCodexKeycapId>(['MIC', 'EMPT5']);
-
 /** After a merge/split, write the edited assignment onto the still-visible slot. */
 function visibleCommandSlotAfterMicrophoneSplit(
   slot: WorkLouderCodexCommandSlot,
@@ -64,6 +63,15 @@ function visibleCommandSlotAfterMicrophoneSplit(
     return slot === 'ACT10_ACT11' ? 'ACT10' : slot;
   }
   return slot === 'ACT10' || slot === 'ACT11' ? 'ACT10_ACT11' : slot;
+}
+
+function compatibleKeycapForSlot(
+  slot: WorkLouderCodexCommandSlot,
+  keycapId: WorkLouderCodexKeycapId,
+): WorkLouderCodexKeycapId {
+  const wantsDouble = slot === 'ACT10_ACT11';
+  if (wantsDouble === isWorkLouderCodexDoubleKeycap(keycapId)) return keycapId;
+  return wantsDouble ? 'MIC' : 'MIC1';
 }
 
 interface WorkLouderCodexEntryProps {
@@ -219,17 +227,19 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
       sourceSlot,
       editingSeparateMicrophoneKeys,
     );
+    const nextKeycapId = compatibleKeycapForSlot(slot, keycapId);
+    const nextAction = isWorkLouderCodexMicrophoneKeycap(nextKeycapId) ? null : editingAction;
     patchLayout((layout) => {
       const previous = layout.slots[sourceSlot];
       const assignmentChanged =
-        previous.keycapId !== keycapId ||
-        JSON.stringify(previous.action) !== JSON.stringify(editingAction);
+        previous.keycapId !== nextKeycapId ||
+        JSON.stringify(previous.action) !== JSON.stringify(nextAction);
       layout.separateMicrophoneKeys = editingSeparateMicrophoneKeys;
       // Crossing merged/split changes which slot is visible. Keep the newly
       // revealed keys as they were unless this save also changed the keycap.
       if (slot === sourceSlot || assignmentChanged) {
-        applyCommandKeycap(layout, slot, keycapId);
-        layout.slots[slot].action = editingAction;
+        applyCommandKeycap(layout, slot, nextKeycapId);
+        layout.slots[slot].action = nextAction;
       }
     });
     closeKeycapEditor();
@@ -432,7 +442,14 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
 
       <WorkLouderCodexKeycapPicker
         open={editingSlot !== null}
-        slot={editingSlot}
+        slot={
+          editingSlot
+            ? visibleCommandSlotAfterMicrophoneSplit(
+                editingSlot,
+                editingSeparateMicrophoneKeys,
+              )
+            : editingSlot
+        }
         selectedKeycapId={editingKeycapId}
         query={keycapQuery}
         onQueryChange={setKeycapQuery}

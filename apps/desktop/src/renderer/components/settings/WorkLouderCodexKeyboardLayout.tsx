@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 
 import {
   WORKLOUDER_CODEX_KEYCAP_IDS,
+  isWorkLouderCodexDoubleKeycap,
   type WorkLouderCodexAgentSlotState,
   type WorkLouderCodexCommandSlot,
   type WorkLouderCodexKeycapId,
@@ -355,7 +356,7 @@ export function WorkLouderCodexKeycapPicker({
   const double = slot === 'ACT10_ACT11';
   const normalizedQuery = query.trim().toLowerCase();
   const keycaps = WORKLOUDER_CODEX_KEYCAP_IDS.filter((keycapId) => {
-    if (double !== (keycapId === 'MIC' || keycapId === 'EMPT5')) return false;
+    if (double !== isWorkLouderCodexDoubleKeycap(keycapId)) return false;
     return normalizedQuery.length === 0 || keycapId.toLowerCase().includes(normalizedQuery);
   });
 

@@ -369,6 +369,12 @@ export function isWorkLouderCodexMicrophoneKeycap(
   return keycapId === 'MIC' || keycapId === 'MIC1';
 }
 
+export function isWorkLouderCodexDoubleKeycap(
+  keycapId: WorkLouderCodexKeycapId | null | undefined,
+): boolean {
+  return keycapId === 'MIC' || keycapId === 'EMPT5';
+}
+
 export function isWorkLouderCodexEncoderMode(value: unknown): value is WorkLouderCodexEncoderMode {
   return isStringOption(value, WORKLOUDER_CODEX_ENCODER_MODES);
 }
