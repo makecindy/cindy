@@ -260,9 +260,9 @@ describe('CINDY · ⑤ E1D 红色体系重构(中性 exact map + 红例外白名
     }
   });
 
-  it('NEUTRAL_PRIMARY_FOREGROUND_BY_ID 前景必须中性字(light #FCFCFC/dark #252222,非全局白)', () => {
+  it('NEUTRAL_PRIMARY_FOREGROUND_BY_ID 前景必须中性字(light #FCFCFC/dark #151515,非全局白)', () => {
     for (const [name, theme] of THEMES) {
-      const expFg = name === 'cindy-light' ? '#FCFCFC' : '#252222';
+      const expFg = name === 'cindy-light' ? '#FCFCFC' : '#151515' /* 2026-08 色阶改版: 反相深字随暗色平移 */;
       for (const id of NEUTRAL_PRIMARY_FOREGROUND_BY_ID) {
         expect(rgbEqual(toRgb(theme.colors[id]), toRgb(expFg), 1), `${name}.${id} 前景应中性字`).toBe(true);
       }
@@ -379,9 +379,9 @@ describe('CINDY · ⑦ WCAG 复算 + U2 例外 allowlist + text-secondary 反向
     }
   });
 
-  it('E1D 中性 CTA 对比度:#FCFCFC×#3C3F43=10.32(light)、#252222×#EEEEEE=13.60(dark) ≥4.5', () => {
+  it('E1D 中性 CTA 对比度:#FCFCFC×#3C3F43=10.32(light)、#151515×#EEEEEE=15.74(dark) ≥4.5', () => {
     expect(contrast('#FCFCFC', light['accent-cta-bg'])).toBeGreaterThanOrEqual(4.5);
-    expect(contrast('#252222', dark['accent-cta-bg'])).toBeGreaterThanOrEqual(4.5);
+    expect(contrast('#151515' /* 2026-08 色阶改版: 反相深字随暗色平移 */, dark['accent-cta-bg'])).toBeGreaterThanOrEqual(4.5);
     // focus-ring cindy 不 override(用 registry 默认 #417CDD,E5D 定稿 2026-07-17 取代 #3b82f6)
     const frLight = colorRegistry.resolveDefault('focus-ring', 'light') ?? '';
     const frDark = colorRegistry.resolveDefault('focus-ring', 'dark') ?? '';
@@ -403,10 +403,20 @@ describe('CINDY · ⑦ WCAG 复算 + U2 例外 allowlist + text-secondary 反向
     }
   });
 
-  it('反向冻结:text-secondary 必须恰等于定稿值 #8C8E94(light,用户调参 2026-07-20 自 Figma #9A9DA3 两轮加深)/#6F6F6F(dark),RGB 归一', () => {
+  it('2026-08 地板:light 信息类文字 × surface/surface-hover 对比度 ≥3.0(用户裁决,决策表 §9.4;dark 仍属 U2 例外不设此门)', () => {
+    // 覆盖面取 §9.4 声明的地板范围(页底/通用 hover);菜单 hover 上 2.90 为已登记 watch 项,不入门禁。
+    for (const id of ['text-secondary', 'cmd-palette-item-meta', 'sidebar-list-muted'] as const) {
+      for (const bgId of ['surface', 'surface-hover'] as const) {
+        const r = contrast(light[id]!, light[bgId]!);
+        expect(r, `light ${id} × ${bgId} 应 ≥3.0,实测 ${r.toFixed(2)}:1`).toBeGreaterThanOrEqual(3.0);
+      }
+    }
+  });
+
+  it('反向冻结:text-secondary 必须恰等于定稿值 #888883(light,用户裁决 2026-08-13 暖化+抬至≥3.0,取代 2026-07-20 调参)/#6F6F6F(dark),RGB 归一', () => {
     expect(
-      rgbEqual(toRgb(light['text-secondary']), toRgb('#8C8E94'), 1),
-      'light text-secondary 须恰等 #8C8E94(用户调参 2026-07-20)',
+      rgbEqual(toRgb(light['text-secondary']), toRgb('#888883'), 1),
+      'light text-secondary 须恰等 #888883(用户裁决 2026-08-13)',
     ).toBe(true);
     expect(
       rgbEqual(toRgb(dark['text-secondary']), toRgb('#6F6F6F'), 1),
@@ -486,9 +496,9 @@ describe('CINDY · ⑧ 可证伪自检(注入错值后断言必须变红,还原�
   });
 
   it('反向冻结证伪:注入 #686B72 到 text-secondary → ⑦ 变红', () => {
-    const figma = toRgb('#8C8E94'); // 用户调参定稿 2026-07-20(原 Figma #9A9DA3)
+    const figma = toRgb('#888883'); // 用户裁决定稿 2026-08-13(沿革: Figma #9A9DA3 → 2026-07-20 #8C8E94 → 本值)
     const injected = toRgb('#686B72');
-    expect(rgbEqual(injected, figma, 1), '#686B72 ≠ #8C8E94,注入后 ⑦ 反向冻结断言必红').toBe(false);
+    expect(rgbEqual(injected, figma, 1), '#686B72 ≠ #888883,注入后 ⑦ 反向冻结断言必红').toBe(false);
     // 正常值仍恰等
     expect(
       rgbEqual(toRgb(cindyLight.colors['text-secondary']), figma, 1),
@@ -503,7 +513,7 @@ describe('CINDY · ⑧ 可证伪自检(注入错值后断言必须变红,还原�
     expect(contrast(L['status-badge-fg']!, orange), 'light 橙徽章 fg×橙').toBeGreaterThanOrEqual(4.5);
     expect(contrast(D['status-badge-fg']!, orange), 'dark 橙徽章 fg×橙').toBeGreaterThanOrEqual(4.5);
     expect(contrast('#FCFCFC', L['accent-cta-bg']!), 'light 中性 CTA').toBeGreaterThanOrEqual(4.5);
-    expect(contrast('#252222', D['accent-cta-bg']!), 'dark 中性 CTA').toBeGreaterThanOrEqual(4.5);
+    expect(contrast('#151515' /* 2026-08 色阶改版: 反相深字随暗色平移 */, D['accent-cta-bg']!), 'dark 中性 CTA').toBeGreaterThanOrEqual(4.5);
     // Fast toggle: thumb(surface-on-card) × track(fast-toggle-track = text-disabled)
     expect(contrast(L['surface-on-card']!, L['text-disabled']!), 'light Fast toggle thumb×track').toBeGreaterThanOrEqual(3);
     expect(contrast(D['surface-on-card']!, D['text-disabled']!), 'dark Fast toggle thumb×track').toBeGreaterThanOrEqual(3);

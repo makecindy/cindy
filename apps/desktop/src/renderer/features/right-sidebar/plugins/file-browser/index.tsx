@@ -17,12 +17,16 @@
  * `./plugins` 触发本文件执行。
  */
 
+import { lazy } from 'react';
 import { FolderTree } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
-import { FileBrowserBody } from './FileBrowserBody';
+
+const FileBrowserBody = lazy(() =>
+  import('./FileBrowserBody').then((module) => ({ default: module.FileBrowserBody })),
+);
 
 /** plugin state shape — 跟 store 序列化结构一致,默认 JSON identity 即可 hydrate。 */
 export interface FileBrowserState {

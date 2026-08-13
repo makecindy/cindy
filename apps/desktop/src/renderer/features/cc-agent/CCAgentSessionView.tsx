@@ -99,7 +99,6 @@ import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
-import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { ChatDisplaySnapshotProvider } from '@/components/chat/ChatDisplaySnapshotContext';
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
@@ -626,8 +625,6 @@ export function CCAgentSessionView({
     ) => void;
   } | null>();
   const rightSidebarCollapsed = outletContext?.rightSidebarCollapsed ?? true;
-  const onToggleRightSidebar = outletContext?.onToggleRightSidebar;
-  // B2b:面板所在侧 —— 折叠态的展开入口要留守面板消失的那一侧(缺省经典右侧)。
   const rightSidebarSide = outletContext?.rightSidebarSide ?? 'right';
   const setRightSidebarAvailable = outletContext?.setRightSidebarAvailable;
   const setRightSidebarSessionId = outletContext?.setRightSidebarSessionId;
@@ -694,10 +691,7 @@ export function CCAgentSessionView({
   const hasControlledBanner = showComposerControlledBanner && controlledBy.length > 0;
   const controlledBannerCollapsed = useComposerCollapsed(sessionId ?? null);
   const showExpandedControlledBanner = hasControlledBanner && !controlledBannerCollapsed;
-  // 平台分流:mac 右栏开关放在 ContentHeader 右端(见 ContentHeader.tsx),Windows
-  // 放在下方 chip 栈第一行。两端都靠 ownsRoute 限定只在全屏聊天视图出现。
   const isMac = window.electronAPI?.platform === 'darwin';
-
   // messageWidth：消息流容器宽度（视觉边距 50px / compact 20px）
   // inputWidth：ChatInput / 状态栏 / workingDir 行的宽度（视觉边距 40px / compact 10px）
   // doc rail 内嵌场景(isCompactRail)恒 compact;主会话不显式传 compact,由 hook
@@ -4534,41 +4528,18 @@ export function CCAgentSessionView({
         </div>
 
         {/* TopRightChipStack:聊天视图右上 chip 浮层。
-          chip 栈第一行 = 右栏展开入口(仅 Windows 且右栏折叠时;展开态的折叠按钮
-          归属右栏 TabBar;mac 开关在 ContentHeader 右端,故 !isMac 守卫)。
+          Windows 固定侧栏入口由 MainLayout 承载；当入口位于右侧时在本栈第一行
+          保留等尺寸占位，让消息跳转等 portal chip 自然落到下一行。
           MessageStream 内部的 PrevMessageJumpChip 通过 portal 挂入同一栈,自然落到下一行。
           "本次会话改动文件列表"已迁移到 RSB review tab,不再保留浮动按钮 + 滑入抽屉。 */}
         <TopRightChipStack>
-          {/* Windows 折叠态的展开入口钉在聊天区靠缝的角上;面板贴右时在右上
-            (本栈第一行),贴左时镜像到左上(下方容器)。 */}
           {!isMac &&
-            rightSidebarCollapsed &&
             (ownsRoute || showRsbToggle) &&
-            onToggleRightSidebar &&
+            rightSidebarCollapsed &&
             rightSidebarSide === 'right' && (
-              <RightSidebarToggle
-                collapsed={rightSidebarCollapsed}
-                onToggle={onToggleRightSidebar}
-                side="right"
-              />
+              <div aria-hidden className="h-7 w-7 shrink-0" />
             )}
         </TopRightChipStack>
-        {/* mac 不渲染本 chip(2026-07-09 Lizi 口径):mac 的折叠 toggle 无论面板贴
-          哪侧都**恒钉窗口右上角**(MainLayout 浮层,与左栏折叠按钮对称);
-          Windows 仅折叠态显示,面板贴左时镜像到聊天区左上角。 */}
-        {!isMac &&
-          rightSidebarCollapsed &&
-          (ownsRoute || showRsbToggle) &&
-          onToggleRightSidebar &&
-          rightSidebarSide === 'left' && (
-            <div className="pointer-events-none absolute left-3 top-3 z-20 flex flex-col items-start gap-2">
-              <RightSidebarToggle
-                collapsed={rightSidebarCollapsed}
-                onToggle={onToggleRightSidebar}
-                side="left"
-              />
-            </div>
-          )}
       </section>
     </>
   );

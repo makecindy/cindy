@@ -3,6 +3,7 @@ import { Maximize2, Minimize2, Minus, PictureInPicture2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next';
 
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 
 import { usePanelMaximize } from '../layout/panelMaximize';
@@ -110,46 +111,36 @@ export function PanelChrome({
           <div className="flex shrink-0 items-center gap-0.5">
             {actions}
             {onMinimize && (
-              <button
-                type="button"
+              <ChromeIconButton
                 aria-label={t('panelChrome.minimizeAria')}
                 onClick={onMinimize}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
                 <Minus size={14} />
-              </button>
+              </ChromeIconButton>
             )}
             {onDetach && (
-              <button
-                type="button"
+              <ChromeIconButton
                 aria-label={t('panelChrome.detachAria')}
                 onClick={onDetach}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
                 <PictureInPicture2 size={14} />
-              </button>
+              </ChromeIconButton>
             )}
             {showMaximize && (
-              // 按下命中 button 时 PanelDragController 会让路(标准头手势面的
-              // 交互元素豁免),点击不会误触"拿起面板"。
-              <button
-                type="button"
+              <ChromeIconButton
                 aria-label={t(isMaximized ? 'panelChrome.restoreAria' : 'panelChrome.maximizeAria')}
                 onClick={() => maximize.toggle(panelKind)}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
                 {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-              </button>
+              </ChromeIconButton>
             )}
             {onClose && (
-              <button
-                type="button"
+              <ChromeIconButton
                 aria-label={t('panelChrome.closeAria')}
                 onClick={onClose}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
                 <X size={14} />
-              </button>
+              </ChromeIconButton>
             )}
           </div>
         )}

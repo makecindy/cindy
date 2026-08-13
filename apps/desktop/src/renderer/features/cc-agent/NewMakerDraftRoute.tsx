@@ -51,7 +51,6 @@ import {
   type FolderPickerSelectSource,
 } from '@/components/new-chat/FolderPickerPopover';
 import { DeviceSwitcherPill } from '@/components/new-chat/DeviceSwitcherPill';
-import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import {
   AddRemoteProjectDialog,
   type RemoteProjectTarget,
@@ -233,10 +232,7 @@ import {
 } from './deviceLinkDraftDefaults';
 import { makeMirrorAccessors, replaceScope, clearScope } from '@/state/deviceLinkModelMirror';
 import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
-import {
-  DRAFT_RIGHT_SIDEBAR_TOGGLE_DRAG_STYLE,
-  resolveNewMakerDraftRightSidebar,
-} from './newMakerDraftRightSidebar';
+import { resolveNewMakerDraftRightSidebar } from './newMakerDraftRightSidebar';
 import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
 import { closeAllTabs as closeRightSidebarTabs } from '@/features/right-sidebar/store';
 import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-workers/actions';
@@ -632,8 +628,6 @@ export function NewMakerDraftRoute() {
     ) => void;
   } | null>();
   const rightSidebarCollapsed = outletContext?.rightSidebarCollapsed ?? true;
-  const onToggleRightSidebar = outletContext?.onToggleRightSidebar;
-  // B2b:面板所在侧 —— 展开入口留守面板消失的那一侧(缺省经典右侧)。
   const rightSidebarSide = outletContext?.rightSidebarSide ?? 'right';
   const setRightSidebarAvailable = outletContext?.setRightSidebarAvailable;
   const setRightSidebarSessionId = outletContext?.setRightSidebarSessionId;
@@ -4399,35 +4393,16 @@ export function NewMakerDraftRoute() {
           {/* mac 上本页不渲染通用 ContentHeader 且顶部无交互元素,垫一条透明
           窗口拖拽条(windowDrag.tsx 约定) */}
           <InvisibleWindowDragStrip />
-          {/* Windows 折叠态显示展开入口,面板贴右在右上、贴左镜像左上,
-            与 CCAgentSessionView 同规则。展开态的折叠按钮归属右栏 TabBar。
-            mac 不渲染(2026-07-09 Lizi 口径):
-            折叠 toggle 无论面板贴哪侧都恒钉窗口右上角(MainLayout 浮层)。 */}
+          {/* 固定入口由 MainLayout 承载；入口在右侧且未内嵌时保留第一行位置，
+            避免其它 chip 与它重叠。 */}
           {!IS_MAC_PLATFORM &&
-            rightSidebarCollapsed &&
             draftRightSidebar.available &&
-            onToggleRightSidebar &&
-            (rightSidebarSide === 'right' ? (
+            rightSidebarCollapsed &&
+            rightSidebarSide === 'right' && (
               <TopRightChipStack>
-                <div style={DRAFT_RIGHT_SIDEBAR_TOGGLE_DRAG_STYLE}>
-                  <RightSidebarToggle
-                    collapsed={rightSidebarCollapsed}
-                    onToggle={onToggleRightSidebar}
-                    side="right"
-                  />
-                </div>
+                <div aria-hidden className="h-7 w-7 shrink-0" />
               </TopRightChipStack>
-            ) : (
-              <div className="pointer-events-none absolute left-3 top-3 z-20">
-                <div style={DRAFT_RIGHT_SIDEBAR_TOGGLE_DRAG_STYLE}>
-                  <RightSidebarToggle
-                    collapsed={rightSidebarCollapsed}
-                    onToggle={onToggleRightSidebar}
-                    side="left"
-                  />
-                </div>
-              </div>
-            ))}
+            )}
           <main
             data-testid="create-agent-main"
             className={cn(

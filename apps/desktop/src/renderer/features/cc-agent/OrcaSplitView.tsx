@@ -14,7 +14,7 @@ import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsS
 import { cn } from '@/lib/utils';
 import { CCAgentSessionView } from './CCAgentSessionView';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
-import { useStopOrcaCollab } from './hooks/useStopOrcaCollab';
+import { useStopOrcaCollabWithoutNavigation } from './hooks/useStopOrcaCollab';
 import {
   clearWorkerAttention,
   useWorkerAttentionSnapshot,
@@ -54,9 +54,8 @@ export function OrcaSplitView({
     () => mergeSessionSources(localSessions, remoteSessions),
     [localSessions, remoteSessions],
   );
-  const { requestStop: requestStopCollab } = useStopOrcaCollab({
+  const { requestStop: requestStopCollab } = useStopOrcaCollabWithoutNavigation({
     leadSessionId,
-    navigateOnSuccess: false,
   });
   const {
     selectedWorkerRecord,

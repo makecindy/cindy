@@ -1509,6 +1509,18 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          // 右侧栏独立子窗口专用 preload:最小权限 bridge,不加载主 preload 完整桥。
+          entry: 'src/preload/sidebarWindowPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          // 插件面板独立窗口专用 preload:最小权限 bridge。
+          entry: 'src/preload/ghostPanelWindowPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
           // RSB 内置浏览器 webview 的 guest 注入层(页面评论 overlay)。由
           // main 的 webview hardener 在 will-attach-webview 时按
           // `path.join(__dirname, 'browserCommentPreload.js')` 强制注入,

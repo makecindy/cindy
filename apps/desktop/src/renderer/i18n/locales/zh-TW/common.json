@@ -4464,12 +4464,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "停用「{{name}}」？",
-      "body": "關閉這個面板會停用整個插件，它的面板和能力都會暫停。之後可以隨時在側邊欄「插件」裡重新開啟。",
+      "body": "關閉這個面板會停用插件並暫停其能力。你可以隨時在側邊欄「插件」中重新啟用。",
       "confirm": "停用"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "合併回主視窗",
+    "mergeBack": "返回主視窗",
     "unavailable": "該插件面板當前不可用"
   },
   "ghostPanelBubble": {
@@ -4479,6 +4479,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "右側邊欄",
+    "panelError": {
+      "title": "面板載入失敗",
+      "description": "此面板目前無法顯示，其他面板仍可繼續使用。",
+      "reload": "重新載入面板"
+    },
     "window": {
       "title": "側邊欄",
       "mergeBack": "合併回主視窗",
@@ -4509,6 +4514,7 @@
         "ghostPanel": "插件面板"
       },
       "controls": {
+        "showAria": "顯示側欄",
         "maximizeAria": "最大化側欄",
         "restoreAria": "退出最大化",
         "closeAria": "關閉側欄",
