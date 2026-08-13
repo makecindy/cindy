@@ -82,8 +82,11 @@ const COLORS = {
   'needs-interaction': 0xffa000,
   completed: 0x35c759,
   error: 0xff453a,
-  /** Cindy brand red (`#DF0C27`, DESIGN.md §15.2). Hardware LEDs, not a UI token. */
-  brand: 0xdf0c27,
+  /**
+   * Deep Cindy brand red (`#A61629`, DESIGN.md §15.2 hover/pressed).
+   * The UI red `#DF0C27` reads pink on these LEDs; the deeper value holds.
+   */
+  brand: 0xa61629,
 } as const;
 
 const OFF_SIDE: WorkLouderLightingSide = {
