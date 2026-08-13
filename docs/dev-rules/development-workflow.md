@@ -86,18 +86,30 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
     结束，表示测试尚未运行，不得当作测试失败排查；排队是正常状态，不要 kill 后重跑。
     只有明确确认资源足够且需要有意重叠时，才可追加 `--no-lock` 作为逃生口。
   - **最终门禁必须绑定冻结快照**：准备提交或提 PR 时，先完成实现、定向测试、受影响 package
-    typecheck 与专项数据库门禁，再冻结最终 diff；由 agent／自动化主持且已安排独立 review 的
-    工作，还必须先将 review 的 P0／P1 清零。根 `pnpm test:unit` 必须针对这个精确快照执行；
-    门禁启动后只要最终 diff 中任一 tracked 内容发生变化，旧结果立即失效，必须在新快照上重新
-    执行。旧快照、无退出码、被调用端终止、只看到「暂无失败输出」都不算通过，唯一有效凭证是
-    最终快照取得退出码 `0`。通过后不得再修改冻结快照中的任何 tracked 内容，直接按 DCO 流程
-    commit／push；若确需修改，回到相应 review 与门禁阶段。普通 PR 仍可按仓库既有流程先提交，
-    再接受 GitHub 自动 review；本条不为所有贡献者新增提交前独立 review 硬门。
+    typecheck 与专项数据库门禁；由 agent／自动化主持且已安排独立 review 的工作，还必须先将
+    review 的 P0／P1 清零。随后显式暂存完整待提交集合（包括新增文件），确认没有混入无关用户
+    改动，并以 `git write-tree` 生成的 index tree ID 冻结快照。根 `pnpm test:unit` 必须在由该
+    tree（或由它生成的临时 commit）物化出的干净 checkout 中执行；未跟踪但不属于本次提交的
+    用户文件可以留在作者 worktree，但不得出现在门禁 checkout，也不得在不重跑门禁的情况下
+    随后加入提交。门禁启动后，任何 `git add`／`git reset` 或 index tree ID 变化都会使旧结果
+    立即失效。旧快照、无退出码、被调用端终止、只看到「暂无失败输出」都不算通过，唯一有效
+    凭证是该 tree ID 取得退出码 `0`。通过后再次确认待提交 index tree ID 与受测 tree 一致，
+    直接按 DCO 流程 commit／push；若不一致，回到相应 review 与门禁阶段。普通 PR 仍可按仓库
+    既有流程先提交，再接受 GitHub 自动 review；本条不为所有贡献者新增提交前独立 review 硬门。
   - **最终门禁环境要可复现且与产品故障分层**：同一批并行任务可将冻结快照依次物化到一个
     已验证、无已知路径污染的专用门禁 checkout，重型门禁严格串行，不让多个 agent／worktree
-    同时争抢共享锁。只有根及所有 workspace 的相关 `package.json`、`pnpm-lock.yaml`、运行时
-    版本及 postinstall 输入一致时，才可复用该 checkout 已安装的依赖；任一依赖输入变化都必须
-    重新同步。普通独立 worktree 仍遵守第 1 节的独立安装原则。安装或运行异常必须记录它发生在
+    同时争抢共享锁。复用该 checkout 已安装的依赖前，当前仓库的依赖指纹必须完全一致：根及
+    所有 workspace 的 `package.json`、本地 `file:` 依赖 `apps/mobile/modules/**`、
+    `pnpm-lock.yaml`、`pnpm-workspace.yaml`、根 `.npmrc`、`dependency-patches/**`，
+    Node／pnpm 版本与平台／架构／libc，以及根 `postinstall` 当前调用的
+    `scripts/ensure-agent-binaries.mjs`、`scripts/agent-binary-cdn-fallback.mjs`、
+    `scripts/shared/client-endpoint-build-env.mjs`、`scripts/fix-node-pty-perms.mjs`、
+    `tools/{claude,codex,ripgrep,pi}/update.mjs`、`tools/shared/**`、各
+    `tools/<kind>/latest.json` 与 `config/endpoint*.json`；还要保持会改变 postinstall 结果的
+    `XDT_SKIP_AGENT_BIN_INSTALL`、`XDT_CDN_BASE_URL`、`CINDY_AUTH_REGION` 一致，并确认已安装
+    runtime 的版本标记与对应 pin 相符。任一输入变化或无法证明一致，都必须重新执行
+    `pnpm install`，不得复用现有 `node_modules`。普通独立 worktree 仍遵守第 1 节的独立安装
+    原则。安装或运行异常必须记录它发生在
     测试启动前、fixture／worker 启动期还是断言阶段；只有取得指向具体外部原因的环境归因证据
     （如明确的外部下载失败、共享锁 holder 或资源耗尽记录）时，才能标为基础设施故障。失败用例
     在同一冻结快照的隔离复核中通过，只是继续调查顺序依赖、共享状态泄漏或环境问题的线索，
