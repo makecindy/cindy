@@ -492,13 +492,15 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
 });
 
 describe('buildUnifiedRail', () => {
-  it('★ 仅在有收藏时出现;供应商按行首次出现序排列', () => {
+  it('★ 常驻,供应商按行首次出现序排列', () => {
     const entries = [
       entryOf({ providerId: 'xd', modelId: 'a' }),
       entryOf({ providerId: 'anthropic', modelId: 'b' }),
       entryOf({ providerId: 'xd', modelId: 'c' }),
     ];
+    // ★ 常驻(2026-08-13 裁决:空收藏也显示,点进去看引导空态,不再按有无收藏隐藏)。
     expect(buildUnifiedRail(entries, [])).toEqual([
+      { kind: 'favorites' },
       { kind: 'all' },
       { kind: 'provider', providerId: 'xd' },
       { kind: 'provider', providerId: 'anthropic' },

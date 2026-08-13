@@ -5562,6 +5562,7 @@
         "railAll": "全部",
         "favoritesGroup": "收藏",
         "authGroup": "授权登录",
+        "favoritesEmpty": "还没有收藏——把鼠标停到模型行上,点 ☆ 存到这里",
         "addFavorite": "存为收藏",
         "removeFavorite": "取消收藏",
         "favoriteConfig": "收藏配置",

@@ -680,7 +680,10 @@ export function UnifiedModelPanel({
         )}
         {!hasRows ? (
           <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
-            {t('newChat.modelSelector.search.noResults')}
+            {/* ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;★ 常驻后必经)。 */}
+            {rail.kind === 'favorites' && !query.trim()
+              ? t('newChat.modelSelector.unified.favoritesEmpty')
+              : t('newChat.modelSelector.search.noResults')}
           </div>
         ) : (
           sections.map((section) => (

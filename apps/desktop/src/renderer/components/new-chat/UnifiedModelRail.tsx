@@ -39,7 +39,8 @@ export function UnifiedModelRail({
   interactionDisabled?: boolean;
 }) {
   const { t } = useTranslation();
-  if (items.length <= 2) return null;
+  // rail 常驻,不做「项数少就整条隐藏」——设计稿的分类栏在单来源时也在(★/全部/来源),
+  // 隐藏会让收藏与快速切换不可发现(Chris 2026-08-13 实测反馈)。
   const activeKey = railItemKey(active);
   return (
     // 设计稿 .rail:宽 48(含 6px 侧距 + 1px 右分隔线)、纵向 8px、格间 2px。

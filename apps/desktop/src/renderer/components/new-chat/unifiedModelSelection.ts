@@ -284,7 +284,9 @@ export function buildUnifiedRail(
   sessionAgent?: AgentKind,
 ): UnifiedRailItem[] {
   const items: UnifiedRailItem[] = [];
-  if (favorites.length > 0) items.push({ kind: 'favorites' });
+  // ★ 常驻(设计稿 renderRail:collection 永远在第一格,空收藏点进去看空态引导)——
+  // 只在有收藏时出现会让功能不可发现(Chris 2026-08-13 实测:「分类栏直接砍了?」)。
+  items.push({ kind: 'favorites' });
   if (sessionAgent) items.push({ kind: 'engine', agent: sessionAgent });
   items.push({ kind: 'all' });
   const seen = new Set<string>();
