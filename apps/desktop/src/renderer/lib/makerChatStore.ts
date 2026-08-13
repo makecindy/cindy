@@ -2289,6 +2289,8 @@ export interface SessionChatState {
    */
   errorReason?: string | null;
   recoverableError: string | null;
+  /** Native Auto denial marker accumulated across SDK continuation segments. */
+  autoReviewBlocked: boolean;
   /**
    * 输入投影自带的 recovery 镜像（main 的 retry 权威状态）。renderer 侧人工
    * Retry 登记本端意图时用它区分 queue-head（原样重发既有队首项）与
@@ -2587,6 +2589,7 @@ function createInitialState(): SessionChatState {
     usageLimitRecovery: null,
     errorReason: null,
     recoverableError: null,
+    autoReviewBlocked: false,
     inputRecovery: null,
     activeTurnRetryText: null,
     errorRetryText: null,
@@ -2655,6 +2658,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   usageLimitRecovery: null,
   errorReason: null,
   recoverableError: null,
+  autoReviewBlocked: false,
   inputRecovery: null,
   activeTurnRetryText: null,
   errorRetryText: null,
@@ -4920,6 +4924,9 @@ export function handleStreamEvent(
     }
 
     case 'done': {
+      const eventAutoReviewBlocked =
+        (event.data as { autoReviewBlocked?: unknown } | null | undefined)?.autoReviewBlocked === true;
+      const autoReviewBlocked = state.autoReviewBlocked || eventAutoReviewBlocked;
       // silent-stop:上游空内容消息静默收尾,main 守卫 1.5s 后会自动续跑(或弹耗尽横幅)。
       // 保持 isRunning=true,避免 renderer 的 500ms 完成去抖触发假完成通知。守卫非续跑
       // 决策通过 exhausted terminal error 广播到达 renderer,那时才正确设 isRunning=false。
@@ -4933,6 +4940,7 @@ export function handleStreamEvent(
         const finalized = finalizeStreamingInState(state);
         return {
           ...finalized,
+          autoReviewBlocked,
           streamingText: '',
           isStreaming: true,
           lastAgentMeta: incomingMeta ?? state.lastAgentMeta,
@@ -4987,7 +4995,7 @@ export function handleStreamEvent(
         }
         | null
         | undefined;
-      const terminalAutoReviewBlocked = terminalData?.autoReviewBlocked === true;
+      const terminalAutoReviewBlocked = autoReviewBlocked || terminalData?.autoReviewBlocked === true;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
       const terminalTurnStatus =
         typeof terminalData?.raw?.status === 'string' ? terminalData.raw.status : null;
@@ -5019,6 +5027,7 @@ export function handleStreamEvent(
         recoverableError: terminalAutoReviewBlocked
           ? decodeRemoteErrorMessage('[AUTO_REVIEW_BLOCKED]')
           : null,
+        autoReviewBlocked: terminalAutoReviewBlocked,
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
@@ -5748,7 +5757,14 @@ function handleStatusUpdate(
     usageLimitRecovery: isTurnStart ? null : state.usageLimitRecovery,
     errorReason: isTurnStart ? null : state.errorReason,
     errorRetryText: isTurnStart || (isTurnComplete && !state.error) ? null : state.errorRetryText,
-    recoverableError: isTurnStart || isTurnComplete ? null : state.recoverableError,
+    recoverableError: isTurnStart
+      ? null
+      : isTurnComplete
+        ? state.autoReviewBlocked
+          ? decodeRemoteErrorMessage('[AUTO_REVIEW_BLOCKED]')
+          : null
+        : state.recoverableError,
+    autoReviewBlocked: isTurnStart ? false : state.autoReviewBlocked,
     isStreaming: update.isRunning
       ? true
       : !update.isRunning && state.isStreaming

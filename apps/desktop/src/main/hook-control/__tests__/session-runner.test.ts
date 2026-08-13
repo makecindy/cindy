@@ -2792,6 +2792,25 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     expect(observer.finalText()).toContain('默认权限');
   });
 
+  it('Claude 原生 Auto 的拒绝标记跨 continuation 保留到最终 hook 正文', async () => {
+    const continuation: ManualContinuation = { id: 17, state: 'awaiting' };
+    const session = makeManualSession('sess-native-auto-continuation', continuation);
+    const observer = observeHookTurn(session as never, {
+      onSilentStopSettled: () => () => {},
+      log,
+    });
+    const cb = h.eventCbs.get('sess-native-auto-continuation')!;
+    cb({ type: 'text', data: { text: '前半结果。', isFinal: true } });
+    cb({ type: 'done', data: { autoReviewBlocked: true }, turnContinuationId: continuation.id });
+    await flush();
+    continuation.state = 'active';
+    cb({ type: 'text', data: { text: '最终结果。', isFinal: true } });
+    cb({ type: 'done', data: {} });
+
+    await expect(observer.finished).resolves.toBeUndefined();
+    expect(observer.finalText()).toContain('自动审批已阻止');
+  });
+
   it('会话不在进程里 -> 立刻 onAbandon(dispatcher 会把记账还回去), 撤销函数不炸', () => {
     // 本调用发生在 vendor dispatch **之前**, live session 正常必然已就绪, 所以这是
     // 兜底而非常规路径。放弃是安全方向, 且 dispatcher 收到 onAbandon 会还记账 ——

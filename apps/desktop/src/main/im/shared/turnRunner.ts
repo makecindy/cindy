@@ -1784,6 +1784,9 @@ export function createTurnRunner(
         case 'tool_result_full':
           return handleToolResultFullEvent(turn, event);
         case 'done':
+          turn.autoReviewBlocked =
+            turn.autoReviewBlocked ||
+            (event.data as { autoReviewBlocked?: unknown } | null)?.autoReviewBlocked === true;
           // The provider may emit a claim-bearing SDK boundary before an
           // automatic continuation. Keep the same IM turn/card alive; only
           // the following unclaimed done is the product completion.
@@ -1794,8 +1797,6 @@ export function createTurnRunner(
           if ((event.data as { silentStop?: boolean } | null)?.silentStop === true) {
             return handleSilentStopDone(state, userId);
           }
-          turn.autoReviewBlocked =
-            (event.data as { autoReviewBlocked?: unknown } | null)?.autoReviewBlocked === true;
           return handleTurnDoneAsync(state, userId);
         case 'error':
           // 可重试错误只是进行中状态；保持当前 turn、卡片和排队消息不动，

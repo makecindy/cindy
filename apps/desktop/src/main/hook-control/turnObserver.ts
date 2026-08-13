@@ -244,6 +244,9 @@ export function observeHookTurn(
         return;
       }
       if (ev.type === 'done') {
+        autoReviewBlocked =
+          autoReviewBlocked ||
+          (ev.data as { autoReviewBlocked?: unknown } | null | undefined)?.autoReviewBlocked === true;
         if ((ev.data as { silentStop?: boolean } | null | undefined)?.silentStop === true) {
           pendingSettleUnsub?.();
           pendingSettleUnsub = onSilentStopSettled(session.id, (_sid, reason) => {
@@ -257,8 +260,6 @@ export function observeHookTurn(
           });
           return;
         }
-        autoReviewBlocked =
-          (ev.data as { autoReviewBlocked?: unknown } | null | undefined)?.autoReviewBlocked === true;
         presenter.seal();
         // Telegram 的 turn.end 仍要经过 server 发布队列。先把节流窗里的最新安全
         // 快照冲进既有 progress 载体，避免客户端在 teardown 时直接吞掉最后一帧。

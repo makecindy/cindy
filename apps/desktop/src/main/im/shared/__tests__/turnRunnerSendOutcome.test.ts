@@ -2139,6 +2139,30 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(sentText).not.toContain('本轮无文本输出');
   });
 
+  it('keeps a native Auto block marker across a continuation boundary', async () => {
+    const handle = {
+      messageId: 'stream-auto-continuation',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    h.emit({ type: 'text', data: { text: '前半结果。', isFinal: false } });
+    h.emit({ type: 'done', data: { autoReviewBlocked: true }, turnContinuationId: 1 });
+    h.emit({ type: 'text', data: { text: '最终结果。', isFinal: false } });
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    });
+    const finalView = String(handle.finalize.mock.calls[0]?.[0] ?? '');
+    expect(finalView).toContain('自动审批已阻止');
+  });
+
   it('still finalizes as failed on a terminal error', async () => {
     const handle = {
       messageId: 'stream-fatal',

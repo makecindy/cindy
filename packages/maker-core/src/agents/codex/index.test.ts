@@ -11859,6 +11859,47 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('policy turn (unattended Auto): notifies once for an unclassifiable command denial', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-policy-unclassifiable' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-policy-unclassifiable',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const policy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat', taskId: 'task-unclassifiable' },
+      confirmationSurface: 'desktop',
+      forceConfirmToolCall: () => false,
+    };
+    await handle.send({ type: 'user', content: 'need permissions' }, { turnPermissionPolicy: policy });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-policy-unclassifiable', itemId: 'deny-1',
+      command: 'rm -rf /tmp/x', cwd: '/repo',
+    })).resolves.toEqual({ decision: 'decline' });
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-policy-unclassifiable', itemId: 'deny-2',
+      command: 'rm -rf /tmp/y', cwd: '/repo',
+    })).resolves.toEqual({ decision: 'decline' });
+    await waitForExpectation(() => {
+      expect(events.filter((event) =>
+        event.type === 'error' && String((event.data as { message?: unknown }).message).includes('[AUTO_REVIEW_BLOCKED]'),
+      )).toHaveLength(1);
+    });
+    await handle.close();
+  });
+
   it('auto-approves deterministic safe actions even without an interaction resolver', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);

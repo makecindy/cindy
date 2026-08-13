@@ -5535,6 +5535,7 @@ export class CodexAgent extends BaseAgent {
           // 命令/文件类审批却没有可分类的 action(如 permissions 能力升级)——无法审查的高权限动作 →
           // 同样 fail-closed 拒绝。mcpServerElicitation(交互输入)有自己的 forceConfirmToolCall 门,保留 auto-accept。
           if (kind === 'commandExecution' || kind === 'fileChange') {
+            autoReviewBlockedNotice.notify();
             return Promise.resolve('decline');
           }
           return Promise.resolve('accept');
