@@ -1811,6 +1811,16 @@
         "cellLabel": "Message notification",
         "hint": "Send a notification message to the Bot on connect/disconnect"
       },
+      "workingDir": {
+        "title": "Working directory for new chats",
+        "hint": "Used for the first Feishu or Lark chat and after /new. Changing it does not move the current context.",
+        "managed": "Use a dedicated directory managed by {{appName}}",
+        "reset": "Restore default",
+        "unavailable": "The selected directory is unavailable. New chats will temporarily use a directory managed by {{appName}}."
+      },
+      "toasts": {
+        "workingDirFailed": "Could not update the working directory. Select it again."
+      },
       "sessionNotification": {
         "label": "Session notifications",
         "cellLabel": "Send a Feishu / Lark DM when a session finishes or needs a reply",

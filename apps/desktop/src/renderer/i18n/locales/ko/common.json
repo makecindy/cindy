@@ -1810,6 +1810,16 @@
         "cellLabel": "메시지 알림",
         "hint": "연결/해제 시 Bot에 알림 메시지를 전송합니다"
       },
+      "workingDir": {
+        "title": "새 채팅 작업 디렉터리",
+        "hint": "Feishu / Lark의 첫 채팅과 /new 이후에 사용합니다. 변경해도 현재 컨텍스트는 이동하지 않습니다.",
+        "managed": "{{appName}}가 관리하는 전용 디렉터리 사용",
+        "reset": "기본값 복원",
+        "unavailable": "선택한 디렉터리를 사용할 수 없습니다. 새 채팅은 일시적으로 {{appName}} 관리 디렉터리를 사용합니다."
+      },
+      "toasts": {
+        "workingDirFailed": "작업 디렉터리를 업데이트하지 못했습니다. 다시 선택하세요."
+      },
       "sessionNotification": {
         "label": "세션 완료 알림",
         "cellLabel": "세션 완료 또는 응답 필요 시 Feishu / Lark 메시지 전송",

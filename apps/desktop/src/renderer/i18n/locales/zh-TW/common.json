@@ -1806,6 +1806,16 @@
         "cellLabel": "訊息通知",
         "hint": "上下線時向 Bot 傳送通知訊息"
       },
+      "workingDir": {
+        "title": "新對話工作目錄",
+        "hint": "飛書或 Lark 首次對話或傳送 /new 後使用。變更不會移動目前上下文。",
+        "managed": "使用 {{appName}} 管理的專用目錄",
+        "reset": "恢復預設",
+        "unavailable": "已選目錄目前無法存取；新對話將暫時使用 {{appName}} 管理的專用目錄。"
+      },
+      "toasts": {
+        "workingDirFailed": "更新工作目錄失敗，請重新選擇"
+      },
       "sessionNotification": {
         "label": "任務完成通知",
         "cellLabel": "任務完成或需要回復時傳送飛書 / Lark 訊息",

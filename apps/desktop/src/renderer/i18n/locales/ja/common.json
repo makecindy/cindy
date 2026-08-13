@@ -1810,6 +1810,16 @@
         "cellLabel": "メッセージ通知",
         "hint": "接続・切断時に Bot へ通知メッセージを送信"
       },
+      "workingDir": {
+        "title": "新しいチャットの作業ディレクトリ",
+        "hint": "Feishu / Lark の最初のチャットと /new の後に使用します。変更しても現在のコンテキストは移動しません。",
+        "managed": "{{appName}} が管理する専用ディレクトリを使用",
+        "reset": "デフォルトに戻す",
+        "unavailable": "選択したディレクトリを利用できません。新しいチャットでは一時的に {{appName}} 管理のディレクトリを使用します。"
+      },
+      "toasts": {
+        "workingDirFailed": "作業ディレクトリを更新できませんでした。もう一度選択してください。"
+      },
       "sessionNotification": {
         "label": "セッション完了通知",
         "cellLabel": "セッション完了または応答が必要なときに Feishu / Lark メッセージを送信",

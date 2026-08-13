@@ -1806,6 +1806,16 @@
         "cellLabel": "消息通知",
         "hint": "上下线时向 Bot 发送通知消息"
       },
+      "workingDir": {
+        "title": "新对话工作目录",
+        "hint": "飞书或 Lark 首次对话或发送 /new 后使用。更改不会移动当前上下文。",
+        "managed": "使用 {{appName}} 管理的专用目录",
+        "reset": "恢复默认",
+        "unavailable": "已选目录当前不可访问；新对话将暂时使用 {{appName}} 管理的专用目录。"
+      },
+      "toasts": {
+        "workingDirFailed": "更新工作目录失败，请重新选择"
+      },
       "sessionNotification": {
         "label": "任务完成通知",
         "cellLabel": "任务完成或需要回复时发送飞书 / Lark 消息",
