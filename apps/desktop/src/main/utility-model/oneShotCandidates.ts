@@ -974,7 +974,12 @@ async function requestProviderHttpText(input: {
         input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }] }],
         ...(!minimal ? {
           tools: [],
-          tool_choice: 'auto',
+          // No tool_choice: one-shot requests never declare tools, and standard
+          // Responses endpoints reject tool_choice without tools — api.x.ai
+          // returns HTTP 400 "A tool_choice was set on the request but no tools
+          // were specified" (2026-08-13 实测), which broke every Auto-review on
+          // xAI sessions. The private Codex endpoint accepts the body without
+          // tool_choice (2026-08-13 实测, gpt-5.6-sol).
           parallel_tool_calls: false,
           store: false,
           stream: true,

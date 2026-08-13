@@ -1584,10 +1584,15 @@ describe('utility one-shot candidates', () => {
 
     expect(result).toMatchObject({ ok: true, providerId: 'xai', model: 'xai/grok-4.3' });
     expect(fetchMock).toHaveBeenCalledWith('https://xai.example/v1/responses', expect.anything());
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
       model: 'grok-4.3',
       reasoning: { effort: 'low' },
     });
+    // api.x.ai rejects tool_choice when the request declares no tools
+    // (HTTP 400 invalid-argument), which failed every Auto-review verdict
+    // on xAI sessions. One-shot requests never declare tools.
+    expect(body).not.toHaveProperty('tool_choice');
   });
 
   it.each(['xai/grok-code-fast', 'xai/grok-build-preview'])(
