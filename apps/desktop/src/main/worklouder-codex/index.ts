@@ -185,8 +185,8 @@ const windowRevealGates = new WeakMap<
  * Flash the keyboard when this Cindy window becomes visible.
  *
  * Hide / minimize / Dock close all count. Focus while already visible
- * does not. Attach after `ready-to-show` so a missed first `show` is
- * recovered from the current visibility.
+ * does not. Seed from the current visibility so a show that already
+ * fired is not treated as still hidden.
  */
 export function attachWorkLouderCodexWindowReveal(win: BrowserWindow): void {
   if (windowRevealGates.has(win)) return;

@@ -184,8 +184,8 @@ export class WorkLouderCodexLightingController {
       this.updateLightingFrame();
     }, WINDOW_REVEAL_MS);
     this.windowRevealTimer.unref?.();
-    this.updateLightingFrame();
-    this.resetAutoDimTimer(this.currentBrightnessAdjustedFrame());
+    const frame = this.updateLightingFrame();
+    this.resetAutoDimTimer(frame);
   }
 
   async refreshTaskSlots(): Promise<void> {
@@ -592,13 +592,6 @@ export class WorkLouderCodexLightingController {
     }
     if (wakeOnBaseFrameChange && baseFrameChanged) this.resetAutoDimTimer(brightnessAdjusted);
     return brightnessAdjusted;
-  }
-
-  private currentBrightnessAdjustedFrame(): WorkLouderCodexLightingFrame {
-    return applyWorkLouderCodexLightingBrightness(
-      createWorkLouderCodexLightingFrame(this.latestActivity, this.slotSessionIds),
-      this.settings.lightingBrightness,
-    );
   }
 
   private scheduleTaskSlotRefresh(immediate = false): void {

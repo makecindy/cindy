@@ -85,7 +85,6 @@ const COLORS = {
   /**
    * Window-reopen red tuned for these LEDs.
    * UI brand red `#DF0C27` / `#A61629` wash pink on the board.
-   * `#D0060C` was the hotter of the four hardware swatches.
    */
   brand: 0xd0060c,
 } as const;
