@@ -50,7 +50,6 @@ import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getIOSSimulatorPluginAccessDecision } from '../cindy-brain/index.js';
-import { shouldEnforceIOSSimulatorShellPolicy } from '../cindy-brain/iosSimulatorPluginGate.js';
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
@@ -76,9 +75,6 @@ import {
   mergeClaudeHooks,
 } from './claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
-import { createIOSSimulatorShellGuardHook } from './claude-hooks/ios-simulator-shell-hook.js';
-import { getDesktopShellCommandPolicy } from './shell-command-policy.js';
-import { ensureAgentShellGuards } from './agent-shell-guards.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
@@ -136,10 +132,7 @@ import {
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.js';
-import {
-  getIOSSimulatorMcpDeps,
-  isIOSSimulatorHostRuntimeActive,
-} from '../mcp-integrations/ios-simulator.js';
+import { getIOSSimulatorMcpDeps } from '../mcp-integrations/ios-simulator.js';
 import { readContactsSettings } from './contacts-settings-store.js';
 import { createIOSSimulatorCodexDynamicToolProvider } from './ios-simulator-codex-dynamic-tools.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
@@ -696,7 +689,7 @@ export function getMaker(): Maker {
           allowed: false as const,
           errorCode: 'IOS_SIMULATOR_DISABLED' as const,
           message:
-            'The iOS Simulator capability is disabled for the current project. Ask the user to enable it in the project plugin settings before retrying.',
+            'The embedded iOS Simulator capability is disabled for the current project. Enable it in the project plugin settings before retrying the embedded tool; other iOS workflows are unaffected.',
           data: {
             reason: 'disabled-in-workdir',
             action: 'enable-plugin',
@@ -707,19 +700,6 @@ export function getMaker(): Maker {
       }
       return { allowed: true as const };
     };
-
-    // The shell guard protects the embedded simulator's ownership/admission/
-    // viewer/cleanup contracts. With the plugin gated off there is nothing to
-    // protect, so blocking the user's own `simctl` / Simulator.app work — and
-    // pointing them at a cindy_ios_simulator tool the gate just removed — would
-    // be a dead end. A runtime this process already installed keeps its
-    // protection either way.
-    const shouldEnforceSimulatorShellGuard = (workingDir: string | null): boolean =>
-      shouldEnforceIOSSimulatorShellPolicy({
-        pluginAccessAllowed: resolveIOSSimulatorAccess({ workingDir: workingDir ?? undefined })
-          .allowed,
-        hostRuntimeActive: isIOSSimulatorHostRuntimeActive(),
-      });
 
     const makerMemoryProviderDeps = {
       getMakerMemoryManager: () => makerMemoryManager,
@@ -913,15 +893,6 @@ export function getMaker(): Maker {
       claudeHooks: mergeClaudeHooks(
         {
           PreToolUse: [
-            {
-              matcher: 'Bash|PowerShell',
-              hooks: [
-                createIOSSimulatorShellGuardHook(
-                  desktopMakerLogger,
-                  shouldEnforceSimulatorShellGuard,
-                ),
-              ],
-            },
             {
               matcher: 'Read',
               hooks: [createReadImageHook(desktopMakerLogger)],
@@ -1192,10 +1163,6 @@ export function getMaker(): Maker {
       codexHostDynamicToolProvider: createIOSSimulatorCodexDynamicToolProvider({
         deps: getIOSSimulatorMcpDeps({ resolveAccess: resolveIOSSimulatorAccess }),
       }),
-      getShellCommandPolicy: ({ command, cwd }) =>
-        shouldEnforceSimulatorShellGuard(cwd?.trim() || null)
-          ? getDesktopShellCommandPolicy(command)
-          : undefined,
       // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
       // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
       // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
@@ -1295,12 +1262,6 @@ export function getMaker(): Maker {
             // bridge 整体缺席 = cindy_contacts 必然不可达
             codexAppliedContactsEnabled = false;
           }
-        }
-        const shellGuardDir = ensureAgentShellGuards();
-        if (shellGuardDir) {
-          mcpExtraEnv.PATH = [shellGuardDir, mcpExtraEnv.PATH ?? process.env.PATH]
-            .filter((value): value is string => Boolean(value))
-            .join(path.delimiter);
         }
         const browserCompanion = usesIsolatedProxy
           ? null

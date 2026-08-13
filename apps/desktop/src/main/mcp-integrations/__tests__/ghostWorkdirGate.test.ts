@@ -446,6 +446,34 @@ describe('花名册 / ghost_list 过滤', () => {
     });
   });
 
+  it('ghost_list/info 只投影 manual 轻量索引，ghost_manual 根索引不启动插件运行时', async () => {
+    listMock.mockReturnValue([
+      chipGhost('art', ['tool'], {
+        manual: {
+          items: [{ dir: 'private/docs', name: 'image-workflow', description: '完整画图工作流' }],
+        },
+      }),
+    ]);
+    const deps = makeDeps();
+    await expect(deps.listAwakeGhosts()).resolves.toMatchObject([
+      {
+        id: 'art',
+        manual: [{ name: 'image-workflow', description: '完整画图工作流' }],
+      },
+    ]);
+    await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({
+      ok: true,
+      ghost: { manual: [{ name: 'image-workflow', description: '完整画图工作流' }] },
+    });
+    await expect(deps.readGhostManual({ ghostId: 'art' })).resolves.toEqual({
+      ok: true,
+      manual: [{ name: 'image-workflow', description: '完整画图工作流' }],
+      content: '',
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(await deps.listAwakeGhosts())).not.toContain('private/docs');
+  });
+
   it('ghost_info 对不存在目标优先返回 GHOST_NOT_FOUND', async () => {
     setGhostDisabledForWorkdir(WORKDIR, 'missing', true);
     activeSessionAvailableMock.mockReturnValue(false);

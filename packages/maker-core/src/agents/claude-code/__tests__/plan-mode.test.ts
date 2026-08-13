@@ -13,7 +13,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps } from '../../base-agent.js';
+import type { AgentDeps, RemoteClaudeRoute } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { PermissionMode } from '../../../types/common.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../../types/events.js';
@@ -568,7 +568,7 @@ describe('ClaudeCodeAgent plan mode', () => {
       imagePath,
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     );
-    const remoteSend = vi.fn(async () => {});
+    const remoteSend = vi.fn(async (_message: unknown) => {});
     const fakeQuery = { ...createFakeQuery(), send: remoteSend };
     const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
       fakeQuery as never;
@@ -607,7 +607,7 @@ describe('ClaudeCodeAgent plan mode', () => {
     process.env.CLAUDE_CONFIG_DIR = configDir;
     const workingDir = await makeTempDir();
     const imagePath = path.join(workingDir, 'desktop.png');
-    const remoteSend = vi.fn(async () => {});
+    const remoteSend = vi.fn(async (_message: unknown) => {});
     const fakeQuery = { ...createFakeQuery(), send: remoteSend };
     const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
       fakeQuery as never;
@@ -660,7 +660,7 @@ describe('ClaudeCodeAgent plan mode', () => {
     process.env.CLAUDE_CONFIG_DIR = configDir;
     const workingDir = await makeTempDir();
     const imagePath = path.join(workingDir, 'desktop-steer.png');
-    const remoteSend = vi.fn(async () => {});
+    const remoteSend = vi.fn(async (_message: unknown) => {});
     const fakeQuery = { ...createFakeQuery(), send: remoteSend };
     const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
       fakeQuery as never;
@@ -862,7 +862,7 @@ describe('ClaudeCodeAgent plan mode', () => {
         return { authenticated: true };
       },
       async logout() {},
-      async getAuthEnv(options) {
+      async getAuthEnv(options): Promise<Record<string, string>> {
         return options?.credentialMode === 'gateway-key'
           ? { ANTHROPIC_API_KEY: 'gw-key' }
           : { CLAUDE_CODE_OAUTH_TOKEN: 'tok-sub' }; // 本地 fallback: 订阅已连
@@ -1304,7 +1304,7 @@ describe('ClaudeCodeAgent plan mode', () => {
     // 后台刷新后 nextRoute.env 是新 token,但 remoteEnv(远端 daemon)还是旧值 ——
     // token 值轮换不算路由变化,同路由放行(codex P2 三轮)。
     let callCount = 0;
-    const resolveRemoteClaudeRoute = vi.fn(async () => {
+    const resolveRemoteClaudeRoute = vi.fn(async (): Promise<RemoteClaudeRoute> => {
       callCount += 1;
       return {
         endpoint: 'https://api.anthropic.com',
@@ -1340,7 +1340,7 @@ describe('ClaudeCodeAgent plan mode', () => {
     // 登录后 backfill 补齐 subscriptionType/rateLimitTier(用户零操作)—— 与 token 同组
     // 按存在性比对,不按值,不误拒(Fable 5 评估 B1)。
     let callCount = 0;
-    const resolveRemoteClaudeRoute = vi.fn(async () => {
+    const resolveRemoteClaudeRoute = vi.fn(async (): Promise<RemoteClaudeRoute> => {
       callCount += 1;
       return {
         endpoint: 'https://api.anthropic.com',
@@ -1419,7 +1419,7 @@ describe('ClaudeCodeAgent plan mode', () => {
     // 初次解析带 x-tenant 定制头;切模时目标路由把它删了 —— 远端 daemon 仍烤着旧头,
     // 必须拒绝(Greptile review #1035:只取 nextRoute 的 key 会把删除误判成一致)。
     let callCount = 0;
-    const resolveRemoteClaudeRoute = vi.fn(async () => {
+    const resolveRemoteClaudeRoute = vi.fn(async (): Promise<RemoteClaudeRoute> => {
       callCount += 1;
       return callCount === 1
         ? {

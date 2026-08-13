@@ -1198,6 +1198,46 @@ describe('legacy Ghost plugin recovery', () => {
     );
   });
 
+  it('recovers legacy manual metadata from shared and owner-scoped roots without weakening other validation', async () => {
+    const root = await tempRoot();
+    const ownerId = 'cloud-a';
+    const ownerKey = dataOwnerStorageKey(ownerId);
+    await writeGhostDirWithManifest(
+      path.join(root, 'brain', 'legacy-string'),
+      'legacy-string',
+      { manual: 'old notes' },
+    );
+    await writeGhostDirWithManifest(
+      path.join(root, 'owners', ownerKey, 'brain', 'legacy-object'),
+      'legacy-object',
+      { manual: { arbitrary: 'old metadata' } },
+    );
+    await writeGhostDirWithManifest(
+      path.join(root, 'brain', 'invalid-other-field'),
+      'invalid-other-field',
+      { manual: 'old notes', name: 42 },
+    );
+
+    expect(
+      getLegacyGhostRecoveryStatus(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        root,
+      ),
+    ).toEqual({ state: 'partial', legacyPluginCount: 2, canRetry: true });
+
+    await expect(
+      recoverLegacyGhostPlugins(
+        { mode: 'cloud', dataOwnerId: ownerId, user: { id: ownerId } },
+        realFsDeps(root),
+      ),
+    ).resolves.toMatchObject({ status: 'migrated', moved: 2, conflicts: 0 });
+    const targetRoot = path.join(root, 'owners', ownerKey, 'cindy-brain');
+    await expect(fs.access(path.join(targetRoot, 'legacy-string'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(targetRoot, 'legacy-object'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(root, 'brain', 'invalid-other-field'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(targetRoot, 'invalid-other-field'))).rejects.toThrow();
+  });
+
   it('removes a newly created empty target when every plugin rename fails', async () => {
     const root = await tempRoot();
     const ownerId = 'cloud-a';
@@ -1882,6 +1922,14 @@ async function writeGhostDirAtPath(
   id: string,
   command?: string,
 ): Promise<void> {
+  await writeGhostDirWithManifest(dir, id, command === undefined ? {} : { command });
+}
+
+async function writeGhostDirWithManifest(
+  dir: string,
+  id: string,
+  extra: Record<string, unknown>,
+): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, 'ghost.json'),
@@ -1894,7 +1942,7 @@ async function writeGhostDirAtPath(
       entry: 'main.js',
       slots: ['tool'],
       tools: [{ name: 'do_thing', description: 'Do something' }],
-      ...(command === undefined ? {} : { command }),
+      ...extra,
     }),
     'utf-8',
   );

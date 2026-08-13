@@ -64,7 +64,7 @@ const GOOD_MANIFEST = {
 };
 
 /** 造一个源码目录;files 为相对路径 → 内容。 */
-async function makeSrcDir(files: Record<string, string>): Promise<string> {
+async function makeSrcDir(files: Record<string, string | Buffer>): Promise<string> {
   const dir = path.join(workDir, 'src');
   for (const [rel, content] of Object.entries(files)) {
     const abs = path.join(dir, rel);
@@ -717,10 +717,85 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  it('manual 作者契约按职责分流并支持与工具目录交叉导航', () => {
+    for (const marker of [
+      '## 3.6 manual:按需披露复杂工作流与分层资料',
+      '"manual": {',
+      'MANUAL.md',
+      '目录树可以任意深',
+      'Markdown 不写 frontmatter',
+      'Manual 的归属不按篇幅长短判断',
+      '多工具组合编排',
+      '复杂工具深入用法',
+      '前置检查、顺序与分支、失败恢复、交付标准',
+      '短但决定多个工具如何协作的',
+      '很长但只是在枚举某一个工具的参数',
+      '用途、输入输出与调用前限制',
+      '紧贴实时工具集合的动态规则与参数',
+      '同一规则只选一个权威落点',
+      '两者并行且可以反复交叉,不是固定读取顺序',
+      'ghost_call({ ghost_id: "my-ghost", tool: "list_tools", args: { category: "deploy" } })',
+      'ghost_manual({ ghost_id: "my-ghost", path: "getting-started/references/deploy.md" })',
+      '不要让多个索引文件互相指回形成循环',
+      '只作为 tool-result 按需进入上下文',
+      '不进入\n生产 system/developer prompt',
+    ]) {
+      expect(FORGE_GUIDE).toContain(marker);
+    }
+    expect(FORGE_GUIDE).not.toContain('需要提供较长的工作流、参考表或排障说明时');
+    expect(FORGE_GUIDE).not.toContain('只有大手册才拆深层文件');
+  });
+
+  it('skill 迁移精确映射召回元数据、正文与容器目录', () => {
+    const skillSection = FORGE_GUIDE.slice(
+      FORGE_GUIDE.indexOf('## 4.16 捆绑 Agent Skills(skill 槽)'),
+      FORGE_GUIDE.indexOf('## 4.17'),
+    );
+    for (const marker of [
+      '迁移时按职责映射,不是按篇幅搬运',
+      'Skill frontmatter 的 `name + description` 所承担的身份/召回作用',
+      '对标系统提示词区\n  插件花名册的身份与 `recall`',
+      '`manual.items` 只是插件容器级一级目录,不对标 Skill frontmatter',
+      '`MANUAL.md` 与深层 Markdown 承接 Skill 正文、references',
+      '只经 `ghost_manual` tool-result 按需进入上下文',
+      '当前已停止新增,未来计划全部废弃',
+    ]) {
+      expect(skillSection).toContain(marker);
+    }
+  });
+
+  it('manual 发布契约按顺序锁定 Cindy 版本门槛与旧客户端回退', () => {
+    expect(FORGE_GUIDE).toContain(
+      '虽能安装但缺少新版宿主能力、导致插件无法按\n设计正常工作时，必须填写最早可正常工作的正式版本',
+    );
+    expect(FORGE_GUIDE).toContain('`manual` / `ghost_manual` 属于后者');
+
+    const manualSection = FORGE_GUIDE.slice(
+      FORGE_GUIDE.indexOf('## 3.6 manual:按需披露复杂工作流与分层资料'),
+      FORGE_GUIDE.indexOf('## 4. main.js 电子脑'),
+    );
+    const orderedRequirements = [
+      'Cindy 先发布',
+      '确认首个支持它的**正式版本号**',
+      '`minCindyVersion` 设为不低于\n该正式版本',
+      '移除\n`skill.items` 的迁移版本也必须设置上述 `minCindyVersion`',
+      '服务端还要保留上一份带 Skill 的历史 release',
+      '旧客户端能通过历史版本回退',
+    ];
+    let previousIndex = -1;
+    for (const requirement of orderedRequirements) {
+      const index = manualSection.indexOf(requirement);
+      expect(index, requirement).toBeGreaterThan(previousIndex);
+      previousIndex = index;
+    }
+  });
+
   it('写死 whenToUse 发现面与二级分派 RULES 契约', () => {
     expect(FORGE_GUIDE).toContain('给模型做插件发现与判断的唯一字段');
     expect(FORGE_GUIDE).toContain(`最多 ${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符`);
-    expect(FORGE_GUIDE).toContain('花名册 → `ghost_info` → `ghost_call`');
+    expect(FORGE_GUIDE).toContain('花名册命中已知 `ghost_id` 时用');
+    expect(FORGE_GUIDE).toContain('未命中或需要全量实时回查时用 `ghost_list`');
+    expect(FORGE_GUIDE).toContain('两者都返回完整\n`CindyGhostInfo`');
     expect(FORGE_GUIDE).toContain(
       '禁止塞入"必须/不得"式行为规则、工具调用顺序、参数协议、错误码与重试策略',
     );
@@ -738,6 +813,8 @@ describe('FORGE_GUIDE', () => {
     );
     expect(FORGE_GUIDE).toContain('`rules: [规则键]`');
     expect(FORGE_GUIDE).toContain('参数 schema **和本次自纠必需的规则**');
+    expect(FORGE_GUIDE).toContain('`list_tools` 是插件声明的顶层工具,不是 Host 固定工具');
+    expect(FORGE_GUIDE).toContain('两条路径可以反复交叉,没有固定先后顺序');
     expect(FORGE_GUIDE).not.toContain('这是你影响 AI 行为的**唯一合法通道**');
     expect(FORGE_GUIDE).not.toContain('description(花名册自述)');
     expect(FORGE_GUIDE).not.toContain('选错会拖累所有会话');
@@ -1081,5 +1158,186 @@ describe('packGhostDir · skill 槽', () => {
     });
     const r = await packGhostDir(dir);
     expect(r).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
+  });
+});
+
+describe('packGhostDir · manual 渐进披露手册', () => {
+  const manualManifest = {
+    ...GOOD_MANIFEST,
+    id: 'manual-demo',
+    manual: {
+      items: [
+        { dir: 'manual', name: 'overview', description: '总览' },
+        { dir: 'manual/advanced', name: 'advanced', description: '进阶' },
+      ],
+    },
+  };
+
+  it('任意深度与嵌套单元可打包，同一产物通过装入侧 inspect', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manualManifest),
+      'main.js': '// brain',
+      'manual/MANUAL.md': '# 总览',
+      'manual/references/deep/flow.md': '# 深层流程',
+      'manual/advanced/MANUAL.md': '# 进阶',
+      'manual/advanced/references/tuning.MD': '# 调优',
+    });
+    const packed = await packGhostDir(dir);
+    expect(packed.ok, JSON.stringify(packed)).toBe(true);
+    if (!packed.ok) return;
+    const inspected = await new GhostManager({
+      getRootDir: () => path.join(workDir, 'ghosts'),
+    }).inspect(packed.cindyPath);
+    expect(inspected).toMatchObject({
+      manifest: { manual: { items: [{ name: 'overview' }, { name: 'advanced' }] } },
+    });
+  });
+
+  it('64KB 正文放行，64KB+1、非法 UTF-8、二进制控制字节与非 Markdown 拒绝', async () => {
+    const cases: Array<[string, Buffer | string, string]> = [
+      ['manual/too-large.md', Buffer.alloc(64 * 1024 + 1, 0x61), '过大'],
+      ['manual/invalid.md', Buffer.from([0xff, 0xfe]), '非法 UTF-8'],
+      ['manual/binary.md', Buffer.from('ok\u0000bad'), '控制字节'],
+      ['manual/data.json', '{}', '非 Markdown'],
+    ];
+    const good = await makeSrcDir({
+      'ghost.json': JSON.stringify({
+        ...GOOD_MANIFEST,
+        manual: { items: [{ dir: 'manual', name: 'overview', description: '总览' }] },
+      }),
+      'main.js': '// brain',
+      'manual/MANUAL.md': Buffer.alloc(64 * 1024, 0x61),
+    });
+    expect((await packGhostDir(good)).ok).toBe(true);
+
+    for (const [relativePath, content] of cases) {
+      const dir = path.join(workDir, relativePath.replaceAll('/', '-'));
+      await fs.promises.mkdir(path.join(dir, 'manual'), { recursive: true });
+      await fs.promises.writeFile(
+        path.join(dir, 'ghost.json'),
+        JSON.stringify({
+          ...GOOD_MANIFEST,
+          manual: { items: [{ dir: 'manual', name: 'overview', description: '总览' }] },
+        }),
+      );
+      await fs.promises.writeFile(path.join(dir, 'main.js'), '// brain');
+      await fs.promises.writeFile(path.join(dir, 'manual/MANUAL.md'), '# 总览');
+      await fs.promises.writeFile(path.join(dir, relativePath), content);
+      expect(await packGhostDir(dir), relativePath).toMatchObject({
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+      });
+    }
+  });
+
+  it('缺 MANUAL.md 与手册目录内符号链接会在打包期拒绝', async () => {
+    const manifest = {
+      ...GOOD_MANIFEST,
+      manual: { items: [{ dir: 'manual', name: 'overview', description: '总览' }] },
+    };
+    const missing = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// brain',
+      'manual/other.md': '# 其它',
+    });
+    expect(await packGhostDir(missing)).toMatchObject({ ok: false, errorCode: 'ENTRY_MISSING' });
+
+    if (canSymlink) {
+      const dir = path.join(workDir, 'manual-link');
+      await fs.promises.mkdir(path.join(dir, 'manual'), { recursive: true });
+      await fs.promises.writeFile(path.join(dir, 'ghost.json'), JSON.stringify(manifest));
+      await fs.promises.writeFile(path.join(dir, 'main.js'), '// brain');
+      await fs.promises.writeFile(path.join(dir, 'manual/MANUAL.md'), '# 总览');
+      const target = path.join(workDir, 'outside.md');
+      await fs.promises.writeFile(target, '# 外部');
+      await fs.promises.symlink(target, path.join(dir, 'manual/link.md'));
+      expect(await packGhostDir(dir)).toMatchObject({
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+      });
+    }
+  });
+
+  it('隐藏 Markdown 与隐藏目录沿用打包过滤规则，不入包也不触发变化误报', async () => {
+    const manifest = {
+      ...GOOD_MANIFEST,
+      manual: { items: [{ dir: 'manual', name: 'overview', description: '总览' }] },
+    };
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// brain',
+      'manual/MANUAL.md': '# 总览',
+      'manual/visible.md': '# 可见正文',
+      'manual/.draft.md': '# 草稿',
+      'manual/.draft/hidden.md': '# 隐藏目录正文',
+    });
+    const packed = await packGhostDir(dir);
+    expect(packed.ok, JSON.stringify(packed)).toBe(true);
+    if (!packed.ok) return;
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(packed.cindyPath));
+    expect(zip.file('manual/MANUAL.md')).not.toBeNull();
+    expect(zip.file('manual/visible.md')).not.toBeNull();
+    expect(zip.file('manual/.draft.md')).toBeNull();
+    expect(zip.file('manual/.draft/hidden.md')).toBeNull();
+  });
+
+  it('MANUAL.md 入口必须逐字匹配，大小写不敏感文件系统也不能用 manual.md 冒充', async () => {
+    const manifest = {
+      ...GOOD_MANIFEST,
+      manual: { items: [{ dir: 'manual', name: 'overview', description: '总览' }] },
+    };
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// brain',
+      'manual/manual.md': '# 错误大小写入口',
+    });
+    const lowercaseEntry = path.join(dir, 'manual/manual.md');
+    const uppercaseEntry = path.join(dir, 'manual/MANUAL.md');
+    const originalLstat = fs.promises.lstat.bind(fs.promises);
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation(
+      ((target: fs.PathLike, options?: fs.StatOptions) => {
+        if (String(target) === uppercaseEntry) {
+          return originalLstat(lowercaseEntry, options as never);
+        }
+        return originalLstat(target, options as never);
+      }) as typeof fs.promises.lstat,
+    );
+
+    expect(await packGhostDir(dir)).toMatchObject({
+      ok: false,
+      errorCode: 'ENTRY_MISSING',
+    });
+    expect(lstatSpy.mock.calls.some(([target]) => String(target) === uppercaseEntry)).toBe(false);
+  });
+
+  it('制品中的 C0、DEL、反斜杠文件名和非法目录名在 Forge 侧直接拒绝', async () => {
+    if (process.platform === 'win32') return;
+    const manifest = {
+      ...GOOD_MANIFEST,
+      manual: { items: [{ dir: 'manual', name: 'overview', description: '总览' }] },
+    };
+    const cases = [
+      { relativePath: `bad${String.fromCharCode(1)}name.md`, directory: false },
+      { relativePath: `bad${String.fromCharCode(0x7f)}dir`, directory: true },
+      { relativePath: 'bad\\windows.md', directory: false },
+    ];
+    for (const [index, testCase] of cases.entries()) {
+      const dir = path.join(workDir, `manual-invalid-path-${index}`);
+      await fs.promises.mkdir(path.join(dir, 'manual'), { recursive: true });
+      await fs.promises.writeFile(path.join(dir, 'ghost.json'), JSON.stringify(manifest));
+      await fs.promises.writeFile(path.join(dir, 'main.js'), '// brain');
+      await fs.promises.writeFile(path.join(dir, 'manual/MANUAL.md'), '# 总览');
+      const invalidPath = path.join(dir, 'manual', testCase.relativePath);
+      if (testCase.directory) {
+        await fs.promises.mkdir(invalidPath);
+        await fs.promises.writeFile(path.join(invalidPath, 'nested.md'), '# invalid');
+      } else {
+        await fs.promises.writeFile(invalidPath, '# invalid');
+      }
+      expect(await packGhostDir(dir), testCase.relativePath).toMatchObject({
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+      });
+    }
   });
 });

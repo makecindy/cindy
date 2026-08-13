@@ -772,7 +772,8 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     // content_block.id(子调用)→ 独立解析匹配第二个 Task_1 → Task_1_dup2,
     // 不复用父映射
     const evt = (entries[0] as Record<string, unknown>).event as Record<string, unknown>;
-    expect((evt.content_block).id).toBe('Task_1_dup2');
+    const contentBlock = evt.content_block as Record<string, unknown>;
+    expect(contentBlock.id).toBe('Task_1_dup2');
   });
 
   it('child content_block_start 在 assistant 后且父同 id 时匹配子 occurrence(P1: Map post-assistant stream starts to the child occurrence)', () => {

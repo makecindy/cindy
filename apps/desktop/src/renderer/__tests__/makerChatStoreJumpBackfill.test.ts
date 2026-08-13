@@ -72,6 +72,10 @@ vi.mock('@/lib/composerDraftStore', () => ({
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import { aroundMessagesByClientIdFor, listMessagesFor } from '@/lib/makerTransport';
+import {
+  markSessionAutomaticHistoryLoadCompleted,
+  restoreSessionAutomaticHistoryLoadAttempts,
+} from '@/lib/sessionScrollStore';
 import type { Message } from '@/lib/ccAgent.types';
 
 const SID = 'sess-jump-backfill';
@@ -351,6 +355,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
       createdAt: '2026-07-20T00:00:00.000Z',
     });
     vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([target]);
+    markSessionAutomaticHistoryLoadCompleted(SID);
     vi.mocked(listMessagesFor).mockImplementationOnce(async () => {
       const page = fullPageNewestFirst();
       // 补齐 await 期间发生 edit-last 截断。
@@ -363,6 +368,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     // 跳转整体作废：不返回目标，也不把 around 行 merge 回窗口。
     expect(result).toBeNull();
     expect(makerChatStore.getSnapshot(SID).messages.map((m) => m.clientId)).not.toContain('rewound');
+    expect(restoreSessionAutomaticHistoryLoadAttempts(SID, 5)).toBe(0);
   });
 
   it('J. 纯文本会话在预算内停手,不会无限翻到几千行', async () => {
@@ -1331,6 +1337,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     await makerChatStore.loadAroundMessageClientId(SID, 'island-trim', { radius: 60 });
     expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
     expect(makerChatStore.getSnapshot(SID).messages.length).toBeGreaterThan(300);
+    markSessionAutomaticHistoryLoadCompleted(SID);
 
     // 离开视图 → 触发 _trimMessagesIfNeeded。
     const leave = makerChatStore.enterView(SID);
@@ -1339,6 +1346,8 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     expect(makerChatStore.getSnapshot(SID).messages).toHaveLength(200);
     // 关键:裁剪不清标记 —— 保留的 200 行未必连续。
     expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    // 普通裁剪正是原问题的重挂载场景:消息窗口仍属同一代,自动补载预算必须保持耗尽。
+    expect(restoreSessionAutomaticHistoryLoadAttempts(SID, 5)).toBe(5);
   });
 
   it('Y2. 超长裁剪丢掉当前计划边界时,允许重入重新首拉补回计划', async () => {

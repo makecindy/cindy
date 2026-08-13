@@ -30,7 +30,7 @@ interface BuiltinPluginMeta {
  */
 const BUILTIN_META: BuiltinPluginMeta[] = [
   { id: 'android',     name: 'Android Automation', description: 'Android adb automation — screenshots, UI dump, taps, swipes, text input, and app launch on connected devices' },
-  { id: 'ios-simulator', name: 'iOS Simulator', description: 'Cindy embedded iOS Simulator — create or attach a session-owned device, boot it in the embedded viewer, build/install/launch apps, inspect screens, and debug interactions. Prefer this for requests to open, run, test, or debug an iOS app; do not launch macOS Simulator.app unless the user explicitly asks for an external system window.' },
+  { id: 'ios-simulator', name: 'iOS Simulator', description: 'Cindy embedded iOS Simulator — create or attach a session-owned device, boot it in the embedded viewer, build/install/launch apps, inspect screens, and debug interactions.' },
   { id: 'browser',     name: 'Browser',      description: 'Browser automation — isolated browsing, snapshots, screenshots, and page actions' },
   { id: 'computer',    name: 'Computer Use', description: 'Local desktop automation — apps, windows, UI inspection, clicks, and typing via an installed driver' },
   { id: 'feishu_bot',   name: 'Feishu Bot',   description: 'Send files and notifications to Feishu users via bot messages' },
