@@ -6941,7 +6941,7 @@
       "loadingDialogues": "불러오는 중…",
       "noDialogues": "세션 없음",
       "dialogueSettings": "대화 정리",
-      "dialogueSettingsAria": "대화 정리(정렬: {{sortBy}})",
+      "dialogueSettingsAria": "대화 정리(상태: {{status}}, 정렬: {{sortBy}})",
       "dialogueSortHeading": "정렬",
       "dialogueSort": {
         "recency": "최근순",

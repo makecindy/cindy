@@ -148,6 +148,20 @@ describe('Dialogue sidebar section', () => {
     expect(dialogueSectionSource).not.toMatch(/localStorage/);
   });
 
+  it('exposes a Dialogue-owned status filter that drives the shared sidebar status', () => {
+    // 入口复用全局 SidebarFilter 的 Status 语义（active/archived/all）与 i18n 文案,
+    // 不另造一套归档视图,避免 Dialogue 与 Projects 两个区状态不同步。
+    expect(dialogueSectionSource).toContain('DIALOGUE_STATUS_OPTIONS');
+    expect(dialogueSectionSource).toContain('onStatusChange');
+    expect(dialogueSectionSource).toContain("'ccAgent.sidebar.filterStatusHeading'");
+    expect(dialogueSectionSource).toContain("'ccAgent.sidebar.filterStatus.active'");
+    expect(dialogueSectionSource).toContain("'ccAgent.sidebar.filterStatus.archived'");
+    expect(dialogueSectionSource).toContain("'ccAgent.sidebar.filterStatus.all'");
+    // Dialogue 区的筛选入口驱动全局 filter.status,与 Projects 区共享同一状态源。
+    expect(sidebarSource).toContain('status={filter.status}');
+    expect(sidebarSource).toContain('onStatusChange={filter.setStatus}');
+  });
+
   it('exposes Dialogue-owned create and section collapse controls', () => {
     expect(dialogueSectionSource).toContain('onCreateDialogue');
     expect(dialogueSectionSource).toContain('SquarePen');
