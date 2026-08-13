@@ -1413,6 +1413,7 @@ export class PiAgent extends BaseAgent {
               readRoots: [opts.workingDir, ...mutableExtraDirs],
               reviewAutoAction,
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
+              notifyAutoReviewBlocked: () => autoReviewBlockedNotice.notify(),
               registeredMcpServerNames,
               registerPendingPrompt,
               turnPermissionPolicy: activeTurnPermissionPolicy,
@@ -2603,6 +2604,8 @@ export class PiAgent extends BaseAgent {
       reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
+      /** 审阅器明确拦截操作时的会话级一次性提示;去重与重置由会话侧持有。 */
+      notifyAutoReviewBlocked: () => void;
       /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
       registeredMcpServerNames: ReadonlySet<string>;
       sessionId: string;
@@ -2692,6 +2695,7 @@ export class PiAgent extends BaseAgent {
         readRoots,
         reviewAutoAction,
         notifyAutoReviewUnavailable,
+        notifyAutoReviewBlocked,
         registeredMcpServerNames,
         registerPendingPrompt,
         turnPermissionPolicy,
@@ -2965,7 +2969,7 @@ export class PiAgent extends BaseAgent {
               toolName,
               reason: decision.reason,
             });
-            autoReviewBlockedNotice.notify();
+            notifyAutoReviewBlocked();
           }
           proc.send({
             type: 'extension_ui_response',
