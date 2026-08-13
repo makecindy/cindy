@@ -37,10 +37,15 @@ const TASK_SLOT_REFRESH_DEBOUNCE_MS = 250;
 const AGENT_KEY_DOUBLE_TAP_MS = 350;
 const ENCODER_LONG_PRESS_MS = 500;
 /**
- * How long a held stick may go silent before we treat it as released. The SDK
- * only reports movement, so a still stick can stop reporting entirely.
+ * How long a held stick may go silent before we give up on it.
+ *
+ * Measured against the hardware: a stick held still reports nothing at all,
+ * with gaps of two seconds and more between updates. Release has its own
+ * signal (distance drops to zero), so this is only a backstop for the device
+ * going away mid-push — unplugged, asleep, or a dropped packet. It has to sit
+ * well above the silent gaps or it would read "held" as "let go".
  */
-const JOYSTICK_RELEASE_TIMEOUT_MS = 300;
+const JOYSTICK_RELEASE_TIMEOUT_MS = 10_000;
 type Timer = ReturnType<typeof setTimeout>;
 
 export interface WorkLouderCodexLightingSink {

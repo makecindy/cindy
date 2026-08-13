@@ -352,6 +352,28 @@ describe('WorkLouderCodexLightingController', () => {
       expect(scrolls[1][0].intensity).toBeGreaterThan(scrolls[0][0].intensity);
     });
 
+    it('scrolls for the whole push and stops on release, as the hardware reports it', () => {
+      vi.useFakeTimers();
+      try {
+        const { stickRef, dispatch } = makeStick();
+
+        // A real push, taken from device logs: it ramps in, sits silent while
+        // held, eases off, then lands on zero when let go. The 0.24 lead-in is
+        // below the activation point, so it correctly does not scroll.
+        stickRef.current?.(up(0.24));
+        stickRef.current?.(up(1));
+        vi.advanceTimersByTime(2_190);
+        stickRef.current?.(up(0.79));
+        stickRef.current?.({ angle: 0, distance: 0 });
+
+        const kinds = dispatch.mock.calls.map((call) => call[0].type);
+        // Nothing during the silence, and no early stop before the release.
+        expect(kinds).toEqual(['scroll', 'scroll', 'scroll-stop']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('stops when the stick returns to centre', () => {
       const { stickRef, dispatch } = makeStick();
 
@@ -362,17 +384,35 @@ describe('WorkLouderCodexLightingController', () => {
       expect(dispatch).toHaveBeenCalledWith({ type: 'scroll-stop' });
     });
 
-    it('stops on its own if the stick goes silent', () => {
+    it('keeps scrolling through the long silences a held stick produces', () => {
       vi.useFakeTimers();
       try {
         const { stickRef, dispatch } = makeStick();
 
         stickRef.current?.(up(1));
         dispatch.mockClear();
-        // The SDK only reports movement, so a held-still stick can stop
-        // reporting — and a release can be missed if the device is unplugged
-        // mid-push. Without this the page would scroll forever.
-        vi.advanceTimersByTime(1_000);
+        // Measured against the hardware: holding the stick still reports
+        // nothing for seconds at a time. Treating that silence as a release is
+        // exactly what made held-to-scroll stop after a moment.
+        vi.advanceTimersByTime(3_000);
+
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('gives up if the device disappears mid-push', () => {
+      vi.useFakeTimers();
+      try {
+        const { stickRef, dispatch } = makeStick();
+
+        stickRef.current?.(up(1));
+        dispatch.mockClear();
+        // Release has its own signal, so this only covers the device going
+        // away while pushed — unplugged, asleep, or a dropped packet. Without
+        // it the page would scroll forever.
+        vi.advanceTimersByTime(30_000);
 
         expect(dispatch).toHaveBeenCalledWith({ type: 'scroll-stop' });
       } finally {
