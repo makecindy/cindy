@@ -778,6 +778,77 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     await handle.close();
   });
 
+  it('reports native Auto denials after switching an existing Query from Default to Auto', async () => {
+    const { handle, fakeQuery, queryPermissionMode } = await startSession('default', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    expect(queryPermissionMode).toBe('default');
+    const events: Array<{ type: string; data: unknown }> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push({ type: event.type, data: event.data });
+    })();
+
+    await handle.setPermissionMode?.('auto');
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('auto');
+    fakeQuery.emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      duration_ms: 1,
+      duration_api_ms: 1,
+      num_turns: 1,
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: {},
+      permission_denials: [{ tool_name: 'Bash', tool_use_id: 'switched-auto-denial', tool_input: {} }],
+    });
+    await settle();
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({ message: expect.stringContaining('[AUTO_REVIEW_BLOCKED]') }),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'done',
+      data: expect.objectContaining({ autoReviewBlocked: true }),
+    }));
+    await handle.close();
+  });
+
+  it('does not track native Auto when the runtime switch fails', async () => {
+    const { handle, fakeQuery } = await startSession('default', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      rejectPermissionModeChange: true,
+    });
+    const events: Array<{ type: string; data: unknown }> = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push({ type: event.type, data: event.data });
+    })();
+
+    await expect(handle.setPermissionMode?.('auto')).rejects.toThrow('permission transport failed');
+    fakeQuery.emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      duration_ms: 1,
+      duration_api_ms: 1,
+      num_turns: 1,
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: {},
+      permission_denials: [{ tool_name: 'Bash', tool_use_id: 'failed-auto-switch', tool_input: {} }],
+    });
+    await settle();
+
+    expect(events.some((event) =>
+      event.type === 'error'
+      && String((event.data as { message?: unknown }).message).includes('[AUTO_REVIEW_BLOCKED]'),
+    )).toBe(false);
+    await handle.close();
+  });
+
   it('still reports the current Auto denial when Plan is armed for the next turn', async () => {
     const { handle, fakeQuery } = await startSession('auto', {
       providerId: 'anthropic',

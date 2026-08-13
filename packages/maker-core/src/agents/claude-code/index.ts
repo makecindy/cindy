@@ -1836,7 +1836,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             eventQueue.push({ type: 'plan_mode_changed', data: { enabled: false }, source: 'claude-code' });
           }
           sdkInPlanMode = false;
-          void q.setPermissionMode(effectiveSdkPermissionMode()).catch((e) => {
+          void setQuerySdkPermissionMode(q, effectiveSdkPermissionMode()).catch((e) => {
             log.warn('post-plan-approval setPermissionMode failed', { error: String(e) });
           });
         }
@@ -2161,11 +2161,25 @@ export class ClaudeCodeAgent extends BaseAgent {
      */
     const effectiveSdkPermissionMode = (): SdkPermissionMode =>
       mutablePlanMode || planTurnActive ? 'plan' : toSdkPermissionMode(mutablePermissionMode);
-    // Only queries that actually started in native Auto need the post-init
-    // downgrade. A host MCP can already have made a query start in `default`;
-    // retrying that no-op and treating a transport failure as fatal would close
-    // an otherwise safe session.
+    // Track the Query's successfully applied SDK mode, not only its construction
+    // mode. Runtime Default <-> Auto switches reuse the same Query, and native
+    // Auto bypasses canUseTool, so result-level denial handling must follow the
+    // Query's current mode.
     const nativeAutoQueries = new WeakSet<Query>();
+    const recordQuerySdkPermissionMode = (
+      query: Query,
+      mode: SdkPermissionMode,
+    ): void => {
+      if (mode === 'auto') nativeAutoQueries.add(query);
+      else nativeAutoQueries.delete(query);
+    };
+    const setQuerySdkPermissionMode = async (
+      query: Query,
+      mode: SdkPermissionMode,
+    ): Promise<void> => {
+      await query.setPermissionMode(mode);
+      recordQuerySdkPermissionMode(query, mode);
+    };
 
     /**
      * **本次 turn** 目标 SDK 权限档: 只看 `planTurnActive`(本轮是否 plan turn), **不含**
@@ -3087,7 +3101,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
         })().catch(() => undefined);
 
-        if (finalRemotePermissionMode === 'auto') nativeAutoQueries.add(remoteQuery);
+        recordQuerySdkPermissionMode(remoteQuery, finalRemotePermissionMode);
         return remoteQuery;
       }
 
@@ -3288,7 +3302,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             : {}),
         },
       });
-      if (sdkStartPermissionMode === 'auto') nativeAutoQueries.add(query);
+      recordQuerySdkPermissionMode(query, sdkStartPermissionMode);
       return query;
     };
 
@@ -4046,7 +4060,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         planTurnActive = false;
         if (!mutablePlanMode) {
           sdkInPlanMode = false;
-          void q.setPermissionMode(effectiveSdkPermissionMode()).catch((e) => {
+          void setQuerySdkPermissionMode(q, effectiveSdkPermissionMode()).catch((e) => {
             log.warn('plan turn end setPermissionMode failed', { error: String(e) });
           });
         }
@@ -4133,8 +4147,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 && nativeAutoQueries.has(currentQ)
               ) {
                 try {
-                  await currentQ.setPermissionMode(effectiveSdkPermissionMode());
-                  nativeAutoQueries.delete(currentQ);
+                  await setQuerySdkPermissionMode(currentQ, effectiveSdkPermissionMode());
                 } catch (error) {
                   // Keeping this query alive would leave connected MCP tools under the
                   // native classifier, which bypasses Cindy's canUseTool policy. Close
@@ -4795,7 +4808,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           replayed = true;
           const targetSdkMode = sdkMode;
           try {
-            await q.setPermissionMode(targetSdkMode);
+            await setQuerySdkPermissionMode(q, targetSdkMode);
             sdkInPlanMode = targetSdkMode === 'plan';
             snapshot.sdkPermissionMode = targetSdkMode;
             log.debug(`${label}: replayed setPermissionMode`, { sdkMode: targetSdkMode });
@@ -4968,7 +4981,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             sdkInPlanMode = false;
             // rewind 窗口期旧 q 不可写, 跳过 — 档位由下方重建的 buildQuery 决定。
             if (!controlRequestsBlocked()) {
-              void q.setPermissionMode(effectiveSdkPermissionMode()).catch((e) => {
+              void setQuerySdkPermissionMode(q, effectiveSdkPermissionMode()).catch((e) => {
                 log.warn('stale plan turn cleanup setPermissionMode failed', { error: String(e) });
               });
             }
@@ -4989,7 +5002,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // effectiveSdkPermissionMode()(planTurnActive 已置 true → 'plan') 起档。
           if (!sdkInPlanMode && !controlRequestsBlocked()) {
             try {
-              await q.setPermissionMode('plan');
+              await setQuerySdkPermissionMode(q, 'plan');
               sdkInPlanMode = true;
             } catch (e) {
               log.warn('deferred plan-mode SDK switch failed — sending as a normal turn', { error: String(e) });
@@ -5002,7 +5015,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           sdkInPlanMode = false;
           if (!controlRequestsBlocked()) {
             try {
-              await q.setPermissionMode(toSdkPermissionMode(mutablePermissionMode));
+              await setQuerySdkPermissionMode(q, toSdkPermissionMode(mutablePermissionMode));
             } catch (e) {
               log.warn('plan-armed SDK downgrade for explicit normal turn failed', { error: String(e) });
             }
@@ -5847,7 +5860,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 路由错配。与其它 post-hoc setPermissionMode 调用点(plan 审批后 / plan turn 结束)
           // 同款 best-effort:失败只 warn,不回退已成功的切模,让持久配置与运行态保持一致
           // (codex review)。
-          await q.setPermissionMode(toSdkPermissionMode('auto')).catch((e) => {
+          await setQuerySdkPermissionMode(q, toSdkPermissionMode('auto')).catch((e) => {
             log.warn('setModel: auto-review permission-mode reapply failed; model switch kept', {
               model: newModel,
               error: String(e),
@@ -5967,7 +5980,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         log.debug('setPermissionMode', { from: previousPermissionMode, to: newMode, sdk: sdkMode, dismissedAs: moreOpen ? 'allow' : 'deny', controlRequestsBlocked: isControlBlocked });
         if (!isControlBlocked) {
           try {
-            await q.setPermissionMode(sdkMode);
+            await setQuerySdkPermissionMode(q, sdkMode);
           } catch (error) {
             // SDK 控制 RPC 失败时恢复旧事实源，但不能覆盖更晚的切档请求。
             if (
@@ -5992,7 +6005,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           && !planTurnActive
           && !controlRequestsBlocked()
         ) {
-          await q.setPermissionMode('default');
+          await setQuerySdkPermissionMode(q, 'default');
         }
         log.warn('Claude native Auto reviewer unavailable; keeping Auto with Cindy fallback', {
           providerId: mutableProviderId,
@@ -6023,7 +6036,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 重建时 buildQuery 以 effectiveSdkPermissionMode() 起档并回写 sdkInPlanMode
           return;
         }
-        await q.setPermissionMode(sdkMode);
+        await setQuerySdkPermissionMode(q, sdkMode);
         sdkInPlanMode = sdkMode === 'plan';
       },
 
