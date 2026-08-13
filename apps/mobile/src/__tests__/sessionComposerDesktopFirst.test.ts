@@ -115,7 +115,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputSource).toContain('cardActive={composerCardActive}');
     expect(composerInputSource).toContain('leading={renderComposerCompactLeading()}');
     expect(source).toContain('const renderComposerCompactLeading = () => (');
-    expect(source).toContain('{renderComposerAttachmentButton()}');
+    expect(source).toContain('styles.composerCompactAttachmentHit');
+    expect(source).toContain('pointerEvents="none"');
+    expect(source).toContain('testID="session.attachmentToggleButton"');
+    expect(source).toContain('height: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(source).toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
     expect(composerInputSource).toContain('toolbar={renderComposerToolbar()}');
     expect(source).toContain('const renderComposerToolbar = () => (');
     expect(attachmentButtonSource).toContain('<Plus');

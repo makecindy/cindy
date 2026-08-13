@@ -1597,7 +1597,11 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('trailing={composerCardActive || !composerShowCreateButton ? null : renderCreateButton()}');
     expect(newComposerSource).toContain('leading={renderComposerCompactLeading()}');
     expect(newSource).toContain('const renderComposerCompactLeading = () => (');
-    expect(newSource).toContain('{renderAttachmentToggleButton()}');
+    expect(newSource).toContain('styles.composerCompactAttachmentHit');
+    expect(newSource).toContain('pointerEvents="none"');
+    expect(newSource).toContain('testID="newSession.attachmentToggleButton"');
+    expect(newSource).toContain('height: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(newSource).toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
     expect(newSource).toContain('const renderComposerToolbar = () => (');
     expect(newSource).toContain('PaperPlaneIcon');
     expect(newSource).not.toContain('ArrowUp');

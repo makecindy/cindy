@@ -3786,7 +3786,38 @@ export default function NewRemoteSessionScreen() {
   // 卡片态仍由 renderComposerToolbar() 渲染同一入口。
   const renderComposerCompactLeading = () => (
     <View style={styles.composerCompactLeading}>
-      {renderAttachmentToggleButton()}
+      <Pressable
+        accessibilityLabel={t('session.common.openContextPanel')}
+        accessibilityRole="button"
+        disabled={creating}
+        onPress={() => {
+          setModelSheetOpen(false);
+          setAgentPickerOpen(false);
+          setPermissionSheetOpen(false);
+          setWorktreeBranchSheetOpen(false);
+          setContextSheetView('main');
+          setContextSheetOpen(true);
+        }}
+        style={({ pressed }) => [
+          styles.composerCompactAttachmentHit,
+          pressed && styles.pressed,
+        ]}
+        testID="newSession.attachmentToggleButton"
+      >
+        <View
+          pointerEvents="none"
+          style={[
+            styles.composerIconButton,
+            contextSheetOpen && styles.composerIconButtonActive,
+          ]}
+        >
+          <Plus
+            color={contextSheetOpen ? colors.textPrimary : colors.textSecondary}
+            size={iconSize.sm}
+            strokeWidth={iconStroke.regular}
+          />
+        </View>
+      </Pressable>
       {renderComposerCollapsedAttachmentBadge()}
     </View>
   );
@@ -6536,6 +6567,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.xs,
     marginRight: spacing.xs,
+  },
+  // 收起态可见加号仍是 34pt;不可见外层自己撑到 44×44。
+  // hitSlop 越不过父 View 边界,不能拿它补主操作热区。
+  composerCompactAttachmentHit: {
+    alignItems: 'center',
+    height: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+    justifyContent: 'center',
+    width: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
   },
   composerIconButtonActive: {
     backgroundColor: colors.surfaceChip,
