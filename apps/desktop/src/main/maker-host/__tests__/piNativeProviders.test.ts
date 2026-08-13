@@ -47,7 +47,6 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         runtimes: {
           pi: piRuntime({
             baseUrl: 'https://api.deepseek.com',
-            wireProtocol: 'openai-chat',
             piCatalogProviderId: 'deepseek',
             models: [
               { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },

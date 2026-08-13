@@ -60,6 +60,25 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
     ).toBeUndefined();
   });
 
+  it('treats an omitted Pi protocol as the effective openai-chat default', () => {
+    const openAiChat = {
+      ...official,
+      wireProtocol: 'openai-chat' as const,
+    };
+    expect(piCatalogProviderIdAfterRouteEdit('pi', openAiChat, {
+      ...openAiChat,
+      wireProtocol: undefined,
+    })).toBe('example');
+    expect(piCatalogProviderIdAfterRouteEdit('pi', {
+      ...openAiChat,
+      wireProtocol: undefined,
+    }, openAiChat)).toBe('example');
+    expect(piCatalogProviderIdAfterRouteEdit('pi', openAiChat, {
+      ...openAiChat,
+      wireProtocol: 'anthropic-messages',
+    })).toBeUndefined();
+  });
+
   it('clears the marker after any model metadata is edited', () => {
     const withModels: {
       baseUrl: string;

@@ -24,6 +24,7 @@ import type {
   ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 import {
+  effectivePiWireProtocol,
   findReservedOAuthExtraParam,
   isLoopbackProviderUrl,
   isProviderRequestPath,
@@ -497,7 +498,8 @@ function invalidateEditedPiCatalogMarker(
   ) return next;
   const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
   const unchanged = normalizeBaseUrl(previousPi.baseUrl) === normalizeBaseUrl(nextPi.baseUrl)
-    && previousPi.wireProtocol === nextPi.wireProtocol
+    && effectivePiWireProtocol(previousPi.wireProtocol)
+      === effectivePiWireProtocol(nextPi.wireProtocol)
     && preservesPiCatalogModels(previousPi.models, nextPi.models);
   if (unchanged) return next;
   const pi = { ...nextPi };

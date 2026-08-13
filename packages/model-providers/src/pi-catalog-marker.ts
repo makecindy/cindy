@@ -1,4 +1,11 @@
-import type { ProviderRuntimeModelConfig } from './types.js';
+import type { ProviderRuntimeModelConfig, ProviderWireProtocol } from './types.js';
+
+/** Pi treats an omitted wire protocol as its effective OpenAI Chat default. */
+export function effectivePiWireProtocol(
+  value: ProviderWireProtocol | undefined,
+): ProviderWireProtocol {
+  return value ?? 'openai-chat';
+}
 
 function projectedPiCatalogFields(model: ProviderRuntimeModelConfig): object {
   return {

@@ -13,6 +13,7 @@ import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
 
 import {
   DEFAULT_CUSTOM_CONTEXT_WINDOW,
+  effectivePiWireProtocol,
   PI_REASONING_EFFORTS,
   preservesPiCatalogModels,
 } from '@cindy/model-providers';
@@ -28,7 +29,7 @@ import type {
 
 interface PiCatalogRouteDraft {
   baseUrl: string;
-  wireProtocol: ProviderWireProtocol;
+  wireProtocol?: ProviderWireProtocol;
   piCatalogProviderId?: string;
   models?: readonly ProviderRuntimeModelConfig[];
 }
@@ -43,7 +44,8 @@ export function piCatalogProviderIdAfterRouteEdit(
   if (agent !== 'pi' || !marker || marker !== previous.piCatalogProviderId) return marker;
   const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
   return normalizeBaseUrl(previous.baseUrl) === normalizeBaseUrl(next.baseUrl)
-    && previous.wireProtocol === next.wireProtocol
+    && effectivePiWireProtocol(previous.wireProtocol)
+      === effectivePiWireProtocol(next.wireProtocol)
     && preservesPiCatalogModels(previous.models, next.models)
     ? marker
     : undefined;

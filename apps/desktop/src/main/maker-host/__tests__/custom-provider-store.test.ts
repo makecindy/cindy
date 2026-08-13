@@ -435,6 +435,27 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       ...original,
       name: 'Renamed provider only',
     }))?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    const defaultProtocolRoundTrip: CustomProviderConfig = {
+      ...original,
+      runtimes: {
+        ...original.runtimes,
+        pi: { ...original.runtimes.pi!, wireProtocol: undefined },
+      },
+    };
+    expect((await updateCustomProvider('official-pi-edited', defaultProtocolRoundTrip))
+      ?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    expect((await updateCustomProvider('official-pi-edited', {
+      ...defaultProtocolRoundTrip,
+      runtimes: {
+        ...defaultProtocolRoundTrip.runtimes,
+        pi: {
+          ...defaultProtocolRoundTrip.runtimes.pi!,
+          wireProtocol: 'anthropic-messages',
+        },
+      },
+    }))?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+
+    await updateCustomProvider('official-pi-edited', original);
     expect((await updateCustomProvider('official-pi-edited', edited))?.runtimes.pi)
       .not.toHaveProperty('piCatalogProviderId');
 
