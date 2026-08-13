@@ -1016,13 +1016,17 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const item = summary({
       currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
     });
-    const installed = manifest(item.ghostId, '1.0.0', ['notify', 'fs']);
+    const installed = {
+      ...manifest(item.ghostId, '1.0.0', ['notify', 'fs']),
+      manual: { arbitrary: 'legacy metadata' },
+    };
+    const normalizedInstalled = manifest(item.ghostId, '1.0.0', ['notify', 'fs']);
     const installedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-installed-ghost-'));
     roots.push(installedDir);
     fs.writeFileSync(path.join(installedDir, 'ghost.json'), JSON.stringify(installed));
     runtime.ghosts = [
       {
-        manifest: { ...installed, name: 'Localized Test Plugin' },
+        manifest: { ...normalizedInstalled, name: 'Localized Test Plugin' },
         dir: installedDir,
         enabled: true,
       },
@@ -1037,14 +1041,17 @@ describe('PluginMarketService migration and defaultInstall', () => {
       ...recordForTest(item),
       releaseId: 'release-1',
       version: '1.0.0',
-      manifestDigest: ghostManifestDigest(installed),
+      manifestDigest: ghostManifestDigest(normalizedInstalled),
     });
 
     await h.service.install(item.id, reviewedInstallOptions(item));
 
     expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
-      permissionBaselineManifest: installed,
+      permissionBaselineManifest: expect.objectContaining({ id: installed.id }),
     });
+    expect(runtime.install.mock.calls[0]?.[1]?.permissionBaselineManifest).not.toHaveProperty(
+      'manual',
+    );
   });
 
   it('keeps a stale official record out of automatic updates but allows explicit replacement', async () => {

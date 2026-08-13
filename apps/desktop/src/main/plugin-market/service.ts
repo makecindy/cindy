@@ -70,8 +70,8 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   GHOST_MANIFEST_MAX_BYTES,
   readBoundedFileNoFollowWithStat,
-  readBoundedFileNoFollowSync,
 } from '../utils/readBoundedFile.js';
+import { readInstalledGhostManifest } from '../installedGhostManifest.js';
 import { withGhostInstallLock } from '../cindy-brain/ghostInstallLock.js';
 import { GhostPackagePermissionReviewRequiredError } from '../cindy-brain/packagePermissionReview.js';
 import { PluginMarketApi } from './api.js';
@@ -293,20 +293,8 @@ function stripDirectionalControls(text: string): string {
 /* eslint-enable no-control-regex */
 
 function installedGhostRawManifest(dir: string): GhostManifest | null {
-  try {
-    // 安装目录也可能被外部进程/同步盘改动,且本函数每次市场快照都会执行:
-    // 与市场目录同一把单句柄限量闸,拒链接、超限即拒,不让无界字节进快照路径。
-    const bytes = readBoundedFileNoFollowSync(
-      path.join(dir, 'ghost.json'),
-      GHOST_MANIFEST_MAX_BYTES,
-    );
-    if (bytes === null) return null;
-    const raw = JSON.parse(bytes.toString('utf8')) as unknown;
-    const validated = validateGhostManifest(raw);
-    return validated.ok ? validated.manifest : null;
-  } catch {
-    return null;
-  }
+  const parsed = readInstalledGhostManifest(dir, GHOST_MANIFEST_MAX_BYTES);
+  return parsed.ok ? parsed.manifest : null;
 }
 
 function installedGhostRawManifestDigest(dir: string): string | null {

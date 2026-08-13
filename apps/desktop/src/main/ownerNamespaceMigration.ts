@@ -7,10 +7,10 @@ import path from 'node:path';
 import { dataOwnerStorageKey, type AppSessionMode } from './appSessionState.js';
 import { createLogger } from './logger.js';
 import {
-  GHOST_MANIFEST_FILE,
   isOfficialGhostId,
-  validateGhostManifest,
+  GHOST_INSTALL_MANIFEST_MAX_BYTES,
 } from '../shared/ghost.js';
+import { readInstalledGhostManifest } from './installedGhostManifest.js';
 import {
   NO_LEGACY_GHOST_RECOVERY,
   type LegacyGhostRecoveryStatus,
@@ -654,13 +654,7 @@ function readValidLegacyGhostDir(
   dir: string,
   expectedId: string,
 ): Pick<LegacyGhostDir, 'command'> | null {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(fsSync.readFileSync(path.join(dir, GHOST_MANIFEST_FILE), 'utf-8'));
-  } catch {
-    return null;
-  }
-  const parsed = validateGhostManifest(raw);
+  const parsed = readInstalledGhostManifest(dir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
   if (!parsed.ok || parsed.manifest.id !== expectedId) return null;
   return { command: parsed.manifest.command ?? null };
 }

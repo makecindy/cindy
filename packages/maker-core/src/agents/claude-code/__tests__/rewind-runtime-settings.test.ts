@@ -32,6 +32,7 @@ const sdkMock = vi.hoisted(() => ({
 
 const imageResizerMock = vi.hoisted(() => ({
   process: vi.fn(async (p: string) => p),
+  validateBuffer: vi.fn(async () => true),
 }));
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({

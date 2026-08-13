@@ -344,6 +344,152 @@ describe('ghost · 清单校验', () => {
     }).ok).toBe(false);
   });
 
+  it('无 manual 时保持 origin/main 的 locale 路径兼容语义', () => {
+    expect(
+      validateGhostManifest({
+        ...goodManifest(),
+        entry: 'assets/main.js',
+        locales: { en: 'assets/main.js/en.json' },
+      }).ok,
+    ).toBe(true);
+
+    expect(
+      validateGhostManifest({
+        ...goodManifest(),
+        slots: ['panel', 'skill'],
+        locales: { en: 'skills/helper.json' },
+        skill: {
+          items: [
+            {
+              dir: 'skills/helper.json/subskill',
+              name: 'helper',
+              description: 'Help with example tasks.',
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('有 manual 时拒绝 manual 目录与 locale 路径任一方向嵌套', () => {
+    const withPaths = (localePath: string, manualDir: string) =>
+      validateGhostManifest({
+        ...goodManifest(),
+        locales: { en: localePath },
+        manual: {
+          items: [{ dir: manualDir, name: 'guide', description: 'Manual guide.' }],
+        },
+      });
+
+    expect(withPaths('manual/guide/en.json', 'manual/guide').ok).toBe(false);
+    expect(withPaths('content/en.json', 'content/en.json/manual').ok).toBe(false);
+  });
+
+  it('有意允许不同逻辑名称的 manual 单元使用祖先/后代目录', () => {
+    const items = [
+      { dir: 'manual', name: 'overview', description: 'Overview.' },
+      { dir: 'manual/advanced', name: 'advanced', description: 'Advanced topics.' },
+    ];
+
+    expect(validateGhostManifest({ ...goodManifest(), manual: { items } })).toMatchObject({
+      ok: true,
+      manifest: expect.objectContaining({ manual: { items } }),
+    });
+  });
+
+  it('manual 目录与声明文件路径任一方向嵌套时拒绝', () => {
+    const withManual = (manifest: Record<string, unknown>, dir: string) =>
+      validateGhostManifest({
+        ...manifest,
+        manual: { items: [{ dir, name: 'guide', description: 'Manual guide.' }] },
+      });
+    const declaredFileCases: Array<{
+      label: string;
+      manifest: Record<string, unknown>;
+      dir: string;
+    }> = [
+      { label: 'ghost.json', manifest: goodManifest(), dir: 'ghost.json' },
+      {
+        label: 'entry',
+        manifest: { ...goodManifest(), entry: 'manual/entry/main.js' },
+        dir: 'manual/entry',
+      },
+      {
+        label: 'icon',
+        manifest: { ...goodManifest(), icon: 'manual/icon/icon.png' },
+        dir: 'manual/icon',
+      },
+      {
+        label: 'settingsHtml',
+        manifest: { ...goodManifest(), settingsHtml: 'manual/settings/settings.html' },
+        dir: 'manual/settings',
+      },
+      {
+        label: 'panel.html',
+        manifest: {
+          ...goodManifest(),
+          panel: {
+            title: 'Hello',
+            html: 'manual/panel/panel.html',
+            minWidth: 240,
+            defaultFraction: 0.18,
+          },
+        },
+        dir: 'manual/panel',
+      },
+      {
+        label: 'node.entry',
+        manifest: {
+          ...goodManifest(),
+          slots: ['panel', 'node'],
+          node: { entry: 'manual/node/main.cjs', protocol: 'mcp-stdio' },
+        },
+        dir: 'manual/node',
+      },
+      {
+        label: 'node.entries',
+        manifest: {
+          ...goodManifest(),
+          slots: ['panel', 'node'],
+          node: {
+            entry: 'node/main.cjs',
+            entries: ['manual/node-extra/child.cjs'],
+            protocol: 'mcp-stdio',
+          },
+        },
+        dir: 'manual/node-extra',
+      },
+    ];
+
+    for (const { label, manifest, dir } of declaredFileCases) {
+      expect(withManual(manifest, dir), label).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('与插件声明文件路径'),
+      });
+    }
+
+    expect(
+      withManual({ ...goodManifest(), entry: 'assets/main.js' }, 'assets/main.js/manual'),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('与插件声明文件路径'),
+    });
+    expect(
+      withManual({ ...goodManifest(), entry: 'Manual/Case/main.js' }, 'manual/case'),
+    ).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining('与插件声明文件路径'),
+    });
+    expect(withManual({ ...goodManifest(), entry: 'src/main.js' }, 'manual/guide')).toMatchObject({
+      ok: true,
+      manifest: expect.objectContaining({
+        manual: {
+          items: [{ dir: 'manual/guide', name: 'guide', description: 'Manual guide.' }],
+        },
+      }),
+    });
+  });
+
   it('locale description / whenToUse 共用本地协议包字符上限', () => {
     const manifest = validateGhostManifest({
       ...goodManifest(),

@@ -1,7 +1,11 @@
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
+import {
+  GhostManualSummary,
+  GhostPermissionList,
+  GhostUpdateReview,
+} from '@/cindy-brain/GhostPermissionList';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { ghostPermissionItems } from '../../../shared/ghost';
@@ -55,9 +59,15 @@ export function PluginMarketPermissionReviewHost() {
                       : 'settings.ghosts.market.customInstallConfirmDescription',
                   ),
               content: review.permissionDiff ? (
-                <GhostUpdateReview diff={review.permissionDiff} />
+                <GhostUpdateReview
+                  diff={review.permissionDiff}
+                  manualCount={review.manifest.manual?.items.length ?? 0}
+                />
               ) : (
-                <GhostPermissionList items={ghostPermissionItems(review.manifest)} />
+                <div>
+                  <GhostManualSummary count={review.manifest.manual?.items.length ?? 0} />
+                  <GhostPermissionList items={ghostPermissionItems(review.manifest)} />
+                </div>
               ),
               maxWidth: 520,
               confirmText: isUpdate

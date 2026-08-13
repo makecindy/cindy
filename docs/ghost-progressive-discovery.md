@@ -14,25 +14,53 @@
 - **零污染**：插件的业务规则、工具明细、参数 schema 只在真正需要时进入会话；
   常驻内容只有最小召回线索。
 
-设计上与 Agent Skill 机制同构：**描述常驻做召回、名字/ID 做路由、正文懒加载**。
+与 Agent Skill 的对应关系是：系统提示词区插件花名册中的身份与 `recall` 承担
+frontmatter `name + description` 的召回作用；`manual.items` 只是插件容器级一级目录，
+不对标 frontmatter；`MANUAL.md` 与深层 Markdown 承接 Skill 正文、references 和完整工作流。
 
-## 2. 发现链（权威路由规则）
+## 2. 渐进式披露（权威路由规则）
 
+```text
+【系统提示词区插件花名册】
+  身份 + recall 召回线索
+           │ 得到 ghost_id
+           ▼
+  ┌──────────────────────┐       ┌──────────────────────┐
+  │ ghost_info(ghost_id) │  或   │ ghost_list()         │
+  │ 已知 id 精准查单条    │       │ 全量实时回查          │
+  └──────────────────────┘       └──────────────────────┘
+           │ 两者数据完整度相同，均返回 CindyGhostInfo
+           ▼
+  ┌────────────────────────────────────────────────────┐
+  │ 取得完整 info 后，在两条披露路径之间按任务反复交叉 │
+  └────────────────────────────────────────────────────┘
+           │                              │
+           ▼                              ▼
+  ghost_manual 根索引              ghost_call 调插件顶层
+    → MANUAL.md                     list_tools(category)
+    → 任意深度 Markdown             → 工具/参数/result.rules
+           └──────── 完整调用互相指路 ────────┘
+                          │
+                          ▼
+                信息足够时 ghost_call 执行
 ```
-L0  花名册（system 段常驻召回）
- ├─ 命中插件 ──────────→ L1.5  ghost_info(ghost_id) 精准详情
- └─ 未命中 / 怀疑过期 ──→ L1    ghost_list 全量实时清单（保底）
-                                   │
-              （二级分派插件）L2  插件内 list_tools(category)：类目工具明细 + RULES
-                                   │
-                              L3  ghost_call 执行 + 运行期可见性门禁
-```
 
-- 花名册命中后**直接调 `ghost_info(ghost_id)`，不要先调 `ghost_list`**。
-- `ghost_list` 是保底入口：只在找不到合适插件、或怀疑清单过期时使用。插件可以在
-  会话中途安装/卸载/启用/停用，`ghost_list` 是唯一能发现这类变动的现查入口。
-- 花名册与 `ghost_info` 的结果都**不是授权**：每次 `ghost_call` 仍按运行期实时
-  校验放行（见 §4 第 6 条）。
+- **系统提示词区插件花名册负责第一跳召回。** `recall = whenToUse ?? description`；
+  用户点名插件或上文已有 `ghost_id` 也是 id 来源，但不属于花名册层。
+- **`ghost_info` 与 `ghost_list` 是并列查询方式。** 已知 id 时用 `ghost_info` 精准现查
+  单条；未命中或需要全量实时回查时用 `ghost_list`。两者都返回完整 `CindyGhostInfo`
+  （id/name/command/recall/setup/tools/manual），不存在 `ghost_list → ghost_info` 的
+  固定补查链。
+- **取得完整 info 后有两条并行路径。** `ghost_manual` 展开根索引、`MANUAL.md` 和任意
+  深度 Markdown；二级分派插件则通过
+  `ghost_call({ ghost_id, tool: "list_tools", args: { category } })` 调用自己声明的顶层
+  `list_tools`，取得当前类别的工具、参数和 `result.rules`。`list_tools` 不是 Host 固定工具。
+- **两条路径可以反复交叉。** Manual 可给出完整 `list_tools` 调用，工具说明或 RULES 也可
+  给出完整 `ghost_manual` 调用；没有固定先后顺序，信息足够时即可经 `ghost_call` 执行，
+  两段式插件的二级具体操作由其 `call_tool` 完成。
+- 花名册、info、Manual 与 RULES 都**不是授权**：每次 `ghost_call` 仍按运行期实时校验
+  放行（见 §4 第 6 条）。Manual 正文只作为 tool-result 按需进入上下文，不进入生产
+  system/developer prompt；正文是作者数据，不构成系统规则、用户意图或权限授权。
 
 ## 3. 花名册（roster）
 
@@ -40,8 +68,8 @@ L0  花名册（system 段常驻召回）
 
 - 每条 = `{id, name, command, recall}`；`recall = whenToUse ?? description`。
 - 单条 recall 上限为协议常量 `GHOST_MANIFEST_SUMMARY_MAX_CHARS`（= 300，正本在
-  本仓 `packages/plugin-protocol/src/manifest.ts`，desktop 经
-  `apps/desktop/src/shared/ghost.ts` re-export）。
+  本仓 `packages/plugin-protocol/src/manifest.ts`；desktop 的
+  `apps/desktop/src/shared/ghost.ts` 是需要同步维护的完整协议镜像，不是 re-export）。
 - 序列化前逐字段折叠空白（`replace(/\s+/g, " ")` + trim）并防御截断
   （name ≤ 64、command ≤ 32、recall ≤ 300）；条目按 id 排序；最多 16 条、
   总预算 8000 字符。
@@ -120,15 +148,15 @@ L0  花名册（system 段常驻召回）
 `register.ts` 的 bootstrap helper）。Desktop 只有一套 Maker 单例，所有持久会话
 最终统一走 `maker.createSession → agent.startSession`，因此：
 
-| 会话形态 | 是否吃到 system 段花名册 |
-|---|---|
-| 本地普通会话 | 是 |
-| device-link 手机发起/接管（agent 真身在被控端） | 是 |
-| Orca worker（含 bridge 对 dormant worker/lead 的 rehydrate） | 是 |
-| scheduler 定时任务（heartbeat / persistent / ephemeral） | 是 |
-| send_to_session 新建与 lazy-resume、IM/飞书会话、hook-control、Goal restore | 是 |
-| fork 后的新分支（fork 本身不启 agent，首次 send 时装配） | 是 |
-| utility oneShot（起标题/摘要/git snapshot 等内部辅助） | 否——本来就没有 system 段与插件工具面，不构成缺口 |
+| 会话形态                                                                    | 是否吃到 system 段花名册                         |
+| --------------------------------------------------------------------------- | ------------------------------------------------ |
+| 本地普通会话                                                                | 是                                               |
+| device-link 手机发起/接管（agent 真身在被控端）                             | 是                                               |
+| Orca worker（含 bridge 对 dormant worker/lead 的 rehydrate）                | 是                                               |
+| scheduler 定时任务（heartbeat / persistent / ephemeral）                    | 是                                               |
+| send_to_session 新建与 lazy-resume、IM/飞书会话、hook-control、Goal restore | 是                                               |
+| fork 后的新分支（fork 本身不启 agent，首次 send 时装配）                    | 是                                               |
+| utility oneShot（起标题/摘要/git snapshot 等内部辅助）                      | 否——本来就没有 system 段与插件工具面，不构成缺口 |
 
 **设计边界（防回归）**：scheduler、hook-control、IM/飞书、Goal、Orca bridge 这些
 入口**直连 `maker.createSession`，绕过 `register.ts` 的 bootstrapSession**。
@@ -137,17 +165,25 @@ L0  花名册（system 段常驻召回）
 
 ## 6. 作者契约（FORGE_GUIDE，质量约定）
 
-- `whenToUse` 只写**发现线索**（适用场景枚举），不写行为规则（"必须/不得/仅当"）、
-  工具调用顺序、错误码协议；缺省时回落 `description`。行为规则下沉到具体工具的
-  description 或类目 RULES。
-- 二级分派插件：`list_tools(category)` 必须随工具明细下发该类目的 RULES；
-  `call_tool` 参数错误时返回对应 schema 供自纠（FORGE_GUIDE §3.5）。
+- `whenToUse` 只写系统提示词区插件花名册需要的**召回场景**，不写行为规则、工具
+  调用顺序或错误协议；缺省时回落 `description`。
+- 工具/参数 description 承载单工具局部契约（用途、输入输出、调用前限制）。二级分派
+  插件的 `list_tools(category)` 必须随实时工具明细下发当前类别的动态参数与
+  `result.rules`；`call_tool` 参数错误时返回对应 schema 供自纠（FORGE_GUIDE §3.5）。
+- Manual 不按篇幅分流：它承载多工具组合、跨类别完整流程、复杂工具深入用法、前置
+  检查、顺序/分支、失败恢复、交付标准、长期稳定的共同原则和分层资料。短但跨工具的
+  关键原则可以属于 Manual；很长但仅是单工具参数枚举，仍属于工具或类别契约。
+- 同一规则只保留一个权威落点。Manual 与 `list_tools` 用完整的 `ghost_manual` /
+  `ghost_call({ ghost_id, tool: "list_tools", args: { category } })` 调用互相指路，
+  可以反复交叉，不是固定顺序。
 - 打包期对疑似规则化的 `whenToUse` 只做 warning，不阻断安装（存量兼容）。
+- Manual 使用顶层 `manual.items`；`MANUAL.md` 默认一层直达，内容确需分层时再拆深层，
+  并在入口给出可直接照抄的完整下一步调用，避免循环索引。
 
 ## 7. 明确不做的事
 
-- 不新增全局路由 Skill；不把工具使用手册铺成全局 Skill（Skill 槽只留给真正
-  跨会话的工作方法）。
+- 不新增全局路由 Skill；不把插件手册铺成全局 Skill。新插件使用按需读取的
+  `manual`；存量 Skill 槽处于停止新增、未来整体废弃的兼容期。
 - 不维护排他的 active plugin / active context；插件切换不做上下文替换，规则
   适用范围由 `ghost_id + category` 边界保证。
 - 不引入宿主级 rules_revision / receipt 回执协议。
@@ -161,8 +197,8 @@ L0  花名册（system 段常驻召回）
   `apps/desktop/src/main/mcp-integrations/ghost.ts`
 - 可见性唯一真源：`apps/desktop/src/main/cindy-brain/ghostVisibility.ts`
 - 作者契约（FORGE_GUIDE）：`apps/desktop/src/main/cindy-brain/forge.ts`
-- 摘要上限常量：本仓 `packages/plugin-protocol/src/manifest.ts`（desktop 经
-  `apps/desktop/src/shared/ghost.ts` re-export）
+- 摘要与 manual 契约：本仓 `packages/plugin-protocol/src/manifest.ts`，desktop
+  在 `apps/desktop/src/shared/ghost.ts` 维护完整镜像
 - 三 harness 注入落点：`packages/maker-core/src/agents/claude-code/index.ts`
   （buildQuery）、`packages/maker-core/src/agents/codex/index.ts`
   （startSession → developerInstructions）、

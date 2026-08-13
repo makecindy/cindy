@@ -20,12 +20,21 @@ interface WindowControlsProps {
    * to match the Stone/Silver tones from docs/design-rules/cindy-design-system.md.
    */
   iconClassName?: string;
+  /** Override the default minimize action for an auxiliary window. */
+  onMinimize?: () => void | Promise<void>;
+  /** Hide minimize when the current surface explicitly opts out of that action. */
+  showMinimize?: boolean;
+  /** Override the default close action for an auxiliary window. */
+  onClose?: () => void | Promise<void>;
 }
 
 const DEFAULT_ICON_CLASS = 'text-titlebar-icon';
 
 export function WindowControls({
   iconClassName = DEFAULT_ICON_CLASS,
+  onMinimize,
+  showMinimize = true,
+  onClose,
 }: WindowControlsProps = {}) {
   const [showCloseDialog, setShowCloseDialog] = useState(false);
   const [showWindowsCloseBehaviorDialog, setShowWindowsCloseBehaviorDialog] = useState(false);
@@ -69,10 +78,18 @@ export function WindowControls({
 
   const controlBase = cn(
     'flex items-center justify-center',
-    'h-9 w-[46px]',
+    'h-7 w-7',
     iconClassName,
     'transition-colors',
   );
+
+  const handleMinimizeClick = (): void => {
+    if (onMinimize) {
+      void onMinimize();
+      return;
+    }
+    window.electronAPI.windowMinimize();
+  };
 
   // 进入 closing 态 + 调 main 端关闭。同时被"点 X 无 in-flight 直走"和 ConfirmDialog
   // 的 onConfirm 调用,共用一份语义。幂等: closingRef 守住重复调用。
@@ -129,6 +146,10 @@ export function WindowControls({
   // splash / login 阶段 maker-ipc handler 还没注册, invoke 会 reject ——
   // catch 后当作 false 处理 (那个阶段本来就不可能有 in-flight)。
   const handleCloseClick = async (): Promise<void> => {
+    if (onClose) {
+      await onClose();
+      return;
+    }
     // 「在新窗口打开」的副窗口 / 右侧栏子窗口 / 插件面板子窗口:关闭只关本窗
     // (会话活在主进程,不受影响),不退出 app,也没有 disposer chain,所以跳过
     // in-flight 确认框 + 全屏 closing overlay,直接调 windowClose(main 端按
@@ -161,14 +182,16 @@ export function WindowControls({
 
   return (
     <>
-      <div className="flex">
-        <button
-          className={cn(controlBase, 'hover:bg-titlebar-control-hover')}
-          onClick={() => window.electronAPI.windowMinimize()}
-          aria-label={t('titleBar.minimize')}
-        >
-          <Minus size={16} />
-        </button>
+      <div className="flex gap-0.5">
+        {showMinimize && (
+          <button
+            className={cn(controlBase, 'hover:bg-titlebar-control-hover')}
+            onClick={handleMinimizeClick}
+            aria-label={t('titleBar.minimize')}
+          >
+            <Minus size={14} />
+          </button>
+        )}
         <button
           className={cn(controlBase, 'hover:bg-titlebar-control-hover')}
           onClick={() => window.electronAPI.windowMaximize()}
@@ -182,7 +205,7 @@ export function WindowControls({
           aria-label={t('titleBar.close')}
           disabled={closing}
         >
-          <X size={16} />
+          <X size={14} />
         </button>
       </div>
       <ConfirmDialog

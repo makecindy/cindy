@@ -40,6 +40,8 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
+import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { cn } from '@/lib/utils';
@@ -71,6 +73,10 @@ interface TabBarProps {
   onMaximize?: () => void;
   /** 关闭整个 RSB 的 toggle(仅 showWindowControls=true 时使用)。 */
   onCloseSidebar?: () => void;
+  /** 固定显示 / 聚焦入口；与关闭按钮分离，点击已展开侧栏时为 no-op。 */
+  onShowSidebar?: () => void;
+  /** 当前面板所在侧，用于固定入口图标方向。 */
+  panelSide?: 'left' | 'right';
   /** maximize 当前态(Phase 6)— 用来切换按钮图标 Maximize2 ↔ Minimize2,
    *  让用户视觉上知道按一下是"退出最大化"。 */
   isMaximized?: boolean;
@@ -199,6 +205,8 @@ export function TabBar({
   showWindowControls,
   onMaximize,
   onCloseSidebar,
+  onShowSidebar,
+  panelSide = 'right',
   isMaximized,
   onCloseOthers,
   onCloseAll,
@@ -268,6 +276,14 @@ export function TabBar({
             >
               <PanelRightClose size={15} />
             </ChromeIconButton>
+          )}
+          {onShowSidebar && (
+            <RightSidebarToggle
+              action="show"
+              collapsed={false}
+              onToggle={onShowSidebar}
+              side={panelSide}
+            />
           )}
         </div>
       )}
@@ -638,17 +654,5 @@ function TabPill({
         <X size={10} />
       </button>
     </div>
-  );
-}
-
-function ChromeIconButton({ children, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button
-      type="button"
-      {...rest}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-    >
-      {children}
-    </button>
   );
 }

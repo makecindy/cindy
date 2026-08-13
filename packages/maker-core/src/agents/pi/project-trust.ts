@@ -59,6 +59,30 @@ function normalizePath(
   return null;
 }
 
+/** Compare two host canonical paths with the exact platform identity used by approval keys. */
+export function piCanonicalPathsEqual(
+  identity: Pick<PiProjectIdentityResolution, 'platform' | 'windowsCaseComparison'>,
+  first: string,
+  second: string,
+): boolean {
+  const left = normalizePath(first, identity.platform, identity.windowsCaseComparison);
+  const right = normalizePath(second, identity.platform, identity.windowsCaseComparison);
+  return left !== null && right !== null && left === right;
+}
+
+/** Check containment using the same canonical comparison identity as approval keys. */
+export function piCanonicalPathIsWithin(
+  identity: Pick<PiProjectIdentityResolution, 'platform' | 'windowsCaseComparison'>,
+  root: string,
+  candidate: string,
+): boolean {
+  const normalizedRoot = normalizePath(root, identity.platform, identity.windowsCaseComparison);
+  const normalizedCandidate = normalizePath(candidate, identity.platform, identity.windowsCaseComparison);
+  if (normalizedRoot === null || normalizedCandidate === null) return false;
+  const rootPrefix = normalizedRoot.endsWith('/') ? normalizedRoot : `${normalizedRoot}/`;
+  return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(rootPrefix);
+}
+
 function hasLosslessCanonicalEncoding(
   identity: Pick<PiProjectIdentityResolution, 'platform' | 'canonicalPathEncoding' | 'windowsCaseComparison'>,
 ): boolean {

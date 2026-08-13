@@ -7,7 +7,7 @@
  * Plugin 解耦原则:壳子 / TabBar / 持久层永远不感知具体 kind,只通过 registry 拿 plugin 渲染。
  */
 
-import type { FC } from 'react';
+import type { ComponentType, FC, LazyExoticComponent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import type { TabCloseInterceptor } from './store';
@@ -101,6 +101,13 @@ export interface TabKindHostContext {
   setCloseInterceptor: (interceptor: TabCloseInterceptor | null) => () => void;
 }
 
+export interface TabKindBodyProps<TState = unknown> {
+  state: TState;
+  ctx: TabKindHostContext;
+  active?: boolean;
+  shellVisible?: boolean;
+}
+
 export interface TabPillRenderProps<TState = unknown> {
   state: TState;
   sessionId: string | null;
@@ -131,12 +138,9 @@ export interface TabKindPlugin<TState = unknown> {
   /** 真正的内容区。每个 tab 实例独立挂载,display:none 切换可见性,不卸载。
    *  `active` 标记当前是否是顶层激活 tab(用户在它上面)—— plugin 据此分支处理
    *  焦点路由 / 媒体 mute / 性能节流等。可选,不读默认忽略。 */
-  TabBody: FC<{
-    state: TState;
-    ctx: TabKindHostContext;
-    active?: boolean;
-    shellVisible?: boolean;
-  }>;
+  TabBody:
+    | ComponentType<TabKindBodyProps<TState>>
+    | LazyExoticComponent<ComponentType<TabKindBodyProps<TState>>>;
   /** 新建 tab 时的初始状态(对应「+」点击 / EmptyState 快捷入口创建)。 */
   defaultState: () => TState;
   /** 持久化前的序列化(可选);默认 JSON.stringify,plugin 可剔除非持久字段。 */

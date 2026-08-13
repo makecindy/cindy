@@ -1076,6 +1076,7 @@ interface ElectronAPI {
   appDisplayVersion: string;
   appDisplayVersionDetail: string;
   preferredSystemLocale: ApplicationMenuLocale;
+  onLocaleChanged?: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
   getDeviceId: () => Promise<string>;
   windowMinimize: () => void;
   windowMaximize: () => void;
@@ -1787,6 +1788,10 @@ interface ElectronAPI {
     } | null>;
     /** 子窗口根组件挂载握手。 */
     ready: () => Promise<void>;
+    rendererReady: () => Promise<void>;
+    presentationReady: () => Promise<void>;
+    refreshContext: () => Promise<void>;
+    onVisibilityChanged: (cb: (payload: { visible: boolean }) => void) => () => void;
     /** 主窗把命令转发给子窗口(必要时 main 先开窗)。 */
     /** main 原子裁决 attached / routed / queued / stale-context。 */
     sendCommand: (
@@ -1838,6 +1843,12 @@ interface ElectronAPI {
     onStateChanged: (
       cb: (state: import('../shared/ghostPanelWindow').GhostPanelWindowsState) => void,
     ) => () => void;
+    rendererReady: () => Promise<void>;
+    presentationReady: () => Promise<void>;
+    onVisibilityChanged: (cb: (payload: { visible: boolean }) => void) => () => void;
+    onCloseRequested: (cb: () => void) => () => void;
+    onMinimizeRequested: (cb: () => void) => () => void;
+    resolveCloseRequest: (approved: boolean) => Promise<void>;
   };
 
   agentIsland: {

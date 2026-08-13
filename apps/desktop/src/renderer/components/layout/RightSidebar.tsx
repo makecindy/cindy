@@ -54,6 +54,8 @@ interface RightSidebarProps {
   isMac: boolean;
   /** 关闭整个 RightSidebar(走外层 toggle handler);仅 Win 端 TabBar 内会渲染对应按钮(Mac 走 MainLayout 浮层)。 */
   onCloseSidebar?: () => void;
+  /** 固定唤起入口；只负责显示已展开的侧栏，不承担关闭语义。 */
+  onShowSidebar?: () => void;
   /** 最大化 RightSidebar;Phase 6 接真行为,Phase 1 渲染按钮即可。Mac 走 MainLayout 浮层、Win 走 TabBar 右端。 */
   onMaximize?: () => void;
   /** 当前 cc-agent session id;由 MainLayout 持有,CCAgentSessionView ownsRoute 时通过 outlet context 推上来。
@@ -88,6 +90,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
     width,
     isMac,
     onCloseSidebar,
+    onShowSidebar,
     onMaximize,
     isMaximized,
     reserveLeftChromeActions = false,
@@ -262,6 +265,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
           isMac={isMac}
           unifiedTopbar={isMac}
           onCloseSidebar={onCloseSidebar}
+          onShowSidebar={onShowSidebar}
           onMaximize={onMaximize}
           isMaximized={isMaximized}
           reserveLeftChromeActions={reserveLeftChromeActions}

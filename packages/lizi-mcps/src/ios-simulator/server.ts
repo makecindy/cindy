@@ -56,7 +56,7 @@ export function createIOSSimulatorMcpServer(
 
   server.tool(
     "list_tools",
-    "Discover Cindy's embedded iOS Simulator tools. This is the preferred entry point for opening, running, testing, or debugging an iOS app in Cindy. Everything behind it acts on a simulated Apple device: never use it to browse the web, fetch HTTP data, or automate this Mac — use the browser, fetch, or computer tools for those. Do not use cindy_computer to launch macOS Simulator.app unless the user explicitly requests an external system window. Start with check_environment before selecting a device.",
+    "Discover Cindy's embedded iOS Simulator tools. Use this entry point when the embedded route is selected for opening, running, testing, or debugging an iOS app in Cindy. Everything behind it acts on a simulated Apple device: never use it to browse the web, fetch HTTP data, or automate this Mac — use the browser, fetch, or computer tools for those. Start with check_environment before selecting a device.",
     { category: z.enum(["ios_simulator"]).optional() },
     async () => {
       const availability = await deps.describeTools?.(readContext(options));

@@ -1,4 +1,5 @@
 import * as WebBrowser from 'expo-web-browser';
+import { requireNativeModule } from 'expo-modules-core';
 import {
   createContext,
   useCallback,
@@ -814,8 +815,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // 账号标识 —— initialized 变 true 时迁移必然已经落盘。
   useEffect(() => {
     if (!initialized) return;
-    if (user?.id) void setTapdbUser(user.id);
-    else void clearTapdbUser();
+    if (user?.id) {
+      void setTapdbUser(user.id);
+      // THEMIS 安全 SDK 上报绑定用户 ID(构建期注入原生模块,缺模块时静默降级)。
+      // 用 requireNativeModule 而非 require('xdt-themis'):前者是 expo-modules-core
+      // 的运行时查找(不受 Metro 静态解析影响),模块缺失时抛出可捕获的错误。
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call,@typescript-eslint/no-unsafe-member-access
+        requireNativeModule('XdtThemis').addCustomField('playerinfo', String(user.id));
+      } catch {
+        // xdt-themis is build-time injected; absent in dev / unconfigured regions.
+      }
+    } else {
+      void clearTapdbUser();
+      // 登出时清除 THEMIS 用户绑定,避免崩溃/强杀上报误归于上一个账号。
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call,@typescript-eslint/no-unsafe-member-access
+        requireNativeModule('XdtThemis').addCustomField('playerinfo', '');
+      } catch {
+        // xdt-themis is build-time injected; absent in dev / unconfigured regions.
+      }
+    }
   }, [initialized, user?.id]);
 
   // 词典缓存的落盘键按账号分区。登出清理是尽力而为的(索引可能读不出来),分区让
