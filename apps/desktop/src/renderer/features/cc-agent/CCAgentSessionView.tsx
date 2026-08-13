@@ -222,6 +222,7 @@ import { resolveCollabEntryPolicy } from './collabEntryPolicy';
 import { consumePendingRemoteCollab, enableRemoteCollabForSession } from './remoteCollabHandoff';
 import {
   dispatchDeferredUiAssignment,
+  getRecoverableDeferredUiAssignment,
   type DeferredUiAssignment,
 } from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
@@ -1430,6 +1431,31 @@ export function CCAgentSessionView({
     updateQueueItem,
     chatDisplaySnapshot,
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
+  useEffect(() => {
+    if (!sessionId || !isOrcaLeadSessionView || !historyLoaded) return;
+    const recoveredAssignment = getRecoverableDeferredUiAssignment({
+      leadSessionId: sessionId,
+      messages,
+      deviceId: remoteDeviceId,
+      remoteRouteUnavailable: remoteConn !== 'connected',
+    });
+    if (!recoveredAssignment) return;
+    // Renderer may exit after the Lead input becomes durable but before the accepted callback
+    // starts the second-stage Worker dispatch. A persisted pending receipt is safe to consume once
+    // this Lead's history has loaded a user row; the main-side gate still enforces snapshot time.
+    void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
+      log.error('recover persisted deferred Worker assignment after session mount failed', err);
+      toast.error(t('newChat.collaboration.assignmentFailed'));
+    });
+  }, [
+    historyLoaded,
+    isOrcaLeadSessionView,
+    messages,
+    remoteConn,
+    remoteDeviceId,
+    sessionId,
+    t,
+  ]);
   // 展示引擎可乐观跟随 intent；真实 event reducer 仍只读 store.agentKind。
   const displayAgentKind = agentSwitchIntent?.target ?? dbToMakerAgentKind(session?.agentKind);
   // 真实会话 agentKind(pending switch intent 不影响)——压缩分流必须用它,

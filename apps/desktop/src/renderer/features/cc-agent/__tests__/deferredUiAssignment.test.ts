@@ -8,6 +8,7 @@ vi.mock('@/lib/makerTransport', () => ({
 import {
   createDeferredUiAssignment,
   dispatchDeferredUiAssignment,
+  getRecoverableDeferredUiAssignment,
   rememberDeferredUiAssignment,
   setDeferredUiAssignmentOwner,
 } from '../deferredUiAssignment';
@@ -124,6 +125,102 @@ describe('deferredUiAssignment', () => {
 
     // 第一次 invoke 可能已被 host 接受，uncertain 状态不会在下一次自动重试。
     expect(localDispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('只用 snapshot 之后已持久化的 Lead user history 恢复 pending 凭据', () => {
+    rememberDeferredUiAssignment('lead-1', {
+      workerSessionId: 'worker-1',
+      initialTask: 'Review after restart',
+      snapshotBeforeMs: 1_000,
+    });
+
+    expect(
+      getRecoverableDeferredUiAssignment({
+        leadSessionId: 'lead-1',
+        messages: [
+          { role: 'user', createdAt: new Date(1_100).toISOString(), isPendingPersist: true },
+        ],
+        remoteRouteUnavailable: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      getRecoverableDeferredUiAssignment({
+        leadSessionId: 'lead-1',
+        messages: [
+          { role: 'user', createdAt: new Date(999).toISOString() },
+          { role: 'assistant', createdAt: new Date(1_100).toISOString() },
+        ],
+        remoteRouteUnavailable: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      getRecoverableDeferredUiAssignment({
+        leadSessionId: 'lead-1',
+        messages: [{ role: 'user', createdAt: new Date(1_000).toISOString() }],
+        remoteRouteUnavailable: false,
+      }),
+    ).toEqual(expect.objectContaining({ workerSessionId: 'worker-1' }));
+  });
+
+  it('远程 receipt 等归属设备恢复在线后才允许消费', () => {
+    rememberDeferredUiAssignment('lead-remote', {
+      workerSessionId: 'worker-remote',
+      initialTask: 'Review remotely',
+      snapshotBeforeMs: 1_000,
+      deviceId: 'device-1',
+    });
+    const history = [{ role: 'user', createdAt: new Date(1_100).toISOString() }];
+
+    expect(
+      getRecoverableDeferredUiAssignment({
+        leadSessionId: 'lead-remote',
+        messages: history,
+        remoteRouteUnavailable: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      getRecoverableDeferredUiAssignment({
+        leadSessionId: 'lead-remote',
+        messages: history,
+        deviceId: 'device-1',
+        remoteRouteUnavailable: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      getRecoverableDeferredUiAssignment({
+        leadSessionId: 'lead-remote',
+        messages: history,
+        deviceId: 'device-1',
+        remoteRouteUnavailable: false,
+      }),
+    ).toEqual(expect.objectContaining({ deviceId: 'device-1' }));
+  });
+
+  it('不恢复无 receipt 或已进入 uncertain 的派单', async () => {
+    expect(
+      getRecoverableDeferredUiAssignment({
+        leadSessionId: 'lead-missing',
+        messages: [{ role: 'user', createdAt: new Date(2_000).toISOString() }],
+        remoteRouteUnavailable: false,
+      }),
+    ).toBeUndefined();
+
+    rememberDeferredUiAssignment('lead-uncertain', {
+      workerSessionId: 'worker-uncertain',
+      initialTask: 'Review once',
+      snapshotBeforeMs: 1_000,
+    });
+    localDispatch.mockRejectedValueOnce(new Error('response lost'));
+    await expect(dispatchDeferredUiAssignment('lead-uncertain', undefined)).rejects.toThrow(
+      'response lost',
+    );
+    expect(
+      getRecoverableDeferredUiAssignment({
+        leadSessionId: 'lead-uncertain',
+        messages: [{ role: 'user', createdAt: new Date(2_000).toISOString() }],
+        remoteRouteUnavailable: false,
+      }),
+    ).toBeUndefined();
   });
 
   it('显式 receipt 与恢复入口并发时，同一 Lead 只派一次', async () => {

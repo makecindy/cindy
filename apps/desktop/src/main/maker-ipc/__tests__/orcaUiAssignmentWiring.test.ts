@@ -5,6 +5,19 @@ import { describe, expect, it } from 'vitest';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
 const lifecycleSource = readFileSync(resolve(__dirname, '..', 'orcaLifecycleService.ts'), 'utf8');
+const sessionViewSource = readFileSync(
+  resolve(
+    __dirname,
+    '..',
+    '..',
+    '..',
+    'renderer',
+    'features',
+    'cc-agent',
+    'CCAgentSessionView.tsx',
+  ),
+  'utf8',
+);
 
 describe('Orca UI assignment wiring', () => {
   it('waits for queryable Lead history before sending the deferred task', () => {
@@ -13,10 +26,12 @@ describe('Orca UI assignment wiring', () => {
     const handler = registerSource.slice(start, end);
 
     const wait = handler.indexOf('orcaUiAssignmentHistoryGate.waitUntilQueryable(');
+    const claim = handler.indexOf('orcaUiAssignmentDispatchClaims.runOnce(');
     const dispatch = handler.indexOf('orcaTeamService.sendToWorker({');
     expect(start).toBeGreaterThan(-1);
     expect(wait).toBeGreaterThan(-1);
-    expect(dispatch).toBeGreaterThan(wait);
+    expect(claim).toBeGreaterThan(wait);
+    expect(dispatch).toBeGreaterThan(claim);
     expect(handler).toContain('buildUiAssignmentInitialTask({');
   });
 
@@ -32,5 +47,15 @@ describe('Orca UI assignment wiring', () => {
     expect(registerSource).toContain(
       'orcaUiAssignmentHistoryGate.notifyUserMessagePersisted(sessionId);',
     );
+    expect(registerSource).toContain(
+      'const orcaUiAssignmentDispatchClaims = createOrcaUiAssignmentDispatchClaims();',
+    );
+  });
+
+  it('keeps the Worker resumable and recovers a persisted pending receipt on Lead mount', () => {
+    expect(lifecycleSource).toContain('!normalized.initialTask || params.deferDelegateTask');
+    expect(sessionViewSource).toContain('getRecoverableDeferredUiAssignment({');
+    expect(sessionViewSource).toContain("remoteRouteUnavailable: remoteConn !== 'connected'");
+    expect(sessionViewSource).toContain('dispatchDeferredUiAssignment(sessionId, undefined).catch');
   });
 });

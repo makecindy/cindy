@@ -5,6 +5,36 @@ export interface OrcaUiAssignmentHistoryGate {
   notifyUserMessagePersisted(leadSessionId: string): void;
 }
 
+export interface OrcaUiAssignmentDispatchClaims {
+  /** 同一份 UI assignment 在 Main 进程生命周期内只执行一次，并发调用共享同一结果。 */
+  runOnce<T>(
+    params: { leadSessionId: string; workerSessionId: string; snapshotBeforeMs: number },
+    dispatch: () => Promise<T>,
+  ): Promise<T>;
+}
+
+export function createOrcaUiAssignmentDispatchClaims(): OrcaUiAssignmentDispatchClaims {
+  const claims = new Map<string, Promise<unknown>>();
+
+  return {
+    runOnce(params, dispatch) {
+      const key = JSON.stringify([
+        params.leadSessionId,
+        params.workerSessionId,
+        params.snapshotBeforeMs,
+      ]);
+      const existing = claims.get(key);
+      if (existing) return existing as ReturnType<typeof dispatch>;
+
+      // 先登记 promise，再在 microtask 中派发，避免同一事件循环内的两个窗口都穿透。
+      // 已完成的 claim 也刻意保留：结果不确定时，重试仍不能冒险重复投递。
+      const claimed = Promise.resolve().then(dispatch);
+      claims.set(key, claimed);
+      return claimed;
+    },
+  };
+}
+
 export function createOrcaUiAssignmentHistoryGate(deps: {
   hasUserMessageSince: (leadSessionId: string, snapshotBeforeMs: number) => Promise<boolean>;
   timeoutMs?: number;

@@ -629,7 +629,7 @@ describe('OrcaLifecycleService', () => {
     );
   });
 
-  it('creates an idle Worker without dispatch or placeholder when the UI defers its task', async () => {
+  it('initializes a deferred-task Worker with the ready placeholder without dispatching the task', async () => {
     const { calls, deps, service } = createDeps();
 
     await expect(
@@ -652,11 +652,12 @@ describe('OrcaLifecycleService', () => {
       'setSessionOrcaRole:lead-1:lead',
       'clearKnownNonOrcaSession:lead-1',
       'setLeadVendorOptions:lead-1:worker-session-1',
+      'sendWorkerReadyPlaceholder:enable_collab_mode:enable_collab_mode/worker-session-1/worker-ready-placeholder',
       'broadcastSessionCreated:worker-session-1',
       'broadcastOrcaWorkerChanged:lead-1',
     ]);
     expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
-    expect(deps.sendWorkerReadyPlaceholder).not.toHaveBeenCalled();
+    expect(deps.sendWorkerReadyPlaceholder).toHaveBeenCalledOnce();
   });
 
   it('falls back to worker when the worker role cannot produce a label slug', async () => {

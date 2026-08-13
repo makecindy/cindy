@@ -387,7 +387,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
         }),
         context: `enable_collab_mode/${created.workerSessionId}/delegate_task`,
       });
-    } else if (!normalized.initialTask) {
+    } else if (!normalized.initialTask || params.deferDelegateTask) {
       try {
         await deps.sendWorkerReadyPlaceholder({
           workerSessionId: created.workerSessionId,

@@ -103,6 +103,39 @@ export function createDeferredUiAssignment(params: {
   };
 }
 
+export function getRecoverableDeferredUiAssignment(params: {
+  leadSessionId: string;
+  messages: ReadonlyArray<{
+    role: string;
+    createdAt?: string;
+    isPendingPersist?: boolean;
+  }>;
+  /** Current device route after sticky-origin recovery; undefined means local/unresolved. */
+  deviceId?: string;
+  remoteRouteUnavailable: boolean;
+}): DeferredUiAssignment | undefined {
+  const stored = readTable()[params.leadSessionId];
+  if (stored?.state !== 'pending') return undefined;
+  if (
+    stored.assignment.deviceId
+    && (
+      stored.assignment.deviceId !== params.deviceId
+      || params.remoteRouteUnavailable
+    )
+  ) {
+    return undefined;
+  }
+  const hasDurableUserAfterSnapshot = params.messages.some((message) => {
+    if (message.role !== 'user' || message.isPendingPersist === true) return false;
+    const createdAtMs = typeof message.createdAt === 'string'
+      ? Date.parse(message.createdAt)
+      : Number.NaN;
+    return Number.isFinite(createdAtMs)
+      && createdAtMs >= stored.assignment.snapshotBeforeMs;
+  });
+  return hasDurableUserAfterSnapshot ? stored.assignment : undefined;
+}
+
 /** Lead 首条输入 accepted 后才调用；此时 history 查询已能看到该输入。 */
 export function dispatchDeferredUiAssignment(
   leadSessionId: string,

@@ -595,7 +595,10 @@ import {
 import { getAgentIslandService } from '../agent-island/service.js';
 import { createOrcaLifecycleService, ORCA_WORKER_READY_MESSAGE } from './orcaLifecycleService.js';
 import { buildUiAssignmentInitialTask } from './orcaUiAssignment.js';
-import { createOrcaUiAssignmentHistoryGate } from './orcaUiAssignmentHistoryGate.js';
+import {
+  createOrcaUiAssignmentDispatchClaims,
+  createOrcaUiAssignmentHistoryGate,
+} from './orcaUiAssignmentHistoryGate.js';
 import { throwOrcaServiceFailure } from './orcaServiceFailure.js';
 import {
   createOrcaTeamService,
@@ -8972,17 +8975,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           );
         }
       }
-      const result = await orcaTeamService.sendToWorker({
-        callerLeadSessionId: leadSessionId,
-        targetSessionId: workerSessionId,
-        message: buildUiAssignmentInitialTask({
+      return orcaUiAssignmentDispatchClaims.runOnce(
+        {
           leadSessionId,
-          initialTask: initialTask.trim(),
+          workerSessionId,
           snapshotBeforeMs,
-        }),
-      });
-      if (!result.ok) throwOrcaServiceFailure(result);
-      return result;
+        },
+        async () => {
+          const result = await orcaTeamService.sendToWorker({
+            callerLeadSessionId: leadSessionId,
+            targetSessionId: workerSessionId,
+            message: buildUiAssignmentInitialTask({
+              leadSessionId,
+              initialTask: initialTask.trim(),
+              snapshotBeforeMs,
+            }),
+          });
+          if (!result.ok) throwOrcaServiceFailure(result);
+          return result;
+        },
+      );
     },
   );
 
@@ -9460,6 +9472,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return page.items.length > 0;
     },
   });
+  const orcaUiAssignmentDispatchClaims = createOrcaUiAssignmentDispatchClaims();
 
   const orcaLifecycleService = createOrcaLifecycleService({
     getActiveTeamByLead,
