@@ -510,24 +510,12 @@ export function CustomProviderDialog({
     (fn: (prev: Record<DialogAgentKind, RuntimeFields>) => Record<DialogAgentKind, RuntimeFields>) => {
       setRt((prev) => {
         const updated = fn(prev);
-        const next = Object.fromEntries(
-          AGENTS.map((agent) => {
-            const runtime = updated[agent];
-            const piCatalogProviderId = piCatalogProviderIdAfterRouteEdit(
-              agent,
-              prev[agent],
-              runtime,
-            );
-            return [
-              agent,
-              piCatalogProviderId === runtime.piCatalogProviderId
-                ? runtime
-                : { ...runtime, piCatalogProviderId },
-            ];
-          }),
-        ) as Record<DialogAgentKind, RuntimeFields>;
-        rtRef.current = next;
-        return next;
+        // Do not consume the catalog marker while the user is still editing.
+        // A temporary route/model change can be reverted before Save; marker
+        // ownership is decided once below from the persisted baseline and the
+        // final serialized values.
+        rtRef.current = updated;
+        return updated;
       });
     },
     [],
@@ -1434,6 +1422,18 @@ export function CustomProviderDialog({
           ? { piCatalogProviderId: rf.piCatalogProviderId }
           : {}),
       };
+      if (a === 'pi' && initial?.runtimes.pi?.piCatalogProviderId) {
+        const savedPiCatalogProviderId = piCatalogProviderIdAfterRouteEdit(
+          a,
+          initial.runtimes.pi,
+          runtimes.pi!,
+        );
+        if (savedPiCatalogProviderId) {
+          runtimes.pi!.piCatalogProviderId = savedPiCatalogProviderId;
+        } else {
+          delete runtimes.pi!.piCatalogProviderId;
+        }
+      }
       // OAuth 形态不收集 per-runtime API key（鉴权走 Runner 的 Bearer）。
       if (
         authMode === 'apiKey' &&

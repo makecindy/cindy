@@ -60,6 +60,26 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
     ).toBeUndefined();
   });
 
+  it('keeps the marker when a temporary route edit is reverted before the final save', () => {
+    const temporaryEdit = {
+      ...official,
+      baseUrl: 'https://proxy.example/v1',
+    };
+    expect(piCatalogProviderIdAfterRouteEdit('pi', official, temporaryEdit)).toBeUndefined();
+    expect(
+      piCatalogProviderIdAfterRouteEdit('pi', official, {
+        ...temporaryEdit,
+        baseUrl: official.baseUrl,
+      }),
+    ).toBe('example');
+    expect(
+      piCatalogProviderIdAfterRouteEdit('pi', official, {
+        ...temporaryEdit,
+        wireProtocol: official.wireProtocol,
+      }),
+    ).toBeUndefined();
+  });
+
   it('treats an omitted Pi protocol as the effective openai-chat default', () => {
     const openAiChat = {
       ...official,
