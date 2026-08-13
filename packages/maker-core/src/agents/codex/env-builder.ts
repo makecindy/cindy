@@ -62,6 +62,34 @@ async function hasAccessiblePwshExecutable(directory: string): Promise<boolean> 
   }
 }
 
+type PwshExecutableProbe = (directory: string) => Promise<boolean>;
+
+/**
+ * Walk PATH in resolution order and stop as soon as an exact executable is
+ * usable. Besides preserving PATH precedence, the short circuit avoids
+ * starting probes for later mapped drives after the answer is already known.
+ */
+export async function findFirstWindowsPwshExecutableIndex(
+  entries: string[],
+  probe: PwshExecutableProbe = hasAccessiblePwshExecutable,
+): Promise<number> {
+  for (const [index, entry] of entries.entries()) {
+    const trimmed = entry.trim();
+    const directory =
+      trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')
+        ? trimmed.slice(1, -1).trim()
+        : trimmed;
+    if (directory.length === 0 || isUncPathEntry(directory)) continue;
+
+    const normalized = path.win32.normalize(directory).replace(/[\\/]+$/, '').toLowerCase();
+    if (normalized.endsWith('\\microsoft\\windowsapps')) continue;
+
+    if (await probe(directory)) return index;
+  }
+
+  return -1;
+}
+
 async function prioritizeWindowsPwshExecutable(env: Record<string, string>): Promise<void> {
   if (process.platform !== 'win32') return;
 
@@ -69,20 +97,7 @@ async function prioritizeWindowsPwshExecutable(env: Record<string, string>): Pro
   if (!pathKey || !env[pathKey]) return;
 
   const entries = env[pathKey].split(path.delimiter);
-  const executableChecks = entries.map(async (entry) => {
-    const trimmed = entry.trim();
-    const directory =
-      trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')
-        ? trimmed.slice(1, -1).trim()
-        : trimmed;
-    if (directory.length === 0 || isUncPathEntry(directory)) return false;
-
-    const normalized = path.win32.normalize(directory).replace(/[\\/]+$/, '').toLowerCase();
-    if (normalized.endsWith('\\microsoft\\windowsapps')) return false;
-
-    return hasAccessiblePwshExecutable(directory);
-  });
-  const executableIndex = (await Promise.all(executableChecks)).findIndex(Boolean);
+  const executableIndex = await findFirstWindowsPwshExecutableIndex(entries);
   if (executableIndex <= 0) return;
 
   const [executableDir] = entries.splice(executableIndex, 1);

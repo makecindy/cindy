@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
-import { buildCodexEnv } from './env-builder.js';
+import { buildCodexEnv, findFirstWindowsPwshExecutableIndex } from './env-builder.js';
 
 function createAuthAdapter(env: Record<string, string> = {}): AuthAdapter {
   return {
@@ -252,5 +252,23 @@ describe('buildCodexEnv', () => {
     expect(env.FORCE_COLOR).toBe('1');
     expect(env.TERM).toBe('xterm-256color');
     expect(env.PSStyle__OutputRendering).toBe('Ansi');
+  });
+});
+
+describe('findFirstWindowsPwshExecutableIndex', () => {
+  it('stops probing after the first accessible pwsh.exe entry', async () => {
+    const probed: string[] = [];
+
+    const index = await findFirstWindowsPwshExecutableIndex(
+      ['C:\\PowerShell', 'Z:\\slow-mapped-drive'],
+      async (directory) => {
+        probed.push(directory);
+        if (directory === 'C:\\PowerShell') return true;
+        throw new Error('later PATH entries must not be probed');
+      },
+    );
+
+    expect(index).toBe(0);
+    expect(probed).toEqual(['C:\\PowerShell']);
   });
 });
