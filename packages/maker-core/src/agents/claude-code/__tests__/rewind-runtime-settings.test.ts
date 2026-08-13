@@ -288,6 +288,51 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  it('uses the session provider route when the same model id has different windows', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = '0';
+    const workingDir = await makeTempDir();
+    const firstQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(firstQuery);
+
+    const resolveVerifiedContextWindow = vi.fn((providerId: string | null | undefined, modelId: string) => {
+      if (modelId !== 'shared-model') return null;
+      if (providerId === 'xd') return 256_000;
+      return 1_000_000;
+    });
+
+    const agent = new ClaudeCodeAgent({
+      ...createDeps(),
+      capabilityAdditions: {
+        availableModels: [
+          ...TEST_MODELS,
+          {
+            id: 'shared-model',
+            displayName: 'Shared',
+            contextWindow: 1_000_000,
+            efforts: ['low', 'medium', 'high'],
+            defaultEffort: 'high',
+          },
+        ],
+      },
+      resolveVerifiedContextWindow,
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-window',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    });
+
+    await handle.setModel?.('shared-model', { providerId: 'xd' });
+
+    expect(resolveVerifiedContextWindow).toHaveBeenCalledWith('xd', 'shared-model');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(256_000);
+
+    await handle.close();
+  });
+
   it('passes max through when changing effort in a live Sonnet 5 session', async () => {
     const { handle, firstQuery } = await startRewindableSession();
 
