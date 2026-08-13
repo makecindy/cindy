@@ -165,7 +165,8 @@ export function UnifiedFlyoutHost({
             role="dialog"
             data-testid="unified-model-config-flyout"
             className={cn(
-              'w-full rounded-[16px] border p-3.5 shadow-[var(--shadow-menu)]',
+              // 设计稿 .flyout:padding 14px 14px 12px。
+              'w-full rounded-[16px] border p-3.5 pb-3 shadow-[var(--shadow-menu)]',
               'border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
               'transition-[top] duration-150 ease-out motion-reduce:transition-none',
               className,

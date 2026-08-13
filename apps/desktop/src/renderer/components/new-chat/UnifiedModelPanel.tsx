@@ -609,13 +609,13 @@ export function UnifiedModelPanel({
         role="listbox"
         aria-label={t('newChat.modelSelector.modelListAria')}
         className={cn(
-          'morph-panel-list-scroll -mr-2 flex min-w-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain py-1 pl-1 [scrollbar-gutter:stable]',
+          // 设计稿 .model-list:8px 内边距、行与行之间无额外间距(行自身 py 8 提供呼吸感)。
+          'morph-panel-list-scroll flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2 [scrollbar-gutter:stable]',
           // min-h-0 是能不能滚到底的关键:flex item 的默认 min-height:auto 会让它按内容
           // 撑开、拒绝收缩,于是超出面板的部分被外层裁掉且**滚不到**(2026-08-13 实测:
           // 列表翻不到最下面)。加上 min-h-0 后,面板高度受限时列表自己收缩并内部滚动,
           // 底部的「连接来源」footer 是同级兄弟,始终留在列表下方、不盖住最后一行。
           'min-h-0',
-          railItems.length > 2 && 'pl-2',
         )}
         // 缺省上限只是「内容很少时别把面板撑太高」的软顶,真正的高度由外层面板给;
         // 二者相加才既不过高、也不会在窄窗口里滚不到底。
@@ -684,7 +684,8 @@ export function UnifiedModelPanel({
               role="group"
               aria-label={sectionLabel(section)}
             >
-              <div className="truncate px-2.5 pb-0.5 pt-1.5 text-11 font-medium text-[var(--text-tertiary)]">
+              {/* 设计稿 .group-label:11.5px 常规字重、padding 8/10/4。 */}
+              <div className="truncate px-2.5 pb-1 pt-2 text-11 text-[var(--text-tertiary)]">
                 {sectionLabel(section)}
               </div>
               {section.rows.map((row) => {

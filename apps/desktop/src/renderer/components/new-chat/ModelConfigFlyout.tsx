@@ -157,7 +157,8 @@ export function ModelConfigFlyout({
       </div>
 
       {(showSlider || config.fastCapable) && (
-        <div className="flex items-center gap-2 pt-3">
+        // 设计稿 .fly-ctrl:first-of-type:第一个控件行上距 14px。
+        <div className="flex items-center gap-2 pt-3.5">
           {showSlider && config.effort && (
             <EffortSlider
               stops={config.efforts}
@@ -250,7 +251,7 @@ export function ModelConfigFlyout({
         //   第 2 行:折后价单行排列 —— 输入 ¥32 · 输出 ¥162 · 缓存读取 ¥3.2
         // 原价对比收进 title(hover 才看):浮层是「选之前扫一眼」的地方,一张对照表
         // 会把它变成账单页,且删除线在 12px 下几乎看不清。
-        <div className="mt-2.5 border-t border-[var(--model-dropdown-border)] pt-2 text-12 leading-[1.7] text-[var(--text-tertiary)]">
+        <div className="mt-2.5 border-t border-[var(--model-dropdown-border)] pt-[9px] text-12 leading-[1.7] text-[var(--text-tertiary)]">
           <div className="flex flex-wrap items-baseline gap-x-1">
             <span>{t('newChat.modelSelector.pricing.title')}</span>
             {price.kind === 'free' ? (

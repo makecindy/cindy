@@ -42,7 +42,8 @@ export function UnifiedModelRail({
   if (items.length <= 2) return null;
   const activeKey = railItemKey(active);
   return (
-    <div className="flex w-11 shrink-0 flex-col items-center gap-0.5 border-r border-[var(--model-dropdown-border)] py-1 pr-1.5">
+    // 设计稿 .rail:宽 48(含 6px 侧距 + 1px 右分隔线)、纵向 8px、格间 2px。
+    <div className="flex w-12 shrink-0 flex-col items-center gap-0.5 border-r border-[var(--model-dropdown-border)] px-1.5 py-2">
       {items.map((item) => {
         const key = railItemKey(item);
         const isActive = activeKey === key;
@@ -69,7 +70,8 @@ export function UnifiedModelRail({
             aria-pressed={isActive}
             data-rail-item={key}
             className={cn(
-              'flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] transition-colors',
+              // 设计稿 .rail-btn:34×34、圆角 9。
+              'flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px] transition-colors',
               // 选中态用**反色实心块**(与浮层里的选中分段同一套表达):
               // 原先的 --surface-chip 在两种主题下都只比底色深一点点,用户看不出当前
               // 停在哪个视图 —— 会话内「同引擎过滤开着没开着」正是靠这一格判断的
@@ -83,7 +85,7 @@ export function UnifiedModelRail({
             {item.kind === 'favorites' ? (
               // 未选中时 ☆ 用金色描边点出「这是收藏」;选中时整格已反色,跟随 currentColor。
               <Star
-                size={15}
+                size={16}
                 fill={isActive ? 'currentColor' : 'none'}
                 className={isActive ? undefined : 'text-[var(--favorite-star)]'}
               />
@@ -92,7 +94,7 @@ export function UnifiedModelRail({
               // 这个过滤器是按什么筛的。
               <engineOption.Mark size={14} className="shrink-0" />
             ) : item.kind === 'all' ? (
-              <LayoutGrid size={15} />
+              <LayoutGrid size={16} />
             ) : item.kind === 'provider' ? (
               <ProviderRailMark providerId={item.providerId} providers={providers} />
             ) : null}

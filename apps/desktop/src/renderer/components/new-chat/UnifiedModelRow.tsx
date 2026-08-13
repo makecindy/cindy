@@ -131,15 +131,19 @@ export function UnifiedModelRow({
       )}
     >
       <div className="flex items-center gap-2">
-        <ModelIconMark
-          {...(entry.icon !== undefined ? { icon: entry.icon } : {})}
-          providerId={entry.providerId}
-          {...(provider?.name !== undefined ? { name: provider.name } : {})}
-          {...(provider?.routing !== undefined ? { routing: provider.routing } : {})}
-          {...(provider?.logoKind !== undefined ? { logoKind: provider.logoKind } : {})}
-          colorClass="text-[var(--text-secondary)]"
-          withMargin={false}
-        />
+        {/* 设计稿 .mark:18×18 定位盒(图标本体 13-17px 居中)。没有这个盒,名字起点
+            随图标实际宽度浮动,第二行描述的 26px 缩进(18+8)就对不上第一行的名字。 */}
+        <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
+          <ModelIconMark
+            {...(entry.icon !== undefined ? { icon: entry.icon } : {})}
+            providerId={entry.providerId}
+            {...(provider?.name !== undefined ? { name: provider.name } : {})}
+            {...(provider?.routing !== undefined ? { routing: provider.routing } : {})}
+            {...(provider?.logoKind !== undefined ? { logoKind: provider.logoKind } : {})}
+            colorClass="text-[var(--text-secondary)]"
+            withMargin={false}
+          />
+        </span>
         <span
           // 设计稿 .m-name:内容宽、不 grow —— 徽标/钱串紧贴模型名左排,
           // 右侧三元组由 ml-auto 推到最右;空间不足时名字先收缩截断,title 给全名。

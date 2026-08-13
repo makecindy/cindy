@@ -2304,7 +2304,9 @@ function ModelSelectorContentView({
         data-model-tag-density={modelTagDensity}
         data-unified-model-panel="true"
         className={cn(
-          'flex min-h-0 flex-col gap-1.5 p-2',
+          // 设计稿的面板骨架:搜索行贴顶(border-b 分隔)、列表贴边(自带 8px 内距)、
+          // footer 用 border-t 分隔 —— 外层不再加统一 padding。
+          'flex min-h-0 flex-col',
           // 高度上限必须给在**面板**上:不给的话,列表按内容撑到比视口还高,外层
           // popover 裁掉超出部分,用户就翻不到最后几行(2026-08-13 实测)。列表侧配
           // min-h-0 + flex-1 收缩并内部滚动,搜索框与底部 footer 始终露着。
@@ -2315,7 +2317,29 @@ function ModelSelectorContentView({
             : 'w-max min-w-[460px] max-w-[min(600px,calc(100vw-48px))]',
         )}
       >
-        {searchField}
+        {/* 设计稿 .search-wrap:无框平铺行 + 底部 hairline(不是独立的胶囊输入框)。 */}
+        <div
+          className={cn(
+            'flex shrink-0 items-center gap-2 border-b border-[var(--model-dropdown-border)] px-3.5 py-3',
+            interactionDisabled ? 'text-[var(--text-disabled-tertiary)]' : 'text-[var(--text-tertiary)]',
+          )}
+        >
+          <Search size={14} className="shrink-0" />
+          <input
+            type="text"
+            disabled={interactionDisabled}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('newChat.modelSelector.search.placeholderAll')}
+            className={cn(
+              'min-w-0 flex-1 bg-transparent text-13 outline-none',
+              interactionDisabled
+                ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled-tertiary)]'
+                : 'text-[var(--model-item-text)] placeholder:text-[var(--text-tertiary)]',
+            )}
+            aria-label={t('newChat.modelSelector.search.placeholderAll')}
+          />
+        </div>
         <UnifiedModelPanel
           providers={providers}
           {...(unifiedAgents ? { agents: unifiedAgents } : {})}
@@ -2384,25 +2408,25 @@ function ModelSelectorContentView({
             ? { overlayClassName: overlayContentClassName }
             : {})}
         />
-        {/* 「连接来源」footer —— 与既有面板同规则(device-link 远程隐藏)。 */}
+        {/* 「连接来源」footer —— 与既有面板同规则(device-link 远程隐藏)。
+            设计稿 .panel-foot / .foot-link:border-t 分隔、9px/14px 内距、13px 文字链
+            (hover 提亮文字,不加底色)。 */}
         {onNavigateToProviders && !deviceId && (
-          <>
-            <div className="mx-1 h-px bg-[var(--model-dropdown-border)]" />
+          <div className="shrink-0 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
             <button
               type="button"
               disabled={interactionDisabled}
               onClick={onNavigateToProviders}
               className={cn(
-                'flex w-full items-center gap-1.5 rounded-[8px] px-3 py-2',
-                'transition-colors hover:bg-[var(--model-item-hover)]',
+                'flex items-center gap-1.5 text-13 text-[var(--text-secondary)]',
+                'transition-colors hover:text-[var(--text-primary)]',
+                interactionDisabled && 'cursor-not-allowed opacity-50',
               )}
             >
-              <Plus size={14} className="shrink-0 text-[var(--text-tertiary)]" />
-              <span className="truncate text-13 font-normal text-[var(--text-tertiary)]">
-                {t('newChat.modelSelector.source.connect')}
-              </span>
+              <Plus size={14} className="shrink-0" />
+              <span className="truncate">{t('newChat.modelSelector.source.connect')}</span>
             </button>
-          </>
+          </div>
         )}
       </div>
     );
