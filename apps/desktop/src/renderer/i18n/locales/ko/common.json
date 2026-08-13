@@ -4452,6 +4452,7 @@
   },
   "contentHeader": {
     "toggleSidebar": "사이드바 전환",
+    "exitFullscreen": "전체 화면 종료",
     "collapsePanel": "접기",
     "expandPanel": "펼치기"
   },

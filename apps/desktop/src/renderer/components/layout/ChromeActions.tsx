@@ -93,7 +93,11 @@ export function ChromeActions({
       >
         <PanelLeft size={15} />
       </button>
-      <MenuButton />
+      <MenuButton
+        onExitFullscreen={
+          isMac && isFullscreen ? () => window.electronAPI?.windowExitFullscreen() : undefined
+        }
+      />
     </div>
   );
 }

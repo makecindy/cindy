@@ -36,6 +36,11 @@ import {
   markDesktopDevStartupFailed,
   markDesktopDevWindowReady,
 } from './devStartupStatus';
+import {
+  installWindowFullscreenStateBroadcast,
+  readWindowFullscreenState,
+  showMainWindowAndRestoreFullscreen,
+} from './mainWindowFullscreenStartup';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
 import {
@@ -2723,7 +2728,11 @@ const createWindow = () => {
   const mainWindowState = windowStateKeeper({
     defaultWidth: 1280,
     defaultHeight: 800,
+    // Applying fullscreen while a hidden macOS window is still starting can
+    // leave the restored window without native traffic lights.
+    fullScreen: process.platform !== 'darwin',
   });
+  const shouldRestoreMacFullscreen = process.platform === 'darwin' && mainWindowState.isFullScreen;
 
   const mainWindow = new BrowserWindow({
     x: mainWindowState.x,
@@ -2834,6 +2843,13 @@ const createWindow = () => {
   // 同一个窗口级安装器，命令发回实际接收按键的窗口；Mac 安装器会直接 no-op。
   installNewMakerWindowShortcut(mainWindow);
 
+  // Register before state restoration so the initial transition is tracked.
+  installWindowFullscreenStateBroadcast(mainWindow, {
+    // macOS 26 no longer emits will-leave-full-screen. Resize detects the
+    // animation start so traffic-light padding returns before the end event.
+    getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
+  });
+
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
   mainWindowState.manage(mainWindow);
@@ -2852,7 +2868,9 @@ const createWindow = () => {
 
   // Show window only after content is rendered — eliminates theme flash
   mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
+    showMainWindowAndRestoreFullscreen(mainWindow, {
+      restoreFullscreen: shouldRestoreMacFullscreen,
+    });
     if (!app.isPackaged) markDesktopDevWindowReady();
     // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、
     // renderer 和首份进程快照预热；回调绑定当代主窗口，重建/退出后不会创建孤儿窗。
@@ -2883,34 +2901,6 @@ const createWindow = () => {
     // 通过 IPC 'deep-link:take-pending' 主动拉取消费 (见 deepLink.ts pending
     // buffer 注释)。这样未登录用户冷启动后完成 Feishu OAuth → MainLayout 第一次
     // mount → 同一条 pull 路径消费 payload, 不会因为登录流程跳过而丢失意图。
-  });
-
-  // Notify renderer when fullscreen state changes (macOS traffic-light adaptation).
-  // macOS 26 (Tahoe) + Electron 41 上 `will-enter-full-screen` / `will-leave-full-screen`
-  // 这两个 macOS 私有事件不再触发,只有动画 END 的 `enter-full-screen` /
-  // `leave-full-screen` 还能用。问题:出全屏时红绿灯在动画一开始就回位,但 padding
-  // 要等 `leave-full-screen` (动画 END) 才补回去 → 中间几百毫秒红绿灯和工具栏 icon
-  // 重叠。退化方案:监听 `resize`,一旦发现处于 fullscreen 标记态但窗口尺寸已经
-  // 小于显示器 → 出全屏动画启动了 → 提前发 false 补 padding。`leave-full-screen`
-  // 仍保留作兜底。
-  let inFullscreen = false;
-  mainWindow.on('enter-full-screen', () => {
-    inFullscreen = true;
-    mainWindow.webContents.send('fullscreen-change', true);
-  });
-  mainWindow.on('leave-full-screen', () => {
-    if (!inFullscreen) return;
-    inFullscreen = false;
-    mainWindow.webContents.send('fullscreen-change', false);
-  });
-  mainWindow.on('resize', () => {
-    if (!inFullscreen) return;
-    const bounds = mainWindow.getBounds();
-    const display = screen.getDisplayMatching(bounds);
-    if (bounds.width < display.bounds.width || bounds.height < display.bounds.height) {
-      inFullscreen = false;
-      mainWindow.webContents.send('fullscreen-change', false);
-    }
   });
 
   // 装饰动画闸门的兜底信号。主窗在 running turn 期间会关掉 backgroundThrottling,
@@ -3703,6 +3693,18 @@ const registerIpcHandlers = () => {
       win.maximize();
     }
   });
+  // Exit-only fallback for macOS native fullscreen. Resolve the target from
+  // the trusted sender so a secondary window can never manipulate the main window.
+  ipcMain.on('window-exit-fullscreen', (event) => {
+    assertTrustedAppRendererEvent(event);
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return;
+    if (win.isSimpleFullScreen()) {
+      win.setSimpleFullScreen(false);
+    } else if (win.isFullScreen()) {
+      win.setFullScreen(false);
+    }
+  });
   // 手动窗口拖拽:no-drag 元素(会话标题文字等,需要同时响应双击)按住移动
   // 时由 renderer 发起,main 用光标位置驱动窗口跟随;pointerup 后 stop。
   // 详见 windowManualDrag.ts 头注释。
@@ -3775,10 +3777,9 @@ const registerIpcHandlers = () => {
   // Fullscreen state query — renderer calls this on mount to recover from the
   // race where `enter-full-screen` fires before the renderer subscribes (e.g.
   // when window-state restores a fullscreen window on launch).
-  ipcMain.handle('get-fullscreen-state', (): boolean => {
-    const win = getWindow();
-    if (!win) return false;
-    return win.isFullScreen() || win.isSimpleFullScreen();
+  ipcMain.handle('get-fullscreen-state', (event): boolean => {
+    assertTrustedAppRendererEvent(event);
+    return readWindowFullscreenState(BrowserWindow.fromWebContents(event.sender));
   });
 
   // Find-in-page (F-FIP-1): renderer overlay drives Chromium's native page search.

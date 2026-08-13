@@ -4451,6 +4451,7 @@
   },
   "contentHeader": {
     "toggleSidebar": "切換側邊欄",
+    "exitFullscreen": "退出全螢幕",
     "collapsePanel": "收起",
     "expandPanel": "展開"
   },

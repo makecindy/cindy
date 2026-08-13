@@ -4448,6 +4448,7 @@
   },
   "contentHeader": {
     "toggleSidebar": "切换侧边栏",
+    "exitFullscreen": "退出全屏",
     "collapsePanel": "收起",
     "expandPanel": "展开"
   },

@@ -4452,6 +4452,7 @@
   },
   "contentHeader": {
     "toggleSidebar": "サイドバーを切り替え",
+    "exitFullscreen": "フルスクリーンを終了",
     "collapsePanel": "折りたたみ",
     "expandPanel": "展開"
   },

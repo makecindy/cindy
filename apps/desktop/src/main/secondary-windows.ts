@@ -31,6 +31,7 @@ import { readWindowBehaviorSettings } from './window-behavior-settings-store.js'
 import { resolveVibrancyConfig, type WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
 import { applyAppearanceToWindow } from './appearance-settings-ipc.js';
+import { installWindowFullscreenStateBroadcast } from './mainWindowFullscreenStartup.js';
 
 const log = createLogger('secondary-windows');
 
@@ -148,6 +149,9 @@ export function openSessionInNewWindow(
   });
   installNewMakerWindowShortcut(win);
   installSelectionContextMenu(win);
+  installWindowFullscreenStateBroadcast(win, {
+    getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
+  });
   // E4D:副窗加入 set,供 vibrancy 动态开关;关闭时移除。
   secondaryWindows.add(win);
   win.once('closed', () => {
