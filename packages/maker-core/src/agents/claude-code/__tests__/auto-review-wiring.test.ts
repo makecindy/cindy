@@ -107,7 +107,8 @@ function createFakeQuery(
       pendingNext = null;
       resolve?.({ done: false, value: message });
     },
-    setPermissionMode: vi.fn(async () => {
+    setPermissionMode: vi.fn(async (_mode: string) => {
+      void _mode;
       if (rejectPermissionModeChange) throw new Error('permission transport failed');
     }),
     setModel: vi.fn(async () => {}),
@@ -538,6 +539,71 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
       'bypassPermissions',
       'default',
     ]);
+    await handle.close();
+  });
+
+  it('keeps the confirmed Full access fact when a queued Ask SDK switch fails', async () => {
+    let releaseFullAccess: (() => void) | undefined;
+    const { handle, fakeQuery } = await startSession('auto');
+    fakeQuery.setPermissionMode
+      .mockImplementationOnce(
+        () => new Promise<void>((resolve) => { releaseFullAccess = resolve; }),
+      )
+      .mockRejectedValueOnce(new Error('permission transport failed'));
+
+    const widening = handle.setPermissionMode!('bypassPermissions');
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    const tightening = handle.setPermissionMode!('ask');
+
+    releaseFullAccess!();
+    await widening;
+    await expect(tightening).rejects.toThrow('permission transport failed');
+    expect(fakeQuery.setPermissionMode.mock.calls.map(([mode]) => mode)).toEqual([
+      'bypassPermissions',
+      'default',
+    ]);
+
+    await handle.commitRewindFiles?.('user-uuid', 'assistant-uuid');
+    const replacementQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(replacementQuery);
+    await handle.send({ type: 'user', content: 'Continue after the failed Ask switch.' });
+    const rebuildArgs = sdkMock.query.mock.calls.at(-1)?.[0] as {
+      options: { permissionMode?: string };
+    };
+    expect(rebuildArgs.options.permissionMode).toBe('bypassPermissions');
+    await handle.close();
+  });
+
+  it('keeps Ask when its failed SDK switch belongs to a retired Query', async () => {
+    let releaseFullAccess: (() => void) | undefined;
+    let rejectAsk: ((reason?: unknown) => void) | undefined;
+    const { handle, fakeQuery } = await startSession('auto');
+    fakeQuery.setPermissionMode
+      .mockImplementationOnce(
+        () => new Promise<void>((resolve) => { releaseFullAccess = resolve; }),
+      )
+      .mockImplementationOnce(
+        () => new Promise<void>((_resolve, reject) => { rejectAsk = reject; }),
+      );
+
+    const widening = handle.setPermissionMode!('bypassPermissions');
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    const tightening = handle.setPermissionMode!('ask');
+
+    releaseFullAccess!();
+    await widening;
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default'));
+    await handle.commitRewindFiles?.('user-uuid', 'assistant-uuid');
+    rejectAsk!(new Error('permission transport failed'));
+    await expect(tightening).rejects.toThrow('permission transport failed');
+
+    const replacementQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(replacementQuery);
+    await handle.send({ type: 'user', content: 'Continue after rewind.' });
+    const rebuildArgs = sdkMock.query.mock.calls.at(-1)?.[0] as {
+      options: { permissionMode?: string };
+    };
+    expect(rebuildArgs.options.permissionMode).toBe('default');
     await handle.close();
   });
 

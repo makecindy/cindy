@@ -2180,10 +2180,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     // Auto bypasses canUseTool, so result-level denial handling must follow the
     // Query's current mode.
     const nativeAutoQueries = new WeakSet<Query>();
+    const queryConfirmedSdkPermissionModes = new WeakMap<Query, SdkPermissionMode>();
     const recordQuerySdkPermissionMode = (
       query: Query,
       mode: SdkPermissionMode,
     ): void => {
+      queryConfirmedSdkPermissionModes.set(query, mode);
       if (mode === 'auto') nativeAutoQueries.add(query);
       else nativeAutoQueries.delete(query);
     };
@@ -6037,15 +6039,30 @@ export class ClaudeCodeAgent extends BaseAgent {
           try {
             await setQuerySdkPermissionMode(permissionModeQuery, sdkMode);
           } catch (error) {
-            // 先发布的收紧档位在 RPC 失败时恢复旧事实源，但不能覆盖更晚的切档请求。
-            // Full access 尚未发布，不需要回滚。
+            // 排队期间更早的放宽 RPC 可能已成功，不能盲目恢复调用前的产品档。
+            // 仅当前 Query 仍在服役时，才按它最后确认成功的 SDK 档恢复；Query 已进入
+            // rewind / rebuild 窗口时保留用户刚选的新档，由 replacement Query 起档。
             if (
               modeChanged
               && !publishAfterSdk
               && permissionModeWriteGeneration === writeGeneration
               && mutablePermissionMode === newMode
+              && q === permissionModeQuery
+              && !controlRequestsBlocked()
             ) {
-              mutablePermissionMode = previousPermissionMode;
+              const confirmedSdkMode = queryConfirmedSdkPermissionModes.get(permissionModeQuery);
+              if (confirmedSdkMode === 'default') {
+                // default 同时承载 Ask 与 Cindy Auto fallback；调用前产品档是这两者之一
+                // 时沿用它，保持 UI 语义且与 SDK 的实际约束一致。
+                mutablePermissionMode =
+                  toSdkPermissionMode(previousPermissionMode) === 'default'
+                    ? previousPermissionMode
+                    : 'ask';
+              } else if (confirmedSdkMode !== undefined) {
+                mutablePermissionMode = confirmedSdkMode;
+              } else {
+                mutablePermissionMode = previousPermissionMode;
+              }
             }
             throw error;
           }
