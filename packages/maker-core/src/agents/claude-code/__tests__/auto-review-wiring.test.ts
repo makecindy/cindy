@@ -723,11 +723,9 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     await handle.close();
   });
 
-  it('re-arms the notice after the user changes the permission mode', async () => {
+  it('does not re-arm a blocked notice after an in-flight permission-mode change', async () => {
     const { handle, canUseTool } = await startSession('auto', {
-      reviewer: async () => {
-        throw new Error('reviewer offline');
-      },
+      reviewVerdict: 'block',
       attachResolver: false,
     });
     const { notices } = startNoticeCollector(handle);
@@ -736,10 +734,15 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     await settle();
     expect(notices).toHaveLength(1);
 
-    // 用户自己动过档位之后又回到 Auto、又不可用 → 有权再看到一次。
+    // 同一轮切档不应清除“每轮一次”的 blocked 提示去重状态。
     await handle.setPermissionMode?.('ask');
     await handle.setPermissionMode?.('auto');
     await canUseTool('Write', { file_path: '/tmp/d.conf' }, { toolUseID: 'n5' });
+    await settle();
+    expect(notices).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'Start a new turn.' });
+    await canUseTool('Write', { file_path: '/tmp/e.conf' }, { toolUseID: 'n6' });
     await settle();
     expect(notices).toHaveLength(2);
     await handle.close();

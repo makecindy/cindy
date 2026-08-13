@@ -1900,7 +1900,6 @@ export class PiAgent extends BaseAgent {
       autoReviewDecisionCache.clear();
       // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
       autoReviewUnavailableNotice.reset();
-      autoReviewBlockedNotice.reset();
       const data = (resp.data ?? {}) as { contextWindow?: number };
       if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
         ctx.contextWindow = data.contextWindow;
@@ -2108,7 +2107,6 @@ export class PiAgent extends BaseAgent {
         if (nextMode !== requestedPermissionSnapshot.mode) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
-          autoReviewBlockedNotice.reset();
         }
         const previousMode = requestedPermissionSnapshot.mode;
         await writePermissionSnapshotOrFailClosed({
