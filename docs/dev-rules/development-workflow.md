@@ -95,9 +95,11 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
     随后加入提交。门禁启动后，任何 `git add`／`git reset` 或 index tree ID 变化都会使旧结果
     立即失效。旧快照、无退出码、被调用端终止、只看到「暂无失败输出」都不算通过，唯一有效
     凭证是该 tree ID 的全部强制检查都取得退出码 `0`。通过后再次确认待提交 index tree ID 与
-    受测 tree 一致，直接按 DCO 流程 commit／push；若不一致，回到相应 review 与门禁阶段。
-    普通 PR 仍可按仓库既有流程先提交，再接受 GitHub 自动 review；本条不为所有贡献者新增
-    提交前独立 review 硬门。
+    受测 tree 一致；提交时不得使用会从工作树重新选取内容的 `-a`／`--all`、`--include`／
+    `--only` 或 pathspec，只按已验证 index 执行 DCO commit。commit 后、push 前还必须以
+    `git rev-parse "HEAD^{tree}"` 取得最终 commit tree 并与受测 tree 精确比对；提交命令或本地 hook
+    导致不一致时不得 push，回到相应 review 与门禁阶段。普通 PR 仍可按仓库既有流程先提交，再
+    接受 GitHub 自动 review；本条不为所有贡献者新增提交前独立 review 硬门。
   - **最终门禁环境要可复现且与产品故障分层**：同一批并行任务可将冻结快照依次物化到一个
     已验证、无已知路径污染的专用门禁 checkout，重型门禁严格串行，不让多个 agent／worktree
     同时争抢共享锁。复用该 checkout 已安装的依赖前，当前仓库的依赖指纹必须完全一致：根及
@@ -111,8 +113,10 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
     `XDT_SKIP_AGENT_BIN_INSTALL`、`XDT_CDN_BASE_URL`、`CINDY_AUTH_REGION`，以及上游下载所用的
     `XDT_AGENTBIN_CONNECT_TIMEOUT_MS`、`XDT_AGENTBIN_STALL_TIMEOUT_MS`、
     `XDT_AGENTBIN_TOTAL_TIMEOUT_MS`、`XDT_AGENTBIN_MIN_THROUGHPUT_BPS`、
-    `XDT_AGENTBIN_THROUGHPUT_WINDOW_MS` 一致，并确认已安装 runtime 的版本标记与对应 pin 相符。
-    任一输入变化或无法证明一致，都必须重新执行
+    `XDT_AGENTBIN_THROUGHPUT_WINDOW_MS`，以及 GitHub 下载认证输入 `GITHUB_TOKEN` 的有无与有效
+    权限上下文一致，并确认已安装 runtime 的版本标记与对应 pin 相符。认证输入只能在进程内核验
+    等价上下文，不得把 token 原文、可复用摘要或其他秘密写入指纹、日志或仓库。任一输入变化、
+    无法在不泄密的前提下证明一致，或 runtime 状态无法验证，都必须重新执行
     `pnpm install`，不得复用现有 `node_modules`。普通独立 worktree 仍遵守第 1 节的独立安装
     原则。安装或运行异常必须记录它发生在
     测试启动前、fixture／worker 启动期还是断言阶段；只有取得指向具体外部原因的环境归因证据
