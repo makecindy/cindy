@@ -237,10 +237,11 @@ describe('runMemoryCleanup', () => {
     await runMemoryCleanup(plan, { deps: { now: fixedNow } });
 
     const archived = await archiveContents();
-    // 两个预置旧归档都保留, 新归档成功 (随机后缀, 与预置名不同)。
+    // 两个预置旧归档都保留; 新归档快照 A (递增后缀) + trash 保留副本
+    // (随机后缀, open-fd 写入不丢 — Codex P1 on #2561 第十三轮)。
     expect(archived).toContain('feedback_a.md');
     expect(archived).toContain(`feedback_a.md.${stamp}.deadbeef`);
-    expect(archived).toHaveLength(3);
+    expect(archived).toHaveLength(4);
   });
 
   it('exposes MEMORY.md rebuild failure instead of swallowing it', async () => {
@@ -435,6 +436,68 @@ describe('runMemoryCleanup', () => {
       expect(result.archived).toHaveLength(0);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('restores source via copy fallback when hard links are unsupported', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟宿主在 rename 前写新内容 (trash ≠ 快照), 且文件系统不支持硬链接
+    // (fs.link 抛 ENOTSUP) — restoreTrash 必须 fallback 到 copyFile 排他恢复,
+    // 否则 src 保持缺失、记忆从 list()/MEMORY.md 消失 (Greptile P1 on #2561
+    // 第十三轮: 硬链接失败后源文件缺失)。
+    const realRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
+      if (String(src).endsWith('feedback_a.md') && String(dst).includes('cleanup-trash')) {
+        await writeFile(
+          String(src),
+          "---\ntitle: NEW\ndescription: new\ntype: feedback\nupdatedAt: '2026-03-01T00:00:00.000Z'\n---\nUPDATED\n",
+          'utf8',
+        );
+      }
+      return realRename(src as string, dst as string);
+    });
+    const linkSpy = vi
+      .spyOn(fs, 'link')
+      .mockRejectedValue(Object.assign(new Error('link not supported'), { code: 'ENOTSUP' }));
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // copyFile fallback 恢复: src 重新出现且持有新内容, 报 failed 不丢数据。
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('UPDATED');
+      expect((await archiveContents()).some((f) => f.startsWith('feedback_a.md'))).toBe(true);
+    } finally {
+      renameSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+  });
+
+  it('keeps trash reachable in .archive after comparison passes (no unlink)', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    await runMemoryCleanup(plan);
+
+    // 对比通过后不 unlink 删除最后路径名 (open fd 可能随后写入 renamed inode)
+    // — trash 被移入 .archive, 内容始终可达 (Codex P1 on #2561 第十三轮:
+    // preserve trash until open-fd writers are impossible)。
+    const shardFiles = await readdir(dir);
+    expect(shardFiles.some((f) => f.includes('cleanup-trash'))).toBe(false);
+    const archived = await archiveContents();
+    // 快照 A (base 名) + trash 保留副本 (时间戳+随机后缀) 并存。
+    const snapshots = archived.filter((f) => f.startsWith('feedback_a.md'));
+    expect(snapshots.length).toBeGreaterThanOrEqual(2);
+    expect(snapshots.some((f) => f === 'feedback_a.md')).toBe(true);
+    // trash 副本内容与快照 A 一致 (对比通过的同一份内容)。
+    const snapshotContent = await readFile(path.join(dir, ARCHIVE_DIR_NAME, 'feedback_a.md'), 'utf8');
+    for (const f of snapshots.filter((n) => n !== 'feedback_a.md')) {
+      await expect(readFile(path.join(dir, ARCHIVE_DIR_NAME, f), 'utf8')).resolves.toBe(
+        snapshotContent,
+      );
     }
   });
 });

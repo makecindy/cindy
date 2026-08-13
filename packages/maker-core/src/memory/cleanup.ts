@@ -31,7 +31,7 @@
  * runMemoryCleanup() 执行归档 (幂等, 可重复跑)。
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 
@@ -417,11 +417,19 @@ export async function runMemoryCleanup(
       await fs.rename(src, trash);
       const trashContent = await fs.readFile(trash).catch(() => null);
       if (trashContent !== null && trashContent.equals(srcContent)) {
-        // 归档完成 → 删 trash; 删除失败 (Windows 锁/瞬态权限) 视为已归档,
-        // trash 残留无害 (不符合合法分片名, list 跳过) — 不阻断归档与索引
-        // 重建 (Codex P2 on #2561 第十一轮: rebuild or restore when trash
-        // cleanup fails)。
-        await fs.unlink(trash).catch(() => {});
+        // 归档完成。不立即 unlink: --force 或宿主检测漏掉的已打开 fd
+        // (storage.ts:294 writeFile(fullPath)) 可能在对比后写入 renamed inode,
+        // unlink 删除最后路径名会让新写入内容不可达 (Codex P1 on #2561
+        // 第十三轮: preserve trash until open-fd writers are impossible)。
+        // 把 trash 移入 .archive (保留路径名, 后续 open fd 写入仍可达), 与
+        // 快照 A 并存; 移动失败 (Windows 锁/瞬态权限) 则保留原位 — trash
+        // 名非合法分片 (<type>_<slug>.md), list 跳过, 不污染索引。
+        await fs
+          .rename(
+            trash,
+            path.join(archiveDir, `${item.filename}.${stamp}.${randomBytes(4).toString('hex')}`),
+          )
+          .catch(() => {});
         result.archived.push(item);
       } else {
         // 宿主并发写的新内容 (或 trash 读失败) → no-clobber 恢复 src
@@ -507,10 +515,16 @@ async function writeExclusive(
  * no-clobber 恢复 trash 到 src — 归档对比不一致时, 宿主并发写的新内容
  * (或 trash 读失败) 要放回 src, 保留活动分片。
  *
- * 用 `fs.link` 排他恢复: src 已存在 (宿主在 src 被移到 trash 后重建并写入
+ * 优先 `fs.link` 排他恢复: src 已存在 (宿主在 src 被移到 trash 后重建并写入
  * 新内容) 则 link 抛 EEXIST, **绝不覆盖新写入** — POSIX rename 会静默覆盖
  * 已存在目标 (Greptile P1 / Codex P1 on #2561 第十一轮: 恢复重命名覆盖最新
  * 写入)。src 不存在时 link + unlink(trash) 完成恢复。
+ *
+ * 文件系统不支持硬链接或权限拒绝 (ENOTSUP/EPERM 等非 EEXIST) 时, link 失败
+ * 会让 src 保持缺失、trash 名不可达 → 记忆从 list()/MEMORY.md 消失 (Greptile
+ * P1 on #2561 第十三轮)。fallback 用 copyFile + COPYFILE_EXCL 排他复制恢复
+ * (不依赖硬链接, src 被重建则 EEXIST), 仍失败才抛错 — 此时 trash 保留在原位
+ * 可人工找回, 不静默丢数据。
  */
 async function restoreTrash(
   trash: string,
@@ -525,6 +539,7 @@ async function restoreTrash(
       filename: item.filename,
       error: 'source changed during archive; restored (archive holds reviewed copy)',
     });
+    return;
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
     if (code === 'EEXIST') {
@@ -535,7 +550,28 @@ async function restoreTrash(
       });
       return;
     }
-    throw e;
+    // 非 EEXIST (ENOTSUP/EPERM/ENOSYS …) → 硬链接不可用, fallback 排他复制。
+    try {
+      await fs.copyFile(trash, src, fs.constants.COPYFILE_EXCL);
+      await fs.unlink(trash).catch(() => {});
+      result.failed.push({
+        filename: item.filename,
+        error: 'source changed during archive; restored via copy (archive holds reviewed copy)',
+      });
+      return;
+    } catch (e2) {
+      if ((e2 as NodeJS.ErrnoException).code === 'EEXIST') {
+        // fallback 复制也撞上宿主重建的 src → 不覆盖, 保留 trash 供找回
+        result.failed.push({
+          filename: item.filename,
+          error: 'source recreated during archive; newer copy kept, trash kept for manual review',
+        });
+        return;
+      }
+      // 恢复彻底失败 → 暴露; trash 保留在原位 (非合法分片名, list 跳过),
+      // 外层重建索引后记忆退出正常路径但磁盘数据可人工找回。
+      throw e2;
+    }
   }
 }
 
