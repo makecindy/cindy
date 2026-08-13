@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 
 import { readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
+import { collectGhostContentFiles, type GhostContentTree } from './ghostContentTree.js';
 import { shouldSkipGhostPackEntry } from './ghostPackageContentRules.js';
 
 /**
@@ -47,65 +47,53 @@ function shouldSkipRootEntry(name: string, relBase: string): boolean {
   return relBase === '' && GHOST_CONTENT_DIGEST_SKIP_ROOT_FILES.has(name);
 }
 
+/**
+ * 单次快照。类型判定与递归全部来自共享的 `ghostContentTree`(lstat 分类,
+ * 不信 readdir 的 Dirent 类型位——Windows junction 的类型位跨平台不稳,跟随
+ * 它递归会把根外字节算进摘要,让"内容相同的插件"哈希不一致);非普通条目按
+ * `throw` 策略 fail closed。跳过的目录整棵不递归(例如 source 树的
+ * node_modules),文件列表收集完成后再做有界逐文件读取。
+ */
 async function snapshotDirectoryPass(
   rootDir: string,
-  shouldSkipEntry: (name: string, relBase: string) => boolean,
+  shouldSkipEntry: (name: string, relativeDir: string) => boolean,
 ): Promise<GhostPackageContentEntry[] | null> {
-  let realRoot: string;
+  let tree: GhostContentTree;
   try {
-    realRoot = await fs.promises.realpath(rootDir);
+    tree = await collectGhostContentFiles(rootDir, {
+      dotEntries: 'include',
+      nonRegular: 'throw',
+      label: 'plugin recovery content digest',
+      shouldSkipEntry,
+    });
   } catch {
     return null;
   }
+  if (tree.files.length > MAX_CONTENT_ENTRIES) return null;
 
   const entries: GhostPackageContentEntry[] = [];
-  let entryCount = 0;
   let totalBytes = 0;
-  const walk = async (dir: string, relBase: string): Promise<boolean> => {
-    let handle: fs.Dir;
+  for (const rel of tree.files) {
+    const abs = path.join(tree.rootIdentity.realPath, ...rel.split('/'));
+    let bytes: Buffer | null;
     try {
-      handle = await fs.promises.opendir(dir);
+      bytes = await readBoundedFileNoFollow(abs, Math.max(0, MAX_CONTENT_BYTES - totalBytes), {
+        containWithin: tree.rootIdentity.realPath,
+        rejectHardLinks: true,
+        verifyContentStability: true,
+      });
     } catch {
-      return false;
+      return null;
     }
-    try {
-      for await (const entry of handle) {
-        if (shouldSkipEntry(entry.name, relBase)) continue;
-        entryCount += 1;
-        if (entryCount > MAX_CONTENT_ENTRIES) return false;
-        if (entry.isSymbolicLink() || (!entry.isFile() && !entry.isDirectory())) return false;
-        const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
-        const abs = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          if (!(await walk(abs, rel))) return false;
-          continue;
-        }
-        let bytes: Buffer | null;
-        try {
-          bytes = await readBoundedFileNoFollow(abs, Math.max(0, MAX_CONTENT_BYTES - totalBytes), {
-            containWithin: realRoot,
-            rejectHardLinks: true,
-            verifyContentStability: true,
-          });
-        } catch {
-          return false;
-        }
-        if (bytes === null) return false;
-        totalBytes += bytes.byteLength;
-        if (totalBytes > MAX_CONTENT_BYTES) return false;
-        entries.push({
-          path: rel,
-          bytes: bytes.byteLength,
-          sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
-        });
-      }
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
-    return true;
-  };
-
-  if (!(await walk(realRoot, ''))) return null;
+    if (bytes === null) return null;
+    totalBytes += bytes.byteLength;
+    if (totalBytes > MAX_CONTENT_BYTES) return null;
+    entries.push({
+      path: rel,
+      bytes: bytes.byteLength,
+      sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+    });
+  }
   entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return entries;
 }

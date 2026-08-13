@@ -234,6 +234,34 @@ describe('collectGhostContentFiles', () => {
       await hashGhostContentFiles(dir, before.files),
     );
   });
+
+  it('applies shouldSkipEntry after classification and prunes skipped subtrees', async () => {
+    const dir = path.join(workDir, 'source');
+    await fs.promises.mkdir(path.join(dir, 'node_modules', 'dep'), { recursive: true });
+    await fs.promises.writeFile(path.join(dir, 'ghost.json'), '{}');
+    await fs.promises.writeFile(path.join(dir, 'main.js'), '// brain');
+    await fs.promises.writeFile(path.join(dir, 'node_modules', 'dep', 'index.js'), 'ignored');
+
+    const tree = await collectGhostContentFiles(dir, {
+      dotEntries: 'include',
+      nonRegular: 'throw',
+      label: 'source digest',
+      shouldSkipEntry: (name) => name.toLowerCase() === 'node_modules',
+    });
+    expect(tree.files).toEqual(['ghost.json', 'main.js']);
+
+    // 跳过谓词不绕过类型判定:名字可被跳过的条目被换成链接,仍按 nonRegular 策略拒。
+    await fs.promises.rm(path.join(dir, 'node_modules'), { recursive: true, force: true });
+    if (!(await tryLinkDir(workDir, path.join(dir, 'node_modules')))) return;
+    await expect(
+      collectGhostContentFiles(dir, {
+        dotEntries: 'include',
+        nonRegular: 'throw',
+        label: 'source digest',
+        shouldSkipEntry: (name) => name.toLowerCase() === 'node_modules',
+      }),
+    ).rejects.toThrow(/rejects link entry/);
+  });
 });
 
 describe('hashGhostContentFiles', () => {

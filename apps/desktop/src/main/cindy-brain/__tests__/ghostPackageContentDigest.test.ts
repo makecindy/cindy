@@ -97,4 +97,24 @@ describe('installedGhostContentDigest', () => {
 
     expect(await installedGhostContentDigest(root)).toBeNull();
   });
+
+  it('fails closed on a directory link instead of following it into the digest', async () => {
+    // 回归点(robot review P2):Dirent 类型位在 Windows 上可能把 junction 报成
+    // 目录,自造 opendir 遍历会跟进去,把根外字节算进摘要。判据必须来自
+    // ghostContentTree 的 lstat 分类:链接一律 fail closed。
+    const root = tempRoot();
+    fs.mkdirSync(path.join(root, 'assets'));
+    fs.writeFileSync(path.join(root, 'ghost.json'), '{}');
+    fs.writeFileSync(path.join(root, 'main.js'), 'export default 1;');
+    const outside = tempRoot();
+    fs.writeFileSync(path.join(outside, 'leak.js'), 'outside bytes');
+    try {
+      // Windows 上 junction 无需管理员权限;其它平台按符号链接处理。
+      fs.symlinkSync(outside, path.join(root, 'assets', 'linked'), 'junction');
+    } catch {
+      return;
+    }
+    expect(await installedGhostContentDigest(root)).toBeNull();
+    expect(await packableGhostSourceContentDigest(root)).toBeNull();
+  });
 });

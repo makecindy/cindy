@@ -149,6 +149,13 @@ export interface CollectGhostContentOptions {
   nonRegular: 'throw' | 'flag';
   /** 错误信息前缀。 */
   label: string;
+  /**
+   * 逐条目跳过谓词(名称 + 父级相对目录)。在**类型判定之后**生效:与
+   * dotEntries 同序,被跳过的条目仍先按 nonRegular 策略判类型(名为 `.x`
+   * 的链接同样是改写通道)。被跳过的目录整棵不递归、被跳过的文件不进
+   * `files`。
+   */
+  shouldSkipEntry?: (name: string, relativeDir: string) => boolean;
 }
 
 export interface GhostContentTree {
@@ -322,6 +329,7 @@ export async function collectGhostContentFiles(
         continue;
       }
       if (isDotEntry && options.dotEntries === 'skip') continue;
+      if (options.shouldSkipEntry?.(entry.name, relativeDir)) continue;
       if (kind === 'directory') {
         await collect(relativePath);
       } else {
