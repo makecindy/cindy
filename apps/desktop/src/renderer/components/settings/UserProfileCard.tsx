@@ -53,7 +53,12 @@ export function UserProfileCard() {
   }, [orgLogoUrl]);
 
   const handleLocalSignIn = async () => {
-    await exitLocalMode();
+    try {
+      await exitLocalMode();
+    } catch {
+      // Continue to the login recovery surface; main remains fail closed while
+      // the durable owner transition is incomplete.
+    }
     navigate('/login');
   };
 

@@ -14,6 +14,10 @@ const installServiceMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({
+  app: {
+    isPackaged: false,
+    getPath: vi.fn(() => '/tmp/cindy-skillhub-test'),
+  },
   BrowserWindow: {
     fromWebContents: vi.fn(() => ({ isDestroyed: () => false })),
     getAllWindows: vi.fn(() => []),
@@ -34,6 +38,10 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 
 const getCurrentDataOwnerId = vi.fn((): string | null => 'local-v1');
 vi.mock('../../authManager', () => ({ getCurrentDataOwnerId }));
+
+vi.mock('../../appSessionState', () => ({
+  isAppSessionBoundaryPending: vi.fn(() => false),
+}));
 
 const ensureReady = vi.fn();
 const getRawDb = vi.fn(() => ({ id: 'db' }));

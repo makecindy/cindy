@@ -44,6 +44,7 @@ function ghost(
     },
     dir: '/fake/plugin-a',
     enabled: true,
+    approval: { state: 'approved', revision: 'rev-a' },
   };
 }
 

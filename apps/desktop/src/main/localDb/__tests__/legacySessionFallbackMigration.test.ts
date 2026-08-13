@@ -2,11 +2,9 @@ import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 
 // Migration companion scripts intentionally use CommonJS so the runtime loader can replay them.
-const migration0079 =
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  require('../../../../drizzle/scripts/0079_futuristic_hercules.ts') as {
-    run(db: Database.Database): void;
-  };
+const { default: migration0079 } = (await import(
+  '../../../../drizzle/scripts/0079_futuristic_hercules'
+)) as { default: { run(db: Database.Database): void } };
 
 describe('0079 legacy scheduler session fallback boundary', () => {
   it('marks existing schedules compatible while new schedules keep the isolated default', () => {

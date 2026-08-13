@@ -36,6 +36,7 @@ function ghost(command: string, id = command, enabled = true): InstalledGhost {
     },
     dir: `/tmp/${id}`,
     enabled,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
   };
 }
 
@@ -52,6 +53,7 @@ function hostCapabilityGhost(id = 'ios-simulator'): InstalledGhost {
     },
     dir: `/tmp/${id}`,
     enabled: true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
   };
 }
 

@@ -28,6 +28,15 @@ import {
   type WdaRunningInstance,
 } from '@cindy/ios-simulator-runtime';
 import { IOSSimulatorToolRegistry, registerIOSSimulatorTools } from '@cindy/mcps';
+// The host modules default their owner-boundary probe to
+// isAppSessionBoundaryPending(), which fails closed on an uncommitted owner.
+// These suites exercise simulator/ownership behavior, not boundary transitions;
+// owner-pending paths are covered by tests that pass explicit overrides.
+vi.mock('../../appSessionState.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../appSessionState.js')>();
+  return { ...actual, isAppSessionBoundaryPending: () => false };
+});
+
 import type { IOSSimulatorPublicRouteStatus } from '../../../shared/iosSimulatorIpc';
 import {
   cancelIOSSimulatorSessionOperations,

@@ -1547,6 +1547,7 @@
         "refreshAdded": "已發現 {{count}} 個新模型",
         "refreshNoNew": "模型列表已是最新，無新增",
         "refreshFailed": "模型列表重新整理失敗，請稍後再試",
+        "refreshFetchDisabled": "模型目錄遠端擷取未啟用，已跳過重新整理",
         "disableModel": "停用此模型",
         "enableModel": "啟用此模型",
         "capabilityGroupHint": "不會出現在對話模型選擇中，僅供影像生成等功能使用",
@@ -3438,6 +3439,15 @@
       "install": "安裝插件…",
       "empty": "還沒有安裝任何插件",
       "emptyHint": "可從插件市場安裝，或點選右上角匯入 .cindy 檔案",
+      "reapproval": {
+        "badge": "需要重新確認權限",
+        "action": "重新確認權限",
+        "actionAria": "重新確認插件「{{name}}」的權限",
+        "noticeTitle": "需要重新確認權限",
+        "bodyLegacy": "Cindy 沒有這個插件的權限確認記錄，所以先將它停用。點「重新確認權限」重新檢視它要求的權限，確認後即可繼續使用。",
+        "bodyInvalid": "這個插件的權限確認記錄已損壞，所以先將它停用。點「重新確認權限」重新檢視它要求的權限，確認後即可繼續使用。",
+        "bodyBuiltinRestart": "這個內建插件的權限記錄出了問題。重新啟動 Cindy 即可自動恢復，不需要其他操作。"
+      },
       "legacyRecovery": {
         "title": "舊版本插件正在等待恢復",
         "deferred": "檢測到 {{count}} 箇舊插件目錄。為避免其它例項仍在使用這些資料，Cindy 暫緩了自動恢復。",
@@ -3485,6 +3495,7 @@
         "groupSeparator": "、"
       },
       "toast": {
+        "reapproved": "已恢復「{{name}}」",
         "installed": "已安裝「{{name}}」",
         "uninstalled": "已解除安裝「{{name}}」",
         "installedAsleep": "已安裝「{{name}}」(未生效，可在此開啟)",
@@ -3631,6 +3642,7 @@
         "fileInvalid": "不是合法的 .cindy 插件檔案",
         "hostUnsupported": "這個插件需要目前版本尚未提供的 Cindy 能力。請先更新 Cindy，再重新安裝。",
         "alreadyInstalled": "這個插件已經安裝",
+        "approvalRequired": "繼續前需要重新確認這個插件的權限",
         "commandConflict": "它的指令和已裝插件撞名了，先解除安裝佔用方或讓作者改名",
         "idReserved": "該 id 使用了官方保留字首 cindy-，僅隨應用內建的插件可用",
         "sourceMissing": "找不到所選檔案",
@@ -3738,6 +3750,11 @@
         "slotIOSSimulator": "內建 iOS 模擬器"
       },
       "commandPaletteTag": "插件指令",
+      "reapproveConfirm": {
+        "title": "重新確認「{{name}}」的權限？",
+        "body": "按下方清單重新授權這個已安裝的插件，不需要重新提供安裝包檔案。",
+        "confirm": "確認並恢復"
+      },
       "updateConfirm": {
         "title": "更新插件「{{name}}」？",
         "body": "版本 {{from}} → {{to}}。將替換現有版本；生效狀態與面板位置保持不變。",
@@ -3761,6 +3778,7 @@
       },
       "updateAll": {
         "title": "全部更新 · {{count}} 個插件",
+        "collapseDiff": "收起",
         "description": "權限無變化的更新會自動完成；涉及權限變更的需要你逐項確認。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "排隊中",
@@ -3770,7 +3788,13 @@
         "statusFailed": "更新失敗",
         "background": "後臺繼續",
         "doneAction": "完成",
-        "doneToast": "批次更新完成：{{done}} 個已更新，{{rest}} 個未完成"
+        "doneToast": "批次更新完成：{{done}} 個已更新，{{rest}} 個未完成",
+        "permissionChanged": "權限變更",
+        "rereview": "重新審閱",
+        "reviewDiff": "查看",
+        "reviewOutdated": "審查過期",
+        "approve": "同意",
+        "skip": "跳過"
       }
     },
     "mcp": {
@@ -5706,6 +5730,7 @@
       "startFailed": "開啟協同失敗",
       "startFailedContinue": "開啟協同失敗，已改為單任務繼續",
       "createWorkerRefreshFailed": "Worker 狀態重新整理失敗，請稍後重試",
+      "assignmentFailed": "Worker 已建立，但無法確認任務是否派發成功。請先查看 Worker 面板，再決定是否重試",
       "openHint": "召集 Worker 協作",
       "disabledHint": "協同模式已關閉，請在設定中重新啟用",
       "unavailableHint": "暫時無法確認協同設定，請稍後重試",

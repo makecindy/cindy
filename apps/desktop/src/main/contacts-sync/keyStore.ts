@@ -202,9 +202,11 @@ export class ContactsSyncKeyStore {
 }
 
 /**
- * 复用已有异步跨进程锁：等待只占 Promise，不阻塞 Electron Main。锁用 PID + mtime
- * 心跳确认陈旧 owner，释放前复核归属，避免多个等待者 compare-then-unlink；任何
- * busy / unavailable 都 fail closed，不能在没有互斥时读改写密钥文件。
+ * 使用 ordinary/advisory 档异步跨进程锁：等待只占 Promise，不阻塞 Electron Main。
+ * advisory 描述的是 owner 证明档位，不代表互斥可选；这里用 PID 存活、mtime 心跳和
+ * 每次 acquisition 的 nonce 安全接管/释放，任何 busy / unavailable 都 fail closed，
+ * 不能在没有互斥时读改写密钥文件。密钥内容安全由加密、owner scope 和原子替换保证，
+ * 这把锁本身不承担插件授权裁决，因此不应升级为 security-boundary 档。
  */
 async function withKeyFileLock<T>(file: string, task: () => T): Promise<T> {
   await fsp.mkdir(path.dirname(file), { recursive: true });

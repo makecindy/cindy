@@ -252,7 +252,7 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('const authRealmChanged = refreshRealm !== activeAuthRealm;');
     expect(refreshBody).toContain('writePersistedAuthSession(data.refreshToken, refreshRealm);');
     expect(refreshBody).toContain('activeAuthRealm = refreshRealm;');
-    expect(refreshBody).toContain('previousUserId !== currentUser.id || authRealmChanged');
+    expect(refreshBody).toContain('previousUserId !== nextUser.id || authRealmChanged');
     expect(refreshBody).toContain('if (authRealmChanged) {\n        notifyAuthListeners();');
 
     expect(deviceLinkSource).toContain('restartDeviceLinkForAuthRealmChange();');
@@ -266,13 +266,19 @@ describe('auth login-flow reset', () => {
     const helperStart = source.indexOf('async function expireRuntimeAuth(');
     const helperEnd = source.indexOf('\n}\n\n// ── Public API', helperStart);
     const helperBody = source.slice(helperStart, helperEnd);
-    expect(helperBody).toContain('beginAppSessionBoundary()');
-    expect(helperBody).toContain('notifyRendererAuthBoundaryPending();');
     expect(helperBody).toContain('clearAuth({ notify: false,');
-    expect(helperBody).toContain('await accountSwitchTeardown');
-    expect(helperBody).toContain('closeLocalDb();');
-    expect(helperBody).toContain('notifyAuthListeners();');
+    expect(helperBody).toContain('await withAccountFreeOwnerCommit({');
+    expect(helperBody).toContain('authAlreadyCleared: true');
     expect(helperBody).toContain('notifySessionExpired(reason);');
+
+    const ownerCommitStart = source.indexOf('async function withAccountFreeOwnerCommit(');
+    const ownerCommitEnd = source.indexOf('\n}\n\nasync function withCloudOwnerCommit(', ownerCommitStart);
+    const ownerCommitBody = source.slice(ownerCommitStart, ownerCommitEnd);
+    expect(ownerCommitBody).toContain('beginAppSessionBoundary()');
+    expect(ownerCommitBody).toContain('notifyRendererAuthBoundaryPending();');
+    expect(ownerCommitBody).toContain('await accountSwitchTeardown');
+    expect(ownerCommitBody).toContain('await authSessionTeardown(opts.reason);');
+    expect(ownerCommitBody).toContain('notifyAuthListeners();');
 
     const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
     const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);

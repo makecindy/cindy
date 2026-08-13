@@ -3,6 +3,7 @@ import os from 'node:os';
 import { ipcMain, type WebContents } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
+import { isGhostInstallApprovalToken, type GhostManifest } from '../../shared/ghost.js';
 import { isPluginMarketCustomIconKey } from '../../shared/pluginMarket.js';
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
 import {
@@ -167,10 +168,29 @@ export function registerPluginMarketIpc(): void {
         typeof options === 'object' && options !== null
           ? (options as {
               expectedReleaseId?: unknown;
+              expectedInstalledApproval?: unknown;
+              expectedManifest?: unknown;
+              allowPermissionExpansion?: unknown;
+              reviewedBaseline?: unknown;
               allowSourceReplacement?: unknown;
             })
           : null;
       const expectedReleaseId = requireString(obj?.expectedReleaseId, 'expectedReleaseId');
+      const expectedInstalledApproval = obj?.expectedInstalledApproval;
+      if (
+        expectedInstalledApproval !== undefined &&
+        !isGhostInstallApprovalToken(expectedInstalledApproval)
+      ) {
+        throwIpcError(
+          'INVALID_PARAMS',
+          'expectedInstalledApproval must come from ghosts:list',
+        );
+      }
+      const expectedManifest = requireObject(obj?.expectedManifest);
+      const allowPermissionExpansion = obj?.allowPermissionExpansion === true;
+      // 扩权批准的审阅基线:只收字符串,野值按缺席处理(缺席 = 保持旧行为)。
+      const reviewedBaseline =
+        typeof obj?.reviewedBaseline === 'string' ? obj.reviewedBaseline : undefined;
       const allowSourceReplacement = obj?.allowSourceReplacement;
       if (typeof allowSourceReplacement !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'allowSourceReplacement must be a boolean');
@@ -180,6 +200,12 @@ export function registerPluginMarketIpc(): void {
           requireString(pluginId, 'pluginId'),
           {
             expectedReleaseId,
+            expectedManifest: expectedManifest as unknown as GhostManifest,
+            ...(expectedInstalledApproval !== undefined
+              ? { expectedInstalledApproval }
+              : {}),
+            allowPermissionExpansion,
+            ...(reviewedBaseline !== undefined ? { reviewedBaseline } : {}),
             allowSourceReplacement,
           },
           (facts) =>

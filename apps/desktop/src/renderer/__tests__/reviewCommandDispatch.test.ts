@@ -19,7 +19,8 @@ describe('/review command dispatch', () => {
     expect(dispatchSource).toContain('await window.electronAPI.maker.startReview({');
     expect(dispatchSource).toContain('return { handled: true, accepted: true, message }');
     expect(dispatchSource).toContain('return { handled: true, accepted: false, message }');
-    expect(sessionViewSource).toContain('if (slashDispatch.handled) return slashDispatch.accepted');
+    expect(sessionViewSource).toContain('if (slashDispatch.handled) {');
+    expect(sessionViewSource).toContain('waitForLeadHistory: false');
     expect(dispatchSource.indexOf('.startReview({')).toBeLessThan(
       dispatchSource.indexOf('void dispatchCommand(hit'),
     );
@@ -62,6 +63,8 @@ describe('/review command dispatch', () => {
   });
 
   it('only clears a deferred composer after Main accepts the Review', () => {
-    expect(dispatchSource).toContain('if (slashDispatch.accepted) pending.onDeferredAccepted?.();');
+    expect(dispatchSource).toContain('if (slashDispatch.accepted) {');
+    expect(dispatchSource).toContain('pending.onDeferredAccepted?.();');
+    expect(dispatchSource).toContain('waitForLeadHistory: false');
   });
 });

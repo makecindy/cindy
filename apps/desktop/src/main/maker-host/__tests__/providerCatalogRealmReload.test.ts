@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
+  devMode: false,
   owner: 'owner-default',
   loads: [] as Array<{
     source: Record<string, unknown>;
@@ -48,7 +49,7 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
 
 vi.mock('../../manifestService.js', () => ({
   getBaseUrl: () => 'https://legacy-build-cdn.example',
-  isDev: () => false,
+  isDev: () => h.devMode,
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getBuildClientEndpoint: () => h.buildEndpoint,
@@ -573,6 +574,31 @@ describe('provider catalog realm reload', () => {
       h.owner = 'owner-default';
       await fsp.rm(root, { recursive: true, force: true });
       syncLocalCatalogOverridesIntoActiveCatalog();
+    }
+  });
+
+  it('dev 缺省禁网时手动刷新不发请求,抛 MODEL_CATALOG_FETCH_DISABLED 而非伪装的网络失败', async () => {
+    h.devMode = true;
+    const savedUrl = process.env.XDT_MODELS_URL;
+    const savedPath = process.env.XDT_MODELS_PATH;
+    const savedForceOff = process.env.XDT_DISABLE_MODELS_FETCH;
+    delete process.env.XDT_MODELS_URL;
+    delete process.env.XDT_MODELS_PATH;
+    delete process.env.XDT_DISABLE_MODELS_FETCH;
+    try {
+      const loadsBefore = h.refreshLoads.length;
+      await expect(refreshActiveCatalogFromSource()).rejects.toMatchObject({
+        code: 'MODEL_CATALOG_FETCH_DISABLED',
+      });
+      expect(h.refreshLoads).toHaveLength(loadsBefore);
+    } finally {
+      h.devMode = false;
+      if (savedUrl === undefined) delete process.env.XDT_MODELS_URL;
+      else process.env.XDT_MODELS_URL = savedUrl;
+      if (savedPath === undefined) delete process.env.XDT_MODELS_PATH;
+      else process.env.XDT_MODELS_PATH = savedPath;
+      if (savedForceOff === undefined) delete process.env.XDT_DISABLE_MODELS_FETCH;
+      else process.env.XDT_DISABLE_MODELS_FETCH = savedForceOff;
     }
   });
 });

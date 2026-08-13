@@ -28,8 +28,10 @@ vi.mock('@/contexts/AuthContext', () => ({
 
 import {
   __installedPluginLayoutForTests,
+  diffMarketUpdatePermissionItems,
   GhostPluginCard,
   LegacyGhostRecoveryNotice,
+  marketUpdateAllowsPermissionExpansion,
   MarketPluginCard,
 } from '../GhostPluginPage';
 import {
@@ -37,6 +39,7 @@ import {
   __resetGhostUnreadForTest,
 } from '@/cindy-brain/ghostUnreadStore';
 import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
+import type { InstalledGhost } from '../../../../shared/ghost';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 const {
@@ -47,6 +50,58 @@ const {
   visibleInstalledPluginItems,
 } = __installedPluginLayoutForTests;
 
+describe('diffMarketUpdatePermissionItems', () => {
+  it.each(['legacy-unapproved', 'invalid'] as const)(
+    'reviews every target permission for a %s install',
+    (approvalState) => {
+      const manifest = {
+        schemaVersion: 2 as const,
+        id: 'legacy-plugin',
+        name: 'Legacy Plugin',
+        description: 'Legacy approval regression fixture',
+        author: 'Cindy',
+        version: '1.0.0',
+        kind: 'chip' as const,
+        entry: 'main.js',
+        slots: ['notify'] as ['notify'],
+      };
+      const installed = {
+        manifest,
+        dir: 'C:\\plugins\\legacy-plugin',
+        enabled: false,
+        approval: { state: approvalState },
+      };
+      const next = {
+        ...manifest,
+        version: '2.0.0',
+        slots: ['notify', 'fs'] as ['notify', 'fs'],
+      };
+
+      const diff = diffMarketUpdatePermissionItems(installed, next);
+      expect(diff.added.map((item) => item.key)).toEqual(expect.arrayContaining(['notify', 'fs']));
+      expect(diff.removed).toEqual([]);
+      expect(diff.unchanged).toEqual([]);
+    },
+  );
+});
+
+describe('marketUpdateAllowsPermissionExpansion', () => {
+  const installed = (approvalState: 'approved' | 'legacy-unapproved' | 'invalid') =>
+    ({ approval: { state: approvalState } }) as InstalledGhost;
+
+  it.each(['legacy-unapproved', 'invalid'] as const)(
+    'allows the full reapproval of a no-permission %s install',
+    (approvalState) => {
+      expect(marketUpdateAllowsPermissionExpansion(installed(approvalState), 0)).toBe(true);
+    },
+  );
+
+  it('only allows approved installs when the reviewed diff adds permissions', () => {
+    expect(marketUpdateAllowsPermissionExpansion(installed('approved'), 0)).toBe(false);
+    expect(marketUpdateAllowsPermissionExpansion(installed('approved'), 1)).toBe(true);
+  });
+});
+
 const commandPlugin: GhostPluginListItem = {
   id: 'filo-google',
   name: 'Filo Google',
@@ -54,6 +109,8 @@ const commandPlugin: GhostPluginListItem = {
   version: '1.0.0',
   enabled: true,
   canUse: true,
+  approvalState: 'approved',
+  builtin: false,
   tabPanel: false,
   hostCapability: null,
   oauthAuthorizationExpired: false,

@@ -343,6 +343,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:project-automation:remove-schedule',
   // —— Orca 协同(Lead 控多 Worker;在被控端进程内编排)——
   'maker:worker:create',
+  'maker:worker:dispatch-ui-assignment',
   'maker:worker:list',
   'maker:worker:switch-focus',
   'maker:worker:idle',
@@ -620,6 +621,9 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 10min,压缩恰好到预算上限时会先 INVOKE_TIMEOUT,被误判为「设备无响应」并
   // 可能触发 peer-link 恢复(codex P2)——同 desktop-cmd:run 模式加 1min 余量。
   'maker:compact-session': 11 * 60_000,
+  // 被控端先等 Lead history 最多 30s，再 resume/queue Worker；默认 30s 会与服务端
+  // deadline 对撞，把边沿成功误报成 DEVICE_LINK_TIMEOUT。留出派发和回程余量。
+  'maker:worker:dispatch-ui-assignment': 65_000,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。

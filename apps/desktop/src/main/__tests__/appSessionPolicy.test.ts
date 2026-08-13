@@ -21,6 +21,12 @@ describe('local app-session policy', () => {
     expect(deriveAppCapabilities('cloud', false).canUseCindyAccountServices).toBe(true);
   });
 
+  it('fails closed while the durable cloud owner is not stable', () => {
+    expect(deriveAppCapabilities('cloud', false, false).canUseCindyAccountServices).toBe(false);
+    expect(deriveAppCapabilities('cloud', false, false).canUseCindyGateway).toBe(false);
+    expect(deriveAppCapabilities('cloud', false, true).canUseCindyAccountServices).toBe(true);
+  });
+
   it('rejects local DB work while the matching owner boundary is pending', () => {
     const state = { dataOwnerId: 'cloud-a' };
     expect(isLocalDbOwnerCurrent(state, 'cloud-a', false)).toBe(true);

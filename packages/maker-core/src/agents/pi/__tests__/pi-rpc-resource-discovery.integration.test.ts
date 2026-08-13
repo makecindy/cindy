@@ -901,7 +901,7 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
           baseDir: snapshotSkill,
           path: path.join(snapshotSkill, 'SKILL.md'),
           source: 'local',
-          scope: 'project',
+          scope: 'temporary',
         }),
       }),
     ]));

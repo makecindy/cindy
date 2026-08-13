@@ -48,7 +48,12 @@ function ghost(id: string, panel?: GhostManifest['panel'] | null, enabled = true
     slots: panel === null ? ['tool'] : ['panel'],
     ...(panel === null ? {} : { panel: panel ?? { title: id, html: 'panel.html' } }),
   };
-  return { manifest, dir: `/fake/${id}`, enabled };
+  return {
+    manifest,
+    dir: `/fake/${id}`,
+    enabled,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+  };
 }
 
 afterEach(() => {

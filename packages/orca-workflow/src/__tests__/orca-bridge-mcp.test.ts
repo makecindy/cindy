@@ -379,6 +379,81 @@ describe('orca_worker_bridge MCP helpers', () => {
     }
   });
 
+  it('reads only the owning Lead history without creating or waking the Lead', async () => {
+    const workerLink: OrcaWorkerLink = {
+      workerId: 'worker-1',
+      workflowId: 'workflow-1',
+      workerSessionId: 'worker-session-1',
+      leadSessionId: 'lead-1',
+      leadSession: {
+        sessionId: 'lead-1',
+        agentKind: 'claude-code',
+        workingDir: '/repo',
+        model: 'claude-opus-4-7',
+      },
+    };
+    const base = makeProvider({ workerLink });
+    const readLeadHistory = vi.fn().mockResolvedValue({
+      items: [{
+        id: 'message-1',
+        role: 'user',
+        content: { text: 'Review this worktree' },
+        agentMeta: null,
+        createdAt: 456,
+      }],
+      hasMore: true,
+      nextCursor: { createdAt: 456, id: 'message-1', rowid: 17 },
+    });
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => base.maker as unknown as Maker,
+      logger: makeLogger(),
+      persistUserMessage: vi.fn(),
+      wireSession: vi.fn(),
+      readLeadHistory,
+      orcaTeamStore: {
+        getWorkerLink: vi.fn(async () => workerLink),
+        updateWorkerStatus: vi.fn(),
+      },
+    });
+    const server = getServer(provider, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'worker-session-1',
+      vendorOptions: {
+        orcaRole: 'worker',
+        orcaWorkerId: 'worker-1',
+        orcaWorkerSessionId: 'worker-session-1',
+      },
+    });
+
+    const result = parseToolJson(await server._registeredTools.read_lead_history.handler({
+      worker_id: 'worker-1',
+      from_ms: 123,
+      limit: 50,
+      cursor: { created_at_ms: 234, id: 'previous', rowid: 9 },
+    }));
+
+    expect(readLeadHistory).toHaveBeenCalledWith({
+      leadSessionId: 'lead-1',
+      fromMs: 123,
+      limit: 50,
+      cursor: { createdAt: 234, id: 'previous', rowid: 9 },
+    });
+    expect(result).toMatchObject({
+      worker_id: 'worker-1',
+      lead_session_id: 'lead-1',
+      has_more: true,
+      next_cursor: { created_at_ms: 456, id: 'message-1', rowid: 17 },
+    });
+    expect(base.createSessionCalls).toEqual([]);
+
+    expect(expectToolError(await server._registeredTools.read_lead_history.handler({
+      worker_id: 'forged-worker',
+      limit: 50,
+    }))).toMatchObject({ error: 'worker identity mismatch' });
+    expect(readLeadHistory).toHaveBeenCalledTimes(1);
+  });
+
   function makeWorkerBridgeLeadHarness(lead: FakeSession) {
     const logger = makeLogger();
     const workerLink: OrcaWorkerLink = {

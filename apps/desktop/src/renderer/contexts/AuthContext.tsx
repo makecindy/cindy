@@ -37,6 +37,7 @@ import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
+import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
@@ -181,6 +182,7 @@ export function AuthProvider({
       setNewMakerDraftOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
       setPendingHandoffOwner(state.dataOwnerId);
+      setDeferredUiAssignmentOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);
       if (ownerChanged) {
         setMemorySettingsOwner(state.dataOwnerId);
@@ -350,6 +352,7 @@ export function AuthProvider({
     activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
+    setDeferredUiAssignmentOwner(state.dataOwnerId);
     setMode(state.mode);
     setDataOwnerId(state.dataOwnerId);
     setCanEnterApp(state.canEnterApp);
@@ -364,6 +367,7 @@ export function AuthProvider({
     activeDataOwnerGenerationRef.current = state.ownerGeneration;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
+    setDeferredUiAssignmentOwner(state.dataOwnerId);
     setMode(state.mode);
     setDataOwnerId(state.dataOwnerId);
     setCanEnterApp(state.canEnterApp);

@@ -97,7 +97,9 @@ describe('CCAgentSessionView 接线不变式', () => {
     expect(sessionViewSrc).toContain(
       "const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;",
     );
-    expect(sessionViewSrc).toContain('if (accepted) pending.onDeferredAccepted?.();');
+    expect(sessionViewSrc).toContain('if (accepted) {');
+    expect(sessionViewSrc).toContain('pending.onDeferredAccepted?.();');
+    expect(sessionViewSrc).toContain('dispatchDeferredUiAssignment(sessionId, undefined).catch');
     expect(sessionViewSrc).toContain(
       '...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {})',
     );

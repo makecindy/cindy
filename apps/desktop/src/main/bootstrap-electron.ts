@@ -754,7 +754,9 @@ import {
   getGhostCindySlot,
   getGhostManager,
   getGhostSessionActivityTracker,
+  interruptGhostCallsForAccountBoundary,
   isGhostAvailableForActiveSession,
+  reconcileGhostOauthAccountsForActiveOwner,
   refreshGhostLocalization,
   registerGhostIpc,
   setGhostsChangedObserver,
@@ -1119,10 +1121,57 @@ async function ensureLifecycleDbClient(userId: string) {
   });
 }
 
+const AUTH_BOUNDARY_WAIT_TIMEOUT_MS = 10_000;
+
+async function withAuthBoundaryTimeout<T>(label: string, task: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${AUTH_BOUNDARY_WAIT_TIMEOUT_MS}ms`));
+        }, AUTH_BOUNDARY_WAIT_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
+  const failures: unknown[] = [];
+  const run = async (label: string, task: () => Promise<void>): Promise<void> => {
+    try {
+      await task();
+    } catch (error) {
+      failures.push(error);
+      authBoundaryLog.error(`${label} on ${reason} failed`, error);
+    }
+  };
+
+  await run('interruptGhostCallsForAccountBoundary', () =>
+    withAuthBoundaryTimeout('interrupt Ghost calls', interruptGhostCallsForAccountBoundary));
+  await run('waitForGhostMutations', () =>
+    withAuthBoundaryTimeout('wait for Ghost mutations', waitForGhostMutations));
+  await run('suspendAllGhosts', suspendAllGhosts);
+
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Ghost projection teardown on ${reason} was incomplete`);
+  }
+}
+
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
+  const blockingFailures: unknown[] = [];
   // The boundary is already marked pending by every caller. New actions now
   // fail closed; drain an action that crossed the boundary before closing its DB.
-  await waitForTurnChangeSetActions();
+  try {
+    await withAuthBoundaryTimeout('wait for turn change-set actions', waitForTurnChangeSetActions);
+  } catch (error) {
+    blockingFailures.push(error);
+    authBoundaryLog.error(`waitForTurnChangeSetActions on ${reason} failed`, error);
+  }
   skillhubAutoSyncService.cancelInFlight();
   // Custom provider routes are owner-scoped but the active catalog is process-global.
   // Clear synchronously at the boundary; the next owner's tracked readiness reloads them
@@ -1171,8 +1220,11 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // Every Ghost sandbox can retain live OAuth, subscription, or in-memory
   // state. Stop them before changing owners; resident Ghosts are recreated by
   // the auth-change activation pass after the new boundary is committed.
-  await waitForGhostMutations();
-  suspendAllGhosts();
+  try {
+    await teardownGhostProjectionBoundary(reason);
+  } catch (error) {
+    blockingFailures.push(error);
+  }
   // Personal IM channels have the same DB boundary. Relogin restarts them from
   // the next owner DB-ready callback; app:ready-for-bot remains a compatibility
   // retry after the new DbClient is ready.
@@ -1277,13 +1329,39 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   } finally {
     releaseEndedSuppression();
   }
-  agentIslandService?.resetRuntimeState();
+  // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
+  // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
+  // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
+  try {
+    await releaseDeviceLinkOwnershipBeforeLogout();
+  } catch (err) {
+    authBoundaryLog.error(
+      `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`,
+      err,
+    );
+  }
+  try {
+    await lifecycleDbClientManager.dispose(reason);
+  } finally {
+    try {
+      localDbCloseDb();
+    } catch (error) {
+      blockingFailures.push(error);
+      authBoundaryLog.error(`close local DB on ${reason} failed`, error);
+    }
+    agentIslandService?.resetRuntimeState();
+  }
+
+  if (blockingFailures.length > 0) {
+    throw new AggregateError(blockingFailures, `account boundary teardown on ${reason} was incomplete`);
+  }
 }
 
 authManager.setAccountSwitchTeardown(async () => {
   await teardownAuthAccountBoundary('runtime-replacement-account-switch');
 });
 authManager.setAuthSessionTeardown(teardownAuthAccountBoundary);
+authManager.setProjectionRepairTeardown(teardownGhostProjectionBoundary);
 
 try {
   reapClaudeOrphansSync();
@@ -3058,6 +3136,15 @@ function syncDefaultPluginsForActiveOwner(): void {
   });
 }
 
+function reconcileGhostOauthForActiveOwner(): void {
+  void reconcileGhostOauthAccountsForActiveOwner().catch((error) => {
+    createLogger('ghost-oauth-owner-reconcile').warn(
+      'OAuth account reconciliation for active owner failed',
+      { error: error instanceof Error ? error.message : String(error) },
+    );
+  });
+}
+
 function parseOptionalDeviceLinkDeviceId(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
   if (value === null) return null;
@@ -4306,13 +4393,7 @@ const registerIpcHandlers = () => {
   });
 
   ipcMain.handle('auth:logout', async () => {
-    const releaseBoundary = beginAppSessionBoundary();
-    try {
-      await teardownAuthAccountBoundary('logout');
-      await authManager.logout();
-    } finally {
-      releaseBoundary();
-    }
+    await authManager.logout();
   });
 
   ipcMain.handle('auth:enter-local', async () => {
@@ -4320,26 +4401,14 @@ const registerIpcHandlers = () => {
       return authManager.getAuthState();
     }
     await authManager.waitForSessionInvalidation();
-    const releaseBoundary = beginAppSessionBoundary();
-    try {
-      await teardownAuthAccountBoundary('enter-local-mode');
-      return authManager.enterLocalMode();
-    } finally {
-      releaseBoundary();
-    }
+    return authManager.enterLocalMode();
   });
 
   ipcMain.handle('auth:exit-local', async () => {
     if (getActiveAppSession().mode !== 'local') {
       throwIpcError('PRECONDITION_FAILED', 'Local mode is not active.');
     }
-    const releaseBoundary = beginAppSessionBoundary();
-    try {
-      await teardownAuthAccountBoundary('exit-local-mode');
-      return authManager.exitLocalMode();
-    } finally {
-      releaseBoundary();
-    }
+    return authManager.exitLocalMode();
   });
 
   ipcMain.handle('auth:refresh', async () => {
@@ -4359,7 +4428,6 @@ const registerIpcHandlers = () => {
     clearReceipt: () => authManager.clearAccountDeletionReceipt(),
     consumeRestoredNotice: () => authManager.consumeAccountDeletionRestoredNotice(),
     isConfirmedLocalSessionCurrent: () => authManager.isConfirmedAccountDeletionSessionCurrent(),
-    teardownAccountBoundary: () => teardownAuthAccountBoundary('account-deletion'),
     clearLocalSession: () => authManager.clearLocalSessionAfterAccountDeletion(),
     logWarn: (message, error) => accountDeletionLog.warn(message, error),
   });
@@ -5202,9 +5270,13 @@ const registerIpcHandlers = () => {
   // 复用市场快照；云端登录/切号的通知可能早于 owner boundary 释放，因此
   // 延迟到当前调用栈结束后再按已提交的新 owner 补跑一次。
   disposePluginMarketAuthListener = authManager.onAuthStateChange(() => {
-    queueMicrotask(syncDefaultPluginsForActiveOwner);
+    queueMicrotask(() => {
+      syncDefaultPluginsForActiveOwner();
+      reconcileGhostOauthForActiveOwner();
+    });
   });
   syncDefaultPluginsForActiveOwner();
+  reconcileGhostOauthForActiveOwner();
 
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
   ipcMain.handle(

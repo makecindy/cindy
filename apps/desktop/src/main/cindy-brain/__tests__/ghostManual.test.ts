@@ -47,6 +47,7 @@ function ghost(manualDir = 'docs/physical-dir'): InstalledGhost {
     manifest: ghostManifest,
     dir: workDir,
     enabled: true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
     trust: {
       level: 'unverified',
       publisherSigned: false,

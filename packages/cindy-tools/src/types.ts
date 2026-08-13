@@ -215,6 +215,10 @@ export type CindyGhostCallResult =
 /** ghost_forge_pack 的结构化失败分类(host 侧产生,原样透传给 agent)。 */
 export type CindyForgePackErrorCode =
   | 'DIR_NOT_FOUND' // 目录不存在或不是目录
+  | 'SOURCE_OUTSIDE_WORKDIR' // 源目录不在当前会话工作目录内
+  | 'WORKDIR_NOT_LOCAL' // 当前会话工作目录在远端或无法证明为本地
+  | 'WORKDIR_READ_ONLY' // 当前会话禁止写入
+  | 'SOURCE_IS_INSTALLED_PLUGIN' // 源目录命中 Host 管理的已安装插件或批准状态根
   | 'MANIFEST_INVALID' // ghost.json 缺失 / 不合法(message 带具体原因)
   | 'ENTRY_MISSING' // 清单声明的 entry / panel.html 等文件不在目录里
   | 'TOO_LARGE' // 文件数或总体积超上限
@@ -251,7 +255,7 @@ export type CindyForgeScaffoldResult =
     }
   | {
       ok: false;
-      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'INTERNAL';
+      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'WORKDIR_NOT_LOCAL' | 'WORKDIR_READ_ONLY' | 'INTERNAL';
       message: string;
     };
 

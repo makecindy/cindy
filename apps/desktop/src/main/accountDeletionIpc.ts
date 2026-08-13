@@ -31,8 +31,7 @@ export interface AccountDeletionIpcDeps {
   clearReceipt(): void;
   consumeRestoredNotice(): boolean;
   isConfirmedLocalSessionCurrent(): boolean;
-  teardownAccountBoundary(): Promise<void>;
-  clearLocalSession(): boolean;
+  clearLocalSession(): Promise<boolean>;
   logWarn(message: string, error?: unknown): void;
 }
 
@@ -108,15 +107,16 @@ export function createAccountDeletionIpcHandlers(
           return { success: true, value: status };
         }
 
-        // Teardown failures are non-fatal here: keeping the initiator logged in
-        // would be more misleading and less safe than completing local logout.
         try {
-          await deps.teardownAccountBoundary();
+          if (!(await deps.clearLocalSession())) {
+            deps.logWarn('local auth identity changed during account deletion teardown; skip clear');
+          }
         } catch (error) {
-          deps.logWarn('account boundary teardown after deletion failed (non-fatal)', error);
-        }
-        if (!deps.clearLocalSession()) {
-          deps.logWarn('local auth identity changed during account deletion teardown; skip clear');
+          deps.logWarn(
+            'account boundary cleanup after deletion is incomplete; local auth remains fail closed',
+            error,
+          );
+          return { success: true, value: status };
         }
         return { success: true, value: status };
       })();

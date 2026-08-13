@@ -580,6 +580,8 @@ export const MAKER_INVOKE = {
   PROJECT_AUTOMATION_REMOVE_SCHEDULE: 'maker:project-automation:remove-schedule',
   // multi-worker Phase 1
   WORKER_CREATE: 'maker:worker:create',
+  /** 新建 Lead 的首条输入 accepted 后，派发此前延后的 UI initial_task。 */
+  WORKER_DISPATCH_UI_ASSIGNMENT: 'maker:worker:dispatch-ui-assignment',
   WORKER_LIST: 'maker:worker:list',
   WORKER_SWITCH_FOCUS: 'maker:worker:switch-focus',
   WORKER_IDLE: 'maker:worker:idle',

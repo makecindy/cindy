@@ -1551,6 +1551,7 @@
         "refreshAdded": "새 모델 {{count}}개를 발견했습니다",
         "refreshNoNew": "모델 목록이 최신 상태입니다. 새 항목이 없습니다",
         "refreshFailed": "모델 목록을 새로고침하지 못했습니다. 잠시 후 다시 시도해 주세요",
+        "refreshFetchDisabled": "모델 카탈로그 원격 가져오기가 비활성화되어 새로고침을 건너뛰었습니다",
         "disableModel": "이 모델 비활성화",
         "enableModel": "이 모델 활성화",
         "capabilityGroupHint": "대화 모델 선택에는 표시되지 않으며, 이미지 생성 등 기능에서만 사용됩니다.",
@@ -3436,6 +3437,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "권한 재확인 필요",
+        "action": "권한 다시 확인",
+        "actionAria": "플러그인 {{name}}의 권한 다시 확인",
+        "noticeTitle": "권한 재확인 필요",
+        "bodyLegacy": "Cindy에 이 플러그인의 권한 확인 기록이 없어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요.",
+        "bodyInvalid": "이 플러그인의 권한 확인 기록이 손상되어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요.",
+        "bodyBuiltinRestart": "이 내장 플러그인의 승인 기록에 문제가 발생했습니다. Cindy를 다시 시작하면 자동으로 복구되며, 다른 조치는 필요하지 않습니다."
+      },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
       "emptyHint": "마켓에서 설치하거나 위 메뉴에서 .cindy 파일을 가져올 수 있습니다",
@@ -3490,6 +3500,7 @@
         "uninstalled": "\"{{name}}\" 제거됨",
         "installedAsleep": "\"{{name}}\" 설치 완료 (비활성 상태이며 여기에서 언제든 활성화할 수 있습니다)",
         "updated": "\"{{name}}\"이(가) v{{version}}(으)로 업데이트되었습니다",
+        "reapproved": "\"{{name}}\"이(가) 복원되었습니다",
         "exported": "\"{{name}}\"의 .cindy 파일을 내보냈습니다",
         "exportFailed": "\"{{name}}\"을(를) 내보내지 못했습니다. 다시 시도하세요",
         "projectDisabled": "이 프로젝트에서 \"{{name}}\"을(를) 껐습니다",
@@ -3632,6 +3643,7 @@
         "fileInvalid": "유효한 .cindy 플러그인 파일이 아닙니다",
         "hostUnsupported": "이 플러그인에는 현재 버전에서 제공하지 않는 Cindy 기능이 필요합니다. Cindy를 업데이트한 후 다시 설치하세요.",
         "alreadyInstalled": "이 플러그인은 이미 설치되어 있습니다",
+        "approvalRequired": "계속하려면 이 플러그인의 권한을 다시 확인해야 합니다",
         "commandConflict": "명령어가 설치된 플러그인과 충돌합니다. 먼저 상대를 제거하거나 명령어 이름을 변경하세요.",
         "idReserved": "이 id는 공식 예약 접두사 cindy-를 사용합니다. 앱에 내장된 플러그인만 사용할 수 있습니다",
         "sourceMissing": "선택한 파일을 찾을 수 없습니다",
@@ -3746,6 +3758,11 @@
         "confirm": "업데이트",
         "cancel": "취소"
       },
+      "reapproveConfirm": {
+        "title": "\"{{name}}\" 권한을 다시 확인할까요?",
+        "body": "아래 권한을 확인하면 설치된 플러그인이 다시 승인됩니다. 설치 파일은 필요하지 않습니다.",
+        "confirm": "확인 후 복원"
+      },
       "pick": {
         "dialogTitle": "폴더 선택",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 폴더 선택을 요청합니다"
@@ -3762,6 +3779,7 @@
       },
       "updateAll": {
         "title": "모두 업데이트 · {{count}}개",
+        "collapseDiff": "접기",
         "description": "일반 업데이트는 자동으로 완료되며, 검증된 실제 패키지가 새 권한을 요청할 때만 개별 확인합니다.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "대기 중",
@@ -3771,7 +3789,13 @@
         "statusFailed": "업데이트 실패",
         "background": "백그라운드에서 계속",
         "doneAction": "완료",
-        "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료"
+        "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료",
+        "permissionChanged": "권한 변경됨",
+        "rereview": "다시 검토",
+        "reviewDiff": "검토",
+        "reviewOutdated": "검토 기간 만료",
+        "approve": "승인",
+        "skip": "건너뛰기"
       }
     },
     "mcp": {
@@ -5707,6 +5731,7 @@
       "startFailed": "협업을 시작하지 못했습니다",
       "startFailedContinue": "협업을 시작하지 못했습니다. 단일 세션으로 계속합니다.",
       "createWorkerRefreshFailed": "Worker 상태를 새로 고칠 수 없습니다. 다시 시도해 주세요.",
+      "assignmentFailed": "Worker를 만들었지만 작업 할당 여부를 확인할 수 없습니다. 다시 시도하기 전에 Worker 패널을 확인하세요.",
       "openHint": "Worker 를 불러 함께 작업",
       "disabledHint": "협업 모드가 비활성화되어 있습니다. 설정에서 활성화하세요.",
       "unavailableHint": "협업 설정을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",

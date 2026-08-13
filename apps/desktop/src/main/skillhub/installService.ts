@@ -31,6 +31,10 @@ import JSZip from 'jszip';
 import { skillhubApiFetch } from './hubApi';
 import { getCurrentDataOwnerId, getCurrentUserId } from '../authManager';
 import { getAppCapabilities } from '../appCapabilities.js';
+import {
+  assertGhostSkillProjectionBoundaryStableForOwner,
+  withSharedGlobalSkillProjectionMutation,
+} from '../authBoundaryQuarantine.js';
 import { registryService } from './registry';
 import type { StoredInstall } from './registry/types';
 import { computeFolderHash } from './folderHash';
@@ -875,7 +879,13 @@ export async function install(
     }
     const projectWorkingDir = await reconcileProjectSkillLinksForPaths(logicalFinalDir, finalDir);
     try {
-      const linkResult = await prepareSharedGlobalSkillLinks();
+      const ownerId = getCurrentDataOwnerId();
+      const linkResult = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
+        prepareSharedGlobalSkillLinks({
+          assertOwnerStable: () =>
+            assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
+        }),
+      );
       for (const warning of linkResult.warnings) {
         log.warn('[skillInstall] shared global skill link warning:', warning);
       }

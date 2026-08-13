@@ -18,7 +18,7 @@ export interface StartupTimeoutOpts<T> {
   /** 超时毫秒数;<= 0 表示不设限(退化为直接 await flow)。 */
   timeoutMs: number;
   /** 超时触发时生成兜底返回值(典型:未登录 AuthState)。 */
-  onTimeout: () => T;
+  onTimeout: () => T | PromiseLike<T>;
   /** 超时后原 flow 迟到 resolve 时回调(不会在未超时时调用)。 */
   onLateResult?: (result: T) => void;
   /** 超时后原 flow 迟到 reject 时回调;不注册也会消化 rejection。 */
@@ -40,10 +40,16 @@ export async function awaitWithStartupTimeout<T>(
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const timeout = new Promise<T>((resolve) => {
+  const timeout = new Promise<T>((resolve, reject) => {
     timer = setTimeout(() => {
       timedOut = true;
-      resolve(opts.onTimeout());
+      try {
+        // Promise resolution assimilates an async recovery fallback while
+        // keeping synchronous fallback callbacks backwards-compatible.
+        resolve(opts.onTimeout());
+      } catch (error) {
+        reject(error);
+      }
     }, opts.timeoutMs);
   });
 

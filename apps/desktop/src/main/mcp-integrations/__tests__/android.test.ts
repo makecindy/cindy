@@ -1,14 +1,16 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { existsSyncMock, outboundFetchMock, spawnMock } = vi.hoisted(() => ({
+const { existsSyncMock, outboundFetchMock, spawnMock, execFileMock } = vi.hoisted(() => ({
   existsSyncMock: vi.fn(),
   outboundFetchMock: vi.fn(),
   spawnMock: vi.fn(),
+  execFileMock: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
   spawn: spawnMock,
+  execFile: execFileMock,
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
