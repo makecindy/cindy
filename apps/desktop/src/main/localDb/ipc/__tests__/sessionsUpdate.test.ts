@@ -35,7 +35,13 @@ const h = vi.hoisted(() => ({
       _atMs?: number,
       _platform?: NodeJS.Platform,
       _client?: { drizzle: ReturnType<typeof drizzle> },
-    ) => true,
+    ) => {
+      void _path;
+      void _atMs;
+      void _platform;
+      void _client;
+      return true;
+    },
   ),
   captureOwnerScope: false,
   ownerCurrent: true,
@@ -225,6 +231,43 @@ describe('local-db:sessions:update handler wiring', () => {
     });
   });
 
+  it('touches the retained local project at the archive activity time', async () => {
+    h.sqlite!
+      .prepare("UPDATE sessions SET workspace_kind = 'project', source = 'plugin' WHERE id = ?")
+      .run('codex-local');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_786_500_050_000);
+
+    try {
+      await invokeUpdate('codex-local', { status: 'archived' });
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+      '/old/dir',
+      1_786_500_050_000,
+      process.platform,
+      h.client,
+    );
+    expect(h.webContentsSend).toHaveBeenCalledWith('local-db:recent-workdirs:changed', {
+      path: '/old/dir',
+    });
+  });
+
+  it('does not retain scheduler projects when the generic update archives them', async () => {
+    h.sqlite!
+      .prepare("UPDATE sessions SET workspace_kind = 'project', source = 'scheduler' WHERE id = ?")
+      .run('codex-local');
+
+    await invokeUpdate('codex-local', { status: 'archived' });
+
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.webContentsSend).not.toHaveBeenCalledWith(
+      'local-db:recent-workdirs:changed',
+      expect.anything(),
+    );
+  });
+
   it('touches the retained local project when device-link soft-deletes through patch-meta', async () => {
     h.sqlite!
       .prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?")
@@ -248,56 +291,96 @@ describe('local-db:sessions:update handler wiring', () => {
     });
   });
 
-  it('touches only the handler-entry database and suppresses broadcast after owner switch', async () => {
+  it('touches the retained local project when device-link archives through patch-meta', async () => {
     h.sqlite!
       .prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?")
       .run('codex-local');
-    const oldClient = h.client!;
-    const nextSqlite = new Database(':memory:');
-    nextSqlite.exec(`
-      CREATE TABLE recent_workdirs (
-        path TEXT PRIMARY KEY NOT NULL,
-        last_used_at INTEGER NOT NULL
-      );
-    `);
-    const nextClient = { drizzle: drizzle(nextSqlite, { schema: { recentWorkdirs } }) };
-    h.captureOwnerScope = true;
-    h.upsertRecentWorkdir.mockImplementation(
-      async (
-        _path: string | null | undefined,
-        atMs?: number,
-        _platform?: NodeJS.Platform,
-        client?: typeof oldClient,
-      ) => {
-        await client!.drizzle
-          .insert(recentWorkdirs)
-          .values({ path: '/old/dir', lastUsedAt: atMs! });
-        return true;
-      },
-    );
-    h.routeLock.mockImplementation(async (_sessionId, task) => {
-      const result = await task();
-      h.client = nextClient as typeof h.client;
-      h.ownerCurrent = false;
-      return result;
-    });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_786_500_150_000);
 
     try {
-      await invokeUpdate('codex-local', { status: 'deleted' });
-
-      expect(
-        h.sqlite!.prepare('SELECT path FROM recent_workdirs').all(),
-      ).toEqual([{ path: '/old/dir' }]);
-      expect(nextSqlite.prepare('SELECT path FROM recent_workdirs').all()).toEqual([]);
-      expect(h.webContentsSend).not.toHaveBeenCalledWith(
-        'local-db:recent-workdirs:changed',
-        expect.anything(),
-        expect.anything(),
-      );
+      await invokePatchMeta('codex-local', { status: 'archived' });
     } finally {
-      nextSqlite.close();
+      now.mockRestore();
     }
+
+    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+      '/old/dir',
+      1_786_500_150_000,
+      process.platform,
+      h.client,
+    );
+    expect(h.webContentsSend).toHaveBeenCalledWith('local-db:recent-workdirs:changed', {
+      path: '/old/dir',
+    });
   });
+
+  it('does not retain scheduler projects when patch-meta archives them', async () => {
+    h.sqlite!
+      .prepare("UPDATE sessions SET workspace_kind = 'project', source = 'scheduler' WHERE id = ?")
+      .run('codex-local');
+
+    await invokePatchMeta('codex-local', { status: 'archived' });
+
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.webContentsSend).not.toHaveBeenCalledWith(
+      'local-db:recent-workdirs:changed',
+      expect.anything(),
+    );
+  });
+
+  it.each(['deleted', 'archived'] as const)(
+    'touches only the handler-entry database and suppresses broadcast after owner switch for %s',
+    async (status) => {
+      h.sqlite!
+        .prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?")
+        .run('codex-local');
+      type CurrentClient = NonNullable<typeof h.client>;
+      const nextSqlite = new Database(':memory:');
+      nextSqlite.exec(`
+        CREATE TABLE recent_workdirs (
+          path TEXT PRIMARY KEY NOT NULL,
+          last_used_at INTEGER NOT NULL
+        );
+      `);
+      const nextClient = { drizzle: drizzle(nextSqlite, { schema: { recentWorkdirs } }) };
+      h.captureOwnerScope = true;
+      h.upsertRecentWorkdir.mockImplementation(
+        async (
+          _path: string | null | undefined,
+          atMs?: number,
+          _platform?: NodeJS.Platform,
+          client?: CurrentClient,
+        ) => {
+          await client!.drizzle
+            .insert(recentWorkdirs)
+            .values({ path: '/old/dir', lastUsedAt: atMs! });
+          return true;
+        },
+      );
+      h.routeLock.mockImplementation(async (_sessionId, task) => {
+        const result = await task();
+        h.client = nextClient as typeof h.client;
+        h.ownerCurrent = false;
+        return result;
+      });
+
+      try {
+        await invokeUpdate('codex-local', { status });
+
+        expect(h.sqlite!.prepare('SELECT path FROM recent_workdirs').all()).toEqual([
+          { path: '/old/dir' },
+        ]);
+        expect(nextSqlite.prepare('SELECT path FROM recent_workdirs').all()).toEqual([]);
+        expect(h.webContentsSend).not.toHaveBeenCalledWith(
+          'local-db:recent-workdirs:changed',
+          expect.anything(),
+          expect.anything(),
+        );
+      } finally {
+        nextSqlite.close();
+      }
+    },
+  );
 
   it('does not resurrect a deleted task through the generic status writer', async () => {
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');

@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 
 function canonicalize(raw: string, platform: NodeJS.Platform): string | null {
+  void platform;
   let path = raw.trim().replace(/\\/g, '/');
   while (path.length > 1 && path.endsWith('/')) {
     if (/^[A-Za-z]:\/$/.test(path)) break;
@@ -45,14 +46,16 @@ function runForPlatform(db: Database.Database, platform: NodeJS.Platform): void 
       (column) => column.name,
     ),
   );
-  if (sessionColumns.has('working_dir')) {
+  // Missing/unknown provenance must not turn automation workdirs into durable user projects.
+  // `source` predates every supported runtime schema, but sparse replay fixtures may omit it.
+  if (sessionColumns.has('working_dir') && sessionColumns.has('source')) {
     const timestampColumns = ['user_send_at', 'updated_at', 'created_at'].filter((column) =>
       sessionColumns.has(column),
     );
     const timestampExpression =
       timestampColumns.length > 0 ? `COALESCE(${timestampColumns.join(', ')}, 0)` : '0';
     const predicates = ['working_dir IS NOT NULL', "TRIM(working_dir) != ''"];
-    if (sessionColumns.has('source')) predicates.push("source = 'desktop'");
+    predicates.push("source IN ('desktop', 'plugin')");
     if (sessionColumns.has('workspace_kind')) predicates.push("workspace_kind = 'project'");
     if (sessionColumns.has('remote_host_id')) predicates.push('remote_host_id IS NULL');
 

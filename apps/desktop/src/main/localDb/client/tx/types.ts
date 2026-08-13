@@ -344,6 +344,8 @@ export interface SessionsSetStatusResultItem {
   title: string | null;
   workingDir: string | null;
   workspaceKind: string | null;
+  remoteHostId: string | null;
+  source: string | null;
   status: 'active' | 'archived';
 }
 

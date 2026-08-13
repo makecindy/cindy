@@ -35,6 +35,7 @@ function seedSession(input: {
   id: string;
   path: string;
   timestamp: number;
+  source?: string;
   status?: string;
   remoteHostId?: string | null;
 }): void {
@@ -42,9 +43,10 @@ function seedSession(input: {
     `INSERT INTO sessions (
        id, source, workspace_kind, remote_host_id, working_dir, status,
        user_send_at, updated_at, created_at
-     ) VALUES (?, 'desktop', 'project', ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, 'project', ?, ?, ?, ?, ?, ?)`,
   ).run(
     input.id,
+    input.source ?? 'desktop',
     input.remoteHostId ?? null,
     input.path,
     input.status ?? 'active',
@@ -76,6 +78,36 @@ describe('0090 retain all recent workdirs migration', () => {
 
     expect(recentRows()).toHaveLength(14);
     expect(recentRows()).toContainEqual({ path: '/workspace/project-0', last_used_at: 1_000 });
+  });
+
+  it('backfills historical local plugin projects without admitting scheduler workdirs', () => {
+    seedSession({
+      id: 'plugin-archived',
+      path: '/workspace/plugin-project',
+      timestamp: 2_000,
+      source: 'plugin',
+      status: 'archived',
+    });
+    seedSession({
+      id: 'scheduler-archived',
+      path: '/workspace/scheduler-project',
+      timestamp: 3_000,
+      source: 'scheduler',
+      status: 'archived',
+    });
+    seedSession({
+      id: 'unknown-archived',
+      path: '/workspace/unknown-project',
+      timestamp: 4_000,
+      source: 'future-source',
+      status: 'archived',
+    });
+
+    migration.run(db);
+
+    expect(recentRows()).toEqual([
+      { path: '/workspace/plugin-project', last_used_at: 2_000 },
+    ]);
   });
 
   it('normalizes duplicate path spellings and keeps the newest activity time', () => {
@@ -119,7 +151,7 @@ describe('0090 retain all recent workdirs migration', () => {
     expect(recentRows()).toEqual([{ path: '/workspace/local', last_used_at: 3_000 }]);
   });
 
-  it('replays safely against a sparse legacy sessions table', () => {
+  it('fails closed against a sparse legacy sessions table without source provenance', () => {
     db.exec(`
       DROP TABLE sessions;
       CREATE TABLE sessions (
@@ -129,11 +161,15 @@ describe('0090 retain all recent workdirs migration', () => {
       );
       INSERT INTO sessions (id, working_dir, created_at)
       VALUES ('legacy', '/workspace/legacy', 4000);
+      INSERT INTO recent_workdirs (path, last_used_at)
+      VALUES ('/workspace/already-retained', 3000);
     `);
 
     migration.run(db);
 
-    expect(recentRows()).toEqual([{ path: '/workspace/legacy', last_used_at: 4_000 }]);
+    expect(recentRows()).toEqual([
+      { path: '/workspace/already-retained', last_used_at: 3_000 },
+    ]);
   });
 
   it('deduplicates legacy Windows drive and UNC casing identities', () => {
@@ -153,12 +189,24 @@ describe('0090 retain all recent workdirs migration', () => {
       '//server/share/project-b',
       5_000,
     );
+    db.prepare('INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)').run(
+      'D:/ÉCOLE/Plugin-Project',
+      5_500,
+    );
+    seedSession({
+      id: 'plugin-windows',
+      path: 'd:/école/plugin-project',
+      timestamp: 6_000,
+      source: 'plugin',
+      status: 'archived',
+    });
 
     migration.runForPlatform(db, 'win32');
 
     expect(recentRows()).toEqual([
       { path: '//server/share/project-b', last_used_at: 5_000 },
       { path: 'D:/Work/Project-A', last_used_at: 3_000 },
+      { path: 'd:/école/plugin-project', last_used_at: 6_000 },
     ]);
   });
 

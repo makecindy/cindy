@@ -50,6 +50,8 @@ CREATE TABLE sessions (
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
   workspace_kind TEXT NOT NULL DEFAULT 'project',
+  remote_host_id TEXT,
+  source TEXT DEFAULT 'desktop',
   codex_history_has_product_prompt INTEGER,
   parent_session_id TEXT,
   forked_at_message_id TEXT,
@@ -2130,6 +2132,45 @@ describe('db worker tx handlers', () => {
       });
     });
   });
+
+  it.each([
+    { label: 'bundled worker', useInlineWorker: false },
+    { label: 'inline worker', useInlineWorker: true },
+  ])(
+    'returns remote host identity through sessions.setStatus in the $label path',
+    async ({ useInlineWorker }) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 'local', { workingDir: '/local/repo' });
+          await seedSession(client, 'remote', { workingDir: '/remote/repo' });
+          await client.exec('UPDATE sessions SET remote_host_id = ? WHERE id = ?', [
+            'host-a',
+            'remote',
+          ]);
+          await client.exec('UPDATE sessions SET source = ? WHERE id = ?', ['plugin', 'remote']);
+
+          await expect(
+            client.tx('sessions.setStatus', {
+              sessionIds: ['local', 'remote'],
+              status: 'archived',
+            }),
+          ).resolves.toEqual([
+            expect.objectContaining({
+              sessionId: 'local',
+              remoteHostId: null,
+              source: 'desktop',
+            }),
+            expect.objectContaining({
+              sessionId: 'remote',
+              remoteHostId: 'host-a',
+              source: 'plugin',
+            }),
+          ]);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
 
   it.each([
     { label: 'bundled worker', useInlineWorker: false },

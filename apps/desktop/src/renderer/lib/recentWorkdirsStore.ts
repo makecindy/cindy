@@ -13,8 +13,8 @@
  *    (main 端 session 创建广播 = 可能新增了 recent_workdirs row)
  *  - 调用方 (hook) 也可以主动调 forceRefresh
  *
- * 普通字段变更 (rename / pin / archive) 不影响 recent_workdirs；软删除会由 main
- * 刷新 lastUsedAt，并经 recentWorkdirs.onChanged 触发强制重拉。
+ * 普通字段变更 (rename / pin) 不影响 recent_workdirs；归档 / 删除会由 main 刷新
+ * lastUsedAt，并经 recentWorkdirs.onChanged 触发强制重拉。
  */
 
 import {
