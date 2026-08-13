@@ -1530,7 +1530,7 @@ describe('new session composer surface', () => {
     const createButtonEnd = newSource.indexOf('// 聚焦卡片形态的底部工具排', createButtonStart);
     const createButtonSource = newSource.slice(createButtonStart, createButtonEnd);
     const composerIconButtonStart = newSource.indexOf('composerIconButton: {');
-    const composerIconButtonEnd = newSource.indexOf('composerIconButtonActive:', composerIconButtonStart);
+    const composerIconButtonEnd = newSource.indexOf('composerCompactLeading:', composerIconButtonStart);
     const composerIconButtonStyle = newSource.slice(composerIconButtonStart, composerIconButtonEnd);
     const modelPillStart = newSource.indexOf('modelPill: {');
     const modelPillEnd = newSource.indexOf('modelPillText:', modelPillStart);
@@ -1595,6 +1595,9 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain("placeholder={voiceIsListening ? '' : composerPlaceholder}");
     expect(newComposerSource).toContain('scrollEnabled={composerInputScrollEnabled}');
     expect(newComposerSource).toContain('trailing={composerCardActive || !composerShowCreateButton ? null : renderCreateButton()}');
+    expect(newComposerSource).toContain('leading={renderComposerCompactLeading()}');
+    expect(newSource).toContain('const renderComposerCompactLeading = () => (');
+    expect(newSource).toContain('{renderAttachmentToggleButton()}');
     expect(newSource).toContain('const renderComposerToolbar = () => (');
     expect(newSource).toContain('PaperPlaneIcon');
     expect(newSource).not.toContain('ArrowUp');

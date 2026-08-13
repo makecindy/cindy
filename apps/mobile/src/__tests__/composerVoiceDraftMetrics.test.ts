@@ -78,6 +78,7 @@ describe('composer voice draft text metrics', () => {
     expect(composerTextPaddingForPlatform('ios')).toEqual({ top: 6, bottom: 0 });
     expect(composerTextPaddingForPlatform('android')).toEqual({ top: 3, bottom: 3 });
     expect(composerTextPaddingForPlatform('default')).toEqual({ top: 3, bottom: 3 });
+    expect(composerTextPaddingForPlatform('ios', { optical: false })).toEqual({ top: 3, bottom: 3 });
   });
 
   it('renders the real composer TextInput with the shared metrics', () => {
@@ -116,6 +117,8 @@ describe('composer voice draft text metrics', () => {
         .toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
       expect(overlayContent, `${rel} 覆盖层顶部内边距必须与输入框同源`)
         .toContain('paddingTop: COMPOSER_TEXT_PADDING_TOP');
+      expect(source, `${rel} 收起单行听写覆盖层必须切到几何居中`)
+        .toContain('voiceDraftOverlayContentGeometric');
     }
   });
 

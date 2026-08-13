@@ -381,6 +381,8 @@ import {
 } from '@/session/composerVoiceHold';
 import { COMPOSER_TEXT_HORIZONTAL_PADDING } from '@/session/composerTextMetrics';
 import {
+  COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
+  COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
   COMPOSER_TEXT_PADDING_BOTTOM,
   COMPOSER_TEXT_PADDING_TOP,
 } from '@/session/composerTextPlatformMetrics';
@@ -2794,7 +2796,10 @@ export default function SessionScreen() {
     >
       <ScrollView
         ref={voiceDraftScrollRef}
-        contentContainerStyle={styles.voiceDraftOverlayContent}
+        contentContainerStyle={[
+          styles.voiceDraftOverlayContent,
+          !composerCardActive && !composerInputIsMultiline && styles.voiceDraftOverlayContentGeometric,
+        ]}
         onContentSizeChange={() => {
           requestAnimationFrame(() => {
             voiceDraftScrollRef.current?.scrollToEnd({ animated: false });
@@ -6820,6 +6825,15 @@ export default function SessionScreen() {
     />
   ) : null);
 
+  // 收起态把附件 + 号放在输入框左侧，避免用户必须先聚焦才能打开附件面板；
+  // 卡片态仍由 renderComposerToolbar() 渲染同一入口。
+  const renderComposerCompactLeading = () => (
+    <View style={styles.composerCompactLeading}>
+      {renderComposerAttachmentButton()}
+      {renderComposerCollapsedAttachmentBadge()}
+    </View>
+  );
+
   // 停止任务按钮(实心中性方块)。两处使用:语音/发送左边的独立槽(inline)、
   // 发送位顶替(sendSlotIsStop);同一颗按钮的两个宿主位置,样式与行为一致。
   const renderComposerStopButton = () => (
@@ -9400,6 +9414,7 @@ export default function SessionScreen() {
                         height={composerInputVisibleHeight}
                         hidden={voiceIsListening}
                         maxHeight={composerResize.inputMaxHeight}
+                        opticalPadding={composerCardActive || composerInputIsMultiline}
                         onBlur={() => {
                           setComposerFocused(false);
                           setComposerVoiceHoldArmed(false);
@@ -9427,7 +9442,7 @@ export default function SessionScreen() {
                     inputOverlay={renderComposerInputOverlay()}
                     inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
                     inputTestID="session.composerInput"
-                    leading={renderComposerCollapsedAttachmentBadge()}
+                    leading={renderComposerCompactLeading()}
                     maxHeight={composerResize.inputMaxHeight}
                     multilineShape={!composerCardActive && composerInputIsMultiline}
                     onBlur={() => {
@@ -10694,6 +10709,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: 34,
     width: 34,
   },
+  composerCompactLeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    marginRight: spacing.xs,
+  },
   composerToolButtonActive: {
     backgroundColor: colors.surfaceChip,
     borderColor: colors.borderStrong,
@@ -10715,6 +10736,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM,
     paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING,
     paddingTop: COMPOSER_TEXT_PADDING_TOP,
+  },
+  voiceDraftOverlayContentGeometric: {
+    paddingBottom: COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
+    paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
   },
   voiceDraftMeasuredBlock: {
     minHeight: COMPOSER_INPUT_LINE_HEIGHT,

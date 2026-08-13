@@ -27,6 +27,8 @@ import {
   COMPOSER_TEXT_VERTICAL_PADDING,
 } from '@/session/composerTextMetrics';
 import {
+  COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
+  COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
   COMPOSER_TEXT_PADDING_BOTTOM,
   COMPOSER_TEXT_PADDING_TOP,
 } from '@/session/composerTextPlatformMetrics';
@@ -224,6 +226,7 @@ export function MobileComposerInputRow({
 }: MobileComposerInputRowProps) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const cardLayout = cardActive === true;
+  const geometricSingleLine = !cardLayout && !multilineShape;
   // RN 里显式 height 压过 minHeight:manual 定高(用户拖过高度)时 frameHeight 可能小于
   // inputFrameMinHeight,直接铺开会把听写停止命中区又压回不足 44pt。数值高度在这里
   // 先 clamp;拖拽中的 Animated 值无法在 JS 侧 clamp(会打断跟手),那一瞬保持动画值,
@@ -266,6 +269,7 @@ export function MobileComposerInputRow({
       selectionColor={selectionColor}
       style={[
         styles.input,
+        geometricSingleLine && styles.inputGeometricSingleLine,
         { maxHeight },
         inputStyle,
       ]}
@@ -297,6 +301,8 @@ export function MobileComposerInputRow({
         <Animated.View
           style={[
             styles.inputFrame,
+            // 收起单行与 34pt + 并排：输入盒在行内居中。
+            geometricSingleLine && inputFrameMinHeight == null && styles.inputFrameSingleLine,
             inputFrameMinHeight != null && { minHeight: inputFrameMinHeight },
             resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight },
           ]}
@@ -542,6 +548,9 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     minWidth: 0,
     position: 'relative',
   },
+  inputFrameSingleLine: {
+    alignItems: 'center',
+  },
   // TextInputWrapper(expo-paste-input)接管 TextInput 在 inputFrame row 里的
   // flex:1 位置;内部保持 row + stretch,TextInput 自身 flex:1 继续填满,
   // 内容自动增长与显式 inputFrameHeight(拖高)两条高度链都不经它中断。
@@ -577,6 +586,11 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING,
     paddingTop: COMPOSER_TEXT_PADDING_TOP,
     textAlignVertical: 'top',
+  },
+  inputGeometricSingleLine: {
+    paddingBottom: COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
+    paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
+    textAlignVertical: 'center',
   },
   // 语音按钮的 absolute 锚点：简洁态贴输入行右侧垂直居中；
   // 有发送按钮时向左让位；卡片态下沉到底部工具排的占位上。

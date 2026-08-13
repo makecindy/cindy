@@ -48,6 +48,11 @@ describe('mobile session composer desktop-first surface', () => {
     const composerSurfaceEnd = source.indexOf('composerSurfaceCompact:', composerSurfaceStart);
     const composerSurfaceStyle = source.slice(composerSurfaceStart, composerSurfaceEnd);
     const sharedStyleStart = sharedSource.indexOf('const makeMobileComposerInputRowStyles');
+    expect(sharedSource).toContain('geometricSingleLine && inputFrameMinHeight == null && styles.inputFrameSingleLine');
+    expect(sharedSource).toContain('inputFrameSingleLine: {');
+    expect(sharedSource).toContain('inputGeometricSingleLine: {');
+    expect(sharedSource).toContain('textAlignVertical: \'center\'');
+    expect(source).toContain('opticalPadding={composerCardActive || composerInputIsMultiline}');
     const composerInputRowStart = sharedSource.indexOf('row: {', sharedStyleStart);
     const composerInputRowEnd = sharedSource.indexOf('rowMultiline:', composerInputRowStart);
     const composerInputRowStyle = sharedSource.slice(composerInputRowStart, composerInputRowEnd);
@@ -106,6 +111,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('<Scan color={colors.textPrimary}');
     expect(source).toContain('<Folder color={colors.textPrimary}');
     expect(composerInputSource).toContain('cardActive={composerCardActive}');
+    expect(composerInputSource).toContain('leading={renderComposerCompactLeading()}');
+    expect(source).toContain('const renderComposerCompactLeading = () => (');
+    expect(source).toContain('{renderComposerAttachmentButton()}');
     expect(composerInputSource).toContain('toolbar={renderComposerToolbar()}');
     expect(source).toContain('const renderComposerToolbar = () => (');
     expect(attachmentButtonSource).toContain('<Plus');
@@ -349,7 +357,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputSource).not.toContain('inputRef={composerInputRef}');
     expect(sharedSource).toContain('ref={inputRef as never}');
     expect(source).toContain('ref={voiceDraftScrollRef}');
-    expect(source).toContain('contentContainerStyle={styles.voiceDraftOverlayContent}');
+    expect(source).toContain('contentContainerStyle={[');
+    expect(source).toContain('styles.voiceDraftOverlayContent');
+    expect(source).toContain('styles.voiceDraftOverlayContentGeometric');
     // 听写期间禁止碰隐藏编辑器的 caret(2026-07-28):setSelectionToEnd 底层是
     // focusEditor,WebView 程序化 focus + keyboardDisplayRequiresUserAction=false
     // 会在点语音的同时弹出软键盘。听写文字由覆盖层渲染,caret 只在用户点输入框
