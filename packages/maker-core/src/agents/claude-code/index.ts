@@ -1997,6 +1997,30 @@ export class ClaudeCodeAgent extends BaseAgent {
       : {};
     const showThinkingSummaries = opts.displayReasoning === 'summarized';
 
+    // Claude Code 把 availableModels 当成组织白名单。目录 + 当前/目标模型都走同一
+    // 个 catalog-id → wire-string 映射,启动与热切共用,后加载的网关模型(如
+    // x-ai/grok-4.6)也能进名单。
+    const currentAvailableSdkModels = (selectedModel: string): string[] => [
+      ...new Set([
+        ...this.capabilities.availableModels.map(({ id }) => sdkModelFor(id)),
+        sdkModelFor(selectedModel),
+      ]),
+    ];
+    const resolveModelContextWindow = (model: string): number | undefined => {
+      // 核实窗口按会话实际来源取。host 注入了 resolver 时,null = 不要收敛
+      // (同 id 多来源 / 未核实兜底),采信 SDK 上报,不能再拿扁平目录首见值覆盖。
+      // 只有未注入 resolver 的路径(测试 / 无 host)才退回扁平目录。
+      const resolveVerified = this.deps.resolveVerifiedContextWindow;
+      if (resolveVerified) {
+        const verified = resolveVerified(mutableProviderId, model);
+        return typeof verified === 'number' && verified > 0 ? verified : undefined;
+      }
+      const descriptor = this.capabilities.availableModels.find((item) => item.id === model);
+      return descriptor && Number.isFinite(descriptor.contextWindow) && descriptor.contextWindow > 0
+        ? descriptor.contextWindow
+        : undefined;
+    };
+
     // SDK settings 对象 (优先级最高, 覆盖 user/project/local 文件层) — 本地分支
     // 和远端分支必须**保持一致** , 否则同 session setting 跨本地 / 远端表现不同
     // (eg. summarized reasoning UI 本地有 remote 没)。getter 让 memOverride /
@@ -2005,17 +2029,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const buildSettings = (): Settings => {
       const settings = buildClaudeFlagSettings({
         showThinkingSummaries,
-        // availableModels is the SDK's highest-priority allowlist. Convert the
-        // whole current catalog and the selected model through the one
-        // catalog-id → wire-string mapper so startup and live switches share
-        // the same [1m] and legacy conversion rules. Keep the selected model
-        // even when it is temporarily outside the catalog.
-        availableModels: [
-          ...new Set([
-            ...this.capabilities.availableModels.map(({ id }) => sdkModelFor(id)),
-            sdkModelFor(mutableModel),
-          ]),
-        ],
+        availableModels: currentAvailableSdkModels(mutableModel),
         // Do not carry the local manager's native-memory suppression across the
         // SSH boundary: the remote host retains its own Claude memory
         // configuration. Maker Memory on remote sessions is injected via the
@@ -2167,16 +2181,13 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 附加只读引用目录: 启动时取 opts.extraDirs 快照, setExtraDirs 覆盖, buildQuery
     // 每 turn 读最新值传给 SDK options.additionalDirectories — 即时生效。
     let mutableExtraDirs: string[] = Array.isArray(opts.extraDirs) ? [...opts.extraDirs] : [];
-    const modelContextWindows = new Map(
-      this.capabilities.availableModels.map((model) => [model.id, model.contextWindow] as const),
-    );
 
     // ── Usage tracker (Stage 2 B') ──────────────────────────────────────────
     // 单 session 共享的 mutable usage state. translator 通过 ctx 注入访问.
     // handle.getUsageSnapshot 也读它, 形成"SDK 原始 usage → tracker → status event / handle snapshot"
-    // 单一可信源.
+    // 单一可信源. 窗口跟白名单同一份实时目录,不冻启动快照。
     const usageTracker = new UsageTracker();
-    usageTracker.setContextWindow(modelContextWindows.get(mutableModel) ?? 0);
+    usageTracker.setContextWindow(resolveModelContextWindow(mutableModel) ?? 0);
 
     // ── 跨 turn 共享状态 ───────────────────────────────────────────────────
     let configuredResumeSessionId: string | undefined = opts.resumeSessionId;
@@ -4197,7 +4208,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               turn: turnState,
               log,
               getModel: () => mutableModel,
-              getModelContextWindow: () => modelContextWindows.get(mutableModel),
+              getModelContextWindow: () => resolveModelContextWindow(mutableModel),
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,
               getSdkSessionId: () => sdkSessionId,
@@ -4707,6 +4718,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           replayed = true;
           const targetModel = mutableModel;
           try {
+            // 与 live setModel 同序:先扩白名单再切。buildQuery await 期间切到的
+            // 目录外模型,新 Query 的启动名单还是旧快照,直接 setModel 会撞组织限制。
+            await q.applyFlagSettings({
+              availableModels: currentAvailableSdkModels(targetModel),
+            });
             await q.setModel(sdkModelFor(targetModel));
             snapshot.model = targetModel;
             log.debug(`${label}: replayed setModel`, { model: targetModel });
@@ -5774,6 +5790,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         const isControlBlocked = controlRequestsBlocked();
         log.debug('setModel', { from: mutableModel, to: newModel, sdk: sdkModel, controlRequestsBlocked: isControlBlocked });
         if (!isControlBlocked) {
+          // flag settings 只在 Query 创建时写入。热切若只调 setModel,Claude Code
+          // 仍按启动时的组织白名单校验,后加载的网关模型会报
+          // "restricted by your organization's settings"(2026-08-13)。applyFlagSettings
+          // 是 merge,先把当前目录 + 目标模型并进去再切。
+          await q.applyFlagSettings({
+            availableModels: currentAvailableSdkModels(newModel),
+          });
           await q.setModel(sdkModel);
         }
         const usedNativeAutoReview = usesNativeClaudeAutoReview();
@@ -5809,7 +5832,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             });
           });
         }
-        const newContextWindow = modelContextWindows.get(mutableModel);
+        const newContextWindow = resolveModelContextWindow(mutableModel);
         if (newContextWindow === undefined) {
           // setContextWindow(0) 是 no-op —— tracker 会静默沿用旧模型窗口直到下一个
           // result 的 modelUsage 修正。UI 环 / auto-compact 期间按旧窗口算(偏乐观),

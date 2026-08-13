@@ -28,6 +28,14 @@ function fakeGhost(overrides: Partial<InstalledGhost> = {}): InstalledGhost {
   } as InstalledGhost;
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 interface Harness {
   dispatcher: GhostPipeDispatcher;
   deps: {
@@ -47,6 +55,7 @@ function makeHarness(opts: {
   ghost?: InstalledGhost | null;
   state?: GhostRuntimeState;
   timeoutMs?: number;
+  ownerScope?: PipeDispatcherDeps['ownerScope'];
 } = {}): Harness {
   const sent: GhostPipeToolCall[] = [];
   const deps = {
@@ -65,6 +74,7 @@ function makeHarness(opts: {
   const dispatcher = new GhostPipeDispatcher({
     ...deps,
     timeoutMs: opts.timeoutMs,
+    ownerScope: opts.ownerScope,
   } as unknown as PipeDispatcherDeps);
   return { dispatcher, deps, sent };
 }
@@ -178,6 +188,36 @@ describe('按需拉起', () => {
     expect(r).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
     expect(h.dispatcher.pendingCount()).toBe(0);
   });
+
+  it('owner changes while spawn is pending: stops the runtime and never dispatches', async () => {
+    let generation = 1;
+    const invalidated = vi.fn();
+    const spawnStarted = deferred();
+    const releaseSpawn = deferred();
+    const h = makeHarness({
+      state: 'off',
+      ownerScope: {
+        capture: () => generation,
+        isCurrent: (scope) => scope === generation,
+        isStable: (scope) => scope === generation,
+        onInvalidated: invalidated,
+      },
+    });
+    h.deps.spawn.mockImplementation(async () => {
+      spawnStarted.resolve();
+      await releaseSpawn.promise;
+      return { ok: true as const };
+    });
+
+    const pending = h.dispatcher.callGhostTool(CALL);
+    await spawnStarted.promise;
+    generation = 2;
+    releaseSpawn.resolve();
+
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
+    expect(invalidated).toHaveBeenCalledWith('art');
+  });
 });
 
 describe('配对交卷', () => {
@@ -195,6 +235,33 @@ describe('配对交卷', () => {
     expect(outcome.accepted).toBe(true);
     await expect(p).resolves.toEqual({ ok: true, result: { url: 'cindy-media://blobs/x.png' } });
     expect(h.dispatcher.pendingCount()).toBe(0);
+  });
+
+  it('rejects a stale result after the owner generation changes', async () => {
+    let generation = 1;
+    const invalidated = vi.fn();
+    const h = makeHarness({
+      ownerScope: {
+        capture: () => generation,
+        isCurrent: (scope) => scope === generation,
+        isStable: (scope) => scope === generation,
+        onInvalidated: invalidated,
+      },
+    });
+    const pending = h.dispatcher.callGhostTool(CALL);
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+
+    generation = 2;
+    const outcome = h.dispatcher.handleToolResult('art', {
+      type: 'tool-result',
+      callId: h.sent[0].callId,
+      ok: true,
+      result: { stale: true },
+    });
+
+    expect(outcome).toMatchObject({ accepted: false });
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
+    expect(invalidated).toHaveBeenCalledWith('art');
   });
 
   it('完成日志只含元数据，不记录参数或返回内容', async () => {

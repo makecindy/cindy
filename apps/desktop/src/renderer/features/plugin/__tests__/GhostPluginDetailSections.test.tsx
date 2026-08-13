@@ -114,6 +114,8 @@ const detail: GhostPluginDetail = {
   version: '1.2.3',
   enabled: true,
   canUse: true,
+  approvalState: 'approved',
+  builtin: false,
   tabPanel: false,
   hostCapability: null,
   author: 'XD',
@@ -167,6 +169,7 @@ describe('Ghost plugin detail sections', () => {
           },
           dir: detail.installDir ?? '/tmp/plugin',
           enabled: true,
+          approval: { state: 'approved', revision: 'rev-1' },
           oauthScopeStale: { secretKey: 'account', missingScopeCount: 2 },
         }}
         detail={{ ...detail, hasSettingsUi: true }}
@@ -206,6 +209,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={vi.fn()}
+        onReapprove={vi.fn()}
         onUpdateFromFile={vi.fn()}
         onUninstall={vi.fn()}
         toggleDisabled={false}
@@ -284,6 +288,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={vi.fn()}
+        onReapprove={vi.fn()}
         onUpdateFromFile={vi.fn()}
         onUninstall={vi.fn()}
         toggleDisabled={false}
@@ -315,6 +320,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={onUpdate}
+        onReapprove={vi.fn()}
         onUpdateFromFile={vi.fn()}
         updateVersion={detail.version}
         onUninstall={vi.fn()}
@@ -329,6 +335,62 @@ describe('Ghost plugin detail sections', () => {
 
     expect(onUpdate).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'settings.ghosts.market.updateTo' })).toBeNull();
+  });
+
+  it.each([
+    ['legacy-unapproved', 'settings.ghosts.reapproval.bodyLegacy'],
+    ['invalid', 'settings.ghosts.reapproval.bodyInvalid'],
+  ] as const)('explains the %s approval state and routes to a fresh review', (approvalState, bodyKey) => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onReapprove = vi.fn();
+    const onUpdate = vi.fn();
+    const onToggle = vi.fn();
+    render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={{ ...detail, approvalState }}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={onToggle}
+        onUse={vi.fn()}
+        onUpdate={onUpdate}
+        onReapprove={onReapprove}
+        onUpdateFromFile={vi.fn()}
+        updateVersion="1.2.4"
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    expect(screen.getByText('settings.ghosts.reapproval.noticeTitle')).toBeTruthy();
+    expect(screen.getByText(bodyKey)).toBeTruthy();
+    // 缺批准时"使用"与"更新"都不该顶在最前面,主动作是重新确认。
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.market.updateTo' })).toBeNull();
+    // detail fixture 是指令型插件(canUse:true / tabPanel:false → 'command'),主动作按钮
+    // 标 chatAction;缺批准时 primaryEnabled=false → 禁用。
+    expect(
+      (screen.getByRole('button', { name: 'settings.ghosts.detail.chatAction' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    // 启用开关(改版为带 aria-pressed 的按钮,非原生 switch)缺批准时禁用,点了不触发 onToggle。
+    const toggle = screen.getByRole('button', {
+      name: 'settings.ghosts.enableAria',
+    }) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+    fireEvent.click(toggle);
+    expect(onToggle).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.reapproval.action' }));
+    expect(onReapprove).toHaveBeenCalledTimes(1);
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 
   it('disables every market update entry while an update is busy', async () => {
@@ -351,6 +413,7 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={onUpdate}
+        onReapprove={vi.fn()}
         onUpdateFromFile={vi.fn()}
         updateVersion="1.2.4"
         updateBusy
@@ -480,6 +543,7 @@ describe('Ghost plugin detail sections', () => {
       onUpdate: vi.fn(),
       onUpdateFromFile: vi.fn(),
       onUninstall: vi.fn(),
+      onReapprove: vi.fn(),
       toggleDisabled: false,
     };
 

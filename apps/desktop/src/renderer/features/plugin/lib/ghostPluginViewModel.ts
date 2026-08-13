@@ -9,6 +9,7 @@
 import {
   ghostContentKeys,
   ghostPermissionItems,
+  type GhostInstallApproval,
   type GhostPermissionItem,
   type GhostTrustInfo,
   type GhostToolDecl,
@@ -34,6 +35,13 @@ export interface GhostPluginListItem {
   version: string;
   enabled: boolean;
   canUse: boolean;
+  /**
+   * Host 是否持有一次明确的安装/更新确认。非 `approved` 的安装不可运行,列表与
+   * 详情都必须如实说明并给出重新确认入口,而不是让它看起来只是"被关掉了"。
+   */
+  approvalState: GhostInstallApproval['state'];
+  /** 随包内置插件(main 按种子清单投影)。批准态异常时文案与恢复入口都不同。 */
+  builtin: boolean;
   /** 声明了插件页内独占面板(panel.position:'tab'),主动作为「使用」(打开面板)。 */
   tabPanel: boolean;
   /** 声明了由 Host 承载、但可从插件 UI 主动进入的能力。 */
@@ -264,6 +272,8 @@ export function toGhostPluginListItem(
     version: manifest.version,
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
+    approvalState: ghost.approval.state,
+    builtin: ghost.builtin === true,
     tabPanel: manifest.panel?.position === 'tab',
     hostCapability: manifest.slots.includes('ios-simulator') ? 'ios-simulator' : null,
     oauthAuthorizationExpired: ghost.oauthAuthorizationExpired !== undefined,

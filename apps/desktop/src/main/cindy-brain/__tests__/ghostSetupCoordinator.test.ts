@@ -8,6 +8,7 @@ import type {
 } from '../../../shared/ghost';
 import { MAKER_PUSH } from '../../maker-ipc/channels';
 import { GhostSetupChangeBus } from '../ghostSetupChangeBus';
+import { GhostMutationCoordinator } from '../ghostMutationCoordinator';
 import {
   GhostSetupCoordinator,
   type GhostSetupActionResult,
@@ -513,6 +514,51 @@ describe('GhostSetupCoordinator', () => {
     h.setAssessment(ready(1));
     release();
     await expect(waiting).resolves.toMatchObject({ ok: true });
+  });
+
+  it('keeps account-boundary action drain pending after the setup call is cancelled', async () => {
+    const h = harness(required());
+    const mutations = new GhostMutationCoordinator();
+    const releaseMutation = mutations.acquire();
+    let release!: () => void;
+    h.executeAction.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ ok: true });
+        }),
+    );
+    const waiting = h.coordinator
+      .ensureReady({
+        sessionId: 'session-1',
+        ghostId: 'gmail',
+        tool: 'search',
+      })
+      .finally(releaseMutation);
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    const pending = h.bridge.pendingSnapshots()[0].request;
+    h.bridge.resolve(pending.requestId, {
+      kind: 'plugin_setup',
+      action: 'run_action',
+      actionId: 'oauth_connect:secret:google',
+      expectedRevision: pending.revision,
+    });
+    await vi.waitFor(() => expect(h.executeAction).toHaveBeenCalledOnce());
+
+    h.bridge.cleanupAll('session_aborted');
+    await expect(waiting).resolves.toMatchObject({ ok: false, errorCode: 'SETUP_CANCELLED' });
+
+    let drained = false;
+    const drain = (async () => {
+      await h.coordinator.waitForActionsIdle();
+      await mutations.waitForIdle();
+      drained = true;
+    })();
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    release();
+    await drain;
+    expect(drained).toBe(true);
   });
 
   it('publishes action error codes without copying Main diagnostic messages', async () => {

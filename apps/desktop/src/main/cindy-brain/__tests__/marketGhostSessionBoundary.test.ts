@@ -22,7 +22,8 @@ describe('market Ghost session boundary', () => {
     const captureEnd = source.indexOf('\n}\n', captureStart);
     const captureBody = source.slice(captureStart, captureEnd);
     expect(captureBody).toContain('isAppSessionBoundaryPending()');
-    expect(captureBody).toContain('return getActiveAppSession();');
+    expect(captureBody).toContain('const owner = getActiveAppSession();');
+    expect(captureBody).toContain('isGhostSkillProjectionBoundaryStableForOwner(owner.dataOwnerId)');
 
     const leaseStart = source.indexOf(
       'function beginGhostMutation(expectedOwner?: ActiveAppSession): () => void {',
@@ -59,6 +60,18 @@ describe('market Ghost session boundary', () => {
     expect(body).toContain('releaseMutation?.();');
   });
 
+  it('fails owner-scoped plugin reads closed while an account boundary is pending', () => {
+    const start = source.indexOf('function availableGhosts(): InstalledGhost[] {');
+    const end = source.indexOf('\n}', start);
+    const body = source.slice(start, end);
+    expect(body).toContain('if (isAppSessionBoundaryPending()) return [];');
+    expect(source).toContain(
+      'return availableGhosts().find((ghost) => ghost.manifest.id === id) ?? null;',
+    );
+    expect(source.match(/getGhost: findAvailableGhost/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    expect(source).toContain('return findAvailableGhost(id)?.manifest.name ?? null;');
+  });
+
   it('allows explicit local replacement and detaches market routing before landing', () => {
     const updateStart = source.indexOf(
       "ipcMain.handle('ghosts:update'",
@@ -83,7 +96,10 @@ describe('market Ghost session boundary', () => {
     const stopAndWaitIndex = body.indexOf(
       'await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);',
     );
-    const managerUpdateIndex = body.indexOf('result = await manager.update(');
+    const oauthLockIndex = body.indexOf(
+      'result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id',
+    );
+    const managerUpdateIndex = body.indexOf('manager.update(lizFilePath,');
     const detachIndex = body.indexOf(
       'marketLedger.markRemoved(inspected.manifest.id, marketInstallSubject)',
     );
@@ -99,7 +115,8 @@ describe('market Ghost session boundary', () => {
     // 只有确认旧进程退出，才切断旧市场的自动更新路由；等待失败时保留原路由，
     // 也不会尝试恢复第二份 resident 进程。
     expect(detachIndex).toBeGreaterThan(stopAndWaitIndex);
-    expect(managerUpdateIndex).toBeGreaterThan(detachIndex);
+    expect(oauthLockIndex).toBeGreaterThan(detachIndex);
+    expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
     expect(body).toContain('marketLedger.isDefaultInstallSuppressed(');
     expect(body).toContain('marketLedger.restoreInstallation(');
     expect(body).toContain('suppressed: marketRecordWasSuppressed');
@@ -133,10 +150,14 @@ describe('market Ghost session boundary', () => {
     const waitIndex = body.indexOf(
       'await getGhostNodeRuntimeBroker().stopAndWait(expected.ghostId);',
     );
-    const updateIndex = body.indexOf('await manager.update(cindyFilePath,');
+    const oauthLockIndex = body.indexOf(
+      'await withActiveOwnerGhostOauthMutationLock(expected.ghostId',
+    );
+    const updateIndex = body.indexOf('manager.update(cindyFilePath,');
 
     expect(waitIndex).toBeGreaterThan(-1);
-    expect(waitIndex).toBeLessThan(updateIndex);
+    expect(waitIndex).toBeLessThan(oauthLockIndex);
+    expect(oauthLockIndex).toBeLessThan(updateIndex);
     const restoreIndex = body.indexOf('spawnIfResident(installed);');
     expect(restoreIndex).toBeGreaterThan(updateIndex);
   });
@@ -149,18 +170,24 @@ describe('market Ghost session boundary', () => {
     const waitIndex = body.indexOf(
       'await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);',
     );
-    const tryIndex = body.indexOf('try {\n        runtime.stop(inspected.manifest.id);');
-    const updateIndex = body.indexOf('result = await manager.update(lizFilePath');
+    const oauthLockIndex = body.indexOf(
+      'result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id',
+    );
+    const updateIndex = body.indexOf('manager.update(lizFilePath');
     const restoreIndex = body.indexOf(
       'if (previousGhost) spawnIfResident(previousGhost);',
     );
 
-    expect(tryIndex).toBeGreaterThan(-1);
-    expect(tryIndex).toBeLessThan(waitIndex);
+    // stopAndWait must be called before manager.update (safe directory
+    // replacement on Windows). The owner lease is outside the per-id lock
+    // per the documented invariant (owner lease → per-id lock).
     expect(waitIndex).toBeGreaterThan(-1);
-    expect(waitIndex).toBeLessThan(updateIndex);
+    expect(waitIndex).toBeLessThan(oauthLockIndex);
+    expect(oauthLockIndex).toBeLessThan(updateIndex);
+    // spawnIfResident is in the market-provenance catch block, after
+    // stopAndWait (rollback if provenance check fails).
     expect(restoreIndex).toBeGreaterThan(waitIndex);
-    expect(body).toContain('finally {\n        releaseMutation();');
+    expect(body).toContain('finally {\n      releaseMutation();');
     expect(body).toContain("throwIpcError('INTERNAL', 'Unable to verify the installed Plugin source');");
     expect(body).toContain("throwIpcError('INTERNAL', 'Unable to detach the installed Plugin source');");
   });

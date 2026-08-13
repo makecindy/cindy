@@ -77,10 +77,23 @@ export class BoundedFileReadChangedError extends Error {
 }
 
 /** realpath 产物是否落在同为 realpath 产物的根内(含根本身)。 */
+function normalizeRealPathForComparison(realPath: string): string {
+  if (process.platform !== 'win32') return realPath;
+  // Node's sync and async realpath implementations may preserve different
+  // casing for a Windows drive letter even though both paths name the same
+  // volume. Normalize only that OS-defined case-insensitive component; the
+  // opened-handle inode checks below still prove the file's identity.
+  return realPath.replace(/^([A-Z]):/, (_, drive: string) => `${drive.toLowerCase()}:`);
+}
+
 export function isRealPathWithinRoot(realFilePath: string, realRoot: string): boolean {
-  if (realFilePath === realRoot) return true;
-  const rootWithSep = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
-  return realFilePath.startsWith(rootWithSep);
+  const comparableFilePath = normalizeRealPathForComparison(realFilePath);
+  const comparableRoot = normalizeRealPathForComparison(realRoot);
+  if (comparableFilePath === comparableRoot) return true;
+  const rootWithSep = comparableRoot.endsWith(path.sep)
+    ? comparableRoot
+    : `${comparableRoot}${path.sep}`;
+  return comparableFilePath.startsWith(rootWithSep);
 }
 
 /**
@@ -93,6 +106,25 @@ export function isRealPathWithinRoot(realFilePath: string, realRoot: string): bo
 function sameInode(a: fs.BigIntStats, b: fs.BigIntStats): boolean {
   if (a.dev === 0n || a.ino === 0n || b.dev === 0n || b.ino === 0n) return false;
   return a.dev === b.dev && a.ino === b.ino;
+}
+
+function sameStableFileState(before: fs.BigIntStats, after: fs.BigIntStats): boolean {
+  if (!after.isFile()) return false;
+  if (before.dev !== 0n && before.ino !== 0n && after.dev !== 0n && after.ino !== 0n) {
+    return sameHandleVersion(before, after);
+  }
+  return (
+    before.mode === after.mode &&
+    before.size === after.size &&
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs
+  );
+}
+
+function changedWhileReadingError(): NodeJS.ErrnoException {
+  const error = new Error('source file changed while being read') as NodeJS.ErrnoException;
+  error.code = 'EIO';
+  return error;
 }
 
 /** 同一打开句柄在读取前后是否仍是同一内容版本。 */
@@ -145,6 +177,23 @@ async function verifyStillWithinRoot(
   }
 }
 
+function verifyStillWithinRootSync(
+  handleStat: fs.BigIntStats,
+  filePath: string,
+  realRoot: string,
+): boolean {
+  try {
+    const [pathStat, realFilePath] = [
+      fs.statSync(filePath, { bigint: true }),
+      fs.realpathSync(filePath),
+    ];
+    if (!sameInode(pathStat, handleStat)) return false;
+    return isRealPathWithinRoot(realFilePath, realRoot);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 读取一个"必须是普通文件"的文件,拒绝符号链接,限量读取。
  *
@@ -192,21 +241,27 @@ export async function readBoundedFileNoFollowWithStat(
       if (!(await verifyStillWithinRoot(stat, filePath, options.containWithin))) return null;
     }
     const bytes = await readToLength(handle, Number(stat.size));
-    const finalStat = await handle.stat({ bigint: true });
-    if (options?.rejectHardLinks && finalStat.nlink !== 1n) {
+    const after = await handle.stat({ bigint: true });
+    if (options?.rejectHardLinks && after.nlink !== 1n) {
       if (options.verifyContentStability) throw new BoundedFileReadChangedError();
       return null;
     }
-    if (!sameHandleVersion(stat, finalStat)) {
+    if (bytes.byteLength !== Number(stat.size) || !sameStableFileState(stat, after)) {
       if (options?.verifyContentStability) throw new BoundedFileReadChangedError();
-      return null;
+      throw changedWhileReadingError();
+    }
+    if (options?.containWithin !== undefined) {
+      if (!(await verifyStillWithinRoot(after, filePath, options.containWithin))) {
+        if (options?.verifyContentStability) throw new BoundedFileReadChangedError();
+        throw changedWhileReadingError();
+      }
     }
     if (options?.verifyContentStability) {
       const verificationBytes = await readToLength(handle, Number(stat.size));
       const verificationStat = await handle.stat({ bigint: true });
       if (
         (options.rejectHardLinks && verificationStat.nlink !== 1n) ||
-        !sameHandleVersion(finalStat, verificationStat) ||
+        !sameStableFileState(after, verificationStat) ||
         bytes.length !== verificationBytes.length ||
         !bytes.equals(verificationBytes)
       ) {
@@ -214,7 +269,7 @@ export async function readBoundedFileNoFollowWithStat(
       }
       return { bytes, stat: verificationStat, expectedSize: Number(stat.size) };
     }
-    return { bytes, stat: finalStat, expectedSize: Number(stat.size) };
+    return { bytes, stat: after, expectedSize: Number(stat.size) };
   } finally {
     await handle.close();
   }
@@ -238,14 +293,27 @@ export async function readBoundedFileFollowLinks(
   maxBytes: number,
   options?: Pick<ReadBoundedFileOptions, 'containWithin'>,
 ): Promise<Buffer | null> {
-  const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY);
+  const handle = await fs.promises.open(
+    filePath,
+    fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0),
+  );
   try {
     const stat = await handle.stat({ bigint: true });
     if (!stat.isFile() || Number(stat.size) > maxBytes) return null;
     if (options?.containWithin !== undefined) {
       if (!(await verifyStillWithinRoot(stat, filePath, options.containWithin))) return null;
     }
-    return await readToLength(handle, Number(stat.size));
+    const bytes = await readToLength(handle, Number(stat.size));
+    const after = await handle.stat({ bigint: true });
+    if (bytes.byteLength !== Number(stat.size) || !sameStableFileState(stat, after)) {
+      throw changedWhileReadingError();
+    }
+    if (options?.containWithin !== undefined) {
+      if (!(await verifyStillWithinRoot(after, filePath, options.containWithin))) {
+        throw changedWhileReadingError();
+      }
+    }
+    return bytes;
   } finally {
     await handle.close();
   }
@@ -262,7 +330,13 @@ export function readBoundedFileNoFollowSync(
 ): Buffer | null {
   const noFollow =
     options?.noFollowFlag !== undefined ? options.noFollowFlag : (fs.constants.O_NOFOLLOW ?? null);
-  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (noFollow ?? 0));
+  // O_NONBLOCK:对普通文件是 no-op,但对 FIFO/设备在 open 时立即返回 EAGAIN 而不是
+  // 把 Main 永久阻塞 —— 同步读取路径(receipt / ledger / locale)只接受普通文件,
+  // 特殊文件必须 fail-closed 而不是挂起。
+  const fd = fs.openSync(
+    filePath,
+    fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (noFollow ?? 0),
+  );
   try {
     const stat = fs.fstatSync(fd, { bigint: true });
     if (!stat.isFile() || Number(stat.size) > maxBytes) return null;
@@ -277,22 +351,24 @@ export function readBoundedFileNoFollowSync(
       if (!sameInode(linkStat, stat)) return null;
     }
     if (options?.containWithin !== undefined) {
-      try {
-        const pathStat = fs.statSync(filePath, { bigint: true });
-        const realFilePath = fs.realpathSync(filePath);
-        if (!sameInode(pathStat, stat)) return null;
-        if (!isRealPathWithinRoot(realFilePath, options.containWithin)) return null;
-      } catch {
-        return null;
-      }
+      if (!verifyStillWithinRootSync(stat, filePath, options.containWithin)) return null;
     }
     const size = Number(stat.size);
     const buffer = Buffer.alloc(size);
     let offset = 0;
     while (offset < size) {
       const bytesRead = fs.readSync(fd, buffer, offset, size - offset, offset);
-      if (bytesRead === 0) break;
+      if (bytesRead === 0) throw changedWhileReadingError();
       offset += bytesRead;
+    }
+    const after = fs.fstatSync(fd, { bigint: true });
+    if (offset !== size || !sameStableFileState(stat, after)) {
+      throw changedWhileReadingError();
+    }
+    if (options?.containWithin !== undefined) {
+      if (!verifyStillWithinRootSync(after, filePath, options.containWithin)) {
+        throw changedWhileReadingError();
+      }
     }
     return buffer.subarray(0, offset);
   } finally {

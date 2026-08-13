@@ -32,6 +32,7 @@ import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cind
 import { LspServerPool, type IOSSimulatorMcpCallContext } from '@cindy/mcps';
 
 import { createMessage } from '../localDb/ipc/messages.js';
+import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import { getWorkerLink, updateWorkerStatus } from '../localDb/orcaTeamStore.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
 import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
@@ -805,6 +806,31 @@ export function getMaker(): Maker {
         return { makerMemoryEnabled: createOpts.makerMemoryEnabled === true };
       },
       orcaTeamStore: orcaTeamStoreAdapter,
+      readLeadHistory: async ({ leadSessionId, fromMs, limit, cursor }) => {
+        const page = await getMessagesForHistory({
+          sessionIds: [leadSessionId],
+          workdir: null,
+          fromMs,
+          toMs: null,
+          agentKind: null,
+          roles: ['user', 'assistant'],
+          includeRewound: false,
+          limit,
+          cursor,
+          order: 'asc',
+        });
+        return {
+          items: page.items.map((item) => ({
+            id: item.id,
+            role: item.role === 'assistant' ? 'assistant' as const : 'user' as const,
+            content: item.content,
+            agentMeta: item.agentMeta,
+            createdAt: item.createdAt,
+          })),
+          nextCursor: page.nextCursor,
+          hasMore: page.hasMore,
+        };
+      },
       dispatchInterAgentMessage,
     } satisfies OrcaBridgeMcpDeps;
     const orcaWorkerBridgeProvider = createOrcaWorkerBridgeMcpProvider(orcaBridgeDeps);
@@ -876,6 +902,8 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'claude-code'),
       },
+      resolveVerifiedContextWindow: (providerId, modelId) =>
+        resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook
       // 实现 (./claude-hooks/*.ts), maker-core 不感知具体逻辑。
       //

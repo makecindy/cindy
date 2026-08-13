@@ -20,13 +20,14 @@ import {
   parseGhostNodeChildToHostMessage,
   ghostPartition,
   ghostPermissionItems,
+  ghostPermissionProjectionFingerprint,
+  unreviewedGhostPermissionItems,
   ghostWebviewEntryPaths,
   isGhostCallToolName,
   isValidGhostId,
   isOfficialGhostId,
   isValidGhostNetworkHostPattern,
   layoutWithGhostPanel,
-  unreviewedGhostPermissionItems,
   parseGhostPartition,
   resolveGhostManifestLocale,
   validateGhostManifest,
@@ -4020,5 +4021,85 @@ describe('ghost · skill 槽(捆绑 Agent Skills,2026-07-25)', () => {
     expect(diff.added.map((i) => i.key)).toContain('skill:alpha');
     expect(diff.removed.map((i) => i.key)).toContain('skill:alpha');
     expect(diff.unchanged.map((i) => i.key)).not.toContain('skill:alpha');
+  });
+});
+
+describe('ghostPermissionProjectionFingerprint', () => {
+  it('same-key/different-labelArgs 同时作废 baseline、diff 与真实包复核', () => {
+    const reviewed = validateGhostManifest({
+      ...goodChipManifest(),
+      panel: { title: '已审阅面板', html: 'panel.html', minWidth: 240 },
+    });
+    const actual = validateGhostManifest({
+      ...goodChipManifest(),
+      panel: { title: '实际下载面板', html: 'panel.html', minWidth: 240 },
+    });
+    expect(reviewed.ok && actual.ok).toBe(true);
+    if (!reviewed.ok || !actual.ok) return;
+
+    expect(ghostPermissionBaselineKey(reviewed.manifest)).not.toBe(
+      ghostPermissionBaselineKey(actual.manifest),
+    );
+    const diff = diffGhostPermissionItems(reviewed.manifest, actual.manifest);
+    expect(diff.added).toEqual([
+      expect.objectContaining({ key: expect.stringMatching(/^panel:/) }),
+    ]);
+    expect(diff.removed).toEqual([
+      expect.objectContaining({ key: expect.stringMatching(/^panel:/) }),
+    ]);
+    expect(diff.unchanged.some((item) => item.key.startsWith('panel:'))).toBe(false);
+    expect(
+      unreviewedGhostPermissionItems(reviewed.manifest, undefined, actual.manifest),
+    ).toEqual([expect.objectContaining({ key: expect.stringMatching(/^panel:/) })]);
+  });
+
+  it('same-key/different-detail 必须判不同(preview hosts / 工具描述都在 detail 侧)', () => {
+    const base = {
+      ...goodChipManifest(),
+      slots: ['panel', 'preview'],
+      preview: { hosts: ['*.example.dev', 'localhost'] },
+    };
+    const a = validateGhostManifest(base);
+    // 同一个 key(preview 的 key 不随 hosts 变),hosts 换成别的域 —— 用户在确认卡
+    // 看到的授权范围完全不同,只比 key 的旧判据放行,指纹必须拒。
+    const b = validateGhostManifest({
+      ...base,
+      preview: { hosts: ['evil.example.com'] },
+    });
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    const keysA = ghostPermissionItems(a.manifest).map((i) => i.key).sort();
+    const keysB = ghostPermissionItems(b.manifest).map((i) => i.key).sort();
+    expect(keysA).toEqual(keysB); // 前提成立:key 集相同
+    expect(ghostPermissionProjectionFingerprint(a.manifest)).not.toBe(
+      ghostPermissionProjectionFingerprint(b.manifest),
+    );
+
+    // 工具描述(作者自由文本,经 detail 展示)漂移同样必须判不同。
+    const toolBase = {
+      ...goodChipManifest(),
+      slots: ['panel', 'model', 'tool'],
+      tools: [{ name: 'do_thing', description: '做点事' }],
+    };
+    const toolA = validateGhostManifest(toolBase);
+    const toolB = validateGhostManifest({
+      ...toolBase,
+      tools: [{ name: 'do_thing', description: '现在顺便读取你的邮箱' }],
+    });
+    expect(toolA.ok && toolB.ok).toBe(true);
+    if (!toolA.ok || !toolB.ok) return;
+    expect(ghostPermissionProjectionFingerprint(toolA.manifest)).not.toBe(
+      ghostPermissionProjectionFingerprint(toolB.manifest),
+    );
+  });
+
+  it('语义相同时指纹稳定(与字段/条目顺序无关)', () => {
+    const a = validateGhostManifest(goodChipManifest());
+    const b = validateGhostManifest(JSON.parse(JSON.stringify(goodChipManifest())));
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(ghostPermissionProjectionFingerprint(a.manifest)).toBe(
+      ghostPermissionProjectionFingerprint(b.manifest),
+    );
   });
 });

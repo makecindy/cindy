@@ -1205,7 +1205,10 @@ interface ElectronAPI {
     /** 原位更新(同 id 换版):唤醒状态与面板位置延续,沙箱熄灯待重拉。 */
     update: (
       lizFilePath: string,
-      opts: { expectedPackageSha256: string },
+      opts: {
+        expectedPackageSha256: string;
+        expectedInstalledApproval: string;
+      },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     /**
      * cindy 槽后端覆盖:首帧同步读(规则 7);overrides 键为 "image.generate"
@@ -1276,6 +1279,32 @@ interface ElectronAPI {
       packageSha256: string;
       iconDataUrl?: string;
     }>;
+    /** 本地包第三条恢复路径第一步:从已装目录读确认卡事实,零副作用。 */
+    reapproveInspect: (
+      id: string,
+    ) => Promise<{
+      manifest: import('../shared/ghost').GhostManifest;
+      trust: import('../shared/ghost').GhostTrustInfo;
+      /** 确认卡展示时的清单字节指纹;确认时回传,防确认间隙清单被换。 */
+      manifestSha256: string;
+      /** 确认卡展示时的完整批准投影指纹;覆盖技能、locale、icon、trust。 */
+      approvalProjectionSha256: string;
+      /** 升级前的启停偏好(.disabled 镜像读数):确认卡勾选默认值。 */
+      previouslyEnabled: boolean;
+      /** 一次性票据(Host 进程内钉住 inspect 时点的 owner 与事实,confirm 原子消费)。 */
+      inspectTicket: string;
+    }>;
+    /** 第三条恢复路径第二步:用户点过确认卡后开 receipt。 */
+    reapproveInstalled: (
+      id: string,
+      opts: {
+        enable: boolean;
+        expectedManifestSha256: string;
+        expectedApprovalProjectionSha256: string;
+        expectedInstalledApproval: string;
+        inspectTicket: string;
+      },
+    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     uninstall: (id: string) => Promise<{ ok: true }>;
     /** 详情页「导出 .cindy」:打包安装目录 → 保存对话框落盘。 */
     export: (
@@ -4950,13 +4979,25 @@ interface ElectronAPI {
         providerId?: string | null;
         /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
         workerPermissionMode?: 'auto' | 'bypassPermissions';
+        /** 新建 Lead 专用：等首条输入 accepted 且可查询后再派任务。 */
+        deferDelegateTask?: boolean;
       },
     ) => Promise<{
       teamId: string;
       workerSessionId: string;
       workerId: string;
+      dispatched: boolean;
       workerPermissionMode: 'auto' | 'bypassPermissions';
+      uiAssignmentSnapshotBeforeMs: number;
     }>;
+
+    dispatchOrcaUiAssignment: (
+      leadSessionId: string,
+      workerSessionId: string,
+      initialTask: string,
+      snapshotBeforeMs: number,
+      waitForLeadHistory: boolean,
+    ) => Promise<unknown>;
 
     /**
      * F-COLLAB: 关闭 lead session 当前的协同 workflow。

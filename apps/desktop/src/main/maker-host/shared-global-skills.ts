@@ -34,6 +34,8 @@ export interface SharedGlobalSkillLinksResult {
 
 interface PrepareOptions {
   homeDir?: string;
+  /** Optional owner-bound caller guard for Ghost-managed fanout. */
+  assertOwnerStable?: () => void;
 }
 
 export interface SharedProjectSkillLinksResult {
@@ -182,6 +184,7 @@ async function cleanupBrokenManagedLinks(
   rootPath: string,
   managedRoots: string[],
   staleManagedDiscoveryRoots: string[] = [],
+  assertMutationAllowed?: () => void,
 ): Promise<boolean> {
   let entries;
   try {
@@ -214,8 +217,9 @@ async function cleanupBrokenManagedLinks(
     );
     if (!pointsIntoCurrentRoots && !matchesMovedProjectLink) continue;
 
+    assertMutationAllowed?.();
     try {
-      await fsp.rm(linkPath, { recursive: true, force: true });
+      await fsp.unlink(linkPath);
       changed = true;
     } catch {
       // Broken symlink cleanup is best-effort; later link creation will report conflicts if needed.
@@ -228,6 +232,7 @@ async function ensureDirectoryLink(
   source: SkillEntry,
   targetPath: string,
   useRelativeTarget = false,
+  assertMutationAllowed?: () => void,
 ): Promise<{ status: LinkStatus; changed: boolean; reason?: string }> {
   const targetReal = await realPathOrNull(targetPath);
   if (targetReal && targetReal === source.realPath) {
@@ -249,8 +254,15 @@ async function ensureDirectoryLink(
     }
   }
 
+  assertMutationAllowed?.();
   try {
     await fsp.mkdir(path.dirname(targetPath), { recursive: true });
+  } catch (err) {
+    return { status: 'error', changed: false, reason: (err as Error).message };
+  }
+
+  assertMutationAllowed?.();
+  try {
     const linkTarget = useRelativeTarget && process.platform !== 'win32'
       ? path.relative(path.dirname(targetPath), source.path)
       : source.path;
@@ -265,6 +277,7 @@ async function linkEntriesIntoRoot(
   entries: SkillEntry[],
   targetRoot: string,
   useRelativeTarget = false,
+  assertMutationAllowed?: () => void,
 ): Promise<{ actions: LinkAction[]; changed: boolean; warnings: string[] }> {
   const actions: LinkAction[] = [];
   const warnings: string[] = [];
@@ -284,7 +297,12 @@ async function linkEntriesIntoRoot(
     }
 
     const targetPath = path.join(targetRoot, entry.name);
-    const result = await ensureDirectoryLink(entry, targetPath, useRelativeTarget);
+    const result = await ensureDirectoryLink(
+      entry,
+      targetPath,
+      useRelativeTarget,
+      assertMutationAllowed,
+    );
     changed = changed || result.changed;
     const action: LinkAction = {
       name: entry.name,
@@ -316,8 +334,11 @@ async function linkEntriesIntoRoot(
 export async function prepareSharedGlobalSkillLinks(
   opts: PrepareOptions = {},
 ): Promise<SharedGlobalSkillLinksResult> {
+  opts.assertOwnerStable?.();
   const paths = sharedGlobalSkillsPaths(opts.homeDir);
+  opts.assertOwnerStable?.();
   await fsp.mkdir(paths.sharedSkillsDir, { recursive: true });
+  opts.assertOwnerStable?.();
   await fsp.mkdir(paths.claudeSkillsDir, { recursive: true });
   const sharedRootCompare = (await realPathOrNull(paths.sharedSkillsDir)) ?? normalizeForCompare(paths.sharedSkillsDir);
   const claudeRootCompare = (await realPathOrNull(paths.claudeSkillsDir)) ?? normalizeForCompare(paths.claudeSkillsDir);
@@ -335,29 +356,55 @@ export async function prepareSharedGlobalSkillLinks(
     normalizeForCompare(paths.codexSkillsDir),
   ]));
 
-  changed = (await cleanupBrokenManagedLinks(paths.sharedSkillsDir, managedRoots)) || changed;
-  changed = (await cleanupBrokenManagedLinks(paths.claudeSkillsDir, managedRoots)) || changed;
+  changed = (await cleanupBrokenManagedLinks(
+    paths.sharedSkillsDir,
+    managedRoots,
+    [],
+    opts.assertOwnerStable,
+  )) || changed;
+  changed = (await cleanupBrokenManagedLinks(
+    paths.claudeSkillsDir,
+    managedRoots,
+    [],
+    opts.assertOwnerStable,
+  )) || changed;
 
   const initialClaudeEntries = (await listSkillEntries('claude', paths.claudeSkillsDir))
     .filter((entry) => !(entry.isSymlink && pointsInto(entry, [sharedRootCompare, codexRootCompare])));
-  const claudeToShared = await linkEntriesIntoRoot(initialClaudeEntries, paths.sharedSkillsDir);
+  const claudeToShared = await linkEntriesIntoRoot(
+    initialClaudeEntries,
+    paths.sharedSkillsDir,
+    false,
+    opts.assertOwnerStable,
+  );
   actions.push(...claudeToShared.actions);
   warnings.push(...claudeToShared.warnings);
   changed = changed || claudeToShared.changed;
 
   const sharedEntries = await listSkillEntries('shared', paths.sharedSkillsDir);
-  const sharedToClaude = await linkEntriesIntoRoot(sharedEntries, paths.claudeSkillsDir);
+  const sharedToClaude = await linkEntriesIntoRoot(
+    sharedEntries,
+    paths.claudeSkillsDir,
+    false,
+    opts.assertOwnerStable,
+  );
   actions.push(...sharedToClaude.actions);
   warnings.push(...sharedToClaude.warnings);
   changed = changed || sharedToClaude.changed;
 
   const codexEntries = (await listSkillEntries('codex', paths.codexSkillsDir))
     .filter((entry) => !(entry.isSymlink && pointsInto(entry, [sharedRootCompare, claudeRootCompare])));
-  const codexToClaude = await linkEntriesIntoRoot(codexEntries, paths.claudeSkillsDir);
+  const codexToClaude = await linkEntriesIntoRoot(
+    codexEntries,
+    paths.claudeSkillsDir,
+    false,
+    opts.assertOwnerStable,
+  );
   actions.push(...codexToClaude.actions);
   warnings.push(...codexToClaude.warnings);
   changed = changed || codexToClaude.changed;
 
+  opts.assertOwnerStable?.();
   return {
     ...paths,
     changed,

@@ -73,6 +73,33 @@ function makeGateway(overrides: Partial<GhostSubscriptionGatewayDeps> = {}) {
   return { gw: new GhostSubscriptionGateway(deps), sent, running, deps };
 }
 
+describe('subscriptionGateway owner boundary', () => {
+  it('drops buffered events when the owner changes during wake', async () => {
+    let releaseWake!: () => void;
+    let ownerValid = true;
+    const onInvalidated = vi.fn();
+    const wake = vi.fn(() => new Promise<void>((resolve) => { releaseWake = resolve; }));
+    const { gw, sent } = makeGateway({
+      listGhosts: () => [ghost('a', { topics: ['activity'] })],
+      wake,
+      ownerScope: {
+        capture: () => ({ ownerId: 'owner-a', generation: 1 }),
+        isCurrent: () => ownerValid,
+        isStable: () => ownerValid,
+        onInvalidated,
+      },
+    });
+
+    gw.publish('activity', 'did-thinking-start', { sessionId: 's1', blockId: 'b1' });
+    await vi.waitFor(() => expect(wake).toHaveBeenCalledOnce());
+    ownerValid = false;
+    releaseWake();
+
+    await vi.waitFor(() => expect(onInvalidated).toHaveBeenCalledWith('a'));
+    expect(sent).toHaveLength(0);
+  });
+});
+
 const TURN_DATA = { sessionId: 's1', agent: 'claude-code' };
 
 describe('did- 旁听扇出', () => {

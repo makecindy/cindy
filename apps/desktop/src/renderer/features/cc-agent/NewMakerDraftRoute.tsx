@@ -130,6 +130,12 @@ import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
+import {
+  createDeferredUiAssignment,
+  dispatchDeferredUiAssignment,
+  rememberDeferredUiAssignment,
+  type DeferredUiAssignment,
+} from './deferredUiAssignment';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import {
@@ -364,6 +370,7 @@ function draftEnableOrcaOptions(
   collab: CollabDraft,
   providers: ProviderView[],
   providersReady: boolean,
+  deferDelegateTask = false,
 ) {
   const preferredAgent: 'claude-code' | 'codex' | 'pi' =
     collab.worker === 'codex' ? 'codex' : collab.worker === 'pi' ? 'pi' : 'claude-code';
@@ -392,7 +399,8 @@ function draftEnableOrcaOptions(
       workerAgent,
       role: cfg.role,
       label: createWorkerLabel(cfg.role, []),
-      delegateTask: cfg.initialTask || undefined,
+      delegateTask: cfg.initialTask,
+      ...(deferDelegateTask ? { deferDelegateTask: true } : {}),
       workerPermissionMode: cfg.workerPermissionMode,
     };
   }
@@ -428,7 +436,8 @@ function draftEnableOrcaOptions(
     effort: cfg.effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined,
     fast: cfg.fast,
     providerId,
-    delegateTask: cfg.initialTask || undefined,
+    delegateTask: cfg.initialTask,
+    ...(deferDelegateTask ? { deferDelegateTask: true } : {}),
     workerPermissionMode: cfg.workerPermissionMode,
   };
 }
@@ -3284,10 +3293,12 @@ export function NewMakerDraftRoute() {
                 ? {
                     remoteCollab: {
                       deviceId,
+                      pendingLeadInput: message,
                       options: draftEnableOrcaOptions(
                         effectiveCollab,
                         deviceProviders,
                         !deviceProvidersLoading,
+                        true,
                       ),
                     },
                   }
@@ -3487,16 +3498,25 @@ export function NewMakerDraftRoute() {
                 // 才进入 1.6s 平滑期, overlay 从 "空 ChatView" 自然过渡到 "已在
                 // streaming 的 ChatView", 不暴露中间空窗。clear 时机见本 async 块末尾。
 
+                let deferredUiAssignment: DeferredUiAssignment | undefined;
                 if (shouldEnableCollab) {
                   try {
+                    const orcaOptions = draftEnableOrcaOptions(
+                      effectiveCollab,
+                      localProviders,
+                      !localProvidersLoading,
+                      true,
+                    );
                     const result = await window.electronAPI.maker.enableOrca(
                       newSession.id,
-                      draftEnableOrcaOptions(
-                        effectiveCollab,
-                        localProviders,
-                        !localProvidersLoading,
-                      ),
+                      orcaOptions,
                     );
+                    deferredUiAssignment = createDeferredUiAssignment({
+                      options: orcaOptions,
+                      workerSessionId: result.workerSessionId,
+                      snapshotBeforeMs: result.uiAssignmentSnapshotBeforeMs,
+                    });
+                    rememberDeferredUiAssignment(newSession.id, deferredUiAssignment);
                     // worktree 创建在后台完成,组件可能已经切走;这里读取当前 URL,
                     // 避免用 render 时捕获的旧路由误判。
                     if (getCurrentRoutePath() === `/cc-agent/${newSession.id}`) {
@@ -3538,7 +3558,17 @@ export function NewMakerDraftRoute() {
                       : {}),
                   },
                 );
-                if (accepted) opts?.onAccepted?.();
+                if (accepted) {
+                  opts?.onAccepted?.();
+                  void dispatchDeferredUiAssignment(newSession.id, deferredUiAssignment).catch(
+                    (err) => {
+                      log.error('[draft worktree send] deferred Worker assignment failed', err);
+                      toast.error(t('newChat.collaboration.assignmentFailed'));
+                    },
+                  );
+                } else if (deferredUiAssignment) {
+                  toast.error(t('newChat.collaboration.assignmentFailed'));
+                }
                 // sendMessage 会先同步 push user message,再异步返回 enqueue 是否接受。
                 // await 完成时 messages 已经有 user bubble + isStreaming=true,
                 // 此时 clear 让 worktreePreparing 进入 1.6s 平滑期 (overlay 自然
@@ -3613,12 +3643,25 @@ export function NewMakerDraftRoute() {
           // 不阻断 send 流程。worker 类型由 popover 选择,失败回退到单 session 路由。
           let orcaNavTarget: string | null = null;
           let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
+          let deferredUiAssignment: DeferredUiAssignment | undefined;
           if (shouldEnableCollab) {
             try {
+              const orcaOptions = draftEnableOrcaOptions(
+                effectiveCollab,
+                localProviders,
+                !localProvidersLoading,
+                true,
+              );
               const result = await window.electronAPI.maker.enableOrca(
                 newSession.id,
-                draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
+                orcaOptions,
               );
+              deferredUiAssignment = createDeferredUiAssignment({
+                options: orcaOptions,
+                workerSessionId: result.workerSessionId,
+                snapshotBeforeMs: result.uiAssignmentSnapshotBeforeMs,
+              });
+              rememberDeferredUiAssignment(newSession.id, deferredUiAssignment);
               orcaNavTarget = `/cc-agent/${newSession.id}`;
               orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
             } catch (err) {
@@ -3642,6 +3685,7 @@ export function NewMakerDraftRoute() {
             ...(opts?.slashCommandRanges !== undefined
               ? { slashCommandRanges: opts.slashCommandRanges }
               : {}),
+            ...(deferredUiAssignment ? { deferredUiAssignment } : {}),
           });
           opts?.onAccepted?.();
           // 草稿已经成功移交给新会话(setPending),清掉 NEW_MAKER_DRAFT_KEY
@@ -4017,10 +4061,12 @@ export function NewMakerDraftRoute() {
               ? {
                   remoteCollab: {
                     deviceId,
+                    pendingLeadInput: objective,
                     options: draftEnableOrcaOptions(
                       effectiveCollab,
                       deviceProviders,
                       !deviceProvidersLoading,
+                      true,
                     ),
                   },
                 }
@@ -4195,12 +4241,25 @@ export function NewMakerDraftRoute() {
         // session 不匹配返回 stale-context(codex P2)——与 Send 路径同口径,把 reveal
         // 塞进 navigate state,由 CCAgentSessionView mount 后消费。
         let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
+        let deferredUiAssignment: DeferredUiAssignment | undefined;
         if (shouldEnableCollab) {
           try {
+            const orcaOptions = draftEnableOrcaOptions(
+              effectiveCollab,
+              localProviders,
+              !localProvidersLoading,
+              true,
+            );
             const result = await window.electronAPI.maker.enableOrca(
               newSession.id,
-              draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
+              orcaOptions,
             );
+            deferredUiAssignment = createDeferredUiAssignment({
+              options: orcaOptions,
+              workerSessionId: result.workerSessionId,
+              snapshotBeforeMs: result.uiAssignmentSnapshotBeforeMs,
+            });
+            rememberDeferredUiAssignment(newSession.id, deferredUiAssignment);
             orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
           } catch (err) {
             log.error('[draft goal] enableOrca failed (continuing as single session)', err);
@@ -4212,11 +4271,18 @@ export function NewMakerDraftRoute() {
         // setGoal 内部 ensureSession(拉起 agent)+ 发首轮(带目标指令)。
         try {
           await window.electronAPI.maker.setGoal({ sessionId: newSession.id, objective, limits });
+          void dispatchDeferredUiAssignment(newSession.id, deferredUiAssignment).catch((err) => {
+            log.error('[draft goal] deferred Worker assignment failed', err);
+            toast.error(t('newChat.collaboration.assignmentFailed'));
+          });
         } catch (err) {
           // 首轮没发出去 → 下面的 autoNameSession 也不会跑,权威标题永不回流。
           // 不撤回的话标题预览会永久盖着 DB 里的哨兵(理由同 worktree 分支的
           // restoreFirstMessageDraft)。异常照旧抛给调用方展示。
           if (optimisticGoalTitle) emitAutoTitlePreviewCleared(newSession.id);
+          if (deferredUiAssignment) {
+            toast.error(t('newChat.collaboration.assignmentFailed'));
+          }
           throw err;
         }
         // 自动起名:/goal 新建的会话不经普通发送路径,scheduleAutoName 漏触发 → 标题会停在默认。

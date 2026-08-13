@@ -89,6 +89,10 @@ import { PiAgent } from '../index.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
+type PiTestSessionHandle = AgentSessionHandle & {
+  setModel: NonNullable<AgentSessionHandle['setModel']>;
+};
+
 const noopLogger: Logger = {
   trace: () => {}, debug: () => {}, info: () => {}, warn: () => {}, error: () => {}, fatal: () => {},
   child: () => noopLogger,
@@ -157,7 +161,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       ...(mcp?.serverNames
         ? {
           preparePiExtraSpawnConfig: async (_providers, context) => {
-            captured.mcpVendorOptions = context.vendorOptions;
+            captured.mcpVendorOptions = context?.vendorOptions;
             return {
               mcpBridge: {
                 token: 'bridge-token',
@@ -220,14 +224,14 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
     includeNextModel = false,
     mcp?: McpSetup,
-  ): Promise<AgentSessionHandle> {
+  ): Promise<PiTestSessionHandle> {
     const agent = new PiAgent(buildDeps(reviewAutoPermissionAction, includeNextModel, mcp));
     return agent.startSession({
       sessionId: 's1',
       workingDir: cwd,
       model: 'm',
       ...(permissionMode ? { permissionMode: permissionMode as never } : {}),
-    });
+    }) as Promise<PiTestSessionHandle>;
   }
 
   /**
@@ -1203,7 +1207,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     const events: Array<Record<string, unknown>> = [];
     void (async () => {
-      for await (const e of handle.events()) events.push(e as Record<string, unknown>);
+      for await (const e of handle.events()) {
+        events.push(e as unknown as Record<string, unknown>);
+      }
     })();
     let cardShown = false;
     handle.setInteractionResolver?.(async () => {

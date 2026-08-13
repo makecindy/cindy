@@ -38,6 +38,12 @@ import {
   orcaWorkflowsForDevice,
 } from '@/lib/makerTransport';
 import { extractIpcError } from '@/utils/ipcError';
+import {
+  createDeferredUiAssignment,
+  rememberDeferredUiAssignment,
+  type DeferredUiAssignment,
+} from './deferredUiAssignment';
+import { buildDraftWorkerInitialTask } from './draftWorkerHandoff';
 
 const log = createLogger('remoteCollabHandoff');
 
@@ -47,10 +53,13 @@ function remoteWorkerPermissionModeUnsupportedError(): Error {
   );
 }
 
-async function assertRemoteWorkerPermissionModeSupport(
+async function readRemoteCollabCapabilities(
   deviceId: string,
   workerAgent: EnableOrcaOptions['workerAgent'],
-): Promise<void> {
+): Promise<{
+  supportsOrcaWorkerPermissionMode?: boolean;
+  supportsDeferredOrcaUiAssignment?: boolean;
+}> {
   const raw = await agentCapabilitiesForDevice(deviceId, workerAgent);
   if (
     !raw
@@ -60,6 +69,7 @@ async function assertRemoteWorkerPermissionModeSupport(
   ) {
     throw remoteWorkerPermissionModeUnsupportedError();
   }
+  return raw;
 }
 
 /**
@@ -168,6 +178,8 @@ export interface RemoteCollabEnableParams {
    * 在被控端多半不存在,会撞它的精确 preflight。
    */
   options: EnableOrcaOptions;
+  /** 新建 Lead 的待发送输入，仅供不支持 deferred handoff 的老被控端兼容。 */
+  pendingLeadInput?: string;
   /** 日志前缀,用于区分是哪条创建路径(如 'draft send' / 'draft goal')。 */
   logTag: string;
 }
@@ -185,17 +197,78 @@ export interface RemoteCollabEnableParams {
  */
 export async function enableRemoteCollabForSession(
   p: RemoteCollabEnableParams,
-): Promise<{ focusWorkerSessionId: string }> {
+): Promise<{
+  focusWorkerSessionId: string;
+  deferredUiAssignment?: DeferredUiAssignment;
+  assignmentUnconfirmed?: boolean;
+}> {
   // 弹窗展示时的 capability 只是一份快照。真正 mutation 前重新向同一被控端确认，
   // 防止断线重连后设备降级到旧版本、把显式权限字段静默忽略。
-  await assertRemoteWorkerPermissionModeSupport(p.deviceId, p.options.workerAgent);
+  const capabilities = await readRemoteCollabCapabilities(p.deviceId, p.options.workerAgent);
+  const deferDelegateTask =
+    p.options.deferDelegateTask === true
+    && capabilities.supportsDeferredOrcaUiAssignment === true;
+  // 老被控端没有 deferred capability：删掉新字段，沿用它的 enableOrca 即时派单。
+  // 不能在新通道失败后再回退即时派发，否则响应丢失时会把同一任务派两遍。
+  // Even when the capability probe says “new”, preserve the pending Lead text on the wire:
+  // the peer may reconnect/downgrade between capability and mutation. A new handler defers this
+  // wrapped text until history is ready; an old handler still receives the context it cannot query.
+  const enableOptions = (() => {
+    const compatible = { ...p.options };
+    compatible.delegateTask = buildDraftWorkerInitialTask(
+      compatible.delegateTask,
+      p.pendingLeadInput,
+    );
+    if (!deferDelegateTask) delete compatible.deferDelegateTask;
+    return compatible;
+  })();
+  const withDeferredAssignment = (
+    workerSessionId: string,
+    snapshotBeforeMs: number | null,
+    assignmentUnconfirmed = false,
+  ) => {
+    const deferredUiAssignment = deferDelegateTask && snapshotBeforeMs !== null
+      ? createDeferredUiAssignment({
+            // The later assignment can rely on queryable history, so retain the user's raw task;
+            // the legacy Pending Lead input wrapper above exists only for the one-shot enable wire.
+            options: p.options,
+            workerSessionId,
+            snapshotBeforeMs,
+            deviceId: p.deviceId,
+        })
+      : undefined;
+    rememberDeferredUiAssignment(p.leadSessionId, deferredUiAssignment);
+    return {
+      focusWorkerSessionId: workerSessionId,
+      ...(deferredUiAssignment ? { deferredUiAssignment } : {}),
+      ...(assignmentUnconfirmed ? { assignmentUnconfirmed: true } : {}),
+    };
+  };
   try {
-    const result = await makerApiForDevice(p.deviceId).enableOrca(p.leadSessionId, p.options);
-    return { focusWorkerSessionId: result.workerSessionId };
+    const result = await makerApiForDevice(p.deviceId).enableOrca(
+      p.leadSessionId,
+      enableOptions,
+    );
+    return withDeferredAssignment(
+      result.workerSessionId,
+      result.dispatched === false && Number.isFinite(result.uiAssignmentSnapshotBeforeMs)
+        ? result.uiAssignmentSnapshotBeforeMs
+        : null,
+    );
   } catch (err) {
     if (!isAmbiguousTimeout(err)) throw err;
     const recovered = await recoverTimedOutTeam(p);
-    if (recovered) return recovered;
+    // enableOrca 响应丢失时拿不到被控端时间；这些 defer 调用只用于刚创建、尚无历史的
+    // Lead，0 可安全表达「等第一条 user 行」，同时不依赖控制端/被控端时钟同步。
+    // 响应丢失时无法证明实际被控端采用了 deferred handler，也无法证明任务尚未派发。
+    // 只恢复 Team 可见性，不生成可二次派发的 receipt。
+    if (recovered) {
+      return withDeferredAssignment(
+        recovered.focusWorkerSessionId,
+        null,
+        deferDelegateTask,
+      );
+    }
     throw err;
   } finally {
     // 被控端刚建出的 worker session 还没进控制端注册表。fire-and-forget(见文件头 ②)。
@@ -222,25 +295,29 @@ export async function enableRemoteCollabForSession(
  * 返回 true 表示协同已就绪(调用方据此展开协同 tab)。
  */
 export async function consumePendingRemoteCollab(
-  pending: { deviceId: string; options: Record<string, unknown> },
+  pending: { deviceId: string; options: Record<string, unknown>; pendingLeadInput?: string },
   ctx: {
     leadSessionId: string;
     logTag: string;
     /** 失败时的用户可见提示;调用方注入以复用视图的 i18n / toast。 */
     onFailed: (err: unknown) => void;
+    /** Team 已建成，但延迟派单响应丢失，不能安全重试。 */
+    onAssignmentUnconfirmed?: () => void;
   },
-): Promise<boolean> {
+): Promise<{ ok: boolean; deferredUiAssignment?: DeferredUiAssignment }> {
   try {
-    await enableRemoteCollabForSession({
+    const result = await enableRemoteCollabForSession({
       deviceId: pending.deviceId,
       leadSessionId: ctx.leadSessionId,
       options: pending.options as Parameters<typeof window.electronAPI.maker.enableOrca>[1],
+      pendingLeadInput: pending.pendingLeadInput,
       logTag: ctx.logTag,
     });
-    return true;
+    if (result.assignmentUnconfirmed) ctx.onAssignmentUnconfirmed?.();
+    return { ok: true, deferredUiAssignment: result.deferredUiAssignment };
   } catch (err) {
     log.error(`[${ctx.logTag}] remote enableOrca failed (continuing as single session)`, err);
     ctx.onFailed(err);
-    return false;
+    return { ok: false };
   }
 }

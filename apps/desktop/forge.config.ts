@@ -1498,6 +1498,19 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/cindy-brain/forgeScaffoldWorkerProcess.ts',
+          config: 'vite.preload.config.ts',
+          // Stable-parent scaffold publish/cleanup runs in a utility process;
+          // the worker's cwd is the validated parent directory capability.
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/cindy-brain/ghostSnapshotWorkerProcess.ts',
+          config: 'vite.preload.config.ts',
+          // Approval snapshot mutation is cwd-relative inside a stable-parent worker.
+          target: 'preload',
+        },
+        {
           entry: 'src/preload/preload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',

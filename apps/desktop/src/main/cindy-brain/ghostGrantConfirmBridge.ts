@@ -175,6 +175,13 @@ export class GhostGrantConfirmBridge {
     }
   }
 
+  /** Account/data-owner boundary: fail closed every pending grant before waiting on owner leases. */
+  cleanupAll(reason: 'session_closed' | 'session_aborted'): void {
+    for (const requestId of Array.from(this.pending.keys())) {
+      this.settle(requestId, { confirmed: false, reason }, reason);
+    }
+  }
+
   /** 内部统一收口:resolve + 清 pending + 广播 DISMISSED 让 renderer 关卡片。 */
   private settle(
     requestId: string,

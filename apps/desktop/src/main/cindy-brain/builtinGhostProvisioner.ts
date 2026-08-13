@@ -5,9 +5,17 @@ import crypto from 'node:crypto';
 import {
   GHOST_MANIFEST_FILE,
   ghostIconMimeType,
+  isValidGhostId,
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
+import {
+  classifyGhostDirEntry,
+  classifyGhostDirEntrySync,
+  collectGhostContentFiles,
+  hashGhostContentFiles,
+  resolveGhostContentPathSync,
+} from './ghostContentTree.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 import {
   CINDY_OFFICIAL_GHOST_TRUST,
@@ -102,6 +110,17 @@ export interface ProvisionDeps {
   identity?: ProvisionIdentity | null;
   /** 回收删除某个意识目录之前的钩子(index.ts 用它先熄灯沙箱,防 Windows 文件锁)。 */
   beforeRemove?: (id: string) => void | Promise<void>;
+  /** Replacing existing bundled bytes must revoke the old Host receipt first. */
+  beforeReplace?: (id: string) => void | Promise<void>;
+  /** Production path publishes through GhostManager's durable pending journal. */
+  publishSeed?: (
+    id: string,
+    seedDir: string,
+    options: {
+      disabled: boolean;
+      trust?: typeof CINDY_OFFICIAL_GHOST_TRUST;
+    },
+  ) => void | Promise<void>;
   /**
    * 首次真实变更(装/覆盖/回收)动手前回调,整轮至多一次 —— index.ts 用它
    * 广播"播种进行中"的 UI 提示;指纹全一致的 no-op 轮永不触发(不闪提示)。
@@ -111,6 +130,10 @@ export interface ProvisionDeps {
 }
 
 export interface ProvisionOutcome {
+  /** First-party seed manifests whose installed bytes reconciled successfully. */
+  approved: GhostManifest[];
+  /** Immutable seed source for each approved manifest; receipt baselines must use it. */
+  approvedSourceDirs: Record<string, string>;
   /** 本次首装的意识(装完默认唤醒;调用方负责停靠面板 + 广播 + 常驻点火)。 */
   installed: GhostManifest[];
   /** 本次覆盖更新的意识(`.disabled` 已保留;调用方负责广播)。 */
@@ -127,6 +150,56 @@ interface ProvisioningState {
   removed: string[];
   /** 由播种装上的 id 台账 —— 受众不再命中时只回收台账内的,用户手动装的不动。 */
   seeded: string[];
+}
+
+interface ProvisioningStateRead {
+  state: ProvisioningState;
+  readable: boolean;
+}
+
+/** Managed roots must not traverse a symlink/junction in any path segment. */
+function isRealDirectoryPath(absPath: string, allowMissingLeaf = false): boolean {
+  const resolved = path.resolve(absPath);
+  const parsed = path.parse(resolved);
+  let current = parsed.root;
+  const segments = path.relative(parsed.root, resolved).split(path.sep).filter(Boolean);
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (err) {
+      if (
+        allowMissingLeaf &&
+        index === segments.length - 1 &&
+        (err as NodeJS.ErrnoException).code === 'ENOENT'
+      ) {
+        return true;
+      }
+      return false;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+  }
+  return true;
+}
+
+/** Verify that an approval source is the exact, link-free bundled seed directory for an id. */
+export function isTrustedBuiltinSeedSource(
+  seedRootDirs: string[],
+  id: string,
+  sourceDir: string,
+): boolean {
+  if (!isValidGhostId(id)) return false;
+  const resolvedSource = path.resolve(sourceDir);
+  return seedRootDirs.some((root) => {
+    const resolvedRoot = path.resolve(root);
+    const expectedSource = path.join(resolvedRoot, id);
+    return (
+      resolvedSource === expectedSource &&
+      isRealDirectoryPath(resolvedRoot) &&
+      isRealDirectoryPath(expectedSource)
+    );
+  });
 }
 
 /** 列出多个种子根下的意识 id 并集(去重排序)。根缺失/为空按无种子处理。 */
@@ -166,6 +239,7 @@ export function listEligibleBuiltinCommands(
 
 /** 列出单个种子根下的意识 id(= 子目录名;点开头跳过)。种子根缺失返回空。 */
 function listSeedIdsInRoot(seedRootDir: string): string[] {
+  if (!isRealDirectoryPath(seedRootDir)) return [];
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(seedRootDir, { withFileTypes: true });
@@ -178,68 +252,196 @@ function listSeedIdsInRoot(seedRootDir: string): string[] {
     .sort();
 }
 
-/** 读墓碑列表(状态文件缺失 / 损坏一律当空,不阻断播种)。 */
+/**
+ * 读墓碑列表。状态文件缺失 = 无墓碑(返回空);**损坏/读不出则抛错 fail closed**
+ * ——把损坏当空会让已卸载的随包意识复活(丢失卸载事实)。播种路径依赖这个抛错保持
+ * fail closed;不能阻断的消费者(如 legacy 恢复状态查询)必须自己 try/catch 降级,
+ * 而不是把损坏当空(见 getLegacyGhostRecoveryStatusForActiveSession)。
+ */
 export function readBuiltinTombstones(repoRootDir: string): string[] {
-  return readState(repoRootDir).removed;
+  const result = readState(repoRootDir);
+  if (!result.readable) {
+    throw new Error('builtin provisioning state is unreadable');
+  }
+  return result.state.removed;
 }
 
 /** 记墓碑(幂等)。用户卸载内置意识时由 IPC 层调用;同时从 seeded 台账摘除。 */
-export function recordBuiltinTombstone(repoRootDir: string, id: string, log?: BuiltinProvisionerLogger): void {
-  const state = readState(repoRootDir);
+export function recordBuiltinTombstone(
+  repoRootDir: string,
+  id: string,
+  log?: BuiltinProvisionerLogger,
+): void {
+  if (!isValidGhostId(id)) throw new Error('invalid builtin tombstone id');
+  const result = readState(repoRootDir, log);
+  if (!result.readable) throw new Error('builtin provisioning state is unreadable');
+  const state = result.state;
   if (state.removed.includes(id) && !state.seeded.includes(id)) return;
-  writeState(
+  if (!writeState(
     repoRootDir,
     {
       removed: state.removed.includes(id) ? state.removed : [...state.removed, id],
       seeded: state.seeded.filter((v) => v !== id),
     },
     log,
-  );
-}
-
-/** 清墓碑(幂等)。用户手动重装同 id 意识 = 重新跟随包内版本。 */
-export function clearBuiltinTombstone(repoRootDir: string, id: string, log?: BuiltinProvisionerLogger): void {
-  const state = readState(repoRootDir);
-  if (!state.removed.includes(id)) return;
-  writeState(repoRootDir, { ...state, removed: state.removed.filter((v) => v !== id) }, log);
-}
-
-function readState(repoRootDir: string): ProvisioningState {
-  const empty: ProvisioningState = { removed: [], seeded: [] };
-  try {
-    const raw = JSON.parse(fs.readFileSync(path.join(repoRootDir, PROVISIONING_STATE_FILE), 'utf-8')) as unknown;
-    if (typeof raw !== 'object' || raw === null) return empty;
-    const obj = raw as { removed?: unknown; seeded?: unknown };
-    return {
-      removed: Array.isArray(obj.removed) ? obj.removed.filter((v): v is string => typeof v === 'string') : [],
-      seeded: Array.isArray(obj.seeded) ? obj.seeded.filter((v): v is string => typeof v === 'string') : [],
-    };
-  } catch {
-    return empty;
+  )) {
+    throw new Error('builtin provisioning state write failed');
   }
 }
 
-function writeState(repoRootDir: string, state: ProvisioningState, log?: BuiltinProvisionerLogger): void {
+/** 清墓碑(幂等)。用户手动重装同 id 意识 = 重新跟随包内版本。 */
+export function clearBuiltinTombstone(
+  repoRootDir: string,
+  id: string,
+  log?: BuiltinProvisionerLogger,
+): void {
+  if (!isValidGhostId(id)) throw new Error('invalid builtin tombstone id');
+  const result = readState(repoRootDir, log);
+  if (!result.readable) throw new Error('builtin provisioning state is unreadable');
+  const state = result.state;
+  if (!state.removed.includes(id)) return;
+  if (!writeState(repoRootDir, { ...state, removed: state.removed.filter((v) => v !== id) }, log)) {
+    throw new Error('builtin provisioning state write failed');
+  }
+}
+
+/** Carry a removed builtin across an id rename in one atomic state replacement. */
+export function renameBuiltinTombstone(
+  repoRootDir: string,
+  fromId: string,
+  toId: string,
+  log?: BuiltinProvisionerLogger,
+): boolean {
+  if (!isValidGhostId(fromId) || !isValidGhostId(toId)) {
+    throw new Error('invalid builtin tombstone rename');
+  }
+  const result = readState(repoRootDir, log);
+  if (!result.readable) throw new Error('builtin provisioning state is unreadable');
+  const state = result.state;
+  if (!state.removed.includes(fromId)) return false;
+  const removed = state.removed.filter((id) => id !== fromId && id !== toId);
+  removed.push(toId);
+  if (
+    !writeState(
+      repoRootDir,
+      {
+        removed,
+        seeded: state.seeded.filter((id) => id !== toId),
+      },
+      log,
+    )
+  ) {
+    throw new Error('builtin provisioning state write failed');
+  }
+  return true;
+}
+
+function readState(repoRootDir: string, log?: BuiltinProvisionerLogger): ProvisioningStateRead {
+  const empty: ProvisioningStateRead = {
+    state: { removed: [], seeded: [] },
+    readable: true,
+  };
+  const file = path.join(repoRootDir, PROVISIONING_STATE_FILE);
   try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      log?.warn('builtin provisioning state is not a regular file', { file });
+      return { ...empty, readable: false };
+    }
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as unknown;
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      log?.warn('builtin provisioning state is invalid', { file });
+      return { ...empty, readable: false };
+    }
+    const obj = raw as { removed?: unknown; seeded?: unknown };
+    if (
+      (obj.removed !== undefined && !Array.isArray(obj.removed)) ||
+      (obj.seeded !== undefined && !Array.isArray(obj.seeded))
+    ) {
+      log?.warn('builtin provisioning state has invalid fields', { file });
+      return { ...empty, readable: false };
+    }
+    const removed = Array.isArray(obj.removed)
+      ? obj.removed.filter((v): v is string => typeof v === 'string')
+      : [];
+    const seeded = Array.isArray(obj.seeded)
+      ? obj.seeded.filter((v): v is string => typeof v === 'string')
+      : [];
+    if (
+      (Array.isArray(obj.removed) && removed.length !== obj.removed.length) ||
+      (Array.isArray(obj.seeded) && seeded.length !== obj.seeded.length) ||
+      removed.some((id) => !isValidGhostId(id)) ||
+      seeded.some((id) => !isValidGhostId(id))
+    ) {
+      log?.warn('builtin provisioning state contains invalid ghost id', { file });
+      return { ...empty, readable: false };
+    }
+    return {
+      state: { removed, seeded },
+      readable: true,
+    };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return empty;
+    log?.warn('builtin provisioning state unreadable', {
+      file,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { ...empty, readable: false };
+  }
+}
+
+function writeState(
+  repoRootDir: string,
+  state: ProvisioningState,
+  log?: BuiltinProvisionerLogger,
+): boolean {
+  const file = path.join(repoRootDir, PROVISIONING_STATE_FILE);
+  const temp = path.join(
+    repoRootDir,
+    `.${PROVISIONING_STATE_FILE}.tmp-${crypto.randomBytes(8).toString('hex')}`,
+  );
+  try {
+    if (!isRealDirectoryPath(repoRootDir, true)) {
+      throw new Error('builtin provisioning repo root is not a real directory');
+    }
     fs.mkdirSync(repoRootDir, { recursive: true });
-    fs.writeFileSync(path.join(repoRootDir, PROVISIONING_STATE_FILE), `${JSON.stringify(state, null, 2)}\n`);
+    fs.writeFileSync(temp, `${JSON.stringify(state, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+    });
+    const tempStat = fs.lstatSync(temp);
+    if (!tempStat.isFile() || tempStat.isSymbolicLink()) {
+      throw new Error('builtin provisioning temporary state is not a regular file');
+    }
+    fs.renameSync(temp, file);
+    return true;
   } catch (err) {
     // 状态写失败不致命(最坏情况:卸载的内置意识下次启动弹回来一次),warn 留痕。
     log?.warn('builtin provisioning state write failed', {
       error: err instanceof Error ? err.message : String(err),
     });
+    try {
+      fs.rmSync(temp, { force: true });
+    } catch {
+      // Preserve the original failure; the next reconciliation retries the write.
+    }
+    return false;
   }
 }
 
 /** 受众命中判定(纯函数,fail-closed:不认识的规则形态一律不命中)。 */
-export function matchesAudience(rule: AudienceRule | undefined, identity: ProvisionIdentity | null): boolean {
+export function matchesAudience(
+  rule: AudienceRule | undefined,
+  identity: ProvisionIdentity | null,
+): boolean {
   if (rule === undefined || rule === 'all') return true;
   if (typeof rule !== 'object' || rule === null) return false;
   if (identity === null) return false;
   if (Array.isArray(rule.userIds) && rule.userIds.includes(identity.userId)) return true;
   if (Array.isArray(rule.emails) && identity.email !== null) {
     const emailFold = identity.email.toLowerCase();
-    if (rule.emails.some((e) => typeof e === 'string' && e.toLowerCase() === emailFold)) return true;
+    if (rule.emails.some((e) => typeof e === 'string' && e.toLowerCase() === emailFold))
+      return true;
   }
   return false;
 }
@@ -272,10 +474,12 @@ function readProvisioningConfig(
     if (typeof raw !== 'object' || raw === null) throw new Error('config root must be an object');
     const ghosts = (raw as { ghosts?: unknown }).ghosts;
     if (ghosts === undefined) return new Map();
-    if (typeof ghosts !== 'object' || ghosts === null) throw new Error('"ghosts" must be an object');
+    if (typeof ghosts !== 'object' || ghosts === null)
+      throw new Error('"ghosts" must be an object');
     const map = new Map<string, SeedConfigEntry>();
     for (const [id, entry] of Object.entries(ghosts as Record<string, unknown>)) {
-      if (typeof entry !== 'object' || entry === null) throw new Error(`ghosts["${id}"] must be an object`);
+      if (typeof entry !== 'object' || entry === null)
+        throw new Error(`ghosts["${id}"] must be an object`);
       const audience = (entry as { audience?: unknown }).audience;
       const tier = (entry as { tier?: unknown }).tier;
       // tier 只认 'builtin' / 'enterprise'(缺省 builtin);写错整份配置按损坏
@@ -308,7 +512,14 @@ function readProvisioningConfig(
 export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<ProvisionOutcome> {
   const { seedRootDirs, repoRootDir, log } = deps;
   const identity = deps.identity ?? null;
-  const outcome: ProvisionOutcome = { installed: [], updated: [], removed: [], skipped: [] };
+  const outcome: ProvisionOutcome = {
+    approved: [],
+    approvedSourceDirs: {},
+    installed: [],
+    updated: [],
+    removed: [],
+    skipped: [],
+  };
 
   // 每根独立列种子 + 读配置。空根不读配置(未初始化 submodule 的目录里连
   // provisioning.json 都没有,读了必 warn,徒增噪音)。
@@ -317,14 +528,27 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
     return {
       root,
       ids,
-      config: ids.length === 0 ? new Map<string, SeedConfigEntry>() : readProvisioningConfig(root, log),
+      config:
+        ids.length === 0 ? new Map<string, SeedConfigEntry>() : readProvisioningConfig(root, log),
     };
   });
   const allSeedIds = new Set(rootStates.flatMap((s) => s.ids));
   if (allSeedIds.size === 0) return outcome;
   const hasEmptyRoot = rootStates.some((s) => s.ids.length === 0);
 
-  const state = readState(repoRootDir);
+  if (!isRealDirectoryPath(repoRootDir, true)) {
+    log?.warn('builtin provisioning skipped: repo root is not a real directory', {
+      repoRootDir,
+    });
+    outcome.skipped.push(...allSeedIds);
+    return outcome;
+  }
+  const stateResult = readState(repoRootDir, log);
+  if (!stateResult.readable) {
+    outcome.skipped.push(...allSeedIds);
+    return outcome;
+  }
+  const state = stateResult.state;
   const tombstones = new Set(state.removed);
   const seeded = new Set(state.seeded);
   const seededBefore = new Set(seeded);
@@ -345,6 +569,8 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
       continue;
     }
     for (const id of ids) {
+      const ownedBeforeAttempt = seeded.has(id);
+      let ownershipClaimPersisted = false;
       if (processed.has(id)) {
         log?.warn('builtin seed skipped: duplicate id across seed roots', { id, root });
         outcome.skipped.push(id);
@@ -370,7 +596,15 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
 
         await withGhostInstallLock(id, async () => {
           const installedDir = path.join(repoRootDir, id);
-          const installedExists = fs.existsSync(path.join(installedDir, GHOST_MANIFEST_FILE));
+          const installedExists =
+            isRealDirectoryPath(installedDir) &&
+            (() => {
+              try {
+                return classifyGhostDirEntrySync(path.join(installedDir, GHOST_MANIFEST_FILE)) === 'file';
+              } catch {
+                return false;
+              }
+            })();
 
           // 3) 受众:不命中 → 回收"播种装的"(seeded 台账内),手动装的不动。
           if (!matchesAudience(config.get(id)?.audience, identity)) {
@@ -388,45 +622,87 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
           }
 
           // 4) 指纹比对(忽略点开头文件:`.disabled` 是用户状态不是内容)。
+          // 种子是随应用发布的第一方输入,出现链接/FIFO/设备节点属于打包事故:
+          // 必须整颗 fail closed,不能在复制时静默丢掉条目后批准一个残缺安装。
+          const seedFingerprint = await fingerprintDirContent(seedDir);
+          if (seedFingerprint.hasNonRegularEntry) {
+            throw new Error('builtin seed contains a link or non-regular entry');
+          }
+
+          const trust = id === 'cindy-github' ? CINDY_OFFICIAL_GHOST_TRUST : undefined;
           if (installedExists) {
-            const seedHash = await hashDirContent(seedDir);
-            const installedHash = await hashDirContent(installedDir);
-            if (seedHash === installedHash) {
-              if (id === 'cindy-github' && !hasCindyOfficialTrustMetadata(installedDir)) {
-                // receipt 与官方字节必须在同一把安装锁内、经同一次 staging swap
-                // 原子落位；不能在 hash 后单独给可能已被替换的目录补 trust。
-                const wasDisabled = fs.existsSync(path.join(installedDir, '.disabled'));
-                markApplyStart();
-                await swapInSeed(seedDir, installedDir, repoRootDir, id, {
-                  disabled: wasDisabled,
-                  trust: CINDY_OFFICIAL_GHOST_TRUST,
-                });
-              }
+            const installedFingerprint = await fingerprintDirContent(installedDir);
+            const contentMatches =
+              !installedFingerprint.hasNonRegularEntry &&
+              seedFingerprint.hash === installedFingerprint.hash;
+            const trustNeedsRepair = trust !== undefined && !hasCindyOfficialTrustMetadata(installedDir);
+            if (contentMatches && !trustNeedsRepair) {
+              outcome.approved.push(manifest);
+              outcome.approvedSourceDirs[id] = seedDir;
               outcome.skipped.push(id);
               return;
             }
-            const wasDisabled = fs.existsSync(path.join(installedDir, '.disabled'));
+
+            const wasDisabled = (() => {
+              try {
+                return classifyGhostDirEntrySync(path.join(installedDir, '.disabled')) === 'file';
+              } catch {
+                return false;
+              }
+            })();
             markApplyStart();
-            await swapInSeed(seedDir, installedDir, repoRootDir, id, {
-              disabled: wasDisabled,
-              ...(id === 'cindy-github' ? { trust: CINDY_OFFICIAL_GHOST_TRUST } : {}),
-            });
+            // Claim seeded ownership durably before exchanging bytes. If the process
+            // dies after the swap but before the end-of-pass ledger write, the next
+            // reconciliation still knows this id is eligible for audience cleanup.
             seeded.add(id);
-            outcome.updated.push(manifest);
-            log?.info('builtin ghost updated to bundled content', { id, version: manifest.version });
+            if (!writeState(repoRootDir, { removed: [...tombstones], seeded: [...seeded].sort() }, log)) {
+              seeded.delete(id);
+              throw new Error('builtin seeded ledger could not be persisted before replacement');
+            }
+            ownershipClaimPersisted = true;
+            if (!contentMatches) await deps.beforeReplace?.(id);
+            const options = {
+              disabled: wasDisabled,
+              ...(trust ? { trust } : {}),
+            };
+            if (deps.publishSeed) await deps.publishSeed(id, seedDir, options);
+            else await swapInSeed(seedDir, installedDir, repoRootDir, id, options);
+            outcome.approved.push(manifest);
+            outcome.approvedSourceDirs[id] = seedDir;
+            if (contentMatches) {
+              outcome.skipped.push(id);
+            } else {
+              outcome.updated.push(manifest);
+              log?.info('builtin ghost updated to bundled content', { id, version: manifest.version });
+            }
             return;
           }
 
           markApplyStart();
-          await swapInSeed(seedDir, installedDir, repoRootDir, id, {
-            disabled: false,
-            ...(id === 'cindy-github' ? { trust: CINDY_OFFICIAL_GHOST_TRUST } : {}),
-          });
           seeded.add(id);
+          if (!writeState(repoRootDir, { removed: [...tombstones], seeded: [...seeded].sort() }, log)) {
+            seeded.delete(id);
+            throw new Error('builtin seeded ledger could not be persisted before install');
+          }
+          ownershipClaimPersisted = true;
+          const options = {
+            disabled: false,
+            ...(trust ? { trust } : {}),
+          };
+          if (deps.publishSeed) await deps.publishSeed(id, seedDir, options);
+          else await swapInSeed(seedDir, installedDir, repoRootDir, id, options);
+          outcome.approved.push(manifest);
+          outcome.approvedSourceDirs[id] = seedDir;
           outcome.installed.push(manifest);
           log?.info('builtin ghost installed', { id, version: manifest.version });
         });
       } catch (err) {
+        // Existing ownership must survive a failed audience/orphan cleanup so the
+        // next reconciliation retries instead of permanently forgetting an
+        // installed approved plugin. Likewise, once a new ownership claim was
+        // durably committed before publish/replace, keep it: the mutation may
+        // have partially changed bytes or approval state before throwing.
+        if (!ownedBeforeAttempt && !ownershipClaimPersisted) seeded.delete(id);
         outcome.skipped.push(id);
         log?.warn('builtin ghost provisioning failed', {
           id,
@@ -443,14 +719,30 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
   // 半初始化保护(多根拆分后新增):任一根为空说明该根 submodule 很可能没
   // checkout,其种子全集不可知 —— 本轮跳过孤儿回收,宁可留旧包也不误删。
   if (hasEmptyRoot) {
-    log?.info('builtin ghost orphan recovery skipped: empty seed root (submodule not initialized?)', {
-      emptyRoots: rootStates.filter((s) => s.ids.length === 0).map((s) => s.root),
-    });
+    log?.info(
+      'builtin ghost orphan recovery skipped: empty seed root (submodule not initialized?)',
+      {
+        emptyRoots: rootStates.filter((s) => s.ids.length === 0).map((s) => s.root),
+      },
+    );
   } else {
     for (const id of [...seeded]) {
+      if (!isValidGhostId(id)) {
+        log?.warn('builtin ghost orphan id is invalid; skipped', { id });
+        continue;
+      }
       if (allSeedIds.has(id)) continue;
       const installedDir = path.join(repoRootDir, id);
-      if (fs.existsSync(path.join(installedDir, GHOST_MANIFEST_FILE))) {
+      if (
+        isRealDirectoryPath(installedDir) &&
+        (() => {
+          try {
+            return classifyGhostDirEntrySync(path.join(installedDir, GHOST_MANIFEST_FILE)) === 'file';
+          } catch {
+            return false;
+          }
+        })()
+      ) {
         try {
           markApplyStart();
           await deps.beforeRemove?.(id);
@@ -542,7 +834,10 @@ export function listRestorableBuiltinGhosts(deps: {
  * 纯展示用途(设置页分组/打标),配置缺失或损坏按根降级成"全归内置组"
  * 而不是报错,不影响播种主流程。
  */
-export function listEnterpriseSeedIds(seedRootDirs: string[], log?: BuiltinProvisionerLogger): string[] {
+export function listEnterpriseSeedIds(
+  seedRootDirs: string[],
+  log?: BuiltinProvisionerLogger,
+): string[] {
   const ids = new Set<string>();
   for (const root of seedRootDirs) {
     const rootIds = listSeedIdsInRoot(root);
@@ -556,13 +851,22 @@ export function listEnterpriseSeedIds(seedRootDirs: string[], log?: BuiltinProvi
   return [...ids].sort();
 }
 
-/** 种子目录里的 icon → data URL(缺失/超限/读失败降级 null,不拖垮列表)。 */
+/**
+ * 种子目录里的 icon → data URL(缺失/超限/读失败降级 null,不拖垮列表)。
+ *
+ * 路径解析走 `ghostContentTree` 的逐段判定:`stat` 会静默穿透链接,把种子目录之外
+ * 的字节读成 icon 塞进设置页(与"清单声明的相对路径必须落在插件目录内"同一条判据,
+ * 不因为它只是张图就换一套写法)。
+ */
 function readSeedIconDataUrl(seedDir: string, manifest: GhostManifest): string | null {
   if (manifest.icon === undefined) return null;
   try {
-    const iconPath = path.join(seedDir, ...manifest.icon.split('/'));
-    const stat = fs.statSync(iconPath);
-    if (!stat.isFile() || stat.size > MAX_RESTORABLE_ICON_BYTES) return null;
+    const iconPath = resolveGhostContentPathSync(seedDir, manifest.icon, {
+      expect: 'file',
+      label: 'builtin seed icon',
+    });
+    const stat = fs.lstatSync(iconPath);
+    if (stat.size > MAX_RESTORABLE_ICON_BYTES) return null;
     const mime = ghostIconMimeType(manifest.icon);
     if (!mime) return null;
     return `data:${mime};base64,${fs.readFileSync(iconPath).toString('base64')}`;
@@ -578,7 +882,11 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
 }
 
 /** 读并校验种子 manifest;不合格返回 null(warn 留痕)。 */
-function readSeedManifest(seedDir: string, id: string, log?: BuiltinProvisionerLogger): GhostManifest | null {
+function readSeedManifest(
+  seedDir: string,
+  id: string,
+  log?: BuiltinProvisionerLogger,
+): GhostManifest | null {
   let raw: unknown;
   try {
     raw = JSON.parse(fs.readFileSync(path.join(seedDir, GHOST_MANIFEST_FILE), 'utf-8'));
@@ -595,7 +903,10 @@ function readSeedManifest(seedDir: string, id: string, log?: BuiltinProvisionerL
     return null;
   }
   if (v.manifest.id !== id) {
-    log?.warn('builtin seed skipped: dir name != manifest id', { seedDir, manifestId: v.manifest.id });
+    log?.warn('builtin seed skipped: dir name != manifest id', {
+      seedDir,
+      manifestId: v.manifest.id,
+    });
     return null;
   }
   const localeValidation = validateGhostLocaleResourcesInDirectory(seedDir, v.manifest);
@@ -610,36 +921,35 @@ function readSeedManifest(seedDir: string, id: string, log?: BuiltinProvisionerL
 }
 
 /**
- * 目录内容指纹:相对路径排序后逐个 hash(路径 + 字节),点开头条目跳过。
- * 意识包极小(zip 通道上限才 8MB),启动算一遍开销可忽略。
+ * 目录内容指纹 + 一个**不进哈希**的类型状态。意识包极小(zip 通道上限才 8MB),
+ * 启动算一遍开销可忽略。
+ *
+ * 遍历与类型判定取自 `ghostContentTree`(与技能指纹、快照拷贝、安装目录漂移指纹
+ * 同一份实现);这里的显式策略是"点开头条目不算内容(`.disabled` 是用户状态)、
+ * 非普通条目只记状态位不抛错"—— 因为本判据的收敛动作是**重新播种**,不是拒绝。
+ *
+ * 非普通条目(软链 / Windows junction 等)不读内容,也**不能拿 sentinel 喂进哈希** ——
+ * 任何这样的 sentinel 都能被"同路径下内容恰好等于该 sentinel 的普通文件"撞上(已实测:
+ * 内容为 `non-regular` 的普通文件与同名 junction 的摘要完全相等),于是被塞进链接的
+ * 安装目录仍会被判成"与种子逐字节相同"。所以它作为独立字段参与比较,不掺进字节流。
  */
-export async function hashDirContent(dir: string): Promise<string> {
-  const files = collectFiles(dir, '');
-  files.sort();
-  const hash = crypto.createHash('sha256');
-  for (const rel of files) {
-    hash.update(rel);
-    hash.update('\0');
-    hash.update(await fs.promises.readFile(path.join(dir, rel)));
-    hash.update('\0');
-  }
-  return hash.digest('hex');
+export interface DirContentFingerprint {
+  /** 普通文件的 v2 内容指纹；链接等非普通条目不掺进字节流。 */
+  hash: string;
+  /** 是否含既非目录也非普通文件的条目(含点开头的那些)。 */
+  hasNonRegularEntry: boolean;
 }
 
-/** 递归收集相对文件路径(正斜杠归一化保证双平台指纹一致;点开头跳过)。 */
-function collectFiles(rootDir: string, relBase: string): string[] {
-  const abs = path.join(rootDir, relBase);
-  const result: string[] = [];
-  for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) continue;
-    const rel = relBase.length === 0 ? entry.name : `${relBase}/${entry.name}`;
-    if (entry.isDirectory()) {
-      result.push(...collectFiles(rootDir, rel));
-    } else if (entry.isFile()) {
-      result.push(rel);
-    }
-  }
-  return result;
+export async function fingerprintDirContent(dir: string): Promise<DirContentFingerprint> {
+  const tree = await collectGhostContentFiles(dir, {
+    dotEntries: 'skip',
+    nonRegular: 'flag',
+    label: 'builtin seed content',
+  });
+  return {
+    hash: await hashGhostContentFiles(dir, tree.files, tree.rootIdentity),
+    hasNonRegularEntry: tree.hasNonRegularEntry,
+  };
 }
 
 /**
@@ -690,16 +1000,31 @@ async function swapInSeed(
   }
 }
 
-/** 递归复制目录,点开头条目跳过(种子里的 .DS_Store 等垃圾不落仓库)。 */
+/**
+ * 递归复制目录,点开头条目跳过(种子里的 .DS_Store 等垃圾不落仓库)。
+ *
+ * 类型判定同样走 `ghostContentTree`:非普通条目直接抛错。种子里出现链接属于打包
+ * 事故；既不能跟随复制把外部字节铺进安装目录，也不能静默丢掉后批准残缺安装。
+ * 主流程在交换目录前已有同形自检，这里逐条复制前再判一次类型，缩小检查与使用之间
+ * 的窗口，并挡住预检后、该条目被读取前已经发生的类型替换。
+ */
 async function copyDirSkippingDotEntries(from: string, to: string): Promise<void> {
   await fs.promises.mkdir(to, { recursive: true });
   for (const entry of await fs.promises.readdir(from, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) continue;
     const src = path.join(from, entry.name);
     const dest = path.join(to, entry.name);
-    if (entry.isDirectory()) {
+    const kind = await classifyGhostDirEntry(src);
+    // 与 collectGhostContentFiles 同序:先判类型，再按名称决定是否忽略内容。
+    // 否则复制期间出现的 `.x` 链接会被静默跳过，第二道 fail-closed 防线名不副实。
+    if (kind !== 'directory' && kind !== 'file') {
+      throw new Error(
+        `builtin seed rejects ${kind === 'link' ? 'link' : 'non-regular'} entry: ${src}`,
+      );
+    }
+    if (entry.name.startsWith('.')) continue;
+    if (kind === 'directory') {
       await copyDirSkippingDotEntries(src, dest);
-    } else if (entry.isFile()) {
+    } else {
       await fs.promises.copyFile(src, dest);
     }
   }

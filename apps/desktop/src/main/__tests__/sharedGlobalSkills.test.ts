@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   prepareSharedGlobalSkillLinks,
@@ -55,6 +55,41 @@ describe('prepareSharedGlobalSkillLinks', () => {
     expect(result.changed).toBe(true);
     expect(result.warnings).toEqual([]);
     expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'claude-only'), claudeSkill)).toBe(true);
+  });
+
+  it('stops before the next shared-root write when the owner changes mid-fanout', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    await writeSkill(paths.claudeSkillsDir, 'a-first');
+    await writeSkill(paths.claudeSkillsDir, 'b-second');
+
+    let ownerStable = true;
+    const realSymlink = fs.symlink;
+    const symlinkSpy = vi.spyOn(fs, 'symlink').mockImplementation(async (...args) => {
+      await realSymlink(...args);
+      ownerStable = false;
+    });
+    try {
+      await expect(
+        prepareSharedGlobalSkillLinks({
+          homeDir,
+          assertOwnerStable: () => {
+            if (!ownerStable) throw new Error('owner changed');
+          },
+        }),
+      ).rejects.toThrow('owner changed');
+    } finally {
+      symlinkSpy.mockRestore();
+    }
+
+    expect(await sameRealPath(
+      path.join(paths.sharedSkillsDir, 'a-first'),
+      path.join(paths.claudeSkillsDir, 'a-first'),
+    )).toBe(true);
+    await expect(fs.lstat(path.join(paths.sharedSkillsDir, 'b-second'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('links shared skills into Claude skills so Claude Code can load them', async () => {

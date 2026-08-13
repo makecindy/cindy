@@ -11,6 +11,12 @@
  * ids. `.pending` means the ids must be removed; ordinary `.committed` means
  * the ingest completed and only the marker itself may be collected. A
  * committed record carrying `rollbackRequired` is compensated like pending.
+ *
+ * Each operation uses the ordinary/advisory cross-process lock tier, but the
+ * journal mutation still requires mutual exclusion: capture fails and reconcile
+ * defers when the lock is unavailable. Owner-scope checks and the durable journal
+ * protocol provide the data boundary; the lock does not make an authorization
+ * decision and therefore must not inherit the plugin security-boundary policy.
  */
 
 import { randomUUID } from 'node:crypto';
