@@ -24,6 +24,10 @@ vi.mock('../worktree/gitExec', () => ({
   gitExec: (...args: unknown[]) => gitExecMock(...args),
 }));
 
+vi.mock('../worktree/safeDirectory', () => ({
+  reconcileSafeDirectories: vi.fn(async () => undefined),
+}));
+
 vi.mock('../worktree/dirty', () => ({
   isWorktreeDirty: (...args: unknown[]) => isWorktreeDirtyMock(...args),
 }));

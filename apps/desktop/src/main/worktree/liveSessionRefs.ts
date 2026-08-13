@@ -48,6 +48,11 @@ export interface LoadLiveSessionPathKeysOptions {
   /** 日志上下文（定位是哪条 worktree 的检查失败）。 */
   contextPath?: string;
   /**
+   * dialogue 行可能为历史展示保留先前项目的 workingDir/worktreePath。授权生命周期可以
+   * 忽略这些旧路径；删除/淘汰安全门仍应使用默认 false，避免扩大回收范围。
+   */
+  excludeDialoguePaths?: boolean;
+  /**
    * 排除的会话 id：显式删除/归档会话时，该会话自己的 workingDir/worktreePath
    * 不构成"仍在用"；显式回收观察器存在时，其它终态会话仍需运行态证明才能排除。
    */
@@ -65,6 +70,7 @@ export async function loadLiveSessionPathKeys(
       .select({
         id: sessions.id,
         status: sessions.status,
+        workspaceKind: sessions.workspaceKind,
         workingDir: sessions.workingDir,
         worktreePath: sessions.worktreePath,
       })
@@ -78,6 +84,7 @@ export async function loadLiveSessionPathKeys(
     const keys = new Set<string>();
     for (const row of rows) {
       if (opts.excludeSessionId && row.id === opts.excludeSessionId) continue;
+      if (opts.excludeDialoguePaths && row.workspaceKind === 'dialogue') continue;
       const isTerminal = row.status === 'archived' || row.status === 'deleted';
       if (!opts.isSessionRuntimeAlive && row.status === 'deleted') {
         continue;

@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
     persistedSdkSessionId: null,
   })),
   tapWindowBroadcast: vi.fn(),
+  reconcileSafeDirectories: vi.fn(async () => undefined),
   summarizeSession: vi.fn(async () => undefined),
   setPinnedSectionCardMode: vi.fn(),
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
@@ -71,7 +72,7 @@ vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
 }));
 
-import { registerSessionIpc } from '../sessions';
+import { registerSessionIpc, setSessionSafeDirectoryReconcile } from '../sessions';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 
@@ -170,11 +171,13 @@ beforeEach(() => {
   h.handlers.clear();
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
+  setSessionSafeDirectoryReconcile(h.reconcileSafeDirectories);
   registerSessionIpc();
 });
 
 afterEach(() => {
   setSessionRouteLockImplementation(null);
+  setSessionSafeDirectoryReconcile(null);
 });
 
 describe('local-db:sessions:update handler wiring', () => {
@@ -219,6 +222,7 @@ describe('local-db:sessions:update handler wiring', () => {
         patch: expect.objectContaining({ title: '排查远程标题同步' }),
       }),
     );
+    expect(h.reconcileSafeDirectories).not.toHaveBeenCalled();
   });
 
   it('broadcasts permission setting patches to every mounted client', async () => {
@@ -288,6 +292,17 @@ describe('local-db:sessions:update handler wiring', () => {
 
     expect(h.relocate).toHaveBeenCalledTimes(1);
     expect(h.relocate).toHaveBeenCalledWith('cc-local', '/old/dir', '/new/dir');
+    expect(h.reconcileSafeDirectories).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes safe.directory retention when a project session moves back to dialogue', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET workspace_kind = 'project' WHERE id = ?").run(
+      'codex-local',
+    );
+
+    await invokeUpdate('codex-local', { workspaceKind: 'dialogue' });
+
+    expect(h.reconcileSafeDirectories).toHaveBeenCalledTimes(1);
   });
 
   it('returns and broadcasts the sdkSessionId persisted during relocation', async () => {

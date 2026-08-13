@@ -6,12 +6,35 @@ import path from 'node:path';
 import type { WorktreeMeta } from '../worktree/types';
 
 const gitExecMock = vi.fn();
+const safeDirectoryWitnessRefreshMock = vi.fn(async (mutation: () => Promise<unknown>) =>
+  mutation(),
+);
+const { MockGitExecError } = vi.hoisted(() => ({
+  MockGitExecError: class extends Error {
+    constructor(public readonly stderr: string) {
+      super(stderr);
+    }
+  },
+}));
 const storeMap = new Map<string, WorktreeMeta>();
 const storeSetMock = vi.fn();
 
 vi.mock('../worktree/gitExec', () => ({
   gitExec: (...args: unknown[]) => gitExecMock(...args),
-  GitExecError: class GitExecError extends Error {},
+  GitExecError: MockGitExecError,
+}));
+
+vi.mock('../worktree/safeDirectory', () => ({
+  withSafeDirectoryRetention: async (
+    _options: unknown,
+    task: (retention: {
+      addExact: ReturnType<typeof vi.fn>;
+      addSubtree: ReturnType<typeof vi.fn>;
+    }) => Promise<unknown>,
+  ) => task({ addExact: vi.fn(), addSubtree: vi.fn() }),
+  reconcileSafeDirectories: vi.fn(async () => undefined),
+  withSafeDirectoryWitnessRefresh: (...args: unknown[]) =>
+    safeDirectoryWitnessRefreshMock(...(args as [() => Promise<unknown>])),
 }));
 
 vi.mock('../worktree/includePatternsEngine', () => ({
@@ -38,6 +61,7 @@ describe('createWorktree naming authority', () => {
     baseRepo = path.join(tmpRoot, 'repo');
     fs.mkdirSync(baseRepo, { recursive: true });
     storeMap.clear();
+    safeDirectoryWitnessRefreshMock.mockClear();
     storeSetMock.mockReset().mockImplementation(async (sessionId: string, meta: WorktreeMeta) => {
       storeMap.set(sessionId, meta);
     });
@@ -106,6 +130,43 @@ describe('createWorktree naming authority', () => {
       },
     });
     expect(storeMap.get('session-1')).toEqual(result.ok ? result.meta : undefined);
+  });
+
+  it('does not write safe.directory during a normal successful creation', async () => {
+    await expect(create('fix-login')).resolves.toMatchObject({ ok: true });
+
+    expect(
+      gitExecMock.mock.calls.some(
+        ([args]) =>
+          Array.isArray(args) &&
+          args[0] === 'config' &&
+          args.includes('--global') &&
+          args.includes('safe.directory'),
+      ),
+    ).toBe(false);
+  });
+
+  it('refreshes safe.directory witnesses around the Windows long-path fallback write', async () => {
+    let addAttempts = 0;
+    const defaultGitExec = gitExecMock.getMockImplementation()!;
+    gitExecMock.mockImplementation(async (...callArgs: unknown[]) => {
+      const args = callArgs[0] as string[];
+      if (args[0] === '-c' && args[2] === 'worktree' && args[3] === 'add') {
+        addAttempts += 1;
+        if (addAttempts === 1) throw new MockGitExecError('Filename too long');
+      }
+      return defaultGitExec(...callArgs);
+    });
+
+    await expect(create('long-paths')).resolves.toMatchObject({ ok: true });
+
+    expect(safeDirectoryWitnessRefreshMock).toHaveBeenCalledOnce();
+    expect(gitExecMock.mock.calls.map(([args]) => args)).toContainEqual([
+      'config',
+      '--global',
+      'core.longpaths',
+      'true',
+    ]);
   });
 
   it('preserves an explicit legal name and still rejects an explicit illegal name', async () => {

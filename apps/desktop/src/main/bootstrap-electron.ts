@@ -405,7 +405,9 @@ import { assertCaptureHealthy } from './device-link/invoke-registry';
 import {
   registerWorktreeIpc,
   WorktreePool,
+  reconcileSafeDirectories,
   reconcileWorktreesForDeletedSessions,
+  setSafeDirectorySessionRuntimeAliveProvider,
 } from './worktree';
 // shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
 import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
@@ -4888,6 +4890,14 @@ const registerIpcHandlers = () => {
     void reconcileWorktreesForDeletedSessions().catch((err) => {
       console.error('[bootstrap-electron] worktree reconcile failed (non-fatal):', err);
     });
+    // Maker 的运行态真值此刻才可用；基础 DB-ready 对账会独立执行，这里再补一次，
+    // 让已归档且 runtime 已明确退出的会话及时释放授权。仍然不阻塞启动。
+    void reconcileSafeDirectories().catch((err) => {
+      console.error(
+        '[bootstrap-electron] Maker-ready safe.directory reconcile failed (non-fatal):',
+        err,
+      );
+    });
     // 同窗口的 shadow savepoint 对账:owning session 已删除的孤儿保存点链
     // (refs/cindy/savepoints/<sid>)启动期补删。fire-and-forget,不阻塞启动。
     void reconcileSavepointRefsForDeletedSessions().catch((err) => {
@@ -6925,9 +6935,16 @@ app.on('ready', async () => {
   // 首登轻量数据迁移(mToc)的确认弹窗 IPC —— 必须先于 registerLocalDbIpc 注册,
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
+  // safe.directory 对账需要区分“产品上已归档”和“运行时仍在关闭中”。provider
+  // 提前注入且惰性读取 Maker：Agent 环境尚未通过时返回 undefined 并 fail closed，
+  // Maker 就绪后同一个 provider 才开始返回明确的运行态。
+  setSafeDirectorySessionRuntimeAliveProvider((sessionId) =>
+    getMakerIfReady()?.isSessionAlive(sessionId),
+  );
   registerLocalDbIpc({
     cancelSessionOperations: cancelIOSSimulatorSessionOperations,
     cleanupRemovedSession: cleanupIOSSimulatorRemovedSession,
+    reconcileSafeDirectories,
     reconcilePersistedSessionRuntimes: reconcilePersistedIOSSimulatorOwnership,
     withSessionLock: withSendToSessionLock,
     isOwnerCurrent: (userId) =>
@@ -7002,6 +7019,15 @@ app.on('ready', async () => {
         }
         return;
       }
+      // 这是不依赖 Agent provisioning 的基础启动路径：lifecycle DbClient 已完成
+      // 交接后即可读取当前 owner 的 sessions/profile 台账。fire-and-forget，Git
+      // 配置锁或磁盘异常不能阻塞本地 DB 就绪与主界面进入。
+      void reconcileSafeDirectories().catch((err) => {
+        console.error(
+          '[bootstrap-electron] DB-ready safe.directory reconcile failed (non-fatal):',
+          err,
+        );
+      });
       if (dbClientTakeover.mode === 'unchanged') {
         // 副窗口会再次走 localDb.ensureReady；同 owner 的 lifecycle client 已由首个
         // onReady 完整启动，因此这里只保留 DB 连接交接，不重复执行账号级启动维护。

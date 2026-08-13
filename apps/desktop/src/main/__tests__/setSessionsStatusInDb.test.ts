@@ -29,6 +29,7 @@ const h = vi.hoisted(() => ({
   cleanupRemovedSession: vi.fn(),
   removeSessionRefs: vi.fn(),
   recycleWorktreeForRemovedSession: vi.fn(),
+  reconcileSafeDirectories: vi.fn(),
   isOwnerScopeCurrent: vi.fn(),
   drizzle: {},
   userDataPath: '',
@@ -80,6 +81,7 @@ import {
   recycleSessionWorktreeForStatusChange,
   setSessionRemovalCancelOperations,
   setSessionRemovalCleanup,
+  setSessionSafeDirectoryReconcile,
   setSessionsStatusInDb,
 } from '../localDb/ipc/sessions.js';
 import { setSessionRouteLockImplementation } from '../localDb/sessionRouteLock.js';
@@ -94,15 +96,18 @@ beforeEach(() => {
   h.cleanupRemovedSession.mockResolvedValue(undefined);
   h.removeSessionRefs.mockResolvedValue(0);
   h.recycleWorktreeForRemovedSession.mockResolvedValue(undefined);
+  h.reconcileSafeDirectories.mockResolvedValue(undefined);
   h.isOwnerScopeCurrent.mockReturnValue(true);
   setSessionRemovalCancelOperations(h.cancelSessionOperations);
   setSessionRemovalCleanup(h.cleanupRemovedSession);
+  setSessionSafeDirectoryReconcile(h.reconcileSafeDirectories);
   setSessionRouteLockImplementation(h.withSendToSessionLock);
 });
 
 afterEach(() => {
   setSessionRemovalCancelOperations(null);
   setSessionRemovalCleanup(null);
+  setSessionSafeDirectoryReconcile(null);
   setSessionRouteLockImplementation(null);
   fs.rmSync(h.userDataPath, { recursive: true, force: true });
 });
@@ -354,6 +359,37 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     expect(h.closeSession).toHaveBeenCalledWith('s1');
   });
 
+  it('reconciles safe.directory after archiving an ordinary task without worktree metadata', async () => {
+    const order: string[] = [];
+    h.closeSession.mockImplementationOnce(async () => {
+      order.push('close-runtime');
+    });
+    // 低层入口对普通任务是 no-op；状态收口仍须驱动授权生命周期。
+    h.recycleWorktreeForRemovedSession.mockImplementationOnce(async () => {
+      order.push('no-worktree');
+    });
+    h.reconcileSafeDirectories.mockImplementationOnce(async () => {
+      order.push('reconcile-safe-directory');
+    });
+
+    await recycleSessionWorktreeForStatusChange('ordinary', 'archived');
+
+    expect(order).toEqual(['close-runtime', 'no-worktree', 'reconcile-safe-directory']);
+    expect(h.reconcileSafeDirectories).toHaveBeenCalledOnce();
+  });
+
+  it('does not let safe.directory reconciliation failure block completed recycling', async () => {
+    h.reconcileSafeDirectories.mockRejectedValueOnce(new Error('config busy'));
+
+    await expect(
+      recycleSessionWorktreeForStatusChange('ordinary', 'archived'),
+    ).resolves.toBeUndefined();
+
+    expect(h.closeSession).toHaveBeenCalledWith('ordinary');
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledOnce();
+    expect(h.reconcileSafeDirectories).toHaveBeenCalledOnce();
+  });
+
   it('awaits the shared close and worktree recycle chain for deleted sessions', async () => {
     const order: string[] = [];
     h.cancelSessionOperations.mockImplementationOnce(async () => {
@@ -424,6 +460,7 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     expect(h.isSessionStillRemovable).not.toHaveBeenCalled();
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
+    expect(h.reconcileSafeDirectories).not.toHaveBeenCalled();
     expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
   });
 

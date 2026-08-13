@@ -25,6 +25,7 @@ import { readAttachedWorktreeBranch } from './attachedBranch';
 import { gitExec, GitExecError } from './gitExec';
 import { applyWorktreeIncludeFile } from './includePatternsEngine';
 import { pathKey } from './liveSessionRefs';
+import { withSafeDirectoryWitnessRefresh } from './safeDirectory';
 import {
   getWorktreeRestoreMutation,
   getWorktreeRestoreMutationVersion,
@@ -258,7 +259,9 @@ async function addRestoredWorktree(
     if (!(err instanceof GitExecError) || !/filename too long|core\.longpaths/i.test(err.stderr)) {
       throw err;
     }
-    await gitExec(['config', '--global', 'core.longpaths', 'true']);
+    await withSafeDirectoryWitnessRefresh(() =>
+      gitExec(['config', '--global', 'core.longpaths', 'true']),
+    );
     await gitExec(addArgs, baseRepo);
   }
 }

@@ -7,6 +7,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
@@ -14,10 +15,16 @@ type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
   killProcessTree: vi.fn(),
+  ensureSafeDirectory: vi.fn(),
+  retainSafeDirectoryUsage: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({ execFile: mocks.execFile }));
 vi.mock('../../scheduler-host/proc-util', () => ({ killProcessTree: mocks.killProcessTree }));
+vi.mock('../safeDirectory', () => ({
+  ensureSafeDirectory: (...args: unknown[]) => mocks.ensureSafeDirectory(...args),
+  retainSafeDirectoryUsage: (...args: unknown[]) => mocks.retainSafeDirectoryUsage(...args),
+}));
 
 import { gitExec, GitExecError } from '../gitExec';
 
@@ -98,6 +105,23 @@ function installExecFileMock(): FakeGit {
   return state;
 }
 
+function installQueuedGitMock() {
+  const callbacks: ExecCb[] = [];
+  const argsSeen: string[][] = [];
+  mocks.execFile.mockImplementation((file: string, args: string[], _opts: unknown, cb?: ExecCb) => {
+    if (file !== 'git') throw new Error(`unexpected execFile: ${file}`);
+    argsSeen.push(args);
+    callbacks.push(cb!);
+    const child = new EventEmitter() as FakeChild;
+    child.pid = 4_000 + callbacks.length;
+    child.kill = vi.fn();
+    child.exitCode = null;
+    child.signalCode = null;
+    return child;
+  });
+  return { callbacks, argsSeen };
+}
+
 /**
  * 模拟 POSIX 进程组:kill(-pid, 0) 探测按 group.alive 应答(空组抛 ESRCH),
  * 其余信号记录后吞掉。返回可变的 group 状态与信号记录。
@@ -146,6 +170,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   mocks.execFile.mockReset();
   mocks.killProcessTree.mockReset();
+  mocks.ensureSafeDirectory.mockReset().mockResolvedValue('persistent');
+  mocks.retainSafeDirectoryUsage.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -168,6 +194,7 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch', 'origin', 'main'], '/repo', { timeoutMs: 1000 });
+    await flushMicrotasks();
     const s = probe(p);
     const expectation = expect(p).rejects.toMatchObject({
       name: 'GitExecError',
@@ -199,6 +226,7 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    await flushMicrotasks();
     const s = probe(p);
     const expectation = expect(p).rejects.toMatchObject({
       stderr: expect.stringContaining('timed out'),
@@ -231,6 +259,7 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    await flushMicrotasks();
     probe(p);
     vi.advanceTimersByTime(1000);
     await flushMicrotasks();
@@ -251,6 +280,7 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    await flushMicrotasks();
     const s = probe(p);
     const expectation = expect(p).rejects.toMatchObject({
       stderr: expect.stringContaining('process tree terminated'),
@@ -278,6 +308,7 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    await flushMicrotasks();
     const s = probe(p);
     const expectation = expect(p).rejects.toMatchObject({
       stderr: expect.stringContaining('process tree terminated'),
@@ -304,6 +335,7 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    await flushMicrotasks();
     const s = probe(p);
     const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
     vi.advanceTimersByTime(1000);
@@ -323,6 +355,7 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    await flushMicrotasks();
     const s = probe(p);
     const expectation = expect(p).rejects.toMatchObject({
       stderr: expect.stringContaining('cleanup unconfirmed'),
@@ -344,6 +377,7 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    await flushMicrotasks();
     probe(p);
     const expectation = expect(p).rejects.toMatchObject({
       stderr: expect.stringContaining('cleanup unconfirmed'),
@@ -372,6 +406,7 @@ describe('gitExec timeoutMs', () => {
     });
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    await flushMicrotasks();
     const s = probe(p);
     const expectation = expect(p).rejects.toMatchObject({
       stderr: expect.stringContaining('cleanup unconfirmed'),
@@ -389,6 +424,7 @@ describe('gitExec timeoutMs', () => {
     const { group } = installProcessKillMock();
 
     const p = gitExec(['fetch', 'origin', 'main'], '/repo', { timeoutMs: 500 });
+    await flushMicrotasks();
     const s = probe(p);
     const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
 
@@ -420,6 +456,7 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 500 });
+    await flushMicrotasks();
     const s = probe(p);
     const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
 
@@ -448,6 +485,7 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 500 });
+    await flushMicrotasks();
     const s = probe(p);
     const expectation = expect(p).rejects.toMatchObject({
       stderr: expect.stringContaining('cleanup unconfirmed'),
@@ -468,6 +506,7 @@ describe('gitExec timeoutMs', () => {
     group.alive = false;
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 500 });
+    await flushMicrotasks();
     const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
     vi.advanceTimersByTime(500);
     await expectation;
@@ -481,6 +520,7 @@ describe('gitExec timeoutMs', () => {
     const state = installExecFileMock();
 
     const p = gitExec(['status'], '/repo', { timeoutMs: 1000 });
+    await flushMicrotasks();
     state.gitCb!(null, 'clean', '');
     await expect(p).resolves.toEqual({ stdout: 'clean', stderr: '' });
 
@@ -495,6 +535,7 @@ describe('gitExec timeoutMs', () => {
     const { group } = installProcessKillMock();
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 500 });
+    await flushMicrotasks();
     const s = probe(p);
     const expectation = expect(p).rejects.toMatchObject({
       stderr: expect.stringContaining('timed out'),
@@ -519,6 +560,7 @@ describe('gitExec timeoutMs', () => {
     const { group } = installProcessKillMock();
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 300 });
+    await flushMicrotasks();
     const expectation = expect(p).rejects.toMatchObject({
       stderr: expect.stringContaining('timed out'),
     });
@@ -536,8 +578,153 @@ describe('gitExec timeoutMs', () => {
     const state = installExecFileMock();
 
     const p = gitExec(['status'], '/repo');
+    await flushMicrotasks();
     state.gitCb!(null, 'ok', '');
     await expect(p).resolves.toEqual({ stdout: 'ok', stderr: '' });
+    expect(mocks.retainSafeDirectoryUsage).toHaveBeenCalledWith('/repo');
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('跨 profile 保留声明完成前不启动 Git', async () => {
+    const { callbacks } = installQueuedGitMock();
+    let releasePublication!: () => void;
+    mocks.retainSafeDirectoryUsage.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releasePublication = resolve;
+      }),
+    );
+
+    const p = gitExec(['status'], '/repo');
+    await flushMicrotasks();
+    expect(callbacks).toHaveLength(0);
+
+    releasePublication();
+    await flushMicrotasks();
+    expect(callbacks).toHaveLength(1);
+    callbacks[0](null, 'clean\n', '');
+    await expect(p).resolves.toEqual({ stdout: 'clean\n', stderr: '' });
+  });
+
+  it('跨 profile 保留声明失败时首个 Git 也只使用命令作用域授权', async () => {
+    const { callbacks, argsSeen } = installQueuedGitMock();
+    mocks.retainSafeDirectoryUsage.mockRejectedValueOnce(new Error('ledger unavailable'));
+
+    const p = gitExec(['status', '--short'], '/repo');
+    await flushMicrotasks();
+
+    expect(argsSeen).toEqual([['-c', 'safe.directory=/repo', 'status', '--short']]);
+    callbacks[0](null, 'clean\n', '');
+    await expect(p).resolves.toEqual({ stdout: 'clean\n', stderr: '' });
+    expect(mocks.ensureSafeDirectory).not.toHaveBeenCalled();
+  });
+
+  it('真实 dubious-ownership 才登记精确路径，并在成功后只重试原命令一次', async () => {
+    const { callbacks, argsSeen } = installQueuedGitMock();
+    const repositoryPath = path.join('/repo', "worktree with 'quote'");
+    const p = gitExec(['status', '--short'], repositoryPath, {
+      extraEnv: { LC_ALL: 'C' },
+    });
+    await flushMicrotasks();
+    const firstFailure = Object.assign(new Error('git failed'), { code: 128 });
+
+    callbacks[0](
+      firstFailure,
+      '',
+      `fatal: detected dubious ownership in repository at '${repositoryPath}'\n`,
+    );
+    await flushMicrotasks();
+
+    expect(mocks.ensureSafeDirectory).toHaveBeenCalledWith(repositoryPath, { LC_ALL: 'C' });
+    expect(argsSeen).toEqual([
+      ['status', '--short'],
+      ['status', '--short'],
+    ]);
+
+    callbacks[1](null, 'clean\n', '');
+    await expect(p).resolves.toEqual({ stdout: 'clean\n', stderr: '' });
+  });
+
+  it('从跨行 dubious 诊断中保留路径里的换行与引号', async () => {
+    const { callbacks, argsSeen } = installQueuedGitMock();
+    const repositoryPath = path.join('/repo', "line one\nline 'two'");
+    const p = gitExec(['status'], repositoryPath);
+    await flushMicrotasks();
+    const firstFailure = Object.assign(new Error('git failed'), { code: 128 });
+
+    callbacks[0](
+      firstFailure,
+      '',
+      `fatal: detected dubious ownership in repository at '${repositoryPath}'\n` +
+        'To add an exception for this directory, call:\n\n' +
+        `\tgit config --global --add safe.directory '${repositoryPath}'\n`,
+    );
+    await flushMicrotasks();
+
+    expect(mocks.ensureSafeDirectory).toHaveBeenCalledWith(repositoryPath, undefined);
+    expect(argsSeen).toEqual([['status'], ['status']]);
+    callbacks[1](null, 'clean\n', '');
+    await expect(p).resolves.toEqual({ stdout: 'clean\n', stderr: '' });
+  });
+
+  it('全局条目无法精确拥有时只给重试命令添加 safe.directory', async () => {
+    const { callbacks, argsSeen } = installQueuedGitMock();
+    const repositoryPath = path.join('/repo', 'reset-history');
+    mocks.ensureSafeDirectory.mockResolvedValueOnce('command');
+    const p = gitExec(['status', '--short'], repositoryPath);
+    await flushMicrotasks();
+    const firstFailure = Object.assign(new Error('git failed'), { code: 128 });
+
+    callbacks[0](
+      firstFailure,
+      '',
+      `fatal: detected dubious ownership in repository at '${repositoryPath}'\n`,
+    );
+    await flushMicrotasks();
+
+    expect(argsSeen).toEqual([
+      ['status', '--short'],
+      ['-c', `safe.directory=${repositoryPath}`, 'status', '--short'],
+    ]);
+    callbacks[1](null, 'clean\n', '');
+    await expect(p).resolves.toEqual({ stdout: 'clean\n', stderr: '' });
+  });
+
+  it('无法从标准错误中证明绝对路径时不回退使用 cwd', async () => {
+    const { callbacks, argsSeen } = installQueuedGitMock();
+    const p = gitExec(['status'], '/repo');
+    await flushMicrotasks();
+    const firstFailure = Object.assign(new Error('git failed'), { code: 128 });
+
+    callbacks[0](firstFailure, '', 'fatal: detected dubious ownership\n');
+
+    await expect(p).rejects.toMatchObject({
+      name: 'GitExecError',
+      stderr: 'fatal: detected dubious ownership\n',
+    });
+    expect(mocks.ensureSafeDirectory).not.toHaveBeenCalled();
+    expect(argsSeen).toEqual([['status']]);
+  });
+
+  it('dubious 恢复的台账或配置写入失败时降级为精确的命令作用域授权', async () => {
+    const { callbacks, argsSeen } = installQueuedGitMock();
+    const repositoryPath = path.join('/repo', 'worktree');
+    const p = gitExec(['status'], repositoryPath);
+    await flushMicrotasks();
+    const firstFailure = Object.assign(new Error('git failed'), { code: 128 });
+    mocks.ensureSafeDirectory.mockRejectedValueOnce(new Error('ledger unavailable'));
+
+    callbacks[0](
+      firstFailure,
+      '',
+      `fatal: detected dubious ownership in repository at '${repositoryPath}'\n`,
+    );
+    await flushMicrotasks();
+
+    expect(argsSeen).toEqual([
+      ['status'],
+      ['-c', `safe.directory=${repositoryPath}`, 'status'],
+    ]);
+    callbacks[1](null, 'clean\n', '');
+    await expect(p).resolves.toEqual({ stdout: 'clean\n', stderr: '' });
   });
 });

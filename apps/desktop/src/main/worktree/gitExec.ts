@@ -4,7 +4,8 @@
  * 职责:
  *   - 用 child_process.execFile 调用 git, 保留 stderr/stdout/exitCode
  *   - 自动处理 dubious-ownership: 若 stderr 含 "dubious ownership", 提取路径,
- *     `git config --global --add safe.directory <path>`, 重试**一次**原命令
+ *     交给 safeDirectory 所有权台账按需添加全局信任；若全局配置无法精确拥有，
+ *     用单次命令作用域信任重试**一次**
  *   - 抛出 GitExecError 让上层 errorClassifier 解析为 WorktreeError
  *
  * 不在这里做 errorClassifier — 那是上层 createWorktree/removeWorktree 的职责,
@@ -12,8 +13,10 @@
  */
 
 import { execFile, type ExecFileOptions } from 'node:child_process';
+import path from 'node:path';
 
 import { killProcessTree } from '../scheduler-host/proc-util';
+import { ensureSafeDirectory, retainSafeDirectoryUsage } from './safeDirectory';
 
 export interface GitExecResult {
   stdout: string;
@@ -437,13 +440,33 @@ function execFileOnce(
  *   fatal: detected dubious ownership in repository at C:/path/to/repo
  */
 function extractDubiousPath(stderr: string): string | null {
-  // 优先匹配带引号的形态(各平台/版本通用)
-  const quoted = stderr.match(/dubious ownership in repository at ['"]([^'"]+)['"]/i);
-  if (quoted) return quoted[1];
-  // 兜底: 不带引号(老 git 版本)
-  const bare = stderr.match(/dubious ownership in repository at\s+(\S+)/i);
-  if (bare) return bare[1];
-  return null;
+  // Git 对含换行的 POSIX 路径会把 fatal 诊断也展开成多行；以随后固定的建议段
+  // 作为边界。不能用 [^'"]+：合法路径本身可以含引号。
+  const match = /^fatal: detected dubious ownership in repository at[\t ]+/im.exec(stderr);
+  if (!match) return null;
+  const remainder = stderr.slice(match.index + match[0].length);
+  const suggestion = /\r?\nTo add an exception for this directory, call:\r?\n/.exec(remainder);
+  let candidate = suggestion
+    ? remainder.slice(0, suggestion.index)
+    : (remainder.match(/^[^\r\n]*/)?.[0] ?? '');
+  if (
+    candidate.length >= 2 &&
+    ((candidate.startsWith("'") && candidate.endsWith("'")) ||
+      (candidate.startsWith('"') && candidate.endsWith('"')))
+  ) {
+    candidate = candidate.slice(1, -1);
+  } else {
+    candidate = candidate.trim();
+  }
+  if (!candidate || candidate.includes('\0') || !path.isAbsolute(candidate)) return null;
+  return candidate;
+}
+
+function withCommandScopedSafeDirectory(
+  args: readonly string[],
+  repositoryPath: string,
+): readonly string[] {
+  return ['-c', `safe.directory=${repositoryPath}`, ...args];
 }
 
 /**
@@ -451,7 +474,8 @@ function extractDubiousPath(stderr: string): string | null {
  *
  * 行为:
  *   - 第一次 execFile 成功 → 直接 resolve
- *   - 失败 + stderr 含 "dubious ownership" → 提取 path, 配 safe.directory, 重试**一次**
+ *   - 失败 + 标准 dubious-ownership 提示 → 提取绝对 path, 按需登记 safe.directory,
+ *     重试**一次**
  *   - 重试仍失败 → 抛 GitExecError(stderr 仍是 dubious-ownership, 让 classifier 走兜底)
  *   - 任何其他失败 → 抛 GitExecError 不重试
  */
@@ -460,26 +484,47 @@ export async function gitExec(
   cwd?: string,
   opts?: GitExecOpts,
 ): Promise<GitExecResult> {
+  // 必须先发布跨 profile 依赖，再让 Git 读取全局配置。否则并发对账可能在本次命令
+  // 已读到旧授权后将其删除，而成功分支不会触发 dubious 恢复，后续 Agent Git 失去信任。
+  // 台账暂不可用时也不能退回“直接启动 Git”：改用只对本次进程生效的 -c 授权，
+  // 不依赖全局条目，且不会留下无法证明所有权的持久配置。
+  let retentionPublished = true;
+  let firstAttemptArgs = args;
+  if (cwd && path.isAbsolute(cwd)) {
+    try {
+      await retainSafeDirectoryUsage(cwd);
+    } catch {
+      retentionPublished = false;
+      firstAttemptArgs = withCommandScopedSafeDirectory(args, cwd);
+    }
+  }
   try {
-    return await execFileOnce(args, cwd, opts);
+    return await execFileOnce(firstAttemptArgs, cwd, opts);
   } catch (err) {
     if (!(err instanceof GitExecError)) throw err;
     // spawn ENOENT(git 未安装) 也走 GitExecError, 这里不该重试
     if (err.cause?.code === 'ENOENT') throw err;
 
-    if (/dubious ownership/i.test(err.stderr)) {
-      const dubiousPath = extractDubiousPath(err.stderr) ?? cwd;
-      if (dubiousPath) {
-        try {
-          await execFileOnce(
-            ['config', '--global', '--add', 'safe.directory', dubiousPath],
-          );
-          // 配完 safe.directory 后重试原命令
-          return await execFileOnce(args, cwd, opts);
-        } catch {
-          // 重试或配置失败都直接抛原始错误(让 classifier 报 dubious-ownership)
-          throw err;
-        }
+    const dubiousPath = extractDubiousPath(err.stderr);
+    if (dubiousPath) {
+      let retryArgs: readonly string[];
+      try {
+        const recoveryMode = retentionPublished
+          ? await ensureSafeDirectory(dubiousPath, opts?.extraEnv)
+          : 'command';
+        retryArgs =
+          recoveryMode === 'command'
+            ? withCommandScopedSafeDirectory(args, dubiousPath)
+            : args;
+      } catch {
+        // 台账/配置写入失败仍可安全执行：精确路径只进入这一次 Git 子进程的配置。
+        retryArgs = withCommandScopedSafeDirectory(args, dubiousPath);
+      }
+      try {
+        return await execFileOnce(retryArgs, cwd, opts);
+      } catch {
+        // 重试失败保留原始 dubious 错误，让 classifier 给出稳定诊断。
+        throw err;
       }
     }
     throw err;

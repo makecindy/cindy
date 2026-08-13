@@ -23,6 +23,9 @@ const storeGetAllMock = vi.fn();
 const storeDelMock = vi.fn();
 const applyIncludeMock = vi.fn();
 const copyClaudeSiviDirsMock = vi.fn();
+const safeDirectoryWitnessRefreshMock = vi.fn(async (mutation: () => Promise<unknown>) =>
+  mutation(),
+);
 let dbWorktreePath: string | null = null;
 let dbWorkingDir: string | null = null;
 let dbBindingRows: Array<{
@@ -53,6 +56,11 @@ vi.mock('../worktree/includePatternsEngine', () => ({
 
 vi.mock('../worktree/WorktreeManager', () => ({
   copyClaudeSiviDirs: (...args: unknown[]) => copyClaudeSiviDirsMock(...args),
+}));
+
+vi.mock('../worktree/safeDirectory', () => ({
+  withSafeDirectoryWitnessRefresh: (...args: unknown[]) =>
+    safeDirectoryWitnessRefreshMock(...(args as [() => Promise<unknown>])),
 }));
 
 vi.mock('../localDb/client/current', () => ({
@@ -107,6 +115,7 @@ describe('worktree restore', () => {
     storeDelMock.mockReset();
     applyIncludeMock.mockReset().mockResolvedValue([]);
     copyClaudeSiviDirsMock.mockReset().mockResolvedValue(undefined);
+    safeDirectoryWitnessRefreshMock.mockClear();
     mod = await import('../worktree/restore');
   });
 
@@ -1012,6 +1021,7 @@ describe('worktree restore', () => {
     const calls = gitExecMock.mock.calls.map(argsOf);
     expect(calls.filter((args) => args[0] === '-c' && args[3] === 'add')).toHaveLength(2);
     expect(calls).toContainEqual(['config', '--global', 'core.longpaths', 'true']);
+    expect(safeDirectoryWitnessRefreshMock).toHaveBeenCalledOnce();
   });
 
   it('restore: worktree add failure → ok=false, no store write', async () => {

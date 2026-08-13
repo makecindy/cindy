@@ -21,6 +21,7 @@ const clearSnapshotRefMock = vi.fn();
 const ignoredFilesMock = vi.fn();
 const changedIncludeFilesMock = vi.fn();
 const storeSetMock = vi.fn();
+const reconcileSafeDirectoriesMock = vi.fn(async () => undefined);
 const storeMap = new Map<string, WorktreeMeta>();
 const liveSessionRows: Array<{
   id: string;
@@ -33,6 +34,17 @@ let liveSessionLookupError: Error | null = null;
 vi.mock('../worktree/gitExec', () => ({
   gitExec: (...args: unknown[]) => gitExecMock(...args),
   GitExecError: class GitExecError extends Error {},
+}));
+
+vi.mock('../worktree/safeDirectory', () => ({
+  withSafeDirectoryRetention: async (
+    _options: unknown,
+    task: (retention: {
+      addExact: ReturnType<typeof vi.fn>;
+      addSubtree: ReturnType<typeof vi.fn>;
+    }) => Promise<unknown>,
+  ) => task({ addExact: vi.fn(), addSubtree: vi.fn() }),
+  reconcileSafeDirectories: () => reconcileSafeDirectoriesMock(),
 }));
 
 vi.mock('../worktree/dirty', () => ({
@@ -117,6 +129,7 @@ describe('removeWorktreeForSession', () => {
     clearSnapshotRefMock.mockReset().mockResolvedValue(undefined);
     ignoredFilesMock.mockReset().mockResolvedValue([]);
     changedIncludeFilesMock.mockReset().mockResolvedValue([]);
+    reconcileSafeDirectoriesMock.mockReset().mockResolvedValue(undefined);
     storeSetMock.mockReset().mockImplementation(async (sessionId: string, meta: WorktreeMeta) => {
       storeMap.set(sessionId, meta);
     });
@@ -126,6 +139,7 @@ describe('removeWorktreeForSession', () => {
   it('no store entry → no-op', async () => {
     await manager.removeWorktreeForSession('nope');
     expect(gitExecMock).not.toHaveBeenCalled();
+    expect(reconcileSafeDirectoriesMock).toHaveBeenCalledOnce();
   });
 
   it('reads and recycles a historical auto-* worktree without renaming it', async () => {
@@ -1053,6 +1067,9 @@ describe('removeWorktreeForSession', () => {
     const meta = makeMeta('s1');
     storeMap.set('s1', meta);
     const gitOperations: string[] = [];
+    reconcileSafeDirectoriesMock.mockImplementation(async () => {
+      gitOperations.push('reconcile');
+    });
     gitExecMock.mockImplementation(async (args: string[]) => {
       gitOperations.push(args[0] ?? '');
       return {
@@ -1085,9 +1102,11 @@ describe('removeWorktreeForSession', () => {
     expect(gitOperations).toEqual([
       'symbolic-ref',
       'worktree',
+      'reconcile',
       'rev-parse',
       'rev-list',
       'update-ref',
+      'reconcile',
     ]);
     expect(storeMap.has('s1')).toBe(false);
   });

@@ -27,6 +27,12 @@ import {
 import { readAttachedWorktreeBranch } from './attachedBranch';
 import { classifyError, type ClassifyInput } from './errorClassifier';
 import { gitExec, GitExecError } from './gitExec';
+import {
+  reconcileSafeDirectories,
+  type SafeDirectoryRetention,
+  withSafeDirectoryRetention,
+  withSafeDirectoryWitnessRefresh,
+} from './safeDirectory';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
 import { hasKeepSentinel, isManagedWorktreePath } from './safety';
 import {
@@ -659,17 +665,44 @@ export async function copyClaudeSiviDirs(
  *   6. configureHooksPath
  *   7. copyClaudeSiviDirs(跳过 .claude/worktrees 这类历史工作区状态)
  *   8. applyWorktreeIncludeFile
- *   9. git config --global --add safe.directory <path>
- *  10. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
+ *   9. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
+ *
+ * safe.directory 不再在成功路径无条件写入；只有任一步 Git 命令真实报告 dubious
+ * ownership 时，gitExec 才通过所有权台账按需添加。
  */
 export async function createWorktree(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
-  const create = () => withCreateWorktreeQueue(req.baseRepo, () => createWorktreeInner(req));
+  const create = (): Promise<CreateWorktreeResp> =>
+    withCreateWorktreeQueue(req.baseRepo, async () => {
+      let result: CreateWorktreeResp;
+      try {
+        result = await withSafeDirectoryRetention({ exactPaths: [req.baseRepo] }, (retention) =>
+          createWorktreeInner(req, retention),
+        );
+      } catch (error) {
+        return { ok: false, error: classifyError(classifyAny(error)) };
+      }
+
+      // 失败路径可能已经按需登记过授权。持久创建声明撤销后再统一对账；
+      // 成功路径的持久化 metadata 已接管 C，无需额外 I/O。
+      if (!result.ok) {
+        await reconcileSafeDirectories().catch((error) => {
+          log.warn(
+            '[worktree] safe.directory reconcile after failed create was non-fatal:',
+            error instanceof Error ? error.message : String(error),
+          );
+        });
+      }
+      return result;
+    });
   return req.recoveryKey === undefined
     ? create()
     : withPrecreatedWorktreeOperationQueue(req.sessionId, create);
 }
 
-async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
+async function createWorktreeInner(
+  req: CreateWorktreeReq,
+  safeDirectoryRetention: SafeDirectoryRetention,
+): Promise<CreateWorktreeResp> {
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
@@ -728,6 +761,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       };
     }
     const baseRepo = cwdInfo.repoRoot ?? path.resolve(req.baseRepo);
+    await safeDirectoryRetention.addExact(baseRepo);
 
     // 2. branches — sourceBranch 既可以是本地分支(常规 schedule),也可以是
     //    任意 commit-ish。
@@ -773,6 +807,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       worktreePath = path.join(baseRepo, MANAGED_WORKTREE_DIR_NAME, name);
       attempts += 1;
     }
+    await safeDirectoryRetention.addSubtree(worktreePath);
 
     // 4. mkdirp parent
     const parentDir = path.dirname(worktreePath);
@@ -790,7 +825,9 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       if (err instanceof GitExecError && /filename too long|core\.longpaths/i.test(err.stderr)) {
         // 启用 core.longpaths 后重试一次
         try {
-          await gitExec(['config', '--global', 'core.longpaths', 'true']);
+          await withSafeDirectoryWitnessRefresh(() =>
+            gitExec(['config', '--global', 'core.longpaths', 'true']),
+          );
           await timed('git worktree add retry', () => gitExec(addArgs, baseRepo));
         } catch (retryErr) {
           return { ok: false, error: classifyError(classifyAny(retryErr)) };
@@ -856,20 +893,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       );
     }
 
-    // 9. safe.directory
-    try {
-      await timed('add safe.directory', () =>
-        gitExec(['config', '--global', '--add', 'safe.directory', worktreePath]),
-      );
-    } catch (err) {
-      // 非致命 — 仅日志
-      log.warn(
-        `[worktree] add safe.directory failed:`,
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-
-    // 10. store + DB
+    // 9. store + DB
     const meta: WorktreeMeta = {
       sessionId: req.sessionId,
       name,
@@ -931,6 +955,15 @@ export interface RemoveWorktreeOptions {
   preserveDirty?: boolean;
 }
 
+async function reconcileSafeDirectoriesAfterCleanup(): Promise<void> {
+  await reconcileSafeDirectories().catch((error) => {
+    log.warn(
+      '[worktree] safe.directory reconcile after cleanup was non-fatal:',
+      error instanceof Error ? error.message : String(error),
+    );
+  });
+}
+
 /**
  * fire-and-forget: 即便失败也不抛, 仅记日志。
  *
@@ -964,6 +997,7 @@ export async function removeWorktreeForSession(
     if (removeWorktreeQueues.get(sessionId) === run) {
       removeWorktreeQueues.delete(sessionId);
     }
+    await reconcileSafeDirectoriesAfterCleanup();
   }
 }
 
@@ -1426,6 +1460,9 @@ export async function discardPrecreatedWorktree(
       );
     }
   }
+  // 上面的分支探测/删除同样经过 gitExec，可能因 dubious ownership 重新发布授权；
+  // 必须等最后一条 Git 命令结束后再收敛一次，不能只依赖目录删除阶段的对账。
+  await reconcileSafeDirectoriesAfterCleanup();
   return { status: 'discarded', branchDeleted };
 }
 

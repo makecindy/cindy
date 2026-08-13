@@ -15,6 +15,7 @@ import {
   registerSessionIpc,
   setSessionRemovalCancelOperations,
   setSessionRemovalCleanup,
+  setSessionSafeDirectoryReconcile,
 } from './sessions';
 import { registerMessageIpc } from './messages';
 import { registerOrcaWorkflowIpc } from './orcaTeams';
@@ -80,6 +81,8 @@ export interface RegisterLocalDbIpcOpts {
   cancelSessionOperations?: (sessionId: string) => Promise<void>;
   /** Release Host-owned runtime and ownership after task removal is revalidated. */
   cleanupRemovedSession?: (sessionId: string) => Promise<void>;
+  /** Refresh shared Git trust after an archived/deleted task runtime has closed. */
+  reconcileSafeDirectories?: () => Promise<void>;
   /** Reconcile persisted Host-owned task runtimes once the owner DB is readable. */
   reconcilePersistedSessionRuntimes?: () => Promise<void>;
   /** Serialize startup tombstone cleanup with task restore/start/send operations. */
@@ -100,6 +103,7 @@ export interface RegisterLocalDbIpcOpts {
 export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   setSessionRemovalCancelOperations(opts.cancelSessionOperations ?? null);
   setSessionRemovalCleanup(opts.cleanupRemovedSession ?? null);
+  setSessionSafeDirectoryReconcile(opts.reconcileSafeDirectories ?? null);
   setSessionRouteLockImplementation(opts.withSessionLock ?? null);
   const runEnsureReady = createOwnerEnsureCoordinator({
     isOwnerCurrent: opts.isOwnerCurrent ?? (() => true),

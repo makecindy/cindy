@@ -33,6 +33,10 @@ export {
   reconcileWorktreesForDeletedSessions,
 } from './sessionRemovalRecycle';
 export {
+  reconcileSafeDirectories,
+  setSafeDirectorySessionRuntimeAliveProvider,
+} from './safeDirectory';
+export {
   getWorktreeRestoreStatus,
   restoreMissingManagedWorktreeForSession,
   restoreWorktreeForSession,

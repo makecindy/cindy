@@ -25,6 +25,7 @@ import {
 } from './liveSessionRefs';
 import { getBranchName } from './nameGenerator';
 import { hasKeepSentinel, isManagedWorktreePath } from './safety';
+import { reconcileSafeDirectories } from './safeDirectory';
 import * as store from './worktreeStore';
 import { createLogger } from '../logger';
 
@@ -45,6 +46,15 @@ const inflight = new Set<string>();
 
 function repoKey(baseRepo: string): string {
   return path.resolve(baseRepo);
+}
+
+async function reconcileSafeDirectoriesAfterCleanup(): Promise<void> {
+  await reconcileSafeDirectories().catch((error) => {
+    log.warn(
+      '[WorktreePool] safe.directory reconcile after cleanup was non-fatal:',
+      error instanceof Error ? error.message : String(error),
+    );
+  });
 }
 
 // ── acquire ──────────────────────────────────────────────────────────────────
@@ -113,7 +123,10 @@ export async function acquireWorktree(
               await gitExec(['worktree', 'prune'], entry.meta.baseRepo).catch(() => {});
               return false;
             });
-          if (drained) store.del(entry.meta.sessionId);
+          if (drained) {
+            store.del(entry.meta.sessionId);
+            await reconcileSafeDirectoriesAfterCleanup();
+          }
         }
       }
     }
@@ -244,6 +257,7 @@ export async function releaseWorktree(sessionId: string): Promise<'pooled' | 'pr
         .catch(() => false);
       if (drained) {
         store.del(existing.meta.sessionId);
+        await reconcileSafeDirectoriesAfterCleanup();
       }
     }
   }
@@ -267,7 +281,10 @@ export async function releaseWorktree(sessionId: string): Promise<'pooled' | 'pr
  * 按 createdAt 从旧到新淘汰 clean 条目，dirty 条目永远不淘汰。
  * 允许因全部 dirty 而超限（不能因历史残留拒绝新工作）。
  */
-async function evictIfOverLimit(liveSessionPathKeys?: LiveSessionPathKeys): Promise<void> {
+async function evictIfOverLimit(
+  liveSessionPathKeys?: LiveSessionPathKeys,
+  reconcileAfterCleanup = true,
+): Promise<void> {
   if (store.getAll().length <= MAX_WORKTREES) return;
 
   const liveRefs =
@@ -275,20 +292,23 @@ async function evictIfOverLimit(liveSessionPathKeys?: LiveSessionPathKeys): Prom
 
   // 每轮重新读 store 取最旧的 clean 候选，避免 stale snapshot 问题
   while (store.getAll().length > MAX_WORKTREES) {
-    const candidate = await findOldestCleanCandidate(liveRefs);
+    const candidate = await findOldestCleanCandidate(liveRefs, reconcileAfterCleanup);
     if (!candidate) break; // 剩余全是 dirty / 池中在用，允许超限
 
     const drained = await drainEntry(candidate)
       .then(() => true)
       .catch(() => false);
-    if (drained) store.del(candidate.sessionId);
-    else break;
+    if (drained) {
+      store.del(candidate.sessionId);
+      if (reconcileAfterCleanup) await reconcileSafeDirectoriesAfterCleanup();
+    } else break;
   }
 }
 
 /** 从 store 中找到最旧的、可淘汰的 clean 条目。 */
 async function findOldestCleanCandidate(
   liveSessionPathKeys: LiveSessionPathKeys,
+  reconcileAfterCleanup: boolean,
 ): Promise<WorktreeMeta | null> {
   const sorted = store.getAll().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
@@ -309,6 +329,7 @@ async function findOldestCleanCandidate(
       await fs.access(meta.path);
     } catch {
       store.del(meta.sessionId);
+      if (reconcileAfterCleanup) await reconcileSafeDirectoriesAfterCleanup();
       return null; // store 已缩减，让外层 while 重新检查
     }
 
@@ -371,6 +392,7 @@ export async function drainOne(baseRepo: string): Promise<void> {
   pool.delete(key);
   await drainEntry(entry.meta);
   store.del(entry.meta.sessionId);
+  await reconcileSafeDirectoriesAfterCleanup();
 }
 
 // ── park / recover ──────────────────────────────────────────────────────────
@@ -446,5 +468,7 @@ export async function recoverPool(): Promise<void> {
     // （可能属于仍有效的用户 session，由正常 session 生命周期管理）
   }
 
-  await evictIfOverLimit(liveSessionPathKeys);
+  // bootstrap 会在 recoverPool 返回后 fire-and-forget 触发一次统一对账；这里不能
+  // await safe.directory 配置 IO，否则会把后台任务重新变成启动阻塞点。
+  await evictIfOverLimit(liveSessionPathKeys, false);
 }

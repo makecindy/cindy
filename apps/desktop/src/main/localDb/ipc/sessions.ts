@@ -64,6 +64,7 @@ const SLOW_SESSION_LIST_MS = 250;
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 type SessionRemovalCancelOperations = (sessionId: string) => Promise<void>;
 type SessionRemovalCleanup = (sessionId: string) => Promise<void>;
+type SessionSafeDirectoryReconcile = () => Promise<void>;
 export interface SessionRecycleScope {
   ownerScope: OwnerScope;
   mediaDb: DbClient['drizzle'];
@@ -71,6 +72,7 @@ export interface SessionRecycleScope {
 
 let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
 let sessionRemovalCleanup: SessionRemovalCleanup | null = null;
+let sessionSafeDirectoryReconcile: SessionSafeDirectoryReconcile | null = null;
 
 /** Composition-root injection for Host-owned operations that must stop before worktree recycle. */
 export function setSessionRemovalCancelOperations(
@@ -84,6 +86,34 @@ export function setSessionRemovalCleanup(
   cleanupRemovedSession: SessionRemovalCleanup | null,
 ): void {
   sessionRemovalCleanup = cleanupRemovedSession;
+}
+
+/** Composition-root injection avoids a localDb -> worktreeStore -> localDb module cycle. */
+export function setSessionSafeDirectoryReconcile(
+  reconcile: SessionSafeDirectoryReconcile | null,
+): void {
+  sessionSafeDirectoryReconcile = reconcile;
+}
+
+async function reconcileSafeDirectoriesAfterSessionChange(
+  sessionId: string,
+  reason: 'project-target' | 'status',
+): Promise<void> {
+  const reconcile = sessionSafeDirectoryReconcile;
+  if (!reconcile) {
+    log.warn('safe.directory reconcile after session change is not configured', {
+      sessionId,
+      reason,
+    });
+    return;
+  }
+  await reconcile().catch((error) => {
+    log.warn('safe.directory reconcile after session change failed', {
+      sessionId,
+      reason,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 function captureOwnerScope(): OwnerScope {
@@ -216,8 +246,8 @@ function broadcastWorktreeChanged(sessionId: string): void {
  * fire-and-forget:回收失败不影响状态写库(启动期 reconcile 兜底 deleted 场景)。
  * 先关子进程再回收——Windows 下 CLI 子进程 cwd 在 worktree 内会锁目录。
  * 既有动态 import 避免 localDb → maker-host / worktree 的静态模块环(worktreeStore
- * 反向 import 本文件的 setWorktreePathInDb)。Simulator 清理由启动组合层静态注入，
- * 避免在回收临界路径上延迟加载带原生副作用的 Host 模块。
+ * 反向 import 本文件的 setWorktreePathInDb)。Simulator 与 safe.directory 清理由启动
+ * 组合层静态注入，避免继续扩大回收临界路径上的动态加载面。
  *
  * 回收链结束后(无论成功、跳过还是失败)都广播一次 worktree:changed —— 失败/跳过
  * 时条目仍在 store 里,重拉拿到的就是"徽标还在"这个真实状态,同样是对的。
@@ -288,7 +318,13 @@ export async function recycleSessionWorktreeForStatusChange(
         });
       });
     };
-    await closeAndRecycle(sessionId, true);
+    try {
+      await closeAndRecycle(sessionId, true);
+    } finally {
+      // 普通任务没有 worktree meta，也必须在 runtime 关闭后刷新 profile 快照并
+      // 回收 Cindy 拥有的授权；运行态仍 alive/unknown 时 provider 会保守保留。
+      await reconcileSafeDirectoriesAfterSessionChange(sessionId, 'status');
+    }
   } catch (err) {
     log.warn('worktree recycle after session status change failed', {
       sessionId,
@@ -1496,6 +1532,11 @@ export function registerSessionIpc(
             ...(updated.pinnedAt === null ? { summary: null } : { status: updated.status }),
           };
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
+    if (projectTargetChanged) {
+      // retainSafeDirectoryUsage 会把首次 Git 的 cwd 保存在共享 profile 快照。项目归属
+      // 提交后立即刷新，避免移动仓库或转为 dialogue 后旧路径继续保留全局授权。
+      void reconcileSafeDirectoriesAfterSessionChange(sid, 'project-target');
+    }
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
     if (
