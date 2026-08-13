@@ -1672,11 +1672,15 @@ export class PluginMarketService {
       // 上面的 serverRecordMatchesInstalledGhost 单独判断；把两者捆绑会让旧记录
       // 因缺摘要被当成首次安装，升级时无端要求重新批准全部权限。
       const permissionBaselineManifest = installedRawManifest;
+      const installedTargetMarketRoute = Boolean(
+        installedNow &&
+        serverRecordMatchesInstalledGhost(plugin.id, installedNow, currentRecordNow),
+      );
       const replacingSource = Boolean(
         installedNow &&
         options.allowSourceReplacement &&
         currentRecordNow?.installed &&
-        !serverRecordMatchesInstalledGhost(plugin.id, installedNow, currentRecordNow),
+        !installedTargetMarketRoute,
       );
       let routeDetached = false;
       let replacedRouteWasSuppressed = false;
@@ -1733,9 +1737,10 @@ export class PluginMarketService {
       await this.withCapturedLedgerMutation(ledger, () => {
         ledger.upsertInstallation(recordFrom(plugin, 'market', installed));
       });
-      // 只有首装、Public Plugin、运行时落位与安装账本全部成功后才铸造 eventId。
+      // 只有新建 Public 市场路由、运行时落位与安装账本全部成功后才铸造 eventId。
+      // 同一市场路由的升级不计；本地/自定义来源替换为公共市场包属于一次新安装。
       // 网络发送永不 await；失败留在 owner-scoped outbox，不回滚本地安装。
-      if (!options.expectedInstalled && plugin.scope === 'public') {
+      if (!installedTargetMarketRoute && plugin.scope === 'public') {
         const queued = installReceipts.enqueue(plugin.id, plugin.currentRelease.id);
         if (queued) void installReceipts.flush();
       }

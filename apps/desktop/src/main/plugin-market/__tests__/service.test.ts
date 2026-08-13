@@ -1860,6 +1860,49 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.receiptOutbox.flush).toHaveBeenCalledOnce();
   });
 
+  it('queues one receipt after replacing a local source with a public market plugin', async () => {
+    const item = summary();
+    const previousDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-local-plugin-'));
+    roots.push(previousDir);
+    const previousManifest = manifest(item.ghostId);
+    fs.writeFileSync(path.join(previousDir, 'ghost.json'), JSON.stringify(previousManifest));
+    runtime.ghosts = [{ manifest: previousManifest, dir: previousDir, enabled: true }];
+    runtime.install.mockResolvedValue({
+      manifest: manifest(item.ghostId),
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: true,
+    });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(
+      recordForTest(item, {
+        pluginId: 'local-plugin',
+        source: 'local-market',
+        sourceKey: 'local:/plugins',
+        manifestDigest: ghostManifestDigest(previousManifest),
+      }),
+    );
+    h.receiptOutbox.enqueue.mockImplementation(() => {
+      expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
+        pluginId: item.id,
+        source: 'market',
+        installed: true,
+      });
+      return {
+        eventId: '123e4567-e89b-42d3-a456-426614174000',
+        pluginId: item.id,
+        releaseId: item.currentRelease.id,
+      };
+    });
+
+    await expect(
+      h.service.install(item.id, reviewedInstallOptions(item, true)),
+    ).resolves.toMatchObject({ ghost: { manifest: { id: item.ghostId } } });
+
+    expect(h.receiptOutbox.enqueue).toHaveBeenCalledOnce();
+    expect(h.receiptOutbox.enqueue).toHaveBeenCalledWith(item.id, item.currentRelease.id);
+    expect(h.receiptOutbox.flush).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['download', new Error('download failed')],
     ['verification', new Error('sha256 mismatch')],
