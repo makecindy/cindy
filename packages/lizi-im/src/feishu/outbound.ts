@@ -23,10 +23,12 @@ import path from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
 
 import { getLog } from './moduleScope.js';
-import { buildInteractiveCardV1 } from './cards.js';
+import { buildInteractiveCardV1, buildMarkdownCardV2 } from './cards.js';
 import { decodeLaneUserId } from './codec.js';
 import * as ownerGuard from './ownerGuard.js';
 import { parseIncoming } from './incomingContent.js';
+import type { AttachmentRef } from './incomingContent.js';
+import { messages as transportMessages } from './messages.js';
 import type { InteractiveCardSpec, SendFileResult } from '../types.js';
 import type { BotCredentials } from './internal-types.js';
 
@@ -76,6 +78,35 @@ export function pushReplyAnchor(laneUserId: string, messageId: string): void {
   const state = laneAnchors.get(laneUserId) ?? { queue: [], held: null, quotedHeld: false };
   state.queue.push(messageId);
   laneAnchors.set(laneUserId, state);
+}
+
+// ── patchable opener (开话题开场白卡 = 本轮流式卡) ──────────────────────────
+// 群主流 @ 开话题时, 开场白是一张「思考中」占位卡; 本轮流式卡不再新建一条
+// 回复, 而是直接 patch 这张卡 — 话题里第一条可见内容就是答案。lane → opener
+// 卡的映射由 wsClient 在 openThread 成功后登记, streamingText.start 认领。
+
+const patchableOpeners = new Map<string, string>();
+
+export function pushPatchableOpener(laneUserId: string, messageId: string): void {
+  patchableOpeners.set(laneUserId, messageId);
+}
+
+/**
+ * 认领本 lane 的开场白卡: 存在则把它推进为已持有锚点(后续 reply 挂它, 仍落
+ * 在话题内)并返回消息 id, streamingText.start 拿它直接 patch; 不存在(开话题
+ * 失败的降级群 lane / 话题内 @)返回 null, 走新建流式卡的老路。
+ */
+export function claimPatchableOpener(laneUserId: string): string | null {
+  const openerId = patchableOpeners.get(laneUserId);
+  if (!openerId) return null;
+  patchableOpeners.delete(laneUserId);
+  const state = laneAnchors.get(laneUserId) ?? { queue: [], held: null, quotedHeld: false };
+  // 锚点队列头正常就是这张开场白卡; 对不上说明顺序被破坏, 保守起见仍保留队列。
+  if (state.queue[0] === openerId) state.queue.shift();
+  state.held = openerId;
+  state.quotedHeld = true;
+  laneAnchors.set(laneUserId, state);
+  return openerId;
 }
 
 type SendTarget =
@@ -183,6 +214,128 @@ export async function replyText(
     'text',
     JSON.stringify({ text }),
   );
+}
+
+// ── openThread (群主流 @ 开话题) ────────────────────────────────────────────
+// 开话题对同一触发消息幂等: 飞书可能重复投递同一条群主流 @ 事件(WS 重连等),
+// 不合并就会同一条消息开出多个话题、重复 agent 回答。进行中的请求共享同一
+// promise, 已完成的按 TTL 短缓存 — 重投事件直接复用同一个话题。缓存键是
+// 触发消息 id(平台内唯一), 不随 unbindClient 清空(换代不会重放别的消息 id)。
+
+interface OpenThreadResult {
+  messageId: string;
+  threadId: string;
+}
+
+const OPEN_THREAD_DEDUP_TTL_MS = 10 * 60_000;
+const OPEN_THREAD_DEDUP_MAX_ENTRIES = 200;
+const openThreadByTrigger = new Map<
+  string,
+  { ts: number; promise: Promise<OpenThreadResult | null> }
+>();
+
+function pruneOpenThreadDedup(): void {
+  const now = Date.now();
+  for (const [triggerId, entry] of openThreadByTrigger) {
+    if (now - entry.ts > OPEN_THREAD_DEDUP_TTL_MS) openThreadByTrigger.delete(triggerId);
+  }
+  while (openThreadByTrigger.size > OPEN_THREAD_DEDUP_MAX_ENTRIES) {
+    let oldestKey: string | undefined;
+    let oldestTs = Number.POSITIVE_INFINITY;
+    for (const [triggerId, entry] of openThreadByTrigger) {
+      if (entry.ts < oldestTs) {
+        oldestTs = entry.ts;
+        oldestKey = triggerId;
+      }
+    }
+    if (oldestKey === undefined) break;
+    openThreadByTrigger.delete(oldestKey);
+  }
+}
+
+/**
+ * 以 reply_in_thread 回复触发消息, 用它作为根开一个新话题。开场白**就是
+ * 本轮流式卡**: 发一张「思考中」占位卡片(message 可被 patch 升级成正文),
+ * 之后流式卡直接 patch 它 — 话题里不会多出一条「开个话题聊这条」的占位
+ * 消息, 第一条可见内容就是答案本身(streamingText.start 经
+ * claimPatchableOpener 认领)。返回开场白卡 id + 新话题 thread_id。
+ * 同一触发消息并发/重复调用共享同一次开话题 — 防飞书重投事件开出多个话题
+ * (含进程重启: uuid 走服务端去重)。
+ *
+ * 失败语义: API 失败或响应缺 message_id → null(没有可确认已发出的开场白);
+ * 响应有 message_id 但缺 thread_id → 用 message.get 补查话题 id, 查不到就
+ * 撤回开场白再返回 null — 不让「回复都在里面」的开场白承诺落空。调用方在
+ * null 时降级回群 lane 旧行为(引用回复 + chat_id 直发)。
+ */
+export function openThread(replyToMessageId: string): Promise<OpenThreadResult | null> {
+  const now = Date.now();
+  const cached = openThreadByTrigger.get(replyToMessageId);
+  if (cached && now - cached.ts <= OPEN_THREAD_DEDUP_TTL_MS) return cached.promise;
+
+  const promise = doOpenThread(replyToMessageId);
+  openThreadByTrigger.set(replyToMessageId, { ts: now, promise });
+  pruneOpenThreadDedup();
+  return promise;
+}
+
+async function doOpenThread(replyToMessageId: string): Promise<OpenThreadResult | null> {
+  const log = getLog();
+  try {
+    const res = await ensureClient().im.v1.message.reply({
+      path: { message_id: replyToMessageId },
+      data: {
+        content: JSON.stringify(buildMarkdownCardV2(transportMessages.streaming.randomThinking())),
+        msg_type: 'interactive',
+        reply_in_thread: true,
+        // 服务端幂等键: 同一触发消息重复开话题(重投事件、进程重启后重放)时,
+        // 飞书按 uuid 去重(1 小时内同 uuid 至多发一条, 重复调用返回原消息
+        // id), 不会开出第二个话题。
+        uuid: replyToMessageId,
+      },
+    });
+    const messageId = res.data?.message_id ?? '';
+    const threadId = res.data?.thread_id ?? '';
+    if (!messageId) {
+      log.warn(
+        '[feishu/outbound] openThread: no message_id in response — nothing provably sent',
+      );
+      return null;
+    }
+    if (threadId) return { messageId, threadId };
+    // 部分成功: 开场白已发出但响应缺 thread_id — 补查消息详情恢复话题 id。
+    const recovered = await tryFetchMessageThreadId(messageId);
+    if (recovered) return { messageId, threadId: recovered };
+    // 恢复不了: 撤回开场白再降级, 避免「回复都在里面」的开场白留在群里误导。
+    try {
+      await ensureClient().im.v1.message.delete({ path: { message_id: messageId } });
+      log.warn(
+        '[feishu/outbound] openThread: thread_id unrecoverable — opener recalled, fallback to group lane',
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(
+        `[feishu/outbound] openThread: thread_id unrecoverable, opener recall failed (non-fatal): ${msg}`,
+      );
+    }
+    return null;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[feishu/outbound] openThread failed (fallback to group lane): ${msg}`);
+    return null;
+  }
+}
+
+/** 用 message.get 补查开场白消息的 thread_id(部分成功恢复);失败返回 ''。 */
+async function tryFetchMessageThreadId(messageId: string): Promise<string> {
+  const log = getLog();
+  try {
+    const res = await ensureClient().im.v1.message.get({ path: { message_id: messageId } });
+    return res.data?.items?.[0]?.thread_id ?? '';
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[feishu/outbound] openThread: thread_id recovery via message.get failed: ${msg}`);
+    return '';
+  }
 }
 
 // ── reactions (used by host orchestrator to ack user msgs) ────────────────────
@@ -404,67 +557,106 @@ export interface RecentChatMessage {
   senderOpenId: string;
   senderIsBot: boolean;
   text: string;
+  /** 图片/文件附件引用(image_key / file_key) — 下载需要配对的 messageId。 */
+  attachments: AttachmentRef[];
   createTimeMs: number;
 }
 
+export interface ChatHistoryPage {
+  /** 页内按时间升序(拉取是倒序的, 返回前翻正)。 */
+  messages: RecentChatMessage[];
+  /** 还有更早的页时给下一次调用的 page_token; 没有更早历史为 null。 */
+  nextPageToken: string | null;
+}
+
 /**
- * 拉群会话最近历史(群 lane 触发时拼上下文前缀用)。倒序拉一页, 返回升序。
- * 需要「获取群组中所有消息」权限; 权限不足/失败返回空数组 + log warn —
- * 上下文前缀降级为无, turn 照跑。文本抽取复用 parseIncoming(text/post 之外
- * 的类型给占位标签)。
+ * 按页拉群/话题历史(群 lane 触发时 adapter 拼上下文用)。倒序拉一页, 返回
+ * 页内升序。话题 lane 传 threadId 走 thread 容器, 只回本话题消息; 群主流
+ * 不传, 调用方自行按 thread_id 过滤(chat 容器会混入话题消息)。
+ *
+ * 需要「获取群组中所有消息」权限。**失败(权限不足/网络)直接抛错** — 调用方
+ * 需要区分「真的没有历史」与「拉取失败」来做降级提示, 不能吞成空数组。
+ * 文本抽取复用 parseIncoming; audio/media/sticker 等对上下文无意义的类型跳过。
  */
-export async function fetchRecentChatMessages(
-  chatId: string,
-  opts?: { limit?: number },
-): Promise<RecentChatMessage[]> {
+export async function fetchChatHistoryPage(args: {
+  chatId: string;
+  threadId?: string;
+  pageToken?: string;
+  pageSize?: number;
+}): Promise<ChatHistoryPage> {
+  const c = client;
+  if (!c) throw new Error('feishu client not bound');
+  const res = await c.im.v1.message.list({
+    params: {
+      container_id_type: args.threadId ? 'thread' : 'chat',
+      container_id: args.threadId ?? args.chatId,
+      sort_type: 'ByCreateTimeDesc',
+      page_size: Math.min(Math.max(args.pageSize ?? 50, 1), 50),
+      with_sender_name: true,
+      ...(args.pageToken ? { page_token: args.pageToken } : {}),
+    },
+  });
+  if (res.code !== 0) {
+    throw new Error(`im.message.list failed: code=${res.code} msg=${res.msg ?? 'unknown'}`);
+  }
+  const items = res.data?.items ?? [];
+  const out: RecentChatMessage[] = [];
+  for (const item of items) {
+    if (!item.message_id || item.deleted) continue;
+    const msgType = item.msg_type ?? '';
+    const rawContent = item.body?.content ?? '';
+    let text = '';
+    let attachments: AttachmentRef[] = [];
+    if (msgType === 'text' || msgType === 'post' || msgType === 'image' || msgType === 'file') {
+      const parsed = parseIncoming(msgType, rawContent);
+      text = parsed.text;
+      attachments = parsed.attachments;
+    } else if (msgType === 'interactive') {
+      text = '[卡片消息]';
+    } else {
+      continue; // audio/media/sticker 等对上下文无意义, 跳过
+    }
+    if (!text && attachments.length === 0) continue;
+    out.push({
+      messageId: item.message_id,
+      threadId: item.thread_id ?? '',
+      senderName: item.sender?.sender_name ?? '',
+      senderOpenId: item.sender?.id_type === 'open_id' ? (item.sender?.id ?? '') : '',
+      senderIsBot: item.sender?.sender_type === 'app',
+      text,
+      attachments,
+      createTimeMs: Number(item.create_time ?? 0),
+    });
+  }
+  out.reverse();
+  const hasMore = res.data?.has_more === true;
+  const nextToken = res.data?.page_token;
+  return {
+    messages: out,
+    nextPageToken: hasMore && nextToken ? nextToken : null,
+  };
+}
+
+/**
+ * 拉群名称(群 lane 会话标题用)。需要「获取群基本信息」权限; 失败/无权限
+ * 返回 null — 调用方回落 chatId 后 6 位。bot 拉不到群名的常见原因与群历史
+ * 相同: 应用未开权限或未发布版本。
+ */
+export async function getChatName(chatId: string): Promise<string | null> {
   const log = getLog();
   const c = client;
-  if (!c) return [];
+  if (!c) return null;
   try {
-    const res = await c.im.v1.message.list({
-      params: {
-        container_id_type: 'chat',
-        container_id: chatId,
-        sort_type: 'ByCreateTimeDesc',
-        page_size: Math.min(Math.max(opts?.limit ?? 50, 1), 50),
-        with_sender_name: true,
-      },
-    });
-    const items = res.data?.items ?? [];
-    const out: RecentChatMessage[] = [];
-    for (const item of items) {
-      if (!item.message_id || item.deleted) continue;
-      const msgType = item.msg_type ?? '';
-      const rawContent = item.body?.content ?? '';
-      let text = '';
-      if (msgType === 'text' || msgType === 'post') {
-        text = parseIncoming(msgType, rawContent).text;
-      } else if (msgType === 'image') {
-        text = '[图片]';
-      } else if (msgType === 'file') {
-        text = '[文件]';
-      } else if (msgType === 'interactive') {
-        text = '[卡片消息]';
-      } else {
-        continue; // audio/media/sticker 等对上下文无意义, 跳过
-      }
-      if (!text) continue;
-      out.push({
-        messageId: item.message_id,
-        threadId: item.thread_id ?? '',
-        senderName: item.sender?.sender_name ?? '',
-        senderOpenId: item.sender?.id_type === 'open_id' ? (item.sender?.id ?? '') : '',
-        senderIsBot: item.sender?.sender_type === 'app',
-        text,
-        createTimeMs: Number(item.create_time ?? 0),
-      });
+    const res = await c.im.v1.chat.get({ path: { chat_id: chatId } });
+    if (res.code !== 0) {
+      log.warn(`[feishu/outbound] chat.get failed: code=${res.code} msg=${res.msg ?? 'unknown'}`);
+      return null;
     }
-    out.reverse();
-    return out;
+    return res.data?.name ?? null;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`[feishu/outbound] fetchRecentChatMessages failed (context degraded): ${msg}`);
-    return [];
+    log.warn(`[feishu/outbound] chat.get failed: ${msg}`);
+    return null;
   }
 }
 

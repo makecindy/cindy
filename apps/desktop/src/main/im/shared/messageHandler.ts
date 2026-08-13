@@ -16,7 +16,7 @@
  * 跨渠道互不影响。
  */
 
-import type { IMMessageEvent, TextChannelIM } from '@cindy/im';
+import type { IMAttachment, IMMessageEvent, TextChannelIM } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import {
@@ -193,7 +193,11 @@ export function createMessageHandler(
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
-    let prepared: { agentText: string; commit?: () => void | Promise<void> } | null = null;
+    let prepared: {
+      agentText: string;
+      contextAttachments?: IMAttachment[];
+      commit?: () => void | Promise<void>;
+    } | null = null;
     if (adapter.prepareAgentTurnText) {
       try {
         prepared = await adapter.prepareAgentTurnText(event);
@@ -217,6 +221,10 @@ export function createMessageHandler(
         ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
         ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
+        // 群历史附件只进模型消息、不落库(见 ImRunAgentTurnArgs.contextAttachments)。
+        ...(prepared?.contextAttachments?.length
+          ? { contextAttachments: prepared.contextAttachments }
+          : {}),
         ...(prepared?.commit
           ? {
               // turnRunner 只在 provider 真正接受消息后调用；排队、停止与

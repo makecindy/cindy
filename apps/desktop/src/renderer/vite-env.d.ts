@@ -1806,6 +1806,7 @@ interface ElectronAPI {
     /** 写偏好;true 附带开窗,false 附带关窗。返回新 state。 */
     setDetached: (
       detached: boolean,
+      handoff?: import('../shared/rightSidebarWindow').RsbWindowTabHandoff,
     ) => Promise<{ detached: boolean; lastOpen: boolean; open: boolean }>;
     /** 子窗口 mount 时拉主窗上报的渲染上下文(main 缓存的最后一份)。 */
     getContext: () => Promise<{
@@ -1843,6 +1844,9 @@ interface ElectronAPI {
         deviceLinkDeviceId?: string | null;
         available: boolean;
       }) => void,
+    ) => () => void;
+    onTabHandoff: (
+      callback: (handoff: import('../shared/rightSidebarWindow').RsbWindowTabHandoff) => void,
     ) => () => void;
     onCommand: (cb: (cmd: RsbWindowCommand) => void) => () => void;
   };

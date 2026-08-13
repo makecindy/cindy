@@ -48,6 +48,28 @@ describe('cancelPending 交还卡片地址', () => {
     expect(getPendingCount()).toBe(0);
   });
 
+  it('permission: 登记原始卡片正文, resolve 时交还供收口卡保留决策正文', () => {
+    const { resolve } = register('req-perm', 'permission', 'chat|555');
+    // register 走了默认 extras; 这里补登记带 permissionCard 的版本(新 requestId)。
+    const resolve2 = vi.fn();
+    registerPendingExternal('req-perm2', 'permission', 'chat|666', resolve2, vi.fn(), {
+      toolName: 'Bash',
+      permissionCard: { title: '🔧 工具调用：Bash', body: '**参数预览**\n```json\n{"cmd": "ls"}\n```' },
+    });
+
+    const resolved = resolvePending('req-perm2', { kind: 'permission', behavior: 'allow' });
+
+    expect(resolved).toEqual({
+      messageId: 'chat|666',
+      permissionCard: {
+        title: '🔧 工具调用：Bash',
+        body: '**参数预览**\n```json\n{"cmd": "ls"}\n```',
+      },
+    });
+    expect(getPendingCount()).toBe(1); // 只剩 req-perm 那条
+    cancelPending('req-perm', 'cleanup');
+  });
+
   it('plan_review 与 ask_user_question 同样交还地址', () => {
     register('req-plan', 'plan_review', 'chat|556');
     register('req-ask', 'ask_user_question', 'chat|557');

@@ -887,6 +887,8 @@ export const MAKER_PUSH = {
   RSB_WINDOW_CONTEXT_CHANGED: 'maker:rsb-window:context-changed',
   /** main → 子窗口命令(如 open-terminal),只发子窗口。payload = RsbWindowCommand。 */
   RSB_WINDOW_COMMAND: 'maker:rsb-window:command',
+  /** 子窗口合并回主窗口前交接不可持久化 session 的 tab 快照，只发主窗口。 */
+  RSB_WINDOW_TAB_HANDOFF: 'maker:rsb-window:tab-handoff',
   /** Main-owned H.264 access unit pushed without Renderer polling. */
   IOS_SIMULATOR_H264_FRAME: 'maker:ios-simulator:h264-frame',
   /** Main-owned public route selection/status for the iOS Simulator viewer. */

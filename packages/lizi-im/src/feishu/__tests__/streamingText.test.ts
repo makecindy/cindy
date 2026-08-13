@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   sendFile: vi.fn(),
   sendText: vi.fn(),
   uploadImage: vi.fn(),
+  // 默认无 patchable opener — 走新建流式卡路径
+  claimPatchableOpener: vi.fn(() => null),
 }));
 
 vi.mock('../outbound.js', () => mocks);

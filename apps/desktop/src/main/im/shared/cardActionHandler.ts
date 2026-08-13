@@ -1378,9 +1378,14 @@ export function createCardActionHandler(
           }
 
           // Patch the card to a resolved state so the user sees their choice took.
+          // 授权卡保留原始正文(工具名 + 参数预览)再追加决策结果 — 用户要能
+          // 回看自己批准的是什么; 其它交互卡维持整卡替换的旧形态。
           const resolvedLabel = describeDecision(decision);
           try {
-            await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(resolvedLabel));
+            const spec = resolved.permissionCard
+              ? cards.buildResolvedPermissionCard(resolved.permissionCard, resolvedLabel)
+              : cards.buildResolvedCard(resolvedLabel);
+            await im.updateInteractiveCard(event.messageId, spec);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(`updateInteractiveCard failed (non-fatal): ${msg}`);

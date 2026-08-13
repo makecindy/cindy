@@ -105,6 +105,11 @@ export interface ImCardBuilders {
     sessions: RecentControlSession[];
   }): InteractiveCardSpec;
   buildResolvedCard(label: string): InteractiveCardSpec;
+  /** 授权卡收口: 保留原始正文 + 追加决策结果, 去掉按钮。 */
+  buildResolvedPermissionCard(
+    original: { title: string; body: string },
+    label: string,
+  ): InteractiveCardSpec;
 }
 
 export function createCardBuilders(
@@ -519,6 +524,22 @@ export function createCardBuilders(
     buildResolvedCard(label) {
       return {
         body: label,
+        buttons: [],
+      };
+    },
+
+    /**
+     * 授权卡被点击后的收口形态: **保留原始正文**(工具名 + 参数预览 — 用户
+     * 需要看到自己刚刚批准的是什么), 去掉按钮, 末尾追加决策结果一行。
+     * 与 buildResolvedCard 的差异正在于不吞掉决策正文。
+     */
+    buildResolvedPermissionCard(
+      original: { title: string; body: string },
+      label: string,
+    ): InteractiveCardSpec {
+      return {
+        title: original.title,
+        body: `${original.body}\n\n${label}`,
         buttons: [],
       };
     },

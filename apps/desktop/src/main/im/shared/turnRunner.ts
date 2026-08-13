@@ -122,7 +122,12 @@ import {
   type ImAuthRouteStatus,
   type ImAuthCheckDeps,
 } from './authCheck';
-import { FBOT_DRAFT_TITLE, generateAndPersistFbotTitle } from './fbotTitle';
+import {
+  FBOT_DRAFT_TITLE,
+  generateAndPersistFbotTitle,
+  generateImSessionTitleText,
+  persistGeneratedSessionTitle,
+} from './fbotTitle';
 import { materializeLocalMarkdownImages } from './localMarkdownImages';
 import {
   createTurnActivity,
@@ -359,6 +364,12 @@ export interface ImRunAgentTurnArgs {
    * 缺省 = text。落库(persistUserMessage)与标题生成恒用 text(渠道原文)。
    */
   agentText?: string;
+  /**
+   * 上下文附件(群历史里的图片/文件) —— 只拼进模型消息的 image/file
+   * block, **不随用户消息落库、不进 transcript**。与 attachments(触发
+   * 用户自己发的, 照常落库)是两条语义边界, 不可合并传参。
+   */
+  contextAttachments?: IMAttachment[];
   outputCardMessageId?: string;
   outputCardPrefix?: string;
   onTurnComplete?: () => void;
@@ -768,19 +779,29 @@ export function createTurnRunner(
       text.trim().length > 0 &&
       (adapter.threadScoped
         ? target.created
-        : adapter.sessions.generatedTitlePrefix !== undefined && row.sdkSessionId == null)
+        : adapter.sessions.skipOneshotTitleFor?.(userId) !== true &&
+          adapter.sessions.generatedTitlePrefix !== undefined &&
+          row.sdkSessionId == null)
     ) {
       // threadScoped 新 thread 会话: 用首条消息生成正式标题(渠道前缀),
       // 完成后把 thread 名片卡升级为「{正式标题}」。
       // 非 threadScoped 渠道(feishu/discord, 一 (bot,user) 一行长期复用):
       // 每条"新对话"的首条消息重新起名 —— sdkSessionId == null 即新上下文
       // (首次建行 / /new 重置后), 标题跟随当前话题而不是永远停在第一次。
-      startBackgroundTask(() => maybeGenerateImSessionTitle(row.id, text, threadHeaderCardId));
+      startBackgroundTask(() =>
+        maybeGenerateImSessionTitle(row.id, userId, target.scopeKey, text, threadHeaderCardId),
+      );
     }
 
     const item: QueuedSend = {
       turn,
-      userMessage: buildImUserMessage(args.agentText ?? text, attachments, target.attached),
+      // contextAttachments 只进模型消息(跟在用户自己附件后面), 不进
+      // item.attachments —— persistUserMessage 落库的只有触发用户发的附件。
+      userMessage: buildImUserMessage(
+        args.agentText ?? text,
+        [...attachments, ...(args.contextAttachments ?? [])],
+        target.attached,
+      ),
       rowId: row.id,
       text,
       attachments,
@@ -1576,6 +1597,22 @@ export function createTurnRunner(
     }
 
     try {
+      // 授权卡已转投 owner 私聊 — 立刻在原群/话题 lane 留指路提示
+      // (与 handleInteractionFor 同款; 私聊 lane 卡片就在原地, 不需要)。
+      if (
+        req.kind === 'permission' &&
+        userId.startsWith('g/') &&
+        adapter.ui.cards.permission.dmRoutedNotice
+      ) {
+        try {
+          await im.sendText(userId, adapter.ui.cards.permission.dmRoutedNotice, {
+            threadTs: scopeKey,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`dm routed notice send failed (non-fatal): ${msg}`);
+        }
+      }
       registerPendingExternal(
         req.requestId,
         req.kind as InteractionDecision['kind'],
@@ -1591,7 +1628,12 @@ export function createTurnRunner(
               : { kind, behavior: 'deny', reason: err.message },
           );
         },
-        req.kind === 'permission' ? { toolName: req.toolName } : undefined,
+        req.kind === 'permission'
+          ? {
+              toolName: req.toolName,
+              permissionCard: { title: spec.title ?? '', body: spec.body },
+            }
+          : undefined,
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1676,15 +1718,38 @@ export function createTurnRunner(
    */
   async function maybeGenerateImSessionTitle(
     sessionId: string,
+    userId: string,
+    scopeKey: string | undefined,
     text: string,
     headerCardId: string | null,
   ): Promise<void> {
     const threadUiPack = adapter.ui.thread;
     const configuredPrefix = adapter.sessions.generatedTitlePrefix;
-    if (configuredPrefix === undefined && !(adapter.threadScoped && threadUiPack)) return;
+    const composeTitle = adapter.sessions.composeGeneratedTitle;
+    if (
+      configuredPrefix === undefined &&
+      !composeTitle &&
+      !(adapter.threadScoped && threadUiPack)
+    )
+      return;
     const prefix = typeof configuredPrefix === 'function' ? configuredPrefix() : configuredPrefix;
     try {
-      const title = await generateAndPersistFbotTitle(sessionId, text, prefix);
+      let title: string | null;
+      if (composeTitle) {
+        // 渠道自定义拼装(飞书话题 lane → [飞书·{群名}·{简介}] {threadId 后 6 位}):
+        // oneshot 只负责出「话题简介」文本, 完整标题由渠道按 lane 拼; 返回 null
+        // (该 lane 不适用, 如 DM)回落默认 prefix 路径。
+        const generated = await generateImSessionTitleText(sessionId, text);
+        if (!generated) return;
+        title = await composeTitle(userId, scopeKey, generated, sessionId);
+        if (title) {
+          await persistGeneratedSessionTitle(sessionId, title);
+        } else {
+          title = await generateAndPersistFbotTitle(sessionId, text, prefix);
+        }
+      } else {
+        title = await generateAndPersistFbotTitle(sessionId, text, prefix);
+      }
       if (!richIm || !title || !headerCardId || !threadUiPack) return;
       await richIm.updateInteractiveCard(headerCardId, {
         ...threadUiPack.sessionHeaderTitled(title),
@@ -2310,7 +2375,13 @@ export function createTurnRunner(
     await completeTurnCallbackAfterAck(failure.turn);
     if (failure.turn.queueMode === 'internal') {
       try {
-        const message = `❌ 启动 agent 失败：${failure.reason}`;
+        // 群轮次强确认策略与「完全访问」档互斥(maker fail-closed 拒绝) — 给
+        // 用户能看懂的说法并指路 /permission, 而不是裸抛策略错误码。
+        const policyUnsupported = failure.reason.startsWith('TURN_PERMISSION_POLICY_UNSUPPORTED');
+        const message =
+          policyUnsupported && adapter.ui.error?.permissionModeUnsupported
+            ? adapter.ui.error.permissionModeUnsupported
+            : `❌ 启动 agent 失败：${failure.reason}`;
         if (
           output.kind === 'chunked-text' &&
           failure.turn.chunkedReplyBegun
@@ -2885,13 +2956,36 @@ export function createTurnRunner(
       }
 
       try {
+        // 授权卡已转投 owner 私聊 — 立刻在原群/话题 lane 留一句指路(不能等
+        // registerPending: 它要等用户点完卡才返回, 那提示就变成"事后"的了)。
+        // 私聊 lane 的卡片就落在当前会话里, 不需要指路。
+        if (
+          req.kind === 'permission' &&
+          userId.startsWith('g/') &&
+          adapter.ui.cards.permission.dmRoutedNotice
+        ) {
+          try {
+            await im.sendText(userId, adapter.ui.cards.permission.dmRoutedNotice, {
+              threadTs: scopeKey,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn(`dm routed notice send failed (non-fatal): ${msg}`);
+          }
+        }
         const decision = await registerPending(
           req.requestId,
           req.kind as InteractionDecision['kind'],
           messageId,
           // Stash toolName for permission requests so cardActionHandler can
           // build permissionUpdates when the user picks 'allow:always'.
-          req.kind === 'permission' ? { toolName: req.toolName } : undefined,
+          // permissionCard 留着收口时恢复原始正文(工具名 + 参数预览)。
+          req.kind === 'permission'
+            ? {
+                toolName: req.toolName,
+                permissionCard: { title: spec.title ?? '', body: spec.body },
+              }
+            : undefined,
         );
         return decision;
       } catch (err) {

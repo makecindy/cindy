@@ -1459,6 +1459,7 @@ const rsbWindowController = new RsbWindowController({
   },
   contextChannel: MAKER_PUSH.RSB_WINDOW_CONTEXT_CHANGED,
   commandChannel: MAKER_PUSH.RSB_WINDOW_COMMAND,
+  tabHandoffChannel: MAKER_PUSH.RSB_WINDOW_TAB_HANDOFF,
   isQuitting: () => isQuitting,
   canCloseWindow: () => !hasActiveRsbNativePopupSurfaces(),
   log: createLogger('right-sidebar-window-controller'),
@@ -3862,8 +3863,8 @@ const registerIpcHandlers = () => {
   // Fullscreen state query — renderer calls this on mount to recover from the
   // race where `enter-full-screen` fires before the renderer subscribes (e.g.
   // when window-state restores a fullscreen window on launch).
-  ipcMain.handle('get-fullscreen-state', (): boolean => {
-    const win = getWindow();
+  ipcMain.handle('get-fullscreen-state', (event): boolean => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? getWindow();
     if (!win) return false;
     return win.isFullScreen() || win.isSimpleFullScreen();
   });

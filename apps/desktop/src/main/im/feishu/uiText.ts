@@ -88,6 +88,15 @@ export const ui = {
       `其它部分收到啦，正在处理~`,
   },
 
+  // ── pre-dispatch 失败细分文案 ──────────────────────────────────────────────
+  error: {
+    agentUnsupported:
+      '🤔 当前选择的 Agent 在这个渠道需要逐条权限确认，暂时上不了场，换一个 Agent 再试~',
+    permissionModeUnsupported:
+      '⚠️ 群/话题会话不能用「完全访问」权限档 — 群上下文里有成员可控的内容，必须保留操作确认。\n' +
+      '发 /permission 把本会话切回「自动审批」再试~',
+  },
+
   // ── card text (sent via @cindy/im InteractiveCardSpec) ──────────────────────
   cards: {
     permission: {
@@ -96,6 +105,8 @@ export const ui = {
       btnAllowOnce: '✅ 仅本次允许',
       btnAllowAlways: '✅ 总是允许',
       btnDeny: '❌ 拒绝',
+      /** 授权卡转投 owner 私聊后, 在原群/话题里留的指路提示。 */
+      dmRoutedNotice: '🔐 这个操作需要你确认 — 授权卡片已经发到你的私聊，去那里点一下继续~',
       resolvedAllowOnce: '✅ 已允许（仅本次）',
       resolvedAllowAlways: '✅ 已允许（这个工具以后都放行）',
       resolvedDeny: '❌ 已拒绝',

@@ -27,7 +27,7 @@ import {
   resolveImSessionDefaults,
   type ResolvedImSessionDefaults,
 } from '../defaultSessionSettings';
-import { broadcastSessionCreated } from './sessionBroadcast';
+import { broadcastSessionCreated, broadcastSessionPatched } from './sessionBroadcast';
 import type { ImOrchestratorConfig, ImSessionNamespace } from './types';
 
 const log = createLogger('im:repo');
@@ -387,6 +387,16 @@ export function createImSessionRepo(
               userSendAt: now,
             },
           });
+        // upsert 前先判行是否已存在: resolveSessionTitle 只对**新建行**生效 —
+        // 复活行带着自己的历史标题(oneshot 拼装的话题名等), 不能被渠道解析
+        // 结果刷掉(飞书话题 lane 首条消息会把标题升级成 [飞书·群名·简介] 格式,
+        // 复活时再刷回 [飞书·群名] 后缀格式就是数据回退)。
+        const preRows = await db
+          .select({ title: sessions.title })
+          .from(sessions)
+          .where(eq(sessions.id, row.id))
+          .limit(1);
+        const isFreshInsert = preRows.length === 0;
         // upsert 可能走冲突分支(残留行的 sdkSessionId / 模型 / 权限被刻意保留),
         // 返回值必须以 DB 持久化结果为准——直接返回 prepared 默认值会让 turn 拿
         // sdkSessionId=null 新开对话,而 DB 里旧上下文仍标记 active,两边失配。
@@ -395,19 +405,20 @@ export function createImSessionRepo(
           .from(sessions)
           .where(eq(sessions.id, row.id))
           .limit(1);
-        return persistedRows[0];
+        return { row: persistedRows[0], isFreshInsert };
       });
-      const result: ImSessionRow = persisted
+      const persistedRow = persisted?.row;
+      const result: ImSessionRow = persistedRow
         ? {
-            id: persisted.id,
-            agentKind: toCoreAgentKind(persisted.agentKind),
-            workingDir: persisted.workingDir ?? row.workingDir,
-            model: persisted.model,
-            effort: persisted.effort,
-            permissionMode: persisted.permissionMode,
-            fastMode: persisted.fastMode,
-            sdkSessionId: persisted.sdkSessionId,
-            providerId: persisted.providerId ?? null,
+            id: persistedRow.id,
+            agentKind: toCoreAgentKind(persistedRow.agentKind),
+            workingDir: persistedRow.workingDir ?? row.workingDir,
+            model: persistedRow.model,
+            effort: persistedRow.effort,
+            permissionMode: persistedRow.permissionMode,
+            fastMode: persistedRow.fastMode,
+            sdkSessionId: persistedRow.sdkSessionId,
+            providerId: persistedRow.providerId ?? null,
           }
         : row;
       log.info(
@@ -417,6 +428,25 @@ export function createImSessionRepo(
       );
       // 通知 renderer sidebar / device-link 控制端有新会话行,否则要手动刷新才出现
       broadcastSessionCreated(result.id);
+      // 渠道可异步解析正式标题(飞书群/话题 lane → 拉群名拼 [飞书·群/话题] {群名}),
+      // 只对**新建行**生效 — 复活行保留自己的历史标题(首条消息 oneshot 会把
+      // 话题会话升级成 [飞书·群名·简介] 格式, 不能回刷)。失败/无结果保持
+      // defaultTitle, 不阻塞建行。
+      if (ns.resolveSessionTitle && persisted?.isFreshInsert !== false) {
+        try {
+          const resolved = await ns.resolveSessionTitle(userId, scopeKey);
+          if (resolved) {
+            await db
+              .update(sessions)
+              .set({ title: resolved })
+              .where(eq(sessions.id, result.id));
+            broadcastSessionPatched(result.id, { title: resolved });
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`resolveSessionTitle failed for ${ns.source} session (non-fatal): ${msg}`);
+        }
+      }
       return result;
     },
   };

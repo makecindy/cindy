@@ -24,7 +24,14 @@
  * `[name](xdt-file:///abs/path)`).
  */
 
-import { sendCardRaw, patchCardRaw, uploadImage, sendFile, sendText } from './outbound.js';
+import {
+  sendCardRaw,
+  patchCardRaw,
+  uploadImage,
+  sendFile,
+  sendText,
+  claimPatchableOpener,
+} from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
 import { getLog } from './moduleScope.js';
 import { messages as transportMessages } from './messages.js';
@@ -338,6 +345,10 @@ export async function start(
   openId: string,
   initial: string = transportMessages.streaming.randomThinking(),
 ): Promise<StreamingTextHandle> {
+  // 群主流 @ 开话题时, 开场白卡就是本轮流式卡(openThread 已用它开好话题) —
+  // 认领后直接 patch, 不再新建一条「开个话题」占位回复。
+  const claimed = claimPatchableOpener(openId);
+  if (claimed) return new FeishuStreamingTextHandle(claimed, openId, initial);
   const { messageId } = await sendCardRaw(openId, buildMarkdownCardV2(initial));
   return new FeishuStreamingTextHandle(messageId, openId, initial);
 }
