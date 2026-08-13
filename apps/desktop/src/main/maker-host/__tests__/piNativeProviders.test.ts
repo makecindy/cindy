@@ -99,7 +99,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[0]?.models[0]).not.toHaveProperty('thinkingLevelMap');
   });
 
-  it('preserves explicit model overrides after the catalog marker is cleared', () => {
+  it('preserves explicit overrides for an exact official model after the catalog marker is cleared', () => {
     const { providers } = buildPiNativeProvidersFromConfigs(
       [{
         id: 'deepseek-customized',
@@ -110,8 +110,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
             baseUrl: 'https://api.deepseek.com',
             wireProtocol: 'openai-chat',
             models: [{
-              id: 'deepseek-v4-pro',
-              name: 'My DeepSeek',
+              id: 'deepseek-v4-flash',
+              name: 'My DeepSeek Flash',
               contextWindow: 64_000,
               supportsImageInput: true,
               reasoning: true,
@@ -123,8 +123,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       () => 'secret',
     );
     expect(providers[0]?.models[0]).toEqual({
-      id: 'deepseek-v4-pro',
-      name: 'My DeepSeek',
+      id: 'deepseek-v4-flash',
+      name: 'My DeepSeek Flash',
       contextWindow: 64_000,
       input: ['text', 'image'],
       reasoning: true,

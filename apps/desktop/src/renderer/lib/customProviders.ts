@@ -11,7 +11,11 @@
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
 
-import { DEFAULT_CUSTOM_CONTEXT_WINDOW, PI_REASONING_EFFORTS } from '@cindy/model-providers';
+import {
+  DEFAULT_CUSTOM_CONTEXT_WINDOW,
+  PI_REASONING_EFFORTS,
+  preservesPiCatalogModels,
+} from '@cindy/model-providers';
 import type {
   AgentKind,
   CatalogModel,
@@ -29,26 +33,6 @@ interface PiCatalogRouteDraft {
   models?: readonly ProviderRuntimeModelConfig[];
 }
 
-function piCatalogModelOverridesChanged(
-  previous: readonly ProviderRuntimeModelConfig[] | undefined,
-  next: readonly ProviderRuntimeModelConfig[] | undefined,
-): boolean {
-  const nextById = new Map((next ?? []).map((model) => [model.id, model]));
-  return (previous ?? []).some((model) => {
-    const candidate = nextById.get(model.id);
-    if (!candidate) return false;
-    const projectedFields = (value: ProviderRuntimeModelConfig) => ({
-      name: value.name,
-      contextWindow: value.contextWindow,
-      supportsImageInput: value.supportsImageInput,
-      reasoning: value.reasoning,
-      reasoningEfforts: value.reasoningEfforts,
-      reasoningDefaultEffort: value.reasoningDefaultEffort,
-    });
-    return JSON.stringify(projectedFields(model)) !== JSON.stringify(projectedFields(candidate));
-  });
-}
-
 /** The catalog marker is valid while the route and every existing model's capability fields stay unchanged. */
 export function piCatalogProviderIdAfterRouteEdit(
   agent: AgentKind,
@@ -60,7 +44,7 @@ export function piCatalogProviderIdAfterRouteEdit(
   const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
   return normalizeBaseUrl(previous.baseUrl) === normalizeBaseUrl(next.baseUrl)
     && previous.wireProtocol === next.wireProtocol
-    && !piCatalogModelOverridesChanged(previous.models, next.models)
+    && preservesPiCatalogModels(previous.models, next.models)
     ? marker
     : undefined;
 }

@@ -28,6 +28,7 @@ import {
   isLoopbackProviderUrl,
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
+  preservesPiCatalogModels,
 } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
@@ -495,23 +496,9 @@ function invalidateEditedPiCatalogMarker(
     || previousPi.piCatalogProviderId !== nextPi.piCatalogProviderId
   ) return next;
   const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
-  const nextModelById = new Map(nextPi.models.map((model) => [model.id, model]));
-  const modelOverridesChanged = previousPi.models.some((model) => {
-    const candidate = nextModelById.get(model.id);
-    if (!candidate) return false;
-    const projectedFields = (value: ProviderRuntimeModelConfig) => ({
-      name: value.name,
-      contextWindow: value.contextWindow,
-      supportsImageInput: value.supportsImageInput,
-      reasoning: value.reasoning,
-      reasoningEfforts: value.reasoningEfforts,
-      reasoningDefaultEffort: value.reasoningDefaultEffort,
-    });
-    return JSON.stringify(projectedFields(model)) !== JSON.stringify(projectedFields(candidate));
-  });
   const unchanged = normalizeBaseUrl(previousPi.baseUrl) === normalizeBaseUrl(nextPi.baseUrl)
     && previousPi.wireProtocol === nextPi.wireProtocol
-    && !modelOverridesChanged;
+    && preservesPiCatalogModels(previousPi.models, nextPi.models);
   if (unchanged) return next;
   const pi = { ...nextPi };
   delete pi.piCatalogProviderId;

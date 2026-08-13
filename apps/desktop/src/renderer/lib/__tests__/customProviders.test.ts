@@ -102,6 +102,47 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
       ...withModels,
       models: [{ ...withModels.models[0], defaultEnabled: false }],
     })).toBe('example');
+    expect(piCatalogProviderIdAfterRouteEdit('pi', withModels, {
+      ...withModels,
+      models: [],
+    })).toBeUndefined();
+    expect(piCatalogProviderIdAfterRouteEdit('pi', withModels, {
+      ...withModels,
+      models: [{
+        id: 'model-b',
+        name: 'My Model B',
+        contextWindow: 64_000,
+        supportsImageInput: false,
+        reasoning: true,
+        reasoningEfforts: ['low'],
+        reasoningDefaultEffort: 'low',
+      }],
+    })).toBeUndefined();
+    expect(piCatalogProviderIdAfterRouteEdit('pi', withModels, {
+      ...withModels,
+      models: [
+        { id: 'new-model', name: 'New model' },
+        withModels.models[0],
+      ],
+    })).toBe('example');
+    const twoModels = {
+      ...withModels,
+      models: [
+        withModels.models[0],
+        { id: 'model-b', name: 'Model B', contextWindow: 64_000 },
+      ],
+    };
+    expect(piCatalogProviderIdAfterRouteEdit('pi', twoModels, {
+      ...twoModels,
+      models: [...twoModels.models].reverse(),
+    })).toBe('example');
+    expect(piCatalogProviderIdAfterRouteEdit('pi', withModels, {
+      ...withModels,
+      models: [
+        { ...withModels.models[0], name: 'Edited first duplicate' },
+        withModels.models[0],
+      ],
+    })).toBeUndefined();
   });
 });
 

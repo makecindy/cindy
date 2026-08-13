@@ -35,6 +35,8 @@ export type {
 
 export { PI_REASONING_EFFORTS } from './types.js';
 
+export { preservesPiCatalogModels } from './pi-catalog-marker.js';
+
 export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 
 export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from './catalog.js';
