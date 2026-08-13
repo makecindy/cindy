@@ -2319,9 +2319,11 @@ function ModelSelectorContentView({
           // min-h-0 + flex-1 收缩并内部滚动,搜索框与底部 footer 始终露着。
           'max-h-[min(560px,calc(100vh-120px))]',
           // 宽度自适应(规格 §1.2):长模型名先把面板撑宽,到上限才截断,不硬砍名字。
+          // 最小宽只兜「搜索行 + 空态不局促」的底(Chris 2026-08-13:min 460 让短名列表
+          // 中间留一条空隙 —— 面板应该贴着最长行收窄,理论最小值可以很小)。
           fluidWidth
             ? 'w-full min-w-0'
-            : 'w-max min-w-[460px] max-w-[min(600px,calc(100vw-48px))]',
+            : 'w-max min-w-[300px] max-w-[min(600px,calc(100vw-48px))]',
         )}
       >
         {/* 设计稿 .search-wrap:无框平铺行 + 底部 hairline(不是独立的胶囊输入框)。 */}

@@ -1,4 +1,4 @@
-import { Check, Star, Zap } from 'lucide-react';
+import { Star, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
@@ -281,13 +281,8 @@ export function UnifiedModelRow({
             />
           )}
         </span>
-        <Check
-          size={15}
-          className={cn(
-            'shrink-0 text-[var(--model-item-check)]',
-            selected ? 'visible' : 'invisible',
-          )}
-        />
+        {/* 行尾不放 ✅(Chris 2026-08-13 裁决:选中已有整行底色,再加勾是重复信号,
+            还平白吃掉一列宽度);选中态语义由 aria-selected 承载。 */}
       </div>
       {entry.description && (
         // 单行截断 + title 全文;宽度上限收紧到约等于最长模型名的量级(~30ch)——
