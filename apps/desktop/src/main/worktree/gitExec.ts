@@ -4,7 +4,7 @@
  * 职责:
  *   - 用 child_process.execFile 调用 git, 保留 stderr/stdout/exitCode
  *   - 自动处理 dubious-ownership: 若 stderr 含 "dubious ownership", 提取路径,
- *     `git config --global --add safe.directory <path>`, 重试**一次**原命令
+ *     精确值尚不存在时添加 `safe.directory`, 重试**一次**原命令
  *   - 抛出 GitExecError 让上层 errorClassifier 解析为 WorktreeError
  *
  * 不在这里做 errorClassifier — 那是上层 createWorktree/removeWorktree 的职责,
@@ -69,6 +69,8 @@ export interface GitExecOpts {
    */
   timeoutMs?: number;
 }
+
+const safeDirectoryQueues = new Map<string, Promise<void>>();
 
 /** POSIX 超时后 SIGTERM → SIGKILL 的宽限期:给 git 留出清理 .lock 的时间窗。 */
 const POSIX_KILL_GRACE_MS = 1_500;
@@ -446,6 +448,34 @@ function extractDubiousPath(stderr: string): string | null {
   return null;
 }
 
+async function listSafeDirectories(): Promise<string[]> {
+  try {
+    const { stdout } = await execFileOnce(['config', '--global', '--get-all', 'safe.directory']);
+    const values = stdout.split(/\r?\n/);
+    if (values.at(-1) === '') values.pop();
+    const resetIndex = values.lastIndexOf('');
+    return resetIndex < 0 ? values : values.slice(resetIndex + 1);
+  } catch (err) {
+    if (err instanceof GitExecError && err.exitCode === 1) return [];
+    throw err;
+  }
+}
+
+/** Add an exact value only when the user's global config does not already contain it. */
+async function ensureSafeDirectory(directory: string): Promise<void> {
+  const previous = safeDirectoryQueues.get(directory) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(async () => {
+    if ((await listSafeDirectories()).includes(directory)) return;
+    await execFileOnce(['config', '--global', '--add', 'safe.directory', directory]);
+  });
+  safeDirectoryQueues.set(directory, run);
+  try {
+    await run;
+  } finally {
+    if (safeDirectoryQueues.get(directory) === run) safeDirectoryQueues.delete(directory);
+  }
+}
+
 /**
  * 主 API: 执行 git 命令, 自动处理 dubious-ownership。
  *
@@ -471,9 +501,7 @@ export async function gitExec(
       const dubiousPath = extractDubiousPath(err.stderr) ?? cwd;
       if (dubiousPath) {
         try {
-          await execFileOnce(
-            ['config', '--global', '--add', 'safe.directory', dubiousPath],
-          );
+          await ensureSafeDirectory(dubiousPath);
           // 配完 safe.directory 后重试原命令
           return await execFileOnce(args, cwd, opts);
         } catch {
