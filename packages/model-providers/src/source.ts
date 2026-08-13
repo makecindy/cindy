@@ -239,15 +239,6 @@ export function mergeWithBundled(primary: Catalog): Catalog {
     const bundled = bundledById.get(p.id);
     const bundledAccess = bundled ? legacyAccessFor(p, bundled) : undefined;
     if (!bundled) return p;
-    // xAI 的 Pi 通道不是服务端目录对 Gateway 的承诺，而是客户端随 Pi 官方目录同步的
-    // 原生直连清单。远端 Catalog 仍可更新 Claude/Codex 两个 root，但不能用缺席或旧的
-    // `models.pi` 遮掉客户端刚同步的 Grok（例如 4.6）。显式停用仍由 Pi 官方快照下一次
-    // 同步删除，不借用服务端 Catalog 的缺席语义。
-    const keepBundledPiCatalog =
-      p.id === 'xai'
-      && bundled.agents.includes('pi')
-      && bundled.routing.pi !== undefined
-      && bundled.models.pi !== undefined;
     const inheritImage =
       p.id === 'xai' &&
       p.imageModels === undefined &&
@@ -271,8 +262,7 @@ export function mergeWithBundled(primary: Catalog): Catalog {
     if (
       !(p.access === undefined && bundledAccess !== undefined) &&
       !inheritImage &&
-      !inheritEmbedding &&
-      !keepBundledPiCatalog
+      !inheritEmbedding
     ) {
       return p;
     }
@@ -293,13 +283,6 @@ export function mergeWithBundled(primary: Catalog): Catalog {
             ...(p.embeddingDefaults === undefined && bundled.embeddingDefaults !== undefined
               ? { embeddingDefaults: bundled.embeddingDefaults }
               : {}),
-          }
-        : {}),
-      ...(keepBundledPiCatalog
-        ? {
-            agents: p.agents.includes('pi') ? p.agents : [...p.agents, 'pi' as AgentKind],
-            routing: { ...p.routing, pi: bundled.routing.pi },
-            models: { ...p.models, pi: bundled.models.pi },
           }
         : {}),
     };
@@ -330,17 +313,9 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   // 保留新版客户端随包快照，避免复现 presets 曾出现的“旧远端遮掉新本地能力”；
   // 远端较新时整份生效，继续支持 status=retired、route 删除和价格纠错。
   const selectedRegistry = selectNewerModelRegistry(primary, BUNDLED_CATALOG);
-  // xAI is the only provider whose model list is a static part of this Catalog snapshot. When
-  // bundled wins the registry revision guard, keep its xAI provider with that same snapshot
-  // instead of combining a new registry with an older remote/LKG list.
-  const providers = selectedRegistry.fromFallback && primary.modelRegistry !== undefined
-    ? merged.map((provider) =>
-        provider.id === 'xai' ? (bundledById.get('xai') ?? provider) : provider,
-      )
-    : merged;
   return {
     version: primary.version,
-    providers,
+    providers: merged,
     ...(presets && presets.length > 0 ? { presets } : {}),
     ...(selectedRegistry.modelRegistry ? { modelRegistry: selectedRegistry.modelRegistry } : {}),
   };

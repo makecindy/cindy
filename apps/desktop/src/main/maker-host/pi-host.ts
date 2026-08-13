@@ -54,7 +54,7 @@ import {
   getDesktopMcpToolApprovalPresentation,
 } from './mcp-tool-approval-policy.js';
 import { getRipgrepBinaryPath } from './runtime-configs.js';
-import { resolveXdPiGatewayWireProtocol } from './active-catalog.js';
+import { getActiveCatalog, resolveXdPiGatewayWireProtocol } from './active-catalog.js';
 
 const log = createLogger('pi-host');
 
@@ -422,16 +422,29 @@ export async function buildXaiPiNativeProvider(
   model?: string,
   allowHistoricalResume = false,
 ): Promise<PiNativeProvidersResult> {
-  const officialModels = officialPiModels('xai') ?? [];
-  const models = officialModels.map((candidate) => ({
-    ...candidate,
-    id: `xai/${candidate.id}`,
+  const catalogModels =
+    getActiveCatalog().providers.find((provider) => provider.id === 'xai')?.models.pi ?? [];
+  const officialById = new Map((officialPiModels('xai') ?? []).map((candidate) => [candidate.id, candidate]));
+  const models = catalogModels.map((catalogModel) => ({
+    ...(officialById.get(catalogModel.id) ?? configuredPiModel({
+      id: catalogModel.id,
+      name: catalogModel.name,
+      contextWindow: catalogModel.contextWindowVerified ? catalogModel.contextWindow : undefined,
+      supportsImageInput:
+        catalogModel.supportsImageInput === true
+        || catalogModel.modalities?.input.includes('image') === true,
+      reasoning: catalogModel.efforts.length > 0,
+      reasoningEfforts: catalogModel.efforts.filter(
+        (effort): effort is PiReasoningEffort => effort !== 'ultra',
+      ),
+    })),
+    id: `xai/${catalogModel.id}`,
     // Keep the xai/ prefix on the wire so the existing compat proxy selects its Responses
     // bridge, which refreshes OAuth per request, recovers 401/403, and injects x_search.
     api: 'anthropic-messages' as const,
   }));
   const aliases = Object.fromEntries(
-    officialModels.flatMap((candidate) => [
+    catalogModels.flatMap((candidate) => [
       [candidate.id, `xai/${candidate.id}`],
       [`xai/${candidate.id}`, `xai/${candidate.id}`],
     ]),

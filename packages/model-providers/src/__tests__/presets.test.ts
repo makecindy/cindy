@@ -270,7 +270,7 @@ describe('parseCatalog presets 容错', () => {
 });
 
 describe('mergeWithBundled presets 兜底', () => {
-  it('远端 xAI 目录不能覆盖客户端随 Pi 官方目录同步的原生模型清单', () => {
+  it('远端 xAI 目录缺少 Pi 时不在 bundled 合并层复活静态成员', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!;
     const remoteXai = {
       ...bundledXai,
@@ -286,10 +286,9 @@ describe('mergeWithBundled presets 兜底', () => {
     };
     const merged = mergeWithBundled(minimalCatalog({ providers: [remoteXai] }));
     const xai = merged.providers.find((provider) => provider.id === 'xai');
-    expect(xai?.agents).toContain('pi');
-    expect(xai?.routing.pi).toEqual(bundledXai.routing.pi);
-    expect(xai?.models.pi).toEqual(bundledXai.models.pi);
-    expect(xai?.models.pi?.some((model) => model.id === 'grok-4.6')).toBe(true);
+    expect(xai?.agents).not.toContain('pi');
+    expect(xai?.routing.pi).toBeUndefined();
+    expect(xai?.models.pi).toBeUndefined();
   });
 
   it('远端 presets 与 bundled 按 id 合并：远端同 id 优先，bundled 缺项不丢', () => {

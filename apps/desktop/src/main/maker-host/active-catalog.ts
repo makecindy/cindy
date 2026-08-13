@@ -74,6 +74,26 @@ let discoveredCodex: CatalogModel[] = [];
  * 空/坏数据绝不抹掉静态兜底。由 generic-oauth 的 models 发现流程写入。
  */
 const discoveredByProvider = new Map<string, Partial<Record<AgentKind, CatalogModel[]>>>();
+
+/**
+ * xAI 订阅账号从官方 `/v1/user` → `/v1/models` 读到的权威成员清单。
+ *
+ * `null` = 当前 owner 尚无成功账号快照，允许公共 Catalog / bundled 只作为启动救急；
+ * `[]` = 上游明确返回空清单，仍是权威结果。成员保存为 canonical `xai/grok-*`，
+ * Claude/Codex 原样消费，Pi 在投影时去掉 `xai/`。
+ */
+export interface XaiDiscoveredModel {
+  id: string;
+  name?: string;
+  description?: string;
+  contextWindow?: number;
+  contextWindowVerified?: boolean;
+  maxOutput?: number;
+  efforts?: CatalogModel['efforts'];
+  defaultEffort?: CatalogModel['defaultEffort'];
+}
+
+let xaiDiscoveredModels: XaiDiscoveredModel[] | null = null;
 /** 单 tab 能力覆盖块(shared/modelAccess ModelAccessAgentOverride 同形)。 */
 export interface XdGatewayAgentOverride {
   contextWindow?: number;
@@ -303,7 +323,11 @@ function projectCodexModelsToBridges(
 }
 
 /** 静态段被淘汰的供应商：先清空 providers.models，再由 discovery + Registry/local root 装配。 */
-const DYNAMIC_LIST_PROVIDER_IDS: ReadonlySet<string> = new Set(['anthropic', 'openai', 'xd']);
+const DYNAMIC_LIST_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  'anthropic',
+  'openai',
+  'xd',
+]);
 
 /**
  * Anthropic discovery 映射阶段读取的 Registry 字段子集：上游缺字段时先用它补齐，
@@ -459,6 +483,130 @@ function assembleRoot(
   return preserveDeclarationOrder ? out : sortModelsByOrder(out);
 }
 
+/** Registry / local override 只能补账号已返回的条目，不能重新实体化账号没有的成员。 */
+function assembleAuthoritativeRoot(
+  providerId: string,
+  agent: RootAgentKind,
+  models: readonly CatalogModel[],
+  plan: ModelPlaneRegistryPlan,
+): CatalogModel[] {
+  const memberIds = new Set(models.map((model) => model.id));
+  return assembleRoot(providerId, agent, models, plan, true).filter((model) =>
+    memberIds.has(model.id),
+  );
+}
+
+function xaiCatalogModelById(
+  provider: Provider,
+  id: string,
+  agent: AgentKind,
+): CatalogModel | undefined {
+  const bundled = BUNDLED_CATALOG.providers.find((entry) => entry.id === 'xai');
+  if (agent === 'pi') {
+    const bare = id.startsWith('xai/') ? id.slice('xai/'.length) : id;
+    return (
+      provider.models.pi?.find((model) => model.id === bare)
+      ?? bundled?.models.pi?.find((model) => model.id === bare)
+    );
+  }
+  return (
+    provider.models[agent]?.find((model) => model.id === id)
+    ?? bundled?.models[agent]?.find((model) => model.id === id)
+  );
+}
+
+function materializeXaiAccountModels(
+  provider: Provider,
+  agent: RootAgentKind,
+  discovered: readonly XaiDiscoveredModel[],
+): CatalogModel[] {
+  return discovered.map((entry, index) => {
+    const catalogModel =
+      xaiCatalogModelById(provider, entry.id, agent)
+      ?? xaiCatalogModelById(provider, entry.id, 'pi');
+    const registry = modelRegistryMetaFields('xai', agent, entry.id);
+    const efforts = entry.efforts
+      ? [...entry.efforts]
+      : [...(registry?.efforts ?? catalogModel?.efforts ?? [])];
+    const requestedDefault =
+      entry.defaultEffort !== undefined
+        ? entry.defaultEffort
+        : (registry?.defaultEffort ?? catalogModel?.defaultEffort ?? null);
+    const defaultEffort =
+      requestedDefault !== null && efforts.includes(requestedDefault)
+        ? requestedDefault
+        : efforts.includes('high')
+          ? 'high'
+          : (efforts[efforts.length - 1] ?? null);
+    const contextWindow =
+      entry.contextWindow ?? registry?.contextWindow ?? catalogModel?.contextWindow ?? 200_000;
+    const contextWindowVerified =
+      entry.contextWindow !== undefined
+        ? (entry.contextWindowVerified ?? true)
+        : registry?.contextWindow !== undefined || catalogModel?.contextWindowVerified === true;
+    return {
+      ...catalogModel,
+      id: entry.id,
+      name: entry.name ?? registry?.name ?? catalogModel?.name ?? entry.id.slice('xai/'.length),
+      ...(entry.description !== undefined
+        ? { description: entry.description }
+        : registry?.description !== undefined
+          ? { description: registry.description }
+          : {}),
+      group: registry?.group ?? catalogModel?.group ?? 'grok',
+      sortOrder: registry?.sortOrder ?? catalogModel?.sortOrder ?? 1_000 + index,
+      contextWindow,
+      ...(contextWindowVerified ? { contextWindowVerified: true } : {}),
+      ...(entry.maxOutput !== undefined
+        ? { maxOutput: entry.maxOutput }
+        : registry?.maxOutput !== undefined
+          ? { maxOutput: registry.maxOutput }
+          : catalogModel?.maxOutput !== undefined
+            ? { maxOutput: catalogModel.maxOutput }
+            : {}),
+      efforts,
+      defaultEffort,
+      ...(registry?.supportsFastMode !== undefined
+        ? { supportsFastMode: registry.supportsFastMode }
+        : {}),
+      status: registry?.status ?? catalogModel?.status ?? 'active',
+      defaultEnabled: registry?.defaultEnabled ?? catalogModel?.defaultEnabled ?? true,
+    };
+  });
+}
+
+function bundledXaiFallbackMembers(provider: Provider): XaiDiscoveredModel[] {
+  return (provider.models.pi ?? []).map((model) => ({
+    id: model.id.startsWith('xai/') ? model.id : `xai/${model.id}`,
+  }));
+}
+
+function projectXaiPiModel(
+  provider: Provider,
+  model: CatalogModel,
+): CatalogModel {
+  const bareId = model.id.startsWith('xai/') ? model.id.slice('xai/'.length) : model.id;
+  const piMetadata = xaiCatalogModelById(provider, model.id, 'pi');
+  return {
+    ...model,
+    ...piMetadata,
+    id: bareId,
+    name: model.name,
+    description: model.description,
+    group: model.group,
+    sortOrder: model.sortOrder,
+    contextWindow: model.contextWindow,
+    ...(model.contextWindowVerified !== undefined
+      ? { contextWindowVerified: model.contextWindowVerified }
+      : {}),
+    ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
+    efforts: model.efforts,
+    defaultEffort: model.defaultEffort,
+    status: model.status,
+    defaultEnabled: model.defaultEnabled,
+  };
+}
+
 /** 把 provider 的全部 per-agent 模型清单清零(保留身份卡);已为空则原样返回。 */
 function withEmptyModels(p: Provider): Provider {
   const entries = Object.entries(p.models) as [AgentKind, CatalogModel[]][];
@@ -477,26 +625,11 @@ function computeMerged(): Catalog {
   // XD Provider 使用随客户端发布的固定壳，远端 Catalog 只能管理非 XD Provider。
   // `/models` 会在下方重建固定壳的全部模型，Catalog 缺失、刷新或异常都不能改变 XD。
   const builtinXd = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd');
+  const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
   const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
   const providerSources = b.providers.filter((provider) => provider.id !== 'xd');
   if (builtinXd) providerSources.splice(Math.max(0, remoteXdIndex), 0, builtinXd);
-  const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
-  let providers: Provider[] = providerSources.map((provider): Provider => {
-    if (provider.id !== 'xai') return provider;
-    // Pi 的 xAI 清单来自随包同步的 Pi 官方目录，独立于 Claude/Codex 的 Registry root。
-    // 即使调用方直接 setActiveCatalog 绕过 source merge，也不能把 Pi 再镜像成旧 Grok 表。
-    const piRoute = bundledXai?.routing.pi;
-    const piModels = bundledXai?.models.pi;
-    if (!piRoute || !piModels) return provider;
-    return {
-      ...provider,
-      agents: provider.agents.includes('pi')
-        ? provider.agents
-        : [...provider.agents, 'pi' as AgentKind],
-      routing: { ...provider.routing, pi: piRoute },
-      models: { ...provider.models, pi: piModels },
-    };
-  });
+  let providers: Provider[] = providerSources;
 
   // 先清零已退役的静态 providers.models 段：无论目录来自 bundled 还是远端，
   // OpenAI/Anthropic 的 root 都只由 discovery 证据 + Registry presence + local
@@ -589,22 +722,48 @@ function computeMerged(): Catalog {
       return { ...p, models: { ...p.models, 'claude-code': root, codex: codexBridge, pi: root } };
     }
     if (p.id === 'xai') {
-      const claudeRoot = assembleRoot(
-        'xai',
-        'claude-code',
-        p.models['claude-code'] ?? [],
-        plan,
-        true,
-      );
-      const codexRoot = assembleRoot('xai', 'codex', p.models.codex ?? [], plan, true);
+      const useAccountMembership = xaiDiscoveredModels !== null;
+      const accountModels = xaiDiscoveredModels ?? [];
+      // The bundled-only fallback uses Pi's official list as its membership seed because it is
+      // the freshest packaged xAI list (and currently carries Grok 4.6). A loaded server Catalog
+      // remains the preceding fallback and keeps its own legacy static membership for old server
+      // compatibility. Any successful account snapshot, including [], overrides both.
+      const authoritativeMembers = useAccountMembership
+        ? accountModels
+        : b === BUNDLED_CATALOG || p === bundledXai
+          ? bundledXaiFallbackMembers(p)
+          : null;
+      const claudeSeed = authoritativeMembers
+        ? materializeXaiAccountModels(p, 'claude-code', authoritativeMembers)
+        : (p.models['claude-code'] ?? []);
+      const codexSeed = authoritativeMembers
+        ? materializeXaiAccountModels(p, 'codex', authoritativeMembers)
+        : (p.models.codex ?? []);
+      const claudeRoot = authoritativeMembers
+        ? assembleAuthoritativeRoot('xai', 'claude-code', claudeSeed, plan)
+        : assembleRoot('xai', 'claude-code', claudeSeed, plan, true);
+      const codexRoot = authoritativeMembers
+        ? assembleAuthoritativeRoot('xai', 'codex', codexSeed, plan)
+        : assembleRoot('xai', 'codex', codexSeed, plan, true);
+      const piModels = claudeRoot.map((model) => projectXaiPiModel(p, model));
       return {
         ...p,
+        agents: p.agents.includes('pi') ? p.agents : [...p.agents, 'pi' as AgentKind],
+        routing: {
+          ...p.routing,
+          ...(p.routing.pi
+            ? {}
+            : bundledXai?.routing.pi
+              ? {
+                  pi: bundledXai.routing.pi,
+                }
+              : {}),
+        },
         models: {
           ...p.models,
           'claude-code': claudeRoot,
           codex: codexRoot,
-          // Pi 保留自己的官方目录裸 ID、协议与能力，不镜像 namespaced Claude root。
-          ...(p.agents.includes('pi') ? { pi: p.models.pi ?? [] } : {}),
+          pi: piModels,
         },
       };
     }
@@ -743,19 +902,10 @@ export function setActiveCatalog(catalog: Catalog): void {
 export function commitModelPlaneFromCatalog(catalog: Catalog): void {
   const current = base ?? BUNDLED_CATALOG;
   const incomingXai = catalog.providers.find((provider) => provider.id === 'xai');
-  const currentXai = current.providers.find((provider) => provider.id === 'xai');
   const providers =
     incomingXai && current.providers.some((provider) => provider.id === 'xai')
       ? current.providers.map((provider) =>
-          provider.id === 'xai'
-            ? {
-                ...provider,
-                models: {
-                  ...incomingXai.models,
-                  ...(currentXai?.models.pi ? { pi: currentXai.models.pi } : {}),
-                },
-              }
-            : provider,
+          provider.id === 'xai' ? incomingXai : provider,
         )
       : current.providers;
   base = {
@@ -830,6 +980,12 @@ export function setDiscoveredProviderModels(
   const byAgent = discoveredByProvider.get(providerId) ?? {};
   byAgent[agent] = [...models];
   discoveredByProvider.set(providerId, byAgent);
+  markChanged();
+}
+
+/** 成功空数组同样是权威成员快照；null 仅表示当前 owner 尚无成功快照。 */
+export function setXaiDiscoveredModels(models: readonly XaiDiscoveredModel[] | null): void {
+  xaiDiscoveredModels = models === null ? null : models.map((model) => ({ ...model }));
   markChanged();
 }
 

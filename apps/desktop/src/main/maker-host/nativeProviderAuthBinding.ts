@@ -3,9 +3,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import {
+  isConnectionSourceKind,
+  NATIVE_PROVIDER_CONNECTION_SOURCE,
+  type ConnectionSourceKind,
+  type NativeHarnessInheritedProviderId,
+  type NativeProviderId,
+} from './model-discovery/connection-source.js';
 
-type NativeProviderId = 'anthropic' | 'openai' | 'xai';
-const NATIVE_PROVIDER_IDS = ['anthropic', 'openai', 'xai'] as const satisfies readonly NativeProviderId[];
+const NATIVE_PROVIDER_IDS = [
+  'anthropic',
+  'openai',
+  'xai',
+] as const satisfies readonly NativeProviderId[];
 type BindingFile = Partial<Record<NativeProviderId, string>> & {
   legacyClaimOwner?: string;
   /**
@@ -33,6 +43,8 @@ type BindingFile = Partial<Record<NativeProviderId, string>> & {
    * 就存在」。登出时清除（那之后的凭证若还在，就回到「可被继承」的语义）。
    */
   selfAuthorized?: Partial<Record<NativeProviderId, string>>;
+  /** 授权来源审计；旧文件缺失时继续由 selfAuthorized / provider 迁移语义兼容。 */
+  sources?: Partial<Record<NativeProviderId, ConnectionSourceKind>>;
 };
 
 function bindingPath(): string {
@@ -78,7 +90,10 @@ function readBindingsOrFail(): BindingRead {
     // 只修 revoked、保住其余归属 —— 否则一次「修复」会把别人的 owner 抹掉,反倒开出新的
     // 误认领口子(PR #548 review)。
     const revoked = (value as { revoked?: unknown }).revoked;
-    if (revoked !== undefined && (typeof revoked !== 'object' || revoked === null || Array.isArray(revoked))) {
+    if (
+      revoked !== undefined &&
+      (typeof revoked !== 'object' || revoked === null || Array.isArray(revoked))
+    ) {
       const { revoked: _bad, ...rest } = value as BindingFile;
       return { ok: false, reason: 'badRevoked', bindings: rest };
     }
@@ -136,6 +151,10 @@ export function bindNativeProviderAuth(provider: NativeProviderId): void {
     writeBindings({
       ...bindings,
       selfAuthorized: { ...bindings.selfAuthorized, [provider]: owner },
+      sources: {
+        ...bindings.sources,
+        [provider]: 'explicit-provider-oauth',
+      },
       [provider]: owner,
     });
     return;
@@ -161,6 +180,10 @@ export function bindNativeProviderAuth(provider: NativeProviderId): void {
     ...salvaged,
     revoked: suppressed,
     selfAuthorized: { ...salvaged.selfAuthorized, [provider]: owner },
+    sources: {
+      ...salvaged.sources,
+      [provider]: 'explicit-provider-oauth',
+    },
     [provider]: owner,
   });
 }
@@ -173,7 +196,24 @@ export function bindNativeProviderAuth(provider: NativeProviderId): void {
 export function isNativeProviderAuthSelfAuthorized(provider: NativeProviderId): boolean {
   const read = readBindingsOrFail();
   if (!read.ok && read.reason === 'unreadable') return true;
-  return read.bindings.selfAuthorized?.[provider] !== undefined;
+  return (
+    read.bindings.sources?.[provider] === 'explicit-provider-oauth' ||
+    read.bindings.selfAuthorized?.[provider] !== undefined
+  );
+}
+
+/** 返回当前 owner 绑定的授权来源；归属不明或旧文件未记录时返回 null。 */
+export function getNativeProviderAuthSource(
+  provider: NativeProviderId,
+): ConnectionSourceKind | null {
+  if (!isNativeProviderAuthBound(provider)) return null;
+  const read = readBindingsOrFail();
+  if (!read.ok) return null;
+  const explicit = read.bindings.sources?.[provider];
+  if (isConnectionSourceKind(explicit)) return explicit;
+  if (read.bindings.selfAuthorized?.[provider] !== undefined) return 'explicit-provider-oauth';
+  // 旧版 xAI token 只可能由 Cindy 的浏览器 OAuth 写入；不得把缺少来源字段误报成 CLI 继承。
+  return NATIVE_PROVIDER_CONNECTION_SOURCE[provider];
 }
 
 /**
@@ -209,6 +249,11 @@ export function unbindNativeProviderAuth(
     delete selfAuthorized[provider];
     bindings.selfAuthorized = selfAuthorized;
   }
+  if (bindings.sources?.[provider] !== undefined) {
+    const sources = { ...bindings.sources };
+    delete sources[provider];
+    bindings.sources = sources;
+  }
   if (marking) bindings.revoked = { ...(bindings.revoked ?? {}), [provider]: owner as string };
   writeBindings(bindings);
 }
@@ -234,7 +279,17 @@ export function migrateLegacyNativeProviderAuthBindings(
     // 显式登出过的 provider 一律跳过:这条一次性迁移同样不能把用户弃用掉的残留凭证
     // 认领回来(PR #548 review)。
     if (bindings.revoked && provider in bindings.revoked) continue;
-    if (available[provider] && !next[provider]) next[provider] = ownerId;
+    if (available[provider] && !next[provider]) {
+      next[provider] = ownerId;
+      next.sources = {
+        ...next.sources,
+        [provider]: NATIVE_PROVIDER_CONNECTION_SOURCE[provider],
+      };
+      // xAI 的旧 safeStorage blob 也是 Cindy 自己完成的 OAuth，不是本机 CLI 继承。
+      if (provider === 'xai') {
+        next.selfAuthorized = { ...next.selfAuthorized, xai: ownerId };
+      }
+    }
   }
   writeBindings(next);
 }
@@ -242,16 +297,18 @@ export function migrateLegacyNativeProviderAuthBindings(
 /**
  * Claim an auto-detected local CLI credential for the current owner.
  *
- * Applies to every native provider, not just Codex. Two independent holes make
+ * Applies only to Cindy's native Harness providers (Claude Code and Codex). Two independent holes make
  * the intended first-owner auto-connect strand forever without this repair:
  *   - the one-shot legacy migration above can consume `legacyClaimOwner` while a
  *     credential is not visible yet (the Codex ~/.codex reconcile hardlink is
  *     created after startup, so its probe reads false);
  *   - the migration only runs for cloud owners that hold the legacy namespace
  *     claim, so local-mode owners — and cloud owners whose claim marker is
- *     absent — never get a chance to inherit at all, no matter how visible the
- *     credential is. Anthropic and xAI read their credential synchronously and
- *     are therefore immune to the first hole but not to the second.
+ *     absent — never get a chance to inherit at all, no matter how visible the credential is.
+ *
+ * xAI is deliberately excluded: it is a downstream provider, not a Cindy Harness. Its token may
+ * only be bound by Cindy's explicit OAuth flow (or the one-time migration of a token that Cindy
+ * itself stored in an older version), never by generic local-CLI detection.
  *
  * This repairs exactly that: only when the slot has no owner, the credential
  * exists, and no OTHER account won the legacy claim. An existing binding is
@@ -259,7 +316,7 @@ export function migrateLegacyNativeProviderAuthBindings(
  * migrateLegacyNativeProviderAuthBindings.
  */
 export function claimDetectedNativeProviderAuth(
-  provider: NativeProviderId,
+  provider: NativeHarnessInheritedProviderId,
   hasCredential: () => boolean,
 ): boolean {
   const owner = getActiveAppSession().dataOwnerId;
@@ -284,7 +341,11 @@ export function claimDetectedNativeProviderAuth(
   // 的口子。解除只有「用户再次显式授权」一条路(PR #548 review)。
   if (bindings.revoked && provider in bindings.revoked) return false;
   if (!hasCredential()) return false;
-  writeBindings({ ...bindings, [provider]: owner });
+  writeBindings({
+    ...bindings,
+    sources: { ...bindings.sources, [provider]: 'native-harness-inherited' },
+    [provider]: owner,
+  });
   return true;
 }
 
@@ -295,7 +356,7 @@ export function claimDetectedNativeProviderAuth(
  * that owner, while account switches and explicit revocation still fail closed.
  */
 export function restoreNativeProviderAuthForRecovery(
-  provider: NativeProviderId,
+  provider: NativeHarnessInheritedProviderId,
   expectedOwner: string,
   hasCredential: () => boolean,
 ): boolean {
@@ -307,6 +368,10 @@ export function restoreNativeProviderAuthForRecovery(
   if (bindings.revoked && provider in bindings.revoked) return false;
   if (!hasCredential()) return false;
   if (provider in bindings) return bindings[provider] === expectedOwner;
-  writeBindings({ ...bindings, [provider]: expectedOwner });
+  writeBindings({
+    ...bindings,
+    sources: { ...bindings.sources, [provider]: 'native-harness-inherited' },
+    [provider]: expectedOwner,
+  });
   return true;
 }

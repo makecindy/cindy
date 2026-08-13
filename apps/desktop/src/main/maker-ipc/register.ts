@@ -685,6 +685,7 @@ import {
   getAnthropicModelDiscoveryFailure,
   refreshAnthropicModelsFromHttp,
 } from '../maker-host/model-discovery/anthropic.js';
+import { refreshXaiModelsFromHttp } from '../maker-host/model-discovery/xai.js';
 import { refreshBuiltinProviderModels } from '../maker-host/provider-model-refresh.js';
 import {
   configureProviderModelAutoRefresh,
@@ -5643,9 +5644,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         refreshAnthropic: refreshAnthropicModelsFromHttp,
         refreshOpenAi: () =>
           maker.refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer' }),
-        refreshXaiCatalog: async () => {
-          await refreshActiveCatalogFromSource();
-        },
+        refreshXai: refreshXaiModelsFromHttp,
       }),
   });
   options.onProviderModelAutoRefreshConfigured();

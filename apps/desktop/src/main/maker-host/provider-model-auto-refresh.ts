@@ -292,15 +292,9 @@ export function createProviderModelRefreshCoordinator(
       }
 
       const requestedIds = providerIds ?? BUILTIN_REFRESHABLE_PROVIDER_IDS;
-      const ids = requestedIds.filter(
-        (id) =>
-          connectedIds.has(id) &&
-          // xAI's provider refresh reads the same public Catalog as refreshCatalog. The shared
-          // refresh already ran (or was intentionally skipped because splash/cooldown made its
-          // snapshot current), so running the provider hook would fetch the identical source a
-          // second time. Manual xAI refresh still uses refreshProvider and bypasses this path.
-          !(id === 'xai' && deps.refreshCatalog),
-      );
+      // Public Catalog refreshes metadata; each connected account still refreshes its own
+      // authoritative membership independently, including xAI `/user` → `/models`.
+      const ids = requestedIds.filter((id) => connectedIds.has(id));
       // 启动期无视冷却（见 `'startup'` trigger 注释）；in-flight 合并仍生效，所以并发的
       // 启动触发与手动刷新不会各起一次 codex app-server。
       const force = isForcedProviderModelAutoRefreshTrigger(trigger);

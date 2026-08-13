@@ -3,9 +3,9 @@
  *
  * 历史:本文件曾是「迁移前硬编码清单的逐字快照」守卫(规则 10 no-break)。统一重构后
  * 静态清单**按设计**退役——anthropic/openai/xd 的清单运行时动态注入(SDK 发现 /
- * codex 注册表 / 网关下发,见 active-catalog + model-discovery),bundled 只剩 xai。
+ * codex 注册表 / 网关下发,见 active-catalog + model-discovery),bundled 的 xai 仅作离线 fallback。
  * 冻结快照随之退役;本守卫改为守派生机制本身的契约:
- *   1. bundled 派生 = 仅 xai 静态清单(动态供应商零静态模型,不用假数据冒充);
+ *   1. bundled 派生 = xai 离线 fallback(账号发现成功后由账号快照收缩成员);
  *   2. 注入后的目录按 provider 序 flatMap + id 首见去重,per-agent 分叉字段透传;
  *   3. refreshCatalogDerivedModels 原地 splice(已建会话持引用可见新目录)。
  */
@@ -228,7 +228,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     );
   });
 
-  it('bundled(未注入)派生 = 仅 xai 静态清单,动态供应商不贡献任何条目', () => {
+  it('bundled(未注入)派生 = xai 离线 fallback,其它动态供应商不贡献条目', () => {
     const cc = deriveAvailableModels(BUNDLED_CATALOG, 'claude-code');
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');
     expect(cc.map((m) => m.id)).toEqual([

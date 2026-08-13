@@ -61,7 +61,7 @@ describe('provider model auto-refresh coordinator', () => {
     expect(refreshCatalog).toHaveBeenCalledOnce();
   });
 
-  it('does not repeat the shared Catalog refresh through the connected xAI provider hook', async () => {
+  it('refreshes xAI account membership independently after shared Catalog metadata', async () => {
     let now = 1_000;
     const refreshCatalog = vi.fn(async () => undefined);
     const refreshProvider = vi.fn(async () => undefined);
@@ -73,20 +73,20 @@ describe('provider model auto-refresh coordinator', () => {
       log: { debug: vi.fn(), warn: vi.fn() },
     });
 
-    // Splash already loaded the public Catalog; startup must not immediately fetch it again via
-    // xAI's provider-level hook.
+    // Splash already loaded the public Catalog; startup still reads the connected account list.
     await coordinator.requestAutoRefresh('startup');
     expect(refreshCatalog).not.toHaveBeenCalled();
-    expect(refreshProvider).not.toHaveBeenCalled();
+    expect(refreshProvider).toHaveBeenCalledOnce();
+    expect(refreshProvider).toHaveBeenLastCalledWith('xai');
 
     now += PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
     await coordinator.requestAutoRefresh('foreground');
     expect(refreshCatalog).toHaveBeenCalledOnce();
-    expect(refreshProvider).not.toHaveBeenCalled();
+    expect(refreshProvider).toHaveBeenCalledOnce();
 
     // An explicit manual refresh remains available and executes the provider hook once.
     await coordinator.refreshManually('xai');
-    expect(refreshProvider).toHaveBeenCalledOnce();
+    expect(refreshProvider).toHaveBeenCalledTimes(2);
   });
 
   it('refreshes only connected built-ins and applies a per-provider cooldown', async () => {

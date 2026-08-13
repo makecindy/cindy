@@ -22,6 +22,7 @@ import {
   setAnthropicDiscoveredModels,
   setDiscoveredCodexModels,
   setLocalCatalogOverrides,
+  setXaiDiscoveredModels,
   setXdGatewayModels,
 } from '../active-catalog.js';
 import {
@@ -88,12 +89,13 @@ afterEach(() => {
   setActiveCatalog(BUNDLED_CATALOG);
   setDiscoveredCodexModels([]);
   setAnthropicDiscoveredModels([]);
+  setXaiDiscoveredModels(null);
   setXdGatewayModels([]);
   setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
 });
 
 describe('registry presence 实体化', () => {
-  it('bundled xAI 离线快照与同仓 Registry 投影逐字节一致,禁止发布期人工漂移', () => {
+  it('a loaded legacy Catalog keeps its own xAI fallback membership instead of importing Pi members', () => {
     const expected = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!expected) throw new Error('bundled catalog missing xai');
     const generatedCatalog = structuredClone(BUNDLED_CATALOG);
@@ -105,7 +107,9 @@ describe('registry presence 实体化', () => {
     setActiveCatalog(generatedCatalog);
     expect(models('xai', 'claude-code')).toEqual(expected.models['claude-code']);
     expect(models('xai', 'codex')).toEqual(expected.models.codex);
-    expect(models('xai', 'pi')).toEqual(expected.models.pi);
+    expect(models('xai', 'pi').map((model) => model.id)).toEqual(
+      expected.models['claude-code']?.map((model) => model.id.slice('xai/'.length)),
+    );
   });
 
   it('远端宣告 GPT-6(status+能力自洽)→ 免发现进入 codex root,并自动派生 claude/pi bridge', () => {
@@ -542,8 +546,10 @@ describe('本地 override(local 永远最高)', () => {
     });
     const claude = models('xai', 'claude-code').find((m) => m.id === 'xai/grok-test');
     expect(claude).toMatchObject({ efforts: ['low', 'medium', 'high', 'xhigh'] });
-    expect(models('xai', 'pi').find((m) => m.id === 'xai/grok-test')).toBeUndefined();
-    expect(models('xai', 'pi').some((m) => m.id === 'grok-4.6')).toBe(true);
+    expect(models('xai', 'pi').find((m) => m.id === 'grok-test')).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+    });
+    expect(models('xai', 'pi').some((m) => m.id === 'grok-4.6')).toBe(false);
   });
 
   it('本地 perAgent 也在 bridge 目标端生效,且不能写展示/status 字段', () => {

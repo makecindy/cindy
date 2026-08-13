@@ -2,9 +2,11 @@
  * 目录运行时校验(parseCatalog)+ presets 清洗排序。
  *
  * 2026-07-19 起 bundled 目录由 `builtin.ts` 组装:内置供应商身份卡是 TS 常量,
- * `catalog/providers.json`(v2)只承载 xai 静态清单 + presets 模板——它仍是
+ * `catalog/providers.json`(v2)承载 xAI 的离线 fallback 元数据 + presets 模板——它仍是
  * ① OSS `cfg/providers.json` 的发布物 ② dev 直读的仓库文件。anthropic/openai/xd
  * 的模型清单运行时动态注入(见 apps/desktop maker-host active-catalog),不再进目录文件。
+ * xAI 登录后同样由账号 `/v1/models` 决定成员；此处静态段只在尚无成功账号快照时救急，
+ * 并为已发现成员补上下文、价格、能力与路由。
  * 所有跨端模型元数据统一进入严格版本化的 `modelRegistry`;目录顶层不接受旁路元数据块。
  */
 

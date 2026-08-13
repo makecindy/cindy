@@ -109,7 +109,7 @@ describe('mergeWithBundled', () => {
     expect(merged.providers.find((p) => p.id === 'anthropic')!.models['claude-code']!.length).toBe(1);
   });
 
-  it('keeps a newer bundled modelRegistry when the primary full snapshot is stale', () => {
+  it('keeps a newer bundled Registry without replacing the independent xAI fallback provider', () => {
     const bundledRegistry = BUNDLED_CATALOG.modelRegistry;
     const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!bundledRegistry) throw new Error('missing bundled modelRegistry');
@@ -129,7 +129,7 @@ describe('mergeWithBundled', () => {
 
     expect(merged.modelRegistry).toBe(bundledRegistry);
     expect(merged.modelRegistry?.models.length).toBeGreaterThan(staleRegistry.models.length);
-    expect(merged.providers.find((provider) => provider.id === 'xai')).toBe(bundledXai);
+    expect(merged.providers.find((provider) => provider.id === 'xai')?.name).toBe('STALE-XAI');
   });
 
   it('uses a newer primary modelRegistry as one complete snapshot, including retirements', () => {
