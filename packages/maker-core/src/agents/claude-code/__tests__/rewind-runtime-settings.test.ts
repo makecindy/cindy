@@ -272,6 +272,8 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       defaultEffort: 'high',
     });
 
+    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000_000);
+
     await handle.setModel?.('x-ai/grok-4.6');
 
     expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({
@@ -281,6 +283,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     expect(firstQuery.applyFlagSettings.mock.invocationCallOrder[0]).toBeLessThan(
       firstQuery.setModel.mock.invocationCallOrder[0],
     );
+    expect(handle.getUsageSnapshot().contextWindow).toBe(256_000);
 
     await handle.close();
   });

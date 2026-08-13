@@ -2006,6 +2006,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         sdkModelFor(selectedModel),
       ]),
     ];
+    const resolveModelContextWindow = (model: string): number | undefined => {
+      const descriptor = this.capabilities.availableModels.find((item) => item.id === model);
+      return descriptor && Number.isFinite(descriptor.contextWindow) && descriptor.contextWindow > 0
+        ? descriptor.contextWindow
+        : undefined;
+    };
 
     // SDK settings 对象 (优先级最高, 覆盖 user/project/local 文件层) — 本地分支
     // 和远端分支必须**保持一致** , 否则同 session setting 跨本地 / 远端表现不同
@@ -2167,16 +2173,13 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 附加只读引用目录: 启动时取 opts.extraDirs 快照, setExtraDirs 覆盖, buildQuery
     // 每 turn 读最新值传给 SDK options.additionalDirectories — 即时生效。
     let mutableExtraDirs: string[] = Array.isArray(opts.extraDirs) ? [...opts.extraDirs] : [];
-    const modelContextWindows = new Map(
-      this.capabilities.availableModels.map((model) => [model.id, model.contextWindow] as const),
-    );
 
     // ── Usage tracker (Stage 2 B') ──────────────────────────────────────────
     // 单 session 共享的 mutable usage state. translator 通过 ctx 注入访问.
     // handle.getUsageSnapshot 也读它, 形成"SDK 原始 usage → tracker → status event / handle snapshot"
-    // 单一可信源.
+    // 单一可信源. 窗口跟白名单同一份实时目录,不冻启动快照。
     const usageTracker = new UsageTracker();
-    usageTracker.setContextWindow(modelContextWindows.get(mutableModel) ?? 0);
+    usageTracker.setContextWindow(resolveModelContextWindow(mutableModel) ?? 0);
 
     // ── 跨 turn 共享状态 ───────────────────────────────────────────────────
     let configuredResumeSessionId: string | undefined = opts.resumeSessionId;
@@ -4197,7 +4200,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               turn: turnState,
               log,
               getModel: () => mutableModel,
-              getModelContextWindow: () => modelContextWindows.get(mutableModel),
+              getModelContextWindow: () => resolveModelContextWindow(mutableModel),
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,
               getSdkSessionId: () => sdkSessionId,
@@ -5821,7 +5824,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             });
           });
         }
-        const newContextWindow = modelContextWindows.get(mutableModel);
+        const newContextWindow = resolveModelContextWindow(mutableModel);
         if (newContextWindow === undefined) {
           // setContextWindow(0) 是 no-op —— tracker 会静默沿用旧模型窗口直到下一个
           // result 的 modelUsage 修正。UI 环 / auto-compact 期间按旧窗口算(偏乐观),
