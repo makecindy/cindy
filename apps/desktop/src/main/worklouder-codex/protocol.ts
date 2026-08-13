@@ -83,10 +83,11 @@ const COLORS = {
   completed: 0x35c759,
   error: 0xff453a,
   /**
-   * Deep Cindy brand red (`#A61629`, DESIGN.md §15.2 hover/pressed).
-   * The UI red `#DF0C27` reads pink on these LEDs; the deeper value holds.
+   * Window-reopen red tuned for these LEDs.
+   * UI brand red `#DF0C27` / `#A61629` share the same hue and wash pink
+   * on the board; drop the blue channel so it stays crimson.
    */
-  brand: 0xa61629,
+  brand: 0xb40a12,
 } as const;
 
 const OFF_SIDE: WorkLouderLightingSide = {
@@ -247,12 +248,12 @@ export function createWorkLouderCodexOffFrame(): WorkLouderCodexLightingFrame {
  */
 export function createWorkLouderCodexWindowRevealFrame(): WorkLouderCodexLightingFrame {
   return {
-    ambient: side(WorkLouderLightingEffect.Snake, 0.95, 0.55, COLORS.brand),
-    keys: side(WorkLouderLightingEffect.Breath, 0.42, 0.55, COLORS.brand),
+    ambient: side(WorkLouderLightingEffect.Snake, 0.78, 0.55, COLORS.brand),
+    keys: side(WorkLouderLightingEffect.Breath, 0.34, 0.55, COLORS.brand),
     threads: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, id) => ({
       id,
       color: COLORS.brand,
-      brightness: 0.9,
+      brightness: 0.72,
       effect: WorkLouderLightingEffect.Breath,
       speed: 0.55,
       syncKeysLighting: false,
