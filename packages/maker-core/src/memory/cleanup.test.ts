@@ -7,16 +7,18 @@
  */
 
 import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ARCHIVE_DIR_NAME,
   planMemoryCleanup,
   runMemoryCleanup,
 } from './cleanup.js';
+import { MemoryStorage } from './storage.js';
 
 let dir: string;
 
@@ -237,5 +239,54 @@ describe('runMemoryCleanup', () => {
     expect(archived).toContain('feedback_a.md');
     expect(archived).toContain(`feedback_a.md.${stamp}.1`);
     expect(archived).toContain(`feedback_a.md.${stamp}.2`);
+  });
+
+  it('keeps source when it changed between archive copy and unlink', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+
+    // 模拟「归档复制后、unlink 前源被并发更新」: 第二次读 feedback_a.md 时
+    // 返回修改后的内容 (Greptile P1 on #2561)。
+    const realReadFile = fs.readFile.bind(fs);
+    let reads = 0;
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(async (p, ...rest) => {
+      const buf = await realReadFile(p as string, ...rest);
+      if (String(p).endsWith('feedback_a.md')) {
+        reads += 1;
+        if (reads === 2) return Buffer.from('---\ntitle: Same\ndescription: hook\ntype: feedback\nupdatedAt: 2026-03-01T00:00:00.000Z\n---\nUPDATED body\n');
+      }
+      return buf;
+    });
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // 源被保留 (未删), 且记录为 failed (归档持有旧副本)。
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('same');
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      expect(result.archived).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('exposes MEMORY.md rebuild failure instead of swallowing it', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    const spy = vi
+      .spyOn(MemoryStorage.prototype, 'rebuildIndex')
+      .mockRejectedValue(new Error('disk full'));
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // 归档本身成功, 但索引重建失败必须暴露 (Codex P2 on #2561)。
+      expect(result.archived).toHaveLength(1);
+      expect(result.indexRebuildError).toContain('disk full');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

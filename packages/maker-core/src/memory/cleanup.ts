@@ -173,6 +173,12 @@ export interface CleanupRunResult {
   archived: ArchiveItem[];
   /** 归档失败/跳过的文件 (保留在原地, 下次重跑)。 */
   failed: Array<{ filename: string; error: string }>;
+  /**
+   * 归档后重建 MEMORY.md 失败时的错误 (索引可能 stale, 会把已归档文件继续
+   * 注入后续会话 — 见 Codex P2 on #2561: store.init() 只修 FTS 不重建索引)。
+   * 成功时为 undefined; 调用方 (CLI) 应告警并非零退出。
+   */
+  indexRebuildError?: string;
 }
 
 /**
@@ -344,19 +350,29 @@ export async function runMemoryCleanup(
     const src = path.join(plan.shardDir, item.filename);
     try {
       // 幂等: 源已不存在 (已被上次运行归档) → 跳过不报错。
-      const srcStat = await fs.stat(src).catch(() => null);
-      if (!srcStat) continue;
+      const srcContent = await fs.readFile(src).catch(() => null);
+      if (srcContent === null) continue;
 
-      // 可选真备份: 归档前复制一份到 backupRoot (数据保全)。用 COPYFILE_EXCL
+      // 可选真备份: 归档前写一份到 backupRoot (数据保全)。用 writeFile 'wx'
       // 原子预留目标, 同名冲突 (重复 backup-dir / 同 clock rerun / 并发) 递增
       // 后缀重试, 绝不覆盖已有备份 (Greptile P1 / Codex P1 on #2561)。
       if (opts.backupRoot) {
-        await copyExclusive(src, opts.backupRoot, item.filename, stamp);
+        await writeExclusive(opts.backupRoot, item.filename, stamp, srcContent);
       }
 
-      // 归档 = 排他复制进 .archive + 删源。复制+删除在崩溃时最多留两份
-      // (安全方向), 而 COPYFILE_EXCL 保证并发/同名下绝不覆盖已有归档。
-      await copyExclusive(src, archiveDir, item.filename, stamp);
+      // 归档 = 排他写入 .archive (写的是复制时的快照)。
+      await writeExclusive(archiveDir, item.filename, stamp, srcContent);
+
+      // 复制后校验源未变 (--force 绕过宿主检测时, 源可能在复制期间被并发
+      // 更新; 若变了则绝不 unlink, 保留较新版本 — Greptile P1 on #2561)。
+      const current = await fs.readFile(src).catch(() => null);
+      if (current === null || !current.equals(srcContent)) {
+        result.failed.push({
+          filename: item.filename,
+          error: 'source changed during archive; kept newer version (archive holds pre-change copy)',
+        });
+        continue;
+      }
       await fs.unlink(src);
       result.archived.push(item);
     } catch (e) {
@@ -365,13 +381,14 @@ export async function runMemoryCleanup(
   }
 
   // 归档改变了 list() 结果 → 重建 MEMORY.md (移除已归档条目的索引行),
-  // 让下一次会话的 getIndex() 立即反映瘦身后的索引 (与 storage.rebuildIndex
-  // 行为一致)。
+  // 让下一次会话的 getIndex() 立即反映瘦身后的索引。失败必须暴露 — 静默吞掉
+  // 会让旧索引继续把已归档文件注入后续会话, 且 store.init() 只修 FTS 不会
+  // 重建 MEMORY.md (Codex P2 on #2561)。
   if (result.archived.length > 0) {
     try {
       await new MemoryStorage(plan.shardDir).rebuildIndex();
-    } catch {
-      // 索引重建失败不阻塞: 文件已归档, 下次打开由 store.init()/write 自动重建。
+    } catch (e) {
+      result.indexRebuildError = String(e);
     }
   }
 
@@ -390,25 +407,24 @@ function contentHash(rec: MemoryRecord): string {
 }
 
 /**
- * 排他复制 src 到 dir 下 (同名冲突时递增后缀), 返回最终目标路径。
+ * 排他写入 content 到 dir 下 (同名冲突时递增后缀), 返回最终目标路径。
  *
- * 用 `COPYFILE_EXCL` **原子预留**目标: 目标已存在时 copyFile 抛 EEXIST, 递增
- * 后缀重试。相比「先 pathExists 探测再非排他 copyFile」, 消除了并发 TOCTOU
- * 竞态 — 两个进程不会同时观察到同一路径不存在并覆盖对方 (Greptile P1 /
- * Codex P1 on #2561: 并发目标路径未排他预留)。
+ * 用 `writeFile(flag:'wx')` **原子预留**目标: 目标已存在时抛 EEXIST, 递增后缀
+ * 重试。相比「先探测再非排他写」, 消除了并发 TOCTOU 竞态 — 两个进程不会
+ * 同时观察到同一路径不存在并覆盖对方 (Greptile P1 / Codex P1 on #2561)。
  */
-async function copyExclusive(
-  src: string,
+async function writeExclusive(
   dir: string,
   filename: string,
   stamp: string,
+  content: Buffer,
 ): Promise<string> {
   await fs.mkdir(dir, { recursive: true });
   const base = path.join(dir, filename);
   for (let attempt = 0; ; attempt += 1) {
     const target = attempt === 0 ? base : path.join(dir, `${filename}.${stamp}.${attempt}`);
     try {
-      await fs.copyFile(src, target, fs.constants.COPYFILE_EXCL);
+      await fs.writeFile(target, content, { flag: 'wx' });
       return target;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;

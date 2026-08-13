@@ -231,8 +231,18 @@ async function main() {
       archiveStale: opts.archiveStale,
       archived: result.archived,
       failed: result.failed,
+      indexRebuildError: result.indexRebuildError ?? null,
     })}\n`,
   );
+
+  // MEMORY.md 重建失败必须暴露 (Codex P2 on #2561): 静默会让旧索引把已归档
+  // 文件继续注入后续会话, 且 store.init() 只修 FTS 不重建索引。
+  if (result.indexRebuildError) {
+    const warn = (msg) => (opts.json ? process.stderr : process.stdout).write(`${msg}\n`);
+    warn('⚠️ MEMORY.md 重建失败: ' + result.indexRebuildError);
+    warn('  归档已落盘, 但旧索引可能仍引用已归档文件; 请修复索引文件权限/磁盘后重跑。');
+    process.exit(4);
+  }
 }
 
 /**
