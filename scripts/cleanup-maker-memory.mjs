@@ -235,6 +235,14 @@ async function main() {
     })}\n`,
   );
 
+  // 归档失败必须非零退出 (Codex P1 on #2561): 自动化会误把「源保留未清理」
+  // 当成成功, 导致清理被静默跳过。exit 5 区分于缺参(2)/宿主(3)/索引失败(4)。
+  if (result.failed.length > 0) {
+    const warn = (msg) => (opts.json ? process.stderr : process.stdout).write(`${msg}\n`);
+    warn(`⚠️ ${result.failed.length} 个文件归档失败, 源已保留在分片目录, 请修复后重跑。`);
+    process.exit(5);
+  }
+
   // MEMORY.md 重建失败必须暴露 (Codex P2 on #2561): 静默会让旧索引把已归档
   // 文件继续注入后续会话, 且 store.init() 只修 FTS 不重建索引。
   if (result.indexRebuildError) {

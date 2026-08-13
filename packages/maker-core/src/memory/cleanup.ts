@@ -31,7 +31,7 @@
  * runMemoryCleanup() 执行归档 (幂等, 可重复跑)。
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 
@@ -360,20 +360,11 @@ export async function runMemoryCleanup(
         await writeExclusive(opts.backupRoot, item.filename, stamp, srcContent);
       }
 
-      // 归档 = 排他写入 .archive (写的是复制时的快照)。
-      await writeExclusive(archiveDir, item.filename, stamp, srcContent);
-
-      // 复制后校验源未变 (--force 绕过宿主检测时, 源可能在复制期间被并发
-      // 更新; 若变了则绝不 unlink, 保留较新版本 — Greptile P1 on #2561)。
-      const current = await fs.readFile(src).catch(() => null);
-      if (current === null || !current.equals(srcContent)) {
-        result.failed.push({
-          filename: item.filename,
-          error: 'source changed during archive; kept newer version (archive holds pre-change copy)',
-        });
-        continue;
-      }
-      await fs.unlink(src);
+      // 归档 = rename 原子移动进 .archive (对齐 #2519 migrate 的 rename-then-
+      // remove 哲学)。rename 是单个原子系统调用, 不存在「复制/校验/删源」的
+      // 多步窗口 — 移动后 src 路径即空, 宿主并发写会落到新的 src 文件, 已
+      // 移动的旧内容不受影响, 新内容绝不丢失 (Greptile P1 on #2561 第五/六轮)。
+      await moveExclusive(src, archiveDir, item.filename, stamp);
       result.archived.push(item);
     } catch (e) {
       result.failed.push({ filename: item.filename, error: String(e) });
@@ -429,6 +420,37 @@ async function writeExclusive(
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
       // EEXIST → 目标已被占用 (同名历史 / 并发写入), 递增后缀重试。
+    }
+  }
+}
+
+/**
+ * rename 原子移动 src 到 dir 下, 目标路径带「时间戳 + 随机后缀」保证唯一,
+ * 返回最终目标路径。
+ *
+ * rename 是单个原子系统调用 — 移动后 src 路径即空, 宿主并发写会落到新的
+ * src 文件而非覆盖已移动内容; 随机后缀 (32-bit) 使目标在并发/同 clock 下
+ * 几乎不可能已存在, 因此既不覆盖已有归档、也无「探测→写」的 TOCTOU 竞态
+ * (Greptile P1 on #2561 第四/五/六轮: 并发未排他 + 复制删源窗口)。
+ */
+async function moveExclusive(
+  src: string,
+  dir: string,
+  filename: string,
+  stamp: string,
+): Promise<string> {
+  await fs.mkdir(dir, { recursive: true });
+  for (let attempt = 0; ; attempt += 1) {
+    const target = path.join(dir, `${filename}.${stamp}.${randomBytes(4).toString('hex')}`);
+    try {
+      await fs.rename(src, target);
+      return target;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      // Windows: 目标已存在 → 撞随机后缀 (极低概率), 重试; POSIX rename 会
+      // 覆盖同名目标但随机后缀使其几乎不可能发生。
+      if (code === 'EEXIST' || code === 'EPERM' || code === 'ENOTEMPTY') continue;
+      throw e;
     }
   }
 }

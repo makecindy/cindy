@@ -7,7 +7,6 @@
  */
 
 import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
-import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -152,7 +151,8 @@ describe('runMemoryCleanup', () => {
 
     expect(result.archived.map((a) => a.filename)).toEqual(['feedback_a.md']);
     expect(result.failed).toHaveLength(0);
-    expect(await archiveContents()).toContain('feedback_a.md');
+    // 归档文件名带时间戳+随机后缀 (rename 原子移动)。
+    expect((await archiveContents()).some((f) => f.startsWith('feedback_a.md.'))).toBe(true);
     await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).rejects.toThrow();
     await expect(readFile(path.join(dir, 'feedback_b.md'), 'utf8')).resolves.toContain('same');
     const index = await readFile(path.join(dir, 'MEMORY.md'), 'utf8');
@@ -180,7 +180,7 @@ describe('runMemoryCleanup', () => {
     const result = await runMemoryCleanup(plan, { archiveStale: true });
 
     expect(result.archived.map((a) => a.filename)).toEqual(['project_done.md']);
-    expect(await archiveContents()).toContain('project_done.md');
+    expect((await archiveContents()).some((f) => f.startsWith('project_done.md.'))).toBe(true);
   });
 
   it('is idempotent — re-running yields an empty plan archive set', async () => {
@@ -193,7 +193,7 @@ describe('runMemoryCleanup', () => {
     expect(second.duplicates).toHaveLength(0);
   });
 
-  it('suffixes archive filename on collision instead of overwriting', async () => {
+  it('does not overwrite existing archive on collision (random-suffix rename)', async () => {
     await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
     await mkdir(path.join(dir, ARCHIVE_DIR_NAME), { recursive: true });
@@ -203,7 +203,8 @@ describe('runMemoryCleanup', () => {
 
     const archived = await archiveContents();
     expect(archived).toContain('feedback_a.md'); // 旧归档保留
-    expect(archived.some((f) => f.startsWith('feedback_a.md.'))).toBe(true); // 新归档加后缀
+    // 新归档用时间戳+随机后缀, 不覆盖旧归档。
+    expect(archived.some((f) => f.startsWith('feedback_a.md.'))).toBe(true);
   });
 
   it('suffixes backup filename on collision instead of overwriting', async () => {
@@ -220,55 +221,25 @@ describe('runMemoryCleanup', () => {
     expect(backup.some((f) => f.startsWith('feedback_a.md.'))).toBe(true);
   });
 
-  it('increments suffix on same-stamp collision (rerun with identical clock)', async () => {
+  it('does not overwrite pre-existing archive on same-stamp rerun', async () => {
     await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
-    // 固定时钟, 模拟同 clock rerun: 第一次归档后目标 feedback_a.md.<stamp>.1 已存在。
+    // 固定时钟, 模拟同 clock rerun: 预置旧归档 (base + 随机后缀), 新归档
+    // 用时间戳+随机后缀, 与预置名不同, 绝不覆盖。
     const fixedNow = () => '2026-08-13T00:00:00.000Z';
     const stamp = fixedNow().replace(/[:.]/g, '-');
     await mkdir(path.join(dir, ARCHIVE_DIR_NAME), { recursive: true });
-    // 预置 base + 第 1 级后缀, 迫使循环递增到 .2。
     await writeFile(path.join(dir, ARCHIVE_DIR_NAME, 'feedback_a.md'), 'v0', 'utf8');
-    await writeFile(path.join(dir, ARCHIVE_DIR_NAME, `feedback_a.md.${stamp}.1`), 'v1', 'utf8');
+    await writeFile(path.join(dir, ARCHIVE_DIR_NAME, `feedback_a.md.${stamp}.deadbeef`), 'v1', 'utf8');
 
     const plan = await planMemoryCleanup(dir);
     await runMemoryCleanup(plan, { deps: { now: fixedNow } });
 
     const archived = await archiveContents();
-    // 旧归档 base 与 .1 都保留, 新归档递增到 .2, 绝不覆盖。
+    // 两个预置旧归档都保留, 新归档成功 (随机后缀, 与预置名不同)。
     expect(archived).toContain('feedback_a.md');
-    expect(archived).toContain(`feedback_a.md.${stamp}.1`);
-    expect(archived).toContain(`feedback_a.md.${stamp}.2`);
-  });
-
-  it('keeps source when it changed between archive copy and unlink', async () => {
-    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
-    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
-
-    const plan = await planMemoryCleanup(dir);
-
-    // 模拟「归档复制后、unlink 前源被并发更新」: 第二次读 feedback_a.md 时
-    // 返回修改后的内容 (Greptile P1 on #2561)。
-    const realReadFile = fs.readFile.bind(fs);
-    let reads = 0;
-    const spy = vi.spyOn(fs, 'readFile').mockImplementation(async (p, ...rest) => {
-      const buf = await realReadFile(p as string, ...rest);
-      if (String(p).endsWith('feedback_a.md')) {
-        reads += 1;
-        if (reads === 2) return Buffer.from('---\ntitle: Same\ndescription: hook\ntype: feedback\nupdatedAt: 2026-03-01T00:00:00.000Z\n---\nUPDATED body\n');
-      }
-      return buf;
-    });
-
-    try {
-      const result = await runMemoryCleanup(plan);
-      // 源被保留 (未删), 且记录为 failed (归档持有旧副本)。
-      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('same');
-      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
-      expect(result.archived).toHaveLength(0);
-    } finally {
-      spy.mockRestore();
-    }
+    expect(archived).toContain(`feedback_a.md.${stamp}.deadbeef`);
+    expect(archived).toHaveLength(3);
   });
 
   it('exposes MEMORY.md rebuild failure instead of swallowing it', async () => {
