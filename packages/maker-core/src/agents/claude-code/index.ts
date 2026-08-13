@@ -2007,11 +2007,14 @@ export class ClaudeCodeAgent extends BaseAgent {
       ]),
     ];
     const resolveModelContextWindow = (model: string): number | undefined => {
-      // 核实窗口按会话实际来源取,不查扁平 availableModels:同 id 多来源时首见
-      // 可能是另一条路由。host 未注入或目录有歧义时再退回扁平目录,保住无 host
-      // 路径和后加载模型的即时窗口。
-      const verified = this.deps.resolveVerifiedContextWindow?.(mutableProviderId, model);
-      if (typeof verified === 'number' && verified > 0) return verified;
+      // 核实窗口按会话实际来源取。host 注入了 resolver 时,null = 不要收敛
+      // (同 id 多来源 / 未核实兜底),采信 SDK 上报,不能再拿扁平目录首见值覆盖。
+      // 只有未注入 resolver 的路径(测试 / 无 host)才退回扁平目录。
+      const resolveVerified = this.deps.resolveVerifiedContextWindow;
+      if (resolveVerified) {
+        const verified = resolveVerified(mutableProviderId, model);
+        return typeof verified === 'number' && verified > 0 ? verified : undefined;
+      }
       const descriptor = this.capabilities.availableModels.find((item) => item.id === model);
       return descriptor && Number.isFinite(descriptor.contextWindow) && descriptor.contextWindow > 0
         ? descriptor.contextWindow

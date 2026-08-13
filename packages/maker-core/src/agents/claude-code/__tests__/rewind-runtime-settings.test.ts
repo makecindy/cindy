@@ -333,6 +333,49 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  it('does not apply the flattened catalog window when the host resolver returns null', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = '0';
+    const workingDir = await makeTempDir();
+    const firstQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(firstQuery);
+
+    const resolveVerifiedContextWindow = vi.fn(() => null);
+
+    const agent = new ClaudeCodeAgent({
+      ...createDeps(),
+      capabilityAdditions: {
+        availableModels: [
+          ...TEST_MODELS,
+          {
+            id: 'shared-model',
+            displayName: 'Shared',
+            contextWindow: 256_000,
+            efforts: ['low', 'medium', 'high'],
+            defaultEffort: 'high',
+          },
+        ],
+      },
+      resolveVerifiedContextWindow,
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-unverified-window',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    });
+
+    expect(handle.getUsageSnapshot().contextWindow).toBe(0);
+
+    await handle.setModel?.('shared-model', { providerId: 'xd' });
+
+    expect(resolveVerifiedContextWindow).toHaveBeenCalledWith('xd', 'shared-model');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(0);
+
+    await handle.close();
+  });
+
   it('passes max through when changing effort in a live Sonnet 5 session', async () => {
     const { handle, firstQuery } = await startRewindableSession();
 
