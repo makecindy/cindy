@@ -149,9 +149,10 @@ describe('plugin delivery contract', () => {
   it('parses a visible Plugin detail and validates its manifest', () => {
     const detailManifest = {
       ...validManifest,
-      slots: ['tool', 'panel', 'badge', 'confirm', 'agent'],
+      minCindyVersion: '1.2.3',
+      slots: ['tool', 'panel', 'badge', 'confirm', 'agent', 'session-context'],
       panel: { html: 'panel.html' },
-      agent: { errand: true, schedule: true },
+      agent: { errand: true, schedule: true, sessionMessage: true },
     } as const;
     const response = parseGetPluginResponse({
       schemaVersion: PLUGIN_API_SCHEMA_VERSION,
@@ -181,10 +182,12 @@ describe('plugin delivery contract', () => {
       'badge',
       'confirm',
       'agent',
+      'session-context',
     ]);
     expect(response.plugin.currentRelease.manifest.agent).toEqual({
       errand: true,
       schedule: true,
+      sessionMessage: true,
     });
   });
 

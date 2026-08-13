@@ -3559,6 +3559,8 @@
         "cindyTextOneshotModelDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply. The plugin declares a preferred model: {{model}} (effective when available in the current catalog; your pin takes precedence).",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
+        "agentSessionMessage": "Send messages to the current session",
+        "agentSessionMessageDetail": "Allows the plugin panel to send ordinary user messages to the focused session. The current Agent still handles them through normal permissions and Skill flows.",
         "agentBackground": "Can automatically start new Agent turns in the background",
         "agentBackgroundDetail": "Does not require a click each time, but can only use sessions you previously connected to this plugin. Model charges may apply.",
         "agentErrand": "Can hand tasks to the Cindy Agent and collect the result",

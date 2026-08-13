@@ -597,12 +597,15 @@ export function createSessionRemoteHostIdReader(): (sessionId: string) => Promis
 }
 
 export interface SessionRowSnapshot {
+  /** Source gate used by plugin current-task/session-switch projection. */
+  source?: string | null;
   status: string;
   title: string | null;
   userSendAt: number | null;
   workingDir: string | null;
   workspaceKind: string | null;
   providerId: string | null;
+  permissionMode?: string | null;
   /** Hook exact-takeover must reject SSH-owned sessions. */
   remoteHostId?: string | null;
   /** Hook exact-takeover must reject internal Orca worker sessions. */
@@ -617,6 +620,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
   const db = getDbClient().drizzle;
   const [row] = await db
     .select({
+      source: sessions.source,
       status: sessions.status,
       title: sessions.title,
       userSendAt: sessions.userSendAt,
@@ -625,6 +629,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       // heartbeat 任务 providerId 留空时,沿用绑定会话在聊天里选的来源(与 model
       // 留空沿用 meta.model 对称)。零新增查询,复用 runner 已并行取的这行快照。
       providerId: sessions.providerId,
+      permissionMode: sessions.permissionMode,
       clearedAt: sessions.clearedAt,
       remoteHostId: sessions.remoteHostId,
       orcaRole: sessions.orcaRole,

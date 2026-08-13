@@ -167,6 +167,8 @@ export interface GhostCardNeeds {
 export interface GhostAgentNeeds {
   background?: boolean;
   errand?: boolean;
+  /** 允许插件面板向当前焦点任务投递一条普通用户消息。 */
+  sessionMessage?: boolean;
   schedule?: boolean;
 }
 
@@ -2497,7 +2499,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     };
   }
 
-  // agent 槽能力详单:缺省 = 仅点击票据;三个加档由 Desktop 独立展示并授权。
+  // agent 槽能力详单:缺省 = 仅点击票据;各加档由 Desktop 独立展示并授权。
   let agent: GhostAgentNeeds | undefined;
   if (raw.agent !== undefined) {
     if (!isPlainObject(raw.agent)) {
@@ -2508,7 +2510,11 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
     const agentRaw = raw.agent as Record<string, unknown>;
     const unknownAgentField = Object.keys(agentRaw).find(
-      (key) => key !== 'background' && key !== 'errand' && key !== 'schedule',
+      (key) =>
+        key !== 'background' &&
+        key !== 'errand' &&
+        key !== 'schedule' &&
+        key !== 'sessionMessage',
     );
     if (unknownAgentField) {
       return {
@@ -2525,17 +2531,44 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true) {
+    if (agentRaw.sessionMessage !== undefined && typeof agentRaw.sessionMessage !== 'boolean') {
+      return { ok: false, reason: 'agent.sessionMessage 必须是布尔值' };
+    }
+    if (agentRaw.sessionMessage === true && !slots.includes('session-context')) {
+      return {
+        ok: false,
+        reason: 'agent.sessionMessage 必须同时声明 session-context 卡槽',
+      };
+    }
+    if (agentRaw.sessionMessage === true && !slots.includes('panel')) {
+      return {
+        ok: false,
+        reason: 'agent.sessionMessage 仅允许面板插件声明，必须同时声明 panel 卡槽',
+      };
+    }
+    if (agentRaw.sessionMessage === true && raw.minCindyVersion === undefined) {
+      return {
+        ok: false,
+        reason: 'agent.sessionMessage 必须同时声明 minCindyVersion',
+      };
+    }
+    if (
+      agentRaw.background !== true &&
+      agentRaw.errand !== true &&
+      agentRaw.schedule !== true &&
+      agentRaw.sessionMessage !== true
+    ) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true 三项加档;仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / sessionMessage: true 四项加档;仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
+      ...(agentRaw.sessionMessage === true ? { sessionMessage: true } : {}),
     };
   }
 

@@ -182,6 +182,8 @@ export interface GhostCardNeeds {
 export interface GhostAgentNeeds {
   background?: boolean;
   errand?: boolean;
+  /** 允许插件面板向当前焦点任务投递一条普通用户消息。 */
+  sessionMessage?: boolean;
   /**
    * schedule = 「可以请你新建自动化任务」(2026-08-04)。
    *
@@ -1835,6 +1837,14 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       labelKey: 'agentUserAction',
       detailKey: 'agentUserActionDetail',
     });
+    if (manifest.agent?.sessionMessage === true) {
+      items.push({
+        key: 'agent:session-message',
+        kind: 'agent',
+        labelKey: 'agentSessionMessage',
+        detailKey: 'agentSessionMessageDetail',
+      });
+    }
     if (manifest.agent?.background === true) {
       items.unshift({
         key: 'agent:background',
@@ -3605,7 +3615,11 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
     const agentRaw = raw.agent as Record<string, unknown>;
     const unknownAgentField = Object.keys(agentRaw).find(
-      (key) => key !== 'background' && key !== 'errand' && key !== 'schedule',
+      (key) =>
+        key !== 'background' &&
+        key !== 'errand' &&
+        key !== 'schedule' &&
+        key !== 'sessionMessage',
     );
     if (unknownAgentField) {
       return {
@@ -3622,17 +3636,38 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true) {
+    if (agentRaw.sessionMessage !== undefined && typeof agentRaw.sessionMessage !== 'boolean') {
+      return { ok: false, reason: 'agent.sessionMessage 必须是布尔值' };
+    }
+    if (agentRaw.sessionMessage === true && !slots.includes('session-context')) {
+      return {
+        ok: false,
+        reason: 'agent.sessionMessage 必须同时声明 session-context 卡槽',
+      };
+    }
+    if (agentRaw.sessionMessage === true && !slots.includes('panel')) {
+      return {
+        ok: false,
+        reason: 'agent.sessionMessage 仅允许面板插件声明，必须同时声明 panel 卡槽',
+      };
+    }
+    if (
+      agentRaw.background !== true &&
+      agentRaw.errand !== true &&
+      agentRaw.schedule !== true &&
+      agentRaw.sessionMessage !== true
+    ) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true 三项加档；仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / sessionMessage: true 四项加档；仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
+      ...(agentRaw.sessionMessage === true ? { sessionMessage: true } : {}),
     };
   }
 
@@ -5386,6 +5421,66 @@ export interface GhostPipeHostRequest {
   type: 'host-request';
   kind: 'app-context';
 }
+
+/** 插件面板读取当前任务或向当前任务投递普通用户消息。 */
+export type GhostPipeSessionRequest =
+  | {
+      type: 'session-request';
+      kind: 'get-current-session';
+    }
+  | {
+      type: 'session-request';
+      kind: 'send-message';
+      sessionId: string;
+      message: string;
+    };
+
+export type GhostPipeSessionResult =
+  | {
+      ok: true;
+      kind: 'current-session';
+      sessionId: string | null;
+      /**
+       * 新版宿主附带的当前主任务快照。保持可选以兼容只返回 sessionId 的旧宿主，
+       * 也让旧插件继续只读取原字段。
+       */
+      session?: {
+        sessionId: string;
+        sessionName: string | null;
+        workdir: string | null;
+        workdir_is_local: boolean;
+        workdir_is_read_only: boolean;
+      };
+    }
+  | {
+      ok: true;
+      kind: 'message-sent';
+      sessionId: string;
+      disposition: 'created' | 'resumed' | 'active' | 'queued';
+    }
+  | {
+      ok: false;
+      errorCode:
+        | 'INVALID_REQUEST'
+        | 'INVALID_ARGS'
+        | 'PERMISSION_DENIED'
+        | 'HOST_NOT_READY'
+        | 'NOT_FOUND'
+        | 'ARCHIVED'
+        | 'DELETED'
+        | 'SESSION_NOT_FOUND'
+        | 'SESSION_UNAVAILABLE'
+        | 'AGENT_NOT_READY'
+        | 'UNSUPPORTED_CAPABILITY'
+        | 'BUDGET_MODEL_REQUIRES_API_MODE'
+        | 'PROVIDER_ROUTE_UNAVAILABLE'
+        | 'LEAD_NOT_SUPPORTED'
+        | 'WORKTREE_UNAVAILABLE'
+        | 'RATE_LIMITED'
+        | 'BUSY'
+        | 'INTERNAL';
+      message: string;
+    };
 
 /** 插件请求 Agent 新回合时可选的会话处理方式。 */
 export const GHOST_AGENT_RUN_MODES = ['continue', 'fork', 'new'] as const;

@@ -79,6 +79,19 @@ contextBridge.exposeInMainWorld('cindy', {
     requestSchedule: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'schedule-request' }),
   },
+  session: {
+    getCurrentSessionId: (): Promise<unknown> =>
+      ipcRenderer.invoke('ghost-pipe:send', {
+        type: 'session-request',
+        kind: 'get-current-session',
+      }),
+    sendMessage: (req: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('ghost-pipe:send', {
+        ...req,
+        type: 'session-request',
+        kind: 'send-message',
+      }),
+  },
   node: {
     request: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'node-request' }),

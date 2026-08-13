@@ -69,7 +69,11 @@ export class GhostPreviewSlot {
 
   constructor(private readonly deps: PreviewSlotDeps) {}
 
-  handleRequest(ghostId: string, payload: unknown): GhostPipePreviewResult {
+  handleRequest(
+    ghostId: string,
+    payload: unknown,
+    options: { focusedSessionIdOverride?: string | null } = {},
+  ): GhostPipePreviewResult {
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost?.enabled || !ghost.manifest.slots.includes('preview')) {
       return fail('PERMISSION_DENIED', '插件未申请面板预览权限(preview 槽),或当前未启用');
@@ -104,7 +108,11 @@ export class GhostPreviewSlot {
     // 落点会话:显式 sessionId 优先(通常来自 session-context 注入),缺省
     // 落台前会话;两者皆无(用户不在会话页)= 没有可开标签的家,如实拒。
     const sessionId =
-      typeof request.sessionId === 'string' ? request.sessionId : this.deps.focusedSessionId();
+      typeof request.sessionId === 'string'
+        ? request.sessionId
+        : options.focusedSessionIdOverride !== undefined
+          ? options.focusedSessionIdOverride
+          : this.deps.focusedSessionId();
     if (!sessionId) {
       return fail('HOST_NOT_READY', '当前没有活跃会话可承载预览标签');
     }

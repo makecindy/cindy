@@ -17,6 +17,8 @@ import { describe, expect, it } from 'vitest';
 const repoRoot = resolve(__dirname, '..', '..', '..', '..', '..');
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const coordinatorSourcePath = resolve(__dirname, '..', 'maker-ipc', 'agent-input-coordinator.ts');
+const coordinatorSource = readFileSync(coordinatorSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const acceptedCallbackSourcePath = resolve(__dirname, '..', 'maker-ipc', 'acceptedCallbackRunner.ts');
 const acceptedCallbackSource = readFileSync(acceptedCallbackSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const orcaInterAgentDispatcherSourcePath = resolve(__dirname, '..', 'maker-ipc', 'orcaInterAgentDispatcher.ts');
@@ -302,13 +304,23 @@ describe('sendToSession ordering', () => {
     expect(liveBranch).toContain('live,');
     expectOrder(liveBranch, 'message,', 'clientId,');
     expect(liveBranch).toContain('onAccepted: persistUserMessage,');
-    expect(liveBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(liveBranch).toContain('onDispatching: () => {');
+    expectOrder(
+      liveBranch,
+      'assertBeforeVendorDispatch?.();',
+      'dispatchAgentIslandUserPrompt(targetSessionId);',
+    );
     expect(liveBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session live');");
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(resumedBranch).toContain('session,');
     expectOrder(resumedBranch, 'message,', 'clientId,');
     expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
-    expect(resumedBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(resumedBranch).toContain('onDispatching: () => {');
+    expectOrder(
+      resumedBranch,
+      'assertBeforeVendorDispatch?.();',
+      'dispatchAgentIslandUserPrompt(targetSessionId);',
+    );
     expect(resumedBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session resumed');");
   });
 
@@ -329,6 +341,7 @@ describe('sendToSession ordering', () => {
     expect(helperBlock).toContain('await opts.onAccepted?.();');
     expect(helperBlock).toContain('await beginTurnChangeSetAtDispatch(session, anchorClientId);');
     expect(helperBlock).toContain('await gitSnapshotCoordinator.onTurnStart(session.id);');
+    expect(helperBlock).toContain('await prepareBeforeVendorDispatch?.();');
     expect(helperBlock).toContain('const pendingHandoff = await agentHandoffPending.peek(session.id);');
     expect(helperBlock).toContain('prependHandoffToUserMessage(');
     expect(helperBlock).toContain("{ type: 'user', content: message },");
@@ -361,6 +374,11 @@ describe('sendToSession ordering', () => {
       helperBlock,
       'await beginTurnChangeSetAtDispatch(session, anchorClientId);',
       'await gitSnapshotCoordinator.onTurnStart(session.id);',
+    );
+    expectOrder(
+      helperBlock,
+      'await gitSnapshotCoordinator.onTurnStart(session.id);',
+      'await prepareBeforeVendorDispatch?.();',
     );
     expect(countOccurrences(block, 'sendUserMessageWithAwaitedGitBaseline(')).toBe(3);
     expect(block).not.toContain('const sendResult = await session.send({ type: \'user\', content: message }, {');
@@ -580,7 +598,12 @@ describe('sendToSession ordering', () => {
     expect(liveBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(liveBranch).toContain('live,');
     expect(liveBranch).toContain('onAccepted: persistUserMessage,');
-    expect(liveBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(liveBranch).toContain('onDispatching: () => {');
+    expectOrder(
+      liveBranch,
+      'assertBeforeVendorDispatch?.();',
+      'dispatchAgentIslandUserPrompt(targetSessionId);',
+    );
     expect(liveBranch).not.toContain('await persistUserMessage();');
     expect(liveBranch).toContain('if (isSessionRunningError(err))');
     expect(liveBranch).toContain('await enqueueSendToSessionMessage({');
@@ -598,11 +621,153 @@ describe('sendToSession ordering', () => {
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(resumedBranch).toContain('session,');
     expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
-    expect(resumedBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
+    expect(resumedBranch).toContain('onDispatching: () => {');
+    expectOrder(
+      resumedBranch,
+      'assertBeforeVendorDispatch?.();',
+      'dispatchAgentIslandUserPrompt(targetSessionId);',
+    );
     expect(resumedBranch).not.toContain('await persistUserMessage();');
     expect(resumedBranch).toContain('if (isSessionRunningError(err))');
     expect(resumedBranch).toContain('await enqueueSendToSessionMessage({');
     expect(resumedBranch).toContain("wakeKind: 'queued' as const");
+  });
+
+  it('preserves stored permission mode when lazy-resuming an existing session', () => {
+    const block = extractSendToSessionSource();
+    const resumedBranch = extractBetween(
+      block,
+      'const createOpts = buildCreateOptsWithStderr({\n          id: targetSessionId,',
+      "assertDesktopSendDispatched(sendResult, 'send_to_session resumed');",
+    );
+    expect(resumedBranch).toContain('permissionMode: permissionModeOrAsk(dbRow.permissionMode),');
+    expect(resumedBranch).not.toContain("permissionMode: 'bypassPermissions',");
+  });
+
+  it('rechecks plugin target focus at the accepted boundary', () => {
+    const runnerBlock = extractBetween(
+      source,
+      'setGhostSessionMessageRunner(async',
+      '  setGhostErrandRunner(',
+    );
+    expect(runnerBlock).toContain('if (!(await isTargetCurrent())) {');
+    expect(runnerBlock).toContain('const readAuthorization = async () => {');
+    expect(runnerBlock).toContain('classifyGhostVisibility(ghostId, sessionRow.workingDir');
+    expect(runnerBlock).toContain('if (!(await readAuthorization())) {');
+    expectOrder(
+      runnerBlock,
+      'if (!(await isTargetCurrent())) {',
+      'const clientId = createId();',
+    );
+    expect(runnerBlock).toContain('onAccepted: async () => {');
+    expect(runnerBlock).toContain('throw new AcceptedCallbackDispatchCancelled(');
+    expect(runnerBlock).toContain('clientId,');
+    expect(runnerBlock).toContain('rewindPersistedUserMessageBeforeDispatch(sessionId, clientId)');
+    expect(runnerBlock).not.toContain('if (!rewound) return;');
+    expect(runnerBlock).toContain('dispatchState.rewound = rewound;');
+    expect(runnerBlock).toContain('return rewound;');
+    expect(source).toContain("'消息取消失败，请在任务中检查后重试'");
+    expect(runnerBlock).toContain('prepareBeforeVendorDispatch: async () => {');
+    expect(runnerBlock).toContain('finalDispatchGuard = await captureGhostSessionFocusGuard(sessionId);');
+    expect(runnerBlock).toContain('const authorization = await readAuthorization();');
+    expect(runnerBlock).toContain('finalAuthorizedWorkingDir = authorization.workingDir;');
+    expectOrder(
+      runnerBlock,
+      'prepareBeforeVendorDispatch: async () => {',
+      'assertBeforeVendorDispatch: () => {',
+    );
+    expectOrder(
+      runnerBlock,
+      'finalDispatchGuard = await captureGhostSessionFocusGuard(sessionId);',
+      'finalAuthorizedWorkingDir = authorization.workingDir;',
+    );
+    expect(runnerBlock).toContain('assertBeforeVendorDispatch: () => {');
+    expect(runnerBlock).toContain("'plugin target changed at final vendor dispatch boundary'");
+    expect(runnerBlock).toContain(
+      'classifyGhostVisibility(ghostId, finalAuthorizedWorkingDir',
+    );
+    expect(runnerBlock).toContain(
+      "'plugin current-task message authorization changed at final dispatch boundary'",
+    );
+    expect(runnerBlock).toContain('onDispatchCancelled: rewindCancelledMessage,');
+  });
+
+  it('screens plugin session messages once before direct or queued dispatch', () => {
+    const runnerBlock = extractBetween(
+      source,
+      'setGhostSessionMessageRunner(async',
+      '  setGhostErrandRunner(',
+    );
+    expect(runnerBlock).toContain('screenGhostUserMessage(sessionId, message)');
+    expect(runnerBlock).toContain("if (verdict.action === 'block') {");
+    expect(runnerBlock).toContain("errorCode: 'PERMISSION_DENIED'");
+    expect(runnerBlock).toContain(
+      "const screenedMessage = verdict.action === 'rewrite' ? verdict.text : message;",
+    );
+    expect(runnerBlock).toContain('message: screenedMessage,');
+    expect(runnerBlock).toContain('bypassGhostHooks: true,');
+    expect(runnerBlock).toContain('requireCurrentSessionFocus: true,');
+    expect(runnerBlock).toContain('pluginSessionMessageGhostId: ghostId,');
+
+    const enqueueBlock = extractBetween(
+      source,
+      'async function enqueueSendToSessionMessage',
+      'const orcaInterAgentDispatcher:',
+    );
+    const coordinatorBlock = extractBetween(
+      source,
+      'const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({',
+      'agentInputCoordinatorHolder = inputCoordinator;',
+    );
+    expect(enqueueBlock).toContain(
+      '...(params.bypassGhostHooks ? { bypassGhostHooks: true } : {}),',
+    );
+    expect(enqueueBlock).toContain(
+      '...(params.requireCurrentSessionFocus ? { requireCurrentSessionFocus: true } : {}),',
+    );
+    expect(enqueueBlock).toContain(
+      'pluginSessionMessageGhostId: params.pluginSessionMessageGhostId',
+    );
+    expect(coordinatorBlock).toContain('if (item.requireCurrentSessionFocus === true) {');
+    expect(coordinatorBlock).toContain('const ghostId = item.pluginSessionMessageGhostId;');
+    expect(coordinatorBlock).toContain(
+      'const sessionRow = await getSessionRowSnapshot(sessionId);',
+    );
+    expect(coordinatorBlock).toContain(
+      'classifyGhostVisibility(ghostId, sessionRow.workingDir',
+    );
+    expect(coordinatorBlock).not.toContain('classifyGhostVisibility(ghostId, item.workingDir');
+    expect(coordinatorBlock).toContain(
+      'visibility.ghost.manifest.agent?.sessionMessage !== true',
+    );
+    expect(source).toContain('delete normalized.pluginSessionMessageGhostId;');
+    expect(coordinatorBlock).toContain('isGhostSessionCurrent(sessionId)');
+    expect(coordinatorBlock).toContain(
+      'rewindPersistedUserMessageBeforeDispatch(sessionId, item.clientId)',
+    );
+    expect(coordinatorBlock).toContain('captureGhostSessionFocusGuard(sessionId)');
+    expect(coordinatorBlock).toContain('const authorization = await readQueuedPluginAuthorization();');
+    expect(coordinatorBlock).toContain('const finalAuthorizedWorkingDir = authorization.workingDir;');
+    expect(coordinatorBlock).toContain(
+      'classifyGhostVisibility(queuedGhostId, finalAuthorizedWorkingDir',
+    );
+    expect(coordinatorBlock).toContain(
+      "'plugin target changed at queued final vendor dispatch boundary'",
+    );
+    expect(coordinatorBlock).toContain(
+      "'plugin queued current-task message authorization changed at final dispatch boundary'",
+    );
+    expect(coordinatorBlock).toContain('throw new AcceptedCallbackDispatchCancelled(');
+    expect(coordinatorSource).toContain(
+      'if (steersStoredQueueItem && item.requireCurrentSessionFocus === true) {',
+    );
+    expect(coordinatorSource).toContain(
+      'const acceptedResult = await this.deps.onAcceptedQueuedMessage?.(sessionId, item);',
+    );
+    expect(coordinatorSource).toContain(
+      '...(finalDispatchGuard ? { assertBeforeVendorDispatch: finalDispatchGuard } : {}),',
+    );
+    expect(source).toContain('so.assertBeforeVendorDispatch?.();');
   });
 
   it('preserves stored permission and extraDirs when sendToWorker resumes a worker', () => {

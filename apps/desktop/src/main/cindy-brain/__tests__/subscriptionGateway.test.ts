@@ -12,10 +12,18 @@ import {
   GhostActivityTracker,
   GhostTapPendingQueue,
   GhostTurnOriginTracker,
+  buildGhostCurrentSessionSnapshot,
+  createGhostPrimarySessionFocusTracker,
   GhostTurnTranslator,
   createGhostSessionFocusTracker,
+  createGhostWindowFocusRevisionTracker,
   ghostActivityId,
   isGhostEligibleSessionRow,
+  isGhostCurrentSessionSourceEligible,
+  isGhostSessionSwitchEligibleRow,
+  readStableGhostCurrentSessionSnapshot,
+  resolveGhostPrimarySessionId,
+  selectGhostFocusedSessionCandidate,
   normalizeTurnUsage,
   readStatusIsRunning,
   resolveGhostUserHookModel,
@@ -744,6 +752,23 @@ describe('isGhostEligibleSessionRow(订阅投递资格行级判定)', () => {
   });
 });
 
+describe('isGhostSessionSwitchEligibleRow(did-session-switched 专用资格)', () => {
+  it('只额外放行 Orca Lead，仍排除 Worker 与后台来源', () => {
+    expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: null })).toBe(true);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: 'lead' })).toBe(true);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: 'worker' })).toBe(false);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: 'unknown' })).toBe(false);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'scheduler', orcaRole: null })).toBe(false);
+    expect(isGhostCurrentSessionSourceEligible('desktop')).toBe(true);
+    expect(isGhostCurrentSessionSourceEligible('shared')).toBe(true);
+    expect(isGhostCurrentSessionSourceEligible('plugin')).toBe(true);
+    expect(isGhostCurrentSessionSourceEligible('scheduler')).toBe(false);
+    expect(isGhostCurrentSessionSourceEligible('learn')).toBe(false);
+    expect(isGhostCurrentSessionSourceEligible('feishu')).toBe(false);
+    expect(isGhostCurrentSessionSourceEligible(null)).toBe(false);
+  });
+});
+
 describe('createGhostSessionFocusTracker(did-session-switched 去重)', () => {
   it('真变化才发;连续同 id 不重发', () => {
     const notify = vi.fn();
@@ -763,6 +788,269 @@ describe('createGhostSessionFocusTracker(did-session-switched 去重)', () => {
     tracker.note(null); // 重复 null:不发
     tracker.note('s1'); // 切回:算一次新切换
     expect(notify.mock.calls).toEqual([['s1'], ['s1']]);
+  });
+});
+
+describe('selectGhostFocusedSessionCandidate', () => {
+  it('优先使用聚焦主窗口自己的任务', () => {
+    expect(
+      selectGhostFocusedSessionCandidate(
+        [
+          { webContentsId: 1, sessionId: 's1' },
+          { webContentsId: 2, sessionId: 's2' },
+        ],
+        2,
+      ),
+    ).toEqual({ webContentsId: 2, sessionId: 's2' });
+  });
+
+  it('独立插件窗聚焦时仅对唯一主窗口回落，多主窗口 fail closed', () => {
+    expect(
+      selectGhostFocusedSessionCandidate([{ webContentsId: 1, sessionId: 's1' }], null),
+    ).toEqual({ webContentsId: 1, sessionId: 's1' });
+    expect(
+      selectGhostFocusedSessionCandidate(
+        [
+          { webContentsId: 1, sessionId: 's1' },
+          { webContentsId: 2, sessionId: 's2' },
+        ],
+        null,
+      ),
+    ).toBeNull();
+  });
+
+  it('聚焦窗口在非任务页时不借用其它窗口任务', () => {
+    expect(
+      selectGhostFocusedSessionCandidate(
+        [
+          { webContentsId: 1, sessionId: null },
+          { webContentsId: 2, sessionId: 's2' },
+        ],
+        1,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('createGhostWindowFocusRevisionTracker', () => {
+  it('只让发生路由变化的窗口版本失效', () => {
+    const revisions = createGhostWindowFocusRevisionTracker();
+    const firstWindowRevision = revisions.note(1);
+    revisions.note(2);
+    expect(revisions.current(1)).toBe(firstWindowRevision);
+    revisions.note(1);
+    expect(revisions.current(1)).toBe(firstWindowRevision + 1);
+  });
+
+  it('窗口销毁后清除旧版本', () => {
+    const revisions = createGhostWindowFocusRevisionTracker();
+    revisions.note(1);
+    revisions.drop(1);
+    expect(revisions.current(1)).toBe(0);
+  });
+});
+
+describe('readStableGhostCurrentSessionSnapshot', () => {
+  it('快照读取期间焦点变化时丢弃旧任务数据', async () => {
+    const resolveCurrentSessionId = vi
+      .fn<() => Promise<string | null>>()
+      .mockResolvedValueOnce('session-old')
+      .mockResolvedValueOnce('session-new');
+    const readSnapshot = vi.fn(async () => ({ title: '旧任务' }));
+
+    await expect(
+      readStableGhostCurrentSessionSnapshot(resolveCurrentSessionId, readSnapshot),
+    ).resolves.toBeNull();
+    expect(readSnapshot).toHaveBeenCalledWith('session-old');
+  });
+
+  it('焦点保持不变时返回对应任务快照', async () => {
+    const resolveCurrentSessionId = vi.fn(async () => 'session-1');
+    const readSnapshot = vi.fn(async () => ({ title: '当前任务' }));
+
+    await expect(
+      readStableGhostCurrentSessionSnapshot(resolveCurrentSessionId, readSnapshot),
+    ).resolves.toEqual({
+      sessionId: 'session-1',
+      snapshot: { title: '当前任务' },
+    });
+  });
+});
+
+describe('resolveGhostPrimarySessionId', () => {
+  it('普通任务保持原 id，Worker 归一到 Lead', async () => {
+    const readRole = vi.fn(async (sessionId: string) =>
+      sessionId === 'worker-1' ? 'worker' : null,
+    );
+    const lookup = vi.fn(async (sessionId: string) =>
+      sessionId === 'worker-1' ? 'lead-1' : null,
+    );
+    await expect(resolveGhostPrimarySessionId('normal-1', readRole, lookup)).resolves.toBe(
+      'normal-1',
+    );
+    await expect(resolveGhostPrimarySessionId('worker-1', readRole, lookup)).resolves.toBe(
+      'lead-1',
+    );
+  });
+
+  it('Worker 归一缺失或查询失败时 fail closed', async () => {
+    await expect(
+      resolveGhostPrimarySessionId('worker-1', async () => 'worker', async () => null),
+    ).resolves.toBeNull();
+    await expect(
+      resolveGhostPrimarySessionId('session-1', async () => undefined, async () => null),
+    ).resolves.toBeNull();
+    await expect(
+      resolveGhostPrimarySessionId(
+        'worker-1',
+        async () => {
+          throw new Error('db unavailable');
+        },
+        async () => 'lead-1',
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it('未知协同角色不暴露给插件', async () => {
+    await expect(
+      resolveGhostPrimarySessionId('session-1', async () => 'unknown', async () => null),
+    ).resolves.toBeNull();
+  });
+});
+
+describe('createGhostPrimarySessionFocusTracker', () => {
+  it('同一 Lead 下的 Worker 切换只发布一次主任务', async () => {
+    const notify = vi.fn();
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async () => 'lead-1',
+      notify,
+    );
+    tracker.note('worker-1');
+    await Promise.resolve();
+    tracker.note('worker-2');
+    await Promise.resolve();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith('lead-1');
+  });
+
+  it('忽略晚到的旧任务归一结果', async () => {
+    const notify = vi.fn();
+    const pending = new Map<string, (value: string) => void>();
+    const tracker = createGhostPrimarySessionFocusTracker(
+      (sessionId) =>
+        new Promise<string>((resolve) => {
+          pending.set(sessionId, resolve);
+        }),
+      notify,
+    );
+    tracker.note('worker-old');
+    tracker.note('worker-new');
+    pending.get('worker-new')?.('lead-new');
+    await Promise.resolve();
+    pending.get('worker-old')?.('lead-old');
+    await Promise.resolve();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith('lead-new');
+  });
+
+  it('主任务归一完成前不暴露原始 Worker，失败后保持为空', async () => {
+    const notify = vi.fn();
+    let resolvePrimary: ((value: string | null) => void) | undefined;
+    const tracker = createGhostPrimarySessionFocusTracker(
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolvePrimary = resolve;
+        }),
+      notify,
+    );
+
+    tracker.note('worker-1');
+    expect(tracker.current()).toBeNull();
+
+    resolvePrimary?.(null);
+    await Promise.resolve();
+    expect(tracker.current()).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('焦点归一为空时清除去重，切回原主任务会再次发布', async () => {
+    const notify = vi.fn();
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async (sessionId) => (sessionId === 'hidden-session' ? null : 'lead-1'),
+      notify,
+    );
+
+    tracker.note('worker-1');
+    await Promise.resolve();
+    tracker.note('hidden-session');
+    await Promise.resolve();
+    tracker.note('worker-1');
+    await Promise.resolve();
+
+    expect(notify.mock.calls).toEqual([['lead-1'], ['lead-1']]);
+  });
+
+  it('晚到的旧空结果不会清除新焦点的去重状态', async () => {
+    const notify = vi.fn();
+    const pending = new Map<string, (value: string | null) => void>();
+    const tracker = createGhostPrimarySessionFocusTracker(
+      (sessionId) =>
+        new Promise<string | null>((resolve) => {
+          pending.set(sessionId, resolve);
+        }),
+      notify,
+    );
+
+    tracker.note('old-session');
+    tracker.note('current-session');
+    pending.get('current-session')?.('lead-1');
+    await Promise.resolve();
+    pending.get('old-session')?.(null);
+    await Promise.resolve();
+    tracker.note('current-session');
+    pending.get('current-session')?.('lead-1');
+    await Promise.resolve();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith('lead-1');
+  });
+});
+
+describe('buildGhostCurrentSessionSnapshot', () => {
+  it('返回宿主当前任务的标题、本地目录与只读状态', () => {
+    expect(
+      buildGhostCurrentSessionSnapshot(
+        'lead-1',
+        { title: '主任务', workingDir: 'D:/repo-from-row' },
+        {
+          workingDir: 'D:/repo-from-fs',
+          remoteHostId: null,
+          workdirIsReadOnly: false,
+        },
+      ),
+    ).toEqual({
+      sessionId: 'lead-1',
+      sessionName: '主任务',
+      workdir: 'D:/repo-from-fs',
+      workdir_is_local: true,
+      workdir_is_read_only: false,
+    });
+  });
+
+  it('快照不可读时保留任务信息，但目录权限 fail closed', () => {
+    expect(
+      buildGhostCurrentSessionSnapshot(
+        'lead-1',
+        { title: '主任务', workingDir: 'D:/repo-from-row' },
+        null,
+      ),
+    ).toEqual({
+      sessionId: 'lead-1',
+      sessionName: '主任务',
+      workdir: 'D:/repo-from-row',
+      workdir_is_local: false,
+      workdir_is_read_only: true,
+    });
   });
 });
 

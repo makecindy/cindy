@@ -3563,6 +3563,8 @@
         "agentErrandDetail": "這些代辦會在這個插件的專屬任務裡進行，你隨時可以在側邊欄看到並叫停；預設只能讀不能改，要放開需你在插件配置裡親手調整，可能產生模型費用。",
         "agentSchedule": "可以請你新建自動化",
         "agentScheduleDetail": "它只能為你開啟新建自動化的面板並把內容填好，是否建立由你在面板上選好模型後親手儲存決定。建立後由 Cindy 按你設定的時間執行，可能產生模型費用。",
+        "agentSessionMessage": "向目前任務傳送訊息",
+        "agentSessionMessageDetail": "允許插件面板向目前焦點任務傳送一般使用者訊息，訊息仍由目前 Agent 依正常權限與 Skill 流程處理。",
         "nodeRuntime": "可在本機執行隨插件附帶的 Node 程式",
         "nodeMcp": "可在本機執行隨插件附帶的 stdio MCP",
         "nodeRuntimeDetail": "高風險：它和你本人一樣，可以讀取或修改你帳號能訪問的本機檔案、訪問網路並啟動其它程式。Cindy 不能用瀏覽器沙箱限制它。",

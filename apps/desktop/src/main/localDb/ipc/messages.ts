@@ -972,20 +972,67 @@ export function broadcastMessageDeleted(
   }
 }
 
+/** Canonical sidebar preview after a hidden pre-dispatch row is removed. */
+async function readVisibleSessionPreview(sessionId: string): Promise<string | null> {
+  const db = getDbClient().drizzle;
+  const [sessionRow] = await db
+    .select({ clearedAt: sessions.clearedAt })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  const visibleAfterClear =
+    sessionRow?.clearedAt == null ? undefined : gt(messages.createdAt, sessionRow.clearedAt);
+  const [latestRow] = await db
+    .select({ content: messages.content, role: messages.role })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        sql`${messages.role} IN ('user', 'assistant')`,
+        isNull(messages.rewindAt),
+        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        visibleAfterClear,
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(1);
+  return extractMessagePreview(latestRow?.content, latestRow?.role);
+}
+
+function broadcastSessionPreviewPatched(
+  sessionId: string,
+  preview: string | null,
+  ownerScope: DataOwnerBroadcastScope | null,
+): void {
+  const ownerStamp = ownerStampForBroadcast(ownerScope);
+  if (ownerStamp === null) return;
+  const payload = { sessionId, patch: { preview } };
+  if (ownerStamp === undefined) {
+    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', payload);
+  } else {
+    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', payload, ownerStamp);
+  }
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    if (ownerStamp === undefined) win.webContents.send('local-db:sessions:patched', payload);
+    else win.webContents.send('local-db:sessions:patched', payload, ownerStamp);
+  }
+}
+
 /**
- * Hide a user row that was persisted after the session crossed `/clear`.
+ * Hide a user row that was persisted but cancelled before vendor dispatch.
  *
- * This is deliberately narrower than `commitMessageDeletion`: a clear-race
+ * This is deliberately narrower than `commitMessageDeletion`: pre-dispatch
  * cleanup must not create a context-rebuild marker, reset the native session,
- * or touch any other turn.  The row stays as a rewind tombstone so the same
- * clientId remains idempotent across a weak-link retry.
+ * or touch any other turn. The row stays as a rewind tombstone so the same
+ * clientId remains idempotent across retries.
  */
-export async function rewindPersistedUserMessageAfterClear(
+export async function rewindPersistedUserMessageBeforeDispatch(
   sessionId: string,
   clientId: string,
-): Promise<void> {
+): Promise<boolean> {
   const ownerScope = captureOwnerBroadcastScope();
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return false;
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
   const [row] = await db
@@ -1000,8 +1047,8 @@ export async function rewindPersistedUserMessageAfterClear(
       ),
     )
     .limit(1);
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  if (!row) return;
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return false;
+  if (!row) return true;
 
   const rewoundAt = Date.now();
   const updated = await dbClient.exec(
@@ -1013,8 +1060,8 @@ export async function rewindPersistedUserMessageAfterClear(
         AND rewind_at IS NULL`,
     [rewoundAt, sessionId, clientId],
   );
-  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  if (updated.changes === 0) return;
+  // DB 已成功隐藏该行后，即使 owner 在后续清理期间切换，取消派发仍然安全。
+  if (updated.changes === 0) return true;
 
   const mediaCleanup = await Promise.allSettled(
     [...new Set([row.id, row.clientId])].map((refId) =>
@@ -1023,7 +1070,7 @@ export async function rewindPersistedUserMessageAfterClear(
   );
   for (const [index, cleanup] of mediaCleanup.entries()) {
     if (cleanup.status === 'fulfilled') continue;
-    log.warn('clear-race user media ref cleanup failed', {
+    log.warn('undispatched user media ref cleanup failed', {
       sessionId,
       clientId,
       refId: [row.id, row.clientId][index],
@@ -1038,7 +1085,7 @@ export async function rewindPersistedUserMessageAfterClear(
   );
   for (const [index, cleanup] of mediaHashCleanup.entries()) {
     if (cleanup.status === 'fulfilled') continue;
-    log.warn('clear-race session media ref reconcile failed', {
+    log.warn('undispatched session media ref reconcile failed', {
       sessionId,
       clientId,
       hash: mediaHashes[index],
@@ -1046,7 +1093,31 @@ export async function rewindPersistedUserMessageAfterClear(
     });
   }
   broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
+  if (isOwnerBroadcastScopeCurrent(ownerScope)) {
+    try {
+      broadcastSessionPreviewPatched(
+        sessionId,
+        await readVisibleSessionPreview(sessionId),
+        ownerScope,
+      );
+    } catch (error) {
+      log.warn('undispatched user session preview refresh failed', {
+        sessionId,
+        clientId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
+  return true;
+}
+
+/** Backward-compatible clear-race entry point for existing callers and tests. */
+export async function rewindPersistedUserMessageAfterClear(
+  sessionId: string,
+  clientId: string,
+): Promise<void> {
+  await rewindPersistedUserMessageBeforeDispatch(sessionId, clientId);
 }
 
 export async function dismissErrorMessage(

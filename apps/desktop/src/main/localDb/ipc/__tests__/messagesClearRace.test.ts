@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
   client: null as any,
   broadcast: vi.fn(),
   raceOnInsert: false,
+  ownerScope: null as { ownerStamp: string } | null,
+  ownerScopeCurrent: true,
 }));
 
 vi.mock('electron', () => ({
@@ -47,7 +49,8 @@ vi.mock('../../../device-link/invoke-context', () => ({
   isDeviceLinkInvoke: vi.fn(() => false),
 }));
 vi.mock('../../../device-link/broadcast-tap', () => ({
-  captureDataOwnerBroadcastScope: vi.fn(() => null),
+  captureDataOwnerBroadcastScope: vi.fn(() => h.ownerScope),
+  isDataOwnerBroadcastScopeCurrent: vi.fn(() => h.ownerScopeCurrent),
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.broadcast,
 }));
@@ -55,7 +58,11 @@ vi.mock('../../client/current', () => ({
   getDbClient: () => h.client,
 }));
 
-import { createMessage, rewindPersistedUserMessageAfterClear } from '../messages';
+import {
+  createMessage,
+  rewindPersistedUserMessageAfterClear,
+  rewindPersistedUserMessageBeforeDispatch,
+} from '../messages';
 
 function createDb(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -103,6 +110,8 @@ describe('message persistence clear boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.raceOnInsert = false;
+    h.ownerScope = null;
+    h.ownerScopeCurrent = true;
     sqlite = createDb();
   });
 
@@ -177,5 +186,78 @@ describe('message persistence clear boundary', () => {
       sessionId: 's1',
       hash,
     });
+  });
+
+  it('rewinds a plugin message cancelled before vendor dispatch', async () => {
+    sqlite
+      .prepare(
+        `INSERT INTO messages
+          (id, client_id, session_id, role, content, created_at, rewind_at)
+         VALUES (?, ?, ?, 'assistant', ?, ?, NULL)`,
+      )
+      .run('row-previous', 'client-previous', 's1', 'previous answer', 90);
+    sqlite
+      .prepare(
+        `INSERT INTO messages
+          (id, client_id, session_id, role, content, created_at, rewind_at)
+         VALUES (?, ?, ?, 'user', ?, ?, NULL)`,
+      )
+      .run('row-plugin', 'client-plugin', 's1', 'submit', 100);
+
+    await expect(
+      rewindPersistedUserMessageBeforeDispatch('s1', 'client-plugin'),
+    ).resolves.toBe(true);
+
+    const row = sqlite
+      .prepare('SELECT rewind_at AS rewindAt FROM messages WHERE session_id = ? AND client_id = ?')
+      .get('s1', 'client-plugin') as { rewindAt: number | null };
+    expect(row.rewindAt).toEqual(expect.any(Number));
+    expect(h.broadcast).toHaveBeenCalledWith('local-db:messages:deleted', {
+      sessionId: 's1',
+      clientId: 'client-plugin',
+      clientIds: ['client-plugin'],
+    });
+    expect(h.broadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 's1',
+      patch: { preview: 'previous answer' },
+    });
+  });
+
+  it('clears the session preview when a cancelled plugin message was the only visible row', async () => {
+    sqlite
+      .prepare(
+        `INSERT INTO messages
+          (id, client_id, session_id, role, content, created_at, rewind_at)
+         VALUES (?, ?, ?, 'user', ?, ?, NULL)`,
+      )
+      .run('row-only', 'client-only', 's1', 'submit', 100);
+
+    await expect(rewindPersistedUserMessageBeforeDispatch('s1', 'client-only')).resolves.toBe(true);
+
+    expect(h.broadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 's1',
+      patch: { preview: null },
+    });
+  });
+
+  it('reports failure when owner scope expires before the rewind starts', async () => {
+    h.ownerScope = { ownerStamp: 'owner-a' };
+    h.ownerScopeCurrent = false;
+    sqlite
+      .prepare(
+        `INSERT INTO messages
+          (id, client_id, session_id, role, content, created_at, rewind_at)
+         VALUES (?, ?, ?, 'user', ?, ?, NULL)`,
+      )
+      .run('row-stale-owner', 'client-stale-owner', 's1', 'submit', 100);
+
+    await expect(
+      rewindPersistedUserMessageBeforeDispatch('s1', 'client-stale-owner'),
+    ).resolves.toBe(false);
+    const row = sqlite
+      .prepare('SELECT rewind_at AS rewindAt FROM messages WHERE session_id = ? AND client_id = ?')
+      .get('s1', 'client-stale-owner') as { rewindAt: number | null };
+    expect(row.rewindAt).toBeNull();
+    expect(h.broadcast).not.toHaveBeenCalled();
   });
 });

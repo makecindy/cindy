@@ -260,9 +260,10 @@ import {
   type ConnectionAudienceResolver,
 } from './connectionAudienceResolver.js';
 import { ConnectionTokenProvider, type IssuedConnectionToken } from './connectionTokenProvider.js';
-import { GhostFsSlot } from './fsSlot.js';
+import { GhostFsSlot, workdirWriteVerdict } from './fsSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
-import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
+import { getSessionFsSnapshot, getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
+import { getTeamByWorkerSession } from '../localDb/orcaTeamStore.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
 import { readInstalledGhostManifest } from '../installedGhostManifest.js';
 import {
@@ -277,7 +278,15 @@ import {
   createGhostSessionFocusTracker,
   GhostTapPendingQueue,
   GhostTurnOriginTracker,
+  buildGhostCurrentSessionSnapshot,
+  createGhostWindowFocusRevisionTracker,
+  createGhostPrimarySessionFocusTracker,
   isGhostEligibleSessionRow,
+  isGhostCurrentSessionSourceEligible,
+  isGhostSessionSwitchEligibleRow,
+  readStableGhostCurrentSessionSnapshot,
+  resolveGhostPrimarySessionId,
+  selectGhostFocusedSessionCandidate,
   type GhostInteractionActivityKind,
   type GhostScreenResult,
   type MinimalAgentEvent,
@@ -1480,6 +1489,39 @@ export function hasPendingGhostCalls(ghostId: string): boolean {
 
 let agentSlotSingleton: GhostAgentSlot | null = null;
 
+export type GhostSessionMessageRunRequest = {
+  ghostId: string;
+  sessionId: string;
+  message: string;
+  isTargetCurrent: () => Promise<boolean>;
+};
+
+export type GhostSessionMessageRunResult =
+  | {
+      ok: true;
+      sessionId: string;
+      disposition: 'created' | 'resumed' | 'active' | 'queued';
+    }
+  | {
+      ok: false;
+      errorCode: string;
+      message: string;
+    };
+
+export type GhostSessionMessageRunner = (
+  request: GhostSessionMessageRunRequest,
+) => Promise<GhostSessionMessageRunResult>;
+
+let ghostSessionMessageRunner: GhostSessionMessageRunner | null = null;
+const ghostSessionMessageInFlight = new Set<string>();
+const ghostSessionMessageLastSentAt = new Map<string, number>();
+const GHOST_SESSION_MESSAGE_MIN_INTERVAL_MS = 1000;
+
+/** maker-ipc 注入统一 Session 消息投递器，避免 cindy-brain 反向依赖 maker-ipc。 */
+export function setGhostSessionMessageRunner(runner: GhostSessionMessageRunner | null): void {
+  ghostSessionMessageRunner = runner;
+}
+
 /** Agent 新回合槽单例：一次性点击票、后台权限与模板替换的统一守门点。 */
 export function getGhostAgentSlot(): GhostAgentSlot {
   if (!agentSlotSingleton) {
@@ -1716,6 +1758,7 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
  */
 async function isGhostEligibleSession(
   sessionId: string,
+  scope: 'default' | 'session-switch' = 'default',
 ): Promise<
   | { outcome: 'eligible'; agentKind?: string; workdir?: string }
   | { outcome: 'ineligible' }
@@ -1736,7 +1779,11 @@ async function isGhostEligibleSession(
       .limit(1);
     const row = rows[0];
     if (!row) return { outcome: 'retry' }; // 行未落库(极早期)→ 暂时态
-    if (isGhostEligibleSessionRow(row)) {
+    const eligible =
+      scope === 'session-switch'
+        ? isGhostSessionSwitchEligibleRow(row)
+        : isGhostEligibleSessionRow(row);
+    if (eligible) {
       return {
         outcome: 'eligible',
         agentKind: row.agentKind ?? undefined,
@@ -1745,6 +1792,7 @@ async function isGhostEligibleSession(
     }
     log.debug('ghost eligibility: rejected', {
       sessionId,
+      scope,
       source: String(row.source),
       orcaRole: String(row.orcaRole),
     });
@@ -2182,16 +2230,22 @@ export function notifyGhostSessionEvent(
         (g) => g.enabled && g.manifest.subscribe?.topics?.includes('session'),
       );
       if (!hasSubscriber) return;
-      // 投递范围与 turn 事件同口径:只投用户主会话(retry 视为不投,
-      // 生命周期事件不值得重试机制)。
-      const info = await isGhostEligibleSession(data.sessionId);
+      // switched 已在焦点入口归一到 Lead；这里只用专用资格判断放行该事件，
+      // 其它事件继续保持旧 turn/hook 范围。
+      const sessionId = data.sessionId;
+      if (!sessionId) return;
+      const info = await isGhostEligibleSession(
+        sessionId,
+        kind === 'switched' ? 'session-switch' : 'default',
+      );
       if (info.outcome !== 'eligible') return;
       // switched 的调用方(renderer 路由上报)只有 sessionId,workdir 从资格
       // 查询顺手补上,与 created/archived 的载荷形状对齐。
+      const normalizedData = sessionId === data.sessionId ? data : { ...data, sessionId };
       const payload =
         data.workdir === undefined && info.workdir !== undefined
-          ? { ...data, workdir: info.workdir }
-          : data;
+          ? { ...normalizedData, workdir: info.workdir }
+          : normalizedData;
       getGhostSubscriptionGateway().publish(
         'session',
         kind === 'created'
@@ -2212,11 +2266,98 @@ export function notifyGhostSessionEvent(
  * 调,平台无关):去重后发 did-session-switched。连续同 id / 非会话页(null)
  * 不发;切走再切回算新切换(去重语义见 createGhostSessionFocusTracker)。
  */
-const ghostSessionFocusTracker = createGhostSessionFocusTracker((sessionId) =>
-  notifyGhostSessionEvent('switched', { sessionId }),
+const rawGhostSessionFocusTracker = createGhostSessionFocusTracker(() => undefined);
+async function resolveGhostPrimarySession(sessionId: string): Promise<string | null> {
+  return resolveGhostPrimarySessionId(
+    sessionId,
+    async (candidateSessionId) => {
+      const row = await getSessionRowSnapshot(candidateSessionId);
+      // Focus can point at any visible session source. Only user tasks and an
+      // Orca Lead may be exposed through the plugin current-session API.
+      if (!row || !isGhostCurrentSessionSourceEligible(row.source)) return 'unknown';
+      return row.orcaRole;
+    },
+    async (workerSessionId) => {
+      const team = await getTeamByWorkerSession(workerSessionId);
+      return team?.leadSessionId ?? null;
+    },
+  );
+}
+const ghostSessionFocusTracker = createGhostPrimarySessionFocusTracker(
+  resolveGhostPrimarySession,
+  (sessionId) => notifyGhostSessionEvent('switched', { sessionId }),
 );
+const ghostSessionFocusRevisions = createGhostWindowFocusRevisionTracker();
 export function noteGhostSessionFocused(sessionId: string | null): void {
+  rawGhostSessionFocusTracker.note(sessionId);
   ghostSessionFocusTracker.note(sessionId);
+}
+
+type GhostSessionFocusGuard = {
+  revision: number;
+  webContentsId: number;
+  rawSessionId: string;
+};
+
+function readGhostSessionFocusCandidate(): { webContentsId: number; sessionId: string } | null {
+  const focused = BrowserWindow.getFocusedWindow();
+  return selectGhostFocusedSessionCandidate(
+    mainShellWindows().map((window) => ({
+      webContentsId: window.webContents.id,
+      sessionId: ghostSessionFocusByWebContents.get(window.webContents.id) ?? null,
+    })),
+    focused && !focused.isDestroyed() ? focused.webContents.id : null,
+  );
+}
+
+async function currentGhostSessionId(): Promise<string | null> {
+  const candidate = readGhostSessionFocusCandidate();
+  if (!candidate) return null;
+  const primarySessionId = await resolveGhostPrimarySession(candidate.sessionId);
+  const current = readGhostSessionFocusCandidate();
+  return current?.webContentsId === candidate.webContentsId &&
+    current.sessionId === candidate.sessionId
+    ? primarySessionId
+    : null;
+}
+
+export async function isGhostSessionCurrent(sessionId: string): Promise<boolean> {
+  return (await currentGhostSessionId()) === sessionId;
+}
+
+/**
+ * 异步确认目标仍是当前主任务，并返回可在 vendor 前同步复核的焦点守卫。
+ * 同步复核同时约束窗口、原始路由与路由版本，避免异步主任务归一化后又切换焦点。
+ */
+export async function captureGhostSessionFocusGuard(
+  sessionId: string,
+): Promise<(() => boolean) | null> {
+  const candidate = readGhostSessionFocusCandidate();
+  if (!candidate) return null;
+  const revision = ghostSessionFocusRevisions.current(candidate.webContentsId);
+  const primarySessionId = await resolveGhostPrimarySession(candidate.sessionId);
+  const current = readGhostSessionFocusCandidate();
+  if (
+    primarySessionId !== sessionId ||
+    revision !== ghostSessionFocusRevisions.current(candidate.webContentsId) ||
+    current?.webContentsId !== candidate.webContentsId ||
+    current.sessionId !== candidate.sessionId
+  ) {
+    return null;
+  }
+  const guard: GhostSessionFocusGuard = {
+    revision,
+    webContentsId: candidate.webContentsId,
+    rawSessionId: candidate.sessionId,
+  };
+  return () => {
+    const latest = readGhostSessionFocusCandidate();
+    return (
+      guard.revision === ghostSessionFocusRevisions.current(guard.webContentsId) &&
+      latest?.webContentsId === guard.webContentsId &&
+      latest.sessionId === guard.rawSessionId
+    );
+  };
 }
 
 const ghostSessionFocusByWebContents = new Map<number, string | null>();
@@ -2230,10 +2371,12 @@ function noteGhostWindowSessionFocused(sender: WebContents, sessionId: string | 
   const previous = ghostSessionFocusByWebContents.get(sender.id);
   if (previous === sessionId) return;
   ghostSessionFocusByWebContents.set(sender.id, sessionId);
+  ghostSessionFocusRevisions.note(sender.id);
   if (!ghostSessionFocusTrackedWebContents.has(sender.id)) {
     ghostSessionFocusTrackedWebContents.add(sender.id);
     sender.once('destroyed', () => {
       ghostSessionFocusByWebContents.delete(sender.id);
+      ghostSessionFocusRevisions.drop(sender.id);
       ghostSessionFocusTrackedWebContents.delete(sender.id);
     });
   }
@@ -2873,7 +3016,9 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
   if (!previewSlotSingleton) {
     previewSlotSingleton = new GhostPreviewSlot({
       getGhost: findAvailableGhost,
-      focusedSessionId: () => ghostSessionFocusTracker.current(),
+       // Preview keeps the raw focused task as its fallback target. The
+       // normalized tracker is reserved for plugin current-task/session events.
+       focusedSessionId: () => rawGhostSessionFocusTracker.current(),
       broadcast: (payload) => {
         const windows = BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
         windows.forEach((window) => {
@@ -5170,6 +5315,167 @@ export function registerGhostIpc(): void {
     }
     // host-request = 读取宿主公开上下文;不要求卡槽,只返回构建 region,
     // 不含登录态/路径/设备信息。未知 kind 明确拒绝,避免接口悄悄扩面。
+    if (type === 'session-request') {
+      const request = payload as {
+        kind?: unknown;
+        sessionId?: unknown;
+        message?: unknown;
+      };
+      const ghost = findAvailableGhost(id);
+      if (!ghost?.enabled) throwIpcError('PERMISSION_DENIED', '插件未启用');
+
+      if (request.kind === 'get-current-session') {
+        if (
+          !ghost.manifest.slots.includes('session-context') ||
+          !ghost.manifest.slots.includes('agent') ||
+          ghost.manifest.agent?.sessionMessage !== true
+        ) {
+          throwIpcError('PERMISSION_DENIED', '插件未声明当前任务消息能力');
+        }
+        const current = await readStableGhostCurrentSessionSnapshot(
+          currentGhostSessionId,
+          (sessionId) =>
+            Promise.all([getSessionRowSnapshot(sessionId), getSessionFsSnapshot(sessionId)]),
+        );
+        if (!current) {
+          return {
+            ok: true,
+            kind: 'current-session' as const,
+            sessionId: null,
+          };
+        }
+        const { sessionId, snapshot: [row, fsSnapshot] } = current;
+        if (isGhostDisabledForWorkdir(id, fsSnapshot?.workingDir ?? row?.workingDir)) {
+          return {
+            ok: false as const,
+            errorCode: 'PERMISSION_DENIED' as const,
+            message: '插件已在当前任务的工作目录中停用',
+          };
+        }
+        return {
+          ok: true,
+          kind: 'current-session' as const,
+          sessionId,
+          session: buildGhostCurrentSessionSnapshot(
+            sessionId,
+            row,
+            fsSnapshot
+              ? {
+                  workingDir: fsSnapshot.workingDir,
+                  remoteHostId: fsSnapshot.remoteHostId,
+                  workdirIsReadOnly:
+                    workdirWriteVerdict(
+                      fsSnapshot.permissionMode,
+                      fsSnapshot.planModeEnabled,
+                    ) === 'deny',
+                }
+              : null,
+          ),
+        };
+      }
+
+      if (request.kind === 'send-message') {
+        if (
+          !ghost.manifest.slots.includes('agent') ||
+          ghost.manifest.agent?.sessionMessage !== true
+        ) {
+          throwIpcError('PERMISSION_DENIED', '插件未声明当前任务消息能力');
+        }
+        if (
+          typeof request.sessionId !== 'string' ||
+          request.sessionId.trim().length === 0 ||
+          request.sessionId.length > 128
+        ) {
+          throwIpcError('INVALID_PARAMS', 'sessionId must be a non-empty string');
+        }
+        if (
+          typeof request.message !== 'string' ||
+          request.message.trim().length === 0 ||
+          request.message.length > 16_384
+        ) {
+          throwIpcError('INVALID_PARAMS', 'message must be 1-16384 characters');
+        }
+        const focusedSessionId = await currentGhostSessionId();
+        if (!focusedSessionId) {
+          return {
+            ok: false as const,
+            errorCode: 'SESSION_UNAVAILABLE' as const,
+            message: '当前没有可用的任务',
+          };
+        }
+        if (request.sessionId !== focusedSessionId) {
+          return {
+            ok: false as const,
+            errorCode: 'PERMISSION_DENIED' as const,
+            message: '插件只能向当前焦点任务发送消息',
+          };
+        }
+        const focusedSession = await getSessionFsSnapshot(request.sessionId);
+        if (!focusedSession) {
+          return {
+            ok: false as const,
+            errorCode: 'SESSION_UNAVAILABLE' as const,
+            message: '当前任务信息不可用，请重试',
+          };
+        }
+        if (isGhostDisabledForWorkdir(id, focusedSession.workingDir)) {
+          return {
+            ok: false as const,
+            errorCode: 'PERMISSION_DENIED' as const,
+            message: '插件已在当前任务的工作目录中停用',
+          };
+        }
+        const now = Date.now();
+        const lastSentAt = ghostSessionMessageLastSentAt.get(id) ?? 0;
+        if (now - lastSentAt < GHOST_SESSION_MESSAGE_MIN_INTERVAL_MS) {
+          return {
+            ok: false as const,
+            errorCode: 'RATE_LIMITED' as const,
+            message: '插件发送任务消息过于频繁，请稍后重试',
+          };
+        }
+        if (ghostSessionMessageInFlight.has(id)) {
+          return {
+            ok: false as const,
+            errorCode: 'BUSY' as const,
+            message: '插件已有一条任务消息正在发送',
+          };
+        }
+        if (!ghostSessionMessageRunner) {
+          return {
+            ok: false as const,
+            errorCode: 'HOST_NOT_READY' as const,
+            message: '任务消息服务尚未准备好',
+          };
+        }
+        const recheckedSessionId = await currentGhostSessionId();
+        if (recheckedSessionId !== request.sessionId) {
+          return {
+            ok: false as const,
+            errorCode: 'SESSION_UNAVAILABLE' as const,
+            message: '当前焦点任务已变化，请重试',
+          };
+        }
+        ghostSessionMessageLastSentAt.set(id, now);
+        const pending = ghostSessionMessageRunner({
+            ghostId: id,
+            sessionId: request.sessionId,
+            message: request.message,
+            isTargetCurrent: async () =>
+              (await currentGhostSessionId()) === request.sessionId,
+          });
+        ghostSessionMessageInFlight.add(id);
+        try {
+          const result = await pending;
+          if (!result.ok) return result;
+          return { ...result, kind: 'message-sent' as const };
+        } finally {
+          ghostSessionMessageInFlight.delete(id);
+        }
+      }
+
+      throwIpcError('INVALID_PARAMS', '未知的 session 请求类型');
+    }
     if (type === 'host-request') {
       const kind = (payload as { kind?: unknown } | null)?.kind;
       if (kind === 'app-context') return currentGhostAppContext();
@@ -5223,7 +5529,16 @@ export function registerGhostIpc(): void {
     // preview-request = 右侧栏开预览标签(preview 槽):URL 必须命中身份卡
     // preview.hosts 白名单;守门/限速在 previewSlot,落地在 renderer。
     if (type === 'preview-request') {
-      return getGhostPreviewSlot().handleRequest(id, payload);
+      const request = payload as { sessionId?: unknown } | null;
+      const hasExplicitSessionId =
+        request !== null &&
+        typeof request === 'object' &&
+        !Array.isArray(request) &&
+        typeof request.sessionId === 'string';
+      const focusedSessionIdOverride = hasExplicitSessionId
+        ? undefined
+        : await currentGhostSessionId();
+      return getGhostPreviewSlot().handleRequest(id, payload, { focusedSessionIdOverride });
     }
     // schedule-request = 打开自动化创建面板并预填(agent 槽的 schedule 加档):
     // 只开面板,任务由用户选模型后亲手保存才落库——本槽全程不碰 schedule storage。

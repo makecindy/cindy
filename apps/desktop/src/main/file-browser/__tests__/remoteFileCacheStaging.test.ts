@@ -91,11 +91,14 @@ describe('chat attachment staging cache', () => {
       fs.writeFile(freshPath, 'fresh'),
       fs.writeFile(otherOwnerPath, 'other'),
     ]);
-    const oldTime = new Date(Date.now() - 60_000);
+    const sweepCutoffMs = Date.now() - 1_000;
+    const oldTime = new Date(sweepCutoffMs - 60_000);
+    const freshTime = new Date(sweepCutoffMs + 60_000);
     await Promise.all([
       fs.utimes(orphanPath, oldTime, oldTime),
       fs.utimes(protectedPath, oldTime, oldTime),
       fs.utimes(partialPath, oldTime, oldTime),
+      fs.utimes(freshPath, freshTime, freshTime),
       fs.utimes(otherOwnerPath, oldTime, oldTime),
     ]);
 
@@ -103,7 +106,7 @@ describe('chat attachment staging cache', () => {
       sweepStagedChatAttachmentsOnStartup({
         ownerId,
         protectedPaths: [protectedPath],
-        createdBeforeMs: Date.now() - 1_000,
+        createdBeforeMs: sweepCutoffMs,
       }),
     ).resolves.toMatchObject({ inspected: 4, removed: 2, protected: 1 });
 

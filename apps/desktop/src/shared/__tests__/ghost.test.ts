@@ -1097,6 +1097,48 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     ).toBe(false);
   });
 
+  it('agent.sessionMessage 加档:允许面板向当前任务发送消息并单列权限', () => {
+    const result = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent', 'session-context'],
+      agent: { sessionMessage: true },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.agent).toEqual({ sessionMessage: true });
+    expect(ghostPermissionItems(result.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'agent:session-message',
+          kind: 'agent',
+          labelKey: 'agentSessionMessage',
+          detailKey: 'agentSessionMessageDetail',
+        }),
+      ]),
+    );
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent', 'session-context'],
+        agent: { sessionMessage: 'yes' },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        agent: { sessionMessage: true },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['agent', 'session-context'],
+        agent: { sessionMessage: true },
+      }).ok,
+    ).toBe(false);
+  });
+
   it('存量兼容红线:不声明 agent.schedule 的清单,权限项与内容键逐字不变', () => {
     // 这条钉的是仓规红线(plugin-security-and-authoring.md §5):用户升级客户端后
     // 什么都不做,已装插件必须照旧可用 —— 不能因为新增了 schedule 加档,就让任何
@@ -1115,7 +1157,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     }
   });
 
-  it('agent 详单必须与槽成对，且只接受 background / errand / schedule 三项加档', () => {
+  it('agent 详单必须与槽成对，且只接受 background / errand / schedule / sessionMessage 四项加档', () => {
     expect(
       validateGhostManifest({
         ...goodChipManifest(),

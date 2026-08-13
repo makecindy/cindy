@@ -91,6 +91,8 @@ type MakerSendOptions = {
   expectedClearBoundaryMs?: unknown;
   /** Main-owned input generation used by the final vendor fence. */
   expectedInputGeneration?: unknown;
+  /** Main-owned synchronous policy fence; never accepted from renderer IPC. */
+  assertBeforeVendorDispatch?: unknown;
 };
 
 export interface MakerSendTransactionSession {

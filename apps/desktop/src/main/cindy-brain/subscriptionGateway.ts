@@ -659,6 +659,26 @@ export function isGhostEligibleSessionRow(row: {
   return (row.source === 'desktop' || row.source === 'shared' || row.source === 'plugin') && row.orcaRole == null;
 }
 
+/** Current-task reads may inspect Orca workers before normalizing them to Lead. */
+export function isGhostCurrentSessionSourceEligible(source: string | null | undefined): boolean {
+  return source === 'desktop' || source === 'shared' || source === 'plugin';
+}
+
+/**
+ * did-session-switched 单独使用的资格判定：协同 Lead 是用户正在看的主任务，
+ * 应参与前台任务切换；Worker 仍是内部协同任务，不直接暴露给插件。
+ * 其它 turn/activity/hook 路径继续使用 isGhostEligibleSessionRow，保持旧语义。
+ */
+export function isGhostSessionSwitchEligibleRow(row: {
+  source: string | null | undefined;
+  orcaRole: string | null | undefined;
+}): boolean {
+  return (
+    (row.source === 'desktop' || row.source === 'shared' || row.source === 'plugin') &&
+    (row.orcaRole == null || row.orcaRole === 'lead')
+  );
+}
+
 /**
  * 会话切换去重器(did-session-switched 的入口滤波,抽成工厂便于单测):
  * renderer 的路由 effect 每次路由变化都上报"当前台前会话"(路由重渲/非会话
@@ -678,6 +698,132 @@ export function createGhostSessionFocusTracker(
     // 台前会话快照(preview 槽缺省落点等"当前会话"语境用;非会话页为 null)。
     current() {
       return last;
+    },
+  };
+}
+
+/** 多窗口下为“当前任务”选择唯一可信的主壳窗口路由。 */
+export function selectGhostFocusedSessionCandidate(
+  windows: Array<{ webContentsId: number; sessionId: string | null }>,
+  focusedWebContentsId: number | null,
+): { webContentsId: number; sessionId: string } | null {
+  const focused = windows.find((window) => window.webContentsId === focusedWebContentsId);
+  const selected = focused ?? (windows.length === 1 ? windows[0] : null);
+  if (!selected?.sessionId) return null;
+  return { webContentsId: selected.webContentsId, sessionId: selected.sessionId };
+}
+
+/** 窗口级焦点版本：一个主窗口的路由变化不能误伤另一个窗口已捕获的派发守卫。 */
+export function createGhostWindowFocusRevisionTracker(): {
+  note(webContentsId: number): number;
+  current(webContentsId: number): number;
+  drop(webContentsId: number): void;
+} {
+  const revisions = new Map<number, number>();
+  return {
+    note(webContentsId) {
+      const next = (revisions.get(webContentsId) ?? 0) + 1;
+      revisions.set(webContentsId, next);
+      return next;
+    },
+    current(webContentsId) {
+      return revisions.get(webContentsId) ?? 0;
+    },
+    drop(webContentsId) {
+      revisions.delete(webContentsId);
+    },
+  };
+}
+
+/** 异步读取当前任务快照，并在读取完成后复核焦点，避免返回已失焦任务的数据。 */
+export async function readStableGhostCurrentSessionSnapshot<T>(
+  resolveCurrentSessionId: () => Promise<string | null>,
+  readSnapshot: (sessionId: string) => Promise<T>,
+): Promise<{ sessionId: string; snapshot: T } | null> {
+  const sessionId = await resolveCurrentSessionId();
+  if (!sessionId) return null;
+  const snapshot = await readSnapshot(sessionId);
+  if ((await resolveCurrentSessionId()) !== sessionId) return null;
+  return { sessionId, snapshot };
+}
+
+/** 插件面板只面向用户主任务；特殊焦点若落到 Orca Worker，统一折回所属 Lead。 */
+export async function resolveGhostPrimarySessionId(
+  sessionId: string | null,
+  readOrcaRole: (sessionId: string) => Promise<string | null | undefined>,
+  resolveWorkerLead: (workerSessionId: string) => Promise<string | null>,
+): Promise<string | null> {
+  if (!sessionId) return null;
+  try {
+    const role = await readOrcaRole(sessionId);
+    if (role === undefined) return null;
+    if (role === null || role === 'lead') return sessionId;
+    if (role !== 'worker') return null;
+    return await resolveWorkerLead(sessionId);
+  } catch {
+    return null;
+  }
+}
+
+/** 当前任务 API 的宿主快照；会话详情不可读时保留 id，但目录能力一律 fail closed。 */
+export function buildGhostCurrentSessionSnapshot(
+  sessionId: string,
+  row: { title: string | null; workingDir: string | null } | null,
+  fsSnapshot: {
+    workingDir: string | null;
+    remoteHostId: string | null;
+    workdirIsReadOnly: boolean;
+  } | null,
+): {
+  sessionId: string;
+  sessionName: string | null;
+  workdir: string | null;
+  workdir_is_local: boolean;
+  workdir_is_read_only: boolean;
+} {
+  const workdir = fsSnapshot?.workingDir ?? row?.workingDir ?? null;
+  return {
+    sessionId,
+    sessionName: row?.title ?? null,
+    workdir,
+    workdir_is_local: fsSnapshot?.remoteHostId === null && workdir !== null,
+    workdir_is_read_only: fsSnapshot?.workdirIsReadOnly ?? true,
+  };
+}
+
+/**
+ * did-session-switched 的异步归一与去重器：只发布最新一次焦点对应的主任务，
+ * 并在 Worker 间切换但仍属于同一 Lead 时去重。
+ */
+export function createGhostPrimarySessionFocusTracker(
+  resolvePrimarySessionId: (sessionId: string) => Promise<string | null>,
+  notify: (sessionId: string) => void,
+): { note(sessionId: string | null): void; current(): string | null } {
+  let generation = 0;
+  let currentSessionId: string | null = null;
+  let lastNotifiedSessionId: string | null = null;
+  return {
+    note(sessionId) {
+      currentSessionId = null;
+      const requestGeneration = ++generation;
+      if (!sessionId) {
+        lastNotifiedSessionId = null;
+        return;
+      }
+      void resolvePrimarySessionId(sessionId).then((primarySessionId) => {
+        if (requestGeneration !== generation) return;
+        if (!primarySessionId) {
+          lastNotifiedSessionId = null;
+          return;
+        }
+        currentSessionId = primarySessionId;
+        if (primarySessionId === lastNotifiedSessionId) return;
+        lastNotifiedSessionId = primarySessionId;
+        notify(primarySessionId);
+      });
+    },
+    current() {
+      return currentSessionId;
     },
   };
 }

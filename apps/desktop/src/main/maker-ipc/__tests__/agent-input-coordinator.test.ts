@@ -15,6 +15,7 @@ import {
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '../../../shared/interruptedTurn.js';
 import type { RecoveryContextSnapshot } from '../recoveryCoordinator.js';
+import { AcceptedCallbackDispatchCancelled } from '../acceptedCallbackRunner.js';
 
 const mocks = vi.hoisted(() => {
   const logger = {
@@ -210,6 +211,9 @@ function createHarness(opts?: {
   const onAcceptedQueuedMessage = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onAcceptedQueuedMessage']>
   >(() => {});
+  const rewindCancelledPersistedUserMessage = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['rewindCancelledPersistedUserMessage']>
+  >(async () => true);
   const onDispatchedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onDispatchedUserTurn']>
   >(() => {});
@@ -302,6 +306,7 @@ function createHarness(opts?: {
     onUserMessageQueryable,
     onUserMessagePersistenceFailed,
     onAcceptedQueuedMessage,
+    rewindCancelledPersistedUserMessage,
     onDispatchedUserTurn,
     onResumableTurnError,
     isResumableTurnErrorCandidate,
@@ -339,6 +344,7 @@ function createHarness(opts?: {
     onUserMessageQueryable,
     onUserMessagePersistenceFailed,
     onAcceptedQueuedMessage,
+    rewindCancelledPersistedUserMessage,
     onDispatchedUserTurn,
     onResumableTurnError,
     isResumableTurnErrorCandidate,
@@ -5925,6 +5931,41 @@ describe('AgentInputCoordinator queue mutations', () => {
     expect(updated?.sessionReferencesRequireTrustedSnapshot).toBeUndefined();
   });
 
+  it('re-screens a focused-plugin queue message after its text is edited', async () => {
+    const h = createHarness();
+    const sid = 'edit-plugin-text-rescreen';
+    const screen = vi.fn(
+      async () => ({ action: 'allow' }) as const,
+    );
+    h.setScreenUserMessage(screen);
+    h.setRunning(true);
+    const item = makeItem('q-plugin-text', 'screened original', {
+      bypassGhostHooks: true,
+      requireCurrentSessionFocus: true,
+      pluginSessionMessageGhostId: 'plugin-a',
+    });
+    h.coordinator.enqueue(sid, item);
+    h.coordinator.updateText(sid, item.clientId, 'edited text');
+
+    expect(latestProjection(h.projections).pendingQueue[0]).toMatchObject({
+      text: 'edited text',
+      requireCurrentSessionFocus: true,
+      pluginSessionMessageGhostId: 'plugin-a',
+    });
+    expect(latestProjection(h.projections).pendingQueue[0]?.bypassGhostHooks).toBeUndefined();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    expect(screen).toHaveBeenCalledWith(
+      sid,
+      'edited text',
+      expect.objectContaining({ pluginSessionMessageGhostId: 'plugin-a' }),
+    );
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'edited text' });
+  });
+
   it('replaces pending row content (text + files) in place while pinning identity fields', async () => {
     const h = createHarness();
     const sid = 'edit-content';
@@ -6019,6 +6060,47 @@ describe('AgentInputCoordinator queue mutations', () => {
     h.coordinator.updateContent(sid, second.clientId, empty);
     expect(latestProjection(h.projections).pendingQueue[0]?.text).toBe('text only');
   });
+
+  it('re-screens a focused-plugin queue message after its full content is edited', async () => {
+    const h = createHarness();
+    const sid = 'edit-plugin-content-rescreen';
+    const screen = vi.fn(
+      async () => ({ action: 'allow' }) as const,
+    );
+    h.setScreenUserMessage(screen);
+    h.setRunning(true);
+    const item = makeItem('q-plugin-content', 'screened original', {
+      bypassGhostHooks: true,
+      requireCurrentSessionFocus: true,
+      pluginSessionMessageGhostId: 'plugin-a',
+    });
+    h.coordinator.enqueue(sid, item);
+    h.coordinator.updateContent(
+      sid,
+      item.clientId,
+      makeItem(item.clientId, 'edited content', {
+        persistedContent: JSON.stringify({ text: 'edited content', images: [], files: [] }),
+      }),
+    );
+
+    expect(latestProjection(h.projections).pendingQueue[0]).toMatchObject({
+      text: 'edited content',
+      requireCurrentSessionFocus: true,
+      pluginSessionMessageGhostId: 'plugin-a',
+    });
+    expect(latestProjection(h.projections).pendingQueue[0]?.bypassGhostHooks).toBeUndefined();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    expect(screen).toHaveBeenCalledWith(
+      sid,
+      'edited content',
+      expect.objectContaining({ pluginSessionMessageGhostId: 'plugin-a' }),
+    );
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'edited content' });
+  });
 });
 
 describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', () => {
@@ -6104,6 +6186,144 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'first' });
+  });
+
+  it('preserves the current-session focus guard in crash-restored queue items', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-restore-plugin-focus-guard';
+    h.setLoadQueueSnapshot(async () => [
+      makeItem('r-focus', 'plugin message', {
+        bypassGhostHooks: true,
+        requireCurrentSessionFocus: true,
+        pluginSessionMessageGhostId: 'plugin-a',
+      }),
+    ]);
+
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.resume(sid);
+    await flush();
+
+    expect(h.onAcceptedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({
+        clientId: 'r-focus',
+        bypassGhostHooks: true,
+        requireCurrentSessionFocus: true,
+        pluginSessionMessageGhostId: 'plugin-a',
+      }),
+    );
+  });
+
+  it('drops a persisted focused-plugin message when its accepted guard cancels dispatch', async () => {
+    const h = createHarness();
+    const sid = 'plugin-focus-guard-cancelled';
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      return sendSuccess();
+    });
+    h.onAcceptedQueuedMessage.mockImplementationOnce(() => {
+      throw new AcceptedCallbackDispatchCancelled('plugin target changed');
+    });
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-focus', 'plugin message', {
+        bypassGhostHooks: true,
+        requireCurrentSessionFocus: true,
+      }),
+    );
+    await flush();
+
+    expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(
+      (h.coordinator as unknown as { getState: (id: string) => { activeTurn: unknown } }).getState(
+        sid,
+      ).activeTurn,
+    ).toBeNull();
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-focus' }),
+      'cancelled',
+    );
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-focus' }),
+    );
+    expect(h.rewindCancelledPersistedUserMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-focus' }),
+    );
+  });
+
+  it('rechecks focused-plugin messages at the final vendor dispatch boundary', async () => {
+    const h = createHarness();
+    const sid = 'plugin-final-focus-guard-cancelled';
+    let focused = true;
+    h.onAcceptedQueuedMessage.mockImplementationOnce(() => () => {
+      if (!focused) throw new AcceptedCallbackDispatchCancelled('plugin target changed');
+    });
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      focused = false;
+      sendOpts.assertBeforeVendorDispatch?.();
+      return sendSuccess();
+    });
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-final-focus', 'plugin message', {
+        bypassGhostHooks: true,
+        requireCurrentSessionFocus: true,
+      }),
+    );
+    await flush();
+
+    expect(h.rewindCancelledPersistedUserMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-final-focus' }),
+    );
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-final-focus' }),
+      'cancelled',
+    );
+    expect(latestProjection(h.projections).recovery).toBeNull();
+  });
+
+  it('keeps failed recovery when a focused-plugin message cannot be rewound', async () => {
+    const h = createHarness();
+    const sid = 'plugin-focus-guard-rewind-failed';
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      return sendSuccess();
+    });
+    h.onAcceptedQueuedMessage.mockImplementationOnce(() => {
+      throw new AcceptedCallbackDispatchCancelled('plugin target changed');
+    });
+    h.rewindCancelledPersistedUserMessage.mockResolvedValueOnce(false);
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-focus-rewind-failed', 'plugin message', {
+        bypassGhostHooks: true,
+        requireCurrentSessionFocus: true,
+      }),
+    );
+    await flush();
+
+    expect(latestProjection(h.projections)).toMatchObject({
+      recovery: {
+        kind: 'active-turn',
+        item: { clientId: 'q-focus-rewind-failed' },
+      },
+      error: 'plugin target changed',
+    });
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-focus-rewind-failed' }),
+      'failed',
+    );
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
   });
 
   it('releases a crash-restored paused queue on explicit user input (resumeRestorePausedQueue)', async () => {
@@ -6201,6 +6421,65 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     h.coordinator.onTurnEvent(sid, 'done');
     projection = latestProjection(h.projections);
     expect(projection.continuationTurnClientId).toBeNull();
+  });
+
+  it('rechecks a focused-plugin queue item before promoting it to steer', async () => {
+    const h = createHarness();
+    const sid = 'plugin-queued-steer-authorization-cancelled';
+    h.setRunning(true);
+    const item = makeItem('q-plugin-steer', 'plugin message', {
+      bypassGhostHooks: true,
+      requireCurrentSessionFocus: true,
+      pluginSessionMessageGhostId: 'plugin-a',
+    });
+    h.coordinator.enqueue(sid, item);
+    h.onAcceptedQueuedMessage.mockImplementationOnce(() => {
+      throw new AcceptedCallbackDispatchCancelled('plugin authorization changed');
+    });
+
+    await expect(h.coordinator.steer(sid, item, { removeFromQueue: true })).resolves.toBe(true);
+
+    expect(h.onAcceptedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: item.clientId }),
+    );
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: item.clientId }),
+    );
+  });
+
+  it('rechecks a focused-plugin queue item at the final steer dispatch boundary', async () => {
+    const h = createHarness();
+    const sid = 'plugin-queued-steer-final-authorization';
+    h.setRunning(true);
+    const item = makeItem('q-plugin-final-steer', 'plugin message', {
+      bypassGhostHooks: true,
+      requireCurrentSessionFocus: true,
+      pluginSessionMessageGhostId: 'plugin-a',
+    });
+    h.coordinator.enqueue(sid, item);
+    let authorized = true;
+    h.onAcceptedQueuedMessage.mockImplementationOnce(() => () => {
+      if (!authorized) {
+        throw new AcceptedCallbackDispatchCancelled('plugin authorization changed');
+      }
+    });
+    h.steerToAgent.mockImplementationOnce(async (_sessionId, _message, sendOpts) => {
+      authorized = false;
+      sendOpts.assertBeforeVendorDispatch?.();
+    });
+
+    await expect(h.coordinator.steer(sid, item, { removeFromQueue: true })).resolves.toBe(true);
+
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: item.clientId }),
+    );
   });
 
   it('keeps the continuation owner when a terminal event races ahead of steer ack but host remains running', async () => {

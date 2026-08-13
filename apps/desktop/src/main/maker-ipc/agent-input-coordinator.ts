@@ -61,6 +61,7 @@ import {
   RECOVERY_CHECKPOINT_MARKER,
   type RecoveryContextSnapshot,
 } from './recoveryCoordinator.js';
+import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 
 const log = createLogger('maker-input-coordinator');
 const SESSION_RUNNING_RETRY_DELAY_MS = 250;
@@ -194,6 +195,8 @@ export interface AgentInputSendOpts {
   expectedClearBoundaryMs?: number | null;
   /** Main-owned input generation captured before async preparation. */
   expectedInputGeneration?: number;
+  /** Host-only synchronous fence checked immediately before vendor dispatch. */
+  assertBeforeVendorDispatch?: () => void;
   persistUserMessage?: {
     clientId: string;
     content: string;
@@ -413,7 +416,12 @@ export interface AgentInputCoordinatorDeps {
   onAcceptedQueuedMessage?: (
     sessionId: string,
     item: AgentInputQueuedMessage,
-  ) => void | Promise<void>;
+  ) => void | (() => void) | Promise<void | (() => void)>;
+  /** Rewind a durable user row when a host final-dispatch fence cancels the turn. */
+  rewindCancelledPersistedUserMessage?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+  ) => boolean | Promise<boolean>;
   /**
    * Awaited only after vendor dispatch is irreversible (`accepted=true`).
    * Hosts use this for side effects that must not run on cancelled-before-dispatch
@@ -1709,6 +1717,7 @@ export class AgentInputCoordinator {
     // 可能已经清空的 activeTurn 读取。
     const steerContinuationOwnerClientId = state.activeTurn?.continuationOwnerClientId ?? null;
     const steerVendorTurnGeneration = this.deps.getTurnGeneration?.(sessionId) ?? null;
+    let finalDispatchGuard: (() => void) | undefined;
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
     state.queuePaused = false;
     if (!state.steeringQueueClientIds.includes(item.clientId)) {
@@ -1783,12 +1792,17 @@ export class AgentInputCoordinator {
         item.persistedContent,
         referenceContexts,
       );
+      if (steersStoredQueueItem && item.requireCurrentSessionFocus === true) {
+        const acceptedResult = await this.deps.onAcceptedQueuedMessage?.(sessionId, item);
+        finalDispatchGuard = typeof acceptedResult === 'function' ? acceptedResult : undefined;
+      }
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
         messageUuid,
         userName: item.userName,
         signal: AbortSignal.any([inputBoundarySignal, steerAbort.signal]),
         expectedClearBoundaryMs: steerClearBoundaryMs,
         expectedInputGeneration: steerGeneration,
+        ...(finalDispatchGuard ? { assertBeforeVendorDispatch: finalDispatchGuard } : {}),
         // 同 drain:steer 投递也在入队时的 async context 之外。
         ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
       });
@@ -1799,6 +1813,19 @@ export class AgentInputCoordinator {
       latest.steeringQueueClientIds = latest.steeringQueueClientIds.filter(
         (id) => id !== item.clientId,
       );
+
+      if (err instanceof AcceptedCallbackDispatchCancelled) {
+        if (markerStillPresent && opts?.removeFromQueue) {
+          latest.pendingQueue = latest.pendingQueue.filter((q) => q.clientId !== item.clientId);
+          this.removePendingCompactWaitClientId(latest, item.clientId);
+          latest.queueEditLocks = latest.queueEditLocks.filter((id) => id !== item.clientId);
+          if (latest.pendingQueue.length === 0) latest.queuePaused = false;
+          this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+        }
+        this.emit(sessionId);
+        this.scheduleDrain(sessionId, 'focused-plugin-steer-cancelled');
+        return markerStillPresent && opts?.removeFromQueue === true;
+      }
 
       if (isNoActiveTurnError(err)) {
         // maker-core 权威判定无活跃 turn — 先让 host 校准可能 stale 的 busy
@@ -3255,6 +3282,7 @@ export class AgentInputCoordinator {
         head.persistedContent,
         referenceContexts,
       );
+      let finalDispatchGuard: (() => void) | undefined;
       const result = await this.deps.sendToAgent(
         sessionId,
         buildMakerUserMessage(head, referenceContexts),
@@ -3272,6 +3300,9 @@ export class AgentInputCoordinator {
           ...(head.origin?.kind === 'scheduler' ? { origin: head.origin } : {}),
           // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
           ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
+          ...(head.requireCurrentSessionFocus
+            ? { assertBeforeVendorDispatch: () => finalDispatchGuard?.() }
+            : {}),
           persistUserMessage: {
             clientId: head.clientId,
             content: head.persistedContent,
@@ -3317,7 +3348,8 @@ export class AgentInputCoordinator {
               // host 把排队 orca 消息的 accepted 副作用挂在这个 hook 上(置 running /
               // autoBridgePending), 必须 await 完才能放行 vendor turn —— fire-and-forget
               // 会让快 worker 在状态可见前结束 turn, 桥接被 turn-end handler 误跳过。
-              await this.deps.onAcceptedQueuedMessage?.(sessionId, head);
+              const acceptedResult = await this.deps.onAcceptedQueuedMessage?.(sessionId, head);
+              finalDispatchGuard = typeof acceptedResult === 'function' ? acceptedResult : undefined;
               if (!this.isActiveTurnCurrent(sessionId, active)) {
                 throw new Error(
                   '[SEND_CANCELLED_BEFORE_DISPATCH] User turn was cancelled before vendor dispatch',
@@ -3391,6 +3423,44 @@ export class AgentInputCoordinator {
       // 放在分支之前 —— 三条出口都不会再走到接管决策。
       this.discardDeferredResumableCandidate(sessionId, active);
       const latest = this.getState(sessionId);
+      if (
+        active.persisted &&
+        head.requireCurrentSessionFocus === true &&
+        err instanceof AcceptedCallbackDispatchCancelled
+      ) {
+        let rewound = false;
+        try {
+          rewound = (await this.deps.rewindCancelledPersistedUserMessage?.(sessionId, head)) === true;
+        } catch (rewindError) {
+          log.warn('focused plugin message rewind after final dispatch cancellation failed', {
+            sessionId,
+            clientId: head.clientId,
+            error: errorMessage(rewindError),
+          });
+        }
+        if (rewound) {
+          latest.activeTurn = null;
+          latest.error = null;
+          latest.stickyError = null;
+          latest.recovery = null;
+          this.notifyUndispatchedUserTurn(sessionId, head, 'cancelled');
+          this.deps.onDiscardedQueuedMessage?.(sessionId, head);
+          this.emit(sessionId);
+          if (latest.pendingQueue.length > 0 || latest.pendingCompacts.length > 0) {
+            this.scheduleDrain(sessionId, 'focused-plugin-message-cancelled');
+          }
+          this.deps.onQueueEmptied?.(sessionId);
+          return;
+        }
+        latest.error = errorMessage(err);
+        latest.stickyError = null;
+        this.setActiveTurnRecovery(latest, head);
+        this.notifyRejectedUserTurn(sessionId, head);
+        this.notifyUndispatchedUserTurn(sessionId, head, 'failed');
+        this.emit(sessionId);
+        this.deps.onQueueEmptied?.(sessionId);
+        return;
+      }
       if (!active.persisted) {
         if (isSessionRunningError(err)) {
           this.deferQueueHeadAfterSessionRunning(

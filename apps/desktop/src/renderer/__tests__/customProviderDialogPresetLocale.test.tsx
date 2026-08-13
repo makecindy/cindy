@@ -163,22 +163,40 @@ describe('CustomProviderDialog preset locale ownership', () => {
   });
 
   it.each([
-    ['isComposing', { isComposing: true }],
-    ['keyCode 229', { keyCode: 229 }],
-  ])('keeps IME Escape inside composition for %s', async (_label, eventInit) => {
-    i18nState.language = 'zh-TW';
-    const { onClose } = renderDialog();
+    ['isComposing', 'isComposing', true],
+    ['keyCode 229', 'keyCode', 229],
+  ] as const)(
+    'keeps IME Escape inside composition for %s',
+    async (_label, property, value) => {
+      i18nState.language = 'zh-TW';
+      const { onClose } = renderDialog();
 
-    const trigger = await screen.findByRole('button', {
-      name: 'settings.providers.custom.presets.label',
-    });
-    fireEvent.click(trigger);
-    expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
+      const trigger = await screen.findByRole('button', {
+        name: 'settings.providers.custom.presets.label',
+      });
+      fireEvent.click(trigger);
+      expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
 
-    fireEvent.keyDown(document, { key: 'Escape', ...eventInit });
-    expect(screen.getByRole('option', { name: '繁體供應商' })).not.toBeNull();
-    expect(onClose).not.toHaveBeenCalled();
-  });
+      const event = new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(event, property, { value });
+      fireEvent(document, event);
+      expect(screen.getByRole('option', { name: '繁體供應商' })).not.toBeNull();
+      expect(onClose).not.toHaveBeenCalled();
+
+      // Settle Radix's dismiss layer before this parameterized case unmounts.
+      // Otherwise the outgoing popover can occasionally consume the next case's click on Windows.
+      fireEvent.keyDown(document, { key: 'Escape' });
+      await waitFor(() => {
+        expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(onClose).not.toHaveBeenCalled();
+    },
+  );
 
   it('dismisses the model picker before the underlying form on Escape', async () => {
     i18nState.language = 'zh-TW';
@@ -189,6 +207,7 @@ describe('CustomProviderDialog preset locale ownership', () => {
     });
     fireEvent.click(trigger);
     fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
+    await screen.findByDisplayValue('http://127.0.0.1:4000/v1');
 
     fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
@@ -229,6 +248,7 @@ describe('CustomProviderDialog preset locale ownership', () => {
     });
     fireEvent.click(trigger);
     fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
+    await screen.findByDisplayValue('http://127.0.0.1:4000/v1');
     fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
 

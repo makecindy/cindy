@@ -116,6 +116,18 @@ describe('previewSlot · 落点会话与广播', () => {
     expect(deps.broadcast).not.toHaveBeenCalled();
   });
 
+  it('主机归一失败时使用 override 阻止回退到原始焦点', () => {
+    const { slot, deps } = makeSlot({ focusedSessionId: () => 'worker-session' });
+    expect(
+      slot.handleRequest(
+        'preview-ghost',
+        { url: 'https://a.example.dev/' },
+        { focusedSessionIdOverride: null },
+      ),
+    ).toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
+    expect(deps.broadcast).not.toHaveBeenCalled();
+  });
+
   it('一个宿主窗口都不在 = HOST_NOT_READY', () => {
     const { slot } = makeSlot({ broadcast: vi.fn(() => false) });
     expect(
