@@ -1374,7 +1374,7 @@
           "modelContextWindowPlaceholder": "上下文(tokens)",
           "modelContextWindowTitle": "上下文視窗(tokens)。留空按 200K 保守預設；影響視窗顯示與壓縮閾值。",
           "modelSupportsImageInput": "支援圖片輸入",
-          "modelSupportsImageInputHelp": "僅在該模型確實支援視覺輸入時開啟。儲存後新建 Pi 任務生效。",
+          "modelSupportsImageInputHelp": "僅在該模型確實支援視覺輸入時開啟。儲存後新建任務生效。",
           "modelSupportsReasoning": "支援推理",
           "modelSupportsReasoningHelp": "僅在該模型接受推理強度時開啟，並勾選它實際支援的所有檔位。儲存後，下一個 Pi Agent 會話生效。",
           "modelReasoningEfforts": "支援的推理強度",

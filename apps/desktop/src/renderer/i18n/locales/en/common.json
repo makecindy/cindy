@@ -1374,7 +1374,7 @@
           "modelContextWindowPlaceholder": "Context (tokens)",
           "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
           "modelSupportsImageInput": "Supports image input",
-          "modelSupportsImageInputHelp": "Enable only when the model actually accepts visual input. Start a new Pi task after saving.",
+          "modelSupportsImageInputHelp": "Enable only when the model actually accepts visual input. Start a new session after saving.",
           "modelSupportsReasoning": "Supports reasoning",
           "modelSupportsReasoningHelp": "Enable only when the model accepts reasoning effort, then select every supported level. Changes take effect in the next Pi Agent session.",
           "modelReasoningEfforts": "Supported reasoning effort levels",

@@ -43,7 +43,7 @@ import path from 'node:path';
 
 import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from './codex-gateway-config.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
-import { getActiveCatalog, getCatalogModelContextWindow } from './active-catalog.js';
+import { getActiveCatalog, getCatalogModel, getCatalogModelContextWindow } from './active-catalog.js';
 import {
   gatewayDefaultRouteDecision,
   getSessionRoutingDescriptor,
@@ -639,11 +639,17 @@ function createChatBridgeDecision(
         googleThoughtSignaturePlaceholder: true,
     }
     : CHAT_BRIDGE_DEFAULT_CAPABILITIES;
-  const capabilities = chatBridgeCapabilitiesForRoute(
+  const routeCapabilities = chatBridgeCapabilitiesForRoute(
     route.routing.upstream,
     realModel,
     baseCapabilities,
   );
+  const userModelSupportsImageInput =
+    route.providerSource === 'user' &&
+    getCatalogModel(route.providerId, 'codex', wireModel, stripPrefix)?.supportsImageInput === true;
+  const capabilities = userModelSupportsImageInput
+    ? { ...routeCapabilities, imageInput: 'image_url' as const }
+    : routeCapabilities;
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });

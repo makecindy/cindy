@@ -1374,7 +1374,7 @@
           "modelContextWindowPlaceholder": "コンテキスト(tokens)",
           "modelContextWindowTitle": "コンテキストウィンドウ(トークン数)。空欄の場合は保守的な既定値 200K。ウィンドウ表示と圧縮しきい値に影響します。",
           "modelSupportsImageInput": "画像入力に対応",
-          "modelSupportsImageInputHelp": "モデルが実際に画像入力へ対応している場合のみ有効にしてください。保存後、新しい Pi タスクで反映されます。",
+          "modelSupportsImageInputHelp": "モデルが実際に画像入力へ対応している場合のみ有効にしてください。保存後、新しいセッションで反映されます。",
           "modelSupportsReasoning": "推論に対応",
           "modelSupportsReasoningHelp": "モデルが推論強度を受け付ける場合のみ有効にし、実際に対応するすべてのレベルを選択してください。保存後、次の Pi Agent セッションから反映されます。",
           "modelReasoningEfforts": "対応する推論強度",

@@ -448,6 +448,26 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(p.models.pi?.[0]).toMatchObject({ efforts: [], defaultEffort: null });
   });
 
+  it('exports an explicit Codex image-input capability into the catalog model', () => {
+    const p = buildUserProvider({
+      id: 'vision-chat',
+      name: 'Vision Chat',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.test/v1',
+          wireProtocol: 'openai-chat',
+          models: [
+            { id: 'vision', name: 'Vision', supportsImageInput: true },
+            { id: 'text', name: 'Text' },
+          ],
+        },
+      },
+    });
+
+    expect(p.models.codex?.[0]?.supportsImageInput).toBe(true);
+    expect(p.models.codex?.[1]).not.toHaveProperty('supportsImageInput');
+  });
+
   it('exports only the explicitly supported effort levels for a Pi reasoning model', () => {
     const p = buildUserProvider({
       id: 'reasoning-pi',
