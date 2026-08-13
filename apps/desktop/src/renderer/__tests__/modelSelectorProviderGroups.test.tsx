@@ -387,7 +387,7 @@ describe('ModelSelector provider groups', () => {
         models: {
           'claude-code': [
             {
-              id: 'codex/gpt-5.6-sol',
+              id: 'xd/codex-gpt-5.6-sol',
               name: 'Codex GPT-5.6 Sol',
               group: 'gpt-budget',
               sortOrder: 10,
@@ -396,7 +396,7 @@ describe('ModelSelector provider groups', () => {
               defaultEffort: 'high',
             },
             {
-              id: 'deepseek-v4-pro',
+              id: 'deepseek/v4-pro',
               name: 'DeepSeek V4 Pro',
               group: 'ungrouped',
               sortOrder: 20,
@@ -405,7 +405,7 @@ describe('ModelSelector provider groups', () => {
               defaultEffort: 'high',
             },
             {
-              id: 'codex/gpt-5.6-terra',
+              id: 'xd/codex-gpt-5.6-terra',
               name: 'Codex GPT-5.6 Terra',
               group: 'gpt-budget',
               sortOrder: 11,
@@ -420,7 +420,7 @@ describe('ModelSelector provider groups', () => {
 
     try {
       renderSelector({
-        modelId: 'codex/gpt-5.6-sol',
+        modelId: 'xd/codex-gpt-5.6-sol',
         currentProviderId: 'xd',
       });
       await openDropdown();

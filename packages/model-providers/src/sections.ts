@@ -44,6 +44,9 @@ export interface SectionModel {
   contextWindow: number;
   /** 展示图标 id(AI Gateway / 目录设定,见 CatalogModel.icon);缺省回落来源供应商标。 */
   icon?: string;
+  group?: string;
+  mode?: string;
+  sortOrder?: number;
 }
 
 export interface ProviderSection {
@@ -184,6 +187,9 @@ export function buildProviderSections(args: {
         sm.codexCompatibilityWireProtocol = m.codexCompatibilityWireProtocol;
       }
       if (m.icon !== undefined) sm.icon = m.icon;
+      if (m.group !== undefined) sm.group = m.group;
+      if (m.mode !== undefined) sm.mode = m.mode;
+      if (m.sortOrder !== undefined) sm.sortOrder = m.sortOrder;
       return sm;
     }),
   }));
