@@ -40,6 +40,7 @@ import {
 import { extractIpcError } from '@/utils/ipcError';
 import {
   createCustomProvider,
+  piCatalogProviderIdAfterRouteEdit,
   readCustomProviderKey,
   replaceCustomProviderModelId,
   setCustomProviderModelReasoning,
@@ -508,7 +509,23 @@ export function CustomProviderDialog({
   const setRtSynced = useCallback(
     (fn: (prev: Record<DialogAgentKind, RuntimeFields>) => Record<DialogAgentKind, RuntimeFields>) => {
       setRt((prev) => {
-        const next = fn(prev);
+        const updated = fn(prev);
+        const next = Object.fromEntries(
+          AGENTS.map((agent) => {
+            const runtime = updated[agent];
+            const piCatalogProviderId = piCatalogProviderIdAfterRouteEdit(
+              agent,
+              prev[agent],
+              runtime,
+            );
+            return [
+              agent,
+              piCatalogProviderId === runtime.piCatalogProviderId
+                ? runtime
+                : { ...runtime, piCatalogProviderId },
+            ];
+          }),
+        ) as Record<DialogAgentKind, RuntimeFields>;
         rtRef.current = next;
         return next;
       });
@@ -632,6 +649,7 @@ export function CustomProviderDialog({
                 ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
                 : [{ name: '', value: '' }],
             modelsUrl: rc.modelsUrl ?? '',
+            piCatalogProviderId: rc.piCatalogProviderId,
           };
         }
         return next;

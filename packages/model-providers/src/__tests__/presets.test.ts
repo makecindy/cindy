@@ -744,6 +744,16 @@ describe('官方渠道预设契约', () => {
   });
 
   it.each([
+    ['moonshot-kimi-code', 'kimi-coding'],
+    ['minimax-cn', 'minimax-cn'],
+    ['minimax-global', 'minimax'],
+  ])('%s 的 Pi 预设投影官方 Anthropic Messages 协议', (id, providerId) => {
+    const pi = preset(id)?.runtimes.pi;
+    expect(pi?.piCatalogProviderId).toBe(providerId);
+    expect(pi?.wireProtocol).toBe('anthropic-messages');
+  });
+
+  it.each([
     ['zhipu-coding-plan-cn', 'https://open.bigmodel.cn/api/coding/paas/v4'],
     ['zai-coding-plan-global', 'https://api.z.ai/api/coding/paas/v4'],
     ['volcengine-coding-plan', 'https://ark.cn-beijing.volces.com/api/coding/v3'],

@@ -46,7 +46,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         auth: { method: 'apiKey' },
         runtimes: {
           pi: piRuntime({
-            baseUrl: 'https://proxy.example/v1',
+            baseUrl: 'https://api.deepseek.com',
+            wireProtocol: 'openai-chat',
             piCatalogProviderId: 'deepseek',
             models: [
               { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
@@ -57,7 +58,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       }],
       () => 'secret',
     );
-    expect(providers[0]).toMatchObject({ id: 'deepseek-local', baseUrl: 'https://proxy.example/v1' });
+    expect(providers[0]).toMatchObject({ id: 'deepseek-local', baseUrl: 'https://api.deepseek.com' });
     expect(providers[0]?.models[0]).toMatchObject({
       id: 'deepseek-v4-pro',
       api: 'openai-completions',
@@ -71,6 +72,31 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       name: 'Models URL Only',
       contextWindow: 64_000,
     });
+  });
+
+  it('does not apply official per-model routing after the user changes endpoint or protocol', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'deepseek-proxy',
+        name: 'DeepSeek Proxy',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: piRuntime({
+            baseUrl: 'https://proxy.example/anthropic',
+            wireProtocol: 'anthropic-messages',
+            piCatalogProviderId: 'deepseek',
+            models: [{ id: 'deepseek-v4-pro', name: 'Proxy DeepSeek', contextWindow: 64_000 }],
+          }),
+        },
+      }],
+      () => null,
+    );
+    expect(providers[0]).toMatchObject({
+      baseUrl: 'https://proxy.example/anthropic',
+      api: 'anthropic-messages',
+      models: [{ id: 'deepseek-v4-pro', name: 'Proxy DeepSeek', contextWindow: 64_000 }],
+    });
+    expect(providers[0]?.models[0]).not.toHaveProperty('thinkingLevelMap');
   });
 
   it('maps historical xAI namespaced ids to Pi official bare ids', () => {

@@ -97,6 +97,23 @@ function presetModel(model, previous) {
   };
 }
 
+function runtimeWireProtocol(providerId, models) {
+  const apis = [...new Set(models.map((model) => model.api))];
+  if (apis.length !== 1) {
+    throw new Error(`Pi catalog '${providerId}' does not have one runtime protocol`);
+  }
+  switch (apis[0]) {
+    case 'anthropic-messages':
+      return 'anthropic-messages';
+    case 'openai-responses':
+      return 'openai-responses';
+    case 'openai-completions':
+      return 'openai-chat';
+    default:
+      throw new Error(`Pi catalog '${providerId}' has unsupported api '${apis[0]}'`);
+  }
+}
+
 function xaiCatalogModel(model, index) {
   const efforts = supportedEfforts(model);
   return {
@@ -155,6 +172,7 @@ async function main() {
     const previousModels = new Map((preset.runtimes.pi?.models ?? []).map((model) => [model.id, model]));
     preset.runtimes.pi = {
       baseUrl: source.baseUrl,
+      wireProtocol: runtimeWireProtocol(mapping.providerId, providers[mapping.providerId]),
       ...(source.modelsUrl ? { modelsUrl: source.modelsUrl } : {}),
       piCatalogProviderId: mapping.providerId,
       models: providers[mapping.providerId].map((model) => presetModel(model, previousModels.get(model.id))),

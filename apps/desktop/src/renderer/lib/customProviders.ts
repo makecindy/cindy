@@ -19,7 +19,29 @@ import type {
   PiReasoningEffort,
   ProviderView,
   ProviderRuntimeModelConfig,
+  ProviderWireProtocol,
 } from '@cindy/model-providers';
+
+interface PiCatalogRouteDraft {
+  baseUrl: string;
+  wireProtocol: ProviderWireProtocol;
+  piCatalogProviderId?: string;
+}
+
+/** The catalog marker is valid only while the user keeps its inference route unchanged. */
+export function piCatalogProviderIdAfterRouteEdit(
+  agent: AgentKind,
+  previous: PiCatalogRouteDraft,
+  next: PiCatalogRouteDraft,
+): string | undefined {
+  const marker = next.piCatalogProviderId;
+  if (agent !== 'pi' || !marker || marker !== previous.piCatalogProviderId) return marker;
+  const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
+  return normalizeBaseUrl(previous.baseUrl) === normalizeBaseUrl(next.baseUrl)
+    && previous.wireProtocol === next.wireProtocol
+    ? marker
+    : undefined;
+}
 
 /** 开启 Pi reasoning 时的保守常用档位；xhigh/max 仍需用户明确勾选。 */
 export const DEFAULT_PI_CUSTOM_REASONING_EFFORTS: readonly PiReasoningEffort[] = [

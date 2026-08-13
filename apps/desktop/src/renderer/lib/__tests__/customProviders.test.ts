@@ -4,6 +4,7 @@ import {
   appendDiscoveredCustomProviderModels,
   createCustomProvider,
   customProviderModelConfigFromCatalogModel,
+  piCatalogProviderIdAfterRouteEdit,
   providerViewToCustomProviderConfig,
   replaceCustomProviderModelId,
   setCustomProviderModelReasoning,
@@ -18,6 +19,46 @@ import type {
 } from '@cindy/model-providers';
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('piCatalogProviderIdAfterRouteEdit', () => {
+  const official = {
+    baseUrl: 'https://api.example.com/anthropic',
+    wireProtocol: 'anthropic-messages' as const,
+    piCatalogProviderId: 'example',
+  };
+
+  it('keeps a newly applied marker and an unchanged official route', () => {
+    expect(
+      piCatalogProviderIdAfterRouteEdit(
+        'pi',
+        { ...official, piCatalogProviderId: undefined },
+        official,
+      ),
+    ).toBe('example');
+    expect(piCatalogProviderIdAfterRouteEdit('pi', official, official)).toBe('example');
+    expect(
+      piCatalogProviderIdAfterRouteEdit('pi', official, {
+        ...official,
+        baseUrl: `${official.baseUrl}/`,
+      }),
+    ).toBe('example');
+  });
+
+  it('clears the marker after either endpoint or protocol is edited', () => {
+    expect(
+      piCatalogProviderIdAfterRouteEdit('pi', official, {
+        ...official,
+        baseUrl: 'https://proxy.example/v1',
+      }),
+    ).toBeUndefined();
+    expect(
+      piCatalogProviderIdAfterRouteEdit('pi', official, {
+        ...official,
+        wireProtocol: 'openai-chat',
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe('replaceCustomProviderModelId', () => {

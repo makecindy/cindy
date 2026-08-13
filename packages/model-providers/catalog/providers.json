@@ -441,6 +441,7 @@
         },
         "pi": {
           "baseUrl": "https://api.deepseek.com",
+          "wireProtocol": "openai-chat",
           "modelsUrl": "https://api.deepseek.com/models",
           "piCatalogProviderId": "deepseek",
           "models": [
@@ -593,6 +594,7 @@
         },
         "pi": {
           "baseUrl": "https://api.moonshot.cn/v1",
+          "wireProtocol": "openai-chat",
           "modelsUrl": "https://api.moonshot.cn/v1/models",
           "piCatalogProviderId": "moonshotai-cn",
           "models": [
@@ -710,6 +712,7 @@
         },
         "pi": {
           "baseUrl": "https://api.moonshot.ai/v1",
+          "wireProtocol": "openai-chat",
           "modelsUrl": "https://api.moonshot.ai/v1/models",
           "piCatalogProviderId": "moonshotai",
           "models": [
@@ -829,6 +832,7 @@
         },
         "pi": {
           "baseUrl": "https://api.kimi.com/coding",
+          "wireProtocol": "anthropic-messages",
           "piCatalogProviderId": "kimi-coding",
           "models": [
             {
@@ -911,6 +915,7 @@
         },
         "pi": {
           "baseUrl": "https://api.minimaxi.com/anthropic",
+          "wireProtocol": "anthropic-messages",
           "piCatalogProviderId": "minimax-cn",
           "models": [
             {
@@ -969,6 +974,7 @@
         },
         "pi": {
           "baseUrl": "https://api.minimax.io/anthropic",
+          "wireProtocol": "anthropic-messages",
           "piCatalogProviderId": "minimax",
           "models": [
             {
@@ -1120,6 +1126,7 @@
         },
         "pi": {
           "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+          "wireProtocol": "openai-chat",
           "modelsUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models",
           "piCatalogProviderId": "qwen-token-plan-cn",
           "models": [
@@ -1430,6 +1437,7 @@
         },
         "pi": {
           "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+          "wireProtocol": "openai-chat",
           "modelsUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models",
           "piCatalogProviderId": "qwen-token-plan-cn",
           "models": [
@@ -1681,6 +1689,7 @@
         },
         "pi": {
           "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+          "wireProtocol": "openai-chat",
           "piCatalogProviderId": "zai-coding-cn",
           "models": [
             {
@@ -1755,6 +1764,7 @@
         },
         "pi": {
           "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+          "wireProtocol": "openai-chat",
           "piCatalogProviderId": "zai",
           "models": [
             {
@@ -1829,6 +1839,7 @@
         },
         "pi": {
           "baseUrl": "https://api.xiaomimimo.com/v1",
+          "wireProtocol": "openai-chat",
           "piCatalogProviderId": "xiaomi",
           "models": [
             {
@@ -1907,6 +1918,7 @@
         },
         "pi": {
           "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
+          "wireProtocol": "openai-chat",
           "piCatalogProviderId": "xiaomi-token-plan-cn",
           "models": [
             {

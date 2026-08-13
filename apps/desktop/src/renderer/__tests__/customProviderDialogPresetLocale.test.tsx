@@ -25,6 +25,15 @@ vi.mock('@/lib/customProviderId', () => ({
 
 vi.mock('@/lib/customProviders', () => ({
   createCustomProvider: vi.fn(async () => undefined),
+  piCatalogProviderIdAfterRouteEdit: (
+    _agent: string,
+    previous: { baseUrl: string; wireProtocol: string; piCatalogProviderId?: string },
+    next: { baseUrl: string; wireProtocol: string; piCatalogProviderId?: string },
+  ) =>
+    next.piCatalogProviderId === previous.piCatalogProviderId
+    && (next.baseUrl !== previous.baseUrl || next.wireProtocol !== previous.wireProtocol)
+      ? undefined
+      : next.piCatalogProviderId,
   readCustomProviderKey: vi.fn(),
   replaceCustomProviderModelId: vi.fn(),
   setCustomProviderModelReasoning: vi.fn(),

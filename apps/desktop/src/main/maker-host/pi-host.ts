@@ -267,6 +267,21 @@ function officialPiModels(providerId: string): PiNativeModelSpec[] | null {
   }));
 }
 
+function officialPiRouteMatches(
+  providerId: string,
+  baseUrl: string,
+  wireProtocol: ProviderWireProtocol | undefined,
+): boolean {
+  const models = piModelCatalog.providers[providerId];
+  if (!models?.length) return false;
+  const baseUrls = new Set(models.map((model) => model.baseUrl.replace(/\/+$/, '')));
+  const apis = new Set(models.map((model) => model.api));
+  return baseUrls.size === 1
+    && baseUrls.has(baseUrl.trim().replace(/\/+$/, ''))
+    && apis.size === 1
+    && apis.has(wireProtocolToPiApi(wireProtocol));
+}
+
 function configuredPiModel(model: {
   id: string;
   name?: string;
@@ -390,6 +405,7 @@ export function buildPiNativeProvidersFromConfigs(
       ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
       models: (() => {
         const official = rt.piCatalogProviderId
+          && officialPiRouteMatches(rt.piCatalogProviderId, rt.baseUrl, rt.wireProtocol)
           ? officialPiModels(rt.piCatalogProviderId)
           : null;
         const officialById = new Map((official ?? []).map((model) => [model.id, model]));
