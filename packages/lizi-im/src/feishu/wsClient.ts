@@ -26,9 +26,12 @@
  *         /open-apis/bot/v3/info after connect; unknown → drop all group msgs)
  *       → drop if no owner bound yet (群里绝不 TOFU 认主 — 钉钉同款)
  *       → non-owner @bot → polite notice (per-user cooldown), no turn
- *       → owner @bot → strip mention placeholders, senderId = lane id
- *         `g/{chatId}[/{threadId}]`, speaker = owner, record reply anchor,
- *         emit IMMessageEvent
+ *       → owner @bot in a topic → topic lane `g/{chatId}/{threadId}`
+ *       → owner @bot in main stream → openThread: 以触发消息为根
+ *         reply_in_thread 开话题, 事件直接进新话题 lane — 每个话题是独立
+ *         session, 回复全落话题里, 群主流不被刷屏; 开话题失败降级回群
+ *         lane `g/{chatId}` 旧行为
+ *       → strip mention placeholders, record reply anchor, emit IMMessageEvent
  *
  *   card.action.trigger(_v1)
  *     → drop if sender not in whitelist
@@ -679,13 +682,26 @@ async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): P
     return;
   }
 
-  // 群 lane: senderId = g/{chatId}[/{threadId}], 出站按 lane 解码回群;
-  // 记录回挂锚点让本轮回复(引用式)挂回触发消息(话题内回复顺带落回话题)。
-  const laneUserId = isGroup
-    ? encodeLaneUserId(chatId, data.message.thread_id)
-    : null;
-  if (laneUserId) {
-    outbound.pushReplyAnchor(laneUserId, messageId);
+  // 群 lane: senderId = g/{chatId}[/{threadId}], 出站按 lane 解码回群。
+  // 话题内触发直接进话题 lane(锚点=触发消息, 回复自动落回话题); 群主流
+  // 触发先以触发消息为根开话题再进新话题 lane(锚点=开场白消息) — 每话题
+  // 独立 session, 群主流保持干净; 开话题失败才降级回群 lane 旧行为。
+  let laneUserId: string | null = null;
+  if (isGroup) {
+    const incomingThreadId = data.message.thread_id;
+    if (incomingThreadId) {
+      laneUserId = encodeLaneUserId(chatId, incomingThreadId);
+      outbound.pushReplyAnchor(laneUserId, messageId);
+    } else {
+      const opener = await outbound.openThread(messageId, transportMessages.group.threadOpener);
+      if (opener) {
+        laneUserId = encodeLaneUserId(chatId, opener.threadId);
+        outbound.pushReplyAnchor(laneUserId, opener.messageId);
+      } else {
+        laneUserId = encodeLaneUserId(chatId, null);
+        outbound.pushReplyAnchor(laneUserId, messageId);
+      }
+    }
   }
 
   // Emit raw fields — orchestrator decides how to render unsupported (it owns

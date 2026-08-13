@@ -20,6 +20,11 @@ export const messages = {
     /** 非 owner 在群里 @bot 的礼貌回应(per-user 冷却防刷屏, 与 telegram 同语义)。 */
     strangerNotice:
       '👋 我是一位主人的个人 Cindy 助理，只响应主人本人的指令~\nI am a personal Cindy assistant and only respond to my owner.',
+    /**
+     * 群主流 @bot 时以触发消息为根开话题的开场白(reply_in_thread)。此后
+     * 本会话所有回复都落在话题里, 群主流不被刷屏; 每个话题是独立 session。
+     */
+    threadOpener: '🧵 开个话题聊这条, 回复都在里面 ~',
   },
   // (inbound.skipped removed — orchestrator owns the wording for "pure
   // unsupported" / "mixed unsupported" replies; @cindy/im just emits the raw

@@ -8,7 +8,8 @@
  *     MCP (send_file_to_user)
  *   - ack emoji: REACTION_PROCESSING
  *   - 群 lane(senderId = `g/{chatId}[/{threadId}]`, @cindy/im feishu/codec.ts):
- *     每群/每话题一个会话; 群轮次挂强确认策略 + 触发时按需拉群历史拼上下文
+ *     每话题一个会话(群主流 @ 入站即开话题, 群 lane 仅开话题失败的降级
+ *     路径); 群轮次挂强确认策略 + 触发时按需拉群历史拼上下文
  *     (飞书有拉历史 API, 不需要 telegram 那样的本地群消息池)。
  */
 

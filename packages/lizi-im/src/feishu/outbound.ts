@@ -56,8 +56,10 @@ export function unbindClient(): void {
 // ── group lane reply anchors ──────────────────────────────────────────────────
 // 群 lane 的「答案挂回提问」: wsClient 在 owner 触发时 push 触发消息 id,
 // 出站按回合领取(流式建卡时 advance)。话题 lane 的**所有**出站都走 reply
-// 锚点 — 被回复消息在话题里, 回复自动落回话题(会话与挂回一次解决);
-// 普通群 lane 只有回合首条出站 reply(引用式"挂在提问下"), 后续 chat_id 直发。
+// 锚点 — 被回复消息在话题里, 回复自动落回话题(会话与挂回一次解决)。
+// 群主流 @ 会在 wsClient 入站时就以触发消息为根开话题(openThread), 事件
+// 直接进话题 lane; 普通群 lane 只剩开话题失败的降级路径与无锚点主动出站,
+// 此时回合首条出站 reply(引用式"挂在提问下"), 后续 chat_id 直发。
 // 连接换代(unbindClient)清空 — 旧锚点不跨代错配(telegram 同语义)。
 
 interface LaneAnchorState {
@@ -183,6 +185,41 @@ export async function replyText(
     'text',
     JSON.stringify({ text }),
   );
+}
+
+/**
+ * 以 reply_in_thread 回复触发消息, 用它作为根开一个新话题。返回开场白消息
+ * id + 新话题 thread_id(话题内合法锚点); API 失败或响应缺 id 返回 null —
+ * 调用方降级回群 lane 旧行为(引用回复 + chat_id 直发)。
+ */
+export async function openThread(
+  replyToMessageId: string,
+  text: string,
+): Promise<{ messageId: string; threadId: string } | null> {
+  const log = getLog();
+  try {
+    const res = await ensureClient().im.v1.message.reply({
+      path: { message_id: replyToMessageId },
+      data: {
+        content: JSON.stringify({ text }),
+        msg_type: 'text',
+        reply_in_thread: true,
+      },
+    });
+    const messageId = res.data?.message_id ?? '';
+    const threadId = res.data?.thread_id ?? '';
+    if (!messageId || !threadId) {
+      log.warn(
+        `[feishu/outbound] openThread: response missing id(s) messageId=${messageId ? 'yes' : 'no'} threadId=${threadId ? 'yes' : 'no'}`,
+      );
+      return null;
+    }
+    return { messageId, threadId };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[feishu/outbound] openThread failed (fallback to group lane): ${msg}`);
+    return null;
+  }
 }
 
 // ── reactions (used by host orchestrator to ack user msgs) ────────────────────

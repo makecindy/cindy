@@ -8,10 +8,15 @@ const larkMocks = vi.hoisted(() => {
     void payload;
     return { data: { message_id: 'om_created' } };
   });
-  const reply = vi.fn(async (payload: { path: unknown; data: unknown }) => {
-    void payload;
-    return { data: { message_id: 'om_replied' } };
-  });
+  const reply = vi.fn(
+    async (payload: {
+      path: unknown;
+      data: unknown;
+    }): Promise<{ data: { message_id: string; thread_id?: string } }> => {
+      void payload;
+      return { data: { message_id: 'om_replied', thread_id: 'omt_r1' } };
+    },
+  );
   return { create, reply };
 });
 
@@ -142,6 +147,27 @@ describe('feishu outbound lane routing', () => {
         data: expect.objectContaining({ receive_id: 'ou_dm_user' }),
       }),
     );
+  });
+
+  it('openThread replies with reply_in_thread and returns the new thread id', async () => {
+    const res = await outbound.openThread('om_root', '开个话题');
+    expect(larkMocks.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { message_id: 'om_root' },
+        data: expect.objectContaining({ msg_type: 'text', reply_in_thread: true }),
+      }),
+    );
+    expect(res).toEqual({ messageId: 'om_replied', threadId: 'omt_r1' });
+  });
+
+  it('openThread returns null when the response lacks a thread_id', async () => {
+    larkMocks.reply.mockResolvedValueOnce({ data: { message_id: 'om_replied' } });
+    await expect(outbound.openThread('om_root', 'x')).resolves.toBeNull();
+  });
+
+  it('openThread returns null instead of throwing when the API fails', async () => {
+    larkMocks.reply.mockRejectedValueOnce(new Error('no thread permission'));
+    await expect(outbound.openThread('om_root', 'x')).resolves.toBeNull();
   });
 
   it('unbindClient clears held anchors (no cross-generation mismatch)', async () => {
