@@ -7,23 +7,27 @@
  * 本身的契约:registry 命中、defaultState 形状、hydrateState 对非法 raw 的容错。
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+// ReviewTabBody has its own renderer tests. This suite only exercises the
+// registration/state contract, so keep the full review UI graph outside this fixture.
+vi.mock('../ReviewTabBody', () => ({ ReviewTabBody: () => null }));
 
 let registry: typeof import('../../../registry');
 let pluginMod: typeof import('../index');
+let fixtureInitializationCount = 0;
 
 describe('review plugin', () => {
-  beforeEach(async () => {
-    // 关键:vitest 模块缓存默认共享,直接 import 第二次拿到 cached export 不会再
-    // 跑顶层 registerTabKind side-effect。每个测试前先 resetModules + 全新 import
-    // registry,registry 也是模块单例,新 import 拿到的是空 registry。然后 import
-    // plugin 让它跑一遍 register。
+  beforeAll(async () => {
+    fixtureInitializationCount += 1;
+    // registry 与 plugin 共享同一个文件级 fixture：注册 side-effect 只需执行一次。
+    // 每个用例都重置模块会在满载 worker 中重复拉起依赖图并撞上 hook timeout。
     vi.resetModules();
     registry = await import('../../../registry');
     pluginMod = await import('../index');
   });
 
-  afterEach(() => {
+  afterAll(() => {
     registry._resetTabKindRegistry();
   });
 
@@ -154,7 +158,8 @@ describe('review plugin', () => {
   });
 
   // 引用 pluginMod 让 lint 满意 + 验证 module load 成功
-  it('module imports without throwing', () => {
+  it('loads the registration fixture once without throwing', () => {
     expect(pluginMod).toBeTruthy();
+    expect(fixtureInitializationCount).toBe(1);
   });
 });
