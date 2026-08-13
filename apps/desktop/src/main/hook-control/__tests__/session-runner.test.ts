@@ -2697,7 +2697,14 @@ describe('extractToolResultImageUrls 的兜底账本回落(xdt_media_produced)',
 
 describe('watchContinuation: 观察桌面端续跑并回流', () => {
   /** 不自动 done 的 fake session(测试手动驱动事件流)。 */
-  function makeManualSession(id: string) {
+  function makeManualSession(
+    id: string,
+    continuation?: { id: number; state: 'awaiting' | 'active' | 'cancelled' },
+  ) {
+    const continuationListeners = new Set<(
+      continuationId: number,
+      state: 'awaiting' | 'active' | 'cancelled',
+    ) => void>();
     return {
       ...makePermissionModeFake(),
       id,
@@ -2713,6 +2720,15 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
         return () => {
           h.statusCbs.delete(id);
         };
+      },
+      beginTurnContinuationWait: (continuationId?: number) =>
+        continuation && continuationId === continuation.id ? continuation.state : null,
+      onTurnContinuationChange: (listener: (
+        continuationId: number,
+        state: 'awaiting' | 'active' | 'cancelled',
+      ) => void) => {
+        continuationListeners.add(listener);
+        return () => continuationListeners.delete(listener);
       },
     };
   }
@@ -2793,7 +2809,10 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
   });
 
   it('Claude 原生 Auto 的拒绝标记跨 continuation 保留到最终 hook 正文', async () => {
-    const continuation: ManualContinuation = { id: 17, state: 'awaiting' };
+    const continuation: { id: number; state: 'awaiting' | 'active' | 'cancelled' } = {
+      id: 17,
+      state: 'awaiting',
+    };
     const session = makeManualSession('sess-native-auto-continuation', continuation);
     const observer = observeHookTurn(session as never, {
       onSilentStopSettled: () => () => {},
