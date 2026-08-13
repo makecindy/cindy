@@ -616,21 +616,40 @@ export function CCAgentSidebarUpper() {
     [statusFilteredSessionsWithRemote, hiddenProjectKeys, localPlatform],
   );
 
-  /* Codex Micro 的 6 个任务键跟这份列表走。主进程只能查本地 sessions 表,看不见
-   * 被控机器上的任务(它们只活在渲染端的 remote store 里),也不知道用户当前选了
-   * 哪台机器 —— 光靠主进程投影,连着远程用时 6 个键会全是空的。所以由这里上报。
-   * 只送键盘需要的三个字段,不整份 session 过 IPC。 */
+  /* Codex Micro 的 6 个任务键跟侧栏走。主进程只能查本地 sessions 表,看不见被控
+   * 机器上的任务(它们只活在渲染端的 remote store 里),也不知道用户当前选了哪台
+   * 机器 —— 光靠主进程投影,连着远程用时 6 个键会全是空的。所以由这里上报。
+   *
+   * 顺序取真实渲染顺序(与 mod+1..9、旋钮切任务同一个口径),不是
+   * visibleSessionsWithRemote 那份扁平的「按最近更新排序」列表 —— 后者不含置顶区
+   * 与项目分组,和用户眼里看到的顺序对不上,AG00 会指向列表里根本不在第一行的任务。
+   * 不限定容器:展开态与 rail 折叠态是两个不同组件,扫整个 document 才能两种形态
+   * 都覆盖。只送键盘需要的三个字段,不整份 session 过 IPC。 */
   const publishedTaskKeyRef = useRef<string>('');
-  useEffect(() => {
+  const publishSidebarTasks = useCallback(() => {
     if (isSecondaryWindow()) return;
-    const tasks = visibleSessionsWithRemote.map((session) => {
+    const renderedIds = getVisibleSidebarSessionIds();
+    // 读不到渲染顺序就不上报:宁可让键盘沿用上一次的映射,也不要拿一份顺序不对的
+    // 列表覆盖它(主进程在首次上报前本来就会回落本地库)。
+    if (renderedIds.length === 0) return;
+    const byId = new Map(
+      [...visibleSessionsWithRemote, ...remoteProjectSessions].map((session) => [
+        session.id,
+        session,
+      ]),
+    );
+    const tasks = renderedIds.flatMap((id) => {
+      const session = byId.get(id);
+      if (!session) return [];
       // 渲染端存 ISO 字符串,键盘那边按毫秒排置顶顺序。
       const pinnedAtMs = session.pinnedAt ? Date.parse(session.pinnedAt) : Number.NaN;
-      return {
-        id: session.id,
-        title: session.title ?? null,
-        pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
-      };
+      return [
+        {
+          id: session.id,
+          title: session.title ?? null,
+          pinnedAt: Number.isFinite(pinnedAtMs) ? pinnedAtMs : null,
+        },
+      ];
     });
     // 侧栏会因为各种无关状态重算;内容没变就不打扰主进程。
     const key = JSON.stringify(tasks);
@@ -640,7 +659,28 @@ export function CCAgentSidebarUpper() {
       // 键盘没接或 IPC 不可用都不影响侧栏本身。
       publishedTaskKeyRef.current = '';
     });
-  }, [visibleSessionsWithRemote]);
+  }, [visibleSessionsWithRemote, remoteProjectSessions]);
+  useEffect(() => {
+    publishSidebarTasks();
+    // 展开/折叠项目、分组重排这类纯 UI 变化不会动 visibleSessionsWithRemote,
+    // 但会改渲染顺序 —— 跟序号徽标同样的做法,靠 DOM 变化跟住。
+    if (typeof MutationObserver === 'undefined' || typeof document === 'undefined') return;
+    // 观察面是整个 document(展开态与 rail 是两个组件),流式输出时 mutation 会非常
+    // 密集 —— 每帧最多重算一次,别让它变成热路径。
+    let frame: number | null = null;
+    const observer = new MutationObserver(() => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        publishSidebarTasks();
+      });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [publishSidebarTasks]);
 
   // rail 未读集与展开态(ExpandedView.sidebarNotifications)同口径:把"定时任务有未读运行"的
   // 会话并入 attention 未读集。否则 rail 模式下,靠 scheduleSessionIndex 恢复的定时任务

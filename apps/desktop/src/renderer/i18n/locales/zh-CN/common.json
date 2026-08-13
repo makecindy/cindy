@@ -3435,7 +3435,7 @@
           "title": "Agent 键",
           "source": {
             "label": "任务顺序",
-            "description": "AG00～AG05 按最近 6 个活跃任务排列，置顶不会改变顺序。",
+            "description": "AG00～AG05 就是侧边栏从上到下的前 6 个任务，顺序与那里一致。",
             "value": "最近 6 个",
             "options": {
               "recent": "最近任务",

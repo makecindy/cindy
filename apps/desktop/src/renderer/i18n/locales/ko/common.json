@@ -3435,7 +3435,7 @@
           "title": "Agent 키",
           "source": {
             "label": "작업 순서",
-            "description": "AG00~AG05는 최근 활성 작업 6개 순서이며 고정 순서는 사용하지 않습니다.",
+            "description": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
             "value": "최근 6개",
             "options": {
               "recent": "최근 작업",

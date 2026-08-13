@@ -3436,7 +3436,7 @@
           "title": "Agent keys",
           "source": {
             "label": "Task order",
-            "description": "AG00–AG05 follow the six most recently active tasks. Pinned order is ignored.",
+            "description": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
             "value": "Most recent 6",
             "options": {
               "recent": "Most recent",

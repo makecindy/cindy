@@ -3435,7 +3435,7 @@
           "title": "Agent 鍵",
           "source": {
             "label": "任務順序",
-            "description": "AG00～AG05 依最近 6 個活躍任務排列，置頂不會改變順序。",
+            "description": "AG00～AG05 就是側邊欄從上到下的前 6 個任務，順序與那裡一致。",
             "value": "最近 6 個",
             "options": {
               "recent": "最近任務",

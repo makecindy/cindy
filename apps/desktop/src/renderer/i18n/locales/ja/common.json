@@ -3435,7 +3435,7 @@
           "title": "Agent キー",
           "source": {
             "label": "タスクの順序",
-            "description": "AG00～AG05 は最近アクティブだった 6 件のタスク順です。ピン留め順は使いません。",
+            "description": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
             "value": "最近の 6 件",
             "options": {
               "recent": "最近のタスク",
