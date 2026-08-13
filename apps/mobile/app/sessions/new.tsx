@@ -3412,7 +3412,7 @@ export default function NewRemoteSessionScreen() {
       ref={voiceDraftScrollRef}
       contentContainerStyle={[
         styles.voiceDraftOverlayContent,
-        !composerCardActive && !composerInputIsMultiline && styles.voiceDraftOverlayContentGeometric,
+        !composerCardActive && styles.voiceDraftOverlayContentGeometric,
       ]}
       onContentSizeChange={() => {
         requestAnimationFrame(() => {

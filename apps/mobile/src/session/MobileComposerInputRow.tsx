@@ -226,7 +226,10 @@ export function MobileComposerInputRow({
 }: MobileComposerInputRowProps) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const cardLayout = cardActive === true;
-  const geometricSingleLine = !cardLayout && !multilineShape;
+  // 几何居中只看当前是不是收起展示态。resize 在 collapsed 下会把可见高度钉成单行,
+  // 但 mode/manual 与多行草稿判定仍会让 multilineShape 为 true;若据此关掉几何居中,
+  // 收起态文字会继续走 iOS 6/0 光学偏移,对不齐新增的 34pt +。
+  const geometricSingleLine = !cardLayout;
   // RN 里显式 height 压过 minHeight:manual 定高(用户拖过高度)时 frameHeight 可能小于
   // inputFrameMinHeight,直接铺开会把听写停止命中区又压回不足 44pt。数值高度在这里
   // 先 clamp;拖拽中的 Animated 值无法在 JS 侧 clamp(会打断跟手),那一瞬保持动画值,
@@ -282,7 +285,7 @@ export function MobileComposerInputRow({
       style={[
         styles.row,
         compact && styles.rowCompact,
-        multilineShape && styles.rowMultiline,
+        !geometricSingleLine && multilineShape && styles.rowMultiline,
         cardLayout && styles.rowCard,
         rowStyle,
       ]}
@@ -293,7 +296,7 @@ export function MobileComposerInputRow({
       <View
         style={[
           styles.mainRow,
-          multilineShape && styles.mainRowMultiline,
+          !geometricSingleLine && multilineShape && styles.mainRowMultiline,
           !cardLayout && voicePlacement?.inline && styles.mainRowVoiceInset,
         ]}
       >

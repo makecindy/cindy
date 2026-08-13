@@ -2798,7 +2798,7 @@ export default function SessionScreen() {
         ref={voiceDraftScrollRef}
         contentContainerStyle={[
           styles.voiceDraftOverlayContent,
-          !composerCardActive && !composerInputIsMultiline && styles.voiceDraftOverlayContentGeometric,
+          !composerCardActive && styles.voiceDraftOverlayContentGeometric,
         ]}
         onContentSizeChange={() => {
           requestAnimationFrame(() => {
@@ -9414,7 +9414,7 @@ export default function SessionScreen() {
                         height={composerInputVisibleHeight}
                         hidden={voiceIsListening}
                         maxHeight={composerResize.inputMaxHeight}
-                        opticalPadding={composerCardActive || composerInputIsMultiline}
+                        opticalPadding={composerCardActive}
                         onBlur={() => {
                           setComposerFocused(false);
                           setComposerVoiceHoldArmed(false);
