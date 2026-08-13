@@ -628,6 +628,13 @@ export class WorkLouderCodexLightingController {
       if (process.platform === 'darwin') {
         this.device = { ...this.device, inputMonitoringPermission: 'granted' };
       }
+    } else {
+      // Keep the last permission answer; everything else is stale once the
+      // board is gone and would sit next to "Not detected" as if it were live.
+      this.device = {
+        ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+        inputMonitoringPermission: this.device.inputMonitoringPermission,
+      };
     }
     this.emitState();
   }

@@ -37,6 +37,7 @@ import {
   WORKLOUDER_CODEX_DEFAULT_SETTINGS,
   WORKLOUDER_CODEX_ENCODER_ACTIONS,
   WORKLOUDER_CODEX_ENCODER_MODES,
+  WORKLOUDER_CODEX_KEYCAP_ACTIONS,
   WORKLOUDER_CODEX_KEYCAP_IDS,
   cloneWorkLouderCodexLayout,
   type WorkLouderCodexAction,
@@ -115,6 +116,8 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
   const [brightnessDraft, setBrightnessDraft] = useState(100);
   const [editingSlot, setEditingSlot] = useState<WorkLouderCodexCommandSlot | null>(null);
   const [editingKeycapId, setEditingKeycapId] = useState<WorkLouderCodexKeycapId | null>(null);
+  const [editingAction, setEditingAction] = useState<WorkLouderCodexAction | null>(null);
+  const [editingSeparateMicrophoneKeys, setEditingSeparateMicrophoneKeys] = useState(false);
   const [keycapQuery, setKeycapQuery] = useState('');
   const [editingPart, setEditingPart] = useState<
     WorkLouderCodexAgentKey | WorkLouderCodexControlPart | null
@@ -151,21 +154,20 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
     ? WORKLOUDER_CODEX_COMMAND_SLOTS.filter((slot) => slot !== 'ACT10_ACT11')
     : WORKLOUDER_CODEX_COMMAND_SLOTS.filter((slot) => slot !== 'ACT10' && slot !== 'ACT11');
 
-  const changeCommandKeycap = (
+  const applyCommandKeycap = (
+    layout: WorkLouderCodexLayout,
     slot: WorkLouderCodexCommandSlot,
     keycapId: WorkLouderCodexKeycapId,
   ): void => {
-    patchLayout((layout) => {
-      const activeSlots = layout.separateMicrophoneKeys
-        ? WORKLOUDER_CODEX_COMMAND_SLOTS.filter((item) => item !== 'ACT10_ACT11')
-        : WORKLOUDER_CODEX_COMMAND_SLOTS.filter((item) => item !== 'ACT10' && item !== 'ACT11');
-      const duplicate = activeSlots.find(
-        (item) => item !== slot && layout.slots[item].keycapId === keycapId,
-      );
-      const previous = { ...layout.slots[slot] };
-      layout.slots[slot] = { ...layout.slots[slot], keycapId };
-      if (duplicate) layout.slots[duplicate] = previous;
-    });
+    const activeSlots = layout.separateMicrophoneKeys
+      ? WORKLOUDER_CODEX_COMMAND_SLOTS.filter((item) => item !== 'ACT10_ACT11')
+      : WORKLOUDER_CODEX_COMMAND_SLOTS.filter((item) => item !== 'ACT10' && item !== 'ACT11');
+    const duplicate = activeSlots.find(
+      (item) => item !== slot && layout.slots[item].keycapId === keycapId,
+    );
+    const previous = { ...layout.slots[slot] };
+    layout.slots[slot] = { ...layout.slots[slot], keycapId };
+    if (duplicate) layout.slots[duplicate] = previous;
   };
 
   /**
@@ -178,6 +180,8 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
       const slot = key as WorkLouderCodexCommandSlot;
       setEditingSlot(slot);
       setEditingKeycapId(settings.layout.slots[slot].keycapId);
+      setEditingAction(settings.layout.slots[slot].action);
+      setEditingSeparateMicrophoneKeys(settings.layout.separateMicrophoneKeys);
       setKeycapQuery('');
       return;
     }
@@ -190,10 +194,23 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
   const closeKeycapEditor = (): void => {
     setEditingSlot(null);
     setEditingKeycapId(null);
+    setEditingAction(null);
+    setEditingSeparateMicrophoneKeys(false);
     setKeycapQuery('');
   };
 
-  const editingAssignment = editingSlot ? settings.layout.slots[editingSlot] : null;
+  const saveKeycapEditor = (): void => {
+    if (!editingSlot || !editingKeycapId) return;
+    const slot = editingSlot;
+    const keycapId = editingKeycapId;
+    patchLayout((layout) => {
+      applyCommandKeycap(layout, slot, keycapId);
+      layout.slots[slot].action = editingAction;
+      layout.separateMicrophoneKeys = editingSeparateMicrophoneKeys;
+    });
+    closeKeycapEditor();
+  };
+
   /** The microphone slots double as the voice-input control, so they get its options too. */
   const editingMicrophone =
     editingSlot === 'ACT10' || editingSlot === 'ACT11' || editingSlot === 'ACT10_ACT11';
@@ -206,7 +223,7 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
       return {
         legend: key,
         name: custom
-          ? (actionLabel(settings.customAgentKeys[index] ?? null, t) ??
+          ? (actionLabel(settings.customAgentKeys[index] ?? null, t, state) ??
             t('settings.shortcuts.workLouderCodex.agentKeys.newTask'))
           : (slot?.title ?? t('settings.shortcuts.workLouderCodex.agentKeys.newTask')),
         // Say which rule the key is following, so it is clear why it is not
@@ -235,21 +252,27 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
     }
     const slot = key as WorkLouderCodexCommandSlot;
     const assignment = settings.layout.slots[slot];
-    const action = assignment.action;
-    if (action?.type === 'command') {
+    const action = assignment.action ?? WORKLOUDER_CODEX_KEYCAP_ACTIONS[assignment.keycapId] ?? null;
+    if (assignment.keycapId === 'MIC' || assignment.keycapId === 'MIC1') {
       return {
         legend: assignment.keycapId,
-        name: workLouderCodexCommandName(t, action.commandId),
-        description: workLouderCodexCommandDescription(t, action.commandId),
+        name: t('settings.shortcuts.workLouderCodex.microphone.title'),
+        description: t('settings.shortcuts.workLouderCodex.microphone.separate.description'),
       };
     }
-    if (action?.type === 'skill') {
-      return { legend: assignment.keycapId, name: action.name };
+    if (action) {
+      return {
+        legend: assignment.keycapId,
+        name:
+          actionLabel(action, t, state) ??
+          t('settings.shortcuts.workLouderCodex.commandKeys.builtIn'),
+        description:
+          action.type === 'command' ? workLouderCodexCommandDescription(t, action.commandId) : undefined,
+      };
     }
-    // No override: the keycap runs whatever Cindy has wired to it by default.
     return {
       legend: assignment.keycapId,
-      name: t('settings.shortcuts.workLouderCodex.commandKeys.builtIn'),
+      name: t('settings.shortcuts.workLouderCodex.commandKeys.unmapped'),
     };
   };
 
@@ -290,7 +313,7 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
           <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
             {connectionDescription(t, state)}
           </p>
-          {state?.device.deviceType && (
+          {state?.connectionStatus === 'connected' && state.device.deviceType && (
             <div className="flex flex-wrap gap-2 pt-1">
               <DeviceChip icon={<Keyboard size={12} />}>
                 {state.device.deviceType === 'creator-micro-2' ? 'Creator Micro 2' : 'Codex Micro'}
@@ -390,9 +413,7 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
         }}
         onSelect={setEditingKeycapId}
         onCancel={closeKeycapEditor}
-        onSave={() => {
-          if (editingSlot && editingKeycapId) changeCommandKeycap(editingSlot, editingKeycapId);
-        }}
+        onSave={saveKeycapEditor}
         copy={{
           title: t('settings.shortcuts.workLouderCodex.layout.editor.title'),
           description: t('settings.shortcuts.workLouderCodex.layout.editor.description'),
@@ -410,17 +431,16 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
             description={t('settings.shortcuts.workLouderCodex.commandKeys.builtInDescription')}
             control={
               <ActionSelect
-                action={editingAssignment?.action ?? null}
+                action={editingAction}
                 state={state}
                 skills={enabledSkills}
-                disabled={!state || saving || !editingSlot}
-                emptyLabel={t('settings.shortcuts.workLouderCodex.commandKeys.builtIn')}
-                onChange={(action) => {
-                  if (!editingSlot) return;
-                  patchLayout((layout) => {
-                    layout.slots[editingSlot].action = action;
-                  });
-                }}
+                disabled={!state || saving || !editingSlot || editingMicrophone}
+                emptyLabel={
+                  editingMicrophone
+                    ? t('settings.shortcuts.workLouderCodex.microphone.title')
+                    : t('settings.shortcuts.workLouderCodex.commandKeys.builtIn')
+                }
+                onChange={setEditingAction}
               />
             }
           />
@@ -428,10 +448,10 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
             <>
               <SettingsDivider />
               <MicrophoneControls
-                settings={settings}
+                separateMicrophoneKeys={editingSeparateMicrophoneKeys}
                 state={state}
                 saving={saving}
-                patchLayout={patchLayout}
+                onSeparateChange={setEditingSeparateMicrophoneKeys}
               />
             </>
           )}
@@ -689,15 +709,15 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
  * how it listens, and whether the board splits it into two single-width keys.
  */
 function MicrophoneControls({
-  settings,
+  separateMicrophoneKeys,
   state,
   saving,
-  patchLayout,
+  onSeparateChange,
 }: {
-  settings: WorkLouderCodexState['settings'];
+  separateMicrophoneKeys: boolean;
   state: WorkLouderCodexState | null;
   saving: boolean;
-  patchLayout(update: (layout: WorkLouderCodexLayout) => void): void;
+  onSeparateChange(value: boolean): void;
 }) {
   const { t } = useTranslation();
   return (
@@ -710,13 +730,9 @@ function MicrophoneControls({
         description={t('settings.shortcuts.workLouderCodex.microphone.separate.description')}
         control={
           <Switch
-            checked={settings.layout.separateMicrophoneKeys}
+            checked={separateMicrophoneKeys}
             disabled={!state || saving}
-            onCheckedChange={(checked) =>
-              patchLayout((layout) => {
-                layout.separateMicrophoneKeys = checked;
-              })
-            }
+            onCheckedChange={onSeparateChange}
             aria-label={t('settings.shortcuts.workLouderCodex.microphone.separate.label')}
           />
         }
@@ -774,11 +790,13 @@ function ActionSelect({
       </optgroup>
       {allowKeycaps && (
         <optgroup label={t('settings.shortcuts.workLouderCodex.actions.keycaps')}>
-          {WORKLOUDER_CODEX_KEYCAP_IDS.map((keycapId) => (
-            <option key={keycapId} value={`keycap:${keycapId}`}>
-              {keycapId}
-            </option>
-          ))}
+          {WORKLOUDER_CODEX_KEYCAP_IDS.filter((keycapId) => WORKLOUDER_CODEX_KEYCAP_ACTIONS[keycapId]).map(
+            (keycapId) => (
+              <option key={keycapId} value={`keycap:${keycapId}`}>
+                {keycapId}
+              </option>
+            ),
+          )}
         </optgroup>
       )}
       {skills.length > 0 && (
@@ -991,6 +1009,7 @@ function connectionDescription(
 function actionLabel(
   action: WorkLouderCodexAction | null,
   t?: ReturnType<typeof useTranslation>['t'],
+  state?: WorkLouderCodexState | null,
 ): string | null {
   if (!action) return null;
   switch (action.type) {
@@ -1005,7 +1024,7 @@ function actionLabel(
     case 'external-url':
       return action.url;
     case 'task':
-      return null;
+      return state?.taskOptions.find((task) => task.id === action.sessionId)?.title ?? action.sessionId;
   }
 }
 

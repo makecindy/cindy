@@ -506,6 +506,39 @@ describe('WorkLouderCodexLightingController', () => {
     }
   });
 
+  it('clears the last device snapshot when the keyboard disappears', () => {
+    const statusRef: { current: ((status: 'connected' | 'not-detected') => void) | null } = {
+      current: null,
+    };
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn((handler: typeof statusRef.current) => {
+        statusRef.current = handler;
+      }),
+      setDeviceStateHandler: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn());
+    controller.start();
+    sink.setDeviceStateHandler.mock.calls.at(-1)?.[0]?.({
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+      firmwareVersion: '1.2.3',
+      batteryPercentage: 80,
+      isCharging: false,
+      inputMonitoringPermission: 'granted',
+    });
+    expect(controller.getState().device.deviceType).toBe('codex-micro');
+
+    statusRef.current?.('not-detected');
+    expect(controller.getState().connectionStatus).toBe('not-detected');
+    expect(controller.getState().device.deviceType).toBeNull();
+    expect(controller.getState().device.batteryPercentage).toBeNull();
+    expect(controller.getState().device.inputMonitoringPermission).toBe('granted');
+  });
+
   it('delegates shutdown so the host can turn the device off', async () => {
     const sink = {
       update: vi.fn(),

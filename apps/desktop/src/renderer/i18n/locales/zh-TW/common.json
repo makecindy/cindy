@@ -3279,7 +3279,10 @@
           },
           "copyConversationMarkdown": {
             "name": "複製為 Markdown",
-            "description": "將目前任務的對話複製為 Markdown"
+            "description": "將目前任務的對話複製為 Markdown",
+            "copied": "已複製為 Markdown",
+            "empty": "這個任務還沒有可複製的內容",
+            "failed": "複製失敗"
           },
           "archiveTask": {
             "name": "封存任務",
@@ -3367,7 +3370,7 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "entryDescription": "用 6 個 Agent 鍵開啟 Cindy 最近的任務，並用燈光顯示任務狀態。",
+        "entryDescription": "用 6 個 Agent 鍵開啟側邊欄由上而下的前 6 個任務，並用燈光顯示任務狀態。",
         "openAria": "開啟 Work Louder Codex Micro 設定",
         "back": "返回鍵盤快捷鍵",
         "retry": "重試",
@@ -3438,7 +3441,7 @@
             "description": "AG00～AG05 就是側邊欄從上到下的前 6 個任務，順序與那裡一致。",
             "value": "最近 6 個",
             "options": {
-              "recent": "最近任務",
+              "recent": "側邊欄順序",
               "pinned": "置頂任務",
               "priority": "優先任務",
               "custom": "自訂"
@@ -3455,10 +3458,12 @@
         },
         "commandKeys": {
           "builtInDescription": "保持鍵帽內建的動作，或將這個鍵改綁到其他動作。",
-          "builtIn": "使用鍵帽預設動作"
+          "builtIn": "使用鍵帽預設動作",
+          "unmapped": "這個鍵帽沒有對應動作"
         },
         "microphone": {
-"separate": {
+          "title": "麥克風",
+          "separate": {
             "label": "拆分麥克風鍵",
             "description": "保持 ACT10 和 ACT11 分開，不合併為一個 MIC 鍵。"
           }

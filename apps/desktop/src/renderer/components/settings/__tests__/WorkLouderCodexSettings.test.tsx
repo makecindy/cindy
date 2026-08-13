@@ -226,4 +226,22 @@ describe('WorkLouderCodexSettings', () => {
 
     expect(mocks.setSettings).not.toHaveBeenCalled();
   });
+
+  it('does not write microphone-split or assigned-action drafts until Save', () => {
+    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^MIC/ }));
+    fireEvent.click(
+      screen.getByRole('switch', {
+        name: 'settings.shortcuts.workLouderCodex.microphone.separate.label',
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.shortcuts.workLouderCodex.layout.editor.cancel',
+      }),
+    );
+
+    expect(mocks.setSettings).not.toHaveBeenCalled();
+  });
 });

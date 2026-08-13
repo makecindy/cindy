@@ -3279,7 +3279,10 @@
           },
           "copyConversationMarkdown": {
             "name": "Markdown としてコピー",
-            "description": "現在のタスクの内容を Markdown としてコピーします"
+            "description": "現在のタスクの内容を Markdown としてコピーします",
+            "copied": "Markdown としてコピーしました",
+            "empty": "このタスクにはまだコピーできる内容がありません",
+            "failed": "コピーできませんでした"
           },
           "archiveTask": {
             "name": "タスクをアーカイブ",
@@ -3367,7 +3370,7 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "entryDescription": "6 個の Agent キーで Cindy の最近のタスクを開き、ライトで状態を表示します。",
+        "entryDescription": "6 個の Agent キーでサイドバー上から 6 件のタスクを開き、ライトで状態を表示します。",
         "openAria": "Work Louder Codex Micro の設定を開く",
         "back": "キーボードショートカットに戻る",
         "retry": "再試行",
@@ -3438,7 +3441,7 @@
             "description": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
             "value": "最近の 6 件",
             "options": {
-              "recent": "最近のタスク",
+              "recent": "サイドバー順",
               "pinned": "ピン留めしたタスク",
               "priority": "優先タスク",
               "custom": "カスタム"
@@ -3455,10 +3458,12 @@
         },
         "commandKeys": {
           "builtInDescription": "キーキャップ既定の動作のままにするか、別の動作に割り当てます。",
-          "builtIn": "キーキャップの組み込みアクションを使用"
+          "builtIn": "キーキャップの組み込みアクションを使用",
+          "unmapped": "このキーキャップには動作がありません"
         },
         "microphone": {
-"separate": {
+          "title": "マイク",
+          "separate": {
             "label": "マイクキーを分ける",
             "description": "ACT10 と ACT11 を 1 つの MIC キーにまとめず、別々に使います。"
           }

@@ -371,8 +371,9 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
     }
     pendingDeepLink = payload;
     log.debug('buffered pending deep link until renderer pull', payload);
-    // 把窗口拉前台(用户点链接 / 右键的意图就是 focus app)
-    focusMainWindow();
+    // Agent-key first tap may switch in the background. A buffered deep link
+    // from that path must not steal the frontmost app.
+    if (shouldFocus) focusMainWindow();
     return;
   }
   // 已运行场景:listener 必然挂着(MainLayout 已 mount),直接 send,不进 pending。

@@ -3280,7 +3280,10 @@
           },
           "copyConversationMarkdown": {
             "name": "Copy as Markdown",
-            "description": "Copy the current task as Markdown"
+            "description": "Copy the current task as Markdown",
+            "copied": "Copied the task as Markdown",
+            "empty": "This task has nothing to copy yet",
+            "failed": "Could not copy the task"
           },
           "archiveTask": {
             "name": "Archive task",
@@ -3368,7 +3371,7 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "entryDescription": "Open the six most recent Cindy tasks with the Agent keys and mirror their status with lighting.",
+        "entryDescription": "Open the first six sidebar tasks with the Agent keys and mirror their status with lighting.",
         "openAria": "Open Work Louder Codex Micro settings",
         "back": "Back to keyboard shortcuts",
         "retry": "Try again",
@@ -3439,7 +3442,7 @@
             "description": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
             "value": "Most recent 6",
             "options": {
-              "recent": "Most recent",
+              "recent": "Sidebar order",
               "pinned": "Pinned",
               "priority": "Priority",
               "custom": "Custom"
@@ -3456,10 +3459,12 @@
         },
         "commandKeys": {
           "builtInDescription": "Leave this on the keycap default, or bind the key to something else.",
-          "builtIn": "Use the keycap's built-in action"
+          "builtIn": "Use the keycap's built-in action",
+          "unmapped": "This keycap has no action"
         },
         "microphone": {
-"separate": {
+          "title": "Microphone",
+          "separate": {
             "label": "Use separate microphone keys",
             "description": "Keep ACT10 and ACT11 separate instead of combining them into one MIC key."
           }

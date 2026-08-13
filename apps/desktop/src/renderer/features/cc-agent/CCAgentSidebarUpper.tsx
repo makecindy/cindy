@@ -629,9 +629,8 @@ export function CCAgentSidebarUpper() {
   const publishSidebarTasks = useCallback(() => {
     if (isSecondaryWindow()) return;
     const renderedIds = getVisibleSidebarSessionIds();
-    // 读不到渲染顺序就不上报:宁可让键盘沿用上一次的映射,也不要拿一份顺序不对的
-    // 列表覆盖它(主进程在首次上报前本来就会回落本地库)。
-    if (renderedIds.length === 0) return;
+    // 空列表也要上报:换机器、折叠或搜索把可见行清掉时,旧映射必须让位,
+    // 否则 AG 键还会打开上一份已经看不见的任务。
     const byId = new Map(
       [...visibleSessionsWithRemote, ...remoteProjectSessions].map((session) => [
         session.id,

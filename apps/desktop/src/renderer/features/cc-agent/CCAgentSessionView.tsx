@@ -182,6 +182,10 @@ import { serializeAttachedFiles } from '@/lib/messageAttachmentPayload';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
+import {
+  copyCurrentTaskMarkdown,
+  forkCurrentTaskFromKeyboard,
+} from '@/lib/workLouderCodexTaskActions';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
@@ -1484,14 +1488,31 @@ export function CCAgentSessionView({
           return true;
         }
       }
+      if (action.commandId === 'forkTask') {
+        if (!sessionId || !canNavigateSession) return false;
+        void forkCurrentTaskFromKeyboard(sessionId, {
+          navigate,
+          t,
+        });
+        return true;
+      }
+      if (action.commandId === 'copyConversationMarkdown') {
+        if (!sessionId) return false;
+        void copyCurrentTaskMarkdown(sessionId, { navigate, t });
+        return true;
+      }
       return false;
     });
   }, [
+    canNavigateSession,
     cancelPlanReview,
+    navigate,
     pendingPermission,
     pendingPlanReview,
     respondToPermission,
     respondToPlanReview,
+    sessionId,
+    t,
   ]);
   // 展示引擎可乐观跟随 intent；真实 event reducer 仍只读 store.agentKind。
   const displayAgentKind = agentSwitchIntent?.target ?? dbToMakerAgentKind(session?.agentKind);

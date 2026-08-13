@@ -3279,7 +3279,10 @@
           },
           "copyConversationMarkdown": {
             "name": "Markdown으로 복사",
-            "description": "현재 작업의 대화를 Markdown으로 복사합니다"
+            "description": "현재 작업의 대화를 Markdown으로 복사합니다",
+            "copied": "Markdown으로 복사했습니다",
+            "empty": "이 작업에는 아직 복사할 내용이 없습니다",
+            "failed": "복사하지 못했습니다"
           },
           "archiveTask": {
             "name": "작업 보관",
@@ -3367,7 +3370,7 @@
           }
         },
         "title": "Work Louder Codex Micro",
-        "entryDescription": "6개의 Agent 키로 Cindy의 최근 작업을 열고 조명으로 상태를 표시합니다.",
+        "entryDescription": "6개의 Agent 키로 사이드바 위에서부터 6개 작업을 열고 조명으로 상태를 표시합니다.",
         "openAria": "Work Louder Codex Micro 설정 열기",
         "back": "키보드 단축키로 돌아가기",
         "retry": "다시 시도",
@@ -3438,7 +3441,7 @@
             "description": "AG00~AG05는 사이드바 위쪽 6개 작업이며 순서도 사이드바와 같습니다.",
             "value": "최근 6개",
             "options": {
-              "recent": "최근 작업",
+              "recent": "사이드바 순서",
               "pinned": "고정한 작업",
               "priority": "우선 작업",
               "custom": "사용자 지정"
@@ -3455,10 +3458,12 @@
         },
         "commandKeys": {
           "builtInDescription": "키캡 기본 동작을 유지하거나 다른 동작에 연결합니다.",
-          "builtIn": "키캡 기본 동작 사용"
+          "builtIn": "키캡 기본 동작 사용",
+          "unmapped": "이 키캡에는 동작이 없습니다"
         },
         "microphone": {
-"separate": {
+          "title": "마이크",
+          "separate": {
             "label": "마이크 키 분리",
             "description": "ACT10과 ACT11을 하나의 MIC 키로 합치지 않고 따로 사용합니다."
           }
