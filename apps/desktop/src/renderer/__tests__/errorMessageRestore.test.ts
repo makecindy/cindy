@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { makerChatStore } from '@/lib/makerChatStore';
+import { decodeRemoteErrorMessage, makerChatStore } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
 import { ERROR_REASON_I18N_KEYS } from '@/components/chat/errorReasonI18n';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
@@ -31,6 +31,12 @@ function errorRow(clientId: string, content: unknown): Message {
 }
 
 describe('mapServerMessages — persisted terminal error rows', () => {
+  it('maps auto-review blocks to the localized runtime notice', () => {
+    expect(decodeRemoteErrorMessage(
+      '[AUTO_REVIEW_BLOCKED] Auto-review blocked an operation.',
+    )).toContain('Auto-review blocked an operation that may be unsafe');
+  });
+
   it('maps Codex Auto reviewer failures to the stable localized reason key', () => {
     expect(ERROR_REASON_I18N_KEYS['codex-auto-review-unavailable']).toBe(
       'logic.errors.codexAutoReviewUnavailable',

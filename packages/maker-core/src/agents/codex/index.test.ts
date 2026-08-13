@@ -11870,6 +11870,10 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
       permissionMode: 'auto',
     });
+    const events: AgentEvent[] = [];
+    const consumeEvents = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
     const resolver = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'allow' as const }));
     handle.setInteractionResolver(resolver);
     const handlers = host.getThreadHandlers();
@@ -11900,7 +11904,17 @@ describe('CodexAgent MCP thread context hooks', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(resolver).not.toHaveBeenCalled();
     expect(host.request.mock.calls.some(([method]) => method === 'thread/approveGuardianDeniedAction')).toBe(false);
+    await waitForExpectation(() => {
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          isTerminal: false,
+          message: expect.stringContaining('[AUTO_REVIEW_BLOCKED]'),
+        }),
+      }));
+    });
     await handle.close();
+    await consumeEvents;
   });
 
   it('keeps Auto and switches to the current-model fallback when Guardian times out', async () => {

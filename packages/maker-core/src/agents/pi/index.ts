@@ -48,6 +48,7 @@ import {
 } from './cindy-subagent-source.js';
 import { normalizePiToolForAutoReview } from './auto-review-policy.js';
 import {
+  createAutoReviewBlockedNotice,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
@@ -1195,6 +1196,7 @@ export class PiAgent extends BaseAgent {
     // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
     // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
       autoReviewUnavailableNotice.reset();
+      autoReviewBlockedNotice.reset();
     };
     /**
      * 挂起的权限卡登记表 —— 档位切换 / 会话关闭时必须能把它们强制 settle 并让 UI 收卡,
@@ -1240,6 +1242,13 @@ export class PiAgent extends BaseAgent {
     // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Codex 同口径,走既有的
     // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。
     const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+      queue.push({
+        type: 'error',
+        data: { message, isTerminal: false },
+        source: 'pi',
+      });
+    });
+    const autoReviewBlockedNotice = createAutoReviewBlockedNotice((message) => {
       queue.push({
         type: 'error',
         data: { message, isTerminal: false },
@@ -1891,6 +1900,7 @@ export class PiAgent extends BaseAgent {
       autoReviewDecisionCache.clear();
       // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
       autoReviewUnavailableNotice.reset();
+      autoReviewBlockedNotice.reset();
       const data = (resp.data ?? {}) as { contextWindow?: number };
       if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
         ctx.contextWindow = data.contextWindow;
@@ -2097,6 +2107,7 @@ export class PiAgent extends BaseAgent {
         if (nextMode !== requestedPermissionSnapshot.mode) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
+          autoReviewBlockedNotice.reset();
         }
         const previousMode = requestedPermissionSnapshot.mode;
         await writePermissionSnapshotOrFailClosed({
@@ -2949,12 +2960,12 @@ export class PiAgent extends BaseAgent {
             return;
           }
           if (decision.verdict === 'block') {
-            // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默。
-            // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这里。)
+            // 保持 Auto 的 fail-closed 语义，但明确告诉用户这是自动审核拦截。
             this.deps.logger.debug('pi auto-review blocked tool call', {
               toolName,
               reason: decision.reason,
             });
+            autoReviewBlockedNotice.notify();
           }
           proc.send({
             type: 'extension_ui_response',

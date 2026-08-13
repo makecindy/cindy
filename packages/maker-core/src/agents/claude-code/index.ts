@@ -119,6 +119,7 @@ import { normalizeBuiltinToolForAutoReview } from './auto-review-policy.js';
 import {
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
+  createAutoReviewBlockedNotice,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
@@ -1918,8 +1919,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'allow') {
           return { behavior: 'allow', updatedInput: input };
         } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'block') {
-          // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默,只把 reason 喂给模型。
-          // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这条分支。)
+          // 保持 Auto 的 fail-closed 语义，但明确告诉用户这是审核决定；原始 reason
+          // 仍只给 Agent 选择更安全的替代方案，不当作用户可见产品文案。
+          autoReviewBlockedNotice.notify();
           return {
             behavior: 'deny',
             message: autoDecision.reason ?? 'Cindy Auto Review blocked this action. Choose a safer alternative.',
@@ -2082,10 +2084,18 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
     // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
       autoReviewUnavailableNotice.reset();
+      autoReviewBlockedNotice.reset();
     };
     // 「自动审核不可用」的会话级一次性提示(issue #1574)。走既有的非终止 error 事件 +
     // `[CODE]` 约定,不新增事件类型;逐条提示会把 Auto 退化成比 Ask 更烦的东西,所以去重。
     const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+      eventQueue.push({
+        type: 'error',
+        data: { message, isTerminal: false },
+        source: 'claude-code',
+      });
+    });
+    const autoReviewBlockedNotice = createAutoReviewBlockedNotice((message) => {
       eventQueue.push({
         type: 'error',
         data: { message, isTerminal: false },
@@ -2950,7 +2960,8 @@ export class ClaudeCodeAgent extends BaseAgent {
                 return { kind: 'permission', behavior: 'allow' };
               }
               if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'block') {
-                // 与本地分支同口径:模型判定保持静默(审阅器故障已降级成 ask)。
+                // 与本地分支同口径:保留 fail-closed 拒绝，并通知用户是自动审核拦截。
+                autoReviewBlockedNotice.notify();
                 return {
                   kind: 'permission',
                   behavior: 'deny',
@@ -5791,6 +5802,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 换模型 / 换路由可能正好修掉了审阅器不可用的原因(目录解析失败、provider 被停用
         // 等);若换完又不可用,值得再提醒一次。
         autoReviewUnavailableNotice.reset();
+        autoReviewBlockedNotice.reset();
         if (
           !isControlBlocked
           && mutablePermissionMode === 'auto'
@@ -5895,6 +5907,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (newMode !== mutablePermissionMode) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
+          autoReviewBlockedNotice.reset();
         }
         // 计划模式武装中 / 本轮 plan turn 进行中 SDK 恒在 plan 档: 只记录底层权限档
         // (循环收尾切回时生效), 不 push SDK、不动挂起交互(挂着的多半是 plan_review)。

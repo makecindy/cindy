@@ -29,6 +29,7 @@
  */
 
 import {
+  isAutoReviewBlockedNotice,
   isAutoReviewUnavailableNotice,
   parseOverloadError,
   parseOverloadRetryProgress,
@@ -52,6 +53,13 @@ function autoReviewUnavailableNotice(message: string): string | null {
     : null;
 }
 
+/** Auto 审阅器正常拒绝 → 说明安全结论和可恢复路径，不外发 reviewer 原始文本。 */
+function autoReviewBlockedNotice(message: string): string | null {
+  return isAutoReviewBlockedNotice(message)
+    ? '自动审批已阻止可能不安全或超出当前请求的操作。若你想亲自确认，请将这个任务切到「默认权限」后重试。'
+    : null;
+}
+
 /** 已知的非终止自动重试事件 -> 渠道侧本地化进度；其它错误保持静默。 */
 export function turnRetryNotice(data: unknown): string | null {
   if (!data || typeof data !== 'object') return null;
@@ -60,6 +68,8 @@ export function turnRetryNotice(data: unknown): string | null {
   const reason = typeof record.reason === 'string' ? record.reason : undefined;
   const autoReviewNotice = autoReviewUnavailableNotice(message);
   if (autoReviewNotice) return autoReviewNotice;
+  const autoReviewBlocked = autoReviewBlockedNotice(message);
+  if (autoReviewBlocked) return autoReviewBlocked;
   const rateLimitProgress = parseTerminalRateLimitRetryProgress(message, reason);
   if (rateLimitProgress) {
     return `请求受到限流，正在自动重试（${rateLimitProgress.attempt}/${rateLimitProgress.maxAttempts}）…`;

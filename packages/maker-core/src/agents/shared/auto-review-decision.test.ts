@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  AUTO_REVIEW_BLOCKED_CODE,
   AUTO_REVIEW_UNAVAILABLE_CODE,
   AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
   AUTO_REVIEW_RETRY_ATTEMPTS,
@@ -8,7 +9,9 @@ import {
   autoReviewRetryBudgetMs,
   getAutoReviewDelegateHardCeilingMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
+  createAutoReviewBlockedNotice,
   classifyLocalAutoReviewTier,
+  isAutoReviewBlockedNotice,
   isAutoReviewUnavailableNotice,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
@@ -294,6 +297,19 @@ describe('isAutoReviewUnavailableNotice', () => {
   });
 });
 
+describe('isAutoReviewBlockedNotice', () => {
+  it('only recognizes the auto-review blocked notice code', () => {
+    let emitted = '';
+    createAutoReviewBlockedNotice((message) => { emitted = message; }).notify();
+
+    expect(isAutoReviewBlockedNotice(emitted)).toBe(true);
+    expect(isAutoReviewBlockedNotice(`[${AUTO_REVIEW_BLOCKED_CODE}] anything`)).toBe(true);
+    expect(isAutoReviewBlockedNotice(`[${AUTO_REVIEW_UNAVAILABLE_CODE}] nope`)).toBe(false);
+    expect(isAutoReviewBlockedNotice(`prefixed [${AUTO_REVIEW_BLOCKED_CODE}]`)).toBe(false);
+    expect(isAutoReviewBlockedNotice(undefined)).toBe(false);
+  });
+});
+
 describe('createAutoReviewUnavailableNotice', () => {
   it('emits once per session and re-arms only after reset', () => {
     const emitted: string[] = [];
@@ -307,6 +323,23 @@ describe('createAutoReviewUnavailableNotice', () => {
     expect(emitted[0]).toContain(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`);
     // 兜底英文必须跟在 code 后面:未落地 i18n 的宿主(远端 / IM)直接显示它。
     expect(emitted[0]).toContain('Auto-review could not reach a decision');
+
+    notice.reset();
+    notice.notify();
+    expect(emitted).toHaveLength(2);
+  });
+});
+
+describe('createAutoReviewBlockedNotice', () => {
+  it('emits once and re-arms after reset', () => {
+    const emitted: string[] = [];
+    const notice = createAutoReviewBlockedNotice((message) => emitted.push(message));
+
+    notice.notify();
+    notice.notify();
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toContain(`[${AUTO_REVIEW_BLOCKED_CODE}]`);
+    expect(emitted[0]).toContain('Switch this task to Default permissions');
 
     notice.reset();
     notice.notify();

@@ -590,7 +590,7 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     await handle.close();
   });
 
-  it('stays silent when the model itself blocks the action', async () => {
+  it('notifies once when the model itself blocks the action', async () => {
     const { handle, canUseTool } = await startSession('auto', { reviewVerdict: 'block' });
     const { notices } = startNoticeCollector(handle);
 
@@ -598,8 +598,8 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     expect(result).toMatchObject({ behavior: 'deny', message: 'reviewed' });
     await settle();
 
-    // 模型判定的 block 按 Auto 本意保持静默 —— 只把 reason 喂给模型,不打扰用户。
-    expect(notices).toHaveLength(0);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('[AUTO_REVIEW_BLOCKED]');
     await handle.close();
   });
 

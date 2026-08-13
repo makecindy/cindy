@@ -33,6 +33,14 @@ export type AutoReviewDecision = {
  * （见 apps/desktop 的 chat.remoteError.*），不新增协议、不新增事件类型。
  */
 export const AUTO_REVIEW_UNAVAILABLE_CODE = 'AUTO_REVIEW_UNAVAILABLE';
+/**
+ * Auto 审阅器已正常运行、但明确拒绝某项操作时的会话级提示码。
+ *
+ * 不把 reviewer 的自由文本 reason 直接展示给用户：它只适合作为 Agent 换安全做法的
+ * 上下文，展示层应给出稳定、可本地化的安全结论与下一步，而不是把模型的原始判断当
+ * 成产品说明。原始工具输入仍由既有 tool_use / tool_result 呈现。
+ */
+export const AUTO_REVIEW_BLOCKED_CODE = 'AUTO_REVIEW_BLOCKED';
 
 /**
  * 未落地 i18n 的宿主看到的兜底英文。用词与 desktop 权限选择器的档位标签对齐
@@ -47,6 +55,10 @@ const AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT =
   + 'need review are being handed to you to confirm. Switch this task to Default '
   + 'permissions if you would rather not be interrupted.';
 
+const AUTO_REVIEW_BLOCKED_FALLBACK_TEXT =
+  'Auto-review blocked an operation that may be unsafe or outside the current request. '
+  + 'Switch this task to Default permissions and retry if you want to review it yourself.';
+
 /**
  * 判定一条 AgentEvent 的 error message 是否就是「自动审批不可用」提示。
  *
@@ -57,6 +69,12 @@ const AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT =
 export function isAutoReviewUnavailableNotice(message: unknown): boolean {
   return typeof message === 'string'
     && message.startsWith(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`);
+}
+
+/** 与 isAutoReviewUnavailableNotice 同一条错误码契约，供 Desktop 与 IM 投影。 */
+export function isAutoReviewBlockedNotice(message: unknown): boolean {
+  return typeof message === 'string'
+    && message.startsWith(`[${AUTO_REVIEW_BLOCKED_CODE}]`);
 }
 
 /**
@@ -75,6 +93,26 @@ export function createAutoReviewUnavailableNotice(
       if (sent) return;
       sent = true;
       emit(`[${AUTO_REVIEW_UNAVAILABLE_CODE}] ${AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT}`);
+    },
+    reset(): void {
+      sent = false;
+    },
+  };
+}
+
+/**
+ * 模型正常拒绝时每轮最多提示一次。Auto 仍不要求用户逐条确认，但不能再让用户只看到
+ * 工具失败而完全不知道是自动审核作出的安全决定。
+ */
+export function createAutoReviewBlockedNotice(
+  emit: (message: string) => void,
+): { notify(): void; reset(): void } {
+  let sent = false;
+  return {
+    notify(): void {
+      if (sent) return;
+      sent = true;
+      emit(`[${AUTO_REVIEW_BLOCKED_CODE}] ${AUTO_REVIEW_BLOCKED_FALLBACK_TEXT}`);
     },
     reset(): void {
       sent = false;

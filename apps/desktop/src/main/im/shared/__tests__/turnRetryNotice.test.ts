@@ -218,6 +218,17 @@ describe('terminalErrorText', () => {
     expect(notice).not.toContain('Auto-review could not');
   });
 
+  it('Auto 档审核拒绝 → 渠道侧说明 + 可执行动作', () => {
+    const notice = turnRetryNotice({
+      message: '[AUTO_REVIEW_BLOCKED] Auto-review blocked an operation that may be unsafe.',
+      isTerminal: false,
+    });
+    expect(notice).toContain('自动审批已阻止');
+    expect(notice).toContain('默认权限');
+    expect(notice).not.toContain('AUTO_REVIEW_BLOCKED');
+    expect(notice).not.toContain('Auto-review blocked');
+  });
+
   it('其它带 bracket code 的非终止 error 仍保持静默', () => {
     // 只放开有明确渠道文案的那一条,不是所有 [CODE] 都外发。
     expect(turnRetryNotice({
