@@ -1243,8 +1243,12 @@ function forward(
     // 仅在流式响应路径上启用(SSE 请求 + 2xx),非流式 / 错误响应不引入额外行为。
     let streamIdleTimer: NodeJS.Timeout | null = null;
     let streamIdleFired = false;
+    // 对所有被 stream-validity gate 覆盖的 2xx 流式响应武装看门狗:含非 SSE 2xx
+    // (网关可能回 JSON/HTML 错误体)。若只看 isSse,这类响应在半开时仍会悬挂到
+    // 10 分钟 socket 超时而非 90s 看门狗(codex review P2)。非流式请求(未声明
+    // stream)保持原行为,不引入额外超时。
     const isStreamingResponse =
-      requestDeclaredStream && status >= 200 && status < 300 && isSse;
+      requestDeclaredStream && status >= 200 && status < 300;
     if (isStreamingResponse && streamIdleTimeoutMs > 0) {
       const armStreamIdle = (): void => {
         if (upstreamResponseTerminal !== null || streamIdleFired) return;

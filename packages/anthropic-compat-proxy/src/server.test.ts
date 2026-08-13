@@ -2720,6 +2720,47 @@ describe('流式响应空闲看门狗(上游半开兜底)', () => {
     expect(warns.some((w) => w.msg.includes('upstream stream idle watchdog fired'))).toBe(true);
   });
 
+  it('非 SSE 2xx 半开也被看门狗掐断(不再等 10 分钟 socket 超时)', async () => {
+    const warns: string[] = [];
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      // stream:true 请求收到非 SSE 2xx(网关 JSON 错误体),且上游悬挂不 end。
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write(JSON.stringify({ error: { type: 'gateway_error' } }));
+      // 不 end、不 destroy —— 模拟半开。
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      upstreamStreamIdleTimeoutMs: 50,
+      logger: { warn: (msg) => warns.push(msg) },
+    });
+
+    const controller = new AbortController();
+    let outcome: 'rejected' | 'resolved' | 'timeout' = 'timeout';
+    const operation = fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', stream: true }),
+      signal: controller.signal,
+    }).then(async (res) => {
+      await res.text();
+      return 'resolved' as const;
+    }).catch(() => 'rejected' as const);
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    outcome = await Promise.race([
+      operation,
+      new Promise<'timeout'>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve('timeout'), 2000);
+      }),
+    ]);
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    if (outcome === 'timeout') controller.abort();
+
+    // 看门狗应触发(而非悬挂到 10 分钟):客户端收到失败/502,而不是 timeout。
+    expect(outcome).not.toBe('timeout');
+    expect(warns.some((w) => w.includes('upstream stream idle watchdog fired'))).toBe(true);
+  });
+
   it('upstreamStreamIdleTimeoutMs: 0 时禁用看门狗(半开悬挂保持旧行为)', async () => {
     const warns: string[] = [];
     const upstream = await startFakeUpstream((_idx, _body, res) => {
