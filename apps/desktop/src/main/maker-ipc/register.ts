@@ -866,6 +866,7 @@ import {
   removeCustomProviderKey,
   storeCustomProviderHeaders,
   storeCustomProviderKey,
+  getProviderSecretStore,
 } from '../secrets/providerSecretStore.js';
 import {
   getSessionEffort,
@@ -5451,6 +5452,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return fetchProviderModels(spec);
     },
+    builtinApiKeyDeps: {
+      store: getProviderSecretStore(),
+      onKeyChanged: (providerId) => {
+        getGhostSetupChangeBus().emitAll({
+          source: 'host_config',
+          ref: `provider:${providerId}`,
+        });
+        broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+      },
+      logError: (message, err) => log.warn(message, err),
+    },
     // 重新发现会用订阅凭证发起真实上游请求，限主页面 sender（子 frame / WebView 拒绝）。
     assertTrustedSender: (event) =>
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
@@ -5616,6 +5628,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           for (const agent of provider.agents) {
             if (!isCurrent()) break;
             const upstream = provider.routing[agent]?.upstream;
+            if (
+              oauth.modelsDiscoveryUrl &&
+              (!upstream ||
+                new URL(oauth.modelsDiscoveryUrl).origin !== new URL(upstream).origin)
+            ) {
+              // The descriptor is user/provider data, but the discovery request carries a
+              // Bearer token. Never let an explicit discovery URL collect credentials outside
+              // the runtime's own origin. Imported descriptors are rejected earlier; this is
+              // the same fail-closed guard for existing catalog entries.
+              continue;
+            }
             const url =
               oauth.modelsDiscoveryUrl ?? (upstream ? deriveModelsDiscoveryUrl(upstream) : null);
             if (!url) continue;

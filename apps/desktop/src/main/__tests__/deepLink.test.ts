@@ -34,15 +34,34 @@ import {
   buildSessionDeepLink,
   buildSessionMessageDeepLink,
   findDeepLinkInArgv,
+  redactConsumedDeepLinkInArgv,
   findOpenFolderInArgv,
   findOpenShareFileInArgv,
   DEEP_LINK_PROTOCOL,
   OPEN_FOLDER_FLAG,
   OPEN_SHARE_FILE_FLAG,
   focusMainWindow,
+  handleIncomingDeepLink,
   openMainWindowVoiceSettings,
   setDeepLinkMainWindow,
+  takePendingDeepLink,
 } from '../deepLink';
+
+function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
+  const payload = {
+    kind: 'custom',
+    name: 'Deep Link Import',
+    auth: { method: 'apiKey', apiKey: 'sk-must-stay-in-main' },
+    endpoints: [
+      {
+        protocol: 'openai-chat',
+        baseUrl: 'https://api.example.test/v1',
+        models: ['demo-model'],
+      },
+    ],
+  };
+  return `${scheme}://provider/import?v=1&data=${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
+}
 
 describe('user-initiated main-window focus', () => {
   it('activates and raises the target window before focusing on Windows', () => {
@@ -279,6 +298,37 @@ describe('dual scheme (cindy primary + legacy xdt-maker)', () => {
     expect(parseDeepLink('cindy://session/')).toBeNull();
   });
 
+  it.each(['cindy', 'xdt-maker'] as const)(
+    'parses %s provider imports into an opaque Main-only draft id',
+    (scheme) => {
+      const result = parseDeepLink(providerImportUrl(scheme));
+      expect(result).toEqual({
+        type: 'provider-import',
+        importId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      });
+      expect(JSON.stringify(result)).not.toContain('sk-must-stay-in-main');
+    },
+  );
+
+  it('buffers only the opaque provider import id during cold start', () => {
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(providerImportUrl('cindy'), 'test');
+
+    const pending = takePendingDeepLink();
+    expect(pending).toEqual({
+      type: 'provider-import',
+      importId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
+    expect(JSON.stringify(pending)).not.toContain('sk-must-stay-in-main');
+    expect(takePendingDeepLink()).toBeNull();
+  });
+
+  it('rejects malformed provider import paths and repeated parameters', () => {
+    const valid = providerImportUrl('cindy');
+    expect(parseDeepLink(valid.replace('provider/import', 'providers/import'))).toBeNull();
+    expect(parseDeepLink(`${valid}&data=duplicate`)).toBeNull();
+  });
+
   it('generates all builders with the primary cindy:// scheme', () => {
     expect(DEEP_LINK_PROTOCOL).toBe('cindy');
     expect(buildSessionDeepLink('abc-123')).toBe('cindy://session/abc-123');
@@ -306,6 +356,20 @@ describe('findDeepLinkInArgv', () => {
     expect(findDeepLinkInArgv(['electron.exe', 'xdt-maker://session/a'])).toBe(
       'xdt-maker://session/a',
     );
+  });
+});
+
+describe('redactConsumedDeepLinkInArgv', () => {
+  it('replaces a consumed URL without changing unrelated argv entries', () => {
+    const argv = ['electron.exe', '--flag', 'cindy://provider/import?v=1&data=secret'];
+    redactConsumedDeepLinkInArgv(argv, argv[2]!);
+    expect(argv).toEqual(['electron.exe', '--flag', 'cindy://consumed']);
+  });
+
+  it('does nothing when the URL is no longer present', () => {
+    const argv = ['electron.exe', 'cindy://other'];
+    redactConsumedDeepLinkInArgv(argv, 'cindy://provider/import?v=1&data=secret');
+    expect(argv).toEqual(['electron.exe', 'cindy://other']);
   });
 });
 

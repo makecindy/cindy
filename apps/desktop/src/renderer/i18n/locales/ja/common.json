@@ -1484,6 +1484,36 @@
     "providers": {
       "title": "モデルプロバイダー",
       "subtitle": "モデルを選ぶときのソースです。各ソースは対応するモデルと課金方式を提供し、セッションごとに切り替えられます。",
+      "import": {
+        "title": "プロバイダーをインポート",
+        "close": "プロバイダーのインポートを閉じる",
+        "loadFailed": "このプロバイダーインポートリンクは無効か、有効期限が切れています。",
+        "confirmFailed": "インポートできませんでした。リンクまたはエンドポイントを確認して再試行してください。",
+        "oauthFailed": "プロバイダーは追加されましたが、認証が完了しませんでした。もう一度お試しください。",
+        "done": "{{name}} をインポートしました",
+        "oauthDone": "{{name}} を追加して認証しました",
+        "cancel": "キャンセル",
+        "create": "プロバイダーをインポート",
+        "update": "プロバイダーを更新",
+        "replaceKey": "API Key を置き換える",
+        "addAndAuthorize": "追加して認証",
+        "retryOAuth": "認証を再試行",
+        "harnesses": "Harness 設定",
+        "fetchAfterConfirm": "確認後にモデル一覧を取得します",
+        "modelCount": "{{count}} モデル",
+        "keyIncluded": "API Key を含む（内容は非表示）",
+        "headers": "ヘッダー：{{names}}（値は非表示）",
+        "oauthHosts": "認証：{{authorizeHost}} · Token 交換：{{tokenHost}}",
+        "browserAuthorizationInProgress": "先ほど開いたブラウザウィンドウで認証を完了してください。",
+        "replaceWarning": "確認すると、上記の既存ローカル設定または認証情報が置き換えられます。",
+        "confirmNote": "確認するまで保存もプロバイダーエンドポイントへのアクセスも行いません。",
+        "authorizationPendingNote": "プロバイダーは追加されましたが、認証は完了していません。ここで再試行またはキャンセルできます。",
+        "action": {
+          "create": "ローカルに新しいプロバイダー {{name}} を作成します。",
+          "update": "既存のプロバイダー {{name}} を更新します。",
+          "replace-key": "{{name}} のローカル API Key を置き換えます。"
+        }
+      },
       "order": {
         "hint": "ドラッグして並べ替え",
         "handle": "{{provider}}を並べ替えます。現在{{total}}件中{{position}}番目です。矢印キーで移動できます。",

@@ -79,6 +79,16 @@ import type {
   ProviderTestInput,
   ProviderTestResult,
 } from '../maker-host/provider-diagnostics.js';
+import {
+  beginProviderImportConfirm,
+  cancelProviderImport,
+  finishProviderImportConfirm,
+  previewProviderImport,
+} from '../provider-import/providerImport.js';
+import {
+  builtinApiKeyStore,
+  type BuiltinApiKeyBridgeDeps,
+} from '../secrets/builtinApiKeyBridge.js';
 import type {
   ProviderModelsFetchResult,
   ProviderModelsFetchSpec,
@@ -349,6 +359,8 @@ export interface ProviderHandlerDeps {
     providerId: string,
     agent: AgentKind,
   ): { success: boolean; error?: string };
+  /** Built-in API-key imports reuse the Settings allowlist, secret store and change broadcast. */
+  builtinApiKeyDeps?: BuiltinApiKeyBridgeDeps;
   /**
    * 读取已存自定义供应商在该 agent 下的**请求目标端点**(baseUrl + 可选 modelsUrl),
    * 来自 active-catalog 的 routing。models-fetch 用它把 savedProviderId 请求的目标钉回
@@ -1128,6 +1140,148 @@ export function registerProviderHandlers(
     }
     deps.broadcastChanged();
   }
+
+  const providerImportScope = (): { dataOwnerId: string | null; generation: number } =>
+    captureProviderOwnerSession() ?? { dataOwnerId: null, generation: 0 };
+
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, async (event, importId: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const ownerAtIngress = providerImportScope();
+    try {
+      const providers = await deps.listProviders({ allowSideEffects: false });
+      assertProviderMutationOwner(ownerAtIngress);
+      return previewProviderImport(importId, ownerAtIngress, providers);
+    } catch (err) {
+      log.warn('provider import preview rejected', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throwIpcError('INVALID_PARAMS', 'provider import is invalid or expired');
+    }
+  });
+
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_CANCEL, (event, importId: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    cancelProviderImport(importId);
+    return { ok: true };
+  });
+
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, async (event, importId: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const ownerAtIngress = providerImportScope();
+    let started = false;
+    try {
+      const providers = await deps.listProviders({ allowSideEffects: false });
+      assertProviderMutationOwner(ownerAtIngress);
+      const { draft, resolution } = beginProviderImportConfirm(importId, ownerAtIngress, providers);
+      started = true;
+      if (draft.kind === 'builtin') {
+        if (!deps.builtinApiKeyDeps) throwIpcError('INTERNAL', 'built-in API-key bridge unavailable');
+        assertProviderMutationOwner(ownerAtIngress);
+        builtinApiKeyStore(deps.builtinApiKeyDeps, draft.provider, draft.apiKey);
+        finishProviderImportConfirm(importId as string, true);
+        return {
+          ok: true,
+          providerId: draft.provider,
+          authMethod: 'apiKey' as const,
+        };
+      }
+
+      const providerId = resolution.providerId;
+      const config: CustomProviderConfig = {
+        ...draft.config,
+        id: providerId,
+        runtimes: { ...draft.config.runtimes },
+      };
+      const authMethod = config.auth?.method ?? 'apiKey';
+      // Vendors may omit the model list to keep the link compact. Preview is deliberately
+      // offline; only this user-confirmed path may contact the imported endpoint and use the
+      // imported key/headers. Resolve every missing per-Harness list before persisting so an
+      // apparently successful import cannot create an unusable empty provider.
+      if (authMethod !== 'oauth') {
+        for (const agent of VALID_AGENTS as readonly AgentKind[]) {
+          const runtime = config.runtimes[agent];
+          if (!runtime || runtime.models.length > 0) continue;
+          const fetched = await deps.fetchModels({
+            agent,
+            baseUrl: runtime.baseUrl,
+            authMethod,
+            ...(runtime.wireProtocol ? { wireProtocol: runtime.wireProtocol } : {}),
+            modelsUrl: runtime.modelsUrl ?? null,
+            apiKey: draft.keys[agent] ?? null,
+            headers: runtime.headers,
+          });
+          assertProviderMutationOwner(ownerAtIngress);
+          if (!fetched.ok || !fetched.models?.length) {
+            throwIpcError('PRECONDITION_FAILED', `could not fetch models for ${agent}`);
+          }
+          config.runtimes[agent] = { ...runtime, models: fetched.models };
+        }
+      }
+      const validation = validateCustomProviderConfig(config);
+      if (!validation.ok) throwIpcError(validation.code, validation.message);
+      const separated = splitCustomProviderHeaders(config);
+      const result = await withProviderConfigMutation(providerId, async () => {
+        assertProviderMutationOwner(ownerAtIngress);
+        const current = await getCustomProvider(providerId);
+        assertProviderMutationOwner(ownerAtIngress);
+        const mode = resolution.action === 'create' ? 'create' : 'update';
+        if (mode === 'create' && current) {
+          throwIpcError('ALREADY_EXISTS', `custom provider '${providerId}' already exists`);
+        }
+        if (mode === 'update' && !current) {
+          throwIpcError('NOT_FOUND', `custom provider '${providerId}' not found`);
+        }
+        const credentialSnapshots = stageProviderCredentials(
+          providerId,
+          planProviderKeyMutations(config, draft.keys, mode, current),
+          planProviderHeaderMutations(config, separated.headers, mode, current),
+        );
+        let generation: symbol | null = null;
+        let restoreOAuthCredentials: (() => boolean) | null = null;
+        try {
+          if (mode === 'update') {
+            generation = beginOAuthMutation(providerId);
+            deps.oauthCancel(providerId);
+            restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
+            if (!restoreOAuthCredentials) {
+              throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
+            }
+            const updated = await updateCustomProvider(providerId, separated.config);
+            if (!updated) throwIpcError('NOT_FOUND', `custom provider '${providerId}' not found`);
+          } else {
+            await createCustomProvider(separated.config);
+          }
+          assertProviderMutationOwner(ownerAtIngress);
+        } catch (err) {
+          assertProviderMutationOwner(ownerAtIngress);
+          const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
+          const credentialsRestored = restoreProviderCredentials(providerId, credentialSnapshots);
+          if (!oauthRestored || !credentialsRestored) {
+            throwIpcError('INTERNAL', 'provider import failed and credentials could not be restored');
+          }
+          throw err;
+        } finally {
+          if (generation) finishOAuthMutation(providerId, generation);
+        }
+        await afterChange();
+        assertProviderMutationOwner(ownerAtIngress);
+        return {
+          ok: true,
+          providerId,
+          authMethod,
+        };
+      });
+      finishProviderImportConfirm(importId as string, true);
+      return result;
+    } catch (err) {
+      if (started && typeof importId === 'string') finishProviderImportConfirm(importId, false);
+      if (isIpcError(err)) throw err;
+      log.warn('provider import confirmation failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throwIpcError('INTERNAL', 'provider import failed');
+    }
+  });
 
   function assertTrustedProviderMutationSender(event: unknown): void {
     if (!deps.assertTrustedSender) {

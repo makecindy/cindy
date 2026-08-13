@@ -49,6 +49,7 @@ import {
   isDeepLinkProviderConnectId,
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
+import { createProviderImportDraftFromRest } from './provider-import/providerImport';
 
 const log = createLogger('deepLink');
 
@@ -71,6 +72,8 @@ export type DeepLinkPayload =
    */
   | { type: 'new-session'; workingDir: string }
   | { type: 'share-import'; filePath: string }
+  /** 外部 URL 内的凭证已在 Main 转成短期草稿；跨进程只传随机 id。 */
+  | { type: 'provider-import'; importId: string }
   /**
    * 设置页导航。两个来源:
    *   1. 主进程内部发起(全局浮层等独立窗口把用户带回主窗口的准确设置页);
@@ -100,6 +103,11 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   const prefix = matchDeepLinkPrefix(url);
   if (prefix === null) return null;
   const rest = url.slice(prefix.length);
+  // provider/import 是双段精确路径，必须在通用 type/value 解析前消费。
+  if (rest.startsWith('provider/')) {
+    const importId = createProviderImportDraftFromRest(rest);
+    return importId ? { type: 'provider-import', importId } : null;
+  }
   const slashIdx = rest.indexOf('/');
   if (slashIdx <= 0) return null;
   const type = rest.slice(0, slashIdx);
@@ -276,7 +284,8 @@ export function getDeepLinkMainWindow(): BrowserWindow | null {
 export function handleIncomingDeepLink(url: string, source: string): void {
   const payload = parseDeepLink(url);
   if (!payload) {
-    log.warn('ignoring unparseable url', { url, source });
+    // 入站 URL 现在可能含 API key；失败路径也不能把原文写进持久日志。
+    log.warn('ignoring unparseable deep link', { source });
     return;
   }
   log.info('received deep link', { source, payload });
@@ -458,6 +467,19 @@ export function findDeepLinkInArgv(argv: readonly string[]): string | null {
     if (typeof arg === 'string' && matchDeepLinkPrefix(arg) !== null) return arg;
   }
   return null;
+}
+
+/**
+ * Replace a consumed protocol URL in a mutable argv array before the process can
+ * expose it to diagnostics or child processes. The caller retains the URL locally
+ * long enough to parse it; only a non-sensitive marker remains in argv afterwards.
+ */
+export function redactConsumedDeepLinkInArgv(argv: string[], deepLink: string): void {
+  for (let i = argv.length - 1; i >= 0; i -= 1) {
+    if (argv[i] !== deepLink) continue;
+    argv[i] = `${DEEP_LINK_PRIMARY_SCHEME}://consumed`;
+    return;
+  }
 }
 
 /**

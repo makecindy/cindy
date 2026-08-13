@@ -609,6 +609,7 @@ export function MainLayout() {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
+        | { type: 'provider-import'; importId: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => {
       if (payload.type === 'session') {
@@ -631,6 +632,10 @@ export function MainLayout() {
       }
       if (payload.type === 'share-import') {
         openShareImport(payload.filePath);
+        return;
+      }
+      if (payload.type === 'provider-import') {
+        navigate(`/settings?tab=providers&import=${encodeURIComponent(payload.importId)}`);
         return;
       }
       if (payload.type === 'settings') {

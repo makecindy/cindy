@@ -1484,6 +1484,36 @@
     "providers": {
       "title": "Providers",
       "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per session.",
+      "import": {
+        "title": "Import provider",
+        "close": "Close provider import",
+        "loadFailed": "This provider import link is invalid or has expired.",
+        "confirmFailed": "The provider could not be imported. Check the link or endpoint and try again.",
+        "oauthFailed": "The provider was added, but authorization did not finish. Try authorization again.",
+        "done": "{{name}} was imported",
+        "oauthDone": "{{name}} was added and authorized",
+        "cancel": "Cancel",
+        "create": "Import provider",
+        "update": "Update provider",
+        "replaceKey": "Replace API Key",
+        "addAndAuthorize": "Add and authorize",
+        "retryOAuth": "Try authorization again",
+        "harnesses": "Harness configuration",
+        "fetchAfterConfirm": "Models will be fetched after confirmation",
+        "modelCount": "{{count}} models",
+        "keyIncluded": "API Key included (hidden)",
+        "headers": "Headers: {{names}} (values hidden)",
+        "oauthHosts": "Authorization: {{authorizeHost}} · Token exchange: {{tokenHost}}",
+        "browserAuthorizationInProgress": "Complete authorization in the browser window that just opened.",
+        "replaceWarning": "Confirming will replace the existing local configuration or credential shown above.",
+        "confirmNote": "Nothing is saved and no provider endpoint is contacted until you confirm.",
+        "authorizationPendingNote": "The provider was added. Authorization is still pending; you can retry or cancel it here.",
+        "action": {
+          "create": "A new local provider will be created as {{name}}.",
+          "update": "The existing provider {{name}} will be updated.",
+          "replace-key": "The locally stored API Key for {{name}} will be replaced."
+        }
+      },
       "order": {
         "hint": "Drag to reorder",
         "handle": "Reorder {{provider}}, position {{position}} of {{total}}. Use the arrow keys to move.",

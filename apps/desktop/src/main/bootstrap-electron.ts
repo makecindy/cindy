@@ -854,6 +854,7 @@ import {
   handleIncomingOpenFolder,
   handleIncomingShareFile,
   findDeepLinkInArgv,
+  redactConsumedDeepLinkInArgv,
   findOpenFolderInArgv,
   findOpenShareFileInArgv,
   setDeepLinkMainWindow,
@@ -3610,6 +3611,7 @@ if (
 if (process.platform !== 'darwin') {
   const coldStartUrl = findDeepLinkInArgv(process.argv);
   if (coldStartUrl) {
+    redactConsumedDeepLinkInArgv(process.argv, coldStartUrl);
     handleIncomingDeepLink(coldStartUrl, 'cold-start-argv');
   } else {
     const coldStartOpenFolder = findOpenFolderInArgv(process.argv);

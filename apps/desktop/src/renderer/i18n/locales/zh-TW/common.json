@@ -1484,6 +1484,36 @@
     "providers": {
       "title": "模型供應商",
       "subtitle": "選擇模型時的來源。每個來源提供它支援的模型與計費方式，可按任務分別切換。",
+      "import": {
+        "title": "匯入模型供應商",
+        "close": "關閉供應商匯入",
+        "loadFailed": "這個供應商匯入連結無效或已經過期。",
+        "confirmFailed": "匯入失敗，請檢查連結或介面位址後再試一次。",
+        "oauthFailed": "供應商已新增，但授權尚未完成。可以再次嘗試授權。",
+        "done": "已匯入 {{name}}",
+        "oauthDone": "已新增並授權 {{name}}",
+        "cancel": "取消",
+        "create": "匯入供應商",
+        "update": "更新供應商",
+        "replaceKey": "取代 API Key",
+        "addAndAuthorize": "新增並授權",
+        "retryOAuth": "重新嘗試授權",
+        "harnesses": "各 Harness 設定",
+        "fetchAfterConfirm": "確認後取得模型清單",
+        "modelCount": "{{count}} 個模型",
+        "keyIncluded": "已包含 API Key（內容已隱藏）",
+        "headers": "請求標頭：{{names}}（值已隱藏）",
+        "oauthHosts": "授權：{{authorizeHost}} · Token 交換：{{tokenHost}}",
+        "browserAuthorizationInProgress": "請在剛剛開啟的瀏覽器視窗中完成授權。",
+        "replaceWarning": "確認後會取代上方所示的現有本機設定或憑證。",
+        "confirmNote": "點擊確認前不會儲存任何內容，也不會存取供應商介面。",
+        "authorizationPendingNote": "供應商已新增，但授權尚未完成。你可以在這裡重試或取消授權。",
+        "action": {
+          "create": "將在本機新增供應商 {{name}}。",
+          "update": "將更新現有供應商 {{name}}。",
+          "replace-key": "將取代 {{name}} 在本機儲存的 API Key。"
+        }
+      },
       "order": {
         "hint": "拖動排序",
         "handle": "調整 {{provider}} 順序，當前第 {{position}} 項，共 {{total}} 項。使用方向鍵移動。",

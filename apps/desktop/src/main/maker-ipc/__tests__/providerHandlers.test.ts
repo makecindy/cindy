@@ -19,6 +19,10 @@ import {
   UNRECOVERABLE_PROVIDER_CREDENTIAL,
   type UnrecoverableProviderCredential,
 } from '../../secrets/providerSecretStore.js';
+import {
+  clearProviderImportDraftsForTest,
+  createProviderImportDraftFromRest,
+} from '../../provider-import/providerImport.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
@@ -161,7 +165,15 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
   };
 }
 
+function createProviderImportId(payload: unknown): string {
+  const data = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const importId = createProviderImportDraftFromRest(`provider/import?v=1&data=${data}`);
+  if (!importId) throw new Error('test provider import payload was rejected');
+  return importId;
+}
+
 afterEach(() => {
+  clearProviderImportDraftsForTest();
   if (client) clearCurrentDbClient(client);
   raw?.close();
   client = null;
@@ -983,6 +995,86 @@ describe('provider OAuth sender boundary', () => {
 });
 
 describe('provider:custom:* CRUD handlers', () => {
+  it('does not fetch or persist an import until confirmation, then fetches omitted models in Main', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const fetchModels = vi.fn(async (spec) => ({
+      ok: true as const,
+      models: [{ id: 'fetched-model', name: 'Fetched Model' }],
+      observed: spec,
+    }));
+    const deps = makeDeps({ fetchModels });
+    registerProviderHandlers(harness, deps);
+    const importId = createProviderImportId({
+      kind: 'custom',
+      name: 'Deferred Models',
+      auth: { method: 'apiKey', apiKey: 'sk-main-only' },
+      endpoints: [
+        {
+          protocol: 'openai-chat',
+          baseUrl: 'https://models.example.test/v1',
+          targets: ['codex'],
+          headers: { 'X-Tenant': 'tenant-secret' },
+        },
+      ],
+    });
+
+    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId);
+    expect(preview).toMatchObject({
+      authMethod: 'apiKey',
+      runtimes: [{ agent: 'codex', modelCount: 0, willFetchModels: true, hasApiKey: true }],
+    });
+    expect(fetchModels).not.toHaveBeenCalled();
+    expect(await listCustomProviders()).toEqual([]);
+
+    const result = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId);
+    expect(result).toEqual({ ok: true, providerId: 'deferred-models', authMethod: 'apiKey' });
+    expect(fetchModels).toHaveBeenCalledOnce();
+    expect(fetchModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'codex',
+        baseUrl: 'https://models.example.test/v1',
+        authMethod: 'apiKey',
+        apiKey: 'sk-main-only',
+        headers: { 'X-Tenant': 'tenant-secret' },
+      }),
+    );
+    const saved = await listCustomProviders();
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.runtimes.codex?.models).toEqual([
+      { id: 'fetched-model', name: 'Fetched Model' },
+    ]);
+  });
+
+  it('keeps the import draft and does not write when confirmed model discovery fails', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({ fetchModels: vi.fn(async () => ({ ok: false, models: [] })) });
+    registerProviderHandlers(harness, deps);
+    const importId = createProviderImportId({
+      kind: 'custom',
+      name: 'Discovery Fails',
+      auth: { method: 'apiKey', apiKey: 'sk-main-only' },
+      endpoints: [
+        {
+          protocol: 'openai-chat',
+          baseUrl: 'https://models.example.test/v1',
+          targets: ['codex'],
+        },
+      ],
+    });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId);
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId)).rejects.toThrow(
+      /PRECONDITION_FAILED/,
+    );
+    expect(await listCustomProviders()).toEqual([]);
+    // Failure is retryable: a fresh preview of the same opaque import id still works.
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId)).resolves.toMatchObject({
+      name: 'Discovery Fails',
+    });
+  });
+
   it('rejects credential-mutating CRUD before parsing or touching secrets for an untrusted sender', async () => {
     const harness = new IpcHarness();
     const assertTrustedSender = vi.fn(() => {
