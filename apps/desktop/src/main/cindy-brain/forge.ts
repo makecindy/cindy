@@ -52,6 +52,14 @@ const MAX_BASIC_CINDY_BYTES = 8 * 1024 * 1024;
 const MAX_NODE_CINDY_BYTES = 128 * 1024 * 1024;
 const FORGE_AI_ICON_PATH = 'assets/icon.png';
 
+/** 打包时跳过的目录/文件(源码目录里的开发残留,不属于意识本体)。 */
+function shouldSkip(name: string): boolean {
+  if (name.startsWith('.')) return true; // .git / .DS_Store / .disabled 等
+  if (name.toLowerCase() === 'node_modules') return true;
+  if (name.toLowerCase().endsWith('.cindy')) return true; // 上次打包产物,防套娃
+  return false;
+}
+
 export type ForgePackResult =
   | { ok: true; cindyPath: string; manifest: GhostManifest }
   | {
