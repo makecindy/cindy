@@ -18,10 +18,12 @@ import { app } from 'electron';
 import { decodeFeishuLaneUserId, type FeishuIM } from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
+import { normalizeWorkingDirForStorage } from '../../../shared/workingDir';
 import { claimLegacyImPath, ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { createFenceNeutralizer, GROUP_WINDOW_ENTRY_TEXT_MAX_CHARS } from '../shared/groupWindowCore';
 import { createFeishuGroupTurnPermissionPolicy } from './permissionPolicy';
 import { ui, REACTION_PROCESSING } from './uiText';
+import { resolveFeishuWorkingDir } from './channelSettings';
 
 /**
  * 飞书 bot 的 workingDir = `userData/im-working-dir/{botAppId}/`
@@ -31,11 +33,33 @@ import { ui, REACTION_PROCESSING } from './uiText';
  *   - 不分:每个 session 自己一坨工作目录, 跨 session 引用文件需要绝对路径
  * 在 owner 私聊场景下共享更符合直觉。
  */
-function ensureWorkingDir(botAppId: string): string {
+export function legacyManagedFeishuWorkingDir(
+  botAppId: string,
+  userDataPath = app.getPath('userData'),
+): string {
+  return path.join(userDataPath, 'im-working-dir', botAppId);
+}
+
+export function isLegacyManagedFeishuWorkingDir(
+  workingDir: string | null,
+  botAppId: string,
+  userDataPath = app.getPath('userData'),
+): boolean {
+  return (
+    normalizeWorkingDirForStorage(workingDir) ===
+    normalizeWorkingDirForStorage(legacyManagedFeishuWorkingDir(botAppId, userDataPath))
+  );
+}
+
+export function ensureManagedFeishuWorkingDir(botAppId: string): string {
   const dir = ownerScopedImUserDataPath('im-working-dir', botAppId);
-  claimLegacyImPath(path.join(app.getPath('userData'), 'im-working-dir', botAppId), dir);
+  claimLegacyImPath(legacyManagedFeishuWorkingDir(botAppId), dir);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function ensureWorkingDir(botAppId: string): string {
+  return resolveFeishuWorkingDir(() => ensureManagedFeishuWorkingDir(botAppId));
 }
 
 /** lane userId 含 `/`, 会话 id 场景统一替换成 `-`(telegram 同款)。 */

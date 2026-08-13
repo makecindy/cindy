@@ -92,6 +92,7 @@ import { bindingStore, executeDetach } from './binding';
 import { IM_DEFAULT_EFFORT_OVERRIDES, IM_DEFAULT_SETTINGS } from '../../shared/imDefaultSettings';
 import { getAuthState } from '../authManager';
 import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
+import { throwIpcError } from '../utils/ipcValidate';
 
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
@@ -100,6 +101,12 @@ import {
   resetWechatWorkingDir,
   writeWechatWorkingDir,
 } from './wechat/channelSettings';
+import {
+  readFeishuChannelSettings,
+  resetFeishuWorkingDir,
+  writeFeishuWorkingDir,
+} from './feishu/channelSettings';
+import { ensureManagedFeishuWorkingDir, isLegacyManagedFeishuWorkingDir } from './feishu/adapter';
 
 export {
   registerTelegramBotConfigIpc,
@@ -221,6 +228,45 @@ export function startImOrchestrators(): void {
   wireDingTalkOrchestrator(dingtalkIm, DINGTALK_CONFIG);
   wireWechatOrchestrator(wechatIm, WECHAT_CONFIG);
   wireWecomOrchestrator(wecomIm, WECOM_CONFIG);
+
+  ipcMain.handle('feishuBot:get-channel-settings', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readFeishuChannelSettings();
+  });
+  ipcMain.handle('feishuBot:choose-working-directory', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const generation = captureImAccountGeneration();
+    if (generation === null) throwIpcError('PRECONDITION_FAILED', 'No active account');
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    if (!owner || owner.isDestroyed()) {
+      throwIpcError('PRECONDITION_FAILED', 'Feishu settings window is unavailable');
+    }
+    const result = await dialog.showOpenDialog(owner, {
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (!isImAccountGenerationCurrent(generation)) {
+      throwIpcError('PRECONDITION_FAILED', 'Account changed while choosing a directory');
+    }
+    if (result.canceled || !result.filePaths[0]) {
+      return { canceled: true as const, state: readFeishuChannelSettings() };
+    }
+    try {
+      return { canceled: false as const, state: writeFeishuWorkingDir(result.filePaths[0]) };
+    } catch (error) {
+      log.warn('failed to save user-picked Feishu working directory', {
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('INTERNAL', 'Failed to update the Feishu working directory');
+    }
+  });
+  ipcMain.handle('feishuBot:reset-working-directory', (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return resetFeishuWorkingDir();
+    } catch {
+      throwIpcError('INTERNAL', 'Failed to reset the Feishu working directory');
+    }
+  });
 
   ipcMain.handle('wechatBot:get-state', (event) => {
     assertTrustedAppRendererEvent(event);
@@ -471,7 +517,8 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
         .where(eq(sessions.source, 'feishu'));
       for (const row of rows) {
         if (!row.botContextId) continue;
-        const scoped = feishuAdapter.sessions.ensureWorkingDir(row.botContextId);
+        if (!isLegacyManagedFeishuWorkingDir(row.workingDir, row.botContextId)) continue;
+        const scoped = ensureManagedFeishuWorkingDir(row.botContextId);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
       }

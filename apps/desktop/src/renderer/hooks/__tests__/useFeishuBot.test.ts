@@ -52,6 +52,20 @@ function installFeishuApi() {
   const statusListeners = new Set<StatusListener>();
   const registrationListeners = new Set<RegistrationListener>();
   const api = {
+    getChannelSettings: vi.fn(async () => ({
+      version: 1 as const,
+      workingDir: null,
+      workingDirAvailable: true,
+    })),
+    chooseWorkingDirectory: vi.fn(async () => ({
+      canceled: false,
+      state: { version: 1 as const, workingDir: 'D:/project', workingDirAvailable: true },
+    })),
+    resetWorkingDirectory: vi.fn(async () => ({
+      version: 1 as const,
+      workingDir: null,
+      workingDirAvailable: true,
+    })),
     getState: vi.fn(async (): Promise<FeishuState> => ({
       status: 'connected' as const,
       appId: 'cli_test',
@@ -90,6 +104,16 @@ describe('useFeishuBot', () => {
     vi.clearAllMocks();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
     ({ useFeishuBot } = await import('../useFeishuBot'));
+  });
+
+  it('does not reuse working-directory settings after remount', async () => {
+    const { api } = installFeishuApi();
+    const first = renderHook(() => useFeishuBot());
+    await waitFor(() => expect(first.result.current.channelSettings).not.toBeNull());
+    first.unmount();
+    api.getChannelSettings.mockImplementationOnce(() => new Promise(() => {}));
+    const second = renderHook(() => useFeishuBot());
+    expect(second.result.current.channelSettings).toBeNull();
   });
 
   it('updates the live owner and module cache when main claims the first sender', async () => {

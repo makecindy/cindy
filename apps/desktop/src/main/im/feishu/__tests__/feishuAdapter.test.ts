@@ -9,6 +9,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -32,7 +33,7 @@ vi.mock('../../ownerScopedStorage', () => ({
 }));
 
 import type { FeishuIM, FeishuRecentChatMessage, IMMessageEvent } from '@cindy/im';
-import { buildFeishuAdapter } from '../adapter';
+import { buildFeishuAdapter, isLegacyManagedFeishuWorkingDir } from '../adapter';
 
 const getService = vi.fn<() => 'feishu' | 'lark'>(() => 'feishu');
 const fetchRecentChatMessages = vi.fn<
@@ -136,6 +137,39 @@ describe('feishu ImChannelAdapter characterization', () => {
       path.join(os.tmpdir(), 'xdt-feishu-adapter-test', 'im-working-dir', 'cli_abc'),
       dir,
     );
+  });
+
+  it('保留旧托管目录标识供迁移层区分用户目录', () => {
+    expect(
+      isLegacyManagedFeishuWorkingDir('C:\\data\\im-working-dir\\cli_abc', 'cli_abc', 'C:\\data'),
+    ).toBe(true);
+    expect(isLegacyManagedFeishuWorkingDir('/tmp/custom', 'cli_abc', '/tmp/cindy')).toBe(false);
+  });
+
+  it('用户指定工作目录后，新建飞书会话使用该目录', () => {
+    const previousRoot = scopeMocks.root;
+    scopeMocks.root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-feishu-adapter-test-'));
+    try {
+      const configuredDir = path.join(scopeMocks.root, 'project-a');
+      const settingsFile = path.join(
+        scopeMocks.root,
+        'owners',
+        scopeMocks.owner,
+        'feishu-channel.json',
+      );
+      fs.mkdirSync(configuredDir, { recursive: true });
+      fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+      fs.writeFileSync(
+        settingsFile,
+        JSON.stringify({ version: 1, workingDir: configuredDir }),
+        'utf8',
+      );
+
+      expect(adapter.sessions.ensureWorkingDir('cli_abc')).toBe(configuredDir.replace(/\\/g, '/'));
+    } finally {
+      fs.rmSync(scopeMocks.root, { recursive: true, force: true });
+      scopeMocks.root = previousRoot;
+    }
   });
 });
 

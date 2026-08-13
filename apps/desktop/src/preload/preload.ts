@@ -1777,6 +1777,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('feishuBot:registration-begin', { service }),
     registrationCancel: (): Promise<{ ok: true }> =>
       ipcRenderer.invoke('feishuBot:registration-cancel'),
+    getChannelSettings: (): Promise<{
+      version: 1;
+      workingDir: string | null;
+      workingDirAvailable: boolean;
+    }> => ipcRenderer.invoke('feishuBot:get-channel-settings'),
+    chooseWorkingDirectory: (): Promise<{
+      canceled: boolean;
+      state: { version: 1; workingDir: string | null; workingDirAvailable: boolean };
+    }> => ipcRenderer.invoke('feishuBot:choose-working-directory'),
+    resetWorkingDirectory: (): Promise<{
+      version: 1;
+      workingDir: string | null;
+      workingDirAvailable: boolean;
+    }> => ipcRenderer.invoke('feishuBot:reset-working-directory'),
     onStatusChange: fanOutFeishuBotStatusChange,
     onConflict: fanOutFeishuBotConflict,
     onRegistrationStatus: fanOutFeishuBotRegistrationStatus,
