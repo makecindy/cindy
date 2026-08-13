@@ -202,6 +202,18 @@ describe('pi translator', () => {
     }));
   });
 
+  it('carries the product-turn auto-review marker on settled done', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    ctx.autoReviewBlockedForTurn = true;
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'done',
+      data: expect.objectContaining({ autoReviewBlocked: true }),
+    }));
+  });
+
   it('drops a pending provider error when Pi auto-retry succeeds', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

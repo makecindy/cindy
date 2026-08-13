@@ -185,6 +185,25 @@ describe('残留终态 error 在新 turn 启动时清除', () => {
     expect(nextTurn.recoverableError).toBeNull();
   });
 
+  it('silent-stop 的 done marker 在自动续跑收口后仍保留', () => {
+    makerChatStore.__applyStreamEventForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      type: 'done',
+      source: 'claude-code',
+      data: { silentStop: true, autoReviewBlocked: true },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).autoReviewBlocked).toBe(true);
+    makerChatStore.__applyStreamEventForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      type: 'done',
+      source: 'claude-code',
+      data: {},
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).recoverableError).toBe(
+      i18n.t('chat.remoteError.AUTO_REVIEW_BLOCKED'),
+    );
+  });
+
   it('skipTurnReset 的 side-channel running 信号不清 error(banner 保留)', () => {
     emitTerminalError();
     expect(makerChatStore.getSnapshot(SESSION_ID).error).not.toBeNull();

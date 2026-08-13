@@ -2065,6 +2065,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     let mutableAutoReviewCredentialMode = effectiveCredentialMode;
     let nativeAutoReviewUnavailable = false;
     let currentAutoReviewIntent = '';
+    let autoReviewBlockedForTurn = false;
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     // Claude's native OAuth Auto classifier bypasses canUseTool entirely. Once a host MCP
     // is registered, that would also bypass Cindy's trusted-server and prompt policies,
@@ -2095,6 +2096,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       });
     });
     const autoReviewBlockedNotice = createAutoReviewBlockedNotice((message) => {
+      autoReviewBlockedForTurn = true;
       eventQueue.push({
         type: 'error',
         data: { message, isTerminal: false },
@@ -4063,6 +4065,9 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 汇总 permission_denials；只认 native Auto Query，避免误报普通工具失败。
             const isNativeAutoReviewBlockedResult =
               rawType === 'result'
+              && mutablePermissionMode === 'auto'
+              && !mutablePlanMode
+              && !planTurnActive
               && nativeAutoQueries.has(currentQ)
               && Array.isArray((rawMsg as { permission_denials?: unknown }).permission_denials)
               && (rawMsg as { permission_denials: unknown[] }).permission_denials.length > 0;
@@ -4220,7 +4225,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               getModelContextWindow: () => modelContextWindows.get(mutableModel),
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,
-              autoReviewBlockedResult: isNativeAutoReviewBlockedResult,
+              autoReviewBlockedResult: isNativeAutoReviewBlockedResult || autoReviewBlockedForTurn,
               getSdkSessionId: () => sdkSessionId,
               getLogTitle: () => lastSendTitle,
               tracker: usageTracker,
@@ -4920,6 +4925,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         resetAutoReviewNoticesForNewTurn();
+        autoReviewBlockedForTurn = false;
         let bridgeCompactQueued = false;
         // 保持普通 send / rewind send 原有的同步前置语义：即使 async helper 立即
         // return，裸 await 也会让出一个 microtask，导致调用方在 Query rebuild 真正

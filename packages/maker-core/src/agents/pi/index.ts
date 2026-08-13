@@ -1248,6 +1248,7 @@ export class PiAgent extends BaseAgent {
       });
     });
     const autoReviewBlockedNotice = createAutoReviewBlockedNotice((message) => {
+      ctx.autoReviewBlockedForTurn = true;
       queue.push({
         type: 'error',
         data: { message, isTerminal: false },
@@ -1943,6 +1944,7 @@ export class PiAgent extends BaseAgent {
         rejectIfCancelled(sendOpts, 'send');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         resetAutoReviewNoticesForNewTurn();
+        ctx.autoReviewBlockedForTurn = false;
         // 本轮策略覆盖:无策略显式清 null,不继承上一轮渠道策略(§7.2.5);内部续跑
         // (plan 审批实施轮 / 自动继续)不经 send,仍读这份闭包值继承(§7.10)。
         // provider 接受前任何失败都必须撤销,避免"任务显示已开始、实际未启动"却残留策略。

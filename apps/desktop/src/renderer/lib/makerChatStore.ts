@@ -4931,7 +4931,7 @@ export function handleStreamEvent(
       // 保持 isRunning=true,避免 renderer 的 500ms 完成去抖触发假完成通知。守卫非续跑
       // 决策通过 exhausted terminal error 广播到达 renderer,那时才正确设 isRunning=false。
       if ((event.data as { silentStop?: boolean } | null | undefined)?.silentStop === true) {
-        return state;
+        return { ...state, autoReviewBlocked };
       }
       if (isTurnContinuationBoundaryEvent(event)) {
         // A claimed done seals one SDK turn, while its provider-owned

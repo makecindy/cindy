@@ -93,6 +93,8 @@ export interface PiTranslateContext {
    * 暂存到 agent_settled 再终态上报，避免一次可恢复错误提前收口整个 turn。
    */
   pendingAssistantError: PiPendingAssistantError | null;
+  /** Product-turn marker retained until the next real send. */
+  autoReviewBlockedForTurn: boolean;
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
   generationDurationMs: number;
@@ -140,6 +142,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     delegatedUsage: new Map(),
     subagentToolCalls: new Map(),
     pendingAssistantError: null,
+    autoReviewBlockedForTurn: false,
   };
 }
 
@@ -561,6 +564,7 @@ export function translatePiEvent(
               ? { turnDurationMs: Math.max(0, Date.now() - ctx.turnWallClockStartedAt) }
               : {}),
           },
+          ...(ctx.autoReviewBlockedForTurn ? { autoReviewBlocked: true } : {}),
         },
         source: 'pi',
       });
