@@ -1908,8 +1908,9 @@ function GhostPluginActions({
 /**
  * 已安装插件卡片(设计定稿 2026-08-06):
  * - 整卡可点 → 进入插件详情;
- * - 左下角:更新角标(ArrowUp + 版本号,取代右上更新胶囊);
- * - 右侧中间:动作图标——需要连接时显示 Link(进入配置页),就绪时显示 MessageCircle(发起对话),停用不显示;
+ * - 右侧中间:动作图标按状态细分——升级 ArrowUp、授权失败 AlertTriangle(红)、
+ *   未配置 Link(黄)、面板型 ArrowRight(使用)、指令/能力型 MessageCircle(对话)、
+ *   纯工具型与停用不显示;
  * - 不使用开关;启停与设置统一收进详情页。
  */
 export function GhostPluginCard({
@@ -1943,19 +1944,21 @@ export function GhostPluginCard({
   const unread = useGhostUnread(item.id);
   const unreadSummary = useGhostUnreadSummary(item.id);
 
-  // 右侧图标与动作:
+  // 右侧图标与动作(优先级从高到低):
+  // - 有市场升级显示 ArrowUp→更新
   // - 授权过期/失败显示 AlertTriangle(红色警告)→配置
   // - 未配置显示 Link→配置
   // - 面板型显示 ArrowRight→使用
   // - 可对话/能力型显示 MessageCircle→对话
   // - 纯工具型插件不显示右侧图标(只能由 Agent 自动调用,不能对话)
   // - 停用不显示图标
+  const hasUpdate = Boolean(updateVersion && onUpdate);
   const needsAttention = item.hasSetupRequirements && !item.setupReady;
   const setupFailed = item.setupState === 'failed';
   const primaryAction = ghostPrimaryAction(item);
   const isActionable = primaryAction !== 'manage';
-  const rightAction = needsAttention ? onConfigure : onChat;
-  const showRightIcon = enabled && (needsAttention || isActionable);
+  const rightAction = hasUpdate ? onUpdate : needsAttention ? onConfigure : onChat;
+  const showRightIcon = enabled && (hasUpdate || needsAttention || isActionable);
 
   const handleCardKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -1979,31 +1982,6 @@ return (
         !enabled && 'opacity-60',
       )}
     >
-      {/* 左下角更新角标:有市场新版本时渲染。 */}
-      {updateVersion && onUpdate ? (
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onUpdate();
-          }}
-          disabled={updateBusy}
-          aria-label={t('settings.ghosts.page.updateAria', {
-            name: item.name,
-            version: updateVersion,
-          })}
-          className={cn(
-            'absolute bottom-0 left-0 z-10 inline-flex items-center gap-0.5 rounded-br-lg rounded-tl-xl bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-primary)]',
-            'transition-colors duration-150 hover:bg-[var(--surface-hover)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            'disabled:cursor-wait disabled:opacity-40',
-          )}
-        >
-          <ArrowUp size={11} aria-hidden="true" />
-          v{updateVersion}
-        </button>
-      ) : null}
-
       <GhostPluginIcon
         iconDataUrl={item.iconDataUrl}
         iconId={item.id}
@@ -2047,22 +2025,28 @@ return (
           <button
             type="button"
             onClick={rightAction}
+            disabled={hasUpdate && updateBusy}
             aria-label={
-              needsAttention
-                ? setupFailed
-                  ? t('settings.ghosts.page.reauthAria', { name: item.name })
-                  : t('settings.ghosts.page.manageAria', { name: item.name })
-                : primaryAction === 'panel'
-                  ? t('settings.ghosts.page.useAria', { name: item.name })
-                  : t('settings.ghosts.page.chatAria', { name: item.name })
+              hasUpdate
+                ? t('settings.ghosts.page.updateAria', { name: item.name, version: updateVersion })
+                : needsAttention
+                  ? setupFailed
+                    ? t('settings.ghosts.page.reauthAria', { name: item.name })
+                    : t('settings.ghosts.page.manageAria', { name: item.name })
+                  : primaryAction === 'panel'
+                    ? t('settings.ghosts.page.useAria', { name: item.name })
+                    : t('settings.ghosts.page.chatAria', { name: item.name })
             }
             className={cn(
               'grid size-8 place-items-center rounded-full transition-colors duration-150',
               'text-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              'disabled:cursor-wait disabled:opacity-40',
             )}
           >
-            {needsAttention ? (
+            {hasUpdate ? (
+              <ArrowUp size={16} aria-hidden="true" />
+            ) : needsAttention ? (
               setupFailed ? (
                 <AlertTriangle size={16} aria-hidden="true" className="text-[var(--error-fg)]" />
               ) : (

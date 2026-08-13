@@ -218,7 +218,7 @@ describe('GhostPluginCard', () => {
     expect(onChat).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the update corner badge and keeps it from triggering the card action', () => {
+  it('shows the update action on the right and keeps it from triggering the card action', () => {
     const onOpenDetail = vi.fn();
     const onUpdate = vi.fn();
     render(
@@ -250,7 +250,7 @@ describe('GhostPluginCard', () => {
     expect(screen.getByText('settings.ghosts.page.oauthAuthorizationExpired')).toBeTruthy();
   });
 
-  it('blocks the update pill while a market operation is running', () => {
+  it('blocks the update action while a market operation is running', () => {
     render(
       <GhostPluginCard
         item={commandPlugin}
