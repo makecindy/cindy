@@ -351,6 +351,7 @@ import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
 import {
+  attachWorkLouderCodexWindowReveal,
   registerWorkLouderCodexSettingsIpc,
   workLouderCodexLightingController,
 } from './worklouder-codex/index.js';
@@ -3100,6 +3101,8 @@ const createWindow = () => {
   // 装饰动画闸门的兜底信号。主窗在 running turn 期间会关掉 backgroundThrottling,
   // 那之后 Renderer 的 visibilityState 就不再反映真实可见性,细节见模块头注释。
   installWindowHiddenBroadcast(mainWindow);
+  // Keyboard hello when the window comes back from hide / minimize / Dock.
+  attachWorkLouderCodexWindowReveal(mainWindow);
 
   // App badge: 用户把任意 Cindy 窗口点回前台(Dock 点击 / taskbar / alt-tab / 点窗口)即视为
   // 「已查看」,直接清空整个 dock 红点。badge 是 app 级状态,不该依赖当前停在哪个

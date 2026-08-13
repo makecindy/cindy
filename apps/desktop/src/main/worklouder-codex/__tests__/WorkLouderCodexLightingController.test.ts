@@ -5,7 +5,7 @@ import {
   type WorkLouderCodexSettings,
 } from '../../../shared/workLouderCodex.js';
 import { WorkLouderCodexLightingController } from '../WorkLouderCodexLightingController.js';
-import { isWorkLouderCodexLightingFrameOff } from '../protocol.js';
+import { isWorkLouderCodexLightingFrameOff, WorkLouderLightingEffect } from '../protocol.js';
 
 function settings(patch: Partial<WorkLouderCodexSettings>): WorkLouderCodexSettings {
   return { ...createWorkLouderCodexDefaultSettings(), ...patch };
@@ -432,6 +432,77 @@ describe('WorkLouderCodexLightingController', () => {
       expect(commands[0][0].commandId).toBe('toggleSidebar');
       expect(dispatch.mock.calls.some((call) => call[0].type === 'scroll')).toBe(false);
     });
+  });
+
+  it('flashes a rainbow greeting when the window comes back, then returns to status lighting', async () => {
+    vi.useFakeTimers();
+    try {
+      const sink = {
+        update: vi.fn(),
+        setAgentKeyPressHandler: vi.fn(),
+        setDeviceActivityHandler: vi.fn(),
+        setConnectionStatusHandler: vi.fn(),
+        dispose: vi.fn(async () => undefined),
+      };
+      const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => [
+        'running-session',
+      ]);
+      controller.applySettings(settings({ lightingBrightness: 100, lightingAutoDim: 'off' }));
+      await controller.resumeTaskSlots();
+      controller.updateSessionActivity([
+        {
+          sessionId: 'running-session',
+          phase: 'running',
+          compactDetail: '',
+          attention: false,
+        },
+      ]);
+      sink.update.mockClear();
+
+      controller.playWindowReveal();
+      expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Rainbow);
+
+      // Status lighting must not punch through the greeting mid-sweep.
+      controller.updateSessionActivity([
+        {
+          sessionId: 'running-session',
+          phase: 'needs-interaction',
+          compactDetail: '',
+          attention: false,
+        },
+      ]);
+      expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Rainbow);
+
+      await vi.advanceTimersByTimeAsync(1_400);
+      expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Breath);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends the greeting early when the user touches the keyboard', () => {
+    vi.useFakeTimers();
+    try {
+      const activityHandlerRef: { current: (() => void) | null } = { current: null };
+      const sink = {
+        update: vi.fn(),
+        setAgentKeyPressHandler: vi.fn(),
+        setDeviceActivityHandler: vi.fn((handler: (() => void) | null) => {
+          activityHandlerRef.current = handler;
+        }),
+        setConnectionStatusHandler: vi.fn(),
+        dispose: vi.fn(async () => undefined),
+      };
+      const controller = new WorkLouderCodexLightingController(sink, vi.fn());
+      controller.start();
+      controller.playWindowReveal();
+      expect(sink.update.mock.lastCall?.[0]?.ambient.effect).toBe(WorkLouderLightingEffect.Rainbow);
+
+      activityHandlerRef.current?.();
+      expect(isWorkLouderCodexLightingFrameOff(sink.update.mock.lastCall?.[0])).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('delegates shutdown so the host can turn the device off', async () => {

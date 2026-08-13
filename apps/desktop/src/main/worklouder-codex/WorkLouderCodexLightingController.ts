@@ -22,6 +22,7 @@ import {
   applyWorkLouderCodexLightingBrightness,
   createWorkLouderCodexOffFrame,
   createWorkLouderCodexLightingFrame,
+  createWorkLouderCodexWindowRevealFrame,
   isWorkLouderCodexLightingFrameOff,
   type WorkLouderCodexHidEvent,
   type WorkLouderCodexJoystickEvent,
@@ -36,6 +37,8 @@ import {
 const TASK_SLOT_REFRESH_DEBOUNCE_MS = 250;
 const AGENT_KEY_DOUBLE_TAP_MS = 350;
 const ENCODER_LONG_PRESS_MS = 500;
+/** How long the window-reopen greeting stays on the board. */
+const WINDOW_REVEAL_MS = 1_400;
 /**
  * How long a held stick may go silent before we give up on it.
  *
@@ -90,6 +93,7 @@ export class WorkLouderCodexLightingController {
   private stateListeners = new Set<(state: WorkLouderCodexState) => void>();
   private autoDimTimer: Timer | null = null;
   private lightingDimmed = false;
+  private windowRevealTimer: Timer | null = null;
   private lastBaseFrameKey = '';
   private pendingAgentKeyTap: { slot: number; at: number } | null = null;
   private encoderLongPressTimer: Timer | null = null;
@@ -156,10 +160,30 @@ export class WorkLouderCodexLightingController {
     this.settings = cloneWorkLouderCodexSettings(settings);
     this.pendingAgentKeyTap = null;
     this.lightingDimmed = false;
+    this.clearWindowRevealTimer();
     this.publishAgentSlots();
     const frame = this.updateLightingFrame();
     this.resetAutoDimTimer(frame);
     this.emitState();
+  }
+
+  /**
+   * Flash a greeting when Cindy's window comes back after being hidden.
+   *
+   * Status lighting is paused for the duration so a running task's snake
+   * does not overwrite the hello mid-sweep. Device activity or a settings
+   * change also ends it early.
+   */
+  playWindowReveal(): void {
+    this.lightingDimmed = false;
+    this.clearWindowRevealTimer();
+    this.windowRevealTimer = setTimeout(() => {
+      this.windowRevealTimer = null;
+      this.updateLightingFrame();
+    }, WINDOW_REVEAL_MS);
+    this.windowRevealTimer.unref?.();
+    this.updateLightingFrame();
+    this.resetAutoDimTimer(this.currentBrightnessAdjustedFrame());
   }
 
   async refreshTaskSlots(): Promise<void> {
@@ -228,6 +252,7 @@ export class WorkLouderCodexLightingController {
     this.pendingAgentKeyTap = null;
     this.joystickDirection = null;
     this.clearAutoDimTimer();
+    this.clearWindowRevealTimer();
     this.lightingDimmed = false;
     this.updateLightingFrame();
     this.emitState();
@@ -237,6 +262,7 @@ export class WorkLouderCodexLightingController {
     this.clearSlotRefreshTimer();
     this.clearEncoderLongPressTimer();
     this.clearAutoDimTimer();
+    this.clearWindowRevealTimer();
     this.stopJoystickScroll();
     this.slotRefreshVersion += 1;
     this.taskSlotsEnabled = false;
@@ -548,7 +574,15 @@ export class WorkLouderCodexLightingController {
       baseFrame,
       this.settings.lightingBrightness,
     );
-    const frame = this.lightingDimmed ? createWorkLouderCodexOffFrame() : brightnessAdjusted;
+    const overlay = this.windowRevealTimer
+      ? applyWorkLouderCodexLightingBrightness(
+          createWorkLouderCodexWindowRevealFrame(),
+          this.settings.lightingBrightness,
+        )
+      : null;
+    const frame = this.lightingDimmed
+      ? createWorkLouderCodexOffFrame()
+      : (overlay ?? brightnessAdjusted);
     const frameKey = JSON.stringify(frame);
     if (frameKey !== this.lastFrameKey) {
       this.lastFrameKey = frameKey;
@@ -556,6 +590,13 @@ export class WorkLouderCodexLightingController {
     }
     if (wakeOnBaseFrameChange && baseFrameChanged) this.resetAutoDimTimer(brightnessAdjusted);
     return brightnessAdjusted;
+  }
+
+  private currentBrightnessAdjustedFrame(): WorkLouderCodexLightingFrame {
+    return applyWorkLouderCodexLightingBrightness(
+      createWorkLouderCodexLightingFrame(this.latestActivity, this.slotSessionIds),
+      this.settings.lightingBrightness,
+    );
   }
 
   private scheduleTaskSlotRefresh(immediate = false): void {
@@ -612,6 +653,7 @@ export class WorkLouderCodexLightingController {
 
   private handleDeviceActivity(): void {
     this.lightingDimmed = false;
+    this.clearWindowRevealTimer();
     const frame = this.updateLightingFrame();
     this.resetAutoDimTimer(frame);
   }
@@ -632,6 +674,12 @@ export class WorkLouderCodexLightingController {
     if (!this.autoDimTimer) return;
     clearTimeout(this.autoDimTimer);
     this.autoDimTimer = null;
+  }
+
+  private clearWindowRevealTimer(): void {
+    if (!this.windowRevealTimer) return;
+    clearTimeout(this.windowRevealTimer);
+    this.windowRevealTimer = null;
   }
 
   private emitState(): void {

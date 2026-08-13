@@ -28,6 +28,10 @@ import {
 import { WorkLouderCodexLightingController } from './WorkLouderCodexLightingController.js';
 import { createWorkLouderCodexSettingsIpc } from './settingsIpc.js';
 import {
+  createWorkLouderCodexWindowRevealGate,
+  noteWorkLouderCodexWindowVisibility,
+} from './windowReveal.js';
+import {
   readWorkLouderCodexSettings,
   resetWorkLouderCodexSettings,
   writeWorkLouderCodexSettingsPatch,
@@ -170,4 +174,41 @@ function broadcastState(state: WorkLouderCodexState): void {
     if (!isTrustedAppRendererWindow(window)) continue;
     window.webContents.send(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, state);
   }
+}
+
+const windowRevealGates = new WeakMap<
+  BrowserWindow,
+  ReturnType<typeof createWorkLouderCodexWindowRevealGate>
+>();
+
+/**
+ * Flash the keyboard when this Cindy window comes back from hide/minimize.
+ *
+ * First appearance after create is ignored — that is just the window
+ * opening, not a reopen. Focus while already visible is also ignored.
+ */
+export function attachWorkLouderCodexWindowReveal(win: BrowserWindow): void {
+  if (windowRevealGates.has(win)) return;
+  const gate = createWorkLouderCodexWindowRevealGate();
+  windowRevealGates.set(win, gate);
+
+  const sync = (): void => {
+    if (win.isDestroyed()) return;
+    const visible = win.isVisible() && !win.isMinimized();
+    if (noteWorkLouderCodexWindowVisibility(gate, visible)) {
+      workLouderCodexLightingController.playWindowReveal();
+    }
+  };
+
+  win.on('show', sync);
+  win.on('restore', sync);
+  win.on('hide', sync);
+  win.on('minimize', sync);
+  win.once('closed', () => {
+    windowRevealGates.delete(win);
+  });
+  // The first `show` can fire before we attach (`ready-to-show` is wired
+  // earlier). Seed the gate from the current visibility so a missed first
+  // appearance does not swallow the first real reopen.
+  sync();
 }

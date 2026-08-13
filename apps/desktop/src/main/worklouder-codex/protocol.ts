@@ -234,6 +234,28 @@ export function createWorkLouderCodexOffFrame(): WorkLouderCodexLightingFrame {
   };
 }
 
+/**
+ * A short hello on the whole board — used when Cindy's window comes back
+ * after being hidden or minimized. Rainbow on the case and keys, a pulse
+ * on every agent slot. Status lighting takes over again when the overlay
+ * timer fires; this frame is only the greeting.
+ */
+export function createWorkLouderCodexWindowRevealFrame(): WorkLouderCodexLightingFrame {
+  return {
+    ambient: side(WorkLouderLightingEffect.Rainbow, 0.9, 0.7, COLORS.running),
+    keys: side(WorkLouderLightingEffect.Rainbow, 0.38, 0.7, COLORS.running),
+    threads: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, id) => ({
+      id,
+      color: COLORS.running,
+      brightness: 0.85,
+      effect: WorkLouderLightingEffect.Breath,
+      speed: 0.6,
+      syncKeysLighting: false,
+      syncAmbientLighting: false,
+    })),
+  };
+}
+
 export function isWorkLouderCodexHostMessage(value: unknown): value is WorkLouderCodexHostMessage {
   if (!value || typeof value !== 'object') return false;
   const message = value as { kind?: unknown; status?: unknown; level?: unknown; message?: unknown };

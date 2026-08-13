@@ -5,6 +5,7 @@ import {
   applyWorkLouderCodexLightingBrightness,
   createWorkLouderCodexOffFrame,
   createWorkLouderCodexLightingFrame,
+  createWorkLouderCodexWindowRevealFrame,
   isWorkLouderCodexHostMessage,
   isWorkLouderCodexLightingFrameOff,
   parseWorkLouderCodexAgentKeyPress,
@@ -117,5 +118,17 @@ describe('Work Louder lighting settings', () => {
 
     expect(isWorkLouderCodexLightingFrameOff(frame)).toBe(true);
     expect(frame.threads.map((thread) => thread.id)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it('greets a reopened window with a rainbow sweep across every zone', () => {
+    const frame = createWorkLouderCodexWindowRevealFrame();
+
+    expect(frame.ambient.effect).toBe(WorkLouderLightingEffect.Rainbow);
+    expect(frame.keys.effect).toBe(WorkLouderLightingEffect.Rainbow);
+    expect(frame.threads).toHaveLength(6);
+    expect(frame.threads.every((thread) => thread.effect === WorkLouderLightingEffect.Breath)).toBe(
+      true,
+    );
+    expect(isWorkLouderCodexLightingFrameOff(frame)).toBe(false);
   });
 });
