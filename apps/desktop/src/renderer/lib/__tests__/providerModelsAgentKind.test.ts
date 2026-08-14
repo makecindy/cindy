@@ -1,8 +1,11 @@
-import type { AgentKind, ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, type AgentKind, type ProviderView } from '@cindy/model-providers';
 import { describe, expect, it } from 'vitest';
 
 import type { ModelDescriptor } from '@/hooks/useAgentCapabilities';
-import { resolveVisibleModelAgentKind } from '../providerModels';
+import {
+  resolveFlatModelProviderId,
+  resolveVisibleModelAgentKind,
+} from '../providerModels';
 
 const model = (id: string): ModelDescriptor => ({
   id,
@@ -74,5 +77,33 @@ describe('resolveVisibleModelAgentKind', () => {
         providers: [],
       }),
     ).toBe('codex');
+  });
+});
+
+describe('resolveFlatModelProviderId', () => {
+  it('resolves the provider for the first selection in a merged picker', () => {
+    const visionProvider = {
+      ...buildUserProvider({
+        id: 'vision-provider',
+        name: 'Vision Provider',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://vision.example/v1',
+            models: [{ id: 'vision-model', name: 'Vision Model' }],
+          },
+        },
+      }),
+      connected: true,
+    } as ProviderView;
+
+    expect(resolveFlatModelProviderId({
+      modelId: 'vision-model',
+      currentAgentKind: null,
+      currentProviderId: null,
+      ccModels: [model('vision-model')],
+      codexModels: [],
+      piModels: [],
+      providers: [visionProvider],
+    })).toBe('vision-provider');
   });
 });

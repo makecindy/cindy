@@ -235,6 +235,8 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
   afterEach(() => {
     clearSessionProvider('sess-pi');
     setProviderOAuthTokenReader(() => null);
+    setCustomProviderKeyReader(() => null);
+    setCustomProviders([]);
     resetPiProxySessionsForTest();
   });
 
@@ -265,6 +267,53 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
         'x-cindy-pi-session-id',
         'x-cindy-pi-session-token',
       ],
+    });
+  });
+
+  it('routes Pi vision fallback through the selected Pi provider', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'pi-vision-provider',
+        name: 'Pi Vision Provider',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://pi-vision.example/v1',
+            wireProtocol: 'anthropic-messages',
+            models: [
+              { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+              { id: 'pi-vision-model', name: 'Pi Vision Model' },
+            ],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((providerId, agent) =>
+      providerId === 'pi-vision-provider' && agent === 'pi' ? 'pi-vision-key' : null,
+    );
+    setSessionProvider('sess-pi', 'pi-vision-provider');
+    visionFallbackSettings.visionFallbackModel = 'pi-vision-model';
+    visionFallbackSettings.visionFallbackProviderId = 'pi-vision-provider';
+    registerPiProxySession('sess-pi', 'session-secret');
+
+    const decision = await Promise.resolve(createModelRoutingTransform()(
+      {
+        model: 'deepseek/deepseek-v4-pro',
+        messages: [{
+          role: 'user',
+          content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
+        }],
+      },
+      ctxWith({
+        'x-cindy-pi-session-id': 'sess-pi',
+        'x-cindy-pi-session-token': 'session-secret',
+        'x-api-key': 'cindy-pi-provider-auth-placeholder',
+      }),
+    ));
+
+    expect(decision).toMatchObject({
+      upstreamOverride: 'https://pi-vision.example/v1',
+      headerOverride: { authorization: 'Bearer pi-vision-key' },
+      bodyModelOverride: 'pi-vision-model',
     });
   });
 

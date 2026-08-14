@@ -365,9 +365,10 @@ export function createModelRoutingTransform(): RoutingTransform {
       });
       const fallbackProviderId = settings.visionFallbackProviderId;
       if (!fallbackProviderId) return { ...(decision ?? {}), bodyModelOverride: visionModel };
+      const fallbackAgent = headerValue(ctx.headers, 'x-cindy-pi-session-id') ? 'pi' : 'claude-code';
       return resolveProviderRouteDecision(
         fallbackProviderId,
-        'claude-code',
+        fallbackAgent,
         _readGatewayKey(),
         visionModel,
       ).then((route) => {
@@ -386,7 +387,7 @@ export function createModelRoutingTransform(): RoutingTransform {
           ...(route.decision ?? {}),
           bodyModelOverride: rewriteModelIdForProviderRoute(
             fallbackProviderId,
-            'claude-code',
+            fallbackAgent,
             visionModel,
           ),
         };

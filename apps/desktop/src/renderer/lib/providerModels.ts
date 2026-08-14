@@ -13,6 +13,7 @@
 
 import {
   getModel,
+  effectiveSourceIdForModel,
   isModelSelectableForNewRoute,
   isModelVisible,
   providerOffersModel,
@@ -291,4 +292,35 @@ export function resolveVisibleModelAgentKind(params: {
     return 'pi';
   }
   return null;
+}
+
+export function resolveFlatModelProviderId(params: {
+  modelId: string;
+  currentAgentKind: AgentKind | null;
+  currentProviderId: string | null | undefined;
+  ccModels: ModelDescriptor[];
+  codexModels: ModelDescriptor[];
+  piModels?: ModelDescriptor[];
+  providers: ProviderView[];
+}): string | null {
+  const {
+    modelId,
+    currentAgentKind,
+    currentProviderId,
+    ccModels,
+    codexModels,
+    piModels = [],
+    providers,
+  } = params;
+  const agentKind = currentAgentKind ?? resolveVisibleModelAgentKind({
+    modelId,
+    agentKind: null,
+    ccModels,
+    codexModels,
+    piModels,
+    providers,
+  });
+  return agentKind
+    ? effectiveSourceIdForModel(providers, currentProviderId, modelId, agentKind)
+    : null;
 }

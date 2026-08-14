@@ -72,6 +72,7 @@ import {
   filterChatBridgedCodexProviders,
   isDeviceModelVisible,
   providerMonogram,
+  resolveFlatModelProviderId,
   resolveVisibleModelAgentKind,
   selectVisibleModels,
 } from '@/lib/providerModels';
@@ -1546,6 +1547,21 @@ function ModelSelectorContentView({
     if (sections && providerId) {
       // 原子切 provider+model+effort; effort 由目标来源行的 catalog/记忆统一解析。
       onProviderChange?.(providerId, id, reconciledEffort);
+    } else if (onProviderChange) {
+      const flatProviderId = resolveFlatModelProviderId({
+        modelId: id,
+        currentAgentKind,
+        currentProviderId,
+        ccModels: cc.capabilities?.availableModels ?? [],
+        codexModels: codex.capabilities?.availableModels ?? [],
+        piModels: pi.capabilities?.availableModels ?? [],
+        providers,
+      });
+      if (flatProviderId) {
+        onProviderChange(flatProviderId, id, reconciledEffort);
+      } else {
+        onModelChange(id);
+      }
     } else {
       onModelChange(id);
     }
