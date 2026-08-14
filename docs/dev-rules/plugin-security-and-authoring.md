@@ -183,8 +183,13 @@ manifest 的 `tool` 槽只回答"这个插件**能**暴露哪些工具"。装入
    `ghost_call` 只是调用方之一，还有 `ghosts:*` IPC 的 `call` action、定时任务脚本
    通道（`scheduler-host/script-capability-broker.ts`）和 github-issue 内部提交器
    直接打派发器。拦在 MCP 门面层等于没拦。审批策略枚举里没有 deny 档，因此
-   `mcp-tool-approval-policy.ts` 对 `blocked` 只当作"不免审批"，不得返回
-   `prompt-each-time`（那等于允许用户点同意，把禁用变成可绕过）。
+   `mcp-tool-approval-policy.ts` 对 `blocked` 同样返回 `prompt-each-time`（与
+   `needs-approval` 同一分支，只当作"不免审批"，不是硬拒）——**必须**是
+   `prompt-each-time`，不能落回 `prompt`：后者会把判定交回 agent 自己的权限链，
+   用户在权限卡上点一次「不再询问」就会持久化成 user/project 级授权；等这个工具
+   后续被解禁、档位改回 `needs-approval` 时，那条旧授权仍然生效，会绕过插件页新选
+   的"每次询问"。真正的硬拒永远由派发器兜底，这一层只负责不让持久化授权在解禁之后
+   留下后门。
 4. **`grant_only` 是唯一走不到派发器的支路，它的收口在
    `mcp-integrations/ghost.ts`。** 它只过户不派发，协议上忽略 `tool` 字段，所以判据
    落在插件层：工具被用户全禁时不存在任何合法的后续调用，预授权只剩"绕过禁用把文件
