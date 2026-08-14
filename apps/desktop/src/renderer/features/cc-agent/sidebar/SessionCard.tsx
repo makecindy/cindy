@@ -175,6 +175,10 @@ export function SessionCard({
           : remoteActivity.phase === 'running'
             ? ('running' as const)
             : ('done' as const);
+  // 左侧 vendor mark 呼吸原先只看本地 running 集;远程会话的运行态只进了右侧
+  // 状态槽。只并入 phase=running,与 SessionItem / 折叠 rail 同一口径;
+  // needs-interaction 继续由右侧 awaiting 表达。
+  const leftIconRunning = isRunning || remoteActivity?.phase === 'running';
   const rightStatusKind =
     remoteRightStatus ??
     resolveSidebarRightStatus({
@@ -557,7 +561,7 @@ export function SessionCard({
     <span className={CARD_TITLE_STATUS_SLOT_CLASS} aria-hidden>
       <SessionStatusIcon
         session={session}
-        isRunning={isRunning}
+        isRunning={leftIconRunning}
         isAttached={isAttached}
         hasAttentionNotification={hasAttentionNotification}
         isActive={isActive}
@@ -655,10 +659,9 @@ export function SessionCard({
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
       className={cn(
-        'group/card relative w-full overflow-hidden text-left',
-        splitDragEnabled && !needsSplitDragHandle
-          ? 'cursor-grab active:cursor-grabbing'
-          : 'cursor-pointer',
+        // 侧栏任务本身是可点击导航。拖拽能力不改变 hover 光标；
+        // grab 只在真正拖动中由 Sortable / 系统拖拽态负责。
+        'group/card relative w-full overflow-hidden text-left cursor-pointer',
         variant === 'list'
           ? cn(
               // 扁平行(类 Telegram / 对话列表):无描边、无卡片底色,仅 hover/active 行底色。
@@ -719,10 +722,7 @@ export function SessionCard({
               data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
               data-no-drag={splitDragHandleActive ? 'true' : undefined}
               draggable={splitDragHandleActive}
-              className={cn(
-                'relative flex h-5 min-w-0 flex-1 items-center gap-0',
-                splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
-              )}
+              className="relative flex h-5 min-w-0 flex-1 items-center gap-0"
             >
               <span className="flex shrink-0 items-center">{titlePrefixNode}</span>
               {isEditing ? (
@@ -827,7 +827,6 @@ export function SessionCard({
             className={cn(
               'mt-1 overflow-hidden text-11 leading-[1.45]',
               '[display:-webkit-box] [-webkit-line-clamp:1] [-webkit-box-orient:vertical]',
-              splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
               rightStatusKind !== 'time' && 'pr-5',
               awaitingText
                 ? isActive
@@ -917,10 +916,7 @@ export function SessionCard({
             data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
             data-no-drag={splitDragHandleActive ? 'true' : undefined}
             draggable={splitDragHandleActive}
-            className={cn(
-              'relative',
-              splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
-            )}
+            className="relative"
           >
             <div
               className={cn(
@@ -972,7 +968,6 @@ export function SessionCard({
                 'mt-[4px] text-11 leading-[1.4]',
                 '[display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden',
                 'text-[var(--text-secondary)]',
-                splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
               )}
               style={{ WebkitLineClamp: cardPreviewLineClamp }}
             >
@@ -992,7 +987,7 @@ export function SessionCard({
           >
             <SessionStatusIcon
               session={session}
-              isRunning={isRunning}
+              isRunning={leftIconRunning}
               isAttached={isAttached}
               hasAttentionNotification={hasAttentionNotification}
               isActive={isActive}

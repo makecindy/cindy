@@ -12,6 +12,7 @@ import {
   membershipSyncId,
   type ContactsDataSnapshot,
   type ContactsStampedValue,
+  type ContactsSyncConflictMembership,
   type ContactsSyncEntity,
   type ContactsSyncStamp,
   type ContactsSyncState,
@@ -133,12 +134,7 @@ function isContact(value: unknown): boolean {
     )
   )
     return false;
-  if (
-    !isStamped(value.status, (v): v is "confirmed" | "pending" =>
-      isContactStatus(v),
-    )
-  )
-    return false;
+  if (!isStatus(value.status)) return false;
   if (
     !isStamped(value.source, (v): v is "manual" | "agent" | "import" =>
       isContactSource(v),
@@ -150,6 +146,45 @@ function isContact(value: unknown): boolean {
   if (!isStamped(value.updatedAt, (v): v is string => isString(v, 64, false)))
     return false;
   return value.deleted === undefined || isStamp(value.deleted);
+}
+
+function isConflictMembership(
+  value: unknown,
+): value is ContactsSyncConflictMembership {
+  return (
+    isRecord(value) &&
+    isString(value.platform, 32, false) &&
+    /^[a-z0-9_-]+$/.test(value.platform as string) &&
+    isString(value.normalizedValue, MAX_NORMALIZED_IDENTITY_VALUE_LEN, false) &&
+    isString(value.membershipHash, 64, false) &&
+    /^[a-f0-9]{64}$/.test(value.membershipHash as string)
+  );
+}
+
+function isStatus(value: unknown): boolean {
+  if (
+    !isStamped(value, (candidate): candidate is "confirmed" | "pending" =>
+      isContactStatus(candidate),
+    )
+  ) {
+    return false;
+  }
+  if (!isRecord(value) || value.acknowledgedConflicts === undefined)
+    return true;
+  if (
+    !Array.isArray(value.acknowledgedConflicts) ||
+    value.acknowledgedConflicts.length > CONTACTS_SYNC_MAX_ROWS_PER_TABLE
+  ) {
+    return false;
+  }
+  const keys = new Set<string>();
+  for (const membership of value.acknowledgedConflicts) {
+    if (!isConflictMembership(membership)) return false;
+    const key = `${membership.platform}\u0000${membership.normalizedValue}`;
+    if (keys.has(key)) return false;
+    keys.add(key);
+  }
+  return true;
 }
 
 function isIdentity(value: unknown): value is {
@@ -166,11 +201,7 @@ function isIdentity(value: unknown): value is {
     isString(value.platform, 32, false) &&
     /^[a-z0-9_-]+$/.test(value.platform) &&
     isString(value.value, DEFAULT_CONTACTS_CONFIG.maxIdentityValueLen, false) &&
-    isString(
-      value.normalizedValue,
-      MAX_NORMALIZED_IDENTITY_VALUE_LEN,
-      false,
-    ) &&
+    isString(value.normalizedValue, MAX_NORMALIZED_IDENTITY_VALUE_LEN, false) &&
     isUnboundedLocalText(value.label) &&
     isUnboundedLocalText(value.note) &&
     isString(value.createdAt, 64, false)
@@ -384,8 +415,14 @@ export function isValidContactsSyncState(
   )
     return false;
   const contactIds = new Set<string>();
+  let acknowledgedConflictCount = 0;
   for (const contact of value.contacts) {
     if (!isContact(contact) || contactIds.has((contact as { id: string }).id))
+      return false;
+    acknowledgedConflictCount +=
+      (contact as { status: { acknowledgedConflicts?: unknown[] } }).status
+        .acknowledgedConflicts?.length ?? 0;
+    if (acknowledgedConflictCount > CONTACTS_SYNC_MAX_ROWS_PER_TABLE)
       return false;
     contactIds.add((contact as { id: string }).id);
   }

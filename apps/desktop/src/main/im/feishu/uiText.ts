@@ -13,6 +13,7 @@
 
 import type { IMUnsupportedEntry } from '@cindy/im';
 
+import { t } from '../../i18n';
 import type { ImUiTextPack } from '../shared/types';
 
 export const ui = {
@@ -92,16 +93,8 @@ export const ui = {
   error: {
     agentUnsupported:
       '🤔 当前选择的 Agent 在这个渠道需要逐条权限确认，暂时上不了场，换一个 Agent 再试~',
-    permissionModeUnsupported: (permissionMode: string) => {
-      // 「完全访问」已由渠道设置显式放行(护栏取缔), 这里实际只剩
-      // acceptEdits(自动接受编辑)会被群强确认策略拒绝 — 按档位点名报错。
-      const modeLabel =
-        permissionMode === 'acceptEdits' ? '「自动接受编辑」' : '当前权限档';
-      return (
-        `⚠️ 群/话题会话不能用${modeLabel} — 群上下文里有成员可控的内容，必须保留操作确认。\n` +
-        '我往你私聊发了张修复卡，去点一下切回「自动审批」就能继续~（也可以发 /permission 手动切）'
-      );
-    },
+    permissionModeUnsupported: () =>
+      t('settings.imBot.defaults.permissionModeUnsupportedOnChannelHint'),
   },
 
   // ── card text (sent via @cindy/im InteractiveCardSpec) ──────────────────────

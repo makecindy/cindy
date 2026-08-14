@@ -57,6 +57,7 @@ import type {
   IMMessageEvent,
   IMStatus,
 } from '@cindy/im';
+import { getResolvedMainLocale, setMainLocale } from '../../../i18n';
 import { buildFeishuAdapter } from '../adapter';
 import { formatHistoryTime } from '../groupContext';
 
@@ -134,6 +135,27 @@ describe('feishu ImChannelAdapter characterization', () => {
   it('channel / source 恒为 feishu', () => {
     expect(adapter.channel).toBe('feishu');
     expect(adapter.sessions.source).toBe('feishu');
+  });
+
+  it('权限模式不兼容提示在发送时跟随当前语言', () => {
+    const originalLocale = getResolvedMainLocale();
+    const copy = adapter.ui.error?.permissionModeUnsupported;
+    expect(copy).toBeTypeOf('function');
+    if (typeof copy !== 'function') throw new Error('missing permission mode copy');
+
+    try {
+      setMainLocale('en');
+      expect(copy('acceptEdits')).toBe(
+        'The current Agent cannot run on this channel in this permission mode, so messages cannot be processed. Send /permission to choose a supported mode.',
+      );
+
+      setMainLocale('zh-CN');
+      expect(copy('acceptEdits')).toBe(
+        '当前 Agent 不支持以此权限模式在该渠道运行，消息将无法处理。请发送 /permission 调整权限模式。',
+      );
+    } finally {
+      setMainLocale(originalLocale);
+    }
   });
 
   it('session id 格式 feishu_{botAppId}_{openId} — 跨重启稳定, 老用户续上历史', () => {

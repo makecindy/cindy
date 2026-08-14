@@ -214,7 +214,8 @@ describe('withCodexUpstreamRecording', () => {
     const { buildUserProvider } = await import('@cindy/model-providers');
     const { setCustomProviders } = await import('../active-catalog.js');
     const { setCustomProviderKeyReader } = await import('../provider-route.js');
-    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { setSessionProvider, clearSessionProvider } =
+      await import('../session-provider-store.js');
     setCustomProviders([
       buildUserProvider({
         id: 'kimi-moonshot',
@@ -527,6 +528,75 @@ describe('decideCodexRoute', () => {
 });
 
 describe('chatBridgeCapabilitiesForRoute', () => {
+  it('fails closed before a pending target reaches the old custom local bridge', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const {
+      setCustomProviderKeyReader,
+      setPendingCredentialSwitchReader,
+    } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://provider-a.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'shared-model', name: 'Shared Model' }],
+          },
+        },
+      }),
+    ]);
+    const readKey = vi.fn(() => 'provider-a-key');
+    setCustomProviderKeyReader(readKey);
+    setPendingCredentialSwitchReader(() => ({
+      model: 'shared-model',
+      providerId: 'provider-b',
+    }));
+    host.registerComposed('session-pending-bridge', 'thread-pending-bridge', 'PRODUCT_PROMPT');
+    setSessionProvider('session-pending-bridge', 'provider-a');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const body = { model: 'shared-model', input: [{ role: 'user', content: 'hello' }] };
+      const ctx = {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-pending-bridge' },
+      };
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(body, ctx));
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      expect(readKey).not.toHaveBeenCalled();
+      expect(mockState.createResponsesChatHandler).not.toHaveBeenCalled();
+
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision!.localHandler!({
+        rawBody: Buffer.from(JSON.stringify(body)),
+        parsedBody: body,
+        ctx,
+        res: { writeHead, end } as never,
+      });
+      expect(writeHead).toHaveBeenCalledWith(
+        503,
+        expect.objectContaining({ 'retry-after': '1' }),
+      );
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: { code: 'provider_switch_pending' },
+      });
+    } finally {
+      host.unregister('session-pending-bridge');
+      clearSessionProvider('session-pending-bridge');
+      setPendingCredentialSwitchReader(() => undefined);
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('does not forward unsupported passthrough fields into the translator', async () => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
     const capabilities = chatBridgeCapabilitiesForRoute(
