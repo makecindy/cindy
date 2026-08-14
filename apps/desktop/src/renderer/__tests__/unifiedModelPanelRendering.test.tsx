@@ -246,9 +246,10 @@ describe('统一模型选择器面板', () => {
     expect(opusTriple?.textContent).toContain('中');
     expect(opusTriple?.getAttribute('title')).toContain('Claude');
 
-    // 网关上的 GPT-5.5 同时在 cc / codex 下:推荐引擎按条目判定落 Claude(非折扣路由)。
+    // 网关上的 GPT-5.5 同时在 cc / codex 下:gpt 家族主场 codex,推荐随主场
+    // (2026-08-14 改判 —— 此前落 null 走 cc 优先回落,整列显示「底座 Claude」)。
     const gptTriple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
-    expect(gptTriple?.getAttribute('title')).toContain('Claude');
+    expect(gptTriple?.getAttribute('title')).toContain('Codex');
   });
 
   it('hover 行弹出配置浮层,只列该行的候选引擎', async () => {
@@ -271,14 +272,14 @@ describe('统一模型选择器面板', () => {
     });
     const flyout = await screen.findByTestId('unified-model-config-flyout');
     await act(async () => {
-      fireEvent.click(flyout.querySelector('[data-engine-capsule="codex"]') as HTMLElement);
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
     });
-    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('codex');
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
     await waitFor(() => {
       const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
-      expect(triple?.getAttribute('title')).toContain('Codex');
-      // codex 那条目录条目的默认档是 high(cc 那条是 medium)—— 能力按引擎现查。
-      expect(triple?.textContent).toContain('高');
+      expect(triple?.getAttribute('title')).toContain('Claude');
+      // cc 那条目录条目的默认档是 medium(codex 那条是 high)—— 能力按引擎现查。
+      expect(triple?.textContent).toContain('中');
     });
     // 已自定义 → 底栏出现「恢复推荐」。
     expect(within(await screen.findByTestId('unified-model-config-flyout')).getByText('恢复推荐'))
@@ -307,7 +308,8 @@ describe('统一模型选择器面板', () => {
     await act(async () => {
       fireEvent.click(rowFor('GPT-5.5'));
     });
-    expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'medium');
+    // 生效引擎按家族主场落 codex,档位取 codex 条目的默认 high。
+    expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'high');
   });
 
   it('← 键打开该行的配置浮层(键盘入口)', async () => {
@@ -380,6 +382,26 @@ describe('统一面板 · 会话内形态', () => {
     });
   });
 
+  it('会话内选中行的引擎胶囊 = 跨引擎切换事务,不预写全局 override', async () => {
+    // 2026-08-14:选中行强制按会话引擎显示,只写 override 的话显示纹丝不动(假按钮);
+    // 且用户取消切换确认时不该留下任何全局痕迹。
+    renderPanel({ sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5' });
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      targetAgent: 'claude-code',
+      effort: 'medium',
+    });
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  });
+
   it('同引擎行照常走 onSelect(无损直切)', async () => {
     renderPanel({ sessionEngineFilter, currentProviderId: 'anthropic', modelId: 'claude-opus-5' });
     await act(async () => {
@@ -412,12 +434,29 @@ describe('统一面板 · 新会话选中直通', () => {
     expect(onUnifiedSelect).toHaveBeenCalledWith({
       providerId: 'xd',
       modelId: 'gpt-5.5',
-      effort: 'medium',
-      // 推荐引擎(该条目的生效来源主 root)= cc;草稿换引擎无损,直接落。
-      engine: 'cc',
+      // 推荐引擎 = gpt 家族主场 codex;草稿换引擎无损,直接落(档位取 codex 条目默认)。
+      engine: 'codex',
+      effort: 'high',
       fast: false,
       favoriteUid: null,
     });
+  });
+
+  it('草稿选中行的引擎胶囊:override 落库 + 新引擎整份配置立即写回草稿', async () => {
+    // 草稿换引擎无损:选中行按草稿引擎强制显示,胶囊点完必须把草稿一起切过去,
+    // 否则显示纹丝不动(假按钮)。
+    renderPanel({ onUnifiedSelect, currentProviderId: 'xd', modelId: 'gpt-5.5' });
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+    expect(onUnifiedSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'xd', modelId: 'gpt-5.5', engine: 'cc', effort: 'medium' }),
+    );
   });
 
   it('引擎 override 生效后,直通回传的是 override 后的引擎(不是推荐)', async () => {
@@ -539,30 +578,30 @@ describe('统一面板 · 实测回归', () => {
   });
 
   it('「恢复推荐」删掉 override,行与浮层当场回落推荐引擎', async () => {
-    setModelEngineOverride('xd', 'gpt-5.5', 'codex');
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
     renderPanel();
-    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('codex');
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
     await act(async () => {
       fireEvent.pointerEnter(rowFor('GPT-5.5'));
     });
     const flyout = await screen.findByTestId('unified-model-config-flyout');
-    expect(flyout.querySelector('[data-engine-capsule="codex"]')?.getAttribute('data-engine-active'))
+    expect(flyout.querySelector('[data-engine-capsule="cc"]')?.getAttribute('data-engine-active'))
       .toBe('true');
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
     // 1) override 表真的删了(不是写了一份「等于推荐」的快照)
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
-    // 2) 浮层内引擎胶囊回到推荐项,底栏不再是「已自定义」
+    // 2) 浮层内引擎胶囊回到推荐项(家族主场 codex),底栏不再是「已自定义」
     await waitFor(() => {
       const current = screen.getByTestId('unified-model-config-flyout');
-      expect(current.querySelector('[data-engine-capsule="cc"]')?.getAttribute('data-engine-active'))
+      expect(current.querySelector('[data-engine-capsule="codex"]')?.getAttribute('data-engine-active'))
         .toBe('true');
       expect(within(current).queryByText('恢复推荐')).toBeNull();
     });
     // 3) 行内三元组跟着回落
     const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
-    expect(triple?.getAttribute('title')).toContain('Claude');
+    expect(triple?.getAttribute('title')).toContain('Codex');
   });
 
   it('浮层贴着面板左外侧,不会飘到远处', async () => {

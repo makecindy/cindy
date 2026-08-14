@@ -56,7 +56,7 @@ import {
   type ProviderView,
 } from './registry.js';
 import { deriveModelList, type ProviderScope } from './modelList.js';
-import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX, isBudgetModel } from './classification.js';
+import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX, groupOf, isBudgetModel } from './classification.js';
 import type { AgentKind, CatalogModel, Effort, Provider } from './types.js';
 
 /**
@@ -260,14 +260,18 @@ export function candidateAgentsForModel(
  * (`partitionEntriesByNativeAgent` 只降级「主场明确在别处」的行)。推荐引擎照常由
  * `pickRecommendedAgent` 的候选回落链兜底,不受影响。
  *
- * 取值来源:内置 root 表(只标确有主场的)→ 折扣条目判 codex → null。
+ * 取值来源:内置 root 表(只标确有主场的)→ 折扣条目判 codex → **厂商家族**
+ * (`groupOf`:anthropic 家族 → claude-code,gpt 家族 → codex)→ null。
  *
- * **网关(XD)非折扣行也是 null**:网关同时服务三个面,root 概念不适用(host 侧 xd 同样
- * 不入 MODEL_PLANE_POLICIES)。旧版曾按「/v1/messages 翻译面覆盖最广」代理成 cc,但那
- * 不是主场事实,还带来两个错:XD 上的 GPT 非折扣行在 codex 视图被降级;device-link 投影
- * 剥掉 authStrategy 后网关判定失败,本地/远程排序不一致。判定链里因此**没有任何依赖
- * `routing.authStrategy` 的分支**,两端天然同结果。服务端目录未来按条目下发 nativeAgent
- * 字段时,以数据覆盖此推导。
+ * 家族这一层是 2026-08-14 补的:主场是**按模型**说的,不随来源变 —— 网关上的
+ * `claude-opus-5` 主场仍是 claude-code,`gpt-5.6-luna` 主场仍是 codex。没有这一层,
+ * 网关行全部落 null,推荐只能走「候选里 cc 优先」的回落链,产出两类批量错配:
+ * GPT 非折扣行整列显示「底座 Claude」;cc 一旦掉出候选(运行时探测抖动 / 远端不带
+ * cc),Claude 行整列翻成 Codex(Chris 实测「很吓人」的那个现象)。判定复用
+ * classification 的既有分类(目录 `group` 优先、id 前缀兜底),**纯条目数据**,不碰
+ * `routing.authStrategy` —— device-link 投影两端同结果的不变量保持。grok / 国产 /
+ * BYOM 判不出家族的仍落 null(grok 三栖不许被硬派主场,裁决不变)。服务端目录未来
+ * 按条目下发 nativeAgent 字段时,以数据覆盖此推导。
  */
 export function nativeAgentForProviderModel(
   provider: Provider | ProviderView | undefined,
@@ -291,6 +295,13 @@ export function nativeAgentForProviderModel(
       })
     : isBudgetModel({ id: normalizedId });
   if (budget) return 'codex';
+  // 厂商家族(见函数头):目录 group 优先、id 前缀兜底,与徽章/分组同一份判定,不另造。
+  const family = groupOf({
+    id: normalizedId,
+    ...(probe?.group !== undefined ? { group: probe.group } : {}),
+  });
+  if (family === 'anthropic') return 'claude-code';
+  if (family === 'gpt' || family === 'gpt-budget') return 'codex';
   return null;
 }
 

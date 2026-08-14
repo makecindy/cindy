@@ -470,6 +470,12 @@ export function UnifiedModelPanel({
   }, [closeFlyout, interactionDisabled]);
 
   // ── 行配置合成 ────────────────────────────────────────────────────────────
+  // 「正在用的引擎」的单一口径:会话内以 sessionAgent 为准(已确认的会话引擎;
+  // liveAgentKind 在元数据未到时可能回退成 cc),草稿才用 liveAgentKind(= 草稿 vendor)。
+  // isLiveRow 与选中行的 forceEngine 必须用**同一个**口径,否则强制显示出来的引擎
+  // 反而让 isLiveRow 判不中(2026-08-14 测试当场抓到)。
+  const liveEngineAgent = sessionAgent ?? liveAgentKind;
+
   /** 这一行是不是**当前会话 / 草稿正在用的那一行**(来源 + 模型 + 引擎三者都对上)。 */
   const isLiveRow = useCallback(
     (entry: UnifiedModelEntry, config: UnifiedRowConfig): boolean =>
@@ -477,8 +483,19 @@ export function UnifiedModelPanel({
       // (entryMatchesModelId),否则合并行之后选中的模型在列表里不高亮。
       entryMatchesModelId(entry, selected.modelId) &&
       (selected.providerId === null || selected.providerId === entry.providerId) &&
-      (liveAgentKind === null || liveAgentKind === config.agent),
-    [liveAgentKind, selected.modelId, selected.providerId],
+      (liveEngineAgent == null || liveEngineAgent === config.agent),
+    [liveEngineAgent, selected.modelId, selected.providerId],
+  );
+
+  // 选中的收藏锚点**必须仍然存在**才算数(规格 §1.5「删除选中条目时选中回落到对应模型
+  // 默认」)。同一条兜底也覆盖切账号:收藏 store 按 dataOwnerId 分区,换号后旧 uid 在新
+  // 分区里查无此条 —— 不做这层解析就会两头落空(收藏行没了、模型行的勾又被抑制)。
+  const activeFavoriteUid = useMemo(
+    () =>
+      selectedFavoriteUid && favorites.some((item) => item.uid === selectedFavoriteUid)
+        ? selectedFavoriteUid
+        : null,
+    [favorites, selectedFavoriteUid],
   );
 
   const configOf = useCallback(
@@ -490,6 +507,13 @@ export function UnifiedModelPanel({
       // 两个版本号只作重算触发器:store 是模块级单例,值本身不进依赖。
       void enginePrefsVersion;
       void memoryVersion;
+      // 当前草稿 / 会话**实际在用**的模型行:引擎显示强制与事实一致(正在跑什么就画
+      // 什么),不受推荐 / override / pinned 摆布 —— 2026-08-14 实测抓到草稿在 pi 上跑
+      // DeepSeek,行上却按推荐回落显示「Claude」。收藏被选中时不强制(live 的是那条收藏)。
+      const isSelectedModelRow =
+        !activeFavoriteUid &&
+        entryMatchesModelId(entry, selected.modelId) &&
+        (selected.providerId === null || selected.providerId === entry.providerId);
       const base = resolveUnifiedRowConfig({
         entry,
         engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
@@ -499,9 +523,13 @@ export function UnifiedModelPanel({
         memoryFast: (agent) =>
           modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
         agentFastModeCapable,
-        // 会话内:两边都能跑的模型默认落在**当前会话引擎**上(无损直切);用户显式
-        // override 仍然优先(见 resolveUnifiedRowConfig 的 pinnedEngine 注释)。
+        // 会话内:无主场(或主场就在当前引擎)的模型默认落在**当前会话引擎**上(无损
+        // 直切);主场在别处的行保持主场显示。用户显式 override 仍然优先(见
+        // resolveUnifiedRowConfig 的 pinnedEngine 注释)。
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
+        ...(isSelectedModelRow && liveEngineAgent
+          ? { forceEngine: engineOfAgentKind(liveEngineAgent) }
+          : {}),
       });
       // **选中行读 live 值**,不读全局记忆:已建会话的深度 / Fast 由 DB / runtime 权威,
       // 其它对话改同一个模型的全局预设不该改写正在跑的这一条(与旧版 rowEffortOf /
@@ -525,27 +553,21 @@ export function UnifiedModelPanel({
       };
     },
     [
+      activeFavoriteUid,
       agentFastModeCapable,
       enginePrefsVersion,
       fastMode,
       isLiveRow,
+      liveEngineAgent,
       memoryVersion,
       modelMemory,
+      selected.modelId,
+      selected.providerId,
       selectedEffort,
       sessionAgent,
     ],
   );
 
-  // 选中的收藏锚点**必须仍然存在**才算数(规格 §1.5「删除选中条目时选中回落到对应模型
-  // 默认」)。同一条兜底也覆盖切账号:收藏 store 按 dataOwnerId 分区,换号后旧 uid 在新
-  // 分区里查无此条 —— 不做这层解析就会两头落空(收藏行没了、模型行的勾又被抑制)。
-  const activeFavoriteUid = useMemo(
-    () =>
-      selectedFavoriteUid && favorites.some((item) => item.uid === selectedFavoriteUid)
-        ? selectedFavoriteUid
-        : null,
-    [favorites, selectedFavoriteUid],
-  );
   const isSelectedRow = useCallback(
     (anchor: UnifiedAnchor, entry: UnifiedModelEntry): boolean => {
       if (anchor.kind === 'fav') return activeFavoriteUid === anchor.uid;
@@ -590,6 +612,18 @@ export function UnifiedModelPanel({
     onSelect,
     sessionEngineFilter,
     sessionAgent,
+    // 「假设引擎 override = engine」的行配置:目标引擎的 wire id / 深度记忆 / Fast 记忆
+    // 一次解析齐(applyEngine 的选中行分支用,详见 useUnifiedRowActions)。
+    resolveEngineConfig: (entry, engine) =>
+      resolveUnifiedRowConfig({
+        entry,
+        engineOverride: engine,
+        memoryEffort: (agent) =>
+          modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
+        memoryFast: (agent) =>
+          modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
+        agentFastModeCapable,
+      }),
     onFavoriteFlash: flashFavorite,
     onBeforeRemoveFavorite: (anchor) => {
       if (sameAnchor(flyAnchor, anchor)) closeFlyout();
@@ -884,7 +918,7 @@ export function UnifiedModelPanel({
                 effortLabelOf={effortLabelOf}
                 justFavorited={justFavorited === anchorKey(target.anchor)}
                 disabled={interactionDisabled}
-                onEngineChange={(engine) => applyEngine(target.anchor, engine)}
+                onEngineChange={(engine) => applyEngine(target.anchor, target.entry, config, engine)}
                 onEffortChange={(effort) =>
                   applyEffort(target.anchor, target.entry, config, effort)
                 }

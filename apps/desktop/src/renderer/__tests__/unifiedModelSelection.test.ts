@@ -405,12 +405,15 @@ describe('buildUnifiedListSections', () => {
 });
 
 describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
+  // pinned 的适用面是**无主场**(nativeAgent=null)的行:grok / 国产 / BYOM 这类
+  // 全场平等的模型,会话内默认落在当前引擎上才是无损直切。
   const dual = entryOf({
     providerId: 'xd',
-    modelId: 'gpt-5.5',
-    displayName: 'GPT-5.5',
+    modelId: 'deepseek/deepseek-v4-pro',
+    displayName: 'DeepSeek V4 Pro',
     candidates: ['claude-code', 'codex'],
     recommended: 'claude-code',
+    nativeAgent: null,
     capabilities: {
       'claude-code': capability('claude-code'),
       codex: capability('codex', { efforts: ['low', 'high'], defaultEffort: 'high' }),
@@ -422,6 +425,7 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
     displayName: 'GPT-5.5 折扣',
     candidates: ['codex'],
     recommended: 'codex',
+    nativeAgent: 'codex',
     capabilities: { codex: capability('codex') },
   });
 
@@ -447,6 +451,48 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
     expect(config.customized).toBe(false);
   });
 
+  it('主场在别处的行**不跟随** pinned:codex 会话里 Claude 行仍显示 claude-code 主场', () => {
+    // Chris 2026-08-14 实测:codex 会话打开面板,Claude 模型整列被标成 Codex,「像被
+    // 批量改了配置」,且选中会静默骑 bridge。主场明确的行保持主场,选中走跨引擎切换。
+    const claude = entryOf({
+      providerId: 'xd',
+      candidates: ['claude-code', 'codex'],
+      recommended: 'claude-code',
+      nativeAgent: 'claude-code',
+      capabilities: { 'claude-code': capability('claude-code'), codex: capability('codex') },
+    });
+    const config = resolveUnifiedRowConfig({ entry: claude, pinnedEngine: 'codex' });
+    expect(config.engine).toBe('cc');
+    // 主场就是会话引擎的行照常 pinned(等价于推荐,行为不变)。
+    const gpt = entryOf({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      candidates: ['claude-code', 'codex'],
+      recommended: 'codex',
+      nativeAgent: 'codex',
+      capabilities: { 'claude-code': capability('claude-code'), codex: capability('codex') },
+    });
+    expect(resolveUnifiedRowConfig({ entry: gpt, pinnedEngine: 'codex' }).engine).toBe('codex');
+    // 显式 override 仍是最高优先:确要「Claude 骑 codex」的,浮层里点过胶囊就照显示。
+    expect(
+      resolveUnifiedRowConfig({ entry: claude, pinnedEngine: 'codex', engineOverride: 'codex' })
+        .engine,
+    ).toBe('codex');
+  });
+
+  it('forceEngine(选中行)压过 override 与 pinned:显示与正在跑的事实一致', () => {
+    const forced = resolveUnifiedRowConfig({
+      entry: dual,
+      engineOverride: 'codex',
+      pinnedEngine: 'codex',
+      forceEngine: 'cc',
+    });
+    expect(forced.engine).toBe('cc');
+    // 不在候选内的 forceEngine 忽略(防御脏数据),回落正常链。
+    const ignored = resolveUnifiedRowConfig({ entry: codexOnly, forceEngine: 'pi' });
+    expect(ignored.engine).toBe('codex');
+  });
+
   it('同引擎视图按**候选**过滤模型(能留在本会话引擎上的都算无损)', () => {
     const sections = buildUnifiedListSections({
       entries: [dual, codexOnly],
@@ -456,15 +502,20 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
       rail: { kind: 'engine', agent: 'claude-code' },
     });
     const ids = sections.flatMap((s) => s.rows.map((r) => r.entry.modelId));
-    expect(ids).toEqual(['gpt-5.5']);
+    expect(ids).toEqual(['deepseek/deepseek-v4-pro']);
   });
 
   it('同引擎视图里收藏按**条目自己存的引擎**过滤', () => {
-    const favCc = favoriteOf({ uid: 'fav-1', providerId: 'xd', modelId: 'gpt-5.5', agent: 'cc' });
+    const favCc = favoriteOf({
+      uid: 'fav-1',
+      providerId: 'xd',
+      modelId: 'deepseek/deepseek-v4-pro',
+      agent: 'cc',
+    });
     const favCodex = favoriteOf({
       uid: 'fav-2',
       providerId: 'xd',
-      modelId: 'gpt-5.5',
+      modelId: 'deepseek/deepseek-v4-pro',
       agent: 'codex',
     });
     const sections = buildUnifiedListSections({
@@ -487,7 +538,7 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
       rail: { kind: 'all' },
     });
     const ids = sections.flatMap((s) => s.rows.map((r) => r.entry.modelId));
-    expect(ids).toEqual(['gpt-5.5', 'codex/gpt-5.5']);
+    expect(ids).toEqual(['deepseek/deepseek-v4-pro', 'codex/gpt-5.5']);
   });
 });
 

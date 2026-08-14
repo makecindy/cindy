@@ -362,13 +362,16 @@ describe('nativeAgentForProviderModel(原生底座)', () => {
     expect(recommendedAgentForModel([codexOnlyClaude], 'anthropic', 'claude-opus-5')).toBe('codex');
   });
 
-  it('网关按条目判:codex/ 折扣 → codex,非折扣 → null(无主场)', () => {
+  it('网关按条目判家族主场:codex/ 折扣与 gpt-* → codex,claude-* → cc,判不出 → null', () => {
     expect(nativeAgentForProviderModel(xd, 'codex/gpt-5.5')).toBe('codex');
-    // 旧版把网关非折扣行代理成 cc(「翻译面覆盖最广」),但那不是主场事实:XD 上的
-    // GPT 非折扣行会在 codex 视图被错误降级,且判定依赖 authStrategy 导致本地/远程
-    // 投影结果不一致 —— 网关行除折扣数据外一律无主场。
-    expect(nativeAgentForProviderModel(xd, 'gpt-5.5')).toBeNull();
-    expect(nativeAgentForProviderModel(xd, 'claude-opus-5')).toBeNull();
+    // 2026-08-14:主场是按**模型家族**说的,不随来源变 —— 网关上的 GPT/Claude 行同样
+    // 有主场(此前全落 null,推荐走「候选里 cc 优先」回落,产出「GPT 整列显示底座
+    // Claude」「cc 掉出候选时 Claude 整列翻成 Codex」两类批量错配,Chris 实测反馈)。
+    expect(nativeAgentForProviderModel(xd, 'gpt-5.5')).toBe('codex');
+    expect(nativeAgentForProviderModel(xd, 'claude-opus-5')).toBe('claude-code');
+    // 家族判不出的(grok / 国产 / 未知)仍是 null:无主场,任何视图不降级(裁决不变)。
+    expect(nativeAgentForProviderModel(xd, 'x-ai/grok-4.6')).toBeNull();
+    expect(nativeAgentForProviderModel(xd, 'deepseek/deepseek-v4-pro')).toBeNull();
   });
 
   it('device-link 投影(routing 无 authStrategy)与本地同结果:判定链不依赖 authStrategy', () => {
@@ -391,9 +394,10 @@ describe('nativeAgentForProviderModel(原生底座)', () => {
       id: 'xd',
       models: { 'claude-code': [m('gpt-5.5-nonbudget', { group: 'gpt' })] },
     });
-    // 与本地 xd 夹具(带 gateway-key)的判定一致:非折扣 → null。
-    expect(nativeAgentForProviderModel(projectedPlain, 'gpt-5.5-nonbudget')).toBeNull();
-    expect(nativeAgentForProviderModel(xd, 'gpt-5.5')).toBeNull();
+    // 与本地 xd 夹具(带 gateway-key)的判定一致:家族判定只看条目数据(group / id 前缀),
+    // 投影剥掉 authStrategy 后两端同结果。
+    expect(nativeAgentForProviderModel(projectedPlain, 'gpt-5.5-nonbudget')).toBe('codex');
+    expect(nativeAgentForProviderModel(xd, 'gpt-5.5')).toBe('codex');
   });
 
   it('用户自定义供应商没有 root 概念 → null(无主场,不降级)', () => {
@@ -456,9 +460,11 @@ describe('recommendedAgentForModel', () => {
     expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('claude-code');
   });
 
-  it('xd 网关:codex/ 前缀 → codex,其余 → claude-code', () => {
+  it('xd 网关:按家族推荐 —— gpt 系(含 codex/ 折扣)→ codex,claude 系 → claude-code', () => {
     expect(recommendedAgentForModel(providers, 'xd', 'codex/gpt-5.5')).toBe('codex');
-    expect(recommendedAgentForModel(providers, 'xd', 'gpt-5.5')).toBe('claude-code');
+    // 2026-08-14 改判:GPT 非折扣行主场也是 codex,推荐随主场(此前落 null 走 cc 优先
+    // 回落,整列「底座 Claude」)。
+    expect(recommendedAgentForModel(providers, 'xd', 'gpt-5.5')).toBe('codex');
     expect(recommendedAgentForModel(providers, 'xd', 'claude-opus-5')).toBe('claude-code');
   });
 
@@ -673,8 +679,10 @@ describe('unifiedModelEntries', () => {
 
   it('`codex/` 折扣行与全价行不合并', () => {
     const entries = unifiedModelEntries({ providers: [xd], isVisible: alwaysVisible });
-    expect(find(entries, 'xd', 'gpt-5.5')?.recommended).toBe('claude-code');
+    // 两行都是 gpt 家族 → 推荐都是 codex,但仍是两行独立条目(价格不同的两个真实商品)。
+    expect(find(entries, 'xd', 'gpt-5.5')?.recommended).toBe('codex');
     expect(find(entries, 'xd', 'codex/gpt-5.5')?.recommended).toBe('codex');
+    expect(find(entries, 'xd', 'gpt-5.5')).not.toBe(find(entries, 'xd', 'codex/gpt-5.5'));
   });
 
   it('同名模型多来源:各来源各出一行,不去重', () => {

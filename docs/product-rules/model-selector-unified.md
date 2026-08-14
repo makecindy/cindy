@@ -77,11 +77,24 @@
 - 推荐引擎 = 模型**生效来源** provider 的主 root(`MODEL_PLANE_POLICIES`:openai→codex、anthropic→claude-code;xd 按 gateway `perAgent`/membership;user provider 按其 runtime)。同名多来源时先 `effectiveSourceIdForModel` 解析生效来源再推导——**禁止读拍平去重后的列表**(registry.ts 明示)。
 - Pi 恒为候选(客户端投影,wire enum 无 pi,维持现状)。
 - **原生底座(排序用,与推荐引擎分离)只标确有主场的,可空**(Chris 2026-08-13 裁决):
-  anthropic→cc、openai→codex、折扣条目→codex;**多 root 全能模型(xai 系)、网关非折扣行、
+  anthropic→cc、openai→codex、折扣条目→codex;**多 root 全能模型(xai 系)与判不出家族的
   BYOM 一律 null = 无主场**——任何引擎视图都不降级,只有「主场明确在别处」的行才降到
   「仅兼容」层。理由:给 grok 这类三栖模型硬选主场,会让它在其余引擎视图被错误降级;
   判定链不依赖 `routing.authStrategy`,device-link 投影下本地/远程排序天然一致。
   服务端未来下发 `nativeAgent` 字段沿用同语义(可空,空=全场平等),数据覆盖客户端推导。
+- **主场按厂商家族补齐,不随来源变**(2026-08-14,Chris 实测「Claude 全列翻成 Codex」后
+  修订):内置 root 表与折扣判定之后,按 classification 既有分类(目录 `group` 优先、id
+  前缀兜底)补一层——anthropic 家族→cc,gpt/gpt-budget 家族→codex,其余仍 null。网关上的
+  `claude-*`/`gpt-*` 行因此有主场;没有这一层时它们全落 null,推荐走「候选里 cc 优先」
+  回落,会产出两类批量错配:GPT 非折扣行整列「底座 Claude」;cc 掉出候选时 Claude 整列
+  翻成 Codex。
+- **会话内落点(pinnedEngine)只对无主场或主场=当前引擎的行生效**(同日修订):主场在
+  别处的行(codex 会话里的 Claude 系)保持显示主场,选中走跨引擎切换确认,不静默骑
+  bridge;确要「Claude 骑 codex」走浮层引擎胶囊(override 恒为最高优先)。
+- **选中行显示以事实为准(forceEngine)**:当前草稿/会话正在用的那一行,引擎三元组强制
+  按实际引擎画(会话取已确认的 sessionAgent,草稿取草稿 vendor),推荐/override/pinned
+  都不得改写它。选中行的引擎胶囊因此有专属语义:草稿=override 落库并把新引擎配置立即
+  写回草稿;会话=改道跨引擎切换事务,取消时不留任何全局 override。
 
 ### 2.2 (模型,引擎) 上下文与能力
 

@@ -137,8 +137,22 @@ export interface ResolveRowConfigArgs {
    * 优先级刻意排在**用户显式 override 之下**:用户在浮层里点过引擎胶囊,那是显式意图,
    * 会话内也要照显示(此时该行就是一次跨引擎选择,由调用方走 performAgentSwitch)。
    * 把 pinned 排在 override 之上会造出「点了没反应」的假按钮。
+   *
+   * **只对「无主场」或「主场就是当前引擎」的行生效**(2026-08-14,Chris 实测反馈):
+   * 主场明确在别处的行(如 codex 会话里的 Claude 系)不跟随会话引擎 —— 否则打开面板
+   * 满屏 Claude 模型全标着 Codex,像被批量改了配置(实际只是显示落点),而且选中它会
+   * 静默骑在当前引擎的 bridge 上跑。这类行保持显示自己的主场,选中时走跨引擎切换
+   * (确认 + 上下文重建的既有事务);确要"Claude 模型骑 codex"的,浮层里显式点引擎
+   * 胶囊(override 仍然最高优先)。
    */
   pinnedEngine?: UnifiedEngine | undefined;
+  /**
+   * **强制引擎**(选中行专用):当前草稿 / 会话**实际在用**的那一行,显示必须与事实
+   * 一致 —— 引擎栏、深度、Fast 全部按正在跑的引擎画,不受推荐 / override / pinned
+   * 影响(override 描述的是"下次选它用什么",不能改写"现在正跑着什么")。
+   * 不在候选内时忽略(理论上选中行的引擎必在候选,防御历史脏数据)。
+   */
+  forceEngine?: UnifiedEngine | undefined;
 }
 
 function pickEffort(
@@ -170,11 +184,19 @@ export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowC
   const overrideUsable =
     engineOverride !== undefined && candidateEngines.includes(engineOverride);
   const pinned =
-    args.pinnedEngine !== undefined && candidateEngines.includes(args.pinnedEngine)
+    args.pinnedEngine !== undefined &&
+    candidateEngines.includes(args.pinnedEngine) &&
+    // 主场明确在别处的行不跟随会话引擎(见 pinnedEngine 注释):codex 会话里 Claude 系
+    // 保持显示 claude-code 主场,选中走跨引擎切换,不静默骑 bridge。
+    (entry.nativeAgent === null || engineOfAgentKind(entry.nativeAgent) === args.pinnedEngine)
       ? args.pinnedEngine
       : undefined;
+  const forced =
+    args.forceEngine !== undefined && candidateEngines.includes(args.forceEngine)
+      ? args.forceEngine
+      : undefined;
   const baseline = pinned ?? engineOfAgentKind(entry.recommended);
-  const engine = overrideUsable ? engineOverride : baseline;
+  const engine = forced ?? (overrideUsable ? engineOverride : baseline);
   const agent = agentKindOfEngine(engine);
   const capability = entry.capabilities[agent] ?? null;
   const effort = pickEffort(capability, memoryEffort?.(agent));
@@ -184,7 +206,9 @@ export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowC
   const customized =
     // 「已自定义」是相对**该行此刻的缺省**说的:会话内 pinned 生效时,落在当前引擎上
     // 是缺省而不是自定义(否则会话里几乎每一行都被标成已自定义,提亮就失去信息量)。
-    (overrideUsable && engine !== baseline) ||
+    // 按 override 本身(而不是 forced 后的 engine)判:选中行被强制显示 live 引擎时,
+    // 用户留过的引擎选择仍应提亮。
+    (overrideUsable && engineOverride !== baseline) ||
     (effort !== null && capability?.defaultEffort != null && effort !== capability.defaultEffort) ||
     fast;
   return {

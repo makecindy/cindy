@@ -31,6 +31,7 @@ import {
 import type { ModelMemoryAccessors } from './ModelSelector';
 import type { UnifiedSelectedRow } from './UnifiedModelPanel';
 import {
+  agentKindOfEngine,
   anchorKey,
   wireModelIdOf,
   type UnifiedAnchor,
@@ -63,6 +64,12 @@ export interface UnifiedRowActionsOptions {
       }
     | undefined;
   sessionAgent?: AgentKind | undefined;
+  /**
+   * 按「假设引擎 override = engine」解析该行的完整配置(目标引擎的 wire id / 深度记忆 /
+   * Fast)。applyEngine 在**选中行**上需要它:草稿把新引擎整份配置落回草稿,会话把
+   * 目标引擎的 wire id / 深度交给跨引擎切换事务。
+   */
+  resolveEngineConfig?: ((entry: UnifiedModelEntry, engine: UnifiedEngine) => UnifiedRowConfig) | undefined;
   /** ☆ 的 0.7s 点亮反馈(计时器在组件里)。 */
   onFavoriteFlash: (anchorKeyValue: string) => void;
   /** 删除收藏前的收尾(如收起绑在该锚点上的浮层)。 */
@@ -70,7 +77,12 @@ export interface UnifiedRowActionsOptions {
 }
 
 export interface UnifiedRowActions {
-  applyEngine: (anchor: UnifiedAnchor, engine: UnifiedEngine) => void;
+  applyEngine: (
+    anchor: UnifiedAnchor,
+    entry: UnifiedModelEntry,
+    config: UnifiedRowConfig,
+    engine: UnifiedEngine,
+  ) => void;
   applyEffort: (
     anchor: UnifiedAnchor,
     entry: UnifiedModelEntry,
@@ -107,14 +119,46 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     onSelect,
     sessionEngineFilter,
     sessionAgent,
+    resolveEngineConfig,
     onFavoriteFlash,
     onBeforeRemoveFavorite,
   } = options;
 
-  const applyEngine: UnifiedRowActions['applyEngine'] = (anchor, engine) => {
+  const applyEngine: UnifiedRowActions['applyEngine'] = (anchor, entry, config, engine) => {
     if (interactionDisabled) return;
     if (anchor.kind === 'fav') {
       updateModelFavorite(anchor.uid, { agent: engine });
+      return;
+    }
+    // **选中行**的引擎胶囊不是普通 override(2026-08-14):它改的是「正在跑什么」——
+    // 选中行强制按 live 引擎显示(UnifiedModelPanel.configOf.forceEngine),只写 override
+    // 的话显示纹丝不动,胶囊就成了假按钮。
+    if (isLiveRow(entry, config)) {
+      const next = resolveEngineConfig?.(entry, engine);
+      if (sessionEngineFilter && sessionAgent !== undefined) {
+        const targetAgent = agentKindOfEngine(engine);
+        if (targetAgent === sessionAgent) return; // 已在该引擎上,无事可做。
+        // 会话内改选中行的引擎 = 一次跨引擎切换:交给 performAgentSwitch 事务(确认弹窗
+        // + 上下文重建)。**不预写全局 override**:用户取消确认时不该留下任何痕迹。
+        sessionEngineFilter.onCrossEngineSelect({
+          providerId: anchor.providerId,
+          modelId: next?.wireModelId ?? anchor.modelId,
+          targetAgent,
+          effort: next?.effort ?? '',
+        });
+        return;
+      }
+      // 草稿的选中行:换引擎无损 —— override 落库,同时把新引擎的整份配置写回草稿
+      // (与选中一行同一条链路),行随之按新引擎显示。
+      setModelEngineOverride(anchor.providerId, anchor.modelId, engine);
+      if (next) {
+        onSelect(anchor.providerId, next.wireModelId ?? anchor.modelId, next.effort ?? '', {
+          engine: next.engine,
+          fast: next.fast,
+          favoriteUid: null,
+          rowModelId: anchor.modelId,
+        });
+      }
       return;
     }
     setModelEngineOverride(anchor.providerId, anchor.modelId, engine);
