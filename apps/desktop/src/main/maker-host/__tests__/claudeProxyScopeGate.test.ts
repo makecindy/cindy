@@ -324,6 +324,57 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     },
   );
 
+  it.each(['openai-responses', 'openai-chat'] as const)(
+    'replaces a text-only model from a custom %s source with the configured vision fallback',
+    async (wireProtocol) => {
+      setCustomProviders([
+        buildUserProvider({
+          id: `text-only-${wireProtocol}`,
+          name: `Text-only ${wireProtocol}`,
+          runtimes: {
+            'claude-code': {
+              baseUrl: 'https://text-only.example/v1',
+              wireProtocol,
+              models: [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+            },
+          },
+        }),
+        buildUserProvider({
+          id: 'vision-provider',
+          name: 'Vision Provider',
+          runtimes: {
+            'claude-code': {
+              baseUrl: 'https://vision.example/v1',
+              wireProtocol: 'openai-responses',
+              models: [{ id: 'vision-model', name: 'Vision Model' }],
+            },
+          },
+        }),
+      ]);
+      setSessionProvider('sess-grok', `text-only-${wireProtocol}`);
+      setCustomProviderKeyReader(() => 'provider-key');
+      visionFallbackSettings.visionFallbackModel = 'vision-model';
+      visionFallbackSettings.visionFallbackProviderId = 'vision-provider';
+      visionFallbackSettings.visionFallbackProviderIds = { 'claude-code': 'vision-provider' };
+
+      const decision = await Promise.resolve(createModelRoutingTransform()(
+        {
+          model: 'deepseek/deepseek-v4-pro',
+          messages: [{
+            role: 'user',
+            content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
+          }],
+        },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
+      ));
+
+      expect(decision).toMatchObject({
+        localHandler: expect.any(Function),
+        responseProviderId: 'vision-provider',
+      });
+    },
+  );
+
   it('uses a custom Responses request path for a vision fallback', async () => {
     setCustomProviders([
       buildUserProvider({
