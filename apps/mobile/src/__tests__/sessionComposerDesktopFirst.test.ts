@@ -50,6 +50,7 @@ describe('mobile session composer desktop-first surface', () => {
     const sharedStyleStart = sharedSource.indexOf('const makeMobileComposerInputRowStyles');
     expect(sharedSource).toContain('const geometricSingleLine = !cardLayout;');
     expect(sharedSource).toContain('geometricSingleLine && styles.rowCollapsedTouch');
+    expect(sharedSource).toContain('geometricSingleLine && styles.mainRowCollapsedTouch');
     expect(sharedSource).toContain('geometricSingleLine && inputFrameMinHeight == null && styles.inputFrameSingleLine');
     expect(sharedSource).toContain('inputFrameSingleLine: {');
     expect(sharedSource).toContain('inputGeometricSingleLine: {');
@@ -116,15 +117,15 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputSource).toContain('cardActive={composerCardActive}');
     expect(composerInputSource).toContain('leading={renderComposerCompactLeading()}');
     expect(source).toContain('const renderComposerCompactLeading = () => (');
-    expect(source).toContain('styles.composerCompactAttachmentSlot');
+    expect(source).not.toContain('styles.composerCompactAttachmentSlot');
     expect(source).toContain('styles.composerCompactAttachmentHit');
     expect(source).not.toContain('styles.composerCompactAttachmentHitArea');
     expect(source).toContain('pointerEvents="none"');
     expect(source).toContain('testID="session.attachmentToggleButton"');
     expect(source).toContain('height: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
     expect(source).toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
-    expect(source).toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
-    expect(source).toContain("position: 'absolute'");
+    expect(source).toContain('marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
+    expect(source).not.toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(composerInputSource).toContain('toolbar={renderComposerToolbar()}');
     expect(source).toContain('const renderComposerToolbar = () => (');
     expect(attachmentButtonSource).toContain('<Plus');

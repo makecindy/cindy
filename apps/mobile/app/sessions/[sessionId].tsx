@@ -6829,7 +6829,6 @@ export default function SessionScreen() {
   // 卡片态仍由 renderComposerToolbar() 渲染同一入口。
   const renderComposerCompactLeading = () => (
     <View style={styles.composerCompactLeading}>
-      <View style={styles.composerCompactAttachmentSlot} />
       <RouteActionButton
         accessibilityHint={composerLayout.attachment.disabledReason ?? composerSendUnavailableReason ?? undefined}
         accessibilityLabel={composerLayout.attachment.active ? composerLayout.attachment.label : t('session.common.openContextPanel')}
@@ -10740,27 +10739,18 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: spacing.xs,
-    height: MOBILE_COMPOSER_CONTROL_SIZE,
+    height: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
     marginRight: spacing.xs,
-    overflow: 'visible',
-    position: 'relative',
-    zIndex: 3,
   },
-  // 流内占位仍是 34pt,避免收起行被 44pt 热区抬高。
-  composerCompactAttachmentSlot: {
-    height: MOBILE_COMPOSER_CONTROL_SIZE,
-    width: MOBILE_COMPOSER_CONTROL_SIZE,
-  },
-  // 接点击的父层本身就是 44×44,绝对居中挂在 34pt 占位上。
+  // 直接父层本身就是 44×44,负 margin 只抵消它对 mainRow 的额外占位。
+  // 可见加号仍是 34pt,与文字 / 麦克风共中线。
   composerCompactAttachmentHit: {
     alignItems: 'center',
     height: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
     justifyContent: 'center',
-    left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2,
-    position: 'absolute',
-    top: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2,
+    marginHorizontal: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2,
+    marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2,
     width: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
-    zIndex: 3,
   },
   composerToolButtonActive: {
     backgroundColor: colors.surfaceChip,

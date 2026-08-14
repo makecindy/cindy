@@ -297,6 +297,7 @@ export function MobileComposerInputRow({
       <View
         style={[
           styles.mainRow,
+          geometricSingleLine && styles.mainRowCollapsedTouch,
           !geometricSingleLine && multilineShape && styles.mainRowMultiline,
           !cardLayout && voicePlacement?.inline && styles.mainRowVoiceInset,
         ]}
@@ -545,6 +546,9 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     gap: MOBILE_COMPOSER_TOOL_GAP,
     minWidth: 0,
     overflow: 'visible',
+  },
+  mainRowCollapsedTouch: {
+    minHeight: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
   },
   mainRowMultiline: {
     alignItems: 'flex-end',
