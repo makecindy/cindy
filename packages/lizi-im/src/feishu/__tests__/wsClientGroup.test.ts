@@ -153,6 +153,7 @@ beforeEach(async () => {
   // 入站去重账本按设计跨 stop/start 保留(重推高发在重连前后), 所以用例之间
   // 想复用同一个 message_id 必须显式清账。
   wsClient.resetInboundDedupeForTest();
+  wsClient.resetOrphanRetriesForTest();
   mocks.options.length = 0;
   mocks.eventHandlers = {};
   vi.clearAllMocks();
@@ -525,6 +526,59 @@ describe('feishu group inbound gate', () => {
       await firstDelivery;
       await vi.advanceTimersByTimeAsync(10_000);
       expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('queued retry survives a same-bot reconnect (re-armed on start)', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      // 10s 重试已排队。
+
+      // 定时器触发前断开 + 同一 bot 重连: stop() 挂起重试, start() 恢复入队。
+      await wsClient.stop({ announceOffline: false, reason: 'test-reconnect-before-retry' });
+      await connect();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('queued retry is not re-armed when a different bot starts', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 定时器触发前断开, 换成别的 bot — 旧 bot 的挂起重试不得恢复。
+      await wsClient.stop({ announceOffline: false, reason: 'test-account-swap-before-retry' });
+      const otherCreds = { appId: 'cli_other_account', appSecret: 'secret', service: 'feishu' as const };
+      const connecting = wsClient.start(otherCreds, { announceLifecycle: false });
+      mocks.options.at(-1)?.onReady?.();
+      await connecting;
+      wsClient.setBotOpenIdForTest(BOT_OPEN_ID);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
       expect(events).toHaveLength(0);
     } finally {
       vi.useRealTimers();

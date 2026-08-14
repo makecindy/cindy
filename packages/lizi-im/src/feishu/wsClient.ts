@@ -128,9 +128,46 @@ interface PendingOrphanRetry {
   openerMessageId: string;
   /** 触发消息 id — 重试成功时重新认领, 抑制冷却后的重投再次进入提示流程。 */
   messageId: string;
+  /** 已尝试次数 — stop() 挂起后恢复时保持退避进度。 */
+  attempt: number;
 }
 
 const orphanNoticeRetries = new Map<string, PendingOrphanRetry>();
+
+/**
+ * stop() 时被挂起的排队重试(定时器已取消, 元数据保留)。同账号重连后由
+ * start() 重新入队 — 否则事件已被 ACK, 重试随 stop 消失, 用户会一直看到
+ * 「思考中」的开场白卡。跨账号不恢复(见 resumeOrphanRetriesFor 的过滤)。
+ */
+interface SuspendedOrphanRetry {
+  botAppId: string;
+  openerMessageId: string;
+  messageId: string;
+  attempt: number;
+}
+const suspendedOrphanRetries: SuspendedOrphanRetry[] = [];
+
+/** 同账号重连后恢复该 bot 被挂起的排队重试(保持退避进度)。 */
+function resumeOrphanRetriesFor(botAppId: string): void {
+  for (let i = suspendedOrphanRetries.length - 1; i >= 0; i--) {
+    const entry = suspendedOrphanRetries[i]!;
+    if (entry.botAppId !== botAppId) continue;
+    suspendedOrphanRetries.splice(i, 1);
+    scheduleOrphanNoticeRetry(
+      entry.botAppId,
+      entry.openerMessageId,
+      entry.messageId,
+      entry.attempt,
+    );
+  }
+}
+
+/** 测试注入口 — 清空挂起/排队重试。生产代码不要调用。 */
+export function resetOrphanRetriesForTest(): void {
+  for (const retry of orphanNoticeRetries.values()) clearTimeout(retry.timer);
+  orphanNoticeRetries.clear();
+  suspendedOrphanRetries.length = 0;
+}
 
 /** 该 opener 的提示是否已成功送达过(首发/重投/重试任一成功 — 终态)。 */
 function wasNoticeDelivered(openerMessageId: string): boolean {
@@ -269,6 +306,7 @@ function scheduleOrphanNoticeRetry(
     botAppId,
     openerMessageId,
     messageId,
+    attempt,
   });
 }
 
@@ -678,6 +716,9 @@ export async function start(
     case 'connected':
       if (currentStatus !== 'connected') setStatus('connected');
       void fetchBotOpenId();
+      // 恢复本 bot 在 stop() 时被挂起的排队重试(同账号重连) — 事件已被
+      // ACK, 不恢复的话孤儿提示/撤回链随断连永久消失。
+      resumeOrphanRetriesFor(creds.appId);
       if (opts.announceLifecycle !== false) {
         void announceLifecycle('online');
       } else {
@@ -769,7 +810,17 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
   strangerNoticeAt.clear();
   orphanNoticeAt.clear();
   orphanNoticeDelivered.clear();
-  for (const retry of orphanNoticeRetries.values()) clearTimeout(retry.timer);
+  // 排队的重试挂起(不丢弃): 事件已被 ACK, 直接取消会让提示永远不再出现 —
+  // 元数据入 suspendedOrphanRetries, 同账号重连后由 start() 恢复入队。
+  for (const retry of orphanNoticeRetries.values()) {
+    clearTimeout(retry.timer);
+    suspendedOrphanRetries.push({
+      botAppId: retry.botAppId,
+      openerMessageId: retry.openerMessageId,
+      messageId: retry.messageId,
+      attempt: retry.attempt,
+    });
+  }
   orphanNoticeRetries.clear();
   // in-flight 共享发送是连接级状态: 换代后旧发送的共享语义不再有意义
   // (旧 client 的 replyText 会随 close 失败自结, 这里只清记账)。
