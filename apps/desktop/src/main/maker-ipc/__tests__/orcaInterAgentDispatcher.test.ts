@@ -65,8 +65,14 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
   const liveSession = createLiveSession(async (_message, opts) => {
     order.push('send-called');
     await opts?.onAccepted?.();
-    order.push('vendor-released');
-    return { accepted: true };
+    const releaseVendorDispatchLease = await opts?.acquireVendorDispatchLease?.();
+    try {
+      opts?.onDispatching?.();
+      order.push('vendor-released');
+      return { accepted: true };
+    } finally {
+      await releaseVendorDispatchLease?.();
+    }
   });
   const deps: OrcaInterAgentDispatcherDeps<TestSessionMeta> = {
     createId: vi.fn(() => 'client-1'),
@@ -102,6 +108,7 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
     isOrcaTeamActive: vi.fn(async () => true),
     reserveOrcaTeamPreVendorDispatch: vi.fn(() => vi.fn()),
     waitForOrcaTeamTerminalTransition: vi.fn(async () => 'open' as const),
+    acquireVendorDispatchLease: vi.fn(async () => vi.fn()),
     resolveWorkerSenderLabel: vi.fn(async (_workerId, fallback) => fallback),
     isSessionRunningError: vi.fn((err) =>
       err instanceof Error && (err as { code?: string }).code === 'SESSION_RUNNING'
@@ -166,6 +173,37 @@ describe('Orca lead/worker dispatcher', () => {
       },
       expect.objectContaining({ throwOnStartFailure: true }),
     );
+  });
+
+  it('holds the cross-process lease across the live-direct vendor boundary', async () => {
+    const leaseRelease = vi.fn(() => {
+      h.order.push('lease-release');
+    });
+    const acquireVendorDispatchLease = vi.fn(async (teamId: string) => {
+      h.order.push(`lease-acquire:${teamId}`);
+      return leaseRelease;
+    });
+    const h = createHarness({ acquireVendorDispatchLease });
+
+    await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      teamId: 'team-1',
+      rawContent: 'Dispatch under the durable lease',
+      source: 'worker',
+      senderLabel: 'Worker',
+      meta: { source: 'orca', context: 'direct-lease-test' },
+    })).resolves.toMatchObject({ ok: true, mode: 'dispatched' });
+
+    expect(h.order).toEqual([
+      'send-called',
+      'db',
+      'change-set',
+      'lease-acquire:team-1',
+      'vendor-released',
+      'lease-release',
+    ]);
+    expect(acquireVendorDispatchLease).toHaveBeenCalledWith('team-1');
+    expect(leaseRelease).toHaveBeenCalledTimes(1);
   });
 
   it('retains the team reservation and exposes direct accepted settlement to end_team', async () => {

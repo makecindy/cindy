@@ -189,6 +189,10 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   reserveOrcaTeamPreVendorDispatch: (teamId: string) => () => void;
   /** Wait until an in-flight terminal transition either commits or rolls back. */
   waitForOrcaTeamTerminalTransition: (teamId: string) => Promise<'open' | 'terminal'>;
+  /** Cross-process lease held from the durable active check through provider acceptance. */
+  acquireVendorDispatchLease: (
+    teamId: string,
+  ) => Promise<() => void | Promise<void>>;
   /** Process-local last-moment fence for the DB-check-to-vendor race. */
   assertOrcaTeamActiveBeforeVendorDispatch?: (teamId: string) => void;
   isSessionRunningError: (err: unknown) => boolean;
@@ -485,6 +489,8 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           source: params.meta.source,
           context: params.meta.context,
           onAccepted: runAccepted,
+          acquireVendorDispatchLease: () =>
+            deps.acquireVendorDispatchLease(params.teamId),
           beforeVendorDispatch: () =>
             deps.assertOrcaTeamActiveBeforeVendorDispatch?.(params.teamId),
         });
@@ -623,6 +629,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     source: string;
     context: string;
     onAccepted?: () => void | Promise<void>;
+    acquireVendorDispatchLease?: SessionSendOptions['acquireVendorDispatchLease'];
     beforeVendorDispatch?: () => void;
   },
 ): Promise<CollabDirectDispatchResult & { terminalTransitionPending?: true }> {
@@ -646,6 +653,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
         turnChangeSetStarted = true;
         await runAcceptedCallback(onAccepted, session.id, clientId, deps.log ?? defaultLog);
       },
+      acquireVendorDispatchLease: params.acquireVendorDispatchLease,
       onDispatching: () => {
         try {
           params.beforeVendorDispatch?.();

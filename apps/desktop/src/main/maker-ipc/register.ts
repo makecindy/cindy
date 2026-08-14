@@ -8966,6 +8966,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     reserveOrcaTeamPreVendorDispatch,
     waitForOrcaTeamTerminalTransition: (teamId) =>
       orcaTeamTerminalFence.waitForPendingTransition(teamId),
+    acquireVendorDispatchLease: acquireOrcaTeamDispatchLease,
     assertOrcaTeamActiveBeforeVendorDispatch: (teamId) =>
       assertOrcaQueueOriginActive({ kind: 'orca', teamId, senderLabel: 'Orca' }),
     isSessionRunningError,
