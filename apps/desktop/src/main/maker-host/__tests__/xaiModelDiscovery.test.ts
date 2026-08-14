@@ -193,6 +193,53 @@ describe('xAI account model discovery', () => {
     expect(applySnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it('joins startup refresh after getAccessToken rotates the same account token', async () => {
+    let token = 'token-old';
+    let releaseUser!: () => void;
+    const userReleased = new Promise<void>((resolve) => {
+      releaseUser = resolve;
+    });
+    let userStarted!: () => void;
+    const userStartedPromise = new Promise<void>((resolve) => {
+      userStarted = resolve;
+    });
+    const applySnapshot = vi.fn();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get('authorization');
+      expect(auth).toBe('Bearer token-new');
+      if (String(input) === XAI_ACCOUNT_USER_URL) {
+        userStarted();
+        await userReleased;
+        return jsonResponse({ userId: 'user-a' });
+      }
+      return jsonResponse({ data: [{ model: 'grok-4.6' }] });
+    });
+    const deps = {
+      fetchImpl: fetchImpl as typeof fetch,
+      getAccessToken: async () => {
+        token = 'token-new';
+        return token;
+      },
+      peekAccessToken: () => token,
+      hasLogin: () => true,
+      getConnectionSource: () => 'explicit-provider-oauth' as const,
+      getScopeKey: () => 'owner-a:1',
+      cacheFilePath: () => '/unused',
+      applySnapshot,
+      invalidateAuth: vi.fn(),
+      log: { info: vi.fn(), warn: vi.fn() },
+    };
+
+    const splashRefresh = refreshXaiModelsFromHttp(deps);
+    await userStartedPromise;
+    const readinessRefresh = refreshXaiModelsFromHttp(deps);
+    releaseUser();
+
+    await expect(Promise.all([splashRefresh, readinessRefresh])).resolves.toEqual([true, true]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(applySnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshes a rejected token once and restarts the user-model chain', async () => {
     let token = 'token-old';
     const applySnapshot = vi.fn();

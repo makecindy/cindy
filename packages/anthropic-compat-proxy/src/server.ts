@@ -408,7 +408,12 @@ function isSafePathOverride(value: unknown): value is string {
 }
 
 function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
-  return typeof value === 'object' && value !== null && typeof (value as { then?: unknown }).then === 'function';
+  // 接受 object 与 function 两类 thenable（函数对象也可以合法带 .then，见 Promise/A+）。
+  return (
+    (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
 }
 
 /**
@@ -561,14 +566,18 @@ function respondRequestTooLarge(opts: {
  * 跑 transform 链。任一 transform 抛错 → 返回 null(走透传保命)。
  * 所有 transform 都返回 null → 也返回 null(透传)。
  * 至少一个 transform 改了 body → 返回最新的 body。
+ *
+ * async：transform 可返回 Promise（视觉桥等出网调用）。用 isPromiseLike 统一 await，
+ * 同步 transform 返回值原样通过。必须**顺序 await**（禁 Promise.all）——现有 transform
+ * 有强顺序依赖（repairToolExchangeAdjacency → dedupeDuplicateToolUseIds），并发会张冠李戴。
  */
-function runTransforms(
+async function runTransforms(
   rawBody: Buffer,
   contentType: string,
   transforms: RequestTransform[],
   ctx: RequestTransformCtx,
   logger: ProxyLogger,
-): Buffer | null {
+): Promise<Buffer | null> {
   if (transforms.length === 0) return null;
   if (!contentType.toLowerCase().startsWith('application/json')) return null;
 
@@ -584,7 +593,8 @@ function runTransforms(
   let mutated = false;
   for (const t of transforms) {
     try {
-      const next = t(current, ctx);
+      const raw = t(current, ctx);
+      const next = isPromiseLike<unknown | null>(raw) ? await raw : raw;
       if (next !== null && next !== undefined) {
         current = next;
         mutated = true;
@@ -1756,7 +1766,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       ...requestCtx,
       upstreamBase: formatUpstreamBase(route.target),
     };
-    const transformed = runTransforms(rawBody, contentType, transforms, transformCtx, logger);
+    const transformed = await runTransforms(rawBody, contentType, transforms, transformCtx, logger);
     const outBody = transformed ?? rawBody;
 
     let parsedForRewrite: unknown = rawParsed;

@@ -348,6 +348,10 @@ export const MAKER_INVOKE = {
   SUBAGENT_MODEL_SETTINGS_GET: 'maker:subagent-model-settings:get',
   SUBAGENT_MODEL_SETTINGS_SET: 'maker:subagent-model-settings:set',
   SUBAGENT_MODEL_SETTINGS_RESET: 'maker:subagent-model-settings:reset',
+  /** 视觉桥设置（两个清单：目标模型 + 视觉后端）。 */
+  VISION_BRIDGE_SETTINGS_GET: 'maker:vision-bridge-settings:get',
+  VISION_BRIDGE_SETTINGS_SET: 'maker:vision-bridge-settings:set',
+  VISION_BRIDGE_SETTINGS_RESET: 'maker:vision-bridge-settings:reset',
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',

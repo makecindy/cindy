@@ -5801,6 +5801,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     subagentModelSettingsReset: (): Promise<SubagentModelSettingsWriteResult> =>
       ipcRenderer.invoke('maker:subagent-model-settings:reset'),
 
+    /**
+     * 视觉桥设置（两个清单：目标模型勾选 + 视觉后端主/备选）。
+     * 读写 <userData>/vision-bridge-settings.json（main 为真源）。
+     */
+    visionBridgeSettingsGet: (): Promise<VisionBridgeSettingsState> =>
+      ipcRenderer.invoke('maker:vision-bridge-settings:get'),
+    visionBridgeSettingsSet: (
+      patch: VisionBridgeSettingsPatch,
+    ): Promise<VisionBridgeSettingsState> =>
+      ipcRenderer.invoke('maker:vision-bridge-settings:set', patch),
+    visionBridgeSettingsReset: (): Promise<VisionBridgeSettingsState> =>
+      ipcRenderer.invoke('maker:vision-bridge-settings:reset'),
+
     // Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。
     // 并发上限即刻生效;优先级降档对在跑 agent 进程约 15s 内生效(watcher 轮询);
     // 调回 normal 与限核 env 只对新启动的 agent 进程生效。

@@ -331,11 +331,15 @@ async function discoverOnce(
   return parseXaiAccountModels(models);
 }
 
-async function runRefresh(deps: XaiModelDiscoveryDeps): Promise<boolean> {
+async function runRefresh(
+  deps: XaiModelDiscoveryDeps,
+  onAccessTokenResolved?: (token: string) => void,
+): Promise<boolean> {
   const connectionSource = deps.getConnectionSource();
   if (connectionSource !== 'explicit-provider-oauth') return false;
   const scopeKey = deps.getScopeKey();
   let token = await deps.getAccessToken();
+  onAccessTokenResolved?.(token);
   if (!isCurrent(deps, scopeKey, token)) return false;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -390,7 +394,14 @@ export async function refreshXaiModelsFromHttp(
   ) {
     return refreshInflight;
   }
-  const flight = runRefresh(deps).finally(() => {
+  let flight!: Promise<boolean>;
+  flight = runRefresh(deps, (resolvedToken) => {
+    // getAccessToken may rotate an expired token before the first network request.
+    // Re-key the active flight to that resolved token so a concurrent startup/
+    // readiness refresh joins it instead of duplicating the same account discovery.
+    // A real account switch still has a different current token and starts a new flight.
+    if (refreshInflight === flight) refreshInflightToken = resolvedToken;
+  }).finally(() => {
     if (refreshInflight === flight) {
       refreshInflight = null;
       refreshInflightScope = null;

@@ -127,6 +127,7 @@
       "chipMetrics": "用量指示器",
       "memory": "記憶",
       "subagentModels": "Subagent",
+      "visionBridge": "視覺橋",
       "compaction": "上下文壓縮",
       "terminalShell": "預設終端 shell",
       "composer": "訊息輸入",
@@ -985,7 +986,7 @@
         },
         "inputMonitoring": {
           "label": "監聽權限",
-          "tooltip": "用於監聽 Fn、單獨 Command / Option / Control 以及帶 Fn 的語音輸入快捷鍵。普通組合鍵和 F1-F24 單鍵通常不需要。已授權表示當前執行中的 App 可以監聽快捷鍵；開發版可能由 Terminal 承載授權。"
+          "tooltip": "用於監聽 Fn、單獨 Command / Option / Control、帶 Fn 的快捷鍵，以及 F1-F24 單鍵按住說話的放開事件。普通組合鍵不需要。已授權表示目前執行中的 App 可以監聽快捷鍵；開發版可能由 Terminal 承載授權。"
         },
         "accessibility": {
           "label": "自動輸入",
@@ -2429,6 +2430,37 @@
     "compatMode": {
       "title": "小技巧",
       "description": "一些功能性開關，部分需要新建任務才會生效(具體見各 cell 說明)。"
+    },
+    "visionBridge": {
+      "title": "視覺橋",
+      "description": "讓純文字模型獲得看圖能力：用獨立的多模態模型把圖片轉成文字描述後再交給純文字模型。",
+      "enableLabel": "啟用視覺橋",
+      "enableHint": "關閉時所有模型行為與之前完全一致。開啟後，下方勾選的模型會把圖片經視覺後端轉成文字描述。啟用後，傳送給這些模型的圖片以及同訊息文字提示會傳送給你選擇的視覺後端。",
+      "enableAria": "切換視覺橋",
+      "toast": {
+        "saved": "視覺橋設定已儲存",
+        "saveFailed": "儲存視覺橋設定失敗"
+      },
+      "capability": {
+        "vision": "已知支援視覺",
+        "noVision": "已知純文字",
+        "unknown": "視覺能力未知"
+      },
+      "targetModels": {
+        "label": "走視覺橋的模型",
+        "hint": "純文字模型（如 DeepSeek）預設已勾選。也可以勾選支援視覺的模型——例如故意用更便宜的描述模型來節省 token。",
+        "empty": "暫無可用的模型。",
+        "toggleAria": "切換 {{model}} 的視覺橋"
+      },
+      "backends": {
+        "label": "視覺後端模型",
+        "hint": "選擇最多兩個把圖片轉文字的多模態模型。第二個（備用）可選。",
+        "primary": "主後端",
+        "fallback": "備用",
+        "unset": "未選擇",
+        "noBackup": "無備用",
+        "hintSecondary": "優先使用主後端。主後端失敗且配置了備用時切換到備用。兩者都失敗時圖片無法辨識，會以文字提示代替並提醒你。"
+      }
     },
     "chatEmbedding": {
       "cell": {
@@ -6088,6 +6120,11 @@
     },
     "imageMissing": {
       "title": "圖片已丟失"
+    },
+    "visionBridge": {
+      "analyzing": "正在辨識圖片中…（{{count}} 張）",
+      "fallback": "視覺橋使用了備用視覺後端（主後端不可用），圖片辨識可能受影響",
+      "unavailable": "視覺橋目前不可用，圖片無法辨識，已以文字提示代替"
     },
     "newMessageIndicator": {
       "aria": "回到底部，檢視 {{count}} 條新訊息",

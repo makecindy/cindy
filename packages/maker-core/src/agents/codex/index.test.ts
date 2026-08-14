@@ -543,17 +543,26 @@ describe('CodexAgent permissions', () => {
         if (method === Method.ConfigRead) {
           return {
             config: {
-              mcp_servers: { local_docs: { enabled: true } },
+              mcp_servers: { local_docs: { command: '/usr/bin/local-docs', enabled: true } },
               plugins: {
                 'configured@personal': {
-                  mcp_servers: { configured_server: { enabled: true } },
+                  mcp_servers: {
+                    configured_server: { url: 'https://example.invalid/mcp', enabled: true },
+                  },
                 },
               },
             },
           };
         }
         if (method === Method.McpServerStatusList) {
-          return { data: [{ name: 'runtime-mcp', tools: {} }], nextCursor: null };
+          return {
+            data: [
+              { name: 'codex_apps', tools: {} },
+              { name: 'local_docs', tools: {} },
+              { name: 'configured_server', tools: {} },
+            ],
+            nextCursor: null,
+          };
         }
         if (method === Method.TurnStart) return { turn: { id: 'turn-review' } };
         return undefined;
@@ -602,7 +611,6 @@ describe('CodexAgent permissions', () => {
         'features.multi_agent': false,
         'features.remote_plugin': false,
         'mcp_servers.local_docs.enabled': false,
-        'mcp_servers.runtime-mcp.enabled': false,
         'plugins."unsafe-plugin@personal".enabled': false,
         'plugins."configured@personal".enabled': false,
         'plugins."configured@personal".mcp_servers.configured_server.enabled': false,
@@ -636,7 +644,9 @@ describe('CodexAgent permissions', () => {
         enabled: false,
       },
     ]);
-    expect(threadStart.config).not.toHaveProperty('mcp_servers.should_not_exist');
+    expect(threadStart.config).not.toHaveProperty(['mcp_servers.should_not_exist']);
+    expect(threadStart.config).not.toHaveProperty(['mcp_servers.codex_apps.enabled']);
+    expect(threadStart.config).not.toHaveProperty(['mcp_servers.configured_server.enabled']);
     expect(handle.getPlanMode?.()).toBe(false);
 
     await expect(
@@ -703,6 +713,78 @@ describe('CodexAgent permissions', () => {
     await handle.setPlanMode?.(true);
     expect(handle.getPlanMode?.()).toBe(false);
     await handle.close();
+  });
+
+  it('fails closed when Review sees an unknown runtime-only MCP server', async () => {
+    const reviewDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-runtime-mcp-'));
+    tempRoots.push(reviewDir);
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.ExperimentalFeatureEnablementSet) return {};
+        if (method === Method.ConfigRead) return { config: {} };
+        if (method === Method.McpServerStatusList) {
+          return {
+            data: [{ name: 'unknown_runtime_mcp', tools: {} }],
+            nextCursor: null,
+          };
+        }
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+
+    await expect(
+      agent.startSession({
+        sessionId: 'session-review-runtime-mcp',
+        model: 'gpt-5.5',
+        workingDir: reviewDir,
+        reviewMode: true,
+      }),
+    ).rejects.toThrow(/runtime MCP servers without transport-bearing config: unknown_runtime_mcp/);
+  });
+
+  it('fails closed when a runtime MCP only matches a transportless plugin entry', async () => {
+    const reviewDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-plugin-mcp-'));
+    tempRoots.push(reviewDir);
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.ExperimentalFeatureEnablementSet) return {};
+        if (method === Method.ConfigRead) {
+          return {
+            config: {
+              plugins: {
+                'transportless@personal': {
+                  mcp_servers: { colliding_runtime_name: { enabled: true } },
+                },
+              },
+            },
+          };
+        }
+        if (method === Method.McpServerStatusList) {
+          return {
+            data: [{ name: 'colliding_runtime_name', tools: {} }],
+            nextCursor: null,
+          };
+        }
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+
+    await expect(
+      agent.startSession({
+        sessionId: 'session-review-plugin-mcp',
+        model: 'gpt-5.5',
+        workingDir: reviewDir,
+        reviewMode: true,
+      }),
+    ).rejects.toThrow(
+      /runtime MCP servers without transport-bearing config: colliding_runtime_name/,
+    );
   });
 
   it('refuses to start Review when Codex native memory cannot be disabled', async () => {
@@ -11661,6 +11743,102 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(request?.kind).toBe('permission');
     if (request?.kind !== 'permission') throw new Error('expected permission request');
     expect(request.suggestions).toBeUndefined();
+    await handle.close();
+  });
+
+  it('asks the user when a file-change approval omits grantRoot', async () => {
+    const reviewAutoPermissionAction = vi.fn<AutoReviewDelegate>(async () => ({
+      verdict: 'block' as const,
+      reason: 'The destination path is missing.',
+    }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-auto-file-change-without-root',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.fileChangeApproval) throw new Error('expected fileChangeApproval handler');
+    const resolver = vi.fn(async (): Promise<InteractionDecision> => (
+      { kind: 'permission', behavior: 'allow' }
+    ));
+    handle.setInteractionResolver(resolver);
+
+    await expect(handlers.fileChangeApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-file-change-without-root',
+      itemId: 'patch-without-root',
+      grantRoot: null,
+    })).resolves.toEqual({ decision: 'accept' });
+
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver.mock.calls[0]?.[0]).toMatchObject({
+      kind: 'permission',
+      toolName: 'file_change',
+      input: { grantRoot: null },
+    });
+    const request = resolver.mock.calls[0]?.[0];
+    expect(request?.kind).toBe('permission');
+    if (request?.kind !== 'permission') throw new Error('expected permission request');
+    expect(request.suggestions).toBeDefined();
+    await handle.close();
+  });
+
+  it('accepts a pending missing-root file approval when switching to Full access', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-auto-file-change-without-root-mode-switch',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.fileChangeApproval) throw new Error('expected fileChangeApproval handler');
+    const pendingDecision = deferred<InteractionDecision>();
+    const resolver = vi.fn(() => pendingDecision.promise);
+    handle.setInteractionResolver(resolver);
+
+    const approval = handlers.fileChangeApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-file-change-without-root-mode-switch',
+      itemId: 'patch-without-root-mode-switch',
+      grantRoot: null,
+    });
+    await vi.waitFor(() => expect(resolver).toHaveBeenCalledOnce());
+
+    if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
+    await handle.setPermissionMode('bypassPermissions');
+
+    await expect(approval).resolves.toEqual({ decision: 'accept' });
+    pendingDecision.resolve({ kind: 'permission', behavior: 'deny' });
+    await handle.close();
+  });
+
+  it('keeps Full access non-interactive when a file-change approval omits grantRoot', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-full-file-change-without-root',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.fileChangeApproval) throw new Error('expected fileChangeApproval handler');
+
+    await expect(handlers.fileChangeApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-full-file-change-without-root',
+      itemId: 'full-patch-without-root',
+      grantRoot: null,
+    })).resolves.toEqual({ decision: 'accept' });
     await handle.close();
   });
 

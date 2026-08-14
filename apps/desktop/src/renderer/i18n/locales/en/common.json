@@ -127,6 +127,7 @@
       "chipMetrics": "Usage indicator",
       "memory": "Memory",
       "subagentModels": "Subagents",
+      "visionBridge": "Vision Bridge",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
       "composer": "Message input",
@@ -985,7 +986,7 @@
         },
         "inputMonitoring": {
           "label": "Shortcut listener",
-          "tooltip": "Used to listen for Fn, standalone Command / Option / Control, and Fn-based voice input shortcuts. Regular key combinations and standalone F1-F24 keys usually do not need it. Granted means the currently running app can listen for shortcuts; dev builds may be authorized through Terminal."
+          "tooltip": "Used to listen for Fn, standalone Command / Option / Control, Fn-based shortcuts, and standalone F1-F24 push-to-talk release events. Regular key combinations do not need it. Granted means the currently running app can listen for shortcuts; dev builds may be authorized through Terminal."
         },
         "accessibility": {
           "label": "Automatic input",
@@ -2391,6 +2392,37 @@
     "compatMode": {
       "title": "Tips",
       "description": "Functional toggles. Some require a new session to take effect (see individual cell descriptions)."
+    },
+    "visionBridge": {
+      "title": "Vision Bridge",
+      "description": "Give text-only models the ability to read images by routing them through a separate multimodal model that converts images to text descriptions.",
+      "enableLabel": "Enable Vision Bridge",
+      "enableHint": "When off, all models behave exactly as before. When on, models you select below route their images through the vision backend. When enabled, images sent to these models and nearby text used as focus hints are sent to the vision backend you choose.",
+      "enableAria": "Toggle Vision Bridge",
+      "toast": {
+        "saved": "Vision Bridge settings saved",
+        "saveFailed": "Failed to save Vision Bridge settings"
+      },
+      "capability": {
+        "vision": "Known vision-capable",
+        "noVision": "Known text-only",
+        "unknown": "Vision capability unknown"
+      },
+      "targetModels": {
+        "label": "Models routed through Vision Bridge",
+        "hint": "Text-only models (e.g. DeepSeek) are checked by default. You can also check vision-capable models — for example to use a cheaper description model to save tokens.",
+        "empty": "No models available.",
+        "toggleAria": "Toggle Vision Bridge for {{model}}"
+      },
+      "backends": {
+        "label": "Vision backend models",
+        "hint": "Pick up to two multimodal models that convert images to text. The second (backup) is optional.",
+        "primary": "Primary",
+        "fallback": "Backup",
+        "unset": "None selected",
+        "noBackup": "No backup",
+        "hintSecondary": "The primary backend is used first. If it fails and a backup is set, the backup is used. If both fail, the image cannot be described and is replaced with a text notice."
+      }
     },
     "terminalShell": {
       "title": "Default terminal shell",
@@ -6090,6 +6122,11 @@
     },
     "imageMissing": {
       "title": "Image missing"
+    },
+    "visionBridge": {
+      "analyzing": "Analyzing {{count}} image(s)…",
+      "fallback": "Vision bridge fell back to a backup vision backend (primary unavailable); image recognition may be affected",
+      "unavailable": "Vision bridge is unavailable; the image could not be described and was replaced with a text notice"
     },
     "newMessageIndicator": {
       "aria": "Back to bottom, view {{count}} new messages",

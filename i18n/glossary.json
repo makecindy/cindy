@@ -1672,6 +1672,17 @@
         "ko": "매뉴얼"
       },
       "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于已停止新增的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
+    },
+    {
+      "id": "vision-bridge",
+      "status": "proposed",
+      "en": "Vision Bridge",
+      "translations": {
+        "zh-CN": "视觉桥",
+        "ja": "ビジョンブリッジ",
+        "ko": "비전 브리지"
+      },
+      "note": "让纯文本模型获得看图能力的能力名:把图片交给外部多模态后端转成文字描述,再喂给文本模型。zh-CN 取「视觉桥」而非「视觉桥梁/图像转文字」——「桥」强调其桥接定位,且与英文 Vision Bridge 一一对应。设置页 visionBridge 分节、docs/vision-bridge-design.md、日志 note 使用。先登记为 proposed,待产品术语评审后固化。"
     }
   ]
 }
