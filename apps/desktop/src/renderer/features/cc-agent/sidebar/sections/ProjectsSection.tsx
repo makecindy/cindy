@@ -21,7 +21,7 @@
  *   ghost / chosen / drag class 提供视觉。
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -41,7 +41,14 @@ import { SidebarFilterPopover } from '../SidebarFilterPopover';
 import { SectionCollapse } from '../SectionCollapse';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import type { SessionClickHandler } from '../SessionItem';
-import type { ProjectNode as ProjectNodeData } from '../../lib/projectGrouping';
+import {
+  projectKeyComparisonKey,
+  type ProjectNode as ProjectNodeData,
+} from '../../lib/projectGrouping';
+import {
+  buildProjectKeyComparisonSet,
+  projectKeyComparisonSetHas,
+} from '../../lib/sidebarProjectVisibility';
 import type { UseSidebarFilterReturn } from '../../hooks/useSidebarFilter';
 import type {
   AutomationScheduleAction,
@@ -158,6 +165,11 @@ export function ProjectsSection({
   onArchiveAll,
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
+  const localPlatform = window.electronAPI.platform;
+  const collapsedComparisonKeys = useMemo(
+    () => buildProjectKeyComparisonSet(collapsed, localPlatform),
+    [collapsed, localPlatform],
+  );
   const reducedMotion = useReducedMotion();
   // 拖拽只在 Project 分组下才有意义；sortBy 不强制要 'manual'——用户随手拖一下
   // 我们就在 onReorder 里自动切到 manual 并持久化，避免"默认 recency 排序下永远拖不动"
@@ -180,8 +192,13 @@ export function ProjectsSection({
       const fullOrder = normalizeManualProjectOrder(
         filter.manualProjectOrder,
         projectKeysForOrderBaseline,
+        localPlatform,
       );
-      const merged = mergeVisibleReorder(fullOrder, visibleNewOrder);
+      const merged = mergeVisibleReorder(
+        fullOrder,
+        visibleNewOrder,
+        (projectKey) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
+      );
       filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
       // 用户随手一拖即表达"我要手动排序"的意图；如果当前不是 manual，自动切过去
       // 并持久化，让拖拽结果立刻生效，不需要用户先去 Filter Popover 切换排序模式。
@@ -189,7 +206,7 @@ export function ProjectsSection({
         filter.setSortBy('manual');
       }
     },
-    [filter, projectKeysForOrderBaseline],
+    [filter, localPlatform, projectKeysForOrderBaseline],
   );
 
   // F-PJ-10：即使 projects 因 filter 收窄到空，也要保留段头供用户切回 Filter。
@@ -358,7 +375,11 @@ export function ProjectsSection({
               <ProjectNode
                 project={project}
                 statusFilter={filter.status}
-                isCollapsed={collapsed.has(project.projectKey)}
+                isCollapsed={projectKeyComparisonSetHas(
+                  collapsedComparisonKeys,
+                  project.projectKey,
+                  localPlatform,
+                )}
                 parentSectionCollapsed={isSectionCollapsed}
                 activeSessionId={activeSessionId}
                 runningSessionIds={runningSessionIds}

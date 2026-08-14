@@ -63,17 +63,54 @@ export function projectKeyComparisonSetHas(
   return comparisonKey != null && comparisonKeys.has(comparisonKey);
 }
 
+/** Resolve an external/deep-link key to the exact representative rendered in the sidebar. */
+export function findProjectRepresentativeKey(
+  projects: readonly Pick<ProjectNode, 'projectKey'>[],
+  projectKey: string,
+  localPlatform: string,
+): string | null {
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  if (comparisonKey == null) return null;
+  return (
+    projects.find(
+      (project) => projectKeyComparisonKey(project.projectKey, localPlatform) === comparisonKey,
+    )?.projectKey ?? null
+  );
+}
+
+/** Session-level project selectors must use the same comparison identity as project nodes. */
+export function isSessionInProjectComparisonSet(
+  session: SidebarProjectSession,
+  projectComparisonKeys: ReadonlySet<string>,
+  localPlatform: string,
+): boolean {
+  if (session.workspaceKind === 'dialogue') return false;
+  return projectKeyComparisonSetHas(
+    projectComparisonKeys,
+    projectIdentityKeyForSession(session),
+    localPlatform,
+  );
+}
+
+/** Single-project action membership using the same local Windows comparison identity. */
+export function isSessionInProject(
+  session: SidebarProjectSession,
+  projectKey: string,
+  localPlatform: string,
+): boolean {
+  if (session.workspaceKind === 'dialogue') return false;
+  const sessionProjectKey = projectIdentityKeyForSession(session);
+  const sessionComparisonKey = projectKeyComparisonKey(sessionProjectKey, localPlatform);
+  const projectComparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  return sessionComparisonKey != null && sessionComparisonKey === projectComparisonKey;
+}
+
 function isSessionInHiddenProjectComparisonSet(
   session: SidebarProjectSession,
   hiddenProjectComparisonKeys: ReadonlySet<string>,
   localPlatform: string,
 ): boolean {
-  if (session.workspaceKind === 'dialogue') return false;
-  return projectKeyComparisonSetHas(
-    hiddenProjectComparisonKeys,
-    projectIdentityKeyForSession(session),
-    localPlatform,
-  );
+  return isSessionInProjectComparisonSet(session, hiddenProjectComparisonKeys, localPlatform);
 }
 
 export function visibleSidebarProjects(

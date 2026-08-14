@@ -38,9 +38,12 @@ describe('pinned project sidebar integration', () => {
   });
 
   it('exposes project pin toggling from the collapsed rail project menu', () => {
-    expect(sidebarSource).toContain('pinnedProjectKeys={pinnedProjectKeys}');
+    expect(sidebarSource).toContain('pinnedProjectComparisonKeys={pinnedProjectComparisonKeys}');
+    expect(sidebarSource).toContain('localPlatform={localPlatform}');
     expect(sidebarSource).toContain('onToggleProjectPin={handleToggleProjectPin}');
-    expect(sidebarSource).toContain('pinnedProjectKeys.has(menuTarget.projectKey)');
+    expect(sidebarSource).toContain(
+      'projectKeyComparisonSetHas(\n                        pinnedProjectComparisonKeys,\n                        menuTarget.projectKey,\n                        localPlatform,',
+    );
   });
 
   it('applies main-process pinned-order broadcasts to every mounted sidebar hook', () => {
@@ -57,9 +60,14 @@ describe('pinned project sidebar integration', () => {
 
     expect(dateStart).toBeGreaterThanOrEqual(0);
     expect(dateEnd).toBeGreaterThan(dateStart);
-    expect(dateBlock).toContain('pinnedProjectKeys.has(pinnedProjectKey)');
     expect(dateBlock).toContain(
-      '[activityFilteredSessions, vendorPredicate, filter.projectsAsSet, pinnedProjectKeys]',
+      'isSessionInProjectComparisonSet(s, pinnedProjectComparisonKeys, localPlatform)',
+    );
+    expect(dateBlock).toContain(
+      'isSessionInProjectComparisonSet(s, allowedProjectComparisonKeys, localPlatform)',
+    );
+    expect(dateBlock).toContain(
+      'allowedProjectComparisonKeys,\n    pinnedProjectComparisonKeys,\n    localPlatform,',
     );
   });
 
@@ -100,6 +108,42 @@ describe('pinned project sidebar integration', () => {
     expect(sidebarSource).toContain('ensureProjectIncluded: filter.ensureProjectIncluded,');
     expect(sidebarSource).toContain('localPlatform,');
     expect(sidebarSource).toContain('if (restored) return;');
+  });
+
+  it('uses comparison identity for Browse Files and Archive All action membership', () => {
+    const browseStart = sidebarSource.indexOf('const handleBrowseFiles = useCallback(');
+    const browseEnd = sidebarSource.indexOf('/* ---- Rename handler ---- */', browseStart);
+    const archiveStart = sidebarSource.indexOf('const handleArchiveAllInProject = useCallback(');
+    const archiveEnd = sidebarSource.indexOf('\n  return (', archiveStart);
+
+    expect(browseStart).toBeGreaterThanOrEqual(0);
+    expect(browseEnd).toBeGreaterThan(browseStart);
+    expect(archiveStart).toBeGreaterThanOrEqual(0);
+    expect(archiveEnd).toBeGreaterThan(archiveStart);
+    expect(sidebarSource.slice(browseStart, browseEnd)).toContain(
+      'isSessionInProject(s, targetProjectKey, localPlatform)',
+    );
+    expect(sidebarSource.slice(archiveStart, archiveEnd)).toContain(
+      'isSessionInProject(session, targetProjectKey, localPlatform)',
+    );
+  });
+
+  it('resolves a deep-link comparison match to the rendered project representative', () => {
+    const focusStart = sidebarSource.indexOf('const pendingFocus = usePendingProjectFocus();');
+    const focusEnd = sidebarSource.indexOf('/* ---- 自动展开', focusStart);
+    const focusBlock = sidebarSource.slice(focusStart, focusEnd);
+
+    expect(focusStart).toBeGreaterThanOrEqual(0);
+    expect(focusEnd).toBeGreaterThan(focusStart);
+    expect(focusBlock).toContain('const representativeKey = findProjectRepresentativeKey(');
+    expect(focusBlock).toContain('collapse.expand(representativeKey);');
+    expect(focusBlock).toContain('CSS.escape(representativeKey)');
+  });
+
+  it('builds persisted pinned ranks without letting later identity variants overwrite the first', () => {
+    expect(sidebarSource).toContain(
+      'const rank = buildPinnedSidebarRank(order, localPlatform);',
+    );
   });
 
   it('prunes hidden projects from filters in every renderer hook', () => {

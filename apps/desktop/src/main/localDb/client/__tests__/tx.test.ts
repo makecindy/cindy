@@ -17,6 +17,15 @@ CREATE TABLE migration_history (
   content_hash TEXT NOT NULL,
   applied_at INTEGER NOT NULL
 );
+CREATE TABLE recent_workdirs (
+  path TEXT PRIMARY KEY NOT NULL,
+  last_used_at INTEGER NOT NULL
+);
+CREATE TABLE project_aliases (
+  project_key TEXT PRIMARY KEY NOT NULL,
+  alias TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL DEFAULT 'New Maker',
@@ -41,6 +50,8 @@ CREATE TABLE sessions (
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
   workspace_kind TEXT NOT NULL DEFAULT 'project',
+  remote_host_id TEXT,
+  source TEXT DEFAULT 'desktop',
   codex_history_has_product_prompt INTEGER,
   parent_session_id TEXT,
   forked_at_message_id TEXT,
@@ -861,6 +872,164 @@ describe('db worker tx handlers', () => {
       });
     }, { useInlineWorker });
   });
+
+  it.each([false, true])(
+    'recentWorkdirs.mergeWindowsIdentity rolls back canonical insert when cleanup fails (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await client.exec(
+          'INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?), (?, ?)',
+          ['D:/Work/Project-A', 3_000, 'd:/work/project-a', 2_000],
+        );
+        await client.exec(`
+          CREATE TRIGGER fail_recent_workdir_cleanup
+          BEFORE DELETE ON recent_workdirs
+          BEGIN
+            SELECT RAISE(ABORT, 'forced cleanup failure');
+          END
+        `);
+
+        await expect(
+          client.tx('recentWorkdirs.mergeWindowsIdentity', {
+            path: 'd:/work/project-a',
+            lastUsedAt: 4_000,
+          }),
+        ).rejects.toThrow(/forced cleanup failure/);
+
+        await expect(
+          client.query<{ path: string; lastUsedAt: number }>(
+            'SELECT path, last_used_at AS lastUsedAt FROM recent_workdirs ORDER BY path',
+          ),
+        ).resolves.toEqual([
+          { path: 'D:/Work/Project-A', lastUsedAt: 3_000 },
+          { path: 'd:/work/project-a', lastUsedAt: 2_000 },
+        ]);
+      }, { useInlineWorker });
+    },
+  );
+
+  it.each([false, true])(
+    'recentWorkdirs.mergeWindowsIdentity keeps the existing display path while refreshing activity (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await client.exec('INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)', [
+          'D:/Work/Project-A',
+          3_000,
+        ]);
+
+        await client.tx('recentWorkdirs.mergeWindowsIdentity', {
+          path: 'd:/work/project-a',
+          lastUsedAt: 4_000,
+        });
+
+        await expect(
+          client.query<{ path: string; lastUsedAt: number }>(
+            'SELECT path, last_used_at AS lastUsedAt FROM recent_workdirs',
+          ),
+        ).resolves.toEqual([{ path: 'D:/Work/Project-A', lastUsedAt: 4_000 }]);
+      }, { useInlineWorker });
+    },
+  );
+
+  it.each([false, true])(
+    'recentWorkdirs.mergeWindowsIdentity folds non-ASCII Windows casing (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await client.exec('INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)', [
+            'D:/École/Project-A',
+            3_000,
+          ]);
+
+          await client.tx('recentWorkdirs.mergeWindowsIdentity', {
+            path: 'd:/école/project-a',
+            lastUsedAt: 4_000,
+          });
+
+          await expect(
+            client.query<{ path: string; lastUsedAt: number }>(
+              'SELECT path, last_used_at AS lastUsedAt FROM recent_workdirs',
+            ),
+          ).resolves.toEqual([{ path: 'D:/École/Project-A', lastUsedAt: 4_000 }]);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    'recentWorkdirs.removeWindowsIdentity deletes every non-ASCII casing variant (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await client.exec(
+            'INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?), (?, ?)',
+            ['D:/École/Project-A', 3_000, 'd:/école/project-a', 4_000],
+          );
+
+          await expect(
+            client.tx('recentWorkdirs.removeWindowsIdentity', {
+              path: 'D:/ÉCOLE/PROJECT-A',
+            }),
+          ).resolves.toEqual({ changes: 2 });
+          await expect(client.query('SELECT path FROM recent_workdirs')).resolves.toEqual([]);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    'projectAliases.replaceIdentity replaces and clears every Unicode casing variant atomically (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await client.exec(
+            'INSERT INTO project_aliases (project_key, alias, updated_at) VALUES (?, ?, ?), (?, ?, ?)',
+            [
+              'local:D:/École/Project-A',
+              'Newest alias',
+              2_000,
+              'local:d:/école/project-a',
+              'Older alias',
+              1_000,
+            ],
+          );
+
+          await expect(
+            client.tx('projectAliases.replaceIdentity', {
+              projectKey: 'local:D:/ÉCOLE/PROJECT-A',
+              comparisonKey: 'local:d:/école/project-a',
+              foldCase: true,
+              alias: 'Replacement',
+              updatedAt: 3_000,
+            }),
+          ).resolves.toEqual({
+            projectKey: 'local:D:/ÉCOLE/PROJECT-A',
+            alias: 'Replacement',
+            updatedAt: 3_000,
+          });
+          await expect(
+            client.query('SELECT project_key AS projectKey, alias FROM project_aliases'),
+          ).resolves.toEqual([{ projectKey: 'local:D:/ÉCOLE/PROJECT-A', alias: 'Replacement' }]);
+
+          await expect(
+            client.tx('projectAliases.replaceIdentity', {
+              projectKey: 'local:d:/école/project-a',
+              comparisonKey: 'local:d:/école/project-a',
+              foldCase: true,
+              alias: null,
+              updatedAt: 4_000,
+            }),
+          ).resolves.toBeNull();
+          await expect(client.query('SELECT project_key FROM project_aliases')).resolves.toEqual(
+            [],
+          );
+        },
+        { useInlineWorker },
+      );
+    },
+  );
 
   it('sessions.renameTitles applies title changes atomically with preconditions', async () => {
     await withClient(async (client) => {
@@ -1963,6 +2132,45 @@ describe('db worker tx handlers', () => {
       });
     });
   });
+
+  it.each([
+    { label: 'bundled worker', useInlineWorker: false },
+    { label: 'inline worker', useInlineWorker: true },
+  ])(
+    'returns remote host identity through sessions.setStatus in the $label path',
+    async ({ useInlineWorker }) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 'local', { workingDir: '/local/repo' });
+          await seedSession(client, 'remote', { workingDir: '/remote/repo' });
+          await client.exec('UPDATE sessions SET remote_host_id = ? WHERE id = ?', [
+            'host-a',
+            'remote',
+          ]);
+          await client.exec('UPDATE sessions SET source = ? WHERE id = ?', ['plugin', 'remote']);
+
+          await expect(
+            client.tx('sessions.setStatus', {
+              sessionIds: ['local', 'remote'],
+              status: 'archived',
+            }),
+          ).resolves.toEqual([
+            expect.objectContaining({
+              sessionId: 'local',
+              remoteHostId: null,
+              source: 'desktop',
+            }),
+            expect.objectContaining({
+              sessionId: 'remote',
+              remoteHostId: 'host-a',
+              source: 'plugin',
+            }),
+          ]);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
 
   it.each([
     { label: 'bundled worker', useInlineWorker: false },

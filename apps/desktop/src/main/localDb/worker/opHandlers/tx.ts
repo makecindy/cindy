@@ -75,6 +75,12 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return sessionsRenameTitles(db, txArgs);
     case 'sessions.setStatus':
       return sessionsSetStatus(db, txArgs);
+    case 'recentWorkdirs.mergeWindowsIdentity':
+      return recentWorkdirsMergeWindowsIdentity(db, txArgs);
+    case 'recentWorkdirs.removeWindowsIdentity':
+      return recentWorkdirsRemoveWindowsIdentity(db, txArgs);
+    case 'projectAliases.replaceIdentity':
+      return projectAliasesReplaceIdentity(db, txArgs);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(db, txArgs);
     case 'message.delete':
@@ -122,6 +128,90 @@ export function tx(db: Database.Database, args: unknown): unknown {
     default:
       throw Object.assign(new Error(`unknown tx: ${name}`), { code: 'UNKNOWN_TX' });
   }
+}
+
+function recentWorkdirsMergeWindowsIdentity(db: Database.Database, args: unknown): void {
+  const payload = asRecord(args, 'recentWorkdirs.mergeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  const lastUsedAt = expectNumber(payload.lastUsedAt, 'lastUsedAt');
+  const transaction = db.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(db, path);
+    const representative = matches
+      .slice()
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt || a.rowid - b.rowid)[0];
+    const representativePath = representative?.path ?? path;
+    const newestTimestamp = Math.max(lastUsedAt, ...matches.map((row) => row.lastUsedAt));
+    db.prepare(
+      `INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)
+       ON CONFLICT(path) DO UPDATE SET
+         last_used_at = MAX(recent_workdirs.last_used_at, excluded.last_used_at)`,
+    ).run(representativePath, newestTimestamp);
+    const removeVariant = db.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    for (const row of matches) {
+      if (row.path !== representativePath) removeVariant.run(row.path);
+    }
+  });
+  transaction();
+}
+
+function recentWorkdirsRemoveWindowsIdentity(
+  db: Database.Database,
+  args: unknown,
+): { changes: number } {
+  const payload = asRecord(args, 'recentWorkdirs.removeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  const transaction = db.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(db, path);
+    const removeVariant = db.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    let changes = 0;
+    for (const row of matches) changes += removeVariant.run(row.path).changes;
+    return { changes };
+  });
+  return transaction();
+}
+
+function recentWorkdirWindowsIdentityRows(
+  db: Database.Database,
+  path: string,
+): Array<{ rowid: number; path: string; lastUsedAt: number }> {
+  const identity = path.toLowerCase();
+  const rows = db
+    .prepare('SELECT rowid, path, last_used_at AS lastUsedAt FROM recent_workdirs')
+    .all() as Array<{ rowid: number; path: string; lastUsedAt: number }>;
+  return rows.filter((row) => row.path.toLowerCase() === identity);
+}
+
+function projectAliasesReplaceIdentity(
+  db: Database.Database,
+  args: unknown,
+): { projectKey: string; alias: string; updatedAt: number } | null {
+  const payload = asRecord(args, 'projectAliases.replaceIdentity args');
+  const projectKey = expectString(payload.projectKey, 'projectKey');
+  const comparisonKey = expectString(payload.comparisonKey, 'comparisonKey');
+  if (typeof payload.foldCase !== 'boolean') {
+    throw invalidArgs('foldCase must be a boolean');
+  }
+  const alias = nullableString(payload.alias);
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  return db.transaction(() => {
+    const rows = db
+      .prepare('SELECT project_key AS projectKey FROM project_aliases')
+      .all() as Array<{
+      projectKey: string;
+    }>;
+    const removeAlias = db.prepare('DELETE FROM project_aliases WHERE project_key = ?');
+    for (const row of rows) {
+      const identity = payload.foldCase ? row.projectKey.toLowerCase() : row.projectKey;
+      if (identity === comparisonKey) removeAlias.run(row.projectKey);
+    }
+    if (alias == null) return null;
+    db.prepare('INSERT INTO project_aliases (project_key, alias, updated_at) VALUES (?, ?, ?)').run(
+      projectKey,
+      alias,
+      updatedAt,
+    );
+    return { projectKey, alias, updatedAt };
+  })();
 }
 
 /** Remove every stale startup binding as one all-or-nothing repair. */
@@ -500,6 +590,8 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
   title: string | null;
   workingDir: string | null;
   workspaceKind: string | null;
+  remoteHostId: string | null;
+  source: string | null;
   status: 'active' | 'archived';
 }> {
   const payload = asRecord(args, 'sessions.setStatus args');
@@ -514,7 +606,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = db.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind',
+    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   const transaction = db.transaction(() => {
     const applied: Array<{
@@ -522,6 +614,8 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
       title: string | null;
       workingDir: string | null;
       workspaceKind: string | null;
+      remoteHostId: string | null;
+      source: string | null;
       status: 'active' | 'archived';
     }> = [];
     const now = Date.now();
@@ -536,7 +630,14 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
         });
       }
       const updated = updateSession.get(status, now, sessionId) as
-        | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null }
+        | {
+            id: string;
+            title: string | null;
+            workingDir: string | null;
+            workspaceKind: string | null;
+            remoteHostId: string | null;
+            source: string | null;
+          }
         | undefined;
       if (!updated) {
         throw Object.assign(new Error(`Session 不存在: ${sessionId}`), { code: 'NOT_FOUND' });
@@ -546,6 +647,8 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
         title: updated.title,
         workingDir: updated.workingDir,
         workspaceKind: updated.workspaceKind,
+        remoteHostId: updated.remoteHostId,
+        source: updated.source,
         status,
       });
     }
@@ -556,6 +659,8 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     title: string | null;
     workingDir: string | null;
     workspaceKind: string | null;
+    remoteHostId: string | null;
+    source: string | null;
     status: 'active' | 'archived';
   }>;
 }

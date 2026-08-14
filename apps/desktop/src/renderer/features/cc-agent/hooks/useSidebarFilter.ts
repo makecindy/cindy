@@ -50,6 +50,7 @@ import type {
   SidebarPinnedOrderMutation,
   SidebarSettingsSnapshot,
 } from '../../../../shared/sidebarSettings';
+import { pinnedSidebarEntryComparisonKey } from '../lib/pinnedSidebarOrder';
 
 import {
   loadStatus,
@@ -187,6 +188,7 @@ export function useSidebarFilter(
   hiddenProjectKeys: ReadonlySet<string>,
   initialSnapshot: SidebarSettingsSnapshot,
 ): UseSidebarFilterReturn {
+  const localPlatform = window.electronAPI.platform;
   const ownerId = initialSnapshot.dataOwnerId;
   const ownerStamp = useMemo<DataOwnerPushStamp>(
     () => ({
@@ -375,25 +377,25 @@ export function useSidebarFilter(
   const toggleProject = useCallback(
     (workingDir: string) => {
       setProjectsState((prev) => {
-        const next = nextProjectsAfterToggle(prev, workingDir);
+        const next = nextProjectsAfterToggle(prev, workingDir, localPlatform);
         if (next === prev) return prev;
         persistProjects(next, ownerId);
         return next;
       });
     },
-    [ownerId],
+    [localPlatform, ownerId],
   );
 
   const ensureProjectIncluded = useCallback(
     (workingDir: string) => {
       setProjectsState((prev) => {
-        const next = includeProjectInFilter(prev, workingDir);
+        const next = includeProjectInFilter(prev, workingDir, localPlatform);
         if (next === prev) return prev;
         persistProjects(next, ownerId);
         return next;
       });
     },
-    [ownerId],
+    [localPlatform, ownerId],
   );
 
   const setProjectsAll = useCallback(() => {
@@ -407,21 +409,21 @@ export function useSidebarFilter(
   const gc = useCallback(
     (activeWorkingDirs: readonly string[]) => {
       setProjectsState((prev) => {
-        const next = gcProjectsAgainstActive(prev, activeWorkingDirs);
+        const next = gcProjectsAgainstActive(prev, activeWorkingDirs, localPlatform);
         if (next === prev) return prev;
         persistProjects(next, ownerId);
         return next;
       });
       setManualProjectOrderState((prev) => {
         if (prev.length === 0) return prev;
-        const next = normalizeManualProjectOrder(prev, activeWorkingDirs);
+        const next = normalizeManualProjectOrder(prev, activeWorkingDirs, localPlatform);
         if (next.length === prev.length && next.every((wd, index) => wd === prev[index]))
           return prev;
         persistManualProjectOrder(next, ownerId);
         return next;
       });
     },
-    [ownerId],
+    [localPlatform, ownerId],
   );
 
   const projectsAsSet = useMemo<Set<string> | null>(
@@ -452,48 +454,62 @@ export function useSidebarFilter(
   const setManualProjectOrder = useCallback(
     (order: readonly string[], activeWorkingDirs: readonly string[]) => {
       setManualProjectOrderState((prev) => {
-        const next = normalizeManualProjectOrder(order, activeWorkingDirs);
+        const next = normalizeManualProjectOrder(order, activeWorkingDirs, localPlatform);
         if (next.length === prev.length && next.every((wd, index) => wd === prev[index]))
           return prev;
         persistManualProjectOrder(next, ownerId);
         return next;
       });
     },
-    [ownerId],
+    [localPlatform, ownerId],
   );
 
   const setManualPinnedOrder = useCallback(
     (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) =>
       updatePinnedOrder(
-        () => normalizeManualPinnedOrder(order, activeEntryIds),
+        () =>
+          normalizeManualPinnedOrder(order, activeEntryIds, (entryId) =>
+            pinnedSidebarEntryComparisonKey(entryId, localPlatform),
+          ),
         (_latestOrder, nextOrder) => ({
           kind: 'reorder',
           baseOrder: Array.from(baseOrder),
           order: nextOrder,
         }),
       ),
-    [updatePinnedOrder],
+    [localPlatform, updatePinnedOrder],
   );
 
   const promotePin = useCallback(
     (entryId: string) =>
       updatePinnedOrder(
-        (prev) =>
-          prev[0] === entryId
-            ? Array.from(prev)
-            : [entryId, ...prev.filter((id) => id !== entryId)],
+        (prev) => {
+          const identity = pinnedSidebarEntryComparisonKey(entryId, localPlatform);
+          const firstMatches =
+            pinnedSidebarEntryComparisonKey(prev[0] ?? '', localPlatform) === identity;
+          const remaining = prev.filter(
+            (id) => pinnedSidebarEntryComparisonKey(id, localPlatform) !== identity,
+          );
+          if (firstMatches && remaining.length === prev.length - 1) return Array.from(prev);
+          return [firstMatches ? prev[0]! : entryId, ...remaining];
+        },
         () => ({ kind: 'promote', entryId }),
       ),
-    [updatePinnedOrder],
+    [localPlatform, updatePinnedOrder],
   );
 
   const removePin = useCallback(
     (entryId: string) =>
       updatePinnedOrder(
-        (prev) => (prev.includes(entryId) ? prev.filter((id) => id !== entryId) : Array.from(prev)),
+        (prev) => {
+          const identity = pinnedSidebarEntryComparisonKey(entryId, localPlatform);
+          return prev.filter(
+            (id) => pinnedSidebarEntryComparisonKey(id, localPlatform) !== identity,
+          );
+        },
         () => ({ kind: 'remove', entryId }),
       ),
-    [updatePinnedOrder],
+    [localPlatform, updatePinnedOrder],
   );
 
   const isSessionContentFiltered =

@@ -16,6 +16,7 @@ import { isIpcError } from '../shared/ipc-errors.js';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../shared/projectKeys.js';
 import {
   normalizeSidebarPinnedOrder,
+  sidebarPinnedEntryComparisonKey,
   SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH,
   SIDEBAR_PINNED_ORDER_MAX_ENTRIES,
   type SidebarPinnedOrderMutation,
@@ -257,17 +258,35 @@ function rebasePinnedReorder(
   current: readonly string[],
   baseOrder: readonly string[],
   desiredOrder: readonly string[],
+  localPlatform: string,
 ): string[] {
-  const baseSet = new Set(baseOrder);
-  const currentSet = new Set(current);
-  const result = desiredOrder.filter((entry) => !baseSet.has(entry) || currentSet.has(entry));
-  const resultSet = new Set(result);
+  const identityOf = (entry: string) => sidebarPinnedEntryComparisonKey(entry, localPlatform);
+  const baseIdentities = new Set(baseOrder.map(identityOf));
+  const currentRepresentatives = new Map<string, string>();
+  for (const entry of current) {
+    const identity = identityOf(entry);
+    if (!currentRepresentatives.has(identity)) currentRepresentatives.set(identity, entry);
+  }
 
-  for (let index = 0; index < current.length; index += 1) {
-    const entry = current[index];
-    if (baseSet.has(entry) || resultSet.has(entry)) continue;
+  const result: string[] = [];
+  const resultIdentities = new Set<string>();
+  for (const entry of desiredOrder) {
+    const identity = identityOf(entry);
+    if (resultIdentities.has(identity)) continue;
+
+    const durableRepresentative = currentRepresentatives.get(identity);
+    if (baseIdentities.has(identity) && durableRepresentative == null) continue;
+
+    result.push(durableRepresentative ?? entry);
+    resultIdentities.add(identity);
+  }
+
+  const durableEntries = Array.from(currentRepresentatives.entries());
+  for (let index = 0; index < durableEntries.length; index += 1) {
+    const [identity, entry] = durableEntries[index];
+    if (baseIdentities.has(identity) || resultIdentities.has(identity)) continue;
     result.splice(Math.min(index, result.length), 0, entry);
-    resultSet.add(entry);
+    resultIdentities.add(identity);
   }
 
   return normalizeSidebarPinnedOrder(result);
@@ -277,18 +296,29 @@ function applyPinnedMutation(
   current: readonly string[],
   mutation: SidebarPinnedOrderMutation,
   pinnedOrderIsAuthoritative: boolean,
+  localPlatform: string,
 ): string[] {
   switch (mutation.kind) {
-    case 'promote':
-      return current[0] === mutation.entryId
-        ? Array.from(current)
-        : [mutation.entryId, ...current.filter((entry) => entry !== mutation.entryId)];
-    case 'remove':
-      return current.filter((entry) => entry !== mutation.entryId);
+    case 'promote': {
+      const identity = sidebarPinnedEntryComparisonKey(mutation.entryId, localPlatform);
+      const firstMatches =
+        sidebarPinnedEntryComparisonKey(current[0] ?? '', localPlatform) === identity;
+      const remaining = current.filter(
+        (entry) => sidebarPinnedEntryComparisonKey(entry, localPlatform) !== identity,
+      );
+      if (firstMatches && remaining.length === current.length - 1) return Array.from(current);
+      return [firstMatches ? current[0]! : mutation.entryId, ...remaining];
+    }
+    case 'remove': {
+      const identity = sidebarPinnedEntryComparisonKey(mutation.entryId, localPlatform);
+      return current.filter(
+        (entry) => sidebarPinnedEntryComparisonKey(entry, localPlatform) !== identity,
+      );
+    }
     case 'migrate-legacy':
       return pinnedOrderIsAuthoritative ? Array.from(current) : Array.from(mutation.order);
     case 'reorder':
-      return rebasePinnedReorder(current, mutation.baseOrder, mutation.order);
+      return rebasePinnedReorder(current, mutation.baseOrder, mutation.order, localPlatform);
   }
 }
 
@@ -395,6 +425,7 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
           current.value.pinnedOrder,
           mutation,
           hasAuthoritativePinnedOrder(current.customizedKeys),
+          process.platform,
         );
         changed = !sameStringArray(current.value.pinnedOrder, nextOrder);
         return { pinnedOrder: nextOrder };

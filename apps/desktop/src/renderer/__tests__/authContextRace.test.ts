@@ -42,6 +42,7 @@ describe('AuthContext auth-state races', () => {
   it('publishes a data-owner generation at every auth boundary', () => {
     expect(source).toContain('cancelRemoteOptimisticSendsForDataOwnerBoundary();');
     expect(source).toContain('setDataOwnerGeneration(dataOwnerId, ownerGeneration);');
+    expect(source).toContain('recentWorkdirsStore.setDataOwner(getDataOwnerGeneration());');
     expect(source).toContain('invalidateProvidersSnapshot();');
     expect(source).toContain(
       'publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);',

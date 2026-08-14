@@ -50,12 +50,7 @@ import {
 } from '../../../../shared/projectKeys';
 import type { RemoteProjectMachineIdentity } from './remoteProjectIdentity';
 
-export {
-  deviceLinkProjectKey,
-  normalizeProjectKey,
-  projectKeyComparisonKey,
-  projectIdentityKey,
-};
+export { deviceLinkProjectKey, normalizeProjectKey, projectKeyComparisonKey, projectIdentityKey };
 
 /* ============================== Types ============================== */
 
@@ -96,6 +91,10 @@ export interface ProjectNode {
   sessions: Session[];
   /** 组内任意 session 的最大 sortTime（userSendAt ?? updatedAt），用于 Project 间排序 */
   latestActivityAt: string;
+  /** 来自本地持久项目目录；即使当前视图没有匹配会话也应保留项目节点。 */
+  isPersistentLocal?: boolean;
+  /** 该持久项目在全量本地会话中出现过的 agentKind；空数组表示真正零会话。 */
+  persistentLocalKnownAgentKinds?: readonly string[];
 }
 
 export interface ProjectGroupsResult {
@@ -114,6 +113,24 @@ export interface GroupSessionsOptions {
    * when every conversation inside it is pinned.
    */
   includePinnedInProjects?: boolean;
+  /** 与会话生命周期解耦的本地项目目录，用于保留零会话项目。 */
+  persistentLocalProjects?: readonly PersistentLocalProject[];
+  /** 本地路径身份比较所需的平台；Windows 盘符与 UNC 路径忽略大小写。 */
+  localPlatform?: string;
+}
+
+export interface PersistentLocalProject {
+  workingDir: string;
+  lastUsedAt: string;
+  /** 全量本地会话历史中的 agentKind；用于区分真正空项目与 vendor 不匹配。 */
+  knownAgentKinds: readonly string[];
+}
+
+export interface RecentLocalProjectEntry {
+  path: string;
+  lastUsedAt: string;
+  /** 持久层从包含软删除行的会话历史聚合出的 agentKind。 */
+  knownAgentKinds?: readonly string[];
 }
 
 /* ============================== normalize ============================== */
@@ -132,13 +149,79 @@ export interface GroupSessionsOptions {
  */
 export const normalizeWorkingDir = normalizeWorkingDirForGrouping;
 
+export function buildPersistentLocalProjects(
+  entries: readonly RecentLocalProjectEntry[],
+  sessions: readonly Session[],
+  localPlatform: string,
+): PersistentLocalProject[] {
+  const knownKindsByComparisonKey = new Map<string, Set<string>>();
+  for (const session of sessions) {
+    if (
+      session.workspaceKind === 'dialogue' ||
+      session.remoteHostId != null ||
+      session.deviceLinkDeviceId != null
+    ) {
+      continue;
+    }
+    const projectKey = projectIdentityKeyForSession(session);
+    const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+    if (!comparisonKey) continue;
+    let kinds = knownKindsByComparisonKey.get(comparisonKey);
+    if (!kinds) {
+      kinds = new Set<string>();
+      knownKindsByComparisonKey.set(comparisonKey, kinds);
+    }
+    kinds.add(session.agentKind ?? 'cc');
+  }
+
+  return entries.map((entry) => {
+    const projectKey = projectIdentityKey('local', entry.path, null);
+    const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+    const persistedKinds = entry.knownAgentKinds ?? [];
+    const visibleKinds =
+      (comparisonKey && knownKindsByComparisonKey.get(comparisonKey)) ?? new Set<string>();
+    return {
+      workingDir: entry.path,
+      lastUsedAt: entry.lastUsedAt,
+      knownAgentKinds: Array.from(new Set([...persistedKinds, ...visibleKinds])).sort(),
+    };
+  });
+}
+
+export function filterPersistentLocalProjectsByLastActivity(
+  projects: readonly PersistentLocalProject[],
+  cutoffMs: number | null,
+): readonly PersistentLocalProject[] {
+  if (cutoffMs === null) return projects;
+  return projects.filter((project) => toMs(project.lastUsedAt) >= cutoffMs);
+}
+
+/**
+ * vendor 过滤下，历史上存在其它 vendor 会话的项目不能伪装成空项目；真正零会话
+ * 的目录不属于任何 vendor，仍保留创建入口。历史上存在目标 vendor 的项目也保留，
+ * 即使它因为 status 过滤暂时没有可见会话。
+ */
+export function persistentProjectMatchesVendor(
+  project: Pick<ProjectNode, 'isPersistentLocal' | 'persistentLocalKnownAgentKinds'>,
+  vendor: string,
+): boolean {
+  if (!project.isPersistentLocal) return false;
+  const knownKinds = project.persistentLocalKnownAgentKinds ?? [];
+  return knownKinds.length === 0 || knownKinds.includes(vendor);
+}
+
 export function projectIdentityKeyForSession(
   session: Pick<Session, 'workingDir' | 'remoteHostId' | 'deviceLinkDeviceId'>,
 ): string | null {
   const workingDir = normalizeWorkingDir(session.workingDir);
   if (workingDir == null) return null;
-  if (session.deviceLinkDeviceId) return deviceLinkProjectKey(session.deviceLinkDeviceId, workingDir);
-  return projectIdentityKey(session.remoteHostId ? 'remote' : 'local', workingDir, session.remoteHostId ?? null);
+  if (session.deviceLinkDeviceId)
+    return deviceLinkProjectKey(session.deviceLinkDeviceId, workingDir);
+  return projectIdentityKey(
+    session.remoteHostId ? 'remote' : 'local',
+    workingDir,
+    session.remoteHostId ?? null,
+  );
 }
 
 export function getProjectIdentity(session: Session): ProjectIdentity | null {
@@ -274,6 +357,7 @@ function extractDisplayNameFromIndex(
 
 function normalizeProjectAliases(
   raw: GroupSessionsOptions['projectAliases'],
+  localPlatform: string,
 ): Map<string, string> {
   const out = new Map<string, string>();
   if (!raw) return out;
@@ -282,7 +366,10 @@ function normalizeProjectAliases(
     const projectKey = normalizeProjectKey(key);
     const alias = typeof value === 'string' ? value.trim() : '';
     if (!projectKey || alias.length === 0) continue;
-    out.set(projectKey, alias);
+    const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey;
+    // Alias rows arrive newest-first. Legacy Windows casing variants collapse
+    // to one identity without allowing an older duplicate to overwrite it.
+    if (!out.has(comparisonKey)) out.set(comparisonKey, alias);
   }
   return out;
 }
@@ -391,8 +478,9 @@ export function groupSessions(
   sessions: readonly Session[],
   options: GroupSessionsOptions = {},
 ): ProjectGroupsResult {
-  const aliases = normalizeProjectAliases(options.projectAliases);
-  if (!sessions || sessions.length === 0) {
+  const localPlatform = options.localPlatform ?? '';
+  const aliases = normalizeProjectAliases(options.projectAliases, localPlatform);
+  if ((!sessions || sessions.length === 0) && !options.persistentLocalProjects?.length) {
     return { pinned: [], dialogues: [], unclassified: [], projects: [] };
   }
 
@@ -406,6 +494,24 @@ export function groupSessions(
   const remaining = options.includePinnedInProjects
     ? sessions
     : sessions.filter((s) => s.pinnedAt == null);
+
+  // 持久目录是本地 Project 的稳定代表身份。Windows 上会话 cwd 的 casing 可能
+  // 来自另一条 OS/API 链路；若让会话先占 key，最后一条会话删除前后会在两个
+  // casing 之间翻转，连带切断 filter / alias / pin / manual order。先固定代表，
+  // 有会话与零会话两态都复用同一个 projectKey + workingDir。
+  const persistentRepresentativeByComparison = new Map<
+    string,
+    { projectKey: string; workingDir: string }
+  >();
+  for (const project of options.persistentLocalProjects ?? []) {
+    const workingDir = normalizeWorkingDir(project.workingDir);
+    if (!workingDir) continue;
+    const projectKey = projectIdentityKey('local', workingDir, null);
+    const comparisonKey = projectKeyComparisonKey(projectKey, options.localPlatform ?? '');
+    if (comparisonKey && !persistentRepresentativeByComparison.has(comparisonKey)) {
+      persistentRepresentativeByComparison.set(comparisonKey, { projectKey, workingDir });
+    }
+  }
 
   // 3. 按 normalize 后 workingDir 分组
   // 草稿判定主线：userSendAt == null（用户从未按下发送）。
@@ -440,38 +546,95 @@ export function groupSessions(
       // device-link 远程会话也归 'remote' scope(复用隐藏本机 FS 入口的渲染分支),
       // 但用独立 device: key,且不带 remoteHostId(与 SSH 维度互斥)。
       const scope: ProjectScope = isDeviceLink || s.remoteHostId ? 'remote' : 'local';
-      const projectKey = isDeviceLink
+      let projectKey = isDeviceLink
         ? deviceLinkProjectKey(s.deviceLinkDeviceId as string, dir)
         : projectIdentityKey(scope, dir, s.remoteHostId ?? null);
+      let identityWorkingDir = dir;
+      if (scope === 'local') {
+        const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+        const representative = comparisonKey
+          ? persistentRepresentativeByComparison.get(comparisonKey)
+          : undefined;
+        if (representative) {
+          projectKey = representative.projectKey;
+          identityWorkingDir = representative.workingDir;
+        }
+      }
       const arr = groups.get(projectKey);
       if (arr) arr.push(s);
       else groups.set(projectKey, [s]);
       if (!identityByKey.has(projectKey)) {
         identityByKey.set(projectKey, {
           scope,
-          workingDir: dir,
-          remoteHostId: isDeviceLink ? null : s.remoteHostId ?? null,
+          workingDir: identityWorkingDir,
+          remoteHostId: isDeviceLink ? null : (s.remoteHostId ?? null),
           deviceLinkDeviceId: isDeviceLink ? (s.deviceLinkDeviceId as string) : null,
-          deviceLinkDeviceName: isDeviceLink ? s.deviceLinkDeviceName ?? null : null,
-          deviceLinkConnectionStatus: isDeviceLink ? s.deviceLinkConnectionStatus ?? 'connected' : null,
+          deviceLinkDeviceName: isDeviceLink ? (s.deviceLinkDeviceName ?? null) : null,
+          deviceLinkConnectionStatus: isDeviceLink
+            ? (s.deviceLinkConnectionStatus ?? 'connected')
+            : null,
         });
       }
     }
   }
 
-  // 4. unclassified 排序 —— active 在 archived 之上，同状态按 sortTime desc
+  // 4. 合入与会话生命周期解耦的本地项目目录。持久目录已在上一步主导本地
+  // Project 的稳定代表身份；这里补足零会话节点并聚合 activity/vendor 元数据。
+  const persistentProjectKeys = new Set<string>();
+  const persistentLastUsedByKey = new Map<string, string>();
+  const persistentKnownAgentKindsByKey = new Map<string, Set<string>>();
+  const localProjectKeyByComparison = new Map<string, string>();
+  for (const [projectKey, identity] of identityByKey) {
+    if (identity.scope !== 'local') continue;
+    const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+    if (comparisonKey) localProjectKeyByComparison.set(comparisonKey, projectKey);
+  }
+  for (const project of options.persistentLocalProjects ?? []) {
+    const workingDir = normalizeWorkingDir(project.workingDir);
+    if (!workingDir) continue;
+    const seedKey = projectIdentityKey('local', workingDir, null);
+    const comparisonKey = projectKeyComparisonKey(seedKey, localPlatform);
+    const projectKey = (comparisonKey && localProjectKeyByComparison.get(comparisonKey)) ?? seedKey;
+    if (!groups.has(projectKey)) {
+      groups.set(projectKey, []);
+      identityByKey.set(projectKey, {
+        scope: 'local',
+        workingDir,
+        remoteHostId: null,
+        deviceLinkDeviceId: null,
+        deviceLinkDeviceName: null,
+        deviceLinkConnectionStatus: null,
+      });
+      if (comparisonKey) localProjectKeyByComparison.set(comparisonKey, projectKey);
+    }
+    persistentProjectKeys.add(projectKey);
+    const current = persistentLastUsedByKey.get(projectKey);
+    if (!current || toMs(project.lastUsedAt) > toMs(current)) {
+      persistentLastUsedByKey.set(projectKey, project.lastUsedAt);
+    }
+    let knownKinds = persistentKnownAgentKindsByKey.get(projectKey);
+    if (!knownKinds) {
+      knownKinds = new Set<string>();
+      persistentKnownAgentKindsByKey.set(projectKey, knownKinds);
+    }
+    for (const agentKind of project.knownAgentKinds) knownKinds.add(agentKind);
+  }
+
+  // 5. unclassified 排序 —— active 在 archived 之上，同状态按 sortTime desc
   dialogues.sort(compareSessionsByStatusThenSortTimeDesc);
   unclassified.sort(compareSessionsByStatusThenSortTimeDesc);
 
-  // 5. 同名消歧 — "先创建优先"：在每个 basename 相同的 dir 集合里，按
+  // 6. 同名消歧 — "先创建优先"：在每个 basename 相同的 dir 集合里，按
   //    "该 dir 下最早 createdAt 的 Session 升序"排序，排序第一的获胜者保留纯
   //    basename（minSegments=1），其余强制 minSegments=2 触发 parent 追溯。
   //    createdAt 缺失时回退到 dir 字符串字典序，保证确定性。
   const allProjectKeys = Array.from(groups.keys());
-  const allDisplayDirs = allProjectKeys.map((projectKey) => identityByKey.get(projectKey)?.workingDir ?? projectKey);
+  const allDisplayDirs = allProjectKeys.map(
+    (projectKey) => identityByKey.get(projectKey)?.workingDir ?? projectKey,
+  );
   const minSegByDir = new Map<string, number>();
 
-  // 5a. 先按 basename 分桶
+  // 6a. 先按 basename 分桶
   const dirsByBasename = new Map<string, string[]>();
   for (const projectKey of allProjectKeys) {
     const identity = identityByKey.get(projectKey);
@@ -483,7 +646,7 @@ export function groupSessions(
     else dirsByBasename.set(basename, [projectKey]);
   }
 
-  // 5b. 每个 basename 桶内确定获胜者
+  // 6b. 每个 basename 桶内确定获胜者
   for (const [, dirsInBucket] of dirsByBasename) {
     if (dirsInBucket.length === 1) {
       // 唯一 basename，无需消歧；走默认 minSegments=1
@@ -516,7 +679,7 @@ export function groupSessions(
     }
   }
 
-  // 5c. 构造 ProjectNode
+  // 6c. 构造 ProjectNode
   //  - 获胜者 (minSeg=1)：即使 basename 与其他 dir 冲突也强制保留 1 段（先创建优先）
   //  - 非获胜者 (minSeg=2)：通过 extractDisplayName 走至少 2 段的消歧
   //  - 唯一 basename (minSeg=1)：走默认 1 段（无冲突自然 1 段返回）
@@ -529,8 +692,8 @@ export function groupSessions(
     // latestActivityAt 取"全员里 sortTime 最大"——project 间排序按真实最近活跃时间，
     // 不被 active-first 的组内排序污染（否则只有 archived 的 project 会被强行按
     // 较旧的 active 时间下沉，与用户预期不符）。
-    let latestMs = 0;
-    let latestIso = '';
+    let latestIso = persistentLastUsedByKey.get(projectKey) ?? '';
+    let latestMs = toMs(latestIso);
     for (const s of sess) {
       const t = sortTimeMs(s);
       if (t > latestMs) {
@@ -550,7 +713,7 @@ export function groupSessions(
 
     let name: string;
     let segments: number;
-    const alias = aliases.get(projectKey);
+    const alias = aliases.get(projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey);
     if (alias) {
       name = alias;
       segments = 0;
@@ -575,10 +738,14 @@ export function groupSessions(
       segments,
       sessions: sorted,
       latestActivityAt: latestIso,
+      isPersistentLocal: persistentProjectKeys.has(projectKey) || undefined,
+      persistentLocalKnownAgentKinds: persistentProjectKeys.has(projectKey)
+        ? Array.from(persistentKnownAgentKindsByKey.get(projectKey) ?? []).sort()
+        : undefined,
     });
   }
 
-  // 6. Project 间排序
+  // 7. Project 间排序
   projects.sort(compareProjectsByLatestSessionDesc);
 
   return { pinned, dialogues, unclassified, projects };

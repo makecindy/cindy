@@ -11,6 +11,7 @@ interface CollectRestorableProjectKeysOptions {
   lastActivityCutoff: number | null;
   pinnedProjectKeys: ReadonlySet<string>;
   vendorPredicate: RestoreVendorPredicate | null;
+  localPlatform?: string;
 }
 
 /**
@@ -27,21 +28,33 @@ export function collectRestorableProjectKeys({
   lastActivityCutoff,
   pinnedProjectKeys,
   vendorPredicate,
+  localPlatform = '',
 }: CollectRestorableProjectKeysOptions): ReadonlySet<string> {
   const vendorSessions = vendorPredicate ? sessions.filter(vendorPredicate) : sessions;
   const activitySessions =
     lastActivityCutoff === null
       ? vendorSessions
       : vendorSessions.filter((session) => sessionActivityMs(session) >= lastActivityCutoff);
-  const activityGroups = groupSessions(activitySessions, { includePinnedInProjects: true });
+  const activityGroups = groupSessions(activitySessions, {
+    includePinnedInProjects: true,
+    localPlatform,
+  });
   const allGroups =
     lastActivityCutoff === null
       ? activityGroups
-      : groupSessions(vendorSessions, { includePinnedInProjects: true });
+      : groupSessions(vendorSessions, { includePinnedInProjects: true, localPlatform });
   const projectKeys = new Set(activityGroups.projects.map((project) => project.projectKey));
+  const pinnedComparisonKeys = new Set(
+    Array.from(pinnedProjectKeys)
+      .map((projectKey) => projectKeyComparisonKey(projectKey, localPlatform))
+      .filter((projectKey): projectKey is string => projectKey != null),
+  );
 
   for (const project of allGroups.projects) {
-    if (pinnedProjectKeys.has(project.projectKey)) projectKeys.add(project.projectKey);
+    const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
+    if (comparisonKey != null && pinnedComparisonKeys.has(comparisonKey)) {
+      projectKeys.add(project.projectKey);
+    }
   }
   for (const session of allGroups.pinned) {
     if (session.workspaceKind === 'dialogue') continue;

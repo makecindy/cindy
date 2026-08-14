@@ -75,6 +75,6 @@ describe('Projects sidebar section', () => {
 
   it('hides the project tree only through the section collapsed state', () => {
     expect(projectsSectionSource).toContain('{!isSectionCollapsed && (');
-    expect(projectsSectionSource).toContain('isCollapsed={collapsed.has(project.projectKey)}');
+    expect(projectsSectionSource).toContain('isCollapsed={projectKeyComparisonSetHas(');
   });
 });

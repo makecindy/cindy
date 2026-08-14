@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
   return {
     service,
     reset: vi.fn(),
+    setRecentWorkdirsOwner: vi.fn(),
     getMe: vi.fn(async () => ({ role: 'user' })),
     clearWorkersCache: vi.fn(),
     invalidateProvidersSnapshot: vi.fn(),
@@ -51,6 +52,9 @@ vi.mock('@/lib/authService', () => ({
 }));
 vi.mock('@/lib/sessionsStore', () => ({
   sessionsStore: { reset: mocks.reset },
+}));
+vi.mock('@/lib/recentWorkdirsStore', () => ({
+  recentWorkdirsStore: { setDataOwner: mocks.setRecentWorkdirsOwner },
 }));
 vi.mock('@/lib/meService', () => ({ getMe: mocks.getMe }));
 vi.mock('@/features/cc-agent/hooks/useWorkers', () => ({
@@ -133,6 +137,7 @@ describe('AuthContext session cache boundaries', () => {
 
   beforeEach(() => {
     mocks.reset.mockClear();
+    mocks.setRecentWorkdirsOwner.mockClear();
     mocks.getMe.mockClear();
     mocks.clearWorkersCache.mockClear();
     mocks.invalidateProvidersSnapshot.mockClear();
@@ -162,10 +167,18 @@ describe('AuthContext session cache boundaries', () => {
     await waitFor(() => expect(view.result.current.user?.id).toBe('account-a'));
     expect(mocks.reset).toHaveBeenCalledTimes(1);
     expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.setRecentWorkdirsOwner).toHaveBeenCalledWith({
+      dataOwnerId: 'account-a',
+      generation: 1,
+    });
 
     act(() => mocks.emitAuth(authState('account-b')));
     expect(mocks.reset).toHaveBeenCalledTimes(2);
     expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(2);
+    expect(mocks.setRecentWorkdirsOwner).toHaveBeenCalledWith({
+      dataOwnerId: 'account-b',
+      generation: 1,
+    });
 
     act(() => mocks.emitAuth(authState('account-b')));
     expect(mocks.reset).toHaveBeenCalledTimes(2);

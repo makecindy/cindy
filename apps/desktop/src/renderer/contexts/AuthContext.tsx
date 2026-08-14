@@ -32,6 +32,7 @@ import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { setUserPromptOwner } from '@/lib/userPromptStore';
 import { bootstrapMemorySettingsFromMain, setMemorySettingsOwner } from '@/lib/memorySettingsStore';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
@@ -98,6 +99,7 @@ function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?
     cancelRemoteOptimisticSendsForDataOwnerBoundary();
   }
   setDataOwnerGeneration(dataOwnerId, ownerGeneration);
+  recentWorkdirsStore.setDataOwner(getDataOwnerGeneration());
   setSelectedMachineOwner(dataOwnerId);
   if (previousOwnerId !== dataOwnerId) invalidateProvidersSnapshot();
 }

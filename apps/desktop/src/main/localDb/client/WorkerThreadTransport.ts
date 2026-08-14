@@ -311,6 +311,12 @@ function dispatchTx(readyDb, payload) {
       return sessionsRenameTitles(readyDb, request.args);
     case 'sessions.setStatus':
       return sessionsSetStatus(readyDb, request.args);
+    case 'recentWorkdirs.mergeWindowsIdentity':
+      return recentWorkdirsMergeWindowsIdentity(readyDb, request.args);
+    case 'recentWorkdirs.removeWindowsIdentity':
+      return recentWorkdirsRemoveWindowsIdentity(readyDb, request.args);
+    case 'projectAliases.replaceIdentity':
+      return projectAliasesReplaceIdentity(readyDb, request.args);
     case 'session.agentSwitchFallback':
       return sessionAgentSwitchFallback(readyDb, request.args);
     case 'message.delete':
@@ -324,6 +330,72 @@ function dispatchTx(readyDb, payload) {
     default:
       throw Object.assign(new Error('unknown tx: ' + name), { code: 'UNKNOWN_TX' });
   }
+}
+
+// ⚠️ 与 worker/opHandlers/tx.ts 的 recentWorkdirsMergeWindowsIdentity 保持一致。
+function recentWorkdirsMergeWindowsIdentity(readyDb, args) {
+  const payload = asRecord(args, 'recentWorkdirs.mergeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  const lastUsedAt = expectNumber(payload.lastUsedAt, 'lastUsedAt');
+  return readyDb.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(readyDb, path);
+    const representative = matches
+      .slice()
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt || a.rowid - b.rowid)[0];
+    const representativePath = representative?.path ?? path;
+    const newestTimestamp = Math.max(lastUsedAt, ...matches.map((row) => row.lastUsedAt));
+    readyDb.prepare(
+      'INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET last_used_at = MAX(recent_workdirs.last_used_at, excluded.last_used_at)',
+    ).run(representativePath, newestTimestamp);
+    const removeVariant = readyDb.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    for (const row of matches) {
+      if (row.path !== representativePath) removeVariant.run(row.path);
+    }
+  })();
+}
+
+// ⚠️ 与 worker/opHandlers/tx.ts 的 recentWorkdirsRemoveWindowsIdentity 保持一致。
+function recentWorkdirsRemoveWindowsIdentity(readyDb, args) {
+  const payload = asRecord(args, 'recentWorkdirs.removeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  return readyDb.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(readyDb, path);
+    const removeVariant = readyDb.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    let changes = 0;
+    for (const row of matches) changes += removeVariant.run(row.path).changes;
+    return { changes };
+  })();
+}
+
+function recentWorkdirWindowsIdentityRows(readyDb, path) {
+  const identity = path.toLowerCase();
+  return readyDb
+    .prepare('SELECT rowid, path, last_used_at AS lastUsedAt FROM recent_workdirs')
+    .all()
+    .filter((row) => row.path.toLowerCase() === identity);
+}
+
+// ⚠️ 与 worker/opHandlers/tx.ts 的 projectAliasesReplaceIdentity 保持一致。
+function projectAliasesReplaceIdentity(readyDb, args) {
+  const payload = asRecord(args, 'projectAliases.replaceIdentity args');
+  const projectKey = expectString(payload.projectKey, 'projectKey');
+  const comparisonKey = expectString(payload.comparisonKey, 'comparisonKey');
+  if (typeof payload.foldCase !== 'boolean') throw invalidArgs('foldCase must be a boolean');
+  const alias = nullableString(payload.alias);
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  return readyDb.transaction(() => {
+    const rows = readyDb.prepare('SELECT project_key AS projectKey FROM project_aliases').all();
+    const removeAlias = readyDb.prepare('DELETE FROM project_aliases WHERE project_key = ?');
+    for (const row of rows) {
+      const identity = payload.foldCase ? row.projectKey.toLowerCase() : row.projectKey;
+      if (identity === comparisonKey) removeAlias.run(row.projectKey);
+    }
+    if (alias == null) return null;
+    readyDb
+      .prepare('INSERT INTO project_aliases (project_key, alias, updated_at) VALUES (?, ?, ?)')
+      .run(projectKey, alias, updatedAt);
+    return { projectKey, alias, updatedAt };
+  })();
 }
 
 // ⚠️ 与 worker/opHandlers/tx.ts 的 imDeleteBindings 保持一致。
@@ -623,7 +695,7 @@ function sessionsSetStatus(readyDb, args) {
     'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind',
+    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   return readyDb.transaction(() => {
     const applied = [];
@@ -643,6 +715,8 @@ function sessionsSetStatus(readyDb, args) {
         title: updated.title,
         workingDir: updated.workingDir,
         workspaceKind: updated.workspaceKind,
+        remoteHostId: updated.remoteHostId,
+        source: updated.source,
         status,
       });
     }

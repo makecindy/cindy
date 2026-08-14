@@ -27,6 +27,10 @@ import {
 } from '@/components/ui/dropdown-menu';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 import { getRemoteProjectMachineIdentity } from '../lib/remoteProjectIdentity';
+import {
+  buildProjectKeyComparisonSet,
+  projectKeyComparisonSetHas,
+} from '../lib/sidebarProjectVisibility';
 import type {
   FilterGroupBy,
   FilterLastActivity,
@@ -189,6 +193,10 @@ export function SidebarFilterPopover({
     projects === 'all'
       ? t('ccAgent.sidebar.filterAllText')
       : t('ccAgent.sidebar.filterSelectedProjects', { count: projects.length });
+  const projectComparisonKeys =
+    projectsAsSet == null
+      ? null
+      : buildProjectKeyComparisonSet(projectsAsSet, window.electronAPI.platform);
 
   const ariaLabel = t('ccAgent.sidebar.filterAria', {
     status: statusValue,
@@ -258,7 +266,14 @@ export function SidebarFilterPopover({
           )}
           <div className="max-h-[256px] overflow-y-auto">
             {allKnownProjects.map((project) => {
-              const selected = projects === 'all' || (projectsAsSet?.has(project.projectKey) ?? false);
+              const selected =
+                projects === 'all' ||
+                (projectComparisonKeys != null &&
+                  projectKeyComparisonSetHas(
+                    projectComparisonKeys,
+                    project.projectKey,
+                    window.electronAPI.platform,
+                  ));
               const remoteIdentity = getRemoteProjectMachineIdentity(project);
               return (
                 <DropdownMenuItem

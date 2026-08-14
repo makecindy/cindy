@@ -4,6 +4,7 @@ import type { FilterSortBy } from '../hooks/helpers/sidebarFilterCore';
 import { normalizeManualProjectOrder } from '../hooks/helpers/sidebarFilterCore';
 import { sessionActivityMs } from './dateSessionGrouping';
 import type { ProjectNode } from './projectGrouping';
+import { projectKeyComparisonKey } from './projectGrouping';
 
 function toMs(iso: string | null | undefined): number {
   if (!iso) return 0;
@@ -25,6 +26,7 @@ export function sortProjectsForSidebar(
   projects: readonly ProjectNode[],
   sortBy: FilterSortBy,
   manualProjectOrder: readonly string[],
+  localPlatform: string = '',
 ): ProjectNode[] {
   const withSortedSessions = projects.map((project) => ({
     ...project,
@@ -46,12 +48,20 @@ export function sortProjectsForSidebar(
     const normalizedOrder = normalizeManualProjectOrder(
       manualProjectOrder,
       projects.map((project) => project.projectKey),
+      localPlatform,
     );
-    const rank = new Map(normalizedOrder.map((wd, index) => [wd, index]));
+    const rank = new Map(
+      normalizedOrder.map((key, index) => [
+        projectKeyComparisonKey(key, localPlatform) ?? key,
+        index,
+      ]),
+    );
     return withSortedSessions.sort(
       (a, b) =>
-        (rank.get(a.projectKey) ?? Number.MAX_SAFE_INTEGER) -
-        (rank.get(b.projectKey) ?? Number.MAX_SAFE_INTEGER),
+        (rank.get(projectKeyComparisonKey(a.projectKey, localPlatform) ?? a.projectKey) ??
+          Number.MAX_SAFE_INTEGER) -
+        (rank.get(projectKeyComparisonKey(b.projectKey, localPlatform) ?? b.projectKey) ??
+          Number.MAX_SAFE_INTEGER),
     );
   }
 

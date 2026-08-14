@@ -4593,7 +4593,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** 从最近列表移除一条(列表卫生,不动 sessions / 磁盘;再次使用会重新入列)。 */
       remove: (input: { path: string }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:recent-workdirs:remove', input),
-      /** Broadcast: 任一窗口/远程调用删除条目后通知,其它窗口据此重拉列表。 */
+      /** Broadcast: 目录移除或活动时间刷新后通知,renderer 据此重拉列表。 */
       onChanged: createIpcFanOut('local-db:recent-workdirs:changed'),
     },
     rightSidebarTabs: {
