@@ -720,18 +720,21 @@ export function ToolsSection({
   // catch 不得改写新插件下一次点击会使用的 configRef。
   const currentGhostIdRef = useRef(ghostId);
   currentGhostIdRef.current = ghostId;
-  // IPC invoke 的 Promise 可能乱序落定。只有该 Ghost 的最新一次保存结果
-  // (成功或失败)才能碰 confirmedConfigRef/UI；旧请求的回调若还生效，会用
-  // 一个已经过期的判断覆盖掉更新请求刚确认或正在等待的状态。
+  // IPC invoke 的 Promise 可能乱序落定;但主进程侧的 ghosts:tool-permissions:set
+  // handler 是同步写盘(见 cindy-brain/index.ts),同一 renderer 发出的多次调用在
+  // 主进程里严格按发起顺序处理完成,所以"发起顺序"就是真实落盘顺序的忠实代理——
+  // 即使某次调用的 Promise 回执因为跨进程消息调度先/后到达，也不改变谁先写盘。
   const persistSequenceRef = useRef(0);
-  // 最近一次真正被磁盘确认过的配置(初始读盘、或某次 setToolPermissions 真正
-  // 成功都算确认)。失败回滚必须退到这里,不能退到"上一次点击时的乐观值"——
-  // 那个值本身也可能还没确认过。连续两次写都失败时，如果退到上一次乐观值，
-  // UI 会停在一个磁盘上从未真正出现过的配置上；这是安全设置，用户看到的
-  // "已阻止"/"总是允许"必须和磁盘上实际生效的策略一致，不能凭空出现一个中间态。
-  const confirmedConfigRef = useRef({ ghostId, config });
+  // 最近一次真正被磁盘确认过的配置,连同它当时的发起序号一起追踪(初始读盘、
+  // 或某次 setToolPermissions 真正成功都算确认)。失败回滚必须现读这里,不能
+  // 用发起时的旧快照——发起之后到失败之间，可能已经有一次更早发起、但更早
+  // 落定的成功把它更新过。这是安全设置，UI 显示的"已阻止"/"总是允许"必须和
+  // 磁盘上实际生效的策略一致，不能凭空停在一个从未真正落盘过的中间态，也不能
+  // 因为一次成功回调"不是当前最新一次请求"就把它当没发生过而漏记——它确确实实
+  // 已经落盘了。
+  const confirmedConfigRef = useRef({ ghostId, config, sequence: 0 });
   if (confirmedConfigRef.current.ghostId !== ghostId) {
-    confirmedConfigRef.current = { ghostId, config };
+    confirmedConfigRef.current = { ghostId, config, sequence: 0 };
   }
 
   /**
@@ -740,18 +743,23 @@ export function ToolsSection({
    */
   const persist = (next: GhostToolPermissionConfig) => {
     const sequence = ++persistSequenceRef.current;
-    const rollbackTo = confirmedConfigRef.current.config;
     configRef.current = next;
     setLoaded({ ghostId, config: next });
     void window.electronAPI.ghosts.setToolPermissions(ghostId, next).then(
       () => {
-        if (persistSequenceRef.current !== sequence) return;
         if (currentGhostIdRef.current !== ghostId) return;
-        confirmedConfigRef.current = { ghostId, config: next };
+        // 只拒绝"比已确认的还旧"的成功——它对应的写盘已经被更晚发起的请求
+        // 覆盖，如实记录反而会让确认状态倒退回一个磁盘上已经不存在的值。
+        // 不按"是不是当前最新一次请求"过滤：那样会把这次成功当没发生过。
+        if (sequence < confirmedConfigRef.current.sequence) return;
+        confirmedConfigRef.current = { ghostId, config: next, sequence };
       },
       () => {
+        // 只有最新一次发起的请求失败才触发回滚；旧请求的失败可能是被更新的
+        // 请求取代后才姗姗来迟，不该用它覆盖更新请求已经/将要确认的状态。
         if (persistSequenceRef.current !== sequence) return;
         if (currentGhostIdRef.current !== ghostId) return;
+        const rollbackTo = confirmedConfigRef.current.config;
         configRef.current = rollbackTo;
         setLoaded((current) =>
           current.ghostId === ghostId ? { ghostId, config: rollbackTo } : current,
