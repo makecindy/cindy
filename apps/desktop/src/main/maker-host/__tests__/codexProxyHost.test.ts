@@ -445,6 +445,7 @@ describe('withCodexVisionFallback', () => {
     };
 
     try {
+      host.registerComposed('s-provider', 't-provider', 'prompt');
       const wrapped = host.withCodexVisionFallback(() => ({
         upstreamOverride: 'https://text-only.example/v1',
       }));
@@ -455,6 +456,11 @@ describe('withCodexVisionFallback', () => {
         bodyModelOverride: 'vision-model',
         transformProviderId: 'vision-provider',
       }));
+      expect(host.takeCodexVisionFallback('s-provider')).toEqual({
+        model: 'vision-model',
+        providerId: 'vision-provider',
+      });
+      expect(host.takeCodexVisionFallback('s-provider')).toBeNull();
     } finally {
       mockState.visionFallbackSettings = {
         visionFallbackEnabled: true,

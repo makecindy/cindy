@@ -97,6 +97,7 @@ const sessionToThreads = new Map<string, Set<string>>();
 const threadToSession = new Map<string, string>();
 const reviewerModelBySession = new Map<string, string>();
 const httpRecoveryReasonByThread = new Map<string, string>();
+const visionFallbackBySession = new Map<string, { model: string; providerId: string | null }>();
 
 const CODEX_AUTO_REVIEW_MODEL = 'codex-auto-review';
 const CODEX_GUARDIAN_SUBAGENT = 'guardian';
@@ -249,6 +250,29 @@ export function getCodexProxyAuthInjection(): CodexProxyAuthInjection {
 let _readGatewayKey: () => string | null = () => null;
 export function setCodexProxyGatewayKeyReader(fn: () => string | null): void {
   _readGatewayKey = fn;
+}
+
+/** Record the provider/model used by the current Codex turn's vision fallback. */
+export function recordCodexVisionFallback(
+  sessionId: string,
+  model: string,
+  providerId: string | null,
+): void {
+  if (!sessionId || !model) return;
+  visionFallbackBySession.set(sessionId, { model, providerId });
+}
+
+/** Consume the current turn's vision fallback route for usage attribution. */
+export function takeCodexVisionFallback(
+  sessionId: string,
+): { model: string; providerId: string | null } | null {
+  const fallback = visionFallbackBySession.get(sessionId) ?? null;
+  visionFallbackBySession.delete(sessionId);
+  return fallback;
+}
+
+export function clearCodexVisionFallback(sessionId: string): void {
+  visionFallbackBySession.delete(sessionId);
 }
 
 function headerValue(headers: Readonly<Record<string, string>>, name: string): string {
@@ -2549,12 +2573,17 @@ export function withCodexVisionFallback(
           toModel: visionModel,
           providerId: fallbackProviderId,
         });
+        const sessionId = sessionIdFromHeaders(ctx.headers);
+        const recordFallback = () => {
+          if (sessionId) recordCodexVisionFallback(sessionId, visionModel, fallbackProviderId);
+        };
         if (!fallbackProviderId) {
           const defaultFallbackRoute = decideCodexRoute({
             model: visionModel,
             authInjection: frozenAuthInjection ?? getCodexProxyAuthInjection(),
             gatewayKey: _readGatewayKey(),
           });
+          recordFallback();
           return {
             // 原路由只在仍为默认网关时携带可复用的鉴权覆盖；显式 custom/OAuth 上游的
             // header 绝不能跟随回退模型离开本机。
@@ -2584,7 +2613,10 @@ export function withCodexVisionFallback(
             threadId,
             true,
           );
-          if (localBridge) return localBridge;
+          if (localBridge) {
+            recordFallback();
+            return localBridge;
+          }
           return resolveProviderRouteDecision(
             fallbackProviderId,
             'codex',
@@ -2594,6 +2626,7 @@ export function withCodexVisionFallback(
             if (!resolved) {
               return codexVisionFallbackSetupReminderDecision();
             }
+            recordFallback();
             return {
               ...(resolved.decision ?? {}),
               bodyModelOverride: rewriteModelIdForProviderRoute(
@@ -2900,6 +2933,7 @@ function clearSessionThreads(sessionId: string): string[] {
   sessionToThreads.delete(sessionId);
   sessionToThread.delete(sessionId);
   reviewerModelBySession.delete(sessionId);
+  visionFallbackBySession.delete(sessionId);
   for (const threadId of threadIds) {
     if (threadToSession.get(threadId) === sessionId) {
       threadToSession.delete(threadId);

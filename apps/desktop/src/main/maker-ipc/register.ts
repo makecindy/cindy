@@ -294,8 +294,10 @@ import {
   getRemoteCcStaleQuery,
 } from '../maker-host/remote-session-start-ensure.js';
 import {
+  clearCodexVisionFallback,
   getCodexProxyAuthInjection,
   getCodexProxyAuthInjectionState,
+  takeCodexVisionFallback,
 } from '../maker-host/codex-proxy-host.js';
 import {
   readCollaborationSettings,
@@ -3701,6 +3703,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') &&
             !turnModelPromiseBySession.has(session.id)
           ) {
+            clearCodexVisionFallback(session.id);
             turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));
           }
         } else if (data.isRunning === false && !isContinuationBoundary) {
@@ -4604,12 +4607,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       if (event.type === 'done' && event.source === 'codex') {
         // 本会话显式选定的供应商('xd' / 'openai' / null=默认)。退役全局 authMode 后,
         // 「是否走订阅(不计网关费)」改由 spawn 注入 + 该会话是否显式选了 XD 网关决定。
-        const sessionProvider = getSessionProvider(session.id);
+        const visionFallback = takeCodexVisionFallback(session.id);
+        const sessionProvider = visionFallback?.providerId ?? getSessionProvider(session.id);
         const isRemoteCodexSession = Boolean(session.remoteHostId);
-        const isCustomProviderRoute = !isRemoteCodexSession && isUserProviderSession(session.id);
+        const isCustomProviderRoute = !isRemoteCodexSession && (
+          visionFallback?.providerId
+            ? getActiveCatalog().providers.find((provider) => provider.id === visionFallback.providerId)
+                ?.source === 'user'
+            : isUserProviderSession(session.id)
+        );
         const codexAuthInjection = isRemoteCodexSession ? null : getCodexProxyAuthInjection();
-        const modelPromise =
-          turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
+        const modelPromise = visionFallback?.model
+          ? Promise.resolve(visionFallback.model)
+          : turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
         turnModelPromiseBySession.delete(session.id);
         const usage = (event.data as { usage?: unknown } | undefined)?.usage;
         if (usage) recordCodexTurnUsage(usage);
@@ -5035,6 +5045,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           lastReportedCostUsdBySession.delete(session.id);
           lastReportedModelUsageBySession.delete(session.id);
           turnModelPromiseBySession.delete(session.id);
+          clearCodexVisionFallback(session.id);
           productTurnWallClockTracker.clear(session.id);
           productTurnUsageTargetTracker.clear(session.id);
           claudeOutputLagTimingGuard.clear(session.id);
