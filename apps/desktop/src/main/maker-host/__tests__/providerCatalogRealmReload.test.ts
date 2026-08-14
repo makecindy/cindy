@@ -48,7 +48,6 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
 
 vi.mock('../../manifestService.js', () => ({
   getBaseUrl: () => 'https://legacy-build-cdn.example',
-  isDev: () => false,
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getBuildClientEndpoint: () => h.buildEndpoint,
@@ -147,7 +146,6 @@ import {
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
   reloadActiveCatalogForEndpointChange,
-  shouldDisableCatalogFetch,
   syncLocalCatalogOverridesIntoActiveCatalog,
 } from '../createDesktopProviderService.js';
 
@@ -349,14 +347,6 @@ describe('provider catalog realm reload', () => {
     ).rejects.toMatchObject({ code: 'EBUSY' });
     expect(files.has('/catalog.json')).toBe(true);
     expect(files.has('/catalog.json.bak')).toBe(false);
-  });
-
-  it('keeps dev offline by default but permits an explicit catalog URL', () => {
-    expect(shouldDisableCatalogFetch(true, undefined, false)).toBe(true);
-    expect(shouldDisableCatalogFetch(true, '   ', false)).toBe(true);
-    expect(shouldDisableCatalogFetch(true, 'http://127.0.0.1/catalog', false)).toBe(false);
-    expect(shouldDisableCatalogFetch(false, undefined, false)).toBe(false);
-    expect(shouldDisableCatalogFetch(false, 'http://127.0.0.1/catalog', true)).toBe(true);
   });
 
   it('invalidates the old realm immediately and ignores a stale cross-realm response', async () => {
@@ -573,6 +563,29 @@ describe('provider catalog realm reload', () => {
       h.owner = 'owner-default';
       await fsp.rm(root, { recursive: true, force: true });
       syncLocalCatalogOverridesIntoActiveCatalog();
+    }
+  });
+
+  it('XDT_DISABLE_MODELS_FETCH=1 时手动刷新不发请求,抛 MODEL_CATALOG_FETCH_DISABLED 而非伪装的网络失败', async () => {
+    const savedUrl = process.env.XDT_MODELS_URL;
+    const savedPath = process.env.XDT_MODELS_PATH;
+    const savedForceOff = process.env.XDT_DISABLE_MODELS_FETCH;
+    delete process.env.XDT_MODELS_URL;
+    delete process.env.XDT_MODELS_PATH;
+    process.env.XDT_DISABLE_MODELS_FETCH = '1';
+    try {
+      const loadsBefore = h.refreshLoads.length;
+      await expect(refreshActiveCatalogFromSource()).rejects.toMatchObject({
+        code: 'MODEL_CATALOG_FETCH_DISABLED',
+      });
+      expect(h.refreshLoads).toHaveLength(loadsBefore);
+    } finally {
+      if (savedUrl === undefined) delete process.env.XDT_MODELS_URL;
+      else process.env.XDT_MODELS_URL = savedUrl;
+      if (savedPath === undefined) delete process.env.XDT_MODELS_PATH;
+      else process.env.XDT_MODELS_PATH = savedPath;
+      if (savedForceOff === undefined) delete process.env.XDT_DISABLE_MODELS_FETCH;
+      else process.env.XDT_DISABLE_MODELS_FETCH = savedForceOff;
     }
   });
 });

@@ -31,6 +31,7 @@ import type { CodexErrorInfo } from './app-server/protocol.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import type { AgentEvent } from '../../types/events.js';
+import { makeGhostManual64KiBFixture } from '../shared/ghost-manual-fixture.js';
 
 function noopLog(): {
   info: () => void;
@@ -249,6 +250,36 @@ describe('Codex assistant text streaming contract', () => {
         source: 'codex',
       },
     ]);
+  });
+});
+
+describe('translateItemNotification ghost_manual boundary', () => {
+  it('preserves a 64KB high-escape MCP envelope without truncation', async () => {
+    const { content, wire } = makeGhostManual64KiBFixture();
+    expect(Buffer.byteLength(wire, 'utf8')).toBeGreaterThan(64 * 1024);
+
+    const q = createAsyncQueue<AgentEvent>();
+    translateItemNotification(
+      'completed',
+      {
+        threadId: 'thread-manual',
+        turnId: 'turn-manual',
+        item: {
+          type: 'mcpToolCall',
+          id: 'manual-call',
+          server: 'cindy',
+          tool: 'ghost_manual',
+          status: 'completed',
+          result: { content: [{ type: 'text', text: wire }] },
+        },
+      },
+      q,
+      makeCtx(newCodexRuntimeState()),
+    );
+    const events = await collect(q);
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect(full).toMatchObject({ data: { fullText: wire }, source: 'codex' });
+    expect(JSON.parse((full!.data as { fullText: string }).fullText).content).toBe(content);
   });
 });
 

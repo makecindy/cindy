@@ -8,6 +8,7 @@
     "emptyDefault": "사용 가능한 모델이 없습니다",
     "loadingDefault": "모델을 불러오는 중…",
     "subscriptionBadge": "구독",
+    "subscriptionBadgeCompact": "구독",
     "backToModels": "모델 목록으로 돌아가기",
     "agentSwitchHint": "모델을 선택하면 다음 메시지부터 {{agent}}(으)로 전환됩니다",
     "crossAgentEmptyHint": "먼저 제어 대상 기기에서 {{agent}} 모델 소스를 연결하세요",
@@ -24,7 +25,16 @@
     "fastMode": "빠른 모드",
     "fastModeAccessibility": "빠른 모드 {{model}}",
     "reasoningEffort": "추론 강도",
-    "reasoningEffortAccessibility": "추론 강도 {{label}}"
+    "reasoningEffortAccessibility": "추론 강도 {{label}}",
+    "effortLevels": {
+      "minimal": "최소",
+      "low": "낮음",
+      "medium": "보통",
+      "high": "높음",
+      "xhigh": "초고",
+      "max": "최고",
+      "ultra": "극한"
+    }
   },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} 모델 보기",

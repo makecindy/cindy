@@ -35,6 +35,7 @@ vi.mock('../../appSessionState', () => ({
 import {
   createProviderSecretStore,
   readCustomProviderKeyForMutation,
+  readGhostSecretStrict,
   readGhostSecretTailFromIo,
   setProviderSecretsClearedListener,
   type SecretStorageIo,
@@ -169,6 +170,21 @@ describe('providerSecrets registry', () => {
     try {
       expect(
         readCustomProviderKeyForMutation(`missing-key-provider-${process.pid}`, 'codex'),
+      ).toBeNull();
+    } finally {
+      sessionState.mode = previousMode;
+      sessionState.dataOwnerId = previousOwnerId;
+    }
+  });
+
+  it('strict Ghost reconciliation treats a missing file as absent when encryption is unavailable', () => {
+    const previousMode = sessionState.mode;
+    const previousOwnerId = sessionState.dataOwnerId;
+    sessionState.mode = 'cloud';
+    sessionState.dataOwnerId = `missing-ghost-owner-${process.pid}`;
+    try {
+      expect(
+        readGhostSecretStrict(`missing-ghost-${process.pid}`, 'oauth_accounts'),
       ).toBeNull();
     } finally {
       sessionState.mode = previousMode;

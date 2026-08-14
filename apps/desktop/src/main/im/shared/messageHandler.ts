@@ -16,7 +16,7 @@
  * 跨渠道互不影响。
  */
 
-import type { IMMessageEvent, TextChannelIM } from '@cindy/im';
+import type { IMAttachment, IMMessageEvent, TextChannelIM } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import {
@@ -50,6 +50,24 @@ export function createMessageHandler(
 
   /** Per-user serial lock — same shape as legacy messageRouter.turnLocks. */
   const userLocks = new Map<string, Promise<void>>();
+
+  /**
+   * 提前打「已收到」表情 —— 与 turnRunner 的 ackProcessing 是同一个动作, 只是
+   * 时机更早: 群上下文拼装排在 runAgentTurn 之前, 慢的时候(回翻群历史 + 轻量
+   * 模型判断)用户几十秒看不到反馈。句柄交给 turn 接管(ImRunAgentTurnArgs
+   * .ackReactionIdPromise), 由它负责撤掉, 这里不自己清理。
+   * 渠道没有表情能力或打失败 ⇒ null, turn 也不会再补打。
+   */
+  async function ackProcessingEarly(
+    im: TextChannelIM,
+    messageId: string,
+  ): Promise<string | null> {
+    try {
+      return (await im.reactToMessage?.(messageId, adapter.processingEmoji)) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   async function processOne(
     im: TextChannelIM,
@@ -193,8 +211,38 @@ export function createMessageHandler(
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
-    let prepared: { agentText: string; commit?: () => void | Promise<void> } | null = null;
+    let prepared: {
+      agentText: string;
+      contextAttachments?: IMAttachment[];
+      commit?: () => void | Promise<void>;
+    } | null = null;
+    // 「已收到」表情先落, 再拼上下文 —— 群上下文拼装要回翻群历史(可能翻页 + 调
+    // 轻量模型), 慢的时候几十秒没有任何反馈, 用户只能看着不动的消息猜 bot 是不是
+    // 挂了(实测最慢到 87s)。句柄交给 turn 接管(turn 收口时照常撤掉/换成结果
+    // 表情; turn 没建起来就 rejected 时由 turnRunner 撤掉)。
+    // undefined = 没提前打, turn 自己打(与老行为一致)。
+    let handedOverAck: Promise<string | null> | null | undefined;
+    // 用户消息也提前落库 —— 表情只解决了「渠道里看得到反馈」, 桌面端那条会话里
+    // 这条消息要等 turn 真正派发才出现(落库挂在 provider 受理的 onAccepted 上),
+    // 群上下文拼装慢的时候就是 15~60s 的空白, 看着像消息丢了。忙 / 新会话 /
+    // 受保护内容时返回 null, 完全退回原行为(见 persistInboundUserMessageEarly)。
+    let prePersisted: { sessionId: string; clientId: string } | null = null;
     if (adapter.prepareAgentTurnText) {
+      handedOverAck = event.messageId ? ackProcessingEarly(im, event.messageId) : null;
+      try {
+        prePersisted =
+          (await turnRunner.persistInboundUserMessageEarly?.({
+            botContextId: event.contextId,
+            userId: event.senderId,
+            scopeKey: threadScoped ? event.scopeKey : undefined,
+            text: event.text,
+            attachments: event.attachments,
+            ...(event.protectedContent === true ? { protectedContent: true } : {}),
+          })) ?? null;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`early user-message persist failed (non-fatal): ${msg}`);
+      }
       try {
         prepared = await adapter.prepareAgentTurnText(event);
       } catch (err) {
@@ -216,7 +264,13 @@ export function createMessageHandler(
         ...(event.protectedContent === true ? { protectedContent: true } : {}),
         ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
         ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
+        ...(handedOverAck !== undefined ? { ackReactionIdPromise: handedOverAck } : {}),
+        ...(prePersisted ? { prePersistedUserMessage: prePersisted } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
+        // 群历史附件只进模型消息、不落库(见 ImRunAgentTurnArgs.contextAttachments)。
+        ...(prepared?.contextAttachments?.length
+          ? { contextAttachments: prepared.contextAttachments }
+          : {}),
         ...(prepared?.commit
           ? {
               // turnRunner 只在 provider 真正接受消息后调用；排队、停止与

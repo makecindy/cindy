@@ -1,6 +1,6 @@
 /**
  * modelVisibilityPrefs —— 按「(agent, 来源/provider, model) → 是否在模型选择器显示」的
- * **用户本地 override**,localStorage 持久化,跨会话 / 跨重启在本机生效。
+ * **用户本地 override**,按 dataOwnerId 隔离后写入 localStorage,跨会话 / 跨重启在本机生效。
  *
  * 背景:
  *   每个来源(provider)在某个 agent 下可能提供很多模型(XD 网关 Claude Code 有 20 个),
@@ -35,7 +35,9 @@ import { isModelVisible } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 
-const STORAGE_KEY = 'xdt:modelVisibilityPrefs:v1';
+const LEGACY_STORAGE_KEY = 'xdt:modelVisibilityPrefs:v1';
+const STORAGE_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.owner`;
+const MIGRATION_COMPLETE_KEY_PREFIX = `${LEGACY_STORAGE_KEY}.migration-complete.owner`;
 
 /** override 表:key=`${agent}:${providerId}:${modelId}` → 用户显式设定的可见性。 */
 type VisibilityMap = Record<string, boolean>;
@@ -58,18 +60,114 @@ function sanitize(raw: unknown): VisibilityMap {
 
 // 进程内缓存(惰性加载)。读多写少,避免每次读都 parse localStorage。
 let cache: VisibilityMap | null = null;
+let activeOwnerId: string | null = null;
+let activeOwnerGeneration = 0;
+let activeOwnerReadyForWrites = false;
+let activeOwnerMigrationPending = false;
+let activeOwnerMode: 'signed-out' | 'local' | 'cloud' = 'signed-out';
+
+function ownerStorageKey(ownerId: string): string {
+  return `${STORAGE_KEY_PREFIX}.${encodeURIComponent(ownerId)}`;
+}
+
+function ownerMigrationCompleteKey(ownerId: string): string {
+  return `${MIGRATION_COMPLETE_KEY_PREFIX}.${encodeURIComponent(ownerId)}`;
+}
+
+function readStoredMap(raw: string | null): VisibilityMap {
+  if (!raw) return {};
+  try {
+    return sanitize(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 把旧版唯一全局 key 的快照交给 Main 已原子认领的 owner。旧 key 故意保留给并发运行的
+ * 旧版本；新版本只认 owner-scoped key，所以其它账号不会再次导入这份数据。
+ */
+interface MigrationState {
+  readyForWrites: boolean;
+  migrationPending: boolean;
+}
+
+const BLOCKED_MIGRATION: MigrationState = {
+  readyForWrites: false,
+  migrationPending: true,
+};
+
+function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): MigrationState {
+  if (typeof window === 'undefined') return BLOCKED_MIGRATION;
+  try {
+    const scopedKey = ownerStorageKey(ownerId);
+    const migrationCompleteKey = ownerMigrationCompleteKey(ownerId);
+    if (window.localStorage.getItem(migrationCompleteKey) === '1') {
+      return { readyForWrites: true, migrationPending: false };
+    }
+
+    // Main 用模型可见性专属 marker 把旧 key 原子归属给升级时的当前稳定 local/cloud owner；
+    // canInitialize 还保证此刻没有另一个共享 userData 的旧进程在并发改写迁移输入。
+    const claim = window.electronAPI?.maker?.claimLegacyModelVisibilityOwner?.();
+    if (claim?.dataOwnerId !== ownerId || claim.ownerGeneration !== ownerGeneration) {
+      return BLOCKED_MIGRATION;
+    }
+    if (claim.claimedByOtherOwner === true) {
+      // 旧快照永久属于另一账号；写入本 owner 的完成标记，后续无需依赖全局 marker 继续读写。
+      window.localStorage.setItem(migrationCompleteKey, '1');
+      return {
+        readyForWrites: window.localStorage.getItem(migrationCompleteKey) === '1',
+        migrationPending: false,
+      };
+    }
+    if (claim.claimed !== true) return BLOCKED_MIGRATION;
+    if (claim.canInitialize !== true) {
+      // 归属已经明确时，新设置可以安全写进 owner namespace；只把旧全局快照的导入推迟到独占时。
+      return { readyForWrites: true, migrationPending: true };
+    }
+
+    const legacy = readStoredMap(window.localStorage.getItem(LEGACY_STORAGE_KEY));
+    const scoped = readStoredMap(window.localStorage.getItem(scopedKey));
+    // 非独占期间可能已经有新设置；完成迁移时由新设置覆盖同槽旧值，其余历史值仍被保留。
+    window.localStorage.setItem(scopedKey, JSON.stringify({ ...legacy, ...scoped }));
+    // 快照先落盘再标完成；任一步失败都会在下次写入/登录时幂等重试。
+    window.localStorage.setItem(migrationCompleteKey, '1');
+    return {
+      readyForWrites: window.localStorage.getItem(migrationCompleteKey) === '1',
+      migrationPending: false,
+    };
+  } catch {
+    // localStorage / 同步 owner 仲裁不可用时 fail closed：不读取未归属的旧数据。
+    return BLOCKED_MIGRATION;
+  }
+}
+
+function ensureActiveOwnerReadyForWrites(): boolean {
+  if (!activeOwnerId) return false;
+  if (activeOwnerReadyForWrites && !activeOwnerMigrationPending) return true;
+  if (activeOwnerMode === 'signed-out') return false;
+  const migration = migrateLegacyVisibility(activeOwnerId, activeOwnerGeneration);
+  activeOwnerReadyForWrites = migration.readyForWrites;
+  activeOwnerMigrationPending = migration.migrationPending;
+  if (!activeOwnerReadyForWrites) return false;
+  if (!activeOwnerMigrationPending) {
+    // A deferred migration may have imported the legacy map after this owner was first loaded.
+    cache = null;
+    load();
+  }
+  return true;
+}
 
 function load(): VisibilityMap {
-  if (cache) return cache;
-  if (typeof window === 'undefined') {
+  if (cache !== null) return cache;
+  if (typeof window === 'undefined' || !activeOwnerId) {
     cache = {};
-    return cache;
-  }
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    cache = raw ? sanitize(JSON.parse(raw)) : {};
-  } catch {
-    cache = {};
+  } else {
+    try {
+      cache = readStoredMap(window.localStorage.getItem(ownerStorageKey(activeOwnerId)));
+    } catch {
+      cache = {};
+    }
   }
   // 首次加载后把整张快照镜像给 main —— 让 IM /model 在 main 侧拿到用户的可见性 override
   // (override 真源仍是本地 localStorage,main 只缓存副本)。覆盖「用户从不打开模型选择器、
@@ -85,7 +183,11 @@ function load(): VisibilityMap {
  */
 function mirrorToMain(map: VisibilityMap): void {
   try {
-    void window.electronAPI?.maker?.syncModelVisibility?.(map);
+    void window.electronAPI?.maker?.syncModelVisibility?.(
+      activeOwnerId,
+      activeOwnerGeneration,
+      map,
+    );
   } catch {
     // ignore — 镜像失败不影响本地可见性逻辑
   }
@@ -98,9 +200,9 @@ const listeners = new Set<() => void>();
 function persist(map: VisibilityMap): void {
   cache = map;
   version += 1;
-  if (typeof window !== 'undefined') {
+  if (typeof window !== 'undefined' && activeOwnerId) {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+      window.localStorage.setItem(ownerStorageKey(activeOwnerId), JSON.stringify(map));
     } catch {
       // localStorage 满 / 私密窗口禁写 —— 忽略,不影响内存缓存。
     }
@@ -119,6 +221,33 @@ function subscribe(cb: () => void): () => void {
 
 function getVersion(): number {
   return version;
+}
+
+/** Select the owner namespace used by this renderer's model visibility overrides. */
+export function setModelVisibilityOwner(
+  ownerId: string | null,
+  ownerGeneration: number,
+  mode: 'signed-out' | 'local' | 'cloud',
+): void {
+  if (
+    activeOwnerId === ownerId
+    && activeOwnerGeneration === ownerGeneration
+    && activeOwnerMode === mode
+  ) return;
+  activeOwnerId = ownerId;
+  activeOwnerGeneration = ownerGeneration;
+  activeOwnerMode = mode;
+  activeOwnerReadyForWrites = false;
+  activeOwnerMigrationPending = false;
+  cache = null;
+  if (ownerId && mode !== 'signed-out') {
+    const migration = migrateLegacyVisibility(ownerId, ownerGeneration);
+    activeOwnerReadyForWrites = migration.readyForWrites;
+    activeOwnerMigrationPending = migration.migrationPending;
+  }
+  load();
+  version += 1;
+  for (const listener of listeners) listener();
 }
 
 /**
@@ -141,7 +270,7 @@ export function setModelVisibility(
   modelId: string,
   enabled: boolean,
 ): void {
-  if (!providerId || !modelId) return;
+  if (!providerId || !modelId || !ensureActiveOwnerReadyForWrites()) return;
   const map = load();
   const k = keyOf(agent, providerId, modelId);
   if (map[k] === enabled) return;
@@ -159,7 +288,7 @@ export function setManyVisibility(
   modelIds: readonly string[],
   enabled: boolean,
 ): void {
-  if (!providerId || modelIds.length === 0) return;
+  if (!providerId || modelIds.length === 0 || !ensureActiveOwnerReadyForWrites()) return;
   const map = load();
   let changed = false;
   const next = { ...map };
@@ -183,16 +312,25 @@ export function useModelVisibilityVersion(): number {
 
 /** 测试用 —— 重置缓存 + 清 localStorage(其它代码不应调用)。 */
 export function __resetForTest(): void {
+  const currentScopedKey = activeOwnerId ? ownerStorageKey(activeOwnerId) : null;
+  const currentMigrationKey = activeOwnerId ? ownerMigrationCompleteKey(activeOwnerId) : null;
   cache = null;
+  activeOwnerId = null;
+  activeOwnerGeneration = 0;
+  activeOwnerReadyForWrites = false;
+  activeOwnerMigrationPending = false;
+  activeOwnerMode = 'signed-out';
   version = 0;
   listeners.clear();
   if (typeof window !== 'undefined') {
     try {
-      window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+      if (currentScopedKey) window.localStorage.removeItem(currentScopedKey);
+      if (currentMigrationKey) window.localStorage.removeItem(currentMigrationKey);
     } catch {
       // ignore
     }
   }
 }
 
-export const __STORAGE_KEY = STORAGE_KEY;
+export const __STORAGE_KEY = LEGACY_STORAGE_KEY;

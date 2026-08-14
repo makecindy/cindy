@@ -134,6 +134,12 @@ export interface XdGatewayModelInfo {
  * v3 必需字段在协议边界严格校验；这里不读取公共 Catalog，也不按模型 id 或固定常量补值。
  */
 let xdGatewayModels: XdGatewayModelInfo[] = [];
+/**
+ * XD 模型里「由客户端投影给 Codex、但走 Anthropic Messages bridge」的 id 集合。
+ * Responses → Anthropic Messages bridge，不能误用 XD 的原生 Responses 路由。
+ * Set 在模型目录刷新时一次性派生，路由热路径只做 O(1) 查询。
+ */
+let xdCodexAnthropicBridgeModelIds = new Set<string>();
 
 /**
  * Anthropic(Claude.ai 订阅)的**发现清单**:由 host 的 anthropic 发现流程注入
@@ -177,6 +183,33 @@ export function resolveXdPiGatewayWireProtocol(
   if (!gatewayModel?.agents?.includes('pi')) return undefined;
   const wireProtocol = gatewayModel.perAgent?.pi?.wireProtocol;
   return wireProtocol === 'openai-responses' ? wireProtocol : null;
+}
+
+/** 派生 XD 中「仅 claude-code 面（投影给 Claude）、无 codex 原生」的模型 id 集合。 */
+function deriveXdCodexAnthropicBridgeModelIds(models: XdGatewayModelInfo[]): Set<string> {
+  const support = new Map<string, { claudeCode: boolean; codex: boolean }>();
+  for (const model of models) {
+    const current = support.get(model.id) ?? { claudeCode: false, codex: false };
+    for (const agent of xdGatewayTargetAgents(model)) {
+      if (agent === 'claude-code') current.claudeCode = true;
+      else if (agent === 'codex') current.codex = true;
+    }
+    support.set(model.id, current);
+  }
+  return new Set(
+    [...support]
+      .filter(([, agents]) => agents.claudeCode && !agents.codex)
+      .map(([modelId]) => modelId),
+  );
+}
+
+/** 当前 XD 模型是否由客户端投影给 Codex、并应走 Anthropic Messages bridge。 */
+export function isXdCodexAnthropicBridgeModel(modelId: string): boolean {
+  // Codex 会把 1M 上下文选择编码成 wire model 后缀；目录身份仍是原始 model id。
+  // wire model 还可能带 `codex/` 前缀（视觉桥按模型前缀选面时传给路由判定的形态）；
+  // 剥到目录身份再查，否则投影特例不命中、误走 Responses 面。
+  const normalized = modelId.replace(/\[1m\]$/, '').replace(/^codex\//, '');
+  return xdCodexAnthropicBridgeModelIds.has(normalized);
 }
 
 function nonNegativeFiniteOrUndefined(value: number | undefined): number | undefined {
@@ -795,6 +828,7 @@ export function setDiscoveredProviderModels(
  */
 export function setXdGatewayModels(models: XdGatewayModelInfo[]): void {
   xdGatewayModels = [...models];
+  xdCodexAnthropicBridgeModelIds = deriveXdCodexAnthropicBridgeModelIds(models);
   markChanged();
 }
 

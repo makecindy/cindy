@@ -168,3 +168,11 @@ export type {
   InvocationCatalogContext,
   ResolvedInvocation,
 } from './invocation.js';
+
+export {
+  classifyVisionCapability,
+  isKnownNoVisionModel,
+  isKnownVisionModel,
+  normalizeVisionModelId,
+} from './visionCapability.js';
+export type { VisionCapability } from './visionCapability.js';

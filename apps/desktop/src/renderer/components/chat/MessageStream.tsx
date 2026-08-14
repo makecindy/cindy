@@ -200,15 +200,18 @@ import { usePrevUserMessageInView } from './usePrevUserMessageInView';
 import { JumpToBottomChip } from './JumpToBottomChip';
 import { MessageNavRail } from './MessageNavRail';
 import {
+  NAV_RAIL_BACKFILL_MAX_ROUNDS,
   NAV_RAIL_JUMP_TOP_OFFSET_PX,
   deriveNavRailEntries,
   shouldBackfillForNavRail,
 } from './messageNavRailModel';
 import { resolveUserDisplayText } from './userMessageDisplayText';
 import { detectScrollAnchoringApplied } from './scrollAnchoringDetect';
+import { resolveMessageStreamIndicatorBottomOffset } from './messageStreamIndicatorPosition';
 import {
   decideAutoFillAction,
   decideUserIntentFillAction,
+  MAX_AUTO_LOAD_ATTEMPTS,
   TOP_HISTORY_TRIGGER_PX,
   NO_SCROLL_TOLERANCE_PX,
 } from './viewportFillDetect';
@@ -223,6 +226,7 @@ import {
 import { countUnreadAdded } from './unreadCount';
 import { useNavigationKeyListener } from './useNavigationKeyListener';
 import { suppressScrollbarActivation } from '@/lib/scrollbarAutoHide';
+import { useAutomaticHistoryLoadBudget } from './useAutomaticHistoryLoadBudget';
 import { collectAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
@@ -247,6 +251,7 @@ interface MessageStreamProps {
    *  triggers extra re-renders mid-session. */
   workingDir: string;
   messages: ChatMessage[];
+  historyLoaded: boolean;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
   /** Kept for API compatibility. v2 — no longer threaded into render items
    *  (AgentActionsBlock + ThinkingCard manage their own per-block expand
@@ -257,12 +262,14 @@ interface MessageStreamProps {
   continuationTurnClientId?: string | null;
   /** 旧被控端缺省该字段时才启用兼容兜底；unknown 在首个投影前 fail closed。 */
   continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
-  /** F-SYNC-2: callback to load older messages */
-  onLoadMore?: () => void;
+  /** F-SYNC-2: callback to load older messages; true marks this as an automatic fill. */
+  onLoadMore?: (automatic?: boolean) => Promise<boolean>;
   isLoadingMore?: boolean;
   hasMoreMessages?: boolean;
   /** Dynamic bottom padding (px) to reserve space for the input overlay */
   bottomPadding?: number;
+  /** Distance from the chat viewport bottom to the visible composer stack top. */
+  composerStackTopOffset?: number;
   /** Content width — shared with the input overlay so chat stream + input
    *  box stay horizontally aligned (same width, same center, symmetric
    *  padding when the main area is compressed). */
@@ -2523,6 +2530,7 @@ export function MessageStream({
   remoteHostId,
   workingDir,
   messages,
+  historyLoaded,
   taskUpdates,
   isSessionStreaming = false,
   continuationTurnClientId = null,
@@ -2531,6 +2539,7 @@ export function MessageStream({
   isLoadingMore,
   hasMoreMessages,
   bottomPadding,
+  composerStackTopOffset,
   contentWidth,
   focusMessageClientId,
   focusMessageRequestId,
@@ -3253,8 +3262,10 @@ export function MessageStream({
   //   2. windowAtTop=y AND hasMoreMessages=false  → DB 真的没历史了
   //   3. attemptCount >= MAX_AUTO_LOAD_ATTEMPTS  → 退化保护 (只数 IPC, 不数 expand)
   //
-  // attemptCount 用 ref 持有, 跟着 mount 生命周期走; sessionId 切换时父组件用
-  // key={sessionId} 重挂载本组件, ref 自动归零 (单 session 内独立计数, 无需手动 reset).
+  // attemptCount 用 ref 持有,让同一次 mount 内仍可按原预算连续补页。第一次真的
+  // 成功推进缓存窗口后同时在 sessionScrollStore 记 completed;切走再切回的新 mount
+  // 直接从耗尽态开始,避免 leaveView 裁掉已补前缀后把同一页重新拉一遍。
+  // 用户明确向上滚动 / 翻页走 decideUserIntentFillAction,不读取这份自动预算。
   // useLayoutEffect 而不是 useEffect — 在 commit 同步阶段读 scrollH/clientH,
   // 避免 useEffect 滞后一帧导致跟 ResizeObserver/pinToBottom 的副作用错序.
   //
@@ -3263,7 +3274,23 @@ export function MessageStream({
   // 当前触发条件下 (scrollH===clientH) scrollTop 必为 0, 视觉收敛主要靠 line 716
   // 的 pinToBottom effect, 这两个 ref 在这是防御层 (避免 IPC race window 里
   // handleScroll 误覆盖 ref 用错快照 → F-SYNC-2 算错 delta).
-  const autoLoadAttemptCountRef = useRef<number>(0);
+  const {
+    viewportAttemptsRef: autoLoadAttemptCountRef,
+    navRailRoundsRef: navRailBackfillRoundsRef,
+    runAutomaticLoad,
+  } = useAutomaticHistoryLoadBudget(
+    sessionId,
+    MAX_AUTO_LOAD_ATTEMPTS,
+    NAV_RAIL_BACKFILL_MAX_ROUNDS,
+    {
+      historyLoaded,
+      messageCount: messages.length,
+      firstMessageClientId: messages[0]?.clientId ?? null,
+    },
+  );
+  // MessageStream 只按 sessionId remount。逻辑窗口在同一 mount 内被 reload / reconcile /
+  // truncate 时,hook 会同步归零两套本地预算；不能只用 messages identity,正常
+  // push/prepend 同样会换引用。
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -3293,7 +3320,7 @@ export function MessageStream({
         autoLoadAttemptCountRef.current += 1;
         prevScrollHeightRef.current = el.scrollHeight;
         prevScrollTopAtLoadRef.current = el.scrollTop;
-        onLoadMore();
+        void runAutomaticLoad(onLoadMore);
         return;
       }
       case 'none':
@@ -3316,6 +3343,8 @@ export function MessageStream({
     hasMoreMessages,
     isLoadingMore,
     onLoadMore,
+    runAutomaticLoad,
+    sessionId,
     windowAtTop,
     expandWindow,
     windowCoversEnd,
@@ -4061,12 +4090,9 @@ export function MessageStream({
   // 打开后本 effect 依赖变化会重新评估补页。
   // 调度 effect 的依赖含 sessionId(与 MessageNavRail 的 resetKey 同款惯例):
   // 两个会话的条目数 / hasMore 恰好相同且 onLoadMore 身份未变时,切会话也要
-  // 取消旧会话待发的空闲回调、并按归零后的轮数预算为新会话重新评估
-  // (Copilot review)。
-  const navRailBackfillRoundsRef = useRef(0);
-  useEffect(() => {
-    navRailBackfillRoundsRef.current = 0;
-  }, [sessionId]);
+  // 取消旧会话待发的空闲回调。轮数预算只在 mount 时按会话记忆恢复一次;
+  // 不能在 passive effect 再读,否则同一 mount 的 viewport-fill 先 mark 后会
+  // 提前封死导航条自己的本轮预算。
   useEffect(() => {
     if (!navRailEnabled) return;
     if (!onLoadMore) return;
@@ -4086,7 +4112,7 @@ export function MessageStream({
       navRailBackfillRoundsRef.current += 1;
       prevScrollHeightRef.current = el.scrollHeight;
       prevScrollTopAtLoadRef.current = el.scrollTop;
-      onLoadMore();
+      void runAutomaticLoad(onLoadMore);
     };
     // 空闲期执行,别跟首屏渲染 / 两段式扩窗抢主线程;测试等无 ric 环境退化。
     if (typeof window.requestIdleCallback === 'function') {
@@ -4102,6 +4128,7 @@ export function MessageStream({
     hasMoreMessages,
     isLoadingMore,
     onLoadMore,
+    runAutomaticLoad,
   ]);
 
   const railJumpSeqRef = useRef(0);
@@ -4212,13 +4239,13 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // chip 垂直位置 — 用户要求贴在"Generating..." RunningStatusBar 那一行。
-  // overlay 内部从下到上是:input box + 上方 10px gap + RunningStatusBar(约 28px)+
-  // 32px 渐变蒙层。把 chip 挪进 overlay 内、center 大致对齐 status bar center,
-  // 经验值 overlayHeight - 56(原 -60,2026-05-13 用户反馈再往上 4px)。
-  // Math.max 兜底防极小 overlay 时 chip 跑出容器。
+  // chip 垂直位置：优先使用父层实测的输入框卡片顶边，避免 RunningStatusBar
+  // 出现 / 收起改变 overlay 总高度后，把按钮带进输入框。旧调用方保留历史兜底。
   const resolvedBottomPadding = bottomPadding ?? 200;
-  const indicatorBottomOffset = Math.max(resolvedBottomPadding - 56, 12);
+  const indicatorBottomOffset = resolveMessageStreamIndicatorBottomOffset({
+    bottomPadding,
+    composerStackTopOffset,
+  });
 
   // 「提及 → 兑现」关联(方案 2):从会话历史现算,软提示卡据此升级为召唤卡。
   // 引用缓存:内容不变时复用上一个 Map 引用——UserMessage 顶层订阅该
@@ -4564,7 +4591,7 @@ export function MessageStream({
 
             {/* F1 / F3: 新消息悬浮提示——挂在 scrollRef 的 relative wrapper 内部，
            与滚动容器平级。visible 由 `!isNearBottom && unreadCount > 0` 双重
-           守护；bottomOffset 直接复用 bottomPadding（overlayHeight）+ 12。 */}
+           守护；bottomOffset 让按钮位于输入框上边缘上方约 6px。 */}
             <NewMessageIndicator
               visible={!isNearBottom && unreadCount > 0}
               count={unreadCount}

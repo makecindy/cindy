@@ -69,6 +69,7 @@ export function printHelp(log = console.log) {
   log('\n  开发检查:');
   log('    pnpm lint');
   log('    pnpm test:runner');
+  log('    pnpm test:unit:related');
   log('    pnpm test:unit');
   log('    # 排查并发相关问题时，可把 workspace runner 临时退回串行');
   log('    pnpm test:unit -- --workspace-concurrency=1');

@@ -29,6 +29,14 @@ const outsideDir = path.join(tmpUserData, 'outside');
 const logWarnMock = vi.fn();
 const logInfoMock = vi.fn();
 const grantAttachmentsMock = vi.fn();
+const { packGhostDirMock } = vi.hoisted(() => ({ packGhostDirMock: vi.fn() }));
+const releaseMutationMock = vi.fn();
+const captureMutationOwnerMock = vi.fn(() => ({
+  mode: 'local' as const,
+  dataOwnerId: 'test',
+  generation: 0,
+}));
+const acquireMutationLeaseMock = vi.fn(() => releaseMutationMock);
 const confirmRequestMock = vi.fn(async () => ({ confirmed: true, allowDirs: false }));
 const classifyLocalAttachmentPathMock = vi.fn();
 const resolveGhostAttachmentUrlMock = vi.fn();
@@ -102,14 +110,25 @@ const ensureReadyMock = vi.fn(
     };
   },
 );
-const sessionSnapshotMock = vi.fn(async () => ({
+const sessionSnapshotMock = vi.fn(async (): Promise<{
+  workingDir: string;
+  permissionMode: string;
+  planModeEnabled: boolean;
+  remoteHostId: string | null;
+}> => ({
   workingDir: WORKDIR,
   permissionMode: 'auto',
   planModeEnabled: false,
   remoteHostId: null,
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  getGhostManager: () => ({ list: listMock }),
+  getGhostManager: () => ({ list: listMock, managedRootDirs: () => [] }),
+  ghostForgeForbiddenRootDirs: () => [],
+  listAvailableGhostsForAuthorization: () => listMock(),
+  findAvailableGhostForAuthorization: (id: string) =>
+    listMock().find((ghost: any) => ghost.manifest?.id === id) ?? null,
+  captureGhostMutationOwnerForMcp: captureMutationOwnerMock,
+  acquireGhostMutationLeaseForMcp: acquireMutationLeaseMock,
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
   getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
   getGhostSetupAssessment: setupAssessmentMock,
@@ -140,7 +159,11 @@ vi.mock('../../cindy-brain/ghostLocalPathGrant.js', () => ({
   classifyLocalAttachmentPath: classifyLocalAttachmentPathMock,
 }));
 vi.mock('../../cindy-brain/cardService.js', () => ({ withCardToken: (r: unknown) => r }));
-vi.mock('../../cindy-brain/forge.js', () => ({ FORGE_GUIDE: 'guide', packGhostDir: vi.fn() }));
+vi.mock('../../cindy-brain/forge.js', () => ({
+  FORGE_GUIDE: 'guide',
+  packGhostDir: packGhostDirMock,
+  scaffoldGhostDir: vi.fn(),
+}));
 vi.mock('../../cindy-brain/openFileInstall.js', () => ({ handleIncomingCindyFile: vi.fn() }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionFsSnapshot: sessionSnapshotMock,
@@ -311,6 +334,9 @@ beforeEach(() => {
   alsSessionContextMock.mockReset();
   logWarnMock.mockClear();
   logInfoMock.mockClear();
+  releaseMutationMock.mockClear();
+  captureMutationOwnerMock.mockClear();
+  acquireMutationLeaseMock.mockClear();
   sessionSnapshotMock.mockReset();
   sessionSnapshotMock.mockResolvedValue({
     workingDir: WORKDIR,
@@ -318,7 +344,60 @@ beforeEach(() => {
     planModeEnabled: false,
     remoteHostId: null,
   });
+  packGhostDirMock.mockReset();
+  packGhostDirMock.mockResolvedValue({
+    ok: false,
+    errorCode: 'MANIFEST_INVALID',
+    message: 'stop after gate assertion',
+  });
   clearAllPrefs();
+});
+
+describe('Forge session workdir gate', () => {
+  it('holds the owner mutation lease across the Forge operation', async () => {
+    const operation = makeDeps().forgePack({ dir: path.join(WORKDIR, 'plugin-src') });
+    expect(captureMutationOwnerMock).toHaveBeenCalledTimes(1);
+    expect(acquireMutationLeaseMock).toHaveBeenCalledTimes(1);
+    expect(releaseMutationMock).not.toHaveBeenCalled();
+    await operation;
+    expect(releaseMutationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the active session workdir into packGhostDir', async () => {
+    await makeDeps().forgePack({ dir: path.join(WORKDIR, 'plugin-src') });
+    expect(packGhostDirMock).toHaveBeenCalledWith(path.join(WORKDIR, 'plugin-src'), {
+      sessionWorkdir: WORKDIR,
+      forbiddenRootDirs: [],
+    });
+  });
+
+  it('rejects remote workdirs before touching local Forge fs', async () => {
+    sessionSnapshotMock.mockResolvedValueOnce({
+      workingDir: '/remote/project',
+      permissionMode: 'auto',
+      planModeEnabled: false,
+      remoteHostId: 'ssh-1',
+    });
+    const deps = makeDeps();
+    await expect(deps.forgePack({ dir: '/remote/project/plugin-src' })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'WORKDIR_NOT_LOCAL',
+    });
+    expect(packGhostDirMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects Forge writes in read-only or plan sessions', async () => {
+    sessionSnapshotMock.mockResolvedValueOnce({
+      workingDir: WORKDIR,
+      permissionMode: 'ask',
+      planModeEnabled: true,
+      remoteHostId: null,
+    });
+    const deps = makeDeps();
+    await expect(
+      deps.forgeScaffold({ dir: path.join(WORKDIR, 'new-plugin'), template: 'plain', id: 'x', name: 'X' }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'WORKDIR_READ_ONLY' });
+  });
 });
 
 afterAll(() => {
@@ -444,6 +523,34 @@ describe('花名册 / ghost_list 过滤', () => {
         ],
       },
     });
+  });
+
+  it('ghost_list/info 只投影 manual 轻量索引，ghost_manual 根索引不启动插件运行时', async () => {
+    listMock.mockReturnValue([
+      chipGhost('art', ['tool'], {
+        manual: {
+          items: [{ dir: 'private/docs', name: 'image-workflow', description: '完整画图工作流' }],
+        },
+      }),
+    ]);
+    const deps = makeDeps();
+    await expect(deps.listAwakeGhosts()).resolves.toMatchObject([
+      {
+        id: 'art',
+        manual: [{ name: 'image-workflow', description: '完整画图工作流' }],
+      },
+    ]);
+    await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({
+      ok: true,
+      ghost: { manual: [{ name: 'image-workflow', description: '完整画图工作流' }] },
+    });
+    await expect(deps.readGhostManual({ ghostId: 'art' })).resolves.toEqual({
+      ok: true,
+      manual: [{ name: 'image-workflow', description: '完整画图工作流' }],
+      content: '',
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(await deps.listAwakeGhosts())).not.toContain('private/docs');
   });
 
   it('ghost_info 对不存在目标优先返回 GHOST_NOT_FOUND', async () => {
