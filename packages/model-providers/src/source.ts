@@ -202,8 +202,8 @@ function backfillPresetContextWindows(
 
 /**
  * 把远端 / 本地目录与内置 bundled 合并：以输入目录为主，bundled 补它缺失的
- * provider（按 id），并给旧目录中同 id provider 补缺失的 access 与图像能力元数据。
- * primary 明确提供的值（包括显式空图像清单）永远优先，不被 bundled 覆盖。
+ * provider（按 id），并给旧目录中同 id provider 补缺失的 access 与媒体能力元数据。
+ * primary 明确提供的值（包括显式空媒体清单）永远优先，不被 bundled 覆盖。
  *
  * **顺序契约**：结果按 bundled 数组序稳定排列（anthropic → openai → xai → xd），
  * bundled 之外的远端新增供应商按远端原序追加在后。v2 远端目录只承载 xai 段，
@@ -219,6 +219,12 @@ export function mergeWithBundled(primary: Catalog): Catalog {
       p.id === 'xai' &&
       p.imageModels === undefined &&
       bundled.imageModels !== undefined &&
+      bundledAccess !== undefined &&
+      allowsBundledImageInheritance(p.access, bundledAccess);
+    const inheritVideo =
+      p.id === 'xai' &&
+      p.videoModels === undefined &&
+      bundled.videoModels !== undefined &&
       bundledAccess !== undefined &&
       allowsBundledImageInheritance(p.access, bundledAccess);
     // 向量清单与 xai 的图像清单同一个道理(PR #1707 review):xd 段的向量能力是
@@ -238,6 +244,7 @@ export function mergeWithBundled(primary: Catalog): Catalog {
     if (
       !(p.access === undefined && bundledAccess !== undefined) &&
       !inheritImage &&
+      !inheritVideo &&
       !inheritEmbedding
     ) {
       return p;
@@ -250,6 +257,14 @@ export function mergeWithBundled(primary: Catalog): Catalog {
             imageModels: bundled.imageModels,
             ...(p.imageDefaults === undefined && bundled.imageDefaults !== undefined
               ? { imageDefaults: bundled.imageDefaults }
+              : {}),
+          }
+        : {}),
+      ...(inheritVideo
+        ? {
+            videoModels: bundled.videoModels,
+            ...(p.videoDefaults === undefined && bundled.videoDefaults !== undefined
+              ? { videoDefaults: bundled.videoDefaults }
               : {}),
           }
         : {}),

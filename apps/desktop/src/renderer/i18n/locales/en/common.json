@@ -479,7 +479,7 @@
         "reset": "Restore default layout",
         "resetSuccess": "Default panel layout restored",
         "resetFailed": "Could not restore the default panel layout",
-        "saved": "Panel position saved. Restore the default layout in Settings → Appearance.",
+        "saved": "Panel position saved. Restore the default layout in the Appearance section under Settings → General.",
         "saveFailed": "Could not save the panel position"
       }
     },
@@ -2322,7 +2322,7 @@
       "title": "Subagents",
       "description": "Choose the default model used for sub tasks in Claude Code and Codex, and set guardrails for Codex subagents. The setting applies per entry, not per model.",
       "unspecified": "Not specified (use default behavior)",
-      "hint": "Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; Codex changes restart the local Codex runtime right away when idle, or after running sessions finish their current task.",
+      "hint": "Claude Code subagents only support choosing a model; reasoning effort follows Claude Code's native behavior. Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; Codex changes restart the local Codex runtime right away when idle, or after running sessions finish their current task.",
       "codexV2ModelHint": "The subagent default must be a model from Codex's own catalog; models outside it (such as third-party models connected through the compatibility bridge) are rejected by Codex. Sol / Terra (multi-agent V2) further only accept V2 catalog models (currently gpt-5.6-sol and gpt-5.6-terra); legacy multi-agent (V1) has no V2 restriction.",
       "saveFailed": "Failed to save subagent settings",
       "guardrails": {

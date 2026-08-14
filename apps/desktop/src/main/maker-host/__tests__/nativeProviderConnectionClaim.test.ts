@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   claudeCredentialPresent: true,
   grokCredentialPresent: true,
   refreshAnthropicModels: vi.fn(),
+  refreshXaiMediaModels: vi.fn(async () => true),
   loadAnthropicDiskCache: vi.fn(async () => {}),
   codexLoginWithSideEffects: vi.fn(async () => false),
   codexLoginReadOnly: vi.fn(() => false),
@@ -66,6 +67,10 @@ vi.mock('../model-discovery/anthropic.js', () => ({
   loadAnthropicModelsFromDiskCache: h.loadAnthropicDiskCache,
   refreshAnthropicModelsFromHttp: h.refreshAnthropicModels,
   getAnthropicModelDiscoveryFailure: () => h.anthropicDiscoveryFailure,
+}));
+vi.mock('../model-discovery/xai-media.js', () => ({
+  refreshXaiMediaModels: h.refreshXaiMediaModels,
+  clearXaiMediaModels: vi.fn(),
 }));
 
 vi.mock('../active-catalog.js', async () => {
@@ -131,6 +136,7 @@ beforeEach(() => {
   h.grokCredentialPresent = true;
   h.anthropicDiscoveryFailure = null;
   h.refreshAnthropicModels.mockClear();
+  h.refreshXaiMediaModels.mockClear();
   h.loadAnthropicDiskCache.mockClear();
   h.codexLoginWithSideEffects.mockClear();
   h.codexLoginReadOnly.mockClear();
@@ -312,9 +318,10 @@ describe('native provider connection claim on read', () => {
     expect(secondProviders.find((provider) => provider.id === 'anthropic')?.connected).toBe(true);
   });
 
-  it('认领本机 xai 凭证(清单不走动态发现,不触发拉取)', async () => {
+  it('认领本机 xai 凭证后后台补拉媒体模型', async () => {
     expect((await connectedMap()).xai).toBe(true);
     expect(isNativeProviderAuthBound('xai')).toBe(true);
+    expect(h.refreshXaiMediaModels).toHaveBeenCalledTimes(1);
   });
 
   it('认领成功要广播:其它窗口与 device-link 对端只认这条推送来失效快照', async () => {

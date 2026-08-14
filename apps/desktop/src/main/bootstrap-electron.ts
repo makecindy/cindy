@@ -526,6 +526,7 @@ import {
 } from './maker-host/memory-settings-store.js';
 import {
   createAppFocusAutoRefreshTracker,
+  refreshProviderModelsManually,
   requestProviderModelAutoRefresh,
   resetProviderModelAutoRefreshCooldowns,
 } from './maker-host/provider-model-auto-refresh.js';
@@ -548,6 +549,7 @@ import {
   hasGrokOAuthLogin,
 } from './maker-host/grok-oauth-login.js';
 import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
+import { clearXaiMediaModels } from './maker-host/model-discovery/xai-media.js';
 import {
   getChatgptBridgeAuth,
   invalidateChatgptBridgeAuth,
@@ -3762,6 +3764,7 @@ const registerIpcHandlers = () => {
   // 限流快照),否则用户会停在「显示已连接、请求连环 403」的假状态。
   setXaiAuthInvalidatedHandler(() => {
     resetProviderModelAutoRefreshCooldowns('xai');
+    clearXaiMediaModels();
     clearXaiRateLimitSnapshot();
     broadcastXaiAuthStateChanged();
   });
@@ -3774,11 +3777,19 @@ const registerIpcHandlers = () => {
     const result = await runGrokOAuthLogin();
     if (result.ok) {
       resetProviderModelAutoRefreshCooldowns('xai');
+      // 登录可直接覆盖旧账号凭证。先跨授权边界清掉旧账号发现快照，再补拉新账号；
+      // 旧在途请求由 discovery generation + owner scope 双重守卫作废。
+      clearXaiMediaModels();
       // 登录成功后广播 provider 变更 —— 其它已打开的窗口(聊天/模型选择器等)跟随刷新
       // xAI 连接态,不再等 remount/手动刷新(对齐 CLAUDE_OAUTH_LOGIN 的 broadcastClaudeAuthStateChanged)。
       // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
       clearXaiRateLimitSnapshot();
       broadcastXaiAuthStateChanged();
+      void refreshProviderModelsManually('xai').catch((error) => {
+        createLogger('xai-model-refresh').warn('xAI models refresh after login failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
       return { ok: true, authorized: true };
     }
     return { ok: false, reason: result.reason ?? 'unknown', authorized: hasGrokOAuthLogin() };
@@ -3787,6 +3798,7 @@ const registerIpcHandlers = () => {
     try {
       logoutGrok();
       resetProviderModelAutoRefreshCooldowns('xai');
+      clearXaiMediaModels();
     } catch (err) {
       throwIpcError(
         'INTERNAL',

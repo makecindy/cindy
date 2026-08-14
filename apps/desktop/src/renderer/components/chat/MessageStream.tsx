@@ -89,6 +89,70 @@ const JUMP_DOWN_IDLE_MS = 2000;
 const SCROLL_DIRECTION_DEAD_ZONE_PX = 1;
 const TOUCH_HISTORY_INTENT_THRESHOLD_PX = 8;
 const HISTORY_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['PageUp', 'ArrowUp', 'Home']);
+
+type ProgrammaticScrollEndDecision =
+  'stale' | 'finished' | 'replay-deferred-delete' | 'consume-deferred-delete';
+
+type ChipJumpTarget = {
+  generation: number;
+  clientId: string;
+  selector: 'message' | 'user-message';
+  topOffset: number;
+};
+
+/**
+ * 程序化滚动结束时的删除补偿裁决。用户接管必须重放延期补偿；显式的新导航有
+ * 自己的确定落点，可以消费旧补偿；过期 generation 不能触碰后发滚动的状态。
+ */
+export function resolveProgrammaticScrollEndDecision({
+  generation,
+  activeGeneration,
+  hasDeferredDelete,
+  consumeDeferredDelete = false,
+}: {
+  generation: number;
+  activeGeneration: number;
+  hasDeferredDelete: boolean;
+  consumeDeferredDelete?: boolean;
+}): ProgrammaticScrollEndDecision {
+  if (generation !== activeGeneration) return 'stale';
+  if (!hasDeferredDelete) return 'finished';
+  return consumeDeferredDelete ? 'consume-deferred-delete' : 'replay-deferred-delete';
+}
+
+/** 以落定时的最新 DOM 几何重新计算 chip / 导航轨道目标，而不是复用 smooth 开始前的像素。 */
+export function resolveChipJumpTargetScrollTop({
+  scrollTop,
+  containerTop,
+  targetTop,
+  topOffset,
+}: {
+  scrollTop: number;
+  containerTop: number;
+  targetTop: number;
+  topOffset: number;
+}): number {
+  return Math.max(0, scrollTop + targetTop - containerTop - topOffset);
+}
+
+/** 搜索目标只有作为精确 DOM 消息锚点跨过视口顶边时，才能覆盖真实顶端量测。 */
+export function shouldUseFocusedElementAsViewportAnchor({
+  focusClientId,
+  elementClientId,
+  containerTop,
+  elementTop,
+  elementBottom,
+}: {
+  focusClientId: string;
+  elementClientId?: string;
+  containerTop: number;
+  elementTop: number;
+  elementBottom: number;
+}): boolean {
+  return (
+    elementClientId === focusClientId && elementTop <= containerTop && elementBottom > containerTop
+  );
+}
 // chip jump 抑制 expand/load 的安全兜底时长。正常解抑靠 wheel/touch/keydown,
 // 这个 timer 只防"click 后既不滚也不动键盘"的极端情况,够长能覆盖最长 smooth
 // scroll(浏览器长距离 ~1s)。
@@ -224,7 +288,10 @@ import {
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
 import { countUnreadAdded } from './unreadCount';
-import { useNavigationKeyListener } from './useNavigationKeyListener';
+import { NAVIGATION_KEYS, useNavigationKeyListener } from './useNavigationKeyListener';
+export function isScrollNavigationKey(key: string): boolean {
+  return NAVIGATION_KEYS.has(key);
+}
 import { suppressScrollbarActivation } from '@/lib/scrollbarAutoHide';
 import { useAutomaticHistoryLoadBudget } from './useAutomaticHistoryLoadBudget';
 import { collectAssistantTurnUsageDetails } from '@/lib/userTurnUsage';
@@ -875,6 +942,189 @@ function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
 export function findRestorableViewportItemIdx(items: RenderItem[], viewportTopKey: string): number {
   const exactIdx = items.findIndex((it) => it.key === viewportTopKey);
   return exactIdx >= 0 ? exactIdx : recoverLostAnchorIdx(items, viewportTopKey);
+}
+
+/**
+ * 删除补偿的落点选择:视口顶端 item 被删后,取旧序列里它之后第一条存活 item
+ * (连带删除可能越过多条);无则回退它之前最近的存活 item,再无则落到新末条。
+ * 返回 null = 旧序列里找不到被删 key(快照过旧),无从补偿。
+ * 注意:窗口整段被清时 prevKeys 必须是旧**全量**序列——已回退的可见窗没有删除区
+ * 的邻接信息,fallback 会落到 curKeys 末项(会话尾)。
+ */
+export function pickDeleteCompensationAnchorKey(
+  prevKeys: readonly string[],
+  curKeys: readonly string[],
+  deletedKey: string,
+): string | null {
+  const deletedIdx = prevKeys.indexOf(deletedKey);
+  if (deletedIdx < 0) return null;
+  const alive = new Set(curKeys);
+  return (
+    prevKeys.slice(deletedIdx + 1).find((k) => alive.has(k)) ??
+    prevKeys.slice(0, deletedIdx).findLast((k) => alive.has(k)) ??
+    curKeys.at(-1) ??
+    null
+  );
+}
+
+/** 删除补偿落点：精确可见 child 优先；否则落到折叠摘要容器，不用隐藏后代配外层旧 offset。 */
+export function resolveDeleteCompensationLanding(input: {
+  exactVisible: boolean;
+  fallbackContainerVisible: boolean;
+}): 'exact' | 'container' | 'item' {
+  if (input.exactVisible) return 'exact';
+  if (input.fallbackContainerVisible) return 'container';
+  return 'item';
+}
+
+export function isVisibleDeleteCompensationElement(
+  element: { getBoundingClientRect(): { height: number } } | null,
+): boolean {
+  return Boolean(element && element.getBoundingClientRect().height > 0);
+}
+
+/**
+ * 渲染顺序下所有可定位 clientId：message、tool_segment、agent_task、嵌套 work_group。
+ * 删除补偿与 focus 落点都走这条序列，避免子消息删除时跳过中间的工具行。
+ */
+export function collectDeleteAnchorClientIds(items: readonly RenderItem[]): string[] {
+  const ids: string[] = [];
+  for (const item of items) {
+    if (item.type === 'message') ids.push(item.message.clientId);
+    else if (item.type === 'tool_segment') {
+      for (const toolCall of item.toolCalls) ids.push(toolCall.clientId);
+    } else if (item.type === 'agent_task' && item.toolCall) {
+      ids.push(item.toolCall.clientId);
+    } else if (item.type === 'work_group') {
+      ids.push(...collectDeleteAnchorClientIds(item.children));
+    }
+  }
+  return ids;
+}
+
+function queryMessageElement(root: ParentNode, clientId: string): HTMLElement | null {
+  return root.querySelector(
+    `[data-message-client-id="${CSS.escape(clientId)}"]`,
+  ) as HTMLElement | null;
+}
+
+/**
+ * 精确 message / 任务卡优先；否则取 data-message-client-ids 的最内层匹配。
+ * 工作组容器也会带全量子 id，必须用最内层，否则会滚到组顶而不是中间的工具行。
+ */
+function queryFocusElement(root: ParentNode, clientId: string): HTMLElement | null {
+  const exact = queryMessageElement(root, clientId);
+  if (exact) return exact;
+  const matches = root.querySelectorAll<HTMLElement>(
+    `[data-message-client-ids~="${CSS.escape(clientId)}"]`,
+  );
+  return matches[matches.length - 1] ?? null;
+}
+
+/** 折叠摘要容器：跳过高度为 0 的精确 child，取仍可见的最内层聚合节点。 */
+function queryVisibleAggregateContainer(
+  root: ParentNode,
+  clientId: string,
+): HTMLElement | null {
+  const matches = root.querySelectorAll<HTMLElement>(
+    `[data-message-client-ids~="${CSS.escape(clientId)}"]`,
+  );
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const element = matches[i];
+    if (element.getBoundingClientRect().height > 0) return element;
+  }
+  return null;
+}
+
+/** 精确 id 优先；否则取 data-message-client-ids 的第一个 token（折叠工具块 focus 回退）。 */
+export function readAnchorClientId(element: {
+  dataset: { messageClientId?: string; messageClientIds?: string };
+}): string | undefined {
+  const exact = element.dataset.messageClientId?.trim();
+  if (exact) return exact;
+  return element.dataset.messageClientIds?.trim().split(/\s+/).find(Boolean);
+}
+
+/** 视口子锚点只认已渲染的精确 id；聚合 token 列表留给 queryFocusElement。 */
+export function readViewportChildAnchorClientId(element: {
+  dataset: { messageClientId?: string; messageClientIds?: string };
+}): string | undefined {
+  return element.dataset.messageClientId?.trim() || undefined;
+}
+
+type ChildAnchorRect = {
+  clientId: string;
+  top: number;
+  bottom: number;
+};
+
+/** 树序最后一个跨过容器顶边的子锚点（最内层）。 */
+export function pickIntersectingChildAnchor(
+  candidates: readonly ChildAnchorRect[],
+  containerTop: number,
+): { clientId: string; offset: number } | null {
+  let picked: { clientId: string; offset: number } | null = null;
+  for (const candidate of candidates) {
+    if (candidate.bottom - containerTop <= 0 || candidate.top > containerTop) continue;
+    picked = {
+      clientId: candidate.clientId,
+      offset: Math.max(0, containerTop - candidate.top),
+    };
+  }
+  return picked;
+}
+
+type ViewportTopSnapshot = {
+  viewportTopKey: string;
+  offset: number;
+  messageClientId?: string;
+  messageOffset?: number;
+};
+
+/** 精确子 DOM 不存在时降级到 render-item 锚点，避免隐藏 child 继续触发删除补偿。 */
+export function toRenderItemViewportSnapshot(
+  snapshot: ViewportTopSnapshot,
+  offset = snapshot.offset,
+): ViewportTopSnapshot {
+  return { viewportTopKey: snapshot.viewportTopKey, offset };
+}
+
+/**
+ * 展开工作组 / 工具块被折叠后，精确 child DOM 会消失，但 render-item 数据仍在。
+ * 这时必须重新量测；否则陈旧 messageClientId 会在隐藏 child 被删时误走补偿。
+ */
+export function shouldRefreshHiddenChildViewportAnchor(input: {
+  snapshotMessageClientId: string | undefined;
+  exactChildVisible: boolean;
+  childStillInRenderItems: boolean;
+}): boolean {
+  return (
+    input.snapshotMessageClientId !== undefined &&
+    !input.exactChildVisible &&
+    input.childStillInRenderItems
+  );
+}
+
+/**
+ * 折叠组展开后快照往往只有 render-item key。视口顶 item 里已出现可见的精确
+ * child 时必须重测，否则删这个 child 时补偿看不到 snapshotMessageGone。
+ */
+export function shouldRefreshExpandedChildViewportAnchor(input: {
+  snapshotMessageClientId: string | undefined;
+  viewportTopItemHasVisibleExactChild: boolean;
+}): boolean {
+  return (
+    input.snapshotMessageClientId === undefined &&
+    input.viewportTopItemHasVisibleExactChild
+  );
+}
+
+function hasVisibleExactChildAnchor(itemElement: HTMLElement): boolean {
+  for (const element of itemElement.querySelectorAll<HTMLElement>('[data-message-client-id]')) {
+    const rect = element.getBoundingClientRect();
+    if (rect.bottom > rect.top) return true;
+  }
+  return false;
 }
 
 /**
@@ -1823,20 +2073,9 @@ function workGroupClientId(run: WorkChildItem[]): string {
   return workChildClientId(firstActivity ?? run[0]);
 }
 
-/** 工作组内全部可定位 clientId(嵌套组递归),供组容器的回退锚点使用。 */
+/** 工作组容器回退锚点：与删除补偿同一条 clientId 序列。 */
 function collectWorkGroupClientIds(children: readonly RenderItem[]): string[] {
-  const ids: string[] = [];
-  for (const child of children) {
-    if (child.type === 'message') ids.push(child.message.clientId);
-    else if (child.type === 'tool_segment') {
-      for (const toolCall of child.toolCalls) ids.push(toolCall.clientId);
-    } else if (child.type === 'agent_task' && child.toolCall) {
-      ids.push(child.toolCall.clientId);
-    } else if (child.type === 'work_group') {
-      ids.push(...collectWorkGroupClientIds(child.children));
-    }
-  }
-  return ids;
+  return collectDeleteAnchorClientIds(children);
 }
 
 function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
@@ -2408,29 +2647,31 @@ function renderWorkGroupChild(
   }
 
   return (
-    <MessageItem
-      message={item.message}
-      toolResult={props.singleResultMap.get(item.message.clientId)}
-      workingDir={props.workingDir}
-      sessionId={props.sessionId}
-      sessionTitle={props.sessionTitle}
-      agentKind={props.agentKind}
-      remoteHostId={props.remoteHostId}
-      sessionRunning={props.isSessionStreaming}
-      assistantForkBlocked={shouldBlockAssistantFork(
-        props.isSessionStreaming,
-        item.message,
-        props.assistantsWithFollowingUserBoundary,
-      )}
-      assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
-      userTurnUsageDetails={props.userTurnUsageDetailsByAssistantId.get(item.message.clientId)}
-      isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
-      isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
-      isLastUserInput={item.message.clientId === props.lastUserInputClientId}
-      isContinuationTurnOwner={item.message.clientId === props.continuationTurnClientId}
-      continuationInFlightProjectionCapability={props.continuationInFlightProjectionCapability}
-      localFileRefs={props.localFileRefs}
-    />
+    <div data-message-client-id={item.message.clientId}>
+      <MessageItem
+        message={item.message}
+        toolResult={props.singleResultMap.get(item.message.clientId)}
+        workingDir={props.workingDir}
+        sessionId={props.sessionId}
+        sessionTitle={props.sessionTitle}
+        agentKind={props.agentKind}
+        remoteHostId={props.remoteHostId}
+        sessionRunning={props.isSessionStreaming}
+        assistantForkBlocked={shouldBlockAssistantFork(
+          props.isSessionStreaming,
+          item.message,
+          props.assistantsWithFollowingUserBoundary,
+        )}
+        assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
+        userTurnUsageDetails={props.userTurnUsageDetailsByAssistantId.get(item.message.clientId)}
+        isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
+        isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
+        isLastUserInput={item.message.clientId === props.lastUserInputClientId}
+        isContinuationTurnOwner={item.message.clientId === props.continuationTurnClientId}
+        continuationInFlightProjectionCapability={props.continuationInFlightProjectionCapability}
+        localFileRefs={props.localFileRefs}
+      />
+    </div>
   );
 }
 
@@ -2587,6 +2828,8 @@ export function MessageStream({
   /** Set while we programmatically change scrollTop, so the scroll handler
    *  doesn't misread the assignment as user-initiated up-scroll. */
   const programmaticScrollRef = useRef(false);
+  /** 让旧 rAF 不能清掉后发程序化滚动的状态或覆盖其锚点。 */
+  const programmaticScrollGenerationRef = useRef(0);
   /** F-SYNC-2: remembered scrollHeight snapshot taken at the moment we
    *  trigger `onLoadMore`, used to restore position after prepend. */
   const prevScrollHeightRef = useRef(0);
@@ -2597,6 +2840,16 @@ export function MessageStream({
   const prevScrollTopAtLoadRef = useRef(0);
   /** Track previous scrollTop to detect scroll direction. */
   const prevScrollTopRef = useRef(0);
+  /** 上一帧 render items。全量序列在窗口回退成尾窗时仍能选到删除区后的邻居。 */
+  const prevVisibleItemsRef = useRef<readonly RenderItem[]>([]);
+  const prevAllItemsRef = useRef<readonly RenderItem[]>([]);
+  /** 最近一次滚动/跳转落定的视口顶端。不读 sessionScrollStore（程序化跳转后会陈旧）。 */
+  const lastViewportTopRef = useRef<ViewportTopSnapshot | null>(null);
+  /** 窗口重建后下一提交执行的一次性视口复位。 */
+  const pendingReanchorScrollRef = useRef<ViewportTopSnapshot | null>(null);
+  /** 程序化滚动期间到达的删除，待滚动结束后重放补偿。 */
+  const deferredDeleteCompensationRef = useRef(false);
+  const [deleteCompensationReplay, setDeleteCompensationReplay] = useState(0);
   /** clientId of the last user-role message we've already observed. Used to
    *  detect a NEW user send → force pin regardless of prior scroll state. */
   const lastUserMsg = messages[messages.length - 1];
@@ -2667,6 +2920,17 @@ export function MessageStream({
   } | null>(null);
   const focusScrollTimerRef = useRef<number | null>(null);
   const focusHighlightTimerRef = useRef<number | null>(null);
+  /** 进行中的 focus 跳转。生命周期跨越流式重渲染:接管 / 落定监听在挂载级注册并读
+   *  本 ref 判定,挂在 reactive effect 里会被内容型重渲染的 cleanup 拆掉且早退分支
+   *  不再重挂。keysAtJump 供目标在跳转途中被删时选相邻存活落点。 */
+  const focusJumpRef = useRef<{
+    requestKey: string;
+    clientId: string;
+    targetKey: string;
+    keysAtJump: readonly string[];
+    messageClientIdsAtJump: readonly string[];
+    scrollGeneration: number;
+  } | null>(null);
   useEffect(
     () => () => {
       if (focusScrollTimerRef.current !== null) {
@@ -2920,6 +3184,353 @@ export function MessageStream({
     return () => window.clearTimeout(id);
   }, [defaultWindowItems, firstVisibleItemKey, visibleRenderItems.length, allRenderItems.length]);
 
+  // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
+  const visibleRenderItemsRef = useRef(visibleRenderItems);
+  visibleRenderItemsRef.current = visibleRenderItems;
+  // 量出当前视口顶端 render-item；若它内部还有已渲染的子消息，再记实际跨过视口顶边
+  // 的 message clientId。折叠工作组 / 折叠工具块的聚合 data-message-client-ids 只给
+  // focus 回退用，不参与视口快照，避免把隐藏 child 当成活锚点。
+  const measureViewportTop = useCallback((): ViewportTopSnapshot | null => {
+    const container = scrollRef.current;
+    const items = itemsRef.current;
+    if (!container || !items) return null;
+    const vis = visibleRenderItemsRef.current;
+    const cTop = container.getBoundingClientRect().top;
+    const children = items.children;
+    for (let i = 0; i < children.length; i++) {
+      const rect = (children[i] as HTMLElement).getBoundingClientRect();
+      // 第一条「底边还在容器顶边下方」的 item = 正好跨过视口顶边的那条。
+      if (rect.bottom - cTop > 0) {
+        const key = vis[i]?.key;
+        if (!key) return null;
+        const snapshot: ViewportTopSnapshot = {
+          viewportTopKey: key,
+          offset: Math.max(0, cTop - rect.top),
+        };
+        const itemElement = children[i] as HTMLElement;
+        const childAnchor = pickIntersectingChildAnchor(
+          Array.from(
+            itemElement.querySelectorAll<HTMLElement>('[data-message-client-id]'),
+            (element) => {
+              const clientId = readViewportChildAnchorClientId(element);
+              if (!clientId) return null;
+              const rect = element.getBoundingClientRect();
+              if (rect.bottom <= rect.top) return null;
+              return { clientId, top: rect.top, bottom: rect.bottom };
+            },
+          ).filter((candidate): candidate is ChildAnchorRect => candidate !== null),
+          cTop,
+        );
+        if (childAnchor) {
+          snapshot.messageClientId = childAnchor.clientId;
+          snapshot.messageOffset = childAnchor.offset;
+        }
+        return snapshot;
+      }
+    }
+    return null;
+  }, []);
+  // 量测并写入「删除前快照」，返回结果供同帧复用。用户滚动、非贴底程序化跳转与
+  // focus 落定经它刷新；贴底态由 auto-follow 接管，无需快照。
+  const refreshViewportAnchor = useCallback((): ViewportTopSnapshot | null => {
+    const measured = measureViewportTop();
+    if (measured) lastViewportTopRef.current = measured;
+    return measured;
+  }, [measureViewportTop]);
+  const beginProgrammaticScroll = useCallback((): number => {
+    programmaticScrollRef.current = true;
+    programmaticScrollGenerationRef.current += 1;
+    return programmaticScrollGenerationRef.current;
+  }, []);
+  // true = 触发删除补偿重放；false = 正常结束；null = 已被后发滚动取代的旧回调。
+  const finishProgrammaticScroll = useCallback(
+    (
+      generation: number,
+      { consumeDeferredDelete = false }: { consumeDeferredDelete?: boolean } = {},
+    ): boolean | null => {
+      const decision = resolveProgrammaticScrollEndDecision({
+        generation,
+        activeGeneration: programmaticScrollGenerationRef.current,
+        hasDeferredDelete: deferredDeleteCompensationRef.current,
+        consumeDeferredDelete,
+      });
+      if (decision === 'stale') return null;
+      programmaticScrollGenerationRef.current += 1;
+      programmaticScrollRef.current = false;
+      if (decision === 'finished') return false;
+      deferredDeleteCompensationRef.current = false;
+      if (decision === 'consume-deferred-delete') return false;
+      setDeleteCompensationReplay((version) => version + 1);
+      return true;
+    },
+    [],
+  );
+  const allRenderItemsRef = useRef(allRenderItems);
+  allRenderItemsRef.current = allRenderItems;
+  // 折叠/展开不改 visibleRenderItems。精确 child 被卸掉且数据仍在时降级重测；
+  // 快照没有子锚点但视口顶 item 已露出精确 child 时也重测（折叠→展开）。
+  const refreshHiddenChildViewportAnchor = useCallback(() => {
+    const snapshot = lastViewportTopRef.current;
+    const clientId = snapshot?.messageClientId;
+    if (clientId && snapshot) {
+      const root = scrollRef.current;
+      const exact = root ? queryMessageElement(root, clientId) : null;
+      const rect = exact?.getBoundingClientRect();
+      if (
+        !shouldRefreshHiddenChildViewportAnchor({
+          snapshotMessageClientId: clientId,
+          exactChildVisible: Boolean(rect && rect.bottom > rect.top),
+          childStillInRenderItems: allRenderItemsRef.current.some((item) =>
+            renderItemContainsClientId(item, clientId),
+          ),
+        })
+      ) {
+        return;
+      }
+      lastViewportTopRef.current = toRenderItemViewportSnapshot(snapshot);
+      refreshViewportAnchor();
+      return;
+    }
+    const vis = visibleRenderItemsRef.current;
+    const idx = snapshot
+      ? vis.findIndex((item) => item.key === snapshot.viewportTopKey)
+      : -1;
+    const itemElement =
+      idx >= 0 ? (itemsRef.current?.children[idx] as HTMLElement | undefined) : undefined;
+    if (
+      !shouldRefreshExpandedChildViewportAnchor({
+        snapshotMessageClientId: clientId,
+        viewportTopItemHasVisibleExactChild: Boolean(
+          itemElement && hasVisibleExactChildAnchor(itemElement),
+        ),
+      })
+    ) {
+      return;
+    }
+    refreshViewportAnchor();
+  }, [refreshViewportAnchor]);
+  // 瞬时把 key 对应 item 的顶边摆到「容器顶边下方 offset 处」;key 不在当前窗口或
+  // DOM 未就绪则放弃。删除补偿与 focus 落定共用。
+  const scrollKeyToViewportTop = useCallback((key: string, offset: number) => {
+    const container = scrollRef.current;
+    const idx = visibleRenderItemsRef.current.findIndex((item) => item.key === key);
+    const child =
+      idx >= 0 ? (itemsRef.current?.children[idx] as HTMLElement | undefined) : undefined;
+    if (!container || !child) return;
+    const delta =
+      child.getBoundingClientRect().top - (container.getBoundingClientRect().top - offset);
+    if (Math.abs(delta) < 1) return;
+    const generation = beginProgrammaticScroll();
+    container.scrollTop += delta;
+    requestAnimationFrame(() => finishProgrammaticScroll(generation));
+  }, [beginProgrammaticScroll, finishProgrammaticScroll]);
+  const scrollMessageToViewportTop = useCallback((clientId: string, offset: number) => {
+    const container = scrollRef.current;
+    // 视口复位只认已渲染的精确 child。聚合 data-message-client-ids 命中折叠组容器
+    // 会让隐藏 child 继续当活锚点，删除后把组滚到顶。focus 跳转仍走 queryFocusElement。
+    const target = container ? queryMessageElement(container, clientId) : null;
+    if (!container || !target) return false;
+    const delta =
+      target.getBoundingClientRect().top - (container.getBoundingClientRect().top - offset);
+    if (Math.abs(delta) < 1) return true;
+    const generation = beginProgrammaticScroll();
+    container.scrollTop += delta;
+    requestAnimationFrame(() => finishProgrammaticScroll(generation));
+    return true;
+  }, [beginProgrammaticScroll, finishProgrammaticScroll]);
+  const restoreViewportSnapshot = useCallback(
+    (snapshot: ViewportTopSnapshot, itemOffset = snapshot.offset): boolean => {
+      if (
+        snapshot.messageClientId &&
+        scrollMessageToViewportTop(snapshot.messageClientId, snapshot.messageOffset ?? 0)
+      ) {
+        lastViewportTopRef.current = snapshot;
+        return true;
+      }
+      const itemSnapshot = toRenderItemViewportSnapshot(snapshot, itemOffset);
+      lastViewportTopRef.current = itemSnapshot;
+      if (visibleRenderItemsRef.current.some((item) => item.key === itemSnapshot.viewportTopKey)) {
+        scrollKeyToViewportTop(itemSnapshot.viewportTopKey, itemSnapshot.offset);
+        return true;
+      }
+      return false;
+    },
+    [scrollKeyToViewportTop, scrollMessageToViewportTop],
+  );
+  const restoreViewportSnapshotOrRebuildWindow = useCallback(
+    (snapshot: ViewportTopSnapshot, itemOffset = snapshot.offset) => {
+      if (restoreViewportSnapshot(snapshot, itemOffset)) return;
+      pendingReanchorScrollRef.current = lastViewportTopRef.current;
+      const key = lastViewportTopRef.current?.viewportTopKey;
+      if (key) setFirstVisibleItemKey(key);
+    },
+    [restoreViewportSnapshot],
+  );
+  const cancelFocusJump = useCallback(
+    ({
+      consumeDeferredDelete = false,
+      refreshAnchor = false,
+    }: {
+      consumeDeferredDelete?: boolean;
+      refreshAnchor?: boolean;
+    } = {}): boolean => {
+      const jump = focusJumpRef.current;
+      if (!jump) return false;
+      focusJumpRef.current = null;
+      if (focusScrollTimerRef.current !== null) {
+        window.clearTimeout(focusScrollTimerRef.current);
+        focusScrollTimerRef.current = null;
+      }
+      if (focusHighlightTimerRef.current !== null) {
+        window.clearTimeout(focusHighlightTimerRef.current);
+        focusHighlightTimerRef.current = null;
+      }
+      // 只终止仍由这次 focus 拥有的原生 smooth 动画；过期 focus 不得打断后发滚动。
+      if (jump.scrollGeneration === programmaticScrollGenerationRef.current) {
+        const root = scrollRef.current;
+        if (root) root.scrollTo({ top: root.scrollTop, behavior: 'auto' });
+      }
+      const replayingDelete = finishProgrammaticScroll(jump.scrollGeneration, {
+        consumeDeferredDelete,
+      });
+      if (refreshAnchor && replayingDelete === false) refreshViewportAnchor();
+      return true;
+    },
+    [finishProgrammaticScroll, refreshViewportAnchor],
+  );
+  // focus 跳转落定收尾(scrollend 主路径与兜底 timer 共用,幂等):途中布局变化
+  // (删除 / 流式)会让 smooth 落点偏离目标,先瞬时校正回目标;目标在跳转途中被删时
+  // 锚到跳转时序列中它之后第一条存活 item(与删除补偿同语义,落点在窗口外则走窗口
+  // 重建 + pending 复位);用户已接管则不校正。下一帧再清 programmatic 标记并刷新
+  // 删除前快照——半途量测会把跳变中的位置误存为锚点。
+  const settleFocusJump = useCallback(() => {
+    const jump = focusJumpRef.current;
+    if (!jump) return;
+    focusJumpRef.current = null;
+    if (focusScrollTimerRef.current !== null) {
+      window.clearTimeout(focusScrollTimerRef.current);
+      focusScrollTimerRef.current = null;
+    }
+    if (focusHighlightTimerRef.current !== null) {
+      window.clearTimeout(focusHighlightTimerRef.current);
+      focusHighlightTimerRef.current = null;
+    }
+    if (jump.scrollGeneration !== programmaticScrollGenerationRef.current) return;
+    // settle 前已观察到的删除由当前目标校正消费；同帧后续删除仍走通用重放。
+    deferredDeleteCompensationRef.current = false;
+    // 邻居锚定分支会显式写入快照(窗口重建的 DOM 下一提交才就绪),此时不得再用
+    // 旧 DOM 量测覆盖。
+    let snapshotPinned = false;
+    const root = scrollRef.current;
+    if (root) {
+      setHighlightMessageClientId(jump.clientId);
+      const all = allRenderItemsRef.current;
+      const target = queryFocusElement(root, jump.clientId);
+      if (target) {
+        target.scrollIntoView({ block: 'center' });
+        const measured = refreshViewportAnchor();
+        const rootTop = root.getBoundingClientRect().top;
+        const targetRect = target.getBoundingClientRect();
+        if (
+          jump.messageClientIdsAtJump.includes(jump.clientId) &&
+          shouldUseFocusedElementAsViewportAnchor({
+            focusClientId: jump.clientId,
+            elementClientId: target.dataset.messageClientId,
+            containerTop: rootTop,
+            elementTop: targetRect.top,
+            elementBottom: targetRect.bottom,
+          })
+        ) {
+          lastViewportTopRef.current = {
+            ...(measured ?? {
+              viewportTopKey: renderItemKeyForClientId(all, jump.clientId) ?? jump.targetKey,
+              offset: 0,
+            }),
+            messageClientId: jump.clientId,
+            messageOffset: Math.max(0, rootTop - targetRect.top),
+          };
+        }
+      } else {
+        const targetExists = all.some((item) => renderItemContainsClientId(item, jump.clientId));
+        const landMessageClientId =
+          !targetExists && jump.messageClientIdsAtJump.includes(jump.clientId)
+            ? pickDeleteCompensationAnchorKey(
+                jump.messageClientIdsAtJump,
+                collectDeleteAnchorClientIds(all),
+                jump.clientId,
+              )
+            : null;
+        let landKey = landMessageClientId
+          ? renderItemKeyForClientId(all, landMessageClientId)
+          : null;
+        if (!landKey) {
+          const recoveredIdx = findRestorableViewportItemIdx(all, jump.targetKey);
+          landKey =
+            recoveredIdx >= 0
+              ? (all[recoveredIdx]?.key ?? null)
+              : pickDeleteCompensationAnchorKey(
+                  jump.keysAtJump,
+                  all.map((item) => item.key),
+                  jump.targetKey,
+                );
+        }
+        if (landKey) {
+          snapshotPinned = true;
+          restoreViewportSnapshotOrRebuildWindow({
+            viewportTopKey: landKey,
+            offset: 0,
+            ...(landMessageClientId
+              ? { messageClientId: landMessageClientId, messageOffset: 0 }
+              : {}),
+          });
+        }
+      }
+    }
+    requestAnimationFrame(() => {
+      const activeJump = focusJumpRef.current;
+      if (activeJump && activeJump.requestKey !== jump.requestKey) return;
+      const replayingDelete = finishProgrammaticScroll(jump.scrollGeneration);
+      if (!snapshotPinned && replayingDelete === false) refreshViewportAnchor();
+    });
+  }, [
+    finishProgrammaticScroll,
+    refreshViewportAnchor,
+    restoreViewportSnapshotOrRebuildWindow,
+  ]);
+  // 接管 / 落定监听挂载级注册一次,读 focusJumpRef 判定,无活跃跳转时空转。挂在下面
+  // 的 reactive effect 里会被流式重渲染的 cleanup 拆掉且早退分支不再重挂,导致接管
+  // 失灵、兜底 timer 落定时把用户拽回目标。
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    // 用户中途接管(滚轮 / 触摸 / 按住滚动条 / 键盘导航):浏览器已取消 smooth 动画,
+    // 立即恢复用户滚动语义,落定时不再校正回目标。
+    const onUserInput = () => {
+      // finish 路径会重放 focus 期间延期的删除补偿；不能直接清掉，否则用户接管后
+      // 会永久保留删除造成的错误位移。
+      cancelFocusJump();
+    };
+    const onNavigationKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (!isScrollNavigationKey(event.key)) return;
+      if (isEditableKeyboardTarget(event.target)) return;
+      onUserInput();
+    };
+    const onScrollEnd = () => settleFocusJump();
+    root.addEventListener('wheel', onUserInput, { passive: true });
+    root.addEventListener('touchstart', onUserInput, { passive: true });
+    root.addEventListener('mousedown', onUserInput);
+    window.addEventListener('keydown', onNavigationKey);
+    root.addEventListener('scrollend', onScrollEnd);
+    return () => {
+      root.removeEventListener('wheel', onUserInput);
+      root.removeEventListener('touchstart', onUserInput);
+      root.removeEventListener('mousedown', onUserInput);
+      window.removeEventListener('keydown', onNavigationKey);
+      root.removeEventListener('scrollend', onScrollEnd);
+    };
+  }, [cancelFocusJump, settleFocusJump]);
+
   useLayoutEffect(() => {
     const focusRequestKey = focusMessageClientId
       ? `${focusMessageRequestId ?? 0}:${focusMessageClientId}`
@@ -2927,7 +3538,13 @@ export function MessageStream({
     if (!focusMessageClientId || !focusRequestKey) {
       lastAppliedFocusRef.current = null;
       lastMissingFocusRef.current = null;
+      cancelFocusJump({ refreshAnchor: true });
       return;
+    }
+    // 新请求必须在任何 missing / 扩窗 / DOM 未就绪早退前废弃旧跳转，否则旧 timer
+    // 或 scrollend 会继续按上一目标落定。requestId 也纳入 key，支持同消息重复跳转。
+    if (focusJumpRef.current && focusJumpRef.current.requestKey !== focusRequestKey) {
+      cancelFocusJump({ refreshAnchor: true });
     }
     if (lastAppliedFocusRef.current === focusRequestKey) return;
     const lastItemKey = allRenderItems.at(-1)?.key ?? null;
@@ -2958,20 +3575,22 @@ export function MessageStream({
     }
     const root = scrollRef.current;
     if (!root) return;
-    // 精确锚点(message wrapper / 带 toolCall 的任务卡)优先;查不到时退回
-    // 聚合动作块的容器锚点(data-message-client-ids 空格分隔多 clientId)——
-    // 后台 Bash 等工具行渲染在折叠块内,没有独立的行级 DOM 锚点。
-    const el = (root.querySelector(
-      `[data-message-client-id="${CSS.escape(focusMessageClientId)}"]`,
-    ) ??
-      root.querySelector(
-        `[data-message-client-ids~="${CSS.escape(focusMessageClientId)}"]`,
-      )) as HTMLElement | null;
+    const el = queryFocusElement(root, focusMessageClientId);
     if (!el) return;
     restoringRef.current = false;
     isNearBottomRef.current = false;
     setIsNearBottom(false);
-    programmaticScrollRef.current = true;
+    const scrollGeneration = beginProgrammaticScroll();
+    // 新跳直接覆盖未落定的旧跳(用户快速连点两条结果):旧跳转态被替换,旧兜底
+    // timer 一并重设,浏览器的旧 smooth 动画由新 scrollIntoView 接管。
+    focusJumpRef.current = {
+      requestKey: focusRequestKey,
+      clientId: focusMessageClientId,
+      targetKey,
+      keysAtJump: allRenderItems.map((item) => item.key),
+      messageClientIdsAtJump: collectDeleteAnchorClientIds(allRenderItems),
+      scrollGeneration,
+    };
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     lastAppliedFocusRef.current = focusRequestKey;
     if (focusScrollTimerRef.current !== null) {
@@ -2980,32 +3599,27 @@ export function MessageStream({
     if (focusHighlightTimerRef.current !== null) {
       window.clearTimeout(focusHighlightTimerRef.current);
     }
-    // 高亮时机:等平滑滚动**落定后**再点亮,避免目标还在半途就提前闪高亮(用户反馈)。
-    // 优先用 scrollend 精确对齐;拿不到(不支持 / 目标已在视口内滚动距离为 0 不触发)时用兜底延时。
-    // 点亮后**不再自动淡出**——停在搜索命中处,直到下次跳转覆盖或切会话(满足「搜索态高亮不消失」)。
-    let highlightApplied = false;
-    const applyHighlight = () => {
-      if (highlightApplied) return;
-      highlightApplied = true;
-      root.removeEventListener('scrollend', applyHighlight);
-      setHighlightMessageClientId(focusMessageClientId);
-    };
-    root.addEventListener('scrollend', applyHighlight, { once: true });
-    focusScrollTimerRef.current = window.setTimeout(() => {
-      programmaticScrollRef.current = false;
-    }, 800);
-    // 兜底:scrollend 未触发(距离为 0 / 环境不支持)时,~600ms 后强制点亮。
+    // 落定主路径是挂载级 scrollend 监听;有 scrollend 时兜底只是安全网(长距离
+    // smooth 常 >800ms,给足 2.5s),无 scrollend 的环境用 800ms 近似落定。
+    focusScrollTimerRef.current = window.setTimeout(
+      settleFocusJump,
+      'onscrollend' in window ? 2500 : 800,
+    );
+    // 高亮等落定后再点亮(落定回调里做),点亮后不再自动淡出——停在搜索命中处,直到
+    // 下次跳转覆盖或切会话。scrollend 未触发(距离为 0 / 环境不支持)时 ~600ms 兜底。
     focusHighlightTimerRef.current = window.setTimeout(() => {
-      applyHighlight();
+      setHighlightMessageClientId(focusMessageClientId);
       focusHighlightTimerRef.current = null;
     }, 600);
-    // 清理:effect 因依赖变化重跑(如用户快速连点两条结果)时,移除尚未触发的旧监听器,
-    // 避免旧 applyHighlight 在下次 scrollend 以上一条 clientId 点亮、造成高亮闪错消息。
-    // 已触发过则监听器已被 { once } 自动移除,这里为幂等空操作。
-    return () => {
-      root.removeEventListener('scrollend', applyHighlight);
-    };
-  }, [allRenderItems, focusMessageClientId, focusMessageRequestId, visibleRenderItems]);
+  }, [
+    allRenderItems,
+    focusMessageClientId,
+    focusMessageRequestId,
+    visibleRenderItems,
+    beginProgrammaticScroll,
+    cancelFocusJump,
+    settleFocusJump,
+  ]);
 
   // 会话内全部图片的有序 src(全量,来自未裁剪的 allRenderItems),下发给
   // ImageLightbox 做翻图。基于全量而非 visibleRenderItems,这样计数 / 翻页
@@ -3092,10 +3706,7 @@ export function MessageStream({
     visibleStartIdx + visibleRenderItems.length >= allRenderItems.length;
 
   // ── 滚动位置 保存 / 还原 的辅助 ──
-  // unmount cleanup 与 ResizeObserver 回调里读不到最新的 visibleRenderItems /
-  // firstVisibleItemKey(闭包会 stale),用 ref 镜像每次 render 同步一份,供它们读取。
-  const visibleRenderItemsRef = useRef(visibleRenderItems);
-  visibleRenderItemsRef.current = visibleRenderItems;
+  // 镜像 ref:unmount cleanup 与 ResizeObserver 回调里读最新值(闭包会 stale)。
   const windowCoversEndRef = useRef(windowCoversEnd);
   windowCoversEndRef.current = windowCoversEnd;
   const firstVisibleItemKeyRef = useRef(firstVisibleItemKey);
@@ -3116,28 +3727,6 @@ export function MessageStream({
     }
   }, [firstVisibleItemKey, windowCoversEnd]);
 
-  // 量出当前视口顶端那条 render-item 的 key + 它被滚到视口上方的像素数。
-  // 用 children 索引 ↔ visibleRenderItems 索引的天然对应关系反查(map 一条 item
-  // 产出一个根节点),不需要给每条 item 的 DOM 打 data 标记。stable 引用(无依赖)。
-  const measureViewportTop = useCallback((): { viewportTopKey: string; offset: number } | null => {
-    const container = scrollRef.current;
-    const items = itemsRef.current;
-    if (!container || !items) return null;
-    const vis = visibleRenderItemsRef.current;
-    const cTop = container.getBoundingClientRect().top;
-    const children = items.children;
-    for (let i = 0; i < children.length; i++) {
-      const rect = (children[i] as HTMLElement).getBoundingClientRect();
-      // 第一条「底边还在容器顶边下方」的 item = 正好跨过视口顶边的那条。
-      if (rect.bottom - cTop > 0) {
-        const key = vis[i]?.key;
-        if (!key) return null;
-        return { viewportTopKey: key, offset: Math.max(0, cTop - rect.top) };
-      }
-    }
-    return null;
-  }, []);
-
   // 把视口滚回快照记录的「锚点 item + 偏移」。按条目相对定位,所以即使上方图片 /
   // markdown 还没异步渲染完导致高度偏小,也会落在正确的 item 上;settle 期间由
   // ResizeObserver 反复调用本函数纠偏(幂等,不漂移)。stable 引用(无依赖)。
@@ -3154,36 +3743,36 @@ export function MessageStream({
     const rect = child.getBoundingClientRect();
     // 期望 child 顶端落在 (容器顶边 - offset) 处;向下滚 delta 会让 rect.top 上移 delta。
     const delta = rect.top - (cTop - snap.offset);
-    if (Math.abs(delta) < 1) return;
-    programmaticScrollRef.current = true;
+    if (Math.abs(delta) < 1) {
+      refreshViewportAnchor();
+      return;
+    }
+    const generation = beginProgrammaticScroll();
     container.scrollTop += delta;
     requestAnimationFrame(() => {
-      programmaticScrollRef.current = false;
+      if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
     });
-  }, []);
+  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor]);
   // ResizeObserver 回调用 ref 取最新 applyRestore,避免把它放进 observer 依赖导致
   // 流式每 token(visibleRenderItems 变)都 disconnect/reconnect。
   const applyRestoreRef = useRef(applyRestore);
   applyRestoreRef.current = applyRestore;
 
-  // 保存当前浏览位置到 sessionScrollStore。在用户滚动时(DOM 一定存活)持续调用,
-  // 不依赖 unmount 时机。无 sessionId / 量测失败则跳过。
+  // 保存当前浏览位置到 sessionScrollStore,并同步刷新删除前快照(单次量测)。用户
+  // 滚动时持续调用(DOM 一定存活),unmount cleanup 兜底最后一帧;量测失败则跳过。
   const saveRafRef = useRef<number | null>(null);
   const saveScrollSnapshot = useCallback(() => {
-    if (!sessionId) return;
-    const measured = measureViewportTop();
-    if (!measured) return;
+    const measured = refreshViewportAnchor();
+    if (!sessionId || !measured) return;
     saveSessionScroll(sessionId, {
       windowAnchorKey: firstVisibleItemKeyRef.current,
       viewportTopKey: measured.viewportTopKey,
       offset: measured.offset,
       isNearBottom: isNearBottomRef.current,
       anchoredForwardCount:
-        firstVisibleItemKeyRef.current !== null
-          ? anchoredForwardItemsRef.current
-          : undefined,
+        firstVisibleItemKeyRef.current !== null ? anchoredForwardItemsRef.current : undefined,
     });
-  }, [sessionId, measureViewportTop]);
+  }, [sessionId, refreshViewportAnchor]);
 
   // perf-baseline (见 perfLog 注释):
   // 父组件用 key={sessionId} 包了本组件,所以每次切 session 都是全新 mount,
@@ -3403,24 +3992,135 @@ export function MessageStream({
   // 动手就立即通行 — 不会卡住"用 chip 连点上翻"或"跳完立刻 wheel 看更老历史"。
   // 3s safety timer 兜底,应对极端 case(用户 click 后既不滚也不动键盘)。
   const chipJumpInProgressRef = useRef<boolean>(false);
+  const chipJumpGenerationRef = useRef<number | null>(null);
+  const chipJumpTargetRef = useRef<ChipJumpTarget | null>(null);
   const chipJumpClearTimerRef = useRef<number | null>(null);
   const userHistoryTouchStartYRef = useRef<number | null>(null);
   const userIntentLoadInFlightRef = useRef<boolean>(false);
-  const clearChipJumpSuppression = useCallback(() => {
-    if (chipJumpInProgressRef.current) {
+  const finishChipJump = useCallback(
+    (
+      generation: number,
+      {
+        consumeDeferredDelete = false,
+        refreshAnchor = false,
+      }: { consumeDeferredDelete?: boolean; refreshAnchor?: boolean } = {},
+    ): boolean | null => {
+      if (chipJumpGenerationRef.current !== generation) return null;
+      chipJumpGenerationRef.current = null;
+      if (chipJumpTargetRef.current?.generation === generation) {
+        chipJumpTargetRef.current = null;
+      }
       chipJumpInProgressRef.current = false;
+      if (chipJumpClearTimerRef.current !== null) {
+        window.clearTimeout(chipJumpClearTimerRef.current);
+        chipJumpClearTimerRef.current = null;
+      }
+      const replayingDelete = finishProgrammaticScroll(generation, { consumeDeferredDelete });
+      if (refreshAnchor && replayingDelete === false) refreshViewportAnchor();
+      return replayingDelete;
+    },
+    [finishProgrammaticScroll, refreshViewportAnchor],
+  );
+  // wheel/touch/键盘接管：结束当前 smooth，但让期间延期的删除补偿重放。
+  const clearChipJumpSuppression = useCallback(() => {
+    // 跳底会乐观置位贴底。接管后若仍贴底：流式 ResizeObserver 会 pinToBottom 拽回
+    // 视口，延期删除重放也会被补偿 effect 直接跳过。有进行中的 chip / focus /
+    // 跳底 generation 时一律解除，不只在已有延期删除时。
+    if (
+      deferredDeleteCompensationRef.current ||
+      chipJumpGenerationRef.current !== null ||
+      focusJumpRef.current ||
+      programmaticScrollRef.current
+    ) {
+      unpinAutoFollowForUserUpIntent();
     }
+    const generation = chipJumpGenerationRef.current;
+    if (generation !== null) {
+      finishChipJump(generation);
+      const root = scrollRef.current;
+      if (root) root.scrollTo({ top: root.scrollTop, behavior: 'auto' });
+      return;
+    }
+    chipJumpInProgressRef.current = false;
     if (chipJumpClearTimerRef.current !== null) {
       window.clearTimeout(chipJumpClearTimerRef.current);
       chipJumpClearTimerRef.current = null;
     }
-  }, []);
+    if (focusJumpRef.current) {
+      cancelFocusJump();
+      return;
+    }
+    if (programmaticScrollRef.current) {
+      finishProgrammaticScroll(programmaticScrollGenerationRef.current);
+      const root = scrollRef.current;
+      if (root) root.scrollTo({ top: root.scrollTop, behavior: 'auto' });
+    }
+  }, [cancelFocusJump, finishChipJump, finishProgrammaticScroll, unpinAutoFollowForUserUpIntent]);
+  // 正常落定：删除 / 流式更新可能让 smooth 开始时算出的像素落点失效。必须按本次
+  // generation 保存的目标标识重新查 DOM、瞬时校正后，才能让确定落点消费延期删除补偿。
+  // 目标已被删 / DOM 不可用时不消费，交给通用删除补偿重放。
+  const settleChipJump = useCallback((expectedGeneration?: number) => {
+    const generation = expectedGeneration ?? chipJumpGenerationRef.current;
+    if (generation === null || chipJumpGenerationRef.current !== generation) return;
+    const target = chipJumpTargetRef.current;
+    let targetResolved = false;
+    const root = scrollRef.current;
+    if (root && target?.generation === generation) {
+      const selectorAttribute =
+        target.selector === 'user-message' ? 'data-user-msg-id' : 'data-message-client-id';
+      const element = root.querySelector<HTMLElement>(
+        `[${selectorAttribute}="${CSS.escape(target.clientId)}"]`,
+      );
+      if (element) {
+        const correctedScrollTop = resolveChipJumpTargetScrollTop({
+          scrollTop: root.scrollTop,
+          containerTop: root.getBoundingClientRect().top,
+          targetTop: element.getBoundingClientRect().top,
+          topOffset: target.topOffset,
+        });
+        if (Math.abs(correctedScrollTop - root.scrollTop) >= 1) root.scrollTop = correctedScrollTop;
+        targetResolved = true;
+      }
+    }
+    // 只消费校正前已观察到的删除；校正后、下一帧 finish 前新到的删除会重新置位，
+    // 仍由 finish 触发重放，不能被这次导航一并吞掉。
+    if (targetResolved) deferredDeleteCompensationRef.current = false;
+    requestAnimationFrame(() => finishChipJump(generation, { refreshAnchor: true }));
+  }, [finishChipJump]);
+  const beginChipJump = useCallback((target: Omit<ChipJumpTarget, 'generation'>) => {
+    if (chipJumpClearTimerRef.current !== null) {
+      window.clearTimeout(chipJumpClearTimerRef.current);
+    }
+    chipJumpInProgressRef.current = true;
+    const generation = beginProgrammaticScroll();
+    chipJumpGenerationRef.current = generation;
+    chipJumpTargetRef.current = { ...target, generation };
+    chipJumpClearTimerRef.current = window.setTimeout(() => {
+      settleChipJump(generation);
+    }, CHIP_JUMP_SAFETY_MS);
+  }, [beginProgrammaticScroll, settleChipJump]);
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const onScrollEnd = () => {
+      settleChipJump();
+      if (chipJumpGenerationRef.current !== null) return;
+      if (!programmaticScrollRef.current) return;
+      const generation = programmaticScrollGenerationRef.current;
+      if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
+    };
+    root.addEventListener('scrollend', onScrollEnd);
+    return () => root.removeEventListener('scrollend', onScrollEnd);
+  }, [finishProgrammaticScroll, refreshViewportAnchor, settleChipJump]);
   useEffect(() => {
     return () => {
       if (chipJumpClearTimerRef.current !== null) {
         window.clearTimeout(chipJumpClearTimerRef.current);
         chipJumpClearTimerRef.current = null;
       }
+      chipJumpGenerationRef.current = null;
+      chipJumpTargetRef.current = null;
+      chipJumpInProgressRef.current = false;
     };
   }, []);
   useEffect(() => {
@@ -3516,17 +4216,22 @@ export function MessageStream({
     const onTouchEnd = () => {
       userHistoryTouchStartYRef.current = null;
     };
+    const onMouseDown = () => {
+      clearChipJumpSuppression();
+    };
     root.addEventListener('wheel', onWheel, { passive: true });
     root.addEventListener('touchstart', onTouchStart, { passive: true });
     root.addEventListener('touchmove', onTouchMove, { passive: true });
     root.addEventListener('touchend', onTouchEnd, { passive: true });
     root.addEventListener('touchcancel', onTouchEnd, { passive: true });
+    root.addEventListener('mousedown', onMouseDown);
     return () => {
       root.removeEventListener('wheel', onWheel);
       root.removeEventListener('touchstart', onTouchStart);
       root.removeEventListener('touchmove', onTouchMove);
       root.removeEventListener('touchend', onTouchEnd);
       root.removeEventListener('touchcancel', onTouchEnd);
+      root.removeEventListener('mousedown', onMouseDown);
     };
   }, [clearChipJumpSuppression, triggerUserIntentFill, unpinAutoFollowForUserUpIntent]);
   useEffect(() => {
@@ -3554,16 +4259,18 @@ export function MessageStream({
   const pinToBottom = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    programmaticScrollRef.current = true;
+    const generation = beginProgrammaticScroll();
     suppressScrollbarActivation(el);
     el.scrollTop = el.scrollHeight;
     // Clear the flag on the next frame — after the browser has dispatched
     // the resulting scroll event. We use rAF (not a microtask) because the
     // scroll event is dispatched asynchronously.
     requestAnimationFrame(() => {
-      programmaticScrollRef.current = false;
+      if (finishProgrammaticScroll(generation) === false && !isNearBottomRef.current) {
+        refreshViewportAnchor();
+      }
     });
-  }, []);
+  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor]);
 
   // F3: 平滑滚到底的按钮回调。
   //   - 乐观更新 unreadCount / isNearBottom / isNearBottomRef → 按钮同一 tick fade-out
@@ -3573,14 +4280,23 @@ export function MessageStream({
   const scrollToBottomSmooth = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // 显式的新导航取代尚未落定的搜索 focus；自身的底部落点会消费此前延期的删除补偿。
+    cancelFocusJump({ consumeDeferredDelete: true });
+    const chipJumpGeneration = chipJumpGenerationRef.current;
+    if (chipJumpGeneration !== null) {
+      finishChipJump(chipJumpGeneration, { consumeDeferredDelete: true });
+    }
     setUnreadCount(0);
     setIsNearBottom(true);
     isNearBottomRef.current = true;
-    programmaticScrollRef.current = true;
+    const generation = beginProgrammaticScroll();
     // render-window-bidirectional: 清除锚点回到默认尾部窗口（chip/jump-down 语义）。
     setFirstVisibleItemKey(null);
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-  }, []);
+    window.setTimeout(() => {
+      if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
+    }, CHIP_JUMP_SAFETY_MS);
+  }, [beginProgrammaticScroll, cancelFocusJump, finishChipJump, finishProgrammaticScroll, refreshViewportAnchor]);
 
   // F2: messages diff → 按角色累计 unreadCount
   //   - 计数规则抽成纯函数 countUnreadAdded（见 unreadCount.ts）：新 clientId 才计、
@@ -3730,14 +4446,30 @@ export function MessageStream({
         return;
       }
       if (performance.now() < suppressPinUntil) return;
-      if (isNearBottomRef.current) pinToBottom();
+      if (isNearBottomRef.current) {
+        pinToBottom();
+        return;
+      }
+      refreshHiddenChildViewportAnchor();
     });
     ro.observe(content);
     return () => {
       content.removeEventListener(CARD_EXPAND_TOGGLE_EVENT, onCardExpandToggle);
       ro.disconnect();
     };
-  }, [pinToBottom]);
+  }, [pinToBottom, refreshHiddenChildViewportAnchor]);
+
+  // 折叠动画末帧可能已是 0fr，再卸载时内容高度几乎不变，ResizeObserver 不一定
+  // 再触发。精确 child 节点从 items 子树消失时补一次（数据仍在才重测）。
+  useEffect(() => {
+    const items = itemsRef.current;
+    if (!items) return;
+    const observer = new MutationObserver(() => {
+      refreshHiddenChildViewportAnchor();
+    });
+    observer.observe(items, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [refreshHiddenChildViewportAnchor]);
 
   // F-SYNC-2 + render-window: Preserve scroll position after either
   //   (a) DB prepend (messages 数组前端追加,触发 isLoadingMore false → render)
@@ -3785,17 +4517,206 @@ export function MessageStream({
       if (delta > 0 && !anchoringApplied) {
         // anchoring 没生效(viewport 内没合适锚点元素时 Chromium 会跳过自动调整),
         // 由 F-SYNC-2 手动补偿,行为同原版。
-        programmaticScrollRef.current = true;
+        const generation = beginProgrammaticScroll();
         el.scrollTop += delta;
-        requestAnimationFrame(() => {
-          programmaticScrollRef.current = false;
-        });
+        requestAnimationFrame(() => finishProgrammaticScroll(generation));
       }
       // anchoringApplied=true 分支无操作 — 浏览器 anchoring 已把 viewport 摆好。
       prevScrollHeightRef.current = 0;
       prevScrollTopAtLoadRef.current = 0;
     }
-  }, [visibleRenderItems, isLoadingMore]);
+  }, [visibleRenderItems, isLoadingMore, beginProgrammaticScroll, finishProgrammaticScroll]);
+
+  // ── 删除靠前 message 后的视口保位（#2289）──
+  // 快照来自滚动/跳转落定；删除提交后再量会使 delta 恒为 0。贴底交给 pin-to-bottom。
+  useLayoutEffect(() => {
+    const prevVisibleItems = prevVisibleItemsRef.current;
+    const prevAllItems = prevAllItemsRef.current;
+    prevVisibleItemsRef.current = visibleRenderItems;
+    prevAllItemsRef.current = allRenderItems;
+    const snapshot = lastViewportTopRef.current;
+    const prevSeq = prevAllItems.length > 0 ? prevAllItems : prevVisibleItems;
+
+    const pending = pendingReanchorScrollRef.current;
+    if (pending) {
+      pendingReanchorScrollRef.current = null;
+      restoreViewportSnapshot(pending);
+      return;
+    }
+
+    const shrank = visibleRenderItems.length < prevVisibleItems.length;
+    const snapshotKeyGone =
+      snapshot !== null && !visibleRenderItems.some((it) => it.key === snapshot.viewportTopKey);
+    const snapshotMessageClientId = snapshot?.messageClientId;
+    const snapshotMessageGone =
+      snapshotMessageClientId !== undefined &&
+      !allRenderItems.some((item) => renderItemContainsClientId(item, snapshotMessageClientId));
+    if (!shrank && !snapshotKeyGone && !snapshotMessageGone) return;
+
+    const recoverableMessageClientId = snapshotMessageClientId;
+    const recoverableMessageExists =
+      recoverableMessageClientId !== undefined &&
+      allRenderItems.some((item) => renderItemContainsClientId(item, recoverableMessageClientId));
+
+    const recoveredIdx = snapshot
+      ? findRestorableViewportItemIdx(visibleRenderItems, snapshot.viewportTopKey)
+      : -1;
+    const recoveredKey = recoveredIdx >= 0 ? visibleRenderItems[recoveredIdx]?.key : undefined;
+    const windowAnchorLost =
+      firstVisibleItemKey !== null &&
+      findRestorableViewportItemIdx(allRenderItems, firstVisibleItemKey) < 0;
+    if (snapshot && recoveredKey && !snapshotMessageGone) {
+      if (recoveredKey !== snapshot.viewportTopKey) {
+        const rebased: ViewportTopSnapshot = {
+          ...snapshot,
+          viewportTopKey: recoveredKey,
+          offset: 0,
+          ...(recoverableMessageExists
+            ? {
+                messageClientId: recoverableMessageClientId,
+                messageOffset: snapshot.messageOffset ?? snapshot.offset,
+              }
+            : {}),
+        };
+        lastViewportTopRef.current = rebased;
+        if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore) {
+          restoreViewportSnapshot(rebased, 0);
+        }
+      }
+      if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore) return;
+    }
+
+    if (!sessionId) return;
+    if (programmaticScrollRef.current || isLoadingMore) {
+      prevVisibleItemsRef.current = prevVisibleItems;
+      prevAllItemsRef.current = prevAllItems;
+      if (programmaticScrollRef.current) deferredDeleteCompensationRef.current = true;
+      return;
+    }
+    if (isNearBottomRef.current) return;
+
+    let anchor = snapshot;
+    if (restoringRef.current) {
+      const snap = restoreSnapshotRef.current;
+      if (
+        !snap?.viewportTopKey ||
+        findRestorableViewportItemIdx(visibleRenderItems, snap.viewportTopKey) >= 0
+      ) {
+        return;
+      }
+      anchor = { viewportTopKey: snap.viewportTopKey, offset: snap.offset };
+      restoringRef.current = false;
+    }
+    if (!anchor) return;
+    const { viewportTopKey: anchorKey, offset: anchorOffset } = anchor;
+    const anchorItemStillVisible = visibleRenderItems.some((item) => item.key === anchorKey);
+    if (anchor.messageClientId && snapshotMessageGone && anchorItemStillVisible) {
+      const survivorMessageId = pickDeleteCompensationAnchorKey(
+        collectDeleteAnchorClientIds(prevSeq),
+        collectDeleteAnchorClientIds(allRenderItems),
+        anchor.messageClientId,
+      );
+      if (survivorMessageId) {
+        const survivorItemKey = renderItemKeyForClientId(allRenderItems, survivorMessageId);
+        const root = scrollRef.current;
+        const exact = root ? queryMessageElement(root, survivorMessageId) : null;
+        const fallback = root ? queryVisibleAggregateContainer(root, survivorMessageId) : null;
+        const landing = resolveDeleteCompensationLanding({
+          exactVisible: isVisibleDeleteCompensationElement(exact),
+          fallbackContainerVisible: isVisibleDeleteCompensationElement(fallback),
+        });
+        if (landing === 'exact') {
+          const itemOffset = survivorItemKey === anchorKey ? anchorOffset : 0;
+          restoreViewportSnapshotOrRebuildWindow(
+            {
+              viewportTopKey: survivorItemKey ?? anchorKey,
+              offset: itemOffset,
+              messageClientId: survivorMessageId,
+              messageOffset: 0,
+            },
+            itemOffset,
+          );
+          return;
+        }
+        if (landing === 'container' && root && fallback) {
+          // 折叠摘要行可见，隐藏 child 没有精确 DOM。滚摘要到视口顶，不要复用外层旧 offset。
+          const delta =
+            fallback.getBoundingClientRect().top - root.getBoundingClientRect().top;
+          if (Math.abs(delta) >= 1) {
+            const generation = beginProgrammaticScroll();
+            root.scrollTop += delta;
+            requestAnimationFrame(() => finishProgrammaticScroll(generation));
+          }
+          lastViewportTopRef.current = toRenderItemViewportSnapshot({
+            viewportTopKey: survivorItemKey ?? anchorKey,
+            offset: 0,
+          });
+          refreshViewportAnchor();
+          return;
+        }
+        restoreViewportSnapshotOrRebuildWindow(
+          { viewportTopKey: survivorItemKey ?? anchorKey, offset: 0 },
+          0,
+        );
+        return;
+      }
+    }
+    if (anchorItemStillVisible) return;
+
+    if (windowAnchorLost) {
+      const aliveIdx = findRestorableViewportItemIdx(allRenderItems, anchorKey);
+      let targetKey: string | null;
+      let targetOffset = 0;
+      if (aliveIdx >= 0) {
+        targetKey = allRenderItems[aliveIdx]?.key ?? null;
+        if (targetKey === anchorKey) targetOffset = anchorOffset;
+      } else {
+        targetKey = pickDeleteCompensationAnchorKey(
+          prevSeq.map((it) => it.key),
+          allRenderItems.map((it) => it.key),
+          anchorKey,
+        );
+      }
+      if (!targetKey) return;
+      const targetSnapshot: ViewportTopSnapshot = snapshotMessageGone
+        ? { viewportTopKey: targetKey, offset: targetOffset }
+        : {
+            ...anchor,
+            viewportTopKey: targetKey,
+            offset: targetOffset,
+            ...(recoverableMessageExists
+              ? {
+                  messageClientId: recoverableMessageClientId,
+                  messageOffset: anchor.messageOffset ?? anchor.offset,
+                }
+              : {}),
+          };
+      lastViewportTopRef.current = targetSnapshot;
+      pendingReanchorScrollRef.current = targetSnapshot;
+      setFirstVisibleItemKey(targetKey);
+      return;
+    }
+
+    const survivorKey = pickDeleteCompensationAnchorKey(
+      prevVisibleItems.map((it) => it.key),
+      visibleRenderItems.map((it) => it.key),
+      anchorKey,
+    );
+    if (!survivorKey) return;
+    restoreViewportSnapshot({ viewportTopKey: survivorKey, offset: 0 });
+  }, [
+    visibleRenderItems,
+    allRenderItems,
+    firstVisibleItemKey,
+    sessionId,
+    isLoadingMore,
+    deleteCompensationReplay,
+    restoreViewportSnapshot,
+    restoreViewportSnapshotOrRebuildWindow,
+    beginProgrammaticScroll,
+    finishProgrammaticScroll,
+    refreshViewportAnchor,
+  ]);
 
   // ── post-load auto-expand ──
   // 修一类已知 UX 缺口 (跟 render-window 轴换轴无关,老代码同病):
@@ -3862,8 +4783,8 @@ export function MessageStream({
     if (!programmaticScrollRef.current) {
       // 用户手动滚动 = 接管浏览,退出「还原中」,后续恢复正常 auto-follow 判定。
       restoringRef.current = false;
-      // 持续保存当前浏览位置(rAF 节流,DOM 必然存活)。不依赖 unmount 时机,
-      // 规避「React passive cleanup 在 DOM 移除后才跑、量测拿到 null」的坑。
+      // 持续保存浏览位置（rAF 节流，DOM 必然存活），内含删除前快照刷新——纯滚动后
+      // 快照停在陈旧 key 会让删除补偿失配。
       if (saveRafRef.current === null) {
         saveRafRef.current = requestAnimationFrame(() => {
           saveRafRef.current = null;
@@ -3944,9 +4865,16 @@ export function MessageStream({
     // F3: smooth 滚动完成后清除 programmaticScrollRef，让后续用户滚动能被正确识别。
     //   - 判据：距底 < 5px（smooth 动画收敛后的稳定值）+ 当前处于 programmatic 态
     //   - 用 rAF 推迟一帧，避免连续 smooth 滚动的尾帧事件被误判
-    if (programmaticScrollRef.current && distanceFromBottom < 5) {
+    // 同帧刷新删除前快照：程序化贴底后视口顶端已变，陈旧 key 会让删除补偿早退。
+    if (
+      programmaticScrollRef.current &&
+      focusJumpRef.current === null &&
+      chipJumpGenerationRef.current === null &&
+      distanceFromBottom < 5
+    ) {
+      const generation = programmaticScrollGenerationRef.current;
       requestAnimationFrame(() => {
-        programmaticScrollRef.current = false;
+        if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
       });
     }
 
@@ -3985,6 +4913,8 @@ export function MessageStream({
     windowAtTop,
     expandWindow,
     saveScrollSnapshot,
+    refreshViewportAnchor,
+    finishProgrammaticScroll,
     windowCoversEnd,
     anchoredForwardItems,
     visibleStartIdx,
@@ -4038,22 +4968,22 @@ export function MessageStream({
       `[data-user-msg-id="${CSS.escape(prevUserMsgId)}"]`,
     ) as HTMLElement | null;
     if (!el) return;
+    // portal 不在 scroll root 内，mousedown 接管监听收不到；必须在新 smooth 开始前
+    // 显式废弃旧 focus，避免其 scrollend 把视口拉回搜索结果。
+    cancelFocusJump({ consumeDeferredDelete: true });
     suppressAfterClick();
     // expand/load 抑制:smooth scroll 期间路径如果穿过 scrollTop<50,handleScroll
     // 会触发 expandWindow/onLoadMore + F-SYNC-2 scrollTop+=delta,这条 race 可能
     // 把 viewport 拽飞。设 ref 让 handleScroll 跳过那分支。解抑靠 wheel/touch/
     // keydown(在上面 useEffect 里挂的监听),用户一动手就过去,不会卡"用 chip
     // 连点上翻"或"跳完立刻 wheel 看更老历史"。
-    chipJumpInProgressRef.current = true;
-    if (chipJumpClearTimerRef.current !== null) {
-      window.clearTimeout(chipJumpClearTimerRef.current);
-    }
-    chipJumpClearTimerRef.current = window.setTimeout(() => {
-      chipJumpClearTimerRef.current = null;
-      clearChipJumpSuppression();
-    }, CHIP_JUMP_SAFETY_MS);
+    beginChipJump({
+      clientId: prevUserMsgId,
+      selector: 'user-message',
+      topOffset: 0,
+    });
     el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [prevUserMsgId, suppressAfterClick, clearChipJumpSuppression]);
+  }, [prevUserMsgId, suppressAfterClick, beginChipJump, cancelFocusJump]);
 
   const prevPreview = prevUserMsgId ? firstNonEmptyLine(previewById.get(prevUserMsgId) ?? '') : '';
 
@@ -4135,9 +5065,13 @@ export function MessageStream({
   const [railJumpRequest, setRailJumpRequest] = useState<{ id: string; seq: number } | null>(null);
   const lastAppliedRailJumpRef = useRef(0);
   const handleNavRailJump = useCallback((clientId: string) => {
+    // 先废弃旧搜索 focus；目标即使需要下一轮扩窗，旧 scrollend/timer 也不能抢回视口。
+    // 导航条目标要到 layout effect 才能确认仍存在且 DOM 已就绪，因此这里不能提前消费
+    // focus 期间延期的删除补偿：先重放补偿，目标有效时后续导航再覆盖最终落点。
+    cancelFocusJump();
     railJumpSeqRef.current += 1;
     setRailJumpRequest({ id: clientId, seq: railJumpSeqRef.current });
-  }, []);
+  }, [cancelFocusJump]);
 
   useLayoutEffect(() => {
     if (!railJumpRequest) return;
@@ -4169,14 +5103,11 @@ export function MessageStream({
     setIsNearBottom(false);
     // smooth scroll 途经顶部区域时抑制 expandWindow/onLoadMore(chip-jump 协议,
     // 解抑靠用户 wheel/touch/keydown + 安全兜底 timer)。
-    chipJumpInProgressRef.current = true;
-    if (chipJumpClearTimerRef.current !== null) {
-      window.clearTimeout(chipJumpClearTimerRef.current);
-    }
-    chipJumpClearTimerRef.current = window.setTimeout(() => {
-      chipJumpClearTimerRef.current = null;
-      clearChipJumpSuppression();
-    }, CHIP_JUMP_SAFETY_MS);
+    beginChipJump({
+      clientId: railJumpRequest.id,
+      selector: 'message',
+      topOffset: NAV_RAIL_JUMP_TOP_OFFSET_PX,
+    });
     // 落点手动计算,不走 scrollIntoView:轮次跳转要让视口恰好框住
     // "提问 → 回答",提问顶边停在容器顶下方 12px;消息锚点通用的
     // scroll-mt-20(80px)是搜索跳转的上文语境预留,对本任务是漏出
@@ -4186,7 +5117,7 @@ export function MessageStream({
       (el.getBoundingClientRect().top - root.getBoundingClientRect().top) -
       NAV_RAIL_JUMP_TOP_OFFSET_PX;
     root.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
-  }, [railJumpRequest, allRenderItems, visibleRenderItems, clearChipJumpSuppression]);
+  }, [railJumpRequest, allRenderItems, visibleRenderItems, beginChipJump]);
 
   // 第一条 user 消息没有"上一条 assistant"作为 resumeSessionAt 锚点，
   // rewind 必然抛 NO_PRIOR_ASSISTANT。直接在 UI 层把按钮藏掉，避免无效点击。
@@ -4297,6 +5228,8 @@ export function MessageStream({
               data-scroll-container=""
               className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
               onScroll={handleScroll}
+              onPointerDownCapture={() => refreshViewportAnchor()}
+              onKeyDownCapture={() => refreshViewportAnchor()}
             >
               <div
                 ref={contentRef}
@@ -4451,6 +5384,7 @@ export function MessageStream({
                         // data-message-client-ids:组折叠时子卡片/聚合块整体 unmount,
                         // 精确锚点消失 —— 后台任务面板「点行跳聊天」经 ~= 回退查询
                         // 落到组容器(与 AgentActionsBlock 的容器锚点同一约定)。
+                        // 视口子锚点不读这个聚合列表，只认已渲染的 data-message-client-id。
                         <div
                           key={item.key}
                           className="scroll-mt-20"

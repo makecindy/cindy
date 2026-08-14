@@ -352,6 +352,34 @@ describe('SessionCard review regressions', () => {
     expect(automationGroupSource).toContain(": 'text-foreground hover:bg-sidebar-item-hover'");
   });
 
+  it('matches list-mode title type to the text-mode session row', () => {
+    expect(sessionCardSource).toContain("'text-sm font-medium leading-[1.3]'");
+    expect(sessionCardSource).toContain(
+      'inputClassName="absolute inset-x-0 top-1/2 h-6 -translate-y-1/2 text-sm font-medium text-foreground"',
+    );
+    expect(sessionCardSource).toContain("'mt-1 overflow-hidden text-xs leading-[1.45]'");
+    expect(sessionCardSource).toContain('className="leading-none"');
+    expect(sessionCardSource).not.toContain("'text-13 font-semibold leading-[1.3] tracking-[-0.005em]'");
+    expect(sessionItemSource).toContain("'text-left text-sm font-medium'");
+  });
+
+  it('keeps list-mode time and remote marks on the text-mode color and size', () => {
+    expect(sessionCardSource).toContain('size={12}');
+    expect(sessionCardSource).toContain(": 'text-sidebar-action-icon'");
+    expect(sessionCardSource).not.toContain("size={11}\n                      strokeWidth={1.8}");
+    expect(sessionItemSource).toContain('size={12}');
+    expect(sessionItemSource).toContain(": 'text-sidebar-action-icon'");
+  });
+
+  it('shows the project source label inline in both list and text modes', () => {
+    expect(sessionCardSource).toContain('{sourceLabel ? (');
+    expect(sessionItemSource).toContain('{sourceLabel ? (');
+    expect(sessionItemSource).toContain('title={sourceLabel}');
+    expect(sessionCardSource).toContain('title={sourceLabel}');
+    expect(sessionItemSource).toContain("'min-w-0 truncate text-xs font-normal'");
+    expect(sessionItemSource).not.toContain('sourceLabel={sourceLabel}');
+  });
+
   it('aligns list automation headers with regular tasks and indents only expanded children', () => {
     expect(automationGroupSource).toMatch(
       /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: indented\s*\? 'pl-\[22px\] pr-2'\s*: 'pl-3 pr-2'/,

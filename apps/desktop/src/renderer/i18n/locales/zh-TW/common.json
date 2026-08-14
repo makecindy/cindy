@@ -479,7 +479,7 @@
         "reset": "恢復預設佈局",
         "resetSuccess": "已恢復預設面板佈局",
         "resetFailed": "無法恢復預設面板佈局",
-        "saved": "面板位置已儲存；可在「設定 → 外觀」中恢復預設佈局",
+        "saved": "面板位置已儲存；可在「設定 → 一般」的「外觀」區段恢復預設配置",
         "saveFailed": "無法儲存面板位置"
       }
     },
@@ -2321,7 +2321,7 @@
       "title": "Subagent",
       "description": "分別設定 Claude Code 和 Codex 執行子任務時使用的預設模型，併為 Codex Subagent 配置執行護欄。設定按入口生效，不會為每個模型單獨儲存。",
       "unspecified": "不指定（跟隨原邏輯）",
-      "hint": "可選模型取決於已連線的模型來源；留空表示使用 Agent 原本的預設設定。Claude Code 的修改從新建的 Agent 會話開始生效；Codex 的修改在空閒時立即重啟生效，有任務執行時會在本地 Codex 會話全部空閒後自動應用。",
+      "hint": "Claude Code Subagent 僅支援指定模型，推理強度沿用 Claude Code 原生邏輯。可選模型取決於已連線的模型來源；留空表示使用 Agent 原本的預設設定。Claude Code 的修改從新建的 Agent 會話開始生效；Codex 的修改在空閒時立即重啟生效，有任務執行時會在本地 Codex 會話全部空閒後自動應用。",
       "codexV2ModelHint": "Subagent 預設模型必須是 Codex 自身模型目錄內的模型，目錄外的模型（如經相容橋接入的第三方模型）會被 Codex 拒絕；Sol / Terra（Multi-Agent V2）進一步只接受 V2 目錄模型（當前為 gpt-5.6-sol 與 gpt-5.6-terra），舊版（V1）無 V2 限制。",
       "saveFailed": "儲存 Subagent 設定失敗",
       "guardrails": {

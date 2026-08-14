@@ -200,5 +200,16 @@ describe('desktop auth session-expiry detection', () => {
     const requireBody = ghostSource.slice(requireStart, requireEnd);
     expect(requireBody).toContain("throwIpcError(\n        'PRECONDITION_FAILED'");
     expect(requireBody).toContain('isAppSessionBoundaryPending()');
+    // A durable Ghost owner mismatch must stay a retryable precondition error
+    // (not a misleading PERMISSION_DENIED) even when the App session itself is
+    // not switching. The owner-stable check has to sit inside the
+    // PRECONDITION_FAILED branch, so require it to appear before the
+    // PERMISSION_DENIED throw — otherwise a regression that moves it into the
+    // permission branch would still pass a mere toContain.
+    const ownerStableIndex = requireBody.indexOf('!isGhostSkillProjectionBoundaryStableForOwner(activeOwner)');
+    const permissionDeniedIndex = requireBody.indexOf("'PERMISSION_DENIED'");
+    expect(ownerStableIndex).toBeGreaterThan(-1);
+    expect(permissionDeniedIndex).toBeGreaterThan(-1);
+    expect(ownerStableIndex).toBeLessThan(permissionDeniedIndex);
   });
 });
