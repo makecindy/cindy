@@ -749,4 +749,38 @@ describe('runMemoryCleanup', () => {
       unlinkSpy.mockRestore();
     }
   });
+
+  it('restores src when a write lands during the quiesce window', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟: 二次校验 (第 1 次读) 与三次确认 (第 2 次读) 都通过, 但 quiesce
+    // 重试确认窗口 (第 3 次读) 中 open fd 写入 retained — 必须恢复 src + failed,
+    // 不标成功 (Codex P1 on #2561 第二十四轮: keep live-writer shards active
+    // until quiesced)。
+    const realReadFile = fs.readFile.bind(fs);
+    let retainedReads = 0;
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(async (p, ...rest) => {
+      const str = String(p);
+      if (str.includes(ARCHIVE_DIR_NAME) && !str.endsWith('.archive')) {
+        retainedReads += 1;
+        if (retainedReads === 3) {
+          await writeFile(String(p), 'WRITTEN DURING QUIESCE BY OPEN FD', 'utf8');
+        }
+      }
+      return realReadFile(p as string, ...rest);
+    });
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      expect(result.archived).toHaveLength(0);
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain(
+        'WRITTEN DURING QUIESCE',
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

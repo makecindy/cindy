@@ -499,6 +499,31 @@ export async function runMemoryCleanup(
           });
           continue;
         }
+        // quiesce 重试确认 (Codex P1 on #2561 第二十四轮: keep live-writer
+        // shards active until quiesced): 最终读通过后 open fd 仍可能在极短窗口
+        // 内写入。无 OS 锁下无法从数学上排除 live writer, 用「短窗口多次重读」
+        // 尽力排除 — 期间任何一次读到不一致/不可读 → 恢复 src + failed, 不标
+        // 成功; 始终一致才标 archived。这是无锁方案可辩护的工程极限, 数学级
+        // 排除需锁文件协议 (宿主配合, #2519 合入后的产品决策)。
+        let quiesced = true;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const quiesceContent = await fs.readFile(retained).catch(() => null);
+          if (quiesceContent === null || !quiesceContent.equals(srcContent)) {
+            quiesced = false;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        if (!quiesced) {
+          const restored = await restoreRetained(retained, src);
+          result.failed.push({
+            filename: item.filename,
+            error: restored
+              ? 'source written during archive; restored to active shard (retained kept reachable in .archive)'
+              : 'source written during archive; restore failed — src not restored, retained kept reachable in .archive for manual recovery',
+          });
+          continue;
+        }
         result.archived.push(item);
       } else {
         // 宿主并发写的新内容 (或 trash 读失败) → no-clobber 恢复 src
