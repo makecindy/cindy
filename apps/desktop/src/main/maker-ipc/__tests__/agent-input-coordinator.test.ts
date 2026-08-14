@@ -4428,6 +4428,66 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     expect(h.abortSession).not.toHaveBeenCalled();
   });
 
+  it('resumes a paused queue-head recovery from the original head without reordering the tail', async () => {
+    const h = createHarness();
+    const sid = 'resume-paused-queue-head-recovery';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second', {
+      origin: { kind: 'orca', senderLabel: 'worker-1' },
+    });
+
+    h.sendToAgent.mockResolvedValueOnce(hostSendFailure('SEND_FAILED', 'boom'));
+    h.coordinator.enqueue(sid, first);
+    await flush();
+
+    h.coordinator.enqueue(sid, second);
+    await flush();
+    mocks.touchUserSendInDb.mockClear();
+
+    // A mechanical duplicate resume must not retry an unpaused recovery. Only
+    // the visible paused-queue Continue action owns the recovery transition.
+    h.coordinator.resume(sid);
+    await flush();
+    let projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.touchUserSendInDb).not.toHaveBeenCalled();
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-1' });
+
+    projection = h.coordinator.pausePendingQueueForRewind(sid);
+    expect(projection).toMatchObject({
+      queuePaused: true,
+      recovery: { kind: 'queue-head', clientId: 'q-1' },
+    });
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-1', 'q-2']);
+
+    // A stale recovery must never retry through a different queue head.
+    h.coordinator.move(sid, 'q-2', 0);
+    h.coordinator.resume(sid);
+    await flush();
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.touchUserSendInDb).not.toHaveBeenCalled();
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-1' });
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2', 'q-1']);
+
+    h.coordinator.move(sid, 'q-1', 0);
+    projection = h.coordinator.pausePendingQueueForRewind(sid);
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-1', 'q-2']);
+
+    h.sendToAgent.mockResolvedValueOnce(sendSuccess());
+    h.coordinator.resume(sid);
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'first' });
+    expect(mocks.touchUserSendInDb).toHaveBeenCalledOnce();
+    expect(mocks.touchUserSendInDb).toHaveBeenCalledWith(sid, undefined);
+    expect(projection.recovery).toBeNull();
+    expect(projection.error).toBeNull();
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+  });
+
   it('keeps the queue paused after Stop and drains after Continue plus Claude abort boundary', async () => {
     const h = createHarness();
     const sid = 'stop-claude';
