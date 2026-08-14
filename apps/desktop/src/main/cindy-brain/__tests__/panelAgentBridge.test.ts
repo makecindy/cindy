@@ -88,6 +88,23 @@ describe('GhostPanelAgentBridge', () => {
     });
   });
 
+  it('确认和 Agent 共用去除首尾空白的消息', async () => {
+    const { bridge, deps } = makeBridge();
+
+    await bridge.send(11, { message: `${'\n'.repeat(4_096)}真实指令  \n` });
+
+    expect(deps.confirmSend).toHaveBeenCalledWith(
+      'alpha',
+      '真实指令',
+      22,
+      'session-current',
+    );
+    expect(deps.run).toHaveBeenCalledWith(
+      'alpha',
+      expect.objectContaining({ userMessage: '真实指令' }),
+    );
+  });
+
   it('用户取消宿主确认时不签票也不启动 Agent', async () => {
     const { bridge, deps } = makeBridge({
       confirmSend: vi.fn(async () => ({ ok: true as const, confirmed: false })),

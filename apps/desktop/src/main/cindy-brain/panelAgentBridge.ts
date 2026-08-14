@@ -131,7 +131,9 @@ export class GhostPanelAgentBridge {
         message: `message 必须是 1–${MAX_MESSAGE_CHARS} 字符的非空字符串`,
       };
     }
-    const message = raw.message;
+    // 确认框、Agent 和持久化共用同一份去除首尾空白的消息，
+    // 避免前导空行把真实指令压到确认框首屏之外。
+    const message = raw.message.trim();
     const context = raw.context;
     const hasContext = context !== undefined && context !== null;
     const contextJson = hasContext ? serializeContext(context) : null;
