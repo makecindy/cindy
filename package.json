@@ -102,6 +102,7 @@
     "benchmark:browser": "node --import tsx scripts/browser-capability-benchmark.mjs",
     "benchmark:desktop-workers": "node scripts/desktop-worker-benchmark.mjs",
     "dev:embed:search": "node scripts/dev-embed-search.mjs",
+    "demo:legacy-migration": "tsx scripts/dev-legacy-migration-demo.mts",
     "build": "node scripts/ensure-deps.mjs && pnpm --filter desktop build",
     "release:package": "node scripts/ensure-deps.mjs && node apps/desktop/scripts/package-desktop.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",

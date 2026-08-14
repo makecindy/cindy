@@ -167,7 +167,13 @@ interface TurnState {
    * all callers await this same promise instead of each minting a new card.
    * Without it we get one card per delta — a flood of orphan cards.
    */
-  streamingHandlePromise: Promise<StreamingTextHandle> | null;
+  streamingHandlePromise: Promise<StreamingTextHandle | null> | null;
+  /**
+   * 初始流式输出面创建失败(#2164)。置位后本轮不再重试 startStreamingText
+   * (密集 delta 会造成 API 风暴 / 多张孤儿卡),已生成正文由 turn 收口一次性
+   * 降级为普通文本发送,不再静默丢失。
+   */
+  streamingStartFailed: boolean;
   /**
    * 呈现大脑(正文累积 / 过程区合成), 与官方 bot 共用 im/shared/turnPresenter。
    * buffer-replace 策略: 保留个人 IM 渠道现有行为 —— isFinal 用该条全文整体替换
@@ -676,6 +682,7 @@ export function createTurnRunner(
       initialMessageText: text,
       streamingHandle: null,
       streamingHandlePromise: null,
+      streamingStartFailed: false,
       presenter: createTurnPresenter({ mode: 'buffer-replace' }),
       mediaAbsPaths: [],
       workingDir: row.workingDir,
@@ -1887,7 +1894,7 @@ export function createTurnRunner(
     // 一下 ensureStreamingHandle 让 card 先建出来, 再投递。投递接口本身是
     // O(1) 同步 push, 不阻塞事件循环。
     void ensureStreamingHandle(turn).then((handle) => {
-      if (!handle.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力
+      if (!handle?.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力 / 创建失败(null)
       for (const url of urls) {
         try {
           const { absPath } = url.startsWith('cindy-media://')
@@ -1926,7 +1933,7 @@ export function createTurnRunner(
   function handleToolUseEvent(turn: TurnState, event: AgentEvent): void {
     if (!turn.presenter.applyToolUse(event)) return;
     ensureActivityTicker(turn);
-    void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
+    void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
   /**
@@ -1944,7 +1951,7 @@ export function createTurnRunner(
   function handleRetryNoticeEvent(turn: TurnState, event: AgentEvent): void {
     if (!turn.presenter.applyRetryNotice(event)) return;
     ensureActivityTicker(turn);
-    void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
+    void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
   function ensureActivityTicker(turn: TurnState): void {
@@ -2396,26 +2403,43 @@ export function createTurnRunner(
     // deltas, 这时卡片会一直停在 "灵感正在路上..." placeholder 直到 done; done 之间
     // 几秒延迟里用户看着像 stuck。replace 一次保证用户即时看到回复内容。
     if (!turn.presenter.applyText(event)) return;
-    void ensureStreamingHandle(turn).then((h) => h.replace(composeStreamingView(turn)));
+    void ensureStreamingHandle(turn).then((h) => h?.replace(composeStreamingView(turn)));
   }
 
-  function ensureStreamingHandle(turn: TurnState): Promise<StreamingTextHandle> {
+  function ensureStreamingHandle(turn: TurnState): Promise<StreamingTextHandle | null> {
     if (turn.streamingHandle) return Promise.resolve(turn.streamingHandle);
+    // 初始创建已失败:resolve null(#2164)。不复用 rejected promise 也不再重试 ——
+    // 密集 delta 下重试会造成 API 风暴 / 多张孤儿卡;正文由 turn 收口统一降级。
+    if (turn.streamingStartFailed) return Promise.resolve(null);
     if (turn.streamingHandlePromise) return turn.streamingHandlePromise;
     // Singleton: subsequent concurrent callers await the same promise rather
     // than each calling startStreamingText (which would mint a new card per
     // call and produce a flood of orphan messages).
+    // 创建失败集中在此捕获并 resolve null(#2164):调用点全部是 fire-and-forget
+    // 的 .then(...),各自补 rejection handler 必然遗漏;失败留下脱敏日志与
+    // streamingStartFailed 标记,已生成正文由收口分支一次性降级发送。
     turn.streamingHandlePromise = (async () => {
-      const handle =
-        output.kind === 'chunked-text'
-          ? chunkedTextHandle(turn)
-          : turn.outputCardMessageId
-            ? patchedCardHandle(turn.outputCardMessageId)
-            : await output.im.startStreamingText(turn.userId, undefined, {
-                threadTs: turn.scopeKey,
-              });
-      turn.streamingHandle = handle;
-      return handle;
+      try {
+        const handle =
+          output.kind === 'chunked-text'
+            ? chunkedTextHandle(turn)
+            : turn.outputCardMessageId
+              ? patchedCardHandle(turn.outputCardMessageId)
+              : await output.im.startStreamingText(turn.userId, undefined, {
+                  threadTs: turn.scopeKey,
+                });
+        turn.streamingHandle = handle;
+        return handle;
+      } catch (err) {
+        turn.streamingStartFailed = true;
+        // 只记渠道 / 阶段 / 错误摘要,不记 token、消息正文与完整用户标识。
+        log.warn(
+          `[${channel}/turn] initial streaming output start failed (phase=initial_stream_start): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return null;
+      }
     })();
     return turn.streamingHandlePromise;
   }
@@ -2546,6 +2570,32 @@ export function createTurnRunner(
         }
       } catch {
         /* swallow */
+      }
+    } else {
+      // 初始流式输出面创建失败但正文已生成(#2164):此前两条分支都不命中,
+      // 已持久化的助手回复在渠道侧静默消失。收口时一次性降级为普通文本发送
+      // (turn.done 已置,composeStreamingView 只含干净正文;长度限制由渠道发送
+      // 实现兑现)。发送失败只记脱敏日志,不阻塞 settle / 队列放行。
+      try {
+        const fallbackText = composeStreamingView(turn);
+        if (output.kind === 'chunked-text') {
+          await output.commitFinal({
+            userId,
+            text: fallbackText,
+            terminal: turn.terminalKind,
+            threadTs: state.scopeKey,
+            ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
+          });
+        } else {
+          await output.im.sendText(userId, fallbackText, { threadTs: state.scopeKey });
+        }
+        log.info(`[${channel}/turn] streaming surface unavailable — final text delivered via plain send`);
+      } catch (err) {
+        log.warn(
+          `[${channel}/turn] plain-text fallback send failed (non-fatal): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
       }
     }
     settleTurnTerminal(turn);

@@ -37,6 +37,7 @@ import {
 
 import { createLogger } from '../logger.js';
 import { getBaseUrl, isDev } from '../manifestService.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { getBuildClientEndpoint, getClientEndpoint } from '../clientEndpointsService.js';
 import {
   commitModelPlaneFromCatalog,
@@ -556,6 +557,15 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   await ensureActiveCatalogLoaded();
   const sourceConfig = buildSource();
+  // dev 缺省禁网(或 XDT_DISABLE_MODELS_FETCH=1)时这里根本不会发起请求,落到 bundled 是
+  // 预期行为而非网络失败——用专用错误码如实返回,不让 renderer 误报成可重试的刷新失败。
+  // XDT_MODELS_PATH 是纯本地源,不依赖远程拉取,不受 disableFetch 约束。
+  if (sourceConfig.disableFetch && !sourceConfig.localPath) {
+    throwIpcError(
+      'MODEL_CATALOG_FETCH_DISABLED',
+      '模型目录远程拉取未启用,本次未发起请求(dev 模式可设 XDT_MODELS_URL 启用;若已设 XDT_DISABLE_MODELS_FETCH=1 请先移除)',
+    );
+  }
   const sourceKey = catalogSourceKey(sourceConfig);
   if (catalogRefreshInflight?.sourceKey === sourceKey) {
     return catalogRefreshInflight.promise;

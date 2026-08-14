@@ -19,7 +19,15 @@
  *   - workdir 为空串 = remote session 或还没解析,plugin 自行降级渲染占位。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { createLogger } from '@/lib/logger';
@@ -28,6 +36,7 @@ import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
 import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
+import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 import { TabBar, TabStrip } from './TabBar';
 import { EmptyState } from './EmptyState';
@@ -52,6 +61,7 @@ import './plugins';
 import { initRsbBrowserBridge } from './lib/rsbBrowserBridge';
 import { initIOSSimulatorFocusBridge } from './lib/iosSimulatorFocusBridge';
 import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
+import { TabBodyErrorBoundary } from './TabBodyErrorBoundary';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
   isIOSSimulatorPluginAvailable,
@@ -60,15 +70,12 @@ import {
 } from './iosSimulatorPluginAvailability';
 
 const log = createLogger('rightSidebar.shell');
+const EMPTY_TAB_ID_SET = new Set<string>();
 /**
- * Mac 合并顶栏右端 spacer 宽度,对应 MainLayout 浮层按钮簇(MainLayout.tsx
- * `isMac && rightSidebarAvailable` 那块 `absolute right-0 top-0 z-50` 浮层)
- * 展开态的占宽:3 个 h-7 w-7 按钮(detach / maximize / 折叠,28×3=84;
- * #650 起与左簇统一 28px 规格族)+ gap-1 × 2(4×2=8)+ pr-2(8)= 100。
- * 两处没有共享常量(浮层用 tailwind 类布局,绑不到同一个数字上),MainLayout
- * 侧增删按钮 / 改间距时必须同步核对本值,否则 tab strip 会被浮层遮挡或留白。
+ * Mac 合并顶栏右端 spacer 宽度，对应 MainLayout 固定唤起按钮：28px 按钮 + 8px 右距。
+ * detach / maximize / 收起均属于面板自身，直接渲染在本顶栏中。
  */
-const MAC_HEADER_ACTION_SPACER_PX = 100;
+const MAC_HEADER_ACTION_SPACER_PX = 36;
 type RightTabDirection = 'prev' | 'next';
 
 interface RightSidebarShellProps {
@@ -97,6 +104,8 @@ interface RightSidebarShellProps {
    */
   unifiedTopbar?: boolean;
   onCloseSidebar?: () => void;
+  /** Windows 内嵌展开态的固定唤起入口；Mac 由 MainLayout 窗口级浮层承载。 */
+  onShowSidebar?: () => void;
   onMaximize?: () => void;
   /** maximize 态 — 用来让 TabBar 把 maximize 按钮换图标(Maximize2 ↔ Minimize2)。 */
   isMaximized?: boolean;
@@ -135,6 +144,7 @@ export function RightSidebarShell({
   isMac,
   unifiedTopbar = false,
   onCloseSidebar,
+  onShowSidebar,
   onMaximize,
   isMaximized,
   onDetach,
@@ -199,21 +209,30 @@ export function RightSidebarShell({
   );
   const getBucketSnapshot = useCallback(() => getBucket(sessionId), [sessionId]);
   const bucket = useSyncExternalStore(subscribeBucket, getBucketSnapshot);
+  const previousShellVisibleRef = useRef(shellVisible);
 
   useEffect(() => {
     // Phase 5: 推送当前焦点 RSB sessionId 给 main,让 RsbWebviewBackend 拿到。
     // null 也推(切到非 RSB 路由时),让 main 端清掉 active session — 否则
-    // 之前的 sessionId 会成 stale 引用。setActiveSession 失败容错(preload 未就绪)。
-    void window.electronAPI?.rsbBrowserBridge
-      ?.setActiveSession({ sessionId })
-      .catch(() => undefined);
+    // 之前的 sessionId 会成 stale 引用。隐藏的分离窗口只是预热/待命实例，不能
+    // 覆盖主窗口当前的浏览器 session。setActiveSession 失败容错(preload 未就绪)。
+    if (shellVisible) {
+      void window.electronAPI?.rsbBrowserBridge
+        ?.setActiveSession({ sessionId })
+        .catch(() => undefined);
+    } else if (previousShellVisibleRef.current) {
+      void window.electronAPI?.rsbBrowserBridge
+        ?.setActiveSession({ sessionId: null })
+        .catch(() => undefined);
+    }
+    previousShellVisibleRef.current = shellVisible;
     if (!sessionId) return;
     // 首次访问该 sessionId 时触发 IPC list 拉取;命中 cache 直接 noop。
     // 完成后 setBucket → notify → subscribeBucket 唤醒 useSyncExternalStore 重渲染。
     void ensureHydrated(sessionId).catch((err) => {
       log.error('ensureHydrated failed', { sessionId, err });
     });
-  }, [sessionId]);
+  }, [sessionId, shellVisible]);
 
   const projectedTabs = useMemo(
     () => projectIOSSimulatorTabs(bucket.tabs, bucket.activeTabId, iosSimulatorPluginAvailable),
@@ -221,6 +240,69 @@ export function RightSidebarShell({
   );
   const tabs = projectedTabs.tabs;
   const activeTabId = projectedTabs.activeTabId;
+
+  // 首帧只挂当前激活 tab。其余 tab 在浏览器空闲期逐个补挂载，随后继续按原有
+  // keep-alive 语义保留组件 / webview / 编辑器状态。这样恢复一个多 tab 会话时，
+  // 非当前面板不会与窗口首帧、presentation-ready 握手争抢主线程。
+  const [deferredMountState, setDeferredMountState] = useState<{
+    sessionId: string | null;
+    tabIds: Set<string>;
+  }>(() => ({ sessionId: null, tabIds: new Set() }));
+  const deferredMountedTabIds =
+    deferredMountState.sessionId === sessionId ? deferredMountState.tabIds : EMPTY_TAB_ID_SET;
+
+  useEffect(() => {
+    setDeferredMountState((previous) => {
+      if (previous.sessionId !== sessionId) {
+        return {
+          sessionId,
+          tabIds: activeTabId ? new Set([activeTabId]) : new Set(),
+        };
+      }
+      if (!activeTabId || previous.tabIds.has(activeTabId)) return previous;
+      const next = new Set(previous.tabIds);
+      next.add(activeTabId);
+      return { sessionId, tabIds: next };
+    });
+  }, [activeTabId, sessionId]);
+
+  useEffect(() => {
+    if (!bucket.hydrated || !sessionId) return;
+    const pendingTabIds = tabs
+      .map((tab) => tab.id)
+      .filter((tabId) => tabId !== activeTabId && !deferredMountedTabIds.has(tabId));
+    if (pendingTabIds.length === 0) return;
+
+    let cancelled = false;
+    let idleId: number | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let nextIndex = 0;
+    const scheduleNext = () => {
+      if (cancelled || nextIndex >= pendingTabIds.length) return;
+      const mountNext = () => {
+        if (cancelled) return;
+        const tabId = pendingTabIds[nextIndex++];
+        setDeferredMountState((previous) => {
+          if (previous.sessionId !== sessionId || previous.tabIds.has(tabId)) return previous;
+          const next = new Set(previous.tabIds);
+          next.add(tabId);
+          return { sessionId, tabIds: next };
+        });
+        scheduleNext();
+      };
+      if (typeof window.requestIdleCallback === 'function') {
+        idleId = window.requestIdleCallback(mountNext, { timeout: 1000 });
+      } else {
+        timeoutId = setTimeout(mountNext, 32);
+      }
+    };
+    scheduleNext();
+    return () => {
+      cancelled = true;
+      if (idleId !== null) window.cancelIdleCallback(idleId);
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    };
+  }, [activeTabId, bucket.hydrated, deferredMountedTabIds, sessionId, tabs]);
 
   // If a now-hidden simulator tab owned the active marker, move the persisted
   // marker to a visible tab (or null). The simulator tab itself remains stored
@@ -527,31 +609,34 @@ export function RightSidebarShell({
             addButtonWrapperClassName="h-[30px]"
             iosSimulatorAvailable={iosSimulatorPluginAvailable}
           />
-          {/* 右端两态(M2,2026-07-09 Lizi 口径修订):
-              - 贴右(默认)/ maximize 撑满:MainLayout 的 mac 浮层按钮钉在窗口
-                右上角(此时正压在本顶栏右端),这里用固定 spacer 给 detach /
-                maximize / 折叠三按钮让位,避免 tab strip 展开时压到浮层下方。
-              - 贴左(非 maximize):窗口右上浮层只剩折叠 toggle(钉在最右 pane
-                = 聊天区的顶栏角上,不跟面板跑),面板自属控件跟面板走 —— 在本
-                顶栏右端渲染真按钮(detach + maximize)。 */}
-          {panelSide === 'left' && !isMaximized ? (
-            <div
-              data-testid="right-sidebar-topbar-actions"
-              className="flex h-full shrink-0 items-center gap-1"
-              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            >
-              {onDetach && <RightSidebarDetach size="toolbar" onDetach={onDetach} />}
-              {onMaximize && (
-                <RightSidebarMaximize
-                  size="toolbar"
-                  onMaximize={onMaximize}
-                  isMaximized={isMaximized}
-                />
-              )}
-            </div>
-          ) : (
+          {/* 面板自属控件始终跟随面板：detach → maximize → 收起。固定唤起入口只在
+              面板收起或分离时存在；展开态不渲染无效的 show 按钮，也不预留空位。 */}
+          <div
+            data-testid="right-sidebar-topbar-actions"
+            className="flex h-full shrink-0 items-center gap-0.5"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          >
+            {onDetach && <RightSidebarDetach size="toolbar" onDetach={onDetach} />}
+            {onMaximize && (
+              <RightSidebarMaximize
+                size="toolbar"
+                onMaximize={onMaximize}
+                isMaximized={isMaximized}
+              />
+            )}
+            {onCloseSidebar && (
+              <RightSidebarToggle
+                size="toolbar"
+                collapsed={false}
+                onToggle={onCloseSidebar}
+                side={panelSide}
+              />
+            )}
+          </div>
+          {onShowSidebar && (panelSide === 'right' || isMaximized) && (
             <div
               aria-hidden
+              data-testid="right-sidebar-fixed-trigger-spacer"
               className="pointer-events-none h-full shrink-0"
               style={{ width: MAC_HEADER_ACTION_SPACER_PX }}
             />
@@ -569,6 +654,8 @@ export function RightSidebarShell({
           showWindowControls={!isMac}
           onMaximize={onMaximize}
           onCloseSidebar={onCloseSidebar}
+          onShowSidebar={onShowSidebar}
+          panelSide={panelSide}
           isMaximized={isMaximized}
           onDetach={onDetach}
           onCloseOthers={handleCloseOthers}
@@ -596,7 +683,9 @@ export function RightSidebarShell({
           // 所有 tab 都挂载,只切换可见性(规则 7:杜绝切顶层 tab 时 plugin 内部 state /
           // webview / 编辑器 / 文件树 expansion 全部丢失重建)。pointer-events 用
           // `hidden` 自然 disable,visibility 状态由 onVisibilityChange 给 plugin。
-          tabs.map((tab) => (
+          tabs
+            .filter((tab) => tab.id === activeTabId || deferredMountedTabIds.has(tab.id))
+            .map((tab) => (
             <PluginBodyHost
               key={tab.id}
               tab={tab}
@@ -608,7 +697,7 @@ export function RightSidebarShell({
               shellVisible={shellVisible}
               t={t}
             />
-          ))
+            ))
         )}
       </div>
     </div>
@@ -706,12 +795,16 @@ function PluginBodyHost({
       aria-hidden={!active || undefined}
     >
       {plugin ? (
-        <plugin.TabBody
-          state={hydratedState}
-          ctx={ctx}
-          active={active}
-          shellVisible={shellVisible}
-        />
+        <TabBodyErrorBoundary tabId={tab.id} tabKind={tab.kind} t={t}>
+          <Suspense fallback={null}>
+            <plugin.TabBody
+              state={hydratedState}
+              ctx={ctx}
+              active={active}
+              shellVisible={shellVisible}
+            />
+          </Suspense>
+        </TabBodyErrorBoundary>
       ) : (
         <PlaceholderBody tab={tab} t={t} />
       )}

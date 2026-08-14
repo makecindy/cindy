@@ -37,6 +37,12 @@ export type {
 } from './types.js';
 
 export { FeishuIM, createFeishuIM } from './feishu/index.js';
+export {
+  decodeLaneUserId as decodeFeishuLaneUserId,
+  encodeLaneUserId as encodeFeishuLaneUserId,
+} from './feishu/codec.js';
+export type { FeishuLane } from './feishu/codec.js';
+export type { RecentChatMessage as FeishuRecentChatMessage } from './feishu/outbound.js';
 
 export { DiscordIM, createDiscordIM } from './discord/index.js';
 export type { DiscordIMOptions } from './discord/index.js';

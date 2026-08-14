@@ -165,11 +165,26 @@ export interface MemoryStorageMeta {
 
 export class MemoryStorage {
   private indexCache: string | null = null;
+  /**
+   * 派生索引 (MEMORY.md) 失效标记 (review #2388 Codex 23rd P1/P2): shard
+   * write/delete 已落盘但其后的 rebuildIndex 被 owner 边界中止时置位 —
+   * 文件与索引不一致; 下次安全打开 (init) 时 repairIndexIfDirty 惰性修复,
+   * 防止同 owner 后续 session 把 stale 索引读进 system prompt。
+   */
+  private derivedIndexDirty = false;
 
   constructor(
     /** 已就绪的目录绝对路径, e.g. <userData>/maker-memory/<sanitized-workdir>/ */
     public readonly dir: string,
     public readonly config: MemoryConfig = DEFAULT_MEMORY_CONFIG,
+    /**
+     * 文件系统写入前守卫 (review #2388 Codex 8th P1): write 内部在真正写盘前
+     * 有 await (tryReadRaw 读现有文件判 mode), 边界可在此窗口发生 — 必须在该
+     * await 之后、fs.writeFile 之前复核 owner scope, 否则直接调用方 (如 Pi
+     * compaction 经 manager.write, withStore 后置检查之外) 会把写入落到旧
+     * owner 根后报成功。由 store 透传 manager 注入的 scopeCheck。
+     */
+    private readonly beforeFileWrite?: () => void,
   ) {}
 
   /** mkdir -p + 写 meta.json (如缺失). 幂等。 */
@@ -179,6 +194,9 @@ export class MemoryStorage {
     try {
       await fs.access(metaPath);
     } catch {
+      // 首次打开副作用也 fail-closed (review #2388 Codex 16th P1): 异步初始化
+      // 期间边界发生, 不得在旧 owner 下创建 meta.json。
+      this.beforeFileWrite?.();
       const meta: MemoryStorageMeta = {
         absPath: absWorkdir,
         createdAt: new Date().toISOString(),
@@ -291,8 +309,17 @@ export class MemoryStorage {
     }
 
     const fileText = matter.stringify(nextBody, nextFrontmatter);
+    // tryReadRaw 的 await 窗口后、真正写盘前复核 owner scope (review #2388
+    // Codex 8th P1): 边界不得把 shard 写入旧 owner 根。
+    this.beforeFileWrite?.();
     await fs.writeFile(fullPath, fileText, 'utf8');
+    // shard write 后、索引重建前复核 (review #2388 Codex 12th P1): writeFile
+    // await 期间边界可能发生, 不得继续在旧 owner 下 rebuildIndex / 返回成功。
+    // not-ready 时文件已落盘但 MEMORY.md 未更新 → 标记派生索引 dirty (Codex 23rd)。
+    this.guardAfterMutation();
     await this.rebuildIndex();
+    // rebuildIndex 自身多次 await 后、返回前复核 (review #2388 Codex 13th P1)。
+    this.beforeFileWrite?.();
 
     const result: WriteResult = { ok: true, filename };
     const detail = this.computeWarning(nextBody);
@@ -306,13 +333,56 @@ export class MemoryStorage {
   async delete(filename: string): Promise<void> {
     this.assertSafeFilename(filename);
     const fullPath = path.join(this.dir, filename);
+    // 删除前复核 (review #2388 Codex 14th P1): 单次预检只保护 delete 开始瞬间,
+    // 边界在 fs.unlink / rebuildIndex 之间发生仍会删旧 owner 文件并重建索引。
+    this.beforeFileWrite?.();
     try {
       await fs.unlink(fullPath);
     } catch (e) {
       if (isENOENT(e)) throw new MemoryError('not-found', `${filename} 不存在`);
       throw new MemoryError('io-error', `unlink failed: ${(e as Error).message}`);
     }
+    // unlink 后复核 — await 窗口后边界可能发生, 不得继续在旧 owner 下重建索引。
+    // not-ready 时文件已删但 MEMORY.md 仍列出 → 标记派生索引 dirty (Codex 23rd)。
+    this.guardAfterMutation();
     await this.rebuildIndex();
+    // rebuildIndex 内部多次 await 后、返回前复核。
+    this.beforeFileWrite?.();
+  }
+
+  /**
+   * 变更后复核辅助 (review #2388 Codex 23rd P1/P2): shard 已落盘但其后
+   * rebuildIndex 被 owner 边界中止 → 文件与 MEMORY.md 不一致, 标记派生索引
+   * dirty; 下次安全打开 (init) 时 repairIndexIfDirty 惰性重建, 防止同 owner
+   * 后续 session 把 stale 索引读进 system prompt。
+   */
+  private guardAfterMutation(): void {
+    try {
+      this.beforeFileWrite?.();
+    } catch (e) {
+      if (e instanceof MemoryError && e.code === 'not-ready') {
+        this.derivedIndexDirty = true;
+        this.indexCache = null;
+      }
+      throw e;
+    }
+  }
+
+  private markIndexDirty(): void {
+    this.derivedIndexDirty = true;
+    this.indexCache = null;
+  }
+
+  /** 派生索引 (MEMORY.md) 是否因中止的写/删而失效 */
+  isIndexDirty(): boolean {
+    return this.derivedIndexDirty;
+  }
+
+  /** 惰性修复: 上次变更被边界中止 → 重建 MEMORY.md 恢复一致 (幂等) */
+  async repairIndexIfDirty(): Promise<void> {
+    if (!this.derivedIndexDirty) return;
+    await this.rebuildIndex();
+    this.derivedIndexDirty = false;
   }
 
   /** 当前 MEMORY.md 内容 (索引文本, 给 system prompt 拼). 不存在返空串 */
@@ -343,6 +413,18 @@ export class MemoryStorage {
    *   ...
    */
   async rebuildIndex(): Promise<void> {
+    try {
+      await this.rebuildIndexInner();
+    } catch (e) {
+      // 重建被 owner 边界中止 → 索引未更新, 标记 dirty (review #2388 Codex 23rd)
+      if (e instanceof MemoryError && e.code === 'not-ready') {
+        this.markIndexDirty();
+      }
+      throw e;
+    }
+  }
+
+  private async rebuildIndexInner(): Promise<void> {
     const records = await this.list();
     const grouped = new Map<MemoryType, MemoryRecord[]>();
     for (const rec of records) {
@@ -369,6 +451,9 @@ export class MemoryStorage {
       }
     }
     const content = lines.join('\n');
+    // 索引写盘前复核 (review #2388 Codex 13th P1): rebuildIndex 自身有多次
+    // awaited shard reads, 边界不得在旧 owner 下重写 MEMORY.md。
+    this.beforeFileWrite?.();
     await fs.writeFile(path.join(this.dir, INDEX_FILENAME), content, 'utf8');
     this.indexCache = content;
   }

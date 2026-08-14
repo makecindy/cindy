@@ -2,11 +2,9 @@ import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 
 // Migration companion scripts intentionally use CommonJS so the runtime loader can replay them.
-const migration0085 =
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  require('../../../../drizzle/scripts/0085_skinny_iron_man.ts') as {
-    run(db: Database.Database): void;
-  };
+const { default: migration0085 } = (await import(
+  '../../../../drizzle/scripts/0085_skinny_iron_man'
+)) as { default: { run(db: Database.Database): void } };
 
 function setupDb(): Database.Database {
   const db = new Database(':memory:');

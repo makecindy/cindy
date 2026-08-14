@@ -28,6 +28,9 @@ function makeController() {
     getContext: vi.fn(),
     getSidebarWebContents: vi.fn(),
     markReady: vi.fn(),
+    markRendererReady: vi.fn(),
+    markPresentationReady: vi.fn(),
+    refreshContext: vi.fn(),
     setContext: vi.fn(),
     routeCommand: vi.fn(async () => 'routed'),
   } as unknown as RsbWindowController & { routeCommand: ReturnType<typeof vi.fn> };

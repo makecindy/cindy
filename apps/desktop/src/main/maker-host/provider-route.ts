@@ -28,10 +28,7 @@ import {
 } from '@cindy/model-providers';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
-import {
-  getActiveCatalog,
-  isXdCodexAnthropicBridgeModel,
-} from './active-catalog.js';
+import { getActiveCatalog } from './active-catalog.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getSessionProvider } from './session-provider-store.js';
 
@@ -404,28 +401,14 @@ function routingServesWireModel(routing: RoutingDescriptor, wireModel: string | 
 /**
  * 解析 provider × agent × model 的最终 wire。
  *
- * 绝大多数路由直接使用 provider 级描述符；XD 是一个 provider 内同时存在两种 Codex wire
- * 的特例：服务端原生声明 codex 的模型走 Responses，只声明 claude-code 的模型由客户端
- * 投影给 Codex，并复用同一 provider 的 Claude Messages 路由进入本地 bridge。
+ * Model Access v3 已给每个 Agent 明确限定 wire protocol；XD 不在客户端做模型级协议
+ * fallback。自定义 provider 的兼容 bridge 仍由它自己的 routing descriptor 表达。
  */
 function providerRoutingForModel(
   provider: Provider,
   agent: AgentKind,
-  wireModel: string | undefined,
+  _wireModel: string | undefined,
 ): RoutingDescriptor | null {
-  if (
-    provider.id === 'xd'
-    && agent === 'codex'
-    && wireModel
-    && isXdCodexAnthropicBridgeModel(wireModel)
-  ) {
-    const claudeRouting = provider.routing['claude-code'];
-    if (!claudeRouting) return null;
-    return {
-      ...claudeRouting,
-      wireProtocol: 'anthropic-messages',
-    };
-  }
   return provider.routing[agent] ?? null;
 }
 

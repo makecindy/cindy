@@ -1551,6 +1551,7 @@
         "refreshAdded": "新しいモデルを {{count}} 件検出しました",
         "refreshNoNew": "モデル一覧は最新です。新規はありません",
         "refreshFailed": "モデル一覧を更新できませんでした。しばらくしてから再試行してください",
+        "refreshFetchDisabled": "モデルカタログのリモート取得が無効のため、更新をスキップしました",
         "disableModel": "このモデルを無効にする",
         "enableModel": "このモデルを有効にする",
         "capabilityGroupHint": "チャットのモデル選択には表示されず、画像生成などの機能でのみ使用されます。",
@@ -2428,7 +2429,8 @@
       "toast": {
         "enabled": "チャット履歴の意味索引を有効にしました",
         "disabled": "チャット履歴の意味索引を停止しました",
-        "toggleFailed": "チャット埋め込みの切り替えに失敗しました"
+        "unavailable": "このアカウントまたは地域ではチャット履歴の意味索引を利用できません",
+        "toggleFailed": "チャット履歴の意味索引の切り替えに失敗しました"
       }
     },
     "messageNavRail": {
@@ -3314,6 +3316,7 @@
         "manageAria": "{{name}} を管理",
         "agentInvoked": "Agent が自動で呼び出し",
         "upToDate": "最新です",
+        "oauthAuthorizationExpired": "認証期限切れ・再接続が必要",
         "installAria": "{{name}} をインストール"
       },
       "market": {
@@ -3434,6 +3437,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "権限の再確認が必要",
+        "action": "権限を再確認",
+        "actionAria": "プラグイン「{{name}}」の権限を再確認",
+        "noticeTitle": "権限の再確認が必要",
+        "bodyLegacy": "このプラグインの権限確認の記録が Cindy にないため、無効のままにしています。「権限を再確認」から要求される権限を確認し、あらためて許可してください。",
+        "bodyInvalid": "このプラグインの権限確認の記録が壊れているため、無効のままにしています。「権限を再確認」から要求される権限を確認し、あらためて許可してください。",
+        "bodyBuiltinRestart": "この内蔵プラグインの承認記録に問題が発生しました。Cindy を再起動すると自動的に復元されます。他の操作は不要です。"
+      },
       "install": "プラグインをインストール…",
       "empty": "まだプラグインがインストールされていません",
       "emptyHint": "マーケットからインストールするか、上のメニューから .cindy ファイルを読み込めます",
@@ -3488,6 +3500,7 @@
         "uninstalled": "「{{name}}」をアンインストールしました",
         "installedAsleep": "「{{name}}」をインストールしました(無効状態。ここでいつでも有効化できます)",
         "updated": "「{{name}}」を v{{version}} に更新しました",
+        "reapproved": "「{{name}}」を復元しました",
         "exported": "「{{name}}」の .cindy ファイルを書き出しました",
         "exportFailed": "「{{name}}」を書き出せませんでした。もう一度お試しください",
         "projectDisabled": "「{{name}}」をこのプロジェクトで無効にしました",
@@ -3507,6 +3520,7 @@
         "metaWithAuthor": "作者 {{author}} · バージョン {{version}}。ローカルにインストールされ、いつでもアンインストールできます。",
         "enableNow": "インストール後すぐに有効化",
         "enableNowOpenPanel": "インストール後すぐに有効化してパネルを開く",
+        "manualCount": "同梱マニュアル {{count}} 件",
         "expandDescription": "紹介全文を表示",
         "collapseDescription": "紹介を折りたたむ"
       },
@@ -3629,6 +3643,7 @@
         "fileInvalid": "有効な .cindy プラグインファイルではありません",
         "hostUnsupported": "このプラグインには、現在のバージョンでは提供されていない Cindy の機能が必要です。Cindy を更新してから、もう一度インストールしてください。",
         "alreadyInstalled": "このプラグインは既にインストールされています",
+        "approvalRequired": "続けるには、このプラグインの権限を再確認する必要があります",
         "commandConflict": "コマンドがインストール済みのプラグインと重複しています。先に相手をアンインストールするか、コマンド名を変更してください。",
         "idReserved": "この id は公式予約プレフィックス cindy- を使用しています。アプリに同梱されたプラグインのみ使用できます",
         "sourceMissing": "選択したファイルが見つかりません",
@@ -3746,8 +3761,14 @@
       "updateConfirm": {
         "title": "プラグイン「{{name}}」を更新しますか?",
         "body": "バージョン {{from}} → {{to}}。既存バージョンを置き換えます。有効状態とパネル位置は保持されます。",
+        "oauthClientChanged": "この更新で OAuth クライアントが変更されます。プラグイン内蔵の認証を使用している接続済みアカウントは更新後に無効となり、再接続が必要です。",
         "confirm": "更新",
         "cancel": "キャンセル"
+      },
+      "reapproveConfirm": {
+        "title": "「{{name}}」の権限を再確認しますか?",
+        "body": "以下の権限を確認して、このインストール済みプラグインをあらためて許可します。インストールファイルは不要です。",
+        "confirm": "確認して復元"
       },
       "pick": {
         "dialogTitle": "フォルダを選択",
@@ -3765,6 +3786,7 @@
       },
       "updateAll": {
         "title": "すべて更新 · {{count}} 件",
+        "collapseDiff": "折りたたむ",
         "description": "通常の更新は自動で完了し、検証済みの実パッケージが新しい権限を要求する場合のみ個別に確認します。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "待機中",
@@ -3774,7 +3796,13 @@
         "statusFailed": "更新に失敗",
         "background": "バックグラウンドで続行",
         "doneAction": "完了",
-        "doneToast": "一括更新が完了:{{done}} 件更新、{{rest}} 件未完了"
+        "doneToast": "一括更新が完了:{{done}} 件更新、{{rest}} 件未完了",
+        "permissionChanged": "権限変更",
+        "rereview": "再確認",
+        "reviewDiff": "確認",
+        "reviewOutdated": "レビュー期限切れ",
+        "approve": "承認",
+        "skip": "スキップ"
       }
     },
     "mcp": {
@@ -4469,12 +4497,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "「{{name}}」を無効にしますか？",
-      "body": "このパネルを閉じるとプラグイン全体が無効になり、パネルと機能が停止します。サイドバーの「プラグイン」からいつでも再度有効にできます。",
+      "body": "このパネルを閉じるとプラグインが無効になり、機能が停止します。サイドバーの「プラグイン」からいつでも再度有効にできます。",
       "confirm": "無効にする"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "メインウィンドウに戻す",
+    "mergeBack": "メインウィンドウに戻る",
     "unavailable": "このプラグインパネルは現在利用できません"
   },
   "ghostPanelBubble": {
@@ -4484,6 +4512,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "右サイドバー",
+    "panelError": {
+      "title": "パネルの読み込みに失敗しました",
+      "description": "このパネルは現在表示できません。他のパネルは引き続き利用できます。",
+      "reload": "パネルを再読み込み"
+    },
     "window": {
       "title": "サイドバー",
       "mergeBack": "メインウィンドウに戻す",
@@ -4514,6 +4547,7 @@
         "ghostPanel": "プラグインパネル"
       },
       "controls": {
+        "showAria": "サイドバーを表示",
         "maximizeAria": "サイドバーを最大化",
         "restoreAria": "最大化を解除",
         "closeAria": "サイドバーを閉じる",
@@ -5704,6 +5738,7 @@
       "startFailed": "協同の開始に失敗しました",
       "startFailedContinue": "協同の開始に失敗しました。単一セッションとして続行します。",
       "createWorkerRefreshFailed": "Worker の状態を更新できませんでした。もう一度お試しください。",
+      "assignmentFailed": "Worker は作成されましたが、タスクが割り当てられたか確認できません。再試行する前に Worker パネルを確認してください。",
       "openHint": "Worker を呼んで協同する",
       "disabledHint": "協同モードは無効です。設定で有効にしてください。",
       "unavailableHint": "協同設定を確認できません。しばらくしてから再試行してください。",
@@ -6639,7 +6674,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "リモート接続が中断されました（daemon がアップグレードまたは再起動中の可能性があります）。ターンが終了しました — 再送信してください。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
-      "AUTO_REVIEW_UNAVAILABLE": "自動レビューが一時的に利用できないため、レビューが必要な操作は拒否されます。ご自身で承認する場合は、このセッションをデフォルト権限に切り替えてください。",
+      "AUTO_REVIEW_UNAVAILABLE": "自動レビューが判断できませんでした（ネットワークまたはサービスの一時的な問題）。レビューが必要な操作はご自身での確認に切り替わりました。中断を減らしたい場合は、このタスクをデフォルト権限に切り替えてください。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "リモート Claude Code セッションはローカル互換プロキシ経由でルーティングできません(内部エラー)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
@@ -8251,7 +8286,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "このプロジェクトを信頼すると使用できます"
+    "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。"
   },
   "skillhub": {
     "home": {
@@ -9386,7 +9421,8 @@
     },
     "currentSubscription": {
       "title": "現在のサブスクリプション",
-      "purchaseBlocked": "未終了のサブスクリプションがあります。既存のサブスクリプションを処理してから新しいプランを購入してください。"
+      "purchaseBlocked": "未終了のサブスクリプションがあります。既存のサブスクリプションを処理してから新しいプランを購入してください。",
+      "purchaseBlockedUntilPeriodEnd": "現在のプランは {{date}} に終了します。終了後に新しいプランを購入できます。"
     },
     "subscriptionStatus": {
       "INCOMPLETE": "支払い待ち",

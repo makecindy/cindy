@@ -1547,6 +1547,7 @@
         "refreshAdded": "已發現 {{count}} 個新模型",
         "refreshNoNew": "模型列表已是最新，無新增",
         "refreshFailed": "模型列表重新整理失敗，請稍後再試",
+        "refreshFetchDisabled": "模型目錄遠端擷取未啟用，已跳過重新整理",
         "disableModel": "停用此模型",
         "enableModel": "啟用此模型",
         "capabilityGroupHint": "不會出現在對話模型選擇中，僅供影像生成等功能使用",
@@ -2427,7 +2428,8 @@
       "toast": {
         "enabled": "對話記錄語義索引已啟用",
         "disabled": "對話記錄語義索引已停止",
-        "toggleFailed": "切換對話嵌入失敗"
+        "unavailable": "目前帳號或地區暫不支援對話記錄語義索引",
+        "toggleFailed": "切換對話記錄語義索引失敗"
       }
     },
     "messageNavRail": {
@@ -3313,6 +3315,7 @@
         "manageAria": "管理 {{name}}",
         "agentInvoked": "Agent 自動呼叫",
         "upToDate": "已是最新",
+        "oauthAuthorizationExpired": "授權已失效，需重新連線",
         "installAria": "安裝 {{name}}"
       },
       "market": {
@@ -3436,6 +3439,15 @@
       "install": "安裝插件…",
       "empty": "還沒有安裝任何插件",
       "emptyHint": "可從插件市場安裝，或點選右上角匯入 .cindy 檔案",
+      "reapproval": {
+        "badge": "需要重新確認權限",
+        "action": "重新確認權限",
+        "actionAria": "重新確認插件「{{name}}」的權限",
+        "noticeTitle": "需要重新確認權限",
+        "bodyLegacy": "Cindy 沒有這個插件的權限確認記錄，所以先將它停用。點「重新確認權限」重新檢視它要求的權限，確認後即可繼續使用。",
+        "bodyInvalid": "這個插件的權限確認記錄已損壞，所以先將它停用。點「重新確認權限」重新檢視它要求的權限，確認後即可繼續使用。",
+        "bodyBuiltinRestart": "這個內建插件的權限記錄出了問題。重新啟動 Cindy 即可自動恢復，不需要其他操作。"
+      },
       "legacyRecovery": {
         "title": "舊版本插件正在等待恢復",
         "deferred": "檢測到 {{count}} 箇舊插件目錄。為避免其它例項仍在使用這些資料，Cindy 暫緩了自動恢復。",
@@ -3483,6 +3495,7 @@
         "groupSeparator": "、"
       },
       "toast": {
+        "reapproved": "已恢復「{{name}}」",
         "installed": "已安裝「{{name}}」",
         "uninstalled": "已解除安裝「{{name}}」",
         "installedAsleep": "已安裝「{{name}}」(未生效，可在此開啟)",
@@ -3506,6 +3519,7 @@
         "metaWithAuthor": "作者 {{author}} · 版本 {{version}}。將安裝到本機，可隨時解除安裝。",
         "enableNow": "安裝後立即生效",
         "enableNowOpenPanel": "安裝後立即生效並打開面板",
+        "manualCount": "隨包手冊 {{count}} 篇",
         "expandDescription": "展開完整介紹",
         "collapseDescription": "收起介紹"
       },
@@ -3628,6 +3642,7 @@
         "fileInvalid": "不是合法的 .cindy 插件檔案",
         "hostUnsupported": "這個插件需要目前版本尚未提供的 Cindy 能力。請先更新 Cindy，再重新安裝。",
         "alreadyInstalled": "這個插件已經安裝",
+        "approvalRequired": "繼續前需要重新確認這個插件的權限",
         "commandConflict": "它的指令和已裝插件撞名了，先解除安裝佔用方或讓作者改名",
         "idReserved": "該 id 使用了官方保留字首 cindy-，僅隨應用內建的插件可用",
         "sourceMissing": "找不到所選檔案",
@@ -3742,9 +3757,15 @@
         "slotIOSSimulator": "內建 iOS 模擬器"
       },
       "commandPaletteTag": "插件指令",
+      "reapproveConfirm": {
+        "title": "重新確認「{{name}}」的權限？",
+        "body": "按下方清單重新授權這個已安裝的插件，不需要重新提供安裝包檔案。",
+        "confirm": "確認並恢復"
+      },
       "updateConfirm": {
         "title": "更新插件「{{name}}」？",
         "body": "版本 {{from}} → {{to}}。將替換現有版本；生效狀態與面板位置保持不變。",
+        "oauthClientChanged": "本次更新更換了 OAuth 用戶端。使用插件內建授權的已連線帳號將在更新後失效，需要重新連線。",
         "confirm": "更新",
         "cancel": "取消"
       },
@@ -3764,6 +3785,7 @@
       },
       "updateAll": {
         "title": "全部更新 · {{count}} 個插件",
+        "collapseDiff": "收起",
         "description": "權限無變化的更新會自動完成；涉及權限變更的需要你逐項確認。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "排隊中",
@@ -3773,7 +3795,13 @@
         "statusFailed": "更新失敗",
         "background": "後臺繼續",
         "doneAction": "完成",
-        "doneToast": "批次更新完成：{{done}} 個已更新，{{rest}} 個未完成"
+        "doneToast": "批次更新完成：{{done}} 個已更新，{{rest}} 個未完成",
+        "permissionChanged": "權限變更",
+        "rereview": "重新審閱",
+        "reviewDiff": "查看",
+        "reviewOutdated": "審查過期",
+        "approve": "同意",
+        "skip": "跳過"
       }
     },
     "mcp": {
@@ -4468,12 +4496,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "停用「{{name}}」？",
-      "body": "關閉這個面板會停用整個插件，它的面板和能力都會暫停。之後可以隨時在側邊欄「插件」裡重新開啟。",
+      "body": "關閉這個面板會停用插件並暫停其能力。你可以隨時在側邊欄「插件」中重新啟用。",
       "confirm": "停用"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "合併回主視窗",
+    "mergeBack": "返回主視窗",
     "unavailable": "該插件面板當前不可用"
   },
   "ghostPanelBubble": {
@@ -4483,6 +4511,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "右側邊欄",
+    "panelError": {
+      "title": "面板載入失敗",
+      "description": "此面板目前無法顯示，其他面板仍可繼續使用。",
+      "reload": "重新載入面板"
+    },
     "window": {
       "title": "側邊欄",
       "mergeBack": "合併回主視窗",
@@ -4513,6 +4546,7 @@
         "ghostPanel": "插件面板"
       },
       "controls": {
+        "showAria": "顯示側欄",
         "maximizeAria": "最大化側欄",
         "restoreAria": "退出最大化",
         "closeAria": "關閉側欄",
@@ -5703,6 +5737,7 @@
       "startFailed": "開啟協同失敗",
       "startFailedContinue": "開啟協同失敗，已改為單任務繼續",
       "createWorkerRefreshFailed": "Worker 狀態重新整理失敗，請稍後重試",
+      "assignmentFailed": "Worker 已建立，但無法確認任務是否派發成功。請先查看 Worker 面板，再決定是否重試",
       "openHint": "召集 Worker 協作",
       "disabledHint": "協同模式已關閉，請在設定中重新啟用",
       "unavailableHint": "暫時無法確認協同設定，請稍後重試",
@@ -6638,7 +6673,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "遠端連線已中斷（daemon 可能正在升級或重啟）。本輪已結束 — 請重新傳送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法訪問本地檔案/圖片附件。請直接貼上內容。",
-      "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時不可用，需要審批的操作會被拒絕。想自己確認這些操作，可以把任務切到「預設權限」。",
+      "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時無法給出判斷（網路或服務波動），需要審批的操作已轉由你來確認。想少被打斷，可以把任務切到「預設權限」自行掌控。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "遠端 Claude Code 會話無法透過本地相容 Proxy 路由(內部錯誤，請反饋)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 憑據尚未就緒(登入後由服務端自動下發)。請稍候重試；若持續出現，請到 設定 → 模型供應商 檢查 Cindy AI 連線狀態。",
       "DEVICE_LINK_CONTROL_DISABLED": "已關閉對該裝置的控制，訊息未傳送。",
@@ -8250,7 +8285,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "信任此專案後即可使用"
+    "projectSkillNotLoaded": "目前的 Pi 任務尚未載入此專案 Skill，新任務會自動嘗試載入"
   },
   "skillhub": {
     "home": {
@@ -9385,7 +9420,8 @@
     },
     "currentSubscription": {
       "title": "當前訂閱",
-      "purchaseBlocked": "當前已有未結束的訂閱，請先處理現有訂閱後再購買新套餐。"
+      "purchaseBlocked": "當前已有未結束的訂閱，請先處理現有訂閱後再購買新套餐。",
+      "purchaseBlockedUntilPeriodEnd": "當前套餐將於 {{date}} 結束，屆時可購買新套餐。"
     },
     "subscriptionStatus": {
       "INCOMPLETE": "等待完成支付",

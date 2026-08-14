@@ -15,8 +15,8 @@ import {
   Maker,
   ClaudeCodeAgent,
   CodexAgent,
-  DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   configureDefaultImageResizer,
+  type AutoReviewRequest,
   type McpProvider,
 } from '@cindy/maker-core';
 import {
@@ -32,6 +32,7 @@ import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cind
 import { LspServerPool, type IOSSimulatorMcpCallContext } from '@cindy/mcps';
 
 import { createMessage } from '../localDb/ipc/messages.js';
+import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import { getWorkerLink, updateWorkerStatus } from '../localDb/orcaTeamStore.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
 import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
@@ -50,7 +51,6 @@ import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getIOSSimulatorPluginAccessDecision } from '../cindy-brain/index.js';
-import { shouldEnforceIOSSimulatorShellPolicy } from '../cindy-brain/iosSimulatorPluginGate.js';
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
@@ -76,15 +76,13 @@ import {
   mergeClaudeHooks,
 } from './claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
-import { createIOSSimulatorShellGuardHook } from './claude-hooks/ios-simulator-shell-hook.js';
-import { getDesktopShellCommandPolicy } from './shell-command-policy.js';
-import { ensureAgentShellGuards } from './agent-shell-guards.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
   deriveAvailableModels,
   refreshCatalogDerivedModels,
   resolvePiRuntimeModelDescriptor,
+  resolvePiGatewayDescriptorProviderId,
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
@@ -112,6 +110,7 @@ import {
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
+import { findCatalogModel, resolveAutoReviewBudget } from './auto-review-budget.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { accountProviderReadinessBarrier } from './account-provider-readiness-barrier.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
@@ -134,10 +133,7 @@ import {
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.js';
-import {
-  getIOSSimulatorMcpDeps,
-  isIOSSimulatorHostRuntimeActive,
-} from '../mcp-integrations/ios-simulator.js';
+import { getIOSSimulatorMcpDeps } from '../mcp-integrations/ios-simulator.js';
 import { readContactsSettings } from './contacts-settings-store.js';
 import { createIOSSimulatorCodexDynamicToolProvider } from './ios-simulator-codex-dynamic-tools.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
@@ -239,18 +235,42 @@ type RemoteCcQuery = Awaited<
 
 let _maker: Maker | null = null;
 
+/**
+ * 本次审核请求的额度。按模型能力自适应:能关思考的走紧凑档,强制思考的
+ * (以及目录里查不到的)给足思考+结论的空间 —— 固定 384 token 会让 DeepSeek
+ * 这类模型正文恒为空。详见 auto-review-budget.ts。
+ */
+function autoReviewBudgetFor(request: AutoReviewRequest) {
+  return resolveAutoReviewBudget(findCatalogModel(
+    getActiveCatalog().providers,
+    request.providerId,
+    request.agentKind,
+    request.model,
+  ));
+}
+
+let providerAccessRuntimeRefreshListener: (() => void) | null = null;
+
+/** Register the bootstrap-owned runtime reconciliation that follows provider access changes. */
+export function setProviderAccessRuntimeRefreshListener(listener: (() => void) | null): void {
+  providerAccessRuntimeRefreshListener = listener;
+}
+
 const reviewAutoPermissionAction = createAutoPermissionReviewer({
   logger: desktopMakerLogger,
+  // 重试守卫必须按同一份额度计时,否则放宽额度的那一档会被自己的守卫切断。
+  resolveRequestTimeoutMs: (request) => autoReviewBudgetFor(request).timeoutMs,
   requestText: async (request, prompt) => {
     const maker = _maker;
     if (!maker) return null;
+    const budget = autoReviewBudgetFor(request);
     const result = await requestUtilityText(maker, prompt, {
       providerId: request.providerId?.trim() || undefined,
       agentKind: request.agentKind,
       model: request.model,
-      maxTokens: 384,
-      timeoutMs: DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY.requestTimeoutMs,
-      reasoningEffort: 'low',
+      maxTokens: budget.maxTokens,
+      timeoutMs: budget.timeoutMs,
+      ...(budget.reasoningEffort ? { reasoningEffort: budget.reasoningEffort } : {}),
     });
     return result.ok ? result.text : null;
   },
@@ -266,6 +286,13 @@ let _codexModelBackfill: CodexModelBackfillCoordinator | null = null;
 /** Refresh selectable model capabilities, then notify every local/remote renderer. */
 function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {
   if (_maker) refreshCatalogDerivedModels(_maker, getDesktopSelectableCatalog());
+  try {
+    providerAccessRuntimeRefreshListener?.();
+  } catch (error) {
+    desktopMakerLogger.warn('provider access runtime refresh listener failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
@@ -663,7 +690,7 @@ export function getMaker(): Maker {
           allowed: false as const,
           errorCode: 'IOS_SIMULATOR_DISABLED' as const,
           message:
-            'The iOS Simulator capability is disabled for the current project. Ask the user to enable it in the project plugin settings before retrying.',
+            'The embedded iOS Simulator capability is disabled for the current project. Enable it in the project plugin settings before retrying the embedded tool; other iOS workflows are unaffected.',
           data: {
             reason: 'disabled-in-workdir',
             action: 'enable-plugin',
@@ -674,19 +701,6 @@ export function getMaker(): Maker {
       }
       return { allowed: true as const };
     };
-
-    // The shell guard protects the embedded simulator's ownership/admission/
-    // viewer/cleanup contracts. With the plugin gated off there is nothing to
-    // protect, so blocking the user's own `simctl` / Simulator.app work — and
-    // pointing them at a cindy_ios_simulator tool the gate just removed — would
-    // be a dead end. A runtime this process already installed keeps its
-    // protection either way.
-    const shouldEnforceSimulatorShellGuard = (workingDir: string | null): boolean =>
-      shouldEnforceIOSSimulatorShellPolicy({
-        pluginAccessAllowed: resolveIOSSimulatorAccess({ workingDir: workingDir ?? undefined })
-          .allowed,
-        hostRuntimeActive: isIOSSimulatorHostRuntimeActive(),
-      });
 
     const makerMemoryProviderDeps = {
       getMakerMemoryManager: () => makerMemoryManager,
@@ -792,6 +806,31 @@ export function getMaker(): Maker {
         return { makerMemoryEnabled: createOpts.makerMemoryEnabled === true };
       },
       orcaTeamStore: orcaTeamStoreAdapter,
+      readLeadHistory: async ({ leadSessionId, fromMs, limit, cursor }) => {
+        const page = await getMessagesForHistory({
+          sessionIds: [leadSessionId],
+          workdir: null,
+          fromMs,
+          toMs: null,
+          agentKind: null,
+          roles: ['user', 'assistant'],
+          includeRewound: false,
+          limit,
+          cursor,
+          order: 'asc',
+        });
+        return {
+          items: page.items.map((item) => ({
+            id: item.id,
+            role: item.role === 'assistant' ? 'assistant' as const : 'user' as const,
+            content: item.content,
+            agentMeta: item.agentMeta,
+            createdAt: item.createdAt,
+          })),
+          nextCursor: page.nextCursor,
+          hasMore: page.hasMore,
+        };
+      },
       dispatchInterAgentMessage,
     } satisfies OrcaBridgeMcpDeps;
     const orcaWorkerBridgeProvider = createOrcaWorkerBridgeMcpProvider(orcaBridgeDeps);
@@ -863,6 +902,8 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'claude-code'),
       },
+      resolveVerifiedContextWindow: (providerId, modelId) =>
+        resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook
       // 实现 (./claude-hooks/*.ts), maker-core 不感知具体逻辑。
       //
@@ -880,15 +921,6 @@ export function getMaker(): Maker {
       claudeHooks: mergeClaudeHooks(
         {
           PreToolUse: [
-            {
-              matcher: 'Bash|PowerShell',
-              hooks: [
-                createIOSSimulatorShellGuardHook(
-                  desktopMakerLogger,
-                  shouldEnforceSimulatorShellGuard,
-                ),
-              ],
-            },
             {
               matcher: 'Read',
               hooks: [createReadImageHook(desktopMakerLogger)],
@@ -1159,10 +1191,6 @@ export function getMaker(): Maker {
       codexHostDynamicToolProvider: createIOSSimulatorCodexDynamicToolProvider({
         deps: getIOSSimulatorMcpDeps({ resolveAccess: resolveIOSSimulatorAccess }),
       }),
-      getShellCommandPolicy: ({ command, cwd }) =>
-        shouldEnforceSimulatorShellGuard(cwd?.trim() || null)
-          ? getDesktopShellCommandPolicy(command)
-          : undefined,
       // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
       // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
       // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
@@ -1262,12 +1290,6 @@ export function getMaker(): Maker {
             // bridge 整体缺席 = cindy_contacts 必然不可达
             codexAppliedContactsEnabled = false;
           }
-        }
-        const shellGuardDir = ensureAgentShellGuards();
-        if (shellGuardDir) {
-          mcpExtraEnv.PATH = [shellGuardDir, mcpExtraEnv.PATH ?? process.env.PATH]
-            .filter((value): value is string => Boolean(value))
-            .join(path.delimiter);
         }
         const browserCompanion = usesIsolatedProxy
           ? null
@@ -1608,8 +1630,15 @@ export function getMaker(): Maker {
       },
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
         resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId),
-      resolvePiGatewayModelDescriptor: (modelId) =>
-        resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), 'cindy', modelId),
+      resolvePiGatewayModelDescriptor: (providerId, modelId) => {
+        // `cindy` / null 是 Pi 的默认 gateway 路由；其 wire 由 v3 XD runtime plan
+        // 决定，因此描述符也必须锁定 XD，不能让复合 `cindy` 按目录顺序命中同 id 订阅模型。
+        return resolvePiRuntimeModelDescriptor(
+          getDesktopSelectableCatalog(),
+          resolvePiGatewayDescriptorProviderId(providerId),
+          modelId,
+        );
+      },
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
       getGhostRosterPrompt,

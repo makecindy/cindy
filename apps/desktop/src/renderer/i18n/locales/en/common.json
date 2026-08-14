@@ -1552,6 +1552,7 @@
         "refreshAdded": "Found {{count}} new models",
         "refreshNoNew": "Model list is up to date — nothing new",
         "refreshFailed": "Model list couldn’t be refreshed — try again later",
+        "refreshFetchDisabled": "Remote model catalog fetching is disabled — refresh skipped",
         "disableModel": "Disable This Model",
         "enableModel": "Enable This Model",
         "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
@@ -2429,7 +2430,8 @@
       "toast": {
         "enabled": "Chat semantic indexing enabled",
         "disabled": "Chat semantic indexing stopped",
-        "toggleFailed": "Failed to toggle chat embedding"
+        "unavailable": "Chat semantic indexing is unavailable for this account or region",
+        "toggleFailed": "Failed to toggle chat semantic indexing"
       }
     },
     "messageNavRail": {
@@ -3315,6 +3317,7 @@
         "manageAria": "Manage {{name}}",
         "agentInvoked": "Invoked by Agent",
         "upToDate": "Up to date",
+        "oauthAuthorizationExpired": "Authorization expired — reconnect required",
         "installAria": "Install {{name}}"
       },
       "market": {
@@ -3435,6 +3438,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "Permission review needed",
+        "action": "Review Permissions",
+        "actionAria": "Review permissions for plugin {{name}}",
+        "noticeTitle": "Permission review needed",
+        "bodyLegacy": "Cindy has no record of a permission review for this plugin, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again.",
+        "bodyInvalid": "The permission review record for this plugin is damaged, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again.",
+        "bodyBuiltinRestart": "Something went wrong with this built-in plugin's approval record. Restart Cindy to recover automatically — no other action needed."
+      },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
       "emptyHint": "Install from the market, or import a .cindy file from the menu above",
@@ -3489,6 +3501,7 @@
         "uninstalled": "Uninstalled \"{{name}}\"",
         "installedAsleep": "Installed \"{{name}}\" (disabled — enable it here anytime)",
         "updated": "\"{{name}}\" updated to v{{version}}",
+        "reapproved": "\"{{name}}\" restored",
         "exported": "Exported the .cindy file for \"{{name}}\"",
         "exportFailed": "Couldn't export \"{{name}}\" — try again",
         "projectDisabled": "Turned off \"{{name}}\" for this project",
@@ -3508,6 +3521,7 @@
         "metaWithAuthor": "By {{author}} · Version {{version}}. Installs locally and can be uninstalled anytime.",
         "enableNow": "Enable right after install",
         "enableNowOpenPanel": "Enable and open its panel right after install",
+        "manualCount": "Bundled manuals: {{count}}",
         "expandDescription": "Show Full Description",
         "collapseDescription": "Hide Full Description"
       },
@@ -3630,6 +3644,7 @@
         "fileInvalid": "Not a valid .cindy plugin file",
         "hostUnsupported": "This plugin needs Cindy capabilities that this version does not provide. Update Cindy, then install it again.",
         "alreadyInstalled": "This plugin is already installed",
+        "approvalRequired": "This plugin's permissions must be reviewed again before continuing.",
         "commandConflict": "Its command conflicts with an installed plugin. Uninstall the other one or rename the command.",
         "idReserved": "This id uses the reserved official prefix cindy-; it is only available to plugins bundled with the app",
         "sourceMissing": "The selected file could not be found",
@@ -3747,8 +3762,14 @@
       "updateConfirm": {
         "title": "Update plugin \"{{name}}\"?",
         "body": "Version {{from}} → {{to}}. This replaces the installed version; enabled state and panel position are preserved.",
+        "oauthClientChanged": "This update changes the OAuth client. Connected accounts using the plugin's built-in authorization will expire after the update and must be reconnected.",
         "confirm": "Update",
         "cancel": "Cancel"
+      },
+      "reapproveConfirm": {
+        "title": "Re-approve permissions for \"{{name}}\"?",
+        "body": "Review the permissions below to re-approve this installed plugin — no install file needed.",
+        "confirm": "Approve & Restore"
       },
       "pick": {
         "dialogTitle": "Choose a folder",
@@ -3766,6 +3787,7 @@
       },
       "updateAll": {
         "title": "Update all · {{count}} plugins",
+        "collapseDiff": "Collapse",
         "description": "Regular updates finish automatically; verified packages that request new permissions need per-item approval.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "Queued",
@@ -3775,7 +3797,13 @@
         "statusFailed": "Update failed",
         "background": "Continue in background",
         "doneAction": "Done",
-        "doneToast": "Batch update finished: {{done}} updated, {{rest}} not completed"
+        "doneToast": "Batch update finished: {{done}} updated, {{rest}} not completed",
+        "permissionChanged": "Permission changed",
+        "rereview": "Re-review",
+        "reviewDiff": "Review",
+        "reviewOutdated": "Review outdated",
+        "approve": "Approve",
+        "skip": "Skip"
       }
     },
     "mcp": {
@@ -4471,12 +4499,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "Disable \"{{name}}\"?",
-      "body": "Closing this panel disables the whole plugin — its panel and capabilities will pause. You can re-enable it anytime from Plugins in the sidebar.",
+      "body": "Closing this panel disables the plugin and pauses its capabilities. You can re-enable it anytime from Plugins in the sidebar.",
       "confirm": "Disable"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "Merge back into main window",
+    "mergeBack": "Return to main window",
     "unavailable": "This plugin panel is currently unavailable"
   },
   "ghostPanelBubble": {
@@ -4486,6 +4514,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "Right sidebar",
+    "panelError": {
+      "title": "Panel failed to load",
+      "description": "This panel is unavailable right now. Other panels are still available.",
+      "reload": "Reload panel"
+    },
     "window": {
       "title": "Sidebar",
       "mergeBack": "Merge back to main window",
@@ -4516,6 +4549,7 @@
         "ghostPanel": "Plugin panel"
       },
       "controls": {
+        "showAria": "Show sidebar",
         "maximizeAria": "Maximize sidebar",
         "restoreAria": "Restore sidebar",
         "closeAria": "Close sidebar",
@@ -5706,6 +5740,7 @@
       "startFailed": "Failed to start collaboration",
       "startFailedContinue": "Failed to start collaboration. Continuing as a single session.",
       "createWorkerRefreshFailed": "Unable to refresh Worker status. Please try again.",
+      "assignmentFailed": "The Worker was created, but task assignment could not be confirmed. Check the Worker pane before trying again.",
       "openHint": "Bring in a Worker to help",
       "disabledHint": "Collaboration is disabled. Enable it in settings.",
       "unavailableHint": "Unable to verify the collaboration setting. Try again shortly.",
@@ -6642,7 +6677,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "Remote connection interrupted (the daemon may be upgrading or restarting). The turn has ended — please resend.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
-      "AUTO_REVIEW_UNAVAILABLE": "Auto-review is temporarily unavailable, so actions that need review are being denied. Switch this task to Default permissions if you want to approve them yourself.",
+      "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision (network or service hiccup), so actions that need review are being handed to you to confirm. Switch this task to Default permissions if you would rather not be interrupted.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote Claude Code sessions can't route through the local compat proxy (internal error).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
@@ -8264,7 +8299,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "Available after you trust this project"
+    "projectSkillNotLoaded": "This Pi task hasn't loaded this project Skill. New tasks will automatically try to load it."
   },
   "skillhub": {
     "home": {
@@ -9400,7 +9435,8 @@
     },
     "currentSubscription": {
       "title": "Current subscription",
-      "purchaseBlocked": "You already have an unfinished subscription. Manage it before purchasing another plan."
+      "purchaseBlocked": "You already have an unfinished subscription. Manage it before purchasing another plan.",
+      "purchaseBlockedUntilPeriodEnd": "Your current plan ends {{date}}. You can purchase a new plan after it ends."
     },
     "subscriptionStatus": {
       "INCOMPLETE": "Awaiting payment",

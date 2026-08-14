@@ -90,6 +90,18 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
 7. **统一会话树真相**:Cindy `parentSessionId` 是外层独立会话分叉;Pi JSONL entry tree 是当前
    Pi 会话内分支。Pi 导航后必须通过 `session.treeRehydrate` 原子替换 SQLite 可见投影,旧行仅
    soft-hide;切换只改对话上下文,不得声称或尝试回滚工作区文件。
+8. **项目资源显式装配**:root、只读 subagent 与离线 fork 启动 Pi 时都必须显式传
+   `--no-approve --no-extensions`;root 仅用重复 `--extension` 回装 Cindy 自有 bridge/subagent
+   与 pinned plan-mode，并仅用重复 `--skill` 装配 host 从 PR3 approval snapshot 判定 eligible
+   的项目 skill 目录。eligible canonical 目录必须先完整物化到当前会话 `configHome` 的非自动
+   扫描目录，再把隔离快照路径交给 Pi；不得把仍可变化的项目原路径直接放进 argv。复制期间
+   任一越界 symlink、特殊文件或路径替换会使整组 skills fail closed。不得读取/复制项目
+   `.pi/settings.json`，不得传 `--approve`，
+   不得依赖 `PI_OFFLINE=1` 代替 packages/extensions 硬门。root 不传 `--no-skills`，以保留现有
+   user/global skill 行为；项目 skill 的 `loaded` 只能由当前会话 `get_commands` 对隔离快照路径
+   的 exact temporary/local provenance 证明。approval 真源缺失、异常、撤销、失效、路径消失
+   或快照失败时，新会话
+   一律不带项目 `--skill`，并在 per-session runtime manifest 记录诊断原因。
 
 ## 5. 已交付(2026-07 里程碑)
 
@@ -99,6 +111,9 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
 - 自动化安全网:maker-core PI 定向 + 端到端集成(真 pi 二进制 + 真 bridge + 假模型工具调用)
   覆盖安全命令静默执行 / 危险命令升级并 deny 拦截 / 区内写落盘 / 凭证读升级 / 普通读直通 /
   斜杠转义 / models.json 计费透传。
+- PR4 项目资源桥:只装配 Cindy 明确批准的 `.pi/skills` 与 cwd→git root 范围内
+  `.agents/skills`；真实 pinned Pi RPC 夹具覆盖未批准/显式 skills、重复名、并发隔离，以及
+  项目声明 npm/git/local packages 与 extensions 时零 install/clone/第三方执行。
 
 ## 6. 上线门禁
 
@@ -138,8 +153,9 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
 
 ## 7. 上线后路线图(已与 Chris 对齐)
 
-项目 trust 的输入/输出契约见 [`pi-project-trust.md`](pi-project-trust.md)。该契约不改变本节
-所述运行时默认，也不授权 `--approve`、trust.json 或用户 Pi home 复用；这些属于后续装配 PR。
+项目 trust 的输入/输出契约见 [`pi-project-trust.md`](pi-project-trust.md)。PR4 已按该契约
+收缩为 skills-only 显式装配；它不授权 `--approve`、trust.json、项目原始 settings 或用户
+Pi home 复用。settings/packages/extensions 仍属于后续独立安全评审范围。
 
 > 续做指南(每项怎么接着做 + file:line 锚点 + 坑)见 `docs/dev-rules/pi-remaining-work.md`。
 

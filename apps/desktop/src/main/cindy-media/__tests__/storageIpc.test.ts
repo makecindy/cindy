@@ -25,9 +25,8 @@ const blobStore = await import('../blobStore');
 const { createStorageIpcHandlers } = await import('../storageIpc');
 
 const MIGRATION_0070 = path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const migration0071 = require('../../../../drizzle/scripts/0071_bright_ultron.ts') as {
-  run: (db: Database.Database) => void;
+const { default: migration0071 } = (await import('../../../../drizzle/scripts/0071_bright_ultron')) as {
+  default: { run: (db: Database.Database) => void };
 };
 
 function freshDb(): LedgerDb {

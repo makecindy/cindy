@@ -2,14 +2,18 @@ import {
   MODEL_ACCESS_AGENTS,
   MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION,
   MODEL_ACCESS_CURRENCIES,
   MODEL_ACCESS_EFFORTS,
+  MODEL_ACCESS_V2_AGENTS,
+  MODEL_ACCESS_WIRE_PROTOCOLS,
   MODEL_PRICE_VARIANTS,
   MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
   MODEL_REGISTRY_SCHEMA_VERSION,
   MODEL_REGISTRY_STATUSES,
   type ListModelsResponse,
   type ModelAccessParseResult,
+  type ModelAccessV2Agent,
   type ModelAgent,
   type ModelCurrency,
   type ModelEffort,
@@ -89,6 +93,7 @@ const MODEL_CATALOG_ENTRY_V2_FIELDS = [
   ...MODEL_CATALOG_ENTRY_V1_FIELDS,
   'newSessionDefault',
 ] as const;
+const MODEL_CATALOG_ENTRY_V3_FIELDS = MODEL_CATALOG_ENTRY_V2_FIELDS;
 const MODEL_AGENT_OVERRIDE_FIELDS = [
   'contextWindow',
   'efforts',
@@ -96,6 +101,7 @@ const MODEL_AGENT_OVERRIDE_FIELDS = [
   'supportsFastMode',
   'defaultEnabled',
 ] as const;
+const MODEL_AGENT_OVERRIDE_V3_FIELDS = [...MODEL_AGENT_OVERRIDE_FIELDS, 'wireProtocol'] as const;
 const MODEL_TIERED_PRICING_FIELDS = [
   'range',
   'inputCostPerToken',
@@ -171,6 +177,18 @@ export function isModelCurrency(value: unknown): value is ModelCurrency {
 
 function isModelAgent(value: unknown): value is ModelAgent {
   return typeof value === 'string' && MODEL_ACCESS_AGENTS.includes(value as ModelAgent);
+}
+
+function isV2ModelAgent(value: unknown): value is ModelAccessV2Agent {
+  return typeof value === 'string' && MODEL_ACCESS_V2_AGENTS.includes(value as never);
+}
+
+function isModelAccessWireProtocol(value: unknown): boolean {
+  return typeof value === 'string' && MODEL_ACCESS_WIRE_PROTOCOLS.includes(value as never);
+}
+
+function expectedWireProtocol(agent: ModelAgent): (typeof MODEL_ACCESS_WIRE_PROTOCOLS)[number] {
+  return agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
 }
 
 function isModelEffort(value: unknown): value is ModelEffort {
@@ -290,6 +308,7 @@ function overrideError(
   baseEfforts: readonly ModelEffort[] | undefined,
   allowedFields?: readonly string[],
   allowNullDefaultEffort = false,
+  baseDefaultEffort?: ModelEffort | null,
 ): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   let error = allowedFields ? unknownFieldError(value, allowedFields, path) : null;
@@ -318,6 +337,14 @@ function overrideError(
     !effectiveEfforts.includes(value.defaultEffort)
   ) {
     return `${path}.defaultEffort must be included in ${path}.efforts or the base efforts`;
+  }
+  if (
+    value.defaultEffort === undefined &&
+    isModelEffort(baseDefaultEffort) &&
+    effectiveEfforts !== undefined &&
+    !effectiveEfforts.includes(baseDefaultEffort)
+  ) {
+    return `${path}.efforts must include the inherited base defaultEffort`;
   }
   for (const key of ['supportsFastMode', 'defaultEnabled'] as const) {
     if (value[key] !== undefined && typeof value[key] !== 'boolean') {
@@ -384,14 +411,18 @@ function modelEntryError(
   value: unknown,
   path: string,
   schemaVersion:
-    typeof MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION | typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+    | typeof MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION
+    | typeof MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION
+    | typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
 ): string | null {
   if (!isPlainObject(value)) return `${path} must be an object`;
   let error = unknownFieldError(
     value,
     schemaVersion === MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION
       ? MODEL_CATALOG_ENTRY_V1_FIELDS
-      : MODEL_CATALOG_ENTRY_V2_FIELDS,
+      : schemaVersion === MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION
+        ? MODEL_CATALOG_ENTRY_V2_FIELDS
+        : MODEL_CATALOG_ENTRY_V3_FIELDS,
     path,
   );
   if (error) return error;
@@ -404,13 +435,24 @@ function modelEntryError(
     return `${path}.currency must be CNY or USD when present`;
   }
   if (
+    schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION &&
+    !Array.isArray(value.agents)
+  ) {
+    return `${path}.agents must be an array in schema version 3`;
+  }
+  if (
     value.agents !== undefined &&
-    (!Array.isArray(value.agents) || value.agents.some((agent) => !isModelAgent(agent)))
+    (!Array.isArray(value.agents) ||
+      value.agents.some((agent) =>
+        schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+          ? !isModelAgent(agent)
+          : !isV2ModelAgent(agent),
+      ))
   ) {
     return `${path}.agents must be an array of supported agents when present`;
   }
   const supportedAgents = Array.isArray(value.agents) ? (value.agents as ModelAgent[]) : [];
-  if (schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION) {
+  if (schemaVersion !== MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION) {
     const defaultError = newSessionDefaultError(
       value.newSessionDefault,
       `${path}.newSessionDefault`,
@@ -428,6 +470,12 @@ function modelEntryError(
     if (error) return error;
   }
   if (
+    schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION &&
+    (typeof value.name !== 'string' || value.name.trim().length === 0)
+  ) {
+    return `${path}.name must be a non-empty string in schema version 3`;
+  }
+  if (
     value.icon !== undefined &&
     (typeof value.icon !== 'string' || value.icon.trim().length === 0)
   ) {
@@ -436,6 +484,12 @@ function modelEntryError(
   for (const key of ['contextWindow', 'maxOutputTokens'] as const) {
     const error = optionalPositiveIntegerError(value[key], `${path}.${key}`);
     if (error) return error;
+  }
+  if (
+    schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION &&
+    value.contextWindow === undefined
+  ) {
+    return `${path}.contextWindow is required in schema version 3`;
   }
   error = modelModalitiesError(value.modalities, `${path}.modalities`);
   if (error) return error;
@@ -479,21 +533,104 @@ function modelEntryError(
   if (value.perAgent !== undefined) {
     if (!isPlainObject(value.perAgent)) return `${path}.perAgent must be an object when present`;
     for (const [agent, override] of Object.entries(value.perAgent)) {
-      if (!isModelAgent(agent)) return `${path}.perAgent.${agent} is not a supported agent`;
-      if (!supportedAgents.includes(agent)) {
+      const supportedAgent =
+        schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+          ? isModelAgent(agent)
+          : isV2ModelAgent(agent);
+      if (!supportedAgent) return `${path}.perAgent.${agent} is not a supported agent`;
+      if (!supportedAgents.includes(agent as ModelAgent)) {
         return `${path}.perAgent.${agent} must be included in ${path}.agents`;
       }
       error = overrideError(
         override,
         `${path}.perAgent.${agent}`,
         efforts,
-        MODEL_AGENT_OVERRIDE_FIELDS,
+        schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+          ? MODEL_AGENT_OVERRIDE_V3_FIELDS
+          : MODEL_AGENT_OVERRIDE_FIELDS,
         true,
+        isModelEffort(value.defaultEffort) ? value.defaultEffort : null,
       );
       if (error) return error;
+      if (isPlainObject(override) && override.wireProtocol !== undefined) {
+        if (!isModelAccessWireProtocol(override.wireProtocol)) {
+          return `${path}.perAgent.${agent}.wireProtocol must be a supported wire protocol`;
+        }
+        const expected = expectedWireProtocol(agent as ModelAgent);
+        if (override.wireProtocol !== expected) {
+          return `${path}.perAgent.${agent}.wireProtocol must be ${expected}`;
+        }
+      }
+    }
+  }
+  if (schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION) {
+    for (const agent of supportedAgents) {
+      const override = isPlainObject(value.perAgent) ? value.perAgent[agent] : undefined;
+      if (!isPlainObject(override) || !isModelAccessWireProtocol(override.wireProtocol)) {
+        return `${path}.perAgent.${agent}.wireProtocol is required when ${path}.agents includes ${agent}`;
+      }
     }
   }
   return null;
+}
+
+type ModelCatalogSchemaVersion =
+  | typeof MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION
+  | typeof MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION
+  | typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION;
+
+function isKnownAgentForVersion(agent: string, schemaVersion: ModelCatalogSchemaVersion): boolean {
+  return schemaVersion === MODEL_ACCESS_CATALOG_SCHEMA_VERSION
+    ? isModelAgent(agent)
+    : isV2ModelAgent(agent);
+}
+
+/**
+ * Agent kinds are an extensible capability enum on the consumer side. Preserve malformed values
+ * for normal validation, but remove well-formed future string values the current client cannot use.
+ */
+function filterUnknownAgentStrings(
+  value: unknown,
+  schemaVersion: ModelCatalogSchemaVersion,
+): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.filter(
+    (agent) => typeof agent !== 'string' || isKnownAgentForVersion(agent, schemaVersion),
+  );
+}
+
+function sanitizeModelEntryAgents(
+  value: unknown,
+  schemaVersion: ModelCatalogSchemaVersion,
+): unknown {
+  if (!isPlainObject(value)) return value;
+  const sanitized: PlainObject = { ...value };
+  if ('agents' in sanitized) {
+    sanitized.agents = filterUnknownAgentStrings(sanitized.agents, schemaVersion);
+  }
+  if (
+    schemaVersion !== MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION &&
+    'newSessionDefault' in sanitized
+  ) {
+    const original = sanitized.newSessionDefault;
+    const filtered = filterUnknownAgentStrings(sanitized.newSessionDefault, schemaVersion);
+    if (
+      Array.isArray(original) &&
+      original.length > 0 &&
+      Array.isArray(filtered) &&
+      filtered.length === 0
+    ) {
+      delete sanitized.newSessionDefault;
+    } else sanitized.newSessionDefault = filtered;
+  }
+  if (isPlainObject(sanitized.perAgent)) {
+    const knownEntries = Object.entries(sanitized.perAgent).filter(([agent]) =>
+      isKnownAgentForVersion(agent, schemaVersion),
+    );
+    if (knownEntries.length === 0) delete sanitized.perAgent;
+    else sanitized.perAgent = Object.fromEntries(knownEntries);
+  }
+  return sanitized;
 }
 
 export function parseListModelsResponse(
@@ -504,25 +641,28 @@ export function parseListModelsResponse(
   if (unknownField) return fail(unknownField);
   if (
     value.schemaVersion !== MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION &&
+    value.schemaVersion !== MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION &&
     value.schemaVersion !== MODEL_ACCESS_CATALOG_SCHEMA_VERSION
   ) {
     return fail(
-      `response.schemaVersion must be ${MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION} or ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}`,
+      `response.schemaVersion must be ${MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION}, ${MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION}, or ${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}`,
     );
   }
+  const schemaVersion = value.schemaVersion as ModelCatalogSchemaVersion;
   if (!Array.isArray(value.models)) return fail('response.models must be an array');
+  const models = value.models.map((model) => sanitizeModelEntryAgents(model, schemaVersion));
   const modelIds = new Set<string>();
-  for (const [index, model] of value.models.entries()) {
+  for (const [index, model] of models.entries()) {
     if (isPlainObject(model) && typeof model.id === 'string') {
       if (modelIds.has(model.id)) {
         return fail(`response.models[${index}].id must be unique`);
       }
       modelIds.add(model.id);
     }
-    const error = modelEntryError(model, `response.models[${index}]`, value.schemaVersion);
+    const error = modelEntryError(model, `response.models[${index}]`, schemaVersion);
     if (error) return fail(error);
   }
-  return ok(value as unknown as ListModelsResponse);
+  return ok({ schemaVersion, models } as ListModelsResponse);
 }
 
 function referencePriceError(value: unknown, path: string): string | null {
@@ -601,7 +741,7 @@ function registryRouteError(value: unknown, path: string): string | null {
   if (
     !Array.isArray(value.agents) ||
     value.agents.length === 0 ||
-    value.agents.some((agent) => !isModelAgent(agent)) ||
+    value.agents.some((agent) => !isV2ModelAgent(agent)) ||
     new Set(value.agents).size !== value.agents.length
   ) {
     return `${path}.agents must be a unique non-empty array of supported agents`;
@@ -706,7 +846,7 @@ function registryEntryError(
   if (value.perAgent !== undefined) {
     if (!isPlainObject(value.perAgent)) return `${path}.perAgent must be an object when present`;
     for (const [agent, override] of Object.entries(value.perAgent)) {
-      if (!isModelAgent(agent)) return `${path}.perAgent.${agent} is not a supported agent`;
+      if (!isV2ModelAgent(agent)) return `${path}.perAgent.${agent} is not a supported agent`;
       if (!supportedAgents.has(agent)) {
         return `${path}.perAgent.${agent} must be supported by at least one route`;
       }
@@ -715,6 +855,8 @@ function registryEntryError(
         `${path}.perAgent.${agent}`,
         efforts,
         MODEL_AGENT_OVERRIDE_FIELDS,
+        false,
+        isModelEffort(value.defaultEffort) ? value.defaultEffort : null,
       );
       if (error) return error;
     }

@@ -972,6 +972,10 @@ function ModelSelectorContentView({
   // pointer-reveal;布局变化后 Chromium 补发的合成 move 坐标不变,天然被挡。
   const hoverIntentArmedRef = useRef(false);
   const hoverIntentBaseRef = useRef<{ x: number; y: number } | null>(null);
+  const detachedAnchorRecoveryRef = useRef<{
+    providerId: string | null;
+    modelId: string;
+  } | null>(null);
   useEffect(() => {
     if (!pointerRevealRequiresIntent) return;
     const onMove = (e: PointerEvent) => {
@@ -983,6 +987,7 @@ function ModelSelectorContentView({
       const dy = e.screenY - hoverIntentBaseRef.current.y;
       if (dx * dx + dy * dy >= 16) {
         hoverIntentArmedRef.current = true;
+        detachedAnchorRecoveryRef.current = null;
         document.removeEventListener('pointermove', onMove, true);
       }
     };
@@ -1547,6 +1552,12 @@ function ModelSelectorContentView({
   useEffect(() => {
     if (!optionsPanelUsesLayoutPositioning || !editing) return;
     if (!editingModel || (optionsAnchor !== null && !optionsAnchor.isConnected)) {
+      const anchorDetached = optionsAnchor !== null && !optionsAnchor.isConnected;
+      if (anchorDetached) {
+        // 只允许刚失联的同一模型行恢复一次。不要武装组件级 hover gate，否则后续
+        // 任意行都能绕过 pointer movement 门槛（见 PR#1792 关联回归）。
+        detachedAnchorRecoveryRef.current = editing;
+      }
       closeOptionsPanel();
     }
   }, [closeOptionsPanel, editing, editingModel, optionsAnchor, optionsPanelUsesLayoutPositioning]);
@@ -1896,12 +1907,19 @@ function ModelSelectorContentView({
     // untrusted 事件(jsdom 测试/程序派发)不设门:布局位移诱发的浏览器事件是
     // trusted 的,真实闪现场景仍被挡。
     const revealOptionsByPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+      const recoveryTarget = detachedAnchorRecoveryRef.current;
+      const isDetachedAnchorRecovery =
+        optionsPanelUsesLayoutPositioning &&
+        recoveryTarget?.providerId === providerId &&
+        recoveryTarget.modelId === model.id;
       if (
         pointerRevealRequiresIntent &&
         !hoverIntentArmedRef.current &&
+        !isDetachedAnchorRecovery &&
         event.nativeEvent.isTrusted
       )
         return;
+      if (isDetachedAnchorRecovery) detachedAnchorRecoveryRef.current = null;
       revealOptions(event.currentTarget);
     };
     return (

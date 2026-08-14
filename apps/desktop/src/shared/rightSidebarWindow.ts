@@ -9,11 +9,11 @@ import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
 import type { ConversationSearchJump } from './conversationSearchJump.js';
 
-/** 子窗口全局状态:detached 是持久化偏好,lastOpen 是重启恢复用的状态,open 是运行时窗口开闭。 */
+/** 子窗口全局状态：均仅在当前进程有效；重启后 detached / lastOpen 重置。 */
 export interface RsbWindowState {
-  /** 偏好:「侧边栏在新窗口中显示」。持久化,default false。 */
+  /** 当前运行期是否在独立窗口中显示。 */
   detached: boolean;
-  /** 状态:上次退出时窗口是否处于打开态(供重启恢复)。持久化。 */
+  /** 当前运行期是否曾请求保持窗口打开；不跨客户端重启。 */
   lastOpen: boolean;
   /** 运行时:子窗口当前是否存在。不持久化。 */
   open: boolean;
@@ -110,3 +110,14 @@ export type RsbWindowCommandRouteResult =
   | 'routed'
   | 'queued'
   | 'stale-context';
+
+// ── 预热/就绪/隐藏复用 IPC channel 常量 ──────────────────────────────
+// renderer → main(invoke)：轻量窗口根组件已经挂载(Renderer shell 可展示)。
+export const RSB_WINDOW_RENDERER_READY_CHANNEL = 'rsb-window:renderer-ready';
+// renderer → main(invoke)：首份业务内容已提交(context+store 就绪,至少 EmptyState 可见)。
+export const RSB_WINDOW_PRESENTATION_READY_CHANNEL = 'rsb-window:presentation-ready';
+// main → renderer(send)：隐藏/显示时通知子窗口刷新 context 与重置瞬时交互态。
+export const RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL = 'rsb-window:visibility-changed';
+// renderer → main(invoke)：子窗口请求刷新 context(从 main 缓存拉最新值)。
+export const RSB_WINDOW_REFRESH_CONTEXT_CHANNEL = 'rsb-window:refresh-context';
+export const RSB_WINDOW_LOCALE_CHANGED_CHANNEL = 'rsb-window:locale-changed';

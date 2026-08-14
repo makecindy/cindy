@@ -9,7 +9,6 @@ import { ContentHeaderSlot } from '@/components/layout/ContentHeader';
 import { rightSidebarOwnsRailChromeActions as resolveRightSidebarRailChromeActionsOwner } from '@/components/layout/railChromeActions';
 import { FadeSwitcher } from '@/components/layout/FadeSwitcher';
 import { RightSidebar, type RightSidebarHandle } from '@/components/layout/RightSidebar';
-import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { Sidebar } from '@/components/sidebar/Sidebar';
 import {
@@ -57,7 +56,6 @@ import { didUserCloseDetachedSidebarWindow } from '@/lib/rsbWindowTransitions';
 import { routeSidebarCommand } from '@/features/right-sidebar/lib/detachedSidebarRouting';
 import { openTerminalFromShortcut } from '@/features/right-sidebar/lib/openTerminalShortcut';
 import { executeSidebarCommand } from '@/features/right-sidebar/lib/executeSidebarCommand';
-import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
 import { useSidebarResize } from '@/hooks/useSidebarResize';
 import { useSidebarCardMode } from '@/hooks/useSidebarCardMode';
 import { useSidebarPeek } from '@/hooks/useSidebarPeek';
@@ -129,6 +127,7 @@ interface RightSidebarSessionDeclarationOptions {
 }
 
 const applicationMenuLog = createLogger('ApplicationMenu');
+const log = createLogger('MainLayout');
 // Keep in sync with single-segment static routes under /cc-agent in router.tsx.
 const CC_AGENT_STATIC_SEGMENTS = ['boot', 'files', 'new', 'new-dialogue', 'orca', 'scheduled'];
 
@@ -687,32 +686,33 @@ export function MainLayout() {
   // (sessionId 切换 / 草稿切换 / init)都不调,RightSidebar 默认走"直接同步"无动画。
   const rightSidebarRef = useRef<RightSidebarHandle>(null);
 
-  const handleToggleRightSidebar = useCallback(() => {
+  const handleOpenRightSidebar = useCallback(() => {
     if (!rsbWindow.loaded) return;
-    // 偏好「在新窗口显示侧边栏」开启时,toggle 语义改为子窗口开/关:
-    // 展开 = 打开/聚焦子窗口,收起 = 关闭子窗口。内嵌折叠态不动
-    // (按钮显隐由 rsbWindow.open 镜像驱动,见下方渲染处)。
+    // 主窗口固定入口只负责显示 / 聚焦，不承担关闭语义。
     if (rsbDetached) {
-      if (rsbWindow.open) {
-        writeCollapsedFor(rightSidebarSessionId, true);
-        void window.electronAPI.rightSidebarWindow.close().catch(() => undefined);
-      } else {
-        writeCollapsedFor(rightSidebarSessionId, false);
-        void window.electronAPI.rightSidebarWindow.open().catch(() => undefined);
-      }
+      writeCollapsedFor(rightSidebarSessionId, false);
+      void window.electronAPI.rightSidebarWindow
+        .open()
+        .catch((err) => log.warn('show detached right sidebar failed', err));
       return;
     }
+    if (!isRightSidebarCollapsed) return;
     // 打开时沿用上次记住的比例（useRightSidebarResize 持久化的 fraction）：展开后
     // 右栏 = fraction × 可用宽、中间 flex-1 吸收剩余，窗口缩放时两栏按比例同步变化。
     // 持久化按 rightSidebarSessionId 分桶 —— 各 session 独立记忆开关状态(切 session 不串扰)。
-    // 显式 prime RightSidebar 走动画 —— 这是唯一会触发 250ms 折叠动画的入口。
+    // 显式 prime RightSidebar 走动画。
     rightSidebarRef.current?.requestAnimateNextChange();
-    setIsRightSidebarCollapsed((prev) => {
-      const next = !prev;
-      writeCollapsedFor(rightSidebarSessionId, next);
-      return next;
-    });
-  }, [rightSidebarSessionId, rsbDetached, rsbWindow.loaded, rsbWindow.open]);
+    writeCollapsedFor(rightSidebarSessionId, false);
+    setIsRightSidebarCollapsed(false);
+  }, [isRightSidebarCollapsed, rightSidebarSessionId, rsbDetached, rsbWindow.loaded]);
+
+  // 面板自身的关闭按钮继续只负责收起内嵌面板。
+  const handleCloseRightSidebar = useCallback(() => {
+    if (rsbDetached || isRightSidebarCollapsed) return;
+    rightSidebarRef.current?.requestAnimateNextChange();
+    writeCollapsedFor(rightSidebarSessionId, true);
+    setIsRightSidebarCollapsed(true);
+  }, [isRightSidebarCollapsed, rightSidebarSessionId, rsbDetached]);
 
   // 关掉右侧栏最后一个 tab 时自动收起(由 RightSidebarShell 在 tab 数 >0→0 时回调)。
   // detached 子窗口形态不在此处理(那时主窗根本不渲染内嵌 Shell,也收不到此回调)。
@@ -919,36 +919,14 @@ export function MainLayout() {
     }
   }, [rsbDetached]);
 
-  // 3) 重启恢复:detached && lastOpen(上次退出时窗口开着)→ 自动重开子窗口。
-  //    时机对齐 takePendingDeepLink 的 pull-on-mount(ProtectedRoute + LocalDbGate
-  //    之内,登录态天然就绪);ref 守护 strict-mode 双跑。open 幂等,已开则 focus。
-  const rsbWindowRestoredRef = useRef(false);
+  // 3) 启动期只从 main 拉取当前进程状态。分离状态不跨客户端重启恢复；main 在
+  //    controller 创建前已重置 detached / lastOpen，并清理旧版本遗留的偏好文件。
+  const rsbWindowBootstrappedRef = useRef(false);
   useEffect(() => {
-    if (rsbWindowRestoredRef.current) return;
-    rsbWindowRestoredRef.current = true;
+    if (rsbWindowBootstrappedRef.current) return;
+    rsbWindowBootstrappedRef.current = true;
     if (isSecondaryWindow()) return;
-    void bootstrapRsbWindowState().then((s) => {
-      if (!s) return;
-      if (s.detached && s.lastOpen && !s.open) {
-        // 启动恢复不是用户当次手势:窗口照常回到上次位置,但走 showInactive,
-        // 不在冷启动瞬间把焦点从主窗(或用户别的应用)抢过去。
-        void window.electronAPI.rightSidebarWindow
-          .open({ userInitiated: false })
-          .catch(() => undefined);
-      }
-    });
-    // 插件面板独立窗口的重启恢复(同款语义,按 ghostId 逐个):detached &&
-    // lastOpen 的条目重开。open 走 main 复验资格(卸载/停用过的自动清)。
-    try {
-      const ghostWindows = window.electronAPI.ghostPanelWindow?.getStateSync() ?? {};
-      for (const [ghostId, entry] of Object.entries(ghostWindows)) {
-        if (entry.detached && entry.lastOpen && !entry.open) {
-          void window.electronAPI.ghostPanelWindow.open(ghostId).catch(() => undefined);
-        }
-      }
-    } catch {
-      // 桥不可用(测试环境)= 没有可恢复窗口
-    }
+    void bootstrapRsbWindowState();
   }, []);
 
   // 4) 「在新窗口打开」入口(mac 浮层 / win TabBar 按钮共用):开偏好 + 弹出。
@@ -1278,7 +1256,7 @@ export function MainLayout() {
                 // 手势面是 ContentHeader(Windows),窗体长按亦可。
                 data-panel-drag-root="chat-main"
                 className={cn(
-                  'flex flex-1 flex-col overflow-hidden bg-content-area',
+                  'relative flex flex-1 flex-col overflow-hidden bg-content-area',
                   isSettingsRoute ? 'min-w-0' : 'min-w-[400px]',
                   // RSB Maximize(Phase 6):主区彻底 display:none,把整个非左栏空间让给 RSB。
                   isRightSidebarMaximized && 'hidden',
@@ -1309,15 +1287,39 @@ export function MainLayout() {
                       shrink-0 在 main 的 flex 列里独占一行把内容推下(不遮盖)。放在
                       FadeSwitcher 之外 —— 它是全局状态提示,不参与路由切换动画。 */}
                   <CredentialStoreBanner />
+                  {!isMac &&
+                    rightSidebarAvailable &&
+                    rsbWindow.loaded &&
+                    (rsbDetached || isRightSidebarCollapsed) && (
+                      <div
+                        data-testid="right-sidebar-fixed-trigger"
+                        className={cn(
+                          'pointer-events-none absolute z-50',
+                          rightSidebarSide === 'left' ? 'left-2' : 'right-2',
+                        )}
+                        style={
+                          {
+                            top: 'calc(var(--content-header-h) + 0.25rem)',
+                            WebkitAppRegion: 'no-drag',
+                          } as React.CSSProperties
+                        }
+                      >
+                        <RightSidebarToggle
+                          action="show"
+                          collapsed
+                          onToggle={handleOpenRightSidebar}
+                          side={rightSidebarSide}
+                        />
+                      </div>
+                    )}
                   <FadeSwitcher key={location.pathname.split('/')[1] || 'root'}>
                     <Outlet
                       context={{
                         sidebarWidth,
-                        // detached 模式下"折叠态"= 子窗口是否关闭(chip / 按钮显示口径统一)
-                        rightSidebarCollapsed: rsbDetached
-                          ? !rsbWindow.open
-                          : isRightSidebarCollapsed,
-                        onToggleRightSidebar: handleToggleRightSidebar,
+                        // detached 时主窗口没有内嵌侧栏，始终按折叠态布局；子窗口开闭
+                        // 不改变主窗口浮动控件的占位语义。
+                        rightSidebarCollapsed: rsbDetached || isRightSidebarCollapsed,
+                        onToggleRightSidebar: handleOpenRightSidebar,
                         // B2b:面板所在侧,聊天视图据此决定展开入口落左上还是右上。
                         rightSidebarSide,
                         setRightSidebarAvailable,
@@ -1344,7 +1346,7 @@ export function MainLayout() {
                   isMac={isMac}
                   // Windows 展开态的折叠入口归属工具面板自身,放回 TabBar 右端;
                   // 收起后聊天区角上才显示展开入口。mac 仍走窗口右上浮层。
-                  onCloseSidebar={isMac ? undefined : handleToggleRightSidebar}
+                  onCloseSidebar={handleCloseRightSidebar}
                   onMaximize={handleMaximizeRightSidebar}
                   isMaximized={isRightSidebarMaximized}
                   reserveLeftChromeActions={shouldReserveLeftChromeActions({
@@ -1396,8 +1398,8 @@ export function MainLayout() {
             （含设置页），永远钉在窗口角，开/关右栏都不动 —— 解决「右栏作为 <main>
             sibling 会把窗口按钮挤左」的问题。no-drag（按钮可点），周围窗口拖拽区由
             ContentHeader / 左栏顶行提供。
-            mac 不渲染本块（用系统红绿灯）。
-            （Windows 折叠态的展开入口走聊天视图 chip,展开态的折叠入口在右栏 TabBar。） */}
+            mac 不渲染本块（用系统红绿灯）。Windows 固定侧栏入口保留在内容区
+            右上角（系统按钮下一行），与截图中的原位置一致。 */}
         {!isMac && (
           <div
             className="absolute right-0 top-0 z-50 flex h-[46px] items-center"
@@ -1418,39 +1420,21 @@ export function MainLayout() {
             左上角的左栏折叠按钮(ChromeActions)对称、不跟面板跑;detach/maximize
             是面板自属控件,贴右(或 maximize 撑满)时在浮层里(视觉落在面板顶栏
             右端),贴左时跟面板走进 Shell 顶栏右端(见 RightSidebarShell)。 */}
-        {isMac && rightSidebarAvailable && rsbWindow.loaded && (
+        {isMac &&
+          rightSidebarAvailable &&
+          rsbWindow.loaded &&
+          (rsbDetached || isRightSidebarCollapsed) && (
           <div
             className="absolute right-0 top-0 z-50 flex h-[46px] items-center gap-1 pr-2"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            {/* Mac 端:maximize + 折叠按钮浮在窗口右上 46px 区,与 macOS 系统标题栏规范
-                对齐;视觉上与最右 pane 顶部 46px chrome 共占同一 y 区间(z-50 覆盖,
-                RSB chrome / ContentHeader 内部留占位让位)。Win 端不渲染浮层
-                (maximize/折叠在 TabBar 内右端)。
-                detach / maximize 仅在 RSB 展开**且是最右 pane**(贴右或 maximize
-                撑满)时显示 —— 贴左时它们跟面板走(Shell 顶栏),折叠态 maximize
-                无作用语义,只留 toggle 作为"打开"入口。 */}
-            {!isRightSidebarCollapsed &&
-              !rsbDetached &&
-              (rightSidebarSide === 'right' || isRightSidebarMaximized) && (
-                <>
-                  {/* 「在新窗口打开」:开偏好 + 弹出子窗口(win 端此按钮在 TabBar 内)。 */}
-                  {!isSecondaryWindow() && (
-                    <RightSidebarDetach size="toolbar" onDetach={handleDetachRightSidebar} />
-                  )}
-                  <RightSidebarMaximize
-                    size="toolbar"
-                    onMaximize={handleMaximizeRightSidebar}
-                    isMaximized={isRightSidebarMaximized}
-                  />
-                </>
-              )}
-            {/* detached:toggle 的"折叠态"跟随子窗口开闭(收起 = 关子窗口)。
-                side 只管图标方向(画"面板贴哪条边"),按钮位置恒在窗口右上。 */}
+            {/* 固定唤起入口只负责显示 / 聚焦。detach / maximize / 收起属于面板自身，
+                在 RightSidebarShell 的顶栏内渲染，不再与本入口混用。 */}
             <RightSidebarToggle
               size="toolbar"
+              action="show"
               collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
-              onToggle={handleToggleRightSidebar}
+              onToggle={handleOpenRightSidebar}
               side={rightSidebarSide}
             />
           </div>

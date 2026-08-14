@@ -339,8 +339,8 @@ export function isChatEligible(model: { id: string; group?: string; mode?: strin
  * 不让 groupOf 的未知组回退吃 id 启发式 —— 否则 `gpt-4o-audio-preview` 这类合法
  * 自定义对话模型会被误判成能力模型而从全部对话清单消失(PR #744 review)。
  *
- * 例外**只限用户供应商**:网关条目缺 group 时 active-catalog 会补 `custom:xd`
- * (active-catalog.ts),若无条件放行未知组,无分组下发的网关图像/音频/向量模型会
+ * 例外**只限用户供应商**:内置网关即使显式下发未知 group（如历史 `custom:xd`），
+ * 若无条件放行未知组,无分组下发的网关图像/音频/向量模型会
  * 绕过能力分类、重新漏进对话清单 —— 正是本过滤要堵的洞(PR #744 review 第二轮)。
  * 非用户供应商一律走 isChatEligible(mode 权威、id 正则兜底)。
  */

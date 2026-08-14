@@ -596,26 +596,8 @@ export interface ComputerMcpCallContext {
   agentKind?: string;
 }
 
-export interface ComputerProcessIdentity {
-  pid: number;
-  name?: string;
-  command?: string;
-  executable?: string;
-  bundleId?: string;
-}
-
-export interface ComputerProcessIdentityResolveOptions {
-  /** Bypass any host-side process snapshot cache before a side effect. */
-  forceFresh?: boolean;
-}
-
 export interface ComputerMcpDeps {
   getStatus(): Promise<ComputerDriverStatus>;
-  /** Resolve process provenance without trusting model-supplied app labels. */
-  resolveProcessIdentity?(
-    pid: number,
-    options?: ComputerProcessIdentityResolveOptions,
-  ): Promise<ComputerProcessIdentity | null>;
   callTool(
     name: ComputerMcpToolName,
     args: Record<string, unknown>,

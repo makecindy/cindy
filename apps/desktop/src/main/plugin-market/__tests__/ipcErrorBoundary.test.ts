@@ -126,12 +126,16 @@ describe('Plugin Market IPC error boundary', () => {
       'disposePluginMarketAuthListener = authManager.onAuthStateChange',
     );
     expect(listenerStart).toBeGreaterThan(-1);
-    expect(
-      bootstrapSource.indexOf(
-        'queueMicrotask(syncDefaultPluginsForActiveOwner);',
-        listenerStart,
-      ),
-    ).toBeGreaterThan(listenerStart);
+    const listenerEnd = bootstrapSource.indexOf(
+      '\n  syncDefaultPluginsForActiveOwner();',
+      listenerStart,
+    );
+    const listenerBody = bootstrapSource.slice(listenerStart, listenerEnd);
+    expect(listenerBody).toContain('queueMicrotask(() => {');
+    expect(listenerBody).toContain('syncDefaultPluginsForActiveOwner();');
+    expect(listenerBody).toContain('reconcileGhostOauthForActiveOwner();');
+    expect(bootstrapSource.slice(listenerEnd)).toContain('syncDefaultPluginsForActiveOwner();');
+    expect(bootstrapSource.slice(listenerEnd)).toContain('reconcileGhostOauthForActiveOwner();');
     expect(bootstrapSource).toContain("'plugin-market-auth-listener'");
   });
 });

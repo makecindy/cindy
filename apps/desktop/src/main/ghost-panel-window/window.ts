@@ -22,6 +22,7 @@ import { readWindowBehaviorSettings } from '../window-behavior-settings-store.js
 import { installExternalLinkGuards } from '../secondary-windows.js';
 import { installSelectionContextMenu } from '../selection-context-menu.js';
 import { applyAppearanceToWindow } from '../appearance-settings-ipc.js';
+import { markGhostPanelWebContentsId } from './registry.js';
 
 const log = createLogger('ghost-panel-window');
 
@@ -58,7 +59,7 @@ export function createGhostPanelWindow(ghostId: string, title: string): BrowserW
     acceptFirstMouse: !swallowActivationClick,
     ...platformOptions,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'ghostPanelWindowPreload.js'),
       spellcheck: false,
       webviewTag: true,
       // 安全规则 §3 全量显式项(新建窗口不吃默认值,逐项写明):
@@ -74,6 +75,7 @@ export function createGhostPanelWindow(ghostId: string, title: string): BrowserW
       navigateOnDragDrop: false,
     },
   });
+  markGhostPanelWebContentsId(win.webContents.id);
   markAppContentWindow(win);
   applyAppearanceToWindow(win);
   win.webContents.on('did-finish-load', () => {
@@ -85,8 +87,10 @@ export function createGhostPanelWindow(ghostId: string, title: string): BrowserW
 
   installExternalLinkGuards(win);
 
+  // ready-to-show 不再直接 show();由 controller 的双阶段就绪握手控制展示时机。
+  // 窗口以 show:false 创建,首次显示由 controller 在 presentation-ready 后触发。
   win.once('ready-to-show', () => {
-    if (!win.isDestroyed()) win.show();
+    // no-op: 窗口由 controller 控制展示
   });
 
   const hash = '/ghost-panel-window';

@@ -18,6 +18,9 @@
 
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
+import { normalizePersistableFavicon } from '../../../shared/faviconPersistence';
+import { createIpcError } from '../../../shared/ipc-errors';
+import { MAX_STATE_JSON_BYTES } from '../../../shared/rightSidebarTabState';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from './registry';
 import { browserWebviewPool } from './lib/browserWebviewPool';
@@ -39,7 +42,6 @@ type Listener = (sessionId: string) => void;
 export type TabCloseInterceptor = () => Promise<boolean | void> | boolean | void;
 
 const MAX_TABS_PER_SESSION = 20;
-const MAX_STATE_JSON_BYTES = 16 * 1024;
 const cache = new Map<string, TabBucket>();
 const inflight = new Map<string, Promise<void>>();
 const singletonInflight = new Map<string, Promise<TabState>>();
@@ -417,15 +419,49 @@ function markMemoryOnlySession(sessionId: string): void {
   memoryOnlySessions.add(sessionId);
 }
 
-function validateMemoryOnlyStateSize(state: unknown): void {
-  const json = state === undefined ? '{}' : JSON.stringify(state);
+/**
+ * Renderer-side preflight matching the main-process 16KB persistence guard.
+ *
+ * This must run before optimistic cache updates for both persisted and
+ * memory-only sessions. If main rejects an oversized optimistic patch and the
+ * plugin derives that patch from an unchanged external source (for example a
+ * WebView favicon), rollback would notify React and immediately retrigger the
+ * same patch forever.
+ */
+function validateTabStateSize(state: unknown): void {
+  let json: string | undefined;
+  try {
+    json = state === undefined ? '{}' : JSON.stringify(state);
+  } catch {
+    throw createIpcError('INVALID_PARAMS', 'tab state must be JSON-serializable');
+  }
+  // JSON.stringify 顶层 function / symbol 时不抛错而返回 undefined,同样不能持久化。
   if (typeof json !== 'string') {
-    throw new Error('tab state JSON must be serializable');
+    throw createIpcError('INVALID_PARAMS', 'tab state must be JSON-serializable');
   }
   const bytes = new TextEncoder().encode(json).byteLength;
   if (bytes > MAX_STATE_JSON_BYTES) {
-    throw new Error(`tab state JSON too large: ${bytes} bytes (limit ${MAX_STATE_JSON_BYTES})`);
+    throw createIpcError(
+      'RIGHT_SIDEBAR_STATE_TOO_LARGE',
+      `tab state JSON too large: ${bytes} bytes (limit ${MAX_STATE_JSON_BYTES})`,
+    );
   }
+}
+
+/**
+ * hydrate 路径消毒:发布前已把超大 / blob: / 非白名单 favicon 持久化进 DB 的
+ * 存量 tab,读回缓存时直接清洗。否则任何后续 patchState(哪怕只是 title 变更)
+ * 都会把坏 favicon 重新并进 16KB 预检而持续被拒,复发更新循环。
+ * web-browser 以外的 kind 没有 favicon 字段,原样透传。
+ */
+function sanitizeHydratedTabState(kind: string, raw: unknown): unknown {
+  if (kind !== 'web-browser' || !raw || typeof raw !== 'object') return raw;
+  const state = raw as Record<string, unknown>;
+  if (typeof state.favicon !== 'string') return raw;
+  const normalized = normalizePersistableFavicon(state.favicon);
+  if (normalized === state.favicon) return raw;
+  // normalized 为 null(不可持久化)时清成"无图标";为安全 URL 时做归一化。
+  return { ...state, favicon: normalized };
 }
 
 /**
@@ -478,7 +514,7 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
       const tabs: TabState[] = result.tabs.map((row) => ({
         id: row.id,
         kind: row.kind as TabKindId,
-        state: row.state,
+        state: sanitizeHydratedTabState(row.kind, row.state),
       }));
       setBucket(sessionId, { hydrated: true, tabs, activeTabId: result.activeTabId });
     } finally {
@@ -519,9 +555,7 @@ export async function addTab(
       `session ${sessionId} already has ${MAX_TABS_PER_SESSION} tabs (limit reached)`,
     );
   }
-  if (!shouldPersist(sessionId)) {
-    validateMemoryOnlyStateSize(initialState);
-  }
+  validateTabStateSize(initialState);
   const id = makeTabId();
   const position = prev.tabs.length;
   const newTab: TabState = { id, kind, state: initialState };
@@ -957,12 +991,13 @@ export function patchTabState(
   if (idx < 0) return Promise.resolve();
   const oldTab = prev.tabs[idx];
   const newState = patch(oldTab.state);
-  if (!shouldPersist(sessionId)) {
-    try {
-      validateMemoryOnlyStateSize(newState);
-    } catch (err) {
-      return Promise.reject(err);
-    }
+  try {
+    validateTabStateSize(newState);
+  } catch (err) {
+    // patchTabState is intentionally promise-shaped. Keep validation failures
+    // asynchronous so effect callers can handle them with the existing catch
+    // path instead of throwing through React's commit phase.
+    return Promise.reject(err);
   }
   const nextTabs = [...prev.tabs];
   nextTabs[idx] = { ...oldTab, state: newState };

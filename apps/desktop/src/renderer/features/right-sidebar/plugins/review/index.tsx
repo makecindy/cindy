@@ -12,14 +12,18 @@
  * 注册:模块顶层 import-side-effect。plugins/index.ts 把它 import 进来。
  */
 
+import { lazy } from 'react';
 import { FileDiff } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { isSafeBranchBaseRef } from '../../../../../shared/reviewBranchRef';
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
-import { ReviewTabBody } from './ReviewTabBody';
 import type { DiffViewMode } from './DiffViewer/PlainUnifiedDiff';
+
+const ReviewTabBody = lazy(() =>
+  import('./ReviewTabBody').then((module) => ({ default: module.ReviewTabBody })),
+);
 
 export interface ReviewState {
   /** Programmatic exact-turn review target. Null keeps the normal Git-backed review surface. */

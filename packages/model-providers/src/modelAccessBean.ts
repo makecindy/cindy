@@ -8,14 +8,20 @@
  */
 
 export const MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION = 1 as const;
-export const MODEL_ACCESS_CATALOG_SCHEMA_VERSION = 2 as const;
+export const MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION = 2 as const;
+export const MODEL_ACCESS_CATALOG_SCHEMA_VERSION = 3 as const;
 export const MODEL_ACCESS_MODELS_PATH = '/api/model-access/models' as const;
 
 export const MODEL_ACCESS_CURRENCIES = ['CNY', 'USD'] as const;
 export type ModelCurrency = (typeof MODEL_ACCESS_CURRENCIES)[number];
 
-export const MODEL_ACCESS_AGENTS = ['claude-code', 'codex'] as const;
+export const MODEL_ACCESS_V2_AGENTS = ['claude-code', 'codex'] as const;
+export const MODEL_ACCESS_AGENTS = ['claude-code', 'codex', 'pi'] as const;
 export type ModelAgent = (typeof MODEL_ACCESS_AGENTS)[number];
+export type ModelAccessV2Agent = (typeof MODEL_ACCESS_V2_AGENTS)[number];
+
+export const MODEL_ACCESS_WIRE_PROTOCOLS = ['anthropic-messages', 'openai-responses'] as const;
+export type ModelAccessWireProtocol = (typeof MODEL_ACCESS_WIRE_PROTOCOLS)[number];
 
 export const MODEL_ACCESS_EFFORTS = [
   'minimal',
@@ -60,7 +66,7 @@ export interface ModelReferencePrice {
 export interface ModelRegistryRoute {
   providerId: string;
   modelId: string;
-  agents: ModelAgent[];
+  agents: ModelAccessV2Agent[];
   referencePrices?: ModelReferencePrice[];
 }
 
@@ -70,6 +76,7 @@ export interface ModelAgentOverride {
   defaultEffort?: ModelEffort;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
+  wireProtocol?: ModelAccessWireProtocol;
 }
 
 interface ModelRegistryEntryBase {
@@ -94,7 +101,7 @@ export interface ModelRegistryEntryV1 extends ModelRegistryEntryBase {
 }
 
 export interface ModelRegistryEntry extends ModelRegistryEntryBase {
-  newSessionDefault?: ModelAgent[];
+  newSessionDefault?: ModelAccessV2Agent[];
 }
 
 interface ModelRegistryBase {
@@ -204,7 +211,9 @@ export interface ModelCatalogEntry extends ModelCatalogEntryBase {
 
 export interface ListModelsResponse {
   schemaVersion:
-    typeof MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION | typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION;
+    | typeof MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION
+    | typeof MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION
+    | typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION;
   models: ModelCatalogEntry[];
 }
 
@@ -214,7 +223,12 @@ export interface ListModelsResponseV1 {
 }
 
 export interface ListModelsResponseV2 extends ListModelsResponse {
+  schemaVersion: typeof MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION;
+}
+
+export interface ListModelsResponseV3 extends ListModelsResponse {
   schemaVersion: typeof MODEL_ACCESS_CATALOG_SCHEMA_VERSION;
+  models: Array<ModelCatalogEntry & { name: string; contextWindow: number }>;
 }
 
 /** Result returned by local Model Access boundary parsers. */

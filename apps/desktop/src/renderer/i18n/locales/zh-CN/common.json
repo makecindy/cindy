@@ -1547,6 +1547,7 @@
         "refreshAdded": "已发现 {{count}} 个新模型",
         "refreshNoNew": "模型列表已是最新，无新增",
         "refreshFailed": "模型列表刷新失败，请稍后再试",
+        "refreshFetchDisabled": "模型目录远程拉取未启用，已跳过刷新",
         "disableModel": "停用此模型",
         "enableModel": "启用此模型",
         "capabilityGroupHint": "不会出现在对话模型选择中，仅供图像生成等功能使用",
@@ -2424,7 +2425,8 @@
       "toast": {
         "enabled": "对话记录语义索引已启用",
         "disabled": "对话记录语义索引已停止",
-        "toggleFailed": "切换对话嵌入失败"
+        "unavailable": "当前账号或地区暂不支持对话记录语义索引",
+        "toggleFailed": "切换对话记录语义索引失败"
       }
     },
     "messageNavRail": {
@@ -3310,6 +3312,7 @@
         "manageAria": "管理 {{name}}",
         "agentInvoked": "Agent 自动调用",
         "upToDate": "已是最新",
+        "oauthAuthorizationExpired": "授权已失效，需重新连接",
         "installAria": "安装 {{name}}"
       },
       "market": {
@@ -3430,6 +3433,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "需要重新确认权限",
+        "action": "重新确认权限",
+        "actionAria": "重新确认插件「{{name}}」的权限",
+        "noticeTitle": "需要重新确认权限",
+        "bodyLegacy": "Cindy 没有这个插件的权限确认记录，所以先把它停用了。点「重新确认权限」重新过一遍它要的权限，确认后即可继续使用。",
+        "bodyInvalid": "这个插件的权限确认记录已损坏，所以先把它停用了。点「重新确认权限」重新过一遍它要的权限，确认后即可继续使用。",
+        "bodyBuiltinRestart": "这个内置插件的权限记录出了点问题。重启 Cindy 即可自动恢复，无需其他操作。"
+      },
       "install": "安装插件…",
       "empty": "还没有安装任何插件",
       "emptyHint": "可从插件市场安装，或点击右上角导入 .cindy 文件",
@@ -3484,6 +3496,7 @@
         "uninstalled": "已卸载「{{name}}」",
         "installedAsleep": "已安装「{{name}}」（已停用，可随时在此启用）",
         "updated": "「{{name}}」已更新到 v{{version}}",
+        "reapproved": "已恢复「{{name}}」",
         "exported": "已导出「{{name}}」的 .cindy 文件",
         "exportFailed": "导出「{{name}}」失败，请重试",
         "projectDisabled": "已在此项目停用「{{name}}」",
@@ -3503,6 +3516,7 @@
         "metaWithAuthor": "作者 {{author}} · 版本 {{version}}。将安装到本机，可随时卸载。",
         "enableNow": "安装后立即生效",
         "enableNowOpenPanel": "安装后立即生效并打开面板",
+        "manualCount": "随包手册 {{count}} 篇",
         "expandDescription": "展开完整介绍",
         "collapseDescription": "收起介绍"
       },
@@ -3625,6 +3639,7 @@
         "fileInvalid": "不是合法的 .cindy 插件文件",
         "hostUnsupported": "这个插件需要当前版本尚未提供的 Cindy 能力。请先升级 Cindy，再重新安装。",
         "alreadyInstalled": "这个插件已经安装",
+        "approvalRequired": "需要重新确认这个插件的权限后才能继续",
         "commandConflict": "它的指令和已装插件撞名了，先卸载占用方或让作者改名",
         "idReserved": "该 id 使用了官方保留前缀 cindy-，仅随应用内置的插件可用",
         "sourceMissing": "找不到所选文件",
@@ -3742,8 +3757,14 @@
       "updateConfirm": {
         "title": "更新插件「{{name}}」？",
         "body": "版本 {{from}} → {{to}}。将替换现有版本；生效状态与面板位置保持不变。",
+        "oauthClientChanged": "本次更新更换了 OAuth 客户端。使用插件内置授权的已连接账号将在更新后失效，需要重新连接。",
         "confirm": "更新",
         "cancel": "取消"
+      },
+      "reapproveConfirm": {
+        "title": "重新确认「{{name}}」的权限？",
+        "body": "按下方清单重新授权这个已安装的插件，无需重新提供安装包文件。",
+        "confirm": "确认并恢复"
       },
       "pick": {
         "dialogTitle": "选择文件夹",
@@ -3761,6 +3782,7 @@
       },
       "updateAll": {
         "title": "全部更新 · {{count}} 个插件",
+        "collapseDiff": "收起",
         "description": "普通更新会自动完成；真实包请求新增权限时需要逐项确认。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "排队中",
@@ -3770,7 +3792,13 @@
         "statusFailed": "更新失败",
         "background": "后台继续",
         "doneAction": "完成",
-        "doneToast": "批量更新完成：{{done}} 个已更新，{{rest}} 个未完成"
+        "doneToast": "批量更新完成：{{done}} 个已更新，{{rest}} 个未完成",
+        "permissionChanged": "权限变更",
+        "rereview": "重新审阅",
+        "reviewDiff": "查看",
+        "reviewOutdated": "审查过期",
+        "approve": "同意",
+        "skip": "跳过"
       }
     },
     "mcp": {
@@ -4465,12 +4493,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "停用「{{name}}」？",
-      "body": "关闭这个面板会停用整个插件，它的面板和能力都会暂停。之后可以随时在侧边栏「插件」里重新开启。",
+      "body": "关闭这个面板会停用插件并暂停其能力。你可以随时在侧边栏「插件」中重新启用。",
       "confirm": "停用"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "合并回主窗口",
+    "mergeBack": "返回主窗口",
     "unavailable": "该插件面板当前不可用"
   },
   "ghostPanelBubble": {
@@ -4480,6 +4508,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "右侧边栏",
+    "panelError": {
+      "title": "面板加载失败",
+      "description": "这个面板暂时无法显示，其他面板仍可继续使用。",
+      "reload": "重新加载面板"
+    },
     "window": {
       "title": "侧边栏",
       "mergeBack": "合并回主窗口",
@@ -4510,6 +4543,7 @@
         "ghostPanel": "插件面板"
       },
       "controls": {
+        "showAria": "显示侧栏",
         "maximizeAria": "最大化侧栏",
         "restoreAria": "退出最大化",
         "closeAria": "关闭侧栏",
@@ -5700,6 +5734,7 @@
       "startFailed": "开启协同失败",
       "startFailedContinue": "开启协同失败，已改为单任务继续",
       "createWorkerRefreshFailed": "Worker 状态刷新失败，请稍后重试",
+      "assignmentFailed": "Worker 已创建，但无法确认任务是否派发成功。请先查看 Worker 面板，再决定是否重试",
       "openHint": "召集 Worker 协作",
       "disabledHint": "协同模式已关闭，请在设置中重新启用",
       "unavailableHint": "暂时无法确认协同设置，请稍后重试",
@@ -6635,7 +6670,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "远端连接已中断（daemon 可能正在升级或重启）。本轮已结束 — 请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
-      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时不可用，需要审批的操作会被拒绝。想自己确认这些操作，可以把任务切到「默认权限」。",
+      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。想少被打断，可以把任务切到「默认权限」自行掌控。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 会话无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
@@ -8247,7 +8282,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "需要信任此项目后可用"
+    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
   },
   "skillhub": {
     "home": {
@@ -9382,7 +9417,8 @@
     },
     "currentSubscription": {
       "title": "当前订阅",
-      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。"
+      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。",
+      "purchaseBlockedUntilPeriodEnd": "当前套餐将于 {{date}} 结束，届时可购买新套餐。"
     },
     "subscriptionStatus": {
       "INCOMPLETE": "等待完成支付",

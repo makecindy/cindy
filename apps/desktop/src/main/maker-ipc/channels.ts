@@ -580,6 +580,8 @@ export const MAKER_INVOKE = {
   PROJECT_AUTOMATION_REMOVE_SCHEDULE: 'maker:project-automation:remove-schedule',
   // multi-worker Phase 1
   WORKER_CREATE: 'maker:worker:create',
+  /** 新建 Lead 的首条输入 accepted 后，派发此前延后的 UI initial_task。 */
+  WORKER_DISPATCH_UI_ASSIGNMENT: 'maker:worker:dispatch-ui-assignment',
   WORKER_LIST: 'maker:worker:list',
   WORKER_SWITCH_FOCUS: 'maker:worker:switch-focus',
   WORKER_IDLE: 'maker:worker:idle',
@@ -787,9 +789,9 @@ export const MAKER_PUSH = {
   MCP_CHANGED: 'maker:mcp:changed',
   /**
    * 自定义供应商上游错误的结构化广播(payload = ProviderUpstreamErrorEvent:
-   * { agent, providerId, code, retryable, status, detail? })。仅「会话显式路由到
-   * user 供应商」的 status≥400 响应触发,main 侧 30s/(providerId,code) 节流。
-   * renderer 据 code 显示 providerError.* i18n toast + 修复引导。
+   * { agent, providerId, code, retryable, status, detail?, errorType?, reqId? })。
+   * 仅「会话显式路由到 user 供应商」的 status≥400 响应触发,main 侧 30s/(providerId, code) 节流。
+   * renderer 据 code 显示 providerError.* i18n toast + 修复引导;errorType / reqId 供诊断详情。
    */
   PROVIDER_UPSTREAM_ERROR: 'maker:provider:upstream-error',
   /**

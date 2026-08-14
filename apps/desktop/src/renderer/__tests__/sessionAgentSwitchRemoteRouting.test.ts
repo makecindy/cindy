@@ -118,6 +118,31 @@ describe('makerChatStore.mirrorAgentSwitchIntent', () => {
     expect(makerChatStore.getSnapshot(s)).toBe(snap); // 引用不变 = 未触发更新
   });
 
+  it('回归:Pi 权威回声不得被当成非法值清掉切换意图', async () => {
+    const { makerChatStore } = await import('@/lib/makerChatStore');
+    const s = sid();
+    makerChatStore.noteAgentSwitchIntent(s, 'pi', {
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
+    });
+    const snap = makerChatStore.getSnapshot(s);
+
+    makerChatStore.mirrorAgentSwitchIntent(s, {
+      targetAgentKind: 'pi',
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
+    });
+
+    expect(makerChatStore.getSnapshot(s)).toBe(snap);
+    expect(makerChatStore.getSnapshot(s).agentSwitchIntent).toEqual({
+      target: 'pi',
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
+      effort: undefined,
+      fastMode: undefined,
+    });
+  });
+
   it('null / 非法值 = 无意图 → 清除', async () => {
     const { makerChatStore } = await import('@/lib/makerChatStore');
     const s = sid();

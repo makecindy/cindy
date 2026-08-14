@@ -263,6 +263,36 @@ describe('按需拉起', () => {
     expect(r).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
     expect(h.dispatcher.pendingCount()).toBe(0);
   });
+
+  it('owner changes while spawn is pending: stops the runtime and never dispatches', async () => {
+    let generation = 1;
+    const invalidated = vi.fn();
+    const spawnStarted = deferred();
+    const releaseSpawn = deferred();
+    const h = makeHarness({
+      state: 'off',
+      ownerScope: {
+        capture: () => generation,
+        isCurrent: (scope) => scope === generation,
+        isStable: (scope) => scope === generation,
+        onInvalidated: invalidated,
+      },
+    });
+    h.deps.spawn.mockImplementation(async () => {
+      spawnStarted.resolve();
+      await releaseSpawn.promise;
+      return { ok: true as const };
+    });
+
+    const pending = h.dispatcher.callGhostTool(CALL);
+    await spawnStarted.promise;
+    generation = 2;
+    releaseSpawn.resolve();
+
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
+    expect(invalidated).toHaveBeenCalledWith('art');
+  });
 });
 
 describe('配对交卷', () => {

@@ -1498,6 +1498,19 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/cindy-brain/forgeScaffoldWorkerProcess.ts',
+          config: 'vite.preload.config.ts',
+          // Stable-parent scaffold publish/cleanup runs in a utility process;
+          // the worker's cwd is the validated parent directory capability.
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/cindy-brain/ghostSnapshotWorkerProcess.ts',
+          config: 'vite.preload.config.ts',
+          // Approval snapshot mutation is cwd-relative inside a stable-parent worker.
+          target: 'preload',
+        },
+        {
           entry: 'src/preload/preload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
@@ -1505,6 +1518,18 @@ const config: ForgeConfig = {
         {
           // 资源用量独立窗不加载主应用的通用 bridge 与模块级同步初始化。
           entry: 'src/preload/resourceUsagePreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          // 右侧栏独立子窗口专用 preload:最小权限 bridge,不加载主 preload 完整桥。
+          entry: 'src/preload/sidebarWindowPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          // 插件面板独立窗口专用 preload:最小权限 bridge。
+          entry: 'src/preload/ghostPanelWindowPreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
         },

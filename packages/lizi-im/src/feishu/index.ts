@@ -105,8 +105,8 @@ export class FeishuIM extends BaseIM implements ChannelIM {
 
   // ── outbound ────────────────────────────────────────────────────────────────
 
-  sendText(openId: string, text: string): Promise<{ messageId: string }> {
-    return outbound.sendText(openId, text);
+  sendText(userId: string, text: string): Promise<{ messageId: string }> {
+    return outbound.sendText(userId, text);
   }
 
   /**
@@ -120,12 +120,12 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * 适合发"提示语"类消息 — 文案里有 *strong*, `code`, [link] 等且想让用户
    * 看到正确渲染的场合。
    */
-  sendMarkdownText(openId: string, markdown: string): Promise<{ messageId: string }> {
-    return outbound.sendInteractive(openId, { body: markdown, buttons: [] });
+  sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }> {
+    return outbound.sendInteractive(userId, { body: markdown, buttons: [] });
   }
 
-  startStreamingText(openId: string, initial?: string): Promise<StreamingTextHandle> {
-    return streamingText.start(openId, initial);
+  startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
+    return streamingText.start(userId, initial);
   }
 
   /**
@@ -136,16 +136,31 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     return streamingText.patchMarkdown(messageId, markdown);
   }
 
-  sendInteractiveCard(openId: string, spec: InteractiveCardSpec): Promise<{ messageId: string }> {
-    return outbound.sendInteractive(openId, spec);
+  sendInteractiveCard(
+    userId: string,
+    spec: InteractiveCardSpec,
+    opts?: { threadTs?: string; deliverToOwnerDm?: boolean; ownerDmNote?: string },
+  ): Promise<{ messageId: string }> {
+    return outbound.sendInteractive(userId, spec, opts);
   }
 
   updateInteractiveCard(messageId: string, spec: InteractiveCardSpec): Promise<void> {
     return outbound.updateInteractive(messageId, spec);
   }
 
-  sendFile(openId: string, absPath: string, displayName?: string): Promise<SendFileResult> {
-    return outbound.sendFile(openId, absPath, displayName);
+  sendFile(userId: string, absPath: string, displayName?: string): Promise<SendFileResult> {
+    return outbound.sendFile(userId, absPath, displayName);
+  }
+
+  /**
+   * 拉群会话最近历史(群 lane 触发时 adapter 拼上下文前缀用)。权限不足或
+   * 调用失败返回空数组 — 上下文降级, turn 照跑。
+   */
+  fetchRecentChatMessages(
+    chatId: string,
+    opts?: { limit?: number },
+  ): Promise<outbound.RecentChatMessage[]> {
+    return outbound.fetchRecentChatMessages(chatId, opts);
   }
 
   /**
