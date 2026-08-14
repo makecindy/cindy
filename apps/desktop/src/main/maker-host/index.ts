@@ -1813,65 +1813,98 @@ export function getMaker(): Maker {
             });
           }
         });
-        const providerForwardEntries: Array<{
+        const providerForwardEntries = new Map<string, {
           key: string | null;
           pending: Promise<RemoteForward>;
-          handle: RemoteForward;
-        }> = [];
-        try {
-          for (const spec of hostProxyForwards ?? []) {
-            const local = new URL(spec.localUrl);
-            const localHost = local.hostname.replace(/^\[|\]$/g, '');
-            const localPort = Number(local.port);
-            if (
-              !['127.0.0.1', '::1', 'localhost'].includes(localHost) ||
-              !Number.isInteger(localPort) ||
-              localPort <= 0
-            ) {
-              throw new Error(`pi host proxy forward requires an explicit loopback port: ${spec.localUrl}`);
-            }
-            const key = sessionId
-              ? [remoteHostId, sessionId, `${localHost}:${localPort}`, String(spec.remotePort)].join('\0')
-              : null;
-            let pending = key ? piRemoteProviderForwardBySession.get(key) : undefined;
-            if (!pending) {
-              pending = remoteHost.ensureRemoteForward({
-                localHost,
-                localPort,
-                preferredRemotePort: spec.remotePort,
-                exactRemotePort: true,
-              });
-              if (key) piRemoteProviderForwardBySession.set(key, pending);
-            }
+          handle?: RemoteForward;
+        }>();
+        let providerForwardsReleased = false;
+        const releaseProviderForwardEntry = async ({
+          key,
+          pending,
+          handle,
+        }: {
+          key: string | null;
+          pending: Promise<RemoteForward>;
+          handle?: RemoteForward;
+        }): Promise<void> => {
+          let resolved = handle;
+          if (!resolved) {
             try {
-              const handle = await pending;
-              providerForwardEntries.push({ key, pending, handle });
-            } catch (error) {
-              if (key && piRemoteProviderForwardBySession.get(key) === pending) {
-                piRemoteProviderForwardBySession.delete(key);
-              }
-              throw error;
+              resolved = await pending;
+            } catch {
+              return;
             }
           }
+          if (key && piRemoteProviderForwardBySession.get(key) !== pending) return;
+          if (key) piRemoteProviderForwardBySession.delete(key);
+          await resolved.close();
+        };
+        const releaseProviderForwards = async (): Promise<void> => {
+          if (providerForwardsReleased) return;
+          providerForwardsReleased = true;
+          const entries = Array.from(providerForwardEntries.values());
+          providerForwardEntries.clear();
+          await Promise.all(entries.map(releaseProviderForwardEntry));
+        };
+        const ensureProviderForward = async (spec: {
+          localUrl: string;
+          remotePort: number;
+        }): Promise<void> => {
+          if (providerForwardsReleased) {
+            throw new Error('pi host proxy forward cannot be established after transport cleanup');
+          }
+          const local = new URL(spec.localUrl);
+          const localHost = local.hostname.replace(/^\[|\]$/g, '');
+          const localPort = Number(local.port);
+          if (
+            !['127.0.0.1', '::1', 'localhost'].includes(localHost) ||
+            !Number.isInteger(localPort) ||
+            localPort <= 0
+          ) {
+            throw new Error(`pi host proxy forward requires an explicit loopback port: ${spec.localUrl}`);
+          }
+          const entryId = [`${localHost}:${localPort}`, String(spec.remotePort)].join('\0');
+          const existing = providerForwardEntries.get(entryId);
+          if (existing) {
+            await existing.pending;
+            return;
+          }
+          const key = sessionId
+            ? [remoteHostId, sessionId, `${localHost}:${localPort}`, String(spec.remotePort)].join('\0')
+            : null;
+          let pending = key ? piRemoteProviderForwardBySession.get(key) : undefined;
+          if (!pending) {
+            pending = remoteHost.ensureRemoteForward({
+              localHost,
+              localPort,
+              preferredRemotePort: spec.remotePort,
+              exactRemotePort: true,
+            });
+            if (key) piRemoteProviderForwardBySession.set(key, pending);
+          }
+          const entry = { key, pending, handle: undefined as RemoteForward | undefined };
+          providerForwardEntries.set(entryId, entry);
+          try {
+            entry.handle = await pending;
+          } catch (error) {
+            if (providerForwardEntries.get(entryId) === entry) {
+              providerForwardEntries.delete(entryId);
+            }
+            if (key && piRemoteProviderForwardBySession.get(key) === pending) {
+              piRemoteProviderForwardBySession.delete(key);
+            }
+            throw error;
+          }
+        };
+        try {
+          for (const spec of hostProxyForwards ?? []) {
+            await ensureProviderForward(spec);
+          }
         } catch (error) {
-          await Promise.allSettled(
-            providerForwardEntries.map(async ({ key, pending, handle }) => {
-              if (key && piRemoteProviderForwardBySession.get(key) !== pending) return;
-              if (key) piRemoteProviderForwardBySession.delete(key);
-              await handle.close();
-            }),
-          );
+          await Promise.allSettled([releaseProviderForwards()]);
           throw error;
         }
-        const releaseProviderForwards = async (): Promise<void> => {
-          await Promise.all(
-            providerForwardEntries.map(async ({ key, pending, handle }) => {
-              if (key && piRemoteProviderForwardBySession.get(key) !== pending) return;
-              if (key) piRemoteProviderForwardBySession.delete(key);
-              await handle.close();
-            }),
-          );
-        };
         let transport;
         try {
           transport = createSshPiDaemonTransport({
@@ -1887,11 +1920,15 @@ export function getMaker(): Maker {
           await releaseProviderForwards();
           throw error;
         }
+        transport.ensureHostProxyForward = ensureProviderForward;
         if (transport.killRemoteSession) {
           const killRemoteSession = transport.killRemoteSession.bind(transport);
           transport.killRemoteSession = async () => {
-            await killRemoteSession();
-            await releaseProviderForwards();
+            try {
+              await killRemoteSession();
+            } finally {
+              await releaseProviderForwards();
+            }
           };
         } else {
           const close = transport.close.bind(transport);

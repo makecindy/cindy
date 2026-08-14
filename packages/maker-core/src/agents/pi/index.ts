@@ -1759,6 +1759,7 @@ export class PiAgent extends BaseAgent {
     // preparePiExtraSpawnConfig 注册、但 handle 尚未交出,close() 不会跑 → 单独
     // 兜底注销 ctx 再抛(构造失败没有 proc 可关)。catch 必抛,故其后 proc 恒已赋值。
     let proc: PiRpcProcess;
+    let sessionTransport: PiTransport | undefined;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
     let runtimeCapabilityGeneration = 0;
     const runtimeCapabilityListeners = new Set<(
@@ -1913,15 +1914,14 @@ export class PiAgent extends BaseAgent {
         spawnEnv[PI_PERMISSION_HASH_ENV] = permissionSnapshotHash;
       }
       mergeLoopbackNoProxy(spawnEnv);
+      const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
       const { transport } = await this.createTransport(
         {
           args,
           cwd: opts.workingDir,
           env: spawnEnv,
           sessionId: opts.sessionId,
-          hostProxyForwards: nativeProviders.flatMap((provider) =>
-            provider.hostProxyForward ? [provider.hostProxyForward] : [],
-          ),
+          hostProxyForwards: initialHostProxyForward ? [initialHostProxyForward] : [],
         },
         (pid) =>
           this.deps.registerLocalAgentProcess?.({
@@ -1932,6 +1932,7 @@ export class PiAgent extends BaseAgent {
         opts.remoteHostId,
         effectivePiBinaryPath,
       );
+      sessionTransport = transport;
       proc = new PiRpcProcess({
         transport,
         logger: this.deps.logger,
@@ -2373,6 +2374,21 @@ export class PiAgent extends BaseAgent {
       const nextEffortSnapshot = resolveStartupEffortSnapshot(provider, model);
       if (setOpts?.effort) {
         assertStartupEffortAllowed(nextEffortSnapshot, setOpts.effort);
+      }
+      // 远端启动快照保留会话内可切换的全部 native provider，但 SSH reverse-forward
+      // 只为当前实际路由建立。否则用户仅仅登录过 xAI，就会在启动任意 Cindy/BYOM
+      // 远程会话时抢占固定端口 47989；端口冲突会阻断一个完全不使用 xAI 的任务。
+      // 切到 host-backed provider 前先按需建隧道，且必须排在子代理路由快照与
+      // set_model RPC 之前：建隧道失败时父子路由都保持原值。
+      const hostProxyForward = nativeProviderById.get(provider)?.hostProxyForward;
+      if (remote && hostProxyForward) {
+        if (!sessionTransport?.ensureHostProxyForward) {
+          throw new Error(
+            `[REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE] pi: provider '${provider}' requires a Desktop host proxy forward, ` +
+              'but this remote transport cannot establish one; restart the session after reconnecting the remote host.',
+          );
+        }
+        await sessionTransport.ensureHostProxyForward(hostProxyForward);
       }
       // 子代理路由快照必须**先落盘、再切 pi 侧模型**,顺序不能反(review)。
       //

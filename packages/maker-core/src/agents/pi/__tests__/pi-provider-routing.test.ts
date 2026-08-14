@@ -1665,6 +1665,126 @@ describe('Pi provider-aware model routing', () => {
     expect(disposed).toBe(2);
   });
 
+  it('defers the remote xAI forward until a running gateway session actually switches to xAI', async () => {
+    const forwardEvents: string[] = [];
+    let rejectForward = true;
+    let remoteWrites = 0;
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+      ensureHostProxyForward: async (spec) => {
+        forwardEvents.push(`forward:${spec.localUrl}:${spec.remotePort}`);
+        if (rejectForward) throw new Error('remote port already in use');
+      },
+    };
+    let transportOptions:
+      Parameters<NonNullable<AgentDeps['getRemotePiTransport']>>[1] | undefined;
+    const base = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: 'xai',
+            name: 'xAI',
+            baseUrl: 'http://127.0.0.1:47989',
+            api: 'anthropic-messages',
+            apiKeyEnvVar: 'CINDY_PI_API_KEY',
+            models: [{ id: 'xai/grok-4.6' }],
+            modelIdAliases: {
+              'grok-4.6': 'xai/grok-4.6',
+              'xai/grok-4.6': 'xai/grok-4.6',
+            },
+            hostProxyForward: {
+              localUrl: 'http://127.0.0.1:18765',
+              remotePort: 47989,
+            },
+          },
+        ],
+        env: {},
+      }),
+      [
+        {
+          id: 'gateway-model',
+          displayName: 'Gateway model',
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+        {
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    );
+    captured.requestHandler = async (command) => {
+      if (command.type === 'set_model') forwardEvents.push('set_model');
+      return command.type === 'get_state'
+        ? { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } }
+        : { success: true, data: {} };
+    };
+    const agent = new PiAgent({
+      ...base,
+      runtimeConfig: {
+        ...base.runtimeConfig,
+        remoteEndpoint: 'https://gateway.example.test',
+      },
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async () => {
+          remoteWrites += 1;
+        },
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+      getRemotePiTransport: async (_hostId, opts) => {
+        transportOptions = opts;
+        return remoteStub;
+      },
+    });
+    const handle = await agent.startSession({
+      sessionId: 'remote-gateway-then-xai',
+      workingDir: cwd,
+      model: 'gateway-model',
+      providerId: 'xd',
+      remoteHostId: 'remote-host',
+    });
+
+    expect(transportOptions?.hostProxyForwards).toEqual([]);
+    expect(forwardEvents).toEqual([]);
+
+    captured.requests.length = 0;
+    remoteWrites = 0;
+    await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).rejects.toThrow(
+      /remote port already in use/,
+    );
+    expect(remoteWrites).toBe(0);
+    expect(captured.requests).not.toContainEqual({
+      type: 'set_model',
+      provider: 'xai',
+      modelId: 'xai/grok-4.6',
+    });
+
+    rejectForward = false;
+    forwardEvents.length = 0;
+    await handle.setModel!('grok-4.6', { providerId: 'xai' });
+    expect(forwardEvents).toEqual([
+      'forward:http://127.0.0.1:18765:47989',
+      'set_model',
+    ]);
+    await handle.close();
+  });
+
   it('hashes the remote permission snapshot into spawn env so a later Full-access attach restarts', async () => {
     const remoteStub: import('../transport.js').PiTransport = {
       writeLine: async () => {},
