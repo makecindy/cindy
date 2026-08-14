@@ -18,7 +18,11 @@ import {
   type AutoReviewRequest,
 } from './auto-review-decision.js';
 
-const roots = ['/repo', '/extra'];
+const rootAccess = {
+  primaryRoot: '/repo',
+  readRoots: ['/repo', '/extra'],
+  writableRoots: ['/repo'],
+};
 
 afterEach(() => {
   vi.useRealTimers();
@@ -32,7 +36,7 @@ function request(action: AutoReviewRequest['action']): AutoReviewRequest {
     model: 'current-model',
     userIntent: 'Fix the type error',
     action,
-    workspaceRoots: roots,
+    rootAccess,
     platform: 'linux',
   };
 }

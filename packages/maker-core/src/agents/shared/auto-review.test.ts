@@ -12,9 +12,18 @@ import {
   classifyShellCommand,
   isProtectedSystemPath,
   reviewAction,
+  type WorkspaceRootAccess,
 } from './auto-review.js';
 
-const roots = ['/repo', '/extra'];
+function rootAccess(primaryRoot: string, readOnlyRoots: string[] = []): WorkspaceRootAccess {
+  return {
+    primaryRoot,
+    readRoots: [primaryRoot, ...readOnlyRoots],
+    writableRoots: [primaryRoot],
+  };
+}
+
+const roots = rootAccess('/repo', ['/extra']);
 
 describe('reviewAction — 非 shell 动作', () => {
   it('read / session-state → auto-approve', () => {
@@ -35,7 +44,7 @@ describe('reviewAction — file-write 工作区边界', () => {
     expect(reviewAction({ kind: 'file-write', path: '/repo/x.ts' }, roots)).toBe('auto-approve');
   });
   it('额外只读引用目录(非首 root)写 → prompt(additionalDirectories 可读不可写)', () => {
-    // /extra 是只读引用目录,写入须升级,不能因它在 workspaceRoots 里就当可写(codex 报)。
+    // /extra 是只读引用目录,写入须升级,不能因它在 readRoots 里就当可写(codex 报)。
     expect(reviewAction({ kind: 'file-write', path: '/extra/y.ts' }, roots)).toBe('prompt');
   });
   it('区外(非系统)/ .. 逃逸 / 前缀不整段 → prompt(灰区,交 reviewer)', () => {
@@ -48,21 +57,21 @@ describe('reviewAction — file-write 工作区边界', () => {
       expect(reviewAction({ kind: 'file-write', path: p }, roots)).toBe('prompt-each-time');
     }
     expect(reviewAction({ kind: 'file-write', path: '/repo/../../../etc/hosts' }, roots)).toBe('prompt-each-time');
-    expect(reviewAction({ kind: 'file-write', path: '/private/etc/passwd' }, ['/var/f/ws'], { platform: 'darwin' })).toBe('prompt-each-time');
-    expect(reviewAction({ kind: 'file-write', path: 'C:\\Windows\\System32\\x' }, ['C:\\repo'], { platform: 'win32' })).toBe('prompt-each-time');
+    expect(reviewAction({ kind: 'file-write', path: '/private/etc/passwd' }, rootAccess('/var/f/ws'), { platform: 'darwin' })).toBe('prompt-each-time');
+    expect(reviewAction({ kind: 'file-write', path: 'C:\\Windows\\System32\\x' }, rootAccess('C:\\repo'), { platform: 'win32' })).toBe('prompt-each-time');
   });
   it('path 缺失 → prompt(无法确认在区内)', () => {
     expect(reviewAction({ kind: 'file-write', path: undefined }, roots)).toBe('prompt');
   });
   it('macOS firmlink:/private/var 与 /var 对齐(仅 darwin);Linux 不抹平', () => {
     // 显式传 platform,使断言在任何宿主(含 Linux CI)上确定。
-    expect(reviewAction({ kind: 'file-write', path: '/private/var/f/ws/a' }, ['/var/f/ws'], { platform: 'darwin' })).toBe('auto-approve');
+    expect(reviewAction({ kind: 'file-write', path: '/private/var/f/ws/a' }, rootAccess('/var/f/ws'), { platform: 'darwin' })).toBe('auto-approve');
     // /private/etc 归 /etc(系统目录)→ 高影响红线(见系统目录写用例)。
-    expect(reviewAction({ kind: 'file-write', path: '/private/etc/passwd' }, ['/var/f/ws'], { platform: 'darwin' })).toBe('prompt-each-time');
+    expect(reviewAction({ kind: 'file-write', path: '/private/etc/passwd' }, rootAccess('/var/f/ws'), { platform: 'darwin' })).toBe('prompt-each-time');
     // Linux:/private/tmp 与 /tmp 无关,写 /private/tmp/repo/x(root=/tmp/repo)不再被误判为区内 → prompt。
-    expect(reviewAction({ kind: 'file-write', path: '/private/tmp/repo/x' }, ['/tmp/repo'], { platform: 'linux' })).toBe('prompt');
+    expect(reviewAction({ kind: 'file-write', path: '/private/tmp/repo/x' }, rootAccess('/tmp/repo'), { platform: 'linux' })).toBe('prompt');
     // darwin 上同一路径仍抹平为区内。
-    expect(reviewAction({ kind: 'file-write', path: '/private/tmp/repo/x' }, ['/tmp/repo'], { platform: 'darwin' })).toBe('auto-approve');
+    expect(reviewAction({ kind: 'file-write', path: '/private/tmp/repo/x' }, rootAccess('/tmp/repo'), { platform: 'darwin' })).toBe('auto-approve');
   });
 });
 
@@ -72,6 +81,107 @@ describe('reviewAction — exec 实际 cwd 边界', () => {
     expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/extra' }, roots)).toBe('prompt');
     expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/Users/me' }, roots)).toBe('prompt');
     expect(reviewAction({ kind: 'exec', command: 'rm -rf build', cwd: '/Users/me' }, roots)).toBe('prompt-each-time');
+  });
+});
+
+describe('显式 root access 契约', () => {
+  const reordered: WorkspaceRootAccess = {
+    primaryRoot: '/repo',
+    readRoots: ['/extra', '/repo'],
+    writableRoots: ['/repo'],
+  };
+
+  it('相对路径按 primaryRoot 解析，写权限不依赖 readRoots 顺序', () => {
+    expect(reviewAction({ kind: 'file-write', path: 'src/a.ts' }, reordered)).toBe('auto-approve');
+    expect(reviewAction({ kind: 'file-write', path: '/extra/a.ts' }, reordered)).toBe('prompt');
+  });
+
+  it('cd 可进入只读根做只读工作，但破坏与 git -C 不会把只读根当成可写/可信 cwd', () => {
+    expect(classifyShellCommand('cd /extra && rg TODO .', reordered)).toBe('auto-approve');
+    expect(classifyShellCommand('cd /extra && rm -rf build', reordered)).toBe('prompt-each-time');
+    expect(classifyShellCommand('git -C /repo status', reordered)).toBe('auto-approve');
+    expect(classifyShellCommand('git -C /extra status', reordered)).toBe('prompt');
+  });
+
+  it('跨段 cwd 仍供普通命令解析，但 Git 不把 shell 内改出的 cwd 当 host-trusted', () => {
+    expect(classifyShellCommand('cd /extra && rg TODO .', reordered))
+      .toBe('auto-approve');
+    expect(classifyShellCommand('cd /extra && git diff', reordered))
+      .toBe('prompt');
+    expect(classifyShellCommand('pushd /extra && git status', reordered))
+      .toBe('prompt');
+    expect(classifyShellCommand('cd /extra && git -C /extra status', reordered))
+      .toBe('prompt');
+    expect(classifyShellCommand('cd /extra && git -C /repo status', reordered))
+      .toBe('prompt');
+    expect(classifyShellCommand('cd /extra && env -C /extra git status', reordered))
+      .toBe('prompt');
+    expect(classifyShellCommand('cd /extra && env -C /repo git status', reordered))
+      .toBe('prompt');
+    expect(classifyShellCommand('env -C /extra git diff', reordered))
+      .toBe('prompt');
+  });
+
+  it('env 即使重新切到同名 host cwd，也不能为 Git 重建信任锚', () => {
+    expect(classifyShellCommand('env -C /repo git status', reordered))
+      .toBe('prompt');
+    expect(classifyShellCommand('env --chdir=/repo git diff', reordered))
+      .toBe('prompt');
+    // 这个来源标记只收紧 Git；普通只读命令继续使用 wrapper 解析出的 cwd。
+    expect(classifyShellCommand('env -C /repo rg TODO .', reordered))
+      .toBe('auto-approve');
+  });
+
+  it('Windows root 同样按显式权限判定，不依赖 readRoots 位置', () => {
+    const windows: WorkspaceRootAccess = {
+      primaryRoot: 'C:\\repo',
+      readRoots: ['D:\\reference', 'C:\\repo'],
+      writableRoots: ['C:\\repo'],
+    };
+    expect(reviewAction({ kind: 'file-write', path: 'src\\a.ts' }, windows, { platform: 'win32' }))
+      .toBe('auto-approve');
+    expect(reviewAction({ kind: 'file-write', path: 'D:\\reference\\a.ts' }, windows, { platform: 'win32' }))
+      .toBe('prompt');
+    expect(classifyShellCommand('git -C C:\\repo status', windows, { platform: 'win32' }))
+      .toBe('auto-approve');
+  });
+
+  it('重叠可写根按最具体根判定整根删除，POSIX 与 Windows 同口径', () => {
+    const posix: WorkspaceRootAccess = {
+      primaryRoot: '/repo',
+      readRoots: ['/repo', '/repo/packages/core'],
+      writableRoots: ['/repo', '/repo/packages/core'],
+    };
+    expect(classifyShellCommand('rm -rf /repo/packages/core', posix))
+      .toBe('prompt-each-time');
+    expect(classifyShellCommand('rm -rf /repo/packages/core/build', posix))
+      .toBe('prompt');
+
+    const windows: WorkspaceRootAccess = {
+      primaryRoot: 'C:\\repo',
+      readRoots: ['C:\\repo', 'C:\\repo\\packages\\core'],
+      writableRoots: ['C:\\repo', 'C:\\repo\\packages\\core'],
+    };
+    expect(classifyShellCommand('rm -rf C:\\repo\\packages\\core', windows, { platform: 'win32' }))
+      .toBe('prompt-each-time');
+    expect(classifyShellCommand('rm -rf C:\\repo\\packages\\core\\build', windows, { platform: 'win32' }))
+      .toBe('prompt');
+
+    const mixedCaseWindows: WorkspaceRootAccess = {
+      primaryRoot: 'C:\\Repo',
+      readRoots: ['C:\\Repo', 'c:\\REPO\\Packages\\Core'],
+      writableRoots: ['C:\\Repo', 'c:\\REPO\\Packages\\Core'],
+    };
+    expect(classifyShellCommand(
+      'rm -rf C:\\repo\\PACKAGES\\core',
+      mixedCaseWindows,
+      { platform: 'win32' },
+    )).toBe('prompt-each-time');
+    expect(classifyShellCommand(
+      'rm -rf C:\\repo\\PACKAGES\\core\\build',
+      mixedCaseWindows,
+      { platform: 'win32' },
+    )).toBe('prompt');
   });
 });
 
@@ -289,7 +399,7 @@ describe('classifyShellCommand — 极高风险才 prompt-each-time', () => {
     expect(classifyShellCommand("xargs -a /tmp/items sh -c 'echo item'", roots)).toBe('prompt');
   });
   it('Windows 路径保留反斜杠并按首个可写根判定', () => {
-    const windowsRoots = ['C:\\repo', 'C:\\extra'];
+    const windowsRoots = rootAccess('C:\\repo', ['C:\\extra']);
     expect(classifyShellCommand('rm -rf C:\\repo\\build', windowsRoots, {
       cwd: 'C:\\repo',
       platform: 'win32',
@@ -417,7 +527,7 @@ describe('classifyShellCommand — curl/wget 带查询串的 GET(exfil 面)', ()
 });
 
 describe('reviewAction — Windows 绝对路径边界(盘符路径不再被当相对路径拼进工作区)', () => {
-  const winRoots = ['C:\\Users\\me\\project'];
+  const winRoots = rootAccess('C:\\Users\\me\\project');
   it('工作区外的 Windows 绝对写:系统目录 → prompt-each-time,非系统 → prompt', () => {
     expect(reviewAction({ kind: 'file-write', path: 'C:\\Windows\\System32\\drivers\\etc\\hosts' }, winRoots)).toBe('prompt-each-time');
     expect(reviewAction({ kind: 'file-write', path: 'D:\\secrets\\x.txt' }, winRoots)).toBe('prompt');
@@ -437,7 +547,7 @@ describe('reviewAction — Windows 绝对路径边界(盘符路径不再被当�
     expect(reviewAction({ kind: 'file-write', path: 'C:..\\Windows\\System32\\evil.exe' }, winRoots)).toBe('prompt');
     expect(reviewAction({ kind: 'file-write', path: 'C:evil.txt' }, winRoots)).toBe('prompt');
     // POSIX 工作区下盘符相对路径同样 fail-closed 升级(不拼进 /repo)。
-    expect(reviewAction({ kind: 'file-write', path: 'C:..\\..\\etc\\passwd' }, ['/repo'])).toBe('prompt');
+    expect(reviewAction({ kind: 'file-write', path: 'C:..\\..\\etc\\passwd' }, rootAccess('/repo'))).toBe('prompt');
   });
 });
 
@@ -1606,7 +1716,7 @@ describe('引号内字面括号 / -execdir 相对目标 / -files0-from 动态根
   });
 
   it('-execdir 的相对破坏目标 cwd 随匹配项变动、不可证 → 必问', () => {
-    const r = ['/repo'];
+    const r = rootAccess('/repo');
     // -execdir 在匹配项目录执行,相对 `cindy` 实际可能删掉整个 /repo → 必问。
     expect(classifyShellCommand('find /repo -maxdepth 0 -execdir rm -rf cindy \\;', r)).toBe('prompt-each-time');
     // 反例:同样相对目标但用 -exec(会话 cwd 解析)且在区内 → 灰区。

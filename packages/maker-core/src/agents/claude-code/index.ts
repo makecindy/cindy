@@ -124,7 +124,7 @@ import {
   resolveAutoReviewDecision,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
-import type { ReviewableAction } from '../shared/auto-review.js';
+import type { ReviewableAction, WorkspaceRootAccess } from '../shared/auto-review.js';
 import {
   resolveAgentCredentialMode,
   resolveEffectiveCredentialModeFromAuthSource,
@@ -1895,12 +1895,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       const hostApprovalPresentation = mcpApprovalPresentation(toolName, input);
       let forcePrompt = turnPolicyForcePrompt;
       if (mutablePermissionMode === 'auto' && !toolName.startsWith('mcp__')) {
-        const workspaceRoots = [opts.workingDir, ...mutableExtraDirs].filter(
+        const readRoots = [opts.workingDir, ...mutableExtraDirs].filter(
           (d): d is string => typeof d === 'string' && d.length > 0,
         );
         const autoDecision = await reviewAutoAction(
           normalizeBuiltinToolForAutoReview(toolName, input),
-          workspaceRoots,
+          {
+            primaryRoot: opts.workingDir,
+            readRoots,
+            writableRoots: [opts.workingDir],
+          },
           opts.remoteHostId ? 'linux' : process.platform,
         );
         // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)
@@ -2108,7 +2112,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     });
     const reviewAutoAction = (
       action: ReviewableAction,
-      workspaceRoots: string[],
+      rootAccess: WorkspaceRootAccess,
       platform: NodeJS.Platform,
     ): Promise<AutoReviewDecision> => {
       const request = {
@@ -2118,7 +2122,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
         action,
-        workspaceRoots,
+        rootAccess,
         platform,
       };
       const key = JSON.stringify(request);
@@ -2952,9 +2956,13 @@ export class ClaudeCodeAgent extends BaseAgent {
             ) {
               const autoDecision = await reviewAutoAction(
                 normalizeBuiltinToolForAutoReview(remoteToolName, params.input ?? {}),
-                [opts.workingDir].filter(
-                  (d): d is string => typeof d === 'string' && d.length > 0,
-                ),
+                {
+                  primaryRoot: opts.workingDir,
+                  readRoots: [opts.workingDir].filter(
+                    (d): d is string => typeof d === 'string' && d.length > 0,
+                  ),
+                  writableRoots: [opts.workingDir],
+                },
                 'linux',
               );
               if (!remoteTurnPolicyForcePrompt && autoDecision.verdict === 'allow') {

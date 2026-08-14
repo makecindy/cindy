@@ -18,6 +18,7 @@ import {
   reviewAction,
   type ReviewableAction,
   type ReviewVerdict,
+  type WorkspaceRootAccess,
 } from '../shared/auto-review.js';
 
 export type PiAutoReviewVerdict = ReviewVerdict;
@@ -27,10 +28,8 @@ export interface PiAutoReviewContext {
   toolName: string;
   /** 工具入参(bridge 透传的原始对象)。 */
   input: Record<string, unknown>;
-  /** 会话工作区根:cwd,绝对路径(pi 无 extraDirs)。 */
-  workspaceRoots: string[];
-  /** 可读根:工作区 + Pi 附加只读引用目录。写操作仍只看 workspaceRoots。 */
-  readRoots?: string[];
+  /** 会话显式读写根；附加目录只出现在 readRoots。 */
+  rootAccess: WorkspaceRootAccess;
 }
 
 /** 给当前模型 reviewer 的完整 MCP/未知工具证据；输入来自 JSON RPC，可安全序列化。 */
@@ -109,5 +108,5 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
 }
 
 export function classifyPiToolForAutoReview(ctx: PiAutoReviewContext): PiAutoReviewVerdict {
-  return reviewAction(normalizePiToolForAutoReview(ctx), ctx.readRoots ?? ctx.workspaceRoots);
+  return reviewAction(normalizePiToolForAutoReview(ctx), ctx.rootAccess);
 }

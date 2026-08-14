@@ -12,11 +12,16 @@ import {
   classifyBuiltinToolForAutoReview,
   normalizeBuiltinToolForAutoReview,
 } from '../auto-review-policy.js';
+import type { WorkspaceRootAccess } from '../../shared/auto-review.js';
 
-const roots = ['/repo', '/extra']; // 工作区根:cwd + 一个额外目录
+const roots: WorkspaceRootAccess = {
+  primaryRoot: '/repo',
+  readRoots: ['/repo', '/extra'],
+  writableRoots: ['/repo'],
+}; // 工作区根:cwd + 一个额外只读目录
 
-function verdict(toolName: string, input: unknown, workspaceRoots = roots) {
-  return classifyBuiltinToolForAutoReview({ toolName, input, workspaceRoots });
+function verdict(toolName: string, input: unknown, rootAccess = roots) {
+  return classifyBuiltinToolForAutoReview({ toolName, input, rootAccess });
 }
 
 describe('classifyBuiltinToolForAutoReview — 只读与安全状态工具', () => {
@@ -80,28 +85,44 @@ describe('classifyBuiltinToolForAutoReview — 文件写(结构化 path 精确�
     expect(classifyBuiltinToolForAutoReview({
       toolName: 'Write',
       input: { file_path: '/private/var/folders/x/ws/a.ts' },
-      workspaceRoots: ['/var/folders/x/ws'],
+      rootAccess: {
+        primaryRoot: '/var/folders/x/ws',
+        readRoots: ['/var/folders/x/ws'],
+        writableRoots: ['/var/folders/x/ws'],
+      },
       platform: 'darwin',
     })).toBe('auto-approve');
     // 反向:root 带 /private、目标不带,也应对齐。
     expect(classifyBuiltinToolForAutoReview({
       toolName: 'Write',
       input: { file_path: '/var/folders/x/ws/a.ts' },
-      workspaceRoots: ['/private/var/folders/x/ws'],
+      rootAccess: {
+        primaryRoot: '/private/var/folders/x/ws',
+        readRoots: ['/private/var/folders/x/ws'],
+        writableRoots: ['/private/var/folders/x/ws'],
+      },
       platform: 'darwin',
     })).toBe('auto-approve');
     // /private 抹平不误伤真实越界:/private/etc 归 /etc,仍在 /var 工作区外。
     expect(classifyBuiltinToolForAutoReview({
       toolName: 'Write',
       input: { file_path: '/private/etc/passwd' },
-      workspaceRoots: ['/var/folders/x/ws'],
+      rootAccess: {
+        primaryRoot: '/var/folders/x/ws',
+        readRoots: ['/var/folders/x/ws'],
+        writableRoots: ['/var/folders/x/ws'],
+      },
       platform: 'darwin',
     })).toBe('prompt-each-time'); // 抹平后落 /etc = 系统目录 → 确定性同意
     // Linux:/private/var 不再抹平 → 区外写升级(远端 Linux 会话)。
     expect(classifyBuiltinToolForAutoReview({
       toolName: 'Write',
       input: { file_path: '/private/var/folders/x/ws/a.ts' },
-      workspaceRoots: ['/var/folders/x/ws'],
+      rootAccess: {
+        primaryRoot: '/var/folders/x/ws',
+        readRoots: ['/var/folders/x/ws'],
+        writableRoots: ['/var/folders/x/ws'],
+      },
       platform: 'linux',
     })).toBe('prompt');
   });
@@ -145,7 +166,11 @@ describe('classifyBuiltinToolForAutoReview — 内置 Read/Grep/LS 读凭证升�
 });
 
 describe('classifyBuiltinToolForAutoReview — Windows 盘符路径边界', () => {
-  const win = ['C:\\Users\\me\\project'];
+  const win: WorkspaceRootAccess = {
+    primaryRoot: 'C:\\Users\\me\\project',
+    readRoots: ['C:\\Users\\me\\project'],
+    writableRoots: ['C:\\Users\\me\\project'],
+  };
   it('Windows 工作区内写 → auto-approve(绝对与相对)', () => {
     expect(verdict('Write', { file_path: 'C:\\Users\\me\\project\\src\\a.ts' }, win)).toBe('auto-approve');
     expect(verdict('Edit', { file_path: 'src\\a.ts' }, win)).toBe('auto-approve');

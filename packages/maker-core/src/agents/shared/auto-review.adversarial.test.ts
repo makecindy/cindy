@@ -19,9 +19,13 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { classifyShellCommand } from './auto-review.js';
+import { classifyShellCommand, type WorkspaceRootAccess } from './auto-review.js';
 
-const roots = ['/repo', '/extra'];
+const roots: WorkspaceRootAccess = {
+  primaryRoot: '/repo',
+  readRoots: ['/repo', '/extra'],
+  writableRoots: ['/repo'],
+};
 const opts = { cwd: '/repo', platform: 'darwin' as const };
 
 /** 必须确定性必问:stdin / 占位符 / 交互模式决定了实际执行什么,或直接读凭证、提权。 */

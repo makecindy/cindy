@@ -19,7 +19,11 @@ function request(overrides: Partial<AutoReviewRequest> = {}): AutoReviewRequest 
     model: 'current-model',
     userIntent: 'Fix the type error and run tests',
     action: { kind: 'exec', command: 'npx tsc --noEmit' },
-    workspaceRoots: ['/repo'],
+    rootAccess: {
+      primaryRoot: '/repo',
+      readRoots: ['/repo'],
+      writableRoots: ['/repo'],
+    },
     platform: 'darwin',
     ...overrides,
   };
@@ -47,10 +51,14 @@ describe('buildAutoPermissionReviewPrompt', () => {
   });
 
   it('separates the writable workspace root from read-only reference roots', () => {
-    // Extra Dirs 是只读引用目录:prompt 拍平成一个 workspaceRoots 数组会让
+    // Extra Dirs 是只读引用目录:prompt 拍平读写 root 会让
     // 「workspace edits 倾向 allow」把写入只读目录的灰区命令一并放行(codex-connector 报)。
     const prompt = buildAutoPermissionReviewPrompt(request({
-      workspaceRoots: ['/repo', '/extra-docs'],
+      rootAccess: {
+        primaryRoot: '/repo',
+        readRoots: ['/repo', '/extra-docs'],
+        writableRoots: ['/repo'],
+      },
     }));
 
     expect(prompt).toContain('"workspaceRoot":"/repo"');
@@ -60,6 +68,11 @@ describe('buildAutoPermissionReviewPrompt', () => {
     expect(prompt).toContain('READING anything inside them is routine reference work');
     expect(prompt).toContain('WRITING, deleting, or modifying anything inside them');
     expect(prompt).toContain('edits inside workspaceRoot');
+    expect(prompt).toContain([
+      '<review_input>',
+      '{"userIntent":"Fix the type error and run tests","action":{"kind":"exec","command":"npx tsc --noEmit"},"workspaceRoot":"/repo","readOnlyReferenceRoots":["/extra-docs"],"platform":"darwin"}',
+      '</review_input>',
+    ].join('\n'));
   });
 
   it('delimits the action as untrusted data so command text cannot rewrite the policy', () => {
@@ -78,10 +91,14 @@ describe('buildAutoPermissionReviewPrompt', () => {
   it('bounds oversized intent and workspace roots before sending them to the model', () => {
     const prompt = buildAutoPermissionReviewPrompt(request({
       userIntent: `intent-head-${'i'.repeat(4_000)}-intent-tail`,
-      workspaceRoots: Array.from(
-        { length: 12 },
-        (_, index) => `/root-${index}-${'r'.repeat(2_000)}`,
-      ),
+      rootAccess: {
+        primaryRoot: `/root-0-${'r'.repeat(2_000)}`,
+        readRoots: Array.from(
+          { length: 12 },
+          (_, index) => `/root-${index}-${'r'.repeat(2_000)}`,
+        ),
+        writableRoots: [`/root-0-${'r'.repeat(2_000)}`],
+      },
     }));
 
     expect(prompt).toContain('intent-head-');

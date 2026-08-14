@@ -8,10 +8,14 @@ import { describe, expect, it } from 'vitest';
 import { classifyPiToolForAutoReview } from '../auto-review-policy.js';
 
 const WS = '/Users/t/ws';
-const roots = [WS];
+const rootAccess = {
+  primaryRoot: WS,
+  readRoots: [WS],
+  writableRoots: [WS],
+};
 
 function verdict(toolName: string, input: Record<string, unknown>) {
-  return classifyPiToolForAutoReview({ toolName, input, workspaceRoots: roots });
+  return classifyPiToolForAutoReview({ toolName, input, rootAccess });
 }
 
 describe('classifyPiToolForAutoReview', () => {
@@ -27,10 +31,10 @@ describe('classifyPiToolForAutoReview', () => {
   it('allows reads but not writes in extra read-only roots', () => {
     const readRoots = [WS, '/Users/t/reference'];
     expect(classifyPiToolForAutoReview({
-      toolName: 'read', input: { path: '/Users/t/reference/spec.md' }, workspaceRoots: roots, readRoots,
+      toolName: 'read', input: { path: '/Users/t/reference/spec.md' }, rootAccess: { ...rootAccess, readRoots },
     })).toBe('auto-approve');
     expect(classifyPiToolForAutoReview({
-      toolName: 'write', input: { path: '/Users/t/reference/spec.md' }, workspaceRoots: roots, readRoots,
+      toolName: 'write', input: { path: '/Users/t/reference/spec.md' }, rootAccess: { ...rootAccess, readRoots },
     })).toBe('prompt');
   });
 

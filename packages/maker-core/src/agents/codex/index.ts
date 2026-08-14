@@ -3965,6 +3965,13 @@ export class CodexAgent extends BaseAgent {
       : [joinCodexHome('memories')];
     const runtimeWorkspaceRoots = (): string[] =>
       reviewMode ? [opts.workingDir] : [opts.workingDir, ...mutableExtraDirs];
+    const runtimeRootAccess = () => ({
+      primaryRoot: opts.workingDir,
+      readRoots: runtimeWorkspaceRoots().filter(
+        (dir): dir is string => typeof dir === 'string' && dir.length > 0,
+      ),
+      writableRoots: [opts.workingDir],
+    });
     // Auto-review 传给 core 的会话平台(决定是否抹平 macOS /private firmlink)。远端会话的 host
     // process.platform 不代表远端 OS(host 可能 macOS、远端 Linux)——远端 OS 未接入前保守传 'linux'
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
@@ -3981,9 +3988,7 @@ export class CodexAgent extends BaseAgent {
         model: mutableCatalogModel ?? mutableModel,
         userIntent: currentAutoReviewIntent,
         action,
-        workspaceRoots: runtimeWorkspaceRoots().filter(
-          (dir): dir is string => typeof dir === 'string' && dir.length > 0,
-        ),
+        rootAccess: runtimeRootAccess(),
         platform: sessionReviewPlatform,
       };
       const key = JSON.stringify(request);
@@ -5516,7 +5521,7 @@ export class CodexAgent extends BaseAgent {
           if (opts?.autoReviewAction) {
             const verdict = reviewAction(
               opts.autoReviewAction,
-              runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
+              runtimeRootAccess(),
               { platform: sessionReviewPlatform },
             );
             // 无人值守:只接受 core 判为 auto-approve 的安全动作。prompt / prompt-each-time 都意味着

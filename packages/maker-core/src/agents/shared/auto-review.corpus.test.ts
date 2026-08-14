@@ -18,9 +18,13 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { classifyShellCommand, commandExecutableNames } from './auto-review.js';
+import { classifyShellCommand, commandExecutableNames, type WorkspaceRootAccess } from './auto-review.js';
 
-const roots = ['/repo', '/extra'];
+const roots: WorkspaceRootAccess = {
+  primaryRoot: '/repo',
+  readRoots: ['/repo', '/extra'],
+  writableRoots: ['/repo'],
+};
 const opts = { cwd: '/repo', platform: 'darwin' as const };
 
 describe('语料回归 — 修复源 1:引号内 | 是数据不是管道', () => {
@@ -45,15 +49,19 @@ describe('语料回归 — 修复源 1:引号内 | 是数据不是管道', () =>
 });
 
 describe('语料回归 — 修复源 2:cd 区内目录 && 只读命令', () => {
-  it('cd <区内> && 只读 → auto-approve(改前 cd 段落灰区)', () => {
+  it('cd <区内> && 普通只读 → auto-approve，Git 仍要询问', () => {
     for (const c of [
-      'cd /repo && git log --all --oneline --since="10 days ago" | head -50',
-      'cd /repo && git diff --check',
       'cd /repo/packages/maker-core && ls -la src',
-      'cd /repo/.cindy-worktrees/feature-x && git diff upstream/main...HEAD --stat',
       'cd /repo && grep -rn "classifyShellCommand" packages --include="*.ts" | head -20',
     ]) {
       expect(classifyShellCommand(c, roots, opts), c).toBe('auto-approve');
+    }
+    for (const c of [
+      'cd /repo && git log --all --oneline --since="10 days ago" | head -50',
+      'cd /repo && git diff --check',
+      'cd /repo/.cindy-worktrees/feature-x && git diff upstream/main...HEAD --stat',
+    ]) {
+      expect(classifyShellCommand(c, roots, opts), c).toBe('prompt');
     }
   });
   it('cd 区外 / 动态目标仍不放行', () => {
@@ -386,7 +394,8 @@ describe('review 第四轮 — 分类器入口族', () => {
     expect(classifyShellCommand('cd /repo/$(whoami) && ls', roots, opts)).toBe('prompt');
     // 安全伪设备不算副作用,不因这道检查回退。
     expect(classifyShellCommand('cd /repo 2>/dev/null && ls', roots, opts)).toBe('auto-approve');
-    expect(classifyShellCommand('cd /repo && git log --oneline | head', roots, opts)).toBe('auto-approve');
+    // shell 内切换的 cwd 不能作为 host 已验证 Git 仓库的证明。
+    expect(classifyShellCommand('cd /repo && git log --oneline | head', roots, opts)).toBe('prompt');
   });
 });
 
@@ -824,7 +833,7 @@ describe('语料回归 — 命中率下限(总量护栏)', () => {
       'sed -n 1,120p src/index.ts',
       'gh pr view 1 --json state',
       'git log --all --oneline 2>/dev/null | head',
-      'cd /repo && git log --oneline | grep -i "pi\\|harness" | head -30',
+      'git log --oneline | grep -i "pi\\|harness" | head -30',
       'wc -l src/index.ts',
       'find . -name "*.test.ts" | head',
       'which node',

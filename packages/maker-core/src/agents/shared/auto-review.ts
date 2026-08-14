@@ -47,6 +47,19 @@ export { isSensitiveCredentialPath } from './sensitive-credential-paths.js';
 export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
 
 /**
+ * 会话目录权限的显式契约。
+ *
+ * `primaryRoot` 只定义相对路径与默认 cwd 的解析基准；真正的权限边界分别由
+ * `readRoots` / `writableRoots` 决定。调用方必须保证 primaryRoot 同时位于两组 roots 中，
+ * 且 writableRoots 是 readRoots 的子集。core 只做纯字符串判定，不访问文件系统。
+ */
+export interface WorkspaceRootAccess {
+  primaryRoot: string;
+  readRoots: readonly string[];
+  writableRoots: readonly string[];
+}
+
+/**
  * 归一化动作 —— 各 harness 的 adapter 把自己的工具调用/审批请求翻译成它,交 reviewAction 裁决。
  *   read          读文件/内省(可带 path:读凭证文件必问;scope='tree' 的目录级递归读若根在区外必升级,其余放行)
  *   session-state 会话内状态/控制,无本地写/外发(todo、后台 shell 读写、subagent 派生)
@@ -67,12 +80,12 @@ export type ReviewableAction =
 
 /**
  * 核心裁决。纯函数、确定性、无副作用(不触文件系统 —— 探文件存在性会变侧信道,且对远端
- * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots[0] 是唯一可写工作目录，
- * 后续项是 additionalDirectories 只读引用目录，均为绝对路径。
+ * 路径不可行;rootAccess 只做字符串前缀判定)。相对路径按 primaryRoot 解析，读写权限
+ * 分别由 readRoots / writableRoots 判定，所有 root 均为绝对路径。
  */
 export function reviewAction(
   action: ReviewableAction,
-  workspaceRoots: string[],
+  rootAccess: WorkspaceRootAccess,
   opts?: { platform?: NodeJS.Platform },
 ): ReviewVerdict {
   // macOS firmlink(/private/{var,tmp,etc} == /{var,tmp,etc})仅在 darwin 上成立;在 Linux(含远端 Linux)
@@ -84,9 +97,13 @@ export function reviewAction(
       if (action.path && isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
       // 目录级递归读(Grep/Glob/LS,scope='tree')的**根目录**在工作区外 → 能遍历进区外的凭证子路径
       // (如 `Grep {path:'/Users/me', pattern:'AKIA'}` 读出 ~/.aws/credentials,而 path 本身不含凭证名,
-      // copilot 报)→ 升级。读取范围含额外只读引用目录(整个 workspaceRoots)。单文件读只读一个具名文件。
+      // copilot 报)→ 升级。读取范围含额外只读引用目录(整个 readRoots)。单文件读只读一个具名文件。
       if (action.scope === 'tree' && action.path
-        && !isInsideWorkspace(normalizeTarget(action.path, workspaceRoots), workspaceRoots, aliasFirmlinks)) return 'prompt';
+        && !isInsideWorkspace(
+          normalizeTarget(action.path, rootAccess.primaryRoot),
+          rootAccess.readRoots,
+          aliasFirmlinks,
+        )) return 'prompt';
       return 'auto-approve';
     case 'session-state':
       return 'auto-approve';
@@ -95,12 +112,11 @@ export function reviewAction(
       // 写凭证文件必问、不可记住 —— 即便落在工作区内(如 /repo/.aws/credentials、/repo/.codex/auth.json):
       // 把 secret 写进 git-tracked checkout 与写区外同样危险,凭证性优先于工作区边界。
       if (isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
-      const normalizedWriteTarget = normalizeTarget(action.path, workspaceRoots);
-      // **只有工作目录(workspaceRoots[0])可写**;额外目录(additionalDirectories)是只读引用上下文
-      // (base-agent 契约 / index.ts extraDirs 注释:可读不可写)。相对路径挂到 workspaceRoots[0] 解析。
+      const normalizedWriteTarget = normalizeTarget(action.path, rootAccess.primaryRoot);
+      // 写权限只看显式 writableRoots；当前 caller 仅传 primaryRoot，额外目录仍是只读引用上下文
+      // (base-agent 契约 / index.ts extraDirs 注释:可读不可写)。相对路径挂到 primaryRoot 解析。
       // 区内一律放行 —— 即便工作区本身落在 /var、/root 等下,区内写也不该被系统红线误升(先判区内)。
-      const writableRoots = workspaceRoots.slice(0, 1);
-      if (isInsideWorkspace(normalizedWriteTarget, writableRoots, aliasFirmlinks)) return 'auto-approve';
+      if (isInsideWorkspace(normalizedWriteTarget, rootAccess.writableRoots, aliasFirmlinks)) return 'auto-approve';
       // 区外写系统/受保护目录(/etc、/System、C:\Windows 等)是高影响系统级写入,不能交灰区 reviewer
       // 静默 allow(copilot 报)→ 确定性必问。canonical(darwin 抹平 /private firmlink)后判,使
       // `/private/etc/passwd` 也命中 `/etc`。其它区外写 → 灰区 reviewer。
@@ -109,7 +125,7 @@ export function reviewAction(
     }
     case 'exec': {
       const cwdUnknown = action.cwdUnknown === true || (action.cwd !== undefined && action.cwd.trim() === '');
-      const shellVerdict = classifyShellCommand(action.command, workspaceRoots, {
+      const shellVerdict = classifyShellCommand(action.command, rootAccess, {
         cwd: cwdUnknown ? undefined : action.cwd,
         cwdUnknown,
         platform: opts?.platform,
@@ -118,9 +134,12 @@ export function reviewAction(
       if (cwdUnknown) return shellVerdict === 'auto-approve' ? 'prompt' : shellVerdict;
       // 额外目录是只读引用，不是可执行写入边界。先保留命令分类器识别出的确定性红线，
       // 其它命令只要 cwd 不在首个可写根内就升级到 reviewer，避免相对写落进 additionalDirectories。
-      const writableRoots = workspaceRoots.slice(0, 1);
       if (action.cwd
-        && !isInsideWorkspace(normalizeTarget(action.cwd, workspaceRoots), writableRoots, aliasFirmlinks)) {
+        && !isInsideWorkspace(
+          normalizeTarget(action.cwd, rootAccess.primaryRoot),
+          rootAccess.writableRoots,
+          aliasFirmlinks,
+        )) {
         return shellVerdict === 'prompt-each-time' ? shellVerdict : 'prompt';
       }
       return shellVerdict;
@@ -972,6 +991,8 @@ type UnwrappedCommand = {
   tokens: string[];
   cwd?: string;
   cwdUnknown: boolean;
+  /** 是否消费过会重新解析 cwd 的 wrapper 选项；即使文本路径未变，也不再是 host 信任来源。 */
+  consumedCwdChangingWrapper: boolean;
   inspectionOnly: boolean;
   /** 达到剥壳上限时首 token 仍是包装器 = 未能看到真实命令(超深嵌套 `env env … rm`)→ 消费方 fail-closed。 */
   wrapperUnresolved: boolean;
@@ -993,7 +1014,7 @@ function resolveCwdTarget(
     return { cwdUnknown: true };
   }
   return {
-    cwd: normalizeTarget(target, currentCwd ? [currentCwd] : []),
+    cwd: normalizeTarget(target, currentCwd),
     cwdUnknown: false,
   };
 }
@@ -1007,8 +1028,10 @@ function unwrapCommand(
   let toks = stripShellControlTokens(tokens);
   let cwd = initialCwd;
   let cwdUnknown = initialCwdUnknown;
+  let consumedCwdChangingWrapper = false;
   let inspectionOnly = false;
   const applyCwd = (target: string | undefined): void => {
+    consumedCwdChangingWrapper = true;
     const next = resolveCwdTarget(target, cwd, cwdUnknown);
     cwd = next.cwd;
     cwdUnknown = next.cwdUnknown;
@@ -1308,7 +1331,14 @@ function unwrapCommand(
   // env -S)在 depth<MAX 处 break,不算未解析,避免误升。
   const wrapperUnresolved = depth >= MAX_WRAPPER_UNWRAP_DEPTH
     && toks.length > 0 && COMMAND_WRAPPERS.has(executableName(toks[0]));
-  return { tokens: toks, cwd, cwdUnknown, inspectionOnly, wrapperUnresolved };
+  return {
+    tokens: toks,
+    cwd,
+    cwdUnknown,
+    consumedCwdChangingWrapper,
+    inspectionOnly,
+    wrapperUnresolved,
+  };
 }
 
 /** 无需 cwd 语义的调用点只取剥壳后的真实 argv。 */
@@ -2258,6 +2288,8 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
 type ShellReviewOptions = {
   cwd?: string;
   cwdUnknown?: boolean;
+  /** false = cwd 来自 shell 内部 cd/pushd 等，不能作为 Git 仓库配置的 host 信任证明。 */
+  cwdHostTrusted?: boolean;
   platform?: NodeJS.Platform;
 };
 
@@ -2296,11 +2328,10 @@ function charClassCanTraverse(target: string): boolean {
 
 function destructiveTargetNeedsConsent(
   target: string,
-  workspaceRoots: string[],
+  rootAccess: WorkspaceRootAccess,
   opts: ShellReviewOptions,
 ): boolean {
-  const writableRoot = workspaceRoots[0];
-  if (!writableRoot) return true;
+  if (rootAccess.writableRoots.length === 0) return true;
   // 变量、命令/花括号展开的运行期目标不可静态求值；`~` 也不能按 cwd 解析。
   if (/[$`{}]/.test(target) || target.startsWith('~')) return true;
   // 字符类能展开出 `.`/`/` → 运行期路径可穿越出静态前缀,不可静态证明在区内 → 必问(greptile 报)。
@@ -2310,10 +2341,8 @@ function destructiveTargetNeedsConsent(
   // workspace”级别；只有明确进入子目录（如 build/*）才交 reviewer 静默裁决。
   const globIndex = target.search(/[*?[\]]/);
   const staticTarget = globIndex >= 0 ? (target.slice(0, globIndex) || '.') : target;
-  const cwd = opts.cwd ?? writableRoot;
+  const cwd = opts.cwd ?? rootAccess.primaryRoot;
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  const normalizedRoot = canonicalPath(writableRoot, aliasFirmlinks);
-  if (normalizedRoot === '/' || /^[A-Za-z]:\/$/.test(normalizedRoot)) return true;
   const candidates = [staticTarget];
   if (globIndex >= 0) {
     // A bracket expression may itself spell `..` (`[.].`). Check the same
@@ -2322,9 +2351,23 @@ function destructiveTargetNeedsConsent(
     candidates.push(target.replace(/[[\]{}*?]/g, '') || '.');
   }
   return candidates.some((candidate) => {
-    const normalizedTarget = normalizeTarget(candidate, [cwd]);
-    if (!isInsideWorkspace(normalizedTarget, [writableRoot], aliasFirmlinks)) return true;
-    return canonicalPath(normalizedTarget, aliasFirmlinks) === normalizedRoot;
+    const normalizedTarget = normalizeTarget(candidate, cwd);
+    const comparisonPath = (path: string): string => {
+      const canonical = canonicalPath(path, aliasFirmlinks);
+      return (opts.platform ?? process.platform) === 'win32'
+        ? canonical.toLowerCase()
+        : canonical;
+    };
+    const canonicalTarget = comparisonPath(normalizedTarget);
+    // roots 可重叠(`/repo` + `/repo/packages/core`)。目标落入多个根时必须以最具体的根为
+    // 破坏边界；否则删除完整子根会被更宽的父根当成“普通子目录清理”而降级到灰区。
+    const containingRoots = rootAccess.writableRoots
+      .map(comparisonPath)
+      .filter((root) => isInsideWorkspace(canonicalTarget, [root], false))
+      .sort((a, b) => b.length - a.length);
+    const writableRoot = containingRoots[0];
+    if (!writableRoot || writableRoot === '/' || /^[A-Za-z]:\/$/.test(writableRoot)) return true;
+    return canonicalTarget === writableRoot;
   });
 }
 
@@ -2557,13 +2600,13 @@ function shellQuoteArgvForReview(tokens: string[]): string {
 
 function matchedPathSentinel(
   root: string,
-  workspaceRoots: string[],
+  rootAccess: WorkspaceRootAccess,
   opts: ShellReviewOptions,
 ): string | null {
   if (/[$`{}*?[\]]/.test(root) || root.startsWith('~')) return null;
-  const base = opts.cwd ?? workspaceRoots[0];
+  const base = opts.cwd ?? rootAccess.primaryRoot;
   if (!isAbsolutePath(toForwardSlashes(root)) && (!base || opts.cwdUnknown)) return null;
-  const resolved = normalizeTarget(root, base ? [base] : []).replace(/\/+$/, '');
+  const resolved = normalizeTarget(root, base).replace(/\/+$/, '');
   return `${resolved}/${MATCHED_PATH_SENTINEL}`;
 }
 
@@ -2575,7 +2618,7 @@ function matchedPathSentinel(
 function systemWriteTargetsInSegment(
   segment: string,
   tokens: string[],
-  workspaceRoots: string[],
+  rootAccess: WorkspaceRootAccess,
   opts: ShellReviewOptions,
 ): boolean {
   const targets = [...redirectionTargets(segment), ...argumentWriteTargets(tokens)];
@@ -2583,25 +2626,25 @@ function systemWriteTargetsInSegment(
   // 静态不可证的写目标(tar -P 的归档成员等)一律要求同意。
   if (targets.includes(UNPROVABLE_WRITE_TARGET)) return true;
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  const base = opts.cwd ?? workspaceRoots[0];
+  const base = opts.cwd ?? rootAccess.primaryRoot;
   return targets.some((t) =>
     // 每个目标查两种形态:原样(保留 Windows `\` 分隔符)与去 POSIX `\` 转义(`/e\tc`→`/etc`)。
     [t, t.replace(/\\(.)/g, '$1')].some((v) => {
       const forward = toForwardSlashes(v);
       // cwd 未知 + 相对目标 → 无法证明它没落进系统目录,fail-closed。
       if (opts.cwdUnknown && !isAbsolutePath(forward)) return true;
-      return isProtectedSystemPath(canonicalPath(normalizeTarget(v, [base]), aliasFirmlinks));
+      return isProtectedSystemPath(canonicalPath(normalizeTarget(v, base), aliasFirmlinks));
     }));
 }
 
 /** 系统/区外批量破坏与受保护分支强推不能只交给模型裁决。 */
 function scopedDestructionNeedsConsent(
   command: string,
-  workspaceRoots: string[],
+  rootAccess: WorkspaceRootAccess,
   opts: ShellReviewOptions,
   depth = 0,
 ): boolean {
-  let currentCwd: string | undefined = opts.cwd ?? workspaceRoots[0];
+  let currentCwd: string | undefined = opts.cwd ?? rootAccess.primaryRoot;
   let currentCwdUnknown = opts.cwdUnknown === true;
   for (const { text: segment, separatorAfter } of splitExecutableSegments(command)) {
     const unwrapped = unwrapCommand(tokenize(segment), currentCwd, currentCwdUnknown);
@@ -2616,25 +2659,25 @@ function scopedDestructionNeedsConsent(
     const bin = executableName(tokens[0] ?? '');
     // 系统写目标(shell 重定向 + 参数写通道)按**本段有效 cwd** 解析:相对目标必须挂到 unwrapped.cwd
     // (含 `cd /etc &&` 跨段传递与 `env -C /etc` 段内改目录),否则 `cp /tmp/payload hosts` 配 cwd=/etc
-    // 实际覆盖 /etc/hosts 却因按 workspaceRoots 解析而只落灰区(codex 报)。
-    if (systemWriteTargetsInSegment(segment, tokens, workspaceRoots, segmentOpts)) return true;
+    // 实际覆盖 /etc/hosts 却因按会话根解析而只落灰区(codex 报)。
+    if (systemWriteTargetsInSegment(segment, tokens, rootAccess, segmentOpts)) return true;
     const rmTargets = destructiveRmTargets(tokens);
     if (rmTargets?.some((target) =>
-      destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
+      destructiveTargetNeedsConsent(target, rootAccess, segmentOpts))) return true;
     // Windows cmd.exe 广泛递归删除(`rd`/`rmdir`/`del`/`erase` 带 `/s`)按目标作用域判定(codex 报)。
     const winRmTargets = windowsDestructiveRmTargets(tokens);
     if (winRmTargets?.some((target) =>
-      destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
+      destructiveTargetNeedsConsent(target, rootAccess, segmentOpts))) return true;
     // shell -c（含 -lc 等组合短选项）内还有一层命令字符串；递归有限深，超过说明静态结构已不可靠。
     const shellPayload = shellCommandPayload(tokens);
     if (shellPayload && (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
-      shellPayload, workspaceRoots, segmentOpts, depth + 1))) {
+      shellPayload, rootAccess, segmentOpts, depth + 1))) {
       return true;
     }
     // cmd.exe /c "rd /s /q …" 把破坏性删除藏进 cmd 载荷,递归下探(codex 报)。
     const cmdPayload = cmdCommandPayload(tokens);
     if (cmdPayload && (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
-      cmdPayload, workspaceRoots, segmentOpts, depth + 1))) {
+      cmdPayload, rootAccess, segmentOpts, depth + 1))) {
       return true;
     }
     if (bin === 'find') {
@@ -2653,7 +2696,7 @@ function scopedDestructionNeedsConsent(
         const execScope = dirRelative ? { ...segmentOpts, cwdUnknown: true } : segmentOpts;
         // 忽略 {} 直接删的字面/独立目标(`rm -rf /` / `/outside` / -execdir 下的相对目标)按其作用域判定。
         if (rmTargetsInExec.some((target) => !isMatchedPathPlaceholder(target)
-          && destructiveTargetNeedsConsent(target, workspaceRoots, execScope))) return true;
+          && destructiveTargetNeedsConsent(target, rootAccess, execScope))) return true;
         if (rmTargetsInExec.some(isMatchedPathPlaceholder)) execMatchedRm = true;
         // rm 之外的危险面同样要审:受保护写通道(`-exec cp payload /etc/hosts \;`、`-exec tee /etc/x \;`、
         // `-exec install -d /etc/cron.d \;`)、载荷里的重定向与 `cd /etc &&` 跨段(codex 报只查了 rm 目标)。
@@ -2665,19 +2708,19 @@ function scopedDestructionNeedsConsent(
         for (const root of concreteRoots) {
           let innerArgv = argv;
           if (root !== null) {
-            const sentinel = matchedPathSentinel(root, workspaceRoots, segmentOpts);
+            const sentinel = matchedPathSentinel(root, rootAccess, segmentOpts);
             if (sentinel === null) return true; // 根不可静态解析 → 占位目标落哪不可证
             innerArgv = argv.map((t) => substituteMatchedPath(t, sentinel));
           }
           if (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
-            shellQuoteArgvForReview(innerArgv), workspaceRoots, execScope, depth + 1)) return true;
+            shellQuoteArgvForReview(innerArgv), rootAccess, execScope, depth + 1)) return true;
         }
       }
       // 删的是被匹配到的路径(占位符 {}/$0/…),或 -delete → 删除作用域由遍历根决定;动态根一律必问。
       if (deletes || execMatchedRm) {
         if (dynamicRoots) return true;
         if (findRoots.some((target) =>
-          destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
+          destructiveTargetNeedsConsent(target, rootAccess, segmentOpts))) return true;
       }
     }
     // xargs / parallel 动态补入的目标无法从 argv 证明在工作区内；递归/强制 rm 必须保留用户同意
@@ -2691,7 +2734,7 @@ function scopedDestructionNeedsConsent(
         // Unmodelled options plus an apparent shell command cannot be proven safe.
         if (tokens.slice(1).some((token) => SHELL_EXECUTORS.has(executableName(token)))) return true;
       } else if (nested.length > 0 && (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
-        serializeArgvForReview(nested), workspaceRoots, segmentOpts, depth + 1))) {
+        serializeArgvForReview(nested), rootAccess, segmentOpts, depth + 1))) {
         return true;
       }
     }
@@ -3037,7 +3080,7 @@ const SAFE_GIT_GLOBAL_FLAGS: ReadonlySet<string> = new Set([
 
 function isTrustedGitCwdPath(
   target: string | undefined,
-  workspaceRoots: string[],
+  rootAccess: WorkspaceRootAccess,
   cwd: string | undefined,
   cwdUnknown: boolean,
   platform: NodeJS.Platform | undefined,
@@ -3049,7 +3092,7 @@ function isTrustedGitCwdPath(
   // `chdir` 先跟随 symlink、再处理 `..`。词法 normalize 会把 `/repo/link/..` 错折成
   // `/repo`，所以只允许不含 `.`/`..`/空分量的绝对路径，且必须精确等于宿主确认 cwd。
   if (!isAbsolutePath(forward) || forward.split('/').slice(1).some((part) => part === '' || part === '.' || part === '..')) return false;
-  const base = cwd ?? workspaceRoots[0];
+  const base = cwd ?? rootAccess.primaryRoot;
   if (!base) return false;
   const aliasFirmlinks = (platform ?? process.platform) === 'darwin';
   return canonicalPath(forward, aliasFirmlinks) === canonicalPath(base, aliasFirmlinks);
@@ -3057,7 +3100,7 @@ function isTrustedGitCwdPath(
 
 function parseGitInvocation(
   tokens: string[],
-  workspaceRoots: string[],
+  rootAccess: WorkspaceRootAccess,
   opts: ShellReviewOptions,
 ): { sub?: string; args: string[] } | undefined {
   // Git 的全局选项位于子命令之前。`git -C /repo show` 中 `/repo` 不是子命令；若直接
@@ -3074,7 +3117,7 @@ function parseGitInvocation(
       return { sub: token, args: tokens.slice(index + 1) };
     }
     if (token === '-C') {
-      if (!isTrustedGitCwdPath(tokens[index + 1], workspaceRoots, opts.cwd, opts.cwdUnknown === true, opts.platform)) return undefined;
+      if (!isTrustedGitCwdPath(tokens[index + 1], rootAccess, opts.cwd, opts.cwdUnknown === true, opts.platform)) return undefined;
       index += 2;
       continue;
     }
@@ -3086,7 +3129,7 @@ function parseGitInvocation(
     }
     const attachedCwd = /^-C=?(.*)$/.exec(token);
     if (attachedCwd) {
-      if (!isTrustedGitCwdPath(attachedCwd[1], workspaceRoots, opts.cwd, opts.cwdUnknown === true, opts.platform)) return undefined;
+      if (!isTrustedGitCwdPath(attachedCwd[1], rootAccess, opts.cwd, opts.cwdUnknown === true, opts.platform)) return undefined;
       index++;
       continue;
     }
@@ -3108,7 +3151,7 @@ function parseGitInvocation(
 function classifyGit(
   tokens: string[],
   segment: string,
-  workspaceRoots: string[],
+  rootAccess: WorkspaceRootAccess,
   opts: ShellReviewOptions,
 ): ReviewVerdict {
   // 高风险 git(强推/硬重置/clean -f)已在 REVIEW_REQUIRED_PATTERNS 命中,这里分只读 vs 写。
@@ -3133,7 +3176,7 @@ function classifyGit(
   // 远程助手传输 `ext::<cmd>` / `fd::` 会把 URL 里的命令交给 shell 执行(RCE);即便 ls-remote 最终报错,
   // 命令也已跑(codex 报:`git ls-remote 'ext::sh -c …'`)。任何 git 命令带 ext::/fd:: 传输 → 升级。
   if (/(?:^|[\s'"=])(?:ext|fd)::/.test(segment)) return 'prompt';
-  const invocation = parseGitInvocation(tokens, workspaceRoots, opts);
+  const invocation = parseGitInvocation(tokens, rootAccess, opts);
   if (!invocation?.sub || !SAFE_GIT_SUBCOMMANDS.has(invocation.sub)) {
     // `git config --get/--list` 只读;其它 git(commit/checkout/merge/fetch/config 写…)升级。
     if (invocation?.sub === 'config' && /--(?:get|list|get-all)\b/.test(segment)) return 'auto-approve';
@@ -3169,21 +3212,22 @@ function classifyGit(
 
 function classifyShellSegment(
   segment: string,
-  workspaceRoots: string[],
+  rootAccess: WorkspaceRootAccess,
   opts: ShellReviewOptions,
 ): ReviewVerdict {
   const rawTokens = tokenize(segment);
   const unwrapped = unwrapCommand(
     rawTokens,
-    opts.cwd ?? workspaceRoots[0],
+    opts.cwd ?? rootAccess.primaryRoot,
     opts.cwdUnknown === true,
   );
   const tokens = unwrapped.tokens;
   // 包装器可改变内层 cwd（如 `env -C /extra git …`）。不能把该路径当作可信审批基准；
   // 只要 Git 前经过改目录或 cwd 变得未知，保守交给 prompt。
-  const initialCwd = opts.cwd ?? workspaceRoots[0];
+  const initialCwd = opts.cwd ?? rootAccess.primaryRoot;
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  const wrapperChangedCwd = unwrapped.cwdUnknown
+  const wrapperChangedCwd = unwrapped.consumedCwdChangingWrapper
+    || unwrapped.cwdUnknown
     || (unwrapped.cwd !== undefined && initialCwd !== undefined
       && canonicalPath(unwrapped.cwd, aliasFirmlinks) !== canonicalPath(initialCwd, aliasFirmlinks));
   // 裸 env / 未指定 VARIABLE 的 printenv 会输出整个进程环境(含 provider API key)，不能交给
@@ -3256,8 +3300,10 @@ function classifyShellSegment(
     : cmd0Raw;
   if (cmd0.includes('/') && !/^\/(?:usr\/s?bin|s?bin)\//.test(cmd0)) return 'prompt';
   if (bin === 'git') {
-    if (wrapperChangedCwd) return 'prompt';
-    return classifyGit(tokens, deQuoted, workspaceRoots, opts);
+    // 只有 host 直接提供的 cwd 能作为 Git 仓库配置的信任锚。shell 内部 cd/pushd 即使
+    // 静态落在 readRoots，也可能经过 symlink 进入恶意 checkout；env -C 等包装器同理。
+    if (opts.cwdHostTrusted === false || wrapperChangedCwd) return 'prompt';
+    return classifyGit(tokens, deQuoted, rootAccess, opts);
   }
   if (isSafeFetch(bin, deQuoted, tokens)) return 'auto-approve';
   if (isSafeReadonlyBin(bin, deQuoted, tokens)) return 'auto-approve';
@@ -3302,7 +3348,7 @@ export function commandExecutableNames(command: string): string[] {
 
 export function classifyShellCommand(
   command: string,
-  workspaceRoots: string[],
+  rootAccess: WorkspaceRootAccess,
   opts: ShellReviewOptions = {},
 ): ReviewVerdict {
   if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
@@ -3352,7 +3398,7 @@ export function classifyShellCommand(
   // `| tee /etc/hosts`、`truncate -s 0 /etc/passwd`、`tar -C /etc` 等)= 高影响系统写,复用
   // file-write 的系统红线。**判定放在 scopedDestructionNeedsConsent 的分段循环里**,因为那里已经
   // 跨段跟踪有效 cwd(`cd /etc &&`)与包装器改目录(`env -C /etc`)—— 相对写目标必须按有效 cwd 解析
-  // (codex 报:按 workspaceRoots 解析会让 `cp /tmp/payload hosts` 配 cwd=/etc 漏成灰区)。
+  // (codex 报:按会话根解析会让 `cp /tmp/payload hosts` 配 cwd=/etc 漏成灰区)。
   // 该循环的首个变体就是原始 command(保留引号),含空格的 DEST 靠引号定界不会被拆碎。
   // 删除/强推需要结合目标范围判断，不能只按关键词一刀切：可证明局限在工作区子目录或普通
   // feature ref 的操作进入 reviewer；系统级、区外、整工作区、动态目标和受保护/隐含分支必问。
@@ -3362,7 +3408,7 @@ export function classifyShellCommand(
     scopedVariants.push(deEscaped, deExpanded, deSubstituted);
   }
   if (scopedVariants.some((variant) =>
-    scopedDestructionNeedsConsent(variant, workspaceRoots, opts))) return 'prompt-each-time';
+    scopedDestructionNeedsConsent(variant, rootAccess, opts))) return 'prompt-each-time';
   for (const re of REVIEW_REQUIRED_PATTERNS) {
     if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt';
   }
@@ -3374,8 +3420,9 @@ export function classifyShellCommand(
   // 段(相对目标按跟踪 cwd 解析);目标区外/动态(`$VAR`、`~`、`-`)/source/popd 维持灰区不变。
   // 安全性:破坏类(`cd /etc && cp payload hosts`)由前面的 scopedDestructionNeedsConsent 以
   // 自己的跨段 cwd 跟踪先行拦截;这里只影响「全段只读」时 cd 段自身的档位。
-  let trackedCwd: string | undefined = opts.cwd ?? workspaceRoots[0];
+  let trackedCwd: string | undefined = opts.cwd ?? rootAccess.primaryRoot;
   let trackedCwdUnknown = opts.cwdUnknown === true;
+  let trackedCwdHostTrusted = opts.cwdHostTrusted !== false && !trackedCwdUnknown;
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
   for (const seg of segments) {
     const segTokens = stripShellControlTokens(tokenize(seg));
@@ -3385,9 +3432,10 @@ export function classifyShellCommand(
       const next = resolveCwdTarget(dirChange.target, trackedCwd, trackedCwdUnknown);
       trackedCwd = next.cwd;
       trackedCwdUnknown = next.cwdUnknown;
+      trackedCwdHostTrusted = false;
       if ((segBin === 'cd' || segBin === 'pushd')
         && !next.cwdUnknown && next.cwd
-        && isInsideWorkspace(next.cwd, workspaceRoots, aliasFirmlinks)
+        && isInsideWorkspace(next.cwd, rootAccess.readRoots, aliasFirmlinks)
         // 快捷放行只针对「切目录」这个动作本身。同一段里仍可能挂着输出重定向或命令替换
         // (`cd /repo > /tmp/out`),那属于写文件/执行任意内容,不能被这条捷径绕过 ——
         // 复用与 classifyShellSegment 同一份判据(安全伪设备已排除),review P1。
@@ -3397,7 +3445,12 @@ export function classifyShellCommand(
       needsPrompt = true; // 区外/动态目标、source/popd:与改动前同档(灰区)。
       continue;
     }
-    const v = classifyShellSegment(seg, workspaceRoots, opts);
+    const v = classifyShellSegment(seg, rootAccess, {
+      ...opts,
+      cwd: trackedCwd,
+      cwdUnknown: trackedCwdUnknown,
+      cwdHostTrusted: trackedCwdHostTrusted,
+    });
     if (v === 'prompt-each-time') return 'prompt-each-time';
     if (v === 'prompt') needsPrompt = true;
   }
@@ -3424,12 +3477,11 @@ function isAbsolutePath(p: string): boolean {
   return p.startsWith('/') || /^[A-Za-z]:/.test(p);
 }
 
-/** 归一化路径:去包裹引号、统一分隔符,相对路径挂到第一个 workspace root(cwd)。 */
-function normalizeTarget(target: string, workspaceRoots: string[]): string {
+/** 归一化路径:去包裹引号、统一分隔符,相对路径挂到显式 base(cwd)。 */
+function normalizeTarget(target: string, base?: string): string {
   let p = toForwardSlashes(target.replace(/^['"]|['"]$/g, ''));
   if (!isAbsolutePath(p)) {
-    const cwd = workspaceRoots[0];
-    if (cwd) p = `${toForwardSlashes(cwd).replace(/\/+$/, '')}/${p.replace(/^\/+/, '')}`;
+    if (base) p = `${toForwardSlashes(base).replace(/\/+$/, '')}/${p.replace(/^\/+/, '')}`;
   }
   return normalizeSlashes(p);
 }
@@ -3480,9 +3532,9 @@ function canonicalPath(p: string, aliasFirmlinks: boolean): string {
  * 缓解:创建该 symlink 本身需要一条 `ln -s`(shell 命令,会按写/未知升级),攻击面限于**预先已存在**
  * 的恶意链接。以 fail-open 的这一窄口,换取无 fs 副作用 + 远端路径可判 + 确定性可测,是刻意取舍。
  */
-function isInsideWorkspace(target: string, workspaceRoots: string[], aliasFirmlinks: boolean): boolean {
+function isInsideWorkspace(target: string, roots: readonly string[], aliasFirmlinks: boolean): boolean {
   const t = canonicalPath(target, aliasFirmlinks);
-  for (const root of workspaceRoots) {
+  for (const root of roots) {
     if (!root) continue;
     const r = canonicalPath(root, aliasFirmlinks);
     if (t === r) return true;
