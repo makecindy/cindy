@@ -149,9 +149,11 @@ async function notifyAuthRejected(
   response: Response,
   body: string,
   failedAccessToken: string,
-): Promise<void> {
-  if ((response.status !== 401 && response.status !== 403) || !opts.onAuthRejected) return;
-  await opts
+): Promise<unknown> {
+  if ((response.status !== 401 && response.status !== 403) || !opts.onAuthRejected) {
+    return undefined;
+  }
+  return await opts
     .onAuthRejected({
       status: response.status,
       body: body.slice(0, 8 * 1024),
@@ -314,25 +316,42 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     ownerScopeKey: string,
     credentialGeneration: number,
     init: RequestInit,
+    options?: { retryAfterAuthRefresh?: boolean },
   ): Promise<T> {
-    assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
-    const token = await opts.getAccessToken();
-    assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
-    const response = await doFetch(url, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json',
-        ...(init.headers ?? {}),
-      },
-    });
-    const text = await response.text();
-    assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
-    if (!response.ok) {
-      await notifyAuthRejected(opts, response, text, token);
+    const retryAfterAuthRefresh = options?.retryAfterAuthRefresh === true;
+    const maxAttempts = retryAfterAuthRefresh ? 2 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
+      const token = await opts.getAccessToken();
+      assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
+      const response = await doFetch(url, {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+          ...(init.headers ?? {}),
+        },
+      });
+      const text = await response.text();
+      assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
+      if (response.ok) return parseJson<T>(text, phase);
+
+      // 只让第一次失败进入恢复器。轮询可在凭证刷新成功后补发一次同一个 GET；
+      // 第二次仍失败就如实抛出，不能形成内部重试环。submit 不打开此选项，
+      // 因而绝不会因认证恢复重复创建付费任务。
+      const recovery =
+        attempt === 0 ? await notifyAuthRejected(opts, response, text, token) : undefined;
+      assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
+      if (
+        retryAfterAuthRefresh &&
+        attempt === 0 &&
+        recovery === 'refreshed'
+      ) {
+        continue;
+      }
       throw new Error(`xAI 视频${phase}失败(HTTP ${response.status}):${errorDetail(text)}`);
     }
-    return parseJson<T>(text, phase);
+    throw new Error(`xAI 视频${phase}失败:认证恢复重试耗尽`);
   }
 
   async function submit(
@@ -413,6 +432,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
       handle.ownerScopeKey,
       credentialGeneration,
       { method: 'GET', signal },
+      { retryAfterAuthRefresh: true },
     );
     if (data.status === 'pending' || data.status === undefined) {
       return { state: data.status === 'pending' ? 'pending' : 'running', raw: data };

@@ -175,7 +175,7 @@ describe('xAI video provider · submit', () => {
   });
 
   it('forwards 401/403 to the shared xAI auth invalidator', async () => {
-    const onAuthRejected = vi.fn(async () => undefined);
+    const onAuthRejected = vi.fn(async () => 'refreshed');
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ error: { message: 'expired' } }), { status: 401 }),
     ) as unknown as typeof fetch;
@@ -189,6 +189,7 @@ describe('xAI video provider · submit', () => {
       body: JSON.stringify({ error: { message: 'expired' } }),
       failedAccessToken: 'oauth-token',
     });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('discards a late submit response after the SuperGrok credential changes', async () => {
@@ -267,6 +268,147 @@ describe('xAI video provider · poll and download', () => {
 
     await expect(provider.poll(handle)).rejects.toThrow(/账号已切换/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries one poll with the refreshed token without resubmitting the paid task', async () => {
+    const tokens = ['account-a-old-token', 'account-a-old-token', 'account-a-fresh-token'];
+    const getAccessToken = vi.fn(async () => tokens.shift()!);
+    const badCredentialBody = JSON.stringify({
+      code: 'unauthenticated:bad-credentials',
+      error: 'The OAuth2 access token could not be validated.',
+    });
+    const responses = [
+      new Response(JSON.stringify({ request_id: 'video-auth-recovery' }), { status: 200 }),
+      new Response(badCredentialBody, { status: 403 }),
+      new Response(JSON.stringify({ status: 'pending' }), { status: 200 }),
+    ];
+    const fetchMock = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
+    const onAuthRejected = vi.fn(async () => 'refreshed');
+    const provider = makeProvider({
+      fetchImplementation: fetchMock,
+      getAccessToken,
+      onAuthRejected,
+    });
+    const handle = await provider.submit({ prompt: 'recover poll' }, XAI_VIDEO_CATALOG_MODEL_ID);
+
+    await expect(provider.poll(handle)).resolves.toMatchObject({ state: 'pending' });
+    expect(onAuthRejected).toHaveBeenCalledTimes(1);
+    expect(onAuthRejected).toHaveBeenCalledWith({
+      status: 403,
+      body: badCredentialBody,
+      failedAccessToken: 'account-a-old-token',
+    });
+    const calls = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls.filter(([, init]) => (init as RequestInit).method === 'POST')).toHaveLength(1);
+    expect(calls[1][0]).toBe('https://api.x.ai/v1/videos/video-auth-recovery');
+    expect(calls[2][0]).toBe('https://api.x.ai/v1/videos/video-auth-recovery');
+    expect((calls[1][1].headers as Record<string, string>).Authorization).toBe(
+      'Bearer account-a-old-token',
+    );
+    expect((calls[2][1].headers as Record<string, string>).Authorization).toBe(
+      'Bearer account-a-fresh-token',
+    );
+  });
+
+  it('does not retry a poll when credential recovery fails', async () => {
+    const badCredentialBody = JSON.stringify({
+      code: 'unauthenticated:bad-credentials',
+      error: 'The OAuth2 access token could not be validated.',
+    });
+    const responses = [
+      new Response(JSON.stringify({ request_id: 'video-auth-failed' }), { status: 200 }),
+      new Response(badCredentialBody, { status: 401 }),
+    ];
+    const fetchMock = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
+    const onAuthRejected = vi.fn(async () => 'unchanged');
+    const provider = makeProvider({ fetchImplementation: fetchMock, onAuthRejected });
+    const handle = await provider.submit({ prompt: 'failed recovery' }, XAI_VIDEO_CATALOG_MODEL_ID);
+
+    await expect(provider.poll(handle)).rejects.toThrow(/HTTP 401/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onAuthRejected).toHaveBeenCalledTimes(1);
+  });
+
+  it('limits a recovered poll to one retry', async () => {
+    const responses = [
+      new Response(JSON.stringify({ request_id: 'video-auth-retry-limit' }), { status: 200 }),
+      new Response(JSON.stringify({ code: 'unauthenticated:bad-credentials' }), { status: 403 }),
+      new Response(JSON.stringify({ code: 'unauthenticated:bad-credentials' }), { status: 403 }),
+    ];
+    const fetchMock = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
+    const onAuthRejected = vi.fn(async () => 'refreshed');
+    const provider = makeProvider({ fetchImplementation: fetchMock, onAuthRejected });
+    const handle = await provider.submit({ prompt: 'retry limit' }, XAI_VIDEO_CATALOG_MODEL_ID);
+
+    await expect(provider.poll(handle)).rejects.toThrow(/HTTP 403/);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(onAuthRejected).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects recovery when logout changes the credential generation', async () => {
+    const credential = { value: 1 };
+    const responses = [
+      new Response(JSON.stringify({ request_id: 'video-auth-generation' }), { status: 200 }),
+      new Response(JSON.stringify({ code: 'unauthenticated:bad-credentials' }), { status: 403 }),
+    ];
+    const fetchMock = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
+    const onAuthRejected = vi.fn(async () => {
+      credential.value = 2;
+      return 'logged_out';
+    });
+    const provider = makeProvider({ fetchImplementation: fetchMock, credential, onAuthRejected });
+    const handle = await provider.submit(
+      { prompt: 'generation changed' },
+      XAI_VIDEO_CATALOG_MODEL_ID,
+    );
+
+    await expect(provider.poll(handle)).rejects.toThrow(/SuperGrok 凭证已切换/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects recovery when the owner changes', async () => {
+    const owner = { value: 'owner-a', pending: false };
+    const responses = [
+      new Response(JSON.stringify({ request_id: 'video-auth-owner' }), { status: 200 }),
+      new Response(JSON.stringify({ code: 'unauthenticated:bad-credentials' }), { status: 403 }),
+    ];
+    const fetchMock = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
+    const onAuthRejected = vi.fn(async () => {
+      owner.value = 'owner-b';
+      return 'refreshed';
+    });
+    const provider = makeProvider({ fetchImplementation: fetchMock, owner, onAuthRejected });
+    const handle = await provider.submit({ prompt: 'owner changed' }, XAI_VIDEO_CATALOG_MODEL_ID);
+
+    await expect(provider.poll(handle)).rejects.toThrow(/账号已切换/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('discards a late retry response after the credential generation changes', async () => {
+    const credential = { value: 1 };
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ request_id: 'video-auth-late-retry' }), {
+          status: 200,
+        });
+      }
+      if (calls === 2) {
+        return new Response(JSON.stringify({ code: 'unauthenticated:bad-credentials' }), {
+          status: 403,
+        });
+      }
+      credential.value = 2;
+      return new Response(JSON.stringify({ status: 'pending' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const onAuthRejected = vi.fn(async () => 'refreshed');
+    const provider = makeProvider({ fetchImplementation: fetchMock, credential, onAuthRejected });
+    const handle = await provider.submit({ prompt: 'late retry' }, XAI_VIDEO_CATALOG_MODEL_ID);
+
+    await expect(provider.poll(handle)).rejects.toThrow(/SuperGrok 凭证已切换/);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('rejects an old task before reading a replacement SuperGrok credential', async () => {
@@ -383,6 +525,23 @@ describe('xAI video provider · poll and download', () => {
       });
       await expect(invalid.download(videoUrl)).rejects.toThrow(/不是受支持的视频/);
     }
+  });
+
+  it('does not run OAuth recovery for unauthenticated CDN downloads', async () => {
+    const onAuthRejected = vi.fn(async () => 'refreshed');
+    const fetchMock = vi.fn(
+      async () => new Response('expired download', { status: 403 }),
+    ) as unknown as typeof fetch;
+    const provider = makeProvider({ fetchImplementation: fetchMock, onAuthRejected });
+    const videoUrl =
+      'xai-video://content/task?owner=owner-a&credential=1&source=https%3A%2F%2Fvidgen.x.ai%2Ftask.mp4';
+
+    await expect(provider.download(videoUrl)).rejects.toThrow(/下载失败\(HTTP 403\)/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].headers,
+    ).toBeUndefined();
+    expect(onAuthRejected).not.toHaveBeenCalled();
   });
 
   it('rechecks the owner after the download body is complete', async () => {
