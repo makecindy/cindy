@@ -11,9 +11,14 @@ import type { Provider } from '@cindy/model-providers';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { createLogger, type Logger } from '../../logger.js';
 import { setDiscoveredProviderMediaModels } from '../active-catalog.js';
-import { getGrokAccessToken, hasGrokOAuthLogin } from '../grok-oauth-login.js';
+import {
+  getGrokAccessToken,
+  getGrokOAuthCredentialGeneration,
+  hasGrokOAuthLogin,
+} from '../grok-oauth-login.js';
 import { outboundFetch } from '../outbound-fetch.js';
 import { invalidateXaiBridgeAuth } from '../xai-auth-invalidation-host.js';
+import type { XaiBridgeAuthInvalidationResult } from '../xai-bridge-auth-invalidation.js';
 
 const XAI_API_BASE = 'https://api.x.ai/v1';
 const HTTP_TIMEOUT_MS = 15_000;
@@ -31,6 +36,7 @@ export interface XaiMediaDiscoverySnapshot {
 interface XaiMediaDiscoveryDeps {
   hasOAuthLogin(): boolean;
   getAccessToken(): Promise<string>;
+  getCredentialGeneration(): number;
   getOwnerScopeKey(): string;
   isOwnerBoundaryPending(): boolean;
   fetchImplementation: typeof fetch;
@@ -39,7 +45,7 @@ interface XaiMediaDiscoveryDeps {
     status: number;
     body: string;
     failedAccessToken: string;
-  }): Promise<unknown>;
+  }): Promise<XaiBridgeAuthInvalidationResult>;
   log: Pick<Logger, 'info' | 'warn'>;
 }
 
@@ -109,19 +115,29 @@ export function mapXaiMediaModels(
   return out;
 }
 
-async function readBoundedResponseText(response: Response, kind: '图片' | '视频'): Promise<string> {
+async function readBoundedResponseText(
+  response: Response,
+  kind: '图片' | '视频',
+  assertStillCurrent: () => void,
+): Promise<string> {
+  assertStillCurrent();
   const declared = Number(response.headers.get('content-length') ?? Number.NaN);
   if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
     await response.body?.cancel().catch(() => undefined);
+    assertStillCurrent();
     throw new Error(`xAI ${kind}模型列表响应过大`);
   }
-  if (!response.body) return '';
+  if (!response.body) {
+    assertStillCurrent();
+    return '';
+  }
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
+      assertStillCurrent();
       if (done) break;
       if (!value || value.byteLength === 0) continue;
       total += value.byteLength;
@@ -134,6 +150,7 @@ async function readBoundedResponseText(response: Response, kind: '图片' | '视
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
+  assertStillCurrent();
   return Buffer.concat(chunks, total).toString('utf8');
 }
 
@@ -155,9 +172,15 @@ export function createXaiMediaDiscovery(deps: XaiMediaDiscoveryDeps): {
   refresh(): Promise<boolean>;
   clear(): void;
 } {
+  const staleDiscovery = Symbol('stale xAI media discovery');
   let generation = 0;
   let appliedScopeKey: string | null = null;
-  let inflight: { generation: number; promise: Promise<boolean> } | null = null;
+  let inflight: {
+    generation: number;
+    ownerScopeKey: string;
+    credentialGeneration: number;
+    promise: Promise<boolean>;
+  } | null = null;
 
   function syncScope(): string {
     const next = deps.getOwnerScopeKey();
@@ -170,58 +193,95 @@ export function createXaiMediaDiscovery(deps: XaiMediaDiscoveryDeps): {
     return next;
   }
 
-  function canApply(expectedGeneration: number, expectedScope: string): boolean {
+  function canApply(
+    expectedGeneration: number,
+    expectedScope: string,
+    expectedCredentialGeneration: number,
+  ): boolean {
     return (
       generation === expectedGeneration &&
       deps.getOwnerScopeKey() === expectedScope &&
+      deps.getCredentialGeneration() === expectedCredentialGeneration &&
       !deps.isOwnerBoundaryPending() &&
       deps.hasOAuthLogin()
     );
   }
 
+  function assertCurrent(
+    expectedGeneration: number,
+    expectedScope: string,
+    expectedCredentialGeneration: number,
+  ): void {
+    if (!canApply(expectedGeneration, expectedScope, expectedCredentialGeneration)) {
+      throw staleDiscovery;
+    }
+  }
+
   async function fetchList(
     path: '/image-generation-models' | '/video-generation-models',
     label: '图片' | '视频',
-    token: string,
+    initialToken: string,
     signal: AbortSignal,
+    assertStillCurrent: () => void,
   ): Promise<unknown> {
-    const response = await deps.fetchImplementation(`${XAI_API_BASE}${path}`, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-      redirect: 'error',
-      signal,
-    });
-    const text = await readBoundedResponseText(response, label);
-    if (!response.ok) {
-      if ((response.status === 401 || response.status === 403) && deps.onAuthRejected) {
-        await deps
-          .onAuthRejected({
-            status: response.status,
-            body: text.slice(0, 8 * 1024),
-            failedAccessToken: token,
-          })
-          .catch(() => undefined);
+    let token = initialToken;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      assertStillCurrent();
+      const response = await deps.fetchImplementation(`${XAI_API_BASE}${path}`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        redirect: 'error',
+        signal,
+      });
+      assertStillCurrent();
+      const text = await readBoundedResponseText(response, label, assertStillCurrent);
+      if (response.ok) return parsePayload(text, label);
+
+      const recovery =
+        attempt === 0 && (response.status === 401 || response.status === 403) && deps.onAuthRejected
+          ? await deps
+              .onAuthRejected({
+                status: response.status,
+                body: text.slice(0, 8 * 1024),
+                failedAccessToken: token,
+              })
+              .catch(() => undefined)
+          : undefined;
+      assertStillCurrent();
+      if (recovery === 'refreshed' || recovery === 'superseded') {
+        token = await deps.getAccessToken();
+        assertStillCurrent();
+        continue;
       }
       throw new Error(`xAI ${label}模型发现失败(HTTP ${response.status})`);
     }
-    return parsePayload(text, label);
+    throw new Error(`xAI ${label}模型发现失败:认证恢复重试耗尽`);
   }
 
   function refresh(): Promise<boolean> {
     const ownerScopeKey = syncScope();
     if (deps.isOwnerBoundaryPending() || !deps.hasOAuthLogin()) return Promise.resolve(false);
-    if (inflight?.generation === generation) return inflight.promise;
     const expectedGeneration = generation;
+    const expectedCredentialGeneration = deps.getCredentialGeneration();
+    if (
+      inflight?.generation === expectedGeneration &&
+      inflight.ownerScopeKey === ownerScopeKey &&
+      inflight.credentialGeneration === expectedCredentialGeneration
+    ) {
+      return inflight.promise;
+    }
     const flight = (async () => {
       try {
         const token = await deps.getAccessToken();
-        if (!canApply(expectedGeneration, ownerScopeKey)) return false;
+        assertCurrent(expectedGeneration, ownerScopeKey, expectedCredentialGeneration);
+        const assertStillCurrent = (): void =>
+          assertCurrent(expectedGeneration, ownerScopeKey, expectedCredentialGeneration);
         const signal = AbortSignal.timeout(HTTP_TIMEOUT_MS);
         const [imageResult, videoResult] = await Promise.allSettled([
-          fetchList('/image-generation-models', '图片', token, signal),
-          fetchList('/video-generation-models', '视频', token, signal),
+          fetchList('/image-generation-models', '图片', token, signal, assertStillCurrent),
+          fetchList('/video-generation-models', '视频', token, signal, assertStillCurrent),
         ]);
-        if (!canApply(expectedGeneration, ownerScopeKey)) return false;
+        assertStillCurrent();
         // 当前 xAI 图片通道同时承担生成与编辑，视频通道同时承担文生与单图生；
         // 所以动态条目必须覆盖各自完整输入面。以后若目录支持 per-model 能力，
         // 可在这里放宽为按条目声明，而不是靠名称猜测。
@@ -256,7 +316,7 @@ export function createXaiMediaDiscovery(deps: XaiMediaDiscoveryDeps): {
         if (!snapshot.imageModels && !snapshot.videoModels) {
           throw new Error(failures.join('; ') || 'xAI 媒体模型响应不可用');
         }
-        if (!canApply(expectedGeneration, ownerScopeKey)) return false;
+        assertStillCurrent();
         deps.applySnapshot(snapshot);
         if (failures.length > 0) {
           deps.log.warn(
@@ -272,6 +332,7 @@ export function createXaiMediaDiscovery(deps: XaiMediaDiscoveryDeps): {
         });
         return true;
       } catch (error) {
+        if (error === staleDiscovery) return false;
         deps.log.warn('xAI media model discovery failed; keeping current catalog fallback', {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -280,7 +341,12 @@ export function createXaiMediaDiscovery(deps: XaiMediaDiscoveryDeps): {
     })().finally(() => {
       if (inflight?.promise === flight) inflight = null;
     });
-    inflight = { generation: expectedGeneration, promise: flight };
+    inflight = {
+      generation: expectedGeneration,
+      ownerScopeKey,
+      credentialGeneration: expectedCredentialGeneration,
+      promise: flight,
+    };
     return flight;
   }
 
@@ -298,6 +364,7 @@ const log = createLogger('model-discovery:xai-media');
 const discovery = createXaiMediaDiscovery({
   hasOAuthLogin: () => hasGrokOAuthLogin(),
   getAccessToken: () => getGrokAccessToken(),
+  getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
   getOwnerScopeKey: () => activeOwnerScopeKey(),
   isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
   fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,

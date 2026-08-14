@@ -5,6 +5,7 @@ import {
   mapXaiMediaModels,
   type XaiMediaDiscoverySnapshot,
 } from '../model-discovery/xai-media.js';
+import type { XaiBridgeAuthInvalidationResult } from '../xai-bridge-auth-invalidation.js';
 
 function payload(id: string, input: string[], output: string[]): string {
   return JSON.stringify({
@@ -41,13 +42,20 @@ describe('mapXaiMediaModels', () => {
 });
 
 describe('xAI media discovery lifecycle', () => {
-  function harness(fetchImplementation: typeof fetch) {
+  function harness(
+    fetchImplementation: typeof fetch,
+    onAuthRejectedImplementation?: () => Promise<XaiBridgeAuthInvalidationResult>,
+  ) {
     const owner = { value: 'owner-a', pending: false, connected: true };
+    const auth = { token: 'oauth-token', credentialGeneration: 0 };
     const applied: Array<XaiMediaDiscoverySnapshot | null> = [];
-    const onAuthRejected = vi.fn(async () => undefined);
+    const onAuthRejected = vi.fn(async (): Promise<XaiBridgeAuthInvalidationResult> =>
+      onAuthRejectedImplementation ? await onAuthRejectedImplementation() : 'unchanged',
+    );
     const discovery = createXaiMediaDiscovery({
       hasOAuthLogin: () => owner.connected,
-      getAccessToken: async () => 'oauth-token',
+      getAccessToken: async () => auth.token,
+      getCredentialGeneration: () => auth.credentialGeneration,
       getOwnerScopeKey: () => owner.value,
       isOwnerBoundaryPending: () => owner.pending,
       fetchImplementation,
@@ -55,7 +63,7 @@ describe('xAI media discovery lifecycle', () => {
       onAuthRejected,
       log: { info: vi.fn(), warn: vi.fn() },
     });
-    return { discovery, owner, applied, onAuthRejected };
+    return { discovery, owner, auth, applied, onAuthRejected };
   }
 
   it('atomically applies image and video snapshots from the typed endpoints', async () => {
@@ -194,6 +202,185 @@ describe('xAI media discovery lifecycle', () => {
       body: 'expired',
       failedAccessToken: 'oauth-token',
     });
+    expect(h.applied).toEqual([]);
+  });
+
+  it('retries both image and video list GETs once with a refreshed token', async () => {
+    const calls: Array<{ path: string; authorization: string | null }> = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const authorization = new Headers(init?.headers).get('authorization');
+      calls.push({ path, authorization });
+      if (authorization === 'Bearer oauth-token') {
+        return new Response('expired', { status: 401 });
+      }
+      return new Response(
+        path.endsWith('/image-generation-models')
+          ? payload('recovered-image', ['text', 'image'], ['image'])
+          : payload('recovered-video', ['text', 'image'], ['video']),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+    const h = harness(fetchMock, async () => {
+      h.auth.token = 'refreshed-token';
+      return 'refreshed';
+    });
+
+    await expect(h.discovery.refresh()).resolves.toBe(true);
+    expect(calls).toHaveLength(4);
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        { path: '/v1/image-generation-models', authorization: 'Bearer oauth-token' },
+        { path: '/v1/video-generation-models', authorization: 'Bearer oauth-token' },
+        { path: '/v1/image-generation-models', authorization: 'Bearer refreshed-token' },
+        { path: '/v1/video-generation-models', authorization: 'Bearer refreshed-token' },
+      ]),
+    );
+    expect(h.applied).toEqual([
+      {
+        imageModels: [{ id: 'xai/recovered-image', name: 'Recovered Image' }],
+        videoModels: [{ id: 'xai/recovered-video', name: 'Recovered Video' }],
+      },
+    ]);
+  });
+
+  it('retries a safely superseded list GET with the replacement token', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get('authorization');
+      if (
+        String(url).endsWith('/image-generation-models') &&
+        authorization === 'Bearer oauth-token'
+      ) {
+        return new Response('expired', { status: 403 });
+      }
+      return new Response(
+        String(url).endsWith('/image-generation-models')
+          ? payload('superseded-image', ['text', 'image'], ['image'])
+          : payload('current-video', ['text', 'image'], ['video']),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+    const h = harness(fetchMock, async () => {
+      h.auth.token = 'replacement-token';
+      return 'superseded';
+    });
+
+    await expect(h.discovery.refresh()).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(h.applied[0]?.imageModels?.[0]?.id).toBe('xai/superseded-image');
+  });
+
+  it('does not retry again when the recovered GET is still unauthorized', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response('expired', { status: 401 }),
+    ) as unknown as typeof fetch;
+    const h = harness(fetchMock, async () => {
+      h.auth.token = 'refreshed-token';
+      return 'refreshed';
+    });
+
+    await expect(h.discovery.refresh()).resolves.toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(h.onAuthRejected).toHaveBeenCalledTimes(2);
+    expect(h.applied).toEqual([]);
+  });
+
+  it('keeps the fallback and does not retry when auth recovery fails', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response('expired', { status: 401 }),
+    ) as unknown as typeof fetch;
+    const h = harness(fetchMock, async () => {
+      throw new Error('refresh unavailable');
+    });
+
+    await expect(h.discovery.refresh()).resolves.toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(h.onAuthRejected).toHaveBeenCalledTimes(2);
+    expect(h.applied).toEqual([]);
+  });
+
+  it('does not retry or apply when auth recovery changes the credential generation', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) =>
+      String(url).endsWith('/image-generation-models')
+        ? new Response('expired', { status: 401 })
+        : new Response(payload('late-video', ['text', 'image'], ['video']), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const h = harness(fetchMock, async () => {
+      h.owner.connected = false;
+      h.auth.credentialGeneration += 1;
+      return 'logged_out';
+    });
+
+    await expect(h.discovery.refresh()).resolves.toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(h.applied).toEqual([]);
+  });
+
+  it('does not retry or apply when auth recovery crosses the owner boundary', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) =>
+      String(url).endsWith('/image-generation-models')
+        ? new Response('expired', { status: 401 })
+        : new Response(payload('late-video', ['text', 'image'], ['video']), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const h = harness(fetchMock, async () => {
+      h.owner.value = 'owner-b';
+      h.auth.token = 'owner-b-token';
+      return 'superseded';
+    });
+
+    await expect(h.discovery.refresh()).resolves.toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(h.applied).toEqual([]);
+  });
+
+  it('discards a retried response whose credential generation changes while streaming', async () => {
+    let releaseBody!: () => void;
+    let retryStarted!: () => void;
+    const retryStartedPromise = new Promise<void>((resolve) => {
+      retryStarted = resolve;
+    });
+    const releaseBodyPromise = new Promise<void>((resolve) => {
+      releaseBody = resolve;
+    });
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const isImage = String(url).endsWith('/image-generation-models');
+      const authorization = new Headers(init?.headers).get('authorization');
+      if (isImage && authorization === 'Bearer oauth-token') {
+        return new Response('expired', { status: 401 });
+      }
+      if (isImage) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoder.encode('{"models":['));
+              retryStarted();
+              void releaseBodyPromise.then(() => {
+                controller.enqueue(
+                  encoder.encode(
+                    '{"id":"late-image","input_modalities":["text","image"],"output_modalities":["image"]}]}',
+                  ),
+                );
+                controller.close();
+              });
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(payload('current-video', ['text', 'image'], ['video']), { status: 200 });
+    }) as unknown as typeof fetch;
+    const h = harness(fetchMock, async () => {
+      h.auth.token = 'refreshed-token';
+      return 'refreshed';
+    });
+
+    const refresh = h.discovery.refresh();
+    await retryStartedPromise;
+    h.auth.credentialGeneration += 1;
+    releaseBody();
+
+    await expect(refresh).resolves.toBe(false);
     expect(h.applied).toEqual([]);
   });
 });
