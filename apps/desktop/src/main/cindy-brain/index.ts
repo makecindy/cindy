@@ -306,7 +306,11 @@ import {
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-access-policy.js';
-import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
+import {
+  getGrokAccessToken,
+  getGrokOAuthCredentialGeneration,
+  hasGrokOAuthLogin,
+} from '../maker-host/grok-oauth-login.js';
 import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-host.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
@@ -3053,6 +3057,7 @@ function getVideoProviderRegistry() {
         modelAliases: xaiAliases,
         hasOAuthLogin: () => hasGrokOAuthLogin(),
         getAccessToken: () => getGrokAccessToken(),
+        getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
         getOwnerScopeKey: () => activeOwnerScopeKey(),
         isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
         fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,

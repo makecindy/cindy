@@ -77,6 +77,7 @@ interface XaiVideoStatusResponse extends XaiVideoErrorBody {
 export interface CreateXaiVideoProviderOptions {
   hasOAuthLogin(): boolean;
   getAccessToken(): Promise<string>;
+  getCredentialGeneration(): number;
   getOwnerScopeKey(): string;
   isOwnerBoundaryPending(): boolean;
   fetchImplementation?: typeof fetch;
@@ -125,6 +126,24 @@ function assertOwnerScopeCurrent(
   }
 }
 
+function assertCredentialGenerationCurrent(
+  opts: CreateXaiVideoProviderOptions,
+  expected: number,
+): void {
+  if (opts.getCredentialGeneration() !== expected) {
+    throw new Error('xAI 视频请求期间 SuperGrok 凭证已切换,请重试');
+  }
+}
+
+function assertRequestScopeCurrent(
+  opts: CreateXaiVideoProviderOptions,
+  ownerScopeKey: string,
+  credentialGeneration: number,
+): void {
+  assertOwnerScopeCurrent(opts, ownerScopeKey);
+  assertCredentialGenerationCurrent(opts, credentialGeneration);
+}
+
 async function notifyAuthRejected(
   opts: CreateXaiVideoProviderOptions,
   response: Response,
@@ -159,10 +178,16 @@ function assertXaiVideoUrl(raw: string): string {
   return url.toString();
 }
 
-function internalContentRef(taskId: string, ownerScopeKey: string, sourceUrl: string): string {
+function internalContentRef(
+  taskId: string,
+  ownerScopeKey: string,
+  credentialGeneration: number,
+  sourceUrl: string,
+): string {
   const url = new URL(`${INTERNAL_CONTENT_PROTOCOL}//${INTERNAL_CONTENT_HOST}`);
   url.pathname = `/${encodeURIComponent(taskId)}`;
   url.searchParams.set('owner', ownerScopeKey);
+  url.searchParams.set('credential', String(credentialGeneration));
   url.searchParams.set('source', assertXaiVideoUrl(sourceUrl));
   return url.toString();
 }
@@ -170,6 +195,7 @@ function internalContentRef(taskId: string, ownerScopeKey: string, sourceUrl: st
 function parseInternalContentRef(raw: string): {
   taskId: string;
   ownerScopeKey: string;
+  credentialGeneration: number;
   sourceUrl: string;
 } {
   let url: URL;
@@ -189,12 +215,19 @@ function parseInternalContentRef(raw: string): {
   }
   const encodedTaskId = url.pathname.slice(1);
   const ownerScopeKey = url.searchParams.get('owner');
+  const credentialGenerationRaw = url.searchParams.get('credential');
   const sourceUrl = url.searchParams.get('source');
+  const credentialGeneration = Number(credentialGenerationRaw);
   if (
     !encodedTaskId ||
     !ownerScopeKey ||
+    credentialGenerationRaw === null ||
+    !Number.isSafeInteger(credentialGeneration) ||
+    credentialGeneration < 0 ||
     !sourceUrl ||
-    [...url.searchParams.keys()].some((key) => key !== 'owner' && key !== 'source')
+    [...url.searchParams.keys()].some(
+      (key) => key !== 'owner' && key !== 'credential' && key !== 'source',
+    )
   ) {
     throw new Error('xAI 视频下载引用无效');
   }
@@ -205,7 +238,12 @@ function parseInternalContentRef(raw: string): {
     throw new Error('xAI 视频下载引用无效');
   }
   if (!taskId) throw new Error('xAI 视频下载引用无效');
-  return { taskId, ownerScopeKey, sourceUrl: assertXaiVideoUrl(sourceUrl) };
+  return {
+    taskId,
+    ownerScopeKey,
+    credentialGeneration,
+    sourceUrl: assertXaiVideoUrl(sourceUrl),
+  };
 }
 
 async function readBoundedVideo(
@@ -274,11 +312,12 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     url: string,
     phase: string,
     ownerScopeKey: string,
+    credentialGeneration: number,
     init: RequestInit,
   ): Promise<T> {
-    assertOwnerScopeCurrent(opts, ownerScopeKey);
+    assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
     const token = await opts.getAccessToken();
-    assertOwnerScopeCurrent(opts, ownerScopeKey);
+    assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
     const response = await doFetch(url, {
       ...init,
       headers: {
@@ -288,7 +327,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
       },
     });
     const text = await response.text();
-    assertOwnerScopeCurrent(opts, ownerScopeKey);
+    assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
     if (!response.ok) {
       await notifyAuthRejected(opts, response, text, token);
       throw new Error(`xAI 视频${phase}失败(HTTP ${response.status}):${errorDetail(text)}`);
@@ -310,6 +349,8 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     }
     opts.beforeDispatch?.(alias);
     const ownerScopeKey = captureOwnerScope(opts);
+    const credentialGeneration = opts.getCredentialGeneration();
+    assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
     const images = req.images ?? [];
     const body: Record<string, unknown> = {
       model: upstreamModelId,
@@ -331,6 +372,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
       `${XAI_API_BASE}/videos/generations`,
       '提交',
       ownerScopeKey,
+      credentialGeneration,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -341,12 +383,14 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     if (!response.request_id) {
       throw new Error('xAI 视频提交响应缺少 request_id');
     }
+    assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
     return {
       providerId: 'xai-video',
       taskId: response.request_id,
       modelUsed: upstreamModelId,
       submittedAt: Date.now(),
       ownerScopeKey,
+      credentialGeneration,
     };
   }
 
@@ -354,13 +398,20 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     handle: VideoTaskHandle,
     signal?: AbortSignal,
   ): Promise<VideoTaskStatus> {
-    if (handle.providerId !== 'xai-video' || !handle.ownerScopeKey) {
+    if (
+      handle.providerId !== 'xai-video' ||
+      !handle.ownerScopeKey ||
+      !Number.isSafeInteger(handle.credentialGeneration) ||
+      handle.credentialGeneration! < 0
+    ) {
       return { state: 'failed', error: 'xAI 视频任务句柄无效' };
     }
+    const credentialGeneration = handle.credentialGeneration!;
     const data = await authorizedJson<XaiVideoStatusResponse>(
       `${XAI_API_BASE}/videos/${encodeURIComponent(handle.taskId)}`,
       '查询',
       handle.ownerScopeKey,
+      credentialGeneration,
       { method: 'GET', signal },
     );
     if (data.status === 'pending' || data.status === undefined) {
@@ -377,10 +428,16 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     if (!data.video?.url) {
       return { state: 'failed', error: 'xAI 视频任务完成但未返回 video.url', raw: data };
     }
+    assertRequestScopeCurrent(opts, handle.ownerScopeKey, credentialGeneration);
     return {
       state: 'succeeded',
       // 下载只接受本 provider 生成的内部引用，避免把上游自报 URL 变成任意出网入口。
-      videoUrl: internalContentRef(handle.taskId, handle.ownerScopeKey, data.video.url),
+      videoUrl: internalContentRef(
+        handle.taskId,
+        handle.ownerScopeKey,
+        credentialGeneration,
+        data.video.url,
+      ),
       meta: {
         durationSec: data.video?.duration,
         resolution: data.video?.resolution,
@@ -395,19 +452,23 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     videoUrl: string,
     signal?: AbortSignal,
   ): Promise<{ buffer: Buffer; mimeType: string }> {
-    const { ownerScopeKey, sourceUrl } = parseInternalContentRef(videoUrl);
-    assertOwnerScopeCurrent(opts, ownerScopeKey);
+    const { ownerScopeKey, credentialGeneration, sourceUrl } = parseInternalContentRef(videoUrl);
+    const assertStillCurrent = () =>
+      assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
+    assertStillCurrent();
     // 完成态给的是 xAI 临时托管 URL。这里不携带 OAuth，避免凭证被带到
     // 下载域；严格限定 *.x.ai 且不自动跟随重定向。
     const response = await doFetch(sourceUrl, { method: 'GET', redirect: 'manual', signal });
+    assertStillCurrent();
     if (!response.ok) {
       const text = await response.text();
+      assertStillCurrent();
       throw new Error(`xAI 视频下载失败(HTTP ${response.status}):${errorDetail(text)}`);
     }
     const buffer = await readBoundedVideo(
       response,
       maxVideoDownloadBytes,
-      () => assertOwnerScopeCurrent(opts, ownerScopeKey),
+      assertStillCurrent,
     );
     if (buffer.byteLength === 0) throw new Error('xAI 视频下载结果为空');
     const declaredMime =
@@ -418,7 +479,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     }
     // 流读取中的逐块检查覆盖下载过程；这里再封住最后一个分块读完到结果交给
     // cindy-media 之间的同步窗口，旧账号产物绝不跨 owner 边界返回。
-    assertOwnerScopeCurrent(opts, ownerScopeKey);
+    assertStillCurrent();
     return { buffer, mimeType };
   }
 

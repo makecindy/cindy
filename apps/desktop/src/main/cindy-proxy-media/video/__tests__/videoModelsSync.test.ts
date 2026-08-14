@@ -44,6 +44,7 @@ function buildFullRegistry(): VideoProviderRegistry {
     createXaiVideoProvider({
       hasOAuthLogin: () => true,
       getAccessToken: async () => 'test-token',
+      getCredentialGeneration: () => 1,
       getOwnerScopeKey: () => 'owner-a',
       isOwnerBoundaryPending: () => false,
     }),

@@ -16,15 +16,19 @@ const MP4_BYTES = Buffer.from('00000010667479706d70343200000000', 'hex');
 interface HarnessOptions {
   fetchImplementation: typeof fetch;
   owner?: { value: string; pending: boolean };
+  credential?: { value: number };
+  getAccessToken?: () => Promise<string>;
   onAuthRejected?: ReturnType<typeof vi.fn>;
   maxVideoDownloadBytes?: number;
 }
 
 function makeProvider(options: HarnessOptions) {
   const owner = options.owner ?? { value: 'owner-a', pending: false };
+  const credential = options.credential ?? { value: 1 };
   return createXaiVideoProvider({
     hasOAuthLogin: () => true,
-    getAccessToken: async () => 'oauth-token',
+    getAccessToken: options.getAccessToken ?? (async () => 'oauth-token'),
+    getCredentialGeneration: () => credential.value,
     getOwnerScopeKey: () => owner.value,
     isOwnerBoundaryPending: () => owner.pending,
     fetchImplementation: options.fetchImplementation,
@@ -65,6 +69,7 @@ describe('xAI video provider · capabilities', () => {
       modelAliases: [future],
       hasOAuthLogin: () => true,
       getAccessToken: async () => 'oauth-token',
+      getCredentialGeneration: () => 1,
       getOwnerScopeKey: () => 'owner-a',
       isOwnerBoundaryPending: () => false,
       fetchImplementation: fetchMock,
@@ -101,6 +106,7 @@ describe('xAI video provider · submit', () => {
       taskId: 'video-1',
       modelUsed: 'grok-imagine-video',
       ownerScopeKey: 'owner-a',
+      credentialGeneration: 1,
     });
     const [url, init] = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(url).toBe('https://api.x.ai/v1/videos/generations');
@@ -184,6 +190,19 @@ describe('xAI video provider · submit', () => {
       failedAccessToken: 'oauth-token',
     });
   });
+
+  it('discards a late submit response after the SuperGrok credential changes', async () => {
+    const credential = { value: 1 };
+    const fetchMock = vi.fn(async () => {
+      credential.value = 2;
+      return new Response(JSON.stringify({ request_id: 'late-submit' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const provider = makeProvider({ fetchImplementation: fetchMock, credential });
+
+    await expect(
+      provider.submit({ prompt: 'late submit' }, XAI_VIDEO_CATALOG_MODEL_ID),
+    ).rejects.toThrow(/SuperGrok 凭证已切换/);
+  });
 });
 
 describe('xAI video provider · poll and download', () => {
@@ -250,6 +269,91 @@ describe('xAI video provider · poll and download', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects an old task before reading a replacement SuperGrok credential', async () => {
+    const credential = { value: 1 };
+    const getAccessToken = vi.fn(async () => 'account-a-token');
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ request_id: 'video-credential' }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const provider = makeProvider({ fetchImplementation: fetchMock, credential, getAccessToken });
+    const handle = await provider.submit(
+      { prompt: 'credential test' },
+      XAI_VIDEO_CATALOG_MODEL_ID,
+    );
+    credential.value = 2;
+
+    await expect(provider.poll(handle)).rejects.toThrow(/SuperGrok 凭证已切换/);
+    expect(getAccessToken).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a poll when the credential changes while the token is being read', async () => {
+    const credential = { value: 1 };
+    let tokenReads = 0;
+    const getAccessToken = vi.fn(async () => {
+      tokenReads += 1;
+      if (tokenReads === 2) credential.value = 2;
+      return tokenReads === 1 ? 'account-a-token' : 'account-b-token';
+    });
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ request_id: 'video-token-race' }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const provider = makeProvider({ fetchImplementation: fetchMock, credential, getAccessToken });
+    const handle = await provider.submit(
+      { prompt: 'token race' },
+      XAI_VIDEO_CATALOG_MODEL_ID,
+    );
+
+    await expect(provider.poll(handle)).rejects.toThrow(/SuperGrok 凭证已切换/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards a late poll response from the old credential generation', async () => {
+    const credential = { value: 1 };
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ request_id: 'video-late-poll' }), { status: 200 });
+      }
+      credential.value = 2;
+      return new Response(JSON.stringify({ status: 'pending' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const provider = makeProvider({ fetchImplementation: fetchMock, credential });
+    const handle = await provider.submit(
+      { prompt: 'late poll' },
+      XAI_VIDEO_CATALOG_MODEL_ID,
+    );
+
+    await expect(provider.poll(handle)).rejects.toThrow(/SuperGrok 凭证已切换/);
+  });
+
+  it('rejects an old completed-task download after logout or reconnect', async () => {
+    const credential = { value: 1 };
+    const responses = [
+      new Response(JSON.stringify({ request_id: 'video-old-download' }), { status: 200 }),
+      new Response(
+        JSON.stringify({
+          status: 'done',
+          video: { url: 'https://vidgen.x.ai/tasks/video-old-download.mp4' },
+        }),
+        { status: 200 },
+      ),
+    ];
+    const fetchMock = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
+    const provider = makeProvider({ fetchImplementation: fetchMock, credential });
+    const handle = await provider.submit(
+      { prompt: 'old download' },
+      XAI_VIDEO_CATALOG_MODEL_ID,
+    );
+    const done = await provider.poll(handle);
+    if (done.state !== 'succeeded') throw new Error('expected succeeded');
+    credential.value = 2;
+
+    await expect(provider.download(done.videoUrl)).rejects.toThrow(/SuperGrok 凭证已切换/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('trusts verified video bytes instead of the Content-Type header', async () => {
     const owner = { value: 'owner-a', pending: false };
     const validWithoutHeader = makeProvider({
@@ -259,7 +363,7 @@ describe('xAI video provider · poll and download', () => {
       ) as unknown as typeof fetch,
     });
     const videoUrl =
-      'xai-video://content/task?owner=owner-a&source=https%3A%2F%2Fvidgen.x.ai%2Ftask.mp4';
+      'xai-video://content/task?owner=owner-a&credential=1&source=https%3A%2F%2Fvidgen.x.ai%2Ftask.mp4';
 
     await expect(validWithoutHeader.download(videoUrl)).resolves.toEqual({
       buffer: MP4_BYTES,
@@ -303,9 +407,55 @@ describe('xAI video provider · poll and download', () => {
     }) as unknown as typeof fetch;
     const provider = makeProvider({ fetchImplementation: fetchMock, owner });
     const videoUrl =
-      'xai-video://content/task?owner=owner-a&source=https%3A%2F%2Fvidgen.x.ai%2Ftask.mp4';
+      'xai-video://content/task?owner=owner-a&credential=1&source=https%3A%2F%2Fvidgen.x.ai%2Ftask.mp4';
 
     await expect(provider.download(videoUrl)).rejects.toThrow(/账号已切换/);
+  });
+
+  it('rejects when the credential changes during the download stream', async () => {
+    const credential = { value: 1 };
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        credential.value = 2;
+        controller.enqueue(MP4_BYTES);
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn(async () =>
+      new Response(body, { status: 200, headers: { 'content-type': 'video/mp4' } }),
+    ) as unknown as typeof fetch;
+    const provider = makeProvider({ fetchImplementation: fetchMock, credential });
+    const videoUrl =
+      'xai-video://content/task?owner=owner-a&credential=1&source=https%3A%2F%2Fvidgen.x.ai%2Ftask.mp4';
+
+    await expect(provider.download(videoUrl)).rejects.toThrow(/SuperGrok 凭证已切换/);
+  });
+
+  it('rechecks the credential after download bytes are verified', async () => {
+    const credential = { value: 1 };
+    const responseBody = new Response(MP4_BYTES).body;
+    const fetchMock = vi.fn(async () => {
+      const response = {
+        ok: true,
+        status: 200,
+        body: responseBody,
+        headers: {
+          get(name: string) {
+            if (name.toLowerCase() === 'content-type') {
+              credential.value = 2;
+              return 'video/mp4';
+            }
+            return null;
+          },
+        },
+      };
+      return response as unknown as Response;
+    }) as unknown as typeof fetch;
+    const provider = makeProvider({ fetchImplementation: fetchMock, credential });
+    const videoUrl =
+      'xai-video://content/task?owner=owner-a&credential=1&source=https%3A%2F%2Fvidgen.x.ai%2Ftask.mp4';
+
+    await expect(provider.download(videoUrl)).rejects.toThrow(/SuperGrok 凭证已切换/);
   });
 
   it('rejects oversized video content before materializing it', async () => {

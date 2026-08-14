@@ -93,6 +93,12 @@ export interface VideoTaskHandle {
    * providers use it to reject poll/download after the active account changes.
    */
   ownerScopeKey?: string;
+  /**
+   * Optional provider-owned credential generation captured at submit time.
+   * Long-running account-backed providers use it in addition to ownerScopeKey
+   * so logout/relogin within the same app session invalidates the old task.
+   */
+  credentialGeneration?: number;
 }
 
 export interface VideoResultMeta {
