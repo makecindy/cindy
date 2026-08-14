@@ -184,6 +184,8 @@ export interface RoutingDescriptor {
    * （providerViewToConfig 从 routing 重建配置）不丢这个持久化字段。
    */
   modelsUrl?: string;
+  /** Pi 官方模型目录的 provider id；仅供 Pi 原生 provider 复用上游核实的模型协议/能力。 */
+  piCatalogProviderId?: string;
   /**
    * 该路由能服务的 wire model id 命名空间前缀白名单（每项形如 `xai/`，必须以 `/` 结尾）。
    *
@@ -487,6 +489,8 @@ export interface ProviderRuntimeModelConfig {
    * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的 BYOM 端点。
    */
   reasoningEfforts?: PiReasoningEffort[];
+  /** Pi 自定义模型的厂商推荐默认推理强度；必须包含在 reasoningEfforts 中。 */
+  reasoningDefaultEffort?: PiReasoningEffort;
 }
 
 /**
@@ -515,6 +519,8 @@ export interface ProviderPresetRuntime {
    * 防用户无意改坏已核验端点。
    */
   baseUrlEditable?: boolean;
+  /** 对应 `pi.dev/api/models/providers/<id>`；创建连接时快照，旧连接不自动补。 */
+  piCatalogProviderId?: string;
 }
 
 /**
@@ -604,6 +610,8 @@ export interface CustomProviderRuntimeConfig {
    * 从预设创建时随 `ProviderPresetRuntime.modelsUrl` 快照进来并持久化，编辑态仍可再拉。
    */
   modelsUrl?: string;
+  /** Pi 官方模型目录 provider id；缺省保持历史手填/BYOM 行为。 */
+  piCatalogProviderId?: string;
 }
 
 /**

@@ -89,6 +89,7 @@ import {
   resolveRemotePiBinaryPath,
 } from './pi-remote-transport.js';
 import { ensurePiManagerInstalled } from './pi-manager-client.js';
+import { createPiRemoteProviderForwardLease } from './pi-remote-provider-forward.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { routeInjectedRemoteMcpApprovalsThroughCindy } from './remote-claude-permission-mode.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
@@ -1760,7 +1761,19 @@ export function getMaker(): Maker {
       // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
       // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
       // 远端机器没在 pool / 未连接 → 抛错, PiAgent 把它当 startSession 失败传上去。
-      getRemotePiTransport: async (remoteHostId, { binaryPath: _localBinaryPath, remoteBinaryPath: providedRemoteBinaryPath, args, cwd, env, logger, sessionId }) => {
+      getRemotePiTransport: async (
+        remoteHostId,
+        {
+          binaryPath: _localBinaryPath,
+          remoteBinaryPath: providedRemoteBinaryPath,
+          args,
+          cwd,
+          env,
+          logger,
+          sessionId,
+          hostProxyForwards,
+        },
+      ) => {
         const remoteHost = getRemoteSshPool().get(remoteHostId);
         if (!remoteHost) {
           throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
@@ -1799,15 +1812,53 @@ export function getMaker(): Maker {
             });
           }
         });
-        return createSshPiDaemonTransport({
-          remoteHost,
-          binaryPath: remoteBinaryPath,
-          args,
-          cwd,
-          env,
-          logger,
-          daemonSessionId: sessionId ?? undefined,
-        });
+        const providerForwardLease = createPiRemoteProviderForwardLease(
+          (spec) => remoteHost.ensureRemoteForward(spec),
+        );
+        try {
+          for (const spec of hostProxyForwards ?? []) {
+            await providerForwardLease.ensure(spec);
+          }
+        } catch (error) {
+          await Promise.allSettled([providerForwardLease.releaseAll()]);
+          throw error;
+        }
+        let transport;
+        try {
+          transport = createSshPiDaemonTransport({
+            remoteHost,
+            binaryPath: remoteBinaryPath,
+            args,
+            cwd,
+            env,
+            logger,
+            daemonSessionId: sessionId ?? undefined,
+          });
+        } catch (error) {
+          await providerForwardLease.releaseAll();
+          throw error;
+        }
+        transport.ensureHostProxyForward = providerForwardLease.ensure;
+        if (transport.killRemoteSession) {
+          const killRemoteSession = transport.killRemoteSession.bind(transport);
+          transport.killRemoteSession = async () => {
+            try {
+              await killRemoteSession();
+            } finally {
+              await providerForwardLease.releaseAll();
+            }
+          };
+        } else {
+          const close = transport.close.bind(transport);
+          transport.close = async (reason?: string) => {
+            try {
+              await close(reason);
+            } finally {
+              await providerForwardLease.releaseAll();
+            }
+          };
+        }
+        return transport;
       },
       // 远端 Pi 的 agentHome 文件操作:models.json / extensions / perm / subagent 快照 /
       // resume stat 都落到远端机器(pi 进程在远端读)。经 SSH stdin 管道写文件(cat > 原子

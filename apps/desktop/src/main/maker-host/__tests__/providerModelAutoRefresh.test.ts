@@ -61,7 +61,7 @@ describe('provider model auto-refresh coordinator', () => {
     expect(refreshCatalog).toHaveBeenCalledOnce();
   });
 
-  it('refreshes connected xAI media separately from the shared Catalog', async () => {
+  it('refreshes xAI account membership and media independently after shared Catalog metadata', async () => {
     let now = 1_000;
     const refreshCatalog = vi.fn(async () => undefined);
     const refreshProvider = vi.fn(async () => undefined);
@@ -73,7 +73,7 @@ describe('provider model auto-refresh coordinator', () => {
       log: { debug: vi.fn(), warn: vi.fn() },
     });
 
-    // Splash already loaded the public Catalog, but account-scoped media discovery still runs.
+    // Splash already loaded the public Catalog; startup still reads the connected account list.
     await coordinator.requestAutoRefresh('startup');
     expect(refreshCatalog).not.toHaveBeenCalled();
     expect(refreshProvider).toHaveBeenCalledOnce();
@@ -82,10 +82,9 @@ describe('provider model auto-refresh coordinator', () => {
     now += PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
     await coordinator.requestAutoRefresh('foreground');
     expect(refreshCatalog).toHaveBeenCalledOnce();
-    // provider 自己的上次成功快照仍在 30 分钟冷却内，不重复打 xAI 账号端点。
     expect(refreshProvider).toHaveBeenCalledOnce();
 
-    // Manual xAI refresh updates both the shared Catalog and account-scoped media snapshot.
+    // Manual xAI refresh updates the public Catalog plus both account-scoped model sources.
     await coordinator.refreshManually('xai');
     expect(refreshCatalog).toHaveBeenCalledTimes(2);
     expect(refreshProvider).toHaveBeenCalledTimes(2);

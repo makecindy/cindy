@@ -6,6 +6,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { derivePiRuntimeFromClaudeRuntime } from '../../../shared/piRuntimeInitialization.js';
 
+vi.mock('../grok-oauth-login.js', () => ({
+  hasGrokOAuthLogin: () => true,
+}));
+
+vi.mock('../anthropic-compat-proxy-host.js', () => ({
+  getClaudeEndpoint: () => 'http://127.0.0.1:18765',
+}));
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
@@ -14,7 +22,13 @@ vi.mock('electron', () => ({
   },
 }));
 
-import { buildPiNativeProvidersFromConfigs, piNativeKeyEnvVar } from '../pi-host.js';
+import {
+  buildXaiPiNativeProvider,
+  buildPiNativeProvidersFromConfigs,
+  PI_XAI_COMPAT_FORWARD_PORT,
+  piNativeKeyEnvVar,
+  piNativeModelId,
+} from '../pi-host.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
 
@@ -25,6 +39,214 @@ const piRuntime = (over: Partial<NonNullable<Cfg['runtimes']['pi']>> = {}) => ({
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
+  it('keeps a legacy custom xai endpoint separate from the official SuperGrok provider', () => {
+    const { providers, env } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'xai',
+        name: 'Private xAI-compatible endpoint',
+        auth: { method: 'apiKey' },
+        runtimes: {
+          pi: piRuntime({
+            baseUrl: 'https://private-xai.example/v1',
+            models: [{ id: 'private-grok', name: 'Private Grok' }],
+          }),
+        },
+      }],
+      (providerId) => (providerId === 'xai' ? 'legacy-custom-key' : null),
+    );
+    expect(providers).toEqual([
+      expect.objectContaining({
+        id: 'custom:xai',
+        baseUrl: 'https://private-xai.example/v1',
+        models: [expect.objectContaining({ id: 'private-grok' })],
+      }),
+    ]);
+    expect(Object.values(env)).toContain('legacy-custom-key');
+  });
+
+  it('reuses exact Pi official metadata and preserves unmatched configured models', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'deepseek-local',
+        name: 'DeepSeek Local',
+        auth: { method: 'apiKey' },
+        runtimes: {
+          pi: piRuntime({
+            baseUrl: 'https://api.deepseek.com',
+            piCatalogProviderId: 'deepseek',
+            models: [
+              { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+              { id: 'models-url-only', name: 'Models URL Only', contextWindow: 64_000 },
+            ],
+          }),
+        },
+      }],
+      () => 'secret',
+    );
+    expect(providers[0]).toMatchObject({ id: 'deepseek-local', baseUrl: 'https://api.deepseek.com' });
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'deepseek-v4-pro',
+      api: 'openai-completions',
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      reasoning: true,
+      thinkingLevelMap: { low: null, high: 'high', max: 'max' },
+    });
+    expect(providers[0]?.models[1]).toEqual({
+      id: 'models-url-only',
+      name: 'Models URL Only',
+      contextWindow: 64_000,
+    });
+  });
+
+  it('does not apply official per-model routing after the user changes endpoint or protocol', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'deepseek-proxy',
+        name: 'DeepSeek Proxy',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: piRuntime({
+            baseUrl: 'https://proxy.example/anthropic',
+            wireProtocol: 'anthropic-messages',
+            piCatalogProviderId: 'deepseek',
+            models: [{ id: 'deepseek-v4-pro', name: 'Proxy DeepSeek', contextWindow: 64_000 }],
+          }),
+        },
+      }],
+      () => null,
+    );
+    expect(providers[0]).toMatchObject({
+      baseUrl: 'https://proxy.example/anthropic',
+      api: 'anthropic-messages',
+      models: [{ id: 'deepseek-v4-pro', name: 'Proxy DeepSeek', contextWindow: 64_000 }],
+    });
+    expect(providers[0]?.models[0]).not.toHaveProperty('thinkingLevelMap');
+  });
+
+  it('preserves per-model headers from the official Pi catalog', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'kimi-coding-local',
+        name: 'Kimi Coding Local',
+        auth: { method: 'apiKey' },
+        runtimes: {
+          pi: piRuntime({
+            baseUrl: 'https://api.kimi.com/coding',
+            wireProtocol: 'anthropic-messages',
+            piCatalogProviderId: 'kimi-coding',
+            models: [{ id: 'k3', name: 'Kimi K3' }],
+          }),
+        },
+      }],
+      () => 'secret',
+    );
+    expect(providers[0]?.models[0]).toMatchObject({
+      id: 'k3',
+      headers: { 'User-Agent': 'KimiCLI/1.5' },
+    });
+  });
+
+  it('preserves explicit overrides for an exact official model after the catalog marker is cleared', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'deepseek-customized',
+        name: 'DeepSeek Customized',
+        auth: { method: 'apiKey' },
+        runtimes: {
+          pi: piRuntime({
+            baseUrl: 'https://api.deepseek.com',
+            wireProtocol: 'openai-chat',
+            models: [{
+              id: 'deepseek-v4-flash',
+              name: 'My DeepSeek Flash',
+              contextWindow: 64_000,
+              supportsImageInput: true,
+              reasoning: true,
+              reasoningEfforts: ['low'],
+            }],
+          }),
+        },
+      }],
+      () => 'secret',
+    );
+    expect(providers[0]?.models[0]).toEqual({
+      id: 'deepseek-v4-flash',
+      name: 'My DeepSeek Flash',
+      contextWindow: 64_000,
+      input: ['text', 'image'],
+      reasoning: true,
+      thinkingLevelMap: {
+        minimal: null,
+        low: 'low',
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: null,
+      },
+    });
+  });
+
+  it('maps historical xAI namespaced ids to Pi official bare ids', () => {
+    expect(piNativeModelId('xai', 'xai/grok-4.6')).toBe('grok-4.6');
+    expect(piNativeModelId('xai', 'grok-4.6')).toBe('grok-4.6');
+    expect(piNativeModelId('deepseek', 'xai/grok-4.6')).toBe('xai/grok-4.6');
+  });
+
+  it('builds Grok 4.6 from the Pi official xAI catalog without losing protocol metadata', async () => {
+    const { providers, env } = await buildXaiPiNativeProvider('xai/grok-4.6');
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({
+      id: 'xai',
+      baseUrl: 'http://127.0.0.1:18765',
+      api: 'anthropic-messages',
+      apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+      headers: {
+        'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
+        'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
+      },
+      modelIdAliases: { 'grok-4.6': 'xai/grok-4.6' },
+    });
+    expect(providers[0]?.models.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
+      api: 'anthropic-messages',
+      contextWindow: 500_000,
+      maxTokens: 500_000,
+      input: ['text', 'image'],
+      reasoning: true,
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+      },
+    });
+    expect(env).toEqual({
+      CINDY_PI_XAI_PROXY_API_KEY: 'cindy-pi-provider-auth-placeholder',
+    });
+  });
+
+  it('projects remote xAI through an exact SSH reverse-forward to the Desktop compat proxy', async () => {
+    const { providers } = await buildXaiPiNativeProvider('grok-4.6', false, true);
+    expect(providers[0]).toMatchObject({
+      id: 'xai',
+      baseUrl: `http://127.0.0.1:${PI_XAI_COMPAT_FORWARD_PORT}`,
+      api: 'anthropic-messages',
+      hostProxyForward: {
+        localUrl: 'http://127.0.0.1:18765',
+        remotePort: PI_XAI_COMPAT_FORWARD_PORT,
+      },
+    });
+  });
+
+  it('adds a private conservative xAI descriptor only when resuming a historical namespaced id', async () => {
+    await expect(buildXaiPiNativeProvider('xai/grok-retired')).rejects.toThrow(/does not contain/);
+    const { providers } = await buildXaiPiNativeProvider('xai/grok-retired', true);
+    expect(providers[0]?.models.find((model) => model.id === 'xai/grok-retired')).toEqual({
+      id: 'xai/grok-retired',
+      name: 'xai/grok-retired',
+      api: 'anthropic-messages',
+    });
+    expect(providers[0]?.modelIdAliases?.['grok-retired']).toBe('xai/grok-retired');
+  });
   it('turns a Claude-derived wizard runtime and copied Pi key into a callable native provider', () => {
     const derived = derivePiRuntimeFromClaudeRuntime({
       baseUrl: 'https://api.example/anthropic',
@@ -248,5 +470,29 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       },
       { id: 'legacy', name: 'Legacy', contextWindow: undefined },
     ]);
+  });
+
+  it.each([
+    ['deepseek-v4-pro', 'DeepSeek V4 Pro', false],
+    ['kimi-k3', 'Kimi K3', true],
+  ] as const)('maps %s exact reasoning levels and image capability into Pi', (id, name, visual) => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'cn-provider', name: 'CN Provider', auth: { method: 'none' },
+        runtimes: { pi: piRuntime({ models: [{
+          id, name, ...(visual ? { supportsImageInput: true } : {}),
+          reasoning: true, reasoningEfforts: ['low', 'high', 'max'],
+        }] }) },
+      }],
+      () => null,
+    );
+    expect(providers[0].models[0]).toEqual({
+      id, name, contextWindow: undefined,
+      ...(visual ? { input: ['text', 'image'] } : {}),
+      reasoning: true,
+      thinkingLevelMap: {
+        minimal: null, low: 'low', medium: null, high: 'high', xhigh: null, max: 'max',
+      },
+    });
   });
 });

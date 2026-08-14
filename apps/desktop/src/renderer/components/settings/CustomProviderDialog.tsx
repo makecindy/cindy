@@ -40,6 +40,7 @@ import {
 import { extractIpcError } from '@/utils/ipcError';
 import {
   createCustomProvider,
+  piCatalogProviderIdAfterRouteEdit,
   readCustomProviderKey,
   replaceCustomProviderModelId,
   setCustomProviderModelReasoning,
@@ -172,6 +173,8 @@ interface RuntimeFields extends RuntimeFillDraft {
   headers: HeaderRow[];
   /** 隐藏字段：列模型端点（预设 / 已存配置快照进来），「获取模型列表」用；不在表单展示。 */
   modelsUrl: string;
+  /** 隐藏字段：从 Pi 官方目录生成该 runtime；编辑保存必须无损保留。 */
+  piCatalogProviderId?: string;
 }
 
 /** 每个 runtime Tab 的「测试连接」状态（idle → testing → ok/fail）。 */
@@ -192,6 +195,7 @@ function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
     models: [{ id: '', name: '' }],
     headers: [{ name: '', value: '' }],
     modelsUrl: '',
+    piCatalogProviderId: undefined,
   };
 }
 
@@ -216,6 +220,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
             ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
             : [{ name: '', value: '' }],
         modelsUrl: rc.modelsUrl ?? '',
+        piCatalogProviderId: rc.piCatalogProviderId,
         headersState: rc.headersState,
       };
     }
@@ -504,9 +509,13 @@ export function CustomProviderDialog({
   const setRtSynced = useCallback(
     (fn: (prev: Record<DialogAgentKind, RuntimeFields>) => Record<DialogAgentKind, RuntimeFields>) => {
       setRt((prev) => {
-        const next = fn(prev);
-        rtRef.current = next;
-        return next;
+        const updated = fn(prev);
+        // Do not consume the catalog marker while the user is still editing.
+        // A temporary route/model change can be reverted before Save; marker
+        // ownership is decided once below from the persisted baseline and the
+        // final serialized values.
+        rtRef.current = updated;
+        return updated;
       });
     },
     [],
@@ -628,6 +637,7 @@ export function CustomProviderDialog({
                 ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
                 : [{ name: '', value: '' }],
             modelsUrl: rc.modelsUrl ?? '',
+            piCatalogProviderId: rc.piCatalogProviderId,
           };
         }
         return next;
@@ -1112,7 +1122,13 @@ export function CustomProviderDialog({
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
             ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
             ...(m.reasoning === true && m.reasoningEfforts?.length
-              ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+              ? {
+                  reasoning: true,
+                  reasoningEfforts: [...m.reasoningEfforts],
+                  ...(m.reasoningDefaultEffort
+                    ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+                    : {}),
+                }
               : {}),
           }))
           .filter((m) => m.id.length > 0);
@@ -1136,7 +1152,13 @@ export function CustomProviderDialog({
               ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
               ...(cur?.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...(cur?.reasoning === true && cur.reasoningEfforts?.length
-                ? { reasoning: true, reasoningEfforts: [...cur.reasoningEfforts] }
+                ? {
+                    reasoning: true,
+                    reasoningEfforts: [...cur.reasoningEfforts],
+                    ...(cur.reasoningDefaultEffort
+                      ? { reasoningDefaultEffort: cur.reasoningDefaultEffort }
+                      : {}),
+                  }
                 : {}),
             };
           }),
@@ -1196,6 +1218,9 @@ export function CustomProviderDialog({
       const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
       const reasoning = latest ? latest.reasoning : m.reasoning;
       const reasoningEfforts = latest ? latest.reasoningEfforts : m.reasoningEfforts;
+      const reasoningDefaultEffort = latest
+        ? latest.reasoningDefaultEffort
+        : m.reasoningDefaultEffort;
       return {
         id: m.id,
         name: latest?.name.trim() ? latest.name.trim() : m.name,
@@ -1203,7 +1228,13 @@ export function CustomProviderDialog({
         ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
         ...(supportsImageInput === true ? { supportsImageInput: true } : {}),
         ...(reasoning === true && reasoningEfforts?.length
-          ? { reasoning: true, reasoningEfforts: [...reasoningEfforts] }
+          ? {
+              reasoning: true,
+              reasoningEfforts: [...reasoningEfforts],
+              ...(reasoningDefaultEffort
+                ? { reasoningDefaultEffort }
+                : {}),
+            }
           : {}),
       };
     });
@@ -1217,7 +1248,13 @@ export function CustomProviderDialog({
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
           ...(m.reasoning === true && m.reasoningEfforts?.length
-            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+            ? {
+                reasoning: true,
+                reasoningEfforts: [...m.reasoningEfforts],
+                ...(m.reasoningDefaultEffort
+                  ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+                  : {}),
+              }
             : {}),
         });
       }
@@ -1345,7 +1382,13 @@ export function CustomProviderDialog({
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
           ...(m.reasoning === true && m.reasoningEfforts?.length
-            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+            ? {
+                reasoning: true,
+                reasoningEfforts: [...m.reasoningEfforts],
+                ...(m.reasoningDefaultEffort
+                  ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+                  : {}),
+              }
             : {}),
         }))
         .filter((m) => m.id && m.name);
@@ -1375,7 +1418,22 @@ export function CustomProviderDialog({
         models,
         ...(Object.keys(savedHeaders).length > 0 ? { headers: savedHeaders } : {}),
         ...(rf.modelsUrl.trim() ? { modelsUrl: rf.modelsUrl.trim() } : {}),
+        ...(a === 'pi' && rf.piCatalogProviderId
+          ? { piCatalogProviderId: rf.piCatalogProviderId }
+          : {}),
       };
+      if (a === 'pi' && initial?.runtimes.pi?.piCatalogProviderId) {
+        const savedPiCatalogProviderId = piCatalogProviderIdAfterRouteEdit(
+          a,
+          initial.runtimes.pi,
+          runtimes.pi!,
+        );
+        if (savedPiCatalogProviderId) {
+          runtimes.pi!.piCatalogProviderId = savedPiCatalogProviderId;
+        } else {
+          delete runtimes.pi!.piCatalogProviderId;
+        }
+      }
       // OAuth 形态不收集 per-runtime API key（鉴权走 Runner 的 Bearer）。
       if (
         authMode === 'apiKey' &&

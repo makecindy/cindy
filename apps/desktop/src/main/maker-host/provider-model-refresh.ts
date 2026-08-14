@@ -11,6 +11,7 @@ export interface BuiltinProviderModelRefreshDeps {
   refreshXd(): Promise<void>;
   refreshAnthropic(): Promise<boolean>;
   refreshOpenAi(): Promise<boolean>;
+  refreshXai(): Promise<boolean>;
   refreshXaiMedia(): Promise<boolean>;
 }
 
@@ -33,8 +34,12 @@ export async function refreshBuiltinProviderModels(
       }
       return;
     case 'xai':
+      if (!(await deps.refreshXai())) {
+        throw new Error('xAI account model discovery did not apply to the current runtime');
+      }
       if (!(await deps.refreshXaiMedia())) {
         throw new Error('xAI media model discovery did not produce a current snapshot');
       }
+      return;
   }
 }

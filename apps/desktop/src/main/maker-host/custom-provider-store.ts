@@ -24,10 +24,12 @@ import type {
   ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 import {
+  effectivePiWireProtocol,
   findReservedOAuthExtraParam,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
+  preservesPiCatalogModels,
 } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
@@ -38,7 +40,7 @@ export const CUSTOM_PROVIDER_ID_RE = /^[a-z0-9_-]+$/;
 /** 不可占用的内置来源 id。 */
 // 'cindy' 是 pi models.json 里网关 provider 的保留 id;自定义 provider 撞名会让其模型
 // 既被排除出网关块又不写入原生块 → --model 校验失败,故一并保留。
-const RESERVED_IDS = new Set(['anthropic', 'openai', 'xd', 'cindy']);
+const RESERVED_IDS = new Set(['anthropic', 'openai', 'xai', 'xd', 'cindy']);
 const VALID_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
@@ -74,7 +76,15 @@ function parseStoredPiReasoningCapability(
   ) {
     return {};
   }
-  return { reasoning: true, reasoningEfforts: efforts };
+  const defaultEffort = isPiReasoningEffort(model.reasoningDefaultEffort)
+    && efforts.includes(model.reasoningDefaultEffort)
+    ? model.reasoningDefaultEffort
+    : undefined;
+  return {
+    reasoning: true,
+    reasoningEfforts: efforts,
+    ...(defaultEffort ? { reasoningDefaultEffort: defaultEffort } : {}),
+  };
 }
 
 function validateNoAuthLoopbackBoundary(
@@ -143,7 +153,10 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
       return invalid(`runtime '${agent}' model.supportsImageInput must be a boolean`);
     }
-    const hasReasoningCapability = mm.reasoning !== undefined || mm.reasoningEfforts !== undefined;
+    const hasReasoningCapability =
+      mm.reasoning !== undefined
+      || mm.reasoningEfforts !== undefined
+      || mm.reasoningDefaultEffort !== undefined;
     if (hasReasoningCapability && agent !== 'pi') {
       return invalid(`runtime '${agent}' reasoning capability is only supported for pi models`);
     }
@@ -160,8 +173,17 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       ) {
         return invalid(`runtime '${agent}' model.reasoningEfforts invalid`);
       }
-    } else if (mm.reasoningEfforts !== undefined) {
-      return invalid(`runtime '${agent}' model.reasoningEfforts requires reasoning=true`);
+      if (
+        mm.reasoningDefaultEffort !== undefined
+        && (
+          !isPiReasoningEffort(mm.reasoningDefaultEffort)
+          || !mm.reasoningEfforts.includes(mm.reasoningDefaultEffort)
+        )
+      ) {
+        return invalid(`runtime '${agent}' model.reasoningDefaultEffort invalid`);
+      }
+    } else if (mm.reasoningEfforts !== undefined || mm.reasoningDefaultEffort !== undefined) {
+      return invalid(`runtime '${agent}' reasoning metadata requires reasoning=true`);
     }
   }
   if (r.wireProtocol !== undefined) {
@@ -196,6 +218,16 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     } catch {
       return invalid(`runtime '${agent}' modelsUrl is not a valid URL`);
     }
+  }
+  if (
+    r.piCatalogProviderId !== undefined
+    && (
+      agent !== 'pi'
+      || typeof r.piCatalogProviderId !== 'string'
+      || !/^[a-z0-9-]+$/.test(r.piCatalogProviderId)
+    )
+  ) {
+    return invalid(`runtime '${agent}' piCatalogProviderId invalid`);
   }
   return { ok: true };
 }
@@ -332,14 +364,19 @@ function validateAuthSection(auth: unknown): ValidationResult {
 }
 
 /** 纯函数：校验一份自定义供应商配置的结构合法性（per-runtime）。 */
-export function validateCustomProviderConfig(config: unknown): ValidationResult {
+export function validateCustomProviderConfig(
+  config: unknown,
+  options: { allowLegacyXai?: boolean } = {},
+): ValidationResult {
   if (!config || typeof config !== 'object') return invalid('config must be an object');
   const c = config as Record<string, unknown>;
 
   if (typeof c.id !== 'string' || c.id.length === 0) return invalid('id required');
   if (c.id.length > MAX_ID_LEN) return invalid(`id too long (max ${MAX_ID_LEN})`);
   if (!CUSTOM_PROVIDER_ID_RE.test(c.id)) return invalid('id must match /^[a-z0-9_-]+$/');
-  if (RESERVED_IDS.has(c.id)) return invalid(`id '${c.id}' is reserved`);
+  if (RESERVED_IDS.has(c.id) && !(c.id === 'xai' && options.allowLegacyXai === true)) {
+    return invalid(`id '${c.id}' is reserved`);
+  }
 
   if (typeof c.name !== 'string' || c.name.trim().length === 0) return invalid('name required');
   if (c.name.length > MAX_NAME_LEN) return invalid(`name too long (max ${MAX_NAME_LEN})`);
@@ -380,7 +417,13 @@ function normalizeRuntime(
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
       ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
       ...(agent === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
-        ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+        ? {
+            reasoning: true,
+            reasoningEfforts: [...m.reasoningEfforts],
+            ...(m.reasoningDefaultEffort
+              ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+              : {}),
+          }
         : {}),
     }))
     .filter((m) => {
@@ -394,6 +437,7 @@ function normalizeRuntime(
     out.requestPath = rt.requestPath.trim();
   }
   if (rt.modelsUrl && rt.modelsUrl.trim()) out.modelsUrl = rt.modelsUrl.trim();
+  if (agent === 'pi' && rt.piCatalogProviderId) out.piCatalogProviderId = rt.piCatalogProviderId;
   return out;
 }
 
@@ -439,6 +483,33 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
     out.auth = { method: 'none' };
   }
   return out;
+}
+
+/**
+ * 官方目录标记只适用于用户尚未改写的预设快照。所有写入口都在 main 再比一次旧值，
+ * 避免非当前设置页（移动端、旧 renderer、异步发现）改了路由或模型后仍保留 marker，
+ * 继而在 Pi 启动时用官方模型整条覆盖用户显式配置。
+ */
+function invalidateEditedPiCatalogMarker(
+  previous: CustomProviderConfig,
+  next: CustomProviderConfig,
+): CustomProviderConfig {
+  const previousPi = previous.runtimes.pi;
+  const nextPi = next.runtimes.pi;
+  if (
+    !previousPi?.piCatalogProviderId
+    || !nextPi?.piCatalogProviderId
+    || previousPi.piCatalogProviderId !== nextPi.piCatalogProviderId
+  ) return next;
+  const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
+  const unchanged = normalizeBaseUrl(previousPi.baseUrl) === normalizeBaseUrl(nextPi.baseUrl)
+    && effectivePiWireProtocol(previousPi.wireProtocol)
+      === effectivePiWireProtocol(nextPi.wireProtocol)
+    && preservesPiCatalogModels(previousPi.models, nextPi.models);
+  if (unchanged) return next;
+  const pi = { ...nextPi };
+  delete pi.piCatalogProviderId;
+  return { ...next, runtimes: { ...next.runtimes, pi } };
 }
 
 /**
@@ -544,6 +615,13 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       entry.headers = r.headers as Record<string, string>;
     }
     if (typeof r.modelsUrl === 'string' && r.modelsUrl.length > 0) entry.modelsUrl = r.modelsUrl;
+    if (
+      agent === 'pi'
+      && typeof r.piCatalogProviderId === 'string'
+      && /^[a-z0-9-]+$/.test(r.piCatalogProviderId)
+    ) {
+      entry.piCatalogProviderId = r.piCatalogProviderId;
+    }
     out[agent] = entry;
   }
   return out;
@@ -618,10 +696,13 @@ export async function updateCustomProvider(
   config: CustomProviderConfig,
   now: number = Date.now(),
 ): Promise<CustomProviderConfig | null> {
-  const c = normalizeConfig({ ...config, id });
   const db = getDbClient().drizzle;
   const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
   if (!existing) return null;
+  const c = invalidateEditedPiCatalogMarker(
+    rowToConfig(existing),
+    normalizeConfig({ ...config, id }),
+  );
   await db
     .update(customProviders)
     .set({
@@ -645,7 +726,10 @@ export async function updateCustomProviderIfUnchanged(
   now: number = Date.now(),
 ): Promise<boolean> {
   const expectedConfig = normalizeConfig({ ...expected, id });
-  const nextConfig = normalizeConfig({ ...config, id });
+  const nextConfig = invalidateEditedPiCatalogMarker(
+    expectedConfig,
+    normalizeConfig({ ...config, id }),
+  );
   const db = getDbClient().drizzle;
   const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
   if (!existing) return false;

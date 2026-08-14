@@ -9,18 +9,25 @@
 
 import { timingSafeEqual } from 'node:crypto';
 
-const activeTokens = new Map<string, string>();
+interface PiProxySessionRegistration {
+  token: string;
+}
+
+const activeRegistrations = new Map<string, PiProxySessionRegistration>();
 
 export function registerPiProxySession(sessionId: string, token: string): () => void {
   if (!sessionId || !token) throw new Error('Pi proxy session registration requires an id and token');
-  activeTokens.set(sessionId, token);
+  const registration = { token };
+  activeRegistrations.set(sessionId, registration);
   return () => {
-    if (activeTokens.get(sessionId) === token) activeTokens.delete(sessionId);
+    if (activeRegistrations.get(sessionId) === registration) {
+      activeRegistrations.delete(sessionId);
+    }
   };
 }
 
 export function authenticatePiProxySession(sessionId: string, candidate: string | null): boolean {
-  const expected = activeTokens.get(sessionId);
+  const expected = activeRegistrations.get(sessionId)?.token;
   if (!expected || !candidate) return false;
   const expectedBytes = Buffer.from(expected);
   const candidateBytes = Buffer.from(candidate);
@@ -30,5 +37,5 @@ export function authenticatePiProxySession(sessionId: string, candidate: string 
 
 /** Test isolation only. */
 export function resetPiProxySessionsForTest(): void {
-  activeTokens.clear();
+  activeRegistrations.clear();
 }

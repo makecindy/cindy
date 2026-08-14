@@ -16,7 +16,13 @@ export function savedCustomProviderModelShape(
       ? { supportsImageInput: true }
       : {}),
     ...(includePiCapabilities && model.reasoning === true && model.reasoningEfforts?.length
-      ? { reasoning: true, reasoningEfforts: [...model.reasoningEfforts] }
+      ? {
+          reasoning: true,
+          reasoningEfforts: [...model.reasoningEfforts],
+          ...(model.reasoningDefaultEffort
+            ? { reasoningDefaultEffort: model.reasoningDefaultEffort }
+            : {}),
+        }
       : {}),
   };
 }

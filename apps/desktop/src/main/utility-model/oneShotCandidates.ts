@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { type AgentKind, type Maker } from '@cindy/maker-core';
-import { appendProviderRequestPath } from '@cindy/model-providers';
+import { appendProviderRequestPath, storedCustomProviderId } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
@@ -470,7 +470,7 @@ async function requestExplicitProviderText(
   const isOAuth = authStrategy === 'oauth-token';
   const noAuth = authStrategy === 'none';
   const credential = isOAuth
-    ? readCachedGenericOAuthAccessToken(provider.id, provider.auth.oauth)
+    ? readCachedGenericOAuthAccessToken(storedCustomProviderId(provider.id), provider.auth.oauth)
     : noAuth
       ? null
       : readCustomProviderKey(provider.id, agentKind);

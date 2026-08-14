@@ -10,8 +10,14 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { buildUserProvider, DEFAULT_CUSTOM_CONTEXT_WINDOW } from '../user-provider.js';
+import {
+  buildUserProvider,
+  DEFAULT_CUSTOM_CONTEXT_WINDOW,
+  LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
+  storedCustomProviderId,
+} from '../user-provider.js';
 import type { CustomProviderConfig } from '../types.js';
+import { BUNDLED_CATALOG } from '../catalog.js';
 
 const codexOnly: CustomProviderConfig = {
   id: 'openrouter',
@@ -28,6 +34,17 @@ const codexOnly: CustomProviderConfig = {
 };
 
 describe('buildUserProvider (per-runtime)', () => {
+  it('projects a legacy custom xai row under a collision-free runtime id', () => {
+    const provider = buildUserProvider({
+      ...codexOnly,
+      id: 'xai',
+      name: 'My xAI-compatible endpoint',
+    });
+    expect(provider.id).toBe(LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID);
+    expect(provider.routing.codex?.upstream).toBe('https://openrouter.ai/api/v1');
+    expect(storedCustomProviderId(provider.id)).toBe('xai');
+  });
+
   it('maps a single-runtime config to a standard user Provider', () => {
     const p = buildUserProvider(codexOnly);
     expect(p.id).toBe('openrouter');
@@ -103,6 +120,127 @@ describe('buildUserProvider (per-runtime)', () => {
       defaultEffort: 'high',
       group: 'custom:openrouter',
       defaultEnabled: true,
+    });
+  });
+
+  it('inherits Registry efforts only for a unique route of the target agent', () => {
+    const provider = buildUserProvider(
+      {
+        id: 'relay',
+        name: 'Relay',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://relay.example/v1',
+            models: [
+              { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' },
+              { id: 'chatgpt/gpt-5.6-sol', name: 'GPT-5.6-Sol ChatGPT' },
+              { id: 'unregistered-model', name: 'Unregistered' },
+            ],
+          },
+          'claude-code': {
+            baseUrl: 'https://relay.example/anthropic',
+            models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+
+    expect(provider.routing).toMatchObject({
+      codex: { upstream: 'https://relay.example/v1' },
+      'claude-code': { upstream: 'https://relay.example/anthropic' },
+    });
+    expect(provider.models.codex).toEqual([
+      expect.objectContaining({
+        id: 'gpt-5.6-sol',
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultEffort: 'high',
+      }),
+      expect.objectContaining({
+        id: 'chatgpt/gpt-5.6-sol',
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultEffort: 'high',
+      }),
+      expect.objectContaining({
+        id: 'unregistered-model',
+        efforts: ['low', 'medium', 'high', 'xhigh'],
+        defaultEffort: 'high',
+      }),
+    ]);
+    expect(provider.models['claude-code']?.[0]).toMatchObject({
+      id: 'gpt-5.6-sol',
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'high',
+    });
+  });
+
+  it('falls back safely for ambiguous matches, missing target routes and invalid defaults', () => {
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry);
+    if (!registry) throw new Error('missing bundled model registry');
+    const baseEntry = registry.models.find((entry) => entry.id === 'openai/gpt-5.6-sol');
+    if (!baseEntry) throw new Error('missing gpt-5.6-sol registry entry');
+    baseEntry.perAgent = {
+      ...baseEntry.perAgent,
+      codex: { efforts: ['minimal', 'max'], defaultEffort: 'high' },
+    };
+    registry.models.push({
+      ...structuredClone(baseEntry),
+      id: 'alternate/gpt-5.6-sol',
+    });
+
+    const ambiguous = buildUserProvider(
+      {
+        id: 'ambiguous',
+        name: 'Ambiguous',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://relay.example/v1',
+            models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+          },
+        },
+      },
+      { modelRegistry: registry },
+    );
+    expect(ambiguous.models.codex?.[0]).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
+    });
+
+    registry.models.pop();
+    const invalidDefault = buildUserProvider(
+      {
+        id: 'unique',
+        name: 'Unique',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://relay.example/v1',
+            models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+          },
+        },
+      },
+      { modelRegistry: registry },
+    );
+    expect(invalidDefault.models.codex?.[0]).toMatchObject({
+      efforts: ['minimal', 'max'],
+      defaultEffort: 'max',
+    });
+
+    const noTargetRoute = buildUserProvider(
+      {
+        id: 'wrong-agent',
+        name: 'Wrong agent',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://relay.example/v1',
+            models: [{ id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash' }],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+    expect(noTargetRoute.models.codex?.[0]).toMatchObject({
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
     });
   });
 
@@ -293,6 +431,23 @@ describe('buildUserProvider (per-runtime)', () => {
     expect((p.models.pi ?? [])[0]?.supportsImageInput).toBe(true);
   });
 
+  it('never infers Pi efforts from a same-named Registry model', () => {
+    const p = buildUserProvider(
+      {
+        id: 'pi-relay',
+        name: 'Pi Relay',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://relay.example/v1',
+            models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+          },
+        },
+      },
+      { modelRegistry: BUNDLED_CATALOG.modelRegistry },
+    );
+    expect(p.models.pi?.[0]).toMatchObject({ efforts: [], defaultEffort: null });
+  });
+
   it('exports only the explicitly supported effort levels for a Pi reasoning model', () => {
     const p = buildUserProvider({
       id: 'reasoning-pi',
@@ -316,6 +471,29 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(p.models.pi?.[0]).toMatchObject({
       efforts: ['low', 'high', 'xhigh'],
       defaultEffort: 'high',
+    });
+  });
+
+  it.each([
+    ['kimi', 'max'],
+    ['deepseek', 'high'],
+  ] as const)('uses the explicit %s Pi default reasoning effort', (id, expected) => {
+    const p = buildUserProvider({
+      id,
+      name: id,
+      runtimes: {
+        pi: {
+          baseUrl: `https://${id}.example/v1`,
+          models: [{
+            id: `${id}-model`, name: `${id} model`, reasoning: true,
+            reasoningEfforts: ['low', 'high', 'max'], reasoningDefaultEffort: expected,
+          }],
+        },
+      },
+    });
+    expect(p.models.pi?.[0]).toMatchObject({
+      efforts: ['low', 'high', 'max'],
+      defaultEffort: expected,
     });
   });
 
