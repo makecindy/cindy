@@ -6820,6 +6820,15 @@ export default function SessionScreen() {
     />
   ) : null);
 
+  // 收起态把附件 + 号放在输入框左侧，避免用户必须先聚焦输入框才能打开附件面板；
+  // 卡片态仍由 renderComposerToolbar() 渲染同一入口。
+  const renderComposerCompactLeading = () => (
+    <View style={styles.composerCompactLeading}>
+      {renderComposerAttachmentButton()}
+      {renderComposerCollapsedAttachmentBadge()}
+    </View>
+  );
+
   // 停止任务按钮(实心中性方块)。两处使用:语音/发送左边的独立槽(inline)、
   // 发送位顶替(sendSlotIsStop);同一颗按钮的两个宿主位置,样式与行为一致。
   const renderComposerStopButton = () => (
@@ -9427,7 +9436,7 @@ export default function SessionScreen() {
                     inputOverlay={renderComposerInputOverlay()}
                     inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
                     inputTestID="session.composerInput"
-                    leading={renderComposerCollapsedAttachmentBadge()}
+                    leading={renderComposerCompactLeading()}
                     maxHeight={composerResize.inputMaxHeight}
                     multilineShape={!composerCardActive && composerInputIsMultiline}
                     onBlur={() => {
@@ -10693,6 +10702,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     height: 34,
     width: 34,
+  },
+  composerCompactLeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    marginRight: spacing.xs,
   },
   composerToolButtonActive: {
     backgroundColor: colors.surfaceChip,

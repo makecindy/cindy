@@ -3776,6 +3776,15 @@ export default function NewRemoteSessionScreen() {
       testID="newSession.attachmentCollapsedBadge"
     />
   ) : null);
+
+  // 收起态把附件 + 号放在输入框左侧，避免用户必须先聚焦输入框才能打开附件面板；
+  // 卡片态仍由 renderComposerToolbar() 渲染同一入口。
+  const renderComposerCompactLeading = () => (
+    <View style={styles.composerCompactLeading}>
+      {renderAttachmentToggleButton()}
+      {renderComposerCollapsedAttachmentBadge()}
+    </View>
+  );
   // 面板关闭即丢弃未提交的待选(不产生任何上传副作用)。
   useEffect(() => {
     if (!contextSheetOpen) setPendingMediaAssets([]);
@@ -5631,7 +5640,7 @@ export default function NewRemoteSessionScreen() {
                   caretHidden={voiceIsListening}
                   cursorColor={colors.inputCaret}
                   inputRef={firstMessageInputRef}
-                  leading={renderComposerCollapsedAttachmentBadge()}
+                  leading={renderComposerCompactLeading()}
                   inputFrameHeight={composerResize.frameHeight}
                   // 听写期间把输入区撑到 44pt 触控目标:此时「点输入区停止听写」的命中层
                   // 是这层输入区自身(TextInput 的 onPressIn),单行时只有 28pt。
@@ -6516,6 +6525,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     height: MOBILE_COMPOSER_CONTROL_SIZE,
     justifyContent: 'center',
     width: MOBILE_COMPOSER_CONTROL_SIZE,
+  },
+  composerCompactLeading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    marginRight: spacing.xs,
   },
   composerIconButtonActive: {
     backgroundColor: colors.surfaceChip,

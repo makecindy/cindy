@@ -297,6 +297,9 @@ export function MobileComposerInputRow({
         <Animated.View
           style={[
             styles.inputFrame,
+            // 收起态左侧的 34pt + 按钮会把主行撑高到控件高度；
+            // 单行输入自身只有 28pt，需在主行内居中，避免 placeholder / 文本贴到顶部。
+            !cardLayout && !multilineShape && inputFrameMinHeight == null && styles.inputFrameSingleLine,
             inputFrameMinHeight != null && { minHeight: inputFrameMinHeight },
             resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight },
           ]}
@@ -541,6 +544,9 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     flexDirection: 'row',
     minWidth: 0,
     position: 'relative',
+  },
+  inputFrameSingleLine: {
+    alignItems: 'center',
   },
   // TextInputWrapper(expo-paste-input)接管 TextInput 在 inputFrame row 里的
   // flex:1 位置;内部保持 row + stretch,TextInput 自身 flex:1 继续填满,
