@@ -1663,6 +1663,15 @@ export function getCindyGhostsMcpDeps(
           }
         }
       }
+      // owner 快照:下面这段从这里到实际派发之间会经过 dir/save_dir 确认、
+      // 附件授权、session-context 构建等好几个 await 窗口。就算这次调用没有
+      // 附件,dir/save_dir 出的一次性票据与 buildGhostSessionContext 铸的
+      // 上下文同样是"交接"——账号在这些窗口切换后,若新账号下恰好也装了
+      // 同 id 插件,后续 classifyGhostVisibility 只现查"当前活跃账号",会
+      // 照常放行并把旧账号铸好的票据/上下文连同派发一起送进新账号的进程。
+      // 在整段交接开始前统一捕获一次,派发前统一复核,不局限于"有附件才
+      // 检查"。
+      const ownerScopeKeyAtHandoffStart = activeOwnerScopeKey();
       // 附件授权(ghost-grant/ghost-tool-grant)是持久 ledger 记录,不是这次
       // 调用专属的一次性凭证——插件此后任何时候引用同一 hash 都会被判定为
       // 已授权。下面直到实际派发之间还有多处会拒绝这次调用(目录/save_dir
@@ -1692,18 +1701,6 @@ export function getCindyGhostsMcpDeps(
         mergedArgs = { ...args, attachments: grant.hashes };
         pendingAttachmentRevoke = grant.revoke;
       }
-      // grantAttachmentUrls 只保证授权写入那一刻的 owner 没漂移;它返回之后
-      // 到实际派发之间还有 dir/save_dir 确认、session-context 构建等好几个
-      // await 窗口,这些窗口期间的 classifyGhostVisibility 现查"当前活跃
-      // 账号"——账号切换后若新账号下恰好也装了同 id 插件,后续检查会照常
-      // 通过并派发到新账号的进程,dispatchSucceeded 因此置真,finally 就不会
-      // 撤销旧账号那笔刚授出的 ghost-grant/ghost-tool-grant,把它永久遗留在
-      // 旧账号账本里(旧账号那次调用其实从未送达自己的 sandbox)。派发前的
-      // 最后一次核对复用同一个 pendingAttachmentRevoke,漂移就当拒绝处理,
-      // 自然触发下面 finally 的撤销。
-      const ownerScopeKeyAfterAttachmentGrant = pendingAttachmentRevoke
-        ? activeOwnerScopeKey()
-        : null;
       // dispatchSucceeded 置真的两种情况:调用整体成功,或者 pipeDispatcher
       // 明确报告 TIMEOUT(语义是"可能仍在后台继续",附件已经真正交给了
       // sandbox)。下面任何一个提前 return(派发前的复判/确认,以及
@@ -1875,19 +1872,15 @@ export function getCindyGhostsMcpDeps(
             message: t('newChat.pluginSetup.assessmentReadFailed'),
           };
         }
-        // 派发前最后一个无 await 的拦截点:核对附件授权写入之后 owner 是否
-        // 漂移(见 pendingAttachmentRevoke 旁边的注释)。命中就直接拒,让
-        // dispatchSucceeded 保持 false,交给下面 finally 去撤销那笔已经写进
-        // 旧账号账本的 ghost-grant/ghost-tool-grant——不能在这里改派发目标
-        // 或者忽略漂移继续派发,那样等于把旧账号授权的附件送进了新账号的
-        // 插件进程。
-        if (
-          ownerScopeKeyAfterAttachmentGrant !== null &&
-          activeOwnerScopeKey() !== ownerScopeKeyAfterAttachmentGrant
-        ) {
-          log.warn('ghost tool call denied: owner scope changed after attachment grant', {
-            ghostId,
-          });
+        // 派发前最后一个无 await 的拦截点:核对整段交接开始以来 owner 是否
+        // 漂移(见 ownerScopeKeyAtHandoffStart 旁边的注释)——不局限于有
+        // 附件的调用,dir/save_dir 票据与 session-context 同样是交接。命中
+        // 就直接拒,让 dispatchSucceeded 保持 false,交给下面 finally 去撤销
+        // 可能已经写进旧账号账本的 ghost-grant/ghost-tool-grant——不能在这里
+        // 改派发目标或者忽略漂移继续派发,那样等于把旧账号的票据/上下文/
+        // 附件送进了新账号的插件进程。
+        if (activeOwnerScopeKey() !== ownerScopeKeyAtHandoffStart) {
+          log.warn('ghost tool call denied: owner scope changed during handoff', { ghostId });
           return {
             ok: false,
             errorCode: 'PERMISSION_DENIED',

@@ -1708,8 +1708,9 @@ describe('Full Access 插件文件交接', () => {
     resolveGhostAttachmentUrlMock.mockReturnValue({ absPath: file, mimeType: 'image/png', blobHash: hash });
     liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
     activeOwnerScopeKeyMock
-      .mockReturnValueOnce('local:owner-a:0')
-      .mockReturnValue('local:owner-b:0');
+      .mockReturnValueOnce('local:owner-a:0') // callGhostTool: ownerScopeKeyAtHandoffStart(整段交接开始前)
+      .mockReturnValueOnce('local:owner-a:0') // grantAttachmentUrls: ownerScopeKeyAtStart
+      .mockReturnValue('local:owner-b:0'); // grantAttachmentUrls: ownerScopeKeyNow 核对——已经漂移
 
     const result = await makeDeps('codex', 'owner-switch').callGhostTool({
       ghostId: 'art',
@@ -1742,9 +1743,9 @@ describe('Full Access 插件文件交接', () => {
     resolveGhostAttachmentUrlMock.mockReturnValue({ absPath: file, mimeType: 'image/png', blobHash: hash });
     liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
     activeOwnerScopeKeyMock
+      .mockReturnValueOnce('local:owner-a:0') // callGhostTool: ownerScopeKeyAtHandoffStart(整段交接开始前)
       .mockReturnValueOnce('local:owner-a:0') // grantAttachmentUrls: ownerScopeKeyAtStart
       .mockReturnValueOnce('local:owner-a:0') // grantAttachmentUrls: ownerScopeKeyNow 核对
-      .mockReturnValueOnce('local:owner-a:0') // callGhostTool: 附件授权成功后立即捕获
       .mockReturnValue('local:owner-b:0'); // callGhostTool: 派发前复判——已经漂移
 
     const result = await makeDeps('codex', 'owner-switch-after-grant').callGhostTool({
@@ -1757,6 +1758,35 @@ describe('Full Access 插件文件交接', () => {
     expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
     expect(grantAttachmentsMock).toHaveBeenCalledTimes(1);
     expect(revokeAttachmentsMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('无附件的调用铸好 dir 票据后到派发之间账号切换：不派发到新账号', async () => {
+    // 回归 Codex 更进一步指出的 P1:上一条修复只在有附件时捕获 owner
+    // scope,但 dir/save_dir 票据与 session-context 同样是"交接"——没有
+    // 附件的调用铸好 dir 票据后,若账号在后续窗口切换,原先的检查完全不会
+    // 触发(它只在 pendingAttachmentRevoke 非空时才捕获),后续
+    // classifyGhostVisibility 只现查"当前活跃账号"照常放行,会把旧账号铸
+    // 的票据连同派发一起送进新账号的进程。owner scope 现在在整段交接开始
+    // 前(dir/save_dir/attachments 都还没开始)统一捕获,派发前统一复核,
+    // 不再局限于"有附件才检查"。
+    const dir = path.join(outsideDir, 'owner-switch-attachment-free');
+    fs.mkdirSync(dir, { recursive: true });
+    activeOwnerScopeKeyMock
+      .mockReturnValueOnce('local:owner-a:0') // callGhostTool: ownerScopeKeyAtHandoffStart
+      .mockReturnValue('local:owner-b:0'); // callGhostTool: 派发前复判——已经漂移
+
+    const result = await makeDeps('claude-code', 'owner-switch-attachment-free').callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      dir,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    // dir 票据已经铸出(交接确实发生了),只是派发前被拦下——不是像上面
+    // "dir 确认返回后切换 blocked" 那条一样在铸票据之前就被拒。
+    expect(dirDepositMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
