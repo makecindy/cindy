@@ -159,6 +159,12 @@ beforeEach(async () => {
   feishuEvents.removeAllListeners('message');
   mocks.firstAllowed.mockReturnValue(OWNER);
   mocks.checkOwner.mockImplementation((id: string) => id === OWNER);
+  // 恢复 openThread 默认实现 — 个别用例会覆盖它, 不能泄漏到后续用例。
+  mocks.openThread.mockImplementation(async () => ({
+    kind: 'opened',
+    messageId: 'om_opener',
+    threadId: 'omt_new',
+  }));
 });
 
 afterEach(async () => {
@@ -359,6 +365,76 @@ describe('feishu group inbound gate', () => {
       expect(mocks.replyText).toHaveBeenCalledTimes(4);
       // 重试耗尽: 撤回开场白卡, 用户看到干净群主流而不是永久「思考中」卡。
       expect(mocks.recallOwnMessage).toHaveBeenCalledWith('om_opener');
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('exhaustion recall is gated to the triggering connection', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValueOnce({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText
+        .mockRejectedValueOnce(new Error('outage'))
+        .mockRejectedValueOnce(new Error('outage'))
+        .mockRejectedValueOnce(new Error('outage'));
+      // 最后一次重试(retry2)的 replyText 挂起 — 期间用户换代, 之后才失败。
+      let rejectLast!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectLast = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(4);
+
+      // 最后一次重试挂起期间换代, 然后失败 → 耗尽分支应 gate 拦截撤回:
+      // 旧账号的开场白卡不得经新 client 发出删除请求。
+      await wsClient.stop({ announceOffline: false, reason: 'test-disconnect-mid-retry' });
+      rejectLast(new Error('outage'));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cooldown-hit redelivery releases its claim so a later redelivery can retry', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      // 首发 + 前两次定时重试都失败; 第三次重试(90s)不触发。
+      mocks.replyText
+        .mockRejectedValueOnce(new Error('transient network error'))
+        .mockRejectedValueOnce(new Error('still down'))
+        .mockRejectedValueOnce(new Error('still down'));
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 冷却期内的重投: 冷却命中不发送 — 必须释放本次认领, 否则冷却期间
+      // 的 claim 卡满 10 分钟, 之后换代会丢消息。
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 推进 61s: 定时重试(10s/30s)跑两轮都失败; 冷却已过期。
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(3);
+
+      // 冷却过期后的重投: 认领未被卡住 → 正常处理 → 提示发送成功(第 4 次)。
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(4);
       expect(events).toHaveLength(0);
     } finally {
       vi.useRealTimers();

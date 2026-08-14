@@ -120,7 +120,13 @@ async function sendOrphanOpenerNotice(
 ): Promise<void> {
   const log = getLog();
   const last = orphanNoticeAt.get(openerMessageId) ?? 0;
-  if (Date.now() - last < ORPHAN_NOTICE_COOLDOWN_MS) return;
+  if (Date.now() - last < ORPHAN_NOTICE_COOLDOWN_MS) {
+    // 冷却命中(重投场景): 这次投递不产出任何可见结果 — 释放本次认领, 否则
+    // 冷却期间的 claim 会卡满 10 分钟, 换代后新连接的重投被丢弃(stop 已清掉
+    // 定时重试), 用户的 @ 就丢了。
+    releaseInboundClaim(botAppId, messageId);
+    return;
+  }
   orphanNoticeAt.set(openerMessageId, Date.now());
   try {
     await outbound.replyText(openerMessageId, transportMessages.group.threadOrphanNotice);
@@ -143,6 +149,12 @@ function scheduleOrphanNoticeRetry(
   const log = getLog();
   const delay = ORPHAN_NOTICE_RETRY_DELAYS_MS[attempt];
   if (delay === undefined) {
+    // gate 到触发连接: 换代/断开后旧账号的开场白卡不得经新 client 撤回
+    // (重试耗尽发生在最后那次重试的 replyText 之后 — 期间可能已换代)。
+    if (!isActiveConnection(generation, botAppId)) {
+      log.info('[feishu/wsClient] orphan opener recall skipped: connection changed');
+      return;
+    }
     // 重试耗尽: 最后兜底是撤回开场白卡 — 撤回成功用户看到干净群主流而不是
     // 永久「思考中」卡; 撤回失败说明故障仍未恢复, 已无更进一步的兜底手段。
     log.error(
