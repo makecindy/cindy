@@ -612,7 +612,18 @@ export function NewMakerDraftRoute() {
           ? 'ccAgent.draft.remoteProviderUnsupported'
           : code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
             ? 'ccAgent.draft.remoteNativeOauthUnavailable'
-            : 'ccAgent.draft.createSessionFailed';
+            // 轮 40-w4-t3 HIGH:远端 Pi 会话启动时 Cindy AI gateway endpoint
+            // 未就绪 —— main 侧已映射同名 IPC code, 这里走已存在 5 语言的
+            // logic.errors.remoteError.REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE
+            // (引导去 Settings → Model Providers), 不再显示 raw 英文。
+            : code === 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE'
+              ? 'logic.errors.remoteError.REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE'
+              // 轮 42 P2(codex-connector):远端 Pi + loopback-only BYOM 被 main
+              // 映射成 REMOTE_LOCAL_ONLY_PROVIDER —— 这里不映射会落通用失败
+              // toast, 隐藏「换网关/远端可达 BYOM」的行动指引。
+              : code === 'REMOTE_LOCAL_ONLY_PROVIDER'
+                ? 'logic.errors.remoteError.REMOTE_LOCAL_ONLY_PROVIDER'
+                : 'ccAgent.draft.createSessionFailed';
     toast.error(t(key));
   };
 
@@ -2154,13 +2165,11 @@ export function NewMakerDraftRoute() {
         return;
       }
 
-      // fail-closed:Pi 是本地专属 agent,PiAgent.startSession 拒绝任何 remoteHostId
-      // (agents/pi/index.ts)。SSH 目标会带 remoteHostId 建会话 → 首消息必然起不来。
-      // dialog 侧已按 agentVendor 过滤掉 SSH 主机,这里是防非 UI 路径(编程调用 / 未来回归)
-      // 漏进 Pi+SSH 的兜底,抛清晰错误由 dialog 呈现,而不是建出一条注定失败的会话(codex review P1)。
-      if (draftVendor === 'pi') {
-        throw new Error(t('ccAgent.draft.piRemoteUnsupported'));
-      }
+      // 轮 35 CRITICAL 移除:Pi 已支持 SSH 远端(pi-manager daemon + SshPiTransport,
+      // startSession 全量支持 remoteHostId)。此前的「Pi 本地专属」fail-closed
+      // 守卫与 dialog 的 SSH 过滤是过时逻辑 —— 后端早已装配 getRemotePiTransport
+      // 等全套钩子, 守卫只会阻止用户创建远端 Pi 会话。远端不支持的子能力
+      // (如 fork) 由各自入口 fail-closed, 不在会话创建层面整体拦截。
 
       // SSH:lazy-create(workspaceKind='project',第一条消息发出时 agent 进程才真正起),
       // 立即建会话记录并 navigate 过去。建会话约定与本文件其它 createSession 路径一致

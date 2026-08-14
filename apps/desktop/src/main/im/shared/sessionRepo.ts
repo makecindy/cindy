@@ -332,9 +332,10 @@ export function createImSessionRepo(
         workingDir,
         await resolveImSessionDefaults(config, providerSnapshot, ns.source),
       );
-      // 渠道可按 userId 收紧新会话权限档(telegram guest lane → 只读探索)。
-      const tightened = ns.permissionModeFor?.(userId) ?? null;
-      if (tightened) row.permissionMode = tightened;
+      // 渠道可按 userId 覆写新会话权限档(telegram guest lane → 只读探索;
+      // feishu 群 lane → 渠道设置「群聊新建任务权限档」)。
+      const overridden = ns.permissionModeFor?.(userId) ?? null;
+      if (overridden) row.permissionMode = overridden;
       return row;
     },
 

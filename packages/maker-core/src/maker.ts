@@ -523,7 +523,7 @@ export class Maker {
         // 的 fresh-session self-reference 恢复),需要同一把 CAS 才能把它清掉,否则下一次
         // send 会 resume 同一个不存在的会话反复失败。
         onInvalidResumeSession:
-          opts.agentKind === 'claude-code'
+          opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
             ? (expectedSdkSessionId) =>
                 this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
             : undefined,
@@ -591,15 +591,19 @@ export class Maker {
         });
       }
     } catch (error) {
+      // 轮 40-w4-t5 CRITICAL:agent-agnostic 回滚 —— startSession 成功后 storage
+      // 写失败时, 已启动的 agent handle(PI 远端 daemon session / CC / Codex)必须
+      // close, 否则 PI 无 codexThreadClaim 时 handle 不关, 远端 pi-manager session/
+      // MCP bridge 残留成「用户看不到、Maker 管不到」的半创建状态。
+      try {
+        await handle.close();
+      } catch (closeError) {
+        this.logger.warn('failed to close agent handle after session storage failure', {
+          sessionId: id,
+          error: String(closeError),
+        });
+      }
       if (codexThreadClaim) {
-        try {
-          await handle.close();
-        } catch (closeError) {
-          this.logger.warn('failed to close Codex handle after session storage failure', {
-            sessionId: id,
-            error: String(closeError),
-          });
-        }
         codexThreadClaim.release();
       }
       throw error;

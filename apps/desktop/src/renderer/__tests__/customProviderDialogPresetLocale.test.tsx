@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -58,38 +57,6 @@ function renderDialog(onClose = vi.fn()) {
   };
 }
 
-// jsdom 的 KeyboardEvent.keyCode 只读且恒为 0。fireEvent 会再造一发事件，
-// Windows CI 上 229 赋完又丢，IME Escape 被当成普通关闭键。
-// 必须对同一条原生事件 dispatch，监听器读到的才是我们钉上的 keyCode。
-function dispatchEscape(
-  target: Document | Element,
-  init: { isComposing?: boolean; keyCode?: number } = {},
-) {
-  const event = new KeyboardEvent('keydown', {
-    key: 'Escape',
-    bubbles: true,
-    cancelable: true,
-    composed: true,
-    isComposing: Boolean(init.isComposing),
-  });
-  if (init.keyCode !== undefined) {
-    const keyCode = init.keyCode;
-    for (const prop of ['keyCode', 'which'] as const) {
-      Object.defineProperty(event, prop, {
-        configurable: true,
-        get: () => keyCode,
-      });
-    }
-  }
-  target.dispatchEvent(event);
-}
-
-function overlayOf(dialog: HTMLElement): HTMLElement {
-  const overlay = dialog.parentElement;
-  if (!overlay) throw new Error('dialog overlay is missing');
-  return overlay;
-}
-
 beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
@@ -111,20 +78,6 @@ afterEach(() => {
 });
 
 describe('CustomProviderDialog preset locale ownership', () => {
-  it('keeps keyCode 229 on the native Escape event jsdom delivers', () => {
-    let seen = 0;
-    const onKeyDown = (event: KeyboardEvent) => {
-      seen = event.keyCode;
-    };
-    document.addEventListener('keydown', onKeyDown);
-    try {
-      dispatchEscape(document, { keyCode: 229 });
-    } finally {
-      document.removeEventListener('keydown', onKeyDown);
-    }
-    expect(seen).toBe(229);
-  });
-
   it.each([
     ['zh-TW', '繁體供應商'],
     ['en', 'English Provider'],
@@ -155,7 +108,6 @@ describe('CustomProviderDialog preset locale ownership', () => {
   it('dismisses only the topmost preset menu on Escape and preserves unsaved form edits', async () => {
     i18nState.language = 'zh-TW';
     const { onClose } = renderDialog();
-    const user = userEvent.setup();
 
     const trigger = await screen.findByRole('button', {
       name: 'settings.providers.custom.presets.label',
@@ -170,42 +122,44 @@ describe('CustomProviderDialog preset locale ownership', () => {
       'settings.providers.custom.fields.namePlaceholder',
     );
     fireEvent.change(nameInput, { target: { value: 'Unsaved provider' } });
-    await user.click(trigger);
+    fireEvent.click(trigger);
     expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
 
-    await user.keyboard('{Escape}');
-    await waitFor(() => {
-      expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
-      expect(screen.getByDisplayValue('Unsaved provider')).not.toBeNull();
-      expect(onClose).not.toHaveBeenCalled();
-    });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
+    expect(screen.getByDisplayValue('Unsaved provider')).not.toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
 
-    await user.keyboard('{Escape}');
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('dismisses only the topmost preset menu on a scrim gesture', async () => {
     i18nState.language = 'zh-TW';
-    const { onClose } = renderDialog();
-    const user = userEvent.setup();
+    const { container, onClose } = renderDialog();
 
     const trigger = await screen.findByRole('button', {
       name: 'settings.providers.custom.presets.label',
     });
-    await user.click(trigger);
-    expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
+    fireEvent.click(trigger);
+    const option = await screen.findByRole('option', { name: '繁體供應商' });
+    // 等 layout effect 把 childLayer 写进 childLayerRef。只等 option 出现不够:
+    // Windows CI 上 rAF 也可能早于 useLayoutEffect, 第一个 pointerDown 会关整表。
+    await waitFor(() => {
+      expect(option.isConnected).toBe(true);
+    });
+    await new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
+    await new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
 
-    const scrim = overlayOf(
-      screen.getByRole('dialog', { name: 'settings.providers.custom.dialog.createTitle' }),
-    );
-    await user.pointer({ keys: '[MouseLeft]', target: scrim });
+    const scrim = container.firstElementChild as Element;
+    fireEvent.pointerDown(scrim);
     await waitFor(() => {
       expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
     });
     expect(onClose).not.toHaveBeenCalled();
 
-    await user.pointer({ keys: '[MouseLeft]', target: scrim });
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    fireEvent.pointerDown(scrim);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('keeps Cancel as a direct form dismissal without a duplicate top-right button', async () => {
@@ -229,8 +183,9 @@ describe('CustomProviderDialog preset locale ownership', () => {
     });
     fireEvent.click(trigger);
     expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
+    await new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
 
-    dispatchEscape(document, eventInit);
+    fireEvent.keyDown(document, { key: 'Escape', ...eventInit });
     expect(screen.getByRole('option', { name: '繁體供應商' })).not.toBeNull();
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -238,29 +193,28 @@ describe('CustomProviderDialog preset locale ownership', () => {
   it('dismisses the model picker before the underlying form on Escape', async () => {
     i18nState.language = 'zh-TW';
     const { onClose } = renderDialog();
-    const user = userEvent.setup();
 
     const trigger = await screen.findByRole('button', {
       name: 'settings.providers.custom.presets.label',
     });
-    await user.click(trigger);
-    await user.click(await screen.findByRole('option', { name: '繁體供應商' }));
-    await waitFor(() => {
-      expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
-    });
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
 
-    await user.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
-    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
     expect(
       await screen.findByRole('heading', {
         name: 'settings.providers.custom.fetch.pickerTitle',
       }),
     ).not.toBeNull();
 
+    // Radix Popover 的退场 DismissableLayer 会短暂保留 document-capture
+    // listener。显式模拟它消费 Escape，确保 window-capture 的当前层 owner
+    // 先结算 picker，而不是被一个已关闭的菜单吞掉。
     const staleLayerListener = vi.fn((event: KeyboardEvent) => event.preventDefault());
     document.addEventListener('keydown', staleLayerListener, true);
     try {
-      await user.keyboard('{Escape}');
+      fireEvent.keyDown(document, { key: 'Escape' });
       await waitFor(() =>
         expect(
           screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' }),
@@ -268,39 +222,36 @@ describe('CustomProviderDialog preset locale ownership', () => {
       );
       expect(staleLayerListener).not.toHaveBeenCalled();
       expect(onClose).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(1);
     } finally {
       document.removeEventListener('keydown', staleLayerListener, true);
     }
-
-    await user.keyboard('{Escape}');
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it('dismisses only the model picker on its scrim gesture', async () => {
     i18nState.language = 'zh-TW';
     const { onClose } = renderDialog();
-    const user = userEvent.setup();
 
     const trigger = await screen.findByRole('button', {
       name: 'settings.providers.custom.presets.label',
     });
-    await user.click(trigger);
-    await user.click(await screen.findByRole('option', { name: '繁體供應商' }));
-    await user.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
-    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
 
     const pickerHeading = await screen.findByRole('heading', {
       name: 'settings.providers.custom.fetch.pickerTitle',
     });
     const pickerScrim = pickerHeading.closest('[role="dialog"]')?.parentElement;
     expect(pickerScrim).not.toBeNull();
-    fireEvent.pointerDown(pickerScrim as Element, { button: 0 });
+    fireEvent.pointerDown(pickerScrim as Element);
 
-    await waitFor(() =>
-      expect(
-        screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' }),
-      ).toBeNull(),
-    );
+    expect(
+      screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' }),
+    ).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
   });
 });

@@ -308,6 +308,7 @@
         "statusInstalled": "Installed",
         "statusNotInstalled": "Not installed",
         "claudeCodeName": "Claude Code",
+        "piName": "Pi",
         "button": {
           "install": "Install",
           "reinstall": "Reinstall",
@@ -3157,8 +3158,8 @@
           "codex": "Codex",
           "pi": "Pi"
         },
-        "groupCtrPermissionLabel": "Permission mode for group /ctr sessions",
-        "groupCtrPermissionDescription": "Permission mode applied when creating a session via /ctr in a group chat. Defaults to Auto approval. Group context can contain member-controlled content, so Full access sessions will reject group messages and guide you back to Auto approval."
+        "groupPermissionLabel": "Permission mode for new group tasks",
+        "groupPermissionDescription": "Permission mode used for every task created in a group chat — @bot opening a topic, /new, and /ctr all use it; the permission mode above applies to direct messages only. Defaults to Auto approval. Group context can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust. Changes apply to tasks created afterwards; switch an existing task with /permission in the group."
       }
     },
     "shortcuts": {
@@ -4814,7 +4815,10 @@
         "localOnly": "Exact message changes are not available for remote sessions yet.",
         "partialNotice": "This message includes command or tool writes that could not be tracked exactly. Only the captured subset is shown; it is not a complete patch.",
         "emptyTitle": "No recorded changes",
-        "emptyDesc": "The recorded patch for this message has no displayable file changes."
+        "emptyDesc": "The recorded patch for this message has no displayable file changes.",
+        "crossSessionSwitchDisabled": "This review belongs to a collaborator session. Source switching is available only within its own session.",
+        "previewUnavailable": "This message records historical changes, so current on-disk file content cannot be previewed reliably.",
+        "snapshotPatchUnavailable": "A historical change snapshot cannot produce a git apply command for the current worktree."
       },
       "fileCount_one": "{{count}} file",
       "fileCount_other": "{{count}} files",
@@ -4872,6 +4876,7 @@
         "in-progress": "git operation in progress",
         "agent-running": "agent is running",
         "disabled": "review unavailable",
+        "historical-snapshot": "historical change snapshot is read-only",
         "remote-device": "remote device sessions are view-only",
         "remote-ssh": "SSH workspace review is view-only"
       },
@@ -6189,7 +6194,10 @@
       "networkShowRaw": "Show raw error",
       "networkHideRaw": "Hide raw error",
       "silentStopContinue": "Continue",
-      "silentStopContinueTitle": "Continue the current task"
+      "silentStopContinueTitle": "Continue the current task",
+      "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
+      "piManagerUnavailable": "Remote Pi manager is not ready. Retry shortly; if it keeps failing, reinstall Pi under Settings → Remote Machines.",
+      "piBundledNodeMissing": "The remote host is missing its runtime (Node.js). Expand the host under Settings → Remote Machines and click Install on Claude Code or Codex first (they bundle Node.js), then start a Pi task."
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
@@ -6671,13 +6679,13 @@
       }
     },
     "upgradeBanner": {
-      "description": "A new cc-manager version is available on {{hostId}} — upgrading will interrupt all active Claude Code remote sessions on this host",
-      "upgrading": "Upgrading cc-manager on {{hostId}}…",
+      "description": "A new {{manager}} version is available on {{hostId}} — upgrading will interrupt all active remote sessions on this host",
+      "upgrading": "Upgrading {{manager}} on {{hostId}}…",
       "upgrade": "Upgrade now",
-      "upgradeTitle": "Download and restart cc-manager (will interrupt current sessions)",
+      "upgradeTitle": "Download and restart {{manager}} (will interrupt current sessions)",
       "dismissTitle": "Not now (will prompt again on next launch)",
       "failed": "Upgrade failed: {{message}}",
-      "daemonNotReady": "cc-manager upgraded, but the remote daemon hasn't started yet — please resend your message manually"
+      "daemonNotReady": "{{manager}} upgraded, but the remote daemon hasn't started yet — please resend your message manually"
     },
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "Remote connection interrupted (the daemon may be upgrading or restarting). The turn has ended — please resend.",
@@ -6685,6 +6693,7 @@
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision (network or service hiccup), so actions that need review are being handed to you to confirm. Switch this task to Default permissions if you would rather not be interrupted.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote Claude Code sessions can't route through the local compat proxy (internal error).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
+      "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again."
     },
@@ -9357,13 +9366,20 @@
         "endsAt": "Plan ends {{date}}",
         "cancelAction": "Cancel Subscription",
         "cancelConfirmTitle": "Cancel Your Current Subscription?",
-        "cancelConfirmDescription": "This action does not issue a refund or immediately change your balance. Your current plan stays available through {{date}}, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
-        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your balance. Your current plan stays available through the end of this billing period, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescription": "This action does not issue a refund or immediately change your balance. Your current plan stays available through {{date}}, then it will not renew. You cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your balance. Your current plan stays available until this billing period ends, then it will not renew. You cannot purchase a new plan until then.",
         "cancelConfirmAction": "Confirm Cancellation",
         "cancelSuccess": "Auto-renewal is canceled. Your current plan remains available through {{date}}.",
         "cancelSuccessWithoutDate": "Auto-renewal is canceled. Your current plan will end after this billing period.",
         "cancelNotSupported": "This subscription cannot be canceled yet.",
-        "cancelFailed": "Could not cancel the subscription. Try again later."
+        "cancelFailed": "Could not cancel the subscription. Try again later.",
+        "resumeAction": "Resume Subscription",
+        "resumeConfirmTitle": "Resume Your Current Subscription?",
+        "resumeConfirmDescription": "Your plan will renew automatically on the renewal date.",
+        "resumeConfirmAction": "Resume Subscription",
+        "resumeSuccess": "Subscription resumed. It will renew as planned.",
+        "resumeNotAvailable": "This subscription cannot be resumed. Check its latest status before trying again.",
+        "resumeFailed": "Could not resume the subscription. Try again later."
       },
       "topupCard": {
         "action": "Add Funds"

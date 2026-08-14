@@ -308,6 +308,7 @@
         "statusInstalled": "インストール済み",
         "statusNotInstalled": "未インストール",
         "claudeCodeName": "Claude Code",
+        "piName": "Pi",
         "button": {
           "install": "インストール",
           "reinstall": "再インストール",
@@ -3156,8 +3157,8 @@
           "codex": "Codex",
           "pi": "Pi"
         },
-        "groupCtrPermissionLabel": "グループ /ctr 新規セッションの権限モード",
-        "groupCtrPermissionDescription": "グループで @bot の /ctr により新規セッションを作成する際の権限モード。初期値は「自動承認」。グループの文脈にはメンバーが操作できる内容が含まれるため、「フルアクセス」にするとグループのメッセージは拒否され、「自動承認」への切り戻しを案内します。"
+        "groupPermissionLabel": "グループで新規タスクを作成するときの権限モード",
+        "groupPermissionDescription": "グループで新規タスクを作成するときに共通で使う権限モード（@bot でトピックを開く場合、/new、/ctr のいずれも対象）。初期値は「自動承認」で、上の権限モードは個人チャット専用です。グループの文脈にはメンバーが操作できる内容が含まれるため、「フルアクセス」を選ぶと確認なしで直接実行されます。信頼できるグループでのみ選択してください。変更は以後に作成するタスクにのみ適用され、既存のタスクはグループ内で /permission を使って個別に切り替えます。"
       }
     },
     "shortcuts": {
@@ -4812,7 +4813,10 @@
         "localOnly": "メッセージ単位の正確な変更は、リモートタスクではまだ利用できません。",
         "partialNotice": "このメッセージには正確に追跡できないコマンドまたはツールの書き込みが含まれます。以下は取得できた一部のみで、完全なパッチではありません。",
         "emptyTitle": "記録された変更はありません",
-        "emptyDesc": "このメッセージで保存されたパッチに表示可能なファイル変更はありません。"
+        "emptyDesc": "このメッセージで保存されたパッチに表示可能なファイル変更はありません。",
+        "crossSessionSwitchDisabled": "このレビューはコラボレーターのセッションに属しています。ソースを切り替えられるのは、そのセッション内だけです。",
+        "previewUnavailable": "このメッセージは過去の変更を記録しているため、現在のディスク上のファイル内容を確実にプレビューできません。",
+        "snapshotPatchUnavailable": "過去の変更スナップショットから、現在の worktree 向けの git apply コマンドは生成できません。"
       },
       "fileCount_one": "{{count}} ファイル",
       "fileCount_other": "{{count}} ファイル",
@@ -4870,6 +4874,7 @@
         "in-progress": "git 操作が進行中です",
         "agent-running": "エージェントが実行中です",
         "disabled": "レビューを利用できません",
+        "historical-snapshot": "過去の変更スナップショットは読み取り専用です",
         "remote-device": "リモートデバイスのセッションは閲覧のみです",
         "remote-ssh": "SSH ワークスペースのレビューは表示専用です"
       },
@@ -6186,7 +6191,10 @@
       "networkShowRaw": "元のエラーを表示",
       "networkHideRaw": "元のエラーを隠す",
       "silentStopContinue": "続行",
-      "silentStopContinueTitle": "現在のタスクを続行"
+      "silentStopContinueTitle": "現在のタスクを続行",
+      "piTransportClosed": "リモート Pi の接続が切断されました（SSH チャンネルが閉じました）。リモートのタスクは実行中のままです。再接続すると続行できます。",
+      "piManagerUnavailable": "リモート Pi マネージャーが準備できていません。しばらくして再試行してください。失敗が続く場合は「設定 → リモートマシン」で Pi を再インストールしてください。",
+      "piBundledNodeMissing": "リモートホストに実行環境（Node.js）がありません。「設定 → リモートマシン」でホストを展開し、まず Claude Code または Codex の「インストール」をクリックしてください（Node.js もインストールされます）。その後 Pi タスクを開始してください。"
     },
     "backgroundActivity": {
       "status": "バックグラウンドのサブタスクが実行中、モデル使用量を消費しています…",
@@ -6668,13 +6676,13 @@
       }
     },
     "upgradeBanner": {
-      "description": "{{hostId}} の cc-manager に新しいバージョンがあります — アップグレードするとこのホスト上のすべての Claude Code リモートセッションが中断されます",
-      "upgrading": "{{hostId}} の cc-manager をアップグレード中…",
+      "description": "{{hostId}} の {{manager}} に新しいバージョンがあります — アップグレードするとこのホスト上のすべてのリモートセッションが中断されます",
+      "upgrading": "{{hostId}} の {{manager}} をアップグレード中…",
       "upgrade": "今すぐアップグレード",
-      "upgradeTitle": "新しい cc-manager をダウンロードして再起動（現在のセッションは中断されます）",
+      "upgradeTitle": "新しい {{manager}} をダウンロードして再起動（現在のセッションは中断されます）",
       "dismissTitle": "あとで（次回起動時に再度通知）",
       "failed": "アップグレード失敗: {{message}}",
-      "daemonNotReady": "cc-manager のアップグレードは完了しましたが、リモート daemon がまだ起動していません — メッセージを手動で再送信してください"
+      "daemonNotReady": "{{manager}} のアップグレードは完了しましたが、リモート daemon がまだ起動していません — メッセージを手動で再送信してください"
     },
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "リモート接続が中断されました（daemon がアップグレードまたは再起動中の可能性があります）。ターンが終了しました — 再送信してください。",
@@ -6682,6 +6690,7 @@
       "AUTO_REVIEW_UNAVAILABLE": "自動レビューが判断できませんでした（ネットワークまたはサービスの一時的な問題）。レビューが必要な操作はご自身での確認に切り替わりました。中断を減らしたい場合は、このタスクをデフォルト権限に切り替えてください。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "リモート Claude Code セッションはローカル互換プロキシ経由でルーティングできません(内部エラー)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
+      "REMOTE_LOCAL_ONLY_PROVIDER": "このモデルプロバイダーはローカル専用サービス（Ollama など）で、SSH リモートタスクからはアクセスできません。Cindy AI ゲートウェイに切り替えるか、リモートホストから到達可能なプロバイダーを選んでください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。"
     },
@@ -9343,13 +9352,20 @@
         "endsAt": "{{date}} にプラン終了",
         "cancelAction": "サブスクリプションを解約",
         "cancelConfirmTitle": "現在のサブスクリプションを解約しますか？",
-        "cancelConfirmDescription": "この操作による返金や残高の即時変更はありません。現在のプランは {{date}} まで利用でき、その後は更新されません。キャンセルはアプリ内では元に戻せません。また、この請求期間が終了するまで新しいプランは購入できません。",
-        "cancelConfirmDescriptionWithoutDate": "この操作による返金や残高の即時変更はありません。現在のプランは請求期間の終了まで利用でき、その後は更新されません。キャンセルはアプリ内では元に戻せません。また、この請求期間が終了するまで新しいプランは購入できません。",
+        "cancelConfirmDescription": "この操作による返金や残高の即時変更はありません。現在のプランは {{date}} まで利用でき、その後は更新されません。この請求期間が終了するまで新しいプランは購入できません。",
+        "cancelConfirmDescriptionWithoutDate": "この操作による返金や残高の即時変更はありません。現在のプランはこの請求期間が終了するまで利用でき、その後は更新されません。それまでは新しいプランを購入できません。",
         "cancelConfirmAction": "解約を確定",
         "cancelSuccess": "自動更新を停止しました。現在のプランは {{date}} まで利用できます。",
         "cancelSuccessWithoutDate": "自動更新を停止しました。現在のプランはこの請求期間の終了後に終了します。",
         "cancelNotSupported": "このサブスクリプションは現在解約できません。",
-        "cancelFailed": "サブスクリプションを解約できませんでした。しばらくしてからもう一度お試しください。"
+        "cancelFailed": "サブスクリプションを解約できませんでした。しばらくしてからもう一度お試しください。",
+        "resumeAction": "サブスクリプションを再開",
+        "resumeConfirmTitle": "現在のサブスクリプションを再開しますか？",
+        "resumeConfirmDescription": "再開すると、更新日に自動更新されます。",
+        "resumeConfirmAction": "サブスクリプションを再開",
+        "resumeSuccess": "サブスクリプションを再開しました。予定どおり自動更新されます。",
+        "resumeNotAvailable": "このサブスクリプションは再開できません。最新の状態を確認してから、もう一度お試しください。",
+        "resumeFailed": "サブスクリプションを再開できませんでした。しばらくしてからもう一度お試しください。"
       },
       "topupCard": {
         "action": "残高チャージ"

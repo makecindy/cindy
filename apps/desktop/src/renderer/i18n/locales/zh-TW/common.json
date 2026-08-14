@@ -308,6 +308,7 @@
         "statusInstalled": "已安裝",
         "statusNotInstalled": "未安裝",
         "claudeCodeName": "Claude Code",
+        "piName": "Pi",
         "button": {
           "install": "安裝",
           "reinstall": "重新安裝",
@@ -3156,8 +3157,8 @@
           "codex": "Codex",
           "pi": "Pi"
         },
-        "groupCtrPermissionLabel": "群聊 /ctr 新建任務權限檔",
-        "groupCtrPermissionDescription": "群組裡 @bot 用 /ctr 新建任務時使用的權限檔，預設「自動審批」。群組上下文裡有成員可控制的內容，設成「完全存取」後群組裡的消息會被拒絕，並引導你切回「自動審批」。"
+        "groupPermissionLabel": "群聊新建任務權限檔",
+        "groupPermissionDescription": "群組裡新建任務時統一使用的權限檔（@bot 開話題、/new、/ctr 都算），預設「自動審批」；上面那個權限檔只管私聊。群組上下文裡有成員可控制的內容，設成「完全存取」後將直接執行、不再逐項確認，請確認群組成員都可信。變更只影響之後新建的任務，已有任務在群組裡用 /permission 單獨切換。"
       }
     },
     "shortcuts": {
@@ -4812,7 +4813,10 @@
         "localOnly": "本條訊息的精確變更暫不支援遠端任務。",
         "partialNotice": "本條訊息包含無法精確追蹤的命令或工具寫入；以下僅展示已精確捕獲的部分，不能視為完整補丁。",
         "emptyTitle": "沒有已記錄的變更",
-        "emptyDesc": "這條訊息記錄的補丁中沒有可顯示的檔案變更。"
+        "emptyDesc": "這條訊息記錄的補丁中沒有可顯示的檔案變更。",
+        "crossSessionSwitchDisabled": "正在審查協作任務中的這條訊息，不能在目前任務中切換來源。",
+        "previewUnavailable": "這條訊息記錄的是歷史變更，無法可靠預覽目前磁碟中的檔案內容。",
+        "snapshotPatchUnavailable": "歷史變更快照不能產生面向目前 worktree 的 git apply 指令。"
       },
       "fileCount_one": "{{count}} 個檔案",
       "fileCount_other": "{{count}} 個檔案",
@@ -4870,6 +4874,7 @@
         "in-progress": "git 操作進行中",
         "agent-running": "Agent 正在執行",
         "disabled": "審查不可用",
+        "historical-snapshot": "歷史變更快照為唯讀",
         "remote-device": "遠端設備任務僅支援檢視",
         "remote-ssh": "SSH 工作區審查僅支援檢視"
       },
@@ -6186,7 +6191,10 @@
       "networkShowRaw": "檢視原始錯誤",
       "networkHideRaw": "收起原始錯誤",
       "silentStopContinue": "繼續",
-      "silentStopContinueTitle": "繼續當前任務"
+      "silentStopContinueTitle": "繼續當前任務",
+      "piTransportClosed": "遠端 Pi 連線已中斷（SSH 通道關閉）。遠端任務仍在執行，重新連線後可以繼續。",
+      "piManagerUnavailable": "遠端 Pi 管理器未就緒，請稍後重試；若持續失敗請到「設定 → 遠端機器」重新安裝 Pi。",
+      "piBundledNodeMissing": "遠端缺少執行環境（Node.js）。請到「設定 → 遠端機器」展開該主機，先在 Claude Code 或 Codex 列點擊「安裝」（會附帶 Node.js），再建立 Pi 任務。"
     },
     "backgroundActivity": {
       "status": "後臺子任務執行中，模型用量仍在消耗…",
@@ -6668,13 +6676,13 @@
       }
     },
     "upgradeBanner": {
-      "description": "遠端 {{hostId}} 的 cc-manager 有新版本可用 — 升級會中斷該機器上當前所有 Claude Code 遠端任務",
-      "upgrading": "正在升級遠端 {{hostId}} 的 cc-manager…",
+      "description": "遠端 {{hostId}} 的 {{manager}} 有新版本可用 — 升級會中斷該機器上當前所有遠端任務",
+      "upgrading": "正在升級遠端 {{hostId}} 的 {{manager}}…",
       "upgrade": "立即升級",
-      "upgradeTitle": "下載並啟動新版本 cc-manager（會中斷當前任務）",
+      "upgradeTitle": "下載並啟動新版本 {{manager}}（會中斷當前任務）",
       "dismissTitle": "暫不升級（下次啟動會再次提示）",
       "failed": "升級失敗：{{message}}",
-      "daemonNotReady": "cc-manager 升級完成，但遠端 daemon 暫未啟動 — 請手動重新傳送訊息"
+      "daemonNotReady": "{{manager}} 升級完成，但遠端 daemon 暫未啟動 — 請手動重新傳送訊息"
     },
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "遠端連線已中斷（daemon 可能正在升級或重啟）。本輪已結束 — 請重新傳送。",
@@ -6682,6 +6690,7 @@
       "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時無法給出判斷（網路或服務波動），需要審批的操作已轉由你來確認。想少被打斷，可以把任務切到「預設權限」自行掌控。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "遠端 Claude Code 會話無法透過本地相容 Proxy 路由(內部錯誤，請反饋)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 憑據尚未就緒(登入後由服務端自動下發)。請稍候重試；若持續出現，請到 設定 → 模型供應商 檢查 Cindy AI 連線狀態。",
+      "REMOTE_LOCAL_ONLY_PROVIDER": "此模型供應商是本機專屬服務（如 Ollama），SSH 遠端任務無法存取本機位址。請改用 Cindy AI 閘道，或選擇遠端主機可達的模型供應商。",
       "DEVICE_LINK_CONTROL_DISABLED": "已關閉對該裝置的控制，訊息未傳送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件傳輸失敗，訊息未傳送。請重試。"
     },
@@ -9343,13 +9352,20 @@
         "endsAt": "套餐將於 {{date}} 結束",
         "cancelAction": "取消訂閱",
         "cancelConfirmTitle": "取消當前訂閱？",
-        "cancelConfirmDescription": "本次操作不會退款，也不會立即調整餘額。當前套餐權益可繼續使用至 {{date}}，之後不再續費。取消後無法在應用內恢復，本計費週期結束前也無法購買新套餐。",
-        "cancelConfirmDescriptionWithoutDate": "本次操作不會退款，也不會立即調整餘額。當前套餐權益可繼續使用至本計費週期結束，之後不再續費。取消後無法在應用內恢復，本計費週期結束前也無法購買新套餐。",
+        "cancelConfirmDescription": "本次操作不會退款，也不會立即調整餘額。當前套餐權益可繼續使用至 {{date}}，之後不再續費。本計費週期結束前無法購買新套餐。",
+        "cancelConfirmDescriptionWithoutDate": "本次操作不會退款，也不會立即調整餘額。當前套餐權益可繼續使用至本計費週期結束，之後不再續費。本計費週期結束前無法購買新套餐。",
         "cancelConfirmAction": "確認取消",
         "cancelSuccess": "已取消自動續費，當前套餐可使用至 {{date}}。",
         "cancelSuccessWithoutDate": "已取消自動續費，當前套餐將在本計費週期結束後到期。",
         "cancelNotSupported": "當前訂閱暫不支援取消。",
-        "cancelFailed": "取消訂閱失敗，請稍後重試。"
+        "cancelFailed": "取消訂閱失敗，請稍後重試。",
+        "resumeAction": "恢復訂閱",
+        "resumeConfirmTitle": "恢復目前訂閱？",
+        "resumeConfirmDescription": "恢復後將在續費日自動續費。",
+        "resumeConfirmAction": "恢復訂閱",
+        "resumeSuccess": "已恢復訂閱，將按原計畫自動續費。",
+        "resumeNotAvailable": "目前訂閱暫不支援恢復，請查看最新訂閱狀態後重試。",
+        "resumeFailed": "未能恢復訂閱，請稍後重試。"
       },
       "topupCard": {
         "action": "餘額充值"

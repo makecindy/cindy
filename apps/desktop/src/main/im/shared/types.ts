@@ -81,8 +81,12 @@ export interface ImSessionNamespace {
   /** 渠道专属列(feishu: feishuBotAppId/feishuOpenId;slack: imBotContextId/imUserId)。 */
   extraInsertColumns(botContextId: string, userId: string): Record<string, unknown>;
   /**
-   * 按 userId 收紧新会话的权限档(telegram guest lane → 'plan' 只读探索)。
-   * 返回 null/缺省 = 用渠道默认。只影响**新建**行; 已存在行的权限归 owner 管。
+   * 按 userId 覆写新会话的权限档:
+   *   - telegram guest lane → 'plan' 只读探索(收紧);
+   *   - feishu 群/话题 lane → 渠道设置「群聊新建任务权限档」(可比私聊那档宽,
+   *     那是用户对群的显式选择)。
+   * 返回 null/缺省 = 用渠道默认。只影响**新建**行(含 `/new` 重开上下文);
+   * 已存在行的权限归 owner 管(`/permission`)。
    */
   permissionModeFor?(userId: string): PermissionMode | null;
   /**
@@ -214,16 +218,16 @@ export interface ImChannelAdapter {
    * 该轮(fail-closed), 不会静默放开。
    */
   turnPermissionPolicyFor?(event: IMMessageEvent): TurnPermissionPolicy | undefined;
+  /**
+   * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 返回 true 的档位在
+   * dispatch 时不挂 turnPermissionPolicy(maker 不再 fail-closed, 按用户显式
+   * 选择直接执行)。飞书用它在用户于渠道设置中显式选择「完全访问」后取缔
+   * 群护栏; 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道
+   * 不实现即保持 fail-closed。
+   */
+  turnPolicyOptionalForMode?(permissionMode: PermissionMode): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
-  /**
-   * slash 命令事件的渠道钩子 — 在 handleSlashCommand 之前调用。飞书用它记住
-   * 「群主流 @ 开话题」事件带的群主流取数 lane(groupContextLane): /ctr 等
-   * slash 不经过 prepareAgentTurnText, 开话题那条事件攒下的 thread 前上下文
-   * 会丢失; 记住后由话题里第一条 agent 消息领走(见 adapter 实现)。
-   * 其它渠道不实现即 no-op。
-   */
-  onSlashCommandEvent?(event: IMMessageEvent): void;
 }
 
 // ── UI 文案包 ─────────────────────────────────────────────────────────────────
@@ -297,7 +301,8 @@ export interface ImUiTextPack {
    */
   error?: {
     agentUnsupported: string;
-    permissionModeUnsupported: string;
+    /** 函数形态接收 maker 拒绝时的权限档 id(如 acceptEdits), 报错能点名档位。 */
+    permissionModeUnsupported: string | ((permissionMode: string) => string);
     /** 换 Agent 后仍可能不兼容的权限模式(bypassPermissions / acceptEdits)时附加。 */
     agentSwitchAlsoCheckPermissionMode?: string;
   };
@@ -409,6 +414,13 @@ export interface ImUiTextPack {
       resolvedSessionPick: (sessionTitle: string, workspaceName: string) => string;
       resolvedNewSession: (workspaceName: string) => string;
       attachFailed: (reason: string) => string;
+      /**
+       * 群卡片认不出「自己发在哪条话题里」时的收口文案(飞书: 应用重启后
+       * 老卡再被点, 回调 senderId 回落成点击人的私聊 open_id)。此时**不能**
+       * 按它建绑定 —— 会把群里的接管挂到私聊身份上。缺省时回落
+       * attachFailed(通用错因), 不实现该场景的渠道无需提供。
+       */
+      staleGroupCard?: string;
       sessionBusyOldCardPlaceholder: string;
       sessionBusyPrompts: ReadonlyArray<(sessionTitle: string) => string>;
       takeoverLoadingPrompts: ReadonlyArray<(sessionTitle: string) => string>;

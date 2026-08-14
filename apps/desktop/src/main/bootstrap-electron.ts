@@ -166,6 +166,7 @@ import {
   prepare as binaryPrepare,
   peekNeedsDownload as binaryPeekNeedsDownload,
   broadcastResetForStep as binaryBroadcastResetForStep,
+  getCachedBinaryStatus,
   type AgentBinaryKind,
   type PrepareResult,
 } from './agent-binaries';
@@ -399,6 +400,7 @@ import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepoi
 import { registerGitContextIpc, disposeGitContext } from './git-context';
 import { registerGitReviewDeviceOp, registerGitReviewIpc } from './git-review';
 import { registerSidebarSettingsIpc } from './sidebarSettingsStore';
+import { registerModelVisibilityOwnerClaimIpc } from './maker-host/model-visibility-owner-claim.js';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
 import { registerLocalThemesIpc } from './local-themes/register';
@@ -449,6 +451,7 @@ import {
 } from './maker-host/createDesktopProviderService.js';
 import { isCindyEmbeddingModelAvailable } from './maker-host/provider-access-policy.js';
 import { setCustomProviders } from './maker-host/active-catalog.js';
+import { clearModelVisibilityMirror } from './maker-host/model-visibility-mirror.js';
 import { setClaudeSupportedModelsListener } from '@cindy/maker-core';
 import {
   noteAnthropicSdkSupportedModels,
@@ -683,16 +686,10 @@ import { getDesktopCommandRegistry, registerBuiltinDesktopCommands } from './com
 import { registerRemoteCmdIpc } from './commands/remoteCmdIpc.js';
 import { resolvePreferredSystemLocale, resolveSystemLocale } from '../shared/locale.js';
 import {
-  IM_DEFAULT_SETTINGS,
-  isImDefaultAgentKind,
-  isImDefaultEffort,
-  isImDefaultPermissionMode,
   isImDefaultSettingsChannel,
-  type ImDefaultAgentKind,
-  type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
-  type ImDefaultSettingsPatch,
 } from '../shared/imDefaultSettings.js';
+import { parseImDefaultSettingsPatch } from './im/parseDefaultSettingsPatch.js';
 import {
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
   codexSpawnConfigChanged,
@@ -1179,6 +1176,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // before any Agent route can start. A failed DB read therefore stays fail-closed (empty)
   // instead of retaining the previous owner's endpoint or model entries.
   setCustomProviders([]);
+  clearModelVisibilityMirror();
   // 远程会话的镜像冷缓存里是别的设备的聊天内容。owner 命名空间已经保证下一个账号读不到
   // 它,但登出后不该在盘上留着 —— 这里 owner 还指向**旧账号**(commitActiveAppSession 在
   // teardown 之后才切),正是唯一能清准的时机。
@@ -4875,6 +4873,14 @@ const registerIpcHandlers = () => {
     resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
 
     let piInfo: { status: 'passed' | 'failed'; path?: string; error?: string };
+    // 轮 27 LOW-4:首次准备失败后账号切换(同一进程),二进制可能已由后台
+    // 下载/手动放置变得可用 —— 轻量重试:意外可用则清除标志继续准备。
+    if (piDisabledForLaunch) {
+      const cached = getCachedBinaryStatus('pi');
+      if (cached?.binaryPath && cached.binaryPath.length > 0) {
+        piDisabledForLaunch = false;
+      }
+    }
     if (piDisabledForLaunch) {
       piInfo = {
         status: 'failed' as const,
@@ -7035,6 +7041,7 @@ app.on('ready', async () => {
   // device-link 远程 git 审查(只读):git-review:remote-op handler(被控端角色;
   // invoke-registry 捕获后供控制端隧道调用,本机 renderer 不调用)。
   registerGitReviewDeviceOp();
+  registerModelVisibilityOwnerClaimIpc();
   registerSidebarSettingsIpc();
   registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart
@@ -7284,7 +7291,12 @@ onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
 onQuit('im', () => stopImConnection('quit'), 'async');
 onQuit('codex-env', () => shutdownCodexEnvironment(), 'async');
-onQuit('pi-env', () => shutdownPiEnvironment(), 'async');
+// 轮 27 MEDIUM-3:pi-env 挪到 post-async —— 若与 shutdown-maker 同 async 并发,
+// bridge 可能在 session close 的 disposeSessionRegistrations(unregisterSessionCtx/
+// Token)之前关闭, 产生「pi dispose session registration failed (non-fatal)」
+// 日志噪声。post-async 串行在 shutdown-maker(async)之后执行, 且注册顺序在
+// remote-ssh-pool 之前(两者同 post-async, 按注册序执行 —— bridge 先于 pool 关)。
+onQuit('pi-env', () => shutdownPiEnvironment(), 'post-async');
 // embedding-host: abort 语义 —— 立刻让出 SQLite 写连接, 不等当前 tick (那批 job 保持
 // pending 下次续跑, 写事务同步原子无中断)。
 onQuit('embedding-host', () => stopEmbeddingHost(), 'async');
@@ -7301,7 +7313,11 @@ onQuit('codex-proxy', () => disposeCodexProxy(), 'async');
 // Remote file-service clients: 先于 pool 关闭, 挂断远端 daemon 的 exec channel。
 onQuit('remote-file-browser', () => disposeRemoteFileBrowser(), 'async');
 // Remote SSH pool: 主动断开所有活动连接, 防止 ssh2 子句柄阻塞 Node 进程退出。
-onQuit('remote-ssh-pool', () => disposeRemoteSshPool(), 'async');
+// post-async(非 async):shutdown-maker 在 async 阶段关 sessions 时, PiAgent.close()
+// 会经 pi-manager RPC 发 kill 杀远端 daemon —— 若 pool 在 async 并发先
+// 断开 SSH, kill 失败, daemon + env-file(含凭证)残留 30 分钟(R6 审计 M-8/M-11)。
+// 挪到 post-async 串行, 保证 session 级 kill 先完成, pool 最后收尾。
+onQuit('remote-ssh-pool', () => disposeRemoteSshPool(), 'post-async');
 // WDA deleteSession may consume longer than the shared async quit budget. Kill
 // detached WDA/Sidecar process groups synchronously before that budget starts;
 // the lightweight seam is a no-op when Simulator was never initialized.
@@ -7433,85 +7449,6 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
     patch.codexAllowNestedSubagents = input.codexAllowNestedSubagents;
   }
   return patch;
-}
-
-function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatch {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throwIpcError('INVALID_PARAMS', 'im default settings patch required (object)');
-  }
-  const input = raw as Record<string, unknown>;
-  const patch: ImDefaultSettingsPatch = {};
-  if ('agentKind' in input) {
-    if (!isImDefaultAgentKind(input.agentKind)) {
-      throwIpcError('INVALID_PARAMS', 'im default agentKind invalid');
-    }
-    patch.agentKind = input.agentKind;
-  }
-  if ('permissionMode' in input) {
-    if (!isImDefaultPermissionMode(input.permissionMode)) {
-      throwIpcError('INVALID_PARAMS', 'im default permissionMode invalid');
-    }
-    patch.permissionMode = input.permissionMode;
-  }
-  if ('agents' in input) {
-    if (!input.agents || typeof input.agents !== 'object' || Array.isArray(input.agents)) {
-      throwIpcError('INVALID_PARAMS', 'im default agents must be object');
-    }
-    const agentInput = input.agents as Record<string, unknown>;
-    const agentsPatch: NonNullable<ImDefaultSettingsPatch['agents']> = {};
-    // 三个 harness 必须对称解析；漏掉 pi 会让 IM 设置页切 Pi 后改模型静默丢弃
-    // (store 本身支持 pi，见 defaultSettingsStore / IM_DEFAULT_SETTINGS.agents.pi)。
-    for (const kind of ['claude-code', 'codex', 'pi'] as const) {
-      if (kind in agentInput) {
-        agentsPatch[kind] = parseImDefaultAgentSettings(kind, agentInput[kind]);
-      }
-    }
-    patch.agents = agentsPatch;
-  }
-  if ('providerId' in input || 'model' in input || 'effort' in input) {
-    const legacyAgentKind = patch.agentKind ?? IM_DEFAULT_SETTINGS.agentKind;
-    patch.agents = {
-      ...patch.agents,
-      [legacyAgentKind]: parseImDefaultAgentSettings(legacyAgentKind, input),
-    };
-  }
-  return patch;
-}
-
-function parseImDefaultAgentSettings(
-  agentKind: ImDefaultAgentKind,
-  raw: unknown,
-): ImDefaultAgentSettings {
-  const defaults = IM_DEFAULT_SETTINGS.agents[agentKind];
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return { ...defaults };
-  }
-  const input = raw as Record<string, unknown>;
-  let providerId = defaults.providerId;
-  let model = defaults.model;
-  let effort = defaults.effort;
-  if ('providerId' in input) {
-    if (input.providerId !== null && typeof input.providerId !== 'string') {
-      throwIpcError('INVALID_PARAMS', 'im default providerId must be string or null');
-    }
-    providerId =
-      typeof input.providerId === 'string' && input.providerId.trim()
-        ? input.providerId.trim()
-        : null;
-  }
-  if ('model' in input) {
-    if (typeof input.model !== 'string' || !input.model.trim()) {
-      throwIpcError('INVALID_PARAMS', 'im default model required (string)');
-    }
-    model = input.model.trim();
-  }
-  if ('effort' in input) {
-    if (!isImDefaultEffort(input.effort)) {
-      throwIpcError('INVALID_PARAMS', 'im default effort invalid');
-    }
-    effort = input.effort;
-  }
-  return { providerId, model, effort };
 }
 
 function silentEncryptedRetryWire() {

@@ -19,6 +19,9 @@ const scopeMocks = vi.hoisted(() => ({
   join: null as unknown as (...parts: string[]) => string,
   claimLegacy: vi.fn(),
   utilityText: vi.fn(),
+  readImDefaultSettings: vi.fn<(channel?: string) => { groupPermissionMode: string }>(() => ({
+    groupPermissionMode: 'auto',
+  })),
 }));
 
 vi.mock('electron', () => ({
@@ -40,6 +43,11 @@ vi.mock('../../../utility-model/oneShotCandidates.js', () => ({
 }));
 vi.mock('../../../maker-host/index.js', () => ({
   getMaker: () => ({}),
+}));
+// 群 lane 的新建会话权限档来自渠道设置(defaultSettingsStore 拽 electron/存储层,
+// 单测只钉住「读到什么就用什么」)。
+vi.mock('../../defaultSettingsStore', () => ({
+  readImDefaultSettings: (channel?: string) => scopeMocks.readImDefaultSettings(channel),
 }));
 
 import type {
@@ -275,6 +283,34 @@ describe('feishu group lane adapter hooks', () => {
     expect(dmPolicy).toBeUndefined();
   });
 
+  /**
+   * 群里新建的会话一律看渠道设置「群聊新建任务权限档」 —— 不只是 /ctr,
+   * 群主流 @bot 开话题、群里 /new 建行走的都是这个钩子(sessionRepo.prepareNewSession)。
+   * DM 返回 null(不覆写), 私聊仍走面向私聊的那条 permissionMode。
+   */
+  it('permissionModeFor: 群/话题 lane 用群聊权限档, DM 不覆写', () => {
+    scopeMocks.readImDefaultSettings.mockReturnValue({
+      groupPermissionMode: 'bypassPermissions',
+    });
+    // 群主流 lane 与话题 lane 同判据。
+    expect(adapter.sessions.permissionModeFor?.('g/oc_chat1')).toBe('bypassPermissions');
+    expect(adapter.sessions.permissionModeFor?.('g/oc_chat1/omt_t1')).toBe('bypassPermissions');
+    // 读的是飞书这一份渠道设置, 不是 global。
+    expect(scopeMocks.readImDefaultSettings).toHaveBeenCalledWith('feishu');
+    // DM userId 是 open_id, 不是 lane → 不覆写。
+    expect(adapter.sessions.permissionModeFor?.('ou_owner')).toBeNull();
+
+    // 设置改回自动审批时群里也跟着回自动审批(没有"只在手动改过才生效"的门)。
+    scopeMocks.readImDefaultSettings.mockReturnValue({ groupPermissionMode: 'auto' });
+    expect(adapter.sessions.permissionModeFor?.('g/oc_chat1/omt_t1')).toBe('auto');
+  });
+
+  it('turnPolicyOptionalForMode: 仅完全访问档可选(护栏取缔), 其余档保持挂策略', () => {
+    expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions')).toBe(true);
+    expect(adapter.turnPolicyOptionalForMode?.('auto')).toBe(false);
+    expect(adapter.turnPolicyOptionalForMode?.('acceptEdits')).toBe(false);
+  });
+
   it('prepareAgentTurnText: 群 lane 拉历史拼上下文前缀(带时间标注), 剔除触发消息', async () => {
     fetchChatHistoryPage.mockResolvedValueOnce(
       historyPage([
@@ -313,62 +349,27 @@ describe('feishu group lane adapter hooks', () => {
     expect(result?.agentText).toContain('群主流背景');
   });
 
-  it('prepareAgentTurnText: /ctr 开话题事件记忆的群主流取数 lane 被话题首条消息领走(一次性)', async () => {
-    // 群主流 @ "/ctr" 开新话题: slash 不经过 prepareAgentTurnText, 取数 lane
-    // 由 onSlashCommandEvent 记住; 流程结束后话题里第一条 agent 消息按群主流
-    // 拉历史(thread 创建前的上下文), 第二条起回到话题容器。
-    adapter.onSlashCommandEvent?.(
-      groupEvent({
-        senderId: 'g/oc_chat9/omt_ctr1',
-        groupContextLane: { chatId: 'oc_chat9', threadId: '' },
-      }),
-    );
+  /**
+   * 会话里只看会话(产品裁决)。
+   *
+   * 曾经的行为: /ctr 开话题事件把群主流取数 lane 记下来, 由话题里第一条消息
+   * 领走 —— 于是首句要回翻整条群主流(最多 5 页, 每页一次模型相关性判断),
+   * 实测把首句拖到 87s 才开始跑。需要群里的上文就在群主流 @ 机器人。
+   */
+  it('prepareAgentTurnText: /ctr 后话题里的第一条消息也只按话题容器取数', async () => {
     fetchChatHistoryPage.mockResolvedValueOnce(
-      historyPage([historyEntry({ messageId: 'om_h1', threadId: '', text: '群主流背景' })]),
+      historyPage([historyEntry({ messageId: 'om_h1', threadId: 'omt_ctr1', text: '话题内消息' })]),
     );
     const first = await adapter.prepareAgentTurnText?.(
-      groupEvent({ senderId: 'g/oc_chat9/omt_ctr1' }),
-    );
-    expect(fetchChatHistoryPage).toHaveBeenCalledWith(
-      expect.objectContaining({ chatId: 'oc_chat9' }),
-    );
-    expect(fetchChatHistoryPage).not.toHaveBeenCalledWith(
-      expect.objectContaining({ threadId: 'omt_ctr1' }),
-    );
-    expect(first?.agentText).toContain('群主流背景');
-
-    // 一次性: 第二条消息回到话题容器。
-    fetchChatHistoryPage.mockResolvedValueOnce(
-      historyPage([historyEntry({ messageId: 'om_h2', threadId: 'omt_ctr1', text: '话题内消息' })]),
-    );
-    const second = await adapter.prepareAgentTurnText?.(
       groupEvent({ senderId: 'g/oc_chat9/omt_ctr1' }),
     );
     expect(fetchChatHistoryPage).toHaveBeenLastCalledWith(
       expect.objectContaining({ chatId: 'oc_chat9', threadId: 'omt_ctr1' }),
     );
-    expect(second?.agentText).toContain('话题内消息');
-    expect(second?.agentText).not.toContain('群主流背景');
+    expect(first?.agentText).toContain('话题内消息');
   });
 
-  it('prepareAgentTurnText: 话题内 slash 事件无 groupContextLane, 不建立记忆(走话题容器)', async () => {
-    adapter.onSlashCommandEvent?.(groupEvent({ senderId: 'g/oc_chat10/omt_ctr2' }));
-    fetchChatHistoryPage.mockResolvedValueOnce(
-      historyPage([historyEntry({ messageId: 'om_h1', threadId: 'omt_ctr2', text: '话题内消息' })]),
-    );
-    const result = await adapter.prepareAgentTurnText?.(
-      groupEvent({ senderId: 'g/oc_chat10/omt_ctr2' }),
-    );
-    expect(fetchChatHistoryPage).toHaveBeenCalledWith(
-      expect.objectContaining({ chatId: 'oc_chat10', threadId: 'omt_ctr2' }),
-    );
-    expect(result?.agentText).toContain('话题内消息');
-  });
-
-  it('prepareAgentTurnText: DM slash 事件不受记忆机制影响', async () => {
-    adapter.onSlashCommandEvent?.(
-      groupEvent({ senderId: 'ou_owner', groupContextLane: { chatId: 'oc_chat11', threadId: '' } }),
-    );
+  it('prepareAgentTurnText: DM 不拼群上下文', async () => {
     fetchChatHistoryPage.mockClear();
     const result = await adapter.prepareAgentTurnText?.(
       groupEvent({ senderId: 'ou_owner', speaker: undefined }),
@@ -384,6 +385,9 @@ describe('feishu group lane adapter hooks', () => {
         historyEntry({ messageId: 'om_h3', threadId: 'omt_other', text: '别的话题' }),
       ]),
     );
+    // utilityText 的 mock.calls 跨用例累积(suite 无逐例 reset), 判断调用要按
+    // 本用例自己的窗口数 —— 否则会数到前面群主流用例的那次判断。
+    scopeMocks.utilityText.mockClear();
     const result = await adapter.prepareAgentTurnText?.(
       groupEvent({ senderId: 'g/oc_chat1/omt_t1' }),
     );
@@ -392,6 +396,13 @@ describe('feishu group lane adapter hooks', () => {
     );
     expect(result?.agentText).toContain('话题内消息');
     expect(result?.agentText).not.toContain('别的话题');
+    // 话题里**不做**相关性判断: 话题容器天然就是一个话题, 每页一次的模型判断
+    // 只有群主流需要。这几次调用串在首轮关键路径上, 轻量模型一慢就是干等。
+    // (注入扫描仍照常跑 —— 话题里也是群成员能发言的地方。)
+    const judgeCalls = scopeMocks.utilityText.mock.calls.filter((call) =>
+      String(call[1] ?? '').includes('只回答一个词'),
+    );
+    expect(judgeCalls).toHaveLength(0);
   });
 
   it('prepareAgentTurnText: 发言人名字消毒; 伪造上下文标签的消息整条过滤', async () => {

@@ -35,6 +35,7 @@ apps/desktop/release/
 apps/desktop/resources/tools/
 # build-remote-bundles.mjs 会在 dev/package/build 前重新生成这些目录。
 apps/desktop/resources/cc-manager/
+apps/desktop/resources/pi-manager/
 apps/desktop/resources/anthropic-compat-proxy/
 apps/desktop/resources/remote-file-service/
 # Windows 打包时由 prePackage 现场 cargo build 生成并覆盖(forge.config.ts

@@ -23,12 +23,20 @@ export interface ImDefaultSettings {
   agentKind: ImDefaultAgentKind;
   permissionMode: ImDefaultPermissionMode;
   /**
-   * 群聊 /ctr 新建会话用的权限档(当前仅 feishu 消费): 群上下文含成员可控
-   * 内容, 默认 'auto'(自动审批)保留操作确认; 用户可在渠道设置里改成
-   * 'bypassPermissions'(完全访问) — 群轮次会因强确认策略互斥被拒绝, 由
-   * 错误路径的私聊引导卡兜底切回。
+   * **群里新建会话**统一用的权限档(当前仅 feishu 消费) —— 群/话题里 @bot 开
+   * 新话题、群里 `/new`、群里 `/ctr` 全部以它为准, 不再各自继承上面那条
+   * `permissionMode`(那条只管私聊)。群 lane 判定在 feishu adapter 的
+   * `sessions.permissionModeFor`, /ctr 建会话另有一处(cardActionHandler)。
+   *
+   * 群上下文含成员可控内容, 默认 'auto'(自动审批)保留操作确认; 用户可在渠道
+   * 设置里改成 'bypassPermissions'(完全访问) → 群护栏取缔, 直接执行。选到
+   * 'acceptEdits' 等与强确认策略互斥的档位时群轮次会被拒绝, 由错误路径的私聊
+   * 引导卡兜底切回。
+   *
+   * **不看「用户有没有手动改过」**: 默认值本身就是群里的判据(产品裁决 —— 群里
+   * 的事只看这一行), 私聊那条设成完全访问不会顺带放开群。
    */
-  groupCtrPermissionMode: ImDefaultPermissionMode;
+  groupPermissionMode: ImDefaultPermissionMode;
   agents: ImDefaultAgentSettingsMap;
 }
 
@@ -45,7 +53,7 @@ export interface ImDefaultSettingsState extends ImDefaultSettings {
 export const IM_DEFAULT_SETTINGS: ImDefaultSettings = {
   agentKind: 'claude-code',
   permissionMode: 'auto',
-  groupCtrPermissionMode: 'auto',
+  groupPermissionMode: 'auto',
   agents: {
     'claude-code': {
       providerId: null,

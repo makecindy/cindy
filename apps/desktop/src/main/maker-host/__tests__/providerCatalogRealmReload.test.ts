@@ -8,7 +8,6 @@ import { describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
-  devMode: false,
   owner: 'owner-default',
   loads: [] as Array<{
     source: Record<string, unknown>;
@@ -49,7 +48,6 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
 
 vi.mock('../../manifestService.js', () => ({
   getBaseUrl: () => 'https://legacy-build-cdn.example',
-  isDev: () => h.devMode,
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getBuildClientEndpoint: () => h.buildEndpoint,
@@ -148,7 +146,6 @@ import {
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
   reloadActiveCatalogForEndpointChange,
-  shouldDisableCatalogFetch,
   syncLocalCatalogOverridesIntoActiveCatalog,
 } from '../createDesktopProviderService.js';
 
@@ -350,14 +347,6 @@ describe('provider catalog realm reload', () => {
     ).rejects.toMatchObject({ code: 'EBUSY' });
     expect(files.has('/catalog.json')).toBe(true);
     expect(files.has('/catalog.json.bak')).toBe(false);
-  });
-
-  it('keeps dev offline by default but permits an explicit catalog URL', () => {
-    expect(shouldDisableCatalogFetch(true, undefined, false)).toBe(true);
-    expect(shouldDisableCatalogFetch(true, '   ', false)).toBe(true);
-    expect(shouldDisableCatalogFetch(true, 'http://127.0.0.1/catalog', false)).toBe(false);
-    expect(shouldDisableCatalogFetch(false, undefined, false)).toBe(false);
-    expect(shouldDisableCatalogFetch(false, 'http://127.0.0.1/catalog', true)).toBe(true);
   });
 
   it('invalidates the old realm immediately and ignores a stale cross-realm response', async () => {
@@ -577,14 +566,13 @@ describe('provider catalog realm reload', () => {
     }
   });
 
-  it('dev 缺省禁网时手动刷新不发请求,抛 MODEL_CATALOG_FETCH_DISABLED 而非伪装的网络失败', async () => {
-    h.devMode = true;
+  it('XDT_DISABLE_MODELS_FETCH=1 时手动刷新不发请求,抛 MODEL_CATALOG_FETCH_DISABLED 而非伪装的网络失败', async () => {
     const savedUrl = process.env.XDT_MODELS_URL;
     const savedPath = process.env.XDT_MODELS_PATH;
     const savedForceOff = process.env.XDT_DISABLE_MODELS_FETCH;
     delete process.env.XDT_MODELS_URL;
     delete process.env.XDT_MODELS_PATH;
-    delete process.env.XDT_DISABLE_MODELS_FETCH;
+    process.env.XDT_DISABLE_MODELS_FETCH = '1';
     try {
       const loadsBefore = h.refreshLoads.length;
       await expect(refreshActiveCatalogFromSource()).rejects.toMatchObject({
@@ -592,7 +580,6 @@ describe('provider catalog realm reload', () => {
       });
       expect(h.refreshLoads).toHaveLength(loadsBefore);
     } finally {
-      h.devMode = false;
       if (savedUrl === undefined) delete process.env.XDT_MODELS_URL;
       else process.env.XDT_MODELS_URL = savedUrl;
       if (savedPath === undefined) delete process.env.XDT_MODELS_PATH;

@@ -263,6 +263,8 @@ interface QueuedSend {
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
+  /** 调用方在拼群上下文之前已落库的 user 行(见 ImRunAgentTurnArgs 同名字段)。 */
+  prePersistedUserMessage?: { sessionId: string; clientId: string };
 }
 
 type DetachDrainOutcome = 'rewire' | 'cancelled';
@@ -382,6 +384,25 @@ export interface ImRunAgentTurnArgs {
    */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
+  /**
+   * 调用方已经打好的「已收到」表情句柄 —— 传了就由本 turn 接管(不再重复打),
+   * turn 收口时照常撤掉/换成结果表情。
+   *
+   * 给 messageHandler 用: 群上下文拼装(回翻群历史, 可能翻页并调轻量模型)排在
+   * runAgentTurn **之前**, 慢的时候用户几十秒看不到任何反应, 会以为 bot 挂了。
+   * 由调用方在拼装前先打表情、把句柄交进来, 反馈就不再被拼装时间挡住。
+   * 缺省(undefined)= turn 自己打, 与老行为一致。
+   */
+  ackReactionIdPromise?: Promise<string | null> | null;
+  /**
+   * 调用方已经**提前落库**的用户消息(见 persistInboundUserMessageEarly)。
+   *
+   * 带上它, dispatch 时就不再重复写一条 user 行, 只把 turn 的 changeset 锚到
+   * 这条已有记录上。sessionId 必须一起带 —— 提前落库与真正 dispatch 之间隔着
+   * 群上下文拼装(实测 15~60s), 期间路由可能已经改到另一个 session(如 /new
+   * 重置), 那时这份预落库对不上号, dispatch 必须照常自己落一条。
+   */
+  prePersistedUserMessage?: { sessionId: string; clientId: string };
 }
 
 export interface ImTurnTerminal {
@@ -406,6 +427,28 @@ export type ImTurnDispatch =
 /** createTurnRunner 返回的编排实例 — per channel 一个。 */
 export interface ImTurnRunner {
   runAgentTurn(args: ImRunAgentTurnArgs): Promise<void>;
+  /**
+   * 把渠道用户消息**提前**写进本地 messages 表 —— 只给「dispatch 之前还有重活」
+   * 的渠道用(群上下文拼装: 回翻群历史 + 轻量模型扫描, 实测 15~60s)。
+   *
+   * 用户消息平时是在 provider 受理那一刻才落库(见 dispatchQueuedSend 的
+   * onAccepted 注释), 于是这段重活期间桌面端根本看不到"消息已经收到";
+   * 用户会以为消息丢了。这里在重活开始前先落一条, 并把 clientId 交回调用方,
+   * 由它透传给 runAgentTurn(prePersistedUserMessage), dispatch 就不再重复写。
+   *
+   * **只在这条会话此刻完全空闲时才落**(没有 turn 在跑、没有排队消息) ——
+   * 忙的时候提前落会把新提问排在上一轮回答之前, 正是 onAccepted 注释里要
+   * 避免的顺序错乱。忙 / 新会话(行还没建)/ 受保护内容 ⇒ 返回 null,
+   * 完全退回原行为。
+   */
+  persistInboundUserMessageEarly?: (args: {
+    botContextId: string;
+    userId: string;
+    scopeKey?: string;
+    text: string;
+    attachments?: readonly IMAttachment[];
+    protectedContent?: boolean;
+  }) => Promise<{ sessionId: string; clientId: string } | null>;
   /**
    * Durable callers own their queue and receive an observable accepted/terminal
    * contract. Busy work is never copied into turnRunner's in-memory sendQueue.
@@ -628,6 +671,7 @@ export function createTurnRunner(
         if (args.queueMode === 'internal') {
           await replyMissingAuth(userId, created.missingAuth, scopeKey);
         }
+        await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
       }
       target = created.target;
@@ -644,6 +688,7 @@ export function createTurnRunner(
             target.attached,
           );
         }
+        await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
       }
     }
@@ -679,9 +724,14 @@ export function createTurnRunner(
     // session wiring; promise is parked on the turn so completeTurnCallback can
     // await it and remove the reaction once the turn finishes (regardless of
     // whether ack resolved before or after).
-    const ackReactionIdPromise: Promise<string | null> | null = userMessageId
-      ? ackProcessing(userMessageId)
-      : null;
+    // 调用方已经打过 ack 就接管它的句柄, 不再补打一个(飞书 reactToMessage 会
+    // 叠出第二个同款表情)。args 里显式给了 null = 调用方打失败, 同样不补。
+    const ackReactionIdPromise: Promise<string | null> | null =
+      args.ackReactionIdPromise !== undefined
+        ? args.ackReactionIdPromise
+        : userMessageId
+          ? ackProcessing(userMessageId)
+          : null;
 
     let resolveTerminal!: (terminal: ImTurnTerminal) => void;
     const terminalPromise = new Promise<ImTurnTerminal>((resolve) => {
@@ -805,6 +855,9 @@ export function createTurnRunner(
       ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
+      ...(args.prePersistedUserMessage
+        ? { prePersistedUserMessage: args.prePersistedUserMessage }
+        : {}),
     };
 
     // turn 进行中(本 session 的本渠道 turn 未收口 / sendQueue 已有人排队 /
@@ -857,6 +910,34 @@ export function createTurnRunner(
    * 典型: 接管模式下 desktop 排队消息和渠道排队消息在同一个 done 后争抢) →
    * 退回队首, 等下一个 done/error 或 retry timer 再派发, 不报错。
    */
+  /**
+   * 群护栏取缔(feishu): 渠道通过 turnPolicyOptionalForMode 声明「该权限档下
+   * 强确认策略可选」时, dispatch 前按会话当前权限档决定是否真正挂策略 —
+   * 返回 undefined = 不挂, maker 不再 fail-closed, 按用户显式选择直接执行。
+   * 群上下文的防注入过滤与包裹独立于策略, 照常生效; 查档失败保持挂策略
+   * (fail-closed 兜底)。其它渠道不实现该钩子, 行为不变。
+   */
+  async function resolveEffectiveTurnPolicy(
+    item: QueuedSend,
+  ): Promise<TurnPermissionPolicy | undefined> {
+    if (!item.turnPermissionPolicy || !adapter.turnPolicyOptionalForMode) {
+      return item.turnPermissionPolicy;
+    }
+    try {
+      const row = await repo.peekSessionById(item.rowId);
+      if (row && adapter.turnPolicyOptionalForMode(row.permissionMode)) {
+        log.info(
+          `turn policy skipped by channel (mode=${row.permissionMode}) session=${item.rowId.slice(-8)}`,
+        );
+        return undefined;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`resolveEffectiveTurnPolicy peek failed (keep policy): ${msg}`);
+    }
+    return item.turnPermissionPolicy;
+  }
+
   async function dispatchQueuedSend(
     state: SessionState,
     userId: string,
@@ -932,15 +1013,19 @@ export function createTurnRunner(
           )
         : withHandoff;
 
+      // 群护栏取缔(飞书): 按会话当前权限档决定是否真正挂强确认策略, 见
+      // resolveEffectiveTurnPolicy。不挂时走与 DM 轮次相同的无策略路径。
+      const effectiveTurnPolicy = await resolveEffectiveTurnPolicy(item);
+
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
-        ...(item.turnPermissionPolicy ? { turnPermissionPolicy: item.turnPermissionPolicy } : {}),
+        ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
         beforeProviderStart: async () => {
           // 策略轮持一张 host turn lease:期间 setPermissionMode 切到 agent 声明为
           // turnPermissionPolicy-unsupported 的档位(如 Pi Full Access)会被阻塞到本轮
           // 终态,堵死"热切到 bypass 让 bridge 直接放行、策略连冒泡机会都没有"的绕过。
           // 两个 surface 都需要:channel 与 desktop 的策略同样必须扛住热切。
-          if (item.turnPermissionPolicy) {
+          if (effectiveTurnPolicy) {
             item.turn.hostTurnLeaseRelease = state.makerSession.acquireTurnLease();
           }
           if (item.groupHistoryAccess) {
@@ -951,21 +1036,21 @@ export function createTurnRunner(
             });
           }
           item.turn.interactionRouteLease =
-            item.turnPermissionPolicy?.confirmationSurface === 'desktop'
+            effectiveTurnPolicy?.confirmationSurface === 'desktop'
               ? beginInteractionRoute(state.makerSession, {
                   route: {
                     sessionId: rowId,
                     turnId: item.turn.turnId,
-                    origin: item.turnPermissionPolicy.origin,
+                    origin: effectiveTurnPolicy.origin,
                     interactionSurface: 'desktop',
-                    ...(item.turnPermissionPolicy.confirmationTimeoutMs
+                    ...(effectiveTurnPolicy.confirmationTimeoutMs
                       ? {
-                          timeoutMs: item.turnPermissionPolicy.confirmationTimeoutMs,
+                          timeoutMs: effectiveTurnPolicy.confirmationTimeoutMs,
                         }
                       : {}),
-                    ...(item.turnPermissionPolicy.onInteractionStateChange
+                    ...(effectiveTurnPolicy.onInteractionStateChange
                       ? {
-                          onStateChange: item.turnPermissionPolicy.onInteractionStateChange,
+                          onStateChange: effectiveTurnPolicy.onInteractionStateChange,
                         }
                       : {}),
                   },
@@ -974,20 +1059,20 @@ export function createTurnRunner(
                   route: {
                     sessionId: rowId,
                     turnId: item.turn.turnId,
-                    origin: item.turnPermissionPolicy?.origin ?? { kind: 'im', channel },
+                    origin: effectiveTurnPolicy?.origin ?? { kind: 'im', channel },
                     interactionSurface: 'channel-card',
-                    ...(item.turnPermissionPolicy?.confirmationTimeoutMs
-                      ? { timeoutMs: item.turnPermissionPolicy.confirmationTimeoutMs }
+                    ...(effectiveTurnPolicy?.confirmationTimeoutMs
+                      ? { timeoutMs: effectiveTurnPolicy.confirmationTimeoutMs }
                       : {}),
-                    ...(item.turnPermissionPolicy?.onInteractionStateChange
-                      ? { onStateChange: item.turnPermissionPolicy.onInteractionStateChange }
+                    ...(effectiveTurnPolicy?.onInteractionStateChange
+                      ? { onStateChange: effectiveTurnPolicy.onInteractionStateChange }
                       : {}),
                   },
                   handle: handleInteractionFor(
                     rowId,
                     userId,
                     state.scopeKey,
-                    item.turnPermissionPolicy?.confirmationTimeoutMs,
+                    effectiveTurnPolicy?.confirmationTimeoutMs,
                   ),
                   // 文本渠道自己认领掉的不动卡片(它本来就没有卡);其余走
                   // dropInteractionCard —— 作废 pending 的同时把那张卡收口。
@@ -1016,15 +1101,23 @@ export function createTurnRunner(
           // 路径直接 session.send,必须额外调这里,否则守卫额度恒 0,首次
           // silent-stop 就落"已耗尽"误导横幅且永不自动续跑)。
           noteSilentStopUserSend(rowId);
+          // 已经提前落过库(群上下文拼装前, 见 persistInboundUserMessageEarly)就
+          // 复用那条记录, 不再写第二条。sessionId 必须相符 —— 拼装期间路由若换到
+          // 别的 session(/new 重置等), 那份预落库不属于本轮, 照常自己落一条。
+          const prePersisted =
+            item.prePersistedUserMessage?.sessionId === rowId
+              ? item.prePersistedUserMessage
+              : null;
           // 受保护群的触发消息不进会话存档 —— 正文与附件都不落。turn 照常跑,
           // agent 拿得到内容; 只是这一轮的输入不留在长期记录里。
           const persisted = item.protectedContent
             ? null
-            : await persistUserMessage({
+            : (prePersisted ??
+              (await persistUserMessage({
                 sessionId: rowId,
                 text: item.text,
                 attachments: item.attachments,
-              });
+              })));
           await adapter.onUserMessagePersisted?.({
             sessionId: rowId,
             userMessageId: item.turn.userMessageId,
@@ -1805,6 +1898,24 @@ export function createTurnRunner(
   }
 
   /**
+   * 撤掉**调用方交进来的** ack 表情 —— 只用在 TurnState 还没建起来就 rejected
+   * 的路径上(missing_auth)。那个表情是调用方在 dispatch 之前打的, 这里不撤就
+   * 永久卡在用户消息上。turn 建起来之后的清理照旧走 cancelAckReaction。
+   */
+  async function discardHandedOverAck(
+    messageId: string,
+    promise: Promise<string | null> | null | undefined,
+  ): Promise<void> {
+    if (!promise || !messageId) return;
+    try {
+      const reactionId = await promise;
+      if (reactionId) await im.removeMessageReaction?.(messageId, reactionId);
+    } catch {
+      /* 忽略失败：表情清理是尽力而为。 */
+    }
+  }
+
+  /**
    * Turn 结束时撤掉之前 ackProcessing 加的表情。等待 ack promise(此时可能
    * 早已 resolve,也可能仍在飞行中),拿到 reaction token 后调 removeReaction。
    * 任何环节失败都吞掉，这是 ack 的清理动作，不能影响 turn 结束流程。
@@ -2388,12 +2499,17 @@ export function createTurnRunner(
     await completeTurnCallbackAfterAck(failure.turn);
     if (failure.turn.queueMode === 'internal') {
       try {
-        // 群轮次强确认策略与「完全访问」档互斥(maker fail-closed 拒绝) — 给
-        // 用户能看懂的说法并指路 /permission, 而不是裸抛策略错误码。
+        // 群轮次强确认策略与不支持档互斥(maker fail-closed 拒绝;「完全访问」
+        // 已由渠道设置显式放行, 实际只剩 acceptEdits)— 给用户能看懂的说法并
+        // 指路 /permission + 私聊修复卡, 而不是裸抛策略错误码。
         const policyUnsupported = failure.reason.startsWith('TURN_PERMISSION_POLICY_UNSUPPORTED');
+        const rejectedMode = failure.reason.split(':')[2] ?? '';
+        const unsupportedCopy = adapter.ui.error?.permissionModeUnsupported;
         const message =
-          policyUnsupported && adapter.ui.error?.permissionModeUnsupported
-            ? adapter.ui.error.permissionModeUnsupported
+          policyUnsupported && unsupportedCopy
+            ? typeof unsupportedCopy === 'function'
+              ? unsupportedCopy(rejectedMode)
+              : unsupportedCopy
             : `❌ 启动 agent 失败：${failure.reason}`;
         if (
           output.kind === 'chunked-text' &&
@@ -3185,6 +3301,54 @@ export function createTurnRunner(
     return sessionStates.get(sessionId)?.makerSession ?? null;
   }
 
+  /**
+   * 提前落库入站用户消息 —— 契约与取舍见 ImTurnRunner.persistInboundUserMessageEarly。
+   *
+   * 残留窗口(已知、可接受): 落库之后、dispatch 之前如果**别的入口**(desktop
+   * 手打 / scheduler)在同一 session 上起了新 turn, 我们这条 user 行就会排在那轮
+   * assistant 输出之前。代价是 transcript 顺序看着别扭一次; 换来的是常态下
+   * 15~60s 的"消息像丢了"彻底消失。
+   */
+  async function persistInboundUserMessageEarly(args: {
+    botContextId: string;
+    userId: string;
+    scopeKey?: string;
+    text: string;
+    attachments?: readonly IMAttachment[];
+    protectedContent?: boolean;
+  }): Promise<{ sessionId: string; clientId: string } | null> {
+    // 受保护群的触发消息永不进存档(与 onAccepted 同一条边界)。
+    if (args.protectedContent === true) return null;
+    if (args.text.length === 0 && (args.attachments?.length ?? 0) === 0) return null;
+    let target: RouteTarget | null;
+    try {
+      // 只解析既有路由: 提前落库不该新建 session 行, 也不该抢在认证预检之前
+      // 制造出一条会话(新会话仍按原路径在 dispatch 时建行 + 落库)。
+      target = await resolveExistingRouteTarget(args.botContextId, args.userId, args.scopeKey);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`early persist route resolve failed (skipped): ${msg}`);
+      return null;
+    }
+    if (!target) return null;
+    const sessionId = target.row.id;
+    // 空闲判据要覆盖**所有**入口, 不只本渠道: 接管态下 desktop / scheduler 也会
+    // 在同一个 session 上起 turn, 它那轮的 assistant 输出会落在我们之后。
+    // getSession 是只读查在内存里的 session(不新建), 拿不到 ⇒ 本进程没有活
+    // session, 也就没有在跑的 turn。
+    if (getMaker().getSession(sessionId)?.isTurnRunning() === true) return null;
+    const state = sessionStates.get(sessionId);
+    if (state && (state.queue.length > 0 || state.sendQueue.length > 0)) return null;
+    const persisted = await persistUserMessage({
+      sessionId,
+      text: args.text,
+      ...(args.attachments ? { attachments: args.attachments } : {}),
+    });
+    if (!persisted) return null;
+    log.info(`pre-persisted user message for session=${sessionId.slice(-8)}`);
+    return { sessionId, clientId: persisted.clientId };
+  }
+
   async function stopActiveTurn(args: {
     botContextId: string;
     userId: string;
@@ -3263,6 +3427,7 @@ export function createTurnRunner(
 
   return {
     runAgentTurn,
+    persistInboundUserMessageEarly,
     dispatchAgentTurn,
     resolveRouteTarget,
     hasAuthForRoute: (row) => hasAuthForImRoute(row, undefined, authCheckDeps()),

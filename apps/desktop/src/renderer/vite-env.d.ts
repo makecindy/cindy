@@ -194,13 +194,14 @@ interface RemoteAgentSilentInstallStatusPush {
   message?: string;
 }
 
-/** cc-mgr 版本升级 push payload。available=null 表示该 host 的 pending 已清空。 */
+/** cc-mgr / pi-manager 版本升级 push payload。available=null 表示该 host 的 pending 已清空。 */
 interface RemoteAgentCcMgrUpgradeAvailablePush {
   hostId: string;
   available: {
     currentVersion: string;
     availableVersion: string;
   } | null;
+  agent: 'cc' | 'pi';
 }
 
 interface RemoteAgentExecResult {
@@ -2200,6 +2201,7 @@ interface ElectronAPI {
     effort: string;
     permissionMode: string;
     fastMode: boolean;
+    providerId: string | null;
   }) => void;
 
   syncNewMakerDraft: (snapshot: {
@@ -3672,11 +3674,12 @@ interface ElectronAPI {
     ccMgrForceUpgrade: (
       hostId: string,
       sessionId?: string,
+      agent?: 'cc' | 'pi',
     ) => Promise<{ ok: true; daemonReady: boolean }>;
     ccMgrListPendingUpgrades: () => Promise<{
-      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string }>;
+      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string; agent: 'cc' | 'pi' }>;
     }>;
-    ccMgrDismissPendingUpgrade: (hostId: string) => Promise<{ ok: true }>;
+    ccMgrDismissPendingUpgrade: (hostId: string, agent?: 'cc' | 'pi') => Promise<{ ok: true }>;
     // Codex credential sync
     checkCodexAuth: (id: string) => Promise<{
       localExists: boolean;
@@ -4743,9 +4746,16 @@ interface ElectronAPI {
     }>;
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。
-     * 让 IM /model 在 main 侧复用同一套可见性过滤,与应用内模型列表逐模型一致。fire-and-forget。
+     * 让 IM /model 在 main 侧复用同一套可见性过滤,与应用内模型列表逐模型一致；owner stamp
+     * 用于拒绝账号切换期间的迟到快照。fire-and-forget。
      */
-    syncModelVisibility: (map: Record<string, boolean>) => Promise<void>;
+    syncModelVisibility: (
+      dataOwnerId: string | null,
+      ownerGeneration: number,
+      map: Record<string, boolean>,
+    ) => Promise<void>;
+    /** Resolve the stable local/cloud owner allowed to import the pre-account preference key. */
+    claimLegacyModelVisibilityOwner: () => import('../shared/modelVisibility').ModelVisibilityLegacyOwnerClaim;
     /**
      * 「模型 / 供应商停用」override 写入(main 侧 model-disable-store);成功后 main 广播
      * PROVIDER_CHANGED,useProviders 快照刷新后 UI 拿到新的 suspended / disabled 标志。

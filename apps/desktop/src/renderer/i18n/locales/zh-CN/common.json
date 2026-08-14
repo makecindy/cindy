@@ -308,6 +308,7 @@
         "statusInstalled": "已安装",
         "statusNotInstalled": "未安装",
         "claudeCodeName": "Claude Code",
+        "piName": "Pi",
         "button": {
           "install": "安装",
           "reinstall": "重新安装",
@@ -3156,8 +3157,8 @@
           "codex": "Codex",
           "pi": "Pi"
         },
-        "groupCtrPermissionLabel": "群聊 /ctr 新建任务权限档",
-        "groupCtrPermissionDescription": "群里 @bot 用 /ctr 新建任务时使用的权限档，默认「自动审批」。群上下文里有成员可控的内容，设成「完全访问」后群里的消息会被拒绝，并引导你切回「自动审批」。"
+        "groupPermissionLabel": "群聊新建任务权限档",
+        "groupPermissionDescription": "群里新建任务时统一使用的权限档（@bot 开话题、/new、/ctr 都算），默认「自动审批」；上面那个权限档只管私聊。群上下文里有成员可控的内容，设成「完全访问」后将直接执行、不再逐条确认，请确认群里的人都可信。改动只影响之后新建的任务，已有任务在群里用 /permission 单独切换。"
       }
     },
     "shortcuts": {
@@ -4812,7 +4813,10 @@
         "localOnly": "本条消息的精确变更暂不支持远程任务。",
         "partialNotice": "本条消息包含无法精确追踪的命令或工具写入；以下仅展示已精确捕获的部分，不能视为完整补丁。",
         "emptyTitle": "没有已记录的变更",
-        "emptyDesc": "这条消息记录的补丁中没有可显示的文件变更。"
+        "emptyDesc": "这条消息记录的补丁中没有可显示的文件变更。",
+        "crossSessionSwitchDisabled": "正在审查协作任务中的这条消息，不能在当前任务中切换来源。",
+        "previewUnavailable": "这条消息记录的是历史变更，无法可靠预览当前磁盘中的文件内容。",
+        "snapshotPatchUnavailable": "历史变更快照不能生成面向当前 worktree 的 git apply 命令。"
       },
       "fileCount_one": "{{count}} 个文件",
       "fileCount_other": "{{count}} 个文件",
@@ -4870,6 +4874,7 @@
         "in-progress": "git 操作进行中",
         "agent-running": "Agent 正在运行",
         "disabled": "审查不可用",
+        "historical-snapshot": "历史变更快照为只读",
         "remote-device": "远程设备任务仅支持查看",
         "remote-ssh": "SSH 工作区审查仅支持查看"
       },
@@ -6186,7 +6191,10 @@
       "networkShowRaw": "查看原始错误",
       "networkHideRaw": "收起原始错误",
       "silentStopContinue": "继续",
-      "silentStopContinueTitle": "继续当前任务"
+      "silentStopContinueTitle": "继续当前任务",
+      "piTransportClosed": "远端 Pi 连接已中断（SSH 通道关闭）。远端任务仍在运行，重新连接后可以继续。",
+      "piManagerUnavailable": "远端 Pi 管理器未就绪，请稍后重试；若持续失败请到「设置 → 远端机器」重新安装 Pi。",
+      "piBundledNodeMissing": "远端缺少运行环境（Node.js）。请到「设置 → 远端机器」展开该主机，先在 Claude Code 或 Codex 行点击「安装」（会附带 Node.js），再创建 Pi 任务。"
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
@@ -6668,13 +6676,13 @@
       }
     },
     "upgradeBanner": {
-      "description": "远端 {{hostId}} 的 cc-manager 有新版本可用 — 升级会中断该机器上当前所有 Claude Code 远端任务",
-      "upgrading": "正在升级远端 {{hostId}} 的 cc-manager…",
+      "description": "远端 {{hostId}} 的 {{manager}} 有新版本可用 — 升级会中断该机器上当前所有远端任务",
+      "upgrading": "正在升级远端 {{hostId}} 的 {{manager}}…",
       "upgrade": "立即升级",
-      "upgradeTitle": "下载并启动新版本 cc-manager（会中断当前任务）",
+      "upgradeTitle": "下载并启动新版本 {{manager}}（会中断当前任务）",
       "dismissTitle": "暂不升级（下次启动会再次提示）",
       "failed": "升级失败：{{message}}",
-      "daemonNotReady": "cc-manager 升级完成，但远端 daemon 暂未启动 — 请手动重新发送消息"
+      "daemonNotReady": "{{manager}} 升级完成，但远端 daemon 暂未启动 — 请手动重新发送消息"
     },
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "远端连接已中断（daemon 可能正在升级或重启）。本轮已结束 — 请重新发送。",
@@ -6682,6 +6690,7 @@
       "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。想少被打断，可以把任务切到「默认权限」自行掌控。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 会话无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
+      "REMOTE_LOCAL_ONLY_PROVIDER": "该模型供应商是本机专属服务（如 Ollama），SSH 远端任务无法访问本机地址。请改用 Cindy AI 网关，或选择远端主机可达的模型供应商。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。"
     },
@@ -9343,13 +9352,20 @@
         "endsAt": "套餐将于 {{date}} 结束",
         "cancelAction": "取消订阅",
         "cancelConfirmTitle": "取消当前订阅？",
-        "cancelConfirmDescription": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至 {{date}}，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
-        "cancelConfirmDescriptionWithoutDate": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至本计费周期结束，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
+        "cancelConfirmDescription": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至 {{date}}，之后不再续费。本计费周期结束前无法购买新套餐。",
+        "cancelConfirmDescriptionWithoutDate": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至本计费周期结束，之后不再续费。本计费周期结束前无法购买新套餐。",
         "cancelConfirmAction": "确认取消",
         "cancelSuccess": "已取消自动续费，当前套餐可使用至 {{date}}。",
         "cancelSuccessWithoutDate": "已取消自动续费，当前套餐将在本计费周期结束后到期。",
         "cancelNotSupported": "当前订阅暂不支持取消。",
-        "cancelFailed": "取消订阅失败，请稍后重试。"
+        "cancelFailed": "取消订阅失败，请稍后重试。",
+        "resumeAction": "恢复订阅",
+        "resumeConfirmTitle": "恢复当前订阅？",
+        "resumeConfirmDescription": "恢复后将在续费日自动续费。",
+        "resumeConfirmAction": "恢复订阅",
+        "resumeSuccess": "已恢复订阅，将按原计划自动续费。",
+        "resumeNotAvailable": "当前订阅暂不支持恢复，请查看最新订阅状态后重试。",
+        "resumeFailed": "未能恢复订阅，请稍后重试。"
       },
       "topupCard": {
         "action": "余额充值"

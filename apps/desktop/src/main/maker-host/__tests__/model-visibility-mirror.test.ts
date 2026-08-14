@@ -7,9 +7,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __resetModelVisibilityMirrorForTest,
+  clearModelVisibilityMirror,
   getModelVisibilityOverride,
   setModelVisibilityMirror,
   syncModelVisibilityMirror,
+  syncModelVisibilityMirrorForOwner,
 } from '../model-visibility-mirror.js';
 
 afterEach(() => {
@@ -38,6 +40,12 @@ describe('model-visibility-mirror', () => {
     setModelVisibilityMirror({ 'claude-code:xd:b': true });
     expect(getModelVisibilityOverride('claude-code', 'xd', 'a')).toBeUndefined();
     expect(getModelVisibilityOverride('claude-code', 'xd', 'b')).toBe(true);
+  });
+
+  it('账号边界同步清空旧 owner 的进程内镜像', () => {
+    setModelVisibilityMirror({ 'codex:openai:gpt-5.6': false });
+    clearModelVisibilityMirror();
+    expect(getModelVisibilityOverride('codex', 'openai', 'gpt-5.6')).toBeUndefined();
   });
 
   it('仅在净化后的整表实际变化时返回 true，供调用方广播目录失效事件', () => {
@@ -76,5 +84,43 @@ describe('model-visibility-mirror', () => {
 
     setModelVisibilityMirror(null);
     expect(getModelVisibilityOverride('claude-code', 'xd', 'a')).toBeUndefined();
+  });
+
+  it('只接受当前稳定 owner 的快照，拒绝切换中和迟到 generation', () => {
+    const invalidate = vi.fn();
+    const activeOwner = { dataOwnerId: 'owner-b', ownerGeneration: 2 };
+
+    expect(syncModelVisibilityMirrorForOwner(
+      { 'codex:openai:gpt-5.6': false },
+      { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+      activeOwner,
+      false,
+      invalidate,
+    )).toBe(false);
+    expect(syncModelVisibilityMirrorForOwner(
+      { 'codex:openai:gpt-5.6': false },
+      { dataOwnerId: 'owner-b', ownerGeneration: 1 },
+      { dataOwnerId: 'owner-b', ownerGeneration: 3 },
+      false,
+      invalidate,
+    )).toBe(false);
+    expect(syncModelVisibilityMirrorForOwner(
+      { 'codex:openai:gpt-5.6': false },
+      activeOwner,
+      activeOwner,
+      true,
+      invalidate,
+    )).toBe(false);
+    expect(getModelVisibilityOverride('codex', 'openai', 'gpt-5.6')).toBeUndefined();
+
+    expect(syncModelVisibilityMirrorForOwner(
+      { 'codex:openai:gpt-5.6': false },
+      activeOwner,
+      activeOwner,
+      false,
+      invalidate,
+    )).toBe(true);
+    expect(getModelVisibilityOverride('codex', 'openai', 'gpt-5.6')).toBe(false);
+    expect(invalidate).toHaveBeenCalledOnce();
   });
 });
