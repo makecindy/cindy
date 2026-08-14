@@ -384,8 +384,15 @@ function runTask(binary, task, runtime, signal, onProgress) {
     // 浪费:每个子代理一整套连接、每次派发一轮连接风暴(并发 4、单次最多 8),而且子代理不会
     // 显式 close,只能等进程退出(review)。这也是来源隔离不变量:子代理不能继承 root
     // bridge；未来若开放 MCP，Host 必须为子进程签发 descendant provenance。
-    // 剥这一个变量即可 —— 权限门与网关路由不受影响。
     delete childEnv[MCP_BRIDGE_ENV];
+    // 轮 25-J4 HIGH:只删 bridge descriptor 不够 —— 子代理仍继承 root 会话的
+    // 外部 MCP header 真值(CINDY_PI_REMOTE_MCP_SECRET_*)。子代理不用 MCP,
+    // 这些 secret 对它是非必需却多出的凭证暴露面(bash spawnHook 会剥离、read/
+    // /proc 有拦截, 但子 Pi 运行时/扩展/崩溃 dump/未来工具仍持有)。一并删掉:
+    // 最小凭证继承 —— 子代理只保留跑模型需要的 auth/native env。
+    for (const key of Object.keys(childEnv)) {
+      if (key.startsWith('CINDY_PI_REMOTE_MCP_SECRET_')) delete childEnv[key];
+    }
 
     let child;
     try {

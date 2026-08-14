@@ -22,9 +22,9 @@ import {
   GHOST_CARD_HEIGHT_MAX,
   GHOST_CARD_HEIGHT_MIN,
   GHOST_INSTALL_MANIFEST_MAX_BYTES,
-  GHOST_MANIFEST_FILE,
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
+  isGhostInstallApprovalToken,
   diffGhostPermissionItems,
   ghostAppContextLocale,
   ghostPermissionBaselineKey,
@@ -32,9 +32,10 @@ import {
   ghostWebviewEntryPaths,
   isCindyAccountGhostId,
   isOfficialGhostId,
+  ghostPermissionItems,
+  ghostPermissionProjectionFingerprint,
   isValidGhostId,
   layoutWithGhostPanel,
-  validateGhostManifest,
   type GhostHostNoticeKey,
   type GhostImageAspectRatio,
   type GhostManifest,
@@ -51,6 +52,10 @@ import type {
 } from '../../shared/pluginMarket.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
+  isGhostSkillProjectionBoundaryStableForOwner,
+  withGhostSkillProjectionReconcile,
+} from '../authBoundaryQuarantine.js';
+import {
   activeOwnerScopeKey,
   getActiveDataOwnerPushStamp,
   getActiveAppSession,
@@ -61,6 +66,7 @@ import {
 import { getLayoutStore } from '../layout/index.js';
 import {
   GhostManager,
+  type GhostExclusiveMutation,
   isCindyOfficialTrustInfo,
   type GhostHostTrustOverride,
   type InstallRejection,
@@ -68,6 +74,7 @@ import {
 } from './GhostManager.js';
 import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
+import { createOneShotTicketStore } from './oneShotTickets.js';
 import { withGhostInstallLock } from './ghostInstallLock.js';
 import { GhostPackagePermissionReviewRequiredError } from './packagePermissionReview.js';
 import {
@@ -76,9 +83,11 @@ import {
   listBuiltinSeedIds,
   listEnterpriseSeedIds,
   listRestorableBuiltinGhosts,
+  isTrustedBuiltinSeedSource,
   provisionBuiltinGhosts,
   readBuiltinTombstones,
   recordBuiltinTombstone,
+  renameBuiltinTombstone,
   type ProvisionIdentity,
 } from './builtinGhostProvisioner.js';
 import {
@@ -119,13 +128,22 @@ import {
 } from './ghostSetupStatus.js';
 import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
 import { GhostSetupManifestTracker } from './ghostSetupManifestTracker.js';
-import type { GhostSetupActionResult } from './ghostSetupCoordinator.js';
-import type { GhostSetupInteractionResponseTarget } from './ghostSetupInteractionBridge.js';
+import {
+  getGhostSetupCoordinator,
+  type GhostSetupActionResult,
+} from './ghostSetupCoordinator.js';
+import {
+  getGhostSetupInteractionBridge,
+  type GhostSetupInteractionResponseTarget,
+} from './ghostSetupInteractionBridge.js';
 import { executeGhostSetupInlineSubmission } from './ghostSetupInlineExecutor.js';
 import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
 import { GhostOauthAccountManager, type GhostOauthDecl } from './ghostOauthAccounts.js';
+import { withGhostOauthMutationLock } from './ghostOauthMutationLock.js';
+import { createGhostOauthOwnerReconciliationGate } from './ghostOauthOwnerReconciliation.js';
+import { cancelActiveGhostOauthFlow } from './ghostOauthFlow.js';
 import {
   appendReadyGhostOauthReauthSuggest,
   findGhostOauthReauthSuggest,
@@ -134,7 +152,9 @@ import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
-import { reconcileGhostSkillLinks } from './skillSlot.js';
+import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots } from './skillSlot.js';
+import { assertGhostSkillProjectionStableOwner } from '../authBoundaryQuarantine.js';
+import { type GhostOwnerScope } from './ghostOwnerScope.js';
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
@@ -143,7 +163,7 @@ import {
 import {
   FILO_GOOGLE_GHOST_ID,
   FILO_GOOGLE_SECRET_KEY,
-  migrateFiloGoogleAccounts,
+  migrateFiloGoogleAccountsWithResult,
   type LegacyGoogleAccountRow,
 } from './googleAccountsMigration.js';
 import { withFiloGoogleBuildClientConfig } from './filoGoogleClientConfig.js';
@@ -152,22 +172,29 @@ import {
   LEGACY_JIRA_RT_FILE,
   XD_ATLASSIAN_GHOST_ID,
   XD_ATLASSIAN_SECRET_KEY,
-  migrateAtlassianAccounts,
+  migrateAtlassianAccountsWithResult,
 } from './atlassianAccountsMigration.js';
 import {
   LEGACY_GITHUB_CONNECTION_FILE,
   LEGACY_GITHUB_TOKEN_FILE,
   CINDY_GITHUB_GHOST_ID,
   CINDY_GITHUB_SECRET_KEY,
-  migrateGithubAccounts,
+  migrateGithubAccountsWithResult,
 } from './githubAccountsMigration.js';
 import {
   LEGACY_GITLAB_CONNECTION_FILE,
   LEGACY_GITLAB_TOKEN_FILE,
   CINDY_GITLAB_GHOST_ID,
   CINDY_GITLAB_CONNECTION_KEY,
-  migrateGitlabAccounts,
+  migrateGitlabAccountsWithResult,
 } from './gitlabAccountsMigration.js';
+import {
+  LEGACY_MIGRATION_MISSING,
+  LEGACY_MIGRATION_RETRYABLE_FAILURE,
+  legacyMigrationAvailable,
+  readLegacyEncryptedValue,
+  type LegacyMigrationRead,
+} from './legacyMigrationRead.js';
 import { GHOST_SCHEME, ghostExternalLinkUrls, parseGhostPartition } from '../../shared/ghost.js';
 import { GhostPipeDispatcher } from './pipeDispatcher.js';
 import { GhostCardService, parseCardHeightReport } from './cardService.js';
@@ -242,9 +269,10 @@ import {
 import { ConnectionTokenProvider, type IssuedConnectionToken } from './connectionTokenProvider.js';
 import { GhostFsSlot } from './fsSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
-import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
+import { getSessionFsSnapshot, getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
+import { getTeamByWorkerSession } from '../localDb/orcaTeamStore.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
-import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
+import { readInstalledGhostManifest } from '../installedGhostManifest.js';
 import {
   ghostManifestDigest,
   PluginMarketLedger,
@@ -254,10 +282,13 @@ import {
   GhostSubscriptionGateway,
   GhostActivityTracker,
   GhostTurnTranslator,
+  createGhostPrimarySessionFocusTracker,
   createGhostSessionFocusTracker,
   GhostTapPendingQueue,
   GhostTurnOriginTracker,
   isGhostEligibleSessionRow,
+  isGhostSessionSwitchEligibleRow,
+  resolveGhostPrimarySessionId,
   type GhostInteractionActivityKind,
   type GhostScreenResult,
   type MinimalAgentEvent,
@@ -266,6 +297,7 @@ import { GhostExternalLinkGate, GhostPreviewGate, resolveGhostPanelMedia } from 
 import {
   ghostSecretSaved,
   readGhostSecret,
+  readGhostSecretStrict,
   getProviderSecretStore,
   readGhostSecretTail,
   removeGhostSecret,
@@ -338,8 +370,10 @@ import * as localDbSchema from '../localDb/schema.js';
 import { eq } from 'drizzle-orm';
 import { requireAppCapability } from '../appCapabilities.js';
 import {
+  acknowledgeRecoveredLegacyGhosts,
   getLegacyGhostRecoveryStatus,
   hasLegacyOwnerNamespaceClaim,
+  listLegacyOwnerProjectionRoots,
   listLegacyGhostPluginSources,
   listLegacyGhostTombstoneRoots,
   recoverLegacyGhostPlugins,
@@ -472,7 +506,11 @@ function captureGhostMutationOwner(): ActiveAppSession {
   if (isAppSessionBoundaryPending()) {
     throw new Error('账号切换中，已取消本次 Plugin 操作');
   }
-  return getActiveAppSession();
+  const owner = getActiveAppSession();
+  if (!isGhostSkillProjectionBoundaryStableForOwner(owner.dataOwnerId)) {
+    throw new Error('Plugin owner boundary is not durably stable');
+  }
+  return owner;
 }
 
 /**
@@ -485,8 +523,11 @@ function beginGhostMutation(expectedOwner?: ActiveAppSession): () => void {
   if (isAppSessionBoundaryPending()) {
     throw new Error('账号切换中，已取消本次 Plugin 操作');
   }
+  const currentOwner = getActiveAppSession();
+  if (!isGhostSkillProjectionBoundaryStableForOwner(currentOwner.dataOwnerId)) {
+    throw new Error('Plugin owner boundary is not durably stable');
+  }
   if (expectedOwner) {
-    const currentOwner = getActiveAppSession();
     if (
       currentOwner.mode !== expectedOwner.mode ||
       currentOwner.dataOwnerId !== expectedOwner.dataOwnerId ||
@@ -498,9 +539,38 @@ function beginGhostMutation(expectedOwner?: ActiveAppSession): () => void {
   return ghostMutationCoordinator.acquire();
 }
 
+/** MCP calls hold the same owner lease across setup, grant confirmation, and dispatch. */
+export function captureGhostMutationOwnerForMcp(): ActiveAppSession {
+  return captureGhostMutationOwner();
+}
+
+export function acquireGhostMutationLeaseForMcp(expectedOwner: ActiveAppSession): () => void {
+  return beginGhostMutation(expectedOwner);
+}
+
 function isSameAppSession(a: ActiveAppSession, b: ActiveAppSession): boolean {
   return a.mode === b.mode && a.dataOwnerId === b.dataOwnerId && a.generation === b.generation;
 }
+
+const ghostOwnerScope: GhostOwnerScope = {
+  capture: () => captureGhostMutationOwner(),
+  isCurrent: (scope) =>
+    !!scope && isSameAppSession(scope as ActiveAppSession, getActiveAppSession()),
+  isStable: (scope) =>
+    !!scope && isGhostSkillProjectionBoundaryStableForOwner(
+      (scope as ActiveAppSession).dataOwnerId,
+    ),
+  onInvalidated: (ghostId) => {
+    try {
+      getGhostRuntime().stop(ghostId);
+    } catch (error) {
+      log.warn('stale Ghost owner runtime stop failed', {
+        ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+};
 
 function currentLegacyGhostMigrationSession(): {
   mode: ActiveAppSession['mode'];
@@ -521,9 +591,21 @@ function getLegacyGhostRecoveryStatusForActiveSession(): LegacyGhostRecoveryStat
     ownerId === null
       ? new Set<string>()
       : new Set(
-          listLegacyGhostTombstoneRoots(ownerId, app.getPath('userData')).flatMap((root) =>
-            readBuiltinTombstones(root),
-          ),
+          listLegacyGhostTombstoneRoots(ownerId, app.getPath('userData')).flatMap((root) => {
+            try {
+              return readBuiltinTombstones(root);
+            } catch (err) {
+              // 一份损坏的 legacy .builtin-provisioning.json 不能打死整个恢复入口(状态查询
+              // 与重试都经此)。降级为"该根无墓碑"并记录;漏掉的 builtin 排除仍由 backfill 的
+              // isTrustedBundledId 闸兜底,不会因此把随包 id 误迁 —— 对齐 ghosts:builtin-status
+              // 的降级语义,而不是让 recovery UI 整体不可用(§5 恢复入口必须可用)。
+              log.warn('legacy builtin tombstone root unreadable during recovery status; treated as empty', {
+                root,
+                error: err instanceof Error ? err.message : String(err),
+              });
+              return [] as string[];
+            }
+          }),
         );
   const reservedBuiltinCommands = new Set(
     listEligibleBuiltinCommands(
@@ -551,6 +633,7 @@ async function retryLegacyGhostRecoveryForActiveSession(): Promise<LegacyGhostRe
   }
   const initialStatus = getLegacyGhostRecoveryStatusForActiveSession();
   if (!initialStatus.canRetry) return initialStatus;
+  if (initialStatus.deferredReason === 'legacy-discovery-incomplete') return initialStatus;
 
   const releaseMutation = beginGhostMutation(expectedOwner);
   try {
@@ -559,6 +642,7 @@ async function retryLegacyGhostRecoveryForActiveSession(): Promise<LegacyGhostRe
     if (shouldAbort()) return getLegacyGhostRecoveryStatusForActiveSession();
     const authorizedStatus = getLegacyGhostRecoveryStatusForActiveSession();
     if (!authorizedStatus.canRetry) return authorizedStatus;
+    if (authorizedStatus.deferredReason === 'legacy-discovery-incomplete') return authorizedStatus;
 
     const existingGhosts = getGhostManager().list();
     const existingGhostById = new Map(existingGhosts.map((ghost) => [ghost.manifest.id, ghost]));
@@ -662,11 +746,15 @@ async function retryLegacyGhostRecoveryForActiveSession(): Promise<LegacyGhostRe
       throw error;
     }
     if (shouldAbort()) return getLegacyGhostRecoveryStatusForActiveSession();
-    if (result.moved === 0 && !result.provisioningStateMoved) {
+    if (
+      result.moved === 0 &&
+      !result.provisioningStateMoved &&
+      !result.recoveredIds?.length
+    ) {
       restartStoppedActiveGhosts();
       return getLegacyGhostRecoveryStatusForActiveSession();
     }
-    if (result.moved > 0 || result.provisioningStateMoved) {
+    if (result.moved > 0 || result.provisioningStateMoved || result.recoveredIds?.length) {
       brainRootCache = null;
       const restoredBeforeReconcile = getGhostManager().list();
       const movedGhostIds = new Set<string>();
@@ -678,9 +766,36 @@ async function retryLegacyGhostRecoveryForActiveSession(): Promise<LegacyGhostRe
           getGhostNodeRuntimeBroker().stop(ghost.manifest.id);
         }
       }
+      // 只有 owner recovery 在 rename 前写入并在本轮确认的 durable marker 才能进入
+      // receipt backfill。不能从安装根扫描结果推断“刚搬入”，否则同一时间窗内由其他
+      // 写者放入的无 receipt 目录会被当成 legacy 事实自动铸造批准。
+      const recoveredLegacyIds = [...(result.recoveredIds ?? [])];
+      if (recoveredLegacyIds.length > 0) {
+        try {
+          const expectedApprovalProjectionSha256ById =
+            result.recoveredApprovalProjectionSha256ById ?? {};
+          const backfill = await getGhostManager().backfillRecoveredLegacyGhosts(
+            recoveredLegacyIds,
+            {
+              includePending: true,
+              expectedApprovalProjectionSha256ById,
+            },
+          );
+          const pending = new Set(backfill.pending ?? []);
+          const failed = new Set(backfill.failed);
+          await acknowledgeRecoveredLegacyGhosts(
+            expectedOwner.dataOwnerId,
+            recoveredLegacyIds.filter((id) => !pending.has(id) && !failed.has(id)),
+          );
+        } catch (err) {
+          log.warn('recovered legacy ghost backfill pass failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       const builtinReconcileSucceeded =
         result.deferredReason !== 'concurrent-live-instances' &&
-        (await scheduleBuiltinReconcile('legacy-recovery'));
+        (await scheduleBuiltinReconcile('legacy-recovery')) === 'completed';
       if (shouldAbort()) return getLegacyGhostRecoveryStatusForActiveSession();
       const ghosts = getGhostManager().list();
       for (const ghost of ghosts) {
@@ -711,6 +826,8 @@ export function waitForGhostMutations(): Promise<void> {
 
 /** Account-managed built-ins are unavailable outside a verified cloud session. */
 export function isGhostAvailableForActiveSession(id: string): boolean {
+  const activeOwner = getActiveAppSession().dataOwnerId;
+  if (!isGhostSkillProjectionBoundaryStableForOwner(activeOwner)) return false;
   return !isCindyAccountGhostId(id) || getAppCapabilities().canUseCindyAccountServices;
 }
 
@@ -725,9 +842,10 @@ export function getIOSSimulatorPluginAccessDecision(
 }
 
 function availableGhosts(): InstalledGhost[] {
-  return getGhostManager()
-    .list()
-    .filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
+  if (isAppSessionBoundaryPending()) return [];
+  return getGhostManager().list().filter((ghost) =>
+    isGhostAvailableForActiveSession(ghost.manifest.id),
+  );
 }
 
 function projectGhostForRenderer(ghost: InstalledGhost): InstalledGhost {
@@ -768,16 +886,26 @@ function projectGhostForRenderer(ghost: InstalledGhost): InstalledGhost {
 }
 
 function findAvailableGhost(id: string): InstalledGhost | null {
-  if (!isGhostAvailableForActiveSession(id)) return null;
-  return (
-    getGhostManager()
-      .list()
-      .find((ghost) => ghost.manifest.id === id) ?? null
-  );
+  return availableGhosts().find((ghost) => ghost.manifest.id === id) ?? null;
+}
+
+/** Runtime-authorized lookup for integrations outside this module. */
+export function findAvailableGhostForAuthorization(id: string): InstalledGhost | null {
+  return findAvailableGhost(id);
+}
+
+export function listAvailableGhostsForAuthorization(): InstalledGhost[] {
+  return availableGhosts();
 }
 
 function requireGhostAvailableForActiveSession(id: string): void {
   if (!isGhostAvailableForActiveSession(id)) {
+    if (isAppSessionBoundaryPending()) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'Ghost projection is switching owners; retry after the boundary settles.',
+      );
+    }
     throwIpcError('PERMISSION_DENIED', 'This Plugin requires a Cindy account.');
   }
 }
@@ -788,10 +916,47 @@ export function suspendCindyAccountGhosts(): void {
   for (const id of CINDY_ACCOUNT_GHOST_IDS) runtimeSingleton.stop(id);
 }
 
-/** Stop every sandbox before changing the active data owner. */
-export function suspendAllGhosts(): void {
+/**
+ * Cancel owner-bound calls before waiting for their mutation leases.
+ *
+ * The lease itself stays held until each call unwinds, so attachment grants,
+ * setup writes, and post-dispatch cleanup cannot cross into the next owner.
+ */
+export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
+  cancelActiveGhostOauthFlow();
+  getGhostSetupInteractionBridge()?.cleanupAll('session_aborted');
+  getGhostGrantConfirmBridge()?.cleanupAll('session_aborted');
+  getGhostConfirmDialogBridge()?.cancelAll();
   runtimeSingleton?.destroyAll();
+  resetNodeRuntimeBrokerForAccountBoundary();
+  await getGhostSetupCoordinator()?.waitForActionsIdle();
+}
+
+function listGhostOwnerProjectionRoots(): string[] {
+  const activeOwnerRoot = ownerScopedUserDataPath();
+  return [...new Set([
+    path.join(activeOwnerRoot, 'brain'),
+    path.join(activeOwnerRoot, 'cindy-brain'),
+    path.join(activeOwnerRoot, 'ghost-install-state'),
+    ...listLegacyOwnerProjectionRoots(app.getPath('userData')),
+  ])];
+}
+
+/** Stop every sandbox and revoke global skill projections before changing the active data owner. */
+export async function suspendAllGhosts(): Promise<void> {
+  runtimeSingleton?.destroyAll();
+  resetNodeRuntimeBrokerForAccountBoundary();
   brainRootCache = null;
+  const skillCleanup = await removeGhostSkillLinksForRoots(listGhostOwnerProjectionRoots());
+  for (const warning of skillCleanup.warnings) {
+    log.warn('ghost owner skill cleanup warning', { warning });
+  }
+  if (skillCleanup.blockers.length > 0) {
+    for (const blocker of skillCleanup.blockers) {
+      log.error('ghost owner skill cleanup blocked account boundary', { blocker });
+    }
+    throw new Error(`ghost owner skill cleanup incomplete (${skillCleanup.blockers.length})`);
+  }
 }
 let ipcRegistered = false;
 
@@ -827,6 +992,30 @@ function builtinSeedRootDirs(): string[] {
   return [path.join(base, 'official'), path.join(base, 'xd')];
 }
 
+function isTrustedBundledSource(id: string, sourceDir: string): boolean {
+  return isTrustedBuiltinSeedSource(builtinSeedRootDirs(), id, sourceDir);
+}
+
+/**
+ * Forge scaffold/pack 绝不允许写入的 Host 受管根:安装内容根 + 批准状态根(来自
+ * `managedRootDirs()`)+ **随包 seed 根**。seed 根漏在外面时,把 `.cindy` 产物写进
+ * seed 目录会翻转播种指纹,下次启动触发整目录重播种(B-4);seed 根与内容/状态根
+ * 物理不相交,不在 `managedRootDirs()` 内,必须在此显式并入。
+ */
+export function ghostForgeForbiddenRootDirs(): string[] {
+  return [...getGhostManager().managedRootDirs(), ...builtinSeedRootDirs()];
+}
+
+function hasDisabledMarker(dir: string): boolean {
+  try {
+    fs.lstatSync(path.join(dir, '.disabled'));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    return true;
+  }
+}
+
 /** 当前登录身份 → 播种受众判定的输入(登出 = null)。 */
 function currentProvisionIdentity(): ProvisionIdentity | null {
   const state = getAuthState();
@@ -838,13 +1027,50 @@ function currentProvisionIdentity(): ProvisionIdentity | null {
 }
 
 /**
- * 内置意识对账的串行链:startup 与 auth-change 的触发共用一条 promise 链,
+ * 内置意识对账的串行链：统一由 stable-owner post-commit/ensure 入口调度，
+ * 所有触发共用一条 promise 链，
  * 保证任意时刻只有一个 reconcile 在跑(登录抖动 / 快速切号不并发写盘)。
  * 单次失败吞掉并 warn(下次触发重试),链永不断。
  */
 let builtinReconcileChain: Promise<void> = Promise.resolve();
 
-function scheduleBuiltinReconcile(reason: string): Promise<boolean> {
+type BuiltinReconcileOutcome = 'completed' | 'deferred' | 'failed' | 'retry-pending';
+interface BuiltinReconcileScope {
+  scopeKey: string;
+  dataOwnerId: string | null;
+}
+
+let stableOwnerPostCommitTask:
+  ((reason: string, scope: BuiltinReconcileScope) => Promise<BuiltinReconcileOutcome>) | null =
+  null;
+
+/** Run the Plugin post-commit pipeline registered during Ghost IPC bootstrap. */
+export function runStableOwnerPostCommitTask(
+  reason: string,
+  scope: BuiltinReconcileScope,
+): Promise<BuiltinReconcileOutcome> {
+  return stableOwnerPostCommitTask?.(reason, scope) ?? Promise.resolve('deferred');
+}
+
+/**
+ * 本会话内因「撤销陈旧批准」被熄灯的常驻随包插件 id。
+ *
+ * 撤销路径的四连熄灯会把正在跑的常驻实例停掉;后一轮对账把批准补回来时,原判
+ * (#1080)是不自动重启 —— 那时缺少"用户此刻想让它跑"的信号。但对**本会话内被
+ * 我们自己熄掉**的常驻声明插件,重启只是恢复熄灯前的既有状态,不是新决策;常驻
+ * 声明本身就是"启用即应运行"的意思(启动扫描无条件点火)。范围刻意收窄:只记
+ * 本会话、只记常驻声明、点火仍走 spawnIfResident(它自查启用态与会话可用性,
+ * 停用的插件不会被点亮)。
+ */
+const quenchedResidentBuiltinIds = new Set<string>();
+
+function scheduleBuiltinReconcile(
+  reason: string,
+  expectedScope: BuiltinReconcileScope = {
+    scopeKey: activeOwnerScopeKey(),
+    dataOwnerId: getActiveAppSession().dataOwnerId,
+  },
+): Promise<BuiltinReconcileOutcome> {
   const scheduled = builtinReconcileChain
     .catch((err) => {
       log.warn('builtin ghost activation error; reconcile chain resumed', {
@@ -852,15 +1078,22 @@ function scheduleBuiltinReconcile(reason: string): Promise<boolean> {
       });
     })
     .then(async () => {
+      const activeSession = getActiveAppSession();
+      if (
+        activeOwnerScopeKey() !== expectedScope.scopeKey ||
+        activeSession.dataOwnerId !== expectedScope.dataOwnerId
+      ) {
+        log.info('builtin ghost reconcile skipped: stale owner scope', { reason });
+        return 'deferred' as const;
+      }
       try {
-        await reconcileBuiltinGhosts(reason);
-        return true;
+        return await reconcileBuiltinGhosts(reason, expectedScope.dataOwnerId);
       } catch (err) {
         log.warn('builtin ghost reconcile error', {
           reason,
           error: err instanceof Error ? err.message : String(err),
         });
-        return false;
+        return 'failed' as const;
       }
     });
   builtinReconcileChain = scheduled.then(() => undefined);
@@ -936,23 +1169,78 @@ function migrateGhostKvOnRename(fromId: string, toId: string): void {
   }
 }
 
-/** 单轮对账:播种 → (有变化时)广播 + 首装停靠 + 常驻点火。 */
-async function reconcileBuiltinGhosts(reason: string): Promise<void> {
-  const manager = getGhostManager();
+/** 单轮对账:一次性 legacy 迁移 → 播种 → (有变化时)广播 + 首装停靠 + 常驻点火。 */
+async function reconcileBuiltinGhosts(
+  reason: string,
+  dataOwnerId: string | null,
+): Promise<BuiltinReconcileOutcome> {
+  // 整轮对账(迁移 backfill + 播种换目录 + 批准 receipt 写入)都是 owner 绑定的
+  // 文件系统写路径,但 GhostManager/ReceiptStore 的根目录是**每次调用现解析**的:
+  // 异步 hash/copy 中途账号切换落定,后半段写入就会漏进新 owner 的状态根(拿 A 的
+  // 安装目录字节给 B 的同 id 插件铸批准)。与市场装入同一套约束:开工前捕获 owner、
+  // 全程持 mutation 租约(账号 teardown 会等租约),边界期一律整轮跳过 —— 对账是
+  // 幂等的；下一次 stable-owner post-commit/ensure 会补上。
+  let releaseMutation: () => void;
+  try {
+    releaseMutation = beginGhostMutation(captureGhostMutationOwner());
+  } catch {
+    log.info('builtin ghost reconcile skipped: app session boundary', { reason });
+    return 'deferred';
+  }
+  let migrationNeedsRetry = false;
+  try {
+    const manager = getGhostManager();
+    if (dataOwnerId !== null) {
+      // 存量插件迁移必须先于播种与授权消费:#1080 之前装的插件没有 receipt,这里从旧安装
+      // 布局 backfill 出等价批准,让它们升级后无感可用(docs §5 红线)。signed-out 的
+      // no-session 根只承载本进程的 account-free bundled 投影,绝不扫描或确认 legacy
+      // 安装事实。迁移自己取事务锁,因此必须在下面 runExclusiveMutation **之外**调用。
+      try {
+        const migration = await manager.migrateLegacyApprovalsOnce();
+        migrationNeedsRetry =
+          migration.retryPending.length > 0 || manager.hasPendingLegacyApprovalMigration();
+      } catch (err) {
+        migrationNeedsRetry = true;
+        // 迁移整体失败(如状态根不可写)不能挡住播种与后续对账:随包插件仍要能装/更新,
+        // 存量插件保持 fail-closed(列停用、走恢复 UI),下一轮启动再尝试迁移。
+        log.warn('legacy ghost approval migration pass failed', {
+          reason,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    const approvalNeedsRetry = await manager.runExclusiveMutation((mutation) =>
+      reconcileBuiltinGhostsLocked(reason, dataOwnerId, manager, mutation),
+    );
+    migrationNeedsRetry ||= approvalNeedsRetry;
+  } finally {
+    releaseMutation();
+  }
+  return migrationNeedsRetry ? 'retry-pending' : 'completed';
+}
+
+async function reconcileBuiltinGhostsLocked(
+  reason: string,
+  dataOwnerId: string | null,
+  manager: GhostManager,
+  mutation: GhostExclusiveMutation,
+): Promise<boolean> {
   // 改名前置:用户自主状态(墓碑=卸载过 / .disabled=停用)随改名带到新 id,
   // 不能让"明确卸载/停用过"的用户在升级后被以新 id 重新装上并点亮(播种器
   // "用户自主权豁免"支柱)。墓碑:旧 id 有 → 给新 id 记墓碑并清掉旧墓碑
   // (旧种子已不随包,旧墓碑是死数据;清掉也避免用户日后手动恢复新 id 时被
   // 本处反复重新盖墓)。停用态:抓在播种前(孤儿回收会删旧目录),装上后补。
   const renameDisabledCarry = new Map<string, boolean>();
-  for (const [fromId, toId] of RENAMED_BUILTIN_GHOSTS) {
-    const tombstones = readBuiltinTombstones(brainRootDir());
-    if (tombstones.includes(fromId)) {
-      if (!tombstones.includes(toId)) recordBuiltinTombstone(brainRootDir(), toId, log);
-      clearBuiltinTombstone(brainRootDir(), fromId, log);
-      log.info('builtin ghost tombstone carried over rename', { fromId, toId });
+  if (dataOwnerId !== null) {
+    for (const [fromId, toId] of RENAMED_BUILTIN_GHOSTS) {
+      if (renameBuiltinTombstone(brainRootDir(), fromId, toId, log)) {
+        log.info('builtin ghost tombstone carried over rename', { fromId, toId });
+      }
+      renameDisabledCarry.set(
+        toId,
+        hasDisabledMarker(path.join(brainRootDir(), fromId)),
+      );
     }
-    renameDisabledCarry.set(toId, fs.existsSync(path.join(brainRootDir(), fromId, '.disabled')));
   }
   // "播种进行中"胶囊提示:只在真的动手(装/覆盖/回收)时亮起,no-op 对账
   // 不闪(onApplyStart 整轮至多一次);结束广播放 finally,异常也不留悬挂提示。
@@ -964,12 +1252,34 @@ async function reconcileBuiltinGhosts(reason: string): Promise<void> {
       repoRootDir: brainRootDir(),
       identity: currentProvisionIdentity(),
       // 回收先熄灯沙箱再删目录(Windows 文件锁:运行中的电子脑可能占着句柄)。
-      beforeRemove: (id) => {
+      beforeRemove: async (id) => {
         getGhostRuntime().stop(id);
         getGhostNodeRuntimeBroker().stop(id);
         getGhostAgentSlot().clearGhost(id);
         getGhostErrandSlot().clearGhost(id);
+        // 内置回收也必须走 Host 的 uninstall journal；只撤 receipt 再由
+        // provisioner 直接 rm 会在 receipt 删除失败+崩溃时留下孤立批准。
+        const removal = await mutation.uninstall(id, {
+          notify: false,
+          // Audience/orphan reconciliation is Host lifecycle cleanup, not a
+          // durable user choice to keep this builtin uninstalled.
+          recordBuiltinTombstone: false,
+        });
+        if ('rejection' in removal) {
+          throw new Error(`builtin ghost uninstall failed: ${removal.rejection.reason}`);
+        }
       },
+      beforeReplace: async (id) => {
+        // Revoke the old receipt before swapping mutable installed bytes. If a
+        // crash occurs during provisioning, the new bytes cannot run under the
+        // previous approval; the next reconcile mints a receipt from the
+        // immutable seed after the swap is complete.
+        if (!(await mutation.removeInstallApproval(id))) {
+          throw new Error(`builtin ghost approval revoke failed: ${id}`);
+        }
+      },
+      publishSeed: (id, seedDir, options) =>
+        mutation.publishTrustedBundledSeed(id, seedDir, options),
       onApplyStart: () => {
         tipShown = true;
         broadcastGhostProvisioning(true);
@@ -985,29 +1295,83 @@ async function reconcileBuiltinGhosts(reason: string): Promise<void> {
   // 交互按钮按 ghostId 找主,不迁全废)+ KV 偏好搬家。密钥零迁移(官方别名
   // 映射到底层同一存储键);媒体账本旧引用保留(历史聊天图继续可读,新任务
   // 在新 id 名下重新记账)。
-  for (const [fromId, toId] of RENAMED_BUILTIN_GHOSTS) {
-    void reassignGhostCards(fromId, toId).catch((err) =>
-      log.warn('ghost card reassign failed', {
-        fromId,
-        toId,
-        error: err instanceof Error ? err.message : String(err),
-      }),
-    );
-    migrateGhostKvOnRename(fromId, toId);
+  if (dataOwnerId !== null) {
+    for (const [fromId, toId] of RENAMED_BUILTIN_GHOSTS) {
+      void reassignGhostCards(fromId, toId).catch((err) =>
+        log.warn('ghost card reassign failed', {
+          fromId,
+          toId,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+      migrateGhostKvOnRename(fromId, toId);
+    }
+    // 退役插件的凭证、KV 与 fs 槽都是 owner 私有数据；signed-out 不得借
+    // no-session 临时命名空间替任何真实 owner 做清理。
+    for (const retiredId of RETIRED_BUILTIN_GHOSTS) {
+      cleanupRetiredGhostData(retiredId);
+    }
+    // 改名停用态补挂:新 id 本轮首装且旧 id 此前处于停用 → 新目录补 .disabled
+    // (播种首装默认启用,这里还原用户选择;放在广播/停靠之前,清单首帧即正确)。
+    for (const manifest of outcome.installed) {
+      if (!renameDisabledCarry.get(manifest.id)) continue;
+      try {
+        mutation.writeDisabledMarker(manifest.id);
+        log.info('builtin ghost disabled state carried over rename', { id: manifest.id });
+      } catch (err) {
+        log.warn('builtin ghost disabled carry failed', {
+          id: manifest.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
-  // 退役意识的存量数据清理(孤儿回收只删包不删数据;每轮幂等,见台账注释)
-  for (const retiredId of RETIRED_BUILTIN_GHOSTS) {
-    cleanupRetiredGhostData(retiredId);
-  }
-  // 改名停用态补挂:新 id 本轮首装且旧 id 此前处于停用 → 新目录补 .disabled
-  // (播种首装默认启用,这里还原用户选择;放在广播/停靠之前,清单首帧即正确)。
-  for (const manifest of outcome.installed) {
-    if (!renameDisabledCarry.get(manifest.id)) continue;
+  let approvalChanged = false;
+  let approvalNeedsRetry = outcome.retryPending === true;
+  const healedResidentIds: string[] = [];
+  for (const manifest of outcome.approved) {
     try {
-      fs.writeFileSync(path.join(brainRootDir(), manifest.id, '.disabled'), '');
-      log.info('builtin ghost disabled state carried over rename', { id: manifest.id });
+      approvalChanged =
+        (await mutation.approveTrustedBundledInstall(
+          manifest,
+          // `.disabled` 镜像的读数只作停用方向的输入:receipt 已钉停用时,镜像被
+          // 外部移除不会把插件翻回启用(合并规则见 approveTrustedBundledInstall
+          // 头注释;重新启用只有用户显式 setEnabled 一条路)。
+          !hasDisabledMarker(path.join(brainRootDir(), manifest.id)),
+          { sourceDir: outcome.approvedSourceDirs[manifest.id] },
+        )) || approvalChanged;
+      // 本会话内被撤销熄灯的常驻实例,批准补回即恢复点火(隔离态下批准必然重写,
+      // approvalChanged 已为 true,不会被下面的 no-op 早退拦住)。
+      if (quenchedResidentBuiltinIds.delete(manifest.id)) {
+        healedResidentIds.push(manifest.id);
+      }
     } catch (err) {
-      log.warn('builtin ghost disabled carry failed', {
+      approvalNeedsRetry = true;
+      // 走到这里内容目录可能已经换成新种子字节，旧 receipt 却还是授权事实 ——
+      // 留着它就是拿旧批准跑新代码(新版删掉的 slot 仍被授予、版本与技能快照
+      // 也停在旧 revision)。
+      //
+      // removeInstallApproval 的契约是"返回后该插件一定不再被授权运行":删得掉就
+      // 删 receipt，删不掉(状态根不可写 —— 与这里写批准失败同一个成因)就转进程内
+      // 隔离。所以这里不需要、也不应该再自己判断撤销成不成功:那正是上一版在
+      // cleanup 失败时留下 fail-open 的地方。随包插件下一轮启动对账会重新补批准，
+      // 自愈，不需要用户介入。
+      await mutation.removeInstallApproval(manifest.id);
+      // 撤销只让后续的 Host 能力调用与技能落链失效,不会自己结束已经跑起来的沙箱
+      // 进程 —— 登录触发对账时插件可能正在运行。与 beforeRemove 同款四连熄灯
+      // (含 errand slot:漏掉它会让节流状态与在途任务记录留到同会话的自愈之后,
+      // 变成不必要的 rate-limit／"已有在途任务"阻塞),让"撤销后不再被授权运行"
+      // 这句话对运行中的实例也成立。
+      getGhostRuntime().stop(manifest.id);
+      getGhostNodeRuntimeBroker().stop(manifest.id);
+      getGhostAgentSlot().clearGhost(manifest.id);
+      getGhostErrandSlot().clearGhost(manifest.id);
+      // 常驻声明的实例被本次撤销熄掉:记下 id,批准自愈那一轮补点火(见 set 头注释)。
+      if (manifest.launch === 'resident' || manifest.node?.lifecycle === 'resident') {
+        quenchedResidentBuiltinIds.add(manifest.id);
+      }
+      approvalChanged = true;
+      log.warn('builtin ghost approval receipt failed; approval revoked', {
         id: manifest.id,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -1016,14 +1380,17 @@ async function reconcileBuiltinGhosts(reason: string): Promise<void> {
   if (
     outcome.installed.length === 0 &&
     outcome.updated.length === 0 &&
-    outcome.removed.length === 0
-  )
-    return;
+    outcome.removed.length === 0 &&
+    !approvalChanged
+  ) {
+    return approvalNeedsRetry;
+  }
   log.info('builtin ghost reconcile applied changes', {
     reason,
     installed: outcome.installed.map((m) => m.id),
     updated: outcome.updated.map((m) => m.id),
     removed: outcome.removed,
+    approvalChanged,
   });
   // 播种绕过 manager 写盘,广播由这里补上(renderer 首帧 sendSync 早于对账
   // 完成时,靠 ghosts:changed 热更新兜底,多窗口同一套通道)。
@@ -1048,15 +1415,30 @@ async function reconcileBuiltinGhosts(reason: string): Promise<void> {
     const ghost = manager.list().find((g) => g.manifest.id === manifest.id);
     if (ghost) spawnIfResident(ghost);
   }
+  // 本会话内被撤销熄灯、本轮批准自愈的常驻插件:恢复熄灯前的运行状态。
+  // spawnIfResident 自查启用态与会话可用性,停用/不可用的不会被点亮。
+  for (const id of healedResidentIds) {
+    const ghost = manager.list().find((g) => g.manifest.id === id);
+    if (ghost) spawnIfResident(ghost);
+  }
+  return approvalNeedsRetry;
 }
 
 export function getGhostManager(): GhostManager {
   if (!managerSingleton) {
     managerSingleton = new GhostManager({
       getRootDir: brainRootDir,
+      getStateDir: () => ownerScopedUserDataPath('ghost-install-state'),
+      getOwnerContextKey: activeOwnerScopeKey,
       onChanged: broadcastGhostsChanged,
       getLocale: getResolvedMainLocale,
       trustRegistry: loadGhostTrustRegistry(),
+      // 随包批准入口的 builtin-only 边界:id 必须对应一颗随包种子。该入口不经用户
+      // 确认就铸出批准,不能只靠"唯一调用者是随包对账"这条纪律。
+      isTrustedBundledId: (id) => listBuiltinSeedIds(builtinSeedRootDirs()).includes(id),
+      isTrustedBundledSource,
+      recordBuiltinTombstone: (id) => recordBuiltinTombstone(brainRootDir(), id, log),
+      clearBuiltinTombstone: (id) => clearBuiltinTombstone(brainRootDir(), id, log),
       log,
     });
     getGhostSetupManifestTracker().seed(managerSingleton.list());
@@ -1143,6 +1525,7 @@ export function getGhostPipeDispatcher(): GhostPipeDispatcher {
   if (!dispatcherSingleton) {
     dispatcherSingleton = new GhostPipeDispatcher({
       getGhost: findAvailableGhost,
+      ownerScope: ghostOwnerScope,
       runtimeStateOf: (id) => getGhostRuntime().stateOf(id),
       spawn: async (ghost) => {
         const r = await getGhostRuntime().spawn(ghost);
@@ -1165,10 +1548,7 @@ let agentSlotSingleton: GhostAgentSlot | null = null;
 export function getGhostAgentSlot(): GhostAgentSlot {
   if (!agentSlotSingleton) {
     agentSlotSingleton = new GhostAgentSlot({
-      getGhost: (id) =>
-        getGhostManager()
-          .list()
-          .find((g) => g.manifest.id === id) ?? null,
+      getGhost: findAvailableGhost,
       log,
     });
   }
@@ -1186,10 +1566,7 @@ let errandSlotSingleton: GhostErrandSlot | null = null;
 export function getGhostErrandSlot(): GhostErrandSlot {
   if (!errandSlotSingleton) {
     errandSlotSingleton = new GhostErrandSlot({
-      getGhost: (id) =>
-        getGhostManager()
-          .list()
-          .find((g) => g.manifest.id === id) ?? null,
+      getGhost: findAvailableGhost,
       // wait 模式的署名单在途期间替管子那头的 tool-call 续命(同 cindy 槽契约)。
       holdPipeCall: (ghostId, callId, budgetMs) =>
         getGhostPipeDispatcher().holdCall(ghostId, callId, budgetMs),
@@ -1215,23 +1592,30 @@ export function setGhostErrandRunner(runner: GhostErrandRunner | null): void {
 
 /** 插件展示名(errand 会话默认标题等宿主侧使用;未装返回 null)。 */
 export function getInstalledGhostName(id: string): string | null {
-  return (
-    getGhostManager()
-      .list()
-      .find((g) => g.manifest.id === id)?.manifest.name ?? null
-  );
+  return findAvailableGhost(id)?.manifest.name ?? null;
 }
 
 let nodeRuntimeBrokerSingleton: GhostNodeRuntimeBroker | null = null;
+
+/**
+ * `GhostNodeRuntimeBroker.destroyAll()` is a terminal host-exit operation. An
+ * account boundary still needs the old broker terminally stopped so delayed
+ * retries cannot cross owners, but the singleton slot must then be cleared so
+ * the next owner gets a fresh, startable broker.
+ */
+function resetNodeRuntimeBrokerForAccountBoundary(): void {
+  const broker = nodeRuntimeBrokerSingleton;
+  if (!broker) return;
+  broker.destroyAll();
+  if (nodeRuntimeBrokerSingleton === broker) nodeRuntimeBrokerSingleton = null;
+}
 
 /** 随包 Node 工作进程单例：每个活跃插件一个进程，main.js 经主机中继调用。 */
 export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
   if (!nodeRuntimeBrokerSingleton) {
     nodeRuntimeBrokerSingleton = new GhostNodeRuntimeBroker({
-      getGhost: (id) =>
-        getGhostManager()
-          .list()
-          .find((g) => g.manifest.id === id) ?? null,
+      getGhost: findAvailableGhost,
+      ownerScope: ghostOwnerScope,
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
       sendToGhost: (ghostId, payload) => {
         sendToGhostLogic(ghostId, payload);
@@ -1325,6 +1709,7 @@ export function getGhostCardActionDispatcher(): GhostCardActionDispatcher {
       // state / TTL 收口)。
       onActivityStart: (key, sessionId) => getGhostSessionActivityTracker().begin(key, sessionId),
       now: () => Date.now(),
+      ownerScope: ghostOwnerScope,
       log,
     });
   }
@@ -1378,6 +1763,7 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
           isDataOwnerPushStamp(ownerStamp) ? ownerStamp : undefined,
         );
       },
+      ownerScope: ghostOwnerScope,
       log,
     });
   }
@@ -1385,8 +1771,8 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
 }
 
 /**
- * 会话是否在订阅事件的投递范围(用户主会话:desktop/shared 来源、非 orca;
- * 行级判定见 subscriptionGateway.isGhostEligibleSessionRow)。
+ * 会话是否在订阅事件的投递范围。默认只允许非 Orca 用户主任务；session-switch
+ * 额外允许已归一后的 Orca Lead，行级判定见 subscriptionGateway。
  * outcome 三值:eligible / ineligible(查到行且明确不合格,可终身缓存)/
  * retry(DB 未就绪、查询抛错、行还没落库——都是暂时态,调用方稍后重试;
  * 2026-07-12 实测:启动期会话接线早于 DbClient 就绪,一次性判定会把
@@ -1394,6 +1780,7 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
  */
 async function isGhostEligibleSession(
   sessionId: string,
+  scope: 'default' | 'session-switch' = 'default',
 ): Promise<
   | { outcome: 'eligible'; agentKind?: string; workdir?: string }
   | { outcome: 'ineligible' }
@@ -1414,7 +1801,11 @@ async function isGhostEligibleSession(
       .limit(1);
     const row = rows[0];
     if (!row) return { outcome: 'retry' }; // 行未落库(极早期)→ 暂时态
-    if (isGhostEligibleSessionRow(row)) {
+    const isEligible =
+      scope === 'session-switch'
+        ? isGhostSessionSwitchEligibleRow(row)
+        : isGhostEligibleSessionRow(row);
+    if (isEligible) {
       return {
         outcome: 'eligible',
         agentKind: row.agentKind ?? undefined,
@@ -1852,6 +2243,8 @@ export function runGhostAssistantReplyHook(
 export function notifyGhostSessionEvent(
   kind: 'created' | 'archived' | 'switched',
   data: { sessionId: string; workdir?: string },
+  shouldPublish: () => boolean | Promise<boolean> = () => true,
+  onRetry: () => void = () => {},
 ): void {
   void (async () => {
     try {
@@ -1860,16 +2253,24 @@ export function notifyGhostSessionEvent(
         (g) => g.enabled && g.manifest.subscribe?.topics?.includes('session'),
       );
       if (!hasSubscriber) return;
-      // 投递范围与 turn 事件同口径:只投用户主会话(retry 视为不投,
-      // 生命周期事件不值得重试机制)。
-      const info = await isGhostEligibleSession(data.sessionId);
-      if (info.outcome !== 'eligible') return;
+      // created / archived 与 turn 事件同口径；switched 额外允许归一后的 Orca Lead。
+      // retry 视为不投，生命周期事件不值得引入重试机制。
+      const info = await isGhostEligibleSession(
+        data.sessionId,
+        kind === 'switched' ? 'session-switch' : 'default',
+      );
+      if (info.outcome !== 'eligible') {
+        if (info.outcome === 'retry') onRetry();
+        return;
+      }
       // switched 的调用方(renderer 路由上报)只有 sessionId,workdir 从资格
       // 查询顺手补上,与 created/archived 的载荷形状对齐。
       const payload =
         data.workdir === undefined && info.workdir !== undefined
           ? { ...data, workdir: info.workdir }
           : data;
+      // switched 在异步归一、资格查询完成后再确认一次焦点代次；确认与去重在同一步完成。
+      if (!(await shouldPublish())) return;
       getGhostSubscriptionGateway().publish(
         'session',
         kind === 'created'
@@ -1887,13 +2288,26 @@ export function notifyGhostSessionEvent(
 
 /**
  * 会话切换上报入口(renderer MainLayout 路由 effect 经 'ghosts:session-focused'
- * 调,平台无关):去重后发 did-session-switched。连续同 id / 非会话页(null)
- * 不发;切走再切回算新切换(去重语义见 createGhostSessionFocusTracker)。
+ * 调,平台无关):Worker 归一到 Lead 后发 did-session-switched。连续指向同一主任务 / 非会话页
+ * (null)不发；切走再切回算新切换。原始焦点仍单独保留给旧 preview 缺省落点。
  */
-const ghostSessionFocusTracker = createGhostSessionFocusTracker((sessionId) =>
-  notifyGhostSessionEvent('switched', { sessionId }),
+const ghostPrimarySessionFocusTracker = createGhostPrimarySessionFocusTracker(
+  (sessionId) =>
+    resolveGhostPrimarySessionId(
+      sessionId,
+      getSessionRowSnapshot,
+      async (workerSessionId) =>
+        (await getTeamByWorkerSession(workerSessionId))?.leadSessionId ?? null,
+    ),
+  (sessionId, claim, releaseRaw) =>
+    notifyGhostSessionEvent('switched', { sessionId }, claim, releaseRaw),
 );
+// 原始焦点只供 preview 使用；不能用它的 raw-id 去重阻断 primary tracker 的重试。
+const ghostSessionFocusTracker = createGhostSessionFocusTracker(() => {});
 export function noteGhostSessionFocused(sessionId: string | null): void {
+  // 两个 tracker 都必须收到每次上报：raw tracker 负责 preview，primary tracker
+  // 负责 Worker → Lead 归一、异步乱序和失败后的重试。
+  ghostPrimarySessionFocusTracker.note(sessionId);
   ghostSessionFocusTracker.note(sessionId);
 }
 
@@ -1904,17 +2318,20 @@ function noteGhostWindowSessionFocused(sender: WebContents, sessionId: string | 
   // Renderer route reports are not an authority to grant Simulator access. They
   // may only remove a stale Main-owned grant when this window family moves away
   // from the task for which it was explicitly authorized.
-  revokeIOSSimulatorRendererAccessForSessionChange(sender, sessionId);
   const previous = ghostSessionFocusByWebContents.get(sender.id);
-  if (previous === sessionId) return;
-  ghostSessionFocusByWebContents.set(sender.id, sessionId);
-  if (!ghostSessionFocusTrackedWebContents.has(sender.id)) {
-    ghostSessionFocusTrackedWebContents.add(sender.id);
-    sender.once('destroyed', () => {
-      ghostSessionFocusByWebContents.delete(sender.id);
-      ghostSessionFocusTrackedWebContents.delete(sender.id);
-    });
+  if (previous !== sessionId) {
+    revokeIOSSimulatorRendererAccessForSessionChange(sender, sessionId);
+    ghostSessionFocusByWebContents.set(sender.id, sessionId);
+    if (!ghostSessionFocusTrackedWebContents.has(sender.id)) {
+      ghostSessionFocusTrackedWebContents.add(sender.id);
+      sender.once('destroyed', () => {
+        ghostSessionFocusByWebContents.delete(sender.id);
+        ghostSessionFocusTrackedWebContents.delete(sender.id);
+      });
+    }
   }
+  // Keep forwarding same-id reports: the primary tracker may have cleared its
+  // raw-id dedupe marker after a transient resolution failure and needs a retry.
   noteGhostSessionFocused(sessionId);
 }
 
@@ -2063,17 +2480,8 @@ function readInstalledGhostManifestDigest(ghostId: string): string | null {
     .list()
     .find((candidate) => candidate.manifest.id === ghostId);
   if (!ghost) return null;
-  try {
-    const bytes = readBoundedFileNoFollowSync(
-      path.join(ghost.dir, GHOST_MANIFEST_FILE),
-      GHOST_INSTALL_MANIFEST_MAX_BYTES,
-    );
-    if (bytes === null) return null;
-    const validated = validateGhostManifest(JSON.parse(bytes.toString('utf8')) as unknown);
-    return validated.ok ? ghostManifestDigest(validated.manifest) : null;
-  } catch {
-    return null;
-  }
+  const parsed = readInstalledGhostManifest(ghost.dir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
+  return parsed.ok ? ghostManifestDigest(parsed.manifest) : null;
 }
 
 /** Resolve Connection metadata only from a trusted organization market install. */
@@ -3287,11 +3695,60 @@ export function getGhostCindySlot(): GhostCindySlot {
  * removeGhostSecrets 的前缀清扫天然连带)。
  */
 let ghostOauthManagerSingleton: GhostOauthAccountManager | null = null;
+const ghostOauthOwnerReconciliationGate = createGhostOauthOwnerReconciliationGate();
+
+function ghostOauthMutationLockPath(ghostId: string): string {
+  return ownerScopedUserDataPath('ghost-install-state', '.oauth-locks', `${ghostId}.lock`);
+}
+
+function withActiveOwnerGhostOauthMutationLock<T>(
+  ghostId: string,
+  task: () => Promise<T> | T,
+): Promise<T> {
+  const ownerScope = activeOwnerScopeKey();
+  return withGhostOauthMutationLock(
+    ownerScope,
+    ghostId,
+    ghostOauthMutationLockPath(ghostId),
+    async () => {
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) {
+        throw new Error('Plugin OAuth owner boundary changed before mutation');
+      }
+      return task();
+    },
+  );
+}
+
+/** Reconcile migration markers once for every committed owner scope. */
+export async function reconcileGhostOauthAccountsForActiveOwner(): Promise<boolean> {
+  const ownerScope = activeOwnerScopeKey();
+  return ghostOauthOwnerReconciliationGate.run(ownerScope, async () => {
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) return false;
+    const oauthManager = getGhostOauthAccountManager();
+    let retryPending = false;
+    for (const ghost of getGhostManager().list()) {
+      await withActiveOwnerGhostOauthMutationLock(ghost.manifest.id, () => {
+        if (activeOwnerScopeKey() !== ownerScope) {
+          throw new Error('Plugin OAuth owner changed during reconciliation');
+        }
+        const reconciliation = oauthManager.reconcileAccountsForInstalledManifestWithResult(
+          withRuntimeFiloGoogleClient(ghost.manifest),
+        );
+        if (reconciliation.retryPending) retryPending = true;
+      });
+    }
+    return !retryPending
+      && !isAppSessionBoundaryPending()
+      && activeOwnerScopeKey() === ownerScope;
+  });
+}
+
 function getGhostOauthAccountManager(): GhostOauthAccountManager {
   if (!ghostOauthManagerSingleton) {
     ghostOauthManagerSingleton = new GhostOauthAccountManager({
       vault: {
         read: (ghostId, storageKey) => readGhostSecret(ghostId, storageKey),
+        readStrict: (ghostId, storageKey) => readGhostSecretStrict(ghostId, storageKey),
         store: (ghostId, storageKey, value) => storeGhostSecret(ghostId, storageKey, value),
         remove: (ghostId, storageKey) => removeGhostSecret(ghostId, storageKey),
       },
@@ -3361,6 +3818,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
           : undefined;
         return currentDecl !== undefined && isDeepStrictEqual(currentDecl, decl);
       },
+      withMutationLock: withActiveOwnerGhostOauthMutationLock,
     });
   }
   return ghostOauthManagerSingleton;
@@ -3770,6 +4228,8 @@ function throwInstallError(rejection: InstallRejection): never {
       throwIpcError('NOT_FOUND', rejection.reason);
     case 'command-conflict':
       throwIpcError('GHOST_COMMAND_CONFLICT', rejection.reason);
+    case 'state-changed':
+      throwIpcError('PRECONDITION_FAILED', rejection.reason);
     default:
       throwIpcError('INTERNAL', rejection.reason);
   }
@@ -3782,6 +4242,8 @@ function throwUninstallError(rejection: UninstallRejection): never {
       throwIpcError('INVALID_PARAMS', rejection.reason);
     case 'not-installed':
       throwIpcError('NOT_FOUND', rejection.reason);
+    case 'approval-required':
+      throwIpcError('PRECONDITION_FAILED', rejection.reason);
     default:
       throwIpcError('INTERNAL', rejection.reason);
   }
@@ -3846,8 +4308,9 @@ async function installAndDockLocked(
       `装入包的 ghostId(${result.ghost.manifest.id})与加锁使用的 id(${opts.ghostId})不一致`,
     );
   }
-  // 用户手动重装同 id 的内置意识 = 重新跟随包内版本(清墓碑,播种恢复对账)。
-  clearBuiltinTombstone(brainRootDir(), result.ghost.manifest.id, log);
+  // 内置墓碑清除已并入 GhostManager 的 durable install journal(marker.clearBuiltinTombstone
+  // + 提交时清除 + 崩溃恢复补清),此处不再直接调用:瞬时状态写失败会保留 marker 交由
+  // 启动恢复,而不是把已提交的安装误报成错误。
   // 声明了面板的意识装入后立即停进布局树(树上已有 = 重装,原位复活不动树)。
   // 顺序刻意:manager.install 内已广播 ghosts:changed(renderer 先注册面板),
   // 这里再 setLayout 触发 layout:changed(pane 出现时面板组件必然已就位,规则 7)。
@@ -3878,6 +4341,8 @@ export async function installOrUpdateMarketGhostPackage(
   expected: {
     ghostId: string;
     version: string;
+    /** receipt 模型并发护栏:更新分支比对 receipt 派生 token(与 main 硬化叠加,决策 A)。 */
+    expectedInstalledApproval?: string;
     /**
      * 手动首装确认真实包、同来源更新仅在真实包扩权时确认；默认安装只把
      * 市场目录 manifest 当作 fail-closed 权限上限。目录 manifest 不记作批准。
@@ -3910,6 +4375,7 @@ async function installOrUpdateMarketGhostPackageLocked(
   expected: {
     ghostId: string;
     version: string;
+    expectedInstalledApproval?: string;
     permissionPolicy?:
       | { mode: 'manual'; sourceType: PluginMarketItemSource }
       | { mode: 'cap'; manifest: GhostManifest; sourceType: PluginMarketItemSource };
@@ -3940,6 +4406,22 @@ async function installOrUpdateMarketGhostPackageLocked(
         ? 'cindy-official'
         : undefined;
     requireGhostAvailableForActiveSession(expected.ghostId);
+    /**
+     * 「审阅过的」与「真要装的」权限必须一致(2026-08-03,codex review P1)。
+     *
+     * 装入确认框渲染的是**来源方给的 manifest**(服务端市场 = release manifest,
+     * 自定义市场 = 抓到的 ghost.json),而真正落地的是 `.cindy` 包里的 ghost.json。
+     * 两者本该同一份,但来源方的投影层可能与客户端的清单契约漂移——`cindy-protocol`
+     * 那份平行校验器就已经缺了 `confirm` 槽;新登记的槽(如 `badge`)在它眼里是
+     * 未知槽名,投影时会被丢掉或整份拒绝。结果:确认框漏列该项权限,包却原样带着
+     * 它装进来,用户**从没审过就多出一个常驻能力面**。
+     *
+     * 这里按权限项逐项比对。包里多出来的权限先暂停落位,由 Renderer 按真实包
+     * 重新展示;用户批准后携带包 SHA 和已装权限基线重试。
+     * 卡点落在 inspect 之后、任何落地动作之前,所以等待复核时磁盘上什么都没动。
+     * (token broker 授权校验由下方 rejectUnauthorizedTokenBroker(canonicalManifest) 统一执行,
+     *  原 receipt 分支在此处的硬中止已被本可恢复复核取代,见约束文档 §11 整合任务①。)
+     */
     const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
     if (expected.permissionPolicy) {
       const baselineManifest = expected.permissionBaselineManifest ?? null;
@@ -4035,21 +4517,32 @@ async function installOrUpdateMarketGhostPackageLocked(
       // 必须确认旧 utilityProcess 已离开，否则入口文件仍可能被占用而报 EPERM。
       getGhostAgentSlot().clearGhost(expected.ghostId);
       getGhostErrandSlot().clearGhost(expected.ghostId);
-      // 与首装分支同一口径:钉住 inspect 时校验过的包字节(见上)。
-      result = await manager.update(cindyFilePath, {
-        expectedPackageSha256: inspected.packageSha256,
-        ...(trustOverride ? { trustOverride } : {}),
-        beforePackageCommit: () => {
-          getGhostOauthAccountManager().expireAccountsForChangedClients(
-            withRuntimeFiloGoogleClient(installed.manifest),
-            withRuntimeFiloGoogleClient(inspected.canonicalManifest),
-          );
-        },
-        onPackagePlaced: () => {
-          packagePlaced = true;
-          expected.onPackagePlacedInLock?.();
-        },
-      });
+      // receipt 模型下更新必须绑定 receipt token(决策 A:与 main 的 sha 钉扎叠加),
+      // 否则并发批准变更绕不过去。
+      if (!expected.expectedInstalledApproval) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'Plugin approval state was not bound to the market update',
+        );
+      }
+      // Lock order: owner lease -> install lock -> OAuth security lock. Keep
+      // the strict lock through package swap, receipt commit, and compensation.
+      result = await withActiveOwnerGhostOauthMutationLock(expected.ghostId, () =>
+        manager.update(cindyFilePath, {
+          expectedPackageSha256: inspected.packageSha256,
+          expectedInstalledApproval: expected.expectedInstalledApproval!,
+          ...(trustOverride ? { trustOverride } : {}),
+          beforePackageCommit: () =>
+            getGhostOauthAccountManager().prepareAccountsForChangedClients(
+              withRuntimeFiloGoogleClient(installed.manifest),
+              withRuntimeFiloGoogleClient(inspected.canonicalManifest),
+            ),
+          onPackagePlaced: () => {
+            packagePlaced = true;
+            expected.onPackagePlacedInLock?.();
+          },
+        }),
+      );
     } catch (error) {
       if (!packagePlaced) {
         spawnIfResident(installed);
@@ -4064,7 +4557,11 @@ async function installOrUpdateMarketGhostPackageLocked(
       result = { ghost: placed };
     }
     if ('rejection' in result) {
-      spawnIfResident(installed);
+      // 回滚失败 = 安装目录可能已是新字节或缺失,"旧版本还在"不成立,不得按旧
+      // InstalledGhost 重启运行时(P1:那会拿旧批准跑未知字节)。
+      if (!(result.rejection.code === 'io' && result.rejection.rollbackFailed)) {
+        spawnIfResident(installed);
+      }
       throwInstallError(result.rejection);
     }
     runtime.resetFuse(expected.ghostId);
@@ -4109,7 +4606,9 @@ export async function uninstallGhostAndCleanup(
 ): Promise<void> {
   // 按 ghostId 与装入/更新互斥:卸载与同 id 的市场/本地装入不得交错,否则
   // 市场装入的"目标是否已装"判定会被本卸载在其落位前抽走(反之亦然)。
-  return withGhostInstallLock(id, () => uninstallGhostAndCleanupLocked(id, options));
+  return withGhostInstallLock(id, () =>
+    withActiveOwnerGhostOauthMutationLock(id, () => uninstallGhostAndCleanupLocked(id, options)),
+  );
 }
 
 async function uninstallGhostAndCleanupLocked(
@@ -4168,9 +4667,6 @@ async function uninstallGhostAndCleanupLocked(
         id,
         error: err instanceof Error ? err.message : String(err),
       });
-    }
-    if (listBuiltinSeedIds(builtinSeedRootDirs()).includes(id)) {
-      recordBuiltinTombstone(brainRootDir(), id, log);
     }
     let recentIds: string[] | null = null;
     try {
@@ -4244,6 +4740,30 @@ function spawnIfResident(ghost: InstalledGhost): void {
         error: err instanceof Error ? err.message : String(err),
       });
     });
+}
+
+function readLegacyJson<T>(
+  file: string,
+  parse: (raw: unknown) => T | null,
+): LegacyMigrationRead<T> {
+  try {
+    const parsed = parse(JSON.parse(fs.readFileSync(file, 'utf-8')) as unknown);
+    return parsed === null
+      ? LEGACY_MIGRATION_RETRYABLE_FAILURE
+      : legacyMigrationAvailable(parsed);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? LEGACY_MIGRATION_MISSING
+      : LEGACY_MIGRATION_RETRYABLE_FAILURE;
+  }
+}
+
+function readLegacyEncryptedSecret(file: string): LegacyMigrationRead<string> {
+  return readLegacyEncryptedValue(
+    () => fs.readFileSync(file, 'utf-8'),
+    () => safeStorage.isEncryptionAvailable(),
+    (encoded) => safeStorage.decryptString(Buffer.from(encoded, 'base64')),
+  );
 }
 
 export function registerGhostIpc(): void {
@@ -4400,6 +4920,7 @@ export function registerGhostIpc(): void {
       networkHosts: runtimeManifest.network?.hosts,
       manager: getGhostOauthAccountManager(),
       ghostId,
+      withMutationLock: withActiveOwnerGhostOauthMutationLock,
       onChanged: (secretKey) => {
         getGhostSetupChangeBus().emit(ghostId, { source: 'oauth', ref: secretKey });
         broadcastGhostsChanged(getGhostManager().list(), false, { projectionOnly: true });
@@ -4471,18 +4992,12 @@ export function registerGhostIpc(): void {
     getGhostNodeRuntimeBroker().destroyAll();
   });
 
-  // 启动序列(必须等 app ready:registerGhostIpc 在 bootstrap 顶层(ready 前)
-  // 执行,而沙箱创建(session.fromPartition / new BrowserWindow)在 ready 前会
-  // 直接 throw(review P0——早点火会把该意识状态机与协议分区一起打死)):
-  // 1) 内置意识播种对账:「永远以最新包为准」+ 受众(provisioning.json)。
-  //    启动跑一次(authManager 已在 bootstrap 恢复持久化登录态,此刻身份可读),
-  //    此后登录 / 登出 / 切账号每次变化再对账 —— 定向种子登录后装上、登出回收;
-  //    'all' 种子与身份无关,登出也在。对账串行化(chain),auth 抖动不并发。
-  // 2) 常驻意识开机点火:把"已唤醒 + launch: resident"的电子脑拉起(§4 懒加载
-  //    的显式例外——作者声明过、装入确认框摊过牌)。刻意排在首次对账之后,新
-  //    播种的常驻意识同一趟点火;后续对账装上的由 reconcile 自己点火。
-  const activateGhostsAndMigrateLegacyAccounts = (): void => {
+  // Stable-owner 后处理序列：先完成内置插件对账，再恢复常驻插件和旧账号凭证。
+  // 旧凭证迁移保持 best-effort，不阻塞其他插件；任一迁移异常会把本 owner scope
+  // 保持为 retry-pending，避免被 coordinator 误记为完成。
+  const activateGhostsAndMigrateLegacyAccounts = (): 'completed' | 'retry-pending' => {
     for (const ghost of manager.list()) spawnIfResident(ghost);
+    let legacyMigrationNeedsRetry = false;
     const activeOwnerId = getActiveAppSession().dataOwnerId;
     const canMigrateLegacyAccounts =
       getAppCapabilities().canUseCindyAccountServices &&
@@ -4497,30 +5012,19 @@ export function registerGhostIpc(): void {
     ) {
       try {
         const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-        const migrated = migrateFiloGoogleAccounts({
+        const migration = migrateFiloGoogleAccountsWithResult({
           readLegacyManifest: () => {
-            try {
-              const raw = JSON.parse(
-                fs.readFileSync(path.join(legacyDir, 'google_accounts.json'), 'utf-8'),
-              ) as { accounts?: unknown };
-              if (!Array.isArray(raw.accounts)) return null;
-              return { accounts: raw.accounts as LegacyGoogleAccountRow[] };
-            } catch {
-              return null;
-            }
+            return readLegacyJson(path.join(legacyDir, 'google_accounts.json'), (raw) => {
+              if (!raw || typeof raw !== 'object') return null;
+              const candidate = raw as { accounts?: unknown };
+              if (!Array.isArray(candidate.accounts)) return null;
+              return { accounts: candidate.accounts as LegacyGoogleAccountRow[] };
+            });
           },
-          readLegacyRefreshToken: (accountId) => {
-            try {
-              if (!safeStorage.isEncryptionAvailable()) return null;
-              const file = path.join(legacyDir, `google_account_refresh_token_${accountId}.enc`);
-              if (!fs.existsSync(file)) return null;
-              return safeStorage.decryptString(
-                Buffer.from(fs.readFileSync(file, 'utf-8'), 'base64'),
-              );
-            } catch {
-              return null;
-            }
-          },
+          readLegacyRefreshToken: (accountId) =>
+            readLegacyEncryptedSecret(
+              path.join(legacyDir, `google_account_refresh_token_${accountId}.enc`),
+            ),
           vault: {
             read: (ghostId, storageKey) => readGhostSecret(ghostId, storageKey),
             store: (ghostId, storageKey, value) => storeGhostSecret(ghostId, storageKey, value),
@@ -4528,13 +5032,15 @@ export function registerGhostIpc(): void {
           },
           log,
         });
-        if (migrated > 0) {
+        if (migration.retryPending) legacyMigrationNeedsRetry = true;
+        if (migration.migrated > 0) {
           getGhostSetupChangeBus().emit(FILO_GOOGLE_GHOST_ID, {
             source: 'oauth',
             ref: FILO_GOOGLE_SECRET_KEY,
           });
         }
       } catch (err) {
+        legacyMigrationNeedsRetry = true;
         log.warn('filo-google 搬账意外失败(不阻断启动)', {
           err: err instanceof Error ? err.message : String(err),
         });
@@ -4549,29 +5055,15 @@ export function registerGhostIpc(): void {
     ) {
       try {
         const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-        const migrated = migrateAtlassianAccounts({
-          readLegacyRefreshToken: () => {
-            try {
-              if (!safeStorage.isEncryptionAvailable()) return null;
-              const file = path.join(legacyDir, LEGACY_JIRA_RT_FILE);
-              if (!fs.existsSync(file)) return null;
-              return safeStorage.decryptString(
-                Buffer.from(fs.readFileSync(file, 'utf-8'), 'base64'),
-              );
-            } catch {
-              return null;
-            }
-          },
-          readLegacyConnection: () => {
-            try {
-              const raw = JSON.parse(
-                fs.readFileSync(path.join(legacyDir, LEGACY_JIRA_CONNECTION_FILE), 'utf-8'),
-              ) as { email?: unknown };
-              return { email: typeof raw.email === 'string' ? raw.email : null };
-            } catch {
-              return null;
-            }
-          },
+        const migration = migrateAtlassianAccountsWithResult({
+          readLegacyRefreshToken: () =>
+            readLegacyEncryptedSecret(path.join(legacyDir, LEGACY_JIRA_RT_FILE)),
+          readLegacyConnection: () =>
+            readLegacyJson(path.join(legacyDir, LEGACY_JIRA_CONNECTION_FILE), (raw) => {
+              if (!raw || typeof raw !== 'object') return null;
+              const candidate = raw as { email?: unknown };
+              return { email: typeof candidate.email === 'string' ? candidate.email : null };
+            }),
           vault: {
             read: (ghostId, storageKey) => readGhostSecret(ghostId, storageKey),
             store: (ghostId, storageKey, value) => storeGhostSecret(ghostId, storageKey, value),
@@ -4579,13 +5071,15 @@ export function registerGhostIpc(): void {
           },
           log,
         });
-        if (migrated > 0) {
+        if (migration.retryPending) legacyMigrationNeedsRetry = true;
+        if (migration.migrated > 0) {
           getGhostSetupChangeBus().emit(XD_ATLASSIAN_GHOST_ID, {
             source: 'oauth',
             ref: XD_ATLASSIAN_SECRET_KEY,
           });
         }
       } catch (err) {
+        legacyMigrationNeedsRetry = true;
         log.warn('xd-atlassian 搬账意外失败(不阻断启动)', {
           err: err instanceof Error ? err.message : String(err),
         });
@@ -4603,42 +5097,30 @@ export function registerGhostIpc(): void {
     ) {
       try {
         const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-        const migrated = migrateGithubAccounts({
-          readLegacyToken: () => {
-            try {
-              if (!safeStorage.isEncryptionAvailable()) return null;
-              const file = path.join(legacyDir, LEGACY_GITHUB_TOKEN_FILE);
-              if (!fs.existsSync(file)) return null;
-              return safeStorage.decryptString(
-                Buffer.from(fs.readFileSync(file, 'utf-8'), 'base64'),
-              );
-            } catch {
-              return null;
-            }
-          },
-          readLegacyConnection: () => {
-            try {
-              const raw = JSON.parse(
-                fs.readFileSync(path.join(legacyDir, LEGACY_GITHUB_CONNECTION_FILE), 'utf-8'),
-              ) as { host?: unknown };
-              return { host: typeof raw.host === 'string' ? raw.host : null };
-            } catch {
-              return null;
-            }
-          },
+        const migration = migrateGithubAccountsWithResult({
+          readLegacyToken: () =>
+            readLegacyEncryptedSecret(path.join(legacyDir, LEGACY_GITHUB_TOKEN_FILE)),
+          readLegacyConnection: () =>
+            readLegacyJson(path.join(legacyDir, LEGACY_GITHUB_CONNECTION_FILE), (raw) => {
+              if (!raw || typeof raw !== 'object') return null;
+              const candidate = raw as { host?: unknown };
+              return { host: typeof candidate.host === 'string' ? candidate.host : null };
+            }),
           vault: {
             read: (ghostId, storageKey) => readGhostSecret(ghostId, storageKey),
             store: (ghostId, storageKey, value) => storeGhostSecret(ghostId, storageKey, value),
           },
           log,
         });
-        if (migrated > 0) {
+        if (migration.retryPending) legacyMigrationNeedsRetry = true;
+        if (migration.migrated > 0) {
           getGhostSetupChangeBus().emit(CINDY_GITHUB_GHOST_ID, {
             source: 'secret',
             ref: CINDY_GITHUB_SECRET_KEY,
           });
         }
       } catch (err) {
+        legacyMigrationNeedsRetry = true;
         log.warn('cindy-github 搬账意外失败(不阻断启动)', {
           err: err instanceof Error ? err.message : String(err),
         });
@@ -4654,19 +5136,9 @@ export function registerGhostIpc(): void {
     ) {
       try {
         const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-        const migrated = migrateGitlabAccounts({
-          readLegacyToken: () => {
-            try {
-              if (!safeStorage.isEncryptionAvailable()) return null;
-              const file = path.join(legacyDir, LEGACY_GITLAB_TOKEN_FILE);
-              if (!fs.existsSync(file)) return null;
-              return safeStorage.decryptString(
-                Buffer.from(fs.readFileSync(file, 'utf-8'), 'base64'),
-              );
-            } catch {
-              return null;
-            }
-          },
+        const migration = migrateGitlabAccountsWithResult({
+          readLegacyToken: () =>
+            readLegacyEncryptedSecret(path.join(legacyDir, LEGACY_GITLAB_TOKEN_FILE)),
           legacyTokenExists: () => {
             try {
               return fs.existsSync(path.join(legacyDir, LEGACY_GITLAB_TOKEN_FILE));
@@ -4674,39 +5146,36 @@ export function registerGhostIpc(): void {
               return false;
             }
           },
-          readLegacyConnection: () => {
-            try {
-              const raw = JSON.parse(
-                fs.readFileSync(path.join(legacyDir, LEGACY_GITLAB_CONNECTION_FILE), 'utf-8'),
-              ) as { baseUrl?: unknown; username?: unknown };
+          readLegacyConnection: () =>
+            readLegacyJson(path.join(legacyDir, LEGACY_GITLAB_CONNECTION_FILE), (raw) => {
+              if (!raw || typeof raw !== 'object') return null;
+              const candidate = raw as { baseUrl?: unknown; username?: unknown };
               return {
-                baseUrl: typeof raw.baseUrl === 'string' ? raw.baseUrl : null,
-                username: typeof raw.username === 'string' ? raw.username : null,
+                baseUrl: typeof candidate.baseUrl === 'string' ? candidate.baseUrl : null,
+                username: typeof candidate.username === 'string' ? candidate.username : null,
               };
-            } catch {
-              return null;
-            }
-          },
+            }),
           manager: getGhostConnectionManager(),
           log,
         });
-        if (migrated > 0) {
+        if (migration.retryPending) legacyMigrationNeedsRetry = true;
+        if (migration.migrated > 0) {
           getGhostSetupChangeBus().emit(CINDY_GITLAB_GHOST_ID, {
             source: 'connection',
             ref: CINDY_GITLAB_CONNECTION_KEY,
           });
         }
       } catch (err) {
+        legacyMigrationNeedsRetry = true;
         log.warn('cindy-gitlab 搬账意外失败(不阻断启动)', {
           err: err instanceof Error ? err.message : String(err),
         });
       }
     }
+    return legacyMigrationNeedsRetry ? 'retry-pending' : 'completed';
   };
 
   void app.whenReady().then(() => {
-    void scheduleBuiltinReconcile('startup');
-    builtinReconcileChain = builtinReconcileChain.then(activateGhostsAndMigrateLegacyAccounts);
     onAuthStateChange(() => {
       // Login/logout, Membership switches, and refresh integration all cross
       // an auth notification boundary. Discard every short-lived Connection
@@ -4722,10 +5191,28 @@ export function registerGhostIpc(): void {
       // 未读账本按 owner 分文件,换账号后必须整表替换,否则账号 A 的绿点与摘要
       // 会留在账号 B 的插件入口与卡片上(跨账号残留)。
       broadcastGhostUnreadSnapshot();
-      void scheduleBuiltinReconcile('auth-change');
-      builtinReconcileChain = builtinReconcileChain.then(activateGhostsAndMigrateLegacyAccounts);
     });
   });
+
+  stableOwnerPostCommitTask = async (reason, scope) => {
+    const outcome = await scheduleBuiltinReconcile(reason, scope);
+    if (outcome === 'deferred') return outcome;
+    if (
+      activeOwnerScopeKey() !== scope.scopeKey
+      || getActiveAppSession().dataOwnerId !== scope.dataOwnerId
+    ) {
+      return 'deferred';
+    }
+    // Resident activation is account-free for audience:"all" bundled plugins.
+    // The migration body has its own committed-owner gate, so signed-out runs
+    // the common activation phase without touching legacy account data.
+    const activationOutcome = activateGhostsAndMigrateLegacyAccounts();
+    return outcome === 'failed'
+      ? 'failed'
+      : outcome === 'retry-pending' || activationOutcome === 'retry-pending'
+      ? 'retry-pending'
+      : 'completed';
+  };
 
   // ── 管子(脑机接口)main 侧 handler(docs/dev-rules/plugin-security-and-authoring.md)──────────────
   // 身份不信任 sender 自报,一律按 webContents id 反查绑定表验身。
@@ -5202,39 +5689,39 @@ export function registerGhostIpc(): void {
   );
 
   ipcMain.handle('ghosts:cindy-prefs:set', (_event, ghostId: unknown, capability: unknown, model: unknown) => {
-    if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
-      throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
-    }
-    if (!(CINDY_CAPABILITY_KEYS as readonly string[]).includes(capability as string)) {
-      throwIpcError('INVALID_PARAMS', `unknown capability: ${String(capability)}`);
-    }
-    // 白名单按能力键类目分流:image.*/video.*/embed.* 钉各媒体目录模型 id;
-    // text.*(快问快答)钉轻量档位键或目录钉(cat: 编码)——与消费方(cindySlot
-    // route)同一判据,否则存进去的值链路不认。刻意不查凭证态(与清单的凭证
-    // 过滤不同):凭证是瞬态(可以后补/会过期),钉档是持久意图;执行侧
-    // fail-closed 兜底,不在这层把「暂时没配 key」当成非法值。
-    if (
-      !isCindyOverrideModelAllowed(capability as string, model, {
-        image: getCatalogImageConfig().models,
-        video: getCatalogVideoConfig().models,
-        embed: getCatalogEmbedConfig().models,
+      if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
+        throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
+      }
+      if (!(CINDY_CAPABILITY_KEYS as readonly string[]).includes(capability as string)) {
+        throwIpcError('INVALID_PARAMS', `unknown capability: ${String(capability)}`);
+      }
+      // 白名单按能力键类目分流:image.*/video.*/embed.* 钉各媒体目录模型 id;
+      // text.*(快问快答)钉轻量档位键或目录钉(cat: 编码)——与消费方(cindySlot
+      // route)同一判据,否则存进去的值链路不认。刻意不查凭证态(与清单的凭证
+      // 过滤不同):凭证是瞬态(可以后补/会过期),钉档是持久意图;执行侧
+      // fail-closed 兜底,不在这层把「暂时没配 key」当成非法值。
+      if (
+        !isCindyOverrideModelAllowed(capability as string, model, {
+          image: getCatalogImageConfig().models,
+          video: getCatalogVideoConfig().models,
+          embed: getCatalogEmbedConfig().models,
         textPinIds: buildTextOneshotPinOptions(getActiveCatalog(), readModelDisableOverrides()).map(
           (o) => o.id,
         ),
-      })
-    ) {
+        })
+      ) {
       throwIpcError('INVALID_PARAMS', 'model must be null or an allowed model of the capability category');
-    }
-    const overrides = writeGhostCindyOverride(
-      ghostId,
-      capability as CindyCapabilityKey,
-      model as string | null,
-    );
-    getGhostSetupChangeBus().emit(ghostId, {
-      source: 'host_config',
-      ref: `cindy-pref:${String(capability)}`,
-    });
-    return { overrides };
+      }
+      const overrides = writeGhostCindyOverride(
+        ghostId,
+        capability as CindyCapabilityKey,
+        model as string | null,
+      );
+      getGhostSetupChangeBus().emit(ghostId, {
+        source: 'host_config',
+        ref: `cindy-pref:${String(capability)}`,
+      });
+      return { overrides };
   });
 
   // ── agent 槽派活(errand)每插件配置(插件详情页「AI 代办」卡)──
@@ -5261,6 +5748,10 @@ export function registerGhostIpc(): void {
 
   ipcMain.handle('ghosts:install', async (event, lizFilePath: unknown, opts: unknown) => {
     assertTrustedAppRendererEvent(event);
+    // 与市场路径同款 owner 租约:入口处同步捕获 owner,异步 inspect 之后、真正动
+    // 文件系统之前取租约并核对 owner 未变 —— manager 的内容根/状态根都是调用时
+    // 现解析的,异步窗口里账号切换落定会让后半段写进新 owner 的命名空间。
+    const mutationOwner = captureGhostMutationOwner();
     if (typeof lizFilePath !== 'string' || lizFilePath.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'lizFilePath must be a non-empty string');
     }
@@ -5283,14 +5774,20 @@ export function registerGhostIpc(): void {
     // Node 高风险提示在 renderer 装入确认卡的权限清单里如实展示;
     // 2026-07-24 Lizi 定案:不再追加 Main 原生二次确认弹窗。
     const enable = installOpts?.enable === true;
-    // 锁由 installAndDock 按 ghostId 自动获取(卡点);这里传 id 即可。
-    return {
-      ghost: await installAndDock(manager, lizFilePath, {
-        ghostId: probe.manifest.id,
-        enable,
-        expectedPackageSha256,
-      }),
-    };
+    // owner 租约在锁外整段持有(防中途 owner 切换把落位写进新 owner);按 ghostId 的
+    // 互斥锁由 installAndDock 自动获取(卡点),这里传 id 即可。二者语义不同,叠加保留。
+    const releaseMutation = beginGhostMutation(mutationOwner);
+    try {
+      return {
+        ghost: await installAndDock(manager, lizFilePath, {
+          ghostId: probe.manifest.id,
+          enable,
+          expectedPackageSha256,
+        }),
+      };
+    } finally {
+      releaseMutation();
+    }
   });
 
   // 原位更新(同 id 换版):先熄灯沙箱(新代码由下一次派活/面板重挂拉起),
@@ -5298,18 +5795,31 @@ export function registerGhostIpc(): void {
   // 停靠(新版本首次声明面板时补位;已停靠则不动树)。
   ipcMain.handle('ghosts:update', async (event, lizFilePath: unknown, opts: unknown) => {
     assertTrustedAppRendererEvent(event);
+    // 同 ghosts:install:入口同步捕获 owner,异步 inspect 后、熄灯与换版之前取租约。
+    const mutationOwner = captureGhostMutationOwner();
     if (typeof lizFilePath !== 'string' || lizFilePath.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'lizFilePath must be a non-empty string');
     }
-    const expectedPackageSha256 = (opts as { expectedPackageSha256?: unknown } | undefined)
-      ?.expectedPackageSha256;
+    const updateOptions = opts as
+      | {
+          expectedPackageSha256?: unknown;
+          expectedInstalledApproval?: unknown;
+        }
+      | undefined;
+    const expectedPackageSha256 = updateOptions?.expectedPackageSha256;
+    const expectedInstalledApproval = updateOptions?.expectedInstalledApproval;
     if (
       typeof expectedPackageSha256 !== 'string' ||
       !/^[a-f0-9]{64}$/.test(expectedPackageSha256)
     ) {
       throwIpcError('INVALID_PARAMS', 'expectedPackageSha256 must come from ghosts:inspect');
     }
-    const mutationOwner = captureGhostMutationOwner();
+    if (!isGhostInstallApprovalToken(expectedInstalledApproval)) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'expectedInstalledApproval must come from ghosts:list',
+      );
+    }
     const marketLedger = getPluginMarketLedger().bind(
       ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
     );
@@ -5321,12 +5831,14 @@ export function registerGhostIpc(): void {
     }
     rejectReservedGhostId(inspected.manifest.id);
     rejectUnauthorizedTokenBroker(inspected.manifest);
-    // 与市场装入/本地装入/卸载共用按 ghostId 的互斥:换目录期间同 id 的其它
-    // 装入/卸载不得插入(否则并发装入会与本次 rename 竞争、留下不一致态)。
-    return withGhostInstallLock(inspected.manifest.id, async () => {
-      const releaseMutation = beginGhostMutation(mutationOwner);
-      const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
-      try {
+    // 从熄灯到换版收尾整段持 owner 租约:熄灯之后每一步都在改"当前 owner"的插件世界,
+    // 中途 owner 切换落定会把后半段(update 落盘/停靠/点火)写进新 owner。租约在锁外,
+    // 与市场/本地装入/卸载共用的按 ghostId 互斥叠加(二者语义不同,决策 A 都保留)。
+    // 锁序不变量(违反即死锁):owner lease → per-id lock。
+    const releaseMutation = beginGhostMutation(mutationOwner);
+    try {
+      return await withGhostInstallLock(inspected.manifest.id, async () => {
+        const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
         runtime.stop(inspected.manifest.id);
         // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
         // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
@@ -5401,22 +5913,24 @@ export function registerGhostIpc(): void {
         let result: Awaited<ReturnType<typeof manager.update>>;
         let packagePlaced = false;
         try {
-          result = await manager.update(lizFilePath, {
-            expectedPackageSha256,
-            ...(previousGhost
-              ? {
-                  beforePackageCommit: () => {
-                    getGhostOauthAccountManager().expireAccountsForChangedClients(
-                      withRuntimeFiloGoogleClient(previousGhost.manifest),
-                      withRuntimeFiloGoogleClient(inspected.canonicalManifest),
-                    );
-                  },
-                }
-              : {}),
-            onPackagePlaced: () => {
-              packagePlaced = true;
-            },
-          });
+          result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id, () =>
+            manager.update(lizFilePath, {
+              expectedPackageSha256,
+              expectedInstalledApproval,
+              ...(previousGhost
+                ? {
+                    beforePackageCommit: () =>
+                      getGhostOauthAccountManager().prepareAccountsForChangedClients(
+                        withRuntimeFiloGoogleClient(previousGhost.manifest),
+                        withRuntimeFiloGoogleClient(inspected.canonicalManifest),
+                      ),
+                  }
+                : {}),
+              onPackagePlaced: () => {
+                packagePlaced = true;
+              },
+            }),
+          );
         } catch (err) {
           if (!packagePlaced) {
             restoreMarketRecord();
@@ -5433,8 +5947,18 @@ export function registerGhostIpc(): void {
           result = { ghost: placed };
         }
         if ('rejection' in result) {
-          restoreMarketRecord();
-          if (previousGhost) spawnIfResident(previousGhost);
+          // 回滚失败 = 安装目录可能已是新字节或缺失，"旧版本还在"不成立，
+          // 不得按旧 InstalledGhost 重启运行时（P1：那会拿旧批准跑未知字节）。
+          // 同样不得恢复旧市场来源路由——那会把不一致的字节绑定回原来源，
+          // 未来市场版本对账可能按旧 provenance 操作错位插件
+          // （P1, PRRT_kwDOTgdRUs6YcG8r）。
+          if (!(result.rejection.code === 'io' && result.rejection.rollbackFailed)) {
+            restoreMarketRecord();
+          }
+          if (previousGhost &&
+            !(result.rejection.code === 'io' && result.rejection.rollbackFailed)) {
+            spawnIfResident(previousGhost);
+          }
           throwInstallError(result.rejection);
         }
         runtime.resetFuse(inspected.manifest.id); // 换了代码,给新版本干净的熔断记账
@@ -5451,10 +5975,10 @@ export function registerGhostIpc(): void {
         }
         spawnIfResident(result.ghost); // 常驻意识:换完代码立即用新版本点火
         return { ghost: result.ghost };
-      } finally {
-        releaseMutation();
-      }
-    });
+      });
+    } finally {
+      releaseMutation();
+    }
   });
 
   // 设置页「装入意识…」第一步:系统文件选择框(按 .cindy 过滤),只选不装。
@@ -5479,6 +6003,128 @@ export function registerGhostIpc(): void {
     return { filePath: takePendingCindyInstall() };
   });
 
+  // 本地包第三条恢复路径第一步:从**已装目录**读出确认卡事实,零副作用。
+  // 批准丢失(迁移后 receipt 又损坏/被删)时不用用户翻出原始 .cindy —— 字节从安装
+  // 目录读,权限清单全量展示,确认后由 ghosts:reapprove-installed 开 receipt。
+  // inspect 时点的 owner 与事实用一次性票据钉死,confirm 原子消费(P0-2):只回传
+  // manifestSha256 绑不住 owner —— 多账号下确认卡停留期间切号,A 看的确认可以给 B
+  // 的同 id 目录铸批准。票据 Host 进程内持有,renderer 只透传 opaque token。
+  const reapproveTickets = createOneShotTicketStore<{
+    owner: ActiveAppSession;
+    id: string;
+    manifestSha256: string;
+    approvalProjectionSha256: string;
+  }>({ ttlMs: 10 * 60 * 1000, maxEntries: 64 });
+  ipcMain.handle('ghosts:reapprove-inspect', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || id.trim().length === 0) {
+      throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
+    }
+    requireGhostAvailableForActiveSession(id);
+    rejectReservedGhostId(id);
+    // owner 在读事实**之前**捕获(边界期直接抛):票据钉的是"这份事实属于哪个 owner"。
+    const owner = captureGhostMutationOwner();
+    const result = await manager.inspectInstalledReapproval(id);
+    if ('rejection' in result) throwInstallError(result.rejection);
+    const inspectTicket = reapproveTickets.issue({
+      owner,
+      id,
+      manifestSha256: result.manifestSha256,
+      approvalProjectionSha256: result.approvalProjectionSha256,
+    });
+    return {
+      manifest: result.manifest,
+      trust: result.trust,
+      manifestSha256: result.manifestSha256,
+      approvalProjectionSha256: result.approvalProjectionSha256,
+      previouslyEnabled: result.previouslyEnabled,
+      inspectTicket,
+    };
+  });
+
+  // 第三条恢复路径第二步:用户点过确认卡后开 receipt。expectedManifestSha256 绑定
+  // 「确认卡展示的」与「此刻批准的」清单字节(与更新流程 expectedPackageSha256 同形),
+  // expectedInstalledApproval 防确认期间批准状态被并发改写。
+  ipcMain.handle('ghosts:reapprove-installed', async (event, id: unknown, opts: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || id.trim().length === 0) {
+      throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
+    }
+    requireGhostAvailableForActiveSession(id);
+    // 与本地装入同一道门:官方保留前缀不走用户通道(真随包 id 已被 manager 的
+    // 种子清单检查拒掉,这里拦的是冒充官方前缀的目录)。
+    rejectReservedGhostId(id);
+    const options = opts as
+      | {
+          enable?: unknown;
+          expectedManifestSha256?: unknown;
+          expectedApprovalProjectionSha256?: unknown;
+          expectedInstalledApproval?: unknown;
+          inspectTicket?: unknown;
+        }
+      | undefined;
+    if (typeof options?.enable !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'enable must be a boolean');
+    }
+    if (
+      typeof options.expectedManifestSha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(options.expectedManifestSha256)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'expectedManifestSha256 must come from ghosts:reapprove-inspect');
+    }
+    if (
+      typeof options.expectedApprovalProjectionSha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(options.expectedApprovalProjectionSha256)
+    ) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'expectedApprovalProjectionSha256 must come from ghosts:reapprove-inspect',
+      );
+    }
+    if (!isGhostInstallApprovalToken(options.expectedInstalledApproval)) {
+      throwIpcError('INVALID_PARAMS', 'expectedInstalledApproval must come from ghosts:list');
+    }
+    if (typeof options.inspectTicket !== 'string' || options.inspectTicket.length === 0) {
+      throwIpcError('INVALID_PARAMS', 'inspectTicket must come from ghosts:reapprove-inspect');
+    }
+    // 原子消费票据:重放/过期/跨票一律 PRECONDITION_FAILED,让 UI 重开确认卡。
+    const ticket = reapproveTickets.consume(options.inspectTicket);
+    if (
+      !ticket ||
+      ticket.id !== id ||
+      ticket.manifestSha256 !== options.expectedManifestSha256 ||
+      ticket.approvalProjectionSha256 !== options.expectedApprovalProjectionSha256
+    ) {
+      throwIpcError('PRECONDITION_FAILED', '确认卡已过期或与检查时不一致,请重新打开确认');
+    }
+    // 开 receipt 是 owner 绑定的状态根写路径:租约以**票据里 inspect 时点的 owner**
+    // 为期望值 —— 确认卡停留期间切了号,generation 不等直接拒,A 的确认给不了 B。
+    const releaseMutation = beginGhostMutation(ticket.owner);
+    try {
+      const result = await manager.reapproveInstalled(id, {
+          enable: options.enable,
+          expectedManifestSha256: options.expectedManifestSha256,
+          expectedApprovalProjectionSha256: options.expectedApprovalProjectionSha256,
+          expectedInstalledApproval: options.expectedInstalledApproval,
+      });
+      if ('rejection' in result) throwInstallError(result.rejection);
+      // 与装入/更新同款收尾:面板停靠(已有位置则 no-op)+ 常驻点火。
+      // 必须在 owner 租约内执行 —— 否则账号切换后 dock/spawn 会写到新 owner。
+      const store = getLayoutStore();
+      const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
+      if (docked) {
+        const applied = store.setLayout(docked);
+        if ('rejection' in applied) {
+          log.warn('ghost panel dock rejected', { id: result.ghost.manifest.id, reason: applied.rejection });
+        }
+      }
+      spawnIfResident(result.ghost);
+      return { ghost: result.ghost };
+    } finally {
+      releaseMutation();
+    }
+  });
+
   // 只验不装:读出 .cindy 的清单给确认弹窗展示,零副作用。
   ipcMain.handle('ghosts:inspect', async (event, lizFilePath: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -5499,7 +6145,12 @@ export function registerGhostIpc(): void {
     };
   });
 
-  ipcMain.handle('ghosts:uninstall', async (_event, id: unknown) => {
+  ipcMain.handle('ghosts:uninstall', async (event, id: unknown) => {
+    // 卸载会停运行时、撤 receipt 批准、清凭证/KV/ghost-fs 并删安装目录 —— 与
+    // install/update/set-enabled/export 同级的高权限写路径,来源判定必须由 Main
+    // 按真实顶层 frame 完成,不可信任页面自报;不受信 Ghost/WebView 页面若能
+    // invoke 此 channel 即可卸载任意插件(评审 P1)。
+    assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || id.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
     }
@@ -5595,7 +6246,10 @@ export function registerGhostIpc(): void {
   });
 
   // 恢复被抽离的内置意识:清墓碑 + 立即对账(串行链上排队,装回原位)。
-  ipcMain.handle('ghosts:restore-builtin', async (_event, id: unknown) => {
+  ipcMain.handle('ghosts:restore-builtin', async (event, id: unknown) => {
+    // 恢复内置意识会清墓碑并触发对账装回,同属改写插件世界的写路径,来源判定
+    // 与其它写通道对齐,不信任页面自报(评审 P1)。
+    assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || id.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
     }
@@ -5603,10 +6257,19 @@ export function registerGhostIpc(): void {
     if (!listBuiltinSeedIds(builtinSeedRootDirs()).includes(id)) {
       throwIpcError('NOT_FOUND', `意识 ${id} 不是内置种子`);
     }
-    clearBuiltinTombstone(brainRootDir(), id, log);
-    void scheduleBuiltinReconcile('restore');
-    await builtinReconcileChain; // 等本轮装完再返回,renderer 拿到结果时列表已就位
-    return { ok: true };
+    const expectedOwner = captureGhostMutationOwner();
+    const releaseMutation = beginGhostMutation(expectedOwner);
+    try {
+      clearBuiltinTombstone(brainRootDir(), id, log);
+      void scheduleBuiltinReconcile('restore');
+      await builtinReconcileChain; // 等本轮装完再返回,renderer 拿到结果时列表已就位
+      if (!isSameAppSession(expectedOwner, getActiveAppSession())) {
+        throw new Error('账号已切换，已取消本次 Plugin 操作');
+      }
+      return { ok: true };
+    } finally {
+      releaseMutation();
+    }
   });
 
   // 启用 / 停用(停用 = 面板休眠,布局位置保留;详见 GhostManager.setEnabled)。
@@ -5621,36 +6284,49 @@ export function registerGhostIpc(): void {
     if (typeof enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
     }
-    if (!enabled) {
-      runtime.stop(id); // 沉睡立即熄灯
-      getGhostNodeRuntimeBroker().stop(id); // 随包 Node 也立即关闭
-      getGhostSubscriptionGateway().dropGhost(id); // 订阅态清零(缓冲/熔断/seq)
+    // 同 install/update 的 owner 租约:setEnabled 先 await pathExists(旧 owner 的
+    // 安装目录)再动态写 receipt —— 不持租约,这个异步窗口里切号落定会拿 A 的镜像
+    // 状态改 B 的 receipt(启停同时落在两个 owner 的两半)。
+    const releaseMutation = beginGhostMutation(captureGhostMutationOwner());
+    try {
+      if (!enabled) {
+        runtime.stop(id); // 沉睡立即熄灯
+        getGhostNodeRuntimeBroker().stop(id); // 随包 Node 也立即关闭
+        getGhostSubscriptionGateway().dropGhost(id); // 订阅态清零(缓冲/熔断/seq)
+        // 与更新/撤销路径同款:agent 工具授权与 errand 节流/在途记录不跨停用存活,
+        // 重新启用后从干净状态开始。
+        getGhostAgentSlot().clearGhost(id);
+        getGhostErrandSlot().clearGhost(id);
+      }
+      const result = await manager.setEnabled(id, enabled);
+      if ('rejection' in result) throwUninstallError(result.rejection);
+      if (enabled) {
+        runtime.resetFuse(id); // 重新唤醒 = 清熔断记账,可再拉起
+        const ghost = findAvailableGhost(id);
+        if (ghost) spawnIfResident(ghost); // 常驻意识:唤醒即启动
+        resumeGhostUnreadProjection(id); // 沉睡期间保留的那颗点回来(#1421)
+      } else {
+        // 未读停止投影(记录保留):沉睡的意识没法把面板里的内容给你看,留一颗点
+        // 只是噪声;但用户是"先别烦我"不是"这条我读过了",唤醒要能找回来。
+        //
+        // **必须在 setEnabled 成功之后**:写 `.disabled` 可能失败(目录只读 / IO
+        // 错误),那时插件仍是启用态,可提前熄灭的话未读点就被错误清掉、且不会自愈
+        // (要等插件再次上报或重启)。熄灯类操作(runtime/node/订阅)放在前面是既有
+        // 行为且幂等,唯独这条会留下用户可见的错状态(copilot + codex review)。
+        suspendGhostUnreadProjection(id);
+      }
+      return { ok: true };
+    } finally {
+      releaseMutation();
     }
-    const result = await manager.setEnabled(id, enabled);
-    if ('rejection' in result) throwUninstallError(result.rejection);
-    if (enabled) {
-      runtime.resetFuse(id); // 重新唤醒 = 清熔断记账,可再拉起
-      const ghost = findAvailableGhost(id);
-      if (ghost) spawnIfResident(ghost); // 常驻意识:唤醒即启动
-      resumeGhostUnreadProjection(id); // 沉睡期间保留的那颗点回来
-    } else {
-      // 未读停止投影(记录保留):沉睡的意识没法把面板里的内容给你看,留一颗点
-      // 只是噪声;但用户是"先别烦我"不是"这条我读过了",唤醒要能找回来。
-      //
-      // **必须在 setEnabled 成功之后**:写 `.disabled` 可能失败(目录只读 / IO
-      // 错误),那时插件仍是启用态,可提前熄灭的话未读点就被错误清掉、且不会自愈
-      // (要等插件再次上报或重启)。熄灯类操作(runtime/node/订阅)放在前面是既有
-      // 行为且幂等,唯独这条会留下用户可见的错状态(copilot + codex review)。
-      suspendGhostUnreadProjection(id);
-    }
-    return { ok: true };
   });
 
   // 运行时状态快照(面板错误接管态的首帧数据源;广播只覆盖后续变化)。
   ipcMain.handle('ghosts:runtime-states', () => ({ states: runtime.listStates() }));
 
   // 面板错误态的「重载意识」:清熔断记账 + 重新拉起沙箱。
-  ipcMain.handle('ghosts:reload', async (_event, id: unknown) => {
+  ipcMain.handle('ghosts:reload', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || id.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
     }
@@ -5903,6 +6579,19 @@ function broadcastGhostsChanged(
 //    永不并发两趟 fs 对账;失败仅 warn,幂等设计靠下一次广播/启动自愈。
 let skillReconcileInFlight = false;
 let skillReconcilePending = false;
+let skillReconcileRetryTimer: ReturnType<typeof setTimeout> | null = null;
+const SKILL_RECONCILE_RETRY_MS = 1_000;
+
+function scheduleGhostSkillReconcileRetry(): void {
+  skillReconcilePending = true;
+  if (skillReconcileRetryTimer) return;
+  skillReconcileRetryTimer = setTimeout(() => {
+    skillReconcileRetryTimer = null;
+    scheduleGhostSkillReconcile();
+  }, SKILL_RECONCILE_RETRY_MS);
+  skillReconcileRetryTimer.unref?.();
+}
+
 function scheduleGhostSkillReconcile(): void {
   skillReconcilePending = true;
   if (skillReconcileInFlight) return;
@@ -5911,11 +6600,36 @@ function scheduleGhostSkillReconcile(): void {
     try {
       while (skillReconcilePending) {
         skillReconcilePending = false;
+        // 每轮 capture owner + 持租约到本轮全部校验/删/建/扇出完成:全局技能根写的是
+        // owner-scoped 受管根的投影,不持租约时账号切换可以落在"A 的快照校验通过后、
+        // 链接创建前",把全局 ~/.agents/skills 指向 A 的批准快照 —— B 生效后主 Agent
+        // 有跨 owner 读取窗口。租约让 session teardown 的 waitForIdle 等本轮收尾;
+        // 边界期开轮直接抛,pending 保留,换号完成后的 ghosts:changed 广播重跑。
+        let releaseLease: (() => void) | null = null;
         try {
-          const result = await reconcileGhostSkillLinks({
-            ghosts: getGhostManager().list(),
-            brainRoot: brainRootDir(),
-          });
+          const owner = captureGhostMutationOwner();
+          // 已登出/无 owner 时不建全局技能投影：全局 ~/.agents/skills 中的旧链接
+          // 在账号 teardown 时已由 removeGhostSkillLinksForRoots 撤销，这里空跑只会
+          // 因为 ownerId 为空被 withGhostSkillProjectionReconcile 拒绝，且错误消息
+          // 不命中任何重试条件导致 pending 被清掉（永久不复跑），不如直接跳过。
+          if (!owner.dataOwnerId) {
+            skillReconcileInFlight = false;
+            return;
+          }
+          const result = await withGhostSkillProjectionReconcile(
+            owner.dataOwnerId,
+            async () => {
+              releaseLease = beginGhostMutation(owner);
+              return reconcileGhostSkillLinks({
+                ghosts: getGhostManager().list(),
+                brainRoot: brainRootDir(),
+                approvalStateRoot: getGhostManager().approvalStateRoot(),
+                assertOwnerStable: () => assertGhostSkillProjectionStableOwner(owner.dataOwnerId!),
+                validateApprovedSkillSnapshot: (ghost) =>
+                  getGhostManager().verifyApprovedSkillSnapshot(ghost),
+              });
+            },
+          );
           if (result.warnings.length > 0) {
             log.warn('ghost skill reconcile warnings', { warnings: result.warnings });
           }
@@ -5925,9 +6639,22 @@ function scheduleGhostSkillReconcile(): void {
             });
           }
         } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (
+            isAppSessionBoundaryPending()
+            || message.includes('projection is not stable')
+            || message.includes('boundary lock is busy or unavailable')
+          ) {
+            // 账号边界期:本轮不动盘,保留 pending 等换号完成后的广播重跑。
+            scheduleGhostSkillReconcileRetry();
+            break;
+          }
           log.warn('ghost skill reconcile failed', {
-            error: err instanceof Error ? err.message : String(err),
+            error: message,
           });
+        } finally {
+          const release = releaseLease as (() => void) | null;
+          release?.();
         }
       }
     } finally {

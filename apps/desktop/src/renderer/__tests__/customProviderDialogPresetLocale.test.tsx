@@ -142,11 +142,20 @@ describe('CustomProviderDialog preset locale ownership', () => {
       name: 'settings.providers.custom.presets.label',
     });
     fireEvent.click(trigger);
-    expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
+    const option = await screen.findByRole('option', { name: '繁體供應商' });
+    // 等 layout effect 把 childLayer 写进 childLayerRef。只等 option 出现不够:
+    // Windows CI 上 rAF 也可能早于 useLayoutEffect, 第一个 pointerDown 会关整表。
+    await waitFor(() => {
+      expect(option.isConnected).toBe(true);
+    });
+    await new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
+    await new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
 
     const scrim = container.firstElementChild as Element;
     fireEvent.pointerDown(scrim);
-    expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
+    });
     expect(onClose).not.toHaveBeenCalled();
 
     fireEvent.pointerDown(scrim);
@@ -174,6 +183,7 @@ describe('CustomProviderDialog preset locale ownership', () => {
     });
     fireEvent.click(trigger);
     expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
+    await new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
 
     fireEvent.keyDown(document, { key: 'Escape', ...eventInit });
     expect(screen.getByRole('option', { name: '繁體供應商' })).not.toBeNull();

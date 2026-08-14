@@ -120,6 +120,10 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
 import { createLogger } from '@/lib/logger';
+import {
+  markSessionAutomaticHistoryLoadCompleted,
+  resetSessionAutomaticHistoryLoadCompletion,
+} from '@/lib/sessionScrollStore';
 import { extractIpcError } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
@@ -911,6 +915,40 @@ interface RemoteOptimisticSendScope {
 }
 
 let nextRemoteOptimisticRecoverySequence = 0;
+
+/** 各 session「正在识别图片中」toast id（duration 0 手动 dismiss），按 sessionId 隔离，
+ *  避免不同会话/窗口的输出互相误 dismiss；agent 首个输出或失败收口时清理对应 session。 */
+const _visionBridgeToastIds = new Map<string, string>();
+
+/** 清理指定 session 的「正在识别图片中」toast（dismiss 找不到 id 时是 no-op，安全）。 */
+function dismissVisionBridgeToast(sessionId: string): void {
+  const id = _visionBridgeToastIds.get(sessionId);
+  if (id) {
+    toast.dismiss(id);
+    _visionBridgeToastIds.delete(sessionId);
+  }
+}
+
+/** 视觉桥用户提示事件 reason 枚举（识别中 / fallback / 不可用）。 */
+const VISION_BRIDGE_REASONS = new Set([
+  'vision-bridge-recognizing',
+  'vision-bridge-fallback',
+  'vision-bridge-unavailable',
+]);
+
+/**
+ * 视觉桥提示事件判定：reason 命中枚举 且 source 是 main 合成的 'vision-bridge' 专用来源
+ * 且 isTerminal === false。三重校验避免把普通 agent / 远程转发的 error（含伪造 reason）
+ * 误当视觉桥提示弹 toast，或吞掉真实终态错误。
+ */
+function isVisionBridgeReason(event: unknown): boolean {
+  if (!event || typeof event !== 'object') return false;
+  const { type, data, source } = event as { type?: string; data?: unknown; source?: unknown };
+  if (type !== 'error' || source !== 'vision-bridge') return false;
+  const reason = (data as { reason?: unknown } | null)?.reason;
+  if (typeof reason !== 'string' || !VISION_BRIDGE_REASONS.has(reason)) return false;
+  return (data as { isTerminal?: unknown } | null)?.isTerminal === false;
+}
 
 function captureRemoteOptimisticSendScope(
   sessionId: string,
@@ -2060,6 +2098,8 @@ function cancelRemoteOptimisticSendsForRemoteClear(
   clearBoundaryMs: number,
   opts: { historicalHydration?: boolean } = {},
 ): void {
+  // 历史 hydration 也会走到这里,但它只清理旧 optimistic 状态,并没有替换当前消息窗口;
+  // 因此只作废在途请求,不能把已经完成的自动补载误判成新窗口。
   bumpMessagesEpoch(sessionId);
   bumpInteractionReconcileEpoch(sessionId);
   invalidateInputProjectionRequests(sessionId);
@@ -3163,12 +3203,14 @@ function isBeforeOrAtRendererClearBoundary(sessionId: string, createdAt: string)
  * explicitly free a specific session.
  */
 function _purgeSession(sessionId: string): void {
+  // session 删除/归档/驱逐：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   discardPendingTextDelta(sessionId);
   discardDeferredStateWork(sessionId);
   clearIssueConfirmDraftsForSession(sessionId);
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
-  bumpMessagesEpoch(sessionId);
+  invalidateMessageHistoryWindow(sessionId);
   invalidateInputProjectionRequests(sessionId);
   // 删除 / 归档 / LRU 都是 renderer owner 边界。作废仍在附件物化或 composer
   // 交接中的迟到 continuation，且不写入 /clear 的历史时间边界。
@@ -3386,7 +3428,7 @@ function _demoteIdleSessions(): void {
     // 等于代际重置,必须 bump epoch 作废 in-flight 的翻页 / 跳转补齐,并由本次重置释放
     // 分页锁。漏 bump 的后果是 in-flight 那一页按 demote 前的游标提交,把一段脱离上下文
     // 的旧历史 merge 进空切片(或重开后的新切片),最近的消息反而缺席(#676 review)。
-    bumpMessagesEpoch(sessionId);
+    invalidateMessageHistoryWindow(sessionId);
     setState(sessionId, (s) => ({
       ...s,
       messages: [],
@@ -4197,7 +4239,7 @@ function isTerminalErrorData(data: unknown): boolean {
 
 function normalizeAgentTaskUpdate(
   data: unknown,
-  source?: 'claude-code' | 'codex' | 'pi',
+  source?: string,
 ): AgentTaskUpdate | null {
   if (!data || typeof data !== 'object') return null;
   const raw = data as Record<string, unknown>;
@@ -4528,6 +4570,7 @@ export function handleStreamEvent(
   };
   switch (event.type) {
     case 'text': {
+      dismissVisionBridgeToast(event.sessionId);
       const { text, isFinal, isFullText } = event.data as {
         text: string;
         isFinal: boolean;
@@ -4817,6 +4860,7 @@ export function handleStreamEvent(
     }
 
     case 'tool_use': {
+      dismissVisionBridgeToast(event.sessionId);
       const { toolUseId, toolName, input } = event.data as {
         toolUseId: string;
         toolName: string;
@@ -4913,6 +4957,9 @@ export function handleStreamEvent(
     }
 
     case 'done': {
+      // turn 终态兜底清理：done 时清掉该 session 的「正在识别图片中」toast，
+      // 即使没有 text/tool_use 也不残留（视觉桥要么已结束要么被放弃）。
+      dismissVisionBridgeToast(event.sessionId);
       // silent-stop:上游空内容消息静默收尾,main 守卫 1.5s 后会自动续跑(或弹耗尽横幅)。
       // 保持 isRunning=true,避免 renderer 的 500ms 完成去抖触发假完成通知。守卫非续跑
       // 决策通过 exhausted terminal error 广播到达 renderer,那时才正确设 isRunning=false。
@@ -5032,11 +5079,40 @@ export function handleStreamEvent(
         message: errMsgRaw,
         reason,
         errorStatus,
+        imageCount,
       } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
+        imageCount?: number;
       };
+      // 视觉桥用户提示（正在识别 / fallback / 不可用）：toast 展示，完全不改 turn 状态
+      // （不设 recoverableError、不阻断开流），零阻断。用 isVisionBridgeReason 三重校验
+      // （source==='vision-bridge' + isTerminal:false + reason 枚举）——普通 agent / 远程
+      // 转发的同名 reason error 不通过校验，继续走普通 error 处理（不吞真实错误）。
+      if (isVisionBridgeReason(event)) {
+        if (reason === 'vision-bridge-recognizing') {
+          const count = typeof imageCount === 'number' && imageCount > 0 ? imageCount : 1;
+          // 先清旧 id 再存新：连续 recognizing（多图/多 turn）不残留上一张的 loading toast。
+          dismissVisionBridgeToast(event.sessionId);
+          _visionBridgeToastIds.set(
+            event.sessionId,
+            toast.info(i18n.t('chat.visionBridge.analyzing', { count }), { duration: 0 }),
+          );
+          return state;
+        }
+        // fallback / unavailable：识别结束（失败或降级），清掉对应 session 的 loading toast，
+        // 避免「正在识别中」与「已回退」同时挂着。
+        dismissVisionBridgeToast(event.sessionId);
+        if (reason === 'vision-bridge-fallback') {
+          toast.warning(i18n.t('chat.visionBridge.fallback'), { duration: 5000 });
+          return state;
+        }
+        if (reason === 'vision-bridge-unavailable') {
+          toast.warning(i18n.t('chat.visionBridge.unavailable'), { duration: 6000 });
+          return state;
+        }
+      }
       const safeErrMsgRaw = redactSensitiveText(errMsgRaw);
       const safeErrMsg =
         typeof errorStatus === 'number' &&
@@ -5060,6 +5136,9 @@ export function handleStreamEvent(
                 ? i18n.t('logic.errors.codexAutoReviewUnavailable')
                 : decodeRemoteErrorMessage(safeErrMsg);
       const isTerminalError = isTerminalErrorData(event.data);
+      // 终态错误 = turn 收口（含失败）：清掉该 session 的「正在识别图片中」toast，
+      // 避免视觉桥未输出就终结时 loading toast 残留（done/abort/terminal error 兜底）。
+      if (isTerminalError) dismissVisionBridgeToast(event.sessionId);
       if (!isTerminalError) {
         // Codex app-server 的有限重连进度是进行态，不是用户需要处理的错误。
         // 复用 Cindy 自动接管活动行的视觉通道，固定 clientId 原地更新 N/M；
@@ -5760,7 +5839,7 @@ type MakerEventPayload = {
   event?: {
     type: string;
     data: unknown;
-    source?: 'claude-code' | 'codex' | 'pi';
+    source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
     agentMeta?: Record<string, unknown>;
     turnContinuationId?: number;
   };
@@ -5808,7 +5887,7 @@ type PendingTextDeltaBatch = {
   text: string;
   dataOwner: DataOwnerGeneration;
   ingress: LiveIngressContext;
-  source?: 'claude-code' | 'codex' | 'pi';
+  source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
   persistId?: string;
   agentMeta?: Record<string, unknown>;
 };
@@ -6269,6 +6348,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     const persistId = payload.persistId;
     const resolvedContent = payload.resolvedContent;
 
+    // 视觉桥提示只信本机 main 直发：远端（device-link 转发）入站的 source:'vision-bridge'
+    // 事件一律丢弃——source 是 main 合成标记不是防伪签名，已配对远端可伪造；不转发远端
+    // 视觉桥提示（它属于发起会话所在设备的本地 UI 反馈）。
+    if (ingress.remoteDeviceId && isVisionBridgeReason(event)) {
+      return;
+    }
+
     if (isTextDeltaEvent(event)) {
       enqueueTextDeltaPayload(sessionId, event, persistId, ingress);
       return;
@@ -6279,7 +6365,9 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // session_id: 老链路是单独 IPC channel, 新链路融进 maker:event (Claude / Codex 同源)
     if (event.type === 'session_id') {
       const sdkSessionId = typeof event.data === 'string' ? event.data : undefined;
-      if (!sdkSessionId) return;
+      // 轮 21-W1 HIGH:与 maker-core 侧同款 fail-closed —— 空串/超长/含控制字符
+      // 的 sessionId 不得写入内存与持久化(resume 权威键被污染会跨会话误路由)。
+      if (!sdkSessionId || sdkSessionId.length > 4096 || /[\r\n\0]/.test(sdkSessionId)) return;
       const current = getOrCreateState(sessionId);
       if (current.sdkSessionId === sdkSessionId) return;
       setState(sessionId, (s) => ({ ...s, sdkSessionId }));
@@ -6484,6 +6572,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       );
       // MEM-OPT-1: trim non-active sessions after turn completes
       queueMicrotask(() => _trimMessagesIfNeeded(sessionId));
+    }
+    // 视觉桥用户提示事件（source==='vision-bridge' + reason 枚举 + isTerminal:false）：
+    // 已在 dispatchStreamEventPayload 的 case 'error' 分流为 toast，不进 error-banner /
+    // recoverableError 链路（否则会被误渲染成「SDK error surfaced」错误横幅）。三重校验
+    // 保证不吞真实终态错误、不把普通 agent/远程 error 误当视觉桥提示。
+    if (event.type === 'error' && isVisionBridgeReason(event)) {
+      return;
     }
     if (event.type === 'error') {
       const errData = (event.data as { message?: string; sdkError?: string }) ?? {};
@@ -8991,6 +9086,17 @@ function bumpMessagesEpoch(sessionId: string): void {
   _messagesEpoch.set(sessionId, (_messagesEpoch.get(sessionId) ?? 0) + 1);
 }
 
+/**
+ * 作废当前逻辑历史窗口:既让在途分页不能提交回旧窗口,也让下一次挂载重新获得自动
+ * 补载预算。在真正替换当前窗口的路径中,纯内存 trim 是唯一例外——它正是要保留
+ * “这个窗口已经自动补过”的事实,避免切回会话后重复拉同一段历史,所以仍只调用
+ * bumpMessagesEpoch。
+ */
+function invalidateMessageHistoryWindow(sessionId: string): void {
+  bumpMessagesEpoch(sessionId);
+  resetSessionAutomaticHistoryLoadCompletion(sessionId);
+}
+
 function isCurrentHistoryFetch(
   sessionId: string,
   token: number,
@@ -9603,7 +9709,7 @@ function ensureInitialMessages(sessionId: string): void {
 function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean }): void {
   discardPendingTextDelta(sessionId);
   // 代际递增:作废 in-flight 的 loadOlderMessages 追页窗口(见 _messagesEpoch 注释)。
-  bumpMessagesEpoch(sessionId);
+  invalidateMessageHistoryWindow(sessionId);
   invalidateHistoryFetch(sessionId);
   // Drop the in-flight guard so ensureInitialMessages can run again.
   _historyFetchInFlight.delete(sessionId);
@@ -9674,7 +9780,7 @@ function removeMessagesByClientIds(
   invalidateRemoteMessageCache(sessionId);
   discardPendingTextDelta(sessionId);
   // 作废删除提交前发起的历史分页，避免旧页响应把已经清除的行重新 merge 回来。
-  if (options.invalidateHistory !== false) bumpMessagesEpoch(sessionId);
+  if (options.invalidateHistory !== false) invalidateMessageHistoryWindow(sessionId);
   setState(sessionId, (s) => {
     const removedMessages = s.messages.filter((message) => deletedClientIds.has(message.clientId));
     const messages = s.messages.filter((message) => !deletedClientIds.has(message.clientId));
@@ -9744,7 +9850,7 @@ function dropMessagesFromClientId(sessionId: string, clientId: string): void {
   // 路径,同样必须作废 in-flight 的分页 / 跳转补齐。漏 bump 的后果是它们把 rewind
   // 刚软删掉的行当作有效响应 merge 回渲染层(#676 review)。clientId 不在列表时
   // 也照 bump:代价只是让 in-flight 分页重新取一次,比漏作废安全。
-  bumpMessagesEpoch(sessionId);
+  invalidateMessageHistoryWindow(sessionId);
   setState(sessionId, (s) => {
     const idx = s.messages.findIndex((m) => m.clientId === clientId);
     // 目标已经不在切片里(reload / 重开把它清掉了)也必须放锁:上面 bump 过 epoch,
@@ -9997,12 +10103,10 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
       //
       // historyWindowHasIsland 按"是否保留了晚到的本地行"决定清不清,见下方 lateArrivals。
       const isContiguous = reachedKnownWindow;
-      // 代际 bump 与分页锁释放都**只在重建真正提交后**才做。原先在 setState 之前先 bump:
-      // 一旦更新器里的 isStreaming 守卫(分页期间开始了新 turn)否掉这次重建,窗口没换、
-      // 却已经作废掉一个无关的 in-flight 跳转 / 翻页、还替它放了锁;更晚启动的对账也会
-      // 因为这个白 bump 被当成陈旧丢掉(#676 review codex P1)。setState 是同步的,
-      // 把 bump 挪到它之后不引入任何可观察的中间态。
-      let didRebuild = false;
+      // 代际 bump 与分页锁释放都**只在重建确定提交时**做。不能放在 setState 外面提前 bump:
+      // 更新器里的 isStreaming 守卫可能否掉重建。也不能等 setState 通知完成后才 bump:
+      // MessageStream 要在同一次通知里观察到窗口已失效、重置已挂载的自动补载预算。
+      // updater 同步执行且下面所有早退都已经结束,在 return 新 state 前失效正好满足两边。
       setState(sessionId, (s) => {
         // promise 期间可能已开始新 turn(streaming)→ 放弃本次合并,turn 结束会再触发。
         // force 时(stall 看门狗已确认被控端 not-running)放行:此处 isStreaming 是卡死残留。
@@ -10036,7 +10140,7 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
         // 无缺失且无权威字段变化 → 不换引用(视同已应用)。
         if (messages === s.messages) return s;
         if (isContiguous) return { ...s, messages };
-        didRebuild = true;
+        invalidateMessageHistoryWindow(sessionId);
         const oldestRow = oldestMessageRow(collected, 'newest-first');
         // 保留下来的晚到行是否**可证明**与新窗口连续:
         //  - 比权威窗口最新一行还新 → 就是分页期间的 live push,接在尾部,连续;
@@ -10094,7 +10198,6 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
           historyWindowHasIsland: hasDetachedArrival,
         };
       });
-      if (didRebuild) bumpMessagesEpoch(sessionId);
     } finally {
       // 消息路径的早返 / 异常都要等交互重建落定;交互失败会让 run reject(替换原结果),
       // 语义正确:本代不完成。
@@ -10147,21 +10250,26 @@ function finalizeStuckRemoteTurn(sessionId: string): void {
  */
 const MAX_LOAD_OLDER_PAGES = 10;
 
-function loadOlderMessages(sessionId: string): void {
+/**
+ * 加载并提交更早的历史。返回 true 仅表示当前缓存窗口确实向前推进;
+ * 行首守卫、空页、全程失败、代际作废和提交异常都返回 false。
+ * automatic=true 时只在推进成功后耗尽该缓存窗口的跨 mount 自动补载预算。
+ */
+function loadOlderMessages(sessionId: string, automatic = false): Promise<boolean> {
   const state = getOrCreateState(sessionId);
-  if (state.isLoadingMore || !state.hasMoreMessages) return;
+  if (state.isLoadingMore || !state.hasMoreMessages) return Promise.resolve(false);
 
   let firstPageOpts: { limit: number; before?: string; beforeTs?: number };
   if (state.oldestMessageId) {
     firstPageOpts = { limit: 50, before: state.oldestMessageId };
   } else if (state.messages.length > 0) {
     const oldest = state.messages[0];
-    if (!oldest.createdAt) return;
+    if (!oldest.createdAt) return Promise.resolve(false);
     const ts = new Date(oldest.createdAt).getTime();
-    if (!Number.isFinite(ts)) return;
+    if (!Number.isFinite(ts)) return Promise.resolve(false);
     firstPageOpts = { limit: 50, beforeTs: ts };
   } else {
-    return;
+    return Promise.resolve(false);
   }
 
   setState(sessionId, (s) => ({ ...s, isLoadingMore: true }));
@@ -10173,7 +10281,7 @@ function loadOlderMessages(sessionId: string): void {
   // 远程会话(device-link)往上翻页加载更多历史:会话与消息只在被控端,必须走 origin-aware
   // 的 listMessagesFor(本地会话回落 messageService.list),否则查控制端空库 → 旧历史加载为空。
   // 与初始加载 / backfill(本文件其余处)保持一致。
-  void (async () => {
+  return (async () => {
     try {
       const collected: Message[] = [];
       // 跨页按 clientId 去重:mergeMessages 只对"新批 vs 已有"去重,不去重批内
@@ -10220,7 +10328,7 @@ function loadOlderMessages(sessionId: string): void {
       // 重置之后,新代际很可能已经开始自己的分页并重新置了锁 —— 这里再无条件清一次,
       // 就是把别人的锁放掉,让后续滚动 / 跳转并发去抢同一个游标,重新制造游标回退与
       // 重复分页(#676 review)。谁重置谁释放,被作废的请求一律不碰。
-      if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return;
+      if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
 
       if (collected.length === 0) {
         setState(sessionId, (s) => ({
@@ -10229,17 +10337,28 @@ function loadOlderMessages(sessionId: string): void {
           hasMoreMessages: hasMore ? s.hasMoreMessages : false,
           isLoadingMore: false,
         }));
-        return;
+        return false;
       }
 
       const mapped = mapServerMessages(collected);
-      setState(sessionId, (s) => ({
-        ...s,
-        messages: mergeMessages(mapped, s.messages, {}, 'newest-first'),
-        oldestMessageId: oldestId ?? s.oldestMessageId,
-        hasMoreMessages: hasMore,
-        isLoadingMore: false,
-      }));
+      let didAdvanceWindow = false;
+      setState(sessionId, (s) => {
+        const messages = mergeMessages(mapped, s.messages, {}, 'newest-first');
+        const nextOldestMessageId = oldestId ?? s.oldestMessageId;
+        didAdvanceWindow =
+          messages.length > s.messages.length || nextOldestMessageId !== s.oldestMessageId;
+        return {
+          ...s,
+          messages,
+          oldestMessageId: nextOldestMessageId,
+          hasMoreMessages: hasMore,
+          isLoadingMore: false,
+        };
+      });
+      if (didAdvanceWindow && automatic) {
+        markSessionAutomaticHistoryLoadCompleted(sessionId);
+      }
+      return didAdvanceWindow;
     } catch (err) {
       // map/merge/commit 阶段兜底(subagent review P1):任何异常都必须复位
       // isLoadingMore,否则行首守卫会让该会话永久无法再翻页(spinner 卡死)。
@@ -10252,6 +10371,7 @@ function loadOlderMessages(sessionId: string): void {
       if ((_messagesEpoch.get(sessionId) ?? 0) === epochAtStart) {
         setState(sessionId, (s) => ({ ...s, isLoadingMore: false }));
       }
+      return false;
     }
   })();
 }
@@ -12190,6 +12310,9 @@ function stopSession(
   },
 ): void {
   if (!sessionId) return;
+  // Stop/abort 乐观终态：立即清掉该 session 的「正在识别图片中」toast，
+  // 否则 duration:0 的 loading toast 会残留到下一次同 session 输出才消失。
+  dismissVisionBridgeToast(sessionId);
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
   // Stop 的乐观终态必须立即作废此前同源查询与旧操作；不能等响应回来，
   // 否则旧结果会在 abort 往返期间把刚清掉的 owner 重新写回。先推进再捕获，
@@ -12542,6 +12665,8 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
 }
 
 async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string): Promise<void> {
+  // /clear 清空会话：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   // Pin the clear lifecycle to the last known device before any await. The
   // mirror is intentionally cleared below, so live origin lookup is no longer
   // reliable for either clearSession or closeSession.
@@ -12550,7 +12675,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
   // Invalidate old history/projection operations before the first network await.
   // The clear guard itself must be the new authority generation, otherwise an
   // older projection can win the race and reinsert pre-clear queue state.
-  bumpMessagesEpoch(sessionId);
+  invalidateMessageHistoryWindow(sessionId);
   bumpInteractionReconcileEpoch(sessionId);
   supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
   if (remoteDeviceId) {
@@ -13411,12 +13536,23 @@ async function setPlanMode(sessionId: string, enabled: boolean): Promise<void> {
       ? s
       : { ...s, planModeEnabled: enabled, planModeRev: s.planModeRev + 1 },
   );
+  // 轮 40-w4-t17 HIGH-1:runtime setPlanMode 失败必须 fail-closed —— 旧实现只
+  // catch 记日志, 继续持久化 DB, UI/DB 显示已开启但 PI runtime 实际未进入
+  // plan mode(状态分叉, 下一条消息以普通模式执行)。
   const runtimePush = window.electronAPI.maker
     .setPlanMode(sessionId, enabled)
     .catch((err: unknown) => {
-      log.warn('setPlanMode IPC failed:', err);
+      // 回滚乐观值, 不持久化, UI 不谎报。
+      setState(sessionId, (s) =>
+        s.planModeEnabled === enabled
+          ? { ...s, planModeEnabled: previous, planModeRev: s.planModeRev + 1 }
+          : s,
+      );
+      log.warn('setPlanMode runtime push failed — plan mode not applied', err);
+      throw err;
     });
   try {
+    await runtimePush;
     await sessionService.update(sessionId, { planModeEnabled: enabled });
   } catch (err) {
     // 持久化失败 → 回滚乐观值(store + runtime 尽力), UI 不谎报已开启。
@@ -13539,6 +13675,8 @@ function setAskUserDraft(sessionId: string, next: AskUserDraft | null): void {
  */
 function closeSessionQuery(sessionId: string): void {
   if (!sessionId) return;
+  // 会话关闭：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   makerApiFor(sessionId)
     .closeSession(sessionId)
     .catch((err) => log.warn('maker.closeSession failed:', err));
@@ -13773,12 +13911,14 @@ function getAgentSwitchIntentRev(sessionId: string): number {
 function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
+  // 轮 42 P1(codex-connector):pi 遗漏 —— main 的 performSessionAgentSwitch 与
+  // AgentSwitchIntentRecord.target 都支持 'pi', 这里收窄成 cc/codex 会把
+  // 等待下轮的 Pi switch 意图归一化成 null, pending 状态在 renderer 丢失。
   if (
-    item.targetAgentKind !== 'claude-code' &&
-    item.targetAgentKind !== 'codex' &&
-    item.targetAgentKind !== 'pi'
-  )
-    return null;
+    item.targetAgentKind !== 'claude-code'
+    && item.targetAgentKind !== 'codex'
+    && item.targetAgentKind !== 'pi'
+  ) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
   // providerId 缺失按 null(与 main projectPendingAgentSwitchIntent 的 `?? null` 对齐);
   // 只有出现非 string / 非空值的脏值才判非法,避免协议演进时静默丢掉合法意图。

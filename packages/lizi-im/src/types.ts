@@ -244,7 +244,12 @@ export interface IMMessageEvent {
 
 export interface IMCardActionEvent {
   channelName: string;
-  /** open_id of the user who pressed the button. */
+  /**
+   * Identity of the user who pressed the button. For group cards on lane
+   * channels (feishu) this is the card's lane id `g/{chatId}[/{threadId}]` —
+   * transport resolves it from a messageId→lane registry so card actions share
+   * the same identity key as inbound messages; p2p cards keep the open_id.
+   */
   senderId: string;
   /** Chat where the card lives (p2p only). */
   chatId: string;

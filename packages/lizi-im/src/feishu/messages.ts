@@ -21,14 +21,9 @@ export const messages = {
     strangerNotice:
       '👋 我是一位主人的个人 Cindy 助理，只响应主人本人的指令~\nI am a personal Cindy assistant and only respond to my owner.',
     /**
-     * 群主流 @bot 时以触发消息为根开话题的开场白(reply_in_thread)。此后
-     * 本会话所有回复都落在话题里, 群主流不被刷屏; 每个话题是独立 session。
-     */
-    threadOpener: '🧵 开个话题聊这条, 回复都在里面 ~',
-    /**
-     * 开场白已发出但话题 id 无法恢复、撤回也失败时的兜底提示 — 回复落在
-     * 开场白所在话题内, 本轮不起 turn(降级群 lane 会一边留着开场白一边
-     * 把回答刷进群主流)。per-opener 冷却防重投事件重复提示。
+     * 开场白卡已发出但话题 id 无法恢复、撤回也失败时的兜底提示 — 回复落在
+     * 开场白所在话题内, 本轮不起 turn(降级群 lane 会一边留着「思考中」的
+     * 开场白卡一边把回答刷进群主流)。per-opener 冷却防重投事件重复提示。
      */
     threadOrphanNotice: '开话题出了点小问题, 这条没能处理, 麻烦再 @ 我一次~',
   },

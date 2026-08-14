@@ -8,6 +8,7 @@
     "emptyDefault": "暂无可用模型",
     "loadingDefault": "正在加载模型…",
     "subscriptionBadge": "订阅",
+    "subscriptionBadgeCompact": "订阅",
     "backToModels": "返回模型列表",
     "agentSwitchHint": "选择模型后，下一条消息将切换到 {{agent}}",
     "crossAgentEmptyHint": "请先在被控设备连接 {{agent}} 的模型来源",
@@ -24,7 +25,16 @@
     "fastMode": "快速模式",
     "fastModeAccessibility": "快速模式 {{model}}",
     "reasoningEffort": "推理强度",
-    "reasoningEffortAccessibility": "推理强度 {{label}}"
+    "reasoningEffortAccessibility": "推理强度 {{label}}",
+    "effortLevels": {
+      "minimal": "最小",
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "xhigh": "超高",
+      "max": "最高",
+      "ultra": "极致"
+    }
   },
   "agentSwitch": {
     "browseAccessibility": "浏览 {{agent}} 模型",

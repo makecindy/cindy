@@ -21,7 +21,14 @@ export function useSignInToCindy(): () => Promise<void> {
   const navigate = useNavigate();
 
   return useCallback(async () => {
-    if (mode === 'local') await exitLocalMode();
+    if (mode === 'local') {
+      try {
+        await exitLocalMode();
+      } catch {
+        // The login route is also the recovery surface when the durable owner
+        // transition is pending. Do not leave the sign-in action as a no-op.
+      }
+    }
     navigate('/login');
   }, [mode, exitLocalMode, navigate]);
 }

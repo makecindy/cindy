@@ -26,18 +26,18 @@
  *         /open-apis/bot/v3/info after connect; unknown → drop all group msgs)
  *       → drop if no owner bound yet (群里绝不 TOFU 认主 — 钉钉同款)
  *       → non-owner @bot → polite notice (per-user cooldown), no turn
- *       → owner @bot in a topic → topic lane `g/{chatId}/{threadId}`
- *       → owner @bot in main stream → openThread: 以触发消息为根
- *         reply_in_thread 开话题(对同一触发消息幂等 — 重投事件复用同一话题),
- *         事件直接进新话题 lane — 每个话题是独立 session, 回复全落话题里,
- *         群主流不被刷屏; 事件带 groupContextLane 让群历史上下文仍按群主流
- *         拉取; 开话题失败降级回群 lane `g/{chatId}` 旧行为; 开场白孤立
- *         (话题 id 不可恢复且撤回失败)时不起 turn, 回复开场白说明失败
- *       → 处理途中的 await(附件下载/开话题)之后复查连接门禁 — 断开/换账号
- *         的旧连接轮次不得漏进新连接(锚点污染/跨账号出站)
- *       → 事件级去重: 同一 message_id 只处理一次(重投丢弃; 连接换代导致的
- *         中途丢弃会移除标记让重投可重新处理)
- *       → strip mention placeholders, record reply anchor, emit IMMessageEvent
+ *       → owner @bot → strip mention placeholders, senderId = lane id
+ *         `g/{chatId}[/{threadId}]`, speaker = owner, record reply anchor,
+ *         emit IMMessageEvent
+ *
+ *   入站统一门禁(所有 chat_type 生效):
+ *       → 重推去重: 同一 (appId, message_id) 只处理一次(见 claimInboundMessage)
+ *       → 连接换代门禁: 处理途中的 await(附件下载/开话题)之后复查
+ *         isActiveConnection(generation, botAppId) — 断开/换账号的旧连接轮次
+ *         直接丢弃, 不 push 锚点、不 emit, 不会路由进新账号的 client/session
+ *       → 群主流 @ 开话题三态(opened / degraded / orphaned):
+ *         opened → 新话题 lane; degraded → 降级群 lane 旧行为; orphaned →
+ *         回复开场白(落回话题)说明失败并放弃本轮, 不降级刷群主流
  *
  *   card.action.trigger(_v1)
  *     → drop if sender not in whitelist
@@ -92,42 +92,6 @@ const strangerNoticeAt = new Map<string, number>();
 const ORPHAN_NOTICE_COOLDOWN_MS = 60_000;
 const orphanNoticeAt = new Map<string, number>();
 
-/**
- * 事件级去重: 飞书可能重投同一条消息(WS 重连/ack 超时), 同一 message_id 只
- * 处理一次 — openThread 的幂等只保证不重复开话题, 不去重的话重复投递仍会对
- * 同一消息启动两次 agent turn(锚点双份、两份回答)。连接换代导致的中途丢弃
- * 会移除标记, 让重投消息能在新连接上重新处理。message_id 平台内唯一, 不随
- * stop 清空(换代不会重放别的租户的消息 id)。
- */
-const SEEN_MESSAGE_TTL_MS = 10 * 60_000;
-const SEEN_MESSAGE_MAX_ENTRIES = 500;
-const seenMessageAt = new Map<string, number>();
-
-function markMessageSeen(messageId: string): void {
-  seenMessageAt.set(messageId, Date.now());
-  if (seenMessageAt.size <= SEEN_MESSAGE_MAX_ENTRIES) return;
-  // 超过上限时剪掉过期条目; 仍超就按最旧插入序淘汰(内存有界)。
-  const now = Date.now();
-  for (const [id, ts] of seenMessageAt) {
-    if (now - ts > SEEN_MESSAGE_TTL_MS) seenMessageAt.delete(id);
-  }
-  while (seenMessageAt.size > SEEN_MESSAGE_MAX_ENTRIES) {
-    const oldest = seenMessageAt.keys().next().value;
-    if (typeof oldest !== 'string') break;
-    seenMessageAt.delete(oldest);
-  }
-}
-
-function wasMessageSeen(messageId: string): boolean {
-  const ts = seenMessageAt.get(messageId);
-  if (ts === undefined) return false;
-  if (Date.now() - ts > SEEN_MESSAGE_TTL_MS) {
-    seenMessageAt.delete(messageId);
-    return false;
-  }
-  return true;
-}
-
 async function sendOrphanOpenerNotice(openerMessageId: string): Promise<void> {
   const log = getLog();
   const last = orphanNoticeAt.get(openerMessageId) ?? 0;
@@ -139,6 +103,51 @@ async function sendOrphanOpenerNotice(openerMessageId: string): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`[feishu/wsClient] orphan opener notice failed (non-fatal): ${msg}`);
   }
+}
+
+/**
+ * 入站消息去重 —— 飞书事件是「至少送达一次」: 服务端等不到我们的 ACK 就会把
+ * 同一条消息**原样再推一遍**(同一个 message_id)。没有这道闸, 重推会被当成一条
+ * 新消息跑完整一轮 turn: 群里多出一条 bot 回复 + 多花一次模型调用。
+ *
+ * 实测(2026-08-14 14:37, 本机网络抖动、relay 同时断线重连): 话题里只有一条
+ * 用户消息, 却出现两条 bot 回复; 日志里同一句 9 字消息进了两次 processOne。
+ *
+ * 设计要点:
+ *   - 按 (appId, message_id) 记账 —— 换 bot 不会互相串; 用户真的重复发一遍是
+ *     **另一个** message_id, 不会被误杀。
+ *   - 认领动作必须同步完成(检查 + 落账之间不许有 await), 否则两个并发帧会双双
+ *     通过。调用点也因此放在 handleIncomingMessage 的第一个 await 之前。
+ *   - **不随 stop/start 或重连清空**: 重推恰恰发生在断连重连前后, 那时清空等于
+ *     闸门在最需要它的时刻失效。只按 TTL + 容量淘汰。
+ */
+const INBOUND_DEDUPE_TTL_MS = 10 * 60_000;
+const INBOUND_DEDUPE_MAX_ENTRIES = 1_000;
+const seenInboundMessages = new Map<string, number>();
+
+/** true = 本进程没见过这条消息(可以处理); false = 重推, 应当丢弃。 */
+function claimInboundMessage(appId: string, messageId: string): boolean {
+  const key = `${appId}:${messageId}`;
+  const now = Date.now();
+  const seenAt = seenInboundMessages.get(key);
+  if (seenAt !== undefined && now - seenAt < INBOUND_DEDUPE_TTL_MS) return false;
+  // delete + set: Map 对已存在的 key 保留旧插入序, 过期条目刷新后必须重新排到
+  // 队尾, 否则下面按插入序淘汰会先砍掉刚刷新的那条。
+  seenInboundMessages.delete(key);
+  seenInboundMessages.set(key, now);
+  for (const [k, ts] of seenInboundMessages) {
+    const withinBudget = seenInboundMessages.size <= INBOUND_DEDUPE_MAX_ENTRIES;
+    // 插入序 = 时间序, 最老的都没过期且没超量 ⇒ 后面的也不用看。
+    if (withinBudget && now - ts < INBOUND_DEDUPE_TTL_MS) break;
+    if (k === key) continue;
+    seenInboundMessages.delete(k);
+  }
+  return true;
+}
+
+/** 测试注入口 — 生产代码不要调用(生产语义就是跨 stop/start 不清空)。 */
+export function resetInboundDedupeForTest(): void {
+  seenInboundMessages.clear();
 }
 
 const DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 1500;
@@ -215,11 +224,6 @@ async function fetchBotOpenId(): Promise<void> {
 /** 测试注入口 — 生产代码不要调用。 */
 export function setBotOpenIdForTest(openId: string | null): void {
   botOpenId = openId;
-}
-
-/** 测试注入口 — 清空事件级去重标记。生产代码不要调用。 */
-export function resetSeenMessagesForTest(): void {
-  seenMessageAt.clear();
 }
 
 const FEISHU_CONFLICT_ERROR = '该 App 已被另一台设备占用 (exceed_conn_limit)';
@@ -673,13 +677,16 @@ async function handleIncomingMessage(
   const rawContent = data.message.content ?? '';
   if (!senderOpenId || !messageId || !chatId) return;
 
-  // 事件级去重(先于一切业务门): 重投同一条消息直接丢弃 — openThread 幂等只
-  // 防重复开话题, 不去重则重复投递仍会对同一消息启动两次 agent turn。
-  if (wasMessageSeen(messageId)) {
-    log.info('[feishu/wsClient] drop duplicate message delivery');
+  // 重推闸门 —— 必须在第一个 await 之前同步认领(见 claimInboundMessage), 也必须
+  // 排在所有副作用(开话题 / 打表情 / 下附件 / 陌生人提示)之前: 重推一旦漏过去,
+  // 这些动作都会再做一遍。
+  if (!claimInboundMessage(botAppId, messageId)) {
+    log.info(
+      `[feishu/wsClient] drop duplicate inbound message ...${messageId.slice(-8)} ` +
+        '(feishu re-push; already handled)',
+    );
     return;
   }
-  markMessageSeen(messageId);
 
   if (isGroup) {
     // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
@@ -768,8 +775,6 @@ async function handleIncomingMessage(
   // 入站门禁复查: 附件下载等 await 期间连接可能已 stop()/换账号换代 — 不复查
   // 会把旧连接的轮次推进新连接的编排状态(锚点污染/跨账号出站)。
   if (!isActiveConnection(generation, botAppId)) {
-    // 首轮未 emit 就丢弃 — 移除去重标记, 让重投消息能在新连接上重新处理。
-    seenMessageAt.delete(messageId);
     log.info('[feishu/wsClient] drop inbound message: connection changed during processing');
     return;
   }
@@ -786,26 +791,32 @@ async function handleIncomingMessage(
       laneUserId = encodeLaneUserId(chatId, incomingThreadId);
       outbound.pushReplyAnchor(laneUserId, messageId);
     } else {
-      const opener = await outbound.openThread(messageId, transportMessages.group.threadOpener);
+      // 群主流的 @ 恒开新话题 —— 群里存在 /ctr 接管也不例外: 接管严格按话题
+      // 记账(binding 的 userId 就是话题 lane), 群主流不是任何接管的入口。
+      // 拿接管话题去截流群主流消息会让「群里随便 @ 一句」都掉进那条被接管的
+      // 会话(用户感知: 不管在哪问, 工作目录都是绑定那个项目)。要跟接管会话
+      // 说话就在那个话题里说。
+      const opener = await outbound.openThread(messageId);
       // 开话题是一次跨网络的 await — 期间用户可能断开/换账号: 复查门禁,
       // 防止旧连接的锚点与事件漏进新连接(或已停机的编排状态)。
       if (!isActiveConnection(generation, botAppId)) {
-        // 首轮未 emit 就丢弃 — 移除去重标记, 让重投消息能在新连接上重新处理。
-        seenMessageAt.delete(messageId);
         log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
         return;
       }
       if (opener.kind === 'opened') {
         laneUserId = encodeLaneUserId(chatId, opener.threadId);
         outbound.pushReplyAnchor(laneUserId, opener.messageId);
+        // 开场白卡是本轮流式卡: streamingText.start 认领后直接 patch,
+        // 话题里不会多出一条占位消息。
+        outbound.pushPatchableOpener(laneUserId, opener.messageId);
         // 上下文取数 lane 与路由 lane 分离: 新话题是空的, 群历史前缀仍按
         // 触发时所在的群主流拉取(「总结上面」等依赖上文的消息才能拿到
         // 群主流历史), 由 host adapter 消费(IMMessageEvent.groupContextLane)。
         groupContextLane = { chatId, threadId: '' };
       } else if (opener.kind === 'orphaned') {
-        // 开场白已发出但话题 id 恢复失败、撤回也失败: 降级群 lane 会一边
-        // 留着「回复都在里面」的开场白、一边把回答刷进群主流。不起 turn,
-        // 回复开场白(落回话题)说明失败 — 宁可丢一轮, 不误导 + 不刷屏。
+        // 开场白卡已发出但话题 id 恢复失败、撤回也失败: 降级群 lane 会一边
+        // 留着「思考中」的开场白卡、一边把回答刷进群主流。不起 turn, 回复
+        // 开场白(落回话题)说明失败 — 宁可丢一轮, 不误导 + 不刷屏。
         log.error(
           `[feishu/wsClient] openThread orphaned opener=...${opener.openerMessageId.slice(-8)} — turn dropped with in-topic notice`,
         );
@@ -851,6 +862,16 @@ async function handleCardAction(data: unknown): Promise<unknown> {
   try {
     const event = parseCardAction({ raw: data });
     if (event) {
+      // 群卡片的回调 senderId 归一成发卡 lane(与消息侧 /ctr 锁、接管 binding
+      // 的键一致, 否则锁永远清不掉);私聊卡 / 改投 DM 卡没有登记, 保持
+      // operator.open_id。白名单校验仍以 operator.open_id 为准(parser 内)。
+      const lane = outbound.resolveCardLane(event.messageId, event.chatId);
+      if (lane) {
+        event.senderId = lane;
+        log.info(
+          `[feishu/wsClient] card action sender normalized to lane ...${lane.slice(-8)}`,
+        );
+      }
       // Keep the Feishu callback path short: card handlers often patch the
       // same message, and doing that before the action ACK returns can race
       // the client-side card action state. Dispatch on the next tick so the

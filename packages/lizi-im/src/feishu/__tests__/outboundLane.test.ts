@@ -162,13 +162,13 @@ describe('feishu outbound lane routing', () => {
     );
   });
 
-  it('openThread replies with reply_in_thread + uuid and returns opened', async () => {
-    const res = await outbound.openThread('om_root1', '开个话题');
+  it('openThread replies with a patchable card + reply_in_thread + uuid, returns opened', async () => {
+    const res = await outbound.openThread('om_root1');
     expect(larkMocks.reply).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: 'om_root1' },
         data: expect.objectContaining({
-          msg_type: 'text',
+          msg_type: 'interactive',
           reply_in_thread: true,
           uuid: 'om_root1',
         }),
@@ -178,8 +178,8 @@ describe('feishu outbound lane routing', () => {
   });
 
   it('openThread is idempotent per trigger message (duplicate delivery opens no second topic)', async () => {
-    const first = outbound.openThread('om_root2', '开个话题');
-    const second = outbound.openThread('om_root2', '开个话题');
+    const first = outbound.openThread('om_root2');
+    const second = outbound.openThread('om_root2');
     expect(await first).toEqual({ kind: 'opened', messageId: 'om_replied', threadId: 'omt_r1' });
     expect(await second).toEqual({ kind: 'opened', messageId: 'om_replied', threadId: 'omt_r1' });
     // 并发/重复调用只打一次 API — 飞书重投同一条 @ 事件不会开出多个话题。
@@ -191,7 +191,7 @@ describe('feishu outbound lane routing', () => {
     larkMocks.getMessage.mockResolvedValueOnce({
       data: { items: [{ thread_id: 'omt_recovered' }] },
     });
-    const res = await outbound.openThread('om_root3', '开个话题');
+    const res = await outbound.openThread('om_root3');
     expect(res).toEqual({ kind: 'opened', messageId: 'om_replied', threadId: 'omt_recovered' });
     expect(larkMocks.getMessage).toHaveBeenCalledWith({
       path: { message_id: 'om_replied' },
@@ -202,7 +202,7 @@ describe('feishu outbound lane routing', () => {
   it('openThread recalls the opener and returns degraded when thread_id is unrecoverable', async () => {
     larkMocks.reply.mockResolvedValueOnce({ data: { message_id: 'om_replied' } });
     larkMocks.getMessage.mockResolvedValueOnce({ data: { items: [] } });
-    await expect(outbound.openThread('om_root4', 'x')).resolves.toEqual({ kind: 'degraded' });
+    await expect(outbound.openThread('om_root4')).resolves.toEqual({ kind: 'degraded' });
     // 开场白已发出但拿不到话题 id: 撤回它再降级, 不让「回复都在里面」误导。
     expect(larkMocks.deleteMessage).toHaveBeenCalledWith({
       path: { message_id: 'om_replied' },
@@ -212,7 +212,7 @@ describe('feishu outbound lane routing', () => {
   it('openThread recalls the opener and returns degraded when message.get itself fails', async () => {
     larkMocks.reply.mockResolvedValueOnce({ data: { message_id: 'om_replied' } });
     larkMocks.getMessage.mockRejectedValueOnce(new Error('get failed'));
-    await expect(outbound.openThread('om_root5', 'x')).resolves.toEqual({ kind: 'degraded' });
+    await expect(outbound.openThread('om_root5')).resolves.toEqual({ kind: 'degraded' });
     expect(larkMocks.deleteMessage).toHaveBeenCalledWith({
       path: { message_id: 'om_replied' },
     });
@@ -222,7 +222,7 @@ describe('feishu outbound lane routing', () => {
     larkMocks.reply.mockResolvedValueOnce({ data: { message_id: 'om_replied' } });
     larkMocks.getMessage.mockRejectedValueOnce(new Error('get failed'));
     larkMocks.deleteMessage.mockRejectedValueOnce(new Error('delete failed'));
-    await expect(outbound.openThread('om_root6', 'x')).resolves.toEqual({
+    await expect(outbound.openThread('om_root6')).resolves.toEqual({
       kind: 'orphaned',
       openerMessageId: 'om_replied',
     });
@@ -233,7 +233,7 @@ describe('feishu outbound lane routing', () => {
     larkMocks.getMessage.mockRejectedValueOnce(new Error('get failed'));
     // SDK 对业务错误不抛异常 — 2xx 响应带非零 code 时撤回并未成功。
     larkMocks.deleteMessage.mockResolvedValueOnce({ code: 99991672, msg: 'no permission' });
-    await expect(outbound.openThread('om_root7', 'x')).resolves.toEqual({
+    await expect(outbound.openThread('om_root7')).resolves.toEqual({
       kind: 'orphaned',
       openerMessageId: 'om_replied',
     });
@@ -241,7 +241,7 @@ describe('feishu outbound lane routing', () => {
 
   it('openThread returns degraded instead of throwing when the API fails', async () => {
     larkMocks.reply.mockRejectedValueOnce(new Error('no thread permission'));
-    await expect(outbound.openThread('om_root8', 'x')).resolves.toEqual({ kind: 'degraded' });
+    await expect(outbound.openThread('om_root8')).resolves.toEqual({ kind: 'degraded' });
     expect(larkMocks.deleteMessage).not.toHaveBeenCalled();
   });
 
@@ -254,5 +254,72 @@ describe('feishu outbound lane routing', () => {
     expect(larkMocks.create).toHaveBeenCalledWith(
       expect.objectContaining({ params: { receive_id_type: 'chat_id' } }),
     );
+  });
+});
+
+describe('feishu card lane registry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    outbound.unbindClient(); // clears lane anchors + card registry
+    outbound.bindClient(creds);
+  });
+
+  it('registers topic-lane cards and resolves them back to the same lane', async () => {
+    outbound.pushReplyAnchor('g/oc_group1/omt_t1', 'om_topic_trigger');
+    const { messageId } = await outbound.sendInteractive('g/oc_group1/omt_t1', {
+      body: 'pick',
+      buttons: [{ id: 'control:exit', label: '退出', payload: { botAppId: 'cli_x' } }],
+    });
+    expect(messageId).toBe('om_replied');
+    expect(outbound.resolveCardLane('om_replied', 'oc_group1')).toBe('g/oc_group1/omt_t1');
+  });
+
+  it('registers plain group-lane cards (openThread 失败降级路径)', async () => {
+    outbound.pushReplyAnchor('g/oc_group1', 'om_trigger1');
+    const { messageId } = await outbound.sendInteractive('g/oc_group1', {
+      body: 'pick',
+      buttons: [{ id: 'control:exit', label: '退出' }],
+    });
+    expect(outbound.resolveCardLane(messageId, 'oc_group1')).toBe('g/oc_group1');
+  });
+
+  it('does not register p2p (DM) cards — callback keeps the open_id', async () => {
+    await outbound.sendInteractive('ou_dm_user', {
+      body: 'hi',
+      buttons: [{ id: 'control:exit', label: '退出' }],
+    });
+    expect(outbound.resolveCardLane('om_created', 'ou_dm_user')).toBeNull();
+  });
+
+  it('does not register deliverToOwnerDm cards (they live in the owner DM)', async () => {
+    outbound.pushReplyAnchor('g/oc_g', 'om_t');
+    const { messageId } = await outbound.sendInteractive(
+      'g/oc_g',
+      { body: '要执行危险操作', buttons: [{ id: 'permission:allow:once', label: '允许' }] },
+      { deliverToOwnerDm: true },
+    );
+    expect(larkMocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ receive_id: 'ou_owner' }) }),
+    );
+    expect(outbound.resolveCardLane(messageId, 'oc_g')).toBeNull();
+  });
+
+  it('rejects a lane lookup whose chatId does not match the callback chat', async () => {
+    outbound.pushReplyAnchor('g/oc_group1/omt_t1', 'om_topic_trigger');
+    await outbound.sendInteractive('g/oc_group1/omt_t1', {
+      body: 'pick',
+      buttons: [{ id: 'control:exit', label: '退出' }],
+    });
+    expect(outbound.resolveCardLane('om_replied', 'oc_another_group')).toBeNull();
+  });
+
+  it('unbindClient clears the registry (no cross-generation mismatch)', async () => {
+    outbound.pushReplyAnchor('g/oc_group1/omt_t1', 'om_topic_trigger');
+    await outbound.sendInteractive('g/oc_group1/omt_t1', {
+      body: 'pick',
+      buttons: [{ id: 'control:exit', label: '退出' }],
+    });
+    outbound.unbindClient();
+    expect(outbound.resolveCardLane('om_replied', 'oc_group1')).toBeNull();
   });
 });

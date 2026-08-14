@@ -127,6 +127,7 @@
       "chipMetrics": "Usage indicator",
       "memory": "Memory",
       "subagentModels": "Subagents",
+      "visionBridge": "Vision Bridge",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
       "composer": "Message input",
@@ -308,6 +309,7 @@
         "statusInstalled": "Installed",
         "statusNotInstalled": "Not installed",
         "claudeCodeName": "Claude Code",
+        "piName": "Pi",
         "button": {
           "install": "Install",
           "reinstall": "Reinstall",
@@ -465,6 +467,11 @@
         "label": "Sidebar card mode",
         "hint": "Pinned sessions are shown as cards with task-status summaries; card heights vary with summary length, and the cards flow into 2–3 columns when the sidebar is widened.",
         "aria": "Toggle sidebar card mode"
+      },
+      "sidebarMainListMode": {
+        "label": "Session list style",
+        "hint": "Display style for the main sidebar list (below Pinned): Text is a compact single row; List is a two-line row with a preview.",
+        "aria": "Switch session list style"
       },
       "layout": {
         "label": "Panel layout",
@@ -979,7 +986,7 @@
         },
         "inputMonitoring": {
           "label": "Shortcut listener",
-          "tooltip": "Used to listen for Fn, standalone Command / Option / Control, and Fn-based voice input shortcuts. Regular key combinations and standalone F1-F24 keys usually do not need it. Granted means the currently running app can listen for shortcuts; dev builds may be authorized through Terminal."
+          "tooltip": "Used to listen for Fn, standalone Command / Option / Control, Fn-based shortcuts, and standalone F1-F24 push-to-talk release events. Regular key combinations do not need it. Granted means the currently running app can listen for shortcuts; dev builds may be authorized through Terminal."
         },
         "accessibility": {
           "label": "Automatic input",
@@ -1476,7 +1483,11 @@
           "confirmTitle": "Confirm overwrites",
           "confirmSubtitle": "Choose the fields to copy from {{source}}.",
           "source": "Source",
-          "columns": { "field": "Field", "source": "Source value", "target": "Current value" },
+          "columns": {
+            "field": "Field",
+            "source": "Source value",
+            "target": "Current value"
+          },
           "fields": {
             "endpointBundle": "Endpoint and API protocol",
             "baseUrl": "Base URL",
@@ -1552,6 +1563,7 @@
         "refreshAdded": "Found {{count}} new models",
         "refreshNoNew": "Model list is up to date — nothing new",
         "refreshFailed": "Model list couldn’t be refreshed — try again later",
+        "refreshFetchDisabled": "Remote model catalog fetching is disabled — refresh skipped",
         "disableModel": "Disable This Model",
         "enableModel": "Enable This Model",
         "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
@@ -2381,6 +2393,37 @@
       "title": "Tips",
       "description": "Functional toggles. Some require a new session to take effect (see individual cell descriptions)."
     },
+    "visionBridge": {
+      "title": "Vision Bridge",
+      "description": "Give text-only models the ability to read images by routing them through a separate multimodal model that converts images to text descriptions.",
+      "enableLabel": "Enable Vision Bridge",
+      "enableHint": "When off, all models behave exactly as before. When on, models you select below route their images through the vision backend. When enabled, images sent to these models and nearby text used as focus hints are sent to the vision backend you choose.",
+      "enableAria": "Toggle Vision Bridge",
+      "toast": {
+        "saved": "Vision Bridge settings saved",
+        "saveFailed": "Failed to save Vision Bridge settings"
+      },
+      "capability": {
+        "vision": "Known vision-capable",
+        "noVision": "Known text-only",
+        "unknown": "Vision capability unknown"
+      },
+      "targetModels": {
+        "label": "Models routed through Vision Bridge",
+        "hint": "Text-only models (e.g. DeepSeek) are checked by default. You can also check vision-capable models — for example to use a cheaper description model to save tokens.",
+        "empty": "No models available.",
+        "toggleAria": "Toggle Vision Bridge for {{model}}"
+      },
+      "backends": {
+        "label": "Vision backend models",
+        "hint": "Pick up to two multimodal models that convert images to text. The second (backup) is optional.",
+        "primary": "Primary",
+        "fallback": "Backup",
+        "unset": "None selected",
+        "noBackup": "No backup",
+        "hintSecondary": "The primary backend is used first. If it fails and a backup is set, the backup is used. If both fail, the image cannot be described and is replaced with a text notice."
+      }
+    },
     "terminalShell": {
       "title": "Default terminal shell",
       "description": "Use this shell when opening a new sidebar terminal tab.",
@@ -3146,7 +3189,9 @@
           "claude-code": "Claude Code",
           "codex": "Codex",
           "pi": "Pi"
-        }
+        },
+        "groupPermissionLabel": "Permission mode for new group tasks",
+        "groupPermissionDescription": "Permission mode used for every task created in a group chat — @bot opening a topic, /new, and /ctr all use it; the permission mode above applies to direct messages only. Defaults to Auto approval. Group context can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust. Changes apply to tasks created afterwards; switch an existing task with /permission in the group."
       }
     },
     "shortcuts": {
@@ -3437,6 +3482,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "Permission review needed",
+        "action": "Review Permissions",
+        "actionAria": "Review permissions for plugin {{name}}",
+        "noticeTitle": "Permission review needed",
+        "bodyLegacy": "Cindy has no record of a permission review for this plugin, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again.",
+        "bodyInvalid": "The permission review record for this plugin is damaged, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again.",
+        "bodyBuiltinRestart": "Something went wrong with this built-in plugin's approval record. Restart Cindy to recover automatically — no other action needed."
+      },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
       "emptyHint": "Install from the market, or import a .cindy file from the menu above",
@@ -3491,6 +3545,7 @@
         "uninstalled": "Uninstalled \"{{name}}\"",
         "installedAsleep": "Installed \"{{name}}\" (disabled — enable it here anytime)",
         "updated": "\"{{name}}\" updated to v{{version}}",
+        "reapproved": "\"{{name}}\" restored",
         "exported": "Exported the .cindy file for \"{{name}}\"",
         "exportFailed": "Couldn't export \"{{name}}\" — try again",
         "projectDisabled": "Turned off \"{{name}}\" for this project",
@@ -3510,6 +3565,7 @@
         "metaWithAuthor": "By {{author}} · Version {{version}}. Installs locally and can be uninstalled anytime.",
         "enableNow": "Enable right after install",
         "enableNowOpenPanel": "Enable and open its panel right after install",
+        "manualCount": "Bundled manuals: {{count}}",
         "expandDescription": "Show Full Description",
         "collapseDescription": "Hide Full Description"
       },
@@ -3632,6 +3688,7 @@
         "fileInvalid": "Not a valid .cindy plugin file",
         "hostUnsupported": "This plugin needs Cindy capabilities that this version does not provide. Update Cindy, then install it again.",
         "alreadyInstalled": "This plugin is already installed",
+        "approvalRequired": "This plugin's permissions must be reviewed again before continuing.",
         "commandConflict": "Its command conflicts with an installed plugin. Uninstall the other one or rename the command.",
         "idReserved": "This id uses the reserved official prefix cindy-; it is only available to plugins bundled with the app",
         "sourceMissing": "The selected file could not be found",
@@ -3746,6 +3803,11 @@
         "confirm": "Update",
         "cancel": "Cancel"
       },
+      "reapproveConfirm": {
+        "title": "Re-approve permissions for \"{{name}}\"?",
+        "body": "Review the permissions below to re-approve this installed plugin — no install file needed.",
+        "confirm": "Approve & Restore"
+      },
       "pick": {
         "dialogTitle": "Choose a folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
@@ -3762,6 +3824,7 @@
       },
       "updateAll": {
         "title": "Update all · {{count}} plugins",
+        "collapseDiff": "Collapse",
         "description": "Regular updates finish automatically; verified packages that request new permissions need per-item approval.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "Queued",
@@ -3771,7 +3834,13 @@
         "statusFailed": "Update failed",
         "background": "Continue in background",
         "doneAction": "Done",
-        "doneToast": "Batch update finished: {{done}} updated, {{rest}} not completed"
+        "doneToast": "Batch update finished: {{done}} updated, {{rest}} not completed",
+        "permissionChanged": "Permission changed",
+        "rereview": "Re-review",
+        "reviewDiff": "Review",
+        "reviewOutdated": "Review outdated",
+        "approve": "Approve",
+        "skip": "Skip"
       }
     },
     "mcp": {
@@ -4778,7 +4847,10 @@
         "localOnly": "Exact message changes are not available for remote sessions yet.",
         "partialNotice": "This message includes command or tool writes that could not be tracked exactly. Only the captured subset is shown; it is not a complete patch.",
         "emptyTitle": "No recorded changes",
-        "emptyDesc": "The recorded patch for this message has no displayable file changes."
+        "emptyDesc": "The recorded patch for this message has no displayable file changes.",
+        "crossSessionSwitchDisabled": "This review belongs to a collaborator session. Source switching is available only within its own session.",
+        "previewUnavailable": "This message records historical changes, so current on-disk file content cannot be previewed reliably.",
+        "snapshotPatchUnavailable": "A historical change snapshot cannot produce a git apply command for the current worktree."
       },
       "fileCount_one": "{{count}} file",
       "fileCount_other": "{{count}} files",
@@ -4836,6 +4908,7 @@
         "in-progress": "git operation in progress",
         "agent-running": "agent is running",
         "disabled": "review unavailable",
+        "historical-snapshot": "historical change snapshot is read-only",
         "remote-device": "remote device sessions are view-only",
         "remote-ssh": "SSH workspace review is view-only"
       },
@@ -5548,6 +5621,7 @@
         "context": "{{value}} context",
         "codexCompatibilityMode": "Codex compatibility mode",
         "price": "{{input}}/{{output}} per 1M",
+        "subscriptionBadgeCompact": "Sub",
         "fastBadge": "Fast"
       },
       "source": {
@@ -5708,6 +5782,7 @@
       "startFailed": "Failed to start collaboration",
       "startFailedContinue": "Failed to start collaboration. Continuing as a single session.",
       "createWorkerRefreshFailed": "Unable to refresh Worker status. Please try again.",
+      "assignmentFailed": "The Worker was created, but task assignment could not be confirmed. Check the Worker pane before trying again.",
       "openHint": "Bring in a Worker to help",
       "disabledHint": "Collaboration is disabled. Enable it in settings.",
       "unavailableHint": "Unable to verify the collaboration setting. Try again shortly.",
@@ -6048,6 +6123,11 @@
     "imageMissing": {
       "title": "Image missing"
     },
+    "visionBridge": {
+      "analyzing": "Analyzing {{count}} image(s)…",
+      "fallback": "Vision bridge fell back to a backup vision backend (primary unavailable); image recognition may be affected",
+      "unavailable": "Vision bridge is unavailable; the image could not be described and was replaced with a text notice"
+    },
     "newMessageIndicator": {
       "aria": "Back to bottom, view {{count}} new messages",
       "label_one": "{{count}} new message",
@@ -6151,7 +6231,10 @@
       "networkShowRaw": "Show raw error",
       "networkHideRaw": "Hide raw error",
       "silentStopContinue": "Continue",
-      "silentStopContinueTitle": "Continue the current task"
+      "silentStopContinueTitle": "Continue the current task",
+      "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
+      "piManagerUnavailable": "Remote Pi manager is not ready. Retry shortly; if it keeps failing, reinstall Pi under Settings → Remote Machines.",
+      "piBundledNodeMissing": "The remote host is missing its runtime (Node.js). Expand the host under Settings → Remote Machines and click Install on Claude Code or Codex first (they bundle Node.js), then start a Pi task."
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
@@ -6568,6 +6651,8 @@
       "automationSent": "Sent by automation",
       "automationSentNamed": "Sent by automation \"{{name}}\"",
       "automationViewTask": "View automation task",
+      "orcaFromLead": "Message from Lead",
+      "orcaFromWorker": "Message from Worker",
       "expandLongMessage": "Show full message",
       "collapseLongMessage": "Collapse",
       "sessionReference": {
@@ -6633,13 +6718,13 @@
       }
     },
     "upgradeBanner": {
-      "description": "A new cc-manager version is available on {{hostId}} — upgrading will interrupt all active Claude Code remote sessions on this host",
-      "upgrading": "Upgrading cc-manager on {{hostId}}…",
+      "description": "A new {{manager}} version is available on {{hostId}} — upgrading will interrupt all active remote sessions on this host",
+      "upgrading": "Upgrading {{manager}} on {{hostId}}…",
       "upgrade": "Upgrade now",
-      "upgradeTitle": "Download and restart cc-manager (will interrupt current sessions)",
+      "upgradeTitle": "Download and restart {{manager}} (will interrupt current sessions)",
       "dismissTitle": "Not now (will prompt again on next launch)",
       "failed": "Upgrade failed: {{message}}",
-      "daemonNotReady": "cc-manager upgraded, but the remote daemon hasn't started yet — please resend your message manually"
+      "daemonNotReady": "{{manager}} upgraded, but the remote daemon hasn't started yet — please resend your message manually"
     },
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "Remote connection interrupted (the daemon may be upgrading or restarting). The turn has ended — please resend.",
@@ -6647,6 +6732,7 @@
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision (network or service hiccup), so actions that need review are being handed to you to confirm. Switch this task to Default permissions if you would rather not be interrupted.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote Claude Code sessions can't route through the local compat proxy (internal error).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
+      "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again."
     },
@@ -6927,7 +7013,7 @@
         "remoteSettings": "Remote connection settings",
         "multiSelect": "Multi-select",
         "deselect": "Deselect",
-        "menuTrigger": "Remote machines",
+        "menuTrigger": "Session scope",
         "selectedCount_one": "{{count}} machine",
         "selectedCount_other": "{{count}} machines"
       },
@@ -6946,6 +7032,8 @@
         "awaitingPluginSetup": "Awaiting plugin setup"
       },
       "showAllSessions": "Show all {{count}}",
+      "allSessions": "All sessions",
+      "scopeLocalSessions": "This device’s sessions",
       "dialogues": "Chat",
       "newDialogue": "New session",
       "dialoguesToggleExpand": "Expand Chat",
@@ -6963,12 +7051,10 @@
       "projects": "Projects",
       "newProject": "New project",
       "createProjectFailed": "Failed to create project",
-      "projectsSectionToggleExpand": "Expand projects",
-      "projectsSectionToggleCollapse": "Collapse projects",
       "projectsToggleExpand": "Expand all project sessions",
       "projectsToggleCollapse": "Collapse all project sessions",
-      "filterAria": "Organize sidebar (Status: {{status}}, Vendor: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}})",
-      "organizeSidebar": "Organize sidebar",
+      "filterAria": "Sidebar display settings (Status: {{status}}, Vendor: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}})",
+      "organizeSidebar": "Sidebar display settings",
       "filterAllText": "all",
       "filterSelectedProjects": "{{count}} selected",
       "filterStatus": {
@@ -6982,8 +7068,23 @@
         "codex": "Codex"
       },
       "filterGroupBy": {
-        "project": "Project",
-        "date": "Date"
+        "project": "Group by project",
+        "flat": "Flat list",
+        "device": "Group by device",
+        "dialogue": "Group chats together"
+      },
+      "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
+      "deviceGroup": {
+        "local": "This device",
+        "offline": "Offline",
+        "collapse": "Collapse this device",
+        "expand": "Expand this device"
+      },
+      "foldAll": {
+        "collapseGroups": "Collapse all groups",
+        "collapseProjects": "Collapse project groups",
+        "collapseDevices": "Collapse device groups",
+        "expandAll": "Expand all groups"
       },
       "filterLastActivity": {
         "1d": "1d",
@@ -6993,10 +7094,12 @@
         "all": "All"
       },
       "filterSortBy": {
-        "recency": "Recent first",
-        "time": "Oldest first",
+        "recency": "By time",
         "manual": "Manual",
-        "alphabetic": "Alphabetical"
+        "priority": "Priority"
+      },
+      "filterSortByTip": {
+        "priority": "Waiting on you first, then unread, then running, then by time"
       },
       "filterStatusHeading": "Status",
       "filterAgentHeading": "Agent",
@@ -7005,6 +7108,24 @@
       "filterSortByHeading": "Sort by",
       "filterProjectsHeading": "Projects",
       "filterAllProjects": "All projects",
+      "filterHeading": "Filters",
+      "filterSummaryNone": "None",
+      "filterSummaryActive": "{{count}} active",
+      "filterReset": "Reset filters",
+      "displayHeading": "Display",
+      "taskInfoHeading": "Session info",
+      "taskInfoSummaryNone": "None",
+      "taskInfoSummarySeparator": ", ",
+      "taskInfo": {
+        "time": "Time",
+        "pr": "PR status",
+        "tokens": "Tokens",
+        "cost": "Cost"
+      },
+      "taskInfoTip": {
+        "tokens": "Total tokens",
+        "cost": "Total cost"
+      },
       "dateGroup": {
         "today": "Today",
         "yesterday": "Yesterday",
@@ -9284,13 +9405,20 @@
         "endsAt": "Plan ends {{date}}",
         "cancelAction": "Cancel Subscription",
         "cancelConfirmTitle": "Cancel Your Current Subscription?",
-        "cancelConfirmDescription": "This action does not issue a refund or immediately change your balance. Your current plan stays available through {{date}}, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
-        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your balance. Your current plan stays available through the end of this billing period, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescription": "This action does not issue a refund or immediately change your balance. Your current plan stays available through {{date}}, then it will not renew. You cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your balance. Your current plan stays available until this billing period ends, then it will not renew. You cannot purchase a new plan until then.",
         "cancelConfirmAction": "Confirm Cancellation",
         "cancelSuccess": "Auto-renewal is canceled. Your current plan remains available through {{date}}.",
         "cancelSuccessWithoutDate": "Auto-renewal is canceled. Your current plan will end after this billing period.",
         "cancelNotSupported": "This subscription cannot be canceled yet.",
-        "cancelFailed": "Could not cancel the subscription. Try again later."
+        "cancelFailed": "Could not cancel the subscription. Try again later.",
+        "resumeAction": "Resume Subscription",
+        "resumeConfirmTitle": "Resume Your Current Subscription?",
+        "resumeConfirmDescription": "Your plan will renew automatically on the renewal date.",
+        "resumeConfirmAction": "Resume Subscription",
+        "resumeSuccess": "Subscription resumed. It will renew as planned.",
+        "resumeNotAvailable": "This subscription cannot be resumed. Check its latest status before trying again.",
+        "resumeFailed": "Could not resume the subscription. Try again later."
       },
       "topupCard": {
         "action": "Add Funds"

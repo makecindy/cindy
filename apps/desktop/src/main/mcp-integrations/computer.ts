@@ -1987,12 +1987,16 @@ function splitTypeTextChunks(text: string): string[] {
  * `callCuaMcpTool` 和 `shouldRetryWithFreshCuaSession` 使用，避免某种
  * plain text 结果被提升成错误后却没有进入一次性重试分支。
  */
-const STALE_CUA_SESSION_MARKER_RE = /session ended; tool call ignored|not connected/i;
+const STALE_CUA_SESSION_MARKER_RE =
+  /session(?:\s+['"`][^'"`\r\n]+['"`])?\s+(?:has\s+)?ended\b|not connected/i;
 
 function shouldCleanupCuaMcpSessionAfterError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   if (/timed out after/.test(message)) return true;
-  return /transport (?:closed|error)|read ECONNRESET|write EPIPE|connection closed|stream closed|session ended|not connected/i.test(message);
+  return (
+    STALE_CUA_SESSION_MARKER_RE.test(message) ||
+    /transport (?:closed|error)|read ECONNRESET|write EPIPE|connection closed|stream closed/i.test(message)
+  );
 }
 
 function shouldRetryWithFreshCuaSession(name: ComputerMcpToolName, err: unknown): boolean {
@@ -3500,22 +3504,6 @@ export function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): Comput
     getStatus: async () => {
       await ensureRuntime();
       return getComputerDriverStatus();
-    },
-    resolveProcessIdentity: async (pid, resolveOptions) => {
-      const forceFresh = resolveOptions?.forceFresh === true;
-      let processSnapshot = await readProcessSnapshotResult({ forceFresh });
-      let processInfo = processSnapshot.processes.get(pid);
-      if (!processInfo && !forceFresh) {
-        processSnapshot = await readProcessSnapshotResult({ forceFresh: true });
-        processInfo = processSnapshot.processes.get(pid);
-      }
-      if (!processInfo) return null;
-      return {
-        pid: processInfo.pid,
-        name: processInfo.name,
-        command: processInfo.command,
-        executable: processInfo.executable,
-      };
     },
     callTool: async (name, args, context) => {
       if (options.isComputerUseEnabled && !options.isComputerUseEnabled(context)) {

@@ -30,6 +30,7 @@ const mocks = {
     }),
   ),
   pushReplyAnchor: vi.fn(),
+  pushPatchableOpener: vi.fn(),
   firstAllowed: vi.fn<() => string | null>(() => null),
   readOwnerOpenId: vi.fn<() => string | null>(() => null),
   clearOwner: vi.fn(),
@@ -76,6 +77,7 @@ vi.doMock('../outbound.js', () => ({
   replyText: mocks.replyText,
   openThread: mocks.openThread,
   pushReplyAnchor: mocks.pushReplyAnchor,
+  pushPatchableOpener: mocks.pushPatchableOpener,
 }));
 
 vi.doMock('../ownerGuard.js', () => ({
@@ -144,13 +146,15 @@ function collectEvents(): IMMessageEvent[] {
 
 beforeEach(async () => {
   await wsClient.stop({ announceOffline: false, reason: 'test-reset' });
+  // 入站去重账本按设计跨 stop/start 保留(重推高发在重连前后), 所以用例之间
+  // 想复用同一个 message_id 必须显式清账。
+  wsClient.resetInboundDedupeForTest();
   mocks.options.length = 0;
   mocks.eventHandlers = {};
   vi.clearAllMocks();
   feishuEvents.removeAllListeners('message');
   mocks.firstAllowed.mockReturnValue(OWNER);
   mocks.checkOwner.mockImplementation((id: string) => id === OWNER);
-  wsClient.resetSeenMessagesForTest();
 });
 
 afterEach(async () => {
@@ -211,7 +215,7 @@ describe('feishu group inbound gate', () => {
     const events = collectEvents();
     await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
 
-    expect(mocks.openThread).toHaveBeenCalledWith('om_msg1', expect.any(String));
+    expect(mocks.openThread).toHaveBeenCalledWith('om_msg1');
     expect(events).toHaveLength(1);
     const event = events[0]!;
     expect(event.senderId).toBe('g/oc_chat1/omt_new');
@@ -220,6 +224,8 @@ describe('feishu group inbound gate', () => {
     expect(event.speaker).toEqual({ id: OWNER, name: '', isOwner: true });
     // 锚点是开场白消息(话题内合法锚点), 不是触发消息。
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
+    // 开场白卡登记为可补丁锚点 — 本轮流式卡直接 patch 它, 不发占位消息。
+    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
     // 路由进新话题 lane, 但上下文取数 lane 仍是群主流(新话题是空的)。
     expect(event.groupContextLane).toEqual({ chatId: 'oc_chat1', threadId: '' });
   });
@@ -244,6 +250,7 @@ describe('feishu group inbound gate', () => {
 
     expect(events).toHaveLength(0);
     expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
     // 提示挂在开场白下(自动落回话题) — 不把回答刷进群主流。
     expect(mocks.replyText).toHaveBeenCalledWith('om_opener', expect.any(String));
   });
@@ -269,20 +276,15 @@ describe('feishu group inbound gate', () => {
 
     expect(events).toHaveLength(0);
     expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
-
-    // 换代丢弃时去重标记已移除 — 新连接上的重投消息应能正常处理。
-    await connect();
-    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
-    expect(events).toHaveLength(1);
-    expect(events[0]!.senderId).toBe('g/oc_chat1/omt_new');
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
   });
 
   it('drops duplicate delivery of the same message (one turn per message)', async () => {
     await connect();
     const events = collectEvents();
     await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
-    // 飞书重投同一条 @ 事件: openThread 幂等只防重复开话题, 事件级去重防
-    // 止第二次 turn(重复锚点 + 两份回答)。
+    // 飞书重投同一条 @ 事件: 入站去重直接丢弃, 第二次 turn 不会启动
+    // (重复锚点 + 两份回答)。
     await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
 
     expect(events).toHaveLength(1);

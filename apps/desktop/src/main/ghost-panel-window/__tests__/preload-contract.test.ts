@@ -56,6 +56,7 @@ describe('ghost panel preload contract', () => {
     expect(topLevel).toEqual(expect.arrayContaining([
       'platform', 'preferredSystemLocale', 'windowMinimize', 'windowMaximize', 'windowClose',
       'appearanceSettings', 'localThemes', 'appShortcuts', 'theme',
+      'onFullscreenChange', 'getFullscreenState',
       'copyMediaToClipboard', 'showItemInFolder', 'cacheMediaForSession',
       'openMediaWithDefaultApp', 'saveMediaAs', 'ghostPanelWindow', 'ghosts',
     ]));

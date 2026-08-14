@@ -1141,6 +1141,12 @@ async function requestCustomProviderText(input: {
     ...(input.headers ?? {}),
     'Content-Type': 'application/json',
   };
+  const wire: ProviderWire =
+    input.agentKind === 'claude-code' || input.wireProtocol === 'anthropic-messages'
+      ? 'anthropic-messages'
+      : input.wireProtocol === 'openai-chat'
+        ? 'chat-completions'
+        : 'responses';
   // safeStorage 有当前凭证时覆盖历史 header；没有时仅 api-key 策略允许保留旧版
   // header-only 配置，以便用户升级后继续可用。OAuth 与 none 仍必须清掉复制进来的凭证头。
   const preserveLegacyApiKeyHeaders =
@@ -1153,19 +1159,13 @@ async function requestCustomProviderText(input: {
   }
   if (input.credential) {
     headers.Authorization = `Bearer ${input.credential}`;
-    if (input.agentKind === 'claude-code' && input.authStrategy === 'api-key-header') {
+    if (wire === 'anthropic-messages' && input.authStrategy === 'api-key-header') {
       headers['x-api-key'] = input.credential;
     }
   }
-  if (input.agentKind === 'claude-code') {
+  if (wire === 'anthropic-messages') {
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
   }
-  const wire: ProviderWire =
-    input.agentKind === 'claude-code'
-      ? 'anthropic-messages'
-      : input.wireProtocol === 'openai-chat'
-        ? 'chat-completions'
-        : 'responses';
   return requestProviderHttpText({
     wire,
     endpoint: input.requestPath

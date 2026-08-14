@@ -1258,6 +1258,74 @@ const THINKING_ERROR_BODY = JSON.stringify({
   },
 });
 
+// 混合 sync + async transform：锁定 runTransforms 的串行 await 语义（顺序保持、
+// async 被 await、null 透传、失败回退）。防止后续改动误并行化破坏链式顺序依赖。
+describe('anthropic-compat-proxy mixed sync+async transform chain', () => {
+  it('awaits async transforms in order and keeps sync passthrough', async () => {
+    const order: string[] = [];
+    const custom = await startFakeUpstream((_i, body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ echoed: JSON.parse(body) }));
+    });
+    upstreamClose = custom.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: custom.url,
+      transformRequest: [
+        // 第一个：sync transform 透传（返回 null），不改 body。
+        (_body) => {
+          order.push('sync-passthrough');
+          return null;
+        },
+        // 第二个：async transform，模拟视觉桥（延迟后改写 body）。
+        async (body) => {
+          order.push('async-begin');
+          await new Promise((r) => setTimeout(r, 20));
+          order.push('async-end');
+          return { ...(body as Record<string, unknown>), model: 'rewritten-by-async' };
+        },
+        // 第三个：sync transform，在 async 结果上再改。
+        (body) => {
+          order.push('sync-after-async');
+          return { ...(body as Record<string, unknown>), extra: true };
+        },
+      ],
+    });
+
+    await post(proxy.url, { model: 'original', messages: [{ role: 'user', content: 'x' }] });
+    // 顺序：sync 透传 → async 开始 → async 结束 → sync 尾改（严格串行，无并行交错）。
+    expect(order).toEqual(['sync-passthrough', 'async-begin', 'async-end', 'sync-after-async']);
+    // async 的结果被下游消费：final body 同时含 async 与 sync 的改写。
+    expect(custom.bodies).toHaveLength(1);
+    const sent = JSON.parse(custom.bodies[0]);
+    expect(sent.model).toBe('rewritten-by-async');
+    expect(sent.extra).toBe(true);
+  });
+
+  it('recovers from a throwing async transform by skipping it (passthrough)', async () => {
+    const custom = await startFakeUpstream((_i, body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ echoed: JSON.parse(body) }));
+    });
+    upstreamClose = custom.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: custom.url,
+      transformRequest: [
+        async () => {
+          throw new Error('boom');
+        },
+        (body) => ({ ...(body as Record<string, unknown>), survived: true }),
+      ],
+    });
+
+    await post(proxy.url, { model: 'original', messages: [] });
+    expect(custom.bodies).toHaveLength(1);
+    // 抛错的 async transform 被跳过，后续 sync transform 照常执行。
+    expect(JSON.parse(custom.bodies[0]).survived).toBe(true);
+  });
+});
+
 // 跨厂商切回 Anthropic 模型: 历史里 gpt 留下的空壳 thinking 块 + 后面一句 text。
 function anthropicBodyWithEmptyThinking(): unknown {
   return {

@@ -498,6 +498,68 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('uses Anthropic Messages for an explicitly selected pi anthropic-messages provider', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [
+        {
+          id: 'pi-anthropic-only',
+          name: 'Pi Anthropic Only',
+          source: 'user',
+          agents: ['pi'],
+          auth: { method: 'apiKey' },
+          routing: {
+            pi: {
+              upstream: 'https://anthropic-only.example/v1',
+              wireProtocol: 'anthropic-messages',
+              authStrategy: 'api-key-header',
+            },
+          },
+          models: {
+            pi: [{ id: 'pi-anthropic-model', name: 'Pi Anthropic Model', contextWindow: 100_000 }],
+          },
+        },
+      ],
+    } as never);
+    readCustomKey.mockReturnValue('pi-secret');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          content: [{ type: 'text', text: 'review decision' }],
+        }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'review this action', {
+      providerId: 'pi-anthropic-only',
+      agentKind: 'pi',
+      model: 'pi-anthropic-model',
+      maxTokens: 256,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      text: 'review decision',
+      providerId: 'pi-anthropic-only',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://anthropic-only.example/v1/messages',
+      expect.anything(),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0]?.[1] as { body: string; headers: Record<string, string> };
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer pi-secret',
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      'x-api-key': 'pi-secret',
+    });
+    expect(JSON.parse(init.body)).toEqual({
+      model: 'pi-anthropic-model',
+      max_tokens: 256,
+      messages: [{ role: 'user', content: 'review this action' }],
+    });
+  });
+
   it.each([
     {
       wireProtocol: 'openai-chat' as const,
