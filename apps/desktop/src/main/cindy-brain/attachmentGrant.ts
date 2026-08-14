@@ -94,7 +94,20 @@ export const MAX_GRANT_ONLY_ATTACHMENTS = 32;
 export class GrantPolicyError extends Error {}
 
 export type AttachmentGrantResult =
-  | { ok: true; hashes: string[] }
+  | {
+      ok: true;
+      hashes: string[];
+      /**
+       * 撤销本次刚授出的全部 ref(逐条 removeRefById，单条失败只记 warn 继续
+       * 撤其余的，不重抛——调用方已经在处理另一个更早的失败原因，撤销本身
+       * 再失败不能盖过那个原因)。授权成功返回之后，本函数所在的
+       * ghost_call 仍可能因为无关原因（目录确认、setup 状态、blocked 复判…）
+       * 继续失败；那些路径必须调用它，否则会把「写完才拒绝」的已生效授权
+       * 副作用留在账上（见 docs/dev-rules/plugin-security-and-authoring.md
+       * §3.1 第 4 条）。空批返回的 revoke 是无操作 no-op。
+       */
+      revoke: () => Promise<void>;
+    }
   | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' };
 
 /**
@@ -107,7 +120,7 @@ export async function grantAttachmentsToGhost(
 ): Promise<AttachmentGrantResult> {
   const { ghostId, urls } = params;
   const maxCount = params.maxCount ?? MAX_GRANT_ATTACHMENTS;
-  if (urls.length === 0) return { ok: true, hashes: [] };
+  if (urls.length === 0) return { ok: true, hashes: [], revoke: async () => {} };
   if (urls.length > maxCount) {
     return { ok: false, message: `附件过多(单次上限 ${maxCount} 张)` };
   }
@@ -205,5 +218,19 @@ export async function grantAttachmentsToGhost(
   }
   const hashes = prepared.map((grant) => grant.hash);
   deps.log?.info('ghost attachment grant: done', { ghostId, count: hashes.length });
-  return { ok: true, hashes };
+  const revoke = async (): Promise<void> => {
+    for (const grant of prepared) {
+      try {
+        await deps.removeRefById(grant.id);
+      } catch (err) {
+        deps.log?.warn('ghost attachment grant: revoke-on-later-failure did not remove a ref', {
+          ghostId,
+          refId: grant.id,
+          hash: grant.hash,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  };
+  return { ok: true, hashes, revoke };
 }

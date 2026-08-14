@@ -87,6 +87,32 @@ describe('grantAttachmentsToGhost', () => {
     expect(addRef).toHaveBeenCalledWith(
       expect.objectContaining({ refKind: 'ghost-grant', refId: 'cindy-art', originKind: 'user' }),
     );
+    expect(typeof r.revoke).toBe('function');
+  });
+
+  it('revoke() 撤销本次授出的每一条 ref;单条撤销失败只记 warn，继续撤其余的', async () => {
+    const { deps, addRef, removeRefById } = (() => {
+      const base = makeDeps();
+      const removeRefById = vi
+        .fn<(id: string) => Promise<void>>()
+        .mockRejectedValueOnce(new Error('worker disposed'))
+        .mockResolvedValue(undefined);
+      return { ...base, deps: { ...base.deps, removeRefById }, removeRefById };
+    })();
+    const r = await grantAttachmentsToGhost(deps, {
+      ghostId: 'cindy-art',
+      urls: ['xdt-image://s1/a.png', 'xdt-image://s1/bb.png'],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const grantedIds = addRef.mock.calls.map(([p]) => p.id);
+    expect(grantedIds).toHaveLength(2);
+
+    await r.revoke();
+
+    expect(removeRefById).toHaveBeenCalledTimes(2);
+    expect(removeRefById).toHaveBeenCalledWith(grantedIds[0]);
+    expect(removeRefById).toHaveBeenCalledWith(grantedIds[1]);
   });
 
   it('任一地址解析失败 → 整批拒,零副作用(先整批解析再落库)', async () => {
@@ -111,7 +137,12 @@ describe('grantAttachmentsToGhost', () => {
     expect((over as { message: string }).message).toContain('上限');
 
     const empty = await grantAttachmentsToGhost(deps, { ghostId: 'g', urls: [] });
-    expect(empty).toEqual({ ok: true, hashes: [] });
+    expect(empty.ok).toBe(true);
+    if (empty.ok) {
+      expect(empty.hashes).toEqual([]);
+      // 空批的 revoke 是 no-op，调用方不必先判断是否真的授过权才能安全调用。
+      await expect(empty.revoke()).resolves.toBeUndefined();
+    }
     // 真身 withMediaRefCompensation 对空 refIds 是硬抛。空批必须整段跳过补偿
     // 事务,否则记账层的批次校验会把合法的零附件翻译成「附件过户失败」。
     expect(withRefCompensation).not.toHaveBeenCalled();

@@ -21,7 +21,7 @@ import type {
   GhostSetupEnsureRequest,
   GhostSetupEnsureResult,
 } from '../../cindy-brain/ghostSetupCoordinator';
-import type { GhostSetupAssessment } from '../../../shared/ghost';
+import type { GhostSetupAssessment, GhostToolCallResult } from '../../../shared/ghost';
 import type { CindyGhostsHostDeps } from '../ghost';
 import { t } from '../../i18n';
 
@@ -31,6 +31,7 @@ const outsideDir = path.join(tmpUserData, 'outside');
 const logWarnMock = vi.fn();
 const logInfoMock = vi.fn();
 const grantAttachmentsMock = vi.fn();
+const revokeAttachmentsMock = vi.fn(async () => {});
 const { packGhostDirMock } = vi.hoisted(() => ({ packGhostDirMock: vi.fn() }));
 const releaseMutationMock = vi.fn();
 const captureMutationOwnerMock = vi.fn(() => ({
@@ -95,7 +96,10 @@ vi.mock('@cindy/mcps', () => ({ getLiziMcpSessionContext: () => alsSessionContex
 const WORKDIR = '/proj/alpha';
 const listMock = vi.fn<() => unknown[]>(() => []);
 const activeSessionAvailableMock = vi.fn((_ghostId: string) => true);
-const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
+const dispatchMock = vi.fn<() => Promise<GhostToolCallResult>>(async () => ({
+  ok: true,
+  result: 'done',
+}));
 const setupAssessmentMock = vi.fn((_ghostId: string): GhostSetupAssessment => {
   void _ghostId;
   return {
@@ -270,6 +274,7 @@ beforeEach(() => {
     assessment: { state: 'ready', revision: 0, groups: [] },
   });
   grantAttachmentsMock.mockReset();
+  revokeAttachmentsMock.mockClear();
   grantAttachmentsMock.mockImplementation(
     async (
       deps: {
@@ -300,7 +305,7 @@ beforeEach(() => {
         });
         hashes.push(hash);
       }
-      return { ok: true, hashes };
+      return { ok: true, hashes, revoke: revokeAttachmentsMock };
     },
   );
   resolvedAttachmentOrigins.length = 0;
@@ -1529,6 +1534,95 @@ describe('Full Access 插件文件交接', () => {
       expect.objectContaining({ maxCount: 4 }),
     );
     expect(resolvedAttachmentOrigins).toEqual([]);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('附件已授权后派发被拒(如工具被禁)时撤销刚授出的读取权限', async () => {
+    const file = path.join(outsideDir, 'revoke-on-dispatch-block.png');
+    const bytes = Buffer.from('revoke-on-dispatch-block');
+    fs.writeFileSync(file, bytes);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    ledgerRefs.push({ hash, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' });
+    resolveGhostAttachmentUrlMock.mockReturnValue({ absPath: file, mimeType: 'image/png', blobHash: hash });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'PERMISSION_DENIED',
+      message: '用户已在插件设置里禁用该工具',
+    });
+
+    const result = await makeDeps('codex', 'revoke-on-dispatch-block').callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: [`xdt-media://blob/${hash}`],
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(grantAttachmentsMock).toHaveBeenCalledTimes(1);
+    // 附件已经在 grant 阶段成功授权,只有派发本身失败——写完才拒绝不能把这条
+    // ghost-tool-grant 留在账上,必须撤销。
+    expect(revokeAttachmentsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('调用最终成功时不撤销已授权的附件', async () => {
+    const file = path.join(outsideDir, 'no-revoke-on-success.png');
+    const bytes = Buffer.from('no-revoke-on-success');
+    fs.writeFileSync(file, bytes);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    ledgerRefs.push({ hash, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' });
+    resolveGhostAttachmentUrlMock.mockReturnValue({ absPath: file, mimeType: 'image/png', blobHash: hash });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+
+    const result = await makeDeps('codex', 'no-revoke-on-success').callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: [`xdt-media://blob/${hash}`],
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(grantAttachmentsMock).toHaveBeenCalledTimes(1);
+    expect(revokeAttachmentsMock).not.toHaveBeenCalled();
+  });
+
+  it('grant_only 后置 setup 状态变化时撤销刚授出的批量预授权', async () => {
+    const file = path.join(outsideDir, 'grant-only-revoke.png');
+    const bytes = Buffer.from('grant-only-revoke');
+    fs.writeFileSync(file, bytes);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    ledgerRefs.push({ hash, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' });
+    resolveGhostAttachmentUrlMock.mockReturnValue({ absPath: file, mimeType: 'image/png', blobHash: hash });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+    // 授权流程内部(prepareManagedToolGrantSources 等)还会现读几次 setup 状态,
+    // 具体次数是实现细节、不该被测试钉死。用"grant 是否已经成功"这个语义
+    // 本身做开关,而不是数第 N 次调用——grant 成功之前一律 ready,成功之后
+    // (模拟确认卡等待期间 setup 状态变化)一律 needs-approval。
+    let grantSucceeded = false;
+    setupAssessmentMock.mockImplementation(() =>
+      grantSucceeded
+        ? { state: 'required', revision: 1, groups: [] }
+        : { state: 'ready', revision: 0, groups: [] },
+    );
+    grantAttachmentsMock.mockImplementationOnce(async () => {
+      grantSucceeded = true;
+      return { ok: true, hashes: [hash], revoke: revokeAttachmentsMock };
+    });
+
+    const result = await makeDeps('codex', 'grant-only-revoke').callGhostTool({
+      ghostId: 'art',
+      tool: 'ignored-tool',
+      args: {},
+      attachments: [`xdt-media://blob/${hash}`],
+      grantOnly: true,
+    });
+
+    // 具体在哪一步复判触发拒绝不是这条用例要钉的东西(grant_only 分支里
+    // setup/visibility 有好几处复判,详见 ghost.ts callGhostTool)；要钉住的
+    // 是"grant 成功之后任何一处拒绝都必须撤销刚授出的权限"这条不变量。
+    expect(result.ok).toBe(false);
+    expect(grantAttachmentsMock).toHaveBeenCalledTimes(1);
+    expect(revokeAttachmentsMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
