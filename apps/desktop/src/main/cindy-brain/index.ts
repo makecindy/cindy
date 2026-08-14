@@ -907,7 +907,11 @@ export function listAvailableGhostsForAuthorization(): InstalledGhost[] {
 
 function requireGhostAvailableForActiveSession(id: string): void {
   if (!isGhostAvailableForActiveSession(id)) {
-    if (isAppSessionBoundaryPending()) {
+    const activeOwner = getActiveAppSession().dataOwnerId;
+    if (
+      isAppSessionBoundaryPending() ||
+      !isGhostSkillProjectionBoundaryStableForOwner(activeOwner)
+    ) {
       throwIpcError(
         'PRECONDITION_FAILED',
         'Ghost projection is switching owners; retry after the boundary settles.',
@@ -3272,7 +3276,7 @@ function getImageChannelRegistry(): ImageChannelRegistry {
         hasOAuthLogin: () => hasGrokOAuthLogin(),
         getAccessToken: () => getGrokAccessToken(),
         getOwnerScopeKey: () => activeOwnerScopeKey(),
-        isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
+        isOwnerBoundaryPending: () => isGhostBoundaryPending(),
         fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
         beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
         onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
@@ -3371,12 +3375,26 @@ function resolveImageChannelForModel(model: string, operation: 'generate' | 'edi
   return getImageChannelRegistry().resolve(entry.providerId);
 }
 
+/**
+ * Combined Ghost-owner boundary gate for Ghost-only paths (media generation,
+ * cindy-slot work). Unlike the app-wide isAppSessionBoundaryPending(), this
+ * also fails closed while the durable projection owner (shared global marker)
+ * differs, so a sibling instance flipping the owner cannot let an in-flight
+ * Ghost task keep calling upstream or saving media.
+ */
+function isGhostBoundaryPending(): boolean {
+  return (
+    isAppSessionBoundaryPending() ||
+    !isGhostSkillProjectionBoundaryStableForOwner(getActiveAppSession().dataOwnerId)
+  );
+}
+
 export function getGhostCindySlot(): GhostCindySlot {
   if (!cindySlotSingleton) {
     cindySlotSingleton = new GhostCindySlot({
       getGhost: (id) => findAvailableGhost(id),
       getOwnerScopeKey: () => activeOwnerScopeKey(),
-      isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
+      isOwnerBoundaryPending: () => isGhostBoundaryPending(),
       // model 已在 modelSlot 按白名单校验;归属来源(providerId)按白名单条目
       // 定位,经 imageChannelRegistry 取对应执行通道(2026-07 图像多来源)。
       generateImage: async ({ prompt, model, aspectRatio }) => {
@@ -3596,7 +3614,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       resolveOwnedMedia: async (ghostId, hash, ownerScopeKey) => {
         const assertOwnerScopeCurrent = (): void => {
-          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
+          if (isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
             throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
           }
         };
@@ -3623,7 +3641,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       saveGhostMedia: async ({ ghostId, buffer, mimeType, ownerScopeKey, label, callId }) => {
         const assertOwnerScopeCurrent = (): void => {
-          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
+          if (isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
             throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
           }
         };
@@ -3666,19 +3684,34 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 管道;记成 'ghost' 会让 ghostCanRead 的 origin 分支把它当作该意识的
       // 出生物,与"作品"混为一谈。引用方(refId)才是意识,归属由此成立。
       depositMedia: async ({ ghostId, buffer, mimeType, label }) => {
-        const r = await ingestMedia({
-          buffer,
-          mimeType,
-          isCache: false,
-          refs: [
-            {
-              refKind: 'ghost-deposit',
-              refId: ghostId,
-              originKind: 'user',
-              ...(label ? { label } : {}),
-            },
-          ],
-        });
+        // 与 saveGhostMedia 同口径的 durable owner 守卫:寄存器引用按 ghostId
+        // 落到 owner 作用域账本,落盘窗口翻转全局 owner 时必须 fail closed。
+        const ownerScopeKey = activeOwnerScopeKey();
+        const assertOwnerScopeCurrent = (): void => {
+          if (isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
+            throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
+          }
+        };
+        assertOwnerScopeCurrent();
+        const db = getDbClient().drizzle;
+        const r = await ingestMedia(
+          {
+            buffer,
+            mimeType,
+            isCache: false,
+            refs: [
+              {
+                refKind: 'ghost-deposit',
+                refId: ghostId,
+                originKind: 'user',
+                ...(label ? { label } : {}),
+              },
+            ],
+            assertStillValid: assertOwnerScopeCurrent,
+            refCompensationScope: captureMediaRefCompensationScope(ownerScopeKey),
+          },
+          db,
+        );
         return {
           url: r.url,
           hash: r.hash,
@@ -4059,20 +4092,36 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       // (规则 25)。mime 白名单同一来源(blobStore),槽内归一化后再判。
       isSupportedMediaMime: (mime) => supportedMime(mime),
       saveGhostMedia: async ({ ghostId, buffer, mimeType, label, callId }) => {
-        const r = await ingestMedia({
-          buffer,
-          mimeType,
-          isCache: false,
-          refs: [
-            {
-              refKind: 'ghost-gallery',
-              refId: ghostId,
-              originKind: 'ghost',
-              originId: ghostId,
-              ...(label ? { label } : {}),
-            },
-          ],
-        });
+        // 与 cindy 槽 saveGhostMedia 同口径的 durable owner 守卫:落盘前与
+        // ingestMedia 每个 await 边界都复查,防止兄弟实例在 fetch 读取窗口翻转
+        // 全局 Ghost owner marker 后,字节仍被登记为 ghost-gallery 作品。
+        const ownerScopeKey = activeOwnerScopeKey();
+        const assertOwnerScopeCurrent = (): void => {
+          if (isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
+            throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
+          }
+        };
+        assertOwnerScopeCurrent();
+        const db = getDbClient().drizzle;
+        const r = await ingestMedia(
+          {
+            buffer,
+            mimeType,
+            isCache: false,
+            refs: [
+              {
+                refKind: 'ghost-gallery',
+                refId: ghostId,
+                originKind: 'ghost',
+                originId: ghostId,
+                ...(label ? { label } : {}),
+              },
+            ],
+            assertStillValid: assertOwnerScopeCurrent,
+            refCompensationScope: captureMediaRefCompensationScope(ownerScopeKey),
+          },
+          db,
+        );
         recordGhostCallMedia(ghostId, callId, r.url);
         return { url: r.url, hash: r.hash, ext: r.ext };
       },

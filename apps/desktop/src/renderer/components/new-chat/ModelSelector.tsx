@@ -633,7 +633,7 @@ interface ModelSelectorProps {
    * 不传时沿用通用面板的 300px 上限，供 Settings 等紧凑场景按行数收窄。
    */
   maxVisibleModelRows?: number;
-  /** 关闭模型的 effort / Fast 编辑入口；只选择模型 id 的设置项使用。 */
+  /** 关闭模型的 effort / Fast 编辑入口与行内状态摘要；只选择模型 id 的设置项使用。 */
   configurationEnabled?: boolean;
   /** 可选的列表首行兜底值，例如“不指定（使用原逻辑）”。 */
   fallbackOption?: { active: boolean; label: string; onSelect: () => void };
@@ -1883,8 +1883,11 @@ function ModelSelectorContentView({
           }));
     const disabled = interactionDisabled || modelDisabledOf(provider, model.id);
     const disabledReason = subscriptionDirectDisabledReason(model.id);
-    const rowEffort = rowEffortOf(providerId, model);
-    const rowFastOn = fastOnOf(providerId, model);
+    // 只选择模型 id 的入口没有 effort / Fast 语义；继续展示目录默认档会让用户
+    // 误以为该值可在当前入口调整。选择事务仍由 handleRowSelect 独立解析 effort，
+    // 此处只收窄可见摘要，不改变支持配置入口的行为。
+    const rowEffort = configurationEnabled ? rowEffortOf(providerId, model) : null;
+    const rowFastOn = configurationEnabled ? fastOnOf(providerId, model) : false;
     const rowPrice = pricePresentationOf(providerId, model.id);
     const rowPromotionLabel =
       rowPrice?.kind === 'free'

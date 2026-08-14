@@ -1015,6 +1015,28 @@ describe('代办链路', () => {
     expect(saveGhostMedia).not.toHaveBeenCalled();
   });
 
+  it('生成期间 Ghost durable owner 变为 mismatch 时不保存产物', async () => {
+    // 模拟另一实例改写全局 durable Ghost projection owner:进程内 boundaryDepth
+    // 与 owner scope key 都不变,但 Ghost 专属边界(isOwnerBoundaryPending 已含
+    // durable owner 检查)在任务执行中变 pending,在途任务必须收口。
+    let boundaryPending = false;
+    const saveGhostMedia = vi.fn();
+    const { slot } = makeSlot({
+      isOwnerBoundaryPending: () => boundaryPending,
+      generateImage: vi.fn(async () => {
+        boundaryPending = true;
+        return { buffer: new Uint8Array([1, 2, 3]), mimeType: 'image/png' };
+      }),
+      saveGhostMedia,
+    });
+
+    const result = await slot.handleModelRequest('art', REQ);
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { message: string }).message).toContain('账号已切换');
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  });
+
   it('保存期间切换账号时不向新作用域返回旧产物', async () => {
     let ownerScopeKey = 'cloud:owner-a:1';
     const saveGhostMedia = vi.fn(async (params: { ownerScopeKey: string }) => {

@@ -214,6 +214,25 @@ describe('xaiImageClient', () => {
     expect(responseFetch).toHaveBeenCalledTimes(1);
   });
 
+  it('响应返回途中 Ghost durable owner 变为 mismatch 时中止且不返回结果', async () => {
+    // 另一实例改写全局 durable Ghost projection owner:进程内 boundaryDepth 与
+    // owner scope key 都不变,但 Ghost 专属边界(isOwnerBoundaryPending 已含
+    // durable owner 检查)在响应返回途中变 pending,必须中止且不返回结果。
+    let boundaryPending = false;
+    const doFetch = vi.fn<typeof fetch>(async () => {
+      boundaryPending = true;
+      return new Response(
+        JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=', mime_type: 'image/jpeg' }] }),
+        { status: 200 },
+      );
+    });
+    const ch = channel(doFetch, { isOwnerBoundaryPending: () => boundaryPending });
+    await expect(
+      ch.generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' }),
+    ).rejects.toThrow('账号已切换');
+    expect(doFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('登录态决定 ready;派发拦截、源图上限与 OAuth 拒绝均在出网边界处理', async () => {
     const doFetch = vi.fn<typeof fetch>();
     const unavailable = channel(doFetch, { hasOAuthLogin: () => false });
