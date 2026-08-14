@@ -32,6 +32,7 @@ const mocks = {
   pushReplyAnchor: vi.fn(),
   pushPatchableOpener: vi.fn(),
   evictOpenThreadOutcome: vi.fn(),
+  recallOwnMessage: vi.fn(async () => true),
   firstAllowed: vi.fn<() => string | null>(() => null),
   readOwnerOpenId: vi.fn<() => string | null>(() => null),
   clearOwner: vi.fn(),
@@ -80,6 +81,7 @@ vi.doMock('../outbound.js', () => ({
   pushReplyAnchor: mocks.pushReplyAnchor,
   pushPatchableOpener: mocks.pushPatchableOpener,
   evictOpenThreadOutcome: mocks.evictOpenThreadOutcome,
+  recallOwnMessage: mocks.recallOwnMessage,
 }));
 
 vi.doMock('../ownerGuard.js', () => ({
@@ -335,6 +337,28 @@ describe('feishu group inbound gate', () => {
       await wsClient.stop({ announceOffline: false, reason: 'test-disconnect-before-retry' });
       await vi.advanceTimersByTimeAsync(10_000);
       expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retry exhaustion recalls the orphaned opener card as last resort', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValueOnce({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      // 首发 + 3 次重试全部失败(持续故障)。
+      mocks.replyText.mockRejectedValue(new Error('persistent outage'));
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(90_000);
+
+      expect(mocks.replyText).toHaveBeenCalledTimes(4);
+      // 重试耗尽: 撤回开场白卡, 用户看到干净群主流而不是永久「思考中」卡。
+      expect(mocks.recallOwnMessage).toHaveBeenCalledWith('om_opener');
       expect(events).toHaveLength(0);
     } finally {
       vi.useRealTimers();

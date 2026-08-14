@@ -300,6 +300,27 @@ export function evictOpenThreadOutcome(replyToMessageId: string): void {
   openThreadByTrigger.delete(replyToMessageId);
 }
 
+/**
+ * 撤回 bot 自己发的消息(孤儿开场白卡重试耗尽后的最后兜底)。返回是否成功;
+ * 失败只 log — 撤回成功用户看到干净群主流而不是永久「思考中」卡, 撤回失败
+ * 说明故障仍未恢复, 已无更进一步的兜底手段。
+ */
+export async function recallOwnMessage(messageId: string): Promise<boolean> {
+  const log = getLog();
+  try {
+    const res = await ensureClient().im.v1.message.delete({ path: { message_id: messageId } });
+    if (res.code !== undefined && res.code !== 0) {
+      log.warn(`[feishu/outbound] recallOwnMessage rejected (code=${res.code}): ${res.msg ?? ''}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[feishu/outbound] recallOwnMessage failed: ${msg}`);
+    return false;
+  }
+}
+
 async function doOpenThread(replyToMessageId: string): Promise<OpenThreadOutcome> {
   const log = getLog();
   try {

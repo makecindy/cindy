@@ -256,6 +256,14 @@ describe('feishu outbound lane routing', () => {
     expect(larkMocks.reply).toHaveBeenCalledTimes(2);
   });
 
+  it('recallOwnMessage returns true on success and false on business error or throw', async () => {
+    await expect(outbound.recallOwnMessage('om_ok')).resolves.toBe(true);
+    larkMocks.deleteMessage.mockResolvedValueOnce({ code: 99991672, msg: 'rejected' });
+    await expect(outbound.recallOwnMessage('om_rejected')).resolves.toBe(false);
+    larkMocks.deleteMessage.mockRejectedValueOnce(new Error('network down'));
+    await expect(outbound.recallOwnMessage('om_throw')).resolves.toBe(false);
+  });
+
   it('unbindClient clears held anchors (no cross-generation mismatch)', async () => {
     outbound.pushReplyAnchor('g/oc_g', 'om_old');
     outbound.unbindClient();

@@ -143,9 +143,12 @@ function scheduleOrphanNoticeRetry(
   const log = getLog();
   const delay = ORPHAN_NOTICE_RETRY_DELAYS_MS[attempt];
   if (delay === undefined) {
+    // 重试耗尽: 最后兜底是撤回开场白卡 — 撤回成功用户看到干净群主流而不是
+    // 永久「思考中」卡; 撤回失败说明故障仍未恢复, 已无更进一步的兜底手段。
     log.error(
-      `[feishu/wsClient] orphan opener notice retries exhausted — giving up (opener stays orphaned)`,
+      '[feishu/wsClient] orphan opener notice retries exhausted — recalling opener card as last resort',
     );
+    void outbound.recallOwnMessage(openerMessageId);
     return;
   }
   const existing = orphanNoticeRetries.get(openerMessageId);
