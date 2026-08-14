@@ -373,13 +373,77 @@ describe('feishu group inbound gate', () => {
     }
   });
 
+  it('in-flight retry that fails after a successful redelivery drops its chain', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      // 第一次定时重试(10s)挂起中 — 期间重投成功送达, 之后才失败。
+      let rejectRetry!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectRetry = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+
+      // 冷却过后的重投成功送达(重投的处理里会清理挂起重试)。
+      await vi.advanceTimersByTimeAsync(61_000);
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      const deliveredCount = mocks.replyText.mock.calls.length;
+      expect(deliveredCount).toBe(3);
+
+      // 执行中的旧重试此刻才失败 — 链应停: 不 schedule 下一次、不撤回。
+      rejectRetry(new Error('outage'));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(3);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('successful retry reclaims the message so later redeliveries are suppressed', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 10s 定时重试成功 — 重新认领触发消息。
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+
+      // 冷却(60s)过后的重投: 入站去重拦下(已重新认领), 不再进入提示流程。
+      await vi.advanceTimersByTimeAsync(61_000);
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('successful redelivery cancels the stale retry scheduled by the failed first attempt', async () => {
     vi.useFakeTimers();
     try {
       mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
-      // 首发失败 → 安排重试; 重试本身也失败一次(不耗尽)。
+      // 首发 + 前两轮定时重试都失败(90s 重试挂起中) — 重投在此时成功送达。
       mocks.replyText
         .mockRejectedValueOnce(new Error('transient network error'))
+        .mockRejectedValueOnce(new Error('still down'))
         .mockRejectedValueOnce(new Error('still down'));
       await connect();
       const events = collectEvents();
