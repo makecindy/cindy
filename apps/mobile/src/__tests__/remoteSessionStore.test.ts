@@ -1854,7 +1854,7 @@ describe('remoteSessionStore', () => {
     const truncated = {
       ...messageAt('m1', 's1', '2026-01-01T10:00:01.000Z'),
       content: '[remote content truncated: payload too large]',
-      agentMeta: { remoteContentTruncated: true },
+      agentMeta: { remoteContentTruncated: true, agentTaskStatus: 'failed' as const },
     };
     remoteSessionStore.setMessages('s1', [full]);
 
@@ -1866,6 +1866,8 @@ describe('remoteSessionStore', () => {
     const rows = remoteSessionStore.getMessages('s1');
     expect(rows.map((item) => item.id)).toEqual(['m1', 'm2']);
     expect(rows[0].content).toBe('完整的长内容');
+    expect(rows[0].agentMeta?.agentTaskStatus).toBe('failed');
+    expect(rows[0].agentMeta?.remoteContentTruncated).not.toBe(true);
   });
 
   it('does not emit when a reseed returns the same session list or message window', () => {

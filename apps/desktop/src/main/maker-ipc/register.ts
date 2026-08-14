@@ -416,6 +416,7 @@ import {
   noteSessionClearBoundary,
   noteTurnStarted,
   onAssistantTextEvent,
+  onAgentTaskUpdateEvent,
   onInteractionMessage,
   onInteractionResolved,
   clearCodexPlanRowsForSession,
@@ -4128,6 +4129,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         );
       }
       if (event.type === 'agent_task_update') {
+        onAgentTaskUpdateEvent(session.id, event.data);
         // Subagent workspace is an observer only: normalize the existing
         // harness event into Cindy's durable record on the same FIFO as chat
         // messages. No launch/control path or provider payload is modified.

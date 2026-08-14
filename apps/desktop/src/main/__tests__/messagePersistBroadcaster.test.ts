@@ -18,11 +18,15 @@ vi.mock('../localDb/ipc/messages.js', () => ({
   broadcastMessageAgentMetaUpdate: vi.fn(async () => true),
   broadcastMessageRow: vi.fn(),
   createMessage: vi.fn(async () => ({}) as unknown),
+  findVisibleToolUseMessageByAliases: vi.fn(async () => null),
   patchMessageAgentMetaWithResult: vi.fn(async (_sessionId, _clientId, patch) => ({
     previous: {},
     next: patch,
   })),
   updateMessageContent: vi.fn(async () => ({}) as unknown),
+}));
+vi.mock('../localDb/subagentRuns.js', () => ({
+  getSubagentRunDetail: vi.fn(async () => null),
 }));
 
 vi.mock('../logger.js', () => ({
@@ -55,9 +59,11 @@ import {
   broadcastMessageAgentMetaUpdate,
   broadcastMessageRow,
   createMessage,
+  findVisibleToolUseMessageByAliases,
   patchMessageAgentMetaWithResult,
   updateMessageContent,
 } from '../localDb/ipc/messages.js';
+import { getSubagentRunDetail } from '../localDb/subagentRuns.js';
 import {
   markCodexPlanInterrupted,
   writeCodexPlanTerminal,
@@ -69,6 +75,7 @@ import {
 } from '../mcp-integrations/mediaToolResultFallback.js';
 import {
   onToolUseEvent,
+  onAgentTaskUpdateEvent,
   persistCodexPlanOnDone,
   persistCodexPlanOnTerminalError,
   onToolResultEvent,
@@ -118,6 +125,8 @@ describe('Codex done completion boundary', () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(findVisibleToolUseMessageByAliases).mockResolvedValue(null);
+  vi.mocked(getSubagentRunDetail).mockResolvedValue(null);
   ownerScopeState.current = true;
   noteSessionClearBoundary(SESSION, null);
   clearSessionPersistState(SESSION);
@@ -705,6 +714,288 @@ describe('update_plan tool_use persistence', () => {
     await flushWrites();
     expect(createMessage).toHaveBeenCalledTimes(2);
     expect(updateMessageContent).not.toHaveBeenCalled();
+  });
+});
+
+describe('agent task terminal persistence', () => {
+  it.each(['failed', 'stopped'] as const)(
+    'patches a %s terminal state onto the originating tool_use row',
+    async (status) => {
+      const persistId = onToolUseEvent(
+        SESSION,
+        { toolUseId: 'toolu-agent-1', toolName: 'Agent', input: { prompt: 'Inspect auth' } },
+        { uuid: 'sdk-message-1' },
+      );
+
+      expect(onAgentTaskUpdateEvent(SESSION, {
+        taskId: 'agent-1',
+        parentToolUseId: 'toolu-agent-1',
+        status,
+      })).toBe(true);
+
+      await flushWrites();
+      expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+        SESSION,
+        persistId,
+        { agentTaskStatus: status },
+      );
+      expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
+        SESSION,
+        persistId,
+        ownerScopeState.scope,
+      );
+    },
+  );
+
+  it('does not persist running progress updates', async () => {
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-running', toolName: 'Task', input: {} },
+      null,
+    );
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-running',
+      parentToolUseId: 'toolu-agent-running',
+      status: 'running',
+    })).toBe(false);
+
+    await flushWrites();
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+  });
+
+  it('learns a taskId alias from running progress for a later terminal-only update', async () => {
+    const persistId = onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-alias', toolName: 'Agent', input: {} },
+      null,
+    );
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-alias',
+      parentToolUseId: 'toolu-agent-alias',
+      status: 'running',
+    })).toBe(false);
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-alias',
+      status: 'failed',
+    })).toBe(true);
+
+    await flushWrites();
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      { agentTaskStatus: 'failed' },
+    );
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      ownerScopeState.scope,
+    );
+  });
+
+  it('rehydrates a persisted tool row when process-local task linkage is missing', async () => {
+    vi.mocked(findVisibleToolUseMessageByAliases).mockResolvedValueOnce({
+      clientId: 'persisted-agent-row',
+      toolUseId: 'toolu-agent-rehydrated',
+    });
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-rehydrated',
+      parentToolUseId: 'toolu-agent-rehydrated',
+      status: 'stopped',
+    })).toBe(true);
+
+    await flushWrites();
+    expect(findVisibleToolUseMessageByAliases).toHaveBeenCalledWith(SESSION, [
+      'toolu-agent-rehydrated',
+      'agent-rehydrated',
+    ]);
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      'persisted-agent-row',
+      { agentTaskStatus: 'stopped' },
+    );
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
+      SESSION,
+      'persisted-agent-row',
+      ownerScopeState.scope,
+    );
+  });
+
+  it('rehydrates a taskId-only terminal update through the durable Subagent alias', async () => {
+    vi.mocked(findVisibleToolUseMessageByAliases).mockImplementation(async (_sessionId, aliases) =>
+      aliases.includes('toolu-agent-by-task-id')
+        ? {
+            clientId: 'persisted-agent-row-by-task-id',
+            toolUseId: 'toolu-agent-by-task-id',
+          }
+        : null,
+    );
+    vi.mocked(getSubagentRunDetail).mockResolvedValue({
+      parentToolUseId: 'toolu-agent-by-task-id',
+    } as Awaited<ReturnType<typeof getSubagentRunDetail>>);
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      provider: 'claude-code',
+      taskId: 'agent-runtime-id-only',
+      status: 'failed',
+    })).toBe(true);
+
+    await flushWrites();
+    expect(getSubagentRunDetail).toHaveBeenCalledWith(
+      SESSION,
+      'claude-code',
+      'agent-runtime-id-only',
+    );
+    expect(findVisibleToolUseMessageByAliases).toHaveBeenNthCalledWith(2, SESSION, [
+      'agent-runtime-id-only',
+      'toolu-agent-by-task-id',
+    ]);
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      'persisted-agent-row-by-task-id',
+      { agentTaskStatus: 'failed' },
+    );
+  });
+
+  it('does not restore a persisted task link when session clear wins the lookup race', async () => {
+    let markLookupStarted!: () => void;
+    let releaseLookup!: () => void;
+    const lookupStarted = new Promise<void>((resolve) => { markLookupStarted = resolve; });
+    const lookupGate = new Promise<void>((resolve) => { releaseLookup = resolve; });
+    vi.mocked(findVisibleToolUseMessageByAliases).mockImplementationOnce(async () => {
+      markLookupStarted();
+      await lookupGate;
+      return {
+        clientId: 'persisted-agent-row-before-clear',
+        toolUseId: 'toolu-agent-rehydrate-clear-race',
+      };
+    });
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-rehydrate-clear-race',
+      parentToolUseId: 'toolu-agent-rehydrate-clear-race',
+      status: 'completed',
+    })).toBe(true);
+    await lookupStarted;
+    noteSessionClearBoundary(SESSION, Date.now());
+    releaseLookup();
+    await flushWrites();
+
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+  });
+
+  it('carries a terminal update that arrives before its tool_use into the initial row', async () => {
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-early',
+      parentToolUseId: 'toolu-agent-early',
+      status: 'stopped',
+    })).toBe(true);
+
+    const persistId = onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-early', toolName: 'Agent', input: { prompt: 'Inspect auth' } },
+      { uuid: 'sdk-message-early' },
+    );
+
+    await flushWrites();
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: persistId,
+        role: 'tool_use',
+        agentMeta: {
+          uuid: 'sdk-message-early',
+          agentTaskStatus: 'stopped',
+        },
+      }),
+      broadcastGuard(),
+    );
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+  });
+
+  it('does not patch a pre-clear tool row when its terminal update arrives late', async () => {
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-before-clear', toolName: 'Agent', input: {} },
+      null,
+    );
+    noteSessionClearBoundary(SESSION, Date.now());
+
+    onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-before-clear',
+      parentToolUseId: 'toolu-agent-before-clear',
+      status: 'completed',
+    });
+
+    await flushWrites();
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not patch or rebroadcast a terminal update queued before session clear', async () => {
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-queued-before-clear', toolName: 'Agent', input: {} },
+      null,
+    );
+    await flushWrites();
+    vi.clearAllMocks();
+
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const blockingWrite = enqueueDurableWrite('agent-task-clear-race', () => writeGate);
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-queued-before-clear',
+      parentToolUseId: 'toolu-agent-queued-before-clear',
+      status: 'failed',
+    })).toBe(true);
+    noteSessionClearBoundary(SESSION, Date.now());
+
+    releaseWrite();
+    await blockingWrite;
+    await flushWrites();
+
+    expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not rebroadcast when session clear happens during the terminal patch', async () => {
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu-agent-patching-at-clear', toolName: 'Agent', input: {} },
+      null,
+    );
+    await flushWrites();
+    vi.clearAllMocks();
+
+    let markPatchStarted!: () => void;
+    let releasePatch!: () => void;
+    const patchStarted = new Promise<void>((resolve) => { markPatchStarted = resolve; });
+    const patchGate = new Promise<void>((resolve) => { releasePatch = resolve; });
+    vi.mocked(patchMessageAgentMetaWithResult).mockImplementationOnce(
+      async (_sessionId, _clientId, patch) => {
+        markPatchStarted();
+        await patchGate;
+        return { previous: {}, next: patch };
+      },
+    );
+
+    expect(onAgentTaskUpdateEvent(SESSION, {
+      taskId: 'agent-patching-at-clear',
+      parentToolUseId: 'toolu-agent-patching-at-clear',
+      status: 'stopped',
+    })).toBe(true);
+    await patchStarted;
+    noteSessionClearBoundary(SESSION, Date.now());
+    releasePatch();
+    await flushWrites();
+
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledTimes(1);
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
   });
 });
 

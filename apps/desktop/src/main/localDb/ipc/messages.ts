@@ -1601,6 +1601,45 @@ export async function patchMessageAgentMetaWithResult(
   return { previous, next };
 }
 
+export interface VisibleToolUseMessageLink {
+  clientId: string;
+  toolUseId: string;
+}
+
+/**
+ * Recover a durable tool-use row after process-local event linkage was lost.
+ * The session clear boundary is part of visibility: a restart must not make a
+ * pre-clear row eligible for a late background terminal update again.
+ */
+export async function findVisibleToolUseMessageByAliases(
+  sessionId: string,
+  aliases: readonly string[],
+): Promise<VisibleToolUseMessageLink | null> {
+  const normalizedAliases = [...new Set(aliases.filter((alias) => alias.length > 0))];
+  if (!sessionId || normalizedAliases.length === 0) return null;
+  const [row] = await getDbClient()
+    .drizzle.select({
+      clientId: messages.clientId,
+      toolUseId: messages.toolUseId,
+    })
+    .from(messages)
+    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'tool_use'),
+        inArray(messages.toolUseId, normalizedAliases),
+        isNull(messages.rewindAt),
+        or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+      ),
+    )
+    .orderBy(desc(messages.createdAt))
+    .limit(1);
+  return row?.clientId && row.toolUseId
+    ? { clientId: row.clientId, toolUseId: row.toolUseId }
+    : null;
+}
+
 export async function patchMessageAgentMeta(
   sessionId: string,
   clientId: string,

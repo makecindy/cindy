@@ -35,6 +35,7 @@ import {
   deriveAgentTaskStatus,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
+  type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 import {
   isAgentPlanToolName,
@@ -408,6 +409,7 @@ type AgentTaskRenderItem = {
   toolCall?: ChatMessage;
   update?: AgentTaskUpdate;
   result?: string;
+  persistedStatus?: AgentTaskTerminalStatus;
   /** 对应 tool_result 的 createdAt(ms)。历史会话没有 live taskUpdates 时,item 的结束
    *  时间只能靠它 —— 否则跑了半小时以上的 Agent/Task 会让紧随其后的最终答复被空洞守卫
    *  误判(#676 review)。与 tool_segment 的 resultTsMap 同源。 */
@@ -1665,6 +1667,7 @@ export function buildRenderItems(
           key: `task-${msg.clientId}`,
           toolCall: msg,
           update,
+          ...(msg.agentTaskStatus ? { persistedStatus: msg.agentTaskStatus } : {}),
           ...(result !== undefined && !shouldHideToolResult(toolName, result) ? { result } : {}),
           ...(resultTsMs !== undefined ? { resultTsMs } : {}),
         });
@@ -1994,6 +1997,7 @@ function isWorkChild(it: RenderItem): it is WorkChildItem {
 function isRunningAgentTask(it: RenderItem): boolean {
   if (it.type !== 'agent_task') return false;
   const status = deriveAgentTaskStatus(it.update?.status, it.result, {
+    persistedStatus: it.persistedStatus,
     resultIsLaunchReceipt:
       subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !==
         undefined || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
@@ -2648,6 +2652,7 @@ function renderWorkGroupChild(
         toolCall={item.toolCall}
         update={item.update}
         result={item.result}
+        persistedStatus={item.persistedStatus}
         {...(props.sessionId ? { sessionId: props.sessionId } : {})}
         subagentModel={
           item.toolCall?.toolUseId
@@ -5417,6 +5422,7 @@ export function MessageStream({
                           toolCall={item.toolCall}
                           update={item.update}
                           result={item.result}
+                          persistedStatus={item.persistedStatus}
                           {...(sessionId ? { sessionId } : {})}
                           subagentModel={
                             item.toolCall?.toolUseId

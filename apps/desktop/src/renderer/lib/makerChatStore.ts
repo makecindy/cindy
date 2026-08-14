@@ -44,7 +44,9 @@ import {
   markCodexPlanTurnFailed,
 } from '@cindy/maker-shared/message-render';
 import {
+  normalizeAgentTaskTerminalStatus,
   normalizeWorkflowProgressEntries,
+  type AgentTaskTerminalStatus,
   type WorkflowProgressEntry,
 } from '@cindy/maker-shared/agent-task';
 import {
@@ -373,6 +375,8 @@ export interface ChatMessage {
   toolUseId?: string;
   toolName?: string;
   toolInput?: unknown;
+  /** Durable Agent/Task terminal state restored from the tool_use row. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
   /**
    * Renderer-local timestamp for the latest in-place `update_plan` payload.
    * `createdAt` remains the persisted message creation time and must not be
@@ -14941,6 +14945,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       const c = m.content as Record<string, unknown>;
       const toolName = typeof c.toolName === 'string' ? c.toolName : '';
       const toolInput = c.input ?? null;
+      const agentTaskStatus = normalizeAgentTaskTerminalStatus(m.agentMeta?.agentTaskStatus);
       // toolUseId 来源:DB 列(新数据) → fallback 旧数据存在 content.toolUseId 里
       const toolUseId =
         (typeof m.toolUseId === 'string' && m.toolUseId.length > 0 ? m.toolUseId : undefined) ??
@@ -14952,6 +14957,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolUseId,
         toolName,
         toolInput,
+        ...(agentTaskStatus ? { agentTaskStatus } : {}),
         ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
           ? {
               terminalPlanSnapshot: true,
