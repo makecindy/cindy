@@ -153,7 +153,13 @@ describe('runGhostSnapshotWorkerRequest remove', () => {
 
 describe('runGhostSnapshotWorkerRequest ensure fast path', () => {
   it('rejects an ABA replacement of the snapshot root during matches()', async () => {
-    workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-snapshot-aba-'));
+    // GH Windows runners expose os.tmpdir() as an 8.3 short path while the
+    // worker resolves roots via realpath (long-name canonical). Canonicalize
+    // here so the readdir mock's path prefix matches the paths the worker
+    // actually reads, otherwise the swap never fires and the test no-ops.
+    workDir = fs.realpathSync.native(
+      await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-snapshot-aba-')),
+    );
     const idDir = path.join(workDir, 'skilled');
     const revision = '11111111-1111-4111-8111-111111111111';
     const target = path.join(idDir, revision);
