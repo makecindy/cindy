@@ -288,6 +288,54 @@ describe('AppShortcutStore', () => {
     expect(store.getOverrides()).toEqual({ 'toggle-sidebar': combo('KeyJ', { meta: true }) });
   });
 
+  it('refuses to write while the .bak backup is still unrecovered, instead of overwriting it with defaults-derived state', () => {
+    // 回归 Codex P1:只是不缓存空状态还不够——setOverride 这类调用是"先 load
+    // 当前值再基于它 replaceOverrides"，如果拿到的是上一条用例里那份临时空
+    // 快照，合并出的"新配置"其实只包含这一次编辑，会在写盘前锁恰好释放时,
+    // 让 atomicWriteFileSync 先把 .bak 恢复回主文件、再用这份派生自空数据的
+    // 内容覆盖它——把瞬时故障变成永久丢失用户已有的自定义快捷键。
+    //
+    // mock 只拦截"恢复"这一次调用(mockImplementationOnce)，模拟"load() 时
+    // 锁还在、紧接着的 save() 时锁已经清除"——atomicWriteFileSync 自己内部
+    // 的恢复重试这次会成功，所以能不能拦住这次写完全取决于 backupUnrecoverable
+    // 这个标记，不是靠 atomicWriteFileSync 自己重复失败侥幸兜底。
+    fs.writeFileSync(
+      `${filePath()}.bak`,
+      JSON.stringify({
+        version: 1,
+        overrides: { 'toggle-sidebar': combo('KeyJ', { meta: true }) },
+      }),
+    );
+    const realRename = fs.renameSync;
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementationOnce(((from: string, to: string) => {
+      if (String(from) === `${filePath()}.bak` && String(to) === filePath()) {
+        throw Object.assign(new Error('backup restore blocked'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+
+    const store = makeStore('darwin');
+    try {
+      // setOverride 内部自己会先 load()——这次调用本身就撞上 mock 的那一次
+      // 恢复失败，置位 backupUnrecoverable，紧接着(同一次调用里，中间没有再
+      // 插入一次成功的 load())就该在 replaceOverrides→save() 被拒绝，而不是
+      // 用这份派生自空数据的"新配置"覆盖磁盘——此时锁已经"清除"(mock 只拦了
+      // 一次)，如果不是 backupUnrecoverable 拦下，atomicWriteFileSync 自己
+      // 会顺利完成恢复 + 覆盖写入。
+      expect(() => store.setOverride('save-file', combo('KeyP', { meta: true }))).toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+
+    // .bak 里原本保存的覆盖项必须原封不动——没有被上面那次被拒绝的写入破坏。
+    expect(
+      JSON.parse(fs.readFileSync(`${filePath()}.bak`, 'utf-8')).overrides['toggle-sidebar'],
+    ).toEqual(combo('KeyJ', { meta: true }));
+    // 备份已经恢复(mock 已移除，重新读盘会成功)：这次真实读到的覆盖项必须是
+    // .bak 里原本的内容，不能是刚才被拒绝的那次写入留下的任何痕迹。
+    expect(store.getOverrides()).toEqual({ 'toggle-sidebar': combo('KeyJ', { meta: true }) });
+  });
+
   it('notifies subscribers and onChanged on every mutation', () => {
     const onChanged = vi.fn();
     const store = makeStore('darwin', onChanged);

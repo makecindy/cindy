@@ -58,6 +58,14 @@ export interface AppShortcutStoreOptions {
 export class AppShortcutStore {
   private overrides: AppShortcutOverrides | null = null;
   private readonly changeListeners = new Set<(overrides: AppShortcutOverrides) => void>();
+  // load() 遇到 AtomicBackupUnrecoverableError 时置真:.bak 里还有救得回来的
+  // 数据，只是暂时读不出来。这段窗口里 load() 会返回一份不缓存的空快照给纯读
+  // 调用方过渡；但 setOverride/clearOverride/resetAll 都是"先 load current
+  // 再基于它 replaceOverrides"，如果这份空快照被当成真实当前值去合并、再写盘，
+  // 恰好在写盘前锁被释放时，atomicWriteFileSync 会先把 .bak 恢复回主文件、
+  // 再用这份派生自空数据的内容覆盖它——把一次瞬时故障变成永久丢失。这个标记
+  // 在这种情况下拦住 save()，直到某次 load() 真正读到磁盘内容才清除。
+  private backupUnrecoverable = false;
 
   constructor(private readonly options: AppShortcutStoreOptions) {}
 
@@ -155,13 +163,16 @@ export class AppShortcutStore {
           ? (parsed as { overrides?: unknown }).overrides
           : undefined;
       this.overrides = normalizeAppShortcutOverrides(overridesRaw, this.options.platform);
+      this.backupUnrecoverable = false;
     } catch (error) {
       if (isAtomicBackupUnrecoverable(error)) {
         // 备份暂时恢复不了(通常是 Windows 文件锁/杀毒瞬时占用)——不能当成
         // "没有覆盖项"缓存进 this.overrides:一旦缓存，后续任何一次编辑触发的
         // save() 都会用这份错误的空状态覆盖磁盘上唯一还能救回来的快照，把一次
         // 瞬时故障变成永久丢失用户的自定义快捷键。这里只给这一次调用返回空
-        // 快照，不写 this.overrides，下一次 load() 会重新尝试读盘。
+        // 快照，不写 this.overrides，下一次 load() 会重新尝试读盘；同时置位
+        // backupUnrecoverable，堵住这段窗口里任何"先读再写"的 save()。
+        this.backupUnrecoverable = true;
         log.warn('app shortcut overrides temporarily unavailable, not caching as empty', {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -173,6 +184,7 @@ export class AppShortcutStore {
         });
       }
       this.overrides = {};
+      this.backupUnrecoverable = false;
     }
     return this.overrides;
   }
@@ -187,6 +199,17 @@ export class AppShortcutStore {
   }
 
   private save(overrides: AppShortcutOverrides): void {
+    if (this.backupUnrecoverable) {
+      // 上一次 load() 没能确认磁盘真实内容(.bak 暂时恢复不了)，这次要写的
+      // overrides 很可能是拿那份临时空快照当基准合并出来的——写下去会用派生自
+      // 空数据的内容覆盖掉刚恢复回来的真实备份。拒绝这次写，逼调用方重试；
+      // 下一次成功的 load() 会清掉这个标记。
+      const error = new Error(
+        'app shortcut overrides backup has not been recovered yet; refusing to write possibly-derived-from-empty state',
+      );
+      log.warn('app shortcut overrides write blocked: backup not yet recovered');
+      throw error;
+    }
     const filePath = this.options.getFilePath();
     try {
       atomicWriteFileSync(

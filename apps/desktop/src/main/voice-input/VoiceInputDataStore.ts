@@ -75,6 +75,15 @@ type DataChangedPayload = {
 export class VoiceInputDataStore {
   private state: StoredVoiceInputData | null = null;
   private stateOwnerId: string | null = null;
+  // load() 遇到 AtomicBackupUnrecoverableError 时置真:.bak 里还有救得回来的
+  // 数据，只是暂时读不出来。这段窗口里 load() 会返回一份不缓存的默认快照给纯
+  // 读调用方过渡；但 updateSettings/词典变更/历史增删都是"先 load 当前值再
+  // replaceState"，如果这份默认快照被当成真实当前值去合并、再写盘，恰好在
+  // 写盘前锁被释放时，atomicWriteFileSync 会先把 .bak 恢复回主文件、再用这份
+  // 派生自默认值的内容覆盖它——把一次瞬时故障变成永久丢失语音历史/设置，
+  // 还可能连带给词典 CRDT 正本打墓碑。这个标记在这种情况下拦住 save()，直到
+  // 某次 load() 真正读到磁盘内容才清除。
+  private backupUnrecoverable = false;
 
   getSnapshot(): VoiceInputDataSnapshot {
     return cloneSnapshot(this.load());
@@ -464,6 +473,10 @@ export class VoiceInputDataStore {
       };
       const hydrated = this.hydrateDictionaryFromSyncState(this.state);
       this.state = hydrated;
+      // 这里已经是这次调用真正读到的磁盘内容(不是派生自默认值)，清掉标记要
+      // 赶在下面"首次迁移即时写盘"之前——那次内部 save() 写的正是刚读到的真实
+      // 数据，不该被上一轮遗留的 backupUnrecoverable 拦下。
+      this.backupUnrecoverable = false;
       // 首次迁移刚落下印记时立刻写盘一次。只留在内存里的话,这次启动如果没有任何
       // 词典写入,盘上的投影就还是「没有印记」—— 下次 sidecar 真丢了会被再次误判成
       // 首次迁移,于是越过对端墓碑重建,别的设备上删掉的词就复活了。
@@ -476,7 +489,12 @@ export class VoiceInputDataStore {
         // 任何一次词典/设置写入触发的 save() 都会用这份错误的空状态覆盖磁盘，
         // 而且下面的回收逻辑还会据此给 CRDT 正本里的词条打墓碑，把一次瞬时
         // 故障升级成永久数据损毁。这里只给这一次调用返回一个不落盘、不触发
-        // 回收的临时快照，不写 this.state，下一次 load() 会重新尝试读盘。
+        // 回收的临时快照，不写 this.state，下一次 load() 会重新尝试读盘；同时
+        // 置位 backupUnrecoverable，堵住这段窗口里任何"先读再写"的 save()——
+        // 光不缓存还不够，调用方拿到这份快照后可能立刻拿它当"当前值"合并出
+        // 新状态并写盘，写盘前锁一旦恰好释放，会把刚恢复回来的真实备份用这份
+        // 派生自默认值的内容覆盖掉。
+        this.backupUnrecoverable = true;
         log.warn('voice input data temporarily unavailable, not caching as empty', {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -507,6 +525,7 @@ export class VoiceInputDataStore {
       this.state = this.hasSyncedDictionary()
         ? this.projectDictionaryWithoutReconcile(this.state)
         : this.hydrateDictionaryFromSyncState(this.state);
+      this.backupUnrecoverable = false;
       return this.state;
     }
   }
@@ -606,6 +625,17 @@ export class VoiceInputDataStore {
   }
 
   private save(state: StoredVoiceInputData): void {
+    if (this.backupUnrecoverable) {
+      // 上一次 load() 没能确认磁盘真实内容(.bak 暂时恢复不了)，这次要写的
+      // state 很可能是拿那份临时默认快照当基准合并出来的——写下去会用派生自
+      // 默认值的内容覆盖掉刚恢复回来的真实语音历史/设置，还可能连带给词典
+      // CRDT 正本打墓碑。拒绝这次写，逼调用方重试；下一次成功的 load() 会
+      // 清掉这个标记。
+      log.warn('voice input data write blocked: backup not yet recovered');
+      throw new VoiceInputDataStoreWriteError(
+        new Error('voice input data backup has not been recovered yet'),
+      );
+    }
     const filePath = getDataFilePath();
     try {
       atomicWriteFileSync(filePath, JSON.stringify(state, null, 2));
