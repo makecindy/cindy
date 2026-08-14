@@ -137,12 +137,13 @@ async function main() {
   }
   const shard = path.resolve(opts.shard);
 
-  // shard 身份校验 (Codex P1 on #2561 第十九轮: validate the shard before
-  // applying cleanup): --apply/--dry-run 指向已存在但非 maker-memory shard 的
-  // 目录 (如 repo 根 / maker-memory 根) 时, runMemoryCleanup 的 rebuildIndex
-  // 会写 <shard>/MEMORY.md — 即使 plan 为空也可能创建/覆盖 Git 跟踪或无关的
-  // MEMORY.md。帮助文本声明「无 meta.json 目录不属于本工具范围」, 这里强制:
-  // 目录必须存在且含 meta.json (canonical 分片身份), 否则拒绝。
+  // shard 身份校验 (Codex P1 on #2561 第十九/二十轮: validate the shard
+  // before applying cleanup): --apply/--dry-run 指向已存在但非 maker-memory
+  // shard 的目录 (如 repo 根 / maker-memory 根) 时, runMemoryCleanup 的
+  // rebuildIndex 会写 <shard>/MEMORY.md — 即使 plan 为空也可能创建/覆盖 Git
+  // 跟踪或无关的 MEMORY.md。帮助文本声明「无 meta.json 目录不属于本工具
+  // 范围」, 这里强制: 目录必须存在且含**形态正确**的 meta.json (canonical
+  // 分片身份), 否则拒绝。
   const shardStat = await fs.stat(shard).catch(() => null);
   if (shardStat === null) {
     process.stderr.write(`分片目录不存在: ${shard}\n`);
@@ -153,11 +154,25 @@ async function main() {
     process.exit(2);
   }
   try {
-    await fs.access(path.join(shard, 'meta.json'));
+    // 只检查可访问不够 — 任意项目/根目录若恰好含有自己的 meta.json 也会
+    // 通过 (Codex P1 on #2561 第二十轮: require real shard metadata)。
+    // 验证 MemoryStorageMeta 结构 (absPath/createdAt/lastUsedAt 三字段)。
+    const metaRaw = await fs.readFile(path.join(shard, 'meta.json'), 'utf8');
+    const meta = JSON.parse(metaRaw);
+    if (
+      typeof meta !== 'object' ||
+      meta === null ||
+      typeof meta.absPath !== 'string' ||
+      typeof meta.createdAt !== 'string' ||
+      typeof meta.lastUsedAt !== 'string'
+    ) {
+      throw new Error('meta.json shape mismatch');
+    }
   } catch {
     process.stderr.write(
-      `不是 maker-memory 分片 (缺少 meta.json): ${shard}\n` +
-        '  本工具只处理带 meta.json 的 canonical 分片; SSH 分片 / 手工目录属 migrate-maker-memory 范围。\n',
+      `不是 maker-memory 分片 (meta.json 缺失或格式不符): ${shard}\n` +
+        '  分片 meta.json 需为 MakerMemoryStorageMeta (absPath/createdAt/lastUsedAt); ' +
+        'SSH 分片 / 手工目录属 migrate-maker-memory 范围。\n',
     );
     process.exit(2);
   }
