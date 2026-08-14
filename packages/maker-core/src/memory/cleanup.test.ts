@@ -469,6 +469,10 @@ describe('runMemoryCleanup', () => {
       expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
       await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('UPDATED');
       expect((await archiveContents()).some((f) => f.startsWith('feedback_a.md'))).toBe(true);
+      // copy fallback 恢复成功后 trash 也保留 (writer open fd 后续写入可达,
+      // 不 unlink — Codex P1 on #2561 第十八轮: keep copied trash reachable)。
+      const shardFiles = await readdir(dir);
+      expect(shardFiles.some((f) => f.includes('cleanup-trash'))).toBe(true);
     } finally {
       renameSpy.mockRestore();
       linkSpy.mockRestore();
