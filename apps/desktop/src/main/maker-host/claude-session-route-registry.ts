@@ -41,7 +41,7 @@ const routes = new Map<string, ClaudeSessionBillingRoute>();
 const listeners = new Set<RouteChangeListener>();
 const requestRoutes = new Map<number, ClaudeRequestRoute>();
 const latestRequestIds = new Map<string, number>();
-const visionFallbackProviders = new Map<string, string>();
+const visionFallbackRoutes = new Map<string, { model: string; providerId: string | null }>();
 const MAX_REQUEST_ROUTES = 256;
 
 /** 每个带会话标头的请求一开始就调用；未知路由也会使旧错误证据失效。 */
@@ -80,18 +80,24 @@ export function readLatestClaudeSessionRequestId(sessionId: string): number | nu
 }
 
 /** 只覆盖当前回合；回合结束时消费，不改变会话原本选择的供应商。 */
-export function recordClaudeVisionFallbackProvider(sessionId: string, providerId: string): void {
-  visionFallbackProviders.set(sessionId, providerId);
+export function recordClaudeVisionFallbackProvider(
+  sessionId: string,
+  model: string,
+  providerId: string | null,
+): void {
+  visionFallbackRoutes.set(sessionId, { model, providerId });
 }
 
-export function takeClaudeVisionFallbackProvider(sessionId: string): string | null {
-  const providerId = visionFallbackProviders.get(sessionId) ?? null;
-  visionFallbackProviders.delete(sessionId);
-  return providerId;
+export function takeClaudeVisionFallbackProvider(
+  sessionId: string,
+): { model: string; providerId: string | null } | null {
+  const route = visionFallbackRoutes.get(sessionId) ?? null;
+  visionFallbackRoutes.delete(sessionId);
+  return route;
 }
 
 export function clearClaudeVisionFallbackProvider(sessionId: string): void {
-  visionFallbackProviders.delete(sessionId);
+  visionFallbackRoutes.delete(sessionId);
 }
 
 /** proxy transform 决策点旁路调用;同值幂等(不重复通知)。 */
@@ -129,5 +135,5 @@ export function resetClaudeSessionRouteRegistryForTest(): void {
   listeners.clear();
   requestRoutes.clear();
   latestRequestIds.clear();
-  visionFallbackProviders.clear();
+  visionFallbackRoutes.clear();
 }

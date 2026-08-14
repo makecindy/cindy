@@ -66,6 +66,7 @@ import {
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store';
 import {
   readClaudeSessionRoute,
+  takeClaudeVisionFallbackProvider,
   resetClaudeSessionRouteRegistryForTest,
 } from '../claude-session-route-registry';
 import { setProviderOAuthTokenReader } from '../provider-route';
@@ -598,6 +599,10 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
       upstreamOverride: 'https://pi-vision.example/v1',
       headerOverride: { authorization: 'Bearer pi-vision-key' },
       bodyModelOverride: 'pi-vision-model',
+    });
+    expect(takeClaudeVisionFallbackProvider('sess-pi')).toEqual({
+      model: 'pi-vision-model',
+      providerId: 'pi-vision-provider',
     });
   });
 

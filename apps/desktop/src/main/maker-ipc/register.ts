@@ -3706,7 +3706,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           ) {
             if (event.source === 'codex') {
               clearCodexVisionFallback(session.id);
-            } else if (event.source === 'claude-code') {
+            } else if (event.source === 'claude-code' || event.source === 'pi') {
               clearClaudeVisionFallbackProvider(session.id);
             }
             turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));
@@ -3816,7 +3816,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') {
           turnModelPromiseBySession.delete(session.id);
         }
-        if (event.source === 'claude-code') {
+        if (event.source === 'claude-code' || event.source === 'pi') {
           clearClaudeVisionFallbackProvider(session.id);
         } else if (event.source === 'codex') {
           clearCodexVisionFallback(session.id);
@@ -4260,9 +4260,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // (今日 / session / per-message / 按模型) 同源同值。
       // 守卫: index.ts:388 stream_end fallback / codex done 不带 total_cost_usd, typeof 检查会跳过。
       if (event.type === 'done' && event.source === 'claude-code') {
-        const visionFallbackProviderId = takeClaudeVisionFallbackProvider(session.id);
+        const visionFallback = takeClaudeVisionFallbackProvider(session.id);
+        const visionFallbackProviderId = visionFallback?.providerId ?? null;
         const modelPromise =
-          turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
+          visionFallback?.model
+            ? Promise.resolve(visionFallback.model)
+            : turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
         turnModelPromiseBySession.delete(session.id);
         const doneData = event.data as
           | {
@@ -4843,9 +4846,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       //   xd / 默认网关            → 实际 gateway cost。
       // usage 事实无论价格是否可解析都持久化，保证新模型也能看到 cache 命中明细。
       if (event.type === 'done' && event.source === 'pi') {
-        const sessionProvider = getSessionProvider(session.id);
+        const visionFallback = takeClaudeVisionFallbackProvider(session.id);
+        const sessionProvider = visionFallback?.providerId ?? getSessionProvider(session.id);
         const modelPromise =
-          turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
+          visionFallback?.model
+            ? Promise.resolve(visionFallback.model)
+            : turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
         turnModelPromiseBySession.delete(session.id);
         const rawUsage = (event.data as { usage?: unknown } | undefined)?.usage;
         if (rawUsage && typeof rawUsage === 'object') {

@@ -554,6 +554,12 @@ export function createModelRoutingTransform(): RoutingTransform {
       });
       const fallbackAgent = headerValue(ctx.headers, 'x-cindy-pi-session-id') ? 'pi' : 'claude-code';
       const fallbackProviderId = visionFallbackProviderIdForAgent(settings, fallbackAgent);
+      const fallbackSessionId = fallbackAgent === 'pi'
+        ? headerValue(ctx.headers, 'x-cindy-pi-session-id')
+        : (() => {
+            const sdkSessionId = headerValue(ctx.headers, 'x-claude-code-session-id');
+            return sdkSessionId && _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null;
+          })();
       if (!fallbackProviderId && hasVisionFallbackProviderMappings(settings.visionFallbackProviderIds)) {
         log.info('claude vision fallback: selected model has no provider for this agent', {
           agent: fallbackAgent,
@@ -561,7 +567,12 @@ export function createModelRoutingTransform(): RoutingTransform {
         });
         return claudeVisionFallbackSetupReminderDecision();
       }
-      if (!fallbackProviderId) return { ...(decision ?? {}), bodyModelOverride: visionModel };
+      if (!fallbackProviderId) {
+        if ((fallbackAgent === 'claude-code' || fallbackAgent === 'pi') && fallbackSessionId) {
+          recordClaudeVisionFallbackProvider(fallbackSessionId, visionModel, null);
+        }
+        return { ...(decision ?? {}), bodyModelOverride: visionModel };
+      }
       return resolveProviderRoute(
         fallbackProviderId,
         fallbackAgent,
@@ -574,12 +585,6 @@ export function createModelRoutingTransform(): RoutingTransform {
           });
           return claudeVisionFallbackSetupReminderDecision();
         }
-        const fallbackSessionId = fallbackAgent === 'pi'
-          ? headerValue(ctx.headers, 'x-cindy-pi-session-id')
-          : (() => {
-              const sdkSessionId = headerValue(ctx.headers, 'x-claude-code-session-id');
-              return sdkSessionId && _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null;
-            })();
         const prefs = {
           reasoningEffort: fallbackSessionId
             ? getSessionEffort(fallbackSessionId) ?? undefined
@@ -598,8 +603,8 @@ export function createModelRoutingTransform(): RoutingTransform {
           prefs,
         );
         if (localBridge) {
-          if (fallbackAgent === 'claude-code' && fallbackSessionId) {
-            recordClaudeVisionFallbackProvider(fallbackSessionId, fallbackProviderId);
+          if ((fallbackAgent === 'claude-code' || fallbackAgent === 'pi') && fallbackSessionId) {
+            recordClaudeVisionFallbackProvider(fallbackSessionId, visionModel, fallbackProviderId);
           }
           return {
             ...localBridge,
@@ -624,8 +629,8 @@ export function createModelRoutingTransform(): RoutingTransform {
           visionModel,
         ).then((resolved) => {
           if (!resolved) return claudeVisionFallbackSetupReminderDecision();
-          if (fallbackAgent === 'claude-code' && fallbackSessionId) {
-            recordClaudeVisionFallbackProvider(fallbackSessionId, fallbackProviderId);
+          if ((fallbackAgent === 'claude-code' || fallbackAgent === 'pi') && fallbackSessionId) {
+            recordClaudeVisionFallbackProvider(fallbackSessionId, visionModel, fallbackProviderId);
           }
           return {
             ...(resolved.decision ?? {}),
