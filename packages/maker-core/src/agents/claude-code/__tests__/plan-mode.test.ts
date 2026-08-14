@@ -602,6 +602,45 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('blocks an SSH image that requires the desktop vision fallback', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const remoteSend = vi.fn(async () => {});
+    const fakeQuery = { ...createFakeQuery(), send: remoteSend };
+    const remoteImageFallbackMessage = vi.fn(() =>
+      '[REMOTE_VISION_FALLBACK_UNSUPPORTED] Switch to a vision-capable model before sending images in an SSH session.',
+    );
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteImageFallbackMessage },
+      remoteCcQueryFactory: async () => fakeQuery as never,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-vision-fallback',
+      model: 'deepseek/deepseek-v4-pro',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+    const events = handle.events()[Symbol.asyncIterator]();
+
+    await handle.send({
+      type: 'user',
+      content: [{ type: 'image', path: path.join(workingDir, 'remote.png'), mimeType: 'image/png' }],
+    });
+
+    expect(remoteImageFallbackMessage).toHaveBeenCalledWith('deepseek/deepseek-v4-pro');
+    expect(remoteSend).not.toHaveBeenCalled();
+    await expect(nextEvent(events)).resolves.toMatchObject({
+      type: 'error',
+      data: expect.objectContaining({
+        message: expect.stringContaining('[REMOTE_VISION_FALLBACK_UNSUPPORTED]'),
+        isTerminal: false,
+      }),
+    });
+    await handle.close();
+  });
+
   it('warns when an SSH session receives a desktop-local image', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;

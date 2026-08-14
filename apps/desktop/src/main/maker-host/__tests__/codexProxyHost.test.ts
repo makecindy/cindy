@@ -443,6 +443,64 @@ describe('withCodexVisionFallback', () => {
     }
   });
 
+  it.each([
+    ['OpenAI Chat', 'openai-chat', 'createResponsesChatHandler'],
+    ['Anthropic Messages', 'anthropic-messages', 'createResponsesAnthropicHandler'],
+  ] as const)(
+    'routes the fallback through a %s bridge provider',
+    async (_label, wireProtocol, handlerFactory) => {
+      const host = await freshCodexProxyHost();
+      const { buildUserProvider } = await import('@cindy/model-providers');
+      const { setCustomProviders } = await import('../active-catalog.js');
+      const { setCustomProviderKeyReader } = await import('../provider-route.js');
+      const handler = { handle: vi.fn(async () => undefined) };
+      mockState[handlerFactory].mockReturnValueOnce(handler);
+      setCustomProviders([
+        buildUserProvider({
+          id: `vision-${wireProtocol}`,
+          name: `Vision ${wireProtocol}`,
+          runtimes: {
+            codex: {
+              baseUrl: 'https://vision.example/v1',
+              wireProtocol,
+              models: [{ id: 'vision-model', name: 'Vision Model' }],
+            },
+          },
+        }),
+      ]);
+      setCustomProviderKeyReader(() => 'vision-key');
+      mockState.visionFallbackSettings = {
+        visionFallbackEnabled: true,
+        visionFallbackModel: 'vision-model',
+        visionFallbackProviderId: `vision-${wireProtocol}`,
+      };
+
+      try {
+        const body = imageBody('deepseek/deepseek-v4-pro');
+        const decision = await host.withCodexVisionFallback(() => null)(body, ctxFor('t-bridge'));
+
+        expect(decision).toEqual({ localHandler: expect.any(Function) });
+        await decision?.localHandler?.({
+          rawBody: Buffer.from(JSON.stringify(body)),
+          parsedBody: body,
+          ctx: ctxFor('t-bridge'),
+          res: {},
+        } as never);
+        expect(handler.handle).toHaveBeenCalledWith(expect.objectContaining({
+          parsedBody: expect.objectContaining({ model: 'vision-model' }),
+        }));
+      } finally {
+        mockState.visionFallbackSettings = {
+          visionFallbackEnabled: true,
+          visionFallbackModel: null,
+          visionFallbackProviderId: null,
+        };
+        setCustomProviderKeyReader(() => null);
+        setCustomProviders([]);
+      }
+    },
+  );
+
   it('does not route a known text-only model selected as the fallback', async () => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');

@@ -4699,6 +4699,25 @@ export class CodexAgent extends BaseAgent {
         return toAppServerInput(content, opts.workingDir);
       }
     };
+    const blockUnsupportedRemoteVisionFallback = (content: UserMessage['content']): boolean => {
+      if (!opts.remoteHostId || !Array.isArray(content) || !content.some((block) => block.type === 'image')) {
+        return false;
+      }
+      const model = mutableCatalogModel ?? mutableModel;
+      const message = this.deps.runtimeConfig.remoteImageFallbackMessage?.(model);
+      if (!message) return false;
+      log.warn('codex remote: blocked image that requires desktop vision fallback', {
+        sessionId: opts.sessionId,
+        hostId: opts.remoteHostId,
+        model,
+      });
+      eventQueue.push({
+        type: 'error',
+        data: { message, isTerminal: false },
+        source: 'codex',
+      });
+      return true;
+    };
 
     const hostUsesCodexProxy = host.isCodexProxyActive();
 
@@ -9851,6 +9870,7 @@ export class CodexAgent extends BaseAgent {
         if (rejectClosedOrCancelledSend(sendOpts, 'before start')) {
           return;
         }
+        if (blockUnsupportedRemoteVisionFallback(message.content)) return;
         // 用户开启新 turn = 旧重连序列作废；deadline 不得跨 turn 误伤新请求。
         clearReconnectStall();
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
@@ -10554,6 +10574,7 @@ export class CodexAgent extends BaseAgent {
         if (!isTurnInFlight || !steeredTurnId) {
           throw new Error('No active Codex turn to steer');
         }
+        if (blockUnsupportedRemoteVisionFallback(message.content)) return;
         // Validate content before steering. `toTurnInput` can touch local
         // files/images; if that fails, leaving the current turn untouched is
         // better than sending a broken 插话.

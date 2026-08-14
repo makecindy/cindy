@@ -489,6 +489,18 @@ async function resolveProviderRouteById(
   };
 }
 
+/** Resolve a provider-owned route without requiring a session binding. */
+export async function resolveProviderRoute(
+  providerId: string | null | undefined,
+  agent: AgentKind,
+  wireModel?: string,
+): Promise<ResolvedSessionRoute | null> {
+  const id = providerId?.trim() || null;
+  if (!id) return null;
+  if (id === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
+  return resolveProviderRouteById(id, agent, wireModel);
+}
+
 /**
  * 解析会话选定来源的完整运行时素材，供需要本地协议 handler 的路径使用。
  * 普通透明转发仍走 resolveSessionRouteDecision，避免改变历史返回形态。
@@ -596,9 +608,8 @@ export async function resolveProviderRouteDecision(
 ): Promise<ResolvedProviderRouteDecision | null> {
   const id = providerId?.trim() || null;
   if (!id) return null;
-  const route = await resolveProviderRouteById(id, agent, wireModel);
+  const route = await resolveProviderRoute(id, agent, wireModel);
   if (!route) return null;
-  if (id === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
   const { routing, apiKey, oauthToken } = route;
   const decision = buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken);
   return {

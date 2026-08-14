@@ -46,6 +46,14 @@ export interface AgentRuntimeConfig {
   remoteEndpoint?: string;
 
   /**
+   * SSH sessions bypass the desktop's per-request compatibility proxy. When a
+   * local-only image fallback would otherwise be required, the host can return
+   * a user-facing message here so the agent blocks that image before it reaches
+   * the remote daemon. Return undefined to allow the request normally.
+   */
+  remoteImageFallbackMessage?: (model: string) => string | undefined;
+
+  /**
    * 业务行为 flag。Agent 内部决定哪些 key 有意义。
    * Claude 当前用到：CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS
    *

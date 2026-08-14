@@ -48,6 +48,7 @@ import {
   getSessionRoutingDescriptor,
   resolveSessionRoute,
   resolveSessionRouteDecision,
+  resolveProviderRoute,
   resolveProviderRouteDecision,
   rewriteModelIdForProviderRoute,
   buildLocalHandlerHeaders,
@@ -2525,27 +2526,45 @@ export function withCodexVisionFallback(
             bodyModelOverride: visionModel,
           };
         }
-        return resolveProviderRouteDecision(
+        return resolveProviderRoute(
           fallbackProviderId,
           'codex',
-          _readGatewayKey(),
           visionModel,
         ).then((route) => {
-          if (!route || route.routing.wireProtocol === 'openai-chat' || route.routing.wireProtocol === 'anthropic-messages') {
-            log.warn('codex vision fallback provider cannot accept Responses requests', {
+          if (!route) {
+            log.warn('codex vision fallback provider route could not be resolved', {
               providerId: fallbackProviderId,
               model: visionModel,
             });
             return decision;
           }
-          return {
-            ...(route.decision ?? {}),
-            bodyModelOverride: rewriteModelIdForProviderRoute(
-              fallbackProviderId,
-              'codex',
-              visionModel,
-            ),
-          };
+          const threadId = selectedThreadIdFromHeaders(ctx.headers);
+          const localBridge = createLocalBridgeDecision(
+            route,
+            threadId === 'unknown' ? undefined : registry.get(threadId),
+            visionModel,
+            visionModel,
+            threadId,
+          );
+          if (localBridge) return localBridge;
+          return resolveProviderRouteDecision(
+            fallbackProviderId,
+            'codex',
+            _readGatewayKey(),
+            visionModel,
+          ).then((resolved) => {
+            if (!resolved) {
+              return decision;
+            }
+            return {
+              ...(resolved.decision ?? {}),
+              bodyModelOverride: rewriteModelIdForProviderRoute(
+                fallbackProviderId,
+                'codex',
+                visionModel,
+              ),
+            };
+          });
         });
       }
       return decision;

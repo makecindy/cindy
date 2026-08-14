@@ -4869,6 +4869,24 @@ export class ClaudeCodeAgent extends BaseAgent {
         source: 'claude-code',
       });
     };
+    const blockUnsupportedRemoteVisionFallback = (content: UserMessage['content']): boolean => {
+      if (!opts.remoteHostId || !Array.isArray(content) || !content.some((block) => block.type === 'image')) {
+        return false;
+      }
+      const message = this.deps.runtimeConfig.remoteImageFallbackMessage?.(mutableModel);
+      if (!message) return false;
+      log.warn('cc remote: blocked image that requires desktop vision fallback', {
+        sessionId: opts.sessionId,
+        hostId: opts.remoteHostId,
+        model: mutableModel,
+      });
+      eventQueue.push({
+        type: 'error',
+        data: { message, isTerminal: false },
+        source: 'claude-code',
+      });
+      return true;
+    };
     const handle: AgentSessionHandle = {
       get id() { return sdkSessionId ?? '<pending>'; },
       agentKind: 'claude-code',
@@ -4898,6 +4916,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           throw new Error('Claude send cancelled before acceptance');
         }
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
+        if (blockUnsupportedRemoteVisionFallback(message.content)) return;
         let bridgeCompactQueued = false;
         // 保持普通 send / rewind send 原有的同步前置语义：即使 async helper 立即
         // return，裸 await 也会让出一个 microtask，导致调用方在 Query rebuild 真正
@@ -5241,6 +5260,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (sendOpts?.signal?.aborted) {
           throw new Error('Claude steer cancelled before acceptance');
         }
+        if (blockUnsupportedRemoteVisionFallback(message.content)) return;
         if (sendOpts?.logTitle !== undefined) lastSendTitle = sendOpts.logTitle;
         if (!turnInFlight) {
           throw new Error('No active Claude turn to steer');

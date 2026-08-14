@@ -976,6 +976,40 @@ describe('CodexAgent capability routing', () => {
     await agent.dispose();
   });
 
+  it('blocks an SSH image that requires the desktop vision fallback', async () => {
+    const remoteTransport = new MockCodexTransport();
+    const remoteImageFallbackMessage = vi.fn(() =>
+      '[REMOTE_VISION_FALLBACK_UNSUPPORTED] Switch to a vision-capable model before sending images in an SSH session.',
+    );
+    const agent = new CodexAgent(createDeps({ remoteImageFallbackMessage }, {
+      getRemoteCodexTransport: () => remoteTransport,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-vision-fallback',
+      model: 'deepseek/deepseek-v4-pro',
+      workingDir: '/remote/repo',
+      remoteHostId: 'remote-vision-host',
+    });
+    const events = handle.events()[Symbol.asyncIterator]();
+
+    await handle.send({
+      type: 'user',
+      content: [{ type: 'image', path: '/remote/repo/image.png', mimeType: 'image/png' }],
+    });
+
+    expect(remoteImageFallbackMessage).toHaveBeenCalledWith('deepseek/deepseek-v4-pro');
+    expect(remoteTransport.lines.map((line) => JSON.parse(line).method)).not.toContain('turn/start');
+    await expect(nextEvent(events)).resolves.toMatchObject({
+      type: 'error',
+      data: expect.objectContaining({
+        message: expect.stringContaining('[REMOTE_VISION_FALLBACK_UNSUPPORTED]'),
+        isTerminal: false,
+      }),
+    });
+    await handle.close();
+    await agent.dispose();
+  });
+
   it('fails closed when a provisioned companion does not publish the js tool', async () => {
     let ready: boolean | undefined;
     const resolveCapabilityRouting = vi.fn(async (
