@@ -784,15 +784,15 @@ describe('runMemoryCleanup', () => {
     }
   });
 
-  it('keeps trash reachable when both link and copy restore fail', async () => {
+  it('renames trash back to src when link and copy restore both fail', async () => {
     await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
 
     const plan = await planMemoryCleanup(dir);
     // 模拟: 源在归档期间变化 (trash ≠ 快照), 且硬链接恢复 (link ENOTSUP) 与
-    // 排他复制恢复 (copyFile EACCES) 都失败 — 不能抛错 (src 已移走, 抛错让
-    // 记忆退出正常路径), trash 保留可达 + failed 如实报告 (Greptile P1 on
-    // #2561 第二十五轮: 双重恢复失败移除活动记忆)。
+    // 排他复制恢复 (copyFile ENOSPC) 都失败 — rename 兜底把 trash 改回合法
+    // 分片名, 记忆留在 list()/MEMORY.md/FTS 正常路径, 而非只留在 cleanup-trash
+    // 被 rebuildIndex 跳过 (Greptile P1 on #2561 第二十六轮)。
     const realLink = fs.link.bind(fs);
     const linkSpy = vi.spyOn(fs, 'link').mockImplementation(async (src, dst) => {
       if (String(src).endsWith('feedback_a.md') && String(dst).includes('cleanup-trash')) {
@@ -815,13 +815,53 @@ describe('runMemoryCleanup', () => {
 
     try {
       const result = await runMemoryCleanup(plan);
-      // 不抛错 (run 正常返回): failed 如实报告, trash 保留在分片目录可达。
+      // rename 兜底成功: src 恢复 (合法分片名, 内容 = trash 内容), failed 如实。
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('UPDATED');
+      const files = await readdir(dir);
+      expect(files.some((f) => f.includes('cleanup-trash'))).toBe(false);
+    } finally {
+      linkSpy.mockRestore();
+      copySpy.mockRestore();
+    }
+  });
+
+  it('keeps trash reachable when link, copy, and rename restore all fail', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟: link ENOTSUP + copyFile ENOSPC + rename EPERM (真锁) 全部失败 —
+    // trash 保留原位 (磁盘可达、供人工找回), failed 如实报告, 不抛错。
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, 'link').mockImplementation(async (src, dst) => {
+      if (String(src).endsWith('feedback_a.md') && String(dst).includes('cleanup-trash')) {
+        await writeFile(
+          String(src),
+          "---\ntitle: NEW\ndescription: new\ntype: feedback\nupdatedAt: '2026-03-01T00:00:00.000Z'\n---\nUPDATED\n",
+          'utf8',
+        );
+        return realLink(src as string, dst as string);
+      }
+      throw Object.assign(new Error('link not supported'), { code: 'ENOTSUP' });
+    });
+    const copySpy = vi
+      .spyOn(fs, 'copyFile')
+      .mockRejectedValue(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+    const renameSpy = vi
+      .spyOn(fs, 'rename')
+      .mockRejectedValue(Object.assign(new Error('locked'), { code: 'EPERM' }));
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // 全路径失败: 不抛错, failed + trash 保留可达。
       expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
       const files = await readdir(dir);
       expect(files.some((f) => f.includes('cleanup-trash'))).toBe(true);
     } finally {
       linkSpy.mockRestore();
       copySpy.mockRestore();
+      renameSpy.mockRestore();
     }
   });
 

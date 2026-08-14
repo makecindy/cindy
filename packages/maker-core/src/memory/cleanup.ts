@@ -728,14 +728,29 @@ async function restoreTrash(
         });
         return;
       }
-      // 双重恢复 (link + copy) 都失败 → 不抛错: src 已移走, 抛错只会让外层
-      // 记 failed 并重建索引 — 记忆退出正常路径。改为明确 failed + trash 保留
-      // 原位 (磁盘可达, 供人工找回), 绝不静默丢数据 (Greptile P1 on #2561
-      // 第二十五轮: 双重恢复失败移除活动记忆)。
+      // 双重恢复 (link + copy) 都失败。最后兜底: rename(trash → src) 是元数据
+      // 操作不写内容, 在 ENOTSUP/ENOSPC 场景下仍可把 trash 改回合法分片名 —
+      // 记忆留在 list()/MEMORY.md/FTS 正常路径 (Greptile P1 on #2561 第二十六
+      // 轮: 双重恢复失败后分片缺失 — rebuildIndex 跳过非 .md 名)。src 已重建
+      // (宿主新写入) 时绝不覆盖, 保留 trash 供找回; rename 也失败 (真锁) 时
+      // 同样保留 trash (磁盘可达)。
+      if (!(await pathExists(src))) {
+        try {
+          await fs.rename(trash, src);
+          result.failed.push({
+            filename: item.filename,
+            error:
+              'source changed during archive; link/copy restore failed — renamed trash back to active shard (content may be stale)',
+          });
+          return;
+        } catch {
+          // rename 也失败 → 落到下方保留 trash
+        }
+      }
       result.failed.push({
         filename: item.filename,
         error:
-          'source changed during archive; both link and copy restore failed — trash kept reachable for manual recovery',
+          'source changed during archive; all restore paths failed — trash kept reachable for manual recovery',
       });
     }
   }

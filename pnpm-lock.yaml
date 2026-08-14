@@ -46,6 +46,9 @@ importers:
       spdx-expression-parse:
         specifier: 3.0.1
         version: 3.0.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.1
 
   apps/desktop:
     dependencies:
