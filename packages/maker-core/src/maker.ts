@@ -959,7 +959,17 @@ export class Maker {
     opts: ListAgentSkillsOptions & { sessionId?: string },
   ): Promise<ListAgentSkillsResult> {
     const { sessionId, ...agentOpts } = opts;
-    const result = await this.requireAgent(agentKind).listAgentSkills(agentOpts);
+    const sessionMeta = sessionId ? await this.storage.get(sessionId) : null;
+    const includeManagedPiPackages = agentKind === 'pi'
+      && (!sessionId || (
+        sessionMeta?.agentKind === 'pi'
+        && sessionMeta.reviewMode !== true
+        && !sessionMeta.remoteHostId
+      ));
+    const result = await this.requireAgent(agentKind).listAgentSkills({
+      ...agentOpts,
+      includeManagedPiPackages,
+    });
     if (agentKind !== 'pi' || !sessionId) return result;
     const session = this.getSession(sessionId);
     if (

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   capturePiRuntimeCapabilityManifest,
+  identifyManagedPiPackageCommandNames,
   parsePiRuntimeCommands,
 } from '../runtime-capabilities.js';
 
@@ -29,9 +30,60 @@ describe('Pi runtime capability parsing', () => {
     expect(parsePiRuntimeCommands({ commands: [] })).toEqual({ ok: true, commands: [] });
   });
 
+  it('accepts duplicate names because Pi can expose an Extension command and Prompt together', () => {
+    const extension = { ...command, name: 'hello', source: 'extension' };
+    const prompt = { ...command, name: 'hello', source: 'prompt' };
+    expect(parsePiRuntimeCommands({ commands: [extension, prompt] })).toEqual({
+      ok: true,
+      commands: [extension, prompt],
+    });
+  });
+
+  it('marks commands only when Pi provenance is inside an enabled managed package root', () => {
+    const extensionCommand = {
+      ...command,
+      name: 'sample',
+      source: 'extension',
+      sourceInfo: {
+        source: 'extension',
+        baseDir: '/private/cindy/pi-packages/sample',
+        path: 'extensions/index.ts',
+      },
+    };
+    const unrelated = {
+      ...command,
+      name: 'other',
+      source: 'extension',
+      sourceInfo: {
+        source: 'extension',
+        path: '/private/user/.pi/extensions/other.ts',
+      },
+    };
+    expect(identifyManagedPiPackageCommandNames(
+      [extensionCommand, unrelated],
+      ['/private/cindy/pi-packages/sample'],
+    )).toEqual(['sample']);
+  });
+
+  it('does not authorize a colliding name when any runtime entry has unmanaged provenance', () => {
+    expect(identifyManagedPiPackageCommandNames([
+      {
+        ...command,
+        name: 'plan',
+        source: 'extension',
+        sourceInfo: { path: '/private/cindy/pi-packages/sample/index.ts' },
+      },
+      {
+        ...command,
+        name: 'plan',
+        source: 'extension',
+        sourceInfo: { path: '/private/cindy/internal/plan-mode.ts' },
+      },
+    ], ['/private/cindy/pi-packages/sample'])).toEqual([]);
+  });
+
   it.each([
     ['missing commands', {}],
-    ['duplicate names', { commands: [command, command] }],
     ['missing sourceInfo', { commands: [{ ...command, sourceInfo: undefined }] }],
     ['invalid known sourceInfo field', { commands: [{ ...command, sourceInfo: { source: 'auto', scope: 1 } }] }],
     ['unknown command field', { commands: [{ ...command, extra: 'secret' }] }],

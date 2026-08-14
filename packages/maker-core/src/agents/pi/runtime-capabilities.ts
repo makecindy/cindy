@@ -1,4 +1,5 @@
 import type { PiRpcResponse } from './rpc-client.js';
+import path from 'node:path';
 import type {
   PiRuntimeCapabilityError,
   PiRuntimeCapabilityErrorStage,
@@ -70,7 +71,6 @@ export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult
   }
   if (serializedLength > MAX_RESPONSE_BYTES) return { ok: false };
 
-  const seen = new Set<string>();
   const parsed: PiRuntimeCommand[] = [];
   for (const value of commands) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return { ok: false };
@@ -81,12 +81,11 @@ export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult
     const name = boundedString(raw.name, MAX_NAME_LENGTH);
     const source = boundedString(raw.source, MAX_SOURCE_LENGTH);
     const sourceInfo = parseSourceInfo(raw.sourceInfo);
-    if (!name || !source || !sourceInfo || seen.has(name)) return { ok: false };
+    if (!name || !source || !sourceInfo) return { ok: false };
     const description = raw.description === undefined
       ? undefined
       : boundedString(raw.description, MAX_DESCRIPTION_LENGTH);
     if (raw.description !== undefined && !description) return { ok: false };
-    seen.add(name);
     parsed.push({
       name,
       ...(description ? { description } : {}),
@@ -95,6 +94,53 @@ export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult
     });
   }
   return { ok: true, commands: parsed };
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  if (!path.isAbsolute(root) || !path.isAbsolute(candidate)) return false;
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function commandSourcePaths(sourceInfo: PiRuntimeCommandSourceInfo): string[] {
+  const values = [sourceInfo.path, sourceInfo.source, sourceInfo.origin]
+    .filter((value): value is string => typeof value === 'string' && path.isAbsolute(value));
+  if (sourceInfo.baseDir && path.isAbsolute(sourceInfo.baseDir)) {
+    values.push(sourceInfo.baseDir);
+    if (sourceInfo.path && !path.isAbsolute(sourceInfo.path)) {
+      values.push(path.resolve(sourceInfo.baseDir, sourceInfo.path));
+    }
+  }
+  return values;
+}
+
+/**
+ * Mark only commands whose Pi-owned provenance points inside an enabled
+ * Cindy-managed package root. The result is later used both by the palette and
+ * by the prompt escape boundary; static filenames alone never authorize an
+ * extension command.
+ */
+export function identifyManagedPiPackageCommandNames(
+  commands: readonly PiRuntimeCommand[],
+  packageRoots: readonly string[],
+): string[] {
+  const roots = packageRoots.filter(path.isAbsolute).map((root) => path.resolve(root));
+  if (roots.length === 0) return [];
+  const provenanceByName = new Map<string, boolean[]>();
+  for (const command of commands) {
+    const managed = commandSourcePaths(command.sourceInfo)
+      .some((candidate) => roots.some((root) => isPathWithin(root, candidate)));
+    const provenance = provenanceByName.get(command.name) ?? [];
+    provenance.push(managed);
+    provenanceByName.set(command.name, provenance);
+  }
+  // Pi may legitimately expose an Extension command and a Prompt with the
+  // same name. Authorize that name only when every colliding catalog entry is
+  // from a managed package; mixed provenance could dispatch a Cindy internal
+  // or user command instead of the package command shown in the menu.
+  return [...provenanceByName.entries()].flatMap(([name, provenance]) => (
+    provenance.length > 0 && provenance.every(Boolean) ? [name] : []
+  ));
 }
 
 function classifyExplicitRpcFailure(raw: string): Pick<PiRuntimeCapabilityError, 'code' | 'message'> {

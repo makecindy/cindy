@@ -18,6 +18,7 @@ export type SettingsTab =
   | 'remote-control'
   | 'tina'
   | 'builtin-tools'
+  | 'pi-extensions'
   | 'computer-use'
   | 'im-bot'
   | 'help'
@@ -42,6 +43,7 @@ export const TAB_IDS: ReadonlyArray<SettingsTab> = [
   // 类型与 TAB_LABEL_KEY 保留,供旧深链重定向到插件页。
   'remote-control',
   'builtin-tools',
+  'pi-extensions',
   'computer-use',
   'help',
   'about',
@@ -61,6 +63,7 @@ export const TAB_LABEL_KEY: Record<SettingsTab, string> = {
   'remote-control': 'settings.tabs.remoteControl',
   tina: 'settings.tabs.tina',
   'builtin-tools': 'settings.tabs.builtinTools',
+  'pi-extensions': 'settings.tabs.piExtensions',
   'computer-use': 'settings.tabs.computerUse',
   'im-bot': 'settings.tabs.imBot',
   help: 'settings.tabs.help',

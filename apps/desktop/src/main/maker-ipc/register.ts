@@ -500,6 +500,16 @@ import {
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
+import {
+  mergePiPackageCommands,
+  shouldListPiPackageCommands,
+  type PiPackageMutationRequest,
+} from '../../shared/piPackages.js';
+import {
+  listManagedPiPromptCommands,
+  listPiPackages,
+  mutatePiPackage,
+} from '../maker-host/pi-package-store.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerCodexAccountUsageRefresh } from './usage.js';
 import {
@@ -510,7 +520,7 @@ import {
   recordModelTurnUsage,
   recordTurnSpend,
 } from '../usageBroadcaster.js';
-import { throwIpcError } from '../utils/ipcValidate.js';
+import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
@@ -5934,9 +5944,64 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await getDesktopCommandRegistry().execute(name, c);
   });
 
-  ipcMain.handle(MAKER_INVOKE.LIST_AGENT_COMMANDS, (_e, agentKind: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.LIST_AGENT_COMMANDS, async (_e, agentKind: unknown, rawParams?: unknown) => {
     try {
-      return { success: true, commands: maker.listAgentCommands(requireAgentKind(agentKind)) };
+      const kind = requireAgentKind(agentKind);
+      const params = rawParams === undefined ? {} : requireObject(rawParams);
+      if (params.sessionId !== undefined && typeof params.sessionId !== 'string') {
+        throwIpcError('INVALID_PARAMS', 'sessionId must be a string');
+      }
+      if (
+        params.allowManagedPiPackagePreview !== undefined
+        && typeof params.allowManagedPiPackagePreview !== 'boolean'
+      ) {
+        throwIpcError('INVALID_PARAMS', 'allowManagedPiPackagePreview must be a boolean');
+      }
+      const sessionId = typeof params.sessionId === 'string' && params.sessionId.trim()
+        ? params.sessionId.trim()
+        : undefined;
+      const sessionMeta = sessionId ? await maker.getSessionMeta(sessionId) : null;
+      const builtins = maker.listAgentCommands(kind);
+      const mayListPackageCommands = shouldListPiPackageCommands(
+        kind,
+        sessionId !== undefined,
+        sessionMeta,
+        params.allowManagedPiPackagePreview !== false,
+      );
+      let packageCommands: Array<{ name: string; description: string }> = [];
+      let runtimeStatus: import('../../shared/piPackages.js').PiPackageCommandRuntimeStatus | undefined;
+      if (mayListPackageCommands && sessionId) {
+        const manifest = maker.getSessionRuntimeCapabilities(sessionId);
+        runtimeStatus = manifest?.status === 'loaded'
+          ? 'loaded'
+          : manifest?.status === 'failed'
+            ? 'failed'
+            : manifest?.status === 'unknown'
+              ? 'unknown'
+              : 'pending';
+        const managedNames = new Set(manifest?.managedPackageCommandNames ?? []);
+        if (manifest?.status === 'loaded') {
+          packageCommands = manifest.commands.flatMap((command) => (
+            managedNames.has(command.name) && !command.name.startsWith('skill:')
+              ? [{
+                  name: command.name,
+                  description: command.description ?? `Pi extension command: ${command.name}`,
+                }]
+              : []
+          ));
+        } else if (!manifest) {
+          // An empty local Pi task may have a persisted session row before its
+          // process starts. Keep inspected Prompt templates visible; send waits
+          // for this task's get_commands catalog before allowing execution.
+          packageCommands = await listManagedPiPromptCommands();
+        }
+      } else if (mayListPackageCommands) {
+        // Before a task exists, only prompt templates are statically knowable.
+        // Extension commands appear after that exact Pi runtime confirms them.
+        packageCommands = await listManagedPiPromptCommands();
+      }
+      const commands = mergePiPackageCommands(kind, builtins, packageCommands);
+      return { success: true, commands, ...(runtimeStatus ? { runtimeStatus } : {}) };
     } catch (err) {
       return {
         success: false,
@@ -5976,6 +6041,37 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
   );
+
+  ipcMain.handle(MAKER_INVOKE.PI_PACKAGES_LIST, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return listPiPackages();
+  });
+
+  ipcMain.handle(MAKER_INVOKE.PI_PACKAGES_MUTATE, async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const payload = requireObject(raw);
+    const action = requireEnum(
+      payload.action,
+      ['install', 'remove', 'update', 'set-enabled'] as const,
+      'action',
+    );
+    if (typeof payload.source !== 'string' || payload.source.length > 2_048) {
+      throwIpcError('INVALID_PARAMS', 'invalid Pi extension source');
+    }
+    if (payload.confirmed !== undefined && typeof payload.confirmed !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'confirmed must be a boolean');
+    }
+    if (payload.enabled !== undefined && typeof payload.enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
+    }
+    const request: PiPackageMutationRequest = {
+      action,
+      source: payload.source,
+      ...(typeof payload.confirmed === 'boolean' ? { confirmed: payload.confirmed } : {}),
+      ...(typeof payload.enabled === 'boolean' ? { enabled: payload.enabled } : {}),
+    };
+    return mutatePiPackage(request);
+  });
 
   ipcMain.handle(
     MAKER_INVOKE.SCAN_AT_RESOURCES,

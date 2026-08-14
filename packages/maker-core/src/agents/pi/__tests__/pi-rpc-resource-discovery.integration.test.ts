@@ -868,9 +868,8 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
         sourceInfo: expect.objectContaining({
           path: path.join(explicitSkill, 'SKILL.md'),
           source: 'local',
-          // Pi reports direct `--skill` paths as `project` on Windows and
-          // `temporary` on macOS.
-          scope: process.platform === 'win32' ? 'project' : 'temporary',
+          // An explicit path inside the current project remains project-scoped.
+          scope: 'project',
         }),
       }),
     ]));
@@ -934,9 +933,8 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
           baseDir: path.dirname(explicitSkill),
           path: explicitSkill,
           source: 'local',
-          // Pi reports direct `--skill` paths as `project` on Windows and
-          // `temporary` on macOS.
-          scope: process.platform === 'win32' ? 'project' : 'temporary',
+          // An explicit path inside the current project remains project-scoped.
+          scope: 'project',
         }),
       }),
     ]));
@@ -969,9 +967,8 @@ describe.skipIf(!existsSync(PI_BINARY))('Pi v0.83.0 RPC resource discovery facts
       sourceInfo: {
         baseDir: first,
         source: 'local',
-        // The bundled Pi binary uses `project` on Windows and `temporary` on
-        // macOS for direct explicit paths.
-        scope: process.platform === 'win32' ? 'project' : 'temporary',
+        // An explicit path inside the current project remains project-scoped.
+        scope: 'project',
       },
     });
   });

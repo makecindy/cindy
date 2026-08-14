@@ -138,7 +138,7 @@ describe('Pi project skill availability', () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it('does not retry a Pi slash name absent from the refreshed filesystem catalog', async () => {
+  it('retries a Pi slash name while the runtime catalog may still be arriving', async () => {
     const sleeps: number[] = [];
     const reload = vi.fn(async () => [] as UnifiedCommand[]);
 
@@ -151,8 +151,8 @@ describe('Pi project skill availability', () => {
       sleep: async (delayMs) => { sleeps.push(delayMs); },
       reload,
     })).resolves.toEqual({ command: undefined, commands: [] });
-    expect(sleeps).toEqual([]);
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(sleeps).toEqual([10, 20]);
+    expect(reload).toHaveBeenCalledTimes(3);
   });
 
   it('disables only discovered project skills', () => {

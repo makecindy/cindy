@@ -169,6 +169,8 @@ export const MAKER_INVOKE = {
   EXECUTE_DESKTOP_COMMAND: 'maker:execute-desktop-command',
   LIST_AGENT_COMMANDS: 'maker:list-agent-commands',
   LIST_AGENT_SKILLS: 'maker:list-agent-skills',
+  PI_PACKAGES_LIST: 'maker:pi-packages:list',
+  PI_PACKAGES_MUTATE: 'maker:pi-packages:mutate',
   SCAN_AT_RESOURCES: 'maker:scan-at-resources',
   /**
    * "agent 自己认识的本地 customization 全集"。

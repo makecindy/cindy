@@ -115,6 +115,35 @@ function createAgent(
   } as unknown as BaseAgent;
 }
 
+describe('Maker Pi managed-package skill boundary', () => {
+  it('allows package skills only for previews and ordinary local Pi tasks', async () => {
+    const storage = createStorage();
+    const base = {
+      agentKind: 'pi' as const,
+      workDir: '/repo',
+      title: 'Pi',
+      model: 'm',
+    };
+    await storage.create({ id: 'local', ...base });
+    await storage.create({ id: 'review', ...base, reviewMode: true });
+    await storage.create({ id: 'remote', ...base, remoteHostId: 'ssh-host' });
+    const agent = createAgent(async () => {
+      throw new Error('not used');
+    }, 'pi');
+    agent.listAgentSkills = vi.fn(async () => ({ skills: [] }));
+    const maker = new Maker({ agents: { pi: agent }, storage, logger: createLogger() });
+
+    await maker.listAgentSkills('pi', { workingDir: '/repo' });
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'local' });
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'review' });
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'remote' });
+
+    expect(vi.mocked(agent.listAgentSkills).mock.calls.map(([options]) => (
+      options.includeManagedPiPackages
+    ))).toEqual([true, true, false, false]);
+  });
+});
+
 function createHandle(args: {
   id: string;
   agentKind?: AgentKind;

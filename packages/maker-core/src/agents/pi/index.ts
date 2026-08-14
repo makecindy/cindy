@@ -116,7 +116,10 @@ import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
 import { createPiStdioTransport, type PiTransport } from './transport.js';
 import type { PiRemoteFileOps } from '../base-agent.js';
-import { capturePiRuntimeCapabilityManifest } from './runtime-capabilities.js';
+import {
+  capturePiRuntimeCapabilityManifest,
+  identifyManagedPiPackageCommandNames,
+} from './runtime-capabilities.js';
 import {
   assembleApprovedPiProjectResources,
   reconcilePiProjectResourceRuntime,
@@ -339,9 +342,23 @@ function reconcilePiStartupEffort(
  * 有效)—— 防止误触扩展命令让 Cindy 侧状态镜像脱同步(如 /plan),也堵住未来扩展/包
  * 新增命令带来的攻击面。内部控制路径(setPlanMode 的 /plan)不走本函数。
  */
-function escapeLeadingSlashCommand(text: string): string {
+function isExecutablePiSlashCommand(
+  text: string,
+  manifest: PiRuntimeCapabilityManifest | undefined,
+): boolean {
+  const match = text.trimStart().match(/^\/([^\s]+)(?:\s|$)/);
+  if (!match?.[1]) return false;
+  if (match[1].startsWith('skill:')) return true;
+  return manifest?.status === 'loaded'
+    && manifest.managedPackageCommandNames?.includes(match[1]) === true;
+}
+
+function escapeLeadingSlashCommand(
+  text: string,
+  manifest: PiRuntimeCapabilityManifest | undefined,
+): string {
   const trimmed = text.trimStart();
-  if (trimmed.startsWith('/') && !trimmed.startsWith('/skill:')) return ' ' + text;
+  if (trimmed.startsWith('/') && !isExecutablePiSlashCommand(text, manifest)) return ' ' + text;
   return text;
 }
 
@@ -351,9 +368,13 @@ function escapeLeadingSlashCommand(text: string): string {
  * 前置 refs 会把命令挤离起始、退化成普通模型文本使技能不加载,故此时**不前置** refs——优先
  * 保证技能调用生效(该轮省去 Extra Dir 提醒)。send 与 steer 同口径(codex review)。
  */
-function composePiPromptText(text: string, refs: string): string {
+function composePiPromptText(
+  text: string,
+  refs: string,
+  manifest: PiRuntimeCapabilityManifest | undefined,
+): string {
   if (!refs) return text;
-  if (text.trimStart().startsWith('/skill:')) return text;
+  if (isExecutablePiSlashCommand(text, manifest)) return text;
   return `${refs}\n\n${text}`;
 }
 
@@ -1585,6 +1606,27 @@ export class PiAgent extends BaseAgent {
       requestedSkillCount: projectResourceAssembly.diagnostic.requestedSkillCount,
     });
 
+    // Cindy-installed Pi packages are a separate, host-owned trust domain from
+    // project resources and the user's ~/.pi directory. Ordinary runtimes on
+    // this host receive their exact inspected paths, including tasks initiated
+    // through device-link remote control. Review stays hermetic; SSH remoteHostId
+    // runtimes must never interpret controller-local paths.
+    let managedPackageResources: {
+      extensions: string[];
+      skills: Array<{ path: string; name: string; description?: string }>;
+      promptTemplates: string[];
+      packageRoots: string[];
+    } = { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
+    if (!reviewMode && !opts.remoteHostId && this.deps.resolvePiManagedPackageResources) {
+      try {
+        managedPackageResources = await this.deps.resolvePiManagedPackageResources();
+      } catch {
+        this.deps.logger.warn('pi managed package resolver failed closed', {
+          sessionId: opts.sessionId ?? null,
+        });
+      }
+    }
+
     const args = [
       '--mode', 'rpc',
       // Keep Pi's project trust and implicit extension discovery disabled even
@@ -1600,7 +1642,10 @@ export class PiAgent extends BaseAgent {
       '--extension', bridgeExtensionPath,
       ...(!reviewMode ? ['--extension', subagentExtensionPath] : []),
       ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+      ...managedPackageResources.extensions.flatMap((extensionPath) => ['--extension', extensionPath]),
       ...projectResourceAssembly.launchSkillPaths.flatMap((skillPath) => ['--skill', skillPath]),
+      ...managedPackageResources.skills.flatMap((skill) => ['--skill', skill.path]),
+      ...managedPackageResources.promptTemplates.flatMap((promptPath) => ['--prompt-template', promptPath]),
     ];
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
@@ -2061,6 +2106,7 @@ export class PiAgent extends BaseAgent {
     // 身份注册(否则 ?session= ctx 泄漏)+ 关掉可能已 spawn 的子进程(否则僵尸 pi
     // 仍持有本会话的 MCP 路由),再把原始错误抛给调用方。
     let sdkSessionId = '';
+    let runtimeCapabilityRefreshPromise: Promise<void> | undefined;
     const refreshRuntimeCapabilities = async (
       stage: 'ready' | 'switch_session' | 'fork',
     ): Promise<void> => {
@@ -2076,12 +2122,34 @@ export class PiAgent extends BaseAgent {
       );
       const manifest = {
         ...capturedManifest,
+        managedPackageCommandNames: identifyManagedPiPackageCommandNames(
+          capturedManifest.commands,
+          managedPackageResources.packageRoots,
+        ),
         projectResources: reconcilePiProjectResourceRuntime(
           projectResourceAssembly,
           capturedManifest,
         ),
       };
       if (!closed && generation === runtimeCapabilityGeneration) publishRuntimeCapabilities(manifest);
+    };
+    const scheduleRuntimeCapabilityRefresh = (
+      stage: 'ready' | 'switch_session' | 'fork',
+    ): Promise<void> => {
+      const pending = refreshRuntimeCapabilities(stage);
+      const tracked = pending.finally(() => {
+        if (runtimeCapabilityRefreshPromise === tracked) runtimeCapabilityRefreshPromise = undefined;
+      });
+      runtimeCapabilityRefreshPromise = tracked;
+      return tracked;
+    };
+    const awaitRuntimeCapabilitiesForSlashCommand = async (text: string): Promise<void> => {
+      const trimmed = text.trimStart();
+      if (!trimmed.startsWith('/') || trimmed.startsWith('/skill:') || runtimeCapabilityManifest) return;
+      // get_commands starts asynchronously after Pi's ready boundary. A prompt
+      // template selected on a brand-new task must wait for that exact runtime
+      // catalog instead of being escaped into ordinary model text.
+      await runtimeCapabilityRefreshPromise;
     };
     let runtimeCaptureStage: 'ready' | 'switch_session' = 'ready';
     try {
@@ -2186,7 +2254,7 @@ export class PiAgent extends BaseAgent {
       // Capability discovery is optional and must not delay session creation.
       // The ready boundary has selected the final Pi session identity; publish
       // the result later through the per-session query/listener contract.
-      void refreshRuntimeCapabilities(runtimeCaptureStage);
+      void scheduleRuntimeCapabilityRefresh(runtimeCaptureStage);
 
       // plan 镜像与 pi 持久态对齐(resume 关键):pi 的 plan-mode 扩展在 session_start 会从
       // session entry 自恢复 planModeEnabled,但不发 notify。若镜像固定为 false 而 pi 实为 true,
@@ -2486,10 +2554,19 @@ export class PiAgent extends BaseAgent {
           rejectIfCancelled(sendOpts, 'send');
           assertImageInputSupported(images);
           setAutoReviewIntent(message.content);
+          await awaitRuntimeCapabilitiesForSlashCommand(text);
+          rejectIfCancelled(sendOpts, 'send');
           // setExtraDirs 是热更新；Pi 没有独立的 mid-session system-prompt RPC，所以在
           // 后续 user turn 前附上短引用目录段(但 /skill: 起始时不前置,见 composePiPromptText)。
-          const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs));
-          const command: Record<string, unknown> = { type: 'prompt', message: escapeLeadingSlashCommand(promptText) };
+          const promptText = composePiPromptText(
+            text,
+            piExtraDirsPrompt(mutableExtraDirs),
+            runtimeCapabilityManifest,
+          );
+          const command: Record<string, unknown> = {
+            type: 'prompt',
+            message: escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest),
+          };
           if (images.length > 0) command.images = images;
           // send 语义 = 排队开新 turn;pi streaming 中裸 prompt 会被拒,补 followUp。
           if (ctx.isStreaming) command.streamingBehavior = 'followUp';
@@ -2525,9 +2602,18 @@ export class PiAgent extends BaseAgent {
         rejectIfCancelled(sendOpts, 'steer');
         assertImageInputSupported(images);
         setAutoReviewIntent(message.content);
+        await awaitRuntimeCapabilitiesForSlashCommand(text);
+        rejectIfCancelled(sendOpts, 'steer');
         // /skill: 起始时不前置 Extra Dir 引用段(否则命令退化成文本),与 send 同口径。
-        const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs));
-        const command: Record<string, unknown> = { type: 'steer', message: escapeLeadingSlashCommand(promptText) };
+        const promptText = composePiPromptText(
+          text,
+          piExtraDirsPrompt(mutableExtraDirs),
+          runtimeCapabilityManifest,
+        );
+        const command: Record<string, unknown> = {
+          type: 'steer',
+          message: escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest),
+        };
         if (images.length > 0) command.images = images;
         const resp = await proc.request(command);
         if (!resp.success) {
@@ -2820,7 +2906,7 @@ export class PiAgent extends BaseAgent {
         // The Pi session has already switched to the replacement file. Do not
         // make rewind wait for optional discovery; the generation fence keeps
         // this asynchronous refresh from publishing stale data.
-        void refreshRuntimeCapabilities('fork');
+        void scheduleRuntimeCapabilityRefresh('fork');
         return { sdkSessionId: replacement };
       },
 
@@ -3125,11 +3211,17 @@ export class PiAgent extends BaseAgent {
    * .agents/skills。项目条目仅表示已发现；只有 get_commands 能确认 loaded。
    */
   override async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
-    const { items, errors } = await scanPiCustomizations({
-      workingDirs: opts.workingDir ? [opts.workingDir] : [],
-    });
+    const [{ items, errors }, managedPackages] = await Promise.all([
+      scanPiCustomizations({
+        workingDirs: opts.workingDir ? [opts.workingDir] : [],
+      }),
+      opts.includeManagedPiPackages
+        ? this.deps.resolvePiManagedPackageResources?.().catch(() => undefined)
+        : undefined,
+    ]);
     const out: ListAgentSkillsResult = {
-      skills: items
+      skills: [
+        ...items
         .filter((it) => it.kind === 'skill' && it.enabled !== false)
         .map((it) => ({
           kind: 'agent-skill' as const,
@@ -3141,7 +3233,19 @@ export class PiAgent extends BaseAgent {
           enabled: it.enabled ?? true,
           runtimeStatus: it.runtimeStatus,
           runtimeCommandName: `skill:${it.name}`,
-        }))
+        })),
+        ...(managedPackages?.skills ?? []).map((skill) => ({
+          kind: 'agent-skill' as const,
+          name: skill.name,
+          description: skill.description,
+          source: 'skill' as const,
+          path: skill.path,
+          scope: 'user' as const,
+          enabled: true,
+          runtimeStatus: 'approved' as const,
+          runtimeCommandName: `skill:${skill.name}`,
+        })),
+      ]
         .sort((a, b) => a.name.localeCompare(b.name)),
     };
     if (errors.length > 0) out.errors = errors;

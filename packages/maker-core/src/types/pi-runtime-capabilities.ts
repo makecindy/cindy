@@ -81,6 +81,8 @@ export interface PiRuntimeCapabilityManifest {
   status: PiRuntimeCapabilityStatus;
   source: PiRuntimeCapabilitySource;
   commands: readonly PiRuntimeCommand[];
+  /** Commands whose get_commands provenance resolves inside an enabled Cindy-managed Pi package. */
+  managedPackageCommandNames?: readonly string[];
   error?: PiRuntimeCapabilityError;
   /** Does not imply loaded; only `commands` from this session's get_commands can do that. */
   projectResources?: PiProjectResourceRuntimeDiagnostic;

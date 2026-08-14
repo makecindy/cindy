@@ -37,6 +37,7 @@ import { SessionImportSection } from './SessionImportSection';
 import { HelpSection } from './HelpSection';
 import { HelpAssistantPanel } from './HelpAssistantPanel';
 import { AgentResourceSection } from './AgentResourceSection';
+import { PiPackagesSection } from './PiPackagesSection';
 import { CollaborationSection } from './CollaborationSection';
 import { BuiltinToolsSection } from './BuiltinToolsSection';
 import { ContactsSection } from './contacts/ContactsSection';
@@ -479,6 +480,18 @@ export function SettingsView() {
                 {/* 外部(自定义)MCP 与内置工具同页管理:内置在上、外部在下,组成「工具」页。 */}
                 <section className="pb-[18px]" aria-label={t('settings.sections.mcpServers')}>
                   <McpServersSection />
+                </section>
+              </div>
+            )}
+
+            {activeTab === 'pi-extensions' && (
+              <div
+                role="tabpanel"
+                id="settings-panel-pi-extensions"
+                aria-labelledby="settings-tab-pi-extensions"
+              >
+                <section className="pb-[18px]" aria-label={t('settings.piPackages.title')}>
+                  <PiPackagesSection />
                 </section>
               </div>
             )}

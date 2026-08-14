@@ -406,6 +406,19 @@ export interface AgentDeps {
   resolvePiAgentHome?: (remoteHostId?: string | null) => string | undefined;
 
   /**
+   * Pi-only: Cindy-owned packages explicitly enabled for a new runtime on this device.
+   * The host owns package installation, compatibility inspection, persistence,
+   * and path confinement. Device-link remote control still executes on this host
+   * and therefore uses these resources. SSH remoteHostId and Review runtimes do not.
+   */
+  resolvePiManagedPackageResources?: () => Promise<{
+    extensions: string[];
+    skills: Array<{ path: string; name: string; description?: string }>;
+    promptTemplates: string[];
+    packageRoots: string[];
+  }>;
+
+  /**
    * Pi-only: resolve the immutable Cindy project-approval input for one new
    * runtime. The host owns identity canonicalization, approval audit/revocation,
    * and discovered-resource provenance. Missing/throwing resolvers fail closed.

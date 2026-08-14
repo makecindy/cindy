@@ -50,6 +50,7 @@ import {
 } from './mcp-tool-approval-policy.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
 import { resolveXdPiGatewayWireProtocol } from './active-catalog.js';
+import { resolveManagedPiPackageResources } from './pi-package-store.js';
 
 const log = createLogger('pi-host');
 
@@ -452,6 +453,7 @@ getMcpToolApprovalPresentation: getDesktopMcpToolApprovalPresentation,
       if (remoteHostId) return '$HOME/.xdt-server/v1/pi-agent-home';
       return path.join(app.getPath('userData'), 'pi-agent-home');
     },
+    resolvePiManagedPackageResources: resolveManagedPiPackageResources,
     preparePiExtraSpawnConfig: async (providers, ctx) => {
       const extra = await getPiExtraSpawnConfig(providers, opts.logger, ctx);
       if (!extra?.mcpBridge || extra.mcpBridge.servers.length === 0) return extra;
