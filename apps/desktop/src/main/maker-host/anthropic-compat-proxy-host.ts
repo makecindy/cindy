@@ -200,14 +200,6 @@ function createStreamingBridgeResponse(): StreamingBridgeResponse {
   return response;
 }
 
-function responsesBridgeBaseUrl(
-  route: NonNullable<Awaited<ReturnType<typeof resolveProviderRoute>>>,
-): string | null {
-  const requestPath = route.routing.requestPath;
-  if (!requestPath || requestPath === '/responses') return route.routing.upstream;
-  return null;
-}
-
 function createVisionFallbackResponsesBridgeDecision(
   route: NonNullable<Awaited<ReturnType<typeof resolveProviderRoute>>>,
   agent: 'claude-code' | 'pi',
@@ -215,14 +207,13 @@ function createVisionFallbackResponsesBridgeDecision(
   prefs: { reasoningEffort?: string; fast?: boolean },
 ): RoutingDecision | null {
   if (route.routing.wireProtocol !== 'openai-responses') return null;
-  const upstreamBase = responsesBridgeBaseUrl(route);
-  if (!upstreamBase) return null;
   const { headers } = buildLocalHandlerHeaders(route, agent);
   const realModel = rewriteModelIdForProviderRoute(route.providerId, agent, visionModel);
   const handler = createResponsesHandler({
     providers: [{
       prefix: '',
-      upstreamBase,
+      upstreamBase: route.routing.upstream,
+      ...(route.routing.requestPath ? { requestPath: route.routing.requestPath } : {}),
       buildHeaders: async () => headers,
       maxOutputTokensSupported: true,
     }],

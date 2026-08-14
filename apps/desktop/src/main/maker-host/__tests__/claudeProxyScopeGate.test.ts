@@ -321,6 +321,64 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     },
   );
 
+  it('uses a custom Responses request path for a vision fallback', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'vision-responses-custom-path',
+        name: 'Vision Responses Custom Path',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://vision.example/v1?tenant=acme',
+            wireProtocol: 'openai-responses',
+            requestPath: '/tenant/acme/infer?stream=1',
+            models: [{ id: 'vision-model', name: 'Vision Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'vision-key');
+    visionFallbackSettings.visionFallbackModel = 'vision-model';
+    visionFallbackSettings.visionFallbackProviderId = 'vision-responses-custom-path';
+    visionFallbackSettings.visionFallbackProviderIds = { 'claude-code': 'vision-responses-custom-path' };
+    outboundFetch.mockResolvedValueOnce(new Response(sse([
+      { type: 'response.created', response: { id: 'r', model: 'vision-model' } },
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'message' } },
+      { type: 'response.output_text.delta', output_index: 0, delta: 'seen' },
+      { type: 'response.output_item.done', output_index: 0, item: { type: 'message' } },
+      { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 1 } } },
+    ]), { status: 200, headers: { 'content-type': 'text/event-stream' } }));
+
+    const decision = await Promise.resolve(createModelRoutingTransform()(
+      {
+        model: 'deepseek/deepseek-v4-pro',
+        messages: [{
+          role: 'user',
+          content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
+        }],
+        stream: true,
+      },
+      ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
+    ));
+    const response = bridgeResponse();
+    await decision?.localHandler?.({
+      parsedBody: {
+        model: 'deepseek/deepseek-v4-pro',
+        messages: [{
+          role: 'user',
+          content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
+        }],
+        stream: true,
+      },
+      ctx: ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
+      res: response,
+    } as never);
+
+    expect(outboundFetch.mock.calls[0]?.[0]).toBe(
+      'https://vision.example/v1/tenant/acme/infer?tenant=acme&stream=1',
+    );
+    expect(response.chunks.join('')).toContain('message_stop');
+  });
+
   it('streams a chat vision fallback before completion and aborts it when the client disconnects', async () => {
     setCustomProviders([
       buildUserProvider({

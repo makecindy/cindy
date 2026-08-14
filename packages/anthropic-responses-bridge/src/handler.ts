@@ -227,6 +227,21 @@ function trimTrailingSlashes(s: string): string {
   return s.slice(0, end);
 }
 
+/** 在保留 base query 的前提下追加供应商配置的精确 Responses 路径。 */
+function joinResponsesUrl(upstreamBase: string, requestPath: string): string {
+  if (!requestPath.startsWith('/') || requestPath.includes('#')) {
+    throw new TypeError('invalid Responses request path');
+  }
+  const url = new URL(upstreamBase);
+  const queryIndex = requestPath.indexOf('?');
+  const path = queryIndex === -1 ? requestPath : requestPath.slice(0, queryIndex);
+  const query = queryIndex === -1 ? '' : requestPath.slice(queryIndex + 1);
+  url.pathname = `${trimTrailingSlashes(url.pathname)}${path}`;
+  url.search = [url.search.slice(1), query].filter(Boolean).join('&');
+  url.hash = '';
+  return url.toString();
+}
+
 /**
  * 创建订阅直连 handler。host 把它包进 compat-proxy 的 `RoutingDecision.localHandler`:
  * `{ localHandler: (a) => handler.handle({ ...a, prefs }) }`。
@@ -322,9 +337,21 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     const abort = new AbortController();
     res.on('close', () => abort.abort());
 
+    let upstreamUrl: string;
+    try {
+      upstreamUrl = joinResponsesUrl(provider.upstreamBase, provider.requestPath ?? '/responses');
+    } catch (err) {
+      log.error?.('invalid Responses upstream configuration', {
+        reqId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      writeJson(res, 502, { type: 'error', error: { type: 'api_error', message: 'invalid Responses upstream configuration' } });
+      return;
+    }
+
     let upstream: Response;
     try {
-      upstream = await fetchImpl(`${provider.upstreamBase}/responses`, {
+      upstream = await fetchImpl(upstreamUrl, {
         method: 'POST',
         headers: {
           ...providerHeaders,

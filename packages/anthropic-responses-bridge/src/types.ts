@@ -174,8 +174,13 @@ export interface BridgeProviderConfig {
   prefix: string;
   /** 上游 wire 协议;省略 = 'openai-responses'(当前唯一实现)。 */
   wireProtocol?: BridgeWireProtocol;
-  /** 上游 Responses base(不含 /responses),如 codex 后端 / https://api.x.ai/v1。 */
+  /** 上游 Responses base(不含默认 `/responses`),如 codex 后端 / https://api.x.ai/v1。 */
   upstreamBase: string;
+  /**
+   * 上游精确 Responses 请求路径。省略时使用标准 `/responses`；自定义供应商可传
+   * `/tenant/acme/infer?stream=1` 这类已验证的相对路径。
+   */
+  requestPath?: string;
   /**
    * 构造发往上游的 provider 专属 headers(**含鉴权**,如 authorization Bearer + codex 的
    * chatgpt-account-id/originator/openai-beta)。每请求调用一次,内部负责取最新 token / 过期懒刷新。
