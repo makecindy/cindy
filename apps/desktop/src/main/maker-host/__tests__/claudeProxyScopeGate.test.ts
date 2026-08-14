@@ -53,7 +53,7 @@ import {
   readClaudeSessionRoute,
   resetClaudeSessionRouteRegistryForTest,
 } from '../claude-session-route-registry';
-import { setProviderOAuthTokenReader } from '../provider-route';
+import { setPendingCredentialSwitchReader, setProviderOAuthTokenReader } from '../provider-route';
 import {
   registerPiProxySession,
   resetPiProxySessionsForTest,
@@ -74,10 +74,33 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     setClaudeProxyGatewayKeyReader(() => gatewayKey);
     setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-grok' ? 'sess-grok' : null));
     setSessionProvider('sess-grok', 'xai');
+    setPendingCredentialSwitchReader(() => undefined);
   });
 
   afterEach(() => {
     clearSessionProvider('sess-grok');
+    setPendingCredentialSwitchReader(() => undefined);
+  });
+
+  it('订阅直连目标也在进入 bridge 前拦截 pending switch', async () => {
+    setPendingCredentialSwitchReader(() => ({
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
+      previousModel: 'claude-opus-4-8',
+    }));
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'chatgpt/gpt-5.5' },
+        ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+      ),
+    );
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'provider_switch_pending' },
+    });
   });
 
   it('claude-haiku 分类器请求(oauth-spawn)→ 换网关 key,不去 api.x.ai', () => {

@@ -1765,6 +1765,12 @@ export class PiAgent extends BaseAgent {
         const disposer = this.deps.registerPiProxySession(opts.sessionId, proxySessionToken);
         if (typeof disposer === 'function') disposeProxySession = disposer;
       }
+      // 视觉桥后端 env（层 C）：host 解析后注入，cindy-bridge 的 vision 工具读取。
+      // 键名可能含 API key，须纳入 piSecretEnvNames 剥离面。
+      // 传当前 session model：未命中视觉桥目标模型的 Pi 模型不注入 env、不注册
+      // vision 工具（零干扰，不因别的模型配置了视觉桥而改变本模型工具面）。
+      const visionBridgeEnv =
+        this.deps.resolvePiVisionBridgeEnv?.(opts.model) ?? null;
       // 这些值必须留在 Pi 父进程，供 models.json 的 $ENV 请求期解析及 bridge
       // client 使用；cindy-bridge 用该**仅含变量名**的清单在 bash spawn 边界剥离
       // 真值，阻止 LLM shell 绕过工具审批直连 localhost proxy/MCP 或盗用 BYOM key。
@@ -1772,6 +1778,7 @@ export class PiAgent extends BaseAgent {
         PI_API_KEY_ENV,
         PI_SESSION_ID_ENV,
         PI_SESSION_TOKEN_ENV,
+        ...(visionBridgeEnv ? Object.keys(visionBridgeEnv) : []),
         ...Object.keys(authEnv),
         ...Object.keys(nativeEnv),
         ...Object.keys(mcpEnv),
@@ -1804,6 +1811,8 @@ export class PiAgent extends BaseAgent {
         // 外部 MCP header 真值只经 env 交给 bridge extension；host 生成独立名字，
         // 且这些键已进入 piSecretEnvNames，LLM 可调用的 bash 子进程拿不到。
         ...mcpEnv,
+        // 视觉桥后端 env（层 C）：键含 API key 已纳入 piSecretEnvNames 剥离面。
+        ...(visionBridgeEnv ? visionBridgeEnv : {}),
         [PI_SESSION_ID_ENV]: opts.sessionId ?? '',
         ...(proxySessionToken !== undefined
           ? { [PI_SESSION_TOKEN_ENV]: proxySessionToken }

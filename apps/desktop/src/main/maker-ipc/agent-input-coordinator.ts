@@ -1375,8 +1375,8 @@ export class AgentInputCoordinator {
     //  - UI 续跑(「继续」按钮,sendUiTrigger):等价 retryLastError——清 recovery
     //    重发队首 A(原样重发是既有 retryLastError 对 queue-head 的语义),合成
     //    continue 项不入队,避免 A 与 continue 双发。
-    // 自动来源(scheduler / orca)与 resume(继续队列)维持既有「不清」语义:
-    // 自动化项不代表用户表态,resume 是机械放行,显式点重试/删除仍是唯一出路。
+    // 自动来源(scheduler / orca)不代表用户表态,维持「不清」语义。暂停队列的
+    // Continue 则由 resume 原子清除与当前队首匹配的 recovery 后重发原消息。
     if (state.recovery?.kind === 'queue-head' && !automaticOrigin) {
       const abandonedClientId = state.recovery.clientId;
       if (isUiContinuationItem(item)) {
@@ -2101,9 +2101,27 @@ export class AgentInputCoordinator {
 
   resume(sessionId: string): AgentInputProjection {
     const state = this.getState(sessionId);
+    const recovery = state.recovery;
+    const pausedQueueHeadRecoveryClientId =
+      state.queuePaused &&
+      recovery?.kind === 'queue-head' &&
+      state.pendingQueue[0]?.clientId === recovery.clientId
+        ? recovery.clientId
+        : null;
     state.queuePaused = false;
     state.queuePausedByRestore = false;
-    this.clearErrorUnlessQueueHeadBlocked(state);
+    if (pausedQueueHeadRecoveryClientId !== null) {
+      state.error = null;
+      state.stickyError = null;
+      state.recovery = null;
+      log.info('paused queue resume resets queue-head recovery', {
+        sessionId,
+        clientId: pausedQueueHeadRecoveryClientId,
+      });
+      this.touchUserSend(sessionId);
+    } else {
+      this.clearErrorUnlessQueueHeadBlocked(state);
+    }
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'resume');
     this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'resume');
@@ -3427,6 +3445,7 @@ export class AgentInputCoordinator {
       }
       latest.error = errorMessage(err);
       latest.stickyError = null;
+      const piImageCapabilityRejected = isPiImageInputUnsupportedError(err);
       // 同 handleSendNotDispatched:调度来源的 prompt 不留可被人手动 Retry 的 recovery
       // (review #944 第九轮 P1;判据内建在 setActiveTurnRecovery)。
       const schedulerOrigin = this.setActiveTurnRecovery(latest, head) === 'dropped-scheduler';
@@ -3436,6 +3455,10 @@ export class AgentInputCoordinator {
         // (用户 Retry / clearError)—— 现在没有了,不主动清就等于把会话永久钉在"有活跃
         // turn":之后所有用户与调度消息全部积压到 coordinator 被重置
         // (review #944 第十轮 P1)。
+        latest.activeTurn = null;
+      } else if (piImageCapabilityRejected) {
+        // Pi 图片能力拒绝发生在 vendor RPC 之前，不会再有 terminal event 来释放 activeTurn；
+        // 已持久化的用户行仍保留 active-turn recovery，供用户切换到视觉模型后重试。
         latest.activeTurn = null;
       }
       this.notifyRejectedUserTurn(sessionId, head);

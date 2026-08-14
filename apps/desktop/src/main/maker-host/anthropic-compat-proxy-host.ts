@@ -38,6 +38,7 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
+import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 
 import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
@@ -59,6 +60,7 @@ import { getSessionProvider } from './session-provider-store.js';
 import {
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
+  resolvePendingSessionRouteDecision,
   resolveSessionRouteDecision,
 } from './provider-route.js';
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
@@ -206,6 +208,10 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (ccSessionId) noteClaudeSessionRequest(ccSessionId, ctx.reqId);
     if (!isPlainObject(body)) return null;
     const wireModel = typeof body.model === 'string' ? body.model : '';
+    const pendingRoute = sessionId
+      ? resolvePendingSessionRouteDecision(sessionId, wireModel || undefined)
+      : null;
+    if (pendingRoute) return pendingRoute;
 
     // ⓪ 订阅直连翻译:model 带 `chatgpt/` / `xai/` 前缀 → 交给本地 responses handler
     //    (localHandler 插槽,进程内直调,不多一跳;它把 Anthropic Messages ↔ OpenAI Responses
@@ -440,6 +446,13 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         // LiteLLM/provider adapter 可能把 provider_specific_fields(null) 挂到 tool_use 上，
         // 严格 Anthropic 入站 schema 不接受该扩展字段。
         stripToolUseProviderSpecificFields,
+        // 视觉桥透明替换（层 A）：controller 未注入时短路透传，零干扰；注入后把纯文本
+        // 模型请求里的图转成文字描述。放在 stripNonAnthropicFields 之前——否则旧 #794 的
+        // tool_result 图片省略逻辑（如 glm-5.2 的 stripGlm52）会先吃掉 tool_result 内嵌图，
+        // A 层无图可转描述，文档承诺的「A 层覆盖 tool_result 内嵌」落空。视觉桥只替换
+        // image block、不碰 tool_use 结构，位于 repair/dedupe 之后安全；未命中时返回 null，
+        // 旧 #794 strip 继续兜底。
+        buildVisionBridgeProxyTransform(log),
         stripNonAnthropicFields,
       ],
       recoveryRules: [

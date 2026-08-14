@@ -103,6 +103,40 @@ describe('validateCustomMcpConfig', () => {
     expect(validateCustomMcpConfig({ ...valid, headers: { X: 1 } }).ok).toBe(false);
   });
 
+  it('rejects invalid HTTP header names', () => {
+    for (const name of ['X Name', '中文', 'X\nName']) {
+      const result = validateCustomMcpConfig({ ...valid, headers: { [name]: 'value' } });
+      expect(result.ok, `${JSON.stringify(name)} should be rejected`).toBe(false);
+      expect(result.ok === false && result.message).toContain('valid HTTP tokens');
+    }
+  });
+
+  it('accepts HTTP token header names after trimming', () => {
+    expect(
+      validateCustomMcpConfig({
+        ...valid,
+        headers: { ' X-API_Key ': 'value', "X-Trace.Id!#$%&'*+-.^_`|~": 'value' },
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it('rejects non-printable ASCII header values', () => {
+    for (const value of ['中文', '😀', 'line\nfeed', 'tab\tvalue']) {
+      const result = validateCustomMcpConfig({ ...valid, headers: { 'X-Name': value } });
+      expect(result.ok, `${JSON.stringify(value)} should be rejected`).toBe(false);
+      expect(result.ok === false && result.message).toContain('printable ASCII');
+    }
+  });
+
+  it('accepts printable ASCII header values', () => {
+    expect(
+      validateCustomMcpConfig({
+        ...valid,
+        headers: { 'X-Name': 'alice', Authorization: 'Bearer token-123/+_=' },
+      }),
+    ).toEqual({ ok: true });
+  });
+
   // 撞名的自定义 MCP 会在装配层顶替同名内置 server，并继承 MCP 审批策略里对该
   // server 名的信任（策略只看 serverName），所以 id 必须在 CRUD 阶段就拒收。
   it('rejects ids reserved by builtin MCP servers', () => {

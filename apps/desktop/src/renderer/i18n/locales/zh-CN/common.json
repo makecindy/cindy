@@ -127,6 +127,7 @@
       "chipMetrics": "用量指示器",
       "memory": "记忆",
       "subagentModels": "Subagent",
+      "visionBridge": "视觉桥",
       "compaction": "上下文压缩",
       "terminalShell": "默认终端 shell",
       "composer": "消息输入",
@@ -985,7 +986,7 @@
         },
         "inputMonitoring": {
           "label": "监听权限",
-          "tooltip": "用于监听 Fn、单独 Command / Option / Control 以及带 Fn 的语音输入快捷键。普通组合键和 F1-F24 单键通常不需要。已授权表示当前运行中的 App 可以监听快捷键；开发版可能由 Terminal 承载授权。"
+          "tooltip": "用于监听 Fn、单独 Command / Option / Control、带 Fn 的快捷键，以及 F1-F24 单键按住说话的松键事件。普通组合键不需要。已授权表示当前运行中的 App 可以监听快捷键；开发版可能由 Terminal 承载授权。"
         },
         "accessibility": {
           "label": "自动输入",
@@ -2429,6 +2430,37 @@
     "compatMode": {
       "title": "小技巧",
       "description": "一些功能性开关，部分需要新建任务才会生效(具体见各 cell 说明)。"
+    },
+    "visionBridge": {
+      "title": "视觉桥",
+      "description": "让纯文本模型获得看图能力：用单独的多模态模型把图片转成文字描述后再交给纯文本模型。",
+      "enableLabel": "启用视觉桥",
+      "enableHint": "关闭时所有模型行为与之前完全一致。开启后，下方勾选的模型会把图片经视觉后端转成文字描述。启用后，发送给这些模型的图片以及同消息文字提示会发送给你选择的视觉后端。",
+      "enableAria": "切换视觉桥",
+      "toast": {
+        "saved": "视觉桥设置已保存",
+        "saveFailed": "保存视觉桥设置失败"
+      },
+      "capability": {
+        "vision": "已知支持视觉",
+        "noVision": "已知纯文本",
+        "unknown": "视觉能力未知"
+      },
+      "targetModels": {
+        "label": "走视觉桥的模型",
+        "hint": "纯文本模型（如 DeepSeek）默认已勾选。也可以勾选支持视觉的模型——例如故意用更廉价的描述模型来节省 token。",
+        "empty": "暂无可用的模型。",
+        "toggleAria": "切换 {{model}} 的视觉桥"
+      },
+      "backends": {
+        "label": "视觉后端模型",
+        "hint": "选择最多两个把图片转文字的多模态模型。第二个（备用）可选。",
+        "primary": "主后端",
+        "fallback": "备用",
+        "unset": "未选择",
+        "noBackup": "无备用",
+        "hintSecondary": "优先使用主后端。主后端失败且配置了备用时切换到备用。两者都失败时图片无法识别，会以文字提示代替并提醒你。"
+      }
     },
     "chatEmbedding": {
       "cell": {
@@ -6096,6 +6128,11 @@
     "imageMissing": {
       "title": "图片已丢失"
     },
+    "visionBridge": {
+      "analyzing": "正在识别图片中…（{{count}} 张）",
+      "fallback": "视觉桥使用了备用视觉后端（主后端不可用），图片识别可能受影响",
+      "unavailable": "视觉桥当前不可用，图片无法识别，已以文字提示代替"
+    },
     "newMessageIndicator": {
       "aria": "回到底部，查看 {{count}} 条新消息",
       "label_one": "{{count}} 条新消息",
@@ -6618,6 +6655,8 @@
       "automationSent": "由自动化发送",
       "automationSentNamed": "由自动化「{{name}}」发送",
       "automationViewTask": "查看自动化",
+      "orcaFromLead": "来自 Lead 的消息",
+      "orcaFromWorker": "来自 Worker 的消息",
       "expandLongMessage": "展开全文",
       "collapseLongMessage": "收起",
       "sessionReference": {
@@ -9074,6 +9113,7 @@
       "archiveWorkerAria": "归档 Worker {{name}}",
       "createWorker": "创建新 Worker",
       "hardLimitHint": "已达硬上限 {{count}} 个 · 归档现有 Worker 后可继续创建",
+      "hardLimitSettingsHint": "已达硬上限 {{count}} 个 · 点击前往协同设置调整",
       "softLimitHint": "已超过软上限 {{count}} 个 · Worker 过多会增加内存占用",
       "settingsCollaboration": "设置 · 协同",
       "layoutMenuLabel": "Worker 列表显示方式",

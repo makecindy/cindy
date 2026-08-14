@@ -175,6 +175,10 @@ export function SessionCard({
           : remoteActivity.phase === 'running'
             ? ('running' as const)
             : ('done' as const);
+  // 左侧 vendor mark 呼吸原先只看本地 running 集;远程会话的运行态只进了右侧
+  // 状态槽。只并入 phase=running,与 SessionItem / 折叠 rail 同一口径;
+  // needs-interaction 继续由右侧 awaiting 表达。
+  const leftIconRunning = isRunning || remoteActivity?.phase === 'running';
   const rightStatusKind =
     remoteRightStatus ??
     resolveSidebarRightStatus({
@@ -557,7 +561,7 @@ export function SessionCard({
     <span className={CARD_TITLE_STATUS_SLOT_CLASS} aria-hidden>
       <SessionStatusIcon
         session={session}
-        isRunning={isRunning}
+        isRunning={leftIconRunning}
         isAttached={isAttached}
         hasAttentionNotification={hasAttentionNotification}
         isActive={isActive}
@@ -992,7 +996,7 @@ export function SessionCard({
           >
             <SessionStatusIcon
               session={session}
-              isRunning={isRunning}
+              isRunning={leftIconRunning}
               isAttached={isAttached}
               hasAttentionNotification={hasAttentionNotification}
               isActive={isActive}

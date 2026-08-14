@@ -584,6 +584,13 @@ import {
   resetSubagentModelSettings,
   writeSubagentModelSettingsPatch,
 } from './maker-host/subagent-model-settings-store.js';
+import {
+  readVisionBridgeSettings,
+  readVisionBridgeSettingsState,
+  resetVisionBridgeSettings,
+  writeVisionBridgeSettings,
+} from './vision-bridge/vision-bridge-settings-store.js';
+import type { VisionBridgeSettings } from '../shared/visionBridgeSettings.js';
 import { readLspModeSettings, writeLspModeEnabled } from './maker-host/lsp-mode-store.js';
 import {
   readChatEmbeddingSettings,
@@ -644,6 +651,7 @@ import {
 } from './sessionDragPreviewHtml.js';
 import {
   isGlobalVoiceInputOverlayVisible,
+  releaseActiveGlobalVoiceInputShortcut,
   registerGlobalVoiceInputIpc,
 } from './voice-input/global.js';
 import { ensureMainAppPresence } from './appPresence.js';
@@ -3501,6 +3509,24 @@ const registerIpcHandlers = () => {
       resetSubagentModelSettings();
       return subagentModelSettingsWire();
     }, stillValid);
+  });
+
+  // 视觉桥设置 IPC —— store 与 Maker 单例无关, 提前注册（见 vision-bridge-settings-store）。
+  // GET 也是特权配置面读取（providerId/modelId/开关），非可信 sender 同样拒绝（与 SET/RESET 对齐）。
+  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_GET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return visionBridgeSettingsWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_SET, async (event, patch: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const parsed = parseVisionBridgeSettingsPatch(patch);
+    writeVisionBridgeSettings(parsed);
+    return visionBridgeSettingsWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.VISION_BRIDGE_SETTINGS_RESET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    resetVisionBridgeSettings();
+    return visionBridgeSettingsWire();
   });
 
   // Claude Code 自动上下文压缩阈值 IPC —— store 跟 Maker 单例无关, 提前注册。
@@ -7179,6 +7205,7 @@ app.on('ready', async () => {
   // 设备只剩隐私指示灯常亮和 idle-sleep assertion 的代价)。
   installVoiceInputPowerRelease({
     powerMonitor,
+    releaseActiveShortcut: releaseActiveGlobalVoiceInputShortcut,
     broadcast: (channel, payload) => {
       broadcastVoiceInputPowerState(
         BrowserWindow.getAllWindows(),
@@ -7397,6 +7424,65 @@ function subagentModelSettingsWire() {
     customizedKeys: state.customizedKeys,
     defaults: state.defaults,
   };
+}
+
+function visionBridgeSettingsWire() {
+  const state = readVisionBridgeSettingsState();
+  return {
+    ...state.value,
+    isCustomized: state.isCustomized,
+    customizedKeys: state.customizedKeys,
+    defaults: state.defaults,
+  };
+}
+
+/** 解析视觉桥设置 patch（白名单键，逐字段校验；非法抛 INVALID_PARAMS）。 */
+function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSettings> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throwIpcError('INVALID_PARAMS', 'vision bridge settings patch required (object)');
+  }
+  const input = raw as Record<string, unknown>;
+  const patch: Partial<VisionBridgeSettings> = {};
+  if ('enabled' in input) {
+    if (typeof input.enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'vision bridge enabled must be boolean');
+    }
+    patch.enabled = input.enabled;
+  }
+  if ('targetModels' in input) {
+    if (!Array.isArray(input.targetModels)) {
+      throwIpcError('INVALID_PARAMS', 'vision bridge targetModels must be a string array');
+    }
+    // trim 后拒绝空白元素，避免脏值（" deepseek " / "  "）落盘。
+    const trimmed = input.targetModels.map((m) => (typeof m === 'string' ? m.trim() : ''));
+    if (trimmed.some((m) => m.length === 0)) {
+      throwIpcError('INVALID_PARAMS', 'vision bridge targetModels must be a non-blank string array');
+    }
+    patch.targetModels = trimmed;
+  }
+  for (const key of ['primary', 'fallback'] as const) {
+    if (!(key in input)) continue;
+    const value = input[key];
+    if (value === null) {
+      patch[key] = null;
+      continue;
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throwIpcError('INVALID_PARAMS', `vision bridge ${key} must be { providerId, modelId } or null`);
+    }
+    const ref = value as Record<string, unknown>;
+    if (typeof ref.providerId !== 'string' || typeof ref.modelId !== 'string') {
+      throwIpcError('INVALID_PARAMS', `vision bridge ${key} must be { providerId, modelId } or null`);
+    }
+    // trim 后拒绝纯空白，避免脏配置（空白串）落盘。
+    const providerId = ref.providerId.trim();
+    const modelId = ref.modelId.trim();
+    if (providerId.length === 0 || modelId.length === 0) {
+      throwIpcError('INVALID_PARAMS', `vision bridge ${key} providerId/modelId must not be blank`);
+    }
+    patch[key] = { providerId, modelId };
+  }
+  return patch;
 }
 
 function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPatch {

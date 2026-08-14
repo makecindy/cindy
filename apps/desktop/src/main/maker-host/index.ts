@@ -30,6 +30,7 @@ import {
 } from './codex-model-backfill.js';
 import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cindy/orca-workflow';
 import { LspServerPool, type IOSSimulatorMcpCallContext } from '@cindy/mcps';
+import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 
 import { createMessage } from '../localDb/ipc/messages.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
@@ -63,6 +64,17 @@ import {
   writeCodexHistoryHasProductPrompt,
 } from './session-storage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
+import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { createVisionBridge } from '../vision-bridge/vision-bridge.js';
+import {
+  getVisionBridgeController,
+  setVisionBridgeController,
+} from '../vision-bridge/vision-bridge-controller.js';
+import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
+import * as blobStore from '../cindy-media/blobStore.js';
+import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
+import { resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
@@ -244,6 +256,8 @@ type RemoteCcQuery = Awaited<
 >;
 
 let _maker: Maker | null = null;
+/** 视觉桥实例（层 A/B/C 共用），在 resetMaker 时释放缓存。 */
+let _visionBridgeInstance: ReturnType<typeof createVisionBridge> | null = null;
 
 /**
  * 本次审核请求的额度。按模型能力自适应:能关思考的走紧凑档,强制思考的
@@ -657,6 +671,61 @@ export function getPluginRegistry() {
  * MCP 由 @cindy/mcps 包提供 server/tool 定义，desktop main 在这里注入 token、
  * OAuth、缓存、bot 发送等宿主能力，再交给 maker-core 的 ClaudeCodeAgent。
  */
+
+/**
+ * 视觉桥用户提示广播（层 B + 层 D 共用）。
+ * renderer 仅信任 `source: 'vision-bridge'`，避免普通错误事件误触发视觉桥提示。
+ */
+const VISION_BRIDGE_DEDUP_MS = 2_000;
+const _visionBridgeDedup = new Map<string, number>();
+
+function broadcastVisionBridgeEvent(
+  sessionId: string,
+  reason: 'vision-bridge-recognizing' | 'vision-bridge-fallback' | 'vision-bridge-unavailable',
+  extra: { imageCount?: number } = {},
+): void {
+  if (reason === 'vision-bridge-recognizing') {
+    for (const key of _visionBridgeDedup.keys()) {
+      if (key.startsWith(`${sessionId}|`)) _visionBridgeDedup.delete(key);
+    }
+  } else {
+    const key = `${sessionId}|${reason}`;
+    const now = Date.now();
+    const last = _visionBridgeDedup.get(key);
+    if (last !== undefined && now - last < VISION_BRIDGE_DEDUP_MS) return;
+    _visionBridgeDedup.set(key, now);
+  }
+
+  const message = reason === 'vision-bridge-recognizing'
+    ? '正在识别图片中…'
+    : reason === 'vision-bridge-fallback'
+      ? '视觉桥使用了备用视觉后端（主后端不可用）'
+      : '视觉桥当前不可用，图片无法转成文字描述，已以文字提示代替';
+  const payload = {
+    sessionId,
+    event: {
+      type: 'error' as const,
+      data: {
+        message,
+        isTerminal: false,
+        reason,
+        ...(extra.imageCount !== undefined ? { imageCount: extra.imageCount } : {}),
+      },
+      source: 'vision-bridge',
+    },
+  };
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      if (!win.isDestroyed()) win.webContents.send(MAKER_PUSH.EVENT, payload);
+    } catch (error) {
+      desktopMakerLogger.child('vision-bridge').warn('vision bridge event broadcast failed', {
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
 export function getMaker(): Maker {
   if (!_maker) {
     // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap
@@ -1673,6 +1742,20 @@ export function getMaker(): Maker {
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
       getGhostRosterPrompt,
+      // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
+      resolvePiVisionBridgeEnv: (model) =>
+        buildPiVisionBridgeEnv(
+          {
+            getProviderById: (providerId) =>
+              getActiveCatalog().providers.find((provider) => provider.id === providerId) ?? null,
+            readCustomProviderKey,
+            readGatewayKey: readClaudeApiKey,
+            resolveBackendRoute: (providerId, modelId) =>
+              resolveVisionBackendRoute(providerId, modelId, effectiveXdGatewayBaseUrl() || null),
+            fetch: outboundFetch,
+          },
+          model,
+        ),
       // 远端 Pi:给 session 标 remoteHostId 的, PiAgent 通过这个钩子拿远端
       // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
       // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
@@ -1793,6 +1876,28 @@ export function getMaker(): Maker {
       },
     });
 
+    setVisionGatewayKeyReader(readClaudeApiKey);
+    _visionBridgeInstance = createVisionBridge({
+      getProviderById: (providerId) =>
+        getActiveCatalog().providers.find((provider) => provider.id === providerId) ?? null,
+      readCustomProviderKey,
+      readGatewayKey: readClaudeApiKey,
+      resolveGatewayEndpoint: () => effectiveXdGatewayBaseUrl() || null,
+      resolveBackendRoute: (providerId, modelId) =>
+        resolveVisionBackendRoute(providerId, modelId, effectiveXdGatewayBaseUrl() || null),
+      fetch: outboundFetch,
+      logger: desktopMakerLogger.child('vision-bridge'),
+      onStart: (sessionId, imageCount) => {
+        broadcastVisionBridgeEvent(sessionId, 'vision-bridge-recognizing', { imageCount });
+      },
+      onNote: (_note, sessionId, kind) => {
+        broadcastVisionBridgeEvent(
+          sessionId,
+          kind === 'fallback' ? 'vision-bridge-fallback' : 'vision-bridge-unavailable',
+        );
+      },
+    });
+
     _maker = new Maker({
       agents: {
         'claude-code': claudeAgent,
@@ -1802,6 +1907,7 @@ export function getMaker(): Maker {
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,
       makerMemory: makerMemoryManager,
+      visionBridge: _visionBridgeInstance.hook,
       // Desktop-specific session 生命周期副作用钩子。maker-core 不知道文件系统细节，
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
@@ -1877,6 +1983,10 @@ export function getMaker(): Maker {
         },
       },
     });
+    setVisionBridgeController({
+      shouldBridge: _visionBridgeInstance.isTargetModel,
+      describeImage: _visionBridgeInstance.describeImage,
+    });
     // 存量已登录用户补拉:maker 首次就绪后,若 Codex 已登录但当前无 codex 模型
     // (从没跑过会话、models_cache 未生成),fire-and-forget 触发一次 live model/list。
     // 不阻塞 getMaker 返回 / 启动(类比 refreshAnthropicModelsFromHttp 的后台刷新)。
@@ -1948,6 +2058,9 @@ export function resetMaker(): void {
   // 事件会拿旧实例去拉模型清单(串号)。下次 getMaker() 会带着干净记账重建它。
   _codexModelBackfill = null;
   _initialCustomMcpRefresh = undefined;
+  setVisionBridgeController(null);
+  _visionBridgeInstance?.dispose();
+  _visionBridgeInstance = null;
   resetPluginRegistry();
   resetCustomMcpRegistry();
   // 轮 27 MEDIUM-2:resetMaker 是 account 边界收口 —— PI bridge 必须一并

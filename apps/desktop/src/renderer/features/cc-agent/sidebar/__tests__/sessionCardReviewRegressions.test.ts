@@ -119,6 +119,22 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).not.toContain('titlePrefixWidth');
   });
 
+  it('merges remote activity into the left vendor-mark running state', () => {
+    // 远程会话的运行态原先只进右侧状态槽,左侧图标仍只看本地 running 集。
+    // 只并入 phase=running,与折叠 rail / remoteLampOf 同一口径;
+    // needs-interaction 继续由右侧 awaiting 表达。
+    expect(sessionItemSource).toContain(
+      'const leftIconRunning = isRunning || remoteActivity?.phase === \'running\'',
+    );
+    expect(sessionItemSource).toContain('isRunning={leftIconRunning}');
+    expect(sessionCardSource).toContain(
+      'const leftIconRunning = isRunning || remoteActivity?.phase === \'running\'',
+    );
+    expect(sessionCardSource).toContain('isRunning={leftIconRunning}');
+    expect(sessionCardSource).not.toContain('isRemoteSessionActivityActive');
+    expect(sessionItemSource).not.toContain('isRemoteSessionActivityActive');
+  });
+
   it('keeps card preview line budgets stable across content sources', () => {
     expect(sessionCardSource).toContain(
       'const cardPreviewLineClamp = session.summary ? 3 : isRunning ? 2 : isAutomationGenerated ? 1 : 2',

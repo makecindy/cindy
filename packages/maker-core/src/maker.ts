@@ -107,12 +107,23 @@ export interface MakerDeps {
    * (即跟改造前行为一致, native auto-memory 走自家)。
    */
   makerMemory?: MakerMemoryManager;
+  /**
+   * 可选: 视觉桥钩子（层 B）的全局默认。host 创建 Maker 时注入一次，所有
+   * createSession 自动带上；单个 createSession 的 visionBridge 优先。缺省不注入 =
+   * 零干扰（见 docs/vision-bridge-design.md 层 B）。
+   */
+  visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
 }
 
 export interface CreateSessionOptions extends StartSessionOptions {
   agentKind: AgentKind;
   /** 可选：UI 显示用 */
   title?: string;
+  /**
+   * 可选：视觉桥钩子（层 B）。host 注入后，session.send 在把用户贴图交给 agent 前
+   * 用视觉模型转成文字描述（见 docs/vision-bridge-design.md 层 B）。缺省不注入 = 零干扰。
+   */
+  visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
   /** 可选：父会话 id，用于 fork / orchestration 等会话关系。 */
   parentSessionId?: string;
   /**
@@ -329,10 +340,13 @@ export class Maker {
   private readonly closeReasons = new WeakMap<Session, MakerSessionCloseReason>();
   /** Maker Memory 顶层单例 (可选). undefined 时 maker memory 功能整体禁用. */
   public readonly makerMemory: MakerMemoryManager | undefined;
+  /** 视觉桥钩子（层 B）全局默认（可选）。见 MakerDeps.visionBridge。 */
+  protected readonly visionBridge: import('./types/vision-bridge.js').VisionBridgeHook | undefined;
 
   constructor(deps: MakerDeps) {
     this.agents = deps.agents;
     this.storage = deps.storage;
+    this.visionBridge = deps.visionBridge;
     // 不 child 自己名字 — host 传进来的 logger 通常已经命名(如 'maker'),
     // 再 child 'maker' 会变成 'maker/maker'。host 自己决定 root scope 名字。
     this.logger = deps.logger;
@@ -644,6 +658,8 @@ export class Maker {
       // 透传 remoteHostId 让 host 层在 hot path 上能 O(1) 判 local/remote
       // (不用每次 send 回 DB 读 SessionMeta — register.ts checkWorkDirExists 走这条)。
       remoteHostId: meta.remoteHostId ?? null,
+      // 层 B：视觉桥钩子（per-session 优先，否则全局默认；缺省不传 = 零干扰）。
+      visionBridge: startOpts.visionBridge ?? this.visionBridge,
     });
 
     // 当 SDK 回填 sdkSessionId 时持久化
