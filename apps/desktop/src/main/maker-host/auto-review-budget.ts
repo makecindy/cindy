@@ -16,8 +16,10 @@
 import type { AgentKind, CatalogModel } from '@cindy/model-providers';
 
 /** 能关思考的模型:够写一个 JSON 裁决即可。 */
-const COMPACT_MAX_TOKENS = 384;
-const COMPACT_TIMEOUT_MS = 12_000;
+export const AUTO_REVIEW_COMPACT_MAX_TOKENS = 384;
+export const AUTO_REVIEW_COMPACT_TIMEOUT_MS = 12_000;
+const COMPACT_MAX_TOKENS = AUTO_REVIEW_COMPACT_MAX_TOKENS;
+const COMPACT_TIMEOUT_MS = AUTO_REVIEW_COMPACT_TIMEOUT_MS;
 
 /**
  * 强制思考的模型:思考段 + 结论段都要装得下。
@@ -102,6 +104,31 @@ export function resolveAutoReviewBudget(model: CatalogModel | undefined): AutoRe
     // 带一个不生效的字段;个别上游还会因为不认的值直接 400。
     reasoningEffort: undefined,
   };
+}
+
+/**
+ * Auto-review 灰区分类器的网关模型选型。
+ *
+ * 硬编码模型 id 不可行:xd 目录是 model-access server 按账号下发的(运行时才知道
+ * 有哪些模型,#2174)。选型规则:xd 的 codex 模型里挑「能关思考且非 DeepSeek」的,
+ * 优先 gpt 系 —— 分类器要短 JSON,强制思考模型会 malformed。
+ */
+export function resolveAutoReviewGatewayModel(
+  providers: ReadonlyArray<{
+    id: string;
+    models: Partial<Record<AgentKind, CatalogModel[]>>;
+  }>,
+): CatalogModel | undefined {
+  const xd = providers.find((item) => item.id === 'xd');
+  const models = xd?.models.codex ?? [];
+  const candidates = models.filter((m) => {
+    if (m.id.toLowerCase().includes('deepseek')) return false;
+    return modelCanSuppressReasoning(m);
+  });
+  const gptModels = candidates.filter((m) => m.id.toLowerCase().includes('gpt'));
+  // 优先 budget 档(mini/nano):分类器是高热路径,每个灰区动作都付一次模型钱。
+  const budgetClass = gptModels.find((m) => /mini|nano/.test(m.id.toLowerCase()));
+  return budgetClass ?? gptModels[0] ?? candidates[0];
 }
 
 /** 从当前目录里查一个 (供应商, agent, 模型) 的目录条目。 */

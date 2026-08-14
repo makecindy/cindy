@@ -1000,6 +1000,44 @@ describe('utility one-shot candidates', () => {
     expect(body.max_tokens).toBe(64_000);
   });
 
+  it('routes Auto-review gateway codex/ model through xd /v1/responses', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'xd',
+        name: 'XD',
+        source: 'builtin',
+        agents: ['codex'],
+        auth: { method: 'api-key' },
+        routing: {
+          codex: { upstream: 'https://xd.example/v1', authStrategy: 'gateway-key' },
+        },
+        models: { codex: [{ id: 'codex/gpt-5.4-mini', name: 'Mini', contextWindow: 272_000 }] },
+      }],
+    } as never);
+    readKey.mockReturnValue('xd-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => 'data: {"type":"response.output_text.delta","delta":"{\\"verdict\\":\\"allow\\"}"}\ndata: [DONE]\n',
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'classify', {
+      providerId: 'xd',
+      agentKind: 'codex',
+      model: 'codex/gpt-5.4-mini',
+      maxTokens: 384,
+      reasoningEffort: 'low',
+    });
+
+    expect(result).toMatchObject({ ok: true, providerId: 'xd', model: 'codex/gpt-5.4-mini' });
+    expect(fetchMock).toHaveBeenCalledWith('https://gateway.test.invalid/v1/responses', expect.anything());
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body).toMatchObject({
+      model: 'codex/gpt-5.4-mini',
+      max_output_tokens: 384,
+      reasoning: { effort: 'low' },
+    });
+  });
+
   it('缺省不传 maxTokens 时,Anthropic wire 用模型目录 maxOutput 兜底(协议必填,非宿主上限)', async () => {
     activeCatalog.mockReturnValue({
       providers: [{

@@ -16,7 +16,6 @@ import {
   ClaudeCodeAgent,
   CodexAgent,
   configureDefaultImageResizer,
-  type AutoReviewRequest,
   type McpProvider,
 } from '@cindy/maker-core';
 import {
@@ -110,7 +109,14 @@ import {
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
-import { findCatalogModel, resolveAutoReviewBudget } from './auto-review-budget.js';
+import {
+  AUTO_REVIEW_COMPACT_MAX_TOKENS,
+  AUTO_REVIEW_COMPACT_TIMEOUT_MS,
+  findCatalogModel,
+  modelCanSuppressReasoning,
+  resolveAutoReviewBudget,
+  resolveAutoReviewGatewayModel,
+} from './auto-review-budget.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { accountProviderReadinessBarrier } from './account-provider-readiness-barrier.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
@@ -235,20 +241,6 @@ type RemoteCcQuery = Awaited<
 
 let _maker: Maker | null = null;
 
-/**
- * 本次审核请求的额度。按模型能力自适应:能关思考的走紧凑档,强制思考的
- * (以及目录里查不到的)给足思考+结论的空间 —— 固定 384 token 会让 DeepSeek
- * 这类模型正文恒为空。详见 auto-review-budget.ts。
- */
-function autoReviewBudgetFor(request: AutoReviewRequest) {
-  return resolveAutoReviewBudget(findCatalogModel(
-    getActiveCatalog().providers,
-    request.providerId,
-    request.agentKind,
-    request.model,
-  ));
-}
-
 let providerAccessRuntimeRefreshListener: (() => void) | null = null;
 
 /** Register the bootstrap-owned runtime reconciliation that follows provider access changes. */
@@ -258,21 +250,56 @@ export function setProviderAccessRuntimeRefreshListener(listener: (() => void) |
 
 const reviewAutoPermissionAction = createAutoPermissionReviewer({
   logger: desktopMakerLogger,
-  // 重试守卫必须按同一份额度计时,否则放宽额度的那一档会被自己的守卫切断。
-  resolveRequestTimeoutMs: (request) => autoReviewBudgetFor(request).timeoutMs,
+  // 三档候选都被约束为「能关思考」,额度恒为紧凑 12s,守卫无需再按 request 动态取。
+  resolveRequestTimeoutMs: () => AUTO_REVIEW_COMPACT_TIMEOUT_MS,
   requestText: async (request, prompt) => {
     const maker = _maker;
     if (!maker) return null;
-    const budget = autoReviewBudgetFor(request);
-    const result = await requestUtilityText(maker, prompt, {
-      providerId: request.providerId?.trim() || undefined,
-      agentKind: request.agentKind,
-      model: request.model,
-      maxTokens: budget.maxTokens,
-      timeoutMs: budget.timeoutMs,
-      ...(budget.reasoningEffort ? { reasoningEffort: budget.reasoningEffort } : {}),
+    // 1) xd 网关:按账号下发目录动态选「能关思考、非 DeepSeek」的 gpt 系模型。
+    // 额度与 effort 随选中模型算(如 efforts:[] 的 Kimi 不传 low,避免 400)。
+    const gatewayModel = resolveAutoReviewGatewayModel(getActiveCatalog().providers);
+    if (gatewayModel) {
+      const budget = resolveAutoReviewBudget(gatewayModel);
+      const result = await requestUtilityText(maker, prompt, {
+        providerId: 'xd',
+        agentKind: 'codex',
+        model: gatewayModel.id,
+        maxTokens: budget.maxTokens,
+        timeoutMs: budget.timeoutMs,
+        ...(budget.reasoningEffort ? { reasoningEffort: budget.reasoningEffort } : {}),
+      });
+      if (result.ok) return result.text;
+    }
+    // 2) ChatGPT 订阅:没有网关模型的账号回落订阅档。
+    const subscription = await requestUtilityText(maker, prompt, {
+      pinnedProfileId: 'codex-gpt-5.4-mini',
+      maxTokens: AUTO_REVIEW_COMPACT_MAX_TOKENS,
+      timeoutMs: AUTO_REVIEW_COMPACT_TIMEOUT_MS,
+      reasoningEffort: 'low',
     });
-    return result.ok ? result.text : null;
+    if (subscription.ok) return subscription.text;
+    // 3) 会话模型兜底:保留 #1227 的「跟会话 provider/model」能力,只加一条
+    // 门槛——会话模型必须能关思考。DeepSeek 等强制思考模型不再当分类器
+    // (#2174),其余自定义 provider(如 taptap + codex/gpt-5.6-terra)照旧可用。
+    const sessionModel = findCatalogModel(
+      getActiveCatalog().providers,
+      request.providerId,
+      request.agentKind,
+      request.model,
+    );
+    if (sessionModel && modelCanSuppressReasoning(sessionModel)) {
+      const budget = resolveAutoReviewBudget(sessionModel);
+      const result = await requestUtilityText(maker, prompt, {
+        providerId: request.providerId?.trim() || undefined,
+        agentKind: request.agentKind,
+        model: request.model,
+        maxTokens: budget.maxTokens,
+        timeoutMs: budget.timeoutMs,
+        ...(budget.reasoningEffort ? { reasoningEffort: budget.reasoningEffort } : {}),
+      });
+      if (result.ok) return result.text;
+    }
+    return null;
   },
 });
 

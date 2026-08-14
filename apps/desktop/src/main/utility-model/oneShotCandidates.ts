@@ -588,20 +588,23 @@ async function requestBuiltinProviderText(
     const baseUrl = effectiveXdGatewayBaseUrl().trim();
     if (!apiKey) return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'api_key_missing')] };
     if (!baseUrl) return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'endpoint_missing')] };
+    // Nova / Codex 折扣档(codex/…)在网关上走 Responses,chat-completions 会 400。
+    const useResponses = input.model.startsWith('codex/');
     return executeCandidates([{
       providerId: input.provider.id,
       model: input.model,
-      transport: 'litellm-chat-completions',
-      profile,
+      transport: useResponses ? 'codex-responses' : 'litellm-chat-completions',
+      profile: useResponses ? { ...profile, transport: 'codex-responses' } : profile,
       execute: (text, requestOpts) => requestProviderHttpText({
-        wire: 'chat-completions',
-        endpoint: joinProxyPath(baseUrl, '/v1/chat/completions'),
+        wire: useResponses ? 'responses' : 'chat-completions',
+        endpoint: joinProxyPath(baseUrl, useResponses ? '/v1/responses' : '/v1/chat/completions'),
         headers: { Authorization: `Bearer ${apiKey}` },
         model: input.model,
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
         reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        retryWithMinimalBodyOnInvalidRequest: useResponses,
       }),
     }], prompt, [], input);
   }

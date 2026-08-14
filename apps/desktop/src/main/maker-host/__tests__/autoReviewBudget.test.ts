@@ -3,9 +3,12 @@ import { describe, expect, it } from 'vitest';
 import type { CatalogModel } from '@cindy/model-providers';
 
 import {
+  AUTO_REVIEW_COMPACT_MAX_TOKENS,
+  AUTO_REVIEW_COMPACT_TIMEOUT_MS,
   findCatalogModel,
   modelCanSuppressReasoning,
   resolveAutoReviewBudget,
+  resolveAutoReviewGatewayModel,
 } from '../auto-review-budget.js';
 
 const model = (over: Partial<CatalogModel> = {}): CatalogModel => ({
@@ -44,8 +47,8 @@ describe('modelCanSuppressReasoning', () => {
 describe('resolveAutoReviewBudget', () => {
   it('keeps the compact budget for models that can turn reasoning down', () => {
     const budget = resolveAutoReviewBudget(model({ efforts: ['low', 'high'] }));
-    expect(budget.maxTokens).toBe(384);
-    expect(budget.timeoutMs).toBe(12_000);
+    expect(budget.maxTokens).toBe(AUTO_REVIEW_COMPACT_MAX_TOKENS);
+    expect(budget.timeoutMs).toBe(AUTO_REVIEW_COMPACT_TIMEOUT_MS);
     expect(budget.reasoningEffort).toBe('low');
   });
 
@@ -87,6 +90,44 @@ describe('resolveAutoReviewBudget', () => {
   });
 });
 
+describe('resolveAutoReviewGatewayModel', () => {
+  const providers = (codexModels: CatalogModel[]) => [
+    { id: 'xd', models: { codex: codexModels } },
+  ];
+
+  it('picks a suppressible gpt-class model and skips DeepSeek', () => {
+    const picked = resolveAutoReviewGatewayModel(providers([
+      model({ id: 'deepseek/deepseek-v4-pro', efforts: ['high', 'max'] }),
+      model({ id: 'moonshotai/kimi-k2.6', efforts: [] }),
+      model({ id: 'codex/gpt-5.4-mini', efforts: ['low', 'high'] }),
+    ]));
+    expect(picked?.id).toBe('codex/gpt-5.4-mini');
+  });
+
+  it('prefers budget-class mini/nano gpt over frontier gpt', () => {
+    const picked = resolveAutoReviewGatewayModel(providers([
+      model({ id: 'openai/gpt-5.6-luna', efforts: ['low', 'high'] }),
+      model({ id: 'codex/gpt-5.4-mini', efforts: ['low', 'high'] }),
+    ]));
+    expect(picked?.id).toBe('codex/gpt-5.4-mini');
+  });
+
+  it('falls back to any suppressible non-DeepSeek model when no gpt class exists', () => {
+    const picked = resolveAutoReviewGatewayModel(providers([
+      model({ id: 'deepseek/deepseek-v4-flash', efforts: ['high', 'max'] }),
+      model({ id: 'moonshotai/kimi-k2.6', efforts: [] }),
+    ]));
+    expect(picked?.id).toBe('moonshotai/kimi-k2.6');
+  });
+
+  it('returns undefined when xd only has forced-reasoning models', () => {
+    expect(resolveAutoReviewGatewayModel(providers([
+      model({ id: 'deepseek/deepseek-v4-pro', efforts: ['high', 'max'] }),
+    ]))).toBeUndefined();
+    expect(resolveAutoReviewGatewayModel([])).toBeUndefined();
+  });
+});
+
 describe('findCatalogModel', () => {
   const providers = [
     { id: 'xd', models: { 'claude-code': [model({ id: 'shared' })], pi: [model({ id: 'shared' })] } },
@@ -110,7 +151,7 @@ describe('findCatalogModel', () => {
 
   it('never borrows another provider capability when a provider is named', () => {
     // 回归 PR #2474 review:同一个模型 id 在两家目录下能力不同时,跨家借用会把
-    // 强制思考的路由误判成"能关思考",于是又拿回��凑额度 —— 正是本 PR 要修的故障。
+    // 强制思考的路由误判成"能关思考",于是又拿回紧凑额度 —— 正是本 PR 要修的故障。
     const crossProvider = [
       { id: 'xd', models: { 'claude-code': [model({ id: 'dual', efforts: ['high'] })] } },
       { id: 'other', models: { 'claude-code': [model({ id: 'dual', efforts: ['low', 'high'] })] } },
