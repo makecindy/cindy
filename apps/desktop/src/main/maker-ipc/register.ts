@@ -752,7 +752,7 @@ import {
   setClaudeBackgroundActivityBroadcaster,
 } from '../maker-host/claude-session-background-activity.js';
 import { readClaudeSessionRoute } from '../maker-host/claude-session-route-registry.js';
-import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
+import { consumeClaudeOpusPlanMismatchIntoEvent } from '../maker-host/claude-gateway-error-observer.js';
 import { setLiveCcSessionBridge } from '../maker-host/claude-transcript-relocation.js';
 import {
   CredentialModeSwitchBusyError,
@@ -3508,6 +3508,21 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     },
     onTerminal: ({ turnGeneration, event, isCurrentGeneration }) => {
       if (session.remoteHostId) return;
+      if (
+        isCurrentGeneration &&
+        session.agentKind === 'claude-code' &&
+        event.type === 'error' &&
+        isTerminalTurnErrorEvent(event)
+      ) {
+        const reason = consumeClaudeOpusPlanMismatchIntoEvent(session.id, event);
+        if (reason) {
+          log.warn('Claude Opus plan error attributed before session listener fan-out', {
+            sessionId: session.id,
+            model: session.model,
+            reason,
+          });
+        }
+      }
       const turnLeaseId = providerTurnLeaseId(session.instanceId, turnGeneration);
       const isSilentStop =
         event.type === 'done' &&
@@ -3580,29 +3595,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       if (typeof event.turnAttemptToken === 'number') {
         interruptedTurnAutoResumeGuard.noteAttemptEvent(session.id, event.turnAttemptToken);
       }
-      let attributedEvent = event;
-      if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
-        const reason =
-          !session.remoteHostId && session.agentKind === 'claude-code'
-            ? consumeClaudeOpusPlanMismatch(session.id)
-            : null;
-        if (reason) {
-          const eventData =
-            event.data && typeof event.data === 'object' && !Array.isArray(event.data)
-              ? (event.data as Record<string, unknown>)
-              : {};
-          attributedEvent = {
-            ...event,
-            data: { ...eventData, reason },
-          };
-          log.warn('Claude Opus plan error normalized for renderer', {
-            sessionId: session.id,
-            model: session.model,
-            reason,
-          });
-        }
-      }
-      const broadcastEvent = redactEventForRenderer(attributedEvent);
+      const broadcastEvent = redactEventForRenderer(event);
       if (event.type === 'interaction_dismissed') {
         const data = event.data as { requestId?: unknown; reason?: unknown };
         if (typeof data.requestId === 'string') {
@@ -3823,8 +3816,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           turnModelPromiseBySession.delete(session.id);
         }
         const errData =
-          attributedEvent.type === 'error'
-            ? (attributedEvent.data as
+          event.type === 'error'
+            ? (event.data as
                 | { message?: unknown; reason?: unknown; sdkError?: unknown; errorStatus?: unknown }
                 | undefined)
             : undefined;
@@ -4109,7 +4102,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         ) {
           onTurnErrorEvent(
             session.id,
-            attributedEvent.data as {
+            event.data as {
               message?: unknown;
               reason?: unknown;
               sdkError?: unknown;
@@ -4122,7 +4115,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (autoResumeSuppressesPersist) {
           autoResumeBookkeeping.stashSuppressedError(
             session.id,
-            attributedEvent.data,
+            event.data,
             agentInputCoordinatorHolder?.getAutoResumeAttemptToken(session.id) ?? null,
             agentInputCoordinatorHolder?.getAutoResumeDeferredOwner(session.id) ?? null,
           );

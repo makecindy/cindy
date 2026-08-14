@@ -199,7 +199,9 @@
     "learnFailed": "スキル学習を開始できませんでした",
     "learnBusyBody": "学習タスクが既に進行中です。完了してから再度お試しください。",
     "learnFailedBody": "開始に失敗:{{detail}}",
-    "unknownError": "不明なエラー"
+    "unknownError": "不明なエラー",
+    "claudeGatewayOpusPlanMismatch": "この Opus リクエストは接続中の Claude.ai サブスクリプションではなく XD Gateway 経由で送信され、Gateway によってモデルが拒否されました。Claude.ai サブスクリプションに切り替えて再試行するか、別のモデルを選択してください。",
+    "claudeSubscriptionOpusPlanMismatch": "接続中の Claude.ai サブスクリプションでは現在 Opus を利用できません。別の利用可能なモデルを選択してください。サブスクリプションを最近変更した場合は、設定で Anthropic に再接続してから再試行してください。"
   },
   "quote": {
     "count": "{{n}} 件の引用",

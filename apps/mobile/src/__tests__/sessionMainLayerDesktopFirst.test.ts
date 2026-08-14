@@ -33,6 +33,30 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(routeSource).toContain('syncingWhileEmpty={syncingWhileEmpty}');
   });
 
+  it('recomputes localized message errors and the tail banner when the language changes', () => {
+    const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const renderItemsStart = source.indexOf('const renderItems = useMemo(');
+    const renderItemsEnd = source.indexOf('// 只在本次 render 真正 commit', renderItemsStart);
+    const renderItemsSource = source.slice(renderItemsStart, renderItemsEnd);
+    const tailBannerStart = source.indexOf('const tailBannerState = useMemo(');
+    const tailBannerEnd = source.indexOf('// 主按钮', tailBannerStart);
+    const tailBannerSource = source.slice(tailBannerStart, tailBannerEnd);
+    const renderItemsDependencies = renderItemsSource.slice(
+      renderItemsSource.lastIndexOf('['),
+      renderItemsSource.lastIndexOf(']') + 1,
+    );
+    const tailBannerDependencies = tailBannerSource.slice(
+      tailBannerSource.lastIndexOf('['),
+      tailBannerSource.lastIndexOf(']') + 1,
+    );
+
+    // 两个 model 都会在计算时读取 i18n 的当前语言；任务保持打开时，
+    // 仅切换语言也必须使 memo 失效，不能继续显示旧语言的安全错误文案。
+    expect(renderItemsDependencies).toContain('i18nInstance.language');
+    expect(tailBannerDependencies).toContain('i18nInstance.language');
+  });
+
   it('keeps the unsynced session state focused on the current action', () => {
     const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
     const routeStart = source.indexOf('<SessionHeaderBar');

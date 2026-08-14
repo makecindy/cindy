@@ -1982,6 +1982,33 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     expect(outcome.errorMessage).not.toContain('Selected model is at capacity');
   });
 
+  it('官方 Telegram 按请求级 Claude subscription reason 输出安全失败说明', async () => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hello' } }));
+    await new Promise((r) => setTimeout(r, 0));
+    const cb = h.eventCbs.get('sess-new')!;
+    const misleading =
+      'Claude Opus is not available with the Claude Pro plan. Run /logout and /login.';
+
+    cb({
+      type: 'error',
+      data: {
+        message: misleading,
+        reason: 'claude-subscription-opus-plan-mismatch',
+        isTerminal: true,
+      },
+    });
+
+    const outcome = await p;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('Claude.ai 订阅');
+    expect(outcome.errorMessage).not.toMatch(/Claude Pro plan|\/logout|\/login/i);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(misleading));
+  });
+
   it('非过载的终态错误仍原样上报(不误改其它失败的诊断信息)', async () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),

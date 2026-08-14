@@ -655,4 +655,32 @@ describe('turnRunner 自动任务转播(scheduler turn → 远程控制 thread)'
     const finalBody = (stub.finalize.mock.calls.at(-1) as unknown[] | undefined)?.[0] as string;
     expect(finalBody).toContain('重试后成功');
   });
+
+  it('scheduler 转播按请求级 Gateway reason 安全收口', async () => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const h = await attachAndIdle();
+    const misleading =
+      'Claude Opus is not available with the Claude Pro plan. Run /logout and /login.';
+
+    h.emit(withOrigin({
+      type: 'tool_use',
+      data: { toolName: 'Read', input: { file_path: '/x/a.ts' } },
+    }));
+    h.emit(withOrigin({
+      type: 'error',
+      data: {
+        message: misleading,
+        reason: 'claude-gateway-opus-plan-mismatch',
+        isTerminal: true,
+      },
+    }));
+
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(1));
+    const finalBody = String(
+      (stub.finalize.mock.calls[0] as unknown[] | undefined)?.[0],
+    );
+    expect(finalBody).toContain('XD Gateway');
+    expect(finalBody).not.toMatch(/Claude Pro plan|\/logout|\/login/i);
+  });
 });

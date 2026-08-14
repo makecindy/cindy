@@ -345,6 +345,11 @@ export interface AgentInputProjection {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   error: string | null;
+  /**
+   * Structured terminal attribution for `error`. Additive/optional for old controlled
+   * Desktops; consumers must fail closed to null when it is absent or malformed.
+   */
+  errorReason?: string | null;
   recovery: AgentInputRecovery;
   /**
    * Compatibility display value for the existing ErrorBanner. It is no longer

@@ -15,6 +15,7 @@ import { buildMobileUploadedAttachment } from '@/session/attachments';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import { textComposerDocument } from '@/session/composerDocument';
 import type { RemoteSession } from '@/session/types';
+import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '@cindy/maker-shared/claude-opus-plan-mismatch';
 
 const ATTACHMENT_SHA256 = 'a'.repeat(64);
 
@@ -351,6 +352,7 @@ describe('inputProjection', () => {
       queueEditLocks: ['q-1'],
       queueAbortPending: true,
       error: 'failed',
+      errorReason: CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
       errorRetryText: 'retry',
       autoResumePending: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 },
     });
@@ -365,9 +367,23 @@ describe('inputProjection', () => {
       queueEditLocks: ['q-1'],
       queueAbortPending: true,
       error: 'failed',
+      errorReason: CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
       errorRetryText: 'retry',
       autoResumePending: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 },
     });
+  });
+
+  it('fails closed when the additive projection error reason is absent or malformed', () => {
+    expect(normalizeInputProjection({
+      sessionId: 'missing-reason',
+      error: 'raw diagnostic',
+    }).errorReason).toBeNull();
+    expect(normalizeInputProjection({
+      sessionId: 'malformed-reason',
+      error: 'raw diagnostic',
+      errorReason: { route: 'guessed-from-text' },
+    }).errorReason).toBeNull();
+    expect(normalizeInputProjection(undefined).errorReason).toBeNull();
   });
 
   it('distinguishes supported, legacy, and not-yet-received continuation ownership', () => {

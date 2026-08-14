@@ -4,6 +4,7 @@ import {
   UI_ACTION_TRIGGER_PREFIX,
 } from '@cindy/maker-shared/synthetic-trigger';
 import { composerDocumentFromSerializedMessage } from '@/session/composerDocument';
+import { i18n, SUPPORTED_LOCALES } from '@/i18n';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import type { RemoteMessage } from '@/session/types';
 
@@ -883,6 +884,56 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0].body).toContain('设置 → 模型供应商');
     // 非鉴权错误维持原文
     expect(items[1].body).toBe('something exploded');
+  });
+
+  it('renders request-attributed Claude Opus failures safely in every locale', async () => {
+    const previousLanguage = i18n.language;
+    const misleading =
+      'Claude Opus is not available with the Claude Pro plan. Run /logout and /login.';
+    const cases = [
+      {
+        reason: 'claude-gateway-opus-plan-mismatch',
+        key: 'message.systemCard.claudeGatewayOpusPlanMismatch',
+      },
+      {
+        reason: 'claude-subscription-opus-plan-mismatch',
+        key: 'message.systemCard.claudeSubscriptionOpusPlanMismatch',
+      },
+    ] as const;
+
+    try {
+      for (const locale of SUPPORTED_LOCALES) {
+        await i18n.changeLanguage(locale);
+        for (const fixture of cases) {
+          const source = message({
+            id: `${locale}-${fixture.reason}`,
+            role: 'error',
+            content: JSON.stringify({ message: misleading, reason: fixture.reason }),
+          });
+          const [item] = normalizeRemoteMessages([source]);
+
+          expect(item.body, `${locale} ${fixture.reason}`).toBe(i18n.t(fixture.key));
+          expect(item.body).not.toMatch(/Claude Pro plan|\/logout|\/login/i);
+          // Presentation is safe, while the persisted source remains available for diagnostics.
+          expect(item.source.content).toBe(source.content);
+        }
+      }
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
+  });
+
+  it('does not guess attribution for an unknown terminal error reason', () => {
+    const raw = 'diagnostic detail from an unrelated provider';
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'unknown-error-reason',
+        role: 'error',
+        content: JSON.stringify({ message: raw, reason: 'unknown-reason' }),
+      }),
+    ]);
+
+    expect(item.body).toBe(raw);
   });
 
   it('extracts scheduler automation origin from user agentMeta', () => {

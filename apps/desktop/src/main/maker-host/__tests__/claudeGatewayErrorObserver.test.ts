@@ -1,7 +1,7 @@
 import { gzipSync } from 'node:zlib';
 
 import type { ResponseObserverCtx } from '@cindy/anthropic-compat-proxy';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
@@ -9,6 +9,7 @@ import {
 } from '../../../shared/claudeGatewayError.js';
 import {
   consumeClaudeOpusPlanMismatch,
+  consumeClaudeOpusPlanMismatchIntoEvent,
   createClaudeGatewayErrorObserver,
   resetClaudeGatewayErrorObserverForTest,
 } from '../claude-gateway-error-observer.js';
@@ -60,6 +61,39 @@ describe('Claude gateway error observer', () => {
     expect(drive(ctx(), Buffer.from(planError))).toBe(true);
     expect(consumeClaudeOpusPlanMismatch('s1')).toBe(CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON);
     expect(consumeClaudeOpusPlanMismatch('s1')).toBeNull();
+  });
+
+  it('attaches one consumed reason to the same terminal event seen by two listeners', () => {
+    recordClaudeRequestRoute(1, 's1', 'gateway');
+    drive(ctx(), Buffer.from(planError));
+    const event = {
+      type: 'error',
+      data: { message: 'raw terminal diagnostic', isTerminal: true },
+    };
+
+    expect(consumeClaudeOpusPlanMismatchIntoEvent('s1', event)).toBe(
+      CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+    );
+    const firstListener = vi.fn();
+    const secondListener = vi.fn();
+    firstListener(event);
+    secondListener(event);
+
+    expect(firstListener).toHaveBeenCalledWith(event);
+    expect(secondListener).toHaveBeenCalledWith(event);
+    expect(event.data).toEqual({
+      message: 'raw terminal diagnostic',
+      isTerminal: true,
+      reason: CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+    });
+    expect(consumeClaudeOpusPlanMismatch('s1')).toBeNull();
+  });
+
+  it('does not modify a terminal event when request evidence is absent', () => {
+    const event = { data: { message: 'unrelated terminal diagnostic' } };
+
+    expect(consumeClaudeOpusPlanMismatchIntoEvent('s1', event)).toBeNull();
+    expect(event.data).toEqual({ message: 'unrelated terminal diagnostic' });
   });
 
   it('decodes compressed gateway error bodies', () => {

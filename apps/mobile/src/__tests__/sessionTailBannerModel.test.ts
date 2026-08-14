@@ -3,7 +3,11 @@ import {
   APP_EXIT_INTERRUPTED_REASON,
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '@cindy/maker-shared/synthetic-trigger';
-import { i18n } from '@/i18n';
+import {
+  CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+  CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+} from '@cindy/maker-shared/claude-opus-plan-mismatch';
+import { i18n, SUPPORTED_LOCALES } from '@/i18n';
 import {
   isContinuationQueueItem,
   resolveSessionTailBanner,
@@ -48,7 +52,10 @@ describe('resolveSessionTailBanner — error-tail', () => {
     const state = resolveSessionTailBanner(baseInput({
       messages: [
         message({ id: 'u1', role: 'user', content: { text: '跑任务' }, createdAt: '2026-01-01T00:00:01.000Z' }),
-        errorRow('e1', '2026-01-01T00:00:02.000Z', { message: 'process exited unexpectedly' }),
+        errorRow('e1', '2026-01-01T00:00:02.000Z', {
+          message: 'process exited unexpectedly',
+          reason: 'unrelated-terminal-reason',
+        }),
       ],
     }));
     expect(state).toEqual({
@@ -58,6 +65,49 @@ describe('resolveSessionTailBanner — error-tail', () => {
       continueKind: 'error',
       retryable: true,
     });
+  });
+
+  it('localizes request-attributed Claude Opus failures safely in every locale', async () => {
+    const previousLanguage = i18n.language;
+    const misleading =
+      'Claude Opus is not available with the Claude Pro plan. Run /logout and /login.';
+    const cases = [
+      {
+        reason: CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+        key: 'message.systemCard.claudeGatewayOpusPlanMismatch',
+      },
+      {
+        reason: CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+        key: 'message.systemCard.claudeSubscriptionOpusPlanMismatch',
+      },
+    ] as const;
+
+    try {
+      for (const locale of SUPPORTED_LOCALES) {
+        await i18n.changeLanguage(locale);
+        for (const fixture of cases) {
+          const state = resolveSessionTailBanner(baseInput({
+            messages: [errorRow(
+              `${locale}-${fixture.reason}`,
+              '2026-01-01T00:00:02.000Z',
+              { message: misleading, reason: fixture.reason },
+            )],
+          }));
+
+          expect(state).toMatchObject({
+            kind: 'error-tail',
+            continueKind: 'error',
+            retryable: true,
+          });
+          expect((state as { text: string }).text, `${locale} ${fixture.reason}`)
+            .toBe(i18n.t(fixture.key));
+          expect((state as { text: string }).text).not
+            .toMatch(/Claude Pro plan|\/logout|\/login/i);
+        }
+      }
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
   });
 
   it('maps legacy app-exit marker rows to the continue-task semantics', () => {

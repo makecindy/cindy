@@ -3640,6 +3640,10 @@ function applyInputProjection(
       ? 'supported'
       : 'legacy';
   const projectedContinuationTurnClientId = projection.continuationTurnClientId ?? null;
+  const projectedErrorReason =
+    typeof projection.errorReason === 'string' && projection.errorReason.length > 0
+      ? projection.errorReason
+      : null;
   // A reconnect can briefly clear remoteProjectsStore. The projection still
   // belongs to the remote task during that window, so use the sticky origin
   // for optimistic settling/rollback semantics.
@@ -3804,9 +3808,9 @@ function applyInputProjection(
       queueAbortPending: projection.queueAbortPending,
       error: projection.error,
       usageLimitRecovery,
-      // projection 覆盖 error(dispatch 失败等,无 reason 语义)→ reason 一并清,
-      // 避免 silent-stop 的「继续」按钮挂在一条不相干的错误上。
-      errorReason: null,
+      // 新被控端把请求级终态归因与 raw error 成对投影；老端缺字段或 error 已清时
+      // fail closed 为 null，避免把旧 reason 挂到不相干的 dispatch 错误上。
+      errorReason: projection.error ? projectedErrorReason : null,
       // 进入凭证切换等待态时同步清 stale recoverableError:等待中的消息永不 dispatch,
       // 没有 stream/turn-done 事件替它清 —— 残留会让视图的 error(=recoverableError
       // 回落)遮住等待横幅,复现"静默排队"(review P2 2026-07-04)。

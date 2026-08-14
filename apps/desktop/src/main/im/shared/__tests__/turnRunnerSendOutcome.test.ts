@@ -2248,6 +2248,41 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(String(handle.finalize.mock.calls[0][0])).toContain('process exited with code 1');
   });
 
+  it('uses the request-attributed Claude subscription reason for a user turn failure', async () => {
+    const handle = {
+      messageId: 'stream-claude-plan',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+    const misleading =
+      'Claude Opus is not available with the Claude Pro plan. Run /logout and /login.';
+
+    h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
+    await flushMicrotasks();
+    h.emit({
+      type: 'error',
+      data: {
+        message: misleading,
+        reason: 'claude-subscription-opus-plan-mismatch',
+        isTerminal: true,
+      },
+    });
+
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    const finalText = String(handle.finalize.mock.calls[0][0]);
+    expect(finalText).toContain('Claude.ai 订阅');
+    expect(finalText).not.toMatch(/Claude Pro plan|\/logout|\/login/i);
+    expect(mocks.logger.error).toHaveBeenCalledWith(expect.stringContaining(misleading));
+  });
+
   it('keeps streaming resumed-turn output into the same turn after a silentStop resume', async () => {
     const handle = {
       messageId: 'stream-resume',

@@ -40,6 +40,7 @@ const projection: InputProjection = {
   queueEditLocks: [],
   queueAbortPending: false,
   error: null,
+  errorReason: null,
   errorRetryText: null,
     credentialSwitchWait: null,
 };

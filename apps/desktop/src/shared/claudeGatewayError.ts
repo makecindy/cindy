@@ -4,13 +4,16 @@
  * 直连路由则确实反映 Claude.ai 账号的套餐限制。
  */
 
-export const CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON = 'claude-gateway-opus-plan-mismatch';
-export const CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON =
-  'claude-subscription-opus-plan-mismatch';
+import {
+  CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+  CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+} from '@cindy/maker-shared/claude-opus-plan-mismatch';
 
-export type ClaudeOpusPlanMismatchReason =
-  | typeof CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON
-  | typeof CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON;
+export {
+  CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+  CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+  type ClaudeOpusPlanMismatchReason,
+} from '@cindy/maker-shared/claude-opus-plan-mismatch';
 
 const CLAUDE_PRO_OPUS_ERROR = /Claude Opus is not available with the Claude Pro plan/i;
 

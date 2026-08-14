@@ -229,6 +229,7 @@ function buildOptimisticProjection(
     queueEditLocks: [],
     queueAbortPending: false,
     error: null,
+    errorReason: null,
     errorRetryText: null,
     credentialSwitchWait: null,
   };

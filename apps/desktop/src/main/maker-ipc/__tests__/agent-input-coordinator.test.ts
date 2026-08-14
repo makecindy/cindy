@@ -15,6 +15,10 @@ import {
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '../../../shared/interruptedTurn.js';
 import type { RecoveryContextSnapshot } from '../recoveryCoordinator.js';
+import {
+  CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+  CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+} from '@cindy/maker-shared/claude-opus-plan-mismatch';
 
 const mocks = vi.hoisted(() => {
   const logger = {
@@ -427,6 +431,59 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe('AgentInputCoordinator terminal error attribution projection', () => {
+  it('keeps the structured reason paired through sticky transfer and clears both fields together', async () => {
+    const h = createHarness();
+    const sid = 'terminal-error-reason-pair';
+
+    h.coordinator.enqueue(sid, makeItem('q-attributed', 'run attributed request'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'raw Gateway diagnostic', {
+      reason: CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+    });
+
+    expect(latestProjection(h.projections)).toMatchObject({
+      error: 'raw Gateway diagnostic',
+      errorReason: CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+    });
+
+    h.coordinator.onTurnEvent(sid, 'done');
+    expect(latestProjection(h.projections)).toMatchObject({
+      error: 'raw Gateway diagnostic',
+      errorReason: CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+    });
+
+    h.coordinator.clearError(sid);
+    expect(latestProjection(h.projections)).toMatchObject({
+      error: null,
+      errorReason: null,
+    });
+  });
+
+  it('does not retain a stale reason when a later terminal error has another or no reason', () => {
+    const h = createHarness();
+    const sid = 'terminal-error-reason-replaced';
+
+    h.coordinator.onTurnEvent(sid, 'error', 'first raw diagnostic', {
+      reason: CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
+    });
+    h.coordinator.onTurnEvent(sid, 'error', 'second raw diagnostic', {
+      reason: CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+    });
+    expect(latestProjection(h.projections)).toMatchObject({
+      error: 'second raw diagnostic',
+      errorReason: CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
+    });
+
+    h.coordinator.onTurnEvent(sid, 'error', 'ordinary raw diagnostic');
+    expect(latestProjection(h.projections)).toMatchObject({
+      error: 'ordinary raw diagnostic',
+      errorReason: null,
+    });
+  });
 });
 
 describe('AgentInputCoordinator trusted session reference snapshots', () => {

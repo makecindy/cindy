@@ -557,7 +557,9 @@ interface SessionInputState {
   queueAbortPending: boolean;
   activeTurn: ActiveTurn | null;
   error: string | null;
+  errorReason: string | null;
   stickyError: string | null;
+  stickyErrorReason: string | null;
   /**
    * 中断自愈接管中（退避窗口内）时的展示信息；`null` = 未接管。
    *
@@ -618,7 +620,9 @@ interface PendingAutoResumeRecovery {
   stateRef: SessionInputState;
   recovery: Extract<AgentInputRecovery, { kind: 'active-turn' }>;
   error: string | null;
+  errorReason: string | null;
   stickyError: string | null;
+  stickyErrorReason: string | null;
   autoResumeInfo: AutoResumeInfo | null;
   attemptToken: number;
 }
@@ -640,7 +644,9 @@ function createInitialInputState(
     queueAbortPending: false,
     activeTurn: null,
     error: null,
+    errorReason: null,
     stickyError: null,
+    stickyErrorReason: null,
     autoResumePending: null,
     autoResumeAttemptToken: null,
     recovery: null,
@@ -662,6 +668,46 @@ function createInitialInputState(
     generation,
     clearBoundaryMs,
   };
+}
+
+/** Keep raw diagnostics and structured attribution as one state transition. */
+function setInputError(
+  state: SessionInputState,
+  error: string | null,
+  reason: unknown = null,
+): void {
+  state.error = error;
+  state.errorReason = error && typeof reason === 'string' && reason.length > 0 ? reason : null;
+}
+
+function setStickyInputError(
+  state: SessionInputState,
+  error: string | null,
+  reason: unknown = null,
+): void {
+  state.stickyError = error;
+  state.stickyErrorReason = error && typeof reason === 'string' && reason.length > 0 ? reason : null;
+}
+
+function clearInputErrors(state: SessionInputState): void {
+  setInputError(state, null);
+  setStickyInputError(state, null);
+}
+
+function setTerminalInputError(
+  state: SessionInputState,
+  message: string | undefined,
+  signals: Omit<InterruptedTurnErrorSignals, 'message'> | undefined,
+): void {
+  if (message !== undefined) setInputError(state, message, signals?.reason);
+}
+
+function copyStickyInputErrorToLive(state: SessionInputState): void {
+  setInputError(state, state.stickyError, state.stickyErrorReason);
+}
+
+function copyLiveInputErrorToSticky(state: SessionInputState): void {
+  setStickyInputError(state, state.error, state.errorReason);
 }
 /**
  * 首次进入 main 队列边界时冻结原始合成指令意图。IPC payload 属不可信输入，
@@ -1380,8 +1426,7 @@ export class AgentInputCoordinator {
     if (state.recovery?.kind === 'queue-head' && !automaticOrigin) {
       const abandonedClientId = state.recovery.clientId;
       if (isUiContinuationItem(item)) {
-        state.error = null;
-        state.stickyError = null;
+        clearInputErrors(state);
         state.recovery = null;
         log.info('ui continue resets queue-head recovery; resending failed head', {
           sessionId,
@@ -1408,8 +1453,7 @@ export class AgentInputCoordinator {
           clientId: abandonedClientId,
         });
       }
-      state.error = null;
-      state.stickyError = null;
+      clearInputErrors(state);
       state.recovery = null;
     }
     // 用户点「继续任务」表达的是恢复刚才中断/失败的 turn，必须先于此前
@@ -1471,7 +1515,7 @@ export class AgentInputCoordinator {
     this.abandonActiveTurnRecoveryForUserAction(state);
     if (state.recovery) {
       log.info('compact ignored while dispatch boundary is busy', { sessionId });
-      state.error = 'Cannot compact while the session is busy';
+      setInputError(state, 'Cannot compact while the session is busy');
       this.emit(sessionId);
       return this.getProjection(sessionId);
     }
@@ -1558,8 +1602,8 @@ export class AgentInputCoordinator {
         }
         const latest = this.getState(sessionId);
         latest.activeTurn = null;
-        latest.error = sendFailureMessage(result);
-        latest.stickyError = null;
+        setInputError(latest, sendFailureMessage(result));
+        setStickyInputError(latest, null);
         latest.recovery = null;
         log.warn('compact not dispatched', {
           sessionId,
@@ -1591,8 +1635,8 @@ export class AgentInputCoordinator {
       }
       const latest = this.getState(sessionId);
       latest.activeTurn = null;
-      latest.error = errorMessage(err);
-      latest.stickyError = null;
+      setInputError(latest, errorMessage(err));
+      setStickyInputError(latest, null);
       latest.recovery = null;
       log.warn('compact dispatch failed', {
         sessionId,
@@ -1842,7 +1886,7 @@ export class AgentInputCoordinator {
         error: errorMessage(err),
       });
       if (markerStillPresent) {
-        latest.error = errorMessage(err);
+        setInputError(latest, errorMessage(err));
         latest.recovery = null;
         // 视觉 capability 拒绝发生在 Pi RPC 之前，投递结果确定为“未接收”。把原消息
         // 恢复到队首并留下 typed recovery；用户切换到视觉模型后可原样重试。与 ack
@@ -1912,10 +1956,11 @@ export class AgentInputCoordinator {
     // 已建立的失败状态(error / recovery = 旧 turn 的 Retry 入口)会被下面的
     // accepted 清理吞掉;合成收口分支需要回放它(review #939 第三轮)。
     const priorError = accepted.error;
+    const priorErrorReason = accepted.errorReason;
     const priorStickyError = accepted.stickyError;
+    const priorStickyErrorReason = accepted.stickyErrorReason;
     const priorRecovery = accepted.recovery;
-    accepted.error = null;
-    accepted.stickyError = null;
+    clearInputErrors(accepted);
     accepted.recovery = null;
     this.invalidateAbortBoundaryForNewTurn(accepted);
     const sameVendorTurn =
@@ -1981,8 +2026,8 @@ export class AgentInputCoordinator {
       // 保住失败 turn 的 Retry / 错误入口,并让 recovery 挡住队尾 drain——不能
       // 像成功结束一样放行(review #939 第三轮)。done 终结时快照为空,干净收口。
       if (priorError || priorRecovery) {
-        latest.error = priorError;
-        latest.stickyError = priorStickyError;
+        setInputError(latest, priorError, priorErrorReason);
+        setStickyInputError(latest, priorStickyError, priorStickyErrorReason);
         latest.recovery = priorRecovery;
       }
       this.emit(sessionId);
@@ -2040,8 +2085,7 @@ export class AgentInputCoordinator {
       const queuedIds = new Set(state.pendingQueue.map((q) => q.clientId));
       state.queueEditLocks = state.queueEditLocks.filter((id) => queuedIds.has(id));
     }
-    state.error = null;
-    state.stickyError = null;
+    clearInputErrors(state);
     state.recovery = null;
     this.cancelPreSendActiveTurn(sessionId, state, preserveQueue);
     // 用户显式 Stop 立即结束续跑行的 vendor-turn 归属。已跨过 vendor dispatch
@@ -2297,7 +2341,9 @@ export class AgentInputCoordinator {
       return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
     }
     const previousError = state.error;
+    const previousErrorReason = state.errorReason;
     const previousStickyError = state.stickyError;
+    const previousStickyErrorReason = state.stickyErrorReason;
     let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
     if (
       !continueItem &&
@@ -2312,8 +2358,7 @@ export class AgentInputCoordinator {
         return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
       }
     }
-    state.error = null;
-    state.stickyError = null;
+    clearInputErrors(state);
     // 接管态在补发这一刻结束:聊天流里的「重新连接中」活动行交棒给落库的
     // autoResume 行(渲染成「已重新连接」活动行,详情同样可展开)。
     state.autoResumePending = null;
@@ -2344,7 +2389,9 @@ export class AgentInputCoordinator {
           stateRef: state,
           recovery,
           error: previousError,
+          errorReason: previousErrorReason,
           stickyError: previousStickyError,
+          stickyErrorReason: previousStickyErrorReason,
           autoResumeInfo: previousAutoResumeInfo,
           attemptToken,
         });
@@ -2379,8 +2426,7 @@ export class AgentInputCoordinator {
     if (state.autoResumePending) this.deps.onUserEnqueue?.(sessionId);
     this.cancelPreparedAutoResume(sessionId, state);
     const shouldDrainTail = state.recovery?.kind === 'active-turn';
-    state.error = null;
-    state.stickyError = null;
+    clearInputErrors(state);
     // 用户显式收下了这条错误 → 自愈提示也该撤掉(退避到点后的复核会发现 recovery
     // 已清并回滚额度)。
     state.autoResumePending = null;
@@ -2408,7 +2454,7 @@ export class AgentInputCoordinator {
     if (removed) this.removePendingCompactWaitClientId(state, removed.clientId);
     state.queueEditLocks = state.queueEditLocks.filter((id) => id !== clientId);
     if (state.recovery?.kind === 'queue-head' && state.recovery.clientId === clientId) {
-      state.error = null;
+      setInputError(state, null);
       state.recovery = null;
     }
     if (state.pendingQueue.length === 0) state.queuePaused = false;
@@ -2675,20 +2721,20 @@ export class AgentInputCoordinator {
         // that old boundary, but do not replace the newer queue-head recovery/banner with an
         // active-turn retry. The paired done path below preserves the same recovery as well.
         state.activeTurn = null;
-        state.stickyError = null;
+        setStickyInputError(state, null);
         this.emit(sessionId);
         return;
       }
       if (active?.persisted) {
         state.activeTurn = null;
-        state.stickyError = null;
+        setStickyInputError(state, null);
         const schedulerItem = active.item && isSchedulerOriginItem(active.item);
         const resumableCandidate = this.isResumableTurnErrorCandidate(sessionId, message, signals);
         const outcome = this.setActiveTurnRecovery(state, active.item, {
           allowSchedulerAutoResume: Boolean(schedulerItem && resumableCandidate),
         });
         if (outcome === 'dropped-scheduler') {
-          state.error = message ?? state.error;
+          setTerminalInputError(state, message, signals);
           // **紧随的 done 必须被配对吃掉。**各 agent 的失败收尾都是 terminal error 后再补
           // 一个 done;普通用户项靠下方"!active && recovery.kind==='active-turn'"那道守卫
           // 挡住它,而 scheduler 项恰恰没有 recovery 可挡 —— done 会一路落到方法尾部的
@@ -2715,8 +2761,9 @@ export class AgentInputCoordinator {
         if (takeover) {
           state.autoResumePending = takeover;
           state.autoResumeAttemptToken = takeover.sessionTotal;
+          setInputError(state, null);
         } else {
-          state.error = message ?? state.error;
+          setTerminalInputError(state, message, signals);
           // Schedule 的确定性错误或额度耗尽仍由 runner 收口，不留下脱离 run 记账的
           // 人工 Retry。只有真正被普通自动续跑接管的窗口才保留 recovery。
           if (schedulerItem) {
@@ -2750,17 +2797,20 @@ export class AgentInputCoordinator {
         });
         // 候选态只压住**本次**的 message；既有 stickyError 是上一次未处置的错误，与本次无关，
         // 该继续显示。
-        state.error = resumableCandidate
-          ? (state.stickyError ?? state.error)
-          : (state.stickyError ?? message ?? state.error);
+        if (state.stickyError) {
+          copyStickyInputErrorToLive(state);
+        } else if (!resumableCandidate) {
+          setTerminalInputError(state, message, signals);
+        }
         state.recovery = null;
         this.emit(sessionId);
         return;
       }
       if (active && isActiveTurnDispatched(active)) {
         state.activeTurn = null;
-        state.error = state.stickyError ?? message ?? state.error;
-        state.stickyError = state.error;
+        if (state.stickyError) copyStickyInputErrorToLive(state);
+        else setTerminalInputError(state, message, signals);
+        copyLiveInputErrorToSticky(state);
         state.recovery = null;
         this.emit(sessionId);
         this.scheduleDrain(sessionId, 'terminal-error-after-unpersisted-dispatch');
@@ -2772,7 +2822,7 @@ export class AgentInputCoordinator {
         this.emit(sessionId);
         return;
       }
-      state.error = message ?? state.error;
+      setTerminalInputError(state, message, signals);
       // 外部发起的 turn(scheduler/goal 直调 Session.send, active=null)失败时,
       // codex 与 claude-code 的失败收尾都是 terminal error → 紧随的 done 连发
       // (claude 的 is_error 收尾已对齐 codex 序列)。打上 pending 标记, 让配对的
@@ -2835,13 +2885,13 @@ export class AgentInputCoordinator {
       return;
     }
     if (state.stickyError) {
-      state.error = state.stickyError;
+      copyStickyInputErrorToLive(state);
       state.recovery = null;
       this.emit(sessionId);
       this.scheduleDrain(sessionId, 'turn-done-after-sticky-error');
       return;
     }
-    state.error = null;
+    setInputError(state, null);
     state.recovery = null;
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'turn-done');
@@ -2979,6 +3029,7 @@ export class AgentInputCoordinator {
       queueEditLocks: [...state.queueEditLocks],
       queueAbortPending: state.queueAbortPending,
       error: state.error,
+      errorReason: state.errorReason,
       recovery,
       ...(state.autoResumePending ? { autoResumePending: state.autoResumePending } : {}),
       errorRetryText: projectionRetryText(state.pendingQueue, state.recovery),
@@ -3174,7 +3225,7 @@ export class AgentInputCoordinator {
     state.pendingQueue = state.pendingQueue.slice(1);
     this.removePendingCompactWaitClientId(state, head.clientId);
     if (!state.stickyError) {
-      state.error = null;
+      setInputError(state, null);
     }
     state.recovery = null;
     this.invalidateAbortBoundaryForNewTurn(state);
@@ -3412,8 +3463,8 @@ export class AgentInputCoordinator {
         latest.activeTurn = null;
         this.prependQueueHeadIfMissing(latest, head);
         this.clearCredentialSwitchWait(latest);
-        latest.error = errorMessage(err);
-        latest.stickyError = null;
+        setInputError(latest, errorMessage(err));
+        setStickyInputError(latest, null);
         latest.recovery = { kind: 'queue-head', clientId: head.clientId };
         log.warn('pre-accept send failed; restored queue head', {
           sessionId,
@@ -3425,8 +3476,8 @@ export class AgentInputCoordinator {
         this.emit(sessionId);
         return;
       }
-      latest.error = errorMessage(err);
-      latest.stickyError = null;
+      setInputError(latest, errorMessage(err));
+      setStickyInputError(latest, null);
       // 同 handleSendNotDispatched:调度来源的 prompt 不留可被人手动 Retry 的 recovery
       // (review #944 第九轮 P1;判据内建在 setActiveTurnRecovery)。
       const schedulerOrigin = this.setActiveTurnRecovery(latest, head) === 'dropped-scheduler';
@@ -3488,8 +3539,8 @@ export class AgentInputCoordinator {
         this.prependPendingCompactWaitClientId(latest, item.clientId);
       }
       this.clearCredentialSwitchWait(latest);
-      latest.error = message;
-      latest.stickyError = null;
+      setInputError(latest, message);
+      setStickyInputError(latest, null);
       latest.recovery = { kind: 'queue-head', clientId: item.clientId };
       log.warn('send not dispatched; restored queue head', {
         sessionId,
@@ -3506,8 +3557,8 @@ export class AgentInputCoordinator {
     }
 
     latest.activeTurn = null;
-    latest.error = message;
-    latest.stickyError = null;
+    setInputError(latest, message);
+    setStickyInputError(latest, null);
     // 调度来源的 prompt **不留 active-turn recovery**。它的 Retry 走的是普通用户 turn:
     // 没有 scheduler 回调、没有 run 跟踪 —— 而这条 run 此刻已经顺延或落终态了,留着就等于
     // 让一条已收口的调度 prompt 之后还能被人手动跑一次(review #944 第九轮 P1)。
@@ -3565,8 +3616,7 @@ export class AgentInputCoordinator {
     if (!latest.pendingCompacts.includes(request)) {
       latest.pendingCompacts = [request, ...latest.pendingCompacts];
     }
-    latest.error = null;
-    latest.stickyError = null;
+    clearInputErrors(latest);
     latest.recovery = null;
     log.info('compact hit SESSION_RUNNING race; requeued until active turn finishes', {
       sessionId,
@@ -3601,8 +3651,7 @@ export class AgentInputCoordinator {
       return;
     }
     this.prependQueueHeadIfMissing(latest, item);
-    latest.error = null;
-    latest.stickyError = null;
+    clearInputErrors(latest);
     latest.recovery = null;
     latest.credentialSwitchWait = {
       clientId: item.clientId,
@@ -3693,8 +3742,7 @@ export class AgentInputCoordinator {
       return;
     }
     this.prependQueueHeadIfMissing(latest, item);
-    latest.error = null;
-    latest.stickyError = null;
+    clearInputErrors(latest);
     latest.recovery = null;
     log.info('send hit SESSION_RUNNING race; restored queue head until active turn finishes', {
       sessionId,
@@ -3844,8 +3892,7 @@ export class AgentInputCoordinator {
     active: ActiveTurn,
   ): void {
     recordPendingTerminalEvent(active, { type: 'done' });
-    state.error = null;
-    state.stickyError = null;
+    clearInputErrors(state);
     state.recovery = null;
   }
 
@@ -3857,8 +3904,8 @@ export class AgentInputCoordinator {
     const message = 'Session closed before dispatch completed';
     if (!active.item) {
       state.activeTurn = null;
-      state.error = message;
-      state.stickyError = null;
+      setInputError(state, message);
+      setStickyInputError(state, null);
       state.recovery = null;
       log.warn('control turn closed before dispatch completed', {
         sessionId,
@@ -3869,8 +3916,8 @@ export class AgentInputCoordinator {
     const item = active.item;
     if (active.persisted) {
       state.activeTurn = null;
-      state.error = message;
-      state.stickyError = null;
+      setInputError(state, message);
+      setStickyInputError(state, null);
       // 同 onTurnEvent / handleSendNotDispatched:scheduler 的 prompt 不留重试入口
       // (判据内建在 setActiveTurnRecovery,第十八轮 P1)。
       const schedulerOrigin = this.setActiveTurnRecovery(state, item) === 'dropped-scheduler';
@@ -3890,7 +3937,7 @@ export class AgentInputCoordinator {
 
     if (active.persisting) {
       recordPendingTerminalEvent(active, { type: 'error', message });
-      state.error = message;
+      setInputError(state, message);
       state.recovery = null;
       return;
     }
@@ -3904,8 +3951,8 @@ export class AgentInputCoordinator {
       state.pendingQueue = [item, ...state.pendingQueue];
       this.prependPendingCompactWaitClientId(state, item.clientId);
     }
-    state.error = message;
-    state.stickyError = null;
+    setInputError(state, message);
+    setStickyInputError(state, null);
     state.recovery = { kind: 'queue-head', clientId: item.clientId };
   }
 
@@ -3973,8 +4020,8 @@ export class AgentInputCoordinator {
       return false;
     }
     this.pendingAutoResumeRecoveries.delete(clientId);
-    state.error = pending.error;
-    state.stickyError = pending.stickyError;
+    setInputError(state, pending.error, pending.errorReason);
+    setStickyInputError(state, pending.stickyError, pending.stickyErrorReason);
     state.recovery = pending.recovery;
     state.autoResumePending = pending.autoResumeInfo;
     this.emit(sessionId);
@@ -4318,8 +4365,7 @@ export class AgentInputCoordinator {
     if (state.recovery?.kind === 'active-turn') {
       return;
     }
-    state.error = null;
-    state.stickyError = null;
+    clearInputErrors(state);
     state.recovery = null;
   }
 
@@ -4347,8 +4393,7 @@ export class AgentInputCoordinator {
    */
   private abandonActiveTurnRecoveryForUserAction(state: SessionInputState): void {
     if (state.recovery?.kind !== 'active-turn') return;
-    state.error = null;
-    state.stickyError = null;
+    clearInputErrors(state);
     state.recovery = null;
   }
 
@@ -4561,7 +4606,7 @@ export class AgentInputCoordinator {
     state.autoResumeAttemptToken = null;
     const cancelledPrepared = this.cancelPreparedAutoResume(sessionId, state);
     const surfacedMessage = Boolean(message && state.recovery);
-    if (surfacedMessage) state.error = message ?? null;
+    if (surfacedMessage) setInputError(state, message ?? null);
     // cancelPreparedAutoResume 已为队列 / active 变化 emit；纯退避态仍需
     // 单独投影接管结束。没有任何接管状态时保持既有 no-op 语义。
     if (!cancelledPrepared && (hadPendingTakeover || surfacedMessage)) this.emit(sessionId);
@@ -4722,8 +4767,8 @@ export class AgentInputCoordinator {
       });
       if (!this.isTurnGenerationCurrent(sessionId, active)) return 'stale';
       const state = this.getState(sessionId);
-      state.error = `Failed to persist user message: ${errorMessage(err)}`;
-      state.stickyError = state.error;
+      setInputError(state, `Failed to persist user message: ${errorMessage(err)}`);
+      copyLiveInputErrorToSticky(state);
       state.recovery = null;
       active.persisting = false;
       const terminalEvent = active.pendingTerminalEvent;
@@ -4758,7 +4803,7 @@ export class AgentInputCoordinator {
     active.pendingTerminalEvent = null;
     const state = this.getState(sessionId);
     state.activeTurn = null;
-    state.stickyError = null;
+    setStickyInputError(state, null);
     if (terminalEvent.type === 'error') {
       // 第五条终态路径:终态 error 在持久化还在进行时到达 → 被暂存,落库完成后才在这里
       // 结算。Schedule 只在候选瞬时错误上短暂保留 recovery，复用普通自动续跑；
@@ -4772,7 +4817,7 @@ export class AgentInputCoordinator {
         allowSchedulerAutoResume: Boolean(schedulerItem && deferredPersistSuppressed),
       });
       if (outcome === 'dropped-scheduler') {
-        state.error = terminalEvent.message ?? state.error;
+        setTerminalInputError(state, terminalEvent.message, terminalEvent.signals);
         if (deferredPersistSuppressed) {
           this.notifyResumableTurnErrorDiscarded(sessionId, {
             surfaceError: true,
@@ -4809,9 +4854,9 @@ export class AgentInputCoordinator {
         // 接管后若不清,renderer 会收到同时带 error 与 autoResumePending 的投影 —— 违反
         // 「接管态为真时 error 必为 null」这条不变量(greptile P1)。候选判定为真时那里本就
         // 没设,这行是幂等的兜底。
-        state.error = null;
+        setInputError(state, null);
       } else {
-        state.error = terminalEvent.message ?? state.error;
+        setTerminalInputError(state, terminalEvent.message, terminalEvent.signals);
         if (deferredPersistSuppressed) {
           this.notifyResumableTurnErrorDiscarded(sessionId, {
             surfaceError: terminalEvent.supersededByUser !== true,
@@ -4829,7 +4874,7 @@ export class AgentInputCoordinator {
       this.emit(sessionId);
       return;
     }
-    state.error = null;
+    setInputError(state, null);
     state.recovery = null;
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'persisted-after-deferred-done');

@@ -220,6 +220,8 @@ export interface InputProjection {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   error: string | null;
+  /** Normalized additive host attribution; old/malformed projections become null. */
+  errorReason: string | null;
   recovery?: unknown;
   errorRetryText: string | null;
   autoResumePending?: Record<string, unknown> | null;

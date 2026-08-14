@@ -6153,7 +6153,7 @@
       "codexThreadStale": "Codex 鉴权模式已切换，当前任务无法继续 —— 请新建任务后生效。",
       "codexResumeNotReady": "Codex 暂时无法恢复这个任务，请稍后重试",
       "claudeGatewayOpusPlanMismatch": "这次 Opus 请求实际走的是 XD Gateway，不是你的 Claude.ai 订阅；该网关路由拒绝了此模型。可切换到 Claude.ai 订阅后重试，或换一个模型。",
-      "claudeSubscriptionOpusPlanMismatch": "当前连接的 Claude Pro 套餐不支持 Opus。请切换到套餐支持的模型；如果刚升级套餐，请在设置中重新连接 Anthropic 后重试。",
+      "claudeSubscriptionOpusPlanMismatch": "当前连接的 Claude.ai 订阅暂时无法使用 Opus。请换一个可用模型；如果最近调整过订阅，请在设置中重新连接 Anthropic 后重试。",
       "switchClaudeSubscription": "切换到 Claude.ai 并重试",
       "switchClaudeSubscriptionTitle": "把当前任务切换到 Claude.ai 订阅并重试",
       "switchingClaudeSubscription": "正在切换到 Claude.ai…",
