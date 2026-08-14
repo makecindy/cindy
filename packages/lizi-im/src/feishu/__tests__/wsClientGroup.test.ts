@@ -412,6 +412,45 @@ describe('feishu group inbound gate', () => {
     }
   });
 
+  it('delivered marker survives beyond 60s — a very late retry failure never revives the chain', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      // 第一次定时重试挂起超过 60s(极端网络)——期间重投成功送达。
+      let rejectRetry!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectRetry = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+
+      // 重投在送达标记写入 60s+ 之后才让旧请求失败 — 送达是终态, 链不复活。
+      await vi.advanceTimersByTimeAsync(61_000);
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      const deliveredCount = mocks.replyText.mock.calls.length;
+      expect(deliveredCount).toBe(3);
+
+      await vi.advanceTimersByTimeAsync(120_000); // 远超 60s 冷却窗口
+      rejectRetry(new Error('late failure'));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(3);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('successful retry reclaims the message so later redeliveries are suppressed', async () => {
     vi.useFakeTimers();
     try {

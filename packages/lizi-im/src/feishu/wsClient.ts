@@ -101,11 +101,23 @@ const ORPHAN_NOTICE_COOLDOWN_MS = 60_000;
 const orphanNoticeAt = new Map<string, number>();
 
 /**
- * 提示**成功送达**时间(opener → ts)。与 orphanNoticeAt 分离: 后者在发送前
- * 就 set(表达「最近一次尝试」, 失败不回溯), 前者只在成功路径 set — 重试链
- * 用它判断「提示已由其它路径送达, 本链应收尾」。
+ * 提示**成功送达**的 opener 集合。与 orphanNoticeAt 分离: 后者在发送前
+ * 就 set(表达「最近一次尝试」, 失败不回溯), 前者只在成功路径加入 —
+ * 送达是终态事实, 不随时间失效: 重试链用它判断「提示已由其它路径送达,
+ * 本链应收尾」, 挂起超 60s 的旧重试失败时同样成立。stop() 清空, 并有
+ * 容量上限(孤儿事件每次一个 opener, 进程内不会无界增长)。
  */
-const orphanNoticeDeliveredAt = new Map<string, number>();
+const ORPHAN_DELIVERED_MAX_ENTRIES = 200;
+const orphanNoticeDelivered = new Set<string>();
+
+function markNoticeDelivered(openerMessageId: string): void {
+  orphanNoticeDelivered.add(openerMessageId);
+  while (orphanNoticeDelivered.size > ORPHAN_DELIVERED_MAX_ENTRIES) {
+    const oldest = orphanNoticeDelivered.values().next().value;
+    if (typeof oldest !== 'string') break;
+    orphanNoticeDelivered.delete(oldest);
+  }
+}
 
 /** 重试间隔按尝试次数递增 — attempt 0 用首个间隔, 超出数组则放弃。 */
 const ORPHAN_NOTICE_RETRY_DELAYS_MS = [10_000, 30_000, 90_000] as const;
@@ -121,10 +133,9 @@ interface PendingOrphanRetry {
 
 const orphanNoticeRetries = new Map<string, PendingOrphanRetry>();
 
-/** 该 opener 的提示是否已在冷却窗口内成功送达(首发/重投/重试任一成功)。 */
+/** 该 opener 的提示是否已成功送达过(首发/重投/重试任一成功 — 终态)。 */
 function wasNoticeDelivered(openerMessageId: string): boolean {
-  const deliveredAt = orphanNoticeDeliveredAt.get(openerMessageId);
-  return deliveredAt !== undefined && Date.now() - deliveredAt < ORPHAN_NOTICE_COOLDOWN_MS;
+  return orphanNoticeDelivered.has(openerMessageId);
 }
 
 async function sendOrphanOpenerNotice(
@@ -148,7 +159,7 @@ async function sendOrphanOpenerNotice(
     // 发送成功: 标记送达 + 重新认领触发消息(后续重投被入站去重拦下) + 清掉
     // 该 opener 的挂起重试(重试绕过冷却, 不清会在稍后重复提示, 甚至重试
     // 耗尽时误撤回开场白卡)。
-    orphanNoticeDeliveredAt.set(openerMessageId, Date.now());
+    markNoticeDelivered(openerMessageId);
     claimInboundMessage(botAppId, messageId);
     const pending = orphanNoticeRetries.get(openerMessageId);
     if (pending) {
@@ -232,7 +243,7 @@ async function retryOrphanOpenerNotice(
   try {
     await outbound.replyText(openerMessageId, transportMessages.group.threadOrphanNotice);
     // 送达: 标记送达 + 重新认领触发消息(抑制冷却后的重投再次进入提示流程)。
-    orphanNoticeDeliveredAt.set(openerMessageId, Date.now());
+    markNoticeDelivered(openerMessageId);
     claimInboundMessage(botAppId, messageId);
     log.info('[feishu/wsClient] orphan opener notice retry succeeded');
   } catch (err) {
@@ -706,7 +717,7 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
   botOpenId = null;
   strangerNoticeAt.clear();
   orphanNoticeAt.clear();
-  orphanNoticeDeliveredAt.clear();
+  orphanNoticeDelivered.clear();
   for (const retry of orphanNoticeRetries.values()) clearTimeout(retry.timer);
   orphanNoticeRetries.clear();
   outbound.unbindClient();
