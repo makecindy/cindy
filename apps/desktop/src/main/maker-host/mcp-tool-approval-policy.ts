@@ -135,6 +135,18 @@ function readJsonObject(value: unknown): Record<string, unknown> | undefined {
  * 同一条也覆盖 fail-closed 分支：grant_only（批量预授权，把一批文件过户给插件，
  * 更不该允许「不再询问」）、坐标缺失、读取失败 —— 都无法证明用户选过 always-allow，
  * 一律按最严的「每次都问且禁止持久化」处理。
+ *
+ * **已知差异（会话级旧授权）**：上面 `'prompt-each-time'` 只保证从这次判定往后不再
+ * 持久化新授权（claude-code/index.ts 的 canUseTool dispatcher 会丢弃这一档的
+ * `permissionUpdates`）；如果用户在**当前这个会话里、切换到按工具授权设置之前**已经
+ * 对 `ghost_call` 点过 agent 级「总是允许」，那条会话内累积的旧授权仍然有效，SDK 会
+ * 直接跳过 canUseTool，本函数返回什么都不会被读取——插件页设成「每次询问」在这条已
+ * 存在的会话里形同虚设（`blocked` 仍受派发器闸口保护，不受影响）。这个授权是会话级
+ * 内存态（未发现任何 `.claude/settings*.json` 持久化读写路径），换一个新会话就不再
+ * 存在，不是永久污染。抹平它需要先实机验证 SDK 在"会话已有粗粒度授权"时的确切行为，
+ * 与本文件 bypassPermissions 那条已知差异（见 claude-code/index.ts 的
+ * classifyMcpApprovalPolicy 旁注）同一处境：两条路都不便宜，本轮如实记录，不做未经
+ * 验证的半吊子拦截。
  */
 function ghostCallApprovalPolicy(toolParams: unknown): McpToolApprovalPolicy {
   const params = readJsonObject(toolParams);
