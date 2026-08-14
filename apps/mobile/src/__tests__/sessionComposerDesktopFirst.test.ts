@@ -116,10 +116,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputSource).toContain('leading={renderComposerCompactLeading()}');
     expect(source).toContain('const renderComposerCompactLeading = () => (');
     expect(source).toContain('styles.composerCompactAttachmentHit');
+    expect(source).toContain('styles.composerCompactAttachmentHitArea');
     expect(source).toContain('pointerEvents="none"');
     expect(source).toContain('testID="session.attachmentToggleButton"');
-    expect(source).toContain('height: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
-    expect(source).toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(source).toContain('overflow: \'visible\'');
+    expect(source).toContain('bottom: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(composerInputSource).toContain('toolbar={renderComposerToolbar()}');
     expect(source).toContain('const renderComposerToolbar = () => (');
     expect(attachmentButtonSource).toContain('<Plus');

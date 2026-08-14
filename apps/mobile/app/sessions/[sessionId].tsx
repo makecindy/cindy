@@ -6829,33 +6829,35 @@ export default function SessionScreen() {
   // 卡片态仍由 renderComposerToolbar() 渲染同一入口。
   const renderComposerCompactLeading = () => (
     <View style={styles.composerCompactLeading}>
-      <RouteActionButton
-        accessibilityHint={composerLayout.attachment.disabledReason ?? composerSendUnavailableReason ?? undefined}
-        accessibilityLabel={composerLayout.attachment.active ? composerLayout.attachment.label : t('session.common.openContextPanel')}
-        active={composerLayout.attachment.active}
-        disabled={composerLayout.attachment.disabled || (!canUseComposer && !composerLayout.attachment.active)}
-        onPress={() => {
-          setModelSheetOpen(false);
-          setContextSheetView('main');
-          setContextSheetOpen(true);
-        }}
-        style={styles.composerCompactAttachmentHit}
-        testID="session.attachmentToggleButton"
-      >
-        <View
-          pointerEvents="none"
-          style={[
-            styles.composerInlineToolButton,
-            composerLayout.attachment.active && styles.composerToolButtonActive,
-          ]}
+      <View style={styles.composerCompactAttachmentHit}>
+        <RouteActionButton
+          accessibilityHint={composerLayout.attachment.disabledReason ?? composerSendUnavailableReason ?? undefined}
+          accessibilityLabel={composerLayout.attachment.active ? composerLayout.attachment.label : t('session.common.openContextPanel')}
+          active={composerLayout.attachment.active}
+          disabled={composerLayout.attachment.disabled || (!canUseComposer && !composerLayout.attachment.active)}
+          onPress={() => {
+            setModelSheetOpen(false);
+            setContextSheetView('main');
+            setContextSheetOpen(true);
+          }}
+          style={styles.composerCompactAttachmentHitArea}
+          testID="session.attachmentToggleButton"
         >
-          <Plus
-            color={composerLayout.attachment.active ? colors.textPrimary : colors.textSecondary}
-            size={iconSize.sm}
-            strokeWidth={iconStroke.regular}
-          />
-        </View>
-      </RouteActionButton>
+          <View
+            pointerEvents="none"
+            style={[
+              styles.composerInlineToolButton,
+              composerLayout.attachment.active && styles.composerToolButtonActive,
+            ]}
+          >
+            <Plus
+              color={composerLayout.attachment.active ? colors.textPrimary : colors.textSecondary}
+              size={iconSize.sm}
+              strokeWidth={iconStroke.regular}
+            />
+          </View>
+        </RouteActionButton>
+      </View>
       {renderComposerCollapsedAttachmentBadge()}
     </View>
   );
@@ -10741,13 +10743,23 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.xs,
     marginRight: spacing.xs,
   },
-  // 收起态可见加号仍是 34pt;不可见外层自己撑到 44×44。
-  // hitSlop 越不过父 View 边界,不能拿它补主操作热区。
+  // 流内仍占 34pt,与输入文字 / 语音按钮共中线。
+  // 44pt 热区绝对居中外溢,不抬高 mainRow,也不靠会被父级裁掉的 hitSlop。
   composerCompactAttachmentHit: {
     alignItems: 'center',
-    height: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+    height: MOBILE_COMPOSER_CONTROL_SIZE,
     justifyContent: 'center',
-    width: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
+    overflow: 'visible',
+    width: MOBILE_COMPOSER_CONTROL_SIZE,
+  },
+  composerCompactAttachmentHitArea: {
+    alignItems: 'center',
+    bottom: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2,
+    justifyContent: 'center',
+    left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2,
+    position: 'absolute',
+    right: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2,
+    top: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2,
   },
   composerToolButtonActive: {
     backgroundColor: colors.surfaceChip,
