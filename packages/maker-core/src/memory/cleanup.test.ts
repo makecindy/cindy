@@ -75,6 +75,43 @@ describe('planMemoryCleanup', () => {
     expect(plan.archiveItems.map((i) => i.filename)).toEqual(['feedback_rule_a.md']);
   });
 
+  it('skips candidates rewritten between list and hash binding (no un-reviewed archive)', async () => {
+    await shard('feedback_rule_a.md', 'feedback', 'PR polling rule', 'same hook', 'same body',
+      '2026-01-01T00:00:00.000Z');
+    await shard('feedback_rule_b.md', 'feedback', 'PR polling rule', 'same hook', 'same body',
+      '2026-03-01T00:00:00.000Z');
+
+    // 模拟宿主在 list() (分类) 之后、hash 绑定 (readWithRaw) 之前重写
+    // feedback_rule_a.md — expectedHash 与分类必须绑定同一读, 重写导致
+    // contentHash 不一致 → plan 跳过该候选, 不归档用户未审阅的内容
+    // (Codex P1 on #2561 第二十八轮: bind planned hashes to the classified
+    // bytes)。
+    const realReadFile = fs.readFile.bind(fs);
+    let aReads = 0;
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(async (p, ...rest) => {
+      if (String(p).endsWith('feedback_rule_a.md')) {
+        aReads += 1;
+        if (aReads === 2) {
+          // 第 2 次读 (bindExpectedHash 的 readWithRaw) 返回宿主新写入。
+          return Buffer.from(
+            "---\ntitle: REWRITTEN\ndescription: new\ntype: feedback\nupdatedAt: '2026-04-01T00:00:00.000Z'\n---\nrewritten by host\n",
+          );
+        }
+      }
+      return realReadFile(p as string, ...rest);
+    });
+
+    try {
+      const plan = await planMemoryCleanup(dir);
+      // 分类仍显示重复组 (基于 list), 但 archiveItems 跳过被重写的候选 —
+      // 不归档未审阅内容。
+      expect(plan.duplicates).toHaveLength(1);
+      expect(plan.archiveItems).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('reports near-duplicates (same title, different body) without auto-archiving', async () => {
     await shard('project_x_1.md', 'project', 'Same title', 'hook', 'body one',
       '2026-01-01T00:00:00.000Z');

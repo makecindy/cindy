@@ -216,9 +216,10 @@ export async function planMemoryCleanup(
   };
 
   let records: MemoryRecord[];
+  const storage = new MemoryStorage(shardDir);
   try {
     // 复用 storage.list(): 解析 frontmatter、跳过坏文件、按 type+slug 排序。
-    records = await new MemoryStorage(shardDir).list();
+    records = await storage.list();
   } catch {
     return plan;
   }
@@ -248,11 +249,18 @@ export async function planMemoryCleanup(
       archive,
     });
     for (const f of archive) {
+      // expectedHash 与分类绑定同一读 (readWithRaw 重读 + 重解析): list() 后
+      // 宿主重写会让「旧记录分类 + 新字节 hash」绑定, run 归档未审阅内容
+      // (Codex P1 on #2561 第二十八轮: bind planned hashes to the classified
+      // bytes)。重解析与 list 分类不一致 (contentHash 不同) → 本次 plan 跳过
+      // 该候选 (fail safe, 用户重跑 plan 重新审阅)。
+      const expectedHash = await bindExpectedHash(storage, records, f);
+      if (expectedHash === null) continue;
       plan.archiveItems.push({
         filename: f,
         reason: 'duplicate',
         detail: `duplicate of ${keep.filename}`,
-        expectedHash: await fileSha256(path.join(shardDir, f)),
+        expectedHash,
       });
     }
   }
@@ -280,8 +288,10 @@ export async function planMemoryCleanup(
 
     // 记录 plan (用户审阅) 时点的源内容 hash — --archive-stale 执行时对比,
     // 审阅后被更新则 fail/replan, 不归档未审阅的新版本 (Greptile P1 / Codex
-    // P1 on #2561)。
-    const expectedHash = await fileSha256(path.join(shardDir, rec.filename));
+    // P1 on #2561)。hash 与分类绑定同一读; list 后宿主重写 → 跳过候选
+    // (Codex P1 on #2561 第二十八轮)。
+    const expectedHash = await bindExpectedHash(storage, records, rec.filename);
+    if (expectedHash === null) continue;
 
     const haystack = `${rec.frontmatter.description}\n${rec.body}`.toLowerCase();
     const strong = STALE_STRONG_SIGNALS.find((s) => haystack.includes(s.toLowerCase()));
@@ -330,15 +340,36 @@ export async function planMemoryCleanup(
     archive: digests.slice(keepDigests).map((r) => r.filename),
   };
   for (const f of plan.digests.archive) {
+    // 同读绑定 (见上); list 后重写 → 跳过, 不归档未审阅内容。
+    const expectedHash = await bindExpectedHash(storage, records, f);
+    if (expectedHash === null) continue;
     plan.archiveItems.push({
       filename: f,
       reason: 'digest-retention',
       detail: `digest beyond keep-latest-${keepDigests}`,
-      expectedHash: await fileSha256(path.join(shardDir, f)),
+      expectedHash,
     });
   }
 
   return plan;
+}
+
+/**
+ * 为候选绑定「分类字节」的 expectedHash — readWithRaw 同一读重读 + 重解析,
+ * hash 与分类绑定同一字节。list() 后宿主重写 → contentHash 与 list 分类
+ * 不一致 → 返回 null (plan 跳过该候选, fail safe 让用户重跑重新审阅)。
+ * (Codex P1 on #2561 第二十八轮: bind planned hashes to the classified bytes)
+ */
+async function bindExpectedHash(
+  storage: MemoryStorage,
+  records: MemoryRecord[],
+  filename: string,
+): Promise<string | null> {
+  const rr = await storage.readWithRaw(filename);
+  if (!rr) return null; // 并发删除
+  const listed = records.find((r) => r.filename === filename);
+  if (!listed || contentHash(listed) !== contentHash(rr.rec)) return null; // list 后重写
+  return sha256(Buffer.from(rr.raw, 'utf8'));
 }
 
 /**
@@ -631,15 +662,6 @@ function sha256(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex');
 }
 
-/** 读文件并返回内容 sha256; 读失败 (并发删除) 返回 null。 */
-async function fileSha256(p: string): Promise<string | null> {
-  try {
-    return sha256(await fs.readFile(p));
-  } catch {
-    return null;
-  }
-}
-
 /**
  * 排他写入 content 到 dir 下 (同名冲突时递增后缀), 返回最终目标路径。
  *
@@ -788,24 +810,34 @@ async function restoreTrash(
  * copyFile 失败且 src 缺失 (非宿主重建) 时, 用 rename 兜底把 retained 改回
  * 合法分片名 — 元数据操作不依赖磁盘空间, 在 ENOSPC 场景下仍能让记忆留在
  * list()/MEMORY.md 正常路径 (Codex P1 on #2561 第二十七轮: restore retained
- * shards before rebuilding, 镜像 restoreTrash fallback)。
+ * shards before rebuilding, 镜像 restoreTrash fallback)。rename 前**再试一次
+ * copyFile EXCL** — 宿主在探测后、rename 前重建 src 时 EEXIST 能被检测且不
+ * 覆盖 (Codex P1 on #2561 第二十八轮: reserve src before the retained rename
+ * fallback, 镜像 restoreTrash no-clobber retry)。
  */
 async function restoreRetained(retained: string, src: string): Promise<boolean> {
   try {
     await fs.copyFile(retained, src, fs.constants.COPYFILE_EXCL);
     return true;
   } catch {
-    // copyFile 失败 (ENOSPC/EACCES/EEXIST)。src 仍缺失时 rename 兜底
-    // (改名不覆盖内容); src 已存在 (宿主重建的新写入) 绝不覆盖。
+    // copyFile 失败 (ENOSPC/EACCES/EEXIST)。src 缺失时尝试恢复:
+    // 1) copyFile EXCL 再试 (EEXIST 检测宿主重建, 不覆盖);
+    // 2) 仍失败 (ENOSPC) → rename 兜底 (改名不覆盖内容);
+    // src 已存在 (宿主新写入) 绝不覆盖。
     try {
-      await fs.stat(src);
-      return false;
+      await fs.copyFile(retained, src, fs.constants.COPYFILE_EXCL);
+      return true;
     } catch {
       try {
-        await fs.rename(retained, src);
-        return true;
+        await fs.stat(src);
+        return false; // src 已存在 (宿主重建的新写入) → 不覆盖
       } catch {
-        return false;
+        try {
+          await fs.rename(retained, src);
+          return true;
+        } catch {
+          return false;
+        }
       }
     }
   }
