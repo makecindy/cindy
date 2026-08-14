@@ -23,6 +23,7 @@
  * 输出格式: 人类可读报告 + 末尾一行机器可读的 `RESULT <json>`。
  */
 
+import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import process from 'node:process';
 
@@ -135,6 +136,31 @@ async function main() {
     process.exit(2);
   }
   const shard = path.resolve(opts.shard);
+
+  // shard 身份校验 (Codex P1 on #2561 第十九轮: validate the shard before
+  // applying cleanup): --apply/--dry-run 指向已存在但非 maker-memory shard 的
+  // 目录 (如 repo 根 / maker-memory 根) 时, runMemoryCleanup 的 rebuildIndex
+  // 会写 <shard>/MEMORY.md — 即使 plan 为空也可能创建/覆盖 Git 跟踪或无关的
+  // MEMORY.md。帮助文本声明「无 meta.json 目录不属于本工具范围」, 这里强制:
+  // 目录必须存在且含 meta.json (canonical 分片身份), 否则拒绝。
+  const shardStat = await fs.stat(shard).catch(() => null);
+  if (shardStat === null) {
+    process.stderr.write(`分片目录不存在: ${shard}\n`);
+    process.exit(2);
+  }
+  if (!shardStat.isDirectory()) {
+    process.stderr.write(`--shard 必须是目录: ${shard}\n`);
+    process.exit(2);
+  }
+  try {
+    await fs.access(path.join(shard, 'meta.json'));
+  } catch {
+    process.stderr.write(
+      `不是 maker-memory 分片 (缺少 meta.json): ${shard}\n` +
+        '  本工具只处理带 meta.json 的 canonical 分片; SSH 分片 / 手工目录属 migrate-maker-memory 范围。\n',
+    );
+    process.exit(2);
+  }
 
   const plan = await planMemoryCleanup(shard, {
     // 注意: keepDigests 为 0 是合法值 (全清 digest), 用 !== null 而非 truthy。
