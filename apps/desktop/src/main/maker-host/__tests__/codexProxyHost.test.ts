@@ -123,6 +123,10 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
   createResponsesAnthropicHandler: mockState.createResponsesAnthropicHandler,
 }));
 
+// Keep the cold SUT transform in collection time instead of charging it to the
+// first 20-second test. Later cases still use freshCodexProxyHost for isolation.
+const initiallyLoadedCodexProxyHost = await import('../codex-proxy-host.js');
+
 async function freshCodexProxyHost() {
   vi.resetModules();
   mockState.createAnthropicCompatProxy.mockReset();
@@ -147,7 +151,7 @@ describe('withCodexUpstreamRecording', () => {
   }) as never;
 
   it('records the override upstream origin for the request thread', async () => {
-    const host = await freshCodexProxyHost();
+    const host = initiallyLoadedCodexProxyHost;
     host.resetCodexThreadUpstreamForTest();
     const wrapped = host.withCodexUpstreamRecording(
       () => ({ upstreamOverride: 'https://api.x.ai/v1' }),
@@ -600,6 +604,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   async function captureUserChatBridgeCapabilities(options: {
     supportsImageInput?: boolean;
     catalogModel?: string;
+    catalogModels?: Array<{ id: string; supportsImageInput?: boolean }>;
     wireModel?: string;
     stripPrefix?: string;
   }) {
@@ -616,13 +621,18 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         codex: {
           baseUrl: 'https://chat.example/v1',
           wireProtocol: 'openai-chat',
-          models: [{
-            id: catalogModel,
-            name: 'Vision Model',
-            ...(options.supportsImageInput !== undefined
-              ? { supportsImageInput: options.supportsImageInput }
-              : {}),
-          }],
+          models: options.catalogModels?.map((model) => ({
+            ...model,
+            name: model.id,
+          })) ?? [
+            {
+              id: catalogModel,
+              name: 'Vision Model',
+              ...(options.supportsImageInput !== undefined
+                ? { supportsImageInput: options.supportsImageInput }
+                : {}),
+            },
+          ],
         },
       },
     });
@@ -688,6 +698,18 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       stripPrefix: 'vendor/',
     });
     expect(capabilities?.imageInput).toBe('image_url');
+  });
+
+  it('prefers the exact catalog model over an opted-in normalized fallback', async () => {
+    const capabilities = await captureUserChatBridgeCapabilities({
+      catalogModels: [
+        { id: 'vision-model', supportsImageInput: true },
+        { id: 'vendor/vision-model[1m]' },
+      ],
+      wireModel: 'vendor/vision-model[1m]',
+      stripPrefix: 'vendor/',
+    });
+    expect(capabilities?.imageInput).toBeUndefined();
   });
 
   it('does not forward unsupported passthrough fields into the translator', async () => {

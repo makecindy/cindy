@@ -1001,7 +1001,12 @@ export function getCatalogModel(
     candidates.add(stripped.replace(/\[1m\]$/, ''));
   }
   const provider = getActiveCatalog().providers.find((entry) => entry.id === providerId);
-  return provider?.models[agent]?.find((entry) => candidates.has(entry.id)) ?? null;
+  const models = provider?.models[agent];
+  for (const candidate of candidates) {
+    const model = models?.find((entry) => entry.id === candidate);
+    if (model) return model;
+  }
+  return null;
 }
 
 /** 返回指定 provider/agent 下模型的目录上下文窗口。 */
