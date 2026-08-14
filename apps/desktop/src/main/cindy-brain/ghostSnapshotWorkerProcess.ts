@@ -28,10 +28,11 @@ import {
   resolveGhostContentPath,
 } from './ghostContentTree.js';
 import {
+  captureGhostSnapshotTargetIdentity,
+  sameCapturedGhostSnapshotTargetIdentity,
   sameGhostSnapshotInodeIdentity,
   sameGhostSnapshotParentIdentity,
   sameGhostSnapshotPath,
-  sameGhostSnapshotTargetIdentity,
   type GhostSnapshotParentIdentity,
   type GhostSnapshotTargetIdentity,
 } from './ghostSnapshotIdentity.js';
@@ -86,18 +87,14 @@ async function removeVerifiedDirectory(
   parentName: string,
   expectedTarget?: GhostSnapshotTargetIdentity,
 ): Promise<void> {
-  const targetStat = await fs.promises.lstat(targetPath, { bigint: true });
-  const targetRealPath = await fs.promises.realpath(targetPath);
-  if (expectedTarget && !sameGhostSnapshotTargetIdentity(targetStat, targetRealPath, expectedTarget)) {
+  const targetIdentity = await captureGhostSnapshotTargetIdentity(targetPath);
+  if (expectedTarget && !sameCapturedGhostSnapshotTargetIdentity(targetIdentity, expectedTarget)) {
     throw new Error('snapshot target identity changed before removal');
-  }
-  if (!expectedTarget && (!targetStat.isDirectory() || targetStat.isSymbolicLink())) {
-    throw new Error('snapshot target is not a real directory');
   }
   const quarantinePath = `${targetPath}.remove-${process.pid}-${Date.now()}`;
   await fs.promises.rename(targetPath, quarantinePath);
   const movedStat = await fs.promises.lstat(quarantinePath, { bigint: true });
-  if (!sameGhostSnapshotInodeIdentity(movedStat, targetStat)) {
+  if (!sameGhostSnapshotInodeIdentity(movedStat, targetIdentity)) {
     // Never recursively delete an unverified path. Leave the quarantined
     // directory for a later owner-checked cleanup pass.
     throw new Error('snapshot target identity changed during removal');
@@ -157,15 +154,7 @@ export async function runGhostSnapshotWorkerRequest(
     await verifyParent(request.expectedParent, workingDir);
     if (parts.length !== 1) throw new Error('invalid snapshot removal target');
     await verifyDirectory(workingDir, parts[0]);
-    const targetStat = await fs.promises.lstat(targetPath, { bigint: true });
-    if (!targetStat.isDirectory() || targetStat.isSymbolicLink()) {
-      throw new Error('snapshot target is not a real directory');
-    }
-    const targetIdentity = {
-      realPath: await fs.promises.realpath(targetPath),
-      dev: targetStat.dev,
-      ino: targetStat.ino,
-    };
+    const targetIdentity = await captureGhostSnapshotTargetIdentity(targetPath);
     await removeVerifiedDirectory(
       request.expectedParent,
       workingDir,
@@ -179,27 +168,18 @@ export async function runGhostSnapshotWorkerRequest(
   let exists = false;
   let existingTargetIdentity: GhostSnapshotTargetIdentity | undefined;
   try {
-    const stat = await fs.promises.lstat(targetPath, { bigint: true });
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('snapshot target is not a real directory');
+    existingTargetIdentity = await captureGhostSnapshotTargetIdentity(targetPath);
     exists = true;
-    existingTargetIdentity = {
-      realPath: await fs.promises.realpath(targetPath),
-      dev: stat.dev,
-      ino: stat.ino,
-    };
   } catch (error) { if (!hasCode(error, 'ENOENT')) throw error; }
   if (exists) {
     await verifyDirectory(workingDir, parts[0]);
     if (await matches(request.receipt, targetPath)) {
       // matches() reads through pathnames and does not validate the root
-      // itself. Re-read and compare the complete target identity before
-      // accepting the fast path, so a concurrent replacement cannot turn a
-      // content match into an approval for a different directory.
-      const targetStatAfterMatch = await fs.promises.lstat(targetPath, { bigint: true });
-      const targetRealPathAfterMatch = await fs.promises.realpath(targetPath);
-      if (!existingTargetIdentity || !sameGhostSnapshotTargetIdentity(
-        targetStatAfterMatch,
-        targetRealPathAfterMatch,
+      // itself. Recapture a bound identity after the content match so a
+      // concurrent replacement cannot mix an old inode with a new path.
+      const targetIdentityAfterMatch = await captureGhostSnapshotTargetIdentity(targetPath);
+      if (!existingTargetIdentity || !sameCapturedGhostSnapshotTargetIdentity(
+        targetIdentityAfterMatch,
         existingTargetIdentity,
       )) {
         throw new Error('snapshot target identity changed after fast path match');

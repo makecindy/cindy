@@ -2,9 +2,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  captureGhostSnapshotTargetIdentity,
+  sameCapturedGhostSnapshotTargetIdentity,
   sameGhostSnapshotInodeIdentity,
   sameGhostSnapshotTargetIdentity,
 } from '../ghostSnapshotIdentity';
@@ -13,6 +15,7 @@ import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess';
 let workDir: string;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (workDir) await fs.promises.rm(workDir, { recursive: true, force: true });
 });
 
@@ -24,16 +27,15 @@ describe('sameGhostSnapshotTargetIdentity', () => {
     await fs.promises.mkdir(original);
     await fs.promises.mkdir(replacement);
 
-    const expectedStats = await fs.promises.lstat(original, { bigint: true });
-    const expected = {
-      realPath: await fs.promises.realpath(original),
-      dev: expectedStats.dev,
-      ino: expectedStats.ino,
-    };
+    const expected = await captureGhostSnapshotTargetIdentity(original);
     const replacementStats = await fs.promises.lstat(replacement, { bigint: true });
 
     expect(
-      sameGhostSnapshotTargetIdentity(expectedStats, expected.realPath, expected),
+      sameGhostSnapshotTargetIdentity(
+        await fs.promises.lstat(original, { bigint: true }),
+        expected.realPath,
+        expected,
+      ),
     ).toBe(true);
     expect(
       sameGhostSnapshotTargetIdentity(
@@ -49,12 +51,7 @@ describe('sameGhostSnapshotTargetIdentity', () => {
     const target = path.join(workDir, 'target');
     const link = path.join(workDir, 'link');
     await fs.promises.mkdir(target);
-    const expectedStats = await fs.promises.lstat(target, { bigint: true });
-    const expected = {
-      realPath: await fs.promises.realpath(target),
-      dev: expectedStats.dev,
-      ino: expectedStats.ino,
-    };
+    const expected = await captureGhostSnapshotTargetIdentity(target);
     try {
       await fs.promises.symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir');
     } catch {
@@ -72,18 +69,60 @@ describe('sameGhostSnapshotTargetIdentity', () => {
     const original = path.join(workDir, 'original');
     const quarantined = path.join(workDir, 'original.remove-1');
     await fs.promises.mkdir(original);
-    const expectedStats = await fs.promises.lstat(original, { bigint: true });
-    const expected = {
-      realPath: await fs.promises.realpath(original),
-      dev: expectedStats.dev,
-      ino: expectedStats.ino,
-    };
+    const expected = await captureGhostSnapshotTargetIdentity(original);
     await fs.promises.rename(original, quarantined);
     const movedStats = await fs.promises.lstat(quarantined, { bigint: true });
     const movedRealPath = await fs.promises.realpath(quarantined);
 
     expect(sameGhostSnapshotInodeIdentity(movedStats, expected)).toBe(true);
     expect(sameGhostSnapshotTargetIdentity(movedStats, movedRealPath, expected)).toBe(false);
+  });
+
+  it('rejects a recapture that reused the inode but not the timestamps', async () => {
+    workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-snapshot-identity-'));
+    const original = path.join(workDir, 'original');
+    await fs.promises.mkdir(original);
+    const expected = await captureGhostSnapshotTargetIdentity(original);
+    const reused = {
+      ...expected,
+      mtimeNs: expected.mtimeNs + 1n,
+      ctimeNs: expected.ctimeNs + 1n,
+    };
+
+    expect(sameCapturedGhostSnapshotTargetIdentity(reused, expected)).toBe(false);
+  });
+});
+
+describe('captureGhostSnapshotTargetIdentity', () => {
+  it('rejects a replacement between lstat and realpath', async () => {
+    workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-snapshot-capture-'));
+    const target = path.join(workDir, 'target');
+    const replacement = path.join(workDir, 'replacement');
+    await fs.promises.mkdir(target);
+    await fs.promises.mkdir(replacement);
+    const originalStat = await fs.promises.lstat(target, { bigint: true });
+    const realLstat = fs.promises.lstat;
+    const realRealpath = fs.promises.realpath;
+    let lstatCalls = 0;
+
+    vi.spyOn(fs.promises, 'lstat').mockImplementation(async (candidate, options) => {
+      if (path.resolve(String(candidate)) === path.resolve(target) && lstatCalls === 0) {
+        lstatCalls += 1;
+        return originalStat;
+      }
+      return realLstat(candidate, options as never);
+    });
+    vi.spyOn(fs.promises, 'realpath').mockImplementation(async (candidate, options) => {
+      if (path.resolve(String(candidate)) === path.resolve(target)) {
+        await fs.promises.rm(target, { recursive: true, force: true });
+        await fs.promises.rename(replacement, target);
+      }
+      return realRealpath(candidate, options as never);
+    });
+
+    await expect(captureGhostSnapshotTargetIdentity(target)).rejects.toThrow(
+      'snapshot target identity changed while capturing',
+    );
   });
 });
 
