@@ -769,13 +769,17 @@ export function installWebviewHardener(): void {
             hostWebContentsId: contents.id,
           };
           registerGhostPanelWebContents(guestContents.id, panelSenderContext);
-          guestContents.on('did-navigate', (_event, url) => {
+          const syncPanelAgentSender = (_event: Electron.Event, url: string) => {
             if (shouldRegisterGhostPanelAgentSender(url, ghostId, panelHtml, settingsHtml)) {
               registerGhostPanelWebContents(guestContents.id, panelSenderContext);
             } else {
               unregisterGhostPanelWebContents(guestContents.id);
             }
-          });
+          };
+          guestContents.on('did-navigate', syncPanelAgentSender);
+          // history.pushState/replaceState 和 hash 跳转不会触发 did-navigate；
+          // 同样按最终 URL 同步，避免页内改写 pathname 后继续保留 sender 身份。
+          guestContents.on('did-navigate-in-page', syncPanelAgentSender);
           guestContents.once('destroyed', () => {
             unregisterGhostPanelWebContents(guestContents.id);
           });
