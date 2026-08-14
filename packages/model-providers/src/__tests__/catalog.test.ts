@@ -4,7 +4,7 @@
  * **清单来源唯一化**——
  *   - anthropic / openai / xd 是动态清单供应商:bundled 目录只有身份卡,models 恒为空,
  *     清单运行时由 host 注入(SDK 发现 / codex 注册表 / 网关下发);
- *   - xai 是唯一的静态清单供应商(官方无列模型通道),清单活在 catalog/providers.json;
+ *   - xai 的静态段是离线 fallback/元数据层；登录后的成员由账号发现决定;
  *   - presets 是自定义供应商模板,随目录 OSS 热更。
  *
  * 本测试守:(a) bundled 结构合法且符合上述形态;(b) parseCatalog 校验规则
@@ -26,7 +26,7 @@ import type { AgentKind, Catalog, CatalogModel } from '../types.js';
 /** 动态清单供应商(bundled 零模型,运行时注入)。 */
 const DYNAMIC_PROVIDER_IDS = ['anthropic', 'openai', 'xd'] as const;
 
-/** xai 静态清单(唯一活在目录文件里的模型清单)。 */
+/** xAI 随包 fallback 元数据清单。 */
 const EXPECTED_XAI_IDS = [
   'xai/grok-4.5',
   'xai/grok-4.3',
@@ -37,6 +37,7 @@ const EXPECTED_XAI_IDS = [
   'xai/grok-4.20',
   'xai/grok-code-fast',
 ];
+const EXPECTED_XAI_PI_IDS = ['grok-4.3', 'grok-4.5', 'grok-4.6', 'grok-build-0.1'];
 
 function provider(id: string) {
   const p = BUNDLED_CATALOG.providers.find((x) => x.id === id);
@@ -137,10 +138,18 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     }
   });
 
-  it('xai is the only provider with a static model list', () => {
+  it('xai ships a static fallback list and Pi official metadata', () => {
     const xai = provider('xai');
     expect((xai.models['claude-code'] ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_IDS);
     expect((xai.models.codex ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_IDS);
+    expect((xai.models.pi ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_PI_IDS);
+    expect(xai.models.pi?.find((m) => m.id === 'grok-4.6')).toMatchObject({
+      contextWindow: 500_000,
+      maxOutput: 500_000,
+      supportsImageInput: true,
+      efforts: [],
+      defaultEffort: null,
+    });
   });
 
   it('xai ships both Grok Imagine subscription image models', () => {
@@ -225,11 +234,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     ).toBe(1_000_000);
   });
 
-  it('Kimi Code(编程计划)预设的每个模型都带 contextWindow(k3 缺失曾回落 200K)', () => {
-    // k3 此前没带 contextWindow → buildUserProvider 回落 200K 保守默认:选择器
-    // 显示 200K 且压缩阈值过早触发(用户反馈「动不动就压缩」)。取 262144 与同
-    // 套餐 kimi-for-coding 口径一致(K3 开放平台规格 1M,但编程计划端点是否限窗
-    // 无公开文档,保守取值;实测放开后可上调)。
+  it('Kimi Code(编程计划)按各 harness 的权威目录保留 contextWindow', () => {
     const presets = BUNDLED_CATALOG.presets ?? [];
     const kimiCode = presets.find((p) => p.id === 'moonshot-kimi-code');
     expect(kimiCode).toBeDefined();
@@ -240,7 +245,9 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
           `${agent}/${m.id} 缺 contextWindow`,
         ).toBe(true);
       }
-      expect(rt!.models.find((m) => m.id === 'k3')?.contextWindow, `${agent}/k3`).toBe(262_144);
+      expect(rt!.models.find((m) => m.id === 'k3')?.contextWindow, `${agent}/k3`).toBe(
+        agent === 'pi' ? 1_048_576 : 262_144,
+      );
     }
   });
 
@@ -497,7 +504,7 @@ describe('fast-mode per-provider resolution (model-level SSoT)', () => {
   });
 });
 
-describe('vendor grouping metadata (xai 静态清单)', () => {
+describe('vendor grouping metadata (xai fallback metadata)', () => {
   it('every static model carries group=grok + numeric sortOrder', () => {
     const xai = provider('xai');
     for (const agent of xai.agents) {

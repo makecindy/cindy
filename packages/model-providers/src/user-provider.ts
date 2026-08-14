@@ -21,10 +21,25 @@ import type {
   ProviderWireProtocol,
   RoutingDescriptor,
 } from './types.js';
+import type { ModelRegistry } from './modelAccessBean.js';
 import { isLoopbackProviderUrl } from './provider-url.js';
 
 /** 自定义模型缺省上下文窗口（用户不填元数据时的保守默认，仅用于展示）。 */
 export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
+
+/**
+ * Older releases allowed a user provider to occupy `xai`, which is now the built-in SuperGrok
+ * source. Preserve the stored id, but project that legacy row under a collision-free runtime id.
+ */
+export const LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID = 'custom:xai';
+
+export function runtimeCustomProviderId(providerId: string): string {
+  return providerId === 'xai' ? LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID : providerId;
+}
+
+export function storedCustomProviderId(providerId: string): string {
+  return providerId === LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID ? 'xai' : providerId;
+}
 
 /**
  * 自定义模型的默认 effort 档位（「参考默认设置」）——与内置当代旗舰模型对齐：
@@ -41,6 +56,50 @@ const CUSTOM_EFFORTS: Partial<Record<AgentKind, Effort[]>> = {
 /** 自定义模型默认选中的 effort（与内置旗舰一致）。 */
 const DEFAULT_CUSTOM_EFFORT: Effort = 'high';
 
+interface RegistryEffortMetadata {
+  efforts: Effort[];
+  defaultEffort: Effort | null;
+}
+
+/**
+ * 仅在模型能由当前 agent 的 Registry route 唯一识别时复用 effort 元数据。
+ * 自定义 provider 的 id、model id 与路由保持原值；Pi 能力继续只认逐模型显式配置。
+ */
+function registryEffortMetadata(
+  registry: ModelRegistry | null | undefined,
+  modelId: string,
+  agent: AgentKind,
+): RegistryEffortMetadata | undefined {
+  if (agent === 'pi' || !registry) return undefined;
+
+  const candidates = new Set([modelId]);
+  if (modelId.startsWith('chatgpt/')) {
+    candidates.add(modelId.slice('chatgpt/'.length));
+  }
+  const matches = registry.models.filter((entry) =>
+    entry.routes.some(
+      (route) =>
+        route.agents.includes(agent) &&
+        (candidates.has(entry.id) || candidates.has(route.modelId)),
+    ),
+  );
+  const uniqueEntries = [...new Map(matches.map((entry) => [entry.id, entry])).values()];
+  if (uniqueEntries.length !== 1) return undefined;
+
+  const entry = uniqueEntries[0]!;
+  const perAgent = entry.perAgent?.[agent];
+  const efforts = perAgent?.efforts ?? entry.efforts;
+  if (!efforts) return undefined;
+  const declaredDefault = perAgent?.defaultEffort ?? entry.defaultEffort;
+  const defaultEffort =
+    declaredDefault && efforts.includes(declaredDefault)
+      ? declaredDefault
+      : efforts.includes(DEFAULT_CUSTOM_EFFORT)
+        ? DEFAULT_CUSTOM_EFFORT
+        : (efforts[efforts.length - 1] ?? null);
+  return { efforts: [...efforts], defaultEffort };
+}
+
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
 const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
@@ -49,6 +108,7 @@ function toCatalogModel(
   m: ProviderRuntimeModelConfig,
   providerId: string,
   agent: AgentKind,
+  modelRegistry: ModelRegistry | null | undefined,
 ): CatalogModel {
   // Pi BYOM 不从 runtime / 协议猜模型能力：只有用户逐模型明确确认后才向 catalog 暴露
   // effort。这样 catalog/UI 与稍后写入 models.json 的能力保持同一份契约，旧配置安全关闭。
@@ -58,9 +118,15 @@ function toCatalogModel(
         ? [...(m.reasoningEfforts ?? [])]
         : []
       : (CUSTOM_EFFORTS[agent] ?? []);
-  const defaultEffort = efforts.includes(DEFAULT_CUSTOM_EFFORT)
-    ? DEFAULT_CUSTOM_EFFORT
-    : (efforts[0] ?? null);
+  const registryEfforts = registryEffortMetadata(modelRegistry, m.id, agent);
+  const effectiveEfforts = registryEfforts?.efforts ?? efforts;
+  const defaultEffort =
+    registryEfforts?.defaultEffort ??
+    (agent === 'pi' && m.reasoningDefaultEffort && effectiveEfforts.includes(m.reasoningDefaultEffort)
+      ? m.reasoningDefaultEffort
+      : effectiveEfforts.includes(DEFAULT_CUSTOM_EFFORT)
+        ? DEFAULT_CUSTOM_EFFORT
+        : (effectiveEfforts[0] ?? null));
   return {
     id: m.id,
     name: m.name,
@@ -71,7 +137,7 @@ function toCatalogModel(
     // 显式配置的窗口打标:编辑表单回转配置时必须与「缺省物化成的默认值」可区分,
     // 哪怕用户显式填的恰好等于当前默认(未来默认升级后显式值要原样保留)。
     ...(m.contextWindow !== undefined ? { contextWindowExplicit: true } : {}),
-    efforts,
+    efforts: effectiveEfforts,
     defaultEffort,
     // 选择器右栏按 group 聚合：同一自定义来源的模型聚成一组（渲染层用 provider 名兜底标签）。
     group: `custom:${providerId}`,
@@ -101,6 +167,7 @@ function toRouting(
   strategy: 'api-key-header' | 'oauth-token' | 'none',
   modelsUrl?: string,
   wireProtocol?: 'anthropic-messages' | 'openai-responses' | 'openai-chat',
+  piCatalogProviderId?: string,
 ): RoutingDescriptor {
   const r: RoutingDescriptor = {
     upstream: baseUrl,
@@ -121,6 +188,7 @@ function toRouting(
   }
   // 列模型端点回带（编辑表单从 routing 重建配置时不丢；路由器不消费本字段）。
   if (modelsUrl) r.modelsUrl = modelsUrl;
+  if (piCatalogProviderId) r.piCatalogProviderId = piCatalogProviderId;
   return r;
 }
 
@@ -129,7 +197,15 @@ function toRouting(
  * 按 `runtimes` 里**已配置的 runtime** 生成各 agent 的 routing / models（每 runtime 独立 baseUrl /
  * 模型 / headers）；空 runtimes 产出空 Provider（不出现在任何 agent 列表，无害）。
  */
-export function buildUserProvider(config: CustomProviderConfig): Provider {
+export interface BuildUserProviderOptions {
+  modelRegistry?: ModelRegistry | null;
+}
+
+export function buildUserProvider(
+  config: CustomProviderConfig,
+  options: BuildUserProviderOptions = {},
+): Provider {
+  const runtimeProviderId = runtimeCustomProviderId(config.id);
   // OAuth 形态路由走 Runner Bearer；none 明确走无鉴权且由 host 剥凭证；缺省保持历史 API key。
   const oauth = config.auth?.method === 'oauth' ? config.auth.oauth : undefined;
   const isOAuth = oauth !== undefined;
@@ -151,11 +227,14 @@ export function buildUserProvider(config: CustomProviderConfig): Provider {
       strategy,
       rt.modelsUrl,
       rt.wireProtocol,
+      rt.piCatalogProviderId,
     );
-    models[agent] = rt.models.map((m) => toCatalogModel(m, config.id, agent));
+    models[agent] = rt.models.map((m) =>
+      toCatalogModel(m, config.id, agent, options.modelRegistry),
+    );
   }
   return {
-    id: config.id,
+    id: runtimeProviderId,
     name: config.name,
     source: 'user',
     agents,

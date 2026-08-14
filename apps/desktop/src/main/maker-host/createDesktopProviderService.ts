@@ -23,13 +23,13 @@ import path from 'node:path';
 
 import {
   BUNDLED_CATALOG,
-  buildUserProvider,
   compareModelRegistryRevisions,
   decideModelRegistrySnapshot,
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
   loadCatalogWithSource,
   parseCatalog,
+  storedCustomProviderId,
   type Catalog,
   type CatalogIO,
   type CatalogSourceConfig,
@@ -44,6 +44,7 @@ import {
   getActiveCatalog,
   getModelPlaneWarnings,
   setActiveCatalog,
+  setCustomProviderConfigs,
   setCustomProviders,
   setDiscoveredCodexModels,
   setLocalCatalogOverrides,
@@ -58,6 +59,11 @@ import {
   loadAnthropicModelsFromDiskCache,
   refreshAnthropicModelsFromHttp,
 } from './model-discovery/anthropic.js';
+import {
+  clearXaiDiscoveredModels,
+  loadXaiModelsFromDiskCache,
+  refreshXaiModelsFromHttp,
+} from './model-discovery/xai.js';
 import { createProviderService, type ProviderService } from './provider-service.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
@@ -66,6 +72,7 @@ import {
   setOAuthTokenReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
+  type ProviderOAuthTokenReadOptions,
 } from './provider-route.js';
 import { setDiagnosticsKeyReader, setDiagnosticsOAuthTokenReader } from './provider-diagnostics.js';
 import {
@@ -85,10 +92,10 @@ import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import {
   getGrokAccessToken,
   hasGrokOAuthLogin,
-  hasGrokOAuthLoginUnbound,
+  recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
 } from './grok-oauth-login.js';
-import { clearXaiMediaModels, refreshXaiMediaModels } from './model-discovery/xai-media.js';
+import { clearXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
 import { getActiveAppSession } from '../appSessionState.js';
 import {
@@ -385,10 +392,30 @@ let endpointReloadInflight: {
   promise: Promise<Catalog>;
 } | null = null;
 
+async function readXaiProviderOAuthToken(
+  options?: ProviderOAuthTokenReadOptions,
+): Promise<string | null> {
+  if (!options?.forceRefresh) return getGrokAccessToken();
+
+  // A forced retry must stay bound to the exact bearer rejected upstream. Without that
+  // baseline we cannot safely decide which account generation to refresh.
+  const staleToken = options.staleToken;
+  if (!staleToken) return null;
+
+  const outcome = await recoverGrokAuthAfterRejection(staleToken);
+  if (outcome !== 'refreshed' && outcome !== 'superseded') return null;
+
+  // `superseded` means another request/login already replaced the rejected credential.
+  // Return that newer token, but never replay the bearer which caused the 401/403.
+  const token = await getGrokAccessToken();
+  return token !== staleToken ? token : null;
+}
+
 /** Set 用稳定函数引用去重，ensureActiveCatalogLoaded 的幂等调用不会重复注册清理副作用。 */
 function handleProviderSecretsCleared(): void {
   resetGenericOAuthMemoryCache();
   resetGrokOAuthMemoryCache();
+  clearXaiDiscoveredModels();
   clearXaiMediaModels();
 }
 
@@ -402,7 +429,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 这里在路由发生前（splash 早于任何 turn）把真实 safeStorage 读取接进去。
   setCustomProviderKeyReader(readCustomProviderKey);
   setProviderOAuthTokenReader((providerId, agent, options) => {
-    if (providerId === 'xai') return getGrokAccessToken();
+    if (providerId === 'xai') return readXaiProviderOAuthToken(options);
     // Codex and Pi processes do not carry Claude Code's native OAuth credential.
     // Their Anthropic bridges read the host-owned Claude.ai token and allow the
     // existing refresher to rotate it when needed.
@@ -427,7 +454,9 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   addProviderSecretsClearedListener(handleProviderSecretsCleared);
   const readOAuthToken = (providerId: string): string | null => {
     const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-    return readCachedGenericOAuthAccessToken(providerId, provider?.auth.oauth);
+    const storageProviderId =
+      provider?.source === 'user' ? storedCustomProviderId(providerId) : providerId;
+    return readCachedGenericOAuthAccessToken(storageProviderId, provider?.auth.oauth);
   };
   setOAuthTokenReader(readOAuthToken);
   setDiagnosticsOAuthTokenReader(readOAuthToken);
@@ -474,6 +503,10 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
         // 不阻塞 splash(失败保留现值,语义见 model-discovery/anthropic.ts)。
         await loadAnthropicModelsFromDiskCache();
         void refreshAnthropicModelsFromHttp();
+        // xAI 账号成员同样先恢复当前 owner 的成功 LKG，再后台读官方账号清单。
+        // 无 LKG / 刷新失败时 active-catalog 才继续使用 server Catalog → bundled 救急。
+        await loadXaiModelsFromDiskCache();
+        void refreshXaiModelsFromHttp();
         activeLoaded = true;
         return catalog;
       })
@@ -685,7 +718,7 @@ export async function refreshCustomProvidersIntoCatalog(
       log.info('discarded stale custom provider catalog refresh');
       return;
     }
-    setCustomProviders(configs.map((c) => buildUserProvider(c)));
+    setCustomProviderConfigs(configs);
     log.info('custom providers merged into active catalog', { count: configs.length });
   } catch (err) {
     if (!shouldApply()) {
@@ -702,15 +735,15 @@ export async function refreshCustomProvidersIntoCatalog(
 }
 
 /**
- * 连接态读取路径上的绑定自愈(同步凭证的两家:anthropic / xai)。
+ * 连接态读取路径上的原生 Harness 绑定自愈。
  *
  * 写失败绝不抛穿:connection 回调服务于 listProviders,抛出会让整份供应商列表取不到,
  * 比「这一次没认领上」严重得多 —— 下一次读取还会再试。Codex 的同款自愈挂在异步
  * reconcile 收口(见 auth-adapters.claimDetectedCodexOAuthBinding),因为它的凭证是
- * 惰性物化的;这两家的凭证同步可读,在读连接态时就地认领即可。
+ * 惰性物化的；Claude 凭证同步可读，在读连接态时就地认领即可。
  */
 async function claimNativeProviderAuthOnRead(
-  provider: 'anthropic' | 'xai',
+  provider: 'anthropic',
   hasCredential: () => boolean,
   onClaimed?: () => void | Promise<void>,
   waitForClaimed = false,
@@ -838,7 +871,9 @@ export function getDesktopProviderService(): ProviderService {
     migrateLegacyNativeProviderAuthBindings(ownerId, {
       anthropic: hasClaudeAiOAuthUnbound(),
       openai: desktopCodexAuthAdapter.hasCodexOAuthLoginUnbound(),
-      xai: hasGrokOAuthLoginUnbound(),
+      // 这是升级迁移，不是 CLI 自动发现：旧 xAI blob 只可能由 Cindy OAuth 写入，
+      // nativeProviderAuthBinding 会把它记为 explicit-provider-oauth。
+      xai: getProviderSecretStore().has('xai'),
     });
   }
   if (singleton) return singleton;
@@ -846,10 +881,8 @@ export function getDesktopProviderService(): ProviderService {
     getCatalog: getDesktopSelectableCatalog,
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
-      // 三家 native provider 统一口径:先跑一次绑定自愈,再读「绑定 + 凭证」的连接态。
-      // hasClaudeAiOAuth / hasCodexOAuthLogin / hasGrokOAuthLogin 内部都已校验绑定,
-      // 所以这里不再前置 isNativeProviderAuthBound —— 前置短路是纯冗余,而且会把
-      // listProviders 挡在自愈之前,正是「设置页已连接 / 聊天无来源」假报的成因(#294)。
+      // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
+      // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
       anthropic: async ({ allowSideEffects, waitForDiscovery }) => {
         // 自愈会写绑定文件、读凭证作用域缓存并发起带凭证的上游请求。listProviders 这条通道
         // 同时服务 device-link 与可能不受信的渲染上下文,所以副作用只在本机主页面发起时
@@ -886,17 +919,13 @@ export function getDesktopProviderService(): ProviderService {
         allowSideEffects
           ? desktopCodexAuthAdapter.hasCodexOAuthLogin()
           : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
-      xai: async ({ allowSideEffects }) => {
-        if (allowSideEffects) {
-          await claimNativeProviderAuthOnRead('xai', hasGrokOAuthLoginUnbound, () =>
-            refreshXaiMediaModels().then(() => undefined),
-          );
-        }
-        return hasGrokOAuthLogin();
-      },
+      // xAI is a downstream provider, not a native Harness. Its connection state
+      // only reflects a Cindy OAuth binding (or the explicit legacy migration above);
+      // reading the provider list must never auto-claim an arbitrary local token.
+      xai: () => hasGrokOAuthLogin(),
     },
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
-    genericOAuthConnected: (providerId) => hasGenericOAuthLogin(providerId),
+    genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
     // 内置 API-key 供应商(如 gemini 图像来源):连接态 = key 已存(providerSecretStore)。
     builtinApiKeyConnected: (providerId) =>
       providerId === 'gemini' ? Boolean(getProviderSecretStore().get('gemini')?.trim()) : false,
@@ -921,6 +950,7 @@ export const __testing = {
   catalogLkgTemporaryPath,
   readCatalogLkg,
   replaceCatalogLkgFile,
+  readXaiProviderOAuthToken,
   selectCatalogLkgSnapshot,
   serializeCatalogLkgWrite,
   writeCatalogLkg,

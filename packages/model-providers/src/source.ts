@@ -28,6 +28,9 @@ export const CATALOG_CFG_PATH = '/cfg/providers.json';
 /** 整条远端 Catalog fallback 链共享的默认启动等待预算。 */
 export const DEFAULT_REMOTE_CATALOG_BUDGET_MS = 15_000;
 
+/** Only numeric catalog snapshots older than v3 predate the Pi preset metadata contract. */
+const PI_RUNTIME_METADATA_CATALOG_VERSION = 3;
+
 export interface CatalogSourceConfig {
   /** 完整覆盖源 URL（env XDT_MODELS_URL）；缺省使用公共 catalog API。 */
   url?: string;
@@ -127,6 +130,15 @@ function remoteErrorForLog(error: unknown, remoteUrl: string, logUrl: string): s
   return String(error).split(remoteUrl).join(logUrl);
 }
 
+function numericCatalogVersion(version: string): number | null {
+  return /^\d+$/.test(version) ? Number(version) : null;
+}
+
+function allowsLegacyPiRuntimeBackfill(primary: Catalog): boolean {
+  const version = numericCatalogVersion(primary.version);
+  return version !== null && version < PI_RUNTIME_METADATA_CATALOG_VERSION;
+}
+
 /** 只给仍保持 bundled 鉴权与上游路由形状的旧条目迁移 access，不能仅凭 provider id 猜计费。 */
 function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access'] {
   if (primary.auth.method !== bundled.auth.method) return undefined;
@@ -159,16 +171,17 @@ function allowsBundledImageInheritance(
 }
 
 /**
- * 同 id preset 仍以远端为主；bundled 只给远端仍保留的同 runtime / 同 model
- * 回填缺失的 contextWindow。这样旧远端不会把已核实的长上下文元数据降级，同时远端
- * 仍可通过移除 runtime / model 停止新建，或用显式窗口覆盖 bundled。
+ * 同 id preset 仍以远端为主；bundled 给远端仍保留的同 runtime / 同 model 回填缺失的
+ * contextWindow，并为旧 schema 中完全缺席的 Pi runtime 回填已核实能力。这样旧远端不会
+ * 把长上下文或 Pi 能力降级；已有 Pi runtime 与显式窗口仍完整由远端优先。
  */
-function backfillPresetContextWindows(
+function backfillPresetMetadata(
   primary: ProviderPreset,
   bundled: ProviderPreset,
+  allowLegacyPiBackfill: boolean,
 ): ProviderPreset {
   let changed = primary.nameZhTW === undefined && bundled.nameZhTW !== undefined;
-  const runtimes: ProviderPreset['runtimes'] = {};
+  const runtimes: ProviderPreset['runtimes'] = { ...primary.runtimes };
   for (const [agent, runtime] of Object.entries(primary.runtimes) as [
     AgentKind,
     NonNullable<ProviderPreset['runtimes'][AgentKind]>,
@@ -188,6 +201,17 @@ function backfillPresetContextWindows(
       return { ...model, contextWindow: bundledContextWindow };
     });
     runtimes[agent] = runtimeChanged ? { ...runtime, models } : runtime;
+  }
+  // Pi runtime 是 2026-08 后新增的预设能力槽。旧远端目录没有表达“显式禁用 Pi”的
+  // 字段，缺席只代表旧 schema；对随包已核实的官方预设回填整段，避免远端 LKG 把
+  // DeepSeek/Kimi 的推理档位与视觉能力遮掉。远端一旦自行提供 Pi，仍完整优先。
+  if (
+    allowLegacyPiBackfill
+    && primary.runtimes.pi === undefined
+    && bundled.runtimes.pi !== undefined
+  ) {
+    runtimes.pi = bundled.runtimes.pi;
+    changed = true;
   }
   return changed
     ? {
@@ -290,11 +314,12 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   // 远端独有项按远端原序追加。避免旧远端的非空 presets 整段遮掉新版客户端内置条目。
   const primaryPresets = primary.presets ?? [];
   const bundledPresets = BUNDLED_CATALOG.presets ?? [];
+  const allowLegacyPiBackfill = allowsLegacyPiRuntimeBackfill(primary);
   const primaryPresetsById = new Map(primaryPresets.map((preset) => [preset.id, preset]));
   const bundledPresetIds = new Set(bundledPresets.map((preset) => preset.id));
   const presets = bundledPresets.map((bundled) => {
     const remote = primaryPresetsById.get(bundled.id);
-    return remote ? backfillPresetContextWindows(remote, bundled) : bundled;
+    return remote ? backfillPresetMetadata(remote, bundled, allowLegacyPiBackfill) : bundled;
   });
   for (const preset of primaryPresets) {
     if (!bundledPresetIds.has(preset.id)) presets.push(preset);
@@ -303,17 +328,9 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   // 保留新版客户端随包快照，避免复现 presets 曾出现的“旧远端遮掉新本地能力”；
   // 远端较新时整份生效，继续支持 status=retired、route 删除和价格纠错。
   const selectedRegistry = selectNewerModelRegistry(primary, BUNDLED_CATALOG);
-  // xAI is the only provider whose model list is a static part of this Catalog snapshot. When
-  // bundled wins the registry revision guard, keep its xAI provider with that same snapshot
-  // instead of combining a new registry with an older remote/LKG list.
-  const providers = selectedRegistry.fromFallback && primary.modelRegistry !== undefined
-    ? merged.map((provider) =>
-        provider.id === 'xai' ? (bundledById.get('xai') ?? provider) : provider,
-      )
-    : merged;
   return {
     version: primary.version,
-    providers,
+    providers: merged,
     ...(presets && presets.length > 0 ? { presets } : {}),
     ...(selectedRegistry.modelRegistry ? { modelRegistry: selectedRegistry.modelRegistry } : {}),
   };

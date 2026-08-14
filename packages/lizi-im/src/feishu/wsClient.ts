@@ -103,9 +103,9 @@ const ORPHAN_NOTICE_COOLDOWN_MS = 60_000;
 const orphanNoticeAt = new Map<string, number>();
 
 /**
- * 清凭证代次: clearOrphanRetriesForCredentialClear 递增。在途孤儿发送的
- * 续段(await sendOrphanNoticeOnce 之后)据此放弃 — 清凭证后失败的在途
- * 请求不得再 schedule/suspend, 否则清完又会长出新状态。
+ * 清凭证代次。clearOrphanRetriesForCredentialClear 只删 map 条目, 挡不住
+ * 已经 await 出去的 REST。代次在清凭证时递增, 发送前后比对: 过期续段不得
+ * 再 suspend/schedule, 否则同账号再登录会把登出前的 opener 重试/撤回复活。
  */
 let orphanRetryEpoch = 0;
 
@@ -248,8 +248,9 @@ export function resetOrphanRetriesForTest(): void {
 
 /**
  * 明确清除凭证/登出(clearAndDisconnect)时丢弃孤儿重试状态: 排队/挂起的
- * 重试、预算与送达标记全部清空 — 之后重新保存相同 appId/service 不会恢复
- * 旧重试向登出前的 opener 补发提示或撤回旧卡(那是 transport 重连才该有的
+ * 重试、预算与送达标记全部清空, 并递增 orphanRetryEpoch, 让已 await 出去
+ * 的 REST 续段在落定后放弃 — 之后重新保存相同 appId/service 不会恢复旧
+ * 重试向登出前的 opener 补发提示或撤回旧卡(那是 transport 重连才该有的
  * 保留语义)。
  */
 export function clearOrphanRetriesForCredentialClear(): void {
@@ -353,7 +354,7 @@ async function sendOrphanOpenerNotice(
   const epoch = orphanRetryEpoch;
   const outcome = await sendOrphanNoticeOnce(openerMessageId);
   if (epoch !== orphanRetryEpoch) {
-    // 清凭证发生在发送期间: 续段放弃 — 不再 schedule/suspend 任何新状态。
+    // 清凭证发生在发送期间: 续段放弃 — 不再 schedule/suspend。
     log.info('[feishu/wsClient] orphan opener notice stale after credential clear — dropping continuation');
     return;
   }

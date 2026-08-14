@@ -109,7 +109,7 @@ describe('mergeWithBundled', () => {
     expect(merged.providers.find((p) => p.id === 'anthropic')!.models['claude-code']!.length).toBe(1);
   });
 
-  it('keeps a newer bundled modelRegistry when the primary full snapshot is stale', () => {
+  it('keeps a newer bundled Registry without replacing the independent xAI fallback provider', () => {
     const bundledRegistry = BUNDLED_CATALOG.modelRegistry;
     const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!bundledRegistry) throw new Error('missing bundled modelRegistry');
@@ -129,7 +129,7 @@ describe('mergeWithBundled', () => {
 
     expect(merged.modelRegistry).toBe(bundledRegistry);
     expect(merged.modelRegistry?.models.length).toBeGreaterThan(staleRegistry.models.length);
-    expect(merged.providers.find((provider) => provider.id === 'xai')).toBe(bundledXai);
+    expect(merged.providers.find((provider) => provider.id === 'xai')?.name).toBe('STALE-XAI');
   });
 
   it('uses a newer primary modelRegistry as one complete snapshot, including retirements', () => {
@@ -153,7 +153,13 @@ describe('mergeWithBundled', () => {
     expect(merged.modelRegistry).toBe(newerRegistry);
     expect(merged.modelRegistry?.models).toHaveLength(1);
     expect(merged.modelRegistry?.models[0]?.status).toBe('retired');
-    expect(merged.providers.find((provider) => provider.id === 'xai')).toBe(newerXai);
+    const mergedXai = merged.providers.find((provider) => provider.id === 'xai');
+    expect(mergedXai).toMatchObject({
+      ...newerXai,
+      agents: expect.arrayContaining(['claude-code', 'codex', 'pi']),
+      routing: expect.objectContaining({ pi: bundledXai.routing.pi }),
+      models: expect.objectContaining({ pi: bundledXai.models.pi }),
+    });
   });
 
   it('orders result by bundled provider order (v2 远端只带 xai 时不得窜位)', () => {
@@ -414,6 +420,45 @@ describe('loadCatalog', () => {
     expect(local).toMatchObject({ source: 'local', catalog: { version: 'test' } });
     expect(remote).toMatchObject({ source: 'remote', catalog: { version: 'test' } });
     expect(bundled).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
+  });
+
+  it('only backfills Pi metadata for proven legacy snapshots across local, remote, and cache', async () => {
+    const bundledPreset = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'deepseek');
+    if (!bundledPreset) throw new Error('missing bundled DeepSeek preset');
+    const { pi: _missing, ...legacyRuntimes } = bundledPreset.runtimes;
+    const legacy = JSON.stringify({
+      version: '2',
+      providers: MINIMAL.providers,
+      presets: [{ ...bundledPreset, runtimes: legacyRuntimes }],
+    });
+    const current = JSON.stringify({
+      version: BUNDLED_CATALOG.version,
+      providers: MINIMAL.providers,
+      presets: [{ ...bundledPreset, runtimes: legacyRuntimes }],
+    });
+    const local = await loadCatalogWithSource(
+      { localPath: '/repo/providers.json' },
+      { readFile: vi.fn(async () => legacy) },
+    );
+    const remote = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      { fetchText: vi.fn(async () => legacy) },
+    );
+    const cache = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json', remoteBudgetMs: 0 },
+      { readCache: vi.fn(async () => legacy) },
+    );
+    for (const loaded of [local, remote, cache]) {
+      expect(loaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
+        .toEqual(bundledPreset.runtimes.pi);
+    }
+
+    const currentLoaded = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      { fetchText: vi.fn(async () => current) },
+    );
+    expect(currentLoaded.catalog.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
+      .toBeUndefined();
   });
 
   it('persists a valid remote snapshot and uses its source-scoped LKG after failure', async () => {

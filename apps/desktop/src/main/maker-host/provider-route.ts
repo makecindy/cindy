@@ -21,6 +21,8 @@
 
 import {
   actualSourceIdForModel,
+  runtimeCustomProviderId,
+  storedCustomProviderId,
   type AgentKind,
   type Provider,
   type ProviderView,
@@ -59,6 +61,7 @@ export function setCustomProviderKeyReader(reader: CustomProviderKeyReader): voi
  * mutation 之间不会短暂恢复路由。
  */
 export function beginProviderRouteMutation(providerId: string): () => void {
+  providerId = runtimeCustomProviderId(providerId);
   providerRouteMutationCounts.set(
     providerId,
     (providerRouteMutationCounts.get(providerId) ?? 0) + 1,
@@ -74,7 +77,7 @@ export function beginProviderRouteMutation(providerId: string): () => void {
 }
 
 export function isProviderRouteMutationInProgress(providerId: string): boolean {
-  return providerRouteMutationCounts.has(providerId);
+  return providerRouteMutationCounts.has(runtimeCustomProviderId(providerId));
 }
 
 /**
@@ -95,7 +98,7 @@ export function setOAuthTokenReader(reader: OAuthTokenReader): void {
 /** 查询自定义供应商该 runtime 是否已有可注入的 API key（不暴露明文）。 */
 export function hasCustomProviderKey(providerId: string, agent: AgentKind): boolean {
   if (isProviderRouteMutationInProgress(providerId)) return false;
-  return Boolean(customProviderKeyReader(providerId, agent));
+  return Boolean(customProviderKeyReader(storedCustomProviderId(providerId), agent));
 }
 
 export interface ProviderOAuthTokenReadOptions {
@@ -620,10 +623,13 @@ async function readProviderRouteCredentials(
   routing: RoutingDescriptor,
   agent: AgentKind,
 ): Promise<{ apiKey: string | null; oauthToken: string | null }> {
-  const apiKey = provider.source === 'user' ? customProviderKeyReader(provider.id, agent) : null;
+  const credentialProviderId =
+    provider.source === 'user' ? storedCustomProviderId(provider.id) : provider.id;
+  const apiKey =
+    provider.source === 'user' ? customProviderKeyReader(credentialProviderId, agent) : null;
   let oauthToken: string | null = null;
   if (routing.authStrategy === 'oauth-token') {
-    oauthToken = oauthTokenReader(provider.id);
+    oauthToken = oauthTokenReader(credentialProviderId);
   } else if (routing.authStrategy === 'provider-oauth-header') {
     try {
       oauthToken = await providerOAuthTokenReader(provider.id, agent);
@@ -682,7 +688,10 @@ export function resolveSessionRouteDecision(
   if (pendingDecision) return pendingDecision;
   if (!routingServesWireModel(routing, wireModel)) return null;
   // 自定义供应商：resolve 时按 provider_key_<id>_<agent> 读出该 runtime 的 API key 注入鉴权头（不在 catalog）。
-  const apiKey = provider?.source === 'user' ? customProviderKeyReader(providerId, agent) : null;
+  const credentialProviderId =
+    provider?.source === 'user' ? storedCustomProviderId(providerId) : providerId;
+  const apiKey =
+    provider?.source === 'user' ? customProviderKeyReader(credentialProviderId, agent) : null;
   const withRequestPath = (decision: RoutingDecision | null): RoutingDecision | null =>
     decision && wireModel && routing.requestPath
       ? { ...decision, pathOverride: routing.requestPath }
@@ -691,7 +700,13 @@ export function resolveSessionRouteDecision(
   // （临期刷新在后台单飞，不阻塞路由热路径，规则 10）。
   if (routing.authStrategy === 'oauth-token') {
     return withRequestPath(
-      buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthTokenReader(providerId)),
+      buildRouteDecision(
+        routing,
+        gatewayKey,
+        agent,
+        apiKey,
+        oauthTokenReader(credentialProviderId),
+      ),
     );
   }
   if (routing.authStrategy !== 'provider-oauth-header') {

@@ -22,6 +22,7 @@ import {
   setActiveCatalog,
   setAnthropicDiscoveredModels,
   setDiscoveredCodexModels,
+  setXaiDiscoveredModels,
   setDiscoveredProviderMediaModels,
 } from '../active-catalog.js';
 
@@ -90,6 +91,7 @@ describe('active-catalog discovered augment', () => {
     // 复位全局状态,避免测试间串扰
     setActiveCatalog(BUNDLED_CATALOG);
     setDiscoveredCodexModels([]);
+    setXaiDiscoveredModels(null);
     setDiscoveredProviderMediaModels('xai', null);
   });
 
@@ -101,12 +103,49 @@ describe('active-catalog discovered augment', () => {
     expect(openaiIds('pi')).toContain('chatgpt/gpt-5.7');
   });
 
-  it('SuperGrok 静态清单投影到独立 Pi 通道', () => {
+  it('SuperGrok fallback keeps namespaced roots but projects bare Pi ids', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
     expect(xai?.agents).toContain('pi');
-    expect(xai?.routing.pi?.modelPrefixes).toEqual(['xai/']);
-    expect(xai?.models.pi).toEqual(xai?.models['claude-code']);
+    expect(xai?.routing.pi?.upstream).toBe('https://api.x.ai/v1');
+    expect(xai?.models.pi?.map((model) => model.id)).toEqual([
+      'grok-4.3',
+      'grok-4.5',
+      'grok-4.6',
+      'grok-build-0.1',
+    ]);
+    expect(xai?.models.pi).not.toEqual(xai?.models['claude-code']);
+  });
+
+  it('xAI account snapshot is authoritative and projects canonical ids per harness', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXaiDiscoveredModels([
+      { id: 'xai/grok-4.5' },
+      { id: 'xai/grok-4.6' },
+    ]);
+    const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    expect(xai?.models['claude-code']?.map((model) => model.id)).toEqual([
+      'xai/grok-4.5',
+      'xai/grok-4.6',
+    ]);
+    expect(xai?.models.codex?.map((model) => model.id)).toEqual([
+      'xai/grok-4.5',
+      'xai/grok-4.6',
+    ]);
+    expect(xai?.models.pi?.map((model) => model.id)).toEqual(['grok-4.5', 'grok-4.6']);
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
+      contextWindow: 500_000,
+      supportsImageInput: true,
+    });
+  });
+
+  it('xAI successful empty snapshot stays empty and does not leak static membership', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXaiDiscoveredModels([]);
+    const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    expect(xai?.models['claude-code']).toEqual([]);
+    expect(xai?.models.codex).toEqual([]);
+    expect(xai?.models.pi).toEqual([]);
   });
 
   it('xAI 媒体发现按官方存在性收敛，静态同 id 保持 first-wins', () => {

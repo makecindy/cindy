@@ -2,9 +2,11 @@
  * 目录运行时校验(parseCatalog)+ presets 清洗排序。
  *
  * 2026-07-19 起 bundled 目录由 `builtin.ts` 组装:内置供应商身份卡是 TS 常量,
- * `catalog/providers.json`(v2)只承载 xai 静态清单 + presets 模板——它仍是
+ * `catalog/providers.json`(v2)承载 xAI 的离线 fallback 元数据 + presets 模板——它仍是
  * ① OSS `cfg/providers.json` 的发布物 ② dev 直读的仓库文件。anthropic/openai/xd
  * 的模型清单运行时动态注入(见 apps/desktop maker-host active-catalog),不再进目录文件。
+ * xAI 登录后同样由账号 `/v1/models` 决定成员；此处静态段只在尚无成功账号快照时救急，
+ * 并为已发现成员补上下文、价格、能力与路由。
  * 所有跨端模型元数据统一进入严格版本化的 `modelRegistry`;目录顶层不接受旁路元数据块。
  */
 
@@ -46,17 +48,30 @@ function hasValidPresetReasoningCapability(
   agent: AgentKind,
   model: Record<string, unknown>,
 ): boolean {
-  const hasCapability = model.reasoning !== undefined || model.reasoningEfforts !== undefined;
+  const hasCapability =
+    model.reasoning !== undefined
+    || model.reasoningEfforts !== undefined
+    || model.reasoningDefaultEffort !== undefined;
   if (!hasCapability) return true;
   if (agent !== 'pi' || typeof model.reasoning !== 'boolean') return false;
-  if (model.reasoning !== true) return model.reasoningEfforts === undefined;
+  if (model.reasoning !== true) {
+    return model.reasoningEfforts === undefined && model.reasoningDefaultEffort === undefined;
+  }
   if (!Array.isArray(model.reasoningEfforts) || model.reasoningEfforts.length === 0) return false;
   const efforts = model.reasoningEfforts;
-  return (
+  const effortsValid = (
     efforts.every(
       (effort) =>
         typeof effort === 'string' && (PI_REASONING_EFFORTS as readonly string[]).includes(effort),
     ) && new Set(efforts).size === efforts.length
+  );
+  if (!effortsValid) return false;
+  return (
+    model.reasoningDefaultEffort === undefined
+    || (
+      typeof model.reasoningDefaultEffort === 'string'
+      && efforts.includes(model.reasoningDefaultEffort)
+    )
   );
 }
 
@@ -429,6 +444,10 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       if (Object.values(r.headers as Record<string, unknown>).some((x) => typeof x !== 'string')) return false;
     }
     if (r.baseUrlEditable !== undefined && typeof r.baseUrlEditable !== 'boolean') return false;
+    if (
+      r.piCatalogProviderId !== undefined
+      && (agent !== 'pi' || typeof r.piCatalogProviderId !== 'string' || !/^[a-z0-9-]+$/.test(r.piCatalogProviderId))
+    ) return false;
     // modelsUrl / requestPath 不在此淘汰整条——非法值由 sanitizePresets 剥字段。
   }
   return true;

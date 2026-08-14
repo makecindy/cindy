@@ -643,6 +643,75 @@ describe('feishu group inbound gate', () => {
     }
   });
 
+  it('清凭证期间在途首发失败后,同账号再登录不会恢复登出前的 opener 重试', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      let rejectFirst!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectFirst = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      const firstDelivery = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 生产顺序: stop 再清凭证。在途 REST 此时仍未落定; 只清 map 挡不住
+      // 失败续段 suspend, 同账号再登录就会把登出前的 opener 重试复活。
+      await wsClient.stop({ announceOffline: false, reason: 'credentials-cleared' });
+      wsClient.clearOrphanRetriesForCredentialClear();
+      rejectFirst(new Error('client closed'));
+      await firstDelivery;
+
+      await connect();
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('清凭证期间在途重试失败后,同账号再登录不会恢复登出前的 opener 重试', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      let rejectRetry!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectRetry = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+
+      await wsClient.stop({ announceOffline: false, reason: 'credentials-cleared' });
+      wsClient.clearOrphanRetriesForCredentialClear();
+      rejectRetry(new Error('client closed'));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      await connect();
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('in-flight dedupe survives a same-bot reconnect (redelivery shares the old send)', async () => {
     vi.useFakeTimers();
     try {
