@@ -477,6 +477,27 @@ describe('Session per-turn origin 打标', () => {
     expect(secondText?.turnAttemptToken).toBe(2);
   });
 
+  it('background late child events stay visible without inheriting the next turn', async () => {
+    const { handle, emit } = createControllableHandle();
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first', { origin: SCHED_ORIGIN, turnAttemptToken: 1 });
+    await emit({ type: 'done', data: {} });
+    await session.send('second', { turnAttemptToken: 2 });
+    await emit({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'child-1', status: 'completed' },
+    });
+
+    const late = seen.find((event) => event.type === 'agent_task_update');
+    expect(late).toMatchObject({ turnScope: 'background' });
+    expect(late?.turnOrigin).toBeUndefined();
+    expect(late?.turnAttemptToken).toBeUndefined();
+  });
+
   it('event loop crash emits a terminal error and closes the poisoned session', async () => {
     let releaseCrash!: () => void;
     const crashReady = new Promise<void>((resolve) => {

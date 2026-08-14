@@ -468,6 +468,12 @@ export interface ThreadForkParams {
   sandbox?: SandboxMode;
   /** Per-request config overrides, including named permission profile definitions. */
   config?: Record<string, unknown>;
+  /**
+   * 只返回 thread 元数据与 live fork state,不把完整历史塞进单条 NDJSON response。
+   * 与 thread/resume.excludeTurns 同族;超长历史 thread 的 fork 响应体与历史成
+   * 正比、无上界,曾实测单行 31MiB 超过 client maxLineBytes(16MiB)熔断整条连接。
+   */
+  excludeTurns?: boolean;
   [k: string]: unknown;
 }
 
@@ -750,7 +756,8 @@ export interface ServerRequestResolvedNotification {
 }
 
 export interface DynamicToolSpec {
-  namespace?: string;
+  /** Current canonical app-server format for top-level dynamic tools. */
+  type: 'function';
   name: string;
   description: string;
   inputSchema: unknown;
@@ -933,6 +940,18 @@ export interface ItemUpdatedNotification {
 export interface ItemCompletedNotification {
   method: 'item/completed';
   params: { threadId: string; turnId: string; item: ItemEnvelope; completedAtMs?: number };
+}
+
+/**
+ * v2 AgentMessageDeltaNotification:
+ *   { thread_id, turn_id, item_id, delta }
+ *
+ * 正文的专用增量流。item/updated 仍作为旧版 / 异常上游的全文快照兜底，
+ * item/completed 负责最终全文校准。
+ */
+export interface AgentMessageDeltaNotification {
+  method: 'item/agentMessage/delta';
+  params: { threadId: string; turnId: string; itemId: string; delta: string };
 }
 
 export type PlanEntryStatus = 'pending' | 'in_progress' | 'completed';
@@ -1165,6 +1184,7 @@ export type ServerNotification =
   | ItemStartedNotification
   | ItemUpdatedNotification
   | ItemCompletedNotification
+  | AgentMessageDeltaNotification
   | ReasoningSummaryTextDeltaNotification
   | ReasoningSummaryPartAddedNotification
   | ReasoningTextDeltaNotification

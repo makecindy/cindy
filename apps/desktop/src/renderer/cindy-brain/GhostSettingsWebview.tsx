@@ -471,7 +471,7 @@ export function GhostSettingsWebview({
         <p
           className={cn(
             'font-medium text-[var(--text-primary)]',
-            appearance === 'plugin' ? 'text-14 leading-[22px]' : 'text-13',
+            appearance === 'plugin' ? 'text-14 leading-[1.571]' : 'text-13',
           )}
         >
           {title ?? t('settings.ghosts.detail.customSlotTitle')}

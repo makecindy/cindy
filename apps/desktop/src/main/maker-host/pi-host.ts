@@ -43,8 +43,12 @@ import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
-import { getDesktopMcpToolApprovalPolicy } from './mcp-tool-approval-policy.js';
+import {
+  getDesktopMcpToolApprovalPolicy,
+  getDesktopMcpToolApprovalPresentation,
+} from './mcp-tool-approval-policy.js';
 import { getRipgrepBinaryPath } from './runtime-configs.js';
+import { resolveXdPiGatewayWireProtocol } from './active-catalog.js';
 
 const log = createLogger('pi-host');
 
@@ -195,6 +199,9 @@ export interface BuildPiAgentOpts {
   makerMemory?: AgentDeps['makerMemory'];
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
   resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
+  getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+  /** Trusted project-approval authority; omitted until the host has one, which fails closed. */
+  resolvePiProjectTrustInput?: AgentDeps['resolvePiProjectTrustInput'];
 }
 
 /** Cindy wire protocol → pi models.json api 形态。 */
@@ -372,11 +379,23 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     // 与 Claude Code / Codex 同一份第一方 MCP 审批真源。Pi 之前没接,导致 orca 这类
     // 可信 server 的工具落进 Auto-review 灰区被模型静默 block(详见 pi/index.ts 权限门)。
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+    getMcpToolApprovalPresentation: getDesktopMcpToolApprovalPresentation,
     resolvePiAgentHome: () => path.join(app.getPath('userData'), 'pi-agent-home'),
     preparePiExtraSpawnConfig: (providers, ctx) => getPiExtraSpawnConfig(providers, opts.logger, ctx),
     registerPiProxySession,
     resolvePiNativeProviders: () => resolvePiNativeProviders(),
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
+    resolvePiGatewayModelApi: (providerId, modelId) => {
+      const source = providerId?.trim();
+      // Anthropic / OpenAI / xAI 订阅都经既有 compat proxy Messages 前门。即使它们与 XD
+      // 共享 model id，也不能被 XD v3 的 Responses 配置覆盖；models.json 是每会话隔离的，
+      // 因此按本次实际来源生成。自定义 BYOM 走独立 native provider，此分支只配置它不使用
+      // 的 cindy 块，并保持 Messages 安全默认。
+      if (source && source !== 'cindy' && source !== 'xd') return 'anthropic-messages';
+      return resolveXdPiGatewayWireProtocol(modelId);
+    },
+    getGhostRosterPrompt: opts.getGhostRosterPrompt,
+    resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
   });
 }

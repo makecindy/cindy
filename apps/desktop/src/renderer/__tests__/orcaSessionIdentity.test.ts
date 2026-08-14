@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   formatOrcaLeadTitle,
   formatOrcaWorkerTitle,
+  getSessionRouteOwnerId,
   isOrcaLeadSession,
   isOrcaWorkerSession,
   resolveSessionRoute,
@@ -33,16 +34,18 @@ describe('orcaSessionIdentity', () => {
   });
 
   function electronApiMock() {
-    return (globalThis as unknown as {
-      window: {
-        electronAPI: {
-          localDb: {
-            sessions: { get: ReturnType<typeof vi.fn> };
-            orcaWorkflows: { getByWorkerSession: ReturnType<typeof vi.fn> };
+    return (
+      globalThis as unknown as {
+        window: {
+          electronAPI: {
+            localDb: {
+              sessions: { get: ReturnType<typeof vi.fn> };
+              orcaWorkflows: { getByWorkerSession: ReturnType<typeof vi.fn> };
+            };
           };
         };
-      };
-    }).window.electronAPI;
+      }
+    ).window.electronAPI;
   }
 
   it('detects durable Orca identity from session role', () => {
@@ -62,18 +65,27 @@ describe('orcaSessionIdentity', () => {
     expect(formatOrcaWorkerTitle('Implement task')).toBe('Orca Worker: Implement task');
   });
 
+  it('extracts the canonical owner from a resolved session route', () => {
+    expect(getSessionRouteOwnerId('/cc-agent/lead-1?worker=worker-1')).toBe('lead-1');
+    expect(getSessionRouteOwnerId('/cc-agent/session%20one#message')).toBe('session one');
+    expect(getSessionRouteOwnerId('/cc-agent')).toBeNull();
+  });
+
   it('resolves canonical routes from a known session row', async () => {
     const api = electronApiMock();
     api.localDb.orcaWorkflows.getByWorkerSession.mockResolvedValue({
       leadSessionId: 'lead-1',
     });
 
-    await expect(resolveSessionRoute('lead-1', { orcaRole: 'lead' }))
-      .resolves.toBe('/cc-agent/lead-1');
-    await expect(resolveSessionRoute('worker-1', { orcaRole: 'worker' }))
-      .resolves.toBe('/cc-agent/lead-1?worker=worker-1');
-    await expect(resolveSessionRoute('plain-1', { orcaRole: null }))
-      .resolves.toBe('/cc-agent/plain-1');
+    await expect(resolveSessionRoute('lead-1', { orcaRole: 'lead' })).resolves.toBe(
+      '/cc-agent/lead-1',
+    );
+    await expect(resolveSessionRoute('worker-1', { orcaRole: 'worker' })).resolves.toBe(
+      '/cc-agent/lead-1?worker=worker-1',
+    );
+    await expect(resolveSessionRoute('plain-1', { orcaRole: null })).resolves.toBe(
+      '/cc-agent/plain-1',
+    );
 
     expect(api.localDb.orcaWorkflows.getByWorkerSession).toHaveBeenCalledWith('worker-1');
   });
@@ -91,7 +103,8 @@ describe('orcaSessionIdentity', () => {
     const api = electronApiMock();
     api.localDb.orcaWorkflows.getByWorkerSession.mockResolvedValue(null);
 
-    await expect(resolveSessionRoute('worker-2', { orcaRole: 'worker' }))
-      .resolves.toBe('/cc-agent');
+    await expect(resolveSessionRoute('worker-2', { orcaRole: 'worker' })).resolves.toBe(
+      '/cc-agent',
+    );
   });
 });

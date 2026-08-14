@@ -29,6 +29,10 @@ export interface MobileLocalAttachmentUploadCandidate {
   kind: MobileLocalAttachmentKind;
   uri: string;
   name: string;
+  /** 发起上传的 composer 作用域(sessionId 等)；仅供宿主隔离迟到异步结果。 */
+  attachmentScopeKey?: string;
+  /** 同一作用域重复进入时也会递增的代际；避免 A → B → A 后接回最早 A 的旧结果。 */
+  attachmentScopeGeneration?: number;
   mimeType?: string;
   /** 原文件字节数,0 = 未知(上传前由 statSize 兜底)。 */
   size: number;
@@ -119,7 +123,7 @@ export interface MobileLocalAttachmentUploadDeps {
     isActive: () => boolean,
   ): void | Promise<void>;
   /** 单个失败(宿主展示错误文案);已被移除 / 丢弃的任务不会回调。localId 语义同 onUploaded。 */
-  onFailed(error: unknown, localId: string): void;
+  onFailed(error: unknown, localId: string, candidate: MobileLocalAttachmentUploadCandidate): void;
 }
 
 export interface MobileLocalAttachmentUploadController {
@@ -357,7 +361,7 @@ export function createMobileLocalAttachmentUploadController(
       if (task.discarded) {
         outcome = 'discarded';
       } else {
-        deps.onFailed(err, task.localId);
+        deps.onFailed(err, task.localId, task.candidate);
         outcome = 'failed';
       }
     } finally {

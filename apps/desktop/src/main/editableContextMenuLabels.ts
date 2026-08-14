@@ -30,6 +30,15 @@ export const EDITABLE_CONTEXT_MENU_LABELS: Record<SupportedLocale, EditableConte
     pasteAsPlainText: '粘贴为纯文本',
     selectAll: '全选',
   },
+  'zh-TW': {
+    undo: '復原',
+    redo: '重做',
+    cut: '剪下',
+    copy: '拷貝',
+    paste: '貼上',
+    pasteAsPlainText: '貼上為純文字',
+    selectAll: '全選',
+  },
   en: {
     undo: 'Undo',
     redo: 'Redo',

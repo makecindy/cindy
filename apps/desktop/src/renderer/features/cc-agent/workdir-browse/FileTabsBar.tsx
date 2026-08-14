@@ -470,7 +470,7 @@ export function FileTabsBar({
                 // select-none —— 配合 handleTabMouseDown 里的 preventDefault,
                 // 确保拖动 tab 时不会顺手选中文件名文本(双保险:CSS 兜住 +
                 // JS 拦截默认行为)。
-                'cursor-pointer text-[12px] transition-colors select-none',
+                'cursor-pointer text-12 transition-colors select-none',
                 isActive
                   ? // active = hover 的底色 + 字重稍重；不加顶部 accent 线
                     'bg-[var(--chat-input-chip-bg)] text-foreground font-medium'
@@ -585,7 +585,7 @@ export function FileTabsBar({
             const hasRight = currentIdx < tabs.length - 1;
             const hasOthers = tabs.length > 1;
             const itemCls =
-              'flex h-7 w-full items-center rounded-md px-2.5 text-left text-[13px] leading-none text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)] focus:bg-[var(--cmd-palette-item-hover)] focus:outline-none disabled:pointer-events-none disabled:opacity-45';
+              'flex h-7 w-full items-center rounded-md px-2.5 text-left text-13 leading-none text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)] focus:bg-[var(--cmd-palette-item-hover)] focus:outline-none disabled:pointer-events-none disabled:opacity-45';
             // 菜单项的 onClick 在 onPointerDown 关闭菜单 之后 触发? 不是 ——
             // 我们在菜单容器上 stopPropagation pointerdown,避免外层 window
             // 监听把菜单收掉;但菜单内的 button 自身 click 仍可正常触发。
@@ -689,7 +689,7 @@ export function FileTabsBar({
                   'bg-[var(--chat-input-chip-bg)] text-foreground font-medium',
                   'border border-[var(--cmd-palette-border)]',
                   'shadow-[var(--shadow-menu)]',
-                  'text-[12px] opacity-90',
+                  'text-12 opacity-90',
                 )}
                 style={{ left: dragGhost.x + 12, top: dragGhost.y + 12 }}
               >

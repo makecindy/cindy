@@ -275,6 +275,15 @@ export class RemoteHost {
   private status: RemoteStatus = 'disconnected';
   private lastError: string | undefined;
   /**
+   * The last error thrown by `resolveAuth` during connect, kept as the full
+   * Error object. Only set on the local-auth-failure path — where the error
+   * carries the synthetic `KEY_FILE_NOT_FOUND_CODE` that `classifyConnectFailure`
+   * relies on. The concurrent-join path (connect() while connecting) rethrows
+   * this so the structured code survives instead of being flattened into a bare
+   * `lastError` string and downgraded to SSH_CONNECT_FAILED.
+   */
+  private lastAuthError: Error | null = null;
+  /**
    * Human-readable label for the credential that succeeded on the most
    * recent successful connect, e.g. "ssh-agent" or "key:id_ed25519".
    * Surfaced to the UI so the user can verify *which* key actually got
@@ -363,6 +372,9 @@ export class RemoteHost {
       // narrowing, so we re-read through `getStatus()`.
       await this.waitForTerminal();
       if (this.getStatus() === 'ready') return;
+      // Prefer the last resolveAuth error so the structured `.code` survives
+      // (classifyConnectFailure needs it); fall back to the string otherwise.
+      if (this.lastAuthError) throw this.lastAuthError;
       throw new Error(this.lastError ?? 'connect failed');
     }
 
@@ -1020,6 +1032,7 @@ export class RemoteHost {
   private async doConnect(): Promise<void> {
     this.setStatus('connecting');
     this.hostKeyError = null;
+    this.lastAuthError = null;
 
     let auth;
     try {
@@ -1027,6 +1040,9 @@ export class RemoteHost {
     } catch (err) {
       const msg = (err as Error).message;
       this.lastError = msg;
+      // Keep the full error so concurrent connect() joiners can rethrow it
+      // with its structured `.code` intact (see lastAuthError + connect()).
+      this.lastAuthError = err instanceof Error ? err : new Error(msg);
       this.setStatus('failed');
       throw err;
     }

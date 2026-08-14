@@ -7,7 +7,7 @@
 import { DEEP_LINK_URL_PREFIX } from '../shared/deepLinkSchemes';
 import { LOGIN_CALLBACK_CHIBI } from './assets/loginCallbackAssets';
 
-export type OAuthResultPageLang = 'zh' | 'en' | 'ja' | 'ko';
+export type OAuthResultPageLang = 'zh' | 'zh-TW' | 'en' | 'ja' | 'ko';
 export type OAuthResultPageVariant = 'success' | 'warning' | 'error';
 export type OAuthResultPageTheme = 'light' | 'dark';
 
@@ -53,17 +53,24 @@ export interface OAuthResultPageInput {
 
 export const OAUTH_RESULT_HTML_LANG: Record<OAuthResultPageLang, string> = {
   zh: 'zh-CN',
+  'zh-TW': 'zh-TW',
   en: 'en',
   ja: 'ja',
   ko: 'ko',
 };
 
-/** Selects the first supported language in browser preference order. Chinese (incl. Hans/Hant/TW/HK/MO) folds to zh(主干 4 语,无繁体 catalog). */
+/** Selects the first supported language in browser preference order. */
 export function pickOAuthResultPageLang(acceptLanguage: string | undefined): OAuthResultPageLang {
   if (typeof acceptLanguage !== 'string' || acceptLanguage.length === 0) return 'en';
   for (const part of acceptLanguage.split(',')) {
     const primary = part.trim().split(';')[0]?.trim().toLowerCase() ?? '';
-    if (primary.startsWith('zh')) return 'zh';
+    if (primary.startsWith('zh')) {
+      if (primary.includes('hans')) return 'zh';
+      if (primary.includes('hant') || /(?:-|^)(?:tw|hk|mo)(?:-|$)/.test(primary)) {
+        return 'zh-TW';
+      }
+      return 'zh';
+    }
     if (primary.startsWith('ja')) return 'ja';
     if (primary.startsWith('ko')) return 'ko';
     if (primary.startsWith('en')) return 'en';
@@ -73,10 +80,16 @@ export function pickOAuthResultPageLang(acceptLanguage: string | undefined): OAu
 
 function returnLabel(lang: OAuthResultPageLang, brandName: string): string {
   switch (lang) {
-    case 'zh': return `返回 ${brandName}`;
-    case 'en': return `Return to ${brandName}`;
-    case 'ja': return `${brandName} に戻る`;
-    case 'ko': return `${brandName}(으)로 돌아가기`;
+    case 'zh':
+      return `返回 ${brandName}`;
+    case 'zh-TW':
+      return `返回 ${brandName}`;
+    case 'en':
+      return `Return to ${brandName}`;
+    case 'ja':
+      return `${brandName} に戻る`;
+    case 'ko':
+      return `${brandName}(으)로 돌아가기`;
   }
 }
 
@@ -116,6 +129,15 @@ export function getProviderOAuthResultCopy(
         missingCodeBody: `没有收到 ${providerName} 的授权码，请返回 ${brandName} 重试。`,
         invalidStateBody: `授权校验失败，请返回 ${brandName} 重新发起连接。`,
         exchangeFailedBody: `连接 ${providerName} 时发生错误，请返回 ${brandName} 重试。`,
+      };
+    case 'zh-TW':
+      return {
+        successTitle: '授權成功',
+        successBody: `${providerName} 已連線至 ${brandName}。你可以返回應用程式繼續。`,
+        errorTitle: '授權未完成',
+        missingCodeBody: `沒有收到 ${providerName} 的授權碼，請返回 ${brandName} 重試。`,
+        invalidStateBody: `授權驗證失敗，請返回 ${brandName} 重新發起連線。`,
+        exchangeFailedBody: `連線 ${providerName} 時發生錯誤，請返回 ${brandName} 重試。`,
       };
     case 'ja':
       return {
@@ -175,6 +197,16 @@ const GHOST_OAUTH_PAGE_STRINGS: Record<OAuthResultPageLang, GhostOAuthResultCopy
       internal: '回调处理异常，请回到 {brand} 重试。',
     },
   },
+  'zh-TW': {
+    successTitle: '授權成功',
+    successBody: '你可以關閉此頁面，返回 {brand} 繼續。',
+    errorTitle: '授權失敗',
+    errors: {
+      'provider-error': '授權伺服器傳回錯誤：{detail}',
+      'invalid-callback': '回呼參數不完整或驗證失敗，請返回 {brand} 重試。',
+      internal: '處理回呼時發生錯誤，請返回 {brand} 重試。',
+    },
+  },
   en: {
     successTitle: 'Authorization successful',
     successBody: 'You can close this page and return to {brand}.',
@@ -223,7 +255,7 @@ interface OAuthNeutralResultCopy {
 
 /**
  * 回调「中性/需要继续操作」态文案(demo CALLBACK.neutral verbatim 源,PR0b-callback
- * 4 语一次补齐;中文全并进 zh,无繁体 catalog)。
+ * 所有支持语言一次补齐)。
  * 当前生产端暂无中性态调用方(见 callback-pages-classification.md),preview 的
  * warning 页与未来的 Ghost 安装/Slack hook 等「需回 app 继续」场景共用此表。
  */
@@ -236,6 +268,11 @@ export function getOAuthNeutralResultCopy(
       return {
         title: '需要继续操作',
         body: `请返回 ${brandName}，完成当前工作区的安装后继续。`,
+      };
+    case 'zh-TW':
+      return {
+        title: '需要繼續操作',
+        body: `請返回 ${brandName}，完成目前工作區的安裝後繼續。`,
       };
     case 'ja':
       return {

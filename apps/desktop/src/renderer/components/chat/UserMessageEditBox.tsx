@@ -320,7 +320,7 @@ export function UserMessageEditBox({
       />
       <div className="mt-2 flex items-center justify-end gap-2">
         {rollbackFileCount !== null && rollbackFileCount > 0 && (
-          <span className="min-w-0 flex-1 truncate text-left text-[11px] text-[var(--text-tertiary)]">
+          <span className="min-w-0 flex-1 truncate text-left text-11 text-[var(--text-tertiary)]">
             {t('chat.userMessage.editRollbackHint', { count: rollbackFileCount })}
           </span>
         )}
@@ -329,7 +329,7 @@ export function UserMessageEditBox({
           onClick={onCancel}
           disabled={submitting}
           className={cn(
-            'h-7 shrink-0 rounded-full px-3 text-[12px] font-medium',
+            'h-7 shrink-0 rounded-full px-3 text-12 font-medium',
             'border border-[var(--msg-user-border)] bg-transparent',
             'text-[var(--text-secondary)]',
             'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
@@ -344,7 +344,7 @@ export function UserMessageEditBox({
           disabled={!canSend}
           className={cn(
             'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-3',
-            'text-[12px] font-medium',
+            'text-12 font-medium',
             'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
             'hover:opacity-90 transition-opacity',
             'disabled:opacity-40 disabled:pointer-events-none',

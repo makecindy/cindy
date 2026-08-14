@@ -812,14 +812,14 @@ export function AgentActionRow({
     // 身份视觉(头像/印记)由结果位的意识卡片头部承担(2026-07-12 Lizi 定案)。
     if (ghostInfo) {
       return (
-        <span className="truncate text-[14px] font-medium text-[var(--msg-tool-card-chevron)]">
+        <span className="truncate text-14 font-medium text-[var(--msg-tool-card-chevron)]">
           「{ghostInfo.name}」· {ghostInfo.tool}
         </span>
       );
     }
     if (fileChangeCountText) {
       return (
-        <span className="min-w-0 truncate text-[14px] font-medium text-[var(--msg-tool-card-chevron)]">
+        <span className="min-w-0 truncate text-14 font-medium text-[var(--msg-tool-card-chevron)]">
           {fileChangeCountText}
         </span>
       );
@@ -836,7 +836,7 @@ export function AgentActionRow({
             'bg-[var(--chat-input-chip-bg)]',
             'border-[var(--chat-input-chip-border)]',
             'text-[var(--chat-input-chip-text)]',
-            'font-mono text-[13px] leading-[18px] whitespace-nowrap',
+            'font-mono text-13 leading-[1.385] whitespace-nowrap',
             'cursor-pointer transition-colors',
             'group-hover:bg-[var(--cmd-palette-item-hover)]',
             'min-w-0 max-w-full',
@@ -849,7 +849,7 @@ export function AgentActionRow({
     }
     return (
       <span
-        className="text-[14px] font-medium text-[var(--msg-tool-card-chevron)] truncate min-w-0 cursor-pointer"
+        className="text-14 font-medium text-[var(--msg-tool-card-chevron)] truncate min-w-0 cursor-pointer"
         title={displayParam.fullTitle}
       >
         {displayParam.text}
@@ -920,14 +920,14 @@ export function AgentActionRow({
           )}
         </span>
         {!hideVerb && (
-          <span className="text-[14px] text-[var(--msg-tool-card-chevron)] shrink-0">
+          <span className="text-14 text-[var(--msg-tool-card-chevron)] shrink-0">
             {rowVerbLabel}
           </span>
         )}
         {displayCell}
         <span className="flex-1" />
         {stats && (
-          <span className="font-mono text-[13px] font-medium shrink-0 flex gap-1">
+          <span className="font-mono text-13 font-medium shrink-0 flex gap-1">
             <span className="text-[var(--diff-add-fg)]">+{stats.add}</span>
             <span className="text-[var(--diff-del-fg)]">-{stats.del}</span>
           </span>
@@ -953,7 +953,7 @@ export function AgentActionRow({
         <div
           data-agent-action-raw-command="true"
           title={rawCommand}
-          className="min-w-0 truncate px-2 pb-[3px] pl-[30px] font-mono text-[12px] leading-[18px] text-[var(--msg-tool-card-chevron)]"
+          className="min-w-0 truncate px-2 pb-[3px] pl-[30px] font-mono text-12 leading-[1.5] text-[var(--msg-tool-card-chevron)]"
         >
           {rawCommand}
         </div>

@@ -238,6 +238,7 @@ export interface OrcaWorkerDiagnosticOutput extends OrcaWorkerDiagnosticStatus {
 export interface OrcaMcpSessionCtx {
   agentKind: ControlWorkerAgent;
   workingDir: string;
+  getSessionContext?: () => import('../types.js').LiziMcpSessionContext | undefined;
   sessionId?: string;
   /** start_team / end_team 读 vendorOptions.orcaRole 决定是否允许调用
    *  (worker session 不能再开 team)。 */

@@ -6,6 +6,7 @@ import {
   coerceLayout,
   countPanelKind,
   createDefaultLayout,
+  createDefaultLayoutPreservingGhostPanels,
   findPaneById,
   findSplitChildByPanelKind,
   insertRootSplitPane,
@@ -46,6 +47,47 @@ describe('createDefaultLayout', () => {
     expect(layout.sidebar.edge).toBe('left');
     const kinds = walkPanes(layout).map((p) => p.panelKind);
     expect(kinds).toEqual(['session-list', 'chat-main', 'right-tabs']);
+  });
+});
+
+describe('createDefaultLayoutPreservingGhostPanels', () => {
+  it('恢复内置默认排列时保留意识面板槽位、相对顺序与最小宽度', () => {
+    const first = insertRootSplitPane(
+      createDefaultLayout(),
+      { id: 'custom-a', panelKind: 'ghost:alpha', minWidth: 280 },
+      { index: 0, fraction: 0.25 },
+    );
+    const second = insertRootSplitPane(
+      first.layout,
+      { id: 'custom-b', panelKind: 'ghost:beta' },
+      { index: 1, fraction: 0.15 },
+    );
+    expect(first.applied).toBe(true);
+    expect(second.applied).toBe(true);
+
+    const restored = createDefaultLayoutPreservingGhostPanels(second.layout);
+    const children = (restored.content as SplitNode).children;
+    expect(children.map((child) => child.node.type === 'pane' && child.node.panelKind)).toEqual([
+      'ghost:alpha',
+      'ghost:beta',
+      'chat-main',
+      'right-tabs',
+    ]);
+    expect(children[0].node).toMatchObject({
+      id: 'ghost-alpha',
+      panelKind: 'ghost:alpha',
+      minWidth: 280,
+    });
+    expect(children[2].fraction).toBeCloseTo(children[3].fraction);
+    expect(children.reduce((sum, child) => sum + child.fraction, 0)).toBeCloseTo(1);
+    expect(validateLayout(restored)).toEqual({ ok: true });
+    expect((second.layout.content as SplitNode).children[0].node).toMatchObject({ id: 'custom-a' });
+  });
+
+  it('没有意识面板时严格返回内置默认布局', () => {
+    const current = createDefaultLayout();
+    (current.content as SplitNode).children.reverse();
+    expect(createDefaultLayoutPreservingGhostPanels(current)).toEqual(createDefaultLayout());
   });
 });
 

@@ -1,6 +1,9 @@
 import { createCindyProxyMediaService } from '../cindy-proxy-media/service.js';
 import type { CindyProxyMediaService } from '../cindy-proxy-media/types.js';
-import { createSeedanceProvider } from '../cindy-proxy-media/video/providers/seedance.js';
+import {
+  createSeedance25Provider,
+  createSeedanceProvider,
+} from '../cindy-proxy-media/video/providers/seedance.js';
 import { createHappyhorseProvider } from '../cindy-proxy-media/video/providers/happyhorse.js';
 import { resolveSafe as resolveXdtImage } from '../imageCacheStore.js';
 import {
@@ -58,6 +61,14 @@ export function getCindyProxyMediaService(): CindyProxyMediaService {
     // 只有用户显式点名才切。
     const videoProviders = [
       createSeedanceProvider({
+        baseUrl: getGatewayBaseUrl(),
+        getApiKey: readApiKey,
+        logger: log,
+      }),
+      // Seedance 2.5 是独立 provider(值域与 2.0 差太远,capabilities 是
+      // per-provider 的,详见 seedance.ts 文件头)。同样是 opt-in:排在
+      // seedance-fast 之后,不抢出厂默认。
+      createSeedance25Provider({
         baseUrl: getGatewayBaseUrl(),
         getApiKey: readApiKey,
         logger: log,

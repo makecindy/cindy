@@ -13,18 +13,25 @@ import { describe, expect, it } from 'vitest';
 
 import {
   GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE,
+  GHOST_VIDEO_RATIOS,
   GHOST_VIDEO_REF_MODES,
 } from '../../../../shared/ghost.js';
 import { GATEWAY_VIDEO_MODELS } from '../../types.js';
 import { VideoProviderRegistry } from '../registry.js';
-import { createSeedanceProvider } from '../providers/seedance.js';
+import {
+  createSeedance25Provider,
+  createSeedanceProvider,
+} from '../providers/seedance.js';
 import { createHappyhorseProvider } from '../providers/happyhorse.js';
 
 function buildRealRegistry(): VideoProviderRegistry {
-  // 与 desktop art.ts 同一装配顺序(seedance 先注册,seedance-fast 是全局默认)。
+  // 与 desktop mcp-integrations/cindyProxyMedia.ts 同一装配顺序(seedance 先注册,
+  // seedance-fast 是全局默认)。这份 fixture 必须跟着真实装配走 —— 它就是本文件
+  // 那几条同源守卫的被测对象。
   const registry = new VideoProviderRegistry();
   const stub = { baseUrl: 'https://example.invalid', getApiKey: () => null };
   registry.register(createSeedanceProvider(stub));
+  registry.register(createSeedance25Provider(stub));
   registry.register(createHappyhorseProvider(stub));
   return registry;
 }
@@ -87,6 +94,42 @@ describe('参考图张数上界 ↔ provider capabilities 同源', () => {
     const union = registry.collectUnionParams().maxImagesUpperBoundByRefMode;
     for (const mode of Object.keys(union)) {
       expect(known.has(mode), `provider 声明了协议层没有的 refMode '${mode}'`).toBe(true);
+    }
+  });
+});
+
+/**
+ * 同源守卫之三:`supportedRatios` 与协议层 `GHOST_VIDEO_RATIOS`(同 refMode 那条
+ * 一样的双源困境:`shared/` 不能依赖 `main/`)。
+ *
+ * **公布了但传不进来的值,等于没有。** cindySlot 校验 ratio 分两层:先用协议层
+ * 的闭集 GHOST_VIDEO_RATIOS 粗筛,再按型号拿 capabilities.supportedRatios 细筛。
+ * 粗筛在前,所以 provider 往 supportedRatios 里塞一个协议层没有的值时,插件按
+ * capabilities 显式提交只会撞上"未知视频画幅"——而那句话术报的还是协议层那几档,
+ * 根本不提该型号多出来的那个值。上游支持不等于这里能列(2.5 的 `adaptive` 与
+ * `21:9` 都属此类:前者只当 defaults.ratio,后者干脆不接)。
+ *
+ * **`defaults.ratio` 刻意不受这条约束**:它不是"可显式提交的值",而是"调用方
+ * 省略时用什么"的载体,走的是 run.ts 的回落分支(assertParamSupported 遇
+ * undefined 直接 return,压根不校验 defaults)。2.5 正是靠这个区分让
+ * "省略 ratio = 上游自适应"畅通,同时不公布一个假承诺。
+ */
+describe('画幅值域 ↔ 协议层枚举同源', () => {
+  it('每个 alias 报出的画幅都在协议层枚举内(公布了插件也传不进来)', () => {
+    const registry = buildRealRegistry();
+    const known = new Set<string>(GHOST_VIDEO_RATIOS);
+    // 按 alias 遍历而不是按 provider:这正是插件的视角 —— cindySlot 拿到型号名后
+    // 经 getGhostVideoCapabilities 解析出的就是该 alias 背后 provider 的 caps。
+    for (const { alias } of registry.collectAllAliases()) {
+      const caps = registry.resolveByAlias(alias).provider.capabilities;
+      for (const ratio of caps.supportedRatios) {
+        expect(
+          known.has(ratio),
+          `型号 '${alias}' 公布了协议层没有的画幅 '${ratio}':插件按 capabilities ` +
+            `显式提交会被 cindySlot 粗筛拒掉,而话术报的还是协议层那几档。` +
+            `只想当默认值就放 defaults.ratio,别放 supportedRatios。`,
+        ).toBe(true);
+      }
     }
   });
 });

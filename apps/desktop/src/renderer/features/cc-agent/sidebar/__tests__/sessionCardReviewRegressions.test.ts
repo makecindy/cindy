@@ -7,23 +7,43 @@ const sidebarDir = resolve(__dirname, '..');
 const sessionCardSource = readFileSync(resolve(sidebarDir, 'SessionCard.tsx'), 'utf8');
 const sessionEntryListSource = readFileSync(resolve(sidebarDir, 'SessionEntryList.tsx'), 'utf8');
 const sessionItemSource = readFileSync(resolve(sidebarDir, 'SessionItem.tsx'), 'utf8');
-const sessionRenameInputSource = readFileSync(resolve(sidebarDir, '..', 'SessionRenameInput.tsx'), 'utf8');
+const sessionRenameInputSource = readFileSync(
+  resolve(sidebarDir, '..', 'SessionRenameInput.tsx'),
+  'utf8',
+);
 const sessionStatusIconSource = readFileSync(resolve(sidebarDir, 'SessionStatusIcon.tsx'), 'utf8');
-const automationGroupSource = readFileSync(resolve(sidebarDir, 'AutomationSessionGroupItem.tsx'), 'utf8');
-const automationTimerIconSource = readFileSync(resolve(sidebarDir, 'AutomationTimerIcon.tsx'), 'utf8');
-const scheduleBindingBadgeSource = readFileSync(resolve(sidebarDir, 'ScheduleBindingBadge.tsx'), 'utf8');
-const globalsSource = readFileSync(resolve(__dirname, '..', '..', '..', '..', 'styles', 'globals.css'), 'utf8');
+const automationGroupSource = readFileSync(
+  resolve(sidebarDir, 'AutomationSessionGroupItem.tsx'),
+  'utf8',
+);
+const automationTimerIconSource = readFileSync(
+  resolve(sidebarDir, 'AutomationTimerIcon.tsx'),
+  'utf8',
+);
+const scheduleBindingBadgeSource = readFileSync(
+  resolve(sidebarDir, 'ScheduleBindingBadge.tsx'),
+  'utf8',
+);
+const globalsSource = readFileSync(
+  resolve(__dirname, '..', '..', '..', '..', 'styles', 'globals.css'),
+  'utf8',
+);
 
 describe('SessionCard review regressions', () => {
   it('only draws the list top divider on the first overall entry', () => {
-    expect(sessionEntryListSource).toContain('isFirst={index === 0}');
+    // 顶线只认「本列表的整体首行」,不因中间夹了非 session 条目就重画。
+    // 2026-08-12 起额外受 showFirstDivider 约束:混排主列表把每条散排对话各渲染成
+    // 一个单条列表,若都补顶线会与上一行的底线叠成两根横线,那条路径传 false。
+    expect(sessionEntryListSource).toContain('isFirst={showFirstDivider && index === 0}');
     expect(sessionEntryListSource).not.toContain(
       "isFirst={index === 0 || entries[index - 1]?.kind !== 'session'}",
     );
   });
 
   it('keeps awaiting text in list mode previews', () => {
-    expect(sessionCardSource).toContain('const listPreview = awaitingText ?? runningDetail ?? summaryPreview');
+    expect(sessionCardSource).toContain(
+      'const listPreview = awaitingText ?? runningDetail ?? summaryPreview',
+    );
     expect(sessionCardSource).toContain('{listPreview}');
   });
 
@@ -36,7 +56,7 @@ describe('SessionCard review regressions', () => {
   it('plays overflowing sidebar titles only while hovered', () => {
     expect(sessionItemSource).toContain('function SidebarTitleMarquee');
     expect(sessionItemSource).toContain("container.dataset.titleOverflowing = 'true'");
-    expect(sessionItemSource).toContain("delete container.dataset.titleOverflowing");
+    expect(sessionItemSource).toContain('delete container.dataset.titleOverflowing');
     expect(globalsSource).toContain('@keyframes sidebar-title-marquee');
     expect(globalsSource).toContain(
       "sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track",
@@ -69,7 +89,9 @@ describe('SessionCard review regressions', () => {
   });
 
   it('observes layout changes only while the title is hovered', () => {
-    expect(sessionItemSource).toContain('const resizeObserverRef = useRef<ResizeObserver | null>(null);');
+    expect(sessionItemSource).toContain(
+      'const resizeObserverRef = useRef<ResizeObserver | null>(null);',
+    );
     expect(sessionItemSource).toContain("typeof ResizeObserver === 'undefined'");
     expect(sessionItemSource).toContain('observer.observe(container);');
     expect(sessionItemSource).toContain('observer.observe(track);');
@@ -105,8 +127,12 @@ describe('SessionCard review regressions', () => {
   });
 
   it('keeps one Timer glyph for scheduled and automation sessions', () => {
-    expect(sessionCardSource).toContain('const showScheduleBindingBadge = boundSchedules.length > 0');
-    expect(sessionCardSource).toContain('const showAutomationTimer = !showScheduleBindingBadge && isAutomationGenerated');
+    expect(sessionCardSource).toContain(
+      'const showScheduleBindingBadge = boundSchedules.length > 0',
+    );
+    expect(sessionCardSource).toContain(
+      'const showAutomationTimer = !showScheduleBindingBadge && isAutomationGenerated',
+    );
     // schedule 绑定与普通自动化都复用 AutomationTimerIcon;绑定态优先承载更多状态。
     expect(sessionCardSource).toMatch(
       /const renderAutomationMeta = \(iconSize: number\) =>[\s\S]*?showScheduleBindingBadge \? \([\s\S]*?<ScheduleBindingBadge[\s\S]*?schedules=\{boundSchedules\}[\s\S]*?size=\{iconSize\}[\s\S]*?activeForeground=\{isActive\}[\s\S]*?\) : showAutomationTimer \? \([\s\S]*?<AutomationTimerIcon size=\{iconSize\}/,
@@ -121,11 +147,12 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).not.toContain('session-card-progress');
   });
 
-  it('keeps card time anchored to the bottom meta row instead of the overlay layout', () => {
-    // 时间固定在底部 meta 行右端(ml-auto),不再依赖 overlay/block 双态测量。
+  it('keeps card info anchored to the bottom meta row instead of the overlay layout', () => {
+    // 时间/信息槽固定在底部 meta 行右端(ml-auto),不再依赖 overlay/block 双态测量。
+    // C 期起时间渲染并入 SessionInfoMeta(任务信息复选),锚点与让位语义不变。
     expect(sessionCardSource).not.toContain('cardTimeLayout');
-    expect(sessionCardSource).toContain('{cardTimeText}');
-    expect(sessionCardSource).toContain('ml-auto shrink-0'); // E1D 侧栏层级:time 色 conditional via cn,ml-auto shrink-0 保留
+    expect(sessionCardSource).toContain('pieces={cardInfoPieces}');
+    expect(sessionCardSource).toContain('ml-auto shrink-0'); // E1D 侧栏层级:info 槽 ml-auto shrink-0 保留
   });
 
   it('keeps archive confirmation pills clear of time and ordinal overlays', () => {
@@ -138,20 +165,33 @@ describe('SessionCard review regressions', () => {
   });
 
   it('keeps running card previews stable instead of streaming compact activity text', () => {
-    expect(sessionCardSource).toContain('const listPreview = awaitingText ?? runningDetail ?? summaryPreview');
+    expect(sessionCardSource).toContain(
+      'const listPreview = awaitingText ?? runningDetail ?? summaryPreview',
+    );
     expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? summaryPreview');
-    expect(sessionCardSource).not.toContain('const cardPreview = awaitingText ?? runningDetail ?? summaryPreview');
+    expect(sessionCardSource).not.toContain(
+      'const cardPreview = awaitingText ?? runningDetail ?? summaryPreview',
+    );
   });
 
   it('lets single-line card content keep its natural compact height', () => {
     expect(sessionCardSource).toContain("'rounded-xl bg-[var(--surface-elevated)] border'");
-    expect(sessionCardSource).not.toContain("'h-full rounded-xl bg-[var(--surface-elevated)] border'");
+    expect(sessionCardSource).not.toContain(
+      "'h-full rounded-xl bg-[var(--surface-elevated)] border'",
+    );
   });
 
   it('E1D 任务C: SessionCard active 反白链完整且运行态不降级文字颜色', () => {
     const re = /isActive \? 'text-sidebar-item-active-foreground'/g;
     const count = (sessionCardSource.match(re) || []).length;
-    expect(count, 'isActive conditional active-foreground ≥7(title×2+time+RemoteProjectIcon×4)').toBeGreaterThanOrEqual(7);
+    // C 期起两个时间槽的 isActive 分支并入 SessionInfoMeta(经 isActive prop 传递,
+    // 组件内应用 active-foreground),SessionCard 本体剩 title×2 + RemoteProjectIcon 等。
+    expect(
+      count,
+      'isActive conditional active-foreground ≥5(title×2+RemoteProjectIcon 等;时间槽已并入 SessionInfoMeta)',
+    ).toBeGreaterThanOrEqual(5);
+    // 信息槽的反白链由 SessionInfoMeta 承担:isActive 必须透传。
+    expect(sessionCardSource).toMatch(/<SessionInfoMeta[\s\S]{0,200}isActive=\{isActive\}/);
 
     // Running is already expressed by the status indicator, so its text keeps
     // the same semantic colors as other non-active tasks.
@@ -183,20 +223,18 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).toContain(
       'const hasAutomationMeta = boundSchedules.length > 0 || isAutomationGenerated;',
     );
-    expect(sessionItemSource).toContain(
-      "!isEditing && hasAutomationMeta ? 'gap-1.5' : 'gap-2.5'",
-    );
+    expect(sessionItemSource).toContain("!isEditing && hasAutomationMeta ? 'gap-1.5' : 'gap-2.5'");
     expect(automationGroupSource).toContain(
       'className="flex min-w-0 items-center gap-1.5 text-left disabled:cursor-default"',
     );
-    expect(automationGroupSource).toContain(
-      'className="flex min-w-0 items-center gap-1.5"',
-    );
+    expect(automationGroupSource).toContain('className="flex min-w-0 items-center gap-1.5"');
   });
 
   it('keeps active sidebar rename controls inside the active foreground color system', () => {
     expect(sessionItemSource).toContain('activeForeground={isActive}');
-    expect((sessionCardSource.match(/activeForeground=\{isActive\}/g) || []).length).toBeGreaterThanOrEqual(2);
+    expect(
+      (sessionCardSource.match(/activeForeground=\{isActive\}/g) || []).length,
+    ).toBeGreaterThanOrEqual(2);
     expect(sessionRenameInputSource).toContain(
       "activeForeground && 'text-sidebar-item-active-foreground'",
     );
@@ -228,6 +266,37 @@ describe('SessionCard review regressions', () => {
     );
   });
 
+  it('aligns the session row cursor with the actual split drag source state', () => {
+    expect(sessionItemSource).toContain("!isEditing && 'cursor-pointer'");
+    expect(sessionItemSource).toContain(
+      'draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}',
+    );
+    expect(sessionItemSource).toContain('inSortableContainer: true');
+    expect(sessionItemSource).toContain('nativeSortable: false');
+    expect(sessionItemSource).toContain(
+      "sortableDragBlocked: Boolean(row?.closest('[data-no-drag]'))",
+    );
+    expect(sessionItemSource).toContain(
+      "nativeSortable: Boolean(row?.closest('[data-sortable-native-dnd]'))",
+    );
+    expect(sessionItemSource).toContain('data-split-group-drag-handle');
+    expect(sessionItemSource).toContain('data-no-drag={splitDragHandleActive');
+  });
+
+  it('wires pinned card and list titles into split drag without disabling item sorting', () => {
+    expect(sessionCardSource).toContain('data-split-group-drag-source');
+    expect(sessionCardSource).toContain(
+      'draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}',
+    );
+    expect(sessionCardSource).toContain('nativeSortable: false');
+    expect(sessionCardSource).toContain(
+      "nativeSortable: Boolean(card?.closest('[data-sortable-native-dnd]'))",
+    );
+    expect(sessionCardSource).toContain('data-split-group-drag-handle');
+    expect(sessionCardSource).toContain('data-no-drag={splitDragHandleActive');
+    expect(sessionCardSource).toContain('startSessionDrag');
+  });
+
   it('PR-123 greptile: card 路径的绑定徽章与 Timer 进反白体系', () => {
     // P1:renderAutomationMeta 卡片/列表两路都要把选中态透传给 ScheduleBindingBadge,
     // 否则红胶囊上 Timer 仍是 meta 灰;普通自动化分支也必须透传 activeForeground。
@@ -247,38 +316,32 @@ describe('SessionCard review regressions', () => {
   });
 
   it('keeps selected automation group icons, spinner, and actions in the active color system', () => {
-    expect(automationGroupSource).toContain(
-      "colorClassName={hasActiveHidden ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}",
+    // 用正则容忍 prettier 折行(三元在一行还是拆成多行都算通过)。
+    expect(automationGroupSource).toMatch(
+      /colorClassName=\{\s*hasActiveHidden \? 'text-\[var\(--sidebar-item-active-foreground\)\]' : undefined\s*\}/,
     );
     // running 语义下沉到统一 Timer；组头必须透传，图标组件保持橙色优先级。
     expect(automationGroupSource).toContain('running={isRunning}');
     expect(automationTimerIconSource).toMatch(
       /isActivelyRunning[\s\S]*?\? 'text-\[var\(--status-bar-accent\)\]'/,
     );
-    expect(automationGroupSource).toContain(
-      "hasActiveHidden ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon'",
+    // 用正则容忍 prettier 折行(三元在一行还是拆成多行都算通过)。
+    expect(automationGroupSource).toMatch(
+      /hasActiveHidden\s*\?\s*'text-sidebar-item-active-foreground'\s*:\s*'text-sidebar-action-icon'/,
     );
     expect(automationGroupSource).toContain('actionButtonToneClassName');
     expect(automationGroupSource).toContain(
       "? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'",
     );
-    expect(automationGroupSource).toContain(
-      ": 'text-foreground hover:bg-sidebar-item-hover'",
-    );
+    expect(automationGroupSource).toContain(": 'text-foreground hover:bg-sidebar-item-hover'");
   });
 
   it('aligns list automation headers with regular tasks and indents only expanded children', () => {
     expect(automationGroupSource).toMatch(
       /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: indented\s*\? 'pl-\[22px\] pr-2'\s*: 'pl-3 pr-2'/,
     );
-    expect(automationGroupSource).toContain(
-      '<div className="flex flex-col gap-0.5 pl-3">',
-    );
-    expect(automationGroupSource).toContain(
-      "sessionVariant === 'list' ? 'w-3' : 'w-[15px]'",
-    );
-    expect(automationGroupSource).toContain(
-      "sessionVariant === 'list' && 'order-2'",
-    );
+    expect(automationGroupSource).toContain('<div className="flex flex-col gap-0.5 pl-3">');
+    expect(automationGroupSource).toContain("sessionVariant === 'list' ? 'w-3' : 'w-[15px]'");
+    expect(automationGroupSource).toContain("sessionVariant === 'list' && 'order-2'");
   });
 });

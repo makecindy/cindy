@@ -28,6 +28,22 @@ export function defaultSshConfigPath(): string {
   return path.join(os.homedir(), '.ssh', 'config');
 }
 
+/**
+ * Expand a leading `~` (or `~/`, `~\`) to the user's home directory.
+ *
+ * Exported so the ADD/UPDATE IPC boundary can normalize `identityFile` the
+ * same way the config-read path does — Node never expands `~`, so a literal
+ * `~/.ssh/...` stored in the pool host config would fail `fs.readFile` /
+ * ssh-add. The `~\` prefix normalizes backslashes to `/` (a no-op on Windows,
+ * but required on POSIX where backslash is a filename character).
+ */
+export function expandHome(p: string): string {
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
+  if (p.startsWith('~\\')) return path.join(os.homedir(), p.slice(2).replace(/\\/g, '/'));
+  return p;
+}
+
 interface SshConfigSection {
   type?: number;
   before?: string;
@@ -397,10 +413,4 @@ function parseIntSafe(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const n = parseInt(value, 10);
   return Number.isFinite(n) ? n : fallback;
-}
-
-function expandHome(p: string): string {
-  if (p === '~') return os.homedir();
-  if (p.startsWith('~/') || p.startsWith('~\\')) return path.join(os.homedir(), p.slice(2));
-  return p;
 }

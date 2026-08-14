@@ -35,6 +35,10 @@ const GHOST_THEME_TOKENS = [
   // 滚动条(globals.css 统一规范同源色):意识面板照主机同款画 thumb。
   '--msg-scrollbar',
   '--msg-scrollbar-hover',
+  // 功能性交互与 loading 动画只消费主机设计系统的 motion token；插件面板
+  // 不得自行硬编码时长。这里只下发当前面板契约实际需要的两档。
+  '--motion-fast',
+  '--motion-spinner-cycle',
   // 工具卡四件套(data-ghost-audio 卡内播放器 1:1 对标基座 ChatAudioCard 的
   // 配色来源;注册值是 var(--surface-elevated) 这类别名引用,目标 token 也在
   // 本白名单 → iframe 内 var 链完整解析)。--text-secondary-mid 是

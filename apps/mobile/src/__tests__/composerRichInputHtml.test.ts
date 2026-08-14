@@ -55,6 +55,28 @@ describe('mobile composer rich input HTML', () => {
     expect(html).not.toContain('border-radius: 4px');
   });
 
+  it('does not apply the iOS optical offset to Android rich input', () => {
+    const androidHtml = buildComposerRichInputHtml({
+      accessibilityLabel: '输入消息',
+      document: { version: 1, nodes: [] },
+      editable: true,
+      maxHeight: 264,
+      platform: 'android',
+      placeholder: '发送消息',
+      theme: {
+        background: '#eee',
+        border: '#aaa',
+        chip: '#ddd',
+        focus: '#555',
+        placeholder: '#777',
+        text: '#111',
+        textSecondary: '#333',
+      },
+    });
+    expect(androidHtml).toContain('padding: 3px 4px 3px;');
+    expect(androidHtml).not.toContain('padding: 6px 4px 0px;');
+  });
+
   it('keeps the WebKit caret in an editable text anchor after every atom', () => {
     expect(html).toContain("const CARET_ANCHOR = '\\u200B'");
     expect(html).toContain('return node.type === \'text\' ? [element] : [element, makeCaretAnchor()]');

@@ -148,13 +148,13 @@ function StatCell({
     <div className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg bg-[var(--surface-chip)] px-3 py-2">
       <span
         className={cn(
-          'truncate text-[14px] font-semibold leading-[20px] tabular-nums',
+          'truncate text-14 font-semibold leading-[1.429] tabular-nums',
           warning ? 'text-[var(--warning-accent)]' : 'text-[var(--text-primary)]',
         )}
       >
         {value}
       </span>
-      <span className="truncate text-[11px] leading-[14px] text-[var(--text-tertiary)]">
+      <span className="truncate text-11 leading-[1.273] text-[var(--text-tertiary)]">
         {label}
       </span>
     </div>
@@ -228,7 +228,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
   const tokenDistributionTip = tokenDistributionRows.length > 0
     ? (
         <div className="min-w-[220px] space-y-1">
-          <div className="text-[12px] font-medium text-[var(--tooltip-text)]">
+          <div className="text-12 font-medium text-[var(--tooltip-text)]">
             {t('usageDashboard.tokenDistributionTitle', {
               total: formatCompactTokens(layoutHistory.totals.last30DaysTokens),
             })}
@@ -236,10 +236,10 @@ export function HomeUsageDashboard(): React.JSX.Element {
           <div className="space-y-0.5">
             {tokenDistributionRows.map((row) => (
               <div key={row.model} className="flex items-center justify-between gap-4">
-                <span className="min-w-0 truncate text-[12px] text-[var(--tooltip-text)]">
+                <span className="min-w-0 truncate text-12 text-[var(--tooltip-text)]">
                   {row.model}
                 </span>
-                <span className="shrink-0 text-[12px] tabular-nums text-[var(--text-tertiary)]">
+                <span className="shrink-0 text-12 tabular-nums text-[var(--text-tertiary)]">
                   {t('usageDashboard.tokenDistributionRow', {
                     tokens: formatCompactTokens(row.tokens),
                     pct: Math.round((row.tokens / layoutHistory.totals.last30DaysTokens) * 100),
@@ -270,7 +270,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
 
   // 折叠态的一行摘要: 今日 $ (异常标橙) · Token · 连续天数 · 近 30 天 $
   const collapsedSummary = (
-    <span className="min-w-0 flex-1 truncate text-right text-[11px] leading-[18px] tabular-nums text-[var(--text-tertiary)]">
+    <span className="min-w-0 flex-1 truncate text-right text-11 leading-[1.636] tabular-nums text-[var(--text-tertiary)]">
       <span className={cn(showLocalSpendAnomaly && 'font-medium text-[var(--warning-accent)]')}>
         {t('usageDashboard.collapsedToday', {
           v: hasSpendValue ? formatMoney(displayTodaySpend) : UNKNOWN_VALUE,
@@ -303,10 +303,10 @@ export function HomeUsageDashboard(): React.JSX.Element {
     >
       {/* 头部: 标题 + (折叠态) 一行摘要 + 折叠 chevron */}
       <div className={cn('flex items-center justify-between gap-3', !collapsed && 'mb-2.5')}>
-        <span className="flex shrink-0 items-center gap-2 text-[12px] font-medium text-[var(--text-secondary)]">
+        <span className="flex shrink-0 items-center gap-2 text-12 font-medium text-[var(--text-secondary)]">
           <span>{t('usageDashboard.title')}</span>
           {usageRefreshing && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-normal leading-none text-[var(--text-tertiary)]">
+            <span className="inline-flex items-center gap-1 text-10 font-normal leading-none text-[var(--text-tertiary)]">
               <Spinner icon={RefreshCw} size={10} className="opacity-70" />
               {t('usageDashboard.updating')}
             </span>
@@ -382,7 +382,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
             {/* 右栏: 每日堆叠柱状图 (高=日总额, 分段=模型构成)。不放图例 — 每日模型
                 明细全在柱子 hover tooltip 里 (省空间, 用户确认的取舍)。
                 拆分数据未积累出来前柱子整根中性色 + 一行积累提示。 */}
-            <div className="mb-1.5 text-[11px] text-[var(--text-tertiary)]">
+            <div className="mb-1.5 text-11 text-[var(--text-tertiary)]">
               {t('usageDashboard.dailyTotalsTitle')}
             </div>
             <UsageDailyBars
@@ -394,7 +394,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
               todayKey={layoutHistory.todayKey}
             />
             {layoutHistory.models.length === 0 && (
-              <div className="mt-1.5 text-[10px] text-[var(--text-tertiary)] opacity-70">
+              <div className="mt-1.5 text-10 text-[var(--text-tertiary)] opacity-70">
                 {t('usageDashboard.emptyModels')}
               </div>
             )}

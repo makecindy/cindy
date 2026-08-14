@@ -163,6 +163,46 @@ export function walkPanes(layout: Layout): PaneNode[] {
   return out;
 }
 
+/**
+ * 恢复内置默认布局，但保留现有意识面板的停靠槽位。
+ *
+ * `layout.reset` 是用户从坏布局逃生的正式入口，不能顺手把已安装或等待重装复活的
+ * `ghost:*` 面板从树里删掉。意识面板统一重新停在聊天区左侧，保留相对顺序和
+ * minWidth；位置、折叠态与宽度则回到一组有界默认值。
+ */
+export function createDefaultLayoutPreservingGhostPanels(current: Layout): Layout {
+  const ghostPanes = walkPanes(current).filter((pane) => pane.panelKind.startsWith('ghost:'));
+  const next = createDefaultLayout();
+  if (ghostPanes.length === 0 || next.content.type !== 'split') return next;
+
+  const root = next.content;
+  const ghostTotalFraction = Math.min(0.6, ghostPanes.length * 0.2);
+  const ghostFraction = ghostTotalFraction / ghostPanes.length;
+  const builtinFraction = (1 - ghostTotalFraction) / root.children.length;
+  for (const child of root.children) child.fraction = builtinFraction;
+
+  const usedIds = new Set<string>(['sessions', root.id, ...root.children.map((c) => c.node.id)]);
+  const ghostChildren = ghostPanes.map((pane, index) => {
+    const baseId = `ghost-${pane.panelKind.slice('ghost:'.length)}`;
+    let id = baseId;
+    let suffix = index + 1;
+    while (usedIds.has(id)) id = `${baseId}-${suffix++}`;
+    usedIds.add(id);
+    return {
+      fraction: ghostFraction,
+      node: {
+        type: 'pane' as const,
+        id,
+        panelKind: pane.panelKind,
+        ...(pane.minWidth !== undefined ? { minWidth: pane.minWidth } : {}),
+      },
+    };
+  });
+  root.children = [...ghostChildren, ...root.children];
+  normalizeSplitFractions(root);
+  return next;
+}
+
 /** 按 id 查找 pane(含 sidebar 与 float)。找不到返回 null。 */
 export function findPaneById(layout: Layout, paneId: string): PaneNode | null {
   return walkPanes(layout).find((p) => p.id === paneId) ?? null;

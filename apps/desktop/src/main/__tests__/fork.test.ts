@@ -313,6 +313,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('codex', {
       sourceSdkSessionId: 'codex-thread-source',
+      model: 'gpt-5.4',
+      providerId: 'xd',
       upToMessageId: undefined,
       tailTurnsToDrop: 2,
       title: '[Fork] Project A',
@@ -404,6 +406,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('codex', {
       sourceSdkSessionId: 'codex-thread-source',
+      model: 'gpt-5.5',
+      providerId: 'xd',
       upToMessageId: undefined,
       title: '[Fork·已剥离] Project A',
       workingDir: '/work',
@@ -748,6 +752,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('codex', {
       sourceSdkSessionId: 'parked-codex-thread',
+      model: 'gpt-5.4',
+      providerId: null,
       upToMessageId: undefined,
       tailTurnsToDrop: 2,
       title: '[Fork] Project A',
@@ -1091,6 +1097,8 @@ describe('forkSessionAtMessage', () => {
 
     expect(forkSdkSessionMock).toHaveBeenCalledWith('codex', {
       sourceSdkSessionId: 'codex-thread-source',
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
       upToMessageId: undefined,
       tailTurnsToDrop: 1,
       title: '[Fork] Project A',

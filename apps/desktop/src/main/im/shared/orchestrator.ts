@@ -66,7 +66,11 @@ export function createImOrchestrator(adapter: ImChannelAdapter): ImOrchestrator 
     );
   }
 
-  const repo = createImSessionRepo(adapter.config, adapter.sessions);
+  const repo = createImSessionRepo(adapter.config, adapter.sessions, {
+    // 归属能否按路径推断, 取决于这个渠道有没有 `/project` —— 唯一真相在 adapter 上,
+    // 不在 sessions 里再抄一份, 免得两处漂移。
+    projectSwitching: adapter.projectSwitching === true,
+  });
   const cards = createCardBuilders(adapter.ui, repo.getDefaultEffortFor);
   const turnRunner = createTurnRunner(adapter, repo, cards, {
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,

@@ -20,6 +20,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  expandHome,
   readSshConfig,
   removeHost,
   updateHostFields,
@@ -96,6 +97,44 @@ describe('readSshConfig', () => {
     ].join('\n'));
     const hosts = await readSshConfig(scratchFile);
     expect(hosts.map(h => h.id)).toEqual(['concrete']);
+  });
+});
+
+// ── expandHome — Windows 路径形态 ─────────────────────────────────────────────
+
+describe('expandHome', () => {
+  const home = os.homedir();
+
+  it('expands a bare tilde', () => {
+    expect(expandHome('~')).toBe(home);
+  });
+
+  it('expands POSIX-style ~/ prefix', () => {
+    expect(expandHome('~/.ssh/id_ed25519')).toBe(path.join(home, '.ssh', 'id_ed25519'));
+  });
+
+  it('expands Windows-style ~\\ prefix', () => {
+    expect(expandHome('~\\.ssh\\id_ed25519')).toBe(path.join(home, '.ssh', 'id_ed25519'));
+  });
+
+  it('leaves an already-absolute Windows drive path untouched (backslashes preserved)', () => {
+    const p = String.raw`C:\Users\foo\.ssh\id_ed25519`;
+    expect(expandHome(p)).toBe(p);
+  });
+
+  it('leaves forward-slash absolute paths untouched', () => {
+    const p = 'C:/Users/foo/.ssh/id_ed25519';
+    expect(expandHome(p)).toBe(p);
+  });
+
+  it('leaves UNC paths untouched', () => {
+    const p = String.raw`\\nas\share\keys\id_ed25519`;
+    expect(expandHome(p)).toBe(p);
+  });
+
+  it('leaves paths with spaces untouched', () => {
+    const p = String.raw`C:\Users\my name\.ssh\id_ed25519`;
+    expect(expandHome(p)).toBe(p);
   });
 });
 

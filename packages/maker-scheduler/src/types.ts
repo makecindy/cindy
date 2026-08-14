@@ -5,6 +5,13 @@ export type ScheduleWorkspaceKind = 'project' | 'dialogue';
 export type ScheduleExecutionMode = 'agent' | 'script';
 export type ScriptCapability = 'jira.read' | 'jira.comment' | 'sessions.dispatch' | 'feishu.read';
 
+/**
+ * Host-owned session context key for the scheduler run currently dispatched
+ * through a session. It is not exposed in the agent prompt; scheduler MCP
+ * tools use it to recover the authoritative run during auto-resume.
+ */
+export const SCHEDULER_RUN_ID_VENDOR_OPTION = '__cindySchedulerRunId';
+
 /** 一次调度执行由自动到点触发，还是由用户显式 runNow 触发。 */
 export type ScheduleFireSource = 'automatic' | 'run-now';
 

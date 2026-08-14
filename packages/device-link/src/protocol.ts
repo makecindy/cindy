@@ -1,7 +1,7 @@
 /**
  * device-link 客户端完整协议(desktop / mobile 共享)。
  *
- * relay 能理解的信封、连接层 payload 与错误码来自 cindy-protocol submodule；
+ * relay 能理解的信封、连接层 payload 与错误码来自本仓 device-link-protocol；
  * 本文件只补充 relay 不解析的端到端隧道 payload、客户端本地错误与 REST 视图。
  */
 import {
@@ -117,6 +117,13 @@ export const CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 = 'provider-logo-kinds
 /** 控制端能区分 set-model 中显式 providerId:null 与 JSON optional 占位。 */
 export const CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1 =
   'set-model-explicit-provider-null-v1';
+
+/**
+ * 控制端能消费 `maker:event:batch` 微批帧(拆包后逐条按原路消费)。
+ * 被控端只对声明了本能力的控制端发批,未声明者照旧逐帧转发——旧控制端
+ * 因此永远收不到该 channel,无需为未知 channel 做任何兼容。
+ */
+export const CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1 = 'maker-event-batch-v1';
 
 export interface LinkAcceptPayload {
   appVersion: string;

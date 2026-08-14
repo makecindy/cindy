@@ -189,4 +189,49 @@ describe.skipIf(!LIVE)('bridge live e2e (chatgpt codex, handler 形态)', () => 
       await harness.close();
     }
   }, 60000);
+
+  /**
+   * 非流式 fallback 的活体验证 —— Claude Code 的 stream watchdog 触发后会以 stream:false
+   * 重试同一轮,并期待一个完整的 Anthropic Message JSON。这里直接构造该请求,不必复现卡顿。
+   *
+   * 它同时验证一个关键假设:**chatgpt.com/backend-api/codex 是否接受 stream:false**。
+   * 若上游拒收(4xx),说明桥不该把 stream 透传给上游,而应恒请求 SSE、只改下游表示。
+   */
+  for (const model of ['chatgpt/gpt-5.5', 'chatgpt/gpt-5.6-sol']) {
+    it(`非流式 fallback:${model} + stream:false → 完整 Anthropic Message JSON`, async () => {
+      const harness = await startHarness(makeCodexHandler());
+      try {
+        const res = await fetch(`${harness.url}/v1/messages`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-claude-code-session-id': 'live-test-nonstream' },
+          body: JSON.stringify({
+            model,
+            system: 'You are terse.',
+            max_tokens: 64,
+            stream: false,
+            messages: [{ role: 'user', content: 'Reply with exactly: nonstream ok' }],
+          }),
+        });
+        const bodyText = await res.text();
+        console.log(`[${model}] 非流式 status:`, res.status, '| content-type:', res.headers.get('content-type'));
+        console.log(`[${model}] 非流式正文:`, bodyText.slice(0, 1200));
+        expect(res.status).toBe(200);
+        // 下游必须是 JSON,不能是 SSE —— 这正是截图里 CLI 判 malformed 的原因。
+        expect(res.headers.get('content-type')).toContain('application/json');
+        const msg = JSON.parse(bodyText) as Record<string, unknown>;
+        expect(msg.type).toBe('message');
+        expect(msg.role).toBe('assistant');
+        expect(msg.model).toBe(model);
+        expect(Array.isArray(msg.content)).toBe(true);
+        const text = (msg.content as Array<Record<string, unknown>>)
+          .filter((b) => b.type === 'text')
+          .map((b) => String(b.text ?? ''))
+          .join('');
+        console.log(`[${model}] 非流式输出文本:`, JSON.stringify(text), '| stop_reason:', msg.stop_reason);
+        expect(text.toLowerCase()).toContain('nonstream');
+      } finally {
+        await harness.close();
+      }
+    }, 60000);
+  }
 });

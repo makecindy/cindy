@@ -18,11 +18,11 @@ const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
 const quotaHoverCardSource = readFileSync(quotaHoverCardPath, 'utf8').replace(/\r\n/g, '\n');
 const preloadSource = readFileSync(preloadPath, 'utf8').replace(/\r\n/g, '\n');
 const rendererTypesSource = readFileSync(rendererTypesPath, 'utf8').replace(/\r\n/g, '\n');
-const localeSources = ['en', 'zh-CN', 'ja', 'ko'].map((locale) =>
-  readFileSync(
-    resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'),
-    'utf8',
-  ).replace(/\r\n/g, '\n'),
+const localeSources = ['en', 'zh-CN', 'zh-TW', 'ja', 'ko'].map((locale) =>
+  readFileSync(resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'), 'utf8').replace(
+    /\r\n/g,
+    '\n',
+  ),
 );
 
 describe('TodaySpendChip dashboard routing', () => {
@@ -33,7 +33,9 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('isUserTurnTotal: Boolean(userTurnMoney || userTurnCostUsd != null)');
     expect(source).toContain("'todaySpend.tooltip.latestUserTurnTitle'");
     expect(source).toContain('aggregateAssistantTurnUsageDetails(messages, message.clientId)');
-    expect(source).toContain('Amount and token/model detail now describe the same visible user turn');
+    expect(source).toContain(
+      'Amount and token/model detail now describe the same visible user turn',
+    );
     expect(source).toContain('money: summary.money');
     expect(source).not.toContain('segmentMoney: message.turnMoney');
     expect(source).not.toContain('segmentCostUsd: message.turnCostUsd');
@@ -53,7 +55,9 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('todaySpend.openXaiUsage');
     expect(source).toContain('todaySpend.openClaudeUsage');
     // 只有实际 Gateway 会话读取 Model Access quota；自定义供应商只保留本会话统计。
-    expect(source).toContain('const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;');
+    expect(source).toContain(
+      'const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;',
+    );
     expect(source).toContain('useClaudeAccountUsage(usesGatewayQuota)');
   });
 
@@ -78,15 +82,16 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('useXaiRateLimit(usesXaiQuotaForm && !isAnyRemoteSession)');
     expect(source).toContain('todaySpend.xai.noQuotaDetail');
     // bridge 形态优先于 Claude 订阅形态(model 前缀决定实际消耗的额度);device-link 远程不读本机订阅余量
-    expect(source).toContain('isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote');
-
+    expect(source).toContain(
+      'isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote',
+    );
   });
 
   it('treats codex/ budget models + explicit XD selection as API usage on an oauth-bearer spawn', () => {
     expect(source).toContain("modelId.startsWith('codex/')");
     expect(source).toContain("codexAuthInjection === 'oauth-bearer'");
     expect(source).toContain("vendorKey === 'codex' && !isCodexXaiProvider");
-    expect(source).toContain("isRemoteCodexSession ||");
+    expect(source).toContain('isRemoteCodexSession ||');
     expect(source).toContain("(providerId == null || providerId === 'openai')");
     expect(source).toContain('modelId.startsWith(XAI_MODEL_PREFIX)');
     expect(source).toContain("providerId === 'xai'");
@@ -105,7 +110,9 @@ describe('TodaySpendChip dashboard routing', () => {
       "vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && providerId == null",
     );
     // 订阅形态分类整体排除 device-link(专属分支接管渲染)
-    expect(source).toContain("|| (vendorKey === 'pi' && !remoteHostId && providerId === 'anthropic')");
+    expect(source).toContain(
+      "|| (vendorKey === 'pi' && !remoteHostId && providerId === 'anthropic')",
+    );
     // 渲染走专属分支:估算价值 / 累计 cost 有哪个显哪个,不显示本机限额窗口
     expect(source).toContain('if (isDeviceLinkRemote) {');
     // 看板链接对 device-link 落 null(额度属于被控端账号,本机浏览器打开的是控制端账号)
@@ -114,10 +121,14 @@ describe('TodaySpendChip dashboard routing', () => {
 
   it('does not classify remote Codex sessions from the local runtime route', () => {
     expect(source).toContain('remoteHostId?: string | null');
-    expect(source).toContain("const isRemoteCodexSession = vendorKey === 'codex' && Boolean(remoteHostId);");
+    expect(source).toContain(
+      "const isRemoteCodexSession = vendorKey === 'codex' && Boolean(remoteHostId);",
+    );
     // SSH(remoteHostId)与 device-link(deviceLinkDeviceId)远程会话都抑制本机账户快照读取
     expect(source).toContain('deviceLinkDeviceId?: string | null');
-    expect(source).toContain('const isAnyRemoteSession = Boolean(remoteHostId) || Boolean(deviceLinkDeviceId);');
+    expect(source).toContain(
+      'const isAnyRemoteSession = Boolean(remoteHostId) || Boolean(deviceLinkDeviceId);',
+    );
     expect(source).toContain(
       'const shouldReadLocalCodexAccountUsage = usesCodexQuotaForm && !isAnyRemoteSession;',
     );
@@ -129,25 +140,15 @@ describe('TodaySpendChip dashboard routing', () => {
 
   it('shows the shared mobile Codex reset-credit summary for local Desktop sessions', () => {
     // 主进程已有 authoritative read;Desktop renderer 需补齐 preload + 类型链路。
-    expect(preloadSource).toContain(
-      'getCodexRateLimits: (): Promise<MobileCodexRateLimitsResult>',
-    );
-    expect(preloadSource).toContain(
-      "ipcRenderer.invoke('maker:usage:codex-rate-limits')",
-    );
-    expect(rendererTypesSource).toContain(
-      'getCodexRateLimits: () => Promise<',
-    );
+    expect(preloadSource).toContain('getCodexRateLimits: (): Promise<MobileCodexRateLimitsResult>');
+    expect(preloadSource).toContain("ipcRenderer.invoke('maker:usage:codex-rate-limits')");
+    expect(rendererTypesSource).toContain('getCodexRateLimits: () => Promise<');
     // 仅本机 Codex OAuth 会话读取本机账号数据;远程 / bridge 不张冠李戴。
-    expect(source).toContain(
-      'useCodexRateLimits(isCodexOauth && !isAnyRemoteSession)',
-    );
+    expect(source).toContain('useCodexRateLimits(isCodexOauth && !isAnyRemoteSession)');
     // 复用 Mobile 的中性汇总字段；Desktop 按当前界面语言渲染 label / 次数 / 本地时间。
     expect(source).toContain('summarizeCodexRateLimitReset');
     // 复用 chip 现有 tick 时间基准,跨日时本地时间文案会重新格式化。
-    expect(source).toContain(
-      'summarizeCodexRateLimitReset(codexRateLimits, windowLabelNowMs)',
-    );
+    expect(source).toContain('summarizeCodexRateLimitReset(codexRateLimits, windowLabelNowMs)');
     expect(source).toContain('resetSummary?.hasResetCreditCount');
     expect(source).toContain('resetSummary?.earliestExpiryAt');
     expect(source).toContain("t('todaySpend.codex.resetCreditsAvailableLine'");
@@ -215,11 +216,11 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('const codexApiHasTokenFallback = isCodexApi');
     expect(source).toContain('const codexApiEmptyState = isCodexApi');
     expect(source.match(/getCodexApiEmptyState\(latestTurnUsage\)/g)).toHaveLength(1);
-    expect(source).toContain("todaySpend.codex.sessionTokensLine");
-    expect(source).toContain("todaySpend.codex.noUsageLabel");
-    expect(source).toContain("todaySpend.codex.unavailableLabel");
-    expect(source).toContain("todaySpend.codex.noUsageDetail");
-    expect(source).toContain("todaySpend.codex.unavailableDetail");
+    expect(source).toContain('todaySpend.codex.sessionTokensLine');
+    expect(source).toContain('todaySpend.codex.noUsageLabel');
+    expect(source).toContain('todaySpend.codex.unavailableLabel');
+    expect(source).toContain('todaySpend.codex.noUsageDetail');
+    expect(source).toContain('todaySpend.codex.unavailableDetail');
   });
 
   it('keeps Claude subscription details in the chip and tooltip (plan B: follows current model)', () => {
@@ -230,7 +231,9 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('matchScopedWindowForModel(snapshot.scoped, modelId)');
     // bridge 模型形态优先(不消耗 Claude 订阅额度),订阅余量 hook 对 bridge 会话关闭;
     // device-link 远程会话同样不读本机订阅余量
-    expect(source).toContain('isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote');
+    expect(source).toContain(
+      'isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote',
+    );
     expect(source).toContain(
       'const usesClaudeSubscriptionPopover = isClaudeSubscription && !isSubscriptionBridge;',
     );
@@ -252,9 +255,13 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(quotaHoverCardSource).toContain("t('quotaCard.usedPercent'");
     expect(quotaHoverCardSource).toContain("t('quotaCard.resetAt'");
     // chip 周限段: scoped 命中时倒计时前带模型名标注口径 (「Fable 7天 剩余 78%」)
-    expect(source).toContain('weekly.modelDisplayName ? `${weekly.modelDisplayName} ${countdown}` : countdown');
+    expect(source).toContain(
+      'weekly.modelDisplayName ? `${weekly.modelDisplayName} ${countdown}` : countdown',
+    );
     expect(source).toContain('if (sessionSegment) chipSegments.push(sessionSegment);');
-    expect(quotaHoverCardSource).toContain('const planLabel = formatPlanType(snapshot?.subscriptionType);');
+    expect(quotaHoverCardSource).toContain(
+      'const planLabel = formatPlanType(snapshot?.subscriptionType);',
+    );
     expect(quotaHoverCardSource).toContain('data-testid="quota-plan-badge"');
     // 告警判定是纯数据判定, 统一收在 shared/claudeSubscriptionUsage.ts (有直接单测:
     // main/usage/__tests__/claudeSubscriptionUsage.test.ts), 组件只消费, 不再本地重写。
@@ -272,7 +279,9 @@ describe('TodaySpendChip dashboard routing', () => {
     // 卡片比 chip 宽一档:完整 snapshot 把 rateLimitStatus 交给卡片,
     // allowed_warning 仍在全量窗口列表旁以 warning 状态展示。
     expect(quotaHoverCardSource).toContain("normalizedStatus === 'allowed_warning'");
-    expect(quotaHoverCardSource).toContain("{ key: 'quotaCard.limitWarning', tone: 'warn' as const }");
+    expect(quotaHoverCardSource).toContain(
+      "{ key: 'quotaCard.limitWarning', tone: 'warn' as const }",
+    );
     // Claude 订阅 / bridge 订阅不读 gateway quota (不反映订阅花费); 默认路由 key reconcile
     // 完成前形态未定, 同样不放行网关 quota 读 (避免形态闪切)。这些前置条件收敛到
     // isClaudeGateway 里, 由 usesGatewayQuota 统一放行 quota 读取。
@@ -280,7 +289,9 @@ describe('TodaySpendChip dashboard routing', () => {
       /const isClaudeGateway =\s*vendorKey === 'cc'\s*&& !isAnyRemoteSession\s*&& !isSubscriptionBridge\s*&& !ccBillingFormPending/,
     );
     // 远端 Claude 会话恒走网关, 不显示本机订阅余量 (与 Codex 远端口径一致)
-    expect(source).toContain("const isRemoteClaudeSession = vendorKey === 'cc' && Boolean(remoteHostId);");
+    expect(source).toContain(
+      "const isRemoteClaudeSession = vendorKey === 'cc' && Boolean(remoteHostId);",
+    );
     // 订阅判定: 显式选 Anthropic; 默认路由优先用 proxy 观察到的会话生效路由
     // (spawn 凭证冻结, 活性重算会发散), 无观察值回落「无网关 key 且连了 Claude
     // OAuth」启发式 (新会话下一次 spawn 恰按当前凭证决定)
@@ -288,15 +299,21 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toMatch(
       /observedClaudeRoute != null\s*\? observedClaudeRoute === 'subscription'\s*: !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true/,
     );
-    expect(source).toContain('const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey()');
+    expect(source).toContain(
+      'const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey()',
+    );
     expect(source).toContain('useClaudeOAuthConnected(isDefaultRouteClaudeSession)');
     // 无观察值且 key reconcile / OAuth 首查未完成时形态未定, 两侧 hook 都不启用
     // (避免形态闪切)
     expect(source).toContain('observedClaudeRoute == null');
-    expect(source).toContain('(gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null))');
+    expect(source).toContain(
+      '(gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null))',
+    );
     // extra_usage credits 单位未验证,不得假设 cents 并渲染美元金额
     expect(source).not.toContain('formatExtraUsageCredits');
-    expect(quotaHoverCardSource).toContain('const showExtraUsage = snapshot?.extraUsage?.isEnabled === true;');
+    expect(quotaHoverCardSource).toContain(
+      'const showExtraUsage = snapshot?.extraUsage?.isEnabled === true;',
+    );
     expect(quotaHoverCardSource).toContain("t('quotaCard.extraUsageEnabled')");
     expect(quotaHoverCardSource).not.toContain('usedCredits');
     expect(quotaHoverCardSource).not.toContain('monthlyLimit');
@@ -374,17 +391,21 @@ describe('TodaySpendChip dashboard routing', () => {
     // 形态显示 app-server 槽, WHAM 刷新帮不上它(靠 turn 事件 / 悬念超时兜底),
     // 不得催 —— WHAM 桶与 CLI 配额可能不同(账号多限额桶, 2026-07-24 实报 bug)
     expect(source).toContain(
-      'if (isChatgptBridge) {\n'
-      + '      requestCodexAccountRefresh();\n'
-      + '    } else if (isClaudeSubscription && !usesCodexQuotaForm) {\n'
-      + '      requestClaudeSubscriptionRefresh();\n'
-      + '    }',
+      'if (isChatgptBridge) {\n' +
+        '      requestCodexAccountRefresh();\n' +
+        '    } else if (isClaudeSubscription && !usesCodexQuotaForm) {\n' +
+        '      requestClaudeSubscriptionRefresh();\n' +
+        '    }',
     );
-    expect(source).toContain('const hasPendingResetWindow = chipWindows.some((window) => window.resetPending);');
+    expect(source).toContain(
+      'const hasPendingResetWindow = chipWindows.some((window) => window.resetPending);',
+    );
   });
 
   it('does not treat missing subscription credits as exhausted usage', () => {
-    expect(source).toContain('function shouldShowCodexLimitReachedReason(snapshot: RateLimitSnapshot): boolean');
+    expect(source).toContain(
+      'function shouldShowCodexLimitReachedReason(snapshot: RateLimitSnapshot): boolean',
+    );
     expect(source).toContain("snapshot.rateLimitReachedType.includes('credits_depleted')");
     expect(source).not.toContain('if (snapshot.rateLimitReachedType) return t');
     expect(source).not.toContain('credits.hasCredits\\n      ? t');
@@ -404,17 +425,21 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('const isDashboardClickable = usageDashboardUrl !== null');
     expect(source).toContain('if (!usageDashboardUrl) return;');
     // tooltip "打开看板" 行经 helper 统一追加,label 为 null(网关账号)时不追加。
-    expect(source).toContain('function pushDashboardLinkLine(lines: string[], label: string | null)');
+    expect(source).toContain(
+      'function pushDashboardLinkLine(lines: string[], label: string | null)',
+    );
     // 网关账号仍展示 daily/credit/session 指标 + tooltip(仅去掉"打开看板"链接行)。
     // credit 段服务个人租户的三池账本(LiteLLM 语义的 daily/monthly 对它恒不可用)。
-    expect(source).toContain("const PRIMARY_GATEWAY_METRICS: readonly MetricKey[] = ['daily', 'credit', 'session']");
+    expect(source).toContain(
+      "const PRIMARY_GATEWAY_METRICS: readonly MetricKey[] = ['daily', 'credit', 'session']",
+    );
     expect(source).toContain('const chipSegments = getGatewayChipSegments(slots)');
     expect(source).toContain("t('todaySpend.dailyLimitLabel'");
     expect(source).toContain('pushSessionUsageLines(tooltipLines, sessionUsage, null, t)');
   });
 
   it('no longer exposes the per-key (curApp) tooltip metric', () => {
-    expect(source).not.toContain("useTodaySpend");
+    expect(source).not.toContain('useTodaySpend');
     // curApp / currentKeyTodaySpend 指标已于 2026-06-21 移除 (口径冗余 + key 取错桶)。
     // regression guard: 防止它被重新引入。
     expect(source).not.toContain('currentKeyTodaySpend');

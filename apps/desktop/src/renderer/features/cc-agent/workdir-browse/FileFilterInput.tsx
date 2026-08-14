@@ -42,7 +42,7 @@ export function FileFilterInput({ value, onChange }: FileFilterInputProps) {
           placeholder={t('rightSidebar.fileBrowser.filterPlaceholder')}
           className={cn(
             'h-7 w-full rounded-md border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-            'pl-7 pr-7 text-[12px] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]',
+            'pl-7 pr-7 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]',
             'outline-none transition-colors',
             'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
           )}

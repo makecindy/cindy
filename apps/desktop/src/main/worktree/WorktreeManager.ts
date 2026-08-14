@@ -673,17 +673,19 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
-    // 0. 防御性校验 worktree name(IPC 不可信, UI 当前虽然只走自动生成,
-    //    但调试 / 未来扩展 / 误用都可能传入非法值)。
+    // 0. 防御性校验显式 worktree name(IPC 不可信, 调试 / 未来扩展 / 误用
+    //    都可能传入非法值)。只有空白名是生成请求；包括 auto-* 在内的合法非空名
+    //    都按显式名称保留。
     //    要求: [a-z0-9-], 首尾字母数字, 无连续 --, 长度 ≤20。
     //    符合 git ref + Windows/POSIX 路径 + cli flag 安全的交集。
-    const nameError = validateWorktreeName(req.name);
-    if (nameError) {
+    const shouldGenerateName = typeof req.name === 'string' && req.name.trim().length === 0;
+    const explicitNameError = shouldGenerateName ? null : validateWorktreeName(req.name);
+    if (explicitNameError) {
       return {
         ok: false,
         error: {
           kind: 'unknown',
-          message: `worktree 名称非法: ${nameError}`,
+          message: `worktree 名称非法: ${explicitNameError}`,
           hint: `示例合法值: pensive-lederberg, auto-3l9k0c`,
         },
       };
@@ -748,8 +750,20 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
 
     // 3. 路径冲突避让
     const taken = await timed('collect taken names', () => getTakenNames(baseRepo));
+    const requestedName = shouldGenerateName ? generateUniqueName(taken) : req.name;
+    const nameError = validateWorktreeName(requestedName);
+    if (nameError) {
+      return {
+        ok: false,
+        error: {
+          kind: 'unknown',
+          message: `worktree 名称非法: ${nameError}`,
+          hint: `示例合法值: pensive-lederberg, auto-3l9k0c`,
+        },
+      };
+    }
     // 显式 collision（含大小写与 ref 层级冲突）统一走 avoidCollision。
-    let name = avoidCollision(req.name, taken);
+    let name = avoidCollision(requestedName, taken);
     let worktreePath = path.join(baseRepo, MANAGED_WORKTREE_DIR_NAME, name);
     // 文件系统 collision(store 没记录但目录已存在): 多走一次 avoid
     let attempts = 0;
@@ -908,6 +922,8 @@ const removeWorktreeQueues = new Map<string, Promise<void>>();
 export interface RemoveWorktreeOptions {
   /** destructive remove 前确认 owning session 仍处于允许回收的状态。 */
   canRemove?: () => Promise<boolean>;
+  /** archived/deleted 引用只有在对应 runtime 已关闭时才可忽略。 */
+  isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined;
   /**
    * 预创建补偿回收不能把用户可能已经手动写入的内容变成无会话可恢复的快照；
    * 命中 dirty 时保留整个 worktree，而不是走常规删除/归档的 auto-stash 流程。
@@ -924,8 +940,8 @@ export interface RemoveWorktreeOptions {
  *
  * 流程:
  *   1. meta = store.get(sid); null → return
- *   2. live-ref 守卫: 其它未删除会话仍引用该路径 → 保留(排除 sid 自身,
- *      归档会话自己的行不算引用)
+ *   2. live-ref 守卫: 其它会话仍引用该路径 → 保留(排除 sid 自身；其它终态会话
+ *      只有在 runtime 已确认关闭时才不阻挡)
  *   3. dirty → auto-stash(失败 → 保留);成功后先撤销 store 登记，阻断 SEND
  *   4. try git worktree remove --force <meta.path>
  *   5. fail → isManagedWorktreePath 三条校验通过 → fs.rm -rf
@@ -992,11 +1008,12 @@ async function removeWorktreeForSessionInner(
     return;
   }
 
-  // live-ref 守卫: worktree 路径仍被其它未删除会话的 workingDir / worktreePath
-  // 指向时不删(典型: 用户在该目录另开了会话)。查询失败按"在用"保守处理。
+  // live-ref 守卫: worktree 路径仍被其它会话的 workingDir / worktreePath 指向时不删。
+  // 产品终态不代表 runtime 已关闭；显式回收路径用 Maker 的运行态观察器确认。
   const liveKeys = await loadLiveSessionPathKeys({
     contextPath: worktreePath,
     excludeSessionId: sessionId,
+    isSessionRuntimeAlive: options.isSessionRuntimeAlive,
   });
   if (hasLiveSessionReference(meta, liveKeys)) {
     log.info(
@@ -1132,6 +1149,31 @@ async function removeWorktreeForSessionInner(
       }
     };
 
+    const restorePreservedWorktree = async (): Promise<void> => {
+      if (!(await restoreQuarantine())) return;
+      if (!snapshotted) return;
+      if (await restoreAutoStashToPreservedWorktree(meta.path, sessionId)) {
+        await store.set(sessionId, meta);
+      } else {
+        log.warn(
+          `[worktree] recycle cancelled for ${meta.path}, but snapshot reapply failed; ` +
+            'worktree stays unregistered so SEND remains blocked until restore succeeds',
+        );
+      }
+    };
+
+    const hasCurrentLiveReference = async (): Promise<boolean> => {
+      const currentLiveKeys = await loadLiveSessionPathKeys({
+        contextPath: removalPath,
+        excludeSessionId: sessionId,
+        isSessionRuntimeAlive: removalOptions.isSessionRuntimeAlive,
+      });
+      return hasLiveSessionReference(
+        quarantinePath ? { ...meta, quarantinePath } : meta,
+        currentLiveKeys,
+      );
+    };
+
     if (removalOptions.preserveDirty && !quarantinePath && (await pathExists(meta.path))) {
       const candidate = `${meta.path}.xdt-removing-${randomUUID()}`;
       try {
@@ -1187,6 +1229,14 @@ async function removeWorktreeForSessionInner(
       }
     }
 
+    if (await hasCurrentLiveReference()) {
+      log.info(
+        `[worktree] preserved worktree at ${removalPath}: another session referenced it before removal`,
+      );
+      await restorePreservedWorktree();
+      return;
+    }
+
     let removedByGit = false;
     try {
       // 预创建补偿回收必须让 git 在删除瞬间再次确认 worktree 仍然干净：
@@ -1206,6 +1256,13 @@ async function removeWorktreeForSessionInner(
       // 不能再用 fs.rm 绕过它，否则会重新打开 dirty check 后写入的竞态窗口。
       if (removalOptions.preserveDirty) {
         await restoreQuarantine();
+        return;
+      }
+      if (await hasCurrentLiveReference()) {
+        log.info(
+          `[worktree] preserved worktree at ${removalPath}: another session referenced it before fallback removal`,
+        );
+        await restorePreservedWorktree();
         return;
       }
       // fallback: fs.rm —— 必须三条校验通过

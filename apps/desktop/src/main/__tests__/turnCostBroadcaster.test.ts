@@ -209,6 +209,66 @@ describe('recordTurnCostOnMessage', () => {
     });
   });
 
+  it('较晚到达的 token 明细保留同消息先落下的完整整轮耗时', async () => {
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+    const { deps, broadcasts, patchCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: terminal },
+    );
+
+    await recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps);
+
+    expect(patchCalls).toHaveLength(2);
+    expect(patchCalls[1]?.patch).toEqual({
+      turnUsageDetails: { ...DETAILS, turnDurationMs: 6_500 },
+    });
+    expect(broadcasts[0]?.turnUsageDetails).toEqual({
+      ...DETAILS,
+      turnDurationMs: 6_500,
+    });
+  });
+
+  it('已有明细无需补耗时时不做冗余二次写入', async () => {
+    const { deps, patchCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: DETAILS },
+    );
+
+    await expect(
+      recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps),
+    ).resolves.toBe(true);
+
+    expect(patchCalls).toHaveLength(1);
+  });
+
+  it('补耗时的二次写入失效时保留第一次成功结果', async () => {
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+    const { deps, broadcasts, runCostCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: terminal },
+    );
+    let callCount = 0;
+    deps.patchAgentMeta = vi.fn(async (_sessionId, _clientId, patch) => {
+      callCount += 1;
+      if (callCount > 1) return null;
+      return {
+        previous: { turnUsageDetails: terminal },
+        next: { turnUsageDetails: terminal, ...patch },
+      };
+    });
+
+    await expect(
+      recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps),
+    ).resolves.toBe(true);
+
+    expect(callCount).toBe(2);
+    expect(runCostCalls).toHaveLength(1);
+    expect(broadcasts[0]?.turnUsageDetails).toEqual(DETAILS);
+  });
+
   it('价格未知时仍可单独持久化并广播 token/cache 明细', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true);
     await expect(recordTurnUsageOnMessage({
@@ -410,6 +470,79 @@ describe('recordTurnUsageOnMessage', () => {
     ).resolves.toBe(false);
     expect(patchCalls).toHaveLength(0);
     expect(broadcasts).toHaveLength(0);
+  });
+
+  it('0 token 终段把完整耗时合并到同消息已有 token 明细', async () => {
+    const terminal = buildTurnUsageDetails({ turnDurationMs: 6_500 });
+    const { deps, broadcasts, patchCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: DETAILS },
+    );
+
+    await expect(
+      recordTurnUsageOnMessage(
+        { sessionId: 's1', clientId: 'm1', turnUsageDetails: terminal },
+        deps,
+      ),
+    ).resolves.toBe(true);
+
+    expect(patchCalls).toHaveLength(2);
+    expect(patchCalls[0]?.patch).toEqual({ turnUsageDetails: terminal });
+    expect(patchCalls[1]?.patch).toEqual({
+      turnUsageDetails: {
+        ...DETAILS,
+        models: ['claude-sonnet-4-6'],
+        turnDurationMs: 6_500,
+      },
+    });
+    expect(broadcasts[0]?.turnUsageDetails).toEqual({
+      ...DETAILS,
+      models: ['claude-sonnet-4-6'],
+      turnDurationMs: 6_500,
+    });
+  });
+
+  it('仅输入/cache 的 continuation 终段保留同消息已有输出与生成耗时', async () => {
+    const previous = buildTurnUsageDetails({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 10,
+      durationMs: 1_200,
+      turnDurationMs: 2_000,
+      model: 'claude-sonnet-4-6',
+    }) as TurnUsageDetails;
+    const terminal = buildTurnUsageDetails({
+      inputTokens: 5,
+      cacheReadTokens: 95,
+      turnDurationMs: 6_500,
+      model: 'claude-sonnet-4-6',
+    }) as TurnUsageDetails;
+    const expected = buildTurnUsageDetails({
+      inputTokens: 105,
+      outputTokens: 20,
+      cacheReadTokens: 105,
+      durationMs: 1_200,
+      turnDurationMs: 6_500,
+      model: 'claude-sonnet-4-6',
+      models: ['claude-sonnet-4-6'],
+    });
+    const { deps, broadcasts, patchCalls } = makeDeps(
+      true,
+      { money: null, costUsd: 0, hasEstimatedValue: false },
+      { turnUsageDetails: previous },
+    );
+
+    await expect(
+      recordTurnUsageOnMessage(
+        { sessionId: 's1', clientId: 'm1', turnUsageDetails: terminal },
+        deps,
+      ),
+    ).resolves.toBe(true);
+
+    expect(patchCalls).toHaveLength(2);
+    expect(patchCalls[1]?.patch).toEqual({ turnUsageDetails: expected });
+    expect(broadcasts[0]?.turnUsageDetails).toEqual(expected);
   });
 
   it('sessionId / clientId 缺失 → 直接跳过', async () => {

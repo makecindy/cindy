@@ -74,14 +74,14 @@ export default function HookTaskCard({ im, userText, threadContext }: HookTaskCa
       {/* Header: IM 图标 + Cindy 署名 */}
       <div className="flex items-center gap-2 px-[14px] pt-[10px] pb-[6px]">
         <ImIcon im={im} />
-        <span className="text-[13px] font-semibold text-[var(--text-primary)]">
+        <span className="text-13 font-semibold text-[var(--text-primary)]">
           {t('chat.threadContext.cindyFrom', { platform: imLabel(im) })}
         </span>
       </div>
 
       {/* Body: 用户实际提问 */}
       <div className="px-[14px] pb-[12px] flex flex-col gap-2">
-        <div className="text-[14px] leading-[1.6] text-[var(--text-primary)] whitespace-pre-wrap break-words">
+        <div className="text-14 leading-[1.6] text-[var(--text-primary)] whitespace-pre-wrap break-words">
           {userText}
         </div>
 
@@ -94,7 +94,7 @@ export default function HookTaskCard({ im, userText, threadContext }: HookTaskCa
               onClick={() => setExpanded((v) => !v)}
               className={cn(
                 'flex items-center gap-1.5 w-fit cursor-pointer',
-                'text-[12px] font-medium text-[var(--text-tertiary)]',
+                'text-12 font-medium text-[var(--text-tertiary)]',
                 'hover:text-[var(--text-secondary)] transition-colors focus:outline-none',
               )}
             >
@@ -114,7 +114,7 @@ export default function HookTaskCard({ im, userText, threadContext }: HookTaskCa
               <div className="flex flex-col gap-0.5 pl-[18px]">
                 {entries.map((entry, i) => (
                   // biome-ignore lint/suspicious/noArrayIndexKey: 消息内容不可变,index 稳定。
-                  <div key={i} className="text-[12px] leading-[1.5] text-[var(--text-tertiary)] break-words">
+                  <div key={i} className="text-12 leading-[1.5] text-[var(--text-tertiary)] break-words">
                     <span className="font-semibold">[{entry.author}]</span> {entry.text}
                   </div>
                 ))}

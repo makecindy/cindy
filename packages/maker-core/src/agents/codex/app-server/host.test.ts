@@ -116,6 +116,41 @@ class NotificationTransport implements Transport {
   }
 }
 
+describe('AppServerHost assistant text delta routing', () => {
+  it('subscribes to dedicated agentMessage deltas and routes them to the owning thread', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const initialize = transport.lines
+      .map((line) => JSON.parse(line) as { method?: string; params?: { capabilities?: { optOutNotificationMethods?: string[] } } })
+      .find((message) => message.method === 'initialize');
+    expect(initialize?.params?.capabilities?.optOutNotificationMethods).not.toContain(
+      'item/agentMessage/delta',
+    );
+
+    const agentMessageDelta = vi.fn();
+    const subscription = host.subscribeThread('thread-1', { agentMessageDelta });
+    const params = {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'msg-1',
+      delta: 'Hello',
+    };
+    transport.emit({ method: 'item/agentMessage/delta', params });
+
+    expect(agentMessageDelta).toHaveBeenCalledOnce();
+    expect(agentMessageDelta).toHaveBeenCalledWith(params);
+
+    await subscription.release();
+    await host.shutdown();
+  });
+});
+
 describe('AppServerHost MCP readiness', () => {
   it('retries a negative tool probe instead of permanently caching it', async () => {
     let available = false;

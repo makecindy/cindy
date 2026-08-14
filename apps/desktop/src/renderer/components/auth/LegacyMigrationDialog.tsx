@@ -129,7 +129,7 @@ export function LegacyMigrationDialog() {
           id="legacy-migration-title"
           style={{
             margin: 0,
-            fontSize: 23,
+            fontSize: 24,
             lineHeight: 1.25,
             fontWeight: 700,
             color: 'var(--login-callback-title)',
@@ -142,7 +142,7 @@ export function LegacyMigrationDialog() {
           id="legacy-migration-desc"
           style={{
             margin: '22px 0 0',
-            fontSize: 19,
+            fontSize: 18,
             lineHeight: '29px',
             color: 'var(--login-callback-body)',
           }}
@@ -170,7 +170,7 @@ export function LegacyMigrationDialog() {
               background: 'var(--login-callback-cta-bg)',
               border: '1px solid var(--login-callback-cta-border)',
               color: 'var(--login-callback-cta-text)',
-              fontSize: 17,
+              fontSize: 16,
               fontWeight: 700,
               padding: '0 46px',
               cursor: running ? 'default' : 'pointer',

@@ -24,7 +24,7 @@
 import catalogJson from '../catalog/providers.json' with { type: 'json' };
 import modelRegistryJson from '../catalog/model-registry.json' with { type: 'json' };
 
-import type { ModelRegistry } from '@cindy/model-access-protocol';
+import type { ModelRegistry } from './modelAccessBean.js';
 import type { Catalog, Provider } from './types.js';
 
 /** 仓内 v2 目录文件(xai 清单 + presets;同一文件发布到 OSS `cfg/providers.json`)。 */
@@ -174,8 +174,11 @@ const XD_PROVIDER: Provider = {
   videoModels: [
     { id: 'seedance-fast', name: 'Seedance 快速' },
     { id: 'seedance-pro', name: 'Seedance Pro' },
+    { id: 'bytedance/seedance-2.5', name: 'Seedance 2.5' },
     { id: 'happyhorse', name: 'HappyHorse 1.0' },
   ],
+  // 2.5 刻意不接管 best:它只到 720p,而 seedance-pro 有 1080p —— 让 tier=best
+  // 指向 2.5 会把"要 1080p"的单子从可用变成明拒。2.5 需显式点名。
   videoDefaults: {
     standard: 'seedance-fast',
     best: 'seedance-pro',

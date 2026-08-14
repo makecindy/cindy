@@ -215,6 +215,24 @@ describe('interrupted continuation enqueue contract', () => {
     );
   });
 
+  it('keeps background substantive events out of interrupted-turn progress bookkeeping', () => {
+    const progressStart = registerSource.indexOf(
+      "if (event.turnScope !== 'background' && isSubstantiveProgressEvent(event))",
+    );
+    expect(progressStart).toBeGreaterThan(-1);
+    const progressEnd = registerSource.indexOf(
+      '\n      }\n      if (event.type === \'text\')',
+      progressStart,
+    );
+    expect(progressEnd).toBeGreaterThan(progressStart);
+    const progressBlock = registerSource.slice(progressStart, progressEnd);
+    expect(progressBlock).toContain('interruptedTurnAutoResumeGuard.noteProgress(');
+    expect(registerSource.indexOf('onToolUseEvent(', progressEnd)).toBeGreaterThan(progressEnd);
+    expect(
+      registerSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT', progressEnd),
+    ).toBeGreaterThan(progressEnd);
+  });
+
   it('advertises interval null-clear support for mobile wire compatibility', () => {
     expect(registerSource).toMatch(/supportsScheduleIntervalNullClear:\s*true/);
   });

@@ -2,7 +2,7 @@
   "adaptive": {
     "oracle": {
       "provenance": {
-        "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+        "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
         "locator": "loginSkinLayout.ts:302 resolveLoginSurface / :486 resolveDeletionBubbleFrame",
         "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
       },
@@ -10,7 +10,7 @@
     },
     "safeTop": {
       "provenance": {
-        "hash": "sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429",
+        "hash": "sha256:8a60561377a5ab9ad9bdff171d6788e7a6053b220c6d1ede6ca5e216fc85f726",
         "locator": "demo chrome:safe-area 顶仿真常量(产品运行时 = insets.top)",
         "source": "../../../apps/mobile/app/(auth)/login.tsx"
       },
@@ -18,7 +18,7 @@
     },
     "samples": {
       "provenance": {
-        "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+        "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
         "locator": "产品纯函数对 spec.adaptive.sampleSizes 预计算(oracle 输出,非手算)",
         "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
       },
@@ -187,7 +187,7 @@
       "bgBase": {
         "dark": {
           "provenance": {
-            "hash": "sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098",
+            "hash": "sha256:589fb0046fdbe4788dedc1d05ac00dffb2a9e7051047d67db4212308f175da9c",
             "locator": "registerColor('login-bg-base').dark",
             "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
           },
@@ -195,7 +195,7 @@
         },
         "light": {
           "provenance": {
-            "hash": "sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098",
+            "hash": "sha256:589fb0046fdbe4788dedc1d05ac00dffb2a9e7051047d67db4212308f175da9c",
             "locator": "registerColor('login-bg-base').light",
             "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
           },
@@ -205,7 +205,7 @@
       "bubbleBg": {
         "dark": {
           "provenance": {
-            "hash": "sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098",
+            "hash": "sha256:589fb0046fdbe4788dedc1d05ac00dffb2a9e7051047d67db4212308f175da9c",
             "locator": "registerColor('login-deletion-bubble-bg').dark(固定值)",
             "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
           },
@@ -213,7 +213,7 @@
         },
         "light": {
           "provenance": {
-            "hash": "sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098",
+            "hash": "sha256:589fb0046fdbe4788dedc1d05ac00dffb2a9e7051047d67db4212308f175da9c",
             "locator": "registerColor('login-deletion-bubble-bg').light(固定值,Fix A 弃 alias)",
             "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
           },
@@ -223,7 +223,7 @@
       "bubbleBorder": {
         "dark": {
           "provenance": {
-            "hash": "sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098",
+            "hash": "sha256:589fb0046fdbe4788dedc1d05ac00dffb2a9e7051047d67db4212308f175da9c",
             "locator": "registerColor('login-deletion-bubble-border').dark",
             "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
           },
@@ -231,7 +231,7 @@
         },
         "light": {
           "provenance": {
-            "hash": "sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098",
+            "hash": "sha256:589fb0046fdbe4788dedc1d05ac00dffb2a9e7051047d67db4212308f175da9c",
             "locator": "registerColor('login-deletion-bubble-border').light(Fix A 新增 token)",
             "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
           },
@@ -241,7 +241,7 @@
       "copyText": {
         "dark": {
           "provenance": {
-            "hash": "sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098",
+            "hash": "sha256:589fb0046fdbe4788dedc1d05ac00dffb2a9e7051047d67db4212308f175da9c",
             "locator": "registerColor('login-secondary-text').dark",
             "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
           },
@@ -249,7 +249,7 @@
         },
         "light": {
           "provenance": {
-            "hash": "sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098",
+            "hash": "sha256:589fb0046fdbe4788dedc1d05ac00dffb2a9e7051047d67db4212308f175da9c",
             "locator": "registerColor('login-secondary-text').light",
             "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
           },
@@ -259,7 +259,7 @@
       "titleText": {
         "dark": {
           "provenance": {
-            "hash": "sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098",
+            "hash": "sha256:589fb0046fdbe4788dedc1d05ac00dffb2a9e7051047d67db4212308f175da9c",
             "locator": "registerColor('login-control-text').dark",
             "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
           },
@@ -267,7 +267,7 @@
         },
         "light": {
           "provenance": {
-            "hash": "sha256:185c0341a106b24db9665cb4c0e95b3ddb35d253e030cd52d40fd24fb6bd8098",
+            "hash": "sha256:589fb0046fdbe4788dedc1d05ac00dffb2a9e7051047d67db4212308f175da9c",
             "locator": "registerColor('login-control-text').light",
             "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
           },
@@ -279,7 +279,7 @@
       "en": {
         "completedCopy": {
           "provenance": {
-            "hash": "sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff",
+            "hash": "sha256:82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
             "locator": "accountDeletion.status(en).completedCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
           },
@@ -287,7 +287,7 @@
         },
         "completedTitle": {
           "provenance": {
-            "hash": "sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff",
+            "hash": "sha256:82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
             "locator": "accountDeletion.status(en).completedTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
           },
@@ -295,7 +295,7 @@
         },
         "dismissButton": {
           "provenance": {
-            "hash": "sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff",
+            "hash": "sha256:82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
             "locator": "accountDeletion.status(en).dismissButton",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
           },
@@ -303,7 +303,7 @@
         },
         "pendingCopy": {
           "provenance": {
-            "hash": "sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff",
+            "hash": "sha256:82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
             "locator": "accountDeletion.status(en).pendingCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
           },
@@ -311,7 +311,7 @@
         },
         "pendingTitle": {
           "provenance": {
-            "hash": "sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff",
+            "hash": "sha256:82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
             "locator": "accountDeletion.status(en).pendingTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
           },
@@ -319,7 +319,7 @@
         },
         "processingCopy": {
           "provenance": {
-            "hash": "sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff",
+            "hash": "sha256:82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
             "locator": "accountDeletion.status(en).processingCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
           },
@@ -327,7 +327,7 @@
         },
         "processingTitle": {
           "provenance": {
-            "hash": "sha256:c32fbce90b7f1e57835b8791f3a650b8eeaf39a54854b66bb65d2627230a5bff",
+            "hash": "sha256:82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
             "locator": "accountDeletion.status(en).processingTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
           },
@@ -337,7 +337,7 @@
       "ja": {
         "completedCopy": {
           "provenance": {
-            "hash": "sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564",
+            "hash": "sha256:080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
             "locator": "accountDeletion.status(ja).completedCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
           },
@@ -345,7 +345,7 @@
         },
         "completedTitle": {
           "provenance": {
-            "hash": "sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564",
+            "hash": "sha256:080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
             "locator": "accountDeletion.status(ja).completedTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
           },
@@ -353,7 +353,7 @@
         },
         "dismissButton": {
           "provenance": {
-            "hash": "sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564",
+            "hash": "sha256:080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
             "locator": "accountDeletion.status(ja).dismissButton",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
           },
@@ -361,7 +361,7 @@
         },
         "pendingCopy": {
           "provenance": {
-            "hash": "sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564",
+            "hash": "sha256:080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
             "locator": "accountDeletion.status(ja).pendingCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
           },
@@ -369,7 +369,7 @@
         },
         "pendingTitle": {
           "provenance": {
-            "hash": "sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564",
+            "hash": "sha256:080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
             "locator": "accountDeletion.status(ja).pendingTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
           },
@@ -377,7 +377,7 @@
         },
         "processingCopy": {
           "provenance": {
-            "hash": "sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564",
+            "hash": "sha256:080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
             "locator": "accountDeletion.status(ja).processingCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
           },
@@ -385,7 +385,7 @@
         },
         "processingTitle": {
           "provenance": {
-            "hash": "sha256:8afceebfe6a9322e53ec9912a6a70fcbdd9204aec98b02da8595deda5a29d564",
+            "hash": "sha256:080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
             "locator": "accountDeletion.status(ja).processingTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
           },
@@ -395,7 +395,7 @@
       "ko": {
         "completedCopy": {
           "provenance": {
-            "hash": "sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3",
+            "hash": "sha256:f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
             "locator": "accountDeletion.status(ko).completedCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
           },
@@ -403,7 +403,7 @@
         },
         "completedTitle": {
           "provenance": {
-            "hash": "sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3",
+            "hash": "sha256:f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
             "locator": "accountDeletion.status(ko).completedTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
           },
@@ -411,7 +411,7 @@
         },
         "dismissButton": {
           "provenance": {
-            "hash": "sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3",
+            "hash": "sha256:f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
             "locator": "accountDeletion.status(ko).dismissButton",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
           },
@@ -419,7 +419,7 @@
         },
         "pendingCopy": {
           "provenance": {
-            "hash": "sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3",
+            "hash": "sha256:f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
             "locator": "accountDeletion.status(ko).pendingCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
           },
@@ -427,7 +427,7 @@
         },
         "pendingTitle": {
           "provenance": {
-            "hash": "sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3",
+            "hash": "sha256:f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
             "locator": "accountDeletion.status(ko).pendingTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
           },
@@ -435,7 +435,7 @@
         },
         "processingCopy": {
           "provenance": {
-            "hash": "sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3",
+            "hash": "sha256:f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
             "locator": "accountDeletion.status(ko).processingCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
           },
@@ -443,7 +443,7 @@
         },
         "processingTitle": {
           "provenance": {
-            "hash": "sha256:f9447ac98584f7cff741058fbac1d4c402919f9851a8c3fe10cbe4dc09ff3cd3",
+            "hash": "sha256:f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
             "locator": "accountDeletion.status(ko).processingTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
           },
@@ -453,7 +453,7 @@
       "zh-CN": {
         "completedCopy": {
           "provenance": {
-            "hash": "sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599",
+            "hash": "sha256:6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
             "locator": "accountDeletion.status(zh-CN).completedCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
           },
@@ -461,7 +461,7 @@
         },
         "completedTitle": {
           "provenance": {
-            "hash": "sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599",
+            "hash": "sha256:6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
             "locator": "accountDeletion.status(zh-CN).completedTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
           },
@@ -469,7 +469,7 @@
         },
         "dismissButton": {
           "provenance": {
-            "hash": "sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599",
+            "hash": "sha256:6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
             "locator": "accountDeletion.status(zh-CN).dismissButton",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
           },
@@ -477,7 +477,7 @@
         },
         "pendingCopy": {
           "provenance": {
-            "hash": "sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599",
+            "hash": "sha256:6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
             "locator": "accountDeletion.status(zh-CN).pendingCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
           },
@@ -485,7 +485,7 @@
         },
         "pendingTitle": {
           "provenance": {
-            "hash": "sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599",
+            "hash": "sha256:6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
             "locator": "accountDeletion.status(zh-CN).pendingTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
           },
@@ -493,7 +493,7 @@
         },
         "processingCopy": {
           "provenance": {
-            "hash": "sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599",
+            "hash": "sha256:6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
             "locator": "accountDeletion.status(zh-CN).processingCopy",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
           },
@@ -501,18 +501,76 @@
         },
         "processingTitle": {
           "provenance": {
-            "hash": "sha256:9b16eda2aa351aed3ca86df484df049e6bda8e311a06a75f949520168e40b599",
+            "hash": "sha256:6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
             "locator": "accountDeletion.status(zh-CN).processingTitle",
             "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
           },
           "value": "账号正在注销"
+        }
+      },
+      "zh-TW": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+            "locator": "accountDeletion.status(zh-TW).completedCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "Cindy 登入帳號已刪除。"
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+            "locator": "accountDeletion.status(zh-TW).completedTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "帳號已刪除"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+            "locator": "accountDeletion.status(zh-TW).dismissButton",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "我知道了"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+            "locator": "accountDeletion.status(zh-TW).pendingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "帳號計劃於 {{date}} 永久刪除。在此之前重新登入可取消刪除。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+            "locator": "accountDeletion.status(zh-TW).pendingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "帳號正在等待刪除"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+            "locator": "accountDeletion.status(zh-TW).processingCopy",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "等待期已結束，Cindy 登入帳號正在刪除。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+            "locator": "accountDeletion.status(zh-TW).processingTitle",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
+          },
+          "value": "帳號正在刪除"
         }
       }
     },
     "geometry": {
       "bodyLinkGap": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LOGIN_DELETION_BUBBLE(设计单位).bodyLinkGap",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -520,7 +578,7 @@
       },
       "borderWidth": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LoginPage.tsx section style borderWidth=1/PANEL_FIXED_SCALE 设计单位(缩放补偿,渲染恰 1 物理 px;DESIGN.md §16.4)",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -528,7 +586,7 @@
       },
       "fontSize": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LOGIN_DELETION_BUBBLE(设计单位).fontSize",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -536,7 +594,7 @@
       },
       "fontWeight": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LoginPage.tsx font-normal=400",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -544,7 +602,7 @@
       },
       "lineHeight": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LOGIN_DELETION_BUBBLE(设计单位).lineHeight",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -552,7 +610,7 @@
       },
       "linkHitPadding": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LOGIN_DELETION_BUBBLE(设计单位).linkHitPadding",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -560,7 +618,7 @@
       },
       "padding": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LOGIN_DELETION_BUBBLE(设计单位).padding",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -568,7 +626,7 @@
       },
       "radius": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LOGIN_DELETION_BUBBLE(设计单位).radius",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -576,7 +634,7 @@
       },
       "scale": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "loginScale.ts PANEL_FIXED_SCALE=0.5(面板恒定缩放,气泡同乘)",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -584,7 +642,7 @@
       },
       "titleBodyGap": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LOGIN_DELETION_BUBBLE(设计单位).titleBodyGap",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -592,7 +650,7 @@
       },
       "top": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LOGIN_DELETION_BUBBLE(设计单位).top",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -600,7 +658,7 @@
       },
       "width": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LOGIN_DELETION_BUBBLE(设计单位).width",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -608,7 +666,7 @@
       },
       "zIndex": {
         "provenance": {
-          "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
+          "hash": "sha256:b1b4bd03318a1a817257504df3c3f0a7eadba8244ecd307fae3648d53974a390",
           "locator": "LoginPage.tsx wrapper z-30",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
@@ -621,7 +679,7 @@
       "bgBase": {
         "dark": {
           "provenance": {
-            "hash": "sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c",
+            "hash": "sha256:4d775b45a088724290073cdd168cd765bd1d23bd592a2b4276069f1d9d921df7",
             "locator": "loginPalettes.dark.bgBase",
             "source": "../../../apps/mobile/src/theme/tokens.ts"
           },
@@ -629,7 +687,7 @@
         },
         "light": {
           "provenance": {
-            "hash": "sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c",
+            "hash": "sha256:4d775b45a088724290073cdd168cd765bd1d23bd592a2b4276069f1d9d921df7",
             "locator": "loginPalettes.light.bgBase",
             "source": "../../../apps/mobile/src/theme/tokens.ts"
           },
@@ -639,7 +697,7 @@
       "controlText": {
         "dark": {
           "provenance": {
-            "hash": "sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c",
+            "hash": "sha256:4d775b45a088724290073cdd168cd765bd1d23bd592a2b4276069f1d9d921df7",
             "locator": "loginPalettes.dark.controlText",
             "source": "../../../apps/mobile/src/theme/tokens.ts"
           },
@@ -647,7 +705,7 @@
         },
         "light": {
           "provenance": {
-            "hash": "sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c",
+            "hash": "sha256:4d775b45a088724290073cdd168cd765bd1d23bd592a2b4276069f1d9d921df7",
             "locator": "loginPalettes.light.controlText",
             "source": "../../../apps/mobile/src/theme/tokens.ts"
           },
@@ -657,7 +715,7 @@
       "deletionBubbleBg": {
         "dark": {
           "provenance": {
-            "hash": "sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c",
+            "hash": "sha256:4d775b45a088724290073cdd168cd765bd1d23bd592a2b4276069f1d9d921df7",
             "locator": "loginPalettes.dark.deletionBubbleBg",
             "source": "../../../apps/mobile/src/theme/tokens.ts"
           },
@@ -665,7 +723,7 @@
         },
         "light": {
           "provenance": {
-            "hash": "sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c",
+            "hash": "sha256:4d775b45a088724290073cdd168cd765bd1d23bd592a2b4276069f1d9d921df7",
             "locator": "loginPalettes.light.deletionBubbleBg",
             "source": "../../../apps/mobile/src/theme/tokens.ts"
           },
@@ -675,7 +733,7 @@
       "deletionBubbleBorder": {
         "dark": {
           "provenance": {
-            "hash": "sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c",
+            "hash": "sha256:4d775b45a088724290073cdd168cd765bd1d23bd592a2b4276069f1d9d921df7",
             "locator": "loginPalettes.dark.deletionBubbleBorder",
             "source": "../../../apps/mobile/src/theme/tokens.ts"
           },
@@ -683,7 +741,7 @@
         },
         "light": {
           "provenance": {
-            "hash": "sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c",
+            "hash": "sha256:4d775b45a088724290073cdd168cd765bd1d23bd592a2b4276069f1d9d921df7",
             "locator": "loginPalettes.light.deletionBubbleBorder",
             "source": "../../../apps/mobile/src/theme/tokens.ts"
           },
@@ -693,7 +751,7 @@
       "secondaryText": {
         "dark": {
           "provenance": {
-            "hash": "sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c",
+            "hash": "sha256:4d775b45a088724290073cdd168cd765bd1d23bd592a2b4276069f1d9d921df7",
             "locator": "loginPalettes.dark.secondaryText",
             "source": "../../../apps/mobile/src/theme/tokens.ts"
           },
@@ -701,7 +759,7 @@
         },
         "light": {
           "provenance": {
-            "hash": "sha256:cc2b893231cc0d5b066b09d2fc8a3e04c66f19ca6c657b6406b891a27f436e9c",
+            "hash": "sha256:4d775b45a088724290073cdd168cd765bd1d23bd592a2b4276069f1d9d921df7",
             "locator": "loginPalettes.light.secondaryText",
             "source": "../../../apps/mobile/src/theme/tokens.ts"
           },
@@ -713,7 +771,7 @@
       "en": {
         "completedCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(en).completedCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -721,7 +779,7 @@
         },
         "completedTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(en).completedTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -729,7 +787,7 @@
         },
         "dismissButton": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(en).dismissButton",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -737,7 +795,7 @@
         },
         "pendingCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(en).pendingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -745,7 +803,7 @@
         },
         "pendingTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(en).pendingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -753,7 +811,7 @@
         },
         "processingCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(en).processingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -761,7 +819,7 @@
         },
         "processingTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(en).processingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -771,7 +829,7 @@
       "ja": {
         "completedCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ja).completedCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -779,7 +837,7 @@
         },
         "completedTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ja).completedTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -787,7 +845,7 @@
         },
         "dismissButton": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ja).dismissButton",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -795,7 +853,7 @@
         },
         "pendingCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ja).pendingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -803,7 +861,7 @@
         },
         "pendingTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ja).pendingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -811,7 +869,7 @@
         },
         "processingCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ja).processingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -819,7 +877,7 @@
         },
         "processingTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ja).processingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -829,7 +887,7 @@
       "ko": {
         "completedCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ko).completedCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -837,7 +895,7 @@
         },
         "completedTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ko).completedTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -845,7 +903,7 @@
         },
         "dismissButton": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ko).dismissButton",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -853,7 +911,7 @@
         },
         "pendingCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ko).pendingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -861,7 +919,7 @@
         },
         "pendingTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ko).pendingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -869,7 +927,7 @@
         },
         "processingCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ko).processingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -877,7 +935,7 @@
         },
         "processingTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(ko).processingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -887,7 +945,7 @@
       "zh-CN": {
         "completedCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(zh-CN).completedCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -895,7 +953,7 @@
         },
         "completedTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(zh-CN).completedTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -903,7 +961,7 @@
         },
         "dismissButton": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(zh-CN).dismissButton",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -911,7 +969,7 @@
         },
         "pendingCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(zh-CN).pendingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -919,7 +977,7 @@
         },
         "pendingTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(zh-CN).pendingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -927,7 +985,7 @@
         },
         "processingCopy": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(zh-CN).processingCopy",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
@@ -935,18 +993,76 @@
         },
         "processingTitle": {
           "provenance": {
-            "hash": "sha256:73a91860d8fe8bcfdd012cb3a8620129f35ac11ec4dd65fb84b66723832c5cd2",
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
             "locator": "accountDeletion*(zh-CN).processingTitle",
             "source": "../../../apps/mobile/src/auth/loginMessages.ts"
           },
           "value": "账号正在注销"
+        }
+      },
+      "zh-TW": {
+        "completedCopy": {
+          "provenance": {
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
+            "locator": "accountDeletion*(zh-TW).completedCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 登入帳號已刪除。"
+        },
+        "completedTitle": {
+          "provenance": {
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
+            "locator": "accountDeletion*(zh-TW).completedTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "帳號已刪除"
+        },
+        "dismissButton": {
+          "provenance": {
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
+            "locator": "accountDeletion*(zh-TW).dismissButton",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "我知道了"
+        },
+        "pendingCopy": {
+          "provenance": {
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
+            "locator": "accountDeletion*(zh-TW).pendingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "預計於 {date} 永久刪除。現在重新登入即可取消刪除。"
+        },
+        "pendingTitle": {
+          "provenance": {
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
+            "locator": "accountDeletion*(zh-TW).pendingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "帳號正在等待刪除"
+        },
+        "processingCopy": {
+          "provenance": {
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
+            "locator": "accountDeletion*(zh-TW).processingCopy",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "Cindy 登入帳號正在刪除，處理完成後將永久刪除。"
+        },
+        "processingTitle": {
+          "provenance": {
+            "hash": "sha256:b4ea40cf27d353a0fb51f01c6dc0b8a1c9ea07f429160a9b79578078b4d478cd",
+            "locator": "accountDeletion*(zh-TW).processingTitle",
+            "source": "../../../apps/mobile/src/auth/loginMessages.ts"
+          },
+          "value": "帳號正在刪除"
         }
       }
     },
     "geometry": {
       "bodyLinkGap": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).bodyLinkGap",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -954,7 +1070,7 @@
       },
       "borderWidth": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).borderWidth",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -962,7 +1078,7 @@
       },
       "fontSize": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).fontSize",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -970,7 +1086,7 @@
       },
       "lineHeight": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE.lineHeight=LOGIN_COPY_LINE_HEIGHT",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -978,7 +1094,7 @@
       },
       "linkHitSlopMax": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "resolveDeletionBubbleLinkHitSlop 的 18 上限(物理 pt)",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -986,7 +1102,7 @@
       },
       "linkHitSlopX": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "resolveDeletionBubbleLinkHitSlop left/right=20(物理 pt)",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -994,7 +1110,7 @@
       },
       "padLandscapeWidth": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE.padLandscape.width(= WORD_MARK 框宽)",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1002,7 +1118,7 @@
       },
       "padLandscapeX": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE.padLandscape.x",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1010,7 +1126,7 @@
       },
       "padPortraitWidth": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE.padPortrait.width",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1018,7 +1134,7 @@
       },
       "padTop": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE.padLandscape.top / padPortrait.top",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1026,7 +1142,7 @@
       },
       "padding": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).padding",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1034,7 +1150,7 @@
       },
       "phoneWidth": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE.phone.width",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1042,7 +1158,7 @@
       },
       "phoneX": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE.phone.x",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1050,7 +1166,7 @@
       },
       "radius": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).radius",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1058,7 +1174,7 @@
       },
       "titleBodyGap": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_DELETION_BUBBLE(stage 设计单位).titleBodyGap",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1068,7 +1184,7 @@
     "surface": {
       "padLandscapeMinHeight": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "PAD_LANDSCAPE_MIN_HEIGHT",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1076,7 +1192,7 @@
       },
       "padLandscapeMinScale": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "PAD_LANDSCAPE_MIN_SCALE",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1084,7 +1200,7 @@
       },
       "padLandscapeMinWidth": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "PAD_LANDSCAPE_MIN_WIDTH",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1092,7 +1208,7 @@
       },
       "padLandscapeStageHeight": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_PAD_LANDSCAPE_STAGE.height",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1100,7 +1216,7 @@
       },
       "padLandscapeStageWidth": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_PAD_LANDSCAPE_STAGE.width",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1108,7 +1224,7 @@
       },
       "padPortraitMinWidth": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "PAD_PORTRAIT_MIN_WIDTH",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1116,7 +1232,7 @@
       },
       "padPortraitStageHeight": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_PAD_PORTRAIT_STAGE.height",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1124,7 +1240,7 @@
       },
       "padPortraitStageWidth": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_PAD_PORTRAIT_STAGE.width",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1132,7 +1248,7 @@
       },
       "phoneStageWidth": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "surface 断点/stage 规格.phoneStageWidth",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1140,7 +1256,7 @@
       },
       "stageWidth": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "LOGIN_STAGE_WIDTH",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1152,7 +1268,7 @@
     "desktop": {
       "bubbleClass": {
         "provenance": {
-          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
+          "hash": "sha256:2198dfba63561edc265167a53cfdcc86975862994e2a48b37008a0432d76c881",
           "locator": "AccountDeletionStatusPanel section className 全串",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },
@@ -1160,7 +1276,7 @@
       },
       "dismissGate": {
         "provenance": {
-          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
+          "hash": "sha256:2198dfba63561edc265167a53cfdcc86975862994e2a48b37008a0432d76c881",
           "locator": "LoginPage.tsx accountDeletionStatus.status === 'completed' ? onDismiss : undefined",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },
@@ -1168,7 +1284,7 @@
       },
       "dismissHitArea": {
         "provenance": {
-          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
+          "hash": "sha256:2198dfba63561edc265167a53cfdcc86975862994e2a48b37008a0432d76c881",
           "locator": "dismiss inline style marginTop/marginBottom/paddingTop/paddingBottom",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },
@@ -1176,7 +1292,7 @@
       },
       "renderPosition": {
         "provenance": {
-          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
+          "hash": "sha256:2198dfba63561edc265167a53cfdcc86975862994e2a48b37008a0432d76c881",
           "locator": "LoginPage.tsx </LoginStage> 之后的 AccountDeletionStatusPanel 渲染点",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },
@@ -1184,7 +1300,7 @@
       },
       "scaleContract": {
         "provenance": {
-          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
+          "hash": "sha256:2198dfba63561edc265167a53cfdcc86975862994e2a48b37008a0432d76c881",
           "locator": "wrapper style: top/width/transform/transformOrigin",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },
@@ -1192,7 +1308,7 @@
       },
       "wrapperClass": {
         "provenance": {
-          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
+          "hash": "sha256:2198dfba63561edc265167a53cfdcc86975862994e2a48b37008a0432d76c881",
           "locator": "wrapper(定位+缩放层)className,几何走 inline style",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },
@@ -1202,15 +1318,15 @@
     "mobile": {
       "a11yModalGate": {
         "provenance": {
-          "hash": "sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429",
+          "hash": "sha256:8a60561377a5ab9ad9bdff171d6788e7a6053b220c6d1ede6ca5e216fc85f726",
           "locator": "login.tsx 气泡渲染点 Animated.View importantForAccessibility",
           "source": "../../../apps/mobile/app/(auth)/login.tsx"
         },
-        "value": "气泡对读屏隐藏 = 协议弹窗打开 || 入场未完成;iOS accessibilityElementsHidden + Android importantForAccessibility 双端都给(opacity/pointerEvents 不影响读屏,不隐藏则会念出不可见的注销状态)(PR #464 codex)"
+        "value": "气泡对读屏隐藏 = 协议弹窗打开 || 区域确认打开 || 入场未完成;iOS accessibilityElementsHidden + Android importantForAccessibility 双端都给(opacity/pointerEvents 不影响读屏,不隐藏则会念出不可见的注销状态)(PR #464 codex)"
       },
       "dismissGate": {
         "provenance": {
-          "hash": "sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429",
+          "hash": "sha256:8a60561377a5ab9ad9bdff171d6788e7a6053b220c6d1ede6ca5e216fc85f726",
           "locator": "login.tsx:1315-1327 {onDismiss ? <Pressable/> : null}",
           "source": "../../../apps/mobile/app/(auth)/login.tsx"
         },
@@ -1218,7 +1334,7 @@
       },
       "dismissHitSlop": {
         "provenance": {
-          "hash": "sha256:68e94a9b51b845bcf68e3aa801ea5876ddae3c5225b4e0308346700f52340565",
+          "hash": "sha256:21c12226a12107b833741686a21cfb3771b13d3235303c144eeb5dca11760931",
           "locator": "resolveDeletionBubbleLinkHitSlop(scale)",
           "source": "../../../apps/mobile/src/auth/loginSkinLayout.ts"
         },
@@ -1226,7 +1342,7 @@
       },
       "entranceGate": {
         "provenance": {
-          "hash": "sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429",
+          "hash": "sha256:8a60561377a5ab9ad9bdff171d6788e7a6053b220c6d1ede6ca5e216fc85f726",
           "locator": "login.tsx 气泡渲染点 Animated.View pointerEvents/style",
           "source": "../../../apps/mobile/app/(auth)/login.tsx"
         },
@@ -1234,7 +1350,7 @@
       },
       "renderPosition": {
         "provenance": {
-          "hash": "sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429",
+          "hash": "sha256:8a60561377a5ab9ad9bdff171d6788e7a6053b220c6d1ede6ca5e216fc85f726",
           "locator": "login.tsx:1140-1197 deletionBubbleFrame + AccountDeletionStatusPanel frame prop",
           "source": "../../../apps/mobile/app/(auth)/login.tsx"
         },
@@ -1242,12 +1358,54 @@
       },
       "styleFacts": {
         "provenance": {
-          "hash": "sha256:20ed75caa1af0812da868a6ce764a33556811c291e21ccd4a9671e1c92559429",
+          "hash": "sha256:8a60561377a5ab9ad9bdff171d6788e7a6053b220c6d1ede6ca5e216fc85f726",
           "locator": "login.tsx:1439-1449 makeStyles.deletionBubble",
           "source": "../../../apps/mobile/app/(auth)/login.tsx"
         },
         "value": "不透明底+1px 描边;无 shadow/elevation/固定高(样式块守护断言)"
       }
     }
-  }
+  },
+  "supportedLocales": [
+    {
+      "provenance": {
+        "hash": "sha256:219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "locator": "SUPPORTED_LOCALES[0]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "zh-CN"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "locator": "SUPPORTED_LOCALES[1]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "zh-TW"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "locator": "SUPPORTED_LOCALES[2]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "en"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "locator": "SUPPORTED_LOCALES[3]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "ja"
+    },
+    {
+      "provenance": {
+        "hash": "sha256:219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "locator": "SUPPORTED_LOCALES[4]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      },
+      "value": "ko"
+    }
+  ]
 }

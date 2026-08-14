@@ -32,6 +32,12 @@ interface PendingEntry {
    * the request, so we stash it here at register time.
    */
   toolName?: string;
+  /**
+   * 授权卡原始正文(title + body, 仅 kind === 'permission')。点击后收口时
+   * 保留它再追加决策结果 — 用户需要看到自己批准的是什么, 不能整卡换成
+   * 一句「✅ 已允许」。
+   */
+  permissionCard?: { title: string; body: string };
 }
 
 const pending = new Map<string, PendingEntry>();
@@ -40,7 +46,7 @@ export function registerPending(
   requestId: string,
   kind: InteractionDecision['kind'],
   messageId: string,
-  extras?: { toolName?: string },
+  extras?: { toolName?: string; permissionCard?: { title: string; body: string } },
 ): Promise<InteractionDecision> {
   return new Promise<InteractionDecision>((resolve, reject) => {
     try {
@@ -65,7 +71,7 @@ export function registerPendingExternal(
   messageId: string,
   resolve: (decision: InteractionDecision) => void,
   reject: (err: Error) => void,
-  extras?: { toolName?: string },
+  extras?: { toolName?: string; permissionCard?: { title: string; body: string } },
 ): void {
   if (pending.has(requestId)) {
     throw new Error(`pending interaction already exists for requestId=${requestId}`);
@@ -76,6 +82,7 @@ export function registerPendingExternal(
     messageId,
     kind,
     toolName: extras?.toolName,
+    permissionCard: extras?.permissionCard,
   });
 }
 
@@ -86,32 +93,35 @@ export function lookupPending(requestId: string): PendingEntry | null {
 export function resolvePending(
   requestId: string,
   decision: InteractionDecision,
-): { messageId: string } | null {
+): { messageId: string; permissionCard?: { title: string; body: string } } | null {
   const entry = pending.get(requestId);
   if (!entry) return null;
   pending.delete(requestId);
   entry.resolve(decision);
-  return { messageId: entry.messageId };
+  return { messageId: entry.messageId, permissionCard: entry.permissionCard };
 }
 
 /**
  * Resolve one pending card with the safe decision used when its turn ends.
  * 安全默认与 hook 链路同源(interactionCardModel), 只有 reason 文案按渠道给。
+ *
+ * Returns the card's messageId (same shape as `resolvePending`) so the caller
+ * can close the card off. Without that, the card stays on screen with live
+ * buttons after the interaction is already gone — pressing it then does
+ * nothing at all, which is exactly what a dropped turn looks like to the user.
  */
-export function cancelPending(requestId: string, reason: string): boolean {
+export function cancelPending(requestId: string, reason: string): { messageId: string } | null {
   const entry = pending.get(requestId);
-  if (!entry) return false;
+  if (!entry) return null;
   pending.delete(requestId);
   if (entry.kind === 'ask_user_question') {
     entry.resolve(buildAskNoAnswerDecision());
-    return true;
-  }
-  if (entry.kind === 'plan_review') {
+  } else if (entry.kind === 'plan_review') {
     entry.resolve(buildPlanDenyDecision(reason));
-    return true;
+  } else {
+    entry.resolve(buildPermissionDenyDecision(reason));
   }
-  entry.resolve(buildPermissionDenyDecision(reason));
-  return true;
+  return { messageId: entry.messageId };
 }
 
 /** Reject all pending interactions (used on session close / error). */

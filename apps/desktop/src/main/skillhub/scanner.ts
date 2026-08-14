@@ -14,11 +14,12 @@
  * Read-only for scan; write helpers gated by SKILL_PATH_WHITELIST.
  */
 
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import matter from 'gray-matter';
-import type { AgentCustomization, Maker } from '@cindy/maker-core';
+import type { AgentCustomization, Maker, PiRuntimeCapabilityStatus } from '@cindy/maker-core';
 import { registryService, type StoredInstall } from './registry';
 import { isIgnoredSkillPackagePath } from './packageIgnore';
 
@@ -38,7 +39,8 @@ export interface SkillFileEntry {
 
 export interface Skill {
   /**
-   * Stable id — React key，含 engine 前缀防跨引擎同名冲突。
+   * Stable id — React key，含 engine 前缀防跨引擎同名冲突。同一 engine 下
+   * 若 URL 基键重复，会再追加 canonical source path 的不可逆 hash。
    *   global  → `${engine}:${kind}:global:${name}`
    *   project → `${engine}:${kind}:project:${projectHash}:${name}`
    */
@@ -49,10 +51,18 @@ export interface Skill {
    *   project → `${kind}:project:${projectHash}:${name}`
    */
   urlKey: string;
+  /** Pi customization 的 canonical physical source hash；Pi 条目始终提供。 */
+  sourceKey?: string;
+  /** 同一 URL 基键存在多个来源时，详情路由必须携带 sourceKey。 */
+  requiresSourceKey?: boolean;
   /** 来自哪个 agent 引擎。 */
-  engine: 'claude-code' | 'codex';
+  engine: 'claude-code' | 'codex' | 'pi';
   /** 发现该 skill 的所有引擎专属路径（去重后）。~/.agents/ 通用路径不算引擎。 */
-  linkedEngines: Array<{ engine: 'claude-code' | 'codex'; label: string }>;
+  linkedEngines: Array<{
+    engine: 'claude-code' | 'codex' | 'pi';
+    label: string;
+    runtimeStatus?: PiRuntimeCapabilityStatus;
+  }>;
   kind: SkillKind;
   scope: SkillScope;
   /** Folder name for kind=skill; basename without `.md` for kind=command/agent. */
@@ -69,6 +79,8 @@ export interface Skill {
    * the file's parent dir, computed renderer-side via path utilities).
    */
   absolutePath: string;
+  /** Lexical path reported by discovery before canonical realpath deduplication. */
+  discoveredPath: string;
   /** Full path to the .md file we render (SKILL.md for skill, the file itself for command/agent). */
   mdPath: string;
   /** Sibling files / subfolders inside the skill folder. Always empty for command/agent. */
@@ -131,15 +143,23 @@ export interface ProjectInput {
  * 状态; ok 状态简化为按 (kind/scope) 聚合 count。失败不抛, 单个 errors 收进 sources。
  */
 /**
- * Codex scope → SkillScope 映射。
- * Codex: 'user'|'system'|'admin' → 'global', 'repo' → 'project'。
+ * Codex/Pi scope → SkillScope 映射。
+ * Codex/Pi: 'user'|'system'|'admin' → 'global', 'repo' → 'project'。
  * Claude: 已经是 'global'|'project'，直通。
  */
 function normalizeScope(engine: string, rawScope: string): SkillScope {
-  if (engine === 'codex') {
+  if (engine === 'codex' || engine === 'pi') {
     return rawScope === 'repo' ? 'project' : 'global';
   }
   return rawScope as SkillScope;
+}
+
+function realPathOrNormalized(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.normalize(value);
+  }
 }
 
 function normalizeSkillEntityPath(c: AgentCustomization): AgentCustomization {
@@ -168,14 +188,26 @@ export async function scanAllSkills(
   maker: Maker,
 ): Promise<ScanResult> {
   const projects = params.projects ?? [];
-  // ProjectInput 带 hash，maker 只要 project root；建反查表用于补回 projectHash 字段。
-  const hashByProjectRoot = new Map<string, string>();
+  const projectByWorkingDir = new Map<string, ProjectInput>();
+  const projectsByCanonicalWorkingDir = new Map<string, ProjectInput[]>();
+  const workingDirs: string[] = [];
   for (const p of projects) {
     if (p.projectRoot && path.isAbsolute(p.projectRoot)) {
-      hashByProjectRoot.set(p.projectRoot, p.hash);
+      workingDirs.push(p.projectRoot);
+      projectByWorkingDir.set(path.normalize(p.projectRoot), p);
+      const canonicalRoot = realPathOrNormalized(p.projectRoot);
+      const aliases = projectsByCanonicalWorkingDir.get(canonicalRoot) ?? [];
+      aliases.push(p);
+      projectsByCanonicalWorkingDir.set(canonicalRoot, aliases);
     }
   }
-  const workingDirs = Array.from(hashByProjectRoot.keys());
+  const projectForWorkingDir = (workingDir?: string): ProjectInput | undefined => {
+    if (!workingDir) return undefined;
+    const lexicalMatch = projectByWorkingDir.get(path.normalize(workingDir));
+    if (lexicalMatch) return lexicalMatch;
+    const canonicalMatches = projectsByCanonicalWorkingDir.get(realPathOrNormalized(workingDir));
+    return canonicalMatches?.length === 1 ? canonicalMatches[0] : undefined;
+  };
 
   let listed: { items: AgentCustomization[]; errors: Array<{ path?: string; message: string }> };
   try {
@@ -194,18 +226,16 @@ export async function scanAllSkills(
   const HIDDEN_SCOPES = new Set(['system', 'admin']);
   const isBackupPath = (p: string) => /\.bak\.\d+$/.test(path.basename(p));
   const isGenericPath = (p: string) => /\/\.agents\/skills\//.test(p.replace(/\\/g, '/'));
-  const seenItems = new Map<string, { winner: AgentCustomization; all: AgentCustomization[] }>();
+  const seenItems = new Map<string, { winner: AgentCustomization; all: AgentCustomization[]; realPath: string }>();
   for (const item of listed.items) {
     const c = normalizeSkillEntityPath(item);
     if (HIDDEN_SCOPES.has(c.scope)) continue;
     if (isBackupPath(c.absolutePath)) continue;
-    let realKey: string;
-    try {
-      realKey = fs.realpathSync(c.absolutePath);
-    } catch {
-      realKey = c.absolutePath;
-    }
-    const existing = seenItems.get(realKey);
+    const realKey = realPathOrNormalized(c.absolutePath);
+    const normalizedScope = normalizeScope(c.engine, c.scope);
+    const project = normalizedScope === 'project' ? projectForWorkingDir(c.workingDir) : undefined;
+    const dedupeKey = project ? `${realKey}\0project:${project.hash}` : realKey;
+    const existing = seenItems.get(dedupeKey);
     if (existing) {
       existing.all.push(c);
       if (!isGenericPath(existing.winner.absolutePath) && isGenericPath(c.absolutePath)) {
@@ -213,14 +243,15 @@ export async function scanAllSkills(
       }
       continue;
     }
-    seenItems.set(realKey, { winner: c, all: [c] });
+    seenItems.set(dedupeKey, { winner: c, all: [c], realPath: realKey });
   }
-  const deduped = Array.from(seenItems.entries()).map(([realPath, v]) => ({ ...v, realPath }));
+  const deduped = Array.from(seenItems.values());
 
   // ── AgentCustomization → SkillhubSkill ──────────────────────────────────────
-  const skills: Skill[] = deduped.map(({ winner: c, all, realPath }) => {
+  const candidates = deduped.map(({ winner: c, all, realPath }) => {
     const engine = c.engine as Skill['engine'];
-    const projectHash = c.workingDir ? hashByProjectRoot.get(c.workingDir) : undefined;
+    const project = projectForWorkingDir(c.workingDir);
+    const projectHash = project?.hash;
     // skill 类型的 identity 始终是目录名（= market slug），不依赖 frontmatter name。
     // Codex RPC 可能从 frontmatter 取 name 导致与目录名不一致，统一用 basename(realPath)。
     const canonicalName = c.kind === 'skill' ? path.basename(realPath) : c.name;
@@ -232,23 +263,52 @@ export async function scanAllSkills(
     const urlKey = scope === 'global'
       ? `${c.kind}:global:${canonicalName}`
       : `${c.kind}:project:${projectHash}:${canonicalName}`;
-    const id = `${engine}:${urlKey}`;
+    return { c, all, realPath, engine, project, projectHash, canonicalName, scope, urlKey };
+  });
+  const identityCounts = new Map<string, number>();
+  for (const candidate of candidates) {
+    const identity = `${candidate.engine}:${candidate.urlKey}`;
+    identityCounts.set(identity, (identityCounts.get(identity) ?? 0) + 1);
+  }
 
-    const engineSet = new Map<string, string>();
+  const skills: Skill[] = candidates.map(({
+    c,
+    all,
+    realPath,
+    engine,
+    project,
+    projectHash,
+    canonicalName,
+    scope,
+    urlKey,
+  }) => {
+    const hasIdentityCollision = (identityCounts.get(`${engine}:${urlKey}`) ?? 0) > 1;
+    // Pi entries are new to this SkillHub projection. Give them a path-derived
+    // identity even when currently unique, so adding/removing a same-name source
+    // never changes the surviving Pi entry's React/storage identity.
+    const sourceKey = engine === 'pi' || hasIdentityCollision
+      ? createHash('sha256').update(realPath).digest('hex')
+      : undefined;
+    const id = `${engine}:${urlKey}${sourceKey ? `:source:${sourceKey}` : ''}`;
+
+    const engineSet = new Map<Skill['engine'], Skill['linkedEngines'][number]>();
     for (const item of all) {
-      const eng = item.engine as Skill['engine'];
+      const eng = item.engine;
       if (!engineSet.has(eng)) {
-        engineSet.set(eng, eng === 'claude-code' ? 'Claude' : eng === 'codex' ? 'Codex' : eng);
+        engineSet.set(eng, {
+          engine: eng,
+          label: eng === 'claude-code' ? 'Claude' : eng === 'codex' ? 'Codex' : 'Pi',
+          ...(item.runtimeStatus ? { runtimeStatus: item.runtimeStatus } : {}),
+        });
       }
     }
-    const linkedEngines: Skill['linkedEngines'] = Array.from(engineSet, ([e, label]) => ({
-      engine: e as Skill['engine'],
-      label,
-    }));
+    const linkedEngines = Array.from(engineSet.values());
 
     const skill: Skill = {
       id,
       urlKey,
+      ...(sourceKey ? { sourceKey } : {}),
+      ...(hasIdentityCollision ? { requiresSourceKey: true } : {}),
       engine,
       linkedEngines,
       kind: c.kind as SkillKind,
@@ -256,6 +316,7 @@ export async function scanAllSkills(
       name: canonicalName,
       description: c.description,
       absolutePath: realPath,
+      discoveredPath: c.absolutePath,
       mdPath: c.mdPath ?? realPath,
       files: c.kind === 'skill'
         ? filterSkillPackageFileEntries(realPath, (c.files ?? []) as SkillFileEntry[])
@@ -263,7 +324,7 @@ export async function scanAllSkills(
       frontmatter: c.frontmatter,
       parseError: c.parseError,
       registryEntry: null,            // 下面 join 阶段填
-      ...(c.workingDir ? { projectRoot: c.workingDir } : {}),
+      ...(project ? { projectRoot: project.projectRoot } : {}),
       ...(projectHash ? { projectHash } : {}),
     };
     return skill;
@@ -396,7 +457,8 @@ export async function readSkillContent(params: { mdPath: string }): Promise<{
     return { success: false, error: 'only .md files may be read via this channel' };
   }
 
-  if (!isAllowedSkillPath(mdPath)) {
+  const resolvedMdPath = resolveAllowedExistingSkillPath(mdPath);
+  if (!resolvedMdPath) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
   if (isIgnoredSkillFilePath(mdPath)) {
@@ -404,7 +466,7 @@ export async function readSkillContent(params: { mdPath: string }): Promise<{
   }
 
   try {
-    const raw = fs.readFileSync(mdPath, 'utf-8');
+    const raw = fs.readFileSync(resolvedMdPath, 'utf-8');
     const parsed = matter(raw);
     return { success: true, content: parsed.content };
   } catch (err) {
@@ -436,7 +498,8 @@ export async function readSkillSiblingFile(params: { filePath: string }): Promis
     return { success: false, error: 'filePath must be an absolute path' };
   }
 
-  if (!isAllowedSkillPath(filePath)) {
+  const resolvedFilePath = resolveAllowedExistingSkillPath(filePath);
+  if (!resolvedFilePath) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
 
@@ -445,14 +508,14 @@ export async function readSkillSiblingFile(params: { filePath: string }): Promis
       return { success: false, error: 'path is excluded from SkillHub packages' };
     }
 
-    const stat = fs.statSync(filePath);
+    const stat = fs.statSync(resolvedFilePath);
     if (!stat.isFile()) {
       return { success: false, error: 'path is not a file' };
     }
     if (stat.size > PREVIEW_SIZE_CAP) {
       return { success: false, error: `文件超过 ${Math.round(PREVIEW_SIZE_CAP / 1024)} KB,无法在面板中预览` };
     }
-    const content = fs.readFileSync(filePath, 'utf-8');
+    const content = fs.readFileSync(resolvedFilePath, 'utf-8');
     return { success: true, content };
   } catch (err) {
     return {
@@ -479,18 +542,19 @@ export async function listSkillFolderChildren(params: { dirPath: string }): Prom
     return { success: false, error: 'dirPath must be an absolute path' };
   }
 
-  if (!isAllowedSkillPath(dirPath)) {
+  const resolvedDirPath = resolveAllowedExistingSkillPath(dirPath);
+  if (!resolvedDirPath) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
 
   try {
-    const stat = fs.statSync(dirPath);
+    const stat = fs.statSync(resolvedDirPath);
     if (!stat.isDirectory()) {
       return { success: false, error: 'path is not a directory' };
     }
     const skillRoot = findSkillRootForPath(dirPath);
     const entries: SkillFileEntry[] = fs
-      .readdirSync(dirPath, { withFileTypes: true })
+      .readdirSync(resolvedDirPath, { withFileTypes: true })
       .filter((s) => {
         const childPath = path.join(dirPath, s.name);
         return !isIgnoredSkillPackagePath(skillPackageRelPath(skillRoot, childPath, s.name));
@@ -522,17 +586,85 @@ const EDIT_SIZE_CAP_WRITE = 1024 * 1024; // 1 MB write cap (defensive against pa
 
 // 统一白名单：所有引擎的 skill/command/agent 目录共用。
 // 新增引擎时只需在此 regex 加一个分支。
-const SKILL_PATH_WHITELIST = /\/(\.(claude\/(skills|commands|agents)|agents\/skills|codex\/skills)|codex-home\/skills)\//;
+const SKILL_PATH_WHITELIST = /\/(\.(claude\/(skills|commands|agents)|agents\/skills|codex\/skills|pi\/skills)|codex-home\/skills)\//;
 
-function isAllowedSkillPath(absolutePath: string): boolean {
+function isLexicallyAllowedSkillPath(absolutePath: string): boolean {
   // path.resolve 解析 .. 和 . 段，防止遍历绕过白名单
   const norm = path.resolve(absolutePath).replace(/\\/g, '/');
   return SKILL_PATH_WHITELIST.test(norm);
 }
 
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (
+    relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
+}
+
+/**
+ * Resolve the final existing target before Main performs IO. Project-owned
+ * `.pi/skills` paths get an extra physical boundary: neither the source root
+ * nor a child symlink may escape the project. Other roots keep supporting the
+ * existing global compatibility symlinks used by shared skill installs.
+ */
+function resolveAllowedExistingSkillPath(absolutePath: string): string | null {
+  if (!isLexicallyAllowedSkillPath(absolutePath)) return null;
+  const lexicalPath = path.resolve(absolutePath);
+  let realTarget: string;
+  try {
+    realTarget = fs.realpathSync.native(lexicalPath);
+  } catch {
+    return null;
+  }
+
+  const normalized = lexicalPath.replace(/\\/g, '/');
+  const marker = '/.pi/skills/';
+  const markerIndex = normalized.indexOf(marker);
+  if (markerIndex < 0) return realTarget;
+
+  const lexicalSkillRoot = path.normalize(normalized.slice(0, markerIndex + marker.length - 1));
+  const lexicalProjectRoot = path.dirname(path.dirname(lexicalSkillRoot));
+  try {
+    const realProjectRoot = fs.realpathSync.native(lexicalProjectRoot);
+    const realSkillRoot = fs.realpathSync.native(lexicalSkillRoot);
+    if (
+      !isPathWithin(realProjectRoot, realSkillRoot)
+      || !isPathWithin(realSkillRoot, realTarget)
+    ) return null;
+  } catch {
+    return null;
+  }
+  return realTarget;
+}
+
+/**
+ * Canonicalize a path previously surfaced by SkillHub discovery for an IPC
+ * grant. This deliberately reuses the same lexical whitelist and physical
+ * symlink boundary as the eventual read/write operation.
+ */
+export function resolveExistingSkillPathForGrant(absolutePath: string): string | null {
+  if (!absolutePath || !path.isAbsolute(absolutePath)) return null;
+  return resolveAllowedExistingSkillPath(absolutePath);
+}
+
+/** Return whether an existing target belongs to one of the sender's scanned roots. */
+export function isExistingSkillPathGranted(
+  absolutePath: string,
+  grantedRoots: ReadonlySet<string>,
+): boolean {
+  const realTarget = resolveExistingSkillPathForGrant(absolutePath);
+  if (!realTarget) return false;
+  for (const root of grantedRoots) {
+    if (isPathWithin(root, realTarget)) return true;
+  }
+  return false;
+}
+
 function findSkillRootForPath(absolutePath: string): string | null {
   const norm = path.resolve(absolutePath).replace(/\\/g, '/');
-  const markerMatch = /\/(?:\.claude\/(?:skills|commands|agents)|\.agents\/skills|\.codex\/skills|codex-home\/skills)\//.exec(norm);
+  const markerMatch = /\/(?:\.claude\/(?:skills|commands|agents)|\.agents\/skills|\.codex\/skills|\.pi\/skills|codex-home\/skills)\//.exec(norm);
   if (!markerMatch) return null;
 
   const afterMarker = norm.slice((markerMatch.index ?? 0) + markerMatch[0].length);
@@ -566,19 +698,20 @@ export async function readSkillRawFile(params: { filePath: string }): Promise<{
   if (path.normalize(filePath).split(path.sep).includes('..')) {
     return { success: false, error: 'filePath contains traversal segments' };
   }
-  if (!isAllowedSkillPath(filePath)) {
+  const resolvedFilePath = resolveAllowedExistingSkillPath(filePath);
+  if (!resolvedFilePath) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
   if (isIgnoredSkillFilePath(filePath)) {
     return { success: false, error: 'path is excluded from SkillHub packages' };
   }
   try {
-    const stat = fs.statSync(filePath);
+    const stat = fs.statSync(resolvedFilePath);
     if (!stat.isFile()) return { success: false, error: 'path is not a file' };
     if (stat.size > EDIT_SIZE_CAP_READ) {
       return { success: false, error: `文件超过 ${Math.round(EDIT_SIZE_CAP_READ / 1024)} KB,请用外部编辑器` };
     }
-    const content = fs.readFileSync(filePath, 'utf-8');
+    const content = fs.readFileSync(resolvedFilePath, 'utf-8');
     return { success: true, content };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -596,7 +729,21 @@ export async function writeSkillFile(params: { filePath: string; content: string
   if (path.normalize(filePath).split(path.sep).includes('..')) {
     return { success: false, error: 'filePath contains traversal segments' };
   }
-  if (!isAllowedSkillPath(filePath)) {
+  if (!isLexicallyAllowedSkillPath(filePath)) {
+    return { success: false, error: 'path is not under a recognized skills directory' };
+  }
+  try {
+    // Parent-directory compatibility symlinks remain supported, but the final
+    // editable file must be a regular lexical entry. Otherwise resolving it
+    // first would let an atomic rename overwrite the symlink's external target.
+    if (fs.lstatSync(filePath).isSymbolicLink()) {
+      return { success: false, error: 'refusing to write through a symbolic link' };
+    }
+  } catch {
+    return { success: false, error: '文件不存在,本期不允许创建新文件' };
+  }
+  const resolvedFilePath = resolveAllowedExistingSkillPath(filePath);
+  if (!resolvedFilePath) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
   if (isIgnoredSkillFilePath(filePath)) {
@@ -605,7 +752,7 @@ export async function writeSkillFile(params: { filePath: string; content: string
   // Existence requirement — v0.2.2 disallows creating new files.
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(filePath);
+    stat = fs.statSync(resolvedFilePath);
   } catch {
     return { success: false, error: '文件不存在,本期不允许创建新文件' };
   }
@@ -618,7 +765,7 @@ export async function writeSkillFile(params: { filePath: string; content: string
   }
   // Atomic write: tmp + rename. fsync the tmp file before rename so a crash
   // mid-write doesn't leave a half-written file at the target path.
-  const tmpPath = `${filePath}.xdt-tmp`;
+  const tmpPath = `${resolvedFilePath}.xdt-tmp`;
   try {
     const fd = fs.openSync(tmpPath, 'w');
     try {
@@ -627,7 +774,7 @@ export async function writeSkillFile(params: { filePath: string; content: string
     } finally {
       fs.closeSync(fd);
     }
-    fs.renameSync(tmpPath, filePath);
+    fs.renameSync(tmpPath, resolvedFilePath);
     return { success: true };
   } catch (err) {
     // Best-effort tmp cleanup — ignore failures.
@@ -656,7 +803,7 @@ export async function renameLocalSkill(params: {
   if (path.normalize(absolutePath).split(path.sep).includes('..')) {
     return { success: false, error: 'absolutePath contains traversal segments' };
   }
-  if (!isAllowedSkillPath(absolutePath)) {
+  if (!resolveAllowedExistingSkillPath(absolutePath)) {
     return { success: false, error: 'path is not under a recognized skills directory' };
   }
   if (!/^[a-z0-9-]+$/.test(newName)) {
@@ -666,9 +813,12 @@ export async function renameLocalSkill(params: {
   // 必须是已有的 skill folder
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(absolutePath);
+    stat = fs.lstatSync(absolutePath);
   } catch {
     return { success: false, error: '目录不存在' };
+  }
+  if (stat.isSymbolicLink()) {
+    return { success: false, error: '符号链接 skill 不支持重命名' };
   }
   if (!stat.isDirectory()) {
     return { success: false, error: 'absolutePath 不是目录' };
@@ -690,7 +840,16 @@ export async function renameLocalSkill(params: {
 
   // 必须有 SKILL.md
   const oldSkillMd = path.join(absolutePath, 'SKILL.md');
-  if (!fs.existsSync(oldSkillMd) || !fs.statSync(oldSkillMd).isFile()) {
+  let skillMdStat: fs.Stats;
+  try {
+    skillMdStat = fs.lstatSync(oldSkillMd);
+  } catch {
+    return { success: false, error: 'SKILL.md 不存在,无法改名' };
+  }
+  if (skillMdStat.isSymbolicLink()) {
+    return { success: false, error: '符号链接 SKILL.md 不支持重命名' };
+  }
+  if (!skillMdStat.isFile()) {
     return { success: false, error: 'SKILL.md 不存在,无法改名' };
   }
 

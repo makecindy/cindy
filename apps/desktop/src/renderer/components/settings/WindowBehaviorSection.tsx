@@ -138,7 +138,7 @@ export function WindowBehaviorSection() {
           <div
             role="radiogroup"
             aria-label={t('settings.windowBehavior.closeBehavior.aria')}
-            className="flex w-fit shrink-0 items-center gap-0.5 rounded-lg border border-[var(--settings-theme-card-border)] p-0.5"
+            className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
           >
             {(['tray', 'quit'] as const).map((behavior) => {
               const active = windowsCloseBehavior === behavior;
@@ -150,7 +150,7 @@ export function WindowBehaviorSection() {
                   aria-checked={active}
                   onClick={() => setWindowsCloseBehavior(behavior)}
                   className={cn(
-                    'rounded-md px-2.5 py-1 text-xs transition-colors',
+                    'rounded-full px-2.5 py-1 text-xs transition-colors',
                     active
                       ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
                       : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',

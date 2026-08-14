@@ -147,6 +147,34 @@ const piReasoningPreset = {
   },
 };
 
+const explicitPiPreset = {
+  id: 'explicit-pi',
+  name: 'Explicit Pi',
+  runtimes: {
+    'claude-code': {
+      baseUrl: 'https://explicit.example/anthropic',
+      models: [{ id: 'claude-model', name: 'Claude Model' }],
+    },
+    pi: {
+      baseUrl: 'https://explicit.example/pi',
+      wireProtocol: 'openai-chat' as const,
+      models: [{ id: 'pi-model', name: 'Pi Model' }],
+    },
+  },
+};
+
+const claudeRequestPathPreset = {
+  id: 'claude-request-path',
+  name: 'Claude Request Path',
+  runtimes: {
+    'claude-code': {
+      baseUrl: 'https://path.example/anthropic',
+      requestPath: '/tenant/acme/messages',
+      models: [{ id: 'path-model', name: 'Path Model' }],
+    },
+  },
+};
+
 function renderWizard(presetId: string) {
   return render(
     React.createElement(AddProviderWizard, {
@@ -170,6 +198,8 @@ beforeEach(() => {
           openCodePreset,
           dualDiscoveryPreset,
           piReasoningPreset,
+          explicitPiPreset,
+          claudeRequestPathPreset,
         ],
       })),
       // 列模型失败场景兜底(Greptile P1 回归):官方 API 预设必须靠推荐模型仍可完成。
@@ -323,6 +353,16 @@ describe('AddProviderWizard — preset 直达', () => {
     );
     const keys = vi.mocked(createCustomProvider).mock.calls[0][1];
     expect(keys).toMatchObject({ 'claude-code': 'sk-test', codex: 'sk-test' });
+    expect(config.runtimes.pi).toEqual({
+      baseUrl: 'https://api.anthropic.com',
+      wireProtocol: 'anthropic-messages',
+      models: expect.arrayContaining([
+        expect.objectContaining({ id: 'claude-opus-5', contextWindow: 1_000_000 }),
+        expect.objectContaining({ id: 'claude-sonnet-5', contextWindow: 1_000_000 }),
+        expect.objectContaining({ id: 'claude-haiku-4-5', contextWindow: 200_000 }),
+      ]),
+    });
+    expect(keys.pi).toBe('sk-test');
   });
 
   it('Pi 预设保存时保留显式 reasoning 能力与支持档位', async () => {
@@ -342,6 +382,63 @@ describe('AddProviderWizard — preset 直达', () => {
         reasoningEfforts: ['low', 'high'],
       }),
     ]);
+  });
+
+  it('预设已有显式 Pi runtime 时不被 Claude 自动初始化覆盖', async () => {
+    renderWizard('explicit-pi');
+
+    await waitFor(() => expect(screen.getByDisplayValue('Explicit Pi')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.getByText('Pi Model')).not.toBeNull());
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes.pi).toEqual({
+      baseUrl: 'https://explicit.example/pi',
+      wireProtocol: 'openai-chat',
+      models: [{ id: 'pi-model', name: 'Pi Model' }],
+    });
+    expect(keys.pi).toBe('sk-test');
+  });
+
+  it('预设显式 Pi 模型全部取消后不从 Claude 重新生成 Pi runtime', async () => {
+    renderWizard('explicit-pi');
+
+    await waitFor(() => expect(screen.getByDisplayValue('Explicit Pi')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    const piModel = await screen.findByText('Pi Model');
+    fireEvent.click(piModel.closest('button') as HTMLButtonElement);
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes['claude-code']).toEqual({
+      baseUrl: 'https://explicit.example/anthropic',
+      models: [{ id: 'claude-model', name: 'Claude Model' }],
+    });
+    expect(config.runtimes.pi).toBeUndefined();
+    expect(keys.pi).toBeUndefined();
+  });
+
+  it('Claude runtime 带自定义请求路径时不自动生成 Pi runtime', async () => {
+    renderWizard('claude-request-path');
+
+    await waitFor(() => expect(screen.getByDisplayValue('Claude Request Path')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.getByText('Path Model')).not.toBeNull());
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes['claude-code']).toMatchObject({
+      requestPath: '/tenant/acme/messages',
+    });
+    expect(config.runtimes.pi).toBeUndefined();
+    expect(keys.pi).toBeUndefined();
   });
 
   it('editable preset saves the edited base URL and exact request path', async () => {

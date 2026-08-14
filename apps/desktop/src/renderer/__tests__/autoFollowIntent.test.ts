@@ -12,6 +12,7 @@ import {
   resolveLastUserMessageObservation,
   resolveNearBottomOnScroll,
   resolveRenderPinDecision,
+  selectTailUserMessageId,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
   UNPIN_MIN_SCROLLABLE_PX,
@@ -173,6 +174,7 @@ describe('resolveRenderPinDecision', () => {
     expect(resolveRenderPinDecision({
       restoring: true,
       newUserSend: true,
+      sentFromThisRenderer: true,
       nearBottom: false,
     })).toEqual({ clearRestoring: true, pinToBottom: true });
   });
@@ -181,6 +183,7 @@ describe('resolveRenderPinDecision', () => {
     expect(resolveRenderPinDecision({
       restoring: true,
       newUserSend: false,
+      sentFromThisRenderer: false,
       nearBottom: false,
     })).toEqual({ clearRestoring: false, pinToBottom: false });
   });
@@ -189,13 +192,83 @@ describe('resolveRenderPinDecision', () => {
     expect(resolveRenderPinDecision({
       restoring: false,
       newUserSend: false,
+      sentFromThisRenderer: false,
       nearBottom: true,
     })).toEqual({ clearRestoring: false, pinToBottom: true });
     expect(resolveRenderPinDecision({
       restoring: false,
       newUserSend: false,
+      sentFromThisRenderer: false,
       nearBottom: false,
     })).toEqual({ clearRestoring: false, pinToBottom: false });
+  });
+
+  // #2194: IM 渠道 / 手机端 / 定时任务注入的 user 消息没有本端发送意图，
+  // 不应夺走视口——按普通新内容处理（贴底才跟随）。
+  it('externally injected user message does not steal a scrolled-up viewport', () => {
+    expect(resolveRenderPinDecision({
+      restoring: false,
+      newUserSend: true,
+      sentFromThisRenderer: false,
+      nearBottom: false,
+    })).toEqual({ clearRestoring: false, pinToBottom: false });
+  });
+
+  it('externally injected user message still follows while near the bottom', () => {
+    expect(resolveRenderPinDecision({
+      restoring: false,
+      newUserSend: true,
+      sentFromThisRenderer: false,
+      nearBottom: true,
+    })).toEqual({ clearRestoring: false, pinToBottom: true });
+  });
+
+  it('externally injected user message does not take ownership from a restored anchor', () => {
+    expect(resolveRenderPinDecision({
+      restoring: true,
+      newUserSend: true,
+      sentFromThisRenderer: false,
+      nearBottom: false,
+    })).toEqual({ clearRestoring: false, pinToBottom: false });
+  });
+});
+
+describe('selectTailUserMessageId', () => {
+  type Item = { type: 'message'; id: string; role: 'user' | 'assistant' };
+  const userMessageId = (item: Item | undefined) =>
+    item?.role === 'user' ? item.id : null;
+
+  it('uses the real tail when a bounded window does not cover the end', () => {
+    expect(
+      selectTailUserMessageId({
+        windowCoversEnd: false,
+        visibleLastItem: { type: 'message', id: 'old-user', role: 'user' },
+        realLastItem: { type: 'message', id: 'new-user', role: 'user' },
+        userMessageId,
+      }),
+    ).toBe('new-user');
+  });
+
+  it('ignores an older visible-tail user when the real tail is assistant', () => {
+    expect(
+      selectTailUserMessageId({
+        windowCoversEnd: false,
+        visibleLastItem: { type: 'message', id: 'old-user', role: 'user' },
+        realLastItem: { type: 'message', id: 'assistant-tail', role: 'assistant' },
+        userMessageId,
+      }),
+    ).toBeNull();
+  });
+
+  it('uses the visible tail when the window covers the end', () => {
+    expect(
+      selectTailUserMessageId({
+        windowCoversEnd: true,
+        visibleLastItem: { type: 'message', id: 'visible-user', role: 'user' },
+        realLastItem: { type: 'message', id: 'visible-user', role: 'user' },
+        userMessageId,
+      }),
+    ).toBe('visible-user');
   });
 });
 

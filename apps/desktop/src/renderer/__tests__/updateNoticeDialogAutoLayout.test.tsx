@@ -5,11 +5,9 @@
  *
  * 装完后的自动公告走这条布局,UpdateBanner 的「装前预览」也刻意复用它(见 useUpdateNotice
  * 的 onOpenVersion)。所以这个文件既是既有行为的回归护栏,也是新入口渲染形态的说明:
- *   - 单版本:右上角是该版本日期,徽标 v<版本>
- *   - 跨版本:右上角是版本数,每个版本内容块各自展示 v<版本> 徽标
+ *   - 单版本:右上角是 v<版本> 徽标
+ *   - 跨版本:右上角是 v<版本> 徽标,跟随滚动更新到当前可见版本
  * 两种情况都没有版本跳转器、没有懒加载占位块。
- *
- * 弹窗本身在本次改动里一行未改;这里锁住的是「预览入口依赖的那部分不能被顺手清理掉」。
  */
 
 import { cleanup, render, screen } from '@testing-library/react';
@@ -71,22 +69,26 @@ function renderAuto(releaseNotes: ReleaseNotes[]) {
 }
 
 describe('UpdateNoticeDialog auto layout', () => {
-  it('single version: date on the right, plain version badge, single-version aria', () => {
+  it('single version: version badge in header and content, single-version aria', () => {
     renderAuto([NEWEST]);
 
     expect(screen.queryByText(/update\.notice\.versionsSpan/)).toBeNull();
     expect(screen.getAllByText(/2026/).length).toBeGreaterThan(0);
-    expect(screen.getByText('v0.1.21')).toBeTruthy();
+    // v0.1.21 appears in header badge AND in the version block subheader.
+    expect(screen.getAllByText('v0.1.21')).toHaveLength(2);
     expect(
       screen.getByText('update.notice.ariaDescription(version=0.1.21)'),
     ).toBeTruthy();
   });
 
-  it('multiple versions: version count on the right, per-version badges, span aria', () => {
+  it('multiple versions: version badge in header, per-version badges, span aria', () => {
     renderAuto([NEWEST, OLDER]);
 
-    expect(screen.getByText('update.notice.versionsSpan(count=2)')).toBeTruthy();
-    expect(screen.getByText('v0.1.21')).toBeTruthy();
+    // No version count label anymore — header shows v0.1.21 badge.
+    expect(screen.queryByText(/update\.notice\.versionsSpan/)).toBeNull();
+    // v0.1.21 appears in header badge AND in its content block.
+    expect(screen.getAllByText('v0.1.21')).toHaveLength(2);
+    // v0.1.20 appears only in its content block (header badge shows v0.1.21).
     expect(screen.getByText('v0.1.20')).toBeTruthy();
     expect(
       screen.getByText('update.notice.ariaDescriptionSpan(from=0.1.20,count=2)'),

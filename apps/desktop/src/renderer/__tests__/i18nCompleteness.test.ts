@@ -37,8 +37,12 @@ function loadLocales(): Record<string, unknown>[] {
   const dirs = readdirSync(LOCALES_DIR, { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
-  return dirs.map((d) =>
-    JSON.parse(readFileSync(resolve(LOCALES_DIR, d, 'common.json'), 'utf8')) as Record<string, unknown>,
+  return dirs.map(
+    (d) =>
+      JSON.parse(readFileSync(resolve(LOCALES_DIR, d, 'common.json'), 'utf8')) as Record<
+        string,
+        unknown
+      >,
   );
 }
 
@@ -107,10 +111,10 @@ async function scanSource(): Promise<Scan> {
 }
 
 describe('i18n completeness (static keys present in all locales)', () => {
-  it('every static t() key (no inline default) exists in all 4 locales', async () => {
+  it('every static t() key (no inline default) exists in all supported locales', async () => {
     const locales = localeNames();
     const trees = loadLocales();
-    expect(locales.length).toBeGreaterThanOrEqual(4); // zh-CN / en / ja / ko
+    expect(locales.length).toBeGreaterThanOrEqual(5); // zh-CN / zh-TW / en / ja / ko
 
     const { used, withDefault, templateCount } = await scanSource();
 

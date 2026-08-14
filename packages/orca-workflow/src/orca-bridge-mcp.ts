@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { isTerminalAgentErrorEvent, toSessionDispatchOutcome } from '@cindy/maker-core';
+import {
+  isTerminalAgentErrorEvent,
+  ORCA_NESTED_REPORT_ERROR_CODE,
+  ORCA_NESTED_REPORT_ERROR_MESSAGE,
+  toSessionDispatchOutcome,
+} from '@cindy/maker-core';
 import type { AgentEvent, AgentKind, Logger, Maker, McpProvider, McpProviderContext, Session } from '@cindy/maker-core';
 import {
   isProductTurnDoneEvent,
@@ -46,6 +51,26 @@ export interface OrcaTeamStore {
     workerSessionId?: string;
   }) => Promise<OrcaWorkerLink | null>;
   updateWorkerStatus: (workerId: string, status: OrcaWorkerStatus) => Promise<void>;
+}
+
+export interface OrcaLeadHistoryCursor {
+  createdAt: number;
+  id: string;
+  rowid?: number;
+}
+
+export interface OrcaLeadHistoryMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: unknown;
+  agentMeta: unknown;
+  createdAt: number;
+}
+
+export interface OrcaLeadHistoryPage {
+  items: OrcaLeadHistoryMessage[];
+  nextCursor: OrcaLeadHistoryCursor | null;
+  hasMore: boolean;
 }
 
 interface CapturedSessionEntry {
@@ -117,6 +142,16 @@ export interface OrcaBridgeMcpDeps {
     makerMemoryEnabled?: boolean;
   }>;
   orcaTeamStore?: OrcaTeamStore;
+  /**
+   * Worker-scoped read-only transcript access. The bridge resolves the owning Lead from the
+   * attested Worker link; callers never choose an arbitrary session id.
+   */
+  readLeadHistory?: (params: {
+    leadSessionId: string;
+    fromMs: number | null;
+    limit: number;
+    cursor: OrcaLeadHistoryCursor | null;
+  }) => Promise<OrcaLeadHistoryPage>;
   dispatchInterAgentMessage?: (params: {
     targetSessionId: string;
     rawContent: string;
@@ -175,6 +210,37 @@ interface SanitizedOrcaSendError {
 const ORCA_SEND_OWNER = 'orca-workflow';
 const SAFE_ERROR_NAME_RE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 const SAFE_SEND_ERROR_CODES = new Set(['SESSION_RUNNING']);
+
+export const SEND_TO_LEAD_TOOL_DESCRIPTION = [
+  'Pass the worker_id from the latest Lead message.',
+  'This tool is the assigned Orca Worker\'s direct reporting channel to the Lead.',
+  'Native subagents are internal helpers, so they return findings to the Worker instead of calling this tool.',
+  'Call once per turn, only with the final report or one blocking question.',
+  'After a question, stop and wait for send_to_worker.',
+  'Combine all results; do not send progress, partial findings, or same-turn corrections.',
+].join(' ');
+
+export function authorizeSendToLeadCaller(ctx: McpProviderContext):
+  | { ok: true }
+  | { ok: false; error: { error: string; code: 'NESTED_AGENT_NOT_ALLOWED' | 'CALLER_PROVENANCE_REQUIRED' } } {
+  if (ctx.mcpCallerAttested === true && ctx.mcpCallerKind === 'root') return { ok: true };
+  if (ctx.mcpCallerAttested === true && ctx.mcpCallerKind === 'descendant') {
+    return {
+      ok: false,
+      error: {
+        error: ORCA_NESTED_REPORT_ERROR_MESSAGE,
+        code: ORCA_NESTED_REPORT_ERROR_CODE,
+      },
+    };
+  }
+  return {
+    ok: false,
+    error: {
+      error: 'caller provenance is required to report directly to the lead',
+      code: 'CALLER_PROVENANCE_REQUIRED',
+    },
+  };
+}
 
 function makeOrcaSendContext(entrypoint: string, sessionId: string, action: string): string {
   return `${entrypoint}/${sessionId}/${action}`;
@@ -390,6 +456,10 @@ function peekAutoBridgeState(workerId: string): AutoBridgeState | null {
 }
 
 function setAutoBridgePending(workerId: string, pending: boolean): void {
+  if (!pending) {
+    workerAutoBridgePending.delete(workerId);
+    return;
+  }
   let state = peekAutoBridgeState(workerId);
   if (!state) {
     state = { pending: false, ready: false, inFlight: false, version: 0 };
@@ -414,6 +484,7 @@ export const __testing = {
   autoBridgeStateCount: () => workerAutoBridgePending.size,
   clearAutoBridgeState: clearAutoBridgePending,
   hasAutoBridgePending,
+  setAutoBridgePending,
 };
 
 function attachSessionCapture(entry: CapturedSessionEntry): void {
@@ -660,12 +731,14 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
 
       server.tool(
         'send_to_lead',
-        'You MUST pass your worker_id (see the Bridge note at the end of the most recent lead message). Report results or ask a question to the lead session.',
+        SEND_TO_LEAD_TOOL_DESCRIPTION,
         {
           message: z.string().min(1),
           worker_id: z.string().min(1).describe('Required. Your assigned worker_id. Find it in the Bridge note at the end of the most recent lead message, or in the system prompt Identity line.'),
         },
         async ({ message, worker_id }) => {
+          const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
+          if (!authorization.ok) return text(authorization.error, true);
           const resolved = await resolveLead(worker_id);
           if (!resolved.ok) return text(resolved.error, true);
           const { link, entry } = resolved;
@@ -771,6 +844,79 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
             ok: true,
             worker_id: link.workerId,
             lead_session_id: link.leadSessionId,
+          });
+        },
+      );
+
+      server.tool(
+        'read_lead_history',
+        'Read user/assistant transcript rows from your owning Lead without waking or modifying the Lead. Use only when an [Orca UI Assignment] depends on Lead context. You MUST pass your worker_id.',
+        {
+          worker_id: z.string().min(1).describe('Required. Your assigned worker_id.'),
+          from_ms: z
+            .number()
+            .int()
+            .nonnegative()
+            .optional()
+            .describe('Optional inclusive Unix-ms lower bound, such as the UI assignment snapshot_before_ms.'),
+          limit: z.number().int().min(1).max(200).default(100),
+          cursor: z
+            .object({
+              created_at_ms: z.number().int().nonnegative(),
+              id: z.string().min(1),
+              rowid: z.number().int().positive().optional(),
+            })
+            .optional()
+            .describe('next_cursor from the previous page.'),
+        },
+        async ({ worker_id, from_ms, limit, cursor }) => {
+          const resolved = await resolveWorkerLink(deps, ctx, worker_id);
+          if (!resolved.ok) return text(resolved.error, true);
+          if (!deps.readLeadHistory) {
+            return text({ error: 'lead history unavailable' }, true);
+          }
+          let page: OrcaLeadHistoryPage;
+          try {
+            page = await deps.readLeadHistory({
+              leadSessionId: resolved.link.leadSessionId,
+              fromMs: from_ms ?? null,
+              limit,
+              cursor: cursor
+                ? {
+                    createdAt: cursor.created_at_ms,
+                    id: cursor.id,
+                    ...(cursor.rowid !== undefined ? { rowid: cursor.rowid } : {}),
+                  }
+                : null,
+            });
+          } catch (err) {
+            log.warn('read lead history failed', {
+              workerId: resolved.link.workerId,
+              leadSessionId: resolved.link.leadSessionId,
+              errorName: err instanceof Error ? err.name : undefined,
+            });
+            return text({ error: 'lead history read failed' }, true);
+          }
+          return text({
+            worker_id: resolved.link.workerId,
+            lead_session_id: resolved.link.leadSessionId,
+            messages: page.items.map((item) => ({
+              id: item.id,
+              role: item.role,
+              content: item.content,
+              agent_meta: item.agentMeta,
+              created_at_ms: item.createdAt,
+            })),
+            has_more: page.hasMore,
+            next_cursor: page.nextCursor
+              ? {
+                  created_at_ms: page.nextCursor.createdAt,
+                  id: page.nextCursor.id,
+                  ...(page.nextCursor.rowid !== undefined
+                    ? { rowid: page.nextCursor.rowid }
+                    : {}),
+                }
+              : null,
           });
         },
       );

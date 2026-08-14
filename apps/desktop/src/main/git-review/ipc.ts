@@ -21,6 +21,7 @@ import { readImagePreview } from './imageReader.js';
 import { readMarkdownPreview } from './markdownReader.js';
 import { GitReviewPushError, pushBranch } from './pushOps.js';
 import { resolveReviewScope } from './scopeResolver.js';
+import { createSshPreviewReaderDeps, withSessionReviewExecution } from './sshReviewBackend.js';
 import { readStatus } from './statusReader.js';
 import { applyFileBatch, applyHunkSelection, GitReviewStageError } from './stageOps.js';
 import type {
@@ -245,6 +246,9 @@ export async function openReviewFile(
   if (scope.disabledReason || !scope.repoRoot) {
     throwIpcError('PRECONDITION_FAILED', 'No git repository is available for this session');
   }
+  if (scope.source === 'remote') {
+    throwIpcError('PRECONDITION_FAILED', 'Opening files is unavailable for SSH workspace review');
+  }
   let targetReal: string;
   try {
     targetReal = (await resolveRepoContainedRealPath(scope.repoRoot, gitPath)).targetReal;
@@ -269,7 +273,7 @@ export async function readReviewImagePreview(
   if (scope.disabledReason || !scope.repoRoot) {
     throwIpcError('PRECONDITION_FAILED', scope.disabledMessage ?? 'git review is unavailable');
   }
-  return readImagePreview(scope, request);
+  return readImagePreview(scope, request, scope.source === 'remote' ? createSshPreviewReaderDeps(scope) : {});
 }
 
 export async function readReviewMarkdownPreview(
@@ -281,7 +285,16 @@ export async function readReviewMarkdownPreview(
   if (scope.disabledReason || !scope.repoRoot) {
     throwIpcError('PRECONDITION_FAILED', scope.disabledMessage ?? 'git review is unavailable');
   }
-  return readMarkdownPreview(scope, request);
+  const preview = await readMarkdownPreview(
+    scope,
+    request,
+    scope.source === 'remote' ? createSshPreviewReaderDeps(scope) : {},
+  );
+  // Repository Markdown is rendered with privileged links disabled in the
+  // renderer. Clearing a controlled-side baseDir is an additional boundary:
+  // future renderer changes cannot reinterpret an SSH path as a controller
+  // local file origin.
+  return scope.source === 'remote' ? { ...preview, baseDir: null } : preview;
 }
 
 async function runQueuedWrite<T>(
@@ -293,6 +306,9 @@ async function runQueuedWrite<T>(
   const scope = await deps.resolveScope(sessionId);
   if (scope.disabledReason || !scope.repoRoot) {
     throwIpcError('PRECONDITION_FAILED', scope.disabledMessage ?? 'git review is unavailable');
+  }
+  if (scope.source === 'remote') {
+    throwIpcError('PRECONDITION_FAILED', 'SSH workspace review is view-only');
   }
   return enqueueGitRepoWrite(scope.repoRoot, async () => {
     await assertSessionWriteAllowed(sessionId, deps);
@@ -320,7 +336,16 @@ function mapWriteError(err: unknown): never {
     }
     throwIpcError('PRECONDITION_FAILED', message);
   }
-  if (err instanceof Error && /\[(INVALID_PARAMS|PRECONDITION_FAILED|STALE_DIFF|PUSH_LEASE_EXPIRED|PUSH_NO_REMOTE|SESSION_RUNNING)\]/.test(err.message)) throw err;
+  if (isForwardableReviewIpcError(err)) throw err;
+  throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+}
+
+function isForwardableReviewIpcError(err: unknown): err is Error {
+  return err instanceof Error && /\[(INVALID_PARAMS|PRECONDITION_FAILED|STALE_DIFF|PUSH_LEASE_EXPIRED|PUSH_NO_REMOTE|SESSION_RUNNING|SSH_[A-Z_]+)\]/.test(err.message);
+}
+
+function rethrowReviewIpcError(err: unknown): never {
+  if (isForwardableReviewIpcError(err)) throw err;
   throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
 }
 
@@ -425,7 +450,7 @@ export async function runReviewPush(
   }
 }
 
-function parseSessionId(payload: unknown): string {
+export function parseSessionId(payload: unknown): string {
   const obj = requireObject(payload);
   return requireString(obj.sessionId, 'sessionId');
 }
@@ -441,7 +466,7 @@ function readDiffOptions(obj: Record<string, unknown>): ReviewDiffReadOptions {
   return { ignoreWhitespace: readOptionalBoolean(obj, 'ignoreWhitespace') === true };
 }
 
-function parseReviewDataPayload(payload: unknown): { sessionId: string; options: ReviewDiffReadOptions } {
+export function parseReviewDataPayload(payload: unknown): { sessionId: string; options: ReviewDiffReadOptions } {
   const obj = requireObject(payload);
   return {
     sessionId: requireString(obj.sessionId, 'sessionId'),
@@ -460,7 +485,7 @@ export function parseCommitDiffPayload(payload: unknown): { sessionId: string; o
   };
 }
 
-function parseCommitsPayload(payload: unknown): { sessionId: string; baseRef: string | null } {
+export function parseCommitsPayload(payload: unknown): { sessionId: string; baseRef: string | null } {
   const obj = requireObject(payload);
   const rawBaseRef = typeof obj.baseRef === 'string' && obj.baseRef.trim() ? obj.baseRef.trim() : null;
   if (rawBaseRef && !isSafeBranchBaseRef(rawBaseRef)) {
@@ -472,7 +497,7 @@ function parseCommitsPayload(payload: unknown): { sessionId: string; baseRef: st
   };
 }
 
-function parseBranchDiffPayload(payload: unknown): { sessionId: string; baseRef: string | null; options: ReviewDiffReadOptions } {
+export function parseBranchDiffPayload(payload: unknown): { sessionId: string; baseRef: string | null; options: ReviewDiffReadOptions } {
   const obj = requireObject(payload);
   const rawBaseRef = typeof obj.baseRef === 'string' && obj.baseRef.trim() ? obj.baseRef.trim() : null;
   if (rawBaseRef && !isSafeBranchBaseRef(rawBaseRef)) {
@@ -675,144 +700,136 @@ export function registerGitReviewIpc(options: GitReviewIpcOptions = {}): void {
   ipcMain.handle(GIT_REVIEW_INVOKE.GET, async (_event, payload: unknown) => {
     try {
       const { sessionId, options } = parseReviewDataPayload(payload);
-      return await readReviewData(sessionId, options);
+      return await withSessionReviewExecution(sessionId, () => readReviewData(sessionId, options));
     } catch (err) {
-      if (err instanceof Error && /\[INVALID_PARAMS\]/.test(err.message)) throw err;
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+      rethrowReviewIpcError(err);
     }
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.SUMMARY, async (_event, payload: unknown) => {
     try {
-      return await readReviewSummary(parseSessionId(payload));
+      const sessionId = parseSessionId(payload);
+      return await withSessionReviewExecution(sessionId, () => readReviewSummary(sessionId));
     } catch (err) {
-      if (err instanceof Error && /\[INVALID_PARAMS\]/.test(err.message)) throw err;
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+      rethrowReviewIpcError(err);
     }
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.COMMITS, async (_event, payload: unknown) => {
     try {
       const { sessionId, baseRef } = parseCommitsPayload(payload);
-      return await readReviewCommits(sessionId, baseRef);
+      return await withSessionReviewExecution(sessionId, () => readReviewCommits(sessionId, baseRef));
     } catch (err) {
-      if (err instanceof Error && /\[INVALID_PARAMS\]/.test(err.message)) throw err;
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+      rethrowReviewIpcError(err);
     }
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.COMMIT_DIFF, async (_event, payload: unknown) => {
     try {
       const { sessionId, oid, options } = parseCommitDiffPayload(payload);
-      return await readReviewCommitDiff(sessionId, oid, options);
+      return await withSessionReviewExecution(sessionId, () => readReviewCommitDiff(sessionId, oid, options));
     } catch (err) {
-      if (err instanceof Error && /\[INVALID_PARAMS\]/.test(err.message)) throw err;
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+      rethrowReviewIpcError(err);
     }
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.BRANCH_DIFF, async (_event, payload: unknown) => {
     try {
       const { sessionId, baseRef, options } = parseBranchDiffPayload(payload);
-      return await readReviewBranchDiff(sessionId, baseRef, options);
+      return await withSessionReviewExecution(sessionId, () => readReviewBranchDiff(sessionId, baseRef, options));
     } catch (err) {
-      if (err instanceof Error && /\[INVALID_PARAMS\]/.test(err.message)) throw err;
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+      rethrowReviewIpcError(err);
     }
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.FILE_DIFF, async (_event, payload: unknown) => {
     try {
       const { sessionId, request } = parseFileDiffPayload(payload);
-      return await readReviewFileDiff(sessionId, request);
+      return await withSessionReviewExecution(sessionId, () => readReviewFileDiff(sessionId, request));
     } catch (err) {
-      if (err instanceof Error && /\[(INVALID_PARAMS|PRECONDITION_FAILED)\]/.test(err.message)) throw err;
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+      rethrowReviewIpcError(err);
     }
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.IMAGE_PREVIEW, async (_event, payload: unknown) => {
     try {
       const { sessionId, request } = parseImagePreviewPayload(payload);
-      return await readReviewImagePreview(sessionId, request);
+      return await withSessionReviewExecution(sessionId, () => readReviewImagePreview(sessionId, request));
     } catch (err) {
-      if (err instanceof Error && /\[(INVALID_PARAMS|PRECONDITION_FAILED)\]/.test(err.message)) throw err;
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+      rethrowReviewIpcError(err);
     }
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.MARKDOWN_PREVIEW, async (_event, payload: unknown) => {
     try {
       const { sessionId, request } = parseMarkdownPreviewPayload(payload);
-      return await readReviewMarkdownPreview(sessionId, request);
+      return await withSessionReviewExecution(sessionId, () => readReviewMarkdownPreview(sessionId, request));
     } catch (err) {
-      if (err instanceof Error && /\[(INVALID_PARAMS|PRECONDITION_FAILED)\]/.test(err.message)) throw err;
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+      rethrowReviewIpcError(err);
     }
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.OPEN_FILE, async (_event, payload: unknown) => {
     try {
       const { sessionId, path: gitPath } = parseOpenFilePayload(payload);
-      await openReviewFile(sessionId, gitPath);
+      await withSessionReviewExecution(sessionId, () => openReviewFile(sessionId, gitPath));
     } catch (err) {
-      if (err instanceof Error && /\[(INVALID_PARAMS|PRECONDITION_FAILED|INTERNAL)\]/.test(err.message)) throw err;
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+      rethrowReviewIpcError(err);
     }
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.STAGE_FILE, async (_event, payload: unknown) => {
     const { sessionId, targets } = parseTargets(payload);
-    return runReviewFileStageOperation(sessionId, 'stage', targets.slice(0, 1), writeDeps);
+    return withSessionReviewExecution(sessionId, () => runReviewFileStageOperation(sessionId, 'stage', targets.slice(0, 1), writeDeps));
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.UNSTAGE_FILE, async (_event, payload: unknown) => {
     const { sessionId, targets } = parseTargets(payload);
-    return runReviewFileStageOperation(sessionId, 'unstage', targets.slice(0, 1), writeDeps);
+    return withSessionReviewExecution(sessionId, () => runReviewFileStageOperation(sessionId, 'unstage', targets.slice(0, 1), writeDeps));
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.DISCARD_FILE, async (_event, payload: unknown) => {
     const { sessionId, targets } = parseTargets(payload);
-    return runReviewFileStageOperation(sessionId, 'discard', targets.slice(0, 1), writeDeps);
+    return withSessionReviewExecution(sessionId, () => runReviewFileStageOperation(sessionId, 'discard', targets.slice(0, 1), writeDeps));
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.STAGE_ALL, async (_event, payload: unknown) => {
     const { sessionId, targets } = parseTargets(payload);
-    return runReviewFileStageOperation(sessionId, 'stage', targets, writeDeps);
+    return withSessionReviewExecution(sessionId, () => runReviewFileStageOperation(sessionId, 'stage', targets, writeDeps));
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.UNSTAGE_ALL, async (_event, payload: unknown) => {
     const { sessionId, targets } = parseTargets(payload);
-    return runReviewFileStageOperation(sessionId, 'unstage', targets, writeDeps);
+    return withSessionReviewExecution(sessionId, () => runReviewFileStageOperation(sessionId, 'unstage', targets, writeDeps));
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.DISCARD_ALL, async (_event, payload: unknown) => {
     const { sessionId, targets } = parseTargets(payload);
-    return runReviewFileStageOperation(sessionId, 'discard', targets, writeDeps);
+    return withSessionReviewExecution(sessionId, () => runReviewFileStageOperation(sessionId, 'discard', targets, writeDeps));
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.STAGE_HUNK, async (_event, payload: unknown) => {
     const { sessionId, diff, hunkIndex, options } = parseHunkPayload(payload);
-    return runReviewHunkStageOperation(sessionId, 'stage', diff, hunkIndex, options, writeDeps);
+    return withSessionReviewExecution(sessionId, () => runReviewHunkStageOperation(sessionId, 'stage', diff, hunkIndex, options, writeDeps));
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.UNSTAGE_HUNK, async (_event, payload: unknown) => {
     const { sessionId, diff, hunkIndex, options } = parseHunkPayload(payload);
-    return runReviewHunkStageOperation(sessionId, 'unstage', diff, hunkIndex, options, writeDeps);
+    return withSessionReviewExecution(sessionId, () => runReviewHunkStageOperation(sessionId, 'unstage', diff, hunkIndex, options, writeDeps));
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.DISCARD_HUNK, async (_event, payload: unknown) => {
     const { sessionId, diff, hunkIndex, options } = parseHunkPayload(payload);
-    return runReviewHunkStageOperation(sessionId, 'discard', diff, hunkIndex, options, writeDeps);
+    return withSessionReviewExecution(sessionId, () => runReviewHunkStageOperation(sessionId, 'discard', diff, hunkIndex, options, writeDeps));
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.COMMIT, async (_event, payload: unknown) => {
     const { sessionId, message, includeUnstaged } = parseCommitPayload(payload);
-    return runReviewCommit(sessionId, message, includeUnstaged, writeDeps);
+    return withSessionReviewExecution(sessionId, () => runReviewCommit(sessionId, message, includeUnstaged, writeDeps));
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.PUSH, async (_event, payload: unknown) => {
     const { sessionId, confirmForce } = parsePushPayload(payload);
-    return runReviewPush(sessionId, confirmForce, writeDeps);
+    return withSessionReviewExecution(sessionId, () => runReviewPush(sessionId, confirmForce, writeDeps));
   });
 }

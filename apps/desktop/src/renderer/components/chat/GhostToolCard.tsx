@@ -754,7 +754,7 @@ function GhostCardCanvas({
               boxShadow: 'var(--shadow-menu)',
             }}
           >
-            <div className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+            <div className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>
               {t('chat.ghostCall.linkConfirmTitle')}
             </div>
             <div className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
@@ -762,14 +762,14 @@ function GhostCardCanvas({
             </div>
             {linkAskHost ? (
               <div
-                className="mt-1.5 break-all text-[13px] font-semibold"
+                className="mt-1.5 break-all text-13 font-semibold"
                 style={{ color: 'var(--text-primary)' }}
               >
                 {linkAskHost}
               </div>
             ) : null}
             <div
-              className="mt-1 max-h-24 overflow-y-auto break-all font-mono text-[11px] leading-relaxed"
+              className="mt-1 max-h-24 overflow-y-auto break-all font-mono text-11 leading-relaxed"
               style={{ color: 'var(--text-tertiary)' }}
             >
               {linkAsk}
@@ -807,6 +807,7 @@ function GhostCardCanvas({
           <DropdownMenuTrigger asChild>
             <span
               aria-hidden
+              data-fixed-menu-anchor
               style={{
                 position: 'fixed',
                 left: imgMenu.x,
@@ -836,6 +837,7 @@ function GhostCardCanvas({
           <DropdownMenuTrigger asChild>
             <span
               aria-hidden
+              data-fixed-menu-anchor
               style={{
                 position: 'fixed',
                 left: audioMenu.x,
@@ -974,7 +976,7 @@ export function GhostToolCard({
             <Ghost size={11} style={{ color: 'var(--text-secondary)' }} />
           )}
         </span>
-        <span className="min-w-0 truncate text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+        <span className="min-w-0 truncate text-11 font-medium" style={{ color: 'var(--text-secondary)' }}>
           {name}
         </span>
         <span className="flex h-3.5 w-3.5 items-center justify-center">
@@ -1008,20 +1010,20 @@ export function GhostToolCard({
         >
           {toolName ? (
             <div
-              className="mb-1 inline-block rounded px-1.5 py-px font-mono text-[10px]"
+              className="mb-1 inline-block rounded px-1.5 py-px font-mono text-10"
               style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
             >
               {toolName}
             </div>
           ) : null}
           <div
-            className="mb-1 text-[10px] font-medium tracking-[0.5px]"
+            className="mb-1 text-10 font-medium tracking-[0.5px]"
             style={{ color: 'var(--text-tertiary)' }}
           >
             {t('chat.ghostCall.cardParams')}
           </div>
           <pre
-            className="max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed"
+            className="max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono text-11 leading-relaxed"
             style={{ color: 'var(--text-secondary)' }}
           >
             {paramsJson}
@@ -1060,7 +1062,7 @@ export function GhostToolCard({
                   <Ghost size={11} style={{ color: 'var(--text-secondary)' }} />
                 )}
               </span>
-              <span className="min-w-0 truncate text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+              <span className="min-w-0 truncate text-11 font-medium" style={{ color: 'var(--text-secondary)' }}>
                 {name}
               </span>
               <span className="flex h-3.5 w-3.5 items-center justify-center">

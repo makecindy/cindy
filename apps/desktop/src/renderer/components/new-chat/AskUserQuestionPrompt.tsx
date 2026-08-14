@@ -516,7 +516,7 @@ export function AskUserQuestionPrompt({
       minimizeDisabled={isAnimating}
       headerLeading={
         currentQ?.header ? (
-          <span className="inline-block rounded-[6px] bg-[var(--ask-header-chip-bg)] px-[8px] py-[2px] text-[12px] font-medium text-[var(--ask-badge-text)]">
+          <span className="inline-block rounded-[6px] bg-[var(--ask-header-chip-bg)] px-[8px] py-[2px] text-12 font-medium text-[var(--ask-badge-text)]">
             {currentQ.header}
           </span>
         ) : null
@@ -602,7 +602,7 @@ export function AskUserQuestionPrompt({
                       )}
                     </div>
                   </div>
-                  <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-[13px] font-medium text-[var(--ask-badge-text)]">
+                  <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
                     {idx + 1}
                   </div>
                 </button>
@@ -656,7 +656,7 @@ export function AskUserQuestionPrompt({
                   }}
                   placeholder="Type your answer..."
                   className={cn(
-                    'min-h-[22px] min-w-0 flex-1 bg-transparent text-14 font-normal leading-[22px] outline-none',
+                    'min-h-[22px] min-w-0 flex-1 bg-transparent text-14 font-normal leading-[1.571] outline-none',
                     'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
                     'select-text',
                   )}
@@ -695,7 +695,7 @@ export function AskUserQuestionPrompt({
                     Type something else...
                   </span>
                 </div>
-                <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-[13px] font-medium text-[var(--ask-badge-text)]">
+                <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
                   {options.length + 1}
                 </div>
               </button>
@@ -723,7 +723,7 @@ export function AskUserQuestionPrompt({
               placeholder="Type your answer..."
               autoFocus
               className={cn(
-                'min-h-10 min-w-0 flex-1 rounded-[8px] border px-3 py-[8px] text-14 leading-[22px] outline-none',
+                'min-h-10 min-w-0 flex-1 rounded-[8px] border px-3 py-[8px] text-14 leading-[1.571] outline-none',
                 'border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] text-[var(--ask-input-text)]',
                 'placeholder:text-[var(--ask-input-placeholder)]',
               )}

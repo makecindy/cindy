@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   PLATFORM_ISSUE_SUBMISSION_IDENTITY,
   postGithubIssueAsUser,
-  resolveGithubIssueSubmissionIdentity,
+  resolveGithubIssueSubmissionChoices,
   type GithubUserIssueSubmitterDeps,
 } from '../githubUserIssueSubmitter';
 
@@ -28,12 +28,12 @@ function makeDeps(over: Partial<GithubUserIssueSubmitterDeps> = {}): GithubUserI
   };
 }
 
-describe('resolveGithubIssueSubmissionIdentity', () => {
-  it('已启用且凭证有效时解析为 GitHub 用户本人', async () => {
+describe('resolveGithubIssueSubmissionChoices', () => {
+  it('已启用且凭证有效时保留平台默认并追加 GitHub 用户选项', async () => {
     const deps = makeDeps();
-    await expect(resolveGithubIssueSubmissionIdentity(deps)).resolves.toEqual({
-      kind: 'github-user',
-      login: 'octocat',
+    await expect(resolveGithubIssueSubmissionChoices(deps)).resolves.toEqual({
+      platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
+      githubUser: { kind: 'github-user', login: 'octocat' },
     });
     expect(deps.callGhostTool).toHaveBeenCalledWith({
       ghostId: 'cindy-github',
@@ -48,19 +48,50 @@ describe('resolveGithubIssueSubmissionIdentity', () => {
       { isGithubCredentialSaved: () => false },
     ]) {
       const deps = makeDeps(over);
-      await expect(resolveGithubIssueSubmissionIdentity(deps)).resolves.toEqual(
-        PLATFORM_ISSUE_SUBMISSION_IDENTITY,
-      );
+      await expect(resolveGithubIssueSubmissionChoices(deps)).resolves.toEqual({
+        platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
+      });
       expect(deps.callGhostTool).not.toHaveBeenCalled();
     }
   });
 
   it('当前 workdir 禁用 cindy-github 时走平台身份且不调用插件', async () => {
     const deps = makeDeps({ isGithubGhostDisabledForWorkdir: (workdir) => workdir === '/repo' });
-    await expect(resolveGithubIssueSubmissionIdentity(deps, '/repo')).resolves.toEqual(
-      PLATFORM_ISSUE_SUBMISSION_IDENTITY,
-    );
+    await expect(resolveGithubIssueSubmissionChoices(deps, '/repo')).resolves.toEqual({
+      platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
+    });
     expect(deps.callGhostTool).not.toHaveBeenCalled();
+  });
+
+  it('插件 readiness 读取异常时仍返回平台身份', async () => {
+    const warn = vi.fn();
+    const deps = makeDeps({
+      logger: { warn },
+      isGithubGhostEnabled: () => {
+        throw new Error('plugin registry unavailable');
+      },
+    });
+    await expect(resolveGithubIssueSubmissionChoices(deps)).resolves.toEqual({
+      platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
+    });
+    expect(deps.callGhostTool).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('可选身份日志失败时仍返回平台身份', async () => {
+    const deps = makeDeps({
+      logger: {
+        warn: () => {
+          throw new Error('logger unavailable');
+        },
+      },
+      isGithubGhostEnabled: () => {
+        throw new Error('plugin registry unavailable');
+      },
+    });
+    await expect(resolveGithubIssueSubmissionChoices(deps)).resolves.toEqual({
+      platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
+    });
   });
 
   it('插件运行时不可用时在确认前回退平台身份', async () => {
@@ -71,27 +102,31 @@ describe('resolveGithubIssueSubmissionIdentity', () => {
         message: '插件启动失败',
       })),
     });
-    await expect(resolveGithubIssueSubmissionIdentity(deps)).resolves.toEqual(
-      PLATFORM_ISSUE_SUBMISSION_IDENTITY,
-    );
+    await expect(resolveGithubIssueSubmissionChoices(deps)).resolves.toEqual({
+      platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
+    });
   });
 
-  it('已保存但失效的 token 返回 AUTH_NOT_READY，不冒充未绑定', async () => {
+  it('已保存但失效的 token 只隐藏用户选项，不阻断平台 Bot', async () => {
     for (const message of [
       'GitHub token 未配置或已失效',
       'GitHub API HTTP 403 Forbidden',
       '凭证「github_pat」尚未配置',
     ]) {
+      const warn = vi.fn();
       const deps = makeDeps({
+        logger: { warn },
         callGhostTool: vi.fn(async () => ({
           ok: false as const,
           errorCode: 'INTERNAL',
           message,
         })),
       });
-      await expect(resolveGithubIssueSubmissionIdentity(deps)).rejects.toMatchObject({
-        issueErrorCode: 'AUTH_NOT_READY',
+      await expect(resolveGithubIssueSubmissionChoices(deps)).resolves.toEqual({
+        platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
       });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(message);
     }
   });
 
@@ -103,18 +138,21 @@ describe('resolveGithubIssueSubmissionIdentity', () => {
         return { ok: true as const, result: { data: { login: 'octocat' } } };
       }),
     });
-    await expect(resolveGithubIssueSubmissionIdentity(deps)).resolves.toEqual(
-      PLATFORM_ISSUE_SUBMISSION_IDENTITY,
-    );
+    await expect(resolveGithubIssueSubmissionChoices(deps)).resolves.toEqual({
+      platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
+    });
   });
 
-  it('get_current_user 成功但缺少 login 时拒绝半残身份', async () => {
+  it('get_current_user 成功但缺少 login 时只隐藏半残身份', async () => {
+    const warn = vi.fn();
     const deps = makeDeps({
+      logger: { warn },
       callGhostTool: vi.fn(async () => ({ ok: true as const, result: { data: {} } })),
     });
-    await expect(resolveGithubIssueSubmissionIdentity(deps)).rejects.toMatchObject({
-      issueErrorCode: 'SERVER_ERROR',
+    await expect(resolveGithubIssueSubmissionChoices(deps)).resolves.toEqual({
+      platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
     });
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });
 

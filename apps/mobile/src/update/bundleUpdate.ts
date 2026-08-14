@@ -39,7 +39,7 @@ export interface BundleUpdateEvaluation {
 export interface EvaluateBundleUpdateInput {
   /** 当前运行包的 runtimeVersion(取自 expo-updates Updates.runtimeVersion)。 */
   currentRuntimeVersion: string | null | undefined;
-  /** 当前包的应用版本(Constants.expoConfig.version)。 */
+  /** 当前包的应用版本(原生真值 APP_BINARY_VERSION;不要传会被 OTA 覆盖的 expoConfig.version)。 */
   currentVersion: string | null | undefined;
   /** `/latest` 返回体(已解析)。无效/缺字段视为无更新。 */
   latest: unknown;

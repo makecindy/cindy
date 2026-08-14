@@ -16,7 +16,7 @@
  * 跨渠道互不影响。
  */
 
-import type { IMMessageEvent, TextChannelIM } from '@cindy/im';
+import type { IMAttachment, IMMessageEvent, TextChannelIM } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import {
@@ -79,8 +79,7 @@ export function createMessageHandler(
     const pureTextCommandInput =
       event.text.length > 0 && event.attachments.length === 0 && event.unsupported.length === 0;
     const commandLike =
-      pureTextCommandInput &&
-      (isStopCommand(event.text) || looksLikeSlashCommand(event.text));
+      pureTextCommandInput && (isStopCommand(event.text) || looksLikeSlashCommand(event.text));
     if (commandLike && !isCommandAuthorized(event)) {
       log.info(
         `dropped non-owner command sender=...${event.senderId.slice(-8)} ` +
@@ -148,6 +147,14 @@ export function createMessageHandler(
 
     // ── slash command (only on plain text: no attachments, no unsupported) ──
     if (pureTextCommandInput && looksLikeSlashCommand(event.text)) {
+      // 渠道钩子先于命令处理 — 飞书靠它记住开话题 slash 事件的群主流取数
+      // lane(thread 前上下文), 供流程结束后话题里的第一条 agent 消息使用。
+      try {
+        adapter.onSlashCommandEvent?.(event);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`onSlashCommandEvent threw (non-fatal): ${msg}`);
+      }
       try {
         await slash.handleSlashCommand(event.text, {
           botContextId: event.contextId,
@@ -194,7 +201,11 @@ export function createMessageHandler(
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
-    let prepared: { agentText: string; commit?: () => void | Promise<void> } | null = null;
+    let prepared: {
+      agentText: string;
+      contextAttachments?: IMAttachment[];
+      commit?: () => void | Promise<void>;
+    } | null = null;
     if (adapter.prepareAgentTurnText) {
       try {
         prepared = await adapter.prepareAgentTurnText(event);
@@ -205,14 +216,23 @@ export function createMessageHandler(
     }
     // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
     const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
+    const groupHistoryAccess = adapter.groupHistoryAccessFor?.(event);
     try {
       await turnRunner.runAgentTurn({
         botContextId: event.contextId,
         userId: event.senderId,
         userMessageId: event.messageId,
         text: event.text,
+        // 受保护群的触发消息照常起 turn, 但不进会话存档(渠道侧已挡住群历史池,
+        // 这里挡住第二条路径)。
+        ...(event.protectedContent === true ? { protectedContent: true } : {}),
         ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
+        ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
+        // 群历史附件只进模型消息、不落库(见 ImRunAgentTurnArgs.contextAttachments)。
+        ...(prepared?.contextAttachments?.length
+          ? { contextAttachments: prepared.contextAttachments }
+          : {}),
         ...(prepared?.commit
           ? {
               // turnRunner 只在 provider 真正接受消息后调用；排队、停止与

@@ -63,6 +63,12 @@ export interface ContextSheetGoalViewProps {
   onClearGoal: () => void;
   /** 打开表单时的默认目标内容(对齐桌面 NewGoalDialog:composer 里已有的文字带入)。 */
   initialObjective?: string;
+  /**
+   * 失败接回时的完整表单初始值(codex review P2):新建页 goal.set 失败跳转时经
+   * 路由参数带入 objective + limits;优先于 initialObjective(后者仅 composer 文字,
+   * 带不回 limits)。平时 undefined → 走 initialObjective / 空表单,与旧行为一致。
+   */
+  initial?: { objective: string; limits?: MobileGoalLimitsInput };
   testID?: string;
 }
 
@@ -75,6 +81,7 @@ export function ContextSheetGoalView({
   onResumeGoal,
   onClearGoal,
   initialObjective,
+  initial,
   testID,
 }: ContextSheetGoalViewProps) {
   return goal ? (
@@ -91,7 +98,7 @@ export function ContextSheetGoalView({
     <ContextSheetGoalCreateForm
       busy={busy}
       error={error}
-      initial={initialObjective ? { objective: initialObjective } : undefined}
+      initial={initial ?? (initialObjective ? { objective: initialObjective } : undefined)}
       onSetGoal={onSetGoal}
       testID={testID}
     />

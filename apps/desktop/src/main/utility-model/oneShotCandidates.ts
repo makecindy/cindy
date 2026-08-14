@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { toSdkModelString, type AgentKind, type Maker } from '@cindy/maker-core';
+import { type AgentKind, type Maker } from '@cindy/maker-core';
 import { appendProviderRequestPath } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
@@ -56,7 +56,7 @@ export type UtilityTextRequestOptions = {
   maxTokens?: number;
   timeoutMs?: number;
   /** Optional lightweight reasoning hint for short internal classifiers. */
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
   providerId?: string;
   agentKind?: AgentKind;
@@ -415,6 +415,13 @@ async function requestExplicitProviderText(
     };
   }
 
+  // 自定义供应商目录钉同样钳制到模型声明的输出上限(与 builtin 分支同口径,
+  // 见 requestBuiltinProviderText 开头)。Codex 2026-08-06。
+  const catalogModel = provider.models[agentKind]?.find((m) => m.id === model);
+  if (opts.maxTokens !== undefined && catalogModel?.maxOutput !== undefined) {
+    opts = { ...opts, maxTokens: Math.min(opts.maxTokens, catalogModel.maxOutput) };
+  }
+
   if (provider.id === 'xd' || provider.id === 'anthropic' || provider.id === 'openai' || provider.id === 'xai') {
     return requestBuiltinProviderText(prompt, {
       provider,
@@ -535,6 +542,9 @@ function supportsXaiReasoning(model: string): boolean {
   return !(normalized.startsWith('grok-code') || normalized.startsWith('grok-build'));
 }
 
+// 内置供应商的执行分支只认下面硬编码的 xd/anthropic/openai/xai 四家;钉档
+// 清单侧(textOneshotPinOptions.isRoutableForOneshot)按同一集合过滤——新增
+// 第五个聊天型内置供应商时两边一起动,否则清单会列出这里接不住的模型。
 async function requestBuiltinProviderText(
   prompt: string,
   input: {
@@ -544,7 +554,7 @@ async function requestBuiltinProviderText(
     transport: UtilityModelTransport;
     maxTokens?: number;
     timeoutMs?: number;
-    reasoningEffort?: 'low' | 'medium' | 'high';
+    reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   },
 ): Promise<UtilityTextResult> {
   const profile: UtilityModelProfile = {
@@ -558,6 +568,19 @@ async function requestBuiltinProviderText(
   const routing = input.provider.routing[input.agentKind];
   if (!routing) {
     return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'agent_unavailable')] };
+  }
+  // 内置供应商同样要尊重 routing.disabled:目录钉指向的 runtime 被停用后,
+  // 不应再把 prompt 发过去(与自定义分支 430-431 同一判据,reason 同口径)。
+  // Codex 2026-08-06。
+  if (routing.disabled) {
+    return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'endpoint_missing')] };
+  }
+
+  // 插件显式传了 maxTokens 时,钳到该模型目录声明的输出上限(maxOutput),
+  // 避免发送超过模型能力的值被 provider 拒绝。缺省(未传)不钳,走模型自然输出。
+  const catalogModel = findProviderModel(input.provider, input.agentKind, input.model);
+  if (input.maxTokens !== undefined && catalogModel?.maxOutput !== undefined) {
+    input = { ...input, maxTokens: Math.min(input.maxTokens, catalogModel.maxOutput) };
   }
 
   if (input.provider.id === 'xd') {
@@ -601,9 +624,13 @@ async function requestBuiltinProviderText(
           'anthropic-version': '2023-06-01',
           'anthropic-beta': 'oauth-2025-04-20',
         },
-        model: toSdkModelString(input.model, findProviderModel(input.provider, input.agentKind, input.model)?.contextWindow),
+        // 直连 Anthropic API 用目录裸 id;不要复用 toSdkModelString——它会给 1M
+        // 目录模型追加 SDK 专用的 [1m] 后缀,/v1/messages 对该串返回 404(#2429)。
+        model: toAnthropicApiModelId(input.model),
         prompt: text,
-        maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
+        // Anthropic API 协议必填 max_tokens:缺省时以模型目录声明的 maxOutput
+        // (模型自身输出能力)兜底,没有目录条目才回退 81920——宿主不设政策上限。
+        maxTokens: requestOpts?.maxTokens ?? input.maxTokens ?? catalogModel?.maxOutput ?? 81_920,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
         reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
       }),
@@ -799,7 +826,7 @@ async function requestLiteLlmText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 20_000;
@@ -828,11 +855,14 @@ async function requestLiteLlmText(input: {
     const parsed = await response.json() as {
       choices?: Array<{ message?: { content?: unknown } }>;
     };
-    const text = parsed.choices
-      ?.map((choice) => typeof choice.message?.content === 'string' ? choice.message.content : '')
+    const text = (parsed.choices ?? [])
+      .map((choice) => chatCompletionContentText(choice.message?.content))
       .join('')
-      .trim() ?? '';
-    if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
+      .trim();
+    if (!text) {
+      log.warn('utility text chat-completions empty content', chatCompletionEmptyFingerprint(parsed));
+      throw new UtilityTextExecutionError({ reason: 'empty_response' });
+    }
     return text;
   } catch (error) {
     if (error instanceof UtilityTextExecutionError) throw error;
@@ -877,6 +907,19 @@ function appendProviderPath(baseUrl: string, suffix: string): string {
   return url.toString();
 }
 
+/**
+ * catalog model id → 内置 Anthropic `/v1/messages` 直连请求体的 API model id。
+ *
+ * `[1m]` 是 Claude Code SDK 的 beta 通道后缀(由 toSdkModelString 按目录
+ * contextWindow 追加),不是 Anthropic API 模型名;直连 Messages API 时携带它
+ * 会被上游以 404 not_found 拒绝,进而让 Auto-review 持续 fail-closed(#2429)。
+ * 该转换仅用于内置 anthropic 直连分支——不对自定义供应商做全局字符串剥离,
+ * 部分兼容网关可能把 `[1m]` 作为自己的路由 id。
+ */
+export function toAnthropicApiModelId(model: string): string {
+  return model.endsWith('[1m]') ? model.slice(0, -'[1m]'.length) : model;
+}
+
 /** Claude providers may configure either the host root or an existing `/v1` base. */
 function joinAnthropicMessagesPath(baseUrl: string): string {
   const url = new URL(baseUrl);
@@ -905,7 +948,7 @@ async function requestProviderHttpText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   /** Some coding-specialized models reject their wire's reasoning field. */
   supportsReasoning?: boolean;
   /** Unknown custom routes may reject optional fields from an otherwise compatible wire. */
@@ -946,7 +989,10 @@ async function requestProviderHttpText(input: {
       : input.wire === 'anthropic-messages'
         ? {
           model: input.model,
-          max_tokens: input.maxTokens ?? 4096,
+          // Anthropic API 协议必填 max_tokens。缺省由调用方以模型目录声明的
+          // maxOutput 兜底(模型自身输出能力);81920 只是模型不在目录时的最后
+          // 回退,不是宿主承诺的输出上限。
+          max_tokens: input.maxTokens ?? 81_920,
           messages: [{ role: 'user', content: input.prompt }],
         }
         : {
@@ -988,7 +1034,16 @@ async function requestProviderHttpText(input: {
       : input.wire === 'anthropic-messages'
         ? parseAnthropicResponseText(raw)
         : parseChatCompletionText(raw);
-    if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
+    if (!text) {
+      if (input.wire === 'chat-completions') {
+        try {
+          log.warn('utility text chat-completions empty content', chatCompletionEmptyFingerprint(JSON.parse(raw)));
+        } catch {
+          // 指纹尽力而为,解析不了就不记。
+        }
+      }
+      throw new UtilityTextExecutionError({ reason: 'empty_response' });
+    }
     return text;
   } catch (error) {
     if (error instanceof UtilityTextExecutionError) throw error;
@@ -1005,12 +1060,66 @@ function parseChatCompletionText(raw: string): string {
   try {
     const json = JSON.parse(raw) as { choices?: Array<{ message?: { content?: unknown } }> };
     return (json.choices ?? [])
-      .map((choice) => typeof choice.message?.content === 'string' ? choice.message.content : '')
+      .map((choice) => chatCompletionContentText(choice.message?.content))
       .join('')
       .trim();
   } catch {
     return '';
   }
+}
+
+/**
+ * chat-completions 的 message.content 归一:字符串直取;思考模型的 content 可能是
+ * parts 数组([{type:'text',text:…}]),只拼正文段——type 为 'text' 或缺省(最老
+ * 形态),字符串元素(旧网关偶见)直取。reasoning/thinking/tool_result 等带 text
+ * 的非正文段刻意跳过,与顶层 reasoning_content 不取同一立场:思维链不是答案,
+ * 拼进去 expectJson 必挂、普通调用被思维链污染。
+ */
+function chatCompletionContentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (typeof part !== 'object' || part === null) return '';
+        const type = (part as { type?: unknown }).type;
+        if (type !== undefined && type !== 'text') return '';
+        const text = (part as { text?: unknown }).text;
+        return typeof text === 'string' ? text : '';
+      })
+      .join('');
+  }
+  return '';
+}
+
+/**
+ * 2xx 但取不到正文时的结构指纹:只记形状(content 类型/finish_reason/字段名),
+ * 不记内容——错误响应体可能回显请求元数据,模型正文不落盘全文。
+ * (2026-08-05 实证:deepseek-v4-flash 这类思考模型 200 空 content → empty_response,
+ * 没有指纹时无从区分"思考烧光预算"与"返回结构不认"。)
+ */
+function chatCompletionEmptyFingerprint(parsed: unknown): Record<string, unknown> {
+  if (typeof parsed !== 'object' || parsed === null) return { shape: 'non-object' };
+  const choices = (parsed as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return { shape: 'no-choices', topKeys: Object.keys(parsed).slice(0, 8) };
+  }
+  const first = choices[0] as { message?: unknown; finish_reason?: unknown };
+  const message = (
+    typeof first?.message === 'object' && first.message !== null ? first.message : {}
+  ) as Record<string, unknown>;
+  const content = message.content;
+  return {
+    contentType: Array.isArray(content) ? 'array' : content === null ? 'null' : typeof content,
+    contentPartTypes: Array.isArray(content)
+      ? content
+          .slice(0, 6)
+          .map((part) => (typeof part === 'object' && part !== null ? (part as { type?: unknown }).type : typeof part))
+      : undefined,
+    hasReasoningContent: typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0,
+    finishReason: first?.finish_reason,
+    messageKeys: Object.keys(message).slice(0, 8),
+  };
 }
 
 /** Direct request for a user provider runtime selected by the schedule. */
@@ -1026,7 +1135,7 @@ async function requestCustomProviderText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
 }): Promise<string> {
   const headers: Record<string, string> = {
     ...(input.headers ?? {}),

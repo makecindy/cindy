@@ -138,7 +138,7 @@ export function UsageHeatmap({
         {monthLabels.map((m) => (
           <span
             key={`${m.col}-${m.text}`}
-            className="absolute top-0 text-[10px] leading-[14px] text-[var(--text-tertiary)]"
+            className="absolute top-0 text-10 leading-[1.4] text-[var(--text-tertiary)]"
             style={{ left: m.col * colPitch }}
           >
             {m.text}

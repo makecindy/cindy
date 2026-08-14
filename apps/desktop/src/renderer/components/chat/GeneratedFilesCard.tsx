@@ -113,7 +113,7 @@ function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
           'h-7 px-2.5 py-1.5 max-w-[280px]',
           'rounded-[9999px]',
           'bg-[var(--msg-md-inline-code-bg)]',
-          'text-[13px] font-medium text-[var(--msg-assistant-text)]',
+          'text-13 font-medium text-[var(--msg-assistant-text)]',
           'hover:bg-[var(--cmd-palette-item-hover)]',
           'transition-colors cursor-pointer',
         )}
@@ -259,7 +259,7 @@ export function GeneratedFilesCard({
             onClick={() => setExpanded(true)}
             className={cn(
               'inline-flex items-center gap-1 h-7 px-2.5 py-1.5 rounded-[9999px]',
-              'text-[13px] text-[var(--text-secondary)]',
+              'text-13 text-[var(--text-secondary)]',
               'hover:bg-[var(--cmd-palette-item-hover)] transition-colors cursor-pointer',
             )}
           >
@@ -273,7 +273,7 @@ export function GeneratedFilesCard({
             onClick={() => setExpanded(false)}
             className={cn(
               'inline-flex items-center gap-1 h-7 px-2.5 py-1.5 rounded-[9999px]',
-              'text-[13px] text-[var(--text-secondary)]',
+              'text-13 text-[var(--text-secondary)]',
               'hover:bg-[var(--cmd-palette-item-hover)] transition-colors cursor-pointer',
             )}
           >

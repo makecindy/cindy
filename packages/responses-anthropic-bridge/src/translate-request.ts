@@ -97,6 +97,45 @@ function instructionsText(value: ResponsesRequest['instructions']): string {
   }).join('');
 }
 
+function agentMessageText(item: JsonObject, itemIndex: number): string {
+  const normalizedAuthor = typeof item.author === 'string'
+    ? item.author.replace(/\s*[\r\n]+\s*/g, ' ').trim()
+    : '';
+  const author = normalizedAuthor || 'agent';
+  let body = '';
+  let omittedEncryptedContent = false;
+  if (typeof item.content === 'string') {
+    body = item.content;
+  } else if (Array.isArray(item.content)) {
+    const parts: string[] = [];
+    for (const part of item.content) {
+      if (!isObject(part) || typeof part.type !== 'string') {
+        throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
+      }
+      if (part.type === 'encrypted_content') {
+        omittedEncryptedContent = true;
+        continue;
+      }
+      if (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text') {
+        if (typeof part.text !== 'string') {
+          throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
+        }
+        parts.push(part.text);
+        continue;
+      }
+      throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
+    }
+    body = parts.join('\n');
+  } else {
+    throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
+  }
+  return body.trim()
+    ? `[collab ${author}]\n${body}`
+    : omittedEncryptedContent
+      ? `[collab message from ${author}; encrypted payload omitted]`
+      : `[collab message from ${author}; empty content]`;
+}
+
 function parseDataUrl(value: string): { mediaType: string; data: string } | null {
   const match = /^data:([^;,]+)(?:;[^,]*)*;base64,([\s\S]+)$/i.exec(value);
   if (!match) return null;
@@ -1112,7 +1151,8 @@ export function translateResponsesRequest(
     assistant = null;
   };
 
-  for (const rawItem of items) {
+  for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+    const rawItem = items[itemIndex];
     if (!isObject(rawItem)) throw new UnsupportedResponsesFeatureError('input item');
     const type = stringValue(rawItem.type);
     if (type === 'reasoning') {
@@ -1166,6 +1206,11 @@ export function translateResponsesRequest(
         name: mapping.wireName,
         input: inputValue,
       });
+      continue;
+    }
+    if (type === 'agent_message') {
+      assistant ??= { role: 'assistant', content: [] };
+      assistant.content.push(textPart(agentMessageText(rawItem, itemIndex)));
       continue;
     }
     if (type === 'input_text' || type === 'input_image' || type === 'input_file') {

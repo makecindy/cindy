@@ -1,22 +1,17 @@
 /**
- * ghost-panel-window settings-store —— 「插件面板在独立窗口中显示」的持久化。
+ * ghost-panel-window 进程内状态。
  *
- * File: <userData>/ghost-panel-windows-settings.json
- *
- * 形如 { windows: { <ghostId>: { detached, lastOpen } } }。语义对照
- * right-sidebar-window/settings-store.ts(同一 override 模型、同只由 main 的
- * controller 写),差异是按 ghostId 多条:每个插件面板各自记偏好与恢复状态。
- *  - detached: **偏好**。用户点了该面板的「独立窗口」按钮;
- *  - lastOpen: **状态**。退出时该窗口是否开着,供下次启动恢复。
- * 没有条目 = 从未抽离(等价两个 false)。
+ * 每个 ghostId 的 detached / lastOpen 只服务当前客户端进程，用于窗口状态机和隐藏复用；
+ * 客户端重启后所有插件面板一律回到主窗口。启动时还会删除旧版本留下的分离偏好文件。
+ * 窗口尺寸与位置由独立的 window-state 文件管理，不受这里影响。
  */
 
 import { app } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { isValidGhostId } from '../../shared/ghost.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
-import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 
 const log = desktopMakerLogger.child('ghost-panel-window-settings-store');
 
@@ -29,7 +24,7 @@ export interface GhostPanelWindowsSettings {
   windows: Record<string, GhostPanelWindowEntrySettings>;
 }
 
-const DEFAULTS: GhostPanelWindowsSettings = { windows: {} };
+let runtimeSettings: GhostPanelWindowsSettings = { windows: {} };
 
 function settingsFilePath(): string {
   return path.join(app.getPath('userData'), 'ghost-panel-windows-settings.json');
@@ -51,16 +46,8 @@ export function normalizeGhostPanelWindowsSettings(raw: unknown): GhostPanelWind
   return { windows };
 }
 
-const store = createOverrideSettingsFile<GhostPanelWindowsSettings>({
-  filePath: settingsFilePath,
-  defaults: DEFAULTS,
-  normalize: normalizeGhostPanelWindowsSettings,
-  log,
-  label: 'ghost-panel-windows',
-});
-
 export function readGhostPanelWindowsSettings(): GhostPanelWindowsSettings {
-  return store.read();
+  return { windows: { ...runtimeSettings.windows } };
 }
 
 /** 单条 patch:writePatch 是浅合并,windows map 必须整体读改写。 */
@@ -68,16 +55,27 @@ export function patchGhostPanelWindowEntry(
   ghostId: string,
   patch: Partial<GhostPanelWindowEntrySettings>,
 ): void {
-  const current = store.read().windows;
+  const current = runtimeSettings.windows;
   const entry = current[ghostId] ?? { detached: false, lastOpen: false };
-  store.writePatch({ windows: { ...current, [ghostId]: { ...entry, ...patch } } });
+  runtimeSettings = { windows: { ...current, [ghostId]: { ...entry, ...patch } } };
 }
 
 /** 删条目(卸载清理):不存在时为 no-op。 */
 export function removeGhostPanelWindowEntry(ghostId: string): void {
-  const current = store.read().windows;
+  const current = runtimeSettings.windows;
   if (!(ghostId in current)) return;
   const next = { ...current };
   delete next[ghostId];
-  store.writePatch({ windows: next });
+  runtimeSettings = { windows: next };
+}
+
+/** 新进程重置全部插件面板的分离状态，并清理旧版本遗留的持久化偏好。 */
+export function resetGhostPanelWindowSettingsForStartup(): void {
+  runtimeSettings = { windows: {} };
+  const legacyFile = settingsFilePath();
+  try {
+    fs.rmSync(legacyFile, { force: true });
+  } catch (err) {
+    log.warn('failed to remove legacy ghost-panel window settings', { legacyFile, err });
+  }
 }

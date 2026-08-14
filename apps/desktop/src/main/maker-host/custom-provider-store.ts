@@ -390,7 +390,9 @@ function normalizeRuntime(
     });
   const out: CustomProviderRuntimeConfig = { baseUrl: rt.baseUrl.trim(), models };
   if (rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
-  if (rt.requestPath && rt.requestPath.trim()) out.requestPath = rt.requestPath.trim();
+  if (agent !== 'pi' && rt.requestPath && rt.requestPath.trim()) {
+    out.requestPath = rt.requestPath.trim();
+  }
   if (rt.modelsUrl && rt.modelsUrl.trim()) out.modelsUrl = rt.modelsUrl.trim();
   return out;
 }
@@ -535,7 +537,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
     ) {
       entry.wireProtocol = r.wireProtocol;
     }
-    if (isProviderRequestPath(r.requestPath)) {
+    if (agent !== 'pi' && isProviderRequestPath(r.requestPath)) {
       entry.requestPath = r.requestPath;
     }
     if (r.headers && typeof r.headers === 'object' && !Array.isArray(r.headers)) {

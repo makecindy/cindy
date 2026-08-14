@@ -16,6 +16,9 @@
  */
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+import fs from 'node:fs';
+import path from 'node:path';
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from 'node:timers';
 
 import type { AgentKind } from './types/common.js';
 import type { Capabilities } from './types/capabilities.js';
@@ -31,6 +34,9 @@ import type {
   ListCustomizationsOptions,
   ListCustomizationsResult,
 } from './types/customizations.js';
+import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
+import { piExplicitSkillRuntimePath } from './agents/pi/skill-runtime-provenance.js';
+import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resource-assembly.js';
 import { Session, generateSessionId } from './session.js';
 import type {
   AgentSessionHandle,
@@ -145,6 +151,123 @@ function capabilitiesForSession(
       reason: 'platform-limited',
       message: '远端 Codex 会话暂不支持对话 rewind',
     },
+  };
+}
+
+function canonicalPiRuntimePath(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS = 250;
+const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET = 2_048;
+
+async function fingerprintPiProjectSkillForPalette(
+  sourcePath: string,
+  canonicalRepoRoot: string,
+  budget: { remainingEntries: number; deadlineAtMs: number },
+): ReturnType<typeof fingerprintPiProjectSkillEntrypoint> {
+  const remainingMs = budget.deadlineAtMs - Date.now();
+  if (remainingMs <= 0) return null;
+  let timeout: number | NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      fingerprintPiProjectSkillEntrypoint(sourcePath, canonicalRepoRoot, { budget }),
+      new Promise<null>((resolve) => {
+        timeout = setNodeTimeout(() => resolve(null), remainingMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearNodeTimeout(timeout);
+  }
+}
+
+async function mergePiRuntimeSkillStatuses(
+  result: ListAgentSkillsResult,
+  manifest: PiRuntimeCapabilityManifest | undefined,
+): Promise<ListAgentSkillsResult> {
+  if (manifest?.status !== 'loaded') return result;
+  const loadedExplicitSkills = new Map<string, string>();
+  const loadedLegacyProjectSkills = new Map<string, string>();
+  const changedProjectSkills = new Map<string, string>();
+  const fingerprintBudget = {
+    remainingEntries: PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET,
+    deadlineAtMs: Date.now() + PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS,
+  };
+  for (const skill of manifest.projectResources?.loadedSkills ?? []) {
+    const canonicalSourcePath = canonicalPiRuntimePath(skill.sourcePath);
+    if (!skill.snapshotDigest || !skill.sourceFingerprint || !skill.canonicalRepoRoot) {
+      changedProjectSkills.set(canonicalSourcePath, skill.sourcePath);
+      continue;
+    }
+    const currentFingerprint = await fingerprintPiProjectSkillForPalette(
+      skill.sourcePath,
+      skill.canonicalRepoRoot,
+      fingerprintBudget,
+    );
+    if (
+      currentFingerprint?.contentDigest !== skill.snapshotDigest
+      || currentFingerprint.sourceStateDigest !== skill.sourceFingerprint
+    ) {
+      changedProjectSkills.set(canonicalSourcePath, skill.sourcePath);
+      continue;
+    }
+    loadedExplicitSkills.set(canonicalSourcePath, skill.commandName);
+  }
+  for (const command of manifest.commands) {
+    const baseDir = command.sourceInfo.baseDir;
+    if (command.source !== 'skill' || !command.name.startsWith('skill:')) continue;
+    const skillName = command.name.slice('skill:'.length);
+    if (command.sourceInfo.scope === 'project' && typeof baseDir === 'string') {
+      loadedLegacyProjectSkills.set(
+        [skillName, canonicalPiRuntimePath(baseDir)].join('\0'),
+        command.name,
+      );
+      continue;
+    }
+    // Pinned Pi reports explicit --skill with a paired baseDir + SKILL.md path.
+    // The shared helper rejects partial/mismatched provenance before a
+    // user/global collision can mark a project scanner result loaded. Match
+    // explicit resources by path because frontmatter names need not equal
+    // their containing folder names.
+    const explicitPath = piExplicitSkillRuntimePath(command);
+    if (explicitPath) {
+      loadedExplicitSkills.set(canonicalPiRuntimePath(explicitPath), command.name);
+    }
+  }
+  if (
+    loadedExplicitSkills.size === 0
+    && loadedLegacyProjectSkills.size === 0
+    && changedProjectSkills.size === 0
+  ) return result;
+  const changedSkillErrors = [...changedProjectSkills.values()].map((skillPath) => ({
+    path: skillPath,
+    message: 'Project skill changed after this Pi session started; restart the session to load the current version.',
+  }));
+  return {
+    ...result,
+    skills: result.skills.map((skill) => {
+      let runtimeCommandName: string | undefined;
+      if (skill.scope === 'repo' && skill.path) {
+        const canonicalSkillPath = canonicalPiRuntimePath(skill.path);
+        if (!changedProjectSkills.has(canonicalSkillPath)) {
+          runtimeCommandName = loadedExplicitSkills.get(canonicalSkillPath)
+            ?? [skill.path, path.dirname(path.dirname(skill.path))]
+              .map(canonicalPiRuntimePath)
+              .map((skillPath) => loadedLegacyProjectSkills.get([skill.name, skillPath].join('\0')))
+              .find((commandName) => commandName !== undefined);
+        }
+      }
+      return runtimeCommandName
+        ? { ...skill, runtimeStatus: 'loaded' as const, runtimeCommandName }
+        : skill;
+    }),
+    ...(changedSkillErrors.length > 0
+      ? { errors: [...(result.errors ?? []), ...changedSkillErrors] }
+      : {}),
   };
 }
 
@@ -459,6 +582,7 @@ export class Maker {
           effort: opts.effort,
           permissionMode: opts.permissionMode,
           fastMode: opts.fastMode,
+          reviewMode: opts.reviewMode,
           parentSessionId: opts.parentSessionId,
           // remoteHostId: 远端 session 把目标机器持久化, 之后 resume / list 都能识别。
           // 本地 session 留 undefined (sqlite 落空), 跟历史行为兼容。
@@ -642,6 +766,19 @@ export class Maker {
     return this.activeSessions.get(id);
   }
 
+  /** Read a live session's per-runtime Pi capability snapshot without creating or resuming it. */
+  getSessionRuntimeCapabilities(id: string): PiRuntimeCapabilityManifest | undefined {
+    return this.activeSessions.get(id)?.getRuntimeCapabilities();
+  }
+
+  /** Subscribe to a live session's per-runtime Pi catalog without sharing state across sessions. */
+  onSessionRuntimeCapabilitiesChange(
+    id: string,
+    listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
+  ): () => void {
+    return this.activeSessions.get(id)?.onRuntimeCapabilitiesChange(listener) ?? (() => undefined);
+  }
+
   /**
    * 读 session 持久化元数据 (title / agentKind / sdkSessionId / ...).
    * 主要给 IPC 层在 send 前查最新 title 作为日志诊断字段透传用 ——
@@ -689,6 +826,17 @@ export class Maker {
   }
 
   /**
+   * Return the close cause for the exact runtime Session instance.
+   *
+   * A missing explicit cause means the vendor/Session closed itself. Keep this
+   * keyed by instance rather than business session id: a replacement can be
+   * created before a late close notification from the old instance arrives.
+   */
+  getSessionCloseReason(session: Session): MakerSessionCloseReason {
+    return this.closeReasons.get(session) ?? 'unexpected';
+  }
+
+  /**
    * Maker 进程级 shutdown — app.before-quit / 信号 / 崩溃 hook 调一次。
    *
    * **强制退出语义** (与 normal logout 路径不同): agent.dispose() 和 session.close()
@@ -715,6 +863,14 @@ export class Maker {
     const agentEntries = Object.entries(this.agents);
 
     const errors: Array<{ kind: string; name: string; error: unknown }> = [];
+
+    // shutdown() calls detach() directly instead of closeSession(), so record
+    // the explicit cause before any asynchronous close callback can run. This
+    // prevents app exit from looking like an unexpected provider rebuild and
+    // accidentally preserving an automatic retry lease.
+    for (const session of sessSnapshot) {
+      if (!this.closeReasons.has(session)) this.closeReasons.set(session, 'requested');
+    }
 
     // **agent.dispose 优先排队**: 微任务 ordering 不是强保证 (dispose 内部还有 await
     // hostPromise 等 hop), 但先排队意味着 SIGTERM 那一步至少不会被 session-close
@@ -780,9 +936,20 @@ export class Maker {
    */
   async listAgentSkills(
     agentKind: AgentKind,
-    opts: ListAgentSkillsOptions,
+    opts: ListAgentSkillsOptions & { sessionId?: string },
   ): Promise<ListAgentSkillsResult> {
-    return this.requireAgent(agentKind).listAgentSkills(opts);
+    const { sessionId, ...agentOpts } = opts;
+    const result = await this.requireAgent(agentKind).listAgentSkills(agentOpts);
+    if (agentKind !== 'pi' || !sessionId) return result;
+    const session = this.getSession(sessionId);
+    if (
+      session?.agentKind !== 'pi'
+      || !opts.workingDir
+      || canonicalPiRuntimePath(opts.workingDir) !== canonicalPiRuntimePath(session.workDir)
+    ) {
+      return result;
+    }
+    return mergePiRuntimeSkillStatuses(result, session.getRuntimeCapabilities());
   }
 
   /** ChatInput `@` palette entries, routed by agent kind. */

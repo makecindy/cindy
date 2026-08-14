@@ -16,10 +16,12 @@ import { CINDY_REGION_CODE } from '../../shared/regionCode.js';
 import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
 import type { SubmittedIssueRecord } from '../../shared/myIssues.js';
 import { myIssueUrl } from '../../shared/myIssues.js';
+import { redactSensitive } from '../learn-host/redaction';
 import type {
   IssueConfirmDecision,
   IssueDraft,
   IssueEnvInfo,
+  IssueSubmissionChoices,
   IssueSubmissionIdentity,
 } from './issueConfirmBridge';
 
@@ -31,6 +33,8 @@ export type GithubIssueSubmitResult =
       issueUrl: string;
       finalTitle: string;
       editedByUser: boolean;
+      /** agent 初稿进入确认卡前是否命中过常见敏感信息并被自动替换。 */
+      privacyRedacted: boolean;
     }
   | {
       ok: false;
@@ -70,11 +74,11 @@ export interface GithubIssueSubmitServiceDeps {
     sessionId: string,
     draft: IssueDraft,
     env: IssueEnvInfo,
-    submissionIdentity: IssueSubmissionIdentity,
+    submissionChoices: IssueSubmissionChoices,
     suggestedPublicName?: string,
   ) => Promise<IssueConfirmDecision>;
-  /** 每次发起确认前现查；已绑定但凭证失效时应抛 AUTH_NOT_READY，不能冒充未绑定。 */
-  resolveSubmissionIdentity: (workingDir: string) => Promise<IssueSubmissionIdentity>;
+  /** 平台身份必有；仅当实时验证到可用账号时附加 GitHub 用户身份。 */
+  resolveSubmissionChoices: (workingDir: string) => Promise<IssueSubmissionChoices>;
   /** body factory must be evaluated for each network attempt after auth refresh. */
   postIssue: (
     submissionIdentity: IssueSubmissionIdentity,
@@ -110,22 +114,20 @@ export async function submitGithubIssueWithConfirm(
     region: deps.getRegion(),
   };
 
-  let submissionIdentity: IssueSubmissionIdentity;
+  let submissionChoices: IssueSubmissionChoices;
   try {
-    submissionIdentity = await deps.resolveSubmissionIdentity(req.workingDir);
+    submissionChoices = await deps.resolveSubmissionChoices(req.workingDir);
   } catch (err) {
     return mapSubmitError(err);
   }
 
-  const suggestedPublicName =
-    submissionIdentity.kind === 'platform'
-      ? (normalizeIssuePublicName(deps.getSubmitterName()) ?? undefined)
-      : undefined;
+  const suggestedPublicName = normalizeIssuePublicName(deps.getSubmitterName()) ?? undefined;
+  const preparedDraft = redactIssueDraft(req);
   const decision = await deps.confirm(
     req.sessionId,
-    { title: req.title, body: req.body, type: req.type },
+    preparedDraft.draft,
     env,
-    submissionIdentity,
+    submissionChoices,
     suggestedPublicName,
   );
 
@@ -144,6 +146,7 @@ export async function submitGithubIssueWithConfirm(
     };
   }
 
+  const submissionIdentity = decision.submissionIdentity ?? submissionChoices.platform;
   const confirmedPublicName =
     submissionIdentity.kind === 'platform' ? normalizeIssuePublicName(decision.publicName) : null;
   if (submissionIdentity.kind === 'platform' && !confirmedPublicName) {
@@ -157,9 +160,9 @@ export async function submitGithubIssueWithConfirm(
   // 用户确认版优先 —— agent 传入值在这里被丢弃,代码层保证。
   const finalTitle = decision.title.slice(0, SERVER_TITLE_MAX);
   const editedByUser =
-    decision.title !== req.title ||
-    decision.body !== req.body ||
-    decision.type !== req.type;
+    decision.title !== preparedDraft.draft.title ||
+    decision.body !== preparedDraft.draft.body ||
+    decision.type !== preparedDraft.draft.type;
 
   const uiLanguage = decision.uiLanguage ?? deps.getFallbackLocale();
   const regionCode = CINDY_REGION_CODE[env.region];
@@ -195,10 +198,31 @@ export async function submitGithubIssueWithConfirm(
       issueUrl: result.githubIssue.url,
       finalTitle,
       editedByUser,
+      privacyRedacted: preparedDraft.privacyRedacted,
     };
   } catch (err) {
     return mapSubmitError(err);
   }
+}
+
+/**
+ * Agent 可能把用户粘贴的日志、错误和路径直接带进初稿。先过高置信度脱敏，再交给
+ * 用户确认；用户在确认卡里主动编辑的内容视为明确确认，不在这里静默改写。
+ */
+function redactIssueDraft(req: SubmitIssueRequest): {
+  draft: Pick<SubmitIssueRequest, 'title' | 'body' | 'type'>;
+  privacyRedacted: boolean;
+} {
+  const title = redactSensitive(req.title);
+  const body = redactSensitive(req.body);
+  return {
+    draft: {
+      title: title.text.trim(),
+      body: body.text.trim(),
+      type: req.type,
+    },
+    privacyRedacted: title.hitCount > 0 || body.hitCount > 0,
+  };
 }
 
 /** 记账是 best-effort:任何异常只吞掉,不影响已经成功的提交结果。 */

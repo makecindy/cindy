@@ -1,8 +1,8 @@
 /**
- * 端点清单阻断框的四语文案与内容组装。
+ * 端点清单阻断框的多语文案与内容组装。
  *
  * 覆盖两件事:
- *  1. 文案完整性——四种语言的 key 集合一致、无空值,且**单语言输出**(这个框原先
+ *  1. 文案完整性——各语言的 key 集合一致、无空值,且**单语言输出**(这个框原先
  *     把中英两段拼在同一个 detail 里,用户看到一屏混排,是本次要修的现象);
  *  2. 组装规则——离线按钮只在「网络层失败 + 有可用缓存」时出现,choices 与 buttons
  *     一一对应(宿主按 index 取语义,错位就会把"退出"当成"重试")。
@@ -17,7 +17,7 @@ import {
   type EndpointManifestDialogLocale,
 } from '../endpointManifestDialogCopy';
 
-const LOCALES: EndpointManifestDialogLocale[] = ['zh-CN', 'en', 'ja', 'ko'];
+const LOCALES: EndpointManifestDialogLocale[] = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'];
 
 /** CJK 与拉丁字母混排检测用:排除产品名、已裁决术语与占位符后仍有英文单词即视为混排。 */
 function stripAllowedLatin(text: string): string {
@@ -25,7 +25,7 @@ function stripAllowedLatin(text: string): string {
 }
 
 describe('端点清单弹框文案', () => {
-  it('四种语言 key 集合一致且无空值', () => {
+  it('全部语言 key 集合一致且无空值', () => {
     const reference = Object.keys(ENDPOINT_MANIFEST_DIALOG_COPY['zh-CN']).sort();
     for (const locale of LOCALES) {
       const copy = ENDPOINT_MANIFEST_DIALOG_COPY[locale];
@@ -45,7 +45,7 @@ describe('端点清单弹框文案', () => {
   });
 
   it('CJK 语言的文案不夹带英文句子(不再中英混排)', () => {
-    for (const locale of ['zh-CN', 'ja', 'ko'] as const) {
+    for (const locale of ['zh-CN', 'zh-TW', 'ja', 'ko'] as const) {
       for (const [key, value] of Object.entries(ENDPOINT_MANIFEST_DIALOG_COPY[locale])) {
         const leftover = stripAllowedLatin(value);
         expect(/[A-Za-z]{3,}/.test(leftover), `${locale}.${key} 夹带英文:${value}`).toBe(false);

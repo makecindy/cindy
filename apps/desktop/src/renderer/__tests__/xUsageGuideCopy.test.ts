@@ -1,10 +1,10 @@
 /**
- * X 用法与风险告知的四语言文案契约。
+ * X 用法与风险告知的多语言文案契约。
  *
  * 为什么需要专门一测:这一节的文案里有两样东西**没有任何编译期约束**,而写错的后果
  * 都是用户可见的 ——
  *
- *   1. **bot handle `@askmycindy` 硬编码在四份 locale 里。** 它不来自 binding:这一节
+ *   1. **bot handle `@askmycindy` 硬编码在各 locale 里。** 它不来自 binding:这一节
  *      在用户还没绑定时就要显示(评估阶段最需要看到风险), 那时候拿不到 scopeName。
  *      改 handle 时四份都得改, 漏一份就会让那个语言的用户去 @ 一个不存在的账号。
  *      (硬编码是安全的: cn 与 global 两份 endpoint manifest 的 xHookWsUrl 指向同一个
@@ -23,6 +23,7 @@ import en from '../i18n/locales/en/common.json';
 import ja from '../i18n/locales/ja/common.json';
 import ko from '../i18n/locales/ko/common.json';
 import zhCN from '../i18n/locales/zh-CN/common.json';
+import zhTW from '../i18n/locales/zh-TW/common.json';
 
 const BOT_HANDLE = '@askmycindy';
 
@@ -41,6 +42,8 @@ type GuideCopy = {
 const LOCALES: Record<string, GuideCopy> = {
   'zh-CN': (zhCN as never as { settings: { remoteControl: { hook: { x: { guide: GuideCopy } } } } })
     .settings.remoteControl.hook.x.guide,
+  'zh-TW': (zhTW as never as { settings: { remoteControl: { hook: { x: { guide: GuideCopy } } } } })
+    .settings.remoteControl.hook.x.guide,
   en: (en as never as { settings: { remoteControl: { hook: { x: { guide: GuideCopy } } } } })
     .settings.remoteControl.hook.x.guide,
   ja: (ja as never as { settings: { remoteControl: { hook: { x: { guide: GuideCopy } } } } })
@@ -49,8 +52,8 @@ const LOCALES: Record<string, GuideCopy> = {
     .settings.remoteControl.hook.x.guide,
 };
 
-describe('X 用法与风险告知的四语言文案', () => {
-  it('四份 locale 都齐全, 没有空串', () => {
+describe('X 用法与风险告知的多语言文案', () => {
+  it('所有 locale 都齐全, 没有空串', () => {
     for (const [loc, guide] of Object.entries(LOCALES)) {
       for (const [key, value] of Object.entries(guide)) {
         expect(typeof value, `${loc}.${key}`).toBe('string');
@@ -65,14 +68,15 @@ describe('X 用法与风险告知的四语言文案', () => {
     }
   });
 
-  it('撤回说明都写出 /delete: 那是唯一四语通用的命令词', () => {
+  it('撤回说明都写出 /delete: 这是跨语言通用的命令词', () => {
     for (const [loc, guide] of Object.entries(LOCALES)) {
       expect(guide.withdrawBody, `${loc}.withdrawBody 必须含 /delete`).toContain('/delete');
     }
   });
 
-  it('中文命令词 /删除 只出现在 zh-CN: 对非中文用户是噪音', () => {
+  it('中文命令词按简繁中文展示, 对非中文用户不产生噪音', () => {
     expect(LOCALES['zh-CN'].withdrawBody).toContain('/删除');
+    expect(LOCALES['zh-TW'].withdrawBody).toContain('/刪除');
     for (const loc of ['en', 'ja', 'ko']) {
       expect(LOCALES[loc].withdrawBody, `${loc} 不该提 /删除`).not.toContain('删除');
     }
@@ -96,6 +100,7 @@ describe('X 用法与风险告知的四语言文案', () => {
     // 指出 P2; 初版四语分别是「我明白」/ Got it / 了解しました / 이해했어요)。
     const BANNED: Record<string, readonly string[]> = {
       'zh-CN': ['我明白', '知道了', '确定', '提交'],
+      'zh-TW': ['我明白', '知道了', '確定', '提交'],
       en: ['Got it', 'Got It', 'OK', 'Confirm'],
       ja: ['了解しました', 'OK'],
       ko: ['이해했어요', '확인'],
@@ -103,6 +108,7 @@ describe('X 用法与风险告知的四语言文案', () => {
     // 对象 = 风险本身。四语各自的说法, 比"长度下限"之类的代理判据准确。
     const OBJECT: Record<string, string> = {
       'zh-CN': '风险',
+      'zh-TW': '風險',
       en: 'Risk',
       ja: 'リスク',
       ko: '위험',
@@ -113,10 +119,9 @@ describe('X 用法与风险告知的四语言文案', () => {
           word,
         );
       }
-      expect(
-        guide.ackConfirm,
-        `${loc}.ackConfirm 必须点名确认对象（${OBJECT[loc]}）`,
-      ).toContain(OBJECT[loc]);
+      expect(guide.ackConfirm, `${loc}.ackConfirm 必须点名确认对象（${OBJECT[loc]}）`).toContain(
+        OBJECT[loc],
+      );
     }
   });
 
@@ -130,6 +135,7 @@ describe('X 用法与风险告知的四语言文案', () => {
     // 「一份文案、两处渲染, 不各写一份」, 加 variant 等于把它想消掉的漂移风险请回来。
     const BANNED: Record<string, readonly string[]> = {
       'zh-CN': ['下面', '下方', '以下'],
+      'zh-TW': ['下面', '下方', '以下'],
       en: ['below'],
       ja: ['下で', '以下'],
       ko: ['아래'],

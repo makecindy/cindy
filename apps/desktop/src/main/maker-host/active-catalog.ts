@@ -31,6 +31,7 @@ import {
   type Catalog,
   type CatalogModel,
   type Provider,
+  type ProviderWireProtocol,
 } from '@cindy/model-providers';
 
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
@@ -76,6 +77,7 @@ export interface XdGatewayAgentOverride {
   defaultEffort?: string | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
+  wireProtocol?: Extract<ProviderWireProtocol, 'anthropic-messages' | 'openai-responses'>;
 }
 
 /**
@@ -98,7 +100,7 @@ export interface XdGatewayModelInfo {
   /** AIGateway 缓存 token 单价(per token);参与「免费」判定与价格展示。 */
   cacheReadInputTokenCost?: number;
   cacheCreationInputTokenCost?: number;
-  /** 进哪些 runtime tab;缺省 = 仅 claude-code 兜底。 */
+  /** 进哪些 runtime tab；v3 由服务端完整下发。 */
   agents?: AgentKind[];
   name?: string;
   group?: string;
@@ -113,10 +115,9 @@ export interface XdGatewayModelInfo {
   /** 默认可见性;缺省按 true。 */
   defaultEnabled?: boolean;
   /**
-   * 新对话默认种子的 agent 标记(服务端 /models 下发的 newSessionDefault)。仅 wire agent;
-   * pi 由 xdGatewayTargetAgents 投影进 pi tab 后,按 'claude-code' 口径判定默认。
+   * 新对话默认种子的 agent 标记(服务端 /models 下发的 newSessionDefault)。
    */
-  newSessionDefault?: ('claude-code' | 'codex')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
   /** 展示图标 id(AI Gateway 设定;缺省 / 未知值渲染层回落来源供应商标)。 */
   icon?: string;
   modalities?: { input: string[]; output: string[] };
@@ -130,17 +131,9 @@ export interface XdGatewayModelInfo {
  * 列表完全以网关为准,不再由 OSS 产品目录决定)。未登录 / 拉取失败 / 空响应时
  * 保持空数组,绝不把产品目录里的静态模型冒充成网关实时可用模型。有值时 xd
  * 供应商的模型列表整体重建。模型、tab 归属、展示元数据和价格都只读服务端条目；
- * 字段缺失时使用确定性客户端默认值，不读取公共 Catalog 补充。
+ * v3 必需字段在协议边界严格校验；这里不读取公共 Catalog，也不按模型 id 或固定常量补值。
  */
 let xdGatewayModels: XdGatewayModelInfo[] = [];
-/**
- * XD 服务端只声明 claude-code、未声明 codex 的聊天模型。
- *
- * 这些模型在客户端投影进 Codex 选择器，但请求必须走本地
- * Responses → Anthropic Messages bridge，不能误用 XD 的原生 Responses 路由。
- * Set 在模型目录刷新时一次性派生，路由热路径只做 O(1) 查询。
- */
-let xdCodexAnthropicBridgeModelIds = new Set<string>();
 
 /**
  * Anthropic(Claude.ai 订阅)的**发现清单**:由 host 的 anthropic 发现流程注入
@@ -161,48 +154,29 @@ let localOverrides: ModelCatalogOverrides = EMPTY_MODEL_CATALOG_OVERRIDES;
 /** 最近一次合并的 registry 实体化告警(单 route 隔离不拖垮其余;刷新路径读走打日志)。 */
 let lastPlanWarnings: ModelPlaneWarning[] = [];
 
-const VALID_EFFORTS: ReadonlySet<string> = new Set([
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-  'ultra',
-]);
-
 type Effort = CatalogModel['efforts'][number];
 
 function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
-  const agents: AgentKind[] =
-    model.agents && model.agents.length > 0 ? [...model.agents] : ['claude-code'];
-  // Pi 走网关 anthropic-messages 协议，可达面与 claude-code 相同；服务端目录
-  // 尚无 pi 概念时按 claude-code 归属镜像，显式声明 pi 后自然不重复。
-  if (agents.includes('claude-code') && !agents.includes('pi')) agents.push('pi');
-  return agents;
+  return model.agents ? [...model.agents] : [];
 }
 
-function deriveXdCodexAnthropicBridgeModelIds(models: XdGatewayModelInfo[]): Set<string> {
-  const support = new Map<string, { claudeCode: boolean; codex: boolean }>();
-  for (const model of models) {
-    const current = support.get(model.id) ?? { claudeCode: false, codex: false };
-    for (const agent of xdGatewayTargetAgents(model)) {
-      if (agent === 'claude-code') current.claudeCode = true;
-      else if (agent === 'codex') current.codex = true;
-    }
-    support.set(model.id, current);
-  }
-  return new Set(
-    [...support]
-      .filter(([, agents]) => agents.claudeCode && !agents.codex)
-      .map(([modelId]) => modelId),
+/**
+ * XD 下发模型给 Pi 时的真实 wire protocol。
+ *
+ * Pi provider 始终叫 `cindy`；这里只读取 v3 服务端给该模型的 transport，供
+ * models.json 写入模型级 `api`。三态语义：非 XD Pi 模型返回 undefined；XD Pi 模型
+ * 缺失或协议非法返回 null，由 maker-core fail closed；有效配置返回 Responses。
+ */
+export function resolveXdPiGatewayWireProtocol(
+  modelId: string,
+): Extract<ProviderWireProtocol, 'openai-responses'> | null | undefined {
+  const normalized = modelId.replace(/\[1m\]$/, '');
+  const gatewayModel = xdGatewayModels.find(
+    (model) => model.id === normalized,
   );
-}
-
-/** 当前 XD 模型是否由客户端投影给 Codex、并应走 Anthropic Messages bridge。 */
-export function isXdCodexAnthropicBridgeModel(modelId: string): boolean {
-  // Codex 会把 1M 上下文选择编码成 wire model 后缀；目录身份仍是原始 model id。
-  return xdCodexAnthropicBridgeModelIds.has(modelId.replace(/\[1m\]$/, ''));
+  if (!gatewayModel?.agents?.includes('pi')) return undefined;
+  const wireProtocol = gatewayModel.perAgent?.pi?.wireProtocol;
+  return wireProtocol === 'openai-responses' ? wireProtocol : null;
 }
 
 function nonNegativeFiniteOrUndefined(value: number | undefined): number | undefined {
@@ -631,13 +605,13 @@ function computeMerged(): Catalog {
   });
 
   // XD 网关权威模型清单重建。即使实时清单为空也必须重建为空:不能证明某个模型
-  // 当前在网关可用就不显示。元数据**只信服务端下发 + 确定性默认值**(2026-07-19 起
+  // 当前在网关可用就不显示。元数据**只信服务端下发**(2026-07-19 起
   // 不再回落产品目录静态模型条目——服务端 modelRegistry 已是唯一策展元数据权威):
   //   - perAgent 覆盖块按 tab 应用在基线字段之上;
-  //   - efforts 字段缺失 = 未登记 → 合成 3 档(low/medium/high,默认 high);
-  //     显式 [] = 登记为不可调 → 尊重为空;
-  //   - supportsFastMode 缺失 → false(上游未声明就不能声称支持);
-  //   - defaultEnabled 缺失 → 默认可见。
+  //   - efforts 缺失或 [] = 没有可调档位，不合成任何档位;
+  //   - defaultEffort 只使用服务端明确下发值，不猜 high / 最大档;
+  //   - supportsFastMode / defaultEnabled 缺失就保持缺失，不物化客户端默认值;
+  //   - v3 name / contextWindow 已在 HTTP 协议边界强制要求，这里绝不补 id / 200K。
   // 放在所有 augment 之后:只影响 xd 供应商自己的模型列表,同 id 模型经其它供应商
   // (如 anthropic 订阅直连)仍照常可用。
   const gwModels = xdGatewayModels;
@@ -648,43 +622,31 @@ function computeMerged(): Catalog {
     const models: Provider['models'] = {};
     for (const agent of agentKeys) models[agent] = [];
     for (const gm of gwModels) {
-      // tab 归属:服务端 agents > 仅 claude-code(网关 /v1/messages 翻译覆盖面最广,不猜)
+      // tab 归属只读服务端 agents；v3 缺失时不向任何 Agent 猜测或补全。
       const targetAgents = xdGatewayTargetAgents(gm);
       for (const agent of targetAgents) {
         if (!models[agent]) continue; // 未知 agent 键防御(wire 数据)
         const ov = gm.perAgent?.[agent] ?? {};
-        // efforts:override > 基线;字段"存在"与"空数组"语义不同(缺失=未登记→3档,[]=不可调)
-        const rawEfforts = ov.efforts ?? gm.efforts;
-        const efforts: Effort[] =
-          rawEfforts === undefined
-            ? ['low', 'medium', 'high']
-            : rawEfforts.filter((e): e is Effort => VALID_EFFORTS.has(e));
+        // v3 validator 已检查 effort 枚举与 defaultEffort 从属关系；此处只做层级覆盖。
+        const efforts = (ov.efforts ?? gm.efforts ?? []) as Effort[];
         const rawDefault = ov.defaultEffort !== undefined ? ov.defaultEffort : gm.defaultEffort;
-        const defaultEffort: Effort | null =
-          rawDefault === null
-            ? null
-            : rawDefault && VALID_EFFORTS.has(rawDefault) && efforts.includes(rawDefault as Effort)
-              ? (rawDefault as Effort)
-              : efforts.includes('high')
-                ? 'high'
-                : efforts.length > 0
-                  ? efforts[efforts.length - 1]
-                  : null;
+        const defaultEffort = (rawDefault ?? null) as Effort | null;
         const defaultEnabled = ov.defaultEnabled ?? gm.defaultEnabled;
         const cost = effectiveGatewayModelCost(gm);
+        const contextWindow = ov.contextWindow ?? gm.contextWindow;
         const merged: CatalogModel = {
           id: gm.id,
-          name: gm.name ?? gm.id,
-          group: gm.group ?? 'custom:xd',
-          contextWindow: ov.contextWindow ?? gm.contextWindow ?? 200_000,
+          // name / contextWindow are required by Model Access v3 and therefore never synthesized.
+          name: gm.name as string,
+          ...(gm.group !== undefined ? { group: gm.group } : {}),
+          contextWindow: contextWindow as number,
           ...(gm.maxOutputTokens !== undefined ? { maxOutput: gm.maxOutputTokens } : {}),
-          // override 或 gateway 模型显式给了才算真实上限;落到 200_000 兜底的不标记。
-          ...(ov.contextWindow !== undefined || gm.contextWindow !== undefined
-            ? { contextWindowVerified: true }
-            : {}),
+          contextWindowVerified: true,
           efforts,
           defaultEffort,
-          supportsFastMode: ov.supportsFastMode ?? gm.supportsFastMode ?? false,
+          ...(ov.supportsFastMode !== undefined || gm.supportsFastMode !== undefined
+            ? { supportsFastMode: ov.supportsFastMode ?? gm.supportsFastMode }
+            : {}),
           ...(gm.mode !== undefined ? { mode: gm.mode } : {}),
           ...(gm.description !== undefined ? { description: gm.description } : {}),
           ...(gm.sortOrder !== undefined ? { sortOrder: gm.sortOrder } : {}),
@@ -697,21 +659,6 @@ function computeMerged(): Catalog {
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
         };
         models[agent]!.push(merged);
-      }
-    }
-    // 服务端明确没有 codex 的 Claude-wire 模型仍可由本地 bridge 服务。选择器需要看到
-    // 它们，但路由身份保留在 xdCodexAnthropicBridgeModelIds，不能把投影误当原生支持。
-    const claudeModels = models['claude-code'] ?? [];
-    const codexModels = models.codex;
-    if (codexModels) {
-      for (const model of claudeModels) {
-        if (xdCodexAnthropicBridgeModelIds.has(model.id)) {
-          codexModels.push({
-            ...model,
-            supportsFastMode: false,
-            codexCompatibilityWireProtocol: 'anthropic-messages',
-          });
-        }
       }
     }
     // 每个 tab 内按 sortOrder 稳定排序(无 sortOrder 的合成条目排最后,按进入序)。
@@ -848,7 +795,6 @@ export function setDiscoveredProviderModels(
  */
 export function setXdGatewayModels(models: XdGatewayModelInfo[]): void {
   xdGatewayModels = [...models];
-  xdCodexAnthropicBridgeModelIds = deriveXdCodexAnthropicBridgeModelIds(models);
   markChanged();
 }
 

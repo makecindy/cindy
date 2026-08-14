@@ -17,6 +17,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import type { MarketSourceSummary } from '../../../shared/pluginMarket';
 
 import { marketplaceSourceErrorKey } from './lib/pluginMarketErrorKey';
+import { MarketplaceDiscoveryNotice } from './MarketplaceDiscoveryNotice';
 
 export interface MarketplaceSourcesDialogProps {
   open: boolean;
@@ -52,6 +53,8 @@ export function MarketplaceSourcesDialog({
     key: string;
     detail: string | null;
   } | null>(null);
+  // 刷新成功的发现回执(与错误互斥;新一轮操作前清空)。
+  const [refreshedSummary, setRefreshedSummary] = useState<MarketSourceSummary | null>(null);
 
   const toOperationError = (error: unknown) => {
     const ipc = extractIpcError(error);
@@ -70,14 +73,18 @@ export function MarketplaceSourcesDialog({
     setPendingRemove(null);
     setBusySource(null);
     setOperationError(null);
+    // 回执含市场名与计数,与来源列表同作用域:父级一关(含切号)即清空。
+    setRefreshedSummary(null);
   }, [open]);
 
   const handleRefresh = useCallback(
     async (name: string) => {
       setBusySource(name);
       setOperationError(null);
+      setRefreshedSummary(null);
       try {
-        await window.electronAPI.pluginMarket.refreshSource(name);
+        const summary = await window.electronAPI.pluginMarket.refreshSource(name);
+        setRefreshedSummary(summary);
         onChanged();
       } catch (error) {
         setOperationError(toOperationError(error));
@@ -92,6 +99,8 @@ export function MarketplaceSourcesDialog({
     async (source: MarketSourceSummary) => {
       setBusySource(source.name);
       setOperationError(null);
+      // 被移除的可能正是回执指向的来源,残留会指向已不存在的市场。
+      setRefreshedSummary(null);
       try {
         await window.electronAPI.pluginMarket.removeSource(source.name);
         onChanged();
@@ -176,6 +185,12 @@ export function MarketplaceSourcesDialog({
               </div>
             ) : null}
 
+            {refreshedSummary ? (
+              <div className="mb-3">
+                <MarketplaceDiscoveryNotice summary={refreshedSummary} action="refreshed" />
+              </div>
+            ) : null}
+
             <div className="flex flex-col gap-2">
               {sources.map((source) => (
                 <div
@@ -218,6 +233,13 @@ export function MarketplaceSourcesDialog({
                           {t('settings.ghosts.market.sources.skippedEntries', {
                             count: source.skippedCount,
                           })}
+                        </p>
+                      ) : null}
+                      {source.pluginCount === 0 &&
+                      source.skippedCount > 0 &&
+                      source.unreadableCount === 0 ? (
+                        <p className="text-[var(--warning-fg)]">
+                          {t('settings.ghosts.market.sources.emptyWithSkippedEntries')}
                         </p>
                       ) : null}
                       {source.unreadableCount > 0 ? (

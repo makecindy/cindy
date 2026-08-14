@@ -26,7 +26,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-const { resolveSafe, resolveSessionImageLenient } = await import('../imageCacheStore');
+const { resolveSafe, resolveSessionImageLenient, collectSessionImageUrls } = await import('../imageCacheStore');
 
 describe('resolveSafe — reserved hosts', () => {
   it('feishu-media-images host routes to feishu-media/images/', () => {
@@ -148,6 +148,12 @@ describe('resolveSafe — session-id path (regression)', () => {
   it('non-xdt-image URL is rejected', () => {
     expect(() => resolveSafe('http://example.com/x.png')).toThrow(/invalid url/);
   });
+
+  it('rejects malformed percent-encoding as a malformed URL', () => {
+    expect(() => resolveSafe('xdt-image://sess-abc/%E0%A4%A.png')).toThrow(
+      /malformed url/,
+    );
+  });
 });
 
 describe('resolveSessionImageLenient — ghost attachment grant forms', () => {
@@ -206,5 +212,9 @@ describe('resolveSessionImageLenient — ghost attachment grant forms', () => {
     expect(() =>
       resolveSessionImageLenient('xdt-image://no-such-file-1700000000000.png'),
     ).toThrow();
+  });
+
+  it('ignores malformed percent-encoding while collecting session URLs', () => {
+    expect(collectSessionImageUrls('see xdt-image://sess-lenient/%E0%A4%A.png')).toEqual([]);
   });
 });

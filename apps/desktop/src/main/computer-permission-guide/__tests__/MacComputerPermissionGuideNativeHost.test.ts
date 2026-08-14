@@ -75,6 +75,8 @@ describe('MacComputerPermissionGuideNativeHost', () => {
     expect(source).toContain('hostSize = NSSize(width: 500, height: 226)');
     expect(source).toContain('cardFrame = NSRect(x: 68, y: 12, width: 432, height: 152)');
     expect(source).toContain('"Open computer automation"');
+    expect(source).toContain('case zhTW = "zh-TW"');
+    expect(source).toContain('readyTitle: "Computer Use 已準備就緒"');
     expect(source).toContain('setAccessibilityLabel("CuaDriver")');
     expect(source).not.toContain('setAccessibilityLabel("Computer Use")');
     expect(source).not.toContain('"Computer Use · Step');

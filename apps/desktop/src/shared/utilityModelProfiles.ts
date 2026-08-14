@@ -131,7 +131,10 @@ export function getUtilityModelProfiles(): UtilityModelProfile[] {
 }
 
 export function isUtilityModelProviderKind(value: string): value is UtilityModelProviderKind {
-  return value in UTILITY_MODEL_PROFILES;
+  // 不能用 `in`:继承键('toString'/'constructor')会被当成真实档位放行——该判断
+  // 是钉档写入白名单的判据之一,IPC 入参是 unknown,继承键入库后消费侧拿到
+  // undefined profile,该意识的快问快答会持续 NO_CANDIDATE 直到清钉。
+  return Object.prototype.hasOwnProperty.call(UTILITY_MODEL_PROFILES, value);
 }
 
 const UTILITY_MODEL_PROVIDER_ALIASES: Record<string, UtilityModelProviderKind> = {
@@ -161,8 +164,12 @@ const UTILITY_MODEL_PROVIDER_ALIASES: Record<string, UtilityModelProviderKind> =
 
 export function resolveUtilityModelProviderKindAlias(value: string): UtilityModelProviderKind | null {
   const normalized = value.trim().toLowerCase();
-  return UTILITY_MODEL_PROVIDER_ALIASES[normalized]
-    ?? (isUtilityModelProviderKind(normalized) ? normalized : null);
+  // 同上:括号取索引会走原型链('constructor' 取出 Object 构造函数,truthy 被当
+  // 合法别名),必须先验自有键。
+  if (Object.prototype.hasOwnProperty.call(UTILITY_MODEL_PROVIDER_ALIASES, normalized)) {
+    return UTILITY_MODEL_PROVIDER_ALIASES[normalized];
+  }
+  return isUtilityModelProviderKind(normalized) ? normalized : null;
 }
 
 export function estimateUtilityModelCostUsd(

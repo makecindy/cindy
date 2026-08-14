@@ -45,8 +45,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import JSZip from 'jszip';
-
 import {
   downloadToFileWithTimeout,
   createDownloadProgressLogger,
@@ -196,6 +194,7 @@ export function verifyInstalled(platformKey, binRoot = BIN_ROOT) {
  */
 async function extractVerifiedFiles(zipBuffer, platformKey, destDir) {
   const spec = PINNED[platformKey];
+  const { default: JSZip } = await import('jszip');
   const zip = await JSZip.loadAsync(zipBuffer);
   const staged = new Map();
 

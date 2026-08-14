@@ -95,21 +95,20 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
       aria-label={t('sidebar.user.downloadMobile')}
       className={cn(
         'mobile-download-btn',
-        'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full',
-        !isCollapsed && 'mr-1',
-        'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)]',
+        'flex shrink-0 items-center justify-center rounded-full',
+        isCollapsed ? 'h-8 w-8' : 'h-9 w-9',
         'text-[var(--sidebar-user-card-text)] transition-colors hover:bg-sidebar-item-hover',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
       )}
     >
-      <Smartphone className="h-3 w-3" aria-hidden="true" />
+      <Smartphone className="h-5 w-5" aria-hidden="true" />
     </button>
   );
 
   if (isCollapsed) {
     return (
       <>
-        <div className="mt-auto flex h-[66px] flex-col items-center justify-center gap-1 px-3">
+        <div className="mt-auto flex h-[76px] flex-col items-center justify-center gap-1 px-3">
           <button
             onClick={handleClick}
             role="link"
@@ -170,12 +169,13 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   }
 
   return (
-    <div className="mt-auto px-3 pb-3 pt-2">
+    <div className="mt-auto pt-1">
       {/* 胶囊整体承载 hover(方案 D):玻璃底色加深一档;悬停右侧操作按钮时用
-        :has() 把胶囊底色还原,只让当前按钮高亮,避免双层叠色。 */}
+        :has() 把胶囊底色还原,只让当前按钮高亮,避免双层叠色。
+        横向填满容器、向下填满、12px 容器圆角(rounded-xl)。 */}
       <div
         className={cn(
-          'flex h-10 items-center rounded-full border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] px-[7px]',
+          'flex h-12 items-center rounded-xl border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] pl-3 pr-1.5',
           'transition-colors hover:bg-[var(--sidebar-user-card-bg-hover)]',
           'has-[.flame-btn:hover]:bg-[var(--sidebar-user-card-bg)]',
           'has-[.mobile-download-btn:hover]:bg-[var(--sidebar-user-card-bg)]',
@@ -189,25 +189,25 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
         >
           {/* Avatar — admin 用户加 1.5px 反色描边 + 右下角盾牌角标 */}
           <div
-            className="relative h-[27px] w-[27px] shrink-0"
+            className="relative h-10 w-10 shrink-0"
             title={isCanary ? t('sidebar.user.canaryBadge') : undefined}
           >
             {user?.avatar && !avatarError ? (
               <img
                 src={user.avatar}
                 alt={displayName}
-                className={cn('h-[27px] w-[27px] rounded-full object-cover')}
+                className={cn('h-10 w-10 rounded-full object-cover')}
                 onError={() => setAvatarError(true)}
               />
             ) : (
               <div
                 className={cn(
-                  'flex h-[27px] w-[27px] items-center justify-center rounded-full',
-                  'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] text-[14px] font-medium text-[var(--sidebar-user-card-text)]',
+                  'flex h-10 w-10 items-center justify-center rounded-full',
+                  'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] text-16 font-medium text-[var(--sidebar-user-card-text)]',
                 )}
               >
                 {showNotSignedInGlyph ? (
-                  <UserRound aria-hidden="true" size={15} strokeWidth={1.75} />
+                  <UserRound aria-hidden="true" size={18} strokeWidth={1.75} />
                 ) : (
                   initial
                 )}
@@ -238,12 +238,12 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               'opacity-100',
             )}
           >
-            <p className="truncate text-[14px] font-semibold leading-[18px] text-[var(--sidebar-user-card-text)]">
+            <p className="truncate text-14 font-semibold leading-[1.286] text-[var(--sidebar-user-card-text)]">
               {displayName}
             </p>
             {/* 2px gap 与同栏 userNameContainer 保持一致。 */}
             <p
-              className="truncate text-[10.5px] leading-[13px] text-[var(--sidebar-user-card-text)] opacity-80"
+              className="truncate text-10 leading-[1.3] text-[var(--sidebar-user-card-text)] opacity-80"
               title={appVersionLabelDetail}
             >
               {appVersionLabel}
@@ -273,8 +273,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
             }
             className={cn(
               'flame-btn',
-              'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full',
-              'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)]',
+              'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
               'transition-colors hover:bg-sidebar-item-hover',
               'transition-opacity duration-200 ease-in-out',
               'opacity-100',
@@ -282,7 +281,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
           >
             <Flame
               className={cn(
-                'h-3 w-3',
+                'h-5 w-5',
                 isFlameReopen
                   ? 'fill-current text-[var(--sidebar-user-card-text)]'
                   : 'text-[var(--sidebar-user-card-text)]',

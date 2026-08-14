@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   parseIssueEnvRegion,
+  parseOptionalGithubUserIdentity,
   parseIssueSuggestedPublicName,
   parseIssueSubmissionIdentity,
 } from '@/lib/issueConfirmPayload';
@@ -22,6 +23,19 @@ describe('parseIssueSubmissionIdentity', () => {
     expect(parseIssueSubmissionIdentity({ kind: 'github-user', login: '' })).toBeNull();
     expect(parseIssueSubmissionIdentity({ kind: 'other', login: 'someone' })).toBeNull();
     expect(parseIssueSubmissionIdentity(null)).toBeNull();
+  });
+});
+
+describe('parseOptionalGithubUserIdentity', () => {
+  it('只保留完整的 GitHub 用户身份，非法可选值按缺失处理', () => {
+    expect(parseOptionalGithubUserIdentity({ kind: 'github-user', login: ' octocat ' })).toEqual({
+      kind: 'github-user',
+      login: 'octocat',
+    });
+    expect(
+      parseOptionalGithubUserIdentity({ kind: 'platform', login: 'cindy-issue' }),
+    ).toBeUndefined();
+    expect(parseOptionalGithubUserIdentity({ kind: 'github-user', login: '' })).toBeUndefined();
   });
 });
 

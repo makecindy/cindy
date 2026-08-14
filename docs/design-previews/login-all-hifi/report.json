@@ -1,4 +1,10 @@
 {
+  "stale": {
+    "since": "2026-08-09",
+    "reason": "繁中登录覆盖加入后 spec.json / index.html / truth.json 均已变更,本报告仍是 2026-07-29 四语快照:inputHashes 与 coverage.cases 都早于该改动(不含 pad-global-android-light-zh-TW)。",
+    "warning": "下面的 ok:true 只对本报告 inputHashes 所记的那批输入成立,不代表当前五语工件已通过门 A-F。",
+    "howToClear": "在装有 qa-hifi-demo 工具链的环境跑 node <skill>/scripts/verify.mjs --demo docs/design-previews/login-all-hifi 并提交刷新后的 report.json;重跑会自然覆盖掉本字段。"
+  },
   "ok": true,
   "toolVersion": "qa-hifi-demo@2026-07-25-p0-hardening",
   "demo": "cindy-login-all-hifi",

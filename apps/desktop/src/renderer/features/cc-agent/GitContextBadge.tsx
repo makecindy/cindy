@@ -25,11 +25,8 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import type { Session } from '@/lib/ccAgent.types';
 import type { PrStatusKind, PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
-import {
-  useSessionGitContext,
-  prStatusKey,
-  MAX_STATUS_QUERIES,
-} from '@/hooks/useSessionGitContext';
+import { useSessionGitContext } from '@/hooks/useSessionGitContext';
+import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import { PR_STATUS_COLOR, PR_STATUS_ICON, pickBranchLabel } from './gitContextPrVisuals';
 
 export function GitContextBadge({ session }: { session: Session }) {
@@ -122,7 +119,7 @@ function PrChip({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult
           <span>#{prRef.prNumber}</span>
           {unresolved > 0 && (
             <span
-              className="inline-flex items-center gap-0.5 text-[10px] font-medium leading-none"
+              className="inline-flex items-center gap-0.5 text-10 font-medium leading-none"
               style={{ color: 'var(--status-bar-accent)' }}
               aria-label={t('ccAgent.gitContext.pr.unresolved', { count: unresolved })}
             >

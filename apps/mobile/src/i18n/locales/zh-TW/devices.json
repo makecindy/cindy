@@ -1,0 +1,329 @@
+{
+  "common": {
+    "cancel": "取消",
+    "save": "儲存",
+    "saving": "儲存中",
+    "delete": "刪除",
+    "deleting": "刪除中",
+    "create": "新建"
+  },
+  "list": {
+    "thisComputer": "這臺裝置",
+    "allConversations": "所有任務",
+    "syncFailed": "同步失敗",
+    "requestFailed": "請求失敗",
+    "loading": "正在讀取可控制裝置",
+    "untitled": "未命名任務",
+    "connection": {
+      "connecting": "連線中",
+      "disconnected": "連線斷開"
+    },
+    "error": {
+      "sessionDeviceNotFound": "找不到這個任務所屬裝置，請重新同步後再試。",
+      "taskDeviceNotFound": "找不到這個任務所屬裝置，請重新同步後再試。",
+      "noDevice": "沒有可用裝置。請先開啟桌面端遠端控制，然後重新同步。"
+    },
+    "alert": {
+      "actionFailed": "操作失敗",
+      "renameFailed": "重新命名失敗",
+      "deleteTitle": "刪除任務？",
+      "deleteMessage": "將刪除「{{title}}」，刪除後不可恢復。"
+    },
+    "a11y": {
+      "selectScope": "選擇任務範圍",
+      "openSettings": "開啟設定",
+      "syncing": "正在重新同步",
+      "sync": "重新同步",
+      "pinnedConversations": "置頂 {{count}} 條任務",
+      "newRemoteConversation": "新建遠端任務",
+      "renameDevice": "重新命名 {{label}}",
+      "project": "專案 {{title}}",
+      "openAutomationLatest": "開啟自動化 {{title}} 的最新任務",
+      "automationTask": "自動化 {{title}}",
+      "openConversation": "開啟任務 {{title}}",
+      "collapse": "收起 {{title}}",
+      "expand": "展開 {{title}}",
+      "taskError": "任務出錯",
+      "awaitingYou": "等待你處理",
+      "doneUnread": "已完成未讀",
+      "running": "執行中",
+      "close": "關閉",
+      "cancelRename": "取消重新命名"
+    },
+    "menu": {
+      "groupByProject": "按專案分組"
+    },
+    "renameDevice": {
+      "title": "重新命名裝置",
+      "placeholder": "裝置名稱",
+      "savingA11y": "正在儲存裝置名",
+      "saveA11y": "儲存裝置名"
+    },
+    "renameSession": {
+      "title": "重新命名任務",
+      "placeholder": "任務標題",
+      "savingA11y": "正在儲存任務標題",
+      "saveA11y": "儲存任務標題"
+    },
+    "revoked": {
+      "title": "已撤銷訪問權限",
+      "body": "「{{deviceName}}」撤銷了本機的遠端訪問權限。請在該電腦的 {{appName}} 設定裡重新授權本裝置，然後點「重試訪問」。",
+      "retry": "重試訪問"
+    },
+    "viewAllConversations": "檢視全部 {{count}} 條任務",
+    "viewAllRuns": "檢視全部 {{count}} 次執行",
+    "preview": {
+      "needAttention": "{{count}} 個需關注",
+      "waiting": "等待處理 {{count}} 個",
+      "automationRunning": "自動化執行中",
+      "totalRuns": "共 {{count}} 次執行"
+    }
+  },
+  "detail": {
+    "filter": {
+      "active": "活躍",
+      "waiting": "待處理",
+      "automation": "自動化",
+      "archived": "歸檔",
+      "all": "全部",
+      "a11y": "篩選{{label}}任務"
+    },
+    "group": {
+      "project": "專案",
+      "date": "時間",
+      "label": "分組",
+      "a11y": "按{{label}}分組"
+    },
+    "metric": {
+      "active": "活躍",
+      "waiting": "待處理",
+      "automation": "自動化",
+      "activeA11y": "篩選活躍任務",
+      "waitingA11y": "篩選待處理任務",
+      "automationA11y": "篩選自動化生成的任務"
+    },
+    "plan": "計劃",
+    "automationsButtonA11y": "開啟遠端自動化",
+    "search": {
+      "openA11y": "搜尋遠端任務",
+      "closeA11y": "關閉搜尋遠端任務",
+      "label": "搜尋",
+      "placeholder": "搜尋標題、專案、模型、訊息",
+      "clearA11y": "清除搜尋",
+      "closeInputA11y": "關閉搜尋",
+      "clear": "清除",
+      "close": "關閉"
+    },
+    "filters": {
+      "collapseA11y": "收起任務篩選",
+      "expandA11y": "展開任務篩選",
+      "label": "篩選"
+    },
+    "selection": {
+      "count": "已選擇 {{count}} 個任務",
+      "canAct": "可執行操作",
+      "cannotAct": "沒有可執行操作",
+      "clearA11y": "取消選擇任務"
+    },
+    "bulk": {
+      "pinning": "置頂中",
+      "unpinning": "取消中",
+      "archiving": "歸檔中",
+      "restoring": "恢復中",
+      "deleting": "刪除中",
+      "pinA11y": "批次置頂選中任務",
+      "unpinA11y": "批次取消置頂選中任務",
+      "archiveA11y": "批次歸檔選中任務",
+      "restoreA11y": "批次恢復選中任務",
+      "deleteA11y": "批次刪除選中任務",
+      "cancelA11y": "取消批次操作",
+      "partialFailure": "已處理 {{done}} 個，{{failed}} 個失敗（已還原，可重試）。",
+      "noArchivable": "當前選擇裡沒有可歸檔的活躍任務。",
+      "noPinnable": "當前選擇裡沒有可置頂的活躍任務。",
+      "noRestorable": "當前選擇裡沒有可恢復的歸檔任務。",
+      "noUnpinnable": "當前選擇裡沒有已置頂的任務。",
+      "noDeletable": "當前選擇裡沒有可刪除的任務。",
+      "noneModifiable": "當前選擇的任務都不能修改。"
+    },
+    "automationScope": {
+      "eyebrow": "自動化",
+      "title": "自動化",
+      "emptyCopy": "自動化執行後，每次執行的任務都會出現在這裡。",
+      "emptyTitle": "這個自動化還沒有執行記錄"
+    },
+    "projectScope": {
+      "eyebrow": "專案",
+      "emptyCopy": "在這個專案裡開始一個新任務。",
+      "emptyTitle": "這個專案還沒有任務"
+    },
+    "subtitle": {
+      "deviceActive": "{{deviceName}} · {{count}} 個活躍任務",
+      "activeAndProjects": "{{count}} 個活躍任務 · {{projects}} 個專案"
+    },
+    "row": {
+      "a11yAutomationGroup": "自動化組 {{title}}",
+      "a11ySession": "任務 {{title}}",
+      "a11yCollapse": "收起 {{title}}",
+      "a11yExpand": "展開 {{title}}",
+      "collapse": "收起",
+      "expand": "展開"
+    },
+    "badge": {
+      "waiting": "待處理 {{count}}",
+      "automationPrefix": "自動化",
+      "sessionCount": "{{count}} 個任務",
+      "aggregate": "聚合",
+      "running": "執行中",
+      "unread": "未讀 {{count}}"
+    },
+    "child": {
+      "openA11y": "開啟自動化生成的任務 {{title}}"
+    },
+    "viewAllRuns": "檢視全部 {{count}} 次執行"
+  },
+  "automations": {
+    "error": {
+      "projectMissingConfig": "專案自動化缺少 projectConfigId，請在桌面端刪除",
+      "deletePartial": "自動化已刪除，但 {{count}} 個生成任務未能更新狀態。請在桌面端檢查這些任務。"
+    },
+    "subtitle": "{{active}} 個執行中 · {{total}} 個自動化",
+    "metric": {
+      "running": "執行中",
+      "unreadResults": "未讀結果",
+      "executing": "執行中"
+    },
+    "summary": {
+      "paused": "{{count}} 個自動化已暫停。選擇後可以執行、暫停、編輯或開啟最近任務。",
+      "default": "選擇自動化後可以執行、暫停、編輯或開啟最近任務。"
+    },
+    "empty": {
+      "copy": "可以直接從手機建立第一條自動化，或在桌面端建立後同步到這裡。",
+      "title": "這臺裝置暫無自動化"
+    },
+    "createAutomation": "新建自動化",
+    "recentRuns": "最近執行",
+    "runs": {
+      "emptyCopy": "點選 Run now 後會在這裡看到新 run。",
+      "emptyTitle": "還沒有執行記錄"
+    },
+    "form": {
+      "title": {
+        "create": "新建自動化",
+        "edit": "編輯自動化"
+      },
+      "sessionMode": {
+        "bound": "繫結已有任務後，目錄、worktree、Agent 和 Fast 模式跟隨該任務。",
+        "persistent": "首次觸發會建立持續任務，後續觸發繼續接在同一任務裡。",
+        "fresh": "每次觸發都會建立新的任務。"
+      },
+      "field": {
+        "name": "名稱",
+        "prompt": "提示詞",
+        "trigger": "觸發方式",
+        "runSession": "執行任務",
+        "boundSession": "繫結任務",
+        "intervalMinutes": "間隔分鐘",
+        "workspace": "工作區",
+        "projectDir": "專案目錄",
+        "model": "模型",
+        "effort": "推理強度",
+        "timezone": "時區"
+      },
+      "namePlaceholder": "例如：每日專案巡檢",
+      "scriptHint": "這是一個僅執行指令碼的自動化，指令碼配置只能在桌面端編輯；此處可以改動名稱、觸發方式、通知等其它欄位。",
+      "promptPlaceholder": "寫清楚每次自動執行要讓 {{appName}} 做什麼",
+      "trigger": {
+        "recurring": "週期",
+        "manual": "手動"
+      },
+      "session": {
+        "fresh": "新任務",
+        "persistent": "持續",
+        "bound": "繫結"
+      },
+      "boundSessionA11y": "繫結任務 {{name}}",
+      "intervalPlaceholder": "留空則使用 cron",
+      "workspace": {
+        "project": "專案",
+        "dialogue": "對話"
+      },
+      "useWorktree": "使用 worktree",
+      "modelPlaceholderBound": "跟隨任務",
+      "modelPlaceholderPiDefault": "留空使用預設模型",
+      "fastMode": "Fast 模式",
+      "notifyDesktop": "桌面通知",
+      "notifyFeishu": "飛書通知",
+      "savingA11y": "正在儲存自動化",
+      "saveA11y": "儲存自動化",
+      "cancelA11y": "取消編輯自動化"
+    },
+    "delete": {
+      "counting": "正在統計由這條自動化生成的任務…",
+      "confirmDeleteBoth": "刪除自動化和任務",
+      "confirmArchive": "刪除自動化並歸檔任務",
+      "confirmTaskOnly": "只刪除自動化",
+      "title": "刪除 {{name}}",
+      "copy": "刪除自動化不會中斷已經開始的執行。生成過的任務按下面的選項處理，和桌面端保持一致。",
+      "optionsA11y": "選擇生成任務處理方式",
+      "keepDesc": "只刪除這條自動化，歷史任務繼續保留在原列表裡。",
+      "keepLabel": "保留生成任務",
+      "archiveDesc": "刪除自動化後，把由它生成的任務移到歸檔，後續仍可搜尋。",
+      "archiveLabel": "歸檔生成任務",
+      "deleteDesc": "刪除自動化後，把由它生成的任務也標記為刪除。這個操作不可從手機端撤銷。",
+      "deleteLabel": "刪除生成任務",
+      "cancelA11y": "取消刪除自動化",
+      "confirmA11y": "確認刪除自動化"
+    },
+    "pause": {
+      "title": "暫停 {{name}}",
+      "detailFallback": "暫停會阻止這條自動化繼續觸發。",
+      "previewFallback": "沒有正在執行的 run",
+      "confirmA11y": "確認暫停自動化",
+      "pausing": "暫停中",
+      "confirm": "確認暫停",
+      "cancelA11y": "取消暫停自動化"
+    },
+    "runDelete": {
+      "title": "刪除這條執行記錄",
+      "copy": "只會刪除這條自動化執行記錄，不會刪除它開啟過的任務，也不會影響後續自動觸發。",
+      "confirmA11y": "確認刪除執行記錄",
+      "confirm": "刪除記錄",
+      "cancelA11y": "取消刪除執行記錄"
+    },
+    "template": {
+      "label": "模板",
+      "loadingA11y": "模板載入中",
+      "refreshA11y": "重新整理自動化模板",
+      "loading": "載入中",
+      "refresh": "重新整理",
+      "cardA11y": "自動化模板 {{name}}",
+      "manualConfig": "手動配置"
+    },
+    "scheduleRowA11y": "自動化 {{title}}",
+    "detail": {
+      "promptScriptFallback": "僅執行指令碼的自動化，配置只能在桌面端編輯",
+      "promptEmpty": "沒有儲存自動化提示詞",
+      "deleteA11y": "刪除自動化",
+      "runNowA11y": "立即執行自動化",
+      "running": "執行中",
+      "resumeA11y": "恢復自動化",
+      "pauseA11y": "暫停自動化",
+      "resume": "恢復",
+      "pause": "暫停",
+      "editA11y": "編輯自動化",
+      "edit": "編輯"
+    },
+    "run": {
+      "openSessionA11y": "開啟自動化生成的任務",
+      "opening": "開啟中",
+      "session": "任務",
+      "restartA11y": "重新執行自動化",
+      "restarting": "重跑中",
+      "restart": "重跑",
+      "markReadA11y": "標記執行記錄已讀",
+      "marking": "標記中",
+      "markRead": "已讀",
+      "deleteA11y": "刪除執行記錄"
+    }
+  }
+}

@@ -206,7 +206,12 @@ describe('resolveDevCliFlags', () => {
           });
           expect(viaLink.isolatedDirIsEpochDerived).toBe(true);
         } finally {
-          rmSync(linkAncestor, { force: true });
+          // 指向目录的 symlink 要走 rmdir 语义:不带 recursive 的 rmSync 按
+          // unlink 处理,Windows 上直接抛 EISDIR(Path is a directory),把整个
+          // pnpm test:unit 门禁带红。只有拿到 symlink 权限的开发机(canSymlink
+          // 为 true)会走到这里,CI 拿不到权限所以看不见这条。recursive 对
+          // symlink 只删链接本身,不跟随进目标目录(已实测)。
+          rmSync(linkAncestor, { recursive: true, force: true });
         }
       }
       // TOCTOU 稳定性:目录被并发进程创建前后,同一写法的判定结果一致——

@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   areProviderRequestUrlsAllowed,
+  canSendHydratedApiKey,
   connectionTestCanUseSaved,
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
   providerModelFetchRequestSignature,
+  restoreHydratedApiKey,
   type SavedProviderProbeBaseline,
 } from '../providerModelFetch';
 
@@ -166,6 +168,133 @@ describe('modelFetchCanReuseSavedCredentials', () => {
         'apiKey',
       ),
     ).toBe(false);
+  });
+
+  it('keeps saved credentials when only the inference request path changes', () => {
+    expect(
+      modelFetchCanReuseSavedCredentials(
+        {
+          baseUrl: headerAuthBaseline.baseUrl,
+          requestPath: '/tenant/acme/models',
+          modelsUrl: headerAuthBaseline.modelsUrl,
+        },
+        headerAuthBaseline,
+        'none',
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('canSendHydratedApiKey', () => {
+  const apiKeyBaseline: SavedProviderProbeBaseline = {
+    ...headerAuthBaseline,
+    authMode: 'apiKey',
+    apiKey: 'saved-key',
+  };
+  const requestTarget = {
+    baseUrl: apiKeyBaseline.baseUrl,
+    requestPath: apiKeyBaseline.requestPath,
+    modelsUrl: apiKeyBaseline.modelsUrl,
+  };
+
+  it('keeps an untouched hydrated key on the saved base/models endpoint', () => {
+    expect(canSendHydratedApiKey(requestTarget, apiKeyBaseline, 'apiKey', 0)).toBe(true);
+    expect(
+      canSendHydratedApiKey(
+        { ...requestTarget, baseUrl: 'https://new.example/v1' },
+        apiKeyBaseline,
+        'apiKey',
+        0,
+      ),
+    ).toBe(false);
+    expect(
+      canSendHydratedApiKey(
+        { ...requestTarget, modelsUrl: 'https://new.example/models' },
+        apiKeyBaseline,
+        'apiKey',
+        0,
+      ),
+    ).toBe(false);
+  });
+
+  it('allows a key after the user explicitly edits it', () => {
+    expect(
+      canSendHydratedApiKey(
+        { ...requestTarget, baseUrl: 'https://new.example/v1' },
+        apiKeyBaseline,
+        'apiKey',
+        1,
+      ),
+    ).toBe(true);
+  });
+  it('allows the hydrated key when only requestPath changes', () => {
+    expect(
+      canSendHydratedApiKey(
+        {
+          baseUrl: apiKeyBaseline.baseUrl,
+          requestPath: '/tenant/acme/models',
+          modelsUrl: apiKeyBaseline.modelsUrl,
+        },
+        apiKeyBaseline,
+        'apiKey',
+        0,
+      ),
+    ).toBe(true);
+  });
+
+  it('still blocks a changed model-discovery endpoint until the key is edited', () => {
+    expect(
+      canSendHydratedApiKey(
+        { baseUrl: 'https://new.example/v1', modelsUrl: apiKeyBaseline.modelsUrl },
+        apiKeyBaseline,
+        'apiKey',
+        0,
+      ),
+    ).toBe(false);
+    expect(
+      canSendHydratedApiKey(
+        { baseUrl: 'https://new.example/v1', modelsUrl: apiKeyBaseline.modelsUrl },
+        apiKeyBaseline,
+        'apiKey',
+        1,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('restoreHydratedApiKey', () => {
+  const baseline: SavedProviderProbeBaseline = {
+    ...headerAuthBaseline,
+    authMode: 'apiKey',
+    apiKey: 'saved-key',
+  };
+
+  it('restores a cleared hydrated key after returning to the saved endpoint', () => {
+    const reverted = {
+      baseUrl: baseline.baseUrl,
+      modelsUrl: baseline.modelsUrl,
+      apiKey: '',
+    };
+    expect(restoreHydratedApiKey(reverted, baseline, 'apiKey', 0).apiKey).toBe('saved-key');
+  });
+
+  it('does not overwrite an explicit key edit or a different endpoint', () => {
+    expect(
+      restoreHydratedApiKey(
+        { baseUrl: baseline.baseUrl, modelsUrl: baseline.modelsUrl, apiKey: '' },
+        baseline,
+        'apiKey',
+        1,
+      ).apiKey,
+    ).toBe('');
+    expect(
+      restoreHydratedApiKey(
+        { baseUrl: 'https://new.example/v1', modelsUrl: baseline.modelsUrl, apiKey: '' },
+        baseline,
+        'apiKey',
+        0,
+      ).apiKey,
+    ).toBe('');
   });
 });
 

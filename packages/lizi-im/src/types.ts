@@ -186,6 +186,16 @@ export interface IMMessageEvent {
    * 模型可用 NO_REPLY 哨兵选择沉默; transport 抑制该消息的表情回应。
    */
   ambient?: boolean;
+  /**
+   * 这条消息来自「禁止保存内容」的群(Telegram `has_protected_content`)。
+   *
+   * 它照常起 turn —— 用户 @ 机器人说的话是他此刻要说给 bot 的。但**不得写入
+   * 任何长期存档**: 群历史池已在渠道侧拦下, 这个标记是给业务层的第二道 ——
+   * 会话消息存档同样不能成为绕过保护边界的旁路。
+   *
+   * 缺省 / false = 未受保护(只有 Telegram 会置它, 其它渠道不设置, 行为不变)。
+   */
+  protectedContent?: boolean;
   /** Pre-downloaded attachments. */
   attachments: IMAttachment[];
   /**
@@ -223,11 +233,23 @@ export interface IMMessageEvent {
   };
   /** Channel-specific raw event for debug. */
   raw?: unknown;
+  /**
+   * 群历史上下文的取数 lane, 与路由 lane(senderId)分离。仅 feishu 群主流 @
+   * 开新话题时设置: 出站路由进新话题 lane, 但上下文前缀仍按触发时所在 lane
+   * (群主流, threadId='')拉取 — 新话题是空的, 按它过滤会丢掉「总结上面」等
+   * 依赖的群主流上文。其它场景/渠道恒 undefined(上下文按 senderId lane 取)。
+   */
+  groupContextLane?: { chatId: string; threadId: string };
 }
 
 export interface IMCardActionEvent {
   channelName: string;
-  /** open_id of the user who pressed the button. */
+  /**
+   * Identity of the user who pressed the button. For group cards on lane
+   * channels (feishu) this is the card's lane id `g/{chatId}[/{threadId}]` —
+   * transport resolves it from a messageId→lane registry so card actions share
+   * the same identity key as inbound messages; p2p cards keep the open_id.
+   */
   senderId: string;
   /** Chat where the card lives (p2p only). */
   chatId: string;

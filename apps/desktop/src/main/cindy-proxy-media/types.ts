@@ -77,6 +77,7 @@ export type GatewayImageModel = (typeof GATEWAY_IMAGE_MODELS)[number]['id'];
 export const GATEWAY_VIDEO_MODELS = [
   { id: 'seedance-fast', label: 'Seedance 快速' },
   { id: 'seedance-pro', label: 'Seedance Pro' },
+  { id: 'bytedance/seedance-2.5', label: 'Seedance 2.5' },
   { id: 'happyhorse', label: 'HappyHorse 1.0' },
 ] as const;
 

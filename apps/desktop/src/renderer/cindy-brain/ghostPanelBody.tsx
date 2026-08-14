@@ -48,14 +48,14 @@ export function GhostPanelError({
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-4">
       <CircleAlert size={22} className="text-[var(--error-fg)]" />
-      <p className="text-center text-[12px] leading-relaxed text-[var(--text-secondary)]">
+      <p className="text-center text-12 leading-relaxed text-[var(--text-secondary)]">
         {t(state === 'fused' ? 'settings.ghosts.panelError.fused' : 'settings.ghosts.panelError.crashed')}
       </p>
       <div className="flex items-center gap-2">
         <button
           type="button"
           onClick={reload}
-          className="rounded-full border border-[var(--border-default)] px-3.5 py-1.5 text-[12px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-chip)]"
+          className="rounded-full border border-[var(--border-default)] px-3.5 py-1.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-chip)]"
         >
           {t('settings.ghosts.panelError.reload')}
         </button>
@@ -63,7 +63,7 @@ export function GhostPanelError({
         <button
           type="button"
           onClick={() => void window.electronAPI.ghosts.setEnabled(manifest.id, false).catch(() => {})}
-          className="rounded-full border border-[var(--border-default)] px-3.5 py-1.5 text-[12px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-chip)]"
+          className="rounded-full border border-[var(--border-default)] px-3.5 py-1.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-chip)]"
         >
           {t('settings.ghosts.panelError.close')}
         </button>

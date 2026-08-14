@@ -22,7 +22,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
 import { TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
@@ -31,13 +31,18 @@ import type { Logger } from '../../../interfaces/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
-const PI_BINARY = path.join(
-  REPO_ROOT,
-  'apps',
-  'pi-bin',
-  `${process.platform}-${process.arch}`,
-  process.platform === 'win32' ? 'pi.exe' : 'pi',
-);
+// Local installs keep the same versioned binary outside the worktree. The
+// override lets a lightweight harness smoke use that binary without copying it
+// into apps/pi-bin or starting Desktop; CI keeps the repository-managed path.
+const PI_BINARY =
+  process.env.CINDY_TEST_PI_BINARY ||
+  path.join(
+    REPO_ROOT,
+    'apps',
+    'pi-bin',
+    `${process.platform}-${process.arch}`,
+    process.platform === 'win32' ? 'pi.exe' : 'pi',
+  );
 const RIPGREP_DIR = path.join(
   REPO_ROOT,
   'apps',
@@ -362,6 +367,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         ],
       },
       resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }
 
@@ -423,7 +429,63 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
-    'rejects a turn permission policy (Pi cannot enforce it) and honors steer cancellation before RPC',
+    'keeps provider cindy and sends a gateway Responses model to /v1/responses',
+    { timeout: 60_000 },
+    async () => {
+      const deps = buildDeps();
+      deps.capabilityAdditions = {
+        ...deps.capabilityAdditions,
+        availableModels: [
+          ...(deps.capabilityAdditions?.availableModels ?? []),
+          {
+            id: 'pi-responses-model',
+            displayName: 'Pi Responses Model',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      };
+      deps.resolvePiGatewayModelApi = (_providerId, modelId) =>
+        modelId === 'pi-responses-model' ? 'openai-responses' : 'anthropic-messages';
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-agent-responses-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      const requestsBefore = seenRequests.length;
+      scriptedResponses.push(responsesStreamBody('pong from responses gateway', 'pi-responses-model'));
+      try {
+        handle = await agent.startSession({
+          sessionId: 'itest-responses-session',
+          workingDir,
+          model: 'pi-responses-model',
+          providerId: 'xd',
+        });
+        const events: AgentEvent[] = [];
+        const collected = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+
+        await handle.send({ type: 'user', content: 'ping responses' });
+        await collected;
+
+        expect(seenRequests.slice(requestsBefore).some((request) => request.url === '/v1/responses'))
+          .toBe(true);
+        expect(events.some((event) =>
+          event.type === 'text'
+          && (event.data as { text?: string }).text?.includes('pong from responses gateway'),
+        )).toBe(true);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'accepts a turn permission policy in ask, rejects it in Full Access, and honors steer cancellation before RPC',
     { timeout: 60_000 },
     async () => {
       const agent = new PiAgent(buildDeps());
@@ -437,13 +499,20 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         const requestsBefore = seenRequests.length;
 
-        // turnPermissionPolicy(IM 群等)是 host 回调,Pi 无法在其独立进程的工具边界执行
-        // → fail-closed 拒绝(任何档位),防止群上下文不经 owner 确认执行破坏性工具。
+        // ask/auto 下 Pi bridge 会把受控工具冒泡给 host，policy turn 可以启动。
         const policy = {
           origin: { kind: 'im' as const, channel: 'telegram' as const },
           confirmationSurface: 'channel' as const,
           forceConfirmToolCall: () => true,
         };
+        await expect(
+          handle.send({ type: 'user', content: 'policy-safe turn' }, { turnPermissionPolicy: policy }),
+        ).resolves.toBeUndefined();
+        await vi.waitFor(() => expect(seenRequests.length).toBeGreaterThan(requestsBefore));
+
+        // Full Access 下 bridge 不上报 tool_call，host 无法兑现每轮策略，必须 preflight 拒绝。
+        await handle.setPermissionMode?.('bypassPermissions');
+        const requestsBeforeFullAccess = seenRequests.length;
         await expect(
           handle.send({ type: 'user', content: 'destructive?' }, { turnPermissionPolicy: policy }),
         ).rejects.toBeInstanceOf(TurnPermissionPolicyUnsupportedError);
@@ -456,8 +525,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           handle.steer({ type: 'user', content: 'late steer' }, { signal: aborted.signal }),
         ).rejects.toThrow(/cancelled before acceptance/);
 
-        // 两次都在到达假网关前被拦下:没有新请求打到 pi。
-        expect(seenRequests.length).toBe(requestsBefore);
+        // Full Access policy 与 cancelled steer 都在到达假网关前被拦下。
+        expect(seenRequests.length).toBe(requestsBeforeFullAccess);
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });
@@ -713,6 +782,60 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         // pi 应把图片 base64 转发进网关请求(Anthropic image content block)。
         const sawImage = seenRequests.some((r) => r.body.includes(PNG_1x1_B64));
         expect(sawImage).toBe(true);
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'forwards one review turn with Markdown/PDF excerpts and image bytes',
+    { timeout: 60_000 },
+    async () => {
+      const pngBase64 =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
+      const agent = new PiAgent(buildDeps());
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-review-formats-'));
+      const markdownPath = path.join(workingDir, 'launch.md');
+      const pdfPath = path.join(workingDir, 'contract.pdf');
+      const imagePath = path.join(workingDir, 'poster.png');
+      writeFileSync(markdownPath, '# Launch\nBudget: 100 vs 80 + 50');
+      writeFileSync(pdfPath, '%PDF-1.4\n% transport fixture');
+      writeFileSync(imagePath, Buffer.from(pngBase64, 'base64'));
+      let handle: AgentSessionHandle | null = null;
+      try {
+        handle = await agent.startSession({
+          sessionId: 'review-format-session',
+          workingDir,
+          model: 'pi-test-model',
+          reviewMode: true,
+          reviewReadPaths: [markdownPath, pdfPath, imagePath],
+        });
+        const before = seenRequests.length;
+        const done = (async () => {
+          for await (const event of handle!.events()) if (event.type === 'done') break;
+        })();
+        await handle.send({
+          type: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Markdown budget: 100 vs 80 + 50. PDF payment: 30 days vs 60 days.',
+            },
+            { type: 'file', path: markdownPath, mimeType: 'text/markdown' },
+            { type: 'file', path: pdfPath, mimeType: 'application/pdf' },
+            { type: 'image', path: imagePath, mimeType: 'image/png' },
+          ],
+        });
+        await done;
+
+        const bodies = seenRequests.slice(before).map((request) => request.body).join('\n');
+        expect(bodies).toContain('Markdown budget: 100 vs 80 + 50');
+        expect(bodies).toContain('PDF payment: 30 days vs 60 days');
+        expect(bodies).toContain(jsonStringContent(markdownPath));
+        expect(bodies).toContain(jsonStringContent(pdfPath));
+        expect(bodies).toContain(pngBase64);
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });
@@ -1123,6 +1246,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     permissionMode: 'ask' | 'auto' | 'bypassPermissions';
     resolverBehavior: 'allow' | 'deny';
     deps?: AgentDeps;
+    reviewMode?: boolean;
+    reviewReadPaths?: string[];
   }): Promise<{ resolverTools: string[]; finalText: string }> {
     const agent = new PiAgent(opts.deps ?? buildDeps());
     const resolverTools: string[] = [];
@@ -1133,6 +1258,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         workingDir: opts.workingDir,
         model: 'pi-test-model',
         permissionMode: opts.permissionMode,
+        ...(opts.reviewMode ? { reviewMode: true } : {}),
+        ...(opts.reviewReadPaths ? { reviewReadPaths: opts.reviewReadPaths } : {}),
       });
       handle.setInteractionResolver?.(async (req) => {
         resolverTools.push((req as { toolName?: string }).toolName ?? '?');
@@ -1183,6 +1310,41 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
         expect(followUp.some((body) => body.includes('tool-target.ts:1: needle-line'))).toBe(true);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'Review directory grep returns safe matches without credential-file contents',
+    { timeout: 60_000 },
+    async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-review-safe-grep-'));
+      writeFileSync(path.join(workingDir, 'source.ts'), 'needle-safe\n');
+      writeFileSync(path.join(workingDir, 'credentials.json'), 'needle-credentials-secret\n');
+      writeFileSync(path.join(workingDir, 'cert.pem'), 'needle-private-key-secret\n');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('grep', { pattern: 'needle', path: '.', literal: true }),
+          anthropicStreamBody('review grep finished'),
+        );
+        const reqBefore = seenRequests.length;
+        await runPermissionTurn({
+          sessionId: 'pi-review-safe-grep',
+          workingDir,
+          permissionMode: 'ask',
+          resolverBehavior: 'deny',
+          reviewMode: true,
+        });
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body).join('\n');
+        expect(followUp).toContain('source.ts:1: needle-safe');
+        expect(followUp).not.toContain('credentials.json');
+        expect(followUp).not.toContain('needle-credentials-secret');
+        expect(followUp).not.toContain('cert.pem');
+        expect(followUp).not.toContain('needle-private-key-secret');
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;

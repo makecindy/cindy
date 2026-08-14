@@ -45,6 +45,12 @@ export interface UpdateAllRow {
    */
   reviewedBaseline?: string;
   /**
+   * 审阅时 Host 下发的批准态 token。manifest 权限指纹相同也不代表授权事实
+   * 相同：approved receipt 失效成 invalid / legacy-unapproved 后，旧的局部 diff
+   * 必须作废并按“无批准基线”重新展示全部权限。
+   */
+  reviewedApproval?: string;
+  /**
    * 审阅时取得的 manifest:主进程强制要求安装时传回同一份清单，
    * approve 必须原样带上，否则 INVALID_PARAMS。
    */

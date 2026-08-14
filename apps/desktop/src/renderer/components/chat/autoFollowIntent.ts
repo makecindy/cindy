@@ -84,11 +84,47 @@ export function shouldUnpinOnUpIntent({ scrollHeight, clientHeight }: UpIntentUn
   return scrollHeight - clientHeight > UNPIN_MIN_SCROLLABLE_PX;
 }
 
+export interface SelectTailUserMessageArgs<T extends { type: string }> {
+  /** 当前有界窗口是否覆盖完整 render-item 尾部。 */
+  windowCoversEnd: boolean;
+  /** 当前 DOM 窗口最后一个 render item。 */
+  visibleLastItem: T | undefined;
+  /** 内存中完整 render-item 序列最后一个 item。 */
+  realLastItem: T | undefined;
+  /** 从 render item 提取 user message id；非 user item 返回 null。 */
+  userMessageId: (item: T | undefined) => string | null;
+}
+
+/**
+ * 选择供「新用户发送」检测的尾消息。
+ *
+ * bounded window 未覆盖会话末尾时，visible 尾只代表历史切片边界，可能刚好是
+ * 一条旧 user message；拿它建基线会误判跳回底部或遮蔽真正的新发送。因此该态
+ * 必须无条件读取内存全量的真实尾部。窗口覆盖末尾时 visible 尾与真实尾同义，
+ * 保留 visible 路径避免纯扩窗造成额外观察变化。
+ */
+export function selectTailUserMessageId<T extends { type: string }>({
+  windowCoversEnd,
+  visibleLastItem,
+  realLastItem,
+  userMessageId,
+}: SelectTailUserMessageArgs<T>): string | null {
+  return userMessageId(windowCoversEnd ? visibleLastItem : realLastItem);
+}
+
 export interface ResolveRenderPinArgs {
   /** A saved non-bottom viewport is currently being restored. */
   restoring: boolean;
   /** The current render introduced a new user message at the tail. */
   newUserSend: boolean;
+  /**
+   * The tail user message was sent from this renderer's composer (local send,
+   * edit-resend, or a device-link send initiated on this desktop). User
+   * messages injected by other entries (IM channels, a mobile client driving
+   * the session remotely, scheduler runs) arrive over IPC with no local
+   * composer intent and must not steal the viewport (#2194).
+   */
+  sentFromThisRenderer: boolean;
   /** Auto-follow was active before this render. */
   nearBottom: boolean;
 }
@@ -141,14 +177,20 @@ export function resolveLastUserMessageObservation({
 /**
  * Resolve the render-time priority between a saved history anchor and auto-follow.
  * Reopening a session must preserve a real reading position, but a user message
- * sent during that mounted session is an explicit request to resume at the tail.
+ * sent from this renderer during that mounted session is an explicit request to
+ * resume at the tail. A user message injected by another entry (IM channel,
+ * mobile client, scheduler) carries no such intent: it follows the ordinary
+ * rule — pin only while the user is still near the bottom.
  */
 export function resolveRenderPinDecision({
   restoring,
   newUserSend,
   nearBottom,
+  sentFromThisRenderer,
 }: ResolveRenderPinArgs): ResolveRenderPinDecision {
-  if (newUserSend) return { clearRestoring: restoring, pinToBottom: true };
+  if (newUserSend && sentFromThisRenderer) {
+    return { clearRestoring: restoring, pinToBottom: true };
+  }
   if (restoring) return { clearRestoring: false, pinToBottom: false };
   return { clearRestoring: false, pinToBottom: nearBottom };
 }

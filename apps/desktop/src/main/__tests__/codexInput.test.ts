@@ -46,6 +46,24 @@ describe('Codex app-server input', () => {
     ]);
   });
 
+  it('keeps extracted document evidence, the PDF reference, and the image in one review turn', async () => {
+    const content: UserMessage['content'] = [
+      {
+        type: 'text',
+        text: 'Markdown budget: 100 vs 80 + 50. PDF payment: 30 days vs 60 days.',
+      },
+      { type: 'file', path: '/tmp/contract.pdf', mimeType: 'application/pdf' },
+      { type: 'image', path: '/tmp/poster.png', mimeType: 'image/png' },
+    ];
+
+    const inputs = await toAppServerInput(content, '/tmp');
+
+    expect(inputs).toContainEqual({ type: 'localImage', path: '/tmp/poster.png' });
+    expect(JSON.stringify(inputs)).toContain('contract.pdf');
+    expect(JSON.stringify(inputs)).toContain('Markdown budget: 100 vs 80 + 50');
+    expect(JSON.stringify(inputs)).toContain('PDF payment: 30 days vs 60 days');
+  });
+
   it('resolves relative mention chips against the working directory', async () => {
     const content: UserMessage['content'] = [
       { type: 'text', text: 'Read @src/app.ts' },

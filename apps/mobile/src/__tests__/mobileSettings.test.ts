@@ -15,6 +15,15 @@ const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
 
 describe('mobile settings overview', () => {
+  it('renders language as one expandable picker instead of a fixed option list', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
+
+    expect(source).toContain('testID="settings.language.picker"');
+    expect(source).toContain('<SheetModal');
+    expect(source).toContain('<MobileChoicePickerList');
+    expect(source).not.toContain('LanguageOptionRow');
+  });
+
   it('keeps the device-link hello name and settings device name on one source', () => {
     expect(buildMobileDeviceName({ constantsDeviceName: ' Carol iPhone ', platform: 'ios' })).toBe('Carol iPhone');
     expect(buildMobileDeviceName({ constantsDeviceName: '   ', platform: 'android' })).toBe('Cindy android');
@@ -230,5 +239,15 @@ describe('mobile settings overview', () => {
     expect(source).not.toContain("'settings.version.desktopVersion'");
     expect(i18n.t('settings.version.pairedDesktopVersion', { version: '0.1.18' }))
       .toBe('配套桌面版本 0.1.18');
+  });
+
+  it('整包版本读原生真值 APP_BINARY_VERSION,不读会被 OTA 覆盖的 expoConfig.version', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
+
+    // 整包版本必须取原生烧进的 CFBundleShortVersionString / versionName(APP_BINARY_VERSION),
+    // 热更后不漂移;绝不能读 Constants.expoConfig.version —— 它会被 OTA manifest 内嵌的
+    // expoClient.version(打热更时主仓 app.json 的旧值)覆盖,导致整包版本回退。
+    expect(source).toContain("const appVersion = APP_BINARY_VERSION || '0.0.0';");
+    expect(source).not.toContain("const appVersion = Constants.expoConfig?.version");
   });
 });

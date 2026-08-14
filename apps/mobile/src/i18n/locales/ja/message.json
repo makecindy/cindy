@@ -183,7 +183,12 @@
       "neutral": "再接続",
       "pending": "再接続中…",
       "pendingWithProgress": "再接続中 {{attempt}}/{{total}}…",
-      "details": "今回の再試行 {{attempt}}/{{total}} · このセッションでの再接続 {{count}} 回"
+      "details": "今回の再試行 {{attempt}}/{{total}} · このセッションでの再接続 {{count}} 回",
+      "detail": {
+        "reason": "中断の理由",
+        "attempt": "今回の再試行 {{attempt}}/{{total}}",
+        "sessionTotal": "このセッションでの再接続 {{count}} 回"
+      }
     },
     "modelLabel": "モデル",
     "sessionLabel": "セッション",

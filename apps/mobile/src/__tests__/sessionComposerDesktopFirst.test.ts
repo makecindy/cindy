@@ -214,9 +214,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(inputStyle).toContain('...COMPOSER_TEXT_STYLE');
     expect(inputStyle).toContain('maxHeight: MOBILE_COMPOSER_INPUT_MAX_HEIGHT');
     expect(inputStyle).toContain('minHeight: MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT');
+    expect(inputStyle).toContain('paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM');
     expect(inputStyle).toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
-    expect(inputStyle).toContain('paddingVertical: MOBILE_COMPOSER_INPUT_VERTICAL_PADDING');
+    expect(inputStyle).toContain('paddingTop: COMPOSER_TEXT_PADDING_TOP');
     expect(inputStyle).toContain("textAlignVertical: 'top'");
+    expect(floatingButtonStyle).toContain("bottom: Platform.OS === 'ios' ? 8 : 11");
     // Composer input is a single stable, always-multiline, always-inline instance (no compact↔expanded
     // swap that remounts the native input) so the first tap reliably opens the keyboard — guards the
     // "two taps to focus" regression. Compact rest look kept via minHeight (no fixed height that clips).
@@ -247,7 +249,6 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT;');
     expect(source).toContain('const COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD = 34;');
     expect(source).toContain('const COMPOSER_INPUT_LINE_HEIGHT = MOBILE_COMPOSER_INPUT_LINE_HEIGHT;');
-    expect(source).toContain('const COMPOSER_INPUT_VERTICAL_PADDING = MOBILE_COMPOSER_INPUT_VERTICAL_PADDING;');
     expect(source).toContain('const COMPOSER_INPUT_MAX_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_MAX_HEIGHT;');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_HEIGHT = (MOBILE_COMPOSER_INPUT_LINE_HEIGHT * MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES)');
@@ -322,7 +323,10 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const currentTurnStreaming = useMemo(');
     expect(source).toContain('const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)');
     expect(source).toContain('const canStopComposer = canStopQueue || canStopCurrentRun;');
-    expect(source).toContain('canStop: canUseComposer && canStopComposer,');
+    expect(source).toContain('canStop: canStopComposer,');
+    expect(source).toContain(
+      'const composerStopDisabled = composerLayout.stop.disabled || !canUseRemoteSessionControls;',
+    );
     expect(source).not.toContain('canStop: canUseComposer && canStopQueue,');
     expect(source).toContain('const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);');
     expect(source).toContain('const composerVoicePlacement = voiceUiAvailable');
@@ -363,8 +367,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(voiceDraftOverlayStyle).toContain("overflow: 'hidden'");
     expect(voiceDraftOverlayContentStyle).not.toContain('minHeight: COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT');
     expect(voiceDraftOverlayContentStyle).not.toContain("alignItems: 'flex-start'");
+    expect(voiceDraftOverlayContentStyle).toContain('paddingBottom: COMPOSER_TEXT_PADDING_BOTTOM');
     expect(voiceDraftOverlayContentStyle).toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
-    expect(voiceDraftOverlayContentStyle).toContain('paddingVertical: COMPOSER_INPUT_VERTICAL_PADDING');
+    expect(voiceDraftOverlayContentStyle).toContain('paddingTop: COMPOSER_TEXT_PADDING_TOP');
     expect(voiceDraftOverlayContentStyle).not.toContain("width: '100%'");
     expect(voiceDraftMeasuredBlockStyle).not.toContain("alignSelf: 'flex-start'");
     expect(voiceDraftMeasuredBlockStyle).toContain('minHeight: COMPOSER_INPUT_LINE_HEIGHT');
@@ -483,7 +488,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(inlineButtonStyle).not.toContain('width: 42');
     expect(floatingButtonStyle).toContain("position: 'absolute'");
     expect(floatingButtonStyle).toContain('right: MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT');
-    expect(floatingButtonStyle).toContain('bottom: 11');
+    expect(floatingButtonStyle).toContain("bottom: Platform.OS === 'ios' ? 8 : 11");
     expect(floatingButtonStyle).toContain('zIndex: 2');
     expect(sharedSource).toContain('right: spacing.md + MOBILE_COMPOSER_CONTROL_SIZE + MOBILE_COMPOSER_TOOL_GAP');
     expect(sendButtonStyle).toContain('height: 34');
@@ -514,11 +519,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain(': hydrateQuotes(sessionId);');
     expect(source).toContain('quoteHydration,');
     expect(source).toContain('!composerDocumentsEqual(composerDocumentRef.current, immediateDocumentSnapshot)');
-    expect(source).toContain('if (canUseComposer) return;');
+    expect(source).toContain('if (canUseRemoteSessionControls) return;');
     expect(source).toContain('setModelSheetOpen(false);');
-    expect(source).toContain('if (!canUseComposer || !currentSession || !modelSheetSelection) return;');
-    expect(source).toContain('modelSheetOpen && canUseComposer');
-    expect(source).toContain('disabled={controlBusy || !canUseComposer}');
+    expect(source).toContain('if (!canUseRemoteSessionControls || !currentSession || !modelSheetSelection) return;');
+    expect(source).toContain('modelSheetOpen && canUseRemoteSessionControls');
+    expect(source).toContain('disabled={controlBusy || !canUseRemoteSessionControls}');
     expect(source).toContain('createMobileCindyVoiceCredential');
     // Voice startup claims the pressIn-prewarmed ASR connection when one is
     // fresh (credential already resolved, WebSocket already connecting) and
@@ -564,8 +569,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('updateHistoryEntry: (entryId, text) => updateMobileVoiceInputHistoryEntryForHost(deviceId, entryId, text)');
     expect(source).not.toContain('styles.sendButtonStop');
     expect(source).not.toContain('sendButtonStop:');
-    expect(source).toContain('fill={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}');
-    expect(source).toContain('color={composerLayout.stop.disabled ? colors.textSecondary : colors.ctaText}');
+    expect(source).toContain('fill={composerStopDisabled ? colors.textSecondary : colors.ctaText}');
+    expect(source).toContain('color={composerStopDisabled ? colors.textSecondary : colors.ctaText}');
     expect(source).toContain('pressedStyle={styles.sendButtonPressed}');
     expect(source).toContain('pressedStyle === undefined ? styles.routeButtonPressed : pressedStyle');
     expect(source).not.toContain('composerShowStatusRow');

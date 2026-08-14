@@ -64,7 +64,7 @@ export function WechatBotSection({
   const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('wechat');
 
   const authorizationSteps = (
-    <ol className="mt-1 grid gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3 text-[12px] leading-[1.55] text-[var(--text-secondary)]">
+    <ol className="mt-1 grid gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3 text-12 leading-[1.55] text-[var(--text-secondary)]">
       {[1, 2, 3, 4].map((step) => (
         <li key={step} className="flex gap-2">
           <span className="shrink-0 text-[var(--text-tertiary)]">{step}.</span>

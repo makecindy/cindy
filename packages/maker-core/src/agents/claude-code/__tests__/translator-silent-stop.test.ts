@@ -103,7 +103,11 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
     const ctx = createCtx(tracker);
 
     pushToolUseMessage(queue, ctx);
-    pushEmptyThinkingMessage(queue, ctx);
+    translateSdkMessage(
+      { type: 'assistant', message: { content: [{ type: 'thinking', thinking: '继续分析中', signature: 'sig-2' }] } },
+      queue,
+      ctx,
+    );
     translateSdkMessage(
       { type: 'result', total_cost_usd: 0.1, usage: NON_EMPTY_USAGE },
       queue,
@@ -210,7 +214,7 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
     expect(silentStopWarned(ctx)).toBe(false);
   });
 
-  it('does NOT log on a zero-tool turn (plain exchange, not a mid-task stall)', async () => {
+  it('marks a zero-tool thinking-only turn as a silent stop', async () => {
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx(tracker);
@@ -227,8 +231,106 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
       ctx,
     );
 
-    await drain(queue);
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(true);
+    expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  it('marks the thinking-only auto-resume turn after a tool turn also silently stops', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushToolUseMessage(queue, ctx);
+    pushEmptyThinkingMessage(queue, ctx);
+    translateSdkMessage(
+      { type: 'result', stop_reason: 'end_turn', total_cost_usd: 0.1, usage: NON_EMPTY_USAGE },
+      queue,
+      ctx,
+    );
+
+    translateSdkMessage(
+      { type: 'stream_event', event: { type: 'message_start', message: { model: 'claude-fable-5', usage: { input_tokens: 2000 } } } },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      { type: 'assistant', message: { content: [{ type: 'thinking', thinking: '续跑后仍在分析', signature: 'sig-2' }] } },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0.2,
+        usage: { input_tokens: 2000, output_tokens: 4 },
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    const flags = events
+      .filter((event) => event.type === 'done')
+      .map((event) => (event.data as { silentStop?: boolean }).silentStop);
+    expect(flags).toEqual([true, true]);
+  });
+
+  it('does NOT mark a zero-tool turn that already emitted visible text before trailing thinking', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    translateSdkMessage(
+      { type: 'stream_event', event: { type: 'message_start', message: { model: 'claude-fable-5', usage: { input_tokens: 1000 } } } },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      { type: 'assistant', message: { content: [{ type: 'text', text: '先给你结论。' }] } },
+      queue,
+      ctx,
+    );
+    pushEmptyThinkingMessage(queue, ctx);
+    translateSdkMessage(
+      { type: 'result', stop_reason: 'end_turn', total_cost_usd: 0.1, usage: NON_EMPTY_USAGE },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
     expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
+  });
+
+  it('treats unknown assistant blocks as substance instead of auto-resuming them', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    translateSdkMessage(
+      { type: 'stream_event', event: { type: 'message_start', message: { model: 'claude-fable-5', usage: { input_tokens: 1000 } } } },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'server_tool_use', id: 'server-tool-1', name: 'web_search' }] },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      { type: 'result', stop_reason: 'end_turn', total_cost_usd: 0.1, usage: NON_EMPTY_USAGE },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
   });
 
   it('does NOT log when result.result repairs the missing tail (truncation fallback already recovers)', async () => {

@@ -23,6 +23,36 @@ type PresetId = 'full' | 'balanced' | 'background';
 const PRIORITY_OPTIONS: AgentResourceProcessPriority[] = ['normal', 'low', 'lowest'];
 const MAX_CONCURRENT_CAP = 64;
 
+/** 档位提示的全部取值(含 activePreset 为 null 时的 custom);顺序即 DOM 叠放顺序。 */
+const PRESET_HINT_KEYS = ['full', 'balanced', 'background', 'custom'] as const;
+
+/** 带分割线的多行卡片:卡片自身不留内边距,由每行 `px-4 py-4` 承担(房规见 SubagentModelSection 卡 2)。 */
+const CARD_CLASS = cn(
+  'flex flex-col rounded-xl',
+  'bg-[var(--settings-theme-card-bg)]',
+  'border border-[var(--settings-theme-card-border)]',
+);
+/** 卡片内一行:左侧标签 + 说明,右侧控件相对整块垂直居中(设置页各 section 通用版式)。 */
+const ROW_CLASS = 'flex items-center justify-between gap-3 px-4 py-4';
+const ROW_LABEL_CLASS = 'text-13 font-medium text-[var(--settings-section-sublabel)]';
+const ROW_HINT_CLASS =
+  'text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70';
+/** 行间分割线:左右缩进与行内边距对齐。 */
+const DIVIDER_CLASS = 'mx-4 h-px bg-[var(--settings-theme-card-border)]';
+
+/**
+ * 数字输入框的框体规格,与设置页统一输入框 `SettingsTextInput` 的 md 档一致
+ * (DESIGN.md §4-5:单行输入走药丸圆角;fill 必须是 `--surface-elevated` —— 设置卡片
+ * 本身是 ivory,ivory 输入压在 ivory 卡上会与背景同色、填充对比度归零)。
+ * 上下调节沿用浏览器原生步进器,不自绘 —— 设置页的控件样式统一是独立议题,留待整体收敛。
+ */
+const NUMBER_INPUT_CLASS = cn(
+  'h-9 w-24 shrink-0 rounded-full px-4 text-13 outline-none transition-colors',
+  'bg-[var(--surface-elevated)] text-[var(--settings-input-text)]',
+  'border border-[var(--settings-input-border)] focus:border-[var(--settings-input-border-focus)]',
+  'focus:ring-2 focus:ring-[var(--focus-ring)]',
+);
+
 /**
  * 均衡档并发值:本机核数的一半,至少 2(与 main 侧 toolchain-thread-cap 的口径一致),
  * 且不超过 IPC 校验上限 —— 超高核数工作站(>128 核)算出的值若越过 cap,首个 IPC 写
@@ -173,8 +203,10 @@ export function AgentResourceSection() {
   if (!settings) return null;
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-3">
+    <div className="flex flex-col gap-[14px]">
+      {/* min-h 锁住标题行高度:DefaultOverrideControls 未自定义时返回 null,若不预留
+          高度,首次改动让「已自定义」+ 恢复按钮(30px)出现会把整段往下顶,列表抖一下。 */}
+      <div className="flex min-h-[30px] items-center justify-between gap-3">
         <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
           {t('settings.agentResource.title')}
         </h2>
@@ -196,134 +228,165 @@ export function AgentResourceSection() {
         />
       </div>
 
-      <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+      <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
         {t('settings.agentResource.description')}
       </p>
 
-      {/* 预设条:三个字段的组合快捷方式;都不匹配 = 自定义,均不高亮 */}
-      <div className="flex flex-col gap-1.5">
-        <span className="text-12 font-medium text-[var(--text-primary)]">
-          {t('settings.agentResource.preset')}
-        </span>
-        <div
-          role="radiogroup"
-          aria-label={t('settings.agentResource.preset')}
-          className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
-        >
-          {(['full', 'balanced', 'background'] as const).map((id) => {
-            const active = activePreset === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                disabled={applyingPreset}
-                onClick={() => void applyPreset(id)}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-xs transition-colors',
-                  active
-                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
-                  applyingPreset && 'opacity-60',
-                )}
-              >
-                {t(`settings.agentResource.presets.${id}`)}
-              </button>
-            );
-          })}
+      <div className={CARD_CLASS}>
+        {/* 预设条:三个字段的组合快捷方式;都不匹配 = 自定义,均不高亮。
+            这行提示随档位变化,四语长度差异极大(en full 162 字符 vs custom 53),会在不同
+            行数间跳变、把下方各行顶动。防抖靠下面的 grid 叠放 —— 四段提示占同一格,容器
+            高度恒等于四者中最高的一段,与窗口宽度和语言都无关(固定 min-height 只是下限,
+            长文案照样会溢出撑高)。因为与宽度无关,提示就留在左列、不必独占整行,分段控件
+            才能像同卡其它行一样相对「标签 + 说明」整块垂直居中。 */}
+        <div className={ROW_CLASS}>
+          <div className="flex min-w-0 flex-col gap-1">
+            <p className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {t('settings.agentResource.preset')}
+            </p>
+            {/* 四段提示全部常挂载、叠在同一个 grid 格里,只有当前档位那段可见(其余
+                visibility:hidden —— 不进无障碍树、不可聚焦,但仍参与撑高)。 */}
+            <div className="grid">
+              {PRESET_HINT_KEYS.map((key) => {
+                const shown = (activePreset ?? 'custom') === key;
+                return (
+                  <p
+                    key={key}
+                    data-preset-hint={key}
+                    aria-hidden={!shown || undefined}
+                    className={cn(
+                      ROW_HINT_CLASS,
+                      'col-start-1 row-start-1',
+                      !shown && 'invisible',
+                    )}
+                  >
+                    {t(`settings.agentResource.presetHints.${key}`)}
+                  </p>
+                );
+              })}
+            </div>
+          </div>
+          <div
+            role="radiogroup"
+            aria-label={t('settings.agentResource.preset')}
+            className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
+          >
+            {(['full', 'balanced', 'background'] as const).map((id) => {
+              const active = activePreset === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  disabled={applyingPreset}
+                  onClick={() => void applyPreset(id)}
+                  className={cn(
+                    'rounded-full px-2.5 py-1 text-xs transition-colors',
+                    active
+                      ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
+                      : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
+                    applyingPreset && 'opacity-60',
+                  )}
+                >
+                  {t(`settings.agentResource.presets.${id}`)}
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <span className="text-11 text-[var(--text-tertiary)]">
-          {activePreset
-            ? t(`settings.agentResource.presetHints.${activePreset}`)
-            : t('settings.agentResource.presetHints.custom')}
-        </span>
-      </div>
 
-      {/* 并发命令上限 */}
-      <label className="flex flex-col gap-1.5">
-        <span className="text-12 font-medium text-[var(--text-primary)]">
-          {t('settings.agentResource.maxConcurrent')}
-        </span>
-        <span className="text-11 text-[var(--text-tertiary)]">
-          {t('settings.agentResource.maxConcurrentHint')}
-        </span>
-        <input
-          type="number"
-          min={0}
-          max={MAX_CONCURRENT_CAP}
-          disabled={applyingPreset}
-          value={maxDraft ?? String(settings.maxConcurrentCommands)}
-          onChange={(e) => setMaxDraft(e.target.value)}
-          onBlur={() => {
-            // 唯一提交点(DESIGN §14.3:Settings 单行编辑器 Enter 不得提交):
-            // 仅 0..64 的整数且与当前值不同才写盘;非法/未变草稿作废,
-            // 回显权威值(clamp 会绕过 main 侧硬拒语义,一律拒绝不改写)
-            const text = (maxDraft ?? '').trim();
-            setMaxDraft(null);
-            if (!/^\d+$/.test(text)) return;
-            const raw = Number(text);
-            if (raw > MAX_CONCURRENT_CAP) return;
-            if (raw === settings.maxConcurrentCommands) return;
-            persist('maxConcurrentCommands', raw);
-          }}
-          className="mt-0.5 w-24 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-13 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-        />
-      </label>
+        <div className={DIVIDER_CLASS} />
 
-      {/* 进程优先级 */}
-      <div className="flex flex-col gap-1.5">
-        <span className="text-12 font-medium text-[var(--text-primary)]">
-          {t('settings.agentResource.priority')}
-        </span>
-        <span className="text-11 text-[var(--text-tertiary)]">
-          {t('settings.agentResource.priorityHint')}
-        </span>
-        <div
-          role="radiogroup"
-          aria-label={t('settings.agentResource.priority')}
-          className="mt-0.5 flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
-        >
-          {PRIORITY_OPTIONS.map((tier) => {
-            const active = settings.processPriority === tier;
-            return (
-              <button
-                key={tier}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                disabled={applyingPreset}
-                onClick={() => persist('processPriority', tier)}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-xs transition-colors',
-                  active
-                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
-                )}
-              >
-                {t(`settings.agentResource.priorityOptions.${tier}`)}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 工具链限核 */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex flex-col gap-1.5">
-          <span className="text-12 font-medium text-[var(--text-primary)]">
-            {t('settings.agentResource.capThreads')}
+        {/* 并发命令上限 */}
+        <label className={ROW_CLASS}>
+          <span className="flex min-w-0 flex-col gap-1">
+            <span className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {t('settings.agentResource.maxConcurrent')}
+            </span>
+            <span className={ROW_HINT_CLASS}>
+              {t('settings.agentResource.maxConcurrentHint')}
+            </span>
           </span>
-          <span className="text-11 text-[var(--text-tertiary)]">
-            {t('settings.agentResource.capThreadsHint')}
-          </span>
+          <input
+            type="number"
+            min={0}
+            max={MAX_CONCURRENT_CAP}
+            disabled={applyingPreset}
+            value={maxDraft ?? String(settings.maxConcurrentCommands)}
+            onChange={(e) => setMaxDraft(e.target.value)}
+            onBlur={() => {
+              // 唯一提交点(DESIGN §14.3:Settings 单行编辑器 Enter 不得提交):
+              // 仅 0..64 的整数且与当前值不同才写盘;非法/未变草稿作废,
+              // 回显权威值(clamp 会绕过 main 侧硬拒语义,一律拒绝不改写)
+              const text = (maxDraft ?? '').trim();
+              setMaxDraft(null);
+              if (!/^\d+$/.test(text)) return;
+              const raw = Number(text);
+              if (raw > MAX_CONCURRENT_CAP) return;
+              if (raw === settings.maxConcurrentCommands) return;
+              persist('maxConcurrentCommands', raw);
+            }}
+            className={NUMBER_INPUT_CLASS}
+          />
+        </label>
+
+        <div className={DIVIDER_CLASS} />
+
+        {/* 进程优先级 */}
+        <div className={ROW_CLASS}>
+          <div className="flex min-w-0 flex-col gap-1">
+            <p className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {t('settings.agentResource.priority')}
+            </p>
+            <p className={ROW_HINT_CLASS}>{t('settings.agentResource.priorityHint')}</p>
+          </div>
+          <div
+            role="radiogroup"
+            aria-label={t('settings.agentResource.priority')}
+            className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
+          >
+            {PRIORITY_OPTIONS.map((tier) => {
+              const active = settings.processPriority === tier;
+              return (
+                <button
+                  key={tier}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  disabled={applyingPreset}
+                  onClick={() => persist('processPriority', tier)}
+                  className={cn(
+                    'rounded-full px-2.5 py-1 text-xs transition-colors',
+                    active
+                      ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
+                      : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
+                  )}
+                >
+                  {t(`settings.agentResource.priorityOptions.${tier}`)}
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <Switch
-          checked={settings.capToolchainThreads}
-          disabled={applyingPreset}
-          onCheckedChange={(next) => persist('capToolchainThreads', next)}
-          aria-label={t('settings.agentResource.capThreads')}
-        />
+
+        <div className={DIVIDER_CLASS} />
+
+        {/* 工具链限核 */}
+        <div className={ROW_CLASS}>
+          <div className="flex min-w-0 flex-col gap-1">
+            <p className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+              {t('settings.agentResource.capThreads')}
+            </p>
+            <p className={ROW_HINT_CLASS}>{t('settings.agentResource.capThreadsHint')}</p>
+          </div>
+          <Switch
+            checked={settings.capToolchainThreads}
+            disabled={applyingPreset}
+            onCheckedChange={(next) => persist('capToolchainThreads', next)}
+            aria-label={t('settings.agentResource.capThreads')}
+          />
+        </div>
       </div>
     </div>
   );

@@ -132,6 +132,32 @@ describe('performSessionAgentSwitch', () => {
     );
   });
 
+  it('codex → pi + OpenAI 关闭旧会话并保持目标 provider route', async () => {
+    const { deps, calls } = makeDeps({
+      getSessionRow: vi.fn(async () =>
+        makeRow({ agentKind: 'codex', model: 'gpt-5.5-codex', sdkSessionId: 'codex-thread' }),
+      ),
+    });
+
+    const result = await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'pi',
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
+      applyNow: true,
+    });
+
+    expect(result).toMatchObject({ switched: true, agentKind: 'pi', engineReady: true });
+    expect(calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending', 'bootstrap']);
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', {
+      agentKind: 'pi',
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
+      sdkSessionId: null,
+    });
+    expect(deps.setSessionProvider).toHaveBeenCalledWith('s1', 'openai');
+  });
+
   it('跨引擎 DB 提交后立即覆盖旧 provider route', async () => {
     const { deps } = makeDeps();
 
@@ -178,6 +204,17 @@ describe('performSessionAgentSwitch', () => {
     await expect(performSessionAgentSwitch(missing.deps, validParams)).rejects.toThrow(/NOT_FOUND/);
     const deleted = makeDeps({ getSessionRow: vi.fn(async () => makeRow({ status: 'deleted' })) });
     await expect(performSessionAgentSwitch(deleted.deps, validParams)).rejects.toThrow(/NOT_FOUND/);
+  });
+
+  it('Review 审计任务拒绝切换 harness', async () => {
+    const { deps, calls } = makeDeps({
+      getSessionRow: vi.fn(async () => makeRow({ source: 'review' })),
+    });
+
+    await expect(performSessionAgentSwitch(deps, validParams)).rejects.toThrow(
+      /Review task settings are fixed/,
+    );
+    expect(calls).toEqual([]);
   });
 
   it('远程会话与 Orca 会话抛 UNSUPPORTED_CAPABILITY', async () => {

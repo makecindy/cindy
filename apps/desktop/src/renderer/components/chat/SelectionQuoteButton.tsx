@@ -270,7 +270,7 @@ export function SelectionQuoteButton({
       // mousedown 先于 click 触发浏览器清选区;preventDefault 保住选区与按钮。
       onMouseDown={(e) => e.preventDefault()}
       onClick={handleAdd}
-      className="fixed z-[60] flex w-max items-center gap-2.5 whitespace-nowrap rounded-full px-3 py-1.5 text-[12px] shadow-[var(--shadow-menu)]"
+      className="fixed z-[60] flex w-max items-center gap-2.5 whitespace-nowrap rounded-full px-3 py-1.5 text-12 shadow-[var(--shadow-menu)]"
       style={{
         left: clamp(anchor.x, BUTTON_MIN_X_PX, window.innerWidth - BUTTON_RIGHT_MARGIN_PX),
         top:

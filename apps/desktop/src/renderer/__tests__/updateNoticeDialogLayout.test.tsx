@@ -15,7 +15,7 @@
  */
 
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import '@/i18n';
 import i18n from '@/i18n';
@@ -66,7 +66,19 @@ function renderDialog(notes: ReleaseNotes[]) {
   );
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+beforeEach(() => {
+  vi.stubGlobal('IntersectionObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    takeRecords() { return []; }
+  });
+});
 
 describe('UpdateNoticeDialog 单栏版式', () => {
   it('贡献者名单每个版本只渲染一次,不再 chrome 与子头各一份', () => {
@@ -137,10 +149,11 @@ describe('UpdateNoticeDialog 单栏版式', () => {
     expect(screen.getAllByText(i18n.t('update.notice.newFeatures'))).toHaveLength(1);
   });
 
-  it('单版本 auto 模式的版本号与日期在版本块里,不在标题栏', () => {
+  it('单版本 auto 模式:版本号出现在标题栏右上角与内容块两处', () => {
     renderDialog([topicNotes('0.1.21', ['Kafeifei'])]);
-    expect(screen.getByText('v0.1.21')).toBeTruthy();
-    // 标题栏右侧在单版本 auto 下不再显示日期或版本计数。
+    // v0.1.21 同时出现在标题栏 VersionBadge 和内容块 VersionBlock 的徽标中。
+    expect(screen.getAllByText('v0.1.21')).toHaveLength(2);
+    // 标题栏右侧不再显示版本计数。
     expect(screen.queryByText(i18n.t('update.notice.versionsSpan', { count: 1 }))).toBeNull();
   });
 

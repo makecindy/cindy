@@ -63,7 +63,8 @@ import { startThreadControlFlow } from './controlFlow';
 import { bindingStore, executeDetach, type BindingAttachResult } from '../binding';
 import { generateTakeoverSummary } from './sessionSummary';
 import { broadcastSessionCreated } from './sessionBroadcast';
-import type { IdentityKey } from '@cindy/im';
+import { readImDefaultSettings } from '../defaultSettingsStore';
+import { decodeFeishuLaneUserId, type IdentityKey } from '@cindy/im';
 import {
   readModelRouteSnapshot,
   readPermissionMode,
@@ -488,6 +489,43 @@ export function createCardActionHandler(
     }
   }
 
+  async function handlePermissionModeFixToAuto(
+    im: ChannelIM,
+    event: IMCardActionEvent,
+  ): Promise<void> {
+    // 群会话「完全访问」档被拒时发到 owner 私聊的一键修复卡 — 把该会话
+    // 切回 auto(自动审批)。走与 permmode:pick 相同的切换链(运行时先切、
+    // 落库失败回滚);auto 不需要二次确认。文案缺失(非飞书渠道)时忽略 —
+    // 这张卡只有提供 permissionModeFix 文案的渠道会发出。
+    const fixUi = ui.cards.permissionModeFix;
+    const sessionId = String(event.payload.sessionId ?? '');
+    if (!sessionId || !fixUi) {
+      log.warn('permissionMode:fix-auto missing sessionId/fixUi — ignoring');
+      return;
+    }
+    const agentKind: AgentKind =
+      event.payload.agentKind === 'codex' ? 'codex' : adapter.config.agentKind;
+    const result = await changeSessionPermissionMode({
+      sessionId,
+      mode: 'auto',
+      modes: getMaker().getCapabilities(agentKind).permissionModes,
+      confirmedFullAccess: false,
+      readPreviousMode: () => readPermissionMode(sessionId),
+      getLiveSession: () => turnRunner.getMakerSessionById(sessionId),
+      persist: (nextMode) => updatePermissionMode(sessionId, nextMode),
+    });
+    const label =
+      result.kind === 'changed'
+        ? fixUi.resolved
+        : fixUi.failed(result.kind === 'invalid' || result.kind === 'failed' ? result.reason : '');
+    try {
+      await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(label));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`permissionMode:fix-auto card patch failed (non-fatal): ${msg}`);
+    }
+  }
+
   async function handleControlPick(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
     const botContextId = String(event.payload.botAppId ?? '');
     const workingDir = String(event.payload.workingDir ?? '');
@@ -811,6 +849,22 @@ export function createCardActionHandler(
     );
 
     const desktopPrefs = getDesktopCcPrefs() ?? DESKTOP_CC_DEFAULTS;
+    // 飞书群/话题里的 /ctr 新建: 权限档用渠道设置「群聊新建会话权限档」
+    // (默认 auto 自动审批); 私聊保持 desktop 偏好不变。
+    // 群判定不能只靠 senderId lane 归一 — lane 登记表在 WS 重连/进程重启后
+    // 清空, 回调 senderId 会回落 operator.open_id。open_chat_id 恒在回调里:
+    // 群 chat 以 oc_ 开头, p2p 的 chat_id 是对方 open_id(ou_ 前缀), 用
+    // chatId 前缀兜底判定, 与 lane 归一互为备份。
+    const isFeishuGroupControl =
+      channel === 'feishu' &&
+      (decodeFeishuLaneUserId(event.senderId) !== null || event.chatId.startsWith('oc_'));
+    const controlNewPermissionMode = isFeishuGroupControl
+      ? readImDefaultSettings('feishu').groupCtrPermissionMode
+      : desktopPrefs.permissionMode;
+    log.info(
+      `control:new permission mode=${controlNewPermissionMode} group=${isFeishuGroupControl} ` +
+        `sender=...${event.senderId.slice(-8)}`,
+    );
     // 停用轴准入(PR #744 review 第五轮):IM 新建会话是新的付费路由,desktop 偏好里
     // 保存的 model/provider 可能已被用户停用 —— 宽松降级:被停用的显式来源/模型逐级
     // 丢弃(退回 agent 默认路由),隐式默认被停用时显式落替代来源;不因停用让 IM
@@ -882,7 +936,7 @@ export function createCardActionHandler(
           model: requireRouteModel(),
           providerId: route.providerId ?? undefined,
           ...(routeEffort ? { effort: routeEffort } : {}),
-          permissionMode: desktopPrefs.permissionMode as PermissionMode,
+          permissionMode: controlNewPermissionMode as PermissionMode,
           fastMode: routeFastMode,
           title: FBOT_DRAFT_TITLE,
         });
@@ -1301,6 +1355,10 @@ export function createCardActionHandler(
             await handlePermissionModeCancel(im, event);
             return;
           }
+          if (event.buttonId === 'permissionMode:fix-auto') {
+            await handlePermissionModeFixToAuto(im, event);
+            return;
+          }
 
           // /ctr picker —
           //   pick (workspace) → 替换为 session picker
@@ -1368,6 +1426,9 @@ export function createCardActionHandler(
 
           const resolved = resolvePending(requestId, decision);
           if (!resolved) {
+            // 卡片正文**不动**: 交互被作废时 turnRunner 已经把它收口了(dropInteractionCard),
+            // 而这里拿不到的另一半原因是"刚刚已经成功处理过" —— 那种情况改写成过期态
+            // 等于把一次已经生效的授权报成失效。渠道侧的气泡提示已足够告知这次点击无效。
             log.warn(
               `no pending interaction for requestId=...${requestId.slice(-8)} (already resolved? user double-tapped?)`,
             );
@@ -1375,9 +1436,14 @@ export function createCardActionHandler(
           }
 
           // Patch the card to a resolved state so the user sees their choice took.
+          // 授权卡保留原始正文(工具名 + 参数预览)再追加决策结果 — 用户要能
+          // 回看自己批准的是什么; 其它交互卡维持整卡替换的旧形态。
           const resolvedLabel = describeDecision(decision);
           try {
-            await im.updateInteractiveCard(event.messageId, cards.buildResolvedCard(resolvedLabel));
+            const spec = resolved.permissionCard
+              ? cards.buildResolvedPermissionCard(resolved.permissionCard, resolvedLabel)
+              : cards.buildResolvedCard(resolvedLabel);
+            await im.updateInteractiveCard(event.messageId, spec);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(`updateInteractiveCard failed (non-fatal): ${msg}`);

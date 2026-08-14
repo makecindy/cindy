@@ -3,6 +3,7 @@
  * 重点:符号链接一律拒(POSIX 走 O_NOFOLLOW,无该 flag 的平台走
  * lstat+dev/ino 回退闸),超限/非普通文件返回 null。
  */
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,7 +11,10 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  BoundedFileReadChangedError,
+  BoundedFileReadUncertainError,
   GHOST_MANIFEST_MAX_BYTES,
+  readBoundedFileFollowLinks,
   readBoundedFileNoFollow,
   readBoundedFileNoFollowSync,
 } from '../readBoundedFile';
@@ -26,6 +30,40 @@ afterEach(async () => {
 });
 
 describe('readBoundedFileNoFollow', () => {
+  it('opens follow-links untrusted paths in non-blocking mode; no-follow defaults to blocking', async () => {
+    const file = path.join(workDir, 'plain.json');
+    await fs.promises.writeFile(file, '{"ok":1}');
+    const realOpen = fs.promises.open;
+    const flags: number[] = [];
+    const spy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      flags.push(Number(args[1]));
+      return realOpen(...args);
+    }) as typeof fs.promises.open);
+
+    try {
+      // readBoundedFileNoFollow opts into O_NONBLOCK only when the caller asks
+      // for it (special-file reads); the default no-follow open stays blocking.
+      await expect(readBoundedFileNoFollow(file, 1024)).resolves.not.toBeNull();
+      await expect(readBoundedFileNoFollow(file, 1024, { nonBlocking: true })).resolves.not.toBeNull();
+      // readBoundedFileFollowLinks always opens non-blocking so a FIFO/device
+      // entry cannot block Main forever.
+      await expect(readBoundedFileFollowLinks(file, 1024)).resolves.not.toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(flags).toHaveLength(3);
+    const nonBlockingFlag = fs.constants.O_NONBLOCK ?? 0;
+    // flags[0]: readBoundedFileNoFollow default (blocking)
+    expect(flags[0] & nonBlockingFlag).toBe(0);
+    // flags[1]: readBoundedFileNoFollow with nonBlocking: true
+    expect(flags[1] & nonBlockingFlag).toBe(nonBlockingFlag);
+    // flags[2]: readBoundedFileFollowLinks (always non-blocking)
+    expect(flags[2] & nonBlockingFlag).toBe(nonBlockingFlag);
+  });
+
   it('普通文件按实际字节返回,超限返回 null', async () => {
     const small = path.join(workDir, 'small.json');
     await fs.promises.writeFile(small, '{"ok":true}');
@@ -34,6 +72,58 @@ describe('readBoundedFileNoFollow', () => {
     const big = path.join(workDir, 'big.json');
     await fs.promises.writeFile(big, 'x'.repeat(GHOST_MANIFEST_MAX_BYTES + 1));
     expect(await readBoundedFileNoFollow(big, GHOST_MANIFEST_MAX_BYTES)).toBeNull();
+  });
+
+  it('rejectHardLinks:拒绝已有硬链接的文件', async () => {
+    const original = path.join(workDir, 'outside-secret.png');
+    const linked = path.join(workDir, 'market-icon.png');
+    await fs.promises.writeFile(original, 'PRIVATE');
+    await fs.promises.link(original, linked);
+
+    expect(await readBoundedFileNoFollow(linked, 1024, { rejectHardLinks: true })).toBeNull();
+  });
+
+  it('rejectHardLinks:读取后链接计数变化时按内容变化拒绝', async () => {
+    const file = path.join(workDir, 'linked-during-read.png');
+    await fs.promises.writeFile(file, 'SAFE');
+    const realOpen = fs.promises.open;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      const handle = await realOpen(...args);
+      const realStat = handle.stat.bind(handle);
+      let statCalls = 0;
+      return new Proxy(handle, {
+        get(target, key) {
+          if (key === 'stat') {
+            return async (options?: fs.StatOptions) => {
+              const stat = (await realStat(options as never)) as unknown as fs.BigIntStats;
+              statCalls += 1;
+              if (statCalls === 1) return stat;
+              return new Proxy(stat, {
+                get(statTarget, statKey) {
+                  if (statKey === 'nlink') return 2n;
+                  const value = Reflect.get(statTarget, statKey);
+                  return typeof value === 'function' ? value.bind(statTarget) : value;
+                },
+              }) as fs.BigIntStats;
+            };
+          }
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }) as typeof fs.promises.open);
+    try {
+      await expect(
+        readBoundedFileNoFollow(file, 1024, {
+          rejectHardLinks: true,
+          verifyContentStability: true,
+        }),
+      ).rejects.toBeInstanceOf(BoundedFileReadChangedError);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it.runIf(process.platform !== 'win32')('POSIX:符号链接在 open 处被 O_NOFOLLOW 拒绝', async () => {
@@ -59,7 +149,9 @@ describe('readBoundedFileNoFollow', () => {
   it('无 O_NOFOLLOW 的平台:普通文件不被回退闸误伤', async () => {
     const file = path.join(workDir, 'plain.json');
     await fs.promises.writeFile(file, '{"ok":1}');
-    expect((await readBoundedFileNoFollow(file, 1024, { noFollowFlag: null }))?.toString('utf8')).toBe('{"ok":1}');
+    expect(
+      (await readBoundedFileNoFollow(file, 1024, { noFollowFlag: null }))?.toString('utf8'),
+    ).toBe('{"ok":1}');
   });
 
   it('无 O_NOFOLLOW 的平台:lstat 报告符号链接时拒绝,不依赖宿主 symlink 权限', async () => {
@@ -120,6 +212,60 @@ describe('readBoundedFileNoFollow', () => {
     },
   );
 
+  it.runIf(process.platform === 'win32')(
+    'containWithin accepts the same Windows drive with different realpath drive-letter casing',
+    async () => {
+      const file = path.join(workDir, 'drive-case.json');
+      await fs.promises.writeFile(file, '{"ok":true}');
+      const flipDriveCase = (realRoot: string) =>
+        realRoot.replace(/^([A-Za-z]):/, (_, drive: string) => (
+          `${drive === drive.toLowerCase() ? drive.toUpperCase() : drive.toLowerCase()}:`
+        ));
+      const asyncRootWithAlternateDriveCase = flipDriveCase(
+        await fs.promises.realpath(workDir),
+      );
+      const syncRootWithAlternateDriveCase = flipDriveCase(fs.realpathSync(workDir));
+
+      expect(
+        (await readBoundedFileNoFollow(file, 1024, {
+          containWithin: asyncRootWithAlternateDriveCase,
+          noFollowFlag: null,
+        }))?.toString('utf8'),
+      ).toBe('{"ok":true}');
+      expect(
+        readBoundedFileNoFollowSync(file, 1024, {
+          containWithin: syncRootWithAlternateDriveCase,
+          noFollowFlag: null,
+        })?.toString('utf8'),
+      ).toBe('{"ok":true}');
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')('nonBlocking: FIFO 不阻塞并被拒绝', async () => {
+    const fifo = path.join(workDir, 'icon');
+    if (spawnSync('mkfifo', [fifo]).status !== 0) return;
+    const started = Date.now();
+    await expect(readBoundedFileNoFollow(fifo, 1024, { nonBlocking: true })).resolves.toBeNull();
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it('根内复核暂时失败时报告不确定读取,不伪装成缺失', async () => {
+    const file = path.join(workDir, 'uncertain.json');
+    await fs.promises.writeFile(file, '{"ok":true}');
+    const statSpy = vi
+      .spyOn(fs.promises, 'stat')
+      .mockRejectedValueOnce(Object.assign(new Error('EACCES'), { code: 'EACCES' }));
+    try {
+      const error = await readBoundedFileNoFollow(file, 1024, { containWithin: workDir }).catch(
+        (value: unknown) => value,
+      );
+      expect(error).toBeInstanceOf(BoundedFileReadUncertainError);
+      expect(error).toMatchObject({ code: 'EACCES' });
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
   it('网络盘短读:单次 read 未填满时循环读满已校验长度', async () => {
     const file = path.join(workDir, 'short.json');
     const payload = `{"key":"${'a'.repeat(64)}"}`;
@@ -147,6 +293,85 @@ describe('readBoundedFileNoFollow', () => {
       expect(bytes?.toString('utf8')).toBe(payload);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('开启内容稳定性校验时,读取期间版本变化返回可重试错误', async () => {
+    const file = path.join(workDir, 'changed.json');
+    await fs.promises.writeFile(file, '{"ok":true}');
+    const realOpen = fs.promises.open;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      const handle = await realOpen(...args);
+      const realStat = handle.stat.bind(handle);
+      let statCalls = 0;
+      return new Proxy(handle, {
+        get(target, key) {
+          if (key === 'stat') {
+            return async (options?: fs.StatOptions) => {
+              const stat = (await realStat(options as never)) as unknown as fs.BigIntStats;
+              statCalls += 1;
+              if (statCalls !== 2) return stat;
+              return new Proxy(stat, {
+                get(statTarget, statKey) {
+                  if (statKey === 'mtimeNs') return statTarget.mtimeNs + 1n;
+                  const value = Reflect.get(statTarget, statKey);
+                  return typeof value === 'function' ? value.bind(statTarget) : value;
+                },
+              }) as fs.BigIntStats;
+            };
+          }
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }) as typeof fs.promises.open);
+    try {
+      await expect(
+        readBoundedFileNoFollow(file, 1024, { verifyContentStability: true }),
+      ).rejects.toBeInstanceOf(BoundedFileReadChangedError);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('开启内容稳定性校验时,同 stat 的同长度改写会在复读时返回可重试错误', async () => {
+    const file = path.join(workDir, 'same-stat-changed.json');
+    await fs.promises.writeFile(file, 'AAAA');
+    const stableStat = await fs.promises.stat(file, { bigint: true });
+    const realOpen = fs.promises.open;
+    let rewritten = false;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle);
+      return new Proxy(handle, {
+        get(target, key) {
+          if (key === 'stat') return async () => stableStat;
+          if (key === 'read') {
+            return async (buffer: Buffer, offset: number, length: number, position: number) => {
+              const result = await realRead(buffer, offset, length, position);
+              if (!rewritten) {
+                await fs.promises.writeFile(file, 'BBBB');
+                rewritten = true;
+              }
+              return result;
+            };
+          }
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }) as typeof fs.promises.open);
+    try {
+      await expect(
+        readBoundedFileNoFollow(file, 1024, { verifyContentStability: true }),
+      ).rejects.toBeInstanceOf(BoundedFileReadChangedError);
+      expect(rewritten).toBe(true);
+    } finally {
+      openSpy.mockRestore();
     }
   });
 
@@ -184,12 +409,16 @@ describe('readBoundedFileNoFollow', () => {
         });
       }) as typeof fs.promises.open);
       const realLstat = fs.promises.lstat;
-      const lstatSpy = vi
-        .spyOn(fs.promises, 'lstat')
-        .mockImplementation((async (p: fs.PathLike, opts?: fs.StatOptions) => {
-          const st = (await (realLstat as (...a: unknown[]) => Promise<fs.BigIntStats>)(p, opts)) as fs.BigIntStats;
-          return zero(st);
-        }) as typeof fs.promises.lstat);
+      const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation((async (
+        p: fs.PathLike,
+        opts?: fs.StatOptions,
+      ) => {
+        const st = (await (realLstat as (...a: unknown[]) => Promise<fs.BigIntStats>)(
+          p,
+          opts,
+        )) as fs.BigIntStats;
+        return zero(st);
+      }) as typeof fs.promises.lstat);
       try {
         expect(await readBoundedFileNoFollow(file, 1024, { noFollowFlag: null })).toBeNull();
       } finally {
@@ -201,23 +430,75 @@ describe('readBoundedFileNoFollow', () => {
 });
 
 describe('readBoundedFileNoFollowSync', () => {
+  it('opens untrusted no-follow paths in non-blocking mode (sync variant)', async () => {
+    const file = path.join(workDir, 'plain.json');
+    await fs.promises.writeFile(file, '{"ok":1}');
+    const realOpenSync = fs.openSync;
+    let flags = 0;
+    const spy = vi.spyOn(fs, 'openSync').mockImplementation(((
+      ...args: Parameters<typeof fs.openSync>
+    ) => {
+      flags = Number(args[1]);
+      return realOpenSync(...args);
+    }) as typeof fs.openSync);
+
+    try {
+      expect(readBoundedFileNoFollowSync(file, 1024)).not.toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The sync variant opens non-blocking so a FIFO/device entry cannot block
+    // Main forever; O_NONBLOCK is a no-op for regular files.
+    const nonBlockingFlag = fs.constants.O_NONBLOCK ?? 0;
+    expect(flags & nonBlockingFlag).toBe(nonBlockingFlag);
+  });
+
   it('限量与回退闸语义和异步变体一致', async () => {
     const file = path.join(workDir, 'plain.json');
     await fs.promises.writeFile(file, '{"ok":1}');
     expect(readBoundedFileNoFollowSync(file, 1024)?.toString('utf8')).toBe('{"ok":1}');
-    expect(readBoundedFileNoFollowSync(file, 1024, { noFollowFlag: null })?.toString('utf8')).toBe('{"ok":1}');
+    expect(readBoundedFileNoFollowSync(file, 1024, { noFollowFlag: null })?.toString('utf8')).toBe(
+      '{"ok":1}',
+    );
 
     const big = path.join(workDir, 'big.json');
     await fs.promises.writeFile(big, 'x'.repeat(2048));
     expect(readBoundedFileNoFollowSync(big, 1024)).toBeNull();
   });
 
-  it.runIf(process.platform !== 'win32')('符号链接:O_NOFOLLOW 拒于 open,回退闸拒于 lstat', async () => {
-    const target = path.join(workDir, 'target.json');
-    await fs.promises.writeFile(target, '{"ok":true}');
-    const link = path.join(workDir, 'link.json');
-    await fs.promises.symlink(target, link);
-    expect(() => readBoundedFileNoFollowSync(link, 1024)).toThrow();
-    expect(readBoundedFileNoFollowSync(link, 1024, { noFollowFlag: null })).toBeNull();
+  it.runIf(process.platform !== 'win32')(
+    '符号链接:O_NOFOLLOW 拒于 open,回退闸拒于 lstat',
+    async () => {
+      const target = path.join(workDir, 'target.json');
+      await fs.promises.writeFile(target, '{"ok":true}');
+      const link = path.join(workDir, 'link.json');
+      await fs.promises.symlink(target, link);
+      expect(() => readBoundedFileNoFollowSync(link, 1024)).toThrow();
+      expect(readBoundedFileNoFollowSync(link, 1024, { noFollowFlag: null })).toBeNull();
+    },
+  );
+});
+
+describe('readBoundedFileNoFollowSync mutation guard', () => {
+  it('rejects a file that changes while being read', async () => {
+    const file = path.join(workDir, 'mutating.json');
+    await fs.promises.writeFile(file, '{"ok":1}');
+    const realReadSync = fs.readSync;
+    let mutated = false;
+    const spy = vi.spyOn(fs, 'readSync').mockImplementation(((fd, buffer, offset, length, position) => {
+      const bytesRead = (realReadSync as typeof fs.readSync)(fd, buffer, offset, length, position);
+      if (!mutated && bytesRead > 0) {
+        mutated = true;
+        fs.writeFileSync(file, '{"ok":2,"mutated":true}');
+      }
+      return bytesRead;
+    }) as typeof fs.readSync);
+
+    try {
+      expect(() => readBoundedFileNoFollowSync(file, 1024)).toThrow(/changed while being read/);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

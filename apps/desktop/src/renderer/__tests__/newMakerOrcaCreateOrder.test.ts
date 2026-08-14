@@ -137,7 +137,71 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     );
     expect(sessionViewSource).toContain('if (sessionHandoffPreparing) return false;');
     expect(sessionViewSource).not.toContain('if (worktreePreparing) return false;');
-    expect(sessionViewSource).toContain('disabled={remoteHandoffPreparing}');
+    expect(sessionViewSource).toContain(
+      "disabled={remoteHandoffPreparing || session?.source === 'review'}",
+    );
+  });
+
+  it('rebases delayed-create inline metadata after rewriting a Pi skill alias', () => {
+    const pendingBranch = sessionViewSource
+      .slice(
+        sessionViewSource.indexOf('const pending = consumePending(sessionId);'),
+        sessionViewSource.indexOf('const pendingGoalConsumedRef'),
+      )
+      .replace(/\r\n/g, '\n');
+
+    expect(pendingBranch).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n              pending.agentReferences,',
+    );
+    expect(pendingBranch).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n              pending.pastedTextRanges,',
+    );
+    expect(pendingBranch).toMatch(
+      /rebaseInlineRangesAfterSlashCommandRewrite\(\s*\n\s*pending\.slashCommandRanges,/,
+    );
+    expect(pendingBranch).toContain('agentReferences: pendingAgentReferences');
+    expect(pendingBranch).toContain('pastedTextRanges: pendingPastedTextRanges');
+    expect(pendingBranch).toContain('slashCommandRanges: pendingSlashCommandRanges');
+    expect(pendingBranch).toContain('PI_RUNTIME_SKILL_RETRY_DELAYS_MS');
+  });
+
+  it('reconciles Pi skill aliases after the user selects a working directory', () => {
+    const workingDirHandler = sessionViewSource
+      .slice(
+        sessionViewSource.indexOf('const handleWorkingDirChange = useCallback('),
+        sessionViewSource.indexOf('const maybeShowContextUsage'),
+      )
+      .replace(/\r\n/g, '\n');
+
+    expect(sessionViewSource).toContain('const commands = options?.workingDirOverride');
+    expect(workingDirHandler).toContain('workingDirOverride: newDir');
+    expect(workingDirHandler).toContain('piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS');
+    expect(workingDirHandler).toContain('preparePiRuntime: async () =>');
+    expect(workingDirHandler).toContain("'maker:create-session'");
+    expect(workingDirHandler).toContain('window.electronAPI.maker.createSession(createOpts)');
+    expect(workingDirHandler).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.agentReferences,',
+    );
+    expect(workingDirHandler).toContain(
+      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.pastedTextRanges,',
+    );
+    expect(workingDirHandler).toMatch(
+      /rebaseInlineRangesAfterSlashCommandRewrite\(\s*\n\s*pending\.slashCommandRanges,/,
+    );
+    expect(workingDirHandler).toContain('slashDispatch.message,');
+  });
+
+  it('uses bounded Pi runtime reconciliation for ordinary sends and steering', () => {
+    const slashDispatchBranch = sessionViewSource
+      .slice(
+        sessionViewSource.indexOf('const originalMessage = message;'),
+        sessionViewSource.indexOf('if (slashDispatch.handled) return slashDispatch.accepted;'),
+      )
+      .replace(/\r\n/g, '\n');
+
+    expect(
+      slashDispatchBranch.match(/piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS/g),
+    ).toHaveLength(3);
   });
 
   it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {
@@ -147,7 +211,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     const body = remoteCollabHandoffSource.slice(
       remoteCollabHandoffSource.indexOf('export async function enableRemoteCollabForSession('),
     );
-    const returnAt = body.indexOf('return { focusWorkerSessionId:');
+    const returnAt = body.indexOf('return withDeferredAssignment(');
     const finallyAt = body.indexOf('} finally {');
     expect(returnAt).toBeGreaterThan(-1);
     expect(finallyAt).toBeGreaterThan(returnAt);
@@ -158,17 +222,23 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     // 草稿里持久化的来源/模型按**目标设备**的目录收窄:device-link 分支必须用
     // deviceProviders,拿控制端的 localProviders 收窄等于用错机器的目录。
     const collapsed = source.replace(/\s+/g, ' ');
-    const remoteNarrowing =
-      collapsed.match(
-        /draftEnableOrcaOptions\( effectiveCollab, deviceProviders, !deviceProvidersLoading, \)/g,
-      ) ?? [];
-    expect(remoteNarrowing).toHaveLength(2);
-    // 本机 / SSH 的四条路径仍按控制端目录收窄,不能被一起改掉。
     expect(
       collapsed.match(
-        /draftEnableOrcaOptions\(\s*effectiveCollab,\s*localProviders,\s*!localProvidersLoading,?\s*\)/g,
+        /draftEnableOrcaOptions\( effectiveCollab, deviceProviders, !deviceProvidersLoading, true, \)/g,
       ) ?? [],
-    ).toHaveLength(4);
+    ).toHaveLength(2);
+    // 本机 / SSH 仍按控制端目录收窄。五条创建即发送/目标路径都要求 deferred handoff;
+    // 「添加远程项目」只迁移未发送的 composer 草稿,不能提前派 Worker 任务。
+    expect(
+      collapsed.match(
+        /draftEnableOrcaOptions\( effectiveCollab, localProviders, !localProvidersLoading, true, \)/g,
+      ) ?? [],
+    ).toHaveLength(3);
+    expect(
+      collapsed.match(
+        /draftEnableOrcaOptions\(\s*effectiveCollab, localProviders, !localProvidersLoading\)/g,
+      ) ?? [],
+    ).toHaveLength(1);
   });
 
   it('re-validates the worker agent against the target device catalog', () => {
@@ -300,8 +370,10 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       expect(send).toBeLessThan(unlock);
       // sendMessage 失败时 resolve false 而不抛错 —— 必须 await 且经 deliver 判定,
       // 裸调 + 立刻丢副本会让正文从界面和磁盘上一起消失(codex P1 第五轮)。
-      expect(branch).toContain('await deliverRecoverableHandoff(sessionId, () =>');
+      expect(branch).toContain('const delivered = await deliverRecoverableHandoff(sessionId, () =>');
       expect(branch).toContain('sendMessage(');
+      expect(branch.indexOf('if (delivered) {')).toBeGreaterThan(send);
+      expect(branch).toContain('dispatchDeferredUiAssignment(sessionId, deferredUiAssignment)');
     });
 
     it('新建目标:锁从消费一路盖到 setGoal 结束,setGoal 成功后才清副本', () => {
@@ -324,6 +396,8 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       expect(awaitCollab).toBeLessThan(setGoal);
       // setGoal 抛错时副本必须留着 → 它必须包在 deliver 的回调里(抛错就到不了 forget)。
       expect(forget).toBeLessThan(setGoal);
+      expect(branch.indexOf('if (delivered) {')).toBeGreaterThan(setGoal);
+      expect(branch).toContain('dispatchDeferredUiAssignment(sessionId, deferredUiAssignment)');
       expect(setGoal).toBeLessThan(unlock);
     });
 

@@ -14,7 +14,7 @@ import {
   Workflow,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type Ref } from 'react';
 
 import { cn } from '@/lib/utils';
 import { ghostFallbackIconKind, type GhostFallbackIconKind } from './lib/ghostPluginViewModel';
@@ -61,12 +61,16 @@ export function GhostPluginIcon({
   iconDataUrl,
   iconId,
   iconName,
+  iconContainerRef,
+  onIconLoad,
   onIconLoadError,
   size = 'md',
 }: {
   iconDataUrl?: string;
   iconId: string;
   iconName: string;
+  iconContainerRef?: Ref<HTMLSpanElement>;
+  onIconLoad?: () => void;
   onIconLoadError?: () => void;
   size?: GhostPluginIconSize;
 }) {
@@ -81,6 +85,7 @@ export function GhostPluginIcon({
 
   return (
     <span
+      ref={iconContainerRef}
       className={cn(
         'inline-flex shrink-0 items-center justify-center overflow-hidden border-[0.5px] border-[var(--border-default)]',
         resolvedIconDataUrl
@@ -95,6 +100,7 @@ export function GhostPluginIcon({
           alt=""
           draggable={false}
           referrerPolicy="no-referrer"
+          onLoad={onIconLoad}
           onError={() => {
             setFailedSrc(resolvedIconDataUrl);
             onIconLoadError?.();

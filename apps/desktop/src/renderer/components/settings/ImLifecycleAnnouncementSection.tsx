@@ -7,6 +7,7 @@ export function ImLifecycleAnnouncementSection(props: {
   hint: string;
   checked: boolean;
   onCheckedChange: (enabled: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-[14px]">
@@ -36,6 +37,7 @@ export function ImLifecycleAnnouncementSection(props: {
         <Switch
           checked={props.checked}
           onCheckedChange={props.onCheckedChange}
+          disabled={props.disabled}
           aria-label={props.label}
         />
       </div>

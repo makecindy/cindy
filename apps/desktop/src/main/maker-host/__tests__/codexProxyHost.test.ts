@@ -310,6 +310,15 @@ describe('withCodexUpstreamRecording', () => {
 });
 
 describe('codex gateway config', () => {
+  it('所有认证模式都让缺少 model metadata 的 Codex 模型使用 CodeModeOnly', async () => {
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+
+    for (const mode of ['oauth-bearer', 'env-key', 'provider-oauth'] as const) {
+      const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
+      expect(args).toContain('features.code_mode_only=true');
+    }
+  });
+
   it('oauth-bearer 模式: requires_openai_auth, 不带 env_key', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
 
@@ -375,24 +384,74 @@ describe('createCrossProviderCompactionCompatTransform', () => {
   const compactionItem = { type: 'compaction', encrypted_content: 'ENC' };
   const contextCompactionItem = { type: 'context_compaction', id: 'cc_1', encrypted_content: 'ENC2' };
   const userMessage = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] };
+  const agentMessage = {
+    type: 'agent_message',
+    author: 'researcher',
+    recipient: 'parent',
+    content: [
+      { type: 'input_text', text: 'readable agent result' },
+      { type: 'encrypted_content', encrypted_content: 'AGENT_ENC' },
+    ],
+  };
+  const reasoningItem = {
+    type: 'reasoning',
+    content: null,
+    summary: [],
+    encrypted_content: 'REASONING_ENC',
+  };
 
-  it('把加密压缩块替换为明文占位 message(非 ChatGPT 上游)', async () => {
+  it('同时降级 compaction 与 agent 消息密文，保留可读正文和 reasoning(非 ChatGPT 上游)', async () => {
     const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
     const transform = createCrossProviderCompactionCompatTransform();
 
     const out = transform(
-      { model: 'gpt-5.5', input: [compactionItem, contextCompactionItem, userMessage] },
+      {
+        model: 'gpt-5.5',
+        input: [compactionItem, contextCompactionItem, agentMessage, reasoningItem, userMessage],
+      },
       { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
     ) as { input: Array<Record<string, unknown>> };
 
     expect(out).not.toBeNull();
-    expect(out.input).toHaveLength(3);
+    expect(out.input).toHaveLength(5);
     expect(out.input[0].type).toBe('message');
     expect(out.input[1].type).toBe('message');
-    expect(JSON.stringify(out.input)).not.toContain('ENC');
     expect(JSON.stringify(out.input[0])).toContain('compacted into an encrypted snapshot');
-    // 压缩点之后的原有消息原样保留
-    expect(out.input[2]).toEqual(userMessage);
+    expect(out.input[2]).toEqual({
+      type: 'agent_message',
+      author: 'researcher',
+      recipient: 'parent',
+      content: [{ type: 'input_text', text: 'readable agent result' }],
+    });
+    expect(out.input[3]).toEqual(reasoningItem);
+    expect(out.input[4]).toEqual(userMessage);
+    expect(JSON.stringify(out.input)).not.toContain('AGENT_ENC');
+    expect(JSON.stringify(out.input)).toContain('REASONING_ENC');
+    // transform 不得原地污染 Codex 持有的历史对象。
+    expect(agentMessage.content).toHaveLength(2);
+  });
+
+  it('agent_message 只有密文时整条丢弃', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    const out = transform(
+      {
+        model: 'gpt-5.5',
+        input: [
+          {
+            type: 'agent_message',
+            author: 'researcher',
+            recipient: 'parent',
+            content: [{ type: 'encrypted_content', encrypted_content: 'ONLY_ENC' }],
+          },
+          userMessage,
+        ],
+      },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    ) as { input: Array<Record<string, unknown>> };
+
+    expect(out.input).toEqual([userMessage]);
   });
 
   it('ChatGPT 上游原样透传(远端压缩语义不受影响)', async () => {
@@ -400,7 +459,7 @@ describe('createCrossProviderCompactionCompatTransform', () => {
     const transform = createCrossProviderCompactionCompatTransform();
 
     expect(transform(
-      { model: 'gpt-5.5', input: [compactionItem, userMessage] },
+      { model: 'gpt-5.5', input: [compactionItem, agentMessage, reasoningItem, userMessage] },
       { ...CTX_BASE, upstreamBase: 'https://chatgpt.com/backend-api/codex' },
     )).toBeNull();
   });
@@ -614,6 +673,104 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     clearSessionProvider('session-kimi-image');
     setCustomProviderKeyReader(() => null);
     setCustomProviders([]);
+  });
+
+  it('strips agent message ciphertext before a cross-provider Chat bridge request', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'history-chat-provider',
+        name: 'History Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://chat-provider.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'history-model', name: 'History Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'history-provider-key');
+    host.registerComposed('session-history-chat', 'thread-history-chat', 'PRODUCT_PROMPT');
+    setSessionProvider('session-history-chat', 'history-chat-provider');
+    host.setCodexProxyAuthInjection('env-key');
+
+    const parsedBody = {
+      model: 'history-model',
+      input: [
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          recipient: 'parent',
+          content: [
+            { type: 'input_text', text: 'readable result' },
+            { type: 'encrypted_content', encrypted_content: 'AGENT_ENC' },
+          ],
+        },
+        {
+          type: 'agent_message',
+          author: 'researcher',
+          recipient: 'parent',
+          content: [{ type: 'encrypted_content', encrypted_content: 'ONLY_ENC' }],
+        },
+        {
+          type: 'reasoning',
+          content: null,
+          summary: [],
+          encrypted_content: 'REASONING_ENC',
+        },
+      ],
+    };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-history-chat' },
+    };
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        parsedBody,
+        ctx,
+      ));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      if (!decision?.localHandler) throw new Error('expected Chat bridge local handler');
+
+      const res = {} as never;
+      await decision.localHandler({
+        rawBody: Buffer.from(JSON.stringify(parsedBody)),
+        parsedBody,
+        ctx,
+        res,
+      });
+      const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as
+        | { handle: ReturnType<typeof vi.fn> }
+        | undefined;
+      expect(bridge?.handle).toHaveBeenCalledWith({
+        parsedBody: {
+          ...parsedBody,
+          instructions: 'PRODUCT_PROMPT',
+          input: [
+            {
+              type: 'agent_message',
+              author: 'researcher',
+              recipient: 'parent',
+              content: [{ type: 'input_text', text: 'readable result' }],
+            },
+            parsedBody.input[2],
+          ],
+        },
+        res,
+      });
+    } finally {
+      clearSessionProvider('session-history-chat');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
   });
 
   it('routes a custom Codex Anthropic Messages runtime to the local bridge with provider-owned auth', async () => {
@@ -870,152 +1027,59 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     }
   });
 
-  it('routes only XD Claude-only models through the Anthropic bridge in env-key mode', async () => {
+  it('does not project an XD Claude-only model into Codex or create an Anthropic bridge', async () => {
     const host = await freshCodexProxyHost();
     const { setXdGatewayModels } = await import('../active-catalog.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
-    setXdGatewayModels([
-      { id: 'gpt-native', agents: ['claude-code', 'codex'] },
-      { id: 'claude-bridge', agents: ['claude-code'] },
-    ]);
+    setXdGatewayModels([{
+      id: 'claude-only',
+      name: 'Claude Only',
+      contextWindow: 200_000,
+      agents: ['claude-code'],
+      perAgent: { 'claude-code': { wireProtocol: 'anthropic-messages' } },
+    }]);
     host.setCodexProxyGatewayKeyReader(() => 'xd-gateway-key');
-    host.registerComposed('session-xd-bridge', 'thread-xd-bridge', 'PRODUCT_PROMPT');
-    setSessionProvider('session-xd-bridge', 'xd');
+    host.registerComposed('session-xd-no-projection', 'thread-xd-no-projection', 'PRODUCT_PROMPT');
+    setSessionProvider('session-xd-no-projection', 'xd');
     host.setCodexProxyAuthInjection('env-key');
 
-    const bridgeDecision = await Promise.resolve(host.createModelRoutingTransform()(
+    const decision = await Promise.resolve(host.createModelRoutingTransform()(
       {
-        model: 'claude-bridge[1m]',
+        model: 'claude-only[1m]',
         input: [{ role: 'user', content: 'hello' }],
       },
       {
         reqId: 1,
         method: 'POST',
         url: '/responses',
-        headers: {
-          'thread-id': 'thread-xd-bridge',
-          authorization: 'Bearer codex-token-must-not-leak',
-          'chatgpt-account-id': 'account-must-not-leak',
-        },
+        headers: { 'thread-id': 'thread-xd-no-projection' },
       },
     ));
 
-    expect(bridgeDecision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
-    expect(host.registerChildThread('thread-xd-bridge', 'thread-xd-child')).toBe(true);
-    const childBridgeDecision = await Promise.resolve(host.createModelRoutingTransform()(
-      {
-        model: 'claude-bridge',
-        input: [{ role: 'user', content: 'child hello' }],
-      },
-      {
-        reqId: 2,
-        method: 'POST',
-        url: '/responses',
-        headers: { 'thread-id': 'thread-xd-child' },
-      },
-    ));
-    expect(childBridgeDecision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    expect(decision).toBeNull();
+    expect(mockState.createResponsesAnthropicHandler).not.toHaveBeenCalled();
 
-    expect(host.registerChildThread('thread-xd-child', 'thread-xd-grandchild')).toBe(true);
-    const grandchildBridgeDecision = await Promise.resolve(host.createModelRoutingTransform()(
-      {
-        model: 'claude-bridge',
-        input: [{ role: 'user', content: 'grandchild hello' }],
-      },
-      {
-        reqId: 3,
-        method: 'POST',
-        url: '/responses',
-        headers: { 'thread-id': 'thread-xd-grandchild' },
-      },
-    ));
-    expect(grandchildBridgeDecision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
-
-    const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
-      {
-        upstreamBase: string;
-        promptCaching: boolean;
-        automaticPromptCaching: boolean;
-        strictTools: boolean;
-        buildHeaders: () => Promise<Record<string, string>>;
-        rewriteModel: (model: string) => string;
-      },
-    ]>;
-    const config = anthropicHandlerCalls[0]?.[0];
-    expect(config).toBeDefined();
-    if (!config) throw new Error('XD Anthropic bridge config was not captured');
-    expect(config.upstreamBase).toBe(XD_GATEWAY_BASE_URL);
-    expect(config.promptCaching).toBe(true);
-    expect(config.automaticPromptCaching).toBe(false);
-    expect(config.strictTools).toBe(false);
-    expect(await config.buildHeaders()).toEqual({
-      'x-api-key': 'xd-gateway-key',
-      authorization: 'Bearer xd-gateway-key',
-      'anthropic-beta': 'context-1m-2025-08-07',
-    });
-    expect(config.rewriteModel('claude-bridge[1m]')).toBe('claude-bridge');
-
-    const nativeDecision = await Promise.resolve(host.createModelRoutingTransform()(
-      {
-        model: 'gpt-native',
-        input: [{ role: 'user', content: 'hello' }],
-      },
-      {
-        reqId: 4,
-        method: 'POST',
-        url: '/responses',
-        headers: { 'thread-id': 'thread-xd-grandchild' },
-      },
-    ));
-    expect(nativeDecision).toBeNull();
-    expect(mockState.createResponsesAnthropicHandler).toHaveBeenCalledTimes(3);
-
-    host.unregister('session-xd-bridge');
-    expect(host.registerChildThread('thread-xd-bridge', 'thread-after-close')).toBe(false);
-    expect(host.registerChildThread('thread-xd-child', 'thread-after-child-close')).toBe(false);
-    expect(host.registerChildThread('thread-xd-grandchild', 'thread-after-grandchild-close')).toBe(false);
-    const closedChildDecision = await Promise.resolve(host.createModelRoutingTransform()(
-      {
-        model: 'claude-bridge',
-        input: [{ role: 'user', content: 'closed child' }],
-      },
-      {
-        reqId: 5,
-        method: 'POST',
-        url: '/responses',
-        headers: { 'thread-id': 'thread-xd-child' },
-      },
-    ));
-    expect(closedChildDecision).toBeNull();
-    expect(mockState.createResponsesAnthropicHandler).toHaveBeenCalledTimes(3);
-
-    clearSessionProvider('session-xd-bridge');
+    host.unregister('session-xd-no-projection');
+    clearSessionProvider('session-xd-no-projection');
     setXdGatewayModels([]);
     host.setCodexProxyGatewayKeyReader(() => null);
   });
 
-  it('routes an implicit XD Claude-only model through the Anthropic bridge', async () => {
+  it('does not implicitly select XD for a model that v3 only assigns to Claude Code', async () => {
     const host = await freshCodexProxyHost();
-    const {
-      getActiveCatalog,
-      setAnthropicDiscoveredModels,
-      setXdGatewayModels,
-    } = await import('../active-catalog.js');
+    const { getActiveCatalog, setXdGatewayModels } = await import('../active-catalog.js');
     const { setProviderViewsReader } = await import('../provider-route.js');
     const { clearSessionProvider } = await import('../session-provider-store.js');
-    setAnthropicDiscoveredModels([{
+    setXdGatewayModels([{
       id: 'claude-implicit-xd',
-      name: 'Implicit Shared Claude',
-      group: 'anthropic',
+      name: 'Implicit XD Claude',
       contextWindow: 200_000,
-      efforts: ['low', 'medium', 'high'],
-      defaultEffort: 'high',
-      status: 'active',
+      agents: ['claude-code'],
+      perAgent: { 'claude-code': { wireProtocol: 'anthropic-messages' } },
     }]);
-    setXdGatewayModels([{ id: 'claude-implicit-xd', agents: ['claude-code'] }]);
     setProviderViewsReader(async () => getActiveCatalog().providers.map((provider) => ({
       ...provider,
-      connected: provider.id === 'xd' || provider.id === 'anthropic',
+      connected: provider.id === 'xd',
     })));
     host.setCodexProxyGatewayKeyReader(() => 'xd-gateway-key');
     host.registerComposed(
@@ -1040,28 +1104,11 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         },
       ));
 
-      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
-      const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
-        {
-          upstreamBase: string;
-          authMode: string;
-          buildHeaders: () => Promise<Record<string, string>>;
-        },
-      ]>;
-      const config = anthropicHandlerCalls.at(-1)?.[0];
-      expect(config).toBeDefined();
-      if (!config) throw new Error('implicit XD Anthropic bridge config was not captured');
-      expect(config.upstreamBase).toBe(XD_GATEWAY_BASE_URL);
-      expect(config.authMode).toBe('api-key');
-      expect(await config.buildHeaders()).toEqual({
-        'x-api-key': 'xd-gateway-key',
-        authorization: 'Bearer xd-gateway-key',
-        'anthropic-beta': 'context-1m-2025-08-07',
-      });
+      expect(decision).toBeNull();
+      expect(mockState.createResponsesAnthropicHandler).not.toHaveBeenCalled();
     } finally {
       host.unregister('session-implicit-xd');
       clearSessionProvider('session-implicit-xd');
-      setAnthropicDiscoveredModels([]);
       setXdGatewayModels([]);
       setProviderViewsReader(async () => []);
       host.setCodexProxyGatewayKeyReader(() => null);
@@ -1402,11 +1449,17 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     host.unregister('session-owner');
   });
 
-  it('fails an XD bridged model locally when the gateway key is unavailable', async () => {
+  it('does not create a hidden XD bridge for a Claude-only model without a gateway key', async () => {
     const host = await freshCodexProxyHost();
     const { setXdGatewayModels } = await import('../active-catalog.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
-    setXdGatewayModels([{ id: 'claude-bridge', agents: ['claude-code'] }]);
+    setXdGatewayModels([{
+      id: 'claude-bridge',
+      name: 'Claude Bridge',
+      contextWindow: 200_000,
+      agents: ['claude-code'],
+      perAgent: { 'claude-code': { wireProtocol: 'anthropic-messages' } },
+    }]);
     host.setCodexProxyGatewayKeyReader(() => null);
     host.registerComposed('session-xd-no-key', 'thread-xd-no-key', 'PRODUCT_PROMPT');
     setSessionProvider('session-xd-no-key', 'xd');
@@ -1425,7 +1478,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       },
     ));
 
-    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    expect(decision).toBeNull();
     expect(mockState.createResponsesAnthropicHandler).not.toHaveBeenCalled();
 
     clearSessionProvider('session-xd-no-key');

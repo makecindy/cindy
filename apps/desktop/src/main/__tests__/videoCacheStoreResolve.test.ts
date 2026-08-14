@@ -59,4 +59,10 @@ describe('videoCacheStore.resolveSafe', () => {
       /invalid url/i,
     );
   });
+
+  it('rejects malformed percent-encoding as a malformed URL', () => {
+    expect(() => resolveSafe('xdt-video://lizi-art-media-videos/%E0%A4%A.mp4')).toThrow(
+      /malformed url/i,
+    );
+  });
 });

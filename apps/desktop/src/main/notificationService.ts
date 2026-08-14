@@ -32,6 +32,14 @@ import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-lin
 import { latestMessageText } from './localDb/latestMessageText';
 import { drainPersistQueue } from './messagePersistBroadcaster';
 import { createLogger } from './logger';
+import {
+  getSessionExternalNotificationText,
+  getSessionNotificationBody,
+  getSessionNotificationUntitled,
+  type SessionEventKind,
+} from './sessionNotificationCopy';
+
+export type { SessionEventKind } from './sessionNotificationCopy';
 
 const log = createLogger('notificationService');
 let desktopNotificationsEnabled = true;
@@ -60,8 +68,6 @@ const devNotificationIcon = !app.isPackaged
  *   - 'error'       — agent 本轮以报错结束
  *   - 'needs-reply' — agent 抛出 ask-user / permission / plan-review，等用户处理
  */
-export type SessionEventKind = 'done' | 'error' | 'needs-reply';
-
 const CLIENT_NOTIFICATION_NAME = 'Cindy';
 
 interface ShowSessionEventPayload {
@@ -83,31 +89,6 @@ interface ShowSessionEventPayload {
  * 不能只依赖 Windows AUMID / macOS bundle 元数据标识来源：不同系统和通知中心
  * 展示的 app 元数据并不一致，只显示任务名时容易被误认成同名插件主动发出的通知。
  */
-function buildBody(kind: SessionEventKind): string {
-  switch (kind) {
-    case 'needs-reply':
-      return '需要你回复';
-    case 'error':
-      return '执行失败';
-    case 'done':
-    default:
-      return '已完成 ✓';
-  }
-}
-
-/**
- * 外部通知通用文案 — 单行纯文本，保持极简并与桌面 toast 信息一致。
- * 标题 + 状态合并到一行，适用于飞书私聊和企微群消息列表。
- */
-function buildExternalNotificationText(title: string, kind: SessionEventKind): string {
-  const status = kind === 'needs-reply'
-    ? '需要你回复'
-    : kind === 'error'
-      ? '执行失败'
-      : '已完成 ✓';
-  return `${CLIENT_NOTIFICATION_NAME} · 任务「${title}」${status}`;
-}
-
 // 防 GC：Electron Notification 实例如果不持引用，JS 引擎可能在 toast 还在显示
 // 时就回收掉，导致 click handler 丢失甚至触发异常事件。用 Set 持引用，等
 // close/click 后再 release。
@@ -147,7 +128,7 @@ export function showDesktopSessionEvent(
 ): void {
   const { sessionId, title, kind } = payload;
   if (sessionId) markSessionNeedsAttention(sessionId);
-  const safeTitle = title?.trim() || sessionId.slice(0, 8) || '任务';
+  const safeTitle = title?.trim() || sessionId.slice(0, 8) || getSessionNotificationUntitled();
   showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId));
 }
 
@@ -260,7 +241,7 @@ function assertValidSessionEventPayload(
 
 /** 桌面 toast 分支 — 原实现保持不变,只是拆出来便于 channels 选择性执行。 */
 function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: () => void): void {
-  const body = buildBody(kind);
+  const body = getSessionNotificationBody(kind);
 
   // Electron Notification 在某些 Linux 桌面环境下可能不可用——静默兜底。
   if (!Notification.isSupported()) {
@@ -309,7 +290,10 @@ async function sendFeishuMessage(
     return;
   }
   try {
-    await feishuIm.sendMarkdownText(ownerOpenId, buildExternalNotificationText(safeTitle, kind));
+    await feishuIm.sendMarkdownText(
+      ownerOpenId,
+      getSessionExternalNotificationText(safeTitle, kind),
+    );
   } catch (err) {
     // 飞书 SDK 包了一层 axios; 400 等业务错误的真正 message 在 response.data 里,
     // 显式拆出来 log。与 scheduler-host/notifier.ts 的 catch 写法对齐。

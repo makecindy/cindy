@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import { shouldTeardownColdStartRuntime } from '../authColdStartBoundary';
 
 /** Regression guard for login progress that is intentionally owned by Electron main. */
 describe('auth login-flow reset', () => {
@@ -192,6 +194,42 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('preservePersistedRefreshToken: true');
   });
 
+  it('does not call teardown for a fresh signed-out/null cold-start session', () => {
+    const teardown = vi.fn();
+    const previousAppSession = {
+      mode: 'signed-out' as const,
+      dataOwnerId: null,
+      generation: 0,
+    };
+
+    if (shouldTeardownColdStartRuntime(previousAppSession, 'account-1')) {
+      teardown();
+    }
+
+    expect(teardown).not.toHaveBeenCalled();
+  });
+
+  it('tears down only an already-committed runtime that crosses an owner boundary', () => {
+    expect(
+      shouldTeardownColdStartRuntime(
+        { mode: 'cloud', dataOwnerId: 'account-1', generation: 1 },
+        'account-1',
+      ),
+    ).toBe(false);
+    expect(
+      shouldTeardownColdStartRuntime(
+        { mode: 'cloud', dataOwnerId: 'account-1', generation: 1 },
+        'account-2',
+      ),
+    ).toBe(true);
+    expect(
+      shouldTeardownColdStartRuntime(
+        { mode: 'local', dataOwnerId: 'local-v1', generation: 1 },
+        'account-1',
+      ),
+    ).toBe(true);
+  });
+
   it('drops a runtime refresh result after logout or a newer login changes auth generation', () => {
     const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
     const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);
@@ -214,7 +252,7 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('const authRealmChanged = refreshRealm !== activeAuthRealm;');
     expect(refreshBody).toContain('writePersistedAuthSession(data.refreshToken, refreshRealm);');
     expect(refreshBody).toContain('activeAuthRealm = refreshRealm;');
-    expect(refreshBody).toContain('previousUserId !== currentUser.id || authRealmChanged');
+    expect(refreshBody).toContain('previousUserId !== nextUser.id || authRealmChanged');
     expect(refreshBody).toContain('if (authRealmChanged) {\n        notifyAuthListeners();');
 
     expect(deviceLinkSource).toContain('restartDeviceLinkForAuthRealmChange();');
@@ -228,13 +266,19 @@ describe('auth login-flow reset', () => {
     const helperStart = source.indexOf('async function expireRuntimeAuth(');
     const helperEnd = source.indexOf('\n}\n\n// ── Public API', helperStart);
     const helperBody = source.slice(helperStart, helperEnd);
-    expect(helperBody).toContain('beginAppSessionBoundary()');
-    expect(helperBody).toContain('notifyRendererAuthBoundaryPending();');
     expect(helperBody).toContain('clearAuth({ notify: false,');
-    expect(helperBody).toContain('await accountSwitchTeardown');
-    expect(helperBody).toContain('closeLocalDb();');
-    expect(helperBody).toContain('notifyAuthListeners();');
+    expect(helperBody).toContain('await withAccountFreeOwnerCommit({');
+    expect(helperBody).toContain('authAlreadyCleared: true');
     expect(helperBody).toContain('notifySessionExpired(reason);');
+
+    const ownerCommitStart = source.indexOf('async function withAccountFreeOwnerCommit(');
+    const ownerCommitEnd = source.indexOf('\n}\n\nasync function withCloudOwnerCommit(', ownerCommitStart);
+    const ownerCommitBody = source.slice(ownerCommitStart, ownerCommitEnd);
+    expect(ownerCommitBody).toContain('beginAppSessionBoundary()');
+    expect(ownerCommitBody).toContain('notifyRendererAuthBoundaryPending();');
+    expect(ownerCommitBody).toContain('await accountSwitchTeardown');
+    expect(ownerCommitBody).toContain('await authSessionTeardown(opts.reason);');
+    expect(ownerCommitBody).toContain('notifyAuthListeners();');
 
     const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
     const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);

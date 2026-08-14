@@ -327,7 +327,7 @@ export function ToolPayloadLightbox({
                 <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
                 <span
                   className={cn(
-                    'font-semibold text-[14px]',
+                    'font-semibold text-14',
                     'text-[var(--msg-tool-card-text)]',
                     'truncate',
                   )}
@@ -416,13 +416,13 @@ export function ToolPayloadLightbox({
                   {payload.files.length > 1 && (
                     <div
                       title={file.filePath}
-                      className="truncate text-[14px] font-medium text-[var(--msg-tool-card-text)]"
+                      className="truncate text-14 font-medium text-[var(--msg-tool-card-text)]"
                     >
                       {basename(file.filePath)}
                     </div>
                   )}
                   {file.diffs.length === 0 ? (
-                    <span className="text-[13px] text-[var(--msg-tool-card-chevron)]">
+                    <span className="text-13 text-[var(--msg-tool-card-chevron)]">
                       {t('chat.agentActionRow.noContent')}
                     </span>
                   ) : (
@@ -515,7 +515,7 @@ export function ToolPayloadLightbox({
               type="button"
               onClick={handleClose}
               className={cn(
-                'h-8 rounded-full border px-4 text-[12px] font-medium',
+                'h-8 rounded-full border px-4 text-12 font-medium',
                 'border-[var(--border-default)] bg-[var(--surface-elevated)]',
                 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
@@ -527,7 +527,7 @@ export function ToolPayloadLightbox({
               type="button"
               onClick={handleSaveText}
               className={cn(
-                'h-8 rounded-full px-4 text-[12px] font-medium',
+                'h-8 rounded-full px-4 text-12 font-medium',
                 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
                 'hover:opacity-90 transition-opacity',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',

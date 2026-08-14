@@ -182,7 +182,7 @@ export function PermissionSelector({
             // min-w-0 让 span 能在 flex 容器里跌破内容宽度,truncate 才能在窄宽下出现 "完..."
             'min-w-0 font-normal text-current',
             'truncate',
-            isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+            isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
           )}
         >
           {triggerLabel}
@@ -348,7 +348,7 @@ export function PermissionSelector({
                 />
                 <span
                   className={cn(
-                    'min-w-0 flex-1 truncate text-left text-[14px] font-medium',
+                    'min-w-0 flex-1 truncate text-left text-14 font-medium',
                     selectedTone ? 'text-current' : 'text-[var(--model-item-text)]',
                   )}
                 >

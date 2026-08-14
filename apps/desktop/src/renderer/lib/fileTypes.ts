@@ -142,6 +142,8 @@ export interface SerializedAttachedFile {
   size: number;
   category: FileCategory;
   mimeType: string;
+  /** Image source was selected or pasted on the Desktop host. */
+  pathOrigin?: 'desktop-host';
   url?: string;
   originalName?: string;
   /**

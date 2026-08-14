@@ -61,6 +61,7 @@
     "react-native-worklets": "0.8.3",
     "xdt-ios-app-distribution": "file:./modules/xdt-ios-app-distribution",
     "xdt-mobile-realtime-audio": "file:./modules/xdt-mobile-realtime-audio",
+    "xdt-screenshot-monitor": "file:./modules/xdt-screenshot-monitor",
     "xdt-tapdb": "file:./modules/xdt-tapdb",
     "xdt-wechat-login": "file:./modules/xdt-wechat-login"
   },

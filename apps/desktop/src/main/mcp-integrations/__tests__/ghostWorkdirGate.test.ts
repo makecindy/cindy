@@ -21,6 +21,7 @@ import type {
   GhostSetupEnsureRequest,
   GhostSetupEnsureResult,
 } from '../../cindy-brain/ghostSetupCoordinator';
+import { t } from '../../i18n';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
 const prefsFile = () => path.join(tmpUserData, 'ghost-workdir-prefs.json');
@@ -28,6 +29,14 @@ const outsideDir = path.join(tmpUserData, 'outside');
 const logWarnMock = vi.fn();
 const logInfoMock = vi.fn();
 const grantAttachmentsMock = vi.fn();
+const { packGhostDirMock } = vi.hoisted(() => ({ packGhostDirMock: vi.fn() }));
+const releaseMutationMock = vi.fn();
+const captureMutationOwnerMock = vi.fn(() => ({
+  mode: 'local' as const,
+  dataOwnerId: 'test',
+  generation: 0,
+}));
+const acquireMutationLeaseMock = vi.fn(() => releaseMutationMock);
 const confirmRequestMock = vi.fn(async () => ({ confirmed: true, allowDirs: false }));
 const classifyLocalAttachmentPathMock = vi.fn();
 const resolveGhostAttachmentUrlMock = vi.fn();
@@ -82,6 +91,7 @@ vi.mock('@cindy/mcps', () => ({ getLiziMcpSessionContext: () => alsSessionContex
 
 const WORKDIR = '/proj/alpha';
 const listMock = vi.fn<() => unknown[]>(() => []);
+const activeSessionAvailableMock = vi.fn((_ghostId: string) => true);
 const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
 const setupAssessmentMock = vi.fn((_ghostId: string) => {
   void _ghostId;
@@ -100,18 +110,29 @@ const ensureReadyMock = vi.fn(
     };
   },
 );
-const sessionSnapshotMock = vi.fn(async () => ({
+const sessionSnapshotMock = vi.fn(async (): Promise<{
+  workingDir: string;
+  permissionMode: string;
+  planModeEnabled: boolean;
+  remoteHostId: string | null;
+}> => ({
   workingDir: WORKDIR,
   permissionMode: 'auto',
   planModeEnabled: false,
   remoteHostId: null,
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  getGhostManager: () => ({ list: listMock }),
+  getGhostManager: () => ({ list: listMock, managedRootDirs: () => [] }),
+  ghostForgeForbiddenRootDirs: () => [],
+  listAvailableGhostsForAuthorization: () => listMock(),
+  findAvailableGhostForAuthorization: (id: string) =>
+    listMock().find((ghost: any) => ghost.manifest?.id === id) ?? null,
+  captureGhostMutationOwnerForMcp: captureMutationOwnerMock,
+  acquireGhostMutationLeaseForMcp: acquireMutationLeaseMock,
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
   getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
   getGhostSetupAssessment: setupAssessmentMock,
-  isGhostAvailableForActiveSession: () => true,
+  isGhostAvailableForActiveSession: activeSessionAvailableMock,
 }));
 vi.mock('../../cindy-brain/ghostSetupCoordinator.js', () => ({
   getGhostSetupCoordinator: () => ({
@@ -138,7 +159,11 @@ vi.mock('../../cindy-brain/ghostLocalPathGrant.js', () => ({
   classifyLocalAttachmentPath: classifyLocalAttachmentPathMock,
 }));
 vi.mock('../../cindy-brain/cardService.js', () => ({ withCardToken: (r: unknown) => r }));
-vi.mock('../../cindy-brain/forge.js', () => ({ FORGE_GUIDE: 'guide', packGhostDir: vi.fn() }));
+vi.mock('../../cindy-brain/forge.js', () => ({
+  FORGE_GUIDE: 'guide',
+  packGhostDir: packGhostDirMock,
+  scaffoldGhostDir: vi.fn(),
+}));
 vi.mock('../../cindy-brain/openFileInstall.js', () => ({ handleIncomingCindyFile: vi.fn() }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionFsSnapshot: sessionSnapshotMock,
@@ -154,12 +179,17 @@ vi.mock('../ghostAttachmentResolve.js', () => ({
   resolveGhostAttachmentUrl: resolveGhostAttachmentUrlMock,
 }));
 
-const { getCindyGhostsMcpDeps } = await import('../ghost');
+const { getCindyGhostsMcpDeps, getGhostRosterPrompt } = await import('../ghost');
+const { createCindyGhostsMcpServer } = await import('cindy-tools');
 const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisabledForWorkdir } =
   await import('../../cindy-brain/ghostWorkdirPrefs');
 import type { LiziMcpSessionContext } from '@cindy/mcps';
 
-function chipGhost(id: string, slots: string[] = ['tool']): unknown {
+function chipGhost(
+  id: string,
+  slots: string[] = ['tool'],
+  extra: Record<string, unknown> = {},
+): unknown {
   return {
     enabled: true,
     manifest: {
@@ -168,6 +198,7 @@ function chipGhost(id: string, slots: string[] = ['tool']): unknown {
       kind: 'chip',
       slots,
       tools: [{ name: 'run', description: 'd' }],
+      ...extra,
     },
   };
 }
@@ -197,7 +228,9 @@ function makeDeps(
 function clearAllPrefs(): void {
   // 把测试涉及的目录 × id 全部清一遍(幂等;清空后 store 自动删文件)。
   for (const dir of [WORKDIR, '/proj/beta', 'E:/Repo']) {
-    for (const id of ['art', 'other']) setGhostDisabledForWorkdir(dir, id, false);
+    for (const id of ['art', 'other', 'missing', 'sleeping', 'account']) {
+      setGhostDisabledForWorkdir(dir, id, false);
+    }
   }
 }
 
@@ -205,6 +238,8 @@ beforeEach(() => {
   fs.mkdirSync(outsideDir, { recursive: true });
   listMock.mockReset();
   listMock.mockReturnValue([chipGhost('art'), chipGhost('other')]);
+  activeSessionAvailableMock.mockReset();
+  activeSessionAvailableMock.mockReturnValue(true);
   dispatchMock.mockClear();
   setupAssessmentMock.mockReset();
   setupAssessmentMock.mockReturnValue({ state: 'ready', revision: 0, groups: [] });
@@ -299,6 +334,9 @@ beforeEach(() => {
   alsSessionContextMock.mockReset();
   logWarnMock.mockClear();
   logInfoMock.mockClear();
+  releaseMutationMock.mockClear();
+  captureMutationOwnerMock.mockClear();
+  acquireMutationLeaseMock.mockClear();
   sessionSnapshotMock.mockReset();
   sessionSnapshotMock.mockResolvedValue({
     workingDir: WORKDIR,
@@ -306,7 +344,60 @@ beforeEach(() => {
     planModeEnabled: false,
     remoteHostId: null,
   });
+  packGhostDirMock.mockReset();
+  packGhostDirMock.mockResolvedValue({
+    ok: false,
+    errorCode: 'MANIFEST_INVALID',
+    message: 'stop after gate assertion',
+  });
   clearAllPrefs();
+});
+
+describe('Forge session workdir gate', () => {
+  it('holds the owner mutation lease across the Forge operation', async () => {
+    const operation = makeDeps().forgePack({ dir: path.join(WORKDIR, 'plugin-src') });
+    expect(captureMutationOwnerMock).toHaveBeenCalledTimes(1);
+    expect(acquireMutationLeaseMock).toHaveBeenCalledTimes(1);
+    expect(releaseMutationMock).not.toHaveBeenCalled();
+    await operation;
+    expect(releaseMutationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the active session workdir into packGhostDir', async () => {
+    await makeDeps().forgePack({ dir: path.join(WORKDIR, 'plugin-src') });
+    expect(packGhostDirMock).toHaveBeenCalledWith(path.join(WORKDIR, 'plugin-src'), {
+      sessionWorkdir: WORKDIR,
+      forbiddenRootDirs: [],
+    });
+  });
+
+  it('rejects remote workdirs before touching local Forge fs', async () => {
+    sessionSnapshotMock.mockResolvedValueOnce({
+      workingDir: '/remote/project',
+      permissionMode: 'auto',
+      planModeEnabled: false,
+      remoteHostId: 'ssh-1',
+    });
+    const deps = makeDeps();
+    await expect(deps.forgePack({ dir: '/remote/project/plugin-src' })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'WORKDIR_NOT_LOCAL',
+    });
+    expect(packGhostDirMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects Forge writes in read-only or plan sessions', async () => {
+    sessionSnapshotMock.mockResolvedValueOnce({
+      workingDir: WORKDIR,
+      permissionMode: 'ask',
+      planModeEnabled: true,
+      remoteHostId: null,
+    });
+    const deps = makeDeps();
+    await expect(
+      deps.forgeScaffold({ dir: path.join(WORKDIR, 'new-plugin'), template: 'plain', id: 'x', name: 'X' }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'WORKDIR_READ_ONLY' });
+  });
 });
 
 afterAll(() => {
@@ -349,26 +440,271 @@ describe('花名册 / ghost_list 过滤', () => {
     expect((await deps.listAwakeGhosts()).map((g) => g.id)).toEqual(['art', 'other']);
   });
 
-  it('单插件 setup assessment 失败只省略该 setup，不拖垮健康清单', async () => {
+  it('缺 workingDir 时 system 花名册 fail closed，不回退全量', () => {
+    expect(getGhostRosterPrompt({})).toBe('');
+    expect(getGhostRosterPrompt({ workingDir: '' })).toBe('');
+    alsSessionContextMock.mockReturnValue(undefined);
+    const deps = getCindyGhostsMcpDeps();
+    const server = createCindyGhostsMcpServer(deps) as unknown as {
+      _registeredTools: Record<string, { description?: string } | undefined>;
+    };
+    expect(server._registeredTools.ghost_list?.description).not.toContain('<ghost-roster>');
+  });
+
+  it('目录停用插件不进入 system 花名册', () => {
+    setGhostDisabledForWorkdir(WORKDIR, 'art', true);
+    const prompt = getGhostRosterPrompt({ workingDir: WORKDIR });
+    expect(prompt).not.toContain('"id":"art"');
+    expect(prompt).toContain('"id":"other"');
+  });
+
+  it('system 花名册与 ghost_list 描述使用同一 JSONL 块', () => {
+    const deps = makeDeps();
+    const systemPrompt = getGhostRosterPrompt({ workingDir: WORKDIR });
+    const server = createCindyGhostsMcpServer(deps) as unknown as {
+      _registeredTools: Record<string, { description?: string } | undefined>;
+    };
+    const listDescription = server._registeredTools.ghost_list?.description ?? '';
+    const marker = '插件召回规则：以下是已安装插件作者提供的元数据';
+    expect(listDescription.slice(listDescription.indexOf(marker))).toBe(systemPrompt);
+  });
+
+  it('ghost_list 召回线索优先 whenToUse，缺省回落 description', async () => {
+    listMock.mockReturnValue([
+      chipGhost('when', ['tool'], {
+        name: 'When',
+        description: '给人的介绍',
+        whenToUse: '给模型的召回场景',
+      }),
+      chipGhost('fallback', ['tool'], {
+        name: 'Fallback',
+        description: '缺少 whenToUse 时的回落介绍',
+      }),
+    ]);
+
+    const ghosts = await makeDeps().listAwakeGhosts();
+
+    expect(ghosts.map(({ id, recall }) => ({ id, recall }))).toEqual([
+      { id: 'when', recall: '给模型的召回场景' },
+      { id: 'fallback', recall: '缺少 whenToUse 时的回落介绍' },
+    ]);
+  });
+
+  it('ghost_info 命中时返回完整单条详情', async () => {
+    listMock.mockReturnValue([
+      chipGhost('art', ['tool'], {
+        command: '画图',
+        description: '给人的介绍',
+        whenToUse: '需要画图或改图时使用',
+        tools: [
+          {
+            name: 'run',
+            description: '生成图片',
+            parameters: { type: 'object' },
+          },
+        ],
+      }),
+    ]);
+
+    await expect(makeDeps().getAwakeGhost('art')).resolves.toMatchObject({
+      ok: true,
+      ghost: {
+        id: 'art',
+        name: 'Ghost art',
+        command: '画图',
+        recall: '需要画图或改图时使用',
+        setup: { state: 'ready' },
+        tools: [
+          {
+            name: 'run',
+            description: '生成图片',
+            parameters: { type: 'object' },
+          },
+        ],
+      },
+    });
+  });
+
+  it('ghost_list/info 只投影 manual 轻量索引，ghost_manual 根索引不启动插件运行时', async () => {
+    listMock.mockReturnValue([
+      chipGhost('art', ['tool'], {
+        manual: {
+          items: [{ dir: 'private/docs', name: 'image-workflow', description: '完整画图工作流' }],
+        },
+      }),
+    ]);
+    const deps = makeDeps();
+    await expect(deps.listAwakeGhosts()).resolves.toMatchObject([
+      {
+        id: 'art',
+        manual: [{ name: 'image-workflow', description: '完整画图工作流' }],
+      },
+    ]);
+    await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({
+      ok: true,
+      ghost: { manual: [{ name: 'image-workflow', description: '完整画图工作流' }] },
+    });
+    await expect(deps.readGhostManual({ ghostId: 'art' })).resolves.toEqual({
+      ok: true,
+      manual: [{ name: 'image-workflow', description: '完整画图工作流' }],
+      content: '',
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(await deps.listAwakeGhosts())).not.toContain('private/docs');
+  });
+
+  it('ghost_info 对不存在目标优先返回 GHOST_NOT_FOUND', async () => {
+    setGhostDisabledForWorkdir(WORKDIR, 'missing', true);
+    activeSessionAvailableMock.mockReturnValue(false);
+
+    await expect(makeDeps().getAwakeGhost('missing')).resolves.toEqual({
+      ok: false,
+      errorCode: 'GHOST_NOT_FOUND',
+      message: t('newChat.pluginSetup.targetNotFound'),
+    });
+  });
+
+  it('ghost_info 对未启用目标返回 GHOST_ASLEEP', async () => {
+    listMock.mockReturnValue([
+      { ...(chipGhost('sleeping') as Record<string, unknown>), enabled: false },
+    ]);
+
+    await expect(makeDeps().getAwakeGhost('sleeping')).resolves.toEqual({
+      ok: false,
+      errorCode: 'GHOST_ASLEEP',
+      message: t('newChat.pluginSetup.targetDisabled'),
+    });
+  });
+
+  it('ghost_info 对账号不可用目标返回未登录口径的 GHOST_NOT_FOUND', async () => {
+    listMock.mockReturnValue([chipGhost('account')]);
+    activeSessionAvailableMock.mockReturnValue(false);
+    setGhostDisabledForWorkdir(WORKDIR, 'account', true);
+
+    await expect(makeDeps().getAwakeGhost('account')).resolves.toEqual({
+      ok: false,
+      errorCode: 'GHOST_NOT_FOUND',
+      message: '该插件需要 Cindy 账号，未登录状态不可用；不要重试，改用本地可用方式。',
+    });
+  });
+
+  it('ghost_info 对目录停用目标优先于未启用返回 GHOST_DISABLED_IN_WORKDIR', async () => {
+    listMock.mockReturnValue([
+      { ...(chipGhost('sleeping') as Record<string, unknown>), enabled: false },
+    ]);
+    setGhostDisabledForWorkdir(WORKDIR, 'sleeping', true);
+
+    await expect(makeDeps().getAwakeGhost('sleeping')).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+    });
+  });
+
+  it('ghost_info 对无工具的纯面板插件返回写实提示', async () => {
+    listMock.mockReturnValue([chipGhost('panel', ['panel'], { tools: [] })]);
+
+    await expect(makeDeps().getAwakeGhost('panel')).resolves.toEqual({
+      ok: false,
+      errorCode: 'GHOST_NOT_FOUND',
+      message: '该插件未声明任何可供调用的工具;不要重试,改用其它方式完成。',
+    });
+  });
+
+  it('单插件 setup assessment 失败只省略该 setup，不拖垮查询', async () => {
     setupAssessmentMock.mockImplementation((ghostId) => {
       if (ghostId === 'art') throw new SyntaxError('malformed setup storage');
       return { state: 'ready', revision: 0, groups: [] };
     });
 
-    const ghosts = await makeDeps().listAwakeGhosts();
+    const deps = makeDeps();
+    const ghosts = await deps.listAwakeGhosts();
+    const info = await deps.getAwakeGhost('art');
 
     expect(ghosts.map((ghost) => ghost.id)).toEqual(['art', 'other']);
     expect(ghosts[0]?.setup).toBeUndefined();
     expect(ghosts[1]?.setup).toEqual({ state: 'ready', revision: 0, groups: [] });
-    expect(logWarnMock).toHaveBeenCalledWith('ghost setup assessment omitted from roster', {
+    expect(info).toMatchObject({ ok: true, ghost: { id: 'art' } });
+    expect(info.ok && info.ghost.setup).toBeUndefined();
+    expect(logWarnMock).toHaveBeenCalledTimes(2);
+    expect(logWarnMock).toHaveBeenCalledWith('ghost setup assessment omitted from discovery', {
       ghostId: 'art',
       errorType: 'SyntaxError',
     });
-    expect(JSON.stringify(ghosts)).not.toContain('malformed setup storage');
+    expect(JSON.stringify({ ghosts, info })).not.toContain('malformed setup storage');
   });
 });
 
 describe('ghost_call 兜底拒绝', () => {
+  it('不存在优先于未登录与残留目录偏好返回 GHOST_NOT_FOUND', async () => {
+    listMock.mockReturnValue([]);
+    activeSessionAvailableMock.mockReturnValue(false);
+    setGhostDisabledForWorkdir(WORKDIR, 'missing', true);
+
+    await expect(
+      makeDeps().callGhostTool({ ghostId: 'missing', tool: 'run', args: {} }),
+    ).resolves.toEqual({
+      ok: false,
+      errorCode: 'GHOST_NOT_FOUND',
+      message: t('newChat.pluginSetup.targetNotFound'),
+    });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('未登录优先于目录停用与未启用返回 GHOST_NOT_FOUND', async () => {
+    listMock.mockReturnValue([
+      { ...(chipGhost('account') as Record<string, unknown>), enabled: false },
+    ]);
+    activeSessionAvailableMock.mockReturnValue(false);
+    setGhostDisabledForWorkdir(WORKDIR, 'account', true);
+
+    await expect(
+      makeDeps().callGhostTool({ ghostId: 'account', tool: 'run', args: {} }),
+    ).resolves.toEqual({
+      ok: false,
+      errorCode: 'GHOST_NOT_FOUND',
+      message: '该插件需要 Cindy 账号，未登录状态不可用；不要重试，改用本地可用方式。',
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('目录停用优先于未启用返回 GHOST_DISABLED_IN_WORKDIR', async () => {
+    listMock.mockReturnValue([
+      { ...(chipGhost('sleeping') as Record<string, unknown>), enabled: false },
+    ]);
+    setGhostDisabledForWorkdir(WORKDIR, 'sleeping', true);
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'sleeping',
+      tool: 'run',
+      args: {},
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+      message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('仅未启用时返回 GHOST_ASLEEP 与侧边栏启用引导', async () => {
+    listMock.mockReturnValue([
+      { ...(chipGhost('sleeping') as Record<string, unknown>), enabled: false },
+    ]);
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'sleeping',
+      tool: 'run',
+      args: {},
+    });
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'GHOST_ASLEEP',
+      message: t('newChat.pluginSetup.targetDisabled'),
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it('禁用 → GHOST_DISABLED_IN_WORKDIR,派发器零触碰', async () => {
     setGhostDisabledForWorkdir(WORKDIR, 'art', true);
     const deps = makeDeps();

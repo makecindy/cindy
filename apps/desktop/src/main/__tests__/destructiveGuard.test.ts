@@ -64,6 +64,13 @@ describe('checkDestructiveToolCall — Bash command match', () => {
     });
   }
 
+  it('matches Pi lowercase bash with the same deletion rules', () => {
+    expect(checkDestructiveToolCall('bash', { command: 'rm -rf build' })).toEqual({
+      destructive: true,
+      reason: 'shell command contains `rm`',
+    });
+  });
+
   const allowCommands = [
     'ls -la',
     'cat package.json',

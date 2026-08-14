@@ -55,7 +55,7 @@ describe('ChatInput session switch focus contract', () => {
     );
     expect(restoreNextDraftBlock).toContain('if (!isCurrentTransition()) return;');
     expect(restoreNextDraftBlock).toContain(
-      'if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor)) return;',
+      'if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)) return;',
     );
     expect(restoreNextDraftBlock).toContain("editor.commands.focus('end');");
     expect(firstMountHydrationBlock).toContain('focusOnStorageKeyChangeRef.current');
@@ -64,7 +64,7 @@ describe('ChatInput session switch focus contract', () => {
 
   it('enables storageKey refocus for routed session and new-draft views', () => {
     expect(sessionViewSource).toContain(
-      'const ownsRoute = !sessionIdProp && !isCompactRail && !isOrcaMode;',
+      'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
     );
     expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute}');
     expect(newMakerDraftRouteSource).toContain('focusOnStorageKeyChange');
@@ -87,14 +87,36 @@ describe('ChatInput session switch focus contract', () => {
   });
 
   it('guards delayed storageKey focus against stealing from another focused control', () => {
-    expect(chatInputSource).toContain('function hasFocusMovedToInteractiveElement(');
-    expect(chatInputSource).toContain('if (activeElement === focusAnchor) return false;');
-    expect(chatInputSource).toContain('if (editor.view.dom.contains(activeElement)) return false;');
-    expect(chatInputSource).toContain('return isInteractiveFocusedElement(activeElement);');
+    expect(chatInputSource).toContain(
+      'hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)',
+    );
   });
 
-  it('reuses in-composer Plugin placement for routed Use and end-focuses Create with Cindy', () => {
+  it('wires local send locking through the behavior-tested focus restore hook', () => {
+    const localSendLockBlock = extractBetween(
+      chatInputSource,
+      '// Local/SSH sends keep the live composer while references and runtime',
+      'try {\n        let serializedContent',
+    );
+
+    expect(chatInputSource).toContain(
+      'const captureSendFocusForRestore = useComposerSendFocusRestore(',
+    );
+    expect(localSendLockBlock).toContain('captureSendFocusForRestore();');
+    expect(localSendLockBlock.indexOf('captureSendFocusForRestore();')).toBeLessThan(
+      localSendLockBlock.indexOf('setSendDispatchInFlight(true);'),
+    );
+  });
+
+  it('reuses composer entry paths for Plugin commands and Host capabilities', () => {
+    const capabilitySelectionBlock = extractBetween(
+      chatInputSource,
+      'const insertAtResource = useCallback(',
+      'const handleComposerSuggestionSelect = useCallback(',
+    );
+
     expect(pluginPageSource).toContain('pendingGhostId: ghost.manifest.id');
+    expect(pluginPageSource).toContain('pendingHostCapabilityGhostId: ghost.manifest.id');
     expect(pluginPageSource.match(/focusAtEnd: true/g)).toHaveLength(1);
     expect(
       chatInputSource.match(/placeGhostAtComposerStart\(editor, ghost, installedGhosts\)/g),
@@ -105,6 +127,23 @@ describe('ChatInput session switch focus contract', () => {
       ),
     ).toHaveLength(1);
     expect(chatInputSource).toContain('pendingGhostId: undefined');
+    expect(chatInputSource).toContain('pendingHostCapabilityGhostId: undefined');
+    expect(
+      chatInputSource.match(
+        /placeHostCapabilityAtComposerStart\(editor, ghost, installedGhosts\)/g,
+      ),
+    ).toHaveLength(1);
+    expect(capabilitySelectionBlock).toContain("selectedItem.type === 'plugin-command'");
+    expect(capabilitySelectionBlock).toContain('if (ghost.manifest.command) {');
+    expect(capabilitySelectionBlock).toContain(
+      'placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);',
+    );
+    expect(capabilitySelectionBlock).toContain(
+      'placeHostCapabilityAtComposerStart(editor, ghost, installedGhostsRef.current);',
+    );
+    expect(capabilitySelectionBlock).toContain('!remoteHostId');
+    expect(capabilitySelectionBlock).toContain('!deviceLinkDeviceId');
+    expect(capabilitySelectionBlock).not.toContain('focusIOSSimulatorPanel');
     expect(chatInputSource).toContain('focusComposerEndNextFrame(editor);');
   });
 
@@ -124,16 +163,18 @@ describe('ChatInput session switch focus contract', () => {
     expect(chatInputSource).toContain('onAccepted: markRecentPluginUsage');
     expect(successfulSendBlock).toContain('markRecentPluginUsage();');
     expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(3);
-    expect(worktreeSendBlock).toContain('if (accepted) opts?.onAccepted?.();');
+    expect(worktreeSendBlock).toContain('if (accepted) {');
+    expect(worktreeSendBlock).toContain('opts?.onAccepted?.();');
+    expect(worktreeSendBlock).toContain(
+      'dispatchDeferredUiAssignment(newSession.id, deferredUiAssignment)',
+    );
   });
 
   it('optimistically clears device-link composer state before awaiting send and restores without dropping newer input', () => {
     const transitionBegin = chatInputSource.indexOf(
       'makerChatStore.beginRemoteOptimisticComposerTransition(',
     );
-    const optimisticClear = chatInputSource.indexOf(
-      'if (optimisticallyClearRemoteComposer) {',
-    );
+    const optimisticClear = chatInputSource.indexOf('if (optimisticallyClearRemoteComposer) {');
     const frozenReferenceHydration = chatInputSource.search(
       /agentReferences\s*=\s*await resolveSerializedSessionMessageReferencesForSend\(agentReferences\);/,
     );
@@ -167,7 +208,9 @@ describe('ChatInput session switch focus contract', () => {
     expect(chatInputSource).toContain(
       'latestStorageKeyRef.current === sourceStorageKey &&\n            storageKeyForDraftRef.current === sourceStorageKey',
     );
-    expect(chatInputSource).toContain('restoreRemoteOptimisticDraft(\n            sourceStorageKey,');
+    expect(chatInputSource).toContain(
+      'restoreRemoteOptimisticDraft(\n            sourceStorageKey,',
+    );
     expect(chatInputSource).toContain('!isDataOwnerGenerationCurrent(dataOwnerAtOptimisticClear)');
     expect(chatInputSource).toContain('restoreOptimisticallyClearedComposer(clientId, {');
     expect(chatInputSource).toContain('isRemoteOptimisticDataOwnerBoundaryError(error)');

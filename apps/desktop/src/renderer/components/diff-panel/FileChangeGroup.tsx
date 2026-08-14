@@ -93,7 +93,7 @@ export function FileChangeGroup({
         </span>
         <span className="flex shrink-0 items-center gap-2 text-xs tabular-nums">
           {change.isBinary ? (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            <span className="rounded bg-muted px-1.5 py-0.5 text-10 text-muted-foreground">
               {t('skillhub.diffPanel.binaryBadge')}
             </span>
           ) : stats ? (

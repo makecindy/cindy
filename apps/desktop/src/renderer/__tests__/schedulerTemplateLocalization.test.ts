@@ -5,13 +5,14 @@ import enCommon from '../i18n/locales/en/common.json';
 import zhCNCommon from '../i18n/locales/zh-CN/common.json';
 import jaCommon from '../i18n/locales/ja/common.json';
 import koCommon from '../i18n/locales/ko/common.json';
+import zhTWCommon from '../i18n/locales/zh-TW/common.json';
 
 /**
  * 内置模板多语言同步测试。
  *
  * 包内 builtin-templates.ts 的中文是唯一正本，renderer 用
  * scheduler.builtinTemplates 覆盖展示文案。这组断言锁两件事：
- * 1. 四语言块结构完整——每个模板/分类/参数在每种语言都有非空文案；
+ * 1. 全部语言块结构完整——每个模板/分类/参数在每种语言都有非空文案；
  * 2. zh-CN 块与包正本逐字一致——防止"改包不改 JSON"或反向的静默漂移。
  */
 
@@ -34,6 +35,7 @@ interface SchedulerL10n {
 
 const LOCALES: Record<string, SchedulerL10n> = {
   'zh-CN': (zhCNCommon as { scheduler: SchedulerL10n }).scheduler,
+  'zh-TW': (zhTWCommon as { scheduler: SchedulerL10n }).scheduler,
   en: (enCommon as { scheduler: SchedulerL10n }).scheduler,
   ja: (jaCommon as { scheduler: SchedulerL10n }).scheduler,
   ko: (koCommon as { scheduler: SchedulerL10n }).scheduler,
@@ -76,7 +78,10 @@ describe.each(Object.entries(LOCALES))('scheduler.builtinTemplates (%s)', (_loca
         paramKeys,
       );
       for (const key of paramKeys) {
-        expect(item.params?.[key]?.label.trim().length, `${template.id}.${key} label`).toBeGreaterThan(0);
+        expect(
+          item.params?.[key]?.label.trim().length,
+          `${template.id}.${key} label`,
+        ).toBeGreaterThan(0);
       }
     }
   });

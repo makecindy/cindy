@@ -1089,6 +1089,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         amountError={amountError}
         subscriptionPurchaseBlocked={subscriptionPurchaseBlocked}
         currentSubscriptionOfferCode={currentSubscriptionOfferCode}
+        subscriptionCancelAtPeriodEnd={currentSubscription?.cancelAtPeriodEnd ?? false}
+        subscriptionPeriodEndAt={currentSubscription?.currentPeriodEndAt ?? null}
         canCheckout={canCheckout}
         onClose={closeSubscriptionDialog}
         onRetry={() => void loadBillingState()}
@@ -1113,6 +1115,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         amountError={amountError}
         subscriptionPurchaseBlocked={false}
         currentSubscriptionOfferCode={null}
+        subscriptionCancelAtPeriodEnd={false}
+        subscriptionPeriodEndAt={null}
         canCheckout={canCheckout}
         onClose={closeTopupDialog}
         onRetry={() => void loadBillingState()}
@@ -1774,6 +1778,8 @@ function BillingOfferDialog({
   amountError,
   subscriptionPurchaseBlocked,
   currentSubscriptionOfferCode,
+  subscriptionCancelAtPeriodEnd,
+  subscriptionPeriodEndAt,
   canCheckout,
   onClose,
   onRetry,
@@ -1796,6 +1802,8 @@ function BillingOfferDialog({
   amountError: string | null;
   subscriptionPurchaseBlocked: boolean;
   currentSubscriptionOfferCode: string | null;
+  subscriptionCancelAtPeriodEnd: boolean;
+  subscriptionPeriodEndAt: string | null;
   canCheckout: boolean;
   onClose: () => void;
   onRetry: () => void;
@@ -1807,6 +1815,10 @@ function BillingOfferDialog({
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const formattedSubscriptionPeriodEndAt = formatBillingDate(
+    subscriptionPeriodEndAt,
+    billingLocale,
+  );
   const title =
     kind === 'SUBSCRIPTION'
       ? t('billing.dialogs.subscription.title')
@@ -2057,7 +2069,11 @@ function BillingOfferDialog({
 
                   {kind === 'SUBSCRIPTION' && selected && subscriptionPurchaseBlocked && (
                     <p className="mt-4 text-12 leading-5 text-[var(--text-secondary)]">
-                      {t('billing.currentSubscription.purchaseBlocked')}
+                      {subscriptionCancelAtPeriodEnd && formattedSubscriptionPeriodEndAt
+                        ? t('billing.currentSubscription.purchaseBlockedUntilPeriodEnd', {
+                            date: formattedSubscriptionPeriodEndAt,
+                          })
+                        : t('billing.currentSubscription.purchaseBlocked')}
                     </p>
                   )}
                 </div>

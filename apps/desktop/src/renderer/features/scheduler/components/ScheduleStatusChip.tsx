@@ -35,7 +35,7 @@ export function ScheduleStatusChip({ variant, className }: Props) {
   return (
     <span
       className={cn(
-        'inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium',
+        'inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-11 font-medium',
         'leading-none whitespace-nowrap',
         isFilled
           ? 'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)]'

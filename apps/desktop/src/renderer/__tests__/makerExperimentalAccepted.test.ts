@@ -9,8 +9,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const hookSource = readFileSync(resolve(__dirname, '..', 'hooks', 'useMakerSession.ts'), 'utf8')
-  .replace(/\r\n?/g, '\n');
+const hookSource = readFileSync(
+  resolve(__dirname, '..', 'hooks', 'useMakerSession.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const viewSource = readFileSync(
   resolve(__dirname, '..', 'features', 'maker-experimental', 'MakerExperimentalView.tsx'),
   'utf8',
@@ -18,15 +20,25 @@ const viewSource = readFileSync(
 
 describe('Maker Experimental accepted result handling', () => {
   it('keeps the maker.send accepted result in useMakerSession', () => {
-    expect(hookSource).toContain("type MakerSendResult = { accepted: boolean }");
-    expect(hookSource).toContain('send: (text: string, attachments?: Array<{ type: \'image\' | \'file\'; path: string; mimeType?: string }>) => Promise<MakerSendResult>;');
-    expect(hookSource).toContain('send: (sid: string, message: { type: \'user\'; content: unknown }) => Promise<MakerSendResult>;');
-    expect(hookSource).toContain('const result = await api.send(sessionIdRef.current, { type: \'user\', content });');
+    expect(hookSource).toContain('type MakerSendResult = { accepted: boolean }');
+    expect(hookSource).toContain(
+      "send: (text: string, attachments?: Array<{ type: 'image' | 'file'; path: string; mimeType?: string }>) => Promise<MakerSendResult>;",
+    );
+    expect(hookSource).toContain(
+      "send: (sid: string, message: { type: 'user'; content: unknown }) => Promise<MakerSendResult>;",
+    );
+    expect(hookSource).toContain(
+      "const result = await api.send(sessionIdRef.current, { type: 'user', content });",
+    );
     expect(hookSource).toContain('return result;');
   });
 
   it('does not clear the input when maker.send returns accepted:false', () => {
-    const sendBlock = extractBetween(viewSource, 'const handleSend = async () => {', 'const models =');
+    const sendBlock = extractBetween(
+      viewSource,
+      'const handleSend = async () => {',
+      'const models =',
+    );
 
     expect(sendBlock).toContain('const result = await m.send(inputText, attachments);');
     expect(sendBlock).toContain('if (result.accepted === false) {');
@@ -35,8 +47,11 @@ describe('Maker Experimental accepted result handling', () => {
   });
 
   it('defines the rejected-send message in every locale', () => {
-    for (const locale of ['zh-CN', 'en', 'ja', 'ko']) {
-      const raw = readFileSync(resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'), 'utf8');
+    for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+      const raw = readFileSync(
+        resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'),
+        'utf8',
+      );
       const json = JSON.parse(raw) as { makerExperimental?: { sendNotAccepted?: unknown } };
       expect(json.makerExperimental?.sendNotAccepted).toEqual(expect.any(String));
       expect(json.makerExperimental?.sendNotAccepted).not.toBe('');

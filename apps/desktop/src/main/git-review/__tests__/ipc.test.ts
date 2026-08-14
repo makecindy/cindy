@@ -7,9 +7,11 @@ import {
   parseMarkdownPreviewPayload,
   parseOpenFilePayload,
   parseTarget,
+  openReviewFile,
+  readReviewData,
   runReviewFileStageOperation,
 } from '../ipc';
-import type { FileDiff, GitReviewDeps } from '../types';
+import type { FileDiff, GitReviewDeps, ReviewScope, ReviewStatus } from '../types';
 
 const HEX_OID = '0123456789abcdef0123456789abcdef01234567';
 const SHORT_HEX_OID = 'abc1234';
@@ -126,6 +128,33 @@ describe('git-review IPC payload guards', () => {
   });
 });
 
+describe('git-review evidence failures', () => {
+  it.each(['resolveScope', 'readStatus', 'readDiffs'] as const)(
+    'propagates %s errors instead of manufacturing an empty non-Git result',
+    async (failingStage) => {
+      const failure = new Error(`${failingStage} failed`);
+      const scope = { disabledReason: null, repoRoot: '/repo' } as ReviewScope;
+      const status = { scope } as ReviewStatus;
+      const deps: GitReviewDeps = {
+        resolveScope: vi.fn(async () => {
+          if (failingStage === 'resolveScope') throw failure;
+          return scope;
+        }),
+        readStatus: vi.fn(async () => {
+          if (failingStage === 'readStatus') throw failure;
+          return status;
+        }),
+        readDiffs: vi.fn(async () => {
+          if (failingStage === 'readDiffs') throw failure;
+          return { staged: [], unstaged: [], capped: { staged: null, unstaged: null } };
+        }),
+      };
+
+      await expect(readReviewData('s1', deps)).rejects.toBe(failure);
+    },
+  );
+});
+
 describe('git-review write busy gate', () => {
   it('rejects queued writes before resolving or touching a repository', async () => {
     const deps: GitReviewDeps = {
@@ -139,6 +168,36 @@ describe('git-review write busy gate', () => {
       { source: 'unstaged', path: 'file.txt', oldPath: null },
     ], deps)).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
     expect(deps.resolveScope).not.toHaveBeenCalled();
+  });
+
+  it('rejects SSH workspace writes before reading status or mutating Git', async () => {
+    const deps: GitReviewDeps = {
+      resolveScope: vi.fn().mockResolvedValue({
+        disabledReason: null,
+        repoRoot: '/remote/repo',
+        source: 'remote',
+      } as ReviewScope),
+      readStatus: vi.fn(),
+      readDiffs: vi.fn(),
+    };
+
+    await expect(runReviewFileStageOperation('s1', 'stage', [
+      { source: 'unstaged', path: 'file.txt', oldPath: null },
+    ], deps)).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(deps.readStatus).not.toHaveBeenCalled();
+  });
+
+  it('rejects opening a controlled-side file with the local shell', async () => {
+    const openPath = vi.fn();
+    const resolveScope = vi.fn().mockResolvedValue({
+      disabledReason: null,
+      repoRoot: '/remote/repo',
+      source: 'remote',
+    } as ReviewScope);
+
+    await expect(openReviewFile('s1', 'file.txt', { resolveScope }, openPath))
+      .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(openPath).not.toHaveBeenCalled();
   });
 });
 

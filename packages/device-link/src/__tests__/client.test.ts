@@ -3,7 +3,7 @@
  * 握手 / 请求配对 / 超时 / relay-error / 重连退避 / 心跳僵死 / token 缺失。
  */
 import { describe, it, expect, vi } from 'vitest';
-import { DeviceLinkClient, type WsLike } from '../client.js';
+import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../client.js';
 import { PROTOCOL_VERSION, DeviceLinkError, type Envelope } from '../protocol.js';
 import {
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
@@ -12,10 +12,13 @@ import {
   MAX_TRANSPORT_PENDING_MESSAGES,
   MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES,
   TRANSPORT_PENDING_PUSH_MAX_AGE_MS,
+  TRANSPORT_RETRY_PASS_BUDGET,
   encodeReliableFrames,
   makeTransportSkipPayload,
   parseTransportPayload,
 } from '../transport.js';
+import { DL_CONTACTS_SYNC_CHANNEL } from '../contactsSyncProtocol.js';
+import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 
 type Handler = (...args: unknown[]) => void;
 
@@ -592,6 +595,17 @@ describe('DeviceLinkClient', () => {
     h.client.start();
     await tick();
     const ws = h.current();
+    // 确定性回 pong:监听出站 ping、同步应答,彻底消除对真实计时器调度的依赖。
+    // 必须在 ack()(hello-ack 启动心跳)之前装上:装晚了,建链期间的若干
+    // await tick() 在慢 CI/Windows 上可能耗掉两个 8ms 心跳周期,期间 ping
+    // 无人应答就已误判断网。语义不变:若慢业务 handler 真堵住帧处理,push
+    // 进来的 pong 不会被消费,pongMiss 照样触发断网,断言仍能抓住回归。
+    const originalSend = ws.send.bind(ws);
+    ws.send = (data: string) => {
+      originalSend(data);
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'ping') ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+    };
     ws.ack();
     await establishInboundReliableLink(h, 'slow-stream');
 
@@ -611,16 +625,6 @@ describe('DeviceLinkClient', () => {
         data: JSON.stringify({ channel: 'maker:event', payload: { text: 'slow' } }),
       },
     });
-    // 确定性回 pong:监听出站 ping、同步应答,彻底消除对真实计时器调度的依赖
-    // (旧写法用 4ms setInterval 自由跑,慢 CI/Windows 上会落后两个 8ms 心跳
-    // 周期触发误断网)。语义不变:若慢业务 handler 真堵住帧处理,push 进来的
-    // pong 不会被消费,pongMiss 照样触发断网,断言仍能抓住回归。
-    const originalSend = ws.send.bind(ws);
-    ws.send = (data: string) => {
-      originalSend(data);
-      const env = JSON.parse(data) as Envelope;
-      if (env.kind === 'ping') ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
-    };
     await tick();
     expect(release).toBeTypeOf('function');
 
@@ -2071,10 +2075,8 @@ describe('DeviceLinkClient', () => {
     for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
       h.client.sendPush('dev-b', 'maker:event', { i });
     }
-    // push 之间不互相驱逐：新鲜 push 溢出仍按原语义被背压拒绝
-    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'overflow' })).toThrow(
-      expect.objectContaining({ code: 'BACKPRESSURE' }),
-    );
+    // （push 拥塞入队的 latest-wins 语义见专项用例
+    //   「缓冲被未 ACK 的 push 占满时，新 push latest-wins 驱逐最旧帧入队」）
 
     // invoke-result 是控制端的存活凭据：丢弃整个队头可丢弃前缀（fresh push
     // 一并放弃），立即入队发出，不留任何 push 排在 result 之前
@@ -2142,49 +2144,319 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('push 入队压力只做 TTL 兜底清扫（单调时钟计量），新鲜 push 之间仍互相背压', async () => {
-    // TTL 用单调时钟：墙钟被 NTP 向前校正超过 TTL 时，刚入队的 push 不得被误判过期
+  it('缓冲被未 ACK 的 push 占满时，新 push latest-wins 驱逐最旧帧入队，不再 BACKPRESSURE', async () => {
+    // 生产反例（2026-08-07，P0 度量实锤）：对端停 ACK 时新鲜 push 互相背压，
+    // 一小时 5168 次 BACKPRESSURE（maker:event），镜像零交付只放大重试风暴。
+    // 现改为按需腾位：只丢最旧的可丢弃帧，较新的镜像历史保留给对端恢复后交付。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'latest-wins-stream');
+
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+
+    // 满员后的新 push：只驱逐最旧的 1 条（seq=1）腾位，自身入队；
+    // baseSeq 前移到 2，接收端整体跳过被驱逐的 seq，无空洞
+    expect(() =>
+      h.client.sendPush('dev-b', 'maker:event', { text: 'newest-1' }),
+    ).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+    const pushFrames = () => h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    let meta = parseTransportPayload(pushFrames().at(-1)!.payload)!.meta;
+    expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 1);
+    expect(meta.baseSeq).toBe(2);
+
+    // 连续洪峰：每条新 push 轮换掉一条最旧帧，队列保持满员而不再抛背压
+    expect(() =>
+      h.client.sendPush('dev-b', 'maker:event', { text: 'newest-2' }),
+    ).not.toThrow();
+    meta = parseTransportPayload(pushFrames().at(-1)!.payload)!.meta;
+    expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 2);
+    expect(meta.baseSeq).toBe(3);
+    h.client.stop();
+  });
+
+  it('push 拥塞腾位不跨 live 帧：队头是 live invoke 时新 push 维持 BACKPRESSURE', async () => {
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, requestTimeoutMs: 5_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const open = h.client.openLink('dev-b', {
+      controllerName: 'Test',
+      protocolVersion: 1,
+      appVersion: '1',
+    });
+    const sentOpen = h.current().sent.find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: sentOpen.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'remote-stream',
+      },
+    });
+    await open;
+
+    // 队头 seq=1 是仍在等待响应的 live invoke，其后被 push 填满：
+    // live 帧是可丢弃前缀的边界，push 腾位不得跨越（会留 seq 空洞）
+    const p = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] }, 5_000);
+    p.catch(() => {});
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 1; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'overflow' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+    h.client.stop();
+  });
+
+  it('流控 push(contacts-sync)满员入队不驱逐镜像帧,维持 BACKPRESSURE 交发送方流控', async () => {
+    // contacts-sync sender 对 BACKPRESSURE 做阻塞等待重试(它的流控协议),
+    // 它的帧不得触发 latest-wins 驱逐别人——满员时按原语义拒收即可。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'flow-controlled-in-stream');
+
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+    expect(() =>
+      h.client.sendPush('dev-b', DL_CONTACTS_SYNC_CHANNEL, { version: 1, type: 'chunk' }),
+    ).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+    h.client.stop();
+  });
+
+  it('已入队的流控 push 是腾位边界:镜像洪峰驱逐到它即止,分片不被静默丢弃', async () => {
+    // 反例(review P2):contacts-sync 的 cipher-chunk 一旦被 maker:event 洪峰
+    // 静默驱逐,发送方以为已送达,接收端永远拼不出本次传输。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'flow-controlled-boundary-stream');
+
+    // 队形:2 条镜像(seq1-2) + 1 条 contacts 分片(seq3) + 镜像填满到 64
+    h.client.sendPush('dev-b', 'maker:event', { i: 0 });
+    h.client.sendPush('dev-b', 'maker:event', { i: 1 });
+    h.client.sendPush('dev-b', DL_CONTACTS_SYNC_CHANNEL, { version: 1, type: 'chunk', index: 0 });
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 3; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { fill: i });
+    }
+
+    const pushFrames = () => h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    // 洪峰驱逐 seq1、seq2 两条镜像后,队头是 contacts 分片:边界生效,第三条拒收
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-1' })).not.toThrow();
+    expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(2);
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-2' })).not.toThrow();
+    expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(3);
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    h.client.stop();
+  });
+
+  it('白名单外的事件流 push(messages:created)不参与 latest-wins:不驱逐别人,也不被驱逐', async () => {
+    // review P1(第二轮):local-db:messages:created 是不可合并的事件流——拥塞
+    // 驱逐发生时 link 未断,reconnect reseed 不会跑,静默驱逐 = UI 永久漏一条消息。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'event-stream-guard-stream');
+
+    // 方向一:满员时它自己入队不驱逐镜像,维持 BACKPRESSURE
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+    expect(() =>
+      h.client.sendPush('dev-b', 'local-db:messages:created', { messageId: 'm1' }),
+    ).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+    h.client.stop();
+  });
+
+  it('已入队的事件流 push 是腾位边界:镜像洪峰驱逐到 messages:created 即止', async () => {
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'event-stream-boundary-stream');
+
+    // 队形:1 条镜像(seq1) + 1 条 messages:created(seq2) + 镜像填满到 64
+    h.client.sendPush('dev-b', 'maker:event', { i: 0 });
+    h.client.sendPush('dev-b', 'local-db:messages:created', { messageId: 'm1' });
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 2; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { fill: i });
+    }
+
+    const pushFrames = () => h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    // 第一条洪峰驱逐 seq1 镜像入队;第二条队头已是 messages:created,拒收
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-1' })).not.toThrow();
+    expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(2);
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    h.client.stop();
+  });
+
+  it('键控终态快照(sessions:activity)不参与 latest-wins:收尾快照不被 maker:event 洪峰驱逐', async () => {
+    // review P2(第三轮):activity 按 sessionId 键控,completed/error 收尾快照是
+    // 该键最后一帧;staging 在 sendPush 成功后即删暂存不再重试,link 不重连
+    // reseed 不会跑——被驱逐 = 手机端永远显示 running。
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'activity-final-stream');
+
+    // 队形:1 条镜像(seq1) + 会话 A 的 completed 快照(seq2) + 镜像填满到 64
+    h.client.sendPush('dev-b', 'maker:event', { i: 0 });
+    h.client.sendPush('dev-b', SESSION_ACTIVITY_CHANNEL, { sessionId: 'a', status: 'completed' });
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 2; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { fill: i });
+    }
+
+    const pushFrames = () => h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    // 洪峰驱逐 seq1 镜像后,队头是 activity 收尾快照:边界生效,后续洪峰拒收
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'newest-1' })).not.toThrow();
+    expect(parseTransportPayload(pushFrames().at(-1)!.payload)!.meta.baseSeq).toBe(2);
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'blocked' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    // activity 满员入队也不驱逐别人(不在白名单)
+    expect(() =>
+      h.client.sendPush('dev-b', SESSION_ACTIVITY_CHANNEL, { sessionId: 'b', status: 'running' }),
+    ).toThrow(expect.objectContaining({ code: 'BACKPRESSURE' }));
+    h.client.stop();
+  });
+
+  it('WebSocket 缓冲满时 push 在驱逐前拒绝:不为无法入队的帧清空镜像历史', async () => {
+    // review P1:容量预检若晚于驱逐,连续调用会逐步清空本可重试的镜像历史,
+    // 却一帧未纳。预检先行后,ws 满那一轮必须一条都不驱逐。
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'ws-precheck-stream');
+
+    for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+      h.client.sendPush('dev-b', 'maker:event', { i });
+    }
+    h.current().bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'rejected' })).toThrow(
+      expect.objectContaining({ code: 'BACKPRESSURE' }),
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('latest-wins push admission'),
+    );
+
+    // ws 恢复后的下一条 push 只驱逐本轮的 1 条(baseSeq=2):
+    // 证明 ws 满那一轮没有发生任何驱逐,否则基线会更靠后
+    h.current().bufferedAmount = 0;
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'admitted' })).not.toThrow();
+    const pushFrames = h.current().sent.filter(
+      (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
+    );
+    expect(parseTransportPayload(pushFrames.at(-1)!.payload)!.meta.baseSeq).toBe(2);
+    h.client.stop();
+  });
+
+  it('live invoke 入队压力只做 TTL 兜底清扫(单调时钟计量):过期 push 出队,新鲜 push 不被 invoke 驱逐', async () => {
+    // TTL 用单调时钟:墙钟被 NTP 向前校正超过 TTL 时,刚入队的 push 不得被误判过期。
+    // (push 入队已改 latest-wins,TTL 路径由 live invoke 的入队压力触达。)
     const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
     let nowMs = 10_000;
     const clock = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => nowMs);
     try {
       const warn = vi.fn();
       const h = makeHarness({
-        timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000 },
+        timing: { pingIntervalMs: 10_000, transportRetryIntervalMs: 60_000, requestTimeoutMs: 5_000 },
         logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
       });
       h.client.start();
       await tick();
       h.current().ack();
-      await establishInboundReliableLink(h, 'ttl-stream');
+      await establishInboundReliableLink(h, 'ttl-invoke-stream');
 
       h.client.sendPush('dev-b', 'maker:event', { text: 'old-1' });
       h.client.sendPush('dev-b', 'maker:event', { text: 'old-2' });
-      // 只推进单调时钟：前两条 push 超龄，后续 push 保持新鲜
+      // 只推进单调时钟:前两条 push 超龄,后续 push 保持新鲜
       nowMs += TRANSPORT_PENDING_PUSH_MAX_AGE_MS + 1;
       for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES - 2; i++) {
         h.client.sendPush('dev-b', 'maker:event', { i });
       }
 
-      // 缓冲满：新 push 触发 TTL 兜底清扫，只有 2 条过期 push 出队，新 push 入队
-      expect(() =>
-        h.client.sendPush('dev-b', 'maker:event', { text: 'fresh-after-sweep' }),
-      ).not.toThrow();
+      // 缓冲满:live invoke 触发 TTL 兜底清扫,2 条过期 push 出队,invoke 入队
+      const p1 = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] }, 5_000);
+      p1.catch(() => {});
+      await tick();
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining('dropped 2 discardable pending frame(s)'),
       );
-      const frames = h.current().sent.filter(
-        (env) => env.kind === 'push' && parseTransportPayload(env.payload) !== null,
-      );
-      const meta = parseTransportPayload(frames[frames.length - 1].payload)!.meta;
-      expect(meta.seq).toBe(MAX_TRANSPORT_PENDING_MESSAGES + 1);
-      expect(meta.baseSeq).toBe(3);
 
-      // 填回满员后队头是新鲜 push：不互相驱逐，仍按原语义背压
+      // 填回满员后队头是新鲜 push:invoke 不得驱逐它们,维持 BACKPRESSURE
       h.client.sendPush('dev-b', 'maker:event', { text: 'refill' });
-      expect(() => h.client.sendPush('dev-b', 'maker:event', { text: 'overflow' })).toThrow(
-        expect.objectContaining({ code: 'BACKPRESSURE' }),
-      );
+      let backpressured: unknown;
+      const p2 = h.client.invoke('dev-b', { channel: 'maker:list-active', args: [] }, 5_000);
+      await p2.catch((err: unknown) => { backpressured = err; });
+      expect(backpressured).toEqual(expect.objectContaining({ code: 'BACKPRESSURE' }));
       h.client.stop();
     } finally {
       clock.mockRestore();
@@ -2779,8 +3051,7 @@ describe('DeviceLinkClient', () => {
     // 断线 → 第一次退避 5ms
     h.current().emit('close', 1006);
     expect(h.client.getStatus()).toBe('connecting');
-    await tick(15);
-    expect(h.sockets.length).toBe(2);
+    await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
 
     h.current().ack();
     expect(h.client.getStatus()).toBe('online');
@@ -2795,9 +3066,7 @@ describe('DeviceLinkClient', () => {
 
     h.current().emit('close', 1012, 'service restart');
     expect(h.client.getStatus()).toBe('connecting');
-    await tick(15);
-
-    expect(h.sockets).toHaveLength(2);
+    await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
     h.current().ack();
     expect(h.client.getStatus()).toBe('online');
     h.client.stop();
@@ -2817,16 +3086,14 @@ describe('DeviceLinkClient', () => {
 
     // 第一次断线 → 20ms 后重连。
     h.current().emit('close', 4409, 'replaced by newer connection');
-    await tick(30);
-    expect(h.sockets.length).toBe(2);
+    await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
     h.current().ack();
 
     // 第二条连接还没稳定到 reconnectStableResetMs 就又被顶掉,下一次应按 40ms 退避。
     h.current().emit('close', 4409, 'replaced by newer connection');
     await tick(25);
     expect(h.sockets.length).toBe(2);
-    await tick(30);
-    expect(h.sockets.length).toBe(3);
+    await vi.waitFor(() => expect(h.sockets).toHaveLength(3));
     h.client.stop();
   });
 
@@ -2931,8 +3198,7 @@ describe('DeviceLinkClient', () => {
 
     // 断线 → 退避重连产生 socket2(epoch2)
     stale.emit('close', 1006);
-    await tick(15);
-    expect(h.sockets.length).toBe(2);
+    await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
     const fresh = h.current();
 
     // 过期 socket1 的迟到 close + 垃圾 message:epoch 守卫应忽略(否则 handleDisconnect 会
@@ -3132,8 +3398,7 @@ describe('DeviceLinkClient', () => {
     h.current().emit('close', 1006);
     await tick(20);
     expect(h.sockets.length).toBe(1); // 退避 50ms 未到,不重连(默认曲线未被改快)
-    await tick(50);
-    expect(h.sockets.length).toBe(2); // 到点才重连
+    await vi.waitFor(() => expect(h.sockets).toHaveLength(2)); // 到点才重连
     h.current().ack();
     expect(h.client.getStatus()).toBe('online');
     h.client.stop();
@@ -3391,7 +3656,7 @@ describe('DeviceLinkClient', () => {
       expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'replaced', closeCode: 4409 });
       expect(issues).toHaveLength(1);
 
-      await tick(15);
+      await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
       h.current().ack();
       expect(h.client.getConnectionIssue()).toBeNull();
       expect(issues).toHaveLength(2);
@@ -3418,7 +3683,7 @@ describe('DeviceLinkClient', () => {
       h.current().emit('close', 4429, 'too many connections');
       expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'too-many-connections' });
 
-      await tick(15);
+      await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
       h.current().emit('close', 4400, 'protocol version mismatch');
       expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'version-mismatch' });
       h.client.stop();
@@ -3466,12 +3731,12 @@ describe('DeviceLinkClient', () => {
       expect(h.client.getConnectionIssue()).toBeNull();
 
       // 先制造 auth-failed,再来一次普通断线:原因不被网络抖动洗掉
-      await tick(15);
+      await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
       const ws2 = h.current();
       ws2.emit('error', new Error("Expected HTTP 101 response but was '401 Unauthorized'"));
       ws2.emit('close', 1006);
       expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'auth-failed' });
-      await tick(15);
+      await vi.waitFor(() => expect(h.sockets).toHaveLength(3));
       h.current().emit('close', 1006);
       expect(h.client.getConnectionIssue()).toMatchObject({ kind: 'auth-failed' });
       h.client.stop();
@@ -3486,7 +3751,7 @@ describe('DeviceLinkClient', () => {
       const ws = h.current();
       ws.emit('error', new Error('Unexpected server response: 401'));
       ws.emit('close', 1006);
-      await tick(15);
+      await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
       const ws2 = h.current();
       ws2.emit('error', new Error('Unexpected server response: 401'));
       ws2.emit('close', 1006);
@@ -3642,8 +3907,9 @@ describe('DeviceLinkClient', () => {
       h.current().ack();
       await tick();
       await establishInboundReliableLink(h, `stream-${src}`, 1, src);
+      const socketCount = h.sockets.length;
       h.current().emit('close', 1006);
-      await tick(20); // 退避后重连
+      await vi.waitFor(() => expect(h.sockets).toHaveLength(socketCount + 1));
       h.current().ack();
       await tick();
       expect(h.client.getStatus()).toBe('online');
@@ -3675,16 +3941,16 @@ describe('DeviceLinkClient', () => {
         await makeLinkDownPeer(h);
 
         // link down:push 只入队不发送,填满 pending(64 条)
+        // (用可合并镜像通道 maker:event:白名单外通道不参与 latest-wins)
         for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
-          h.client.sendPush('ctrl-1', 'sessions', { i });
+          h.client.sendPush('ctrl-1', 'maker:event', { i });
         }
-        // 第 65 条:队头未过滞留阈值 → 仍是 BACKPRESSURE(原有语义不变)
-        expect(() => h.client.sendPush('ctrl-1', 'sessions', { overflow: true })).toThrow(
-          /reliable transport buffer is full/,
-        );
+        // 第 65 条:队头未过滞留阈值 → latest-wins 驱逐最旧 push 腾位入队,
+        // 不再 BACKPRESSURE(link 恢复后仍可交付较新镜像)
+        expect(() => h.client.sendPush('ctrl-1', 'maker:event', { overflow: true })).not.toThrow();
         // 滞留超阈值后:入队前整队放弃,新帧不再被顶回
         nowMs += 51;
-        expect(() => h.client.sendPush('ctrl-1', 'sessions', { after: true })).not.toThrow();
+        expect(() => h.client.sendPush('ctrl-1', 'maker:event', { after: true })).not.toThrow();
         h.client.stop();
       } finally {
         clock.mockRestore();
@@ -3904,8 +4170,9 @@ describe('DeviceLinkClient', () => {
         // 恢复后仍在 30s 节流窗口内(时钟只走 1s)再次丢 link:新帧必须立刻再通知,
         // 否则 host 的唯一恢复出口最坏被推迟整个窗口。
         nowMs += 1_000;
+        const socketCount = h.sockets.length;
         h.current().emit('close', 1006);
-        await tick(20);
+        await vi.waitFor(() => expect(h.sockets).toHaveLength(socketCount + 1));
         h.current().ack();
         await tick();
         const staleFrame2 = encodeReliableFrames(
@@ -3929,4 +4196,539 @@ describe('DeviceLinkClient', () => {
       }
     });
   });
+});
+
+describe('computeReconnectDelayMs(relay 拥塞冷却下限)', () => {
+  const timing = {
+    reconnectBaseMs: 1_000,
+    reconnectMaxMs: 30_000,
+    congestionBackoffBaseMs: 5_000,
+    congestionBackoffMaxMs: 30_000,
+  };
+
+  it('无拥塞信号:维持原指数退避曲线与 0.7x–1.0x 向下抖动', () => {
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0, congestionCloseStreak: 0, random: 0 }))
+      .toBe(700);
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0, congestionCloseStreak: 0, random: 0.9999 }))
+      .toBe(1000);
+    // 指数封顶 reconnectMaxMs
+    expect(computeReconnectDelayMs({ ...timing, attempt: 10, congestionCloseStreak: 0, random: 0 }))
+      .toBe(21_000);
+  });
+
+  it('拥塞冷却:与普通退避取 max,按连击加深,封顶 congestionBackoffMaxMs', () => {
+    // 稳定在线后 attempt 归零,但拥塞连击在:冷却下限接管(5s × 0.7 = 3.5s)
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0, congestionCloseStreak: 1, random: 0 }))
+      .toBe(3_500);
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0, congestionCloseStreak: 2, random: 0 }))
+      .toBe(7_000);
+    // 连击封顶:5s × 2^3 = 40s > 30s 上限
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0, congestionCloseStreak: 4, random: 0 }))
+      .toBe(21_000);
+    // 普通退避已深于冷却下限时,取普通退避(max 语义,不是叠加)
+    expect(computeReconnectDelayMs({ ...timing, attempt: 6, congestionCloseStreak: 1, random: 0 }))
+      .toBe(21_000);
+  });
+
+  it('入参钳制:非法 attempt/streak/random 不产生 NaN 或负延迟', () => {
+    expect(computeReconnectDelayMs({ ...timing, attempt: -3, congestionCloseStreak: -1, random: 0 }))
+      .toBe(700);
+    expect(computeReconnectDelayMs({ ...timing, attempt: Number.NaN, congestionCloseStreak: 0, random: 2 }))
+      .toBe(1_000);
+    expect(computeReconnectDelayMs({ ...timing, attempt: 0.9, congestionCloseStreak: 1.9, random: Number.NaN }))
+      .toBe(3_500);
+  });
+});
+
+describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
+  it('1013 计入拥塞连击,握手成功不清零,稳定在线满窗口才清零;普通断线不计入', async () => {
+    const h = makeHarness({
+      timing: {
+        reconnectBaseMs: 1,
+        reconnectMaxMs: 5,
+        reconnectStableResetMs: 20,
+        congestionBackoffBaseMs: 2,
+        congestionBackoffMaxMs: 8,
+        pingIntervalMs: 60_000,
+      },
+    });
+    const internals = h.client as unknown as { congestionCloseStreak: number };
+    h.client.start();
+    await tick();
+    h.current().ack();
+    expect(internals.congestionCloseStreak).toBe(0);
+
+    // relay 拥塞踢连接:计入连击
+    h.current().emit('close', 1013, 'inbound backpressure');
+    expect(internals.congestionCloseStreak).toBe(1);
+
+    // 退避后重连成功:握手成功**不**清拥塞连击(与 reconnectAttempt 生命周期不同)
+    await tick(40);
+    h.current().ack();
+    expect(h.client.getStatus()).toBe('online');
+    expect(internals.congestionCloseStreak).toBe(1);
+
+    // 稳定在线满 reconnectStableResetMs 后清零
+    await tick(100);
+    expect(internals.congestionCloseStreak).toBe(0);
+
+    // 普通断线(1006)不计入拥塞连击
+    h.current().emit('close', 1006, 'heartbeat lost');
+    expect(internals.congestionCloseStreak).toBe(0);
+    h.client.stop();
+  });
+
+  it('拥塞冷却不被请求路径打穿:waitUntilOnline 不 un-park,显式用户意图 override 才立即重连', async () => {
+    // review P1:事故形态下在途请求经 waitUntilOnline → connectNow 清掉冷却
+    // 计时器,每次 1013 后仍立即重连,循环掐不断。
+    const h = makeHarness({
+      timing: {
+        reconnectBaseMs: 1,
+        reconnectMaxMs: 5,
+        // 冷却下限拉大,确保测试窗口内计时器不会自然到点
+        congestionBackoffBaseMs: 60_000,
+        congestionBackoffMaxMs: 60_000,
+        pingIntervalMs: 60_000,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    const socketsBefore = h.sockets.length;
+
+    h.current().emit('close', 1013, 'inbound backpressure');
+    // 请求路径 un-park:冷却期间必须被 park,不新建连接,有界等待快速失败
+    await expect(h.client.waitUntilOnline(30)).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+    expect(h.sockets.length).toBe(socketsBefore);
+
+    // 显式用户意图(移动端回前台):override 立即重连
+    h.client.connectNow('appstate-active', { overrideCongestionCooldown: true });
+    await tick();
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+    h.client.stop();
+  });
+
+  it('非拥塞断线的 waitUntilOnline un-park 行为不变:立即打断退避重连', async () => {
+    const h = makeHarness({
+      timing: {
+        // 普通退避拉大:不 un-park 的话测试窗口内不会自然重连
+        reconnectBaseMs: 60_000,
+        reconnectMaxMs: 60_000,
+        pingIntervalMs: 60_000,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    const socketsBefore = h.sockets.length;
+
+    h.current().emit('close', 1006, 'heartbeat lost');
+    const wait = h.client.waitUntilOnline(2_000);
+    await tick();
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+    h.current().ack();
+    await expect(wait).resolves.toBeUndefined();
+    h.client.stop();
+  });
+
+  it('多 peer 拓扑:冷却是连接级的,两个控制端对称受影响、pending 均保留并在重连后各自重放', async () => {
+    // 故障半径三问 §3(remote-and-mobile-adaptation):被控端与 relay 只有一条
+    // 连接、服务多个控制端。1013 是连接级故障,冷却也只推迟连接级重连——必须
+    // 断言它不偏袒/不惩罚任何单个 peer:两边的 link 与 pending 处理完全对称,
+    // 且冷却期间不丢在途帧,重连后各自按原 seq 重放(#1187→#1405 的放大判例
+    // 正是「单 peer 故障升级成整条连接」,这里反向确认没有引入新的不对称)。
+    const h = makeHarness({
+      timing: {
+        reconnectBaseMs: 1,
+        reconnectMaxMs: 5,
+        congestionBackoffBaseMs: 20,
+        congestionBackoffMaxMs: 20,
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000, // 重试计时器不参与本用例
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'stream-a', 1, 'ctrl-a');
+    await establishInboundReliableLink(h, 'stream-b', 1, 'ctrl-b');
+
+    // 在途帧用 invoke-result(live 帧,永不可丢弃):push 是 best-effort 镜像,
+    // 建链时会被可丢弃前缀清扫丢掉(#1375),验证不了「pending 跨冷却保留」。
+    // 它也正是「另一个 peer 的在途请求回包」这一关注点本身。
+    const reliableResultsTo = (dst: string): Envelope[] => h.current().sent.filter(
+      (e) => e.kind === 'invoke-result' && e.dst === dst && parseTransportPayload(e.payload) !== null,
+    );
+    h.client.sendInvokeResult('ctrl-a', 'req-a', { ok: true, result: 'a' });
+    h.client.sendInvokeResult('ctrl-b', 'req-b', { ok: true, result: 'b' });
+    expect(reliableResultsTo('ctrl-a')).toHaveLength(1);
+    expect(reliableResultsTo('ctrl-b')).toHaveLength(1);
+
+    // relay 拥塞踢掉整条共享连接
+    const socketsBefore = h.sockets.length;
+    h.current().emit('close', 1013, 'inbound backpressure');
+
+    // 冷却期内不重连(对两个 peer 一视同仁:谁都拿不到新连接,也没人被单独放行)
+    await tick(8);
+    expect(h.sockets.length).toBe(socketsBefore);
+
+    // 冷却到点:重连并重建两条 link → 两个 peer 的 pending 各自按原 seq 重放,
+    // 一条都没丢、也没有串到对方的 stream
+    await tick(30);
+    expect(h.sockets.length).toBe(socketsBefore + 1);
+    h.current().ack();
+    await establishInboundReliableLink(h, 'stream-a', 1, 'ctrl-a');
+    await establishInboundReliableLink(h, 'stream-b', 1, 'ctrl-b');
+    await tick();
+    const replayedA = reliableResultsTo('ctrl-a');
+    const replayedB = reliableResultsTo('ctrl-b');
+    expect(replayedA).toHaveLength(1);
+    expect(replayedB).toHaveLength(1);
+    expect(parseTransportPayload(replayedA[0]!.payload)!.meta.seq).toBe(1);
+    expect(parseTransportPayload(replayedB[0]!.payload)!.meta.seq).toBe(1);
+    h.client.stop();
+  });
+
+  it('stopped 后经 connectNow 拉起 = 新生命周期:拥塞连击清零(与 start 对齐)', async () => {
+    const h = makeHarness({
+      timing: { reconnectBaseMs: 1, reconnectMaxMs: 5, pingIntervalMs: 60_000 },
+    });
+    const internals = h.client as unknown as { congestionCloseStreak: number };
+    h.client.start();
+    await tick();
+    h.current().ack();
+    h.current().emit('close', 1013, 'inbound backpressure');
+    expect(internals.congestionCloseStreak).toBe(1);
+
+    h.client.stop();
+    h.client.connectNow('relaunch');
+    expect(internals.congestionCloseStreak).toBe(0);
+    h.client.stop();
+  });
+});
+
+describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
+  /**
+   * 统计每个 seq 的**发送次数**(首发 1 次,之后每次重发 +1)。
+   * 分片消息一次发送会写出多帧,所以只数首片(segment.index === 0 或未分片),
+   * 否则「首发」本身就会被误判成重发过。
+   */
+  function sendsBySeq(ws: FakeWs, kind: Envelope['kind'] = 'invoke-result'): Map<number, number> {
+    const counts = new Map<number, number>();
+    for (const env of ws.sent) {
+      if (env.kind !== kind) continue;
+      const parsed = parseTransportPayload(env.payload);
+      if (!parsed) continue;
+      if (parsed.meta.segment && parsed.meta.segment.index !== 0) continue;
+      counts.set(parsed.meta.seq, (counts.get(parsed.meta.seq) ?? 0) + 1);
+    }
+    return counts;
+  }
+  /** 统计写进 ws 的**帧**数(分片逐帧计),用于验证按帧扣预算。 */
+  function framesSent(ws: FakeWs, kind: Envelope['kind'] = 'invoke-result'): number {
+    return ws.sent.filter((env) => (
+      env.kind === kind && parseTransportPayload(env.payload) !== null
+    )).length;
+  }
+  const retriedSeqs = (counts: Map<number, number>): number[] =>
+    [...counts.entries()].filter(([, n]) => n > 1).map(([seq]) => seq).sort((a, b) => a - b);
+
+  /**
+   * 这两条断言的是「**每一趟**发多少」,所以必须用 fake timers 逐趟驱动:真实定时器下
+   * 回调会在负载高的 runner 上挤在一起(CI 上实测把「只压队头 2 条」跑成 4 条),那不是
+   * 实现问题,而是「累计重发集合」根本不是不变量 —— 每趟上限才是。
+   */
+  async function withFakeTimers(
+    fn: (h: Harness, advance: (ms: number) => Promise<void>) => Promise<void>,
+    timing: NonNullable<Parameters<typeof makeHarness>[0]>['timing'],
+  ): Promise<void> {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing });
+      const advance = async (ms: number): Promise<void> => {
+        await vi.advanceTimersByTimeAsync(ms);
+      };
+      h.client.start();
+      await advance(1);
+      h.current().ack();
+      const linked = establishInboundReliableLink(h, 'remote-stream');
+      await advance(1);
+      await linked;
+      await fn(h, advance);
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('对端停止 ACK 时,一趟定时重发只发预算内的最旧几条(而不是整个窗口)', async () => {
+    // 2026-08-08 线上:一趟重发遍历整个 pending 窗口(上限 64 条)、同步全部写进 ws,
+    // 对端 relay 路由已失效时逐帧弹回 DEVICE_OFFLINE —— 单簇 213 条就是这个形状。
+    // 既有两道刹车都拦不住本趟:per-peer 制动要等 relay-error 回来(异步),ws 容量
+    // 中断的阈值是 8MB(小帧根本到不了)。所以「一趟发多少条」必须自己有上限。
+    await withFakeTimers(async (h, advance) => {
+      for (let i = 0; i < 9; i += 1) {
+        h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      expect(seqs).toHaveLength(9);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
+
+      // 恰好跑一趟:只重发预算内的最旧 3 条 —— 累计 ACK 只能从队头推进,顺序不是可选项
+      await advance(200);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 3));
+
+      // 再一趟:对端仍未 ACK,预算继续压在同样的队头 3 条上(不铺满窗口)
+      await advance(200);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 3));
+      const headCounts = seqs.slice(0, 3).map((seq) => sendsBySeq(ws).get(seq));
+      expect(headCounts).toEqual([3, 3, 3]); // 首发 + 两趟重发
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: 3,
+      transportMaxRetryAttempts: 50, // 不让耗尽路径提前介入
+    });
+  }, 10_000);
+
+  it('队头被累计 ACK 后窗口前移,后续消息才轮到重发', async () => {
+    // 「一直重发最旧几条」不是饥饿而是正确形状:接收端拿不到队头就无法消费后面的 seq。
+    // 窗口只在队头被确认后前移,这条用例锚定 ACK 前后两段。
+    await withFakeTimers(async (h, advance) => {
+      for (let i = 0; i < 6; i += 1) {
+        h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      const streamId = parseTransportPayload(
+        ws.sent.find((env) => env.kind === 'invoke-result' && parseTransportPayload(env.payload))!.payload,
+      )!.meta.streamId;
+
+      await advance(200);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, 2));
+
+      // 累计 ACK 掉前 3 条 → 窗口前移 → 下一趟轮到 seq[3]、seq[4]
+      ws.push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId, ackSeq: seqs[2] },
+        },
+      });
+      await advance(200);
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual([...seqs.slice(0, 2), seqs[3], seqs[4]]);
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: 2,
+      transportMaxRetryAttempts: 50,
+    });
+  }, 10_000);
+
+  it('分片消息按**帧**扣预算:一条大消息就能用满一趟(不再让 8 条放出上百帧)', async () => {
+    // greptile P1:压垮 relay 的是帧数。按逻辑消息计数时,一条 4MB 消息分 32 片,
+    // 8 条预算能放出 ~256 帧,等于没限。分片不能跨趟拆(接收端要整条重组),所以
+    // 每趟至少发一条,发完按帧数结算。
+    await withFakeTimers(async (h, advance) => {
+      // 每条 ~3 片(payload 略大于 2×128KB)
+      const chunky = 'x'.repeat(2 * 128 * 1024 + 1_000);
+      for (let i = 0; i < 4; i += 1) {
+        h.client.sendInvokeResult('dev-b', `big-${i}`, { ok: true, result: chunky });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      expect(seqs).toHaveLength(4);
+      // 首发就证明确实分片了:帧数远多于消息数,而每条消息只算发过 1 次
+      expect(framesSent(ws)).toBeGreaterThan(8);
+      expect([...sendsBySeq(ws).values()]).toEqual([1, 1, 1, 1]);
+
+      // 预算 4 帧、每条 3 片:队头那条发完(3 帧)后,第二条会超预算 → 发送前就被拦下,
+      // 留到下一趟。所以本趟只重发队头 1 条、只写出 3 帧。
+      const framesBefore = framesSent(ws);
+      await advance(200);
+      const retried = retriedSeqs(sendsBySeq(ws));
+      expect(retried).toEqual([seqs[0]]);
+      // 本趟真实写出的帧数不超过 max(预算, 队头分片数) —— 这才是「上限」的准确表述
+      const passFrames = framesSent(ws) - framesBefore;
+      expect(passFrames).toBeLessThanOrEqual(4);
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: 4,
+      transportMaxRetryAttempts: 50,
+    });
+  }, 15_000);
+
+  it('队头单条就超预算时:本趟只发它一条,后面的一条都不带(上限 = max(预算, 队头分片数))', async () => {
+    // review 两位都指出「预算不是硬上限」。准确表述是 max(预算, 队头分片数):队头那条
+    // 压不下去(分片不能跨趟拆,而它又必须先送到),但它绝不能顺带把后面的也拖出去。
+    await withFakeTimers(async (h, advance) => {
+      const chunky = 'x'.repeat(3 * 128 * 1024 + 1_000); // ~4 片,单条即超预算(2)
+      h.client.sendInvokeResult('dev-b', 'big', { ok: true, result: chunky });
+      for (let i = 0; i < 5; i += 1) {
+        h.client.sendInvokeResult('dev-b', `small-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      const framesBefore = framesSent(ws);
+
+      await advance(200);
+      // 只有队头那条大消息被重发,5 条小消息一条都没被带出去
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual([seqs[0]]);
+      // 溢出被限制在「队头这一条的分片数」内,而不是预算 + 队头
+      const passFrames = framesSent(ws) - framesBefore;
+      expect(passFrames).toBeLessThanOrEqual(6);
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: 2,
+      transportMaxRetryAttempts: 50,
+    });
+  }, 15_000);
+
+  it('预算字段被显式塞成 undefined 时回退到常量默认,不是静默关掉限流', async () => {
+    // copilot review:Partial<DeviceLinkTiming> 的「可选值直塞」会 spread 覆盖默认值,
+    // Math.max(1, undefined) = NaN → 判据恒 false → 预算被静默关闭。
+    await withFakeTimers(async (h, advance) => {
+      for (let i = 0; i < 20; i += 1) {
+        h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+      await advance(200);
+      // 回退到 TRANSPORT_RETRY_PASS_BUDGET(8),而不是把 20 条全部重发
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual(seqs.slice(0, TRANSPORT_RETRY_PASS_BUDGET));
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 200,
+      transportRetryPassBudget: undefined as unknown as number,
+      transportMaxRetryAttempts: 50,
+    });
+  }, 10_000);
+
+  it('超时生成的 skip 占位一定被发出(哪怕队头压着超过预算的 pending),且不顺带重放全窗口', async () => {
+    // codex P2 两轮:① 不该借道无限重放(会同步重发整个窗口);② 但也不能借道「受预算的
+    // 一趟」—— 那会从队头开始消耗预算、在到达 skip 之前用完,接收端正等这个 seq,后面的
+    // 可靠消息会一直阻塞。所以改成定向发这一帧。
+    await withFakeTimers(async (h, advance) => {
+      // 队头先压 12 条(远超预算 3)
+      for (let i = 0; i < 12; i += 1) {
+        h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+      }
+      const ws = h.current();
+      const seqs = [...sendsBySeq(ws).keys()].sort((a, b) => a - b);
+
+      // 先挂 catch 再推进时钟:fake timer 下 reject 发生在 advance 内部,
+      // 事后才 await 会被算成 unhandled rejection。
+      const invoke = h.client.invoke('dev-b', { channel: 'maker:slow', args: [] }, 50)
+        .then(() => null, (err: unknown) => err);
+      const invokeFrame = ws.sent.filter((env) => (
+        env.kind === 'invoke' && parseTransportPayload(env.payload)
+      )).at(-1)!;
+      const invokeSeq = parseTransportPayload(invokeFrame.payload)!.meta.seq;
+      expect(invokeSeq).toBeGreaterThan(seqs.at(-1)!); // 它排在那 12 条之后
+
+      await advance(60);
+      expect(await invoke).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+
+      // ① 该 seq 的 skip 占位确实发出去了(不是等后续趟次才触达)
+      const skipSent = ws.sent.some((env) => {
+        const parsed = parseTransportPayload(env.payload);
+        if (!parsed || parsed.meta.seq !== invokeSeq) return false;
+        return JSON.parse(parsed.data)?.__cindyDeviceLinkTransportSkip === true;
+      });
+      expect(skipSent).toBe(true);
+
+      // ② 没有顺带把前面 12 条全部重发(那正是本 PR 要消除的簇)
+      expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
+    }, {
+      pingIntervalMs: 600_000,
+      transportRetryIntervalMs: 10_000, // 定时器不参与,只看 skip 这一步
+      transportRetryPassBudget: 3,
+      transportMaxRetryAttempts: 50,
+    });
+  }, 10_000);
+
+  it('link 重建后的 replay 不受预算限制:可达性刚被对端 link-accept 证明过', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000, // 定时器不参与,只看 replay 那一趟
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'remote-stream');
+
+    for (let i = 0; i < 7; i += 1) {
+      h.client.sendInvokeResult('dev-b', `req-${i}`, { ok: true, result: i });
+    }
+    const ws = h.current();
+    expect(retriedSeqs(sendsBySeq(ws))).toEqual([]);
+
+    // 对端重新 link-open → 本端 link-accept → replay:一趟把 7 条全部重放
+    await establishInboundReliableLink(h, 'remote-stream-2');
+    await tick();
+    expect(retriedSeqs(sendsBySeq(ws)).length).toBe(7);
+
+    h.client.stop();
+  }, 10_000);
+
+  it('多 peer 拓扑:一个 peer 停止 ACK 被限流,另一个 peer 的投递零感知', async () => {
+    // 故障半径第 3 问(docs/dev-rules/remote-and-mobile-adaptation.md):预算是 per-peer 的,
+    // 一台休眠手机的积压不得拖慢另一台在线设备。
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 200,
+        transportRetryPassBudget: 2,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'stream-b', 1, 'dev-b');
+    await establishInboundReliableLink(h, 'stream-c', 1, 'dev-c');
+
+    // dev-b 积压 8 条且从不 ACK;dev-c 只有 1 条并正常 ACK
+    for (let i = 0; i < 8; i += 1) {
+      h.client.sendInvokeResult('dev-b', `b-${i}`, { ok: true, result: i });
+    }
+    h.client.sendInvokeResult('dev-c', 'c-0', { ok: true, result: 'c' });
+
+    const ws = h.current();
+    const cFrames = () => ws.sent.filter((env) => {
+      if (env.kind !== 'invoke-result' || env.dst !== 'dev-c') return false;
+      return parseTransportPayload(env.payload) !== null;
+    });
+    expect(cFrames()).toHaveLength(1);
+    const cStreamId = parseTransportPayload(cFrames()[0]!.payload)!.meta.streamId;
+
+    // dev-c 累计 ACK:它的 pending 清空,此后不再重发
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-c',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: cStreamId, ackSeq: 1 },
+      },
+    });
+
+    // 等 dev-b 至少跑过一趟限流重发,确认 dev-c 完全没被牵连
+    await vi.waitFor(() => {
+      const bRetried = ws.sent.filter((env) => env.dst === 'dev-b' && env.kind === 'invoke-result');
+      expect(bRetried.length).toBeGreaterThan(8);
+    });
+    expect(cFrames()).toHaveLength(1);
+
+    h.client.stop();
+  }, 10_000);
 });

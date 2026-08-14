@@ -15,32 +15,31 @@
  * 改写,不碰 DOM 结构。
  */
 
-import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { diffChars } from 'diff';
 
 import { isImageBytesReachable, loadImageSourceBase64 } from '@/lib/annotationBurnIn';
 import { createLogger } from '@/lib/logger';
-import { computeExportScale, domToPngBlob, resolveExportBackground } from '@/lib/rasterizeToImage';
+import {
+  computeExportScale,
+  domToPngBlob,
+  EXPORT_MAX_OUTPUT_PIXELS,
+  resolveExportBackground,
+} from '@/lib/rasterizeToImage';
 
 const log = createLogger('ShareConversationImage');
+
+/**
+ * Desktop 长图可安全使用比共享默认值更长的单边；像素总量仍沿用 4096² 预算，
+ * 所以窄长聊天记录不会因“塞不进正方形”被误拒绝，也不会放大位图内存峰值。
+ */
+const SHARE_IMAGE_MAX_EDGE_PX = 16_384;
 
 /** 消息行挂的定位属性 —— 与 MessageStream 的 wrapper 保持一致。 */
 export const SHARE_SESSION_ATTR = 'data-share-session-id';
 export const SHARE_MESSAGE_ATTR = 'data-share-message-id';
 /** 打了这个标记的元素是纯交互件(操作栏、复选框、hover 工具栏),不进图。 */
 export const SHARE_EXCLUDE_ATTR = 'data-share-exclude';
-
-/** 分享图片页脚使用的品牌域名。dev 的行为语义归 cn 系。 */
-export const SHARE_SITE_HOST_BY_REGION: Readonly<Record<CindyRegion, string>> = Object.freeze({
-  cn: 'cindy.cn',
-  dev: 'cindy.cn',
-  global: 'cindy.app',
-});
-
-export function shareSiteHostForRegion(region: CindyRegion): string {
-  return SHARE_SITE_HOST_BY_REGION[region];
-}
 
 /**
  * 克隆体里必须清掉的锚点属性:离屏容器挂在 document 内,这些 data 属性会让
@@ -68,8 +67,6 @@ export interface BuildShareImageOptions {
   logoSrc: string;
   /** 页脚 Cindy 角色主视觉的 URL(打包资源,同源)。 */
   characterSrc?: string;
-  /** 页脚网址文字(host,如 cindy.app)。 */
-  siteHost: string;
 }
 
 /** 找不到任何选中消息的 DOM 时抛这个 —— 调用方据此 toast。 */
@@ -293,11 +290,19 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
 }
 
 /**
- * 分享图至少保留 1x CSS 像素密度。共享光栅化层的 4096 单边上限是内存硬边界，
- * 继续缩小虽能成功导出，但正文会退化成不可读缩略图；这里宁可明确拒绝。
+ * 分享图至少保留 1x CSS 像素密度。聊天记录使用更长的单边上限，但输出像素总量
+ * 仍受共享 4096² 预算约束；任一限制要求缩到 1x 以下时，宁可明确拒绝不可读缩略图。
  */
 export function assertShareImageReadableSize(root: HTMLElement): void {
-  if (computeExportScale(root.scrollWidth, root.scrollHeight, 2) < 1) {
+  if (
+    computeExportScale(
+      root.scrollWidth,
+      root.scrollHeight,
+      2,
+      SHARE_IMAGE_MAX_EDGE_PX,
+      EXPORT_MAX_OUTPUT_PIXELS,
+    ) < 1
+  ) {
     throw new ShareImageTooLargeError();
   }
 }
@@ -392,23 +397,19 @@ export interface ShareImageFooterAssets {
   logoSrc: string;
   /** Cindy 角色主视觉;缺省时页脚只有 logo。 */
   characterSrc?: string;
-  /** 网址文字(host,如 cindy.app)。 */
-  siteHost: string;
 }
 
 /**
- * 品牌页脚:角色图标与 logo 横向锁定,网址在下一行,整体居中。
- * 角色图标仅承担品牌识别,通过小尺寸和轻度降饱和避免抢正文。
+ * 品牌页脚:角色图标与 logo 横向锁定、整体居中。
+ * 角色图标直接保留源素材颜色,不额外调色。
  */
 export function buildShareImageFooter({
   logoSrc,
   characterSrc,
-  siteHost,
 }: ShareImageFooterAssets): HTMLElement {
   const footer = document.createElement('div');
   footer.className = 'flex flex-col items-center';
   footer.style.paddingTop = '48px';
-  footer.style.gap = '6px';
 
   const lockup = document.createElement('div');
   lockup.className = 'flex items-center justify-center';
@@ -422,8 +423,6 @@ export function buildShareImageFooter({
     character.style.width = `${FOOTER_CHARACTER_PX}px`;
     character.style.borderRadius = '8px';
     character.style.objectFit = 'cover';
-    character.style.filter = 'saturate(0.72) contrast(0.94)';
-    character.style.opacity = '0.9';
     character.style.flexShrink = '0';
     character.setAttribute('loading', 'eager');
     lockup.appendChild(character);
@@ -437,25 +436,7 @@ export function buildShareImageFooter({
   logo.setAttribute('loading', 'eager');
   lockup.appendChild(logo);
   footer.appendChild(lockup);
-
-  if (siteHost) {
-    const site = document.createElement('span');
-    site.textContent = siteHost;
-    site.style.fontSize = '11px';
-    site.style.color = 'var(--text-tertiary)';
-    footer.appendChild(site);
-  }
   return footer;
-}
-
-/** `https://cindy.app/` → `cindy.app`;解析失败回落原串。 */
-export function websiteHost(websiteUrl: string | undefined): string {
-  if (!websiteUrl) return '';
-  try {
-    return new URL(websiteUrl).host;
-  } catch {
-    return websiteUrl;
-  }
 }
 
 /**
@@ -467,7 +448,6 @@ export async function buildShareImageBlob({
   contentWidth,
   logoSrc,
   characterSrc,
-  siteHost,
 }: BuildShareImageOptions): Promise<Blob> {
   const sourceNodes: HTMLElement[] = [];
   for (const clientId of orderedSelectedIds) {
@@ -561,7 +541,6 @@ export async function buildShareImageBlob({
       buildShareImageFooter({
         logoSrc: footerLogo,
         ...(footerCharacter ? { characterSrc: footerCharacter } : {}),
-        siteHost,
       }),
     );
 
@@ -575,7 +554,11 @@ export async function buildShareImageBlob({
     );
     assertShareImageReadableSize(stage);
 
-    return await domToPngBlob(stage, { background });
+    return await domToPngBlob(stage, {
+      background,
+      maxEdge: SHARE_IMAGE_MAX_EDGE_PX,
+      maxOutputPixels: EXPORT_MAX_OUTPUT_PIXELS,
+    });
   } finally {
     host.remove();
   }

@@ -74,7 +74,7 @@ export function NewMessageIndicator({
           'border border-[var(--msg-tool-card-border)]',
           'bg-[hsl(var(--content-area))] shadow-md',
           // 文字：12px / 500 / 使用 msg-tool-text
-          'text-[12px] font-medium leading-none text-[var(--msg-tool-text)]',
+          'text-12 font-medium leading-none text-[var(--msg-tool-text)]',
           // hover / active:用项目通用的 list-item hover token,与
           // SlashCommandPalette / ModelSelector / FolderPicker 等保持一致。
           // 不用 content-area + alpha — alpha 会让下方文字透过来。

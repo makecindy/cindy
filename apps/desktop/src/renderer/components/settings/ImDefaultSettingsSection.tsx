@@ -10,12 +10,13 @@ import {
   getModel,
   isModelSelectableForNewRoute,
 } from '@cindy/model-providers';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
@@ -25,6 +26,8 @@ import { cn } from '@/lib/utils';
 import {
   IM_DEFAULT_EFFORT_OVERRIDES,
   IM_DEFAULT_SETTINGS,
+  isUnconditionalTurnPolicyChannel,
+  isImDefaultPermissionMode,
   type ImDefaultAgentKind,
   type ImDefaultEffort,
   type ImDefaultSettingsChannel,
@@ -203,7 +206,7 @@ export function ImDefaultSettingsSection({
     return (
       <div
         className={cn(
-          'text-[13px] text-[var(--text-tertiary)]',
+          'text-13 text-[var(--text-tertiary)]',
           embedded
             ? 'py-2'
             : 'rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-5',
@@ -215,6 +218,41 @@ export function ImDefaultSettingsSection({
   }
 
   const activeSettings = settings.agents[settings.agentKind];
+  // 按选中 Agent 的 capabilities 判断:未声明 / 声明了但 supported.supported !== true
+  // 的 Agent(如 Pi)无法在「无条件挂逐条权限确认」的渠道(个人微信)使用。不写死 Pi——
+  // 未来 Pi 补上该 capability、或新增其它不支持的 Agent 时,此处自动跟随 main 侧
+  // 的 capability 真相,不会误警告 / 漏警告。(Telegram / 钉钉仅在群聊挂 policy,
+  // 主人私聊 Pi 可用,设置 UI 不区分群聊/私聊,故不整体警告。)
+  const selectedAgentCaps =
+    settings.agentKind === 'claude-code'
+      ? cc
+      : settings.agentKind === 'codex'
+        ? codex
+        : pi;
+  const selectedAgentCapabilitiesReady =
+    !selectedAgentCaps.loading &&
+    selectedAgentCaps.error === null &&
+    selectedAgentCaps.capabilities !== null;
+  const selectedTurnPolicy = selectedAgentCaps.capabilities?.turnPermissionPolicy;
+  const selectedAgentUnsupported =
+    selectedAgentCapabilitiesReady && selectedTurnPolicy?.supported.supported !== true;
+  const selectedPermissionModeUnsupported =
+    selectedAgentCapabilitiesReady &&
+    selectedTurnPolicy?.supported.supported === true &&
+    selectedTurnPolicy.unsupportedPermissionModes.includes(settings.permissionMode);
+  // 渠道默认权限模式若是换 Agent 后仍不兼容的档位(Claude Code / Codex 的
+  // unsupportedPermissionModes 并集:bypassPermissions / acceptEdits),仅换 Agent
+  // 会在新会话(/new)上再次命中权限模式错误,警告需附加 /permission 提示。
+  const modeUnsupportedAfterSwitch =
+    settings.permissionMode === 'bypassPermissions' || settings.permissionMode === 'acceptEdits';
+  const turnPolicyWarning =
+    channel !== undefined && isUnconditionalTurnPolicyChannel(channel)
+      ? selectedAgentUnsupported
+        ? 'agent'
+        : selectedPermissionModeUnsupported
+          ? 'mode'
+          : null
+      : null;
 
   const changeAgent = (agentKind: ImDefaultAgentKind) => {
     if (agentKind === settings.agentKind) return;
@@ -280,10 +318,10 @@ export function ImDefaultSettingsSection({
             <MessageSquare size={18} className="text-[var(--settings-section-title)]" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-[14px] font-medium leading-none text-[var(--settings-section-title)]">
+            <h3 className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
               {t('settings.imBot.defaults.title')}
             </h3>
-            <p className="mt-2 text-[12px] leading-[1.45] text-[var(--settings-section-desc)]">
+            <p className="mt-2 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
               {t(`settings.imBot.defaults.channelDescriptions.${descriptionChannel}`)}
             </p>
           </div>
@@ -297,7 +335,7 @@ export function ImDefaultSettingsSection({
 
       <div className="grid gap-4 md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
         <div className="flex flex-col gap-2">
-          <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+          <span className="text-12 font-medium text-[var(--text-secondary)]">
             {t('settings.imBot.defaults.agentLabel')}
           </span>
           {/* 与新建对话工具条同一个引擎下拉(AgentSelect, #1350): 手写三选一分段在
@@ -315,7 +353,7 @@ export function ImDefaultSettingsSection({
         </div>
 
         <div className="flex flex-col gap-2">
-          <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+          <span className="text-12 font-medium text-[var(--text-secondary)]">
             {t('settings.imBot.defaults.modelLabel')}
           </span>
           <ModelSelector
@@ -334,6 +372,68 @@ export function ImDefaultSettingsSection({
           />
         </div>
       </div>
+
+      {/* 飞书专属: 群聊 /ctr 新建会话的权限档(默认自动审批)。群上下文含成员
+          可控内容; 用户显式选择「完全访问」时群护栏取缔(不挂强确认策略, 直接
+          执行), 防注入过滤仍独立生效。共享 PermissionSelector — 权限语义与
+          新建对话工具栏同一份。 */}
+      {channel === 'feishu' && (
+        <div className="flex flex-col gap-2">
+          <span className="text-12 font-medium text-[var(--text-secondary)]">
+            {t('settings.imBot.defaults.groupCtrPermissionLabel')}
+          </span>
+          <PermissionSelector
+            permissionMode={settings.groupCtrPermissionMode}
+            vendorKey={vendorKeyFor(settings.agentKind)}
+            triggerVariant="field"
+            disabled={pending}
+            ariaContext={t('settings.imBot.defaults.groupCtrPermissionLabel')}
+            onPermissionModeChange={(mode) => {
+              if (isImDefaultPermissionMode(mode)) {
+                void persist({ groupCtrPermissionMode: mode });
+              }
+            }}
+          />
+          <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+            {t('settings.imBot.defaults.groupCtrPermissionDescription')}
+          </p>
+        </div>
+      )}
+
+      {turnPolicyWarning && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2"
+        >
+          <AlertTriangle
+            size={14}
+            className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
+            aria-hidden
+          />
+          <div className="min-w-0">
+            {turnPolicyWarning === 'agent' ? (
+              <>
+                <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+                  {t('settings.imBot.defaults.agentUnsupportedOnChannelHint', {
+                    agent: t(`settings.imBot.defaults.agents.${settings.agentKind}`),
+                  })}
+                </p>
+                {modeUnsupportedAfterSwitch && (
+                  <p className="mt-1 text-11 leading-[1.45] text-[var(--text-secondary)]">
+                    {t('settings.imBot.defaults.agentUnsupportedOnChannelModeHint')}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+                {t('settings.imBot.defaults.permissionModeUnsupportedOnChannelHint')}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

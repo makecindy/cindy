@@ -8,7 +8,7 @@
  * main turns that history into a prompt and returns one assistant answer.
  */
 
-export type HelpLocale = 'zh-CN' | 'en' | 'ja' | 'ko';
+export type HelpLocale = 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
 
 export type HelpRole = 'user' | 'assistant';
 

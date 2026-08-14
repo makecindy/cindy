@@ -191,6 +191,10 @@ export function replyContextOf(
 ): { author: string; text: string; isBot?: boolean } | null {
   const replied = m.reply_to_message;
   if (!replied) return null;
+  // 受保护群里被引用的原消息不进 prompt: 引用块会把原文原样带进模型上下文,
+  // 那和把它写进本地池是同一次外传。与官方 bot「被引消息受保护则原文与附件
+  // 都不外传」同一语义。触发轮次本身照常跑, 只是不带原文。
+  if (replied.has_protected_content === true || m.has_protected_content === true) return null;
   let text = replied.text ?? replied.caption ?? '';
   if (!text) {
     if (replied.photo && replied.photo.length > 0) text = '[图片]';
@@ -278,9 +282,14 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
     await collectMedia(sibling, ctx, attachments, unsupported);
   }
   const reply = replyContextOf(m);
-  const replyAttachmentCount = m.reply_to_message
-    ? await collectReplyMedia(m.reply_to_message, ctx, attachments)
-    : 0;
+  // 受保护的被引消息连附件一起不外传(与 replyContextOf 的正文判据同一条边界):
+  // 只挡引用带出来的那份, 本条消息自己的附件仍按用户显式发送处理。
+  const replyProtected =
+    m.reply_to_message?.has_protected_content === true || m.has_protected_content === true;
+  const replyAttachmentCount =
+    m.reply_to_message && !replyProtected
+      ? await collectReplyMedia(m.reply_to_message, ctx, attachments)
+      : 0;
 
   return {
     channelName: 'telegram',
@@ -293,6 +302,9 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
     unsupported,
     threadTs: undefined,
     scopeKey: undefined,
+    // 受保护群的消息照常起 turn, 但不得进任何长期存档 —— 群历史池已在
+    // emitGroupWindow 处拦下, 这个标记是给业务层会话存档的第二道。
+    ...(m.has_protected_content === true ? { protectedContent: true } : {}),
     ...(reply
       ? {
           replyContext: {

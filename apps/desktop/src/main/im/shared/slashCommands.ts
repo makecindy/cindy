@@ -42,14 +42,7 @@ import {
   renderTextPermissionModeResult,
   resolvePermissionMode,
 } from './permissionModeControl';
-
-const INTERACTIVE_SLASH_COMMANDS = new Set([
-  '/model',
-  '/permission',
-  '/ctr',
-  '/session',
-  '/project',
-]);
+import { isBotCommandAvailableOnChannel, tokenizeBotCommand } from './botCommands';
 
 /** Quick text-only check; treat anything starting with '/' (no spaces before) as a command. */
 export function looksLikeSlashCommand(text: string): boolean {
@@ -97,15 +90,55 @@ export function createSlashHandlers(
     }
   }
 
-  async function handleSlashCommand(text: string, ctx: SlashCtx): Promise<boolean> {
-    const [cmd, ...commandArgs] = text.trim().split(/\s+/);
-    log.info(`slash cmd=${cmd} userId=...${ctx.userId.slice(-8)}`);
+  /**
+   * 工作区显示名。
+   *
+   * 三种情况各有其名: 没有会话行、或目录就是渠道的托管目录时显示「对话」——
+   * 内部的 `telegram-<botId>` 是实现细节, 不是项目名; 否则取目录名(两种分隔符
+   * 都切, 不用 path.basename: 它只认当前平台的分隔符, 而远程控制下一条 Windows
+   * 会话完全可能由 macOS 上的主进程渲染); 目录为空则退回「对话」而不是空串。
+   */
+  function workspaceDisplayName(
+    workingDir: string | null | undefined,
+    botContextId: string,
+    /**
+     * 该会话的归属分组(只读路径带得出来时传)。schema 里它与路径是**解耦**的:
+     * 接管一条 desktop 的对话会话时, 目录既不是项目、也不等于本渠道的托管目录
+     * (末段常是内部 UUID), 只比对路径判不出来, 会把 UUID 当项目名报出去。
+     */
+    workspaceKind?: 'project' | 'dialogue' | null,
+  ): string {
+    // 没有 project 卡文案的渠道(它是可选契约)退回一个中性词, 不硬造。
+    const dialogueName = ui.cards.project?.dialogueName ?? '—';
+    if (workspaceKind === 'dialogue') return dialogueName;
+    if (!workingDir) return dialogueName;
+    if (workingDir === adapter.sessions.ensureWorkingDir(botContextId)) return dialogueName;
+    // 取不到末段就保留目录本身。两种根目录都会走到这:
+    //   - POSIX 根 `/` 按分隔符切完一段不剩;
+    //   - Windows 盘符根 `C:/` 只剩 `C:` —— 而 `C:` 在 Windows 里指的是「该盘的
+    //     当前目录」, 跟根目录不是一回事, 拿它当项目名会指向另一个地方。
+    // listProjectsForControl 并不排除根目录(选择器里就显示成 `/` 或 `C:/`),
+    // 回落到「对话」会把一个货真价实的项目报成对话。
+    const segments = workingDir.split(/[\\/]/).filter(Boolean);
+    const named = segments.filter((seg, i) => !(i === 0 && /^[A-Za-z]:$/.test(seg)));
+    return named.pop() ?? workingDir;
+  }
 
-    const supportsTextPermissionCommand = channel === 'wecom' && cmd === '/permission';
+  async function handleSlashCommand(text: string, ctx: SlashCtx): Promise<boolean> {
+    // 分词只做一次 —— 注册表内部不再重复 split, 命令名与参数不可能对不上。
+    const { definition, invocation, args: commandArgs } = tokenizeBotCommand(text);
+    const cmd = definition ? `/${definition.command}` : invocation;
+    log.info(`slash cmd=${invocation} userId=...${ctx.userId.slice(-8)}`);
+
+    // 渠道能力判据收进注册表(哪些命令要富卡、哪些渠道有文本降级), dispatcher
+    // 不再硬编码 `channel === 'wecom' && cmd === '/permission'`。
     if (
-      adapter.output.kind === 'chunked-text' &&
-      INTERACTIVE_SLASH_COMMANDS.has(cmd) &&
-      !supportsTextPermissionCommand
+      definition &&
+      !isBotCommandAvailableOnChannel(
+        definition,
+        channel,
+        adapter.output.kind !== 'chunked-text',
+      )
     ) {
       await safeSendText(
         ctx.userId,
@@ -243,8 +276,7 @@ export function createSlashHandlers(
         return true;
       }
 
-      case '/exctr':
-      case '/exitctr': {
+      case '/exctr': {
         // thread 模型: 同一用户可能有多个接管 thread, 顶层 slash 不知道指哪个 —
         // 语义定为"全部退出"(单退走 thread root 卡片的退出按钮)。
         if (threadScoped && threadUi) {
@@ -260,7 +292,7 @@ export function createSlashHandlers(
               if (r.wasAttached) detached += 1;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              log.error(`${cmd} executeDetach(scope) threw: ${msg}`);
+              log.error(`${invocation} executeDetach(scope) threw: ${msg}`);
             }
           }
           await safeSendText(ctx.userId, threadUi.exctrAllDone(detached));
@@ -283,7 +315,7 @@ export function createSlashHandlers(
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          log.error(`${cmd} executeDetach threw: ${msg}`);
+          log.error(`${invocation} executeDetach threw: ${msg}`);
           await safeSendText(ctx.userId, `❌ 结束接管失败：${msg}`);
         }
         return true;
@@ -386,11 +418,11 @@ export function createSlashHandlers(
           listProjectsForControl(),
           repo.findActiveSession(ctx.botContextId, ctx.userId),
         ]);
-        const dialogueDir = adapter.sessions.ensureWorkingDir(ctx.botContextId);
-        const currentName =
-          !current || current.workingDir === dialogueDir
-            ? projectUi.dialogueName
-            : (current.workingDir.split(/[\\/]/).filter(Boolean).pop() ?? current.workingDir);
+        const currentName = workspaceDisplayName(
+          current?.workingDir,
+          ctx.botContextId,
+          current?.workspaceKind,
+        );
         const spec = cards.buildProjectPickerCard({
           botAppId: ctx.botContextId,
           projects,
@@ -402,6 +434,59 @@ export function createSlashHandlers(
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/project card send failed: ${msg}`);
         }
+        return true;
+      }
+
+      case '/settings': {
+        // 只读总览 —— 不改任何配置, 所以不需要富卡, 纯文本渠道也照常可用。
+        const render = ui.slash.settings;
+        if (!render) {
+          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          return true;
+        }
+        if (threadScoped && threadUi) {
+          await safeSendText(ctx.userId, threadUi.perThreadConfigUnsupported);
+          return true;
+        }
+        // /ctr 接管期间, 下一条消息跑在**被接管的 desktop 会话**里 —— /model、
+        // /permission 改的也是那一行。总览无条件读 Telegram 自己的确定性会话行
+        // 就会报接管前的项目/模型/权限, 与同一屏里的其它命令自相矛盾。
+        //
+        // binding 指向的行已失效时回落到渠道自身的会话 —— 与 turnRunner 命中
+        // 无效 binding 时的落点一致(它还会顺手 detach, 只读路径不写)。
+        const attachedSessionId = bindingStore.get({
+          channel,
+          botContextId: ctx.botContextId,
+          userId: ctx.userId,
+        });
+        // 只读查询必须走只读路径: resolveRouteTarget 没有现成会话时会**建**一条,
+        // 而它内部的 findActiveSession 还会把软删行翻回 active 并广播 —— 问一句
+        // 「我现在什么配置」不该凭空造出任务, 更不该把用户已删的会话拉回列表。
+        const row =
+          (attachedSessionId ? await repo.peekSessionById(attachedSessionId) : null) ??
+          (await repo.peekSession(ctx.botContextId, ctx.userId));
+        // 还没有会话行时报的必须是**下一条消息真正会用的**那份配置。静态
+        // adapter.config 不认用户在设置页改过的新会话默认值, 也不认已下架的模型,
+        // 会报出一个用户根本得不到的配置。prepareNewSession 走的正是建会话那条
+        // 默认值解析(readImDefaultSettings + 供应商目录 reconcile), 且只算不写。
+        const effective = row ?? (await repo.prepareNewSession(ctx.botContextId, ctx.userId));
+        // 项目显示成目录名而不是绝对路径: 官方 bot 那边显示的是工作区别名(短名),
+        // 两边给出的粒度得一样, 否则同一个项目在两个 bot 里看着像两个东西。
+        const workspace = workspaceDisplayName(
+          effective.workingDir,
+          ctx.botContextId,
+          effective.workspaceKind,
+        );
+        await safeSendText(
+          ctx.userId,
+          render({
+            workspace,
+            agent: effective.agentKind,
+            model: effective.model,
+            effort: effective.effort,
+            permission: effective.permissionMode,
+          }),
+        );
         return true;
       }
 

@@ -184,6 +184,8 @@ export async function getPiExtraSpawnConfig(
       : {}),
     workingDir: sessionCtx?.workingDir ?? '',
     vendorOptions,
+    mcpCallerKind: sessionCtx?.mcpCallerKind ?? 'unknown',
+    mcpCallerAttested: sessionCtx?.mcpCallerAttested === true,
   };
   // 同 session 重建(resume/reattach)直接覆盖注册,注册表以 sessionId 为 key,
   // 天然不累积。必须在返回(即 spawn)前完成 —— cindy-bridge extension 一起进程
@@ -317,6 +319,8 @@ async function doStart(
         workingDir: active.workingDir,
         vendorOptions: active.vendorOptions,
         sessionId: active.sessionId,
+        mcpCallerKind: active.mcpCallerKind,
+        mcpCallerAttested: active.mcpCallerAttested,
         ...(active.sessionInstanceId
           ? { sessionInstanceId: active.sessionInstanceId }
           : {}),

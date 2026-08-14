@@ -1,5 +1,5 @@
 /** UI-supported concrete locales. */
-export const SUPPORTED_LOCALES = ['zh-CN', 'en', 'ja', 'ko'] as const;
+export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 /** User-facing locale preference. 'system' is resolved by the host process. */
@@ -57,17 +57,32 @@ function matchSupportedLocale(raw: string | undefined | null): SupportedLocale |
   }
 
   const language = getLanguageCode(raw);
-  return language ? UNIQUE_LOCALE_BY_LANGUAGE.get(language) ?? null : null;
+  return language ? (UNIQUE_LOCALE_BY_LANGUAGE.get(language) ?? null) : null;
 }
 
-/**
- * Map a single OS/browser locale string to an app-supported locale.
- *
- * Current product policy folds all Chinese variants into zh-CN because there is
- * no separate Traditional Chinese resource bundle yet.
- */
+function matchSystemLocale(raw: string | undefined | null): SupportedLocale | null {
+  const normalized = normalizeLocaleTag(raw);
+  const language = getLanguageCode(raw);
+  if (language === 'zh') {
+    const intlLocale = normalized ? new Intl.Locale(normalized) : null;
+    const script = intlLocale?.script?.toLowerCase() ?? '';
+    const region = intlLocale?.region?.toLowerCase() ?? '';
+    // An explicit script is stronger than a conflicting region, e.g.
+    // zh-Hans-HK is Simplified Chinese and zh-Hant-CN is Traditional Chinese.
+    if (script === 'hans') return 'zh-CN';
+    if (script === 'hant') return 'zh-TW';
+    if (['cn', 'sg'].includes(region)) return 'zh-CN';
+    if (['tw', 'hk', 'mo'].includes(region)) return 'zh-TW';
+    // Bare `zh` follows the mainland default; an explicit Traditional tag is
+    // handled above before this fallback.
+    return 'zh-CN';
+  }
+  return matchSupportedLocale(raw);
+}
+
+/** Map a single OS/browser locale string to an app-supported locale. */
 export function resolveSystemLocale(raw: string | undefined | null): SupportedLocale {
-  return matchSupportedLocale(raw) ?? DEFAULT_LOCALE;
+  return matchSystemLocale(raw) ?? DEFAULT_LOCALE;
 }
 
 /**
@@ -80,7 +95,7 @@ export function resolvePreferredSystemLocale(
   rawLocales: readonly (string | undefined | null)[],
 ): SupportedLocale {
   for (const raw of rawLocales) {
-    const locale = matchSupportedLocale(raw);
+    const locale = matchSystemLocale(raw);
     if (locale) return locale;
   }
   return DEFAULT_LOCALE;

@@ -360,7 +360,7 @@ export function MessageActionBar({
         <time
           dateTime={createdAt}
           className={cn(
-            'inline-flex h-[24px] items-center text-[12px] font-normal whitespace-nowrap',
+            'inline-flex h-[24px] items-center text-12 font-normal whitespace-nowrap',
             // Optical adjustment: nudge time text down 0.5px so its visual
             // mid-line aligns with the lucide Copy icon glyph center.
             'relative top-[0.5px]',
@@ -425,7 +425,7 @@ export function MessageActionBar({
   // bar 的 gap-0.5(2px)对两段相邻文本太挤,额外 6px 左距(共 8px)让「时间 | 用量」
   // 读成两个独立信息组。金额与 token 回退共用同一套 —— 换的是内容,不是位置。
   const metaTextClassName = cn(
-    'inline-flex h-[24px] items-center text-[12px] font-normal whitespace-nowrap',
+    'inline-flex h-[24px] items-center text-12 font-normal whitespace-nowrap',
     'relative top-[0.5px]',
     'ml-1.5',
     'text-[var(--settings-section-desc)] cursor-default',

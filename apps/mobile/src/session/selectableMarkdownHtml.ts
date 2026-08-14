@@ -7,6 +7,7 @@ import {
 import { tokenizeCode } from '@/session/codeHighlight';
 import { parseSessionDeepLinkUrl, shortSessionId } from '@/session/sessionLinks';
 import { buildKatexLoaderJs } from '@/session/mathWebViewHtml';
+import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
 // lineHeight 取别名:本模块内 `lineHeight` 是正文行高的局部变量(来自 options)。
 import { lightColors, lineHeight as lineHeightScale, typeScale } from '@/theme/tokens';
 import { i18n } from '@/i18n';
@@ -69,7 +70,7 @@ export function buildSelectableMarkdownHtml(
   // KaTeX runtime 只在文档确实含公式时注入(绝大多数文档没有,不为它们付
   // CDN 请求;失败降级由占位内容天然承担——块级是源码 <pre>、行内是斜体源码)。
   // CSS/JS 一律由 loader 动态注入,不放静态 <link>/<script src>:阻塞式外链在
-  // CDN 挂起时会让 WebView 永久白屏(见 mathWebViewHtml.ts 的硬约束说明)。
+  // 资源请求挂起时会让 WebView 永久白屏(见 mathWebViewHtml.ts 的硬约束说明)。
   const hasMath = blocksContainMath(blocks);
   return [
     '<!doctype html>',
@@ -90,6 +91,15 @@ export function buildSelectableMarkdownHtml(
   ].join('');
 }
 
+export function buildSelectableMarkdownFragmentHtml(
+  markdown: string,
+  options: SelectableMarkdownHtmlOptions = {},
+): string {
+  return renderBlocks(parseMobileMarkdown(markdown), {
+    sessionLinkTitles: options.sessionLinkTitles,
+  });
+}
+
 /** 文档内是否存在 math 块或 inline math(决定要不要注入 KaTeX runtime)。 */
 function blocksContainMath(blocks: readonly MobileMarkdownBlock[]): boolean {
   const inlinesHaveMath = (inlines: readonly MobileMarkdownInline[]) =>
@@ -106,7 +116,7 @@ function blocksContainMath(blocks: readonly MobileMarkdownBlock[]): boolean {
 
 /**
  * KaTeX 原位渲染脚本:KaTeX 就绪后把所有 data-latex 元素替换成 KaTeX 输出。
- * CSS/JS 经 buildKatexLoaderJs 动态注入(双 CDN failover + 超时,不阻塞首屏),
+ * CSS/JS 经 buildKatexLoaderJs 动态注入(固定本地资源 + 超时,不阻塞首屏),
  * 全部失败时占位源码(块级 <pre> / 行内斜体)保持可读;渲染失败(非法 LaTeX)
  * 由 throwOnError:false 消化,不抛错不留半截 DOM。
  */
@@ -150,7 +160,7 @@ best.addEventListener('animationend',function(){best.classList.remove('xdt-line-
 })();</script>`;
 }
 
-function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): string {
+export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): string {
   // 缺省走 light hex(调用方一般从 useTheme().colors 显式注入,见 MarkdownFileReader)。
   const textColor = cssValue(options.textColor ?? lightColors.textPrimary);
   const mutedColor = cssValue(options.mutedColor ?? lightColors.textSecondary);
@@ -427,8 +437,13 @@ function renderBlock(block: MobileMarkdownBlock, ctx: RenderContext): string {
       // 与聊天消息流同一个 tokenizer(session/codeHighlight),着色口径一致;
       // 每个非 plain 片段包一层 <span class="syn-*">,颜色见 css 里的 .syn-* 规则。
       return `<pre><code>${highlightCodeHtml(block.text, block.language)}</code></pre>`;
-    case 'mermaid':
-      return `<pre><code>${escapeHtml(`// mermaid\n${block.text}`)}</code></pre>`;
+    case 'mermaid': {
+      const repaired = repairMermaidSource(block.text);
+      const repairedAttribute = repaired === block.text
+        ? ''
+        : ` data-mermaid-repaired-source="${escapeAttribute(repaired)}"`;
+      return `<pre><code data-mermaid-source="${escapeAttribute(block.text)}"${repairedAttribute}>${escapeHtml(`// mermaid\n${block.text}`)}</code></pre>`;
+    }
     case 'math':
       // display 公式:data-latex 存源码,文档级 KaTeX runtime(见
       // buildMathRuntimeScript)加载后原位渲染;CDN 失败时保持源码 <pre> 展示。
@@ -515,7 +530,8 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
       ].join('');
       // data-xdt-src 保留解析层原始 URL:target.src 会被 WebView percent-encode(中文文件名等),
       // 与图集里存的原始 URL 精确匹配不上会丢横滑翻页,点击上报以 data-xdt-src 为准。
-      return `<img src="${escapeAttribute(inline.url)}" data-xdt-src="${escapeAttribute(inline.url)}" alt="${escapeAttribute(inline.alt)}"${size}>`;
+      const alt = inline.alt || i18n.t('message.renderer.imageFallbackTitle');
+      return `<img src="${escapeAttribute(inline.url)}" data-xdt-src="${escapeAttribute(inline.url)}" alt="${escapeAttribute(alt)}"${size}>`;
     }
   }
 }

@@ -16,9 +16,11 @@
 
 import { eq, inArray } from 'drizzle-orm';
 
+import { hasLiveSessionReference, pathKey } from './liveSessionRefs';
 import { removeWorktreeForSession } from './WorktreeManager';
 import * as store from './worktreeStore';
 import { getDbClient } from '../localDb/client/current';
+import type { DbClient } from '../localDb/client/DbClient';
 import { sessions } from '../localDb/schema';
 import { createLogger } from '../logger';
 
@@ -35,7 +37,51 @@ const log = createLogger('sessionRemovalRecycle');
  * 调用方约定:先确保该会话的 CLI 子进程已关闭(Windows 下子进程 cwd 在
  * worktree 内会锁目录,git worktree remove 必败),再调本函数。
  */
-export async function recycleWorktreeForRemovedSession(sessionId: string): Promise<void> {
+export interface RecycleWorktreeForRemovedSessionOptions {
+  db?: DbClient['drizzle'];
+  isOwnerCurrent?: () => boolean;
+  /** Internal guard: owner retries reuse this entry point without starting another owner scan. */
+  scanOwners?: boolean;
+  /** Runtime truth used by the live-reference guard for archived/deleted borrowers. */
+  isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined;
+  /**
+   * Owner retries must go back through the caller's route lock + CLI close chain before
+   * entering this low-level remover. Omitted callers preserve the owner rather than
+   * deleting it without the required runtime shutdown.
+   */
+  recycleOwner?: (sessionId: string) => Promise<void>;
+}
+
+export async function recycleWorktreeForRemovedSession(
+  sessionId: string,
+  options: RecycleWorktreeForRemovedSessionOptions = {},
+): Promise<void> {
+  try {
+    await recycleOwnWorktreeForRemovedSession(sessionId, options);
+  } finally {
+    if (options.scanOwners !== false) {
+      const ownerSessionIds = await findOwningWorktreeSessionIds(sessionId);
+      for (const ownerSessionId of ownerSessionIds) {
+        if (options.recycleOwner) {
+          await options.recycleOwner(ownerSessionId);
+        } else {
+          log.warn(
+            `[sessionRemovalRecycle] preserving owner ${ownerSessionId}: no runtime-close callback`,
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 只处理 session 自身登记的 worktree。是否存在自身 meta、是否为 ephemeral，均不影响
+ * 顶层入口随后扫描共享 owner。
+ */
+async function recycleOwnWorktreeForRemovedSession(
+  sessionId: string,
+  options: Pick<RecycleWorktreeForRemovedSessionOptions, 'db' | 'isOwnerCurrent' | 'isSessionRuntimeAlive'>,
+): Promise<void> {
   const meta = store.get(sessionId);
   if (!meta) return;
   if (meta.ephemeral) {
@@ -44,7 +90,10 @@ export async function recycleWorktreeForRemovedSession(sessionId: string): Promi
     );
     return;
   }
-  const status = await readCurrentSessionStatus(sessionId);
+  const db = options.db ?? getDbClient().drizzle;
+  const isOwnerCurrent = options.isOwnerCurrent ?? (() => true);
+  if (!isOwnerCurrent()) return;
+  const status = await readCurrentSessionStatus(sessionId, db);
   if (status !== 'deleted' && status !== 'archived') {
     log.info(
       `[sessionRemovalRecycle] skip worktree recycle for session ${sessionId}: current status=${status ?? 'missing'}`,
@@ -52,25 +101,88 @@ export async function recycleWorktreeForRemovedSession(sessionId: string): Promi
     return;
   }
   await removeWorktreeForSession(sessionId, {
+    isSessionRuntimeAlive: options.isSessionRuntimeAlive,
     canRemove: async () => {
-      const currentStatus = await readCurrentSessionStatus(sessionId);
+      if (!isOwnerCurrent()) return false;
+      const currentStatus = await readCurrentSessionStatus(sessionId, db);
       return currentStatus === 'deleted' || currentStatus === 'archived';
     },
   });
 }
 
 /**
+ * 读取终态共享 session 的路径，并从 store 中找精确匹配或安全父子路径关系的 owner。
+ * 这个 helper 只负责一次扫描，不递归触发其它 session 的扫描；owner 回收由调用方
+ * 重新经过 recycleWorktreeForRemovedSession 与 removeWorktreeForSession 安全门。
+ */
+async function findOwningWorktreeSessionIds(sessionId: string): Promise<string[]> {
+  const row = await readSessionRecycleSnapshot(sessionId);
+  if (!row || (row.status !== 'deleted' && row.status !== 'archived')) return [];
+
+  const sharedPathKeys = new Set<string>();
+  const workingDirKey = pathKey(row.workingDir);
+  const worktreePathKey = pathKey(row.worktreePath);
+  if (workingDirKey) sharedPathKeys.add(workingDirKey);
+  if (worktreePathKey) sharedPathKeys.add(worktreePathKey);
+  if (sharedPathKeys.size === 0) return [];
+
+  return store
+    .getAll()
+    .filter(
+      (owner) =>
+        !owner.ephemeral &&
+        owner.sessionId !== sessionId &&
+        hasLiveSessionReference(owner, sharedPathKeys),
+    )
+    .map((owner) => owner.sessionId);
+}
+
+interface SessionRecycleSnapshot {
+  status: string | null | undefined;
+  workingDir: string | null;
+  worktreePath: string | null;
+}
+
+async function readSessionRecycleSnapshot(
+  sessionId: string,
+): Promise<SessionRecycleSnapshot | null> {
+  try {
+    const db = getDbClient().drizzle;
+    const [row] = await db
+      .select({
+        status: sessions.status,
+        workingDir: sessions.workingDir,
+        worktreePath: sessions.worktreePath,
+      })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId));
+    return row ?? null;
+  } catch (err) {
+    log.warn(
+      `[sessionRemovalRecycle] session recycle snapshot lookup failed for ${sessionId}; preserving worktree`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
+/**
  * 动态回收任务在关闭 CLI / 删除 worktree 前共用的实时状态守卫。
  * 查询失败按不可回收处理，宁可保留也不误关已恢复为 active 的会话。
  */
-export async function isSessionStillRemovable(sessionId: string): Promise<boolean> {
-  const status = await readCurrentSessionStatus(sessionId);
+export async function isSessionStillRemovable(
+  sessionId: string,
+  db: DbClient['drizzle'] = getDbClient().drizzle,
+): Promise<boolean> {
+  const status = await readCurrentSessionStatus(sessionId, db);
   return status === 'deleted' || status === 'archived';
 }
 
-async function readCurrentSessionStatus(sessionId: string): Promise<string | null> {
+async function readCurrentSessionStatus(
+  sessionId: string,
+  db: DbClient['drizzle'],
+): Promise<string | null> {
   try {
-    const db = getDbClient().drizzle;
     const [row] = await db
       .select({ status: sessions.status })
       .from(sessions)
@@ -103,7 +215,12 @@ export async function reconcileWorktreesForDeletedSessions(): Promise<void> {
     rows = await db
       .select({ id: sessions.id, status: sessions.status })
       .from(sessions)
-      .where(inArray(sessions.id, candidates.map((m) => m.sessionId)));
+      .where(
+        inArray(
+          sessions.id,
+          candidates.map((m) => m.sessionId),
+        ),
+      );
   } catch (err) {
     // DB 不可用时不做任何删除(保守方向:漏收一轮无害,误删不可逆)。
     log.warn(

@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
 import { GhostPluginIcon } from './GhostPluginIcon';
+import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
 import { pluginPresentationOrigin } from './lib/pluginMarketPresentation';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 
@@ -26,6 +27,7 @@ export function MarketPluginDetailView({
 }: MarketPluginDetailViewProps) {
   const { t } = useTranslation();
   const { scrolled, onScroll } = usePluginDetailScrolled();
+  const marketIcon = usePluginMarketIcon(detail, { deferUntilVisible: false });
   const presentationOrigin = pluginPresentationOrigin(detail);
   // 自定义市场（Git/本地源）的包字节未经服务端校验，安全说明必须如实区分。
   const isCustomSource = detail.sourceType !== 'server';
@@ -36,16 +38,14 @@ export function MarketPluginDetailView({
       : detail.installState === 'installed'
         ? 'settings.ghosts.market.installed'
         : detail.installState === 'conflict'
-          ? 'settings.ghosts.market.conflict'
+          ? 'settings.ghosts.market.replace'
           : 'settings.ghosts.market.install';
-  const actionDisabled =
-    busy || detail.installState === 'installed' || detail.installState === 'conflict';
-  // 冲突态的行动按钮只说「暂不可用」,原因必须在详情页也给出——列表卡片同一处理。
-  // 详情可能是先以非冲突态打开、随后目录或本地安装状态变化才转冲突的。
-  const conflictDescriptionId = useId();
-  const conflictDescription =
+  const actionDisabled = busy || detail.installState === 'installed';
+  // 同 id 已装时仍展示明确的替换语义；用户点击后才会进入真实包事务。
+  const replacementDescriptionId = useId();
+  const replacementDescription =
     detail.installState === 'conflict'
-      ? t('settings.ghosts.market.conflictDescription')
+      ? t('settings.ghosts.market.replaceDescription')
       : undefined;
 
   return (
@@ -62,14 +62,16 @@ export function MarketPluginDetailView({
         <header>
           <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
             <GhostPluginIcon
-              iconDataUrl={detail.icon?.url}
+              iconContainerRef={marketIcon.containerRef}
+              iconDataUrl={marketIcon.iconDataUrl}
               iconId={detail.ghostId}
               iconName={detail.name}
-              onIconLoadError={onIconLoadError}
+              onIconLoad={marketIcon.onIconLoad}
+              onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
               size="detail"
             />
             <div className="min-w-0">
-              <h1 className="truncate text-28 font-medium leading-[34px] text-[var(--text-primary)]">
+              <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
                 {detail.name}
               </h1>
               <div className="mt-1.5 flex flex-wrap items-center gap-2 text-12 text-[var(--text-tertiary)]">
@@ -88,7 +90,9 @@ export function MarketPluginDetailView({
               type="button"
               onClick={onInstall}
               disabled={actionDisabled}
-              aria-describedby={conflictDescription ? conflictDescriptionId : undefined}
+              aria-describedby={
+                replacementDescription ? replacementDescriptionId : undefined
+              }
               className={cn(
                 'plugin-detail-primary-action inline-flex h-10 min-w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-13 font-medium',
                 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
@@ -102,17 +106,17 @@ export function MarketPluginDetailView({
             </button>
           </div>
           <p
-            id={conflictDescription ? conflictDescriptionId : undefined}
-            className="mt-5 text-14 leading-[22px] text-[var(--text-secondary)]"
+            id={replacementDescription ? replacementDescriptionId : undefined}
+            className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]"
           >
-            {conflictDescription ?? (detail.description || detail.ghostId)}
+            {replacementDescription ?? (detail.description || detail.ghostId)}
           </p>
         </header>
 
         <section className="mt-10" aria-labelledby="market-security-title">
           <h2
             id="market-security-title"
-            className="text-18 font-medium leading-[26px] text-[var(--text-primary)]"
+            className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]"
           >
             {t('settings.ghosts.market.securityTitle')}
           </h2>
@@ -136,7 +140,7 @@ export function MarketPluginDetailView({
             <div className="flex items-baseline gap-2">
               <h2
                 id="market-permissions-title"
-                className="text-18 font-medium leading-[26px] text-[var(--text-primary)]"
+                className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]"
               >
                 {t('settings.ghosts.perm.grantsTitle')}
               </h2>

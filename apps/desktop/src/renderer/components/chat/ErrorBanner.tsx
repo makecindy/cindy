@@ -408,15 +408,6 @@ export function ErrorBanner({
       await refreshOpenAiAuth();
       return;
     }
-    if (openAiCredentialScope === 'system-shared') {
-      try {
-        const result = await window.electronAPI.openChatGPTApp();
-        if (!result.success) toast.error(t('chatgptAuthRecovery.openAppFailed'));
-      } catch {
-        toast.error(t('chatgptAuthRecovery.openAppFailed'));
-      }
-      return;
-    }
     promptCodexSessionExpired(error);
   };
 
@@ -541,8 +532,8 @@ export function ErrorBanner({
         )}
       </div>
       {openAiReconnectRequired && (
-        // 系统共享凭证必须回 ChatGPT App 修复；Cindy 独立凭证才启动 Cindy OAuth。
-        // 登录候选出现后先走账号级服务端探测，探测成功前继续隐藏请求 Retry。
+        // 所有凭证来源都由 Cindy 启动可产生新 Codex 凭据的登录流程；登录候选出现后
+        // 先走账号级服务端探测，探测成功前继续隐藏请求 Retry。
         <button
           type="button"
           onClick={() => void handleOpenAiRecovery()}
@@ -558,9 +549,7 @@ export function ErrorBanner({
               ? 'chatgptAuthRecovery.recheck'
               : openAiRecoveryBusy
                 ? 'chatgptAuthRecovery.checking'
-                : openAiCredentialScope === 'system-shared'
-                  ? 'chatgptAuthRecovery.openApp'
-                  : 'chatgptAuthRecovery.relogin',
+                : 'chatgptAuthRecovery.relogin',
           )}
         >
           <Spinner icon={RefreshCw} size={12} spinning={openAiRecoveryBusy} />
@@ -569,9 +558,7 @@ export function ErrorBanner({
               ? 'chatgptAuthRecovery.checking'
               : openAiRecoveryCheck === 'failed'
                 ? 'chatgptAuthRecovery.recheck'
-                : openAiCredentialScope === 'system-shared'
-                  ? 'chatgptAuthRecovery.openApp'
-                  : 'chatgptAuthRecovery.relogin',
+                : 'chatgptAuthRecovery.relogin',
           )}
         </button>
       )}
@@ -598,6 +585,7 @@ export function ErrorBanner({
         // 与「切换到 Claude.ai 并重试」同一档低打扰内联恢复动作:不弹窗、不抢焦点。
         <button
           type="button"
+          data-split-pane-route-action=""
           onClick={onViewBalance}
           className={cn(
             'shrink-0 flex select-none items-center gap-1 text-xs font-medium',
@@ -645,6 +633,7 @@ export function ErrorBanner({
       {onContinueAfterUsageReset && (
         <button
           type="button"
+          data-split-pane-route-action=""
           onClick={onContinueAfterUsageReset}
           className={cn(
             'shrink-0 flex items-center gap-1 text-xs font-medium',
@@ -677,6 +666,7 @@ export function ErrorBanner({
       {showInvalidEncryptedContentRecovery && onForkStripEncrypted && (
         <button
           type="button"
+          data-split-pane-route-action=""
           onClick={() => void onForkStripEncrypted()}
           disabled={forkStripEncryptedRunning}
           className={cn(

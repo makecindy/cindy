@@ -91,6 +91,22 @@ CREATE TABLE messages (
   rewind_at INTEGER,
   UNIQUE(session_id, client_id)
 );
+CREATE TABLE subagent_runs (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'claude-code',
+  logical_agent_id TEXT NOT NULL DEFAULT '',
+  parent_tool_use_id TEXT,
+  status TEXT NOT NULL DEFAULT 'running',
+  title TEXT,
+  description TEXT,
+  summary TEXT,
+  activity TEXT NOT NULL DEFAULT '[]',
+  started_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL DEFAULT 0,
+  rewind_at INTEGER,
+  deleted_at INTEGER
+);
 CREATE TABLE im_bindings (
   channel TEXT NOT NULL,
   bot_context_id TEXT NOT NULL,
@@ -532,6 +548,101 @@ describe('db worker tx handlers', () => {
       );
     });
   });
+
+  it.each([false, true])(
+    'rewind.commit hides linked and parentless Subagent tail rows across providers atomically (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 's1');
+          await client.exec(
+            `INSERT INTO messages
+             (id, client_id, session_id, role, content, tool_use_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`,
+            [
+              'before',
+              'before-client',
+              's1',
+              'user',
+              'before',
+              null,
+              100,
+              'target',
+              'target-client',
+              's1',
+              'tool_use',
+              '{}',
+              'spawn-tool',
+              200,
+            ],
+          );
+          await client.exec(
+            `INSERT INTO subagent_runs
+             (id, session_id, provider, parent_tool_use_id, started_at, rewind_at)
+           VALUES
+             (?, ?, ?, ?, ?, NULL),
+             (?, ?, ?, ?, ?, NULL),
+             (?, ?, ?, ?, ?, NULL),
+             (?, ?, ?, ?, ?, NULL),
+             (?, ?, ?, ?, ?, NULL),
+             (?, ?, ?, ?, ?, NULL)`,
+            [
+              'linked',
+              's1',
+              'pi',
+              'spawn-tool',
+              50,
+              'orphan-before',
+              's1',
+              'claude-code',
+              null,
+              100,
+              'orphan-same-ms-claude',
+              's1',
+              'claude-code',
+              null,
+              200,
+              'orphan-same-ms-codex',
+              's1',
+              'codex',
+              null,
+              200,
+              'orphan-after-pi',
+              's1',
+              'pi',
+              null,
+              201,
+              'orphan-after-codex',
+              's1',
+              'codex',
+              null,
+              202,
+            ],
+          );
+
+          await client.tx('rewind.commit', {
+            sessionId: 's1',
+            targetCreatedAt: 200,
+            targetMessageId: 'target',
+            targetClientId: 'target-client',
+            now: 999,
+          });
+
+          await expect(
+            client.query('SELECT id, rewind_at FROM subagent_runs ORDER BY id'),
+          ).resolves.toEqual([
+            { id: 'linked', rewind_at: 999 },
+            { id: 'orphan-after-codex', rewind_at: 999 },
+            { id: 'orphan-after-pi', rewind_at: 999 },
+            { id: 'orphan-before', rewind_at: null },
+            { id: 'orphan-same-ms-claude', rewind_at: 999 },
+            { id: 'orphan-same-ms-codex', rewind_at: 999 },
+          ]);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
 
   it('session.treeRehydrate atomically replaces the visible projection and preserves old branches', async () => {
     await withClient(async (client) => {
@@ -1212,8 +1323,10 @@ describe('db worker tx handlers', () => {
     });
   });
 
-  it('message.delete scrubs the selected AI round and invalidates native context atomically', async () => {
-    await withClient(async (client) => {
+  it.each([false, true])(
+    'message.delete scrubs the selected AI round and parentless Subagents across providers atomically (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
       await seedSession(client, 's1');
       await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', [
         'old-native',
@@ -1240,11 +1353,86 @@ describe('db worker tx handlers', () => {
         job.lastInsertRowid,
         Buffer.from([1, 2, 3]),
       ]);
+      await client.exec('UPDATE messages SET tool_use_id = ? WHERE id = ?', [
+        'spawn-tool',
+        'tool',
+      ]);
+      await client.exec(
+        `INSERT INTO subagent_runs
+          (id, session_id, provider, logical_agent_id, parent_tool_use_id, title, description, summary, activity, started_at, updated_at)
+         VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'linked',
+          's1',
+          'pi',
+          'linked-task',
+          'spawn-tool',
+          'linked title',
+          'linked prompt',
+          'linked result',
+          '[{"sequence":1,"summary":"linked activity"}]',
+          50,
+          60,
+          'parentless-claude',
+          's1',
+          'claude-code',
+          'claude-task',
+          null,
+          'claude title',
+          'claude prompt',
+          'claude result',
+          '[{"sequence":1,"summary":"claude activity"}]',
+          210,
+          220,
+          'next-claude',
+          's1',
+          'claude-code',
+          'next-task',
+          null,
+          'next title',
+          'next prompt',
+          'next result',
+          '[{"sequence":1,"summary":"next activity"}]',
+          300,
+          310,
+          'parentless-codex',
+          's1',
+          'codex',
+          'codex-task',
+          null,
+          'codex title',
+          'codex prompt',
+          'codex result',
+          '[{"sequence":1,"summary":"codex activity"}]',
+          220,
+          230,
+          'parentless-pi',
+          's1',
+          'pi',
+          'pi-task',
+          null,
+          'pi title',
+          'pi prompt',
+          'pi result',
+          '[{"sequence":1,"summary":"pi activity"}]',
+          230,
+          240,
+        ],
+      );
 
       await expect(
         client.tx('message.delete', {
           sessionId: 's1',
           clientIds: ['target', 'thinking', 'auto-resume', 'tool'],
+          subagentTurnWindow: {
+            startedAtInclusive: 100,
+            startedAtExclusive: 300,
+          },
           contextMarker: {
             id: 'ctx-id',
             clientId: 'ctx-client',
@@ -1260,6 +1448,7 @@ describe('db worker tx handlers', () => {
           { messageId: 'auto-resume', clientId: 'auto-resume' },
           { messageId: 'tool', clientId: 'tool' },
         ],
+        subagentRunIds: ['linked', 'parentless-claude', 'parentless-codex', 'parentless-pi'],
       });
 
       await expect(
@@ -1319,8 +1508,55 @@ describe('db worker tx handlers', () => {
         client.query('SELECT rowid FROM embedding_jobs WHERE source_id = ?', ['target']),
       ).resolves.toEqual([]);
       await expect(client.query('SELECT rowid FROM chat_vec')).resolves.toEqual([]);
-    });
-  });
+      await expect(
+        client.query(
+          'SELECT id, title, description, summary, activity, deleted_at FROM subagent_runs ORDER BY id',
+        ),
+      ).resolves.toEqual([
+        {
+          id: 'linked',
+          title: null,
+          description: null,
+          summary: null,
+          activity: '[]',
+          deleted_at: 500,
+        },
+        {
+          id: 'next-claude',
+          title: 'next title',
+          description: 'next prompt',
+          summary: 'next result',
+          activity: '[{"sequence":1,"summary":"next activity"}]',
+          deleted_at: null,
+        },
+        {
+          id: 'parentless-claude',
+          title: null,
+          description: null,
+          summary: null,
+          activity: '[]',
+          deleted_at: 500,
+        },
+        {
+          id: 'parentless-codex',
+          title: null,
+          description: null,
+          summary: null,
+          activity: '[]',
+          deleted_at: 500,
+        },
+        {
+          id: 'parentless-pi',
+          title: null,
+          description: null,
+          summary: null,
+          activity: '[]',
+          deleted_at: 500,
+        },
+      ]);
+      }, { useInlineWorker });
+    },
+  );
 
   it('message.delete rejects non-deletable rows without clearing the sdk binding', async () => {
     await withClient(async (client) => {
@@ -1726,6 +1962,79 @@ describe('db worker tx handlers', () => {
         updated_at: 999,
       });
     });
+  });
+
+  it.each([
+    { label: 'bundled worker', useInlineWorker: false },
+    { label: 'inline worker', useInlineWorker: true },
+  ])('returns exact Orca archive ids through the $label tx path', async ({ useInlineWorker }) => {
+    await withClient(
+      async (client) => {
+        await seedSession(client, 'lead');
+        await seedSession(client, 'active-worker', { orcaRole: 'worker' });
+        await seedSession(client, 'archived-worker', {
+          orcaRole: 'worker',
+          status: 'archived',
+        });
+        await seedSession(client, 'deleted-worker', {
+          orcaRole: 'worker',
+          status: 'deleted',
+        });
+        await seedSession(client, 'orphan-worker', { orcaRole: 'worker' });
+        await client.exec(
+          'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+          ['active-team', 'lead', 'active', 1, 1],
+        );
+        await client.exec(
+          'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+          ['inactive-team', 'lead', 'completed', 1, 1],
+        );
+        for (const [id, teamId, sessionId] of [
+          ['active-link', 'active-team', 'active-worker'],
+          ['archived-link', 'active-team', 'archived-worker'],
+          ['deleted-link', 'active-team', 'deleted-worker'],
+          ['orphan-link', 'inactive-team', 'orphan-worker'],
+        ]) {
+          await client.exec(
+            'INSERT INTO orca_workers (id, team_id, session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+            [id, teamId, sessionId, 'idle', 1, 1],
+          );
+        }
+
+        await expect(
+          client.tx('orca.archiveWorkersByTeam', { teamId: 'active-team', now: 100 }),
+        ).resolves.toEqual(['active-worker']);
+        await expect(
+          client.tx('orca.reconcileInactiveTeamWorkersForLead', {
+            leadSessionId: 'lead',
+            now: 200,
+          }),
+        ).resolves.toEqual(['orphan-worker']);
+
+        await expect(
+          client.query<{ id: string; status: string; updated_at: number }>(
+            'SELECT id, status, updated_at FROM sessions WHERE id != ? ORDER BY id',
+            ['lead'],
+          ),
+        ).resolves.toEqual([
+          { id: 'active-worker', status: 'archived', updated_at: 100 },
+          { id: 'archived-worker', status: 'archived', updated_at: 1 },
+          { id: 'deleted-worker', status: 'deleted', updated_at: 1 },
+          { id: 'orphan-worker', status: 'archived', updated_at: 200 },
+        ]);
+        await expect(
+          client.query<{ id: string; status: string; updated_at: number }>(
+            'SELECT id, status, updated_at FROM orca_workers ORDER BY id',
+          ),
+        ).resolves.toEqual([
+          { id: 'active-link', status: 'idle', updated_at: 1 },
+          { id: 'archived-link', status: 'idle', updated_at: 1 },
+          { id: 'deleted-link', status: 'idle', updated_at: 1 },
+          { id: 'orphan-link', status: 'done', updated_at: 200 },
+        ]);
+      },
+      { useInlineWorker },
+    );
   });
 
   it('serializes the same worker label across independent database workers', async () => {

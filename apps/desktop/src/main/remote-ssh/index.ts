@@ -23,7 +23,6 @@ import os from 'node:os';
 
 import {
   ConnectionPool,
-  isAuthFailure,
   readSshConfig,
   upsertHost,
   updateHostFields,
@@ -33,6 +32,7 @@ import {
   uninstallRemoteAgent,
   checkRemoteCodexAuth,
   pushRemoteCodexAuth,
+  expandHome,
   FileHostKeyStore,
   RemoteHost,
   type AddHostInput,
@@ -47,6 +47,7 @@ import { createLogger } from '../logger.js';
 import { throwIpcError, requireString, requireObject, requireEnum } from '../utils/ipcValidate.js';
 import { getRemoteClaudeEnv } from './claude-env.js';
 import { serializeEnvBlock } from './env-block.js';
+import { classifyConnectFailure } from './connect-failure.js';
 import {
   addKeyToAgent,
   buildInstallCommand,
@@ -268,8 +269,7 @@ export async function ensureRemoteHostReady(id: string): Promise<void> {
   try {
     await pool.connect(id);
   } catch (err) {
-    const msg = String((err as Error)?.message ?? err);
-    const code = isAuthFailure(msg) ? 'SSH_AUTH_FAILED' : 'SSH_CONNECT_FAILED';
+    const { code, msg } = classifyConnectFailure(err);
     throwIpcError(code, msg);
   }
 }
@@ -576,7 +576,7 @@ function normalizeAddInput(raw: unknown): AddHostInput & { agentProxy?: SshHostA
   //   agent → optional, when set it pins the agent to that one key
   //           (FilteredAgent — solves MaxAuthTries with busy agents)
   const identityFile = typeof obj.identityFile === 'string' && obj.identityFile.trim()
-    ? obj.identityFile.trim()
+    ? expandHome(obj.identityFile.trim())
     : undefined;
   if (authMethod === 'key' && !identityFile) {
     throwIpcError('INVALID_PARAMS', 'identityFile required when authMethod is "key"');
@@ -764,14 +764,11 @@ export function registerRemoteSshIpc(): void {
     try {
       await getPool().connect(id);
     } catch (err) {
-      const msg = String((err as Error)?.message ?? err);
-      // Classify auth-shaped failures distinctly so renderer can show
-      // "fix your key/agent" UX vs "check network/host". RemoteHost has
-      // already rewritten the message to actionable text (ssh-copy-id hint)
-      // when the underlying ssh2 error matched isAuthFailure — we pass it
-      // through verbatim so the toast surfaces the same hint as the
-      // host-row subtitle.
-      const code = isAuthFailure(msg) ? 'SSH_AUTH_FAILED' : 'SSH_CONNECT_FAILED';
+      // classifyConnectFailure produces SSH_AUTH_FAILED | SSH_KEY_FILE_NOT_FOUND
+      // | SSH_CONNECT_FAILED. RemoteHost rewrites auth failures to actionable
+      // text (ssh-copy-id hint) verbatim so the toast matches the host-row
+      // subtitle; a local identityFile ENOENT is classified off `.code`.
+      const { code, msg } = classifyConnectFailure(err);
       throwIpcError(code, msg);
     }
 

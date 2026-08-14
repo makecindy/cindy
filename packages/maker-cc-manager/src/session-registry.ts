@@ -1121,6 +1121,7 @@ function hasToolGuardMcpPrefixCollision(
   guard: QueryToolGuard,
   mcpServerNames: ReadonlySet<string>,
 ): boolean {
+  if (guard.invocation === 'root-only') return false;
   if (!guard.sourceServerId) return false;
   // The caller passes only connected host/user/project/local MCPs. An exact id
   // can therefore be a user MCP shadowing the harness source.
@@ -1135,13 +1136,19 @@ function findDeniedToolGuard(
   toolName: string,
   selectionText: string,
   mcpServerNames: ReadonlySet<string>,
+  agentId?: string,
 ): QueryToolGuard | undefined {
   const guard = toolGuards?.find(
     (candidate) =>
-      toolName.startsWith(candidate.toolNamePrefix) &&
+      (candidate.invocation === 'root-only'
+        ? toolName === candidate.toolNamePrefix
+        : toolName.startsWith(candidate.toolNamePrefix)) &&
       !hasToolGuardMcpPrefixCollision(candidate, mcpServerNames),
   );
   if (!guard || guard.invocation === 'auto') return undefined;
+  if (guard.invocation === 'root-only') {
+    return typeof agentId === 'string' && agentId.length > 0 ? guard : undefined;
+  }
   if (
     guard.invocation === 'explicit-only' &&
     guard.explicitSelectors?.some((selector) =>
@@ -1173,6 +1180,7 @@ function createToolGuardHooks(
       toolName,
       getSelectionText(),
       getMcpServerNames(),
+      typeof input.agent_id === 'string' ? input.agent_id : undefined,
     );
     if (!guard) return { continue: true };
 

@@ -44,7 +44,7 @@ describe('review plugin', () => {
     expect(a.diffViewMode).toBe('unified');
     expect(a.fileTreeVisible).toBe(false);
     expect(a.wordWrap).toBe(false);
-    expect(a.wordDiff).toBe(true);
+    expect(a.wordDiff).toBe(false);
     expect(a.hideWhitespace).toBe(false);
     expect(a.richMarkdownPreview).toBe(true);
     expect(a.branchBaseRef).toBeNull();
@@ -101,12 +101,12 @@ describe('review plugin', () => {
     expect((p.hydrateState!({}) as { wordWrap: boolean }).wordWrap).toBe(false);
   });
 
-  it('hydrateState defaults word diff to enabled for invalid values', () => {
+  it('hydrateState defaults word diff to disabled for invalid values', () => {
     const p = registry.getTabKind('review')!;
     expect((p.hydrateState!({ wordDiff: false }) as { wordDiff: boolean }).wordDiff).toBe(false);
     expect((p.hydrateState!({ wordDiff: true }) as { wordDiff: boolean }).wordDiff).toBe(true);
-    expect((p.hydrateState!({ wordDiff: 'no' }) as { wordDiff: boolean }).wordDiff).toBe(true);
-    expect((p.hydrateState!({}) as { wordDiff: boolean }).wordDiff).toBe(true);
+    expect((p.hydrateState!({ wordDiff: 'no' }) as { wordDiff: boolean }).wordDiff).toBe(false);
+    expect((p.hydrateState!({}) as { wordDiff: boolean }).wordDiff).toBe(false);
   });
 
   it('hydrateState falls back to visible whitespace changes for invalid values', () => {

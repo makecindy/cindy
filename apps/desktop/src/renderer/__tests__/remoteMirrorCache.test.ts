@@ -179,6 +179,14 @@ function expectPut(deviceId: string, sessionId: string, rows: unknown[]): void {
   );
   expect(hit).toBe(true);
 }
+
+function expectNoPut(deviceId: string, sessionId: string, rows: unknown[]): void {
+  const hit = putMessages.mock.calls.some(
+    ([d, s2, r]) =>
+      d === deviceId && s2 === sessionId && JSON.stringify(r) === JSON.stringify(rows),
+  );
+  expect(hit).toBe(false);
+}
 const getSessionList = vi.fn(async () => ({
   devices: [] as never[],
   ownerToken: cachedOwnerToken,
@@ -793,6 +801,29 @@ describe('remoteProjectsStore.hydrateFromCache', () => {
     expect(sessions[0].deviceLinkConnectionStatus).toBe('connected');
   });
 
+  it('缓存里的 archived 行可先显示，但重连后仍需按需权威校准', () => {
+    remoteProjectsStore.hydrateFromCache([
+      {
+        deviceId: 'dev-cold',
+        deviceName: 'Cold',
+        sessions: [{ id: 'cached-archived', status: 'archived' }] as never,
+      },
+    ]);
+    expect(remoteProjectsStore.hasLoadedSessionStatus('dev-cold', 'archived')).toBe(false);
+
+    remoteProjectsStore.setDeviceSessions('dev-cold', 'Cold', [{ id: 'fresh-active' }] as never);
+
+    expect(remoteProjectsStore.getDeviceSessions('dev-cold', 'archived')).toEqual([
+      expect.objectContaining({
+        id: 'cached-archived',
+        status: 'archived',
+        deviceLinkConnectionStatus: 'connected',
+      }),
+    ]);
+    expect(remoteProjectsStore.hasLoadedSessionStatus('dev-cold', 'active')).toBe(true);
+    expect(remoteProjectsStore.hasLoadedSessionStatus('dev-cold', 'archived')).toBe(false);
+  });
+
   it('空会话列表的设备不种入(不画出一台空壳设备)', () => {
     remoteProjectsStore.hydrateFromCache([
       { deviceId: 'dev-empty', deviceName: 'Empty', sessions: [] },
@@ -1286,22 +1317,22 @@ describe('列表读在账号切换后整份作废', () => {
   });
 });
 
-describe('会话离场时清消息缓存', () => {
+describe('会话删除时清消息缓存', () => {
   // review(codex P1):会话可能不在当前(有界)分片里、甚至这台设备还没有分片,但它完全可能
   // 有一份上次打开时留下的缓存文件 —— 早退就等于把"别的控制端刚删掉的会话"的正文留在盘上。
-  it('会话不在分片里(甚至没有分片)时,终态推送同样清缓存', () => {
-    // 没有分片:直接对一台未知设备发终态 patch
+  it('会话不在分片里(甚至没有分片)时,deleted 推送同样清缓存', () => {
+    // 没有分片:直接对一台未知设备发 deleted patch
     remoteProjectsStore.applyPatch('dev-unknown', 'sess-ghost', { status: 'deleted' });
     expectPut('dev-unknown', 'sess-ghost', []);
 
     // 有分片但会话不在窗口内
     remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: 's-in' }] as never);
     putMessages.mockClear();
-    remoteProjectsStore.applyPatch(DEVICE_ID, 's-outside-window', { status: 'archived' });
+    remoteProjectsStore.applyPatch(DEVICE_ID, 's-outside-window', { status: 'deleted' });
     expectPut(DEVICE_ID, 's-outside-window', []);
   });
 
-  it('被控端把会话标 deleted / archived → 清掉该会话的缓存文件', () => {
+  it('deleted 清缓存，archived 保留缓存供归档任务离线查看', () => {
     remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [
       { id: 's-del' },
       { id: 's-arch' },
@@ -1311,7 +1342,7 @@ describe('会话离场时清消息缓存', () => {
     remoteProjectsStore.applyPatch(DEVICE_ID, 's-arch', { status: 'archived' });
 
     expectPut(DEVICE_ID, 's-del', []);
-    expectPut(DEVICE_ID, 's-arch', []);
+    expectNoPut(DEVICE_ID, 's-arch', []);
   });
 });
 

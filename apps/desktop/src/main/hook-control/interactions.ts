@@ -18,9 +18,14 @@
  * hook 协议卡的渲染与挂起注册表。
  *
  * 超时与收口: hook 是无人值守链路, 任何交互都必须有界 —— 注册时挂 30min
- * 超时(短于 session-runner 的 60min 整 turn 硬超时, 保证超时后 turn 还能
- * 正常收口), 超时按 kind 的安全默认自决并通知调用方发 interaction.cancel
- * 改写卡片; turn 结束时未决交互同样按默认收口(cancelForRequest)。
+ * 超时, 按 kind 的安全默认自决并通知调用方发 interaction.cancel 改写卡片;
+ * turn 结束时未决交互同样按默认收口(cancelForRequest)。
+ *
+ * (原文写这 30min 是"短于 session-runner 的 60min 整 turn 硬超时"。**那条硬超时
+ * 2026-08-01 已撤**, 见 session-runner 的「turn 时长策略」——所以它现在不是抢在别人
+ * 前面, 而是**这条链路上唯一的有界兜底**: maker-core 的 turn stall 看门狗刻意把
+ * "等用户回应交互"排除在静默之外, 不会来救。个人 IM 那侧没有等价定时器, 见
+ * docs/product-rules/telegram-bot-parity.md 缺口 2g。)
  *
  * 纯逻辑模块: 不做 IO, 帧的发送由调用方(session-runner + dispatcher)注入的
  * 回调承担, 单测直接驱动(规则 14)。
@@ -53,7 +58,7 @@ function summarizeInput(input: Record<string, unknown>): string {
   }
 }
 
-/** 未决交互超时(必须短于 session-runner 的整 turn 硬超时 60min)。 */
+/** 未决交互超时: 到点按安全默认收口并撤卡。理由与边界见模块头「超时与收口」。 */
 export const HOOK_INTERACTION_TIMEOUT_MS = 30 * 60_000;
 
 /** 合成结果: 过网线的卡片 + 留在本端的按钮->决策映射与安全默认。 */

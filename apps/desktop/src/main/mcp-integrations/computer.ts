@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync } from 'node:fs';
 import type { Stream } from 'node:stream';
 import { app } from 'electron';
+import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -19,6 +20,7 @@ import type {
 } from '@cindy/mcps';
 import { createLogger } from '../logger.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { resolveDesktopOutboundProxy } from '../maker-host/outbound-proxy-resolver.js';
 
 const logger = createLogger('mcp/cindy_computer');
 const DRIVER_COMMAND = 'cua-driver';
@@ -898,11 +900,48 @@ export function installIdleTimeoutForPlatform(platform: NodeJS.Platform = proces
   return platform === 'win32' ? INSTALL_HARD_TIMEOUT_MS : INSTALL_IDLE_TIMEOUT_MS;
 }
 
-function runInstallCommand(
+/** Translate Cindy's validated system proxy decision into env understood by installer tools. */
+export function buildCuaInstallerProxyEnv(
+  proxyUrl: string | null | undefined,
+): Record<string, string> | undefined {
+  const proxy = parseOutboundProxyUrl(proxyUrl);
+  if (!proxy) return undefined;
+  if (proxy.kind === 'socks5') {
+    const proxyUrlWithRemoteDns = proxy.url.replace(/^socks5:/, 'socks5h:');
+    return { ALL_PROXY: proxyUrlWithRemoteDns, all_proxy: proxyUrlWithRemoteDns };
+  }
+  return {
+    HTTPS_PROXY: proxy.url,
+    HTTP_PROXY: proxy.url,
+    https_proxy: proxy.url,
+    http_proxy: proxy.url,
+  };
+}
+
+async function resolveCuaInstallerProxyEnv(
+  installUrl: string,
+): Promise<Record<string, string> | undefined> {
+  // Explicit env already reaches the child unchanged and keeps its per-host NO_PROXY semantics.
+  if (hasProxyEnvConfig()) return undefined;
+  try {
+    return buildCuaInstallerProxyEnv(await resolveDesktopOutboundProxy(installUrl));
+  } catch (err) {
+    logger.debug('cua-driver installer proxy resolution failed (using inherited environment)', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+}
+
+async function runInstallCommand(
   onSpawn?: (pid: number | undefined) => void,
   targetVersion?: string,
 ): Promise<ExecResult> {
   clearStaleCuaInstallLock();
+  let extraEnv = process.platform === 'win32'
+    ? undefined
+    : await resolveCuaInstallerProxyEnv(UNIX_INSTALL_URL);
+  if (targetVersion) extraEnv = { ...extraEnv, CUA_DRIVER_RS_VERSION: targetVersion };
   const activityOptions: ActivityTimeoutOptions = {
     idleTimeoutMs: installIdleTimeoutForPlatform(),
     hardTimeoutMs: INSTALL_HARD_TIMEOUT_MS,
@@ -911,7 +950,7 @@ function runInstallCommand(
     // 更新场景把检测到的版本 pin 给上游脚本(env 是其最高优先级版本源)。
     // 不 pin 时上游会用脚本内 baked 默认值,该值可能滞后于真实最新版,
     // 导致「更新到 0.7.0」实际装回旧版(review P1)。
-    ...(targetVersion ? { extraEnv: { CUA_DRIVER_RS_VERSION: targetVersion } } : {}),
+    ...(extraEnv ? { extraEnv } : {}),
   };
   if (process.platform === 'win32') {
     return runProcessWithActivityTimeout(

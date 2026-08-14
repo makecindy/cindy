@@ -15,6 +15,9 @@
  *     供设置页只读展示"用的是哪个身份"。回给意识不算新增泄露面:装入确认
  *     框已披露"将使用你的登录邮箱",且该凭证每次代发都注给它自己的服务端。
  *     未登录/登录态缺邮箱 → saved:false 无 identity,页面照"请重新登录"画);
+ *   - gh-cli 优先 + PAT 备用:{ key, saved, tail?, hostSource:'gh-cli',
+ *     hostAvailable }。saved/tail 只描述保险库里的备用 PAT；hostAvailable
+ *     只描述主机能否复用本机 gh 登录，不暴露 token 或账号资料；
  * - PUT  /secrets/<key>  → body {"value":"..."} 存入主机保险库,204;
  * - DELETE /secrets/<key> → 清除,204(幂等);
  * - login-email / Host 托管凭证键的任意单键操作 → 405(派生身份不可配置);
@@ -70,6 +73,12 @@ export async function handleGhostSecretsRequest(args: {
   getLoginEmail?: () => string | null;
   /** Host 托管凭证(source:'oidc-token')的就绪状态;值不进入意识可见接口。 */
   managedSecretStates?: Array<{ key: string; saved: boolean }>;
+  /** 宿主优先凭证来源状态(当前仅 gh-cli),只回可用布尔。 */
+  hostCredentialStates?: Array<{
+    key: string;
+    source: 'gh-cli';
+    available: boolean;
+  }>;
   vault: GhostSecretsVault;
   ghostId: string;
   /**
@@ -84,6 +93,9 @@ export async function handleGhostSecretsRequest(args: {
   const identityKeys = args.identitySecretKeys ?? [];
   const managedStates = args.managedSecretStates ?? [];
   const managedKeys = managedStates.map(({ key }) => key);
+  const hostCredentialStates = new Map(
+    (args.hostCredentialStates ?? []).map((state) => [state.key, state] as const),
+  );
 
   if (pathname === '/secrets') {
     if (method !== 'GET') return { status: 405 };
@@ -92,7 +104,13 @@ export async function handleGhostSecretsRequest(args: {
         const saved = vault.saved(ghostId, key);
         // 指纹只在"确实存了"时给(没存过的键即便留有孤儿指纹也不回)。
         const tail = saved ? vault.tail(ghostId, key) : null;
-        return tail ? { key, saved, tail } : { key, saved };
+        const hostState = hostCredentialStates.get(key);
+        const hostFields = hostState
+          ? { hostSource: hostState.source, hostAvailable: hostState.available }
+          : {};
+        return tail
+          ? { key, saved, tail, ...hostFields }
+          : { key, saved, ...hostFields };
       });
       // 身份凭证:现读登录邮箱只读展示;identityKeys 为空时不碰登录态。
       const email = identityKeys.length > 0 ? (args.getLoginEmail?.()?.trim() ?? '') : '';

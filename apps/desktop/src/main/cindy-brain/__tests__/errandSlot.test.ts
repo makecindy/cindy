@@ -349,6 +349,29 @@ describe('结果截断', () => {
 });
 
 describe('clearGhost', () => {
+  it('clearGhost 后仍把在途 errand 视为忙,直到 execute finally 收口', async () => {
+    let release: (() => void) | null = null;
+    const runner = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ ok: true, sessionId: 'sess-1', text: 'done' });
+        }),
+    );
+    const { slot } = makeSlot({ runner: runner as unknown as GhostErrandRunner });
+
+    await expect(slot.handleRequest('helper', RUN)).resolves.toMatchObject({
+      ok: true,
+      status: 'running',
+    });
+    expect(slot.hasActiveErrandFor('helper')).toBe(true);
+    slot.clearGhost('helper');
+    expect(slot.hasActiveErrandFor('helper')).toBe(true);
+
+    release!();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(slot.hasActiveErrandFor('helper')).toBe(false);
+  });
+
   it('清除任务记录与节流状态', async () => {
     const { slot, clock } = makeSlot();
     const a = await slot.handleRequest('helper', RUN);

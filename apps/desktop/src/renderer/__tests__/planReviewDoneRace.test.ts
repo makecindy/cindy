@@ -275,7 +275,7 @@ describe('plan_review 与 done 的时序', () => {
     expect(latestPlanStatuses()).toEqual(['in_progress', 'pending']);
   });
 
-  it('codex:成功完成但缺少最终 plan 快照时收口计划卡片', () => {
+  it('codex:成功完成但缺少最终 plan 快照时盖章收口、不改步骤事实', () => {
     const startedAtMs = 1_700_000_000_000;
     const completedAtMs = startedAtMs + 5_000;
     const now = vi.spyOn(Date, 'now').mockReturnValue(startedAtMs);
@@ -285,13 +285,18 @@ describe('plan_review 与 done 的时序', () => {
     now.mockReturnValue(completedAtMs);
     emitDone('codex', undefined, 'turn-1', 'completed');
 
-    expect(latestPlanStatuses()).toEqual(['completed', 'completed']);
-    const completedPlan = makerChatStore
+    // 收口 = 终态章(生命周期),步骤保持 agent 实际报告的状态。
+    expect(latestPlanStatuses()).toEqual(['in_progress', 'pending']);
+    const sealedPlan = makerChatStore
       .getSnapshot(SESSION_ID)
       .messages.findLast(
         (message) => message.role === 'tool_use' && message.toolName === 'update_plan',
       );
-    expect(completedPlan).toMatchObject({ planUpdatedAtMs: completedAtMs });
+    expect(sealedPlan).toMatchObject({
+      terminalPlanSnapshot: true,
+      terminalPlanAtMs: completedAtMs,
+      planUpdatedAtMs: completedAtMs,
+    });
   });
 
   it('claude:done 不改 Codex update_plan 展示状态', () => {

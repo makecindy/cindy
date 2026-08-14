@@ -228,6 +228,28 @@ export class PluginMarketLedger {
     this.write(data);
   }
 
+  /** 换源落位前失败时，将旧路由和原有默认安装退订状态一起原子恢复。 */
+  restoreInstallation(
+    record: PluginMarketInstallationRecord,
+    optOut?: { userId: string; suppressed: boolean },
+  ): void {
+    const data = this.read();
+    data.installations[record.ghostId] = record;
+    if (optOut) {
+      const suppressedPluginIds = data.defaultInstallOptOuts[optOut.userId] ?? [];
+      if (optOut.suppressed) {
+        data.defaultInstallOptOuts[optOut.userId] = [
+          ...new Set([...suppressedPluginIds, record.pluginId]),
+        ];
+      } else {
+        const restored = suppressedPluginIds.filter((pluginId) => pluginId !== record.pluginId);
+        if (restored.length > 0) data.defaultInstallOptOuts[optOut.userId] = restored;
+        else delete data.defaultInstallOptOuts[optOut.userId];
+      }
+    }
+    this.write(data);
+  }
+
   markRemoved(ghostId: string, userId: string | null): void {
     const data = this.read();
     const record = data.installations[ghostId];

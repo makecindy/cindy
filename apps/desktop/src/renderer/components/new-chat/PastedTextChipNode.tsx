@@ -144,7 +144,7 @@ export const PastedTextChipNode = Node.create<Record<string, never>, Record<stri
       class:
         'inline-flex min-w-0 max-w-[min(240px,55vw)] select-none items-center align-middle ' +
         'gap-1.5 rounded-full border border-[var(--border-default)] px-2 py-0.5 ' +
-        'bg-[var(--surface-chip)] text-[var(--text-primary)] text-[12px] font-normal leading-5',
+        'bg-[var(--surface-chip)] text-[var(--text-primary)] text-12 font-normal leading-5',
       style: 'color: var(--text-primary); user-select: none; -webkit-user-select: none; -webkit-user-drag: element;',
       draggable: 'true',
       contenteditable: 'false',

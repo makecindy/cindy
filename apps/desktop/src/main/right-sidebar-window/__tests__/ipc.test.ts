@@ -19,6 +19,12 @@ import { MAKER_INVOKE, MAKER_SEND } from '../../maker-ipc/channels.js';
 import { registerRsbWindowIpc } from '../ipc.js';
 import type { RsbWindowController } from '../controller.js';
 
+type RsbWindowControllerMock = RsbWindowController & {
+  getState: ReturnType<typeof vi.fn>;
+  getSidebarWebContents: ReturnType<typeof vi.fn>;
+  routeCommand: ReturnType<typeof vi.fn>;
+};
+
 function makeController() {
   return {
     getState: vi.fn(),
@@ -28,9 +34,12 @@ function makeController() {
     getContext: vi.fn(),
     getSidebarWebContents: vi.fn(),
     markReady: vi.fn(),
+    markRendererReady: vi.fn(),
+    markPresentationReady: vi.fn(),
+    refreshContext: vi.fn(),
     setContext: vi.fn(),
     routeCommand: vi.fn(async () => 'routed'),
-  } as unknown as RsbWindowController & { routeCommand: ReturnType<typeof vi.fn> };
+  } as unknown as RsbWindowControllerMock;
 }
 
 function getSendCommandHandler() {
@@ -216,6 +225,80 @@ describe('right-sidebar-window IPC', () => {
     ).rejects.toThrow(/searchJump/);
   });
 
+  it('validates and forwards the turn-review host bucket session', async () => {
+    // 协同面板里 worker 流的审查入口带宿主(lead)桶。sanitizer 重建命令对象,
+    // 漏透传 hostSessionId 会让 detached 窗口路径退回 worker 的不可见桶。
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-turn-review',
+          sessionId: 'worker-1',
+          changeSetIds: ['change-1'],
+          requestNonce: 1,
+          hostSessionId: 'lead-1',
+        },
+        allowOpen: true,
+      },
+    );
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-turn-review',
+          sessionId: 'worker-1',
+          changeSetIds: ['change-1'],
+          requestNonce: 2,
+        },
+        allowOpen: true,
+      },
+    );
+
+    expect(controller.routeCommand).toHaveBeenNthCalledWith(1, {
+      command: {
+        type: 'open-turn-review',
+        sessionId: 'worker-1',
+        changeSetIds: ['change-1'],
+        selectedDiffId: null,
+        selectedPath: null,
+        requestNonce: 1,
+        hostSessionId: 'lead-1',
+      },
+      allowOpen: true,
+    });
+    expect(controller.routeCommand).toHaveBeenNthCalledWith(2, {
+      command: {
+        type: 'open-turn-review',
+        sessionId: 'worker-1',
+        changeSetIds: ['change-1'],
+        selectedDiffId: null,
+        selectedPath: null,
+        requestNonce: 2,
+        hostSessionId: null,
+      },
+      allowOpen: true,
+    });
+
+    await expect(
+      handler(
+        { sender: mainWebContents },
+        {
+          command: {
+            type: 'open-turn-review',
+            sessionId: 'worker-1',
+            changeSetIds: ['change-1'],
+            requestNonce: 3,
+            hostSessionId: 42,
+          },
+          allowOpen: true,
+        },
+      ),
+    ).rejects.toThrow(/hostSessionId/);
+  });
+
   it('validates and forwards external-file browser commands', async () => {
     const controller = makeController();
     const { handler, mainWebContents } = registerController(controller);
@@ -302,6 +385,64 @@ describe('right-sidebar-window IPC', () => {
     ).rejects.toThrow(/request.userInitiated/);
   });
 
+  it('requires a provider-scoped Subagent focus and forwards the pair together', async () => {
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: {
+          type: 'open-subagents-tab',
+          sessionId: 's1',
+          focusRunId: 'shared-native-id',
+          focusProvider: 'codex',
+          focusTab: true,
+        },
+        allowOpen: true,
+      },
+    );
+
+    expect(controller.routeCommand).toHaveBeenCalledWith({
+      command: {
+        type: 'open-subagents-tab',
+        sessionId: 's1',
+        focusRunId: 'shared-native-id',
+        focusProvider: 'codex',
+        focusTab: true,
+      },
+      allowOpen: true,
+    });
+
+    await expect(
+      handler(
+        { sender: mainWebContents },
+        {
+          command: {
+            type: 'open-subagents-tab',
+            sessionId: 's1',
+            focusRunId: 'shared-native-id',
+          },
+          allowOpen: true,
+        },
+      ),
+    ).rejects.toThrow(/focusRunId and command.focusProvider/);
+    await expect(
+      handler(
+        { sender: mainWebContents },
+        {
+          command: {
+            type: 'open-subagents-tab',
+            sessionId: 's1',
+            focusRunId: 'shared-native-id',
+            focusProvider: 'other-harness',
+          },
+          allowOpen: true,
+        },
+      ),
+    ).rejects.toThrow(/focusProvider/);
+  });
+
   it('open payload:缺省/空 = 用户手势;显式 false 透传;野值拒绝', async () => {
     const controller = makeController();
     registerController(controller);
@@ -320,6 +461,66 @@ describe('right-sidebar-window IPC', () => {
     expect(controller.open).toHaveBeenNthCalledWith(3, { userInitiated: false });
 
     expect(() => open({}, { userInitiated: 1 })).toThrow(/options.userInitiated/);
+  });
+
+  it('accepts a memory-only tab handoff only from the detached sidebar sender', () => {
+    const controller = makeController();
+    const sidebarWebContents = { id: 3 };
+    controller.getState.mockReturnValue({ detached: true, lastOpen: true, open: true });
+    controller.getSidebarWebContents.mockReturnValue(sidebarWebContents);
+    registerController(controller);
+    const handlers = (
+      ipcMain as unknown as { __handlers: Map<string, (e: unknown, p: unknown, h?: unknown) => unknown> }
+    ).__handlers;
+    const setDetached = handlers.get(MAKER_INVOKE.RSB_WINDOW_SET_DETACHED);
+    if (!setDetached) throw new Error('RSB_WINDOW_SET_DETACHED handler not registered');
+    const handoff = {
+      snapshots: [
+        {
+          sessionId: 's1',
+          tabs: [{ id: 't1', kind: 'web-browser', state: { url: 'https://example.com' } }],
+          activeTabId: 't1',
+          persistable: false,
+        },
+      ],
+    };
+
+    setDetached({ sender: sidebarWebContents }, false, handoff);
+    expect(controller.setDetached).toHaveBeenCalledWith(false, handoff);
+
+    expect(() => setDetached({ sender: { id: 4 } }, false, handoff)).toThrow(/sender/);
+    expect(() => setDetached({ sender: sidebarWebContents }, false, {
+      snapshots: [{ sessionId: 's1', tabs: [], activeTabId: null, persistable: true }],
+    })).toThrow(/non-persistable/);
+  });
+
+  it('accepts a memory-only tab handoff for detach only from the main window sender', () => {
+    const controller = makeController();
+    const sidebarWebContents = { id: 3 };
+    controller.getState.mockReturnValue({ detached: false, lastOpen: false, open: false });
+    controller.getSidebarWebContents.mockReturnValue(sidebarWebContents);
+    const { mainWebContents } = registerController(controller);
+    const handlers = (
+      ipcMain as unknown as {
+        __handlers: Map<string, (e: unknown, p: unknown, h?: unknown) => unknown>;
+      }
+    ).__handlers;
+    const setDetached = handlers.get(MAKER_INVOKE.RSB_WINDOW_SET_DETACHED);
+    if (!setDetached) throw new Error('RSB_WINDOW_SET_DETACHED handler not registered');
+    const handoff = {
+      snapshots: [
+        {
+          sessionId: 's1',
+          tabs: [{ id: 't1', kind: 'web-browser', state: { url: 'about:blank' } }],
+          activeTabId: 't1',
+          persistable: false,
+        },
+      ],
+    };
+
+    setDetached({ sender: mainWebContents }, true, handoff);
+    expect(controller.setDetached).toHaveBeenCalledWith(true, handoff);
+    expect(() => setDetached({ sender: sidebarWebContents }, true, handoff)).toThrow(/main window/);
   });
 
   it('requires an explicit allowOpen boolean in the IPC envelope', async () => {

@@ -27,15 +27,16 @@ describe('SelectionQuoteButton — user message floating action exclusion', () =
   it('keeps long-message collapse enabled for mixed quote and prose messages', () => {
     const collapseGuard = userMessageSource.slice(
       userMessageSource.indexOf('const collapseMeasureEnabled ='),
-      userMessageSource.indexOf('const { mirrorRef:', userMessageSource.indexOf('const collapseMeasureEnabled =')),
+      userMessageSource.indexOf(
+        'const { mirrorRef:',
+        userMessageSource.indexOf('const collapseMeasureEnabled ='),
+      ),
     );
     expect(collapseGuard).not.toContain('inlineQuoteCount === 0');
-    expect(userMessageSource).toContain(
-      "longMessageCollapsed && (automationOrigin ? 'line-clamp-3' : 'line-clamp-10')",
-    );
     expect(userMessageSource).toMatch(
-      /\{renderContent\(\n\s+segment\.text,/,
+      /longMessageCollapsed\s*&&\s*\(automationOrigin \? 'line-clamp-3' : 'line-clamp-10'\)/,
     );
+    expect(userMessageSource).toMatch(/\{renderContent\(\n\s+segment\.text,/);
     expect(userMessageSource).toContain('!longMessageCollapsed,');
   });
 
@@ -45,7 +46,9 @@ describe('SelectionQuoteButton — user message floating action exclusion', () =
     );
     expect(buttonSource).toContain("container.dataset.selectionQuoteContext = '';");
     expect(buttonSource).toContain('readSelectionInStream(true)');
-    expect(buttonSource).toContain('!allowQuoteDisabled && selectionIntersectsFloatingQuoteDisabledArea');
+    expect(buttonSource).toContain(
+      '!allowQuoteDisabled && selectionIntersectsFloatingQuoteDisabledArea',
+    );
   });
 
   it('keeps the floating action at its intrinsic width near either viewport edge', () => {
@@ -69,10 +72,12 @@ describe('SelectionQuoteButton — user message floating action exclusion', () =
       querySelectorAll: vi.fn(() => [allowed, disabled]),
     };
 
-    expect(selectionIntersectsFloatingQuoteDisabledArea(
-      range as Pick<Range, 'intersectsNode'>,
-      container as unknown as Pick<HTMLElement, 'querySelectorAll'>,
-    )).toBe(true);
+    expect(
+      selectionIntersectsFloatingQuoteDisabledArea(
+        range as Pick<Range, 'intersectsNode'>,
+        container as unknown as Pick<HTMLElement, 'querySelectorAll'>,
+      ),
+    ).toBe(true);
     expect(range.intersectsNode).toHaveBeenCalledTimes(2);
   });
 
@@ -80,9 +85,11 @@ describe('SelectionQuoteButton — user message floating action exclusion', () =
     const range = { intersectsNode: vi.fn(() => false) };
     const container = { querySelectorAll: vi.fn(() => [{} as Element]) };
 
-    expect(selectionIntersectsFloatingQuoteDisabledArea(
-      range as Pick<Range, 'intersectsNode'>,
-      container as unknown as Pick<HTMLElement, 'querySelectorAll'>,
-    )).toBe(false);
+    expect(
+      selectionIntersectsFloatingQuoteDisabledArea(
+        range as Pick<Range, 'intersectsNode'>,
+        container as unknown as Pick<HTMLElement, 'querySelectorAll'>,
+      ),
+    ).toBe(false);
   });
 });

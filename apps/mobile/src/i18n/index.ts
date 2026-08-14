@@ -10,16 +10,17 @@
  * - 不接 LanguageDetector backend,偏好全部走 languagePreferenceStore(AsyncStorage)。
  */
 
-import i18n from 'i18next';
-import { initReactI18next } from 'react-i18next';
-import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import i18n from "i18next";
+import { initReactI18next } from "react-i18next";
+import { BRAND_NAME } from "@cindy/maker-shared/branding";
 
-import enCommon from './locales/en';
-import zhCNCommon from './locales/zh-CN';
-import jaCommon from './locales/ja';
-import koCommon from './locales/ko';
-import { DEFAULT_LOCALE } from './locale';
-import { detectSystemLocale } from './systemLocale';
+import enCommon from "./locales/en";
+import zhCNCommon from "./locales/zh-CN";
+import zhTWCommon from "./locales/zh-TW";
+import jaCommon from "./locales/ja";
+import koCommon from "./locales/ko";
+import { DEFAULT_LOCALE } from "./locale";
+import { detectSystemLocale } from "./systemLocale";
 
 export {
   DEFAULT_LOCALE,
@@ -27,13 +28,14 @@ export {
   isSupportedLocale,
   resolveSystemLocale,
   SUPPORTED_LOCALES,
-} from './locale';
-export type { LocalePreference, SupportedLocale } from './locale';
-export { detectSystemLocale } from './systemLocale';
+} from "./locale";
+export type { LocalePreference, SupportedLocale } from "./locale";
+export { detectSystemLocale } from "./systemLocale";
 
 const resources = {
   en: { common: enCommon },
-  'zh-CN': { common: zhCNCommon },
+  "zh-CN": { common: zhCNCommon },
+  "zh-TW": { common: zhTWCommon },
   ja: { common: jaCommon },
   ko: { common: koCommon },
 } as const;
@@ -42,10 +44,10 @@ const resources = {
 void i18n.use(initReactI18next).init({
   resources,
   lng: detectSystemLocale(),
-  // 缺 key 回退英文(主干 4 语,无繁体 catalog)。
+  // 缺 key 回退英文。
   fallbackLng: { default: [DEFAULT_LOCALE] },
-  defaultNS: 'common',
-  ns: ['common'],
+  defaultNS: "common",
+  ns: ["common"],
   interpolation: {
     escapeValue: false, // React 已转义
     // 品牌名单一事实源:文案里的 {{appName}} 全部由此注入(与 desktop 同约定)。

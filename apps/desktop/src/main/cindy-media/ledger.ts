@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, lt, ne, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
 import { getDbClient } from '../localDb/client/current';
@@ -83,6 +83,8 @@ export interface RecordBlobParams {
 }
 
 export interface AddRefParams {
+  /** Stable row id supplied by staged writers so a lost commit acknowledgement can be rolled back. */
+  id?: string;
   hash: string;
   refKind: MediaRefKind;
   refId: string;
@@ -100,10 +102,14 @@ export interface AddRefParams {
  * 用户附件的 blob 当可再生缓存清掉(review P1);反向(false→true)不升,
  * 已有非 cache 引用的内容不因后来的缓存写入而变得可清。
  */
-export async function recordBlob(params: RecordBlobParams, db: LedgerDb = defaultDb()): Promise<void> {
+export async function recordBlob(
+  params: RecordBlobParams,
+  db: LedgerDb = defaultDb(),
+): Promise<void> {
   const now = Date.now();
   const isCache = params.isCache ?? false;
-  await db.insert(mediaBlobs)
+  await db
+    .insert(mediaBlobs)
     .values({
       hash: params.hash,
       ext: params.ext,
@@ -142,8 +148,9 @@ export async function addRef(params: AddRefParams, db: LedgerDb = defaultDb()): 
   if (params.refKind === 'message' && !params.originSessionId) {
     throw new Error('cindy-media: message ref requires originSessionId');
   }
-  const id = randomUUID();
-  await db.insert(mediaRefs)
+  const id = params.id ?? randomUUID();
+  await db
+    .insert(mediaRefs)
     .values({
       id,
       hash: params.hash,
@@ -230,10 +237,7 @@ export async function hasGhostToolGrant(
         eq(mediaRefs.hash, params.hash),
         eq(mediaRefs.refId, params.ghostId),
         eq(mediaRefs.originKind, 'tool'),
-        or(
-          eq(mediaRefs.refKind, 'ghost-tool-grant'),
-          eq(mediaRefs.refKind, 'ghost-grant'),
-        ),
+        or(eq(mediaRefs.refKind, 'ghost-tool-grant'), eq(mediaRefs.refKind, 'ghost-grant')),
       ),
     )
     .limit(1)
@@ -243,7 +247,9 @@ export async function hasGhostToolGrant(
 
 /**
  * 删会话的引用清理(会话删除钩子唯一入口):
- *   - session-attachment / import:refId 就是会话 id,直接删;
+ *   - session-attachment:新格式 refId 就是会话 id；兼容旧 Simulator
+ *     复合 refId，额外按 originSessionId 连坐删；
+ *   - import:refId 就是会话 id,直接删;
  *   - message:refId 是消息 id,按出生会话(originSessionId)连坐删——
  *     会话没了,它名下消息的引用自然一起走;
  *   - **绝不**碰 ghost-gallery / ghost-grant / ghost-tool-grant /
@@ -252,19 +258,41 @@ export async function hasGhostToolGrant(
  *     (寄存物同理:画布上的图不该因为删了某个会话就变得不能改)。
  * 引用删完后引用归零的 blob 交回收器,本函数不动字节仓。
  */
+function sessionOwnedRefCondition(sessionId: string) {
+  return or(
+    and(
+      eq(mediaRefs.refKind, 'session-attachment'),
+      or(eq(mediaRefs.refId, sessionId), eq(mediaRefs.originSessionId, sessionId)),
+    ),
+    and(eq(mediaRefs.refKind, 'import'), eq(mediaRefs.refId, sessionId)),
+    and(eq(mediaRefs.refKind, 'message'), eq(mediaRefs.originSessionId, sessionId)),
+  );
+}
+
 export async function removeSessionRefs(
   sessionId: string,
   db: LedgerDb = defaultDb(),
 ): Promise<number> {
+  const result = await db.delete(mediaRefs).where(sessionOwnedRefCondition(sessionId)).run();
+  return result.changes;
+}
+
+/**
+ * Delete session-owned refs only while the same stable DB still records the
+ * task as deleted. The EXISTS guard and DELETE share one SQLite statement, so
+ * restore/archive cannot race a separate status read and lose valid media.
+ */
+export async function removeSessionRefsIfDeleted(
+  sessionId: string,
+  db: LedgerDb = defaultDb(),
+): Promise<number> {
+  const deletedSession = db
+    .select({ id: schema.sessions.id })
+    .from(schema.sessions)
+    .where(and(eq(schema.sessions.id, sessionId), eq(schema.sessions.status, 'deleted')));
   const result = await db
     .delete(mediaRefs)
-    .where(
-      or(
-        and(eq(mediaRefs.refKind, 'session-attachment'), eq(mediaRefs.refId, sessionId)),
-        and(eq(mediaRefs.refKind, 'import'), eq(mediaRefs.refId, sessionId)),
-        and(eq(mediaRefs.refKind, 'message'), eq(mediaRefs.originSessionId, sessionId)),
-      ),
-    )
+    .where(and(sessionOwnedRefCondition(sessionId), exists(deletedSession)))
     .run();
   return result.changes;
 }
@@ -464,7 +492,9 @@ export async function listZeroRefBlobs(
       lastAccessAt: mediaBlobs.lastAccessAt,
     })
     .from(mediaBlobs)
-    .where(and(lt(mediaBlobs.createdAt, cutoffMs), lt(mediaBlobs.lastAccessAt, cutoffMs), noRefsExist()))
+    .where(
+      and(lt(mediaBlobs.createdAt, cutoffMs), lt(mediaBlobs.lastAccessAt, cutoffMs), noRefsExist()),
+    )
     .all();
 }
 

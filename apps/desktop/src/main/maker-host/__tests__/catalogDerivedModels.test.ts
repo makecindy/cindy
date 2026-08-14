@@ -19,6 +19,7 @@ import type { ModelDescriptor } from '@cindy/maker-core';
 import {
   deriveAvailableModels,
   refreshCatalogDerivedModels,
+  resolvePiGatewayDescriptorProviderId,
   resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
 } from '../catalog-to-descriptors.js';
@@ -177,6 +178,34 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     });
   });
 
+  it('resolves an explicit XD descriptor instead of a same-id subscription descriptor', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const openai = catalog.providers.find((provider) => provider.id === 'openai');
+    const xd = catalog.providers.find((provider) => provider.id === 'xd');
+    expect(openai).toBeDefined();
+    expect(xd).toBeDefined();
+    openai!.models.pi = [model('shared-default-route', {
+      name: 'Subscription Shared',
+      contextWindow: 128_000,
+    })];
+    xd!.models.pi = [model('shared-default-route', {
+      name: 'XD Shared',
+      contextWindow: 200_000,
+    })];
+
+    expect(resolvePiGatewayDescriptorProviderId(null)).toBe('xd');
+    expect(resolvePiGatewayDescriptorProviderId('cindy')).toBe('xd');
+    expect(resolvePiGatewayDescriptorProviderId('openai')).toBe('openai');
+    expect(resolvePiRuntimeModelDescriptor(
+      catalog,
+      resolvePiGatewayDescriptorProviderId(null),
+      'shared-default-route',
+    )).toMatchObject({
+      displayName: 'XD Shared',
+      contextWindow: 200_000,
+    });
+  });
+
   it('projects explicit provider-model image modalities and leaves unknown capability unset', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     const xd = catalog.providers.find((provider) => provider.id === 'xd');
@@ -275,7 +304,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     );
     anthropic.models.pi = [model('shared-default')];
     xd.models.pi = [
-      model('shared-default', { newSessionDefault: ['claude-code', 'codex'] }),
+      model('shared-default', { newSessionDefault: ['pi'] }),
     ];
 
     expect(
@@ -288,7 +317,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     ).toMatchObject({ contextWindow: 272_000, newSessionDefault: ['codex'] });
     expect(
       deriveAvailableModels(catalog, 'pi').find((entry) => entry.id === 'shared-default'),
-    ).toMatchObject({ newSessionDefault: ['claude-code'] });
+    ).toMatchObject({ newSessionDefault: ['pi'] });
   });
 
   it('per-agent 分叉透传:gpt-5.5 cc=1M / codex=272k', () => {

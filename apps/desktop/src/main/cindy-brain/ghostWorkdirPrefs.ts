@@ -4,9 +4,9 @@
  * File: <userData>/ghost-workdir-prefs.json
  *
  * 形态:{ disabledByWorkdir: { <归一化目录键>: [ghostId, …] } }
- * - 语义:某意识被记在某目录键下 = 该目录的会话里"当它不存在"——
- *   花名册(工具描述)不出现、ghost_list 不返回、`$` 指令不点亮,
- *   ghost_call 调用时刻兜底拒绝(老会话快照已含自述的防御线)。
+ * - 语义:某意识被记在某目录键下 = 该目录的会话里不可使用——花名册
+ *   不出现、ghost_list 不返回、ghost_info 返回目录禁用错误、`$` 指令
+ *   不点亮,ghost_call 调用时刻兜底拒绝(老会话快照已含自述的防御线)。
  * - 全局唤醒/沉睡(GhostManager.enabled)仍是主开关;本文件只记
  *   "全局唤醒之上的目录级例外",一个方向:禁用。没写 = 跟随全局
  *   (规则 20:override 与默认分开记,清除 override 即回到跟随)。

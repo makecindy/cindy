@@ -63,6 +63,7 @@ import {
   type ReasoningSummaryPartAddedNotification,
   type ReasoningTextDeltaNotification,
   type AccountRateLimitsUpdatedNotification,
+  type AgentMessageDeltaNotification,
   type ThreadStatusChangedNotification,
   type ThreadSettingsUpdatedNotification,
   type ItemGuardianApprovalReviewStartedNotification,
@@ -74,7 +75,7 @@ import {
  * 我们订阅的 notification 方法集 — 这之外的 (大部分 delta + plan/diff/hook/etc.)
  * 在 initialize 时通过 optOutNotificationMethods 告诉 server 别推, 省 IPC 带宽。
  *
- * agentMessage 文本流我们仍走 item/updated 全量字段算 diff (省一类 delta);
+ * agentMessage 正文订阅专用 delta；item/updated 全量字段保留为兼容兜底与校准来源。
  * reasoning summary 流必须订阅 delta — claude code 等价体验需要逐字出 thinking 文本,
  * item/completed 给的是终态全文 (用来校准), 中间过程靠 delta 才能动起来。
  */
@@ -87,6 +88,7 @@ const SUBSCRIBED_METHODS = [
   'item/started',
   'item/updated',
   'item/completed',
+  'item/agentMessage/delta',
   'turn/plan/updated',             // Codex update_plan snapshots
   'item/reasoning/summaryTextDelta', // 流式 reasoning 文本增量 (OpenAI summary)
   'item/reasoning/summaryPartAdded', // summary 分段标记 (插 \n\n 分隔用)
@@ -102,7 +104,6 @@ const SUBSCRIBED_METHODS = [
 ] as const;
 
 const NOTIFICATIONS_TO_OPT_OUT = [
-  'item/agentMessage/delta',
   'item/plan/delta',
   'item/commandExecution/outputDelta',
   'item/fileChange/outputDelta',
@@ -142,6 +143,8 @@ export interface ThreadEventHandlers {
   itemStarted?: (params: ItemStartedNotification['params']) => void;
   itemUpdated?: (params: ItemUpdatedNotification['params']) => void;
   itemCompleted?: (params: ItemCompletedNotification['params']) => void;
+  /** 正文的逐段增量；item/completed 仍会下发最终全文做权威校准。 */
+  agentMessageDelta?: (params: AgentMessageDeltaNotification['params']) => void;
   /** Codex native update_plan snapshots. */
   turnPlanUpdated?: (params: TurnPlanUpdatedNotification['params']) => void;
   /** OpenAI reasoning summary 单段内的文本增量 (按 summaryIndex 区分段)。 */
@@ -1377,6 +1380,7 @@ export class AppServerHost {
       case 'item/started': fn = handlers.itemStarted as (p: never) => void; break;
       case 'item/updated': fn = handlers.itemUpdated as (p: never) => void; break;
       case 'item/completed': fn = handlers.itemCompleted as (p: never) => void; break;
+      case 'item/agentMessage/delta': fn = handlers.agentMessageDelta as (p: never) => void; break;
       case 'turn/plan/updated': fn = handlers.turnPlanUpdated as (p: never) => void; break;
       case 'item/reasoning/summaryTextDelta': fn = handlers.reasoningSummaryTextDelta as (p: never) => void; break;
       case 'item/reasoning/summaryPartAdded': fn = handlers.reasoningSummaryPartAdded as (p: never) => void; break;

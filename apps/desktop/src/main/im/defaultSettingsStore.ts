@@ -62,6 +62,9 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
     permissionMode: isImDefaultPermissionMode(r.permissionMode)
       ? r.permissionMode
       : IM_DEFAULT_SETTINGS.permissionMode,
+    groupCtrPermissionMode: isImDefaultPermissionMode(r.groupCtrPermissionMode)
+      ? r.groupCtrPermissionMode
+      : IM_DEFAULT_SETTINGS.groupCtrPermissionMode,
     agents: {
       'claude-code': normalizeAgentSettings(
         'claude-code',
@@ -327,6 +330,9 @@ function settingsOverrides(
   if (value.permissionMode !== defaults.permissionMode) {
     overrides.permissionMode = value.permissionMode;
   }
+  if (value.groupCtrPermissionMode !== defaults.groupCtrPermissionMode) {
+    overrides.groupCtrPermissionMode = value.groupCtrPermissionMode;
+  }
   const agents: Partial<Record<ImDefaultAgentKind, ImDefaultAgentSettings>> = {};
   for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
@@ -341,6 +347,9 @@ function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSet
   const keys: string[] = [];
   if (value.agentKind !== defaults.agentKind) keys.push('agentKind');
   if (value.permissionMode !== defaults.permissionMode) keys.push('permissionMode');
+  if (value.groupCtrPermissionMode !== defaults.groupCtrPermissionMode) {
+    keys.push('groupCtrPermissionMode');
+  }
   for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
       keys.push(`agents.${agentKind}`);
@@ -357,6 +366,7 @@ function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {
   return {
     agentKind: settings.agentKind,
     permissionMode: settings.permissionMode,
+    groupCtrPermissionMode: settings.groupCtrPermissionMode,
     agents: {
       'claude-code': { ...settings.agents['claude-code'] },
       codex: { ...settings.agents.codex },

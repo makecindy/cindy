@@ -10,9 +10,13 @@
  */
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { messages, sessions } from '../../schema';
+import type { SessionRouteLock } from '../../sessionRouteLock';
+
+type SessionRouteLockMock = SessionRouteLock &
+  MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -23,6 +27,9 @@ const h = vi.hoisted(() => ({
   })),
   tapWindowBroadcast: vi.fn(),
   summarizeSession: vi.fn(async () => undefined),
+  routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
+    task(),
+  ) as SessionRouteLockMock,
 }));
 
 vi.mock('electron', () => ({
@@ -60,6 +67,7 @@ vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
 }));
 
 import { registerSessionIpc } from '../sessions';
+import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 
 function createDb(): void {
   const sqlite = new Database(':memory:');
@@ -129,6 +137,11 @@ function createDb(): void {
   insert.run('cc-local', '/old/dir', 'cc', null, 'dialogue');
   insert.run('codex-local', '/old/dir', 'codex', null, 'dialogue');
   insert.run('cc-remote', '/remote/dir', 'cc', 'host-1', 'project');
+  sqlite.prepare(`
+    INSERT INTO sessions (
+      id, working_dir, agent_kind, remote_host_id, workspace_kind, source, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'review', 1, 1)
+  `).run('review-local', '/review/dir', 'codex', null, 'dialogue');
   h.sqlite = sqlite;
   h.db = drizzle(sqlite, { schema: { messages, sessions } });
 }
@@ -142,12 +155,45 @@ async function invokeUpdate(id: string, patch: Record<string, unknown>): Promise
 beforeEach(() => {
   vi.clearAllMocks();
   h.relocate.mockImplementation(async () => ({ persistedSdkSessionId: null }));
+  h.routeLock.mockImplementation(async (_sessionId, task) => task());
   h.handlers.clear();
   createDb();
+  setSessionRouteLockImplementation(h.routeLock);
   registerSessionIpc();
 });
 
+afterEach(() => {
+  setSessionRouteLockImplementation(null);
+});
+
 describe('local-db:sessions:update handler wiring', () => {
+  it('does not resurrect a deleted task through the generic status writer', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+
+    await expect(invokeUpdate('codex-local', { status: 'active' })).rejects.toThrow(
+      '[PRECONDITION_FAILED]',
+    );
+
+    const persisted = h
+      .sqlite!.prepare('SELECT status FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string };
+    expect(persisted.status).toBe('deleted');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.routeLock).toHaveBeenCalledWith('codex-local', expect.any(Function));
+  });
+
+  it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {
+    await expect(invokeUpdate('review-local', { effort: 'low' })).rejects.toThrow(
+      /Review task settings are fixed/,
+    );
+    await invokeUpdate('review-local', { title: '审查记录' });
+
+    const persisted = h
+      .sqlite!.prepare('SELECT effort, title FROM sessions WHERE id = ?')
+      .get('review-local') as { effort: string; title: string };
+    expect(persisted).toEqual({ effort: 'high', title: '审查记录' });
+  });
+
   it('persists and broadcasts title-only patches to device-link subscribers', async () => {
     await invokeUpdate('codex-local', { title: '排查远程标题同步' });
 

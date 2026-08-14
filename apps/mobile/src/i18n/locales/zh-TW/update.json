@@ -1,0 +1,17 @@
+{
+  "installHintTitle": "安裝提示",
+  "installHintBody": "在系統彈框中點選「安裝」後，請回到桌面檢視安裝進度；下載完成後系統會自動替換當前版本。",
+  "openInstallFailedTitle": "無法開啟安裝連結",
+  "openInstallFailedBody": "請手動複製安裝地址在 Safari 中開啟。",
+  "bundleAvailableBody": "發現新版本，需要下載安裝整包更新。",
+  "releaseNotes": "\n更新內容：\n{{notes}}",
+  "forcedTitle": "需要更新",
+  "goUpdate": "去更新",
+  "newVersionTitle": "發現新版本",
+  "later": "稍後",
+  "upToDateTitle": "已是最新版本",
+  "upToDateBody": "當前已是最新整包版本。",
+  "checkFailedTitle": "檢查失敗",
+  "checkFailedBody": "無法連線更新伺服器，請稍後重試。",
+  "latestRequestFailed": "latest 請求失敗：HTTP {{status}}"
+}

@@ -22,6 +22,7 @@ import type { TelegramGroupWindowEntry } from '@cindy/im';
 import {
   assembleGroupWindowContext,
   createFenceNeutralizer,
+  DEFAULT_GROUP_WINDOW_RETENTION,
   GROUP_WINDOW_ENTRY_TEXT_MAX_CHARS,
   recordGroupWindowEntry,
   resetGroupWindowCursors,
@@ -37,9 +38,20 @@ const log = createLogger('telegram-group-window');
 export const TELEGRAM_PERSONAL_WINDOW_PROVIDER = 'telegram-personal';
 
 /**
+ * 个人 bot 这一侧生效的保留上限 —— 数值与官方同源, 但**这份对象是个人独有的**。
+ *
+ * 个人 bot 的群里允许非主人使用(受限权限), 消息量只会比官方那边更大, 所以同样
+ * 需要这道闸。额度按 provider 命名空间(`telegram-personal:<botId>`)独立计算, 与
+ * 官方的 `telegram:<principalId>` 各是各的一块 —— 换绑不同 bot 也各自独立。
+ *
+ * 做成可变对象只为让测试用小阈值把回收逼出来。
+ */
+export const TELEGRAM_PERSONAL_GROUP_WINDOW_RETENTION = { ...DEFAULT_GROUP_WINDOW_RETENTION };
+
+/**
  * provider 按 bot 命名空间(`telegram-personal:<botId>`): 换绑不同 bot 后,
  * 新 bot 的上下文注入与设置卡群清单不掺前任 bot 的历史(review P1)。
- * 官方 hook 通道的 TTL 清扫按 'telegram-personal%' 前缀豁免本命名空间全部行。
+ * 官方 hook 通道的旧行清扫只精确删除 provider='telegram'，不会命中本命名空间。
  */
 function providerOf(botId: string): string {
   return botId
@@ -48,25 +60,40 @@ function providerOf(botId: string): string {
 }
 
 /**
- * 存储永久保留(Chris 2026-07-30 拍板): Telegram bot 没有别的聊天记录来源,
- * 本地群消息库就是它的记忆, 不做 TTL/条数自动清理 — 清理只在用户明确要求时
- * 执行(与主流 agent 产品同理念)。单条正文截断与每轮 4000 字注入预算仍在,
- * 那是 prompt 预算, 不是存储上限。永久保留通过不向共享核心传 retention 表达。
+ * 存储的保留边界(Chris 2026-07-30 定方向 / 2026-08-08 定判据)。**不是"永不删"**,
+ * 准确说是两条:
+ *
+ *   1. **没有日常清理**: 不做 TTL, 也不按"每群保留最近 N 条"逐群裁剪。Telegram bot
+ *      没有别的聊天记录来源, 本地群消息库就是它的记忆, 按条数裁会在活跃群里几天就
+ *      把去年的内容挤没(与主流 agent 产品同理念)。
+ *   2. **但有容量安全阀, 且它会自动删**: 下面确实向共享核心传了
+ *      `TELEGRAM_PERSONAL_GROUP_WINDOW_RETENTION`。同一 provider 命名空间的正文超过
+ *      1 GiB 或行数超过 500 万时, `recordGroupWindowEntry` 会**自动回收最旧的记录**
+ *      (收敛到 90% 低水位)。日常量级碰不到它, 但"只在用户明确要求时才删"这句话是
+ *      不成立的 —— 撞到阀值就是自动删, 不问用户。
+ *
+ * 单条正文截断与每轮 4000 字注入预算是 prompt 预算, 与上面两条无关, 不是存储上限。
+ *
+ * (本注释早期版本写的"永久保留, 通过不向共享核心传 retention 表达"已作废: 下一行
+ * 就传了。)
  */
 
 /** 入窗(幂等: 同 (provider,chat,thread,message) 唯一键重复插入直接忽略)。 */
 export async function recordTelegramGroupMessage(entry: TelegramGroupWindowEntry): Promise<void> {
-  await recordGroupWindowEntry({
-    provider: providerOf(entry.botId),
-    chatId: entry.chatId,
-    threadId: entry.threadId,
-    messageId: entry.messageId,
-    chatName: entry.chatName,
-    author: entry.author,
-    text: entry.text,
-    fileNames: entry.fileNames,
-    sentAt: entry.sentAt,
-  });
+  await recordGroupWindowEntry(
+    {
+      provider: providerOf(entry.botId),
+      chatId: entry.chatId,
+      threadId: entry.threadId,
+      messageId: entry.messageId,
+      chatName: entry.chatName,
+      author: entry.author,
+      text: entry.text,
+      fileNames: entry.fileNames,
+      sentAt: entry.sentAt,
+    },
+    TELEGRAM_PERSONAL_GROUP_WINDOW_RETENTION,
+  );
 }
 
 /**
@@ -114,9 +141,8 @@ export async function buildTelegramGroupContextPrefix(args: {
   /** 窗口维度(topic id 或 '' 主群流) — 普通群 reply 链共享主群流窗口。 */
   threadId: string;
   /**
-   * 游标命名空间(缺省 = threadId)。per-root reply 链传 lane 的 root 段:
-   * 各链共享同一窗口但各自维护"上次拼到哪"的增量游标(官方 externalKey
-   * cursorKeyOf 同语义)。
+   * 游标命名空间(缺省 = threadId)。只能传稳定、低基数的 lane scope；不得传
+   * messageId/requestId/turnId 等逐消息高基数值，否则会制造无界游标行。
    */
   cursorScope?: string;
   /** 触发消息的 Telegram 原生 message id — 从上下文中精确剔除"当前消息"。 */

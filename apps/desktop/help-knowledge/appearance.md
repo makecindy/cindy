@@ -28,7 +28,7 @@ Settings > General controls how the app looks and how it notifies you.
 
 **Language:**
 
-- Display language: System / 中文 / English / 日本語 / 한국어. Affects UI text only; agent replies follow your prompt and personalization, not this setting.
+- Display language: System / English / 简体中文 / 繁體中文 / 日本語 / 한국어. Affects UI text only; agent replies follow your prompt and personalization, not this setting.
 
 **Notifications:**
 

@@ -4,9 +4,11 @@ import type {
   GhostSetupAllowedAction,
   GhostSetupAssessment,
   GhostSetupPlan,
+  InstalledGhost,
 } from '../../../shared/ghost';
 import { MAKER_PUSH } from '../../maker-ipc/channels';
 import { GhostSetupChangeBus } from '../ghostSetupChangeBus';
+import { GhostMutationCoordinator } from '../ghostMutationCoordinator';
 import {
   GhostSetupCoordinator,
   type GhostSetupActionResult,
@@ -18,6 +20,7 @@ import {
   type GhostSetupInteractionResponseTarget,
   type GhostSetupInteractionSnapshot,
 } from '../ghostSetupInteractionBridge';
+import { classifyGhostVisibility } from '../ghostVisibility';
 
 function required(revision = 0): GhostSetupAssessment {
   return {
@@ -511,6 +514,51 @@ describe('GhostSetupCoordinator', () => {
     h.setAssessment(ready(1));
     release();
     await expect(waiting).resolves.toMatchObject({ ok: true });
+  });
+
+  it('keeps account-boundary action drain pending after the setup call is cancelled', async () => {
+    const h = harness(required());
+    const mutations = new GhostMutationCoordinator();
+    const releaseMutation = mutations.acquire();
+    let release!: () => void;
+    h.executeAction.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ ok: true });
+        }),
+    );
+    const waiting = h.coordinator
+      .ensureReady({
+        sessionId: 'session-1',
+        ghostId: 'gmail',
+        tool: 'search',
+      })
+      .finally(releaseMutation);
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    const pending = h.bridge.pendingSnapshots()[0].request;
+    h.bridge.resolve(pending.requestId, {
+      kind: 'plugin_setup',
+      action: 'run_action',
+      actionId: 'oauth_connect:secret:google',
+      expectedRevision: pending.revision,
+    });
+    await vi.waitFor(() => expect(h.executeAction).toHaveBeenCalledOnce());
+
+    h.bridge.cleanupAll('session_aborted');
+    await expect(waiting).resolves.toMatchObject({ ok: false, errorCode: 'SETUP_CANCELLED' });
+
+    let drained = false;
+    const drain = (async () => {
+      await h.coordinator.waitForActionsIdle();
+      await mutations.waitForIdle();
+      drained = true;
+    })();
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    release();
+    await drain;
+    expect(drained).toBe(true);
   });
 
   it('publishes action error codes without copying Main diagnostic messages', async () => {
@@ -1227,6 +1275,55 @@ describe('GhostSetupCoordinator', () => {
     });
     expect(bridge.pendingSnapshots()).toEqual([]);
     expect(executeAction).not.toHaveBeenCalled();
+  });
+
+  it('setup waiter 与工具入口共用目录停用优先于未启用的可见性判序', async () => {
+    const changeBus = new GhostSetupChangeBus();
+    const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn() });
+    const ghost = {
+      enabled: true,
+      manifest: {
+        id: 'gmail',
+        name: 'Gmail',
+        kind: 'chip',
+        slots: ['tool'],
+        tools: [{ name: 'search', description: 'Search' }],
+      },
+    } as InstalledGhost;
+    let disabled = false;
+    const coordinator = new GhostSetupCoordinator({
+      changeBus,
+      bridge,
+      assess: () => required(),
+      validateTarget: (ghostId, _tool, workingDir) => {
+        const visibility = classifyGhostVisibility(ghostId, workingDir ?? null, {
+          listGhosts: () => [ghost],
+          isAvailableForActiveSession: () => true,
+          isDisabledForWorkdir: () => disabled,
+        });
+        return visibility.ok ? { ok: true } : visibility;
+      },
+      getGhostIdentity: () => ({ id: 'gmail', name: 'Gmail' }),
+      executeAction: vi.fn(),
+      terminalGraceMs: 0,
+    });
+    const waiting = coordinator.ensureReady({
+      sessionId: 'session-1',
+      ghostId: 'gmail',
+      tool: 'search',
+      workingDir: '/proj/alpha',
+    });
+    await vi.waitFor(() => expect(bridge.pendingSnapshots()).toHaveLength(1));
+
+    ghost.enabled = false;
+    disabled = true;
+    changeBus.emit('gmail', { source: 'workdir_policy' });
+
+    await expect(waiting).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+    });
+    expect(bridge.pendingSnapshots()).toEqual([]);
   });
 
   it.each([

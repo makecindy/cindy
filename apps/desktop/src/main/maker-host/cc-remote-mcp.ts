@@ -176,6 +176,8 @@ export async function buildCcRemoteHttpMcpServers(
   const ctx = {
     agentKind: 'claude-code' as const,
     sessionId: args.sessionId,
+    mcpCallerKind: 'root' as const,
+    mcpCallerAttested: true,
     ...(args.sessionInstanceId ? { sessionInstanceId: args.sessionInstanceId } : {}),
     workingDir: args.workingDir,
     // remote ctx: scope key 语义见 maker-core buildMemoryScopeKey。

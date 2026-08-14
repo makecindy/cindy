@@ -149,17 +149,32 @@ describe('Claude Code translator context window', () => {
       status: 'running',
       title: 'Review auth flow',
       description: 'Check the auth flow',
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'task-1',
+        parentToolUseId: 'toolu-1',
+      },
     });
     expect(events[1].data).toMatchObject({
       status: 'running',
       summary: 'Read login code',
       lastToolName: 'Read',
       usage: { totalTokens: 1200, toolUses: 3, durationMs: 2500 },
+      subagentObservation: {
+        kind: 'progress',
+        logicalSubagentId: 'task-1',
+        parentToolUseId: 'toolu-1',
+      },
     });
     expect(events[2].data).toMatchObject({
       status: 'completed',
       outputFile: '/tmp/task.md',
       summary: 'Auth flow looks correct',
+      subagentObservation: {
+        kind: 'terminal',
+        logicalSubagentId: 'task-1',
+        parentToolUseId: 'toolu-1',
+      },
     });
   });
 

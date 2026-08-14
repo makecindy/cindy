@@ -953,6 +953,14 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       const ipc = extractIpcError(err);
       if (ipc?.code === 'SSH_AUTH_FAILED') {
         toast.error(ipc.message);
+      } else if (ipc?.code === 'SSH_KEY_FILE_NOT_FOUND') {
+        // Local key-path problem (fs ENOENT on the configured identityFile),
+        // NOT a network/host failure. Show the actual path + how to fix it so
+        // the user isn't sent down the "check the network" path.
+        // Strip the English raw-error prefix ("identity file not found: ") so
+        // localized copy doesn't end up bilingual / double-saying "not found".
+        const detail = ipc.message.replace(/^identity file not found:\s*/, '');
+        toast.error(t('settings.remote.toast.connectKeyFileMissing', { detail }));
       } else {
         toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.connectFailed' })));
       }

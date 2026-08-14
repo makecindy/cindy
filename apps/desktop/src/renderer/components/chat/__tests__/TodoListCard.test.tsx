@@ -50,14 +50,36 @@ describe('TodoListCard flyout interaction', () => {
     expect(container.querySelector('.animate-pulse')).toBeNull();
   });
 
-  it('keeps the active row static when the flyout is open', () => {
+  it('keeps the active row static when the session is idle', () => {
+    // 计划因停止/失败/中断留在屏幕上时会话已空闲:继续呼吸等于谎报"这步还在跑"。
+    const { container } = render(<TodoListCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.mouseEnter(trigger.parentElement as HTMLElement);
+
+    const wrapper = container.querySelector('span[data-plan-step-active="true"]');
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.classList.contains('session-status-breathing')).toBe(false);
+    expect(wrapper?.getAttribute('data-plan-step-breathing')).toBe('false');
+    expect(wrapper?.querySelector('svg')).not.toBeNull();
+  });
+
+  it('breathes the active row on an HTML wrapper when the flyout is open', () => {
     const { container } = render(<TodoListCard todos={TODOS} animated />);
 
     const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
     fireEvent.mouseEnter(trigger.parentElement as HTMLElement);
 
-    expect(container.querySelector('svg.lucide-circle-dashed')).not.toBeNull();
+    // 正在执行的步骤用侧栏运行态同款呼吸(session-status-breathing,已在
+    // reduced-motion 白名单)。按 SVG 常驻动画红线,动画必须挂 span wrapper,
+    // SVG 本体静态;不用旋转,不用 Tailwind 硬编码 pulse/spin。
+    const wrapper = container.querySelector('span[data-plan-step-active="true"]');
+    expect(wrapper?.tagName).toBe('SPAN');
+    expect(wrapper?.classList.contains('session-status-breathing')).toBe(true);
+    expect(wrapper?.querySelector('svg')).not.toBeNull();
+    expect(container.querySelector('svg.session-status-breathing')).toBeNull();
     expect(container.querySelector('.animate-spin')).toBeNull();
+    expect(container.querySelector('.animate-spinner')).toBeNull();
     expect(container.querySelector('.animate-pulse')).toBeNull();
   });
 

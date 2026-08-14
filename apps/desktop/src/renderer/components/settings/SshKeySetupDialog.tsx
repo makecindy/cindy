@@ -948,7 +948,7 @@ function CodeBlock({
         </button>
       </div>
       <pre
-        className="max-h-32 overflow-auto rounded-md border p-2.5 text-[11.5px] leading-relaxed whitespace-pre-wrap break-all"
+        className="max-h-32 overflow-auto rounded-md border p-2.5 text-11 leading-relaxed whitespace-pre-wrap break-all"
         style={{
           backgroundColor: 'var(--settings-input-bg, #faf9f5)',
           borderColor: 'var(--settings-input-border, #d7d7d4)',
@@ -1114,6 +1114,19 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
                   />
                 ))}
               </div>
+            )}
+
+            {/* Path problem (no_such_file): no platform commands help — the
+                configured key path itself is wrong. Give an explicit fix
+                direction (re-select the key / edit the host's Identity file
+                path) instead of the generic "use a terminal" fallback below. */}
+            {state.reason === 'no_such_file' && (
+              <p
+                className="text-12 leading-relaxed"
+                style={{ color: 'var(--settings-integration-subtitle)' }}
+              >
+                {t('settings.remote.keys.agentTrouble.noSuchFileFix')}
+              </p>
             )}
 
             {/* Fallback: skip the agent entirely and rely on ~/.ssh/config +

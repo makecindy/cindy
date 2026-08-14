@@ -74,37 +74,49 @@ function setState(patch: Partial<SkillhubState>): void {
 // 过期结果保护：每次 scan 领取递增 id，只有最新请求能写回 state，避免旧项目列表的
 // 慢响应覆盖新项目列表的扫描结果。
 let scanRequestId = 0;
+let latestScan: { id: number; promise: Promise<SkillhubSkill[]> } | null = null;
 
-export async function refresh(): Promise<void> {
+export function refresh(): Promise<SkillhubSkill[]> {
   const myId = ++scanRequestId;
-  setState({ loading: true, error: null });
-  try {
-    const result = await window.electronAPI.skillhub.scan({
-      projects: state.projects.map((p) => ({ projectRoot: p.projectRoot, hash: p.hash })),
-    });
-    if (myId !== scanRequestId) return;
-    if (result.success) {
-      setState({
-        skills: result.skills ?? [],
-        sources: result.sources ?? [],
-        loading: false,
-        bootstrapped: true,
+  const promise = (async (): Promise<SkillhubSkill[]> => {
+    setState({ loading: true, error: null });
+    try {
+      const result = await window.electronAPI.skillhub.scan({
+        projects: state.projects.map((p) => ({ projectRoot: p.projectRoot, hash: p.hash })),
       });
-    } else {
+      if (myId !== scanRequestId) {
+        return latestScan?.id === scanRequestId ? latestScan.promise : state.skills;
+      }
+      if (result.success) {
+        const skills = result.skills ?? [];
+        setState({
+          skills,
+          sources: result.sources ?? [],
+          loading: false,
+          bootstrapped: true,
+        });
+        return skills;
+      }
       setState({
         error: result.error ?? 'scan failed with no error message',
         loading: false,
         bootstrapped: true,
       });
+      return state.skills;
+    } catch (err) {
+      if (myId !== scanRequestId) {
+        return latestScan?.id === scanRequestId ? latestScan.promise : state.skills;
+      }
+      setState({
+        error: err instanceof Error ? err.message : String(err),
+        loading: false,
+        bootstrapped: true,
+      });
+      return state.skills;
     }
-  } catch (err) {
-    if (myId !== scanRequestId) return;
-    setState({
-      error: err instanceof Error ? err.message : String(err),
-      loading: false,
-      bootstrapped: true,
-    });
-  }
+  })();
+  latestScan = { id: myId, promise };
+  return promise;
 }
 
 /**
@@ -184,6 +196,7 @@ export function setSyncError(err: string | null): void {
  */
 export function reset(): void {
   scanRequestId += 1;
+  latestScan = null;
   invalidateSkillSyncRequests();
   bootstrapped = false;
   state = {
@@ -223,7 +236,7 @@ function ensureAuthListener(): void {
 registerSyncStoreSetters({ setSyncResults, mergeSyncResults, setSyncError });
 
 interface UseSkillhubReturn extends SkillhubState {
-  refresh: () => Promise<void>;
+  refresh: () => Promise<SkillhubSkill[]>;
 }
 
 export function useSkillhub(): UseSkillhubReturn {

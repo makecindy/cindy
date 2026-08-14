@@ -61,7 +61,7 @@ function prefix(type: DiffLine['type']): string {
 function HunkSeparator({ count }: { count: number }) {
   const { t } = useTranslation();
   return (
-    <div className="flex min-h-[20px] w-full select-none items-center bg-[var(--surface)] font-mono text-[11px] leading-5 text-[var(--text-tertiary)]">
+    <div className="flex min-h-[20px] w-full select-none items-center bg-[var(--surface)] font-mono text-11 leading-5 text-[var(--text-tertiary)]">
       <span className="w-[3.5rem] shrink-0 border-r border-[var(--border-default)] px-2 text-right text-[var(--diff-line-num)]" />
       <span className="w-[3.5rem] shrink-0 border-r border-[var(--border-default)] px-2 text-right text-[var(--diff-line-num)]" />
       <span className="w-5 shrink-0 text-center">⋯</span>
@@ -106,7 +106,7 @@ function HunkActionPill({
               aria-label={action.label}
               disabled={action.disabled || pending}
               onClick={() => action.onClick(hunk.index)}
-              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-10 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {pending ? <Spinner size={11} /> : hunkActionIcon(action.icon)}
               <span className="sr-only">{action.label}</span>
@@ -137,7 +137,7 @@ function UnifiedLineRow({
   wordWrap: boolean;
 }) {
   return (
-    <div className={cn('flex min-h-[20px] w-full font-mono text-[11px] leading-5', lineClass(line.type))}>
+    <div className={cn('flex min-h-[20px] w-full font-mono text-11 leading-5', lineClass(line.type))}>
       <span className="w-[3.5rem] shrink-0 select-none border-r border-[var(--border-default)] px-2 text-right text-[var(--diff-line-num)]">
         {line.oldLineNumber ?? ''}
       </span>
@@ -168,7 +168,7 @@ function SplitLineRow({
   wordWrap: boolean;
 }) {
   return (
-    <div className="grid min-h-[20px] w-full grid-cols-2 font-mono text-[11px] leading-5">
+    <div className="grid min-h-[20px] w-full grid-cols-2 font-mono text-11 leading-5">
       <SplitCell
         cell={left}
         side="left"
@@ -400,7 +400,7 @@ export function PlainUnifiedDiff({
       ? diff.error ?? t('rightSidebar.review.kindNotice.unrenderable')
       : t(`rightSidebar.review.kindNotice.${diff.kind}`, { defaultValue: status });
     return (
-      <div className="flex min-w-0 items-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-[12px] text-[var(--text-secondary)]">
+      <div className="flex min-w-0 items-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
         <span className="min-w-0 flex-1">
           <span className="font-medium text-[var(--text-primary)]">{status}</span>
           <span className="ml-2">{notice}</span>
@@ -409,7 +409,7 @@ export function PlainUnifiedDiff({
           <button
             type="button"
             onClick={() => onOpenFile(diff)}
-            className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2 text-[11px] font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+            className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
           >
             <ExternalLink size={12} />
             <span>{t('rightSidebar.review.openFile')}</span>
@@ -420,7 +420,7 @@ export function PlainUnifiedDiff({
   }
   if (diff.hunks.length === 0) {
     return (
-      <div className="rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-[12px] text-[var(--text-tertiary)]">
+      <div className="rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-tertiary)]">
         {t('rightSidebar.review.noRenderableDiff')}
       </div>
     );

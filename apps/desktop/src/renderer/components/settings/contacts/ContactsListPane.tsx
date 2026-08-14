@@ -147,7 +147,7 @@ export function ContactsListPane(props: Props) {
           >
             {f.label}
             {f.id === 'pending' && (f.badge ?? 0) > 0 && (
-              <span className="rounded-full bg-[var(--status-bar-accent)] px-1.5 text-11 leading-[16px] text-[var(--status-badge-fg)]">
+              <span className="rounded-full bg-[var(--status-bar-accent)] px-1.5 text-11 leading-[1.455] text-[var(--status-badge-fg)]">
                 {f.badge}
               </span>
             )}

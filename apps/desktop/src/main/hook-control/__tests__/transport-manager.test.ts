@@ -189,6 +189,9 @@ describe('hook-control runtime capability gate', () => {
       handleSessionArchive: vi.fn(),
       handleInteractionDecision: vi.fn(),
       handleTurnDelivery,
+      onMessageOpResult: vi.fn(),
+      setEmojiReactionsMode: vi.fn(),
+      settleAckReactions: vi.fn(),
       activateAccount: vi.fn(),
       deactivateAccount: vi.fn(async () => undefined),
       dispose: vi.fn(),
@@ -1581,6 +1584,9 @@ describe('Telegram provider capability, binding and prefs', () => {
       handleDispatch,
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
+      onMessageOpResult: vi.fn(),
+      setEmojiReactionsMode: vi.fn(),
+      settleAckReactions: vi.fn(),
       cancel: vi.fn(),
       handleSessionArchive: vi.fn(),
       handleInteractionDecision: vi.fn(),
@@ -2778,10 +2784,29 @@ describe('Telegram provider capability, binding and prefs', () => {
     await expect(manager.getTelegramBehavior('stale-binding')).rejects.toBeInstanceOf(
       HookNotConnectedError,
     );
-    expect(server.frames.some((frame) => frame.type === 'provider.behavior.get')).toBe(false);
+    // 绑定确认后客户端会主动拉一次表情档位(ack 表情要在首次派发前就按用户的
+    // 选择发), 所以这里不能断言「一帧 behavior.get 都没有」—— 要断言的是
+    // **stale binding 那次请求没有出帧**。
+    expect(
+      server.frames
+        .filter((frame) => frame.type === 'provider.behavior.get')
+        .every((frame) => frame.payload.bindingId !== 'stale-binding'),
+    ).toBe(true);
 
+    // 绑定确认时客户端已经主动拉过一次, waitFor 会命中那一帧 —— 这里要等的是
+    // **本次显式读取**新发出的那一帧, 所以按帧数增长取最后一个。
+    const behaviorGetsBefore = server.frames.filter(
+      (frame) => frame.type === 'provider.behavior.get',
+    ).length;
     const behaviorRead = manager.getTelegramBehavior('binding-telegram-1');
-    const behaviorGet = await server.waitFor('provider.behavior.get');
+    await vi.waitFor(() =>
+      expect(
+        server.frames.filter((frame) => frame.type === 'provider.behavior.get').length,
+      ).toBeGreaterThan(behaviorGetsBefore),
+    );
+    const behaviorGet = server.frames
+      .filter((frame) => frame.type === 'provider.behavior.get')
+      .at(-1)!;
     if (behaviorGet.type !== 'provider.behavior.get') throw new Error('unreachable');
     sock.send(
       serializeHookMessage(

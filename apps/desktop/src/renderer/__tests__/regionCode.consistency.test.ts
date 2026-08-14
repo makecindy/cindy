@@ -26,11 +26,13 @@ import en from '../i18n/locales/en/common.json';
 import ja from '../i18n/locales/ja/common.json';
 import ko from '../i18n/locales/ko/common.json';
 import zhCN from '../i18n/locales/zh-CN/common.json';
+import zhTW from '../i18n/locales/zh-TW/common.json';
 
 type Bundle = Record<string, unknown>;
 
 const LOCALES: Record<string, Bundle> = {
   'zh-CN': zhCN as Bundle,
+  'zh-TW': zhTW as Bundle,
   en: en as Bundle,
   ja: ja as Bundle,
   ko: ko as Bundle,
@@ -47,7 +49,7 @@ function regionCodeKeyFor(region: string): string {
  * 登录页徽标的 key 命名与另两条不同(`login.regionPill.cn` 而非 `regionCodeCn`),
  * 所以 keyFor 可按链路覆盖。
  *
- * ⚠️ 本表只覆盖 **i18n bundle 侧**:某个区域在四语包里有没有 key、取值对不对。
+ * ⚠️ 本表只覆盖 **i18n bundle 侧**:某个区域在全部语言包里有没有 key、取值对不对。
  * 「组件里有没有真的引用到那个 key」是另一回事,由下面的 SOURCE_CONSUMERS 用源码
  * 字面量扫描覆盖(各组件都把 key 写成字面量分支而非动态拼接,为的是 `pnpm check:i18n`
  * 的静态提取能看到——正好也让这种扫描可行)。两者缺一都留口子:只有 bundle 就防不住
@@ -87,7 +89,7 @@ function keyOf(consumer: (typeof CONSUMERS)[number], region: string): string {
  *
  * 为什么要扫源码:三条链路的「哪个区域用哪个 key」都由组件自己维护(LoginPage 的
  * REGION_PILL_KEY 映射表、侧栏与 issue 卡片的三元字面量分支)。新增区域时只补了
- * CINDY_REGION_CODE 与四语 bundle、忘了补组件分支,上面的 bundle 断言照样全绿,而
+ * CINDY_REGION_CODE 与多语 bundle、忘了补组件分支,上面的 bundle 断言照样全绿,而
  * 该区域在界面上拿不到文案 —— 这一组断言补的就是那道信号。
  */
 const SOURCE_CONSUMERS: ReadonlyArray<{
@@ -117,7 +119,7 @@ function readConsumerSource(file: string): string {
 }
 
 describe('区域代号:界面 i18n 与常量一致', () => {
-  it('有代号的区域: 每条链路的四语 i18n 值逐字等于常量,且不被翻译', () => {
+  it('有代号的区域: 每条链路的多语 i18n 值逐字等于常量,且不被翻译', () => {
     const labeled = Object.entries(CINDY_REGION_CODE).filter(([, code]) => code !== null);
     // 防塌陷:常量或消费链路被清空时下面的循环会变成空跑而全绿。
     expect(labeled.length).toBeGreaterThan(0);
@@ -128,14 +130,14 @@ describe('区域代号:界面 i18n 与常量一致', () => {
           const key = keyOf(consumer, region);
           expect(
             consumer.pick(bundle)[key],
-            `${locale} 的 ${consumer.prefix}.${key}(${consumer.label})应为 ${code}(区域代号四语同文、不翻译)`,
+            `${locale} 的 ${consumer.prefix}.${key}(${consumer.label})应为 ${code}(区域代号多语同文、不翻译)`,
           ).toBe(code);
         }
       }
     }
   });
 
-  it('不标注的区域: 各链路四语都不得存在对应 key,避免出现「能显示但契约不写」的半套实现', () => {
+  it('不标注的区域: 各链路所有语言都不得存在对应 key,避免出现「能显示但契约不写」的半套实现', () => {
     const unlabeled = Object.entries(CINDY_REGION_CODE).filter(([, code]) => code === null);
     expect(unlabeled.length).toBeGreaterThan(0);
     for (const [region] of unlabeled) {

@@ -39,6 +39,54 @@ const ctx: RequestTransformCtx = {
 };
 
 describe('stripEncryptedContentFromBody', () => {
+  it('drops ciphertext from intermediate agent messages while preserving readable progress and completion', () => {
+    const body = buf({
+      model: 'gpt-5.6-sol',
+      input: [
+        {
+          type: 'agent_message',
+          author: '/root/progress_test',
+          recipient: '/root',
+          content: [
+            { type: 'input_text', text: 'progress' },
+            { type: 'encrypted_content', encrypted_content: 'gAAAAA-progress' },
+          ],
+          internal_chat_message_metadata_passthrough: { source: 'send_message' },
+        },
+        {
+          type: 'agent_message',
+          author: '/root/progress_test',
+          recipient: '/root',
+          content: [{ type: 'input_text', text: 'complete' }],
+        },
+        {
+          type: 'agent_message',
+          author: '/root/opaque',
+          content: [{ type: 'encrypted_content', encrypted_content: 'gAAAAA-only' }],
+        },
+      ],
+    });
+
+    const out = stripEncryptedContentFromBody(body);
+
+    expect(out).not.toBeNull();
+    expect(JSON.parse(out!.toString('utf8')).input).toEqual([
+      {
+        type: 'agent_message',
+        author: '/root/progress_test',
+        recipient: '/root',
+        content: [{ type: 'input_text', text: 'progress' }],
+        internal_chat_message_metadata_passthrough: { source: 'send_message' },
+      },
+      {
+        type: 'agent_message',
+        author: '/root/progress_test',
+        recipient: '/root',
+        content: [{ type: 'input_text', text: 'complete' }],
+      },
+    ]);
+  });
+
   it('removes encrypted_content nested in Responses-style input items', () => {
     const body = buf({
       model: 'gpt-5.5',

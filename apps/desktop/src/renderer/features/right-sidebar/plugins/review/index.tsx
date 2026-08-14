@@ -12,14 +12,18 @@
  * 注册:模块顶层 import-side-effect。plugins/index.ts 把它 import 进来。
  */
 
+import { lazy } from 'react';
 import { FileDiff } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { isSafeBranchBaseRef } from '../../../../../shared/reviewBranchRef';
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
-import { ReviewTabBody } from './ReviewTabBody';
 import type { DiffViewMode } from './DiffViewer/PlainUnifiedDiff';
+
+const ReviewTabBody = lazy(() =>
+  import('./ReviewTabBody').then((module) => ({ default: module.ReviewTabBody })),
+);
 
 export interface ReviewState {
   /** Programmatic exact-turn review target. Null keeps the normal Git-backed review surface. */
@@ -28,6 +32,12 @@ export interface ReviewState {
     selectedDiffId: string | null;
     selectedPath: string | null;
     requestNonce: number;
+    /**
+     * 变更集所属会话。null(旧数据)= 与 tab 桶同会话;与桶会话不同(协同面板
+     * 里审查 worker 的轮次)时按它取数,且不提供 git 来源切换(git 视图跟随桶
+     * 会话的 workdir,对 worker 语义错误)。
+     */
+    targetSessionId: string | null;
   } | null;
   /** 用户收起过哪些 diff id。空数组表示所有当前 diff 默认展开。 */
   collapsedPaths: string[];
@@ -37,7 +47,7 @@ export interface ReviewState {
   fileTreeVisible: boolean;
   /** diff 行是否自动换行。默认关闭,保留横向滚动。 */
   wordWrap: boolean;
-  /** 是否显示行内文字差异强调。对齐 Codex,默认开启。 */
+  /** 是否显示行内文字差异强调。默认关闭,避免大文件审查时增加渲染开销。 */
   wordDiff: boolean;
   /** 是否用忽略空白模式读取 diff。默认关闭,避免影响 patch 类操作。 */
   hideWhitespace: boolean;
@@ -53,7 +63,7 @@ const DEFAULT_STATE: ReviewState = {
   diffViewMode: 'unified',
   fileTreeVisible: false,
   wordWrap: false,
-  wordDiff: true,
+  wordDiff: false,
   hideWhitespace: false,
   richMarkdownPreview: true,
   branchBaseRef: null,
@@ -125,6 +135,9 @@ const plugin: TabKindPlugin<ReviewState> = {
           requestNonce: typeof (rawTurnTarget as { requestNonce?: unknown }).requestNonce === 'number'
             ? (rawTurnTarget as { requestNonce: number }).requestNonce
             : 0,
+          targetSessionId: typeof (rawTurnTarget as { targetSessionId?: unknown }).targetSessionId === 'string'
+            ? (rawTurnTarget as { targetSessionId: string }).targetSessionId
+            : null,
         }
       : null;
     return { turnTarget, collapsedPaths, diffViewMode, fileTreeVisible, wordWrap, wordDiff, hideWhitespace, richMarkdownPreview, branchBaseRef };

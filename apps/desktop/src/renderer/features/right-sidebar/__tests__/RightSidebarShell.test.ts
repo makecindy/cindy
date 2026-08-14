@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { createElement } from 'react';
+import { createElement, useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import type { AppShortcutOverrides } from '../../../../shared/appShortcuts';
+import type { LucideIcon } from 'lucide-react';
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: vi.fn() },
@@ -31,6 +32,7 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 });
 
 import { RightSidebarShell } from '../RightSidebarShell';
+import { registerTabKind, unregisterTabKind } from '../registry';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
 import { _resetPopupRouterForTests } from '../lib/popupRouter';
 import { _resetNativePopupTabsForTests } from '../lib/nativePopupTabs';
@@ -40,7 +42,7 @@ import {
   type SidebarVisibilityRequest,
   type SidebarVisibilityRequestOptions,
 } from '../lib/sidebarCommands';
-import { _resetStore, closeTab, getBucket } from '../store';
+import { _resetStore, closeTab, getBucket, setActiveTab } from '../store';
 import { writePanelCollapsed } from '@/layout/collapsePrefs';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 
@@ -262,6 +264,156 @@ describe('RightSidebarShell empty state', () => {
     _resetPopupRouterForTests();
     _resetNativePopupTabsForTests();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  it('clears the active browser session only when a visible detached shell is hidden', async () => {
+    const setActiveSession = window.electronAPI.rsbBrowserBridge.setActiveSession;
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: false,
+        isMac: true,
+      }),
+    );
+
+    await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+    expect(setActiveSession).not.toHaveBeenCalled();
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+      }),
+    );
+
+    await waitFor(() => expect(setActiveSession).toHaveBeenCalledWith({ sessionId: 's1' }));
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: false,
+        isMac: true,
+      }),
+    );
+
+    await waitFor(() => expect(setActiveSession).toHaveBeenCalledWith({ sessionId: null }));
+  });
+
+  it('mounts only the active body first, then idle-mounts and keeps the rest alive', async () => {
+    const idleCallbacks: IdleRequestCallback[] = [];
+    Object.defineProperty(window, 'requestIdleCallback', {
+      configurable: true,
+      value: vi.fn((callback: IdleRequestCallback) => {
+        idleCallbacks.push(callback);
+        return idleCallbacks.length;
+      }),
+    });
+    Object.defineProperty(window, 'cancelIdleCallback', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const mountA = vi.fn();
+    const unmountA = vi.fn();
+    const mountB = vi.fn();
+    const unmountB = vi.fn();
+    const BodyA = () => {
+      useEffect(() => {
+        mountA();
+        return unmountA;
+      }, []);
+      return createElement('div', { 'data-testid': 'body-a' });
+    };
+    const BodyB = () => {
+      useEffect(() => {
+        mountB();
+        return unmountB;
+      }, []);
+      return createElement('div', { 'data-testid': 'body-b' });
+    };
+    const Pill = () => createElement('span');
+    const Icon = (() => null) as unknown as LucideIcon;
+    registerTabKind({
+      kind: 'file-browser',
+      menu: {
+        kind: 'file-browser',
+        labelKey: 'rightSidebar.tabs.kinds.fileBrowser',
+        icon: Icon,
+        order: 1,
+        enabled: true,
+      },
+      TabPillTitle: Pill,
+      TabBody: BodyA,
+      defaultState: () => ({}),
+    });
+    registerTabKind({
+      kind: 'terminal',
+      menu: {
+        kind: 'terminal',
+        labelKey: 'rightSidebar.tabs.kinds.terminal',
+        icon: Icon,
+        order: 2,
+        enabled: true,
+      },
+      TabPillTitle: Pill,
+      TabBody: BodyB,
+      defaultState: () => ({}),
+    });
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        { id: 'tab-a', kind: 'file-browser', state: null },
+        { id: 'tab-b', kind: 'terminal', state: null },
+      ],
+      activeTabId: 'tab-a',
+    });
+
+    try {
+      const view = render(
+        createElement(RightSidebarShell, {
+          sessionId: 's1',
+          workdir: '/tmp/repo',
+          remoteHostId: null,
+          isMac: true,
+        }),
+      );
+
+      await waitFor(() => expect(screen.getByTestId('body-a')).toBeTruthy());
+      expect(screen.queryByTestId('body-b')).toBeNull();
+      expect(idleCallbacks).toHaveLength(1);
+
+      act(() => {
+        idleCallbacks.shift()?.({
+          didTimeout: false,
+          timeRemaining: () => 50,
+        });
+      });
+
+      await waitFor(() => expect(screen.getByTestId('body-b')).toBeTruthy());
+      expect(screen.getByTestId('body-a')).toBeTruthy();
+
+      await act(async () => {
+        await setActiveTab('s1', 'tab-b');
+      });
+
+      expect(screen.getByTestId('body-a')).toBeTruthy();
+      expect(screen.getByTestId('body-b')).toBeTruthy();
+      expect(mountA).toHaveBeenCalledOnce();
+      expect(mountB).toHaveBeenCalledOnce();
+      expect(unmountA).not.toHaveBeenCalled();
+      expect(unmountB).not.toHaveBeenCalled();
+      view.unmount();
+    } finally {
+      unregisterTabKind('file-browser');
+      unregisterTabKind('terminal');
+      delete (window as unknown as { requestIdleCallback?: unknown }).requestIdleCallback;
+      delete (window as unknown as { cancelIdleCallback?: unknown }).cancelIdleCallback;
+    }
   });
 
   it('cycles right sidebar tabs in strip order and wraps around', async () => {
@@ -524,12 +676,11 @@ describe('RightSidebarShell empty state', () => {
     });
   });
 
-  it('renders detach/maximize in the topbar when panel is docked left (mac M2), spacer when right or maximized', async () => {
-    // 贴左:窗口右上浮层只剩折叠 toggle(恒钉窗口右上角,2026-07-09 Lizi 口径),
-    // detach / maximize 是面板自属控件,必须由 Shell 顶栏右端自渲染,否则面板
-    // 控件全体消失(mac 实测 bug);折叠 toggle 不下沉进面板。
+  it('keeps mac panel actions in the panel topbar without reserving a hidden show trigger', async () => {
+    // 展开态没有固定唤起入口；detach / maximize / 收起始终属于面板自身。
     const onDetach = vi.fn();
     const onMaximize = vi.fn();
+    const onCloseSidebar = vi.fn();
     const { unmount } = render(
       createElement(RightSidebarShell, {
         sessionId: 's1',
@@ -540,6 +691,7 @@ describe('RightSidebarShell empty state', () => {
         panelSide: 'left',
         onDetach,
         onMaximize,
+        onCloseSidebar,
       }),
     );
 
@@ -550,11 +702,12 @@ describe('RightSidebarShell empty state', () => {
     expect(onDetach).toHaveBeenCalledOnce();
     screen.getByRole('button', { name: 'rightSidebar.tabs.controls.maximizeAria' }).click();
     expect(onMaximize).toHaveBeenCalledOnce();
-    // 折叠 toggle 不在面板顶栏(恒在 MainLayout 窗口右上浮层)。
-    expect(screen.queryByRole('button', { name: 'contentHeader.collapsePanel' })).toBeNull();
+    screen.getByRole('button', { name: 'contentHeader.collapsePanel' }).click();
+    expect(onCloseSidebar).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
     unmount();
 
-    // 贴左 + maximize 撑满:面板成为最右 pane,浮层接管三按钮,Shell 回落 spacer。
+    // maximize 后面板占据最右边缘，仍保留自属控件，但不为隐藏的唤起入口留空。
     const { unmount: unmountMax } = render(
       createElement(RightSidebarShell, {
         sessionId: 's1',
@@ -566,13 +719,15 @@ describe('RightSidebarShell empty state', () => {
         isMaximized: true,
         onDetach,
         onMaximize,
+        onCloseSidebar,
       }),
     );
     await waitFor(() => expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy());
-    expect(screen.queryByTestId('right-sidebar-topbar-actions')).toBeNull();
+    expect(screen.getByTestId('right-sidebar-topbar-actions')).toBeTruthy();
+    expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
     unmountMax();
 
-    // 贴右(默认):按钮在 MainLayout 浮层,Shell 只渲染让位 spacer。
+    // 贴右时同样保留面板自属控件，不显示无效唤起入口，也不留空。
     render(
       createElement(RightSidebarShell, {
         sessionId: 's1',
@@ -582,17 +737,19 @@ describe('RightSidebarShell empty state', () => {
         unifiedTopbar: true,
         onDetach,
         onMaximize,
+        onCloseSidebar,
       }),
     );
     await waitFor(() => expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy());
-    expect(screen.queryByTestId('right-sidebar-topbar-actions')).toBeNull();
-    expect(
-      screen.queryByRole('button', { name: 'rightSidebar.tabs.controls.detachAria' }),
-    ).toBeNull();
+    expect(screen.getByTestId('right-sidebar-topbar-actions')).toBeTruthy();
+    expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
+    expect(screen.getByRole('button', { name: 'rightSidebar.tabs.controls.detachAria' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'contentHeader.collapsePanel' })).toBeTruthy();
   });
 
   it('keeps the existing 36px TabBar host on Windows', async () => {
     const onCloseSidebar = vi.fn();
+    const onShowSidebar = vi.fn();
     render(
       createElement(RightSidebarShell, {
         sessionId: 's1',
@@ -600,6 +757,7 @@ describe('RightSidebarShell empty state', () => {
         remoteHostId: null,
         isMac: false,
         onCloseSidebar,
+        onShowSidebar,
         onMaximize: vi.fn(),
         onDetach: vi.fn(),
       }),
@@ -618,6 +776,34 @@ describe('RightSidebarShell empty state', () => {
     });
     collapseButton.click();
     expect(onCloseSidebar).toHaveBeenCalledOnce();
+    const showButton = screen.getByRole('button', {
+      name: 'rightSidebar.tabs.controls.showAria',
+    });
+    showButton.click();
+    expect(onShowSidebar).toHaveBeenCalledOnce();
+    expect(showButton.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('does not render the fixed show action while the Windows sidebar is already expanded', async () => {
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: false,
+        onCloseSidebar: vi.fn(),
+        onMaximize: vi.fn(),
+        onDetach: vi.fn(),
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy());
+    expect(
+      screen.queryByRole('button', { name: 'rightSidebar.tabs.controls.showAria' }),
+    ).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'rightSidebar.tabs.controls.closeAria' }),
+    ).toBeTruthy();
   });
 
   it('keeps the legacy TabBar without window controls for the detached mac window (no unifiedTopbar)', async () => {

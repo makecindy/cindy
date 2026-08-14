@@ -16,7 +16,9 @@ export type TurnChangeIncompleteReason =
   | 'read-failed'
   | 'diff-too-large'
   | 'provider-diff-conflict'
-  | 'turn-failed';
+  | 'turn-failed'
+  /** Another session's turn overlapped in the same workspace; capture attribution is best-effort and never undoable. */
+  | 'concurrent-workspace';
 
 export interface TurnChangeFileSummary {
   id: string;
@@ -71,6 +73,15 @@ export interface PersistedTurnChangeSetV1 {
   completedAt: number;
   unifiedDiff: string;
   files: TurnChangeFileSummary[];
+}
+
+/**
+ * Whether a summary carries file content a standalone review card can show.
+ * Incomplete zero-file records remain persisted for diagnostics, but rendering a
+ * warning-only card in the chat stream gives the user nothing to inspect or act on.
+ */
+export function hasReviewableTurnChanges(summary: TurnChangeSetSummary): boolean {
+  return summary.fileCount > 0 || summary.files.length > 0;
 }
 
 export interface TurnChangeSetUpdatedPayload {

@@ -1,7 +1,7 @@
 /**
  * PiAgent.listAgentSkills 单测 —— 纯文件系统技能发现(不 spawn pi 二进制)。
  *
- * 验证 pi 的 ChatInput `/` palette agent-skill 类目能扫到项目 .pi/agent/skills 下的
+ * 验证 pi 的 ChatInput `/` palette agent-skill 类目能扫到项目 .pi/skills 下的
  * SKILL.md,与 CC/Codex 的技能可见性对齐;发现层零基线上下文(仅 name/description)。
  */
 
@@ -48,8 +48,8 @@ describe('PiAgent.listAgentSkills (filesystem discovery, no binary spawn)', () =
     rmSync(workingDir, { recursive: true, force: true });
   });
 
-  it('discovers a project-scoped skill from .pi/agent/skills/<name>/SKILL.md', async () => {
-    const skillDir = path.join(workingDir, '.pi', 'agent', 'skills', 'demo-skill');
+  it('discovers a project-scoped skill from .pi/skills/<name>/SKILL.md as unavailable', async () => {
+    const skillDir = path.join(workingDir, '.pi', 'skills', 'demo-skill');
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(
       path.join(skillDir, 'SKILL.md'),
@@ -64,6 +64,8 @@ describe('PiAgent.listAgentSkills (filesystem discovery, no binary spawn)', () =
     expect(found?.kind).toBe('agent-skill');
     expect(found?.source).toBe('skill');
     expect(found?.scope).toBe('repo');
+    expect(found?.runtimeStatus).toBe('discovered');
+    expect(found?.runtimeCommandName).toBe('skill:demo-skill');
     expect(found?.description).toContain('demo skill');
   });
 

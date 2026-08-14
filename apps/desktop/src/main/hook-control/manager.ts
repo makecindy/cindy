@@ -18,6 +18,8 @@ import { randomUUID } from 'node:crypto';
 
 import {
   HOOK_FEATURE_GROUP_RELAY,
+  DEFAULT_TELEGRAM_BEHAVIOR,
+  HOOK_FEATURE_MESSAGE_OPS,
   HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
@@ -53,6 +55,7 @@ import {
   type ProviderBindStatusPayload,
   type ProviderBehaviorSetPayload,
   type ProviderBehaviorStatePayload,
+  type TelegramEmojiReactions,
   type QuerySessionEntry,
 } from '@cindy/slack-hook-protocol';
 
@@ -679,6 +682,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       HOOK_FEATURE_GROUP_RELAY,
       HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
       HOOK_FEATURE_PROVIDER_BEHAVIOR,
+      // 只给 Telegram 声明: msg.op 目前只有 Telegram 的执行器, X 的渲染路径
+      // 不接入(#1855 的红线之一)。
+      HOOK_FEATURE_MESSAGE_OPS,
     ],
     isEnabled: () => store.get().telegramEnabled,
     setEnabled: (enabled) => {
@@ -931,6 +937,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function activateCurrentAccount(): void {
     if (accountActive || disposed) return;
     accountActive = true;
+    // 新账号的档位要重新拉 —— 沿用上一位主人的选择就是串台。
+    resetTelegramEmojiReactions();
     // 群窗口生命周期兼容入口(永久保留模式下是 no-op)。仍纳入
     // pendingAccountOps，保证未来若恢复本地维护动作也受账号 DB 边界保护。
     trackAccountOp(sweepGroupWindowExpired());
@@ -1087,6 +1095,84 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       timer.unref?.();
       lane.pendingBehavior.set(requestId, { bindingId, resolve, reject, timer });
     });
+  }
+
+  /**
+   * 最近一次 provider.behavior.state 的表情档位。
+   *
+   * 之前这个状态只广播给界面, main 侧没留 —— 于是 ack 表情读不到用户的
+   * off / minimal / expressive 选择。缓存在这里而不是塞进 lane: 它是 per-binding
+   * 的全局开关, 而 Telegram lane 与 binding 一一对应。
+   */
+  let telegramEmojiReactions: TelegramEmojiReactions | null = null;
+  /**
+   * 缓存里那个档位是**谁的**。
+   *
+   * 档位是 per-binding 的用户设置。换绑(A → B)时如果只是重新拉一次而不先作废
+   * 旧值, B 的设置到达之前的每一次派发都会按 A 的选择发表情 —— 上一位主人关了
+   * 表情、新主人开着(或反过来)都会串号。
+   */
+  let telegramEmojiReactionsBindingId: string | null = null;
+
+  /**
+   * 把最新档位落进缓存并转告 dispatcher(ack 表情按它决定发什么、发不发)。
+   */
+  function adoptTelegramEmojiReactions(
+    next: TelegramEmojiReactions | null,
+    bindingId: string | null = null,
+  ): void {
+    telegramEmojiReactions = next;
+    telegramEmojiReactionsBindingId = next === null ? null : bindingId;
+    dispatcher?.setEmojiReactionsMode(next);
+  }
+
+  /**
+   * 账号切换/停用时把档位打回**未知**, 而不是打回基线。
+   *
+   * 档位是 per-binding 的用户设置 —— 换个账号还沿用上一位主人的选择就是串台;
+   * 而拿基线顶上同样不对: 新主人可能正是把表情关掉的那个, 在他的值到达前发
+   * 一轮 minimal 就是无视他的选择。未知期间一帧不发, 等 hydrate 落定。
+   * 与 serverFeatures 的清理同理由: 留着比没有更糟。
+   */
+  function resetTelegramEmojiReactions(): void {
+    adoptTelegramEmojiReactions(null);
+  }
+
+  /**
+   * 连接就绪即主动拉一次表情档位。
+   *
+   * 之前只在收到 provider.behavior.state 时才更新 —— 那要等用户打开 Settings
+   * 页面, 或等服务端主动推。在那之前的每一次派发都按 minimal 发表情, 用户明明
+   * 关掉了却照发。绑定未确认 / 服务端不支持 behavior 时静默跳过(getTelegramBehavior
+   * 自己会短路)。
+   */
+  function primeTelegramEmojiReactions(bindingIdOverride?: string | null): void {
+    const bindingId =
+      bindingIdOverride ??
+      (telegramLane.binding?.state === 'confirmed' ? telegramLane.binding.bindingId : null);
+    if (bindingId === null) return; // 还没确认绑定 —— 等 confirmed 回调再来
+    // 服务端根本不宣告 provider.behavior: 不存在服务端侧的覆盖值, 协议基线**就是**
+    // 确定的有效值, 直接落定。不落定的话档位永远停在「未知」, ack 表情一次都不发。
+    if (!telegramLane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_BEHAVIOR)) {
+      adoptTelegramEmojiReactions(DEFAULT_TELEGRAM_BEHAVIOR.emojiReactions, bindingId);
+      return;
+    }
+    void sendTelegramBehaviorRequest(bindingId, (requestId, currentBindingId) =>
+      makeProviderBehaviorGet({
+        requestId,
+        provider: 'telegram',
+        bindingId: currentBindingId,
+      }),
+    )
+      // bindingId 必须一起落 —— 丢掉它的话, behavior.state handler 刚记下的归属
+      // 会被这次覆盖成 null, 同一 binding 的下一个重复 confirmed 快照就被误判成
+      // 换绑, 档位被清回未知、hydration 窗口内的任务全部漏发 ack。
+      .then((view) => adoptTelegramEmojiReactions(view.emojiReactions, view.bindingId))
+      .catch(() => {
+        // 超时 / 断线是**暂时**失败: 服务端明明有这套设置, 只是这一次没问到。
+        // 拿基线顶上就等于替用户做了选择(他可能正是把表情关掉的那个), 所以
+        // 档位留在「未知」—— 下一次连接或绑定确认会再 hydrate 一遍。
+      });
   }
 
   function telegramBehaviorView(payload: ProviderBehaviorStatePayload): TelegramHookBehaviorState {
@@ -1296,6 +1382,27 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   }
 
   function persistLaneBinding(lane: NeutralProviderLane, view: ProviderBindingView): void {
+    // 档位是 per-binding 的: 绑定确认(首绑 / 改绑)之后才知道该读谁的设置, 而
+    // 绑定确认往往发生在连接之后 —— 只在连接就绪时拉一次会漏掉这一路。撤销 /
+    // 换绑则回到基线, 不把上一位主人的选择留给下一个。
+    if (lane.config.provider === 'telegram') {
+      if (view.state === 'confirmed') {
+        // 换绑: 先把旧主人的档位作废再拉新的。不作废的话, B 的设置到达之前
+        // 每一次派发都按 A 的选择发表情 —— 配置串号。同一个 binding 的重复
+        // confirmed 不清, 免得把已经就绪的档位打回未知、白白漏发一批。
+        if ((view.bindingId ?? null) !== telegramEmojiReactionsBindingId) {
+          adoptTelegramEmojiReactions(null);
+        }
+        // 这一刻 lane.binding 可能还是旧值, 用刚确认的 bindingId。
+        primeTelegramEmojiReactions(view.bindingId ?? null);
+      } else if (
+        view.state === 'revoked' ||
+        view.state === 'none' ||
+        view.state === 'superseded'
+      ) {
+        resetTelegramEmojiReactions();
+      }
+    }
     try {
       if (
         view.state === 'confirmed' &&
@@ -2044,6 +2151,11 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       log.info(`bind.state: ${snap.length} bindings`);
       return;
     }
+    if (msg.type === 'msg.op.result') {
+      // 表情回执: 纯装饰动作的结果, 失败只记一行 —— 不重试也不影响任务本身。
+      dispatcher?.onMessageOpResult(msg.payload);
+      return;
+    }
     if (msg.type === 'tool.response') {
       // Slack 网关工具应答: replyTo 配对在途请求; 迟到帧(已超时清理)静默丢
       const pending = pendingTools.get(msg.payload.replyTo);
@@ -2168,6 +2280,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           return;
         }
         const view = telegramBehaviorView(msg.payload);
+        adoptTelegramEmojiReactions(view.emojiReactions, view.bindingId);
         pending.resolve(view);
         notifyTelegramBehavior?.(view);
         return;
@@ -2176,7 +2289,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         log.warn('stale provider behavior push for a different binding, dropped');
         return;
       }
-      notifyTelegramBehavior?.(telegramBehaviorView(msg.payload));
+      const pushedView = telegramBehaviorView(msg.payload);
+      adoptTelegramEmojiReactions(pushedView.emojiReactions, pushedView.bindingId);
+      notifyTelegramBehavior?.(pushedView);
       return;
     }
     if (msg.type === 'bind.update') {
@@ -2634,6 +2749,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           // deploy without another status transition.
           const t = created;
           dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m), lane.serverFeatures);
+          if (provider === 'telegram') primeTelegramEmojiReactions();
         }
         notifyStatus(toView());
       },
@@ -2649,6 +2765,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         if (s === 'connected' && laneCapabilityReady(lane)) {
           const t = created;
           dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m), lane.serverFeatures);
+          if (provider === 'telegram') primeTelegramEmojiReactions();
         }
         notifyStatus(toView());
       },
@@ -3070,6 +3187,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // when another caller is already waiting on the same physical drain.
       accountActive = false;
       accountGeneration += 1;
+      // 👀 欠账要趁档位与连接都还活着结清 —— reset 之后档位是 null(一帧不发),
+      // stopAll 之后发送函数也没了, dispatcher 兜底那次 teardown 结不了账。
+      dispatcher?.settleAckReactions();
+      resetTelegramEmojiReactions();
       for (const lane of lanes) {
         lane.openRequestId = null;
         lane.bindRequest = null;

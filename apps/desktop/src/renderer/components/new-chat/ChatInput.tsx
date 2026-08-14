@@ -47,6 +47,10 @@ import {
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
 import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
 import {
+  hasFocusMovedToInteractiveElement,
+  useComposerSendFocusRestore,
+} from './useComposerSendFocusRestore';
+import {
   setVoiceInputDraftDecoration,
   VoiceInputDraftDecoration,
   type VoiceInputCaretState,
@@ -137,9 +141,20 @@ import {
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
 import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
-import { focusComposerEndNextFrame, placeGhostAtComposerStart } from './ghostComposerPlacement';
+import {
+  focusComposerEndNextFrame,
+  hostCapabilityForGhost,
+  placeGhostAtComposerStart,
+  placeHostCapabilityAtComposerStart,
+} from './ghostComposerPlacement';
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
+import {
+  addPlanModeComposerCommand,
+  consumePlanModeComposerCommand,
+  isPlanModeComposerCommandText,
+  shouldPreservePlanModeComposerDraft,
+} from './planModeComposerCommand';
 import { PendingQueuePanel } from './PendingQueuePanel';
 import { SendButton } from './SendButton';
 import { FolderPickerPopover, addRecentFolder } from './FolderPickerPopover';
@@ -149,6 +164,7 @@ import {
   findGhostByCommand,
   parseGhostCommandWord,
 } from '@/cindy-brain/ghostCommand';
+import { expandHostCapabilityInvocation } from '@/cindy-brain/hostCapabilityInvocation';
 import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -185,7 +201,6 @@ import { composerDocIsEmpty } from './composerDocState';
 import { canUseLocalAttachmentPicker } from './localAttachmentPicker';
 import {
   isComposerBlankPointerTarget,
-  isInteractiveFocusedElement,
   resolveComposerBlankFocusIntent,
 } from './composerBlankPointerFocus';
 import {
@@ -200,7 +215,23 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Selection, TextSelection } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
-import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
+import {
+  beginSlashCommandRosterLoad,
+  EMPTY_SLASH_COMMANDS,
+  failSlashCommandRosterLoad,
+  filterSlashCommands,
+  firstAvailableSlashCommandIndex,
+  hasAvailableSlashCommand,
+  hasUnavailableProjectSkillPreview,
+  isSlashCommandUnavailable,
+  isSlashCommandRosterReady,
+  loadAllCommands,
+  nextAvailableSlashCommandIndex,
+  PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  slashCommandInvocationName,
+  type SlashCommandRosterState,
+  type UnifiedCommand,
+} from '@/lib/slashCommands';
 import {
   AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
   getAtDirectoryCompletionQuery,
@@ -300,6 +331,7 @@ import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { makerApiFor, makerApiForDevice } from '@/lib/makerTransport';
+import { SESSION_LINK_DROP_MIME } from '@/lib/sessionLinkDrop';
 
 const log = createLogger('ChatInput');
 // perf-baseline(与 MessageStream / sidebar 的 perf/session-switch 探针同通道):
@@ -326,7 +358,6 @@ const ComposerHardBreak = HardBreak.extend({
 // 自然宽度（permission + model + voice + send 等）估，实测可微调。
 const TOOLBAR_DENSE_MAX_WIDTH = 520;
 const TOOLBAR_COMPACT_MAX_WIDTH = 448;
-
 function isVoiceInputIdleLike(state: VoiceInputState): boolean {
   return state === 'idle' || state === 'done' || state === 'error';
 }
@@ -443,6 +474,8 @@ interface ChatInputProps {
   onWorkingDirChange?: (dir: string | null) => void;
   /** When true, the input is disabled (e.g. during streaming). */
   disabled?: boolean;
+  /** Freeze model/provider/effort/permission controls for audit-only tasks. */
+  settingsLocked?: boolean;
   /** When true, shows Stop button instead of Send button. */
   isStreaming?: boolean;
   /**
@@ -728,20 +761,6 @@ function scrollVoiceInputDraftEndIntoView(editor: Editor): void {
   }
 }
 
-function hasFocusMovedToInteractiveElement(focusAnchor: Element | null, editor: Editor): boolean {
-  const activeElement = document.activeElement;
-  if (
-    !activeElement ||
-    activeElement === document.body ||
-    activeElement === document.documentElement
-  ) {
-    return false;
-  }
-  if (activeElement === focusAnchor) return false;
-  if (editor.view.dom.contains(activeElement)) return false;
-  return isInteractiveFocusedElement(activeElement);
-}
-
 /**
  * Is the editor document "empty" (no text and no chips)? Used to mimic the
  * textarea's `message.trim().length > 0` gate for the Send button.
@@ -936,6 +955,7 @@ export function ChatInput({
   onFastModeChange,
   onWorkingDirChange,
   disabled,
+  settingsLocked = false,
   isStreaming = false,
   isAgentBusy,
   onStop,
@@ -1460,8 +1480,8 @@ export function ChatInput({
   // 与下拉菜单看到的顺序一致。vendorKey 未锁定时按 PermissionSelector 的
   // 默认取 cc。editorProps.handleKeyDown 是稳定闭包, 走 ref 取值。
   const permissionCycleOptions = useMemo(
-    () => activeAgentCapabilities?.permissionModes ?? [],
-    [activeAgentCapabilities],
+    () => (settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? [])),
+    [activeAgentCapabilities, settingsLocked],
   );
   const permissionCycleOptionsRef = useRef(permissionCycleOptions);
   permissionCycleOptionsRef.current = permissionCycleOptions;
@@ -1475,7 +1495,7 @@ export function ChatInput({
   // 计划模式入口门控:agent capability(device-link 老被控端无此字段 → 隐藏)+ 父组件接线。
   const planModeSupported = activeAgentCapabilities?.planMode?.supported === true;
   const planModeEntry =
-    planModeSupported && onPlanModeChange
+    !settingsLocked && planModeSupported && onPlanModeChange
       ? { enabled: planModeEnabled, onToggle: (next: boolean) => void onPlanModeChange(next) }
       : undefined;
   // 当前 activeModel 归属的 agent runtime —— 用于 send 预检里按 (model, agent) 查
@@ -1730,7 +1750,7 @@ export function ChatInput({
           // 多行列表 "1. / 2. / 3." 的点和正文会逐行漂移;等宽数字让前缀宽度
           // 一致、列表自然对齐。ComposerListIndentDecoration 会额外为整条列表
           // 行保留换行后的视觉缩进。
-          'text-[15px] leading-[22px] font-normal tabular-nums',
+          'text-15 leading-[1.467] font-normal tabular-nums',
           'text-[var(--chat-input-text)]',
           'focus:outline-none',
           // Tailwind can't target ProseMirror placeholder pseudo — handled
@@ -1986,6 +2006,13 @@ export function ChatInput({
         return false;
       },
       handleDrop(_view, event) {
+        // Session-link drops are inserted by the outer composer drop handler.
+        // Consume the event here first so ProseMirror does not also insert the
+        // drag source's `text/plain` fallback (the raw session id).
+        if (event.dataTransfer?.getData(SESSION_LINK_DROP_MIME).trim()) {
+          event.preventDefault();
+          return true;
+        }
         const payload = decodeComposerMentionPayload(
           event.dataTransfer?.getData(COMPOSER_MENTION_MIME) ?? '',
         );
@@ -2276,6 +2303,11 @@ export function ChatInput({
             attachments: existing?.attachments ?? [],
             quotes: existing?.quotes ?? [],
             browserComments: existing?.browserComments ?? [],
+            ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+            ...(existing?.pendingHostCapabilityGhostId
+              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+              : {}),
+            ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: true },
         );
@@ -2350,6 +2382,20 @@ export function ChatInput({
         },
         { at },
       );
+      return true;
+    },
+    [editor],
+  );
+
+  const insertSessionLinkDrop = useCallback(
+    (e: ReactDragEvent<HTMLElement>): boolean => {
+      if (!editor || editor.isDestroyed) return false;
+      const href = e.dataTransfer.getData(SESSION_LINK_DROP_MIME).trim();
+      if (!href) return false;
+      const at = lastComposerSelectionFromRef.current ?? editor.state.selection.from;
+      appendMentionChip(editor, pastedSessionChipAttrs({ href, label: null }), { at });
+      lastComposerSelectionFromRef.current = editor.state.selection.from;
+      resolveSessionChipTitles(editor);
       return true;
     },
     [editor],
@@ -2467,48 +2513,51 @@ export function ChatInput({
     [installedGhosts, workingDir],
   );
   const pluginAvailableIds = useMemo(
-    () =>
-      new Set(
-        ghostsForCommand
-          .filter((ghost) => ghost.enabled && ghost.manifest.command)
-          .map((ghost) => ghost.manifest.id),
-      ),
+    () => new Set(ghostsForCommand.filter((ghost) => ghost.enabled).map((ghost) => ghost.manifest.id)),
     [ghostsForCommand],
   );
   // 统一建议面板的插件条目(旧 `+` 菜单口径的并集):可用项可选,无指令或
-  // 未生效项保留展示但置灰(entry 级 disabled + 原因)。
-  const pluginSuggestions = useMemo<ComposerPluginSuggestion[]>(
-    () => {
-      // device-link 远程会话的插件运行在被控端；控制端清单既不代表远端
-      // 已安装状态，选择后也无法用本地 InstalledGhost 解析并插入命令。
-      if (deviceLinkDeviceId) return [];
-      return pluginsForMenu.map((ghost) => {
-        const hasCommand = !!ghost.manifest.command;
-        const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasCommand;
-        return {
-          item: {
-            type: 'plugin-command' as const,
-            name: ghost.manifest.name,
-            relPath: ghost.manifest.command ?? `cindy://plugin/${ghost.manifest.id}`,
-            pluginId: ghost.manifest.id,
-            ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
-            sourceLabel: ghost.manifest.command ?? '',
-            _nameLower: `${ghost.manifest.name} ${ghost.manifest.command ?? ''}`.toLowerCase(),
-            _relPathLower: `${ghost.manifest.command ?? ''} ${ghost.manifest.id}`.toLowerCase(),
-          },
-          ...(selectable
-            ? {}
-            : {
-                disabled: true,
-                disabledReason: t(
-                  hasCommand ? 'extraDirs.pluginDisabled' : 'extraDirs.pluginNoCommand',
-                ),
-              }),
-        };
-      });
-    },
-    [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, t],
-  );
+  // Host 入口或未生效项保留展示但置灰(entry 级 disabled + 原因)。
+  const pluginSuggestions = useMemo<ComposerPluginSuggestion[]>(() => {
+    // device-link 远程会话的插件运行在被控端；控制端清单既不代表远端
+    // 已安装状态，选择后也无法用本地 InstalledGhost 解析并插入命令。
+    if (deviceLinkDeviceId) return [];
+    return pluginsForMenu.map((ghost) => {
+      const hasCommand = !!ghost.manifest.command;
+      const hostCapability = remoteHostId ? null : hostCapabilityForGhost(ghost);
+      const hasComposerEntry = hasCommand || hostCapability !== null;
+      const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasComposerEntry;
+      const entryKey = ghost.manifest.command ?? hostCapability ?? '';
+      return {
+        item: {
+          type: 'plugin-command' as const,
+          name: ghost.manifest.name,
+          relPath:
+            ghost.manifest.command ??
+            (hostCapability
+              ? `cindy://host-capability/${hostCapability}`
+              : `cindy://plugin/${ghost.manifest.id}`),
+          pluginId: ghost.manifest.id,
+          ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+          sourceLabel: entryKey,
+          _nameLower: `${ghost.manifest.name} ${entryKey}`.toLowerCase(),
+          _relPathLower: `${entryKey} ${ghost.manifest.id}`.toLowerCase(),
+        },
+        ...(selectable
+          ? {}
+          : {
+              disabled: true,
+              disabledReason: t(
+                !pluginAvailableIds.has(ghost.manifest.id)
+                  ? 'extraDirs.pluginDisabled'
+                  : ghost.manifest.slots.includes('skill')
+                    ? 'extraDirs.pluginAgentInvoked'
+                    : 'extraDirs.pluginNoCommand',
+              ),
+            }),
+      };
+    });
+  }, [deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, remoteHostId, t]);
   useEffect(() => {
     setGhostCommandRoster(editor, ghostsForCommand);
   }, [editor, ghostsForCommand]);
@@ -2543,6 +2592,11 @@ export function ChatInput({
   useEffect(() => {
     editor?.setEditable(!composerMutationLocked);
   }, [composerMutationLocked, editor]);
+  const captureSendFocusForRestore = useComposerSendFocusRestore(
+    editor,
+    composerMutationLocked,
+    sendDispatchInFlight,
+  );
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const voiceInputShortcutLabel = useMemo(
     () => formatVoiceInputShortcut(voiceInputSettings.shortcut),
@@ -2709,9 +2763,25 @@ export function ChatInput({
       ) {
         event.preventDefault();
         event.stopPropagation();
+        if (panelBridgeRef.current?.captureKey(event)) return;
         clearPressTimer();
         voiceShortcutPressRef.current = null;
         void dispatchSendRef.current(enterIntent);
+        return;
+      }
+
+      // This window capture listener runs before Tiptap's palette bridge. While
+      // listening, preserve the editor's normal priority: Enter first selects
+      // or dismisses the open palette instead of stopping voice and sending the
+      // unresolved slash query.
+      if (
+        currentState === 'listening' &&
+        isComposerEnterTarget(event.target) &&
+        (enterIntent === 'queue' || enterIntent === 'steer') &&
+        panelBridgeRef.current?.captureKey(event)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
 
@@ -2993,6 +3063,11 @@ export function ChatInput({
           attachments: existing?.attachments ?? [],
           quotes: existing?.quotes ?? [],
           browserComments: existing?.browserComments ?? [],
+          ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+          ...(existing?.pendingHostCapabilityGhostId
+            ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+            : {}),
+          ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
         },
         { silent: true },
       );
@@ -3058,7 +3133,7 @@ export function ChatInput({
         window.requestAnimationFrame(() => {
           if (editor.isDestroyed || !editor.isEditable) return;
           if (latestStorageKeyRef.current !== storageKey) return;
-          if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor)) return;
+          if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)) return;
           editor.commands.focus('end');
         });
       }
@@ -3125,7 +3200,7 @@ export function ChatInput({
         if (!focusOnStorageKeyChangeRef.current) return;
         if (disableAutofocusRef.current || disabledRef.current) return;
         if (editor.isDestroyed || !editor.isEditable) return;
-        if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor)) return;
+        if (hasFocusMovedToInteractiveElement(storageKeyFocusAnchor, editor.view.dom)) return;
         editor.commands.focus('end');
       });
     };
@@ -3204,9 +3279,9 @@ export function ChatInput({
   }, [editor, storageKey]);
 
   // Plugin page routed entry: wait until the editor has hydrated its existing
-  // draft, then reuse the exact same insertion/focus path as the in-composer
-  // `$` / `+` selectors. This preserves body text and replaces an existing
-  // Plugin command instead of treating the command as prefilled plain text.
+  // draft, then reuse the same placement path as the in-composer selectors.
+  // Command and Host-capability Plugins intentionally use separate handoff
+  // fields because only commands expand through `ghost_call`.
   useEffect(() => {
     if (!editor || !storageKey || !hasHydratedRef.current) return;
     const draft = getComposerDraft(storageKey);
@@ -3227,6 +3302,23 @@ export function ChatInput({
         { silent: true },
       );
       placeGhostAtComposerStart(editor, ghost, installedGhosts);
+      return;
+    }
+
+    if (draft.pendingHostCapabilityGhostId) {
+      const ghost = ghostsForCommand.find(
+        (candidate) => candidate.manifest.id === draft.pendingHostCapabilityGhostId,
+      );
+      saveComposerDraft(
+        storageKey,
+        {
+          ...draft,
+          pendingHostCapabilityGhostId: undefined,
+          focusAtEnd: false,
+        },
+        { silent: true },
+      );
+      if (ghost) placeHostCapabilityAtComposerStart(editor, ghost, installedGhosts);
       return;
     }
 
@@ -3275,6 +3367,11 @@ export function ChatInput({
             attachments: existing?.attachments ?? [],
             quotes: existing?.quotes ?? [],
             browserComments: next,
+            ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+            ...(existing?.pendingHostCapabilityGhostId
+              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+              : {}),
+            ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: true },
         );
@@ -3374,12 +3471,41 @@ export function ChatInput({
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
-  const [mergedCommands, setMergedCommands] = useState<UnifiedCommand[]>([]);
   const paletteAgentKind = agentKind ?? 'claude-code';
   // remote session:workingDir 是远端主机路径,不能按它扫本机 skills/files。
   // slash 退化为 desktop + agent-builtin(传 null),@ 文件面板直接关闭(见 atOpen)。
   const isRemoteSession = !!remoteHostId;
+  const slashCommandContextKey = JSON.stringify([
+    workingDir ?? null,
+    paletteAgentKind,
+    isRemoteSession,
+    sessionId ?? null,
+    deviceLinkDeviceId ?? null,
+  ]);
+  const [slashCommandLoadState, setSlashCommandLoadState] = useState<SlashCommandRosterState>({
+    contextKey: '',
+    status: 'loading',
+    commands: EMPTY_SLASH_COMMANDS,
+  });
+  const slashCommandsReady = isSlashCommandRosterReady(
+    slashCommandLoadState,
+    slashCommandContextKey,
+  );
+  const mergedCommands =
+    slashCommandLoadState.contextKey === slashCommandContextKey
+      ? slashCommandLoadState.commands
+      : EMPTY_SLASH_COMMANDS;
+  const planModeCommandAvailable = planModeEntry !== undefined;
+  const composerSlashCommands = useMemo(
+    () =>
+      addPlanModeComposerCommand(
+        mergedCommands,
+        planModeCommandAvailable && slashCommandsReady ? t('planMode.menuItem') : null,
+      ),
+    [mergedCommands, planModeCommandAvailable, slashCommandsReady, t],
+  );
   const slashCommandLoadSeqRef = useRef(0);
+  const piRuntimeRetryRef = useRef(0);
   useEffect(
     () => () => {
       slashCommandLoadSeqRef.current += 1;
@@ -3389,38 +3515,54 @@ export function ChatInput({
   const reloadSlashCommands = useCallback(
     (opts?: { forceReload?: boolean }) => {
       const seq = ++slashCommandLoadSeqRef.current;
+      setSlashCommandLoadState((current) =>
+        beginSlashCommandRosterLoad(current, slashCommandContextKey),
+      );
       // device-link 远程会话:agent-builtin / agent-skill 从被控端读(deviceLinkDeviceId);
       // workingDir 是被控端路径；SSH remote 显式关扫描。desktop 命令始终本地。
       loadAllCommands(
         paletteAgentKind,
         workingDir,
-        { ...opts, skipAgentSkills: isRemoteSession },
+        { ...opts, skipAgentSkills: isRemoteSession, sessionId },
         deviceLinkDeviceId,
       )
         .then((cmds) => {
-          if (slashCommandLoadSeqRef.current === seq) setMergedCommands(cmds);
+          if (slashCommandLoadSeqRef.current === seq) {
+            setSlashCommandLoadState({
+              contextKey: slashCommandContextKey,
+              status: 'ready',
+              commands: cmds,
+            });
+          }
         })
         .catch(() => {
-          if (slashCommandLoadSeqRef.current === seq) setMergedCommands([]);
+          if (slashCommandLoadSeqRef.current === seq) {
+            setSlashCommandLoadState((current) =>
+              failSlashCommandRosterLoad(current, slashCommandContextKey),
+            );
+          }
         });
     },
-    [workingDir, paletteAgentKind, isRemoteSession, deviceLinkDeviceId],
+    [
+      workingDir,
+      paletteAgentKind,
+      isRemoteSession,
+      sessionId,
+      deviceLinkDeviceId,
+      slashCommandContextKey,
+    ],
   );
-  // context(workingDir / agentKind / remote)变化时先同步清空命令缓存:切换会话(尤其
-  // local→remote)那一瞬,reloadSlashCommands 是异步的,清空可避免 palette 在刷新完成前
-  // 残留上一个项目的本地 skills。下面的 reload effect 紧接着用新 context 重填。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 这里用依赖数组表达上下文切换触发清空，effect 内不直接读取这些值。
   useEffect(() => {
-    setMergedCommands([]);
-  }, [workingDir, paletteAgentKind, isRemoteSession, deviceLinkDeviceId]);
+    piRuntimeRetryRef.current = 0;
+  }, [slashCommandContextKey]);
   useEffect(() => {
     reloadSlashCommands();
   }, [reloadSlashCommands]);
   // Slash 指令与 $意识一致:doc 保持可逐字编辑的普通文本,完整命中当前 roster
   // 时才由 decoration 显示确认胶囊。异步 roster 刷新不进入 keystroke 热路径。
   useEffect(() => {
-    setSlashCommandRoster(editor, mergedCommands);
-  }, [editor, mergedCommands]);
+    setSlashCommandRoster(editor, composerSlashCommands);
+  }, [editor, composerSlashCommands]);
   // 意识指令源($ 触发):复用窗口级已装意识快照,避免输入触发符时同步扫盘。
   // 目录级禁用同判:被禁用的意识不进 $ 菜单(与胶囊 / 发送期展开同源)。
   const isGhostSigil = trigger.kind === 'slash' && trigger.sigil === '$';
@@ -3438,7 +3580,7 @@ export function ChatInput({
       );
   }, [ghostsForCommand, isGhostSigil, t]);
   // 面板显示与键盘导航共用同一份命令源:$ 只列意识,/ 只列技能/命令。
-  const paletteCommands = isGhostSigil ? ghostCommandItems : mergedCommands;
+  const paletteCommands = isGhostSigil ? ghostCommandItems : composerSlashCommands;
   const filteredCommands = useMemo(
     () => (trigger.kind === 'slash' ? filterSlashCommands(paletteCommands, trigger.query) : []),
     [paletteCommands, trigger],
@@ -3702,10 +3844,15 @@ export function ChatInput({
   const [slashFocus, setSlashFocus] = useState(0);
   const [atFocus, setAtFocus] = useState(0);
 
-  // Reset focus when the list shrinks below current index
+  // Keep keyboard focus on an executable row when filtering or runtime status changes.
   useEffect(() => {
-    if (slashFocus >= filteredCommands.length) setSlashFocus(0);
-  }, [filteredCommands.length, slashFocus]);
+    setSlashFocus((current) => (
+      current >= filteredCommands.length
+      || (filteredCommands[current] && isSlashCommandUnavailable(filteredCommands[current]))
+        ? firstAvailableSlashCommandIndex(filteredCommands)
+        : current
+    ));
+  }, [filteredCommands]);
   useEffect(() => {
     if (
       atFocus >= filteredAt.length ||
@@ -3782,6 +3929,21 @@ export function ChatInput({
     if (!slashOpen) return;
     reloadSlashCommands({ forceReload: true });
   }, [slashOpen, reloadSlashCommands]);
+  useEffect(() => {
+    if (!slashOpen) {
+      piRuntimeRetryRef.current = 0;
+      return;
+    }
+    if (paletteAgentKind !== 'pi' || !sessionId) return;
+    if (!hasUnavailableProjectSkillPreview(mergedCommands)) return;
+    const attempt = piRuntimeRetryRef.current;
+    if (attempt >= PI_RUNTIME_SKILL_RETRY_DELAYS_MS.length) return;
+    piRuntimeRetryRef.current = attempt + 1;
+    const timer = window.setTimeout(() => {
+      reloadSlashCommands({ forceReload: true });
+    }, PI_RUNTIME_SKILL_RETRY_DELAYS_MS[attempt]);
+    return () => window.clearTimeout(timer);
+  }, [mergedCommands, paletteAgentKind, reloadSlashCommands, sessionId, slashOpen]);
 
   // ── Panel → editor bridge for keyboard nav ─────────────────────────
   // The editor's `handleKeyDown` fires before React re-renders, so we need
@@ -3793,11 +3955,12 @@ export function ChatInput({
   useEffect(() => {
     panelBridgeRef.current = {
       captureKey: (e) => {
+        if (e.isComposing) return false;
         if (!slashOpen && !atOpen) return false;
         switch (e.key) {
           case 'ArrowDown':
             if (slashOpen && filteredCommands.length > 0) {
-              setSlashFocus((i) => (i + 1) % filteredCommands.length);
+              setSlashFocus((i) => nextAvailableSlashCommandIndex(filteredCommands, i, 1));
               return true;
             }
             if (atOpen && filteredAt.length > 0) {
@@ -3807,7 +3970,7 @@ export function ChatInput({
             return false;
           case 'ArrowUp':
             if (slashOpen && filteredCommands.length > 0) {
-              setSlashFocus((i) => (i - 1 + filteredCommands.length) % filteredCommands.length);
+              setSlashFocus((i) => nextAvailableSlashCommandIndex(filteredCommands, i, -1));
               return true;
             }
             if (atOpen && filteredAt.length > 0) {
@@ -3817,8 +3980,20 @@ export function ChatInput({
             return false;
           case 'Enter':
           case 'Tab':
-            if (slashOpen && filteredCommands[slashFocus]) {
-              insertSlashCommand(filteredCommands[slashFocus]);
+            if (slashOpen) {
+              const focusedCommand = filteredCommands[slashFocus];
+              if (!focusedCommand) {
+                if (trigger.kind === 'slash') setSuppressedSlashAt(trigger.from);
+                return true;
+              }
+              if (isSlashCommandUnavailable(focusedCommand)) {
+                setSlashFocus(firstAvailableSlashCommandIndex(filteredCommands));
+                if (!hasAvailableSlashCommand(filteredCommands) && trigger.kind === 'slash') {
+                  setSuppressedSlashAt(trigger.from);
+                }
+                return true;
+              }
+              insertSlashCommand(focusedCommand);
               return true;
             }
             if (
@@ -3858,7 +4033,15 @@ export function ChatInput({
   // ── Palette insertions ─────────────────────────────────────────────
   const insertSlashCommand = useCallback(
     (cmd: UnifiedCommand) => {
-      if (!editor || trigger.kind !== 'slash') return;
+      if (
+        !editor ||
+        editor.isDestroyed ||
+        trigger.kind !== 'slash' || composerMutationLockedRef.current ||
+        editor.view.composing ||
+        isSlashCommandUnavailable(cmd)
+      ) {
+        return;
+      }
       const { from } = trigger;
       // Replace the WHOLE slash-run, not just up-to-caret: the user may
       // have moved the caret back inside the run (e.g. `/compa|ct`) and
@@ -3885,10 +4068,19 @@ export function ChatInput({
         }
         runEnd = parentStart + childOffset + text.length;
       });
-      editor
+      let planModeCommandConsumed = false;
+      const applied = editor
         .chain()
         .focus()
         .command(({ tr }) => {
+          planModeCommandConsumed = consumePlanModeComposerCommand(
+            tr,
+            from,
+            runEnd,
+            cmd,
+            planModeCommandAvailable && trigger.sigil === '/',
+          );
+          if (planModeCommandConsumed) return true;
           if (trigger.sigil === '$') {
             // 意识指令:纯文本 `$命令 `(不建 chip)——发送期由 expandGhostCommand
             // 识别并追加机器指令,序列化零特判。
@@ -3896,13 +4088,22 @@ export function ChatInput({
           } else {
             // Slash 也保持纯文本;SlashCommandDecoration 只负责视觉确认,
             // Backspace / 光标移动因此与普通文字完全一致。
-            replaceSlashCommandRunWithText(tr, editor.schema, from, runEnd, cmd.name);
+            replaceSlashCommandRunWithText(
+              tr,
+              editor.schema,
+              from,
+              runEnd,
+              slashCommandInvocationName(cmd),
+            );
           }
           return true;
         })
         .run();
+      if (applied && planModeCommandConsumed) {
+        planModeEntry?.onToggle(!planModeEntry.enabled);
+      }
     },
-    [editor, trigger],
+    [editor, planModeCommandAvailable, planModeEntry, trigger],
   );
 
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
@@ -3965,10 +4166,17 @@ export function ChatInput({
       if (selectedItem.type === 'file-picker') return;
       if (selectedItem.type === 'plugin-command') {
         if (!selectedItem.pluginId) return;
-        const ghost = installedGhostsRef.current.find(
-          (candidate) => candidate.manifest.id === selectedItem.pluginId,
-        );
-        if (!ghost?.enabled || !ghost.manifest.command) return;
+        const ghost = filterGhostsForWorkdir(
+          installedGhostsRef.current,
+          workingDirRef.current,
+        ).find((candidate) => candidate.manifest.id === selectedItem.pluginId);
+        if (!ghost?.enabled) return;
+        const useHostCapability =
+          !ghost.manifest.command &&
+          !remoteHostId &&
+          !deviceLinkDeviceId &&
+          hostCapabilityForGhost(ghost) !== null;
+        if (!ghost.manifest.command && !useHostCapability) return;
         editor
           .chain()
           .focus()
@@ -3977,7 +4185,11 @@ export function ChatInput({
             return true;
           })
           .run();
-        placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);
+        if (ghost.manifest.command) {
+          placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);
+        } else {
+          placeHostCapabilityAtComposerStart(editor, ghost, installedGhostsRef.current);
+        }
         closeAtPanel();
         return;
       }
@@ -4038,8 +4250,10 @@ export function ChatInput({
     },
     [
       closeAtPanel,
+      deviceLinkDeviceId,
       editor,
       effectiveAt,
+      remoteHostId,
       resolveEffectiveAtRange,
       setSyntheticAtAnchor,
     ],
@@ -4138,7 +4352,10 @@ export function ChatInput({
       // Local/SSH sends keep the live composer while references and runtime
       // settings settle; remote sends must stay editable after their
       // click-time snapshot is cleared.
-      if (!optimisticallyClearRemoteComposer) setSendDispatchInFlight(true);
+      if (!optimisticallyClearRemoteComposer) {
+        captureSendFocusForRestore();
+        setSendDispatchInFlight(true);
+      }
       try {
         let serializedContent = serializedAtClick;
         if (!serializedContent) {
@@ -4157,13 +4374,15 @@ export function ChatInput({
           serializedContent = serializeEditorContent(editor);
         }
         const {
-          text: editorText,
+          text: serializedEditorText,
           mentions,
           hasQuotes,
           agentReferences: serializedAgentReferences,
           pastedTextRanges,
           slashCommandRanges,
+          hostCapability: serializedHostCapability,
         } = serializedContent;
+        let editorText = serializedEditorText;
         let agentReferences = serializedAgentReferences;
         const attachmentsForSend = optimisticallyClearRemoteComposer
           ? attachmentsBeforeOptimisticClear
@@ -4171,6 +4390,86 @@ export function ChatInput({
         const commentsForSend = optimisticallyClearRemoteComposer
           ? commentsBeforeOptimisticClear
           : [...browserCommentsRef.current];
+        // Resolve the structured capability atom against the current enabled,
+        // workdir-scoped Plugin roster. Draft data is presentation state only;
+        // it cannot grant a Host route after the Plugin is disabled/uninstalled.
+        const eligibleGhosts = filterGhostsForWorkdir(
+          installedGhostsRef.current,
+          workingDirRef.current,
+        );
+        const canUseLocalHostCapability = !remoteHostId && !deviceLinkDeviceId;
+        const hostCapabilityGhost =
+          serializedHostCapability && canUseLocalHostCapability
+            ? (eligibleGhosts.find(
+                (candidate) =>
+                  candidate.enabled &&
+                  candidate.manifest.id === serializedHostCapability.ghostId &&
+                  hostCapabilityForGhost(candidate) === serializedHostCapability.capability,
+              ) ?? null)
+            : null;
+        if (serializedHostCapability && !hostCapabilityGhost) {
+          toast.warning(t('newChat.pluginSetup.error.TARGET_UNAVAILABLE'));
+          return;
+        }
+        const hostCapability =
+          serializedHostCapability && hostCapabilityGhost
+            ? {
+                capability: serializedHostCapability.capability,
+                ghostId: hostCapabilityGhost.manifest.id,
+                name: hostCapabilityGhost.manifest.name,
+              }
+            : null;
+        // A capability chip is metadata, not an automatic visible prefix. Use
+        // the localized default only when the user sent the chip by itself;
+        // otherwise preserve their body byte-for-byte and avoid duplication.
+        if (hostCapability && !editorText.trim()) {
+          editorText =
+            hostCapability.capability === 'ios-simulator'
+              ? t('rightSidebar.iosSimulator.startPrompt')
+              : hostCapability.name;
+        }
+        if (
+          !serializedHostCapability &&
+          isPlanModeComposerCommandText(
+            editorText,
+            planModeEntry !== undefined,
+            slashCommandsReady ? mergedCommands : null,
+          )
+        ) {
+          planModeEntry?.onToggle(!planModeEntry.enabled);
+          isRestoringRef.current = true;
+          try {
+            editor.commands.clearContent(true);
+          } finally {
+            isRestoringRef.current = false;
+          }
+          historyIndexRef.current = -1;
+          hydratedHistoryDocumentRef.current = null;
+          draftRef.current = null;
+          if (sourceStorageKey) {
+            if (
+              shouldPreservePlanModeComposerDraft(
+                attachmentsForSend.length,
+                commentsForSend.length,
+              )
+            ) {
+              const existingDraft = getComposerDraft(sourceStorageKey);
+              saveComposerDraft(
+                sourceStorageKey,
+                {
+                  text: editor.getJSON(),
+                  attachments: attachmentsForSend,
+                  quotes: existingDraft?.quotes ?? [],
+                  browserComments: commentsForSend,
+                },
+                { silent: true },
+              );
+            } else {
+              clearComposerDraft(sourceStorageKey);
+            }
+          }
+          return;
+        }
         // composerQuote 在其正文位置序列化成 markdown blockquote,支持引用与回复交错。
         // browser-comment-chip:页面评论序列化为 `# Browser comments:` 段拼在正文后
         // (截图在下方并入 filesToSend,与文本块里的 "attached as a labeled image"
@@ -4259,15 +4558,19 @@ export function ChatInput({
         // 追加"必须走 cindy 总机"的机器指令;未命中原样发送。
         // 读取 useInstalledGhosts 的最新窗口级快照。ghosts:changed 会原子更新
         // 该快照;发送路径无需同步 IPC,仍按当前工作目录执行同一禁用判定。
-        const eligibleGhosts = filterGhostsForWorkdir(
-          installedGhostsRef.current,
-          workingDirRef.current,
-        );
         const ghostCommandWord = parseGhostCommandWord(text);
-        const usedGhost = ghostCommandWord
-          ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
-          : null;
-        const textToSend = expandGhostCommand(text, eligibleGhosts);
+        const usedGhost = hostCapabilityGhost
+          ? hostCapabilityGhost
+          : ghostCommandWord
+            ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
+            : null;
+        const textToSend = hostCapability
+          ? expandHostCapabilityInvocation(
+              text,
+              hostCapability,
+              t('rightSidebar.iosSimulator.startPrompt'),
+            )
+          : expandGhostCommand(text, eligibleGhosts);
         const sendSnapshot = captureComposerSendSnapshot(
           editor.getJSON(),
           latestAttachmentsRef.current,
@@ -4399,6 +4702,11 @@ export function ChatInput({
                   attachments: [...next.attachments],
                   quotes: existing?.quotes ?? [],
                   browserComments: [...next.browserComments],
+                  ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
+                  ...(existing?.pendingHostCapabilityGhostId
+                    ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
+                    : {}),
+                  ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
                 },
                 { silent: true, preserveRemoteOptimisticRecovery: true },
               );
@@ -4662,6 +4970,7 @@ export function ChatInput({
       restoreFiles,
       storageKey,
       deviceLinkDeviceId,
+      remoteHostId,
       t,
       currentModelAgentKind,
       enforceConnectedSourceGate,
@@ -4671,6 +4980,10 @@ export function ChatInput({
       remoteModelListStatus,
       confirmDialog,
       navigate,
+      slashCommandsReady,
+      mergedCommands,
+      planModeEntry,
+      captureSendFocusForRestore,
     ],
   );
   useEffect(() => {
@@ -4949,6 +5262,7 @@ export function ChatInput({
       syncDraft = true,
       memoryProviderId = effectiveSourceId,
     ) => {
+      if (settingsLocked) return;
       // 切换意图期:Fast 改动是"更新意图"而不是改当前会话实时状态(否则普通
       // SET_FAST 链路会让 main 清意图、renderer 乐观态失配)。经 ref 调用——
       // performAgentSwitch 声明在本回调之后(TDZ)。
@@ -4988,6 +5302,7 @@ export function ChatInput({
       modelMemory,
       persistFastModeChange,
       syncSessionDraftModelPrefs,
+      settingsLocked,
     ],
   );
 
@@ -5273,6 +5588,7 @@ export function ChatInput({
 
   const performModelChange = useCallback(
     async (newModelId: string, expectedAgentSwitchRevision?: number) => {
+      if (settingsLocked) return false;
       const sourceSessionId = sessionId;
       const sourceRemoteDeviceId = sourceSessionId
         ? (deviceLinkDeviceId ?? getSessionDeviceId(sourceSessionId))
@@ -5312,10 +5628,7 @@ export function ChatInput({
 
       // model-only 不改变当前生效来源；effort 能力也必须按该来源精确解析，避免同 id 的
       // 内置模型档位穿进 BYOM。恢复优先级:模型预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
-      const { efforts, defaultEffort } = resolveModelEfforts(
-        newModelId,
-        effectiveSourceId,
-      );
+      const { efforts, defaultEffort } = resolveModelEfforts(newModelId, effectiveSourceId);
       const providerEffort =
         modelMemory && currentModelAgentKind && effectiveSourceId
           ? modelMemory.getEffort(currentModelAgentKind, effectiveSourceId, newModelId)
@@ -5503,6 +5816,7 @@ export function ChatInput({
       confirmModelSwitchContextGuard,
       performAgentSwitch,
       remoteAtomicModelSelectionSupported,
+      settingsLocked,
     ],
   );
 
@@ -5523,6 +5837,7 @@ export function ChatInput({
 
   const handleEffortChange = useCallback(
     async (newEffort: Effort) => {
+      if (settingsLocked) return;
       // 切换意图期:effort 改动 = 更新意图(重登记),不走普通 setEffort 链路。
       if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
@@ -5620,6 +5935,7 @@ export function ChatInput({
       syncSessionDraftModelPrefs,
       fastMode,
       performAgentSwitch,
+      settingsLocked,
     ],
   );
 
@@ -5671,6 +5987,7 @@ export function ChatInput({
       reconciledEffort?: Effort,
       expectedAgentSwitchRevision?: number,
     ) => {
+      if (settingsLocked) return false;
       const sourceSessionId = sessionId;
       const sourceRemoteDeviceId = sourceSessionId
         ? (deviceLinkDeviceId ?? getSessionDeviceId(sourceSessionId))
@@ -5945,6 +6262,7 @@ export function ChatInput({
       confirmModelSwitchContextGuard,
       performAgentSwitch,
       remoteAtomicModelSelectionSupported,
+      settingsLocked,
     ],
   );
 
@@ -5991,6 +6309,7 @@ export function ChatInput({
 
   const handlePermissionModeChange = useCallback(
     async (newMode: PermissionMode) => {
+      if (settingsLocked) return;
       const previousMode = activePermissionModeRef.current;
       if (requiresFullAccessConfirmation(previousMode, newMode)) {
         const confirmed = await confirmDialog({
@@ -6037,7 +6356,7 @@ export function ChatInput({
         toast.error(t('newChat.chatInput.permissionSwitchFailed'));
       }
     },
-    [sessionId, onPermissionModeDidChange, t, confirmDialog],
+    [sessionId, onPermissionModeDidChange, t, confirmDialog, settingsLocked],
   );
   useEffect(() => {
     handlePermissionModeChangeRef.current = handlePermissionModeChange;
@@ -6248,6 +6567,7 @@ export function ChatInput({
                       : 'focus-within:border-[var(--chat-input-border-focus)]',
                   ],
             )}
+            data-split-group-composer-drop-target
             // 卡片里的空白(文字行下方的空隙、工具栏两组按钮之间的空档、四周
             // padding)没有元素承接点击:浏览器默认会把焦点从 contenteditable 撤到
             // <body>,正在输入的光标凭空消失;而点空白又该能进入输入态。所以先
@@ -6337,6 +6657,9 @@ export function ChatInput({
               if (mentionInserted) {
                 return;
               }
+              if (insertSessionLinkDrop(e)) {
+                return;
+              }
               // 意识面板拖来的产物(cindy-ghost:// 媒体地址):走引渡链路——
               // main 验归属后,图片落图片附件、视频落路径引用的 file 附件(托盘可见)。
               // 键用 storageKey(= draftKey ?? sessionId):新建会话草稿态没有
@@ -6394,7 +6717,7 @@ export function ChatInput({
               <div className="pb-1.5">
                 <div className="group/bcomment relative inline-flex">
                   <div
-                    className="inline-flex items-center gap-1.5 rounded-full border py-1 pl-2.5 pr-2.5 text-[12px] group-hover/bcomment:pr-7"
+                    className="inline-flex items-center gap-1.5 rounded-full border py-1 pl-2.5 pr-2.5 text-12 group-hover/bcomment:pr-7"
                     style={{
                       borderColor: 'var(--border-default)',
                       color: 'var(--text-secondary)',
@@ -6439,7 +6762,7 @@ export function ChatInput({
                         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                           <span className="flex items-center gap-1.5">
                             <span
-                              className="inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold"
+                              className="inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-10 font-semibold"
                               style={{
                                 backgroundColor: 'var(--focus-ring)',
                                 color: '#fff',
@@ -6448,7 +6771,7 @@ export function ChatInput({
                               {item.markerNumber}
                             </span>
                             <span
-                              className="inline-flex items-center rounded px-1 py-px font-mono text-[10px]"
+                              className="inline-flex items-center rounded px-1 py-px font-mono text-10"
                               style={{
                                 backgroundColor: 'var(--surface-chip)',
                                 color: 'var(--text-tertiary)',
@@ -6458,7 +6781,7 @@ export function ChatInput({
                             </span>
                           </span>
                           <span
-                            className="line-clamp-2 whitespace-pre-wrap text-[12px] leading-[1.5]"
+                            className="line-clamp-2 whitespace-pre-wrap text-12 leading-[1.5]"
                             style={{ color: 'var(--text-secondary)' }}
                           >
                             {item.comment || t('chat.browserComment.noText')}
@@ -6581,7 +6904,7 @@ export function ChatInput({
                 {/* 「+」只负责合成打开统一建议面板；内容与输入 @ 完全共用。 */}
                 <ExtraDirsButton
                   extraDirsCount={(extraDirs ?? []).length}
-                  hasReferenceDirs={onExtraDirsChange !== undefined}
+                  hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}
                   open={syntheticAtOpen}
                   onOpenChange={handleComposerSuggestionOpenChange}
                   autoFocusTarget={composerSuggestionFocusTarget}
@@ -6597,7 +6920,7 @@ export function ChatInput({
                       onClose={closeAtPanel}
                       onRetry={() => runAtScan(atQuery)}
                       referenceDirs={
-                        onExtraDirsChange
+                        !settingsLocked && onExtraDirsChange
                           ? {
                               dirs: extraDirs ?? [],
                               onRemove: (path) => {
@@ -6620,7 +6943,7 @@ export function ChatInput({
                   onPermissionModeChange={handlePermissionModeChange}
                   vendorKey={vendorKey}
                   deviceId={deviceLinkDeviceId}
-                  disabled={composerEditorLocked}
+                  disabled={composerEditorLocked || settingsLocked}
                   dense={effectiveDenseToolbar}
                   iconOnly={useUltraCompactToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
@@ -6701,7 +7024,9 @@ export function ChatInput({
                     onProviderChange={handleProviderChange}
                     onNavigateToProviders={handleNavigateToProviders}
                     switching={remoteSwitchInFlight}
-                    disabled={disabled || agentSendDispatchInFlight || agentSwitchInFlight}
+                    disabled={
+                      disabled || settingsLocked || agentSendDispatchInFlight || agentSwitchInFlight
+                    }
                     visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                     compactToolbar={useNarrowToolbar}
                     ultraCompactToolbar={useUltraCompactToolbar}
@@ -6900,7 +7225,7 @@ export function ChatInput({
                   aria-label={t('newChat.folderPicker.selectFolder')}
                 >
                   <Folder size={18} className="shrink-0 text-[var(--folder-btn-icon)]" />
-                  <span className="text-[15px] font-normal text-[var(--folder-btn-text)]">
+                  <span className="text-15 font-normal text-[var(--folder-btn-text)]">
                     {folderBasename ?? t('newChat.folderPicker.selectFolder')}
                   </span>
                 </button>
@@ -7183,7 +7508,7 @@ function VoiceInputButton({
         <span
           ref={pillLabelRef}
           className={cn(
-            'whitespace-nowrap pr-3 text-[12.5px] tabular-nums',
+            'whitespace-nowrap pr-3 text-12 tabular-nums',
             '-translate-x-1 opacity-0 transition-[opacity,transform] duration-[180ms] ease-out',
             expanded && 'translate-x-0 opacity-100',
             'motion-reduce:transition-none',
@@ -7221,7 +7546,7 @@ function AttachmentRejectionStrip({
           className={cn(
             'pointer-events-auto inline-flex max-w-[640px] items-center gap-2',
             'rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
-            'px-4 py-[10px] text-[13px] font-medium leading-snug text-[var(--cmd-palette-item-text)]',
+            'px-4 py-[10px] text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)]',
             'shadow-[var(--shadow-menu)]',
           )}
         >
@@ -7428,7 +7753,7 @@ function ThumbnailItem({
                 {file.name}
               </span>
               {metaLine ? (
-                <span className="truncate text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                <span className="truncate text-11" style={{ color: 'var(--text-secondary)' }}>
                   {metaLine}
                 </span>
               ) : null}
@@ -7441,7 +7766,7 @@ function ThumbnailItem({
       <button
         type="button"
         className={cn(
-          'absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-white',
+          'absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full text-10 text-white',
           'opacity-0 transition-opacity group-hover:opacity-100',
         )}
         style={{ backgroundColor: 'var(--file-remove-bg)' }}

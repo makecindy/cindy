@@ -155,7 +155,7 @@ export function PlanViewerCard({
           'flex h-[44px] items-center justify-between pl-[20px] pr-[10px]',
         )}
       >
-        <span className="text-[14px] font-semibold text-[var(--plan-min-title)]">
+        <span className="text-14 font-semibold text-[var(--plan-min-title)]">
           {t('newChat.planReview.title')}
         </span>
         <div className="flex items-center gap-[4px]">
@@ -227,10 +227,10 @@ export function PlanViewerCard({
         )}
       >
         <div className="flex items-center gap-[12px]">
-          <span className="text-[14px] font-semibold text-[var(--plan-header-title)]">
+          <span className="text-14 font-semibold text-[var(--plan-header-title)]">
             {t('newChat.planReview.title')}
           </span>
-          <span className="text-[12px] font-normal text-[var(--plan-header-hint)]">
+          <span className="text-12 font-normal text-[var(--plan-header-hint)]">
             {hint}
           </span>
         </div>
@@ -301,7 +301,7 @@ export function PlanViewerCard({
             className={cn(
               'flex-1 resize-none overflow-y-auto px-[28px] py-[20px]',
               'whitespace-pre-wrap break-words bg-transparent outline-none',
-              'font-mono text-[13px] leading-[1.7]',
+              'font-mono text-13 leading-[1.7]',
               'text-[var(--plan-edit-body)] caret-[var(--plan-edit-body)]',
             )}
             aria-label={t('newChat.planReview.toolbar.edit')}
@@ -309,7 +309,7 @@ export function PlanViewerCard({
           {saveError && (
             <div
               className={cn(
-                'shrink-0 border-t px-[28px] py-[8px] text-[12px]',
+                'shrink-0 border-t px-[28px] py-[8px] text-12',
                 'border-[var(--plan-header-divider)]',
                 'bg-[var(--plan-content-bg)] text-red-500',
               )}
@@ -329,12 +329,12 @@ export function PlanViewerCard({
             )}
           >
             <div className="pb-[4px]">
-              <span className="text-[12px] font-semibold text-[var(--plan-outline-label)]">
+              <span className="text-12 font-semibold text-[var(--plan-outline-label)]">
                 {t('newChat.planReview.outlineLabel')}
               </span>
             </div>
             {outline.length === 0 ? (
-              <span className="px-[8px] py-[6px] text-[12px] text-[var(--plan-outline-item-text)]">
+              <span className="px-[8px] py-[6px] text-12 text-[var(--plan-outline-item-text)]">
                 {t('newChat.planReview.outlineEmpty')}
               </span>
             ) : (
@@ -347,7 +347,7 @@ export function PlanViewerCard({
                     onClick={() => handleScrollToAnchor(entry.id)}
                     className={cn(
                       'flex items-center rounded-[6px] px-[8px] py-[6px] text-left',
-                      'text-[12px]',
+                      'text-12',
                       'transition-colors hover:bg-[var(--plan-outline-active-bg)]',
                       // v1: no scroll-spy. Items are neutral by default and
                       // become active only after the user clicks them.

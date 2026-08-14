@@ -51,6 +51,16 @@ describe('buildClaudeFlagSettings', () => {
     ).toBe(false);
   });
 
+  it('uses host-provided Claude SDK wire models over a user availableModels allowlist', () => {
+    const settings = buildClaudeFlagSettings({
+      showThinkingSummaries: false,
+      fastMode: false,
+      availableModels: ['claude-opus-4-6[1m]', 'claude-sonnet-5'],
+    });
+
+    expect(settings.availableModels).toEqual(['claude-opus-4-6[1m]', 'claude-sonnet-5']);
+  });
+
   it('adds namespaced plugin skill overrides from the host routing policy', () => {
     const settings = buildClaudeFlagSettings({
       showThinkingSummaries: false,

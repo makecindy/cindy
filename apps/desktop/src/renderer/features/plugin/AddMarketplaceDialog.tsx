@@ -18,6 +18,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import type { MarketSourceSummary } from '../../../shared/pluginMarket';
 
 import { marketplaceSourceErrorKey } from './lib/pluginMarketErrorKey';
+import { MarketplaceDiscoveryNotice } from './MarketplaceDiscoveryNotice';
 import { MarketplaceGuideDialog } from './MarketplaceGuideDialog';
 import { MarketplaceSourcesDialog } from './MarketplaceSourcesDialog';
 
@@ -64,6 +65,8 @@ export function AddMarketplaceDialog({
     key: string;
     detail: string | null;
   } | null>(null);
+  // 添加成功的发现回执:插件数 + 跳过/暂不可读提示(与错误互斥,新一轮操作前清空)。
+  const [addedSummary, setAddedSummary] = useState<MarketSourceSummary | null>(null);
 
   // 只有 git 克隆类错误码的 detail 是消毒后的 stderr 摘录,值得原文展示;
   // 其它错误码的 message 是内部英文文案,展示反而会和本地化引导重复。
@@ -97,6 +100,8 @@ export function AddMarketplaceDialog({
     setSources(null);
     setSourcesOpen(false);
     setOperationError(null);
+    // 回执含上一账号的市场名与计数,作用域同来源列表:切号/重开一并清空。
+    setAddedSummary(null);
     if (!open) return;
     void loadSources();
   }, [mode, dataOwnerId, open, loadSources]);
@@ -122,25 +127,29 @@ export function AddMarketplaceDialog({
     if (addDisabled) return;
     setAdding(true);
     setOperationError(null);
+    setAddedSummary(null);
     try {
       // 本地目录的授权必须来自 Main 原生目录选择器(选择即授权):Renderer 直传
       // 绝对路径在 IPC 层会被拒——XSS 控制下的自报路径不构成用户授权。输入的
       // 路径只作为原生框的初始定位提示;用户取消则静默结束。
+      let summary: MarketSourceSummary;
       if (sourceIsLocal) {
         const picked = await window.electronAPI.pluginMarket.pickLocalSource(sourceInput.trim());
         if (picked.canceled) return;
+        summary = picked.summary;
       } else {
         const sparsePaths = sparseInput
           .split('\n')
           .map((entry) => entry.trim())
           .filter((entry) => entry.length > 0);
         const ref = refInput.trim();
-        await window.electronAPI.pluginMarket.addSource({
+        summary = await window.electronAPI.pluginMarket.addSource({
           source: sourceInput.trim(),
           ...(ref ? { ref } : {}),
           ...(sparsePaths.length > 0 ? { sparsePaths } : {}),
         });
       }
+      setAddedSummary(summary);
       setSourceInput('');
       setRefInput('');
       setSparseInput('');
@@ -279,6 +288,12 @@ export function AddMarketplaceDialog({
                     {operationError.detail}
                   </pre>
                 ) : null}
+              </div>
+            ) : null}
+
+            {addedSummary ? (
+              <div className="mt-3">
+                <MarketplaceDiscoveryNotice summary={addedSummary} action="added" />
               </div>
             ) : null}
 

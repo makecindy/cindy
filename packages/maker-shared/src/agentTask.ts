@@ -8,10 +8,11 @@
  * the two clients stay in lockstep. This module is presentation-neutral (no i18n strings,
  * no React): it returns structured data; each client formats labels in its own locale.
  *
- * `agent_task_update` is a LIVE-only `AgentEvent` (never persisted), forwarded to the mobile
- * controller over the `maker:event` device-link channel. The mobile store decodes it via
- * `applyAgentTaskUpdateEvent` into a per-session map; the render layer links each update to
- * its originating `Task`/`collab:*` tool-call (or renders it standalone when orphaned).
+ * The renderer/device-link `agent_task_update` transport remains live-only. The desktop host
+ * consumes a main-only Subagent observation marker before forwarding the existing payload,
+ * and separately projects that observation into Cindy's durable workspace. Mobile decodes
+ * the live event via
+ * `applyAgentTaskUpdateEvent`; the render layer links it to its originating tool-call.
  */
 
 export type AgentTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
@@ -154,16 +155,36 @@ export interface AgentTaskUpdate {
 }
 
 /**
+ * Derive the visible task status from the live update and its paired tool result.
+ * A result is a terminal fact, so it closes a stale `running` update without
+ * overriding an explicit failure or stopped state.
+ */
+export function deriveAgentTaskStatus(
+  updateStatus: AgentTaskStatus | undefined,
+  result?: string,
+  options?: { resultIsLaunchReceipt?: boolean },
+): AgentTaskStatus {
+  const hasResult = typeof result === 'string' && result.trim().length > 0;
+  if (updateStatus === 'running' && hasResult && !options?.resultIsLaunchReceipt) return 'completed';
+  return updateStatus ?? (hasResult ? 'completed' : 'running');
+}
+
+/**
  * Tool names that spawn a sub-agent task: Claude `Task`/`Agent`, Codex collab agents,
  * PI `subagent`(Cindy 自有扩展注册的工具名,与 pi 社区惯例一致)。
  *
  * MCP 工具一律带 `mcp__` 前缀,不会与裸 `subagent` 撞名。
  */
-export function isAgentTaskToolName(toolName: string): boolean {
+export function isSubagentSpawnToolName(toolName: string): boolean {
   return toolName === 'Agent'
     || toolName === 'Task'
     || toolName === PI_SUBAGENT_TOOL_NAME
-    || toolName.startsWith('collab:');
+    || toolName === 'collab:spawn'
+    || toolName === 'collab:spawnAgent';
+}
+
+export function isAgentTaskToolName(toolName: string): boolean {
+  return isSubagentSpawnToolName(toolName) || toolName.startsWith('collab:');
 }
 
 /** PI 子代理工具名 —— maker-core 的 pi 扩展注册端与本文件的卡片判据共用,不各写字面量。 */
@@ -362,6 +383,37 @@ export function subagentSpawnReceiptName(
   return name && trimmed && trimmed === name ? name : undefined;
 }
 
+/**
+ * V1 `collab:spawnAgent` returns a compact child-state summary. A `running`
+ * summary is a launch receipt for the spawn tool, not a terminal result for
+ * the child task, so it must not close a stale running update.
+ */
+export function subagentSpawnResultIndicatesRunning(
+  toolName: string | undefined,
+  result: string | null | undefined,
+): boolean {
+  const trimmed = typeof result === 'string'
+    ? result.trim().replace(/\r\n/g, '\n')
+    : '';
+  // Claude's asynchronous Agent tool returns a textual launch receipt while the
+  // child is still running. Treat it like the structured Codex V1 receipt so a
+  // paired stale `running` update does not close the task prematurely.
+  if ((toolName === 'Agent' || toolName === 'Task')
+    && (
+      trimmed === 'Async agent launched successfully.'
+      || (
+        trimmed.startsWith('Async agent launched successfully.\nagentId: ')
+        && trimmed.includes('\nThe agent is working in the background.')
+      )
+    )) {
+    return true;
+  }
+  if (toolName !== 'collab:spawnAgent') return false;
+  return (result ?? '').split(/\r?\n/).some((line) =>
+    /^[^:\n]+:\s*(?:running|in[_-]?progress|started|active)\s*$/i.test(line.trim()),
+  );
+}
+
 export function buildAgentTaskCardModel(input: {
   toolName?: string;
   toolInput?: unknown;
@@ -369,7 +421,11 @@ export function buildAgentTaskCardModel(input: {
   result?: string;
 }): AgentTaskCardModel {
   const { toolName, toolInput, update, result } = input;
-  const status: AgentTaskStatus = update?.status ?? (result ? 'completed' : 'running');
+  const status = deriveAgentTaskStatus(update?.status, result, {
+    resultIsLaunchReceipt:
+      subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
+      || subagentSpawnResultIndicatesRunning(toolName, result),
+  });
   const provider: 'claude-code' | 'codex' | 'pi' =
     update?.provider
     ?? (toolName?.startsWith('collab:')

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // extract.mjs — cindy 桌面登录链路 QA demo 真值提取器。
 // 机械提取,不手抄:布局常量/缩放公式经 esbuild 编译产品 TS 后 import;
-// 颜色 token 正则解析 themes/colors.ts;文案 JSON.parse 四语 common.json;
+// 颜色 token 正则解析 themes/colors.ts;文案 JSON.parse 产品支持语言的 common.json;
 // 协议链接/窗口最小尺寸/内联 SVG path 正则定位源码;adaptive.samples 用
 // 产品 loginScale.ts 的真公式预计算。stdout 输出 truth JSON。
 
@@ -16,6 +16,19 @@ const demoDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(demoDir, '..', '..', '..');
 const R = (p) => resolve(repoRoot, p); // 绝对路径
 const rel = (p) => `../../../${p}`; // provenance 用的 demoDir 相对路径(docs/design-previews/<name>/ → 仓库根)
+
+function readSupportedLocales(srcRelRepo) {
+  const source = readFileSync(R(srcRelRepo), 'utf8');
+  const declaration = source.match(/SUPPORTED_LOCALES\s*=\s*\[([^\]]*)\]/s)?.[1];
+  const locales = declaration
+    ? [...declaration.matchAll(/['"]([^'"]+)['"]/g)].map((match) => match[1])
+    : [];
+  if (!locales.length) throw new Error(`${srcRelRepo} 未找到 SUPPORTED_LOCALES`);
+  return locales;
+}
+
+const DESKTOP_LOCALES_TS = 'apps/desktop/src/shared/locale.ts';
+const SUPPORTED_LOCALES = readSupportedLocales(DESKTOP_LOCALES_TS);
 
 const hashes = new Map();
 function fileHash(absPath) {
@@ -93,6 +106,7 @@ const geometry = {
   control: wrapObj(tokens.CONTROL, TOKENS_TS, 'CONTROL'),
   spinner: wrapObj(tokens.SPINNER, TOKENS_TS, 'SPINNER'),
   social: wrapObj(tokens.SOCIAL, TOKENS_TS, 'SOCIAL'),
+  skipEntry: wrapObj(tokens.SKIP_ENTRY, TOKENS_TS, 'SKIP_ENTRY'),
   back: wrapObj(tokens.BACK, TOKENS_TS, 'BACK'),
   errorText: wrapObj(tokens.ERROR_TEXT, TOKENS_TS, 'ERROR_TEXT'),
   methodRow: wrapObj(tokens.METHOD_ROW, TOKENS_TS, 'METHOD_ROW'),
@@ -166,8 +180,7 @@ const colorNames = {
 const colors = {};
 for (const [key, name] of Object.entries(colorNames)) colors[key] = tokenPair(name);
 
-/* ── 3. 四语文案:JSON.parse common.json,取 demo 用到的 login 键 ── */
-const LANGS = ['zh-CN', 'en', 'ja', 'ko'];
+/* ── 3. 产品支持语言文案:JSON.parse common.json,取 demo 用到的 login 键 ── */
 const COPY_KEYS = [
   'title', 'subtitle', 'phonePlaceholder', 'emailPlaceholder', 'invalidEmail', 'invalidPhone',
   'working', 'continue', 'back', 'cancel', 'chooseMethod', 'orgDetected', 'enterpriseLogin',
@@ -184,7 +197,7 @@ const COPY_KEYS = [
   'social.apple', 'social.google', 'social.wechat',
 ];
 const copy = {};
-for (const lang of LANGS) {
+for (const lang of SUPPORTED_LOCALES) {
   const src = `apps/desktop/src/renderer/i18n/locales/${lang}/common.json`;
   const json = JSON.parse(readFileSync(R(src), 'utf8'));
   const bag = {};
@@ -262,8 +275,7 @@ const icons = {
   google: { light: svgAsset('google'), dark: svgAsset('google') },
   wechat: { light: svgAsset('wechat'), dark: svgAsset('wechat') },
   sso: { light: svgAsset('sso'), dark: svgAsset('sso-dark') },
-  // guest 圆钮入口已退役(游客入口改为文本链接),对应 icons/guest{,-dark}.svg 已从产品删除,
-  // 故此处不再提取 guest 叶子。本 demo 的 index.html 仍按其内嵌 truth 快照渲染历史 UI。
+  // guest 圆钮入口已退役(游客入口改为文本链接),对应 icons/guest{,-dark}.svg 已从产品删除。
   paths: {
     backChevron: backChevronD,
     consentCheck: pathsOf('ConsentCheckGlyph')[0],
@@ -317,6 +329,13 @@ const samples = SAMPLE_SIZES.map(([w, h]) => {
   };
 });
 
+const supportedLocales = SUPPORTED_LOCALES.map((locale, index) =>
+  leaf(locale, DESKTOP_LOCALES_TS, `SUPPORTED_LOCALES[${index}]`),
+);
 process.stdout.write(
-  JSON.stringify({ geometry, colors, copy, urls, constants, icons, adaptive: { samples } }, null, 2),
+  JSON.stringify(
+    { geometry, colors, copy, supportedLocales, urls, constants, icons, adaptive: { samples } },
+    null,
+    2,
+  ),
 );

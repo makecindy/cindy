@@ -106,6 +106,30 @@ describe('archive_sessions tool', () => {
     expect(parse(res)).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
   });
 
+  it('explains that deleted sessions cannot be restored through status tools', async () => {
+    const deps: ArchiveSessionsDeps = {
+      getSessionContext: () => ({
+        sessionId: 'current-session',
+        agentKind: 'claude-code',
+        workingDir: '/tmp/proj',
+      }),
+      setSessionsStatus: vi.fn(async () => ({
+        ok: false as const,
+        errorCode: 'PRECONDITION_FAILED' as const,
+        message: '已删除的任务不能恢复或归档: deleted-session',
+      })),
+    };
+    const registry = new XdtHelperToolRegistry();
+    registerUnarchiveSessionsTool(registry, deps);
+
+    const res = await registry.call('unarchive_sessions', {
+      session_ids: ['deleted-session'],
+    });
+
+    expect(res.isError).toBe(true);
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+  });
+
   it('rejects empty batch at schema boundary', async () => {
     const { registry } = setup();
     const res = await registry.call('archive_sessions', { session_ids: [] });

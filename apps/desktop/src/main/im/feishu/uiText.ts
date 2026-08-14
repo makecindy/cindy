@@ -88,6 +88,22 @@ export const ui = {
       `其它部分收到啦，正在处理~`,
   },
 
+  // ── pre-dispatch 失败细分文案 ──────────────────────────────────────────────
+  error: {
+    agentUnsupported:
+      '🤔 当前选择的 Agent 在这个渠道需要逐条权限确认，暂时上不了场，换一个 Agent 再试~',
+    permissionModeUnsupported: (permissionMode: string) => {
+      // 「完全访问」已由渠道设置显式放行(护栏取缔), 这里实际只剩
+      // acceptEdits(自动接受编辑)会被群强确认策略拒绝 — 按档位点名报错。
+      const modeLabel =
+        permissionMode === 'acceptEdits' ? '「自动接受编辑」' : '当前权限档';
+      return (
+        `⚠️ 群/话题会话不能用${modeLabel} — 群上下文里有成员可控的内容，必须保留操作确认。\n` +
+        '我往你私聊发了张修复卡，去点一下切回「自动审批」就能继续~（也可以发 /permission 手动切）'
+      );
+    },
+  },
+
   // ── card text (sent via @cindy/im InteractiveCardSpec) ──────────────────────
   cards: {
     permission: {
@@ -96,6 +112,9 @@ export const ui = {
       btnAllowOnce: '✅ 仅本次允许',
       btnAllowAlways: '✅ 总是允许',
       btnDeny: '❌ 拒绝',
+      /** 授权卡转投 owner 私聊后, 在原群/话题里留的指路提示 — 带工具名, 点出具体是什么操作。 */
+      dmRoutedNotice: (toolName: string) =>
+        `🔐 \`${toolName}\` 这个操作需要你确认 — 授权卡片已经发到你的私聊，去那里点一下继续~`,
       resolvedAllowOnce: '✅ 已允许（仅本次）',
       resolvedAllowAlways: '✅ 已允许（这个工具以后都放行）',
       resolvedDeny: '❌ 已拒绝',
@@ -138,6 +157,20 @@ export const ui = {
       btnConfirmFullAccess: '开启 Full access',
       btnCancelFullAccess: '保留当前权限',
       fullAccessCancelled: '已取消，保留当前权限',
+    },
+    /**
+     * 群会话「完全访问」档被强确认策略拒绝时, 发到 owner 私聊的一键修复卡 —
+     * 点按钮把该会话切回 auto(自动审批), 群里就能继续发消息了。
+     */
+    permissionModeFix: {
+      title: '🛡️ 把群会话切回「自动审批」',
+      body: (sessionTitle: string) =>
+        `刚才在群里/话题里的消息没能开跑：**${sessionTitle}** 用的是「完全访问」权限档，` +
+        '但群上下文里有成员可控的内容，必须保留操作确认。\n\n点下面按钮把它切到「自动审批」（auto），' +
+        '切完回群里继续发消息就行。',
+      btnFix: '✅ 切到自动审批',
+      resolved: '✅ 已切到「自动审批」— 回群里继续发消息吧~',
+      failed: (reason: string) => `❌ 没切过去：${reason}。可以发 /permission auto 手动切换`,
     },
     control: {
       title: '🎮 挑个工作区上号',

@@ -63,6 +63,7 @@ const ACTION_TAG_STRIP_RE = /<action\s+tab="[a-z-]+"\s*\/?>/gi;
 
 const LOCALE_NAME: Record<HelpLocale, string> = {
   'zh-CN': 'Simplified Chinese',
+  'zh-TW': 'Traditional Chinese',
   en: 'English',
   ja: 'Japanese',
   ko: 'Korean',
@@ -74,7 +75,7 @@ type HelpOneShotTarget = {
 };
 
 function normalizeLocale(locale: unknown): HelpLocale {
-  return locale === 'zh-CN' || locale === 'en' || locale === 'ja' || locale === 'ko'
+  return locale === 'zh-CN' || locale === 'zh-TW' || locale === 'en' || locale === 'ja' || locale === 'ko'
     ? locale
     : 'en';
 }

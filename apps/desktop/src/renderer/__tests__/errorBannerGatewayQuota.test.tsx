@@ -64,7 +64,9 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
 
     expect(screen.getByText('chat.errorBanner.gatewayQuotaExhausted')).toBeTruthy();
     expect(screen.queryByText(QUOTA_ERROR)).toBeNull();
-    fireEvent.click(screen.getByTitle('chat.errorBanner.viewBalanceTitle'));
+    const viewBalanceButton = screen.getByTitle('chat.errorBanner.viewBalanceTitle');
+    expect(viewBalanceButton.getAttribute('data-split-pane-route-action')).toBe('');
+    fireEvent.click(viewBalanceButton);
     expect(onViewBalance).toHaveBeenCalledOnce();
   });
 

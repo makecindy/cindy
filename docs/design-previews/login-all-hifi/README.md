@@ -40,7 +40,7 @@ PR #908 做的是在 `main` 上把它恢复并补齐窄屏钳制 —— 详见 `
 
 - **布局常量**：`apps/desktop/.../loginDesignTokens.ts`、`loginScale.ts`、`apps/mobile/src/auth/loginSkinLayout.ts`、`apps/mobile/src/theme/tokens.ts`（经 esbuild 编译后 import，取真值而非正则猜）
 - **布局 oracle**：直接调产品公式本体 —— `resolveLoginSurface()` / `computeLoginKeyboardShift()` / 桌面 `loginScale` —— 对 `spec.adaptive.sampleSizes` 与四个移动帧预设**预计算**期望几何；demo 侧用镜像公式独立算一遍，由门 D / F 比对两次独立计算
-- **四语文案**：`JSON.parse` 桌面 4×`common.json` + 移动 `loginMessages.ts`
+- **五语文案**：`JSON.parse` 桌面 5×`common.json` + 移动 `loginMessages.ts`
 - **色 token**：正则解析 `themes/colors.ts` / 移动 `theme/tokens.ts` 的 light / dark 对
 - **SVG path**：从 `LoginControls.tsx` / `LoginSkinControls.tsx` 逐函数提取 `d` / `fill` / `viewBox`
 - **品牌位图**：`assets/` 是产品 PNG 的**逐字节拷贝**（与 `apps/mobile/assets/login/`、`apps/desktop/src/renderer/assets/login/` 完全相同，git 复用同一 blob），`truth` 记录 sha256 + IHDR 尺寸，门 D 的 `asset-sha` 绑定按 sha 比对
@@ -54,12 +54,22 @@ S=~/.claude/skills/qa-hifi-demo/scripts
 D=docs/design-previews/login-all-hifi
 node $S/truth.mjs  --demo $D --check    # 漂移检查:产品动了但 demo 没跟 → exit 2 + 差异清单
 node $S/truth.mjs  --demo $D            # 重新提取 truth.json
-node $S/truth.mjs  --demo $D --embed    # 写回 index.html 的 qa-truth 内嵌块(禁手抄)
+node $S/truth.mjs  --demo $D --embed    # 写回 index.html 的 qa-truth 内嵌块(禁手抄；须保留 const RAW 静态字面量包装)
 node $S/states.mjs --demo $D            # 静态:状态声明完备性
 node $S/verify.mjs --demo $D            # 动态:门 A/B/C/D/F(约 9 分钟)
 ```
 
 产品登录相关常量 / 文案 / 组件变更后跑 `--check`；漂移就重走上面五步，别手改 `truth.json` 或内嵌块。
+
+`index.html` 把生成后的 truth 作为 `const RAW = {...}` 静态字面量直接执行，而不是先从 DOM
+`textContent` 读回再交给 HTML 渲染器。这个包装是预览页的安全边界；`pnpm test:runner` 会同时
+校验包装形态与 `truth.json` 的结构等价，更新嵌入工具时不得退回 DOM 文本数据源。
+
+> ⚠️ **`report.json` 当前已过期（2026-08-09）**：它是 2026-07-29 的四语快照，`inputHashes` 与
+> `coverage.cases` 都早于本次繁中登录覆盖，其 `ok: true` 不代表当前五语工件已通过门 A–F。
+> `truth.json` 与内嵌块已由 `extract.mjs` 机械刷新，并确认 41 个 provenance 源文件的 hash
+> 全部匹配；但 `verify.mjs` 所在的 qa-hifi-demo 工具链未入仓且本机没有，所以不伪造新报告。
+> 在有工具链的环境重跑 `verify.mjs` 并提交刷新后的 report 即可解除标记。
 
 ## 局限（如实说明）
 
@@ -69,5 +79,5 @@ node $S/verify.mjs --demo $D            # 动态:门 A/B/C/D/F(约 9 分钟)
   的逐式镜像，两边独立计算、由门 D / F 交叉验证 —— 不是同一份代码。
 - **键盘态是仿真**：真机 `keyboardDidShow` 的高度 / safe-area 由 `truth.mobile.keyboardSim` 声明的
   仿真输入给出，位移公式取产品 `computeLoginKeyboardShift()` 预计算值；不代表任何具体机型实测。
-- **门 B / D 走 6 组代表性组合**（`spec.verify.cases`），不是 3×2×2×4 全笛卡尔积 —— 全展开会慢到不可用。
+- **门 B / D 走 6 组代表性组合**（`spec.verify.cases`），覆盖全部五种语言，不是 3×2×2×5 全笛卡尔积 —— 全展开会慢到不可用。
   未覆盖的组合由「同一套 truth + 同一套渲染代码」承担，不等于逐组验过。

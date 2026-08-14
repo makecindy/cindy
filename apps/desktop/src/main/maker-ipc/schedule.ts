@@ -69,8 +69,10 @@ import { getGhostManager } from '../cindy-brain/index.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { isTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import {
   resolveBoundSessionGenerationRoute,
@@ -431,7 +433,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     }
   };
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_GENERATE_PRE_RUN_HOOK, async (_e, payload: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_GENERATE_PRE_RUN_HOOK, async (event, payload: unknown) => {
     const body = requireObject(payload, 'payload');
     const description = requireString(body.description, 'description');
     const maker = getMaker?.();
@@ -457,7 +459,12 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       // the provider picker. Never turn an unconnected built-in provider into
       // a routable candidate just because it exists in the catalog.
       const { getDesktopProviderService } = await import('../maker-host/createDesktopProviderService.js');
-      const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
+      const trustedCaller = isDeviceLinkInvoke() || isTrustedAppRendererEvent(event);
+      const providers = await getDesktopProviderService().listProviders({
+        allowSideEffects: trustedCaller,
+        waitForDiscovery: trustedCaller,
+        getCatalog: getActiveCatalog,
+      });
       const route = resolveBoundSessionGenerationRoute({
         session,
         sessionProviderId: getSessionProvider(targetSessionId),

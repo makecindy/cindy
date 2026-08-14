@@ -27,4 +27,12 @@ describe('publish progress event filter', () => {
     expect(scanningCloseBranch).toContain("dispatch({ type: 'CLOSE' });");
     expect(scanningCloseBranch).not.toContain('stopScanPoll');
   });
+
+  it('preserves the lexical discovery path for rename safety checks', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(resolve(here, '../../PublishDialog.tsx'), 'utf8')
+      .replace(/\r\n/g, '\n');
+
+    expect(source).toContain('absolutePath: skill.discoveredPath ?? eff.absolutePath');
+  });
 });

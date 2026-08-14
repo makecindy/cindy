@@ -23,14 +23,17 @@
  * 复用 body.resizing-pane 让 webview 在拖动期间指针穿透(与拖宽同款方案),
  * 否则指针滑进浏览器 tab 区域后 pointermove 会被 guest 吃掉、拖动卡死。
  *
- * 平台口径:**Windows 已转正;mac 暂不启用**(挂载方 MainLayout 以 !isMac 关闸)
- * —— mac 交换态的控件锚定(B2b 遗留)未做、顶栏拖拽习惯也未定,待真机轮一并开。
+ * 平台口径:Windows 与 macOS 均已启用。Windows 可拖 Tab 条空白或长按窗体；
+ * macOS unified topbar 保留给窗口拖动，因此只走窗体长按。macOS 交换态的控件
+ * 锚定由 MainLayout / RightSidebarShell 的 M2 适配负责。
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 
 import { swapRootSplitChildrenByKind } from '../../shared/layoutTree';
+import { toast } from '@/lib/toast';
 
 /** 长按窗体:按住该时长(ms)且位移小于容差才"浮起"。 */
 const LONG_PRESS_MS = 600;
@@ -142,6 +145,7 @@ export function PanelDragController({
   sidebarBlockRef,
   enabled,
 }: PanelDragControllerProps): ReactNode {
+  const { t } = useTranslation();
   const [drag, setDrag] = useState<DragRenderState | null>(null);
   const dragActiveRef = useRef(false);
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -250,9 +254,19 @@ export function PanelDragController({
           try {
             const layout = window.electronAPI.layout.getStateSync().layout;
             const op = swapRootSplitChildrenByKind(layout, sourceKind, targetKindNow);
-            if (op.applied) void window.electronAPI.layout.set(op.layout).catch(() => undefined);
+            if (op.applied) {
+              void window.electronAPI.layout
+                .set(op.layout)
+                .then((result) =>
+                  result.persisted
+                    ? toast.success(t('settings.appearance.layout.saved'))
+                    : toast.error(t('settings.appearance.layout.saveFailed')),
+                )
+                .catch(() => toast.error(t('settings.appearance.layout.saveFailed')));
+            }
           } catch {
-            // IPC 异常 —— 放弃本次交换,界面保持原样
+            // 同步 IPC 异常 —— 放弃本次交换并明确告诉用户没有保存。
+            toast.error(t('settings.appearance.layout.saveFailed'));
           }
         }
         if (opts.suppressClick) {
@@ -340,7 +354,7 @@ export function PanelDragController({
       document.removeEventListener('pointerdown', onPointerDown, true);
       cleanupRef.current?.();
     };
-  }, [enabled, rowRef, sidebarBlockRef]);
+  }, [enabled, rowRef, sidebarBlockRef, t]);
 
   if (!drag) return null;
   const zone = drag.targetKind

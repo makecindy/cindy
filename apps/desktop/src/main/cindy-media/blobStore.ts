@@ -199,13 +199,27 @@ export function parseBlobUrl(url: string): { hash: string; ext: string } | null 
   } catch {
     return null;
   }
-  if (parsed.hostname !== HOST_BLOBS) return null;
+  if (
+    parsed.hostname !== HOST_BLOBS ||
+    parsed.username ||
+    parsed.password ||
+    parsed.port ||
+    parsed.search ||
+    parsed.hash ||
+    url.includes('?') ||
+    url.includes('#')
+  ) {
+    return null;
+  }
   const pathname = parsed.pathname.startsWith('/') ? parsed.pathname.slice(1) : parsed.pathname;
   const dotIdx = pathname.lastIndexOf('.');
   if (dotIdx <= 0) return null;
   const hash = pathname.slice(0, dotIdx);
   const ext = pathname.slice(dotIdx).toLowerCase();
   if (!HASH_RE.test(hash) || !MIME_BY_EXT[ext]) return null;
+  // URL 解析会规范化空 authority、空 port 与 dot segment；只接受本仓
+  // 自己生成的字面地址，避免同一 immutable blob 有多个 Chromium cache key。
+  if (url !== blobUrl(hash, ext)) return null;
   return { hash, ext };
 }
 

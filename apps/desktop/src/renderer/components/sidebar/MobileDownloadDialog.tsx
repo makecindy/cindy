@@ -462,7 +462,7 @@ export function MobileDownloadDialog({
                   ) : qrError ? (
                     <span className="flex max-w-[160px] flex-col items-center gap-2 text-center text-[var(--error-fg-strong)]">
                       <QrCode className="h-6 w-6" aria-hidden="true" />
-                      <span className="text-12 leading-[18px]">
+                      <span className="text-12 leading-[1.5]">
                         {t('sidebar.mobileDownload.error')}
                       </span>
                     </span>
@@ -491,7 +491,7 @@ export function MobileDownloadDialog({
                   )}
                 </p>
                 {hasLinkedMobile ? (
-                  <p className="mt-1 text-12 leading-[18px] text-[var(--confirm-desc)]">
+                  <p className="mt-1 text-12 leading-[1.5] text-[var(--confirm-desc)]">
                     {t('sidebar.mobileDownload.scanAnotherHint')}
                   </p>
                 ) : null}
@@ -583,12 +583,12 @@ export function MobileDownloadDialog({
                   <Settings2 className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
                 </span>
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="text-13 font-medium leading-[18px] text-[var(--confirm-title)]">
+                  <span className="text-13 font-medium leading-[1.385] text-[var(--confirm-title)]">
                     {t('sidebar.mobileDownload.allowControl')}
                   </span>
                   {remotePresentation?.selfDeviceId ? (
                     <span
-                      className="mt-0.5 truncate font-mono text-10 leading-[14px] text-[var(--confirm-desc)]"
+                      className="mt-0.5 truncate font-mono text-10 leading-[1.4] text-[var(--confirm-desc)]"
                       title={remotePresentation.selfDeviceId}
                     >
                       {t('sidebar.mobileDownload.deviceId', {

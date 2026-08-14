@@ -11,9 +11,9 @@
  * 三类规则:
  *  1. forbidden —— 术语在某语言下的禁用译法(如 Agent 在 zh-CN 禁「代理」)。
  *  2. case-form —— 保留英文的术语必须统一大小写形态(如 Worker 不写 worker)。
- *  3. punctuation —— 两条规则适用范围不同:半角标点(汉字后禁 , : ; ! ?)只对 zh-CN
- *     生效——日文 UI 惯例本就用半角冒号,实测 ja 半角 124:78 才是主流;省略号(… 而非
- *     三个半角点)覆盖 zh-CN / ja / ko 三语,三者现状都以 … 为主流。
+ *  3. punctuation —— 两条规则适用范围不同:半角标点(汉字后禁 , : ; ! ?)对 zh-CN /
+ *     zh-TW 生效——日文 UI 惯例本就用半角冒号,实测 ja 半角 124:78 才是主流;省略号
+ *     (… 而非三个半角点)覆盖 en / zh-CN / zh-TW / ja / ko。
  *
  * 分级:
  *  - status=decided 的术语违规 → **阻断**(exit 1)。
@@ -149,15 +149,21 @@ function flatten(obj, prefix, out) {
 
 /**
  * 加载一个 locale 的全部文案。
- * key 前缀区分来源,便于 exempt 精确定位:desktop:a.b / mobile/session:x.y
+ * key 前缀区分来源,便于 exempt 精确定位:desktop:a.b /
+ * desktop/namespace:a.b / mobile/session:x.y
  */
 function loadLocale(locale) {
   const out = new Map();
 
-  const desktopFile = path.join(DESKTOP_LOCALES, locale, 'common.json');
-  if (fs.existsSync(desktopFile)) {
-    for (const [k, v] of flatten(readJson(desktopFile), '', new Map())) {
-      out.set(`desktop:${k}`, v);
+  const desktopDir = path.join(DESKTOP_LOCALES, locale);
+  if (fs.existsSync(desktopDir)) {
+    for (const file of fs.readdirSync(desktopDir).sort()) {
+      if (!file.endsWith('.json')) continue;
+      const ns = file.slice(0, -'.json'.length);
+      const source = ns === 'common' ? 'desktop' : `desktop/${ns}`;
+      for (const [k, v] of flatten(readJson(path.join(desktopDir, file)), '', new Map())) {
+        out.set(`${source}:${k}`, v);
+      }
     }
   }
 

@@ -26,6 +26,7 @@ export const ui = {
 /session     列最近的 desktop 任务，点一个直接接管续聊
 /model       换个模型上场
 /permission  调一下权限模式（auto / bypass / ask 等）
+/settings    看看当前项目、Agent、模型、推理强度、权限
 /ctr         远程接管 desktop 上的某个工作区（接管中再发可直接换任务）
 /exctr       结束接管，回到 Telegram 对话
 /help        看看我会啥
@@ -34,7 +35,9 @@ export const ui = {
 
 私聊直接发消息就行；群里 @ 我或回复我的消息才会触发，我也会记住群里最近的聊天做上下文~`,
     unknownCommand: (cmd: string) =>
-      `没认出 \`${cmd}\` 这个命令 🤔\n我能听懂的: /new、/session、/project、/model、/permission、/ctr、/exctr、/stop、/help`,
+      `没认出 \`${cmd}\` 这个命令 🤔\n我能听懂的: /new、/session、/project、/model、/permission、/settings、/ctr、/exctr、/stop、/help`,
+    settings: ({ workspace, agent, model, effort, permission }) =>
+      `⚙️ 当前设置\n\n项目：${workspace}\nAgent：${agent}\n模型：${model}\n推理强度：${effort}\n权限：${permission}\n\n想改就发 /project、/model、/permission～`,
     detachedBySlash: '🚪 接管结束，咱们回到 Telegram 对话。下次想远程操控 desktop 再 /ctr',
     detachedByRevoke: '⚠️ 你在 desktop 那边把接管收回去了，后续消息回到 Telegram 对话。',
     notAttached: '🤷 你现在没在接管任何任务，/exctr 闲着也没事可干。',

@@ -41,7 +41,34 @@ import {
   nextEnabledSuggestionIndex,
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
+  type ComposerPluginSuggestion,
 } from '@/lib/composerSuggestion';
+
+const iosSimulatorPluginSuggestion: ComposerPluginSuggestion = {
+  item: {
+    type: 'plugin-command',
+    name: 'iOS Simulator',
+    relPath: 'cindy://host-capability/ios-simulator',
+    pluginId: 'ios-simulator',
+  },
+};
+
+const disabledIOSSimulatorPluginSuggestion: ComposerPluginSuggestion = {
+  ...iosSimulatorPluginSuggestion,
+  disabled: true,
+  disabledReason: 'extraDirs.pluginDisabled',
+};
+
+const skillOnlyPluginSuggestion: ComposerPluginSuggestion = {
+  item: {
+    type: 'plugin-command',
+    name: 'Skill only',
+    relPath: 'cindy://plugin/skill-only',
+    pluginId: 'skill-only',
+  },
+  disabled: true,
+  disabledReason: 'extraDirs.pluginAgentInvoked',
+};
 
 afterEach(() => {
   cleanup();
@@ -145,9 +172,11 @@ describe('统一 composer 建议入口', () => {
     fireEvent.click(plan);
     expect(onPlanToggle).toHaveBeenCalledWith(false);
     expect(
-      (screen.getByRole('menuitemcheckbox', {
-        name: 'newChat.collaboration.modeLabel: policy unavailable',
-      }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole('menuitemcheckbox', {
+          name: 'newChat.collaboration.modeLabel: policy unavailable',
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
   });
 
@@ -198,6 +227,81 @@ describe('统一 composer 建议入口', () => {
     expect(document.activeElement).toBe(removeButton);
     await user.keyboard('{Enter}');
     expect(onRemove).toHaveBeenCalledWith('/repo-shared');
+  });
+
+  it('Host capability 插件由统一建议面板交给 composer 处理，不伪造 command', () => {
+    const entries = buildComposerSuggestionEntries({
+      query: '',
+      actions: [],
+      resources: [],
+      plugins: [iosSimulatorPluginSuggestion],
+    });
+    const onSelect = vi.fn();
+    render(
+      createElement(AtMentionPanel, {
+        query: '',
+        state: { kind: 'ready', items: [], truncated: false },
+        entries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect,
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
+        embedded: true,
+      }),
+    );
+
+    const pluginRow = screen.getByRole('button', { name: 'iOS Simulator' });
+    expect((pluginRow as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(pluginRow);
+    expect(onSelect).toHaveBeenCalledWith({
+      kind: 'resource',
+      item: iosSimulatorPluginSuggestion.item,
+    });
+  });
+
+  it('已停用优先显示停用状态；可用但无直接入口的 Skill 标为 Agent 自动调用', () => {
+    const disabledEntries = buildComposerSuggestionEntries({
+      query: '',
+      actions: [],
+      resources: [],
+      plugins: [disabledIOSSimulatorPluginSuggestion],
+    });
+    const { rerender } = render(
+      createElement(AtMentionPanel, {
+        query: '',
+        state: { kind: 'ready', items: [], truncated: false },
+        entries: disabledEntries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
+        embedded: true,
+      }),
+    );
+    expect(screen.getByText('extraDirs.pluginDisabled')).toBeTruthy();
+
+    const skillOnlyEntries = buildComposerSuggestionEntries({
+      query: '',
+      actions: [],
+      resources: [],
+      plugins: [skillOnlyPluginSuggestion],
+    });
+    rerender(
+      createElement(AtMentionPanel, {
+        query: '',
+        state: { kind: 'ready', items: [], truncated: false },
+        entries: skillOnlyEntries,
+        focusedIndex: 0,
+        onFocusedIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        onClose: vi.fn(),
+        onRetry: vi.fn(),
+        embedded: true,
+      }),
+    );
+    expect(screen.getByText('extraDirs.pluginAgentInvoked')).toBeTruthy();
   });
 });
 

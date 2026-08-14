@@ -122,10 +122,12 @@ describe('CCAgentSessionView /issue attachment wiring', () => {
 
   it('passes composer files through both dispatch entry points', () => {
     // 已有会话:handleSend 把当前 composer files 交给命令 dispatch。
-    expect(sessionViewSource).toContain('maybeDispatchDesktopSlashCommand(message, files)');
+    expect(sessionViewSource).toMatch(
+      /maybeDispatchDesktopSlashCommand\(message, files(?:,|\))/,
+    );
     // 新建会话:首条消息补发时把 pending.files 交给命令 dispatch(此前被静默丢弃)。
-    expect(sessionViewSource).toContain(
-      'maybeDispatchDesktopSlashCommand(pending.text, pending.files)',
+    expect(sessionViewSource).toMatch(
+      /maybeDispatchDesktopSlashCommand\(\s*pending\.text,\s*pending\.files,/,
     );
   });
 

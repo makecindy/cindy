@@ -1,10 +1,13 @@
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, Eye, EyeOff, Loader2, Trash2 } from 'lucide-react';
+import { Check, Eye, EyeOff, Loader2, Send, Trash2 } from 'lucide-react';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { Switch } from '@/components/ui/switch';
 import { useWecomBot } from '@/hooks/useWecomBot';
+import { useWecomGroupNotificationSettings } from '@/hooks/useWecomGroupNotificationSettings';
 import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 
@@ -64,6 +67,8 @@ export function WecomBotSection({
   const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('wecom');
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
+  const wecomGroup = useWecomGroupNotificationSettings();
+  const [webhookUrl, setWebhookUrl] = useState('');
 
   const handleDisconnect = useCallback(async () => {
     const approved = await confirm({
@@ -272,6 +277,126 @@ export function WecomBotSection({
           </div>
         </div>
       )}
+      <div className="h-px w-full bg-[var(--border-default)]" />
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p
+              className="text-13 font-medium text-[var(--settings-section-sublabel)]"
+              style={{ letterSpacing: '0.12px' }}
+            >
+              {t('settings.notifications.wecomGroupLabel')}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {wecomGroup.configured
+                ? t('settings.notifications.wecomGroupConfiguredHint', {
+                    maskedKey: wecomGroup.maskedKey,
+                  })
+                : t('settings.notifications.wecomGroupHint')}
+            </p>
+          </div>
+          <Switch
+            checked={wecomGroup.enabled && wecomGroup.configured}
+            onCheckedChange={(next) => {
+              void wecomGroup
+                .setEnabled(next)
+                .catch(() => toast.error(t('settings.notifications.wecomGroupToggleFailed')));
+            }}
+            disabled={!wecomGroup.configured || wecomGroup.busy}
+            aria-label={t('settings.notifications.wecomGroupAria')}
+          />
+        </div>
+
+        {wecomGroup.configured ? (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={wecomGroup.busy}
+              onClick={() => {
+                void wecomGroup
+                  .test(t('settings.notifications.wecomGroupTestMessage'))
+                  .then(() => toast.success(t('settings.notifications.wecomGroupTestSuccess')))
+                  .catch(() => toast.error(t('settings.notifications.wecomGroupTestFailed')));
+              }}
+              className={cn(
+                'flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full',
+                'border border-[var(--settings-btn-secondary-border)]',
+                'bg-[var(--settings-btn-secondary-bg)] text-12 font-medium',
+                'text-[var(--settings-btn-secondary-text)]',
+                wecomGroup.busy && 'cursor-not-allowed opacity-40',
+              )}
+            >
+              {wecomGroup.busy ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              {t('settings.notifications.wecomGroupTest')}
+            </button>
+            <button
+              type="button"
+              disabled={wecomGroup.busy}
+              onClick={() => {
+                void wecomGroup
+                  .clear()
+                  .then(() => toast.success(t('settings.notifications.wecomGroupCleared')))
+                  .catch(() => toast.error(t('settings.notifications.wecomGroupClearFailed')));
+              }}
+              className={cn(
+                'flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full',
+                'border border-[var(--settings-btn-secondary-border)]',
+                'bg-[var(--settings-btn-secondary-bg)] text-12 font-medium',
+                'text-[var(--settings-btn-secondary-text)]',
+                wecomGroup.busy && 'cursor-not-allowed opacity-40',
+              )}
+            >
+              <Trash2 size={13} />
+              {t('settings.notifications.wecomGroupClear')}
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <input
+              type="password"
+              value={webhookUrl}
+              onChange={(event) => setWebhookUrl(event.target.value)}
+              placeholder={t('settings.notifications.wecomGroupPlaceholder')}
+              autoComplete="new-password"
+              spellCheck={false}
+              aria-label={t('settings.notifications.wecomGroupLabel')}
+              className={cn(
+                'h-[42px] w-full rounded-full px-[14px]',
+                'border border-[var(--settings-input-border)]',
+                'bg-[var(--settings-input-bg)] text-13 text-[var(--settings-input-text)]',
+                'placeholder:text-[var(--settings-input-placeholder)] outline-none',
+                'focus:border-[var(--settings-input-border-focus)]',
+              )}
+            />
+            <button
+              type="button"
+              disabled={wecomGroup.busy || !webhookUrl.trim()}
+              onClick={() => {
+                void wecomGroup
+                  .saveAndTest(
+                    webhookUrl.trim(),
+                    t('settings.notifications.wecomGroupTestMessage'),
+                  )
+                  .then(() => {
+                    setWebhookUrl('');
+                    toast.success(t('settings.notifications.wecomGroupSaveSuccess'));
+                  })
+                  .catch(() => toast.error(t('settings.notifications.wecomGroupSaveFailed')));
+              }}
+              className={cn(
+                'flex h-[42px] items-center justify-center gap-1.5 rounded-full',
+                'border border-[var(--settings-btn-primary-border)]',
+                'bg-[var(--settings-btn-primary-bg)] text-13 font-medium',
+                'text-[var(--settings-btn-primary-text)]',
+                (wecomGroup.busy || !webhookUrl.trim()) && 'cursor-not-allowed opacity-40',
+              )}
+            >
+              {wecomGroup.busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+              {t('settings.notifications.wecomGroupSaveAndTest')}
+            </button>
+          </div>
+        )}
+      </div>
     </ImChannelSettingsCard>
   );
 }

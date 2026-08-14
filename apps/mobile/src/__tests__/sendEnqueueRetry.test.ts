@@ -17,14 +17,14 @@ describe('send enqueue weak-network retry ordering', () => {
 
   /**
    * 提取全部 enqueue 弱网重试循环体(send 原路径 + outbox 派发路径各一个),
-   * 每个循环以其后最近的「setInputProjection(…, projection);」为界。
+   * 每个循环以其后最近的 projection store 写入为界。
    * 两条路径共用同一套写序边界,守卫必须逐个覆盖,不能只查第一个。
    */
   const LOOP_MARKER = 'for (let attempt = 0; ; attempt++) {';
   const extractRetryLoops = (): string[] => {
     const loops: string[] = [];
     for (let from = source.indexOf(LOOP_MARKER); from > -1; from = source.indexOf(LOOP_MARKER, from + 1)) {
-      const endMatch = /remoteSessionStore\.setInputProjection\([^)]*, projection\);/.exec(source.slice(from));
+      const endMatch = /remoteSessionStore\.setInputProjection(?:IfCurrent)?\(\s*[^,]+,\s*projection(?:,\s*projectionEpochAtRequestStart)?\s*,?\s*\);/.exec(source.slice(from));
       expect(endMatch).not.toBeNull();
       loops.push(source.slice(from, from + (endMatch?.index ?? 0)));
     }

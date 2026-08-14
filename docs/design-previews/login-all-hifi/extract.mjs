@@ -2,7 +2,7 @@
 // extract.mjs — cindy 登录链路「全端」QA demo 真值提取器(desk + phone + pad)。
 // 机械提取,不手抄:
 //  - desk:布局常量/缩放公式经 esbuild 编译产品 TS 后 import;颜色 token 正则解析
-//    themes/colors.ts;文案 JSON.parse 四语 common.json;协议链接/窗口最小尺寸/内联
+//    themes/colors.ts;文案 JSON.parse 五语 common.json;协议链接/窗口最小尺寸/内联
 //    SVG path 正则定位;adaptive.samples 用产品 loginScale.ts 真公式预计算(= 桌面基线
 //    docs/design-previews/login-flow-hifi/extract.mjs 同构,truth 命名空间迁入 desk.*)。
 //  - mobile(phone/pad 共用):loginSkinLayout.ts / theme/tokens.ts / loginMessages.ts
@@ -43,6 +43,26 @@ import { relative } from 'node:path';
 // 不写死层数 —— 换目录时跟着 repoRoot 一起变,不会再出现存在性校验红。
 const REL_PREFIX = relative(demoDir, repoRoot).split(sep).join('/');
 const rel = (p) => `${REL_PREFIX}/${p}`;
+
+function readSupportedLocales(srcRelRepo) {
+  const source = readFileSync(R(srcRelRepo), 'utf8');
+  const declaration = source.match(/SUPPORTED_LOCALES\s*=\s*\[([^\]]*)\]/s)?.[1];
+  const locales = declaration
+    ? [...declaration.matchAll(/['"]([^'"]+)['"]/g)].map((match) => match[1])
+    : [];
+  if (!locales.length) throw new Error(`${srcRelRepo} 未找到 SUPPORTED_LOCALES`);
+  return locales;
+}
+
+const DESKTOP_LOCALES_TS = 'apps/desktop/src/shared/locale.ts';
+const MOBILE_LOCALES_TS = 'apps/mobile/src/i18n/locale.ts';
+const SUPPORTED_LOCALES = readSupportedLocales(DESKTOP_LOCALES_TS);
+const mobileSupportedLocales = readSupportedLocales(MOBILE_LOCALES_TS);
+if (JSON.stringify(SUPPORTED_LOCALES) !== JSON.stringify(mobileSupportedLocales)) {
+  throw new Error(
+    `Desktop / Mobile SUPPORTED_LOCALES 不一致:${SUPPORTED_LOCALES.join(',')} != ${mobileSupportedLocales.join(',')}`,
+  );
+}
 
 const hashes = new Map();
 function fileHash(absPath) {
@@ -241,8 +261,7 @@ const desk = await (async () => {
   const colors = {};
   for (const [key, name] of Object.entries(colorNames)) colors[key] = tokenPair(name);
 
-  /* 四语文案:JSON.parse common.json */
-  const LANGS = ['zh-CN', 'en', 'ja', 'ko'];
+  /* 产品支持语言文案:JSON.parse common.json */
   const COPY_KEYS = [
     'title', 'subtitle', 'phonePlaceholder', 'emailPlaceholder', 'invalidEmail', 'invalidPhone',
     'working', 'continue', 'back', 'cancel', 'chooseMethod', 'orgDetected', 'enterpriseLogin',
@@ -259,7 +278,7 @@ const desk = await (async () => {
     'social.apple', 'social.google', 'social.wechat',
   ];
   const copy = {};
-  for (const lang of LANGS) {
+  for (const lang of SUPPORTED_LOCALES) {
     const src = `apps/desktop/src/renderer/i18n/locales/${lang}/common.json`;
     const json = JSON.parse(readFileSync(R(src), 'utf8'));
     const bag = {};
@@ -538,8 +557,7 @@ const mobile = await (async () => {
     };
   }
 
-  /* 文案:loginMessages 4 语 catalog(demo 用到的登录键子集 + 错误码子集) */
-  const LANGS = ['zh-CN', 'en', 'ja', 'ko'];
+  /* 文案:loginMessages 支持语言 catalog(demo 用到的登录键子集 + 错误码子集) */
   const COPY_KEYS = [
     // 移动侧无 skipLogin / globalRegion 文案键(前者随跳过登录入口一并移除,后者属未合入分支)
     'title', 'phonePlaceholder', 'emailPlaceholder', 'invalidEmail', 'invalidPhone', 'continue',
@@ -561,7 +579,7 @@ const mobile = await (async () => {
   // 移动「服务不可用」= AUTH_REQUEST_FAILED(见 loginMessages.ts authErrorMessages)。
   const ERROR_KEYS = ['INVALID_CODE', 'AUTH_REQUEST_FAILED', 'NETWORK_ERROR'];
   const copy = {};
-  for (const lang of LANGS) {
+  for (const lang of SUPPORTED_LOCALES) {
     const bag = {};
     for (const key of COPY_KEYS) {
       const val = messages.loginMessages[lang][key];
@@ -866,6 +884,9 @@ const mobile = await (async () => {
 
 /* desk 的 adaptive.samples 单独挂到 truth 根(verify.mjs 门 F 硬编码读 adaptive.samples;
    provenance 豁免路径也是 adaptive.samples——故不放 desk.* 下)。 */
+const supportedLocales = SUPPORTED_LOCALES.map((locale, index) =>
+  leaf(locale, DESKTOP_LOCALES_TS, `SUPPORTED_LOCALES[${index}]`),
+);
 process.stdout.write(
-  JSON.stringify({ desk, mobile, adaptive: { samples: deskSamples } }, null, 2),
+  JSON.stringify({ desk, mobile, supportedLocales, adaptive: { samples: deskSamples } }, null, 2),
 );

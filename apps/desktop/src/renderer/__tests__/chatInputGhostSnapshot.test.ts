@@ -31,11 +31,25 @@ describe('ChatInput Ghost snapshot contract', () => {
   });
 
   it('does not expose controller-local plugin rows in device-link sessions', () => {
+    expect(source).toContain('if (deviceLinkDeviceId) return [];');
     expect(source).toContain(
-      'if (deviceLinkDeviceId) return [];',
+      '[deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, remoteHostId, t]',
     );
+  });
+
+  it('revalidates Host capability chips as enabled and local at send time', () => {
     expect(source).toContain(
-      '[deviceLinkDeviceId, pluginsForMenu, pluginAvailableIds, t]',
+      'const canUseLocalHostCapability = !remoteHostId && !deviceLinkDeviceId;',
+    );
+    expect(source).toMatch(
+      /serializedHostCapability && canUseLocalHostCapability[\s\S]*?candidate\.enabled &&[\s\S]*?candidate\.manifest\.id === serializedHostCapability\.ghostId/,
+    );
+    expect(source).toContain("toast.warning(t('newChat.pluginSetup.error.TARGET_UNAVAILABLE'));");
+  });
+
+  it('does not consume Host capability text as a local plan-mode command', () => {
+    expect(source).toMatch(
+      /if \(\s*!serializedHostCapability &&\s*isPlanModeComposerCommandText\(/,
     );
   });
 });

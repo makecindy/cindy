@@ -15,6 +15,8 @@ export type DbTxName =
   | 'orca.setWorkerFocus'
   | 'orca.removeWorker'
   | 'orca.cancelStaleTeams'
+  | 'orca.archiveWorkersByTeam'
+  | 'orca.reconcileInactiveTeamWorkersForLead'
   | 'sessions.renameTitles'
   | 'sessions.setStatus'
   | 'session.agentSwitchFallback'
@@ -255,6 +257,18 @@ export interface OrcaCancelStaleTeamsArgs {
   now: number;
 }
 
+/** Archive every still-active worker session linked to one team. */
+export interface OrcaArchiveWorkersByTeamArgs {
+  teamId: string;
+  now: number;
+}
+
+/** Repair active worker sessions left behind under a lead's inactive teams. */
+export interface OrcaReconcileInactiveTeamWorkersForLeadArgs {
+  leadSessionId: string;
+  now: number;
+}
+
 export interface SessionsRenameTitleChange {
   sessionId: string;
   title: string;
@@ -296,6 +310,15 @@ export interface SessionAgentSwitchFallbackArgs {
 export interface MessageDeleteArgs {
   sessionId: string;
   clientIds: string[];
+  /**
+   * Parentless Claude observations cannot be joined to a tool message. For an
+   * assistant-round deletion, the caller supplies the surrounding real-user
+   * time boundaries so the same transaction can retire those durable copies.
+   */
+  subagentTurnWindow?: {
+    startedAtInclusive: number;
+    startedAtExclusive?: number;
+  };
   contextMarker: {
     id: string;
     clientId: string;
@@ -310,6 +333,7 @@ export interface MessageDeleteResult {
     messageId: string;
     clientId: string;
   }>;
+  subagentRunIds: string[];
 }
 
 export interface SessionsSetStatusResultItem {
@@ -729,6 +753,8 @@ export type DbTxArgsByName = {
   'orca.setWorkerFocus': OrcaSetWorkerFocusArgs;
   'orca.removeWorker': OrcaRemoveWorkerArgs;
   'orca.cancelStaleTeams': OrcaCancelStaleTeamsArgs;
+  'orca.archiveWorkersByTeam': OrcaArchiveWorkersByTeamArgs;
+  'orca.reconcileInactiveTeamWorkersForLead': OrcaReconcileInactiveTeamWorkersForLeadArgs;
   'sessions.renameTitles': SessionsRenameTitlesArgs;
   'sessions.setStatus': SessionsSetStatusArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
@@ -772,6 +798,8 @@ export type DbTxResultByName = {
   'orca.setWorkerFocus': undefined;
   'orca.removeWorker': string | null;
   'orca.cancelStaleTeams': undefined;
+  'orca.archiveWorkersByTeam': string[];
+  'orca.reconcileInactiveTeamWorkersForLead': string[];
   'sessions.renameTitles': SessionsRenameTitleResult[];
   'sessions.setStatus': SessionsSetStatusResultItem[];
   'session.agentSwitchFallback': undefined;

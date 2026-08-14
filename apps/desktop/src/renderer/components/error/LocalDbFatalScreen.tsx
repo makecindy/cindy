@@ -84,10 +84,10 @@ export function LocalDbFatalScreen({
             )}
             {(message || code) && (
               <details className="mt-1 w-full">
-                <summary className="cursor-pointer text-[12px] text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]">
+                <summary className="cursor-pointer text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]">
                   {t('localDbFatal.details')}
                 </summary>
-                <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-[var(--surface-chip)] p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all text-[var(--text-secondary)]">
+                <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-[var(--surface-chip)] p-3 font-mono text-11 leading-relaxed whitespace-pre-wrap break-all text-[var(--text-secondary)]">
                   {[code, message].filter(Boolean).join('\n')}
                 </pre>
               </details>

@@ -30,7 +30,7 @@ import type {
 
 const log = createLogger('help-feedback');
 
-const VALID_LOCALES: ReadonlySet<HelpLocale> = new Set<HelpLocale>(['zh-CN', 'en', 'ja', 'ko']);
+const VALID_LOCALES: ReadonlySet<HelpLocale> = new Set<HelpLocale>(['zh-CN', 'zh-TW', 'en', 'ja', 'ko']);
 
 function draftFilePath(): string {
   return path.join(app.getPath('userData'), 'help-feedback-drafts.json');

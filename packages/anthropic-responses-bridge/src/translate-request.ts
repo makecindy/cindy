@@ -359,8 +359,11 @@ export function translateRequest(
     model: opts.model,
     input,
     store: false,
-    // 恒 stream:server.ts 的响应翻译器只解析 SSE(非流式 JSON 会被静默丢成空响应)。
-    // Claude Code SDK 全程流式;万一上游拿到 stream:false 请求也强制转成流,保证解析路径唯一。
+    // 上游**恒流式**,与调用方的 stream 无关。chatgpt.com/backend-api/codex 对
+    // stream:false 直接 400 `{"detail":"Stream must be set to true"}`(2026-08-10 实测,
+    // gpt-5.5 与 gpt-5.6-sol 一致),SSE 是这些订阅上游唯一可用的响应形态。
+    // 调用方的非流式需求(Claude Code stream watchdog 的 fallback)由 handler 在**下游**
+    // 把整流缓冲成单个 Anthropic Message JSON 满足,不靠上游换模式。
     stream: true,
     include: ['reasoning.encrypted_content'],
   };

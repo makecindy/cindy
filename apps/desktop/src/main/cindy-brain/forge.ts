@@ -15,21 +15,102 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { promisify } from 'node:util';
 
 import JSZip from 'jszip';
 
 import {
   GHOST_ICON_MAX_BYTES,
   GHOST_INSTALL_MANIFEST_MAX_BYTES,
+  GHOST_MANUAL_ENTRY_FILE,
+  GHOST_MANUAL_MD_MAX_BYTES,
   GHOST_MANIFEST_FILE,
+  GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_SKILL_MD_MAX_BYTES,
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
-import { GHOST_MANIFEST_MAX_BYTES, readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
+import {
+  GHOST_MANIFEST_MAX_BYTES,
+  readBoundedFileNoFollow,
+  readBoundedFileNoFollowWithStat,
+} from '../utils/readBoundedFile.js';
+import {
+  decodeGhostManualMarkdown,
+  ghostManualLogicalPathForEntry,
+} from './ghostManualValidation.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
+import { isPathInsideDir } from './dirDeposit.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
+
+/**
+ * `fs.promises.realpath` 没有 native 变体,promisify 一次(scaffold/pack 的受管根
+ * 与 workdir 门都靠它拿到规范路径再比对)。
+ */
+const realpathNative = promisify(fs.realpath.native);
+
+/**
+ * 解析已存在祖先的真身、保留尚不存在的尾段,让受管根在首次落盘前就可比对。
+ */
+async function resolveThroughExistingAncestor(inputPath: string): Promise<string> {
+  let cursor = path.resolve(inputPath);
+  const tail: string[] = [];
+  while (true) {
+    try {
+      const real = await realpathNative(cursor);
+      return path.join(real, ...tail);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return path.resolve(inputPath);
+      tail.unshift(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+/**
+ * 逐段确认一个已存在目录路径没有 symlink / junction 祖先。
+ *
+ * 不能用 `realpath(path) === path` 判断：Windows 的 8.3 短路径会被 realpath
+ * 展开成长路径，二者文本不同但每一段仍都是普通目录。逐段 lstat 才能既放行
+ * 这种合法别名，又继续拒绝真正的 reparse-point 祖先。
+ */
+async function pathHasLinkSegment(inputPath: string): Promise<boolean> {
+  const resolved = path.resolve(inputPath);
+  const root = path.parse(resolved).root;
+  let current = root;
+  const relative = path.relative(root, resolved);
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    const stat = await fs.promises.lstat(current);
+    if (!stat.isSymbolicLink()) continue;
+    // macOS exposes os.tmpdir() under `/var` while realpath resolves it to
+    // `/private/var`. This system alias is safe; links created below the temp
+    // root remain rejected by the ordinary segment check.
+    const tempRoot = path.resolve(os.tmpdir());
+    const targetRel = path.relative(tempRoot, resolved);
+    if (targetRel.startsWith(`..${path.sep}`) || path.isAbsolute(targetRel)) return true;
+    try {
+      const realSegment = await realpathNative(current);
+      const realTempRoot = await realpathNative(tempRoot);
+      const tempRel = path.relative(realSegment, realTempRoot);
+      if (
+        tempRel === '' ||
+        tempRel.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(tempRel) ||
+        !(await fs.promises.stat(current)).isDirectory()
+      ) {
+        return true;
+      }
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** 与 GhostManager 装入侧同一量级的上限(打包侧提前拦,fail fast)。 */
 const MAX_BASIC_FILES = 256;
@@ -52,7 +133,15 @@ export type ForgePackResult =
   | { ok: true; cindyPath: string; manifest: GhostManifest }
   | {
       ok: false;
-      errorCode: 'DIR_NOT_FOUND' | 'MANIFEST_INVALID' | 'ENTRY_MISSING' | 'TOO_LARGE' | 'INTERNAL';
+      errorCode:
+        | 'DIR_NOT_FOUND'
+        | 'MANIFEST_INVALID'
+        | 'ENTRY_MISSING'
+        | 'TOO_LARGE'
+        | 'INTERNAL'
+        // Forge 打包出口的会话 workdir 门 + 受管根禁区(C-4 + #7)。
+        | 'SOURCE_OUTSIDE_WORKDIR'
+        | 'SOURCE_IS_INSTALLED_PLUGIN';
       message: string;
     };
 
@@ -86,6 +175,29 @@ interface ForgeScaffoldInput {
   name: string;
   description?: string;
 }
+
+/**
+ * scaffold 落盘能力(C-4):实际写盘委托给隔离的稳定父目录写入器(main 侧
+ * forgeScaffoldCapability/worker),forge.ts 只做校验与内容生成,不直接碰盘。
+ */
+export interface ForgeScaffoldWriteRequest {
+  parentDir: string;
+  targetName: string;
+  expectedParent: {
+    realPath: string;
+    dev: bigint;
+    ino: bigint;
+  };
+  files: Array<{ path: string; base64: string }>;
+}
+
+export type ForgeScaffoldWriteResult =
+  | { ok: true }
+  | { ok: false; errorCode: 'TARGET_EXISTS' | 'INTERNAL'; message: string };
+
+export type ForgeScaffoldWriter = (
+  request: ForgeScaffoldWriteRequest,
+) => Promise<ForgeScaffoldWriteResult>;
 
 /** 生成插件清单；先走正式校验，再允许任何文件落盘。 */
 function scaffoldManifest(input: ForgeScaffoldInput): Record<string, unknown> {
@@ -408,7 +520,11 @@ function hasFsErrorCode(err: unknown, code: string): boolean {
  */
 export async function scaffoldGhostDir(
   input: ForgeScaffoldInput,
-  options?: { sessionWorkdir?: string | null },
+  options?: {
+    sessionWorkdir?: string | null;
+    forbiddenRootDirs?: readonly string[];
+    writeScaffold?: ForgeScaffoldWriter;
+  },
 ): Promise<ForgeScaffoldResult> {
   const template = input.template;
   if (!FORGE_SCAFFOLD_TEMPLATES.includes(template)) {
@@ -423,130 +539,129 @@ export async function scaffoldGhostDir(
   const resolved = path.resolve(input.dir);
   const workdir = options?.sessionWorkdir;
   if (!workdir) {
-    return {
-      ok: false,
-      errorCode: 'INVALID_INPUT',
-      message: '没有会话工作目录,无法确定骨架输出位置',
-    };
+    return { ok: false, errorCode: 'INVALID_INPUT', message: '没有会话工作目录,无法确定骨架输出位置' };
   }
-  // 字面 startsWith 不设防软链:工作目录里若有 out -> /tmp/out 之类的
-  // 软链祖先,字面在内、实际在外。两边都按 realpath 对账——目标还不存在,
-  // 就取「已存在的最深祖先」的真身再拼回剩余段。
+  // 字面 startsWith 不设防软链:工作目录里若有 out -> /tmp/out 之类的软链祖先,
+  // 字面在内、实际在外。两边都按 realpath 对账——目标还不存在,就取「已存在的最深
+  // 祖先」的真身再拼回剩余段(与打包侧受管根解析共用 resolveThroughExistingAncestor)。
   let realWorkdir: string;
   try {
-    realWorkdir = await fs.promises.realpath(path.resolve(workdir));
+    realWorkdir = await realpathNative(path.resolve(workdir));
   } catch {
-    return {
-      ok: false,
-      errorCode: 'INVALID_INPUT',
-      message: '会话工作目录不存在,无法确定骨架输出位置',
-    };
+    return { ok: false, errorCode: 'INVALID_INPUT', message: '会话工作目录不存在,无法确定骨架输出位置' };
   }
-  let realAncestor = resolved;
-  const pendingSegments: string[] = [];
-  for (;;) {
-    try {
-      realAncestor = await fs.promises.realpath(realAncestor);
-      break;
-    } catch (err) {
-      if (!hasFsErrorCode(err, 'ENOENT')) {
-        return {
-          ok: false,
-          errorCode: 'INTERNAL',
-          message: err instanceof Error ? err.message : String(err),
-        };
-      }
-      const parent = path.dirname(realAncestor);
-      if (parent === realAncestor) break; // 到根了,根一定存在,防御性兜底
-      pendingSegments.unshift(path.basename(realAncestor));
-      realAncestor = parent;
-    }
+  let realTarget: string;
+  try {
+    realTarget = await resolveThroughExistingAncestor(resolved);
+  } catch (err) {
+    return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
   }
-  const realTarget = path.join(realAncestor, ...pendingSegments);
   if (!realTarget.startsWith(`${realWorkdir}${path.sep}`) && realTarget !== realWorkdir) {
     return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
   }
+  for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
+    let resolvedForbiddenRoot: string;
+    try {
+      resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);
+    } catch (err) {
+      return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
+    }
+    // 与打包侧同形的双向判定:骨架目标既不能落进受管根(已装插件 / 状态根 / seed 根),
+    // 也不能是它们的祖先。祖先方向此处是纵深防御(该目录必已存在,最终 rename 会
+    // TARGET_EXISTS 拒掉),但判定不散落、两半都覆盖,才不会靠读者去推断下游语义。
+    if (
+      isPathInsideDir(resolvedForbiddenRoot, realTarget) ||
+      isPathInsideDir(realTarget, resolvedForbiddenRoot)
+    ) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_INPUT',
+        message:
+          'dir 不能落在已安装插件目录或 Host 管理的状态目录内,也不能是它们的上级目录;请在工作目录里换一个独立的作者目录',
+      };
+    }
+  }
+  const targetDir = path.resolve(input.dir);
   const files = scaffoldFiles(input);
-  // 显式收窄而非 as 断言:manifest 恒为 JSON 字符串,二进制项(占位图标)另存;
-  // 未来若误把 manifest 写成 Buffer,这里在编译/测试期就报,而不是运行期 parse 炸。
   const manifestRaw = files[GHOST_MANIFEST_FILE];
   if (typeof manifestRaw !== 'string') {
     return { ok: false, errorCode: 'INTERNAL', message: 'scaffold manifest 必须是 JSON 字符串' };
   }
   const validation = validateGhostManifest(JSON.parse(manifestRaw));
   if (!validation.ok) {
-    return {
-      ok: false,
-      errorCode: 'INVALID_INPUT',
-      message: `插件信息不合格:${validation.reason}`,
-    };
+    return { ok: false, errorCode: 'INVALID_INPUT', message: `插件信息不合格:${validation.reason}` };
   }
 
-  const targetDir = path.resolve(input.dir);
   try {
     await fs.promises.lstat(targetDir);
-    return {
-      ok: false,
-      errorCode: 'TARGET_EXISTS',
-      message: `目标已经存在，不会覆盖:${targetDir}`,
-    };
+    return { ok: false, errorCode: 'TARGET_EXISTS', message: `目标已经存在，不会覆盖:${targetDir}` };
   } catch (err) {
     if (!hasFsErrorCode(err, 'ENOENT')) {
-      return {
-        ok: false,
-        errorCode: 'INTERNAL',
-        message: err instanceof Error ? err.message : String(err),
-      };
+      return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
     }
   }
 
   const parentDir = path.dirname(targetDir);
-  let stagingDir: string | null = null;
+  let parentStat: fs.BigIntStats;
+  let parentRealPath: string;
   try {
-    await fs.promises.mkdir(parentDir, { recursive: true });
-    stagingDir = await fs.promises.mkdtemp(
-      path.join(parentDir, `.${path.basename(targetDir)}-scaffold-`),
-    );
-    for (const [rel, content] of Object.entries(files)) {
-      const abs = path.join(stagingDir, rel);
-      await fs.promises.mkdir(path.dirname(abs), { recursive: true });
-      await fs.promises.writeFile(abs, content, { encoding: 'utf8', flag: 'wx' });
+    parentStat = await fs.promises.lstat(parentDir, { bigint: true });
+    if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
+      return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 的父目录必须是工作目录内已存在的普通目录' };
     }
-    try {
-      await fs.promises.rename(stagingDir, targetDir);
-      stagingDir = null;
-    } catch (err) {
-      if (hasFsErrorCode(err, 'EEXIST') || hasFsErrorCode(err, 'ENOTEMPTY')) {
-        return {
-          ok: false,
-          errorCode: 'TARGET_EXISTS',
-          message: `目标已经存在，不会覆盖:${targetDir}`,
-        };
-      }
-      throw err;
+    parentRealPath = await realpathNative(parentDir);
+    if (
+      (await pathHasLinkSegment(parentDir)) ||
+      !isPathInsideDir(realWorkdir, parentRealPath)
+    ) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_INPUT',
+        message: 'dir 的父目录必须是工作目录内已存在且没有链接祖先的普通目录',
+      };
     }
-    return {
-      ok: true,
-      dir: targetDir,
-      template,
-      files: Object.keys(files).sort(),
-      nextSteps: [
-        '按需要修改 ghost.json、main.js 和 worker 源码。',
-        '调用 ghost_forge_pack 打包并让用户确认安装。',
-        'Node 模板不允许在安装或首次运行时执行 npm install、npx 或 postinstall。',
-      ],
-    };
   } catch (err) {
+    if (hasFsErrorCode(err, 'ENOENT')) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_INPUT',
+        message: 'dir 的父目录必须先创建，并且必须位于当前工作目录内',
+      };
+    }
+    return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
+  }
+
+  // 实际落盘委托给隔离的稳定父目录写入器(C-4):forge.ts 只生成内容,不直接写盘。
+  if (!options?.writeScaffold) {
     return {
       ok: false,
       errorCode: 'INTERNAL',
-      message: err instanceof Error ? err.message : String(err),
+      message: 'Forge scaffold stable-directory capability is unavailable',
     };
-  } finally {
-    if (stagingDir) {
-      await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
-    }
   }
+  const writeResult = await options.writeScaffold({
+    parentDir,
+    targetName: path.basename(targetDir),
+    expectedParent: { realPath: parentRealPath, dev: parentStat.dev, ino: parentStat.ino },
+    files: Object.entries(files).map(([rel, content]) => ({
+      path: rel,
+      base64: (typeof content === 'string' ? Buffer.from(content, 'utf8') : content).toString('base64'),
+    })),
+  });
+  if (!writeResult.ok) {
+    return { ok: false, errorCode: writeResult.errorCode, message: writeResult.message };
+  }
+  return {
+    ok: true,
+    dir: targetDir,
+    template,
+    files: Object.keys(files).sort(),
+    nextSteps: [
+      '按需要修改 ghost.json、main.js 和 worker 源码。',
+      '调用 ghost_forge_pack 打包并让用户确认安装。',
+      'Node 模板不允许在安装或首次运行时执行 npm install、npx 或 postinstall。',
+    ],
+  };
 }
 
 /**
@@ -674,10 +789,13 @@ async function buildGhostPackage(
     // 3) 清单声明的入口文件必须真实在场(打包期拦,别等装入后沙箱 404)。
     const mustExist: string[] = [];
     if (manifest.entry) mustExist.push(manifest.entry);
-    if (manifest.node?.entry) mustExist.push(manifest.node.entry);
+    if (manifest.node?.entry) {
+      mustExist.push(manifest.node.entry, ...(manifest.node.entries ?? []));
+    }
     if (manifest.panel?.html) mustExist.push(manifest.panel.html);
     if (manifest.settingsHtml) mustExist.push(manifest.settingsHtml);
     for (const item of manifest.skill?.items ?? []) mustExist.push(`${item.dir}/SKILL.md`);
+    if (iconPng === undefined && manifest.icon) mustExist.push(manifest.icon);
     for (const rel of mustExist) {
       try {
         // lstat 与收集侧(walk 的 Dirent)同一语义:声明的入口若是符号链接,
@@ -724,12 +842,137 @@ async function buildGhostPackage(
       }
     }
 
+    // 3.6) manual:每个声明单元必须以 MANUAL.md 为入口，目录内只允许普通
+    // Markdown 文件；逐文件限量、严格 UTF-8，并拒绝并发截短与二进制内容。
+    // 缓存本次校验过的字节，生成 zip 时直接使用同一份快照，避免“预检一份、
+    // 入包时又读到另一份”的竞态。嵌套单元共享缓存，同一物理文件只校验一次。
+    const manualFileSnapshots = new Map<string, Buffer>();
+    for (const item of manifest.manual?.items ?? []) {
+      const unitRoot = path.join(dir, ...item.dir.split('/'));
+      const validateManualDir = async (
+        currentDir: string,
+        relativeDir: string,
+        preloadedEntries?: fs.Dirent[],
+      ): Promise<Exclude<ForgePackResult, { ok: true }> | null> => {
+        let entries: fs.Dirent[];
+        if (preloadedEntries) {
+          entries = preloadedEntries;
+        } else {
+          try {
+            entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+          } catch {
+            return {
+              ok: false,
+              errorCode: 'ENTRY_MISSING',
+              message: `读取手册目录失败:${item.dir}${relativeDir ? `/${relativeDir}` : ''}`,
+            };
+          }
+        }
+        for (const entry of entries) {
+          if (shouldSkip(entry.name)) continue;
+          const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+          const logicalPath = `${item.dir}/${relativePath}`;
+          const absolutePath = path.join(currentDir, entry.name);
+          if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) {
+            return {
+              ok: false,
+              errorCode: 'MANIFEST_INVALID',
+              message: `manual 单元只允许普通 Markdown 文件:${logicalPath}`,
+            };
+          }
+          if (entry.isDirectory()) {
+            if (ghostManualLogicalPathForEntry(item.name, relativePath, 'directory') === null) {
+              return {
+                ok: false,
+                errorCode: 'MANIFEST_INVALID',
+                message: `manual 目录无法形成合法 ghost_manual 路径:${logicalPath}`,
+              };
+            }
+            const nestedError = await validateManualDir(absolutePath, relativePath);
+            if (nestedError) return nestedError;
+            continue;
+          }
+          if (ghostManualLogicalPathForEntry(item.name, relativePath, 'file') === null) {
+            return {
+              ok: false,
+              errorCode: 'MANIFEST_INVALID',
+              message: `manual 文件无法形成合法 ghost_manual Markdown 路径:${logicalPath}`,
+            };
+          }
+          if (manualFileSnapshots.has(logicalPath)) continue;
+          let read;
+          try {
+            read = await readBoundedFileNoFollowWithStat(
+              absolutePath,
+              GHOST_MANUAL_MD_MAX_BYTES,
+              {
+                containWithin: realDir,
+                verifyContentStability: true,
+              },
+            );
+          } catch {
+            return {
+              ok: false,
+              errorCode: 'MANIFEST_INVALID',
+              message: `读取 manual 文件失败:${logicalPath}`,
+            };
+          }
+          if (read === null) {
+            return {
+              ok: false,
+              errorCode: 'MANIFEST_INVALID',
+              message: `${logicalPath} 不是普通文件或超过 ${GHOST_MANUAL_MD_MAX_BYTES} 字节上限`,
+            };
+          }
+          const decoded = decodeGhostManualMarkdown(read.bytes);
+          if (!decoded.ok) {
+            return {
+              ok: false,
+              errorCode: 'MANIFEST_INVALID',
+              message: `manual 文件不合格(${logicalPath}):${decoded.reason}`,
+            };
+          }
+          manualFileSnapshots.set(logicalPath, read.bytes);
+        }
+        return null;
+      };
+      let rootEntries: fs.Dirent[];
+      try {
+        rootEntries = await fs.promises.readdir(unitRoot, { withFileTypes: true });
+      } catch {
+        return {
+          ok: false,
+          errorCode: 'ENTRY_MISSING',
+          message: `读取手册目录失败:${item.dir}`,
+        };
+      }
+      const manualEntry = rootEntries.find((entry) => entry.name === GHOST_MANUAL_ENTRY_FILE);
+      if (!manualEntry?.isFile() || manualEntry.isSymbolicLink()) {
+        return {
+          ok: false,
+          errorCode: 'ENTRY_MISSING',
+          message: `清单声明的文件不存在:${item.dir}/${GHOST_MANUAL_ENTRY_FILE}`,
+        };
+      }
+      const manualError = await validateManualDir(unitRoot, '', rootEntries);
+      if (manualError) return manualError;
+    }
+
     // 4) 收集文件(递归,跳过开发残留),数量/体积设限。
+    // 分类一律走 lstat(不信 readdir Dirent 的类型位——libuv 对 junction 的类型位
+    // 跨平台不稳),按我们分支的加固语义处理:
+    //  - 目录:进递归前按 realpath 复核仍在规范源码根内。目录可能在"分类"与
+    //    "递归"之间被换成指向根外/受管根的 junction(TOCTOU);realpath 越界即拒
+    //    (SOURCE_OUTSIDE_WORKDIR),避免把根外字节递归卷进 .cindy。
+    //  - 符号链接:清单声明的入口是链接 → ENTRY_MISSING(装入侧会缺入口 404,
+    //    打包期就拦);非声明的链接 → 跳过,不穿透、不把目标字节打进包。
+    //  - 普通文件:收集(字节读取仍在下面按 realDir containWithin 现读)。
     const files: Array<{ rel: string; abs: string }> = [];
     let totalBytes = 0;
     const maxFiles = manifest.node ? MAX_NODE_FILES : MAX_BASIC_FILES;
     const maxTotalBytes = manifest.node ? MAX_NODE_TOTAL_BYTES : MAX_BASIC_TOTAL_BYTES;
     const seenPackPaths = new Set<string>();
+    const requiredPackPaths = new Set(mustExist.map((entry) => entry.toLowerCase()));
     const walk = async (
       cur: string,
       relBase: string,
@@ -748,20 +991,49 @@ async function buildGhostPackage(
           };
         }
         seenPackPaths.add(foldedRel);
-        if (e.isDirectory()) {
+        let st: fs.Stats;
+        try {
+          st = await fs.promises.lstat(abs);
+        } catch {
+          // 分类时条目已消失(并发删除):声明入口 → ENTRY_MISSING,其它跳过。
+          if (requiredPackPaths.has(foldedRel)) {
+            return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不存在:${rel}` };
+          }
+          continue;
+        }
+        if (st.isSymbolicLink()) {
+          if (requiredPackPaths.has(foldedRel)) {
+            return {
+              ok: false,
+              errorCode: 'ENTRY_MISSING',
+              message: `清单声明的文件是链接,不可打包:${rel}`,
+            };
+          }
+          continue;
+        }
+        if (st.isDirectory()) {
+          // 进递归前按 realpath 复核:分类与递归之间目录可能被换成指向根外的
+          // junction。realpath 越出规范源码根即拒,不把根外字节卷进包。
+          let realCur: string;
+          try {
+            realCur = await realpathNative(abs);
+          } catch {
+            continue;
+          }
+          if (!isPathInsideDir(realDir, realCur)) {
+            return {
+              ok: false,
+              errorCode: 'SOURCE_OUTSIDE_WORKDIR',
+              message: `源码子目录在打包期被替换为指向根外的链接:${rel}`,
+            };
+          }
           const bad = await walk(abs, rel);
           if (bad) return bad;
-        } else if (e.isSymbolicLink()) {
-          // 符号链接一律不穿透。此前是静默跳过——OneDrive 未水合占位文件、
-          // 仓库里提交的链接都会被悄悄丢出包外,校验说"在场"、包里却没有,
-          // 运行期才 404。改为结构化拒绝,错误可见。
-          return {
-            ok: false,
-            errorCode: 'MANIFEST_INVALID',
-            message: `源码目录含符号链接条目,不允许打包:${rel}`,
-          };
-        } else if (e.isFile()) {
+        } else if (st.isFile()) {
           files.push({ rel, abs });
+          // 体积预算用 stat(而非 lstat.size):这是"walk 期预估"值,真正的
+          // 权威边界在下面 zip 步按剩余预算 containWithin 现读时强制(文件可能在
+          // walk 与读取之间被并发撑大)。分类归 lstat,预算归 stat,各司其职。
           totalBytes += (await fs.promises.stat(abs)).size;
           if (files.length > maxFiles) {
             return { ok: false, errorCode: 'TOO_LARGE', message: `文件过多(上限 ${maxFiles} 个)` };
@@ -773,12 +1045,43 @@ async function buildGhostPackage(
               message: `总体积超上限(${maxTotalBytes} 字节)`,
             };
           }
+        } else if (requiredPackPaths.has(foldedRel)) {
+          // 声明入口是块/字符设备、FIFO 等非常规条目 → 视为缺失。
+          return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不是普通文件:${rel}` };
         }
       }
       return null;
     };
     const tooLarge = await walk(dir, '');
     if (tooLarge) return tooLarge;
+    const collectedPackPaths = new Set(files.map((file) => file.rel));
+    const omittedRequiredPath = mustExist.find(
+      (requiredPath) => !collectedPackPaths.has(requiredPath),
+    );
+    if (omittedRequiredPath) {
+      return {
+        ok: false,
+        errorCode: 'ENTRY_MISSING',
+        message: `清单声明的文件未进入打包内容:${omittedRequiredPath}`,
+      };
+    }
+    if (manifest.manual !== undefined) {
+      const isWithinManualUnit = (rel: string): boolean =>
+        manifest.manual!.items.some((item) => rel.startsWith(`${item.dir}/`));
+      const packedManualPaths = new Set(
+        files.filter((file) => isWithinManualUnit(file.rel)).map((file) => file.rel),
+      );
+      const changedManualPath =
+        [...packedManualPaths].find((rel) => !manualFileSnapshots.has(rel)) ??
+        [...manualFileSnapshots.keys()].find((rel) => !packedManualPaths.has(rel));
+      if (changedManualPath !== undefined) {
+        return {
+          ok: false,
+          errorCode: 'MANIFEST_INVALID',
+          message: `manual 目录在打包期间发生变化:${changedManualPath}`,
+        };
+      }
+    }
     // AI icon overlay changes both the manifest snapshot and the icon bytes. A
     // source tree carrying a publisher/reviewer signature cannot be modified
     // here without re-signing, so let the host fall back to the original icon
@@ -830,6 +1133,8 @@ async function buildGhostPackage(
         content = manifestBytes;
       } else if (iconPng !== undefined && f.rel === FORGE_AI_ICON_PATH) {
         content = iconPng;
+      } else if (manualFileSnapshots.has(f.rel)) {
+        content = manualFileSnapshots.get(f.rel)!;
       } else {
         let bytes: Buffer | null;
         try {
@@ -900,9 +1205,48 @@ async function buildGhostPackage(
  */
 export async function packGhostDir(
   dir: string,
-  options?: { iconPng?: Buffer },
+  options?: { sessionWorkdir?: string | null; forbiddenRootDirs?: readonly string[]; iconPng?: Buffer },
 ): Promise<ForgePackResult> {
-  const built = await buildGhostPackage(dir, undefined, options);
+  // Forge 打包出口专属安全门(C-4 + #7):source 必须在会话 workdir 内、且不得是受管根
+  //(已装插件 / 批准状态根 / seed 根,双向判定)。算出的 realSourceDir 作为
+  // buildGhostPackage 的 expectedRealDir 上游锚点——正是它要求"由上游校验后传入"的那份。
+  const workdir = options?.sessionWorkdir;
+  if (!workdir) {
+    return { ok: false, errorCode: 'SOURCE_OUTSIDE_WORKDIR', message: 'Forge pack requires an active session workdir' };
+  }
+  let realWorkdir: string;
+  try {
+    realWorkdir = await realpathNative(path.resolve(workdir));
+  } catch {
+    return { ok: false, errorCode: 'SOURCE_OUTSIDE_WORKDIR', message: 'The current session workdir does not exist' };
+  }
+  let realSourceDir: string;
+  try {
+    realSourceDir = await realpathNative(dir);
+  } catch {
+    return { ok: false, errorCode: 'DIR_NOT_FOUND', message: `目录不存在:${dir}` };
+  }
+  if (!isPathInsideDir(realWorkdir, realSourceDir)) {
+    return { ok: false, errorCode: 'SOURCE_OUTSIDE_WORKDIR', message: 'Forge source must be inside the current session workdir' };
+  }
+  for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
+    const resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);
+    // 双向:源目录落在受管根内要拒(拿已安装插件当源码),源目录是受管根祖先也要拒
+    //(递归打包会走进 cindy-brain / ghost-install-state / seed 根,把已装字节、批准
+    // receipt、技能快照打进 .cindy)。
+    if (
+      isPathInsideDir(resolvedForbiddenRoot, realSourceDir) ||
+      isPathInsideDir(realSourceDir, resolvedForbiddenRoot)
+    ) {
+      return {
+        ok: false,
+        errorCode: 'SOURCE_IS_INSTALLED_PLUGIN',
+        message:
+          'Forge source must not be an installed Plugin or a Host-managed state directory; copy the source into the current session workdir first',
+      };
+    }
+  }
+  const built = await buildGhostPackage(dir, realSourceDir, options ? { iconPng: options.iconPng } : undefined);
   if (!built.ok) return built;
   const authoringIssue = firstGhostAuthoringIssue(built.manifestRaw);
   if (authoringIssue) {
@@ -910,7 +1254,9 @@ export async function packGhostDir(
   }
   // 产物跟源码住一起(2026-07 Lizi 定案:拿取直观);文件收集在写盘之前完成
   // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
-  const cindyPath = path.join(dir, `${built.manifest.id}-${built.manifest.version}.cindy`);
+  // 落地到**规范源码目录**(realpath 产物)而非可能是符号链接/别名的入参 `dir`:
+  // 产物必须写进真实目录,别名只是通往它的一条路径。
+  const cindyPath = path.join(realSourceDir, `${built.manifest.id}-${built.manifest.version}.cindy`);
   try {
     await fs.promises.writeFile(cindyPath, built.buf);
   } catch (err) {
@@ -1054,8 +1400,8 @@ my-ghost/
   "schemaVersion": 2,
   "id": "my-ghost",            // 小写字母/数字/连字符,1–32 位,全局唯一
   "name": "我的意识",           // 展示名
-  "description": "一句话说清这段意识是干嘛的(给人看:装入确认框/详情页)",  // 1–300 字
-  "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–300 字,给模型看:进 agent 会话的意识花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;缺省时花名册回落用 description
+  "description": "一句话说清这段意识是干嘛的(给人看:装入确认框/详情页)",  // 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字
+  "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字,给模型看:进 agent 会话的意识花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;花名册会折叠连续空白,异常数据会截断;缺省时花名册回落用 description
   "icon": "assets/icon.png",   // 建议:插件图标(包内相对路径;扩展名限 png/jpg/jpeg/webp/gif,不收 svg——svg 可携带脚本,虽经 <img> 渲染不执行,仍不给这个面)。不配则面板与消息身份头显示默认拼图占位符;官方插件仓惯例放 assets/icon.png
   "locales": {                 // 可选:插件只跟随宿主语言;不支持/缺失语言固定回退 en
     "en": "locales/en.json",
@@ -1064,6 +1410,7 @@ my-ghost/
     "ko": "locales/ko.json"
   },
   "version": "1.0.0",
+  "minCindyVersion": "1.2.3", // 可选:安装所需最低 Cindy 正式版本(SemVer)。不写=兼容所有版本;只在确实使用了新版宿主能力时声明
   "entry": "main.js",          // 电子脑入口(kind 字段已无需填写:意识只有芯片一种形态,缺省即 chip;写了也只认 "chip")
   "launch": "on-demand",       // 可选:电子脑启动模式。on-demand(缺省)=被需要才拉起;resident=唤醒即常驻(确认框会如实标注"常驻运行",绝大多数意识不需要,仅订阅型/需秒响应的场景用)
   "slots": ["tool", "cindy", "panel"],   // 能力白名单,没声明的槽运行时不存在
@@ -1094,6 +1441,38 @@ my-ghost/
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
+\`\`\`
+
+不要为“当前开发环境版本”机械填写 \`minCindyVersion\`。旧插件和不依赖新版宿主能力的
+插件应省略它；当更早版本无法正确安装，或虽能安装但缺少新版宿主能力、导致插件无法按
+设计正常工作时，必须填写最早可正常工作的正式版本。\`manual\` / \`ghost_manual\` 属于后者。
+
+### whenToUse:只写发现线索,不写使用规则
+
+在作者契约里,\`whenToUse\` 是专门给模型做插件发现与判断的唯一字段;
+\`description\` 给人看(装入确认框/详情页),不要拿它兼任模型路由说明。
+\`whenToUse\` 最多 ${GHOST_MANIFEST_SUMMARY_MAX_CHARS} 字符,花名册会完整展示有效内容,折叠连续空白并对异常数据做防御性截断。花名册命中已知 \`ghost_id\` 时用
+\`ghost_info\` 精准现查单条;未命中或需要全量实时回查时用 \`ghost_list\`。两者都返回完整
+\`CindyGhostInfo\`,取得信息后再按任务交叉读取 Manual 与插件工具目录,信息足够即可调用。
+未声明 \`whenToUse\` 时宿主会用 \`description\` 兼容回落,但高质量插件
+必须单独写好 \`whenToUse\`,不要依赖回落。
+
+只写用户意图、业务对象和常见说法的**场景枚举**,回答"什么情况下应该想到这个插件"。
+禁止塞入"必须/不得"式行为规则、工具调用顺序、参数协议、错误码与重试策略。
+单个工具怎么调用放进工具及参数 \`description\`;同一类别内、紧贴当前工具集合与参数的
+动态规则放进 §3.5 的 **\`list_tools(category)\` RULES**;多工具组合、跨类别完整流程、
+长期稳定的共同原则与深入用法放进 §3.6 的 Manual。不要在三处复制同一份规则。
+
+反例(错把使用规则塞进发现面):
+
+\`\`\`json
+"whenToUse": "管理项目时找我;必须先调用 list_tools(category=project),再调用 call_tool;遇到 INVALID_ARGS 不得改用其它工具"
+\`\`\`
+
+改正版(只保留场景枚举):
+
+\`\`\`json
+"whenToUse": "需要查询、创建或更新项目、任务、成员、迭代与发布状态时找我"
 \`\`\`
 
 ### 2.1 本地化资源(locales)
@@ -1160,7 +1539,7 @@ key、未知字段、原清单没有的条目、类型或长度不合格、文�
 node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`constructor\` 或
 \`prototype\`；这些名称是宿主保留键，打包时会直接拒绝。
 
-十六个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图/快问快答,
+十八个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图/快问快答,
 见 §4 与 §4.0.2)、\`agent\`(让
 当前 Agent 开始一个普通用户回合,或派活取回结果,见 §4.11 / §4.11.1)、\`panel\`(常驻
 面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
@@ -1174,7 +1553,8 @@ Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机
 用户亲选即授权,见 §4.14)、\`preview\`(请主机在右侧栏内置浏览器打开白名单网站的
 预览标签,见 §4.15)、\`skill\`(捆绑 Agent Skills:随包 SKILL.md 技能,启用后
 Claude Code 与 Codex 都能发现,见 §4.16)、\`workspace\`(请主机为项目目录在
-侧边栏创建/复用会话入口,见 §4.17)。
+侧边栏创建/复用会话入口,见 §4.17)、\`ios-simulator\`(读取当前台前任务的
+公开 iOS 模拟器状态并打开 Host 内置控制面板,见 §4.19)。
 
 **agent 能力详单**:在 \`slots\` 加 \`"agent"\`，默认只允许在用户真实点击你的
 聊天卡片后发起一次 Agent 回合；这一档不写配套字段。若确实需要没有当次点击也能
@@ -1234,6 +1614,18 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 }
 \`\`\`
 
+**manual 随包手册**(独立顶层字段,不是 slot、不是权限项,详见 §3.6):
+
+\`\`\`json
+"manual": {
+  "items": [{                         // 1–8 条
+    "dir": "manual/getting-started", // 包内物理目录,必须有 MANUAL.md
+    "name": "getting-started",        // ghost_manual path 的逻辑首段,不暴露物理 dir
+    "description": "从安装到首次运行" // 一级轻量索引,1–300 字
+  }]
+}
+\`\`\`
+
 **cindy 能力详单**:声明"这个意识被允许点主机代办菜单上的哪些菜"——只有类目和
 动作,**没有任何具体模型/供应商信息**(选型权在主机与用户,意识只表达意图)。
 类目与动作:\`image\`(\`generate\`=出图 / \`edit\`=改图)、\`video\`(\`generate\`=
@@ -1254,7 +1646,7 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
     "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/确认框)
-    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段);"oidc-token"=主机为当前企业 Membership 按需签发短时 Connection JWT(插件不可读取,必须显式限制 inject.hosts,固定 Authorization: Bearer {value},见 §4.7)
+    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段);"gh-cli"=仅官方 cindy-github 可用,优先复用本机 gh 登录、不可用时回落同 key 的设置页 PAT;"oidc-token"=主机为当前企业 Membership 按需签发短时 Connection JWT(插件不可读取,必须显式限制 inject.hosts,固定 Authorization: Bearer {value},见 §4.7)
     "hint": "在控制台生成后粘贴",                     // 可选提示(主机 Setup 卡与 settingsHtml 都会用到)
     "url": "https://example.com/settings/keys",     // 可选:控制台/申请地址(仅 https)。调用前缺凭证时,主机 Setup 卡会在输入框旁展示本地化的「获取凭证」入口；settingsHtml 也可用 <a href> 逐字引用它,点击经主机转系统浏览器打开(见 §4.8「外链」)
     "inject": {                                     // 必填:这条凭证怎么进请求
@@ -1315,8 +1707,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
   话术)、\`connection:<key>\`(该连接声明下至少添加一条)、
   \`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空且不能是宿主保留键;键名主机无先验,
   label 必填)。Node 凭证同样可参与 setup.requires。
-- 引用必须逐字指向已声明的 key,悬空引用**打包期就拒**;\`login-email\` 源凭证恒就绪,
-  引用它同样拒(没有配置动作可引导)。kv 引用要求已声明 settingsHtml(没有设置页没人填)。
+- 引用必须逐字指向已声明的 key,悬空引用**打包期就拒**;\`login-email\` /
+  \`gh-cli\` / \`oidc-token\` 这类 Host 派生或优先来源不允许引用(没有可靠的
+  同步配置动作可引导)。kv 引用要求已声明 settingsHtml(没有设置页没人填)。
 - **绝大多数意识不需要写本字段**:不声明时主机走启发式——声明过凭证/连接的意识,
   任一项配好即算就绪;什么都没声明的恒就绪。只有启发式判不准才需要显式声明,两种
   典型:"必须**同时**配 A 和 B"(多组声明)、"凭证全是**可选项**、一个不配也能用"
@@ -1341,8 +1734,10 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 \`\`\`
 
 措辞套路(实测有效):description 写清"干什么 + 返回什么";参数 description 里直接
-写行为规则(如"用户原话透传,不要扩写"、"仅当用户显式说 X 才传 Y")——AI 会照做。
-这是你影响 AI 行为的**唯一合法通道**,不要试图在别处塞指令。
+写该工具自己的行为规则(如"用户原话透传,不要扩写"、"仅当用户显式说 X 才传 Y")——
+AI 会照做。直接声明工具时,工具/参数 description 是单工具局部契约的落点;两段式目录中,
+当前类别内、随实时工具集合与参数变化的规则走 §3.5 的类目 RULES。多工具或跨类别的完整
+工作流与长期稳定共同原则走 §3.6 的 Manual。都不要塞进 \`whenToUse\`,也不要重复维护。
 
 ### 3.1 @ 插件入口
 
@@ -1351,22 +1746,24 @@ Composer 的 \`@\` 面板只展示已安装且可用的插件入口；插件作�
 
 ## 3.5 工具面设计:直接声明,还是两段式目录
 
-工具怎么摆有两种形态,按"数量 × 粒度"选,选错会拖累所有会话:
+工具怎么摆有两种形态,按"数量 × 粒度"选,选错会让单插件详情和全量查询结果臃肿:
 
 **直接声明(默认,绝大多数意识用这个)**:每个工具在 tools 里逐条声明(§3 的写法)。
 适用:工具是"意图级"的——一个工具对应用户会说的一句话(如"生成音乐"、"部署站点"),
-数量一只手到一打(主机硬上限 16 项,超了直接拒装)。收益全在明处:AI 靠 description
-自然语言触发命中率最高;装入弹窗把每个工具如实列给用户;工具名不存在主机直接拦。
+数量一只手到一打(主机硬上限 16 项,超了直接拒装)。收益全在明处:模型通过
+\`ghost_info\` 拿到插件详情后,靠各工具 description 选择具体能力;装入弹窗把每个工具
+如实列给用户;工具名不存在主机直接拦。
 
 **两段式目录(大工具面专用)**:要包的能力是"端点级"的几十上百个操作(典型:给一个
 大 API 面做接入,操作粒度是 list_xxx / get_xxx / create_xxx)时,**别把它们全塞进
-tools**——所有意识的工具清单会一起被你一家撑爆,别的意识也跟着遭殃。改为只声明两个
-元工具,目录和分发表放进 main.js 自己维护:
+tools**——本插件的 \`ghost_info\` 单条详情会被撑大,不知道装了什么时 \`ghost_list\`
+的全量结果也会被拖重,而且 tools 硬上限 16 根本装不下。改为只声明两个元工具,
+目录和分发表放进 main.js 自己维护:
 
 \`\`\`json
 "tools": [{
   "name": "list_tools",
-  "description": "列出本意识可用的操作。不传 category 返回类目概览(类目名+数量);传 category 返回该类目下所有操作的名称与说明。",
+  "description": "列出本意识可用的操作。不传 category 返回类目概览(类目名+数量);传 category 返回该类目下所有操作的名称、说明与该类目 RULES。",
   "parameters": { "type": "object", "properties": { "category": { "type": "string", "description": "类目名,来自概览" } } }
 }, {
   "name": "call_tool",
@@ -1386,14 +1783,70 @@ tools**——所有意识的工具清单会一起被你一家撑爆,别的意识
 
 - 元工具名固定叫 \`list_tools\` / \`call_tool\`,不要自创同义词;
 - \`list_tools\` 支持类目下钻:不传 category 给概览,传了给明细——目录大时别一次全量倒出;
-- \`call_tool\` 收到不认识的 name 或不合法的 args,失败交卷的 message 里**附上该操作正确的
-  参数 schema**——AI 会照着自纠重试,比干巴巴报错省一轮追问;
+- \`list_tools(category)\` 返回工具明细时,必须在同一份结果里一并下发该类目的
+  **RULES**,让模型在调用前拿到适用规则。推荐每个工具用 \`rules: [规则键]\`
+  声明引用,结果顶层用 \`rules: { 规则键: 完整规则正文 }\` 去重下发;也可以直接
+  下发清晰的 RULES 段,但不能只给工具名与说明、把必要规则留到调用失败后才说;
+- \`call_tool\` 收到不认识的 name 时,失败结果附可用工具名与回查
+  \`list_tools(category)\` 的提示;收到不合法的 args 时,失败结果必须附该工具正确的
+  参数 schema **和本次自纠必需的规则**(规则正文或能在本结果中解析的引用)——AI 会照着
+  自纠重试,比干巴巴报错省一轮追问;
 - 权限透明的代价自己补:装入弹窗只会逐条列出 list_tools / call_tool 两个元工具,用户
-  看不出背后有多少操作。把能力范围如实写进 ghost.json 的 description(花名册自述),
-  别让用户装完才发现。
+  看不出背后有多少操作。把给人看的能力范围如实写进 ghost.json 的 description,
+  再把模型应在什么场景发现你的场景枚举写进 whenToUse,别让人或模型装完才发现。
+
+\`list_tools\` 是插件声明的顶层工具,不是 Host 固定工具;实际通过
+\`ghost_call({ ghost_id: "my-ghost", tool: "list_tools", args: { category: "deploy" } })\`
+调用。类别 RULES 如果依赖跨工具/跨类别工作流或深入说明,不要复制正文,而应给出完整
+\`ghost_manual({ ghost_id: "my-ghost", path: "operations/references/deploy.md" })\` 调用。
+反过来,Manual 也可以用上面的完整 \`ghost_call(... list_tools ...)\` 调用指向实时工具目录。
+两条路径可以反复交叉,没有固定先后顺序;信息足够时,用 \`ghost_call\` 调顶层工具,
+或由两段式插件的 \`call_tool\` 执行具体操作。
 
 分界线的手感:一打以内、意图级 → 直接声明;几十以上、端点级 → 两段式。两段式首次
 使用多一跳(先翻目录),目录进上下文后,同一会话的后续调用与直接声明无异。
+
+## 3.6 manual:按需披露复杂工作流与分层资料
+
+Manual 的归属不按篇幅长短判断。它对标 Skill 正文与 references,承载多工具组合编排、
+跨类别完整工作流、复杂工具深入用法、前置检查、顺序与分支、失败恢复、交付标准、
+跨工具/跨类别长期稳定的共同原则,以及需要分层展开的参考资料。短但决定多个工具如何协作的
+关键原则应进入 Manual;很长但只是在枚举某一个工具的参数,仍应留在该工具 description 或
+所属类别的工具说明/RULES,不能只因内容长就搬进 Manual。
+
+使用顶层 \`manual.items\` 声明手册单元,不要把上述内容塞进 \`whenToUse\` 或 system 提示。
+每个单元目录必须有普通 Markdown \`MANUAL.md\` 入口;目录树可以任意深,但所有非目录条目
+都必须是普通 \`.md\` 文件,单文件不超过 64KB。Markdown 不写 frontmatter;二进制、非法
+UTF-8、符号链接和其它扩展名都会在打包与装入两侧拒绝。
+
+四层信息各司其职:
+
+- \`whenToUse\`:只放系统提示词区插件花名册需要的召回场景;
+- 工具/参数 description:放单个工具的局部契约,包括用途、输入输出与调用前限制;
+- 插件 \`list_tools(category)\` 返回的工具说明与 \`result.rules\`:放当前 category 内、
+  紧贴实时工具集合的动态规则与参数;
+- \`manual\`:放多工具/跨类别编排、复杂工具深入用法、完整工作流、失败恢复、交付标准、
+  长期稳定的共同原则与分层资料。
+
+同一规则只选一个权威落点,不要在工具 description、类别 RULES 与 Manual 复制三份。
+需要另一层信息时给出完整调用互相指路:Manual 可指向
+\`ghost_call({ ghost_id: "my-ghost", tool: "list_tools", args: { category: "deploy" } })\`,
+工具说明或 RULES 可指向 \`ghost_manual\`。两者并行且可以反复交叉,不是固定读取顺序;
+信息够用时即可执行。
+
+导航尽量浅:默认让 \`MANUAL.md\` 一层直达完整任务;内容确需分层展开时再拆深层文件,入口
+直接列出下一步完整调用,例如
+\`ghost_manual({ ghost_id: "my-ghost", path: "getting-started/references/deploy.md" })\`。
+不要让多个索引文件互相指回形成循环。手册正文只作为 tool-result 按需进入上下文,不进入
+生产 system/developer prompt;它是插件作者数据,不是系统规则、用户意图或权限授权,作者不得
+用它伪造授权或绕过工具自身的运行期门禁。
+
+**发布硬门槛**:首个依赖 \`manual\` / \`ghost_manual\` 的插件版本，必须等包含该工具的
+Cindy 先发布，确认首个支持它的**正式版本号**后，再把 \`minCindyVersion\` 设为不低于
+该正式版本并发布插件。开发期版本号未定时只保留这条契约，不猜占位版本。移除
+\`skill.items\` 的迁移版本也必须设置上述 \`minCindyVersion\`，并遵守 Cindy 先发、插件
+后发的顺序；服务端还要保留上一份带 Skill 的历史 release，使旧客户端能通过历史版本回退
+继续取得兼容包。
 
 ## 4. main.js 电子脑(沙箱后台逻辑)
 
@@ -1623,12 +2076,14 @@ await cindy.send({ type: 'cindy-request', kind: 'release_media', hash: r.hash })
 
 \`\`\`js
 // 需声明:"slots": [..., "cindy"], "cindy": { "text": ["oneshot"] }
+// 可选偏好:"cindy": { "text": ["oneshot"], "oneshotModel": "codex/gpt-5.5" }
 const r = await cindy.send({
   type: 'cindy-request',
   kind: 'oneshot_text',
   prompt: '把下面的反馈按情绪分成 正面/负面/中性,只回类别词:\\n' + feedback,
   // expectJson: true,     // 可选:要求只输出 JSON,主机校验可解析
-  // maxTokens: 256,       // 可选:回答预算(1–4096,缺省 1024)
+  // maxTokens: 256,       // 可选:插件自限输出(正整数)。快问快答不设输出上限——
+                          // 与宿主会话一致,按所选供应商/模型的自然输出,60s 超时兜底
   callId: msg.callId,      // tool-call 触发时务必带上(归因)
 });
 // 成功:{ ok:true, text:'…', model:'…' }(model = 实际应答的通道/型号,仅诊断)
@@ -1640,7 +2095,13 @@ const r = await cindy.send({
 - 它走主机的**轻量任务模型链**(用户在设置里配置的快速通道,与会话自动起
   标题同一条),不拉起 Agent、没有工具、碰不到用户文件、不进任何会话——
   要"干活"(读文件、查资料、多步操作)请用派活(§4.11.1);
-- 选型不在你手里,也没有 tier/model 参数:链由用户配置,主机逐候选兜底;
+- 选型仍不在你手里(没有 tier/model 参数),但有两级偏好:**用户可在插件
+  详情页把这项能力钉到他供应商列表里的任意文本模型**(钉死,失败不回落);
+  你也可以在身份卡 \`cindy\` 里声明 \`"oneshotModel": "<目录模型 id>"\` 表达
+  偏好——主机目录解析得到(且用户没停用)就用它,解析不到按未声明处理。
+  优先级:用户钉档 > 你的声明 > 系统默认链。声明只表达意图,别拿它当可用性
+  保证;**更老的宿主会整份拒装含此字段的身份卡**(cindy 详单未知类目硬拒),
+  声明前确认目标用户群的主机版本;
 - \`errorCode:'NO_CANDIDATE'\` = 用户当前没有可用的快速通道(未配置或凭证
   不可用)。**这是正常失败面**:如实提示用户,不要重试轰炸;
 - \`expectJson: true\` 时主机会剥掉代码围栏并校验 JSON.parse,解析失败返回
@@ -1785,8 +2246,9 @@ region 只适合选择**已在 manifest 声明过**的公开配置。例如 brok
 不要读取 \`navigator.language\`。宿主切换语言时，运行中的电子脑会收到
 \`{ type:'host-context-changed', ok:true, context:{ region, locale } }\`，可用
 \`BroadcastChannel\` 通知同插件的设置页/panel 重新读取 \`/app-context\` 并换文案。
-未运行的插件会在下次启动或页面重新装载时直接读到新语言。插件自身不支持该 locale 时
-必须选英文资源。
+未运行的插件会在下次启动或页面重新装载时直接读到新语言。插件协议之外的宿主语言
+(当前为 \`zh-TW\`)会在插件边界固定映射为 \`en\`，保证按旧四语契约编写的存量插件
+无需改代码；插件自身不支持该 locale 时也必须选英文资源。
 
 ## 4.5 聊天卡片(card 槽,海报模式)
 
@@ -2031,7 +2493,9 @@ cindy.onHostMessage(function (msg) {
   // 语义 = "主机停下来交给你做,做完继续":你可以在这窗口里做任何事(记账、
   // 经 network 槽过合规接口…),然后用三种动作之一收尾:
   if (msg.name === 'will-user-message') {
-    // msg.data = { sessionId, text };msg.hookId 原样带回。
+    // msg.data = { sessionId, text, model? };新 turn 时 model 是本轮已选模型 id,
+    // 同轮插话(steer)时是当前运行中 turn 的模型 id。
+    // msg.hookId 原样带回。
     if (/(内部代号|密钥)/.test(msg.data.text)) {
       // ① block:打回,不继续(reason 展示在被拦气泡上)。
       cindy.send({ type:'event-verdict', hookId: msg.hookId, action:'block', reason:'疑似包含敏感信息' });
@@ -2087,9 +2551,10 @@ cindy.onHostMessage(function (msg) {
   无弹窗**;空改写 / 改写等于原文一律被忽略;
 - **UI 全主机画**:红条、气泡都由主机绘制,你只提供 reason / text 文本,伪装不了、
   也冒充不了别的意识;
-- **钩子作用于"即将启动新 turn 的用户消息"**:运行中 turn 里的用户插话(steer)v1
-  **不经**你的钩子——拦下 = turn 压根不启动,这是钩子点的语义边界,别假设
-  能看到会话里的每一句话;
+- **钩子作用于发给 Agent 的用户消息**:即将启动新 turn 的消息和运行中 turn 里的
+  用户插话(steer)都经同一道钩子。新 turn 的 \`model\` 是本轮已选模型,steer 的
+  \`model\` 是当前运行中 turn 的模型;拦下新 turn = turn 不启动,拦下 steer = 不注入
+  当前 turn;
 - **没有绕过通道(v1)**:被拦消息用户只能编辑后重发,重发仍会经你再审。即便
   如此也别把拦截当硬性管控设计(意识是工具不是管理员):reason 要引导用户怎么
   改,而不是单纯说不;
@@ -2114,7 +2579,8 @@ AI 每轮回复完成后,主机把**全文**交给你——这是一个**通用�
 \`\`\`js
 cindy.onHostMessage(async function (msg) {
   if (msg.type !== 'event' || msg.name !== 'will-assistant-message') return;
-  // msg.data = { sessionId, text = 本轮 AI 回复全文 };msg.hookId 原样带回。
+  // msg.data = { sessionId, text = 本轮 AI 回复全文, model? };
+  // model 是生成本轮回复的模型 id;msg.hookId 原样带回。
   const polished = await cindy.fetch({ url: 'https://api.example.com/polish', method: 'POST',
                                        body: JSON.stringify({ text: msg.data.text }) });
   // ① rewrite:用改写正文替换回复(静默换文本,≤16000 字符)。
@@ -2217,6 +2683,16 @@ BroadcastChannel、日志或任何自存路径(review 必查)。凭证只会注�
 当前登录邮箱,拿来只读展示"用的是哪个身份";未登录时 saved:false 无 identity,
 照"请重新登录"画)——确认框已如实披露,除展示外别拿它做别的;对该 key 的
 PUT/DELETE 一律 405(派生身份不可配置)。
+
+**GitHub CLI 优先凭证(source:"gh-cli",保留能力)**:仅官方 \`cindy-github\`
+插件可声明。主机每次 GitHub API 请求时优先复用本机 \`gh auth token\` 的登录态；
+本机没装 gh、未登录或读取超时时,再回落到同一 key 经 \`/secrets\` 保存的备用 PAT。
+两种 token 都只在 Main 的 networkSlot 内存中进入请求头,插件沙箱、settings 页面、
+Renderer、Agent、KV 和日志都拿不到。设置页 GET \`/secrets\` 对这条 key 额外返回
+\`hostSource:"gh-cli"\` 与 \`hostAvailable:boolean\`,其中 \`saved/tail\` 仍只描述备用
+PAT；页面可据此展示“已检测到 gh，可直接使用”，但不能读取 gh 的账号或 token。
+此来源的注入形态固定为 \`api.github.com\` 的
+\`Authorization: Bearer {value}\`,不允许 exchange,也不要放进 \`setup.requires\`。
 
 **Cindy 企业身份断言(source:"oidc-token",可选)**:适用于接入 Cindy Connection
 Auth 的企业服务。主机只在当前登录账号属于组织 Membership、且该插件拥有当前组织的
@@ -3143,11 +3619,21 @@ if (!opened.ok) console.warn(opened.errorCode, opened.message);
 
 ## 4.16 捆绑 Agent Skills(skill 槽)
 
-想让插件"自带一份教 Agent 怎么用好自己的说明书"(或任何领域技能),把技能目录
-随包携带并声明 \`skill\` 槽 + \`skill.items\` 详单(见 §2)。装入且启用后,主机把
-每个技能目录链接进共享技能根 \`~/.agents/skills/<插件id>--<技能name>\`(Windows 用
-junction),Claude Code 与 Codex 都能自动发现——不复制字节,插件更新技能跟着更新,
-停用/卸载即撤链。
+插件随包 Skill **当前已停止新增,未来计划全部废弃**。新插件不要声明 \`skill\` 槽
+或新增 \`skill.items\`。迁移时按职责映射,不是按篇幅搬运:
+
+- Skill frontmatter 的 \`name + description\` 所承担的身份/召回作用,对标系统提示词区
+  插件花名册的身份与 \`recall\`;插件侧用 \`name\` + \`whenToUse\` 提供这层信息;
+- \`manual.items\` 只是插件容器级一级目录,不对标 Skill frontmatter;
+- \`MANUAL.md\` 与深层 Markdown 承接 Skill 正文、references、复杂工作流与深入用法,
+  只经 \`ghost_manual\` tool-result 按需进入上下文,不进入生产 system/developer prompt;
+- 单工具局部契约下沉到工具/参数 description;当前类别内贴近实时工具集合的动态规则与参数
+  下沉到 \`list_tools(category)\` 的工具说明和 \`result.rules\`;跨工具/跨类别编排与长期
+  稳定原则进入 Manual。Manual 与 \`list_tools\` 用完整调用互相指路,不复制同一段规则。
+
+以下只解释存量包的兼容形态,用于维护与迁移,**不要照抄到新插件**。存量插件装入且
+启用后,主机仍会把每个技能目录链接进共享技能根
+\`~/.agents/skills/<插件id>--<技能name>\`(Windows 用 junction),停用/卸载即撤链。
 
 目录形态(每条 item 一个目录,内必须有 SKILL.md):
 
@@ -3191,7 +3677,7 @@ SKILL.md 硬规则(打包与装入双侧强制,任一不满足直接拒):
 信任与作用域(如实告知用户,也请作者自重):
 
 - 技能指令由**主 Agent 以用户全部权限执行**,对所有项目、所有会话生效,
-  **不受插件沙箱约束**——这是十五个卡槽里信任面最高的能力,装入确认框会把
+  **不受插件沙箱约束**——这是十八个卡槽里信任面最高的能力,装入确认框会把
   每个技能置顶逐条列出;
 - 技能跟随插件的**全局**启用状态:仅在某个工作目录停用插件**不会**隐藏技能,
   只有全局停用或卸载才撤链(本期只有全局作用域);
@@ -3288,6 +3774,63 @@ if (r.ok && r.confirmed) {
 - 真正的守门仍在你自己手里:确认只是问一句,**该校验的前置条件(文件在不在、
   工作区干不干净)确认前后都要自己再查一遍**——用户点确认和你真动手之间,
   世界可能已经变了。
+
+## 4.19 内置 iOS 模拟器(ios-simulator 槽)
+
+要给插件提供内置 iOS 模拟器的状态入口或工作流面板时,声明 \`ios-simulator\` 槽。
+电子脑只能读取**当前台前任务**的公开状态,并请求主机打开 Cindy 自己的模拟器面板:
+
+标准产品形态只需 \`skill + ios-simulator\`:Host 会在任务右侧栏提供手动入口,
+Agent 通过 Skill 调 Host MCP。不要为了重复同一状态再声明 \`panel\`;插件停靠面板的关闭
+语义是停用整份插件,不适合作为模拟器 viewer 的替身。只有确实存在 Host viewer 没有的独立
+工作流 UI 时才额外声明 panel。
+
+声明 \`ios-simulator\` 时必须同时声明 \`minCindyVersion\`,取首次提供该 Host 能力的 Cindy
+正式版本。它用于让旧版 Host 把插件识别为“需要更新 Cindy”,而不是“插件非法”;不要填写
+当前开发环境版本,也不要用它替代下面的运行时 capability 检查。
+
+\`\`\`js
+const caps = await cindy.iosSimulator.request({ kind: 'capabilities' });
+if (caps.ok && caps.kind === 'capabilities') {
+  // caps.apiVersion === 1
+  // caps.capabilities.pluginVideo === false
+  // caps.capabilities.pluginInput === false
+}
+
+const current = await cindy.iosSimulator.request({ kind: 'status' });
+if (current.ok) {
+  const instances = current.status.instances;
+  const routeStatuses = current.status.routeStatuses || [];
+}
+
+const opened = await cindy.iosSimulator.request({
+  kind: 'open-panel',
+  // 可选:只能填上面 status 返回、且仍属于当前任务的 instanceId
+  instanceId: current.ok ? current.status.instances[0]?.instanceId : undefined
+});
+\`\`\`
+
+规则与红线:
+
+- 请求里**没有 sessionId**。台前任务由 Host 现查;自造 \`sessionId\`、其它未知字段
+  或跨任务 instanceId 都会拒绝。切到非任务页、远程/SSH 任务或任务失效时 fail closed;
+- \`status\` 只返回环境是否就绪、可用设备数量、公开实例状态和当前 stream/input 路线。
+  它不续租、不启动 driver,也不返回 UDID、路径、授权、诊断或 ownership 信息;
+- 本槽不是模拟器运行时:WDA、Native Sidecar、H.264、Native HID、生命周期、恢复与
+  fallback 仍由 Cindy Host 独占。插件拿不到视频帧、viewer lease、触控入口、进程句柄、
+  artifact 路径或 Xcode 私有诊断;
+- \`open-panel\` 只打开/聚焦 Host 既有面板。没有绑定实例时可省略 instanceId,让用户
+  在 Host 面板里选择设备;连续请求会限速;
+- panel.html 保持零桥。面板要使用本槽时,按 §5 先 \`/wake\`,再用同源
+  BroadcastChannel 把请求交给 main.js,由 main.js 调 \`cindy.iosSimulator.request\`;
+- 插件 Skill 选择内嵌路线后,Agent 构建、安装、启动与 UI 操作调用 Host 注册的
+  \`cindy_ios_simulator\` MCP,不要重复打包一份 WDA/Sidecar。内嵌能力不存在或不可用时,
+  Skill 可以按用户目标与普通权限规则改走外部 Xcode、Simulator.app、\`simctl\` 或
+  Computer Use;Host 不会把这些外部操作自动转换为内嵌调用;
+- 本能力仅存在于带该槽的 Cindy Desktop。当前 Host 遇到未来 schema 或未知 capability
+  slot 时会把包识别为“需要更新 Cindy”,而不是误报插件非法。已发布的旧 Host 无法追改;
+  Skill 在 MCP 不存在时必须说明内嵌路线不可用;如果用户目标不依赖 Cindy viewer,
+  可以继续使用正常的外部工具链,否则再引导用户升级 Cindy。
 
 ## 5. 面板(panel.html/css/js)
 
@@ -3405,9 +3948,15 @@ if (r.ok && r.confirmed) {
 ### 7.2 打包、安装与验证
 
 1. 新插件先调 \`ghost_forge_scaffold\` 生成骨架，或把已有源码放在用户工作目录下的
-   一个文件夹里(如 \`my-ghost/\`)；脚手架目标必须是新目录，绝不覆盖已有文件；
+   一个文件夹里(如 \`my-ghost/\`)；脚手架目标必须是新目录，绝不覆盖已有文件，
+   其父目录必须是工作目录内已存在的普通目录；也不能落在已安装插件目录或 Host 状态目录内(会被拒，理由同下一条)；
+   **Forge 源码必须是当前会话工作目录里的独立作者目录**。已安装插件目录以及
+   Host 管理的状态目录都不是源码区，禁止直接修改、打包或用路径别名绕过；若要继续
+   开发已有插件，先把源码复制/迁出到工作目录中的新目录，再从该副本制作;
 2. 调 \`ghost_forge_pack({ dir: '<绝对路径>' })\`——校验 + 打包 + 弹装入确认框;
    产物落在源码目录里(\`<id>-<version>.cindy\`,同版本覆盖,下次打包自动跳过);
+   若返回 \`SOURCE_IS_INSTALLED_PLUGIN\`,不要重试或换大小写、软链接、junction 绕过,
+   按上一步迁出源码后再打包;也可能返回 \`SOURCE_OUTSIDE_WORKDIR\`(源码不在会话工作目录内);
 3. **告知用户去点弹窗**(装入默认沉睡,提醒用户勾"立即开启"或到主界面侧边栏「插件」中唤醒);
 4. 改代码后重新 pack:同 id 会弹"更新 vX → vY",唤醒状态与面板位置自动保留
    (记得 bump ghost.json 的 version);
@@ -3472,8 +4021,10 @@ if (r.ok && r.confirmed) {
 - network 详单格式错(hosts 缺失/裸 TLD/IP/带端口/通配不在最左、secret 缺 inject、
   inject.format 没有 {value} 占位、inject.header 用了 Host/Cookie 等协议关键头、
   inject.hosts 不是 hosts 声明条目的子集、有详单但 slots 没有 "network"、
-  secret.source 不是 "user"/"login-email"/"oauth"/"oidc-token"、
+  secret.source 不是 "user"/"login-email"/"oauth"/"gh-cli"/"oidc-token"、
   source:"login-email" 或 source:"oidc-token" 声明了 url 或 exchange、
+  source:"gh-cli" 不是官方 cindy-github、注入形态不是 api.github.com 的
+  Authorization Bearer、或声明了 exchange、
   声明了 user 凭证但没声明 settingsHtml、遗留 input 字段值不是 "ghost")
 - exchange 声明格式错(url 非 https/域名不在 hosts 白名单、bodyFormat 不是恰含一个
   {value}、contentType 不在白名单、tokenPath 不是点分路径、ttlSeconds 越界)

@@ -43,6 +43,7 @@ export type SshErrorCode =
   | 'HOST_NOT_FOUND'
   | 'AMBIGUOUS_HOST'
   | 'SSH_AUTH_FAILED'
+  | 'SSH_KEY_FILE_NOT_FOUND'
   | 'SSH_CONNECT_FAILED'
   | 'EXEC_TIMEOUT'
   | 'PLUGIN_DISABLED'
@@ -179,6 +180,14 @@ export function classifySshError(err: unknown): ClassifiedSshError {
       return {
         errorCode: 'SSH_AUTH_FAILED',
         hint: `SSH 认证失败（确定性错误，重试无效，请把提示转告用户处理）：${detail}`,
+      };
+    case 'SSH_KEY_FILE_NOT_FOUND':
+      return {
+        errorCode: 'SSH_KEY_FILE_NOT_FOUND',
+        // Strip the raw-error prefix (identity file not found: ) so the hint
+        // doesn't mix an English prefix into the localized message — same
+        // treatment the renderer toast applies.
+        hint: `配置的私钥文件在本机磁盘上不存在/不可读（本机路径问题，不是网络或服务端错误）：${detail.replace(/^identity file not found:\s*/, '')}。请到「设置 → 远程连接」重新选择私钥或编辑主机的 Identity file 路径。`,
       };
     default:
       return {

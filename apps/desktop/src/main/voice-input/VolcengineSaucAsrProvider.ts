@@ -5,6 +5,7 @@ import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core'
 import { createLogger } from '../logger.js';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.js';
 import { resamplePcm16 } from './RealtimeAsrWebSocketProvider.js';
+import { volcengineSaucLanguageCode } from './language.js';
 import { mergeRecoveredTranscript } from './transcriptMerge.js';
 import { describeAsrHandshakeTraceId, describeAsrWebSocketTarget } from './voiceInputAsrConfig.js';
 
@@ -430,6 +431,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
   private sendInitialRequest(): void {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    const language = volcengineSaucLanguageCode(this.sourceLanguage);
     socket.send(encodeFullClientRequest({
       user: {
         uid: 'xdt-maker',
@@ -449,9 +451,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
         end_window_size: NONSTREAM_END_WINDOW_MS,
         enable_punc: true,
         enable_itn: true,
-        ...(this.sourceLanguage && this.sourceLanguage.toLowerCase() !== 'auto'
-          ? { language: this.sourceLanguage }
-          : {}),
+        ...(language ? { language } : {}),
       },
     }));
   }

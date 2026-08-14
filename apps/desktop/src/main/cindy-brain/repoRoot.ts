@@ -20,6 +20,11 @@ export interface GhostRepoRootDeps {
   };
 }
 
+export interface GhostRepoRootCacheEntry {
+  ownerScopeKey: string;
+  rootDir: string;
+}
+
 /** 解析意识仓库根;调用方自行缓存结果(迁移只应尝试一次)。 */
 export function resolveGhostRepoRoot(deps: GhostRepoRootDeps): string {
   const root = path.join(deps.userDataDir, 'cindy-brain');
@@ -44,4 +49,17 @@ export function resolveGhostRepoRoot(deps: GhostRepoRootDeps): string {
     return legacy;
   }
   return root;
+}
+
+/** Cache the resolved repository root only for the owner scope that produced it. */
+export function resolveCachedGhostRepoRoot(
+  cache: GhostRepoRootCacheEntry | null,
+  ownerScopeKey: string,
+  deps: GhostRepoRootDeps,
+): GhostRepoRootCacheEntry {
+  if (cache?.ownerScopeKey === ownerScopeKey) return cache;
+  return {
+    ownerScopeKey,
+    rootDir: resolveGhostRepoRoot(deps),
+  };
 }

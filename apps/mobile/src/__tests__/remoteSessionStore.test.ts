@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAKER_EVENT_BATCH_CHANNEL } from '@cindy/device-link';
 import { remoteSessionStore, sessionPendingWrites } from '@/session/remoteSessionStore';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -946,6 +947,52 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('stamps the turn plan as failed on a codex terminal error, through live-plan overlays', () => {
+    // 没有 done 的 codex 终态 error:这一轮的计划行等不到章。手机端要自己补失败
+    // 印记,否则全勾完的失败计划按旧数据兜底退场;而印记只写内存行、不写 live
+    // 缓存时,overlay 会用旧缓存把 main 随后广播的落库印记盖回去(review P1)。
+    const planRow = {
+      ...message('plan-row-1', 's1'),
+      role: 'tool_use' as const,
+      toolUseId: 'plan:turn-err',
+      content: {
+        toolUseId: 'plan:turn-err',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      },
+    };
+    remoteSessionStore.setMessages('s1', [planRow]);
+    // 先按真实链路让 live 缓存记住这一行(update_plan 推送)。
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'tool_use',
+      data: {
+        toolUseId: 'plan:turn-err',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      },
+    }, 'plan-row-1');
+
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'error',
+      source: 'codex',
+      data: { message: 'stream disconnected' },
+    });
+
+    expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+      content: {
+        turnCompleted: false,
+        input: { plan: [{ step: 'Ship', status: 'completed' }] },
+      },
+    });
+
+    // main 落库前的行重新到达(无印记):overlay 用 live 缓存覆盖 content,
+    // 缓存已带印记 → 不回退成"已完成的旧计划"。
+    remoteSessionStore.mergeMessages('s1', [planRow]);
+    expect(remoteSessionStore.getMessages('s1')[0]).toMatchObject({
+      content: { turnCompleted: false },
+    });
+  });
+
   it('coalesces update_plan with streaming finalization into one notification', () => {
     vi.useFakeTimers();
     const notify = vi.fn();
@@ -1053,7 +1100,7 @@ describe('remoteSessionStore', () => {
     });
   });
 
-  it('keeps synthetic completion when done precedes the initial plan DB row', () => {
+  it('keeps the honest live snapshot when done precedes the initial plan DB row', () => {
     remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
       sessionId: 's1',
       persistId: 'plan-row-1',
@@ -1105,17 +1152,19 @@ describe('remoteSessionStore', () => {
       },
     });
 
+    // 成功收尾封的是生命周期,不改步骤事实:agent 报告什么就显示什么,
+    // 晚到的 DB 行也不能把 live 快照拉回更旧的内容。
     expect(remoteSessionStore.getMessages('s1')[0].content).toMatchObject({
       input: {
         plan: [
-          { step: 'Inspect', status: 'completed' },
-          { step: 'Patch', status: 'completed' },
+          { step: 'Inspect', status: 'in_progress' },
+          { step: 'Patch', status: 'pending' },
         ],
       },
     });
   });
 
-  it('does not let a delayed message window revert synthetic completion', () => {
+  it('does not let a delayed message window revert the live plan snapshot', () => {
     const stalePlanRow = {
       ...message('plan-row-1', 's1'),
       role: 'tool_use' as const,
@@ -1153,8 +1202,9 @@ describe('remoteSessionStore', () => {
 
     remoteSessionStore.setLatestMessageWindow('s1', [stalePlanRow]);
 
+    // 步骤保持 agent 实际报告的状态,不因成功收尾被改写成 completed。
     expect(remoteSessionStore.getMessages('s1')[0].content).toMatchObject({
-      input: { plan: [{ step: 'Inspect', status: 'completed' }] },
+      input: { plan: [{ step: 'Inspect', status: 'in_progress' }] },
     });
   });
 
@@ -2636,6 +2686,55 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('rejects a late projection query after a newer push and terminal boundary', () => {
+    const ownerProjection = {
+      ...projection('s1'),
+      continuationTurnClientId: 'resume-1',
+    };
+    const expectedEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    remoteSessionStore.setInputProjection('s1', ownerProjection);
+    const queryEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:input:projection', {
+      ...projection('s1'),
+      continuationTurnClientId: null,
+    });
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: { type: 'done', data: {} },
+    });
+
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', ownerProjection, queryEpoch)).toBe(false);
+    expect(remoteSessionStore.getInputProjection('s1').continuationTurnClientId).toBeNull();
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+    expect(remoteSessionStore.captureInputProjectionAuthorityEpoch('s1')).not.toBe(expectedEpoch);
+  });
+
+  it('accepts a projection query result when no newer authority event arrived', () => {
+    const expectedEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', projection('s1'), expectedEpoch)).toBe(true);
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue[0]?.clientId).toBe('q-1');
+  });
+
+  it('clears a continuation owner at a terminal boundary without a projection clear push', () => {
+    const ownerProjection = {
+      ...projection('s1'),
+      continuationTurnClientId: 'resume-1',
+    };
+    remoteSessionStore.setInputProjection('s1', ownerProjection);
+    remoteSessionStore.setSessionRunning('s1', true);
+    const operationEpoch = remoteSessionStore.captureInputProjectionAuthorityEpoch('s1');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:status-changed', {
+      sessionId: 's1',
+      status: 'closed',
+    });
+
+    expect(remoteSessionStore.getInputProjection('s1').continuationTurnClientId).toBeNull();
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+    expect(remoteSessionStore.setInputProjectionIfCurrent('s1', ownerProjection, operationEpoch)).toBe(false);
+  });
+
   it('soft-invalidates an offline device without deleting sessions or messages', () => {
     const meta = session('s1', {
       updatedAt: '2026-01-01T00:00:01.000Z',
@@ -2966,5 +3065,91 @@ describe('引用调和(2026-07-18 首页重渲染风暴修复)', () => {
       ]);
     }
     expect(remoteSessionStore.getSessions()).toBe(snapshot);
+  });
+});
+
+describe('maker:event 微批拆包(CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1)', () => {
+  it('批内事件按序走与逐帧完全相同的路径:流式增量拼接结果一致', () => {
+    vi.useFakeTimers();
+    try {
+      // 逐帧基线
+      pushMakerText('s-single', 'p-1', 'hello', false);
+      pushMakerText('s-single', 'p-1', ' world', false);
+      vi.runOnlyPendingTimers();
+      const single = remoteSessionStore.getMessages('s-single');
+
+      // 同样两条事件,这次由被控端合并成一帧微批下发
+      remoteSessionStore.applyRemotePush('dev-1', MAKER_EVENT_BATCH_CHANNEL, {
+        sessionId: 's-batch',
+        events: [
+          { sessionId: 's-batch', persistId: 'p-1', event: { type: 'text', data: { text: 'hello', isFinal: false } } },
+          { sessionId: 's-batch', persistId: 'p-1', event: { type: 'text', data: { text: ' world', isFinal: false } } },
+        ],
+      });
+      vi.runOnlyPendingTimers();
+      const batched = remoteSessionStore.getMessages('s-batch');
+
+      expect(batched).toHaveLength(1);
+      expect(batched[0]).toMatchObject({ id: 'p-1', role: 'assistant', content: 'hello world' });
+      // 与逐帧结果逐字段一致(仅 sessionId 不同)
+      expect(batched[0]!.content).toBe(single[0]!.content);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('形状不符的批帧整体忽略;批内单条坏事件只跳过该条', () => {
+    vi.useFakeTimers();
+    try {
+      // 缺 events / events 为空 / 非数组:整帧忽略,不抛
+      for (const bad of [
+        { sessionId: 's-bad' },
+        { sessionId: 's-bad', events: [] },
+        { sessionId: 's-bad', events: 'nope' },
+        { events: [{}] },
+        null,
+      ]) {
+        expect(() =>
+          remoteSessionStore.applyRemotePush('dev-1', MAKER_EVENT_BATCH_CHANNEL, bad),
+        ).not.toThrow();
+      }
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s-bad')).toHaveLength(0);
+
+      // 批内混入坏条目:好的照常生效
+      remoteSessionStore.applyRemotePush('dev-1', MAKER_EVENT_BATCH_CHANNEL, {
+        sessionId: 's-mixed',
+        events: [
+          'not-an-object',
+          { sessionId: 's-mixed', persistId: 'p-9', event: { type: 'text', data: { text: 'ok', isFinal: true } } },
+        ],
+      });
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s-mixed')).toHaveLength(1);
+      expect(remoteSessionStore.getMessages('s-mixed')[0]).toMatchObject({ content: 'ok' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('批内 sessionId 与顶层不一致的条目被丢弃:不绕过 topic 隔离', () => {
+    // topic 路由只按**顶层** sessionId,批内混入其它会话的事件会把本端未订阅的
+    // 会话数据投进来(坏帧/恶意帧场景)。fail-closed 跳过该条,不整批丢。
+    vi.useFakeTimers();
+    try {
+      remoteSessionStore.applyRemotePush('dev-1', MAKER_EVENT_BATCH_CHANNEL, {
+        sessionId: 's-own',
+        events: [
+          { sessionId: 's-other', persistId: 'p-x', event: { type: 'text', data: { text: 'leak', isFinal: true } } },
+          { sessionId: 's-own', persistId: 'p-y', event: { type: 'text', data: { text: 'mine', isFinal: true } } },
+        ],
+      });
+      vi.runOnlyPendingTimers();
+      expect(remoteSessionStore.getMessages('s-other')).toHaveLength(0);
+      expect(remoteSessionStore.getMessages('s-own')).toHaveLength(1);
+      expect(remoteSessionStore.getMessages('s-own')[0]).toMatchObject({ content: 'mine' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

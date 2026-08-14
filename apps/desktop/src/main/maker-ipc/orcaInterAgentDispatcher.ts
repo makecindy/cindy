@@ -99,6 +99,7 @@ export type OrcaInterAgentSendToSessionInternalResult =
         | 'DELETED'
         | 'BUSY'
         | 'AGENT_NOT_READY'
+        | 'UNSUPPORTED_CAPABILITY'
         // create 显式执行配置专用;dispatcher 恒走 jump,仅镜像共用函数的联合形状。
         | 'BUDGET_MODEL_REQUIRES_API_MODE'
         | 'PROVIDER_ROUTE_UNAVAILABLE'

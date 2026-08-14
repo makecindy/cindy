@@ -16,8 +16,29 @@ import {
   isHarnessOwnedCapabilitySource,
   isCapabilityRouteInvocationAllowed,
 } from '../../types/capability-routing.js';
+import { ORCA_NESTED_REPORT_DENIAL_REASON } from '../shared/orca-report-policy.js';
 
 const CLAUDE_CODE_HARNESS_ID = 'claude-code';
+export const ORCA_SEND_TO_LEAD_TOOL_NAME = 'mcp__orca_worker_bridge__send_to_lead';
+
+/** Claude root calls have no agent_id; native subagents always carry one. */
+export function buildClaudeOrcaCallerProvenanceHooks(): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
+  const guardTool: HookCallback = async (input) => {
+    if (input.hook_event_name !== 'PreToolUse') return { continue: true };
+    const pre = input as PreToolUseHookInput;
+    if (pre.tool_name !== ORCA_SEND_TO_LEAD_TOOL_NAME) return { continue: true };
+    if (typeof pre.agent_id !== 'string' || pre.agent_id.length === 0) return { continue: true };
+    return {
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: ORCA_NESTED_REPORT_DENIAL_REASON,
+      },
+    };
+  };
+  return { PreToolUse: [{ matcher: ORCA_SEND_TO_LEAD_TOOL_NAME, hooks: [guardTool] }] };
+}
 
 function isClaudeSkillDirective(directive: CapabilityRouteOverride): boolean {
   return (
@@ -60,9 +81,19 @@ export function buildClaudeSkillOverrides(
 export interface ClaudeRemoteToolGuard {
   toolNamePrefix: string;
   sourceServerId: string;
-  invocation: 'auto' | 'explicit-only' | 'disabled';
+  invocation: 'auto' | 'explicit-only' | 'disabled' | 'root-only';
   explicitSelectors?: string[];
   denialMessage?: string;
+}
+
+export function buildClaudeRemoteOrcaCallerGuards(isOrcaWorker: boolean): ClaudeRemoteToolGuard[] {
+  if (!isOrcaWorker) return [];
+  return [{
+    toolNamePrefix: ORCA_SEND_TO_LEAD_TOOL_NAME,
+    sourceServerId: 'orca_worker_bridge',
+    invocation: 'root-only',
+    denialMessage: ORCA_NESTED_REPORT_DENIAL_REASON,
+  }];
 }
 
 /**

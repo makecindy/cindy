@@ -11,9 +11,13 @@ Type `/` at the start of the composer to open the command palette.
 2. **Built-in app commands** — `/help` (show available commands), `/clear` (clear the current session context — resets the conversation in place without creating a new session), `/cmd` (run a shell command in the working directory), `/issue` (file an issue), `/goal` (start a goal-driven run), `/learn`, `/workflows`, and `/jump-session`.
 3. **The agent's own commands** — e.g. `/compact`, `/agents`, `/memory` (the exact list depends on the agent; Claude Code and Codex each contribute their own).
 
+`/issue` does not require a GitHub plugin or GitHub account. The confirmation card uses Cindy's official bot by default; if a working account is already configured under **Plugins > Cindy GitHub**, that account appears as an optional submission identity.
+
+Before submitting, Cindy helps clarify missing details so the issue is actionable. For bugs, it can collect reproduction steps and user-approved, redacted diagnostic summaries; the confirmation card always shows the final public content. After creation, Cindy returns the issue link and can help interested users reproduce or fix the problem from source because Cindy is open source.
+
 **Using the palette:**
 
-- Start typing to filter. Matching is **prefix-only** (case-insensitive `startsWith` on the command name) — not fuzzy.
+- Start typing to filter. Matching is **contains-based** (case-insensitive substring matching on the command name) — not fuzzy.
 - Up to 25 matches shown at a time.
 - **↑ / ↓** move focus, **Enter** runs the focused command, **Esc** closes the palette.
 

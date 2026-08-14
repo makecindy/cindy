@@ -57,6 +57,8 @@ import type {
   ReviewStageOperationSummary,
 } from '@/lib/gitReview.types';
 import { formatSidebarTime } from '@/features/cc-agent/lib/formatSidebarTime';
+
+import { gitReviewApiFor, isReviewRemoteOversizeError } from '@/lib/gitReviewTransport';
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { TurnChangeSetDetail } from '../../../../../shared/turnChangeSet';
 import { extractIpcError } from '@/utils/ipcError';
@@ -106,6 +108,23 @@ interface ReviewTabBodyProps {
   ctx: TabKindHostContext;
 }
 
+/**
+ * source / selectedCommitOid 由外层 ReviewTabBody 持有并下发:轮次视图与
+ * Git 视图共用同一个来源状态机,从轮次视图的来源下拉切走时目标 source
+ * 要在 Git 视图挂载前就位(对齐 Codex 的单 source + turnSelection 模型)。
+ */
+interface GitReviewBodyProps extends ReviewTabBodyProps {
+  source: ReviewSource;
+  setSource: (source: ReviewSource) => void;
+  selectedCommitOid: string | null;
+  setSelectedCommitOid: (oid: string | null) => void;
+}
+
+interface TurnReviewBodyProps extends ReviewTabBodyProps {
+  setSource: (source: ReviewSource) => void;
+  setSelectedCommitOid: (oid: string | null) => void;
+}
+
 type ReviewToggleAction = Extract<ReviewStageAction, 'stage' | 'unstage'>;
 type RevealActionScope = 'file' | 'section';
 type ReviewToolbarLayout = 'wide' | 'compact' | 'minimal';
@@ -142,6 +161,10 @@ export function getBatchActionLayout(containerWidth: number): BatchActionLayout 
 
 export function shouldShowBranchBaseLabel(rowWidth: number, hasBranchBaseControl: boolean): boolean {
   return hasBranchBaseControl && Number.isFinite(rowWidth) && rowWidth >= REVIEW_BRANCH_BASE_LABEL_MIN_WIDTH_PX;
+}
+
+export function shouldOfferReviewOpenFile(remoteHostId: string | null, deviceLinkDeviceId: string | null): boolean {
+  return remoteHostId === null && deviceLinkDeviceId === null;
 }
 
 export type ReviewCommitActionDisabledReason =
@@ -368,13 +391,51 @@ export function useClearReviewOperationNoticeOnSourceChange(
 }
 
 export function ReviewTabBody(props: ReviewTabBodyProps) {
-  if (props.state.turnTarget) return <TurnChangeSetReviewBody {...props} />;
-  return <GitReviewTabBody {...props} />;
+  const [source, setSource] = useState<ReviewSource>('unstaged');
+  const [selectedCommitOid, setSelectedCommitOid] = useState<string | null>(null);
+  if (props.state.turnTarget) {
+    return (
+      <TurnChangeSetReviewBody
+        {...props}
+        setSource={setSource}
+        setSelectedCommitOid={setSelectedCommitOid}
+      />
+    );
+  }
+  return (
+    <GitReviewTabBody
+      {...props}
+      source={source}
+      setSource={setSource}
+      selectedCommitOid={selectedCommitOid}
+      setSelectedCommitOid={setSelectedCommitOid}
+    />
+  );
 }
 
-function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
+function TurnChangeSetReviewBody({ state, ctx, setSource, setSelectedCommitOid }: TurnReviewBodyProps) {
   const { t } = useTranslation();
   const target = state.turnTarget;
+  // 变更集所属会话。协同面板里审查 worker 的轮次时,tab 桶在 lead 会话
+  // (worker 自己的桶在协同视图下不可见),数据按 targetSessionId 取。
+  const reviewSessionId = target?.targetSessionId ?? ctx.sessionId;
+  const crossSession = Boolean(target?.targetSessionId && target.targetSessionId !== ctx.sessionId);
+  // 供来源下拉的「提交」子菜单用;与 Git 视图同一 IPC,子菜单展开时刷新。
+  // 跨会话时不挂来源下拉(git 视图跟随桶会话 workdir,对 worker 语义错误),
+  // 传 null 跳过取数。
+  const commitsState = useReviewCommits(crossSession ? null : ctx.sessionId || null, state.branchBaseRef ?? null);
+  const switchToGitSource = useCallback((next: ReviewSource) => {
+    // 对齐 Codex EP 语义:切到其它来源即退出轮次审查(清 turnTarget),
+    // 轮次选择不保留;要再看本条消息需从聊天流卡片重新进入。
+    setSelectedCommitOid(null);
+    setSource(next);
+    ctx.patchState({ turnTarget: null });
+  }, [ctx, setSelectedCommitOid, setSource]);
+  const switchToCommitSource = useCallback((oid: string) => {
+    setSelectedCommitOid(oid);
+    setSource('commit');
+    ctx.patchState({ turnTarget: null });
+  }, [ctx, setSelectedCommitOid, setSource]);
   const [changeSets, setChangeSets] = useState<TurnChangeSetDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -403,7 +464,7 @@ function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
       setLoading(false);
       return;
     }
-    void window.electronAPI.maker.getTurnChangeSets(ctx.sessionId, targetIdsKey.split('\0'))
+    void window.electronAPI.maker.getTurnChangeSets(reviewSessionId, targetIdsKey.split('\0'))
       .then((sets) => {
         if (cancelled) return;
         setChangeSets(sets);
@@ -418,7 +479,7 @@ function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
     return () => {
       cancelled = true;
     };
-  }, [ctx.deviceLinkDeviceId, ctx.remoteHostId, ctx.sessionId, reloadToken, t, targetIdsKey]);
+  }, [ctx.deviceLinkDeviceId, ctx.remoteHostId, reloadToken, reviewSessionId, t, targetIdsKey]);
 
   const selectedDiff = target?.selectedDiffId
     ? visibleDiffs.find((diff) => diff.id === target.selectedDiffId)
@@ -441,24 +502,37 @@ function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--panel-bg)]">
       <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3 py-2">
-        <FileDiffIcon size={15} className="shrink-0 text-[var(--text-secondary)]" />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[var(--text-primary)]">
-          {t('rightSidebar.review.turn.title')}
-        </span>
-        <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums">
+        {crossSession ? (
+          // 跨会话(协同 worker 的轮次):不提供 git 来源切换——git 视图跟随
+          // 桶会话的 workdir,对 worker 的 worktree 语义错误。静态标题,关 tab 退出。
+          <>
+            <FileDiffIcon size={15} className="shrink-0 text-[var(--text-secondary)]" />
+            <span className="min-w-0 truncate text-12 font-medium text-[var(--text-primary)]">
+              {t('rightSidebar.review.turn.title')}
+            </span>
+          </>
+        ) : (
+          <SourceDropdown
+            source="turn"
+            counts={{}}
+            commits={commitsState.data?.commits ?? []}
+            commitsLoading={commitsState.loading}
+            commitsError={commitsState.error}
+            commitsLoaded={commitsState.data !== null}
+            selectedCommitOid={null}
+            onChange={switchToGitSource}
+            onSelectCommit={switchToCommitSource}
+            onRefreshCommits={commitsState.refresh}
+          />
+        )}
+        <span className="min-w-0 flex-1 truncate" />
+        <span className="shrink-0 whitespace-nowrap font-mono text-11 tabular-nums">
           <span className="text-[var(--diff-add-fg)]">+{totalAdd}</span>{' '}
           <span className="text-[var(--diff-del-fg)]">-{totalDel}</span>
         </span>
-        <button
-          type="button"
-          onClick={() => ctx.patchState({ turnTarget: null })}
-          className="h-7 shrink-0 rounded-full px-2 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-        >
-          {t('rightSidebar.review.turn.currentWorkspace')}
-        </button>
       </header>
       {!loading && !error && isPartial && (
-        <div className="flex shrink-0 items-start gap-2 border-b border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-secondary)]">
+        <div className="flex shrink-0 items-start gap-2 border-b border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-3 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
           <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
           <span>{t('rightSidebar.review.turn.partialNotice')}</span>
         </div>
@@ -490,7 +564,7 @@ function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
           onViewModeChange={(diffViewMode) => ctx.patchState({ diffViewMode })}
           onRichMarkdownPreviewChange={(richMarkdownPreview) => ctx.patchState({ richMarkdownPreview })}
           wordWrap={state.wordWrap ?? false}
-          wordDiff={state.wordDiff ?? true}
+          wordDiff={state.wordDiff ?? false}
           fileTreeVisible={state.fileTreeVisible ?? false}
           jumpRequest={jumpRequest}
           loadImagePreview={unavailablePreview}
@@ -503,16 +577,18 @@ function TurnChangeSetReviewBody({ state, ctx }: ReviewTabBodyProps) {
   );
 }
 
-function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
+function GitReviewTabBody({ state, ctx, source, setSource, selectedCommitOid, setSelectedCommitOid }: GitReviewBodyProps) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  // device-link 远程会话:session 行在被控设备的 DB 里,只读查询经 gitReviewTransport
+  // 隧道到被控端执行(被控端以它自己的 session 记录解析 workdir);写操作与本机
+  // 文件打开在控制端禁用(readOnly 经 writeDisabledReasons 的 remote-device 档)。
+  const deviceLinkDeviceId = ctx.deviceLinkDeviceId ?? null;
   const sessionId = ctx.sessionId || null;
   const hideWhitespace = state.hideWhitespace ?? false;
   const branchBaseRef = state.branchBaseRef ?? null;
-  const { data, loading, error, refresh, setData: setReviewData } = useReviewGitState(sessionId, hideWhitespace);
-  const commitsState = useReviewCommits(sessionId, branchBaseRef);
-  const [source, setSource] = useState<ReviewSource>('unstaged');
-  const [selectedCommitOid, setSelectedCommitOid] = useState<string | null>(null);
+  const { data, loading, error, errorCode, refresh, setData: setReviewData } = useReviewGitState(sessionId, hideWhitespace, deviceLinkDeviceId);
+  const commitsState = useReviewCommits(sessionId, branchBaseRef, deviceLinkDeviceId);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [operationSummary, setOperationSummary] = useState<ReviewStageOperationSummary | null>(null);
@@ -536,7 +612,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const diffViewMode: DiffViewMode = state.diffViewMode ?? 'unified';
   const fileTreeVisible = state.fileTreeVisible ?? false;
   const wordWrap = state.wordWrap ?? false;
-  const wordDiff = state.wordDiff ?? true;
+  const wordDiff = state.wordDiff ?? false;
   const richMarkdownPreview = state.richMarkdownPreview ?? true;
   const collapsedSet = useMemo(() => new Set(state.collapsedPaths ?? []), [state.collapsedPaths]);
   const rawUnstaged = data?.diffs.unstaged ?? [];
@@ -546,8 +622,8 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const staged = useMemo(() => filterWhitespaceHiddenDiffs(rawStaged, hideWhitespace), [hideWhitespace, rawStaged]);
   const commits = commitsState.data?.commits ?? [];
   const effectiveCommitOid = source === 'commit' ? selectedCommitOid : null;
-  const commitDiffState = useReviewCommitDiff(sessionId, effectiveCommitOid, hideWhitespace);
-  const branchDiffState = useReviewBranchDiff(sessionId, branchBaseRef, hideWhitespace, source === 'branch');
+  const commitDiffState = useReviewCommitDiff(sessionId, effectiveCommitOid, hideWhitespace, deviceLinkDeviceId);
+  const branchDiffState = useReviewBranchDiff(sessionId, branchBaseRef, hideWhitespace, source === 'branch', deviceLinkDeviceId);
   const currentBranchDiffData = getCurrentBranchDiffData(branchDiffState.data, branchBaseRef);
   const availableLastTurnDiffs = useMemo(
     () => rawUnstaged.concat(rawStaged).filter((diff) => lastTurnPaths.has(diff.path)),
@@ -572,7 +648,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
       ignoreWhitespace: hideWhitespace,
     }));
   }, [hideWhitespace, lastTurnCapped, lastTurnCappedEntries, source]);
-  const lastTurnHydratedDiffState = useReviewFileDiffs(sessionId, lastTurnHydrationRequests);
+  const lastTurnHydratedDiffState = useReviewFileDiffs(sessionId, lastTurnHydrationRequests, deviceLinkDeviceId);
   const hydratedLastTurnDiffs = useMemo(
     () => lastTurnHydratedDiffState.data?.map((item) => item.diff).filter((diff): diff is FileDiff => diff !== null) ?? [],
     [lastTurnHydratedDiffState.data],
@@ -635,7 +711,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     branchBaseRef: selectedCappedSummaryDiff.source === 'branch' ? currentBranchDiffData?.baseRef ?? branchBaseRef : null,
     ignoreWhitespace: hideWhitespace,
   } : null;
-  const cappedFileDiffState = useReviewFileDiff(sessionId, cappedFileDiffRequest, reviewWriteVersion);
+  const cappedFileDiffState = useReviewFileDiff(sessionId, cappedFileDiffRequest, reviewWriteVersion, deviceLinkDeviceId);
   const cappedFileDiffData = cappedFileDiffState.data;
   const maybeCappedLoadedDiff = cappedFileDiffData?.diff ?? null;
   const cappedLoadedDiff = maybeCappedLoadedDiff?.id === selectedCappedSummaryDiff?.id
@@ -654,24 +730,47 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
     () => getGitApplyCopyAvailability(visibleDiffs, hideWhitespace, platform),
     [hideWhitespace, platform, visibleDiffs],
   );
+  /**
+   * device-link 预览请求只发送被控端实际读取的轻量 diff 字段，裁剪 hunks / hunksPlain
+   * 等大字段以节省帧预算。markdownReader 额外读取 kind/size/status/isTooLarge/isBinary,
+   * imageReader 读取 kind。本地调用仍传完整 diff 保持兼容。
+   */
+  const trimPreviewDiff = useCallback((diff: FileDiff): FileDiff => ({
+    source: diff.source,
+    id: diff.id,
+    path: diff.path,
+    oldPath: diff.oldPath,
+    index: diff.index,
+    kind: diff.kind,
+    size: diff.size,
+    status: diff.status,
+    isTooLarge: diff.isTooLarge,
+    isBinary: diff.isBinary,
+  } as FileDiff), []);
   const loadImagePreview = useCallback<LoadImagePreview>((diff) => {
     if (!sessionId) return Promise.reject(new Error('sessionId is required'));
-    return window.electronAPI.gitReview.imagePreview({
+    return gitReviewApiFor(deviceLinkDeviceId).imagePreview({
       sessionId,
-      diff,
+      diff: deviceLinkDeviceId ? trimPreviewDiff(diff) : diff,
       commitOid: diff.source === 'commit' ? effectiveCommitOid : null,
       branchBaseRef: diff.source === 'branch' ? currentBranchDiffData?.baseRef ?? branchBaseRef : null,
+    } as Parameters<typeof window.electronAPI.gitReview.imagePreview>[0]).catch((err) => {
+      if (isReviewRemoteOversizeError(err)) throw new Error(t('rightSidebar.review.remote.oversizeDesc'));
+      throw err;
     });
-  }, [branchBaseRef, currentBranchDiffData?.baseRef, effectiveCommitOid, sessionId]);
+  }, [branchBaseRef, currentBranchDiffData?.baseRef, deviceLinkDeviceId, effectiveCommitOid, sessionId, t, trimPreviewDiff]);
   const loadMarkdownPreview = useCallback<LoadMarkdownPreview>((diff) => {
     if (!sessionId) return Promise.reject(new Error('sessionId is required'));
-    return window.electronAPI.gitReview.markdownPreview({
+    return gitReviewApiFor(deviceLinkDeviceId).markdownPreview({
       sessionId,
-      diff,
+      diff: deviceLinkDeviceId ? trimPreviewDiff(diff) : diff,
       commitOid: diff.source === 'commit' ? effectiveCommitOid : null,
       branchBaseRef: diff.source === 'branch' ? currentBranchDiffData?.baseRef ?? branchBaseRef : null,
+    } as Parameters<typeof window.electronAPI.gitReview.markdownPreview>[0]).catch((err) => {
+      if (isReviewRemoteOversizeError(err)) throw new Error(t('rightSidebar.review.remote.oversizeDesc'));
+      throw err;
     });
-  }, [branchBaseRef, currentBranchDiffData?.baseRef, effectiveCommitOid, sessionId]);
+  }, [branchBaseRef, currentBranchDiffData?.baseRef, deviceLinkDeviceId, effectiveCommitOid, sessionId, t, trimPreviewDiff]);
   const openReviewFile = useCallback((diff: FileDiff) => {
     if (!sessionId) return;
     void window.electronAPI.gitReview.openFile({ sessionId, path: diff.path })
@@ -680,12 +779,21 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
         toast.error(t('rightSidebar.review.openFileFailed', { error: message }));
       });
   }, [sessionId, t]);
+  // device-link 与 SSH 工作区都没有可由控制端 shell 打开的本机文件。
+  const openFileHandler = shouldOfferReviewOpenFile(ctx.remoteHostId, deviceLinkDeviceId) ? openReviewFile : undefined;
+  // 次级视图(提交 / 分支 / 单文件)错误串的 OVERSIZE 标记 → 可读文案;其余原样。
+  const localizeReviewError = useCallback(<T extends string | null>(message: T): T | string => {
+    if (message && isReviewRemoteOversizeError(message)) return t('rightSidebar.review.remote.oversizeDesc');
+    return message;
+  }, [t]);
   const writeDisabledReasons = data?.status?.writeDisabledReasons ?? [];
   const effectiveWriteDisabledReasons = useMemo(() => {
     const reasons = [...writeDisabledReasons];
+    // device-link 首期只读:被控端 handler 也不实现写 op,这里是同一契约的 UI 面。
+    if (deviceLinkDeviceId) reasons.push('remote-device');
     if (agentRunning) reasons.push('agent-running');
     return reasons;
-  }, [agentRunning, writeDisabledReasons]);
+  }, [agentRunning, deviceLinkDeviceId, writeDisabledReasons]);
   const canWrite = Boolean(data?.status && effectiveWriteDisabledReasons.length === 0 && !pendingKey);
   const commitOrPushPending = pendingKey === 'commit' || pendingKey === 'commit-push' || pendingKey === 'push';
   const pushPending = pendingKey === 'push' || pendingKey === 'commit-push';
@@ -909,7 +1017,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
       if (!committed) return messageText;
       return decoratePushError(messageText, err);
     }).then((completed) => ({ committed, completed }));
-  }, [branchDiffState, commitsState, decoratePushError, runPushFlow, runWrite, sessionId, source, updateReviewDataFromWrite]);
+  }, [branchDiffState, commitsState, decoratePushError, runPushFlow, runWrite, sessionId, setSelectedCommitOid, source, updateReviewDataFromWrite]);
 
   const pushCurrentBranch = useCallback(() => {
     if (!sessionId) return;
@@ -927,7 +1035,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
       setSelectedCommitOid(null);
       setSource('branch');
     }
-  }, [commits, commitsState.data, commitsState.loading, selectedCommitOid, source]);
+  }, [commits, commitsState.data, commitsState.loading, selectedCommitOid, setSelectedCommitOid, setSource, source]);
 
   const togglePath = useCallback(
     (id: string) => {
@@ -962,7 +1070,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   const selectCommitSource = useCallback((oid: string) => {
     setSelectedCommitOid(oid);
     setSource('commit');
-  }, []);
+  }, [setSelectedCommitOid, setSource]);
   const requestFileJump = useCallback((diff: FileDiff) => {
     setJumpRequest((prev) => ({ id: diff.id, nonce: (prev?.nonce ?? 0) + 1 }));
   }, []);
@@ -1029,6 +1137,28 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
   }
 
   if (error && !data) {
+    // device-link 远程会话的两类确定性失败给专属占位:老被控端无 remote-op
+    // channel(升级即解决,刷新无用),以及响应超设备互联帧预算。
+    if (deviceLinkDeviceId && errorCode === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+      return (
+        <CenteredState
+          icon={<AlertTriangle size={24} />}
+          title={t('rightSidebar.review.remote.deviceTooOldTitle')}
+          desc={t('rightSidebar.review.remote.deviceTooOldDesc')}
+        />
+      );
+    }
+    if (deviceLinkDeviceId && isReviewRemoteOversizeError(error)) {
+      return (
+        <CenteredState
+          icon={<AlertTriangle size={24} />}
+          title={t('rightSidebar.review.remote.oversizeTitle')}
+          desc={t('rightSidebar.review.remote.oversizeDesc')}
+          actionLabel={t('rightSidebar.review.refresh')}
+          onAction={refresh}
+        />
+      );
+    }
     return <CenteredState icon={<AlertTriangle size={24} />} title={t('rightSidebar.review.errorTitle')} desc={error} actionLabel={t('rightSidebar.review.refresh')} onAction={refresh} />;
   }
 
@@ -1102,14 +1232,14 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
             onSelectCommit={selectCommitSource}
             onRefreshCommits={commitsState.refresh}
           />
-          <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums">
+          <span className="shrink-0 whitespace-nowrap font-mono text-11 tabular-nums">
             <span className="text-[var(--diff-add-fg)]">+{totalAdd}</span>{' '}
             <span className="text-[var(--diff-del-fg)]">-{totalDel}</span>
           </span>
           {toolbarShowBranch && (
             <>
               <div className="mx-0.5 h-4 w-px shrink-0 bg-[var(--border-default)]" />
-              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-12 text-[var(--text-secondary)]">
                 <GitBranch size={13} className="shrink-0 text-[var(--text-tertiary)]" />
                 <span className="min-w-0 truncate font-medium text-[var(--text-primary)]">
                   {branchLabel}
@@ -1193,7 +1323,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           </div>
         </div>
         {effectiveWriteDisabledReasons.length > 0 && (
-          <div className="mt-2 flex items-start gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-2.5 py-2 text-[11px] leading-relaxed text-[var(--text-secondary)]">
+          <div className="mt-2 flex items-start gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-2.5 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
             <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--warning-fg)]" />
             <span>{t('rightSidebar.review.writeDisabledNotice', {
               reasons: writeDisabledReasonText,
@@ -1212,7 +1342,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           selectedSummaryDiff={selectedCappedSummaryDiff}
           loadedDiff={cappedLoadedDiff}
           loading={cappedFileDiffState.loading && !cappedLoadedDiff}
-          error={cappedFileDiffState.error}
+          error={localizeReviewError(cappedFileDiffState.error)}
           onSelectFile={selectCappedFile}
           onRefresh={refreshAll}
           refreshPending={reviewRefreshPending}
@@ -1237,7 +1367,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           loadImagePreview={loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
           richMarkdownPreview={richMarkdownPreview}
-          onOpenFile={openReviewFile}
+          onOpenFile={openFileHandler}
           writeAction={source === 'unstaged' ? {
             canWrite,
             pendingKey,
@@ -1269,7 +1399,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           diffs={commitDiffs}
           rawDiffCount={rawCommitDiffs.length}
           diffLoading={commitDiffState.loading && !selectedCommitDiff}
-          diffError={commitDiffState.error}
+          diffError={localizeReviewError(commitDiffState.error)}
           onRefreshDiff={commitDiffState.refresh}
           onRefresh={refreshAll}
           refreshPending={reviewRefreshPending}
@@ -1285,7 +1415,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           loadImagePreview={loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
           richMarkdownPreview={richMarkdownPreview}
-          onOpenFile={openReviewFile}
+          onOpenFile={openFileHandler}
         />
       ) : source === 'branch' ? (
         <BranchSourceView
@@ -1295,7 +1425,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           diffs={branchDiffs}
           rawDiffCount={rawBranchDiffs.length}
           diffLoading={branchDiffState.loading && !currentBranchDiffData}
-          diffError={branchDiffState.error}
+          diffError={localizeReviewError(branchDiffState.error)}
           onSelectBase={setBranchBaseRef}
           onRefreshDiff={branchDiffState.refresh}
           onRefresh={refreshAll}
@@ -1312,7 +1442,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           loadImagePreview={loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
           richMarkdownPreview={richMarkdownPreview}
-          onOpenFile={openReviewFile}
+          onOpenFile={openFileHandler}
         />
       ) : source === 'staged' ? (
         <StagedSourceView
@@ -1338,7 +1468,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           loadImagePreview={loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
           richMarkdownPreview={richMarkdownPreview}
-          onOpenFile={openReviewFile}
+          onOpenFile={openFileHandler}
           hunkActionsEnabled={canUsePatchBasedReviewActions(hideWhitespace)}
         />
       ) : source === 'last-turn' && lastTurnHydrating ? (
@@ -1351,7 +1481,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
         <CenteredState
           icon={<AlertTriangle size={24} />}
           title={t('rightSidebar.review.errorTitle')}
-          desc={lastTurnHydrationError}
+          desc={localizeReviewError(lastTurnHydrationError)}
           actionLabel={t('rightSidebar.review.refresh')}
           onAction={refreshAll}
         />
@@ -1384,7 +1514,7 @@ function GitReviewTabBody({ state, ctx }: ReviewTabBodyProps) {
           loadImagePreview={loadImagePreview}
           loadMarkdownPreview={loadMarkdownPreview}
           richMarkdownPreview={richMarkdownPreview}
-          onOpenFile={openReviewFile}
+          onOpenFile={openFileHandler}
           writeAction={source === 'last-turn' ? undefined : {
             canWrite,
             pendingKey,
@@ -1435,7 +1565,7 @@ function AheadBehindPill({
   return (
     <Tip text={label}>
       <span
-        className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]"
+        className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 font-mono text-10 text-[var(--text-secondary)]"
         aria-label={label}
       >
         ↑{ahead} ↓{behind}
@@ -1585,7 +1715,7 @@ function CommitOrPushDropdown({
               if (!triggerDisabled) setOpen(true);
             }}
             className={cn(
-              'inline-flex h-6 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[10px] font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
+              'inline-flex h-6 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-10 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
               iconOnly ? 'w-6 justify-center px-0' : 'gap-1 px-2.5',
               triggerDisabled && 'cursor-not-allowed opacity-50',
             )}
@@ -1602,10 +1732,10 @@ function CommitOrPushDropdown({
         onKeyDown={handleKeyDown}
         className="w-[min(22rem,calc(100vw-24px))] rounded-[10px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[var(--shadow-menu)]"
       >
-        <div className="flex min-w-0 items-center gap-2 rounded-[8px] bg-[var(--surface-chip)] px-2.5 py-2 text-[12px]">
+        <div className="flex min-w-0 items-center gap-2 rounded-[8px] bg-[var(--surface-chip)] px-2.5 py-2 text-12">
           <GitBranch size={13} className="shrink-0 text-[var(--text-tertiary)]" />
           <span className="min-w-0 flex-1 truncate font-medium text-[var(--text-primary)]">{branchLabel}</span>
-          <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums">
+          <span className="shrink-0 whitespace-nowrap font-mono text-11 tabular-nums">
             <span className="text-[var(--diff-add-fg)]">+{totalAdd}</span>{' '}
             <span className="text-[var(--diff-del-fg)]">-{totalDel}</span>
           </span>
@@ -1621,7 +1751,7 @@ function CommitOrPushDropdown({
             }}
             rows={4}
             placeholder={t('rightSidebar.review.commit.placeholder')}
-            className="min-h-[92px] w-full resize-none rounded-[8px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2 text-[12px] leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+            className="min-h-[92px] w-full resize-none rounded-[8px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 py-2 text-12 leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
           />
         </div>
         <DropdownMenuItem
@@ -1629,7 +1759,7 @@ function CommitOrPushDropdown({
             event.preventDefault();
             setIncludeUnstaged((current) => !current);
           }}
-          className="mt-1 flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+          className="mt-1 flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
         >
           <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
             {includeUnstaged && <Check size={10} />}
@@ -1664,7 +1794,7 @@ function CommitOrPushDropdown({
           }}
         >
           {push.ahead > 0 && (
-            <span className="rounded-full bg-[var(--surface-chip)] px-1 font-mono text-[9px] text-[var(--text-secondary)]">
+            <span className="rounded-full bg-[var(--surface-chip)] px-1 font-mono text-10 text-[var(--text-secondary)]">
               ↑{push.ahead}
             </span>
           )}
@@ -1702,7 +1832,7 @@ function CommitDropdownAction({
         onSelect();
       }}
       className={cn(
-        'flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
+        'flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
         disabled && 'cursor-not-allowed opacity-50',
       )}
     >
@@ -1710,7 +1840,7 @@ function CommitDropdownAction({
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {children}
       {shortcut && (
-        <span className="shrink-0 rounded bg-[var(--surface-chip)] px-1 py-0.5 font-mono text-[9px] text-[var(--text-tertiary)]">
+        <span className="shrink-0 rounded bg-[var(--surface-chip)] px-1 py-0.5 font-mono text-10 text-[var(--text-tertiary)]">
           {shortcut}
         </span>
       )}
@@ -1821,7 +1951,7 @@ function FileJumpPopover({
               onChange={(event) => setQuery(event.target.value)}
               placeholder={t('rightSidebar.review.fileJump.placeholder')}
               aria-label={t('rightSidebar.review.fileJump.placeholder')}
-              className="h-7 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-7 pr-2 text-[12px] text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+              className="h-7 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-7 pr-2 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
             />
           </label>
           <div
@@ -1830,7 +1960,7 @@ function FileJumpPopover({
             className="mt-2 max-h-[280px] overflow-y-auto"
           >
             {results.length === 0 ? (
-              <div className="px-2 py-4 text-[11px] text-[var(--text-tertiary)]">
+              <div className="px-2 py-4 text-11 text-[var(--text-tertiary)]">
                 {t('rightSidebar.review.fileJump.empty')}
               </div>
             ) : (
@@ -1847,11 +1977,11 @@ function FileJumpPopover({
                     index === selectedIndex && 'bg-[var(--cmd-palette-item-hover)]',
                   )}
                 >
-                  <span className="truncate text-[12px] font-medium text-[var(--text-primary)]">
+                  <span className="truncate text-12 font-medium text-[var(--text-primary)]">
                     {result.fileName}
                   </span>
                   {result.directory && (
-                    <span className="truncate text-[10px] text-[var(--text-tertiary)]">
+                    <span className="truncate text-10 text-[var(--text-tertiary)]">
                       {result.directory}
                     </span>
                   )}
@@ -1859,7 +1989,7 @@ function FileJumpPopover({
               ))
             )}
             {overflowCount > 0 && (
-              <div className="px-2 py-1.5 text-[10px] text-[var(--text-tertiary)]">
+              <div className="px-2 py-1.5 text-10 text-[var(--text-tertiary)]">
                 {t('rightSidebar.review.fileJump.more', { count: overflowCount })}
               </div>
             )}
@@ -1987,7 +2117,7 @@ export function ReviewMoreMenu({
         onCopyGitApply();
       }}
       className={cn(
-        'flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
+        'flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
         !canCopyGitApply && 'cursor-not-allowed opacity-50',
       )}
     >
@@ -2033,7 +2163,7 @@ export function ReviewMoreMenu({
         )}
         <DropdownMenuItem
           onSelect={() => onWordWrapChange(!wordWrap)}
-          className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+          className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
         >
           {wordWrap
             ? <WrapText size={12} className="text-[var(--text-secondary)]" />
@@ -2042,7 +2172,7 @@ export function ReviewMoreMenu({
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => onWordDiffChange(!wordDiff)}
-          className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+          className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
         >
           {wordDiff
             ? <Diff size={12} className="text-[var(--text-secondary)]" />
@@ -2051,7 +2181,7 @@ export function ReviewMoreMenu({
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => onHideWhitespaceChange(!hideWhitespace)}
-          className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+          className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
         >
           {hideWhitespace
             ? <EyeOff size={12} className="text-[var(--text-secondary)]" />
@@ -2091,7 +2221,7 @@ function DiffExpansionMenuItem({
         onToggle();
       }}
       className={cn(
-        'flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
+        'flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
         disabled && 'cursor-not-allowed opacity-50',
       )}
     >
@@ -2122,7 +2252,7 @@ function FileTreeMenuItem({
   return (
     <DropdownMenuItem
       onSelect={onToggle}
-      className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+      className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
     >
       {preferenceVisible
         ? <FolderOpen size={12} className="text-[var(--text-secondary)]" />
@@ -2145,8 +2275,9 @@ export function SourceDropdown({
   onSelectCommit,
   onRefreshCommits,
 }: {
-  source: ReviewSource;
-  counts: { unstaged: number; staged: number; branch: number; lastTurn: number };
+  /** `'turn'` 表示轮次审查(turnTarget)选中态:非 git 来源,仅作为当前项展示。 */
+  source: ReviewSource | 'turn';
+  counts: { unstaged?: number; staged?: number; branch?: number; lastTurn?: number };
   commits?: ReviewCommit[];
   commitsLoading?: boolean;
   commitsError?: string | null;
@@ -2158,6 +2289,11 @@ export function SourceDropdown({
   onRefreshCommits?: () => void;
 }) {
   const { t } = useTranslation();
+  // 轮次项只在轮次审查态存在(进入它的唯一入口是聊天流的变更卡片);
+  // 切走即清 turnTarget、不提供"切回轮次"的常驻项,对齐 Codex 的 EP 语义。
+  const turnOption: SourceDropdownOption | null = source === 'turn'
+    ? { source: 'turn', label: t('rightSidebar.review.turn.title') }
+    : null;
   const options: SourceDropdownOption[] = [
     { source: 'unstaged', label: t('rightSidebar.review.source.unstaged'), count: counts.unstaged },
     { source: 'staged', label: t('rightSidebar.review.source.staged'), count: counts.staged },
@@ -2166,7 +2302,7 @@ export function SourceDropdown({
     { source: 'last-turn', label: t('rightSidebar.review.source.lastTurn') },
   ];
   const directOptions = options.filter((option) => option.source !== 'commit');
-  const selected = options.find((option) => option.source === source) ?? options[0];
+  const selected = turnOption ?? options.find((option) => option.source === source) ?? options[0];
   const commitList = commits ?? [];
   const commitMenuLoaded = commitsLoaded ?? false;
   return (
@@ -2176,7 +2312,7 @@ export function SourceDropdown({
           type="button"
           aria-label={t('rightSidebar.review.sourceDropdownAria')}
           className={cn(
-            'flex h-7 shrink-0 items-center justify-between rounded-full border border-transparent bg-transparent px-1.5 text-left text-[12px] font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
+            'flex h-7 shrink-0 items-center justify-between rounded-full border border-transparent bg-transparent px-1.5 text-left text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]',
             layout === 'wide' ? 'max-w-[11rem]' : 'max-w-[10rem]',
           )}
         >
@@ -2190,6 +2326,13 @@ export function SourceDropdown({
         sideOffset={4}
         className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[12rem] rounded-[8px] border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
       >
+        {turnOption && (
+          <SourceDropdownItem
+            option={turnOption}
+            active
+            onChange={onChange}
+          />
+        )}
         {directOptions.slice(0, 2).map((option) => (
           <SourceDropdownItem
             key={option.source}
@@ -2202,7 +2345,7 @@ export function SourceDropdown({
           if (open) onRefreshCommits?.();
         }}
         >
-          <DropdownMenuSubTrigger className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)] data-[state=open]:bg-[var(--cmd-palette-item-hover)]">
+          <DropdownMenuSubTrigger className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)] data-[state=open]:bg-[var(--cmd-palette-item-hover)]">
             <span className="min-w-0 flex-1 truncate">{t('rightSidebar.review.source.commit')}</span>
             <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--text-secondary)]">
               {source === 'commit' && <Check size={12} />}
@@ -2218,7 +2361,7 @@ export function SourceDropdown({
               <>
                 <DropdownMenuItem
                   disabled
-                  className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-secondary)]"
+                  className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-secondary)]"
                 >
                   <AlertTriangle size={12} />
                   <span>{t('rightSidebar.review.commitMenu.error')}</span>
@@ -2228,7 +2371,7 @@ export function SourceDropdown({
                     event.preventDefault();
                     onRefreshCommits?.();
                   }}
-                  className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <Spinner icon={RefreshCw} size={12} spinning={commitsLoading} className="text-[var(--text-secondary)]" />
                   <span>{t('rightSidebar.review.commitMenu.retry')}</span>
@@ -2237,7 +2380,7 @@ export function SourceDropdown({
             ) : !commitMenuLoaded || (commitsLoading && commitList.length === 0) ? (
               <DropdownMenuItem
                 disabled
-                className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-secondary)]"
+                className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-secondary)]"
               >
                 <Spinner icon={RefreshCw} size={12} />
                 <span>{t('rightSidebar.review.commitMenu.loading')}</span>
@@ -2245,7 +2388,7 @@ export function SourceDropdown({
             ) : commitList.length === 0 ? (
               <DropdownMenuItem
                 disabled
-                className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-secondary)]"
+                className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-secondary)]"
               >
                 <FileDiffIcon size={12} />
                 <span>{t('rightSidebar.review.commitMenu.empty')}</span>
@@ -2258,12 +2401,12 @@ export function SourceDropdown({
                   <DropdownMenuItem
                     onSelect={() => onSelectCommit?.(commit.oid)}
                     className={cn(
-                      'flex h-8 min-w-0 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
+                      'flex h-8 min-w-0 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]',
                       active && 'bg-[var(--surface-chip)]',
                     )}
                   >
                     <span className="min-w-0 flex-1 truncate">{title}</span>
-                    <span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">
+                    <span className="shrink-0 text-10 text-[var(--text-tertiary)]">
                       {t('rightSidebar.review.commitMenu.relativeTime', {
                         time: formatSidebarTime(new Date(commit.authorTime * 1000).toISOString(), t),
                       })}
@@ -2291,7 +2434,7 @@ export function SourceDropdown({
 }
 
 interface SourceDropdownOption {
-  source: ReviewSource;
+  source: ReviewSource | 'turn';
   label: string;
   count?: number;
 }
@@ -2316,8 +2459,11 @@ function SourceDropdownItem({
 }) {
   return (
     <DropdownMenuItem
-      onSelect={() => onChange(option.source)}
-      className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+      // 轮次伪选项已是选中态,点它只关菜单,不产生来源切换。
+      onSelect={() => {
+        if (option.source !== 'turn') onChange(option.source);
+      }}
+      className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
     >
       <span className="min-w-0 flex-1 truncate">{option.label}</span>
       <SourceCountBadge count={option.count} />
@@ -2413,18 +2559,18 @@ function OperationNotice({
   const errorDetails = errorLines.slice(1).join('\n').trim();
   if (!error && failed.length === 0) return null;
   return (
-    <div className="mt-2 rounded-[8px] border border-[var(--error-border)] bg-[var(--error-bg)] px-2.5 py-2 text-[11px] leading-relaxed text-[var(--error-fg)]">
+    <div className="mt-2 rounded-[8px] border border-[var(--error-border)] bg-[var(--error-bg)] px-2.5 py-2 text-11 leading-relaxed text-[var(--error-fg)]">
       {errorTitle ?? t('rightSidebar.review.actions.partialFailure', {
         succeeded: summary?.succeeded.length ?? 0,
         failed: failed.length,
       })}
       {errorDetails && (
-        <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-[var(--error-fg-strong)]">
+        <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-10 text-[var(--error-fg-strong)]">
           {errorDetails}
         </div>
       )}
       {failed.length > 0 && (
-        <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-[var(--error-fg-strong)]">
+        <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-10 text-[var(--error-fg-strong)]">
           {failed[0].path}: {failed[0].stderr || failed[0].error}
         </div>
       )}
@@ -2489,7 +2635,7 @@ function DiffList({
   loadImagePreview: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
-  onOpenFile: (diff: FileDiff) => void;
+  onOpenFile?: (diff: FileDiff) => void;
   writeAction?: WriteActionProps;
 }) {
   const parentRef = useRef<HTMLDivElement | null>(null);
@@ -2694,7 +2840,7 @@ function DiffList({
         onRichMarkdownPreviewChange={onRichMarkdownPreviewChange}
       />
       {topNotice && (
-        <div className="shrink-0 border-b border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-secondary)]">
+        <div className="shrink-0 border-b border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-3 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
           {topNotice}
         </div>
       )}
@@ -2881,12 +3027,12 @@ export function ReviewFileTreeSidebar({
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t('rightSidebar.review.fileTree.filterPlaceholder')}
             aria-label={t('rightSidebar.review.fileTree.filterPlaceholder')}
-            className="h-7 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-7 pr-2 text-[12px] text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+            className="h-7 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-7 pr-2 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
           />
         </label>
       </div>
       {flatNodes.length === 0 ? (
-        <div className="px-3 py-4 text-[11px] leading-relaxed text-[var(--text-tertiary)]">
+        <div className="px-3 py-4 text-11 leading-relaxed text-[var(--text-tertiary)]">
           {t('rightSidebar.review.fileTree.empty')}
         </div>
       ) : (
@@ -2947,7 +3093,7 @@ function ReviewFileTreeRow({
         role="treeitem"
         aria-expanded={!collapsed}
         onClick={() => onToggleDirectory(node.id)}
-        className="flex h-7 w-full min-w-0 items-center gap-1 pr-2 text-left text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+        className="flex h-7 w-full min-w-0 items-center gap-1 pr-2 text-left text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
         style={{ paddingLeft }}
       >
         {collapsed ? <ChevronRight size={12} className="shrink-0 text-[var(--text-tertiary)]" /> : <ChevronDown size={12} className="shrink-0 text-[var(--text-tertiary)]" />}
@@ -2966,7 +3112,7 @@ function ReviewFileTreeRow({
         aria-selected={active}
         onClick={() => onSelectFile(node.diff)}
         className={cn(
-          'flex h-7 w-full min-w-0 items-center pr-2 text-left text-[12px] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
+          'flex h-7 w-full min-w-0 items-center pr-2 text-left text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
           active && 'bg-[var(--surface-chip)] text-[var(--text-primary)]',
         )}
         style={{ paddingLeft: paddingLeft + 18 }}
@@ -3065,12 +3211,12 @@ export function ReviewDiffListHeader({
   }, [rowEl]);
 
   return (
-    <div ref={setRowEl} className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3 text-[12px]">
+    <div ref={setRowEl} className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3 text-12">
       <div data-testid="review-diff-list-header-left" className="flex min-w-0 flex-1 items-center gap-2">
         {branchBaseControl && (
           <>
             {showBranchBaseLabel && (
-              <span data-testid="review-branch-base-label" className="shrink-0 text-[11px] text-[var(--text-tertiary)]">
+              <span data-testid="review-branch-base-label" className="shrink-0 text-11 text-[var(--text-tertiary)]">
                 {t('rightSidebar.review.branch.baseLabel')}
               </span>
             )}
@@ -3171,7 +3317,7 @@ function DiffViewModeToggle({
           type="button"
           onClick={() => onChange(option.mode)}
           className={cn(
-            'rounded-full px-2 text-[10px] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
+            'rounded-full px-2 text-10 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
             option.mode === mode && 'bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)]',
           )}
         >
@@ -3230,7 +3376,7 @@ export function CappedSourceView({
   loadImagePreview: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
-  onOpenFile: (diff: FileDiff) => void;
+  onOpenFile?: (diff: FileDiff) => void;
   writeAction?: WriteActionProps;
 }) {
   const { t } = useTranslation();
@@ -3287,7 +3433,7 @@ export function CappedSourceView({
         richMarkdownPreview={richMarkdownPreview}
         onRichMarkdownPreviewChange={onRichMarkdownPreviewChange}
       />
-      <div className="shrink-0 border-b border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-secondary)]">
+      <div className="shrink-0 border-b border-[var(--border-default)] bg-[var(--warning-bg-soft)] px-3 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
         {notice}
       </div>
       <div ref={contentRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
@@ -3355,12 +3501,12 @@ function CappedFileState({
   desc: string;
 }) {
   return (
-    <div className="m-3 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-3 text-[12px] leading-relaxed text-[var(--text-secondary)]">
+    <div className="m-3 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-3 text-12 leading-relaxed text-[var(--text-secondary)]">
       <div className="flex items-center gap-2 font-medium text-[var(--text-primary)]">
         <span className="text-[var(--text-tertiary)]">{icon}</span>
         <span>{title}</span>
       </div>
-      <div className="mt-1 break-words text-[11px] text-[var(--text-tertiary)]">{desc}</div>
+      <div className="mt-1 break-words text-11 text-[var(--text-tertiary)]">{desc}</div>
     </div>
   );
 }
@@ -3408,7 +3554,7 @@ function CommitSourceView({
   loadImagePreview: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
-  onOpenFile: (diff: FileDiff) => void;
+  onOpenFile?: (diff: FileDiff) => void;
 }) {
   const { t } = useTranslation();
 
@@ -3499,7 +3645,7 @@ function BranchSourceView({
   loadImagePreview: LoadImagePreview;
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
-  onOpenFile: (diff: FileDiff) => void;
+  onOpenFile?: (diff: FileDiff) => void;
 }) {
   const { t } = useTranslation();
   const blockingWarning = warning && warning.code !== 'base-missing' ? warning : null;
@@ -3576,7 +3722,7 @@ export function BranchBaseDropdown({
             type="button"
             disabled={candidates.length === 0}
             aria-label={tooltip}
-            className="flex h-6 min-w-0 max-w-full items-center justify-between rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2 text-left text-[12px] text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex h-6 min-w-0 max-w-full items-center justify-between rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2 text-left text-12 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span className="min-w-0 truncate">{label}</span>
             <ChevronDown size={13} className="ml-1.5 shrink-0 text-[var(--text-tertiary)]" />
@@ -3592,7 +3738,7 @@ export function BranchBaseDropdown({
           <DropdownMenuItem
             key={candidate.refName}
             onSelect={() => onSelectBase(candidate.refName)}
-            className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[12px] text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
+            className="flex h-8 items-center gap-2 rounded-[6px] px-2 text-12 text-[var(--text-primary)] focus:bg-[var(--cmd-palette-item-hover)]"
           >
             <span className="flex h-4 w-4 items-center justify-center text-[var(--text-secondary)]">
               {candidate.refName === selectedBaseRef && <Check size={12} />}
@@ -3646,13 +3792,13 @@ function CenteredState({
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <div className="text-[var(--text-tertiary)]">{icon}</div>
-      <p className="text-[13px] font-medium text-[var(--text-primary)]">{title}</p>
-      <p className="max-w-[260px] text-[11px] leading-relaxed text-[var(--text-tertiary)]">{desc}</p>
+      <p className="text-13 font-medium text-[var(--text-primary)]">{title}</p>
+      <p className="max-w-[260px] text-11 leading-relaxed text-[var(--text-tertiary)]">{desc}</p>
       {actionLabel && onAction && (
         <button
           type="button"
           onClick={onAction}
-          className="mt-1 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-[11px] font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+          className="mt-1 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
         >
           {actionLabel}
         </button>
@@ -3690,7 +3836,7 @@ function ActionButton({
         onClick();
       }}
       className={cn(
-        'inline-flex h-6 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[10px] font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50',
+        'inline-flex h-6 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] text-10 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50',
         className,
         iconOnly ? 'w-6 px-0' : 'gap-1 px-2',
       )}
@@ -3758,7 +3904,7 @@ function StagedSourceView({
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   hunkActionsEnabled: boolean;
-  onOpenFile: (diff: FileDiff) => void;
+  onOpenFile?: (diff: FileDiff) => void;
 }) {
   const { t } = useTranslation();
   const filteredEmpty = diffs.length === 0 && stagedCount > 0;
@@ -3829,7 +3975,7 @@ function FileRow({
   loadMarkdownPreview: LoadMarkdownPreview;
   richMarkdownPreview: boolean;
   onImagePreviewLoad: () => void;
-  onOpenFile: (diff: FileDiff) => void;
+  onOpenFile?: (diff: FileDiff) => void;
 }) {
   const { t } = useTranslation();
   const fileName = basename(diff.path);
@@ -3903,8 +4049,8 @@ function FileRow({
             <ChevronRight size={12} className="shrink-0 text-[var(--text-tertiary)]" />
           )}
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[13px] font-medium text-[var(--text-primary)]">{fileName}</span>
-            <span className="block truncate text-[10px] text-[var(--text-tertiary)]">
+            <span className="block truncate text-13 font-medium text-[var(--text-primary)]">{fileName}</span>
+            <span className="block truncate text-10 text-[var(--text-tertiary)]">
               {showsPathTransition ? (
                 <>
                   <span className="opacity-70">{diff.oldPath}</span>
@@ -3916,16 +4062,16 @@ function FileRow({
           </span>
         </button>
         {changeChip && (
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]">
+          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
             {changeChip}
           </span>
         )}
         {diff.kind !== 'text' && (
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]">
+          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
             {t(`rightSidebar.review.status.${diff.kind}`, { defaultValue: diff.kind })}
           </span>
         )}
-        <span className="shrink-0 font-mono text-[11px] tabular-nums">
+        <span className="shrink-0 font-mono text-11 tabular-nums">
           <span className="text-[var(--diff-add-fg)]">+{diff.additions}</span>{' '}
           <span className="text-[var(--diff-del-fg)]">-{diff.deletions}</span>
         </span>
@@ -3965,12 +4111,12 @@ function FileRow({
       {expanded && (
         <div className="min-w-0 px-3 pb-3">
           {showRenamePartialNotice && (
-            <div className="mb-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-[12px] text-[var(--text-secondary)]">
+            <div className="mb-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
               {t('rightSidebar.review.renamePartialNotice')}
             </div>
           )}
           {showTypechangePartialNotice && (
-            <div className="mb-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-[12px] text-[var(--text-secondary)]">
+            <div className="mb-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-12 text-[var(--text-secondary)]">
               {t('rightSidebar.review.typechangePartialNotice')}
             </div>
           )}

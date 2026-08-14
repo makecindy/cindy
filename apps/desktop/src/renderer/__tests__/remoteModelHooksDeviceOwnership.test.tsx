@@ -49,6 +49,137 @@ function provider(id: string): ProviderView {
 }
 
 describe('remote model hook device ownership', () => {
+  it('clears a mounted local capability hook when optional Pi becomes unavailable', async () => {
+    let piAvailable = true;
+    const getCapabilities = vi.fn(async (agentKind: string) => {
+      if (agentKind === 'pi' && !piAvailable) {
+        throw new Error("Agent 'pi' is not registered");
+      }
+      return capabilities(`local:${agentKind}`);
+    });
+    setElectronApi({ maker: { getCapabilities } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+    await mod.preloadAllCapabilities();
+
+    const frames: Array<ReturnType<typeof mod.useAgentCapabilities>> = [];
+    function Probe() {
+      frames.push(mod.useAgentCapabilities('pi'));
+      return null;
+    }
+
+    const view = render(<Probe />);
+    await waitFor(() =>
+      expect(frames.at(-1)?.capabilities?.availableModels[0]?.displayName).toBe('local:pi'),
+    );
+
+    piAvailable = false;
+    const generation = mod.beginLocalCapabilitiesRefresh();
+    const entries = await mod.loadLocalCapabilitiesSnapshot();
+    await act(async () => {
+      expect(mod.commitLocalCapabilitiesSnapshot(generation, entries)).toBe(true);
+    });
+
+    await waitFor(() => {
+      expect(frames.at(-1)?.capabilities).toBeNull();
+      expect(frames.at(-1)?.loading).toBe(false);
+      expect(frames.at(-1)?.error).toBeNull();
+    });
+    expect(mod.getCachedCapabilities('pi')).toBeNull();
+    view.unmount();
+  });
+
+  it('does not let a pre-refresh Pi request revive a committed missing snapshot', async () => {
+    let piUnavailable = false;
+    let resolveStalePi!: (value: ReturnType<typeof capabilities>) => void;
+    const stalePi = new Promise<ReturnType<typeof capabilities>>((resolve) => {
+      resolveStalePi = resolve;
+    });
+    const getCapabilities = vi.fn((agentKind: string) => {
+      if (agentKind === 'pi') {
+        if (piUnavailable) return Promise.reject(new Error("Agent 'pi' is not registered"));
+        return stalePi;
+      }
+      return Promise.resolve(capabilities(`local:${agentKind}`));
+    });
+    setElectronApi({ maker: { getCapabilities } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    const frames: Array<ReturnType<typeof mod.useAgentCapabilities>> = [];
+    function Probe() {
+      frames.push(mod.useAgentCapabilities('pi'));
+      return null;
+    }
+
+    const view = render(<Probe />);
+    await waitFor(() => expect(getCapabilities).toHaveBeenCalledWith('pi'));
+
+    piUnavailable = true;
+    const generation = mod.beginLocalCapabilitiesRefresh();
+    const entries = await mod.loadLocalCapabilitiesSnapshot();
+    await act(async () => {
+      expect(mod.commitLocalCapabilitiesSnapshot(generation, entries)).toBe(true);
+    });
+    await waitFor(() => {
+      expect(frames.at(-1)?.capabilities).toBeNull();
+      expect(frames.at(-1)?.loading).toBe(false);
+    });
+
+    await act(async () => {
+      resolveStalePi(capabilities('stale:pi'));
+      await stalePi;
+      await Promise.resolve();
+    });
+
+    expect(frames.at(-1)?.capabilities).toBeNull();
+    expect(mod.getCachedCapabilities('pi')).toBeNull();
+    view.unmount();
+  });
+
+  it('keeps a successful cache-miss result when a newer local refresh fails before commit', async () => {
+    let resolveInitialPi!: (value: ReturnType<typeof capabilities>) => void;
+    const initialPi = new Promise<ReturnType<typeof capabilities>>((resolve) => {
+      resolveInitialPi = resolve;
+    });
+    let piRequests = 0;
+    let failRefresh = false;
+    const getCapabilities = vi.fn((agentKind: string) => {
+      if (agentKind === 'pi' && piRequests++ === 0) return initialPi;
+      if (agentKind === 'claude-code' && failRefresh) {
+        return Promise.reject(new Error('temporary capability IPC failure'));
+      }
+      return Promise.resolve(capabilities(`refresh:${agentKind}`));
+    });
+    setElectronApi({ maker: { getCapabilities } });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    const frames: Array<ReturnType<typeof mod.useAgentCapabilities>> = [];
+    function Probe() {
+      frames.push(mod.useAgentCapabilities('pi'));
+      return null;
+    }
+
+    const view = render(<Probe />);
+    await waitFor(() => expect(getCapabilities).toHaveBeenCalledWith('pi'));
+
+    failRefresh = true;
+    await act(async () => {
+      await mod.refreshLocalCapabilities();
+    });
+    await act(async () => {
+      resolveInitialPi(capabilities('initial:pi'));
+      await initialPi;
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(frames.at(-1)?.capabilities?.availableModels[0]?.displayName).toBe('initial:pi');
+      expect(frames.at(-1)?.loading).toBe(false);
+      expect(frames.at(-1)?.error).toBeNull();
+    });
+    expect(mod.getCachedCapabilities('pi')?.availableModels[0]?.displayName).toBe('initial:pi');
+    view.unmount();
+  });
+
   it('never renders the previous device capabilities under a newly selected device', async () => {
     const invoke = vi.fn((deviceId: string) => {
       if (deviceId === 'dev-a') return Promise.resolve(capabilities('Mac A'));

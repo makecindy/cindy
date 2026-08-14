@@ -13,6 +13,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
+import { createIpcError } from '../../shared/ipc-errors';
+import { toast } from '@/lib/toast';
 
 const {
   refreshBuiltinModelsSpy,
@@ -145,7 +147,7 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 }));
 
 vi.mock('@/lib/toast', () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() },
 }));
 
 vi.mock('@/lib/customProviders', () => ({
@@ -217,6 +219,12 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(
       (await screen.findAllByText('settings.providers.xd.title')).length,
     ).toBeGreaterThanOrEqual(2);
+    // 详情标题的模型数/订阅标签必须在可用宽度内折行，不能溢出覆盖右侧连接操作。
+    const identity = screen.getByTestId('provider-detail-identity');
+    const metadata = screen.getByTestId('provider-detail-metadata');
+    expect(identity.contains(metadata)).toBe(true);
+    expect(identity.classList.contains('flex-auto')).toBe(true);
+    expect(metadata.classList.contains('flex-wrap')).toBe(true);
     // 未连接的 Anthropic 不出现在左栏(无检测建议时整页不出现)。
     expect(screen.queryByText('Anthropic')).toBeNull();
     // xd 实时模型为空 → 详情仍渲染模型工具行与刷新入口，避免用户无从恢复。
@@ -257,6 +265,28 @@ describe('ProvidersSection — 双栏管理', () => {
       resolveRefresh({ ok: true, providerId: 'xd' });
       await pendingRefresh;
     });
+  });
+
+  it('内置刷新失败按错误码区分文案:dev 禁网提示跳过,其余保持通用失败', async () => {
+    refreshBuiltinModelsSpy.mockRejectedValueOnce(
+      createIpcError('MODEL_CATALOG_FETCH_DISABLED', '模型目录远程拉取未启用'),
+    );
+    refreshBuiltinModelsSpy.mockRejectedValueOnce(new Error('network down'));
+    render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'settings.providers.models.refreshBuiltinAria' }),
+      );
+    });
+    expect(toast.info).toHaveBeenLastCalledWith('settings.providers.models.refreshFetchDisabled');
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'settings.providers.models.refreshBuiltinAria' }),
+      );
+    });
+    expect(toast.error).toHaveBeenLastCalledWith('settings.providers.models.refreshFailed');
   });
 
   it('检测到本机 CLI 且渠道未连接 → 建议行出现,点击直达向导授权步', async () => {

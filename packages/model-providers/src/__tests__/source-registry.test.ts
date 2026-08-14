@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { modelRegistryCanonicalJson } from '@cindy/model-access-protocol';
+import { modelRegistryCanonicalJson } from '../modelRegistryCanonical.js';
 
 import { BUNDLED_CATALOG } from '../catalog.js';
 import {

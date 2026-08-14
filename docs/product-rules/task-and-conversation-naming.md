@@ -462,7 +462,7 @@ grep -rniE "'(New Chat|New Maker|New Conversation|Copy conversation link)'" \
 **先确认延迟是否真的存在。** 判据一不是把所有英文的 `new session` 机械翻成「Agent 会话」：
 必须沿实现追到设置的读取时机。只在 `buildQuery`／SDK Query 启动时读取的设置，才说「下一个
 Agent 会话」；调用时现查的设置会立即生效，不该要求用户重启任何会话。项目插件开关属于后者：
-renderer 的 `$` 指令展开、`ghost_list` 与 `ghost_call` 都按工作目录现查；旧 Agent 会话即使仍有
+renderer 的 `$` 指令展开、`ghost_list`、`ghost_info` 与 `ghost_call` 都按工作目录现查；旧 Agent 会话即使仍有
 工具描述里的花名册快照，实际调用也会被 `GHOST_DISABLED_IN_WORKDIR` 拒绝。因此 UI 只说
 「已停用／不可用」，不写「新任务生效」，也不写「新 Agent 会话生效」。英文源若把生效时机写错，
 同样应按实现修正四语，不能把错误事实忠实翻译过去。

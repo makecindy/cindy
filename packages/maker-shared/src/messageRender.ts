@@ -1,7 +1,10 @@
 import {
   type AgentTaskUpdate,
+  deriveAgentTaskStatus,
   findAgentTaskUpdate,
   isAgentTaskToolName,
+  subagentSpawnReceiptName,
+  subagentSpawnResultIndicatesRunning,
 } from './agentTask';
 import { HISTORY_GAP_SPLIT_MS } from './historyGap';
 
@@ -17,8 +20,42 @@ export interface MessageRenderSourceMessageLike {
   toolInput?: unknown;
   /** SDK tool-use id — used to link a Task/collab tool-call to its live `agent_task_update`. */
   toolUseId?: string | null;
+  /**
+   * Owning Agent/Task tool-use id when this message was produced inside a
+   * subagent. Plan scanning treats it as an ownership boundary: subagent plan
+   * calls never compete for the top-level pinned panel.
+   */
+  parentToolUseId?: string | null;
+  /**
+   * Host-persisted message metadata. Plan ownership only reads two keys:
+   * `autoResume` / `origin` — user rows carrying either are internal dispatches
+   * (auto-resume continuation, scheduler runs), not the user opening a new
+   * topic, so they must not cut a plan session boundary.
+   *
+   * Surfaces that strip `agentMeta` during projection (desktop renderer's
+   * ChatMessage) must instead carry the projected flags below.
+   */
+  agentMeta?: Record<string, unknown> | null;
+  /** Desktop renderer projection of synthetic trigger rows (auto-resume 等)。 */
+  isSyntheticTrigger?: boolean;
+  /** Desktop renderer projection of scheduler-originated user rows. */
+  automationOrigin?: unknown;
   /** Host-persisted SDK turn boundary on the final assistant or owning Codex plan row. */
   turnCompleted?: boolean;
+  /**
+   * Host sealed this Codex plan row because its owning turn ended successfully.
+   * The seal closes the plan's lifecycle only — step statuses stay exactly as the
+   * agent last reported them. Interrupted, failed, and auto-resumed turns never
+   * seal, so their plan stays open while the task itself is still alive.
+   */
+  terminalPlanSnapshot?: boolean;
+  /** Host time when the successful turn seal was applied. */
+  terminalPlanAtMs?: number;
+  /**
+   * user 消息投递方式:'steer' 是运行中插话,不开启新 turn——失败印记回扫的
+   * turn 所有权边界只认普通('turn')user 消息。
+   */
+  delivery?: string | null;
 }
 
 export type MessageRenderNormalizedMessageKind =
@@ -193,6 +230,19 @@ export interface MessageRenderTodoInsertion {
   createdAt?: string;
   updatedAtMs?: number;
   source: MessageRenderTodoSource;
+  /**
+   * 这份计划所属的 turn 已被 host 判定为成功收尾(见
+   * `MessageRenderSourceMessageLike.terminalPlanSnapshot`)。常驻面板据此退场,
+   * 不看勾选状态;未盖章就一直挂着。
+   */
+  sealed?: boolean;
+  /** Persisted host time of the successful terminal seal. */
+  sealedAtMs?: number;
+  /**
+   * host 在中断/失败 turn 给该计划行盖的 `turnCompleted: false`(见
+   * `persistCodexPlanOnDone`):任务还活着,常驻面板不得按"全勾完"兜底退场。
+   */
+  turnFailed?: boolean;
 }
 
 export interface MessageRenderLatestTodoState {
@@ -416,6 +466,109 @@ export function dedupeToolMediaByUrl<TMedia extends MessageRenderToolMediaLike>(
   return out;
 }
 
+/**
+ * 计划所有权的**唯一** user 边界判据:这个 user 行是不是"用户真的开口"的反面。
+ *
+ * 落在 user 行上但不构成边界的四类:
+ *  - 自动续跑 / scheduler 定时消息(agentMeta.autoResume / origin;desktop 渲染层
+ *    投影成 isSyntheticTrigger / automationOrigin 后丢弃原 meta,两套字段都认):
+ *    同一件事的延续,当边界会把进行中的计划切成新 session、历史里出现重复计划卡;
+ *  - 同轮 steer 插话:turn 还在跑,用户在指挥进行中的活,不是开新话题
+ *    (MessageStream 的 turn 分组同样把 steer 排除在新 turn 边界外);
+ *  - 子代理内部的 user 行(带 parentUuid / parentToolUseId):子任务的输入,当边界
+ *    会顶掉主线程计划、换 key 重挂载 TodoListCard。
+ *
+ * **计划分组(findMessageTodoInsertions)与失败回扫(markCodexPlanTurnFailed)共用
+ * 这一份判据**。两边各自推导过一次,结果是回扫只豁免了 steer:计划之后经过一次
+ * 自动续跑再以 terminal error 收尾时,回扫在合成 user 行上提前 break、够不到本轮
+ * 计划,全勾完的失败计划先按旧数据退场,等 main 的异步印记广播才复活(手机端断连
+ * 则要到重新加载,review P2)。
+ */
+function isSyntheticUserRow(message: MessageRenderSourceMessageLike): boolean {
+  if (isHookUserRow(message)) return false;
+  const meta = message.agentMeta;
+  return (
+    message.isSyntheticTrigger === true ||
+    (message.automationOrigin !== undefined && message.automationOrigin !== null) ||
+    meta?.autoResume === true ||
+    (meta?.origin !== undefined && meta?.origin !== null) ||
+    isSteerUserRow(message) ||
+    hasSubagentParent(message)
+  );
+}
+
+function isHookUserRow(message: MessageRenderSourceMessageLike): boolean {
+  const hookSource =
+    (message as Record<string, unknown>).hookSource ??
+    message.agentMeta?.hookSource;
+  return hookSource !== undefined && hookSource !== null;
+}
+
+/**
+ * 子代理归属判定:desktop 投影出顶层 parentToolUseId;mobile / main 原始行只有
+ * agentMeta.parentUuid。二者任一存在即视为子代理内部消息。
+ */
+function hasSubagentParent(message: MessageRenderSourceMessageLike): boolean {
+  const explicit =
+    message.parentToolUseId ??
+    message.agentMeta?.parentToolUseId ??
+    message.agentMeta?.parent_tool_use_id;
+  if (typeof explicit === 'string' && explicit.trim().length > 0) {
+    // 显式的 tool-parent 字段本身就是归属证明,不需要形态消歧。
+    return isSubagentParentId(explicit) || !looksLikeLegacyTranscriptUuid(explicit);
+  }
+  // 裸 parentUuid 不足以证明子代理归属:旧 Claude 导入把普通 transcript 链边
+  // 也存在这个字段(同 latestMessageText.logic.ts 的既定判据),把它一律当子
+  // 代理会让旧会话的顶层计划被面板与对账整段过滤掉。只认 SDK tool-use id 形态。
+  const nested = (message as { source?: { agentMeta?: Record<string, unknown> | null } }).source;
+  for (const candidate of [message.agentMeta?.parentUuid, nested?.agentMeta?.parentUuid]) {
+    if (typeof candidate === 'string' && isSubagentParentId(candidate)) return true;
+  }
+  return false;
+}
+
+/** Live Claude/Codex SDK tool-use ids;裸 uuid 形态的 legacy transcript 链边不算。 */
+const SUBAGENT_PARENT_ID_RE = /^(?:toolu|call)[_-]/iu;
+/**
+ * 兼容模型(kimi 系等)的 tool-use id 形态:`${ToolName}_${序号}`。resume 前的
+ * 转录归一化(maker-core 的 jsonl-tool-id-normalize)还会把它改写成 `Task_x1`
+ * (移出铸造空间,x 可顺延)与 `Bash_5_dup2`(去重),这些都是**真实 tool-use id**
+ * 并被同步写进子代理行的 parent_tool_use_id。只认 toolu_/call_ 前缀会把这类
+ * 子代理的 TodoWrite 当成顶层计划,而 desktop 实时流因显式投影不受影响 →
+ * 又一次多端分叉(review P2)。
+ *
+ * 与 legacy transcript 链边不会误撞:这条形态要求"下划线 + 可选 x + 末段数字",
+ * RFC uuid 与 `preceding-user-uuid` 都不含下划线数字结尾。
+ *
+ * 残留边界(如实记录):**任意**自定义形态的 tool id(既非 toolu_/call_,也非
+ * `名字_序号`)仍会被判成非 tool parent。彻底的解法是持久化时就记下"这是显式
+ * tool parent"这一位,而不是让每个消费方按字符串形态猜——同 canonical 计划模型
+ * 那笔欠账,留待正式建模时一并收口。
+ */
+const COMPAT_TOOL_USE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*_x*\d+(?:_dup\d+)?$/u;
+
+/**
+ * 投影侧共用的同一条判据:这个字符串是不是 SDK 的 tool-parent id 形态。
+ *
+ * 把 DB 行的裸 `agentMeta.parentUuid` 提升成显式 `parentToolUseId` 的投影(desktop
+ * 渲染层的历史恢复)必须先过这一关 —— legacy Claude 导入把 transcript 链边
+ * (`preceding-user-uuid` 这类非 RFC 串)存在同一个键上,无条件提升会让顶层计划行
+ * 被判成子代理、普通 user 行被当成合成边界,而保留裸字段的 mobile / main 不会,
+ * 于是同一份历史在两端分组不同(review P2)。
+ */
+export function isSubagentParentToolUseId(value: string): boolean {
+  return isSubagentParentId(value);
+}
+
+function isSubagentParentId(value: string): boolean {
+  const trimmed = value.trim();
+  return SUBAGENT_PARENT_ID_RE.test(trimmed) || COMPAT_TOOL_USE_ID_RE.test(trimmed);
+}
+
+function looksLikeLegacyTranscriptUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value.trim());
+}
+
 export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMessageLike>(
   messages: readonly TMessage[],
   options: MessageRenderTodoGroupingOptions = {},
@@ -427,14 +580,27 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     firstIndex: number;
     lastIndex: number;
     source: MessageRenderTodoSource;
+    /** 该 session 首条计划调用之前最近一条 user 消息的下标(turn 边界锚点)。 */
+    userBoundaryIndex: number;
   }> = [];
   const lastSessionBySource = new Map<MessageRenderTodoSource, (typeof sessions)[number]>();
   const taskState = new Map<string, MessageRenderTodoItem>();
+  let lastUserIndex = -1;
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
+    if (message.role === 'user') {
+      if (!isSyntheticUserRow(message)) lastUserIndex = index;
+      continue;
+    }
     const source = agentPlanSource(toolNameOf(message));
     if (!source) continue;
+    // 子代理内部的计划调用不属于顶层面板:它们的 owner 是那个 Agent/Task 工具行,
+    // 混进来会顶掉主线程计划(顶层"最新计划"按位置竞争,历史病 §3.1.5)。
+    // 两套字段都认:desktop 投影出顶层 parentToolUseId;mobile 保留原始
+    // agentMeta.parentUuid(normalizeRemoteMessages 不投影,父行滑出分页窗口
+    // 时孤儿子消息回退顶层流,不认 meta 就会把子代理清单当顶层计划)。
+    if (hasSubagentParent(message)) continue;
 
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const previous = lastSessionBySource.get(source);
@@ -443,7 +609,25 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
       source === 'task'
       && Boolean(previousAllDone)
       && taskToolTargetsExistingTask(message, resultText, taskState);
-    const startsNewSession = !previous || (Boolean(previousAllDone) && !continuesCompletedTaskSession);
+    // 终态章是计划 session 的硬边界:成功收尾的 turn 常留着未勾完的步骤,只看
+    // allDone 会让下一 turn 的计划把上一轮吞成"续写"——历史里上一轮的计划卡
+    // 消失、面板复用旧 key。同 toolUseId 的活跃行被新事件清章(terminalPlanSnapshot
+    // 置 false)后不算边界,sealed-then-updated 的复亮行为不变。
+    const previousSealed =
+      Boolean(previous) && planRowSealOf(messages[previous!.lastIndex]).sealed;
+    // 普通 user turn 也是所有权边界:用户开了新话题,旧的未完成计划不得把新计划
+    // 吞成"续期"(历史病 §3.1.2/3.1.3——串号后新计划复用旧 key、Task 状态跨
+    // turn 拼接)。task source 例外:显式指向已有任务的操作(TaskUpdate/TaskGet
+    // 带已知 id)仍是同一份清单的合法续写。
+    const crossesUserBoundary =
+      Boolean(previous)
+      && lastUserIndex > (previous?.lastIndex ?? -1)
+      && !(source === 'task' && taskToolTargetsExistingTask(message, resultText, taskState));
+    const startsNewSession =
+      !previous
+      || previousSealed
+      || crossesUserBoundary
+      || (Boolean(previousAllDone) && !continuesCompletedTaskSession);
     if (source === 'task' && startsNewSession) {
       taskState.clear();
     }
@@ -461,7 +645,13 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
       previous.todos = parsed;
       previous.lastIndex = index;
     } else {
-      const session = { todos: parsed, firstIndex: index, lastIndex: index, source };
+      const session = {
+        todos: parsed,
+        firstIndex: index,
+        lastIndex: index,
+        source,
+        userBoundaryIndex: lastUserIndex,
+      };
       sessions.push(session);
       lastSessionBySource.set(source, session);
     }
@@ -470,12 +660,21 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
   const out = new Map<number, MessageRenderTodoInsertion>();
   for (const session of sessions) {
     const first = messages[session.firstIndex];
+    const lastRow = messages[session.lastIndex];
+    const seal = planRowSealOf(lastRow);
     out.set(session.lastIndex, {
       key: `${keyPrefix}-${sourceClientId(first)}`,
       todos: session.todos,
-      createdAt: messages[session.lastIndex]?.createdAt,
-      updatedAtMs: messages[session.lastIndex]?.planUpdatedAtMs,
+      createdAt: lastRow?.createdAt,
+      updatedAtMs: lastRow?.planUpdatedAtMs,
       source: session.source,
+      ...(seal.sealed
+        ? {
+            sealed: true,
+            ...(typeof seal.sealedAtMs === 'number' ? { sealedAtMs: seal.sealedAtMs } : {}),
+          }
+        : {}),
+      ...(planRowTurnFailed(lastRow) ? { turnFailed: true } : {}),
     });
   }
   return out;
@@ -503,6 +702,9 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (!isAgentPlanToolName(toolNameOf(message))) continue;
+    // 与 findMessageTodoInsertions 同一条边界:子代理内部的计划调用不参与
+    // 顶层"最新计划事件"的判定,否则子调用会让顶层 insertion 判为过期。
+    if (hasSubagentParent(message)) continue;
     latestPlanIndex = index;
     latestPlanMessage = message;
   }
@@ -551,28 +753,28 @@ export interface CodexPlanSnapshotApplyResult<
 }
 
 /**
- * Resolve the plan payload that should survive a Codex turn terminal event.
- * A successful turn is authoritative even when Codex only returns its last
- * cached in-progress snapshot: every remaining item belongs to that finished
- * turn and must converge to completed. Other terminal states may only apply an
- * explicit snapshot; they must never infer completion from stale progress.
+ * Close out a Codex plan at its owning turn's terminal event.
+ *
+ * Two independent things happen here, and keeping them separate is the whole
+ * point:
+ *  - **Content**: an explicit `turn/plan/updated` snapshot carried by `done` is
+ *    applied verbatim. Nothing else ever rewrites a step. Codex leaves open
+ *    items on a successful turn routinely (its own prompt asks the model to tick
+ *    them, and the model complies most of the time — not always), and inventing
+ *    the missing ticks makes the transcript claim work that was never reported.
+ *  - **Lifecycle**: a successful, ownership-matched turn *seals* the row. The
+ *    seal is what retires the pinned capsule, so retiring no longer depends on
+ *    the agent having ticked every box.
+ *
+ * Interrupted / failed turns, and any turn whose id does not match, seal
+ * nothing: the task is still alive and the user is usually about to steer it,
+ * so the plan must stay on screen. A matching non-successful terminal `done`
+ * does stamp `turnCompleted:false` on its plan row, immediately in memory —
+ * main's durable stamp (`persistCodexPlanOnDone`) lands asynchronously after
+ * this event is broadcast, and without the in-memory twin an all-done
+ * interrupted plan would be retired by the legacy fallback the moment
+ * streaming ends, then flash back when the durable row arrives.
  */
-export function resolveCodexPlanSnapshotOnDone(
-  currentPlan: readonly unknown[],
-  snapshot: unknown,
-  inferCompletion: boolean,
-): unknown[] | null {
-  const authoritativeSnapshot = Array.isArray(snapshot) ? snapshot : null;
-  if (!authoritativeSnapshot && !inferCompletion) return null;
-
-  const snapshotSource = authoritativeSnapshot ?? currentPlan;
-  if (!inferCompletion) return authoritativeSnapshot;
-  return snapshotSource.map((item) => {
-    const record = readRecord(item);
-    return record ? { ...record, status: 'completed' } : item;
-  });
-}
-
 export function applyCodexPlanSnapshotOnDone<
   TMessage extends MessageRenderSourceMessageLike,
 >(
@@ -581,11 +783,26 @@ export function applyCodexPlanSnapshotOnDone<
   turnId?: string | null,
   terminalStatus?: unknown,
   planUpdatedAtMs?: number,
+  cancelled?: boolean,
 ): CodexPlanSnapshotApplyResult<TMessage> {
   const authoritativeSnapshot = Array.isArray(snapshot) ? snapshot : null;
-  const hasAuthoritativeSnapshot = authoritativeSnapshot !== null;
-  const canInferCompletion = terminalStatus === 'completed' && Boolean(turnId);
-  if (!hasAuthoritativeSnapshot && !canInferCompletion) {
+  // 取消标记优先于 completed:done 可同时带 cancelled:true + raw.status
+  // 'completed'(main 侧 isSuccessfulCodexDoneEventData 同序判定)。渲染端若
+  // 只看 status 会先盖章退场,随后 main 持久化 turnCompleted:false 的 DB 行
+  // 广播到达,计划复活——即时 UI 与落库分叉。
+  // 成功判据与 main 的 isSuccessfulCodexDoneEventData 逐字同序:未取消 +
+  // raw.status === 'completed'。其余一切(status 为别的值、缺失、被 cancelled
+  // 覆盖)在归属明确的 turn 上都是失败终态。
+  //
+  // "缺失也算失败"很关键:main 对缺 status 的 done 同样写 turnCompleted:false,
+  // 若这里不落印记,渲染端会按旧数据兜底先退场,随后落库行带失败印记到达又把
+  // 计划判活 → 消失再闪回(review P2)。
+  const isSuccessfulTerminal = terminalStatus === 'completed' && cancelled !== true;
+  const sealsTurn = isSuccessfulTerminal && Boolean(turnId);
+  // terminalStatus === undefined = 调用方没在描述终态(仅套用权威快照的调用),
+  // 不落任何印记;null / 其它值都来自真实 done,按失败终态处理。
+  const stampsFailed = Boolean(turnId) && terminalStatus !== undefined && !isSuccessfulTerminal;
+  if (!authoritativeSnapshot && !sealsTurn && !stampsFailed) {
     return { messages, changed: false, toolUseId: null };
   }
   const expectedToolUseId = turnId ? `plan:${turnId}` : null;
@@ -600,39 +817,109 @@ export function applyCodexPlanSnapshotOnDone<
 
     const input = readRecord(toolInputOf(message));
     if (!Array.isArray(input?.plan)) continue;
-    // maker-core attaches the latest cached turn/plan/updated snapshot to done.
-    // When Codex omits its final plan update, that array still contains open
-    // items and is in progress rather than a terminal snapshot. Converge that
-    // cached progress (or the persisted row when no snapshot exists) only for a
-    // matching, explicitly successful turn. Without a turn id, an array can
-    // still be applied as supplied but completion must never be inferred for an
-    // unrelated last plan row.
-    const nextSnapshot = resolveCodexPlanSnapshotOnDone(
-      input.plan,
-      authoritativeSnapshot,
-      canInferCompletion,
-    );
-    if (!nextSnapshot) {
-      return { messages, changed: false, toolUseId: null };
-    }
-    if (samePlanSnapshot(input.plan, nextSnapshot)) {
+
+    const nextPlan = authoritativeSnapshot ?? input.plan;
+    const planChanged =
+      authoritativeSnapshot !== null && !samePlanSnapshot(input.plan, authoritativeSnapshot);
+    // Seal an already-sealed row again would be a no-op update that still
+    // restarts the capsule's grace timer, so treat it as unchanged.
+    const sealChanged = sealsTurn && message.terminalPlanSnapshot !== true;
+    const failChanged =
+      stampsFailed && message.terminalPlanSnapshot !== true && message.turnCompleted !== false;
+    if (!planChanged && !sealChanged && !failChanged) {
       return { messages, changed: false, toolUseId };
     }
 
+    // 生命周期印记(章 / 失败标记)同时写进顶层与 content:mobile 的 live-plan
+    // 缓存只保存 content(rememberLivePlanContent),overlay 会用这份缓存覆盖
+    // main 广播里已持久化的带章 content——章只在顶层的话,overlay 一盖计划就
+    // 永远"未盖章",下一 turn 的计划会把上一轮吞进同一 session。
+    const lifecycleStamp = {
+      ...(sealsTurn
+        ? {
+            terminalPlanSnapshot: true,
+            ...(typeof planUpdatedAtMs === 'number' && Number.isFinite(planUpdatedAtMs)
+              ? { terminalPlanAtMs: planUpdatedAtMs }
+              : {}),
+          }
+        : {}),
+      ...(failChanged ? { turnCompleted: false } : {}),
+    };
     const next = [...messages];
     next[index] = {
       ...message,
+      ...lifecycleStamp,
       ...(typeof planUpdatedAtMs === 'number' && Number.isFinite(planUpdatedAtMs)
         ? { planUpdatedAtMs }
         : {}),
       ...(message.toolInput !== undefined
-        ? { toolInput: { ...input, plan: nextSnapshot } }
+        ? { toolInput: { ...input, plan: nextPlan } }
         : {}),
       ...(content
-        ? { content: { ...content, input: { ...input, plan: nextSnapshot } } }
+        ? { content: { ...content, input: { ...input, plan: nextPlan }, ...lifecycleStamp } }
         : {}),
     };
     return { messages: next, changed: true, toolUseId };
+  }
+  return { messages, changed: false, toolUseId: null };
+}
+
+/**
+ * 同轮 steer 插话判定。**两套字段都认**:落库位置是 `agentMeta.delivery`
+ * (mobile 与 main 侧的原始行保持这个形状),desktop 渲染层把它投影成顶层
+ * `delivery` 后丢弃原 meta。只看顶层会让 mobile / main 的所有权回扫在插话行上
+ * 提前收手,全勾完的失败计划先按旧数据退场、等 main 的异步印记广播才复活
+ * (断连时要等到重新加载,review P2)。计划分组边界与失败回扫共用这一个谓词,
+ * 两处不再各自推导"什么算插话"。
+ */
+function isSteerUserRow(message: MessageRenderSourceMessageLike): boolean {
+  return message.delivery === 'steer' || message.agentMeta?.delivery === 'steer';
+}
+
+/**
+ * Live-side twin of main's `persistCodexPlanOnTerminalError`: a Codex turn that
+ * dies on a terminal `error` never gets a `done`, so nothing seals its plan row
+ * and nothing stamps `turnCompleted:false` in memory. Stamp the current turn's
+ * plan row here so the pinned capsule sees the task as alive immediately, in
+ * the window before the durable stamp's row broadcast arrives. Step statuses
+ * are untouched; already-sealed or already-stamped rows are left alone.
+ *
+ * Ownership boundary: only rows inside the failing turn's segment — after the
+ * latest turn-starting user message — may be stamped. Codex plan rows are
+ * per-turn (`plan:<turnId>` is created within its own turn), so the scan stops
+ * cold at the first user row that started a turn. What counts as "started a
+ * turn" is `isSyntheticUserRow`'s negation — the same predicate the plan
+ * grouping boundary uses, so steer interjections, auto-resume / scheduler
+ * dispatches, and subagent-internal user rows all keep the scan going instead of
+ * each surface re-deriving its own list. A failed turn that never emitted
+ * `update_plan` stamps nothing;
+ * reaching past the boundary would resurrect an unrelated historical plan
+ * (pre-seal-era all-done rows retire via the legacy fallback, and a stray
+ * failure stamp would flip them back to "alive" with no durable write to
+ * correct it — main's stamper correctly no-ops in that case).
+ */
+export function markCodexPlanTurnFailed<TMessage extends MessageRenderSourceMessageLike>(
+  messages: readonly TMessage[],
+): { messages: readonly TMessage[]; changed: boolean; toolUseId: string | null } {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === 'user' && !isSyntheticUserRow(message)) break;
+    if (message.role !== 'tool_use' || toolNameOf(message) !== 'update_plan') continue;
+    if (planRowSealOf(message).sealed || planRowTurnFailed(message)) {
+      return { messages, changed: false, toolUseId: null };
+    }
+    const next = [...messages];
+    // 印记同时落 content(与 applyCodexPlanSnapshotOnDone 同口径):mobile 的
+    // live-plan 缓存只存 content 并整体覆盖 overlay 之后的行,只写顶层的话
+    // 缓存一盖就把 main 广播的落库印记抹掉。
+    const content = readRecord(message.content);
+    next[index] = {
+      ...message,
+      turnCompleted: false,
+      ...(content ? { content: { ...content, turnCompleted: false } } : {}),
+    };
+    // toolUseId 回给调用方:mobile 按它把同一份 content 写回 live-plan 缓存。
+    return { messages: next, changed: true, toolUseId: toolUseIdOf(message) ?? null };
   }
   return { messages, changed: false, toolUseId: null };
 }
@@ -1394,15 +1681,26 @@ function groupActiveWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
  * 运行中(未到终态)的子 Agent 卡是折叠时的"可见锚点",绝不折进「工作过程」组:
  * 任务没完成就归档会谎报终态(典型:后台子 agent 仍在跑,父 turn 已产出最终正文)。
  * status 派生口径与 buildAgentTaskCardModel / 桌面 MessageStream 的 isRunningAgentTask
- * 完全一致(update.status 优先;否则有配对工具结果 secondaryBody 视为 completed、
- * 无则 running),保证「卡片显示运行中」与「是否折叠」永远同步。
- * 终态 = completed/failed/stopped。
+ * 完全一致:配对工具结果 secondaryBody 会把 stale running 收敛为 completed,
+ * 但不覆盖 failed/stopped 等明确终态,保证「卡片显示运行中」与「是否折叠」永远同步。
  */
 function isRunningAgentTaskItem<
   TMessage extends MessageRenderNormalizedMessage,
 >(item: MessageRenderItem<TMessage>): boolean {
   if (item.type !== 'agent_task') return false;
-  const status = item.update?.status ?? (item.toolCall?.secondaryBody ? 'completed' : 'running');
+  const status = deriveAgentTaskStatus(item.update?.status, item.toolCall?.secondaryBody, {
+    resultIsLaunchReceipt:
+      item.toolCall !== undefined &&
+      (subagentSpawnReceiptName(
+        toolNameOf(item.toolCall.source),
+        toolInputOf(item.toolCall.source),
+        item.toolCall.secondaryBody,
+      ) !== undefined
+        || subagentSpawnResultIndicatesRunning(
+          toolNameOf(item.toolCall.source),
+          item.toolCall.secondaryBody,
+        )),
+  });
   return status === 'running';
 }
 
@@ -1704,6 +2002,37 @@ function toolInputOf(message: MessageRenderSourceMessageLike): unknown {
   if (message.toolInput !== undefined) return message.toolInput;
   const content = readRecord(message.content);
   return content?.input;
+}
+
+/**
+ * host 的终态章可能在顶层字段(desktop live / hydrate 路径),也可能只在持久化
+ * content 里(mobile 直接渲染 main 广播的行,updateDbMessageContent 把章写进
+ * content)。session 边界与 insertion 的 sealed 判定都必须两处都认。
+ */
+function planRowSealOf(
+  message: MessageRenderSourceMessageLike | undefined,
+): { sealed: boolean; sealedAtMs?: number } {
+  if (!message) return { sealed: false };
+  const content = readRecord(message.content);
+  const sealed =
+    message.terminalPlanSnapshot === true ||
+    (message.terminalPlanSnapshot === undefined && content?.terminalPlanSnapshot === true);
+  if (!sealed) return { sealed: false };
+  const sealedAtMs =
+    typeof message.terminalPlanAtMs === 'number'
+      ? message.terminalPlanAtMs
+      : typeof content?.terminalPlanAtMs === 'number'
+        ? content.terminalPlanAtMs
+        : undefined;
+  return { sealed: true, ...(sealedAtMs !== undefined ? { sealedAtMs } : {}) };
+}
+
+/** 同 planRowSealOf:失败印记(turnCompleted:false)也认 content 里的持久化位置。 */
+function planRowTurnFailed(message: MessageRenderSourceMessageLike | undefined): boolean {
+  if (!message) return false;
+  if (message.turnCompleted === false) return true;
+  const content = readRecord(message.content);
+  return message.turnCompleted === undefined && content?.turnCompleted === false;
 }
 
 function toolUseIdOf(message: MessageRenderSourceMessageLike): string | undefined {

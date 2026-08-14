@@ -57,6 +57,28 @@ export function useFoldableExpandedState(
   return [expanded, toggleExpanded];
 }
 
+export function isFoldableBlockExpanded(blockId: string): boolean {
+  return store.isExpanded(blockId);
+}
+
+/**
+ * 订阅一组折叠卡的展开态；只在这些 block 的布尔快照变化时触发消费方重渲染。
+ * 空数组快照恒定，因此非分享态不会因任意卡片展开而重渲染会话页。
+ */
+export function useFoldableExpandedBlocksSnapshot(
+  blockIds: readonly string[],
+): string {
+  const subscribe = useCallback(
+    (listener: () => void) => store.subscribe(listener),
+    [],
+  );
+  const getSnapshot = useCallback(
+    () => blockIds.map((blockId) => (store.isExpanded(blockId) ? '1' : '0')).join(''),
+    [blockIds],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
 // ── Test internals ──────────────────────────────────────────────────────────
 // 仅供单测使用,生产代码不要消费。
 

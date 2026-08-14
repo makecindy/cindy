@@ -40,10 +40,13 @@ function stubElectron() {
 describe('loadAllCommands deviceId', () => {
   it('本地会话(无 deviceId):三源全本地,不碰隧道', async () => {
     const s = stubElectron();
-    const cmds = await loadAllCommands('claude-code', '/w');
+    const cmds = await loadAllCommands('claude-code', '/w', { sessionId: 'local-session' });
     expect(s.invoke).not.toHaveBeenCalled();
     expect(s.listAgentCommands).toHaveBeenCalledWith('claude-code');
-    expect(s.listAgentSkills).toHaveBeenCalled();
+    expect(s.listAgentSkills).toHaveBeenCalledWith('claude-code', {
+      workingDir: '/w',
+      sessionId: 'local-session',
+    });
     // 本地会话:goal 命令保留(可对本地 session 设目标)。
     expect(cmds.map((x) => x.name).sort()).toEqual(['compact', 'goal', 'help', 'localskill']);
   });
@@ -80,7 +83,12 @@ describe('loadAllCommands deviceId', () => {
 
   it('远程会话:agent-builtin / agent-skill 走隧道,desktop 仍本地', async () => {
     const s = stubElectron();
-    const cmds = await loadAllCommands('claude-code', '/host/path', undefined, 'dev-1');
+    const cmds = await loadAllCommands(
+      'claude-code',
+      '/host/path',
+      { sessionId: 'remote-session' },
+      'dev-1',
+    );
     // desktop 始终本地
     expect(s.listDesktopCommands).toHaveBeenCalled();
     // agent-builtin / agent-skill 不走本地、走隧道
@@ -89,7 +97,7 @@ describe('loadAllCommands deviceId', () => {
     expect(s.invoke).toHaveBeenCalledWith('dev-1', 'maker:list-agent-commands', ['claude-code']);
     expect(s.invoke).toHaveBeenCalledWith('dev-1', 'maker:list-agent-skills', [
       'claude-code',
-      { workingDir: '/host/path' },
+      { workingDir: '/host/path', sessionId: 'remote-session' },
     ]);
     // 结果 = 本地 desktop(help + goal,远程会话不再剔除)+ 被控端 builtin(host-cmd)+ 被控端 skill(host-skill)
     expect(cmds.map((x) => x.name).sort()).toEqual(['goal', 'help', 'host-cmd', 'host-skill']);

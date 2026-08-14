@@ -667,7 +667,9 @@ describe('sendToSession ordering', () => {
     expect(orcaWorkerCreationServiceSource).toContain(
       "return agent === 'codex' || agent === 'pi';",
     );
-    expect(orcaLifecycleServiceSource).toContain('createWorkerInTeam({ ...params, teamId: team.id })');
+    expect(orcaLifecycleServiceSource).toMatch(
+      /createWorkerInTeam\(\{\s*\n\s*\.\.\.params,\s*\n\s*teamId: team\.id,/,
+    );
   });
 
   it('delegates worker terminal runtime to OrcaTeamService', () => {

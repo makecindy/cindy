@@ -44,7 +44,7 @@ function FallbackNotice({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="mb-2 flex items-start gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-[11px] leading-relaxed text-[var(--text-secondary)]">
+    <div className="mb-2 flex items-start gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-11 leading-relaxed text-[var(--text-secondary)]">
       <AlertTriangle size={13} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />
       <span>
         <span className="font-medium text-[var(--text-primary)]">{t('rightSidebar.review.richPreview.fallbackTitle')}</span>
@@ -96,7 +96,7 @@ export function MarkdownDiffPreview({
 
   if (state.status === 'loading') {
     return (
-      <div className="flex min-h-[160px] items-center justify-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] text-[12px] text-[var(--text-tertiary)]">
+      <div className="flex min-h-[160px] items-center justify-center gap-2 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface)] text-12 text-[var(--text-tertiary)]">
         <Spinner size={16} />
         <span>{t('rightSidebar.review.richPreview.loading')}</span>
       </div>
@@ -124,7 +124,7 @@ export function MarkdownDiffPreview({
   return (
     <div
       data-review-markdown-preview="true"
-      className="min-w-0 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[13px] leading-relaxed text-[var(--text-primary)] [&_pre]:max-w-full [&_pre]:overflow-x-auto"
+      className="min-w-0 rounded-[8px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-13 leading-relaxed text-[var(--text-primary)] [&_pre]:max-w-full [&_pre]:overflow-x-auto"
     >
       <MarkdownRenderer
         workingDir={state.data.baseDir ?? ''}

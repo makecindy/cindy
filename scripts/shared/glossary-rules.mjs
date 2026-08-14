@@ -288,15 +288,16 @@ export function makeExemptChecker(list) {
 
 /**
  * 规则边界由现状数据定,不靠直觉(比例为引入本脚本时实测的 desktop locale):
- *  - 全角逗号 / 冒号:zh-CN 全角是主流(逗号 566:218、冒号 153:61)→ 规则成立。
+ *  - 全角逗号 / 冒号:zh-CN 全角是主流(逗号 566:218、冒号 153:61)，zh-TW 生成语料也统一
+ *    使用全角中文标点→ 规则成立。
  *    **ja 不适用**——日文 UI 惯例本就用半角冒号,实测半角 124:78 反而是主流,
  *    套用中文规则会制造 124 处假阳性。ko 同理不适用。
  *  - 省略号:zh-CN 140:44、ja 138:46、ko 138:46,三语一致以「…」为主流 → 全部适用。
  *    **en 同样适用**——不是靠现状数据,而是 DESIGN.md §11 Voice & Content 明文规定
  *    英文也用省略号字符「…」而非三个半角点。原先漏掉 en,等于让门禁替既有违规背书。
  */
-export const HALFWIDTH_PUNCT_LOCALES = new Set(['zh-CN']);
-export const ELLIPSIS_LOCALES = new Set(['en', 'zh-CN', 'ja', 'ko']);
+export const HALFWIDTH_PUNCT_LOCALES = new Set(['zh-CN', 'zh-TW']);
+export const ELLIPSIS_LOCALES = new Set(['en', 'zh-CN', 'zh-TW', 'ja', 'ko']);
 
 /**
  * 中文正文里的半角标点。两种形态:

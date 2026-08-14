@@ -7,10 +7,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Linking, Platform } from 'react-native';
-import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import { i18n } from '@/i18n';
 import {
+  APP_BINARY_VERSION,
   IS_OTA_SELFHOST,
   IS_TESTFLIGHT_BUILD,
   REVIEW_MODE,
@@ -128,7 +128,9 @@ export function useBundleUpdatePrompt({
       if (requestEpoch !== channelEpochRef.current) return 'skipped';
       const evaluation = evaluateBundleUpdate({
         currentRuntimeVersion: Updates.runtimeVersion,
-        currentVersion: Constants.expoConfig?.version ?? null,
+        // 强更门槛(minVersion)按原生真值比,避免热更后 expoConfig.version 被内嵌旧值
+        // 覆盖导致原生已达标的机器被误判为低于门槛、错误触发强更。
+        currentVersion: APP_BINARY_VERSION || null,
         latest,
       });
       if (evaluation.needsUpdate) {

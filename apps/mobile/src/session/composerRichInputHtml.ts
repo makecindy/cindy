@@ -11,7 +11,8 @@ import {
   COMPOSER_TEXT_FONT_SIZE,
   COMPOSER_TEXT_HORIZONTAL_PADDING,
   COMPOSER_TEXT_LINE_HEIGHT,
-  COMPOSER_TEXT_VERTICAL_PADDING,
+  composerTextPaddingForPlatform,
+  type ComposerTextPlatform,
 } from '@/session/composerTextMetrics';
 
 export interface ComposerRichInputTheme {
@@ -30,6 +31,7 @@ export interface ComposerRichInputConfig {
   editable: boolean;
   maxHeight: number;
   placeholder: string;
+  platform?: ComposerTextPlatform;
   theme: ComposerRichInputTheme;
 }
 
@@ -40,6 +42,7 @@ export interface ComposerRichInputConfig {
  */
 export function buildComposerRichInputHtml(config: ComposerRichInputConfig): string {
   const bootstrap = JSON.stringify(config).replace(/</g, '\\u003c');
+  const composerTextPadding = composerTextPaddingForPlatform(config.platform ?? 'ios');
   return `<!doctype html>
 <html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <style>
@@ -54,7 +57,7 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
     font-size: ${COMPOSER_TEXT_FONT_SIZE}px; line-height: ${COMPOSER_TEXT_LINE_HEIGHT}px;
     min-height: ${COMPOSER_SINGLE_LINE_HEIGHT}px; max-height: var(--max-height);
     overflow-y: auto; outline: none;
-    padding: ${COMPOSER_TEXT_VERTICAL_PADDING}px ${COMPOSER_TEXT_HORIZONTAL_PADDING}px;
+    padding: ${composerTextPadding.top}px ${COMPOSER_TEXT_HORIZONTAL_PADDING}px ${composerTextPadding.bottom}px;
     white-space: pre-wrap; overflow-wrap: anywhere; -webkit-user-select: text;
   }
   #editor:empty::before { content: attr(data-placeholder); color: var(--placeholder); pointer-events: none; }

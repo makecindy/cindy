@@ -30,7 +30,7 @@
  */
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Play, Undo } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -41,7 +41,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { WorktreeBadge } from '@/components/sidebar/WorktreeBadge';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { SessionRenameInput } from '../SessionRenameInput';
-import { usePrRefsForSession } from '@/contexts/PrRefsContext';
+import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
 import { SessionTooltip } from './SessionTooltip';
 import {
   DropdownMenu,
@@ -63,7 +63,8 @@ import {
 import { toast } from '@/lib/toast';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
-import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
+import { buildSessionInfoPieces, SessionInfoMeta } from './SessionInfoMeta';
+import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { highlightSegments } from '../lib/highlightSegments';
 import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
 import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
@@ -73,7 +74,10 @@ import {
   isEmptyDraftSession,
 } from '../lib/sessionDisplayTitle';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
-import { loadScheduleSidebarIndexRuns, type ScheduleSidebarIndexRun } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import {
+  loadScheduleSidebarIndexRuns,
+  type ScheduleSidebarIndexRun,
+} from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { useSchedulesSnapshot } from '@/features/scheduler/lib/schedulesStore';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
@@ -91,6 +95,12 @@ import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionAc
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
+import {
+  finishSessionDrag,
+  isSplitGroupDragSource,
+  needsDedicatedSplitGroupDragHandle,
+  startSessionDrag,
+} from '../splitGroupDnd';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
@@ -300,6 +310,17 @@ export const SessionItem = memo(function SessionItem({
 }: SessionItemProps) {
   const { t } = useTranslation();
   const prRefs = usePrRefsForSession(session.id);
+  // 任务信息复选(C 期):行右侧信息槽内容,与整理菜单同源共享状态。
+  const { fields: taskInfoFields } = useTaskInfoFields();
+  // 勾选 pr 且行渲染时注册为 PR 消费者:注册即拉取(远程会话含引用补拉),
+  // 此后 Provider 周期/聚焦统一刷新,失败自愈(usePrActions 的 value 恒定)。
+  const { registerPrConsumer } = usePrActions();
+  const wantsPrInfo = taskInfoFields.includes('pr');
+  const remoteDeviceId = session.deviceLinkDeviceId;
+  useEffect(() => {
+    if (!wantsPrInfo) return undefined;
+    return registerPrConsumer(session.id, remoteDeviceId);
+  }, [wantsPrInfo, remoteDeviceId, session.id, registerPrConsumer]);
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅(性能不变量第 2 条),
   // 非按住态恒为 null,不惊动 memo。
   const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
@@ -311,6 +332,16 @@ export const SessionItem = memo(function SessionItem({
     session.userSendAt && session.userSendAt > session.updatedAt
       ? session.userSendAt
       : session.updatedAt;
+  // PR 信息(C' 期):勾选且有引用时取最新一条(prRefs 已按 lastSeenAt 降序)。
+  const infoPrRef = taskInfoFields.includes('pr') ? prRefs[0] : undefined;
+  // 传 hasPrRef 让 PR 参与「按勾选顺序」排列(否则它恒在最前)。
+  const infoPieces = buildSessionInfoPieces(
+    session,
+    taskInfoFields,
+    activityIso,
+    t,
+    infoPrRef != null,
+  );
   // 右侧状态指示器五档优先级(高→低),色表全端统一(侧栏 / 卡片 / 灵动岛同一张表):
   //   1. error(出错终止 / 定时任务失败未读)→ 红点   —— 红专职表示"坏了"
   //   2. awaiting(等待回复/权限/计划审阅)→ TapTap 蓝点 —— "在等你",邀请而非告警
@@ -350,16 +381,22 @@ export const SessionItem = memo(function SessionItem({
           : remoteActivity.phase === 'running'
             ? ('running' as const)
             : ('done' as const);
-  const rightStatusKind = remoteRightStatus ?? resolveSidebarRightStatus({
-    attentionKind,
-    isUrgentFromContext,
-    isRunning,
-    hasAttentionNotification,
-  });
+  const rightStatusKind =
+    remoteRightStatus ??
+    resolveSidebarRightStatus({
+      attentionKind,
+      isUrgentFromContext,
+      isRunning,
+      hasAttentionNotification,
+    });
   const showRightStatus = rightStatusKind !== 'time';
-  const remoteIconKind = session.deviceLinkDeviceId ? 'device-link' : session.remoteHostId ? 'ssh' : null;
+  const remoteIconKind = session.deviceLinkDeviceId
+    ? 'device-link'
+    : session.remoteHostId
+      ? 'ssh'
+      : null;
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
-    ? session.deviceLinkConnectionStatus ?? 'connected'
+    ? (session.deviceLinkConnectionStatus ?? 'connected')
     : null;
   const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
@@ -390,7 +427,9 @@ export const SessionItem = memo(function SessionItem({
   // 组件卸载后 setState。null 明确表示「查过但没映射」,undefined 表示「还没查」——
   // 两者都不显示按钮,避免闪现。
   const shouldResolveSchedule = isAutomationGenerated && !insideAutomationGroup;
-  const [resolvedScheduleId, setResolvedScheduleId] = useState<string | null | undefined>(undefined);
+  const [resolvedScheduleId, setResolvedScheduleId] = useState<string | null | undefined>(
+    undefined,
+  );
   useEffect(() => {
     if (!shouldResolveSchedule) return;
     let cancelled = false;
@@ -416,8 +455,7 @@ export const SessionItem = memo(function SessionItem({
   const schedulesSnapshot = useSchedulesSnapshot();
   const scheduleStillExists =
     resolvedScheduleId != null &&
-    (schedulesSnapshot == null ||
-      schedulesSnapshot.some((s) => s.id === resolvedScheduleId));
+    (schedulesSnapshot == null || schedulesSnapshot.some((s) => s.id === resolvedScheduleId));
   const effectiveScheduleId = scheduleStillExists ? resolvedScheduleId : null;
   const handleAutomationRunClick = useCallback(async () => {
     if (!effectiveScheduleId) {
@@ -485,6 +523,7 @@ export const SessionItem = memo(function SessionItem({
   //      也不会触发。这种"用户明确想再看一眼"的语义由调用方通过
   //      imperative 路径(querySelector + scrollIntoNearestView)补一刀
   const rowRef = useRef<HTMLDivElement>(null);
+  const dragStartTargetRef = useRef<Element | null>(null);
 
   // ── Double-click rename ──
   const [isEditing, setIsEditing] = useState(false);
@@ -541,12 +580,52 @@ export const SessionItem = memo(function SessionItem({
     [displayTitle, isEditing, remoteWritesBlocked, t],
   );
 
+  // 置顶段使用原生 Sortable DnD：Sortable 负责侧栏内排序，原生 dragstart 同时写入
+  // 分屏 MIME，因此同一整行可以根据落点完成排序或拖入右侧。普通 forceFallback
+  // 列表仍保留原来的专用标题起手区，项目子任务则继续由 data-no-drag 隔离。
+  // 首帧先按 Sortable 容器处理，避免 ref effect 运行前短暂开启原生拖拽。
+  const [dragContainerState, setDragContainerState] = useState({
+    inSortableContainer: true,
+    sortableDragBlocked: false,
+    nativeSortable: false,
+  });
+  useEffect(() => {
+    const row = rowRef.current;
+    setDragContainerState({
+      inSortableContainer: Boolean(row?.closest('[data-sortable-id]')),
+      sortableDragBlocked: Boolean(row?.closest('[data-no-drag]')),
+      nativeSortable: Boolean(row?.closest('[data-sortable-native-dnd]')),
+    });
+  }, []);
+  const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
+  const splitDragEnabled = isSplitGroupDragSource({
+    editing: isEditing,
+    orcaRole: session.orcaRole,
+    ...dragContainerState,
+    hasDedicatedHandle: true,
+  });
+  const splitDragHandleActive = splitDragEnabled && needsSplitDragHandle;
+
+  const handleDragStart = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      startSessionDrag(event, {
+        sessionId: session.id,
+        deviceId: session.deviceLinkDeviceId,
+        label: displayTitle,
+        enabled: splitDragEnabled,
+        needsDedicatedHandle: needsSplitDragHandle,
+        dragStartTarget: dragStartTargetRef.current,
+      });
+      dragStartTargetRef.current = null;
+    },
+    [displayTitle, needsSplitDragHandle, session.deviceLinkDeviceId, session.id, splitDragEnabled],
+  );
+
   // isActive 由 false → true(或初次 mount 时即为 true)→ 把行滚进 viewport。
   // 同 active 重渲染 / 其它字段更新不触发(useEffect deps 只有 isActive)。
   useEffect(() => {
     if (isActive) scrollIntoNearestView(rowRef.current);
   }, [isActive]);
-
 
   // archivePending 生命周期：进入 pending → 起 4s 自动撤回 timer + document mousedown
   // 监听（点击不在 confirm 胶囊上就立刻撤回）。退出 pending → 全部清理。这两条退路确保
@@ -648,8 +727,8 @@ export const SessionItem = memo(function SessionItem({
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
-    void window.electronAPI.maker.openSessionInNewWindow(session.id);
-  }, [remoteWritesBlocked, session.id, t]);
+    void window.electronAPI.maker.openSessionInNewWindow(session.id, session.deviceLinkDeviceId);
+  }, [remoteWritesBlocked, session.deviceLinkDeviceId, session.id, t]);
 
   // 复制 cindy://session/<id> 深度链接到剪贴板。三个变体(标准/Pinned/Archived/Draft)
   // 共用此 handler — sessionId 始终存在(draft 也是 DB-backed 的 Session row)。
@@ -669,14 +748,10 @@ export const SessionItem = memo(function SessionItem({
   // 渲染成会话 chip)。原「复制会话 ID」二级菜单(深度链接 / 仅 ID / Agent)已按
   // 产品决策收敛为这一项;不自带分隔线,分组由各使用点决定,避免菜单被切得过碎。
   const copySessionIdSubmenu = (
-    <DropdownMenuItem
-      onSelect={() => void handleCopyDeepLinkSelect()}
-      className={MENU_ITEM_CLASS}
-    >
+    <DropdownMenuItem onSelect={() => void handleCopyDeepLinkSelect()} className={MENU_ITEM_CLASS}>
       {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
     </DropdownMenuItem>
   );
-
   const canMoveToProject =
     Boolean(onMoveSession) &&
     !isEmpty &&
@@ -727,8 +802,24 @@ export const SessionItem = memo(function SessionItem({
       ref={rowRef}
       data-session-id={session.id}
       data-sidebar-session-row="true"
+      data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
+      draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
       tabIndex={0}
+      onPointerDownCapture={(event) => {
+        dragStartTargetRef.current = event.target instanceof Element ? event.target : null;
+      }}
+      onPointerUpCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
+      onPointerCancelCapture={() => {
+        dragStartTargetRef.current = null;
+      }}
+      onDragStart={handleDragStart}
+      onDragEnd={(event) => {
+        dragStartTargetRef.current = null;
+        finishSessionDrag(event, session.id, session.deviceLinkDeviceId);
+      }}
       onPointerDown={(e) => {
         if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
           makerChatStore.ensureInitialMessages(session.id);
@@ -749,7 +840,13 @@ export const SessionItem = memo(function SessionItem({
         }
       }}
       onContextMenu={(e) => {
-        if (isEditing) return;
+        if (isEditing) {
+          // 重命名输入框上的右键交给系统的可编辑菜单(剪切/复制/粘贴,main 侧
+          // selection-context-menu),但必须拦下冒泡——否则会穿透到滚动容器的
+          // 空白处右键 handler,整理菜单和原生菜单叠着弹(2026-08-13 实机回归)。
+          e.stopPropagation();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         prefetchRemovalPreflight();
@@ -772,7 +869,8 @@ export const SessionItem = memo(function SessionItem({
         // 否则归档/取消归档后 DOM 列表重排,原 hover bg 在前一个屏幕位置上要
         // 跑完 150ms 渐变才褪掉,视觉上像是"旧行仍然选中,延迟才切到新行"。
         // 用 ProjectAction 同款瞬时反馈,跟 Cursor / Codex sidebar 的体感一致。
-        'text-sm font-medium text-left cursor-pointer',
+        'text-left text-sm font-medium',
+        !isEditing && 'cursor-pointer',
         // active 描边必须画在盒内且不参与布局。真实 border 会让固定宽高的
         // border-box 内容区四边各缩 1px,导致选中行的左侧 icon / 标题整体右移。
         isActive
@@ -822,7 +920,15 @@ export const SessionItem = memo(function SessionItem({
         //   也会直接返回原 string,所以两路渲染最终都走 truncate 容器。
         // 远程项目 icon 跟项目标题同口径:直接贴在标题右侧。标题过长时标题截断,
         // icon shrink-0 保持可见;右侧槽位只保留 worktree + 时间 + hover action。
-        <span className="min-w-0 flex flex-1 items-center gap-1.5">
+        <span
+          data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+          data-no-drag={splitDragHandleActive ? 'true' : undefined}
+          draggable={splitDragHandleActive}
+          className={cn(
+            'min-w-0 flex flex-1 items-center gap-1.5',
+            splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
+          )}
+        >
           {/* 绑定徽章优先于普通自动化 Timer:persistentSession 会话两者皆真,
               主图标统一为 Timer，绑定态额外承载频率/暂停信息。 */}
           {boundSchedules.length > 0 ? (
@@ -854,7 +960,9 @@ export const SessionItem = memo(function SessionItem({
               size={12}
               strokeWidth={1.8}
               connectionStatus={remoteIconConnectionStatus}
-              className={cn(isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon')}
+              className={cn(
+                isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
+              )}
             />
           )}
         </span>
@@ -894,16 +1002,9 @@ export const SessionItem = memo(function SessionItem({
             {showRightStatus ? (
               <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
             ) : (
-              <time
-                dateTime={activityIso}
-                title={formatSidebarTimeAbsolute(activityIso)}
-                className={cn(
-                  'min-w-0 truncate text-right text-xs font-medium tabular-nums',
-                  isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
-                )}
-              >
-                {formatSidebarTime(activityIso, t)}
-              </time>
+              // 任务信息复选(C 期):按用户勾选拼装 pr / tokens / cost / time;默认仅
+              // time,与旧时间槽渲染等价。全不选 → 槽位留空(min-w-14 仍保住 action 锚点)。
+              <SessionInfoMeta pieces={infoPieces} prRef={infoPrRef} isActive={isActive} />
             )}
           </div>
 
@@ -959,15 +1060,20 @@ export const SessionItem = memo(function SessionItem({
                   未归档 + 非 draft + 非远程只读。Edit 与左侧 Timer chip 同链路,不再重复
                   暴露;Run 走 main.maker.schedule.runNow,与 AutomationSessionGroupItem
                   组头 [Run ▶️][More ⋮] 保持高频直点、低频收纳的同构。 */}
-              {isAutomationGenerated && !insideAutomationGroup && !isArchived && !isEmpty && !remoteWritesBlocked && effectiveScheduleId && (
-                <SessionAction
-                  label={t('ccAgent.sidebar.automationGroup.menu.runNow')}
-                  onClick={() => void handleAutomationRunClick()}
-                  isActive={isActive}
-                >
-                  <Play size={14} strokeWidth={2} />
-                </SessionAction>
-              )}
+              {isAutomationGenerated &&
+                !insideAutomationGroup &&
+                !isArchived &&
+                !isEmpty &&
+                !remoteWritesBlocked &&
+                effectiveScheduleId && (
+                  <SessionAction
+                    label={t('ccAgent.sidebar.automationGroup.menu.runNow')}
+                    onClick={() => void handleAutomationRunClick()}
+                    isActive={isActive}
+                  >
+                    <Play size={14} strokeWidth={2} />
+                  </SessionAction>
+                )}
               <SessionAction
                 label={t('ccAgent.sidebar.sessionMenu.moreActions')}
                 onClick={(e) => {

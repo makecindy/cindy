@@ -175,6 +175,7 @@ describe('buildUserProvider (per-runtime)', () => {
       runtimes: { codex: { ...codexOnly.runtimes.codex!, headers: { 'X-Org': 'acme' } } },
     });
     expect(p.routing.codex?.headerOverride).toEqual({ 'X-Org': 'acme' });
+    expect(p.routing.codex?.headerOverrideState).toBe('configured');
   });
 
   it('carries modelsUrl into routing (edit-form round-trip), absent when unset', () => {

@@ -11,6 +11,7 @@
 
 import { getGhostManager, getGhostPipeDispatcher } from '../cindy-brain';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
+import { createLogger } from '../logger.js';
 import { ghostSecretSaved } from '../secrets/providerSecretStore';
 import {
   CINDY_GITHUB_GHOST_ID,
@@ -19,6 +20,7 @@ import {
 } from './githubUserIssueSubmitter';
 
 let sharedDeps: GithubUserIssueSubmitterDeps | null = null;
+const log = createLogger('github-issue/github-user');
 
 /**
  * 共享实例 —— 同一次「我的 Issue」查询里,身份解析与随后的搜索用同一个对象,
@@ -44,5 +46,6 @@ export function buildGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps {
     isGithubGhostDisabledForWorkdir: (workdir) =>
       isGhostDisabledForWorkdir(CINDY_GITHUB_GHOST_ID, workdir),
     callGhostTool: (request) => getGhostPipeDispatcher().callGhostTool(request),
+    logger: log,
   };
 }

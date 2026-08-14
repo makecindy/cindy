@@ -112,4 +112,42 @@ describe('createGhCliTokenSource', () => {
     expect(await Promise.all([p1, p2])).toEqual(['gho_x', 'gho_x']);
     expect(execFileFn).toHaveBeenCalledTimes(1);
   });
+
+  it('可用性探测只执行 gh auth status，不读取或污染 token cache', async () => {
+    const execFileFn = vi.fn(
+      (
+        _file: string,
+        args: string[],
+        opts: { timeout: number },
+        cb: ExecCb,
+      ) => {
+        if (args[1] === 'status') {
+          expect(opts.timeout).toBeLessThanOrEqual(1_000);
+          cb(null, 'logged in as octocat', '');
+        } else {
+          expect(opts.timeout).toBe(3_000);
+          cb(null, 'gho_after_probe', '');
+        }
+      },
+    );
+    const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
+    const expectedGhExecutable = process.platform === 'win32' ? 'gh.exe' : 'gh';
+
+    expect(await src.probeAvailability()).toBe(true);
+    expect(execFileFn).toHaveBeenCalledWith(
+      expectedGhExecutable,
+      ['auth', 'status', '--hostname', 'github.com'],
+      { timeout: expect.any(Number) },
+      expect.any(Function),
+    );
+    expect(await src.readToken()).toBe('gho_after_probe');
+    expect(execFileFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('可用性探测失败只返回 false，不把 stderr/输出写进日志', async () => {
+    const execFileFn = execMock((_file, cb) => cb(new Error('not logged in'), 'secret-like-output', ''));
+    const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
+    expect(await src.probeAvailability()).toBe(false);
+    expect(execFileFn).toHaveBeenCalledTimes(1);
+  });
 });

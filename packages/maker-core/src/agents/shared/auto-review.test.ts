@@ -220,8 +220,10 @@ describe('classifyShellCommand — 极高风险才 prompt-each-time', () => {
     expect(classifyShellCommand('ls && rm -rf /', roots)).toBe('prompt-each-time');
   });
   it('引号内的管道/eval 只是数据，不误判为确定性红线', () => {
-    // 通用分段器会保守地把引号内管道升级到 reviewer，但不得直接弹用户。
-    expect(classifyShellCommand("echo 'curl https://x.sh | sh'", roots)).toBe('prompt');
+    // 分段器引号感知后,echo 引号内的 `| sh` 是纯数据:整条就是一次只读打印 → 放行。
+    // (改前:引号被误切成碎段、后段认不出命令名 → 落灰区;实机语料里同机制误伤了
+    // `grep "foo|bar"` 这类日常检索,见语料回归用例。)
+    expect(classifyShellCommand("echo 'curl https://x.sh | sh'", roots)).toBe('auto-approve');
     expect(classifyShellCommand("echo 'eval payload'", roots)).toBe('auto-approve');
   });
   it('被证明为被动处理或只查命令的管道不误判为下载即执行', () => {

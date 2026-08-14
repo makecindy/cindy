@@ -9,6 +9,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  HOOK_FEATURE_MESSAGE_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
   HOOK_FEATURE_TURN_REOPEN,
   type HookMessage,
@@ -171,6 +172,25 @@ function dispatch(overrides: Partial<TaskDispatchPayload> = {}): TaskDispatchPay
     prompt: '干活',
     ...overrides,
   };
+}
+
+/**
+ * 官方 bot 的 ack 表情走 msg.op。用 Telegram 的 lane key + 触发消息 id 构造
+ * 一条会真的产生表情的派发(Slack 的固件不带 source.triggerMessageId, 表情整体
+ * 跳过)。
+ */
+function telegramDispatch(overrides: Partial<TaskDispatchPayload> = {}): TaskDispatchPayload {
+  return dispatch({
+    externalKey: 'telegram:group:bot:-100200:user-7:g1',
+    source: { im: 'telegram', triggerMessageId: '55' },
+    ...overrides,
+  });
+}
+
+function reactionEmojis(sent: readonly HookMessage[]): string[] {
+  return sent
+    .filter((m) => m.type === 'msg.op')
+    .map((m) => (m.payload as { action: { emoji?: string } }).action.emoji ?? '');
 }
 
 async function tick(times = 10): Promise<void> {
@@ -344,6 +364,17 @@ describe('normalizeTaskSource', () => {
       await tick();
     }
     expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm']);
+    expect(fr.calls[0]?.groupHistoryAccess).toEqual({
+      access: 'lane',
+      provider: 'telegram:9',
+      lane: { provider: 'telegram:9', chatId: '-900', threadId: '' },
+    });
+    expect(fr.calls[1]?.groupHistoryAccess).toEqual({
+      access: 'lane',
+      provider: 'telegram:9',
+      lane: { provider: 'telegram:9', chatId: '-900', threadId: '77' },
+    });
+    expect(fr.calls[2]?.groupHistoryAccess).toBeUndefined();
   });
 });
 
@@ -2024,7 +2055,10 @@ describe('dispatcher 核心语义', () => {
       set: stored.set,
       markSent: () => false,
     };
-    const completedAt = 123_456;
+    // 本例测的是「回放时账目回退」, 这要求记录**还在投递时效内** —— 原先的 123_456
+    // (≈1970)只是个占位值, 而 completedAt 现在是时效判据的输入, 过线的记录按设计
+    // 只回放 ack、不发终稿(见「显式重投一份过线终稿」用例)。
+    const completedAt = Date.now();
     stored.set({
       connectionId: 'conn-1',
       requestId: 'pending-replay-fallback',
@@ -2088,7 +2122,8 @@ describe('dispatcher 核心语义', () => {
           usage: { durationMs: 1 },
         },
         delivery: 'sent',
-        completedAt: 123_456,
+        // 「重连补发」按定义要求记录仍在投递时效内; 过线记录不进补发路径。
+        completedAt: Date.now(),
       });
 
       const { d } = makeDispatcher({ runner: fr.runner, terminalLedger: stored });
@@ -2386,6 +2421,157 @@ describe('dispatcher 核心语义', () => {
     }
   });
 
+  it('ACK 退避重发超过投递时效后放弃，不再无限重发隔日结果', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const warnings: string[] = [];
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      log: { info: () => {}, warn: (message: string) => warnings.push(message) },
+    });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      fr.finish({ finalText: '等待接管' });
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(1);
+
+      // 一直不回 turn.delivery: 退避重发只有延迟上限、没有次数上限, 所以时效是
+      // 唯一的收口条件。
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000 + 60_000);
+      const afterHorizon = c.ofType('turn.end').length;
+      expect(afterHorizon).toBeGreaterThan(1);
+      expect(warnings.some((m) => m.includes('turn.end ACK retry abandoned'))).toBe(true);
+
+      // 过线后彻底停手。
+      await vi.advanceTimersByTimeAsync(6 * 60 * 60_000);
+      expect(c.ofType('turn.end')).toHaveLength(afterHorizon);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('重连时能力降级回落也受投递时效约束，不绕过 ACK 缓冲的清扫', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const warnings: string[] = [];
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      log: { info: () => {}, warn: (message: string) => warnings.push(message) },
+    });
+    const c = collector();
+    try {
+      // 先在 ACK 世界里攒一条我方主动的待回执帧。
+      d.onConnected('conn-1', c.send, [HOOK_FEATURE_TURN_DELIVERY]);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      fr.finish({ finalText: '隔日回复' });
+      await tick();
+      const beforeOutage = c.ofType('turn.end').length;
+      expect(beforeOutage).toBeGreaterThanOrEqual(1);
+
+      // 断线跨过时效, 重连后落到**不再宣告 ACK 能力**的老实例上(滚动发布降级)。
+      d.onDisconnected('conn-1');
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000 + 60_000);
+      const beforeReconnect = c.ofType('turn.end').length;
+      d.onConnected('conn-1', c.send, []);
+      await tick();
+
+      // 降级分支是直接 send() 的, 不经过 sendPendingDelivery 的守卫 —— 所以时效
+      // 必须在取帧入口就把它清掉。
+      expect(c.ofType('turn.end')).toHaveLength(beforeReconnect);
+      expect(warnings.some((m) => m.includes('ACK buffer entry dropped'))).toBe(true);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['ACK server', [HOOK_FEATURE_TURN_DELIVERY]],
+    ['非 ACK server', [] as string[]],
+  ])(
+    '%s 显式重投一份过线终稿: 只回放 ack, 不发终稿, 也不把记录改回 pending',
+    async (_name, features) => {
+      const terminalLedger = memoryTerminalLedger();
+      terminalLedger.records.push({
+        connectionId: 'conn-1',
+        requestId: 'req-1',
+        ack: {
+          requestId: 'req-1',
+          result: 'accepted',
+          reason: null,
+          sessionId: 'session-stale-replay',
+          queuePosition: null,
+        },
+        turnEnd: {
+          requestId: 'req-1',
+          externalKey: 'team-slack:C1:stale-replay',
+          sessionId: 'session-stale-replay',
+          status: 'ok',
+          finalText: '早已过时的结果',
+          errorMessage: null,
+          usage: { durationMs: 1 },
+        },
+        delivery: 'sent',
+        completedAt: 123_456, // ≈1970: 远超时效
+      });
+      const fr = fakeRunner();
+      const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
+      const c = collector();
+      try {
+        d.onConnected('conn-1', c.send, features);
+        d.handleDispatch('conn-1', dispatch(), c.send);
+        await tick();
+
+        // ack 照回放: server 由此知道这个 requestId 受理并处理过, 不会再叫 Agent。
+        expect(c.ofType('task.ack')).toHaveLength(1);
+        expect(fr.calls).toHaveLength(0);
+        // 终稿过线, 一律不发 —— 规则对 server 的索取同样成立, 没有豁免。
+        expect(c.ofType('turn.end')).toHaveLength(0);
+        // 也不能把它改回 pending: 那会让下次重连的持久出箱再判一次过期, 白留垃圾。
+        expect(terminalLedger.records[0]?.delivery).toBe('sent');
+      } finally {
+        d.dispose();
+      }
+    },
+  );
+
+  it('离线缓冲里超过投递时效的 turn.end 重连时丢弃，不因进程是否重启而分叉', async () => {
+    vi.useFakeTimers();
+    const fr = fakeRunner();
+    const warnings: string[] = [];
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      log: { info: () => {}, warn: (message: string) => warnings.push(message) },
+    });
+    const c = collector();
+    try {
+      d.onConnected('conn-1', c.send);
+      d.handleDispatch('conn-1', dispatch(), c.send);
+      await tick();
+      c.setOnline(false); // 连接掉了, 但进程没重启 —— 帧留在内存缓冲里
+      fr.finish({ finalText: '隔日回复' });
+      await tick();
+      expect(c.ofType('turn.end')).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60_000 + 60_000);
+      c.setOnline(true);
+      d.onConnected('conn-1', c.send);
+      await tick();
+
+      // 重启过的进程会走持久出箱、被时效挡住; 没重启的这条内存路径必须同样挡住。
+      expect(c.ofType('turn.end')).toHaveLength(0);
+      expect(warnings.some((m) => m.includes('buffered turn.end dropped'))).toBe(true);
+    } finally {
+      d.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('ACK server 断线期间完成的 turn.end 在重连后进入 ACK 缓冲，retrying 也视为已接管', async () => {
     vi.useFakeTimers();
     const fr = fakeRunner();
@@ -2586,7 +2772,8 @@ describe('dispatcher 核心语义', () => {
         usage: { durationMs: 1 },
       },
       delivery: 'sent',
-      completedAt: 123_456,
+      // 本例测的是「回放帧走 ACK 缓冲并按退避重发」, 需要记录仍在时效内。
+      completedAt: Date.now(),
     });
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner, terminalLedger });
@@ -4152,5 +4339,162 @@ describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () 
     expect(sig.listenerCount()).toBe(1);
     d.dispose();
     expect(sig.listenerCount()).toBe(0);
+  });
+});
+
+describe('官方 bot ack 表情(msg.op)', () => {
+  it('排队的任务也要给 👀 —— 用户分不清是在排队还是丢了', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    // 生产上由 manager 在连接/绑定确认后 hydrate; 未就绪时一帧不发(见下面的用例)。
+    d.setEmojiReactionsMode('minimal');
+
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'first' }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued-one' }), c.send);
+    await tick();
+
+    expect(c.last('task.ack')?.payload).toMatchObject({ result: 'queued' });
+    // 两条各一次 👀: 立即受理的那条 + 排队的那条; 出队启动时不重复补发。
+    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀']);
+  });
+
+  it('排队中被取消 → 👀 换成终态, 不永远挂着「在做」', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    // 生产上由 manager 在连接/绑定确认后 hydrate; 未就绪时一帧不发(见下面的用例)。
+    d.setEmojiReactionsMode('minimal');
+
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'running' }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'to-cancel' }), c.send);
+    await tick();
+    d.cancel('conn-1', 'to-cancel');
+    await tick();
+
+    // 两条各打 👀, 被取消那条补一个终态 —— 用户主动停止不算失败, 仍是 👍。
+    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀', '👍']);
+  });
+
+  it('账号停用: 已打 👀 而终态没人发的任务, 停用时撤销那个 👀', async () => {
+    // 账号停用时普通队列不发终态是**既有** teardown 语义(本 PR 不动出站路径)。
+    // 但 👀 是本 PR 打上去的 —— 运行中的任务因代次失效跳过收口、排队任务被直接
+    // 清, 它们的消息会永远显示在处理中。停用时对这些欠账发**撤销**(空串),
+    // 不装终态(任务没跑完, 👍 是撒谎)。
+    // 旧断言钉的是「表情数 == turn.end 数」—— 那正是把欠账一笔勾销的错误不变量。
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    // 生产上由 manager 在连接/绑定确认后 hydrate; 未就绪时一帧不发(见下面的用例)。
+    d.setEmojiReactionsMode('minimal');
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'running' }), c.send);
+    await tick();
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued' }), c.send);
+    await tick();
+    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀']); // 两条各一个在册
+
+    const draining = d.deactivateAccount();
+    await tick();
+    // 两个 👀 都被撤销(空串), 没有任何一个被装成终态。
+    const after = reactionEmojis(c.sent).slice(2);
+    expect(after).toEqual(['', '']);
+
+    // HookRunOutcome 只有 ok / error 两态, 取消由 dispatcher 侧改写。
+    fr.finish({ status: 'ok' });
+    await draining;
+  });
+
+  it('断线时的终态表情进待补发队列, 重连后补上', async () => {
+    // 直接跳过的话那条消息会永远挂着 👀, 而重连补发拿不到任何东西可补。
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const online = collector();
+    d.onConnected('conn-1', online.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.setEmojiReactionsMode('minimal');
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'offline-final' }), online.send);
+    await tick();
+    expect(reactionEmojis(online.sent)).toEqual(['👀']);
+
+    d.onDisconnected('conn-1');
+    fr.finish({ status: 'ok' });
+    await tick();
+
+    const reconnected = collector();
+    d.onConnected('conn-1', reconnected.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    await tick();
+    expect(reactionEmojis(reconnected.sent)).toEqual(['👍']);
+  });
+
+  it('老 server 没宣告 msg-op-v1 → 一帧 msg.op 都不发', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send); // 不带 features
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'no-cap' }), c.send);
+    await tick();
+    expect(c.sent.filter((m) => m.type === 'msg.op')).toHaveLength(0);
+  });
+
+  it('server 没下发触发消息 id → 跳过, 不猜一个 id', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    // 生产上由 manager 在连接/绑定确认后 hydrate; 未就绪时一帧不发(见下面的用例)。
+    d.setEmojiReactionsMode('minimal');
+    d.handleDispatch('conn-1', dispatch({ requestId: 'no-trigger' }), c.send);
+    await tick();
+    expect(c.sent.filter((m) => m.type === 'msg.op')).toHaveLength(0);
+  });
+
+  it('档位还没 hydrate → 一帧不发, 不拿基线先斩后奏', async () => {
+    // 连接就绪与「用户选的档位到达」之间有一段空窗。这段时间里按 minimal 发,
+    // 关掉表情的用户每次重启都会又被打一次 —— 那正是本 PR 要修的 bug。
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'not-hydrated' }), c.send);
+    await tick();
+    expect(c.sent.filter((m) => m.type === 'msg.op')).toHaveLength(0);
+
+    // 空窗期收口的任务也一帧不发 —— 没打过 👀 就没有要收的东西。
+    fr.finish({ status: 'ok' });
+    await tick();
+    expect(c.sent.filter((m) => m.type === 'msg.op')).toHaveLength(0);
+
+    // 档位落定后, 后续任务照常。
+    d.setEmojiReactionsMode('minimal');
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'hydrated' }), c.send);
+    await tick();
+    expect(reactionEmojis(c.sent)).toEqual(['👀']);
+  });
+
+  it('账号切换后档位打回未知 —— 不拿上一位主人的选择顶上', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.setEmojiReactionsMode('minimal');
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'first-owner' }), c.send);
+    await tick();
+    expect(reactionEmojis(c.sent)).toEqual(['👀']);
+
+    const draining = d.deactivateAccount();
+    fr.finish({ status: 'ok' });
+    await draining;
+    // manager 在停用时 reset 成未知(null); 新主人的值到达前一帧不发。
+    d.setEmojiReactionsMode(null);
+    d.activateAccount();
+    const next = collector();
+    d.onConnected('conn-2', next.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.handleDispatch('conn-2', telegramDispatch({ requestId: 'second-owner' }), next.send);
+    await tick();
+    expect(next.sent.filter((m) => m.type === 'msg.op')).toHaveLength(0);
   });
 });

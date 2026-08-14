@@ -249,7 +249,7 @@ export function ContactsSection() {
           >
             {t('settings.contacts.manage')}
             {pendingCount > 0 && (
-              <span className="rounded-full bg-[var(--status-bar-accent)] px-1.5 text-11 leading-[16px] text-[var(--accent-pure-cta-fg)]">
+              <span className="rounded-full bg-[var(--status-bar-accent)] px-1.5 text-11 leading-[1.455] text-[var(--accent-pure-cta-fg)]">
                 {pendingCount}
               </span>
             )}

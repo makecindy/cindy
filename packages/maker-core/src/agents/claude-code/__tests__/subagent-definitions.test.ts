@@ -33,6 +33,25 @@ beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-subagent-'));
 });
 
+// Windows 开发机的 os.tmpdir() 位于用户 profile 之下,项目作用域的向上走查会路过真实的
+// `~/.claude/agents`(实现刻意对齐 cc 的平台语义,见 projectAgentsDirs 头注释,不是 bug)。
+// 测试只关心 fixture 内的定义:统一按 root 前缀过滤掉本机漏进来的真实定义,保持封闭。
+// 已知残余暴露:漏进来的真实文件仍消耗扫描预算(MAX_FILES=200)。预算类用例都是
+// 「远超上限抛错」形态不受影响;但若本机真实定义数量超过上限,常规用例会被顶爆——
+// 真到那天需要给实现加可注入的走查上界,而不是继续在测试里兜。
+async function discoverInFixture(
+  options: Parameters<typeof discoverSubagentDefinitions>[0],
+): ReturnType<typeof discoverSubagentDefinitions> {
+  const found = await discoverSubagentDefinitions(options);
+  const prefixes = new Set([root]);
+  try {
+    prefixes.add(await fs.realpath(root));
+  } catch {
+    /* fixture 根拿不到 realpath 时保持字面前缀 */
+  }
+  return found.filter((f) => [...prefixes].some((p) => f.filePath.startsWith(p + path.sep)));
+}
+
 afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -47,7 +66,7 @@ describe('discoverSubagentDefinitions', () => {
       '你负责搜 X。',
     );
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: wd,
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -66,7 +85,7 @@ describe('discoverSubagentDefinitions', () => {
     await writeAgent(dir, 'b.md', 'name: b\nmodel: "  "');
     await writeAgent(dir, 'c.md', 'name: c');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -82,7 +101,7 @@ describe('discoverSubagentDefinitions', () => {
       'name: security-review\nmodel: opus',
     );
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -99,7 +118,7 @@ describe('discoverSubagentDefinitions', () => {
       'name: dup\nmodel: opus',
     );
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: home },
     });
@@ -115,7 +134,7 @@ describe('discoverSubagentDefinitions', () => {
     await writeAgent(path.join(outer, '.claude', 'agents'), 'n.md', 'name: n\nmodel: far');
     await writeAgent(path.join(inner, '.claude', 'agents'), 'n.md', 'name: n\nmodel: near');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: inner,
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -128,7 +147,7 @@ describe('discoverSubagentDefinitions', () => {
     const home = path.join(root, 'home', '.claude');
     await writeAgent(path.join(home, 'agents'), 'u.md', 'name: u\nmodel: sonnet');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo-without-agents'),
       env: { CLAUDE_CONFIG_DIR: home },
     });
@@ -162,7 +181,7 @@ describe('discoverSubagentDefinitions', () => {
     );
     await fs.writeFile(path.join(dir, 'plain.md'), '没有 frontmatter 的普通 md\n', 'utf8');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -181,7 +200,7 @@ describe('discoverSubagentDefinitions', () => {
     // 故意让 process.env 指向另一个(空)目录:传入的 env 必须胜出。
     process.env.CLAUDE_CONFIG_DIR = path.join(root, 'wrong-home');
     try {
-      const found = await discoverSubagentDefinitions({
+      const found = await discoverInFixture({
         workingDir: path.join(root, 'repo-without-agents'),
         env: { CLAUDE_CONFIG_DIR: isolated },
       });
@@ -199,7 +218,7 @@ describe('discoverSubagentDefinitions', () => {
     const hostHome = path.join(root, 'host-home');
     await writeAgent(path.join(hostHome, 'agents'), 'h.md', 'name: from-host-env\nmodel: opus');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo-without-agents'),
       env: {},
       hostEnv: { CLAUDE_CONFIG_DIR: hostHome },
@@ -214,7 +233,7 @@ describe('discoverSubagentDefinitions', () => {
     await writeAgent(path.join(childHome, 'agents'), 'c.md', 'name: from-child-env\nmodel: opus');
     await writeAgent(path.join(hostHome, 'agents'), 'h.md', 'name: from-host-env\nmodel: opus');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo-without-agents'),
       env: { CLAUDE_CONFIG_DIR: childHome },
       hostEnv: { CLAUDE_CONFIG_DIR: hostHome },
@@ -245,7 +264,7 @@ describe('discoverSubagentDefinitions', () => {
     await fs.mkdir(agents, { recursive: true });
     await fs.symlink(path.join(real, 'reviewer.md'), path.join(agents, 'reviewer.md'));
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -261,7 +280,7 @@ describe('discoverSubagentDefinitions', () => {
     await fs.mkdir(agents, { recursive: true });
     await fs.symlink(real, path.join(agents, 'shared'), directoryLinkType);
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -281,7 +300,7 @@ describe('discoverSubagentDefinitions', () => {
       });
       expect(kind).toBeUndefined();
 
-      const found = await discoverSubagentDefinitions({
+      const found = await discoverInFixture({
         workingDir: path.join(root, 'repo'),
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
       });
@@ -294,7 +313,7 @@ describe('discoverSubagentDefinitions', () => {
       path.join(agents, 'dead.md'),
     );
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -308,7 +327,7 @@ describe('discoverSubagentDefinitions', () => {
     // agents/loop -> agents 自己
     await fs.symlink(agents, path.join(agents, 'loop'), directoryLinkType);
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -320,9 +339,10 @@ describe('discoverSubagentDefinitions', () => {
   // 于是又把覆盖用的 env 设回去。抛出来才能走调用方的显式降级。
   it('文件数超预算 → 抛 SubagentScanBudgetError', async () => {
     const agents = path.join(root, 'repo', '.claude', 'agents');
+    const maxFiles = 5;
     await fs.mkdir(agents, { recursive: true });
     await Promise.all(
-      Array.from({ length: 210 }, (_, i) =>
+      Array.from({ length: maxFiles + 1 }, (_, i) =>
         fs.writeFile(
           path.join(agents, `a${i}.md`),
           `---\nname: a${i}\ndescription: d\n---\nbody\n`,
@@ -332,9 +352,10 @@ describe('discoverSubagentDefinitions', () => {
     );
 
     await expect(
-      discoverSubagentDefinitions({
+      discoverInFixture({
         workingDir: path.join(root, 'repo'),
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
+        maxFiles,
       }),
     ).rejects.toBeInstanceOf(SubagentScanBudgetError);
   });
@@ -343,7 +364,7 @@ describe('discoverSubagentDefinitions', () => {
     await writeAgent(path.join(root, 'repo', '.claude', 'agents'), 'a.md', 'name: a');
     // now() 注入一个「已经超时」的起点,不依赖真实慢盘也能锁住这条分支。
     await expect(
-      discoverSubagentDefinitions({
+      discoverInFixture({
         workingDir: path.join(root, 'repo'),
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
         now: () => Date.now() - 60_000,
@@ -362,7 +383,7 @@ describe('discoverSubagentDefinitions', () => {
     );
 
     await expect(
-      discoverSubagentDefinitions({
+      discoverInFixture({
         workingDir: path.join(root, 'repo'),
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
         deadlineMs: 0,
@@ -373,7 +394,7 @@ describe('discoverSubagentDefinitions', () => {
   it('deadline 充裕时正常返回(定时器不会误伤正常路径)', async () => {
     await writeAgent(path.join(root, 'repo', '.claude', 'agents'), 'a.md', 'name: a\nmodel: opus');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
       deadlineMs: 5_000,
@@ -395,7 +416,7 @@ describe('discoverSubagentDefinitions', () => {
     const link = path.join(linkParent, 'app-link');
     await fs.symlink(workSub, link, directoryLinkType);
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: link,
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -415,7 +436,7 @@ describe('discoverSubagentDefinitions', () => {
       'utf8',
     );
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -435,7 +456,7 @@ describe('discoverSubagentDefinitions', () => {
     );
 
     await expect(
-      discoverSubagentDefinitions({
+      discoverInFixture({
         workingDir: path.join(root, 'repo'),
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
       }),
@@ -453,7 +474,7 @@ describe('discoverSubagentDefinitions', () => {
       'utf8',
     );
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -466,30 +487,34 @@ describe('discoverSubagentDefinitions', () => {
   // 同步排序还堵住事件循环让外层定时器都没机会触发。改 opendir 流式并就地封顶。
   it('单目录条目数超上限 → 抛(不物化、不排序)', async () => {
     const agents = path.join(root, 'repo', '.claude', 'agents');
+    const maxDirEntries = 5;
     await fs.mkdir(agents, { recursive: true });
     await Promise.all(
-      Array.from({ length: 520 }, (_, i) =>
+      Array.from({ length: maxDirEntries + 1 }, (_, i) =>
         fs.writeFile(path.join(agents, `x${i}.txt`), 'not a definition', 'utf8'),
       ),
     );
 
     await expect(
-      discoverSubagentDefinitions({
+      discoverInFixture({
         workingDir: path.join(root, 'repo'),
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
+        maxDirEntries,
       }),
     ).rejects.toBeInstanceOf(SubagentScanBudgetError);
   });
 
   // 深度上限也是预算:静默返回空会让上层判「没人声明 model」→ 又把覆盖用的 env 设回去。
   it('递归深度超上限 → 抛(不静默截断)', async () => {
-    const deep = path.join(root, 'repo', '.claude', 'agents', ...Array(10).fill('d'));
+    const maxDepth = 2;
+    const deep = path.join(root, 'repo', '.claude', 'agents', ...Array(3).fill('d'));
     await writeAgent(deep, 'x.md', 'name: deep\nmodel: opus');
 
     await expect(
-      discoverSubagentDefinitions({
+      discoverInFixture({
         workingDir: path.join(root, 'repo'),
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
+        maxDepth,
       }),
     ).rejects.toBeInstanceOf(SubagentScanBudgetError);
   });
@@ -503,7 +528,7 @@ describe('discoverSubagentDefinitions', () => {
     await writeAgent(agents, 'old.md.bak.1', 'name: bak-backup\nmodel: opus');
     await writeAgent(path.join(agents, '.archive'), 'z.md', 'name: in-hidden-dir\nmodel: opus');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -522,7 +547,7 @@ describe('discoverSubagentDefinitions', () => {
     await writeAgent(dir, 'a-plain.md', 'name: dup\ndescription: 没写 model');
     await writeAgent(dir, 'z-declared.md', 'name: dup\ndescription: 写了 model\nmodel: xai/grok-4.5');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -536,7 +561,7 @@ describe('discoverSubagentDefinitions', () => {
     await writeAgent(dir, 'a-declared.md', 'name: dup\ndescription: 写了 model\nmodel: opus');
     await writeAgent(dir, 'z-plain.md', 'name: dup\ndescription: 没写 model');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -555,7 +580,7 @@ describe('discoverSubagentDefinitions', () => {
       'name: dup\ndescription: 项目',
     );
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: home },
     });
@@ -572,7 +597,7 @@ describe('discoverSubagentDefinitions', () => {
       `name: hm\ndescription: d\nmodel: ${'x'.repeat(5000)}`,
     );
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -594,7 +619,7 @@ describe('discoverSubagentDefinitions', () => {
     );
     await writeAgent(path.join(inner, '.claude', 'agents'), 'n.md', 'name: n\ndescription: 近者没写');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: inner,
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -611,7 +636,7 @@ describe('discoverSubagentDefinitions', () => {
     await writeAgent(agents, 'x.md', 'name: dup\ndescription: 根下没写 model');
     await writeAgent(path.join(agents, 'review'), 'x.md', 'name: dup\ndescription: 子目录写了\nmodel: opus');
 
-    const found = await discoverSubagentDefinitions({
+    const found = await discoverInFixture({
       workingDir: path.join(root, 'repo'),
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'empty-home') },
     });
@@ -622,14 +647,14 @@ describe('discoverSubagentDefinitions', () => {
 
   it('目录不存在 / workingDir 非绝对路径都安全返回空,不抛错', async () => {
     await expect(
-      discoverSubagentDefinitions({
+      discoverInFixture({
         workingDir: path.join(root, 'nope'),
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'also-nope') },
       }),
     ).resolves.toEqual([]);
 
     await expect(
-      discoverSubagentDefinitions({
+      discoverInFixture({
         workingDir: 'relative/path',
         env: { CLAUDE_CONFIG_DIR: path.join(root, 'also-nope') },
       }),

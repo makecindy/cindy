@@ -67,7 +67,12 @@ export interface RoutableMaker {
   getContextUsage: FullMaker['getContextUsage'];
   setExtraDirs: FullMaker['setExtraDirs'];
   closeSession: FullMaker['closeSession'];
+  // 手动压缩(pi 原生 compact,capability-aware 的 maker:compact-session):
+  // 上下文环 / 会话菜单对 device-link 远程 pi 会话也要隧道到被控端执行
+  // (压缩的是被控端的会话上下文,控制端本机无该 live 会话,固定调本机必 null 静默失败)。
+  compactSession: FullMaker['compactSession'];
   enableOrca: FullMaker['enableOrca'];
+  dispatchOrcaUiAssignment: FullMaker['dispatchOrcaUiAssignment'];
   disableOrca: FullMaker['disableOrca'];
   input: Pick<
     FullMaker['input'],
@@ -163,7 +168,16 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     getContextUsage: t('maker:get-context-usage') as FullMaker['getContextUsage'],
     setExtraDirs: t('maker:set-extra-dirs') as FullMaker['setExtraDirs'],
     closeSession: t('maker:close-session') as FullMaker['closeSession'],
+    compactSession: ((sessionId, instructions) =>
+      invokeRemote(
+        deviceId,
+        'maker:compact-session',
+        instructions === undefined ? [sessionId] : [sessionId, instructions],
+      )) as FullMaker['compactSession'],
     enableOrca: t('maker:session:enable-orca') as FullMaker['enableOrca'],
+    dispatchOrcaUiAssignment: t(
+      'maker:worker:dispatch-ui-assignment',
+    ) as FullMaker['dispatchOrcaUiAssignment'],
     disableOrca: t('maker:session:disable-orca') as FullMaker['disableOrca'],
     input: {
       enqueue: t('maker:input:enqueue') as FullMaker['input']['enqueue'],
@@ -200,9 +214,13 @@ export function makerApiForDevice(deviceId: string): RoutableMaker {
 export function agentCapabilitiesForDevice(
   deviceId: string,
   agentKind: 'claude-code' | 'codex' | 'pi',
-): Promise<{ supportsOrcaWorkerPermissionMode?: boolean }> {
+): Promise<{
+  supportsOrcaWorkerPermissionMode?: boolean;
+  supportsDeferredOrcaUiAssignment?: boolean;
+}> {
   return invokeRemote(deviceId, 'maker:get-capabilities', [agentKind]) as Promise<{
     supportsOrcaWorkerPermissionMode?: boolean;
+    supportsDeferredOrcaUiAssignment?: boolean;
   }>;
 }
 

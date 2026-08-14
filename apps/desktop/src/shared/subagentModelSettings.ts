@@ -27,6 +27,8 @@ export interface SubagentModelSettings {
   codexEffort: CodexSubagentEffort | null;
   /** false → 注入 `-c agents.enabled=false`，对旧版多代理(V1)与 Sol/Terra(V2)都硬生效。 */
   codexSubagentsEnabled: boolean;
+  /** false → 不注入 Cindy 的 multi-agent mode hint，保留 Codex 原生调度策略。 */
+  codexUseCindySubagentPolicy: boolean;
   /** null = 跟随上游默认(V1=6 / V2=3 个子代理)；1..8 → 注入 max_concurrent_threads_per_session=N。 */
   codexMaxConcurrentSubagents: number | null;
   /** true → 注入 `-c agents.max_depth=2`。上游该键仅 V1 生效，V2 忽略（UI hint 已注明）。 */
@@ -76,6 +78,7 @@ export const SUBAGENT_MODEL_SETTINGS_DEFAULTS: SubagentModelSettings = {
   codexProviderId: null,
   codexEffort: null,
   codexSubagentsEnabled: true,
+  codexUseCindySubagentPolicy: true,
   codexMaxConcurrentSubagents: null,
   codexAllowNestedSubagents: false,
 };
@@ -92,6 +95,7 @@ export const SUBAGENT_MODEL_CARD_KEYS = [
 /** 设置 UI 的「Codex 子代理护栏」卡片键组。 */
 export const SUBAGENT_GUARDRAIL_KEYS = [
   'codexSubagentsEnabled',
+  'codexUseCindySubagentPolicy',
   'codexMaxConcurrentSubagents',
   'codexAllowNestedSubagents',
 ] as const satisfies readonly (keyof SubagentModelSettings)[];
@@ -104,6 +108,7 @@ export const CODEX_SPAWN_AFFECTING_KEYS = [
   'codex',
   'codexEffort',
   'codexSubagentsEnabled',
+  'codexUseCindySubagentPolicy',
   'codexMaxConcurrentSubagents',
   'codexAllowNestedSubagents',
 ] as const satisfies readonly (keyof SubagentModelSettings)[];
@@ -165,7 +170,7 @@ export function normalizeSubagentModelId(value: unknown): string | null {
  * codexEffort 有意不参与配对清理:`agents.default_subagent_reasoning_effort` 单独
  * 注入在上游是合法配置(子代理继承父模型、只改档位),手改设置文件表达它的能力按
  * 「隐藏配置也是正式契约」保留;UI 侧选「不指定」时会原子清 {codex, codexProviderId,
- * codexEffort} 三键,不产生意外孤儿。护栏三键互相独立,同样不参与。
+ * codexEffort} 三键,不产生意外孤儿。护栏四键互相独立,同样不参与。
  */
 export function reconcileSubagentModelSettingsPatch(
   patch: SubagentModelSettingsPatch,

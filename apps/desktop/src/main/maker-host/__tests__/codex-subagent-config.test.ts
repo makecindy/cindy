@@ -13,7 +13,7 @@ function settings(partial: Partial<SubagentModelSettings> = {}): SubagentModelSe
   return { ...SUBAGENT_MODEL_SETTINGS_DEFAULTS, ...partial };
 }
 
-// 子代理开启时恒注入的两个 features 段键(按需委托策略 + spawn 模型覆盖)。
+// 默认设置注入的两个 features 段键(Cindy 策略 + spawn 模型覆盖)。
 const DELEGATION_ARGS_PREFIXES = [
   'features.multi_agent_v2.multi_agent_mode_hint_text="',
   'features.multi_agent_v2.expose_spawn_agent_model_overrides=true',
@@ -25,7 +25,7 @@ function expectDelegationArgs(args: string[]): void {
   }
 }
 
-/** 去掉恒注入的 delegation 键值对(连同配对的 '-c'),只留设置驱动的 agents.* 部分。 */
+/** 去掉默认 feature 键值对(连同配对的 '-c'),只留设置驱动的 agents.* 部分。 */
 function withoutDelegationArgs(args: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i += 2) {
@@ -47,6 +47,34 @@ describe('buildCodexSubagentSpawnArgs', () => {
     }
   });
 
+  it('uses Codex native scheduling when the Cindy policy is off', () => {
+    const args = buildCodexSubagentSpawnArgs(
+      settings({
+        codexUseCindySubagentPolicy: false,
+        codex: 'gpt-5.6-terra',
+        codexEffort: 'high',
+        codexMaxConcurrentSubagents: 4,
+        codexAllowNestedSubagents: true,
+      }),
+    );
+    expect(
+      args.some((arg) =>
+        arg.startsWith('features.multi_agent_v2.multi_agent_mode_hint_text='),
+      ),
+    ).toBe(false);
+    expect(args).toContain('features.multi_agent_v2.expose_spawn_agent_model_overrides=true');
+    expect(withoutDelegationArgs(args)).toEqual([
+      '-c',
+      'agents.default_subagent_model="gpt-5.6-terra"',
+      '-c',
+      'agents.default_subagent_reasoning_effort="high"',
+      '-c',
+      'agents.max_concurrent_threads_per_session=4',
+      '-c',
+      'agents.max_depth=2',
+    ]);
+  });
+
   it('keeps the delegation hint within the upstream 400-token budget', () => {
     // 上游 MULTI_AGENT_MODE_MAX_TOKENS=400;粗算 4 chars/token,留足余量。
     const hintArg = buildCodexSubagentSpawnArgs(settings()).find((arg) =>
@@ -62,6 +90,7 @@ describe('buildCodexSubagentSpawnArgs', () => {
       buildCodexSubagentSpawnArgs(
         settings({
           codexSubagentsEnabled: false,
+          codexUseCindySubagentPolicy: false,
           codex: 'gpt-5.6-terra',
           codexEffort: 'high',
           codexMaxConcurrentSubagents: 3,

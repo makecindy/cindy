@@ -31,6 +31,12 @@ import {
  */
 export interface ConnectionReadOptions {
   allowSideEffects: boolean;
+  /**
+   * Wait for post-claim model discovery before materializing this snapshot.
+   * This is an internal readiness hint for routing callers; ordinary provider reads
+   * intentionally keep the low-latency/LKG behavior even when side effects are allowed.
+   */
+  waitForDiscovery?: boolean;
 }
 
 export interface ProviderListOptions extends ConnectionReadOptions {
@@ -39,6 +45,12 @@ export interface ProviderListOptions extends ConnectionReadOptions {
    * rather than the user-selectable projection. Never sourced from IPC input.
    */
   catalog?: Catalog;
+  /**
+   * Internal lazy full-catalog override. Policy callers use this when an allowed connection read
+   * may claim credentials and refresh dynamic models before the provider view is materialized.
+   * Evaluated after every async connection reader settles; never sourced from IPC input.
+   */
+  getCatalog?: () => Catalog;
 }
 
 /** 内置三家供应商「是否已连接」的判定器（由 host 注入，读各自凭证存储）。 */
@@ -111,14 +123,17 @@ export interface ProviderService {
  */
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
   async function listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]> {
-    const readOpts: ConnectionReadOptions = { allowSideEffects: opts?.allowSideEffects === true };
+    const readOpts: ConnectionReadOptions = {
+      allowSideEffects: opts?.allowSideEffects === true,
+      waitForDiscovery: opts?.waitForDiscovery === true,
+    };
     const [xd, anthropic, openai, xai] = await Promise.all([
       Promise.resolve(deps.connection.xd(readOpts)),
       Promise.resolve(deps.connection.anthropic(readOpts)),
       Promise.resolve(deps.connection.openai(readOpts)),
       Promise.resolve(deps.connection.xai(readOpts)),
     ]);
-    const catalog = opts?.catalog ?? deps.getCatalog();
+    const catalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
     const connected: ConnectionState = { xd, anthropic, openai, xai };
     // 自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」替代「连接 / 断开」，
     // 没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。

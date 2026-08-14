@@ -24,7 +24,10 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { runWithLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
 import type { Logger } from '@cindy/maker-core';
-import { createCodexMcpThreadContextStore } from './codexMcpThreadContextStore.js';
+import {
+  createCodexMcpThreadContextStore,
+  isSameCodexMcpSessionContext,
+} from './codexMcpThreadContextStore.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
 
 const SERVER_HEADER = 'Lizi_MCPS/1.0';
@@ -537,15 +540,20 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
       }
       if (!activeContext) {
         const threadId = extractCodexThreadId(parsedBody);
-        activeContext = contextForThreadRoute(
-          threadContextStore.getContextForThreadId(threadId),
+        activeContext = contextForRequestRoute(
+          parsedBody,
+          threadContextStore,
           threadInstanceQuery,
         );
-        let decision: 'no_thread_id' | 'thread_unregistered' | 'ctx_resolved';
+        let decision:
+          | 'no_thread_id'
+          | 'thread_unregistered'
+          | 'thread_resolved'
+          | 'instance_resolved';
         if (!threadId) {
-          decision = 'no_thread_id';
+          decision = activeContext ? 'instance_resolved' : 'no_thread_id';
         } else if (activeContext) {
-          decision = 'ctx_resolved';
+          decision = 'thread_resolved';
         } else {
           decision = 'thread_unregistered';
         }
@@ -561,7 +569,8 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     if (
       !sessionTokenCtx &&
       threadInstanceQuery !== null &&
-      hasUnverifiedInstanceBoundToolCall(parsedBody, threadContextStore, threadInstanceQuery)
+      hasToolCall(parsedBody) &&
+      !activeContext
     ) {
       res.statusCode = 401;
       res.end('Session instance mismatch');
@@ -667,31 +676,6 @@ interface BlockedToolCall {
   context?: LiziMcpSessionContext;
 }
 
-/**
- * `tools/call`s from two different Codex threads coalesced into one JSON-RPC
- * batch. There is no single session context the request could run under, and
- * `extractCodexThreadId` correctly refuses to pick one — but "no context" means
- * the transport would run both calls with an EMPTY AsyncLocalStorage context,
- * and every provider that reads it (cindy_browser's `__mcpSessionId`, …) would
- * fall back to host-side UI-focus inference. That is the exact cross-session
- * mis-routing this boundary exists to prevent, so refusing to pick has to mean
- * refusing to run — fail closed, not fail open to whatever the user is looking
- * at. (Both threads being registered and enabled means the per-call checks
- * below cannot catch this shape.)
- */
-function hasAmbiguousThreadContext(messages: unknown[]): boolean {
-  let seen: string | undefined;
-  for (const message of messages) {
-    if (!isToolCallMessage(message)) continue;
-    const threadId = extractCodexThreadIdFromMessage(message);
-    // Undefined is `missing_thread_context`'s job, not ambiguity's.
-    if (!threadId) continue;
-    if (seen && seen !== threadId) return true;
-    seen = threadId;
-  }
-  return false;
-}
-
 function findBlockedToolCall(
   body: unknown,
   threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>,
@@ -700,11 +684,8 @@ function findBlockedToolCall(
   threadInstanceQuery: string | null = null,
 ): BlockedToolCall | undefined {
   const messages = Array.isArray(body) ? body : [body];
-  // ?session= 路由时 threadId 不参与任何判定 (强优先, 见下), ambiguity
-  // 检查同样豁免 — 否则伪造/串台的 batch threadId 反而有语义效力。
-  if (!sessionTokenCtx && hasAmbiguousThreadContext(messages)) {
-    return { reason: 'ambiguous_thread_context' };
-  }
+  const toolCallContexts: LiziMcpSessionContext[] = [];
+  let resolvedContext: LiziMcpSessionContext | undefined;
   for (const message of messages) {
     if (!isToolCallMessage(message)) continue;
     // Resolve each tools/call independently. Batch siblings such as MCP
@@ -714,11 +695,9 @@ function findBlockedToolCall(
     // fail-closed, 请求体的 _meta.threadId 不得覆盖 policy ctx —— 否则伪造
     // 一个已注册 threadId 就能绕过本 session 冻结的 built-in plugin
     // disabled policy (执行态身份同样是 sessionTokenCtx 强优先)。
-    const threadId = extractCodexThreadIdFromMessage(message);
-    const context = sessionTokenCtx ?? contextForThreadRoute(
-      threadContextStore.getContextForThreadId(threadId),
-      threadInstanceQuery,
-    );
+    const context =
+      sessionTokenCtx ??
+      contextForToolCallRoute(message, threadContextStore, threadInstanceQuery);
     // Ordinary built-in providers are initialized globally, so the bridge is
     // their only deterministic per-thread policy boundary. A malformed or
     // stale client must not bypass that boundary by omitting an id or naming
@@ -726,6 +705,13 @@ function findBlockedToolCall(
     if (!context) {
       return { reason: 'missing_thread_context' };
     }
+    if (resolvedContext && !isSameCodexMcpSessionContext(resolvedContext, context)) {
+      return { reason: 'ambiguous_thread_context' };
+    }
+    resolvedContext ??= context;
+    toolCallContexts.push(context);
+  }
+  for (const context of toolCallContexts) {
     const raw = context?.vendorOptions?.[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY];
     if (Array.isArray(raw) && raw.some((id) => id === pluginId)) {
       return { reason: 'disabled', context };
@@ -748,19 +734,56 @@ function contextForThreadRoute(
   return context.sessionInstanceId === instanceQuery ? context : undefined;
 }
 
-function hasUnverifiedInstanceBoundToolCall(
+function contextForRequestRoute(
   body: unknown,
   threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>,
-  instanceQuery: string,
-): boolean {
+  instanceQuery: string | null,
+): LiziMcpSessionContext | undefined {
   const messages = Array.isArray(body) ? body : [body];
+  let resolved: LiziMcpSessionContext | undefined;
+  let sawToolCall = false;
   for (const message of messages) {
     if (!isToolCallMessage(message)) continue;
-    const threadId = extractCodexThreadIdFromMessage(message);
-    const context = threadContextStore.getContextForThreadId(threadId);
-    if (!threadId || context?.sessionInstanceId !== instanceQuery) return true;
+    sawToolCall = true;
+    const context = contextForToolCallRoute(message, threadContextStore, instanceQuery);
+    if (!context || (resolved && !isSameCodexMcpSessionContext(resolved, context))) {
+      return undefined;
+    }
+    resolved = context;
   }
-  return false;
+  if (sawToolCall) return resolved;
+  const threadId = extractCodexThreadId(body);
+  if (threadId) {
+    return contextForThreadRoute(
+      threadContextStore.getContextForThreadId(threadId),
+      instanceQuery,
+    );
+  }
+  return instanceQuery === null
+    ? undefined
+    : threadContextStore.getContextForSessionInstanceId(instanceQuery);
+}
+
+function contextForToolCallRoute(
+  message: unknown,
+  threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>,
+  instanceQuery: string | null,
+): LiziMcpSessionContext | undefined {
+  const threadId = extractCodexThreadIdFromMessage(message);
+  if (threadId) {
+    // 声明过 threadId 却未注册/已过期时不得回退 instance，避免掩盖串台。
+    return contextForThreadRoute(
+      threadContextStore.getContextForThreadId(threadId),
+      instanceQuery,
+    );
+  }
+  return instanceQuery === null
+    ? undefined
+    : threadContextStore.getContextForSessionInstanceId(instanceQuery);
+}
+
+function hasToolCall(body: unknown): boolean {
+  return (Array.isArray(body) ? body : [body]).some(isToolCallMessage);
 }
 
 function withoutSessionInstanceId(
@@ -782,7 +805,7 @@ function writeBlockedToolCallResponse(
     ? `Built-in tool "${pluginId}" is disabled for this session. Enable it in Settings and start a new session to apply the change.`
     : reason === 'ambiguous_thread_context'
       ? `Built-in tool "${pluginId}" received calls from more than one session in a single batch and cannot tell them apart. Retry the calls one session at a time.`
-      : `Built-in tool "${pluginId}" could not verify this session's tool policy. Start a new session and try again.`;
+      : `Built-in tool "${pluginId}" could not bind this call to a verified Cindy session. This is a session-routing problem, not a plugin setup problem. Start a new task and try again.`;
   const disabledResult = (id: unknown) => ({
     jsonrpc: '2.0',
     id: id ?? null,

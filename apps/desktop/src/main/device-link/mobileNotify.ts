@@ -21,17 +21,6 @@ const CATEGORY_BY_KIND: Record<MobileSessionEventKind, NotifyCategory> = {
 };
 
 /**
- * 无内容摘要时的回退正文,与桌面 toast(notificationService.buildBody)同文案。
- * 有意不共享常量:notificationService 反向 import 本模块发送 mobile 通道,
- * 共享会引入运行时环。
- */
-const BODY_BY_KIND: Record<MobileSessionEventKind, string> = {
-  done: '已完成 ✓',
-  error: '执行失败',
-  'needs-reply': '需要你回复',
-};
-
-/**
  * 组装 notify payload。deepLink 用 scheme 无关的应用内路径(手机端点击通知后自行
  * router.push),规避 cn/global 两条构建线 scheme 不同的问题。
  * 正文取 detail(该会话最近一条 assistant 内容 / 定时任务结果摘要)——2026-07 产品
@@ -43,6 +32,8 @@ export function buildSessionNotifyPayload(opts: {
   title: string;
   kind: MobileSessionEventKind;
   selfDeviceId: string;
+  /** 由 main host 按发送时的当前 locale 解析；本纯模块不依赖 Electron i18n。 */
+  fallbackBody: string;
   /** 内容摘要(可选):折叠空白后按协议上限截断 */
   detail?: string;
 }): NotifyPayload {
@@ -54,7 +45,7 @@ export function buildSessionNotifyPayload(opts: {
   return {
     category: CATEGORY_BY_KIND[opts.kind],
     title: safeTitle,
-    body: detail || BODY_BY_KIND[opts.kind].slice(0, NOTIFY_BODY_MAX_LENGTH),
+    body: detail || opts.fallbackBody.slice(0, NOTIFY_BODY_MAX_LENGTH),
     deepLink: `/sessions/${encodeURIComponent(opts.sessionId)}?deviceId=${encodeURIComponent(opts.selfDeviceId)}`,
     // 同会话的通知在系统层合并(APNs collapse-id / thread-id);混入 srcDeviceId,
     // 多台桌面推同名会话时互不顶替。原样拼接不可行:deviceId 可能是 64 位

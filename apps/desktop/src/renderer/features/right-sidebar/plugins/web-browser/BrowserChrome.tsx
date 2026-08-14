@@ -259,7 +259,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
             onBlur={handleBlur}
             placeholder={t('rightSidebar.browser.urlPlaceholder')}
             className={cn(
-              'min-w-0 flex-1 bg-transparent text-[12px] leading-none text-[var(--text-primary)]',
+              'min-w-0 flex-1 bg-transparent text-12 leading-none text-[var(--text-primary)]',
               'placeholder:text-[var(--text-tertiary)] outline-none',
             )}
           />
@@ -268,7 +268,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
             type="button"
             onClick={beginEdit}
             // 整个 pill 中部区域都可点 → 进编辑态。truncate 让长 URL 单行省略。
-            className="min-w-0 flex-1 truncate text-left text-[12px] leading-none text-[var(--text-primary)]"
+            className="min-w-0 flex-1 truncate text-left text-12 leading-none text-[var(--text-primary)]"
             title={url}
           >
             {displayValue}

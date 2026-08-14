@@ -2,11 +2,49 @@ import { describe, expect, it } from 'vitest';
 
 import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.js';
 import {
+  buildClaudeOrcaCallerProvenanceHooks,
+  buildClaudeRemoteOrcaCallerGuards,
   buildClaudeLocalToolGuardHooks,
   buildClaudeRemoteToolGuards,
   buildClaudeSkillOverrides,
   mergeClaudeHookSets,
+  ORCA_SEND_TO_LEAD_TOOL_NAME,
 } from '../capability-routing.js';
+
+describe('Claude Orca caller provenance', () => {
+  it('allows the root locally but denies a native subagent before MCP dispatch', async () => {
+    const hook = buildClaudeOrcaCallerProvenanceHooks().PreToolUse?.[0]?.hooks[0];
+    if (!hook) throw new Error('expected Orca caller provenance hook');
+    const input = {
+      hook_event_name: 'PreToolUse' as const,
+      session_id: 'session-orca-worker',
+      transcript_path: '/tmp/transcript',
+      cwd: '/repo',
+      tool_name: ORCA_SEND_TO_LEAD_TOOL_NAME,
+      tool_input: { worker_id: 'forged-worker-id' },
+      tool_use_id: 'tool-orca-report',
+    };
+
+    await expect(hook(input, 'tool-orca-report', {
+      signal: new AbortController().signal,
+    })).resolves.toEqual({ continue: true });
+    await expect(hook({ ...input, agent_id: 'native-child-1' }, 'tool-orca-report', {
+      signal: new AbortController().signal,
+    })).resolves.toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'deny' },
+    });
+  });
+
+  it('serializes one exact root-only guard for a remote Orca worker', () => {
+    expect(buildClaudeRemoteOrcaCallerGuards(true)).toEqual([{
+      toolNamePrefix: ORCA_SEND_TO_LEAD_TOOL_NAME,
+      sourceServerId: 'orca_worker_bridge',
+      invocation: 'root-only',
+      denialMessage: 'NESTED_AGENT_NOT_ALLOWED: nested agent cannot report directly to the lead',
+    }]);
+    expect(buildClaudeRemoteOrcaCallerGuards(false)).toEqual([]);
+  });
+});
 
 describe('buildClaudeSkillOverrides', () => {
   it('maps host policy to Claude Code native skill visibility', () => {

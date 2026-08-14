@@ -16,7 +16,7 @@ interface VendorReadinessBadgeProps {
 
 export function VendorReadinessBadge({ readiness }: VendorReadinessBadgeProps) {
   if (readiness === 'loading') {
-    return <span className="text-[10px] text-muted-foreground" aria-label="loading">●</span>;
+    return <span className="text-10 text-muted-foreground" aria-label="loading">●</span>;
   }
   return <span aria-label={readiness}>{BADGE_MAP[readiness]}</span>;
 }

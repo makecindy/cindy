@@ -128,7 +128,7 @@ function WorkerErrorBadge({ className }: { className?: string }) {
     <span
       aria-label={t('orca.rolePill.errorBadgeAria')}
       className={cn(
-        'pointer-events-none inline-flex items-center rounded-full bg-[var(--error-fg)] px-1.5 text-[9px] font-semibold uppercase leading-[1.5] tracking-[0.3px] text-[var(--error-bg)]',
+        'pointer-events-none inline-flex items-center rounded-full bg-[var(--error-fg)] px-1.5 text-10 font-semibold uppercase leading-[1.5] tracking-[0.3px] text-[var(--error-bg)]',
         className,
       )}
     >
@@ -244,7 +244,7 @@ function WorkerSummary({
       <div
         className={cn(
           'flex items-center gap-2 leading-snug',
-          compact ? 'text-[11px]' : 'text-[13px]',
+          compact ? 'text-11' : 'text-13',
         )}
       >
         <WorkerAvatar
@@ -285,7 +285,7 @@ function WorkerSummary({
         )}
       </div>
       {!compact && (
-        <div className="mt-0.5 ml-[26px] flex items-center gap-1.5 text-[11px] leading-snug text-[var(--text-tertiary)]">
+        <div className="mt-0.5 ml-[26px] flex items-center gap-1.5 text-11 leading-snug text-[var(--text-tertiary)]">
           <span>{simplifyModelName(worker.model)}</span>
           <EffortBars effort={worker.effort} />
         </div>
@@ -370,7 +370,7 @@ function WorkerLayoutMenu({
           className="absolute right-0 top-full z-50 mt-1 w-[190px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
           style={{ boxShadow: 'var(--shadow-menu)' }}
         >
-          <div className="select-none px-2.5 py-1.5 text-[10px] font-medium leading-snug text-[var(--text-tertiary)]">
+          <div className="select-none px-2.5 py-1.5 text-10 font-medium leading-snug text-[var(--text-tertiary)]">
             {t('orca.rolePill.layoutMenuLabel')}
           </div>
           {rows.map((row) => {
@@ -379,7 +379,7 @@ function WorkerLayoutMenu({
               <button
                 key={row.value}
                 type="button"
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] leading-snug text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-12 leading-snug text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
                 onClick={() => {
                   onLayoutChange(row.value);
                   setOpen(false);
@@ -542,7 +542,7 @@ function WorkerTabsList({
                   type="button"
                   ref={selected ? focusedTabRef : undefined}
                   className={cn(
-                    'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border py-0 pl-2 pr-6 text-[11px] leading-none transition-colors',
+                    'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border py-0 pl-2 pr-6 text-11 leading-none transition-colors',
                     selected
                       ? isError
                         ? 'border-[var(--error-fg)] bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
@@ -634,7 +634,7 @@ export function WorkerListToolbar({
   if (!worker) {
     return (
       <div className={cn('flex min-w-0 flex-1 items-center gap-1', className)}>
-        <span className="min-w-0 flex-1 select-none truncate text-[11px] font-medium text-muted-foreground">
+        <span className="min-w-0 flex-1 select-none truncate text-11 font-medium text-muted-foreground">
           {t('orca.rolePill.worker')}
         </span>
         <CreateWorkerTabButton
@@ -788,7 +788,7 @@ export function RolePillDropdown({
 
   if (!worker) {
     return (
-      <span className={cn('text-[11px] font-medium text-muted-foreground', className)}>
+      <span className={cn('text-11 font-medium text-muted-foreground', className)}>
         {t('orca.rolePill.worker')}
       </span>
     );
@@ -816,7 +816,7 @@ export function RolePillDropdown({
         type="button"
         className={cn(
           'inline-flex items-center gap-1.5 rounded-full border py-[3px] px-2.5',
-          'text-[11px] leading-none',
+          'text-11 leading-none',
           // focused worker 出错时 trigger 也描红(dropdown 布局下它是常驻可见的当前 worker)
           worker.status === 'error'
             ? 'border-[var(--error-border)] bg-[var(--error-bg)] hover:bg-[var(--error-bg)]'
@@ -857,10 +857,10 @@ export function RolePillDropdown({
         >
           {/* Header: WORKERS + count */}
           <div className="flex select-none items-center justify-between px-4 pt-3 pb-2">
-            <span className="text-[10px] font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
+            <span className="text-10 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
               {t('orca.rolePill.workersHeader')}
             </span>
-            <span className="text-[10px] font-medium text-[var(--text-tertiary)]">
+            <span className="text-10 font-medium text-[var(--text-tertiary)]">
               {t('orca.rolePill.workerCountSummary', {
                 // count 驱动 i18next 复数选择 (en: _one/_other; zh/ja/ko: _other),
                 // totalCount/activeCount 仍用于插值。
@@ -895,7 +895,7 @@ export function RolePillDropdown({
                     }}
                   >
                     {/* 主行: avatar (含 status icon + 可选 attention dot) + role + optional internal label. */}
-                    <div className="flex items-center gap-2 text-[13px] leading-snug">
+                    <div className="flex items-center gap-2 text-13 leading-snug">
                       <WorkerAvatar
                         agent={w.agent}
                         status={w.status}
@@ -911,7 +911,7 @@ export function RolePillDropdown({
                     </div>
                     {/* 副行: 简化 model 名 (去 provider 前缀) + effort bars.
                         Claude / Codex 都显 (两种 agent 都有 reasoning effort 概念). */}
-                    <div className="mt-0.5 ml-[26px] flex items-center gap-1.5 text-[11px] leading-snug text-[var(--text-tertiary)]">
+                    <div className="mt-0.5 ml-[26px] flex items-center gap-1.5 text-11 leading-snug text-[var(--text-tertiary)]">
                       <span>{simplifyModelName(w.model)}</span>
                       <EffortBars effort={w.effort} />
                     </div>
@@ -951,17 +951,17 @@ export function RolePillDropdown({
                 <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md bg-[var(--surface-elevated)]">
                   <Plus size={13} />
                 </span>
-                <span className="text-[13px] leading-snug text-[var(--text-primary)]">
+                <span className="text-13 leading-snug text-[var(--text-primary)]">
                   {t('orca.rolePill.createWorker')}
                 </span>
               </div>
-              <div className="mt-1 text-[11px] leading-snug text-[var(--text-tertiary)]">
+              <div className="mt-1 text-11 leading-snug text-[var(--text-tertiary)]">
                 {t('orca.rolePill.hardLimitHint', { count: hardLimit })}
               </div>
               {settingsEnabled && (
                 <button
                   type="button"
-                  className="mt-1.5 inline-flex items-center gap-1 text-[11px] leading-snug text-[var(--text-primary)] underline hover:opacity-80"
+                  className="mt-1.5 inline-flex items-center gap-1 text-11 leading-snug text-[var(--text-primary)] underline hover:opacity-80"
                   onClick={() => onOpenSettings()}
                 >
                   {t('orca.rolePill.settingsCollaboration')}
@@ -983,25 +983,25 @@ export function RolePillDropdown({
                 <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md bg-[var(--surface-chip)]">
                   <Plus size={13} className="text-[var(--status-bar-accent)]" />
                 </span>
-                <span className="text-[13px] leading-snug text-[var(--status-bar-accent)]">
+                <span className="text-13 leading-snug text-[var(--status-bar-accent)]">
                   {t('orca.rolePill.createWorker')}
                 </span>
                 {/* 不用 font-mono: 代码字体缺 ⌘ 等修饰键字形, 见 KeyboardShortcutsSection。
                     用户删除绑定时 shortcutKey 为空串, 不渲染空占位。 */}
                 {shortcutKey && (
-                  <kbd className="ml-auto text-[10px] text-[var(--status-bar-accent)]">
+                  <kbd className="ml-auto text-10 text-[var(--status-bar-accent)]">
                     {shortcutKey}
                   </kbd>
                 )}
               </button>
-              <div className="mt-1 px-[30px] text-[11px] leading-snug text-[var(--text-tertiary)]">
+              <div className="mt-1 px-[30px] text-11 leading-snug text-[var(--text-tertiary)]">
                 {t('orca.rolePill.softLimitHint', { count: softLimit })}
               </div>
               {settingsEnabled && (
                 <div className="px-[30px]">
                   <button
                     type="button"
-                    className="mt-1 inline-flex items-center gap-1 text-[11px] leading-snug text-[var(--status-bar-accent)] underline hover:opacity-80"
+                    className="mt-1 inline-flex items-center gap-1 text-11 leading-snug text-[var(--status-bar-accent)] underline hover:opacity-80"
                     onClick={() => onOpenSettings()}
                   >
                     {t('orca.rolePill.settingsCollaboration')}
@@ -1014,7 +1014,7 @@ export function RolePillDropdown({
             /* normal */
             <button
               type="button"
-              className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[13px] leading-snug text-[var(--text-secondary)] hover:bg-[var(--surface-chip)] rounded-b-xl transition-colors"
+              className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-13 leading-snug text-[var(--text-secondary)] hover:bg-[var(--surface-chip)] rounded-b-xl transition-colors"
               onClick={() => {
                 onOpenCreate();
                 closeDropdown();
@@ -1025,7 +1025,7 @@ export function RolePillDropdown({
               </span>
               {t('orca.rolePill.createWorker')}
               {shortcutKey && (
-                <kbd className="ml-auto text-[10px] text-[var(--text-tertiary)]">
+                <kbd className="ml-auto text-10 text-[var(--text-tertiary)]">
                   {shortcutKey}
                 </kbd>
               )}

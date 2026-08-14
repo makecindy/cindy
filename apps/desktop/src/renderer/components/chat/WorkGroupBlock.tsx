@@ -176,7 +176,7 @@ function ThinkingActivityRow({
       <span
         ref={textRef}
         className={cn(
-          'min-w-0 flex-1 text-[14px] italic text-[var(--thinking-body-text)]',
+          'min-w-0 flex-1 text-14 italic text-[var(--thinking-body-text)]',
           expanded ? 'whitespace-pre-wrap break-words' : 'truncate',
         )}
         title={expanded ? undefined : activity.content}
@@ -265,7 +265,7 @@ function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
       <span
         ref={textRef}
         className={cn(
-          'min-w-0 flex-1 text-[14px] italic text-[var(--thinking-body-text)]',
+          'min-w-0 flex-1 text-14 italic text-[var(--thinking-body-text)]',
           expanded ? 'whitespace-pre-wrap break-words' : 'truncate',
         )}
         title={expanded ? undefined : activity.content}

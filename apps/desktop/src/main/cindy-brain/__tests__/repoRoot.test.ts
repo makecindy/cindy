@@ -6,7 +6,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 
-import { resolveGhostRepoRoot, type GhostRepoRootDeps } from '../repoRoot';
+import {
+  resolveCachedGhostRepoRoot,
+  resolveGhostRepoRoot,
+  type GhostRepoRootDeps,
+} from '../repoRoot';
 
 const USER_DATA = path.join(path.sep, 'fake', 'userData');
 const ROOT = path.join(USER_DATA, 'cindy-brain');
@@ -60,5 +64,68 @@ describe('resolveGhostRepoRoot', () => {
     const { deps, rename } = makeDeps([ROOT]);
     expect(resolveGhostRepoRoot(deps)).toBe(ROOT);
     expect(rename).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveCachedGhostRepoRoot', () => {
+  it('reuses the resolved root while the owner scope is unchanged', () => {
+    const first = makeDeps([]);
+    const cached = resolveCachedGhostRepoRoot(null, 'signed-out:none:0', first.deps);
+    const second = makeDeps([], {
+      userDataDir: path.join(path.sep, 'unused'),
+      exists: vi.fn(() => false),
+    });
+
+    const resolved = resolveCachedGhostRepoRoot(
+      cached,
+      'signed-out:none:0',
+      second.deps,
+    );
+
+    expect(resolved).toBe(cached);
+    expect(second.deps.exists).not.toHaveBeenCalled();
+  });
+
+  it('resolves the real owner root after signed-out startup restores an account', () => {
+    const signedOut = makeDeps([], {
+      userDataDir: path.join(path.sep, 'userData', 'cindy-no-session', '123'),
+    });
+    const initial = resolveCachedGhostRepoRoot(
+      null,
+      'signed-out:none:0',
+      signedOut.deps,
+    );
+    const ownerDataDir = path.join(path.sep, 'userData', 'owners', 'user-1');
+    const restored = makeDeps([], { userDataDir: ownerDataDir });
+
+    const resolved = resolveCachedGhostRepoRoot(
+      initial,
+      'cloud:user-1:1',
+      restored.deps,
+    );
+
+    expect(resolved).not.toBe(initial);
+    expect(resolved).toEqual({
+      ownerScopeKey: 'cloud:user-1:1',
+      rootDir: path.join(ownerDataDir, 'cindy-brain'),
+    });
+  });
+
+  it('does not reuse one account root for another account', () => {
+    const ownerA = path.join(path.sep, 'userData', 'owners', 'user-a');
+    const ownerB = path.join(path.sep, 'userData', 'owners', 'user-b');
+    const initial = resolveCachedGhostRepoRoot(
+      null,
+      'cloud:user-a:1',
+      makeDeps([], { userDataDir: ownerA }).deps,
+    );
+
+    const resolved = resolveCachedGhostRepoRoot(
+      initial,
+      'cloud:user-b:2',
+      makeDeps([], { userDataDir: ownerB }).deps,
+    );
+
+    expect(resolved.rootDir).toBe(path.join(ownerB, 'cindy-brain'));
   });
 });

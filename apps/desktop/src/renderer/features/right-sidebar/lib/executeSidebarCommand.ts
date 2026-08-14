@@ -12,6 +12,7 @@ import {
   openFileInSidebarFileBrowser,
 } from './openInSidebarFileBrowser';
 import { openBackgroundTasksTab } from './openBackgroundTasksTab';
+import { openSubagentsTab } from './openSubagentsTab';
 import { openTurnReview } from './openTurnReview';
 import { openUrlInSidebarBrowser } from './openInSidebarBrowser';
 
@@ -51,11 +52,23 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
     });
     return;
   }
+  if (command.type === 'open-subagents-tab') {
+    await openSubagentsTab(command.sessionId, {
+      ...(command.focusRunId && command.focusProvider
+        ? { focusRunId: command.focusRunId, focusProvider: command.focusProvider }
+        : {}),
+      focusTab: command.focusTab !== false,
+      revealSidebar: command.revealSidebar !== false,
+      userInitiated: false,
+    });
+    return;
+  }
   if (command.type === 'open-turn-review') {
     await openTurnReview(command.sessionId, command.changeSetIds, {
       selectedDiffId: command.selectedDiffId ?? null,
       selectedPath: command.selectedPath ?? null,
       requestNonce: command.requestNonce,
+      hostSessionId: command.hostSessionId ?? null,
     });
     return;
   }

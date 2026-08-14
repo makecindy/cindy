@@ -17,6 +17,7 @@ const CINDY_AI_PROVIDER_ID = 'xd';
 const MAINLAND_VIDEO_MODEL_IDS: ReadonlySet<string> = new Set([
   'seedance-fast',
   'seedance-pro',
+  'bytedance/seedance-2.5',
 ]);
 
 function projectVideoDefaults(
@@ -125,6 +126,15 @@ export function projectProviderCatalogForBuildRegion(
 /** Cindy AI requires a Cindy account session; every membership kind may select it. */
 export function isProviderSelectable(providerId: string, context: ProviderAccessContext): boolean {
   return !(providerId === CINDY_AI_PROVIDER_ID && context.canUseCindyGateway === false);
+}
+
+/** Whether the projected account catalog can route a Cindy-managed embedding model. */
+export function isCindyEmbeddingModelAvailable(catalog: Catalog, modelId: string): boolean {
+  return (
+    catalog.providers
+      .find((provider) => provider.id === CINDY_AI_PROVIDER_ID)
+      ?.embeddingModels?.some((model) => model.id === modelId) ?? false
+  );
 }
 
 /**

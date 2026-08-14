@@ -19,6 +19,7 @@
 
 import { app } from 'electron';
 import path from 'node:path';
+import { constants, type Stats } from 'node:fs';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
@@ -32,10 +33,40 @@ import type { AttachmentIntegrity, AttachmentOssRef } from '../../shared/attachm
 import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { isDangerousAttachmentName } from '../../shared/attachmentSafety.js';
+import { readReviewRunOwner, type ReviewRunOwner } from '../../shared/reviewRun.js';
+import {
+  reviewRunOwnerStatus,
+  type ReviewOwnerLivenessProbe,
+  type ReviewProcessAliveProbe,
+} from '../reviewer/reviewRunRecovery.js';
 
 const log = createLogger('maker-ipc/normalize');
 
 const TEMP_DIRS_BY_SESSION = new Map<string, string>();
+const TEMP_OWNER_ROOT_PREFIX = 'v2-';
+const TEMP_OWNER_ROOT_NONCE = randomUUID();
+const TEMP_OWNER_ROOT_NAME = /^v2-(\d+)-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+const TEMP_OWNER_RECORD_NAME = '.cindy-owner.json';
+const TEMP_OWNER_RECORD_MAX_BYTES = 4 * 1024;
+const TEMP_OWNER_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+const NOFOLLOW_FLAG = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
+const TEMP_OWNER_ROOT_PREPARATIONS = new Map<string, Promise<string>>();
+let tempAttachmentOwner: ReviewRunOwner = {
+  instanceId: randomUUID(),
+  processId: process.pid,
+};
+
+interface TempAttachmentOwnerRecord {
+  version: 1;
+  createdAt: number;
+  expiresAt: number;
+  owner: ReviewRunOwner;
+}
+
+/** Share the exact Main-process identity used by Review lifecycle recovery. */
+export function configureTempAttachmentOwner(owner: ReviewRunOwner): void {
+  tempAttachmentOwner = owner;
+}
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/png': '.png',
@@ -46,14 +77,171 @@ const EXT_BY_MIME: Record<string, string> = {
   'text/plain': '.txt',
 };
 
+function assertSafeTempSessionId(sessionId: string): void {
+  if (!sessionId || sessionId === '.' || sessionId === '..' || /[\\/\0]/.test(sessionId)) {
+    throw new Error('Unsafe session id for temporary attachments');
+  }
+}
+
+function tempRoot(): string {
+  return path.join(app.getPath('temp'), 'cindy-attachments');
+}
+
+function tempOwnerRoot(): string {
+  return path.join(
+    tempRoot(),
+    `${TEMP_OWNER_ROOT_PREFIX}${process.pid}-${TEMP_OWNER_ROOT_NONCE}`,
+  );
+}
+
 function tempDirFor(sessionId: string): string {
-  return path.join(app.getPath('temp'), 'cindy-attachments', sessionId);
+  assertSafeTempSessionId(sessionId);
+  return path.join(tempOwnerRoot(), sessionId);
+}
+
+async function assertRealTempDirectory(dir: string): Promise<void> {
+  const entry = await fs.lstat(dir);
+  if (entry.isSymbolicLink() || !entry.isDirectory()) {
+    throw new Error('Temporary attachment directory must be a real directory');
+  }
+}
+
+function tempOwnerRecordPath(ownerRoot: string): string {
+  return path.join(ownerRoot, TEMP_OWNER_RECORD_NAME);
+}
+
+function statMatches(before: Stats, after: Stats): boolean {
+  return (
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.size === after.size &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs &&
+    before.mode === after.mode
+  );
+}
+
+function parseTempOwnerRecord(value: unknown): TempAttachmentOwnerRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const owner = readReviewRunOwner(record.owner);
+  if (
+    record.version !== 1 ||
+    typeof record.createdAt !== 'number' ||
+    !Number.isFinite(record.createdAt) ||
+    record.createdAt <= 0 ||
+    typeof record.expiresAt !== 'number' ||
+    !Number.isFinite(record.expiresAt) ||
+    record.expiresAt <= record.createdAt ||
+    record.expiresAt - record.createdAt > TEMP_OWNER_MAX_AGE_MS ||
+    !owner
+  ) {
+    return null;
+  }
+  return {
+    version: 1,
+    createdAt: record.createdAt,
+    expiresAt: record.expiresAt,
+    owner,
+  };
+}
+
+async function loadTempOwnerRecord(
+  ownerRoot: string,
+  currentUid: number | null,
+): Promise<TempAttachmentOwnerRecord | null> {
+  const recordPath = tempOwnerRecordPath(ownerRoot);
+  const before = await fs.lstat(recordPath).catch(() => null);
+  if (
+    !before ||
+    before.isSymbolicLink() ||
+    !before.isFile() ||
+    before.size > TEMP_OWNER_RECORD_MAX_BYTES ||
+    (currentUid !== null && before.uid !== currentUid)
+  ) {
+    return null;
+  }
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
+  try {
+    handle = await fs.open(recordPath, constants.O_RDONLY | NOFOLLOW_FLAG);
+    const opened = await handle.stat();
+    if (!statMatches(before, opened)) return null;
+    const raw = await handle.readFile({ encoding: 'utf8' });
+    const afterHandle = await handle.stat();
+    const afterPath = await fs.lstat(recordPath).catch(() => null);
+    if (
+      !statMatches(opened, afterHandle) ||
+      !afterPath ||
+      afterPath.isSymbolicLink() ||
+      !statMatches(opened, afterPath)
+    ) {
+      return null;
+    }
+    return parseTempOwnerRecord(JSON.parse(raw) as unknown);
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function ensureTempOwnerRoot(): Promise<string> {
+  const sharedRoot = tempRoot();
+  const ownerRoot = tempOwnerRoot();
+  const pending = TEMP_OWNER_ROOT_PREPARATIONS.get(ownerRoot);
+  if (pending) return pending;
+  const preparation = (async () => {
+    await fs.mkdir(sharedRoot, { recursive: true, mode: 0o700 });
+    await assertRealTempDirectory(sharedRoot);
+    await fs.chmod(sharedRoot, 0o700);
+    await fs.mkdir(ownerRoot, { recursive: true, mode: 0o700 });
+    await assertRealTempDirectory(ownerRoot);
+    await fs.chmod(ownerRoot, 0o700);
+
+    const recordPath = tempOwnerRecordPath(ownerRoot);
+    const currentUid = typeof process.getuid === 'function' ? process.getuid() : null;
+    const existing = await loadTempOwnerRecord(ownerRoot, currentUid);
+    if (existing) {
+      if (
+        existing.owner.instanceId !== tempAttachmentOwner.instanceId ||
+        existing.owner.processId !== tempAttachmentOwner.processId
+      ) {
+        throw new Error('Temporary attachment directory belongs to another process');
+      }
+      return ownerRoot;
+    }
+    if (await fs.lstat(recordPath).catch(() => null)) {
+      throw new Error('Temporary attachment owner record is invalid');
+    }
+
+    const createdAt = Date.now();
+    const record: TempAttachmentOwnerRecord = {
+      version: 1,
+      createdAt,
+      expiresAt: createdAt + TEMP_OWNER_MAX_AGE_MS,
+      owner: tempAttachmentOwner,
+    };
+    await fs.writeFile(recordPath, JSON.stringify(record), { flag: 'wx', mode: 0o600 });
+    await fs.chmod(recordPath, 0o600);
+    return ownerRoot;
+  })();
+  TEMP_OWNER_ROOT_PREPARATIONS.set(ownerRoot, preparation);
+  try {
+    return await preparation;
+  } finally {
+    if (TEMP_OWNER_ROOT_PREPARATIONS.get(ownerRoot) === preparation) {
+      TEMP_OWNER_ROOT_PREPARATIONS.delete(ownerRoot);
+    }
+  }
 }
 
 /** 在 session 临时目录下分配一个唯一文件路径(建目录,不写内容)。 */
 async function ensureTempPath(sessionId: string, mimeType: string | undefined): Promise<string> {
+  const root = await ensureTempOwnerRoot();
   const dir = tempDirFor(sessionId);
-  await fs.mkdir(dir, { recursive: true });
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  await assertRealTempDirectory(dir);
+  await fs.chmod(dir, 0o700);
   TEMP_DIRS_BY_SESSION.set(sessionId, dir);
   const ext = (mimeType && EXT_BY_MIME[mimeType]) ?? '.bin';
   return path.join(dir, `${randomUUID()}${ext}`);
@@ -65,7 +253,8 @@ async function writeTempFile(
   mimeType: string | undefined,
 ): Promise<string> {
   const file = await ensureTempPath(sessionId, mimeType);
-  await fs.writeFile(file, bytes);
+  await fs.writeFile(file, bytes, { flag: 'wx', mode: 0o600 });
+  await fs.chmod(file, 0o600);
   return file;
 }
 
@@ -83,6 +272,7 @@ type AttachmentBlock = {
   path?: string;
   base64?: string;
   mimeType?: string;
+  pathOrigin?: 'desktop-host';
 };
 type UserMessageShape = string | { type: 'user'; content: string | RawBlock[] };
 
@@ -110,6 +300,16 @@ export async function normalizeUserMessage(
     }
 
     const block = { ...raw } as AttachmentBlock & { type: 'image' | 'file' };
+    const isDesktopHostImage = block.type === 'image' && (
+      block.pathOrigin === 'desktop-host'
+      || Boolean(block.base64)
+      || (typeof block.path === 'string' && (
+        block.path.startsWith('xdt-image://')
+        || block.path.startsWith('cindy-media://')
+        || isAttachmentOssRef(block.path)
+      ))
+    );
+    if (isDesktopHostImage) block.pathOrigin = 'desktop-host';
 
     // 0) device-link 出方向 OSS 引用(控制端发来的附件)→ presign-get 下载物化到临时文件,
     //    用后删 OSS。新引用下载/校验失败 → 整条不发；旧引用保留历史的单附件降级语义。
@@ -210,7 +410,24 @@ export async function normalizeUserMessage(
 // device-link 出方向:被控端入队消息的 OSS 引用一次性物化(files[] + persistedContent 共用下载)
 // ───────────────────────────────────────────────────────────────────────────
 
-type SerializedFileLike = { url?: unknown; path?: unknown; base64?: unknown; mimeType?: unknown };
+type SerializedFileLike = {
+  url?: unknown;
+  path?: unknown;
+  base64?: unknown;
+  mimeType?: unknown;
+  type?: unknown;
+  category?: unknown;
+  ext?: unknown;
+};
+
+function isQueuedImageFile(file: SerializedFileLike): boolean {
+  if (file.type === 'image') return true;
+  return (
+    file.category === 'image'
+    && typeof file.ext === 'string'
+    && file.ext.toLowerCase() !== '.gif'
+  );
+}
 
 /** 该字段是 device-link 出方向附件 OSS 引用串。 */
 function isOssRefField(v: unknown): v is string {
@@ -239,6 +456,24 @@ function isLocalImagePathField(v: unknown): v is string {
 /** persistedContent images[].url 需要物化:OSS 引用,或被控端本机绝对路径图片。 */
 function needsImageMaterialize(v: unknown): v is string {
   return isOssRefField(v) || isLocalImagePathField(v);
+}
+
+function isManagedImageUrl(v: unknown): v is string {
+  return (
+    typeof v === 'string'
+    && (v.startsWith('xdt-image://') || v.startsWith('cindy-media://'))
+  );
+}
+
+function queuedFileMaterializeRef(file: SerializedFileLike): string | null {
+  if (isOssRefField(file.url)) return file.url;
+  // url 是队列实际消费的图片；path 只是文件选择器保留的原始磁盘来源。
+  if (isQueuedImageFile(file) && isManagedImageUrl(file.url)) return null;
+  if (isOssRefField(file.path)) return file.path;
+  if (!isQueuedImageFile(file)) return null;
+  if (isLocalImagePathField(file.url)) return file.url;
+  if (isLocalImagePathField(file.path)) return file.path;
+  return null;
 }
 
 /** persistedContent JSON 串里是否含需物化引用(images[].url / files[].path)。解析失败 → 视作无。 */
@@ -343,15 +578,14 @@ async function materializeQueuedOssAttachmentsInternal(
   const files = Array.isArray(it.files) ? it.files : null;
   const pcStr = typeof it.persistedContent === 'string' ? it.persistedContent : null;
 
-  const filesHaveOss =
+  const filesNeedMaterialize =
     files?.some(
       (f) =>
         !!f &&
         typeof f === 'object' &&
-        (isOssRefField((f as SerializedFileLike).url) ||
-          isOssRefField((f as SerializedFileLike).path)),
+        queuedFileMaterializeRef(f as SerializedFileLike) !== null,
     ) ?? false;
-  if (!filesHaveOss && !(pcStr && persistedContentNeedsMaterialize(pcStr))) return { item }; // 无需物化 → 原样
+  if (!filesNeedMaterialize && !(pcStr && persistedContentNeedsMaterialize(pcStr))) return { item }; // 无需物化 → 原样
 
   const byRef = new Map<string, MaterializedRef>(); // 引用串 → 物化结果(同串只下载/拷贝+入库一次)
   const ossKeys = new Set<string>();
@@ -497,7 +731,7 @@ async function materializeQueuedOssAttachmentsInternal(
           continue;
         }
         const sf = f as SerializedFileLike;
-        const refStr = isOssRefField(sf.url) ? sf.url : isOssRefField(sf.path) ? sf.path : null;
+        const refStr = queuedFileMaterializeRef(sf);
         if (!refStr) {
           out.push(f);
           continue;
@@ -506,7 +740,15 @@ async function materializeQueuedOssAttachmentsInternal(
           refStr,
           typeof sf.mimeType === 'string' ? sf.mimeType : undefined,
         );
-        out.push(m ? { ...(f as object), url: m.url, path: m.absPath, base64: undefined } : f);
+        out.push(m
+          ? {
+              ...(f as object),
+              url: m.url,
+              path: m.absPath,
+              ...(isQueuedImageFile(sf) ? { pathOrigin: 'desktop-host' as const } : {}),
+              base64: undefined,
+            }
+          : f);
       }
       nextFiles = out;
     }
@@ -663,9 +905,11 @@ export async function materializeDirectSendOssAttachments(
       typeof pathValue === 'string' &&
       pathValue !== originalPath
     ) {
+      const isImage = (original as { type?: unknown }).type === 'image';
       nextContent[attachmentIndexes[index]] = {
         ...(original as object),
         path: pathValue,
+        ...(isImage ? { pathOrigin: 'desktop-host' as const } : {}),
         base64: undefined,
       };
     }
@@ -712,7 +956,81 @@ export async function cleanupSessionTempAttachments(sessionId: string): Promise<
   TEMP_DIRS_BY_SESSION.delete(sessionId);
   try {
     await fs.rm(dir, { recursive: true, force: true });
+    const ownerRoot = path.dirname(dir);
+    const ownerStillInUse = [...TEMP_DIRS_BY_SESSION.values()].some(
+      (candidate) => path.dirname(candidate) === ownerRoot,
+    );
+    if (!ownerStillInUse) {
+      const remaining = await fs.readdir(ownerRoot).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      });
+      if (remaining?.every((entry) => entry === TEMP_OWNER_RECORD_NAME)) {
+        await fs.rm(ownerRoot, { recursive: true, force: true });
+      }
+    }
   } catch (e) {
     log.warn('cleanup temp attachments failed', { sessionId, error: String(e) });
+  }
+}
+
+/**
+ * Reclaim attachment roots left by a crashed Main process. Only versioned,
+ * PID-scoped roots with a same-user owner record enter this cleanup boundary;
+ * ambiguous live owners survive until their persisted deadline.
+ */
+export async function cleanupOrphanedTempAttachments(options: {
+  currentOwner: ReviewRunOwner;
+  root?: string;
+  processIsAlive?: ReviewProcessAliveProbe;
+  ownerLivenessProbe?: ReviewOwnerLivenessProbe;
+  now?: () => number;
+}): Promise<void> {
+  const sharedRoot = options.root ?? tempRoot();
+  const entries = await fs.readdir(sharedRoot, { withFileTypes: true }).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  });
+  if (entries.length === 0) return;
+  await assertRealTempDirectory(sharedRoot);
+  const currentUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const now = options.now?.() ?? Date.now();
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const match = TEMP_OWNER_ROOT_NAME.exec(entry.name);
+    if (!match) continue;
+    const ownerPid = Number(match[1]);
+    if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) continue;
+
+    const candidate = path.join(sharedRoot, entry.name);
+    const stat = await fs.lstat(candidate).catch(() => null);
+    if (
+      !stat ||
+      stat.isSymbolicLink() ||
+      !stat.isDirectory() ||
+      (currentUid !== null && stat.uid !== currentUid)
+    ) {
+      continue;
+    }
+    const record = await loadTempOwnerRecord(candidate, currentUid);
+    if (!record || record.owner.processId !== ownerPid) {
+      const lastKnownActiveAt = Math.max(stat.birthtimeMs, stat.ctimeMs, stat.mtimeMs);
+      if (now - lastKnownActiveAt < TEMP_OWNER_MAX_AGE_MS) continue;
+      await fs.rm(candidate, { recursive: true, force: true });
+      continue;
+    }
+    const status = await reviewRunOwnerStatus(
+      record.owner,
+      options.currentOwner,
+      options.processIsAlive,
+      options.ownerLivenessProbe,
+    );
+    if (status === 'alive') continue;
+    if (status === 'unknown' && now < record.expiresAt) continue;
+    for (const [sessionId, dir] of TEMP_DIRS_BY_SESSION) {
+      if (path.dirname(dir) === candidate) TEMP_DIRS_BY_SESSION.delete(sessionId);
+    }
+    await fs.rm(candidate, { recursive: true, force: true });
   }
 }

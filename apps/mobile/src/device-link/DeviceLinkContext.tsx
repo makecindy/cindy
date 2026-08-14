@@ -3,6 +3,7 @@ import { AppState, Platform } from 'react-native';
 import {
   DeviceLinkClient,
   DeviceLinkError,
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -29,6 +30,7 @@ import {
   clearAllDeviceProviders,
   evictDeviceProviders,
   fetchDeviceProviders,
+  markDeviceFetchEpoch,
   type DeviceProvidersPayload,
 } from '@/device-link/deviceProvidersCache';
 import {
@@ -119,6 +121,8 @@ export interface DeviceLinkContextValue {
   presenceVersion: number;
   connectionEpoch: number;
   lastPresenceSnapshot: PresenceSnapshot | null;
+  /** 当前 relay 连接代内的逐设备 availability；null = 本代尚无权威 verdict。 */
+  getPresenceAvailability(deviceId: string): boolean | null;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
   /**
@@ -141,6 +145,17 @@ export interface DeviceLinkContextValue {
 }
 
 const DeviceLinkContext = createContext<DeviceLinkContextValue | null>(null);
+
+/**
+ * 本控制端声明的端到端可选能力(link-open 与 subscribe 两处共用同一份,漏一处会让
+ * 被控端按能力缺失降级)。被控端只在看到对应能力后才发送新 wire 形状。
+ */
+const CONTROLLER_CAPABILITIES = [
+  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  // maker:event 微批:被控端把同一会话的连续事件合并成一帧,本端拆包后逐条消费
+  // (见 remoteSessionStore 的 MAKER_EVENT_BATCH_CHANNEL 分支)。
+  CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+];
 
 // 任意目标端真实应答的独立时序证据。它不等同于 presence verdict,也不参与 IPC/DB
 // 响应性熔断;只用于判定并发返回的 unavailable 是否已被更晚目标应答推翻。
@@ -282,6 +297,23 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const [presenceVersion, setPresenceVersion] = useState(0);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   const [lastPresenceSnapshot, setLastPresenceSnapshot] = useState<PresenceSnapshot | null>(null);
+
+  /**
+   * availability 放在 ref 里供 transport 同步读取；每次真实的三态变化也必须发布给
+   * Context consumers。before / after 比较避免 rehydrate 重试重复写 false 时制造
+   * 无意义渲染，也避免只清 verdict、availability 仍为 unknown 时误报变化。
+   */
+  const publishPresenceAvailabilityMutation = useCallback(<T,>(
+    deviceId: string,
+    mutate: (availabilityByDevice: Map<string, boolean>) => T,
+  ): T => {
+    const availabilityByDevice = presenceAvailableByDeviceRef.current;
+    const before = availabilityByDevice.get(deviceId) ?? null;
+    const result = mutate(availabilityByDevice);
+    const after = availabilityByDevice.get(deviceId) ?? null;
+    if (before !== after) setPresenceVersion((version) => version + 1);
+    return result;
+  }, []);
 
   const sendOpenLinkOnce = useCallback((
     client: DeviceLinkClient,
@@ -506,7 +538,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
                   presenceWipeTimersRef.current,
                   deviceId,
                 );
-                presenceAvailableByDeviceRef.current.set(deviceId, false);
+                publishPresenceAvailabilityMutation(deviceId, (availabilityByDevice) => {
+                  availabilityByDevice.set(deviceId, false);
+                });
                 presenceUnavailableVerdictsRef.current.set(deviceId, {
                   kind: 'disabled',
                   responseEvidenceEpoch: capturePresenceAvailabilityEpoch(
@@ -524,7 +558,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
                 // 当前代 false verdict,让退避重跑过滤该设备而不是持续重放整套计划。
                 // rehydrate 已按请求发起时的 presence epoch 丢弃旧路由离线回包,
                 // 因此这里不会覆盖更晚的 available=true。
-                presenceAvailableByDeviceRef.current.set(deviceId, false);
+                publishPresenceAvailabilityMutation(deviceId, (availabilityByDevice) => {
+                  availabilityByDevice.set(deviceId, false);
+                });
                 presenceUnavailableVerdictsRef.current.set(deviceId, {
                   kind: 'offline',
                   responseEvidenceEpoch: capturePresenceAvailabilityEpoch(
@@ -566,7 +602,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       state.inFlight = run;
       return run;
     },
-    [probeUnresponsiveDevice, scheduleRehydrateRetry, sendOpenLinkOnce, sendTrackedSubscribe],
+    [
+      probeUnresponsiveDevice,
+      publishPresenceAvailabilityMutation,
+      scheduleRehydrateRetry,
+      sendOpenLinkOnce,
+      sendTrackedSubscribe,
+    ],
   );
 
   useEffect(() => {
@@ -774,12 +816,14 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           // presence=false(入站帧无时序歧义,disabled 判定仍保留)。
           // revoked/熔断/in-flight 去重等保护由 rehydrate 自身的既有门把守。
           markRemoteResponseEvidence(deviceId);
-          reconcileAvailabilityAfterInboundFrame(
-            presenceAvailableByDeviceRef.current,
-            presencePendingRecoveryDeviceIdsRef.current,
-            presenceUnavailableVerdictsRef.current,
-            deviceId,
-          );
+          publishPresenceAvailabilityMutation(deviceId, (availabilityByDevice) => (
+            reconcileAvailabilityAfterInboundFrame(
+              availabilityByDevice,
+              presencePendingRecoveryDeviceIdsRef.current,
+              presenceUnavailableVerdictsRef.current,
+              deviceId,
+            )
+          ));
           // 直接可达证据必须同步收口此前 unavailable presence 建的镜像清理
           // 计时器:该 timer 的触发条件是 availability 非明确 true——若随后的
           // open/subscribe/rehydrate 瞬时失败或停在 unknown,遗留 timer 仍会
@@ -795,6 +839,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 同时驱逐并后台重拉；页面保留旧画面，当前代完整快照提交后由订阅一次性更新。
         evictDeviceProviders(deviceId);
         evictAgentCapabilitiesForDevice(deviceId);
+        const epochAtWrite = connectionEpoch;
         void fetchDeviceProviders(deviceId, () =>
           sendInvokeWithAccessHandling<DeviceProvidersPayload>(
             client,
@@ -802,7 +847,17 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             'maker:provider:list',
             [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
           )
-        ).catch(() => { /* 下次进入选择器或重连补齐时继续重试。 */ });
+        )
+          .then(() => {
+            // 无挂载 hook 的后台缓存写入也要标记所属连接代际(codex review P1):
+            // 不 mark 则 deviceFetchEpoch 保持 undefined,断线前旧目录在重连后被
+            // 当「首次挂载缓存命中」采信、永不刷新——选择器无限期展示已删供应商。
+            // fetch 期间重连(epoch 变化)则 mark 的是捕获时的旧代际 → 下次 effect
+            // 判 reconnected → 强制 fresh(保守正确)。失败不 mark(evict 已清缓存,
+            // 无旧目录可被误采信)。
+            markDeviceFetchEpoch(deviceId, epochAtWrite);
+          })
+          .catch(() => { /* 下次进入选择器或重连补齐时继续重试。 */ });
         void refreshDeviceCapabilities(client, deviceId);
       },
     }));
@@ -828,12 +883,14 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         noteSessionLiveStreamsInterrupted,
       );
       markRemoteResponseEvidence(deviceId);
-      reconcileAvailabilityAfterInboundFrame(
-        presenceAvailableByDeviceRef.current,
-        presencePendingRecoveryDeviceIdsRef.current,
-        presenceUnavailableVerdictsRef.current,
-        deviceId,
-      );
+      publishPresenceAvailabilityMutation(deviceId, (availabilityByDevice) => (
+        reconcileAvailabilityAfterInboundFrame(
+          availabilityByDevice,
+          presencePendingRecoveryDeviceIdsRef.current,
+          presenceUnavailableVerdictsRef.current,
+          deviceId,
+        )
+      ));
       clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
       void rehydrateWithClient(client);
     });
@@ -844,13 +901,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         remoteResponseEvidenceEpochs,
         deviceId,
       );
-      if (!reconcileOfflineVerdictAfterResponse(
-        presenceAvailableByDeviceRef.current,
-        presencePendingRecoveryDeviceIdsRef.current,
-        presenceUnavailableVerdictsRef.current,
-        deviceId,
-        currentEpoch,
-      )) {
+      if (!publishPresenceAvailabilityMutation(deviceId, (availabilityByDevice) => (
+        reconcileOfflineVerdictAfterResponse(
+          availabilityByDevice,
+          presencePendingRecoveryDeviceIdsRef.current,
+          presenceUnavailableVerdictsRef.current,
+          deviceId,
+          currentEpoch,
+        )
+      ))) {
         return;
       }
 
@@ -914,7 +973,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         }
         // 回前台立刻重连:绕开断线后遗留的指数退避计时器(可能 park 到 30s),
         // 让"打开 App → 打开会话"路径快速恢复在线,而不是干等退避。
-        client.connectNow('appstate-active');
+        // overrideCongestionCooldown:用户显式回前台是拥塞冷却的合法豁免——
+        // 冷却默认只拦请求路径的 un-park(waitUntilOnline),不拦真人操作。
+        client.connectNow('appstate-active', { overrideCongestionCooldown: true });
         // 快速切换(连接被宽限保住、始终 online)不会有 online 状态转换,这条显式
         // 补齐就是断档回填的唯一触发点;其余路径下它因 status 未 online 而空转。
         void rehydrateWithClient(client);
@@ -974,7 +1035,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       backgroundReleaseInFlightRef.current = false;
       if (clientRef.current === client) clientRef.current = null;
     };
-  }, [auth.getAccessToken, auth.isAuthenticated, clearRehydrateRetry, rehydrateWithClient]);
+  }, [
+    auth.getAccessToken,
+    auth.isAuthenticated,
+    clearRehydrateRetry,
+    publishPresenceAvailabilityMutation,
+    rehydrateWithClient,
+  ]);
 
   const openLink = useCallback(
     async (deviceId: string) => {
@@ -1027,12 +1094,17 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     await sendUnsubscribe(requireClient(clientRef.current), deviceId, toSend);
   }, []);
 
+  const getPresenceAvailability = useCallback((deviceId: string): boolean | null => (
+    presenceAvailableByDeviceRef.current.get(deviceId) ?? null
+  ), []);
+
   const value = useMemo<DeviceLinkContextValue>(() => ({
     status,
     connectionIssue,
     presenceVersion,
     connectionEpoch,
     lastPresenceSnapshot,
+    getPresenceAvailability,
     openLink,
     closeLink,
     invoke,
@@ -1042,6 +1114,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     closeLink,
     connectionEpoch,
     connectionIssue,
+    getPresenceAvailability,
     invoke,
     lastPresenceSnapshot,
     openLink,
@@ -1127,6 +1200,8 @@ async function rebuildSessionSnapshot(
     responsivenessCohort:
       opts?.responsivenessCohort ?? createDeviceSendCohort(deviceId),
   };
+  const projectionEpochAtRequestStart =
+    remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
   // 四路快照独立拉取、独立落库:断连补齐窗口本就脆弱,一个子请求失败不应拖垮
   // 其余(旧实现共用一个 catch,任一失败三份快照全丢)。goal 覆盖断连窗口内
   // 丢失的 maker:goal:status-changed push;model-pref / turn-cost 无对应查询通道,
@@ -1170,7 +1245,11 @@ async function rebuildSessionSnapshot(
     remoteSessionStore.setPendingInteractions(sessionId, pending.value, { finalizeStreaming: true });
   }
   if (projection.status === 'fulfilled' && projection.value) {
-    remoteSessionStore.setInputProjection(sessionId, projection.value);
+    remoteSessionStore.setInputProjectionIfCurrent(
+      sessionId,
+      projection.value,
+      projectionEpochAtRequestStart,
+    );
   }
   // undefined = 未拿到/未知(兼容形态的空返回),不能当作权威「无 goal」落库——
   // 那会把在世的 goal 卡清掉直到下一条 push;只有显式 null 才代表确认无 goal。
@@ -1232,7 +1311,7 @@ async function sendOpenLink(
       controllerName: mobileDeviceName(),
       protocolVersion: PROTOCOL_VERSION,
       appVersion: Constants.expoConfig?.version ?? '0.0.0',
-      capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+      capabilities: CONTROLLER_CAPABILITIES,
     });
     // link-accept 只证明链路层活着,不证明 invoke 路径健康(review P1):事故形态
     // 正是 link-open 在被控端 IPC/DB 路径之外应答正常、invoke 全部挂死——若凭
@@ -1376,7 +1455,7 @@ async function sendSubscribe(
       args: [{
         topics,
         controllerName: mobileDeviceName(),
-        capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+        capabilities: CONTROLLER_CAPABILITIES,
       }],
     });
   } catch (err) {

@@ -370,6 +370,31 @@ describe('inputProjection', () => {
     });
   });
 
+  it('distinguishes supported, legacy, and not-yet-received continuation ownership', () => {
+    expect(normalizeInputProjection(undefined)).toMatchObject({
+      continuationTurnClientId: null,
+      continuationInFlightProjectionCapability: 'unknown',
+    });
+    expect(normalizeInputProjection({ sessionId: 'legacy' })).toMatchObject({
+      continuationTurnClientId: null,
+      continuationInFlightProjectionCapability: 'legacy',
+    });
+    expect(normalizeInputProjection({
+      sessionId: 'supported-null',
+      continuationTurnClientId: null,
+    })).toMatchObject({
+      continuationTurnClientId: null,
+      continuationInFlightProjectionCapability: 'supported',
+    });
+    expect(normalizeInputProjection({
+      sessionId: 'supported-owner',
+      continuationTurnClientId: 'resume-1',
+    })).toMatchObject({
+      continuationTurnClientId: 'resume-1',
+      continuationInFlightProjectionCapability: 'supported',
+    });
+  });
+
   it('preserves and pauses queue only when Stop sees queued rows', () => {
     const queued = buildQueuedTextMessage(session(), 'later', new Date(), 'q-1');
 

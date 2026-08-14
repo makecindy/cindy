@@ -63,7 +63,7 @@ export function LinkOpenSection() {
         <div
           role="radiogroup"
           aria-label={t('settings.linkOpen.card.ariaLabel')}
-          className="flex w-fit shrink-0 items-center gap-0.5 rounded-lg border border-[var(--settings-theme-card-border)] p-0.5"
+          className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
         >
           {OPTIONS.map((opt) => {
             const active = preference === opt.value;
@@ -75,7 +75,7 @@ export function LinkOpenSection() {
                 aria-checked={active}
                 onClick={() => setPreference(opt.value)}
                 className={cn(
-                  'rounded-md px-2.5 py-1 text-xs transition-colors',
+                  'rounded-full px-2.5 py-1 text-xs transition-colors',
                   active
                     ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
                     : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',

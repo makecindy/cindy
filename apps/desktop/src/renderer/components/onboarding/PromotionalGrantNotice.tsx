@@ -69,10 +69,10 @@ export function PromotionalGrantNotice({
         <Gift size={15} className="text-[var(--text-secondary)]" />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-[14px] font-medium leading-snug text-[var(--text-primary)]">
+        <span className="text-14 font-medium leading-snug text-[var(--text-primary)]">
           {t('onboarding.promotionalGrant.title')}
         </span>
-        <span className="text-[13px] leading-relaxed text-[var(--text-secondary)]">
+        <span className="text-13 leading-relaxed text-[var(--text-secondary)]">
           {t('onboarding.promotionalGrant.desc', {
             amount: formatBillingAmount(
               notice.grant.originalAmount,
@@ -91,7 +91,7 @@ export function PromotionalGrantNotice({
             }}
             className={cn(
               'flex items-center gap-0.5 rounded-[8px] px-2 py-1 -ml-2',
-              'text-[13px] font-medium text-[var(--text-primary)]',
+              'text-13 font-medium text-[var(--text-primary)]',
               'transition-colors hover:bg-[var(--model-item-hover)] active:scale-[0.98]',
             )}
           >
@@ -102,7 +102,7 @@ export function PromotionalGrantNotice({
             type="button"
             onClick={notice.acknowledge}
             className={cn(
-              'rounded-[8px] px-2 py-1 text-[13px] font-normal text-[var(--text-secondary)]',
+              'rounded-[8px] px-2 py-1 text-13 font-normal text-[var(--text-secondary)]',
               'transition-colors hover:bg-[var(--model-item-hover)] active:scale-[0.98]',
             )}
           >

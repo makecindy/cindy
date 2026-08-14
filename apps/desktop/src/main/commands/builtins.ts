@@ -31,7 +31,8 @@ const log = createLogger('desktop-commands');
  * 执行结果(stdout / stderr / exitCode / elapsedMs / cmdLine / cwd / timedOut)。
  */
 export interface DesktopCommandTriggeredPayload {
-  command: 'help' | 'clear' | 'cmd' | 'issue' | 'jump-session' | 'goal' | 'workflows' | 'learn';
+  command:
+    'help' | 'clear' | 'cmd' | 'issue' | 'review' | 'jump-session' | 'goal' | 'workflows' | 'learn';
   sessionId?: string;
   workingDir?: string;
   args?: string;
@@ -439,6 +440,19 @@ export function registerBuiltinDesktopCommands(
       `File feedback to the ${BRAND_NAME} team — the agent helps clarify details, then submits a GitHub issue after your confirmation. Usage: /issue [initial description]`,
     execute: (ctx) => {
       sendDesktopCommandToSender(ctx, buildPayload('issue', ctx));
+    },
+  });
+
+  registry.register({
+    name: 'review',
+    description:
+      'Review the current task in a fresh, memory-free, read-only reviewer task. Supports code changes, files, documents, and images. Usage: /review [focus or path]',
+    execute: () => {
+      // ChatInput invokes maker:start-review directly so its exact attachment
+      // snapshot crosses the durable Main boundary before the view can unmount.
+      // Refuse any unbound registry invocation instead of silently broadcasting
+      // an event that may have no mounted consumer.
+      throw new Error('/review must be started from a task composer');
     },
   });
 

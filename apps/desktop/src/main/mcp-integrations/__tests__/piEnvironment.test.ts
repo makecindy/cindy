@@ -123,6 +123,8 @@ describe('piEnvironment per-session identity', () => {
       sessionInstanceId: 'pi-instance-1',
       workingDir: '/repo',
       vendorOptions: {},
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
     });
     expect(config?.mcpBridge).toBeTruthy();
     const server = config!.mcpBridge!.servers[0]!;
@@ -575,7 +577,7 @@ describe('piEnvironment per-session identity', () => {
     expect(callResp.status).toBe(200);
     const result = await readRpcText(callResp) as { result?: { isError?: boolean; content?: { text?: string }[] } };
     expect(result.result?.isError).toBe(true);
-    expect(result.result?.content?.[0]?.text).toContain('could not verify this session');
+    expect(result.result?.content?.[0]?.text).toContain('verified Cindy session');
   });
 
   it('registers the worker bridge before the Pi session role is available', async () => {

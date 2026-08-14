@@ -398,4 +398,40 @@ describe('im default settings store', () => {
     expect(persisted.channels.feishu.permissionMode).toBe('bypassPermissions');
     expect(persisted.channels.slack.agentKind).toBe('codex');
   });
+
+  it('group /ctr permission mode: auto default, per-channel override, reset clears it', () => {
+    expect(readImDefaultSettings('feishu').groupCtrPermissionMode).toBe('auto');
+    writeImDefaultSettingsPatch({ groupCtrPermissionMode: 'bypassPermissions' }, 'feishu');
+    expect(readImDefaultSettings('feishu').groupCtrPermissionMode).toBe('bypassPermissions');
+    // 其它渠道不受影响, 跟随系统默认。
+    expect(readImDefaultSettings('discord').groupCtrPermissionMode).toBe('auto');
+    expect(readImDefaultSettingsState('feishu').customizedKeys).toContain(
+      'groupCtrPermissionMode',
+    );
+
+    resetImDefaultSettingsChannel('feishu');
+    expect(readImDefaultSettings('feishu').groupCtrPermissionMode).toBe('auto');
+    expect(readImDefaultSettingsState('feishu').isCustomized).toBe(false);
+
+    // override 清空后文件整体删除(createOverrideSettingsFile 清理语义)。
+    const persisted = fs.existsSync(settingsFile())
+      ? JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'))
+      : {};
+    expect(persisted.channels).toBeUndefined();
+  });
+
+  it('falls back group / ctr permission to auto for persisted documents without the field', () => {
+    const without = {
+      agentKind: IM_DEFAULT_SETTINGS.agentKind,
+      permissionMode: 'auto' as const,
+      agents: IM_DEFAULT_SETTINGS.agents,
+    };
+    const migrated = __testing.normalizeDocument({
+      schemaVersion: 3,
+      global: without,
+      channels: { feishu: without },
+    });
+    expect(migrated.global.groupCtrPermissionMode).toBe('auto');
+    expect(migrated.channels.feishu.groupCtrPermissionMode).toBe('auto');
+  });
 });

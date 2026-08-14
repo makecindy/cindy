@@ -2,11 +2,12 @@
 // extract.mjs — 注销提示气泡(修复后)QA demo 真值提取器。机械提取,不手抄:
 //  - desktop:LoginPage.tsx 气泡 class 串/结构事实/渲染位置(根层浮层、LoginStage 之外)、
 //    colors.ts registerColor 值(login-deletion-bubble-bg 的 var 链解析:chat-input-bg/surface
-//    /chat-input-border/login-control-text/login-secondary-text)、4×common.json 注销四语。
+//    /chat-input-border/login-control-text/login-secondary-text)、SUPPORTED_LOCALES 对应的
+//    common.json 注销文案。
 //  - mobile:loginSkinLayout.ts LOGIN_DELETION_BUBBLE 常量 + resolveDeletionBubbleFrame 结构
 //    事实(esbuild 编译后 import 作 adaptive oracle)、tokens.ts loginPalettes 双色板
 //    (deletionBubbleBg/Border/controlText/secondaryText)、login.tsx 气泡样式块+渲染结构、
-//    loginMessages.ts 注销四语。
+//    loginMessages.ts 注销文案(按共享 SUPPORTED_LOCALES 逐项读取)。
 //  - adaptive.samples:产品纯函数 resolveLoginSurface + resolveDeletionBubbleFrame 对
 //    spec.adaptive.sampleSizes 预计算期望几何(oracle = 产品公式本身,验收侧不重写)。
 // stdout 输出 truth JSON。
@@ -22,6 +23,26 @@ const demoDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(demoDir, '..', '..', '..');
 const R = (p) => resolve(repoRoot, p);
 const rel = (p) => `../../../${p}`;
+
+function readSupportedLocales(srcRelRepo) {
+  const source = readFileSync(R(srcRelRepo), 'utf8');
+  const declaration = source.match(/SUPPORTED_LOCALES\s*=\s*\[([^\]]*)\]/s)?.[1];
+  const locales = declaration
+    ? [...declaration.matchAll(/['"]([^'"]+)['"]/g)].map((match) => match[1])
+    : [];
+  if (!locales.length) throw new Error(`${srcRelRepo} 未找到 SUPPORTED_LOCALES`);
+  return locales;
+}
+
+const DESKTOP_LOCALES_TS = 'apps/desktop/src/shared/locale.ts';
+const MOBILE_LOCALES_TS = 'apps/mobile/src/i18n/locale.ts';
+const SUPPORTED_LOCALES = readSupportedLocales(DESKTOP_LOCALES_TS);
+const mobileSupportedLocales = readSupportedLocales(MOBILE_LOCALES_TS);
+if (JSON.stringify(SUPPORTED_LOCALES) !== JSON.stringify(mobileSupportedLocales)) {
+  throw new Error(
+    `Desktop / Mobile SUPPORTED_LOCALES 不一致:${SUPPORTED_LOCALES.join(',')} != ${mobileSupportedLocales.join(',')}`,
+  );
+}
 
 const hashes = new Map();
 function fileHash(absPath) {
@@ -129,9 +150,8 @@ if (bubbleBorder.light.startsWith('var(') || bubbleBorder.dark.startsWith('var('
 const controlText = extractRegisterColor(colorsSrc, 'login-control-text');
 const secondaryText = extractRegisterColor(colorsSrc, 'login-secondary-text');
 
-const DESK_COPY_LOCALES = ['zh-CN', 'en', 'ja', 'ko'];
 const deskCopy = {};
-for (const loc of DESK_COPY_LOCALES) {
+for (const loc of SUPPORTED_LOCALES) {
   const j = JSON.parse(readSrc(P.commonJson(loc)));
   const st = j.accountDeletion?.status;
   if (!st) throw new Error(`${loc} common.json 缺 accountDeletion.status`);
@@ -213,8 +233,8 @@ if (!/accessibilityElementsHidden=\{deletionBubbleA11yHidden\}/.test(mGateTag[0]
   throw new Error('mobile 气泡 iOS 读屏隐藏(accessibilityElementsHidden)未命中');
 if (!/importantForAccessibility=\{\s*deletionBubbleA11yHidden \? 'no-hide-descendants' : 'auto'\s*\}/.test(mGateTag[0]))
   throw new Error('mobile 气泡 Android 读屏隐藏(importantForAccessibility)未命中');
-if (!/const deletionBubbleA11yHidden = consentDialogOpen \|\| handoffPhase !== 'done';/.test(mLoginSrc))
-  throw new Error('mobile 气泡读屏隐藏条件(弹窗打开 || 入场未完成)未命中');
+if (!/const deletionBubbleA11yHidden =\s*consentDialogOpen \|\| realmConsentOpen \|\| handoffPhase !== 'done';/.test(mLoginSrc))
+  throw new Error('mobile 气泡读屏隐藏条件(协议弹窗 || 区域确认 || 入场未完成)未命中');
 
 // loginPalettes 双色板
 const mPalettesObj = extractConstObject(mTokensSrc, 'loginPalettes');
@@ -226,40 +246,54 @@ function paletteVal(mode, key) {
   return m[1];
 }
 
-// loginMessages 四语(顺序 zh-CN/en/ja/ko)
-const MSG_LOCALES = ['zh-CN', 'en', 'ja', 'ko'];
-function msgValues(key) {
-  const re = new RegExp(`\\b${key}:\\s*'((?:[^'\\\\]|\\\\.)*)'`, 'g');
-  const hits = [...mMsgsSrc.matchAll(re)].map((m) => m[1]);
-  if (hits.length !== 4) throw new Error(`loginMessages 键 ${key} 命中 ${hits.length} 次(预期 4)`);
-  return hits;
-}
-const mCopy = {};
-for (const [i, loc] of MSG_LOCALES.entries()) {
-  mCopy[loc] = {
-    pendingTitle: msgValues('accountDeletionPendingTitle')[i],
-    pendingCopy: msgValues('accountDeletionPendingCopy')[i],
-    processingTitle: msgValues('accountDeletionProcessingTitle')[i],
-    processingCopy: msgValues('accountDeletionProcessingCopy')[i],
-    completedTitle: msgValues('accountDeletionCompletedTitle')[i],
-    completedCopy: msgValues('accountDeletionCompletedCopy')[i],
-    dismissButton: msgValues('accountDeletionDismiss')[i],
-  };
-}
-
 /* ══ oracle:esbuild 编译 loginSkinLayout.ts → resolveLoginSurface + resolveDeletionBubbleFrame ══ */
 const require2 = createRequire(join(repoRoot, 'package.json'));
 const esbuild = require2('esbuild');
 const tmp = mkdtempSync(join(tmpdir(), 'deletion-bubble-extract-'));
 let layoutMod;
+let messagesMod;
 try {
   const code = esbuild.transformSync(mSkinSrc, { loader: 'ts', format: 'esm' }).code;
   writeFileSync(join(tmp, 'loginSkinLayout.mjs'), code);
+  const messagesCode = esbuild
+    .transformSync(mMsgsSrc, { loader: 'ts', format: 'esm' })
+    .code.replace(
+      /import\s*\{\s*getLocales\s*\}\s*from\s*['"]expo-localization['"];?/,
+      'const getLocales = () => [{ languageTag: "zh-CN" }];',
+    )
+    .replace(
+      /import\s*\{\s*getManualLocaleOverride\s*\}\s*from\s*['"]@\/i18n\/appLanguage['"];?/,
+      'const getManualLocaleOverride = () => null;',
+    );
+  writeFileSync(join(tmp, 'loginMessages.mjs'), messagesCode);
   layoutMod = await import(pathToFileURL(join(tmp, 'loginSkinLayout.mjs')).href);
+  messagesMod = await import(pathToFileURL(join(tmp, 'loginMessages.mjs')).href);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }
 const { resolveLoginSurface, resolveDeletionBubbleFrame } = layoutMod;
+
+const COPY_KEYS = {
+  pendingTitle: 'accountDeletionPendingTitle',
+  pendingCopy: 'accountDeletionPendingCopy',
+  processingTitle: 'accountDeletionProcessingTitle',
+  processingCopy: 'accountDeletionProcessingCopy',
+  completedTitle: 'accountDeletionCompletedTitle',
+  completedCopy: 'accountDeletionCompletedCopy',
+  dismissButton: 'accountDeletionDismiss',
+};
+const mCopy = {};
+for (const loc of SUPPORTED_LOCALES) {
+  const catalog = messagesMod.loginMessages[loc];
+  if (!catalog) throw new Error(`loginMessages 缺 ${loc}`);
+  mCopy[loc] = Object.fromEntries(
+    Object.entries(COPY_KEYS).map(([truthKey, messageKey]) => {
+      const value = catalog[messageKey];
+      if (typeof value !== 'string') throw new Error(`loginMessages ${loc} 缺 ${messageKey}`);
+      return [truthKey, value];
+    }),
+  );
+}
 
 // demo 的 safeTop 仿真常量(demo chrome;phone top = insets.top,产品运行时注入)
 const DEMO_SAFE_TOP = 59;
@@ -284,6 +318,9 @@ const samples = SAMPLE_SIZES.map(([w, h]) => {
 
 /* ══ truth 组装 ══ */
 const truth = {
+  supportedLocales: SUPPORTED_LOCALES.map((locale, index) =>
+    leaf(locale, DESKTOP_LOCALES_TS, `SUPPORTED_LOCALES[${index}]`),
+  ),
   structure: {
     desktop: {
       renderPosition: leaf('LoginPage 根层(</LoginStage> 之后),不在 stage 文档流;absolute z-30 浮层', P.loginPage, 'LoginPage.tsx </LoginStage> 之后的 AccountDeletionStatusPanel 渲染点'),
@@ -307,7 +344,7 @@ const truth = {
       dismissHitSlop: leaf("hitSlop 按气泡内可用空间钳制:top=min(18, bodyLinkGap×scale)、bottom=min(18, padding×scale)、左右 20——RN hitSlop 不越父边界,虚标无效(PR #494 codex);热区随整个登录 stage 同步缩放(320pt 窗口下主按钮本身 ≈34pt),不追未缩放 44pt 绝对值", M.skinLayout, 'resolveDeletionBubbleLinkHitSlop(scale)'),
       dismissGate: leaf('仅 completed 态渲染 dismiss Pressable(onDismiss 仅 completed 传入)', M.loginTsx, 'login.tsx:1315-1327 {onDismiss ? <Pressable/> : null}'),
       entranceGate: leaf("Animated.View 包装:opacity=panelEntrance.opacity(与登录组同一 Animated 值);pointerEvents 仅 handoffPhase==='done' 放行且取 box-none(全屏包装层不作触摸目标,避免挡住下方登录组命中;入场完成前 none = 不可见不可点)(PR #464 review)", M.loginTsx, 'login.tsx 气泡渲染点 Animated.View pointerEvents/style'),
-      a11yModalGate: leaf("气泡对读屏隐藏 = 协议弹窗打开 || 入场未完成;iOS accessibilityElementsHidden + Android importantForAccessibility 双端都给(opacity/pointerEvents 不影响读屏,不隐藏则会念出不可见的注销状态)(PR #464 codex)", M.loginTsx, 'login.tsx 气泡渲染点 Animated.View importantForAccessibility'),
+      a11yModalGate: leaf("气泡对读屏隐藏 = 协议弹窗打开 || 区域确认打开 || 入场未完成;iOS accessibilityElementsHidden + Android importantForAccessibility 双端都给(opacity/pointerEvents 不影响读屏,不隐藏则会念出不可见的注销状态)(PR #464 codex)", M.loginTsx, 'login.tsx 气泡渲染点 Animated.View importantForAccessibility'),
     },
   },
   desktop: {
@@ -360,7 +397,7 @@ const truth = {
       },
     },
     copy: Object.fromEntries(
-      DESK_COPY_LOCALES.map((loc) => [
+      SUPPORTED_LOCALES.map((loc) => [
         loc,
         leafFields(deskCopy[loc], P.commonJson(loc), `accountDeletion.status(${loc})`),
       ]),
@@ -439,7 +476,7 @@ const truth = {
       },
     ),
     copy: Object.fromEntries(
-      MSG_LOCALES.map((loc) => [loc, leafFields(mCopy[loc], M.loginMessages, `accountDeletion*(${loc})`)]),
+      SUPPORTED_LOCALES.map((loc) => [loc, leafFields(mCopy[loc], M.loginMessages, `accountDeletion*(${loc})`)]),
     ),
   },
   adaptive: {

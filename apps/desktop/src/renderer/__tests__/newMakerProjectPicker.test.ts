@@ -196,9 +196,10 @@ describe('Shared create project picker', () => {
     expect(worktreeChipsSource).toContain(
       'const switchDisabled = disabled || checkboxDisabled || (environmentDisabled && !enabled)',
     );
-    expect(worktreeChipsSource).toContain(
-      'const showBranchChip = !advancedHidden && (enabled || !!detect.data?.isGitRepo)',
-    );
+    // 2026-08-07 裁决:确认不合格(confirmedIneligible === true)时整条控件隐藏、
+    // 发送侧放行普通会话;探测中/失败(null)时已 ON 仍显示并 fail closed。
+    expect(worktreeChipsSource).toContain('confirmedIneligible !== true');
+    expect(worktreeChipsSource).toContain('&& (enabled || !!detect.data?.isGitRepo)');
     const toggleHandler = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const handleWtEnabledChange = useCallback('),
       newMakerDraftRouteSource.indexOf('const handleWtSourceBranchChange = useCallback('),
@@ -213,8 +214,12 @@ describe('Shared create project picker', () => {
       'if (isDeviceLinkDraft) setWtEnabled(false);',
     );
     expect(newMakerDraftRouteSource).toContain('wt.enabled && wt.baseRepo');
+    const sendGuardStart = newMakerDraftRouteSource.indexOf(
+      '&& selectedWorktree.confirmedIneligible !== true',
+    );
+    expect(sendGuardStart).toBeGreaterThan(-1);
     const sendGuard = newMakerDraftRouteSource.slice(
-      newMakerDraftRouteSource.indexOf('if (selectedWorkingDir && !isRemoteProjectDraft && selectedWorktree.enabled) {'),
+      sendGuardStart,
       newMakerDraftRouteSource.indexOf('const dataOwnerAtSend = getDataOwnerGeneration();'),
     );
     expect(sendGuard).toContain('worktreeMissingRepo');
@@ -226,9 +231,10 @@ describe('Shared create project picker', () => {
   it('only forwards a worktree-eligible repo root to fail-closed creation gates', () => {
     // linked worktree、非 Git 目录和探测失败都不能把 repoRoot 暴露给发送 / Goal；
     // checkbox 仍保留用户输入，由上层 ON 门明确阻塞，不能静默降级成 base-repo 创建。
-    expect(worktreeChipsSource).toMatch(
-      /const baseRepo =\s*detect\.data\?\.gitInstalled === true[\s\S]*detect\.data\.isGitRepo[\s\S]*!detect\.data\.isInsideWorktree[\s\S]*detect\.data\.repoRoot \?\? null/,
-    );
+    // baseRepo 与 confirmedIneligible 从共享的 gitEligible 派生,保证两处使用同一条件。
+    expect(worktreeChipsSource).toContain('const gitEligible: boolean | null = detect.data');
+    expect(worktreeChipsSource).toContain('detect.data.gitInstalled && detect.data.isGitRepo && !detect.data.isInsideWorktree');
+    expect(worktreeChipsSource).toContain('const baseRepo = gitEligible ? (detect.data!.repoRoot ?? null) : null;');
   });
 
   it('mirrors the repo-scoped source branch through the selected working device', () => {
@@ -1166,10 +1172,10 @@ describe('Shared create project picker', () => {
    * 它真正依赖的那一半(设备 / 项目)。第五条路径出现时,①会直接失败,而②保证它自动是对的。
    */
   it('routes every draft-target transition through the single action', () => {
-    // 四条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落。
-    // 声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
+    // 五条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
+    // “对话”分组导航请求。声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
     const calls = newMakerDraftRouteSource.match(/applyDraftTarget\(\{/g) ?? [];
-    expect(calls.length).toBe(4);
+    expect(calls.length).toBe(5);
     // 组件里不得再有任何一处手写这些副作用 —— 手写一处就等于又开了一条绕过推导的路。
     // patchDraft 仍可出现(入场清 extraDirs、发送后复位),但不得再带设备字段。
     expect(newMakerDraftRouteSource).not.toContain('deviceLinkDeviceId: deviceId,');
@@ -1398,7 +1404,9 @@ describe('Shared create project picker', () => {
     );
     // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
     expect(chatInputSource).toContain('if (onExtraDirsChange) {');
-    expect(chatInputSource).toContain('hasReferenceDirs={onExtraDirsChange !== undefined}');
+    expect(chatInputSource).toContain(
+      'hasReferenceDirs={!settingsLocked && onExtraDirsChange !== undefined}',
+    );
   });
 
   // #807 review 第二十四轮:`useAttachments.addFiles` 对未知扩展名要先 await peekFileHeader,附件是

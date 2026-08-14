@@ -78,6 +78,23 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
     offlineButton: '用上次配置启动',
     quitButton: '退出 Cindy',
   },
+  'zh-TW': {
+    networkTitle: 'Cindy 暫時無法連線',
+    configTitle: 'Cindy 暫時無法啟動',
+    networkBody:
+      '啟動時無法連線到 Cindy 服務。請確認裝置已連線網路，然後再次嘗試啟動。如果正在使用 Proxy 或公司網路，可以切換網路後再試。',
+    configBody: 'Cindy 暫時無法完成啟動。請稍後再試；如果問題持續發生，請聯絡技術支援。',
+    errorLine: '錯誤資訊：{{error}}',
+    diagnosticsHint: '需要協助時，可以複製診斷資訊並貼到支援訊息中。',
+    copyDiagnosticsButton: '複製診斷資訊',
+    copiedHint: '診斷資訊已複製。請貼到支援訊息中。',
+    copyFailedHint: '無法複製診斷資訊，請再試一次。',
+    noSavedConfigurationHint: '此裝置沒有可用的歷史設定，必須恢復連線後才能繼續啟動。',
+    offlineHint: '也可以使用上次成功取得的設定離線啟動（取得時間：{{savedAt}}），需要網路的功能將無法使用。',
+    retryButton: '再次嘗試啟動 Cindy',
+    offlineButton: '使用上次的設定',
+    quitButton: '結束 Cindy',
+  },
   en: {
     networkTitle: "Cindy Couldn't Connect",
     configTitle: "Cindy Couldn't Start",

@@ -23,7 +23,7 @@ const REPO_A = {
 
 describe('detectCwdStateForTarget', () => {
   const snapshot: DetectCwdSnapshot = {
-    target: { cwd: '/repo-a', deviceLinkDeviceId: 'device-a' },
+    target: { cwd: '/repo-a', deviceLinkDeviceId: 'device-a', refreshEpoch: 0 },
     data: REPO_A,
     loading: false,
   };
@@ -33,6 +33,7 @@ describe('detectCwdStateForTarget', () => {
       detectCwdStateForTarget(snapshot, {
         cwd: '/repo-a',
         deviceLinkDeviceId: 'device-a',
+        refreshEpoch: 0,
       }),
     ).toEqual({ data: REPO_A, loading: false });
   });
@@ -51,6 +52,17 @@ describe('detectCwdStateForTarget', () => {
       detectCwdStateForTarget(snapshot, {
         cwd: '/repo-a',
         deviceLinkDeviceId: 'device-b',
+        refreshEpoch: 0,
+      }),
+    ).toEqual({ data: null, loading: true });
+  });
+
+  it('synchronously fences stale data when the reconnect epoch changes', () => {
+    expect(
+      detectCwdStateForTarget(snapshot, {
+        cwd: '/repo-a',
+        deviceLinkDeviceId: 'device-a',
+        refreshEpoch: 1,
       }),
     ).toEqual({ data: null, loading: true });
   });
@@ -80,6 +92,7 @@ describe('useDetectCwd', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
 
     rerender({ reconnectEpoch: 1 });
+    expect(result.current).toEqual({ data: null, loading: true });
 
     await waitFor(() => {
       expect(result.current).toEqual({ data: REPO_A, loading: false });

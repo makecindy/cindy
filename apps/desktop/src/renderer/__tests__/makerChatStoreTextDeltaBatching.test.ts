@@ -1563,6 +1563,54 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
+  it('calibrates an in-flight bubble to a shorter authoritative final text', () => {
+    emitTextDelta('Hello worxderful');
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text',
+        source: 'codex',
+        data: { text: 'Hello wonderful', isFinal: true, isFullText: true },
+      },
+      persistId: 'assistant-1',
+    });
+
+    vi.advanceTimersByTime(32);
+
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.streamingText).toBe('Hello wonderful');
+    expect(snapshot.messages).toEqual([
+      expect.objectContaining({
+        clientId: 'assistant-1',
+        role: 'assistant',
+        content: 'Hello wonderful',
+      }),
+    ]);
+  });
+
+  it('keeps accumulated text when an unmarked isFinal event is only a tail block', () => {
+    emitTextDelta('Hello ');
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text',
+        source: 'claude-code',
+        data: { text: 'world', isFinal: true },
+      },
+      persistId: 'assistant-1',
+    });
+
+    vi.advanceTimersByTime(32);
+
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.streamingText).toBe('Hello ');
+    expect(snapshot.messages).toEqual([
+      expect.objectContaining({ content: 'Hello ' }),
+    ]);
+  });
+
   it('keeps 1000 ordinary text deltas batched to at most two store commits after the 32ms timer', () => {
     let notifyCount = 0;
     const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
@@ -2137,6 +2185,50 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(
       'Authorization: [REDACTED] (HTTP 401)',
     );
+  });
+
+  it('keeps remote auth retry side effects in the primary renderer', async () => {
+    makerChatStore.__teardownGlobalListeners();
+    makerChatStore.initGlobalListeners({ ownsRemoteAuthRetry: false });
+    vi.mocked(sessionService.get).mockResolvedValue({
+      agentKind: 'cc',
+      remoteHostId: 'remote-host',
+      sdkSessionId: null,
+      fastMode: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      totalCostUsd: 0,
+      workingDir: WORKING_DIR,
+      model: MODEL,
+      effort: EFFORT,
+      permissionMode: PERMISSION_MODE,
+    } as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    emitDbMessageCreated({
+      id: 'user-row',
+      clientId: 'user-client',
+      role: 'user',
+      content: 'retry only in primary renderer',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { sdkError: 'authentication_failed', message: '401 expired' },
+        agentMeta: { sdkSessionId: 'sdk-1' },
+      },
+    });
+    await flushPromises();
+
+    expect(window.electronAPI.safeStorageRead).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.closeSession).not.toHaveBeenCalled();
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('401 expired');
   });
 
   it('persists the original remote auth error when retry enqueue rejects asynchronously', async () => {

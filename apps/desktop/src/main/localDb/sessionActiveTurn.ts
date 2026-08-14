@@ -49,12 +49,13 @@
  * turn 主流程。
  */
 
-import { and, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { getDbClient } from './client/current';
 import { messages, sessions } from './schema';
 import { createLogger } from '../logger';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { boundedSummary } from '../maker-ipc/recoveryCoordinator.js';
 
 const log = createLogger('session-active-turn');
 
@@ -69,6 +70,36 @@ let _quitFrozen = false;
 /** app 退出编排 sync 阶段调用(bootstrap-electron onQuit),此后时间戳只读。 */
 export function freezeSessionActiveTurnMarkers(): void {
   _quitFrozen = true;
+}
+
+/**
+ * 数据 owner 边界(切账号 / 登出)的**有作用域** ended 写抑制 —— 与 _quitFrozen
+ * 同一语义:边界 teardown 的 maker.shutdown 会批量 close 所有本地会话,close
+ * teardown 触发的 ended 写会把"边界时还在飞的 turn"伪装成正常收尾,被切换打断
+ * 的任务既无中断横幅也无红点,呈现为"卡住且无报错"(2026-08-11 实报:凭证跨区
+ * 误判触发账号切换,busy Codex 会话被静默孤儿化)。与 quit freeze 的差别只有一个:
+ * 边界后进程继续服务新 owner,必须可释放。计数器支持重入;返回的释放函数幂等。
+ *
+ * 残余竞态说明:close 触发的 ended 写来自 session status listener 的 async handler,
+ * 不被 maker.shutdown 的 await 覆盖,理论上可能晚于释放时刻。调用方靠「持有到
+ * teardown 尾部(DB dispose 之后)」把窗口压到极小;真漏网的迟到写会撞上已
+ * dispose 的 DbClient,由写链吞错落日志,不会污染时间戳。
+ */
+let _endedWriteSuppressions = 0;
+
+export function beginSessionTurnEndedSuppression(): () => void {
+  _endedWriteSuppressions += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    _endedWriteSuppressions -= 1;
+  };
+}
+
+/** ended 写抑制判定:quit freeze 或任一在持有的 owner 边界抑制。 */
+function isEndedWriteSuppressed(): boolean {
+  return _quitFrozen || _endedWriteSuppressions > 0;
 }
 
 /**
@@ -158,7 +189,7 @@ export function markSessionTurnStarted(sessionId: string): void {
  * 在重启后误判为中断。只允许时间戳前进。
  */
 export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number): void {
-  if (_quitFrozen) return;
+  if (isEndedWriteSuppressed()) return;
   const notifyContext = captureTurnEndedPersistedContext();
   enqueueEndedWrite(
     sessionId,
@@ -177,7 +208,7 @@ export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number
  * 入队时刻判定」的语义一致(barrier 版的"入队时刻"= 本函数调用时刻)。
  */
 export function markSessionTurnEndedAfterBarrier(sessionId: string, barrier: Promise<unknown>): void {
-  if (_quitFrozen) return;
+  if (isEndedWriteSuppressed()) return;
   const endedAt = Date.now();
   const notifyContext = captureTurnEndedPersistedContext();
   void barrier.then(
@@ -463,9 +494,123 @@ export async function hasAssistantProgressAfterMessage(
   return Boolean(row?.found);
 }
 
+/**
+ * Read the small durable handoff used by retry recovery. This intentionally
+ * does not copy tool results or the transcript: the model can still inspect
+ * the real history, while this marker prevents a repeated retry from looking
+ * like a brand-new task after a context compaction.
+ */
+export async function getRecoveryContextSnapshot(
+  sessionId: string,
+  userClientId: string,
+): Promise<{
+  contextTokens: number;
+  contextWindow: number;
+  progressCount: number;
+  recentProgress: Array<{
+    role: 'assistant' | 'tool_use' | 'thinking' | 'ask_user' | 'plan_review';
+    summary: string;
+  }>;
+}> {
+  const db = getDbClient().drizzle;
+  const progressRoles = ['assistant', 'tool_use', 'thinking', 'ask_user', 'plan_review'] as const;
+  const afterUser = sql`EXISTS (
+    SELECT 1 FROM messages u
+    WHERE u.session_id = ${sessionId}
+      AND u.client_id = ${userClientId}
+      AND u.rewind_at IS NULL
+      AND (${messages.createdAt} > u.created_at
+        OR (${messages.createdAt} = u.created_at AND ${sql.raw('"messages"."rowid"')} > u.rowid))
+  )`;
+  const visibleProgress = and(
+    eq(messages.sessionId, sessionId),
+    inArray(messages.role, progressRoles),
+    isNull(messages.rewindAt),
+    afterUser,
+  );
+  const [session, countRow, recentRows] = await Promise.all([
+    db
+      .select({ contextTokens: sessions.contextTokens, contextWindow: sessions.contextWindow })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1),
+    db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(messages)
+      .where(visibleProgress),
+    db
+      .select({ role: messages.role, content: messages.content })
+      .from(messages)
+      .where(visibleProgress)
+      .orderBy(desc(messages.createdAt), desc(sql.raw('"messages"."rowid"')))
+      .limit(6),
+  ]);
+
+  return {
+    contextTokens: session[0]?.contextTokens ?? 0,
+    contextWindow: session[0]?.contextWindow ?? 0,
+    progressCount: Number(countRow[0]?.count ?? 0),
+    recentProgress: recentRows.reverse().map((row) => ({
+      role: normalizeRecoveryRole(row.role),
+      summary: summarizeRecoveryContent(row.content),
+    })),
+  };
+}
+
+function normalizeRecoveryRole(
+  role: string,
+): 'assistant' | 'tool_use' | 'thinking' | 'ask_user' | 'plan_review' {
+  if (
+    role === 'tool_use' ||
+    role === 'thinking' ||
+    role === 'ask_user' ||
+    role === 'plan_review'
+  ) return role;
+  return 'assistant';
+}
+
+function summarizeRecoveryContent(raw: string): string {
+  let value: unknown = raw;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    // Keep legacy/plain content as-is.
+  }
+  let summary = '';
+  if (typeof value === 'string') {
+    summary = value;
+  } else if (Array.isArray(value)) {
+    summary = value
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        const record = part as Record<string, unknown>;
+        if (typeof record.text === 'string') return record.text;
+        if (typeof record.toolName === 'string') return `tool ${record.toolName}`;
+        if (typeof record.name === 'string') return `tool ${record.name}`;
+        return '';
+      })
+      .filter(Boolean)
+      .join(' ');
+  } else if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (typeof record.toolName === 'string') summary = `tool ${record.toolName}`;
+    else if (typeof record.name === 'string') summary = `tool ${record.name}`;
+    else if (typeof record.text === 'string') summary = record.text;
+    else if (typeof record.summary === 'string') summary = record.summary;
+    else if (typeof record.command === 'string') summary = `command ${record.command}`;
+  }
+  return boundedSummary(summary);
+}
+
 /** 测试专用:重置模块内存态。 */
 export function _resetSessionActiveTurnStateForTests(): void {
   _writeChains.clear();
   _quitFrozen = false;
+  _endedWriteSuppressions = 0;
   _onTurnEndedPersisted = null;
+  // bootAt 一并重置:它在模块 import 时定格,而用例常以「相对 now 的 startedAt」
+  // 造数据 —— 文件内前置用例的累计耗时一旦超过该相对差,后续用例的中断判定就会
+  // 因 startedAt >= bootAt 静默翻转(时钟脆弱)。每个用例重新定基消除顺序耦合。
+  _bootAtMs = Date.now();
 }

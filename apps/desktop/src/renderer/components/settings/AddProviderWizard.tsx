@@ -23,6 +23,7 @@ import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { createCustomProvider, type RuntimeKeys } from '@/lib/customProviders';
 import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import { providerMonogram } from '@/lib/providerModels';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
@@ -30,11 +31,12 @@ import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
+import { derivePiRuntimeFromClaudeRuntime } from '@/../shared/piRuntimeInitialization';
 
 import {
   isLoopbackProviderUrl,
   presetDisplayName,
-  sortPresetsForLocale,
+  sortPresetsForRegion,
 } from '@cindy/model-providers';
 import type {
   AgentKind,
@@ -355,8 +357,8 @@ export function AddProviderWizard({
     [providers],
   );
   const sortedPresets = useMemo(
-    () => sortPresetsForLocale(presets, i18n.language),
-    [presets, i18n.language],
+    () => sortPresetsForRegion(presets, CURRENT_CINDY_REGION),
+    [presets],
   );
   const q = query.trim().toLowerCase();
   const filteredOauth = q
@@ -364,7 +366,10 @@ export function AddProviderWizard({
     : oauthChoices;
   const filteredPresets = q
     ? sortedPresets.filter(
-        (p) => p.name.toLowerCase().includes(q) || (p.nameEn?.toLowerCase().includes(q) ?? false),
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.nameEn?.toLowerCase().includes(q) ?? false) ||
+          (p.nameZhTW?.toLowerCase().includes(q) ?? false),
       )
     : sortedPresets;
 
@@ -803,6 +808,14 @@ export function AddProviderWizard({
         if (preset.authMethod !== 'none') {
           const k = apiKey.trim();
           if (k) keys[agent] = k;
+        }
+      }
+      const claudeRuntime = runtimes['claude-code'];
+      if (!preset.runtimes.pi && !runtimes.pi && claudeRuntime) {
+        const piRuntime = derivePiRuntimeFromClaudeRuntime(claudeRuntime);
+        if (piRuntime) {
+          runtimes.pi = piRuntime;
+          if (keys['claude-code']) keys.pi = keys['claude-code'];
         }
       }
       if (Object.keys(runtimes).length === 0) {

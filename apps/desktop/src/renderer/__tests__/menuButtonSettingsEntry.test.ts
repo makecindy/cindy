@@ -11,7 +11,7 @@
  * 1. 菜单包含 settings 菜单项,文案走 i18n key `titleBar.menuItems.settings`。
  * 2. 点击导航 `/settings`,且已在设置页时不重复导航(与 MainLayout
  *    'open-settings' 命令、侧栏用户卡片同一行为)。
- * 3. 四语言 locale 都提供 `titleBar.menuItems.settings` 文案。
+ * 3. 全部支持语言都提供 `titleBar.menuItems.settings` 文案。
  */
 
 import { describe, it, expect } from 'vitest';
@@ -43,7 +43,7 @@ describe('MenuButton — settings menu item (#1881)', () => {
 });
 
 describe('MenuButton — locale coverage for the settings item', () => {
-  const locales = ['zh-CN', 'en', 'ja', 'ko'] as const;
+  const locales = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const;
 
   for (const lng of locales) {
     it(`${lng} provides titleBar.menuItems.settings`, () => {

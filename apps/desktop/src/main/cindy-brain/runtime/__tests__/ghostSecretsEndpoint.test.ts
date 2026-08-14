@@ -126,6 +126,37 @@ describe('cindy-brain · ghostSecretsEndpoint(user 凭证只写通道,意识收�
     }
   });
 
+  it('gh-cli 状态只附可用布尔；备用 PAT 仍可写、可清并保留独立 saved/tail', async () => {
+    const vault = memVault({ github_pat: 'github_pat_abcdefgh1234' });
+    const base = {
+      readBodyText: () => Promise.resolve(''),
+      userSecretKeys: ['github_pat'],
+      hostCredentialStates: [
+        { key: 'github_pat', source: 'gh-cli' as const, available: true },
+      ],
+      vault,
+      ghostId: 'cindy-github',
+    };
+    const list = await handleGhostSecretsRequest({ ...base, method: 'GET', pathname: '/secrets' });
+    expect(JSON.parse(list.body ?? '')).toEqual([
+      {
+        key: 'github_pat',
+        saved: true,
+        tail: '1234',
+        hostSource: 'gh-cli',
+        hostAvailable: true,
+      },
+    ]);
+    expect(list.body).not.toContain('github_pat_abcdefgh');
+    const cleared = await handleGhostSecretsRequest({
+      ...base,
+      method: 'DELETE',
+      pathname: '/secrets/github_pat',
+    });
+    expect(cleared.status).toBe(204);
+    expect(vault.data).not.toHaveProperty('github_pat');
+  });
+
   it('oidc-token 只回 Host 托管就绪状态，不回 token/audience/身份资料且不可写删', async () => {
     const base = {
       readBodyText: () => Promise.resolve('{"value":"forged"}'),

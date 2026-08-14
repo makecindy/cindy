@@ -359,6 +359,8 @@ export function buildClaudeTurnUsageDetails(
   deltas: ModelUsageDeltaEntry[] | undefined,
   fallbackModel: string,
   perModel?: ResolvedModelCost[],
+  durationMs?: number,
+  turnDurationMs?: number,
 ): TurnUsageDetails | null {
   const hasModelUsageDeltas = Boolean(deltas && deltas.length > 0);
   const perModelCost = perModel
@@ -380,5 +382,7 @@ export function buildClaudeTurnUsageDetails(
     model: deltas?.length === 1 ? deltas[0].model : hasModelUsageDeltas ? undefined : fallbackModel,
     models: hasModelUsageDeltas ? deltas?.map((delta) => delta.model) : undefined,
     perModelCost: perModelCost && perModelCost.length > 0 ? perModelCost : undefined,
+    durationMs,
+    turnDurationMs,
   });
 }

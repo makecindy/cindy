@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 
 import { app } from 'electron';
 import type { BrowserWindow } from 'electron';
+import { eq } from 'drizzle-orm';
 
 import { Scheduler } from '@cindy/maker-scheduler';
 import type { Logger, ScheduleRunner } from '@cindy/maker-scheduler';
@@ -22,6 +23,8 @@ import type { Maker } from '@cindy/maker-core';
 import type { FeishuIM } from '@cindy/im';
 
 import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace';
+import { sessions } from '../localDb/schema.js';
+import { isReviewSessionSource } from '../../shared/sessionSource.js';
 import {
   resolveDefaultScheduleRoute,
   resolveRouteCopyCapabilities,
@@ -146,6 +149,20 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     isManagedWorkspaceDir: (dir) => {
       const rel = path.relative(dialogueWorkspaceRootDir(), dir);
       return !rel.startsWith('..') && !path.isAbsolute(rel);
+    },
+    // Review sessions are host-owned read-only tasks, not normal unattended
+    // automation targets. Re-read their durable source for CRUD and every fire
+    // so renderer filtering or a restored schedule row cannot bypass isolation.
+    validateTargetSession: async (targetSessionId) => {
+      const [row] = await deps
+        .getDb()
+        .select({ source: sessions.source })
+        .from(sessions)
+        .where(eq(sessions.id, targetSessionId))
+        .limit(1);
+      if (isReviewSessionSource(row?.source)) {
+        throw new Error('Review tasks cannot be targets of scheduled automations');
+      }
     },
     // 卡死收口的通知出口。通知投递平时住在两个 runner 里(它们各自持 notifier),而
     // 卡死收口刻意绕过 runner —— 要么它压根不返回、要么它把守卫 abort 当普通中断处理。

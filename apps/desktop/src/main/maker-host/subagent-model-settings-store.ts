@@ -42,8 +42,10 @@ function normalize(raw: unknown): SubagentModelSettings {
     codexProviderId: codex === null ? null : normalizeSubagentModelId(input.codexProviderId),
     // effort 不依附模型(effort-only 是合法上游配置,见 shared 契约注释)。
     codexEffort: isCodexSubagentEffort(input.codexEffort) ? input.codexEffort : null,
-    // 垃圾值回退方向按语义定:总开关 fail-open(保能力),嵌套 fail-closed(少放权)。
+    // 垃圾值回退方向按语义定:总开关 fail-open(保能力),Cindy 策略 fail-open
+    // (兼容升级前行为),嵌套 fail-closed(少放权)。
     codexSubagentsEnabled: input.codexSubagentsEnabled === false ? false : true,
+    codexUseCindySubagentPolicy: input.codexUseCindySubagentPolicy === false ? false : true,
     codexMaxConcurrentSubagents: normalizeCodexSubagentConcurrency(
       input.codexMaxConcurrentSubagents,
     ),

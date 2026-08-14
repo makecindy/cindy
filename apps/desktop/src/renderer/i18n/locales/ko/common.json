@@ -131,6 +131,7 @@
       "terminalShell": "기본 터미널 셸",
       "composer": "메시지 입력",
       "linkOpen": "링크 열기 방식",
+      "streamFade": "스트리밍 모션",
       "compatMode": "팁",
       "voiceInput": "음성 입력",
       "import": "세션 가져오기",
@@ -252,7 +253,8 @@
             "listAgent": "현재 agent 에 로드된 키 목록:",
             "linuxStart": "사용자 로컬 ssh-agent 시작(영구 적용은 ~/.bashrc / ~/.zshrc 에 추가):",
             "win32Enable": "ssh-agent 서비스 활성화(관리자 PowerShell 에서 실행):"
-          }
+          },
+          "noSuchFileFix": "이 경로는 디스크에 존재하지 않습니다. 호스트 설정으로 돌아가 올바른 개인 키를 다시 선택하거나, Identity file 경로 입력을 확인하세요 (~/.ssh/… 형식이 지원되며 홈 디렉터리로 확장됩니다)."
         }
       },
       "add": {
@@ -370,7 +372,8 @@
         "codexSyncDone": "Codex 자격 증명을 원격에 푸시했습니다",
         "codexSyncDoneDaemonRestartFailed": "Codex 자격 증명이 원격에 푸시되었지만 이전 daemon이 재시작되지 않았습니다 — 원격에 다시 연결한 후 재시도하세요",
         "codexSyncFailed": "Codex 자격 증명 동기화 실패",
-        "codexSyncNoLocal": "로컬에 Codex 자격 증명이 없습니다 — 먼저 {{appName}} 에서 Codex 에 로그인하세요"
+        "codexSyncNoLocal": "로컬에 Codex 자격 증명이 없습니다 — 먼저 {{appName}} 에서 Codex 에 로그인하세요",
+        "connectKeyFileMissing": "개인 키 파일을 찾을 수 없거나 읽을 수 없습니다: {{detail}}. 경로를 확인하거나 호스트 설정에서 키를 다시 선택하세요."
       },
       "silentInstall": {
         "starting": "원격 {{hostId}} 에 {{agent}} 설치 중…",
@@ -462,6 +465,20 @@
         "label": "사이드바 카드 모드",
         "hint": "고정된 세션을 작업 현황 요약이 담긴 카드로 표시합니다. 카드 높이는 요약 길이에 따라 달라지며, 사이드바를 넓히면 2~3열로 자동 배치됩니다.",
         "aria": "사이드바 카드 모드 전환"
+      },
+      "sidebarMainListMode": {
+        "label": "세션 목록 표시 방식",
+        "hint": "사이드바 기본 목록(고정 제외)의 표시 형식입니다. 텍스트는 간결한 한 줄, 목록은 미리보기가 있는 두 줄입니다.",
+        "aria": "세션 목록 표시 방식 전환"
+      },
+      "layout": {
+        "label": "패널 레이아웃",
+        "hint": "패널 위치와 너비는 다음 실행에도 유지됩니다. 사용하기 어려운 배치가 되면 기본 레이아웃으로 복원할 수 있습니다.",
+        "reset": "기본 레이아웃 복원",
+        "resetSuccess": "기본 패널 레이아웃을 복원했습니다",
+        "resetFailed": "기본 패널 레이아웃을 복원하지 못했습니다",
+        "saved": "패널 위치를 저장했습니다. 설정 → 외관에서 기본 레이아웃으로 복원할 수 있습니다.",
+        "saveFailed": "패널 위치를 저장하지 못했습니다"
       }
     },
     "notifications": {
@@ -473,6 +490,15 @@
       "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
       "feishuDisabledHint": "먼저 \"Feishu / Lark 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
       "feishuAria": "세션 완료 Feishu 알림 전환",
+      "sessionEvent": {
+        "untitled": "제목 없는 세션",
+        "done": "완료됨 ✓",
+        "error": "실행 실패",
+        "needsReply": "답변이 필요합니다",
+        "externalDone": "Cindy · 세션 “{{title}}” 완료됨 ✓",
+        "externalError": "Cindy · 세션 “{{title}}” 실행 실패",
+        "externalNeedsReply": "Cindy · 세션 “{{title}}”에 답변이 필요합니다"
+      },
       "wecomGroupLabel": "WeCom 그룹 알림",
       "wecomGroupHint": "자동 작업 완료 알림에 사용됩니다. WeCom 그룹 봇 Webhook URL을 붙여넣으면 이 기기에 암호화되어 저장됩니다.",
       "wecomGroupConfiguredHint": "설정됨(키 {{maskedKey}}). 전체 스위치를 켠 후 각 자동 작업에서 필요할 때 전송할 수 있습니다.",
@@ -611,6 +637,7 @@
       "options": {
         "system": "자동 (시스템 따르기)",
         "zh-CN": "简体中文",
+        "zh-TW": "繁體中文",
         "en": "English",
         "ja": "日本語",
         "ko": "한국어"
@@ -922,6 +949,7 @@
         "optionDescriptions": {
           "auto": "인식 서비스가 자동 감지",
           "zh-CN": "중국어 간체(중국 본토)",
+          "zh-TW": "중국어 번체(대만)",
           "en": "영어",
           "ja": "일본어",
           "ko": "한국어"
@@ -1445,6 +1473,71 @@
         },
         "advanced": {
           "label": "고급 설정 (모델 / 요청 헤더)"
+        },
+        "runtimeFill": {
+          "action": "다른 runtime 채우기",
+          "reviewTitle": "다른 runtime 채우기",
+          "reviewSubtitle": "필드 차이를 먼저 확인하세요. 각 runtime은 독립적으로 저장됩니다.",
+          "confirmTitle": "덮어쓰기 확인",
+          "confirmSubtitle": "{{source}}에서 복사할 필드를 선택하세요.",
+          "source": "원본",
+          "columns": {
+            "field": "필드",
+            "source": "원본 값",
+            "target": "현재 값"
+          },
+          "fields": {
+            "endpointBundle": "엔드포인트 및 API 프로토콜",
+            "baseUrl": "기본 URL",
+            "requestPath": "요청 경로",
+            "wireProtocol": "API 프로토콜",
+            "apiKey": "API 키",
+            "models": "모델",
+            "headers": "추가 헤더",
+            "modelsUrl": "모델 목록 엔드포인트"
+          },
+          "values": {
+            "empty": "비어 있음",
+            "default": "기본/추론",
+            "configured": "설정됨",
+            "secretSet": "설정됨(숨김)",
+            "models_one": "모델 {{count}}개",
+            "models_other": "모델 {{count}}개",
+            "headers_one": "헤더 {{count}}개",
+            "headers_other": "헤더 {{count}}개"
+          },
+          "targetConflict_one": "기존 필드 {{count}}개가 다름",
+          "targetConflict_other": "기존 필드 {{count}}개가 다름",
+          "targetReady_one": "필드 {{count}}개를 채울 수 있음",
+          "targetReady_other": "필드 {{count}}개를 채울 수 있음",
+          "targetIncompatible_one": "필드 {{count}}개가 호환되지 않음",
+          "targetIncompatible_other": "필드 {{count}}개가 호환되지 않음",
+          "status": {
+            "needsConfirm": "확인 필요",
+            "ready": "채울 준비됨",
+            "incompatible": "호환되지 않음"
+          },
+          "secretIndependent": "{{target}}의 별도 로컬 키로 복사",
+          "overwriteCurrent": "현재 값 대체",
+          "fillEmpty": "빈 필드 채우기",
+          "incompatibleProtocol": "복사되지 않음: {{target}}에서 이 API 프로토콜을 지원하지 않습니다",
+          "incompatibleHeaders": "복사되지 않음: {{target}}에 필요한 헤더는 여기서 안전하게 복사할 수 없습니다",
+          "incompatibleEndpoint": "복사되지 않음: {{target}}에서는 이 엔드포인트 설정을 사용할 수 없습니다",
+          "noSelectableFields": "이 runtime에 호환되는 필드가 없습니다.",
+          "endpointBundleNote": "{{target}}에는 기본 URL, 요청 경로, API 프로토콜을 함께 복사하여 엔드포인트 불일치를 방지합니다.",
+          "oauthPiUnavailable": "Pi 네이티브 runtime은 OAuth 제공자를 지원하지 않아 채우기 대상에서 제외됩니다.",
+          "independentNote": "일회성 채우기입니다. 이후 runtime 간 동기화되지 않으며 키는 별도 safeStorage에 저장됩니다.",
+          "continue": "덮어쓰기 검토",
+          "apply": "채우기 확인",
+          "applyOverwrite": "덮어쓰고 채우기",
+          "back": "차이로 돌아가기",
+          "nothingToFill": "현재 runtime에 재사용 가능한 필드를 먼저 입력하세요",
+          "alreadySame": "다른 runtime과 이미 일치합니다",
+          "loadingKeys": "저장된 API 키를 모두 불러온 후 다른 runtime을 채우세요",
+          "keysUnavailable": "저장된 API 키를 불러오지 못해 다른 runtime을 채울 수 없습니다",
+          "modelsBusy": "모델 목록 가져오기 또는 선택을 완료한 후 다른 runtime을 채우세요",
+          "noCompatibleFields": "현재 runtime의 재사용 가능한 필드를 다른 runtime에서 지원하지 않습니다",
+          "filledToast": "{{targets}}에 채웠습니다"
         }
       },
       "models": {
@@ -1467,6 +1560,7 @@
         "refreshAdded": "새 모델 {{count}}개를 발견했습니다",
         "refreshNoNew": "모델 목록이 최신 상태입니다. 새 항목이 없습니다",
         "refreshFailed": "모델 목록을 새로고침하지 못했습니다. 잠시 후 다시 시도해 주세요",
+        "refreshFetchDisabled": "모델 카탈로그 원격 가져오기가 비활성화되어 새로고침을 건너뛰었습니다",
         "disableModel": "이 모델 비활성화",
         "enableModel": "이 모델 활성화",
         "capabilityGroupHint": "대화 모델 선택에는 표시되지 않으며, 이미지 생성 등 기능에서만 사용됩니다.",
@@ -1725,6 +1819,12 @@
         "label": "온라인/오프라인 알림",
         "cellLabel": "메시지 알림",
         "hint": "연결/해제 시 Bot에 알림 메시지를 전송합니다"
+      },
+      "sessionNotification": {
+        "label": "세션 완료 알림",
+        "cellLabel": "세션 완료 또는 응답 필요 시 Feishu / Lark 메시지 전송",
+        "hint": "연동된 Feishu 또는 Lark 봇을 통해 DM을 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
+        "disabledHint": "먼저 Bot을 설정하고 바인딩을 완료하려면 DM을 보내주세요."
       },
       "bind": "연동"
     },
@@ -2041,6 +2141,7 @@
         "project": "프로젝트 워크스페이스 전환",
         "model": "모델 보기·전환",
         "permission": "권한 모드 보기·전환",
+        "settings": "프로젝트와 Agent 설정 보기",
         "ctr": "데스크톱 세션 원격 제어",
         "exctr": "원격 제어 종료"
       },
@@ -2228,6 +2329,9 @@
         "title": "Codex 하위 에이전트 가드레일",
         "enableHint": "Codex가 작업 중 일회성 하위 에이전트를 생성하도록 허용합니다. 끄면 이전 버전 멀티 에이전트(V1)와 Sol / Terra(V2) 모두에 적용됩니다.",
         "enableAria": "Codex 하위 에이전트 허용",
+        "cindyPolicyLabel": "Cindy 사용자 지정 하위 에이전트 정책 사용",
+        "cindyPolicyHint": "켜면 Cindy가 탐색 작업에서 Codex가 하위 에이전트를 적극적으로 사용하도록 유도하는 지침을 주입합니다. 이미 계획과 위임에 능숙한 모델에서는 추가 지침이 오히려 역효과를 낼 수 있습니다. 끄면 주입을 중단하고 Codex의 기본 동작을 사용합니다.",
+        "cindyPolicyAria": "Cindy 사용자 지정 하위 에이전트 정책 사용",
         "concurrencyLabel": "하위 에이전트 동시 실행 한도",
         "concurrencyHint": "동시에 실행할 수 있는 하위 에이전트 수의 상한입니다. 하위 에이전트는 각각 모델 할당량을 소비합니다. Ultra 단계에서 동시 실행이 8에 도달하면 Codex가 경고합니다.",
         "concurrencyFollowDefault": "Codex 기본값 따르기(이전 버전 V1은 6, Sol / Terra는 3)",
@@ -2322,6 +2426,12 @@
         "external": "시스템 기본 브라우저"
       }
     },
+    "streamFade": {
+      "title": "스트리밍 모션",
+      "label": "출력 텍스트 페이드 인",
+      "hint": "답변이 스트리밍되는 동안 새 텍스트가 단어 단위로 차례로 페이드 인됩니다. 켜면 효과가 적용되고, 끄면 내용이 즉시 표시됩니다. 시스템의 동작 줄이기 설정이 켜져 있으면 항상 꺼집니다.",
+      "toggleAria": "스트리밍 페이드 인 모션 전환"
+    },
     "chatEmbedding": {
       "cell": {
         "label": "채팅 기록 의미 색인 활성화",
@@ -2331,7 +2441,8 @@
       "toast": {
         "enabled": "채팅 기록 의미 색인이 활성화됨",
         "disabled": "채팅 기록 의미 색인이 중지됨",
-        "toggleFailed": "채팅 임베딩 전환 실패"
+        "unavailable": "이 계정 또는 지역에서는 채팅 기록 의미 색인을 사용할 수 없습니다",
+        "toggleFailed": "채팅 기록 의미 색인 전환 실패"
       }
     },
     "messageNavRail": {
@@ -3036,6 +3147,9 @@
           "wecom": "새 WeCom 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
+        "agentUnsupportedOnChannelHint": "{{agent}} Agent는 이 채널에서 메시지별 권한 확인을 지원하지 않아 메시지를 처리할 수 없습니다. Claude Code 또는 Codex로 전환하세요.",
+        "agentUnsupportedOnChannelModeHint": "Agent를 전환하고 /new를 보낸 후에도 새 Agent에서 권한 모드 문제가 표시되면 /permission을 보내 권한 모드를 조정하세요.",
+        "permissionModeUnsupportedOnChannelHint": "현재 Agent는 이 권한 모드로 이 채널에서 실행할 수 없어 메시지를 처리할 수 없습니다. /permission을 보내 지원되는 권한 모드로 변경하세요.",
         "modelLabel": "모델 설정",
         "loading": "새 대화 설정을 불러오는 중…",
         "loadFailed": "새 대화 설정을 불러오지 못했습니다",
@@ -3044,7 +3158,9 @@
           "claude-code": "Claude Code",
           "codex": "Codex",
           "pi": "Pi"
-        }
+        },
+        "groupCtrPermissionLabel": "그룹 /ctr 새 세션 권한 모드",
+        "groupCtrPermissionDescription": "그룹 채팅에서 @bot /ctr로 새 세션을 만들 때 적용되는 권한 모드입니다. 기본값은 자동 승인입니다. 그룹 컨텍스트에는 멤버가 조작할 수 있는 내용이 포함되므로 전체 액세스를 선택하면 확인 없이 바로 실행됩니다. 신뢰할 수 있는 그룹에서만 선택하세요."
       }
     },
     "shortcuts": {
@@ -3214,6 +3330,7 @@
         "manageAria": "{{name}} 관리",
         "agentInvoked": "Agent가 자동 호출",
         "upToDate": "최신 상태",
+        "oauthAuthorizationExpired": "인증 만료 · 다시 연결 필요",
         "installAria": "{{name}} 설치"
       },
       "market": {
@@ -3232,12 +3349,21 @@
         "update": "마켓에서 업데이트",
         "updateTo": "v{{version}}(으)로 업데이트",
         "installed": "설치됨",
-        "conflict": "사용할 수 없음",
-        "conflictAria": "{{name}}에 플러그인 ID 충돌이 있습니다",
-        "conflictDescription": "이 플러그인 ID는 이미 사용 중이어서 설치할 수 없습니다.",
+        "replace": "교체",
+        "replaceAria": "{{name}}을(를) 이 마켓 버전으로 교체",
+        "replaceDescription": "같은 ID의 플러그인이 이미 설치되어 있습니다. 계속하면 이 마켓 버전으로 교체하고 플러그인 데이터는 유지됩니다.",
         "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "customSourcesUnavailable": "다음 사용자 지정 마켓을 일시적으로 사용할 수 없습니다: {{names}}. 다른 마켓에는 영향을 주지 않습니다.",
         "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",
         "notConfigured": "이 환경에는 플러그인 마켓이 구성되지 않았습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "upgradeNotice": {
+          "single": "조직 플러그인 ‘{{name}}’을(를) 자동으로 업데이트했습니다.",
+          "multiple_one": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다.",
+          "multiple_other": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다.",
+          "singleWithPermissions": "조직 플러그인 ‘{{name}}’을(를) 자동으로 업데이트했습니다. 새 권한: {{permissions}}",
+          "multipleWithPermissions_one": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다. 새 권한이 추가되었습니다.",
+          "multipleWithPermissions_other": "조직 플러그인 {{count}}개를 자동으로 업데이트했습니다. 일부 플러그인에 새 권한이 추가되었습니다."
+        },
         "removalNotice": {
           "single": "플러그인 “{{name}}”: 조직에서 제거했으며 이 기기의 로컬 사본과 데이터도 정리했습니다.",
           "multiple_one": "{{count}}개의 플러그인이 조직에서 제거되었습니다. 이 기기의 로컬 사본과 데이터가 정리되었습니다.",
@@ -3279,6 +3405,9 @@
           "empty": "이 마켓에는 플러그인 항목이 없습니다",
           "skippedEntries": "잘못된 플러그인 항목 {{count}}개를 건너뛰었습니다",
           "unreadableEntries": "플러그인 항목 {{count}}개를 일시적으로 읽을 수 없습니다. 새로고침하여 다시 시도하세요",
+          "addedReceipt": "\"{{name}}\"을(를) 추가했고 플러그인 {{count}}개를 발견했습니다",
+          "refreshedReceipt": "\"{{name}}\"을(를) 새로고침했고 플러그인 {{count}}개를 발견했습니다",
+          "emptyWithSkippedEntries": "사용 가능한 플러그인을 찾지 못했습니다. 매니페스트의 모든 항목을 건너뛰었습니다. 소스 유형, 플러그인 디렉터리, 매니페스트를 확인하세요.",
           "localBadge": "로컬",
           "defaultRef": "기본 브랜치",
           "neverSynced": "동기화되지 않음",
@@ -3321,6 +3450,15 @@
             "copyFailed": "복사에 실패했습니다. 다시 시도하세요."
           }
         }
+      },
+      "reapproval": {
+        "badge": "권한 재확인 필요",
+        "action": "권한 다시 확인",
+        "actionAria": "플러그인 {{name}}의 권한 다시 확인",
+        "noticeTitle": "권한 재확인 필요",
+        "bodyLegacy": "Cindy에 이 플러그인의 권한 확인 기록이 없어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요.",
+        "bodyInvalid": "이 플러그인의 권한 확인 기록이 손상되어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요.",
+        "bodyBuiltinRestart": "이 내장 플러그인의 승인 기록에 문제가 발생했습니다. Cindy를 다시 시작하면 자동으로 복구되며, 다른 조치는 필요하지 않습니다."
       },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
@@ -3376,6 +3514,7 @@
         "uninstalled": "\"{{name}}\" 제거됨",
         "installedAsleep": "\"{{name}}\" 설치 완료 (비활성 상태이며 여기에서 언제든 활성화할 수 있습니다)",
         "updated": "\"{{name}}\"이(가) v{{version}}(으)로 업데이트되었습니다",
+        "reapproved": "\"{{name}}\"이(가) 복원되었습니다",
         "exported": "\"{{name}}\"의 .cindy 파일을 내보냈습니다",
         "exportFailed": "\"{{name}}\"을(를) 내보내지 못했습니다. 다시 시도하세요",
         "projectDisabled": "이 프로젝트에서 \"{{name}}\"을(를) 껐습니다",
@@ -3395,6 +3534,7 @@
         "metaWithAuthor": "제작자 {{author}} · 버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "enableNow": "설치 후 바로 활성화",
         "enableNowOpenPanel": "설치 후 바로 활성화하고 패널 열기",
+        "manualCount": "번들 매뉴얼 {{count}}개",
         "expandDescription": "전체 소개 보기",
         "collapseDescription": "소개 접기"
       },
@@ -3429,6 +3569,7 @@
         "cindyEmbedTextDetail": "텍스트가 시스템 벡터 모델로 전송되어 숫자 배열로 변환됩니다. 한 번에 최대 {{max}}개이며 모델 요금이 발생할 수 있습니다. 생성된 벡터는 플러그인만 보관하며 사용자 라이브러리에는 기록되지 않습니다.",
         "cindySearchWeb": "Cindy AI로 공개 웹을 검색할 수 있음",
         "cindySearchWebDetail": "검색 요청은 공개 웹에 접근하며 Cindy AI 사용량을 소모할 수 있습니다.",
+        "cindyTextOneshotModelDetail": "시스템의 경량 작업 모델 체인(자동 제목과 같은 경로)을 사용합니다. Agent를 사용하지 않고 파일에도 접근하지 않습니다. 모델 비용이 발생할 수 있습니다. 플러그인이 선호 모델을 선언했습니다: {{model}}(현재 카탈로그에서 사용 가능한 경우에 적용되며, 핀 설정이 우선 적용됩니다).",
         "agentUserAction": "플러그인 카드를 클릭한 뒤 Agent의 새 작업을 시작할 수 있음",
         "agentUserActionDetail": "클릭 한 번마다 한 번만 시작할 수 있으며, 해당 카드가 속한 세션에서만 사용할 수 있습니다.",
         "agentBackground": "백그라운드에서 Agent의 새 작업을 자동으로 시작할 수 있음",
@@ -3475,6 +3616,8 @@
         "networkSecretGhostInputDetail": "이 자격 증명은 플러그인 자체 설정 화면에서 입력받으므로 입력 시점에 플러그인 페이지를 거칩니다. 이후 호스트에 한 번만 전달되어 암호화 저장되며, 저장 후에는 플러그인이 다시 읽을 수 없습니다. 주입은 선언된 도메인 요청 시에만 호스트가 수행합니다.",
         "networkSecretIdentity": "로그인 이메일을 자격 증명 \"{{name}}\"(으)로 사용합니다",
         "networkSecretIdentityDetail": "값은 로그인된 계정의 이메일에서 가져오며, 요청 시 호스트가 자동으로 파생하여 주입합니다. 입력할 필요가 없으며, 플러그인은 설정 화면에 현재 신원을 표시하기 위해 이 이메일을 읽을 수 있습니다.",
+        "networkSecretGhCli": "자격 증명 \"{{name}}\"에는 로컬 GitHub CLI 로그인을 우선 사용합니다",
+        "networkSecretGhCliDetail": "호스트는 필요할 때만 로컬 gh 로그인 토큰을 읽어 GitHub API 요청에만 주입합니다. 플러그인 코드는 토큰을 읽거나 저장할 수 없습니다. gh를 사용할 수 없으면 플러그인 설정에서 예비 Personal Access Token을 구성할 수 있습니다.",
         "networkSecretOrganizationIdentity": "Cindy 조직 사용자 신원을 자격 증명 \"{{name}}\"(으)로 사용합니다",
         "networkSecretOrganizationIdentityDetail": "Cindy가 필요할 때 단기 신원 어설션을 발급하며, 호스트만 명시된 서비스 호스트로 전송합니다. 플러그인 코드는 토큰을 읽거나 저장할 수 없습니다.",
         "networkSecretOauth": "{{host}}에서 OAuth 인증을 진행하도록 안내합니다({{name}})",
@@ -3485,6 +3628,7 @@
         "codeDetailWithNode": "패널 UI는 독립된 샌드박스에서 실행됩니다. 로컬 처리는 위에서 선언된 Node 런타임이 제공합니다.",
         "added": "추가",
         "removed": "제거",
+        "updated": "업데이트됨",
         "unchanged": "그 외 {{count}}개 권한은 변경 없음",
         "noChange": "권한 변경이 없습니다.",
         "pick": "폴더 선택을 요청할 수 있습니다",
@@ -3495,6 +3639,8 @@
         "sessionContextDetail": "현재 세션을 위해 작동할 때만 위치 정보(세션 ID와 프로젝트 폴더 경로)를 전달합니다. 파일 내용은 포함되지 않으며 파일 접근 권한도 부여되지 않습니다.",
         "preview": "아래 사이트의 미리보기 페이지를 사이드바 브라우저에서 열 수 있습니다",
         "previewDetail": "아래에 나열된 사이트만 열 수 있으며, 페이지를 열 때마다 어떤 플러그인이 열었는지 표시됩니다.",
+        "iosSimulator": "현재 작업의 내장 iOS 시뮬레이터 상태를 확인하고 제어 패널을 열 수 있습니다",
+        "iosSimulatorDetail": "시뮬레이터 수명 주기, WDA, Native Sidecar, 영상과 입력은 계속 Cindy Host가 관리합니다. 플러그인은 프레임 데이터, 입력 권한, 네이티브 Helper 또는 다른 작업 ID를 받을 수 없습니다.",
         "nodeChildSpawn": "Node 프로그램이 패키지에 신고된 하위 프로세스 시작을 호스트에 요청할 수 있습니다",
         "nodeChildSpawnDetail": "자신의 패키지 안에 신고된 JS 파일만 시작할 수 있으며(메인 프로그램과 동일한 로컬 권한), 임의의 명령은 실행할 수 없습니다. 플러그인이 비활성화되거나 종료되면 하위 프로세스도 함께 종료됩니다.",
         "skill": "AI 어시스턴트에 스킬 \"{{name}}\"을(를) 추가합니다",
@@ -3509,7 +3655,9 @@
       },
       "errors": {
         "fileInvalid": "유효한 .cindy 플러그인 파일이 아닙니다",
+        "hostUnsupported": "이 플러그인에는 현재 버전에서 제공하지 않는 Cindy 기능이 필요합니다. Cindy를 업데이트한 후 다시 설치하세요.",
         "alreadyInstalled": "이 플러그인은 이미 설치되어 있습니다",
+        "approvalRequired": "계속하려면 이 플러그인의 권한을 다시 확인해야 합니다",
         "commandConflict": "명령어가 설치된 플러그인과 충돌합니다. 먼저 상대를 제거하거나 명령어 이름을 변경하세요.",
         "idReserved": "이 id는 공식 예약 접두사 cindy-를 사용합니다. 앱에 내장된 플러그인만 사용할 수 있습니다",
         "sourceMissing": "선택한 파일을 찾을 수 없습니다",
@@ -3554,6 +3702,9 @@
             "embed.text": "텍스트 벡터 변환"
           },
           "defaultOption": "{{model}} (기본값)",
+          "defaultOptionDeclared": "{{model}}(플러그인 선언)",
+          "searchPlaceholder": "모델 또는 제공자 검색",
+          "budgetBadge": "할인",
           "noModels": "사용 가능한 모델 없음"
         },
         "errandPrefs": {
@@ -3610,14 +3761,21 @@
         "slotBadge": "읽지 않음 배지",
         "slotFs": "파일 쓰기",
         "slotSkill": "에이전트 스킬",
-        "slotWorkspace": "워크스페이스 세션"
+        "slotWorkspace": "워크스페이스 세션",
+        "slotIOSSimulator": "내장 iOS 시뮬레이터"
       },
       "commandPaletteTag": "플러그인 명령",
       "updateConfirm": {
         "title": "플러그인 \"{{name}}\"을(를) 업데이트할까요?",
         "body": "버전 {{from}} → {{to}}. 설치된 버전을 교체합니다. 활성 상태와 패널 위치는 유지됩니다.",
+        "oauthClientChanged": "이번 업데이트에서 OAuth 클라이언트가 변경됩니다. 플러그인의 기본 인증을 사용하는 연결된 계정은 업데이트 후 만료되며 다시 연결해야 합니다.",
         "confirm": "업데이트",
         "cancel": "취소"
+      },
+      "reapproveConfirm": {
+        "title": "\"{{name}}\" 권한을 다시 확인할까요?",
+        "body": "아래 권한을 확인하면 설치된 플러그인이 다시 승인됩니다. 설치 파일은 필요하지 않습니다.",
+        "confirm": "확인 후 복원"
       },
       "pick": {
         "dialogTitle": "폴더 선택",
@@ -3635,15 +3793,9 @@
       },
       "updateAll": {
         "title": "모두 업데이트 · {{count}}개",
-        "description": "권한 변경이 없는 업데이트는 자동으로 완료됩니다. 권한이 확장되는 업데이트는 항목별 확인이 필요합니다.",
-        "versionRange": "v{{from}} → v{{to}}",
-        "permissionChanged": "권한 변경됨",
-        "reviewOutdated": "권한 변경 내역이 오래되었습니다",
-        "rereview": "다시 검토",
-        "reviewDiff": "확인",
         "collapseDiff": "접기",
-        "approve": "동의 후 업데이트",
-        "skip": "건너뛰기",
+        "description": "일반 업데이트는 자동으로 완료되며, 검증된 실제 패키지가 새 권한을 요청할 때만 개별 확인합니다.",
+        "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "대기 중",
         "statusInstalling": "업데이트 중…",
         "statusDone": "업데이트됨",
@@ -3651,7 +3803,13 @@
         "statusFailed": "업데이트 실패",
         "background": "백그라운드에서 계속",
         "doneAction": "완료",
-        "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료"
+        "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료",
+        "permissionChanged": "권한 변경됨",
+        "rereview": "다시 검토",
+        "reviewDiff": "검토",
+        "reviewOutdated": "검토 기간 만료",
+        "approve": "승인",
+        "skip": "건너뛰기"
       }
     },
     "mcp": {
@@ -4243,11 +4401,21 @@
     "tokenLabel": "Token",
     "tokenBreakdown": "(입력 {{input}} · 출력 {{output}})",
     "cacheLabel": "캐시",
+    "timeLabel": "시간",
+    "timeAndRateValue": "{{duration}} 속도:{{rate}} 토큰/초",
     "modelLabel": "모델",
     "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
+    "paceTrendFast": "현재 평균 사용 속도는 빠른 편입니다(대략적인 추세)",
+    "paceTrendNormal": "현재 평균 사용 속도는 보통입니다(대략적인 추세)",
+    "paceTrendSlow": "현재 평균 사용 속도는 느린 편입니다(대략적인 추세)",
     "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
+    "durationSeconds": "{{value}}초",
+    "durationMinutesSeconds": "{{minutes}}분 {{seconds}}초",
+    "performanceLine": "속도 {{rate}} 토큰/초 · 시간 {{duration}}",
+    "performanceRateLine": "속도 {{rate}} 토큰/초",
+    "timeLine": "시간 {{duration}}",
     "costLine": "이번 턴 비용: {{cost}}",
     "valueLine": "이번 턴 토큰 가치: {{cost}}",
     "tokenLine": "Token: 총 {{total}} · 입력 {{input}} · 출력 {{output}}",
@@ -4298,6 +4466,7 @@
     "close": "닫기",
     "menuItems": {
       "settings": "설정",
+      "resourceUsage": "리소스 사용량",
       "help": "도움말",
       "issues": "이슈",
       "checkForUpdates": "업데이트 확인"
@@ -4335,12 +4504,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "\"{{name}}\" 플러그인을 비활성화할까요?",
-      "body": "이 패널을 닫으면 플러그인 전체가 비활성화되어 패널과 기능이 중지됩니다. 사이드바의 '플러그인'에서 언제든지 다시 활성화할 수 있습니다.",
+      "body": "이 패널을 닫으면 플러그인이 비활성화되고 기능이 중지됩니다. 사이드바의 '플러그인'에서 언제든지 다시 활성화할 수 있습니다.",
       "confirm": "비활성화"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "메인 창으로 되돌리기",
+    "mergeBack": "메인 창으로 돌아가기",
     "unavailable": "이 플러그인 패널은 현재 사용할 수 없습니다"
   },
   "ghostPanelBubble": {
@@ -4350,6 +4519,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "오른쪽 사이드바",
+    "panelError": {
+      "title": "패널을 불러오지 못했습니다",
+      "description": "이 패널은 지금 표시할 수 없습니다. 다른 패널은 계속 사용할 수 있습니다.",
+      "reload": "패널 다시 불러오기"
+    },
     "window": {
       "title": "사이드바",
       "mergeBack": "메인 창으로 되돌리기",
@@ -4369,8 +4543,10 @@
       "kinds": {
         "fileBrowser": "파일 브라우저",
         "browser": "브라우저",
+        "iosSimulator": "iOS 시뮬레이터",
         "terminal": "터미널",
         "review": "리뷰",
+        "subagents": "하위 에이전트",
         "backgroundTasks": "백그라운드 작업",
         "resourceUsage": "리소스 사용량",
         "collaboration": "협업",
@@ -4378,6 +4554,7 @@
         "ghostPanel": "플러그인 패널"
       },
       "controls": {
+        "showAria": "사이드바 표시",
         "maximizeAria": "사이드바 최대화",
         "restoreAria": "최대화 해제",
         "closeAria": "사이드바 닫기",
@@ -4396,6 +4573,8 @@
         "fileSub": "Files",
         "openReview": "리뷰 열기",
         "reviewSub": "Review",
+        "openSubagents": "하위 에이전트 열기",
+        "subagentsSub": "나중에도 볼 수 있는 하위 작업",
         "openBackgroundTasks": "백그라운드 작업 열기",
         "backgroundTasksSub": "Background tasks",
         "openResourceUsage": "리소스 사용량 열기",
@@ -4420,6 +4599,164 @@
       "loadFailed": "파일 트리를 불러오지 못했습니다",
       "unsupportedDropFile": "이 형식의 파일은 아직 미리 볼 수 없습니다",
       "multipleDropFilesUnsupported": "파일은 한 번에 하나만 드롭할 수 있습니다"
+    },
+    "iosSimulator": {
+      "title": "iOS 시뮬레이터",
+      "startPrompt": "iOS 시뮬레이터를 열어 주세요.",
+      "description": "이 로컬 세션에서 사용할 수 있는 Xcode 환경과 시뮬레이터를 확인합니다.",
+      "buildApproval": {
+        "title": "Xcode가 이 프로젝트를 빌드하도록 허용할까요?",
+        "description": "Xcode는 macOS 사용자 권한으로 이 프로젝트의 빌드 스크립트를 실행합니다. 스크립트는 프로젝트 외부의 파일을 읽거나 수정할 수 있고, 빌드 출력은 Agent에 반환됩니다. 신뢰하는 프로젝트인 경우에만 계속하세요."
+      },
+      "agentControlApproval": {
+        "attachTitle": "Agent가 이 시뮬레이터에 연결하고 제어하도록 허용할까요?",
+        "createTitle": "Agent가 시뮬레이터를 생성하고 제어하도록 허용할까요?",
+        "description": "이 작업이 성공하면 Agent는 현재 Cindy 작업에서 이 시뮬레이터를 사용할 수 있습니다. 시뮬레이터 시작 또는 중지, App 설치 또는 실행, 탭, 스와이프, 입력, 스크린샷, 시뮬레이터 설정 변경은 기기 제어에 대한 추가 확인 없이 실행됩니다. 기기 연결을 해제하거나 작업을 종료하거나 Cindy를 다시 시작하거나 시뮬레이터 패널에서 Agent 제어 권한을 취소하면 이 접근 권한이 만료됩니다. 그 밖의 민감한 작업에는 별도 승인이 필요할 수 있습니다."
+      },
+      "refresh": "새로 고침",
+      "checking": "확인 중",
+      "accessRequiredTitle": "이 세션 승인",
+      "accessRequiredDescription": "이 패널에는 현재 세션의 시뮬레이터 접근 권한이 없습니다. 시스템 대화상자에서 확인하세요.",
+      "allowTaskAccess": "세션 접근 허용",
+      "requestingAccess": "접근 요청 중…",
+      "accessDialogTitle": "iOS 시뮬레이터 제어를 허용할까요?",
+      "accessDialogMessage": "이 Cindy 창에서 ‘{{task}}’의 iOS 시뮬레이터를 보고 제어하도록 허용할까요?",
+      "accessDialogDetail": "이 권한은 현재 세션에만 적용되며 다른 세션으로 전환하면 해제됩니다.",
+      "accessDialogAllow": "시뮬레이터 제어 허용",
+      "accessDialogCancel": "취소",
+      "accessDialogUntitledTask": "이름 없는 세션",
+      "readyTitle": "시뮬레이터 환경 준비 완료",
+      "unavailableTitle": "시뮬레이터를 사용할 수 없음",
+      "connectionError": "로컬 시뮬레이터 환경을 확인하지 못했습니다. 다시 시도해 주세요.",
+      "remoteUnsupported": "iOS 시뮬레이터는 로컬 macOS 세션에서만 사용할 수 있으며 SSH 또는 원격 세션에서는 지원되지 않습니다.",
+      "sessionUnavailable": "이 Cindy 세션을 더 이상 사용할 수 없습니다.",
+      "setupTitle": "설정 체크리스트",
+      "devicesTitle": "사용 가능한 기기",
+      "instancesTitle": "세션 시뮬레이터",
+      "instancesOverview": "다중 인스턴스 개요",
+      "instancesCount": "{{count}}개 준비됨",
+      "openDevice": "기기 열기",
+      "noDevices": "iPhone 또는 iPad 시뮬레이터를 찾지 못했습니다.",
+      "noAvailableDevices": "연결할 수 있는 iPhone 또는 iPad 시뮬레이터가 없습니다.",
+      "unavailableDevicesTitle": "사용할 수 없는 기기",
+      "unavailableDevicesCount": "{{count}}대",
+      "unavailableDevicesDescription": "현재 연결할 수 없는 기기입니다. 원인을 확인하고 해결한 후 상태를 새로 고치세요.",
+      "missingRuntime": "{{runtime}} Runtime이 없습니다",
+      "missingRuntimeHelp": "해당 Runtime을 Xcode에서 설치한 후 상태를 새로 고치세요.",
+      "deviceUnavailable": "Xcode에서 이 기기를 사용할 수 없는 상태로 표시했습니다",
+      "deviceUnavailableHelp": "Xcode에서 시뮬레이터를 확인하거나 다시 생성한 후 상태를 새로 고치세요.",
+      "booted": "부팅됨",
+      "shutdown": "종료됨",
+      "runtime": "런타임",
+      "udid": "UDID",
+      "attached": "연결됨",
+      "attachDevice": "기기 연결",
+      "detachDevice": "기기 연결 해제",
+      "startDevice": "기기 시작",
+      "stopDevice": "기기 중지",
+      "attachedDescription": "이 기기는 현재 Cindy 세션에 연결되어 있습니다.",
+      "agentControlTitle": "Agent 제어",
+      "agentControlDescription": "허용한 경우에만 Agent가 이 기기를 시작, 중지 또는 조작할 수 있습니다.",
+      "allowAgentControl": "Agent 제어 허용",
+      "disableAgentControl": "Agent 제어 사용 중지",
+      "agentControlDialogTitle": "Agent 제어를 허용할까요?",
+      "agentControlDialogMessage": "Agent가 {{simulator}} 기기를 제어하도록 허용할까요?",
+      "agentControlDialogDetail": "이 요청은 ‘{{task}}’에서 시작되었습니다. Agent는 이 시뮬레이터에서 시작, 중지, 탭, 입력, 앱 설치 및 실행을 수행할 수 있습니다. 이 권한은 사용 중지할 때까지 현재 Cindy 프로필에 저장되며 재시작 후에도 유지됩니다.",
+      "agentControlDialogAllow": "허용",
+      "agentControlDialogCancel": "취소",
+      "operationError": "Cindy가 시뮬레이터 작업을 완료하지 못했습니다.",
+      "retryHint": "상태를 새로 고친 후 다시 시도하세요.",
+      "operationErrorWithRecovery": "Cindy가 시뮬레이터 작업을 완료하지 못했습니다. 상태를 새로 고친 후 다시 시도하세요.",
+      "deviceInUseByOtherTask": "다른 Cindy 작업에서 이 기기를 사용 중입니다. 다른 기기를 선택하거나 기존 작업에서 먼저 연결을 해제하세요.",
+      "taskDeviceLimitReached": "현재 작업에 {{limit}}대의 기기가 연결되어 있습니다. 한 대의 연결을 해제한 후 다른 기기를 연결하세요.",
+      "runningDeviceLimitReached": "Cindy에서 이미 {{limit}}대의 시뮬레이터를 동시에 실행 중입니다. 한 대를 중지한 후 이 부팅된 기기를 연결하세요.",
+      "resourceSoftLimitTitle": "현재 {{count}}대의 시뮬레이터가 실행 중입니다",
+      "resourceSoftLimitDescription": "기기를 더 시작하기 전에 Cindy가 시스템 메모리를 확인합니다. 새 시작이 차단되어도 기존 기기는 계속 실행됩니다.",
+      "resourceHardLimitTitle": "동시 실행 한도({{limit}}대)에 도달했습니다",
+      "resourceHardLimitDescription": "실행 중인 시뮬레이터 한 대를 중지한 후 새 기기를 시작하세요.",
+      "errors": {
+        "attachedElsewhere": "다른 Cindy 작업에서 이 기기를 사용 중입니다. 다른 기기를 선택하거나 기존 작업에서 먼저 연결을 해제하세요.",
+        "taskLimitReached": "이 작업에는 최대 {{taskLimit}}대의 기기를 연결할 수 있습니다. 한 대의 연결을 해제한 후 다시 시도하세요.",
+        "resourceLimitReached": "Cindy의 시뮬레이터 동시 실행 한도({{hardLimit}}대)에 도달했습니다. 한 대를 중지한 후 다시 시도하세요.",
+        "memoryPressure": "시스템 메모리 압력이 높아 시뮬레이터를 더 시작할 수 없습니다. 한 대를 중지하거나 나중에 다시 시도하세요.",
+        "deviceNotFound": "선택한 기기가 더 이상 존재하지 않습니다. 상태를 새로 고치고 다른 기기를 선택하세요.",
+        "deviceStateChanged": "기기 상태가 변경되었습니다. 상태를 새로 고친 후 다시 시도하세요."
+      },
+      "streamAlt": "{{device}}의 실시간 시뮬레이터 화면",
+      "waitingForFrame": "연결되면 실시간 화면이 여기에 표시됩니다.",
+      "viewerStoppedTitle": "시뮬레이터가 중지됨",
+      "viewerStoppedDescription": "이 기기를 시작하면 실시간 화면과 제어를 다시 사용할 수 있습니다.",
+      "gestureHint": "실시간 화면을 클릭하면 탭하고, 드래그하면 스와이프할 수 있습니다.",
+      "textInputLabel": "시뮬레이터에 입력할 텍스트",
+      "textInputPlaceholder": "시뮬레이터에 보낼 텍스트 입력",
+      "sendText": "텍스트 보내기",
+      "pressHome": "홈 누르기",
+      "rotateDevice": "기기 회전",
+      "lockScreen": "화면 잠금",
+      "unlockScreen": "화면 잠금 해제",
+      "agentBusyTitle": "Agent가 이 기기를 사용 중",
+      "agentBusyDescription": "현재 Agent 작업이 끝날 때까지 수동 입력이 일시 중지됩니다.",
+      "takeControl": "기기 제어권 가져오기",
+      "takeoverPendingDescription": "현재 원자적 작업이 끝나기를 기다리는 중입니다. 대기 중인 Agent 작업은 취소되었습니다.",
+      "manualControlTitle": "수동 제어 활성화됨",
+      "manualControlDescription": "새 Agent 입력이 일시 중지되었습니다. 보기, 빌드 및 진단은 계속할 수 있습니다.",
+      "resumeAgentInput": "Agent 입력 재개",
+      "streamProfile": "스트림 품질",
+      "streamProfiles": {
+        "low": "낮음 · 5 FPS",
+        "balanced": "균형 · 10 FPS",
+        "balancedNative": "균형 · 20 FPS",
+        "high": "높음 · 20 FPS",
+        "highNative": "높음 · 30 FPS",
+        "experimental60": "60 FPS · 실험적"
+      },
+      "route": {
+        "nativeH264": "Native H.264",
+        "wdaJpeg": "WDA JPEG · 호환 모드",
+        "nativeHid": "Native HID",
+        "wdaInput": "WDA 입력 · 호환 모드",
+        "hidden": "뷰어 대기 중",
+        "multiTouchUnavailable": "멀티터치를 사용할 수 없음",
+        "state": {
+          "idle": "대기 중",
+          "detecting": "네이티브 기능 감지 중…",
+          "active": "활성",
+          "fallback": "호환 모드",
+          "reconnecting": "재연결 중…",
+          "unavailable": "사용할 수 없음"
+        }
+      },
+      "stream": {
+        "idle": "대기 중",
+        "connecting": "연결 중",
+        "streaming": "실시간",
+        "reconnecting": "다시 연결 중",
+        "paused": "일시 중지",
+        "disconnected": "연결 끊김"
+      },
+      "lifecycle": {
+        "stopped": "중지됨",
+        "booting": "시작 중",
+        "ready": "준비됨",
+        "stopping": "중지 중",
+        "error": "확인 필요"
+      },
+      "operations": {
+        "attach": "기기 연결 중…",
+        "start": "기기 시작 중…",
+        "stop": "기기 중지 중…",
+        "detach": "기기 연결 해제 중…",
+        "grant": "Agent 제어 권한 업데이트 중…",
+        "control": "입력 제어 업데이트 중…"
+      },
+      "setup": {
+        "localMac": "Mac의 로컬 Cindy 세션에서 이 프로젝트를 여세요.",
+        "installXcode": "Mac App Store 또는 Apple Developer에서 Xcode를 설치하세요.",
+        "selectXcode": "Xcode를 한 번 열고 명령줄 개발자 도구를 선택하세요.",
+        "installRuntime": "Xcode 설정에서 iOS 시뮬레이터 런타임을 설치하세요.",
+        "createDevice": "Xcode의 기기 및 시뮬레이터 창에서 iPhone 또는 iPad 시뮬레이터를 만드세요.",
+        "retryXcode": "Xcode를 열거나 재시작한 뒤 이 패널을 새로 고침하세요."
+      }
     },
     "browser": {
       "newTab": "새 탭",
@@ -4475,7 +4812,6 @@
     "review": {
       "turn": {
         "title": "이 메시지의 변경 사항",
-        "currentWorkspace": "현재 작업 공간",
         "localOnly": "메시지별 정확한 변경 사항은 아직 원격 작업에서 사용할 수 없습니다.",
         "partialNotice": "이 메시지에는 정확히 추적할 수 없는 명령 또는 도구 쓰기가 포함되어 있습니다. 아래에는 캡처된 일부만 표시되며 완전한 패치가 아닙니다.",
         "emptyTitle": "기록된 변경 사항 없음",
@@ -4536,7 +4872,15 @@
         "unmerged": "병합되지 않은 파일 있음",
         "in-progress": "git 작업 진행 중",
         "agent-running": "에이전트 실행 중",
-        "disabled": "리뷰를 사용할 수 없음"
+        "disabled": "리뷰를 사용할 수 없음",
+        "remote-device": "원격 기기 세션은 보기 전용입니다",
+        "remote-ssh": "SSH 워크스페이스 검토는 보기 전용입니다"
+      },
+      "remote": {
+        "deviceTooOldTitle": "상대 기기 버전이 너무 오래되었습니다",
+        "deviceTooOldDesc": "상대 기기의 {{appName}} 버전이 오래되어 원격 리뷰를 지원하지 않습니다. 피제어 기기를 업그레이드한 후 다시 시도해 주세요.",
+        "oversizeTitle": "변경 데이터가 너무 큽니다",
+        "oversizeDesc": "이 보기의 변경 사항이 기기 연결 전송 한도를 초과합니다. 피제어 기기에서 확인해 주세요."
       },
       "unmodifiedLines_one": "{{count}}줄 변경 없음",
       "unmodifiedLines_other": "{{count}}줄 변경 없음",
@@ -4737,7 +5081,7 @@
         },
         "no-session": {
           "title": "세션을 찾을 수 없음",
-          "desc": "현재 세션 기록을 찾을 수 없습니다."
+          "desc": "이 기기에서 현재 세션 기록을 찾을 수 없습니다."
         },
         "no-workdir": {
           "title": "작업 디렉터리 없음",
@@ -4765,6 +5109,58 @@
       "touchCountAria_other": "{{count}}회 편집됨",
       "expandAllAria": "모든 파일 펼치기",
       "collapseAllAria": "모든 파일 접기"
+    },
+    "subagents": {
+      "running": "실행 중",
+      "finished": "종료됨",
+      "empty": "이 작업에는 아직 하위 에이전트가 없습니다",
+      "emptyDetail": "이 작업에서 생성된 하위 에이전트는 계속 여기에 보관됩니다.",
+      "loading": "하위 에이전트 불러오는 중…",
+      "unavailable": "하위 에이전트 기록을 사용할 수 없습니다",
+      "unavailableDetail": "이 원격 기기 또는 이전 앱 버전은 아직 영구 하위 에이전트 기록을 제공하지 않습니다.",
+      "loadFailed": "하위 에이전트를 불러올 수 없습니다",
+      "retry": "다시 시도",
+      "loadEarlier": "이전 하위 에이전트 불러오기",
+      "untitled": "하위 에이전트",
+      "notFound": "하위 에이전트를 찾을 수 없습니다",
+      "back": "뒤로",
+      "harness": "Harness",
+      "model": "모델",
+      "context": "상위 작업 컨텍스트",
+      "contextValues": {
+        "unknown": "Harness에서 보고하지 않음",
+        "snapshot": "상위 작업 스냅샷",
+        "live": "실시간 상위 작업"
+      },
+      "assignment": "할당 내용",
+      "returnedResult": "반환된 결과",
+      "resultTruncated": "반환된 결과가 표시를 위해 일부 생략되었습니다.",
+      "latestUpdate": "최근 업데이트",
+      "activity": "활동",
+      "noActivity": "활동 세부 정보가 보고되지 않았습니다.",
+      "transcript": "전체 기록",
+      "noTranscript": "전체 기록 항목이 보고되지 않았습니다.",
+      "transcriptUnavailable": "이 Harness는 아직 전체 하위 작업 기록을 Cindy에 제공하지 않습니다. 반환된 결과와 수명 주기 활동은 계속 보관됩니다.",
+      "transcriptRoles": {
+        "parent": "상위 작업",
+        "subagent": "하위 에이전트",
+        "tool": "도구",
+        "system": "시스템"
+      },
+      "lastTool": "최근 도구: {{tool}}",
+      "tokens": "{{value}} tokens",
+      "activityKinds": {
+        "started": "시작됨",
+        "progress": "진행",
+        "message": "메시지",
+        "question": "질문",
+        "decision": "결정",
+        "resumed": "재개됨",
+        "steered": "방향 조정됨",
+        "completed": "완료됨",
+        "failed": "실패",
+        "stopped": "중지됨"
+      }
     },
     "backgroundTasks": {
       "running": "실행 중",
@@ -5122,6 +5518,7 @@
     "modelSelector": {
       "budgetNeedsApiKey": "이 모델은 설정에서 API key를 구성해야 사용할 수 있습니다",
       "hidden": "숨김",
+      "modelListAria": "모델 목록",
       "subscriptionDirectDisabled": {
         "chatgpt": "구독 직결 GPT 모델은 SSH 원격 세션을 아직 지원하지 않습니다",
         "xai": "구독 직결 Grok 모델은 SSH 원격 세션을 아직 지원하지 않습니다",
@@ -5168,7 +5565,7 @@
         "budget": "GPT 할인",
         "grok": "xAI",
         "google": "Google",
-        "china": "국내",
+        "china": "중국",
         "image": "이미지",
         "video": "비디오",
         "tts": "음성 합성",
@@ -5176,6 +5573,7 @@
         "realtime": "실시간 음성",
         "embedding": "임베딩",
         "compression": "압축",
+        "ungrouped": "미분류",
         "other": "기타"
       },
       "search": {
@@ -5187,6 +5585,7 @@
         "context": "컨텍스트 {{value}}",
         "codexCompatibilityMode": "Codex 호환 모드",
         "price": "{{input}}/{{output}} / 100만",
+        "subscriptionBadgeCompact": "구독",
         "fastBadge": "고속"
       },
       "source": {
@@ -5272,6 +5671,7 @@
     },
     "worktree": {
       "detecting": "환경 감지 중…",
+      "detectFailed": "환경 감지에 실패하여 worktree를 당분간 사용할 수 없습니다",
       "gitMissing": "git이 감지되지 않습니다. 먼저 설치하세요",
       "notGitRepo": "현재 디렉터리는 git 리포지토리가 아닙니다",
       "alreadyInWorktree": "이미 worktree 안에 있어 중첩이 금지됩니다",
@@ -5346,6 +5746,7 @@
       "startFailed": "협업을 시작하지 못했습니다",
       "startFailedContinue": "협업을 시작하지 못했습니다. 단일 세션으로 계속합니다.",
       "createWorkerRefreshFailed": "Worker 상태를 새로 고칠 수 없습니다. 다시 시도해 주세요.",
+      "assignmentFailed": "Worker를 만들었지만 작업 할당 여부를 확인할 수 없습니다. 다시 시도하기 전에 Worker 패널을 확인하세요.",
       "openHint": "Worker 를 불러 함께 작업",
       "disabledHint": "협업 모드가 비활성화되어 있습니다. 설정에서 활성화하세요.",
       "unavailableHint": "협업 설정을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
@@ -5607,7 +6008,7 @@
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 로그인이 더 이상 유효하지 않습니다",
-    "systemSharedInvalidated": "Cindy는 현재 이 컴퓨터의 ChatGPT 로그인을 사용하고 있습니다. 이 로그인이 만료되었습니다. ChatGPT App을 열어 다시 로그인한 후 재시도하세요.",
+    "systemSharedInvalidated": "Cindy는 현재 이 컴퓨터의 ChatGPT 로그인을 사용하고 있습니다. 이 로그인이 만료되었습니다. Cindy에서 다시 로그인한 후 재시도하세요.",
     "instanceIsolatedInvalidated": "Cindy는 현재 별도로 로그인한 ChatGPT 계정을 사용하고 있습니다. 이 로그인이 만료되었습니다. Cindy에서 다시 로그인한 후 재시도하세요.",
     "unknownInvalidated": "Cindy의 현재 ChatGPT 로그인이 만료되었습니다. 다시 로그인한 후 재시도하세요.",
     "recovered": "ChatGPT 로그인이 복구되었습니다. 다시 시도하세요.",
@@ -5620,6 +6021,7 @@
     "verificationFailed": "ChatGPT 로그인이 복구되었는지 확인할 수 없습니다. 다시 확인해 주세요."
   },
   "chat": {
+    "sessionLoading": "세션 불러오는 중",
     "askUserQuestion": {
       "skippedAnswer": "건너뜀"
     },
@@ -6117,6 +6519,25 @@
         "handoffTitle": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
         "handoffTitleEnglishSource": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)",
         "resumedBadge": "세션 재개됨"
+      },
+      "review": {
+        "running": "현재 결과물을 검토하는 중",
+        "completed": "검토 완료",
+        "failed": "검토를 완료하지 못했습니다",
+        "openTask": "검토 작업 열기",
+        "readOnlyHint": "독립 작업 · 개발 메모리 없음 · 읽기 전용",
+        "noResult": "검토 결과가 반환되지 않았습니다",
+        "failure": {
+          "reviewerClosed": "검토 작업이 완료되기 전에 닫혔습니다",
+          "cancelledBeforeStart": "검토가 시작되기 전에 취소되었습니다",
+          "interrupted": "Cindy가 종료될 때 검토가 중단되었습니다. /review를 다시 실행하세요.",
+          "sourceWorkspaceChanged": "원본 작업의 작업 공간이 변경되었습니다. 현재 작업 공간에서 /review를 다시 실행하세요.",
+          "sourceConversationChanged": "원본 작업이 변경되었습니다. 현재 작업에 대해 /review를 다시 실행하세요.",
+          "sourceFilesChanged": "원본 작업의 파일이 변경되었습니다. 현재 결과물에 대해 /review를 다시 실행하세요.",
+          "artifactChanged": "검토 대상 결과물이 변경되었습니다. 현재 결과물에 대해 /review를 다시 실행하세요.",
+          "artifactUnavailable": "Cindy가 검토 대상 결과물을 안전하게 읽지 못했습니다. 작업 공간 또는 첨부 파일을 확인한 후 /review를 다시 실행하세요.",
+          "providerFailed": "검토 작업 실행에 실패했습니다"
+        }
       }
     },
     "markdownRenderer": {
@@ -6160,13 +6581,17 @@
       "mention": "플러그인 언급 · {{names}}",
       "mentionExpandAria": "모델에 추가된 힌트 보기",
       "mentionDirectiveLabel": "모델에 추가된 힌트",
+      "hostCapabilityExpandAria": "선택한 Cindy 기능 경로 보기",
+      "hostCapabilityDirectiveLabel": "Agent에 전송된 Cindy 기능 경로",
+      "hostCapabilityLegend": "강조 표시 = 현재 선택 · 나머지는 Cindy의 고정 경로 설명",
       "semanticExpandAria": "이 호출에 대한 설명 보기",
       "semanticNote": "AI가 메시지의 의미를 바탕으로 이 플러그인을 스스로 호출했습니다. 이 메시지에는 기계 지시문이 추가되지 않았습니다.",
       "listSeparator": ", ",
       "status": {
         "running": "호출 중…",
         "called": "호출됨",
-        "done": "완료됨"
+        "done": "완료됨",
+        "selected": "선택됨"
       }
     },
     "userMessage": {
@@ -6257,7 +6682,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "원격 연결이 중단되었습니다(daemon이 업그레이드 또는 재시작 중일 수 있습니다). 턴이 종료되었습니다 — 다시 전송하세요.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "원격 세션에서는 로컬 파일/이미지 첨부에 접근할 수 없습니다. 내용을 직접 붙여넣으세요.",
-      "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰를 일시적으로 사용할 수 없어 검토가 필요한 작업이 거부됩니다. 직접 승인하려면 이 세션을 기본 권한으로 전환하세요.",
+      "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰가 판단을 내리지 못했습니다(네트워크 또는 서비스 일시 장애). 검토가 필요한 작업은 직접 확인하도록 전환되었습니다. 중단을 줄이려면 이 작업을 기본 권한으로 전환하세요.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "원격 Claude Code 세션은 로컬 호환 프록시를 통해 라우팅할 수 없습니다(내부 오류).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
@@ -6288,6 +6713,7 @@
       "actionUnavailable": "이 메시지에는 안전하게 실행 취소할 수 없는 파일 변경 사항이 포함되어 있습니다",
       "actionFailed": "변경 사항을 적용하지 못했습니다. 다시 시도하세요",
       "partial": "정확히 캡처된 변경 사항만 표시됩니다",
+      "partialNone": "파일이 변경되었지만 내용을 기록하지 못해 여기에서 검토하거나 실행 취소할 수 없습니다",
       "partialReversible": "실행 취소와 다시 적용은 정확히 캡처된 변경 사항만 처리하며 캡처되지 않은 변경 사항은 처리하지 않습니다",
       "partialActionHint": "정확히 캡처된 파일 변경 사항만 실행 취소하거나 다시 적용합니다",
       "showMore": "파일 {{count}}개 더 보기",
@@ -6530,7 +6956,7 @@
         "remoteSettings": "원격 연결 설정",
         "multiSelect": "다중 선택",
         "deselect": "선택 해제",
-        "menuTrigger": "원격 기기",
+        "menuTrigger": "세션 범위",
         "selectedCount_one": "기기 {{count}}대",
         "selectedCount_other": "기기 {{count}}대"
       },
@@ -6549,6 +6975,8 @@
         "awaitingPluginSetup": "플러그인 설정 대기 중"
       },
       "showAllSessions": "모두 표시 {{count}}개",
+      "allSessions": "모든 세션",
+      "scopeLocalSessions": "이 기기의 세션",
       "dialogues": "대화",
       "newDialogue": "새 세션",
       "dialoguesToggleExpand": "대화 펼치기",
@@ -6566,12 +6994,10 @@
       "projects": "프로젝트",
       "newProject": "새 프로젝트",
       "createProjectFailed": "프로젝트 생성 실패",
-      "projectsSectionToggleExpand": "프로젝트 펼치기",
-      "projectsSectionToggleCollapse": "프로젝트 접기",
       "projectsToggleExpand": "모든 프로젝트 세션 펼치기",
       "projectsToggleCollapse": "모든 프로젝트 세션 접기",
-      "filterAria": "사이드바 정리(상태: {{status}}, Agent: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
-      "organizeSidebar": "사이드바 정리",
+      "filterAria": "사이드바 표시 설정(상태: {{status}}, Agent: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
+      "organizeSidebar": "사이드바 표시 설정",
       "filterAllText": "전체",
       "filterSelectedProjects": "{{count}}개 선택됨",
       "filterStatus": {
@@ -6585,8 +7011,23 @@
         "codex": "Codex"
       },
       "filterGroupBy": {
-        "project": "프로젝트",
-        "date": "날짜"
+        "project": "프로젝트별 그룹",
+        "flat": "평면 목록",
+        "device": "기기별 그룹",
+        "dialogue": "대화 묶기"
+      },
+      "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
+      "deviceGroup": {
+        "local": "이 기기",
+        "offline": "오프라인",
+        "collapse": "이 기기 접기",
+        "expand": "이 기기 펼치기"
+      },
+      "foldAll": {
+        "collapseGroups": "모든 그룹 접기",
+        "collapseProjects": "프로젝트 그룹 접기",
+        "collapseDevices": "기기 그룹 접기",
+        "expandAll": "모든 그룹 펼치기"
       },
       "filterLastActivity": {
         "1d": "1일",
@@ -6596,10 +7037,12 @@
         "all": "전체"
       },
       "filterSortBy": {
-        "recency": "최근순",
-        "time": "시간순",
+        "recency": "시간순",
         "manual": "수동",
-        "alphabetic": "알파벳순"
+        "priority": "우선순위"
+      },
+      "filterSortByTip": {
+        "priority": "확인이 필요한 항목 먼저, 다음 읽지 않음, 실행 중, 나머지는 시간순"
       },
       "filterStatusHeading": "상태",
       "filterAgentHeading": "에이전트",
@@ -6608,6 +7051,24 @@
       "filterSortByHeading": "정렬",
       "filterProjectsHeading": "프로젝트",
       "filterAllProjects": "모든 프로젝트",
+      "filterHeading": "필터",
+      "filterSummaryNone": "없음",
+      "filterSummaryActive": "{{count}}개 적용 중",
+      "filterReset": "필터 초기화",
+      "displayHeading": "표시",
+      "taskInfoHeading": "세션 정보",
+      "taskInfoSummaryNone": "없음",
+      "taskInfoSummarySeparator": ", ",
+      "taskInfo": {
+        "time": "시간",
+        "pr": "PR 상태",
+        "tokens": "토큰",
+        "cost": "비용"
+      },
+      "taskInfoTip": {
+        "tokens": "누적 토큰",
+        "cost": "누적 비용"
+      },
       "dateGroup": {
         "today": "오늘",
         "yesterday": "어제",
@@ -7806,7 +8267,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "{{appName}}에 피드백을 제출하고 싶습니다. 높은 품질의 GitHub issue로 정리하도록 도와주세요: 먼저 피드백 유형(버그 또는 기능 제안)을 확인하고 필요한 세부 정보(증상, 재현 단계 또는 사용 시나리오, 기대 동작)를 질문해 주세요. 정보가 충분해지면 cindy_helper의 call_tool로 submit_github_issue 도구를 호출해 제출해 주세요(category=feedback, 먼저 list_tools로 매개변수를 확인할 수 있습니다. 제출 전에 확인 카드가 표시됩니다). 제출에 실패하면 이유를 그대로 알려주세요.{{details}}",
+      "instruction": "{{appName}}에 피드백을 제출하고 싶습니다. 정보가 충분하고 명확한 GitHub issue로 정리하도록 도와주세요: 버그인지 기능 제안인지 확인하고, 빠진 정보나 모호한 부분만 질문해 주세요. 버그라면 증상, 재현 단계, 기대 동작과 실제 동작, 재현 빈도, 시도한 해결 방법을 최대한 확인하고, 사용자가 동의한 경우에만 민감 정보를 제거한 진단 요약을 포함해 주세요. 비밀번호, 토큰, 이메일 주소, 개인 경로, 관련 없는 파일 내용은 포함하지 마세요. 기능 제안이라면 사용 시나리오, 현재 문제와 원하는 결과를 확인해 주세요. 정보가 충분해지면 cindy_helper의 call_tool로 submit_github_issue 도구를 호출해 제출해 주세요(category=feedback, 먼저 list_tools로 매개변수를 확인할 수 있습니다. 제출 전에 확인 카드가 표시됩니다). GitHub 플러그인이나 계정 설정은 필요하지 않습니다. 기본적으로 Cindy 공식 봇이 제출하며, 사용 가능한 GitHub 계정이 있을 때만 확인 카드에 추가 제출 계정으로 표시됩니다. 생성 후 issue 번호와 링크를 알려 주고, Cindy가 오픈 소스이며 소스에서 재현·수정·테스트·기능 개발을 함께 진행할 수 있다고 안내해 주세요. 제출에 실패하면 이유를 그대로 알려주세요.{{details}}",
       "detailsPrefix": "\n초기 설명: {{details}}"
     },
     "confirm": {
@@ -7815,11 +8276,12 @@
       "typeFeature": "기능 제안",
       "titleLabel": "제목",
       "bodyLabel": "본문(Markdown)",
-      "submissionMethodLabel": "게시 방식",
-      "identityGithubUser": "GitHub 계정 @{{login}}에서 직접 게시",
+      "privacyHint": "감지된 일반적인 비밀 정보, 개인 경로, 이메일 주소는 가능한 범위에서 자동으로 가립니다. 제출 전에 공개 내용을 확인하세요.",
+      "submissionMethodLabel": "제출 계정",
+      "identityGithubUser": "내 GitHub 계정 @{{login}}",
       "identityGithubUserHint": "GitHub의 Issue 작성자가 되며 직접 수정하거나 닫을 수 있습니다",
-      "identityPlatform": "Cindy에서 대신 게시(GitHub App {{login}})",
-      "identityPlatformHint": "GitHub의 Issue 작성자가 아니므로 직접 수정하거나 닫을 수 없습니다",
+      "identityPlatform": "Cindy 공식 봇 @{{login}} (기본값)",
+      "identityPlatformHint": "GitHub 계정 설정 없이 사용할 수 있습니다. Issue는 공식 봇이 만들며 본문에 공개 서명을 표시할 수 있습니다",
       "publicNameLabel": "공개 서명",
       "publicNameHint": "이 서명은 Issue 본문에 공개적으로 표시됩니다",
       "anonymous": "익명",
@@ -7866,6 +8328,9 @@
       "deny": "거부"
     }
   },
+  "commandPalette": {
+    "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
+  },
   "skillhub": {
     "home": {
       "title": "스킬",
@@ -7893,7 +8358,12 @@
     },
     "common": {
       "openFolderFailed": "폴더 열기 실패",
-      "close": "닫기"
+      "close": "닫기",
+      "statusDiscovered": "발견됨",
+      "statusApproved": "승인됨",
+      "statusLoaded": "로드됨",
+      "statusFailed": "로드 실패",
+      "statusUnknown": "알 수 없음"
     },
     "welcome": {
       "scanning": "로컬 skill 스캔 중…",
@@ -8486,6 +8956,7 @@
       "silentStopExhausted": "모델이 빈 응답을 반복해서 반환하여 자동 재개가 일시 중지되었습니다. \"계속\"을 클릭하여 작업을 재개하세요.",
       "permissionTightenInterruptFailed": "권한을 강화하는 동안 실행 중인 작업을 중지하지 못했습니다. 작업이 끝날 때까지 확인 없이 계속 실행될 수 있습니다. 필요하면 수동으로 중지하세요.",
       "codexAutoReviewUnavailable": "자동 리뷰를 일시적으로 사용할 수 없습니다. 현재 작업을 차단하고 기본 권한으로 전환했습니다. 다시 시도하세요. 필요한 경우 확인을 요청합니다.",
+      "hostShellCommandBlocked": "Cindy가 내장 iOS 시뮬레이터를 우회하는 셸 명령을 차단했습니다. 기기 제어, 앱 실행, 화면 조작, 스크린샷, 진단에는 iOS 시뮬레이터 도구를 사용하세요.",
       "upstreamResponseIdleTimeout": "모델이 오랫동안 응답하지 않아 무한 대기를 막기 위해 이번 턴을 자동으로 중단했습니다. 완료된 도구 호출은 유지되며, 다음 메시지를 보내 계속할 수 있습니다.",
       "codexCompactionNotConverging": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 공간을 차지하는 것은 대화가 아니라 압축으로 줄일 수 없는 시스템 프롬프트와 도구 정의인 경우가 대부분입니다. 새 세션을 시작하세요.",
       "codexCompactionNotConvergingModelSwitch": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 이 세션은 도중에 모델을 변경했고, Codex는 변경 전 모델의 컨텍스트 한도로 계속 판단하고 있습니다. 원래 모델로 되돌리거나 새 세션을 시작하세요.",
@@ -8606,6 +9077,17 @@
       "closeAria": "닫기"
     }
   },
+  "splitGroup": {
+    "closeAria": "‘{{title}}’ 분할 창 닫기",
+    "closeAll": "분할 닫기",
+    "toggleDirection": "상하 / 좌우 분할 전환",
+    "dropHint": "여기에 세션을 놓아 열기",
+    "loadingTask": "세션 불러오는 중…",
+    "resizeAria": "세션 분할 창 크기 조절",
+    "alreadyOpen": "이 세션은 이미 분할 창에 열려 있습니다. 다른 세션을 선택하세요.",
+    "limitReached": "한 분할 창에는 세션을 최대 {{count}}개까지 열 수 있습니다. 분할 창 하나를 닫고 다시 시도하세요.",
+    "addUnavailable": "현재 분할 창에서 이 세션을 열 수 없습니다. 기본 영역에서 세션을 연 후 다시 시도하세요."
+  },
   "extraDirs": {
     "menuAria": "작업 메뉴",
     "tooltipEmpty": "더 많은 작업",
@@ -8613,6 +9095,7 @@
     "addFiles": "파일, 이미지 또는 동영상 추가…",
     "pluginsTitle": "설치된 플러그인",
     "pluginDisabled": "비활성화됨",
+    "pluginAgentInvoked": "Agent가 자동으로 사용",
     "pluginNoCommand": "여기에서 사용할 수 없음",
     "sectionTitle": "참조 디렉터리(읽기 전용)",
     "empty": "아직 참조 디렉터리가 없습니다",
@@ -8690,6 +9173,21 @@
       "failed": "목표 설정에 실패했습니다",
       "set": "목표를 설정했습니다 — 자동으로 진행합니다",
       "cleared": "목표를 지웠습니다"
+    }
+  },
+  "review": {
+    "sessionTitle": "검토 · {{title}}",
+    "toast": {
+      "failed": "검토를 시작할 수 없습니다",
+      "remoteUnsupported": "이 버전에서는 로컬 작업만 검토할 수 있습니다"
+    },
+    "externalArtifactConfirm": {
+      "title": "작업 공간 밖의 결과물을 검토할까요?",
+      "message": "이 검토는 작업 공간 밖 또는 메모리에 있는 {{count}}개 항목을 설정된 모델로 보냅니다.",
+      "detail": "이번 검토에는 아래 항목만 허용됩니다. 계속하기 전에 확인하세요.",
+      "inline": "메모리 첨부 파일",
+      "allow": "이번만 허용",
+      "cancel": "취소"
     }
   },
   "learn": {
@@ -8966,7 +9464,8 @@
     },
     "currentSubscription": {
       "title": "현재 구독",
-      "purchaseBlocked": "종료되지 않은 구독이 있습니다. 기존 구독을 처리한 후 새 요금제를 구매하세요."
+      "purchaseBlocked": "종료되지 않은 구독이 있습니다. 기존 구독을 처리한 후 새 요금제를 구매하세요.",
+      "purchaseBlockedUntilPeriodEnd": "현재 요금제는 {{date}}에 종료됩니다. 종료 후 새 요금제를 구매할 수 있습니다."
     },
     "subscriptionStatus": {
       "INCOMPLETE": "결제 대기",

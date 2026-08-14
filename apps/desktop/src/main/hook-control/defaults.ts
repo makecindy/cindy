@@ -14,9 +14,11 @@
  * 的清单本就来自本机实时供应商目录, 非法值只出现在
  * "偏好过期"(模型下架 / agent 换代)的窗口里。
  *
- * permissionMode 例外: IM 草稿默认没有权限概念, 取值链是「显式且该 agent
- * 支持 > 显式但不支持时回落该 agent **最严**档 > 从未填显式档时
- * 'bypassPermissions'」。
+ * permissionMode 例外: 本模块**刻意不消费**草稿里的权限档(注入面
+ * `HookDefaultsDeps.readDefaults` 压根没这个字段 —— 草稿本身是有的,
+ * `ImDefaultSettings.permissionMode` 出厂 'auto', 个人 IM 那侧照常用它)。
+ * 这里的取值链是「显式且该 agent 支持 > 显式但不支持时回落该 agent **最严**档 >
+ * 从未填显式档时 'bypassPermissions'」。
  *
  * 「不支持时只能更严不能更宽」是安全方向的硬要求(2026-07 修正; 旧实现在此
  * 回落 bypass): 用户填过显式档 = 明确表达过「不要默认的完全访问」, 换 agent

@@ -23,7 +23,7 @@ export function PlanModeIndicator({ onExit, disabled }: PlanModeIndicatorProps):
   const { t } = useTranslation();
   return (
     <div
-      className="mx-auto flex max-w-full select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px]"
+      className="mx-auto flex max-w-full select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-12"
       style={{
         backgroundColor: 'var(--surface-chip)',
         border: '1px solid var(--border-default)',

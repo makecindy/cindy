@@ -59,7 +59,11 @@ function bundledRipgrepDir(): string {
   const candidates = app.isPackaged
     ? [path.join(process.resourcesPath, 'tools', 'ripgrep')]
     : [
-        path.join(app.getAppPath(), '..', '..', 'apps', 'ripgrep-bin', key),
+        // 非打包环境(dev / 测试)首选 app 目录;测试环境的 electron mock 可能
+        // 不提供 getAppPath,此时跳过该候选,用 cwd 相对候选兜底。
+        ...(typeof app.getAppPath === 'function'
+          ? [path.join(app.getAppPath(), '..', '..', 'apps', 'ripgrep-bin', key)]
+          : []),
         path.join(process.cwd(), 'apps', 'ripgrep-bin', key),
         path.join(process.cwd(), '..', 'ripgrep-bin', key),
       ];

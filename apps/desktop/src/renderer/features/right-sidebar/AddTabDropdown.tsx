@@ -5,7 +5,7 @@
  * `RolePillDropdown.tsx` 的 WorkerLayoutMenu):
  * - 容器 12px 圆角 + 1px border-default + surface-elevated + shadow-menu, padding 4
  * - 分组头 10px / weight 500 / text-tertiary / px-2.5 pt-2 pb-1
- * - menu item 28px / rounded-lg(8px) / px-2.5 py-1.5 / text-[12px] / text-primary,
+ * - menu item 28px / rounded-lg(8px) / px-2.5 py-1.5 / text-12 / text-primary,
  *   hover bg-surface-hover, disabled opacity-50
  * - 分隔线 mx-1 my-1 h-px bg-border-default
  *
@@ -15,7 +15,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { Activity, FileDiff, FolderTree, Globe, ListTodo, Terminal } from 'lucide-react';
+import {
+  Bot,
+  FileDiff,
+  FolderTree,
+  Globe,
+  ListTodo,
+  Smartphone,
+  Terminal,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { TabKindId, TabKindMenuMeta } from './types';
@@ -39,6 +47,8 @@ interface AddTabDropdownProps {
    * dropdown 改 trailing 文案为"已打开"并维持 enabled(点击 = host 切到现有)。
    */
   existingKinds?: ReadonlySet<TabKindId>;
+  /** Host viewer is a public surface only while the product plugin is enabled. */
+  iosSimulatorAvailable?: boolean;
 }
 
 // Phase 1 硬编码。Phase 2 之后由 plugin registry 自动汇总。
@@ -59,18 +69,18 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
     singleton: true,
   },
   {
-    kind: 'background-tasks',
-    labelKey: 'rightSidebar.tabs.kinds.backgroundTasks',
-    icon: ListTodo,
-    order: 17,
+    kind: 'subagents',
+    labelKey: 'rightSidebar.tabs.kinds.subagents',
+    icon: Bot,
+    order: 16,
     enabled: true,
     singleton: true,
   },
   {
-    kind: 'resource-usage',
-    labelKey: 'rightSidebar.tabs.kinds.resourceUsage',
-    icon: Activity,
-    order: 18,
+    kind: 'background-tasks',
+    labelKey: 'rightSidebar.tabs.kinds.backgroundTasks',
+    icon: ListTodo,
+    order: 17,
     enabled: true,
     singleton: true,
   },
@@ -82,6 +92,13 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
     enabled: true,
   },
   {
+    kind: 'ios-simulator',
+    labelKey: 'rightSidebar.tabs.kinds.iosSimulator',
+    icon: Smartphone,
+    order: 25,
+    enabled: true,
+  },
+  {
     kind: 'terminal',
     labelKey: 'rightSidebar.tabs.kinds.terminal',
     icon: Terminal,
@@ -90,7 +107,13 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
   },
 ];
 
-export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: AddTabDropdownProps) {
+export function AddTabDropdown({
+  anchorRef,
+  onClose,
+  onSelect,
+  existingKinds,
+  iosSimulatorAvailable = false,
+}: AddTabDropdownProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement | null>(null);
   // 定位:portal 到 body + fixed,按 anchor rect 摆位。原实现是「+」wrapper 内的
@@ -187,8 +210,11 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
     };
   }, [anchorRef, onClose]);
 
-  const enabled = MENU_ITEMS.filter((m) => m.enabled).sort((a, b) => a.order - b.order);
-  const coming = MENU_ITEMS.filter((m) => !m.enabled).sort((a, b) => a.order - b.order);
+  const visibleItems = MENU_ITEMS.filter(
+    (item) => item.kind !== 'ios-simulator' || iosSimulatorAvailable,
+  );
+  const enabled = visibleItems.filter((m) => m.enabled).sort((a, b) => a.order - b.order);
+  const coming = visibleItems.filter((m) => !m.enabled).sort((a, b) => a.order - b.order);
 
   return createPortal(
     <div
@@ -228,7 +254,7 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
             label={t(m.labelKey)}
             trailing={
               alreadyOpen ? (
-                <span className="text-[10px] text-[var(--text-tertiary)]">
+                <span className="text-10 text-[var(--text-tertiary)]">
                   {t('rightSidebar.tabs.menu.alreadyOpen')}
                 </span>
               ) : undefined
@@ -253,7 +279,7 @@ export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: 
 
 function GroupHeader({ label }: { label: string }) {
   return (
-    <div className="px-2.5 pt-2 pb-1 text-[10px] font-medium text-[var(--text-tertiary)]">
+    <div className="px-2.5 pt-2 pb-1 text-10 font-medium text-[var(--text-tertiary)]">
       {label}
     </div>
   );
@@ -281,7 +307,7 @@ function DropdownItem({
       className={cn(
         // focus-visible 与 hover 同款背景:键盘打开时首项自动聚焦要有可见落点,
         // 鼠标交互不触发 focus-visible,无视觉噪音。
-        'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] leading-snug text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:bg-[var(--surface-hover)]',
+        'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-13 leading-snug text-[var(--text-primary)] transition-colors focus:outline-none focus-visible:bg-[var(--surface-hover)]',
         disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-[var(--surface-hover)]',
       )}
     >

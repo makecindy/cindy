@@ -1,0 +1,147 @@
+{
+  "title": "設定",
+  "language": {
+    "title": "語言",
+    "hint": "僅影響應用介面。Agent 回覆語言由 Agent 自身決定。",
+    "options": {
+      "system": "跟隨系統",
+      "zh-CN": "簡體中文",
+      "zh-TW": "繁體中文",
+      "en": "English",
+      "ja": "日本語",
+      "ko": "한국어"
+    }
+  },
+  "version": {
+    "sectionTitle": "版本",
+    "currentLabel": "當前版本",
+    "bundleVersion": "整包版本 {{version}}",
+    "otaVersion": "熱更版本 {{version}}",
+    "pairedDesktopVersion": "配套桌面版本 {{version}}",
+    "devNoOta": "開發版，熱更不可用",
+    "checkAction": "檢查更新",
+    "testFlightCheckAction": "檢查內容更新",
+    "checking": "檢查中",
+    "updating": "更新中",
+    "checkingAccessibility": "正在檢查更新",
+    "testFlightCheckingAccessibility": "正在檢查內容更新",
+    "testFlightUpdateManaged": "測試版安裝更新由 TestFlight 管理",
+    "testFlightNoContentUpdate": "當前沒有可用的內容更新。新測試版本請在 TestFlight 中檢視。",
+    "testFlightContentUpdateUnavailable": "當前構建無法檢查內容更新。新測試版本請在 TestFlight 中檢視。",
+    "bundleUpdateFound": "發現整包更新",
+    "upToDate": "已是最新版本",
+    "bundleUpToDateNoOta": "整包已是最新，當前版本不支援熱更新",
+    "downloadedRestarting": "更新已下載，正在重啟",
+    "downloadedRestartRequired": "更新已下載，完全退出 App 後重新開啟即可生效",
+    "bundleCheckFailed": "無法檢查整包更新，請稍後重試",
+    "checkFailedDetail": "檢查更新失敗：{{detail}}",
+    "checkFailed": "檢查更新失敗，請稍後重試"
+  },
+  "notifications": {
+    "sectionTitle": "通知",
+    "taskDone": "任務完成通知",
+    "taskDoneHint": "電腦上的任務完成、出錯或需要你回覆時，推送到這臺手機；完成或需要回復時附帶最新回覆內容。",
+    "permissionDenied": "系統通知權限未開啟。請到 iOS「設定 → 通知 → {{appName}}」允許通知後重試。",
+    "unregisterQueued": "已關閉。當前網路下注銷未完成，將在下次聯網時自動補上。"
+  },
+  "about": {
+    "sectionTitle": "關於這臺手機",
+    "deviceName": "裝置名稱",
+    "deviceNameDetail": "電腦端授權列表會顯示這個名稱。",
+    "platform": "平臺",
+    "remoteControl": "被控權限",
+    "remoteControlValue": "電腦端管理",
+    "remoteControlDetail": "手機只作為控制端。允許被控、撤銷和恢復權限仍在電腦端設定裡完成。",
+    "editAccessibility": "修改{{label}}"
+  },
+  "relay": {
+    "online": "Relay 已連線",
+    "connecting": "正在連線 Relay",
+    "stopped": "Relay 未連線",
+    "lastSynced": "上次同步 {{time}}",
+    "canSync": "可以同步遠端任務。",
+    "reconnectHint": "網路恢復後會自動重新訂閱遠端任務。",
+    "resumeHint": "回到前臺或重新登入後會恢復連線。"
+  },
+  "header": {
+    "notSignedIn": "未登入",
+    "thisPhone": "當前手機"
+  },
+  "debug": {
+    "sectionTitle": "除錯 / 開發者",
+    "userId": "使用者 ID",
+    "notSynced": "未同步",
+    "deviceId": "裝置 ID",
+    "initializing": "初始化中",
+    "authServer": "Auth Server",
+    "authRegion": "登入區域"
+  },
+  "updateInfo": {
+    "embedded": "隨整包",
+    "embeddedFallback": "隨整包（熱更未生效）",
+    "unknown": "未知",
+    "source": "執行來源",
+    "sourceEmbedded": "內建版本(隨包)",
+    "sourceEmergencyFallback": "內建版本(應急啟動，熱更未生效)",
+    "sourceOta": "OTA 熱更新",
+    "updateId": "更新 ID",
+    "updatedAt": "更新時間",
+    "channel": "Channel",
+    "runtime": "Runtime",
+    "otaMarker": "熱更標記",
+    "emergencyLaunch": "應急啟動",
+    "emergencyLaunchYes": "是（本次執行內熱更無法生效）"
+  },
+  "legal": {
+    "sectionTitle": "備案資訊",
+    "privacyPolicy": "隱私政策",
+    "userAgreement": "使用者協議",
+    "view": "檢視",
+    "openPrivacyPolicy": "開啟隱私政策",
+    "openUserAgreement": "開啟使用者協議",
+    "appFilingNumber": "App 備案號",
+    "analytics": "使用統計",
+    "analyticsHint": "幫助我們瞭解 Cindy 的啟動與留存情況。上報裝置型號、系統版本、應用版本、裝置識別符號等裝置與使用環境資訊，登入後還包含你的帳號 ID；不包含任何對話內容、檔案或提示詞。",
+    "analyticsSaveFailed": "設定未能儲存，重啟後可能恢復原值。",
+    "analyticsReset": "恢復預設",
+    "analyticsResetAction": "恢復"
+  },
+  "account": {
+    "logoutHint": "退出只會清除這臺手機上的登入態和本地遠端映象，不會影響電腦端任務。",
+    "logout": "退出登入",
+    "loggingOut": "退出中",
+    "loggingOutAccessibility": "正在退出登入"
+  },
+  "copyRow": {
+    "action": "複製",
+    "done": "已複製",
+    "accessibility": "複製{{label}}"
+  },
+  "voiceDictionary": {
+    "sectionTitle": "語音詞典",
+    "label": "檢視詞典",
+    "hint": "詞典儲存在電腦上，並在你的電腦之間自動同步；手機只能檢視，新增和刪除請回電腦操作。",
+    "openAccessibility": "檢視語音詞典",
+    "screenTitle": "語音詞典",
+    "entryCount": "{{count}} 個詞條",
+    "aliasSeparator": "、",
+    "aliases": "常被聽成：{{aliases}}",
+    "refresh": "重新整理",
+    "refreshing": "重新整理中…",
+    "refreshAccessibility": "重新整理詞典",
+    "readOnlyHint": "手機只能檢視，新增和刪除請回電腦操作。",
+    "offlineHint": "電腦當前都不線上，顯示的是上次同步到手機的內容。",
+    "noDesktops": "還沒有可同步的電腦。在電腦上登入同一帳號後，詞典會自動出現在這裡。"
+  },
+  "deviceNameEditor": {
+    "screenTitle": "裝置名稱",
+    "placeholder": "本機名稱",
+    "resetAccessibility": "恢復預設本機名稱",
+    "emptyError": "裝置名稱不能為空。",
+    "deviceInitializing": "裝置還在初始化，請稍後再試。",
+    "saving": "儲存中…",
+    "saved": "已儲存。",
+    "restoringDefault": "正在恢復預設名稱…",
+    "restoredDefault": "已恢復預設名稱。"
+  }
+}

@@ -327,6 +327,57 @@ describe('buildRenderItems — key stability', () => {
     expect(items.indexOf(cards[0])).toBeGreaterThan(items.findIndex((item) => item.key === 'msg-a1'));
   });
 
+  it('hides all zero-file change cards because they have no reviewable content', () => {
+    const base: TurnChangeSetSummary = {
+      id: 'cs-base',
+      sessionId: 's1',
+      anchorClientId: 'u1',
+      provider: 'claude-code',
+      providerTurnId: null,
+      cwd: 'C:/work',
+      state: 'partial',
+      workspaceState: 'applied',
+      isReversible: false,
+      incompleteReasons: [],
+      createdAt: 1,
+      completedAt: 2,
+      files: [],
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+    };
+    const opaque: TurnChangeSetSummary = {
+      ...base,
+      id: 'cs-noise',
+      incompleteReasons: ['opaque-tool', 'turn-failed', 'concurrent-workspace'],
+    };
+    const truncated: TurnChangeSetSummary = {
+      ...base,
+      id: 'cs-too-large',
+      incompleteReasons: ['opaque-tool', 'diff-too-large'],
+      createdAt: 3,
+      completedAt: 4,
+    };
+    const escaped: TurnChangeSetSummary = {
+      ...base,
+      id: 'cs-escape',
+      incompleteReasons: ['outside-workspace'],
+      createdAt: 5,
+      completedAt: 6,
+    };
+
+    const { items } = buildRenderItems(
+      [mkUser('u1'), mkAssistant('a1'), mkUser('u2')],
+      undefined,
+      undefined,
+      { turnChangeSets: [opaque, truncated, escaped] },
+    );
+    const cards = items.filter(
+      (item): item is Extract<RenderItem, { type: 'turn_changes' }> => item.type === 'turn_changes',
+    );
+    expect(cards).toEqual([]);
+  });
+
   it('keeps opaque command artifacts as fallback chips without duplicating exact files', () => {
     const messages = [
       mkUser('u1'),
