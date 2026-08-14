@@ -11,7 +11,7 @@ const fakeClient = { fake: 'client' };
 
 const outboundMocks = vi.hoisted(() => ({
   claimPatchableOpener: vi.fn<() => string | null>(() => null),
-  getBoundClient: vi.fn(() => fakeClient),
+  getBoundClient: vi.fn<() => { fake: string } | null>(() => ({ fake: 'client' })),
   recallOwnMessageWith: vi.fn(async () => true),
   updateInteractive: vi.fn(async () => undefined),
   registerCardLane: vi.fn(),
@@ -83,11 +83,21 @@ const SPEC = { body: 'picker', buttons: [] };
 describe('FeishuIM opener consumption failure semantics', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // 默认有绑定 client — 个别用例覆盖为 null, 不能泄漏到后续用例。
+    outboundMocks.getBoundClient.mockReturnValue({ fake: 'client' });
   });
 
   it('consumePendingOpenerCard: 无 pending opener 返回 false(不撤回)', async () => {
     outboundMocks.claimPatchableOpener.mockReturnValue(null);
     await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(false);
+    expect(outboundMocks.recallOwnMessageWith).not.toHaveBeenCalled();
+  });
+
+  it('重连空窗(无绑定 client)不认领 opener, 保留注册给重连后消费', async () => {
+    outboundMocks.getBoundClient.mockReturnValue(null);
+    await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(false);
+    await expect(im.consumePendingOpenerAsCard('g/oc_c/omt_t', SPEC)).resolves.toBe(false);
+    expect(outboundMocks.claimPatchableOpener).not.toHaveBeenCalled();
     expect(outboundMocks.recallOwnMessageWith).not.toHaveBeenCalled();
   });
 
