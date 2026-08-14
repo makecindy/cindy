@@ -257,13 +257,20 @@ describe('CustomProviderDialog preset locale ownership', () => {
       }),
     ).not.toBeNull();
 
-    await user.keyboard('{Escape}');
-    await waitFor(() =>
-      expect(
-        screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' }),
-      ).toBeNull(),
-    );
-    expect(onClose).not.toHaveBeenCalled();
+    const staleLayerListener = vi.fn((event: KeyboardEvent) => event.preventDefault());
+    document.addEventListener('keydown', staleLayerListener, true);
+    try {
+      await user.keyboard('{Escape}');
+      await waitFor(() =>
+        expect(
+          screen.queryByRole('heading', { name: 'settings.providers.custom.fetch.pickerTitle' }),
+        ).toBeNull(),
+      );
+      expect(staleLayerListener).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener('keydown', staleLayerListener, true);
+    }
 
     await user.keyboard('{Escape}');
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
