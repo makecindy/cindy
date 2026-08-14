@@ -157,9 +157,10 @@ const PI_PERMISSION_HASH_ENV = 'CINDY_PI_PERMISSION_HASH';
 /** 远端附件内联上限:超过则 fail-before-dispatch, 不静默截断。 */
 const REMOTE_PI_ATTACHMENT_MAX_BYTES = 256 * 1024;
 /**
- * Remote reconnects rebuild PiAgent in the same Desktop process. Keep the
- * loopback-proxy credential stable for a business session without making it
- * derivable from the public session id alone.
+ * Compatibility fallback for hosts that do not provide persistent derivation.
+ * Desktop injects its owner-scoped safeStorage-backed deriver so restart and
+ * reattach keep the same token; other hosts retain the previous process-stable
+ * behavior without making the token derivable from the public session id alone.
  */
 const PI_PROXY_SESSION_TOKEN_KEY = randomBytes(32);
 
@@ -242,9 +243,18 @@ function stableSessionPathSegment(sid: string | undefined): string {
   return createHash('sha256').update(sid).digest('hex').slice(0, 12);
 }
 
-function stableRemoteProxySessionToken(sid: string | undefined): string {
+function stableRemoteProxySessionToken(
+  sid: string | undefined,
+  hostDeriver?: (sessionId: string) => string,
+): string {
   if (!sid) return randomBytes(32).toString('base64url');
-  return createHmac('sha256', PI_PROXY_SESSION_TOKEN_KEY).update(sid).digest('base64url');
+  const token = hostDeriver
+    ? hostDeriver(sid)
+    : createHmac('sha256', PI_PROXY_SESSION_TOKEN_KEY).update(sid).digest('base64url');
+  if (!/^[A-Za-z0-9_-]{40,256}$/.test(token)) {
+    throw new Error('pi: host returned an invalid proxy session token');
+  }
+  return token;
 }
 
 function slugifyForMemory(input: string, maxLen: number): string {
@@ -1789,7 +1799,7 @@ export class PiAgent extends BaseAgent {
     // 当作信任边界。
     const remoteUsesHostProxy = remote && nativeProviders.some((provider) => provider.hostProxyForward);
     const proxySessionToken = remoteUsesHostProxy
-      ? stableRemoteProxySessionToken(opts.sessionId)
+      ? stableRemoteProxySessionToken(opts.sessionId, this.deps.derivePiProxySessionToken)
       : !remote
         ? randomBytes(32).toString('base64url')
         : undefined;

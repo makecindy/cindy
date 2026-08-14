@@ -1606,7 +1606,12 @@ describe('Pi provider-aware model routing', () => {
         },
       ],
     );
-    const agent = new PiAgent({
+    const stableTokens = new Map([
+      ['remote-xai-forward', 'a'.repeat(43)],
+      ['remote-xai-other', 'b'.repeat(43)],
+    ]);
+    const derivePiProxySessionToken = vi.fn((sessionId: string) => stableTokens.get(sessionId)!);
+    const agentDeps: AgentDeps = {
       ...base,
       auth: {
         ...base.auth,
@@ -1623,6 +1628,7 @@ describe('Pi provider-aware model routing', () => {
           disposed += 1;
         };
       },
+      derivePiProxySessionToken,
       resolveRemotePiBinaryPath: async () => '/remote/pi',
       getRemotePiFileOps: () => ({
         mkdirp: async () => {},
@@ -1635,7 +1641,8 @@ describe('Pi provider-aware model routing', () => {
         transportOptions = opts;
         return remoteStub;
       },
-    });
+    };
+    const agent = new PiAgent(agentDeps);
     const handle = await agent.startSession({
       sessionId: 'remote-xai-forward',
       workingDir: cwd,
@@ -1649,10 +1656,13 @@ describe('Pi provider-aware model routing', () => {
     expect(registeredToken).toMatch(/^[A-Za-z0-9_-]{40,}$/);
     expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(registeredToken);
     const firstToken = registeredToken;
+    const firstSpawnEnv = { ...transportOptions?.env };
     await handle.close();
     expect(disposed).toBe(1);
 
-    const reattached = await agent.startSession({
+    // Reconstruct the agent to model a Desktop restart. The host-owned
+    // derivation survives while maker-core process-local state does not.
+    const reattached = await new PiAgent(agentDeps).startSession({
       sessionId: 'remote-xai-forward',
       workingDir: cwd,
       model: 'grok-4.6',
@@ -1660,9 +1670,48 @@ describe('Pi provider-aware model routing', () => {
       remoteHostId: 'remote-host',
     });
     expect(registeredToken).toBe(firstToken);
+    expect(transportOptions?.env).toEqual(firstSpawnEnv);
     expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(firstToken);
     await reattached.close();
     expect(disposed).toBe(2);
+
+    const otherSession = await new PiAgent(agentDeps).startSession({
+      sessionId: 'remote-xai-other',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      remoteHostId: 'remote-host',
+    });
+    expect(registeredToken).not.toBe(firstToken);
+    expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(registeredToken);
+    expect(derivePiProxySessionToken).toHaveBeenCalledWith('remote-xai-forward');
+    expect(derivePiProxySessionToken).toHaveBeenCalledWith('remote-xai-other');
+    await otherSession.close();
+    expect(disposed).toBe(3);
+
+    const legacyDeps: AgentDeps = {
+      ...agentDeps,
+      derivePiProxySessionToken: undefined,
+    };
+    const legacy = await new PiAgent(legacyDeps).startSession({
+      sessionId: 'remote-xai-legacy',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      remoteHostId: 'remote-host',
+    });
+    const legacyToken = registeredToken;
+    await legacy.close();
+    const legacyReattached = await new PiAgent(legacyDeps).startSession({
+      sessionId: 'remote-xai-legacy',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      remoteHostId: 'remote-host',
+    });
+    expect(registeredToken).toBe(legacyToken);
+    await legacyReattached.close();
+    expect(disposed).toBe(5);
   });
 
   it('defers the remote xAI forward until a running gateway session actually switches to xAI', async () => {

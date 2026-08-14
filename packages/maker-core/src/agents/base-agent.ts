@@ -475,6 +475,13 @@ export interface AgentDeps {
   registerPiProxySession?: (sessionId: string, token: string) => (() => void) | void;
 
   /**
+   * Pi-only: host-owned derivation for restart-stable remote proxy tokens.
+   * Desktop persists the secret key; maker-core receives only the per-session
+   * result. Missing hooks preserve the legacy process-stable fallback.
+   */
+  derivePiProxySessionToken?: (sessionId: string) => string;
+
+  /**
    * BYOM:host 解析出当前会话可用的 pi **原生 provider**(用户自定义/本地模型)+ 需注入的
    * env(api keys)。PiAgent 把这些写进 models.json 的独立 provider 块(直连用户端点,不过
    * anthropic-compat 代理),并按 model→provider 路由 set_model / 初始 --provider。
