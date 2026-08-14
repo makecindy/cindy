@@ -102,6 +102,16 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
    的 exact temporary/local provenance 证明。approval 真源缺失、异常、撤销、失效、路径消失
    或快照失败时，新会话
    一律不带项目 `--skill`，并在 per-session runtime manifest 记录诊断原因。
+9. **Pi 会话 spawn env 稳定性(轮 41,2026-08-12)**:同一 `sessionId` 的重建(断链重连 /
+   恢复 / 重启挂回)spawn env 必须**逐字节稳定**(除显式换代)。远端 daemon 的
+   `pi/ensure` 以 envHash 全量对比判定条件 restart——**任何 per-call 随机值
+   (`randomBytes` / 时间戳 / 计数器)进入 spawn env 都会让 envHash 必变 → 重连即
+   kill + 全新建,毁掉「断链保活 / 纯 attach」语义**。轮 41 实锤:pi session bridge
+   token 曾每次 `randomBytes` 新生成,正常对话中 SSH 闪断一次就杀一次 pi。规则:
+   新增 spawn env 键前先问「同 session 重建时这个值变不变?」——会变就必须确定性派生
+   (如 `HMAC(进程级key, sessionId)`),或走非 env 通道(文件 / RPC 参数)。由
+   `piEnvironment.test.ts` 的 token 稳定性断言守;`session-registry` 的 envHash
+   机制测试只守「mismatch 会 restart」,守不住「env 不会自己 mismatch」。
 
 ## 5. 已交付(2026-07 里程碑)
 
@@ -114,6 +124,26 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
 - PR4 项目资源桥:只装配 Cindy 明确批准的 `.pi/skills` 与 cwd→git root 范围内
   `.agents/skills`；真实 pinned Pi RPC 夹具覆盖未批准/显式 skills、重复名、并发隔离，以及
   项目声明 npm/git/local packages 与 extensions 时零 install/clone/第三方执行。
+
+### SSH 远端能力(2026-08 里程碑,轮 39 补记)
+
+- **形态**:SSH remote 已交付。远端 daemon 唯一形态是 `packages/maker-pi-manager/`
+  (TS 单例 Node daemon,NDJSON RPC over unix socket,per-host 常驻);Python per-session
+  daemon(`pi-daemon.py`)已完全退役并从仓库移除。新增 `PiTransport` 抽象(本地
+  `createPiStdioTransport` / 远端 `createSshPiDaemonTransport` 双实现,PiRpcProcess
+  感知不到差异)。
+- **关键组件**:`maker-pi-manager`(protocol/codec/server/client/session-registry/bin)、
+  `pi-manager-installer.ts`(probe/install/ensure/uninstall)、desktop 侧
+  `pi-manager-client.ts` / `pi-remote-transport.ts` / `pi-host.ts` 装配。
+- **凭证面**:网关 key/BYOM key 经 SSH 加密通道传远端,落 per-session env-file(0600);
+  kill/空闲回收(30min)/daemon 重启(cleanupStaleState)三路径清理。Full Access 下
+  bash 可读父进程 env 的已知风险(见上文 §3)同样适用于远端会话 —— 远端会话的
+  ask/auto 档同样受限。BYOM key 落远端机器是设计语义(远端 pi 直连 BYOM endpoint),
+  用户可见性由 i18n 文案覆盖。
+- **受限能力(有意)**:远端会话不支持本地 fork(`forkSdkSession` 抛 remoteFork);
+  `/review` 对 SSH 远端会话前置拦截(device-link 同款);无自动重连(用户手动 Retry,
+  与 CC/Codex 对齐);版本差 + daemon 活着时 defer 并显示 UpgradeBanner, 用户确认
+  后才 kill + 重装(daemon 已死则静默升级磁盘 bundle)。
 
 ## 6. 上线门禁
 

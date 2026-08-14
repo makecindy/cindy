@@ -101,6 +101,8 @@ export interface GhostOauthAccountView {
 /** 保险库最小面(providerSecretStore 在接线处适配;测试喂内存假体)。 */
 export interface GhostOauthVault {
   read(ghostId: string, storageKey: string): string | null;
+  /** Optional strict read used only by durable reconciliation. */
+  readStrict?(ghostId: string, storageKey: string): string | null;
   /** 返回 false = 写失败(safeStorage 不可用等),调用方折叠结构化错误。 */
   store(ghostId: string, storageKey: string, value: string): boolean;
   remove(ghostId: string, storageKey: string): void;
@@ -607,15 +609,33 @@ export class GhostOauthAccountManager {
    * the update-crash half state and incorrectly reusing that token for a third
    * client introduced by a later update.
    */
-  reconcileAccountsForInstalledManifest(currentManifest: GhostManifest): number {
+  reconcileAccountsForInstalledManifestWithResult(currentManifest: GhostManifest): {
+    restored: number;
+    retryPending: boolean;
+  } {
     const ghostId = currentManifest.id;
     let restoredCount = 0;
+    let retryPending = false;
     for (const secret of currentManifest.network?.secrets ?? []) {
       if (secret.source !== 'oauth' || secret.oauth?.tokenBroker) continue;
       if (this.clientCustomized(ghostId, secret.key)) continue;
       const currentClientId = secret.oauth?.clientId?.trim();
       if (!currentClientId) continue;
-      const beforeRaw = this.deps.vault.read(ghostId, accountsKey(secret.key));
+      let beforeRaw: string | null;
+      try {
+        beforeRaw = (this.deps.vault.readStrict ?? this.deps.vault.read)(
+          ghostId,
+          accountsKey(secret.key),
+        );
+      } catch (error) {
+        retryPending = true;
+        this.deps.logger?.warn?.('ghost oauth client migration recovery read failed', {
+          ghostId,
+          secretKey: secret.key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
       if (beforeRaw === null) continue;
       const manifest = parseManifest(beforeRaw);
       let changed = 0;
@@ -636,6 +656,7 @@ export class GhostOauthAccountManager {
       }
       if (changed === 0) continue;
       if (!this.deps.vault.store(ghostId, accountsKey(secret.key), JSON.stringify(manifest))) {
+        retryPending = true;
         this.deps.logger?.warn?.('ghost oauth client migration recovery write failed', {
           ghostId,
           secretKey: secret.key,
@@ -646,7 +667,12 @@ export class GhostOauthAccountManager {
       this.clearCachedTokens(ghostId, secret.key);
       this.notifyStatusChanged(ghostId, secret.key, 'connected');
     }
-    return restoredCount;
+    return { restored: restoredCount, retryPending };
+  }
+
+  /** Compatibility wrapper for callers that only need the restored count. */
+  reconcileAccountsForInstalledManifest(currentManifest: GhostManifest): number {
+    return this.reconcileAccountsForInstalledManifestWithResult(currentManifest).restored;
   }
 
   /** 返回仍未完成重新授权的 clientId 迁移账号数；普通撤销授权不计入。 */

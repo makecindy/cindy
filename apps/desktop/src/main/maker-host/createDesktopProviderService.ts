@@ -4,8 +4,8 @@
  * 两块职责：
  *   1. 目录加载器 `ensureActiveCatalogLoaded`：用 electron net.request 拉公共 Catalog、node fs 读 dev
  *      本地文件，把结果写进 active-catalog 单例（getActiveCatalog 同步读）。
- *        - release：优先从区域化 Model Access 公共接口加载，失败时回退旧 OSS 目录。
- *        - dev：关闭联网（与 manifestService 一致），可由 XDT_MODELS_PATH 指向本地文件即时生效。
+ *        - release / dev：都从区域化 Model Access 公共接口加载，失败时回退旧 OSS 目录。
+ *        - dev 可由 XDT_MODELS_PATH 指向本地文件即时生效（本地文件优先于远端）。
  *        - env 兜底：XDT_MODELS_URL（完整覆盖 URL）/ XDT_DISABLE_MODELS_FETCH（强制不联网）。
  *      **每进程拉一次、存内存、无 TTL**：启动总是先拉远端；失败时才读按端点隔离的
  *      last-known-good 快照，最后回退 bundled。
@@ -36,7 +36,7 @@ import {
 } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
-import { getBaseUrl, isDev } from '../manifestService.js';
+import { getBaseUrl } from '../manifestService.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { getBuildClientEndpoint, getClientEndpoint } from '../clientEndpointsService.js';
 import {
@@ -325,38 +325,24 @@ const io: CatalogIO = {
 };
 
 /**
- * 构建目录源配置。release 使用区域化 Model Access 公共接口，旧 OSS 保留为迁移期回退；dev 不联网。
+ * 构建目录源配置。release 与 dev 统一使用区域化 Model Access 公共接口，旧 OSS 保留为迁移期回退。
  *
  * 会话切到另一 auth realm 时，Model Access 公共接口随 active endpoint 改变并触发整份目录
  * 重载。旧 OSS 只属于安装包区域，因此仅同区加载允许使用；跨区主源失败时直接退化 bundled，
  * 绝不把安装区域的 provider/routing 目录冒充成组织区域目录。
  */
 function buildSource(): CatalogSourceConfig {
-  const dev = isDev();
   const explicitUrl = process.env.XDT_MODELS_URL;
-  const baseUrl = dev ? undefined : getClientEndpoint('modelAccessApiBaseUrl');
-  const usesBuildRealm = !dev && baseUrl === getBuildClientEndpoint('modelAccessApiBaseUrl');
+  const baseUrl = getClientEndpoint('modelAccessApiBaseUrl');
+  const usesBuildRealm = baseUrl === getBuildClientEndpoint('modelAccessApiBaseUrl');
   return {
     url: explicitUrl,
     localPath: process.env.XDT_MODELS_PATH,
     baseUrl,
-    fallbackBaseUrl: dev || !usesBuildRealm ? undefined : getBaseUrl(),
+    fallbackBaseUrl: !usesBuildRealm ? undefined : getBaseUrl(),
     remoteBudgetMs: DEFAULT_REMOTE_CATALOG_BUDGET_MS,
-    disableFetch: shouldDisableCatalogFetch(
-      dev,
-      explicitUrl,
-      process.env.XDT_DISABLE_MODELS_FETCH === '1',
-    ),
+    disableFetch: process.env.XDT_DISABLE_MODELS_FETCH === '1',
   };
-}
-
-/** dev 缺省禁网；显式 URL 是唯一远端调试入口，强制禁网始终拥有最高优先级。 */
-export function shouldDisableCatalogFetch(
-  dev: boolean,
-  explicitUrl: string | undefined,
-  forcedDisabled: boolean,
-): boolean {
-  return forcedDisabled || (dev && !explicitUrl?.trim());
 }
 
 function catalogSourceKey(source: CatalogSourceConfig): string {
@@ -557,13 +543,13 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   await ensureActiveCatalogLoaded();
   const sourceConfig = buildSource();
-  // dev 缺省禁网(或 XDT_DISABLE_MODELS_FETCH=1)时这里根本不会发起请求,落到 bundled 是
+  // XDT_DISABLE_MODELS_FETCH=1 时这里根本不会发起请求,落到 bundled 是
   // 预期行为而非网络失败——用专用错误码如实返回,不让 renderer 误报成可重试的刷新失败。
   // XDT_MODELS_PATH 是纯本地源,不依赖远程拉取,不受 disableFetch 约束。
   if (sourceConfig.disableFetch && !sourceConfig.localPath) {
     throwIpcError(
       'MODEL_CATALOG_FETCH_DISABLED',
-      '模型目录远程拉取未启用,本次未发起请求(dev 模式可设 XDT_MODELS_URL 启用;若已设 XDT_DISABLE_MODELS_FETCH=1 请先移除)',
+      '模型目录远程拉取未启用,本次未发起请求(若已设 XDT_DISABLE_MODELS_FETCH=1 请先移除)',
     );
   }
   const sourceKey = catalogSourceKey(sourceConfig);

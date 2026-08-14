@@ -84,6 +84,10 @@ import type {
   SubagentModelSettingsState,
   SubagentModelSettingsWriteResult,
 } from '../shared/subagentModelSettings';
+import {
+  isModelVisibilityLegacyOwnerClaim,
+  type ModelVisibilityLegacyOwnerClaim,
+} from '../shared/modelVisibility';
 import type { VoiceInputAsrMode, VoiceInputProviderKind } from '../shared/voiceInputAsrProfiles';
 import type {
   VoiceInputRefinerProviderKind,
@@ -123,7 +127,9 @@ import type {
 import type {
   RsbWindowCommandRouteRequest,
   RsbWindowCommandRouteResult,
+  RsbWindowTabHandoff,
 } from '../shared/rightSidebarWindow';
+import { RSB_WINDOW_TAB_HANDOFF_CHANNEL } from '../shared/rightSidebarWindow';
 import {
   RSB_NATIVE_POPUP_CLAIM_CHANNEL,
   RSB_NATIVE_POPUP_CLOSE_CHANNEL,
@@ -385,6 +391,7 @@ const fanOutOrcaWorkerChanged = createIpcFanOut('maker:orca:worker-changed');
 const fanOutRsbWindowStateChanged = createIpcFanOut('maker:rsb-window:state-changed');
 const fanOutRsbWindowContextChanged = createIpcFanOut('maker:rsb-window:context-changed');
 const fanOutRsbWindowCommand = createIpcFanOut('maker:rsb-window:command');
+const fanOutRsbWindowTabHandoff = createIpcFanOut(RSB_WINDOW_TAB_HANDOFF_CHANNEL);
 // 插件停靠面板独立窗口(ghost panel window)状态推送
 const fanOutGhostPanelWindowStateChanged = createIpcFanOut(
   'maker:ghost-panel-window:state-changed',
@@ -1539,8 +1546,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 写偏好;true 附带开窗,false 附带关窗。返回新 state。 */
     setDetached: (
       detached: boolean,
+      handoff?: RsbWindowTabHandoff,
     ): Promise<{ detached: boolean; lastOpen: boolean; open: boolean }> =>
-      ipcRenderer.invoke('maker:rsb-window:set-detached', detached),
+      ipcRenderer.invoke('maker:rsb-window:set-detached', detached, handoff),
     /** 子窗口 mount 时拉主窗上报的渲染上下文(main 缓存的最后一份)。 */
     getContext: (): Promise<{
       sessionId: string | null;
@@ -1565,6 +1573,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onStateChanged: fanOutRsbWindowStateChanged,
     onContextChanged: fanOutRsbWindowContextChanged,
     onCommand: fanOutRsbWindowCommand,
+    onTabHandoff: (cb: (handoff: RsbWindowTabHandoff) => void): (() => void) =>
+      fanOutRsbWindowTabHandoff((data) => cb(data as RsbWindowTabHandoff)),
   },
 
   // ── 插件停靠面板独立窗口(ghost panel window)──────────────────────────
@@ -2081,12 +2091,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── IM Binding (feishu /ctr 接管 → desktop session 路由) ──
   // 整体接管态由 main/im/binding.ts 维护; renderer 用这套 API 实时知道
   // 某个 sessionId 是否被某 IM 用户接管 (用来渲染 mask + 收回按钮)。
-  /** renderer 启动/cc prefs 变化时推送当前 cc vendor 偏好给 main，供接管新建 session 时使用 */
+  /**
+   * renderer 启动/cc prefs 变化时推送当前 cc vendor 偏好给 main，供接管新建 session
+   * 时使用。providerId 必须随模型一起推送：/ctr 新建会话靠它把路由钉在用户选择的
+   * 供应商上（缺省时隐式路由可能落到官方网关，而模型只在用户供应商存在 → 400）。
+   */
   syncDesktopCcPrefs: (prefs: {
     model: string;
     effort: string;
     permissionMode: string;
     fastMode: boolean;
+    providerId: string | null;
   }): void => ipcRenderer.send('desktop:cc-prefs-changed', prefs),
 
   /**
@@ -2261,6 +2276,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(BILLING_INVOKE.CREATE_SUBSCRIPTION, payload),
     getCurrentSubscription: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CURRENT_SUBSCRIPTION),
     cancelCurrentSubscription: () => ipcRenderer.invoke(BILLING_INVOKE.CANCEL_CURRENT_SUBSCRIPTION),
+    resumeCurrentSubscription: () => ipcRenderer.invoke(BILLING_INVOKE.RESUME_CURRENT_SUBSCRIPTION),
     refreshSubscriptionPurchase: (payload) =>
       ipcRenderer.invoke(BILLING_INVOKE.REFRESH_SUBSCRIPTION_PURCHASE, payload),
     quotePlanChange: (payload) => ipcRenderer.invoke(BILLING_INVOKE.QUOTE_PLAN_CHANGE, payload),
@@ -4090,13 +4106,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ccMgrForceUpgrade: (
       hostId: string,
       sessionId?: string,
+      agent: 'cc' | 'pi' = 'cc',
     ): Promise<{ ok: true; daemonReady: boolean }> =>
-      ipcRenderer.invoke('maker:remote-ssh:cc-mgr-force-upgrade', { hostId, sessionId }),
+      ipcRenderer.invoke('maker:remote-ssh:cc-mgr-force-upgrade', { hostId, sessionId, agent }),
     ccMgrListPendingUpgrades: (): Promise<{
-      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string }>;
+      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string; agent: 'cc' | 'pi' }>;
     }> => ipcRenderer.invoke('maker:remote-ssh:cc-mgr-list-pending-upgrades'),
-    ccMgrDismissPendingUpgrade: (hostId: string): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:remote-ssh:cc-mgr-dismiss-pending-upgrade', { hostId }),
+    ccMgrDismissPendingUpgrade: (hostId: string, agent: 'cc' | 'pi' = 'cc'): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:remote-ssh:cc-mgr-dismiss-pending-upgrade', { hostId, agent }),
 
     // ── Codex auth sync (Phase B+) ────────────────────────────────────────
     // Two-step UX: check first (so renderer can build the right confirm
@@ -5097,10 +5114,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。
      * 让 IM /model 在 main 侧复用同一套可见性过滤,与应用内模型列表逐模型一致。
-     * fire-and-forget(忽略返回),main 仅缓存于内存、不落盘。
+     * dataOwnerId + ownerGeneration 用于拒绝账号切换期间的迟到快照；main 仅缓存于内存、不落盘。
      */
-    syncModelVisibility: (map: Record<string, boolean>): Promise<void> =>
-      ipcRenderer.invoke('maker:model-visibility:sync', map),
+    syncModelVisibility: (
+      dataOwnerId: string | null,
+      ownerGeneration: number,
+      map: Record<string, boolean>,
+    ): Promise<void> =>
+      ipcRenderer.invoke('maker:model-visibility:sync', dataOwnerId, ownerGeneration, map),
+    claimLegacyModelVisibilityOwner: (): ModelVisibilityLegacyOwnerClaim => {
+      const value: unknown = ipcRenderer.sendSync(
+        'maker:model-visibility:legacy-owner-claim-sync',
+      );
+      return isModelVisibilityLegacyOwnerClaim(value)
+        ? value
+        : {
+            dataOwnerId: null,
+            ownerGeneration: 0,
+            claimed: false,
+            claimedByOtherOwner: false,
+            canInitialize: false,
+          };
+    },
     /**
      * 「模型 / 供应商停用」override 写入(main 侧持久化真源 model-disable-store)。
      * 成功后 main 广播 PROVIDER_CHANGED,renderer 经 useProviders 快照刷新拿到

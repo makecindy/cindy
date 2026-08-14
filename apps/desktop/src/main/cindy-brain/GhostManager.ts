@@ -1231,6 +1231,11 @@ export class GhostManager {
     return this.runExclusiveMutation(() => this.migrateLegacyApprovalsUnlocked());
   }
 
+  /** True only while the durable migration ledger still carries retry work. */
+  hasPendingLegacyApprovalMigration(): boolean {
+    return this.receiptStore.readMigrationLedger()?.state === 'in-progress';
+  }
+
   private async migrateLegacyApprovalsUnlocked(): Promise<{
     migrated: string[];
     skipped: string[];

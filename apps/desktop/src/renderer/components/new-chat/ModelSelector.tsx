@@ -98,6 +98,7 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
+import { compactEnglishEffortLabel } from '@cindy/maker-shared/agent-capabilities';
 import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
@@ -439,6 +440,25 @@ export function modelEffortLabel(
   return t(`effortLevels.${e}`, {
     defaultValue: m?.effortDisplayNames?.[e] ?? agentDisplayName ?? e,
   });
+}
+
+export function modelCompactEffortLabel(
+  language: string,
+  t: Translate,
+  m: Pick<RowModel, 'effortDisplayNames'> | null | undefined,
+  e: Effort,
+  agentDisplayName?: string,
+): string {
+  const fullLabel = modelEffortLabel(t, m, e, agentDisplayName);
+  return language.toLowerCase().startsWith('en')
+    ? compactEnglishEffortLabel(e, fullLabel)
+    : fullLabel;
+}
+
+function resolvedTranslationLanguage(
+  i18n: { resolvedLanguage?: string; language?: string } | undefined,
+): string {
+  return i18n?.resolvedLanguage ?? i18n?.language ?? '';
 }
 
 function ModelPromotionBadge({ children }: { children: ReactNode }) {
@@ -839,7 +859,7 @@ function ModelSelectorContentView({
 }) {
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const constrainedListMaxHeight = modelListMaxHeightForRows(maxVisibleModelRows);
   const [paneElement, setPaneElement] = useState<HTMLDivElement | null>(null);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
@@ -1101,6 +1121,8 @@ function ModelSelectorContentView({
   // 档名多语言:i18n 词表(effortLevels.*) → 模型级 effortDisplayNames →
   // capabilities displayName(未知档兜底) → 原 id。
   const effortLabelFor = (m: RowModel, e: Effort) => modelEffortLabel(t, m, e, effortMeta.get(e));
+  const compactEffortLabelFor = (m: RowModel, e: Effort) =>
+    modelCompactEffortLabel(resolvedTranslationLanguage(i18n), t, m, e, effortMeta.get(e));
 
   // 当前 agent 是否支持 Fast Mode(agent 级能力,叠加 per-model supportsFastMode 才显示开关)。
   const hasFastModeCap = useMemo(() => {
@@ -1996,8 +2018,12 @@ function ModelSelectorContentView({
                     {model.displayName}
                   </span>
                   {rowEffort && (
-                    <span className="shrink-0 text-13 font-normal text-[var(--text-tertiary)]">
-                      {effortLabelFor(model, rowEffort)}
+                    <span
+                      aria-label={effortLabelFor(model, rowEffort)}
+                      title={effortLabelFor(model, rowEffort)}
+                      className="shrink-0 text-13 font-normal text-[var(--text-tertiary)]"
+                    >
+                      {compactEffortLabelFor(model, rowEffort)}
                     </span>
                   )}
                   {rowFastOn && (
@@ -2019,8 +2045,14 @@ function ModelSelectorContentView({
                       </span>
                     )}
                     {showSubscriptionTag && (
-                      <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium text-[var(--text-secondary)]">
-                        {t('settings.providers.models.subscription')}
+                      <span
+                        aria-label={t('settings.providers.models.subscription')}
+                        title={t('settings.providers.models.subscription')}
+                        className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium text-[var(--text-secondary)]"
+                      >
+                        {t('newChat.modelSelector.meta.subscriptionBadgeCompact', {
+                          defaultValue: t('settings.providers.models.subscription'),
+                        })}
                       </span>
                     )}
                     {showPromotionTag && rowPromotionLabel && (
@@ -2364,7 +2396,7 @@ export function ModelSelector({
   onNavigateToProviders,
   agentSwitch,
 }: ModelSelectorProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
   const openRef = useRef(false);
   const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
@@ -2588,7 +2620,16 @@ export function ModelSelector({
     !hasConnectedSource;
   // trigger 上仍展示当前模型的 effort(模型支持时)。
   const showEffort = !fallbackOption?.active && efforts.length > 0 && efforts.includes(effort);
-  const effortLabel = showEffort ? labelOf(effort) : null;
+  const fullEffortLabel = showEffort ? labelOf(effort) : null;
+  const effortLabel = showEffort
+    ? modelCompactEffortLabel(
+        resolvedTranslationLanguage(i18n),
+        t,
+        currentModel,
+        effort,
+        effortMeta.get(effort),
+      )
+    : null;
   // Fast 工具栏按钮已移除 → trigger 上用闪电标出当前是否 Fast(模型支持 + 已开启时)。
   // 支持性按「当前生效来源」现查 per-provider 条目;无法解析来源(flat / device-link 退化)时
   // 回退拍平值,避免误隐藏闪电。
@@ -2621,20 +2662,20 @@ export function ModelSelector({
     : showSourceDisconnected
       ? `${t('newChat.modelSelector.source.disconnected')}: ${displayIdentityLabel}`
       : agentIdentity?.state === 'pending' && agentName
-        ? effortLabel
+        ? fullEffortLabel
           ? t('newChat.modelSelector.trigger.pendingAriaWithEffort', {
               agent: agentName,
               model: displayLabel,
-              effort: effortLabel,
+              effort: fullEffortLabel,
             })
           : t('newChat.modelSelector.trigger.pendingAria', {
               agent: agentName,
               model: displayLabel,
             })
-        : effortLabel
+        : fullEffortLabel
           ? t('newChat.modelSelector.trigger.ariaWithEffort', {
               model: displayIdentityLabel,
-              effort: effortLabel,
+              effort: fullEffortLabel,
             })
           : t('newChat.modelSelector.trigger.aria', { model: displayIdentityLabel });
   // compact 会隐藏断连状态文字；原生 title 仍需保留同一状态，避免鼠标用户悬停
@@ -2864,6 +2905,7 @@ export function ModelSelector({
                 ·
               </span>
               <span
+                title={fullEffortLabel ?? undefined}
                 className={cn(
                   'min-w-0 font-normal',
                   isCreateAgentVariant

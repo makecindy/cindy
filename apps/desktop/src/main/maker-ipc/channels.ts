@@ -222,9 +222,12 @@ export const MAKER_INVOKE = {
   /**
    * renderer → main 单向镜像「模型显示/隐藏」override(modelVisibilityPrefs)。
    * override 真源仍在 renderer localStorage;main 只缓存一份内存副本,供 IM `/model`
-   * 派生模型列表时复用同一套可见性过滤(两端列表口径一致)。fire-and-forget,不落盘。
+   * 派生模型列表时复用同一套可见性过滤(两端列表口径一致)。入参带 dataOwnerId +
+   * ownerGeneration，Main 拒绝账号切换期间的迟到快照。fire-and-forget,不落盘。
    */
   MODEL_VISIBILITY_SYNC: 'maker:model-visibility:sync',
+  /** Sync read: which stable local/cloud owner may import the pre-account Renderer preference key. */
+  MODEL_VISIBILITY_LEGACY_OWNER_CLAIM_SYNC: 'maker:model-visibility:legacy-owner-claim-sync',
   /**
    * 「模型 / 供应商停用」override 写入(model-disable-store,main 侧持久化真源)。
    * 入参 = { kind:'model', providerId, modelIds: string[], disabled: boolean }
@@ -887,6 +890,8 @@ export const MAKER_PUSH = {
   RSB_WINDOW_CONTEXT_CHANGED: 'maker:rsb-window:context-changed',
   /** main → 子窗口命令(如 open-terminal),只发子窗口。payload = RsbWindowCommand。 */
   RSB_WINDOW_COMMAND: 'maker:rsb-window:command',
+  /** 子窗口合并回主窗口前交接不可持久化 session 的 tab 快照，只发主窗口。 */
+  RSB_WINDOW_TAB_HANDOFF: 'maker:rsb-window:tab-handoff',
   /** Main-owned H.264 access unit pushed without Renderer polling. */
   IOS_SIMULATOR_H264_FRAME: 'maker:ios-simulator:h264-frame',
   /** Main-owned public route selection/status for the iOS Simulator viewer. */

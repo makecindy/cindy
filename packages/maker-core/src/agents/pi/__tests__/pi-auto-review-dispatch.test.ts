@@ -41,16 +41,35 @@ const captured = vi.hoisted(() => ({
   closed: false,
 }));
 
+vi.mock('../transport.js', () => ({
+  createPiStdioTransport: (opts: {
+    args: string[];
+    env: Record<string, string | undefined>;
+    onProcessSpawned?: (pid: number) => void | (() => void);
+  }) => {
+    // spawn 参数断言移到 transport 工厂(spawn 行为在 stdio transport)。
+    captured.args = opts.args;
+    captured.env = opts.env;
+    opts.onProcessSpawned?.(1234);
+    return {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 1234,
+      isClosed: () => false,
+    };
+  },
+  attachJsonlReader: () => {},
+}));
+
 vi.mock('../rpc-client.js', () => ({
   PiRpcProcess: class {
     isClosed = false;
     constructor(opts: {
-      args: string[];
-      env: Record<string, string | undefined>;
       onEvent: (event: unknown) => void;
     }) {
-      captured.args = opts.args;
-      captured.env = opts.env;
       captured.onEvent = opts.onEvent;
     }
     async request(
@@ -349,7 +368,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       const extensionPaths = captured.args.flatMap((arg, index) =>
         arg === '--extension' ? [captured.args[index + 1]] : []);
       expect(extensionPaths).toEqual([
-        path.join(configHome!, 'extensions', 'cindy-bridge.ts'),
+        path.posix.join(configHome!, 'extensions', 'cindy-bridge.ts'),
       ]);
 
       const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;

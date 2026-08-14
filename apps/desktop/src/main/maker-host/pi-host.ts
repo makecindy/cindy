@@ -23,6 +23,7 @@ import { PiAgent, type AgentDeps, type AuthAdapter, type AuthState } from '@cind
 import type {
   AgentRuntimeConfig,
   AuthAdapterOptions,
+  PiMcpServerRef,
   PiNativeApi,
   PiNativeProviderSpec,
   PiNativeProvidersResult,
@@ -47,7 +48,7 @@ import {
   getDesktopMcpToolApprovalPolicy,
   getDesktopMcpToolApprovalPresentation,
 } from './mcp-tool-approval-policy.js';
-import { getRipgrepBinaryPath } from './runtime-configs.js';
+import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
 import { resolveXdPiGatewayWireProtocol } from './active-catalog.js';
 
 const log = createLogger('pi-host');
@@ -173,6 +174,16 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     enumerable: true,
     configurable: false,
   });
+  // 远端会话专用:真上游网关端点(非本地 loopback compat proxy)。远端机器够不到
+  // 本机 127.0.0.1,必须直连网关 —— 与 CC 的 buildDesktopClaudeRuntimeConfig 对齐。
+  // 缺省会 fallback 到 endpoint(loopback),远端不可用 —— 但 writeModelsJson 的
+  // remote 分支显式读它,缺失时写 127.0.0.1:0 是 bug(见 R1/R2 审核);这里保证
+  // 恒有真上游。
+  Object.defineProperty(config, 'remoteEndpoint', {
+    get: () => claudeUpstreamEndpoint(),
+    enumerable: true,
+    configurable: false,
+  });
   Object.defineProperties(config, {
     memoryEnabled: {
       get: () => readMemorySettings().pi,
@@ -202,6 +213,20 @@ export interface BuildPiAgentOpts {
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
   /** Trusted project-approval authority; omitted until the host has one, which fails closed. */
   resolvePiProjectTrustInput?: AgentDeps['resolvePiProjectTrustInput'];
+  /** SSH remote pi 会话的 transport 工厂(host 装配;缺省 = 远端 pi 会话被拒)。 */
+  getRemotePiTransport?: AgentDeps['getRemotePiTransport'];
+  /** SSH remote pi 会话的 agentHome 文件操作原语(host 装配;缺省 = 远端 fs 走本地,错误语义)。 */
+  getRemotePiFileOps?: AgentDeps['getRemotePiFileOps'];
+  /** 远端 pi 二进制解析(host probe;缺省 = 回落本地路径)。 */
+  resolveRemotePiBinaryPath?: AgentDeps['resolveRemotePiBinaryPath'];
+  /** 远端会话是否跳过 in-process MCP bridge(Phase 1 不桥 orca/memory/ghost)。 */
+  remotePiSkipMcpBridge?: AgentDeps['remotePiSkipMcpBridge'];
+  /** 远端 MCP bridge URL 改写器:把本地 loopback URL 改成 remote-forward 地址。
+   *  轮 24 HIGH-2:返回 { url, close } —— close 关闭本次 rewrite 建立的 forward,
+   *  pi-host 在会话 dispose 时调用, 防远端端口随会话累积泄漏。 */
+  rewriteRemotePiMcpBridgeUrl?: (remoteHostId: string, localUrl: string) => Promise<{ url: string; close: () => void }>;
+  /** 远端 agent-proxy env(HTTPS_PROXY/HTTP_PROXY/NO_PROXY 经 SSH remote-forward)。 */
+  getRemotePiAgentProxyEnv?: AgentDeps['getRemotePiAgentProxyEnv'];
 }
 
 /** Cindy wire protocol → pi models.json api 形态。 */
@@ -342,7 +367,10 @@ export function buildPiNativeProvidersFromConfigs(
 }
 
 /** BYOM:读 DB 自定义 provider + safeStorage key → pi 原生 provider spec。IO 外壳,逻辑在上面。 */
-async function resolvePiNativeProviders(): Promise<PiNativeProvidersResult> {
+async function resolvePiNativeProviders(ctx?: {
+  workingDir?: string;
+  remoteHostId?: string | null;
+}): Promise<PiNativeProvidersResult> {
   let configs;
   try {
     configs = await listCustomProvidersWithSecureHeaders();
@@ -352,9 +380,42 @@ async function resolvePiNativeProviders(): Promise<PiNativeProvidersResult> {
     });
     return { providers: [], env: {} };
   }
-  return buildPiNativeProvidersFromConfigs(configs, readCustomProviderKey, (id, reason) =>
-    log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
-  );
+  const isRemote = Boolean(ctx?.remoteHostId);
+  // 远端会话:本地 loopback 端点(本机 Ollama/vLLM)远端够不到。
+  // 轮 42 P2(codex-connector):**不再 pre-filter 掉** —— 让 PiAgent 的
+  // [REMOTE_LOCAL_ONLY_PROVIDER] guard 显式拒绝, 用户才能拿到带行动指引的
+  // 可行动错误码(换网关/远端可达 BYOM)。pre-filter 会让显式选择落到通用
+  // 「BYOM provider cannot serve model」路径, renderer 收不到指引文案。
+  if (isRemote) {
+    for (const c of configs) {
+      const baseUrl = c.runtimes.pi?.baseUrl;
+      if (baseUrl && isLoopbackUrl(baseUrl)) {
+        log.debug('resolvePiNativeProviders: remote session has loopback BYOM provider (core guard will reject)', {
+          id: c.id,
+          baseUrl,
+        });
+      }
+    }
+  }
+  return buildPiNativeProvidersFromConfigs(configs, readCustomProviderKey, (id, reason) => {
+    log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason });
+  });
+}
+
+/** baseUrl 是否指向本机 loopback(与本机 proxy 同判定,远端会话不可达)。
+ *  轮 24 CRITICAL-1:startsWith('127.') 会误杀 127.example.com 等合法域名
+ *  —— 改为精确 IPv4 loopback 正则(/^127\.\d+\.\d+\.\d+$/)。URL.hostname 已
+ *  去括号, ::1 无需再匹配 '[::1]'(保留兼容)。 */
+function isLoopbackUrl(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === 'localhost'
+      || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+      || host === '::1'
+      || host === '[::1]';
+  } catch {
+    return false;
+  }
 }
 
 /** pi 二进制缺失时返回 null(调用方跳过注册);其余情况构造 PiAgent。 */
@@ -379,11 +440,81 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     // 与 Claude Code / Codex 同一份第一方 MCP 审批真源。Pi 之前没接,导致 orca 这类
     // 可信 server 的工具落进 Auto-review 灰区被模型静默 block(详见 pi/index.ts 权限门)。
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
-    getMcpToolApprovalPresentation: getDesktopMcpToolApprovalPresentation,
-    resolvePiAgentHome: () => path.join(app.getPath('userData'), 'pi-agent-home'),
-    preparePiExtraSpawnConfig: (providers, ctx) => getPiExtraSpawnConfig(providers, opts.logger, ctx),
+getMcpToolApprovalPresentation: getDesktopMcpToolApprovalPresentation,
+    resolvePiAgentHome: (remoteHostId) => {
+      // 轮 40-w4-t3 CRITICAL:远端 agentHome 承载 session 历史(sessions/*.jsonl,
+      // 与 DB sdk_session_id 持久关联)—— 必须落远端持久目录, 不能用本机
+      // userData(远端 fileOps 会创建含反斜杠的字面目录)或 /tmp(重启即丢)。
+      // $HOME 由远端 fileOps 的 bash 统一展开;DB 里存 $HOME/... 字面, 跨会话
+      // 一致。run-tmp 等短生命周期内容仍走 agentHome/run-tmp。
+      if (remoteHostId) return '$HOME/.xdt-server/v1/pi-agent-home';
+      return path.join(app.getPath('userData'), 'pi-agent-home');
+    },
+    preparePiExtraSpawnConfig: async (providers, ctx) => {
+      const extra = await getPiExtraSpawnConfig(providers, opts.logger, ctx);
+      if (!extra?.mcpBridge || extra.mcpBridge.servers.length === 0) return extra;
+      // 远端会话:把 in-process bridge 的 loopback URL 改成 remote-forward 地址
+      // (SSH 隧道转发回本地 bridge)。身份 query / token 不变。
+      const remoteHostId = ctx?.remoteHostId;
+      const rewriter = opts.rewriteRemotePiMcpBridgeUrl;
+      if (remoteHostId && rewriter) {
+        let servers;
+        // 轮 24 HIGH-2:rewriter 每次调用建一条远端 forward, 会话结束必须关闭
+        // —— 收集 close, 包装进 disposeSessionCtx, 否则端口随会话累积泄漏。
+        const forwardClosers: Array<() => void> = [];
+        // 轮 40-w4-t8 HIGH:并发重写时一个 rewriter reject 后, 其它 pending 的
+        // rewriter 晚到 resolve 仍会 push close 并创建 forward —— Promise.all
+        // 的 catch 只关当时已收集的, 晚到的 forward 永不关闭(端口/句柄泄漏)。
+        // 改 Promise.allSettled: 全部 settle 后统一判定, 任一失败则关闭所有
+        // 已成功项(含晚到的), 再重抛。
+        const settled = await Promise.allSettled(
+          extra.mcpBridge.servers.map(async (s) => {
+            if (s.remote) return s; // 外部 HTTP MCP 直连,不改。
+            const rewritten = await rewriter(remoteHostId, s.url);
+            forwardClosers.push(rewritten.close);
+            // 轮 29 LOW-2:显式标 PiMcpServerRef —— rewrite 后 URL 指向 SSH
+            // 隧道本地端(不再是远端直连), remote 字段缺省 = undefined。
+            const ref: PiMcpServerRef = {
+              name: s.name,
+              url: rewritten.url,
+            };
+            return ref;
+          }),
+        );
+        const failed = settled.find((r) => r.status === 'rejected');
+        if (failed) {
+          // URL 改写失败(SSH forward 不可用等):**所有**已建立的 forward 一并
+          // 关闭(含晚到 resolve 的), 再注销已注册的 session ctx(否则 bridge
+          // 端残留引用泄漏 —— R2 凭证 Bug7)。然后重抛,由 PiAgent 的 catch
+          // 降级为「远端无 MCP」。
+          for (const close of forwardClosers) {
+            try { close(); } catch { /* best-effort */ }
+          }
+          try {
+            extra.disposeSessionCtx?.();
+          } catch {
+            /* best-effort */
+          }
+          const reason = (failed as PromiseRejectedResult).reason;
+          throw reason instanceof Error ? reason : new Error(String(reason));
+        }
+        servers = settled.map((r) => (r as PromiseFulfilledResult<PiMcpServerRef>).value);
+        const baseDispose = extra.disposeSessionCtx;
+        return {
+          ...extra,
+          mcpBridge: { ...extra.mcpBridge, servers },
+          disposeSessionCtx: () => {
+            for (const close of forwardClosers) {
+              try { close(); } catch { /* best-effort */ }
+            }
+            baseDispose?.();
+          },
+        };
+      }
+      return extra;
+    },
     registerPiProxySession,
-    resolvePiNativeProviders: () => resolvePiNativeProviders(),
+    resolvePiNativeProviders: (ctx) => resolvePiNativeProviders(ctx),
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
     resolvePiGatewayModelApi: (providerId, modelId) => {
@@ -397,5 +528,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     },
     getGhostRosterPrompt: opts.getGhostRosterPrompt,
     resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
+    getRemotePiTransport: opts.getRemotePiTransport,
+    getRemotePiFileOps: opts.getRemotePiFileOps,
+    resolveRemotePiBinaryPath: opts.resolveRemotePiBinaryPath,
+    remotePiSkipMcpBridge: opts.remotePiSkipMcpBridge,
+    getRemotePiAgentProxyEnv: opts.getRemotePiAgentProxyEnv,
   });
 }

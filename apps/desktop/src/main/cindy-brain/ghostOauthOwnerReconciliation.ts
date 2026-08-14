@@ -11,24 +11,26 @@ export function createGhostOauthOwnerReconciliationGate(): {
   run: (
     ownerScope: string,
     reconcile: () => Promise<boolean>,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
 } {
   let reconciledOwnerScope: string | null = null;
-  const inFlightByOwnerScope = new Map<string, Promise<void>>();
+  const inFlightByOwnerScope = new Map<string, Promise<boolean>>();
 
   return {
-    async run(ownerScope, reconcile): Promise<void> {
-      if (reconciledOwnerScope === ownerScope) return;
+    async run(ownerScope, reconcile): Promise<boolean> {
+      if (reconciledOwnerScope === ownerScope) return true;
       const existing = inFlightByOwnerScope.get(ownerScope);
       if (existing) return existing;
 
-      let task!: Promise<void>;
+      let task!: Promise<boolean>;
       task = (async () => {
-        if (await reconcile()) reconciledOwnerScope = ownerScope;
+        const completed = await reconcile();
+        if (completed) reconciledOwnerScope = ownerScope;
+        return completed;
       })();
       inFlightByOwnerScope.set(ownerScope, task);
       try {
-        await task;
+        return await task;
       } finally {
         if (inFlightByOwnerScope.get(ownerScope) === task) {
           inFlightByOwnerScope.delete(ownerScope);

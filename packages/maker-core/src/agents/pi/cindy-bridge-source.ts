@@ -81,10 +81,28 @@ function withoutPiSecrets(env: Record<string, string | undefined>): Record<strin
 
 function managedRipgrepPath(): string {
   const configured = process.env[MANAGED_RG_PATH_ENV];
-  if (!configured || !path.isAbsolute(configured)) {
-    throw new Error('Cindy managed ripgrep is unavailable');
+  if (configured && path.isAbsolute(configured)) return configured;
+  // 轮 42 P1(codex-connector):远端 Pi 会话不注入 CINDY_PI_MANAGED_RG_PATH
+  // (本地 rg 二进制远端无意义)—— 远端 fallback 到 PATH 上的 rg(远端 POSIX
+  // 系统常见, 与 CC/Codex 远端一致)。两者都拿不到才 throw(fail-closed)。
+  const fallback = whichRgOnPath();
+  if (fallback) return fallback;
+  throw new Error('Cindy managed ripgrep is unavailable');
+}
+
+/** PATH 上找 rg(远端 fallback)。未找到返回空串。 */
+function whichRgOnPath(): string {
+  const dirs = (process.env.PATH ?? '').split(':');
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const candidate = dir.endsWith('/') ? dir + 'rg' : dir + '/rg';
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* keep scanning */
+    }
   }
-  return configured;
+  return '';
 }
 
 // 凭证/密钥路径特征由 maker-core 的单一来源生成。bridge 自包含、运行时不能 import，
@@ -150,8 +168,15 @@ function currentPermissionState(): {
   reviewReadPaths: string[];
   reviewOnly: boolean;
 } {
+  // 轮 40-w4-t12 HIGH-1:review-only 是会话创建时的启动语义(reviewMode), 由
+  // PiAgent 以独立 env 标记注入 —— 权限文件损坏/缺失时**不得**降级成普通 ask
+  // (否则 hard review-only 变成可交互确认的普通会话)。文件解析失败 → fail-closed:
+  // 保留 reviewOnly(按启动标记), reviewReadPaths 保守清空(读不了就不放行额外路径)。
+  const reviewOnlyByStart = process.env.CINDY_PI_REVIEW_ONLY === '1';
   const file = process.env.CINDY_PI_PERMISSION_FILE ?? '';
-  if (!file) return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: false };
+  if (!file) {
+    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
+  }
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'));
     return {
@@ -162,10 +187,10 @@ function currentPermissionState(): {
       reviewReadPaths: Array.isArray(parsed?.reviewReadPaths)
         ? parsed.reviewReadPaths.filter((root: unknown) => typeof root === 'string')
         : [],
-      reviewOnly: parsed?.reviewOnly === true,
+      reviewOnly: parsed?.reviewOnly === true || reviewOnlyByStart,
     };
   } catch {
-    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: false };
+    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
   }
 }
 
@@ -1084,10 +1109,55 @@ export default async function cindyBridge(pi: any) {
     // Extra Dirs 的结构化写工具永远禁止，即使 Full access 也不能把“只读引用”静默
     // 升级成写目录。bash 仍由 Cindy 审批/模型指令约束（Pi 暂无 OS sandbox API）。
     const targetPath = typeof event.input?.path === 'string' ? event.input.path : '';
+    // agent 运行时目录(configHome:models.json/权限档/subagent 快照/bridge 扩展)
+    // 是控制面:模型改写 models.json 的 baseUrl/apiKey 可把后续请求全部 MITM 到
+    // 攻击者 endpoint, 会话内容随之外泄(R5 安全审计 H-4)。host 侧写入不经此门
+    // (直连远端 fs / 本地 fs, 不走 pi 工具);模型的结构化写一律硬拦,含 Full access
+    // —— 与 permission file 同等级防护(CINDY_PI_PERMISSION_FILE 已在 SECRET_ENV_NAMES
+    // 剥离, models.json 走这条统一路径拦截)。
+    const agentHomeDir = process.env.PI_CODING_AGENT_DIR;
+    // 轮 40-w4-t12 HIGH-2 + 轮 40-w4-t13 HIGH:写目标 symlink 绕过 —— isInsideRoot
+    // 只看字面路径。realpathSync(目标) 在文件不存在时抛(null), 只回落字面检查会
+    // 漏掉 **symlink 父目录**(agentHome/link/perm.json, link -> /outside)。修:
+    // 目标存在 → realpath 目标;目标不存在 → realpath 最近的**存在的父目录**,
+    // 用真实父目录判定(父目录链上的 symlink 一并解析)。
+    const writeTargetResolved = (() => {
+      if (!targetPath) return null;
+      try {
+        return realpathSync(targetPath);
+      } catch {
+        // 目标不存在:向上找最近存在的祖先并 realpath。
+        let dir = path.dirname(targetPath);
+        for (let i = 0; i < 64; i += 1) {
+          try {
+            return path.join(realpathSync(dir), path.basename(targetPath));
+          } catch {
+            const parent = path.dirname(dir);
+            if (parent === dir) return null;
+            dir = parent;
+          }
+        }
+        return null;
+      }
+    })();
+    const writeInsideAgentHome = agentHomeDir
+      && (
+        isInsideRoot(targetPath, agentHomeDir)
+        || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, agentHomeDir))
+      );
     if (
       targetPath
       && FILE_WRITE_BUILTINS.has(event.toolName)
-      && permission.readOnlyRoots.some((root) => isInsideRoot(targetPath, root))
+      && writeInsideAgentHome
+    ) {
+      return { block: true, reason: 'Cindy agent runtime directory is read-only.' };
+    }
+    if (
+      targetPath
+      && FILE_WRITE_BUILTINS.has(event.toolName)
+      && permission.readOnlyRoots.some((root) =>
+        isInsideRoot(targetPath, root)
+        || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, root)))
     ) {
       return { block: true, reason: 'Cindy extra reference directories are read-only.' };
     }

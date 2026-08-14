@@ -75,6 +75,14 @@ export function createGhostPanelWindow(ghostId: string, title: string): BrowserW
       navigateOnDragDrop: false,
     },
   });
+  // Keep the detached plugin renderer in sync with its own native fullscreen
+  // state; the main window's listener cannot describe this BrowserWindow.
+  win.on('enter-full-screen', () => {
+    if (!win.isDestroyed()) win.webContents.send('fullscreen-change', true);
+  });
+  win.on('leave-full-screen', () => {
+    if (!win.isDestroyed()) win.webContents.send('fullscreen-change', false);
+  });
   markGhostPanelWebContentsId(win.webContents.id);
   markAppContentWindow(win);
   applyAppearanceToWindow(win);

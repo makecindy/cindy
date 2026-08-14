@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  collectAmbiguousDeviceNames,
   projectDisplayLabelWithMachine,
   resolveRemoteProjectMachineIdentity,
 } from '@/features/cc-agent/lib/remoteProjectIdentity';
@@ -56,7 +57,9 @@ describe('resolveRemoteProjectMachineIdentity', () => {
     expect(resolveRemoteProjectMachineIdentity(remoteProject, [])?.displayLabel).toBe('gpu-box');
   });
 
-  it('shows a device-link friendly name and keeps the stable device id visible', () => {
+  // 2026-08-12 用户裁决:设备 ID 是机器指纹哈希,对用户没有可读意义,默认不显示;
+  // 只有两台设备撞名、光看名字分不出来时才附上消歧。
+  it('shows only the device-link friendly name when the name is unambiguous', () => {
     const identity = resolveRemoteProjectMachineIdentity(
       {
         scope: 'remote',
@@ -69,8 +72,46 @@ describe('resolveRemoteProjectMachineIdentity', () => {
     expect(identity).toEqual({
       kind: 'device-link',
       label: 'Office Mac',
+      detail: null,
+      displayLabel: 'Office Mac',
+    });
+  });
+
+  it('appends the device id only for names shared by more than one device', () => {
+    const identity = resolveRemoteProjectMachineIdentity(
+      {
+        scope: 'remote',
+        remoteHostId: null,
+        deviceLinkDeviceId: 'device-123',
+        deviceLinkDeviceName: 'Office Mac',
+      },
+      [],
+      { ambiguousDeviceNames: new Set(['office mac']) },
+    );
+    expect(identity).toEqual({
+      kind: 'device-link',
+      label: 'Office Mac',
       detail: 'device-123',
       displayLabel: 'Office Mac · device-123',
+    });
+  });
+
+  it('falls back to the device id as the label when no device name resolved', () => {
+    const identity = resolveRemoteProjectMachineIdentity(
+      {
+        scope: 'remote',
+        remoteHostId: null,
+        deviceLinkDeviceId: 'device-123',
+        deviceLinkDeviceName: null,
+      },
+      [],
+    );
+    // 名字拿不到时 label 已经是 ID 本身,detail 不再重复一遍。
+    expect(identity).toEqual({
+      kind: 'device-link',
+      label: 'device-123',
+      detail: null,
+      displayLabel: 'device-123',
     });
   });
 
@@ -86,6 +127,48 @@ describe('resolveRemoteProjectMachineIdentity', () => {
         [sshHost('gpu-box')],
       ),
     ).toBeNull();
+  });
+});
+
+describe('collectAmbiguousDeviceNames', () => {
+  const project = (deviceLinkDeviceId: string | null, deviceLinkDeviceName: string | null) => ({
+    deviceLinkDeviceId,
+    deviceLinkDeviceName,
+  });
+
+  it('flags a name only when it maps to more than one device id', () => {
+    const ambiguous = collectAmbiguousDeviceNames([
+      project('device-a', 'Dash Macbook Pro'),
+      project('device-b', 'Dash Macbook Pro'),
+      project('device-c', 'Office Mac'),
+    ]);
+    expect(ambiguous.has('dash macbook pro')).toBe(true);
+    expect(ambiguous.has('office mac')).toBe(false);
+  });
+
+  it('does not flag several projects that live on the same device', () => {
+    const ambiguous = collectAmbiguousDeviceNames([
+      project('device-a', 'Dash Macbook Pro'),
+      project('device-a', 'Dash Macbook Pro'),
+    ]);
+    expect(ambiguous.size).toBe(0);
+  });
+
+  it('compares names case-insensitively and ignores surrounding whitespace', () => {
+    const ambiguous = collectAmbiguousDeviceNames([
+      project('device-a', ' Dash Macbook Pro'),
+      project('device-b', 'dash macbook pro '),
+    ]);
+    expect([...ambiguous]).toEqual(['dash macbook pro']);
+  });
+
+  it('skips entries without a device id or without a resolved name', () => {
+    const ambiguous = collectAmbiguousDeviceNames([
+      project(null, 'Dash Macbook Pro'),
+      project('device-b', null),
+      project('device-c', '   '),
+    ]);
+    expect(ambiguous.size).toBe(0);
   });
 });
 

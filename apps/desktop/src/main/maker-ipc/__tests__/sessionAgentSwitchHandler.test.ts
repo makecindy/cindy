@@ -117,21 +117,6 @@ describe('performSessionAgentSwitch', () => {
     expect(boundary.toAgentKind).toBe('cc');
   });
 
-  it('claude-code → pi 不会被参数校验拒绝', async () => {
-    const { deps } = makeDeps();
-    const result = await performSessionAgentSwitch(deps, {
-      sessionId: 's1',
-      targetAgentKind: 'pi',
-      model: 'gpt-5.5',
-      applyNow: true,
-    });
-    expect(result).toMatchObject({ switched: true, agentKind: 'pi' });
-    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith(
-      's1',
-      expect.objectContaining({ agentKind: 'pi' }),
-    );
-  });
-
   it('codex → pi + OpenAI 关闭旧会话并保持目标 provider route', async () => {
     const { deps, calls } = makeDeps({
       getSessionRow: vi.fn(async () =>
@@ -156,6 +141,21 @@ describe('performSessionAgentSwitch', () => {
       sdkSessionId: null,
     });
     expect(deps.setSessionProvider).toHaveBeenCalledWith('s1', 'openai');
+  });
+
+  it('claude-code → pi 不会被参数校验拒绝', async () => {
+    const { deps } = makeDeps();
+    const result = await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'pi',
+      model: 'gpt-5.5',
+      applyNow: true,
+    });
+    expect(result).toMatchObject({ switched: true, agentKind: 'pi' });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ agentKind: 'pi' }),
+    );
   });
 
   it('跨引擎 DB 提交后立即覆盖旧 provider route', async () => {

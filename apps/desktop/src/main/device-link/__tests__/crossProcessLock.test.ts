@@ -724,6 +724,46 @@ describe('接管陈旧锁', () => {
     }
   });
 
+  it('retries publication after the final takeover when Windows still reports the path busy', async () => {
+    const lock = path.join(dir, 'lock');
+    await writeStaleStrictLock(lock);
+    const originalRename = fsp.rename;
+    const originalLink = fsp.link;
+    let takeovers = 0;
+    let busyPublishes = 0;
+    const renameSpy = vi.spyOn(fsp, 'rename').mockImplementation((async (
+      from: unknown,
+      to: unknown,
+    ) => {
+      const result = await (originalRename as (...args: unknown[]) => Promise<unknown>)(from, to);
+      if (from === lock && typeof to === 'string' && to.startsWith(`${lock}.reclaim-`)) {
+        takeovers += 1;
+        if (takeovers < 3) await writeStaleStrictLock(lock);
+      }
+      return result;
+    }) as typeof fsp.rename);
+    const linkSpy = vi.spyOn(fsp, 'link').mockImplementation((async (
+      from: unknown,
+      to: unknown,
+    ) => {
+      if (to === lock && takeovers === 3 && busyPublishes < 1) {
+        busyPublishes += 1;
+        throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+      }
+      return (originalLink as (...args: unknown[]) => Promise<unknown>)(from, to);
+    }) as typeof fsp.link);
+    try {
+      await expect(
+        withCrossProcessLock(lock, { label: 'final-takeover-busy', waitMs: 500 }, async (s) => s),
+      ).resolves.toEqual({ held: true });
+      expect(takeovers).toBe(3);
+      expect(busyPublishes).toBe(1);
+    } finally {
+      renameSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+  });
+
   it('recovers an own reclaim gate after rename and fsync both fail', async () => {
     const lock = path.join(dir, 'lock');
     const originalOpen = fsp.open;
