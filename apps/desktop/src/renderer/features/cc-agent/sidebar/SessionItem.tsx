@@ -250,8 +250,8 @@ export interface SessionItemProps {
    */
   matchIndices?: readonly number[];
   /**
-   * hover 时右侧展示的"项目来源"标签(项目 displayName 或"对话")。
-   * 仅在时间排序视图下由父层注入 —— 项目分组视图里项目名已由 ProjectNode 表头承载,
+   * 标题旁的"项目来源"标签(项目 displayName 或"对话")。
+   * 仅在平铺视图下由父层注入 —— 项目分组视图里项目名已由 ProjectNode 表头承载,
    * 无需再在会话行重复显示,因此不传。
    */
   sourceLabel?: string;
@@ -966,6 +966,19 @@ export const SessionItem = memo(function SessionItem({
               )}
             />
           )}
+          {sourceLabel ? (
+            <span
+              title={sourceLabel}
+              className={cn(
+                'min-w-0 truncate text-xs font-normal',
+                isActive
+                  ? 'text-sidebar-item-active-foreground/70'
+                  : 'text-[var(--cmd-palette-item-meta)]',
+              )}
+            >
+              {sourceLabel}
+            </span>
+          ) : null}
         </span>
       )}
 
@@ -1274,7 +1287,7 @@ export const SessionItem = memo(function SessionItem({
   // Tooltip——鼠标一到列表项立即显示该对话的 PR 与实时状态(产品要求,
   // 不等全局 500ms 悬停延迟)。无 PR 的行原样返回,保持本文件"密集列表
   // 少挂 Tip"的既有取舍。
-  // 统一 hover 浮层:PR 优先 / 无 PR 时回落到 sourceLabel / 都没有则透传 row。
+  // 统一 hover 浮层:PR 优先;来源标签已写在标题旁,不再用浮层重复。
   // 具体优先级、配色和 orca-lead 回退详见 SessionTooltip.tsx。
   // 单独 automation-generated 会话(未被 AutomationSessionGroupItem 吸走)在 hover 时
   // 显示「下次运行倒计时 + 累计运行次数」,与分组头 rowTooltip 同语义。分组内子行
@@ -1284,7 +1297,6 @@ export const SessionItem = memo(function SessionItem({
     <SessionTooltip
       sessionId={session.id}
       prRefs={prRefs}
-      sourceLabel={sourceLabel}
       isAutomationSession={showAutomationTooltip}
     >
       {row}

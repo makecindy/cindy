@@ -312,8 +312,11 @@ export function createProviderModelRefreshCoordinator(
       });
     },
 
-    refreshManually(providerId): Promise<void> {
-      return refresh(providerId, true);
+    async refreshManually(providerId): Promise<void> {
+      // xAI 同时有公共静态目录与账号态媒体发现。手动刷新要把两层都刷新；自动路径
+      // 已在上方统一先刷新公共目录，再调用 provider hook，因此不会重复拉 Catalog。
+      if (providerId === 'xai' && deps.refreshCatalog) await deps.refreshCatalog();
+      await refresh(providerId, true);
     },
     resetCooldowns,
   };

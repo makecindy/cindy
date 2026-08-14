@@ -34,11 +34,14 @@ describe('requireAppCapability IPC errors', () => {
     expect(() => requireAppCapability('canUseDeviceLink')).toThrow(/\[PRECONDITION_FAILED\]/);
   });
 
-  it('keeps cloud capabilities closed while the durable owner is unstable', () => {
+  it('keeps normal cloud capabilities available when only the Ghost projection owner differs', () => {
     state.mode = 'cloud';
     state.ownerStable = false;
-    expect(() => requireAppCapability('canUseCindyAccountServices')).toThrow(
-      /\[PRECONDITION_FAILED\]/,
-    );
+    expect(() => requireAppCapability('canUseCindyAccountServices')).not.toThrow();
+    expect(() => requireAppCapability('canUseCindyGateway')).not.toThrow();
+    expect(() => requireAppCapability('canUseDeviceLink')).not.toThrow();
+    expect(() => requireAppCapability('canUseSkillHubCloud')).not.toThrow();
+    expect(() => requireAppCapability('canUseCindyOAuthBroker')).not.toThrow();
+    expect(() => requireAppCapability('canUseCindyHeartbeat')).not.toThrow();
   });
 });

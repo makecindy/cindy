@@ -61,7 +61,7 @@ describe('provider model auto-refresh coordinator', () => {
     expect(refreshCatalog).toHaveBeenCalledOnce();
   });
 
-  it('refreshes xAI account membership independently after shared Catalog metadata', async () => {
+  it('refreshes xAI account membership and media independently after shared Catalog metadata', async () => {
     let now = 1_000;
     const refreshCatalog = vi.fn(async () => undefined);
     const refreshProvider = vi.fn(async () => undefined);
@@ -77,15 +77,16 @@ describe('provider model auto-refresh coordinator', () => {
     await coordinator.requestAutoRefresh('startup');
     expect(refreshCatalog).not.toHaveBeenCalled();
     expect(refreshProvider).toHaveBeenCalledOnce();
-    expect(refreshProvider).toHaveBeenLastCalledWith('xai');
+    expect(refreshProvider).toHaveBeenCalledWith('xai');
 
     now += PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
     await coordinator.requestAutoRefresh('foreground');
     expect(refreshCatalog).toHaveBeenCalledOnce();
     expect(refreshProvider).toHaveBeenCalledOnce();
 
-    // An explicit manual refresh remains available and executes the provider hook once.
+    // Manual xAI refresh updates the public Catalog plus both account-scoped model sources.
     await coordinator.refreshManually('xai');
+    expect(refreshCatalog).toHaveBeenCalledTimes(2);
     expect(refreshProvider).toHaveBeenCalledTimes(2);
   });
 

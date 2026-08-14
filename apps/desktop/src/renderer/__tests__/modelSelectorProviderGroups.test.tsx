@@ -374,6 +374,15 @@ describe('ModelSelector provider groups', () => {
     expect(within(dashscopeGroup).queryByText('Opus 4.8')).toBeNull();
   });
 
+  it('hides effort summaries when the entry only supports selecting a model id', async () => {
+    renderSelector({ configurationEnabled: false });
+    await openDropdown();
+
+    const popover = screen.getByTestId('model-options-popover');
+    expect(within(popover).queryByTitle('high')).toBeNull();
+    expect(within(popover).queryByTitle('medium')).toBeNull();
+  });
+
   it('keeps the create-agent secondary panel at the original left/center position with layout coordinates', async () => {
     renderSelector({ visualVariant: 'create-agent', useMorphPopover: true });
     await openDropdown();

@@ -524,7 +524,7 @@ describe('SessionCard visual cases', () => {
     );
     const listTitleRow = Array.from(listContainer.querySelectorAll<HTMLElement>('div')).find(
       (node) =>
-        node.classList.contains('h-5') &&
+        node.className.includes('h-[22px]') &&
         node.textContent?.includes('自动化日报巡检') &&
         node.querySelector('[aria-label="查看自动化任务"]'),
     );
@@ -556,7 +556,7 @@ describe('SessionCard visual cases', () => {
     const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
     const titleRow = Array.from(card.querySelectorAll<HTMLElement>('div')).find(
       (node) =>
-        node.classList.contains('h-5') && node.textContent?.includes(visualCase.session.title),
+        node.className.includes('h-[22px]') && node.textContent?.includes(visualCase.session.title),
     );
     expect(titleRow).toBeTruthy();
     const statusIconSlot = Array.from(titleRow!.querySelectorAll<HTMLElement>('span')).find(

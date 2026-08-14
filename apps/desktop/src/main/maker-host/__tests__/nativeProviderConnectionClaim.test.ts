@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   refreshAnthropicModels: vi.fn(async () => true),
   refreshXaiModels: vi.fn(async () => true),
   loadXaiDiskCache: vi.fn(async () => false),
+  refreshXaiMediaModels: vi.fn(async () => true),
   loadAnthropicDiskCache: vi.fn(async () => {}),
   codexLoginWithSideEffects: vi.fn(async () => false),
   codexLoginReadOnly: vi.fn(() => false),
@@ -74,6 +75,10 @@ vi.mock('../model-discovery/xai.js', () => ({
   clearXaiDiscoveredModels: vi.fn(),
   loadXaiModelsFromDiskCache: h.loadXaiDiskCache,
   refreshXaiModelsFromHttp: h.refreshXaiModels,
+}));
+vi.mock('../model-discovery/xai-media.js', () => ({
+  refreshXaiMediaModels: h.refreshXaiMediaModels,
+  clearXaiMediaModels: vi.fn(),
 }));
 
 vi.mock('../active-catalog.js', async () => {
@@ -155,6 +160,7 @@ beforeEach(() => {
   h.refreshAnthropicModels.mockClear();
   h.refreshXaiModels.mockClear();
   h.loadXaiDiskCache.mockClear();
+  h.refreshXaiMediaModels.mockClear();
   h.loadAnthropicDiskCache.mockClear();
   h.codexLoginWithSideEffects.mockClear();
   h.codexLoginReadOnly.mockClear();
@@ -346,6 +352,10 @@ describe('native provider connection claim on read', () => {
     bindNativeProviderAuth('xai');
     expect((await connectedMap()).xai).toBe(true);
     expect(getNativeProviderAuthSource('xai')).toBe('explicit-provider-oauth');
+    expect(h.refreshXaiModels).not.toHaveBeenCalled();
+    // Explicit OAuth/login owns discovery refresh. Merely reading connection state after
+    // a durable binding must stay side-effect free and must not re-run media discovery.
+    expect(h.refreshXaiMediaModels).not.toHaveBeenCalled();
   });
 
   it('认领成功要广播:其它窗口与 device-link 对端只认这条推送来失效快照', async () => {

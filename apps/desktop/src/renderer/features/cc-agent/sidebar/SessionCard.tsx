@@ -715,14 +715,14 @@ export function SessionCard({
             />
           )}
           <div className="flex items-center gap-1.5">
-            {/* 标题槽固定沿用常态时间槽的 20px 高度。改名框本身是 24px，编辑时
-                绝对定位居中覆盖文字槽位，不参与布局计算，避免整条置顶任务被撑高。
+            {/* 标题槽固定 22px，对齐文字模式 14px 标题的一行高。改名框本身是 24px，
+                编辑时绝对定位居中覆盖文字槽位，不参与布局计算，避免整条任务被撑高。
                 状态 / Agent / 自动化图标始终留在文字槽左侧，编辑态也不改变标题起点。 */}
             <div
               data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
               data-no-drag={splitDragHandleActive ? 'true' : undefined}
               draggable={splitDragHandleActive}
-              className="relative flex h-5 min-w-0 flex-1 items-center gap-0"
+              className="relative flex h-[22px] min-w-0 flex-1 items-center gap-0"
             >
               <span className="flex shrink-0 items-center">{titlePrefixNode}</span>
               {isEditing ? (
@@ -738,7 +738,7 @@ export function SessionCard({
                     setIsEditing(false);
                   }}
                   containerClassName="relative min-w-0 flex-1 self-stretch"
-                  inputClassName="absolute inset-x-0 top-1/2 h-6 -translate-y-1/2 text-13 font-semibold text-foreground"
+                  inputClassName="absolute inset-x-0 top-1/2 h-6 -translate-y-1/2 text-sm font-medium text-foreground"
                   activeForeground={isActive}
                 />
               ) : (
@@ -746,7 +746,7 @@ export function SessionCard({
                   <span
                     className={cn(
                       'min-w-0 truncate',
-                      'text-13 font-semibold leading-[1.3] tracking-[-0.005em]',
+                      'text-sm font-medium leading-[1.3]',
                       isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
                     )}
                   >
@@ -764,20 +764,21 @@ export function SessionCard({
                   {remoteIconKind && (
                     <RemoteProjectIcon
                       kind={remoteIconKind}
-                      size={11}
+                      size={12}
                       strokeWidth={1.8}
                       connectionStatus={remoteIconConnectionStatus}
                       className={
                         isActive
                           ? 'text-sidebar-item-active-foreground'
-                          : 'text-[var(--text-tertiary)]'
+                          : 'text-sidebar-action-icon'
                       }
                     />
                   )}
                   {sourceLabel ? (
                     <span
+                      title={sourceLabel}
                       className={cn(
-                        'min-w-0 truncate text-11 font-normal',
+                        'min-w-0 truncate text-xs font-normal',
                         isActive
                           ? 'text-sidebar-item-active-foreground/70'
                           : 'text-[var(--cmd-palette-item-meta)]',
@@ -825,7 +826,7 @@ export function SessionCard({
             data-no-drag={splitDragHandleActive ? 'true' : undefined}
             draggable={splitDragHandleActive}
             className={cn(
-              'mt-1 overflow-hidden text-11 leading-[1.45]',
+              'mt-1 overflow-hidden text-xs leading-[1.45]',
               '[display:-webkit-box] [-webkit-line-clamp:1] [-webkit-box-orient:vertical]',
               rightStatusKind !== 'time' && 'pr-5',
               awaitingText
@@ -1223,7 +1224,7 @@ function TimeActionsSlot({
     infoPrRef != null,
   );
   return (
-    <div className="group/slot relative ml-auto flex h-5 shrink-0 items-center justify-end">
+    <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
       {/* 默认内容:worktree + 信息槽;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
       <div
         className={cn(
@@ -1240,10 +1241,7 @@ function TimeActionsSlot({
           pieces={infoPieces}
           prRef={infoPrRef}
           isActive={isActive}
-          className={cn(
-            'text-10 font-medium leading-none',
-            !isActive && 'text-[var(--text-tertiary)]',
-          )}
+          className="leading-none"
         />
       </div>
 
