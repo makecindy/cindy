@@ -246,6 +246,11 @@ describe('translateRequest', () => {
         { type: 'input_image', image_url: 'data:image/png;base64,AAAABBBB' },
       ],
     });
+    const toolOutput = out.input?.find((item) => item.type === 'function_call_output') as
+      | { output?: string }
+      | undefined;
+    expect(toolOutput?.output).not.toContain('image omitted');
+    expect(toolOutput?.output).not.toContain('Do NOT guess');
   });
 
   it('serverSideTools 恒定追加在 function tools 之后(位置固定 → 前缀稳定)', () => {

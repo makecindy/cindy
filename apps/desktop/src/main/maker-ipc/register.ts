@@ -745,6 +745,7 @@ import {
 } from '../maker-host/claude-session-background-activity.js';
 import {
   readClaudeSessionRoute,
+  clearClaudeVisionFallbackProvider,
   takeClaudeVisionFallbackProvider,
 } from '../maker-host/claude-session-route-registry.js';
 import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
@@ -3703,7 +3704,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') &&
             !turnModelPromiseBySession.has(session.id)
           ) {
-            clearCodexVisionFallback(session.id);
+            if (event.source === 'codex') {
+              clearCodexVisionFallback(session.id);
+            } else if (event.source === 'claude-code') {
+              clearClaudeVisionFallbackProvider(session.id);
+            }
             turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));
           }
         } else if (data.isRunning === false && !isContinuationBoundary) {
@@ -3810,6 +3815,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         shouldMarkTurnTerminalIdleAfterBroadcast = true;
         if (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') {
           turnModelPromiseBySession.delete(session.id);
+        }
+        if (event.source === 'claude-code') {
+          clearClaudeVisionFallbackProvider(session.id);
+        } else if (event.source === 'codex') {
+          clearCodexVisionFallback(session.id);
         }
         const errData =
           attributedEvent.type === 'error'
@@ -5046,6 +5056,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           lastReportedModelUsageBySession.delete(session.id);
           turnModelPromiseBySession.delete(session.id);
           clearCodexVisionFallback(session.id);
+          clearClaudeVisionFallbackProvider(session.id);
           productTurnWallClockTracker.clear(session.id);
           productTurnUsageTargetTracker.clear(session.id);
           claudeOutputLagTimingGuard.clear(session.id);

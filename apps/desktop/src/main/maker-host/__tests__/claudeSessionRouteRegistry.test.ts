@@ -14,6 +14,7 @@ import {
   recordClaudeRequestRoute,
   recordClaudeSessionRoute,
   recordClaudeVisionFallbackProvider,
+  clearClaudeVisionFallbackProvider,
   resetClaudeSessionRouteRegistryForTest,
   takeClaudeRequestRoute,
   takeClaudeVisionFallbackProvider,
@@ -95,6 +96,12 @@ describe('claude-session-route-registry', () => {
   it('consumes a vision fallback provider after the current turn', () => {
     recordClaudeVisionFallbackProvider('s1', 'vision-provider');
     expect(takeClaudeVisionFallbackProvider('s1')).toBe('vision-provider');
+    expect(takeClaudeVisionFallbackProvider('s1')).toBeNull();
+  });
+
+  it('clears a vision fallback provider when a turn ends without done', () => {
+    recordClaudeVisionFallbackProvider('s1', 'vision-provider');
+    clearClaudeVisionFallbackProvider('s1');
     expect(takeClaudeVisionFallbackProvider('s1')).toBeNull();
   });
 

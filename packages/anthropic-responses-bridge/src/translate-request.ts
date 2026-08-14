@@ -47,7 +47,7 @@ function systemToInstructions(system: AnthropicMessagesRequest['system']): strin
 }
 
 /** tool_result.content(string / block 数组)拍平成 function_call_output 需要的字符串。 */
-function toolResultToString(content: unknown): string {
+function toolResultToString(content: unknown, preserveImages: boolean): string {
   if (content == null) return '';
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -62,6 +62,7 @@ function toolResultToString(content: unknown): string {
           // 是否具备视觉能力无关;不带说明的 '[image]' 会被模型当作空结果,诱发反复
           // 重读或臆测图像内容。图像走 user 消息路径仍可正常送达(input_image)。
           if (rec.type === 'image') {
+            if (preserveImages) return '';
             return (
               '[image omitted: this tool returned an image, but tool results on this '
               + 'provider route are delivered as plain text only, so the image data could '
@@ -199,7 +200,7 @@ function messageToInputItems(
         items.push({
           type: 'function_call_output',
           call_id: tr.tool_use_id,
-          output: toolResultToString(tr.content),
+          output: toolResultToString(tr.content, preserveToolResultImages),
         });
         if (preserveToolResultImages) {
           const images = toolResultImages(tr.content);

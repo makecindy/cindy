@@ -90,6 +90,10 @@ export function takeClaudeVisionFallbackProvider(sessionId: string): string | nu
   return providerId;
 }
 
+export function clearClaudeVisionFallbackProvider(sessionId: string): void {
+  visionFallbackProviders.delete(sessionId);
+}
+
 /** proxy transform 决策点旁路调用;同值幂等(不重复通知)。 */
 export function recordClaudeSessionRoute(
   sessionId: string,
