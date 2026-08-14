@@ -1334,6 +1334,19 @@
       "note": "Apple Simulator 与 Cindy 内置查看器能力的用户可见名称。iOS 保留官方大小写；中文使用「模拟器」，日语使用「シミュレータ」，韩语使用「시뮬레이터」。先登记为 proposed，待插件与内置面板文案稳定后固化。"
     },
     {
+      "id": "lead",
+      "status": "proposed",
+      "en": "Lead",
+      "translations": {
+        "zh-CN": "Lead",
+        "zh-TW": "Lead",
+        "ja": "Lead",
+        "ko": "Lead"
+      },
+      "forbidden": {},
+      "note": "Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不译成 Leader / 主控 / 主导 / 队长。这里只钉大小写形态：首字母大写 Lead。存量文案里仍有小写 lead（如 lead session），先登记为 proposed，待与 Worker 一并固化。"
+    },
+    {
       "id": "worker",
       "status": "decided",
       "en": "Worker",

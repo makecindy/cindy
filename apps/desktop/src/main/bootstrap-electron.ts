@@ -461,6 +461,7 @@ import {
 import {
   clearXaiDiscoveredModels,
   discardXaiModelsDiskCache,
+  loadXaiModelsFromDiskCache,
   refreshXaiModelsFromHttp,
 } from './maker-host/model-discovery/xai.js';
 import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.js';
@@ -6958,6 +6959,7 @@ app.on('ready', async () => {
               await refreshProviderModelsAfterAccountReady({
                 restartCodex: restartCodexAfterAuthModeChange,
                 shutdownCodexEnvironment,
+                loadXaiLkg: loadXaiModelsFromDiskCache,
                 refreshProviderModels: requestProviderModelAutoRefresh,
                 log: accountSwitchLog,
               });

@@ -6611,6 +6611,8 @@
       "automationSent": "자동화 작업에서 보냄",
       "automationSentNamed": "자동화 작업 \"{{name}}\"에서 보냄",
       "automationViewTask": "자동화 작업 보기",
+      "orcaFromLead": "Lead에서 온 메시지",
+      "orcaFromWorker": "Worker에서 온 메시지",
       "expandLongMessage": "전체 메시지 보기",
       "collapseLongMessage": "접기",
       "sessionReference": {

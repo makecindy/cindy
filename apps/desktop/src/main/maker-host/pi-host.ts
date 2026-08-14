@@ -63,6 +63,8 @@ const PI_API_KEY_ENV = 'CINDY_PI_API_KEY';
 const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_PROVIDER_AUTH_PLACEHOLDER_KEY = 'cindy-pi-provider-auth-placeholder';
+/** Dedicated exact remote port for the Desktop-owned xAI compat proxy. */
+export const PI_XAI_COMPAT_FORWARD_PORT = 47989;
 
 /**
  * 订阅 OAuth provider:网关 `cindy` 块经 compat proxy 用安全存储里的 OAuth 服务这些模型,
@@ -447,6 +449,7 @@ export function buildPiNativeProvidersFromConfigs(
 export async function buildXaiPiNativeProvider(
   model?: string,
   allowHistoricalResume = false,
+  remote = false,
 ): Promise<PiNativeProvidersResult> {
   const catalogModels =
     getActiveCatalog().providers.find((provider) => provider.id === 'xai')?.models.pi ?? [];
@@ -492,7 +495,14 @@ export async function buildXaiPiNativeProvider(
     providers: [{
       id: 'xai',
       name: 'xAI',
-      baseUrl: getClaudeEndpoint(),
+      baseUrl: remote
+        ? (() => {
+            const endpoint = new URL(getClaudeEndpoint());
+            endpoint.hostname = '127.0.0.1';
+            endpoint.port = String(PI_XAI_COMPAT_FORWARD_PORT);
+            return endpoint.toString().replace(/\/$/, '');
+          })()
+        : getClaudeEndpoint(),
       api: 'anthropic-messages',
       apiKeyEnvVar: PI_API_KEY_ENV,
       headers: {
@@ -501,6 +511,14 @@ export async function buildXaiPiNativeProvider(
       },
       models,
       modelIdAliases: aliases,
+      ...(remote
+        ? {
+            hostProxyForward: {
+              localUrl: getClaudeEndpoint(),
+              remotePort: PI_XAI_COMPAT_FORWARD_PORT,
+            },
+          }
+        : {}),
     }],
     env: {},
   };
@@ -551,7 +569,7 @@ async function resolvePiNativeProviders(ctx: {
       || (!ctx.providerId && ctx.model.startsWith('xai/'))
       ? ctx.model
       : undefined;
-    const xai = await buildXaiPiNativeProvider(selectedXaiModel, !!ctx.resumeSessionId);
+    const xai = await buildXaiPiNativeProvider(selectedXaiModel, !!ctx.resumeSessionId, isRemote);
     custom.providers.push(...xai.providers);
     Object.assign(custom.env, xai.env);
   }

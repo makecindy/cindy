@@ -1317,8 +1317,8 @@ export function UserMessage({
 
   const orcaCardTitle =
     orcaCommunication?.orcaSource === 'lead'
-      ? 'Orca Lead: dispatched task'
-      : 'Orca Worker: reported result';
+      ? t('chat.userMessage.orcaFromLead')
+      : t('chat.userMessage.orcaFromWorker');
 
   // Attachments belong to the user message independently of its visual shell.
   // Define each renderer once, then place it inside the hook / ordinary branch

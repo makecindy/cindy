@@ -600,7 +600,16 @@ export class PiAgent extends BaseAgent {
    * plan-mode 扩展路径 / subagent spawn env —— 本地场景即 this.deps.binaryPath。
    */
   private async createTransport(
-    opts: { args: string[]; cwd: string; env: Record<string, string | undefined>; sessionId?: string | null },
+    opts: {
+      args: string[];
+      cwd: string;
+      env: Record<string, string | undefined>;
+      sessionId?: string | null;
+      hostProxyForwards?: ReadonlyArray<{
+        localUrl: string;
+        remotePort: number;
+      }>;
+    },
     onProcessSpawned?: (pid: number) => void | (() => void),
     remoteHostId?: string | null,
     remoteBinaryPath?: string,
@@ -615,6 +624,7 @@ export class PiAgent extends BaseAgent {
         env: opts.env,
         logger: this.deps.logger,
         sessionId: opts.sessionId ?? null,
+        hostProxyForwards: opts.hostProxyForwards,
       });
       return { transport, remoteBinaryPath: transport.remoteBinaryPath ?? remoteBinaryPath };
     }
@@ -935,7 +945,7 @@ export class PiAgent extends BaseAgent {
       }
       for (const candidateId of candidateIds) {
         const loopbackNative = nativeProviderById.get(candidateId);
-        if (loopbackNative && isLoopbackOnlyBaseUrl(loopbackNative.baseUrl)) {
+        if (loopbackNative && isLoopbackOnlyBaseUrl(loopbackNative.baseUrl) && !loopbackNative.hostProxyForward) {
           throw new Error(
             `[REMOTE_LOCAL_ONLY_PROVIDER] pi: BYOM provider '${candidateId}' baseUrl ${loopbackNative.baseUrl} is loopback-only — ` +
               'a remote Pi session runs on the SSH host and cannot reach a service on this machine; ' +
@@ -1057,7 +1067,10 @@ export class PiAgent extends BaseAgent {
     // pi 会把占位 key 当网关 key 打真实 upstream → 每个远端 turn 都失败。
     // 远端只支持 gateway-key(与 writeModelsJson 的远端分支一致)。fail-fast
     // 拒绝比「看似启动、首回合 401」可诊断。
-    if (opts.remoteHostId && credentialMode === 'oauth-bearer') {
+    const remoteOAuthViaHostProxy = Boolean(
+      opts.remoteHostId && nativeProviderById.get(initialProvider)?.hostProxyForward,
+    );
+    if (opts.remoteHostId && credentialMode === 'oauth-bearer' && !remoteOAuthViaHostProxy) {
       // 轮 42 P2(codex-connector):NotSupportedError 自己拼 message, 不带
       // bracketed code —— sessionCreateHandler 只认 [REMOTE_*] 前缀。message
       // 前加 [REMOTE_NATIVE_OAUTH_UNAVAILABLE] 让 renderer 走 5 语言可行动
@@ -1758,10 +1771,13 @@ export class PiAgent extends BaseAgent {
         notifyRuntimeCapabilityListener(listener, manifest);
       }
     };
-    // 远端会话直连网关(remoteEndpoint),不走本地 loopback compat proxy —— session
-    // token 只对本地代理鉴权有意义,远端注入纯属冗余凭证面(R5 安全审计 C-3):
-    // 不生成、不注册、不进 env-file。
-    const proxySessionToken = remote ? undefined : randomBytes(32).toString('base64url');
+    // 普通远端会话直连网关(remoteEndpoint),不生成本地 proxy token。只有显式声明
+    // hostProxyForward 的 provider（当前为 xAI）仍通过 Desktop compat proxy：
+    // SSH 只解决可达性，session token 继续提供逐会话鉴权，不能把 loopback 端口
+    // 当作信任边界。
+    const remoteUsesHostProxy = remote && nativeProviders.some((provider) => provider.hostProxyForward);
+    const proxySessionToken =
+      !remote || remoteUsesHostProxy ? randomBytes(32).toString('base64url') : undefined;
     let disposeProxySession: (() => void) | undefined;
     // 幂等:onExit(进程异常退出)与 close()(用户结束)可能都调用它;首次注销后置位,
     // 后续调用直接返回,避免二次注销(codex review:crash 时须由 onExit 立即释放)。
@@ -1875,7 +1891,15 @@ export class PiAgent extends BaseAgent {
       }
       mergeLoopbackNoProxy(spawnEnv);
       const { transport } = await this.createTransport(
-        { args, cwd: opts.workingDir, env: spawnEnv, sessionId: opts.sessionId },
+        {
+          args,
+          cwd: opts.workingDir,
+          env: spawnEnv,
+          sessionId: opts.sessionId,
+          hostProxyForwards: nativeProviders.flatMap((provider) =>
+            provider.hostProxyForward ? [provider.hostProxyForward] : [],
+          ),
+        },
         (pid) =>
           this.deps.registerLocalAgentProcess?.({
             pid,

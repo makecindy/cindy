@@ -255,6 +255,15 @@ export interface PiNativeProviderSpec {
   models: PiNativeModelSpec[];
   /** Translate Cindy's persisted/public model id to the Pi-native model id for this provider. */
   modelIdAliases?: Record<string, string>;
+  /**
+   * This provider is backed by a loopback service owned by the Desktop host. Remote Pi may use
+   * it only after the host establishes the exact SSH reverse-forward described here. The marker
+   * is host control-plane data and is never serialized into models.json.
+   */
+  hostProxyForward?: {
+    localUrl: string;
+    remotePort: number;
+  };
 }
 
 /** host 解析出的 pi 原生 provider + 需注入子进程的 env(api keys)。 */
@@ -699,6 +708,11 @@ export interface AgentDeps {
       logger: AgentDeps['logger'];
       /** maker sessionId(daemon 模式用作远端 daemon 的 session key)。 */
       sessionId?: string | null;
+      /** Host-owned loopback providers that must be reverse-forwarded before remote Pi starts. */
+      hostProxyForwards?: ReadonlyArray<{
+        localUrl: string;
+        remotePort: number;
+      }>;
     },
   ) => import('./pi/transport.js').PiTransport | Promise<import('./pi/transport.js').PiTransport>;
 

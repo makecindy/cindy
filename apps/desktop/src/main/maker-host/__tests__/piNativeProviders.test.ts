@@ -25,6 +25,7 @@ vi.mock('electron', () => ({
 import {
   buildXaiPiNativeProvider,
   buildPiNativeProvidersFromConfigs,
+  PI_XAI_COMPAT_FORWARD_PORT,
   piNativeKeyEnvVar,
   piNativeModelId,
 } from '../pi-host.js';
@@ -194,6 +195,19 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       },
     });
     expect(env).toEqual({});
+  });
+
+  it('projects remote xAI through an exact SSH reverse-forward to the Desktop compat proxy', async () => {
+    const { providers } = await buildXaiPiNativeProvider('grok-4.6', false, true);
+    expect(providers[0]).toMatchObject({
+      id: 'xai',
+      baseUrl: `http://127.0.0.1:${PI_XAI_COMPAT_FORWARD_PORT}`,
+      api: 'anthropic-messages',
+      hostProxyForward: {
+        localUrl: 'http://127.0.0.1:18765',
+        remotePort: PI_XAI_COMPAT_FORWARD_PORT,
+      },
+    });
   });
 
   it('adds a private conservative xAI descriptor only when resuming a historical namespaced id', async () => {

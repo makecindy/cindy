@@ -6611,6 +6611,8 @@
       "automationSent": "自動化タスクから送信",
       "automationSentNamed": "自動化タスク「{{name}}」から送信",
       "automationViewTask": "自動化タスクを表示",
+      "orcaFromLead": "Lead からのメッセージ",
+      "orcaFromWorker": "Worker からのメッセージ",
       "expandLongMessage": "全文を表示",
       "collapseLongMessage": "折りたたむ",
       "sessionReference": {

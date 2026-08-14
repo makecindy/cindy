@@ -6611,6 +6611,8 @@
       "automationSent": "由自動化傳送",
       "automationSentNamed": "由自動化「{{name}}」傳送",
       "automationViewTask": "檢視自動化",
+      "orcaFromLead": "來自 Lead 的訊息",
+      "orcaFromWorker": "來自 Worker 的訊息",
       "expandLongMessage": "展開全文",
       "collapseLongMessage": "收起",
       "sessionReference": {

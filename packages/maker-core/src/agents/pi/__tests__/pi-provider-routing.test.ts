@@ -1554,6 +1554,104 @@ describe('Pi provider-aware model routing', () => {
     expect(captured.args).toEqual([]);
   });
 
+  it('allows an explicitly forwarded remote xAI provider and keeps proxy auth in the remote env', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+    };
+    let transportOptions:
+      Parameters<NonNullable<AgentDeps['getRemotePiTransport']>>[1] | undefined;
+    let registeredToken: string | undefined;
+    let disposed = 0;
+    const base = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: 'xai',
+            name: 'xAI',
+            baseUrl: 'http://127.0.0.1:47989',
+            api: 'anthropic-messages',
+            apiKeyEnvVar: 'CINDY_PI_API_KEY',
+            headers: {
+              'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
+              'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
+            },
+            models: [{ id: 'xai/grok-4.6' }],
+            modelIdAliases: {
+              'grok-4.6': 'xai/grok-4.6',
+              'xai/grok-4.6': 'xai/grok-4.6',
+            },
+            hostProxyForward: {
+              localUrl: 'http://127.0.0.1:18765',
+              remotePort: 47989,
+            },
+          },
+        ],
+        env: {},
+      }),
+      [
+        {
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    );
+    const agent = new PiAgent({
+      ...base,
+      auth: {
+        ...base.auth,
+        getState: async () => ({
+          authenticated: true,
+          identity: 'SuperGrok',
+          authSource: 'oauth',
+        }),
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'placeholder' }),
+      },
+      registerPiProxySession: (_sessionId, token) => {
+        registeredToken = token;
+        return () => {
+          disposed += 1;
+        };
+      },
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async () => {},
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+      getRemotePiTransport: async (_hostId, opts) => {
+        transportOptions = opts;
+        return remoteStub;
+      },
+    });
+    const handle = await agent.startSession({
+      sessionId: 'remote-xai-forward',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      remoteHostId: 'remote-host',
+    });
+    expect(transportOptions?.hostProxyForwards).toEqual([
+      { localUrl: 'http://127.0.0.1:18765', remotePort: 47989 },
+    ]);
+    expect(registeredToken).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+    expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(registeredToken);
+    await handle.close();
+    expect(disposed).toBe(1);
+  });
+
   it('hashes the remote permission snapshot into spawn env so a later Full-access attach restarts', async () => {
     const remoteStub: import('../transport.js').PiTransport = {
       writeLine: async () => {},

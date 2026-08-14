@@ -30,6 +30,7 @@ import {
 } from './codex-model-backfill.js';
 import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cindy/orca-workflow';
 import { LspServerPool, type IOSSimulatorMcpCallContext } from '@cindy/mcps';
+import type { RemoteForward } from '@cindy/maker-remote-ssh';
 
 import { createMessage } from '../localDb/ipc/messages.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
@@ -418,6 +419,7 @@ const staleInvalidatedCcSessions = new Set<string>();
  * ensureRemoteForward 顺延探测,断线重连由 RemoteHost re-arm 保持。
  */
 const PI_MCP_FORWARD_PORT_START = 47981;
+const piRemoteProviderForwardBySession = new Map<string, Promise<RemoteForward>>();
 /**
  * 本进程见过的 bridge 实例 — ensureCodexMcpBridgeStartedForRemote 据此检测
  * bridge 重建并清空 forcedFreshCcBridgeSessions (旧 bridge 的
@@ -1677,7 +1679,19 @@ export function getMaker(): Maker {
       // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
       // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
       // 远端机器没在 pool / 未连接 → 抛错, PiAgent 把它当 startSession 失败传上去。
-      getRemotePiTransport: async (remoteHostId, { binaryPath: _localBinaryPath, remoteBinaryPath: providedRemoteBinaryPath, args, cwd, env, logger, sessionId }) => {
+      getRemotePiTransport: async (
+        remoteHostId,
+        {
+          binaryPath: _localBinaryPath,
+          remoteBinaryPath: providedRemoteBinaryPath,
+          args,
+          cwd,
+          env,
+          logger,
+          sessionId,
+          hostProxyForwards,
+        },
+      ) => {
         const remoteHost = getRemoteSshPool().get(remoteHostId);
         if (!remoteHost) {
           throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
@@ -1716,15 +1730,97 @@ export function getMaker(): Maker {
             });
           }
         });
-        return createSshPiDaemonTransport({
-          remoteHost,
-          binaryPath: remoteBinaryPath,
-          args,
-          cwd,
-          env,
-          logger,
-          daemonSessionId: sessionId ?? undefined,
-        });
+        const providerForwardEntries: Array<{
+          key: string | null;
+          pending: Promise<RemoteForward>;
+          handle: RemoteForward;
+        }> = [];
+        try {
+          for (const spec of hostProxyForwards ?? []) {
+            const local = new URL(spec.localUrl);
+            const localHost = local.hostname.replace(/^\[|\]$/g, '');
+            const localPort = Number(local.port);
+            if (
+              !['127.0.0.1', '::1', 'localhost'].includes(localHost) ||
+              !Number.isInteger(localPort) ||
+              localPort <= 0
+            ) {
+              throw new Error(`pi host proxy forward requires an explicit loopback port: ${spec.localUrl}`);
+            }
+            const key = sessionId
+              ? [remoteHostId, sessionId, `${localHost}:${localPort}`, String(spec.remotePort)].join('\0')
+              : null;
+            let pending = key ? piRemoteProviderForwardBySession.get(key) : undefined;
+            if (!pending) {
+              pending = remoteHost.ensureRemoteForward({
+                localHost,
+                localPort,
+                preferredRemotePort: spec.remotePort,
+                exactRemotePort: true,
+              });
+              if (key) piRemoteProviderForwardBySession.set(key, pending);
+            }
+            try {
+              const handle = await pending;
+              providerForwardEntries.push({ key, pending, handle });
+            } catch (error) {
+              if (key && piRemoteProviderForwardBySession.get(key) === pending) {
+                piRemoteProviderForwardBySession.delete(key);
+              }
+              throw error;
+            }
+          }
+        } catch (error) {
+          await Promise.allSettled(
+            providerForwardEntries.map(async ({ key, pending, handle }) => {
+              if (key && piRemoteProviderForwardBySession.get(key) !== pending) return;
+              if (key) piRemoteProviderForwardBySession.delete(key);
+              await handle.close();
+            }),
+          );
+          throw error;
+        }
+        const releaseProviderForwards = async (): Promise<void> => {
+          await Promise.all(
+            providerForwardEntries.map(async ({ key, pending, handle }) => {
+              if (key && piRemoteProviderForwardBySession.get(key) !== pending) return;
+              if (key) piRemoteProviderForwardBySession.delete(key);
+              await handle.close();
+            }),
+          );
+        };
+        let transport;
+        try {
+          transport = createSshPiDaemonTransport({
+            remoteHost,
+            binaryPath: remoteBinaryPath,
+            args,
+            cwd,
+            env,
+            logger,
+            daemonSessionId: sessionId ?? undefined,
+          });
+        } catch (error) {
+          await releaseProviderForwards();
+          throw error;
+        }
+        if (transport.killRemoteSession) {
+          const killRemoteSession = transport.killRemoteSession.bind(transport);
+          transport.killRemoteSession = async () => {
+            await killRemoteSession();
+            await releaseProviderForwards();
+          };
+        } else {
+          const close = transport.close.bind(transport);
+          transport.close = async (reason?: string) => {
+            try {
+              await close(reason);
+            } finally {
+              await releaseProviderForwards();
+            }
+          };
+        }
+        return transport;
       },
       // 远端 Pi 的 agentHome 文件操作:models.json / extensions / perm / subagent 快照 /
       // resume stat 都落到远端机器(pi 进程在远端读)。经 SSH stdin 管道写文件(cat > 原子

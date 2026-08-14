@@ -58,6 +58,8 @@ import {
 
 /** OSS / bundled 加载来的基础目录;null = 尚未加载(回落 BUNDLED_CATALOG)。 */
 let base: Catalog | null = null;
+/** Last trusted Registry used only to re-project user configs; it never changes catalog membership. */
+let trustedCustomProviderRegistry: Catalog['modelRegistry'] = BUNDLED_CATALOG.modelRegistry;
 /** 用户自定义供应商(已 buildUserProvider 展开的标准 Provider),追加在 base 之后。 */
 let custom: Provider[] = [];
 /** 当前 owner 的原始配置；仅用于 Registry 热更新后的运行时重投影。 */
@@ -353,10 +355,10 @@ function modelRegistryMetaFields(
   agent: AgentKind,
   modelId: string,
 ): RegistryMetaFields | undefined {
-  const catalog = base ?? BUNDLED_CATALOG;
   // 模型 registry 的路由与 perAgent 覆盖只按 claude-code / codex 建键;Pi 是动态 BYOM,
   // 无 registry per-agent 覆盖,按 agent 无关处理(取条目基线元数据)。
   const registryAgent = agent === 'pi' ? undefined : agent;
+  const catalog = base ?? BUNDLED_CATALOG;
   const matched = findModelRegistryRoute(catalog.modelRegistry, providerId, modelId, registryAgent);
   if (!matched) return undefined;
   const { entry } = matched;
@@ -881,7 +883,8 @@ export function getCatalogModelContextWindow(
 export function setActiveCatalog(catalog: Catalog): void {
   const previous = base ?? BUNDLED_CATALOG;
   const projectionRegistry =
-    catalog.modelRegistry ?? previous.modelRegistry ?? BUNDLED_CATALOG.modelRegistry;
+    catalog.modelRegistry ?? previous.modelRegistry ?? trustedCustomProviderRegistry;
+  trustedCustomProviderRegistry = projectionRegistry;
   base = catalog;
   if (customConfigs) {
     custom = customConfigs.map((config) =>
@@ -908,6 +911,7 @@ export function commitModelPlaneFromCatalog(catalog: Catalog): void {
           provider.id === 'xai' ? incomingXai : provider,
         )
       : current.providers;
+  if (catalog.modelRegistry) trustedCustomProviderRegistry = catalog.modelRegistry;
   base = {
     ...current,
     providers,
@@ -915,7 +919,7 @@ export function commitModelPlaneFromCatalog(catalog: Catalog): void {
   };
   if (customConfigs) {
     custom = customConfigs.map((config) =>
-      buildUserProvider(config, { modelRegistry: base?.modelRegistry }),
+      buildUserProvider(config, { modelRegistry: trustedCustomProviderRegistry }),
     );
   }
   markChanged();
@@ -952,9 +956,7 @@ export function setCustomProviders(providers: Provider[]): void {
 export function setCustomProviderConfigs(configs: CustomProviderConfig[]): void {
   customConfigs = [...configs];
   custom = customConfigs.map((config) =>
-    buildUserProvider(config, {
-      modelRegistry: (base ?? BUNDLED_CATALOG).modelRegistry,
-    }),
+    buildUserProvider(config, { modelRegistry: trustedCustomProviderRegistry }),
   );
   markChanged();
 }
