@@ -152,15 +152,15 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   }
 
   /**
-   * 撤回群主流 @ 开话题的 pending 开场白卡(slash 等自备回复的终态分支用 —
-   * 编排层拿不到回复文案, 认领后撤回, 让 slash 的回复成为话题里第一条实质
-   * 内容)。无 pending opener 返回 false。撤回失败只 log(卡残留但不被误
-   * patch — 认领已完成)。
+   * 消费群主流 @ 开话题的 pending 开场白卡并把卡片 spec 原地替换上去 —
+   * slash 的首个卡片反馈(/ctr picker、/model 选择卡等)就地变成开场白卡,
+   * 话题里只有一张卡且锚点有效(不是撤回后拿已删消息当锚点)。无 pending
+   * opener 返回 false(调用方走正常发卡)。
    */
-  async discardPendingOpenerCard(userId: string): Promise<boolean> {
+  async consumePendingOpenerAsCard(userId: string, spec: InteractiveCardSpec): Promise<boolean> {
     const openerId = outbound.claimPatchableOpener(userId);
     if (!openerId) return false;
-    await outbound.recallOwnMessage(openerId);
+    await outbound.updateInteractive(openerId, spec);
     return true;
   }
 

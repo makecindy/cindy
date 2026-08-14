@@ -474,16 +474,19 @@ describe('feishu group inbound gate', () => {
       await Promise.resolve();
       expect(mocks.replyText).toHaveBeenCalledTimes(1);
 
-      // 断开 + 同一 bot 重连; 重投被仍持有的入站认领拦下(无新发送)。
+      // 断开 + 同一 bot 重连; stop 已释放 in-flight 认领 — 重投到达时不再被
+      // 认领压掉, 而是正常处理并共享在途发送(不另发第二条)。
       await wsClient.stop({ announceOffline: false, reason: 'test-same-account-reconnect' });
       await connect();
-      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      const redelivery = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
       expect(mocks.replyText).toHaveBeenCalledTimes(1);
 
-      // 旧发送此刻失败 — 其失败路径安排的重试跨 stop 保留, 且同账号重连后
-      // 应在新连接上继续执行(stale generation 不拦同 bot 的重试)。
+      // 旧发送此刻失败 — 共享结果 'failed': 两条路径各自安排重试, 入口同一;
+      // 同账号重连后在新连接上继续执行(stale generation 不拦同 bot 的重试)。
       rejectFirst(new Error('client closed'));
       await firstDelivery;
+      await redelivery;
       await vi.advanceTimersByTimeAsync(10_000);
       expect(mocks.replyText).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(300_000);
@@ -933,6 +936,40 @@ describe('feishu group inbound gate', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('stop releases the in-flight claim so a redelivery on the reconnected bot is processed', async () => {
+    // 旧连接的 openThread 挂起中; stop(同账号重连)释放认领; 新连接的重投
+    // 到达 → 正常处理(不被仍持有的认领压掉)。
+    let resolveOldOpen!: (o: { kind: 'opened'; messageId: string; threadId: string }) => void;
+    mocks.openThread.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveOldOpen = resolve;
+      }),
+    );
+    await connect();
+    const events = collectEvents();
+    const oldHandling = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+    await Promise.resolve();
+    expect(mocks.openThread).toHaveBeenCalledTimes(1);
+
+    await wsClient.stop({ announceOffline: false, reason: 'test-reconnect-while-opening' });
+    await connect();
+    // 重投(旧请求恢复前到达): stop 已释放认领 → 新连接正常处理并 emit。
+    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+    await vi.waitFor(() => expect(mocks.openThread).toHaveBeenCalledTimes(2));
+    expect(events).toHaveLength(1);
+    expect(events[0]!.senderId).toBe('g/oc_chat1/omt_new');
+
+    // 旧 handler 此刻才恢复: gate-drop, 且不得再释放新连接的认领。
+    resolveOldOpen({ kind: 'opened', messageId: 'om_opener', threadId: 'omt_new' });
+    await oldHandling;
+    expect(events).toHaveLength(1);
+
+    // 第三次投递: 新连接的认领仍在 → 重推被压掉, 不会重复起 turn。
+    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+    expect(events).toHaveLength(1);
+    expect(mocks.openThread).toHaveBeenCalledTimes(2);
   });
 
   it('drops duplicate delivery of the same message (one turn per message)', async () => {

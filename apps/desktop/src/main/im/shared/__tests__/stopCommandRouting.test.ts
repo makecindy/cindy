@@ -93,7 +93,7 @@ describe('messageHandler !stop routing', () => {
   let sendMarkdownText: ReturnType<typeof vi.fn>;
   let sendText: ReturnType<typeof vi.fn>;
   let consumePendingOpenerCard: ReturnType<typeof vi.fn>;
-  let discardPendingOpenerCard: ReturnType<typeof vi.fn>;
+  let consumePendingOpenerAsCard: ReturnType<typeof vi.fn>;
   let deliver: (event: IMMessageEvent) => void;
 
   function wire(threadScoped: boolean): void {
@@ -104,7 +104,7 @@ describe('messageHandler !stop routing', () => {
     sendText = vi.fn(async () => undefined);
     // 群主流 @ 开话题的开场白卡收口能力(仅 feishu 实现; 这里模拟富卡渠道)。
     consumePendingOpenerCard = vi.fn(async () => false);
-    discardPendingOpenerCard = vi.fn(async () => false);
+    consumePendingOpenerAsCard = vi.fn(async () => false);
 
     const im = {
       onMessage(handler: (event: IMMessageEvent) => void) {
@@ -114,7 +114,7 @@ describe('messageHandler !stop routing', () => {
       sendMarkdownText,
       sendText,
       consumePendingOpenerCard,
-      discardPendingOpenerCard,
+      consumePendingOpenerAsCard,
     } as unknown as ChannelIM;
 
     const adapter = {
@@ -453,14 +453,25 @@ describe('messageHandler !stop routing', () => {
     expect(runAgentTurn).not.toHaveBeenCalled();
   });
 
-  it('slash 首条撤回开场白卡, slash 回复照常执行', async () => {
-    discardPendingOpenerCard.mockResolvedValue(true);
+  it('slash 首条注入 opener sink: 首个回复就地消费开场白卡', async () => {
+    let capturedCtx: Parameters<typeof handleSlashCommand>[1] | undefined;
+    handleSlashCommand.mockImplementation(async (_text: string, ctx: Parameters<typeof handleSlashCommand>[1]) => {
+      capturedCtx = ctx;
+      return true;
+    });
+    consumePendingOpenerCard.mockResolvedValue(true);
     deliver(makeEvent({ text: '/project' }));
     await flushMicrotasks();
 
-    expect(discardPendingOpenerCard).toHaveBeenCalledWith('U123456789');
     expect(handleSlashCommand).toHaveBeenCalledTimes(1);
     expect(runAgentTurn).not.toHaveBeenCalled();
+
+    // sink 存在且首个 withMarkdown 消费开场白卡(第二次起回落)。
+    expect(capturedCtx?.consumePendingOpener).toBeDefined();
+    await expect(capturedCtx!.consumePendingOpener!.withMarkdown('U123456789', '回复')).resolves.toBe(true);
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith('U123456789', '回复');
+    await expect(capturedCtx!.consumePendingOpener!.withMarkdown('U123456789', '第二条')).resolves.toBe(false);
+    expect(consumePendingOpenerCard).toHaveBeenCalledTimes(1);
   });
 
   it('纯 unsupported 首条消费开场白卡: patch 提示, 不再另发', async () => {

@@ -143,11 +143,12 @@ export interface RichChannelIM extends TextChannelIM {
   consumePendingOpenerCard?(userId: string, markdown: string): Promise<boolean>;
 
   /**
-   * 同上场景但终态内容由其它组件自行发送(slash 自备回复, 编排层拿不到
-   * 文案): 认领并**撤回** pending opener 卡(「思考中」卡不留在话题里),
-   * 返回 true; 无 pending opener 返回 false。仅 feishu 实现。
+   * 同上场景但终态内容是一张卡片(slash 的 /ctr picker、/model 选择卡等):
+   * 认领 pending opener 并把卡片 spec 原地替换上去(开场白卡就地变成该卡),
+   * 返回 true; 无 pending opener 返回 false, 调用方走正常发卡。仅 feishu
+   * 实现。
    */
-  discardPendingOpenerCard?(userId: string): Promise<boolean>;
+  consumePendingOpenerAsCard?(userId: string, spec: InteractiveCardSpec): Promise<boolean>;
 }
 
 /** Backward-compatible name for the existing rich-card channel contract. */

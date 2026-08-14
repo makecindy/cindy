@@ -16,7 +16,7 @@
  * 跨渠道互不影响。
  */
 
-import type { IMAttachment, IMMessageEvent, TextChannelIM } from '@cindy/im';
+import type { IMAttachment, IMMessageEvent, InteractiveCardSpec, TextChannelIM } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import {
@@ -189,14 +189,34 @@ export function createMessageHandler(
 
     // ── slash command (only on plain text: no attachments, no unsupported) ──
     if (pureTextCommandInput && looksLikeSlashCommand(event.text)) {
-      // slash 自备回复(编排层拿不到文案): 撤回「思考中」开场白卡 — 认领后
-      // 删除, 让 slash 回复成为话题里第一条实质内容; 卡留着会卡住且同话题
-      // 下一条真消息 patch 错卡。
-      await richIm?.discardPendingOpenerCard?.(event.senderId);
+      // 群主流 @ 开话题的首条若是 slash: slash 自备回复(文本/卡片), 把它的
+      // **首个**回复就地消费开场白卡(patch 文本 / 替换卡片)— 卡不卡住, 也
+      // 不用撤回后拿已删消息当回复锚点。消费过一次后后续回复正常发送。
+      // 闭包内 TS 会丢失外层三元对 richIm 的窄化 — 先捕获能力函数。
+      const consumeCard = richIm?.consumePendingOpenerCard;
+      const consumeAsCard = richIm?.consumePendingOpenerAsCard;
+      const sink = consumeCard
+        ? {
+            used: false,
+            async withMarkdown(userId: string, markdown: string): Promise<boolean> {
+              if (this.used) return false;
+              const ok = await consumeCard(userId, markdown);
+              if (ok) this.used = true;
+              return ok;
+            },
+            async withCard(userId: string, spec: InteractiveCardSpec): Promise<boolean> {
+              if (this.used) return false;
+              const ok = (await consumeAsCard?.(userId, spec)) ?? false;
+              if (ok) this.used = true;
+              return ok;
+            },
+          }
+        : undefined;
       try {
         await slash.handleSlashCommand(event.text, {
           botContextId: event.contextId,
           userId: event.senderId,
+          consumePendingOpener: sink,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

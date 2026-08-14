@@ -181,6 +181,37 @@ describe('IM slash commands', () => {
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.agent.apiKeyMissing);
   });
 
+  it('首条 slash 带 consumePendingOpener: 首个文本回复 patch 开场白卡, 不另发', async () => {
+    const { handlers } = makeHarness();
+    const withMarkdown = vi.fn(async () => true);
+    const withCard = vi.fn(async () => true);
+
+    const handled = await handlers.handleSlashCommand('/help', {
+      botContextId: 'bot',
+      userId: 'ou_user',
+      consumePendingOpener: { withMarkdown, withCard },
+    });
+
+    expect(handled).toBe(true);
+    expect(withMarkdown).toHaveBeenCalledWith('ou_user', ui.slash.help);
+    expect(mocks.sendMarkdownText).not.toHaveBeenCalled();
+  });
+
+  it('首条 slash 消费失败时回落正常发送', async () => {
+    const { handlers } = makeHarness();
+    const withMarkdown = vi.fn(async () => false);
+
+    const handled = await handlers.handleSlashCommand('/help', {
+      botContextId: 'bot',
+      userId: 'ou_user',
+      consumePendingOpener: { withMarkdown, withCard: vi.fn(async () => false) },
+    });
+
+    expect(handled).toBe(true);
+    expect(withMarkdown).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.help);
+  });
+
   it('explains the persisted provider when /new defaults are unauthenticated', async () => {
     const prepared = { ...defaultRow, agentKind: 'codex' as const, model: 'gpt-5.5' };
     const repo = makeRepo({ prepareNewSession: vi.fn(async () => prepared) });

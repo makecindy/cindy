@@ -260,6 +260,14 @@ function isSameBotActive(botAppId: string, service: BotCredentials['service']): 
 const orphanNoticeInFlight = new Map<string, Promise<'delivered' | 'failed'>>();
 
 /**
+ * 处理中的入站消息记账(key = `${appId}:${messageId}` → 所属 generation)。
+ * stop() 用它释放「认领了但所属连接即将失效、不会有产出」的消息认领 —
+ * 同账号重连后该消息的重投能被新连接处理(不被仍持有的认领压掉); 已处理
+ * 完的消息认领不受影响(重推抑制不变)。
+ */
+const inboundInFlight = new Map<string, { generation: number }>();
+
+/**
  * 发送孤儿提示(单一 in-flight): 同一 opener 并发进入时共享同一次发送结果,
  * 不会打出第二条。成功即标记送达(终态); 失败返回 'failed' 由调用方决定
  * 释放认领/安排重试。
@@ -940,6 +948,15 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
   // 注意: orphanNoticeInFlight **不**清空 — in-flight 的 REST 请求在 stop()
   // 时已捕获旧 client, close 不保证取消它; 保留去重记账, 同 bot 重连后的
   // 重投仍会共享那次在途发送而不是并发第二条(条目随 promise 落定自清理)。
+  // 处理中的入站消息: 所属连接即将失效, 该消息不会再有产出 — 释放认领并
+  // evict 开话题缓存, 让同账号重连后的重投被新连接处理(而不是被仍持有的
+  // 认领压掉后 ACK 掉、且不再有重投保证); 已处理完的消息认领不动。
+  for (const key of inboundInFlight.keys()) {
+    seenInboundMessages.delete(key);
+    const sep = key.indexOf(':');
+    if (sep > 0) outbound.evictOpenThreadOutcome(key.slice(sep + 1));
+  }
+  inboundInFlight.clear();
   outbound.unbindClient();
   if (opts.clearOwnerBeforeIdle) {
     pendingOfflineNotice = false;
@@ -1089,9 +1106,42 @@ async function handleIncomingMessage(
     return;
   }
 
+  inboundInFlight.set(`${botAppId}:${messageId}`, { generation });
+  try {
+    await processClaimedMessage(botAppId, service, generation, data, {
+      messageId,
+      chatId,
+      isGroup,
+      senderOpenId,
+    });
+  } finally {
+    // 自己的 entry 才清 — 重连后新连接可能已为同一条消息重新记账。
+    const entry = inboundInFlight.get(`${botAppId}:${messageId}`);
+    if (entry?.generation === generation) inboundInFlight.delete(`${botAppId}:${messageId}`);
+  }
+}
+
+async function processClaimedMessage(
+  botAppId: string,
+  service: BotCredentials['service'],
+  generation: number,
+  data: RawMessageEvent,
+  base: {
+    messageId: string;
+    chatId: string;
+    isGroup: boolean;
+    senderOpenId: string;
+  },
+): Promise<void> {
+  const log = getLog();
+  const { messageId, chatId, isGroup, senderOpenId } = base;
+  // 上游(handleIncomingMessage)已做过非空门, 这里保留可选链防御:
+  // 提取分支后 data.message 的窄化不跨函数传递。
+  const msgType = data.message?.message_type ?? '';
+  const rawContent = data.message?.content ?? '';
   if (isGroup) {
     // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
-    if (!mentionsSelf(data.message.mentions, botOpenId)) return;
+    if (!mentionsSelf(data.message?.mentions, botOpenId)) return;
     // 群里绝不 TOFU 认主(钉钉同款): 没有 owner 时群消息全丢。
     if (!ownerGuard.firstAllowed()) {
       log.info('[feishu/wsClient] drop group mention: no owner bound yet');
@@ -1164,7 +1214,7 @@ async function handleIncomingMessage(
 
   // 群消息: 剥 @bot 占位符、其他 @ 转显示名。
   const text =
-    isGroup && data.message.mentions && botOpenId
+    isGroup && data.message?.mentions && botOpenId
       ? resolveMentionPlaceholders(parsed.text, data.message.mentions, botOpenId)
       : parsed.text;
 
@@ -1176,8 +1226,11 @@ async function handleIncomingMessage(
   // 入站门禁复查: 附件下载等 await 期间连接可能已 stop()/换账号换代 — 不复查
   // 会把旧连接的轮次推进新连接的编排状态(锚点污染/跨账号出站)。
   if (!isActiveConnection(generation, botAppId)) {
-    // 本轮没有产出任何用户可见结果 — 释放入站认领, 让重推能在新连接上处理。
-    abandonInboundTurn(botAppId, messageId);
+    // stop() 已释放认领(重连接管)时不得再碰 — 新连接可能已为同一条消息
+    // 重新认领; 记账还在(处理在 stop 之外被换代)→ 释放让重投可处理。
+    if (inboundInFlight.get(`${botAppId}:${messageId}`)?.generation === generation) {
+      abandonInboundTurn(botAppId, messageId);
+    }
     log.info('[feishu/wsClient] drop inbound message: connection changed during processing');
     return;
   }
@@ -1189,7 +1242,7 @@ async function handleIncomingMessage(
   let laneUserId: string | null = null;
   let groupContextLane: { chatId: string; threadId: string } | undefined;
   if (isGroup) {
-    const incomingThreadId = data.message.thread_id;
+    const incomingThreadId = data.message?.thread_id;
     if (incomingThreadId) {
       laneUserId = encodeLaneUserId(chatId, incomingThreadId);
       outbound.pushReplyAnchor(laneUserId, messageId);
@@ -1203,10 +1256,11 @@ async function handleIncomingMessage(
       // 开话题是一次跨网络的 await — 期间用户可能断开/换账号: 复查门禁,
       // 防止旧连接的锚点与事件漏进新连接(或已停机的编排状态)。
       if (!isActiveConnection(generation, botAppId)) {
-        // 话题可能已开但本轮没有 emit — 释放入站认领并 evict 开话题结果缓存,
-        // 让重推在新连接上用新客户端重试 API(复用旧缓存会拿到旧客户端上的
-        // degraded/orphaned 结果)。
-        abandonInboundTurn(botAppId, messageId);
+        // 同上: stop() 已释放认领时不重复释放; 记账还在才 abandon(释放 +
+        // evict 开话题缓存, 让重推在新连接上用新客户端重试 API)。
+        if (inboundInFlight.get(`${botAppId}:${messageId}`)?.generation === generation) {
+          abandonInboundTurn(botAppId, messageId);
+        }
         log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
         return;
       }
