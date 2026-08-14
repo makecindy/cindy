@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  discardXaiModelsDiskCache,
   loadXaiModelsFromDiskCache,
   parseXaiAccountModels,
   refreshXaiModelsFromHttp,
@@ -136,6 +137,48 @@ describe('xAI account model discovery', () => {
       }),
     ).resolves.toBe(false);
     expect(applySnapshot).not.toHaveBeenCalled();
+  });
+
+  it('drops a queued disk-cache deletion after the active owner scope changes', async () => {
+    let scope = 'owner-a:1';
+    const ownerACache = '/owner-a/xai-models.json';
+    const ownerBCache = '/owner-b/xai-models.json';
+    const cacheFilePath = vi.fn(() => (scope === 'owner-a:1' ? ownerACache : ownerBCache));
+    let releaseFirstRemoval!: () => void;
+    const firstRemovalReleased = new Promise<void>((resolve) => {
+      releaseFirstRemoval = resolve;
+    });
+    let firstRemovalStarted!: () => void;
+    const firstRemovalStartedPromise = new Promise<void>((resolve) => {
+      firstRemovalStarted = resolve;
+    });
+    const rmSpy = vi.spyOn(fsp, 'rm').mockImplementation(async () => {
+      firstRemovalStarted();
+      await firstRemovalReleased;
+    });
+    const deps = {
+      getScopeKey: () => scope,
+      cacheFilePath,
+      log: { info: vi.fn(), warn: vi.fn() },
+    };
+
+    try {
+      const firstRemoval = discardXaiModelsDiskCache(deps);
+      await firstRemovalStartedPromise;
+      const queuedRemoval = discardXaiModelsDiskCache(deps);
+      expect(cacheFilePath).toHaveBeenCalledTimes(2);
+
+      scope = 'owner-b:2';
+      releaseFirstRemoval();
+      await Promise.all([firstRemoval, queuedRemoval]);
+
+      expect(rmSpy).toHaveBeenCalledTimes(1);
+      expect(rmSpy).toHaveBeenCalledWith(ownerACache, { force: true });
+      expect(rmSpy).not.toHaveBeenCalledWith(ownerBCache, expect.anything());
+    } finally {
+      releaseFirstRemoval();
+      rmSpy.mockRestore();
+    }
   });
 
   it('does not reuse an older account flight when the token changes under the same owner scope', async () => {

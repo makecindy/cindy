@@ -420,10 +420,15 @@ export function clearXaiDiscoveredModels(): void {
 }
 
 /** Explicit re-login may replace the SuperGrok account under the same Cindy owner. */
-export async function discardXaiModelsDiskCache(): Promise<void> {
-  const deps = DEFAULT_DEPS;
+export async function discardXaiModelsDiskCache(
+  injected: Partial<XaiModelDiscoveryDeps> = {},
+): Promise<void> {
+  const deps = { ...DEFAULT_DEPS, ...injected };
+  const scopeKey = deps.getScopeKey();
+  const file = deps.cacheFilePath();
   await enqueueCacheMutation(async () => {
-    await fsp.rm(deps.cacheFilePath(), { force: true });
+    if (deps.getScopeKey() !== scopeKey) return;
+    await fsp.rm(file, { force: true });
   }, deps);
 }
 
