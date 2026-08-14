@@ -558,6 +558,49 @@ describe('feishu group inbound gate', () => {
     }
   });
 
+  it('retry that fires while disconnected is suspended and resumed on same-bot reconnect', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      // 第一次定时重试(10s)的发送挂起中 — 断开, 该发送之后才失败。
+      let rejectRetry!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectRetry = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+
+      // 断开(in-flight 无法挂起); 旧发送失败 → 在停止状态安排下一次重试。
+      await wsClient.stop({ announceOffline: false, reason: 'test-disconnect-mid-retry' });
+      rejectRetry(new Error('client closed'));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // 该重试在重连前触发: 无连接 → 挂起(不终止)。
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+
+      // 同一 bot 重连 → 挂起重试恢复入队 → 下一次尝试成功送达。
+      await connect();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(3);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('queued retry is not re-armed when a different bot starts', async () => {
     vi.useFakeTimers();
     try {

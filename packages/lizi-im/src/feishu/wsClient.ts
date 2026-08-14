@@ -147,6 +147,21 @@ interface SuspendedOrphanRetry {
 }
 const suspendedOrphanRetries: SuspendedOrphanRetry[] = [];
 
+const MAX_SUSPENDED_ORPHAN_RETRIES = 100;
+
+/** 挂起一个排队重试(按 opener 去重, 有界淘汰最旧)。 */
+function suspendOrphanRetry(entry: SuspendedOrphanRetry): void {
+  for (let i = suspendedOrphanRetries.length - 1; i >= 0; i--) {
+    if (suspendedOrphanRetries[i]!.openerMessageId === entry.openerMessageId) {
+      suspendedOrphanRetries.splice(i, 1);
+    }
+  }
+  suspendedOrphanRetries.push(entry);
+  while (suspendedOrphanRetries.length > MAX_SUSPENDED_ORPHAN_RETRIES) {
+    suspendedOrphanRetries.shift();
+  }
+}
+
 /** 同账号重连后恢复该 bot 被挂起的排队重试(保持退避进度)。 */
 function resumeOrphanRetriesFor(botAppId: string): void {
   for (let i = suspendedOrphanRetries.length - 1; i >= 0; i--) {
@@ -281,10 +296,16 @@ function scheduleOrphanNoticeRetry(
       log.info('[feishu/wsClient] orphan notice already delivered — skipping opener recall');
       return;
     }
-    // 账号门: 无连接或已换成别的 bot 时不撤回 — 旧账号的开场白卡不得经
-    // 新账号的 client 操作; 同一 bot 重连则照常(见 isSameBotActive)。
+    // 账号门: 已换成别的 bot 时终止(旧账号的开场白卡不得经新账号的 client
+    // 操作); 无连接(停止/重连中)时挂起等重连恢复 — 终止会让事件已被 ACK
+    // 的撤回链永久消失; 同一 bot 重连则照常(见 isSameBotActive)。
     if (!isSameBotActive(botAppId)) {
-      log.info('[feishu/wsClient] orphan opener recall skipped: no same-bot connection');
+      if (currentBotAppId !== null && currentBotAppId !== botAppId) {
+        log.info('[feishu/wsClient] orphan opener recall skipped: account changed');
+        return;
+      }
+      suspendOrphanRetry({ botAppId, openerMessageId, messageId, attempt });
+      log.info('[feishu/wsClient] orphan opener recall suspended for same-bot reconnect');
       return;
     }
     // 重试耗尽: 最后兜底是撤回开场白卡 — 撤回成功用户看到干净群主流而不是
@@ -318,10 +339,16 @@ async function retryOrphanOpenerNotice(
 ): Promise<void> {
   const log = getLog();
   // 账号门(重连安全): 换代后仍是同一个 bot 就用当前 client 继续重试 —
-  // 跨 stop 保留的重试链不会死在 stale generation 上; 换成别的 bot 或
-  // 无连接时跳过, 旧账号的开场白不发进新账号的会话。
+  // 跨 stop 保留的重试链不会死在 stale generation 上; 换成别的 bot 时
+  // 终止(旧账号的开场白不发进新账号的会话); 无连接时挂起等重连恢复 —
+  // 停止状态排队的重试若在重连前触发, 终止会让提示永久消失。
   if (!isSameBotActive(botAppId)) {
-    log.info('[feishu/wsClient] orphan opener notice retry skipped: no same-bot connection');
+    if (currentBotAppId !== null && currentBotAppId !== botAppId) {
+      log.info('[feishu/wsClient] orphan opener notice retry skipped: account changed');
+      return;
+    }
+    suspendOrphanRetry({ botAppId, openerMessageId, messageId, attempt });
+    log.info('[feishu/wsClient] orphan opener notice retry suspended for same-bot reconnect');
     return;
   }
   // 提示已由其它路径送达(执行中的重试与重投成功交错) — 放弃整条重试链。
@@ -814,7 +841,7 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
   // 元数据入 suspendedOrphanRetries, 同账号重连后由 start() 恢复入队。
   for (const retry of orphanNoticeRetries.values()) {
     clearTimeout(retry.timer);
-    suspendedOrphanRetries.push({
+    suspendOrphanRetry({
       botAppId: retry.botAppId,
       openerMessageId: retry.openerMessageId,
       messageId: retry.messageId,
