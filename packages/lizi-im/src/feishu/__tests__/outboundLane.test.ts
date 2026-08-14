@@ -362,6 +362,18 @@ describe('feishu outbound lane routing', () => {
     expect(outbound.claimPatchableOpener('g/oc_g/omt_p2')).toBeNull();
   });
 
+  it('明确清除凭证(forgetBoundAccount)后同凭证重绑不保留旧 opener', async () => {
+    outbound.pushReplyAnchor('g/oc_g/omt_p8', 'om_opener');
+    outbound.pushPatchableOpener('g/oc_g/omt_p8', 'om_opener', 'om_trigger');
+
+    // 登出(clearAndDisconnect): stop → forgetBoundAccount → 之后重新保存
+    // 相同凭证 — 不得被误判为同账号 transport 重连, 旧 opener 不保留。
+    outbound.unbindClient();
+    outbound.forgetBoundAccount();
+    outbound.bindClient(creds);
+    expect(outbound.claimPatchableOpener('g/oc_g/omt_p8')).toBeNull();
+  });
+
   it('同账号重连(rebind 同凭证)保留 pending opener, 仍可被认领', async () => {
     outbound.pushReplyAnchor('g/oc_g/omt_keep', 'om_opener');
     outbound.pushPatchableOpener('g/oc_g/omt_keep', 'om_opener');

@@ -200,11 +200,13 @@ export function createMessageHandler(
       // 仅当本条消息**自己**开了话题(groupContextLane 存在)才注入 sink —
       // 同话题后续 slash 不得认领上一轮的 pending opener(归属错乱, 同
       // !stop 分支的说明)。
+      // bind 接收者: FeishuIM 方法内部访问 this.log, 裸函数引用会导致 catch
+      // 路径(撤回开场白卡)在 this=undefined 下抛错、卡残留。
       const consumeCard = event.groupContextLane
-        ? richIm?.consumePendingOpenerCard
+        ? richIm?.consumePendingOpenerCard?.bind(richIm)
         : undefined;
       const consumeAsCard = event.groupContextLane
-        ? richIm?.consumePendingOpenerAsCard
+        ? richIm?.consumePendingOpenerAsCard?.bind(richIm)
         : undefined;
       const sink = consumeCard
         ? {

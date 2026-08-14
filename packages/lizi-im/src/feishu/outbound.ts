@@ -57,6 +57,16 @@ function clearAccountScopedOutboundState(): void {
   openerTriggers.clear();
 }
 
+/**
+ * 明确清除凭证/登出路径(clearAndDisconnect)用: 与 transport 重连区分 —
+ * 清掉账号态并重置 lastBoundCreds, 之后重新保存相同 appId/service 不会被
+ * 误判为同账号重连(登出前的 opener/锚点不得被新一轮会话认领)。
+ */
+export function forgetBoundAccount(): void {
+  clearAccountScopedOutboundState();
+  lastBoundCreds = null;
+}
+
 export function bindClient(c: BotCredentials): void {
   // 账号真正替换(appId/service 变化)才清开场白卡与话题锚点: 同账号 transport
   // 重连(reconnectSavedCredentials: stop → start 同凭证)时 turn 仍在跑, 未消费
