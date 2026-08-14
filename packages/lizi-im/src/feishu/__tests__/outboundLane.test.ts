@@ -326,6 +326,24 @@ describe('feishu outbound lane routing', () => {
     );
   });
 
+  it('rearmAnchorToTrigger: 回拨到触发消息的回复带 reply_in_thread 落回话题', async () => {
+    outbound.pushReplyAnchor('g/oc_g/omt_p9', 'om_opener');
+    outbound.pushPatchableOpener('g/oc_g/omt_p9', 'om_opener', 'om_trigger');
+    expect(outbound.claimPatchableOpener('g/oc_g/omt_p9')).toBe('om_opener');
+
+    // patch 失败撤回开场白卡后: 回拨锚点到触发消息。
+    expect(outbound.rearmAnchorToTrigger('g/oc_g/omt_p9')).toBe(true);
+    await outbound.sendText('g/oc_g/omt_p9', '兜底回复');
+    expect(larkMocks.reply).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        path: { message_id: 'om_trigger' },
+        data: expect.objectContaining({ reply_in_thread: true }),
+      }),
+    );
+    // 触发记录一次性消费 — 再次回拨返回 false。
+    expect(outbound.rearmAnchorToTrigger('g/oc_g/omt_p9')).toBe(false);
+  });
+
   it('claimPatchableOpener consumes the registered opener exactly once', async () => {
     outbound.pushReplyAnchor('g/oc_g/omt_p1', 'om_opener');
     outbound.pushPatchableOpener('g/oc_g/omt_p1', 'om_opener');

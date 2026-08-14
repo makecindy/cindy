@@ -152,10 +152,13 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       return true;
     } catch (err) {
       // patch 失败: 认领已完成, 卡不会再被后续流式 patch — 撤回它让兜底
-      // 发送成为唯一回复; 撤回也失败则卡残留(与孤儿撤回同一边界, 已 log)。
+      // 发送成为唯一回复; 同时把 held 锚点回拨到触发消息(带 reply_in_thread),
+      // 否则兜底发送会向已删除的开场白卡 reply 失败。撤回也失败则卡残留
+      // (与孤儿撤回同一最终边界, 已 log)。
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`consumePendingOpenerCard patch failed — recalling opener: ${msg}`);
       await outbound.recallOwnMessage(openerId);
+      outbound.rearmAnchorToTrigger(userId);
       return false;
     }
   }
@@ -176,10 +179,12 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       outbound.registerCardLane(userId, openerId);
       return true;
     } catch (err) {
-      // 同 consumePendingOpenerCard: 替换失败撤回开场白卡, 回落正常发卡。
+      // 同 consumePendingOpenerCard: 替换失败撤回开场白卡并回拨锚点到触发
+      // 消息, 回落正常发卡。
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`consumePendingOpenerAsCard replace failed — recalling opener: ${msg}`);
       await outbound.recallOwnMessage(openerId);
+      outbound.rearmAnchorToTrigger(userId);
       return false;
     }
   }

@@ -54,6 +54,7 @@ function sameBoundAccount(next: BotCredentials): boolean {
 function clearAccountScopedOutboundState(): void {
   laneAnchors.clear();
   patchableOpeners.clear();
+  openerTriggers.clear();
 }
 
 export function bindClient(c: BotCredentials): void {
@@ -91,13 +92,23 @@ interface LaneAnchorState {
   held: string | null;
   /** 普通群: held 是否已用于引用回复(用过则后续 chat_id 直发)。 */
   quotedHeld: boolean;
+  /**
+   * held 是群主流触发消息(开场白撤回后的回拨锚点)时置位 — 对它 reply 必须带
+   * reply_in_thread 才会落回话题(触发消息本人在群主流)。
+   */
+  inThreadReply: boolean;
 }
 
 const laneAnchors = new Map<string, LaneAnchorState>();
 
 /** wsClient 在 owner 群触发时登记回挂锚点。 */
 export function pushReplyAnchor(laneUserId: string, messageId: string): void {
-  const state = laneAnchors.get(laneUserId) ?? { queue: [], held: null, quotedHeld: false };
+  const state = laneAnchors.get(laneUserId) ?? {
+    queue: [],
+    held: null,
+    quotedHeld: false,
+    inThreadReply: false,
+  };
   state.queue.push(messageId);
   laneAnchors.set(laneUserId, state);
 }
@@ -109,8 +120,20 @@ export function pushReplyAnchor(laneUserId: string, messageId: string): void {
 
 const patchableOpeners = new Map<string, string>();
 
-export function pushPatchableOpener(laneUserId: string, messageId: string): void {
+/**
+ * 开场白卡对应的触发消息 id(lane → 群主流触发消息)。开场白 patch/替换失败
+ * 被撤回后, 话题里不再有合法锚点 — 回拨到触发消息并带 reply_in_thread 回复
+ * 才能落回话题(触发消息本人在群主流)。
+ */
+const openerTriggers = new Map<string, string>();
+
+export function pushPatchableOpener(
+  laneUserId: string,
+  messageId: string,
+  triggerMessageId?: string,
+): void {
   patchableOpeners.set(laneUserId, messageId);
+  if (triggerMessageId) openerTriggers.set(laneUserId, triggerMessageId);
 }
 
 /**
@@ -122,19 +145,49 @@ export function claimPatchableOpener(laneUserId: string): string | null {
   const openerId = patchableOpeners.get(laneUserId);
   if (!openerId) return null;
   patchableOpeners.delete(laneUserId);
-  const state = laneAnchors.get(laneUserId) ?? { queue: [], held: null, quotedHeld: false };
+  // openerTriggers 保留 — patch/替换失败撤回开场白卡时需要回拨锚点
+  // (rearmAnchorToTrigger 消费); 正常认领成功则随下次 push 覆盖或账号替换清空。
+  const state = laneAnchors.get(laneUserId) ?? {
+    queue: [],
+    held: null,
+    quotedHeld: false,
+    inThreadReply: false,
+  };
   // 锚点队列头正常就是这张开场白卡; 对不上说明顺序被破坏, 保守起见仍保留队列。
   if (state.queue[0] === openerId) state.queue.shift();
   state.held = openerId;
   state.quotedHeld = true;
+  state.inThreadReply = false;
   laneAnchors.set(laneUserId, state);
   return openerId;
+}
+
+/**
+ * patch/替换失败撤回开场白卡后调用: 把 held 锚点回拨到触发消息(带
+ * reply_in_thread 标记)。兜底发送向触发消息 reply 且 reply_in_thread=true,
+ * 仍落回话题 — 而不是向已删除的开场白卡 reply 失败。无触发记录返回 false。
+ */
+export function rearmAnchorToTrigger(laneUserId: string): boolean {
+  const triggerId = openerTriggers.get(laneUserId);
+  openerTriggers.delete(laneUserId);
+  if (!triggerId) return false;
+  const state = laneAnchors.get(laneUserId) ?? {
+    queue: [],
+    held: null,
+    quotedHeld: false,
+    inThreadReply: false,
+  };
+  state.held = triggerId;
+  state.quotedHeld = true;
+  state.inThreadReply = true;
+  laneAnchors.set(laneUserId, state);
+  return true;
 }
 
 type SendTarget =
   | { kind: 'open_id'; id: string }
   | { kind: 'chat_id'; id: string }
-  | { kind: 'reply'; messageId: string };
+  | { kind: 'reply'; messageId: string; replyInThread?: boolean };
 
 /**
  * userId → 本次出站目标。
@@ -148,7 +201,12 @@ function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean }): S
   const lane = decodeLaneUserId(userId);
   if (!lane) return { kind: 'open_id', id: userId };
 
-  const state = laneAnchors.get(userId) ?? { queue: [], held: null, quotedHeld: false };
+  const state = laneAnchors.get(userId) ?? {
+    queue: [],
+    held: null,
+    quotedHeld: false,
+    inThreadReply: false,
+  };
   laneAnchors.set(userId, state);
   // 领取条件: advanceRound(流式建卡 = 新回合)必领; 其余出站只在完全没有
   // 持有时领(首次一次性回复)。回合中途的卡片/文件**不领** — 队列里可能已经
@@ -157,12 +215,16 @@ function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean }): S
   if ((opts?.advanceRound || !state.held) && state.queue.length > 0) {
     state.held = state.queue.shift() ?? null;
     state.quotedHeld = false;
+    state.inThreadReply = false;
   }
 
   if (lane.threadId) {
     // 话题 lane: 必须 reply 锚点才能落回话题; 没有锚点宁可失败也不能把
-    // 消息发进群主流(位置错误比丢失更糟)。
-    return state.held ? { kind: 'reply', messageId: state.held } : null;
+    // 消息发进群主流(位置错误比丢失更糟)。held 是回拨的群主流触发消息时
+    // 带 reply_in_thread 回复才能落回话题。
+    return state.held
+      ? { kind: 'reply', messageId: state.held, replyInThread: state.inThreadReply || undefined }
+      : null;
   }
   if (state.held && !state.quotedHeld) {
     state.quotedHeld = true;
@@ -181,7 +243,12 @@ async function createMessage(
   if (target.kind === 'reply') {
     const res = await c.im.v1.message.reply({
       path: { message_id: target.messageId },
-      data: { content, msg_type: msgType },
+      data: {
+        content,
+        msg_type: msgType,
+        // 回拨到群主流触发消息的锚点: 必须 reply_in_thread 才落回话题。
+        ...(target.replyInThread ? { reply_in_thread: true } : {}),
+      },
     });
     const id = res.data?.message_id ?? '';
     if (!id) throw new Error('[feishu/outbound] reply: no message_id in response');

@@ -12,6 +12,7 @@ const outboundMocks = vi.hoisted(() => ({
   recallOwnMessage: vi.fn(async () => true),
   updateInteractive: vi.fn(async () => undefined),
   registerCardLane: vi.fn(),
+  rearmAnchorToTrigger: vi.fn(() => true),
 }));
 
 vi.mock('../outbound.js', () => ({
@@ -19,6 +20,7 @@ vi.mock('../outbound.js', () => ({
   recallOwnMessage: outboundMocks.recallOwnMessage,
   updateInteractive: outboundMocks.updateInteractive,
   registerCardLane: outboundMocks.registerCardLane,
+  rearmAnchorToTrigger: outboundMocks.rearmAnchorToTrigger,
 }));
 
 vi.mock('../streamingText.js', () => ({
@@ -92,6 +94,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     );
     await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(false);
     expect(outboundMocks.recallOwnMessage).toHaveBeenCalledWith('om_opener');
+    expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t');
   });
 
   it('consumePendingOpenerAsCard: 替换失败时撤回并返回 false', async () => {
@@ -99,6 +102,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     outboundMocks.updateInteractive.mockRejectedValueOnce(new Error('replace failed'));
     await expect(im.consumePendingOpenerAsCard('g/oc_c/omt_t', SPEC)).resolves.toBe(false);
     expect(outboundMocks.recallOwnMessage).toHaveBeenCalledWith('om_opener');
+    expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t');
     expect(outboundMocks.registerCardLane).not.toHaveBeenCalled();
   });
 

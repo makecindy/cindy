@@ -238,7 +238,7 @@ describe('feishu group inbound gate', () => {
     // 锚点是开场白消息(话题内合法锚点), 不是触发消息。
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
     // 开场白卡登记为可补丁锚点 — 本轮流式卡直接 patch 它, 不发占位消息。
-    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
+    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener', 'om_msg1');
     // 路由进新话题 lane, 但上下文取数 lane 仍是群主流(新话题是空的)。
     expect(event.groupContextLane).toEqual({ chatId: 'oc_chat1', threadId: '' });
   });

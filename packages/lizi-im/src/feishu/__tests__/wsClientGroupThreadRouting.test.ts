@@ -191,7 +191,7 @@ describe('feishu group thread routing', () => {
 
     expect(mocks.openThread).toHaveBeenCalledWith('om_msg1');
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
-    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
+    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener', 'om_msg1');
     expect(events).toHaveLength(1);
     expect(events[0].senderId).toBe('g/oc_chat1/omt_new');
     // 新话题是空的, 群历史前缀仍按触发时所在的群主流拉取。
