@@ -40,7 +40,18 @@ const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 let client: Lark.Client | null = null;
 let creds: BotCredentials | null = null;
 
+/** 最近一次 bind 的账号身份 — 跨 unbind 保留, 用于判「账号是否真替换」。 */
+let lastBoundCreds: BotCredentials | null = null;
+
 export function bindClient(c: BotCredentials): void {
+  // 账号真正替换(appId/service 变化)才清开场白卡映射: 同账号 transport 重连
+  // (reconnectSavedCredentials: stop → start 同凭证)时 turn 仍在跑, 未消费的
+  // opener 必须仍可被认领, 否则答案无处 patch、话题锚点丢失。
+  const accountChanged =
+    lastBoundCreds !== null &&
+    (lastBoundCreds.appId !== c.appId || lastBoundCreds.service !== c.service);
+  if (accountChanged) patchableOpeners.clear();
+  lastBoundCreds = c;
   creds = c;
   client = new Lark.Client({
     appId: c.appId,
@@ -54,9 +65,7 @@ export function unbindClient(): void {
   creds = null;
   laneAnchors.clear();
   cardLanes.clear();
-  // 换代后旧账号的开场白卡不得再被认领(claim 会把它当本轮流式卡 patch,
-  // 把新账号的答案打到旧账号的卡上)。
-  patchableOpeners.clear();
+  // patchableOpeners 不随 unbind 清空(见 bindClient 的账号替换清理)。
 }
 
 // ── group lane reply anchors ──────────────────────────────────────────────────

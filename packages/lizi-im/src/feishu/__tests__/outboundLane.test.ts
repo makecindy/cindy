@@ -327,13 +327,24 @@ describe('feishu outbound lane routing', () => {
     expect(outbound.claimPatchableOpener('g/oc_g/omt_p1')).toBeNull();
   });
 
-  it('unbindClient clears pending patchable openers (no cross-generation claim)', async () => {
+  it('同账号重连(rebind 同凭证)保留 pending opener 仍可被认领', async () => {
     outbound.pushReplyAnchor('g/oc_g/omt_p2', 'om_opener');
     outbound.pushPatchableOpener('g/oc_g/omt_p2', 'om_opener');
 
-    outbound.unbindClient(); // 换账号/断线: 旧账号的开场白卡不得再被认领
+    // 同账号 transport 重连: stop → unbind → start → bind 同凭证 — turn 还在
+    // 跑, 开场白卡必须仍可被认领(答案 patch 它, 锚点也不丢)。
+    outbound.unbindClient();
     outbound.bindClient(creds);
-    expect(outbound.claimPatchableOpener('g/oc_g/omt_p2')).toBeNull();
+    expect(outbound.claimPatchableOpener('g/oc_g/omt_p2')).toBe('om_opener');
+  });
+
+  it('账号真正替换(appId 变化)时清空 pending opener, 不可跨账号认领', async () => {
+    outbound.pushReplyAnchor('g/oc_g/omt_p3', 'om_opener');
+    outbound.pushPatchableOpener('g/oc_g/omt_p3', 'om_opener');
+
+    outbound.unbindClient(); // 换账号/断线
+    outbound.bindClient({ appId: 'cli_other_account', appSecret: 'secret', service: 'feishu' as const });
+    expect(outbound.claimPatchableOpener('g/oc_g/omt_p3')).toBeNull();
   });
 });
 

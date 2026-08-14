@@ -175,7 +175,12 @@ export function createMessageHandler(
       }
       // 群主流 @ 开话题的首条若是 !stop: 「思考中」开场白卡就地 patch 成
       // stop 回复(消费 pending opener), 不再另发一条; 消费不了再走正常发送。
-      const openerConsumed = await consumeOpenerWithText(event.senderId, reply);
+      // 仅当本条消息**自己**开了话题(groupContextLane 存在)才消费 — 同话题
+      // 后续消息 B 不得认领上一轮 A 的 pending opener, 否则 B 的终态回复会
+      // 覆盖 A 的思考卡, A 的回答另发新卡造成归属错乱。
+      const openerConsumed = event.groupContextLane
+        ? await consumeOpenerWithText(event.senderId, reply)
+        : false;
       if (!openerConsumed) {
         try {
           await im.sendMarkdownText(event.senderId, reply, { threadTs: event.scopeKey });
@@ -192,9 +197,15 @@ export function createMessageHandler(
       // 群主流 @ 开话题的首条若是 slash: slash 自备回复(文本/卡片), 把它的
       // **首个**回复就地消费开场白卡(patch 文本 / 替换卡片)— 卡不卡住, 也
       // 不用撤回后拿已删消息当回复锚点。消费过一次后后续回复正常发送。
-      // 闭包内 TS 会丢失外层三元对 richIm 的窄化 — 先捕获能力函数。
-      const consumeCard = richIm?.consumePendingOpenerCard;
-      const consumeAsCard = richIm?.consumePendingOpenerAsCard;
+      // 仅当本条消息**自己**开了话题(groupContextLane 存在)才注入 sink —
+      // 同话题后续 slash 不得认领上一轮的 pending opener(归属错乱, 同
+      // !stop 分支的说明)。
+      const consumeCard = event.groupContextLane
+        ? richIm?.consumePendingOpenerCard
+        : undefined;
+      const consumeAsCard = event.groupContextLane
+        ? richIm?.consumePendingOpenerAsCard
+        : undefined;
       const sink = consumeCard
         ? {
             used: false,
@@ -230,8 +241,11 @@ export function createMessageHandler(
     // ── pure-unsupported: reply directly, do NOT invoke agent ───────────────
     if (!hasContent && event.unsupported.length > 0) {
       const notice = ui.agent.unsupportedOnly(event.unsupported);
-      // 同 !stop: 开场白卡就地 patch 成 unsupported 提示, 消费不了再另发。
-      const openerConsumed = await consumeOpenerWithText(event.senderId, notice);
+      // 同 !stop: 开场白卡就地 patch 成 unsupported 提示, 消费不了再另发;
+      // 仅本条消息自己开了话题(groupContextLane)才消费。
+      const openerConsumed = event.groupContextLane
+        ? await consumeOpenerWithText(event.senderId, notice)
+        : false;
       if (!openerConsumed) {
         try {
           await im.sendText(event.senderId, notice, {

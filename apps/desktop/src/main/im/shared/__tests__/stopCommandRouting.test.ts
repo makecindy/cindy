@@ -421,7 +421,7 @@ describe('messageHandler !stop routing', () => {
 
   it('!stop 首条消费开场白卡: patch 回复, 不再另发', async () => {
     consumePendingOpenerCard.mockResolvedValue(true);
-    deliver(makeEvent());
+    deliver(makeEvent({ groupContextLane: { chatId: 'C1', threadId: '' } }));
     await flushMicrotasks();
 
     expect(consumePendingOpenerCard).toHaveBeenCalledWith(
@@ -432,8 +432,8 @@ describe('messageHandler !stop routing', () => {
     expect(stopActiveTurn).toHaveBeenCalledTimes(1);
   });
 
-  it('consume 返回 false 时回落正常发送(无 pending opener 的普通场景)', async () => {
-    deliver(makeEvent());
+  it('consume 返回 false 时回落正常发送(有 pending opener 但消费失败)', async () => {
+    deliver(makeEvent({ groupContextLane: { chatId: 'C1', threadId: '' } }));
     await flushMicrotasks();
 
     expect(consumePendingOpenerCard).toHaveBeenCalledTimes(1);
@@ -442,9 +442,35 @@ describe('messageHandler !stop routing', () => {
     });
   });
 
+  it('同话题后续 !stop 不消费上一轮的 pending opener(归属不抢占)', async () => {
+    // 消息 A 已开话题且其 pending opener 尚未被流式认领; 本条 B 是同一话题的
+    // 后续消息(groupContextLane 缺省)— B 不得 patch A 的思考卡。
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ text: '!stop' }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).not.toHaveBeenCalled();
+    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+      threadTs: '1234.5678',
+    });
+  });
+
+  it('同话题后续 slash 不注入 opener sink', async () => {
+    let capturedCtx: Parameters<typeof handleSlashCommand>[1] | undefined;
+    handleSlashCommand.mockImplementation(async (_text: string, ctx: Parameters<typeof handleSlashCommand>[1]) => {
+      capturedCtx = ctx;
+      return true;
+    });
+    deliver(makeEvent({ text: '/project' }));
+    await flushMicrotasks();
+
+    expect(handleSlashCommand).toHaveBeenCalledTimes(1);
+    expect(capturedCtx?.consumePendingOpener).toBeUndefined();
+  });
+
   it('consume patch 抛错时回落正常发送(回复不丢, 认领已完成)', async () => {
     consumePendingOpenerCard.mockRejectedValue(new Error('patch failed'));
-    deliver(makeEvent());
+    deliver(makeEvent({ groupContextLane: { chatId: 'C1', threadId: '' } }));
     await flushMicrotasks();
 
     expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
@@ -460,7 +486,7 @@ describe('messageHandler !stop routing', () => {
       return true;
     });
     consumePendingOpenerCard.mockResolvedValue(true);
-    deliver(makeEvent({ text: '/project' }));
+    deliver(makeEvent({ text: '/project', groupContextLane: { chatId: 'C1', threadId: '' } }));
     await flushMicrotasks();
 
     expect(handleSlashCommand).toHaveBeenCalledTimes(1);
@@ -480,6 +506,7 @@ describe('messageHandler !stop routing', () => {
       makeEvent({
         text: '',
         unsupported: [{ type: 'audio', label: '语音（暂不支持）' }] as IMMessageEvent['unsupported'],
+        groupContextLane: { chatId: 'C1', threadId: '' },
       }),
     );
     await flushMicrotasks();
