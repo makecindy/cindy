@@ -11,6 +11,10 @@ const MAX_MESSAGE_CHARS = 16_384;
 const MAX_CONTEXT_JSON_CHARS = 65_536;
 const MAX_FINAL_PROMPT_CHARS = 65_536;
 const MAX_CONTEXT_DEPTH = 64;
+// 拒绝会改变视觉顺序或隐藏确认内容的控制字符；保留 tab/newline/CR
+// 以及 emoji/文字成形所需的 ZWNJ/ZWJ。
+const UNSAFE_CONFIRMATION_CONTROL_RE =
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u00ad\u034f\u061c\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]/;
 
 export interface GhostPanelAgentBridgeDeps {
   panelContext(senderWebContentsId: number): {
@@ -144,6 +148,13 @@ export class GhostPanelAgentBridge {
         ok: false,
         errorCode: 'INVALID_REQUEST',
         message: `message 与 context 组合后不能超过 ${MAX_FINAL_PROMPT_CHARS} 字符`,
+      };
+    }
+    if (UNSAFE_CONFIRMATION_CONTROL_RE.test(finalPrompt)) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_REQUEST',
+        message: 'message 和 context 不能包含会伪装确认内容的隐藏或方向控制字符',
       };
     }
 

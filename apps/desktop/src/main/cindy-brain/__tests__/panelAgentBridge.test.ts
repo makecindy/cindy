@@ -157,6 +157,31 @@ describe('GhostPanelAgentBridge', () => {
     expect(deps.run).not.toHaveBeenCalled();
   });
 
+  it('拒绝可伪装宿主确认内容的隐藏和方向控制字符', async () => {
+    const unsafePayloads = [
+      { message: 'safe\u202eevil' },
+      { message: 'safe\u2066evil\u2069' },
+      { message: 'safe\u0000evil' },
+      { message: 'safe\u200bevil' },
+      { message: '继续', context: { label: 'safe\u202eevil' } },
+    ];
+
+    for (const payload of unsafePayloads) {
+      const { bridge, deps } = makeBridge();
+      expect(await bridge.send(11, payload)).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_REQUEST',
+      });
+      expect(deps.confirmSend).not.toHaveBeenCalled();
+      expect(deps.run).not.toHaveBeenCalled();
+    }
+
+    const allowed = makeBridge();
+    await expect(
+      allowed.bridge.send(11, { message: '👨‍👩‍👧‍👦 继续' }),
+    ).resolves.toEqual({ ok: true, disposition: 'active' });
+  });
+
   it('拒绝 sessionId、mode 等越界字段，不签票也不运行', async () => {
     const { bridge, deps } = makeBridge();
     const result = await bridge.send(11, {
