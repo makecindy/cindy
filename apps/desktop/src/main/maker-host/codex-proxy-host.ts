@@ -48,6 +48,8 @@ import {
   getSessionRoutingDescriptor,
   resolveSessionRoute,
   resolveSessionRouteDecision,
+  resolveProviderRouteDecision,
+  rewriteModelIdForProviderRoute,
   buildLocalHandlerHeaders,
   inferProviderIdForModel,
   isHostInjectedAuthSession,
@@ -2437,8 +2439,10 @@ function codexRequestBodyContainsImage(body: unknown): boolean {
   if (!isPlainObject(body)) return false;
   const input = body.input;
   if (Array.isArray(input)) {
-    for (const item of input) {
-      if (isPlainObject(item) && codexContentArrayContainsImage(item.content)) return true;
+    for (let index = input.length - 1; index >= 0; index -= 1) {
+      const item = input[index];
+      if (!isPlainObject(item) || item.role !== 'user') continue;
+      return codexContentArrayContainsImage(item.content);
     }
   }
   return codexContentArrayContainsImage(body.instructions);
@@ -2453,36 +2457,13 @@ function codexRequestBodyContainsImage(body: unknown): boolean {
  * `localHandler`(chat/anthropic bridge,桥接自己处理图)一律不动,避免把用户显式选的
  * 供应商或本地桥接误切。
  */
-export function withCodexVisionFallback(inner: RoutingTransform): RoutingTransform {
+export function withCodexVisionFallback(
+  inner: RoutingTransform,
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): RoutingTransform {
   return (body, ctx) => {
     const result = inner(body, ctx);
-    const apply = (decision: RoutingDecision | null): RoutingDecision | null => {
-      if (!decision) {
-        // inner 返回 null = 默认网关(env-key 态的纯文本模型正是这条路)。命中才转成覆盖。
-        if (
-          ctx.method === 'POST'
-          && isPlainObject(body)
-          && typeof body.model === 'string'
-          && isTextOnlyModel(body.model)
-          && codexRequestBodyContainsImage(body)
-          && readSubagentModelSettings().visionFallbackEnabled !== false
-        ) {
-          log.info('codex vision fallback: text-only model + image → switching model', {
-            threadId: selectedThreadIdFromHeaders(ctx.headers),
-            sessionId: sessionIdFromHeaders(ctx.headers),
-            fromModel: body.model,
-            toModel: configuredVisionFallbackModel(readSubagentModelSettings().visionFallbackModel),
-          });
-          return {
-            bodyModelOverride: configuredVisionFallbackModel(
-              readSubagentModelSettings().visionFallbackModel,
-            ),
-          };
-        }
-        return null;
-      }
-      // localHandler / upstreamOverride 不兜底(桥接自己处理图;供应商路由保留用户选择)。
-      if (decision.localHandler || decision.upstreamOverride) return decision;
+    const apply = (decision: RoutingDecision | null): RoutingDecision | Promise<RoutingDecision | null> | null => {
       if (
         ctx.method === 'POST'
         && isPlainObject(body)
@@ -2491,18 +2472,53 @@ export function withCodexVisionFallback(inner: RoutingTransform): RoutingTransfo
         && codexRequestBodyContainsImage(body)
         && readSubagentModelSettings().visionFallbackEnabled !== false
       ) {
+        if (decision?.localHandler) return decision;
+        const settings = readSubagentModelSettings();
+        const visionModel = configuredVisionFallbackModel(settings.visionFallbackModel);
+        const fallbackProviderId = settings.visionFallbackProviderId;
         log.info('codex vision fallback: text-only model + image → switching model', {
           threadId: selectedThreadIdFromHeaders(ctx.headers),
           sessionId: sessionIdFromHeaders(ctx.headers),
           fromModel: body.model,
-          toModel: configuredVisionFallbackModel(readSubagentModelSettings().visionFallbackModel),
+          toModel: visionModel,
+          providerId: fallbackProviderId,
         });
-        return {
-          ...decision,
-          bodyModelOverride: configuredVisionFallbackModel(
-            readSubagentModelSettings().visionFallbackModel,
-          ),
-        };
+        if (!fallbackProviderId) {
+          const defaultFallbackRoute = decideCodexRoute({
+            model: visionModel,
+            authInjection: frozenAuthInjection ?? getCodexProxyAuthInjection(),
+            gatewayKey: _readGatewayKey(),
+          });
+          return {
+            // 原路由只在仍为默认网关时携带可复用的鉴权覆盖；显式 custom/OAuth 上游的
+            // header 绝不能跟随回退模型离开本机。
+            ...(decision?.upstreamOverride ? {} : (decision ?? {})),
+            ...(defaultFallbackRoute ?? {}),
+            bodyModelOverride: visionModel,
+          };
+        }
+        return resolveProviderRouteDecision(
+          fallbackProviderId,
+          'codex',
+          _readGatewayKey(),
+          visionModel,
+        ).then((route) => {
+          if (!route || route.routing.wireProtocol === 'openai-chat' || route.routing.wireProtocol === 'anthropic-messages') {
+            log.warn('codex vision fallback provider cannot accept Responses requests', {
+              providerId: fallbackProviderId,
+              model: visionModel,
+            });
+            return decision;
+          }
+          return {
+            ...(route.decision ?? {}),
+            bodyModelOverride: rewriteModelIdForProviderRoute(
+              fallbackProviderId,
+              'codex',
+              visionModel,
+            ),
+          };
+        });
       }
       return decision;
     };
@@ -2520,7 +2536,7 @@ function createCodexProxyHandle(
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
     // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
     routingTransform: withCodexUpstreamRecording(
-      withCodexVisionFallback(createModelRoutingTransform(frozenAuthInjection)),
+      withCodexVisionFallback(createModelRoutingTransform(frozenAuthInjection), frozenAuthInjection),
       () => buildCodexGatewayBaseUrl(),
     ),
     responseObserver: composeResponseObservers(

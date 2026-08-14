@@ -592,20 +592,32 @@ export async function resolveProviderRouteDecision(
   providerId: string | null | undefined,
   agent: AgentKind,
   gatewayKey: string | null,
+  wireModel?: string,
 ): Promise<ResolvedProviderRouteDecision | null> {
   const id = providerId?.trim() || null;
   if (!id) return null;
-  if (isProviderRouteMutationInProgress(id)) return null;
+  const route = await resolveProviderRouteById(id, agent, wireModel);
+  if (!route) return null;
   if (id === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
-  const provider = getActiveCatalog().providers.find((p) => p.id === id);
-  const routing = provider?.routing[agent];
-  if (!provider || !routing) return null;
-  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  const { routing, apiKey, oauthToken } = route;
+  const decision = buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken);
   return {
     providerId: id,
     routing,
-    decision: buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken),
+    decision: decision && wireModel && routing.requestPath
+      ? { ...decision, pathOverride: routing.requestPath }
+      : decision,
   };
+}
+
+export function rewriteModelIdForProviderRoute(
+  providerId: string,
+  agent: AgentKind,
+  model: string,
+): string {
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+  const stripPrefix = provider?.routing[agent]?.modelIdRewrite?.stripPrefix;
+  return stripPrefix && model.startsWith(stripPrefix) ? model.slice(stripPrefix.length) : model;
 }
 
 export function resolveSessionRouteDecision(

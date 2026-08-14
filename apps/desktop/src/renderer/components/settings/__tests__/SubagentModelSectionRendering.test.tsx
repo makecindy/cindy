@@ -250,6 +250,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
 const DEFAULTS = {
   visionFallbackEnabled: true,
   visionFallbackModel: null,
+  visionFallbackProviderId: null,
   claudeCode: null,
   claudeCodeProviderId: null,
   codex: null,

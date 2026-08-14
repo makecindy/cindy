@@ -37,6 +37,8 @@ function normalize(raw: unknown): SubagentModelSettings {
   return {
     visionFallbackEnabled,
     visionFallbackModel,
+    visionFallbackProviderId:
+      visionFallbackModel === null ? null : normalizeSubagentModelId(input.visionFallbackProviderId),
     claudeCode,
     // 磁盘直读同样执行配对不变量:模型未指定时来源无所依附,外部手改文件留下的
     // 孤儿 providerId 会让 isCustomized 误报「已自定义」却显示「不指定」(codex review)。
@@ -86,6 +88,12 @@ export function readSubagentModelSettingsState(): OverrideSettingsState<Subagent
   // (写 null = 删除该 override key,全空则删除文件)。仅设置 UI 的 State 读入口
   // 自愈;派发热路径 readSubagentModelSettings 只消费已归一的 value,无需触发写。
   const orphanPatch: SubagentModelSettingsPatch = {};
+  if (
+    state.value.visionFallbackModel === null
+    && state.customizedKeys.includes('visionFallbackProviderId')
+  ) {
+    orphanPatch.visionFallbackProviderId = null;
+  }
   if (state.value.claudeCode === null && state.customizedKeys.includes('claudeCodeProviderId')) {
     orphanPatch.claudeCodeProviderId = null;
   }

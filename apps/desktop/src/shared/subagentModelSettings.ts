@@ -23,6 +23,8 @@ export interface SubagentModelSettings {
   visionFallbackEnabled: boolean;
   /** null = use Cindy's automatic vision fallback model. */
   visionFallbackModel: string | null;
+  /** The provider route used for the selected vision fallback model. */
+  visionFallbackProviderId: string | null;
   claudeCode: string | null;
   claudeCodeProviderId: string | null;
   codex: string | null;
@@ -81,6 +83,7 @@ export type SubagentModelSettingsWriteResult = SubagentModelSettingsState & {
 export const SUBAGENT_MODEL_SETTINGS_DEFAULTS: SubagentModelSettings = {
   visionFallbackEnabled: true,
   visionFallbackModel: null,
+  visionFallbackProviderId: null,
   claudeCode: null,
   claudeCodeProviderId: null,
   codex: null,
@@ -187,8 +190,8 @@ export function reconcileSubagentModelSettingsPatch(
 ): SubagentModelSettingsPatch {
   const next = { ...patch };
   const clearOrphan = (
-    modelKey: 'claudeCode' | 'codex',
-    providerKey: 'claudeCodeProviderId' | 'codexProviderId',
+    modelKey: 'visionFallbackModel' | 'claudeCode' | 'codex',
+    providerKey: 'visionFallbackProviderId' | 'claudeCodeProviderId' | 'codexProviderId',
   ) => {
     const effectiveModel = next[modelKey] !== undefined ? next[modelKey] : current[modelKey];
     if (effectiveModel !== null) return;
@@ -200,6 +203,7 @@ export function reconcileSubagentModelSettingsPatch(
       next[providerKey] = null;
     }
   };
+  clearOrphan('visionFallbackModel', 'visionFallbackProviderId');
   clearOrphan('claudeCode', 'claudeCodeProviderId');
   clearOrphan('codex', 'codexProviderId');
   return next;

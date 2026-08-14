@@ -29,6 +29,11 @@ const mockState = vi.hoisted(() => {
     injectionTransform: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     stripNonAnthropicFields: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     recordXaiRateLimitSnapshot: vi.fn(),
+    visionFallbackSettings: {
+      visionFallbackEnabled: true,
+      visionFallbackModel: null as string | null,
+      visionFallbackProviderId: null as string | null,
+    },
     createInstructionsInjectionTransform: vi.fn((opts: { registry: Registry }) => {
       capturedRegistry = opts.registry;
       return (body: unknown, ctx: unknown) => state.injectionTransform(body, ctx);
@@ -63,6 +68,10 @@ vi.mock('../../logger.js', () => ({
 
 vi.mock('../../usageBroadcaster.js', () => ({
   recordXaiRateLimitSnapshot: mockState.recordXaiRateLimitSnapshot,
+}));
+
+vi.mock('../subagent-model-settings-store', () => ({
+  readSubagentModelSettings: () => mockState.visionFallbackSettings,
 }));
 
 // SUT 链(codex-gateway-config → runtime-configs)运行期读端点清单;单测里没有
@@ -347,6 +356,26 @@ describe('withCodexVisionFallback', () => {
     expect(decision).toBeNull();
   });
 
+  it('does not fall back when only an earlier input item contains an image', async () => {
+    const host = await freshCodexProxyHost();
+    const wrapped = host.withCodexVisionFallback(() => null);
+
+    const decision = await wrapped({
+      model: 'deepseek/deepseek-v4-pro',
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: 'data:image/png;base64,eA==' }],
+        },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '图片已收到' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '请继续总结' }] },
+      ],
+    }, ctxFor('t-history-image'));
+
+    expect(decision).toBeNull();
+  });
+
   it('does not fall back for a vision-capable model', async () => {
     const host = await freshCodexProxyHost();
     const wrapped = host.withCodexVisionFallback(() => null);
@@ -356,14 +385,59 @@ describe('withCodexVisionFallback', () => {
     expect(decision).toBeNull();
   });
 
-  it('keeps an upstreamOverride decision untouched (custom provider / OAuth direct)', async () => {
+  it('replaces an original custom-provider route with the default fallback route', async () => {
     const host = await freshCodexProxyHost();
     const inner = { upstreamOverride: 'https://api.x.ai/v1' };
     const wrapped = host.withCodexVisionFallback(() => inner);
 
     const decision = await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-custom'));
 
-    expect(decision).toBe(inner);
+    expect(decision).toEqual({ bodyModelOverride: 'codex/gpt-5.6-luna' });
+  });
+
+  it('routes the fallback through its selected provider instead of the original upstream', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'vision-provider',
+        name: 'Vision Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://vision.example/v1',
+            models: [{ id: 'vision-model', name: 'Vision Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'vision-key');
+    mockState.visionFallbackSettings = {
+      visionFallbackEnabled: true,
+      visionFallbackModel: 'vision-model',
+      visionFallbackProviderId: 'vision-provider',
+    };
+
+    try {
+      const wrapped = host.withCodexVisionFallback(() => ({
+        upstreamOverride: 'https://text-only.example/v1',
+      }));
+
+      expect(await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-provider'))).toEqual(expect.objectContaining({
+        upstreamOverride: 'https://vision.example/v1',
+        headerOverride: { authorization: 'Bearer vision-key' },
+        bodyModelOverride: 'vision-model',
+      }));
+    } finally {
+      mockState.visionFallbackSettings = {
+        visionFallbackEnabled: true,
+        visionFallbackModel: null,
+        visionFallbackProviderId: null,
+      };
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
   });
 
   it('keeps a localHandler decision untouched', async () => {

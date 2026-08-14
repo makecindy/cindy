@@ -33,6 +33,7 @@ export function VisionFallbackRow() {
   const save = useCallback(async (patch: {
     visionFallbackEnabled?: boolean;
     visionFallbackModel?: string | null;
+    visionFallbackProviderId?: string | null;
   }) => {
     if (!settings || Object.entries(patch).every(([key, value]) => settings[key as keyof SubagentModelSettingsState] === value)) return;
     setPending(true);
@@ -52,6 +53,7 @@ export function VisionFallbackRow() {
   if (!settings) return null;
 
   const isCustomized = settings.customizedKeys.includes('visionFallbackModel')
+    || settings.customizedKeys.includes('visionFallbackProviderId')
     || settings.customizedKeys.includes('visionFallbackEnabled');
   const sourceKey = isCustomized ? 'user' : 'product';
 
@@ -88,6 +90,15 @@ export function VisionFallbackRow() {
             effort=""
             onModelChange={(model) => void save({ visionFallbackModel: model })}
             onEffortChange={() => undefined}
+            currentProviderId={settings.visionFallbackProviderId}
+            onProviderChange={(providerId, modelId) => {
+              const nextModel = modelId ?? settings.visionFallbackModel;
+              if (!nextModel) return;
+              void save({
+                visionFallbackModel: nextModel,
+                visionFallbackProviderId: providerId,
+              });
+            }}
             configurationEnabled={false}
             switching={pending}
             disabled={pending}
@@ -97,14 +108,21 @@ export function VisionFallbackRow() {
             fallbackOption={{
               active: settings.visionFallbackModel === null,
               label: t('settings.subagentModels.visionFallbackAutomatic'),
-              onSelect: () => void save({ visionFallbackModel: null }),
+              onSelect: () => void save({
+                visionFallbackModel: null,
+                visionFallbackProviderId: null,
+              }),
             }}
           />
         </div>
         <DefaultOverrideControls
           isCustomized={isCustomized}
           disabled={pending}
-          onReset={() => void save({ visionFallbackEnabled: true, visionFallbackModel: null })}
+          onReset={() => void save({
+            visionFallbackEnabled: true,
+            visionFallbackModel: null,
+            visionFallbackProviderId: null,
+          })}
         />
         <Switch
           checked={settings.visionFallbackEnabled}

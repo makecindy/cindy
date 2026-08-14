@@ -7332,6 +7332,7 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
   // providerId 与 model id 同约束(短标识串),共用同一套校验/归一化。
   for (const key of [
     'visionFallbackModel',
+    'visionFallbackProviderId',
     'claudeCode',
     'claudeCodeProviderId',
     'codex',
