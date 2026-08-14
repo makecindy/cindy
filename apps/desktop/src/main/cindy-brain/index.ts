@@ -15,6 +15,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { supportsCindyVersion } from '@cindy/plugin-protocol';
 
 import { createLogger } from '../logger.js';
+import { isSecondaryAppWindow } from '../secondary-windows.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   type GhostAppRegion,
@@ -2391,8 +2392,15 @@ function mainShellWindows(): BrowserWindow[] {
   );
 }
 
+/** 主窗口和已上报自身会话的应用副窗口都是面板的任务宿主。 */
+function ghostPanelHostOwnsSession(hostContents: WebContents): boolean {
+  if (isMainShellWindowUrl(hostContents.getURL())) return true;
+  const hostWindow = BrowserWindow.fromWebContents(hostContents);
+  return isSecondaryAppWindow(hostWindow) && ghostSessionFocusByWebContents.has(hostContents.id);
+}
+
 /**
- * 面板目标任务解析：停靠态取承载主窗口自己的路由；独立面板窗只在主窗口
+ * 面板目标任务解析：停靠态取承载宿主窗口自己的路由；独立面板窗只在主窗口
  * 唯一时回落。多窗口有歧义就拒绝，绝不让插件提供 sessionId 猜目标。
  */
 function ghostPanelTargetSessionId(hostWebContentsId: number): string | null {
@@ -2400,7 +2408,7 @@ function ghostPanelTargetSessionId(hostWebContentsId: number): string | null {
   if (!hostContents || hostContents.isDestroyed()) return null;
   const candidates = mainShellWindows();
   return resolveGhostPanelTargetSessionId({
-    hostIsMainShell: isMainShellWindowUrl(hostContents.getURL()),
+    hostOwnsSession: ghostPanelHostOwnsSession(hostContents),
     hostSessionId: ghostSessionFocusByWebContents.get(hostWebContentsId),
     mainShellSessionIds: candidates.map((window) =>
       ghostSessionFocusByWebContents.get(window.webContents.id),
@@ -2409,7 +2417,7 @@ function ghostPanelTargetSessionId(hostWebContentsId: number): string | null {
 }
 
 /**
- * 宿主确认必须落在真正承载目标任务的主壳窗口。停靠面板直接用
+ * 宿主确认必须落在真正承载目标任务的宿主窗口。停靠面板直接用
  * 自己的 Host；独立面板窗只在能唯一找到同一任务的主壳时放行。
  */
 function ghostPanelConfirmationTargetWebContentsId(
@@ -2419,7 +2427,7 @@ function ghostPanelConfirmationTargetWebContentsId(
   const hostContents = webContents.fromId(hostWebContentsId);
   if (!hostContents || hostContents.isDestroyed()) return null;
   return resolveGhostPanelConfirmationTargetId({
-    hostIsMainShell: isMainShellWindowUrl(hostContents.getURL()),
+    hostOwnsSession: ghostPanelHostOwnsSession(hostContents),
     hostWebContentsId,
     hostSessionId: ghostSessionFocusByWebContents.get(hostWebContentsId),
     targetSessionId: sessionId,
@@ -2894,7 +2902,7 @@ function resumeGhostUnreadProjection(ghostId: string): void {
 
 let confirmSlotSingleton: GhostConfirmSlot | null = null;
 
-/** 意识确认弹窗通道(main → **单个**窗口;renderer 用主机同款 ConfirmDialog 渲染)。 */
+/** 意识确认弹窗通道(main → **单个**窗口;renderer 用宿主 ConfirmDialog 渲染)。 */
 export const GHOST_CONFIRM_CHANNEL = 'ghosts:confirm-request';
 
 /**
@@ -2902,7 +2910,7 @@ export const GHOST_CONFIRM_CHANNEL = 'ghosts:confirm-request';
  * 超时兜底在 GhostConfirmDialogBridge,这里只组装"投给哪个窗口"。
  *
  * 只投**一个**窗口：普通 confirm 沿用 focused ?? 第一个；面板 Agent
- * 确认则精确投给承载目标任务的主壳。不像 notify 那样广播:模态确认框广播
+ * 确认则精确投给承载目标任务的宿主窗口。不像 notify 那样广播:模态确认框广播
  * 出去会在每个窗口各弹一个、收回多份答案。没有可投窗口时 sendToWindow 回
  * false → 桥 reject → 槽回 UNAVAILABLE(明确区别于"用户拒绝")。
  */
@@ -2918,7 +2926,7 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
             if (
               !targetContents ||
               targetContents.isDestroyed() ||
-              !isMainShellWindowUrl(targetContents.getURL())
+              !ghostPanelHostOwnsSession(targetContents)
             ) {
               return false;
             }

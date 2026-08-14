@@ -203,7 +203,7 @@ describe('resolveGhostPanelTargetSessionId', () => {
   it('停靠面板只取承载主窗口自己的当前任务', () => {
     expect(
       resolveGhostPanelTargetSessionId({
-        hostIsMainShell: true,
+        hostOwnsSession: true,
         hostSessionId: ' session-host ',
         mainShellSessionIds: ['session-other'],
       }),
@@ -213,7 +213,7 @@ describe('resolveGhostPanelTargetSessionId', () => {
   it('独立面板窗仅在主窗口唯一时回落', () => {
     expect(
       resolveGhostPanelTargetSessionId({
-        hostIsMainShell: false,
+        hostOwnsSession: false,
         hostSessionId: null,
         mainShellSessionIds: ['session-only'],
       }),
@@ -223,16 +223,33 @@ describe('resolveGhostPanelTargetSessionId', () => {
   it('多主窗口歧义或唯一窗口不在任务页时 fail closed', () => {
     expect(
       resolveGhostPanelTargetSessionId({
-        hostIsMainShell: false,
+        hostOwnsSession: false,
         hostSessionId: null,
         mainShellSessionIds: ['session-a', 'session-b'],
       }),
     ).toBeNull();
     expect(
       resolveGhostPanelTargetSessionId({
-        hostIsMainShell: false,
+        hostOwnsSession: false,
         hostSessionId: null,
         mainShellSessionIds: [null],
+      }),
+    ).toBeNull();
+  });
+
+  it('会话副窗口取自身任务，不回落到主窗口', () => {
+    expect(
+      resolveGhostPanelTargetSessionId({
+        hostOwnsSession: true,
+        hostSessionId: 'session-secondary',
+        mainShellSessionIds: ['session-main'],
+      }),
+    ).toBe('session-secondary');
+    expect(
+      resolveGhostPanelTargetSessionId({
+        hostOwnsSession: true,
+        hostSessionId: null,
+        mainShellSessionIds: ['session-main'],
       }),
     ).toBeNull();
   });
@@ -242,7 +259,7 @@ describe('resolveGhostPanelConfirmationTargetId', () => {
   it('停靠面板确认固定投给承载同一任务的 Host', () => {
     expect(
       resolveGhostPanelConfirmationTargetId({
-        hostIsMainShell: true,
+        hostOwnsSession: true,
         hostWebContentsId: 22,
         hostSessionId: 'session-current',
         targetSessionId: 'session-current',
@@ -251,9 +268,21 @@ describe('resolveGhostPanelConfirmationTargetId', () => {
     ).toBe(22);
   });
 
+  it('会话副窗口的确认固定投给副窗口自身', () => {
+    expect(
+      resolveGhostPanelConfirmationTargetId({
+        hostOwnsSession: true,
+        hostWebContentsId: 33,
+        hostSessionId: 'session-secondary',
+        targetSessionId: 'session-secondary',
+        mainShells: [{ webContentsId: 22, sessionId: 'session-main' }],
+      }),
+    ).toBe(33);
+  });
+
   it('独立面板只选唯一承载目标任务的主壳，歧义时 fail closed', () => {
     const base = {
-      hostIsMainShell: false,
+      hostOwnsSession: false,
       hostWebContentsId: 99,
       hostSessionId: null,
       targetSessionId: 'session-current',
