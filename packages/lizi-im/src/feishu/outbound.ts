@@ -482,7 +482,8 @@ function pruneCardLanes(): void {
 }
 
 /** 发卡成功后在 lane 通道登记 card messageId → laneUserId;私聊发送不登记。 */
-function registerCardLane(userId: string, messageId: string): void {
+/** 登记交互卡的发卡 lane(按钮回调 resolveCardLane 反查用)。 */
+export function registerCardLane(userId: string, messageId: string): void {
   if (!decodeLaneUserId(userId)) return;
   cardLanes.set(messageId, { ts: Date.now(), lane: userId });
   pruneCardLanes();

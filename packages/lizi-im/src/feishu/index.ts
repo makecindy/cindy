@@ -161,6 +161,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     const openerId = outbound.claimPatchableOpener(userId);
     if (!openerId) return false;
     await outbound.updateInteractive(openerId, spec);
+    // 替换后的交互卡同样要登记发卡 lane — 否则按钮回调 resolveCardLane
+    // 查不到, 被 cardActionHandler 的群卡 fail-closed 门当旧卡拒绝。
+    outbound.registerCardLane(userId, openerId);
     return true;
   }
 

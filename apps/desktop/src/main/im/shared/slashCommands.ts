@@ -97,7 +97,14 @@ export function createSlashHandlers(
   async function safeSendText(ctx: SlashCtx, text: string): Promise<void> {
     try {
       if (ctx.consumePendingOpener) {
-        if (await ctx.consumePendingOpener.withMarkdown(ctx.userId, text)) return;
+        try {
+          if (await ctx.consumePendingOpener.withMarkdown(ctx.userId, text)) return;
+        } catch (err) {
+          // patch 失败不吞回复: 认领已完成(卡不会再被误 patch), 回落正常
+          // 发送 — 用户至少收到结果。
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`consumePendingOpener withMarkdown failed (fallback to normal send): ${msg}`);
+        }
       }
       await im.sendMarkdownText(ctx.userId, text);
     } catch (err) {
@@ -106,20 +113,32 @@ export function createSlashHandlers(
     }
   }
 
-  /** 卡片反馈: 首条同样经 consumePendingOpener 替换开场白卡, 消费不了再发新卡。 */
-  async function safeSendCard(ctx: SlashCtx, spec: InteractiveCardSpec): Promise<void> {
+  /**
+   * 卡片反馈: 首条经 consumePendingOpener 替换开场白卡, 替换失败回落正常发卡。
+   * 返回是否送达(替换成功或发卡成功)— /ctr 等依赖「卡片确实可见」的调用方
+   * 据此决定是否进入控制态。
+   */
+  async function safeSendCard(ctx: SlashCtx, spec: InteractiveCardSpec): Promise<boolean> {
     try {
       if (ctx.consumePendingOpener) {
-        if (await ctx.consumePendingOpener.withCard(ctx.userId, spec)) return;
+        try {
+          if (await ctx.consumePendingOpener.withCard(ctx.userId, spec)) return true;
+        } catch (err) {
+          // 替换失败回落正常发卡: 认领已完成, 用户至少拿到一张可用卡片。
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`consumePendingOpener withCard failed (fallback to normal send): ${msg}`);
+        }
       }
       if (!richIm) {
         log.warn('safeSendCard failed: channel has no rich-card output');
-        return;
+        return false;
       }
       await richIm.sendInteractiveCard(ctx.userId, spec);
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`safeSendCard failed (non-fatal): ${msg}`);
+      return false;
     }
   }
 
@@ -397,12 +416,11 @@ export function createSlashHandlers(
           projects,
           currentAttachedTitle,
         });
-        try {
-          await safeSendCard(ctx, spec);
+        const sent = await safeSendCard(ctx, spec);
+        if (sent) {
           enterControl(ctx.botContextId, ctx.userId);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.error(`/ctr card send failed: ${msg}`);
+        } else {
+          log.error('/ctr picker card send failed — control NOT entered (avoid locking the user)');
         }
         return true;
       }
