@@ -18,10 +18,9 @@ import {
  * UnifiedModelRail —— 统一面板左侧的视图筛选栏(model-selector-unified §1.2 / §1.6)。
  *
  * 格位由数据派生(见 `buildUnifiedRail`),这里只负责画:
- *   ★收藏 → 同引擎(仅会话内,图标 = 当前会话引擎的品牌 mark)→ 全部 → 各来源供应商。
- *
- * 只有 2 格(全部 + 单一供应商)时整条 rail 不渲染 —— 一个永远只有一个可选项的筛选器
- * 是纯噪音。
+ *   ★收藏 → 同引擎(仅会话内,图标 = 当前会话引擎的品牌 mark)→ ──分隔── → 全部 → 各来源。
+ * rail 常驻(2026-08-13 裁决),分隔线与设计稿 .rail-sep 同构:「个人钉的」与
+ * 「目录本身的视图」两段之间画一条 22px 细线。
  */
 export function UnifiedModelRail({
   items,
@@ -48,6 +47,8 @@ export function UnifiedModelRail({
       {items.map((item) => {
         const key = railItemKey(item);
         const isActive = activeKey === key;
+        // 设计稿 .rail-sep:「★/同引擎」与「全部/来源」两段之间的 22px 细线。
+        const separatorBefore = item.kind === 'all';
         const engineOption =
           item.kind === 'engine' ? agentOptionOf(engineOfAgentKind(item.agent)) : null;
         const label =
@@ -61,8 +62,11 @@ export function UnifiedModelRail({
                 ? t('newChat.modelSelector.unified.railAll')
                 : providerLabel(item.providerId);
         return (
+          <div key={key} className="contents">
+            {separatorBefore && (
+              <div aria-hidden className="my-[3px] w-[22px] border-t border-[var(--model-dropdown-border)]" />
+            )}
           <button
-            key={key}
             type="button"
             disabled={interactionDisabled}
             onClick={() => onSelect(item)}
@@ -84,12 +88,9 @@ export function UnifiedModelRail({
             )}
           >
             {item.kind === 'favorites' ? (
-              // 未选中时 ☆ 用金色描边点出「这是收藏」;选中时整格已反色,跟随 currentColor。
-              <Star
-                size={16}
-                fill={isActive ? 'currentColor' : 'none'}
-                className={isActive ? undefined : 'text-[var(--favorite-star)]'}
-              />
+              // ☆ 未激活与其它格同灰(hover 提亮)—— 常亮金色会在没进收藏视图时也
+              // 抢视线(2026-08-14 实机自查);激活时整格反色 + 实心星跟随 currentColor。
+              <Star size={16} fill={isActive ? 'currentColor' : 'none'} />
             ) : item.kind === 'engine' && engineOption ? (
               // 同引擎格用**当前会话引擎自己的品牌 mark**(规格 §1.6),用户一眼知道
               // 这个过滤器是按什么筛的。
@@ -100,6 +101,7 @@ export function UnifiedModelRail({
               <ProviderRailMark providerId={item.providerId} providers={providers} />
             ) : null}
           </button>
+          </div>
         );
       })}
     </div>

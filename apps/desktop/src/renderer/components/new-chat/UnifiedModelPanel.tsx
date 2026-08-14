@@ -21,6 +21,7 @@ import { useModelFavorites, type ModelFavoriteItem } from '@/state/modelFavorite
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
+import { MORPH_CONTENT_RESIZE_EVENT } from '@/components/ui/morph-popover';
 
 import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFlyout';
 // ModelSelector 反过来也 import 本文件 —— ESM 循环 import 在这里安全:两边用到的都是
@@ -330,11 +331,31 @@ export function UnifiedModelPanel({
     }
     const listRect = el.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
+    // 上界目标:行是所在组第一行时把**组标题**一起露出来(贴顶只见行不见组名,
+    // 像被裁了一刀 —— 2026-08-14 实机自查);否则给 8px 呼吸余量。下界恒 8px。
+    const group = row.closest('[role="group"]');
+    const header = group?.firstElementChild;
+    const isFirstRowOfGroup =
+      header instanceof HTMLElement && row.previousElementSibling === header;
+    const topBoundary = isFirstRowOfGroup
+      ? header.getBoundingClientRect().top - 4
+      : rowRect.top - 8;
+    // 上下两条余量约束装不进可视区(极矮面板)时按顶对齐一次并收工,防止上下修正
+    // 相互触发的振荡。
+    if (rowRect.bottom + 8 - topBoundary > el.clientHeight) {
+      const forced = Math.max(0, el.scrollTop + (topBoundary - listRect.top));
+      if (Math.abs(forced - el.scrollTop) > 1) {
+        suppressScrollDismissRef.current = true;
+        el.scrollTop = forced;
+      }
+      needsEnsureVisibleRef.current = false;
+      return;
+    }
     const delta =
-      rowRect.top < listRect.top
-        ? rowRect.top - listRect.top
-        : rowRect.bottom > listRect.bottom
-          ? rowRect.bottom - listRect.bottom
+      topBoundary < listRect.top
+        ? topBoundary - listRect.top
+        : rowRect.bottom > listRect.bottom - 8
+          ? rowRect.bottom - (listRect.bottom - 8)
           : 0;
     if (Math.abs(delta) > 1) {
       const next = Math.max(0, el.scrollTop + delta);
@@ -350,6 +371,10 @@ export function UnifiedModelPanel({
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
+    // 内容集合变了(切视图 / 搜索 / 数据刷新)→ 通知 morph 宿主重量一次面板尺寸:
+    // 增长方向被 min-h-0 钳制链挡住,宿主的 ResizeObserver 看不到(收缩才看得到),
+    // 不吱声的话切回大视图面板永远卡在小尺寸(2026-08-14 实机自查)。
+    el.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
     const raf = requestAnimationFrame(() => {
       const selectionKey = `${selected.providerId ?? ''}::${selected.modelId}::${selectedFavoriteUid ?? ''}`;
       const previous = previousSelectionRef.current;

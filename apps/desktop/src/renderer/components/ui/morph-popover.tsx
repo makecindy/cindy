@@ -48,6 +48,17 @@ import { cn } from '@/lib/utils';
  * 行高亮、i18n 全部由调用方提供。业务不进这里。
  */
 
+/**
+ * 内容侧主动请求重量的自定义事件名(从内容任意节点冒泡派发即可)。
+ *
+ * 为什么需要它:面板内容若被「不超过宿主高度」的钳制链约束(如统一模型选择器的
+ * min-h-0 弹性列),内容**增长**时元素尺寸被钳住不变,ResizeObserver 看不到任何
+ * 变化 —— 切到条目更多的视图后面板永远卡在小尺寸(2026-08-14 实机自查:xAI 视图
+ * 收缩到 243px,切回「全部」不再长回)。收缩能被 RO 看到,增长必须由内容侧吱声。
+ * 非 morph 宿主(Radix 分支)收不到此事件,无副作用。
+ */
+export const MORPH_CONTENT_RESIZE_EVENT = 'cindy:morph-content-resize';
+
 const MORPH_MS = 220;
 const MORPH_EASE = 'cubic-bezier(0.3, 0.9, 0.25, 1)';
 /** 面板停靠位与 chip 之间的间隙(对齐 Radix sideOffset 习惯) */
@@ -428,9 +439,21 @@ export function MorphPopover({
       });
     });
     ro.observe(content);
+    // 内容侧的显式重量请求(MORPH_CONTENT_RESIZE_EVENT):内容增长被钳制链挡住时
+    // RO 无事件,由内容自己吱声;与 RO 走同一条 settle 门 + rAF 合并。
+    const onResizeRequest = () => {
+      if (roRaf) return;
+      roRaf = requestAnimationFrame(() => {
+        roRaf = 0;
+        if (!settledRef.current) return;
+        syncPanelToContent();
+      });
+    };
+    content.addEventListener(MORPH_CONTENT_RESIZE_EVENT, onResizeRequest);
     return () => {
       if (roRaf) cancelAnimationFrame(roRaf);
       ro.disconnect();
+      content.removeEventListener(MORPH_CONTENT_RESIZE_EVENT, onResizeRequest);
     };
   }, [mounted, open, syncPanelToContent]);
 

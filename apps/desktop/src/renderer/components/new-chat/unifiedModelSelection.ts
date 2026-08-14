@@ -452,7 +452,11 @@ export function buildUnifiedListSections(args: {
       });
       continue;
     }
-    const isAuth = providerById.get(entry.providerId)?.auth?.method === 'oauth';
+    // 「授权登录」合并组只在多来源陈列的视图有意义;rail 已按单一来源过滤时,
+    // 组标题必须回答「我在看哪个来源」—— 显示该来源名,不再合并
+    // (2026-08-14 实机自查:点了 xAI 图标,列表标题却写「授权登录」,像没切换)。
+    const isAuth =
+      rail.kind !== 'provider' && providerById.get(entry.providerId)?.auth?.method === 'oauth';
     const key = isAuth ? 'auth' : `provider:${entry.providerId}`;
     let bucket = buckets.get(key);
     if (!bucket) {
