@@ -978,16 +978,22 @@ describe('anthropic-compat-proxy routingTransform', () => {
     const chatgpt = await startFakeUpstream((_i, _b, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); });
     upstreamClose = async () => { await gateway.close(); await chatgpt.close(); };
 
+    let transformProviderId: string | undefined;
     proxy = await createAnthropicCompatProxy({
       upstream: chatgpt.url,
-      transformRequest: [(body) => {
+      transformRequest: [(body, ctx) => {
+        transformProviderId = ctx.providerId;
         const request = body as { model?: string; transformed?: boolean };
         return { ...request, transformed: true, transformedForModel: request.model };
       }],
       routingTransform: (body) => {
         const model = (body as { model?: string }).model ?? '';
         return model === 'deepseek/deepseek-v4-pro'
-          ? { upstreamOverride: gateway.url, bodyModelOverride: 'codex/gpt-5.6-luna' }
+          ? {
+            upstreamOverride: gateway.url,
+            bodyModelOverride: 'codex/gpt-5.6-luna',
+            transformProviderId: 'xai',
+          }
           : null;
       },
     });
@@ -1001,6 +1007,7 @@ describe('anthropic-compat-proxy routingTransform', () => {
       transformed: true,
       transformedForModel: 'codex/gpt-5.6-luna',
     });
+    expect(transformProviderId).toBe('xai');
   });
 
   it('without routingTransform, always uses default upstream (backward compat)', async () => {

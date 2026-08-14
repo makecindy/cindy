@@ -641,6 +641,36 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('rejects an SSH image steer when the turn already ended', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const remoteSend = vi.fn(async () => {});
+    const remoteImageFallbackMessage = vi.fn(() => '[REMOTE_VISION_FALLBACK_UNSUPPORTED] Set a vision model first.');
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteImageFallbackMessage },
+      remoteCcQueryFactory: async () => ({ ...createFakeQuery(), send: remoteSend }) as never,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-ended-steer',
+      model: 'deepseek/deepseek-v4-pro',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+    const events = handle.events()[Symbol.asyncIterator]();
+
+    await expect(handle.steer({
+      type: 'user',
+      content: [{ type: 'image', path: path.join(workingDir, 'remote.png'), mimeType: 'image/png' }],
+    })).rejects.toThrow('No active Claude turn to steer');
+
+    expect(remoteSend).not.toHaveBeenCalled();
+    expect(remoteImageFallbackMessage).not.toHaveBeenCalled();
+    await expect(nextEvent(events)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
   it('warns when an SSH session receives a desktop-local image', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;

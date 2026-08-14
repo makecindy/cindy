@@ -5263,11 +5263,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (sendOpts?.signal?.aborted) {
           throw new Error('Claude steer cancelled before acceptance');
         }
-        if (blockUnsupportedRemoteVisionFallback(message.content, false)) return;
-        if (sendOpts?.logTitle !== undefined) lastSendTitle = sendOpts.logTitle;
         if (!turnInFlight) {
           throw new Error('No active Claude turn to steer');
         }
+        if (blockUnsupportedRemoteVisionFallback(message.content, false)) return;
+        if (sendOpts?.logTitle !== undefined) lastSendTitle = sendOpts.logTitle;
         log.debug('steer ▶ user message', {
           model: mutableModel,
           effort: mutableEffort,

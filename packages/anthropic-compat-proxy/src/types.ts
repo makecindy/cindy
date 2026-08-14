@@ -33,6 +33,12 @@ export interface RequestTransformCtx {
    * 避免 host 侧为判断路由去向而复刻整套路由逻辑。
    */
   readonly upstreamBase?: string;
+  /**
+   * 本次路由最终选定的供应商 id（若 routingTransform 提供）。当 `bodyModelOverride`
+   * 已把模型名改成上游裸 model id、无法再从 model 推断供应商时，兼容 transform 可据此
+   * 使用目标供应商的 wire 规则。未提供时保持既有的会话 / model 推断行为。
+   */
+  readonly providerId?: string;
 }
 
 /**
@@ -101,6 +107,11 @@ export interface RoutingDecision {
    * 下一轮主动 strip 看到的入站 model 对齐。
    */
   bodyModelOverride?: string;
+  /**
+   * 给随后 request transform 的最终供应商标识。仅影响 transform 上下文，不参与
+   * 出站路由或鉴权；典型用于「图片兜底切换到另一供应商」后仍正确做该供应商兼容改写。
+   */
+  transformProviderId?: string;
   /**
    * 本地 handler(见 LocalRequestHandler)。与上面几个转发字段**互斥**:设了 handler 时其余
    * 字段忽略、不发生任何上游转发。省略 = 转发语义,与本字段引入前字节级一致。

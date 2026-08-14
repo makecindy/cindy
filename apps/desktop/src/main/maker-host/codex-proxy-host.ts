@@ -1775,13 +1775,15 @@ function createXaiResponsesCompatTransform(): RequestTransform {
     const sessionId = sessionIdFromTransformCtx(ctx);
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
     const inferredProviderId =
-      explicitProviderId ?? (typeof body.model === 'string' ? inferProviderIdForModel(body.model, 'codex') : null);
+      ctx.providerId
+      ?? explicitProviderId
+      ?? (typeof body.model === 'string' ? inferProviderIdForModel(body.model, 'codex') : null);
     if (inferredProviderId !== 'xai') return null;
     // 与路由的 scope 门同源:xai 会话里非 xai/ 前缀的请求会被 resolveSessionRouteDecision
     // 放回默认路由(ChatGPT/网关),body 不能再按 xAI 语义改写(挪 instructions / 剥
     // reasoning 会破坏默认上游的请求),transform 是否生效必须与路由是否捕获一致。
     const wireModel = typeof body.model === 'string' ? body.model : undefined;
-    if (!providerRoutingServesWireModel('xai', 'codex', wireModel)) return null;
+    if (ctx.providerId !== 'xai' && !providerRoutingServesWireModel('xai', 'codex', wireModel)) return null;
     let changed = false;
     let current = moveInstructionsIntoInput(body);
     if (current) changed = true;
@@ -2548,7 +2550,7 @@ export function withCodexVisionFallback(
               providerId: fallbackProviderId,
               model: visionModel,
             });
-            return decision;
+            return codexVisionFallbackSetupReminderDecision();
           }
           const threadId = selectedThreadIdFromHeaders(ctx.headers);
           const localBridge = createLocalBridgeDecision(
@@ -2566,7 +2568,7 @@ export function withCodexVisionFallback(
             visionModel,
           ).then((resolved) => {
             if (!resolved) {
-              return decision;
+              return codexVisionFallbackSetupReminderDecision();
             }
             return {
               ...(resolved.decision ?? {}),
@@ -2575,6 +2577,7 @@ export function withCodexVisionFallback(
                 'codex',
                 visionModel,
               ),
+              transformProviderId: fallbackProviderId,
             };
           });
         });

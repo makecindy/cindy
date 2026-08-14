@@ -41,6 +41,7 @@ import {
 import { createResponsesHandler } from '@cindy/anthropic-responses-bridge';
 import { createResponsesChatHandler, type ChatBridgeCapabilities } from '@cindy/responses-chat-bridge';
 import { EventEmitter } from 'node:events';
+import { PassThrough, Readable } from 'node:stream';
 
 import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
@@ -153,37 +154,48 @@ function withVisionFallbackModel(body: unknown, model: string): unknown {
   return isPlainObject(body) ? { ...body, model } : body;
 }
 
-interface BufferedBridgeResponse extends EventEmitter {
+interface StreamingBridgeResponse extends EventEmitter {
   statusCode: number;
   headers: Record<string, string>;
   headersSent: boolean;
-  chunks: Buffer[];
-  writeHead(status: number, headers?: Record<string, string>): BufferedBridgeResponse;
+  stream: PassThrough;
+  headersReady: Promise<void>;
+  abort(): void;
+  writeHead(status: number, headers?: Record<string, string>): StreamingBridgeResponse;
   write(chunk: unknown): boolean;
   end(chunk?: unknown): void;
 }
 
-function createBufferedBridgeResponse(): BufferedBridgeResponse {
-  const response = new EventEmitter() as BufferedBridgeResponse;
+function createStreamingBridgeResponse(): StreamingBridgeResponse {
+  const response = new EventEmitter() as StreamingBridgeResponse;
+  let resolveHeadersReady: () => void = () => {};
   response.statusCode = 200;
   response.headers = {};
   response.headersSent = false;
-  response.chunks = [];
+  response.stream = new PassThrough();
+  response.headersReady = new Promise((resolve) => { resolveHeadersReady = resolve; });
   response.writeHead = (status, headers = {}) => {
     response.statusCode = status;
     response.headers = Object.fromEntries(
       Object.entries(headers).map(([name, value]) => [name.toLowerCase(), String(value)]),
     );
     response.headersSent = true;
+    resolveHeadersReady();
     return response;
   };
   response.write = (chunk) => {
-    response.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8'));
-    return true;
+    if (response.stream.writableEnded) return false;
+    return response.stream.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8'));
   };
   response.end = (chunk) => {
+    if (response.stream.writableEnded) return;
     if (chunk !== undefined) response.write(chunk);
+    if (!response.headersSent) response.writeHead(response.statusCode, response.headers);
+    response.stream.end();
     response.emit('finish');
+  };
+  response.abort = () => {
+    if (!response.stream.writableEnded) response.stream.end();
   };
   return response;
 }
@@ -252,7 +264,7 @@ function createVisionFallbackChatBridgeDecision(
     }],
     logger: log,
     fetchImpl: async (_url, init) => {
-      const response = createBufferedBridgeResponse();
+      const response = createStreamingBridgeResponse();
       let parsedBody: unknown;
       try {
         parsedBody = JSON.parse(String(init?.body ?? ''));
@@ -262,8 +274,31 @@ function createVisionFallbackChatBridgeDecision(
           headers: { 'content-type': 'application/json' },
         });
       }
-      await chatHandler.handle({ parsedBody, res: response as never });
-      return new Response(Buffer.concat(response.chunks), {
+      let rejectOnAbort: (reason: unknown) => void = () => {};
+      const abortPromise = new Promise<never>((_resolve, reject) => { rejectOnAbort = reject; });
+      const onAbort = () => {
+        response.emit('close');
+        response.abort();
+        rejectOnAbort(new DOMException('The operation was aborted', 'AbortError'));
+      };
+      if (init?.signal?.aborted) onAbort();
+      else init?.signal?.addEventListener('abort', onAbort, { once: true });
+
+      const completed = chatHandler.handle({ parsedBody, res: response as never }).catch((error) => {
+        if (init?.signal?.aborted) return;
+        log.warn('vision fallback chat bridge failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (!response.headersSent) {
+          response.writeHead(502, { 'content-type': 'application/json; charset=utf-8' });
+        }
+        response.end(JSON.stringify({ error: { message: 'vision fallback chat bridge failed' } }));
+      }).finally(() => {
+        init?.signal?.removeEventListener('abort', onAbort);
+      });
+      await Promise.race([response.headersReady, abortPromise]);
+      void completed;
+      return new Response(Readable.toWeb(response.stream) as ReadableStream, {
         status: response.statusCode,
         headers: response.headers,
       });

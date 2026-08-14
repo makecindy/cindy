@@ -320,6 +320,86 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
       expect(response.chunks.join('')).toContain('message_stop');
     },
   );
+
+  it('streams a chat vision fallback before completion and aborts it when the client disconnects', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'vision-chat-stream',
+        name: 'Vision Chat Stream',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://vision.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'vision-model', name: 'Vision Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'vision-key');
+    visionFallbackSettings.visionFallbackModel = 'vision-model';
+    visionFallbackSettings.visionFallbackProviderId = 'vision-chat-stream';
+    visionFallbackSettings.visionFallbackProviderIds = { 'claude-code': 'vision-chat-stream' };
+
+    let upstreamAborted = false;
+    let releaseUpstream: () => void = () => {};
+    const keepOpen = new Promise<void>((resolve) => { releaseUpstream = resolve; });
+    const encoder = new TextEncoder();
+    outboundFetch.mockImplementationOnce(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(sse([
+            { id: 'chat-r', model: 'vision-model', choices: [{ delta: { content: 'seen' }, finish_reason: null }] },
+          ])));
+          signal?.addEventListener('abort', () => {
+            upstreamAborted = true;
+            controller.error(new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+          void keepOpen.then(() => {
+            if (upstreamAborted) return;
+            controller.enqueue(encoder.encode(sse([
+              { id: 'chat-r', model: 'vision-model', choices: [{ delta: {}, finish_reason: 'stop' }] },
+            ])));
+            controller.close();
+          });
+        },
+      }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    });
+
+    try {
+      const decision = await Promise.resolve(createModelRoutingTransform()(
+        {
+          model: 'deepseek/deepseek-v4-pro',
+          messages: [{
+            role: 'user',
+            content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
+          }],
+          stream: true,
+        },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
+      ));
+      const response = bridgeResponse();
+      const forwarding = decision?.localHandler?.({
+        parsedBody: {
+          model: 'deepseek/deepseek-v4-pro',
+          messages: [{
+            role: 'user',
+            content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
+          }],
+          stream: true,
+        },
+        ctx: ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
+        res: response,
+      } as never);
+
+      await vi.waitFor(() => expect(response.chunks.join('')).toContain('seen'));
+      response.emit('close');
+      await vi.waitFor(() => expect(upstreamAborted).toBe(true));
+      await forwarding;
+    } finally {
+      releaseUpstream();
+    }
+  });
 });
 
 describe('pi routingTransform — xdt session header selects the Pi provider route', () => {

@@ -433,6 +433,7 @@ describe('withCodexVisionFallback', () => {
         upstreamOverride: 'https://vision.example/v1',
         headerOverride: { authorization: 'Bearer vision-key' },
         bodyModelOverride: 'vision-model',
+        transformProviderId: 'vision-provider',
       }));
     } finally {
       mockState.visionFallbackSettings = {
@@ -442,6 +443,34 @@ describe('withCodexVisionFallback', () => {
       };
       setCustomProviderKeyReader(() => null);
       setCustomProviders([]);
+    }
+  });
+
+  it('shows the setup reminder instead of sending an image back to an unresolved text-only route', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.visionFallbackSettings = {
+      visionFallbackEnabled: true,
+      visionFallbackModel: 'vision-model',
+      visionFallbackProviderId: 'missing-provider',
+    };
+
+    try {
+      const decision = await host.withCodexVisionFallback(() => ({
+        upstreamOverride: 'https://text-only.example/v1',
+      }))(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-unresolved-provider'));
+
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      const response = { writeHead: vi.fn(), end: vi.fn() };
+      await decision?.localHandler?.({ res: response } as never);
+      expect(JSON.parse(response.end.mock.calls[0][0])).toMatchObject({
+        error: { code: 'cindy_vision_fallback_not_configured' },
+      });
+    } finally {
+      mockState.visionFallbackSettings = {
+        visionFallbackEnabled: true,
+        visionFallbackModel: null,
+        visionFallbackProviderId: null,
+      };
     }
   });
 
@@ -4092,6 +4121,42 @@ describe('codex proxy host', () => {
       input: [
         { type: 'message', role: 'system', content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
         { type: 'message', role: 'user', content: 'hello' },
+      ],
+    });
+  });
+
+  it('normalizes a bare xAI fallback model when routing supplies the target provider', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'grok-4.3',
+      instructions: 'BASE_PROMPT',
+      tools: [{ type: 'namespace', name: 'multi_agent_v1', tools: [] }],
+      input: [{ role: 'user', content: 'look at this image' }],
+    };
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: {},
+      providerId: 'xai',
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toMatchObject({
+      model: 'grok-4.3',
+      tools: [{ type: 'x_search' }],
+      input: [
+        { type: 'message', role: 'system', content: 'BASE_PROMPT' },
+        { type: 'message', role: 'user', content: 'look at this image' },
       ],
     });
   });

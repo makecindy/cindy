@@ -1780,6 +1780,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const transformCtx: RequestTransformCtx = {
       ...requestCtx,
       upstreamBase: formatUpstreamBase(route.target),
+      providerId: decision?.transformProviderId,
     };
     const transformed = runTransforms(bodyForTransforms, contentType, transforms, transformCtx, logger);
     const forwardBody = transformed ?? bodyForTransforms;
