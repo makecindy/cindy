@@ -392,6 +392,8 @@ export interface AgentInputCoordinatorDeps {
   onUserMessagePersisting?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /** Called after the durable user row exists; ownership of staged attachments may be released. */
   onUserMessagePersisted?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  /** Called only after the durable row also survives the current clear/rewind generation. */
+  onUserMessageQueryable?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
    * Called when the user-row write failed. A queued turn remains retryable;
    * an accepted steer does not, because replay could duplicate model input.
@@ -3300,6 +3302,7 @@ export class AgentInputCoordinator {
                 active.persisted = true;
                 active.persisting = false;
                 active.dispatchLifecycle = 'awaiting-dispatch-hooks';
+                this.notifyUserMessageQueryable(sessionId, head);
                 // 跨过 DB 持久化边界即刻收窄快照:此后崩溃属 interrupted-turn
                 // 辖区,若等到下一次 emit(turn done)才写,长 turn 内崩溃会把
                 // 已送达的消息二次恢复(issue #761)。
@@ -4592,6 +4595,18 @@ export class AgentInputCoordinator {
     }
   }
 
+  private notifyUserMessageQueryable(sessionId: string, item: AgentInputQueuedMessage): void {
+    try {
+      this.deps.onUserMessageQueryable?.(sessionId, item);
+    } catch (err) {
+      log.warn('onUserMessageQueryable failed', {
+        sessionId,
+        clientId: item.clientId,
+        error: errorMessage(err),
+      });
+    }
+  }
+
   private notifyUserMessagePersisting(sessionId: string, item: AgentInputQueuedMessage): void {
     try {
       this.deps.onUserMessagePersisting?.(sessionId, item);
@@ -4697,6 +4712,7 @@ export class AgentInputCoordinator {
       if (!this.isTurnGenerationCurrent(sessionId, active)) return 'stale';
       active.persisted = true;
       active.persisting = false;
+      this.notifyUserMessageQueryable(sessionId, item);
       // 同 drain onPersisted:steer 消息落库后立即收窄快照,避免长 turn 内崩溃二次恢复。
       this.maybePersistQueueSnapshot(sessionId);
       this.settlePendingTerminalEventAfterPersist(sessionId, active);

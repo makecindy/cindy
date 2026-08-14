@@ -1493,7 +1493,7 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
       target: unknown,
       ...rest: unknown[]
     ) => {
-      if (typeof target === 'string' && target === lock) {
+      if (target === lock) {
         // 不是 EEXIST:锁**建不出来**(EMFILE / 控制目录被 ACL 挡住)。
         throw Object.assign(new Error('EMFILE'), { code: 'EMFILE' });
       }

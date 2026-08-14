@@ -90,12 +90,16 @@ export async function handleGhostOauthRequest(args: {
   networkHosts?: readonly string[];
   manager: GhostOauthEndpointManager;
   ghostId: string;
+  /** Serialize credential/account persistence with package OAuth migration. */
+  withMutationLock?: <T>(ghostId: string, task: () => Promise<T> | T) => Promise<T>;
   /** Successful semantic persistence only; never receives credential values. */
   onChanged?: (secretKey: string) => void;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }): Promise<GhostOauthRequestOutcome> {
   const { method, pathname, readBodyText, oauthSecrets, networkHosts, manager, ghostId, log } =
     args;
+  const runMutation = <T>(task: () => Promise<T> | T): Promise<T> =>
+    args.withMutationLock?.(ghostId, task) ?? Promise.resolve(task());
   const notifyChanged = (secretKey: string): void => {
     try {
       args.onChanged?.(secretKey);
@@ -175,7 +179,8 @@ export async function handleGhostOauthRequest(args: {
         clientSecret = trimmed.length > 0 ? trimmed : undefined;
       }
       try {
-        if (!manager.setClientConfig(ghostId, secretKey, clientId, clientSecret)) {
+        if (!(await runMutation(() =>
+          manager.setClientConfig(ghostId, secretKey, clientId, clientSecret)))) {
           return { status: 500 };
         }
         notifyChanged(secretKey);
@@ -187,7 +192,7 @@ export async function handleGhostOauthRequest(args: {
     }
     if (method === 'DELETE') {
       try {
-        manager.clearClientConfig(ghostId, secretKey);
+        await runMutation(() => manager.clearClientConfig(ghostId, secretKey));
         notifyChanged(secretKey);
         return { status: 204 };
       } catch (err) {
@@ -295,11 +300,8 @@ export async function handleGhostOauthRequest(args: {
       scopes.push(scope);
     }
     try {
-      const stored = manager.reportInsufficientScopes(
-        ghostId,
-        secretKey,
-        scopes,
-        decl.scopes ?? [],
+      const stored = await runMutation(() =>
+        manager.reportInsufficientScopes(ghostId, secretKey, scopes, decl.scopes ?? []),
       );
       if (stored === false) return { status: 500 };
       // 证据未变时不广播:插件在用户重连前会反复撞同一权限错误并 fire-and-forget
@@ -317,7 +319,7 @@ export async function handleGhostOauthRequest(args: {
     const accountId = segments[2];
     if (!accountId) return { status: 404 };
     try {
-      manager.disconnectAccount(ghostId, secretKey, accountId);
+      await runMutation(() => manager.disconnectAccount(ghostId, secretKey, accountId));
       notifyChanged(secretKey);
       return { status: 204 };
     } catch (err) {
@@ -333,7 +335,9 @@ export async function handleGhostOauthRequest(args: {
     const accountId = parsed.body.accountId;
     if (typeof accountId !== 'string' || accountId.length === 0) return { status: 400 };
     try {
-      if (!manager.setDefaultAccount(ghostId, secretKey, accountId)) return { status: 404 };
+      if (!(await runMutation(() => manager.setDefaultAccount(ghostId, secretKey, accountId)))) {
+        return { status: 404 };
+      }
       notifyChanged(secretKey);
       return { status: 204 };
     } catch (err) {

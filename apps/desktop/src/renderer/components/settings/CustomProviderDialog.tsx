@@ -1584,6 +1584,8 @@ export function CustomProviderDialog({
           !saving &&
           !runtimeFill
         ) {
+          event.preventDefault();
+          event.stopPropagation();
           dismissTopmostLayer();
         }
       }}

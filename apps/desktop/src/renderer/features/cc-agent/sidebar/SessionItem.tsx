@@ -41,7 +41,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { WorktreeBadge } from '@/components/sidebar/WorktreeBadge';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { SessionRenameInput } from '../SessionRenameInput';
-import { usePrRefsForSession } from '@/contexts/PrRefsContext';
+import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
 import { SessionTooltip } from './SessionTooltip';
 import {
   DropdownMenu,
@@ -63,7 +63,8 @@ import {
 import { toast } from '@/lib/toast';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
-import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
+import { buildSessionInfoPieces, SessionInfoMeta } from './SessionInfoMeta';
+import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { highlightSegments } from '../lib/highlightSegments';
 import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
 import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
@@ -309,6 +310,17 @@ export const SessionItem = memo(function SessionItem({
 }: SessionItemProps) {
   const { t } = useTranslation();
   const prRefs = usePrRefsForSession(session.id);
+  // 任务信息复选(C 期):行右侧信息槽内容,与整理菜单同源共享状态。
+  const { fields: taskInfoFields } = useTaskInfoFields();
+  // 勾选 pr 且行渲染时注册为 PR 消费者:注册即拉取(远程会话含引用补拉),
+  // 此后 Provider 周期/聚焦统一刷新,失败自愈(usePrActions 的 value 恒定)。
+  const { registerPrConsumer } = usePrActions();
+  const wantsPrInfo = taskInfoFields.includes('pr');
+  const remoteDeviceId = session.deviceLinkDeviceId;
+  useEffect(() => {
+    if (!wantsPrInfo) return undefined;
+    return registerPrConsumer(session.id, remoteDeviceId);
+  }, [wantsPrInfo, remoteDeviceId, session.id, registerPrConsumer]);
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅(性能不变量第 2 条),
   // 非按住态恒为 null,不惊动 memo。
   const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
@@ -320,6 +332,16 @@ export const SessionItem = memo(function SessionItem({
     session.userSendAt && session.userSendAt > session.updatedAt
       ? session.userSendAt
       : session.updatedAt;
+  // PR 信息(C' 期):勾选且有引用时取最新一条(prRefs 已按 lastSeenAt 降序)。
+  const infoPrRef = taskInfoFields.includes('pr') ? prRefs[0] : undefined;
+  // 传 hasPrRef 让 PR 参与「按勾选顺序」排列(否则它恒在最前)。
+  const infoPieces = buildSessionInfoPieces(
+    session,
+    taskInfoFields,
+    activityIso,
+    t,
+    infoPrRef != null,
+  );
   // 右侧状态指示器五档优先级(高→低),色表全端统一(侧栏 / 卡片 / 灵动岛同一张表):
   //   1. error(出错终止 / 定时任务失败未读)→ 红点   —— 红专职表示"坏了"
   //   2. awaiting(等待回复/权限/计划审阅)→ TapTap 蓝点 —— "在等你",邀请而非告警
@@ -818,7 +840,13 @@ export const SessionItem = memo(function SessionItem({
         }
       }}
       onContextMenu={(e) => {
-        if (isEditing) return;
+        if (isEditing) {
+          // 重命名输入框上的右键交给系统的可编辑菜单(剪切/复制/粘贴,main 侧
+          // selection-context-menu),但必须拦下冒泡——否则会穿透到滚动容器的
+          // 空白处右键 handler,整理菜单和原生菜单叠着弹(2026-08-13 实机回归)。
+          e.stopPropagation();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         prefetchRemovalPreflight();
@@ -974,16 +1002,9 @@ export const SessionItem = memo(function SessionItem({
             {showRightStatus ? (
               <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
             ) : (
-              <time
-                dateTime={activityIso}
-                title={formatSidebarTimeAbsolute(activityIso)}
-                className={cn(
-                  'min-w-0 truncate text-right text-xs font-medium tabular-nums',
-                  isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
-                )}
-              >
-                {formatSidebarTime(activityIso, t)}
-              </time>
+              // 任务信息复选(C 期):按用户勾选拼装 pr / tokens / cost / time;默认仅
+              // time,与旧时间槽渲染等价。全不选 → 槽位留空(min-w-14 仍保住 action 锚点)。
+              <SessionInfoMeta pieces={infoPieces} prRef={infoPrRef} isActive={isActive} />
             )}
           </div>
 

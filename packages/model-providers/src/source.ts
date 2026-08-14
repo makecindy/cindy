@@ -1,8 +1,8 @@
 /**
  * 目录源解析与加载（纯逻辑，IO 由 host 注入，零 Electron / node 依赖）。
  *
- *   - release：优先从 Model Access 公共匿名接口拉取完整 Catalog；失败时回退旧 OSS 目录。
- *   - dev：直接读仓库本地文件（`localPath`），改了即时生效、默认不联网。
+ *   - release / dev：优先从 Model Access 公共匿名接口拉取完整 Catalog；失败时回退旧 OSS 目录。
+ *   - dev：仓库本地文件（`localPath`）优先，改了即时生效；否则同样走远端。
  *   - 兜底优先级：本地(dev) → 公共 API → 上次有效快照(LKG) → 旧 OSS → 内置 bundled。
  *
  * 目录每进程加载一次、存内存、**无 TTL**（由 host 的 active-catalog 在启动期 await 一次）。

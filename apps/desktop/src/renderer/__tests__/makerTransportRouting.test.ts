@@ -24,6 +24,7 @@ function stubElectron() {
     closeSession: vi.fn(),
     compactSession: vi.fn().mockResolvedValue({ tokensBefore: 100, estimatedTokensAfter: 20 }),
     enableOrca: vi.fn(),
+    dispatchOrcaUiAssignment: vi.fn(),
     disableOrca: vi.fn(),
     regenerateSessionTitle: vi.fn().mockResolvedValue({ title: 'local title' }),
     plugins: { getState: vi.fn().mockResolvedValue({ effectiveEnabled: true }) },
@@ -73,6 +74,7 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     api.closeSession('rs');
     api.compactSession('rs', 'focus on API design');
     api.enableOrca('rs', { workerAgent: 'codex' });
+    api.dispatchOrcaUiAssignment('rs', 'worker-1', 'Review this PR', 123, true);
     api.disableOrca('rs');
     api.input.compact(
       'rs',
@@ -95,6 +97,13 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session:enable-orca', [
       'rs',
       { workerAgent: 'codex' },
+    ]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:worker:dispatch-ui-assignment', [
+      'rs',
+      'worker-1',
+      'Review this PR',
+      123,
+      true,
     ]);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session:disable-orca', ['rs']);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:input:compact', [

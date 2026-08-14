@@ -2,11 +2,9 @@ import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 
 // Migration companion scripts intentionally use CommonJS so the runtime loader can replay them.
-const migration0081 =
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  require('../../../../drizzle/scripts/0081_preserve_gateway_currency.ts') as {
-    run(db: Database.Database): void;
-  };
+const { default: migration0081 } = (await import(
+  '../../../../drizzle/scripts/0081_preserve_gateway_currency'
+)) as { default: { run(db: Database.Database): void } };
 
 const RATE = 6.7;
 

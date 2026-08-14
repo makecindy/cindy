@@ -899,11 +899,23 @@ export class Session {
       // The request may have queued before close() but reached the transport only after
       // shutdown started. Re-check at the serialized side-effect boundary.
       this.ensureActive();
+      const fromMode = this.permissionModeStateValue.mode;
       await this.handle.setPermissionMode!(mode);
       this.permissionModeStateValue = {
         mode,
         generation: this.permissionModeStateValue.generation + 1,
       };
+      // 轮 40-w4-t8 HIGH:权限档切换(尤其放宽到 Full access)是安全边界变更,
+      // 成功提交后必须审计 —— 事后能复盘谁/何时/从哪切到哪。
+      this.logger.info('audit: session permission mode changed', {
+        operation: 'session_permission_mode_change',
+        sessionId: this.id,
+        agentKind: this.agentKind,
+        fromMode,
+        toMode: mode,
+        generation: this.permissionModeStateValue.generation,
+        widenedToBypass: mode === 'bypassPermissions' && fromMode !== 'bypassPermissions',
+      });
       return this.permissionModeState;
     });
     const tracked = operation.finally(() => {

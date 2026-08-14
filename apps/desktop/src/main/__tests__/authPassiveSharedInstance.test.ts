@@ -209,6 +209,30 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(body).toContain('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);');
   });
 
+  it('passive 登录不得在 owner gate 前消费共享 receipt 或 relogin marker', () => {
+    const acceptStart = authSource.indexOf('async function acceptLoginOutcome(');
+    const acceptEnd = authSource.indexOf('\n}\n\nasync function runLoginAction', acceptStart);
+    const acceptBody = authSource.slice(acceptStart, acceptEnd);
+    const acceptGuard = acceptBody.indexOf('if (!isPassiveSharedUserDataInstance()) {');
+    expect(acceptGuard).toBeGreaterThan(-1);
+    expect(acceptBody.indexOf('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);')).toBeGreaterThan(
+      acceptGuard,
+    );
+
+    const completeStart = authSource.indexOf('async function completeLogin(');
+    const completeEnd = authSource.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
+    const completeBody = authSource.slice(completeStart, completeEnd);
+    const completeGuard = completeBody.indexOf('if (!isPassiveSharedUserDataInstance()) {');
+    expect(completeGuard).toBeGreaterThan(-1);
+    expect(completeBody.indexOf('removeSafe(LEGACY_REFRESH_TOKEN_KEY);')).toBeGreaterThan(
+      completeGuard,
+    );
+    expect(completeBody.indexOf('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);')).toBeGreaterThan(
+      completeGuard,
+    );
+    expect(completeBody.indexOf('clearReloginFlag();')).toBeGreaterThan(completeGuard);
+  });
+
   it('冷启动确定性失效:passive 不删盘,非 passive 也只做 compare-and-delete', () => {
     const start = authSource.indexOf("if (action.kind === 'definitive-failure') {");
     const end = authSource.indexOf("} else if (action.kind === 'replacement-retry') {", start);

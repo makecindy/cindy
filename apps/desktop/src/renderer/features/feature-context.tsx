@@ -53,6 +53,15 @@ interface FeatureSidebarSlotContextValue {
   setSidebarEnabled: Dispatch<SetStateAction<boolean>>;
   /** 当前 Feature 是否需要 Sidebar */
   sidebarEnabled: boolean;
+  /**
+   * 当前 Feature 是否自行在其滚动区里渲染顶部导航的「可滚动段」(自动任务 / 插件 /
+   * 搜索 / 远程机器)。true 时 Shell 顶部只保留固定的「新建」行,其余交给 Feature
+   * ——任务列表页据此让这些行随列表一起滚走(2026-08-12 用户裁决,对齐 Codex)。
+   * 默认 false:没有长列表的视图(插件页等)仍由 Shell 整块渲染五行。
+   */
+  ownsTopNavScrollableRows: boolean;
+  /** 内部 setter,Feature 经 useOwnTopNavScrollableRows 声明。 */
+  setOwnsTopNavScrollableRows: Dispatch<SetStateAction<boolean>>;
 }
 
 const FeatureSidebarSlotContext = createContext<FeatureSidebarSlotContextValue | null>(null);
@@ -73,6 +82,7 @@ export function FeatureSidebarSlotProvider({
   const [upperContent, setUpperContent] = useState<ReactNode>(null);
   const [headerContent, setHeaderContent] = useState<ReactNode>(null);
   const [sidebarEnabled, setSidebarEnabled] = useState(true);
+  const [ownsTopNavScrollableRows, setOwnsTopNavScrollableRows] = useState(false);
 
   const value = useMemo<FeatureSidebarSlotContextValue>(
     () => ({
@@ -83,8 +93,10 @@ export function FeatureSidebarSlotProvider({
       isCollapsed,
       sidebarEnabled,
       setSidebarEnabled,
+      ownsTopNavScrollableRows,
+      setOwnsTopNavScrollableRows,
     }),
-    [upperContent, headerContent, isCollapsed, sidebarEnabled],
+    [upperContent, headerContent, isCollapsed, sidebarEnabled, ownsTopNavScrollableRows],
   );
 
   return (
@@ -101,9 +113,7 @@ export function FeatureSidebarSlotProvider({
 export function useFeatureSidebarUpper(): ReactNode {
   const ctx = useContext(FeatureSidebarSlotContext);
   if (!ctx) {
-    throw new Error(
-      'useFeatureSidebarUpper must be used inside <FeatureSidebarSlotProvider>',
-    );
+    throw new Error('useFeatureSidebarUpper must be used inside <FeatureSidebarSlotProvider>');
   }
   return ctx.upperContent;
 }
@@ -114,9 +124,7 @@ export function useFeatureSidebarUpper(): ReactNode {
 export function useSidebarCollapsedState(): boolean {
   const ctx = useContext(FeatureSidebarSlotContext);
   if (!ctx) {
-    throw new Error(
-      'useSidebarCollapsedState must be used inside <FeatureSidebarSlotProvider>',
-    );
+    throw new Error('useSidebarCollapsedState must be used inside <FeatureSidebarSlotProvider>');
   }
   return ctx.isCollapsed;
 }
@@ -127,9 +135,7 @@ export function useSidebarCollapsedState(): boolean {
 export function useFeatureSidebarEnabled(): boolean {
   const ctx = useContext(FeatureSidebarSlotContext);
   if (!ctx) {
-    throw new Error(
-      'useFeatureSidebarEnabled must be used inside <FeatureSidebarSlotProvider>',
-    );
+    throw new Error('useFeatureSidebarEnabled must be used inside <FeatureSidebarSlotProvider>');
   }
   return ctx.sidebarEnabled;
 }
@@ -144,9 +150,7 @@ export function useFeatureSidebarEnabled(): boolean {
 export function useRegisterSidebarUpper(node: ReactNode): void {
   const ctx = useContext(FeatureSidebarSlotContext);
   if (!ctx) {
-    throw new Error(
-      'useRegisterSidebarUpper must be used inside <FeatureSidebarSlotProvider>',
-    );
+    throw new Error('useRegisterSidebarUpper must be used inside <FeatureSidebarSlotProvider>');
   }
   const { setUpperContent } = ctx;
 
@@ -159,15 +163,40 @@ export function useRegisterSidebarUpper(node: ReactNode): void {
 }
 
 /**
+ * Feature 声明「顶部导航的可滚动段由我在自己的滚动区里渲染」。
+ * 与 useRegisterSidebarUpper 同款语义:卸载时**不**复位——沿用「保持最后一个
+ * Feature 的声明」,避免导航到 /settings 等非 Feature 路由时顶部导航闪一下变形。
+ * 下一个 Feature 挂载时自然覆盖(不接管的 Feature 传 false)。
+ */
+export function useOwnTopNavScrollableRows(owns: boolean): void {
+  const ctx = useContext(FeatureSidebarSlotContext);
+  if (!ctx) {
+    throw new Error('useOwnTopNavScrollableRows must be used inside <FeatureSidebarSlotProvider>');
+  }
+  const { setOwnsTopNavScrollableRows } = ctx;
+
+  useLayoutEffect(() => {
+    setOwnsTopNavScrollableRows(owns);
+  }, [owns, setOwnsTopNavScrollableRows]);
+}
+
+/** Sidebar Shell 读取:顶部导航是否只渲染固定段(可滚动段已被 Feature 接管)。 */
+export function useOwnsTopNavScrollableRows(): boolean {
+  const ctx = useContext(FeatureSidebarSlotContext);
+  if (!ctx) {
+    throw new Error('useOwnsTopNavScrollableRows must be used inside <FeatureSidebarSlotProvider>');
+  }
+  return ctx.ownsTopNavScrollableRows;
+}
+
+/**
  * ContentHeader Shell 读取当前要渲染的中部内容。
  * 只读，不包含 setter。
  */
 export function useFeatureContentHeader(): ReactNode {
   const ctx = useContext(FeatureSidebarSlotContext);
   if (!ctx) {
-    throw new Error(
-      'useFeatureContentHeader must be used inside <FeatureSidebarSlotProvider>',
-    );
+    throw new Error('useFeatureContentHeader must be used inside <FeatureSidebarSlotProvider>');
   }
   return ctx.headerContent;
 }
@@ -184,9 +213,7 @@ export function useFeatureContentHeader(): ReactNode {
 export function useRegisterContentHeader(node: ReactNode): void {
   const ctx = useContext(FeatureSidebarSlotContext);
   if (!ctx) {
-    throw new Error(
-      'useRegisterContentHeader must be used inside <FeatureSidebarSlotProvider>',
-    );
+    throw new Error('useRegisterContentHeader must be used inside <FeatureSidebarSlotProvider>');
   }
   const { setHeaderContent } = ctx;
 
@@ -206,9 +233,7 @@ export function useRegisterContentHeader(node: ReactNode): void {
 export function useSetSidebarEnabled(enabled: boolean): void {
   const ctx = useContext(FeatureSidebarSlotContext);
   if (!ctx) {
-    throw new Error(
-      'useSetSidebarEnabled must be used inside <FeatureSidebarSlotProvider>',
-    );
+    throw new Error('useSetSidebarEnabled must be used inside <FeatureSidebarSlotProvider>');
   }
   const { setSidebarEnabled } = ctx;
 

@@ -207,6 +207,7 @@ import {
 } from './messageNavRailModel';
 import { resolveUserDisplayText } from './userMessageDisplayText';
 import { detectScrollAnchoringApplied } from './scrollAnchoringDetect';
+import { resolveMessageStreamIndicatorBottomOffset } from './messageStreamIndicatorPosition';
 import {
   decideAutoFillAction,
   decideUserIntentFillAction,
@@ -267,6 +268,8 @@ interface MessageStreamProps {
   hasMoreMessages?: boolean;
   /** Dynamic bottom padding (px) to reserve space for the input overlay */
   bottomPadding?: number;
+  /** Distance from the chat viewport bottom to the visible composer stack top. */
+  composerStackTopOffset?: number;
   /** Content width — shared with the input overlay so chat stream + input
    *  box stay horizontally aligned (same width, same center, symmetric
    *  padding when the main area is compressed). */
@@ -2536,6 +2539,7 @@ export function MessageStream({
   isLoadingMore,
   hasMoreMessages,
   bottomPadding,
+  composerStackTopOffset,
   contentWidth,
   focusMessageClientId,
   focusMessageRequestId,
@@ -4235,13 +4239,13 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // chip 垂直位置 — 用户要求贴在"Generating..." RunningStatusBar 那一行。
-  // overlay 内部从下到上是:input box + 上方 10px gap + RunningStatusBar(约 28px)+
-  // 32px 渐变蒙层。把 chip 挪进 overlay 内、center 大致对齐 status bar center,
-  // 经验值 overlayHeight - 56(原 -60,2026-05-13 用户反馈再往上 4px)。
-  // Math.max 兜底防极小 overlay 时 chip 跑出容器。
+  // chip 垂直位置：优先使用父层实测的输入框卡片顶边，避免 RunningStatusBar
+  // 出现 / 收起改变 overlay 总高度后，把按钮带进输入框。旧调用方保留历史兜底。
   const resolvedBottomPadding = bottomPadding ?? 200;
-  const indicatorBottomOffset = Math.max(resolvedBottomPadding - 56, 12);
+  const indicatorBottomOffset = resolveMessageStreamIndicatorBottomOffset({
+    bottomPadding,
+    composerStackTopOffset,
+  });
 
   // 「提及 → 兑现」关联(方案 2):从会话历史现算,软提示卡据此升级为召唤卡。
   // 引用缓存:内容不变时复用上一个 Map 引用——UserMessage 顶层订阅该
@@ -4587,7 +4591,7 @@ export function MessageStream({
 
             {/* F1 / F3: 新消息悬浮提示——挂在 scrollRef 的 relative wrapper 内部，
            与滚动容器平级。visible 由 `!isNearBottom && unreadCount > 0` 双重
-           守护；bottomOffset 直接复用 bottomPadding（overlayHeight）+ 12。 */}
+           守护；bottomOffset 让按钮位于输入框上边缘上方约 6px。 */}
             <NewMessageIndicator
               visible={!isNearBottom && unreadCount > 0}
               count={unreadCount}

@@ -812,6 +812,7 @@ function makeInstalledGhost(id: string): InstalledGhost {
     } as InstalledGhost['manifest'],
     dir: '/tmp/fake-install-dir',
     enabled: true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
   };
 }
 
