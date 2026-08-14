@@ -96,16 +96,17 @@ export function shouldEnableGhostPanelAgentBridge(
   return slots.includes('agent') && isGhostPanelAgentEntry(src, panelHtml, settingsHtml);
 }
 
-/** Agent preload 跟随 Guest 生命周期，因此 Agent Guest 只允许留在唯一 panel 入口。 */
-export function isGhostPanelNavigationAllowed(
+/** 只在 Guest 当前仍处于唯一 panel 入口时保留 Main sender 登记。 */
+export function shouldRegisterGhostPanelAgentSender(
   url: string,
   ghostId: string,
-  agentBridge: boolean,
   panelHtml?: string,
   settingsHtml?: string,
 ): boolean {
-  if (classifyGhostPanelNavigation(url, ghostId) !== 'allow') return false;
-  return !agentBridge || isGhostPanelAgentEntry(url, panelHtml, settingsHtml);
+  return (
+    classifyGhostPanelNavigation(url, ghostId) === 'allow' &&
+    isGhostPanelAgentEntry(url, panelHtml, settingsHtml)
+  );
 }
 
 /**
@@ -763,9 +764,17 @@ export function installWebviewHardener(): void {
         // 面板错误接管态负责用户侧收尾)。
         registerGhostWebContents(guestContents.id);
         if (agentBridge) {
-          registerGhostPanelWebContents(guestContents.id, {
+          const panelSenderContext = {
             ghostId,
             hostWebContentsId: contents.id,
+          };
+          registerGhostPanelWebContents(guestContents.id, panelSenderContext);
+          guestContents.on('did-navigate', (_event, url) => {
+            if (shouldRegisterGhostPanelAgentSender(url, ghostId, panelHtml, settingsHtml)) {
+              registerGhostPanelWebContents(guestContents.id, panelSenderContext);
+            } else {
+              unregisterGhostPanelWebContents(guestContents.id);
+            }
           });
           guestContents.once('destroyed', () => {
             unregisterGhostPanelWebContents(guestContents.id);
@@ -778,15 +787,15 @@ export function installWebviewHardener(): void {
         guestContents.setWindowOpenHandler(() => ({ action: 'deny' }));
         guestContents.on('will-navigate', (event, url) => {
           const nav = classifyGhostPanelNavigation(url, ghostId);
-          // Agent preload 与 WebContents 同寿命；一旦允许它从 panel.html 导航到
-          // settingsHtml，同一个 Guest 仍会保留 bridge。Agent 面板因此锁死在
-          // 唯一声明的 panel 入口（query/hash 不影响 pathname 比对）；preview / external
-          // 本来就会在下方 preventDefault 后交给宿主代办，仍可照常使用。
-          if (isGhostPanelNavigationAllowed(url, ghostId, agentBridge, panelHtml, settingsHtml)) {
-            return;
-          }
           if (nav === 'allow') {
-            event.preventDefault();
+            // 保留存量多页面面板的同源导航，但离开唯一 panel 入口前立即
+            // 撤销 Main sender 身份；导航回 panel 后由 did-navigate 重新登记。
+            if (
+              agentBridge &&
+              !shouldRegisterGhostPanelAgentSender(url, ghostId, panelHtml, settingsHtml)
+            ) {
+              unregisterGhostPanelWebContents(guestContents.id);
+            }
             return;
           }
           event.preventDefault();

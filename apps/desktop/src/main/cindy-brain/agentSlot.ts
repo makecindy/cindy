@@ -139,16 +139,20 @@ export class GhostAgentSlot {
       expiresAt: this.now() + TOKEN_TTL_MS,
       surface,
     });
-    let sessions = this.associatedSessions.get(ghostId);
-    if (!sessions) {
-      sessions = new Set<string>();
-      this.associatedSessions.set(ghostId, sessions);
+    // 只有存量卡片点击建立 agent.background 会话关联。面板票据每次
+    // 都经 Host 确认，不得把单次同意升级为后续无确认的后台访问。
+    if (surface === 'card') {
+      let sessions = this.associatedSessions.get(ghostId);
+      if (!sessions) {
+        sessions = new Set<string>();
+        this.associatedSessions.set(ghostId, sessions);
+      }
+      if (sessions.size >= MAX_SESSIONS_PER_GHOST) {
+        const oldest = sessions.values().next().value as string | undefined;
+        if (oldest) sessions.delete(oldest);
+      }
+      sessions.add(sessionId);
     }
-    if (sessions.size >= MAX_SESSIONS_PER_GHOST) {
-      const oldest = sessions.values().next().value as string | undefined;
-      if (oldest) sessions.delete(oldest);
-    }
-    sessions.add(sessionId);
     return token;
   }
 

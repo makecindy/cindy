@@ -132,6 +132,9 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 确认必须路由到承载目标任务的主壳窗口。`settingsHtml` 虽与面板共用 Ghost webview
 安全闸，但不得注入该 preload，也不得登记为面板 Agent sender；若它与
 `panel.html` 指向同一文件，按路径无法区分两种界面，必须 fail closed 且不注入 Agent preload。
+存量面板的同源页面导航不得因此被改写；Guest 离开唯一 `panel.html` 入口前撤销
+Main sender 登记，只在导航回该入口后恢复。面板的单次确认票不得建立
+`agent.background` 会话关联，不能把当次同意升级为后续无确认调用。
 
 ## 4．preload 与 Context Bridge
 

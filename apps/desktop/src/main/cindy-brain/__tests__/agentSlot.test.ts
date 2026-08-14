@@ -287,4 +287,22 @@ describe('agentSlot · 后台权限', () => {
     expect((await slot.handleRequest('alpha', request('session-1'))).ok).toBe(true);
     expect(runner).toHaveBeenCalledTimes(2);
   });
+
+  it('面板逐次确认票不建立 background 会话关联', async () => {
+    const runner = acceptedRunner();
+    const slot = makeSlot({
+      ghosts: [fakeGhost('alpha', { background: true })],
+      runner,
+    });
+    slot.issueUserActionToken('alpha', 'session-1', 'panel');
+
+    expect(
+      await slot.handleRequest('alpha', {
+        ...userRequest('unused'),
+        trigger: 'background',
+        sessionId: 'session-1',
+      }),
+    ).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(runner).not.toHaveBeenCalled();
+  });
 });

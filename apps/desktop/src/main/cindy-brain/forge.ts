@@ -3187,6 +3187,7 @@ await cindy.agent.run({
 后台调用只能使用用户过去点击过你卡片、已与你建立关联的会话；每个插件同时只处理
 一条 Agent 请求，后台请求之间至少间隔 10 秒。这个能力可能自动产生模型费用，只在
 产品确实需要时申请，不要把 \`sessionId\` 当作任意跨会话控制口。
+面板 \`agent.send\` 的逐次确认只授权当次发送，不建立上述后台会话关联。
 
 面板也可以复用同一个 \`agent\` 槽，但只开放更窄的用户操作 API：
 
@@ -3213,6 +3214,8 @@ if (target.ok && target.available) {
   \`window.cindy\`；
 - 需要该桥时，\`panel.html\` 与 \`settingsHtml\` 必须指向不同文件。同路径时 Host 无法
   仅凭安全闸区分面板与设置页，会 fail closed 且不注入 \`window.cindyPanel\`；
+- 存量多页面面板仍可同源导航；Guest 离开唯一 \`panel.html\` 入口时 Host 会立即
+  撤销 Agent sender 登记，导航回面板入口后才恢复，其它页面调用会 fail closed；
 - 面板没有除此之外的电子脑管子。文件、网络、其它 slot 仍按 §5 经 BroadcastChannel
   交给 main.js 代办。
 
