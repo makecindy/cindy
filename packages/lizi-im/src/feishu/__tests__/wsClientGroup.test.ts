@@ -31,6 +31,7 @@ const mocks = {
   ),
   pushReplyAnchor: vi.fn(),
   pushPatchableOpener: vi.fn(),
+  evictOpenThreadOutcome: vi.fn(),
   firstAllowed: vi.fn<() => string | null>(() => null),
   readOwnerOpenId: vi.fn<() => string | null>(() => null),
   clearOwner: vi.fn(),
@@ -78,6 +79,7 @@ vi.doMock('../outbound.js', () => ({
   openThread: mocks.openThread,
   pushReplyAnchor: mocks.pushReplyAnchor,
   pushPatchableOpener: mocks.pushPatchableOpener,
+  evictOpenThreadOutcome: mocks.evictOpenThreadOutcome,
 }));
 
 vi.doMock('../ownerGuard.js', () => ({
@@ -277,13 +279,14 @@ describe('feishu group inbound gate', () => {
     expect(events).toHaveLength(0);
     expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
     expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
-
-    // 放弃路径释放了入站认领 — 新连接上的重投消息应能正常处理(openThread
-    // 幂等缓存保证不会开出第二个话题)。
+    // 放弃路径释放了入站认领并 evict 了开话题缓存 — 新连接上的重投消息应
+    // 重新走 openThread API(而不是复用旧连接上的结果), 且正常处理。
+    expect(mocks.evictOpenThreadOutcome).toHaveBeenCalledWith('om_msg1');
     await connect();
     await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
     expect(events).toHaveLength(1);
     expect(events[0]!.senderId).toBe('g/oc_chat1/omt_new');
+    expect(mocks.openThread).toHaveBeenCalledTimes(2);
   });
 
   it('orphan notice failure releases the dedupe claim so a redelivery retries the notice', async () => {

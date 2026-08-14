@@ -167,6 +167,18 @@ function releaseInboundClaim(appId: string, messageId: string): void {
   seenInboundMessages.delete(`${appId}:${messageId}`);
 }
 
+/**
+ * 放弃一条已认领但未产出结果的入站消息(连接换代丢弃路径): 释放去重认领 +
+ * evict 开话题结果缓存。只释放认领不 evict 的话, 重投会复用旧连接上的
+ * degraded/orphaned 缓存结果(旧客户端已 unbind, 补查/撤回必然失败)而不是
+ * 用新客户端重试 API。孤儿提示失败的重试不经过这里 — 复用 orphaned 结果
+ * 重试提示正是设计意图。
+ */
+function abandonInboundTurn(botAppId: string, messageId: string): void {
+  releaseInboundClaim(botAppId, messageId);
+  outbound.evictOpenThreadOutcome(messageId);
+}
+
 /** 测试注入口 — 生产代码不要调用(生产语义就是跨 stop/start 不清空)。 */
 export function resetInboundDedupeForTest(): void {
   seenInboundMessages.clear();
@@ -798,7 +810,7 @@ async function handleIncomingMessage(
   // 会把旧连接的轮次推进新连接的编排状态(锚点污染/跨账号出站)。
   if (!isActiveConnection(generation, botAppId)) {
     // 本轮没有产出任何用户可见结果 — 释放入站认领, 让重推能在新连接上处理。
-    releaseInboundClaim(botAppId, messageId);
+    abandonInboundTurn(botAppId, messageId);
     log.info('[feishu/wsClient] drop inbound message: connection changed during processing');
     return;
   }
@@ -824,9 +836,10 @@ async function handleIncomingMessage(
       // 开话题是一次跨网络的 await — 期间用户可能断开/换账号: 复查门禁,
       // 防止旧连接的锚点与事件漏进新连接(或已停机的编排状态)。
       if (!isActiveConnection(generation, botAppId)) {
-        // 话题可能已开但本轮没有 emit — 释放入站认领, 让重推能在新连接上
-        // 重新处理(openThread 幂等缓存保证不会开出第二个话题)。
-        releaseInboundClaim(botAppId, messageId);
+        // 话题可能已开但本轮没有 emit — 释放入站认领并 evict 开话题结果缓存,
+        // 让重推在新连接上用新客户端重试 API(复用旧缓存会拿到旧客户端上的
+        // degraded/orphaned 结果)。
+        abandonInboundTurn(botAppId, messageId);
         log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
         return;
       }

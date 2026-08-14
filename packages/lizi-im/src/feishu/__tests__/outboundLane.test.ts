@@ -245,6 +245,17 @@ describe('feishu outbound lane routing', () => {
     expect(larkMocks.deleteMessage).not.toHaveBeenCalled();
   });
 
+  it('evictOpenThreadOutcome drops the cached result so the next call retries the API', async () => {
+    // 第一次失败(degraded)会被缓存; 放弃路径 evict 后, 重投应重新打 API。
+    larkMocks.reply.mockRejectedValueOnce(new Error('old client gone'));
+    await expect(outbound.openThread('om_root9')).resolves.toEqual({ kind: 'degraded' });
+
+    outbound.evictOpenThreadOutcome('om_root9');
+    const retried = await outbound.openThread('om_root9');
+    expect(retried).toEqual({ kind: 'opened', messageId: 'om_replied', threadId: 'omt_r1' });
+    expect(larkMocks.reply).toHaveBeenCalledTimes(2);
+  });
+
   it('unbindClient clears held anchors (no cross-generation mismatch)', async () => {
     outbound.pushReplyAnchor('g/oc_g', 'om_old');
     outbound.unbindClient();

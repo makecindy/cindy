@@ -289,6 +289,17 @@ export function openThread(replyToMessageId: string): Promise<OpenThreadOutcome>
   return promise;
 }
 
+/**
+ * 移除某触发消息的开话题结果缓存 — 只在「放弃本轮、期待重投重试」的路径
+ * 调用(连接换代丢弃时与入站认领释放配套)。不 evict 的话, 重投会复用旧连接
+ * 上的 degraded/orphaned 结果(旧客户端已 unbind, 补查/撤回必然失败), 而不是
+ * 用新客户端重试 API。孤儿提示失败的重试路径不 evict — 复用 orphaned 结果
+ * 重试提示正是设计意图。
+ */
+export function evictOpenThreadOutcome(replyToMessageId: string): void {
+  openThreadByTrigger.delete(replyToMessageId);
+}
+
 async function doOpenThread(replyToMessageId: string): Promise<OpenThreadOutcome> {
   const log = getLog();
   try {
