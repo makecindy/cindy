@@ -62,7 +62,6 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
   if (m.description !== undefined) d.description = m.description;
   if (m.effortDisplayNames !== undefined) d.effortDisplayNames = m.effortDisplayNames;
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;
-  if (m.supportsImageInput !== undefined) d.supportsImageInput = m.supportsImageInput;
   if (m.mode !== undefined) d.mode = m.mode;
   return d;
 }

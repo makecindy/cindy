@@ -43,7 +43,6 @@ export interface ModelDescriptor {
   effortDisplayNames?: Partial<Record<Effort, string>>;
   defaultEffort: Effort | null;
   supportsFastMode?: boolean;
-  supportsImageInput?: boolean;
   /** 目录展示排序权重;缺省排末尾。 */
   sortOrder?: number;
   /**
@@ -230,7 +229,6 @@ function isModelDescriptor(value: unknown): value is ModelDescriptor {
     isOptionalString(value.description) &&
     isOptionalStringRecord(value.effortDisplayNames) &&
     isOptionalBoolean(value.supportsFastMode) &&
-    isOptionalBoolean(value.supportsImageInput) &&
     isOptionalFiniteNumber(value.sortOrder) &&
     isOptionalBoolean(value.defaultEnabled) &&
     isOptionalNewSessionDefault(value.newSessionDefault)

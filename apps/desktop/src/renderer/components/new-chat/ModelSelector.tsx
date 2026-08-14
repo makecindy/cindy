@@ -423,7 +423,6 @@ interface RowModel {
   defaultEffort: Effort | null;
   effortDisplayNames?: Partial<Record<string, string>>;
   supportsFastMode?: boolean;
-  supportsImageInput?: boolean;
   /** 模型级 Codex bridge 协议；仅同一 Provider 内混合原生/桥接模型时存在。 */
   codexCompatibilityWireProtocol?: 'openai-chat' | 'anthropic-messages';
   /** 展示图标 id(AI Gateway / 目录设定,SectionModel.icon);flat 列表的 ModelDescriptor 无此字段。 */
@@ -617,8 +616,6 @@ interface ModelSelectorProps {
   maxVisibleModelRows?: number;
   /** 关闭模型的 effort / Fast 编辑入口；只选择模型 id 的设置项使用。 */
   configurationEnabled?: boolean;
-  /** 仅展示目录明确支持图片输入的模型。 */
-  imageInputOnly?: boolean;
   /** 可选的列表首行兜底值，例如“不指定（使用原逻辑）”。 */
   fallbackOption?: { active: boolean; label: string; onSelect: () => void };
   /**
@@ -703,7 +700,6 @@ interface ModelSelectorContentProps {
   followSession?: { active: boolean; label: string; onFollow: () => void };
   /** 是否显示模型的 effort / Fast 编辑入口。 */
   configurationEnabled?: boolean;
-  imageInputOnly?: boolean;
   /** 语义同 ModelSelectorProps.reselectEmitsChange(点当前行照常回调)。 */
   reselectEmitsChange?: boolean;
   /** 点击当前已选模型行时打开该行的配置浮层，而不是直接收起选择器。 */
@@ -828,7 +824,6 @@ function ModelSelectorContentView({
   onNavigateToProviders,
   followSession,
   configurationEnabled = true,
-  imageInputOnly = false,
   reselectEmitsChange = false,
   selectedRowClickOpensConfiguration = false,
   pointerRevealRequiresIntent = false,
@@ -1068,14 +1063,7 @@ function ModelSelectorContentView({
       excludeChatBridgedCodex,
     ],
   );
-  const filteredVisibleModels = useMemo(
-    () => imageInputOnly
-      ? visibleModels.filter((model) => model.supportsImageInput === true)
-      : visibleModels,
-    [imageInputOnly, visibleModels],
-  );
-
-  const currentModel = filteredVisibleModels.find((m) => m.id === modelId);
+  const currentModel = visibleModels.find((m) => m.id === modelId);
 
   // 显式 vendor / 浏览分段已给出 agentKind 时直接采用；浏览目标引擎期间 modelId 仍是
   // 旧引擎当前模型，通常不在目标 catalog，不能先因 currentModel 缺失判 null（否则目标
@@ -1297,7 +1285,7 @@ function ModelSelectorContentView({
     // 被停用的当前来源只保留选中行(keepSelected 豁免语义)。
     const restrictSuspended = (pid: string, mid: string): boolean =>
       !(suspendedActiveSourceId && pid === suspendedActiveSourceId && mid !== modelId);
-    const built = buildProviderSections({
+    return buildProviderSections({
       providers: orderedSectionProviders,
       agent: currentAgentKind,
       selectedModelId: modelId,
@@ -1324,16 +1312,9 @@ function ModelSelectorContentView({
               id: mid,
               defaultEnabled: cat?.defaultEnabled,
             });
-          },
+      },
       query,
     });
-    if (!imageInputOnly) return built;
-    return built
-      .map((section) => ({
-        ...section,
-        models: section.models.filter((model) => model.supportsImageInput === true),
-      }))
-      .filter((section) => section.models.length > 0);
     // visibilityVersion 仅作刷新触发器(设置页改显示开关后强制重算);deviceId 切换需重算分段。
   }, [
     sourcesEnabled,
@@ -1347,7 +1328,6 @@ function ModelSelectorContentView({
     visibilityVersion,
     deviceId,
     remoteProviders.modelVisibilityOverrides,
-    imageInputOnly,
   ]);
 
   const flatModels = useMemo(() => {
@@ -1358,8 +1338,8 @@ function ModelSelectorContentView({
     // 解析不到(trigger 无 icon)、发送必失败。非浏览态保持历史行为不变。
     const base =
       browsing && agentKind
-        ? filteredVisibleModels.filter((m) => sourcesForModel(providers, m.id, agentKind).length > 0)
-        : filteredVisibleModels;
+        ? visibleModels.filter((m) => sourcesForModel(providers, m.id, agentKind).length > 0)
+        : visibleModels;
     // 本地 flat 入口（子代理模型、Worker 等）没有 provider sections 帮忙过滤，必须显式复用
     // 会话选择器 / IM `/model` 的同一套「已连接来源 × 用户可见模型」规则。否则设置页里
     // 已忽略或仅由断开来源提供的目录项仍会被列出来，选中后没有可用路由。
@@ -1399,7 +1379,7 @@ function ModelSelectorContentView({
     );
   }, [
     sections,
-    filteredVisibleModels,
+    visibleModels,
     query,
     browsing,
     agentKind,
@@ -2369,7 +2349,6 @@ export function ModelSelector({
   popoverSide = 'top',
   maxVisibleModelRows,
   configurationEnabled = true,
-  imageInputOnly = false,
   fallbackOption,
   reselectEmitsChange = false,
   selectedRowClickOpensConfiguration = false,
@@ -2957,7 +2936,6 @@ export function ModelSelector({
       onProviderChange={onProviderChange}
       onNavigateToProviders={onNavigateToProviders}
       configurationEnabled={configurationEnabled}
-      imageInputOnly={imageInputOnly}
       reselectEmitsChange={reselectEmitsChange}
       selectedRowClickOpensConfiguration={selectedRowClickOpensConfiguration}
       pointerRevealRequiresIntent={morphEnabled}

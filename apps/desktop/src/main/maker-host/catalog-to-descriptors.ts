@@ -75,7 +75,6 @@ function toDescriptor(
   if (m.description !== undefined) d.description = m.description;
   if (m.effortDisplayNames !== undefined) d.effortDisplayNames = m.effortDisplayNames;
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;
-  if (m.supportsImageInput !== undefined) d.supportsImageInput = m.supportsImageInput;
   if (m.group !== undefined) d.group = m.group;
   if (m.sortOrder !== undefined) d.sortOrder = m.sortOrder;
   if (m.mode !== undefined) d.mode = m.mode;

@@ -1003,7 +1003,7 @@ describe('CodexAgent capability routing', () => {
       type: 'error',
       data: expect.objectContaining({
         message: expect.stringContaining('[REMOTE_VISION_FALLBACK_UNSUPPORTED]'),
-        isTerminal: false,
+        isTerminal: true,
       }),
     });
     await handle.close();

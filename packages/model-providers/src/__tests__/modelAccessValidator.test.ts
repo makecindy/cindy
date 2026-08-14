@@ -211,6 +211,29 @@ describe('model access catalog contract', () => {
     );
   });
 
+  it('rejects image capability fields until a new catalog schema version is introduced', () => {
+    const { newSessionDefault: _newSessionDefault, ...legacyModel } = VALID_RESPONSE.models[0]!;
+    const versions = [
+      [MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION, legacyModel],
+      [MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
+    ] as const;
+
+    for (const [schemaVersion, model] of versions) {
+      expectReject(
+        { schemaVersion, models: [{ ...model, supportsImageInput: true }] },
+        'response.models[0].supportsImageInput',
+      );
+      expectReject(
+        {
+          schemaVersion,
+          models: [{ ...model, perAgent: { 'claude-code': { supportsImageInput: true } } }],
+        },
+        'response.models[0].perAgent.claude-code.supportsImageInput',
+      );
+    }
+  });
+
   it('validates existing mode and normalized modalities in both schema versions', () => {
     const { newSessionDefault: _newSessionDefault, ...legacyModel } = VALID_RESPONSE.models[0]!;
     for (const [schemaVersion, model] of [
@@ -591,6 +614,22 @@ describe('public model registry contract', () => {
     ];
 
     for (const [value, path] of cases) expectRegistryReject(value, path);
+  });
+
+  it('rejects image capability fields until a new registry schema version is introduced', () => {
+    for (const schemaVersion of [
+      MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
+      MODEL_REGISTRY_SCHEMA_VERSION,
+    ] as const) {
+      expectRegistryReject(
+        {
+          ...VALID_REGISTRY,
+          schemaVersion,
+          models: [{ ...VALID_REGISTRY.models[0], supportsImageInput: true }],
+        },
+        'modelRegistry.models[0].supportsImageInput',
+      );
+    }
   });
 
   it('rejects unsupported versions, duplicate canonical ids, and duplicate routes', () => {

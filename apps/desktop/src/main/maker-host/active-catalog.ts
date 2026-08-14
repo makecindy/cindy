@@ -317,7 +317,6 @@ interface RegistryMetaFields {
   efforts?: Effort[];
   defaultEffort?: Effort | null;
   supportsFastMode?: boolean;
-  supportsImageInput?: boolean;
   status?: CatalogModel['status'];
 }
 
@@ -356,9 +355,6 @@ function modelRegistryMetaFields(
         : {}),
     ...(perAgent?.supportsFastMode !== undefined || entry.supportsFastMode !== undefined
       ? { supportsFastMode: perAgent?.supportsFastMode ?? entry.supportsFastMode }
-      : {}),
-    ...(perAgent?.supportsImageInput !== undefined || entry.supportsImageInput !== undefined
-      ? { supportsImageInput: perAgent?.supportsImageInput ?? entry.supportsImageInput }
       : {}),
     ...(entry.status !== undefined
       ? {
@@ -638,8 +634,6 @@ function computeMerged(): Catalog {
         const defaultEnabled = ov.defaultEnabled ?? gm.defaultEnabled;
         const cost = effectiveGatewayModelCost(gm);
         const contextWindow = ov.contextWindow ?? gm.contextWindow;
-        const registrySupportsImageInput = modelRegistryMetaFields('xd', agent, gm.id)
-          ?.supportsImageInput;
         const merged: CatalogModel = {
           id: gm.id,
           // name / contextWindow are required by Model Access v3 and therefore never synthesized.
@@ -663,11 +657,6 @@ function computeMerged(): Catalog {
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
-          ...(gm.modalities !== undefined
-            ? { supportsImageInput: gm.modalities.input.includes('image') }
-            : registrySupportsImageInput !== undefined
-              ? { supportsImageInput: registrySupportsImageInput }
-              : {}),
         };
         models[agent]!.push(merged);
       }

@@ -262,33 +262,6 @@ describe('XD 网关权威模型清单重建', () => {
     );
   });
 
-  it('把网关图片输入 modalities 投影到 Claude Code 与 Codex', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
-    setXdGatewayModels([{
-      id: 'gateway-vision',
-      agents: ['claude-code', 'codex'],
-      modalities: { input: ['text', 'image'], output: ['text'] },
-    }]);
-
-    expect(xdModels('claude-code').find((model) => model.id === 'gateway-vision'))
-      .toMatchObject({ modalities: { input: ['text', 'image'] } });
-    expect(deriveAvailableModels(getActiveCatalog(), 'codex').find(
-      (model) => model.id === 'gateway-vision',
-    )).toMatchObject({ supportsImageInput: true });
-  });
-
-  it('网关未下发 modalities 时继承注册表明确声明的图片能力', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
-    setXdGatewayModels([{
-      id: 'gpt-5.6-luna',
-      agents: ['claude-code', 'codex'],
-    }]);
-
-    expect(deriveAvailableModels(getActiveCatalog(), 'codex').find(
-      (model) => model.id === 'gpt-5.6-luna',
-    )).toMatchObject({ supportsImageInput: true });
-  });
-
   it('把标准 token 价投影为每百万 token 的折后展示价', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([

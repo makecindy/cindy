@@ -198,7 +198,6 @@ interface EffectiveRouteFields {
   efforts?: Effort[];
   defaultEffort?: Effort | null;
   supportsFastMode?: boolean;
-  supportsImageInput?: boolean;
   defaultEnabled?: boolean;
   /** 运行时防御：typed caller 绕过 protocol parser 时也不能静默修复坏档位。 */
   validationError?: string;
@@ -242,9 +241,6 @@ function effectiveRouteFields(
     ...(defaultEffort !== undefined ? { defaultEffort } : {}),
     ...(override?.supportsFastMode !== undefined || entry.supportsFastMode !== undefined
       ? { supportsFastMode: override?.supportsFastMode ?? entry.supportsFastMode }
-      : {}),
-    ...(entry.supportsImageInput !== undefined
-      ? { supportsImageInput: entry.supportsImageInput }
       : {}),
     ...(override?.defaultEnabled !== undefined || entry.defaultEnabled !== undefined
       ? { defaultEnabled: override?.defaultEnabled ?? entry.defaultEnabled }
@@ -432,7 +428,6 @@ function toOverlay(
     ...(fields.efforts !== undefined ? { efforts: fields.efforts } : {}),
     ...(fields.defaultEffort !== undefined ? { defaultEffort: fields.defaultEffort } : {}),
     ...(fields.supportsFastMode !== undefined ? { supportsFastMode: fields.supportsFastMode } : {}),
-    ...(fields.supportsImageInput !== undefined ? { supportsImageInput: fields.supportsImageInput } : {}),
     ...(status === 'deprecated'
       ? { status, defaultEnabled: false }
       : status !== null
@@ -476,7 +471,6 @@ function toMaterializedModel(
     efforts: fields.efforts,
     defaultEffort,
     ...(fields.supportsFastMode !== undefined ? { supportsFastMode: fields.supportsFastMode } : {}),
-    ...(fields.supportsImageInput !== undefined ? { supportsImageInput: fields.supportsImageInput } : {}),
     status,
     ...(status === 'deprecated'
       ? { defaultEnabled: false }
