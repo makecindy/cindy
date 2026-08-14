@@ -182,7 +182,10 @@ async function main() {
     ...(opts.keepDigests !== null ? { keepDigests: opts.keepDigests } : {}),
   });
 
-  const summarize = (p) => ({
+  // --archive-stale 时 apply 会把全部 staleCandidates 加入归档 — dry-run
+  // 必须如实反映实际归档量 (Codex P1 on #2561 第二十二轮: reflect stale
+  // archiving in dry-run output), 否则用户/自动化会批准一个比实际更小的清理。
+  const summarize = (p, archiveStale = false) => ({
     shardDir: shard,
     totalRecords: p.records.length,
     duplicates: p.duplicates.map((d) => ({ keep: d.keep, archive: d.archive })),
@@ -194,15 +197,16 @@ async function main() {
       updatedAt: s.updatedAt,
     })),
     digests: p.digests,
-    archiveCount: p.archiveItems.length,
+    archiveCount: p.archiveItems.length + (archiveStale ? p.staleCandidates.length : 0),
   });
 
   if (opts.dryRun) {
-    const summary = summarize(plan);
+    const summary = summarize(plan, opts.archiveStale);
     if (!opts.json) {
       const staleSignal = summary.staleCandidates.filter((s) => s.reason === 'signal');
       const staleWeak = summary.staleCandidates.filter((s) => s.reason === 'weak-signal');
       const staleAge = summary.staleCandidates.filter((s) => s.reason === 'age');
+      const staleLabel = opts.archiveStale ? '将归档 (--archive-stale)' : '仅报告; 确认后加 --archive-stale';
       process.stdout.write(`分片目录: ${shard}\n`);
       process.stdout.write(`合法分片总数: ${summary.totalRecords}\n\n`);
       process.stdout.write(`完全重复 (${summary.duplicates.length} 组, 自动归档):\n`);
@@ -213,25 +217,24 @@ async function main() {
       for (const n of summary.nearDuplicates) {
         process.stdout.write(`  - "${n.title}": ${n.filenames.join(', ')}\n`);
       }
-      process.stdout.write(
-        `\n终态候选 (信号词, ${staleSignal.length} 条, 仅报告; 确认后加 --archive-stale):\n`,
-      );
+      process.stdout.write(`\n终态候选 (信号词, ${staleSignal.length} 条, ${staleLabel}):\n`);
       for (const s of staleSignal) {
         process.stdout.write(`  - ${s.filename} (命中 "${s.matchedSignal}")\n`);
       }
       process.stdout.write(
-        `\n终态候选 (英文 broad 词, ${staleWeak.length} 条, 仅报告):\n`,
+        `\n终态候选 (英文 broad 词, ${staleWeak.length} 条, ${staleLabel}):\n`,
       );
       for (const s of staleWeak) {
         process.stdout.write(`  - ${s.filename} (命中 "${s.matchedSignal}")\n`);
       }
-      process.stdout.write(`\n终态候选 (仅时间过期, ${staleAge.length} 条, 仅报告):\n`);
+      process.stdout.write(`\n终态候选 (仅时间过期, ${staleAge.length} 条, ${staleLabel}):\n`);
       for (const s of staleAge) {
         process.stdout.write(`  - ${s.filename} (updatedAt ${s.updatedAt})\n`);
       }
       process.stdout.write(
         `\ndigest 精简: 保留 ${summary.digests.keep.length}, 归档 ${summary.digests.archive.length}\n`,
       );
+      process.stdout.write(`\n预计归档总数: ${summary.archiveCount} 条\n`);
       process.stdout.write(`\n(dry-run — 未修改任何文件; 执行请加 --apply)\n`);
     }
     process.stdout.write(`RESULT ${JSON.stringify({ mode: 'dry-run', ...summary })}\n`);

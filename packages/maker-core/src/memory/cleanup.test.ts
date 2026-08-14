@@ -298,10 +298,13 @@ describe('runMemoryCleanup', () => {
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
 
     const plan = await planMemoryCleanup(dir);
-    // 模拟 Windows --force 下宿主锁定源文件: rename (移动 src → trash) 持续
-    // EPERM → 必须暴露为 failed, 而非把 EPERM 当目标冲突无限重试 (Greptile
-    // P1 / Codex P2 on #2561)。
-    const spy = vi
+    // 模拟 Windows --force 下宿主锁定源文件: link (排他预留 src → trash) 与
+    // fallback rename 都持续 EPERM → 必须暴露为 failed, 而非把 EPERM 当目标
+    // 冲突无限重试 (Greptile P1 / Codex P2 on #2561)。
+    const linkSpy = vi
+      .spyOn(fs, 'link')
+      .mockRejectedValue(Object.assign(new Error('source locked'), { code: 'EPERM' }));
+    const renameSpy = vi
       .spyOn(fs, 'rename')
       .mockRejectedValue(Object.assign(new Error('source locked'), { code: 'EPERM' }));
 
@@ -311,7 +314,8 @@ describe('runMemoryCleanup', () => {
       // 源保留 (未被删)。
       await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('same');
     } finally {
-      spy.mockRestore();
+      linkSpy.mockRestore();
+      renameSpy.mockRestore();
     }
   });
 
@@ -320,14 +324,15 @@ describe('runMemoryCleanup', () => {
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
 
     const plan = await planMemoryCleanup(dir);
-    // 模拟宿主在 hash 校验后、rename 前写 src (新内容 B): rename 执行时先写
-    // 新内容再移动 → trash 内容 ≠ 快照 → 应恢复 src, 归档保留审阅快照。
-    const realRename = fs.rename.bind(fs);
-    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
+    // 模拟宿主在 hash 校验后、trash 排他预留前写 src (新内容 B): reserveTrashTarget
+    // 的 link 执行前先写新内容再 link → trash 内容 ≠ 快照 → 应恢复 src,
+    // 归档保留审阅快照。
+    const realLink = fs.link.bind(fs);
+    const spy = vi.spyOn(fs, 'link').mockImplementation(async (src, dst) => {
       if (String(src).endsWith('feedback_a.md') && String(dst).includes('cleanup-trash')) {
         await writeFile(String(src), "---\ntitle: NEW\ndescription: new\ntype: feedback\nupdatedAt: '2026-03-01T00:00:00.000Z'\n---\nUPDATED\n", 'utf8');
       }
-      return realRename(src as string, dst as string);
+      return realLink(src as string, dst as string);
     });
 
     try {
@@ -346,26 +351,33 @@ describe('runMemoryCleanup', () => {
     await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
 
     const plan = await planMemoryCleanup(dir);
-    // 模拟宿主并发写: rename 前写新内容 B (trash 将持有 B ≠ 快照 A), 并在
-    // src 移到 trash 后重建 src (新写入) — restoreTrash 的 link 排他恢复会
-    // EEXIST, 不覆盖新写入 (Greptile P1 / Codex P1 on #2561 第十一轮)。
-    const realRename = fs.rename.bind(fs);
-    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
-      if (String(dst).includes('cleanup-trash')) {
+    // 模拟宿主并发写: trash 排他预留 (link) 前写新内容 B (trash 将持有
+    // B ≠ 快照 A), 并在 src 被 unlink (移入 trash) 后重建 src (新写入) —
+    // restoreTrash 的 link 排他恢复会 EEXIST, 不覆盖新写入 (Greptile P1 /
+    // Codex P1 on #2561 第十一轮)。
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, 'link').mockImplementation(async (src, dst) => {
+      if (String(src).endsWith('feedback_a.md') && String(dst).includes('cleanup-trash')) {
         await writeFile(
           String(src),
           "---\ntitle: B\ndescription: b\ntype: feedback\nupdatedAt: '2026-03-01T00:00:00.000Z'\n---\nUPDATED\n",
           'utf8',
         );
-        const r = await realRename(src as string, dst as string);
+      }
+      return realLink(src as string, dst as string);
+    });
+    const realUnlink = fs.unlink.bind(fs);
+    const unlinkSpy = vi.spyOn(fs, 'unlink').mockImplementation(async (p) => {
+      const r = await realUnlink(p as string);
+      if (String(p).endsWith('feedback_a.md')) {
+        // 宿主在 src 被 unlink (移入 trash) 后立即重建 src (新写入)。
         await writeFile(
-          String(src),
+          String(p),
           "---\ntitle: RECREATED\ndescription: new\ntype: feedback\nupdatedAt: '2026-03-02T00:00:00.000Z'\n---\nrecreated by host\n",
           'utf8',
         );
-        return r;
       }
-      return realRename(src as string, dst as string);
+      return r;
     });
 
     try {
@@ -376,7 +388,8 @@ describe('runMemoryCleanup', () => {
       const files = await readdir(dir);
       expect(files.some((f) => f.includes('cleanup-trash'))).toBe(true);
     } finally {
-      spy.mockRestore();
+      linkSpy.mockRestore();
+      unlinkSpy.mockRestore();
     }
   });
 
@@ -552,20 +565,8 @@ describe('runMemoryCleanup', () => {
     // 模拟: open fd 在 move 后写 retained (二次校验不一致), 且宿主同时重建了
     // src — copyFile EXCL 恢复会 EEXIST, retained 必须保留 (open-fd 新内容
     // 不可因恢复失败被 unlink 删除, Greptile P1 / Codex P1 on #2561 第十五轮)。
-    // rename(src→trash) 重建 src; link(trash→retained) 后写 retained。
-    const realRename = fs.rename.bind(fs);
-    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
-      const r = await realRename(src as string, dst as string);
-      if (String(src).endsWith('feedback_a.md') && String(dst).includes('cleanup-trash')) {
-        // 宿主在 src 移到 trash 后立即重建 src (新写入)。
-        await writeFile(
-          String(src),
-          "---\ntitle: RECREATED\ndescription: new\ntype: feedback\nupdatedAt: '2026-03-02T00:00:00.000Z'\n---\nrecreated by host\n",
-          'utf8',
-        );
-      }
-      return r;
-    });
+    // link 路径: trash→retained (dst 含 .archive) 后写 retained; unlink 路径:
+    // src→trash 的 unlink 后宿主重建 src。
     const realLink = fs.link.bind(fs);
     const linkSpy = vi.spyOn(fs, 'link').mockImplementation(async (src, dst) => {
       const r = await realLink(src as string, dst as string);
@@ -575,6 +576,19 @@ describe('runMemoryCleanup', () => {
         !String(dst).endsWith('.archive')
       ) {
         await writeFile(String(dst), 'WRITTEN AFTER MOVE BY OPEN FD', 'utf8');
+      }
+      return r;
+    });
+    const realUnlink = fs.unlink.bind(fs);
+    const unlinkSpy = vi.spyOn(fs, 'unlink').mockImplementation(async (p) => {
+      const r = await realUnlink(p as string);
+      if (String(p).endsWith('feedback_a.md')) {
+        // 宿主在 src 被 unlink (移入 trash) 后立即重建 src (新写入)。
+        await writeFile(
+          String(p),
+          "---\ntitle: RECREATED\ndescription: new\ntype: feedback\nupdatedAt: '2026-03-02T00:00:00.000Z'\n---\nrecreated by host\n",
+          'utf8',
+        );
       }
       return r;
     });
@@ -593,8 +607,8 @@ describe('runMemoryCleanup', () => {
         readFile(path.join(dir, ARCHIVE_DIR_NAME, retained as string), 'utf8'),
       ).resolves.toContain('WRITTEN AFTER MOVE');
     } finally {
-      renameSpy.mockRestore();
       linkSpy.mockRestore();
+      unlinkSpy.mockRestore();
     }
   });
 

@@ -413,8 +413,10 @@ export async function runMemoryCleanup(
       //      读失败 (宿主并发写的新内容) → no-clobber 恢复 src (见
       //      restoreTrash — Greptile P1 / Codex P1 on #2561 第十一轮)。
       await writeExclusive(archiveDir, item.filename, stamp, srcContent);
-      const trash = path.join(plan.shardDir, `${item.filename}.cleanup-trash-${stamp}`);
-      await fs.rename(src, trash);
+      // trash 目标排他预留 (Codex P2 on #2561 第二十二轮): 失败清理遗留的
+      // cleanup-trash 文件是 live-writer 内容的恢复路径 — 同 stamp rerun 或
+      // 并发清理时 rename(src, trash) 会覆盖既有 trash, 丢弃唯一可达副本。
+      const trash = await reserveTrashTarget(src, plan.shardDir, item.filename, stamp);
       const trashContent = await fs.readFile(trash).catch(() => null);
       if (trashContent !== null && trashContent.equals(srcContent)) {
         // 归档完成。不立即 unlink: --force 或宿主检测漏掉的已打开 fd
@@ -524,6 +526,43 @@ export async function runMemoryCleanup(
   }
 
   return result;
+}
+
+/**
+ * 排他移动 src 到 <shard>/.cleanup-trash-<stamp>-<rand> 目标, 返回 trash 路径。
+ *
+ * 失败清理遗留的 cleanup-trash 文件是 live-writer 内容的恢复路径 — 同 stamp
+ * rerun 或并发清理时 rename(src, trash) 会覆盖既有 trash, 丢弃唯一可达副本
+ * (Codex P2 on #2561 第二十二轮: reserve trash targets before renaming)。
+ * 用 link 原子排他预留 (EEXIST 换随机后缀重试) + unlink 删源; link 不可用
+ * (ENOTSUP/EPERM/ENOSYS) 时 fallback rename (随机后缀, 碰撞窗口极小)。
+ */
+async function reserveTrashTarget(
+  src: string,
+  shardDir: string,
+  filename: string,
+  stamp: string,
+): Promise<string> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const candidate = path.join(
+      shardDir,
+      `${filename}.cleanup-trash-${stamp}-${randomBytes(4).toString('hex')}`,
+    );
+    try {
+      await fs.link(src, candidate);
+      // link 成功 (目标已原子排他预留), 删源路径名 — unlink 失败 (Windows
+      // 锁) 则两份副本并存 (安全方向), 不保留共享 inode 状态 (R11 约定)。
+      await fs.unlink(src).catch(() => {});
+      return candidate;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue;
+      // link 不可用 (文件系统不支持硬链接) → fallback rename (目标随机后缀,
+      // 碰撞窗口极小)。
+      await fs.rename(src, candidate);
+      return candidate;
+    }
+  }
+  throw new Error(`unable to reserve trash target for ${filename}`);
 }
 
 /** 归一化内容 hash — 忽略 updatedAt 与 frontmatter 排版差异, 只比语义内容。 */
