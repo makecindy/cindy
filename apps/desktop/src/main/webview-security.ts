@@ -68,6 +68,16 @@ export function getGhostPanelGuestPreloadPath(): string {
   return path.join(__dirname, 'ghostPanelGuestPreload.js');
 }
 
+/** settingsHtml 与 panel.html 共用 Ghost webview 闸，但只有真正的面板入口可拿 Agent bridge。 */
+export function isGhostPanelAgentEntry(src: unknown, panelHtml: unknown): boolean {
+  if (typeof src !== 'string' || typeof panelHtml !== 'string') return false;
+  try {
+    return new URL(src).pathname === `/${panelHtml}`;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 把 `will-attach-webview` event 给的 webPreferences / params 改成"安全锁死"版。
  *
@@ -672,7 +682,7 @@ export function installWebviewHardener(): void {
     // will-attach → did-attach 对同一个 guest 同步成对触发;用闭包变量把
     // will 阶段的意识判定带给 did 阶段(意识 guest 走独立接线,不装浏览器
     // 的 popup 路由与快捷键转发)。
-    let pendingGhostAttach: { id: string } | null = null;
+    let pendingGhostAttach: { id: string; agentBridge: boolean } | null = null;
     contents.on('will-attach-webview', (e, webPreferences, params) => {
       // 意识面板分支:声明了意识分区的 webview 必须验明正身——
       // 分区/地址/已装清单三对齐才放行并保留专属分区;验证失败直接拒附加
@@ -684,10 +694,11 @@ export function installWebviewHardener(): void {
           pendingGhostAttach = null;
           return;
         }
+        const agentBridge = isGhostPanelAgentEntry(params.src, ghost.manifest.panel?.html);
         applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params, {
-          panelPreloadPath: getGhostPanelGuestPreloadPath(),
+          ...(agentBridge ? { panelPreloadPath: getGhostPanelGuestPreloadPath() } : {}),
         });
-        pendingGhostAttach = { id: ghost.manifest.id };
+        pendingGhostAttach = { id: ghost.manifest.id, agentBridge };
         return;
       }
       pendingGhostAttach = null;
@@ -701,18 +712,20 @@ export function installWebviewHardener(): void {
     });
     contents.on('did-attach-webview', (_e, guestContents) => {
       if (pendingGhostAttach) {
-        const ghostId = pendingGhostAttach.id;
+        const { id: ghostId, agentBridge } = pendingGhostAttach;
         pendingGhostAttach = null;
         // 崩溃豁免登记(lifecycle 的全局 render-process-gone 守卫据此放行,
         // 面板错误接管态负责用户侧收尾)。
         registerGhostWebContents(guestContents.id);
-        registerGhostPanelWebContents(guestContents.id, {
-          ghostId,
-          hostWebContentsId: contents.id,
-        });
-        guestContents.once('destroyed', () => {
-          unregisterGhostPanelWebContents(guestContents.id);
-        });
+        if (agentBridge) {
+          registerGhostPanelWebContents(guestContents.id, {
+            ghostId,
+            hostWebContentsId: contents.id,
+          });
+          guestContents.once('destroyed', () => {
+            unregisterGhostPanelWebContents(guestContents.id);
+          });
+        }
         // 意识面板零弹窗、零跳转:window.open 全拒,导航锁死在自己协议同源内。
         // 两个声明式例外(都是拦下导航、主机代办,面板侧依旧零桥):
         //   - /preview/ 预览链接 → 主窗口弹 lightbox(cindy-brain/previewGate.ts);

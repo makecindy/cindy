@@ -46,6 +46,7 @@ import {
   applyWebviewHardening,
   installBrowserGuestHandlers,
   installDeferredPopupRouter,
+  isGhostPanelAgentEntry,
   isGuestShortcutKeyDownType,
   resolveGuestShortcutAction,
   setRsbPopupOpenerResolver,
@@ -267,6 +268,12 @@ describe('installBrowserGuestHandlers(main-owned popup)', () => {
 });
 
 describe('applyGhostWebviewHardening(意识面板 webview)', () => {
+  it('只把 panel.html 识别为 Agent bridge 入口，settingsHtml 不获得 preload', () => {
+    expect(isGhostPanelAgentEntry('cindy-ghost://art/ui/panel.html', 'ui/panel.html')).toBe(true);
+    expect(isGhostPanelAgentEntry('cindy-ghost://art/settings.html', 'ui/panel.html')).toBe(false);
+    expect(isGhostPanelAgentEntry('not a url', 'ui/panel.html')).toBe(false);
+  });
+
   it('同一套安全锁全部生效,但保留意识专属分区、掐死 popup', () => {
     const webPreferences: Record<string, unknown> = {
       nodeIntegration: true,
