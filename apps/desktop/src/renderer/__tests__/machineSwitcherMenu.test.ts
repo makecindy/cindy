@@ -83,6 +83,32 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     const scrollableRowsIdx = sidebarUpperSource.indexOf('<SidebarTopNav section="scrollable" />');
     expect(scrollRefIdx).toBeGreaterThanOrEqual(0);
     expect(scrollableRowsIdx).toBeGreaterThan(scrollRefIdx);
+    // 搜索打开时搜索行作为滚动容器直接子项 sticky;打开查询时记下并复位滚动,
+    // 清查询时还原,不再用 overlay 盖住输入框。
+    expect(topNavSource).toContain("const pinSearch = section === 'scrollable' && search.query.trim().length > 0");
+    expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)]'");
+    expect(topNavSource).toContain('if (section === \'scrollable\')');
+    expect(sidebarUpperSource).toContain('lastListScrollTopRef.current = el.scrollTop');
+    expect(sidebarUpperSource).toContain(
+      'sidebarScrollRef.current?.scrollTo({ top: lastListScrollTopRef.current })',
+    );
+    expect(sidebarUpperSource).toContain('search.statusFilter');
+    expect(sidebarUpperSource).toContain('searchProjectKey');
+    expect(sidebarUpperSource).toContain('onContextMenu={(event) => event.stopPropagation()}');
+    expect(sidebarUpperSource).toContain('{searchActive ? (');
+    expect(sidebarUpperSource).toContain('<div hidden={searchActive} className="flex flex-col gap-2">');
+    expect(sidebarUpperSource).toContain('freezeListScrollOnOpenRef.current = true');
+    expect(sidebarUpperSource).toContain('const restoreListScroll = useCallback');
+    expect(sidebarUpperSource).toContain('const restoreListScrollAfterPointer = useCallback');
+    expect(sidebarUpperSource).toContain('restoreListScrollAfterPointer()');
+    expect(sidebarUpperSource).toContain("window.addEventListener('pointerup', onPointerEnd, true)");
+    expect(sidebarUpperSource).toContain("document.addEventListener('focusin', onFocusIn)");
+    const inlineSearchSource = read('features', 'cc-agent', 'sidebar', 'SidebarInlineSearch.tsx');
+    expect(inlineSearchSource).toContain('inputRef.current?.focus({ preventScroll: true })');
+    expect(sidebarUpperSource).not.toContain('absolute inset-0 z-20');
+    expect(sidebarUpperSource).not.toContain(
+      "search.trimmed && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)]'",
+    );
 
     // 声明语义与 useRegisterSidebarUpper 一致:卸载不复位,避免切到 /settings 时闪变。
     expect(featureContextSource).toContain('export function useOwnTopNavScrollableRows');
@@ -211,9 +237,18 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(entryListSource.match(/sourceLabel=\{sourceLabelMap\?\.get\(entry\.session\.id\)\}/g)).toHaveLength(
       2,
     );
+    const automationGroupSource = read(
+      'features',
+      'cc-agent',
+      'sidebar',
+      'AutomationSessionGroupItem.tsx',
+    );
+    expect(automationGroupSource).toContain('sourceLabel: sourceLabelMap?.get(session.id)');
     const cardSource = read('features', 'cc-agent', 'sidebar', 'SessionCard.tsx');
     expect(cardSource).toContain('sourceLabel,');
     expect(cardSource).toContain('{sourceLabel ? (');
+    const itemSource = read('features', 'cc-agent', 'sidebar', 'SessionItem.tsx');
+    expect(itemSource).toContain('{sourceLabel ? (');
   });
 
   // 2026-08-12 用户裁决:筛选各维度选中后菜单不关闭(常要连调几项);排序与显示

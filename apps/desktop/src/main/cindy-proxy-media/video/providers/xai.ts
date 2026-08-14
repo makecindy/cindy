@@ -23,6 +23,7 @@ export const XAI_VIDEO_CATALOG_MODEL_ID = 'xai/grok-imagine-video';
 const INTERNAL_CONTENT_PROTOCOL = 'xai-video:';
 const INTERNAL_CONTENT_HOST = 'content';
 const MAX_VIDEO_DOWNLOAD_BYTES = 256 * 1024 * 1024;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 const SUPPORTED_DURATIONS = Array.from({ length: 15 }, (_, index) => index + 1);
 
@@ -178,6 +179,27 @@ function assertXaiVideoUrl(raw: string): string {
     throw new Error('xAI 视频任务返回了不可信的下载地址');
   }
   return url.toString();
+}
+
+async function fetchXaiVideoDownload(
+  doFetch: typeof fetch,
+  sourceUrl: string,
+  signal: AbortSignal | undefined,
+  assertStillCurrent: () => void,
+): Promise<Response> {
+  assertStillCurrent();
+  const response = await doFetch(sourceUrl, { method: 'GET', redirect: 'manual', signal });
+  assertStillCurrent();
+  if (!REDIRECT_STATUSES.has(response.status)) return response;
+
+  const location = response.headers.get('location');
+  await response.body?.cancel().catch(() => undefined);
+  assertStillCurrent();
+  if (!location) throw new Error('xAI 视频下载重定向缺少 Location');
+  const redirectUrl = assertXaiVideoUrl(new URL(location, sourceUrl).toString());
+  const redirected = await doFetch(redirectUrl, { method: 'GET', redirect: 'manual', signal });
+  assertStillCurrent();
+  return redirected;
 }
 
 function internalContentRef(
@@ -478,9 +500,9 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     const assertStillCurrent = () =>
       assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
     assertStillCurrent();
-    // 完成态给的是 xAI 临时托管 URL。这里不携带 OAuth，避免凭证被带到
-    // 下载域；严格限定 *.x.ai 且不自动跟随重定向。
-    const response = await doFetch(sourceUrl, { method: 'GET', redirect: 'manual', signal });
+    // 完成态给的是 xAI 临时托管 URL。下载及至多一跳重定向都必须重新验证
+    // 为可信 *.x.ai 目标；手动跟随确保任何不可信 Location 都会 fail closed。
+    const response = await fetchXaiVideoDownload(doFetch, sourceUrl, signal, assertStillCurrent);
     assertStillCurrent();
     if (!response.ok) {
       const text = await response.text();

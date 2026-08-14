@@ -254,6 +254,73 @@ describe('xAI video provider · poll and download', () => {
     expect(calls[3][1].headers).toBeUndefined();
   });
 
+  it('follows one trusted download redirect and validates the final video bytes', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) =>
+      String(url) === 'https://vidgen.x.ai/tasks/redirect.mp4'
+        ? new Response(null, { status: 302, headers: { Location: '/cdn/final.mp4' } })
+        : new Response(MP4_BYTES, { status: 200, headers: { 'content-type': 'text/plain' } }),
+    ) as unknown as typeof fetch;
+    const provider = makeProvider({ fetchImplementation: fetchMock });
+    const videoUrl =
+      'xai-video://content/task?owner=owner-a&credential=1&source=https%3A%2F%2Fvidgen.x.ai%2Ftasks%2Fredirect.mp4';
+
+    await expect(provider.download(videoUrl)).resolves.toEqual({
+      buffer: MP4_BYTES,
+      mimeType: 'video/mp4',
+    });
+    expect((fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls).toEqual([
+      ['https://vidgen.x.ai/tasks/redirect.mp4', { method: 'GET', redirect: 'manual' }],
+      ['https://vidgen.x.ai/cdn/final.mp4', { method: 'GET', redirect: 'manual' }],
+    ]);
+  });
+
+  it('rejects unsafe video redirects and keeps owner and credential generation current', async () => {
+    const videoUrl =
+      'xai-video://content/task?owner=owner-a&credential=1&source=https%3A%2F%2Fvidgen.x.ai%2Ftasks%2Fredirect.mp4';
+    for (const location of [undefined, 'https://example.com/final.mp4']) {
+      const fetchMock = vi.fn(async () =>
+        new Response(null, {
+          status: 302,
+          ...(location ? { headers: { Location: location } } : {}),
+        }),
+      ) as unknown as typeof fetch;
+      await expect(
+        makeProvider({ fetchImplementation: fetchMock }).download(videoUrl),
+      ).rejects.toThrow(location ? /不可信/ : /缺少 Location/);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    }
+
+    const repeated = vi.fn(async () =>
+      new Response(null, { status: 307, headers: { Location: 'https://cdn.x.ai/again.mp4' } }),
+    ) as unknown as typeof fetch;
+    await expect(
+      makeProvider({ fetchImplementation: repeated }).download(videoUrl),
+    ).rejects.toThrow(/下载失败\(HTTP 307\)/);
+    expect(repeated).toHaveBeenCalledTimes(2);
+
+    const owner = { value: 'owner-a', pending: false };
+    const ownerSwitch = vi.fn(async () => {
+      owner.value = 'owner-b';
+      return new Response(null, { status: 302, headers: { Location: 'https://cdn.x.ai/final.mp4' } });
+    }) as unknown as typeof fetch;
+    await expect(
+      makeProvider({ fetchImplementation: ownerSwitch, owner }).download(videoUrl),
+    ).rejects.toThrow(/账号已切换/);
+
+    owner.value = 'owner-a';
+    const credential = { value: 1 };
+    const credentialSwitch = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('vidgen.x.ai')) {
+        return new Response(null, { status: 302, headers: { Location: 'https://cdn.x.ai/final.mp4' } });
+      }
+      credential.value = 2;
+      return new Response(MP4_BYTES, { status: 200 });
+    }) as unknown as typeof fetch;
+    await expect(
+      makeProvider({ fetchImplementation: credentialSwitch, credential }).download(videoUrl),
+    ).rejects.toThrow(/SuperGrok 凭证已切换/);
+  });
+
   it('fails closed when the active account changes after submit', async () => {
     const owner = { value: 'owner-a', pending: false };
     const fetchMock = vi.fn(async () =>

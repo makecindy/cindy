@@ -72,6 +72,16 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
   };
 }
 
+function setupKvManifest(id = 'hello'): Record<string, unknown> {
+  return {
+    ...goodManifest(id),
+    settingsHtml: 'settings.html',
+    setup: {
+      requires: [{ anyOf: [{ kv: 'repoDir', label: '本机 cindy 项目目录' }] }],
+    },
+  };
+}
+
 function atResourceManifest(id = 'hello'): Record<string, unknown> {
   return {
     ...goodManifest(id),
@@ -261,6 +271,27 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
       approval: { state: 'approved' },
     });
     expect(fs.existsSync(migrationLedgerPath())).toBe(true);
+  });
+
+  it('带 setup.kv 的旧安装无感迁移并保留标准化就绪声明', async () => {
+    await writeLegacyInstall('hello', setupKvManifest(), {
+      files: { 'settings.html': '<!doctype html>' },
+    });
+
+    const outcome = await manager.migrateLegacyApprovalsOnce();
+
+    expect(outcome.migrated).toEqual(['hello']);
+    expect(manager.list()[0]).toMatchObject({
+      enabled: true,
+      approval: { state: 'approved' },
+      manifest: {
+        setup: {
+          requires: [
+            { anyOf: [{ kind: 'kv', key: 'repoDir', label: '本机 cindy 项目目录' }] },
+          ],
+        },
+      },
+    });
   });
 
   it('未批准或 receipt 损坏的插件不展示可变 trust 镜像', async () => {
@@ -919,6 +950,34 @@ describe('GhostManager · 从已装目录重新确认(本地包第三条恢复�
     expect(manager.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
     // 启停镜像同步维护(回滚到旧客户端不错位)。
     expect(fs.existsSync(path.join(rootDir, 'hello', '.disabled'))).toBe(false);
+  });
+
+  it('带 setup.kv 的旧安装可从已装目录重新确认并恢复可用', async () => {
+    await writeLegacyInstall('hello', setupKvManifest(), {
+      files: { 'settings.html': '<!doctype html>' },
+    });
+    const inspected = await manager.inspectInstalledReapproval('hello');
+    if ('rejection' in inspected) throw new Error(JSON.stringify(inspected.rejection));
+
+    const result = await manager.reapproveInstalled('hello', {
+      enable: true,
+      expectedManifestSha256: inspected.manifestSha256,
+      expectedApprovalProjectionSha256: inspected.approvalProjectionSha256,
+      expectedInstalledApproval: 'legacy-unapproved',
+    });
+
+    if ('rejection' in result) throw new Error(JSON.stringify(result.rejection));
+    expect(manager.list()[0]).toMatchObject({
+      enabled: true,
+      approval: { state: 'approved' },
+      manifest: {
+        setup: {
+          requires: [
+            { anyOf: [{ kind: 'kv', key: 'repoDir', label: '本机 cindy 项目目录' }] },
+          ],
+        },
+      },
+    });
   });
 
   it('重新确认要求立即启用时，删除停用镜像失败必须拒绝且不提交批准', async () => {
@@ -3161,12 +3220,13 @@ describe('GhostManager · Host approval receipt', () => {
   const writeBundledSource = async (
     manifest: InstalledGhost['manifest'],
     files: Record<string, string> = { 'main.js': '// bundled seed' },
+    sourceManifest: unknown = manifest,
   ): Promise<{ sourceDir: string }> => {
     const sourceDir = path.join(workDir, 'bundled-seeds', manifest.id);
     await fs.promises.rm(sourceDir, { recursive: true, force: true });
     await fs.promises.mkdir(sourceDir, { recursive: true });
     trustedBundledIds.add(manifest.id);
-    await fs.promises.writeFile(path.join(sourceDir, 'ghost.json'), JSON.stringify(manifest));
+    await fs.promises.writeFile(path.join(sourceDir, 'ghost.json'), JSON.stringify(sourceManifest));
     for (const [relativePath, content] of Object.entries(files)) {
       const target = path.join(sourceDir, relativePath);
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
@@ -3775,6 +3835,34 @@ describe('GhostManager · Host approval receipt', () => {
         'utf8',
       ),
     ).toContain('Approved instructions');
+  });
+
+  it('bundled approval accepts a normalized setup manifest while validating source author syntax', async () => {
+    const sourceManifest = setupKvManifest();
+    await manager.install(
+      await makeCindy('setup.cindy', sourceManifest, {
+        'main.js': '// installed setup plugin',
+        'settings.html': '<!doctype html>',
+      }),
+    );
+    const listed = manager.list()[0];
+    const source = await writeBundledSource(
+      listed.manifest,
+      {
+        'main.js': '// bundled setup plugin',
+        'settings.html': '<!doctype html>',
+      },
+      sourceManifest,
+    );
+
+    await expect(
+      manager.approveTrustedBundledInstall(listed.manifest, listed.enabled, source),
+    ).resolves.toBe(true);
+    expect(manager.list()[0].manifest.setup).toEqual({
+      requires: [
+        { anyOf: [{ kind: 'kv', key: 'repoDir', label: '本机 cindy 项目目录' }] },
+      ],
+    });
   });
 
   it('snapshot repair persists a one-way disable before the compatibility marker disappears', async () => {
