@@ -41,6 +41,7 @@ export interface ComposerRichInputProps {
   onPasteImages?: (uris: string[]) => void;
   onPasteImagesLoadFailed?: () => void;
   onPasteImagesLoading?: (count: number) => void;
+  opticalPadding?: boolean;
   placeholder: string;
   resolveSessionLinkLabel?: (href: string) => Promise<ResolvedSessionLinkSemantic | null>;
   testID?: string;
@@ -70,6 +71,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     onPasteImages,
     onPasteImagesLoadFailed,
     onPasteImagesLoading,
+    opticalPadding = true,
     placeholder,
     resolveSessionLinkLabel,
     testID,
@@ -95,6 +97,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       document,
       editable,
       maxHeight,
+      opticalPadding,
       platform: Platform.OS === 'ios' ? 'ios' as const : Platform.OS === 'android' ? 'android' as const : 'default' as const,
       placeholder,
       theme,
@@ -107,12 +110,14 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       accessibilityLabel,
       editable,
       maxHeight,
+      opticalPadding,
       placeholder,
       theme,
     }), [
       accessibilityLabel,
       editable,
       maxHeight,
+      opticalPadding,
       placeholder,
       theme.background,
       theme.border,

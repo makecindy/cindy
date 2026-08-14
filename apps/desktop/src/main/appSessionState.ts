@@ -13,7 +13,6 @@ import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import { LOCAL_PROFILE_DATA_OWNER_ID } from './profile/profileRegistryModel.js';
 import type { DataOwnerPushStamp } from '../shared/dataOwnerPush.js';
-import { isGhostSkillProjectionBoundaryStableForOwner } from './authBoundaryQuarantine.js';
 
 export type AppSessionMode = 'signed-out' | 'local' | 'cloud';
 
@@ -143,12 +142,10 @@ export function beginAppSessionBoundary(): () => void {
 }
 
 export function isAppSessionBoundaryPending(): boolean {
-  if (boundaryDepth > 0) return true;
-  const session = ensureLoaded();
-  return !isGhostSkillProjectionBoundaryStableForOwner(session.dataOwnerId);
+  return boundaryDepth > 0;
 }
 
-/** Process-local transition state, excluding a durable owner mismatch. */
+/** Backward-compatible alias for the process-local application transition. */
 export function isAppSessionBoundaryLocallyPending(): boolean {
   return boundaryDepth > 0;
 }

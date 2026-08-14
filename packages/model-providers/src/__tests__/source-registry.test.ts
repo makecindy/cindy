@@ -225,19 +225,23 @@ describe('mergeWithBundled', () => {
     expect(merged.providers.find((provider) => provider.id === 'xai')?.name).toBe('REMOTE-XAI');
   });
 
-  it('旧远端未声明媒体能力时继承 bundled;显式空清单仍可停用', () => {
+  it('旧远端未声明 xAI 媒体能力时继承 bundled;显式空清单仍可停用', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
     const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
     delete oldRemoteXai.imageModels;
+    delete oldRemoteXai.videoModels;
     const inherited = mergeWithBundled({ version: '2', providers: [oldRemoteXai] });
     expect(inherited.providers.find((p) => p.id === 'xai')?.imageModels)
       .toEqual(bundledXai.imageModels);
+    expect(inherited.providers.find((p) => p.id === 'xai')?.videoModels)
+      .toEqual(bundledXai.videoModels);
 
     const explicitlyDisabled = mergeWithBundled({
       version: '2',
-      providers: [{ ...oldRemoteXai, imageModels: [] }],
+      providers: [{ ...oldRemoteXai, imageModels: [], videoModels: [] }],
     });
     expect(explicitlyDisabled.providers.find((p) => p.id === 'xai')?.imageModels).toEqual([]);
+    expect(explicitlyDisabled.providers.find((p) => p.id === 'xai')?.videoModels).toEqual([]);
   });
 
   it('旧远端未声明向量清单时继承 bundled;显式空清单仍是停用语义', () => {
@@ -268,6 +272,7 @@ describe('mergeWithBundled', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
     const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
     delete oldRemoteXai.imageModels;
+    delete oldRemoteXai.videoModels;
 
     const apiKeyXai: Provider = {
       ...oldRemoteXai,
@@ -290,9 +295,19 @@ describe('mergeWithBundled', () => {
       )?.imageModels,
     ).toBeUndefined();
     expect(
+      mergeWithBundled({ version: '2', providers: [apiKeyXai] }).providers.find(
+        (p) => p.id === 'xai',
+      )?.videoModels,
+    ).toBeUndefined();
+    expect(
       mergeWithBundled({ version: '2', providers: [alternateRouteXai] }).providers.find(
         (p) => p.id === 'xai',
       )?.imageModels,
+    ).toBeUndefined();
+    expect(
+      mergeWithBundled({ version: '2', providers: [alternateRouteXai] }).providers.find(
+        (p) => p.id === 'xai',
+      )?.videoModels,
     ).toBeUndefined();
   });
 
@@ -300,6 +315,7 @@ describe('mergeWithBundled', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
     const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
     delete oldRemoteXai.imageModels;
+    delete oldRemoteXai.videoModels;
 
     for (const access of [
       { kind: 'api' as const },
@@ -312,6 +328,12 @@ describe('mergeWithBundled', () => {
           providers: [{ ...oldRemoteXai, access }],
         }).providers.find((p) => p.id === 'xai')?.imageModels,
       ).toBeUndefined();
+      expect(
+        mergeWithBundled({
+          version: '2',
+          providers: [{ ...oldRemoteXai, access }],
+        }).providers.find((p) => p.id === 'xai')?.videoModels,
+      ).toBeUndefined();
     }
 
     expect(
@@ -320,6 +342,12 @@ describe('mergeWithBundled', () => {
         providers: [{ ...oldRemoteXai, access: bundledXai.access }],
       }).providers.find((p) => p.id === 'xai')?.imageModels,
     ).toEqual(bundledXai.imageModels);
+    expect(
+      mergeWithBundled({
+        version: '2',
+        providers: [{ ...oldRemoteXai, access: bundledXai.access }],
+      }).providers.find((p) => p.id === 'xai')?.videoModels,
+    ).toEqual(bundledXai.videoModels);
   });
 
   it('非 xAI 远端条目缺少媒体字段时不从 bundled 恢复已撤下能力', () => {

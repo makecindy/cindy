@@ -1,5 +1,5 @@
 /**
- * PanelDragController —— 「直接拖面板换位」正式交互(布局树 B3 转正;前身是
+ * PanelDragController —— 「直接拖面板换位 / grid 停靠」正式交互(布局树 B3 转正;前身是
  * dev-only 原型 PanelDragPrototype,Lizi 体感两轮后拍板转正、不做编辑模式)。
  *
  * 手势(所有顶级面板通用,未来意识面板经标准头 §6.0 天然继承):
@@ -9,11 +9,10 @@
  *      已知边界:网页(webview)/独立进程区域宿主收不到按压事件,长按在那里
  *      天然无效(平台机制)——标准头手势是这类面板的主入口。
  *
- * 交互语义(drop-zone 式):**拖动过程不换位**;指针拖进**对面那块面板的真实
- * 矩形**(共享边内缩 12px 防贴边抖动)时,该面板区域亮起「松手会落到这里」的
- * 半透明高亮罩 —— 高亮就是会被交换的区域本身的尺寸,不是半屏;退出即熄灭。
- * **松手在高亮亮着时才写树交换**(layout.set 即持久化,LayoutRoot 收广播重排),
- * Esc / 松手在原侧 = 取消,什么都不发生。
+ * 交互语义(drop-zone 式):**拖动过程不改树**。插件拖到另一个插件的上/下边缘
+ * 形成纵向 grid，拖到任一根级区域的左/右边缘回到横排，中心保持交换；内置
+ * chat/right-tabs 只参加根级交换，不进入插件 column。高亮罩严格显示最终占位的
+ * 半区或整块区域，松手才一次性 layout.set 持久化；Esc / 无高亮松手 = 取消。
  *
  * 性能口径(按 Lizi "卡手"反馈定型):pointermove 热路径**零 React 渲染、零
  * 布局读取**——边界几何在起拖时量一次缓存(拖动期间不换位,界面静止,没有
@@ -32,7 +31,13 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
-import { swapRootSplitChildrenByKind } from '../../shared/layoutTree';
+import {
+  moveGhostPaneToRootByKind,
+  stackGhostPaneByKind,
+  swapPanesByKind,
+  swapRootSplitChildrenByKind,
+  type LayoutNode,
+} from '../../shared/layoutTree';
 import { toast } from '@/lib/toast';
 
 /** 长按窗体:按住该时长(ms)且位移小于容差才"浮起"。 */
@@ -106,7 +111,6 @@ export function isDroppableRect(width: number, height: number): boolean {
   return width >= MIN_DROP_TARGET_SIZE_PX && height >= MIN_DROP_TARGET_SIZE_PX;
 }
 
-
 interface PanelDragControllerProps {
   /** MainLayout 的 row 容器(全宽 flex 行),用于算内容区右边界与纵向范围。 */
   rowRef: React.RefObject<HTMLDivElement | null>;
@@ -123,11 +127,114 @@ interface ZoneRect {
   height: number;
 }
 
-/** 单个可落靶面板:高亮框(它的真实矩形)+ 触发区间。起拖时一次性量好。 */
+export type PanelDropIntent =
+  'swap' | 'stack-before' | 'stack-after' | 'root-before' | 'root-after';
+
+interface RectLike extends ZoneRect {
+  right: number;
+  bottom: number;
+}
+
+const GRID_EDGE_RATIO = 0.28;
+
+function pointInRect(x: number, y: number, rect: RectLike): boolean {
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+/**
+ * 二维停靠意图：插件之间上/下形成 grid，左/右回到根横排，中心交换槽位。
+ * 内置面板保持根级交换；落在插件纵向列时交换整列，不把内置面板塞进列内。
+ */
+export function computePanelDropIntent(input: {
+  pointerX: number;
+  pointerY: number;
+  paneRect: RectLike;
+  rootRect: RectLike;
+  sourceKind: string;
+  targetKind: string;
+  sourceRootIndex: number;
+  targetRootIndex: number;
+  sourceIsRootPane: boolean;
+  targetIsRootPane: boolean;
+}): PanelDropIntent | null {
+  const { pointerX, pointerY, paneRect, sourceKind, targetKind } = input;
+  if (!pointInRect(pointerX, pointerY, paneRect)) return null;
+  const sourceGhost = sourceKind.startsWith('ghost:');
+  const targetGhost = targetKind.startsWith('ghost:');
+  if (!sourceGhost) {
+    return input.sourceIsRootPane && input.sourceRootIndex !== input.targetRootIndex
+      ? 'swap'
+      : null;
+  }
+
+  const nx = paneRect.width > 0 ? (pointerX - paneRect.left) / paneRect.width : 0.5;
+  const ny = paneRect.height > 0 ? (pointerY - paneRect.top) / paneRect.height : 0.5;
+  const edgeCandidates: Array<{ distance: number; intent: PanelDropIntent }> = [
+    { distance: nx, intent: 'root-before' },
+    { distance: 1 - nx, intent: 'root-after' },
+  ];
+  if (targetGhost) {
+    edgeCandidates.push(
+      { distance: ny, intent: 'stack-before' },
+      { distance: 1 - ny, intent: 'stack-after' },
+    );
+  }
+  const nearest = edgeCandidates.sort((a, b) => a.distance - b.distance)[0];
+  if (nearest && nearest.distance <= GRID_EDGE_RATIO) return nearest.intent;
+
+  // 嵌套插件只能和插件交换，避免把 chat/right-tabs 换进 ghost-only 的 column。
+  if (
+    targetGhost ||
+    (input.sourceIsRootPane &&
+      input.targetIsRootPane &&
+      input.sourceRootIndex !== input.targetRootIndex)
+  ) {
+    return 'swap';
+  }
+  // 同一 root 区域的中心没有新的布局含义。
+  return null;
+}
+
+function insetRect(rect: RectLike): RectLike {
+  const left = rect.left + DROP_ZONE_INSET_PX;
+  const top = rect.top + DROP_ZONE_INSET_PX;
+  const width = Math.max(0, rect.width - DROP_ZONE_INSET_PX * 2);
+  const height = Math.max(0, rect.height - DROP_ZONE_INSET_PX * 2);
+  return { left, top, width, height, right: left + width, bottom: top + height };
+}
+
+export function computePanelDropZone(
+  intent: PanelDropIntent,
+  paneRect: RectLike,
+  rootRect: RectLike,
+  swapAtRoot = false,
+): ZoneRect {
+  const base = insetRect(
+    intent === 'root-before' || intent === 'root-after' || (intent === 'swap' && swapAtRoot)
+      ? rootRect
+      : paneRect,
+  );
+  switch (intent) {
+    case 'stack-before':
+      return { ...base, height: base.height / 2 };
+    case 'stack-after':
+      return { ...base, top: base.top + base.height / 2, height: base.height / 2 };
+    case 'root-before':
+      return { ...base, width: base.width / 2 };
+    case 'root-after':
+      return { ...base, left: base.left + base.width / 2, width: base.width / 2 };
+    case 'swap':
+      return base;
+  }
+}
+
+/** 单个可落靶面板：pane 与其根级区域几何均在起拖时缓存。 */
 interface DropTarget {
   kind: string;
-  zone: ZoneRect;
-  trigger: TriggerRange;
+  paneRect: RectLike;
+  rootRect: RectLike;
+  rootIndex: number;
+  isRootPane: boolean;
 }
 
 /** 起拖时一次性缓存的几何:全部可落靶面板(N 面板,拖到谁身上就和谁换位)。 */
@@ -138,6 +245,7 @@ interface DragGeometry {
 /** 低频渲染状态:只在拖动开始/结束与落靶目标变化时更新,不随指针移动更新。 */
 interface DragRenderState {
   targetKind: string | null;
+  zone: ZoneRect | null;
 }
 
 export function PanelDragController({
@@ -166,37 +274,62 @@ export function PanelDragController({
 
     /** 进入拖动态:量一次几何 + 挂全局监听 + webview 穿透 + 禁选中。 */
     const activateDrag = (sourceKind: string, startX: number, startY: number) => {
-      // 可落靶面板 = root 分割里除源之外的每一个 pane(N 面板通用,拖到谁
-      // 身上就和谁换位);高亮/提交区域是各自**当下的真实矩形**(Lizi 定案:
-      // 高亮必须是"会被交换的那块区域"的尺寸,不是半屏)。
-      // 几何一次性缓存:拖动期间不换位、界面静止,没有需要每帧重量的理由。
+      // 几何一次性缓存：pane 矩形决定上下/中心落点，根级区域矩形决定左右停靠。
+      // 拖动期间树不变，热路径无需再次读取布局。
       const targets: DropTarget[] = [];
+      let sourceRootIndex = -1;
+      let sourceIsRootPane = false;
       try {
         const layout = window.electronAPI.layout.getStateSync().layout;
-        if (layout.content.type !== 'split') return;
-        const kinds = layout.content.children.map((c) =>
-          c.node.type === 'pane' ? c.node.panelKind : null,
+        if (layout.content.type !== 'split' || layout.content.direction !== 'row') return;
+        const paneKinds = (node: LayoutNode): string[] =>
+          node.type === 'pane'
+            ? [node.panelKind]
+            : node.children.flatMap((child) => paneKinds(child.node));
+        sourceRootIndex = layout.content.children.findIndex((child) =>
+          paneKinds(child.node).includes(sourceKind),
         );
-        const sourceIndex = kinds.indexOf(sourceKind);
-        if (sourceIndex < 0) return;
-        kinds.forEach((kind, index) => {
-          if (!kind || index === sourceIndex) return;
-          const el = document.querySelector(`[data-panel-drag-root="${kind}"]`);
-          if (!el) return; // 未注册(隐藏)的 kind 没有 DOM,自然不可落靶
-          const rect = el.getBoundingClientRect();
-          // 折叠(w-0)/隐藏的面板没有身体,不算落点;全过滤光则下方 targets 为空,
-          // 根本不进入拖动态(按下如常点击,不浮起一张无处可落的拖影)。
-          if (!isDroppableRect(rect.width, rect.height)) return;
-          targets.push({
-            kind,
-            zone: {
-              left: rect.left + DROP_ZONE_INSET_PX,
-              top: rect.top + DROP_ZONE_INSET_PX,
-              width: Math.max(0, rect.width - DROP_ZONE_INSET_PX * 2),
-              height: Math.max(0, rect.height - DROP_ZONE_INSET_PX * 2),
-            },
-            // 入界余量只缩"朝源面板那侧"的共享方向:源在目标左侧则缩目标左缘。
-            trigger: computeTriggerRange(rect.left, rect.right, sourceIndex < index),
+        if (sourceRootIndex < 0) return;
+        sourceIsRootPane = layout.content.children[sourceRootIndex].node.type === 'pane';
+
+        layout.content.children.forEach((rootChild, rootIndex) => {
+          const kinds = paneKinds(rootChild.node);
+          const rootElement =
+            rootChild.node.type === 'split'
+              ? document.querySelector(`[data-layout-root-child-id="${rootChild.node.id}"]`)
+              : document.querySelector(`[data-panel-drag-root="${rootChild.node.panelKind}"]`);
+          const rootDomRect = rootElement?.getBoundingClientRect();
+          if (!rootDomRect || !isDroppableRect(rootDomRect.width, rootDomRect.height)) return;
+          const rootRect: RectLike = {
+            left: rootDomRect.left,
+            top: rootDomRect.top,
+            width: rootDomRect.width,
+            height: rootDomRect.height,
+            right: rootDomRect.right,
+            bottom: rootDomRect.bottom,
+          };
+          kinds.forEach((kind) => {
+            if (kind === sourceKind) return;
+            const el = document.querySelector(`[data-panel-drag-root="${kind}"]`);
+            if (!el) return; // 未注册(隐藏)的 kind 没有 DOM,自然不可落靶
+            const rect = el.getBoundingClientRect();
+            // 折叠(w-0)/隐藏的面板没有身体,不算落点;全过滤光则下方 targets 为空,
+            // 根本不进入拖动态(按下如常点击,不浮起一张无处可落的拖影)。
+            if (!isDroppableRect(rect.width, rect.height)) return;
+            targets.push({
+              kind,
+              paneRect: {
+                left: rect.left,
+                top: rect.top,
+                width: rect.width,
+                height: rect.height,
+                right: rect.right,
+                bottom: rect.bottom,
+              },
+              rootRect,
+              rootIndex,
+              isRootPane: rootChild.node.type === 'pane',
+            });
           });
         });
       } catch {
@@ -207,8 +340,9 @@ export function PanelDragController({
 
       dragActiveRef.current = true;
       let targetKindNow: string | null = null;
+      let targetIntentNow: PanelDropIntent | null = null;
       pointRef.current = { x: startX, y: startY };
-      setDrag({ targetKind: null });
+      setDrag({ targetKind: null, zone: null });
       document.body.classList.add('resizing-pane');
       const prevUserSelect = document.body.style.userSelect;
       const prevBodyPointerEvents = document.body.style.pointerEvents;
@@ -223,16 +357,47 @@ export function PanelDragController({
       // 长按期间 mousedown 默认行为可能已拉出文字选区,浮起时清掉。
       window.getSelection()?.removeAllRanges();
 
-      /** 每帧:直改拖影 transform;只有落靶目标变化才 setState。 */
+      /** 每帧:直改拖影 transform;只有落靶目标/方向变化才 setState。 */
       const onMove = (e: PointerEvent) => {
         moveGhost(e.clientX, e.clientY);
         const geo = geometryRef.current;
         if (!geo) return;
-        const hit = geo.targets.find((t) => isPointerInTargetZone(e.clientX, t.trigger));
-        const nextKind = hit ? hit.kind : null;
-        if (nextKind !== targetKindNow) {
+        let nextTarget: DropTarget | null = null;
+        let nextIntent: PanelDropIntent | null = null;
+        for (const target of geo.targets) {
+          const intent = computePanelDropIntent({
+            pointerX: e.clientX,
+            pointerY: e.clientY,
+            paneRect: target.paneRect,
+            rootRect: target.rootRect,
+            sourceKind,
+            targetKind: target.kind,
+            sourceRootIndex,
+            targetRootIndex: target.rootIndex,
+            sourceIsRootPane,
+            targetIsRootPane: target.isRootPane,
+          });
+          if (!intent) continue;
+          nextTarget = target;
+          nextIntent = intent;
+          break;
+        }
+        const nextKind = nextTarget?.kind ?? null;
+        if (nextKind !== targetKindNow || nextIntent !== targetIntentNow) {
           targetKindNow = nextKind;
-          setDrag({ targetKind: nextKind });
+          targetIntentNow = nextIntent;
+          setDrag({
+            targetKind: nextKind,
+            zone:
+              nextTarget && nextIntent
+                ? computePanelDropZone(
+                    nextIntent,
+                    nextTarget.paneRect,
+                    nextTarget.rootRect,
+                    nextIntent === 'swap' && !sourceKind.startsWith('ghost:'),
+                  )
+                : null,
+          });
         }
       };
 
@@ -249,11 +414,27 @@ export function PanelDragController({
         document.removeEventListener('pointercancel', onCancel);
         window.removeEventListener('keydown', onKey, true);
         cleanupRef.current = null;
-        if (opts.commit && targetKindNow) {
-          // 松手在高亮上 → 此刻才真正与落靶面板换位并持久化。
+        if (opts.commit && targetKindNow && targetIntentNow) {
           try {
             const layout = window.electronAPI.layout.getStateSync().layout;
-            const op = swapRootSplitChildrenByKind(layout, sourceKind, targetKindNow);
+            const op =
+              targetIntentNow === 'stack-before' || targetIntentNow === 'stack-after'
+                ? stackGhostPaneByKind(
+                    layout,
+                    sourceKind,
+                    targetKindNow,
+                    targetIntentNow === 'stack-before' ? 'before' : 'after',
+                  )
+                : targetIntentNow === 'root-before' || targetIntentNow === 'root-after'
+                  ? moveGhostPaneToRootByKind(
+                      layout,
+                      sourceKind,
+                      targetKindNow,
+                      targetIntentNow === 'root-before' ? 'before' : 'after',
+                    )
+                  : sourceKind.startsWith('ghost:')
+                    ? swapPanesByKind(layout, sourceKind, targetKindNow)
+                    : swapRootSplitChildrenByKind(layout, sourceKind, targetKindNow);
             if (op.applied) {
               void window.electronAPI.layout
                 .set(op.layout)
@@ -265,7 +446,7 @@ export function PanelDragController({
                 .catch(() => toast.error(t('settings.appearance.layout.saveFailed')));
             }
           } catch {
-            // 同步 IPC 异常 —— 放弃本次交换并明确告诉用户没有保存。
+            // 同步 IPC 异常 —— 放弃本次布局变换并明确告诉用户没有保存。
             toast.error(t('settings.appearance.layout.saveFailed'));
           }
         }
@@ -278,7 +459,10 @@ export function PanelDragController({
           };
           window.addEventListener('click', swallow, { capture: true, once: true });
           window.setTimeout(
-            () => window.removeEventListener('click', swallow, { capture: true } as EventListenerOptions),
+            () =>
+              window.removeEventListener('click', swallow, {
+                capture: true,
+              } as EventListenerOptions),
             100,
           );
         }
@@ -357,9 +541,7 @@ export function PanelDragController({
   }, [enabled, rowRef, sidebarBlockRef, t]);
 
   if (!drag) return null;
-  const zone = drag.targetKind
-    ? geometryRef.current?.targets.find((t) => t.kind === drag.targetKind)?.zone ?? null
-    : null;
+  const zone = drag.zone;
   // 视觉(全走主题 token,规则 16;无文案免 i18n):
   //   1. 落点高亮:半透明淡蓝罩层(VSCode 拖 tab 落点同款质感)——透出下方内容,
   //      取色基于 focus-ring 语义蓝低透明度混合,light / dark / 扩展主题都自然;

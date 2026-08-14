@@ -43,14 +43,24 @@ let creds: BotCredentials | null = null;
 /** 最近一次 bind 的账号身份 — 跨 unbind 保留, 用于判「账号是否真替换」。 */
 let lastBoundCreds: BotCredentials | null = null;
 
-export function bindClient(c: BotCredentials): void {
-  // 账号真正替换(appId/service 变化)才清开场白卡映射: 同账号 transport 重连
-  // (reconnectSavedCredentials: stop → start 同凭证)时 turn 仍在跑, 未消费的
-  // opener 必须仍可被认领, 否则答案无处 patch、话题锚点丢失。
-  const accountChanged =
+function sameBoundAccount(next: BotCredentials): boolean {
+  return (
     lastBoundCreds !== null &&
-    (lastBoundCreds.appId !== c.appId || lastBoundCreds.service !== c.service);
-  if (accountChanged) patchableOpeners.clear();
+    lastBoundCreds.appId === next.appId &&
+    lastBoundCreds.service === next.service
+  );
+}
+
+function clearAccountScopedOutboundState(): void {
+  laneAnchors.clear();
+  patchableOpeners.clear();
+}
+
+export function bindClient(c: BotCredentials): void {
+  // 账号真正替换(appId/service 变化)才清开场白卡与话题锚点: 同账号 transport
+  // 重连(reconnectSavedCredentials: stop → start 同凭证)时 turn 仍在跑, 未消费
+  // 的 opener / 锚点必须仍可被认领, 否则答案无处 patch、话题出站没有 reply 根。
+  if (!sameBoundAccount(c)) clearAccountScopedOutboundState();
   lastBoundCreds = c;
   creds = c;
   client = new Lark.Client({
@@ -63,9 +73,8 @@ export function bindClient(c: BotCredentials): void {
 export function unbindClient(): void {
   client = null;
   creds = null;
-  laneAnchors.clear();
   cardLanes.clear();
-  // patchableOpeners 不随 unbind 清空(见 bindClient 的账号替换清理)。
+  // patchableOpeners / laneAnchors 不随 unbind 清空(见 bindClient 的账号替换清理)。
 }
 
 // ── group lane reply anchors ──────────────────────────────────────────────────
@@ -73,7 +82,7 @@ export function unbindClient(): void {
 // 出站按回合领取(流式建卡时 advance)。话题 lane 的**所有**出站都走 reply
 // 锚点 — 被回复消息在话题里, 回复自动落回话题(会话与挂回一次解决);
 // 普通群 lane 只有回合首条出站 reply(引用式"挂在提问下"), 后续 chat_id 直发。
-// 连接换代(unbindClient)清空 — 旧锚点不跨代错配(telegram 同语义)。
+// 账号替换时清空 — 同账号 transport 重连保留, 避免进行中的 turn 丢掉话题锚点。
 
 interface LaneAnchorState {
   /** 待领取的触发消息 id FIFO(多条消息先后触发同一 lane 各自排队)。 */
@@ -465,7 +474,7 @@ export async function removeReaction(messageId: string, reactionId: string): Pro
 // 键对不上会让 /ctr 锁永远清不掉。发往 lane 的卡在发送成功后把 messageId 登记
 // 回发卡 lane, 回调时反查归一成同一条 lane;私聊卡(open_id)与改投 owner DM 的卡
 // 不登记, 回调保持 open_id。飞书卡片回调有效期 30 天, 过期条目不会再有点击,
-// 按 31 天 TTL + 上限淘汰;unbindClient 随连接换代清空(与 laneAnchors 同口径)。
+// 按 31 天 TTL + 上限淘汰;unbindClient 清空(卡片回调不跨连接认领旧卡)。
 
 const CARD_LANE_TTL_MS = 31 * 24 * 60 * 60 * 1000;
 const CARD_LANE_MAX_ENTRIES = 512;

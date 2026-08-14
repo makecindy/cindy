@@ -88,6 +88,7 @@ import {
   hasGrokOAuthLoginUnbound,
   resetGrokOAuthMemoryCache,
 } from './grok-oauth-login.js';
+import { clearXaiMediaModels, refreshXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
 import { getActiveAppSession } from '../appSessionState.js';
 import {
@@ -384,6 +385,13 @@ let endpointReloadInflight: {
   promise: Promise<Catalog>;
 } | null = null;
 
+/** Set 用稳定函数引用去重，ensureActiveCatalogLoaded 的幂等调用不会重复注册清理副作用。 */
+function handleProviderSecretsCleared(): void {
+  resetGenericOAuthMemoryCache();
+  resetGrokOAuthMemoryCache();
+  clearXaiMediaModels();
+}
+
 /**
  * 启动期（splash）await 一次：加载远端目录写入 active-catalog。幂等 + 并发去重。
  * loadCatalog 永不抛（最差回落 bundled），故本函数也不会抛。
@@ -416,10 +424,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   });
   // 账号切换清空本机密钥后,同步失效 generic-oauth 的内存缓存——
   // 不失效的话磁盘 blob 已删但缓存还热,B 账号会继续用 A 的 token 路由(串号)。
-  addProviderSecretsClearedListener(() => {
-    resetGenericOAuthMemoryCache();
-    resetGrokOAuthMemoryCache();
-  });
+  addProviderSecretsClearedListener(handleProviderSecretsCleared);
   const readOAuthToken = (providerId: string): string | null => {
     const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
     return readCachedGenericOAuthAccessToken(providerId, provider?.auth.oauth);
@@ -740,15 +745,13 @@ async function claimNativeProviderAuthOnRead(
       return;
     }
     if (claimedWork) {
-      // Ordinary provider reads retain low latency. Discovery still runs in the background and
-      // its completion invalidates other snapshots, while explicit routing callers opt into the
-      // await above. Keep the rejection contained so a refresh failure cannot become an
-      // unhandled rejection on the connection-status path.
-      void Promise.resolve(claimedWork)
-        .then(notifyIfClaimStillCurrent)
-        .catch((err) => {
-          log.warn('native provider post-claim work failed', { provider, error: String(err) });
-        });
+      // 连接态已经在本次读里从 false 翻成 true，必须立即广播；媒体／模型发现可以继续
+      // 在后台跑，成功时 active-catalog revision 会再广播清单变化。不能让慢上游把
+      // “已连接”本身拖到超时以后才出现在其它窗口。
+      notifyIfClaimStillCurrent();
+      void Promise.resolve(claimedWork).catch((err) => {
+        log.warn('native provider post-claim work failed', { provider, error: String(err) });
+      });
       return;
     }
     // 认领成功 = 这家供应商刚从「未连接」翻成「已连接」,但只有触发这次读取的那个调用方
@@ -884,7 +887,11 @@ export function getDesktopProviderService(): ProviderService {
           ? desktopCodexAuthAdapter.hasCodexOAuthLogin()
           : desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
       xai: async ({ allowSideEffects }) => {
-        if (allowSideEffects) await claimNativeProviderAuthOnRead('xai', hasGrokOAuthLoginUnbound);
+        if (allowSideEffects) {
+          await claimNativeProviderAuthOnRead('xai', hasGrokOAuthLoginUnbound, () =>
+            refreshXaiMediaModels().then(() => undefined),
+          );
+        }
         return hasGrokOAuthLogin();
       },
     },

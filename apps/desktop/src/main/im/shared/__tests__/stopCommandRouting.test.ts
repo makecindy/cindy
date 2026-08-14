@@ -518,4 +518,45 @@ describe('messageHandler !stop routing', () => {
     expect(sendText).not.toHaveBeenCalled();
     expect(runAgentTurn).not.toHaveBeenCalled();
   });
+
+  it('同话题后续 !stop 不消费上一轮的 pending opener(归属不抢占)', async () => {
+    // 消息 A 已开话题且其 pending opener 尚未被流式认领; 本条 B 是同一话题的
+    // 后续消息(groupContextLane 缺省)— B 不得 patch A 的思考卡。
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ text: '!stop' }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).not.toHaveBeenCalled();
+    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+      threadTs: '1234.5678',
+    });
+  });
+
+  it('同话题后续 slash 不注入 opener sink', async () => {
+    let capturedCtx: Parameters<typeof handleSlashCommand>[1] | undefined;
+    handleSlashCommand.mockImplementation(async (_text: string, ctx: Parameters<typeof handleSlashCommand>[1]) => {
+      capturedCtx = ctx;
+      return true;
+    });
+    deliver(makeEvent({ text: '/project' }));
+    await flushMicrotasks();
+
+    expect(handleSlashCommand).toHaveBeenCalledTimes(1);
+    expect(capturedCtx?.consumePendingOpener).toBeUndefined();
+  });
+
+  it('同话题后续纯 unsupported 不消费上一轮的 pending opener', async () => {
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(
+      makeEvent({
+        text: '',
+        unsupported: [{ type: 'audio', label: '语音（暂不支持）' }] as IMMessageEvent['unsupported'],
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
 });

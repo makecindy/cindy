@@ -70,6 +70,18 @@ let discoveredCodex: CatalogModel[] = [];
  * 空/坏数据绝不抹掉静态兜底。由 generic-oauth 的 models 发现流程写入。
  */
 const discoveredByProvider = new Map<string, Partial<Record<AgentKind, CatalogModel[]>>>();
+/**
+ * 供应商媒体模型动态发现快照。成功快照决定当前账号的型号存在性，静态／远端
+ * 同 id 条目只提供 first-wins 展示元数据；发现失败不写本 Map，完整回落静态目录。
+ * 媒体字段显式 `[]` 是服务端停用信号，合并时不得被本快照复活。
+ */
+const discoveredMediaByProvider = new Map<
+  string,
+  {
+    imageModels?: NonNullable<Provider['imageModels']>;
+    videoModels?: NonNullable<Provider['videoModels']>;
+  }
+>();
 /** 单 tab 能力覆盖块(shared/modelAccess ModelAccessAgentOverride 同形)。 */
 export interface XdGatewayAgentOverride {
   contextWindow?: number;
@@ -291,6 +303,26 @@ function augmentModels(
         .map(({ model }) => model)
     : combined;
   return { ...p, models: { ...p.models, [agent]: models } };
+}
+
+function applyMediaDiscovery(
+  provider: Provider,
+  key: 'imageModels' | 'videoModels',
+  discovered: NonNullable<Provider['imageModels']>,
+): Provider {
+  const existing = provider[key];
+  // undefined = 这份原始目录没有声明能力；正常加载路径会先由 source 用 bundled
+  // 补旧目录。[] 则是明确停用。两种情况都不能仅凭账号发现把能力凭空复活。
+  if (!existing || existing.length === 0) return provider;
+  // 官方端点成功返回空清单 = 当前账号此类媒体没有可执行型号。它与请求失败不同，
+  // 必须清掉旧快照／静态兜底，不能继续展示一个账号实际不可用的型号。
+  if (discovered.length === 0) return { ...provider, [key]: [] };
+  const discoveredById = new Map(discovered.map((model) => [model.id, model]));
+  const retained = existing.filter((model) => discoveredById.delete(model.id));
+  const next = [...retained, ...discoveredById.values()];
+  const unchanged =
+    next.length === existing.length && next.every((model, index) => model === existing[index]);
+  return unchanged ? provider : { ...provider, [key]: next };
 }
 
 /**
@@ -557,6 +589,20 @@ function computeMerged(): Catalog {
       return next;
     });
   }
+  if (discoveredMediaByProvider.size > 0) {
+    providers = providers.map((provider) => {
+      const snapshot = discoveredMediaByProvider.get(provider.id);
+      if (!snapshot) return provider;
+      let next = provider;
+      if (snapshot.imageModels) {
+        next = applyMediaDiscovery(next, 'imageModels', snapshot.imageModels);
+      }
+      if (snapshot.videoModels) {
+        next = applyMediaDiscovery(next, 'videoModels', snapshot.videoModels);
+      }
+      return next;
+    });
+  }
   // ── root 装配 + 投影(2026-08-02 模型平面收敛,拓扑见 model-plane/modelPlanePolicy.ts)。
   // 每个 allowlist 供应商:registry presence 实体化/overlay + retired 标记 → 本地
   // override(local 永远最高)→ 派生端(bridge/Pi)从最终 root 统一重算。
@@ -819,6 +865,30 @@ export function setDiscoveredProviderModels(
   const byAgent = discoveredByProvider.get(providerId) ?? {};
   byAgent[agent] = [...models];
   discoveredByProvider.set(providerId, byAgent);
+  markChanged();
+}
+
+/**
+ * 原子注入供应商图片／视频发现快照。成功快照决定存在性，同 id 静态元数据优先；
+ * 传 null 清空该供应商账号态快照，回到当前
+ * 静态／远端目录；失败路径不应调用，以保留同账号上次成功结果。
+ */
+export function setDiscoveredProviderMediaModels(
+  providerId: string,
+  snapshot: {
+    imageModels?: NonNullable<Provider['imageModels']>;
+    videoModels?: NonNullable<Provider['videoModels']>;
+  } | null,
+): void {
+  if (snapshot === null) discoveredMediaByProvider.delete(providerId);
+  else {
+    const previous = discoveredMediaByProvider.get(providerId) ?? {};
+    discoveredMediaByProvider.set(providerId, {
+      ...previous,
+      ...(snapshot.imageModels ? { imageModels: [...snapshot.imageModels] } : {}),
+      ...(snapshot.videoModels ? { videoModels: [...snapshot.videoModels] } : {}),
+    });
+  }
   markChanged();
 }
 

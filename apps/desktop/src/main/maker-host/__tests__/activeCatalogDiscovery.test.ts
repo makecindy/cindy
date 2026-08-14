@@ -22,6 +22,7 @@ import {
   setActiveCatalog,
   setAnthropicDiscoveredModels,
   setDiscoveredCodexModels,
+  setDiscoveredProviderMediaModels,
 } from '../active-catalog.js';
 
 function openaiIds(agent: 'claude-code' | 'codex' | 'pi'): string[] {
@@ -89,6 +90,7 @@ describe('active-catalog discovered augment', () => {
     // 复位全局状态,避免测试间串扰
     setActiveCatalog(BUNDLED_CATALOG);
     setDiscoveredCodexModels([]);
+    setDiscoveredProviderMediaModels('xai', null);
   });
 
   it('新 discovered id 同时进入 openai.codex 与 Claude/Pi bridge', () => {
@@ -105,6 +107,69 @@ describe('active-catalog discovered augment', () => {
     expect(xai?.agents).toContain('pi');
     expect(xai?.routing.pi?.modelPrefixes).toEqual(['xai/']);
     expect(xai?.models.pi).toEqual(xai?.models['claude-code']);
+  });
+
+  it('xAI 媒体发现按官方存在性收敛，静态同 id 保持 first-wins', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setDiscoveredProviderMediaModels('xai', {
+      imageModels: [
+        { id: 'xai/grok-imagine-image', name: 'Remote Rename Must Not Win' },
+        { id: 'xai/future-image', name: 'Future Image' },
+      ],
+      videoModels: [{ id: 'xai/future-video', name: 'Future Video' }],
+    });
+    const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    expect(xai?.imageModels).toContainEqual({
+      id: 'xai/grok-imagine-image',
+      name: 'Grok Imagine Image',
+    });
+    expect(xai?.imageModels).toContainEqual({ id: 'xai/future-image', name: 'Future Image' });
+    expect(xai?.videoModels).toContainEqual({ id: 'xai/future-video', name: 'Future Video' });
+    expect(xai?.imageModels?.some((model) => model.id === 'xai/grok-imagine-image-quality')).toBe(
+      false,
+    );
+    expect(xai?.videoModels?.some((model) => model.id === 'xai/grok-imagine-video')).toBe(false);
+  });
+
+  it('xAI 媒体发现不复活远端显式空清单', () => {
+    const catalog = bundledWithoutRegistry();
+    const xai = catalog.providers.find((provider) => provider.id === 'xai');
+    if (!xai) throw new Error('fixture missing xai');
+    xai.imageModels = [];
+    xai.videoModels = [];
+    setActiveCatalog(catalog);
+    setDiscoveredProviderMediaModels('xai', {
+      imageModels: [{ id: 'xai/future-image', name: 'Future Image' }],
+      videoModels: [{ id: 'xai/future-video', name: 'Future Video' }],
+    });
+    const active = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    expect(active?.imageModels).toEqual([]);
+    expect(active?.videoModels).toEqual([]);
+  });
+
+  it('xAI 媒体分类型更新时保留另一类上次成功快照', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setDiscoveredProviderMediaModels('xai', {
+      imageModels: [{ id: 'xai/first-image', name: 'First Image' }],
+      videoModels: [{ id: 'xai/first-video', name: 'First Video' }],
+    });
+    setDiscoveredProviderMediaModels('xai', {
+      videoModels: [{ id: 'xai/second-video', name: 'Second Video' }],
+    });
+    const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    expect(xai?.imageModels).toEqual([{ id: 'xai/first-image', name: 'First Image' }]);
+    expect(xai?.videoModels).toEqual([{ id: 'xai/second-video', name: 'Second Video' }]);
+  });
+
+  it('xAI 官方成功返回空清单时清掉该类旧型号', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setDiscoveredProviderMediaModels('xai', {
+      imageModels: [],
+      videoModels: [],
+    });
+    const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    expect(xai?.imageModels).toEqual([]);
+    expect(xai?.videoModels).toEqual([]);
   });
 
   it('bridge 投影剔除 max/ultra:codex 侧保留、claude-code 侧封顶 xhigh(issue #352)', () => {

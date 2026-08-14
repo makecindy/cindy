@@ -12,7 +12,7 @@ function deps(
     refreshXd: vi.fn(async () => {}),
     refreshAnthropic: vi.fn(async () => true),
     refreshOpenAi: vi.fn(async () => true),
-    refreshXaiCatalog: vi.fn(async () => {}),
+    refreshXaiMedia: vi.fn(async () => true),
     ...overrides,
   };
 }
@@ -22,7 +22,7 @@ describe('refreshBuiltinProviderModels', () => {
     ['xd', 'refreshXd'],
     ['anthropic', 'refreshAnthropic'],
     ['openai', 'refreshOpenAi'],
-    ['xai', 'refreshXaiCatalog'],
+    ['xai', 'refreshXaiMedia'],
   ] as const)('dispatches %s to its existing refresh source', async (providerId, method) => {
     const d = deps();
     await refreshBuiltinProviderModels(providerId, d);
@@ -36,5 +36,8 @@ describe('refreshBuiltinProviderModels', () => {
     await expect(
       refreshBuiltinProviderModels('openai', deps({ refreshOpenAi: async () => false })),
     ).rejects.toThrow(/OpenAI model discovery/);
+    await expect(
+      refreshBuiltinProviderModels('xai', deps({ refreshXaiMedia: async () => false })),
+    ).rejects.toThrow(/xAI media model discovery/);
   });
 });
