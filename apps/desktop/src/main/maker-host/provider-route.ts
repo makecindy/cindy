@@ -151,6 +151,17 @@ const CLIENT_AUTH_HEADERS = ['authorization', 'x-api-key'];
 const MISSING_CUSTOM_PROVIDER_API_KEY = 'cindy-missing-custom-provider-api-key';
 const DISABLED_PROVIDER_ROUTE_ERROR = 'provider_route_disabled';
 const UPDATING_PROVIDER_ROUTE_ERROR = 'provider_route_updating';
+const PENDING_PROVIDER_SWITCH_ERROR = 'provider_switch_pending';
+
+type PendingCredentialSwitchReader = (
+  sessionId: string,
+) => { model: string; providerId: string | null; previousModel?: string } | undefined;
+let pendingCredentialSwitchReader: PendingCredentialSwitchReader = () => undefined;
+
+/** Main wires the pending switch service into this synchronous routing boundary. */
+export function setPendingCredentialSwitchReader(reader: PendingCredentialSwitchReader): void {
+  pendingCredentialSwitchReader = reader;
+}
 
 /**
  * 已迁移但无法安全执行的历史路由必须由 proxy 原地拒绝，不能返回 null：
@@ -196,6 +207,49 @@ function updatingProviderRouteDecision(providerId: string): RoutingDecision {
       res.end(payload);
     },
   };
+}
+
+function pendingProviderSwitchRouteDecision(providerId: string | null): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const source = providerId ? `Provider '${providerId}'` : 'The default Provider route';
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: PENDING_PROVIDER_SWITCH_ERROR,
+          code: PENDING_PROVIDER_SWITCH_ERROR,
+          message: `${source} has a pending Provider switch; retry after the current turn completes.`,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'retry-after': '1',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+function samePendingSwitchModel(left: string, right: string): boolean {
+  const leftBare = left.endsWith('[1m]') ? left.slice(0, -'[1m]'.length) : left;
+  const rightBare = right.endsWith('[1m]') ? right.slice(0, -'[1m]'.length) : right;
+  return leftBare === rightBare;
+}
+
+export function resolvePendingSessionRouteDecision(
+  sessionId: string,
+  wireModel: string | undefined,
+): RoutingDecision | null {
+  const providerId = getSessionProvider(sessionId);
+  const pendingSwitch = pendingCredentialSwitchReader(sessionId);
+  return wireModel &&
+    pendingSwitch &&
+    samePendingSwitchModel(pendingSwitch.model, wireModel) &&
+    (!pendingSwitch.previousModel ||
+      !samePendingSwitchModel(pendingSwitch.previousModel, wireModel))
+    ? pendingProviderSwitchRouteDecision(providerId)
+    : null;
 }
 
 function withoutClientAuthHeaders(
@@ -615,7 +669,8 @@ export function resolveSessionRouteDecision(
   wireModel?: string,
 ): RoutingDecision | null | Promise<RoutingDecision | null> {
   const providerId = getSessionProvider(sessionId);
-  if (!providerId) return null;
+  const pendingDecision = resolvePendingSessionRouteDecision(sessionId, wireModel);
+  if (!providerId) return pendingDecision;
   if (isProviderRouteMutationInProgress(providerId)) {
     return updatingProviderRouteDecision(providerId);
   }
@@ -624,6 +679,7 @@ export function resolveSessionRouteDecision(
   const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!routing) return null;
   if (routing.disabled) return disabledProviderRouteDecision(providerId);
+  if (pendingDecision) return pendingDecision;
   if (!routingServesWireModel(routing, wireModel)) return null;
   // 自定义供应商：resolve 时按 provider_key_<id>_<agent> 读出该 runtime 的 API key 注入鉴权头（不在 catalog）。
   const apiKey = provider?.source === 'user' ? customProviderKeyReader(providerId, agent) : null;

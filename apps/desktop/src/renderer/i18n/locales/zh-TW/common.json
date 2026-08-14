@@ -9106,6 +9106,7 @@
       "archiveWorkerAria": "歸檔 Worker {{name}}",
       "createWorker": "建立新 Worker",
       "hardLimitHint": "已達硬上限 {{count}} 個 · 歸檔現有 Worker 後可繼續建立",
+      "hardLimitSettingsHint": "已達硬上限 {{count}} 個 · 點擊前往協同設定調整",
       "softLimitHint": "已超過軟上限 {{count}} 個 · Worker 過多會增加記憶體佔用",
       "settingsCollaboration": "設定 · 協同",
       "layoutMenuLabel": "Worker 列表顯示方式",

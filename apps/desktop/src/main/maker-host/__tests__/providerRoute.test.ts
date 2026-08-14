@@ -27,6 +27,7 @@ import {
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
+  setPendingCredentialSwitchReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
   resolveImplicitProviderOAuthRouteDecision,
@@ -73,6 +74,7 @@ const CODEX_ACCOUNT_HEADER_DELETE = [
 afterEach(() => {
   mockGetAppCapabilities.mockReturnValue({ canUseCindyGateway: true });
   setProviderOAuthTokenReader(() => null);
+  setPendingCredentialSwitchReader(() => undefined);
   clearSessionProvider('s-xai');
   clearSessionProvider('s-xai-rewrite');
   clearSessionProvider('s-anthropic-codex');
@@ -449,6 +451,18 @@ describe('resolveSessionRouteDecision — modelPrefixes 服务范围门(issue #8
     )).resolves.toEqual(expect.objectContaining({ upstreamOverride: 'https://api.x.ai/v1' }));
   });
 
+  it('pending 目标在旧 Provider scope 外时仍先 fail closed', () => {
+    setSessionProvider('s-scope', 'xai');
+    setPendingCredentialSwitchReader(() => ({
+      model: 'gpt-5.6-sol',
+      providerId: 'openai',
+    }));
+
+    expect(resolveSessionRouteDecision('s-scope', 'codex', KEY, 'gpt-5.6-sol')).toEqual({
+      localHandler: expect.any(Function),
+    });
+  });
+
   it('未声明 modelPrefixes 的供应商(XD/Anthropic/自定义)不受门限制 —— no-break', () => {
     setSessionProvider('s-scope', 'xd');
     expect(resolveSessionRouteDecision('s-scope', 'claude-code', KEY, 'claude-haiku-4-5-20251001')).toEqual({
@@ -745,6 +759,167 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
       upstreamOverride: 'https://openrouter.ai/api/v1',
       headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
     });
+  });
+
+  it('跨供应商切换 pending 时不把目标模型发给旧供应商', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://provider-a.example/v1',
+            models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }],
+          },
+        },
+      }),
+      buildUserProvider({
+        id: 'provider-b',
+        name: 'Provider B',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://provider-b.example/v1',
+            models: [{ id: 'anthropic/gpt-5.6-sol', name: 'GPT 5.6 Sol' }],
+          },
+        },
+      }),
+    ]);
+    const readKey = vi.fn(() => 'custom-key');
+    setCustomProviderKeyReader(readKey);
+    setSessionProvider('s-user', 'provider-a');
+    setPendingCredentialSwitchReader((sessionId) =>
+      sessionId === 's-user'
+        ? { model: 'anthropic/gpt-5.6-sol', providerId: 'provider-b' }
+        : undefined,
+    );
+
+    const decision = await Promise.resolve(
+      resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'anthropic/gpt-5.6-sol'),
+    );
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
+    expect(
+      resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'anthropic/gpt-5.6-sol[1m]'),
+    ).toEqual({ localHandler: expect.any(Function) });
+    expect(readKey).not.toHaveBeenCalled();
+
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision!.localHandler!({
+      rawBody: Buffer.from('{}'),
+      parsedBody: { model: 'anthropic/gpt-5.6-sol' },
+      ctx: { reqId: 1, method: 'POST', url: '/v1/messages', headers: {} },
+      res: { writeHead, end } as never,
+    });
+    expect(writeHead).toHaveBeenCalledWith(503, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      'retry-after': '1',
+    });
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: {
+        type: 'provider_switch_pending',
+        code: 'provider_switch_pending',
+      },
+    });
+
+    setPendingCredentialSwitchReader(() => ({
+      model: 'deepseek-v4-flash',
+      providerId: 'provider-b',
+    }));
+    expect(
+      resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'deepseek-v4-flash'),
+    ).toEqual({ localHandler: expect.any(Function) });
+    expect(readKey).not.toHaveBeenCalled();
+  });
+
+  it('pending 只拦目标模型，保留旧 turn 与自定义供应商 universal 路由', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://provider-a.example/v1',
+            models: [{ id: 'old-model', name: 'Old Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'custom-key');
+    setSessionProvider('s-user', 'provider-a');
+    setPendingCredentialSwitchReader(() => ({ model: 'new-model', providerId: 'provider-b' }));
+
+    expect(resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'old-model')).toMatchObject({
+      upstreamOverride: 'https://provider-a.example/v1',
+    });
+    setPendingCredentialSwitchReader(() => ({
+      model: 'old-model',
+      providerId: 'provider-b',
+      previousModel: 'old-model',
+    }));
+    expect(resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'old-model')).toMatchObject({
+      upstreamOverride: 'https://provider-a.example/v1',
+    });
+    setPendingCredentialSwitchReader(() => undefined);
+    expect(resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'unknown-model')).toMatchObject({
+      upstreamOverride: 'https://provider-a.example/v1',
+    });
+  });
+
+  it('implicit 旧路由也拦截 pending 目标，但允许同模型旧 turn 收尾', () => {
+    clearSessionProvider('s-user');
+    setPendingCredentialSwitchReader(() => ({
+      model: 'new-model',
+      providerId: 'provider-b',
+      previousModel: 'old-model',
+    }));
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'new-model')).toEqual({
+      localHandler: expect.any(Function),
+    });
+
+    setPendingCredentialSwitchReader(() => ({
+      model: 'shared-model',
+      providerId: 'provider-b',
+      previousModel: 'shared-model',
+    }));
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'shared-model')).toBeNull();
+  });
+
+  it('同供应商 pending 也拦目标模型，但无 model 的控制面请求不受影响', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://provider-a.example/v1',
+            models: [{ id: 'new-model', name: 'New Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'custom-key');
+    setSessionProvider('s-user', 'provider-a');
+    setPendingCredentialSwitchReader(() => ({ model: 'new-model', providerId: 'provider-a' }));
+
+    expect(resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'new-model')).toEqual({
+      localHandler: expect.any(Function),
+    });
+    setPendingCredentialSwitchReader(() => ({ model: 'new-model', providerId: 'provider-b' }));
+    expect(resolveSessionRouteDecision('s-user', 'claude-code', KEY)).toMatchObject({
+      upstreamOverride: 'https://provider-a.example/v1',
+    });
+
+    clearSessionProvider('s-user');
+    setPendingCredentialSwitchReader(() => ({
+      model: 'codex/gpt-5.5',
+      providerId: null,
+      previousModel: 'gpt-5.5',
+    }));
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'codex/gpt-5.5')).toEqual({
+      localHandler: expect.any(Function),
+    });
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'gpt-5.5')).toBeNull();
   });
 
   it('blocks new routes while endpoint and key switch as one logical mutation', async () => {
