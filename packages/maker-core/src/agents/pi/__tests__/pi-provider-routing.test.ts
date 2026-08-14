@@ -209,7 +209,7 @@ describe('Pi provider-aware model routing', () => {
         getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
         triggerLogin: async () => ({ authenticated: true }),
         logout: async () => {},
-        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'provider-auth-placeholder' }),
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
       },
       runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
       binaryPath: path.join(agentHome, 'pi'),
@@ -240,7 +240,7 @@ describe('Pi provider-aware model routing', () => {
             name: 'xAI',
             baseUrl: 'http://127.0.0.1:9',
             api: 'anthropic-messages',
-            apiKeyEnvVar: 'CINDY_PI_API_KEY',
+            apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
             headers: {
               'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
               'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
@@ -271,7 +271,7 @@ describe('Pi provider-aware model routing', () => {
             models: [{ id: 'local-model' }],
           },
         ],
-        env: {},
+        env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
       }),
     });
 
@@ -286,11 +286,14 @@ describe('Pi provider-aware model routing', () => {
       .toEqual(['--provider', 'xai']);
     expect(captured.args.slice(captured.args.indexOf('--model'), captured.args.indexOf('--model') + 2))
       .toEqual(['--model', 'xai/grok-4.6']);
-    expect(captured.env.CINDY_PI_API_KEY).toBe('provider-auth-placeholder');
+    expect(captured.env.CINDY_PI_API_KEY).toBe('gateway-key');
+    expect(captured.env.CINDY_PI_XAI_PROXY_API_KEY).toBe('xai-proxy-placeholder');
 
     const models = JSON.parse(
       readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
-    ) as { providers: Record<string, { models: Array<Record<string, unknown>> }> };
+    ) as { providers: Record<string, { apiKey: string; models: Array<Record<string, unknown>> }> };
+    expect(models.providers.cindy?.apiKey).toBe('$CINDY_PI_API_KEY');
+    expect(models.providers.xai?.apiKey).toBe('$CINDY_PI_XAI_PROXY_API_KEY');
     expect(models.providers.xai?.models.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
       api: 'anthropic-messages',
       contextWindow: 500_000,
@@ -1565,6 +1568,7 @@ describe('Pi provider-aware model routing', () => {
       isClosed: () => false,
       remoteBinaryPath: '/remote/pi',
       killRemoteSession: async () => {},
+      ensureHostProxyForward: async () => {},
     };
     let transportOptions:
       Parameters<NonNullable<AgentDeps['getRemotePiTransport']>>[1] | undefined;
@@ -1578,7 +1582,7 @@ describe('Pi provider-aware model routing', () => {
             name: 'xAI',
             baseUrl: 'http://127.0.0.1:47989',
             api: 'anthropic-messages',
-            apiKeyEnvVar: 'CINDY_PI_API_KEY',
+            apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
             headers: {
               'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
               'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
@@ -1594,9 +1598,16 @@ describe('Pi provider-aware model routing', () => {
             },
           },
         ],
-        env: {},
+        env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
       }),
       [
+        {
+          id: 'gateway-model',
+          displayName: 'Gateway model',
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
         {
           id: 'grok-4.6',
           displayName: 'Grok 4.6',
@@ -1620,7 +1631,11 @@ describe('Pi provider-aware model routing', () => {
           identity: 'SuperGrok',
           authSource: 'oauth',
         }),
-        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'placeholder' }),
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: {
+        ...base.runtimeConfig,
+        remoteEndpoint: 'https://gateway.example.test',
       },
       registerPiProxySession: (_sessionId, token) => {
         registeredToken = token;
@@ -1654,9 +1669,28 @@ describe('Pi provider-aware model routing', () => {
       { localUrl: 'http://127.0.0.1:18765', remotePort: 47989 },
     ]);
     expect(registeredToken).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+    expect(transportOptions?.env.CINDY_PI_API_KEY).toBe('gateway-key');
+    expect(transportOptions?.env.CINDY_PI_XAI_PROXY_API_KEY).toBe('xai-proxy-placeholder');
+    expect(JSON.parse(transportOptions?.env.CINDY_PI_SECRET_ENV_NAMES ?? '[]')).toEqual(
+      expect.arrayContaining(['CINDY_PI_API_KEY', 'CINDY_PI_XAI_PROXY_API_KEY']),
+    );
     expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(registeredToken);
     const firstToken = registeredToken;
     const firstSpawnEnv = { ...transportOptions?.env };
+
+    captured.requests.length = 0;
+    await handle.setModel!('gateway-model', { providerId: 'xd' });
+    await handle.setModel!('grok-4.6', { providerId: 'xai' });
+    expect(captured.requests).toContainEqual({
+      type: 'set_model',
+      provider: 'cindy',
+      modelId: 'gateway-model',
+    });
+    expect(captured.requests).toContainEqual({
+      type: 'set_model',
+      provider: 'xai',
+      modelId: 'xai/grok-4.6',
+    });
     await handle.close();
     expect(disposed).toBe(1);
 
@@ -1743,7 +1777,7 @@ describe('Pi provider-aware model routing', () => {
             name: 'xAI',
             baseUrl: 'http://127.0.0.1:47989',
             api: 'anthropic-messages',
-            apiKeyEnvVar: 'CINDY_PI_API_KEY',
+            apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
             models: [{ id: 'xai/grok-4.6' }],
             modelIdAliases: {
               'grok-4.6': 'xai/grok-4.6',
@@ -1755,7 +1789,7 @@ describe('Pi provider-aware model routing', () => {
             },
           },
         ],
-        env: {},
+        env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
       }),
       [
         {
@@ -1782,6 +1816,10 @@ describe('Pi provider-aware model routing', () => {
     };
     const agent = new PiAgent({
       ...base,
+      auth: {
+        ...base.auth,
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
       runtimeConfig: {
         ...base.runtimeConfig,
         remoteEndpoint: 'https://gateway.example.test',

@@ -175,7 +175,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       id: 'xai',
       baseUrl: 'http://127.0.0.1:18765',
       api: 'anthropic-messages',
-      apiKeyEnvVar: 'CINDY_PI_API_KEY',
+      apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
       headers: {
         'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
         'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
@@ -194,7 +194,9 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         supportsReasoningEffort: false,
       },
     });
-    expect(env).toEqual({});
+    expect(env).toEqual({
+      CINDY_PI_XAI_PROXY_API_KEY: 'cindy-pi-provider-auth-placeholder',
+    });
   });
 
   it('projects remote xAI through an exact SSH reverse-forward to the Desktop compat proxy', async () => {

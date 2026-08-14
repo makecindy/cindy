@@ -61,6 +61,7 @@ import { getActiveCatalog, resolveXdPiGatewayWireProtocol } from './active-catal
 const log = createLogger('pi-host');
 
 const PI_API_KEY_ENV = 'CINDY_PI_API_KEY';
+const PI_XAI_PROXY_API_KEY_ENV = 'CINDY_PI_XAI_PROXY_API_KEY';
 const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_PROVIDER_AUTH_PLACEHOLDER_KEY = 'cindy-pi-provider-auth-placeholder';
@@ -70,10 +71,10 @@ export const PI_XAI_COMPAT_FORWARD_PORT = 47989;
 /**
  * 订阅 OAuth provider:网关 `cindy` 块经 compat proxy 用安全存储里的 OAuth 服务这些模型,
  * models.json 的 $CINDY_PI_API_KEY 只需占位(真凭证由 proxy 按 session-id 注入)。
- * 自定义 BYOM provider **不在此列** —— 它们走各自原生块 + 独立 key,而网关块仍需真网关 key
- * 以便会话中途切回网关模型可用,故 BYOM 会话不能写占位符毒化网关块。
+ * xAI/BYOM provider **不在此列** —— 它们走各自原生块 + 独立 key,而网关块仍需真网关 key
+ * 以便会话中途切回网关模型可用,故原生 provider 会话不能写占位符毒化网关块。
  */
-const PI_OAUTH_SUBSCRIPTION_PROVIDERS = new Set(['anthropic', 'openai', 'xai']);
+const PI_OAUTH_SUBSCRIPTION_PROVIDERS = new Set(['anthropic', 'openai']);
 
 /**
  * 解析 pi 主执行文件绝对路径;找不到返回 null(pi 为可选实验 agent,不阻塞启动)。
@@ -147,13 +148,14 @@ class DesktopPiAuthAdapter implements AuthAdapter {
   }
 
   async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {
-    // 订阅 OAuth provider 用占位符(真凭证由 compat proxy 注入)。
+    // 共用 cindy provider 的订阅 OAuth 路由用占位符(真凭证由 compat proxy 注入)。
     if (options?.providerId && PI_OAUTH_SUBSCRIPTION_PROVIDERS.has(options.providerId)) {
       return { [PI_API_KEY_ENV]: PI_PROVIDER_AUTH_PLACEHOLDER_KEY };
     }
     const key = readClaudeApiKey();
-    // 纯 BYOM 不依赖 Cindy 登录。models.json 始终包含 gateway `cindy` 块，Pi 启动
-    // 会解析它，所以无网关 key 时给不可用占位值；当前原生 provider 使用独立 key。
+    // xAI/BYOM 不依赖 Cindy 登录。models.json 始终包含 gateway `cindy` 块，
+    // 有网关 key 就保留给会话内切回 Cindy/XD；无 key 时才用不可用占位值。
+    // xAI 原生块自身使用 PI_XAI_PROXY_API_KEY_ENV，不再与网关块争用此变量。
     return { [PI_API_KEY_ENV]: key ?? PI_PROVIDER_AUTH_PLACEHOLDER_KEY };
   }
 }
@@ -507,7 +509,7 @@ export async function buildXaiPiNativeProvider(
           })()
         : getClaudeEndpoint(),
       api: 'anthropic-messages',
-      apiKeyEnvVar: PI_API_KEY_ENV,
+      apiKeyEnvVar: PI_XAI_PROXY_API_KEY_ENV,
       headers: {
         'x-cindy-pi-session-id': `$${PI_SESSION_ID_ENV}`,
         'x-cindy-pi-session-token': `$${PI_SESSION_TOKEN_ENV}`,
@@ -523,7 +525,7 @@ export async function buildXaiPiNativeProvider(
           }
         : {}),
     }],
-    env: {},
+    env: { [PI_XAI_PROXY_API_KEY_ENV]: PI_PROVIDER_AUTH_PLACEHOLDER_KEY },
   };
 }
 
