@@ -3160,8 +3160,8 @@
           "codex": "Codex",
           "pi": "Pi"
         },
-        "groupCtrPermissionLabel": "Permission mode for group /ctr sessions",
-        "groupCtrPermissionDescription": "Permission mode applied when creating a session via /ctr in a group chat. Defaults to Auto approval. Group context can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust."
+        "groupPermissionLabel": "Permission mode for new group tasks",
+        "groupPermissionDescription": "Permission mode used for every task created in a group chat — @bot opening a topic, /new, and /ctr all use it; the permission mode above applies to direct messages only. Defaults to Auto approval. Group context can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust. Changes apply to tasks created afterwards; switch an existing task with /permission in the group."
       }
     },
     "shortcuts": {

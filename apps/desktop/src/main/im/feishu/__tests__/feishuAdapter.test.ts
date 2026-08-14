@@ -24,6 +24,9 @@ const scopeMocks = vi.hoisted(() => ({
   >(() => []),
   bindingGet: vi.fn<() => string | null>(() => null),
   getAttachCardMessageId: vi.fn<() => string | null>(() => null),
+  readImDefaultSettings: vi.fn<(channel?: string) => { groupPermissionMode: string }>(() => ({
+    groupPermissionMode: 'auto',
+  })),
 }));
 
 vi.mock('electron', () => ({
@@ -52,6 +55,11 @@ vi.mock('../../binding', () => ({
     get: scopeMocks.bindingGet,
     getAttachCardMessageId: scopeMocks.getAttachCardMessageId,
   },
+}));
+// 群 lane 的新建会话权限档来自渠道设置(defaultSettingsStore 拽 electron/存储层,
+// 单测只钉住「读到什么就用什么」)。
+vi.mock('../../defaultSettingsStore', () => ({
+  readImDefaultSettings: (channel?: string) => scopeMocks.readImDefaultSettings(channel),
 }));
 
 import type {
@@ -283,6 +291,28 @@ describe('feishu group lane adapter hooks', () => {
       groupEvent({ senderId: 'ou_owner', speaker: undefined }),
     );
     expect(dmPolicy).toBeUndefined();
+  });
+
+  /**
+   * 群里新建的会话一律看渠道设置「群聊新建任务权限档」 —— 不只是 /ctr,
+   * 群主流 @bot 开话题、群里 /new 建行走的都是这个钩子(sessionRepo.prepareNewSession)。
+   * DM 返回 null(不覆写), 私聊仍走面向私聊的那条 permissionMode。
+   */
+  it('permissionModeFor: 群/话题 lane 用群聊权限档, DM 不覆写', () => {
+    scopeMocks.readImDefaultSettings.mockReturnValue({
+      groupPermissionMode: 'bypassPermissions',
+    });
+    // 群主流 lane 与话题 lane 同判据。
+    expect(adapter.sessions.permissionModeFor?.('g/oc_chat1')).toBe('bypassPermissions');
+    expect(adapter.sessions.permissionModeFor?.('g/oc_chat1/omt_t1')).toBe('bypassPermissions');
+    // 读的是飞书这一份渠道设置, 不是 global。
+    expect(scopeMocks.readImDefaultSettings).toHaveBeenCalledWith('feishu');
+    // DM userId 是 open_id, 不是 lane → 不覆写。
+    expect(adapter.sessions.permissionModeFor?.('ou_owner')).toBeNull();
+
+    // 设置改回自动审批时群里也跟着回自动审批(没有"只在手动改过才生效"的门)。
+    scopeMocks.readImDefaultSettings.mockReturnValue({ groupPermissionMode: 'auto' });
+    expect(adapter.sessions.permissionModeFor?.('g/oc_chat1/omt_t1')).toBe('auto');
   });
 
   it('turnPolicyOptionalForMode: 仅完全访问档可选(护栏取缔), 其余档保持挂策略', () => {

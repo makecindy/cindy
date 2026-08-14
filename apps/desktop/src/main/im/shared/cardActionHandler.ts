@@ -835,7 +835,7 @@ export function createCardActionHandler(
     //   - agentKind = 'claude-code' (跟 desktop 默认一致)
     //   - model/effort/fastMode 用 desktop 当前偏好(含 providerId, 缺省走
     //     DESKTOP_CC_DEFAULTS) — 这是"用 desktop 默认"的承诺
-    //   - permissionMode 例外: 飞书群 /ctr 用渠道设置「群聊新建会话权限档」
+    //   - permissionMode 例外: 飞书群 /ctr 用渠道设置「群聊新建任务权限档」
     //     (默认 auto), 私聊/其它渠道保持 desktop 偏好 — 两个创建分支必须一致,
     //     非 thread 分支才是 feishu(非 threadScoped 渠道)实际走的路径
     //   - 不传 vendorOptions, 跟 desktop renderer spawn 时一致 (没有
@@ -852,8 +852,9 @@ export function createCardActionHandler(
     );
 
     const desktopPrefs = getDesktopCcPrefs() ?? DESKTOP_CC_DEFAULTS;
-    // 飞书群/话题里的 /ctr 新建: 权限档用渠道设置「群聊新建会话权限档」
-    // (默认 auto 自动审批); 私聊保持 desktop 偏好不变。
+    // 飞书群/话题里的 /ctr 新建: 权限档用渠道设置「群聊新建任务权限档」
+    // (默认 auto 自动审批, 与群里 @bot 开话题建会话同一个设置项 —— 见
+    // feishu adapter 的 sessions.permissionModeFor); 私聊保持 desktop 偏好不变。
     // 群判定不能只靠 senderId lane 归一 — lane 登记表在 WS 重连/进程重启后
     // 清空, 回调 senderId 会回落 operator.open_id。open_chat_id 恒在回调里:
     // 群 chat 以 oc_ 开头, p2p 的 chat_id 是对方 open_id(ou_ 前缀), 用
@@ -862,7 +863,7 @@ export function createCardActionHandler(
       channel === 'feishu' &&
       (decodeFeishuLaneUserId(event.senderId) !== null || event.chatId.startsWith('oc_'));
     const controlNewPermissionMode = isFeishuGroupControl
-      ? readImDefaultSettings('feishu').groupCtrPermissionMode
+      ? readImDefaultSettings('feishu').groupPermissionMode
       : desktopPrefs.permissionMode;
     log.info(
       `control:new permission mode=${controlNewPermissionMode} group=${isFeishuGroupControl} ` +

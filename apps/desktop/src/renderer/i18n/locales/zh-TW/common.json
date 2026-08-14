@@ -3159,8 +3159,8 @@
           "codex": "Codex",
           "pi": "Pi"
         },
-        "groupCtrPermissionLabel": "群聊 /ctr 新建任務權限檔",
-        "groupCtrPermissionDescription": "群組裡 @bot 用 /ctr 新建任務時使用的權限檔，預設「自動審批」。群組上下文裡有成員可控制的內容，設成「完全存取」後將直接執行、不再逐項確認，請確認群組成員都可信。"
+        "groupPermissionLabel": "群聊新建任務權限檔",
+        "groupPermissionDescription": "群組裡新建任務時統一使用的權限檔（@bot 開話題、/new、/ctr 都算），預設「自動審批」；上面那個權限檔只管私聊。群組上下文裡有成員可控制的內容，設成「完全存取」後將直接執行、不再逐項確認，請確認群組成員都可信。變更只影響之後新建的任務，已有任務在群組裡用 /permission 單獨切換。"
       }
     },
     "shortcuts": {

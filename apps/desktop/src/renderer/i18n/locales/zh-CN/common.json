@@ -3159,8 +3159,8 @@
           "codex": "Codex",
           "pi": "Pi"
         },
-        "groupCtrPermissionLabel": "群聊 /ctr 新建任务权限档",
-        "groupCtrPermissionDescription": "群里 @bot 用 /ctr 新建任务时使用的权限档，默认「自动审批」。群上下文里有成员可控的内容，设成「完全访问」后将直接执行、不再逐条确认，请确认群里的人都可信。"
+        "groupPermissionLabel": "群聊新建任务权限档",
+        "groupPermissionDescription": "群里新建任务时统一使用的权限档（@bot 开话题、/new、/ctr 都算），默认「自动审批」；上面那个权限档只管私聊。群上下文里有成员可控的内容，设成「完全访问」后将直接执行、不再逐条确认，请确认群里的人都可信。改动只影响之后新建的任务，已有任务在群里用 /permission 单独切换。"
       }
     },
     "shortcuts": {

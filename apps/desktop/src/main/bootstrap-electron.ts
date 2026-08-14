@@ -690,16 +690,10 @@ import { getDesktopCommandRegistry, registerBuiltinDesktopCommands } from './com
 import { registerRemoteCmdIpc } from './commands/remoteCmdIpc.js';
 import { resolvePreferredSystemLocale, resolveSystemLocale } from '../shared/locale.js';
 import {
-  IM_DEFAULT_SETTINGS,
-  isImDefaultAgentKind,
-  isImDefaultEffort,
-  isImDefaultPermissionMode,
   isImDefaultSettingsChannel,
-  type ImDefaultAgentKind,
-  type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
-  type ImDefaultSettingsPatch,
 } from '../shared/imDefaultSettings.js';
+import { parseImDefaultSettingsPatch } from './im/parseDefaultSettingsPatch.js';
 import {
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
   codexSpawnConfigChanged,
@@ -7461,85 +7455,6 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
     patch.codexAllowNestedSubagents = input.codexAllowNestedSubagents;
   }
   return patch;
-}
-
-function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatch {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throwIpcError('INVALID_PARAMS', 'im default settings patch required (object)');
-  }
-  const input = raw as Record<string, unknown>;
-  const patch: ImDefaultSettingsPatch = {};
-  if ('agentKind' in input) {
-    if (!isImDefaultAgentKind(input.agentKind)) {
-      throwIpcError('INVALID_PARAMS', 'im default agentKind invalid');
-    }
-    patch.agentKind = input.agentKind;
-  }
-  if ('permissionMode' in input) {
-    if (!isImDefaultPermissionMode(input.permissionMode)) {
-      throwIpcError('INVALID_PARAMS', 'im default permissionMode invalid');
-    }
-    patch.permissionMode = input.permissionMode;
-  }
-  if ('agents' in input) {
-    if (!input.agents || typeof input.agents !== 'object' || Array.isArray(input.agents)) {
-      throwIpcError('INVALID_PARAMS', 'im default agents must be object');
-    }
-    const agentInput = input.agents as Record<string, unknown>;
-    const agentsPatch: NonNullable<ImDefaultSettingsPatch['agents']> = {};
-    // 三个 harness 必须对称解析；漏掉 pi 会让 IM 设置页切 Pi 后改模型静默丢弃
-    // (store 本身支持 pi，见 defaultSettingsStore / IM_DEFAULT_SETTINGS.agents.pi)。
-    for (const kind of ['claude-code', 'codex', 'pi'] as const) {
-      if (kind in agentInput) {
-        agentsPatch[kind] = parseImDefaultAgentSettings(kind, agentInput[kind]);
-      }
-    }
-    patch.agents = agentsPatch;
-  }
-  if ('providerId' in input || 'model' in input || 'effort' in input) {
-    const legacyAgentKind = patch.agentKind ?? IM_DEFAULT_SETTINGS.agentKind;
-    patch.agents = {
-      ...patch.agents,
-      [legacyAgentKind]: parseImDefaultAgentSettings(legacyAgentKind, input),
-    };
-  }
-  return patch;
-}
-
-function parseImDefaultAgentSettings(
-  agentKind: ImDefaultAgentKind,
-  raw: unknown,
-): ImDefaultAgentSettings {
-  const defaults = IM_DEFAULT_SETTINGS.agents[agentKind];
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return { ...defaults };
-  }
-  const input = raw as Record<string, unknown>;
-  let providerId = defaults.providerId;
-  let model = defaults.model;
-  let effort = defaults.effort;
-  if ('providerId' in input) {
-    if (input.providerId !== null && typeof input.providerId !== 'string') {
-      throwIpcError('INVALID_PARAMS', 'im default providerId must be string or null');
-    }
-    providerId =
-      typeof input.providerId === 'string' && input.providerId.trim()
-        ? input.providerId.trim()
-        : null;
-  }
-  if ('model' in input) {
-    if (typeof input.model !== 'string' || !input.model.trim()) {
-      throwIpcError('INVALID_PARAMS', 'im default model required (string)');
-    }
-    model = input.model.trim();
-  }
-  if ('effort' in input) {
-    if (!isImDefaultEffort(input.effort)) {
-      throwIpcError('INVALID_PARAMS', 'im default effort invalid');
-    }
-    effort = input.effort;
-  }
-  return { providerId, model, effort };
 }
 
 function silentEncryptedRetryWire() {

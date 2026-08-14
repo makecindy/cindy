@@ -81,8 +81,12 @@ export interface ImSessionNamespace {
   /** 渠道专属列(feishu: feishuBotAppId/feishuOpenId;slack: imBotContextId/imUserId)。 */
   extraInsertColumns(botContextId: string, userId: string): Record<string, unknown>;
   /**
-   * 按 userId 收紧新会话的权限档(telegram guest lane → 'plan' 只读探索)。
-   * 返回 null/缺省 = 用渠道默认。只影响**新建**行; 已存在行的权限归 owner 管。
+   * 按 userId 覆写新会话的权限档:
+   *   - telegram guest lane → 'plan' 只读探索(收紧);
+   *   - feishu 群/话题 lane → 渠道设置「群聊新建任务权限档」(可比私聊那档宽,
+   *     那是用户对群的显式选择)。
+   * 返回 null/缺省 = 用渠道默认。只影响**新建**行(含 `/new` 重开上下文);
+   * 已存在行的权限归 owner 管(`/permission`)。
    */
   permissionModeFor?(userId: string): PermissionMode | null;
   /**

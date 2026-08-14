@@ -9,6 +9,8 @@
  *   - ack emoji: REACTION_PROCESSING
  *   - 群 lane(senderId = `g/{chatId}[/{threadId}]`, @cindy/im feishu/codec.ts):
  *     群主流 @ 入站即开话题(每话题一个会话, 群 lane 仅开话题失败的降级路径);
+ *     群里新建的会话一律用渠道设置「群聊新建任务权限档」(sessions.permissionModeFor,
+ *     `/ctr` 新建走 cardActionHandler 读同一设置);
  *     群轮次挂「非只读即确认」策略 + 触发时按页回翻群历史(50/页, 最多 5 页,
  *     模型相关性早停 + 注入扫描), 图片/文件下载后进上下文, 统一防注入包裹
  *     (见 ./groupContext.ts)。
@@ -28,6 +30,7 @@ import {
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { bindingStore } from '../binding';
+import { readImDefaultSettings } from '../defaultSettingsStore';
 import { claimLegacyImPath, ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { createLogger } from '../../logger';
 import { buildFeishuGroupContext, sanitizeDisplayText } from './groupContext';
@@ -301,6 +304,25 @@ export function buildFeishuAdapter(
         feishuBotAppId: botAppId,
         feishuOpenId: userId,
       }),
+      /**
+       * 群/话题里新建的会话一律用渠道设置「群聊新建任务权限档」, 不吃上面那条
+       * 面向私聊的 `permissionMode`。
+       *
+       * 覆盖到的建会话路径(都经 sessionRepo.prepareNewSession):
+       *   - 群主流 @bot 开新话题 → 话题 lane 首条消息建行(turnRunner)
+       *   - 群里 `/new` 重开上下文(slashCommands → resetSessionToDefaults)
+       *   - 群主流降级 lane(开话题失败时)建行
+       * `/ctr` 新建接管会话不走这里(它建的是 desktop 会话, 见
+       * cardActionHandler), 那边读的是同一个设置项。
+       *
+       * DM(userId 是 open_id, decode 得 null)返回 null = 不覆写, 私聊照旧。
+       * 群那档比私聊那档**宽**时同样覆写 —— 这是用户在设置里对群的显式选择,
+       * 「群里的事只看这一行」是产品裁决(不看用户是否手动改过该下拉框)。
+       */
+      permissionModeFor: (userId) =>
+        decodeFeishuLaneUserId(userId) === null
+          ? null
+          : readImDefaultSettings('feishu').groupPermissionMode,
       // 群/话题 lane 建行后异步拉群名把标题升级为 [飞书·群] {群名} /
       // [飞书·话题] {群名}; 拉不到(无「获取群基本信息」权限)保持后缀回落。
       // 只对新建行生效(sessionRepo 侧保证), 复活行保留自己的历史标题。
