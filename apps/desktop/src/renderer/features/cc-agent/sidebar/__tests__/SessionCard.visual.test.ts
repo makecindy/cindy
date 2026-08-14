@@ -338,7 +338,10 @@ describe('SessionCard visual cases', () => {
         'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
       );
       expect(card?.draggable).toBe(true);
+      expect(card?.className).toContain('cursor-pointer');
+      expect(card?.className).not.toContain('cursor-grab');
       expect(card?.querySelector('[data-split-group-drag-handle="true"]')).toBeNull();
+      expect(title.className).not.toContain('cursor-grab');
       expect(actionButton).not.toBeNull();
 
       fireEvent.pointerDown(title, { button: 0, pointerType: 'mouse' });
