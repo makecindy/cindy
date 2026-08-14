@@ -227,6 +227,12 @@ function trimTrailingSlashes(s: string): string {
   return s.slice(0, end);
 }
 
+function normalizeUpstreamBase(s: string): string {
+  const url = new URL(s);
+  url.pathname = trimTrailingSlashes(url.pathname);
+  return url.toString();
+}
+
 /** 在保留 base query 的前提下追加供应商配置的精确 Responses 路径。 */
 function joinResponsesUrl(upstreamBase: string, requestPath: string): string {
   if (!requestPath.startsWith('/') || requestPath.includes('#')) {
@@ -253,7 +259,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       throw new Error(`bridge provider '${p.prefix}' 声明了未实现的 wireProtocol: ${String(p.wireProtocol)}`);
     }
   }
-  const providers = opts.providers.map((p) => ({ ...p, upstreamBase: trimTrailingSlashes(p.upstreamBase) }));
+  const providers = opts.providers.map((p) => ({ ...p, upstreamBase: normalizeUpstreamBase(p.upstreamBase) }));
   const log = opts.logger ?? {};
   const fetchImpl = opts.fetchImpl ?? fetch;
   let reqSeq = 0;

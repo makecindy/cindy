@@ -117,6 +117,26 @@ describe('createResponsesHandler', () => {
     expect(seen[0].body.service_tier).toBeUndefined();
   });
 
+  it('preserves trailing slashes in upstream query values while joining a custom path', async () => {
+    const seen: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      seen.push(url);
+      return new Response(sse(OK_SSE), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }));
+    const handler = createResponsesHandler({
+      providers: [providerConfig({
+        upstreamBase: 'https://upstream.example/v1?prefix=/tenant/',
+        requestPath: '/infer',
+      })],
+    });
+
+    await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [], stream: true });
+
+    const url = new URL(seen[0]);
+    expect(url.pathname).toBe('/v1/infer');
+    expect(url.searchParams.get('prefix')).toBe('/tenant/');
+  });
+
   it('上游 200 但整流零事件(非 SSE 正文)→ 合成带正文前缀的 error 事件而非空 200,并留 warn(#941)', async () => {
     const warns: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
