@@ -84,6 +84,22 @@ function toolResultToString(content: unknown): string {
   }
 }
 
+function toolResultImages(content: unknown, images: ResponsesContentPart[] = []): ResponsesContentPart[] {
+  if (Array.isArray(content)) {
+    for (const item of content) toolResultImages(item, images);
+    return images;
+  }
+  if (!content || typeof content !== 'object') return images;
+  const block = content as Record<string, unknown>;
+  if (block.type === 'image') {
+    const url = imageToDataUrl(block as Extract<AnthropicContentBlock, { type: 'image' }>);
+    if (url) images.push({ type: 'input_image', image_url: url });
+    return images;
+  }
+  if (block.type === 'tool_result') toolResultImages(block.content, images);
+  return images;
+}
+
 /** Anthropic image block → Responses input_image 的 data URL。 */
 function imageToDataUrl(block: Extract<AnthropicContentBlock, { type: 'image' }>): string | null {
   const src = block.source;
@@ -127,7 +143,11 @@ function splitReasoningBlob(blob: string): { id?: string; encrypted: string } {
  * text/image 会累积进一个「待 flush」的 content-part 缓冲,遇到 tool_use / tool_result /
  * thinking 这类需要独立 item 的 block 时先 flush,保证 item 间的时序与原始 block 顺序一致。
  */
-function messageToInputItems(msg: AnthropicMessage, reasoning: ReasoningReplayOpts): ResponsesInputItem[] {
+function messageToInputItems(
+  msg: AnthropicMessage,
+  reasoning: ReasoningReplayOpts,
+  preserveToolResultImages: boolean,
+): ResponsesInputItem[] {
   const items: ResponsesInputItem[] = [];
   // codex /responses 拒绝 role:"system" → 映射到 "developer"(OpenAI 的 system 等价角色,实测 200)。
   const role: 'user' | 'assistant' | 'developer' = msg.role === 'system' ? 'developer' : msg.role;
@@ -181,6 +201,19 @@ function messageToInputItems(msg: AnthropicMessage, reasoning: ReasoningReplayOp
           call_id: tr.tool_use_id,
           output: toolResultToString(tr.content),
         });
+        if (preserveToolResultImages) {
+          const images = toolResultImages(tr.content);
+          if (images.length > 0) {
+            items.push({
+              type: 'message',
+              role: 'user',
+              content: [
+                { type: 'input_text', text: 'Media returned by the preceding tool result:' },
+                ...images,
+              ],
+            });
+          }
+        }
         break;
       }
       case 'thinking': {
@@ -316,6 +349,8 @@ export interface TranslateRequestOptions {
    * 请求本身没有任何 function tool 时也会单独下发(纯服务端工具轮)。
    */
   serverSideTools?: ResponsesServerTool[];
+  /** 将工具结果中的图片作为视觉输入继续传递。 */
+  preserveToolResultImages?: boolean;
 }
 
 /**
@@ -333,7 +368,7 @@ export function translateRequest(
     dropAll: opts.reasoningEffort === 'none',
   };
   for (const msg of req.messages ?? []) {
-    input.push(...messageToInputItems(msg, reasoningReplay));
+    input.push(...messageToInputItems(msg, reasoningReplay, opts.preserveToolResultImages === true));
   }
 
   // 显式用 ResponsesFunctionTool(而非放宽后的 ResponsesTool 联合):function tool 的

@@ -642,6 +642,7 @@ function createChatBridgeDecision(
   instructions: string | undefined,
   wireModel: string,
   requestModelOverride?: string,
+  allowVisionInput = false,
 ): RoutingDecision | null {
   if (!route || route.routing.wireProtocol !== 'openai-chat') return null;
   const { headers } = buildLocalHandlerHeaders(route, 'codex');
@@ -666,11 +667,9 @@ function createChatBridgeDecision(
         googleThoughtSignaturePlaceholder: true,
     }
     : CHAT_BRIDGE_DEFAULT_CAPABILITIES;
-  const capabilities = chatBridgeCapabilitiesForRoute(
-    route.routing.upstream,
-    realModel,
-    baseCapabilities,
-  );
+  const capabilities = allowVisionInput
+    ? { ...baseCapabilities, imageInput: 'image_url' as const }
+    : chatBridgeCapabilitiesForRoute(route.routing.upstream, realModel, baseCapabilities);
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
@@ -1024,6 +1023,7 @@ function createLocalBridgeDecision(
   wireModel: string,
   requestModelOverride: string | undefined,
   threadId: string,
+  allowVisionInput = false,
 ): RoutingDecision | null {
   if (!route) return null;
   if (route.routing.wireProtocol === 'openai-chat') {
@@ -1032,6 +1032,7 @@ function createLocalBridgeDecision(
       instructions,
       wireModel,
       requestModelOverride,
+      allowVisionInput,
     );
     if (decision) {
       recordCodexThreadUpstreamForDiagnostics(threadId, route.routing.upstream);
@@ -2443,14 +2444,39 @@ function codexContentArrayContainsImage(content: unknown): boolean {
   );
 }
 
+function codexToolOutputContainsImage(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(codexToolOutputContainsImage);
+  if (!isPlainObject(value)) return false;
+  if (typeof value.type === 'string' && CODEX_IMAGE_PART_TYPES.has(value.type)) return true;
+  return codexToolOutputContainsImage(value.output) || codexToolOutputContainsImage(value.content);
+}
+
 function codexRequestBodyContainsImage(body: unknown): boolean {
   if (!isPlainObject(body)) return false;
   const input = body.input;
   if (Array.isArray(input)) {
+    let lastUserIndex = -1;
     for (let index = input.length - 1; index >= 0; index -= 1) {
       const item = input[index];
-      if (!isPlainObject(item) || item.role !== 'user') continue;
-      return codexContentArrayContainsImage(item.content);
+      if (isPlainObject(item) && item.role === 'user') {
+        lastUserIndex = index;
+        break;
+      }
+    }
+    if (lastUserIndex >= 0) {
+      for (let index = lastUserIndex; index < input.length; index += 1) {
+        const item = input[index];
+        if (!isPlainObject(item)) continue;
+        if (item.role === 'user' && codexContentArrayContainsImage(item.content)) return true;
+        if (
+          item.type === 'function_call_output'
+          || item.type === 'custom_tool_call_output'
+          || item.type === 'tool_search_output'
+          || item.type === 'tool_search_call_output'
+        ) {
+          if (codexToolOutputContainsImage(item.output ?? item.content ?? item.tools)) return true;
+        }
+      }
     }
   }
   return codexContentArrayContainsImage(body.instructions);
@@ -2556,6 +2582,7 @@ export function withCodexVisionFallback(
             visionModel,
             visionModel,
             threadId,
+            true,
           );
           if (localBridge) return localBridge;
           return resolveProviderRouteDecision(

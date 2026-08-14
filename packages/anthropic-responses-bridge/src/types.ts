@@ -198,6 +198,8 @@ export interface BridgeProviderConfig {
    * 上游是否支持 `max_output_tokens`。默认 false —— codex 后端会 400;标准 OpenAI Responses / api.x.ai 支持。
    */
   maxOutputTokensSupported?: boolean;
+  /** 将 tool_result 里的图片搬到后续 user message，供视觉兜底模型读取。 */
+  preserveToolResultImages?: boolean;
   /**
    * 该(去前缀后的)model 是否支持 `reasoning` 参数。默认全支持;返回 false 的模型(如 xAI grok-code-fast,
    * 对 reasoningEffort 报 400)bridge 将**完全不发** reasoning 字段。省略 = 全部支持。

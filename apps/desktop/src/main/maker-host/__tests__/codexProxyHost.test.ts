@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
@@ -381,6 +382,25 @@ describe('withCodexVisionFallback', () => {
     expect(decision).toBeNull();
   });
 
+  it('falls back when the current function output contains an image', async () => {
+    const host = await freshCodexProxyHost();
+    const wrapped = host.withCodexVisionFallback(() => null);
+    const decision = await wrapped({
+      model: 'deepseek/deepseek-v4-pro',
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'make a chart' }] },
+        { type: 'function_call', call_id: 'call-1', name: 'chart', arguments: '{}' },
+        {
+          type: 'function_call_output',
+          call_id: 'call-1',
+          output: [{ type: 'input_image', image_url: 'data:image/png;base64,eA==' }],
+        },
+      ],
+    }, ctxFor('t-tool-image'));
+
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
+  });
+
   it('does not fall back for a vision-capable model', async () => {
     const host = await freshCodexProxyHost();
     const wrapped = host.withCodexVisionFallback(() => null);
@@ -616,7 +636,7 @@ describe('withCodexVisionFallback', () => {
     };
 
     try {
-      const originalBridge = { localHandler: vi.fn(async () => undefined) } as never;
+      const originalBridge: RoutingDecision = { localHandler: vi.fn(async () => undefined) };
       const body = imageBody('deepseek/deepseek-v4-pro');
       const decision = await host.withCodexVisionFallback(() => originalBridge)(body, ctxFor('t-local-bridge'));
 

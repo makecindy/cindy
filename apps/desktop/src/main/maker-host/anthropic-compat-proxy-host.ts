@@ -216,6 +216,7 @@ function createVisionFallbackResponsesBridgeDecision(
       ...(route.routing.requestPath ? { requestPath: route.routing.requestPath } : {}),
       buildHeaders: async () => headers,
       maxOutputTokensSupported: true,
+      preserveToolResultImages: true,
     }],
     logger: log,
     fetchImpl: outboundFetch,
@@ -252,6 +253,7 @@ function createVisionFallbackChatBridgeDecision(
       prefix: '',
       upstreamBase: 'http://cindy.local',
       buildHeaders: async () => ({}),
+      preserveToolResultImages: true,
     }],
     logger: log,
     fetchImpl: async (_url, init) => {

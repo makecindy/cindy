@@ -334,6 +334,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       model: realModel,
       promptCacheKey: sessionId,
       maxOutputTokensSupported: provider.maxOutputTokensSupported,
+      preserveToolResultImages: provider.preserveToolResultImages,
       reasoningEffort,
       serviceTier,
       providerPrefix: provider.prefix,

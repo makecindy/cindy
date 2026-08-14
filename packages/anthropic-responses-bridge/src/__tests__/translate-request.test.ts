@@ -225,6 +225,29 @@ describe('translateRequest', () => {
     expect(item.output).not.toContain('[image]');
   });
 
+  it('can preserve tool-result images as a following user vision message', () => {
+    const req: AnthropicMessagesRequest = {
+      model: 'gpt-5.5',
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'c1',
+          content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAABBBB' } }],
+        }],
+      }],
+    };
+    const out = translateRequest(req, { model: 'gpt-5.5', preserveToolResultImages: true });
+    expect(out.input).toContainEqual({
+      type: 'message',
+      role: 'user',
+      content: [
+        { type: 'input_text', text: 'Media returned by the preceding tool result:' },
+        { type: 'input_image', image_url: 'data:image/png;base64,AAAABBBB' },
+      ],
+    });
+  });
+
   it('serverSideTools 恒定追加在 function tools 之后(位置固定 → 前缀稳定)', () => {
     const req: AnthropicMessagesRequest = {
       model: 'xai/grok-4.5',
