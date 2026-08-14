@@ -270,46 +270,49 @@ describe('xAI video provider · poll and download', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('retries one poll with the refreshed token without resubmitting the paid task', async () => {
-    const tokens = ['account-a-old-token', 'account-a-old-token', 'account-a-fresh-token'];
-    const getAccessToken = vi.fn(async () => tokens.shift()!);
-    const badCredentialBody = JSON.stringify({
-      code: 'unauthenticated:bad-credentials',
-      error: 'The OAuth2 access token could not be validated.',
-    });
-    const responses = [
-      new Response(JSON.stringify({ request_id: 'video-auth-recovery' }), { status: 200 }),
-      new Response(badCredentialBody, { status: 403 }),
-      new Response(JSON.stringify({ status: 'pending' }), { status: 200 }),
-    ];
-    const fetchMock = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
-    const onAuthRejected = vi.fn(async () => 'refreshed');
-    const provider = makeProvider({
-      fetchImplementation: fetchMock,
-      getAccessToken,
-      onAuthRejected,
-    });
-    const handle = await provider.submit({ prompt: 'recover poll' }, XAI_VIDEO_CATALOG_MODEL_ID);
+  it.each(['refreshed', 'superseded'] as const)(
+    'retries one poll when auth recovery is %s without resubmitting the paid task',
+    async (recovery) => {
+      const tokens = ['account-a-old-token', 'account-a-old-token', 'account-a-fresh-token'];
+      const getAccessToken = vi.fn(async () => tokens.shift()!);
+      const badCredentialBody = JSON.stringify({
+        code: 'unauthenticated:bad-credentials',
+        error: 'The OAuth2 access token could not be validated.',
+      });
+      const responses = [
+        new Response(JSON.stringify({ request_id: 'video-auth-recovery' }), { status: 200 }),
+        new Response(badCredentialBody, { status: 403 }),
+        new Response(JSON.stringify({ status: 'pending' }), { status: 200 }),
+      ];
+      const fetchMock = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
+      const onAuthRejected = vi.fn(async () => recovery);
+      const provider = makeProvider({
+        fetchImplementation: fetchMock,
+        getAccessToken,
+        onAuthRejected,
+      });
+      const handle = await provider.submit({ prompt: 'recover poll' }, XAI_VIDEO_CATALOG_MODEL_ID);
 
-    await expect(provider.poll(handle)).resolves.toMatchObject({ state: 'pending' });
-    expect(onAuthRejected).toHaveBeenCalledTimes(1);
-    expect(onAuthRejected).toHaveBeenCalledWith({
-      status: 403,
-      body: badCredentialBody,
-      failedAccessToken: 'account-a-old-token',
-    });
-    const calls = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls).toHaveLength(3);
-    expect(calls.filter(([, init]) => (init as RequestInit).method === 'POST')).toHaveLength(1);
-    expect(calls[1][0]).toBe('https://api.x.ai/v1/videos/video-auth-recovery');
-    expect(calls[2][0]).toBe('https://api.x.ai/v1/videos/video-auth-recovery');
-    expect((calls[1][1].headers as Record<string, string>).Authorization).toBe(
-      'Bearer account-a-old-token',
-    );
-    expect((calls[2][1].headers as Record<string, string>).Authorization).toBe(
-      'Bearer account-a-fresh-token',
-    );
-  });
+      await expect(provider.poll(handle)).resolves.toMatchObject({ state: 'pending' });
+      expect(onAuthRejected).toHaveBeenCalledTimes(1);
+      expect(onAuthRejected).toHaveBeenCalledWith({
+        status: 403,
+        body: badCredentialBody,
+        failedAccessToken: 'account-a-old-token',
+      });
+      const calls = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls).toHaveLength(3);
+      expect(calls.filter(([, init]) => (init as RequestInit).method === 'POST')).toHaveLength(1);
+      expect(calls[1][0]).toBe('https://api.x.ai/v1/videos/video-auth-recovery');
+      expect(calls[2][0]).toBe('https://api.x.ai/v1/videos/video-auth-recovery');
+      expect((calls[1][1].headers as Record<string, string>).Authorization).toBe(
+        'Bearer account-a-old-token',
+      );
+      expect((calls[2][1].headers as Record<string, string>).Authorization).toBe(
+        'Bearer account-a-fresh-token',
+      );
+    },
+  );
 
   it('does not retry a poll when credential recovery fails', async () => {
     const badCredentialBody = JSON.stringify({

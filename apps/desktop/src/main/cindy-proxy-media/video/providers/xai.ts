@@ -341,11 +341,13 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
       // 因而绝不会因认证恢复重复创建付费任务。
       const recovery =
         attempt === 0 ? await notifyAuthRejected(opts, response, text, token) : undefined;
+      // superseded 可能是同一登录的 token 已被并发请求先一步刷新；下面这道
+      // owner + credential generation 复核会先排除登出、换号与数据 owner 切换。
       assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
       if (
         retryAfterAuthRefresh &&
         attempt === 0 &&
-        recovery === 'refreshed'
+        (recovery === 'refreshed' || recovery === 'superseded')
       ) {
         continue;
       }
