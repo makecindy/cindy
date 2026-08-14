@@ -372,7 +372,7 @@ describe('ghostPanelWebContents registry', () => {
     });
     const context = ghostPanelContextForWebContents(102)!;
     context.ghostId = 'forged';
-    context.ownerStamp.ownerGeneration = 99;
+    (context.ownerStamp as { ownerGeneration: number }).ownerGeneration = 99;
 
     expect(ghostPanelContextForWebContents(102)?.ghostId).toBe('alpha');
     expect(ghostPanelContextForWebContents(102)?.ownerStamp.ownerGeneration).toBe(7);
