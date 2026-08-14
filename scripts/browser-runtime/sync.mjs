@@ -371,6 +371,11 @@ const LOCAL_PATCHES = {
   const allowIpv6UniqueLocalRange = rawPolicy?.allowIpv6UniqueLocalRange;
   const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
   const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
+  // LOCAL PATCH (Cindy, via sync.mjs): preserve the exact-origin allowlist
+  // used by the sandboxed local HTML preview server. Vendored SsrFPolicy
+  // supports allowedOrigins (promote only the matching request origin's
+  // hostname), but the resolver must not drop it on the floor.
+  const allowedOrigins = normalizeStringList(rawPolicy?.allowedOrigins);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const hasExplicitFakeIpSetting =
@@ -383,7 +388,8 @@ const LOCAL_PATCHES = {
     !hasExplicitPrivateSetting &&
     !hasExplicitFakeIpSetting &&
     !allowedHostnames &&
-    !hostnameAllowlist
+    !hostnameAllowlist &&
+    !allowedOrigins
   ) {
     // Keep the default policy object present so CDP guards still enforce
     // fail-closed private-network checks on unconfigured installs.
@@ -400,6 +406,7 @@ const LOCAL_PATCHES = {
     ...(allowIpv6UniqueLocalRange !== undefined ? { allowIpv6UniqueLocalRange } : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+    ...(allowedOrigins ? { allowedOrigins } : {}),
   };
 }`,
     },
@@ -433,6 +440,360 @@ const LOCAL_PATCHES = {
         '            legacyCdpUrl,\n' +
         '          ),\n' +
         '        );',
+    },
+  ],
+  'extension/src/browser/pw-session.ts': [
+    {
+      desc: 'import the host-settable runtime config getter so the preview route guard can check the live origin allowlist',
+      find:
+        '} from "openclaw/plugin-sdk/number-runtime";',
+      replace:
+        '} from "openclaw/plugin-sdk/number-runtime";\n' +
+        'import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";',
+    },
+    {
+      desc: 'track the installed route guard per page so a newer navigation can unroute the previous one (prevents a stale preview guard from blocking later navigations on the same tab)',
+      find:
+        'export async function gotoPageWithNavigationGuard(\n' +
+        '  opts: {',
+      replace:
+        'const previewRouteGuards = new WeakMap<\n' +
+        '  Page,\n' +
+        '  (route: Route, request: Request) => Promise<void>\n' +
+        '>();\n' +
+        '\n' +
+        'export async function gotoPageWithNavigationGuard(\n' +
+        '  opts: {',
+    },
+    {
+      desc: 'compute the exact preview origin before installing the navigation route guard — preview pages (tokenized loopback URL) navigate only within their exact origin',
+      find:
+        '  let blockedError: unknown = null;\n' +
+        '\n' +
+        '  const handler = async (route: Route, request: Request) => {',
+      replace:
+        '  let blockedError: unknown = null;\n' +
+        '  // LOCAL PATCH (Cindy, via sync.mjs): the exact-origin preview\n' +
+        '  // allowlist entry this navigation lands on, if any. For such pages\n' +
+        '  // the route guard stays alive for the page lifetime AND enforces\n' +
+        '  // EXACT origin equality — the SSRF policy alone would permit\n' +
+        '  // ordinary public HTTP(S) destinations, so a previewed page could\n' +
+        '  // otherwise location.href its DOM/CSSOM to a public origin.\n' +
+        '  let previewOrigin: string | null = null;\n' +
+        '  try {\n' +
+        '    const entryUrl = new URL(opts.url);\n' +
+        '    if (opts.ssrfPolicy?.allowedOrigins?.includes(entryUrl.origin)) {\n' +
+        '      previewOrigin = entryUrl.origin;\n' +
+        '    }\n' +
+        '  } catch {\n' +
+        '    previewOrigin = null;\n' +
+        '  }\n' +
+        '\n' +
+        '  const handler = async (route: Route, request: Request) => {',
+    },
+    {
+      desc: 'enforce exact-origin equality for preview pages inside the route handler, with live authorization re-check on EVERY request (including subresources)',
+      find:
+        '    const isTopLevel = isTopLevelNavigationRequest(opts.page, request);\n' +
+        '    const isSubframeDocument =\n' +
+        '      !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);\n' +
+        '    if (!isTopLevel && !isSubframeDocument) {\n' +
+        '      await continueRouteSafely(route);\n' +
+        '      return;\n' +
+        '    }\n' +
+        '    try {',
+      replace:
+        '    // LOCAL PATCH (Cindy, via sync.mjs): preview pages — ALL requests\n' +
+        '    // (not just document navigations) must pass live authorization AND\n' +
+        '    // exact-origin equality BEFORE any subresource is allowed through.\n' +
+        '    // The origin must be STILL authorized by the live host config: the\n' +
+        '    // guard captured previewOrigin at goto time, but the host may have\n' +
+        '    // revoked the preview since — a freed port seized by another local\n' +
+        '    // process must never serve anything into a survivor tab.\n' +
+        '    if (previewOrigin !== null) {\n' +
+        '      let stillAuthorized = false;\n' +
+        '      try {\n' +
+        '        const liveOrigins =\n' +
+        '          getRuntimeConfig?.()?.browser?.ssrfPolicy?.allowedOrigins;\n' +
+        '        stillAuthorized = Array.isArray(liveOrigins) && liveOrigins.includes(previewOrigin);\n' +
+        '      } catch {\n' +
+        '        stillAuthorized = false;\n' +
+        '      }\n' +
+        '      if (!stillAuthorized) {\n' +
+        '        await route.abort().catch(() => {});\n' +
+        '        return;\n' +
+        '      }\n' +
+        '      let sameOrigin = false;\n' +
+        '      try {\n' +
+        '        sameOrigin = new URL(request.url()).origin === previewOrigin;\n' +
+        '      } catch {\n' +
+        '        sameOrigin = false;\n' +
+        '      }\n' +
+        '      if (!sameOrigin) {\n' +
+        '        await route.abort().catch(() => {});\n' +
+        '        return;\n' +
+        '      }\n' +
+        '      await continueRouteSafely(route);\n' +
+        '      return;\n' +
+        '    }\n' +
+        '    const isTopLevel = isTopLevelNavigationRequest(opts.page, request);\n' +
+        '    const isSubframeDocument =\n' +
+        '      !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);\n' +
+        '    if (!isTopLevel && !isSubframeDocument) {\n' +
+        '      await continueRouteSafely(route);\n' +
+        '      return;\n' +
+        '    }\n' +
+        '    try {',
+    },
+    {
+      desc: 'clear stale Service Worker storage for the preview origin BEFORE goto and FAIL CLOSED on clear failure — a persistent profile may hold an old SW from an earlier local service on the same port',
+      find:
+        '  await opts.page.route("**", handler);',
+      replace:
+        '  // LOCAL PATCH (Cindy, via sync.mjs): take over any route guard this\n' +
+        '  // function previously installed for the same page. A stale preview\n' +
+        '  // guard would otherwise keep aborting every later page-initiated\n' +
+        '  // navigation on that tab once it was navigated to a normal site.\n' +
+        '  const previousGuard = previewRouteGuards.get(opts.page);\n' +
+        '  if (previousGuard) {\n' +
+        '    await opts.page.unroute("**", previousGuard).catch(() => {});\n' +
+        '  }\n' +
+        '  previewRouteGuards.set(opts.page, handler);\n' +
+        '  await opts.page.route("**", handler);\n' +
+        '  // LOCAL PATCH (Cindy, via sync.mjs): kill WebRTC on preview pages.\n' +
+        '  // CSP cannot constrain RTCPeerConnection ICE/STUN/TURN traffic (a\n' +
+        '  // previewed page could exfiltrate data chunked into TURN\n' +
+        '  // credentials); --disable-webrtc was probed INEFFECTIVE (API still\n' +
+        '  // constructable), so the constructor is shadowed before ANY page\n' +
+        '  // script runs (addInitScript runs on every navigation, incl. the\n' +
+        '  // first). Scoped to the preview origin: a tab that navigates to a\n' +
+        '  // normal WebRTC-dependent site afterwards keeps RTCPeerConnection.\n' +
+        '  if (previewOrigin !== null) {\n' +
+        '    try {\n' +
+        '    await opts.page\n' +
+        '      .addInitScript(() => {\n' +
+        '        try {\n' +
+        '          const __u = new URL(window.location.href);\n' +
+        '          if (\n' +
+        '            __u.protocol === "http:" &&\n' +
+        '            __u.hostname === "127.0.0.1" &&\n' +
+        '            /^\\/preview\\/[a-f0-9]{64}\\//.test(__u.pathname)\n' +
+        '          ) {\n' +
+        '            Object.defineProperty(window, "RTCPeerConnection", {\n' +
+        '              value: undefined,\n' +
+        '              configurable: true,\n' +
+        '            });\n' +
+        '            Object.defineProperty(window, "webkitRTCPeerConnection", {\n' +
+        '              value: undefined,\n' +
+        '              configurable: true,\n' +
+        '            });\n' +
+        '            // Kill BroadcastChannel too: all preview tokens share the\n' +
+        '            // same origin (http://127.0.0.1:<port>), so concurrent\n' +
+        '            // previews could cross-communicate via same-origin APIs.\n' +
+        '            // localStorage/IndexedDB are also shared, but those are\n' +
+        '            // scoped to the preview page lifetime (ephemeral port).\n' +
+        '            Object.defineProperty(window, "BroadcastChannel", {\n' +
+        '              value: undefined,\n' +
+        '              configurable: true,\n' +
+        '            });\n' +
+        '          }\n' +
+        '        } catch {\n' +
+        '          /* ignore */\n' +
+        '        }\n' +
+        '      });\n' +
+        '    } catch (err) {\n' +
+        '      // Fail-closed: a failed addInitScript must REFUSE the preview\n' +
+        '      // navigation — and the route guard installed above must be\n' +
+        '      // removed so a normal page is not left with a preview-only\n' +
+        '      // route that aborts its own navigations.\n' +
+        '      await opts.page.unroute("**", handler).catch(() => {});\n' +
+        '      if (previewRouteGuards.get(opts.page) === handler) previewRouteGuards.delete(opts.page);\n' +
+        '      throw err;\n' +
+        '    }\n' +
+        '  }',
+    },
+    {
+      desc: 'clear stale Service Worker storage for the preview origin BEFORE goto and FAIL CLOSED on clear failure',
+      find:
+        '  try {\n' +
+        '    const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });',
+      replace:
+        '  try {\n' +
+        '    // LOCAL PATCH (Cindy, via sync.mjs): clear stale Service Worker\n' +
+        '    // storage for the preview origin BEFORE goto. A persistent\n' +
+        '    // profile may hold an old SW from an earlier local service on the\n' +
+        '    // same port; worker-src \'none\' only blocks NEW registrations, and\n' +
+        '    // the stale SW would intercept /preview/<token>/... before the\n' +
+        '    // server responds, answering with a synthetic document that\n' +
+        '    // carries NO CSP.\n' +
+        '    if (previewOrigin !== null) {\n' +
+        '      try {\n' +
+        '        const cdp = await opts.page.context().newCDPSession(opts.page);\n' +
+        '        await cdp.send("Storage.clearDataForOrigin", {\n' +
+        '          origin: previewOrigin,\n' +
+        '          storageTypes: "service_workers",\n' +
+        '        });\n' +
+        '        await cdp.detach().catch(() => {});\n' +
+        '      } catch (clearErr) {\n' +
+        '        throw clearErr;\n' +
+        '      }\n' +
+        '    }\n' +
+        '    const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });',
+    },
+    {
+      desc: 'when goto fails on a preview target, remove the preview route guard AND close the page — the preview HTML may already be executing while the caller swallows non-policy errors',
+      find:
+        '  } catch (err) {\n' +
+        '    if (blockedError) {\n' +
+        '      throw toLintErrorObject(blockedError, "Non-Error thrown");\n' +
+        '    }\n' +
+        '    throw err;\n' +
+        '  } finally {',
+      replace:
+        '  } catch (err) {\n' +
+        '    // LOCAL PATCH (Cindy, via sync.mjs): goto failed — the page did\n' +
+        '    // NOT land on the preview origin, so the preview-only route\n' +
+        '    // guard must be removed; otherwise the tab\'s normal navigations\n' +
+        '    // stay blocked by a stale guard. A preview-target failure can\n' +
+        '    // leave the untrusted HTML already executing: close the page so\n' +
+        '    // no guard-less survivor can navigate unchecked.\n' +
+        '    if (previewOrigin !== null) {\n' +
+        '      await opts.page.unroute("**", handler).catch(() => {});\n' +
+        '      if (previewRouteGuards.get(opts.page) === handler) previewRouteGuards.delete(opts.page);\n' +
+        '      await opts.page.close().catch(() => {});\n' +
+        '    }\n' +
+        '    if (blockedError) {\n' +
+        '      throw toLintErrorObject(blockedError, "Non-Error thrown");\n' +
+        '    }\n' +
+        '    throw err;\n' +
+        '  } finally {',
+    },
+    {
+      desc: 'keep the navigation route guard alive for preview pages so page-initiated navigations stay blocked after the initial goto',
+      find:
+        '  } finally {\n' +
+        '    await opts.page.unroute("**", handler).catch(() => {});\n' +
+        '    if (blockedError) {',
+      replace:
+        '  } finally {\n' +
+        '    // LOCAL PATCH (Cindy, via sync.mjs): keep the navigation guard\n' +
+        '    // alive for preview pages (previewOrigin !== null). Without this,\n' +
+        '    // page-initiated navigations after the initial goto would run\n' +
+        '    // unchecked; the guard lives for the page lifetime and is torn\n' +
+        '    // down with the page (Playwright removes routes on close).\n' +
+        '    if (previewOrigin === null) {\n' +
+        '      await opts.page.unroute("**", handler).catch(() => {});\n' +
+        '      if (previewRouteGuards.get(opts.page) === handler) previewRouteGuards.delete(opts.page);\n' +
+        '    }\n' +
+        '    if (blockedError) {',
+    },
+    {
+      desc: 'createPageViaPlaywright: do not swallow navigation-guard failures for preview targets — rethrow regardless of page close state so a guard-less survivor is never returned as "created"',
+      find:
+        '    } catch (err) {\n' +
+        '      if (isPolicyDenyNavigationError(err) || err instanceof BlockedBrowserTargetError) {\n' +
+        '        throw err;\n' +
+        '      }\n' +
+        '    }\n' +
+        '    // OpenClaw owns this newly-created tab: if the post-navigation safety',
+      replace:
+        '    } catch (err) {\n' +
+        '      if (isPolicyDenyNavigationError(err) || err instanceof BlockedBrowserTargetError) {\n' +
+        '        throw err;\n' +
+        '      }\n' +
+        '      // LOCAL PATCH (Cindy, via sync.mjs): a non-policy failure from\n' +
+        '      // gotoPageWithNavigationGuard on a PREVIEW target must not be\n' +
+        '      // swallowed. The goto-failure path already removed the route\n' +
+        '      // guard and closed the page — but page.close() itself may have\n' +
+        '      // failed, leaving a guard-less survivor. Rethrow whenever the\n' +
+        '      // target was a preview origin, regardless of close state.\n' +
+        '      let isPreviewTarget = false;\n' +
+        '      try {\n' +
+        '        const entryUrl = new URL(targetUrl);\n' +
+        '        isPreviewTarget =\n' +
+        '          opts.ssrfPolicy?.allowedOrigins?.includes(entryUrl.origin) === true;\n' +
+        '      } catch { /* not a preview URL */ }\n' +
+        '      if (isPreviewTarget) {\n' +
+        '        throw err;\n' +
+        '      }\n' +
+        '    }\n' +
+        '    // OpenClaw owns this newly-created tab: if the post-navigation safety',
+    },
+  ],
+  'extension/src/browser/navigation-guard.ts': [
+    {
+      desc: 'resolve exact-origin allowlist per request URL in the navigation guard (allowedOrigins only promotes the matching origin\'s hostname; redirects/subframes re-evaluate with their own URL)',
+      find:
+        'import {\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../infra/net/ssrf.js";',
+      replace:
+        'import {\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  resolveSsrFPolicyForUrl,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../infra/net/ssrf.js";',
+    },
+    {
+      desc: 'apply resolveSsrFPolicyForUrl before the private-network gates in assertBrowserNavigationAllowed',
+      find:
+        '  let parsed: URL;\n' +
+        '  try {\n' +
+        '    parsed = new URL(rawUrl);\n' +
+        '  } catch {\n' +
+        '    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${rawUrl}`);\n' +
+        '  }\n' +
+        '\n' +
+        '  if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {',
+      replace:
+        '  let parsed: URL;\n' +
+        '  try {\n' +
+        '    parsed = new URL(rawUrl);\n' +
+        '  } catch {\n' +
+        '    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${rawUrl}`);\n' +
+        '  }\n' +
+        '\n' +
+        '  // LOCAL PATCH (Cindy, via sync.mjs): promote exact-origin allowlist entries\n' +
+        '  // (scheme+host+port) into the hostname allowlist for THIS request URL only.\n' +
+        '  // Redirect chains and subframe navigations re-enter this function with their\n' +
+        '  // own URL, so the origin-scoped trust cannot leak to other ports or hosts.\n' +
+        '  opts.ssrfPolicy = resolveSsrFPolicyForUrl(parsed, opts.ssrfPolicy);\n' +
+        '\n' +
+        '  if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {',
+    },
+  ],
+  'extension/src/infra/net/ssrf.ts': [
+    {
+      desc: 're-export resolveSsrFPolicyForUrl through the browser-local SSRF policy shell (used by the local HTML preview origin allowlist)',
+      find:
+        'export {\n' +
+        '  SsrFBlockedError,\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../../sdk-security-runtime.js";',
+      replace:
+        'export {\n' +
+        '  SsrFBlockedError,\n' +
+        '  isPrivateNetworkAllowedByPolicy,\n' +
+        '  resolvePinnedHostnameWithPolicy,\n' +
+        '  resolveSsrFPolicyForUrl,\n' +
+        '  type LookupFn,\n' +
+        '  type SsrFPolicy,\n' +
+        '} from "../../sdk-security-runtime.js";',
+    },
+  ],
+  'extension/src/sdk-security-runtime.ts': [
+    {
+      desc: 're-export resolveSsrFPolicyForUrl from the shim so the navigation guard can promote exact-origin allowlist entries',
+      find: '  resolvePinnedHostnameWithPolicy,\n',
+      replace: '  resolvePinnedHostnameWithPolicy,\n  resolveSsrFPolicyForUrl,\n',
     },
   ],
 };

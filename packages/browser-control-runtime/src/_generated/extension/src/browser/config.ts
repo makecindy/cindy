@@ -294,6 +294,11 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const allowIpv6UniqueLocalRange = rawPolicy?.allowIpv6UniqueLocalRange;
   const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
   const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
+  // LOCAL PATCH (Cindy, via sync.mjs): preserve the exact-origin allowlist
+  // used by the sandboxed local HTML preview server. Vendored SsrFPolicy
+  // supports allowedOrigins (promote only the matching request origin's
+  // hostname), but the resolver must not drop it on the floor.
+  const allowedOrigins = normalizeStringList(rawPolicy?.allowedOrigins);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const hasExplicitFakeIpSetting =
@@ -306,7 +311,8 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
     !hasExplicitPrivateSetting &&
     !hasExplicitFakeIpSetting &&
     !allowedHostnames &&
-    !hostnameAllowlist
+    !hostnameAllowlist &&
+    !allowedOrigins
   ) {
     // Keep the default policy object present so CDP guards still enforce
     // fail-closed private-network checks on unconfigured installs.
@@ -323,6 +329,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
     ...(allowIpv6UniqueLocalRange !== undefined ? { allowIpv6UniqueLocalRange } : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+    ...(allowedOrigins ? { allowedOrigins } : {}),
   };
 }
 

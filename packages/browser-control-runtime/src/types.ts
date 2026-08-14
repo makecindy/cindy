@@ -149,7 +149,15 @@ export type BrowserControlErrorCode =
   | 'BROWSER_RUNTIME_NOT_CONFIGURED'
   | 'BROWSER_RUNTIME_UNAVAILABLE'
   | 'BROWSER_RUNTIME_INVALID_REQUEST'
-  | 'BROWSER_RUNTIME_ACTION_FAILED';
+  | 'BROWSER_RUNTIME_ACTION_FAILED'
+  // Sandboxed local HTML preview (previewLocalHtml action). These codes are
+  // produced at the MCP boundary (L2), not by the runtime itself; they share
+  // the BROWSER_RUNTIME_* family for consistent agent-facing error semantics.
+  | 'BROWSER_RUNTIME_LOCAL_PREVIEW_NO_WORKDIR'
+  | 'BROWSER_RUNTIME_LOCAL_PREVIEW_UNAVAILABLE'
+  | 'BROWSER_RUNTIME_LOCAL_PREVIEW_PATH_NOT_ALLOWED'
+  | 'BROWSER_RUNTIME_LOCAL_PREVIEW_UNSUPPORTED_FILE'
+  | 'BROWSER_RUNTIME_LOCAL_PREVIEW_NOT_FOUND';
 
 export interface BrowserControlRuntime {
   call(request: BrowserControlRequest): Promise<BrowserControlResult>;

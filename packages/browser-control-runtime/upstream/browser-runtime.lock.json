@@ -29,10 +29,62 @@
     {
       "file": "extension/src/browser/config.ts",
       "desc": "skip upstream auto-injected \"openclaw\"/\"user\" profiles when the host provides its own (avoids CDP port 18800 collision with the managed profile + never drives the user's Chrome)"
+    },
+    {
+      "file": "extension/src/browser/navigation-guard.ts",
+      "desc": "resolve exact-origin allowlist per request URL in the navigation guard (allowedOrigins only promotes the matching origin's hostname; redirects/subframes re-evaluate with their own URL)"
+    },
+    {
+      "file": "extension/src/browser/navigation-guard.ts",
+      "desc": "apply resolveSsrFPolicyForUrl before the private-network gates in assertBrowserNavigationAllowed"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "import the host-settable runtime config getter so the preview route guard can check the live origin allowlist"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "track the installed route guard per page so a newer navigation can unroute the previous one (prevents a stale preview guard from blocking later navigations on the same tab)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "compute the exact preview origin before installing the navigation route guard — preview pages (tokenized loopback URL) navigate only within their exact origin"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "enforce exact-origin equality for preview pages inside the route handler, with live authorization re-check on EVERY request (including subresources)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "clear stale Service Worker storage for the preview origin BEFORE goto and FAIL CLOSED on clear failure — a persistent profile may hold an old SW from an earlier local service on the same port"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "clear stale Service Worker storage for the preview origin BEFORE goto and FAIL CLOSED on clear failure"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "when goto fails on a preview target, remove the preview route guard AND close the page — the preview HTML may already be executing while the caller swallows non-policy errors"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "keep the navigation route guard alive for preview pages so page-initiated navigations stay blocked after the initial goto"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "createPageViaPlaywright: do not swallow navigation-guard failures for preview targets — rethrow regardless of page close state so a guard-less survivor is never returned as \"created\""
+    },
+    {
+      "file": "extension/src/infra/net/ssrf.ts",
+      "desc": "re-export resolveSsrFPolicyForUrl through the browser-local SSRF policy shell (used by the local HTML preview origin allowlist)"
+    },
+    {
+      "file": "extension/src/sdk-security-runtime.ts",
+      "desc": "re-export resolveSsrFPolicyForUrl from the shim so the navigation guard can promote exact-origin allowlist entries"
     }
   ],
   "fileCount": 335,
-  "contentHash": "ec71c1f65b7239df32b0e861d8ac55a1dc55747487dae4fcf1ea4d16002c02ec",
+  "contentHash": "4aafea807b570aba87698ae5127da6b8f44b4aa90538a7326b03db95997666ef",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

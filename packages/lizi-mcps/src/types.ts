@@ -510,6 +510,23 @@ export interface BrowserMcpDeps {
   supportsSemanticQueries?(): boolean;
   logger?: LiziMcpLogger;
   /**
+   * Optional runtime session-context accessor. Resolved lazily at tool-call
+   * time so Codex HTTP bridge sessions (factory-time ctx is empty) still get
+   * the real `workingDir`. Same pattern as MemoryMcpDeps.getSessionContext.
+   */
+  getSessionContext?(): LiziMcpSessionContext | undefined;
+  /**
+   * Optional sandboxed local HTML preview: map a workspace-local HTML file to a
+   * token-scoped managed preview URL (loopback + capability token with TTL,
+   * served from the entry's directory). Absent → `previewLocalHtml` fails
+   * with a clear error.
+   */
+  createLocalPreviewUrl?(input: {
+    workingDir: string;
+    localPath: string;
+    sessionId?: string;
+  }): Promise<{ url: string }>;
+  /**
    * Optional L2 (user-local) recipe layer. The host scans userData, parses with
    * the @cindy/mcps `parseRecipes`/`parseSiteGuides` pure fns, and returns the
    * resolved maps plus a `version` content fingerprint. @cindy/mcps stays free of
