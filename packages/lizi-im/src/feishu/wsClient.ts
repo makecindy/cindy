@@ -154,8 +154,28 @@ const suspendedOrphanRetries: SuspendedOrphanRetry[] = [];
 
 const MAX_SUSPENDED_ORPHAN_RETRIES = 100;
 
-/** 挂起一个排队重试(按 opener 去重, 有界淘汰最旧)。 */
+/**
+ * 该 opener 的尝试预算天花板(opener → 最高 attempt, 只增不减, 跨链保持)。
+ * 重投失败路径原本会用 attempt 0 覆盖更先进的重试链 — 反复重连+重投会把
+ * 预算反复重置, 撤回兜底永远到不了; 天花板让任何新链都从既有进度续接。
+ */
+const ORPHAN_ATTEMPT_CEILING_MAX_ENTRIES = 200;
+const orphanAttemptCeiling = new Map<string, number>();
+
+function bumpOrphanAttemptCeiling(openerMessageId: string, attempt: number): number {
+  const ceiling = Math.max(orphanAttemptCeiling.get(openerMessageId) ?? 0, attempt);
+  orphanAttemptCeiling.set(openerMessageId, ceiling);
+  while (orphanAttemptCeiling.size > ORPHAN_ATTEMPT_CEILING_MAX_ENTRIES) {
+    const oldest = orphanAttemptCeiling.keys().next().value;
+    if (typeof oldest !== 'string') break;
+    orphanAttemptCeiling.delete(oldest);
+  }
+  return ceiling;
+}
+
+/** 挂起一个排队重试(按 opener 去重, 预算续接天花板, 有界淘汰最旧)。 */
 function suspendOrphanRetry(entry: SuspendedOrphanRetry): void {
+  entry.attempt = bumpOrphanAttemptCeiling(entry.openerMessageId, entry.attempt);
   for (let i = suspendedOrphanRetries.length - 1; i >= 0; i--) {
     if (suspendedOrphanRetries[i]!.openerMessageId === entry.openerMessageId) {
       suspendedOrphanRetries.splice(i, 1);
@@ -212,6 +232,7 @@ export function resetOrphanRetriesForTest(): void {
   for (const retry of orphanNoticeRetries.values()) clearTimeout(retry.timer);
   orphanNoticeRetries.clear();
   suspendedOrphanRetries.length = 0;
+  orphanAttemptCeiling.clear();
 }
 
 /** 该 opener 的提示是否已成功送达过(首发/重投/重试任一成功 — 终态)。 */
@@ -331,6 +352,9 @@ function scheduleOrphanNoticeRetry(
   attempt: number,
 ): void {
   const log = getLog();
+  // 预算续接天花板: 共享失败后重投路径的 attempt 0 不得覆盖更先进的
+  // 重试链(否则反复重连+重投永远到不了撤回兜底)。
+  attempt = bumpOrphanAttemptCeiling(openerMessageId, attempt);
   const delay = ORPHAN_NOTICE_RETRY_DELAYS_MS[attempt];
   if (delay === undefined) {
     // 提示已由其它路径(重投成功)送达时, 撤回会误删一张已经给出说明的卡 —

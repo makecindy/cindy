@@ -708,6 +708,54 @@ describe('feishu group inbound gate', () => {
     }
   });
 
+  it('redelivery joining a failed in-flight retry does not reset the attempt budget', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      // 首发 + attempt0(10s) + attempt1(40s) 都失败; 下一次重投的发送挂起。
+      mocks.replyText
+        .mockRejectedValueOnce(new Error('outage'))
+        .mockRejectedValueOnce(new Error('outage'))
+        .mockRejectedValueOnce(new Error('outage'));
+      let rejectShared!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectShared = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(3); // 首发 + attempt0 + attempt1
+      // attempt2 已排队(130s 触发)。
+
+      // 冷却过后的重投创建 in-flight 发送(第 4 次调用, 挂起)。
+      const redelivery = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(4);
+
+      // attempt2 定时器触发 → 加入那次 in-flight(不另发)。
+      await vi.advanceTimersByTimeAsync(69_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(4);
+
+      // 共享发送失败: attempt2 链进撤回兜底; 重投失败路径的 attempt 0 不得
+      // 重置预算(预算天花板) — 之后不应再有新发送。
+      rejectShared(new Error('outage'));
+      await redelivery;
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(mocks.recallOwnMessage).toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(4);
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('queued retry is not re-armed when a different bot starts', async () => {
     vi.useFakeTimers();
     try {
