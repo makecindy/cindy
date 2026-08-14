@@ -2308,7 +2308,7 @@
       "hint": "可選模型取決於已連線的模型來源；留空表示使用 Agent 原本的預設設定。Claude Code 的修改從新建的 Agent 會話開始生效；Codex 的修改在空閒時立即重啟生效，有任務執行時會在本地 Codex 會話全部空閒後自動應用。",
       "visionFallbackLabel": "圖片請求的視覺備援模型",
       "visionFallbackEnabledAria": "啟用圖片請求的視覺備援",
-      "visionFallbackHint": "目前模型不支援圖片時，Cindy 會使用你在這裡選擇的模型；未選擇時只提醒你前往設定配置。",
+      "visionFallbackHint": "目前模型不支援圖片時，Cindy 會用此模型處理本輪圖片。",
       "visionFallbackTextOnlyWarning": "此模型不支援圖片，請在設定中選擇支援圖片的模型。",
       "visionFallbackAutomatic": "不設定，僅提醒",
       "visionFallbackSetupReminder": "目前的模型不支援圖片。請前往設定 → 工具 → 圖片請求視覺備援模型，選擇支援圖片的模型後再試一次。",

@@ -2309,7 +2309,7 @@
       "codexV2ModelHint": "Subagent 默认模型必须是 Codex 自身模型目录内的模型，目录外的模型（如经兼容桥接入的第三方模型）会被 Codex 拒绝；Sol / Terra（Multi-Agent V2）进一步只接受 V2 目录模型（当前为 gpt-5.6-sol 与 gpt-5.6-terra），旧版（V1）无 V2 限制。",
       "visionFallbackLabel": "图片请求视觉兜底模型",
       "visionFallbackEnabledAria": "启用图片请求视觉兜底",
-      "visionFallbackHint": "当前模型不支持图片时，Cindy 会使用你在这里选择的模型；未选择时只提醒你到设置配置。",
+      "visionFallbackHint": "当前模型不支持图片时，Cindy 会用此模型处理本轮图片。",
       "visionFallbackTextOnlyWarning": "此模型不支持图片，请在设置里选择支持图片的模型。",
       "visionFallbackAutomatic": "不设置，仅提醒",
       "visionFallbackSetupReminder": "当前模型不支持图片。请前往设置 → 工具 → 图片请求视觉兜底模型，选择支持图片的模型后重试。",

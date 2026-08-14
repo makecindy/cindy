@@ -2314,7 +2314,7 @@
       "codexV2ModelHint": "The subagent default must be a model from Codex's own catalog; models outside it (such as third-party models connected through the compatibility bridge) are rejected by Codex. Sol / Terra (multi-agent V2) further only accept V2 catalog models (currently gpt-5.6-sol and gpt-5.6-terra); legacy multi-agent (V1) has no V2 restriction.",
       "visionFallbackLabel": "Vision fallback for image requests",
       "visionFallbackEnabledAria": "Enable vision fallback for image requests",
-      "visionFallbackHint": "When the current model cannot handle images, Cindy uses the model you choose here; if none is chosen, it only shows a setup reminder.",
+      "visionFallbackHint": "When the current model cannot handle images, Cindy uses this model to process images in this turn.",
       "visionFallbackTextOnlyWarning": "This model cannot handle images. Choose a model that supports images in Settings.",
       "visionFallbackAutomatic": "Not set, remind only",
       "visionFallbackSetupReminder": "The current model does not support images. Go to Settings → Tools → Vision fallback for image requests, choose an image-capable model, then try again.",

@@ -2312,7 +2312,7 @@
       "hint": "선택 가능한 모델은 연결된 모델 소스에 따라 달라집니다. 지정하지 않으면 Agent의 기본 설정을 사용합니다. Claude Code 변경 사항은 새 세션부터 적용됩니다. Codex 변경 사항은 유휴 상태에서 즉시 재시작되어 반영되며, 작업 실행 중에는 로컬 Codex 세션이 모두 유휴 상태가 된 후 자동 적용됩니다.",
       "visionFallbackLabel": "이미지 요청용 시각 폴백 모델",
       "visionFallbackEnabledAria": "이미지 요청용 시각 폴백 사용",
-      "visionFallbackHint": "현재 모델이 이미지를 처리할 수 없으면 Cindy가 여기서 선택한 모델을 사용합니다. 선택하지 않으면 설정 안내만 표시합니다.",
+      "visionFallbackHint": "현재 모델이 이미지를 처리할 수 없으면 Cindy가 이 모델로 이번 요청의 이미지를 처리합니다.",
       "visionFallbackTextOnlyWarning": "이 모델은 이미지를 처리할 수 없습니다. 설정에서 이미지 지원 모델을 선택하세요.",
       "visionFallbackAutomatic": "설정 안 함(안내만 표시)",
       "visionFallbackSetupReminder": "현재 모델은 이미지를 지원하지 않습니다. 설정 → 도구 → 이미지 요청용 시각 폴백 모델에서 이미지 지원 모델을 선택한 후 다시 시도하세요.",
