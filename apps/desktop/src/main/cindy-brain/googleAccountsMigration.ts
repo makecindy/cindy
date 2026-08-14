@@ -16,6 +16,7 @@
  */
 
 import type { GhostOauthVault } from './ghostOauthAccounts.js';
+import type { LegacyMigrationRead } from './legacyMigrationRead.js';
 
 /** filo-google 意识与其 oauth 凭证槽(与 ghost.json 声明一致,搬账目的地)。 */
 export const FILO_GOOGLE_GHOST_ID = 'filo-google';
@@ -30,13 +31,18 @@ export interface LegacyGoogleAccountRow {
 }
 
 export interface GoogleAccountsMigrationDeps {
-  /** 读老账号清单(userData/safe-storage/google_accounts.json;不存在 / 坏形态回 null)。 */
-  readLegacyManifest(): { accounts: LegacyGoogleAccountRow[] } | null;
-  /** 读老账号的 refresh token 明文(safeStorage 解密;不存在 / 解密失败回 null)。 */
-  readLegacyRefreshToken(accountId: string): string | null;
+  /** 读老账号清单，并区分确实缺失与可重试读取失败。 */
+  readLegacyManifest(): LegacyMigrationRead<{ accounts: LegacyGoogleAccountRow[] }>;
+  /** 读老账号的 refresh token 明文，并区分确实缺失与可重试读取失败。 */
+  readLegacyRefreshToken(accountId: string): LegacyMigrationRead<string>;
   /** 意识 OAuth 保险库(与 GhostOauthAccountManager 同一本账)。 */
   vault: GhostOauthVault;
   log?: { info(msg: string, meta?: Record<string, unknown>): void; warn(msg: string, meta?: Record<string, unknown>): void };
+}
+
+export interface GoogleAccountsMigrationResult {
+  migrated: number;
+  retryPending: boolean;
 }
 
 /** 老账号 id 形状(镜像老集成的 SAFE_ACCOUNT_ID_RE;同时满足保险库键名字符集)。 */
@@ -50,27 +56,47 @@ export const FILO_CURRENT_PROFILE_ID = 'filoCurrent';
  * 在内置意识对账完成后调用(见 index.ts 启动序列);同步 IO 量级为个位数
  * 小文件,不值得异步化。
  */
-export function migrateFiloGoogleAccounts(deps: GoogleAccountsMigrationDeps): number {
+export function migrateFiloGoogleAccountsWithResult(
+  deps: GoogleAccountsMigrationDeps,
+): GoogleAccountsMigrationResult {
   const { readLegacyManifest, readLegacyRefreshToken, vault, log } = deps;
 
   const accountsKey = `${FILO_GOOGLE_SECRET_KEY}-accounts`;
   // 意识侧已有账号(用户手动连过 / 上次已迁)→ 不碰,防重复合并。
-  if (vault.read(FILO_GOOGLE_GHOST_ID, accountsKey) !== null) return 0;
+  if (vault.read(FILO_GOOGLE_GHOST_ID, accountsKey) !== null) {
+    return { migrated: 0, retryPending: false };
+  }
 
   const legacy = readLegacyManifest();
-  if (!legacy || legacy.accounts.length === 0) return 0;
+  if (legacy.status === 'retryable-failure') {
+    return { migrated: 0, retryPending: true };
+  }
+  if (legacy.status === 'missing' || legacy.value.accounts.length === 0) {
+    return { migrated: 0, retryPending: false };
+  }
 
   const rows: Array<{ id: string; label: string | null; status: 'connected'; createdAt: number }> = [];
-  for (const account of legacy.accounts) {
+  for (const account of legacy.value.accounts) {
     // 只迁 filoCurrent:意识内置同一 client,refresh token 直接通用;
     // legacy 档案的令牌换了 client 刷不动,迁了也是死账号,不如引导重连。
     if (account.credentialProfileId !== FILO_CURRENT_PROFILE_ID) continue;
     if (typeof account.id !== 'string' || !SAFE_ACCOUNT_ID_RE.test(account.id)) continue;
     const refreshToken = readLegacyRefreshToken(account.id);
-    if (!refreshToken) continue;
-    if (!vault.store(FILO_GOOGLE_GHOST_ID, `${FILO_GOOGLE_SECRET_KEY}-rt-${account.id}`, refreshToken)) {
-      log?.warn('filo-google 搬账:refresh token 写入失败,跳过该账号', { accountId: account.id });
-      continue;
+    if (refreshToken.status === 'retryable-failure') {
+      for (const row of rows) {
+        vault.remove(FILO_GOOGLE_GHOST_ID, `${FILO_GOOGLE_SECRET_KEY}-rt-${row.id}`);
+      }
+      return { migrated: 0, retryPending: true };
+    }
+    if (refreshToken.status === 'missing') continue;
+    if (!vault.store(FILO_GOOGLE_GHOST_ID, `${FILO_GOOGLE_SECRET_KEY}-rt-${account.id}`, refreshToken.value)) {
+      for (const row of rows) {
+        vault.remove(FILO_GOOGLE_GHOST_ID, `${FILO_GOOGLE_SECRET_KEY}-rt-${row.id}`);
+      }
+      log?.warn('filo-google 搬账:refresh token 写入失败,整体回退并等待重试', {
+        accountId: account.id,
+      });
+      return { migrated: 0, retryPending: true };
     }
     rows.push({
       id: account.id,
@@ -79,15 +105,20 @@ export function migrateFiloGoogleAccounts(deps: GoogleAccountsMigrationDeps): nu
       createdAt: typeof account.updatedAt === 'number' && Number.isFinite(account.updatedAt) ? account.updatedAt : 0,
     });
   }
-  if (rows.length === 0) return 0;
+  if (rows.length === 0) return { migrated: 0, retryPending: false };
 
   const manifest = { defaultAccountId: rows[0].id, accounts: rows };
   if (!vault.store(FILO_GOOGLE_GHOST_ID, accountsKey, JSON.stringify(manifest))) {
     // 清单写失败:回收已搬的 rt,保持"没迁过"的干净状态,下次启动重试。
     for (const row of rows) vault.remove(FILO_GOOGLE_GHOST_ID, `${FILO_GOOGLE_SECRET_KEY}-rt-${row.id}`);
     log?.warn('filo-google 搬账:账号清单写入失败,整体回退');
-    return 0;
+    return { migrated: 0, retryPending: true };
   }
   log?.info('filo-google 搬账完成:老 Google 集成账号已迁入意识', { migrated: rows.length });
-  return rows.length;
+  return { migrated: rows.length, retryPending: false };
+}
+
+/** Compatibility wrapper for callers that only need the migrated count. */
+export function migrateFiloGoogleAccounts(deps: GoogleAccountsMigrationDeps): number {
+  return migrateFiloGoogleAccountsWithResult(deps).migrated;
 }

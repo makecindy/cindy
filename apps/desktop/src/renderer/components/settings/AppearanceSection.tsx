@@ -23,17 +23,14 @@ import {
   DEFAULT_UI_FONT_SIZE,
   useFontSettings,
 } from '@/hooks/useFontSettings';
-import { useSidebarCardMode, type SidebarViewMode } from '@/hooks/useSidebarCardMode';
 import {
-  getThemeFamilies,
-  resolveFamilyVariant,
-  type ThemeFamily,
-} from '@/themes/families';
-import {
-  buildCopyFromTheme,
-  onLocalThemesChange,
-  refreshLocalThemes,
-} from '@/themes/local-themes';
+  useSidebarCardMode,
+  useSidebarMainViewMode,
+  type SidebarMainViewMode,
+  type SidebarViewMode,
+} from '@/hooks/useSidebarCardMode';
+import { getThemeFamilies, resolveFamilyVariant, type ThemeFamily } from '@/themes/families';
+import { buildCopyFromTheme, onLocalThemesChange, refreshLocalThemes } from '@/themes/local-themes';
 import { toast } from '@/lib/toast';
 import { isLocalThemeId } from '../../../shared/local-themes';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -144,7 +141,7 @@ function ThemeCard({
         style={{
           backgroundColor: previewBg,
           borderColor: isSelected
-            ? activeRingColor ?? 'var(--settings-theme-preview-border-active)'
+            ? (activeRingColor ?? 'var(--settings-theme-preview-border-active)')
             : 'var(--settings-theme-preview-border)',
         }}
       >
@@ -287,7 +284,10 @@ function FamilyDropdown({
                     {getLabel(family)}
                   </span>
                   {isSelected ? (
-                    <Check size={16} className="shrink-0 text-[var(--settings-theme-icon-active)]" />
+                    <Check
+                      size={16}
+                      className="shrink-0 text-[var(--settings-theme-icon-active)]"
+                    />
                   ) : null}
                 </button>
               );
@@ -316,6 +316,7 @@ export function AppearanceSection() {
     resetCodeSize,
   } = useFontSettings();
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
+  const { mode: sidebarMainViewMode, setMode: setSidebarMainViewMode } = useSidebarMainViewMode();
   const { t } = useTranslation();
   const [localThemesVersion, setLocalThemesVersion] = useState(0);
   const [uiSizeInput, setUiSizeInput] = useState(String(uiSize));
@@ -335,9 +336,13 @@ export function AppearanceSection() {
     setCodeSizeInput(String(codeSize));
   }, [codeSize]);
 
-  useEffect(() => onLocalThemesChange(() => {
-    setLocalThemesVersion((version) => version + 1);
-  }), []);
+  useEffect(
+    () =>
+      onLocalThemesChange(() => {
+        setLocalThemesVersion((version) => version + 1);
+      }),
+    [],
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -363,27 +368,23 @@ export function AppearanceSection() {
   );
 
   const getFamilyLabel = useCallback(
-    (family: ThemeFamily) => isLocalThemeId(family.id)
-      ? `${family.name} ${t('settings.appearance.localBadge')}`
-      : family.name,
+    (family: ThemeFamily) =>
+      isLocalThemeId(family.id)
+        ? `${family.name} ${t('settings.appearance.localBadge')}`
+        : family.name,
     [t],
   );
 
   const handleExport = useCallback(async () => {
     const isDark = resolveIsDark(theme);
-    const { theme: activeTheme } = resolveFamilyVariant(
-      familyId,
-      isDark ? 'dark' : 'light',
-    );
+    const { theme: activeTheme } = resolveFamilyVariant(familyId, isDark ? 'dark' : 'light');
     const { baseId, theme: themeJson } = buildCopyFromTheme(activeTheme);
     const result = await window.electronAPI.localThemes.write({
       baseId,
       theme: themeJson,
     });
     if (!result.success) {
-      toast.error(
-        t('settings.appearance.localThemes.exportFailed', { error: result.error }),
-      );
+      toast.error(t('settings.appearance.localThemes.exportFailed', { error: result.error }));
       return;
     }
     // openDir 失败只 log,不退化 success toast — 文件已落盘是主要事实
@@ -442,9 +443,7 @@ export function AppearanceSection() {
   const handleOpenDir = useCallback(async () => {
     const result = await window.electronAPI.localThemes.openDir();
     if (!result.success) {
-      toast.error(
-        t('settings.appearance.localThemes.openDirFailed', { error: result.error }),
-      );
+      toast.error(t('settings.appearance.localThemes.openDirFailed', { error: result.error }));
     }
   }, [t]);
 
@@ -590,22 +589,30 @@ export function AppearanceSection() {
             <LocalThemeIconButton
               icon={Copy}
               label={t('settings.appearance.localThemes.export')}
-              onClick={() => { void handleExport(); }}
+              onClick={() => {
+                void handleExport();
+              }}
             />
             <LocalThemeIconButton
               icon={ImportIcon}
               label={t('settings.appearance.localThemes.import')}
-              onClick={() => { void handleImport(); }}
+              onClick={() => {
+                void handleImport();
+              }}
             />
             <LocalThemeIconButton
               icon={FolderOpen}
               label={t('settings.appearance.localThemes.openDir')}
-              onClick={() => { void handleOpenDir(); }}
+              onClick={() => {
+                void handleOpenDir();
+              }}
             />
             <LocalThemeIconButton
               icon={RefreshCw}
               label={t('settings.appearance.localThemes.refresh')}
-              onClick={() => { void handleRefresh(); }}
+              onClick={() => {
+                void handleRefresh();
+              }}
             />
           </div>
         </div>
@@ -792,53 +799,100 @@ export function AppearanceSection() {
         </div>
       </div>
 
-      {/* Sidebar card mode — 卡片瀑布流 vs 紧凑列表（sidebar-card-mode redesign）。
+      {/* Sidebar view modes — 置顶段(三态) / 主列表(两态)分离(sidebar-redesign B 期)。
           独立卡片，沿用 NotificationSection 的 label+hint+Switch 行模式。 */}
       <div
         className={cn(
-          'flex items-center justify-between gap-3 rounded-xl p-5',
+          'flex flex-col gap-4 rounded-xl p-5',
           'bg-[var(--settings-theme-card-bg)]',
           'border border-[var(--settings-theme-card-border)]',
         )}
       >
-        <div className="flex min-w-0 flex-col gap-1">
-          <p
-            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-            style={{ letterSpacing: '0.12px' }}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p
+              className="text-13 font-medium text-[var(--settings-section-sublabel)]"
+              style={{ letterSpacing: '0.12px' }}
+            >
+              {t('settings.appearance.sidebarCardMode.label')}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.appearance.sidebarCardMode.hint')}
+            </p>
+          </div>
+
+          <div
+            role="radiogroup"
+            aria-label={t('settings.appearance.sidebarCardMode.aria')}
+            className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
           >
-            {t('settings.appearance.sidebarCardMode.label')}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
-            {t('settings.appearance.sidebarCardMode.hint')}
-          </p>
+            {(
+              [
+                { value: 'text', labelKey: 'ccAgent.sidebar.viewStyleList' },
+                { value: 'card', labelKey: 'ccAgent.sidebar.viewStyleCard' },
+                { value: 'list', labelKey: 'ccAgent.sidebar.viewStyleListWide' },
+              ] as Array<{ value: SidebarViewMode; labelKey: string }>
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={sidebarViewMode === opt.value}
+                onClick={() => setSidebarViewMode(opt.value)}
+                className={cn(
+                  'rounded-full px-2.5 py-1 text-xs transition-colors',
+                  sidebarViewMode === opt.value
+                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
+                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
+                )}
+              >
+                {t(opt.labelKey)}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div
-          role="radiogroup"
-          aria-label={t('settings.appearance.sidebarCardMode.aria')}
-          className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
-        >
-          {([
-            { value: 'text', labelKey: 'ccAgent.sidebar.viewStyleList' },
-            { value: 'card', labelKey: 'ccAgent.sidebar.viewStyleCard' },
-            { value: 'list', labelKey: 'ccAgent.sidebar.viewStyleListWide' },
-          ] as Array<{ value: SidebarViewMode; labelKey: string }>).map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              role="radio"
-              aria-checked={sidebarViewMode === opt.value}
-              onClick={() => setSidebarViewMode(opt.value)}
-              className={cn(
-                'rounded-full px-2.5 py-1 text-xs transition-colors',
-                sidebarViewMode === opt.value
-                  ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-                  : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
-              )}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p
+              className="text-13 font-medium text-[var(--settings-section-sublabel)]"
+              style={{ letterSpacing: '0.12px' }}
             >
-              {t(opt.labelKey)}
-            </button>
-          ))}
+              {t('settings.appearance.sidebarMainListMode.label')}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.appearance.sidebarMainListMode.hint')}
+            </p>
+          </div>
+
+          <div
+            role="radiogroup"
+            aria-label={t('settings.appearance.sidebarMainListMode.aria')}
+            className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
+          >
+            {(
+              [
+                { value: 'text', labelKey: 'ccAgent.sidebar.viewStyleList' },
+                { value: 'list', labelKey: 'ccAgent.sidebar.viewStyleListWide' },
+              ] as Array<{ value: SidebarMainViewMode; labelKey: string }>
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={sidebarMainViewMode === opt.value}
+                onClick={() => setSidebarMainViewMode(opt.value)}
+                className={cn(
+                  'rounded-full px-2.5 py-1 text-xs transition-colors',
+                  sidebarMainViewMode === opt.value
+                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
+                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
+                )}
+              >
+                {t(opt.labelKey)}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

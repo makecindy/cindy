@@ -2,9 +2,14 @@
  * dialogueSidebarSection — projectless conversation sidebar invariants.
  *
  * These are static checks because the renderer test environment has no jsdom.
- * The product rule is intentionally narrow: Dialogue is a project-peer section,
- * not a pseudo-project, so project filtering/manual project order must not hide
- * or reposition the Dialogue section.
+ *
+ * 侧边栏重设计 D 期(2026-08-12,docs/product-rules/sidebar-redesign-plan.md):
+ * 旧裁决「Dialogue 是 Projects 的同级固定段、固定显示在 Projects 之后」已被
+ * **有意推翻**——对话与项目行在主列表中按同一口径混排(mainListModel),
+ * 「对话归为一组」成为可选开关。本文件的不变量随之改写:
+ *   - 主列表由 ProjectsSection 统一渲染,dialogues 作为混排输入传入;
+ *   - 项目筛选含「对话」哨兵:未勾选 DIALOGUE_FILTER_KEY 时隐藏无项目任务;
+ *   - 固定 DialogueSection 段与按日期分组段不再渲染。
  */
 
 import { readFileSync } from 'node:fs';
@@ -17,21 +22,13 @@ const sidebarSource = readFileSync(
   'utf8',
 );
 
-const dialogueSectionSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'sections', 'DialogueSection.tsx'),
+const projectsSectionSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'sections', 'ProjectsSection.tsx'),
   'utf8',
 );
 
-const dateGroupedSectionSource = readFileSync(
-  resolve(
-    __dirname,
-    '..',
-    'features',
-    'cc-agent',
-    'sidebar',
-    'sections',
-    'DateGroupedSessionsSection.tsx',
-  ),
+const mainListModelSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'lib', 'mainListModel.ts'),
   'utf8',
 );
 
@@ -51,41 +48,34 @@ const remoteProjectsHookSource = readFileSync(
   'utf8',
 );
 
-describe('Dialogue sidebar section', () => {
-  it('is rendered after Projects in project-grouped mode', () => {
-    const projectsIndex = sidebarSource.indexOf('<ProjectsSection');
-    const dialogueIndex = sidebarSource.indexOf('<DialogueSection');
-
-    expect(projectsIndex).toBeGreaterThanOrEqual(0);
-    expect(dialogueIndex).toBeGreaterThanOrEqual(0);
-    expect(dialogueIndex).toBeGreaterThan(projectsIndex);
+describe('Mixed main list (sidebar-redesign D 期)', () => {
+  it('renders dialogues through the mixed ProjectsSection instead of a fixed DialogueSection', () => {
+    expect(sidebarSource).toContain('dialogues={visibleDialogues}');
+    expect(sidebarSource).not.toContain('<DialogueSection');
+    expect(projectsSectionSource).toContain('buildMainListEntries');
   });
 
-  it('does not let project filtering hide dialogues', () => {
-    expect(sidebarSource).not.toMatch(/filter\.projectsAsSet\s*!==\s*null\)\s*return\s*\[\]/);
+  it('drops the removed date-grouped section entirely', () => {
+    expect(sidebarSource).not.toContain('<DateGroupedSessionsSection');
+    expect(sidebarSource).not.toContain("filter.groupBy === 'date'");
   });
 
-  it('keeps the Dialogue section visible when it has no sessions', () => {
-    expect(dialogueSectionSource).not.toMatch(/sessions\.length\s*===\s*0\)\s*return\s+null/);
-    expect(dialogueSectionSource).toContain("'ccAgent.sidebar.noDialogues'");
+  it('lets the project filter include or exclude dialogues via DIALOGUE_FILTER_KEY', () => {
+    expect(sidebarSource).toContain('DIALOGUE_FILTER_KEY');
+    expect(sidebarSource).toContain('filter.projectsAsSet.has(DIALOGUE_FILTER_KEY)');
   });
 
-  it('shows loading instead of the empty state until the initial session fetch settles', () => {
-    expect(sidebarSource.match(/isLoading=\{isLoadingSidebarSessions\}/g)).toHaveLength(2);
-    expect(sidebarSource).toContain('useRemoteSessionBootstrapLoading(selectedMachineId)');
-    expect(sidebarSource).toMatch(
-      /sessionsHook\.isLoading\s*\|\|\s*remoteSessionBootstrapLoading\s*\|\|\s*remoteDeviceDirectoryStatus === 'loading'/,
-    );
-    expect(dialogueSectionSource).toContain('isLoading: boolean');
-    expect(dialogueSectionSource).toContain("'ccAgent.sidebar.loadingDialogues'");
-    expect(dialogueSectionSource).toMatch(
-      /isLoading\s*\?\s*'ccAgent\.sidebar\.loadingDialogues'\s*:\s*'ccAgent\.sidebar\.noDialogues'/,
-    );
-    expect(dateGroupedSectionSource).toContain('isLoading: boolean');
-    expect(dateGroupedSectionSource).toContain('!isLoading');
-    expect(dateGroupedSectionSource).toMatch(
-      /isLoading\s*\?\s*'ccAgent\.sidebar\.loadingDialogues'\s*:\s*'ccAgent\.sidebar\.dateGroup\.empty'/,
-    );
+  it('keeps manual sort scoped to project rows (设计文档 §9.3 收窄)', () => {
+    // 手动排序只重排项目行;散排对话 / 对话组不进 manualProjectOrder。
+    expect(mainListModelSource).toContain("sortBy === 'manual'");
+    expect(mainListModelSource).toContain('normalizeManualProjectOrder');
+    expect(projectsSectionSource).toContain("filter.sortBy === 'manual' ? (");
+  });
+
+  it('offers the dialogue group as an opt-in toggle, not a fixed section', () => {
+    expect(mainListModelSource).toContain('groupDialogue');
+    expect(projectsSectionSource).toContain('DialogueGroupNode');
+    expect(projectsSectionSource).toContain("t('ccAgent.sidebar.dialogues')");
   });
 
   it('loads archived sessions on demand for the selected connected remote devices', () => {
@@ -142,84 +132,23 @@ describe('Dialogue sidebar section', () => {
     );
   });
 
-  it('has a Dialogue-owned runtime sort setting instead of using project manual order or renderer storage', () => {
-    expect(dialogueSectionSource).toContain('DIALOGUE_SORT_OPTIONS');
-    expect(dialogueSectionSource).not.toMatch(/manualProjectOrder/);
-    expect(dialogueSectionSource).not.toMatch(/localStorage/);
-  });
-
-  it('exposes Dialogue-owned create and section collapse controls', () => {
-    expect(dialogueSectionSource).toContain('onCreateDialogue');
-    expect(dialogueSectionSource).toContain('SquarePen');
-    expect(dialogueSectionSource).toContain('ChevronDown');
-    expect(dialogueSectionSource).toContain('ChevronRight');
-    expect(dialogueSectionSource).not.toContain('ChevronsDownUp');
-    expect(dialogueSectionSource).not.toContain('ChevronsUpDown');
-    expect(dialogueSectionSource).toContain("t('ccAgent.sidebar.newDialogue')");
-    expect(dialogueSectionSource).toContain("t('ccAgent.sidebar.dialoguesToggleExpand')");
-    expect(dialogueSectionSource).toContain("t('ccAgent.sidebar.dialoguesToggleCollapse')");
-  });
-
-  it('makes the Dialogue title and adjacent hover arrow collapse the section instead of putting collapse in the right tool group', () => {
-    const titleIndex = dialogueSectionSource.indexOf("t('ccAgent.sidebar.dialogues')");
-    const titleButtonIndex = dialogueSectionSource.lastIndexOf('<button', titleIndex);
-    const titleExpandedIndex = dialogueSectionSource.indexOf(
-      'aria-expanded={!collapsed}',
-      titleButtonIndex,
-    );
-    const hoverToggleIndex = dialogueSectionSource.indexOf('<Tip text={toggleLabel}');
-    const hoverToggleExpandedIndex = dialogueSectionSource.indexOf(
-      'aria-expanded={!collapsed}',
-      hoverToggleIndex,
-    );
-    const settingsIndex = dialogueSectionSource.indexOf("t('ccAgent.sidebar.dialogueSettings')");
-
-    expect(titleIndex).toBeGreaterThanOrEqual(0);
-    expect(titleButtonIndex).toBeGreaterThanOrEqual(0);
-    expect(titleExpandedIndex).toBeLessThan(titleIndex);
-    expect(hoverToggleIndex).toBeGreaterThan(titleIndex);
-    expect(hoverToggleExpandedIndex).toBeGreaterThan(hoverToggleIndex);
-    expect(settingsIndex).toBeGreaterThan(hoverToggleExpandedIndex);
-  });
-
-  it('only shows dialogue header actions while hovering or focusing the Dialogue header row', () => {
-    expect(dialogueSectionSource).toContain('group/sidebar-header flex h-6');
-    expect(dialogueSectionSource).toContain(
-      'pointer-events-none opacity-0 transition-opacity duration-150',
-    );
-    expect(dialogueSectionSource).toContain(
-      'group-hover/sidebar-header:pointer-events-auto group-hover/sidebar-header:opacity-100',
-    );
-    expect(dialogueSectionSource).toContain(
-      'has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100',
-    );
-    expect(dialogueSectionSource).not.toContain(
-      'group-focus-within/sidebar-header:pointer-events-auto',
-    );
-    expect(dialogueSectionSource).toContain('className={HEADER_HOVER_ACTION_CLASS}');
-    expect(dialogueSectionSource).toContain('className={HEADER_ACTIONS_CLASS}');
-  });
-
   it('routes standalone dialogue targets through the mounted draft page transition', () => {
     const handler = extractHandlerBlock(sidebarSource, 'handleCreateDialogue');
     expect(sidebarSource).toContain(
       'resolveDialogueDeviceTarget(selectedMachineId, switcherDevices, deviceListSettled)',
     );
     expect(handler).toContain("selectedDialogueDeviceResolution.status === 'pending'");
-    expect(handler).toContain(
-      'state: makeDialogueNewMakerRouteState(selectedDialogueDeviceResolution.target)',
-    );
+    // 无显式目标时仍走作用域推断(pending 守卫 + resolution.target);显式目标见下一条。
+    expect(handler).toContain('if (deviceTarget === undefined)');
+    expect(handler).toContain('target = selectedDialogueDeviceResolution.target;');
+    expect(handler).toContain('state: makeDialogueNewMakerRouteState(target)');
     expect(handler).not.toContain('resetDraftWorkspaceTargets');
     expect(handler).not.toContain('patchNewMakerDraft');
-    expect(newMakerDraftRouteSource).toContain(
-      'readNewMakerDialogueTargetRequest(location.state)',
-    );
+    expect(newMakerDraftRouteSource).toContain('readNewMakerDialogueTargetRequest(location.state)');
     expect(newMakerDraftRouteSource).toContain(
       'handledDialogueTargetRequestRef.current === dialogueTargetRequest.requestId',
     );
-    expect(newMakerDraftRouteSource).toContain(
-      'patchCollab({ enabled: false });',
-    );
+    expect(newMakerDraftRouteSource).toContain('patchCollab({ enabled: false });');
     expect(newMakerDraftRouteSource).toMatch(
       /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: null,/,
     );
@@ -228,10 +157,48 @@ describe('Dialogue sidebar section', () => {
     );
     expect(newMakerDraftRouteSource).toContain('replace: true');
     expect(handler).toContain("navigate('/cc-agent/new'");
-    expect((sidebarSource.match(/onCreateDialogue={handleCreateDialogue}/g) ?? []).length).toBe(2);
-    expect(sidebarSource).toContain('createDisabled={dialogueCreatePending}');
+    // 混排后展开态的「新建对话」入口并入统一新建;rail 对话面板仍保留独立入口。
+    expect(sidebarSource).toContain('onCreateDialogue={handleCreateDialogue}');
     expect(sidebarSource).toContain('isCreateDialogueDisabled={dialogueCreatePending}');
-    expect(dialogueSectionSource).toContain('disabled={createDisabled}');
+  });
+
+  // 2026-08-12 用户裁决:按设备分组时,某个设备段下「对话」组的新建必须落在该设备上,
+  // 不再按当前机器作用域猜(作用域可能是「所有」或另一台设备)。
+  it('creates the dialogue on the device that owns the group when grouping by device', () => {
+    // 设备段把自己的设备作为创建目标传下去:本机段 null,远程段 {deviceId, deviceName}。
+    expect(projectsSectionSource).toMatch(
+      /renderNonProjectEntry\(\s*entry,\s*key,\s*section\.deviceId\s*\?\s*\{ deviceId: section\.deviceId, deviceName: name \}\s*:\s*null,\s*\)/,
+    );
+    // 不按设备分组的两条渲染路径不传目标 → 上层沿用作用域推断。
+    expect(projectsSectionSource).toContain('renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY)');
+    expect(projectsSectionSource).toContain(
+      'onCreateDialogue={() => onCreateDialogue(dialogueDeviceTarget)}',
+    );
+    // 目标设备离线 → 禁用新建并复用远程写保护文案(被控端才是真正的创建方)。
+    expect(projectsSectionSource).toContain("t('ccAgent.remoteSession.actionsUnavailable')");
+    expect(projectsSectionSource).toMatch(/const targetDeviceOffline = Boolean\(/);
+    // 显式目标不受作用域解析 pending 影响(目标已定,无需等设备目录 settle)。
+    expect(projectsSectionSource).toContain(
+      'dialogueDeviceTarget === undefined ? isCreateDialogueDisabled : false',
+    );
+  });
+
+  // 2026-08-12 实机反馈:list 变体的分割线是「每行底线 + 列表首行顶线」,而混排把
+  // 每条散排对话各渲染成一个单条 SessionEntryList → 每个都自认首行,上一行底线与
+  // 本行顶线叠成两根横线。散排路径必须关掉顶线(底线已覆盖行间分割)。
+  it('does not double up dividers between standalone dialogues in list mode', () => {
+    const sessionEntryListSource = readFileSync(
+      resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'SessionEntryList.tsx'),
+      'utf8',
+    );
+    expect(sessionEntryListSource).toContain('isFirst={showFirstDivider && index === 0}');
+    expect(projectsSectionSource).toContain('showFirstDivider={false}');
+    // 真正的列表首行(置顶段 / 项目内会话 / 自动化组)保持默认,不传该 prop。
+    const pinnedSectionSource = readFileSync(
+      resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'sections', 'PinnedSection.tsx'),
+      'utf8',
+    );
+    expect(pinnedSectionSource).not.toContain('showFirstDivider');
   });
 
   it('allows the shared create route to send a standalone dialogue without picking a project', () => {

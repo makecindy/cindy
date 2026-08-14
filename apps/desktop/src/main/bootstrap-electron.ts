@@ -760,6 +760,7 @@ import {
   reconcileGhostOauthAccountsForActiveOwner,
   refreshGhostLocalization,
   registerGhostIpc,
+  runStableOwnerPostCommitTask,
   setGhostsChangedObserver,
   suspendAllGhosts,
   waitForGhostMutations,
@@ -1743,6 +1744,32 @@ setCodexImageAuthBinding({
 });
 registerGhostIpc();
 registerPluginMarketIpc();
+authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId }) => {
+  const builtinOutcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
+  if (builtinOutcome === 'deferred') return builtinOutcome;
+
+  let needsRetry = builtinOutcome === 'retry-pending' || builtinOutcome === 'failed';
+  // Signed-out is a real stable scope for account-free bundled provisioning.
+  // Market and OAuth are owner-private follow-ups and stay behind this gate.
+  if (dataOwnerId === null) return needsRetry ? 'failed' : 'completed';
+  let deferred = false;
+  const marketOutcome = await syncDefaultMarketPlugins();
+  if (marketOutcome === 'failed') needsRetry = true;
+  if (marketOutcome === 'deferred') deferred = true;
+
+  try {
+    const oauthCompleted = await reconcileGhostOauthAccountsForActiveOwner();
+    if (!oauthCompleted) deferred = true;
+  } catch (error) {
+    createLogger('ghost-oauth-owner-reconcile').warn(
+      'OAuth account reconciliation for active owner failed',
+      { error: error instanceof Error ? error.message : String(error) },
+    );
+    needsRetry = true;
+  }
+
+  return needsRetry ? 'failed' : deferred ? 'deferred' : 'completed';
+});
 
 // ── Custom protocol registration (image-local-cache M2) ──────────────────
 // MUST run before app.whenReady(), and MUST be a SINGLE call:
@@ -3125,29 +3152,6 @@ const createWindow = () => {
 
 let disposeSkillhubAutoSyncAuthListener: (() => void) | null = null;
 let disposeProviderAccessAuthListener: (() => void) | null = null;
-let disposePluginMarketAuthListener: (() => void) | null = null;
-let defaultPluginSyncInFlightScope: string | null = null;
-
-/** Run the existing market reconciliation once for each stable app owner. */
-function syncDefaultPluginsForActiveOwner(): void {
-  const session = getActiveAppSession();
-  if (!session.dataOwnerId || isAppSessionBoundaryPending()) return;
-  const scope = activeOwnerScopeKey();
-  if (scope === defaultPluginSyncInFlightScope) return;
-  defaultPluginSyncInFlightScope = scope;
-  void syncDefaultMarketPlugins().finally(() => {
-    if (defaultPluginSyncInFlightScope === scope) defaultPluginSyncInFlightScope = null;
-  });
-}
-
-function reconcileGhostOauthForActiveOwner(): void {
-  void reconcileGhostOauthAccountsForActiveOwner().catch((error) => {
-    createLogger('ghost-oauth-owner-reconcile').warn(
-      'OAuth account reconciliation for active owner failed',
-      { error: error instanceof Error ? error.message : String(error) },
-    );
-  });
-}
 
 function parseOptionalDeviceLinkDeviceId(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
@@ -4361,6 +4365,7 @@ const registerIpcHandlers = () => {
           pendingCompletion = completion;
         },
       });
+      await authManager.ensureStableOwnerPostCommitTasks('auth-initialize');
       if (!app.isPackaged) {
         recordDesktopDevAuthStartupResult(state, pendingCompletion, () =>
           authManager.getAuthState(),
@@ -5273,15 +5278,6 @@ const registerIpcHandlers = () => {
   // 默认插件同步不能依赖用户先打开插件页。启动时本地 owner 已经稳定则立刻
   // 复用市场快照；云端登录/切号的通知可能早于 owner boundary 释放，因此
   // 延迟到当前调用栈结束后再按已提交的新 owner 补跑一次。
-  disposePluginMarketAuthListener = authManager.onAuthStateChange(() => {
-    queueMicrotask(() => {
-      syncDefaultPluginsForActiveOwner();
-      reconcileGhostOauthForActiveOwner();
-    });
-  });
-  syncDefaultPluginsForActiveOwner();
-  reconcileGhostOauthForActiveOwner();
-
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
   ipcMain.handle(
     'dialog:show-open-directory',
@@ -7275,15 +7271,6 @@ onQuit(
   },
   'sync',
 );
-onQuit(
-  'plugin-market-auth-listener',
-  () => {
-    disposePluginMarketAuthListener?.();
-    disposePluginMarketAuthListener = null;
-  },
-  'sync',
-);
-
 // Async 阶段: 并发跑, 6s 超时兜底。
 //   - shutdown-maker:       Layer 1 关 sessions → Layer 2 dispose agents (Codex
 //                           shared app-server 子进程 SIGTERM)。**必须 await** —

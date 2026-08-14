@@ -758,8 +758,9 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('onClick={openLatestSession}');
     expect(source).not.toMatch(/role=\{latestSession \? 'button'/);
     expect(source).toContain("group.scheduleStatus === 'active'");
-    expect(source).toContain(
-      "scheduleId && !menuOpen && 'group-hover:opacity-0 group-focus-within/slot:opacity-0'",
+    // 用正则容忍 prettier 折行(条件在一行还是拆三行都算通过)。
+    expect(source).toMatch(
+      /scheduleId &&\s*!menuOpen &&\s*'group-hover:opacity-0 group-focus-within\/slot:opacity-0'/,
     );
     expect(source).toContain("menuOpen && 'opacity-0'");
     expect(source).toContain('disabled={!latestSession}');
@@ -768,7 +769,9 @@ describe('automation-generated sessions', () => {
     // vendor 经 agentKindToVendor 归一(pi 会话显示 π,而非 Claude 脸);尺寸规则:cc=13,其余(codex/pi)=12。
     expect(source).toContain("sessionVariant === 'list' ? 'w-3' : 'w-[15px]'");
     expect(source).toContain('vendor={agentKindToVendor(latestSession?.agentKind)}');
-    expect(source).toContain("size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}");
+    expect(source).toContain(
+      "size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}",
+    );
     // 所有自动任务统一 Timer；暂停只叠角标，主图标和 12px 槽位不替换。
     expect(source).toContain('<AutomationTimerIcon');
     expect(source).toContain('paused={isScheduleStopped}');
@@ -782,6 +785,10 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('className="flex min-w-0 items-center gap-1.5"');
     expect(source).toContain("sessionVariant === 'list' && 'order-2'");
     expect(source).toContain('runningSessionIds,');
+    // 组头右侧的时间文字与普通任务行的信息槽(SessionInfoMeta)同款字体 / 色号,
+    // 含 tabular-nums(2026-08-12 用户裁决;C 期给普通行加等宽数字时组头漏跟)。
+    expect(source).toContain("'flex items-center gap-1 text-xs font-medium tabular-nums'");
+    expect(source).toContain("'text-sidebar-action-icon'");
   });
 
   it('auto-collapses an expanded automation group once focus leaves it and offers show-all', () => {

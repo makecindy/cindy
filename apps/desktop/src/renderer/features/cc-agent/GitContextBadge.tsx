@@ -25,11 +25,8 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import type { Session } from '@/lib/ccAgent.types';
 import type { PrStatusKind, PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
-import {
-  useSessionGitContext,
-  prStatusKey,
-  MAX_STATUS_QUERIES,
-} from '@/hooks/useSessionGitContext';
+import { useSessionGitContext } from '@/hooks/useSessionGitContext';
+import { prStatusKey, MAX_STATUS_QUERIES } from '@/lib/prStatus';
 import { PR_STATUS_COLOR, PR_STATUS_ICON, pickBranchLabel } from './gitContextPrVisuals';
 
 export function GitContextBadge({ session }: { session: Session }) {

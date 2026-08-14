@@ -13,7 +13,10 @@ import { useMemo } from 'react';
 import type { Session } from '@/lib/ccAgent.types';
 import { useRemoteSshHosts } from '@/hooks/useRemoteSshHosts';
 import { groupSessions, type ProjectGroupsResult } from '../lib/projectGrouping';
-import { resolveRemoteProjectMachineIdentity } from '../lib/remoteProjectIdentity';
+import {
+  collectAmbiguousDeviceNames,
+  resolveRemoteProjectMachineIdentity,
+} from '../lib/remoteProjectIdentity';
 
 export function useProjectGroups(
   sessions: readonly Session[],
@@ -24,11 +27,15 @@ export function useProjectGroups(
 
   return useMemo(() => {
     const groups = groupSessions(sessions, { projectAliases, includePinnedInProjects });
+    // 撞名判定要看全量项目(哪些设备名对应了多个 deviceId),所以先扫一遍再逐个富化。
+    const ambiguousDeviceNames = collectAmbiguousDeviceNames(groups.projects);
     return {
       ...groups,
       projects: groups.projects.map((project) => ({
         ...project,
-        remoteMachineIdentity: resolveRemoteProjectMachineIdentity(project, sshHosts),
+        remoteMachineIdentity: resolveRemoteProjectMachineIdentity(project, sshHosts, {
+          ambiguousDeviceNames,
+        }),
       })),
     };
   }, [sessions, projectAliases, includePinnedInProjects, sshHosts]);

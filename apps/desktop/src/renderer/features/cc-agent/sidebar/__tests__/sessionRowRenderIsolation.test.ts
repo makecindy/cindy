@@ -62,9 +62,13 @@ vi.mock('react-router-dom', () => ({
 
 vi.mock('@/contexts/PrRefsContext', () => {
   const EMPTY: unknown[] = [];
+  // usePrActions 的真实实现保证 value 恒定;mock 同样给稳定引用,
+  // 避免 effect deps 每渲染变化干扰本文件的重渲染计数断言。
+  const ACTIONS = { registerPrConsumer: vi.fn(() => () => undefined) };
   return {
     usePrRefsForSession: () => EMPTY,
     usePrStatuses: () => ({ statuses: new Map(), fetchStatusesForSession: vi.fn() }),
+    usePrActions: () => ACTIONS,
   };
 });
 

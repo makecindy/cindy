@@ -1535,8 +1535,10 @@ export async function recoverLegacyGhostPlugins(
     !options.rejectReservedIds || !isOfficialGhostId(id);
   const sourceDiscoveryIds = new Set([...discoveredSourceIds].filter(isRecoverableId));
   const targetDiscoveryIds = new Set(targetDiscovery.ghosts.map((ghost) => ghost.id));
+  const visiblePendingIds = (recoveryMarker?.pendingIds ?? []).filter(isRecoverableId);
+  const hasVisibleFrozenWhitelist = recoveryMarker !== null && visiblePendingIds.length > 0;
   const pendingRecoveryIds = new Set(
-    [...(recoveryMarker?.pendingIds ?? sourceDiscoveryIds)].filter(isRecoverableId),
+    [...(hasVisibleFrozenWhitelist ? visiblePendingIds : sourceDiscoveryIds)],
   );
   const approvalProjectionSha256ById = new Map<string, string>(
     Object.entries(recoveryMarker?.approvalProjectionSha256ById ?? {})
@@ -1603,7 +1605,7 @@ export async function recoverLegacyGhostPlugins(
     return result;
   }
   let movableLegacyGhosts: ReturnType<typeof listLegacyGhostDirs> = [];
-  const unexpectedFrozenIds = recoveryMarker
+  const unexpectedFrozenIds = hasVisibleFrozenWhitelist
     ? [...sourceDiscoveryIds].filter((id) => !pendingRecoveryIds.has(id))
     : [];
   let conflicts = (sharedRecoveryBlocked ? sharedLegacyGhosts.length : 0) +
@@ -1614,7 +1616,7 @@ export async function recoverLegacyGhostPlugins(
       conflicts += 1;
       continue;
     }
-    if (recoveryMarker && !pendingRecoveryIds.has(legacy.id)) {
+    if (hasVisibleFrozenWhitelist && !pendingRecoveryIds.has(legacy.id)) {
       continue;
     }
     if (failedRecoveryIds.has(legacy.id)) {

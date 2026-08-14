@@ -83,12 +83,20 @@ async function removeVerifiedDirectory(
   workingDir: string,
   targetPath: string,
   parentName: string,
+  expectedTarget?: { realPath: string; dev: bigint; ino: bigint },
 ): Promise<void> {
   const targetStat = await fs.promises.lstat(targetPath, { bigint: true });
   if (!targetStat.isDirectory() || targetStat.isSymbolicLink()) {
     throw new Error('snapshot target is not a real directory');
   }
   const targetRealPath = await fs.promises.realpath(targetPath);
+  if (expectedTarget && (
+    targetStat.dev !== expectedTarget.dev ||
+    targetStat.ino !== expectedTarget.ino ||
+    !samePath(targetRealPath, expectedTarget.realPath)
+  )) {
+    throw new Error('snapshot target identity changed before removal');
+  }
   const quarantinePath = `${targetPath}.remove-${process.pid}-${Date.now()}`;
   await fs.promises.rename(targetPath, quarantinePath);
   const movedStat = await fs.promises.lstat(quarantinePath, { bigint: true });
@@ -154,15 +162,36 @@ export async function runGhostSnapshotWorkerRequest(
     await verifyParent(request.expectedParent, workingDir);
     if (parts.length !== 1) throw new Error('invalid snapshot removal target');
     await verifyDirectory(workingDir, parts[0]);
-    await removeVerifiedDirectory(request.expectedParent, workingDir, targetPath, parts[0]);
+    const targetStat = await fs.promises.lstat(targetPath, { bigint: true });
+    if (!targetStat.isDirectory() || targetStat.isSymbolicLink()) {
+      throw new Error('snapshot target is not a real directory');
+    }
+    const targetIdentity = {
+      realPath: await fs.promises.realpath(targetPath),
+      dev: targetStat.dev,
+      ino: targetStat.ino,
+    };
+    await removeVerifiedDirectory(
+      request.expectedParent,
+      workingDir,
+      targetPath,
+      parts[0],
+      targetIdentity,
+    );
     send({ ok: true }); return;
   }
   if (!request.receipt || !request.sourceDir) throw new Error('approved skill snapshot is missing');
   let exists = false;
+  let existingTargetIdentity: { realPath: string; dev: bigint; ino: bigint } | undefined;
   try {
-    const stat = await fs.promises.lstat(targetPath);
+    const stat = await fs.promises.lstat(targetPath, { bigint: true });
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('snapshot target is not a real directory');
     exists = true;
+    existingTargetIdentity = {
+      realPath: await fs.promises.realpath(targetPath),
+      dev: stat.dev,
+      ino: stat.ino,
+    };
   } catch (error) { if (!hasCode(error, 'ENOENT')) throw error; }
   if (exists) {
     await verifyDirectory(workingDir, parts[0]);
@@ -218,7 +247,15 @@ export async function runGhostSnapshotWorkerRequest(
     if (tempBeforePublish !== 'directory') throw new Error('snapshot temp directory was replaced before publish');
     await verifyParent(request.expectedParent, workingDir);
     await verifyDirectory(workingDir, parts[0]);
-    if (exists) await fs.promises.rm(targetPath, { recursive: true, force: true });
+    if (exists) {
+      await removeVerifiedDirectory(
+        request.expectedParent,
+        workingDir,
+        targetPath,
+        parts[0],
+        existingTargetIdentity,
+      );
+    }
     await verifyParent(request.expectedParent, workingDir);
     await verifyDirectory(workingDir, parts[0]);
     try {

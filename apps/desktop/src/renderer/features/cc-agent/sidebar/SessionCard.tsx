@@ -22,7 +22,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react';
+import type {
+  DragEvent as ReactDragEvent,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+  RefObject,
+} from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Undo } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -55,7 +60,10 @@ import {
 import { toast } from '@/lib/toast';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
-import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
+import type { Session } from '@/lib/ccAgent.types';
+import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
+import { buildSessionInfoPieces, SessionInfoMeta } from './SessionInfoMeta';
+import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { highlightSegments } from '../lib/highlightSegments';
 import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
 import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
@@ -74,7 +82,10 @@ import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
-import { useSessionBoundSchedules, scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
+import {
+  useSessionBoundSchedules,
+  scheduleFocusPath,
+} from '@/features/scheduler/lib/scheduleSessionBinding';
 import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
@@ -88,8 +99,10 @@ import {
 
 const log = createLogger('SessionCard');
 
-const CARD_TITLE_STATUS_SLOT_CLASS = 'inline-flex h-[1em] w-3 items-center justify-center align-[-0.08em]';
-const CARD_TITLE_META_SLOT_CLASS = 'ml-1 inline-flex h-[1em] w-3 items-center justify-center align-[-0.08em]';
+const CARD_TITLE_STATUS_SLOT_CLASS =
+  'inline-flex h-[1em] w-3 items-center justify-center align-[-0.08em]';
+const CARD_TITLE_META_SLOT_CLASS =
+  'ml-1 inline-flex h-[1em] w-3 items-center justify-center align-[-0.08em]';
 
 /**
  * 平台中立的“待用户交互”判定:直接读 maker session 状态(makerChatStore),不依赖
@@ -135,6 +148,7 @@ export function SessionCard({
   onMoveSession,
   projectOptions = [],
   matchIndices,
+  sourceLabel,
   variant = 'card',
   isFirst = false,
   hideBottomDivider = false,
@@ -161,18 +175,24 @@ export function SessionCard({
           : remoteActivity.phase === 'running'
             ? ('running' as const)
             : ('done' as const);
-  const rightStatusKind = remoteRightStatus ?? resolveSidebarRightStatus({
-    attentionKind,
-    isUrgentFromContext,
-    isRunning,
-    hasAttentionNotification,
-  });
+  const rightStatusKind =
+    remoteRightStatus ??
+    resolveSidebarRightStatus({
+      attentionKind,
+      isUrgentFromContext,
+      isRunning,
+      hasAttentionNotification,
+    });
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
   const activityIso = session.updatedAt;
-  const remoteIconKind = session.deviceLinkDeviceId ? 'device-link' : session.remoteHostId ? 'ssh' : null;
+  const remoteIconKind = session.deviceLinkDeviceId
+    ? 'device-link'
+    : session.remoteHostId
+      ? 'ssh'
+      : null;
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
-    ? session.deviceLinkConnectionStatus ?? 'connected'
+    ? (session.deviceLinkConnectionStatus ?? 'connected')
     : null;
   const remoteWritesBlocked = isRemoteSessionWriteBlocked(session);
   const isAutomationGenerated = isAutomationGeneratedSession(session);
@@ -206,7 +226,7 @@ export function SessionCard({
           ? t('ccAgent.sidebar.card.awaitingPlan')
           : awaitingKind === 'plugin_setup'
             ? t('ccAgent.sidebar.card.awaitingPluginSetup')
-          : t('ccAgent.sidebar.card.awaitingQuestion');
+            : t('ccAgent.sidebar.card.awaitingQuestion');
   const runningDetail =
     islandActivity?.phase === 'running' && islandActivity.compactDetail
       ? islandActivity.compactDetail
@@ -214,7 +234,27 @@ export function SessionCard({
   const listPreview = awaitingText ?? runningDetail ?? summaryPreview;
   const cardPreview = awaitingText ?? summaryPreview;
   const cardPreviewLineClamp = session.summary ? 3 : isRunning ? 2 : isAutomationGenerated ? 1 : 2;
-  const cardTimeText = formatSidebarTime(activityIso, t);
+  // 任务信息复选(C / C' 期):卡片右下角信息槽内容,与整理菜单同源共享状态。
+  const { fields: taskInfoFields } = useTaskInfoFields();
+  const cardPrRefs = usePrRefsForSession(session.id);
+  const cardInfoPrRef = taskInfoFields.includes('pr') ? cardPrRefs[0] : undefined;
+  // 传 hasPrRef 让 PR 参与「按勾选顺序」排列(否则它恒在最前)。
+  const cardInfoPieces = buildSessionInfoPieces(
+    session,
+    taskInfoFields,
+    activityIso,
+    t,
+    cardInfoPrRef != null,
+  );
+  // 勾选 pr 且行渲染时注册为 PR 消费者:注册即拉取(远程会话含引用补拉),
+  // 此后 Provider 周期/聚焦统一刷新,失败自愈(与 SessionItem 同一条路径)。
+  const { registerPrConsumer } = usePrActions();
+  const wantsPrInfo = taskInfoFields.includes('pr');
+  const remoteDeviceId = session.deviceLinkDeviceId;
+  useEffect(() => {
+    if (!wantsPrInfo) return undefined;
+    return registerPrConsumer(session.id, remoteDeviceId);
+  }, [wantsPrInfo, remoteDeviceId, session.id, registerPrConsumer]);
 
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [archivePending, setArchivePending] = useState(false);
@@ -351,7 +391,6 @@ export function SessionCard({
     if (isActive) scrollIntoNearestView(cardRef.current);
   }, [isActive]);
 
-
   // archive 两步确认生命周期（redesign 稿：3s 超时 + 点外面撤回）
   useEffect(() => {
     if (!archivePending) return;
@@ -404,16 +443,13 @@ export function SessionCard({
     }
     onAction(session.id, 'delete');
   }, [remoteWritesBlocked, session.id, onAction, t]);
-  const handlePinSelect = useCallback(
-    () => {
-      if (remoteWritesBlocked) {
-        toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
-        return;
-      }
-      onTogglePin(session.id, isPinned);
-    },
-    [remoteWritesBlocked, session.id, isPinned, onTogglePin, t],
-  );
+  const handlePinSelect = useCallback(() => {
+    if (remoteWritesBlocked) {
+      toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
+      return;
+    }
+    onTogglePin(session.id, isPinned);
+  }, [remoteWritesBlocked, session.id, isPinned, onTogglePin, t]);
   const handleMoveToProjectSelect = useCallback(
     (workingDir: string) => {
       onMoveSession?.(session.id, { kind: 'project', workingDir });
@@ -440,16 +476,19 @@ export function SessionCard({
     setShareExportOpen(true);
   }, []);
 
-  const handleAutomationIconClick = useCallback(async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      const runs = await loadScheduleSidebarIndexRuns();
-      const hit = runs.find((r) => r.sessionId === session.id);
-      navigate(hit ? scheduleFocusPath(hit.scheduleId) : '/cc-agent/scheduled');
-    } catch {
-      navigate('/cc-agent/scheduled');
-    }
-  }, [session.id, navigate]);
+  const handleAutomationIconClick = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        const runs = await loadScheduleSidebarIndexRuns();
+        const hit = runs.find((r) => r.sessionId === session.id);
+        navigate(hit ? scheduleFocusPath(hit.scheduleId) : '/cc-agent/scheduled');
+      } catch {
+        navigate('/cc-agent/scheduled');
+      }
+    },
+    [session.id, navigate],
+  );
 
   // 远程会话把归属设备冻进 `?device=`:发送时的引用解析不再依赖被控端此刻在线。
   const handleCopyDeepLinkSelect = useCallback(async () => {
@@ -604,7 +643,12 @@ export function SessionCard({
         }
       }}
       onContextMenu={(e) => {
-        if (isEditing) return;
+        if (isEditing) {
+          // 同 SessionItem:编辑态放行系统可编辑菜单,但拦下冒泡,避免与滚动
+          // 容器的空白处整理菜单叠弹(2026-08-13 实机回归)。
+          e.stopPropagation();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         prefetchRemovalPreflight();
@@ -619,7 +663,13 @@ export function SessionCard({
           ? cn(
               // 扁平行(类 Telegram / 对话列表):无描边、无卡片底色,仅 hover/active 行底色。
               'rounded-lg',
-              isActive ? 'bg-sidebar-item-active text-sidebar-item-active-foreground border border-[var(--sidebar-item-active-border)]' : 'hover:bg-sidebar-item-hover',
+              // active 描边用 inset shadow 而非真实 border(与 SessionItem 同款修法):
+              // 列表行高由内容撑开,真实 border 只在选中时存在 → 该行凭空高 2px,
+              // 把下方所有行整体推移,选中/取消时列表跳动(2026-08-12 用户反馈)。
+              // inset shadow 画在盒内、不参与布局,行高与未选中时逐像素一致。
+              isActive
+                ? 'bg-sidebar-item-active text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
+                : 'hover:bg-sidebar-item-hover',
             )
           : cn(
               // 卡片:白底 + 描边 + 圆角。多列瀑布由 CardMasonry/DraggableCardColumns
@@ -647,7 +697,9 @@ export function SessionCard({
             aria-hidden
             className={cn(
               'pointer-events-none absolute inset-x-2.5 bottom-0 h-px bg-[color-mix(in_srgb,hsl(var(--sidebar-border))_50%,transparent)] transition-opacity',
-              isActive || isSelected || hideBottomDivider ? 'opacity-0' : 'group-hover/card:opacity-0',
+              isActive || isSelected || hideBottomDivider
+                ? 'opacity-0'
+                : 'group-hover/card:opacity-0',
             )}
           />
           {isFirst && (
@@ -715,9 +767,25 @@ export function SessionCard({
                       size={11}
                       strokeWidth={1.8}
                       connectionStatus={remoteIconConnectionStatus}
-                      className={isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]'}
+                      className={
+                        isActive
+                          ? 'text-sidebar-item-active-foreground'
+                          : 'text-[var(--text-tertiary)]'
+                      }
                     />
                   )}
+                  {sourceLabel ? (
+                    <span
+                      className={cn(
+                        'min-w-0 truncate text-11 font-normal',
+                        isActive
+                          ? 'text-sidebar-item-active-foreground/70'
+                          : 'text-[var(--cmd-palette-item-meta)]',
+                      )}
+                    >
+                      {sourceLabel}
+                    </span>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -727,6 +795,7 @@ export function SessionCard({
             {!isEditing && (
               <TimeActionsSlot
                 sessionId={session.id}
+                session={session}
                 activityIso={activityIso}
                 isActive={isActive}
                 isArchived={isArchived}
@@ -779,174 +848,181 @@ export function SessionCard({
           )}
         </div>
       ) : (
-      <div className="relative flex h-full flex-col px-[10px] pt-[8px] pb-[8px]">
-        {/* 右上角 hover 操作钮(More + Archive/Undo);archivePending 时换成红色确认胶囊。
+        <div className="relative flex h-full flex-col px-[10px] pt-[8px] pb-[8px]">
+          {/* 右上角 hover 操作钮(More + Archive/Undo);archivePending 时换成红色确认胶囊。
             时间在右下角(见下),操作钮放右上角空位、不和时间挤在一起。 */}
-        {!isEditing && !archivePending && (
-          <div
-            className={cn(
-              'absolute right-[6px] top-[6px] z-10 flex items-center gap-0.5',
-              menuPos !== null ? 'opacity-100' : 'opacity-0 group-hover/card:opacity-100 focus-within:opacity-100',
-            )}
-          >
-            <CardAction
-              label={t('ccAgent.sidebar.sessionMenu.moreActions')}
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                prefetchRemovalPreflight();
-                setMenuPos({ x: rect.left, y: rect.bottom + 2 });
-              }}
+          {!isEditing && !archivePending && (
+            <div
+              className={cn(
+                'absolute right-[6px] top-[6px] z-10 flex items-center gap-0.5',
+                menuPos !== null
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover/card:opacity-100 focus-within:opacity-100',
+              )}
             >
-              <EllipsisVertical size={13} strokeWidth={2} />
-            </CardAction>
-            {isArchived && !remoteWritesBlocked ? (
               <CardAction
-                label={t('ccAgent.sidebar.sessionMenu.unarchive')}
-                onClick={() => handleUnarchiveSelect()}
+                label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+                onClick={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  prefetchRemovalPreflight();
+                  setMenuPos({ x: rect.left, y: rect.bottom + 2 });
+                }}
               >
-                <Undo size={13} strokeWidth={2} />
+                <EllipsisVertical size={13} strokeWidth={2} />
               </CardAction>
-            ) : canQuickArchive ? (
-              <CardAction
-                label={t('ccAgent.sidebar.sessionMenu.archived')}
-                onClick={() => beginArchivePending(true)}
-              >
-                <Archive size={13} strokeWidth={2} />
-              </CardAction>
-            ) : null}
-          </div>
-        )}
-        {canQuickArchive && archivePending && (
-          <button
-            ref={confirmPillRef}
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setArchivePending(false);
-              onAction(session.id, 'archive-now');
-            }}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => e.stopPropagation()}
-            className={cn(
-              'absolute right-[6px] top-[6px] z-20 flex h-[22px] w-max min-w-14 items-center justify-center rounded-full px-[9px]',
-              'whitespace-nowrap text-11 font-semibold',
-              'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,var(--surface-elevated))] text-[hsl(var(--destructive))]',
-              'hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,var(--surface-elevated))]',
-              'transition-colors focus:outline-none',
-            )}
-            aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
-          >
-            {t('ccAgent.sidebar.sessionMenu.archived')}
-          </button>
-        )}
-
-        {/* 卡片标题始终保留原来的流式盒子；编辑时只把原标题隐藏，并以绝对定位的
-            24px 输入框覆盖。这样一行 / 两行标题都维持原高度，也不会凭空多出状态图标。 */}
-        <div
-          data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
-          data-no-drag={splitDragHandleActive ? 'true' : undefined}
-          draggable={splitDragHandleActive}
-          className={cn(
-            'relative',
-            splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
+              {isArchived && !remoteWritesBlocked ? (
+                <CardAction
+                  label={t('ccAgent.sidebar.sessionMenu.unarchive')}
+                  onClick={() => handleUnarchiveSelect()}
+                >
+                  <Undo size={13} strokeWidth={2} />
+                </CardAction>
+              ) : canQuickArchive ? (
+                <CardAction
+                  label={t('ccAgent.sidebar.sessionMenu.archived')}
+                  onClick={() => beginArchivePending(true)}
+                >
+                  <Archive size={13} strokeWidth={2} />
+                </CardAction>
+              ) : null}
+            </div>
           )}
-        >
-          <div
-            className={cn(
-              'min-w-0 text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
-              '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
-              isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
-              isEditing && 'invisible',
-            )}
-            style={{ textIndent: 0, paddingLeft: 0 }}
-          >
-            {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
-              ? highlightSegments(session.title, matchIndices, {
-                  highlightClassName: cn(
-                    'bg-transparent font-semibold',
-                    isActive
-                      ? 'text-[var(--sidebar-item-active-foreground)]'
-                      : 'text-[var(--msg-assistant-text)]',
-                  ),
-                })
-              : displayTitle}
-          </div>
-          {isEditing && (
-            <SessionRenameInput
-              sessionId={session.id}
-              value={editValue}
-              onValueChange={setEditValue}
-              onCommit={commitTitle}
-              onCancel={() => {
-                // Esc 取消视为终态:置 committedRef 拦掉 input 卸载触发的 blur 提交
-                // 与生成中迟到的 AI 结果(Codex review P2:取消后不应再被 AI 改名)。
-                committedRef.current = true;
-                setIsEditing(false);
+          {canQuickArchive && archivePending && (
+            <button
+              ref={confirmPillRef}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setArchivePending(false);
+                onAction(session.id, 'archive-now');
               }}
-              containerClassName="absolute inset-x-0 top-1/2 -translate-y-1/2"
-              inputClassName="h-6 text-12 font-semibold text-foreground"
-              activeForeground={isActive}
-            />
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              className={cn(
+                'absolute right-[6px] top-[6px] z-20 flex h-[22px] w-max min-w-14 items-center justify-center rounded-full px-[9px]',
+                'whitespace-nowrap text-11 font-semibold',
+                'bg-[color-mix(in_srgb,hsl(var(--destructive))_15%,var(--surface-elevated))] text-[hsl(var(--destructive))]',
+                'hover:bg-[color-mix(in_srgb,hsl(var(--destructive))_25%,var(--surface-elevated))]',
+                'transition-colors focus:outline-none',
+              )}
+              aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
+            >
+              {t('ccAgent.sidebar.sessionMenu.archived')}
+            </button>
           )}
-        </div>
 
-        {/* 预览:等待交互文案优先,否则显示稳定任务总结 / 最近消息。图标全部下沉到底部 meta 行,
-            此处只放正文文字。 */}
-        {cardPreview && (
-          <p
+          {/* 卡片标题始终保留原来的流式盒子；编辑时只把原标题隐藏，并以绝对定位的
+            24px 输入框覆盖。这样一行 / 两行标题都维持原高度，也不会凭空多出状态图标。 */}
+          <div
             data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
             data-no-drag={splitDragHandleActive ? 'true' : undefined}
             draggable={splitDragHandleActive}
             className={cn(
-              'mt-[4px] text-11 leading-[1.4]',
-              '[display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden',
-              'text-[var(--text-secondary)]',
+              'relative',
               splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
             )}
-            style={{ WebkitLineClamp: cardPreviewLineClamp }}
           >
-            {cardPreview}
-          </p>
-        )}
+            <div
+              className={cn(
+                'min-w-0 text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
+                '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
+                isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
+                isEditing && 'invisible',
+              )}
+              style={{ textIndent: 0, paddingLeft: 0 }}
+            >
+              {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
+                ? highlightSegments(session.title, matchIndices, {
+                    highlightClassName: cn(
+                      'bg-transparent font-semibold',
+                      isActive
+                        ? 'text-[var(--sidebar-item-active-foreground)]'
+                        : 'text-[var(--msg-assistant-text)]',
+                    ),
+                  })
+                : displayTitle}
+            </div>
+            {isEditing && (
+              <SessionRenameInput
+                sessionId={session.id}
+                value={editValue}
+                onValueChange={setEditValue}
+                onCommit={commitTitle}
+                onCancel={() => {
+                  // Esc 取消视为终态:置 committedRef 拦掉 input 卸载触发的 blur 提交
+                  // 与生成中迟到的 AI 结果(Codex review P2:取消后不应再被 AI 改名)。
+                  committedRef.current = true;
+                  setIsEditing(false);
+                }}
+                containerClassName="absolute inset-x-0 top-1/2 -translate-y-1/2"
+                inputClassName="h-6 text-12 font-semibold text-foreground"
+                activeForeground={isActive}
+              />
+            )}
+          </div>
 
-        {/* 底部 meta 行(评审定稿):标题 / 正文之后另起整整一行。
+          {/* 预览:等待交互文案优先,否则显示稳定任务总结 / 最近消息。图标全部下沉到底部 meta 行,
+            此处只放正文文字。 */}
+          {cardPreview && (
+            <p
+              data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
+              data-no-drag={splitDragHandleActive ? 'true' : undefined}
+              draggable={splitDragHandleActive}
+              className={cn(
+                'mt-[4px] text-11 leading-[1.4]',
+                '[display:-webkit-box] [-webkit-box-orient:vertical] overflow-hidden',
+                'text-[var(--text-secondary)]',
+                splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
+              )}
+              style={{ WebkitLineClamp: cardPreviewLineClamp }}
+            >
+              {cardPreview}
+            </p>
+          )}
+
+          {/* 底部 meta 行(评审定稿):标题 / 正文之后另起整整一行。
             左侧图标簇——状态/agent 图标(含运行呼吸 + 需关注红点 + 草稿)、定时任务标识、
             远程业务标识、worktree;右下角业务时间。中间空位自然由图标簇与时间撑开。 */}
-        <div
-          className={cn(
-            'mt-[6px] flex items-center gap-1.5',
-            'text-11 font-medium leading-none tabular-nums',
-            isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
-          )}
-        >
-          <SessionStatusIcon
-            session={session}
-            isRunning={isRunning}
-            isAttached={isAttached}
-            hasAttentionNotification={hasAttentionNotification}
-            isActive={isActive}
-            size={11}
-          />
-          {renderAutomationMeta(11)}
-          {remoteIconKind && (
-            <RemoteProjectIcon
-              kind={remoteIconKind}
-              size={11}
-              strokeWidth={1.8}
-              connectionStatus={remoteIconConnectionStatus}
-              className={isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]'}
-            />
-          )}
-          <WorktreeBadge sessionId={session.id} size={11} className="size-3.5" />
-          <time
-            dateTime={activityIso}
-            title={formatSidebarTimeAbsolute(activityIso)}
-            className={cn('ml-auto shrink-0', isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--cmd-palette-item-meta)]')}
+          <div
+            className={cn(
+              'mt-[6px] flex items-center gap-1.5',
+              'text-11 font-medium leading-none tabular-nums',
+              isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
+            )}
           >
-            {cardTimeText}
-          </time>
+            <SessionStatusIcon
+              session={session}
+              isRunning={isRunning}
+              isAttached={isAttached}
+              hasAttentionNotification={hasAttentionNotification}
+              isActive={isActive}
+              size={11}
+            />
+            {renderAutomationMeta(11)}
+            {remoteIconKind && (
+              <RemoteProjectIcon
+                kind={remoteIconKind}
+                size={11}
+                strokeWidth={1.8}
+                connectionStatus={remoteIconConnectionStatus}
+                className={
+                  isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]'
+                }
+              />
+            )}
+            <WorktreeBadge sessionId={session.id} size={11} className="size-3.5" />
+            {/* 任务信息复选(C / C' 期):卡片版右下角与 list/text 同源;默认仅 time 与旧渲染等价。 */}
+            <SessionInfoMeta
+              pieces={cardInfoPieces}
+              prRef={cardInfoPrRef}
+              isActive={isActive}
+              className={cn(
+                'ml-auto shrink-0 text-11 font-medium leading-none',
+                !isActive && 'text-[var(--cmd-palette-item-meta)]',
+              )}
+            />
+          </div>
         </div>
-      </div>
       )}
 
       {/* mod+1..9 序号徽标(按住修饰键浮现,见 sessionOrdinalBadges):贴右上
@@ -958,9 +1034,7 @@ export function SessionCard({
         <span
           className={cn(
             'pointer-events-none absolute right-2 top-2 z-20 flex',
-            isActive
-              ? 'text-sidebar-item-active-foreground'
-              : 'text-[var(--text-tertiary)]',
+            isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
           )}
         >
           <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
@@ -1047,7 +1121,9 @@ export function SessionCard({
                   onSelect={handlePinSelect}
                   className={MENU_ITEM_CLASS}
                 >
-                  {isPinned ? t('ccAgent.sidebar.sessionMenu.unpin') : t('ccAgent.sidebar.sessionMenu.pin')}
+                  {isPinned
+                    ? t('ccAgent.sidebar.sessionMenu.unpin')
+                    : t('ccAgent.sidebar.sessionMenu.pin')}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1105,6 +1181,7 @@ export function SessionCard({
  *  list 的右下状态指示器由 SidebarRightStatusIndicator 单独承担。 */
 function TimeActionsSlot({
   sessionId,
+  session,
   activityIso,
   isActive,
   isArchived,
@@ -1120,6 +1197,8 @@ function TimeActionsSlot({
   yieldToOrdinalBadge = false,
 }: {
   sessionId: string;
+  /** 任务信息复选(C 期)需要读 totalTokenUsage / totalMoney 等字段。 */
+  session: Session;
   activityIso: string;
   isActive: boolean;
   isArchived: boolean;
@@ -1136,9 +1215,21 @@ function TimeActionsSlot({
   yieldToOrdinalBadge?: boolean;
 }) {
   const { t } = useTranslation();
+  // 任务信息复选(C / C' 期):与 SessionItem 的时间槽同源;默认仅 time 与旧渲染等价。
+  const { fields: taskInfoFields } = useTaskInfoFields();
+  const prRefs = usePrRefsForSession(session.id);
+  const infoPrRef = taskInfoFields.includes('pr') ? prRefs[0] : undefined;
+  // 传 hasPrRef 让 PR 参与「按勾选顺序」排列(否则它恒在最前)。
+  const infoPieces = buildSessionInfoPieces(
+    session,
+    taskInfoFields,
+    activityIso,
+    t,
+    infoPrRef != null,
+  );
   return (
     <div className="group/slot relative ml-auto flex h-5 shrink-0 items-center justify-end">
-      {/* 默认内容:worktree + 时间;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
+      {/* 默认内容:worktree + 信息槽;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
       <div
         className={cn(
           // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
@@ -1150,16 +1241,15 @@ function TimeActionsSlot({
         )}
       >
         <WorktreeBadge sessionId={sessionId} size={11} className="size-3.5" />
-        <time
-          dateTime={activityIso}
-          title={formatSidebarTimeAbsolute(activityIso)}
+        <SessionInfoMeta
+          pieces={infoPieces}
+          prRef={infoPrRef}
+          isActive={isActive}
           className={cn(
-            'text-10 font-medium leading-none tabular-nums',
-            isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]',
+            'text-10 font-medium leading-none',
+            !isActive && 'text-[var(--text-tertiary)]',
           )}
-        >
-          {formatSidebarTime(activityIso, t)}
-        </time>
+        />
       </div>
 
       {canQuickArchive && archivePending && (

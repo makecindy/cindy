@@ -3,10 +3,10 @@
  * ---------------------------------------------------------------------------
  * 封装 Status × Project × Vendor × Last activity 筛选状态，以及主列表整理偏好：
  *   - status   : 'active' | 'archived' | 'all'   → 由后端通过 query 过滤
- *   - projects : 'all' | string[]                 → 客户端 render 阶段过滤
+ *   - projects : 'all' | string[]                 → 客户端 render 阶段过滤(含对话哨兵)
  *   - vendor   : 'all' | 'cc' | 'codex'           → 客户端 render 阶段过滤
  *   - lastActivity : 'all' | '1d' | ...           → 客户端 render 阶段过滤
- *   - groupBy  : 'project' | 'date'               → 客户端 render 阶段切换主列表分组
+ *   - groupBy  : 'project' | 'flat'               → 客户端 render 阶段切换主列表分组
  *   - sortBy   : 'recency' | 'time' | ...         → 客户端 render 阶段切换主列表排序
  *   - manualProjectOrder : string[]               → Project 分组的手动排序偏好
  *
@@ -56,6 +56,8 @@ import {
   loadProjects,
   loadVendor,
   loadGroupBy,
+  loadGroupDialogue,
+  loadGroupDevice,
   loadLastActivity,
   loadSortBy,
   loadManualProjectOrder,
@@ -65,11 +67,14 @@ import {
   persistProjects,
   persistVendor,
   persistGroupBy,
+  persistGroupDialogue,
+  persistGroupDevice,
   persistLastActivity,
   persistSortBy,
   persistManualProjectOrder,
   persistManualPinnedOrder,
   nextProjectsAfterToggle,
+  nextSortByAfterGroupByChange,
   includeProjectInFilter,
   removeProjectsFromFilter,
   gcProjectsAgainstActive,
@@ -99,6 +104,7 @@ export {
   GROUP_BY_KEY,
   LAST_ACTIVITY_KEY,
   SORT_BY_KEY,
+  TASK_INFO_KEY,
   MANUAL_PROJECT_ORDER_KEY,
   MANUAL_PINNED_ORDER_KEY,
 } from './helpers/sidebarFilterCore';
@@ -118,8 +124,12 @@ export interface UseSidebarFilterReturn {
   vendor: FilterVendor;
   /** 最近活跃范围筛选。默认 'all'。 */
   lastActivity: FilterLastActivity;
-  /** Sidebar 主列表分组方式。默认 'project'，可切到 'date'。 */
+  /** Sidebar 主列表分组方式(D 期):'project' = 按项目分组;'flat' = 全平铺。 */
   groupBy: FilterGroupBy;
+  /** 「对话归为一组」开关(D 期):true = 无项目任务收进「对话」组;默认 false 散排。 */
+  groupDialogue: boolean;
+  /** 「按设备分组」开关(E 期):默认 true;仅有远程设备连接时可见/生效。 */
+  groupDevice: boolean;
   /** Sidebar 主列表排序方式。默认 'recency'。 */
   sortBy: FilterSortBy;
   /** Project 分组手动排序顺序。元素为 normalized workingDir。 */
@@ -146,8 +156,14 @@ export interface UseSidebarFilterReturn {
   setLastActivity: (lastActivity: FilterLastActivity) => void;
   /** 设置主列表分组方式，持久化到 localStorage。 */
   setGroupBy: (groupBy: FilterGroupBy) => void;
+  /** 设置「对话归为一组」，持久化到 localStorage。 */
+  setGroupDialogue: (groupDialogue: boolean) => void;
+  /** 设置「按设备分组」，持久化到 localStorage。 */
+  setGroupDevice: (groupDevice: boolean) => void;
   /** 设置主列表排序方式，持久化到 localStorage。 */
   setSortBy: (sortBy: FilterSortBy) => void;
+  /** 一键重置内容筛选（status/projects/vendor/lastActivity）回默认。 */
+  resetContentFilters: () => void;
   /** 直接替换 Project 手动排序顺序，持久化到 localStorage。 */
   setManualProjectOrder: (order: readonly string[], activeWorkingDirs: readonly string[]) => void;
   /** 直接替换 Pinned 手动排序顺序并持久化。
@@ -203,6 +219,8 @@ export function useSidebarFilter(
     loadLastActivity(),
   );
   const [groupBy, setGroupByState] = useState<FilterGroupBy>(() => loadGroupBy());
+  const [groupDialogue, setGroupDialogueState] = useState<boolean>(() => loadGroupDialogue());
+  const [groupDevice, setGroupDeviceState] = useState<boolean>(() => loadGroupDevice());
   const [sortBy, setSortByState] = useState<FilterSortBy>(() => loadSortBy());
   const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() =>
     loadManualProjectOrder(ownerId),
@@ -442,12 +460,44 @@ export function useSidebarFilter(
   const setGroupBy = useCallback((next: FilterGroupBy) => {
     setGroupByState(next);
     persistGroupBy(next);
+    // 手动排序只对项目行有意义。切到平铺后菜单不再露出该档,若仍保留
+    // sortBy=manual,渲染层会继续按它禁用设备分组,菜单却显示「按时间」。
+    setSortByState((current) => {
+      const nextSort = nextSortByAfterGroupByChange(next, current);
+      if (nextSort === current) return current;
+      persistSortBy(nextSort);
+      return nextSort;
+    });
+  }, []);
+
+  const setGroupDialogue = useCallback((next: boolean) => {
+    setGroupDialogueState(next);
+    persistGroupDialogue(next);
+  }, []);
+
+  const setGroupDevice = useCallback((next: boolean) => {
+    setGroupDeviceState(next);
+    persistGroupDevice(next);
   }, []);
 
   const setSortBy = useCallback((next: FilterSortBy) => {
     setSortByState(next);
     persistSortBy(next);
   }, []);
+
+  const resetContentFilters = useCallback(() => {
+    setStatusState('active');
+    persistStatus('active');
+    setProjectsState((prev) => {
+      if (prev === 'all') return prev;
+      persistProjects('all', ownerId);
+      return 'all';
+    });
+    setVendorState('all');
+    persistVendor('all');
+    setLastActivityState('all');
+    persistLastActivity('all');
+  }, [ownerId]);
 
   const setManualProjectOrder = useCallback(
     (order: readonly string[], activeWorkingDirs: readonly string[]) => {
@@ -510,6 +560,8 @@ export function useSidebarFilter(
     vendor,
     lastActivity,
     groupBy,
+    groupDialogue,
+    groupDevice,
     sortBy,
     manualProjectOrder,
     manualPinnedOrder,
@@ -521,7 +573,10 @@ export function useSidebarFilter(
     setVendor,
     setLastActivity,
     setGroupBy,
+    setGroupDialogue,
+    setGroupDevice,
     setSortBy,
+    resetContentFilters,
     setManualProjectOrder,
     setManualPinnedOrder,
     promotePin,

@@ -4,7 +4,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 function readSidebarSource(...parts: string[]) {
-  return readFileSync(resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', ...parts), 'utf8');
+  return readFileSync(
+    resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', ...parts),
+    'utf8',
+  );
 }
 
 const sessionEntryListSource = readSidebarSource('SessionEntryList.tsx');
@@ -22,15 +25,18 @@ describe('sidebar collapse reset wiring', () => {
   it('resets project session showAll on project collapse and on Projects section collapse', () => {
     expect(projectNodeSource).toContain('parentSectionCollapsed: boolean');
     expect(projectNodeSource).toContain('sectionCollapsed={isCollapsed || parentSectionCollapsed}');
-    expect(projectsSectionSource).toContain('parentSectionCollapsed={isSectionCollapsed}');
+    // 2026-08-13 定稿:主列表段级收起随「标题 = 范围下拉」取消,parent 恒为 false
+    //(prop 保留:置顶段等其它宿主仍在用)。
+    expect(projectsSectionSource).toContain('parentSectionCollapsed={false}');
   });
 
   it('passes the Dialogue section collapsed state into its collapsible session list', () => {
     expect(dialogueSectionSource).toContain('sectionCollapsed={collapsed}');
   });
 
-  it('resets the Projects section project-list showAll from the section collapsed state', () => {
-    expect(projectsSectionSource).toContain('useCollapsibleShowAll(isSectionCollapsed)');
+  it('Projects section project-list showAll no longer tracks a section collapse (removed)', () => {
+    // 段级收起已取消(2026-08-13 定稿),showAll 不再有段收起复位来源。
+    expect(projectsSectionSource).toContain('useCollapsibleShowAll(false)');
   });
 
   it('keeps the reset delay constant in sync with the CSS animation duration', () => {

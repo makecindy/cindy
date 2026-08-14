@@ -466,6 +466,11 @@
         "hint": "고정된 세션을 작업 현황 요약이 담긴 카드로 표시합니다. 카드 높이는 요약 길이에 따라 달라지며, 사이드바를 넓히면 2~3열로 자동 배치됩니다.",
         "aria": "사이드바 카드 모드 전환"
       },
+      "sidebarMainListMode": {
+        "label": "세션 목록 표시 방식",
+        "hint": "사이드바 기본 목록(고정 제외)의 표시 형식입니다. 텍스트는 간결한 한 줄, 목록은 미리보기가 있는 두 줄입니다.",
+        "aria": "세션 목록 표시 방식 전환"
+      },
       "layout": {
         "label": "패널 레이아웃",
         "hint": "패널 위치와 너비는 다음 실행에도 유지됩니다. 사용하기 어려운 배치가 되면 기본 레이아웃으로 복원할 수 있습니다.",
@@ -1476,7 +1481,11 @@
           "confirmTitle": "덮어쓰기 확인",
           "confirmSubtitle": "{{source}}에서 복사할 필드를 선택하세요.",
           "source": "원본",
-          "columns": { "field": "필드", "source": "원본 값", "target": "현재 값" },
+          "columns": {
+            "field": "필드",
+            "source": "원본 값",
+            "target": "현재 값"
+          },
           "fields": {
             "endpointBundle": "엔드포인트 및 API 프로토콜",
             "baseUrl": "기본 URL",
@@ -6941,7 +6950,7 @@
         "remoteSettings": "원격 연결 설정",
         "multiSelect": "다중 선택",
         "deselect": "선택 해제",
-        "menuTrigger": "원격 기기",
+        "menuTrigger": "세션 범위",
         "selectedCount_one": "기기 {{count}}대",
         "selectedCount_other": "기기 {{count}}대"
       },
@@ -6960,6 +6969,8 @@
         "awaitingPluginSetup": "플러그인 설정 대기 중"
       },
       "showAllSessions": "모두 표시 {{count}}개",
+      "allSessions": "모든 세션",
+      "scopeLocalSessions": "이 기기의 세션",
       "dialogues": "대화",
       "newDialogue": "새 세션",
       "dialoguesToggleExpand": "대화 펼치기",
@@ -6977,12 +6988,10 @@
       "projects": "프로젝트",
       "newProject": "새 프로젝트",
       "createProjectFailed": "프로젝트 생성 실패",
-      "projectsSectionToggleExpand": "프로젝트 펼치기",
-      "projectsSectionToggleCollapse": "프로젝트 접기",
       "projectsToggleExpand": "모든 프로젝트 세션 펼치기",
       "projectsToggleCollapse": "모든 프로젝트 세션 접기",
-      "filterAria": "사이드바 정리(상태: {{status}}, Agent: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
-      "organizeSidebar": "사이드바 정리",
+      "filterAria": "사이드바 표시 설정(상태: {{status}}, Agent: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
+      "organizeSidebar": "사이드바 표시 설정",
       "filterAllText": "전체",
       "filterSelectedProjects": "{{count}}개 선택됨",
       "filterStatus": {
@@ -6996,8 +7005,23 @@
         "codex": "Codex"
       },
       "filterGroupBy": {
-        "project": "프로젝트",
-        "date": "날짜"
+        "project": "프로젝트별 그룹",
+        "flat": "평면 목록",
+        "device": "기기별 그룹",
+        "dialogue": "대화 묶기"
+      },
+      "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
+      "deviceGroup": {
+        "local": "이 기기",
+        "offline": "오프라인",
+        "collapse": "이 기기 접기",
+        "expand": "이 기기 펼치기"
+      },
+      "foldAll": {
+        "collapseGroups": "모든 그룹 접기",
+        "collapseProjects": "프로젝트 그룹 접기",
+        "collapseDevices": "기기 그룹 접기",
+        "expandAll": "모든 그룹 펼치기"
       },
       "filterLastActivity": {
         "1d": "1일",
@@ -7007,10 +7031,12 @@
         "all": "전체"
       },
       "filterSortBy": {
-        "recency": "최근순",
-        "time": "시간순",
+        "recency": "시간순",
         "manual": "수동",
-        "alphabetic": "알파벳순"
+        "priority": "우선순위"
+      },
+      "filterSortByTip": {
+        "priority": "확인이 필요한 항목 먼저, 다음 읽지 않음, 실행 중, 나머지는 시간순"
       },
       "filterStatusHeading": "상태",
       "filterAgentHeading": "에이전트",
@@ -7019,6 +7045,24 @@
       "filterSortByHeading": "정렬",
       "filterProjectsHeading": "프로젝트",
       "filterAllProjects": "모든 프로젝트",
+      "filterHeading": "필터",
+      "filterSummaryNone": "없음",
+      "filterSummaryActive": "{{count}}개 적용 중",
+      "filterReset": "필터 초기화",
+      "displayHeading": "표시",
+      "taskInfoHeading": "세션 정보",
+      "taskInfoSummaryNone": "없음",
+      "taskInfoSummarySeparator": ", ",
+      "taskInfo": {
+        "time": "시간",
+        "pr": "PR 상태",
+        "tokens": "토큰",
+        "cost": "비용"
+      },
+      "taskInfoTip": {
+        "tokens": "누적 토큰",
+        "cost": "누적 비용"
+      },
       "dateGroup": {
         "today": "오늘",
         "yesterday": "어제",

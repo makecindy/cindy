@@ -50,6 +50,8 @@ export interface UnclassifiedSectionProps {
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;
   projectOptions?: readonly FolderPickerOption[];
   onScheduleAction: (group: AutomationSessionGroup, action: AutomationScheduleAction) => void;
+  /** 主列表显示形态(B 期):text 紧凑行 / list 满宽两行卡。 */
+  sessionVariant?: 'text' | 'list';
 }
 
 export function UnclassifiedSection({
@@ -68,6 +70,7 @@ export function UnclassifiedSection({
   onMoveSession,
   projectOptions,
   onScheduleAction,
+  sessionVariant = 'text',
 }: UnclassifiedSectionProps) {
   if (hidden) return null;
   if (sessions.length === 0) return null;
@@ -89,6 +92,7 @@ export function UnclassifiedSection({
         onMoveSession={onMoveSession}
         projectOptions={projectOptions}
         onScheduleAction={onScheduleAction}
+        sessionVariant={sessionVariant}
       />
     </div>
   );

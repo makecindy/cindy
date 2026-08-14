@@ -143,6 +143,16 @@ export interface ProvisionOutcome {
   removed: string[];
   /** 指纹一致 / 墓碑 / 受众不命中 / 种子不合格而跳过的 id(仅日志用途)。 */
   skipped: string[];
+  /** A transient per-seed or state I/O failure keeps the stable-owner pass retryable. */
+  retryPending?: boolean;
+}
+
+function isRetryableProvisioningError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  // Seed links/non-regular entries are deterministic package violations. Keep
+  // them fail-closed without turning a bad bundle into an endless retry loop.
+  if (message.includes('non-regular') || message.includes(' rejects link')) return false;
+  return true;
 }
 
 /** 播种状态文件形态(墓碑 + seeded 台账;将来组织清单等扩展也落这里)。 */
@@ -570,11 +580,13 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
       repoRootDir,
     });
     outcome.skipped.push(...allSeedIds);
+    outcome.retryPending = true;
     return outcome;
   }
   const stateResult = readState(repoRootDir, log);
   if (!stateResult.readable) {
     outcome.skipped.push(...allSeedIds);
+    outcome.retryPending = true;
     return outcome;
   }
   const state = stateResult.state;
@@ -733,6 +745,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
         // have partially changed bytes or approval state before throwing.
         if (!ownedBeforeAttempt && !ownershipClaimPersisted) seeded.delete(id);
         outcome.skipped.push(id);
+        if (isRetryableProvisioningError(err)) outcome.retryPending = true;
         log?.warn('builtin ghost provisioning failed', {
           id,
           error: err instanceof Error ? err.message : String(err),
@@ -779,6 +792,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
           outcome.removed.push(id);
           log?.info('builtin ghost removed: seed no longer bundled', { id });
         } catch (err) {
+          outcome.retryPending = true;
           log?.warn('builtin ghost orphan removal failed', {
             id,
             error: err instanceof Error ? err.message : String(err),
@@ -791,7 +805,9 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
   }
 
   if (!setsEqual(seeded, seededBefore)) {
-    writeState(repoRootDir, { removed: [...tombstones], seeded: [...seeded].sort() }, log);
+    if (!writeState(repoRootDir, { removed: [...tombstones], seeded: [...seeded].sort() }, log)) {
+      outcome.retryPending = true;
+    }
   }
   return outcome;
 }

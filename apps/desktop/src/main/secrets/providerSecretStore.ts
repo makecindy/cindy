@@ -637,6 +637,30 @@ export function readGhostSecret(ghostId: string, secretKey: string): string | nu
 }
 
 /**
+ * Strict Ghost secret read for owner-stable repair jobs. Absence is still a
+ * normal null result, while keychain, IO, and decrypt failures remain errors
+ * so the durable coordinator can retry instead of memoizing a false no-op.
+ */
+export function readGhostSecretStrict(ghostId: string, secretKey: string): string | null {
+  const physicalKey = resolveOwnerScopedSecretStorageKey(
+    ghostSecretStorageKey(ghostId, secretKey),
+  );
+  if (!physicalKey) return null;
+  const filepath = path.join(secretDir(), `${physicalKey}.enc`);
+  let encoded: string;
+  try {
+    encoded = fs.readFileSync(filepath, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('safeStorage is unavailable');
+  }
+  return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+}
+
+/**
  * 只查某意识凭证是否已入库(加密文件存在性,**不解密**)。插件页 setup
  * 就绪检查专用:判定只需要「存没存」,解密既无必要,还会把 safeStorage
  * 读取异常折叠成「未配置」造成误拦——存在性口径下,文件在就算已配置

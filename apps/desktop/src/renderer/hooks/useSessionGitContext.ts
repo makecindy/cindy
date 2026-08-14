@@ -8,18 +8,17 @@
  *     拿到 workdir 后 gitContext.watch 开启 HEAD 监听;对话中途换 worktree 靠
  *     focus + 周期 tick 再解析并切换监听目标。SSH / device-link 会话在真实执行端
  *     查询,不在控制端注册本地 watcher,改用 focus + 周期 tick。
- *   - PR 引用:listPrRefs(sessionId) + git-context:pr-refs-changed 推送刷新(本机/SSH);
- *     device-link 使用被控端查询 + focus/周期 polling,避免把控制端本地事件
- *     错当成被控端事件。
- *   - PR 状态:引用变化后对前 MAX_STATUS_QUERIES 条批量查一次(main 60s TTL 缓存,
- *     重复查询便宜);未配 PAT 时返回 no-token,UI 显示 PR 号不显示状态。结果含
- *     PR 源分支 branch:遥测拿不到本地目录时,徽标用它兜底显示分支。
+ *   - PR 引用与状态:**消费 PrRefsContext 的共享缓存**(2026-08-12 统一:此前顶栏
+ *     自持一份 refs/状态与拉取管线,与侧栏徽标各查各的、显示还会不同步)。本 hook
+ *     只向共享缓存注册消费者(registerPrConsumer),拉取、周期/聚焦刷新、device-link
+ *     远程路由、失败自愈全部由 PrRefsContext 单点负责;返回值按当前会话过滤,
+ *     语义与旧实现一致(切会话/断链即空)。
  *
  * 约束:dialogue 会话(workspaceKind !== 'project')不启用——workingDir 是对话自有目录,
  * 分支语义无意义。SSH 与 device-link 远程会话则把查询发往真实执行端。
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import type { Session } from '@/lib/ccAgent.types';
 import type {
@@ -31,20 +30,15 @@ import type {
   PrStatusResult,
 } from '@/lib/gitContext.types';
 import { useWorktreeForSession } from '@/contexts/WorktreeContext';
+import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { MAX_STATUS_QUERIES, PR_STATUS_REFRESH_INTERVAL_MS, prStatusKey } from '@/lib/prStatus';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('useSessionGitContext');
 
-/** 只对最近的几条 PR 引用查状态(徽标也只展示这几条)。 */
-export const MAX_STATUS_QUERIES = 3;
-
-/**
- * PR 状态周期刷新间隔。GitHub 侧 open→merged / review 评论 resolve 这类变化
- * 不会产生本地 pr-refs-changed 事件,长开会话只靠初次加载会一直显示旧状态
- * (review 反馈)。取值刻意 > main 侧 60s TTL,保证每次 tick 都真的打到远端。
- */
-const STATUS_REFRESH_INTERVAL_MS = 90_000;
+// 正本在 lib/prStatus(避免与 PrRefsContext 循环导入);re-export 兼容存量 import 方。
+export { MAX_STATUS_QUERIES, PR_STATUS_REFRESH_INTERVAL_MS, prStatusKey } from '@/lib/prStatus';
 
 /**
  * 「对话真实工作目录」再解析间隔。对话中途 agent `cd` 进新 worktree 不产生本地事件,
@@ -54,8 +48,6 @@ const STATUS_REFRESH_INTERVAL_MS = 90_000;
 const DIR_RERESOLVE_INTERVAL_MS = 60_000;
 
 const GET_FOR_SESSION_CHANNEL = 'git-context:get-for-session';
-const PR_REFS_LIST_CHANNEL = 'git-context:pr-refs:list';
-const PR_STATUS_CHANNEL = 'git-context:pr-status';
 
 async function invokeRemoteGitContext<T>(
   deviceId: string,
@@ -72,12 +64,8 @@ export interface SessionGitContext {
   branchSource: GitContextDirSource;
   /** 关联 PR 引用,lastSeenAt 降序。 */
   prRefs: SessionPrRef[];
-  /** key = `${owner}/${repo}#${prNumber}`(小写 owner/repo)。 */
+  /** key = `${owner}/${repo}#${prNumber}`(小写 owner/repo)。仅含本会话引用的条目。 */
   prStatuses: Map<string, PrStatusResult>;
-}
-
-export function prStatusKey(ref: { owner: string; repo: string; prNumber: number }): string {
-  return `${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}#${ref.prNumber}`;
 }
 
 const EMPTY: SessionGitContext = {
@@ -105,12 +93,12 @@ export function useSessionGitContext(session: Session): SessionGitContext {
   const workingDir = session.workingDir ?? null;
   // device-link / SSH 的 path 属于真实执行端,会在那里重新 probe；本地会话仍只使用
   // WorktreeContext 的 live 路径,不信任 session 上的历史快照。
-  const worktreePath = isLocalSession ? worktreeMeta?.path ?? null : session.worktreePath ?? null;
+  const worktreePath = isLocalSession
+    ? (worktreeMeta?.path ?? null)
+    : (session.worktreePath ?? null);
 
   const [head, setHead] = useState<GitHeadInfo | null>(null);
   const [branchSource, setBranchSource] = useState<GitContextDirSource>(null);
-  const [prRefs, setPrRefs] = useState<SessionPrRef[]>([]);
-  const [prStatuses, setPrStatuses] = useState<Map<string, PrStatusResult>>(new Map());
 
   // ── 分支:getForSession 解析真实工作目录 + 可换目录的 HEAD watch ──
   useEffect(() => {
@@ -219,80 +207,30 @@ export function useSessionGitContext(session: Session): SessionGitContext {
     worktreePath,
   ]);
 
-  // ── PR 引用 + 状态 ──
+  // ── PR 引用 + 状态:消费 PrRefsContext 共享缓存(与侧栏徽标同一份)──
+  // 注册消费者即触发拉取;周期/聚焦刷新、device-link 远程路由、失败自愈由
+  // Provider 单点负责。切会话 = 换 key 读缓存(天然隔离,无需清空);断链后
+  // 新会话查询失败 → 缓存无条目 → 返回空,与旧实现的"清空"语义一致。
+  const { registerPrConsumer } = usePrActions();
+  const sharedPrRefs = usePrRefsForSession(sessionId);
+  const { statuses: allStatuses } = usePrStatuses();
   useEffect(() => {
-    if (!isProjectSession) {
-      setPrRefs([]);
-      setPrStatuses(new Map());
-      return;
+    if (!isProjectSession) return undefined;
+    return registerPrConsumer(sessionId, deviceLinkDeviceId ?? undefined);
+  }, [isProjectSession, sessionId, deviceLinkDeviceId, registerPrConsumer]);
+
+  const prRefs = isProjectSession ? sharedPrRefs : EMPTY.prRefs;
+  // statuses 是全局缓存(含其它会话的 PR);按本会话前 MAX_STATUS_QUERIES 条
+  // 引用过滤,保住旧契约「prStatuses 只含本会话条目」(消费方有 size 判断)。
+  const prStatuses = useMemo(() => {
+    const map = new Map<string, PrStatusResult>();
+    for (const ref of prRefs.slice(0, MAX_STATUS_QUERIES)) {
+      const key = prStatusKey(ref);
+      const status = allStatuses.get(key);
+      if (status) map.set(key, status);
     }
-    // The header can remain mounted while the selected task changes. Drop the
-    // previous task's PR chips before the new remote read settles.
-    setPrRefs([]);
-    setPrStatuses(new Map());
-    let cancelled = false;
-    let loadGen = 0;
-
-    const loadRefs = async () => {
-      const gen = ++loadGen;
-      let refsLoaded = false;
-      try {
-        const refs = isDeviceLinkSession
-          ? await invokeRemoteGitContext<SessionPrRef[]>(
-              deviceLinkDeviceId as string,
-              PR_REFS_LIST_CHANNEL,
-              [sessionId],
-            )
-          : await window.electronAPI.gitContext.listPrRefs(sessionId);
-        if (cancelled || gen !== loadGen) return;
-        setPrRefs(refs);
-        refsLoaded = true;
-        const queries = refs.slice(0, MAX_STATUS_QUERIES).map((r) => ({
-          owner: r.owner,
-          repo: r.repo,
-          prNumber: r.prNumber,
-        }));
-        if (queries.length === 0) {
-          setPrStatuses(new Map());
-          return;
-        }
-        const results = isDeviceLinkSession
-          ? await invokeRemoteGitContext<PrStatusResult[]>(
-              deviceLinkDeviceId as string,
-              PR_STATUS_CHANNEL,
-              [{ sessionId, queries }],
-            )
-          : await window.electronAPI.gitContext.getPrStatuses(queries);
-        if (cancelled || gen !== loadGen) return;
-        setPrStatuses(new Map(results.map((r) => [prStatusKey(r), r])));
-      } catch (err) {
-        log.warn('pr refs load failed', String(err));
-        if (!cancelled && gen === loadGen) {
-          if (!refsLoaded) setPrRefs([]);
-          setPrStatuses(new Map());
-        }
-      }
-    };
-
-    void loadRefs();
-    const unsubscribe = isDeviceLinkSession
-      ? () => undefined
-      : window.electronAPI.gitContext.onPrRefsChanged((data) => {
-          if (data.sessionId === sessionId) void loadRefs();
-        });
-    // 远端状态变化(merged / closed / review resolve)没有本地事件可订阅,
-    // 用周期 tick + 窗口聚焦兜底刷新;批量上限 3 条 + main 侧缓存,开销可忽略。
-    const interval = setInterval(() => void loadRefs(), STATUS_REFRESH_INTERVAL_MS);
-    const onFocus = () => void loadRefs();
-    window.addEventListener('focus', onFocus);
-
-    return () => {
-      cancelled = true;
-      unsubscribe();
-      clearInterval(interval);
-      window.removeEventListener('focus', onFocus);
-    };
-  }, [sessionId, isProjectSession, isDeviceLinkSession, deviceLinkDeviceId]);
+    return map;
+  }, [prRefs, allStatuses]);
 
   if (!isProjectSession) return EMPTY;
   return { head, branchSource, prRefs, prStatuses };

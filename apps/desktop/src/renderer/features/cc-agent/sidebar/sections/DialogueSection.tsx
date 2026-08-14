@@ -1,12 +1,14 @@
 /**
- * DialogueSection — 不属于项目的对话段。
+ * DialogueSection — 不属于项目的对话段(**已退出展开态主列表**)。
  *
+ * 侧边栏重设计 D 期(2026-08-12):旧裁决「对话是 Projects 的同级固定段、固定显示
+ * 在 Projects 之后」已被有意推翻——展开态主列表改由 ProjectsSection 按
+ * mainListModel 混排(项目行与散排对话按同一口径排序,「对话归为一组」为可选开关)。
+ * 本组件当前仅存两个消费面:
+ *   1. compareDialogueSessions / DialogueSortBy——折叠 rail 的对话面板仍用它排序;
+ *   2. 组件本体暂保留给 rail 面板体系(railPanelStore)复用行渲染,不再直接出现在
+ *      CCAgentSidebarUpper 的展开态 JSX 中。
  * 这些 session 可以有 workingDir, 但该目录只是对话运行/文件目录, 不作为项目分组。
- * 对话是 Projects 的同级段, 固定显示在 Projects 之后; 即使没有 session 也渲染段头,
- * 让用户始终能感知这个产品层级。对话排序是本段自己的运行时设置, 不复用
- * Project 的 manual order, 避免把对话伪装成一个 project。
- * 段标题旁的箭头折叠/展开整个 Dialogue 段; 右侧工具只保留整理排序和新建对话。
- * 行视觉沿用 SessionItem, 段标题沿用 Pinned/Projects 的 14px/600 规范。
  */
 
 import { useMemo, useState } from 'react';
@@ -15,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
+import { useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -137,6 +140,8 @@ export function DialogueSection({
 }: DialogueSectionProps) {
   const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(false);
+  // 主列表显示形态(B 期):与项目段同一份设置。
+  const { mode: mainViewMode } = useSidebarMainViewMode();
   const sortedSessions = useMemo(
     () => sessions.slice().sort((a, b) => compareDialogueSessions(a, b, sortBy)),
     [sessions, sortBy],
@@ -280,6 +285,7 @@ export function DialogueSection({
             collapsible
             collapseLimit={getDialogueCollapseLimit()}
             sectionCollapsed={collapsed}
+            sessionVariant={mainViewMode === 'list' ? 'list' : 'text'}
           />
           {sortedSessions.length === 0 && (
             <div className="flex h-7 items-center rounded-full px-3 text-xs text-sidebar-muted">

@@ -304,6 +304,50 @@ describe('插件 OAuth clientId 迁移', () => {
     });
   });
 
+  it('reports a retry when crash recovery cannot persist the restored account state', () => {
+    const vault = memoryVault({
+      [`${KEY}-accounts`]: JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [
+          {
+            id: 'acc-1',
+            label: 'a@b.com',
+            status: 'expired',
+            expiredReason: 'oauth_client_changed',
+            expiredFromClientId: 'old-client',
+            expiredForClientId: 'new-client',
+            createdAt: 1,
+          },
+        ],
+      }),
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault: { ...vault, store: () => false },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    expect(mgr.reconcileAccountsForInstalledManifestWithResult(oauthManifest('old-client')))
+      .toEqual({ restored: 0, retryPending: true });
+  });
+
+  it('reports a retry when crash recovery cannot strictly read the account manifest', () => {
+    const vault = memoryVault();
+    const mgr = new GhostOauthAccountManager({
+      vault: {
+        ...vault,
+        readStrict: () => {
+          throw new Error('keychain temporarily unavailable');
+        },
+      },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      openExternal: vi.fn(),
+    });
+
+    expect(mgr.reconcileAccountsForInstalledManifestWithResult(oauthManifest('old-client')))
+      .toEqual({ restored: 0, retryPending: true });
+  });
+
   it('插件切回签发 client 时只在 commit 后复活旧 token，不误复活新 client 账号', () => {
     const vault = memoryVault({
       [`${KEY}-accounts`]: JSON.stringify({

@@ -286,6 +286,8 @@ export interface PluginMarketSnapshotOptions {
   deferDefaultReconciliation?: boolean;
   /** 延后对账完成（成功或失败）后通知 IPC 层刷新一次性提示。 */
   onDeferredReconciliationSettled?: () => void;
+  /** Main-only completion signal; it is not part of the Renderer snapshot. */
+  onDefaultReconciliationOutcome?: (outcome: 'completed' | 'failed') => void;
 }
 
 /**
@@ -595,11 +597,29 @@ export class PluginMarketService {
     // before its ledger write. Wait for queued ledger mutations before deciding
     // whether a default plugin should be installed again.
     await this.ledgerMutation;
-    const reconcileDefaults = async () => {
+    const reconcileDefaults = async (): Promise<'completed' | 'failed'> => {
       // 自定义来源只影响自己的目录发现；暂时不可读的来源不能阻塞官方默认安装。
       // 已经落地的同 id 插件仍由 applyDefaultInstalls → installDetail 的本地事实检查保护。
-      await this.applyDefaultInstalls(plugins, owner, ledger);
-      await this.applyDefaultUpgrades(plugins, owner, ledger);
+      let completed = true;
+      try {
+        if (!(await this.applyDefaultInstalls(plugins, owner, ledger))) completed = false;
+      } catch (error) {
+        completed = false;
+        log.warn('default plugin install reconciliation failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      try {
+        if (!(await this.applyDefaultUpgrades(plugins, owner, ledger))) completed = false;
+      } catch (error) {
+        completed = false;
+        log.warn('default plugin upgrade reconciliation failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      const outcome = completed ? 'completed' : 'failed';
+      options.onDefaultReconciliationOutcome?.(outcome);
+      return outcome;
     };
     if (!options.deferDefaultReconciliation) await reconcileDefaults();
     requireSameMarketOwner(owner);
@@ -2151,7 +2171,8 @@ export class PluginMarketService {
     plugins: readonly VisiblePluginSummary[],
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    let completed = true;
     const installSubject = defaultInstallSubject(owner);
     const counts = ghostIdCounts(plugins);
     const uniqueGhostIds = new Set(
@@ -2225,6 +2246,7 @@ export class PluginMarketService {
       } catch (error) {
         // 单个默认插件失败不拖垮整个市场；下次同步可重试。
         if (!(error instanceof SilentDefaultInstallCancelledError)) {
+          completed = false;
           log.warn('default plugin install failed', {
             pluginId: summary.id,
             error: error instanceof Error ? error.message : String(error),
@@ -2232,13 +2254,15 @@ export class PluginMarketService {
         }
       }
     }
+    return completed;
   }
 
   private async applyDefaultUpgrades(
     plugins: readonly VisiblePluginSummary[],
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    let reconciled = true;
     const local = this.localInstallSnapshot(ledger);
     const completed: Array<{
       name: string | null;
@@ -2251,8 +2275,10 @@ export class PluginMarketService {
         hasPendingGhostCalls(summary.ghostId) ||
         hasRunningGhostErrand(summary.ghostId) ||
         hasRunningGhostCindyWork(summary.ghostId)
-      )
+      ) {
+        reconciled = false;
         continue;
+      }
       try {
         await this.withMutation(summary.id, async () => {
           requireSameMarketOwner(owner);
@@ -2343,7 +2369,10 @@ export class PluginMarketService {
           }
         });
       } catch (error) {
-        if (!(error instanceof SilentUpgradeBusyError)) {
+        if (error instanceof SilentUpgradeBusyError) {
+          reconciled = false;
+        } else {
+          reconciled = false;
           log.warn('default plugin upgrade failed', {
             pluginId: summary.id,
             error: error instanceof Error ? error.message : String(error),
@@ -2365,6 +2394,7 @@ export class PluginMarketService {
         hasPermissionExpansion,
       });
     }
+    return reconciled;
   }
 
   private localInstallSnapshot(

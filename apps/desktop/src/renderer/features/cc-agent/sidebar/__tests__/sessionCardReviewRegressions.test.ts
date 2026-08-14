@@ -31,7 +31,10 @@ const globalsSource = readFileSync(
 
 describe('SessionCard review regressions', () => {
   it('only draws the list top divider on the first overall entry', () => {
-    expect(sessionEntryListSource).toContain('isFirst={index === 0}');
+    // 顶线只认「本列表的整体首行」,不因中间夹了非 session 条目就重画。
+    // 2026-08-12 起额外受 showFirstDivider 约束:混排主列表把每条散排对话各渲染成
+    // 一个单条列表,若都补顶线会与上一行的底线叠成两根横线,那条路径传 false。
+    expect(sessionEntryListSource).toContain('isFirst={showFirstDivider && index === 0}');
     expect(sessionEntryListSource).not.toContain(
       "isFirst={index === 0 || entries[index - 1]?.kind !== 'session'}",
     );
@@ -53,7 +56,7 @@ describe('SessionCard review regressions', () => {
   it('plays overflowing sidebar titles only while hovered', () => {
     expect(sessionItemSource).toContain('function SidebarTitleMarquee');
     expect(sessionItemSource).toContain("container.dataset.titleOverflowing = 'true'");
-    expect(sessionItemSource).toContain("delete container.dataset.titleOverflowing");
+    expect(sessionItemSource).toContain('delete container.dataset.titleOverflowing');
     expect(globalsSource).toContain('@keyframes sidebar-title-marquee');
     expect(globalsSource).toContain(
       "sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track",
@@ -86,7 +89,9 @@ describe('SessionCard review regressions', () => {
   });
 
   it('observes layout changes only while the title is hovered', () => {
-    expect(sessionItemSource).toContain('const resizeObserverRef = useRef<ResizeObserver | null>(null);');
+    expect(sessionItemSource).toContain(
+      'const resizeObserverRef = useRef<ResizeObserver | null>(null);',
+    );
     expect(sessionItemSource).toContain("typeof ResizeObserver === 'undefined'");
     expect(sessionItemSource).toContain('observer.observe(container);');
     expect(sessionItemSource).toContain('observer.observe(track);');
@@ -142,11 +147,12 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).not.toContain('session-card-progress');
   });
 
-  it('keeps card time anchored to the bottom meta row instead of the overlay layout', () => {
-    // 时间固定在底部 meta 行右端(ml-auto),不再依赖 overlay/block 双态测量。
+  it('keeps card info anchored to the bottom meta row instead of the overlay layout', () => {
+    // 时间/信息槽固定在底部 meta 行右端(ml-auto),不再依赖 overlay/block 双态测量。
+    // C 期起时间渲染并入 SessionInfoMeta(任务信息复选),锚点与让位语义不变。
     expect(sessionCardSource).not.toContain('cardTimeLayout');
-    expect(sessionCardSource).toContain('{cardTimeText}');
-    expect(sessionCardSource).toContain('ml-auto shrink-0'); // E1D 侧栏层级:time 色 conditional via cn,ml-auto shrink-0 保留
+    expect(sessionCardSource).toContain('pieces={cardInfoPieces}');
+    expect(sessionCardSource).toContain('ml-auto shrink-0'); // E1D 侧栏层级:info 槽 ml-auto shrink-0 保留
   });
 
   it('keeps archive confirmation pills clear of time and ordinal overlays', () => {
@@ -178,10 +184,14 @@ describe('SessionCard review regressions', () => {
   it('E1D 任务C: SessionCard active 反白链完整且运行态不降级文字颜色', () => {
     const re = /isActive \? 'text-sidebar-item-active-foreground'/g;
     const count = (sessionCardSource.match(re) || []).length;
+    // C 期起两个时间槽的 isActive 分支并入 SessionInfoMeta(经 isActive prop 传递,
+    // 组件内应用 active-foreground),SessionCard 本体剩 title×2 + RemoteProjectIcon 等。
     expect(
       count,
-      'isActive conditional active-foreground ≥7(title×2+time+RemoteProjectIcon×4)',
-    ).toBeGreaterThanOrEqual(7);
+      'isActive conditional active-foreground ≥5(title×2+RemoteProjectIcon 等;时间槽已并入 SessionInfoMeta)',
+    ).toBeGreaterThanOrEqual(5);
+    // 信息槽的反白链由 SessionInfoMeta 承担:isActive 必须透传。
+    expect(sessionCardSource).toMatch(/<SessionInfoMeta[\s\S]{0,200}isActive=\{isActive\}/);
 
     // Running is already expressed by the status indicator, so its text keeps
     // the same semantic colors as other non-active tasks.
@@ -306,16 +316,18 @@ describe('SessionCard review regressions', () => {
   });
 
   it('keeps selected automation group icons, spinner, and actions in the active color system', () => {
-    expect(automationGroupSource).toContain(
-      "colorClassName={hasActiveHidden ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}",
+    // 用正则容忍 prettier 折行(三元在一行还是拆成多行都算通过)。
+    expect(automationGroupSource).toMatch(
+      /colorClassName=\{\s*hasActiveHidden \? 'text-\[var\(--sidebar-item-active-foreground\)\]' : undefined\s*\}/,
     );
     // running 语义下沉到统一 Timer；组头必须透传，图标组件保持橙色优先级。
     expect(automationGroupSource).toContain('running={isRunning}');
     expect(automationTimerIconSource).toMatch(
       /isActivelyRunning[\s\S]*?\? 'text-\[var\(--status-bar-accent\)\]'/,
     );
-    expect(automationGroupSource).toContain(
-      "hasActiveHidden ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon'",
+    // 用正则容忍 prettier 折行(三元在一行还是拆成多行都算通过)。
+    expect(automationGroupSource).toMatch(
+      /hasActiveHidden\s*\?\s*'text-sidebar-item-active-foreground'\s*:\s*'text-sidebar-action-icon'/,
     );
     expect(automationGroupSource).toContain('actionButtonToneClassName');
     expect(automationGroupSource).toContain(

@@ -206,6 +206,65 @@ describe('builtin provisioning durable state', () => {
     expect(JSON.parse(await fs.promises.readFile(stateFile, 'utf8'))).toMatchObject({ seeded: [] });
   });
 
+  it('keeps orphan removal failures retryable for the stable-owner pass', async () => {
+    const root = await makeTempDir();
+    const seedRoot = path.join(root, 'seeds');
+    const repoRoot = path.join(root, 'installed');
+    await writeMinimalSeed(seedRoot, 'current-builtin');
+    await writeMinimalSeed(repoRoot, 'current-builtin');
+    await writeMinimalSeed(repoRoot, 'retired-builtin');
+    await fs.promises.writeFile(
+      path.join(repoRoot, PROVISIONING_STATE_FILE),
+      JSON.stringify({ removed: [], seeded: ['current-builtin', 'retired-builtin'] }),
+    );
+    const beforeRemove = vi.fn().mockRejectedValue(new Error('mutation journal unavailable'));
+
+    const outcome = await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      beforeRemove,
+    });
+
+    expect(outcome.retryPending).toBe(true);
+    expect(outcome.removed).toEqual([]);
+    expect(fs.existsSync(path.join(repoRoot, 'retired-builtin'))).toBe(true);
+    expect(JSON.parse(await fs.promises.readFile(
+      path.join(repoRoot, PROVISIONING_STATE_FILE),
+      'utf8',
+    ))).toMatchObject({ seeded: ['current-builtin', 'retired-builtin'] });
+  });
+
+  it('keeps a failed final seeded-ledger update retryable for the stable-owner pass', async () => {
+    const root = await makeTempDir();
+    const seedRoot = path.join(root, 'seeds');
+    const repoRoot = path.join(root, 'installed');
+    await writeMinimalSeed(seedRoot, 'current-builtin');
+    await writeMinimalSeed(repoRoot, 'current-builtin');
+    await writeMinimalSeed(repoRoot, 'retired-builtin');
+    await fs.promises.writeFile(
+      path.join(repoRoot, PROVISIONING_STATE_FILE),
+      JSON.stringify({ removed: [], seeded: ['current-builtin', 'retired-builtin'] }),
+    );
+    vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      const error = new Error('state root temporarily busy') as NodeJS.ErrnoException;
+      error.code = 'EBUSY';
+      throw error;
+    });
+
+    const outcome = await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+    });
+
+    expect(outcome.retryPending).toBe(true);
+    expect(outcome.removed).toEqual(['retired-builtin']);
+    expect(fs.existsSync(path.join(repoRoot, 'retired-builtin'))).toBe(false);
+    expect(JSON.parse(await fs.promises.readFile(
+      path.join(repoRoot, PROVISIONING_STATE_FILE),
+      'utf8',
+    ))).toMatchObject({ seeded: ['current-builtin', 'retired-builtin'] });
+  });
+
   it('persists seeded ownership before replacing installed bytes', async () => {
     const root = await makeTempDir();
     const seedRoot = path.join(root, 'seeds');
@@ -222,6 +281,24 @@ describe('builtin provisioning durable state', () => {
 
     await provisionBuiltinGhosts({ seedRootDirs: [seedRoot], repoRootDir: repoRoot, beforeReplace });
     expect(beforeReplace).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps transient publish failures retryable for the stable-owner pass', async () => {
+    const root = await makeTempDir();
+    const seedRoot = path.join(root, 'seeds');
+    const repoRoot = path.join(root, 'installed');
+    await writeMinimalSeed(seedRoot, 'builtin-test');
+    const publishSeed = vi.fn().mockRejectedValue(new Error('state root temporarily busy'));
+
+    const outcome = await provisionBuiltinGhosts({
+      seedRootDirs: [seedRoot],
+      repoRootDir: repoRoot,
+      publishSeed,
+    });
+
+    expect(outcome.retryPending).toBe(true);
+    expect(outcome.installed).toEqual([]);
+    expect(publishSeed).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -502,6 +579,7 @@ describe('builtinGhostProvisioner 坏种子 fail closed', () => {
     });
 
     expect(outcome.skipped).toContain('bad-seed');
+    expect(outcome.retryPending).toBeUndefined();
     expect(outcome.installed).toEqual([]);
     expect(outcome.approved).toEqual([]);
     expect(fs.existsSync(path.join(repoRoot, 'bad-seed'))).toBe(false);

@@ -66,8 +66,30 @@ const HEADER_HOVER_ACTION_CLASS = cn(
 );
 
 /**
+ * 每种模式配一个直观图标:文字=密排文本行(AlignJustify)、卡片=网格(LayoutGrid)、
+ * 列表=带内容块的行(LayoutList)。三者视觉区分明显,一眼能对上。
+ * 模块级常量:菜单项与段头 trigger 共用同一张表——trigger 显示**当前选中模式**的
+ * 图标(2026-08-12 用户裁决,此前恒为 LayoutGrid,与实际选中项不符)。
+ * 整理菜单(SidebarFilterPopover)的主列表显示模式复用同一套 text / list 字形。
+ */
+const VIEW_STYLE_OPTIONS: ReadonlyArray<{
+  value: SidebarViewMode;
+  labelKey: string;
+  Icon: LucideIcon;
+}> = [
+  { value: 'text', labelKey: 'ccAgent.sidebar.viewStyleList', Icon: AlignJustify },
+  { value: 'card', labelKey: 'ccAgent.sidebar.viewStyleCard', Icon: LayoutGrid },
+  { value: 'list', labelKey: 'ccAgent.sidebar.viewStyleListWide', Icon: LayoutList },
+];
+
+/** 当前显示模式对应的图标(供段头 trigger 用);未知值兜底到文字版字形。 */
+function viewStyleIcon(mode: SidebarViewMode): LucideIcon {
+  return VIEW_STYLE_OPTIONS.find((opt) => opt.value === mode)?.Icon ?? AlignJustify;
+}
+
+/**
  * ViewStyleMenu — Pinned 段头的"显示样式"切换弹层(文字版 / 卡片版 / 列表)。
- * trigger 由调用方提供(段头右侧 hover 出现的 LayoutGrid 钮),菜单写回全局
+ * trigger 由调用方提供(段头右侧 hover 出现、图标随当前模式变化),菜单写回全局
  * sidebar 显示模式(useSidebarCardMode 的 mode),与 Settings → 外观 同源。
  */
 function ViewStyleMenu({
@@ -80,13 +102,7 @@ function ViewStyleMenu({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
-  // 每种模式配一个直观图标:文字=密排文本行(AlignJustify)、卡片=网格(LayoutGrid)、
-  // 列表=带内容块的行(LayoutList)。三者视觉区分明显,一眼能对上。
-  const OPTIONS: Array<{ value: SidebarViewMode; labelKey: string; Icon: LucideIcon }> = [
-    { value: 'text', labelKey: 'ccAgent.sidebar.viewStyleList', Icon: AlignJustify },
-    { value: 'card', labelKey: 'ccAgent.sidebar.viewStyleCard', Icon: LayoutGrid },
-    { value: 'list', labelKey: 'ccAgent.sidebar.viewStyleListWide', Icon: LayoutList },
-  ];
+  const OPTIONS = VIEW_STYLE_OPTIONS;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
@@ -177,6 +193,8 @@ export function PinnedSection({
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const { mode, setMode } = useSidebarCardMode();
+  // 段头 trigger 的图标 = 当前选中的显示模式(用户一眼看出现在是哪种)。
+  const ViewStyleTriggerIcon = viewStyleIcon(mode);
   // 卡片视觉(card 瀑布流 / list 单列满宽)统称"卡片态";text 为紧凑行。
   const isCardLike = mode !== 'text';
   const [collapsed, setCollapsed] = useState(false);
@@ -320,7 +338,8 @@ export function PinnedSection({
             </Tip>
           </div>
         </div>
-        {/* 显示样式切换:固定最右,hover 浮现(菜单打开时保持可见)。 */}
+        {/* 显示样式切换:固定最右,hover 浮现(菜单打开时保持可见)。
+            图标 = 当前选中的显示模式(2026-08-12 用户裁决),不再恒为网格。 */}
         <div className={cn(HEADER_HOVER_ACTION_CLASS, 'flex items-center gap-0.5')}>
           <ViewStyleMenu mode={mode} setMode={setMode}>
             <button
@@ -332,7 +351,7 @@ export function PinnedSection({
                 'transition-colors hover:text-[var(--sidebar-nav-text)]',
               )}
             >
-              <LayoutGrid size={13} strokeWidth={2} />
+              <ViewStyleTriggerIcon size={13} strokeWidth={2} />
             </button>
           </ViewStyleMenu>
         </div>

@@ -50,18 +50,9 @@ describe('pinned project sidebar integration', () => {
     expect(filterHookSource).toContain('durablePinnedOrderRef.current = snapshot;');
   });
 
-  it('omits sessions belonging to pinned projects from date groups', () => {
-    const dateStart = sidebarSource.indexOf('const visibleDateSessions = useMemo(() => {');
-    const dateEnd = sidebarSource.indexOf('const [selectedSessionIds', dateStart);
-    const dateBlock = sidebarSource.slice(dateStart, dateEnd);
-
-    expect(dateStart).toBeGreaterThanOrEqual(0);
-    expect(dateEnd).toBeGreaterThan(dateStart);
-    expect(dateBlock).toContain('pinnedProjectKeys.has(pinnedProjectKey)');
-    expect(dateBlock).toContain(
-      '[activityFilteredSessions, vendorPredicate, filter.projectsAsSet, pinnedProjectKeys]',
-    );
-  });
+  // (侧边栏重设计 D 期:按日期分组已删除,visibleDateSessions 的置顶项目剔除
+  //  断言随之下线;置顶项目剔除现由 visibleProjectsWithVendor 的
+  //  pinnedProjectKeys 过滤承担,上方断言已覆盖。)
 
   it('confirms before removing a project and keeps the rail open when cancelled', () => {
     const removeStart = sidebarSource.indexOf(

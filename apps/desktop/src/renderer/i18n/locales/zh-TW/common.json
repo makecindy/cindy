@@ -466,6 +466,11 @@
         "hint": "置頂任務以卡片形式展示，含執行狀態摘要，卡片高度隨摘要長短錯落；側欄拉寬時自動分 2~3 列。",
         "aria": "切換側邊欄卡片模式"
       },
+      "sidebarMainListMode": {
+        "label": "任務列表顯示方式",
+        "hint": "側邊欄主列表（置頂以外）的顯示形態：文字為緊湊單行，列表為帶預覽的兩行。",
+        "aria": "切換任務列表顯示方式"
+      },
       "layout": {
         "label": "面板佈局",
         "hint": "面板位置和寬度會保留到下次啟動。如果佈局變得難以使用，可以恢復預設排列。",
@@ -634,8 +639,8 @@
         "zh-CN": "簡體中文",
         "en": "English",
         "ja": "日本語",
-    "ko": "한국어",
-    "zh-TW": "繁體中文"
+        "ko": "한국어",
+        "zh-TW": "繁體中文"
       }
     },
     "userProfile": {
@@ -1452,7 +1457,11 @@
           "confirmTitle": "確認覆蓋",
           "confirmSubtitle": "選擇要從 {{source}} 複製的欄位。",
           "source": "來源",
-          "columns": { "field": "欄位", "source": "來源值", "target": "目前值" },
+          "columns": {
+            "field": "欄位",
+            "source": "來源值",
+            "target": "目前值"
+          },
           "fields": {
             "endpointBundle": "端點與 API 協議",
             "baseUrl": "基礎 URL",
@@ -1479,7 +1488,11 @@
           "targetReady_other": "可填入 {{count}} 個欄位",
           "targetIncompatible_one": "{{count}} 個欄位不相容",
           "targetIncompatible_other": "{{count}} 個欄位不相容",
-          "status": { "needsConfirm": "需要確認", "ready": "可以填入", "incompatible": "不相容" },
+          "status": {
+            "needsConfirm": "需要確認",
+            "ready": "可以填入",
+            "incompatible": "不相容"
+          },
           "secretIndependent": "複製到 {{target}} 的獨立本機金鑰",
           "overwriteCurrent": "取代目前值",
           "fillEmpty": "填入目前空白欄位",
@@ -2313,9 +2326,9 @@
         "title": "Codex Subagent 護欄",
         "enableHint": "允許 Codex 在執行任務時建立一次性 Subagent。關閉後對舊版（V1）和 Sol / Terra（V2）都生效。",
         "enableAria": "允許 Codex 使用 Subagent",
-        "cindyPolicyLabel": "使用 Cindy 自定義 Subagent 策略",
-        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃和委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
-        "cindyPolicyAria": "使用 Cindy 自定義 Subagent 策略",
+        "cindyPolicyLabel": "使用 Cindy 自訂 Subagent 策略",
+        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃與委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
+        "cindyPolicyAria": "使用 Cindy 自訂 Subagent 策略",
         "concurrencyLabel": "Subagent 併發上限",
         "concurrencyHint": "同時執行的 Subagent 數量上限。每個 Subagent 都會消耗模型配額，調低更省；Ultra 檔位下併發達到 8 時 Codex 會發出用量警告。",
         "concurrencyFollowDefault": "跟隨 Codex 預設（舊版 V1 為 6，Sol / Terra 為 3）",
@@ -2324,9 +2337,6 @@
         "nestedLabel": "允許 Subagent 再建立 Subagent",
         "nestedHint": "僅舊版 Codex Multi-Agent（V1）生效，Sol / Terra（V2）會忽略此設定。",
         "nestedAria": "允許 Subagent 再建立 Subagent",
-        "cindyPolicyLabel": "使用 Cindy 自訂 Subagent 策略",
-        "cindyPolicyHint": "開啟後，Cindy 會注入策略，引導 Codex 在探索型任務中主動使用 Subagent。對於本身已擅長規劃與委派的模型，額外引導可能適得其反；關閉後不再注入，改用 Codex 的原生預設行為。",
-        "cindyPolicyAria": "使用 Cindy 自訂 Subagent 策略",
         "localOnlyHint": "以上護欄僅對本機執行的 Codex 生效，SSH 遠端連線的 Codex 不受影響。"
       },
       "toast": {
@@ -2533,7 +2543,7 @@
       },
       "android": {
         "title": "Android 自動化",
-          "description": "讓 Agent 透過 ADB 檢查並操作已連線的 Android 裝置",
+        "description": "讓 Agent 透過 ADB 檢查並操作已連線的 Android 裝置",
         "toggleAria": "切換 Android 自動化",
         "refresh": "重新檢查",
         "toggleHint": "這個全域性開關只對之後新建的 Agent 會話生效；已在執行的 Agent 會話不受影響。",
@@ -6940,7 +6950,7 @@
         "remoteSettings": "遠端連線設定",
         "multiSelect": "多選",
         "deselect": "取消勾選",
-        "menuTrigger": "遠端機器",
+        "menuTrigger": "任務範圍",
         "selectedCount_one": "{{count}} 臺機器",
         "selectedCount_other": "{{count}} 臺機器"
       },
@@ -6959,6 +6969,8 @@
         "awaitingPluginSetup": "等待插件設定"
       },
       "showAllSessions": "顯示全部 {{count}} 項",
+      "allSessions": "全部任務",
+      "scopeLocalSessions": "本機任務",
       "dialogues": "對話",
       "newDialogue": "新任務",
       "dialoguesToggleExpand": "展開對話",
@@ -6976,12 +6988,10 @@
       "projects": "專案",
       "newProject": "新建專案",
       "createProjectFailed": "新建專案失敗",
-      "projectsSectionToggleExpand": "展開專案",
-      "projectsSectionToggleCollapse": "收起專案",
       "projectsToggleExpand": "展開所有專案任務",
       "projectsToggleCollapse": "收起所有專案任務",
-      "filterAria": "整理側邊欄（狀態：{{status}}，Agent：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}）",
-      "organizeSidebar": "整理側邊欄",
+      "filterAria": "側邊欄顯示設定（狀態：{{status}}，Agent：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}）",
+      "organizeSidebar": "側邊欄顯示設定",
       "filterAllText": "全部",
       "filterSelectedProjects": "已選 {{count}} 個",
       "filterStatus": {
@@ -6995,8 +7005,23 @@
         "codex": "Codex"
       },
       "filterGroupBy": {
-        "project": "專案",
-        "date": "日期"
+        "project": "按專案分組",
+        "flat": "平鋪",
+        "device": "按裝置分組",
+        "dialogue": "對話歸為一組"
+      },
+      "filterGroupByDeviceManualTip": "手動排序時按裝置分組暫不可用",
+      "deviceGroup": {
+        "local": "本機",
+        "offline": "離線",
+        "collapse": "收起該裝置",
+        "expand": "展開該裝置"
+      },
+      "foldAll": {
+        "collapseGroups": "收起所有分組",
+        "collapseProjects": "收起專案分組",
+        "collapseDevices": "收起裝置分組",
+        "expandAll": "展開所有分組"
       },
       "filterLastActivity": {
         "1d": "1 天",
@@ -7006,10 +7031,12 @@
         "all": "全部"
       },
       "filterSortBy": {
-        "recency": "最近優先",
-        "time": "最早優先",
+        "recency": "按時間排序",
         "manual": "手動排序",
-        "alphabetic": "字母排序"
+        "priority": "優先級"
+      },
+      "filterSortByTip": {
+        "priority": "等你處理的排在最前，然後是未讀、執行中，其餘按時間"
       },
       "filterStatusHeading": "狀態",
       "filterAgentHeading": "Agent",
@@ -7018,6 +7045,24 @@
       "filterSortByHeading": "排序",
       "filterProjectsHeading": "專案",
       "filterAllProjects": "所有專案",
+      "filterHeading": "篩選",
+      "filterSummaryNone": "無",
+      "filterSummaryActive": "{{count}} 項生效",
+      "filterReset": "重設篩選",
+      "displayHeading": "顯示",
+      "taskInfoHeading": "任務資訊",
+      "taskInfoSummaryNone": "無",
+      "taskInfoSummarySeparator": "、",
+      "taskInfo": {
+        "time": "時間",
+        "pr": "PR 狀態",
+        "tokens": "Token",
+        "cost": "費用"
+      },
+      "taskInfoTip": {
+        "tokens": "累計 Token",
+        "cost": "累計費用"
+      },
       "dateGroup": {
         "today": "今天",
         "yesterday": "昨天",

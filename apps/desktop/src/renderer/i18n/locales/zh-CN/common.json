@@ -466,6 +466,11 @@
         "hint": "置顶任务以卡片形式展示，含执行状态摘要，卡片高度随摘要长短错落；侧栏拉宽时自动分 2~3 列。",
         "aria": "切换侧边栏卡片模式"
       },
+      "sidebarMainListMode": {
+        "label": "任务列表显示方式",
+        "hint": "侧边栏主列表（置顶以外）的显示形态：文字为紧凑单行，列表为带预览的两行。",
+        "aria": "切换任务列表显示方式"
+      },
       "layout": {
         "label": "面板布局",
         "hint": "面板位置和宽度会保留到下次启动。如果布局变得难以使用，可以恢复默认排列。",
@@ -1476,7 +1481,11 @@
           "confirmTitle": "确认覆盖",
           "confirmSubtitle": "选择从 {{source}} 复制的字段。",
           "source": "来源",
-          "columns": { "field": "字段", "source": "来源值", "target": "当前值" },
+          "columns": {
+            "field": "字段",
+            "source": "来源值",
+            "target": "当前值"
+          },
           "fields": {
             "endpointBundle": "端点与 API 协议",
             "baseUrl": "基础 URL",
@@ -1503,7 +1512,11 @@
           "targetReady_other": "可填充 {{count}} 个字段",
           "targetIncompatible_one": "{{count}} 个字段不兼容",
           "targetIncompatible_other": "{{count}} 个字段不兼容",
-          "status": { "needsConfirm": "需要确认", "ready": "可以填充", "incompatible": "不兼容" },
+          "status": {
+            "needsConfirm": "需要确认",
+            "ready": "可以填充",
+            "incompatible": "不兼容"
+          },
           "secretIndependent": "复制到 {{target}} 的独立本地密钥",
           "overwriteCurrent": "替换当前值",
           "fillEmpty": "填充当前空字段",
@@ -6937,7 +6950,7 @@
         "remoteSettings": "远程连接设置",
         "multiSelect": "多选",
         "deselect": "取消勾选",
-        "menuTrigger": "远程机器",
+        "menuTrigger": "任务范围",
         "selectedCount_one": "{{count}} 台机器",
         "selectedCount_other": "{{count}} 台机器"
       },
@@ -6956,6 +6969,8 @@
         "awaitingPluginSetup": "等待插件设置"
       },
       "showAllSessions": "显示全部 {{count}} 项",
+      "allSessions": "全部任务",
+      "scopeLocalSessions": "本机任务",
       "dialogues": "对话",
       "newDialogue": "新任务",
       "dialoguesToggleExpand": "展开对话",
@@ -6973,12 +6988,10 @@
       "projects": "项目",
       "newProject": "新建项目",
       "createProjectFailed": "新建项目失败",
-      "projectsSectionToggleExpand": "展开项目",
-      "projectsSectionToggleCollapse": "收起项目",
       "projectsToggleExpand": "展开所有项目任务",
       "projectsToggleCollapse": "收起所有项目任务",
-      "filterAria": "整理侧边栏（状态：{{status}}，Agent：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
-      "organizeSidebar": "整理侧边栏",
+      "filterAria": "侧边栏显示设置（状态：{{status}}，Agent：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
+      "organizeSidebar": "侧边栏显示设置",
       "filterAllText": "全部",
       "filterSelectedProjects": "已选 {{count}} 个",
       "filterStatus": {
@@ -6992,8 +7005,23 @@
         "codex": "Codex"
       },
       "filterGroupBy": {
-        "project": "项目",
-        "date": "日期"
+        "project": "按项目分组",
+        "flat": "平铺",
+        "device": "按设备分组",
+        "dialogue": "对话归为一组"
+      },
+      "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
+      "deviceGroup": {
+        "local": "本机",
+        "offline": "离线",
+        "collapse": "收起该设备",
+        "expand": "展开该设备"
+      },
+      "foldAll": {
+        "collapseGroups": "收起所有分组",
+        "collapseProjects": "收起项目分组",
+        "collapseDevices": "收起设备分组",
+        "expandAll": "展开所有分组"
       },
       "filterLastActivity": {
         "1d": "1 天",
@@ -7003,10 +7031,12 @@
         "all": "全部"
       },
       "filterSortBy": {
-        "recency": "最近优先",
-        "time": "最早优先",
+        "recency": "按时间排序",
         "manual": "手动排序",
-        "alphabetic": "字母排序"
+        "priority": "优先级"
+      },
+      "filterSortByTip": {
+        "priority": "等你处理的排在最前，然后是未读、运行中，其余按时间"
       },
       "filterStatusHeading": "状态",
       "filterAgentHeading": "Agent",
@@ -7015,6 +7045,24 @@
       "filterSortByHeading": "排序",
       "filterProjectsHeading": "项目",
       "filterAllProjects": "所有项目",
+      "filterHeading": "筛选",
+      "filterSummaryNone": "无",
+      "filterSummaryActive": "{{count}} 项生效",
+      "filterReset": "重置筛选",
+      "displayHeading": "显示",
+      "taskInfoHeading": "任务信息",
+      "taskInfoSummaryNone": "无",
+      "taskInfoSummarySeparator": "、",
+      "taskInfo": {
+        "time": "时间",
+        "pr": "PR 状态",
+        "tokens": "Token",
+        "cost": "费用"
+      },
+      "taskInfoTip": {
+        "tokens": "累计 Token",
+        "cost": "累计费用"
+      },
       "dateGroup": {
         "today": "今天",
         "yesterday": "昨天",
