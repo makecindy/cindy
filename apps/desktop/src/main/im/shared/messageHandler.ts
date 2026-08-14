@@ -234,6 +234,15 @@ export function createMessageHandler(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error(`slash command threw: ${msg}`);
+        // slash 在首个回复发出前抛错(如 /ctr 枚举失败): sink 未被调用,
+        // 开场白卡用内部错误内容收口 — 否则「思考中」卡永久保留。
+        if (sink) {
+          try {
+            await sink.withMarkdown(event.senderId, ui.agent.sendInternalError(msg));
+          } catch {
+            /* 收口失败与卡残留同一最终边界 */
+          }
+        }
       }
       return;
     }
@@ -368,12 +377,19 @@ export function createMessageHandler(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`runAgentTurn threw: ${msg}`);
-      try {
-        await im.sendText(event.senderId, ui.agent.sendInternalError(msg), {
-          threadTs: event.scopeKey,
-        });
-      } catch {
-        /* swallow */
+      // 本条消息自己开了话题(groupContextLane)时, 开场白卡还没被流式认领 —
+      // 用内部错误内容收口它, 否则卡永久残留且同话题下一条会 patch 错卡。
+      const openerConsumed = event.groupContextLane
+        ? await consumeOpenerWithText(event.senderId, ui.agent.sendInternalError(msg))
+        : false;
+      if (!openerConsumed) {
+        try {
+          await im.sendText(event.senderId, ui.agent.sendInternalError(msg), {
+            threadTs: event.scopeKey,
+          });
+        } catch {
+          /* swallow */
+        }
       }
     }
   }

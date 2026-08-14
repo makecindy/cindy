@@ -260,7 +260,9 @@ export function clearOrphanRetriesForCredentialClear(): void {
   suspendedOrphanRetries.length = 0;
   orphanAttemptCeiling.clear();
   orphanNoticeDelivered.clear();
-  orphanNoticeInFlight.clear();
+  // 注意: orphanNoticeInFlight **不清空** — 在途 REST 无法取消, 保留去重
+  // 记账让同凭证快速重登录后的重投共享旧请求(而不是并发第二条提示);
+  // 旧请求落定后条目自清理, 续段由 orphanRetryEpoch 放弃。
 }
 
 /** 该 opener 的提示是否已成功送达过(首发/重投/重试任一成功 — 终态)。 */

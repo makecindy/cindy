@@ -442,6 +442,32 @@ describe('messageHandler !stop routing', () => {
     });
   });
 
+  it('slash 抛错时用内部错误收口开场白卡(sink 未被调用过)', async () => {
+    handleSlashCommand.mockRejectedValueOnce(new Error('list projects failed'));
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ text: '/ctr', groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith(
+      'U123456789',
+      slackUi.agent.sendInternalError('list projects failed'),
+    );
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('runAgentTurn 抛错且本条开了话题: 用内部错误收口开场白卡', async () => {
+    runAgentTurn.mockRejectedValueOnce(new Error('provider exploded'));
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ text: '帮我看看', groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith(
+      'U123456789',
+      slackUi.agent.sendInternalError('provider exploded'),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
   it('同话题后续 !stop 不消费上一轮的 pending opener(归属不抢占)', async () => {
     // 消息 A 已开话题且其 pending opener 尚未被流式认领; 本条 B 是同一话题的
     // 后续消息(groupContextLane 缺省)— B 不得 patch A 的思考卡。
