@@ -311,6 +311,42 @@ export function UnifiedModelPanel({
   // (目录轮询 / 收藏增删)不夺走用户的滚动位置(2026-08-13 实测:浏览到列表深处时,
   // 后台目录刷新重建 sections 会把人拽回顶部的选中行)。
   const viewKey = `${railItemKey(rail)}::${query.trim().toLowerCase()}`;
+  /**
+   * 「需要保证选中行可见」在途标记 —— 对齐不是一次性动作:面板在 morph 弹层里,
+   * 首开那一帧列表高度还是 pill 的裁切态,按它算滚动必错且此后不再重算,选中行
+   * 就停在可视区外(Chris 2026-08-14 实测:「当前模型必须可见」)。置位后由
+   * ResizeObserver 在每次尺寸变化时重新对齐,直到选中行真正可见;用户手动滚动
+   * 立即放弃(不跟用户抢滚动条)。
+   */
+  const needsEnsureVisibleRef = useRef(false);
+  const ensureSelectedVisible = useCallback(() => {
+    const el = listRef.current;
+    if (!el || !needsEnsureVisibleRef.current) return;
+    if (el.clientHeight < 1) return; // 还没有真实布局,等下一次尺寸回调。
+    const row = el.querySelector<HTMLElement>('[data-model-selected="true"]');
+    if (!row) {
+      needsEnsureVisibleRef.current = false; // 本视图没有选中行,无事可做。
+      return;
+    }
+    const listRect = el.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const delta =
+      rowRect.top < listRect.top
+        ? rowRect.top - listRect.top
+        : rowRect.bottom > listRect.bottom
+          ? rowRect.bottom - listRect.bottom
+          : 0;
+    if (Math.abs(delta) > 1) {
+      const next = Math.max(0, el.scrollTop + delta);
+      if (next !== el.scrollTop) {
+        suppressScrollDismissRef.current = true;
+        el.scrollTop = next;
+      }
+      return; // 生长期间可能还会变,保持在途,交给下一次尺寸回调复核。
+    }
+    // 行已完整可见且容器有真实高度 → 收工。
+    needsEnsureVisibleRef.current = false;
+  }, []);
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
@@ -321,30 +357,28 @@ export function UnifiedModelPanel({
       const previousView = previousViewRef.current;
       previousViewRef.current = viewKey;
       if (previous !== null && previous !== selectionKey) {
+        needsEnsureVisibleRef.current = false;
         flashScrollbar(el);
         return;
       }
       if (previousView !== null && previousView === viewKey) return;
-      const row = el.querySelector<HTMLElement>('[data-model-selected="true"]');
-      if (row) {
-        const listRect = el.getBoundingClientRect();
-        const rowRect = row.getBoundingClientRect();
-        const delta =
-          rowRect.top < listRect.top
-            ? rowRect.top - listRect.top
-            : rowRect.bottom > listRect.bottom
-              ? rowRect.bottom - listRect.bottom
-              : 0;
-        const next = Math.max(0, el.scrollTop + delta);
-        if (Math.abs(delta) > 1 && next !== el.scrollTop) {
-          suppressScrollDismissRef.current = true;
-          el.scrollTop = next;
-        }
-      }
+      needsEnsureVisibleRef.current = true;
+      ensureSelectedVisible();
       flashScrollbar(el);
     });
     return () => cancelAnimationFrame(raf);
-  }, [sections, viewKey, selected.modelId, selected.providerId, selectedFavoriteUid]);
+  }, [ensureSelectedVisible, sections, viewKey, selected.modelId, selected.providerId, selectedFavoriteUid]);
+  // morph 生长 / 窗口变化期间尺寸每变一次就复核一次对齐(仅在途标记置位时做事)。
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (!needsEnsureVisibleRef.current) return;
+      requestAnimationFrame(ensureSelectedVisible);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ensureSelectedVisible]);
 
   const closeFlyout = useCallback(() => {
     setFlyAnchor(null);
@@ -634,6 +668,8 @@ export function UnifiedModelPanel({
             suppressScrollDismissRef.current = false;
             return;
           }
+          // 用户亲手滚动 → 放弃在途的「保证选中行可见」,不跟用户抢滚动条。
+          needsEnsureVisibleRef.current = false;
           if (flyAnchor) closeFlyout();
         }}
       >
