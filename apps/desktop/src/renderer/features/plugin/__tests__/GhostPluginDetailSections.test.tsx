@@ -1316,6 +1316,57 @@ describe('Ghost plugin detail sections', () => {
     expect(toastMocks.error).not.toHaveBeenCalled();
   });
 
+  it('rolls a failed first save on a freshly switched ghost back to its own disk config, not the previous ghost’s', async () => {
+    // 回归 Greptile 又发现的 P1:切插件那一轮渲染里，`setLoaded(...)` 只是
+    // 排了队还没真正生效(React 丢弃本轮渲染输出、带新 state 重渲染)，这一轮
+    // 的 `config` 变量此刻仍是"上一个插件"的值。`confirmedConfigRef` 的重置
+    // 逻辑当时直接拿这个还没更新的 `config` 当新插件的确认基准存了进去——
+    // ref 是直接赋值，不会跟着被丢弃的渲染输出一起撤销，于是新插件的确认
+    // 基准被错误地钉死成了上一个插件的档位。如果新插件的第一次保存又失败，
+    // 回滚会把上一个插件的档位错误地画到新插件身上。
+    const setToolPermissions = vi.fn(async () => {
+      throw new Error('first save on the new ghost failed');
+    });
+    stubToolPermissionApi({
+      config: (id) =>
+        id === 'ghost-a'
+          ? { tools: { tool_0: 'blocked' } }
+          : { tools: { tool_2: 'always-allow' } },
+      setToolPermissions,
+    });
+    const { rerender } = render(<ToolsSection ghostId="ghost-a" tools={sevenTools} />);
+
+    rerender(<ToolsSection ghostId="ghost-b" tools={sevenTools} />);
+    await waitFor(() => {
+      const ghostBSeedGroup = screen.getAllByRole('group', { name: /tool_2/ })[0];
+      expect(
+        within(ghostBSeedGroup)
+          .getByRole('button', { name: 'Always allow' })
+          .getAttribute('aria-pressed'),
+      ).toBe('true');
+    });
+
+    // ghost-b 的第一次保存(切换后从未成功过任何一次写)失败。
+    const ghostBEditGroup = screen.getAllByRole('group', { name: /tool_3/ })[0];
+    fireEvent.click(within(ghostBEditGroup).getByRole('button', { name: 'Blocked' }));
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledTimes(1));
+
+    // 回滚必须退到 ghost-b 自己磁盘上的配置(tool_2=always-allow，其余默认
+    // needs-approval)，不能是 ghost-a 的 tool_0=blocked。
+    const tool0Group = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    expect(
+      within(tool0Group).getByRole('button', { name: 'Needs approval' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    const tool2Group = screen.getAllByRole('group', { name: /tool_2/ })[0];
+    expect(
+      within(tool2Group).getByRole('button', { name: 'Always allow' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    const tool3Group = screen.getAllByRole('group', { name: /tool_3/ })[0];
+    expect(
+      within(tool3Group).getByRole('button', { name: 'Needs approval' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+
   it('shows every host permission except Tools and opens the same complete details', async () => {
     render(<PermissionSummary items={permissions} />);
 

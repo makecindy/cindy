@@ -734,7 +734,13 @@ export function ToolsSection({
   // 已经落盘了。
   const confirmedConfigRef = useRef({ ghostId, config, sequence: 0 });
   if (confirmedConfigRef.current.ghostId !== ghostId) {
-    confirmedConfigRef.current = { ghostId, config, sequence: 0 };
+    // 不能直接用上面的 config——如果这次渲染正是 ghostId 切换的那一轮，
+    // loaded 还没被上面那次 setLoaded 真正生效(React 丢弃本轮渲染输出、
+    // 带新 state 重渲染;但 ref 是直接赋值，不会跟着被撤销)，config 此刻
+    // 仍是"上一个插件"的值——把它当成新 ghostId 的确认基准存进去，会让
+    // 这个新插件的失败回滚退到上一个插件的档位上。现读一次盘，保证拿到
+    // 的确实是这个新插件自己的配置。
+    confirmedConfigRef.current = { ghostId, config: readToolPermissions(ghostId), sequence: 0 };
   }
   // 界面当前显示的是哪个序号的配置。每次新点击都无条件抢占(用户最新的
   // 动作永远优先可见);一次失败回滚之后，界面显示的就是 confirmedConfigRef
