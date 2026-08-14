@@ -731,10 +731,32 @@ async function restoreTrash(
       // 双重恢复 (link + copy) 都失败。最后兜底: rename(trash → src) 是元数据
       // 操作不写内容, 在 ENOTSUP/ENOSPC 场景下仍可把 trash 改回合法分片名 —
       // 记忆留在 list()/MEMORY.md/FTS 正常路径 (Greptile P1 on #2561 第二十六
-      // 轮: 双重恢复失败后分片缺失 — rebuildIndex 跳过非 .md 名)。src 已重建
-      // (宿主新写入) 时绝不覆盖, 保留 trash 供找回; rename 也失败 (真锁) 时
-      // 同样保留 trash (磁盘可达)。
+      // 轮: 双重恢复失败后分片缺失 — rebuildIndex 跳过非 .md 名)。
       if (!(await pathExists(src))) {
+        // 探测后、rename 前**再试一次排他复制**: 若宿主在探测后写入 src,
+        // copyFile EXCL 抛 EEXIST 能被检测到且不覆盖 (Greptile P1 on #2561
+        // 第二十七轮: 兜底重命名覆盖新内容 — 探测-rename 窗口内宿主重建 src
+        // 会被 POSIX rename 覆盖)。仅当 src 确实不存在且内容无法复制
+        // (ENOSPC/EACCES) 才走 rename 兜底。
+        try {
+          await fs.copyFile(trash, src, fs.constants.COPYFILE_EXCL);
+          result.failed.push({
+            filename: item.filename,
+            error:
+              'source changed during archive; restored via copy fallback (trash kept reachable, archive holds reviewed copy)',
+          });
+          return;
+        } catch (e3) {
+          if ((e3 as NodeJS.ErrnoException).code === 'EEXIST') {
+            // 宿主在探测后写入 src → 不覆盖, 保留 trash 供找回
+            result.failed.push({
+              filename: item.filename,
+              error:
+                'source recreated during archive; newer copy kept, trash kept for manual review',
+            });
+            return;
+          }
+        }
         try {
           await fs.rename(trash, src);
           result.failed.push({
@@ -762,13 +784,30 @@ async function restoreTrash(
  * 任何失败 (EEXIST 宿主已重建 src / EACCES / EPERM / ENOSPC …) 都返回
  * false 而非抛错: retained 保留在 .archive 可达, 数据不丢 — 恢复失败不能再
  * 让活动分片缺失或删除新内容 (Greptile P1 / Codex P1 on #2561 第十五/十六轮)。
+ *
+ * copyFile 失败且 src 缺失 (非宿主重建) 时, 用 rename 兜底把 retained 改回
+ * 合法分片名 — 元数据操作不依赖磁盘空间, 在 ENOSPC 场景下仍能让记忆留在
+ * list()/MEMORY.md 正常路径 (Codex P1 on #2561 第二十七轮: restore retained
+ * shards before rebuilding, 镜像 restoreTrash fallback)。
  */
 async function restoreRetained(retained: string, src: string): Promise<boolean> {
   try {
     await fs.copyFile(retained, src, fs.constants.COPYFILE_EXCL);
     return true;
   } catch {
-    return false;
+    // copyFile 失败 (ENOSPC/EACCES/EEXIST)。src 仍缺失时 rename 兜底
+    // (改名不覆盖内容); src 已存在 (宿主重建的新写入) 绝不覆盖。
+    try {
+      await fs.stat(src);
+      return false;
+    } catch {
+      try {
+        await fs.rename(retained, src);
+        return true;
+      } catch {
+        return false;
+      }
+    }
   }
 }
 

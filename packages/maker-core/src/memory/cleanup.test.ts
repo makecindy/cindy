@@ -667,6 +667,10 @@ describe('runMemoryCleanup', () => {
     const copySpy = vi
       .spyOn(fs, 'copyFile')
       .mockRejectedValue(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+    // rename 兜底也失败 (真锁) → retained 保留 .archive 可达。
+    const renameSpy = vi
+      .spyOn(fs, 'rename')
+      .mockRejectedValue(Object.assign(new Error('locked'), { code: 'EPERM' }));
 
     try {
       const result = await runMemoryCleanup(plan);
@@ -679,6 +683,46 @@ describe('runMemoryCleanup', () => {
       await expect(
         readFile(path.join(dir, ARCHIVE_DIR_NAME, retained as string), 'utf8'),
       ).resolves.toContain('WRITTEN AFTER MOVE');
+    } finally {
+      linkSpy.mockRestore();
+      copySpy.mockRestore();
+      renameSpy.mockRestore();
+    }
+  });
+
+  it('renames retained back to src when copy restore fails', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟: open fd 在 move 后写 retained (二次校验不一致), copyFile 恢复抛
+    // ENOSPC (磁盘满) — rename 兜底把 retained 改回合法分片名, 记忆留在
+    // list()/MEMORY.md 正常路径 (Codex P1 on #2561 第二十七轮: restore
+    // retained shards before rebuilding)。
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, 'link').mockImplementation(async (src, dst) => {
+      const r = await realLink(src as string, dst as string);
+      if (
+        String(dst).includes(ARCHIVE_DIR_NAME) &&
+        String(src).includes('cleanup-trash') &&
+        !String(dst).endsWith('.archive')
+      ) {
+        await writeFile(String(dst), 'WRITTEN AFTER MOVE BY OPEN FD', 'utf8');
+      }
+      return r;
+    });
+    const copySpy = vi
+      .spyOn(fs, 'copyFile')
+      .mockRejectedValue(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // rename 兜底成功: src 恢复 (合法分片名, 内容 = retained 新内容), failed。
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      expect(result.archived).toHaveLength(0);
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain(
+        'WRITTEN AFTER MOVE',
+      );
     } finally {
       linkSpy.mockRestore();
       copySpy.mockRestore();
