@@ -93,6 +93,41 @@ describe('VoiceInputDataStore persistence', () => {
     expect(JSON.parse(fs.readFileSync(target, 'utf8')).settings.language).toBe('ja');
   });
 
+  it('does not cache defaults when the .bak backup cannot be restored yet, and retries on the next read', () => {
+    // 回归 Codex P2:main 文件缺失、.bak 还在、但恢复(rename .bak → main)这次
+    // 失败(典型场景:Windows 文件锁/杀毒瞬时占用)时，属于
+    // AtomicBackupUnrecoverableError——这不是"投影丢了"，.bak 里还有救得回来
+    // 的真实数据。旧实现会把这次读取当成普通"文件不存在"缓存进 this.state，
+    // 随后任何一次词典/设置写入触发的 save() 都会用这份错误的空状态覆盖磁盘，
+    // 且回收逻辑还会据此给 CRDT 正本里的词条打墓碑，把瞬时故障升级成永久数据
+    // 损毁。
+    const target = path.join(dataDir, 'voice-input-data.v1.json');
+    const seed = new VoiceInputDataStore();
+    seed.updateSettings({ language: 'en' });
+    // 模拟"main 文件缺失、.bak 还在":把已经落盘的正本改名成 .bak。
+    fs.renameSync(target, `${target}.bak`);
+
+    const realRename = fs.renameSync;
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (String(from) === `${target}.bak` && String(to) === target) {
+        throw Object.assign(new Error('backup restore blocked'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+
+    const store = new VoiceInputDataStore();
+    try {
+      // 第一次读取:恢复失败，这次调用只应该拿到默认值，不能崩溃、不能缓存。
+      expect(store.getSettings().language).not.toBe('en');
+    } finally {
+      spy.mockRestore();
+    }
+
+    // 没有缓存空状态：下一次读取(瞬时故障已经"清除")重新尝试读盘，正确恢复
+    // 出 .bak 里原本保存的设置。
+    expect(store.getSettings().language).toBe('en');
+  });
+
   it.each([
     ['writeFileSync', 'disk full'],
     ['renameSync', 'rename denied'],

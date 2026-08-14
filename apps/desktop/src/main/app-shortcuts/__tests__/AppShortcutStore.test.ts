@@ -252,6 +252,42 @@ describe('AppShortcutStore', () => {
     expect(store.getEffectiveCombos('toggle-sidebar')[0]!.code).toBe('KeyB');
   });
 
+  it('does not cache an empty override set when the .bak backup cannot be restored yet, and retries on the next read', () => {
+    // 回归 Codex P2:main 文件缺失、.bak 还在、但恢复(rename .bak → main)这次
+    // 失败(典型场景:Windows 文件锁/杀毒瞬时占用)时，属于 AtomicBackupUnrecoverableError——
+    // 这不是"没有覆盖项"，.bak 里还有救得回来的真实数据。旧实现会把这次读取
+    // 结果当成普通读取失败缓存成 {}，随后任何一次编辑触发的 save() 都会用这份
+    // 错误的空状态覆盖磁盘，把瞬时故障变成永久丢失用户的自定义快捷键。
+    fs.writeFileSync(
+      `${filePath()}.bak`,
+      JSON.stringify({
+        version: 1,
+        overrides: { 'toggle-sidebar': combo('KeyJ', { meta: true }) },
+      }),
+    );
+    const realRename = fs.renameSync;
+    // 非瞬时错误码(不在 TRANSIENT_RENAME_CODES 里)让 renameSyncWithRetry 第一次
+    // 就直接上抛，restoreBackupIfMainMissing 据此包成 AtomicBackupUnrecoverableError。
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (String(from) === `${filePath()}.bak` && String(to) === filePath()) {
+        throw Object.assign(new Error('backup restore blocked'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+
+    const store = makeStore('darwin');
+    try {
+      // 第一次读取:恢复失败，不能缓存成"没有覆盖项"。
+      expect(store.getOverrides()).toEqual({});
+    } finally {
+      spy.mockRestore();
+    }
+
+    // 没有缓存空状态：下一次读取(瞬时故障已经"清除"，因为上面的 mock 只拦一次)
+    // 必须重新尝试读盘，正确恢复出 .bak 里原本保存的覆盖项。
+    expect(store.getOverrides()).toEqual({ 'toggle-sidebar': combo('KeyJ', { meta: true }) });
+  });
+
   it('notifies subscribers and onChanged on every mutation', () => {
     const onChanged = vi.fn();
     const store = makeStore('darwin', onChanged);

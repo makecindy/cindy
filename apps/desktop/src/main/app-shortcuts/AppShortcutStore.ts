@@ -1,5 +1,9 @@
 import { createLogger } from '../logger.js';
-import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
+import {
+  atomicWriteFileSync,
+  isAtomicBackupUnrecoverable,
+  readAtomicFileSync,
+} from '../utils/atomicWriteFile.js';
 import {
   comboToElectronAccelerator,
   findAppShortcutConflict,
@@ -152,6 +156,17 @@ export class AppShortcutStore {
           : undefined;
       this.overrides = normalizeAppShortcutOverrides(overridesRaw, this.options.platform);
     } catch (error) {
+      if (isAtomicBackupUnrecoverable(error)) {
+        // 备份暂时恢复不了(通常是 Windows 文件锁/杀毒瞬时占用)——不能当成
+        // "没有覆盖项"缓存进 this.overrides:一旦缓存，后续任何一次编辑触发的
+        // save() 都会用这份错误的空状态覆盖磁盘上唯一还能救回来的快照，把一次
+        // 瞬时故障变成永久丢失用户的自定义快捷键。这里只给这一次调用返回空
+        // 快照，不写 this.overrides，下一次 load() 会重新尝试读盘。
+        log.warn('app shortcut overrides temporarily unavailable, not caching as empty', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return {};
+      }
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         log.warn('app shortcut overrides read failed, using defaults', {
           error: error instanceof Error ? error.message : String(error),

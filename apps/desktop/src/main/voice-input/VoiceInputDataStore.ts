@@ -14,7 +14,11 @@ import {
 
 import { createLogger } from '../logger.js';
 import { ownerScopedUserDataPath, getActiveAppSession } from '../appSessionState.js';
-import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
+import {
+  atomicWriteFileSync,
+  isAtomicBackupUnrecoverable,
+  readAtomicFileSync,
+} from '../utils/atomicWriteFile.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { voiceDictionarySyncStore } from './VoiceDictionarySyncStore.js';
@@ -466,6 +470,22 @@ export class VoiceInputDataStore {
       if (hydrated.dictionarySyncInitialized && !stampedOnDisk) this.save(hydrated);
       return this.state;
     } catch (error) {
+      if (isAtomicBackupUnrecoverable(error)) {
+        // 备份暂时恢复不了(通常是 Windows 文件锁/杀毒瞬时占用)——`.bak` 里还有
+        // 救得回来的数据，不能当成"投影丢了"缓存进 this.state：一旦缓存，后续
+        // 任何一次词典/设置写入触发的 save() 都会用这份错误的空状态覆盖磁盘，
+        // 而且下面的回收逻辑还会据此给 CRDT 正本里的词条打墓碑，把一次瞬时
+        // 故障升级成永久数据损毁。这里只给这一次调用返回一个不落盘、不触发
+        // 回收的临时快照，不写 this.state，下一次 load() 会重新尝试读盘。
+        log.warn('voice input data temporarily unavailable, not caching as empty', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return {
+          version: 1,
+          settings: getDefaultVoiceInputSettings(process.platform),
+          history: [],
+        };
+      }
       const missing = (error as NodeJS.ErrnoException).code === 'ENOENT';
       if (!missing) {
         log.warn('voice input data read failed, using defaults', {
