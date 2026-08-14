@@ -213,13 +213,24 @@ describe('maker SEND transaction', () => {
     const session = createSession({
       send: vi.fn(async (_message, opts) => {
         await opts?.onAccepted?.();
-        opts?.onDispatching?.();
-        events.push('vendor-send');
+        const release = await opts?.acquireVendorDispatchLease?.();
+        try {
+          opts?.onDispatching?.();
+          events.push('vendor-send');
+        } finally {
+          await release?.();
+        }
         return { accepted: true } satisfies SessionSendResult;
       }),
     });
     const { deps } = createDeps({
       getSession: vi.fn(() => session),
+      acquireVendorDispatchLease: vi.fn(async () => {
+        events.push('lease-acquire');
+        return () => {
+          events.push('lease-release');
+        };
+      }),
       assertBeforeVendorDispatch: vi.fn(() => events.push('final-fence')),
       dispatchUserPromptPreview: vi.fn(() => events.push('prompt-preview')),
     });
@@ -230,16 +241,23 @@ describe('maker SEND transaction', () => {
         persistUserMessage: {
           clientId: 'client-dispatch-marker',
           content: 'hello',
+          origin: {
+            kind: 'orca',
+            teamId: 'team-1',
+            senderLabel: 'Reviewer',
+          },
         },
         onDispatching: () => events.push('caller-marker'),
       }),
     ).resolves.toMatchObject({ accepted: true });
 
     expect(events).toEqual([
+      'lease-acquire',
       'final-fence',
       'prompt-preview',
       'caller-marker',
       'vendor-send',
+      'lease-release',
     ]);
   });
 

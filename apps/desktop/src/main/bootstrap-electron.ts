@@ -284,6 +284,7 @@ import {
   getCurrentDbPath as localDbGetCurrentDbPath,
 } from './localDb/index';
 import { createDbClient, createInprocDbClient } from './localDb/client/DbClient';
+import { disposeOrcaTeamDispatchLeaseCoordinator } from './orcaTeamDispatchLease';
 import { createLifecycleDbClientManager } from './localDb/client/lifecycleDbClient';
 import { clearCurrentDbClient, getDbClient, setCurrentDbClient } from './localDb/client/current';
 import {
@@ -1325,6 +1326,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
         err,
       );
     }
+    await disposeOrcaTeamDispatchLeaseCoordinator();
     await lifecycleDbClientManager.dispose(reason);
   } finally {
     releaseEndedSuppression();
@@ -1341,6 +1343,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     );
   }
   try {
+    await disposeOrcaTeamDispatchLeaseCoordinator();
     await lifecycleDbClientManager.dispose(reason);
   } finally {
     try {
@@ -7323,6 +7326,7 @@ onQuit('ios-simulator-exit-abort', abortIOSSimulatorOperationsForExit, 'sync');
 onQuit('hook-control', () => disposeHookControl(), 'sync');
 // session-git-pr-context: 取消 .git HEAD 的 parcel watcher 订阅, 防原生句柄阻塞退出。
 onQuit('git-context', () => disposeGitContext(), 'async');
+onQuit('orca-team-dispatch-lease', disposeOrcaTeamDispatchLeaseCoordinator, 'async');
 onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'async');
 onQuit('ios-simulator-host', disposeIOSSimulatorHost, 'async');
 onQuit('ios-simulator-ownership-registry', flushIOSSimulatorOwnershipRegistry, 'async');

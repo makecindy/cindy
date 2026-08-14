@@ -14,6 +14,7 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { acquireOrcaTeamDispatchLease } from '../orcaTeamDispatchLease.js';
 
 import type {
   AgentEvent,
@@ -10155,6 +10156,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     beforeDispatchDirectUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnStart(sessionId),
     isOrcaTeamInputActive: async (_sessionId, teamId) =>
       !isOrcaTeamDurablyTerminal(teamId) && (await isOrcaTeamActive(teamId)),
+    acquireVendorDispatchLease: (_sessionId, sendOpts) => {
+      const orcaTeamId =
+        sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
+          ? (sendOpts as { orcaTeamId?: unknown }).orcaTeamId
+          : undefined;
+      return typeof orcaTeamId === 'string'
+        ? acquireOrcaTeamDispatchLease(orcaTeamId)
+        : undefined;
+    },
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);

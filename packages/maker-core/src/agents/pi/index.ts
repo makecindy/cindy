@@ -1967,6 +1967,7 @@ export class PiAgent extends BaseAgent {
             throw new Error(`pi prompt rejected: ${resp.error ?? 'unknown'}`);
           }
           providerAccepted = true;
+          if (sendOpts?.onProviderAccepted) await sendOpts.onProviderAccepted();
           await reportAcceptedPiUserEntry(userEntriesBefore, sendOpts?.onTranscriptUserEntry);
         } catch (err) {
           // 只在 Provider 尚未接受本轮时回滚。接受后的 transcript 回调失败不代表

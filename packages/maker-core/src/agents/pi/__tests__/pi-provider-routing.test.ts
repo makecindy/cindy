@@ -1076,13 +1076,17 @@ describe('Pi provider-aware model routing', () => {
       workingDir: cwd,
       model: 'local-model',
     });
-    const onTranscriptUserEntry = vi.fn();
+    const acceptanceOrder: string[] = [];
+    const onProviderAccepted = vi.fn(() => acceptanceOrder.push('provider'));
+    const onTranscriptUserEntry = vi.fn(() => acceptanceOrder.push('transcript'));
     await handle.send(
       { type: 'user', content: 'new' },
-      { onTranscriptUserEntry },
+      { onProviderAccepted, onTranscriptUserEntry },
     );
+    expect(onProviderAccepted).toHaveBeenCalledOnce();
     expect(onTranscriptUserEntry).toHaveBeenCalledOnce();
     expect(onTranscriptUserEntry).toHaveBeenCalledWith('new-user');
+    expect(acceptanceOrder).toEqual(['provider', 'transcript']);
     await handle.close();
   });
 

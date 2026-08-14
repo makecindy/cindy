@@ -1152,6 +1152,8 @@ export interface SendOptions {
    * 回调失败不得改变已经接受的 provider dispatch 结果。
    */
   onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
+  /** Host-owned callback fired once the provider has irreversibly accepted this send. */
+  onProviderAccepted?: () => void | Promise<void>;
   /**
    * 当前用户的展示名 (host / renderer 在调 send 时提供)。仅用于 turn-start 时
    * push status event 的文案 — agent 拼成 "<userName> Just Wait ..." 让 UI 个人化;

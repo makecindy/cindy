@@ -193,6 +193,11 @@ export interface MakerSendTransactionDeps {
   beforeDispatchDirectUserTurn?: (sessionId: string) => void | Promise<void>;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
   assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
+  /** Cross-process lease acquired after accepted persistence and held through vendor acceptance. */
+  acquireVendorDispatchLease?: (
+    sessionId: string,
+    sendOpts: unknown,
+  ) => void | (() => void | Promise<void>) | Promise<() => void | Promise<void>>;
   /** Durable active-team check for queued Orca traffic, before any rehydrate side effect. */
   isOrcaTeamInputActive?: (sessionId: string, teamId: string) => Promise<boolean>;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;
@@ -1083,6 +1088,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 await persistUserMessage.onPersisted?.();
               }
             : undefined,
+          ...(orcaTeamId && deps.acquireVendorDispatchLease
+            ? {
+                acquireVendorDispatchLease: () =>
+                  deps.acquireVendorDispatchLease?.(sessionId, finalFenceSendOpts),
+              }
+            : {}),
           onDispatching: () => {
             if (persistUserMessage?.shouldBroadcast && !persistUserMessage.shouldBroadcast()) {
               throwIpcError(

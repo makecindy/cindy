@@ -5225,6 +5225,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             throw new Error('Claude input queue is closed');
           }
           userInputAccepted = true;
+          if (sendOpts?.onProviderAccepted) await sendOpts.onProviderAccepted();
           activeCapabilitySelectionText = userMessageTextForCapabilityRouting(message.content);
           setAutoReviewIntent(message.content);
           replayableUserInput = sdkInput;
