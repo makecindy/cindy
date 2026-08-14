@@ -81,12 +81,20 @@ vi.mock('../moduleScope.js', () => ({
 import * as outbound from '../outbound.js';
 
 const creds = { appId: 'cli_test', appSecret: 'secret', service: 'feishu' as const };
+const otherCreds = { appId: 'cli_other_account', appSecret: 'secret', service: 'feishu' as const };
+
+/** 强制清掉同账号重连会保留的 opener/锚点, 避免用例互相泄漏。 */
+function rebindFresh(next = creds): void {
+  outbound.unbindClient();
+  outbound.bindClient({ appId: 'cli_test_reset', appSecret: '', service: 'feishu' });
+  outbound.unbindClient();
+  outbound.bindClient(next);
+}
 
 describe('feishu outbound lane routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    outbound.unbindClient(); // clears lane anchors
-    outbound.bindClient(creds);
+    rebindFresh();
   });
 
   it('sends p2p messages via open_id unchanged', async () => {
@@ -307,10 +315,10 @@ describe('feishu outbound lane routing', () => {
     expect(delCtx).toBe(replyCtx);
   });
 
-  it('unbindClient clears held anchors (no cross-generation mismatch)', async () => {
+  it('账号替换后清空群 lane 锚点, 不再 reply 到旧账号的触发消息', async () => {
     outbound.pushReplyAnchor('g/oc_g', 'om_old');
     outbound.unbindClient();
-    outbound.bindClient(creds);
+    outbound.bindClient(otherCreds);
     await outbound.sendText('g/oc_g', 'later');
     expect(larkMocks.reply).not.toHaveBeenCalled();
     expect(larkMocks.create).toHaveBeenCalledWith(
@@ -327,21 +335,55 @@ describe('feishu outbound lane routing', () => {
     expect(outbound.claimPatchableOpener('g/oc_g/omt_p1')).toBeNull();
   });
 
-  it('unbindClient clears pending patchable openers (no cross-generation claim)', async () => {
+  it('账号替换后 pending opener 不可再被认领', async () => {
     outbound.pushReplyAnchor('g/oc_g/omt_p2', 'om_opener');
     outbound.pushPatchableOpener('g/oc_g/omt_p2', 'om_opener');
 
-    outbound.unbindClient(); // 换账号/断线: 旧账号的开场白卡不得再被认领
-    outbound.bindClient(creds);
+    outbound.unbindClient();
+    outbound.bindClient(otherCreds);
     expect(outbound.claimPatchableOpener('g/oc_g/omt_p2')).toBeNull();
+  });
+
+  it('同账号重连(rebind 同凭证)保留 pending opener, 仍可被认领', async () => {
+    outbound.pushReplyAnchor('g/oc_g/omt_keep', 'om_opener');
+    outbound.pushPatchableOpener('g/oc_g/omt_keep', 'om_opener');
+
+    // reconnectSavedCredentials: stop → unbind → start → bind 同凭证。
+    // host 可能还在回翻群历史, turn 未认领开场白 — 重连后必须还能 patch。
+    outbound.unbindClient();
+    outbound.bindClient(creds);
+    expect(outbound.claimPatchableOpener('g/oc_g/omt_keep')).toBe('om_opener');
+  });
+
+  it('同账号重连保留话题锚点, 后续出站仍能 reply 不丢进群主流', async () => {
+    outbound.pushReplyAnchor('g/oc_g/omt_keep2', 'om_anchor');
+
+    outbound.unbindClient();
+    outbound.bindClient(creds);
+    await outbound.sendText('g/oc_g/omt_keep2', 'after-reconnect');
+    expect(larkMocks.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ path: { message_id: 'om_anchor' } }),
+    );
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
+
+  it('账号真正替换(appId 变化)时清空 pending opener 与话题锚点', async () => {
+    outbound.pushReplyAnchor('g/oc_g/omt_drop', 'om_opener');
+    outbound.pushPatchableOpener('g/oc_g/omt_drop', 'om_opener');
+
+    outbound.unbindClient();
+    outbound.bindClient(otherCreds);
+    expect(outbound.claimPatchableOpener('g/oc_g/omt_drop')).toBeNull();
+    await expect(outbound.sendText('g/oc_g/omt_drop', 'after-switch')).rejects.toThrow(
+      /no reply anchor/,
+    );
   });
 });
 
 describe('feishu card lane registry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    outbound.unbindClient(); // clears lane anchors + card registry
-    outbound.bindClient(creds);
+    rebindFresh();
   });
 
   it('registers topic-lane cards and resolves them back to the same lane', async () => {
