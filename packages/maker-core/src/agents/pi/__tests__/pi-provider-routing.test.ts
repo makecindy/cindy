@@ -1648,8 +1648,21 @@ describe('Pi provider-aware model routing', () => {
     ]);
     expect(registeredToken).toMatch(/^[A-Za-z0-9_-]{40,}$/);
     expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(registeredToken);
+    const firstToken = registeredToken;
     await handle.close();
     expect(disposed).toBe(1);
+
+    const reattached = await agent.startSession({
+      sessionId: 'remote-xai-forward',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      remoteHostId: 'remote-host',
+    });
+    expect(registeredToken).toBe(firstToken);
+    expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(firstToken);
+    await reattached.close();
+    expect(disposed).toBe(2);
   });
 
   it('hashes the remote permission snapshot into spawn env so a later Full-access attach restarts', async () => {

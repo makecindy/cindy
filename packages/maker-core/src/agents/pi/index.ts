@@ -24,7 +24,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 
 /**
  * 轮 40-w4-t5 CRITICAL:远端 agentHome 是 POSIX 路径($HOME/... 或展开后的
@@ -156,6 +156,12 @@ const PI_MODELS_JSON_HASH_ENV = 'CINDY_PI_MODELS_JSON_HASH';
 const PI_PERMISSION_HASH_ENV = 'CINDY_PI_PERMISSION_HASH';
 /** 远端附件内联上限:超过则 fail-before-dispatch, 不静默截断。 */
 const REMOTE_PI_ATTACHMENT_MAX_BYTES = 256 * 1024;
+/**
+ * Remote reconnects rebuild PiAgent in the same Desktop process. Keep the
+ * loopback-proxy credential stable for a business session without making it
+ * derivable from the public session id alone.
+ */
+const PI_PROXY_SESSION_TOKEN_KEY = randomBytes(32);
 
 /**
  * baseUrl 是否指向本机 loopback(远端会话不可达)。与 host 侧 isLoopbackUrl 同口径:
@@ -234,6 +240,11 @@ function truncateToByteBudget(text: string, maxBytes: number): string {
 function stableSessionPathSegment(sid: string | undefined): string {
   if (!sid) return randomBytes(8).toString('hex');
   return createHash('sha256').update(sid).digest('hex').slice(0, 12);
+}
+
+function stableRemoteProxySessionToken(sid: string | undefined): string {
+  if (!sid) return randomBytes(32).toString('base64url');
+  return createHmac('sha256', PI_PROXY_SESSION_TOKEN_KEY).update(sid).digest('base64url');
 }
 
 function slugifyForMemory(input: string, maxLen: number): string {
@@ -1776,8 +1787,11 @@ export class PiAgent extends BaseAgent {
     // SSH 只解决可达性，session token 继续提供逐会话鉴权，不能把 loopback 端口
     // 当作信任边界。
     const remoteUsesHostProxy = remote && nativeProviders.some((provider) => provider.hostProxyForward);
-    const proxySessionToken =
-      !remote || remoteUsesHostProxy ? randomBytes(32).toString('base64url') : undefined;
+    const proxySessionToken = remoteUsesHostProxy
+      ? stableRemoteProxySessionToken(opts.sessionId)
+      : !remote
+        ? randomBytes(32).toString('base64url')
+        : undefined;
     let disposeProxySession: (() => void) | undefined;
     // 幂等:onExit(进程异常退出)与 close()(用户结束)可能都调用它;首次注销后置位,
     // 后续调用直接返回,避免二次注销(codex review:crash 时须由 onExit 立即释放)。
