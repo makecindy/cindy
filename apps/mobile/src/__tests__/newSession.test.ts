@@ -1597,12 +1597,15 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('trailing={composerCardActive || !composerShowCreateButton ? null : renderCreateButton()}');
     expect(newComposerSource).toContain('leading={renderComposerCompactLeading()}');
     expect(newSource).toContain('const renderComposerCompactLeading = () => (');
+    expect(newSource).toContain('styles.composerCompactAttachmentSlot');
     expect(newSource).toContain('styles.composerCompactAttachmentHit');
-    expect(newSource).toContain('styles.composerCompactAttachmentHitArea');
+    expect(newSource).not.toContain('styles.composerCompactAttachmentHitArea');
     expect(newSource).toContain('pointerEvents="none"');
     expect(newSource).toContain('testID="newSession.attachmentToggleButton"');
-    expect(newSource).toContain('overflow: \'visible\'');
-    expect(newSource).toContain('bottom: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
+    expect(newSource).toContain('height: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(newSource).toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(newSource).toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
+    expect(newSource).toContain("position: 'absolute'");
     expect(newSource).toContain('const renderComposerToolbar = () => (');
     expect(newSource).toContain('PaperPlaneIcon');
     expect(newSource).not.toContain('ArrowUp');

@@ -285,6 +285,7 @@ export function MobileComposerInputRow({
       style={[
         styles.row,
         compact && styles.rowCompact,
+        geometricSingleLine && styles.rowCollapsedTouch,
         !geometricSingleLine && multilineShape && styles.rowMultiline,
         cardLayout && styles.rowCard,
         rowStyle,
@@ -512,9 +513,15 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'column',
     minHeight: 50,
+    overflow: 'visible',
     paddingHorizontal: spacing.md,
     paddingVertical: 10,
     position: 'relative',
+  },
+  // 收起态给 leading 的 44pt 热区留出父边界,避免溢出子节点点不到。
+  rowCollapsedTouch: {
+    minHeight: MOBILE_COMPOSER_MIN_TOUCH_TARGET + 6,
+    paddingVertical: 3,
   },
   rowMultiline: {
     borderRadius: 30, // 组件几何:composer 聚焦形态专用,非通用圆角档
@@ -537,6 +544,7 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     flexGrow: 1,
     gap: MOBILE_COMPOSER_TOOL_GAP,
     minWidth: 0,
+    overflow: 'visible',
   },
   mainRowMultiline: {
     alignItems: 'flex-end',
@@ -598,11 +606,13 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   // 语音按钮的 absolute 锚点：简洁态贴输入行右侧垂直居中；
   // 有发送按钮时向左让位；卡片态下沉到底部工具排的占位上。
   voiceButtonAnchor: {
-    // iOS 的文字 padding 是 6/0,按钮随文字下移 3pt；Android 保持 3/3,
-    // 不应继承 iOS 的补偿。
-    bottom: Platform.OS === 'ios' ? 8 : 11,
+    // 收起态按行垂直居中,与 34pt 加号 / 文字共中线;
+    // 不再钉在底部,避免行高变化后麦克风掉下去。
+    bottom: undefined,
     position: 'absolute',
     right: MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
+    top: '50%',
+    transform: [{ translateY: -MOBILE_COMPOSER_CONTROL_SIZE / 2 }],
     zIndex: 2,
   },
   voiceButtonAnchorWithTrailing: {
@@ -610,6 +620,8 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   },
   voiceButtonAnchorCard: {
     bottom: 8,
+    top: undefined,
+    transform: [],
   },
   // 外层横跨全行但 box-none 穿透触摸，只有中间的窄命中条接手势，
   // 避免与左右两侧按钮的 hitSlop 抢触摸。
