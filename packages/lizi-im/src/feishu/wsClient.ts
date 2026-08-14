@@ -187,12 +187,16 @@ function suspendOrphanRetry(entry: SuspendedOrphanRetry): void {
   }
 }
 
-/** 同账号(appId + service)重连后恢复该 bot 被挂起的排队重试(保持退避进度)。 */
+/**
+ * start() 连接就绪后调用: 匹配当前账号(appId + service)的挂起重试恢复
+ * 入队(保持退避进度); **不匹配的直接丢弃** — 换账号时旧账号遗留的重试
+ * 不能无限期等待账号再次出现(届时向早已过时的 opener 补发提示/撤回)。
+ */
 function resumeOrphanRetriesFor(botAppId: string, service: BotCredentials['service']): void {
   for (let i = suspendedOrphanRetries.length - 1; i >= 0; i--) {
     const entry = suspendedOrphanRetries[i]!;
-    if (entry.botAppId !== botAppId || entry.service !== service) continue;
     suspendedOrphanRetries.splice(i, 1);
+    if (entry.botAppId !== botAppId || entry.service !== service) continue;
     scheduleOrphanNoticeRetry(
       entry.botAppId,
       entry.service,

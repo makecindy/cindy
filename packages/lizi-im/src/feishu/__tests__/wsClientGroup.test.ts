@@ -759,6 +759,41 @@ describe('feishu group inbound gate', () => {
     }
   });
 
+  it('换账号启动时丢弃旧账号的挂起重试(不再等待旧账号回归)', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 断开(重试挂起)→ 换成别的 bot 启动: 挂起项被丢弃。
+      await wsClient.stop({ announceOffline: false, reason: 'test-account-swap-drop' });
+      const otherCreds = { appId: 'cli_other_account', appSecret: 'secret', service: 'feishu' as const };
+      const connecting = wsClient.start(otherCreds, { announceLifecycle: false });
+      mocks.options.at(-1)?.onReady?.();
+      await connecting;
+      wsClient.setBotOpenIdForTest(BOT_OPEN_ID);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 之后再换回旧账号: 丢弃过的重试不得复活(向早已过时的 opener 补发)。
+      await wsClient.stop({ announceOffline: false, reason: 'test-back-to-old-account' });
+      const back = wsClient.start(credentials, { announceLifecycle: false });
+      mocks.options.at(-1)?.onReady?.();
+      await back;
+      wsClient.setBotOpenIdForTest(BOT_OPEN_ID);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('queued retry is not re-armed when a different bot starts', async () => {
     vi.useFakeTimers();
     try {
