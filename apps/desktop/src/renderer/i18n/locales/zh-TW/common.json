@@ -4325,6 +4325,14 @@
     "monthlyLimitLabel": "本週期 {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "本任務 {{cost}}",
+    "glm": {
+      "fiveHourLabel": "5小時配額",
+      "mcpMonthlyLabel": "MCP 月間",
+      "windowSegment": "{{label}} 剩餘 {{remaining}}",
+      "windowLine": "{{label}} 剩餘 {{remaining}} (已用 {{used}})",
+      "resetAt": "{{at}} 重置",
+      "waitingDetail": "GLM Coding Plan 用量暫不可用，稍後會自動重試。"
+    },
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "暫無用量",

@@ -11,6 +11,7 @@ import type {
   MobileCodexRateLimitsResult,
 } from '@cindy/maker-shared/device-link-contract';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
+import type { GlmCodingPlanUsageSnapshot } from '../../shared/glmCodingPlanUsage.js';
 import type { ClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import type { ModelPricingMap } from '../usage/modelPricing.js';
 import type { UsageHistoryPayload, UsageHistoryReadOptions } from '../usage/usageHistory.js';
@@ -60,6 +61,7 @@ export interface MakerUsageHandlerDeps {
   readCodexRateLimits(): Promise<MobileCodexRateLimitsResult>;
   consumeCodexRateLimitReset(idempotencyKey: string): Promise<MobileCodexRateLimitResetResult>;
   readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubscriptionUsageSnapshot | null>;
+  readGlmCodingPlanUsageSnapshot(providerId: string): Promise<GlmCodingPlanUsageSnapshot | null>;
   readClaudeAccountUsageSnapshot(): ClaudeAccountUsageSnapshot | null;
   triggerClaudeAccountUsageRefresh(force: boolean): Promise<void>;
   readModelPricing(): Promise<ModelPricingMap | null>;
@@ -122,6 +124,14 @@ export function registerMakerUsageHandlers(
   registry.handle(MAKER_INVOKE.USAGE_CLAUDE_SUBSCRIPTION, async () => {
     return await deps.readClaudeSubscriptionUsageSnapshot();
   });
+
+  // GLM Coding Plan 订阅余量 (5h token / MCP 月度窗口) — cached-first, per-provider。
+  registry.handle(
+    MAKER_INVOKE.USAGE_GLM_CODING_PLAN,
+    async (_e, providerId: unknown) => {
+      return await deps.readGlmCodingPlanUsageSnapshot(requireString(providerId, 'providerId'));
+    },
+  );
 
   // device-link v1:保留旧扁平 USD 形状，不能把 CNY 伪装成 *Usd。
   registry.handle(MAKER_INVOKE.USAGE_MODEL_PRICING, async () => {

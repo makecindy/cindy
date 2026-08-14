@@ -84,6 +84,16 @@ import {
   matchScopedWindowForModel,
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
+import {
+  requestGlmCodingPlanRefresh,
+  useGlmCodingPlanUsage,
+} from '@/hooks/useGlmCodingPlanUsage';
+import {
+  hasAlertingGlmWindow,
+  type GlmCodingPlanUsageSnapshot,
+  type GlmCodingPlanUsageWindow,
+} from '../../../shared/glmCodingPlanUsage';
+import { useProviderUsageCapability } from '@/hooks/useProviderUsageCapability';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useXaiRateLimit, type XaiRateLimitSnapshot } from '@/hooks/useXaiRateLimit';
@@ -679,6 +689,90 @@ function getClaudeChipWindows(
   return windows;
 }
 
+// ── GLM Coding Plan 形态 ─────────────────────────────────────────────────────
+// 与 Claude 订阅同构的双窗 chip: 5 小时 token 窗 + MCP 月度窗。窗口类型按服务端返回
+// 动态命名(reset 字段未经 fixture 证实,缺失时回退窗口名、不渲染倒计时,绝不臆造);
+// token 窗与 MCP 窗是不同维度, 分别展示不相加。
+
+/** GLM 窗口 → chip 段素材;label 优先距 reset 的剩余时长,缺失回退窗口名。 */
+function getGlmChipWindows(
+  snapshot: GlmCodingPlanUsageSnapshot | null,
+  t: TFunction,
+  nowMs: number,
+): ChipWindowSegment[] {
+  if (!snapshot) return [];
+  const windows: ChipWindowSegment[] = [];
+  const fiveHour = snapshot.fiveHour;
+  if (
+    fiveHour
+    && typeof fiveHour.utilization === 'number'
+    && Number.isFinite(fiveHour.utilization)
+  ) {
+    const countdown = formatCompactTimeUntilReset(fiveHour.resetsAt, nowMs, t);
+    const resetsAtMs = toEpochMs(fiveHour.resetsAt);
+    windows.push({
+      key: 'glm-5h',
+      label: countdown ?? t('todaySpend.glm.fiveHourLabel'),
+      remainingPercent: 100 - clampPercent(fiveHour.utilization),
+      resetsAtMs,
+      resetPending: isResetPending(resetsAtMs, nowMs),
+    });
+  }
+  const monthlyMcp = snapshot.monthlyMcp;
+  if (
+    monthlyMcp
+    && typeof monthlyMcp.utilization === 'number'
+    && Number.isFinite(monthlyMcp.utilization)
+  ) {
+    const countdown = formatCompactTimeUntilReset(monthlyMcp.resetsAt, nowMs, t);
+    const resetsAtMs = toEpochMs(monthlyMcp.resetsAt);
+    windows.push({
+      key: 'glm-mcp-monthly',
+      label: countdown ?? t('todaySpend.glm.mcpMonthlyLabel'),
+      remainingPercent: 100 - clampPercent(monthlyMcp.utilization),
+      resetsAtMs,
+      resetPending: isResetPending(resetsAtMs, nowMs),
+    });
+  }
+  return windows;
+}
+
+/** GLM tooltip 行:窗口用量明细(已用/剩余/重置时点),形状对齐 codex windowLine。 */
+function buildGlmTooltipLines(
+  snapshot: GlmCodingPlanUsageSnapshot | null,
+  t: TFunction,
+): string[] {
+  if (!snapshot) return [t('todaySpend.glm.waitingDetail')];
+  const lines: string[] = [];
+  const entries: Array<[string, GlmCodingPlanUsageWindow | null | undefined]> = [
+    [t('todaySpend.glm.fiveHourLabel'), snapshot.fiveHour],
+    [t('todaySpend.glm.mcpMonthlyLabel'), snapshot.monthlyMcp],
+  ];
+  for (const [label, window] of entries) {
+    if (
+      !window
+      || typeof window.utilization !== 'number'
+      || !Number.isFinite(window.utilization)
+    ) {
+      continue;
+    }
+    const usedPercent = clampPercent(window.utilization);
+    const base = t('todaySpend.glm.windowLine', {
+      label,
+      remaining: formatPercent(100 - usedPercent),
+      used: formatPercent(usedPercent),
+    });
+    lines.push(window.resetsAt
+      ? `${base} · ${t('todaySpend.glm.resetAt', {
+          at: formatResetAt(window.resetsAt) ?? '',
+        })}`
+      : base,
+    );
+  }
+  if (lines.length === 0) lines.push(t('todaySpend.glm.waitingDetail'));
+  return lines;
+}
+
 // 告警判定 (chip 变红的口径 + allowed_warning 为何不染红、为何不用 representativeClaim
 // 的取舍) 已收进 shared/claudeSubscriptionUsage.ts 的
 // isClaudeSubscriptionAlerting (纯数据判定, 有直接单测)。
@@ -1136,6 +1230,17 @@ export function TodaySpendChip({
   // 远程会话不读本机账户快照 —— 额度事实在远端:SSH 用 remoteHostId 判,device-link 用
   // deviceLinkDeviceId 判(两者互斥,任一非空即远程,turn 消耗的是远端账号的额度)。
   const isAnyRemoteSession = Boolean(remoteHostId) || Boolean(deviceLinkDeviceId);
+  // GLM Coding Plan 自定义供应商:身份来自 provider 配置快照的 usage 能力标记
+  // (preset → CustomProviderConfig → ProviderView),不是域名/可编辑名称的猜测 ——
+  // 普通 GLM API 与 Coding Plan 共用同一个 /api/anthropic 端点,只有标记能区分。
+  // 远程会话(SSH / device-link)额度事实在被控端,同样抑制本机读取。
+  const glmProviderUsageCapability = useProviderUsageCapability(
+    !isAnyRemoteSession && providerId != null ? providerId : null,
+  );
+  const isGlmCodingPlanSession = !isAnyRemoteSession
+    && providerId != null
+    && glmProviderUsageCapability?.kind === 'glm-coding-plan';
+  const usesGlmQuotaForm = isGlmCodingPlanSession;
   // Model Access 配额只属于实际走 XD/Cindy AI Gateway 的本地会话。显式自定义供应商即使
   // 复用了 env-key / oauth-bearer host，也不能据 host 的启动凭证把 /v2/user/info 串进来。
   const isClaudeGateway =
@@ -1213,6 +1318,11 @@ export function TodaySpendChip({
   // 优先(不消耗 Claude 订阅额度),此时不读。
   const claudeSubscriptionUsage = useClaudeSubscriptionUsage(
     isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote,
+  );
+  // GLM Coding Plan 订阅余量 (5h token / MCP 月度, monitor 端点 cached-first + per-provider)。
+  const glmCodingPlanUsage = useGlmCodingPlanUsage(
+    usesGlmQuotaForm ? providerId : null,
+    usesGlmQuotaForm,
   );
   const latestTurnUsage = useLatestTurnUsageSummary(sessionId);
   const quotaCardSessionUsage = toQuotaHoverCardSessionUsage(sessionUsage);
@@ -1367,7 +1477,9 @@ export function TodaySpendChip({
     ? getCodexChipWindows(accountUsage, t, windowLabelNowMs)
     : isClaudeSubscription
       ? getClaudeChipWindows(claudeSubscriptionUsage, modelId, t, windowLabelNowMs)
-      : [];
+      : usesGlmQuotaForm
+        ? getGlmChipWindows(glmCodingPlanUsage, t, windowLabelNowMs)
+        : [];
   // chip 最多两个窗口段, 固定两个 slot 无条件调 hook(Rules of Hooks)。
   // 重置滚动: 快照刷新中同窗口剩余百分比大幅回升(典型: 窗口到点重置 0% → 100%)
   // 时, 显示值从 0% 快速滚动到新值。
@@ -1392,7 +1504,11 @@ export function TodaySpendChip({
     }
     const rollup = index === 0 ? rollupA : rollupB;
     const text = t(
-      usesCodexQuotaForm ? 'todaySpend.codex.windowSegment' : 'todaySpend.claude.windowSegment',
+      usesCodexQuotaForm
+        ? 'todaySpend.codex.windowSegment'
+        : usesGlmQuotaForm
+          ? 'todaySpend.glm.windowSegment'
+          : 'todaySpend.claude.windowSegment',
       {
         label: window.label,
         remaining: formatPercent(rollup?.percent ?? window.remainingPercent),
@@ -1448,16 +1564,16 @@ export function TodaySpendChip({
   );
 
   React.useEffect(() => {
-    // 订阅形态 (codex-oauth / cc+chatgpt bridge / claude 订阅) 的 reset 倒计时文案
-    // 需要随时间走动: 常态分钟级 tick 足够; 任一窗口进入最后一分钟切秒级 tick,
+    // 订阅形态 (codex-oauth / cc+chatgpt bridge / claude 订阅 / glm coding plan) 的 reset
+    // 倒计时文案需要随时间走动: 常态分钟级 tick 足够; 任一窗口进入最后一分钟切秒级 tick,
     // 让「59秒 → 1秒」逐秒跳动。setTimeout 链每次 tick 后按最新窗口重估下一次延迟。
-    if (!usesCodexQuotaForm && !isClaudeSubscription) return undefined;
+    if (!usesCodexQuotaForm && !isClaudeSubscription && !usesGlmQuotaForm) return undefined;
     const delay = computeCountdownTickDelayMs(chipResetsAtMsList, Date.now());
     const timer = window.setTimeout(() => {
       setWindowLabelNowMs(Date.now());
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [usesCodexQuotaForm, isClaudeSubscription, windowLabelNowMs, chipResetsAtMsList]);
+  }, [usesCodexQuotaForm, isClaudeSubscription, usesGlmQuotaForm, windowLabelNowMs, chipResetsAtMsList]);
 
   // 悬念期主动催一次余量刷新, 让「重置揭晓」尽快到来 —— main read 都是
   // cached-first + 节流(Claude 订阅端点 180s + 退避; Codex WHAM 10s + in-flight
@@ -1474,8 +1590,10 @@ export function TodaySpendChip({
       requestCodexAccountRefresh();
     } else if (isClaudeSubscription && !usesCodexQuotaForm) {
       requestClaudeSubscriptionRefresh();
+    } else if (usesGlmQuotaForm && typeof providerId === 'string') {
+      requestGlmCodingPlanRefresh(providerId);
     }
-  }, [hasPendingResetWindow, isChatgptBridge, isClaudeSubscription, usesCodexQuotaForm, windowLabelNowMs]);
+  }, [hasPendingResetWindow, isChatgptBridge, isClaudeSubscription, usesCodexQuotaForm, usesGlmQuotaForm, providerId, windowLabelNowMs]);
 
   const isDashboardClickable = usageDashboardUrl !== null;
   const handleClick = () => {
@@ -1535,6 +1653,20 @@ export function TodaySpendChip({
     labelNode = chipSegments.length > 0
       ? renderSegmentedLabel(chipSegments)
       : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
+  } else if (usesGlmQuotaForm) {
+    // GLM Coding Plan 形态: chip 显示「5小时窗 剩余% · MCP 月度窗 剩余%」+ 本会话合计;
+    // 无快照时窗口段为空,回落会话金额/占位符号(不渲染臆造数字)。tooltip 走通用
+    // 会话合计 + 窗口明细行(不套 Claude 的 QuotaHoverCard —— 数据模型不同)。
+    const chipSegments = [...windowSegments];
+    if (sessionSegment) chipSegments.push(sessionSegment);
+    labelNode = chipSegments.length > 0
+      ? renderSegmentedLabel(chipSegments)
+      : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
+    const tooltipLines: string[] = [];
+    pushSessionUsageLines(tooltipLines, sessionUsage, sessionTokens, t);
+    tooltipLines.push(...buildGlmTooltipLines(glmCodingPlanUsage, t));
+    appendLatestTurnUsageLines(tooltipLines, latestTurnUsage, t);
+    tooltipNode = buildTooltipNode(tooltipLines);
   } else {
     const slots = computeMetricSlots(claudeQuota, creditTotals, sessionMoney, t);
     const chipSegments = getGatewayChipSegments(slots);
@@ -1614,13 +1746,16 @@ export function TodaySpendChip({
   // isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
   const claudeSubscriptionAlerting = isClaudeSubscription
     && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId);
+  // GLM Coding Plan 告警态: 已知窗口(5h token / MCP 月度)任一剩余水位见底 → 变红;
+  // 语义与 Claude 订阅同口径(剩余 ≤10%),端点无 severity,只有水位一条判据。
+  const glmCodingPlanAlerting = usesGlmQuotaForm && hasAlertingGlmWindow(glmCodingPlanUsage);
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
   const buttonClass = cn(
     'inline-flex h-5 shrink-0 items-center',
     'text-12 font-medium leading-none tabular-nums',
-    claudeSubscriptionAlerting
+    claudeSubscriptionAlerting || glmCodingPlanAlerting
       ? 'text-[var(--error-fg)] hover:text-[var(--error-fg-strong)]'
       // 不可点(网关账号)时不加 hover 变色,避免暗示可交互。
       : cn('text-[var(--msg-tool-card-chevron)]', isDashboardClickable && 'hover:text-foreground'),

@@ -23,6 +23,12 @@ import {
 } from '../usage/claudeSubscriptionUsage.js';
 import { createClaudeSubscriptionUsageReader } from '../usage/claudeSubscriptionUsageRefresh.js';
 import { createCodexAccountUsageSnapshotReader } from '../usage/codexAccountUsageRefresh.js';
+import {
+  GlmCodingPlanUsageRateLimitedError,
+  GlmCodingPlanUsageUnauthorizedError,
+  fetchGlmCodingPlanUsageSnapshot,
+} from '../usage/glmCodingPlanUsage.js';
+import { createGlmCodingPlanUsageReader } from '../usage/glmCodingPlanUsageRefresh.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import {
@@ -33,15 +39,21 @@ import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistor
 import {
   clearClaudeSubscriptionUsageSnapshot,
   clearCodexAccountUsageSnapshot,
+  clearGlmCodingPlanUsageSnapshot,
   readAgentTodayUsage,
   readClaudeSubscriptionUsageSnapshot,
   readCodexAccountUsageSnapshot,
+  readGlmCodingPlanUsageSnapshot,
   recordClaudeSubscriptionUsageSnapshot,
   recordCodexAccountUsageSnapshot,
+  recordGlmCodingPlanUsageSnapshot,
 } from '../usageBroadcaster.js';
 import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
 import { readClaudeAiOAuth } from '../maker-host/claude-credentials-store.js';
+import { getCustomProvider } from '../maker-host/custom-provider-store.js';
 import { setClaudeRateLimitHeadersListener } from '../maker-host/claude-rate-limit-headers-observer.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { createCodexRateLimitResetService } from '../usage/codexRateLimitReset.js';
 
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
@@ -165,6 +177,92 @@ export function syncClaudeSubscriptionUsageForAuthChange(): void {
   });
 }
 
+// ── GLM Coding Plan 订阅余量 reader ─────────────────────────────────────────
+
+/** scrypt 应用盐 —— 与 claude 侧同机制,换前缀防跨源指纹碰撞。 */
+const GLM_KEY_FINGERPRINT_SALT = 'xdt-glm-coding-plan-usage-fp-v1';
+
+const glmKeyFingerprints = new Map<string, string>();
+
+/** provider API key → 归属指纹(scrypt 截 16 hex,不含 key 原文;按 key 缓存)。 */
+function fingerprintGlmKey(key: string): string {
+  const cached = glmKeyFingerprints.get(key);
+  if (cached) return cached;
+  const fingerprint = scryptSync(key, GLM_KEY_FINGERPRINT_SALT, 32)
+    .toString('hex')
+    .slice(0, 16);
+  // 有界缓存:同账号 provider 数量级是个位数,超界(异常)时清空重来即可,不驱逐策略。
+  if (glmKeyFingerprints.size > 32) glmKeyFingerprints.clear();
+  glmKeyFingerprints.set(key, fingerprint);
+  return fingerprint;
+}
+
+/**
+ * 解析一个自定义 provider 的用量查询素材:配置带 usage 能力标记 + 至少一个 runtime
+ * 有 key 才可查询(runtime 优先序 claude-code > codex > pi,取第一个有 key 的)。
+ * 已知限制(v1):per-runtime key 理论上可不同,快照按"实际用于查询的那把 key"的
+ * 指纹归属;两端不同 key 的边缘形态以查询端为准。
+ */
+async function readGlmCodingPlanSource(providerId: string): Promise<{
+  providerId: string;
+  runtimeBaseUrl: string;
+  apiKey: string;
+  platform: 'zhipu' | 'zai';
+} | null> {
+  const config = await getCustomProvider(providerId);
+  if (config?.usage?.kind !== 'glm-coding-plan') return null;
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    const rt = config.runtimes[agent];
+    if (!rt) continue;
+    const key = readCustomProviderKey(providerId, agent);
+    if (!key) continue;
+    return {
+      providerId,
+      runtimeBaseUrl: rt.baseUrl,
+      apiKey: key,
+      platform: config.usage.platform,
+    };
+  }
+  return null;
+}
+
+const glmCodingPlanUsageReader = createGlmCodingPlanUsageReader({
+  readSource: readGlmCodingPlanSource,
+  fetchSnapshot: (source) =>
+    fetchGlmCodingPlanUsageSnapshot({
+      runtimeBaseUrl: source.runtimeBaseUrl,
+      apiKey: source.apiKey,
+      platform: source.platform,
+      // 吃系统代理的出网通道(与 provider 连通性探测同栈;用户代理软件跑系统代理
+      // 模式时裸 fetch 直连会被拒)。
+      fetchFn: outboundFetch,
+    }),
+  recordSnapshot: recordGlmCodingPlanUsageSnapshot,
+  clearSnapshot: clearGlmCodingPlanUsageSnapshot,
+  readCachedSnapshot: readGlmCodingPlanUsageSnapshot,
+  fingerprintKey: fingerprintGlmKey,
+  now: () => Date.now(),
+  isUnauthorizedError: (err) => err instanceof GlmCodingPlanUsageUnauthorizedError,
+  isRateLimitedError: (err) => err instanceof GlmCodingPlanUsageRateLimitedError,
+  onRefreshError: (err) => {
+    log.warn(
+      'glm coding plan usage refresh failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  },
+});
+
+/**
+ * 自定义供应商 CRUD 后的 GLM 用量快照同步钩子(providerHandlers 的
+ * onCustomProviderMutated 消费):删除 / 失去能力 → 清快照;换 key → 指纹失配清
+ * 快照 + 立即刷新。fire-and-forget,不阻塞 CRUD。
+ */
+export function syncGlmCodingPlanUsageForProviderChange(providerId: string): void {
+  void glmCodingPlanUsageReader.syncForProviderChange(providerId).catch(() => {
+    /* reader 内部已把错误交给 onRefreshError, 这里只兜底 promise 拒绝。 */
+  });
+}
+
 const readCodexAccountUsageSnapshotWithWebRefresh = createCodexAccountUsageSnapshotReader({
   readAccessToken: () => desktopCodexAuthAdapter.getAccessToken(),
   readAccountId: () => desktopCodexAuthAdapter.getAccountId(),
@@ -218,6 +316,8 @@ export function registerMakerUsageIpc(maker: Maker): void {
       desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => codexRateLimitResetService.read()),
     consumeCodexRateLimitReset: codexRateLimitResetService.consume,
     readClaudeSubscriptionUsageSnapshot: () => claudeSubscriptionUsageReader.read(),
+    readGlmCodingPlanUsageSnapshot: (providerId: string) =>
+      glmCodingPlanUsageReader.read(providerId),
     readClaudeAccountUsageSnapshot,
     triggerClaudeAccountUsageRefresh,
     readModelPricing: getGatewayModelPricing,

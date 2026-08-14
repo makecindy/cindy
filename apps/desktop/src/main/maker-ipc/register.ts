@@ -499,7 +499,11 @@ import {
 } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
-import { triggerClaudeSubscriptionUsageRefresh, triggerCodexAccountUsageRefresh } from './usage.js';
+import {
+  syncGlmCodingPlanUsageForProviderChange,
+  triggerClaudeSubscriptionUsageRefresh,
+  triggerCodexAccountUsageRefresh,
+} from './usage.js';
 import {
   rebroadcastCodexTodayUsage,
   rebroadcastTodaySpend,
@@ -5674,6 +5678,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
+    onCustomProviderMutated: (providerId: string) =>
+      syncGlmCodingPlanUsageForProviderChange(providerId),
     beginRouteMutation: (providerId) => beginProviderRouteMutation(providerId),
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {}),
     listProviderIds: () => getDesktopSelectableCatalog().providers.map((provider) => provider.id),

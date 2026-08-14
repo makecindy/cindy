@@ -1348,6 +1348,12 @@ export const customProviders = sqliteTable(
      * 缺省/null = API key 形态（历史行为）。OAuth 凭证不在此（走 safeStorage provider_oauth_<id>）。
      */
     auth: text('auth'),
+    /**
+     * 订阅用量能力 JSON（可空）：'{"kind":"glm-coding-plan","platform":"zhipu"}'。
+     * 从目录预设快照而来，标记该配置承载可查询的订阅套餐余量。非凭证；缺省/null =
+     * 无用量能力（历史行为，普通 API 供应商）。校验见 custom-provider-store。
+     */
+    usage: text('usage'),
     /** 列表展示排序（升序）。 */
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: integer('created_at').notNull(),
@@ -1357,6 +1363,23 @@ export const customProviders = sqliteTable(
     idxSortOrder: index('idx_custom_providers_sort_order').on(t.sortOrder),
   }),
 );
+
+/**
+ * coding plan 类订阅用量快照（每 provider 一行，只存最新一份）。
+ *
+ * 与 `account_usage_snapshots` 同源设计（snapshot TEXT 存 JSON + 世代/owner 缓存语义在
+ * usageBroadcaster），差别是归属维度：订阅账号快照按 agent_kind 一行，这里按 provider id
+ * 一行——GLM Coding Plan 是用户自定义 provider，同一账号可配多个实例、不同实例可能用
+ * 不同 API key，必须按 (provider, key 指纹) 隔离，不能全局一份。
+ * DB 文件按 userId 切片，天然账号隔离，无 owner 列。
+ */
+export const codingPlanUsageSnapshots = sqliteTable('coding_plan_usage_snapshots', {
+  /** 自定义 provider id（对齐 custom_providers.id；provider 删除时对应行由调用方清理）。 */
+  providerId: text('provider_id').primaryKey(),
+  /** 快照 JSON（含 keyFingerprint 归属指纹，不含 key 原文）。 */
+  snapshot: text('snapshot').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
 
 /**
  * 用户自定义 MCP 服务器配置（远程 http/sse 型）。

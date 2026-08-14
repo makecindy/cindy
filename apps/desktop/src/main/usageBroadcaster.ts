@@ -13,6 +13,7 @@
  *   - USAGE_TODAY_TOKENS_CHANGED   每 turn done 后推 Codex token 累计 (按 agentKind)
  *   - USAGE_CODEX_ACCOUNT_CHANGED  推 Codex 账号订阅用量快照
  *   - USAGE_CLAUDE_SUBSCRIPTION_CHANGED 推 Claude 订阅账号余量快照 (5h/周/分模型窗口)
+ *   - USAGE_GLM_CODING_PLAN_CHANGED 推 GLM Coding Plan 订阅余量快照 (per-provider)
  *
  * 用户:
  *   - maker-ipc/register.ts: 在 maker:event done 时 record (Claude / Codex API → recordTurnSpend,
@@ -32,6 +33,7 @@ import {
   mergeClaudeSubscriptionUsageSnapshot,
   type ClaudeSubscriptionUsageSnapshot,
 } from '../shared/claudeSubscriptionUsage';
+import type { GlmCodingPlanUsageSnapshot } from '../shared/glmCodingPlanUsage';
 import type { AgentKind } from '@cindy/maker-core';
 
 import {
@@ -55,6 +57,11 @@ export const USAGE_CODEX_ACCOUNT_CHANGED = 'usage:codex-account-changed';
 export const USAGE_XAI_RATE_LIMIT_CHANGED = 'usage:xai-rate-limit-changed';
 /** IPC channel: main → renderer 推 Claude 订阅账号余量变化 (端点刷新 / headers 旁路)。 */
 export const USAGE_CLAUDE_SUBSCRIPTION_CHANGED = 'usage:claude-subscription-changed';
+/**
+ * IPC channel: main → renderer 推 GLM Coding Plan 订阅余量变化 (per-provider)。
+ * payload = { providerId, snapshot: GlmCodingPlanUsageSnapshot | null } (null = 清除)。
+ */
+export const USAGE_GLM_CODING_PLAN_CHANGED = 'usage:glm-coding-plan-changed';
 
 export interface TodaySpendPayload {
   /** 本地时区 YYYY-MM-DD。 */
@@ -885,6 +892,155 @@ export async function readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubsc
   return claudeSubscriptionUsageSnapshot;
 }
 
+// ── GLM Coding Plan usage (persisted per-provider snapshots) ─────────────────
+// 与 Claude subscription 段同源设计(内存缓存 + 落库 + 广播),差异:
+//   - 归属维度是 provider id(GLM Coding Plan 是用户自定义 provider,可配多个实例);
+//   - 单数据源(monitor 端点),无 merge 语义,record 即全量替换;
+//   - owner 变化(账号切换)时整体作废内存缓存 —— DB 按 userId 切片,新账号读不到
+//     旧行,冷启动 hydration 自然为空。
+
+/** push payload:renderer 按 providerId 过滤自己关心的那份。 */
+export interface GlmCodingPlanUsagePushPayload {
+  providerId: string;
+  snapshot: GlmCodingPlanUsageSnapshot | null;
+}
+
+const glmCodingPlanUsageSnapshots = new Map<string, GlmCodingPlanUsageSnapshot | null>();
+const glmCodingPlanUsageHydrated = new Set<string>();
+const glmCodingPlanUsageLoadPromises = new Map<string, Promise<void>>();
+/** 世代计数: owner 变化 / clear 时 +1, 作废在飞的 hydration(不复活旧数据)。 */
+let glmCodingPlanUsageGeneration = 0;
+let glmCodingPlanUsageOwner: string | null = null;
+let glmCodingPlanUsageOwnerInitialized = false;
+
+function resetGlmCodingPlanUsageCacheIfOwnerChanged(): void {
+  const owner = currentAccountUsageOwner();
+  if (glmCodingPlanUsageOwnerInitialized && owner === glmCodingPlanUsageOwner) return;
+  const isFirstInit = !glmCodingPlanUsageOwnerInitialized;
+  glmCodingPlanUsageOwnerInitialized = true;
+  glmCodingPlanUsageOwner = owner;
+  if (isFirstInit) return;
+  glmCodingPlanUsageSnapshots.clear();
+  glmCodingPlanUsageHydrated.clear();
+  glmCodingPlanUsageLoadPromises.clear();
+  glmCodingPlanUsageGeneration += 1;
+}
+
+function ensureGlmCodingPlanUsageLoaded(providerId: string): Promise<void> {
+  resetGlmCodingPlanUsageCacheIfOwnerChanged();
+  if (glmCodingPlanUsageHydrated.has(providerId)) return Promise.resolve();
+  let load = glmCodingPlanUsageLoadPromises.get(providerId);
+  if (!load) {
+    const generation = glmCodingPlanUsageGeneration;
+    load = (async () => {
+      try {
+        if (!currentAccountUsageOwner()) return;
+        const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
+          'SELECT snapshot FROM coding_plan_usage_snapshots WHERE provider_id = ?',
+          [providerId],
+        );
+        // clear / owner 变化抢先发生 → 本次读结果作废。
+        if (generation !== glmCodingPlanUsageGeneration) return;
+        glmCodingPlanUsageHydrated.add(providerId);
+        if (!row?.snapshot) return;
+        const parsed: unknown = JSON.parse(row.snapshot);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          // 单数据源无 merge:内存里若已有更新快照(读库期间 record 到达),保留内存值。
+          if (!glmCodingPlanUsageSnapshots.has(providerId)) {
+            glmCodingPlanUsageSnapshots.set(
+              providerId,
+              parsed as GlmCodingPlanUsageSnapshot,
+            );
+          }
+        }
+      } catch (err) {
+        log.warn(
+          'readGlmCodingPlanUsageSnapshot failed:',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    })();
+    glmCodingPlanUsageLoadPromises.set(providerId, load);
+  }
+  return load.finally(() => {
+    // 与 claude 段同理:清理放 await 之后,防 IIFE 同步走完时 promise 被写回复用。
+    if (glmCodingPlanUsageLoadPromises.get(providerId) === load) {
+      glmCodingPlanUsageLoadPromises.delete(providerId);
+    }
+  });
+}
+
+export async function recordGlmCodingPlanUsageSnapshot(
+  providerId: string,
+  snapshot: unknown,
+): Promise<void> {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
+  const generation = glmCodingPlanUsageGeneration;
+  await ensureGlmCodingPlanUsageLoaded(providerId);
+  if (generation !== glmCodingPlanUsageGeneration) return;
+
+  const next = snapshot as GlmCodingPlanUsageSnapshot;
+  glmCodingPlanUsageSnapshots.set(providerId, next);
+  broadcastGlmCodingPlanUsage({ providerId, snapshot: next });
+
+  if (!glmCodingPlanUsageHydrated.has(providerId)) {
+    log.warn('skip persisting glm coding plan usage snapshot: hydration unavailable');
+    return;
+  }
+  try {
+    await getDbClient().exec(
+      `INSERT INTO coding_plan_usage_snapshots (provider_id, snapshot, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(provider_id) DO UPDATE SET
+         snapshot = excluded.snapshot,
+         updated_at = excluded.updated_at`,
+      [providerId, JSON.stringify(next), Date.now()],
+    );
+    if (generation !== glmCodingPlanUsageGeneration) {
+      // clear 在写库 await 期间抢先:补偿删除,防下次冷启动读回残留。
+      await getDbClient().exec(
+        'DELETE FROM coding_plan_usage_snapshots WHERE provider_id = ?',
+        [providerId],
+      );
+    }
+  } catch (err) {
+    log.warn(
+      'recordGlmCodingPlanUsageSnapshot failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+export async function clearGlmCodingPlanUsageSnapshot(providerId: string): Promise<void> {
+  resetGlmCodingPlanUsageCacheIfOwnerChanged();
+  glmCodingPlanUsageHydrated.add(providerId);
+  glmCodingPlanUsageSnapshots.set(providerId, null);
+  glmCodingPlanUsageGeneration += 1;
+  broadcastGlmCodingPlanUsage({ providerId, snapshot: null });
+  // 世代 +1 会作废所有 provider 的在飞 hydration —— 已 hydrated 的内存值不受影响,
+  // 只有真正在飞的旧读会丢弃,语义与"clear 只针对单 provider"不冲突(其它 provider
+  // 的冷启动读会被重置后重新发起)。
+
+  try {
+    await getDbClient().exec(
+      'DELETE FROM coding_plan_usage_snapshots WHERE provider_id = ?',
+      [providerId],
+    );
+  } catch (err) {
+    log.warn(
+      'clearGlmCodingPlanUsageSnapshot failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+export async function readGlmCodingPlanUsageSnapshot(
+  providerId: string,
+): Promise<GlmCodingPlanUsageSnapshot | null> {
+  await ensureGlmCodingPlanUsageLoaded(providerId);
+  return glmCodingPlanUsageSnapshots.get(providerId) ?? null;
+}
+
 // ── 内部广播 ─────────────────────────────────────────────────────────────────
 
 function broadcastTodaySpend(payload: TodaySpendPayload): void {
@@ -915,6 +1071,14 @@ function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapsh
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send(USAGE_CLAUDE_SUBSCRIPTION_CHANGED, payload);
+    }
+  }
+}
+
+function broadcastGlmCodingPlanUsage(payload: GlmCodingPlanUsagePushPayload): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send(USAGE_GLM_CODING_PLAN_CHANGED, payload);
     }
   }
 }

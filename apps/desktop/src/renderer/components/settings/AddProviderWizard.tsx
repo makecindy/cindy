@@ -827,6 +827,8 @@ export function AddProviderWizard({
           id,
           name: name.trim() || presetDisplayName(preset, i18n.language),
           ...(preset.authMethod === 'none' ? { auth: { method: 'none' as const } } : {}),
+          // 订阅用量能力随预设快照落进配置(创建后与预设脱钩,编辑表单回读时保留)。
+          ...(preset.usage ? { usage: preset.usage } : {}),
           runtimes,
         },
         keys,

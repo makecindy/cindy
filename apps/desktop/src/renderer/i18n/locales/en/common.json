@@ -4327,6 +4327,14 @@
     "monthlyLimitLabel": "Cycle {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "Session {{cost}}",
+    "glm": {
+      "fiveHourLabel": "5-hour quota",
+      "mcpMonthlyLabel": "MCP monthly",
+      "windowSegment": "{{label}} {{remaining}} left",
+      "windowLine": "{{label}} {{remaining}} left ({{used}} used)",
+      "resetAt": "resets {{at}}",
+      "waitingDetail": "GLM Coding Plan usage is unavailable right now and will retry automatically."
+    },
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "No usage yet",

@@ -1193,6 +1193,7 @@ describe('maker usage IPC handlers', () => {
       readCodexRateLimits: vi.fn(),
       consumeCodexRateLimitReset: vi.fn(),
       readClaudeSubscriptionUsageSnapshot: vi.fn().mockResolvedValue(null),
+      readGlmCodingPlanUsageSnapshot: vi.fn().mockResolvedValue(null),
       readClaudeAccountUsageSnapshot: vi.fn(),
       triggerClaudeAccountUsageRefresh: vi.fn(),
       readModelPricing: vi.fn(),
@@ -1230,6 +1231,32 @@ describe('maker usage IPC handlers', () => {
 
     await expect(harness.invoke(MAKER_INVOKE.USAGE_ACCOUNT, 'claude-code')).resolves.toBeNull();
     expect(triggerClaudeAccountUsageRefresh).toHaveBeenCalledWith(true);
+  });
+
+  it('reads GLM coding plan usage per provider and rejects a missing providerId', async () => {
+    const harness = new IpcHarness();
+    const snapshot = {
+      fiveHour: { utilization: 42, resetsAt: null },
+      monthlyMcp: { utilization: 7, resetsAt: null },
+      platform: 'zhipu',
+      source: 'monitor-endpoint',
+      updatedAt: 1,
+      keyFingerprint: 'fp-a',
+    };
+    const readGlmCodingPlanUsageSnapshot = vi.fn().mockResolvedValue(snapshot);
+
+    registerMakerUsageHandlers(harness, makeUsageDeps({ readGlmCodingPlanUsageSnapshot }));
+
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_GLM_CODING_PLAN, 'zhipu-coding-plan'))
+      .resolves.toEqual(snapshot);
+    expect(readGlmCodingPlanUsageSnapshot).toHaveBeenCalledWith('zhipu-coding-plan');
+    // providerId 必填(字符串) —— 空值拒绝,防误读全局槽
+    await expect(
+      harness.invoke(MAKER_INVOKE.USAGE_GLM_CODING_PLAN, undefined),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_GLM_CODING_PLAN, '')).rejects.toMatchObject({
+      code: 'INVALID_PARAMS',
+    });
   });
 
   it('keeps the legacy device-link pricing channel flat and USD-only', async () => {

@@ -218,6 +218,13 @@ export interface ProviderHandlerDeps {
   beginRouteMutation(providerId: string): () => void;
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send PROVIDER_CHANGED）。 */
   broadcastChanged(): void;
+  /**
+   * 自定义供应商 CRUD 成功后的订阅用量快照同步（生产 =
+   * syncGlmCodingPlanUsageForProviderChange，内部 fire-and-forget）。
+   * 配置 / key / usage 能力变化或删除都会改变快照归属，须按新状态清快照或刷新；
+   * 可选注入，未注入时跳过（不影响 CRUD 本身）。
+   */
+  onCustomProviderMutated?(providerId: string): void;
   /** Current selectable catalog ids, used to validate visible provider order entries. */
   listProviderIds(): string[];
   /** Merge the currently visible order into the persisted observed-provider order. */
@@ -930,9 +937,12 @@ export function registerProviderHandlers(
   );
 
   // CRUD 成功后统一收尾：刷新 active-catalog + 广播。
-  async function afterChange(): Promise<void> {
+  async function afterChange(providerId?: string): Promise<void> {
     await deps.refreshCatalog();
     deps.broadcastChanged();
+    // 订阅用量快照与 provider 配置 / key 绑定:CRUD 后按新状态同步(删 = 清、改 = 指纹
+    // 失配即清 + 刷新)。fire-and-forget —— 用量同步不阻塞 CRUD 返回,失败也不回滚配置。
+    if (providerId) deps.onCustomProviderMutated?.(providerId);
   }
 
   function assertTrustedProviderMutationSender(event: unknown): void {
@@ -1306,7 +1316,7 @@ export function registerProviderHandlers(
         throw error;
       }
       assertProviderMutationOwner(ownerAtIngress);
-      await afterChange();
+      await afterChange(config.id);
       assertProviderMutationOwner(ownerAtIngress);
       return { ok: true };
     });
@@ -1387,7 +1397,7 @@ export function registerProviderHandlers(
           throwIpcError('NOT_FOUND', `custom provider '${config.id}' not found`);
         }
         assertProviderMutationOwner(ownerAtIngress);
-        await afterChange();
+        await afterChange(config.id);
         assertProviderMutationOwner(ownerAtIngress);
         return { ok: true };
       } finally {
@@ -1470,7 +1480,7 @@ export function registerProviderHandlers(
           // provider。afterChange 失败时配置已删,凭证/override 不回写(与改动前
           // 语义一致 —— 恢复只覆盖删除本身失败的场景)。
           assertProviderMutationOwner(ownerAtIngress);
-          await afterChange();
+          await afterChange(providerId);
           assertProviderMutationOwner(ownerAtIngress);
           deps.broadcastPricingChanged();
         });

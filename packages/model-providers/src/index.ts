@@ -28,6 +28,7 @@ export type {
   ProviderPreset,
   ProviderPresetRuntime,
   PresetSortRegion,
+  ProviderUsageCapability,
   OAuthAuthorizationCodeDescriptor,
   OAuthDeviceCodeDescriptor,
   OAuthProviderDescriptor,
@@ -37,7 +38,7 @@ export { PI_REASONING_EFFORTS } from './types.js';
 
 export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 
-export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from './catalog.js';
+export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion, isUsableUsageCapability } from './catalog.js';
 
 export { buildUserProvider, DEFAULT_CUSTOM_CONTEXT_WINDOW } from './user-provider.js';
 export {
