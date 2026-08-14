@@ -349,10 +349,15 @@ describe('resolveGhostPanelConfirmationTargetId', () => {
 
 describe('ghostPanelWebContents registry', () => {
   it('由 Host 登记 guest → ghost/host 绑定，并在销毁时清理', () => {
-    registerGhostPanelWebContents(101, { ghostId: 'alpha', hostWebContentsId: 202 });
+    registerGhostPanelWebContents(101, {
+      ghostId: 'alpha',
+      hostWebContentsId: 202,
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 7 },
+    });
     expect(ghostPanelContextForWebContents(101)).toEqual({
       ghostId: 'alpha',
       hostWebContentsId: 202,
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 7 },
     });
 
     unregisterGhostPanelWebContents(101);
@@ -360,12 +365,34 @@ describe('ghostPanelWebContents registry', () => {
   });
 
   it('查询返回副本，调用方不能篡改注册身份', () => {
-    registerGhostPanelWebContents(102, { ghostId: 'alpha', hostWebContentsId: 203 });
+    registerGhostPanelWebContents(102, {
+      ghostId: 'alpha',
+      hostWebContentsId: 203,
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 7 },
+    });
     const context = ghostPanelContextForWebContents(102)!;
     context.ghostId = 'forged';
+    context.ownerStamp.ownerGeneration = 99;
 
     expect(ghostPanelContextForWebContents(102)?.ghostId).toBe('alpha');
+    expect(ghostPanelContextForWebContents(102)?.ownerStamp.ownerGeneration).toBe(7);
     unregisterGhostPanelWebContents(102);
+  });
+
+  it('owner generation 改变后拒绝并清理旧 Guest 登记', () => {
+    registerGhostPanelWebContents(103, {
+      ghostId: 'alpha',
+      hostWebContentsId: 204,
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 7 },
+    });
+
+    expect(
+      ghostPanelContextForWebContents(103, {
+        dataOwnerId: 'owner-a',
+        ownerGeneration: 8,
+      }),
+    ).toBeNull();
+    expect(ghostPanelContextForWebContents(103)).toBeNull();
   });
 });
 

@@ -236,7 +236,8 @@
   存量同源导航继续允许，但 Guest 离开唯一 `panel.html` 入口时必须撤销 Agent sender；
   完整导航及 `history.pushState`／`replaceState`／hash 等页内导航都只按主 frame 的最终 URL
   同步，不得由子 frame URL 恢复；主 frame 返回入口后才恢复。面板票据不得建立
-  `agent.background` 会话关联。
+  `agent.background` 会话关联。sender 身份绑定 attach 时的数据 owner generation；账户或
+  身份边界变化后，旧 Guest 即使遇到同 id 插件也不能继续使用桥。
   消息只进入普通 user 回合，失败时不得回落到其它窗口或历史任务。该能力复用既有
   `agent` slot，不新增权限，也不影响存量插件。
 - `ios-simulator` 槽只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有

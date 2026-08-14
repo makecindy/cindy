@@ -1578,7 +1578,8 @@ let panelAgentBridgeSingleton: GhostPanelAgentBridge | null = null;
 function getGhostPanelAgentBridge(): GhostPanelAgentBridge {
   if (!panelAgentBridgeSingleton) {
     panelAgentBridgeSingleton = new GhostPanelAgentBridge({
-      panelContext: ghostPanelContextForWebContents,
+      panelContext: (senderWebContentsId) =>
+        ghostPanelContextForWebContents(senderWebContentsId, getActiveDataOwnerPushStamp()),
       hasAgentPermission: (ghostId) => {
         const ghost = findAvailableGhost(ghostId);
         return Boolean(ghost?.enabled && ghost.manifest.slots.includes('agent'));

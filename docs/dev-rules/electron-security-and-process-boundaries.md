@@ -135,7 +135,8 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 存量面板的同源页面导航不得因此被改写；Guest 离开唯一 `panel.html` 入口时撤销
 Main sender 登记，完整导航及 `history.pushState`／`replaceState`／hash 等页内导航都只按
 主 frame 的最终 URL 同步，不得由子 frame URL 恢复；只在主 frame 回到该入口后恢复。
-面板的单次确认票不得建立
+sender 登记还必须绑定 attach 时的数据 owner generation；账户／身份边界变化后，旧 Guest
+即使插件 id 相同也必须拒绝并清理登记。面板的单次确认票不得建立
 `agent.background` 会话关联，不能把当次同意升级为后续无确认调用。
 
 ## 4．preload 与 Context Bridge

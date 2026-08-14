@@ -28,12 +28,14 @@ import { app, type BrowserWindow, type WebContents } from 'electron';
 
 import { BROWSER_PARTITION } from '../shared/webviewPartition';
 import { GHOST_PARTITION_PREFIX } from '../shared/ghost';
+import type { DataOwnerPushStamp } from '../shared/dataOwnerPush.js';
 import {
   matchesElectronInput,
   type AppShortcutCombo,
   type AppShortcutId,
 } from '../shared/appShortcuts';
 import { getAppShortcutStore } from './app-shortcuts/index.js';
+import { getActiveDataOwnerPushStamp } from './appSessionState.js';
 import {
   handleGhostExternalLinkNavigation,
   handleGhostPreviewNavigation,
@@ -716,6 +718,7 @@ export function installWebviewHardener(): void {
     let pendingGhostAttach: {
       id: string;
       agentBridge: boolean;
+      ownerStamp: DataOwnerPushStamp;
       panelHtml?: string;
       settingsHtml?: string;
     } | null = null;
@@ -742,6 +745,7 @@ export function installWebviewHardener(): void {
         pendingGhostAttach = {
           id: ghost.manifest.id,
           agentBridge,
+          ownerStamp: getActiveDataOwnerPushStamp(),
           ...(ghost.manifest.panel?.html ? { panelHtml: ghost.manifest.panel.html } : {}),
           ...(ghost.manifest.settingsHtml ? { settingsHtml: ghost.manifest.settingsHtml } : {}),
         };
@@ -758,7 +762,7 @@ export function installWebviewHardener(): void {
     });
     contents.on('did-attach-webview', (_e, guestContents) => {
       if (pendingGhostAttach) {
-        const { id: ghostId, agentBridge, panelHtml, settingsHtml } = pendingGhostAttach;
+        const { id: ghostId, agentBridge, ownerStamp, panelHtml, settingsHtml } = pendingGhostAttach;
         pendingGhostAttach = null;
         // 崩溃豁免登记(lifecycle 的全局 render-process-gone 守卫据此放行,
         // 面板错误接管态负责用户侧收尾)。
@@ -767,10 +771,23 @@ export function installWebviewHardener(): void {
           const panelSenderContext = {
             ghostId,
             hostWebContentsId: contents.id,
+            ownerStamp,
           };
-          registerGhostPanelWebContents(guestContents.id, panelSenderContext);
+          const isOwnerCurrent = () => {
+            const current = getActiveDataOwnerPushStamp();
+            return (
+              current.dataOwnerId === ownerStamp.dataOwnerId &&
+              current.ownerGeneration === ownerStamp.ownerGeneration
+            );
+          };
+          if (isOwnerCurrent()) {
+            registerGhostPanelWebContents(guestContents.id, panelSenderContext);
+          }
           const syncPanelAgentSender = (url: string) => {
-            if (shouldRegisterGhostPanelAgentSender(url, ghostId, panelHtml, settingsHtml)) {
+            if (
+              isOwnerCurrent() &&
+              shouldRegisterGhostPanelAgentSender(url, ghostId, panelHtml, settingsHtml)
+            ) {
               registerGhostPanelWebContents(guestContents.id, panelSenderContext);
             } else {
               unregisterGhostPanelWebContents(guestContents.id);
