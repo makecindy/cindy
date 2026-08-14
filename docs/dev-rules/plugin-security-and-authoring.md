@@ -234,8 +234,9 @@
   Agent 的 message + context，不得用截断摘要代替。独立面板窗的确认只能投给承载
   目标任务的唯一主壳窗口；`settingsHtml` 与 `panel.html` 同路径时不注入面板桥。
   存量同源导航继续允许，但 Guest 离开唯一 `panel.html` 入口时必须撤销 Agent sender；
-  完整导航及 `history.pushState`／`replaceState`／hash 等页内导航都按最终 URL 同步，返回
-  入口后才恢复。面板票据不得建立 `agent.background` 会话关联。
+  完整导航及 `history.pushState`／`replaceState`／hash 等页内导航都只按主 frame 的最终 URL
+  同步，不得由子 frame URL 恢复；主 frame 返回入口后才恢复。面板票据不得建立
+  `agent.background` 会话关联。
   消息只进入普通 user 回合，失败时不得回落到其它窗口或历史任务。该能力复用既有
   `agent` slot，不新增权限，也不影响存量插件。
 - `ios-simulator` 槽只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有

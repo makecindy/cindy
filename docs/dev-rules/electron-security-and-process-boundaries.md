@@ -133,8 +133,9 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 安全闸，但不得注入该 preload，也不得登记为面板 Agent sender；若它与
 `panel.html` 指向同一文件，按路径无法区分两种界面，必须 fail closed 且不注入 Agent preload。
 存量面板的同源页面导航不得因此被改写；Guest 离开唯一 `panel.html` 入口时撤销
-Main sender 登记，完整导航及 `history.pushState`／`replaceState`／hash 等页内导航都按
-最终 URL 同步，只在回到该入口后恢复。面板的单次确认票不得建立
+Main sender 登记，完整导航及 `history.pushState`／`replaceState`／hash 等页内导航都只按
+主 frame 的最终 URL 同步，不得由子 frame URL 恢复；只在主 frame 回到该入口后恢复。
+面板的单次确认票不得建立
 `agent.background` 会话关联，不能把当次同意升级为后续无确认调用。
 
 ## 4．preload 与 Context Bridge
