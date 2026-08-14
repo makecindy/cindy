@@ -19,6 +19,16 @@ export function configuredVisionFallbackModel(configured: unknown): string | nul
   return normalizeSubagentModelId(configured);
 }
 
+function anthropicContentContainsImage(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some((part) => {
+    if (!part || typeof part !== 'object' || Array.isArray(part)) return false;
+    const block = part as { type?: unknown; content?: unknown };
+    return block.type === 'image'
+      || (block.type === 'tool_result' && anthropicContentContainsImage(block.content));
+  });
+}
+
 export function anthropicRequestBodyContainsImage(body: unknown): boolean {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
   const messages = (body as { messages?: unknown }).messages;
@@ -28,6 +38,7 @@ export function anthropicRequestBodyContainsImage(body: unknown): boolean {
     if (!message || typeof message !== 'object' || Array.isArray(message)) continue;
     const { role, content } = message as { role?: unknown; content?: unknown };
     if (role !== 'user') continue;
+    if (anthropicContentContainsImage(content)) return true;
     if (
       Array.isArray(content)
       && content.length > 0
@@ -36,10 +47,7 @@ export function anthropicRequestBodyContainsImage(body: unknown): boolean {
         && (part as { type?: unknown }).type === 'tool_result',
       )
     ) continue;
-    return Array.isArray(content) && content.some((part) =>
-      part && typeof part === 'object' && !Array.isArray(part)
-      && (part as { type?: unknown }).type === 'image',
-    );
+    return false;
   }
   return false;
 }

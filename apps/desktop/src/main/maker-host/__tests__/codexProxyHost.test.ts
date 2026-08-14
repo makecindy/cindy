@@ -575,14 +575,72 @@ describe('withCodexVisionFallback', () => {
     }
   });
 
-  it('keeps a localHandler decision untouched', async () => {
+  it('keeps a localHandler decision untouched when the body has no image', async () => {
     const host = await freshCodexProxyHost();
     const inner = { localHandler: { handle: async () => undefined } } as never;
     const wrapped = host.withCodexVisionFallback(() => inner);
 
-    const decision = await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-local'));
+    const decision = await wrapped(
+      { model: 'deepseek/deepseek-v4-pro', input: 'hello' },
+      ctxFor('t-local'),
+    );
 
     expect(decision).toBe(inner);
+  });
+
+  it('replaces an original local bridge with the configured vision bridge', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const visionHandler = { handle: vi.fn(async () => undefined) };
+    mockState.createResponsesChatHandler.mockReturnValueOnce(visionHandler);
+    setCustomProviders([
+      buildUserProvider({
+        id: 'vision-local-bridge',
+        name: 'Vision Local Bridge',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://vision.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'vision-model', name: 'Vision Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'vision-key');
+    mockState.visionFallbackSettings = {
+      visionFallbackEnabled: true,
+      visionFallbackModel: 'vision-model',
+      visionFallbackProviderId: 'vision-local-bridge',
+    };
+
+    try {
+      const originalBridge = { localHandler: vi.fn(async () => undefined) } as never;
+      const body = imageBody('deepseek/deepseek-v4-pro');
+      const decision = await host.withCodexVisionFallback(() => originalBridge)(body, ctxFor('t-local-bridge'));
+
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      expect(decision).not.toBe(originalBridge);
+      await decision?.localHandler?.({
+        rawBody: Buffer.from(JSON.stringify(body)),
+        parsedBody: body,
+        ctx: ctxFor('t-local-bridge'),
+        res: {},
+      } as never);
+      expect(visionHandler.handle).toHaveBeenCalledWith(expect.objectContaining({
+        parsedBody: expect.objectContaining({ model: 'vision-model' }),
+      }));
+      expect(originalBridge.localHandler).not.toHaveBeenCalled();
+    } finally {
+      mockState.visionFallbackSettings = {
+        visionFallbackEnabled: true,
+        visionFallbackModel: null,
+        visionFallbackProviderId: null,
+      };
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
   });
 
   it('preserves a gateway key headerOverride while adding the fallback model', async () => {

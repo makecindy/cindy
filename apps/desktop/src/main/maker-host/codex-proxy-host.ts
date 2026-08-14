@@ -2478,10 +2478,8 @@ function codexVisionFallbackSetupReminderDecision(): RoutingDecision {
 /**
  * 视觉兜底包装层(方案 B):纯文本模型 + 本轮含图 → 整轮切到可识图兜底模型回答。
  *
- * 只在「请求会落到默认网关」时兜底 —— inner 返回 null(env-key 默认网关)或仅换 header
- * 的网关路由(gateway key)都算网关;`upstreamOverride`(OAuth 直连/自定义供应商)与
- * `localHandler`(chat/anthropic bridge,桥接自己处理图)一律不动,避免把用户显式选的
- * 供应商或本地桥接误切。
+ * 默认网关、透明上游和本地协议桥接都可以兜底。命中后总是按视觉模型重新解析路由，避免
+ * 当前纯文本模型的 chat / anthropic bridge 抢先消费图片请求。
  */
 export function withCodexVisionFallback(
   inner: RoutingTransform,
@@ -2498,7 +2496,6 @@ export function withCodexVisionFallback(
         && codexRequestBodyContainsImage(body)
         && readSubagentModelSettings().visionFallbackEnabled !== false
       ) {
-        if (decision?.localHandler) return decision;
         const settings = readSubagentModelSettings();
         const visionModel = configuredVisionFallbackModel(settings.visionFallbackModel);
         if (!visionModel || isTextOnlyModel(visionModel)) {
@@ -2535,7 +2532,7 @@ export function withCodexVisionFallback(
           return {
             // 原路由只在仍为默认网关时携带可复用的鉴权覆盖；显式 custom/OAuth 上游的
             // header 绝不能跟随回退模型离开本机。
-            ...(decision?.upstreamOverride ? {} : (decision ?? {})),
+            ...(decision?.upstreamOverride || decision?.localHandler ? {} : (decision ?? {})),
             ...(defaultFallbackRoute ?? {}),
             bodyModelOverride: visionModel,
           };

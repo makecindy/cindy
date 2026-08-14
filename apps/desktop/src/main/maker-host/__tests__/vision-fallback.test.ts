@@ -33,6 +33,23 @@ describe('anthropicRequestBodyContainsImage', () => {
       ],
     })).toBe(true);
   });
+
+  it('detects images nested inside the latest tool result', () => {
+    expect(anthropicRequestBodyContainsImage({
+      messages: [
+        { role: 'user', content: 'Generate a chart' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-1', name: 'chart', input: {} }] },
+        {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'tool-1',
+            content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
+          }],
+        },
+      ],
+    })).toBe(true);
+  });
 });
 
 describe('configuredVisionFallbackModel', () => {
