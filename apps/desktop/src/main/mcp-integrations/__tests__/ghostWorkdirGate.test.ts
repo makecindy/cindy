@@ -1591,6 +1591,40 @@ describe('Full Access 插件文件交接', () => {
     expect(revokeAttachmentsMock).not.toHaveBeenCalled();
   });
 
+  it('TIMEOUT(附件已真正交给 sandbox,任务可能仍在后台继续)不撤销已授权的附件', async () => {
+    // 回归 Codex P2:附件已经随 mergedArgs 真正送进 sandbox 之后,
+    // pipeDispatcher 的 TIMEOUT 语义是"工具可能仍在后台继续跑"(见
+    // pipeDispatcher.ts 的 armTimer 超时 message),不是"调用被拒绝"——
+    // 撤销会让仍在运行的插件进程丢失它正在用的文件读取权限,重试还得
+    // 让用户再走一遍确认。这与上面 PERMISSION_DENIED(pipeDispatcher
+    // 自己的资格审失败,根本没送进 sandbox)必须继续撤销的用例正好相反,
+    // 两条一起钉住"能不能送达 sandbox"才是撤销与否的真正判据,不是
+    // 笼统的 result.ok。
+    const file = path.join(outsideDir, 'no-revoke-on-timeout.png');
+    const bytes = Buffer.from('no-revoke-on-timeout');
+    fs.writeFileSync(file, bytes);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    ledgerRefs.push({ hash, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' });
+    resolveGhostAttachmentUrlMock.mockReturnValue({ absPath: file, mimeType: 'image/png', blobHash: hash });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'TIMEOUT',
+      message: '工具 run 执行超时(任务可能仍在后台继续,稍后重试或许能直接取回已完成的结果)',
+    });
+
+    const result = await makeDeps('codex', 'no-revoke-on-timeout').callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: [`xdt-media://blob/${hash}`],
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'TIMEOUT' });
+    expect(grantAttachmentsMock).toHaveBeenCalledTimes(1);
+    expect(revokeAttachmentsMock).not.toHaveBeenCalled();
+  });
+
   it('grant_only 后置 setup 状态变化时撤销刚授出的批量预授权', async () => {
     const file = path.join(outsideDir, 'grant-only-revoke.png');
     const bytes = Buffer.from('grant-only-revoke');

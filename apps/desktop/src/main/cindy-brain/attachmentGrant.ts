@@ -61,7 +61,9 @@ export interface AttachmentGrantDeps {
   removeRefById(id: string): Promise<unknown>;
   /**
    * 在任何 addRef 前先持久化整批精确 id；perform 失败时即时补偿，
-   * 补偿失败也必须留下可由同 owner DB 重启重放的日志。
+   * 补偿失败也必须留下可由同 owner DB 重启重放的日志。真身绑定的补偿 scope
+   * 在写盘前会重判 assertStillAllowed——这是有意的:出生阶段就该在工具已经
+   * 被切成 blocked 时 fail closed，不再新写授权行。
    */
   withRefCompensation<T>(params: {
     refIds: readonly string[];
@@ -69,8 +71,22 @@ export interface AttachmentGrantDeps {
     compensate: (refId: string) => Promise<unknown>;
   }): Promise<T>;
   /**
+   * revoke() 专用的持久补偿，与 withRefCompensation 同构，但**不得**绑定同一个
+   * 会拒绝 blocked 工具的 scope——revoke 存在的意义就是收拾"工具刚被切成
+   * blocked"之后的残留，如果补偿写盘前的断言在这种情况下抛错，撤销会在
+   * 连 pending 标记都没落盘的情况下直接失败，既没删掉 ref 也没留下可重放的
+   * 记录，真正生效的授权反而在原地不动。只保留 owner/DB 身份漂移这类会让
+   * 继续用同一个句柄本身不安全的边界。
+   */
+  withRevokeCompensation<T>(params: {
+    refIds: readonly string[];
+    perform: () => Promise<T>;
+    compensate: (refId: string) => Promise<unknown>;
+  }): Promise<T>;
+  /**
    * 调用方提供的同步实时授权断言。它会在每个异步持久化边界前后执行，
-   * 确保工具在落仓期间切为 blocked 时不留下可读 grant ref。
+   * 确保工具在落仓期间切为 blocked 时不留下可读 grant ref。只用于出生阶段
+   * (withRefCompensation)；revoke() 绝不能复用它,见 withRevokeCompensation。
    */
   assertStillAllowed?(): void;
   log?: {
@@ -225,7 +241,12 @@ export async function grantAttachmentsToGhost(
   const revoke = async (): Promise<void> => {
     const refIds = prepared.map((grant) => grant.id);
     try {
-      await deps.withRefCompensation({
+      // 特意用 withRevokeCompensation,不是上面出生阶段那个
+      // withRefCompensation——两者绑的补偿 scope 不同。撤销往往正是因为
+      // 工具刚被切成 blocked 才触发,如果补偿写盘前的断言复用出生阶段那条
+      // 会拒绝 blocked 的判据,会在 pending 标记落盘前就直接抛错,整个撤销
+      // 连补偿记录都没留下。
+      await deps.withRevokeCompensation({
         refIds,
         // 目标就是删除,perform 与 compensate 因此是同一个幂等操作:无论
         // 走到哪一半失败,两条路径收敛到同一个结果——批内每条 ref 都尝试

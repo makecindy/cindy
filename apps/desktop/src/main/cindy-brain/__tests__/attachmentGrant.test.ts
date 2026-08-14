@@ -32,6 +32,7 @@ function makeDeps(overrides: Partial<AttachmentGrantDeps> = {}): {
   recordBlob: ReturnType<typeof vi.fn>;
   addRef: ReturnType<typeof vi.fn>;
   withRefCompensation: ReturnType<typeof vi.fn>;
+  withRevokeCompensation: ReturnType<typeof vi.fn>;
 } {
   const writeBlob = vi.fn(async ({ buffer }: { buffer: Uint8Array }) => ({
     hash: `${'0'.repeat(63)}${buffer[0]}`,
@@ -55,6 +56,22 @@ function makeDeps(overrides: Partial<AttachmentGrantDeps> = {}): {
       return perform();
     },
   );
+  // 独立于 withRefCompensation 的 mock,不是同一个 vi.fn——两者绑的补偿
+  // scope 在生产代码里本来就不同(见 attachmentGrant.ts 的接口注释),单测
+  // 必须能分别断言"revoke 调用的是哪一个",否则测不出回归。
+  const withRevokeCompensation = vi.fn(
+    async <T,>({
+      refIds,
+      perform,
+    }: {
+      refIds: readonly string[];
+      perform: () => Promise<T>;
+      compensate: (refId: string) => Promise<unknown>;
+    }): Promise<T> => {
+      assertRefCompensationBatch(refIds);
+      return perform();
+    },
+  );
   const deps: AttachmentGrantDeps = {
     resolveImageUrl: (url: string) => {
       if (!url.startsWith('xdt-image://')) throw new Error('xdt-image: invalid url');
@@ -66,9 +83,10 @@ function makeDeps(overrides: Partial<AttachmentGrantDeps> = {}): {
     addRef,
     removeRefById,
     withRefCompensation: withRefCompensation as AttachmentGrantDeps['withRefCompensation'],
+    withRevokeCompensation: withRevokeCompensation as AttachmentGrantDeps['withRevokeCompensation'],
     ...overrides,
   };
-  return { deps, writeBlob, recordBlob, addRef, withRefCompensation };
+  return { deps, writeBlob, recordBlob, addRef, withRefCompensation, withRevokeCompensation };
 }
 
 describe('grantAttachmentsToGhost', () => {
@@ -90,8 +108,8 @@ describe('grantAttachmentsToGhost', () => {
     expect(typeof r.revoke).toBe('function');
   });
 
-  it('revoke() 走出生阶段同一条 withRefCompensation 持久补偿协议撤销每一条 ref', async () => {
-    const { deps, addRef, removeRefById } = (() => {
+  it('revoke() 走 withRevokeCompensation(不是 withRefCompensation)的持久补偿协议撤销每一条 ref', async () => {
+    const { deps, addRef, removeRefById, withRevokeCompensation } = (() => {
       const base = makeDeps();
       const removeRefById = vi
         .fn<(id: string) => Promise<void>>()
@@ -101,7 +119,7 @@ describe('grantAttachmentsToGhost', () => {
       // compensate 兜底(Promise.allSettled)。默认 makeDeps 的 mock 只是
       // `return perform()`,不模拟这条 catch→compensate 路径,必须在这里
       // 换成能还原真实契约的版本,否则测不出「不是裸循环各自忽略失败」。
-      const withRefCompensation: AttachmentGrantDeps['withRefCompensation'] = async ({
+      const withRevokeCompensation: AttachmentGrantDeps['withRevokeCompensation'] = async ({
         refIds,
         perform,
         compensate,
@@ -115,8 +133,9 @@ describe('grantAttachmentsToGhost', () => {
       };
       return {
         ...base,
-        deps: { ...base.deps, removeRefById, withRefCompensation },
+        deps: { ...base.deps, removeRefById, withRevokeCompensation },
         removeRefById,
+        withRevokeCompensation: vi.fn(withRevokeCompensation),
       };
     })();
     const r = await grantAttachmentsToGhost(deps, {
@@ -129,12 +148,59 @@ describe('grantAttachmentsToGhost', () => {
     expect(grantedIds).toHaveLength(2);
 
     // perform 里第一条删除失败即中断循环,不再顺着老实现逐条 try/catch;
-    // 靠 withRefCompensation 的 compensate 把整批 refIds 兜底删完。对
+    // 靠 withRevokeCompensation 的 compensate 把整批 refIds 兜底删完。对
     // revoke() 的调用方而言仍是 best-effort,不重抛。
     await expect(r.revoke()).resolves.toBeUndefined();
 
     expect(removeRefById).toHaveBeenCalledWith(grantedIds[0]);
     expect(removeRefById).toHaveBeenCalledWith(grantedIds[1]);
+    void withRevokeCompensation;
+  });
+
+  it('revoke() 绝不touch withRefCompensation——即使那条补偿之后会因策略拒绝直接抛错，撤销仍必须成功', async () => {
+    // 回归 Greptile P1:revoke() 曾经复用出生阶段那条 withRefCompensation。
+    // 生产接线里它绑定的补偿 scope 会在工具已被切成 blocked 时于写盘前就
+    // 抛错——而"工具刚被切成 blocked"正是触发撤销最常见的原因,一旦复用
+    // 就会让撤销连 pending 标记都没落盘就直接失败。
+    //
+    // withRefCompensation 出生阶段本来就要用到一次(落这批 ref),不能让它
+    // 一上来就拒绝,否则连 grant 都做不成、测不到"之后撤销"这一步。这里
+    // 让它第一次调用(出生)正常放行,并在其后把自己钉死成"策略已拒绝"的
+    // 状态——如果 revoke() 真的错误复用了它,第二次调用会直接抛错;只要
+    // revoke() 走的是独立的 withRevokeCompensation,这条钉死的依赖全程只
+    // 会被调用一次。
+    let refCompensationCalls = 0;
+    const trackedWithRefCompensation: AttachmentGrantDeps['withRefCompensation'] = async ({
+      refIds,
+      perform,
+    }) => {
+      refCompensationCalls += 1;
+      if (refCompensationCalls > 1) {
+        throw new Error('policy scope rejected: tool is blocked (revoke must not reach here)');
+      }
+      assertRefCompensationBatch(refIds);
+      return perform();
+    };
+    const { deps, addRef } = makeDeps({
+      withRefCompensation: trackedWithRefCompensation,
+    });
+    const removeRefById = deps.removeRefById as ReturnType<typeof vi.fn>;
+    const r = await grantAttachmentsToGhost(deps, {
+      ghostId: 'cindy-art',
+      urls: ['xdt-image://s1/a.png'],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(refCompensationCalls).toBe(1);
+
+    await expect(r.revoke()).resolves.toBeUndefined();
+
+    const grantedId = addRef.mock.calls[0]![0].id;
+    expect(removeRefById).toHaveBeenCalledWith(grantedId);
+    // 全程没有第二次调用 withRefCompensation——如果 revoke() 内部错误地
+    // 复用了它,上面对 refCompensationCalls>1 的钉死会直接抛错,revoke()
+    // 就不会 resolve 成功,前一条断言会先失败。
+    expect(refCompensationCalls).toBe(1);
   });
 
   it('任一地址解析失败 → 整批拒,零副作用(先整批解析再落库)', async () => {

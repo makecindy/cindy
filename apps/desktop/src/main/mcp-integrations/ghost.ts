@@ -976,6 +976,18 @@ async function grantAttachmentUrls(params: {
           perform,
           compensate,
         }),
+      // 撤销必须绑未加策略断言的原始 compensationScope,不能沿用上面
+      // guardedCompensationScope——工具被切成 blocked 正是触发撤销的
+      // 常见原因,复用会拒绝 blocked 的 scope 会让补偿写盘前置断言直接
+      // 抛错,连 pending 标记都落不了盘。只保留 owner/DB 身份漂移这一条
+      // 真正会让继续用同一个 db 句柄不安全的边界。
+      withRevokeCompensation: ({ refIds, perform, compensate }) =>
+        withMediaRefCompensation({
+          scope: compensationScope,
+          refIds,
+          perform,
+          compensate,
+        }),
       // 顺序调用幂等化:同 (指纹,意识,引用类型,来源) 已有交接行就不再插入。
       // 并发 check-then-insert 仍可能产生重复账行,但不会改变归属或扩权语义。
       addRef: async (p) => {
@@ -1680,9 +1692,12 @@ export function getCindyGhostsMcpDeps(
         mergedArgs = { ...args, attachments: grant.hashes };
         pendingAttachmentRevoke = grant.revoke;
       }
-      // dispatchSucceeded 只在 pipeDispatcher 真正被调用且返回成功之后才置
-      // true;下面任何一个提前 return 都会让它保持 false,finally 据此撤销
-      // 刚才可能已经授出的附件读取权限。
+      // dispatchSucceeded 置真的两种情况:调用整体成功,或者 pipeDispatcher
+      // 明确报告 TIMEOUT(语义是"可能仍在后台继续",附件已经真正交给了
+      // sandbox)。下面任何一个提前 return(派发前的复判/确认,以及
+      // pipeDispatcher 自己资格审失败的 PERMISSION_DENIED 等)都会让它保持
+      // false,finally 据此撤销刚才可能已经授出的附件读取权限——见下方调用点
+      // 旁边的注释。
       let dispatchSucceeded = false;
       try {
         // 目录过户(xd-service 意识化二期):dir 收集文件发一次性票据,元数据
@@ -1870,13 +1885,25 @@ export function getCindyGhostsMcpDeps(
           args: mergedArgs,
           callId,
         });
+        // pipeDispatcher 自己的资格审失败(GHOST_NOT_FOUND / GHOST_ASLEEP /
+        // TOOL_NOT_FOUND / PERMISSION_DENIED / GHOST_CRASHED)从未真正把
+        // mergedArgs 送进 sandbox——那条 ghost-tool-grant 必须照旧撤销,见下方
+        // finally。真正把附件交出去之后才可能出现的结果只有两种:调用本身
+        // 成功,或者 TIMEOUT(armTimer 的 message 明确写了"任务可能仍在后台
+        // 继续")——这两种都不再是"调用被拒绝",不该撤销已生效的授权,否则
+        // 重试还得让用户再走一遍确认。除 TIMEOUT 外的其它 ok:false 暂时仍归
+        // 入"撤销"这一支:插件工具自己上报的 errorCode 是开放集合,没有结构化
+        // 信号能安全区分"确实送达但工具自己失败"与"根本没送达",宁可多撤销
+        // 一次逼用户重新确认,也不留下无法证伪的已生效授权(fail closed)。
+        if (result.ok || result.errorCode === 'TIMEOUT') {
+          dispatchSucceeded = true;
+        }
         // 收口取账(ghostMediaLedger):本次调用期间主机实际入库的媒体地址。
         // 失败也 drain(清账防泄漏),但只在成功结果上附带——cindy-tools 层
         // 在意识未声明媒体字段时以 xdt_media_produced 注入,兜底 IM/hook 送达。
         const producedMedia = drainGhostCallMedia(ghostId, callId);
         const finalized = withCardToken(result, cardService.finalizeCall(callId), callId);
         if (!finalized.ok) return finalized;
-        dispatchSucceeded = true;
         // 附最后一道 gate(postCtx)的快照:它是派发前最新的 ready 判定。
         const advisory = postCtxAssessment.reauthSuggest ? { setup: postCtxAssessment } : {};
         const base = producedMedia.length > 0
