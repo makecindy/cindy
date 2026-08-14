@@ -86,6 +86,18 @@ export function isGhostPanelAgentEntry(
   }
 }
 
+/** Agent preload 跟随 Guest 生命周期，因此 Agent Guest 只允许留在唯一 panel 入口。 */
+export function isGhostPanelNavigationAllowed(
+  url: string,
+  ghostId: string,
+  agentBridge: boolean,
+  panelHtml?: string,
+  settingsHtml?: string,
+): boolean {
+  if (classifyGhostPanelNavigation(url, ghostId) !== 'allow') return false;
+  return !agentBridge || isGhostPanelAgentEntry(url, panelHtml, settingsHtml);
+}
+
 /**
  * 把 `will-attach-webview` event 给的 webPreferences / params 改成"安全锁死"版。
  *
@@ -690,7 +702,12 @@ export function installWebviewHardener(): void {
     // will-attach → did-attach 对同一个 guest 同步成对触发;用闭包变量把
     // will 阶段的意识判定带给 did 阶段(意识 guest 走独立接线,不装浏览器
     // 的 popup 路由与快捷键转发)。
-    let pendingGhostAttach: { id: string; agentBridge: boolean } | null = null;
+    let pendingGhostAttach: {
+      id: string;
+      agentBridge: boolean;
+      panelHtml?: string;
+      settingsHtml?: string;
+    } | null = null;
     contents.on('will-attach-webview', (e, webPreferences, params) => {
       // 意识面板分支:声明了意识分区的 webview 必须验明正身——
       // 分区/地址/已装清单三对齐才放行并保留专属分区;验证失败直接拒附加
@@ -710,7 +727,12 @@ export function installWebviewHardener(): void {
         applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params, {
           ...(agentBridge ? { panelPreloadPath: getGhostPanelGuestPreloadPath() } : {}),
         });
-        pendingGhostAttach = { id: ghost.manifest.id, agentBridge };
+        pendingGhostAttach = {
+          id: ghost.manifest.id,
+          agentBridge,
+          ...(ghost.manifest.panel?.html ? { panelHtml: ghost.manifest.panel.html } : {}),
+          ...(ghost.manifest.settingsHtml ? { settingsHtml: ghost.manifest.settingsHtml } : {}),
+        };
         return;
       }
       pendingGhostAttach = null;
@@ -724,7 +746,7 @@ export function installWebviewHardener(): void {
     });
     contents.on('did-attach-webview', (_e, guestContents) => {
       if (pendingGhostAttach) {
-        const { id: ghostId, agentBridge } = pendingGhostAttach;
+        const { id: ghostId, agentBridge, panelHtml, settingsHtml } = pendingGhostAttach;
         pendingGhostAttach = null;
         // 崩溃豁免登记(lifecycle 的全局 render-process-gone 守卫据此放行,
         // 面板错误接管态负责用户侧收尾)。
@@ -745,7 +767,17 @@ export function installWebviewHardener(): void {
         guestContents.setWindowOpenHandler(() => ({ action: 'deny' }));
         guestContents.on('will-navigate', (event, url) => {
           const nav = classifyGhostPanelNavigation(url, ghostId);
-          if (nav === 'allow') return;
+          // Agent preload 与 WebContents 同寿命；一旦允许它从 panel.html 导航到
+          // settingsHtml，同一个 Guest 仍会保留 bridge。Agent 面板因此锁死在
+          // 唯一声明的 panel 入口（query/hash 不影响 pathname 比对）；preview / external
+          // 本来就会在下方 preventDefault 后交给宿主代办，仍可照常使用。
+          if (isGhostPanelNavigationAllowed(url, ghostId, agentBridge, panelHtml, settingsHtml)) {
+            return;
+          }
+          if (nav === 'allow') {
+            event.preventDefault();
+            return;
+          }
           event.preventDefault();
           if (nav === 'preview') {
             handleGhostPreviewNavigation(ghostId, url, contents, guestContents);

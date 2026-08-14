@@ -47,6 +47,7 @@ import {
   installBrowserGuestHandlers,
   installDeferredPopupRouter,
   isGhostPanelAgentEntry,
+  isGhostPanelNavigationAllowed,
   isGuestShortcutKeyDownType,
   resolveGuestShortcutAction,
   setRsbPopupOpenerResolver,
@@ -281,6 +282,34 @@ describe('applyGhostWebviewHardening(意识面板 webview)', () => {
       ),
     ).toBe(false);
     expect(isGhostPanelAgentEntry('not a url', 'ui/panel.html')).toBe(false);
+  });
+
+  it('Agent Guest 离开唯一 panel 入口时阻断导航，普通面板仍可同源跳转', () => {
+    expect(
+      isGhostPanelNavigationAllowed(
+        'cindy-ghost://art/ui/panel.html?view=canvas#node-1',
+        'art',
+        true,
+        'ui/panel.html',
+        'settings.html',
+      ),
+    ).toBe(true);
+    expect(
+      isGhostPanelNavigationAllowed(
+        'cindy-ghost://art/settings.html',
+        'art',
+        true,
+        'ui/panel.html',
+        'settings.html',
+      ),
+    ).toBe(false);
+    expect(
+      isGhostPanelNavigationAllowed(
+        'cindy-ghost://art/another-page.html',
+        'art',
+        false,
+      ),
+    ).toBe(true);
   });
 
   it('同一套安全锁全部生效,但保留意识专属分区、掐死 popup', () => {

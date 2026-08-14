@@ -2927,6 +2927,11 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
             win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
           }
           if (!win || win.isDestroyed()) return false;
+          // detached 面板可以在主壳被遮挡、隐藏或最小化时发起确认；确认必须
+          // 出现在用户实际可见的宿主表面，不能静默等到超时再当作取消。
+          if (win.isMinimized()) win.restore();
+          if (!win.isVisible()) win.show();
+          win.focus();
           sendGhostWindowPush(win, GHOST_CONFIRM_CHANNEL, payload);
           return true;
         },
