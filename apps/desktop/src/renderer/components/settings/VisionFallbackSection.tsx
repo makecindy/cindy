@@ -5,6 +5,7 @@ import { Puzzle } from 'lucide-react';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { toast } from '@/lib/toast';
 import {
+  isKnownTextOnlyModel,
   type SubagentModelSettingsState,
 } from '../../../shared/subagentModelSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
@@ -56,6 +57,8 @@ export function VisionFallbackRow() {
     || settings.customizedKeys.includes('visionFallbackProviderId')
     || settings.customizedKeys.includes('visionFallbackEnabled');
   const sourceKey = isCustomized ? 'user' : 'product';
+  const configuredFallbackIsTextOnly = settings.visionFallbackModel !== null
+    && isKnownTextOnlyModel(settings.visionFallbackModel);
 
   return (
     <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
@@ -79,14 +82,16 @@ export function VisionFallbackRow() {
             </span>
           </div>
           <p className="truncate text-12 leading-[1.35] text-[var(--settings-section-desc)]">
-            {t('settings.subagentModels.visionFallbackHint')}
+            {configuredFallbackIsTextOnly
+              ? t('settings.subagentModels.visionFallbackTextOnlyWarning')
+              : t('settings.subagentModels.visionFallbackHint')}
           </p>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <div className="w-[min(320px,30vw)]">
           <ModelSelector
-            modelId={settings.visionFallbackModel ?? 'gpt-5.6-luna'}
+            modelId={settings.visionFallbackModel ?? ''}
             effort=""
             onModelChange={(model) => void save({ visionFallbackModel: model })}
             onEffortChange={() => undefined}

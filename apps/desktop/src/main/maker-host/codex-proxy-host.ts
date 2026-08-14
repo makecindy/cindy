@@ -80,6 +80,7 @@ import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import {
   configuredVisionFallbackModel,
   isTextOnlyModel,
+  VISION_FALLBACK_SETUP_REMINDER,
 } from './vision-fallback.js';
 
 // scope = 'codex-proxy'。保持独立 scope,方便后续 E2E 日志脚本按 codex proxy 过滤。
@@ -2448,6 +2449,24 @@ function codexRequestBodyContainsImage(body: unknown): boolean {
   return codexContentArrayContainsImage(body.instructions);
 }
 
+function codexVisionFallbackSetupReminderDecision(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      res.writeHead(400, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(JSON.stringify({
+        error: {
+          type: 'invalid_request_error',
+          code: 'cindy_vision_fallback_not_configured',
+          message: VISION_FALLBACK_SETUP_REMINDER,
+        },
+      }));
+    },
+  };
+}
+
 /** 纯文本模型 deny-list 判定;`[1m]`(目录 1M 窗口)后缀先归一化剥除。 */
 /**
  * 视觉兜底包装层(方案 B):纯文本模型 + 本轮含图 → 整轮切到可识图兜底模型回答。
@@ -2475,6 +2494,15 @@ export function withCodexVisionFallback(
         if (decision?.localHandler) return decision;
         const settings = readSubagentModelSettings();
         const visionModel = configuredVisionFallbackModel(settings.visionFallbackModel);
+        if (!visionModel || isTextOnlyModel(visionModel)) {
+          log.info('codex vision fallback: no usable user-selected vision model; returning setup reminder', {
+            threadId: selectedThreadIdFromHeaders(ctx.headers),
+            sessionId: sessionIdFromHeaders(ctx.headers),
+            fromModel: body.model,
+            configuredFallbackModel: visionModel,
+          });
+          return codexVisionFallbackSetupReminderDecision();
+        }
         const fallbackProviderId = settings.visionFallbackProviderId;
         log.info('codex vision fallback: text-only model + image → switching model', {
           threadId: selectedThreadIdFromHeaders(ctx.headers),

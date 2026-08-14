@@ -18,11 +18,19 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { visionFallbackSettings } = vi.hoisted(() => ({
+  visionFallbackSettings: {
+    visionFallbackEnabled: true,
+    visionFallbackModel: null as string | null,
+    visionFallbackProviderId: null as string | null,
+  },
+}));
+
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: true }),
 }));
 vi.mock('../subagent-model-settings-store', () => ({
-  readSubagentModelSettings: () => ({ visionFallbackModel: null }),
+  readSubagentModelSettings: () => visionFallbackSettings,
 }));
 
 vi.mock('../logger-adapter', () => ({
@@ -57,6 +65,9 @@ import {
   resetClaudeSessionRouteRegistryForTest,
 } from '../claude-session-route-registry';
 import { setProviderOAuthTokenReader } from '../provider-route';
+import { setCustomProviderKeyReader } from '../provider-route';
+import { setCustomProviders } from '../active-catalog';
+import { buildUserProvider } from '@cindy/model-providers';
 import {
   registerPiProxySession,
   resetPiProxySessionsForTest,
@@ -77,10 +88,15 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     setClaudeProxyGatewayKeyReader(() => gatewayKey);
     setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-grok' ? 'sess-grok' : null));
     setSessionProvider('sess-grok', 'xai');
+    visionFallbackSettings.visionFallbackEnabled = true;
+    visionFallbackSettings.visionFallbackModel = null;
+    visionFallbackSettings.visionFallbackProviderId = null;
   });
 
   afterEach(() => {
     clearSessionProvider('sess-grok');
+    setCustomProviders([]);
+    setCustomProviderKeyReader(() => null);
   });
 
   it('claude-haiku 分类器请求(oauth-spawn)→ 换网关 key,不去 api.x.ai', () => {
@@ -157,7 +173,7 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     expect(readClaudeSessionRoute('sess-grok')).toBe('gateway');
   });
 
-  it('纯文本模型收到 Anthropic 图片时应切到视觉兜底模型', () => {
+  it('纯文本模型收到 Anthropic 图片且未配置视觉模型时应返回设置提醒', () => {
     const transform = createModelRoutingTransform();
     const decision = transform(
       {
@@ -173,7 +189,45 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
     );
 
-    expect(decision).toEqual({ bodyModelOverride: 'codex/gpt-5.6-luna' });
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
+  });
+
+  it('工具结果续接请求继续使用已选择的视觉模型供应商', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'vision-provider',
+        name: 'Vision Provider',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://vision.example/v1',
+            models: [{ id: 'vision-model', name: 'Vision Model' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((providerId, agent) =>
+      providerId === 'vision-provider' && agent === 'claude-code' ? 'vision-key' : null,
+    );
+    visionFallbackSettings.visionFallbackModel = 'vision-model';
+    visionFallbackSettings.visionFallbackProviderId = 'vision-provider';
+
+    const decision = await Promise.resolve(createModelRoutingTransform()(
+      {
+        model: 'deepseek/deepseek-v4-pro',
+        messages: [
+          { role: 'user', content: [{ type: 'image', source: { type: 'base64' } }] },
+          { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-1', name: 'lookup', input: {} }] },
+          { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'done' }] },
+        ],
+      },
+      ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
+    ));
+
+    expect(decision).toMatchObject({
+      upstreamOverride: 'https://vision.example/v1',
+      headerOverride: { authorization: 'Bearer vision-key' },
+      bodyModelOverride: 'vision-model',
+    });
   });
 });
 

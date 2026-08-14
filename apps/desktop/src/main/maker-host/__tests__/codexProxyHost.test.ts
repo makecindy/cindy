@@ -335,13 +335,16 @@ describe('withCodexVisionFallback', () => {
     }],
   });
 
-  it('switches a text-only model to the vision fallback when the request contains an image', async () => {
+  it('keeps the original model when no vision fallback model is configured', async () => {
     const host = await freshCodexProxyHost();
     const wrapped = host.withCodexVisionFallback(() => null);
 
     const decision = await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-vision'));
 
-    expect(decision).toEqual({ bodyModelOverride: 'codex/gpt-5.6-luna' });
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
+    const response = { writeHead: vi.fn(), end: vi.fn() };
+    await decision?.localHandler?.({ res: response } as never);
+    expect(response.end).toHaveBeenCalledWith(expect.stringContaining('请前往设置'));
   });
 
   it('does not fall back when the body has no image', async () => {
@@ -385,14 +388,14 @@ describe('withCodexVisionFallback', () => {
     expect(decision).toBeNull();
   });
 
-  it('replaces an original custom-provider route with the default fallback route', async () => {
+  it('keeps an original custom-provider route when no vision fallback model is configured', async () => {
     const host = await freshCodexProxyHost();
     const inner = { upstreamOverride: 'https://api.x.ai/v1' };
     const wrapped = host.withCodexVisionFallback(() => inner);
 
     const decision = await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-custom'));
 
-    expect(decision).toEqual({ bodyModelOverride: 'codex/gpt-5.6-luna' });
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
   });
 
   it('routes the fallback through its selected provider instead of the original upstream', async () => {
@@ -440,6 +443,49 @@ describe('withCodexVisionFallback', () => {
     }
   });
 
+  it('does not route a known text-only model selected as the fallback', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'text-provider',
+        name: 'Text Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://text.example/v1',
+            models: [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'text-key');
+    mockState.visionFallbackSettings = {
+      visionFallbackEnabled: true,
+      visionFallbackModel: 'deepseek/deepseek-v4-pro',
+      visionFallbackProviderId: 'text-provider',
+    };
+
+    try {
+      const wrapped = host.withCodexVisionFallback(() => ({
+        upstreamOverride: 'https://original.example/v1',
+      }));
+
+      expect(await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-text-fallback'))).toEqual({
+        localHandler: expect.any(Function),
+      });
+    } finally {
+      mockState.visionFallbackSettings = {
+        visionFallbackEnabled: true,
+        visionFallbackModel: null,
+        visionFallbackProviderId: null,
+      };
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('keeps a localHandler decision untouched', async () => {
     const host = await freshCodexProxyHost();
     const inner = { localHandler: { handle: async () => undefined } } as never;
@@ -457,10 +503,7 @@ describe('withCodexVisionFallback', () => {
 
     const decision = await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-header'));
 
-    expect(decision).toEqual({
-      headerOverride: { authorization: 'Bearer sk-gateway' },
-      bodyModelOverride: 'codex/gpt-5.6-luna',
-    });
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
   });
 
   it('applies through an async inner decision', async () => {
@@ -468,7 +511,7 @@ describe('withCodexVisionFallback', () => {
     const wrapped = host.withCodexVisionFallback(() => Promise.resolve(null));
 
     await expect(wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-async'))).resolves.toEqual({
-      bodyModelOverride: 'codex/gpt-5.6-luna',
+      localHandler: expect.any(Function),
     });
   });
 });

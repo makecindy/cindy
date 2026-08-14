@@ -41,8 +41,25 @@ export interface SubagentModelSettings {
   codexAllowNestedSubagents: boolean;
 }
 
-/** 自动视觉兜底模型；用户可在设置中覆盖。 */
-export const DEFAULT_VISION_FALLBACK_MODEL = 'codex/gpt-5.6-luna';
+/** 已知不支持图片输入的模型；设置页用它提示用户避免选错视觉模型。 */
+export const KNOWN_TEXT_ONLY_MODEL_IDS = new Set([
+  'deepseek/deepseek-v4-pro',
+  'deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash',
+  'deepseek-v4-flash',
+  'z-ai/glm-5.1',
+  'glm-5.1',
+  'z-ai/glm-5.2',
+  'glm-5.2',
+  'moonshotai/kimi-k2.6',
+  'kimi-k2.6',
+  'qwen/qwen3.7-max',
+  'qwen3.7-max',
+]);
+
+export function isKnownTextOnlyModel(model: string): boolean {
+  return KNOWN_TEXT_ONLY_MODEL_IDS.has(model.replace(/\[1m\]$/, ''));
+}
 
 /**
  * 与 codex-model-discovery.ts 的 CODEX_EFFORTS 透传白名单一致（不含 minimal——codex

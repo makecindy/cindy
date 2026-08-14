@@ -59,7 +59,9 @@ import { getSessionProvider } from './session-provider-store.js';
 import {
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
+  resolveProviderRouteDecision,
   resolveSessionRouteDecision,
+  rewriteModelIdForProviderRoute,
 } from './provider-route.js';
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
 import { createClaudeAutoClassifierFailureObserver } from './claude-auto-permission-fallback.js';
@@ -91,6 +93,7 @@ import {
   anthropicRequestBodyContainsImage,
   configuredVisionFallbackModel,
   isTextOnlyModel,
+  VISION_FALLBACK_SETUP_REMINDER,
 } from './vision-fallback.js';
 
 // scope = 'cc-proxy' → logger.ts 的 emit() 路由把这条流量并入统一 agent 流
@@ -323,8 +326,8 @@ export function createModelRoutingTransform(): RoutingTransform {
   };
   const routeWithVisionFallback: RoutingTransform = (body, ctx) => {
     const result = route(body, ctx);
-    const apply = (decision: RoutingDecision | null): RoutingDecision | null => {
-      if (decision?.localHandler || decision?.upstreamOverride) return decision;
+    const apply = (decision: RoutingDecision | null): RoutingDecision | Promise<RoutingDecision | null> | null => {
+      if (decision?.localHandler) return decision;
       if (
         ctx.method !== 'POST'
         || !isPlainObject(body)
@@ -333,15 +336,65 @@ export function createModelRoutingTransform(): RoutingTransform {
         || !anthropicRequestBodyContainsImage(body)
         || readSubagentModelSettings().visionFallbackEnabled === false
       ) return decision;
-      const visionModel = configuredVisionFallbackModel(readSubagentModelSettings().visionFallbackModel);
+      const settings = readSubagentModelSettings();
+      const visionModel = configuredVisionFallbackModel(settings.visionFallbackModel);
+      if (!visionModel || isTextOnlyModel(visionModel)) {
+        log.info('claude vision fallback: no usable user-selected vision model; returning setup reminder', {
+          fromModel: body.model,
+          configuredFallbackModel: visionModel,
+        });
+        return {
+          localHandler: async ({ res }) => {
+            res.writeHead(400, {
+              'content-type': 'application/json; charset=utf-8',
+              'cache-control': 'no-store',
+            });
+            res.end(JSON.stringify({
+              type: 'error',
+              error: {
+                type: 'invalid_request_error',
+                message: VISION_FALLBACK_SETUP_REMINDER,
+              },
+            }));
+          },
+        };
+      }
       log.info('claude vision fallback: text-only model + image → switching model', {
         fromModel: body.model,
         toModel: visionModel,
       });
-      return { ...(decision ?? {}), bodyModelOverride: visionModel };
+      const fallbackProviderId = settings.visionFallbackProviderId;
+      if (!fallbackProviderId) return { ...(decision ?? {}), bodyModelOverride: visionModel };
+      return resolveProviderRouteDecision(
+        fallbackProviderId,
+        'claude-code',
+        _readGatewayKey(),
+        visionModel,
+      ).then((route) => {
+        if (
+          !route
+          || (route.routing.wireProtocol !== undefined
+            && route.routing.wireProtocol !== 'anthropic-messages')
+        ) {
+          log.warn('claude vision fallback provider cannot accept Anthropic messages requests', {
+            providerId: fallbackProviderId,
+            model: visionModel,
+          });
+          return decision;
+        }
+        return {
+          ...(route.decision ?? {}),
+          bodyModelOverride: rewriteModelIdForProviderRoute(
+            fallbackProviderId,
+            'claude-code',
+            visionModel,
+          ),
+        };
+      });
     };
     return result instanceof Promise ? result.then(apply) : apply(result);
   };
+
   return (body, ctx) => {
     const decision = routeWithVisionFallback(body, ctx);
     const hasInternalPiHeader =
