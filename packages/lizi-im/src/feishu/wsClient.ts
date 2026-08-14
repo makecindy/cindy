@@ -125,7 +125,6 @@ const ORPHAN_NOTICE_RETRY_DELAYS_MS = [10_000, 30_000, 90_000] as const;
 interface PendingOrphanRetry {
   timer: ReturnType<typeof setTimeout>;
   botAppId: string;
-  generation: number;
   openerMessageId: string;
   /** 触发消息 id — 重试成功时重新认领, 抑制冷却后的重投再次进入提示流程。 */
   messageId: string;
@@ -136,6 +135,16 @@ const orphanNoticeRetries = new Map<string, PendingOrphanRetry>();
 /** 该 opener 的提示是否已成功送达过(首发/重投/重试任一成功 — 终态)。 */
 function wasNoticeDelivered(openerMessageId: string): boolean {
   return orphanNoticeDelivered.has(openerMessageId);
+}
+
+/**
+ * 重试/撤回的账号门: 换代后只要还是**同一个 bot**(重连), 提示/撤回仍然
+ * 安全 — 用当前 client 继续即可(同账号可操作自己发的消息, 跨 stop 保留
+ * 的重试因此不会死在 stale generation 上); 只有换成别的 bot 或无连接时
+ * 才跳过, 旧账号的开场白不得经新账号的 client 操作。
+ */
+function isSameBotActive(botAppId: string): boolean {
+  return acceptingInbound && currentBotAppId === botAppId;
 }
 
 /**
@@ -182,7 +191,6 @@ async function sendOrphanOpenerNotice(
   botAppId: string,
   messageId: string,
   openerMessageId: string,
-  generation: number,
 ): Promise<void> {
   const log = getLog();
   // 终态守卫: 提示已送达过(执行中重试/重投任一成功)则不再发送 — 这次投递
@@ -217,13 +225,12 @@ async function sendOrphanOpenerNotice(
     log.warn(
       '[feishu/wsClient] orphan opener notice failed — inbound claim released, retry scheduled',
     );
-    scheduleOrphanNoticeRetry(botAppId, generation, openerMessageId, messageId, 0);
+    scheduleOrphanNoticeRetry(botAppId, openerMessageId, messageId, 0);
   }
 }
 
 function scheduleOrphanNoticeRetry(
   botAppId: string,
-  generation: number,
   openerMessageId: string,
   messageId: string,
   attempt: number,
@@ -237,10 +244,10 @@ function scheduleOrphanNoticeRetry(
       log.info('[feishu/wsClient] orphan notice already delivered — skipping opener recall');
       return;
     }
-    // gate 到触发连接: 换代/断开后旧账号的开场白卡不得经新 client 撤回
-    // (重试耗尽发生在最后那次重试的 replyText 之后 — 期间可能已换代)。
-    if (!isActiveConnection(generation, botAppId)) {
-      log.info('[feishu/wsClient] orphan opener recall skipped: connection changed');
+    // 账号门: 无连接或已换成别的 bot 时不撤回 — 旧账号的开场白卡不得经
+    // 新账号的 client 操作; 同一 bot 重连则照常(见 isSameBotActive)。
+    if (!isSameBotActive(botAppId)) {
+      log.info('[feishu/wsClient] orphan opener recall skipped: no same-bot connection');
       return;
     }
     // 重试耗尽: 最后兜底是撤回开场白卡 — 撤回成功用户看到干净群主流而不是
@@ -255,12 +262,11 @@ function scheduleOrphanNoticeRetry(
   if (existing) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
     orphanNoticeRetries.delete(openerMessageId);
-    void retryOrphanOpenerNotice(botAppId, generation, openerMessageId, messageId, attempt);
+    void retryOrphanOpenerNotice(botAppId, openerMessageId, messageId, attempt);
   }, delay);
   orphanNoticeRetries.set(openerMessageId, {
     timer,
     botAppId,
-    generation,
     openerMessageId,
     messageId,
   });
@@ -268,16 +274,16 @@ function scheduleOrphanNoticeRetry(
 
 async function retryOrphanOpenerNotice(
   botAppId: string,
-  generation: number,
   openerMessageId: string,
   messageId: string,
   attempt: number,
 ): Promise<void> {
   const log = getLog();
-  // gate 到触发时的连接: 换代/断开后不再重试 — 旧账号的开场白不该发进
-  // 新账号的会话(新账号的重推路径会走它自己的 orphaned 处理)。
-  if (!isActiveConnection(generation, botAppId)) {
-    log.info('[feishu/wsClient] orphan opener notice retry skipped: connection changed');
+  // 账号门(重连安全): 换代后仍是同一个 bot 就用当前 client 继续重试 —
+  // 跨 stop 保留的重试链不会死在 stale generation 上; 换成别的 bot 或
+  // 无连接时跳过, 旧账号的开场白不发进新账号的会话。
+  if (!isSameBotActive(botAppId)) {
+    log.info('[feishu/wsClient] orphan opener notice retry skipped: no same-bot connection');
     return;
   }
   // 提示已由其它路径送达(执行中的重试与重投成功交错) — 放弃整条重试链。
@@ -301,7 +307,7 @@ async function retryOrphanOpenerNotice(
     return;
   }
   log.warn(`[feishu/wsClient] orphan opener notice retry failed (attempt ${attempt})`);
-  scheduleOrphanNoticeRetry(botAppId, generation, openerMessageId, messageId, attempt + 1);
+  scheduleOrphanNoticeRetry(botAppId, openerMessageId, messageId, attempt + 1);
 }
 
 /**
@@ -1053,7 +1059,7 @@ async function handleIncomingMessage(
         log.error(
           `[feishu/wsClient] openThread orphaned opener=...${opener.openerMessageId.slice(-8)} — turn dropped with in-topic notice`,
         );
-        await sendOrphanOpenerNotice(botAppId, messageId, opener.openerMessageId, generation);
+        await sendOrphanOpenerNotice(botAppId, messageId, opener.openerMessageId);
         return;
       } else {
         laneUserId = encodeLaneUserId(chatId, null);

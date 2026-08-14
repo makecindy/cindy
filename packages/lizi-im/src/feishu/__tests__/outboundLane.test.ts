@@ -8,24 +8,41 @@ const larkMocks = vi.hoisted(() => {
     void payload;
     return { data: { message_id: 'om_created' } };
   });
+  // 记录每次调用的 this(各自的 message 命名空间对象, 每个 Client 实例一个)—
+  // 用于断言 openThread 的 reply/get/delete 是否 pin 在同一个 client 上。
+  const replyOwners: unknown[] = [];
+  const getOwners: unknown[] = [];
+  const deleteOwners: unknown[] = [];
   const reply = vi.fn(
-    async (payload: {
-      path: unknown;
-      data: unknown;
-    }): Promise<{ data: { message_id: string; thread_id?: string } }> => {
+    function (
+      this: unknown,
+      payload: {
+        path: unknown;
+        data: unknown;
+      },
+    ): Promise<{ data: { message_id: string; thread_id?: string } }> {
+      replyOwners.push(this);
       void payload;
-      return { data: { message_id: 'om_replied', thread_id: 'omt_r1' } };
+      return Promise.resolve({ data: { message_id: 'om_replied', thread_id: 'omt_r1' } });
     },
   );
   const deleteMessage = vi.fn(
-    async (): Promise<{ code?: number; msg?: string; data?: {} }> => ({ data: {} }),
+    function (this: unknown): Promise<{ code?: number; msg?: string; data?: {} }> {
+      deleteOwners.push(this);
+      return Promise.resolve({ data: {} });
+    },
   );
   const getMessage = vi.fn(
-    async (): Promise<{ data: { items: Array<{ thread_id?: string }> } }> => ({
-      data: { items: [] },
-    }),
+    function (
+      this: unknown,
+      payload: { path: unknown },
+    ): Promise<{ data: { items: Array<{ thread_id?: string }> } }> {
+      getOwners.push(this);
+      void payload;
+      return Promise.resolve({ data: { items: [] } });
+    },
   );
-  return { create, reply, deleteMessage, getMessage };
+  return { create, reply, deleteMessage, getMessage, replyOwners, getOwners, deleteOwners };
 });
 
 vi.mock('@larksuiteoapi/node-sdk', () => ({
@@ -262,6 +279,32 @@ describe('feishu outbound lane routing', () => {
     await expect(outbound.recallOwnMessage('om_rejected')).resolves.toBe(false);
     larkMocks.deleteMessage.mockRejectedValueOnce(new Error('network down'));
     await expect(outbound.recallOwnMessage('om_throw')).resolves.toBe(false);
+  });
+
+  it('openThread pins recovery/recall to the client that created the opener', async () => {
+    const creds2 = { appId: 'cli_other', appSecret: 'secret2', service: 'feishu' as const };
+    const replyBase = larkMocks.replyOwners.length;
+    const getBase = larkMocks.getOwners.length;
+    const deleteBase = larkMocks.deleteOwners.length;
+    larkMocks.reply.mockImplementationOnce(function (this: unknown) {
+      larkMocks.replyOwners.push(this);
+      return Promise.resolve({ data: { message_id: 'om_replied' } });
+    });
+    // message.get 执行期间换账号: bindClient(creds2) 后返回空 items —
+    // 补查与撤回必须仍走创建开场白的那条连接, 不能打到新账号的 client。
+    larkMocks.getMessage.mockImplementationOnce(function (this: unknown, payload: { path: unknown }) {
+      larkMocks.getOwners.push(this);
+      void payload;
+      outbound.bindClient(creds2);
+      return Promise.resolve({ data: { items: [] } });
+    });
+    await expect(outbound.openThread('om_pin1')).resolves.toEqual({ kind: 'degraded' });
+
+    const replyCtx = larkMocks.replyOwners[replyBase];
+    const getCtx = larkMocks.getOwners[getBase];
+    const delCtx = larkMocks.deleteOwners[deleteBase];
+    expect(getCtx).toBe(replyCtx);
+    expect(delCtx).toBe(replyCtx);
   });
 
   it('unbindClient clears held anchors (no cross-generation mismatch)', async () => {

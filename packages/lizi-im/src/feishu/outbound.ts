@@ -323,8 +323,19 @@ export async function recallOwnMessage(messageId: string): Promise<boolean> {
 
 async function doOpenThread(replyToMessageId: string): Promise<OpenThreadOutcome> {
   const log = getLog();
+  // 全程 pin 到触发时的 client: reply / message.get / message.delete 都用
+  // 同一个实例。中途换账号(unbindClient + bindClient 新凭证)时, 补查与
+  // 撤回仍走创建开场白的那条连接 — 不会经新账号的 client 操作旧消息。
+  let c: Lark.Client;
   try {
-    const res = await ensureClient().im.v1.message.reply({
+    c = ensureClient();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[feishu/outbound] openThread failed (fallback to group lane): ${msg}`);
+    return { kind: 'degraded' };
+  }
+  try {
+    const res = await c.im.v1.message.reply({
       path: { message_id: replyToMessageId },
       data: {
         content: JSON.stringify(buildMarkdownCardV2(transportMessages.streaming.randomThinking())),
@@ -346,11 +357,11 @@ async function doOpenThread(replyToMessageId: string): Promise<OpenThreadOutcome
     }
     if (threadId) return { kind: 'opened', messageId, threadId };
     // 部分成功: 开场白已发出但响应缺 thread_id — 补查消息详情恢复话题 id。
-    const recovered = await tryFetchMessageThreadId(messageId);
+    const recovered = await tryFetchMessageThreadId(c, messageId);
     if (recovered) return { kind: 'opened', messageId, threadId: recovered };
     // 恢复不了: 撤回开场白再降级, 避免「思考中」的开场白卡留在群里误导。
     try {
-      const del = await ensureClient().im.v1.message.delete({
+      const del = await c.im.v1.message.delete({
         path: { message_id: messageId },
       });
       // SDK 对业务错误不抛异常, 2xx 响应也可能带非零 code — 只有 code 缺省
@@ -382,10 +393,10 @@ async function doOpenThread(replyToMessageId: string): Promise<OpenThreadOutcome
 }
 
 /** 用 message.get 补查开场白消息的 thread_id(部分成功恢复);失败返回 ''。 */
-async function tryFetchMessageThreadId(messageId: string): Promise<string> {
+async function tryFetchMessageThreadId(c: Lark.Client, messageId: string): Promise<string> {
   const log = getLog();
   try {
-    const res = await ensureClient().im.v1.message.get({ path: { message_id: messageId } });
+    const res = await c.im.v1.message.get({ path: { message_id: messageId } });
     return res.data?.items?.[0]?.thread_id ?? '';
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

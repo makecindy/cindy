@@ -455,6 +455,82 @@ describe('feishu group inbound gate', () => {
     }
   });
 
+  it('retry scheduled after a same-account reconnect proceeds on the new connection', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      // 首次发送挂起中 — 期间断开 + 同一 bot 重连, 挂起的发送之后才失败。
+      let rejectFirst!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectFirst = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      const firstDelivery = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 断开 + 同一 bot 重连; 重投被仍持有的入站认领拦下(无新发送)。
+      await wsClient.stop({ announceOffline: false, reason: 'test-same-account-reconnect' });
+      await connect();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 旧发送此刻失败 — 其失败路径安排的重试跨 stop 保留, 且同账号重连后
+      // 应在新连接上继续执行(stale generation 不拦同 bot 的重试)。
+      rejectFirst(new Error('client closed'));
+      await firstDelivery;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retry is skipped when the account changed (old account opener never hits the new client)', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      let rejectFirst!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectFirst = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      const firstDelivery = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 断开并换成**别的** bot 账号。
+      await wsClient.stop({ announceOffline: false, reason: 'test-account-swap' });
+      const otherCreds = { appId: 'cli_other_account', appSecret: 'secret', service: 'feishu' as const };
+      const connecting = wsClient.start(otherCreds, { announceLifecycle: false });
+      mocks.options.at(-1)?.onReady?.();
+      await connecting;
+      wsClient.setBotOpenIdForTest(BOT_OPEN_ID);
+
+      // 旧发送失败 → 安排重试; 重试触发时账号已换 — 必须跳过, 旧账号的
+      // 开场白不得经新账号的 client 发出。
+      rejectFirst(new Error('client closed'));
+      await firstDelivery;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('delivered terminal marker blocks a late send path even beyond the 60s cooldown', async () => {
     vi.useFakeTimers();
     try {
