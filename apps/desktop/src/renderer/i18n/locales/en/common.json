@@ -6614,6 +6614,8 @@
       "automationSent": "Sent by automation",
       "automationSentNamed": "Sent by automation \"{{name}}\"",
       "automationViewTask": "View automation task",
+      "orcaFromLead": "Message from Lead",
+      "orcaFromWorker": "Message from Worker",
       "expandLongMessage": "Show full message",
       "collapseLongMessage": "Collapse",
       "sessionReference": {
