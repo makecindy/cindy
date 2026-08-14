@@ -592,13 +592,27 @@ async function reserveTrashTarget(
       const code = (e as NodeJS.ErrnoException).code;
       if (code === 'EEXIST') continue;
       if (code === 'CLEANUP_SOURCE_LOCKED') throw e; // 源锁: 直接暴露, 不 fallback
-      // link 不可用 (文件系统不支持硬链接) → fallback rename (目标随机后缀,
-      // 碰撞窗口极小)。
+      // link 不可用 (文件系统不支持硬链接) → fallback rename。目标仍需
+      // no-clobber: 失败清理遗留的 .cleanup-trash-* 恢复文件是 live-writer
+      // 内容的唯一可达副本, 随机后缀碰撞时 rename 会覆盖它 (Codex P2 on
+      // #2561 第二十五轮: reserve fallback trash moves exclusively)。先探测
+      // 目标不存在再 rename, 存在则换随机后缀重试 (fallback 场景 + 32-bit
+      // 随机后缀, 探测-rename 的残余窗口极小, 工程可接受)。
+      if (await pathExists(candidate)) continue;
       await fs.rename(src, candidate);
       return candidate;
     }
   }
   throw new Error(`unable to reserve trash target for ${filename}`);
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.stat(p);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 归一化内容 hash — 忽略 updatedAt 与 frontmatter 排版差异, 只比语义内容。 */
@@ -714,9 +728,15 @@ async function restoreTrash(
         });
         return;
       }
-      // 恢复彻底失败 → 暴露; trash 保留在原位 (非合法分片名, list 跳过),
-      // 外层重建索引后记忆退出正常路径但磁盘数据可人工找回。
-      throw e2;
+      // 双重恢复 (link + copy) 都失败 → 不抛错: src 已移走, 抛错只会让外层
+      // 记 failed 并重建索引 — 记忆退出正常路径。改为明确 failed + trash 保留
+      // 原位 (磁盘可达, 供人工找回), 绝不静默丢数据 (Greptile P1 on #2561
+      // 第二十五轮: 双重恢复失败移除活动记忆)。
+      result.failed.push({
+        filename: item.filename,
+        error:
+          'source changed during archive; both link and copy restore failed — trash kept reachable for manual recovery',
+      });
     }
   }
 }

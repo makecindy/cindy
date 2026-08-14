@@ -783,4 +783,87 @@ describe('runMemoryCleanup', () => {
       spy.mockRestore();
     }
   });
+
+  it('keeps trash reachable when both link and copy restore fail', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟: 源在归档期间变化 (trash ≠ 快照), 且硬链接恢复 (link ENOTSUP) 与
+    // 排他复制恢复 (copyFile EACCES) 都失败 — 不能抛错 (src 已移走, 抛错让
+    // 记忆退出正常路径), trash 保留可达 + failed 如实报告 (Greptile P1 on
+    // #2561 第二十五轮: 双重恢复失败移除活动记忆)。
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, 'link').mockImplementation(async (src, dst) => {
+      if (String(src).endsWith('feedback_a.md') && String(dst).includes('cleanup-trash')) {
+        // reserveTrashTarget 的排他预留: 宿主在预留前写新内容 → trash ≠ 快照,
+        // 触发 restoreTrash; 然后真实 link (移动 src → trash)。
+        await writeFile(
+          String(src),
+          "---\ntitle: NEW\ndescription: new\ntype: feedback\nupdatedAt: '2026-03-01T00:00:00.000Z'\n---\nUPDATED\n",
+          'utf8',
+        );
+        return realLink(src as string, dst as string);
+      }
+      // restoreTrash 的 link (existing=trash → new=src): 硬链接不可用 → 走
+      // copyFile fallback (也被 mock 拒绝) → 双重恢复失败。
+      throw Object.assign(new Error('link not supported'), { code: 'ENOTSUP' });
+    });
+    const copySpy = vi
+      .spyOn(fs, 'copyFile')
+      .mockRejectedValue(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // 不抛错 (run 正常返回): failed 如实报告, trash 保留在分片目录可达。
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      const files = await readdir(dir);
+      expect(files.some((f) => f.includes('cleanup-trash'))).toBe(true);
+    } finally {
+      linkSpy.mockRestore();
+      copySpy.mockRestore();
+    }
+  });
+
+  it('retries fallback rename when the trash target already exists', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟硬链接不可用 (link ENOTSUP → fallback rename), 且 fallback 探测时
+    // 第一个候选路径「已存在」(失败清理遗留) — 必须换后缀重试而非覆盖遗留
+    // 恢复文件 (Codex P2 on #2561 第二十五轮: reserve fallback trash moves
+    // exclusively)。
+    const linkSpy = vi
+      .spyOn(fs, 'link')
+      .mockRejectedValue(Object.assign(new Error('link not supported'), { code: 'ENOTSUP' }));
+    const realStat = fs.stat.bind(fs);
+    let trashProbes = 0;
+    const statSpy = vi.spyOn(fs, 'stat').mockImplementation(async (p) => {
+      const str = String(p);
+      if (str.includes('cleanup-trash')) {
+        trashProbes += 1;
+        if (trashProbes === 1) {
+          // 第一个候选「已存在」(失败清理遗留的恢复文件) → pathExists true
+          // → reserveTrashTarget 换后缀重试, 不覆盖。
+          return { isFile: () => true, isDirectory: () => false } as never;
+        }
+        if (trashProbes === 2) {
+          // 第二个候选不存在 → pathExists false → 允许 rename。
+          throw Object.assign(new Error('no such file'), { code: 'ENOENT' });
+        }
+      }
+      return realStat(p as string);
+    });
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // 换后缀重试后归档成功 (不覆盖遗留, 不抛错)。
+      expect(result.failed).toHaveLength(0);
+      expect(result.archived.some((a) => a.filename === 'feedback_a.md')).toBe(true);
+    } finally {
+      linkSpy.mockRestore();
+      statSpy.mockRestore();
+    }
+  });
 });
