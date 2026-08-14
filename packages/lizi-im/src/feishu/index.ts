@@ -147,8 +147,17 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   async consumePendingOpenerCard(userId: string, markdown: string): Promise<boolean> {
     const openerId = outbound.claimPatchableOpener(userId);
     if (!openerId) return false;
-    await streamingText.patchMarkdown(openerId, markdown);
-    return true;
+    try {
+      await streamingText.patchMarkdown(openerId, markdown);
+      return true;
+    } catch (err) {
+      // patch 失败: 认领已完成, 卡不会再被后续流式 patch — 撤回它让兜底
+      // 发送成为唯一回复; 撤回也失败则卡残留(与孤儿撤回同一边界, 已 log)。
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`consumePendingOpenerCard patch failed — recalling opener: ${msg}`);
+      await outbound.recallOwnMessage(openerId);
+      return false;
+    }
   }
 
   /**
@@ -160,11 +169,19 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   async consumePendingOpenerAsCard(userId: string, spec: InteractiveCardSpec): Promise<boolean> {
     const openerId = outbound.claimPatchableOpener(userId);
     if (!openerId) return false;
-    await outbound.updateInteractive(openerId, spec);
-    // 替换后的交互卡同样要登记发卡 lane — 否则按钮回调 resolveCardLane
-    // 查不到, 被 cardActionHandler 的群卡 fail-closed 门当旧卡拒绝。
-    outbound.registerCardLane(userId, openerId);
-    return true;
+    try {
+      await outbound.updateInteractive(openerId, spec);
+      // 替换后的交互卡同样要登记发卡 lane — 否则按钮回调 resolveCardLane
+      // 查不到, 被 cardActionHandler 的群卡 fail-closed 门当旧卡拒绝。
+      outbound.registerCardLane(userId, openerId);
+      return true;
+    } catch (err) {
+      // 同 consumePendingOpenerCard: 替换失败撤回开场白卡, 回落正常发卡。
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`consumePendingOpenerAsCard replace failed — recalling opener: ${msg}`);
+      await outbound.recallOwnMessage(openerId);
+      return false;
+    }
   }
 
   sendInteractiveCard(
