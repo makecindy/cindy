@@ -19,11 +19,23 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
       auth: { method: 'none' },
       runtimes: { pi: { baseUrl: 'http://127.0.0.1:11434/v1', models: [{ id: 'local-model' }] } },
     },
+    {
+      id: 'xai',
+      name: 'Legacy custom xAI',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        pi: { baseUrl: 'https://private-xai.example/v1', models: [{ id: 'private-grok' }] },
+      },
+    },
   ],
 }));
-vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomProviderKey: () => null }));
+vi.mock('../../secrets/providerSecretStore.js', () => ({
+  readCustomProviderKey: (providerId: string) =>
+    providerId === 'xai' ? 'legacy-custom-key' : null,
+}));
+vi.mock('../grok-oauth-login.js', () => ({ hasGrokOAuthLogin: () => false }));
 
-import { desktopPiAuthAdapter } from '../pi-host.js';
+import { desktopPiAuthAdapter, resolvePiNativeProviders } from '../pi-host.js';
 
 describe('Pi pure BYOM auth without a Cindy account', () => {
   it('authenticates the native provider and only uses an inert gateway placeholder', async () => {
@@ -38,5 +50,33 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
       authenticated: false,
       errorReason: 'cindy_gateway_key_unavailable',
     });
+  });
+
+  it('keeps a legacy custom xai credential usable without a SuperGrok login', async () => {
+    expect(await desktopPiAuthAdapter.getState({ providerId: 'custom:xai' })).toMatchObject({
+      authenticated: true,
+      identity: 'Legacy custom xAI',
+    });
+    expect(await desktopPiAuthAdapter.getState({ providerId: 'xai' })).toMatchObject({
+      authenticated: true,
+      identity: 'Legacy custom xAI',
+    });
+  });
+
+  it('restores a legacy xai session from the custom endpoint startup snapshot', async () => {
+    const resolved = await resolvePiNativeProviders({
+      workingDir: '/tmp/project',
+      providerId: 'xai',
+      model: 'private-grok',
+    });
+
+    expect(resolved.providers).toContainEqual(
+      expect.objectContaining({
+        id: 'xai',
+        baseUrl: 'https://private-xai.example/v1',
+        models: [expect.objectContaining({ id: 'private-grok' })],
+      }),
+    );
+    expect(Object.values(resolved.env)).toContain('legacy-custom-key');
   });
 });

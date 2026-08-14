@@ -10,7 +10,12 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { buildUserProvider, DEFAULT_CUSTOM_CONTEXT_WINDOW } from '../user-provider.js';
+import {
+  buildUserProvider,
+  DEFAULT_CUSTOM_CONTEXT_WINDOW,
+  LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
+  storedCustomProviderId,
+} from '../user-provider.js';
 import type { CustomProviderConfig } from '../types.js';
 import { BUNDLED_CATALOG } from '../catalog.js';
 
@@ -29,6 +34,17 @@ const codexOnly: CustomProviderConfig = {
 };
 
 describe('buildUserProvider (per-runtime)', () => {
+  it('projects a legacy custom xai row under a collision-free runtime id', () => {
+    const provider = buildUserProvider({
+      ...codexOnly,
+      id: 'xai',
+      name: 'My xAI-compatible endpoint',
+    });
+    expect(provider.id).toBe(LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID);
+    expect(provider.routing.codex?.upstream).toBe('https://openrouter.ai/api/v1');
+    expect(storedCustomProviderId(provider.id)).toBe('xai');
+  });
+
   it('maps a single-runtime config to a standard user Provider', () => {
     const p = buildUserProvider(codexOnly);
     expect(p.id).toBe('openrouter');

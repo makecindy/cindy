@@ -29,7 +29,12 @@ import type {
   PiNativeProviderSpec,
   PiNativeProvidersResult,
 } from '@cindy/maker-core';
-import { PI_REASONING_EFFORTS } from '@cindy/model-providers';
+import {
+  LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
+  PI_REASONING_EFFORTS,
+  runtimeCustomProviderId,
+  storedCustomProviderId,
+} from '@cindy/model-providers';
 import piModelCatalogJson from '@cindy/model-providers/pi-model-catalog' with { type: 'json' };
 import type {
   CustomProviderConfig,
@@ -99,15 +104,14 @@ class DesktopPiAuthAdapter implements AuthAdapter {
     if (providerId === 'openai') {
       return desktopCodexAuthAdapter.getState({ credentialMode: 'oauth-bearer' });
     }
-    if (providerId === 'xai') {
-      return hasGrokOAuthLogin()
-        ? { authenticated: true, identity: 'SuperGrok', authSource: 'oauth' }
-        : { authenticated: false, errorReason: 'xai_oauth_unavailable' };
+    if (providerId === 'xai' && hasGrokOAuthLogin()) {
+      return { authenticated: true, identity: 'SuperGrok', authSource: 'oauth' };
     }
     if (providerId) {
+      const storageProviderId = storedCustomProviderId(providerId);
       try {
         const custom = (await listCustomProvidersWithSecureHeaders()).find(
-          (provider) => provider.id === providerId && provider.runtimes.pi,
+          (provider) => provider.id === storageProviderId && provider.runtimes.pi,
         );
         if (custom) {
           const method = custom.auth?.method ?? 'apiKey';
@@ -118,7 +122,7 @@ class DesktopPiAuthAdapter implements AuthAdapter {
           }
           if (method === 'apiKey') {
             const hasHeaderCredential = Object.keys(custom.runtimes.pi?.headers ?? {}).length > 0;
-            return readCustomProviderKey(providerId, 'pi') || hasHeaderCredential
+            return readCustomProviderKey(storageProviderId, 'pi') || hasHeaderCredential
               ? { authenticated: true, identity: custom.name, authSource: 'api-key' }
               : { authenticated: false, errorReason: 'pi_native_api_key_unavailable' };
           }
@@ -430,7 +434,7 @@ export function buildPiNativeProvidersFromConfigs(
       }
     }
     providers.push({
-      id: cfg.id,
+      id: runtimeCustomProviderId(cfg.id),
       name: cfg.name,
       baseUrl: rt.baseUrl,
       api: wireProtocolToPiApi(rt.wireProtocol),
@@ -530,7 +534,7 @@ export async function buildXaiPiNativeProvider(
 }
 
 /** BYOM:读 DB 自定义 provider + safeStorage key → pi 原生 provider spec。IO 外壳,逻辑在上面。 */
-async function resolvePiNativeProviders(ctx: {
+export async function resolvePiNativeProviders(ctx: {
   workingDir: string;
   remoteHostId?: string | null;
   providerId?: string | null;
@@ -564,12 +568,25 @@ async function resolvePiNativeProviders(ctx: {
   }
 
   const custom = buildPiNativeProvidersFromConfigs(
-    configs.filter((config) => config.id !== 'xai'),
+    configs,
     readCustomProviderKey,
     (id, reason) =>
       log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
   );
-  if (ctx.providerId === 'xai' || hasGrokOAuthLogin()) {
+  const legacyCustomXai = configs.find((config) =>
+    config.id === 'xai'
+    && config.runtimes.pi?.models.some((model) => model.id === ctx.model),
+  );
+  const useLegacyCustomXai =
+    ctx.providerId === 'xai'
+    && !hasGrokOAuthLogin()
+    && legacyCustomXai !== undefined;
+  if (useLegacyCustomXai) {
+    const projected = custom.providers.find(
+      (provider) => provider.id === LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
+    );
+    if (projected) projected.id = 'xai';
+  } else if (ctx.providerId === 'xai' || hasGrokOAuthLogin()) {
     const selectedXaiModel = ctx.providerId === 'xai'
       || (!ctx.providerId && ctx.model.startsWith('xai/'))
       ? ctx.model

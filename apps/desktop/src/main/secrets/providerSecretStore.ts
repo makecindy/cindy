@@ -2,6 +2,8 @@ import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { storedCustomProviderId } from '@cindy/model-providers';
+
 import { createLogger } from '../logger.js';
 import {
   providerSecretStorageKey,
@@ -390,8 +392,9 @@ export function getProviderSecretStore(): ProviderSecretStore {
  * 与 renderer 经通用 safe-storage IPC 写入的 .enc 文件字节级互通。
  */
 export function readCustomProviderKey(providerId: string, agent: string): string | null {
+  const storageProviderId = storedCustomProviderId(providerId);
   try {
-    return electronSecretIo.read(customProviderSecretStorageKey(providerId, agent));
+    return electronSecretIo.read(customProviderSecretStorageKey(storageProviderId, agent));
   } catch (err) {
     log.warn(
       { providerId, agent, err: err instanceof Error ? err.message : String(err) },
@@ -418,8 +421,9 @@ export function readCustomProviderHeaders(
   providerId: string,
   agent: string,
 ): Record<string, string> | null {
+  const storageProviderId = storedCustomProviderId(providerId);
   try {
-    const raw = electronSecretIo.read(customProviderHeaderStorageKey(providerId, agent));
+    const raw = electronSecretIo.read(customProviderHeaderStorageKey(storageProviderId, agent));
     return raw === null ? null : parseCustomProviderHeaders(raw);
   } catch (err) {
     log.warn(

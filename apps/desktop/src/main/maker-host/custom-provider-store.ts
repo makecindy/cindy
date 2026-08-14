@@ -40,7 +40,7 @@ export const CUSTOM_PROVIDER_ID_RE = /^[a-z0-9_-]+$/;
 /** 不可占用的内置来源 id。 */
 // 'cindy' 是 pi models.json 里网关 provider 的保留 id;自定义 provider 撞名会让其模型
 // 既被排除出网关块又不写入原生块 → --model 校验失败,故一并保留。
-const RESERVED_IDS = new Set(['anthropic', 'openai', 'xd', 'cindy']);
+const RESERVED_IDS = new Set(['anthropic', 'openai', 'xai', 'xd', 'cindy']);
 const VALID_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
@@ -364,14 +364,19 @@ function validateAuthSection(auth: unknown): ValidationResult {
 }
 
 /** 纯函数：校验一份自定义供应商配置的结构合法性（per-runtime）。 */
-export function validateCustomProviderConfig(config: unknown): ValidationResult {
+export function validateCustomProviderConfig(
+  config: unknown,
+  options: { allowLegacyXai?: boolean } = {},
+): ValidationResult {
   if (!config || typeof config !== 'object') return invalid('config must be an object');
   const c = config as Record<string, unknown>;
 
   if (typeof c.id !== 'string' || c.id.length === 0) return invalid('id required');
   if (c.id.length > MAX_ID_LEN) return invalid(`id too long (max ${MAX_ID_LEN})`);
   if (!CUSTOM_PROVIDER_ID_RE.test(c.id)) return invalid('id must match /^[a-z0-9_-]+$/');
-  if (RESERVED_IDS.has(c.id)) return invalid(`id '${c.id}' is reserved`);
+  if (RESERVED_IDS.has(c.id) && !(c.id === 'xai' && options.allowLegacyXai === true)) {
+    return invalid(`id '${c.id}' is reserved`);
+  }
 
   if (typeof c.name !== 'string' || c.name.trim().length === 0) return invalid('name required');
   if (c.name.length > MAX_NAME_LEN) return invalid(`name too long (max ${MAX_NAME_LEN})`);

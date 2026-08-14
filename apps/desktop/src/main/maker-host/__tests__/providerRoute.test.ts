@@ -747,6 +747,35 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
     });
   });
 
+  it('routes a legacy custom xai row independently from the built-in SuperGrok source', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'xai',
+        name: 'Private xAI-compatible endpoint',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://private-xai.example/v1',
+            models: [{ id: 'private-grok', name: 'Private Grok' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((id, agent) =>
+      id === 'xai' && agent === 'codex' ? 'legacy-custom-key' : null,
+    );
+    setSessionProvider('s-user', 'custom:xai');
+
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'xai')).toBe(true);
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'custom:xai')).toBe(
+      true,
+    );
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY)).toEqual({
+      headerOverride: { authorization: 'Bearer legacy-custom-key' },
+      upstreamOverride: 'https://private-xai.example/v1',
+      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+    });
+  });
+
   it('blocks new routes while endpoint and key switch as one logical mutation', async () => {
     setCustomProviders([
       buildUserProvider({

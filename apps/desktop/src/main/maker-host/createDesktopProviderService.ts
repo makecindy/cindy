@@ -29,6 +29,7 @@ import {
   loadCatalog,
   loadCatalogWithSource,
   parseCatalog,
+  storedCustomProviderId,
   type Catalog,
   type CatalogIO,
   type CatalogSourceConfig,
@@ -427,7 +428,9 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   });
   const readOAuthToken = (providerId: string): string | null => {
     const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-    return readCachedGenericOAuthAccessToken(providerId, provider?.auth.oauth);
+    const storageProviderId =
+      provider?.source === 'user' ? storedCustomProviderId(providerId) : providerId;
+    return readCachedGenericOAuthAccessToken(storageProviderId, provider?.auth.oauth);
   };
   setOAuthTokenReader(readOAuthToken);
   setDiagnosticsOAuthTokenReader(readOAuthToken);
@@ -895,7 +898,7 @@ export function getDesktopProviderService(): ProviderService {
       xai: () => hasGrokOAuthLogin(),
     },
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
-    genericOAuthConnected: (providerId) => hasGenericOAuthLogin(providerId),
+    genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
     // 内置 API-key 供应商(如 gemini 图像来源):连接态 = key 已存(providerSecretStore)。
     builtinApiKeyConnected: (providerId) =>
       providerId === 'gemini' ? Boolean(getProviderSecretStore().get('gemini')?.trim()) : false,

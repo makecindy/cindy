@@ -28,6 +28,20 @@ import { isLoopbackProviderUrl } from './provider-url.js';
 export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
 
 /**
+ * Older releases allowed a user provider to occupy `xai`, which is now the built-in SuperGrok
+ * source. Preserve the stored id, but project that legacy row under a collision-free runtime id.
+ */
+export const LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID = 'custom:xai';
+
+export function runtimeCustomProviderId(providerId: string): string {
+  return providerId === 'xai' ? LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID : providerId;
+}
+
+export function storedCustomProviderId(providerId: string): string {
+  return providerId === LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID ? 'xai' : providerId;
+}
+
+/**
  * 自定义模型的默认 effort 档位（「参考默认设置」）——与内置当代旗舰模型对齐：
  *   - claude-code：low/medium/high/xhigh/max（同 opus / fable）；
  *   - codex：low/medium/high/xhigh（同 gpt-5.x）。
@@ -191,6 +205,7 @@ export function buildUserProvider(
   config: CustomProviderConfig,
   options: BuildUserProviderOptions = {},
 ): Provider {
+  const runtimeProviderId = runtimeCustomProviderId(config.id);
   // OAuth 形态路由走 Runner Bearer；none 明确走无鉴权且由 host 剥凭证；缺省保持历史 API key。
   const oauth = config.auth?.method === 'oauth' ? config.auth.oauth : undefined;
   const isOAuth = oauth !== undefined;
@@ -219,7 +234,7 @@ export function buildUserProvider(
     );
   }
   return {
-    id: config.id,
+    id: runtimeProviderId,
     name: config.name,
     source: 'user',
     agents,

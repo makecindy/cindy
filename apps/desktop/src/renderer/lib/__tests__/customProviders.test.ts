@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
+
 import {
   appendDiscoveredCustomProviderModels,
   createCustomProvider,
   customProviderModelConfigFromCatalogModel,
+  deleteCustomProvider,
   piCatalogProviderIdAfterRouteEdit,
   providerViewToCustomProviderConfig,
+  readCustomProviderKey,
   replaceCustomProviderModelId,
   setCustomProviderModelReasoning,
   setCustomProviderModelReasoningEffort,
@@ -373,6 +377,37 @@ describe('providerViewToCustomProviderConfig Pi catalog metadata', () => {
 });
 
 describe('providerViewToCustomProviderConfig', () => {
+  it('restores the stored id for a legacy custom xai runtime projection', () => {
+    const provider = {
+      id: 'custom:xai',
+      name: 'Legacy custom xAI',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        codex: {
+          upstream: 'https://private-xai.example/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: {
+        codex: [
+          {
+            id: 'private-grok',
+            name: 'Private Grok',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      },
+      connected: true,
+    } satisfies ProviderView;
+
+    expect(providerViewToCustomProviderConfig(provider).id).toBe('xai');
+  });
+
   it('preserves no-auth and exact request-path fields through the edit round trip', () => {
     const provider = {
       id: 'local-chat',
@@ -529,6 +564,39 @@ describe('appendDiscoveredCustomProviderModels', () => {
 });
 
 describe('custom provider credential lifecycle', () => {
+  it('maps the legacy runtime id back to its stored config and credential keys', async () => {
+    const read = vi.fn(async () => 'legacy-key');
+    const update = vi.fn(async () => ({ ok: true }));
+    const remove = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal('window', {
+      electronAPI: {
+        safeStorageRead: read,
+        maker: {
+          updateCustomProvider: update,
+          deleteCustomProvider: remove,
+        },
+      },
+    });
+    const config = {
+      id: 'custom:xai',
+      name: 'Legacy custom xAI',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://private-xai.example/v1',
+          models: [{ id: 'private-grok', name: 'Private Grok' }],
+        },
+      },
+    };
+
+    await expect(readCustomProviderKey('custom:xai', 'codex')).resolves.toBe('legacy-key');
+    await updateCustomProvider(config, { codex: 'replacement-key' });
+    await deleteCustomProvider('custom:xai');
+
+    expect(read).toHaveBeenCalledWith(customProviderSecretStorageKey('xai', 'codex'));
+    expect(update).toHaveBeenCalledWith({ ...config, id: 'xai' }, { codex: 'replacement-key' });
+    expect(remove).toHaveBeenCalledWith('xai');
+  });
+
   it('submits create config and keys through one main-process mutation', async () => {
     const create = vi.fn(async () => ({ ok: true }));
     vi.stubGlobal('window', {

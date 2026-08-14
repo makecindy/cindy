@@ -9,6 +9,7 @@ import {
   setActiveCatalog,
   setActiveCatalogChangedListener,
   setAnthropicDiscoveredModels,
+  setCustomProviderConfigs,
   setDiscoveredCodexModels,
   setXaiDiscoveredModels,
 } from '../active-catalog.js';
@@ -20,6 +21,7 @@ describe('active catalog revision', () => {
     setAnthropicDiscoveredModels([]);
     setDiscoveredCodexModels([]);
     setXaiDiscoveredModels(null);
+    setCustomProviderConfigs([]);
   });
 
   it('invalidates the merged catalog before notifying one monotonic revision', () => {
@@ -45,6 +47,35 @@ describe('active catalog revision', () => {
     expect(listener).toHaveBeenCalledOnce();
     expect(listener.mock.results[0]?.value).toMatchObject({ revision: start + 1 });
     expect(listener.mock.results[0]?.value.ids).toContain('gpt-next-live');
+  });
+
+  it('keeps legacy custom xai isolated across catalog refresh and owner config reload', () => {
+    setCustomProviderConfigs([
+      {
+        id: 'xai',
+        name: 'Private xAI-compatible endpoint',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://private-xai.example/v1',
+            models: [{ id: 'private-grok', name: 'Private Grok' }],
+          },
+        },
+      },
+    ]);
+    setActiveCatalog(structuredClone(BUNDLED_CATALOG));
+
+    const active = getActiveCatalog();
+    expect(active.providers.find((provider) => provider.id === 'xai')?.source).toBe('builtin');
+    expect(active.providers.find((provider) => provider.id === 'custom:xai')).toMatchObject({
+      source: 'user',
+      routing: { codex: { upstream: 'https://private-xai.example/v1' } },
+    });
+
+    setCustomProviderConfigs([]);
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'custom:xai')).toBe(
+      false,
+    );
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'xai')).toBe(true);
   });
 
   it('routes Anthropic discovery through the same revision listener', () => {

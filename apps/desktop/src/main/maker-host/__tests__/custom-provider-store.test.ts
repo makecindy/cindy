@@ -92,6 +92,10 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
   it('rejects bad / reserved ids', () => {
     expect(validateCustomProviderConfig({ ...valid, id: 'Bad Id' }).ok).toBe(false);
     expect(validateCustomProviderConfig({ ...valid, id: 'xd' }).ok).toBe(false);
+    expect(validateCustomProviderConfig({ ...valid, id: 'xai' }).ok).toBe(false);
+    expect(validateCustomProviderConfig({ ...valid, id: 'xai' }, { allowLegacyXai: true }).ok).toBe(
+      true,
+    );
     // 'cindy' 撞 pi 网关 provider id,必须保留
     expect(validateCustomProviderConfig({ ...valid, id: 'cindy' }).ok).toBe(false);
   });

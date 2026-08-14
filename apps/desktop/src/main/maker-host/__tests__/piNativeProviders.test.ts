@@ -39,6 +39,31 @@ const piRuntime = (over: Partial<NonNullable<Cfg['runtimes']['pi']>> = {}) => ({
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
+  it('keeps a legacy custom xai endpoint separate from the official SuperGrok provider', () => {
+    const { providers, env } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'xai',
+        name: 'Private xAI-compatible endpoint',
+        auth: { method: 'apiKey' },
+        runtimes: {
+          pi: piRuntime({
+            baseUrl: 'https://private-xai.example/v1',
+            models: [{ id: 'private-grok', name: 'Private Grok' }],
+          }),
+        },
+      }],
+      (providerId) => (providerId === 'xai' ? 'legacy-custom-key' : null),
+    );
+    expect(providers).toEqual([
+      expect.objectContaining({
+        id: 'custom:xai',
+        baseUrl: 'https://private-xai.example/v1',
+        models: [expect.objectContaining({ id: 'private-grok' })],
+      }),
+    ]);
+    expect(Object.values(env)).toContain('legacy-custom-key');
+  });
+
   it('reuses exact Pi official metadata and preserves unmatched configured models', () => {
     const { providers } = buildPiNativeProvidersFromConfigs(
       [{

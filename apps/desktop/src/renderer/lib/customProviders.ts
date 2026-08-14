@@ -16,6 +16,7 @@ import {
   effectivePiWireProtocol,
   PI_REASONING_EFFORTS,
   preservesPiCatalogModels,
+  storedCustomProviderId,
 } from '@cindy/model-providers';
 import type {
   AgentKind,
@@ -195,7 +196,7 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
     };
   }
   return {
-    id: p.id,
+    id: storedCustomProviderId(p.id),
     name: p.name,
     ...(p.auth.method === 'oauth' && p.auth.oauth
       ? { auth: { method: 'oauth' as const, oauth: p.auth.oauth } }
@@ -242,7 +243,7 @@ export async function readCustomProviderKey(
   agent: AgentKind,
 ): Promise<string | null> {
   const value = await window.electronAPI.safeStorageRead(
-    customProviderSecretStorageKey(providerId, agent),
+    customProviderSecretStorageKey(storedCustomProviderId(providerId), agent),
   );
   return value && value.length > 0 ? value : null;
 }
@@ -264,10 +265,13 @@ export async function updateCustomProvider(
   config: CustomProviderConfig,
   keys: RuntimeKeys,
 ): Promise<void> {
-  await window.electronAPI.maker.updateCustomProvider(config, keys);
+  await window.electronAPI.maker.updateCustomProvider(
+    { ...config, id: storedCustomProviderId(config.id) },
+    keys,
+  );
 }
 
 /** 删除：main 在同一 provider mutation queue 内清配置与所有凭证。 */
 export async function deleteCustomProvider(providerId: string): Promise<void> {
-  await window.electronAPI.maker.deleteCustomProvider(providerId);
+  await window.electronAPI.maker.deleteCustomProvider(storedCustomProviderId(providerId));
 }

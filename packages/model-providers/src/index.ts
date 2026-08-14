@@ -41,7 +41,13 @@ export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 
 export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from './catalog.js';
 
-export { buildUserProvider, DEFAULT_CUSTOM_CONTEXT_WINDOW } from './user-provider.js';
+export {
+  buildUserProvider,
+  DEFAULT_CUSTOM_CONTEXT_WINDOW,
+  LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
+  runtimeCustomProviderId,
+  storedCustomProviderId,
+} from './user-provider.js';
 export {
   appendProviderRequestPath,
   isLoopbackProviderUrl,
