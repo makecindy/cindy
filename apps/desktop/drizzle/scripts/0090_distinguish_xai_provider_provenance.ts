@@ -4,10 +4,6 @@ interface TableInfoRow {
   name: string;
 }
 
-// Commit 6c00d660794567c09255cebb288553ea7ce66be6 is the first code that let Pi
-// persist an official SuperGrok selection as provider_id='xai'. Rows created
-// before that instant cannot be official; rows at or after it are ambiguous
-// and must remain untouched rather than inferring provenance from the old id.
 const OFFICIAL_PI_XAI_INTRODUCED_AT_MS = 1_785_540_089_000;
 
 function tableHasColumns(
