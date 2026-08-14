@@ -724,16 +724,14 @@ export function UnifiedModelPanel({
                 } else if (price?.kind === 'free') {
                   priceDisplay = { kind: 'free' };
                 } else if (price?.kind === 'priced') {
-                  // 符号个数按**标准价**判(original;折扣不改变模型的价格档),亮段比例按折扣算;
-                  // **颜色按折后实付价**重新分档(Chris 2026-08-14 裁决:颜色表达"当前价格的
-                  // 选择观感"——贵模型打到一折,点亮那段就该是绿色质感;无折扣时两档同值)。
+                  // 符号个数按**标准价**判(original;折扣不改变模型的价格档),点亮几格按
+                  // 折扣比例取整;颜色只由点亮格数决定(见 UnifiedModelRow priceDisplay 头注)。
                   const basis = price.original ?? price.current;
                   const discountPct =
                     price.discount !== undefined ? Math.round(price.discount * 100) : 0;
                   priceDisplay = {
                     kind: 'tier',
                     tier: priceTierOf(basis.outputPerMtok, basis.currency),
-                    colorTier: priceTierOf(price.current.outputPerMtok, price.current.currency),
                     // 档串符号跟**报价币种**走(设计稿:中文报价是 ¥¥¥)。
                     symbol: basis.currency === 'CNY' ? '¥' : '$',
                     ...(discountPct > 0 && discountPct < 100
