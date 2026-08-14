@@ -975,6 +975,28 @@ describe('Ghost plugin detail sections', () => {
     expect(pressed[0].getAttribute('aria-label')).toBe('Needs approval');
   });
 
+  // 回归锚点:config 经 IPC 反序列化后是普通对象,工具名与 Object.prototype
+  // 成员撞名(constructor/toString/valueOf/hasOwnProperty/__proto__)时,裸
+  // 下标 `tools?.[toolName]` 会读到原型链上的方法(truthy 但不是合法档位),
+  // 把 globalPolicy 的继承短路掉。旧 bug 下没有任何按钮命中 mode(函数值
+  // 不等于任何档位字符串);修复后必须落回 globalPolicy 的 blocked。
+  it('does not let a tool named "constructor" bypass a blocked global policy', () => {
+    stubToolPermissionApi({ config: { globalPolicy: 'blocked', tools: {} } });
+    render(
+      <ToolsSection
+        ghostId="demo-ghost"
+        tools={[{ name: 'constructor', description: 'Collides with Object.prototype' }]}
+      />,
+    );
+
+    const group = screen.getAllByRole('group', { name: /constructor/ })[0];
+    const pressed = within(group)
+      .getAllByRole('button')
+      .filter((button) => button.getAttribute('aria-pressed') === 'true');
+    expect(pressed).toHaveLength(1);
+    expect(pressed[0].getAttribute('aria-label')).toBe('Blocked');
+  });
+
   it('materializes inherited blocked tools before saving one customized row', async () => {
     const setToolPermissions = stubToolPermissionApi({
       config: {

@@ -653,8 +653,16 @@ const SELECTABLE_TOOL_POLICIES: readonly ToolApprovalMode[] = [
  * 工具时，界面与 Host 都必须显示/执行默认的 needs-approval，避免误导用户。
  */
 function toolModeFromConfig(config: GhostToolPermissionConfig, toolName: string): ToolApprovalMode {
-  const explicit = config.tools?.[toolName];
-  if (explicit) return explicit;
+  // config 经 IPC 反序列化后是普通对象,不再是主进程那边写盘时用的 null 原型
+  // 容器;工具名由插件作者完全控制,叫 constructor/toString/valueOf/
+  // hasOwnProperty/__proto__ 时裸下标会读到 Object.prototype 成员(truthy 但
+  // 不是合法档位),把下面的全局策略继承短路掉。只认自有键,口径与主进程
+  // resolveModeFromConfig 一致。
+  const tools = config.tools;
+  if (tools && Object.prototype.hasOwnProperty.call(tools, toolName)) {
+    const explicit = tools[toolName];
+    if (explicit) return explicit;
+  }
   return config.globalPolicy === 'blocked' ? 'blocked' : 'needs-approval';
 }
 

@@ -90,14 +90,34 @@ describe('grantAttachmentsToGhost', () => {
     expect(typeof r.revoke).toBe('function');
   });
 
-  it('revoke() 撤销本次授出的每一条 ref;单条撤销失败只记 warn，继续撤其余的', async () => {
+  it('revoke() 走出生阶段同一条 withRefCompensation 持久补偿协议撤销每一条 ref', async () => {
     const { deps, addRef, removeRefById } = (() => {
       const base = makeDeps();
       const removeRefById = vi
         .fn<(id: string) => Promise<void>>()
         .mockRejectedValueOnce(new Error('worker disposed'))
         .mockResolvedValue(undefined);
-      return { ...base, deps: { ...base.deps, removeRefById }, removeRefById };
+      // 真身 withMediaRefCompensation 的行为:perform 半路失败就整批
+      // compensate 兜底(Promise.allSettled)。默认 makeDeps 的 mock 只是
+      // `return perform()`,不模拟这条 catch→compensate 路径,必须在这里
+      // 换成能还原真实契约的版本,否则测不出「不是裸循环各自忽略失败」。
+      const withRefCompensation: AttachmentGrantDeps['withRefCompensation'] = async ({
+        refIds,
+        perform,
+        compensate,
+      }) => {
+        try {
+          return await perform();
+        } catch (error) {
+          await Promise.allSettled(refIds.map((id) => compensate(id)));
+          throw error;
+        }
+      };
+      return {
+        ...base,
+        deps: { ...base.deps, removeRefById, withRefCompensation },
+        removeRefById,
+      };
     })();
     const r = await grantAttachmentsToGhost(deps, {
       ghostId: 'cindy-art',
@@ -108,9 +128,11 @@ describe('grantAttachmentsToGhost', () => {
     const grantedIds = addRef.mock.calls.map(([p]) => p.id);
     expect(grantedIds).toHaveLength(2);
 
-    await r.revoke();
+    // perform 里第一条删除失败即中断循环,不再顺着老实现逐条 try/catch;
+    // 靠 withRefCompensation 的 compensate 把整批 refIds 兜底删完。对
+    // revoke() 的调用方而言仍是 best-effort,不重抛。
+    await expect(r.revoke()).resolves.toBeUndefined();
 
-    expect(removeRefById).toHaveBeenCalledTimes(2);
     expect(removeRefById).toHaveBeenCalledWith(grantedIds[0]);
     expect(removeRefById).toHaveBeenCalledWith(grantedIds[1]);
   });

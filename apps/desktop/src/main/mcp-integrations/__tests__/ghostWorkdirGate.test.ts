@@ -1631,6 +1631,37 @@ describe('Full Access 插件文件交接', () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it('grant_only 后置切换 blocked 时撤销刚授出的批量预授权', async () => {
+    // 回归:grant_only 成功路径原先只复判 visibility 与 setup,漏了 blocked——
+    // 用户在 grantAttachmentsMock 内部(模拟确认卡等待期间)把 art 的唯一
+    // 工具切成 blocked 之后,grant 本身仍会返回成功;真正要钉住的是
+    // grantOnlySucceeded 落地前那次收口复判必须再挡一次 blocked。
+    const file = path.join(outsideDir, 'grant-only-revoke-blocked.png');
+    const bytes = Buffer.from('grant-only-revoke-blocked');
+    fs.writeFileSync(file, bytes);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    ledgerRefs.push({ hash, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' });
+    resolveGhostAttachmentUrlMock.mockReturnValue({ absPath: file, mimeType: 'image/png', blobHash: hash });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+    grantAttachmentsMock.mockImplementationOnce(async () => {
+      writeGhostToolPermissions('art', { globalPolicy: 'blocked', tools: { run: 'blocked' } });
+      return { ok: true, hashes: [hash], revoke: revokeAttachmentsMock };
+    });
+
+    const result = await makeDeps('codex', 'grant-only-revoke-blocked').callGhostTool({
+      ghostId: 'art',
+      tool: 'ignored-tool',
+      args: {},
+      attachments: [`xdt-media://blob/${hash}`],
+      grantOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(grantAttachmentsMock).toHaveBeenCalledTimes(1);
+    expect(revokeAttachmentsMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it('确认等待期间账号切换:附件授权不落进新账号的账本,直接 fail closed', async () => {
     // grantAttachmentUrls 在两次可能弹确认卡的 prepare 之前捕获 owner scope
     // key，落任何持久副作用前只核对没有漂移——不能重新现取一份新账号的 key

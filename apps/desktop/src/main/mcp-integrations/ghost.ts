@@ -1621,6 +1621,12 @@ export function getCindyGhostsMcpDeps(
               message: t('newChat.pluginSetup.assessmentReadFailed'),
             };
           }
+          // 补偿事务的最后一次策略断言:visibility/setup 刷新之后、
+          // grantOnlySucceeded 落地之前,工具仍可能被用户切到 blocked——
+          // 只查 visibility+setup 会漏掉这个窗口,必须复用同一份
+          // postGrantVisibility 再判一次 blockedToolVerdict。
+          const postGrantBlocked = blockedToolVerdict(postGrantVisibility.ghost.manifest.tools, true);
+          if (postGrantBlocked) return postGrantBlocked;
           log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
           grantOnlySucceeded = true;
           return {

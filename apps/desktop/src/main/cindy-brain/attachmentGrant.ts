@@ -98,13 +98,17 @@ export type AttachmentGrantResult =
       ok: true;
       hashes: string[];
       /**
-       * 撤销本次刚授出的全部 ref(逐条 removeRefById，单条失败只记 warn 继续
-       * 撤其余的，不重抛——调用方已经在处理另一个更早的失败原因，撤销本身
-       * 再失败不能盖过那个原因)。授权成功返回之后，本函数所在的
-       * ghost_call 仍可能因为无关原因（目录确认、setup 状态、blocked 复判…）
-       * 继续失败；那些路径必须调用它，否则会把「写完才拒绝」的已生效授权
-       * 副作用留在账上（见 docs/dev-rules/plugin-security-and-authoring.md
-       * §3.1 第 4 条）。空批返回的 revoke 是无操作 no-op。
+       * 撤销本次刚授出的全部 ref。复用出生阶段同一条 withRefCompensation
+       * 持久补偿协议(先落 pending 标记再逐条删),不是裸循环 removeRefById——
+       * 半路失败或进程崩溃时,标记留在盘上,下一次同 owner DB 就绪的 reconcile
+       * 会按标记里的精确 id 重放删除,不会把已批准过、现在必须撤销的授权行
+       * 永久遗留在账上。对调用方而言仍是不重抛的 best-effort:失败只记 warn
+       * 继续——调用方已经在处理另一个更早的失败原因，撤销本身再失败不能
+       * 盖过那个原因。授权成功返回之后，本函数所在的 ghost_call 仍可能因为
+       * 无关原因（目录确认、setup 状态、blocked 复判…）继续失败；那些路径
+       * 必须调用它，否则会把「写完才拒绝」的已生效授权副作用留在账上（见
+       * docs/dev-rules/plugin-security-and-authoring.md §3.1 第 4 条）。
+       * 空批返回的 revoke 是无操作 no-op。
        */
       revoke: () => Promise<void>;
     }
@@ -219,17 +223,27 @@ export async function grantAttachmentsToGhost(
   const hashes = prepared.map((grant) => grant.hash);
   deps.log?.info('ghost attachment grant: done', { ghostId, count: hashes.length });
   const revoke = async (): Promise<void> => {
-    for (const grant of prepared) {
-      try {
-        await deps.removeRefById(grant.id);
-      } catch (err) {
-        deps.log?.warn('ghost attachment grant: revoke-on-later-failure did not remove a ref', {
-          ghostId,
-          refId: grant.id,
-          hash: grant.hash,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+    const refIds = prepared.map((grant) => grant.id);
+    try {
+      await deps.withRefCompensation({
+        refIds,
+        // 目标就是删除,perform 与 compensate 因此是同一个幂等操作:无论
+        // 走到哪一半失败,两条路径收敛到同一个结果——批内每条 ref 都尝试
+        // 删过。真身 removeRefById 是 DELETE WHERE id=?,重复删不存在的
+        // id 不报错,可以安全重放。
+        perform: async () => {
+          for (const grant of prepared) {
+            await deps.removeRefById(grant.id);
+          }
+        },
+        compensate: (refId) => deps.removeRefById(refId),
+      });
+    } catch (err) {
+      deps.log?.warn('ghost attachment grant: revoke-on-later-failure did not remove every ref', {
+        ghostId,
+        refIds,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   };
   return { ok: true, hashes, revoke };

@@ -244,10 +244,14 @@ describe('reviewArtifactHandleIdentityMatches vs reviewArtifactPathIdentityMatch
     };
   }
 
-  it('the path-vs-path helper trusts ino alone once both sides report dev=0 (expected for two path stats)', () => {
+  it('the path-vs-path helper trusts ino alone once both sides report dev=0 (expected for two path stats, Windows-only fallback)', () => {
+    // dev=0 on both sides only falls back to ino-only trust on win32 (see fileIdentity.ts's
+    // own tests for the same explicit-platform pattern); on POSIX a real dev is always
+    // available and dev=0 is never trusted, so this must pin 'win32' rather than rely on
+    // whichever OS happens to run the suite.
     const before = makeIdentity({ dev: 0n });
     const after = makeIdentity({ dev: 0n }) as unknown as BigIntStats;
-    expect(reviewArtifactPathIdentityMatches(before, after)).toBe(true);
+    expect(reviewArtifactPathIdentityMatches(before, after, 'win32')).toBe(true);
   });
 
   it('the path-vs-handle helper refuses the same dev=0/dev=0 pair a path-vs-path check would accept', () => {
@@ -257,13 +261,13 @@ describe('reviewArtifactHandleIdentityMatches vs reviewArtifactPathIdentityMatch
     // unique within a volume -- a cross-volume swap with a colliding ino would pass.
     const pathIdentity = makeIdentity({ dev: 0n });
     const handleStatBothZero = makeIdentity({ dev: 0n }) as unknown as BigIntStats;
-    expect(reviewArtifactHandleIdentityMatches(pathIdentity, handleStatBothZero)).toBe(false);
+    expect(reviewArtifactHandleIdentityMatches(pathIdentity, handleStatBothZero, 'win32')).toBe(false);
   });
 
-  it('the path-vs-handle helper accepts the pair once the handle side reports a real volume id', () => {
+  it('the path-vs-handle helper accepts the pair once the handle side reports a real volume id (Windows-only fallback)', () => {
     const pathIdentity = makeIdentity({ dev: 0n });
     const handleStatRealDev = makeIdentity({ dev: 7n }) as unknown as BigIntStats;
-    expect(reviewArtifactHandleIdentityMatches(pathIdentity, handleStatRealDev)).toBe(true);
+    expect(reviewArtifactHandleIdentityMatches(pathIdentity, handleStatRealDev, 'win32')).toBe(true);
   });
 
   it('the path-vs-handle helper still rejects on a genuine ino mismatch', () => {
