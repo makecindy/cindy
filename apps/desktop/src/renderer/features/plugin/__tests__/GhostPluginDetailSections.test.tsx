@@ -1208,6 +1208,61 @@ describe('Ghost plugin detail sections', () => {
     ).toBe('true');
   });
 
+  it('redisplays a late-arriving success after an earlier rollback, instead of leaving the UI on the rolled-back state', async () => {
+    // 回归 Greptile 又发现的 P1:上一条修复让成功回执更新 confirmedConfigRef
+    // 这本账，但没有同步更新真正渲染到界面上的 loaded/configRef。如果顺序
+    // 是"较新请求先失败(把界面回滚到旧状态)、较早请求后成功(只更新了账，
+    // 没碰界面)"，界面会停在回滚后的旧状态，而磁盘上其实是较早请求成功
+    // 写入的新状态——界面和磁盘又对不上了。
+    let rejectSecond!: (reason?: unknown) => void;
+    let resolveFirst!: (value: unknown) => void;
+    const firstSave = new Promise<unknown>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const secondSave = new Promise<unknown>((_resolve, reject) => {
+      rejectSecond = reject;
+    });
+    const setToolPermissions = vi
+      .fn()
+      .mockImplementationOnce(() => firstSave)
+      .mockImplementationOnce(() => secondSave);
+    stubToolPermissionApi({ setToolPermissions });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    const secondGroup = screen.getAllByRole('group', { name: /tool_1/ })[0];
+    fireEvent.click(within(firstGroup).getByRole('button', { name: 'Blocked' }));
+    fireEvent.click(within(secondGroup).getByRole('button', { name: 'Always allow' }));
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(2));
+
+    // 较新的请求(第二次)先失败，回滚界面到"两次编辑之前"。
+    rejectSecond(new Error('second write failed'));
+    await Promise.resolve();
+    await Promise.resolve();
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledTimes(1));
+    expect(
+      within(firstGroup)
+        .getByRole('button', { name: 'Needs approval' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+
+    // 较早的请求(第一次)姗姗来迟才成功——它真的落盘了，界面必须补画出来。
+    resolveFirst({ config: {} });
+    await waitFor(() =>
+      expect(
+        within(firstGroup).getByRole('button', { name: 'Blocked' }).getAttribute('aria-pressed'),
+      ).toBe('true'),
+    );
+    // 第二次没有成功，tool_1 仍然停在回滚后的确认态。
+    expect(
+      within(secondGroup)
+        .getByRole('button', { name: 'Needs approval' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    // 迟到的成功不应该再弹一次失败提示。
+    expect(toastMocks.error).toHaveBeenCalledTimes(1);
+  });
+
   it('does not let a failed save from the previous ghost poison the current config ref', async () => {
     let rejectPreviousGhost!: (reason?: unknown) => void;
     const previousSave = new Promise<unknown>((_resolve, reject) => {

@@ -4643,13 +4643,25 @@ async function uninstallGhostAndCleanupLocked(
     // 工具粒度授权(always-allow/blocked)按 ghostId 存,卸载不清就会在同 id
     // 装入内容不同的新插件时被 resolveToolApprovalMode 当成用户已经对新
     // 安装做过的选择——空配置触发 writeGhostToolPermissions 自带的删除
-    // 分支,复用同一条写路径而不是另开一个清理函数。
-    try {
-      writeGhostToolPermissions(id, {});
-    } catch (err) {
-      log.warn('ghost tool permissions 清理失败', {
+    // 分支,复用同一条写路径而不是另开一个清理函数。写盘用的是临时文件+
+    // rename 的原子写,失败大多是瞬时的(AV 扫描锁临时文件、磁盘 I/O 抖动
+    // 之类),重试几次即可自愈;仍然失败就升到 error 级别(不再是 warn)
+    // 让它更容易被发现——但不因此让已经基本完成的卸载(ghost 文件/密钥都
+    // 已清)整体报失败,那样用户会更困惑。
+    let toolPermissionsCleared = false;
+    let lastClearError: unknown;
+    for (let attempt = 0; attempt < 3 && !toolPermissionsCleared; attempt += 1) {
+      try {
+        writeGhostToolPermissions(id, {});
+        toolPermissionsCleared = true;
+      } catch (err) {
+        lastClearError = err;
+      }
+    }
+    if (!toolPermissionsCleared) {
+      log.error('ghost tool permissions 清理失败,重试 3 次后仍未成功;同 id 后续安装可能继承旧的授权档位', {
         id,
-        error: err instanceof Error ? err.message : String(err),
+        error: lastClearError instanceof Error ? lastClearError.message : String(lastClearError),
       });
     }
     removeGhostKvBestEffort(

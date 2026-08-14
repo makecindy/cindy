@@ -736,6 +736,12 @@ export function ToolsSection({
   if (confirmedConfigRef.current.ghostId !== ghostId) {
     confirmedConfigRef.current = { ghostId, config, sequence: 0 };
   }
+  // 界面当前显示的是哪个序号的配置。每次新点击都无条件抢占(用户最新的
+  // 动作永远优先可见);一次失败回滚之后，界面显示的就是 confirmedConfigRef
+  // 当时的序号——如果后面还有一个更早发起、但更晚才落定的成功回执追上来，
+  // 只要它不比"界面当前显示的"更旧，就要把它也同步画到界面上，不能只更新
+  // confirmedConfigRef 这本账、放着界面继续停在回滚后的旧状态。
+  const displaySequenceRef = useRef(0);
 
   /**
    * 落盘 + 失败回滚。这是安全设置:写盘失败却把 UI 留在新档位,等于告诉用户
@@ -745,6 +751,7 @@ export function ToolsSection({
     const sequence = ++persistSequenceRef.current;
     configRef.current = next;
     setLoaded({ ghostId, config: next });
+    displaySequenceRef.current = sequence;
     void window.electronAPI.ghosts.setToolPermissions(ghostId, next).then(
       () => {
         if (currentGhostIdRef.current !== ghostId) return;
@@ -753,6 +760,15 @@ export function ToolsSection({
         // 不按"是不是当前最新一次请求"过滤：那样会把这次成功当没发生过。
         if (sequence < confirmedConfigRef.current.sequence) return;
         confirmedConfigRef.current = { ghostId, config: next, sequence };
+        // 界面此刻显示的可能是更早一次失败回滚后的旧状态(比如这次成功的
+        // 回执比后一次请求的失败回执更晚到达)。只要没有比它更新的东西已经
+        // 显示在界面上，就把这次真实落盘的结果同步画出来，不能只更新账本
+        // 却留着界面显示错误的旧策略。
+        if (sequence >= displaySequenceRef.current) {
+          configRef.current = next;
+          setLoaded((current) => (current.ghostId === ghostId ? { ghostId, config: next } : current));
+          displaySequenceRef.current = sequence;
+        }
       },
       () => {
         // 只有最新一次发起的请求失败才触发回滚；旧请求的失败可能是被更新的
@@ -764,6 +780,10 @@ export function ToolsSection({
         setLoaded((current) =>
           current.ghostId === ghostId ? { ghostId, config: rollbackTo } : current,
         );
+        // 回滚之后界面显示的就是"已确认"的那个版本，把显示序号同步过去——
+        // 后面如果有更早发起、但更晚落定的成功追上来，才能判断该不该把它
+        // 也同步画出来。
+        displaySequenceRef.current = confirmedConfigRef.current.sequence;
         toast.error(t('settings.ghosts.detail.toolPermissionSaveFailed'));
       },
     );
