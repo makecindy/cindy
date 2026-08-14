@@ -1036,6 +1036,47 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('publishes Full access pending approvals only after a successful Plan exit', async () => {
+    const { handle, fakeQuery, queryOptions } = await startPlanSession(
+      true,
+      {},
+      'bypassPermissions',
+    );
+    const canUseTool = queryOptions.canUseTool;
+    if (!canUseTool) throw new Error('expected canUseTool');
+    let resolvePermission: ((decision: InteractionDecision) => void) | undefined;
+    handle.setInteractionResolver((req) => {
+      if (req.kind === 'permission') {
+        return new Promise<InteractionDecision>((resolve) => {
+          resolvePermission = resolve;
+        });
+      }
+      return Promise.resolve({ kind: 'plan_review', behavior: 'allow' });
+    });
+    let rejectExit: ((reason?: unknown) => void) | undefined;
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => { rejectExit = reject; }),
+    );
+
+    const pending = canUseTool('Write', { file_path: '/tmp/plan-exit.txt' }, { toolUseID: 'pending' });
+    await vi.waitFor(() => expect(resolvePermission).toBeTypeOf('function'));
+    const exit = handle.setPlanMode?.(false);
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    rejectExit!(new Error('permission transport failed'));
+    await expect(exit).rejects.toThrow('permission transport failed');
+    expect(handle.getPlanMode?.()).toBe(true);
+    expect(settled).toBe(false);
+
+    resolvePermission!({ kind: 'permission', behavior: 'deny', reason: 'test cleanup' });
+    await expect(pending).resolves.toMatchObject({ behavior: 'deny' });
+    await handle.close();
+  });
+
   it('auto-exits plan mode after the user approves the plan (ExitPlanMode allow)', async () => {
     const { handle, fakeQuery, queryOptions } = await startPlanSession(true);
     const iterator = handle.events()[Symbol.asyncIterator]();
@@ -1058,6 +1099,49 @@ describe('ClaudeCodeAgent plan mode', () => {
     });
     const ev = await nextEvent(iterator);
     expect(ev).toMatchObject({ type: 'plan_mode_changed', data: { enabled: false } });
+    await handle.close();
+  });
+
+  it('fences a fire-and-forget Full access restore when Ask follows plan approval', async () => {
+    const { handle, fakeQuery, queryOptions } = await startPlanSession(
+      true,
+      {},
+      'bypassPermissions',
+    );
+    const canUseTool = queryOptions.canUseTool;
+    if (!canUseTool) throw new Error('expected canUseTool');
+    handle.setInteractionResolver(async (req): Promise<InteractionDecision> =>
+      req.kind === 'plan_review'
+        ? { kind: 'plan_review', behavior: 'allow' }
+        : { kind: 'permission', behavior: 'deny' });
+    let releaseFullAccess: (() => void) | undefined;
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseFullAccess = resolve; }),
+    );
+
+    await expect(canUseTool(
+      'ExitPlanMode',
+      { plan: '1. do X' },
+      { toolUseID: 'approve-plan-with-pending-full-access' },
+    )).resolves.toMatchObject({ behavior: 'allow' });
+    await vi.waitFor(() => {
+      expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+    });
+
+    await expect(handle.setPermissionMode?.('ask')).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(fakeQuery.close).toHaveBeenCalledTimes(1));
+    const fenceHook = queryOptions.hooks?.PreToolUse?.at(-1)?.hooks[0];
+    if (!fenceHook) throw new Error('expected permission-tightening fence hook');
+    await expect(fenceHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'touch plan-approved-retired-query-must-not-run' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'deny' },
+    });
+
+    releaseFullAccess!();
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledTimes(1));
     await handle.close();
   });
 

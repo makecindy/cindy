@@ -19895,6 +19895,79 @@ describe('CodexAgent plan mode', () => {
     await handle.close();
   });
 
+  it('keeps the Auto block notice deduped across an approved plan implementation turn', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installTurnHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-plan-approve-auto-block-dedupe',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      planMode: true,
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    handle.setInteractionResolver(async () => ({ kind: 'plan_review', behavior: 'allow' }));
+
+    await handle.send({ type: 'user', content: 'make a plan' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.autoApprovalReviewCompleted) throw new Error('expected Guardian handler');
+    handlers.autoApprovalReviewCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      startedAtMs: 1,
+      completedAtMs: 2,
+      reviewId: 'review-plan',
+      targetItemId: 'blocked-plan',
+      decisionSource: 'agent',
+      review: {
+        status: 'denied',
+        riskLevel: 'high',
+        userAuthorization: 'low',
+        rationale: 'blocked during plan',
+      },
+      action: {
+        type: 'command',
+        source: 'shell',
+        command: 'rm -rf /tmp/plan-output',
+        cwd: '/repo',
+      },
+    });
+    runPlanTurn(host, 'turn-1', '1. do X');
+    await vi.waitFor(() => expect(turnStartCalls(host)).toHaveLength(2));
+    handlers.autoApprovalReviewCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-2',
+      startedAtMs: 3,
+      completedAtMs: 4,
+      reviewId: 'review-implementation',
+      targetItemId: 'blocked-implementation',
+      decisionSource: 'agent',
+      review: {
+        status: 'denied',
+        riskLevel: 'high',
+        userAuthorization: 'low',
+        rationale: 'blocked during implementation',
+      },
+      action: {
+        type: 'command',
+        source: 'shell',
+        command: 'rm -rf /tmp/implementation-output',
+        cwd: '/repo',
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(events.filter((event) =>
+        event.type === 'error' &&
+        String((event.data as { message?: unknown }).message).includes('[AUTO_REVIEW_BLOCKED]'),
+      )).toHaveLength(1);
+    });
+    await handle.close();
+  });
+
   it('requests the default marker again when turn/start retries after a daemon restart', async () => {
     const agent = new CodexAgent(createDeps());
     let turnStartCount = 0;
@@ -20083,6 +20156,83 @@ describe('CodexAgent plan mode', () => {
     // 但一次性勾选已在首次 send 消耗。
     expect(reviseParams.collaborationMode).toEqual({ mode: 'plan', settings: PLAN_SETTINGS });
     expect(handle.getPlanMode?.()).toBe(false);
+    await handle.close();
+  });
+
+  it('keeps the Auto block notice deduped across a plan revision turn', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installTurnHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-plan-revision-auto-block-dedupe',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      planMode: true,
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    handle.setInteractionResolver(async () => ({
+      kind: 'plan_review',
+      behavior: 'deny',
+      reason: '先补测试',
+    }));
+
+    await handle.send({ type: 'user', content: 'make a plan' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.autoApprovalReviewCompleted) throw new Error('expected Guardian handler');
+    handlers.autoApprovalReviewCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      startedAtMs: 1,
+      completedAtMs: 2,
+      reviewId: 'review-plan-revision',
+      targetItemId: 'blocked-plan',
+      decisionSource: 'agent',
+      review: {
+        status: 'denied',
+        riskLevel: 'high',
+        userAuthorization: 'low',
+        rationale: 'blocked during plan',
+      },
+      action: {
+        type: 'command',
+        source: 'shell',
+        command: 'rm -rf /tmp/plan-output',
+        cwd: '/repo',
+      },
+    });
+    runPlanTurn(host, 'turn-1', '1. do X');
+    await vi.waitFor(() => expect(turnStartCalls(host)).toHaveLength(2));
+    handlers.autoApprovalReviewCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-2',
+      startedAtMs: 3,
+      completedAtMs: 4,
+      reviewId: 'review-revision',
+      targetItemId: 'blocked-revision',
+      decisionSource: 'agent',
+      review: {
+        status: 'denied',
+        riskLevel: 'high',
+        userAuthorization: 'low',
+        rationale: 'blocked during revision',
+      },
+      action: {
+        type: 'command',
+        source: 'shell',
+        command: 'rm -rf /tmp/revision-output',
+        cwd: '/repo',
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(events.filter((event) =>
+        event.type === 'error' &&
+        String((event.data as { message?: unknown }).message).includes('[AUTO_REVIEW_BLOCKED]'),
+      )).toHaveLength(1);
+    });
     await handle.close();
   });
 
@@ -20482,6 +20632,116 @@ describe('CodexAgent plan mode', () => {
     expect(seen).toHaveLength(1);
 
     pendingDecision.resolve({ kind: 'plan_review', behavior: 'deny' });
+    await handle.close();
+  });
+
+  it('drops an approved stale plan review after a newer Auto-blocked normal turn', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installTurnHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-stale-plan-review-after-normal-turn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      planMode: true,
+    });
+    const pendingDecision = deferred<InteractionDecision>();
+    const interactions: InteractionRequest[] = [];
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    handle.setInteractionResolver(async (req) => {
+      interactions.push(req);
+      return pendingDecision.promise;
+    });
+
+    await handle.send({ type: 'user', content: 'make a plan' });
+    runPlanTurn(host, 'turn-1', '1. do X');
+    await vi.waitFor(() => expect(interactions).toHaveLength(1));
+
+    await handle.send({ type: 'user', content: 'do something else' }, { planMode: false });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.autoApprovalReviewCompleted) throw new Error('expected Guardian handler');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
+    handlers.autoApprovalReviewCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-2',
+      startedAtMs: 1,
+      completedAtMs: 2,
+      reviewId: 'review-new-normal-turn',
+      targetItemId: 'blocked-new-normal-turn',
+      decisionSource: 'agent',
+      review: {
+        status: 'denied',
+        riskLevel: 'high',
+        userAuthorization: 'low',
+        rationale: 'blocked during newer turn',
+      },
+      action: {
+        type: 'command',
+        source: 'shell',
+        command: 'rm -rf /tmp/new-turn-output',
+        cwd: '/repo',
+      },
+    });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-2', status: 'completed' },
+    });
+    await vi.waitFor(() => {
+      expect(events.filter((event) =>
+        event.type === 'error'
+        && String((event.data as { message?: unknown }).message).includes('[AUTO_REVIEW_BLOCKED]'),
+      )).toHaveLength(1);
+      expect(events.some((event) =>
+        event.type === 'done'
+        && (event.data as { autoReviewBlocked?: unknown }).autoReviewBlocked === true,
+      )).toBe(true);
+    });
+
+    pendingDecision.resolve({ kind: 'plan_review', behavior: 'allow' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(turnStartCalls(host)).toHaveLength(2);
+    expect(events.filter((event) =>
+      event.type === 'error'
+      && String((event.data as { message?: unknown }).message).includes('[AUTO_REVIEW_BLOCKED]'),
+    )).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('keeps a newer Plan cycle active when an older plan review resolves late', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installTurnHost(agent);
+    const handle = await startPlanSession(
+      agent,
+      host,
+      'session-stale-plan-review-after-new-plan-turn',
+    );
+    const firstDecision = deferred<InteractionDecision>();
+    const interactions: InteractionRequest[] = [];
+    handle.setInteractionResolver(async (req) => {
+      interactions.push(req);
+      if (interactions.length === 1) return firstDecision.promise;
+      return { kind: 'plan_review', behavior: 'deny', dismissed: true };
+    });
+
+    await handle.send({ type: 'user', content: 'make the first plan' });
+    runPlanTurn(host, 'turn-1', '1. first plan');
+    await vi.waitFor(() => expect(interactions).toHaveLength(1));
+
+    await handle.send({ type: 'user', content: 'make a newer plan' }, { planMode: true });
+    expect(turnStartCalls(host)).toHaveLength(2);
+    firstDecision.resolve({ kind: 'plan_review', behavior: 'allow' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(turnStartCalls(host)).toHaveLength(2);
+
+    runPlanTurn(host, 'turn-2', '1. newer plan');
+    await vi.waitFor(() => expect(interactions).toHaveLength(2));
+    expect(interactions[1]).toMatchObject({
+      kind: 'plan_review',
+      plan: '1. newer plan',
+    });
     await handle.close();
   });
 

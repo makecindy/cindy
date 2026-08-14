@@ -1114,9 +1114,14 @@ const CODEX_INHERITED_CAPABILITY_SELECTION = Symbol('codexInheritedCapabilitySel
 // 计划实施/修订 turn 的**审查意图**:这些 turn 的 message 是固定内部串('Implement the plan.'),
 // 直接拿它当 review intent 会让灰区 reviewer 完全看不到用户原始请求与获批计划(codex 报)。
 const CODEX_AUTO_REVIEW_INTENT = Symbol('codexAutoReviewIntent');
+// Plan approval/revision starts a new Codex SDK turn, but it is still part of
+// the same user-visible product turn. Carry the originating send generation so
+// a delayed review cannot accidentally inherit state from a newer user send.
+const CODEX_PRODUCT_TURN_CONTINUATION = Symbol('codexProductTurnContinuation');
 type CodexInternalSendOptions = SendOptions & {
   [CODEX_INHERITED_CAPABILITY_SELECTION]?: string;
   [CODEX_AUTO_REVIEW_INTENT]?: string;
+  [CODEX_PRODUCT_TURN_CONTINUATION]?: number;
 };
 const SYSTEM_PLAN_REVIEW_DISMISSAL_REASONS = new Set([
   'no_listener_attached',
@@ -5378,6 +5383,7 @@ export class CodexAgent extends BaseAgent {
       // 计划审批期间用户可能继续发消息(currentAutoReviewIntent 会被覆盖):实施/修订 turn 的审查
       // 意图必须锚在**发起计划时**的原始请求上(codex 报)。
       const planRequestAutoReviewIntent = currentAutoReviewIntent;
+      const planRequestSendGeneration = sendGeneration;
       const planFollowUpSendOptions = (
         additionalSelectionText = '',
         autoReviewIntent?: string,
@@ -5392,6 +5398,7 @@ export class CodexAgent extends BaseAgent {
           .filter(Boolean)
           .join('\n'),
         ...(autoReviewIntent ? { [CODEX_AUTO_REVIEW_INTENT]: autoReviewIntent } : {}),
+        [CODEX_PRODUCT_TURN_CONTINUATION]: planRequestSendGeneration,
       });
       const emitPlanFollowUpStartFailure = (kind: 'implementation' | 'revision', error: unknown): void => {
         log.warn(`plan ${kind} turn failed to start`, { error: String(error) });
@@ -5413,6 +5420,18 @@ export class CodexAgent extends BaseAgent {
       log.debug('plan review ▶ dispatch', { turnId, planChars: plan.length });
       const decision = await dispatchInteraction({ kind: 'plan_review', requestId, plan });
       if (closed) return;
+      // A newer explicit send owns the product turn now. The old review may
+      // still resolve after the user has moved on; never let that stale answer
+      // start an implementation/revision turn or mutate the newer turn's
+      // per-turn state.
+      if (sendGeneration !== planRequestSendGeneration) {
+        log.debug('plan review resolved after a newer user turn; dropping stale follow-up', {
+          turnId,
+          planRequestSendGeneration,
+          currentSendGeneration: sendGeneration,
+        });
+        return;
+      }
       if (decision.kind !== 'plan_review') {
         log.warn('plan review got mismatched decision', { decKind: decision.kind });
         return;
@@ -9878,14 +9897,31 @@ export class CodexAgent extends BaseAgent {
         if (rejectClosedOrCancelledSend(sendOpts, 'before start')) {
           return;
         }
+        const internalSendOpts = sendOpts as CodexInternalSendOptions | undefined;
+        const continuationGeneration =
+          internalSendOpts?.[CODEX_PRODUCT_TURN_CONTINUATION];
+        if (
+          continuationGeneration !== undefined
+          && continuationGeneration !== sendGeneration
+        ) {
+          log.debug('dropping stale plan continuation before turn/start', {
+            continuationGeneration,
+            currentSendGeneration: sendGeneration,
+          });
+          return;
+        }
+        const continuesCurrentProductTurn =
+          continuationGeneration === sendGeneration;
         // 用户开启新 turn = 旧重连序列作废；deadline 不得跨 turn 误伤新请求。
         clearReconnectStall();
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
-        resetAutoReviewNoticesForNewTurn();
-        autoReviewBlockedForTurn = false;
+        if (!continuesCurrentProductTurn) {
+          resetAutoReviewNoticesForNewTurn();
+          autoReviewBlockedForTurn = false;
+        }
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
         const capabilitySelectionText =
-          (sendOpts as CodexInternalSendOptions | undefined)?.[
+          internalSendOpts?.[
             CODEX_INHERITED_CAPABILITY_SELECTION
           ] ?? userMessageText(message.content);
         assertCurrentHost('turn/start');

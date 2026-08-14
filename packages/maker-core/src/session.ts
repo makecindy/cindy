@@ -303,6 +303,8 @@ export class Session {
   private readonly handle: AgentSessionHandle;
   private readonly logger: Logger;
   private permissionModeStateValue: PermissionModeState;
+  /** Monotonic user/API intent generation; newer external requests supersede older results. */
+  private externalPermissionModeRequestGeneration = 0;
   private permissionModeChangeChain: Promise<void> = Promise.resolve();
   private permissionModeChangesInFlight = 0;
   /** User/API permission changes, serialized separately so host restores cannot deadlock. */
@@ -868,8 +870,16 @@ export class Session {
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     this.assertPermissionModeSupported(mode);
+    const requestGeneration = ++this.externalPermissionModeRequestGeneration;
+    // Notify the provider before entering Session's serialized transport
+    // chains. A stricter request must be able to fence an uncancellable,
+    // in-flight Full access switch immediately instead of waiting behind it.
+    this.handle.onPermissionModeRequested?.(mode);
     this.externalPermissionModeChangesInFlight += 1;
     const operation = this.externalPermissionModeChangeChain.catch(() => undefined).then(async () => {
+      if (requestGeneration !== this.externalPermissionModeRequestGeneration) {
+        return;
+      }
       if (this.isTurnPermissionPolicyUnsafe(mode)) {
         // Official group turns hold a host lease until background continuations
         // and the temporary safe-mode restore have both settled. Do not let an
@@ -880,7 +890,21 @@ export class Session {
           await Promise.all([...this.hostTurnLeases]);
         }
       }
-      await this.setPermissionModeTracked(mode);
+      if (requestGeneration !== this.externalPermissionModeRequestGeneration) {
+        return;
+      }
+      try {
+        await this.setPermissionModeTracked(mode, {
+          externalRequestGeneration: requestGeneration,
+        });
+      } catch (error) {
+        // A retired provider request may fail after its replacement has already
+        // become the authoritative user intent. Do not surface that stale error.
+        if (requestGeneration !== this.externalPermissionModeRequestGeneration) {
+          return;
+        }
+        throw error;
+      }
     });
     const tracked = operation.finally(() => {
       this.externalPermissionModeChangesInFlight -= 1;
@@ -892,7 +916,10 @@ export class Session {
     await tracked;
   }
 
-  async setPermissionModeTracked(mode: PermissionMode): Promise<PermissionModeState> {
+  async setPermissionModeTracked(
+    mode: PermissionMode,
+    opts?: { externalRequestGeneration?: number },
+  ): Promise<PermissionModeState> {
     this.assertPermissionModeSupported(mode);
     this.permissionModeChangesInFlight += 1;
     const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
@@ -900,6 +927,14 @@ export class Session {
       // shutdown started. Re-check at the serialized side-effect boundary.
       this.ensureActive();
       await this.handle.setPermissionMode!(mode);
+      if (
+        opts?.externalRequestGeneration !== undefined
+        && opts.externalRequestGeneration !== this.externalPermissionModeRequestGeneration
+      ) {
+        // The provider may still have completed an uncancellable, superseded
+        // request. Its replacement owns the published product state.
+        return this.permissionModeState;
+      }
       this.permissionModeStateValue = {
         mode,
         generation: this.permissionModeStateValue.generation + 1,

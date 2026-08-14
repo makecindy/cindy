@@ -182,6 +182,12 @@ interface SessionState {
   model: string;
   inputQueue: AsyncQueue<unknown>;
   query: SdkQueryLike;
+  /**
+   * Host-owned fail-closed fence. close() activates it synchronously before
+   * awaiting interrupt, so an overtaken Full access RPC cannot execute another
+   * tool while this Query is being retired.
+   */
+  permissionTighteningFence: { active: boolean };
   /** Seq counter — monotonic per session. */
   nextSeq: number;
   /** Latest seq we've emitted (`nextSeq - 1` after first event). */
@@ -484,18 +490,22 @@ export class SessionRegistry {
           }
         : undefined;
 
-    const hooks = createToolGuardHooks(
-      opts.toolGuards,
-      () => sessionRef?.toolGuardSelectionText ?? '',
-      () => sessionRef?.toolGuardMcpServerNames ?? EMPTY_MCP_SERVER_NAMES,
-      (toolName, guard) => {
-        this.logger.warn('tool denied by host routing guard', {
-          sessionId: opts.sessionId,
-          toolName,
-          toolNamePrefix: guard.toolNamePrefix,
-          invocation: guard.invocation,
-        });
-      },
+    const permissionTighteningFence = { active: false };
+    const hooks = mergeSdkHooks(
+      createToolGuardHooks(
+        opts.toolGuards,
+        () => sessionRef?.toolGuardSelectionText ?? '',
+        () => sessionRef?.toolGuardMcpServerNames ?? EMPTY_MCP_SERVER_NAMES,
+        (toolName, guard) => {
+          this.logger.warn('tool denied by host routing guard', {
+            sessionId: opts.sessionId,
+            toolName,
+            toolNamePrefix: guard.toolNamePrefix,
+            invocation: guard.invocation,
+          });
+        },
+      ),
+      createPermissionTighteningHooks(permissionTighteningFence),
     );
 
     const sdkOpts: SdkQueryFactoryOptions = {
@@ -524,6 +534,7 @@ export class SessionRegistry {
       model: opts.model,
       inputQueue,
       query,
+      permissionTighteningFence,
       nextSeq: 1,
       lastSeq: 0,
       startedAt: new Date().toISOString(),
@@ -661,6 +672,7 @@ export class SessionRegistry {
     const s = this.sessions.get(sessionId);
     if (!s) return;
     if (!s.alive) return;
+    s.permissionTighteningFence.active = true;
     s.alive = false;
     try {
       await s.query.interrupt();
@@ -684,6 +696,7 @@ export class SessionRegistry {
       this.sessions.delete(sessionId);
       return;
     }
+    s.permissionTighteningFence.active = true;
     // 先标 killing 再 interrupt:终止窗口从这一刻起对 sendMessage 可见
     // (Greptile P1, 见 SessionState.killing)。
     s.killing = true;
@@ -852,6 +865,7 @@ export class SessionRegistry {
    */
   shutdownAll(detail?: string): void {
     for (const s of this.sessions.values()) {
+      s.permissionTighteningFence.active = true;
       // Mark dead BEFORE notify — keeps `alive` flag consistent if notify
       // synchronously throws (we still want the registry to reflect the
       // post-shutdown state).
@@ -1199,4 +1213,36 @@ function createToolGuardHooks(
   return {
     PreToolUse: [{ hooks: [guardTool] }],
   };
+}
+
+function createPermissionTighteningHooks(
+  fence: { active: boolean },
+): SdkHooks {
+  const fenceTool: SdkHookCallback = async (rawInput) => {
+    if (!fence.active) return { continue: true };
+    if (typeof rawInput !== 'object' || rawInput === null) return { continue: true };
+    const input = rawInput as Record<string, unknown>;
+    if (input.hook_event_name !== 'PreToolUse') return { continue: true };
+    return {
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason:
+          'Cindy changed to a stricter permission mode. Retry this action on the resumed turn.',
+      },
+    };
+  };
+  return { PreToolUse: [{ hooks: [fenceTool] }] };
+}
+
+function mergeSdkHooks(...sets: Array<SdkHooks | undefined>): SdkHooks | undefined {
+  const merged: SdkHooks = {};
+  for (const hooks of sets) {
+    if (!hooks) continue;
+    for (const [event, groups] of Object.entries(hooks)) {
+      (merged[event] ??= []).push(...groups);
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }

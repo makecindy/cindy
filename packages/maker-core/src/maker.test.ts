@@ -2641,6 +2641,91 @@ describe('Session turn send guard', () => {
 });
 
 describe('Session permission mode leases', () => {
+  it('notifies a stricter user intent before the serialized Full access switch settles', async () => {
+    const handle = createHandle({ id: 'permission-preflight-thread' });
+    const fullAccess = createDeferred();
+    const requested: PermissionMode[] = [];
+    handle.onPermissionModeRequested = vi.fn((mode: PermissionMode) => {
+      requested.push(mode);
+    });
+    const setPermissionMode = vi
+      .fn()
+      .mockImplementationOnce(() => fullAccess.promise)
+      .mockResolvedValue(undefined);
+    handle.setPermissionMode = setPermissionMode;
+    const baseCapabilities = createAgent(async () => handle).capabilities;
+    const session = new Session({
+      id: 'permission-preflight-session',
+      agentKind: 'claude-code',
+      workDir: '/repo',
+      handle,
+      capabilities: {
+        ...baseCapabilities,
+        permissionModes: [
+          { id: 'ask', displayName: 'Ask' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ],
+        setPermissionModeMidSession: { supported: true },
+      },
+      logger: createLogger(),
+      permissionMode: 'auto',
+    });
+
+    const widening = session.setPermissionMode('bypassPermissions');
+    await vi.waitFor(() => expect(handle.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    const tightening = session.setPermissionMode('ask');
+
+    expect(requested).toEqual(['bypassPermissions', 'ask']);
+    expect(handle.setPermissionMode).not.toHaveBeenCalledWith('ask');
+
+    fullAccess.resolve();
+    await expect(widening).resolves.toBeUndefined();
+    await expect(tightening).resolves.toBeUndefined();
+    expect(setPermissionMode.mock.calls.map(([mode]) => mode)).toEqual([
+      'bypassPermissions',
+      'ask',
+    ]);
+    expect(session.permissionModeState).toEqual({ mode: 'ask', generation: 1 });
+  });
+
+  it('treats a late failure from an overtaken permission request as superseded', async () => {
+    const handle = createHandle({ id: 'permission-superseded-error-thread' });
+    let rejectFullAccess!: (reason?: unknown) => void;
+    const fullAccess = new Promise<void>((_resolve, reject) => {
+      rejectFullAccess = reject;
+    });
+    handle.setPermissionMode = vi
+      .fn()
+      .mockImplementationOnce(() => fullAccess)
+      .mockResolvedValue(undefined);
+    const baseCapabilities = createAgent(async () => handle).capabilities;
+    const session = new Session({
+      id: 'permission-superseded-error-session',
+      agentKind: 'claude-code',
+      workDir: '/repo',
+      handle,
+      capabilities: {
+        ...baseCapabilities,
+        permissionModes: [
+          { id: 'ask', displayName: 'Ask' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ],
+        setPermissionModeMidSession: { supported: true },
+      },
+      logger: createLogger(),
+      permissionMode: 'auto',
+    });
+
+    const widening = session.setPermissionMode('bypassPermissions');
+    await vi.waitFor(() => expect(handle.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    const tightening = session.setPermissionMode('ask');
+
+    rejectFullAccess(new Error('retired transport failed'));
+    await expect(widening).resolves.toBeUndefined();
+    await expect(tightening).resolves.toBeUndefined();
+    expect(session.permissionModeState).toEqual({ mode: 'ask', generation: 1 });
+  });
+
   it('serializes live changes and skips a stale conditional restore', async () => {
     const handle = createHandle({ id: 'permission-thread' });
     const applied: PermissionMode[] = [];

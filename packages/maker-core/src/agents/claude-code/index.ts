@@ -1500,7 +1500,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
       };
     };
-    const localClaudeHooks = reviewMode
+    type PermissionTighteningFence = { active: boolean };
+    const buildLocalClaudeHooks = (
+      permissionTighteningFence: PermissionTighteningFence,
+    ) => reviewMode
       ? { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] }
       : mergeClaudeHookSets(
           buildClaudeLocalToolGuardHooks(
@@ -1525,6 +1528,24 @@ export class ClaudeCodeAgent extends BaseAgent {
           // still runs for send_to_lead after those hooks and denies descendants.
           buildClaudeOrcaCallerProvenanceHooks(),
           this.deps.claudeHooks,
+          {
+            // Full access skips canUseTool, but PreToolUse hooks still run. Keep
+            // this fence last so no later matching hook can overwrite its deny.
+            // It is activated before closing the retired Query, covering the
+            // uncancellable control RPC's remaining lifetime.
+            PreToolUse: [{ hooks: [async () => {
+              if (!permissionTighteningFence.active) return { continue: true };
+              return {
+                continue: true,
+                hookSpecificOutput: {
+                  hookEventName: 'PreToolUse',
+                  permissionDecision: 'deny',
+                  permissionDecisionReason:
+                    'Cindy changed to a stricter permission mode. Retry this action on the resumed turn.',
+                },
+              };
+            }] }],
+          },
         );
     const deniedCapabilityRoute = (toolName: string) => {
       const route = findClaudeMcpCapabilityRoute(
@@ -2151,6 +2172,15 @@ export class ClaudeCodeAgent extends BaseAgent {
     // Full access 则必须等 SDK 控制 RPC 成功后才发布，避免失败的放宽请求先行放过工具。
     // 代次用于阻止较早 RPC 的迟到结果覆盖更新的用户意图。
     let permissionModeWriteGeneration = 0;
+    // A Full access control request cannot be cancelled once the SDK has started
+    // processing it. If a stricter request supersedes it, retire that Query so
+    // the transient bypass mode can never execute another tool; the next send
+    // rebuilds from the latest product permission mode.
+    const pendingFullAccessPermissionQueryCounts = new WeakMap<Query, number>();
+    const queryPermissionTighteningFences = new WeakMap<
+      Query,
+      PermissionTighteningFence
+    >();
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
     // "武装"态 —— send 消耗它并立即 emit plan_mode_changed(false) 让勾选熄灭;
     // 本轮 plan turn 由 planTurnActive 承载(SDK 保持 plan 档): ExitPlanMode 批准
@@ -2194,10 +2224,19 @@ export class ClaudeCodeAgent extends BaseAgent {
     // generation guard 只能阻止状态发布，无法撤销已乱序落到 SDK 的控制请求。
     // 按 Query 分链，避免已退役 Query 的慢请求阻塞 replacement Query。
     const queryPermissionModeWriteChains = new WeakMap<Query, Promise<void>>();
+    const hasPendingFullAccessPermissionWrite = (query: Query): boolean =>
+      (pendingFullAccessPermissionQueryCounts.get(query) ?? 0) > 0;
     const setQuerySdkPermissionMode = async (
       query: Query,
       mode: SdkPermissionMode,
     ): Promise<void> => {
+      const widensToFullAccess = mode === 'bypassPermissions';
+      if (widensToFullAccess) {
+        pendingFullAccessPermissionQueryCounts.set(
+          query,
+          (pendingFullAccessPermissionQueryCounts.get(query) ?? 0) + 1,
+        );
+      }
       const previousWrite = queryPermissionModeWriteChains.get(query) ?? Promise.resolve();
       const operation = previousWrite.catch(() => undefined).then(async () => {
         await query.setPermissionMode(mode);
@@ -2210,7 +2249,18 @@ export class ClaudeCodeAgent extends BaseAgent {
           () => undefined,
         ),
       );
-      await operation;
+      try {
+        await operation;
+      } finally {
+        if (widensToFullAccess) {
+          const remaining = (pendingFullAccessPermissionQueryCounts.get(query) ?? 1) - 1;
+          if (remaining > 0) {
+            pendingFullAccessPermissionQueryCounts.set(query, remaining);
+          } else {
+            pendingFullAccessPermissionQueryCounts.delete(query);
+          }
+        }
+      }
     };
 
     /**
@@ -3213,6 +3263,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 计划模式开启时 SDK 跑 plan; 读 mutable 值让 rewind/fork 重建拿到当前档而非创建时快照。
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
       sdkInPlanMode = sdkStartPermissionMode === 'plan';
+      const permissionTighteningFence: PermissionTighteningFence = { active: false };
+      const localClaudeHooks = buildLocalClaudeHooks(permissionTighteningFence);
       const query = sdkQuery({
         prompt: inputQueue as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
@@ -3331,6 +3383,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             : {}),
         },
       });
+      queryPermissionTighteningFences.set(query, permissionTighteningFence);
       recordQuerySdkPermissionMode(query, sdkStartPermissionMode);
       return query;
     };
@@ -4959,6 +5012,54 @@ export class ClaudeCodeAgent extends BaseAgent {
         source: 'claude-code',
       });
     };
+    const retireQueryForPermissionTightening = (
+      query: Query,
+      reason: string,
+    ): void => {
+      // Keep the safety fence on the retired Query itself. A failed close can
+      // never re-enable it, while the resumed replacement gets a fresh fence.
+      const fence = queryPermissionTighteningFences.get(query);
+      if (fence) fence.active = true;
+      continuationCancellationRequiresQueryRebuild = true;
+      canceledBridgeQueries.add(query);
+      inputQueue.clear();
+      try {
+        inputQueue.end();
+      } catch (error) {
+        log.warn(`${reason}: inputQueue.end threw`, { error: String(error) });
+      }
+      recordCanceledQueryClose(query, reason);
+      const cancelledContinuation = cancelActiveContinuation(reason);
+      if (cancelledContinuation) {
+        retireContinuationTasks(cancelledContinuation);
+        emitCancelledContinuationBoundary(cancelledContinuation, reason);
+      } else if (turnInFlight && !sendInAcceptPhase) {
+        turnInFlight = false;
+        turnState.interruptRequested = false;
+        pendingToolIds.clear();
+        clearUpstreamResponseIdle();
+        emitTurnBoundary(reason);
+      }
+    };
+    const tightenPendingFullAccess = (
+      newMode: PermissionMode,
+      reason: string,
+    ): boolean => {
+      if (newMode === 'bypassPermissions') return false;
+      const permissionModeQuery = q;
+      if (!hasPendingFullAccessPermissionWrite(permissionModeQuery)) return false;
+      permissionModeWriteGeneration += 1;
+      mutablePermissionMode = newMode;
+      dismissAllPending(`permission_mode_changed_to_${newMode}`, 'deny');
+      if (!canceledBridgeQueries.has(permissionModeQuery)) {
+        retireQueryForPermissionTightening(permissionModeQuery, reason);
+      }
+      log.info('retired Claude Query after Full access was superseded', {
+        to: newMode,
+        sdk: toSdkPermissionMode(newMode),
+      });
+      return true;
+    };
     const handle: AgentSessionHandle = {
       get id() { return sdkSessionId ?? '<pending>'; },
       agentKind: 'claude-code',
@@ -5978,6 +6079,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         return mutableFastMode;
       },
 
+      onPermissionModeRequested(newMode) {
+        tightenPendingFullAccess(newMode, 'permission_mode_tightened');
+      },
+
       async setPermissionMode(newMode) {
         if (reviewMode) {
           log.debug('setPermissionMode ignored for hard read-only Review session', {
@@ -5998,6 +6103,21 @@ export class ClaudeCodeAgent extends BaseAgent {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
         }
+        if (
+          newMode !== 'bypassPermissions'
+          && mutablePermissionMode === newMode
+          && continuationCancellationRequiresQueryRebuild
+          && canceledBridgeQueries.has(q)
+        ) {
+          // Session has now delivered the serialized half of a tightening that
+          // onPermissionModeRequested already applied synchronously. The next
+          // send rebuilds this retired Query with the latest strict mode.
+          return;
+        }
+        const sdkMode = toSdkPermissionMode(newMode);
+        const isControlBlocked = controlRequestsBlocked();
+        const permissionModeQuery = isControlBlocked ? null : q;
+        if (tightenPendingFullAccess(newMode, 'permission_mode_tightened')) return;
         // SDK 当前确实处于 plan 档时只记录底层权限档(循环收尾切回时生效)，不 push
         // SDK、不动挂起交互(挂着的多半是 plan_review)。若 Plan 只是在当前普通 turn
         // 中为下一轮武装，sdkInPlanMode 仍为 false，权限切换必须照常作用于当前 Query。
@@ -6015,8 +6135,6 @@ export class ClaudeCodeAgent extends BaseAgent {
         const moreOpen = newMode === 'bypassPermissions';
         // SDK PermissionMode union 没有 'ask' (我们对 ChatInput 暴露的统一名字),
         // SDK 侧把 ask 当 default —— 与 startSession 的处理一致。
-        const sdkMode = toSdkPermissionMode(newMode);
-        const isControlBlocked = controlRequestsBlocked();
         // Full access 是唯一会让审批逻辑无条件放行的档位。当前 Query 可写时，必须等
         // SDK 明确应用成功后，才能把它发布为实时档位并批量允许挂起审批。其余档位
         // 保持 fail-closed：先让 reviewer 看到新约束，并立即拒绝旧的挂起请求。
@@ -6034,7 +6152,6 @@ export class ClaudeCodeAgent extends BaseAgent {
           dismissedAs: publishAfterSdk ? 'allow_after_sdk' : moreOpen ? 'allow' : 'deny',
           controlRequestsBlocked: isControlBlocked,
         });
-        const permissionModeQuery = isControlBlocked ? null : q;
         if (permissionModeQuery) {
           try {
             await setQuerySdkPermissionMode(permissionModeQuery, sdkMode);
@@ -6114,19 +6231,62 @@ export class ClaudeCodeAgent extends BaseAgent {
           log.debug('setPlanMode (deferred, turn in flight)', { enabled });
           return;
         }
+        const planModeQuery = controlRequestsBlocked() ? null : q;
+        if (
+          enabled
+          && planModeQuery
+          && hasPendingFullAccessPermissionWrite(planModeQuery)
+        ) {
+          dismissAllPending('plan_mode_enabled', 'deny');
+          retireQueryForPermissionTightening(
+            planModeQuery,
+            'plan_mode_tightened',
+          );
+          log.info('retired Claude Query after Plan superseded pending Full access');
+          return;
+        }
         // 进计划模式 = 收紧(deny 挂起授权); 退出按底层档宽松度决定 —— 与
         // setPermissionMode 的 moreOpen 语义一致(auto 不再算"更宽松",挂起的越界请求
         // 退出 plan 回到 auto 时仍 fail-closed;只有 bypassPermissions 是真"全开")。
         const moreOpen = !enabled && mutablePermissionMode === 'bypassPermissions';
-        dismissAllPending(`plan_mode_${enabled ? 'enabled' : 'disabled'}`, moreOpen ? 'allow' : 'deny');
+        if (!moreOpen) {
+          dismissAllPending(`plan_mode_${enabled ? 'enabled' : 'disabled'}`, 'deny');
+        }
         const sdkMode = effectiveSdkPermissionMode();
         log.debug('setPlanMode', { enabled, sdk: sdkMode, underlying: mutablePermissionMode, controlRequestsBlocked: controlRequestsBlocked() });
         if (controlRequestsBlocked()) {
           // 重建时 buildQuery 以 effectiveSdkPermissionMode() 起档并回写 sdkInPlanMode
           return;
         }
-        await setQuerySdkPermissionMode(q, sdkMode);
+        const permissionModeQuery = q;
+        try {
+          await setQuerySdkPermissionMode(permissionModeQuery, sdkMode);
+        } catch (error) {
+          // A failed exit leaves the SDK in the stricter plan mode. Keep the
+          // product state aligned instead of claiming Full access early.
+          if (
+            !enabled
+            && moreOpen
+            && mutablePermissionMode === 'bypassPermissions'
+            && q === permissionModeQuery
+            && !controlRequestsBlocked()
+          ) {
+            mutablePlanMode = true;
+          }
+          throw error;
+        }
+        if (
+          q !== permissionModeQuery
+          || controlRequestsBlocked()
+          || mutablePlanMode !== enabled
+          || (!enabled && moreOpen && mutablePermissionMode !== 'bypassPermissions')
+        ) {
+          return;
+        }
         sdkInPlanMode = sdkMode === 'plan';
+        if (moreOpen) {
+          dismissAllPending('plan_mode_disabled', 'allow');
+        }
       },
 
       getPlanMode() {

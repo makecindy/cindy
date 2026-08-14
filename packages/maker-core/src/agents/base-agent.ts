@@ -1382,6 +1382,14 @@ export interface AgentSessionHandle {
   setPermissionMode?(mode: PermissionMode): Promise<void>;
 
   /**
+   * Synchronous notice that a user/API permission change was accepted for
+   * serialization by Session, before it reaches setPermissionMode(). Agents
+   * may use this only for immediate fail-closed tightening; durable state is
+   * still published after the serialized setPermissionMode() succeeds.
+   */
+  onPermissionModeRequested?(mode: PermissionMode): void;
+
+  /**
    * Vendor-native Auto reviewer became unavailable. Keep the product mode at
    * Auto, but route subsequent approvals through Cindy's lightweight reviewer.
    */

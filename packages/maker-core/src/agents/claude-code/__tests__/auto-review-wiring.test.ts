@@ -29,12 +29,20 @@ import type { InteractionDecision, InteractionRequest } from '../../../types/eve
 import type { Logger } from '../../../interfaces/logger.js';
 
 const sdkMock = vi.hoisted(() => ({ forkSession: vi.fn(), query: vi.fn() }));
+const imageResizerMock = vi.hoisted(() => ({
+  process: vi.fn(async (p: string) => p),
+  validateBuffer: vi.fn(async () => true),
+}));
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   forkSession: sdkMock.forkSession,
   query: sdkMock.query,
 }));
+vi.mock('../../shared/image-resizer.js', () => ({
+  getDefaultImageResizer: () => imageResizerMock,
+}));
 
 import { ClaudeCodeAgent } from '../index.js';
+import { Session } from '../../../session.js';
 
 const tempDirs: string[] = [];
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -178,7 +186,17 @@ async function startSession(
     permissionMode,
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
-    | { canUseTool?: CanUseToolFn; permissionMode?: string; model?: string }
+    | {
+        canUseTool?: CanUseToolFn;
+        permissionMode?: string;
+        model?: string;
+        resume?: string;
+        hooks?: {
+          PreToolUse?: Array<{
+            hooks: Array<(input: Record<string, unknown>) => Promise<Record<string, unknown>>>;
+          }>;
+        };
+      }
     | undefined;
   if (!queryOptions?.canUseTool) throw new Error('expected sdk query canUseTool');
 
@@ -197,6 +215,7 @@ async function startSession(
     fakeQuery,
     queryPermissionMode: queryOptions.permissionMode,
     querySdkModel: queryOptions.model,
+    queryOptions,
     reviewAutoPermissionAction,
     seen,
     workingDir,
@@ -223,6 +242,10 @@ const SESSION_SUGGESTION = [{ type: 'addRules', destination: 'session', behavior
 afterEach(async () => {
   sdkMock.forkSession.mockReset();
   sdkMock.query.mockReset();
+  imageResizerMock.process.mockReset();
+  imageResizerMock.process.mockImplementation(async (p: string) => p);
+  imageResizerMock.validateBuffer.mockReset();
+  imageResizerMock.validateBuffer.mockResolvedValue(true);
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   await Promise.all(tempDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
@@ -489,39 +512,135 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     await handle.close();
   });
 
-  it('serializes a superseding Ask after an in-flight Full access SDK switch', async () => {
+  it('retires and fences a Query when Ask supersedes an in-flight Full access switch', async () => {
     let releaseFullAccess: (() => void) | undefined;
     const reviewer = vi.fn(async () => ({ verdict: 'block' as const, reason: 'reviewed' }));
-    const { handle, canUseTool, fakeQuery, seen } = await startSession('auto', { reviewer });
+    const { handle, fakeQuery, queryOptions } = await startSession('auto', { reviewer });
     fakeQuery.setPermissionMode.mockImplementationOnce(
       () => new Promise<void>((resolve) => { releaseFullAccess = resolve; }),
     );
 
     const widening = handle.setPermissionMode!('bypassPermissions');
     await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
-    const tightening = handle.setPermissionMode!('ask');
-    await Promise.resolve();
-    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalledWith('default');
-
-    releaseFullAccess!();
-    await Promise.all([widening, tightening]);
+    fakeQuery.emit({
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sdk-auto-review',
+      mcp_servers: [],
+    });
+    await vi.waitFor(() => expect(handle.id).toBe('sdk-auto-review'));
+    await expect(handle.setPermissionMode!('ask')).resolves.toBeUndefined();
+    expect(fakeQuery.close).toHaveBeenCalledTimes(1);
     expect(fakeQuery.setPermissionMode.mock.calls.map(([mode]) => mode)).toEqual([
       'bypassPermissions',
-      'default',
     ]);
 
-    const pending = canUseTool(
-      'Write',
-      { file_path: '/tmp/superseded-full-access.conf' },
-      { toolUseID: 'superseded-full-access' },
-    );
-    await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
-    expect(permissionRequests(seen)).toHaveLength(1);
-    expect(reviewer).not.toHaveBeenCalled();
+    const fenceHook = queryOptions.hooks?.PreToolUse?.at(-1)?.hooks[0];
+    if (!fenceHook) throw new Error('expected permission-tightening fence hook');
+    await expect(fenceHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'touch retired-query-must-not-run' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'deny' },
+    });
+
+    releaseFullAccess!();
+    await widening;
+
+    const replacementQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(replacementQuery);
+    await handle.send({ type: 'user', content: 'Continue under Ask.' });
+    const replacementOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as {
+      permissionMode?: string;
+      resume?: string;
+      hooks?: {
+        PreToolUse?: Array<{
+          hooks: Array<(input: Record<string, unknown>) => Promise<Record<string, unknown>>>;
+        }>;
+      };
+    };
+    expect(replacementOptions.permissionMode).toBe('default');
+    expect(replacementOptions.resume).toBe('sdk-auto-review');
+    const replacementFenceHook = replacementOptions.hooks?.PreToolUse?.at(-1)?.hooks[0];
+    if (!replacementFenceHook) throw new Error('expected replacement fence hook');
+    await expect(replacementFenceHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'pwd' },
+    })).resolves.toEqual({ continue: true });
     await handle.close();
   });
 
-  it('continues a queued Ask SDK switch after an earlier Full access RPC fails', async () => {
+  it('retires the Query immediately when Session queues Ask behind Full access', async () => {
+    let releaseFullAccess: (() => void) | undefined;
+    const { agent, handle, fakeQuery, queryOptions, workingDir } = await startSession('auto');
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseFullAccess = resolve; }),
+    );
+    const session = new Session({
+      id: 'session-auto-review',
+      agentKind: 'claude-code',
+      workDir: workingDir,
+      handle,
+      capabilities: agent.capabilities,
+      logger: noopLogger(),
+      permissionMode: 'auto',
+    });
+
+    const widening = session.setPermissionMode('bypassPermissions');
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    const tightening = session.setPermissionMode('ask');
+
+    await vi.waitFor(() => expect(fakeQuery.close).toHaveBeenCalledTimes(1));
+    expect(fakeQuery.setPermissionMode.mock.calls.map(([mode]) => mode)).toEqual([
+      'bypassPermissions',
+    ]);
+    const fenceHook = queryOptions.hooks?.PreToolUse?.at(-1)?.hooks[0];
+    if (!fenceHook) throw new Error('expected permission-tightening fence hook');
+    await expect(fenceHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'touch session-queued-query-must-not-run' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'deny' },
+    });
+
+    releaseFullAccess!();
+    await expect(widening).resolves.toBeUndefined();
+    await expect(tightening).resolves.toBeUndefined();
+    expect(session.permissionModeState).toEqual({ mode: 'ask', generation: 1 });
+    await session.close();
+  });
+
+  it('settles a send still in acceptance when Ask retires a pending Full access Query', async () => {
+    let releaseFullAccess: (() => void) | undefined;
+    let releaseResize: ((value: string) => void) | undefined;
+    const { handle, fakeQuery, workingDir } = await startSession('auto');
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseFullAccess = resolve; }),
+    );
+    imageResizerMock.process.mockImplementationOnce(
+      () => new Promise<string>((resolve) => { releaseResize = resolve; }),
+    );
+
+    const widening = handle.setPermissionMode!('bypassPermissions');
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
+    const imagePath = path.join(workingDir, 'permission-race.png');
+    const send = handle.send({ type: 'user', content: [{ type: 'image', path: imagePath }] });
+    await vi.waitFor(() => expect(imageResizerMock.process).toHaveBeenCalledWith(imagePath));
+
+    await expect(handle.setPermissionMode!('ask')).resolves.toBeUndefined();
+    releaseResize!(imagePath);
+    await expect(send).rejects.toThrow('Claude input queue is closed');
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    releaseFullAccess!();
+    await widening;
+    await handle.close();
+  });
+
+  it('keeps Ask on the replacement when the superseded Full access RPC fails late', async () => {
     let rejectFullAccess: ((reason?: unknown) => void) | undefined;
     const { handle, fakeQuery } = await startSession('auto');
     fakeQuery.setPermissionMode.mockImplementationOnce(
@@ -530,76 +649,41 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
 
     const widening = handle.setPermissionMode!('bypassPermissions');
     await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
-    const tightening = handle.setPermissionMode!('ask');
+    await expect(handle.setPermissionMode!('ask')).resolves.toBeUndefined();
 
     rejectFullAccess!(new Error('permission transport failed'));
     await expect(widening).rejects.toThrow('permission transport failed');
-    await expect(tightening).resolves.toBeUndefined();
     expect(fakeQuery.setPermissionMode.mock.calls.map(([mode]) => mode)).toEqual([
       'bypassPermissions',
-      'default',
     ]);
-    await handle.close();
-  });
-
-  it('keeps the confirmed Full access fact when a queued Ask SDK switch fails', async () => {
-    let releaseFullAccess: (() => void) | undefined;
-    const { handle, fakeQuery } = await startSession('auto');
-    fakeQuery.setPermissionMode
-      .mockImplementationOnce(
-        () => new Promise<void>((resolve) => { releaseFullAccess = resolve; }),
-      )
-      .mockRejectedValueOnce(new Error('permission transport failed'));
-
-    const widening = handle.setPermissionMode!('bypassPermissions');
-    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
-    const tightening = handle.setPermissionMode!('ask');
-
-    releaseFullAccess!();
-    await widening;
-    await expect(tightening).rejects.toThrow('permission transport failed');
-    expect(fakeQuery.setPermissionMode.mock.calls.map(([mode]) => mode)).toEqual([
-      'bypassPermissions',
-      'default',
-    ]);
-
-    await handle.commitRewindFiles?.('user-uuid', 'assistant-uuid');
     const replacementQuery = createFakeQuery();
     sdkMock.query.mockReturnValue(replacementQuery);
-    await handle.send({ type: 'user', content: 'Continue after the failed Ask switch.' });
+    await handle.send({ type: 'user', content: 'Continue after the failed Full access switch.' });
     const rebuildArgs = sdkMock.query.mock.calls.at(-1)?.[0] as {
       options: { permissionMode?: string };
     };
-    expect(rebuildArgs.options.permissionMode).toBe('bypassPermissions');
+    expect(rebuildArgs.options.permissionMode).toBe('default');
     await handle.close();
   });
 
-  it('keeps Ask when its failed SDK switch belongs to a retired Query', async () => {
+  it('keeps Ask when the retired Query close fails', async () => {
     let releaseFullAccess: (() => void) | undefined;
-    let rejectAsk: ((reason?: unknown) => void) | undefined;
     const { handle, fakeQuery } = await startSession('auto');
-    fakeQuery.setPermissionMode
-      .mockImplementationOnce(
-        () => new Promise<void>((resolve) => { releaseFullAccess = resolve; }),
-      )
-      .mockImplementationOnce(
-        () => new Promise<void>((_resolve, reject) => { rejectAsk = reject; }),
-      );
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseFullAccess = resolve; }),
+    );
+    fakeQuery.close.mockRejectedValueOnce(new Error('close failed'));
 
     const widening = handle.setPermissionMode!('bypassPermissions');
     await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('bypassPermissions'));
-    const tightening = handle.setPermissionMode!('ask');
+    await expect(handle.setPermissionMode!('ask')).resolves.toBeUndefined();
 
     releaseFullAccess!();
     await widening;
-    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default'));
-    await handle.commitRewindFiles?.('user-uuid', 'assistant-uuid');
-    rejectAsk!(new Error('permission transport failed'));
-    await expect(tightening).rejects.toThrow('permission transport failed');
 
     const replacementQuery = createFakeQuery();
     sdkMock.query.mockReturnValue(replacementQuery);
-    await handle.send({ type: 'user', content: 'Continue after rewind.' });
+    await handle.send({ type: 'user', content: 'Continue after close failure.' });
     const rebuildArgs = sdkMock.query.mock.calls.at(-1)?.[0] as {
       options: { permissionMode?: string };
     };

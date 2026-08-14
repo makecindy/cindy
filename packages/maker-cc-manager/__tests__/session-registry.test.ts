@@ -154,6 +154,47 @@ describe('SessionRegistry', () => {
     expect(controlCalls[2].args).toEqual([{ effortLevel: 'high' }]);
   });
 
+  it('fences tools synchronously while a remote Query is closing', async () => {
+    let closeFenceHook: ((input: unknown) => Promise<unknown>) | undefined;
+    let releaseInterrupt!: () => void;
+    const interruptGate = new Promise<void>((resolve) => {
+      releaseInterrupt = resolve;
+    });
+    const factory: SdkQueryFactory = (opts) => {
+      closeFenceHook = opts.hooks?.PreToolUse?.[0]?.hooks[0];
+      return {
+        async *[Symbol.asyncIterator]() {
+          await new Promise<never>(() => undefined);
+        },
+        interrupt: vi.fn(() => interruptGate),
+        setModel: vi.fn(async () => undefined),
+        setPermissionMode: vi.fn(async () => undefined),
+        applyFlagSettings: vi.fn(async () => undefined),
+      };
+    };
+    const registry = new SessionRegistry({ sdkQueryFactory: factory });
+    registry.create({ sessionId: 's-close-fence', cwd: '/x', model: 'm', env: {} });
+    if (!closeFenceHook) throw new Error('expected permission-tightening fence hook');
+
+    await expect(closeFenceHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'pwd' },
+    })).resolves.toEqual({ continue: true });
+
+    const closing = registry.close('s-close-fence');
+    await expect(closeFenceHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'touch remote-retired-query-must-not-run' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'deny' },
+    });
+
+    releaseInterrupt();
+    await closing;
+  });
+
   it('enforces remote tool guards before permission rules while preserving explicit selection', async () => {
     const { factory: baseFactory } = buildFakeFactory();
     let captured: SdkQueryFactoryOptions | undefined;

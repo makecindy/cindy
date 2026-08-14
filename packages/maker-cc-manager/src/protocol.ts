@@ -26,12 +26,16 @@
  * v3: toolGuards 增加 root-only，使用 SDK agent_id 阻止远端 subagent
  * 调用受保护工具。旧 daemon 无法证明调用来源，因此必须升级协议。
  *
+ * v4: daemon 为退役中的 Claude Query 始终安装 PreToolUse fail-closed
+ * fence。旧 daemon 在 Full Access 控制请求被收紧操作取代时仍可能执行工具，
+ * 因此必须强制替换而不能只提示可选 bundle upgrade。
+ *
  * v1 (redesign): 删除 dead-session drain/archive 握手,对齐 codex 模式。
  * reattach 只接新 events (live-only subscription),不 replay 旧 ring buffer。
  * ring buffer 降级为纯内存 fast-path(同一 daemon 进程生命周期内的 mid-turn 续流)。
  * 断开期间跑完的输出暂不自动补回 chat(follow-up: jsonl recovery 统一 cc + codex)。
  */
-export const PROTOCOL_VERSION = 3 as const;
+export const PROTOCOL_VERSION = 4 as const;
 
 /**
  * cc-mgr bundle 版本号 — 手动 bump。
@@ -40,7 +44,7 @@ export const PROTOCOL_VERSION = 3 as const;
  * 无关依赖变化而变。desktop 用这个（而非 bundle sha256）判断远端 daemon
  * 是否需要 upgrade,避免无关的 pnpm install 触发全量远端重装。
  */
-export const CC_MGR_BUNDLE_VERSION = '0.0.8' as const;
+export const CC_MGR_BUNDLE_VERSION = '0.0.9' as const;
 
 export type RpcId = number;
 
