@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { reviewFileLinkLayoutIsSafe } from '@cindy/maker-core';
 
-import { sameFileIdentity } from '../utils/fileIdentity.js';
+import { sameFileIdentity, samePathAndHandleFileIdentity } from '../utils/fileIdentity.js';
 
 export interface ReviewArtifactAuthorizationAttachment {
   name: string;
@@ -65,6 +65,26 @@ export function reviewArtifactPathIdentityMatches(
 ): boolean {
   return (
     sameFileIdentity(expected, actual) &&
+    expected.size === actual.size &&
+    expected.mode === actual.mode &&
+    expected.mtimeNs === actual.mtimeNs &&
+    expected.ctimeNs === actual.ctimeNs
+  );
+}
+
+/**
+ * 路径 stat 与已打开句柄 stat 的比对必须用这个，不能用上面 path-vs-path 的
+ * 弱变体：句柄 stat 在 Windows 上带真实卷序列号，路径 stat 常年 dev=0，两边
+ * dev 不对等时弱变体会退化成只认 ino——NTFS FileId 只在卷内唯一，跨卷可能
+ * 撞号。`reviewArtifactPathIdentityMatches` 留给两边同源（都是路径 stat 或
+ * 都是句柄 stat）的比对。
+ */
+export function reviewArtifactHandleIdentityMatches(
+  expected: ReviewArtifactPathIdentity,
+  actual: BigIntStats,
+): boolean {
+  return (
+    samePathAndHandleFileIdentity(expected, actual) &&
     expected.size === actual.size &&
     expected.mode === actual.mode &&
     expected.mtimeNs === actual.mtimeNs &&

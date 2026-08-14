@@ -33,6 +33,9 @@ const logInfoMock = vi.fn();
 const grantAttachmentsMock = vi.fn();
 const revokeAttachmentsMock = vi.fn(async () => {});
 const { packGhostDirMock } = vi.hoisted(() => ({ packGhostDirMock: vi.fn() }));
+const { activeOwnerScopeKeyMock } = vi.hoisted(() => ({
+  activeOwnerScopeKeyMock: vi.fn(() => 'local:test-owner:0'),
+}));
 const releaseMutationMock = vi.fn();
 const captureMutationOwnerMock = vi.fn(() => ({
   mode: 'local' as const,
@@ -82,7 +85,7 @@ const resolvedAttachmentOrigins: Array<'user' | 'tool' | undefined> = [];
 vi.mock('electron', () => ({ app: { getPath: () => tmpUserData } }));
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(tmpUserData, ...parts),
-  activeOwnerScopeKey: () => 'local:test-owner:0',
+  activeOwnerScopeKey: activeOwnerScopeKeyMock,
 }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
@@ -275,6 +278,8 @@ beforeEach(() => {
   });
   grantAttachmentsMock.mockReset();
   revokeAttachmentsMock.mockClear();
+  activeOwnerScopeKeyMock.mockReset();
+  activeOwnerScopeKeyMock.mockReturnValue('local:test-owner:0');
   grantAttachmentsMock.mockImplementation(
     async (
       deps: {
@@ -1623,6 +1628,35 @@ describe('Full Access 插件文件交接', () => {
     expect(result.ok).toBe(false);
     expect(grantAttachmentsMock).toHaveBeenCalledTimes(1);
     expect(revokeAttachmentsMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('确认等待期间账号切换:附件授权不落进新账号的账本,直接 fail closed', async () => {
+    // grantAttachmentUrls 在两次可能弹确认卡的 prepare 之前捕获 owner scope
+    // key，落任何持久副作用前只核对没有漂移——不能重新现取一份新账号的 key
+    // 顶上去，否则旧会话解析出的附件就会写进新账号名下。
+    const file = path.join(outsideDir, 'owner-switch.png');
+    const bytes = Buffer.from('owner-switch');
+    fs.writeFileSync(file, bytes);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    ledgerRefs.push({ hash, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' });
+    resolveGhostAttachmentUrlMock.mockReturnValue({ absPath: file, mimeType: 'image/png', blobHash: hash });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+    activeOwnerScopeKeyMock
+      .mockReturnValueOnce('local:owner-a:0')
+      .mockReturnValue('local:owner-b:0');
+
+    const result = await makeDeps('codex', 'owner-switch').callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: [`xdt-media://blob/${hash}`],
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    // grantAttachmentsToGhost(mock 化的持久写入层)绝不能被调用到——账号漂移
+    // 必须在写入发生之前拦下，不是靠事后撤销收拾。
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 

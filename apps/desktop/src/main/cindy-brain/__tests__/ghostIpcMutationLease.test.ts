@@ -84,6 +84,13 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     expect(fn).toContain('beginGhostMutation(');
   });
 
+  it('ghosts:uninstall 清理工具粒度授权策略(否则同 id 重装不同插件会继承旧的 always-allow/blocked)', () => {
+    const start = source.indexOf('async function uninstallGhostAndCleanupLocked');
+    expect(start).toBeGreaterThan(-1);
+    const fn = source.slice(start, source.indexOf('\n}', start));
+    expect(fn).toContain('writeGhostToolPermissions(');
+  });
+
   it('市场装入/更新持租约(installOrUpdateMarketGhostPackage)', () => {
     // 同上:外层委托 withGhostInstallLock,owner 捕获 + 起租约在 ...Locked 内。
     const outerStart = source.indexOf('export async function installOrUpdateMarketGhostPackage');

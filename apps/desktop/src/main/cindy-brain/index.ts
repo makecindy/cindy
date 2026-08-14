@@ -4640,6 +4640,18 @@ async function uninstallGhostAndCleanupLocked(
     const result = await manager.uninstall(id, { notify: false });
     if ('rejection' in result) throwUninstallError(result.rejection);
     removeGhostSecrets(id);
+    // 工具粒度授权(always-allow/blocked)按 ghostId 存,卸载不清就会在同 id
+    // 装入内容不同的新插件时被 resolveToolApprovalMode 当成用户已经对新
+    // 安装做过的选择——空配置触发 writeGhostToolPermissions 自带的删除
+    // 分支,复用同一条写路径而不是另开一个清理函数。
+    try {
+      writeGhostToolPermissions(id, {});
+    } catch (err) {
+      log.warn('ghost tool permissions 清理失败', {
+        id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     removeGhostKvBestEffort(
       createGhostKvStore({
         getRootDir: () => ownerScopedUserDataPath('ghost-kv'),

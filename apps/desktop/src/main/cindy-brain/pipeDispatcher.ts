@@ -147,6 +147,40 @@ export class GhostPipeDispatcher {
   }
 
   /**
+   * 现读一次工具授权档位，`blocked` 直接拒绝；读取本身抛错按无法证明未禁
+   * 处理，同样 fail closed。供派发入口与冷启动 spawn 之后的复判共用——
+   * 两处必须是同一份判据，不能各写一遍再悄悄漂移。
+   */
+  private checkBlockedPolicy(ghostId: string, tool: string): GhostToolCallResult | null {
+    let approvalMode: ToolApprovalMode | undefined;
+    try {
+      approvalMode = this.deps.resolveToolApprovalMode?.(ghostId, tool);
+    } catch (error) {
+      this.deps.log?.warn('ghost tool approval lookup failed; denying call', {
+        ghostId,
+        tool,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        ok: false,
+        errorCode: 'PERMISSION_DENIED',
+        message: `无法读取 ${ghostId} 的工具 ${tool} 授权策略;为了安全未执行该工具,请重试或检查插件设置。`,
+      };
+    }
+    if (approvalMode === 'blocked') {
+      this.deps.log?.info('ghost tool call denied by user policy', { ghostId, tool });
+      return {
+        ok: false,
+        errorCode: 'PERMISSION_DENIED',
+        message:
+          `用户已在插件设置里禁用 ${ghostId} 的工具 ${tool};不要重试、也不要换别的工具绕过,` +
+          `如确实需要请让用户自己到「插件」详情页把该工具改回「每次询问」或「总是允许」。`,
+      };
+    }
+    return null;
+  }
+
+  /**
    * 派活主入口(ghost 总机的 callGhostTool 回调)。
    * 永不 reject——一切失败都折叠成结构化 GhostToolCallResult。
    */
@@ -180,31 +214,8 @@ export class GhostPipeDispatcher {
     // 不该造成任何可观察副作用(进程拉起、OAuth 卡、ledger 落账)。
     // store 正常读取时会把缺失/损坏配置 normalize 为 needs-approval;但依赖本身
     // 抛错意味着宿主无法证明当前工具未被 blocked，必须 fail closed。
-    let approvalMode: ToolApprovalMode | undefined;
-    try {
-      approvalMode = this.deps.resolveToolApprovalMode?.(ghostId, tool);
-    } catch (error) {
-      this.deps.log?.warn('ghost tool approval lookup failed; denying call', {
-        ghostId,
-        tool,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return {
-        ok: false,
-        errorCode: 'PERMISSION_DENIED',
-        message: `无法读取 ${ghostId} 的工具 ${tool} 授权策略;为了安全未执行该工具,请重试或检查插件设置。`,
-      };
-    }
-    if (approvalMode === 'blocked') {
-      this.deps.log?.info('ghost tool call denied by user policy', { ghostId, tool });
-      return {
-        ok: false,
-        errorCode: 'PERMISSION_DENIED',
-        message:
-          `用户已在插件设置里禁用 ${ghostId} 的工具 ${tool};不要重试、也不要换别的工具绕过,` +
-          `如确实需要请让用户自己到「插件」详情页把该工具改回「每次询问」或「总是允许」。`,
-      };
-    }
+    const preSpawnBlock = this.checkBlockedPolicy(ghostId, tool);
+    if (preSpawnBlock) return preSpawnBlock;
     if (this.deps.runtimeStateOf(ghostId) === 'fused') {
       return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件 ${ghostId} 已熔断(反复崩溃),重载或重新启用后再试` };
     }
@@ -221,6 +232,11 @@ export class GhostPipeDispatcher {
       if (!spawned.ok) {
         return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件启动失败:${spawned.reason}` };
       }
+      // 冷启动是一次真实的 await 窗口：spawn 之前读到的 approvalMode 到这里
+      // 可能已经过期(用户刚把该工具切成 blocked)。派发器是唯一收口，这个
+      // 窗口不重判就等于放过被禁工具执行一次。
+      const postSpawnBlock = this.checkBlockedPolicy(ghostId, tool);
+      if (postSpawnBlock) return postSpawnBlock;
     }
     if (!this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
       return this.ownerBoundaryResult();

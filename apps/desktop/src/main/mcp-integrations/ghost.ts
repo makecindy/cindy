@@ -815,6 +815,11 @@ async function grantAttachmentUrls(params: {
   | { ok: false; message: string; errorCode?: 'PERMISSION_DENIED' }
 > {
   const { ghostId } = params;
+  // 捕获在两次可能弹确认卡的 prepare 之前：owner scope key 编码
+  // mode:dataOwnerId:generation，账号切换会改变它。等到落任何持久副作用前
+  // 才现取，会让"等待期间切了账号"的窗口把旧会话解析出的附件写进新账号的
+  // 媒体账本——同一份判据必须钉在同一个起点。
+  const ownerScopeKeyAtStart = activeOwnerScopeKey();
   const localGrant = await prepareLocalPathAttachments({
     urls: params.urls,
     ghostId,
@@ -841,13 +846,20 @@ async function grantAttachmentUrls(params: {
   // 读盘/查账。落任何持久副作用前再做一次无 await 的最终重判。
   const policyBlock = params.recheckPolicy?.();
   if (policyBlock) return policyBlock;
-  // 从此到整批 ref 事务收口始终固定同一 owner scope 与 DB
-  // 句柄。defaultDb 逐次现取会让切号窗口把旧请求落到新账号。
+  // 从此到整批 ref 事务收口始终固定同一 owner scope 与 DB 句柄。现读一次
+  // 只用来核对没有漂移——真正生效的 key 是函数开头捕获的那份，不是这里
+  // 重新现取的，否则"重新现取"本身就是在重犯这条不变量要堵的漏洞。
   const grantRuntime = (() => {
     try {
-      const ownerScopeKey = activeOwnerScopeKey();
+      const ownerScopeKeyNow = activeOwnerScopeKey();
+      if (ownerScopeKeyNow !== ownerScopeKeyAtStart) {
+        log.warn('ghost attachment grant: owner scope changed during grant wait; denying call', {
+          ghostId,
+        });
+        return null;
+      }
       return {
-        compensationScope: captureMediaRefCompensationScope(ownerScopeKey),
+        compensationScope: captureMediaRefCompensationScope(ownerScopeKeyAtStart),
         db: getDbClient().drizzle,
       };
     } catch (error) {

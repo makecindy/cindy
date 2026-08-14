@@ -4,12 +4,17 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { BigIntStats } from 'node:fs';
+
 import {
   assertReviewExplicitPathGranted,
   authorizeReviewExplicitArtifacts,
   isPathWithinReviewWorkspace,
+  reviewArtifactHandleIdentityMatches,
+  reviewArtifactPathIdentityMatches,
   ReviewArtifactAuthorizationError,
   type ResolvedReviewArtifactPath,
+  type ReviewArtifactPathIdentity,
 } from '../reviewArtifactAuthorization.js';
 
 const tempDirs: string[] = [];
@@ -223,5 +228,47 @@ describe('isPathWithinReviewWorkspace', () => {
   it('does not mistake a sibling with the same prefix for a workspace child', () => {
     expect(isPathWithinReviewWorkspace('/work/project', '/work/project/src/a.ts')).toBe(true);
     expect(isPathWithinReviewWorkspace('/work/project', '/work/project-other/a.ts')).toBe(false);
+  });
+});
+
+describe('reviewArtifactHandleIdentityMatches vs reviewArtifactPathIdentityMatches', () => {
+  function makeIdentity(overrides: Partial<ReviewArtifactPathIdentity> = {}): ReviewArtifactPathIdentity {
+    return {
+      dev: 0n,
+      ino: 123n,
+      size: 10n,
+      mode: 0o100644n,
+      mtimeNs: 1000n,
+      ctimeNs: 1000n,
+      ...overrides,
+    };
+  }
+
+  it('the path-vs-path helper trusts ino alone once both sides report dev=0 (expected for two path stats)', () => {
+    const before = makeIdentity({ dev: 0n });
+    const after = makeIdentity({ dev: 0n }) as unknown as BigIntStats;
+    expect(reviewArtifactPathIdentityMatches(before, after)).toBe(true);
+  });
+
+  it('the path-vs-handle helper refuses the same dev=0/dev=0 pair a path-vs-path check would accept', () => {
+    // Regression for the P1 finding on reviewArtifactFingerprint.ts / reviewArtifactSnapshot.ts:
+    // path stats report dev=0 on Windows, but an opened handle reports the real volume id.
+    // Accepting two dev=0 sides here means trusting ino alone, and NTFS FileIds are only
+    // unique within a volume -- a cross-volume swap with a colliding ino would pass.
+    const pathIdentity = makeIdentity({ dev: 0n });
+    const handleStatBothZero = makeIdentity({ dev: 0n }) as unknown as BigIntStats;
+    expect(reviewArtifactHandleIdentityMatches(pathIdentity, handleStatBothZero)).toBe(false);
+  });
+
+  it('the path-vs-handle helper accepts the pair once the handle side reports a real volume id', () => {
+    const pathIdentity = makeIdentity({ dev: 0n });
+    const handleStatRealDev = makeIdentity({ dev: 7n }) as unknown as BigIntStats;
+    expect(reviewArtifactHandleIdentityMatches(pathIdentity, handleStatRealDev)).toBe(true);
+  });
+
+  it('the path-vs-handle helper still rejects on a genuine ino mismatch', () => {
+    const pathIdentity = makeIdentity({ dev: 0n, ino: 123n });
+    const handleStatDifferentFile = makeIdentity({ dev: 7n, ino: 456n }) as unknown as BigIntStats;
+    expect(reviewArtifactHandleIdentityMatches(pathIdentity, handleStatDifferentFile)).toBe(false);
   });
 });

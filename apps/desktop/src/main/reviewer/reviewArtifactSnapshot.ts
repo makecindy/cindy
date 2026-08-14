@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   isPathWithinReviewWorkspace,
   reviewArtifactFileLinkLayoutIsSafe,
+  reviewArtifactHandleIdentityMatches,
   reviewArtifactPathIdentityMatches,
   ReviewArtifactAuthorizationError,
   type ReviewArtifactPathIdentity,
@@ -283,7 +284,7 @@ async function copyOpenFile(
       );
     }
     const before = await source.stat({ bigint: true });
-    if (!reviewArtifactPathIdentityMatches(expectedIdentity, before)) {
+    if (!reviewArtifactHandleIdentityMatches(expectedIdentity, before)) {
       throw new ReviewArtifactAuthorizationError(
         'A review artifact changed after permission was granted',
       );

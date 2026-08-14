@@ -226,6 +226,33 @@ describe('按需拉起', () => {
     expect(r).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
   });
 
+  it('工具在冷启动 spawn 等待期间被切成 blocked:派发前的复判拦下这次调用', async () => {
+    // spawn 之前读到的 approvalMode 只对"暖机、无需拉起"的路径有效；冷启动是
+    // 一次真实的 await 窗口，必须在这个窗口结束后现读一次，否则一次冷启动就
+    // 能放过被禁工具执行一次(见 checkBlockedPolicy 的调用点)。
+    let blocked = false;
+    const spawnStarted = deferred();
+    const releaseSpawn = deferred();
+    const h = makeHarness({
+      state: 'off',
+      resolveToolApprovalMode: () => (blocked ? 'blocked' : 'needs-approval'),
+    });
+    h.deps.spawn.mockImplementation(async () => {
+      spawnStarted.resolve();
+      await releaseSpawn.promise;
+      return { ok: true as const };
+    });
+
+    const pending = h.dispatcher.callGhostTool(CALL);
+    await spawnStarted.promise;
+    blocked = true;
+    releaseSpawn.resolve();
+
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(h.deps.sendToGhost).not.toHaveBeenCalled();
+    expect(h.sent).toHaveLength(0);
+  });
+
   it('owner changes while spawn is pending: stops the runtime and never dispatches', async () => {
     let generation = 1;
     const invalidated = vi.fn();

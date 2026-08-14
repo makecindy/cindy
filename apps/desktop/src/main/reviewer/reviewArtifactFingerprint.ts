@@ -4,7 +4,10 @@ import path from 'node:path';
 
 import { isReviewSensitiveCredentialPath, reviewFileLinkLayoutIsSafe } from '@cindy/maker-core';
 
-import { reviewArtifactPathIdentityMatches } from './reviewArtifactAuthorization.js';
+import {
+  reviewArtifactHandleIdentityMatches,
+  reviewArtifactPathIdentityMatches,
+} from './reviewArtifactAuthorization.js';
 
 const MAX_DIRECTORY_ENTRIES = 50_000;
 const READ_CHUNK_BYTES = 128 * 1024;
@@ -170,7 +173,7 @@ async function addFile(
     const opened = await handle.stat({ bigint: true });
     if (
       !opened.isFile() ||
-      !reviewArtifactPathIdentityMatches(stat, opened) ||
+      !reviewArtifactHandleIdentityMatches(stat, opened) ||
       !(await reviewFileLinkLayoutIsSafe(absolutePath, linkConfinementRoot, opened))
     ) {
       throw new ReviewArtifactFingerprintChangedError(
@@ -186,7 +189,7 @@ async function addFile(
       !reviewArtifactPathIdentityMatches(opened, afterHandle) ||
       !afterPath ||
       afterPath.isSymbolicLink() ||
-      !reviewArtifactPathIdentityMatches(opened, afterPath) ||
+      !reviewArtifactHandleIdentityMatches(afterPath, opened) ||
       afterHandle.nlink !== afterPath.nlink ||
       !(await reviewFileLinkLayoutIsSafe(absolutePath, linkConfinementRoot, afterHandle))
     ) {
