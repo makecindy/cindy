@@ -1665,6 +1665,40 @@ describe('Full Access 插件文件交接', () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it('grant_only 附件引用提交后到收口之间账号切换：撤销旧账号的预授权', async () => {
+    // 回归 Greptile 新发现的 P1:grant_only 的收口复判原来只查
+    // visibility/setup/blocked,没有核对 owner 是否漂移。账号在
+    // grantAttachmentsMock 内部(模拟确认卡等待期间)切换后,即使新账号下
+    // 也装了同 id、ready 且未 blocked 的插件,收口复判会照常通过、
+    // grantOnlySucceeded 照常置真并报告"过户成功"——但 hashes 只在旧账号
+    // 账本里获得了授权,新账号插件用不了它们,旧账号那笔授权也没被撤销。
+    const file = path.join(outsideDir, 'grant-only-revoke-owner-switch.png');
+    const bytes = Buffer.from('grant-only-revoke-owner-switch');
+    fs.writeFileSync(file, bytes);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    ledgerRefs.push({ hash, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' });
+    resolveGhostAttachmentUrlMock.mockReturnValue({ absPath: file, mimeType: 'image/png', blobHash: hash });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+    activeOwnerScopeKeyMock.mockReturnValue('local:owner-a:0');
+    grantAttachmentsMock.mockImplementationOnce(async () => {
+      activeOwnerScopeKeyMock.mockReturnValue('local:owner-b:0');
+      return { ok: true, hashes: [hash], revoke: revokeAttachmentsMock };
+    });
+
+    const result = await makeDeps('codex', 'grant-only-revoke-owner-switch').callGhostTool({
+      ghostId: 'art',
+      tool: 'ignored-tool',
+      args: {},
+      attachments: [`xdt-media://blob/${hash}`],
+      grantOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(grantAttachmentsMock).toHaveBeenCalledTimes(1);
+    expect(revokeAttachmentsMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it('grant_only 后置切换 blocked 时撤销刚授出的批量预授权', async () => {
     // 回归:grant_only 成功路径原先只复判 visibility 与 setup,漏了 blocked——
     // 用户在 grantAttachmentsMock 内部(模拟确认卡等待期间)把 art 的唯一

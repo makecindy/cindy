@@ -1109,6 +1109,56 @@ describe('Ghost plugin detail sections', () => {
     expect(toastMocks.error).not.toHaveBeenCalled();
   });
 
+  it('rolls back to the last disk-confirmed config, not an unconfirmed intermediate value, when two consecutive saves both fail', async () => {
+    // 回归 Greptile P1:旧实现的回滚目标是"上一次点击时的乐观值"
+    // (configRef.current)，不是磁盘上真正确认过的配置。连续两次写都失败
+    // 时，第二次的回滚会退到第一次那个同样从未落盘成功的中间态——UI 显示
+    // 的安全策略（"已阻止"/"总是允许"）会和磁盘实际生效的策略不一致，这是
+    // 安全设置，不能凭空停在一个磁盘上从未真正出现过的状态。
+    let rejectFirst!: (reason?: unknown) => void;
+    let rejectSecond!: (reason?: unknown) => void;
+    const firstSave = new Promise<unknown>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const secondSave = new Promise<unknown>((_resolve, reject) => {
+      rejectSecond = reject;
+    });
+    const setToolPermissions = vi
+      .fn()
+      .mockImplementationOnce(() => firstSave)
+      .mockImplementationOnce(() => secondSave);
+    stubToolPermissionApi({ setToolPermissions });
+    render(<ToolsSection ghostId="demo-ghost" tools={sevenTools} />);
+
+    const firstGroup = screen.getAllByRole('group', { name: /tool_0/ })[0];
+    const secondGroup = screen.getAllByRole('group', { name: /tool_1/ })[0];
+    fireEvent.click(within(firstGroup).getByRole('button', { name: 'Blocked' }));
+    fireEvent.click(within(secondGroup).getByRole('button', { name: 'Always allow' }));
+    await waitFor(() => expect(setToolPermissions).toHaveBeenCalledTimes(2));
+
+    rejectFirst(new Error('first write failed'));
+    await Promise.resolve();
+    rejectSecond(new Error('second write failed'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // 只有最新一次(第二次)的失败才应该触发回滚与提示；第一次是被后一次
+    // 请求取代的旧请求，它的失败必须被忽略，不能再弹一次。
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledTimes(1));
+    // 磁盘上从未真正出现过 tool_0=blocked(两次写都失败)，必须退回到最初
+    // 的确认态(needs-approval)，不能停在中间那个从未确认过的乐观值上。
+    expect(
+      within(firstGroup)
+        .getByRole('button', { name: 'Needs approval' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(
+      within(secondGroup)
+        .getByRole('button', { name: 'Needs approval' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+
   it('does not let a failed save from the previous ghost poison the current config ref', async () => {
     let rejectPreviousGhost!: (reason?: unknown) => void;
     const previousSave = new Promise<unknown>((_resolve, reject) => {

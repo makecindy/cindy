@@ -976,14 +976,23 @@ async function grantAttachmentUrls(params: {
           perform,
           compensate,
         }),
-      // 撤销必须绑未加策略断言的原始 compensationScope,不能沿用上面
-      // guardedCompensationScope——工具被切成 blocked 正是触发撤销的
-      // 常见原因,复用会拒绝 blocked 的 scope 会让补偿写盘前置断言直接
-      // 抛错,连 pending 标记都落不了盘。只保留 owner/DB 身份漂移这一条
-      // 真正会让继续用同一个 db 句柄不安全的边界。
+      // 撤销的持久标记不能绑任何会拒绝的 assertStillValid——工具被切成
+      // blocked、owner 漂移都正是触发撤销的常见原因(见上面派发前的复判与
+      // grant_only 的收口复判),沿用会拒绝这些状态的判据只会让补偿写盘前
+      // 置断言直接抛错,连 pending 标记都落不了盘,持久补偿这层保护整个
+      // 失效。journalDir/ownerStorageKey 是抓取时就定死的静态路径值,与
+      // "现在活跃的 owner 是不是它"无关,复用完全安全;真正"继续用同一个
+      // db 句柄是否安全"这件事交给 perform/compensate 里的 removeRefById
+      // 自己去试——db 已经失效时它自然会抛错,withMediaRefCompensation 的
+      // catch→compensate 兜底会接住,兜底也失败则 pending 标记已经落盘,
+      // 留给下次同 owner DB 就绪时的 reconcile 重放。
       withRevokeCompensation: ({ refIds, perform, compensate }) =>
         withMediaRefCompensation({
-          scope: compensationScope,
+          scope: {
+            journalDir: compensationScope.journalDir,
+            ownerStorageKey: compensationScope.ownerStorageKey,
+            assertStillValid: () => {},
+          },
           refIds,
           perform,
           compensate,
@@ -1585,6 +1594,15 @@ export function getCindyGhostsMcpDeps(
             message: t('newChat.pluginSetup.assessmentReadFailed'),
           };
         }
+        // 附件引用提交后到 grantOnlySucceeded 落地之间有一次真实的异步锁
+        // 释放窗口(grantAttachmentUrls 内部的确认卡等待)。如果账号在这段
+        // 窗口切换,且新账号下恰好也装了同 id、ready 且未 blocked 的插件,
+        // 下面的 postGrant 复判只会现查"当前活跃账号",照常通过并把
+        // grantOnlySucceeded 置真——但 hashes 只在旧账号账本里获得了授权,
+        // 新账号的插件用不了它们,旧账号那笔授权也没被撤销。派发前(这里是
+        // grantOnlySucceeded 落地前)统一核对,漂移就当拒绝处理,交给下面
+        // finally 的撤销收拾。
+        const grantOnlyOwnerScopeKeyAtStart = activeOwnerScopeKey();
         const grant = await grantAttachmentUrls({
           ghostId,
           urls: attachments!,
@@ -1639,6 +1657,19 @@ export function getCindyGhostsMcpDeps(
           // postGrantVisibility 再判一次 blockedToolVerdict。
           const postGrantBlocked = blockedToolVerdict(postGrantVisibility.ghost.manifest.tools, true);
           if (postGrantBlocked) return postGrantBlocked;
+          // 同一收口点核对 owner 是否漂移(见 grantOnlyOwnerScopeKeyAtStart
+          // 旁边的注释)——visibility/setup/blocked 都只现查"当前活跃账号",
+          // 单靠它们查不出"这还是不是授权发生时那个账号"。
+          if (activeOwnerScopeKey() !== grantOnlyOwnerScopeKeyAtStart) {
+            log.warn('ghost grant-only: denied, owner scope changed during grant wait', {
+              ghostId,
+            });
+            return {
+              ok: false,
+              errorCode: 'PERMISSION_DENIED',
+              message: '账号状态已变化，为了安全未执行预授权，请重试。',
+            };
+          }
           log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
           grantOnlySucceeded = true;
           return {

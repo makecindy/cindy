@@ -720,9 +720,19 @@ export function ToolsSection({
   // catch 不得改写新插件下一次点击会使用的 configRef。
   const currentGhostIdRef = useRef(ghostId);
   currentGhostIdRef.current = ghostId;
-  // IPC invoke 的 Promise 可能乱序落定。只有该 Ghost 的最新一次保存
-  // 失败才能回滚；旧请求的 catch 若回滚，会覆盖已经成功落盘的较新状态。
+  // IPC invoke 的 Promise 可能乱序落定。只有该 Ghost 的最新一次保存结果
+  // (成功或失败)才能碰 confirmedConfigRef/UI；旧请求的回调若还生效，会用
+  // 一个已经过期的判断覆盖掉更新请求刚确认或正在等待的状态。
   const persistSequenceRef = useRef(0);
+  // 最近一次真正被磁盘确认过的配置(初始读盘、或某次 setToolPermissions 真正
+  // 成功都算确认)。失败回滚必须退到这里,不能退到"上一次点击时的乐观值"——
+  // 那个值本身也可能还没确认过。连续两次写都失败时，如果退到上一次乐观值，
+  // UI 会停在一个磁盘上从未真正出现过的配置上；这是安全设置，用户看到的
+  // "已阻止"/"总是允许"必须和磁盘上实际生效的策略一致，不能凭空出现一个中间态。
+  const confirmedConfigRef = useRef({ ghostId, config });
+  if (confirmedConfigRef.current.ghostId !== ghostId) {
+    confirmedConfigRef.current = { ghostId, config };
+  }
 
   /**
    * 落盘 + 失败回滚。这是安全设置:写盘失败却把 UI 留在新档位,等于告诉用户
@@ -730,18 +740,25 @@ export function ToolsSection({
    */
   const persist = (next: GhostToolPermissionConfig) => {
     const sequence = ++persistSequenceRef.current;
-    const rollbackTo = configRef.current;
+    const rollbackTo = confirmedConfigRef.current.config;
     configRef.current = next;
     setLoaded({ ghostId, config: next });
-    void window.electronAPI.ghosts.setToolPermissions(ghostId, next).catch(() => {
-      if (persistSequenceRef.current !== sequence) return;
-      if (currentGhostIdRef.current !== ghostId) return;
-      configRef.current = rollbackTo;
-      setLoaded((current) =>
-        current.ghostId === ghostId ? { ghostId, config: rollbackTo } : current,
-      );
-      toast.error(t('settings.ghosts.detail.toolPermissionSaveFailed'));
-    });
+    void window.electronAPI.ghosts.setToolPermissions(ghostId, next).then(
+      () => {
+        if (persistSequenceRef.current !== sequence) return;
+        if (currentGhostIdRef.current !== ghostId) return;
+        confirmedConfigRef.current = { ghostId, config: next };
+      },
+      () => {
+        if (persistSequenceRef.current !== sequence) return;
+        if (currentGhostIdRef.current !== ghostId) return;
+        configRef.current = rollbackTo;
+        setLoaded((current) =>
+          current.ghostId === ghostId ? { ghostId, config: rollbackTo } : current,
+        );
+        toast.error(t('settings.ghosts.detail.toolPermissionSaveFailed'));
+      },
+    );
   };
 
   const currentGlobalPolicy: GlobalToolPolicy = useMemo(() => {

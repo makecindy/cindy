@@ -71,12 +71,17 @@ export interface AttachmentGrantDeps {
     compensate: (refId: string) => Promise<unknown>;
   }): Promise<T>;
   /**
-   * revoke() 专用的持久补偿，与 withRefCompensation 同构，但**不得**绑定同一个
-   * 会拒绝 blocked 工具的 scope——revoke 存在的意义就是收拾"工具刚被切成
-   * blocked"之后的残留，如果补偿写盘前的断言在这种情况下抛错，撤销会在
-   * 连 pending 标记都没落盘的情况下直接失败，既没删掉 ref 也没留下可重放的
-   * 记录，真正生效的授权反而在原地不动。只保留 owner/DB 身份漂移这类会让
-   * 继续用同一个句柄本身不安全的边界。
+   * revoke() 专用的持久补偿，与 withRefCompensation 同构，但**不得**绑定任何
+   * 会拒绝的 scope 断言——revoke 存在的意义就是收拾"工具刚被切成 blocked"
+   * 或"owner 刚发生漂移"之后的残留，这两者恰恰都是触发撤销最常见的原因。
+   * 如果补偿写盘前的断言在这些情况下抛错，撤销会在连 pending 标记都没落盘
+   * 的情况下直接失败，既没删掉 ref 也没留下可重放的记录，真正生效的授权
+   * 反而在原地不动——比裸循环直接删还差。这条持久化标记本身只依赖静态的
+   * journalDir/ownerStorageKey，与当前是否还是同一个活跃 owner 无关；真正
+   * "继续用同一个 db 句柄是否安全"这件事应该交给 perform/compensate 里的
+   * removeRefById 自己去试——db 失效时它自然会抛错，由这条持久补偿协议自己
+   * 的 catch→compensate 兜底接住，兜底也失败则 pending 标记已经落盘，留给
+   * 下次同 owner DB 就绪时的 reconcile 重放。
    */
   withRevokeCompensation<T>(params: {
     refIds: readonly string[];
