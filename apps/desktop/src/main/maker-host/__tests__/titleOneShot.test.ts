@@ -12,11 +12,12 @@
  * 无 electron 的 vitest 里加载;真正的凭证 / fetch / 会话 provider 全部经 deps 注入,不碰真实实现。
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockGetAppCapabilities, mockReadModelDisableOverrides } = vi.hoisted(() => ({
+const { mockGetAppCapabilities, mockReadModelDisableOverrides, mockProviderRouteMutationInProgress } = vi.hoisted(() => ({
   mockGetAppCapabilities: vi.fn(() => ({ canUseCindyGateway: true })),
   mockReadModelDisableOverrides: vi.fn(() => ({})),
+  mockProviderRouteMutationInProgress: vi.fn(() => false),
 }));
 
 vi.mock('../../appCapabilities.js', () => ({
@@ -26,6 +27,11 @@ vi.mock('../../appCapabilities.js', () => ({
 // 用户停用覆盖(disable override store)在测试里可控;默认空 = 无停用。
 vi.mock('../model-disable-store.js', () => ({
   readModelDisableOverrides: mockReadModelDisableOverrides,
+}));
+
+// 路由变更窗口 gate(tryCustomProviderTitle 派发前查);默认无变更。
+vi.mock('../provider-route.js', () => ({
+  isProviderRouteMutationInProgress: mockProviderRouteMutationInProgress,
 }));
 
 // xd 网关上游运行期来自 model-access server 下发(effectiveXdGatewayBaseUrl),
@@ -52,6 +58,22 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
   const { TEST_XD_GATEWAY_BASE_URL } = await import('../../../test/vitest/clientEndpointsFixture');
   return { effectiveXdGatewayBaseUrl: () => TEST_XD_GATEWAY_BASE_URL };
 });
+
+// 自定义供应商凭证读取:tryCustomProviderTitle 走数据驱动路由时用。默认返回 null
+// (无凭证 → failed),单测按需 mockReturnValueOnce 给 key。
+const { mockReadCustomProviderKey } = vi.hoisted(() => ({
+  mockReadCustomProviderKey: vi.fn((providerId?: string, agentKind?: string) => {
+    void providerId;
+    void agentKind;
+    return null as string | null;
+  }),
+}));
+vi.mock('../../secrets/providerSecretStore.js', () => ({
+  readCustomProviderKey: mockReadCustomProviderKey,
+}));
+vi.mock('../generic-oauth.js', () => ({
+  readCachedGenericOAuthAccessToken: vi.fn(() => null),
+}));
 
 import {
   buildTitleTarget,
@@ -105,7 +127,7 @@ async function withDiscoveredMini<T>(fn: () => T | Promise<T>): Promise<T> {
     setDiscoveredCodexModels([]);
   }
 }
-import { BUNDLED_CATALOG, type Catalog, type ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, type Catalog, type CatalogModel, type Provider, type ProviderView } from '@cindy/model-providers';
 
 /** 造一个 fetch 替身:按传入 handler 返回类 Response 对象,并记录调用。 */
 function fakeFetch(
@@ -128,7 +150,12 @@ function fakeFetch(
       ok: r.ok ?? true,
       status: r.status ?? 200,
       json: async () => r.json,
-      text: async () => r.text ?? '',
+      // 标题通道现复用 requestProviderHttpText:它统一走 response.text() + 解析,
+      // 不再分别调 .json() / .text()。未显式给 text 时把 json 序列化兜底,保持
+      // 既有用例「json: {...}」写法可用。
+      text: async () => r.text ?? (r.json !== undefined ? JSON.stringify(r.json) : ''),
+      // requestProviderHttpText 在 400/422 重试前会 cancel body;提供空 body 兜底。
+      body: { cancel: async () => undefined },
     };
   }) as unknown as NonNullable<TitleOneShotDeps['fetchImpl']>;
 }
@@ -385,6 +412,32 @@ describe('generateTitleViaProviderResult — 手动重命名失败语义', () =>
     expect(result).toEqual({ status: 'failed' });
   });
 
+  it('外部 signal 在调用前已中止 → 立即失败,请求收到已中止信号(不发真实请求)', async () => {
+    await withDeepSeekCatalog(async () => {
+      mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
+      const fetchImpl = vi.fn(async (_url: unknown, init: unknown) => {
+        const signal = (init as { signal?: AbortSignal })?.signal;
+        if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ content: [{ type: 'text', text: '不应出现' }] }),
+          body: { cancel: async () => undefined },
+        };
+      }) as unknown as NonNullable<TitleOneShotDeps['fetchImpl']>;
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 's-aborted', agentKind: 'claude-code', prompt: 'x', signal: AbortSignal.abort() },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'failed' });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect((vi.mocked(fetchImpl).mock.calls[0]?.[1] as { signal?: AbortSignal })?.signal?.aborted).toBe(true);
+    });
+  });
 });
 
 // ── buildTitleTarget(锁定 catalog titleModel 配置)────────────────────────
@@ -772,6 +825,488 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
       expect(fetchImpl).not.toHaveBeenCalled();
     } finally {
       setXdGatewayModels([]);
+    }
+  });
+});
+
+// ── 用户 / 预设供应商(数据驱动路由,#2046 / #2097)──────────────────────────
+
+/** 造一个 source:'user' 的 DeepSeek 供应商(anthropic wire + api-key),注入 active catalog。 */
+function withDeepSeekCatalog<T>(fn: () => T | Promise<T>): Promise<T> {
+  const flash: CatalogModel = {
+    id: 'deepseek-v4-flash',
+    name: 'DeepSeek V4 Flash',
+    contextWindow: 1_000_000,
+    efforts: [],
+    defaultEffort: null,
+    status: 'active',
+  };
+  const deepseek: Provider = {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    source: 'user',
+    agents: ['claude-code', 'codex'],
+    auth: { method: 'apiKey' },
+    access: { kind: 'api' },
+    routing: {
+      'claude-code': { upstream: 'https://api.deepseek.com/anthropic', authStrategy: 'api-key-header' },
+      codex: { upstream: 'https://api.deepseek.com', authStrategy: 'api-key-header', wireProtocol: 'openai-chat' },
+    },
+    models: { 'claude-code': [flash], codex: [flash] },
+  } as unknown as Provider;
+  const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+  // 注入用户供应商(去重,避免 BUNDLED 里已有同名)。
+  catalog.providers = [...catalog.providers.filter((p) => p.id !== 'deepseek'), deepseek];
+  setActiveCatalog(catalog);
+  return Promise.resolve(fn()).finally(() => setActiveCatalog(BUNDLED_CATALOG));
+}
+
+/** NewAPI-style OpenAI-compatible custom provider reported in #2423. */
+function withNewApiCatalog<T>(fn: () => T | Promise<T>): Promise<T> {
+  const newApi: Provider = {
+    id: 'newapi',
+    name: 'NewAPI',
+    source: 'user',
+    agents: ['codex'],
+    auth: { method: 'apiKey' },
+    access: { kind: 'api' },
+    routing: {
+      codex: {
+        upstream: 'https://newapi.example/v1',
+        requestPath: '/chat/completions',
+        authStrategy: 'api-key-header',
+        wireProtocol: 'openai-chat',
+      },
+    },
+    models: {
+      codex: [
+        {
+          id: 'newapi-mini',
+          name: 'NewAPI Mini',
+          contextWindow: 128_000,
+          efforts: [],
+          defaultEffort: null,
+          status: 'active',
+        },
+      ],
+    },
+  } as unknown as Provider;
+  const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+  catalog.providers = [...catalog.providers.filter((provider) => provider.id !== newApi.id), newApi];
+  setActiveCatalog(catalog);
+  return Promise.resolve(fn()).finally(() => setActiveCatalog(BUNDLED_CATALOG));
+}
+
+describe('generateTitleViaProvider — 用户/预设供应商(DeepSeek 数据驱动)', () => {
+  // 默认无凭证:防止 mockReturnValueOnce 泄漏到下一个用例导致真实网络请求。
+  beforeEach(() => mockReadCustomProviderKey.mockReturnValue(null));
+
+  it('#2423 NewAPI openai-chat route uses its exact endpoint, model, and credential', async () => {
+    await withNewApiCatalog(async () => {
+      mockReadCustomProviderKey.mockReturnValueOnce('newapi-key');
+      const fetchImpl = fakeFetch(() => ({
+        json: { choices: [{ message: { content: 'NewAPI title' } }] },
+      }));
+
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'newapi-session', agentKind: 'codex', prompt: 'Summarize this session' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'newapi',
+          listConnectedProviders: async () => [
+            providerStub('anthropic'),
+            providerStub('xd'),
+            providerStub('newapi'),
+          ],
+        },
+      );
+
+      expect(result).toEqual({ status: 'ok', title: 'NewAPI title' });
+      expect(mockReadCustomProviderKey).toHaveBeenCalledWith('newapi', 'codex');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [
+        string,
+        { headers: Record<string, string>; body: string },
+      ];
+      expect(url).toBe('https://newapi.example/v1/chat/completions');
+      expect(init.headers.Authorization).toBe('Bearer newapi-key');
+      expect(JSON.parse(init.body)).toMatchObject({
+        model: 'newapi-mini',
+        max_tokens: 32,
+        messages: [{ role: 'user', content: 'Summarize this session' }],
+      });
+    });
+  });
+
+  it('#2423 NewAPI failure stays on the selected provider without fallback', async () => {
+    await withNewApiCatalog(async () => {
+      mockReadCustomProviderKey.mockReturnValueOnce('newapi-key');
+      const fetchImpl = fakeFetch(() => ({ ok: false, status: 401 }));
+
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'newapi-unauthorized', agentKind: 'codex', prompt: 'Summarize this session' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'newapi',
+          listConnectedProviders: async () => [
+            providerStub('anthropic'),
+            providerStub('xd'),
+            providerStub('newapi'),
+          ],
+        },
+      );
+
+      expect(result).toEqual({ status: 'failed' });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(String(vi.mocked(fetchImpl).mock.calls[0]?.[0])).toBe(
+        'https://newapi.example/v1/chat/completions',
+      );
+    });
+  });
+
+  it('device-link 任务保留的 kimi-code/k3 → 按会话供应商走自己的 Claude Code 路由', async () => {
+    const kimi: Provider = {
+      id: 'kimi-code',
+      name: 'Kimi Code',
+      source: 'user',
+      agents: ['claude-code'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        'claude-code': {
+          upstream: 'https://api.kimi.com/coding',
+          authStrategy: 'api-key-header',
+          wireProtocol: 'anthropic-messages',
+        },
+      },
+      models: {
+        'claude-code': [{
+          id: 'k3',
+          name: 'K3',
+          contextWindow: 262_144,
+          efforts: [],
+          defaultEffort: null,
+          status: 'active',
+        }],
+      },
+    } as unknown as Provider;
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers = [...catalog.providers.filter((p) => p.id !== 'kimi-code'), kimi];
+    setActiveCatalog(catalog);
+    mockReadCustomProviderKey.mockReturnValueOnce('kimi-key');
+
+    try {
+      const fetchImpl = fakeFetch(() => ({
+        json: { content: [{ type: 'text', text: '移动端创建的任务' }] },
+      }));
+      const title = await generateTitleViaProvider(
+        { sessionId: 'device-link-session', agentKind: 'claude-code', prompt: '总结这个任务' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'kimi-code',
+          listConnectedProviders: async () => [providerStub('anthropic'), providerStub('kimi-code')],
+        },
+      );
+
+      expect(title).toBe('移动端创建的任务');
+      expect(mockReadCustomProviderKey).toHaveBeenCalledWith('kimi-code', 'claude-code');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [
+        string,
+        { headers: Record<string, string>; body: string },
+      ];
+      expect(url).toBe('https://api.kimi.com/coding/v1/messages');
+      expect(init.headers['x-api-key']).toBe('kimi-key');
+      expect(init.headers.Authorization).toBe('Bearer kimi-key');
+      expect(JSON.parse(init.body)).toMatchObject({
+        model: 'k3',
+        max_tokens: 32,
+        messages: [{ role: 'user', content: '总结这个任务' }],
+      });
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  it('自定义 Codex 省略 wireProtocol → Responses 请求保留标题 instructions', async () => {
+    const customResponses: Provider = {
+      id: 'custom-responses',
+      name: 'Custom Responses',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        codex: {
+          upstream: 'https://custom.example/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: {
+        codex: [{
+          id: 'custom-mini',
+          name: 'Custom Mini',
+          contextWindow: 128_000,
+          efforts: [],
+          defaultEffort: null,
+          status: 'active',
+        }],
+      },
+    } as unknown as Provider;
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers = [...catalog.providers.filter((p) => p.id !== customResponses.id), customResponses];
+    setActiveCatalog(catalog);
+    mockReadCustomProviderKey.mockReturnValueOnce('custom-key');
+
+    try {
+      const fetchImpl = fakeFetch(() => ({ json: { output_text: '自定义 Responses 标题' } }));
+      const title = await generateTitleViaProvider(
+        { sessionId: 'custom-responses-session', agentKind: 'codex', prompt: '起个标题' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'custom-responses',
+          listConnectedProviders: async () => [providerStub('custom-responses')],
+        },
+      );
+
+      expect(title).toBe('自定义 Responses 标题');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [string, { body: string }];
+      expect(url).toBe('https://custom.example/v1/responses');
+      expect(JSON.parse(init.body)).toMatchObject({
+        model: 'custom-mini',
+        instructions:
+          'Output only the short conversation title requested by the user message, without quotation marks or ending punctuation.',
+        input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: '起个标题' }] }],
+      });
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  it('有 key + anthropic wire → 成功起名(不再落 default: null)', async () => {
+    await withDeepSeekCatalog(async () => {
+      mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
+      const fetchImpl = fakeFetch(() => ({
+        json: { content: [{ type: 'text', text: 'DeepSeek 标题' }] },
+      }));
+      const title = await generateTitleViaProvider(
+        { sessionId: 'ds1', agentKind: 'claude-code', prompt: '起个标题' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(title).toBe('DeepSeek 标题');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [
+        string,
+        { headers: Record<string, string>; body: string },
+      ];
+      // 走 DeepSeek 的 anthropic 端点(预设里 claude-code 的 baseUrl)。
+      expect(url).toBe('https://api.deepseek.com/anthropic/v1/messages');
+      // api-key-header + claude-code → 同时带 x-api-key 与 Authorization(对齐通用层)。
+      expect(init.headers['x-api-key']).toBe('ds-key');
+      expect(init.headers.Authorization).toBe('Bearer ds-key');
+      const body = JSON.parse(init.body);
+      expect(body.model).toBe('deepseek-v4-flash');
+      expect(body.max_tokens).toBe(32);
+      expect(body.messages).toEqual([{ role: 'user', content: '起个标题' }]);
+    });
+  });
+
+  it('无 key → failed(不是 unsupported-provider),不发请求', async () => {
+    await withDeepSeekCatalog(async () => {
+      mockReadCustomProviderKey.mockReturnValueOnce(null);
+      const fetchImpl = fakeFetch(() => ({ json: { content: [{ type: 'text', text: '不应出现' }] } }));
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'ds2', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'failed' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  });
+
+  it('路由变更窗口中 → failed(fail-closed),不读凭证不发请求', async () => {
+    await withDeepSeekCatalog(async () => {
+      // 有 key 也会被 gate 拦住:mutation in progress 时 catalog route 与 safeStorage
+      // 更新不是原子的,继续派发可能把旧 endpoint 配新 key 发到错误 upstream。
+      mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
+      mockProviderRouteMutationInProgress.mockReturnValueOnce(true);
+      const fetchImpl = fakeFetch(() => ({ json: { content: [{ type: 'text', text: '不应出现' }] } }));
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'ds-mut', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'failed' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  });
+
+  it('首次 gate 通过后、派发前路由变更窗口开启 → failed(fail-closed),不发请求', async () => {
+    await withDeepSeekCatalog(async () => {
+      // 模拟 TOCTOU:第一次(初始 gate)未见变更,第二次(派发紧前)才进入 mutation 窗口。
+      // 有 key 也必须 fail-closed,避免把旧 route 配新凭证发到错误 upstream(review P1)。
+      mockProviderRouteMutationInProgress
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce(true);
+      mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
+      const fetchImpl = fakeFetch(() => ({ json: { content: [{ type: 'text', text: '不应出现' }] } }));
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'ds-mut-race', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'failed' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  });
+
+  it('供应商有路由但无可选聊天模型 → unsupported-provider', async () => {
+    // 注入一个 models 为空的 deepseek(不经过 withDeepSeekCatalog,直接造空模型 catalog)。
+    const deepseek: Provider = {
+      id: 'deepseek',
+      name: 'DeepSeek',
+      source: 'user',
+      agents: ['claude-code', 'codex'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        'claude-code': { upstream: 'https://api.deepseek.com/anthropic', authStrategy: 'api-key-header' },
+      },
+      models: { 'claude-code': [] },
+    } as unknown as Provider;
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers = [...catalog.providers.filter((p) => p.id !== 'deepseek'), deepseek];
+    setActiveCatalog(catalog);
+    try {
+      const fetchImpl = fakeFetch(() => ({ json: {} }));
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'ds3', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'unsupported-provider' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  it('供应商路由 authStrategy 不受支持 → unsupported-provider(不是 failed)', async () => {
+    // 与通用层对齐:gateway-key / oauth-passthrough 等策略不适用于标题通道,
+    // 视为不可路由而不是凭证缺失。
+    mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
+    const deepseek: Provider = {
+      id: 'deepseek',
+      name: 'DeepSeek',
+      source: 'user',
+      agents: ['claude-code', 'codex'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        'claude-code': { upstream: 'https://api.deepseek.com/anthropic', authStrategy: 'gateway-key' },
+      },
+      models: {
+        'claude-code': [{
+          id: 'deepseek-v4-flash',
+          name: 'DeepSeek V4 Flash',
+          contextWindow: 1_000_000,
+          efforts: [],
+          defaultEffort: null,
+          status: 'active',
+        }],
+      },
+    } as unknown as Provider;
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers = [...catalog.providers.filter((p) => p.id !== 'deepseek'), deepseek];
+    setActiveCatalog(catalog);
+    try {
+      const fetchImpl = fakeFetch(() => ({ json: {} }));
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'ds4', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'unsupported-provider' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  it('自动起名旧入口仍折叠为 null(启发式回退契约不变)', async () => {
+    await withDeepSeekCatalog(async () => {
+      mockReadCustomProviderKey.mockReturnValueOnce(null);
+      const title = await generateTitleViaProvider(
+        { sessionId: 'ds4', agentKind: 'claude-code', prompt: 'x' },
+        {
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(title).toBeNull();
+    });
+  });
+
+  it('多个无 cost 的候选模型 → 按 id 稳定取第一个（tie-break，避免 NaN 排序）', async () => {
+    const deepseek: Provider = {
+      id: 'deepseek',
+      name: 'DeepSeek',
+      source: 'user',
+      agents: ['claude-code'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        'claude-code': { upstream: 'https://api.deepseek.com/anthropic', authStrategy: 'api-key-header' },
+      },
+      models: {
+        'claude-code': [
+          { id: 'zeta-model', name: 'Zeta', contextWindow: 1000, efforts: [], defaultEffort: null, status: 'active' },
+          { id: 'alpha-model', name: 'Alpha', contextWindow: 1000, efforts: [], defaultEffort: null, status: 'active' },
+        ],
+      },
+    } as unknown as Provider;
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers = [...catalog.providers.filter((p) => p.id !== 'deepseek'), deepseek];
+    setActiveCatalog(catalog);
+    mockReadCustomProviderKey.mockReturnValueOnce('ds-key');
+    try {
+      const fetchImpl = fakeFetch(() => ({
+        json: { content: [{ type: 'text', text: 'tie-break title' }] },
+      }));
+      const result = await generateTitleViaProviderResult(
+        { sessionId: 'ds-tie', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      );
+      expect(result).toEqual({ status: 'ok', title: 'tie-break title' });
+      const [, init] = vi.mocked(fetchImpl).mock.calls[0] as [string, { body: string }];
+      expect(JSON.parse(init.body).model).toBe('alpha-model');
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
     }
   });
 });

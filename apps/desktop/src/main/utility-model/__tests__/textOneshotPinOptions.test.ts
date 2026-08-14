@@ -213,9 +213,11 @@ describe('buildTextOneshotPinOptions', () => {
     expect(options.map((o) => o.id)).toEqual(['cat:xd:codex:gpt-a']);
   });
 
-  it('自定义供应商 wire 与执行侧出线不一致的组合不进清单', () => {
-    // 执行侧:claude-code 恒发 anthropic-messages;codex 发不出 anthropic-messages
-    // (会被静默当 responses)。配置错线的组合钉上恒失败,清单提前过滤。
+  it('自定义供应商 wire 与执行侧出线不一致的组合不进清单(codex+anthropic 现在可路由,见 P2)', () => {
+    // 执行侧(requestCustomProviderText):claude-code 恒发 anthropic-messages;
+    // codex/pi 缺省按 agent 默认出线,显式声明 anthropic-messages 现在也走 Anthropic
+    // wire(与 agentKind 无关)。pin-option 侧的 isRoutableForOneshot 已对齐:codex +
+    // anthropic-messages 进清单(此前被判不可路由,静默回落到别的 route——P2 修复)。
     const custom = (id: string, agentKind: 'codex' | 'claude-code', wireProtocol?: string) =>
       provider({
         id,
@@ -243,6 +245,7 @@ describe('buildTextOneshotPinOptions', () => {
     expect(options.map((o) => o.id)).toEqual([
       'cat:cc-anthropic:claude-code:m',
       'cat:cx-chat:codex:m',
+      'cat:cx-anthropic:codex:m',
       'cat:cx-default:codex:m',
     ]);
   });

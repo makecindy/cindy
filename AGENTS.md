@@ -79,6 +79,9 @@
 - 修改 `packages/maker-core` 的 Agent 编排、prompt 组装、tool／MCP 暴露、translator、
   model 映射、usage 计量，或任何进入模型 system 段的提示词前，必须先读
   `docs/dev-rules/maker-core-and-agent-behavior.md`。
+- 新增或修改标题生成、任务摘要、帮助兜底、语音精修、插件 `cindy.text.oneshot`，或任何
+  用户不可见的一次性小模型调用及其 wire 路由前，必须先读
+  `docs/dev-rules/utility-model-and-title-routing.md`。
 - 修改 PI harness 集成（`packages/maker-core/src/agents/pi/**`、`pi-host.ts`、
   `piEnvironment.ts`）、PI 会话权限／配置／system prompt／桥接，或 PI 相关的上线判断前，
   必须先读 `docs/dev-rules/pi-harness.md`（含设计原则、维护不变量与上线清单）。
