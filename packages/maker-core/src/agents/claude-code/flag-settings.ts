@@ -26,6 +26,16 @@
  * - 远端 daemon:   远端机器用户的 apiKeyHelper 同样被屏蔽(远端也是 host 托管路由)。
  * 运行时 q.applyFlagSettings() 是 merge 语义(只并入传入字段),中途 toggle
  * fastMode / effort 不会丢掉本覆盖。
+ *
+ * ## attribution 恒置空 —— 不把 Claude 写成 GitHub 共同作者
+ *
+ * Claude Code 默认在 commit / PR 末尾加 `Co-Authored-By: Claude <noreply@anthropic.com>`
+ * 与 `Generated with Claude Code`。GitHub 会把前者解析成共同作者,用户用 Cindy
+ * 提交任意仓库时 Claude 会出现在 Contributors 里。官方 settings 把空字符串定义为
+ * 隐藏该段署名;flag 层无条件覆盖 user / project / local,本地与远端 cc-mgr 共用。
+ *
+ * 这与 `CLAUDE_CODE_ATTRIBUTION_HEADER` 不是同一件事:后者是打给 Anthropic API
+ * 的计费头(issue #758),订阅直连时必须保留。这里只关 git / GitHub 可见署名。
  */
 
 import type { Settings } from '@anthropic-ai/claude-agent-sdk';
@@ -61,6 +71,11 @@ export function buildClaudeFlagSettings(input: ClaudeFlagSettingsInput): Setting
     showThinkingSummaries: input.showThinkingSummaries,
     // 屏蔽用户级 apiKeyHelper,防止它劫持 oauth-spawn 的订阅鉴权(见文件头注释)。
     apiKeyHelper: '',
+    // 空字符串 = 隐藏 Claude Code 默认的 commit / PR 署名(见文件头注释)。
+    attribution: {
+      commit: '',
+      pr: '',
+    },
     ...(input.memoryOverride !== undefined && {
       autoMemoryEnabled: input.memoryOverride,
       autoDreamEnabled: input.memoryOverride,
