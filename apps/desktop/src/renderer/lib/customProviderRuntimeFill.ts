@@ -29,7 +29,7 @@ export interface RuntimeFillFieldDiff {
   field: RuntimeFillField;
   targetState: RuntimeFillTargetState;
   incompatibilityReason?: RuntimeFillIncompatibilityReason;
-  /** This field must be cleared together with the endpoint bundle. */
+  /** This field must be selected or deselected together with the endpoint bundle. */
   implicitClear?: boolean;
 }
 
@@ -141,33 +141,47 @@ function canonicalHeaders(headers: RuntimeFillHeaderRow[]) {
   return [...byName].map(([name, value]) => ({ name, value }));
 }
 
+function runtimeConsumesModelImageInput(
+  agent: RuntimeFillAgent,
+  wire: ProviderWireProtocol,
+): boolean {
+  return agent === 'pi' || (agent === 'codex' && wire === 'openai-chat');
+}
+
 /**
  * Project source models into the exact shape that the target runtime will save.
- * Pi-only capability metadata belongs to the Pi runtime, so portable fills preserve
- * it for matching target model ids instead of silently deleting it.
+ * Image capability is portable between Pi and OpenAI Chat Codex. Reasoning stays
+ * Pi-only, and metadata unsupported by the source is preserved by matching id.
  */
 function modelsForTarget(
   sourceModels: ProviderRuntimeModelConfig[],
   targetModels: ProviderRuntimeModelConfig[],
   sourceAgent: RuntimeFillAgent,
   targetAgent: RuntimeFillAgent,
+  sourceWire: ProviderWireProtocol,
+  targetWire: ProviderWireProtocol,
 ) {
   const targetById = new Map(validModels(targetModels).map((model) => [model.id, model]));
+  const sourceCarriesImageInput = runtimeConsumesModelImageInput(sourceAgent, sourceWire);
+  const targetConsumesImageInput = runtimeConsumesModelImageInput(targetAgent, targetWire);
   return validModels(sourceModels).map((sourceModel) => {
-    if (targetAgent !== 'pi') return savedCustomProviderModelShape(sourceModel, false);
-    if (sourceAgent === 'pi') return savedCustomProviderModelShape(sourceModel, true);
-
     const portable = savedCustomProviderModelShape(sourceModel, false);
     const existing = targetById.get(portable.id);
+    const supportsImageInput = sourceCarriesImageInput
+      ? sourceModel.supportsImageInput === true
+      : existing?.supportsImageInput === true;
+    const reasoningSource = sourceAgent === 'pi' ? sourceModel : existing;
     return {
       ...portable,
-      ...(existing?.supportsImageInput === true ? { supportsImageInput: true } : {}),
-      ...(existing?.reasoning === true && existing.reasoningEfforts?.length
+      ...(targetConsumesImageInput && supportsImageInput ? { supportsImageInput: true } : {}),
+      ...(targetAgent === 'pi' &&
+      reasoningSource?.reasoning === true &&
+      reasoningSource.reasoningEfforts?.length
         ? {
             reasoning: true,
-            reasoningEfforts: [...existing.reasoningEfforts],
-            ...(existing.reasoningDefaultEffort
-              ? { reasoningDefaultEffort: existing.reasoningDefaultEffort }
+            reasoningEfforts: [...reasoningSource.reasoningEfforts],
+            ...(reasoningSource.reasoningDefaultEffort
+              ? { reasoningDefaultEffort: reasoningSource.reasoningDefaultEffort }
               : {}),
           }
         : {}),
@@ -307,6 +321,7 @@ export function buildRuntimeFillDiffs(
   options: { includeApiKey: boolean; sourceAgent: RuntimeFillAgent; targetAgent: RuntimeFillAgent },
 ): RuntimeFillFieldDiff[] {
   const wire = effectiveWire(options.sourceAgent, source.wireProtocol);
+  const targetWire = effectiveWire(options.targetAgent, target.wireProtocol);
   const endpointSupported = endpointBundleSupported(
     source,
     options.sourceAgent,
@@ -332,6 +347,43 @@ export function buildRuntimeFillDiffs(
     endpointChangesUrl &&
     target.apiKey.trim().length > 0 &&
     true;
+  const sourceModelsForProspectiveWire = modelsForTarget(
+    source.models,
+    target.models,
+    options.sourceAgent,
+    options.targetAgent,
+    wire,
+    wire,
+  );
+  const targetModelsForProspectiveWire = modelsForTarget(
+    target.models,
+    target.models,
+    options.targetAgent,
+    options.targetAgent,
+    wire,
+    wire,
+  );
+  const sourceModelsForCurrentWire = modelsForTarget(
+    source.models,
+    target.models,
+    options.sourceAgent,
+    options.targetAgent,
+    wire,
+    targetWire,
+  );
+  const targetModelsForCurrentWire = modelsForTarget(
+    target.models,
+    target.models,
+    options.targetAgent,
+    options.targetAgent,
+    targetWire,
+    targetWire,
+  );
+  const modelsDependOnEndpoint =
+    wire !== targetWire &&
+    (JSON.stringify(sourceModelsForProspectiveWire) ===
+      JSON.stringify(targetModelsForProspectiveWire)) !==
+      (JSON.stringify(sourceModelsForCurrentWire) === JSON.stringify(targetModelsForCurrentWire));
 
   return RUNTIME_FILL_FIELD_ORDER.filter((field) => {
     if (!options.includeApiKey && field === 'apiKey' && !implicitApiKeyClear) return false;
@@ -399,11 +451,11 @@ export function buildRuntimeFillDiffs(
 
     const sourceValue =
       field === 'models'
-        ? modelsForTarget(source.models, target.models, options.sourceAgent, options.targetAgent)
+        ? sourceModelsForProspectiveWire
         : comparableValue(field, source, options.sourceAgent);
     const targetValue =
       field === 'models'
-        ? modelsForTarget(target.models, target.models, options.targetAgent, options.targetAgent)
+        ? targetModelsForProspectiveWire
         : comparableValue(field, target, options.targetAgent);
     const same = JSON.stringify(sourceValue) === JSON.stringify(targetValue);
     const hiddenTargetHeadersOnly =
@@ -413,7 +465,8 @@ export function buildRuntimeFillDiffs(
     const shouldConfirmImplicitClear =
       (field === 'headers' && implicitHeaderClear) ||
       (field === 'modelsUrl' && (implicitModelsUrlClear || modelsUrlEndpointChange)) ||
-      (field === 'apiKey' && implicitApiKeyClear);
+      (field === 'apiKey' && implicitApiKeyClear) ||
+      (field === 'models' && modelsDependOnEndpoint);
     return {
       field,
       targetState: same && !hiddenTargetHeadersOnly
@@ -574,8 +627,18 @@ export function applyRuntimeFillFields(
     copyEndpoint &&
     target.apiKey.trim().length > 0 &&
     !selected.has('apiKey');
+  const targetWire = copyWireProtocol
+    ? sourceWire
+    : effectiveWire(options.targetAgent, target.wireProtocol);
   const models = selected.has('models')
-    ? modelsForTarget(source.models, target.models, options.sourceAgent, options.targetAgent)
+    ? modelsForTarget(
+        source.models,
+        target.models,
+        options.sourceAgent,
+        options.targetAgent,
+        sourceWire,
+        targetWire,
+      )
     : target.models;
   const copyHeaders =
     selected.has('headers') &&
