@@ -11,6 +11,8 @@ import {
   XAI_VIDEO_CATALOG_MODEL_ID,
 } from '../providers/xai.js';
 
+const MP4_BYTES = Buffer.from('00000010667479706d70343200000000', 'hex');
+
 interface HarnessOptions {
   fetchImplementation: typeof fetch;
   owner?: { value: string; pending: boolean };
@@ -202,7 +204,7 @@ describe('xAI video provider · poll and download', () => {
         }),
         { status: 200 },
       ),
-      new Response(Buffer.from('fake-mp4'), {
+      new Response(MP4_BYTES, {
         status: 200,
         headers: { 'content-type': 'video/mp4' },
       }),
@@ -222,7 +224,7 @@ describe('xAI video provider · poll and download', () => {
     });
     if (done.state !== 'succeeded') throw new Error('expected succeeded');
     const downloaded = await provider.download(done.videoUrl);
-    expect(downloaded).toEqual({ buffer: Buffer.from('fake-mp4'), mimeType: 'video/mp4' });
+    expect(downloaded).toEqual({ buffer: MP4_BYTES, mimeType: 'video/mp4' });
 
     const calls = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls[1][0]).toBe('https://api.x.ai/v1/videos/video-3');
@@ -246,6 +248,64 @@ describe('xAI video provider · poll and download', () => {
 
     await expect(provider.poll(handle)).rejects.toThrow(/账号已切换/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('trusts verified video bytes instead of the Content-Type header', async () => {
+    const owner = { value: 'owner-a', pending: false };
+    const validWithoutHeader = makeProvider({
+      owner,
+      fetchImplementation: vi.fn(
+        async () => new Response(MP4_BYTES, { status: 200 }),
+      ) as unknown as typeof fetch,
+    });
+    const videoUrl =
+      'xai-video://content/task?owner=owner-a&source=https%3A%2F%2Fvidgen.x.ai%2Ftask.mp4';
+
+    await expect(validWithoutHeader.download(videoUrl)).resolves.toEqual({
+      buffer: MP4_BYTES,
+      mimeType: 'video/mp4',
+    });
+
+    for (const contentType of [undefined, 'video/mp4', 'text/html']) {
+      const invalid = makeProvider({
+        owner,
+        fetchImplementation: vi.fn(
+          async () =>
+            new Response(Buffer.from('<html>cdn error</html>'), {
+              status: 200,
+              ...(contentType ? { headers: { 'content-type': contentType } } : {}),
+            }),
+        ) as unknown as typeof fetch,
+      });
+      await expect(invalid.download(videoUrl)).rejects.toThrow(/不是受支持的视频/);
+    }
+  });
+
+  it('rechecks the owner after the download body is complete', async () => {
+    const owner = { value: 'owner-a', pending: false };
+    const responseBody = new Response(MP4_BYTES).body;
+    const fetchMock = vi.fn(async () => {
+      const response = {
+        ok: true,
+        status: 200,
+        body: responseBody,
+        headers: {
+          get(name: string) {
+            if (name.toLowerCase() === 'content-type') {
+              owner.value = 'owner-b';
+              return 'video/mp4';
+            }
+            return null;
+          },
+        },
+      };
+      return response as unknown as Response;
+    }) as unknown as typeof fetch;
+    const provider = makeProvider({ fetchImplementation: fetchMock, owner });
+    const videoUrl =
+      'xai-video://content/task?owner=owner-a&source=https%3A%2F%2Fvidgen.x.ai%2Ftask.mp4';
+
+    await expect(provider.download(videoUrl)).rejects.toThrow(/账号已切换/);
   });
 
   it('rejects oversized video content before materializing it', async () => {

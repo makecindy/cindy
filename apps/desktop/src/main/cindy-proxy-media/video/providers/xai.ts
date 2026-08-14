@@ -16,6 +16,7 @@ import type {
   VideoTaskHandle,
   VideoTaskStatus,
 } from '../types.js';
+import { sniffMediaMime } from '../../../cindy-media/sniffMediaMime.js';
 
 const XAI_API_BASE = 'https://api.x.ai/v1';
 export const XAI_VIDEO_CATALOG_MODEL_ID = 'xai/grok-imagine-video';
@@ -409,7 +410,15 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
       () => assertOwnerScopeCurrent(opts, ownerScopeKey),
     );
     if (buffer.byteLength === 0) throw new Error('xAI 视频下载结果为空');
-    const mimeType = response.headers.get('content-type')?.split(';')[0].trim() || 'video/mp4';
+    const declaredMime =
+      response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '';
+    const mimeType = sniffMediaMime(buffer, declaredMime);
+    if (!mimeType?.startsWith('video/')) {
+      throw new Error('xAI 视频下载结果不是受支持的视频');
+    }
+    // 流读取中的逐块检查覆盖下载过程；这里再封住最后一个分块读完到结果交给
+    // cindy-media 之间的同步窗口，旧账号产物绝不跨 owner 边界返回。
+    assertOwnerScopeCurrent(opts, ownerScopeKey);
     return { buffer, mimeType };
   }
 
