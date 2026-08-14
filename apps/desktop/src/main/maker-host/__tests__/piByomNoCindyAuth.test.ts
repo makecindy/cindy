@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const grokOAuth = vi.hoisted(() => ({ loggedIn: false }));
 
 vi.mock('electron', () => ({
   app: {
@@ -24,7 +26,10 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
       name: 'Legacy custom xAI',
       auth: { method: 'apiKey' },
       runtimes: {
-        pi: { baseUrl: 'https://private-xai.example/v1', models: [{ id: 'private-grok' }] },
+        pi: {
+          baseUrl: 'https://private-xai.example/v1',
+          models: [{ id: 'private-grok' }, { id: 'grok-4.6' }],
+        },
       },
     },
   ],
@@ -33,11 +38,15 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: (providerId: string) =>
     providerId === 'xai' ? 'legacy-custom-key' : null,
 }));
-vi.mock('../grok-oauth-login.js', () => ({ hasGrokOAuthLogin: () => false }));
+vi.mock('../grok-oauth-login.js', () => ({ hasGrokOAuthLogin: () => grokOAuth.loggedIn }));
 
 import { desktopPiAuthAdapter, resolvePiNativeProviders } from '../pi-host.js';
 
 describe('Pi pure BYOM auth without a Cindy account', () => {
+  beforeEach(() => {
+    grokOAuth.loggedIn = false;
+  });
+
   it('authenticates the native provider and only uses an inert gateway placeholder', async () => {
     expect(await desktopPiAuthAdapter.getState({ providerId: 'local-keyless' })).toMatchObject({
       authenticated: true,
@@ -63,20 +72,44 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
     });
   });
 
-  it('restores a legacy xai session from the custom endpoint startup snapshot', async () => {
+  it('restores a legacy xai session from the custom endpoint after SuperGrok is connected', async () => {
+    grokOAuth.loggedIn = true;
     const resolved = await resolvePiNativeProviders({
       workingDir: '/tmp/project',
       providerId: 'xai',
       model: 'private-grok',
+      resumeSessionId: '/tmp/pi/legacy-session.jsonl',
     });
 
     expect(resolved.providers).toContainEqual(
       expect.objectContaining({
         id: 'xai',
         baseUrl: 'https://private-xai.example/v1',
-        models: [expect.objectContaining({ id: 'private-grok' })],
+        models: expect.arrayContaining([expect.objectContaining({ id: 'private-grok' })]),
       }),
     );
     expect(Object.values(resolved.env)).toContain('legacy-custom-key');
+  });
+
+  it('keeps a fresh xai selection on the official provider when SuperGrok is connected', async () => {
+    grokOAuth.loggedIn = true;
+    const resolved = await resolvePiNativeProviders({
+      workingDir: '/tmp/project',
+      providerId: 'xai',
+      model: 'grok-4.6',
+    });
+
+    expect(resolved.providers).toContainEqual(
+      expect.objectContaining({
+        id: 'custom:xai',
+        baseUrl: 'https://private-xai.example/v1',
+      }),
+    );
+    expect(resolved.providers).toContainEqual(
+      expect.objectContaining({
+        id: 'xai',
+        baseUrl: expect.not.stringContaining('private-xai.example'),
+      }),
+    );
   });
 });

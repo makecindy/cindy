@@ -577,10 +577,13 @@ export async function resolvePiNativeProviders(ctx: {
     config.id === 'xai'
     && config.runtimes.pi?.models.some((model) => model.id === ctx.model),
   );
+  // Before custom xAI received the runtime-only `custom:xai` id, sessions persisted `xai`.
+  // A resumed session carrying that old id must keep its saved endpoint even if SuperGrok was
+  // connected later. Fresh `xai` selections still mean the official provider when OAuth exists.
   const useLegacyCustomXai =
     ctx.providerId === 'xai'
-    && !hasGrokOAuthLogin()
-    && legacyCustomXai !== undefined;
+    && legacyCustomXai !== undefined
+    && (!hasGrokOAuthLogin() || ctx.resumeSessionId !== undefined);
   if (useLegacyCustomXai) {
     const projected = custom.providers.find(
       (provider) => provider.id === LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
