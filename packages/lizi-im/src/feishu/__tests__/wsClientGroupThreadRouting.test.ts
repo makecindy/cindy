@@ -28,10 +28,14 @@ const mocks = {
   getBoundClient: vi.fn(() => null),
   sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
   replyText: vi.fn(async () => ({ messageId: 'om_reply' })),
-  // 返回 null = 开话题失败(降级回群 lane), 单测按用例覆盖。
+  // 返回 degraded = 开话题失败(降级回群 lane), 单测按用例覆盖。
   openThread: vi.fn<
-    () => Promise<{ messageId: string; threadId: string } | null>
-  >(async () => ({ messageId: 'om_opener', threadId: 'omt_new' })),
+    () => Promise<
+      | { kind: 'opened'; messageId: string; threadId: string }
+      | { kind: 'degraded' }
+      | { kind: 'orphaned'; openerMessageId: string }
+    >
+  >(async () => ({ kind: 'opened', messageId: 'om_opener', threadId: 'omt_new' })),
   pushReplyAnchor: vi.fn(),
   pushPatchableOpener: vi.fn(),
   resolveCardLane: vi.fn<(messageId: string, chatId: string) => string | null>(
@@ -202,8 +206,8 @@ describe('feishu group thread routing', () => {
    */
   it('每次群主流 @bot 都开自己的新话题(没有任何"截流进接管话题"的通道)', async () => {
     mocks.openThread
-      .mockResolvedValueOnce({ messageId: 'om_opener1', threadId: 'omt_a' })
-      .mockResolvedValueOnce({ messageId: 'om_opener2', threadId: 'omt_b' });
+      .mockResolvedValueOnce({ kind: 'opened', messageId: 'om_opener1', threadId: 'omt_a' })
+      .mockResolvedValueOnce({ kind: 'opened', messageId: 'om_opener2', threadId: 'omt_b' });
     const events = collectMessages();
     await connect();
 
@@ -234,7 +238,7 @@ describe('feishu group thread routing', () => {
   });
 
   it('开话题失败时降级回群 lane(锚点 = 触发消息)', async () => {
-    mocks.openThread.mockResolvedValueOnce(null);
+    mocks.openThread.mockResolvedValueOnce({ kind: 'degraded' });
     const events = collectMessages();
     await connect();
 
