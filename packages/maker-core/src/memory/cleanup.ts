@@ -422,15 +422,34 @@ export async function runMemoryCleanup(
         // unlink 删除最后路径名会让新写入内容不可达 (Codex P1 on #2561
         // 第十三轮: preserve trash until open-fd writers are impossible)。
         // 把 trash 移入 .archive (保留路径名, 后续 open fd 写入仍可达), 与
-        // 快照 A 并存; 移动失败 (Windows 锁/瞬态权限) 则保留原位 — trash
-        // 名非合法分片 (<type>_<slug>.md), list 跳过, 不污染索引。
-        let retained =
-          path.join(archiveDir, `${item.filename}.${stamp}.${randomBytes(4).toString('hex')}`);
-        await fs.rename(trash, retained).catch(() => {
-          // 移动失败 (Windows 锁 = 活跃 writer 仍持有 fd) → trash 保留原位,
-          // 二次校验改读原位 trash。
-          retained = trash;
-        });
+        // 快照 A 并存。用 **link 排他预留 + unlink 删源** 实现 no-clobber 移动:
+        // POSIX rename 会静默覆盖已存在目标 — 32-bit 随机后缀碰撞时不能允许
+        // 覆盖既有 retained 归档 (它可能是 open-fd 迟到内容的唯一可达副本,
+        // Codex P2 on #2561 第二十一轮: reserve retained archive paths
+        // exclusively)。link 到已存在目标抛 EEXIST → 换随机后缀重试; link
+        // 不可用 (ENOTSUP/EPERM/ENOSYS, 文件系统不支持硬链接) 或移动失败
+        // (Windows 锁 = 活跃 writer 仍持有 fd) → trash 保留原位, 二次校验改
+        // 读原位 trash。
+        let retained: string | null = null;
+        for (let attempt = 0; attempt < 8 && retained === null; attempt += 1) {
+          const candidate = path.join(
+            archiveDir,
+            `${item.filename}.${stamp}.${randomBytes(4).toString('hex')}`,
+          );
+          try {
+            await fs.link(trash, candidate);
+            // link 成功 (目标已原子排他预留), 删源路径名 — unlink 失败
+            // (Windows 锁) 则两份副本并存, 安全方向; 不保留共享 inode 状态
+            // (R11 约定)。
+            await fs.unlink(trash).catch(() => {});
+            retained = candidate;
+          } catch (e) {
+            const code = (e as NodeJS.ErrnoException).code;
+            if (code === 'EEXIST') continue; // 随机后缀碰撞 → 换一个重试
+            retained = trash; // link 不可用 / 源被锁 → 保留原位
+          }
+        }
+        if (retained === null) retained = trash; // 多次碰撞 (极不可能) → 原位
         // 二次校验 (Codex P1 on #2561 第十四轮: 不要把仍可能被写入的 trash
         // 标成已归档): 对比只证明「那一刻」没写入, open fd 可能在移动后把新
         // 内容写进 retained inode。重读 retained 对比快照 A — 不一致说明

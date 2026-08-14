@@ -513,10 +513,10 @@ describe('runMemoryCleanup', () => {
     // 模拟 open fd (storage.ts:294 writeFile) 在 trash 移入 .archive 后写入
     // retained inode: 第一次对比通过, 二次校验发现内容 ≠ 快照 → 新内容必须
     // 复制回活动 src 并 failed, 不能只落在 .archive 随机副本退出正常路径
-    // (Codex P1 on #2561 第十四轮)。
-    const realRename = fs.rename.bind(fs);
-    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
-      const r = await realRename(src as string, dst as string);
+    // (Codex P1 on #2561 第十四轮)。trash → retained 移动走 fs.link 排他预留。
+    const realLink = fs.link.bind(fs);
+    const spy = vi.spyOn(fs, 'link').mockImplementation(async (src, dst) => {
+      const r = await realLink(src as string, dst as string);
       if (
         String(dst).includes(ARCHIVE_DIR_NAME) &&
         String(src).includes('cleanup-trash') &&
@@ -552,8 +552,9 @@ describe('runMemoryCleanup', () => {
     // 模拟: open fd 在 move 后写 retained (二次校验不一致), 且宿主同时重建了
     // src — copyFile EXCL 恢复会 EEXIST, retained 必须保留 (open-fd 新内容
     // 不可因恢复失败被 unlink 删除, Greptile P1 / Codex P1 on #2561 第十五轮)。
+    // rename(src→trash) 重建 src; link(trash→retained) 后写 retained。
     const realRename = fs.rename.bind(fs);
-    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
+    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
       const r = await realRename(src as string, dst as string);
       if (String(src).endsWith('feedback_a.md') && String(dst).includes('cleanup-trash')) {
         // 宿主在 src 移到 trash 后立即重建 src (新写入)。
@@ -563,6 +564,11 @@ describe('runMemoryCleanup', () => {
           'utf8',
         );
       }
+      return r;
+    });
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, 'link').mockImplementation(async (src, dst) => {
+      const r = await realLink(src as string, dst as string);
       if (
         String(dst).includes(ARCHIVE_DIR_NAME) &&
         String(src).includes('cleanup-trash') &&
@@ -587,7 +593,8 @@ describe('runMemoryCleanup', () => {
         readFile(path.join(dir, ARCHIVE_DIR_NAME, retained as string), 'utf8'),
       ).resolves.toContain('WRITTEN AFTER MOVE');
     } finally {
-      spy.mockRestore();
+      renameSpy.mockRestore();
+      linkSpy.mockRestore();
     }
   });
 
@@ -630,10 +637,10 @@ describe('runMemoryCleanup', () => {
     // 模拟: open fd 在 move 后写 retained (二次校验不一致), 且 copyFile 恢复
     // 抛 EACCES (非 EEXIST) — 不能抛错 (外层 catch 只记 failed 会让活动分片
     // 缺失), retained 必须保留 .archive 可达 (Greptile P1 on #2561 第十六轮:
-    // 恢复失败后活动分片缺失)。
-    const realRename = fs.rename.bind(fs);
-    const renameSpy = vi.spyOn(fs, 'rename').mockImplementation(async (src, dst) => {
-      const r = await realRename(src as string, dst as string);
+    // 恢复失败后活动分片缺失)。trash → retained 移动走 fs.link 排他预留。
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, 'link').mockImplementation(async (src, dst) => {
+      const r = await realLink(src as string, dst as string);
       if (
         String(dst).includes(ARCHIVE_DIR_NAME) &&
         String(src).includes('cleanup-trash') &&
@@ -659,7 +666,7 @@ describe('runMemoryCleanup', () => {
         readFile(path.join(dir, ARCHIVE_DIR_NAME, retained as string), 'utf8'),
       ).resolves.toContain('WRITTEN AFTER MOVE');
     } finally {
-      renameSpy.mockRestore();
+      linkSpy.mockRestore();
       copySpy.mockRestore();
     }
   });
