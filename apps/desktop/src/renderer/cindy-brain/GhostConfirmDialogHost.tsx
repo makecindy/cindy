@@ -39,6 +39,8 @@ export function GhostConfirmDialogHost() {
             // 主机文案:插件名只作插值,伪装不了这句话本身
             title: t('settings.ghosts.confirm.dialogTitle', { name: ghostName }),
             description: body,
+            // Agent 最终 prompt 可能含换行或无断点长 JSON；确认边界必须完整可读。
+            textClassName: 'whitespace-pre-wrap break-words',
             // 身份头:与 Toast 的来源头同款视觉(语义 token,明暗两档自动跟随)
             content: (
               <span className="inline-flex items-center gap-1.5">
