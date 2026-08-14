@@ -647,13 +647,18 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(handle.id).toBeTruthy();
         await handle.close();
         handle = null;
-        await expect(agent.startSession({
+        // 轮 25 CRITICAL:CAS 返回值不再作为 fallback 门禁 —— session 文件缺失
+        // 时 fresh 是唯一合理选择(文件都没了, 不存在覆盖并发新值的风险)。
+        // CAS=false 也允许 fresh(CAS 仅清 DB 残留, 结果不阻断)。
+        const freshHandle = await agent.startSession({
           sessionId: 'invalid-resume-rejected',
           workingDir,
           model: 'pi-test-model',
           resumeSessionId: path.join(workingDir, 'still-missing.jsonl'),
           onInvalidResumeSession: async () => false,
-        })).rejects.toThrow('fallback rejected');
+        });
+        expect(freshHandle.id).toBeTruthy();
+        await freshHandle.close();
       } finally {
         await handle?.close();
         rmSync(workingDir, { recursive: true, force: true });

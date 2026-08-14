@@ -156,6 +156,21 @@ export interface CodexHttpBridge {
    * 误删新 query 刚注册的 ctx。
    */
   unregisterSessionCtx(sessionId: string, expectedCtx?: LiziMcpSessionContext): void;
+  /**
+   * per-session bearer token (pi 会话用)。与主 token 同权但按会话隔离:
+   * pi 每个会话在 spawn 前生成独立 token,经 env-file 交给远端进程 —— 单个
+   * 会话的 env-file 泄漏只暴露该会话的 bridge 权限,不殃及其它会话与本地
+   * codex 主 token(R5 安全审计 C-2)。必须与 registerSessionCtx 成对注册,
+   * 且仅当 URL query 命中对应 session 时才接受该 token。
+   */
+  registerSessionToken(sessionId: string, token: string): number;
+  /**
+   * session 结束/重建时注销;对未注册的 id 幂等。expectedToken 传入时做
+   * 代际比较,避免同 session 重建后旧 token 的迟到注销误删新 token。
+   * generation(轮 41)为注册时返回的代次 —— 派生 token 同 session 重建时值相同,
+   * 仅靠 expectedToken 无法区分新旧,必须连同代次一起比较。
+   */
+  unregisterSessionToken(sessionId: string, expectedToken?: string, generation?: number): void;
   shutdown(): Promise<void>;
 }
 
@@ -200,6 +215,14 @@ export async function startCodexHttpBridge(
   const threadContextStore = createCodexMcpThreadContextStore();
   // sessionId → ctx (远端 cc 的身份通道, 经 ?session= query 路由, 见 interface 注释)。
   const sessionCtxById = new Map<string, LiziMcpSessionContext>();
+  // sessionId → per-session bearer token 注册代次(pi 会话, 见 interface 注释)。
+  // 轮 41:token 槽带**注册代次** —— pi 会话 token 改为确定性派生(进程级 key +
+  // sessionId HMAC)后,同 session 重建时新旧 token **值相同**, expectedToken 比较
+  // 无法区分「旧实例迟到 dispose」与「新实例刚注册」; 代次比较保证 dispose 只删
+  // 自己那一代注册的槽, 否则断链重连(覆盖注册 + 旧 close 迟到)会把新实例还在
+  // 用的 token 注销 → pi 的 bridge 请求全部 401。
+  const sessionTokenBySessionId = new Map<string, { token: string; generation: number }>();
+  let nextTokenGeneration = 0;
 
   const httpServer = http.createServer(async (req, res) => {
     res.setHeader('Server', SERVER_HEADER);
@@ -216,9 +239,13 @@ export async function startCodexHttpBridge(
       }
 
       // bearer token 鉴权:主 token (per-run, 本地 codex 子进程) / 额外 token
-      // (persistent, 远端常驻 codex daemon 与远端 cc 共用)。两类 token 权限
-      // 不同:主 token 全通;额外 token 只允许访问 REMOTE_ALLOWED_SERVER_NAMES
+      // (persistent, 远端常驻 codex daemon 与远端 cc 共用) / per-session token
+      // (pi 会话, 按 ?session= 隔离, 见 interface 注释)。主 token 与 pi
+      // per-session token 全通;额外 token 只允许访问 REMOTE_ALLOWED_SERVER_NAMES
       // 白名单 (协同 + cindy_memory; 远端进程拿到 token 也不得初始化其余本机 server)。
+      // URL 解析提前:per-session token 匹配需要 session query,纯解析无副作用。
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      const sessionQuery = url.searchParams.get('session');
       const auth = req.headers['authorization'];
       const presented =
         typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
@@ -227,21 +254,43 @@ export async function startCodexHttpBridge(
         !isPrimaryToken &&
         presented !== null &&
         (opts.additionalBearerTokens?.().includes(presented) ?? false);
-      if (!isPrimaryToken && !isScopedRemoteToken) {
+      const isPiSessionToken = presented !== null && sessionQuery !== null
+        && sessionTokenBySessionId.get(sessionQuery)?.token === presented;
+      // 轮 24 HIGH-3 TOCTOU 收口:带 ?session= 的请求**即使主 token**也必须
+      // 命中该 session 的注册 token 才放行 —— 否则「ctx 已注册但 token 未
+      // 注册」的窗口里,任何拿到主 token 的本地进程可借任意 sessionId 绑定
+      // 目标会话的 ctx 执行工具。本地 codex 子进程不带 ?session=,走主 token
+      // 放行(不受影响)。
+      // 轮 41 修正:该收口**只针对主 token** —— persistent token
+      // (additionalBearerTokens)是显式配置给远端 cc daemon 的凭证,本地进程
+      // 拿不到,且远端 cc 走 legacy ?session= 路由从不注册 pi session token;
+      // 一并要求命中 token 槽会把 remote cc 的 ?session= 路径全部打成 401
+      // (codexHttpBridge.test 4 个 legacy 兼容测试回归)。persistent token 借
+      // sessionId 的越权面仍被下方 sessionCtxById 注册校验 + instance 匹配挡住。
+      if (!isPrimaryToken && !isScopedRemoteToken && !isPiSessionToken) {
         res.statusCode = 401;
         res.setHeader('WWW-Authenticate', 'Bearer');
         res.end();
         log.warn('rejected unauthenticated request', { url: req.url });
         return;
       }
+      if (isPrimaryToken && sessionQuery !== null
+        && sessionTokenBySessionId.get(sessionQuery)?.token !== presented) {
+        res.statusCode = 401;
+        res.setHeader('WWW-Authenticate', 'Bearer');
+        res.end();
+        log.warn('rejected unscoped-token request claiming unregistered session', {
+          path: url.pathname,
+          session: prefixId(sessionQuery),
+        });
+        return;
+      }
 
       // 路由 /mcp/<name>
-      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       // 远端 cc 身份路由:?session=<id> 命中注册表即取该 ctx (见 interface
       // 注释)。声称了 session 但未注册 → 401 fail-closed:sessionId 是明文
       // 路由参数,未命中说明 query 已注销或id 系伪造,不能按无 ctx 放行。
       // 不带 ?session= 的 (本地 codex 子进程) 走请求体 threadId 路由。
-      const sessionQuery = url.searchParams.get('session');
       const instanceQuery = url.searchParams.get('instance');
       let sessionTokenCtx: LiziMcpSessionContext | undefined;
       if (sessionQuery !== null) {
@@ -340,15 +389,29 @@ export async function startCodexHttpBridge(
   httpServer.requestTimeout = 0;
 
   // listen 异步：必须真在 listen 状态后才 return，否则 codex spawn 时拿到 url 但连不上
+  // 轮 40-w4-t3 HIGH:listen 永不回调(罕见 OS 异常)会让 doStart 永久挂起 ——
+  // ensureBridge 30s 超时只清 startPromise, 旧 doStart 闭包仍悬挂且不可取消,
+  // 多次会话叠加多个悬挂启动。这里加 watchdog:超时后移除 listener + close
+  // server + reject, 让 doStart 走正常失败路径(下次会话重试), 不泄漏 listen。
   await new Promise<void>((resolve, reject) => {
+    let watchdog: NodeJS.Timeout | undefined;
     const onError = (err: Error): void => {
+      if (watchdog) clearTimeout(watchdog);
       httpServer.removeListener('listening', onListening);
       reject(err);
     };
     const onListening = (): void => {
+      if (watchdog) clearTimeout(watchdog);
       httpServer.removeListener('error', onError);
       resolve();
     };
+    watchdog = setTimeout(() => {
+      httpServer.removeListener('error', onError);
+      httpServer.removeListener('listening', onListening);
+      try { httpServer.close(); } catch { /* already closed */ }
+      reject(new Error('http bridge listen timed out after 30s'));
+    }, 30_000);
+    watchdog.unref?.();
     httpServer.once('error', onError);
     httpServer.once('listening', onListening);
     // 0 = OS 内核原子分配空闲端口 (临时端口范围 49152-65535)
@@ -434,6 +497,18 @@ export async function startCodexHttpBridge(
         return;
       }
       sessionCtxById.delete(sessionId);
+    },
+    registerSessionToken: (sessionId, sessionToken) => {
+      const generation = nextTokenGeneration++;
+      sessionTokenBySessionId.set(sessionId, { token: sessionToken, generation });
+      return generation;
+    },
+    unregisterSessionToken: (sessionId, expectedToken, generation) => {
+      const entry = sessionTokenBySessionId.get(sessionId);
+      if (entry === undefined) return;
+      if (expectedToken !== undefined && entry.token !== expectedToken) return;
+      if (generation !== undefined && entry.generation !== generation) return;
+      sessionTokenBySessionId.delete(sessionId);
     },
     shutdown,
   };

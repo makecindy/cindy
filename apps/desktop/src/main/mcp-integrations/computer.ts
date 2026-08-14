@@ -3501,22 +3501,6 @@ export function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): Comput
       await ensureRuntime();
       return getComputerDriverStatus();
     },
-    resolveProcessIdentity: async (pid, resolveOptions) => {
-      const forceFresh = resolveOptions?.forceFresh === true;
-      let processSnapshot = await readProcessSnapshotResult({ forceFresh });
-      let processInfo = processSnapshot.processes.get(pid);
-      if (!processInfo && !forceFresh) {
-        processSnapshot = await readProcessSnapshotResult({ forceFresh: true });
-        processInfo = processSnapshot.processes.get(pid);
-      }
-      if (!processInfo) return null;
-      return {
-        pid: processInfo.pid,
-        name: processInfo.name,
-        command: processInfo.command,
-        executable: processInfo.executable,
-      };
-    },
     callTool: async (name, args, context) => {
       if (options.isComputerUseEnabled && !options.isComputerUseEnabled(context)) {
         throw new ComputerDriverError('Computer Use is disabled in Settings.');

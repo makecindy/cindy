@@ -1648,6 +1648,17 @@
         "ko": "미분류"
       },
       "note": "模型目录中没有可信厂商 group、但仍可用于对话的兜底分组。它不推断产地或厂商；服务端补充明确 group 后模型会自动归入对应分组。与不能用于对话、沿用原短名称的 Other（其它）分开。"
+    },
+    {
+      "id": "plugin-manual",
+      "status": "proposed",
+      "en": "Manual",
+      "translations": {
+        "zh-CN": "手册",
+        "ja": "マニュアル",
+        "ko": "매뉴얼"
+      },
+      "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于已停止新增的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
     }
   ]
 }

@@ -75,6 +75,7 @@ import type {
   ListCustomizationsResult,
 } from '../types/customizations.js';
 import type { PiRuntimeCapabilityManifest } from '../types/pi-runtime-capabilities.js';
+import type { PiProjectTrustInputSnapshot } from '../types/pi-project-trust.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
 import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
 
@@ -194,6 +195,25 @@ export interface PiNativeModelSpec {
 }
 
 /**
+ * 远端 pi agentHome 的文件操作原语(host 经 SSH 实现)。
+ *
+ * 只暴露 pi 会话真正需要的子集:
+ *   - mkdirp / writeFile(agentHome 内文件:models.json、bridge/subagent 扩展、perm、
+ *     subagent 快照、受管 rg)
+ *   - stat(文件存在性:resume session 预检、plan-mode 扩展存在性)
+ *   - rm(清理:configHome / perm / subagent / forkHome)
+ * 所有路径都是远端机器上的绝对路径(与 pi 进程 cwd 一致)。
+ */
+export interface PiRemoteFileOps {
+  mkdirp(dir: string): Promise<void>;
+  writeFile(file: string, content: string, mode?: number): Promise<void>;
+  stat(file: string): Promise<{ isFile: boolean } | null>;
+  rm(fileOrDir: string, opts?: { recursive?: boolean }): Promise<void>;
+  /** 列目录子项名(供陈旧 configHome 清理等)。失败返回空数组。 */
+  listDir(dir: string): Promise<string[]>;
+}
+
+/**
  * BYOM:一个**原生 pi provider**(用户自定义/本地模型)—— 直连用户端点,不经 Cindy 的
  * anthropic-compat 代理(设计原则:pi 主导,禁双重转义)。host 从 custom-provider-store
  * 解析产出;PiAgent 写进 models.json 的独立 provider 块,并按 model→provider 路由 set_model。
@@ -240,6 +260,8 @@ export interface PiExtraSpawnConfigContext {
   vendorOptions?: Record<string, unknown>;
   mcpCallerKind?: 'root' | 'descendant' | 'unknown';
   mcpCallerAttested?: boolean;
+  /** SSH remote 会话的 host id;host 据此把 bridge URL 改成 remote-forward 地址。 */
+  remoteHostId?: string | null;
 }
 
 export interface CodexExtraSpawnConfig {
@@ -381,7 +403,18 @@ export interface AgentDeps {
    * 配置与会话文件。缺省 → 落系统临时目录(数据不保久,仅兜底)。
    * 其它 agent 不消费此字段。
    */
-  resolvePiAgentHome?: () => string | undefined;
+  resolvePiAgentHome?: (remoteHostId?: string | null) => string | undefined;
+
+  /**
+   * Pi-only: resolve the immutable Cindy project-approval input for one new
+   * runtime. The host owns identity canonicalization, approval audit/revocation,
+   * and discovered-resource provenance. Missing/throwing resolvers fail closed.
+   */
+  resolvePiProjectTrustInput?: (ctx: {
+    sessionId?: string;
+    workingDir: string;
+    remoteHostId?: string;
+  }) => Promise<PiProjectTrustInputSnapshot | null>;
 
   /**
    * pi 专用钩子:把 mcpProviders 转成 pi 子进程可消费的 MCP 桥配置。
@@ -610,6 +643,68 @@ export interface AgentDeps {
    * 缺省 / undefined → 不支持远端, 任何带 remoteHostId 的 session 会被拒。
    */
   getRemoteCodexTransport?: (remoteHostId: string) => import('./codex/app-server/transport.js').Transport;
+
+  /**
+   * Pi 专用:为远端机器构造一个 pi `--mode rpc` transport。
+   *
+   * 当 session 标了 remoteHostId, PiAgent 会调这个钩子拿一个连远端 pi 进程的
+   * transport (替代本地 spawn)。host 层实现 — 通常用 `RemoteHost.execStream`
+   * 在远端跑 `pi --mode rpc ...` 并把 stdin/stdout 拽回本地 (SshPiTransport)。
+   *
+   * 返回的 transport 必须实现 PiTransport 接口 (writeLine / onLine / onClose /
+   * close)。PiAgent 拿到就当 stdio 用, 完全不感知背后是 SSH 桥接。
+   *
+   * 缺省 / undefined → 不支持远端 pi, 任何带 remoteHostId 的 pi session 会被拒。
+   */
+  getRemotePiTransport?: (
+    remoteHostId: string,
+    opts: {
+      /** 本地 pi 二进制路径(远端场景不可用,host 应改用它 resolve 的远端路径)。 */
+      binaryPath: string;
+      /** 远端 pi 二进制绝对路径(host 已 probe;plan-mode 扩展 / subagent spawn 用它)。 */
+      remoteBinaryPath: string;
+      args: string[];
+      cwd: string;
+      env: Record<string, string | undefined>;
+      logger: AgentDeps['logger'];
+      /** maker sessionId(daemon 模式用作远端 daemon 的 session key)。 */
+      sessionId?: string | null;
+    },
+  ) => import('./pi/transport.js').PiTransport | Promise<import('./pi/transport.js').PiTransport>;
+
+  /**
+   * Pi 专用:解析远端 pi 二进制绝对路径(probe 远端安装)。缺省 → 远端会话回落
+   * 本地 binaryPath(错误语义,host 应在 getRemotePiTransport 之前 resolve)。
+   */
+  resolveRemotePiBinaryPath?: (remoteHostId: string) => Promise<string>;
+
+  /**
+   * Pi 专用:远端会话是否跳过 MCP bridge 注入。Phase 1 远端不桥 in-process MCP
+   * (cindy_orca / orca_worker_bridge / cindy_memory 的 loopback URL 远端够不到),
+   * host 据此 gate 掉 preparePiExtraSpawnConfig 的 bridge 部分;外部 HTTP MCP
+   * 直连不受影响。缺省 false = 本地行为不变。
+   */
+  remotePiSkipMcpBridge?: (remoteHostId: string) => boolean;
+
+  /**
+   * Pi 专用:远端会话的 agent-proxy env(HTTPS_PROXY/HTTP_PROXY/NO_PROXY 指向本地
+   * 代理经 SSH remote-forward 隧道)。host 装配;缺省 null = 远端不走本地代理。
+   */
+  getRemotePiAgentProxyEnv?: (remoteHostId: string) => Promise<Record<string, string> | null>;
+
+  /**
+   * Pi 专用:远端 agentHome 文件操作原语。
+   *
+   * 本地 pi 会话的 models.json / cindy-bridge 扩展 / perm 权限档 / subagent 路由快照
+   * / 受管 rg 都写在本地 agentHome(父子进程共享文件系统)。远端会话里这些文件必须写
+   * 到**远端机器**(pi 进程在远端读), host 侧经 SSH 通道实现这套 fs 原语(remote-file-service
+   * 或 ssh heredoc)。缺省 → 远端 pi 会话的 agentHome 文件操作走本地 fs(错误语义,由
+   * host 在 getRemotePiTransport 阶段前置校验,或按 fail-closed 处理)。
+   */
+  getRemotePiFileOps?: (
+    remoteHostId: string,
+  ) => PiRemoteFileOps;
+
 
   /**
    * Codex 专用:读**这个 thread 本次实际出口**的出站代理路径判定,用于把「后端不可达」

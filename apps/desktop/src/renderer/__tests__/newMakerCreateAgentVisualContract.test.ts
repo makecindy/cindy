@@ -352,7 +352,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(vendorIconSource).toContain('text-[hsl(var(--sidebar-muted))]');
 
     expect(userInfoSectionSource).toContain(
-      'rounded-full border border-[var(--sidebar-user-card-border)]',
+      'border border-[var(--sidebar-user-card-border)]',
     );
     expect(userInfoSectionSource).toContain('bg-[var(--sidebar-user-card-bg)]');
     expect(userInfoSectionSource).toContain('text-[var(--sidebar-user-card-text)]');

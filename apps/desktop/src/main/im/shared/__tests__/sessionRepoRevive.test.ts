@@ -351,3 +351,35 @@ describe('sessionRepo workspaceKind(渠道声明 dialogue 归组时)', () => {
     expect(conflictArg.set).not.toHaveProperty('workspaceKind');
   });
 });
+
+/**
+ * 渠道按 userId 覆写新会话权限档的接线(飞书群 lane → 渠道设置「群聊新建任务
+ * 权限档」; telegram guest lane → 只读探索)。钩子返回值必须真的落到新建行上,
+ * 否则设置项形同虚设 —— 建会话的两条路径(turnRunner 建行、`/new` 重置)都从
+ * prepareNewSession 取这份 row。
+ */
+describe('sessionRepo.prepareNewSession 权限档覆写钩子', () => {
+  function makeRepoWithPermissionHook(mode: string | null) {
+    const hookNs = {
+      ...ns,
+      permissionModeFor: () => mode,
+    } as unknown as ImSessionNamespace;
+    return createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, hookNs);
+  }
+
+  it('钩子返回权限档时覆写 resolveImSessionDefaults 的默认档(可宽可紧)', async () => {
+    const row = await makeRepoWithPermissionHook('bypassPermissions').prepareNewSession(
+      'bot',
+      'g/oc_chat1/omt_t1',
+    );
+
+    // 默认档是 auto(见 defaultSessionSettings mock), 群 lane 的显式设置压过它。
+    expect(row.permissionMode).toBe('bypassPermissions');
+  });
+
+  it('钩子返回 null(私聊)时保持渠道默认档', async () => {
+    const row = await makeRepoWithPermissionHook(null).prepareNewSession('bot', 'ou_owner');
+
+    expect(row.permissionMode).toBe('auto');
+  });
+});

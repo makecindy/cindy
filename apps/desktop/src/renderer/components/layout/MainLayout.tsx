@@ -43,7 +43,9 @@ import {
   closeTab,
   ensureHydrated,
   getBucket,
-  invalidateSessionCaches,
+  getTabSnapshot,
+  importTabSnapshot,
+  resetCachesForHostTransition,
 } from '@/features/right-sidebar/store';
 import { browserWebviewPool } from '@/features/right-sidebar/lib/browserWebviewPool';
 import { markAllPtyDetached } from '@/features/right-sidebar/plugins/terminal/lib/xtermPool';
@@ -727,6 +729,16 @@ export function MainLayout() {
     writeCollapsedFor(sessionId, true);
   }, [rsbDetached]);
 
+  // 分离侧栏合并回主窗时，main 先转发不可持久化 session 的 tab 快照，
+  // 再广播 detached=false 让这里重挂内嵌 Shell。快照必须在 cache invalidation
+  // 之前接收；store 会把它保留到本次 hydrate，避免远程/草稿会话回到空栏。
+  useEffect(() => {
+    if (isSecondaryWindow()) return;
+    return window.electronAPI.rightSidebarWindow.onTabHandoff((handoff) => {
+      for (const snapshot of handoff.snapshots) importTabSnapshot(snapshot);
+    });
+  }, []);
+
   // sessionId 切换时按新 session 的存档刷新折叠态。无需 prime 动画 —— RightSidebar 默认
   // 直接同步,切 session "瞬间生效"(用户体感:不应看着一栏慢慢展开/收起)。
   useLayoutEffect(() => {
@@ -907,12 +919,22 @@ export function MainLayout() {
       // 过期(PTY sink 会被对方窗口 re-attach 抢走),两个方向都要复位,否则
       // "弹出 → 合并回主窗"往返后 guard 跳过 re-attach,终端失活。
       markAllPtyDetached();
-      invalidateSessionCaches();
+      resetCachesForHostTransition();
     } else {
       markAllPtyDetached();
-      invalidateSessionCaches();
+      resetCachesForHostTransition();
       const sessionId = rightSidebarSessionIdRef.current;
       if (sessionId) {
+        // The attached shell can mount before this parent transition effect.
+        // Its initial hydrate then belongs to the cache generation that the
+        // reset above invalidates. Start a fresh hydrate after the reset so a
+        // persisted Windows session cannot remain on EMPTY_BUCKET forever.
+        void ensureHydrated(sessionId).catch((err) => {
+          applicationMenuLog.warn('rehydrate right sidebar after host transition failed', {
+            sessionId,
+            err,
+          });
+        });
         writeCollapsedFor(sessionId, false);
         setIsRightSidebarCollapsed(false);
       }
@@ -933,7 +955,11 @@ export function MainLayout() {
   const handleDetachRightSidebar = useCallback(() => {
     if (isSecondaryWindow()) return;
     writeCollapsedFor(rightSidebarSessionId, false);
-    void window.electronAPI.rightSidebarWindow.setDetached(true).catch(() => undefined);
+    const snapshot = getTabSnapshot(rightSidebarSessionId);
+    const handoff = snapshot ? { snapshots: [snapshot] } : undefined;
+    void window.electronAPI.rightSidebarWindow
+      .setDetached(true, handoff)
+      .catch(() => undefined);
   }, [rightSidebarSessionId]);
 
   const handlePageZoomIn = useCallback(() => {

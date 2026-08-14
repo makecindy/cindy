@@ -32,6 +32,7 @@ import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cind
 import { LspServerPool, type IOSSimulatorMcpCallContext } from '@cindy/mcps';
 
 import { createMessage } from '../localDb/ipc/messages.js';
+import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import { getWorkerLink, updateWorkerStatus } from '../localDb/orcaTeamStore.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
 import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
@@ -50,7 +51,6 @@ import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getIOSSimulatorPluginAccessDecision } from '../cindy-brain/index.js';
-import { shouldEnforceIOSSimulatorShellPolicy } from '../cindy-brain/iosSimulatorPluginGate.js';
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
@@ -66,8 +66,17 @@ import { desktopMakerLogger } from './logger-adapter.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
-import { getRemoteSshPool } from '../remote-ssh/index.js';
-import { getRemoteAgentProxyEnv, reconcileCodexAgentProxyEnv } from '../remote-ssh/agent-proxy.js';
+import { getRemoteSshPool, broadcastSilentInstallStatus } from '../remote-ssh/index.js';
+import {
+  getRemoteAgentProxyEnv,
+  reconcileCodexAgentProxyEnv,
+} from '../remote-ssh/agent-proxy.js';
+import {
+  createSshPiDaemonTransport,
+  createRemotePiFileOps,
+  resolveRemotePiBinaryPath,
+} from './pi-remote-transport.js';
+import { ensurePiManagerInstalled } from './pi-manager-client.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { routeInjectedRemoteMcpApprovalsThroughCindy } from './remote-claude-permission-mode.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
@@ -76,9 +85,6 @@ import {
   mergeClaudeHooks,
 } from './claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
-import { createIOSSimulatorShellGuardHook } from './claude-hooks/ios-simulator-shell-hook.js';
-import { getDesktopShellCommandPolicy } from './shell-command-policy.js';
-import { ensureAgentShellGuards } from './agent-shell-guards.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
@@ -136,10 +142,8 @@ import {
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.js';
-import {
-  getIOSSimulatorMcpDeps,
-  isIOSSimulatorHostRuntimeActive,
-} from '../mcp-integrations/ios-simulator.js';
+import { invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.js';
+import { getIOSSimulatorMcpDeps } from '../mcp-integrations/ios-simulator.js';
 import { readContactsSettings } from './contacts-settings-store.js';
 import { createIOSSimulatorCodexDynamicToolProvider } from './ios-simulator-codex-dynamic-tools.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
@@ -406,6 +410,14 @@ const forcedFreshCcBridgeSessions = new Set<string>();
  * 的 query (codex-connector R22 P2)。open 成功后从集合移除。
  */
 const staleInvalidatedCcSessions = new Set<string>();
+/**
+ * Pi 远端 MCP forward 的远端端口首选基数。独立于 codex 的
+ * DEFAULT_REMOTE_PORT_START(47921,见 codex-remote-mcp.ts)与 RemoteHost 的
+ * agent-proxy 基数(17893)—— 避免与两者的扫描窗口冲突。Pi 不写
+ * remote-mcp-forwards.json(那是 codex 的单槽位,共享会互相覆盖),每次
+ * ensureRemoteForward 顺延探测,断线重连由 RemoteHost re-arm 保持。
+ */
+const PI_MCP_FORWARD_PORT_START = 47981;
 /**
  * 本进程见过的 bridge 实例 — ensureCodexMcpBridgeStartedForRemote 据此检测
  * bridge 重建并清空 forcedFreshCcBridgeSessions (旧 bridge 的
@@ -696,7 +708,7 @@ export function getMaker(): Maker {
           allowed: false as const,
           errorCode: 'IOS_SIMULATOR_DISABLED' as const,
           message:
-            'The iOS Simulator capability is disabled for the current project. Ask the user to enable it in the project plugin settings before retrying.',
+            'The embedded iOS Simulator capability is disabled for the current project. Enable it in the project plugin settings before retrying the embedded tool; other iOS workflows are unaffected.',
           data: {
             reason: 'disabled-in-workdir',
             action: 'enable-plugin',
@@ -707,19 +719,6 @@ export function getMaker(): Maker {
       }
       return { allowed: true as const };
     };
-
-    // The shell guard protects the embedded simulator's ownership/admission/
-    // viewer/cleanup contracts. With the plugin gated off there is nothing to
-    // protect, so blocking the user's own `simctl` / Simulator.app work — and
-    // pointing them at a cindy_ios_simulator tool the gate just removed — would
-    // be a dead end. A runtime this process already installed keeps its
-    // protection either way.
-    const shouldEnforceSimulatorShellGuard = (workingDir: string | null): boolean =>
-      shouldEnforceIOSSimulatorShellPolicy({
-        pluginAccessAllowed: resolveIOSSimulatorAccess({ workingDir: workingDir ?? undefined })
-          .allowed,
-        hostRuntimeActive: isIOSSimulatorHostRuntimeActive(),
-      });
 
     const makerMemoryProviderDeps = {
       getMakerMemoryManager: () => makerMemoryManager,
@@ -825,6 +824,31 @@ export function getMaker(): Maker {
         return { makerMemoryEnabled: createOpts.makerMemoryEnabled === true };
       },
       orcaTeamStore: orcaTeamStoreAdapter,
+      readLeadHistory: async ({ leadSessionId, fromMs, limit, cursor }) => {
+        const page = await getMessagesForHistory({
+          sessionIds: [leadSessionId],
+          workdir: null,
+          fromMs,
+          toMs: null,
+          agentKind: null,
+          roles: ['user', 'assistant'],
+          includeRewound: false,
+          limit,
+          cursor,
+          order: 'asc',
+        });
+        return {
+          items: page.items.map((item) => ({
+            id: item.id,
+            role: item.role === 'assistant' ? 'assistant' as const : 'user' as const,
+            content: item.content,
+            agentMeta: item.agentMeta,
+            createdAt: item.createdAt,
+          })),
+          nextCursor: page.nextCursor,
+          hasMore: page.hasMore,
+        };
+      },
       dispatchInterAgentMessage,
     } satisfies OrcaBridgeMcpDeps;
     const orcaWorkerBridgeProvider = createOrcaWorkerBridgeMcpProvider(orcaBridgeDeps);
@@ -896,6 +920,8 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'claude-code'),
       },
+      resolveVerifiedContextWindow: (providerId, modelId) =>
+        resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook
       // 实现 (./claude-hooks/*.ts), maker-core 不感知具体逻辑。
       //
@@ -913,15 +939,6 @@ export function getMaker(): Maker {
       claudeHooks: mergeClaudeHooks(
         {
           PreToolUse: [
-            {
-              matcher: 'Bash|PowerShell',
-              hooks: [
-                createIOSSimulatorShellGuardHook(
-                  desktopMakerLogger,
-                  shouldEnforceSimulatorShellGuard,
-                ),
-              ],
-            },
             {
               matcher: 'Read',
               hooks: [createReadImageHook(desktopMakerLogger)],
@@ -1192,10 +1209,6 @@ export function getMaker(): Maker {
       codexHostDynamicToolProvider: createIOSSimulatorCodexDynamicToolProvider({
         deps: getIOSSimulatorMcpDeps({ resolveAccess: resolveIOSSimulatorAccess }),
       }),
-      getShellCommandPolicy: ({ command, cwd }) =>
-        shouldEnforceSimulatorShellGuard(cwd?.trim() || null)
-          ? getDesktopShellCommandPolicy(command)
-          : undefined,
       // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
       // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
       // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
@@ -1295,12 +1308,6 @@ export function getMaker(): Maker {
             // bridge 整体缺席 = cindy_contacts 必然不可达
             codexAppliedContactsEnabled = false;
           }
-        }
-        const shellGuardDir = ensureAgentShellGuards();
-        if (shellGuardDir) {
-          mcpExtraEnv.PATH = [shellGuardDir, mcpExtraEnv.PATH ?? process.env.PATH]
-            .filter((value): value is string => Boolean(value))
-            .join(path.delimiter);
         }
         const browserCompanion = usesIsolatedProxy
           ? null
@@ -1518,6 +1525,11 @@ export function getMaker(): Maker {
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth logout');
       clearCodexProxyAuthInjection();
       await broadcastCodexRuntimeRoute();
+      // 轮 27 HIGH-1:认证边界变更必须失效 PI MCP bridge —— 否则其 server
+      // factories 冻结的 provider 仍带旧账号 token, 新 pi 会话直到下一次
+      // contacts/plugin/memory 变更才重建(generation-lease 模型下活动会话
+      // 继续用旧桥是安全的, 这里只影响新会话)。
+      invalidatePiEnvironment();
     });
     // 登录成功也要对称重启本地 host:网关 key fallback 下 host 可能在 OAuth 登录前
     // 就以 env-key 形态跑着("auth gate 挡住未授权 spawn"的老前提在该场景不成立),
@@ -1531,6 +1543,8 @@ export function getMaker(): Maker {
       clearChatgptBridgeCredentialCache();
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth login');
       await broadcastCodexRuntimeRoute();
+      // 轮 27 HIGH-1:登录也是认证边界, 与登出对称失效 PI bridge。
+      invalidatePiEnvironment();
       // 这里刻意**不**补拉:登录路径的清单收口在 maker-ipc/auth.ts,它会在 live 拉取没
       // applied 时回退读 models_cache（cache miss 即清空,防串号）。在这里并发补拉会与那次
       // 清空交错,刚拉到的清单可能被空 cache 覆盖。补拉挂在那条收口之后,顺序确定。
@@ -1541,6 +1555,8 @@ export function getMaker(): Maker {
     desktopCodexAuthAdapter.setOnOAuthBindingClaimed(async () => {
       resetProviderModelAutoRefreshCooldowns('openai');
       await requestCodexModelBackfill();
+      // 轮 27 HIGH-1:凭证认领也是认证边界。
+      invalidatePiEnvironment();
     });
     // codex CLI 在 stderr 报 refresh_token 失效时, agent 会调 auth.invalidate() →
     // logout + 这里这个 broadcast, 让 useCodexAuth hook 立刻进 'unauthenticated' 状态,
@@ -1584,6 +1600,8 @@ export function getMaker(): Maker {
           /* no-op */
         }
       }
+      // 轮 27 HIGH-1:凭证失效广播同属认证边界。
+      invalidatePiEnvironment();
     });
     // Claude 同款:订阅 refresh token 被服务端作废(invalid_grant)时,adapter.invalidate()
     // 清态后经这里广播,UI 立刻进「请重新登录」而不是连环 401 的假连接状态。
@@ -1606,6 +1624,8 @@ export function getMaker(): Maker {
           /* no-op */
         }
       }
+      // 轮 27 HIGH-1:Claude 凭证失效同样失效 PI bridge。
+      invalidatePiEnvironment();
     });
     // 预热 codex-home 骨架 + 与本机 codex CLI reconcile 凭证。原本挂在
     // DesktopCodexAuthAdapter 构造函数里(import 即写盘),会让所有传递性 import 到
@@ -1653,6 +1673,124 @@ export function getMaker(): Maker {
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
       getGhostRosterPrompt,
+      // 远端 Pi:给 session 标 remoteHostId 的, PiAgent 通过这个钩子拿远端
+      // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
+      // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
+      // 远端机器没在 pool / 未连接 → 抛错, PiAgent 把它当 startSession 失败传上去。
+      getRemotePiTransport: async (remoteHostId, { binaryPath: _localBinaryPath, remoteBinaryPath: providedRemoteBinaryPath, args, cwd, env, logger, sessionId }) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost) {
+          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+        }
+        if (remoteHost.getStatus() !== 'ready') {
+          throw new Error(`remote SSH host "${remoteHostId}" is not connected (status=${remoteHost.getStatus()}) — connect it under Settings → Remote first`);
+        }
+        // 远端必须用远端安装的 pi 二进制(probe 出 $INSTALL_DIR/pi/pi),不能用本地
+        // binaryPath —— 那是本机 userData 下的路径,远端不存在(连带 plan-mode 扩展
+        // 路径与 subagent 二进制 env 都指向远端才能工作)。
+        // 轮 29 MEDIUM:优先用 PiAgent startSession 已 resolve 并传入的
+        // remoteBinaryPath(接口契约「host 已 probe」)—— 只在缺失时自己 probe
+        // 兜底, 避免两次 resolve 语义分叉(cache 失效窗口)。
+        const remoteBinaryPath = providedRemoteBinaryPath ?? await resolveRemotePiBinaryPath(remoteHost);
+        // daemon 持久模式:远端 pi-manager(TS 单例 daemon)持有 pi 进程,ssh 断链后
+        // 会话继续跑,重连 attach(对齐 codex app-server daemon / cc-mgr)。
+        // 首次 ensure 前确保 pi-manager bundle 装好 + daemon 在跑。
+        // daemon session key = maker sessionId(同一会话重连 attach 到同一 daemon 进程)。
+        // onEvent(轮 15 缺口 3/6):install 进度转发 silent install toast —— 首次
+        // 使用 pi remote 时 1-3s 的 bundle 上传/daemon spawn 不再静默。
+        await ensurePiManagerInstalled(remoteHost, desktopMakerLogger, (event) => {
+          const hostId = remoteHost.id;
+          if (event.kind === 'error') {
+            broadcastSilentInstallStatus({ hostId, agentKind: 'pi', phase: 'failed', message: event.message });
+          } else if (event.kind === 'ready') {
+            broadcastSilentInstallStatus({ hostId, agentKind: 'pi', phase: 'done' });
+          } else {
+            // install-upload 是 pi-manager 专属 kind, SILENT_INSTALL_STATUS 的
+            // eventKind union 不含它(轮 32 MEDIUM 类型对齐) —— 归入 install-log
+            // (renderer phaseText 对未知 kind 保持上次文案, 映射后走通用阶段)。
+            broadcastSilentInstallStatus({
+              hostId,
+              agentKind: 'pi',
+              phase: 'progress',
+              eventKind: event.kind === 'install-upload' ? 'install-log' : event.kind,
+            });
+          }
+        });
+        return createSshPiDaemonTransport({
+          remoteHost,
+          binaryPath: remoteBinaryPath,
+          args,
+          cwd,
+          env,
+          logger,
+          daemonSessionId: sessionId ?? undefined,
+        });
+      },
+      // 远端 Pi 的 agentHome 文件操作:models.json / extensions / perm / subagent 快照 /
+      // resume stat 都落到远端机器(pi 进程在远端读)。经 SSH stdin 管道写文件(cat > 原子
+      // 写 + chmod),stat 走 statRemotePath 同款脚本,mkdir 走 mkdir -p —— 与 cc-manager
+      // bundle 上传同模式,路径绝对不拼进命令行(防 ps / 日志泄漏)。
+      getRemotePiFileOps: (remoteHostId) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost) {
+          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+        }
+        return createRemotePiFileOps(remoteHost);
+      },
+      // 远端 pi 二进制路径:probe(远端 `pi --version`)+ cache。
+      resolveRemotePiBinaryPath: async (remoteHostId) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost) {
+          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+        }
+        return resolveRemotePiBinaryPath(remoteHost);
+      },
+      // 远端会话:MCP bridge 经 SSH remote-forward 隧道化,远端 pi 够到本地
+      // in-process MCP(cindy_orca / orca_worker_bridge / cindy_memory / ghost)。
+      // 改 URL 前缀为 remote-forward 地址,identity/token 不变。
+      // collab 全局禁用由 piEnvironment 按 server 名精确剥除 orca 类工具
+      // (CC/Codex 同闸门, R5 配置审计 H-7);此处不整体 skip —— 整体 skip 会
+      // 连 cindy_memory / ghost / 外部 HTTP MCP 一起误杀。
+      remotePiSkipMcpBridge: () => false,
+      // 把本地 bridge 的 loopback URL(http://127.0.0.1:<localPort>/mcp/<name>)
+      // 改写为远端 remote-forward 地址(http://127.0.0.1:<remotePort>/mcp/<name>)。
+      //
+      // **不复用 ensureRemoteMcpForward**:它写 remote-mcp-forwards.json 的
+      // per-host 单槽位(bridgeLocalPort/remotePort),Pi 与 Codex 各自独立 bridge
+      // (不同 localPort),后调用方会关掉前调用方的 forward —— 同 host 上两 agent
+      // 的 MCP 隧道互相踩踏(R2 MCP BUG-1)。Pi 用 host.ensureRemoteForward 直接建
+      // 独立 forward,远端端口从独立基数(PI_MCP_FORWARD_PORT_START)顺延。
+      rewriteRemotePiMcpBridgeUrl: async (remoteHostId, localUrl) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost) {
+          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+        }
+        // 用 URL 解析改端口再序列化, 避免字符串 replace 误伤 query 参数
+        // (R2 MCP BUG-3) 与 Number('')=0 传非法端口 (R2 MCP BUG-7)。
+        const u = new URL(localUrl);
+        const localPort = u.port;
+        if (!localPort || Number.isNaN(Number(localPort)) || Number(localPort) <= 0) {
+          throw new Error(`pi bridge URL has no usable port: ${localUrl}`);
+        }
+        const fwd = await remoteHost.ensureRemoteForward({
+          localHost: '127.0.0.1',
+          localPort: Number(localPort),
+          preferredRemotePort: PI_MCP_FORWARD_PORT_START,
+        });
+        u.port = String(fwd.remotePort);
+        // 轮 24 HIGH-2:close 由 pi-host 在会话 dispose 时调用 —— 防 forward
+        // 随会话累积耗尽远端端口(fwd.close 幂等, RemoteHost 内部有 dedup)。
+        return { url: u.toString(), close: () => void fwd.close() };
+      },
+      // 「Agent 流量走本地 Proxy」:远端 pi 的 LLM 流量经 SSH remote-forward 走本地代理
+      // (与 CC 远端同机制;pref 关闭时 getRemoteAgentProxyEnv 返回 null → 直连)。
+      getRemotePiAgentProxyEnv: async (remoteHostId) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost) {
+          throw new Error(`remote SSH host "${remoteHostId}" not found in pool — connect it first under Settings → Remote`);
+        }
+        return getRemoteAgentProxyEnv(remoteHost);
+      },
     });
 
     _maker = new Maker({
@@ -1812,6 +1950,10 @@ export function resetMaker(): void {
   _initialCustomMcpRefresh = undefined;
   resetPluginRegistry();
   resetCustomMcpRegistry();
+  // 轮 27 MEDIUM-2:resetMaker 是 account 边界收口 —— PI bridge 必须一并
+  // 失效, 否则旧账号的 MCP server factories 残留(显式耦合, 防未来新调用点
+  // 漏掉 teardownAuthAccountBoundary 链上的 shutdownPiEnvironment)。
+  invalidatePiEnvironment();
 }
 
 /**

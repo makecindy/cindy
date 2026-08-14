@@ -308,6 +308,7 @@
         "statusInstalled": "설치됨",
         "statusNotInstalled": "설치되지 않음",
         "claudeCodeName": "Claude Code",
+        "piName": "Pi",
         "button": {
           "install": "설치",
           "reinstall": "재설치",
@@ -465,6 +466,11 @@
         "label": "사이드바 카드 모드",
         "hint": "고정된 세션을 작업 현황 요약이 담긴 카드로 표시합니다. 카드 높이는 요약 길이에 따라 달라지며, 사이드바를 넓히면 2~3열로 자동 배치됩니다.",
         "aria": "사이드바 카드 모드 전환"
+      },
+      "sidebarMainListMode": {
+        "label": "세션 목록 표시 방식",
+        "hint": "사이드바 기본 목록(고정 제외)의 표시 형식입니다. 텍스트는 간결한 한 줄, 목록은 미리보기가 있는 두 줄입니다.",
+        "aria": "세션 목록 표시 방식 전환"
       },
       "layout": {
         "label": "패널 레이아웃",
@@ -1476,7 +1482,11 @@
           "confirmTitle": "덮어쓰기 확인",
           "confirmSubtitle": "{{source}}에서 복사할 필드를 선택하세요.",
           "source": "원본",
-          "columns": { "field": "필드", "source": "원본 값", "target": "현재 값" },
+          "columns": {
+            "field": "필드",
+            "source": "원본 값",
+            "target": "현재 값"
+          },
           "fields": {
             "endpointBundle": "엔드포인트 및 API 프로토콜",
             "baseUrl": "기본 URL",
@@ -1551,6 +1561,7 @@
         "refreshAdded": "새 모델 {{count}}개를 발견했습니다",
         "refreshNoNew": "모델 목록이 최신 상태입니다. 새 항목이 없습니다",
         "refreshFailed": "모델 목록을 새로고침하지 못했습니다. 잠시 후 다시 시도해 주세요",
+        "refreshFetchDisabled": "모델 카탈로그 원격 가져오기가 비활성화되어 새로고침을 건너뛰었습니다",
         "disableModel": "이 모델 비활성화",
         "enableModel": "이 모델 활성화",
         "capabilityGroupHint": "대화 모델 선택에는 표시되지 않으며, 이미지 생성 등 기능에서만 사용됩니다.",
@@ -3145,7 +3156,9 @@
           "claude-code": "Claude Code",
           "codex": "Codex",
           "pi": "Pi"
-        }
+        },
+        "groupPermissionLabel": "그룹에서 새 작업을 만들 때의 권한 모드",
+        "groupPermissionDescription": "그룹 채팅에서 새 작업을 만들 때 공통으로 사용하는 권한 모드입니다(@bot으로 스레드 열기, /new, /ctr 모두 해당). 기본값은 자동 승인이며, 위의 권한 모드는 개인 채팅에만 적용됩니다. 그룹 컨텍스트에는 멤버가 조작할 수 있는 내용이 포함되므로 전체 액세스를 선택하면 확인 없이 바로 실행됩니다. 신뢰할 수 있는 그룹에서만 선택하세요. 변경은 이후에 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 개별 전환합니다."
       }
     },
     "shortcuts": {
@@ -3436,6 +3449,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "권한 재확인 필요",
+        "action": "권한 다시 확인",
+        "actionAria": "플러그인 {{name}}의 권한 다시 확인",
+        "noticeTitle": "권한 재확인 필요",
+        "bodyLegacy": "Cindy에 이 플러그인의 권한 확인 기록이 없어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요.",
+        "bodyInvalid": "이 플러그인의 권한 확인 기록이 손상되어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요.",
+        "bodyBuiltinRestart": "이 내장 플러그인의 승인 기록에 문제가 발생했습니다. Cindy를 다시 시작하면 자동으로 복구되며, 다른 조치는 필요하지 않습니다."
+      },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
       "emptyHint": "마켓에서 설치하거나 위 메뉴에서 .cindy 파일을 가져올 수 있습니다",
@@ -3490,6 +3512,7 @@
         "uninstalled": "\"{{name}}\" 제거됨",
         "installedAsleep": "\"{{name}}\" 설치 완료 (비활성 상태이며 여기에서 언제든 활성화할 수 있습니다)",
         "updated": "\"{{name}}\"이(가) v{{version}}(으)로 업데이트되었습니다",
+        "reapproved": "\"{{name}}\"이(가) 복원되었습니다",
         "exported": "\"{{name}}\"의 .cindy 파일을 내보냈습니다",
         "exportFailed": "\"{{name}}\"을(를) 내보내지 못했습니다. 다시 시도하세요",
         "projectDisabled": "이 프로젝트에서 \"{{name}}\"을(를) 껐습니다",
@@ -3509,6 +3532,7 @@
         "metaWithAuthor": "제작자 {{author}} · 버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "enableNow": "설치 후 바로 활성화",
         "enableNowOpenPanel": "설치 후 바로 활성화하고 패널 열기",
+        "manualCount": "번들 매뉴얼 {{count}}개",
         "expandDescription": "전체 소개 보기",
         "collapseDescription": "소개 접기"
       },
@@ -3631,6 +3655,7 @@
         "fileInvalid": "유효한 .cindy 플러그인 파일이 아닙니다",
         "hostUnsupported": "이 플러그인에는 현재 버전에서 제공하지 않는 Cindy 기능이 필요합니다. Cindy를 업데이트한 후 다시 설치하세요.",
         "alreadyInstalled": "이 플러그인은 이미 설치되어 있습니다",
+        "approvalRequired": "계속하려면 이 플러그인의 권한을 다시 확인해야 합니다",
         "commandConflict": "명령어가 설치된 플러그인과 충돌합니다. 먼저 상대를 제거하거나 명령어 이름을 변경하세요.",
         "idReserved": "이 id는 공식 예약 접두사 cindy-를 사용합니다. 앱에 내장된 플러그인만 사용할 수 있습니다",
         "sourceMissing": "선택한 파일을 찾을 수 없습니다",
@@ -3745,6 +3770,11 @@
         "confirm": "업데이트",
         "cancel": "취소"
       },
+      "reapproveConfirm": {
+        "title": "\"{{name}}\" 권한을 다시 확인할까요?",
+        "body": "아래 권한을 확인하면 설치된 플러그인이 다시 승인됩니다. 설치 파일은 필요하지 않습니다.",
+        "confirm": "확인 후 복원"
+      },
       "pick": {
         "dialogTitle": "폴더 선택",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 폴더 선택을 요청합니다"
@@ -3761,6 +3791,7 @@
       },
       "updateAll": {
         "title": "모두 업데이트 · {{count}}개",
+        "collapseDiff": "접기",
         "description": "일반 업데이트는 자동으로 완료되며, 검증된 실제 패키지가 새 권한을 요청할 때만 개별 확인합니다.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "대기 중",
@@ -3770,7 +3801,13 @@
         "statusFailed": "업데이트 실패",
         "background": "백그라운드에서 계속",
         "doneAction": "완료",
-        "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료"
+        "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료",
+        "permissionChanged": "권한 변경됨",
+        "rereview": "다시 검토",
+        "reviewDiff": "검토",
+        "reviewOutdated": "검토 기간 만료",
+        "approve": "승인",
+        "skip": "건너뛰기"
       }
     },
     "mcp": {
@@ -4776,7 +4813,10 @@
         "localOnly": "메시지별 정확한 변경 사항은 아직 원격 작업에서 사용할 수 없습니다.",
         "partialNotice": "이 메시지에는 정확히 추적할 수 없는 명령 또는 도구 쓰기가 포함되어 있습니다. 아래에는 캡처된 일부만 표시되며 완전한 패치가 아닙니다.",
         "emptyTitle": "기록된 변경 사항 없음",
-        "emptyDesc": "이 메시지에 저장된 패치에는 표시할 수 있는 파일 변경 사항이 없습니다."
+        "emptyDesc": "이 메시지에 저장된 패치에는 표시할 수 있는 파일 변경 사항이 없습니다.",
+        "crossSessionSwitchDisabled": "이 리뷰는 협업 세션에 속합니다. 소스 전환은 해당 세션 안에서만 사용할 수 있습니다.",
+        "previewUnavailable": "이 메시지는 과거 변경 사항을 기록하므로 현재 디스크의 파일 내용을 안정적으로 미리 볼 수 없습니다.",
+        "snapshotPatchUnavailable": "과거 변경 스냅샷에서는 현재 worktree용 git apply 명령을 만들 수 없습니다."
       },
       "fileCount_one": "{{count}}개 파일",
       "fileCount_other": "{{count}}개 파일",
@@ -4834,6 +4874,7 @@
         "in-progress": "git 작업 진행 중",
         "agent-running": "에이전트 실행 중",
         "disabled": "리뷰를 사용할 수 없음",
+        "historical-snapshot": "과거 변경 스냅샷은 읽기 전용입니다",
         "remote-device": "원격 기기 세션은 보기 전용입니다",
         "remote-ssh": "SSH 워크스페이스 검토는 보기 전용입니다"
       },
@@ -5546,6 +5587,7 @@
         "context": "컨텍스트 {{value}}",
         "codexCompatibilityMode": "Codex 호환 모드",
         "price": "{{input}}/{{output}} / 100만",
+        "subscriptionBadgeCompact": "구독",
         "fastBadge": "고속"
       },
       "source": {
@@ -5706,6 +5748,7 @@
       "startFailed": "협업을 시작하지 못했습니다",
       "startFailedContinue": "협업을 시작하지 못했습니다. 단일 세션으로 계속합니다.",
       "createWorkerRefreshFailed": "Worker 상태를 새로 고칠 수 없습니다. 다시 시도해 주세요.",
+      "assignmentFailed": "Worker를 만들었지만 작업 할당 여부를 확인할 수 없습니다. 다시 시도하기 전에 Worker 패널을 확인하세요.",
       "openHint": "Worker 를 불러 함께 작업",
       "disabledHint": "협업 모드가 비활성화되어 있습니다. 설정에서 활성화하세요.",
       "unavailableHint": "협업 설정을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
@@ -6148,7 +6191,10 @@
       "networkShowRaw": "원본 오류 보기",
       "networkHideRaw": "원본 오류 숨기기",
       "silentStopContinue": "계속",
-      "silentStopContinueTitle": "현재 작업 계속"
+      "silentStopContinueTitle": "현재 작업 계속",
+      "piTransportClosed": "원격 Pi 연결이 끊어졌습니다(SSH 채널 닫힘). 원격 작업은 계속 실행 중입니다. 다시 연결하면 계속할 수 있습니다.",
+      "piManagerUnavailable": "원격 Pi 관리자가 준비되지 않았습니다. 잠시 후 다시 시도하세요. 계속 실패하면 「설정 → 원격 머신」에서 Pi를 다시 설치하세요.",
+      "piBundledNodeMissing": "원격 호스트에 런타임(Node.js)이 없습니다. 「설정 → 원격 머신」에서 호스트를 펼쳐 먼저 Claude Code 또는 Codex의 「설치」를 클릭하세요(Node.js가 함께 설치됨). 그런 다음 Pi 작업을 시작하세요."
     },
     "backgroundActivity": {
       "status": "백그라운드 하위 작업 실행 중, 모델 사용량을 소비하고 있습니다…",
@@ -6630,13 +6676,13 @@
       }
     },
     "upgradeBanner": {
-      "description": "원격 {{hostId}}의 cc-manager에 새 버전이 있습니다 — 업그레이드하면 이 호스트의 모든 Claude Code 원격 세션이 중단됩니다",
-      "upgrading": "{{hostId}}의 cc-manager를 업그레이드하는 중…",
+      "description": "원격 {{hostId}}의 {{manager}}에 새 버전이 있습니다 — 업그레이드하면 이 호스트의 모든 원격 세션이 중단됩니다",
+      "upgrading": "{{hostId}}의 {{manager}}를 업그레이드하는 중…",
       "upgrade": "지금 업그레이드",
-      "upgradeTitle": "새 cc-manager 다운로드 및 재시작 (현재 세션이 중단됨)",
+      "upgradeTitle": "새 {{manager}} 다운로드 및 재시작 (현재 세션이 중단됨)",
       "dismissTitle": "나중에 (다음 실행 시 다시 알림)",
       "failed": "업그레이드 실패: {{message}}",
-      "daemonNotReady": "cc-manager 업그레이드가 완료되었지만 원격 daemon이 아직 시작되지 않았습니다 — 메시지를 수동으로 다시 전송하세요"
+      "daemonNotReady": "{{manager}} 업그레이드가 완료되었지만 원격 daemon이 아직 시작되지 않았습니다 — 메시지를 수동으로 다시 전송하세요"
     },
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "원격 연결이 중단되었습니다(daemon이 업그레이드 또는 재시작 중일 수 있습니다). 턴이 종료되었습니다 — 다시 전송하세요.",
@@ -6644,6 +6690,7 @@
       "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰가 판단을 내리지 못했습니다(네트워크 또는 서비스 일시 장애). 검토가 필요한 작업은 직접 확인하도록 전환되었습니다. 중단을 줄이려면 이 작업을 기본 권한으로 전환하세요.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "원격 Claude Code 세션은 로컬 호환 프록시를 통해 라우팅할 수 없습니다(내부 오류).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
+      "REMOTE_LOCAL_ONLY_PROVIDER": "이 모델 제공자는 로컬 전용 서비스(예: Ollama)라서 SSH 원격 작업에서 접근할 수 없습니다. Cindy AI 게이트웨이로 전환하거나 원격 호스트에서 접근 가능한 제공자를 선택하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요."
     },
@@ -6915,7 +6962,7 @@
         "remoteSettings": "원격 연결 설정",
         "multiSelect": "다중 선택",
         "deselect": "선택 해제",
-        "menuTrigger": "원격 기기",
+        "menuTrigger": "세션 범위",
         "selectedCount_one": "기기 {{count}}대",
         "selectedCount_other": "기기 {{count}}대"
       },
@@ -6934,6 +6981,8 @@
         "awaitingPluginSetup": "플러그인 설정 대기 중"
       },
       "showAllSessions": "모두 표시 {{count}}개",
+      "allSessions": "모든 세션",
+      "scopeLocalSessions": "이 기기의 세션",
       "dialogues": "대화",
       "newDialogue": "새 세션",
       "dialoguesToggleExpand": "대화 펼치기",
@@ -6951,12 +7000,10 @@
       "projects": "프로젝트",
       "newProject": "새 프로젝트",
       "createProjectFailed": "프로젝트 생성 실패",
-      "projectsSectionToggleExpand": "프로젝트 펼치기",
-      "projectsSectionToggleCollapse": "프로젝트 접기",
       "projectsToggleExpand": "모든 프로젝트 세션 펼치기",
       "projectsToggleCollapse": "모든 프로젝트 세션 접기",
-      "filterAria": "사이드바 정리(상태: {{status}}, Agent: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
-      "organizeSidebar": "사이드바 정리",
+      "filterAria": "사이드바 표시 설정(상태: {{status}}, Agent: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
+      "organizeSidebar": "사이드바 표시 설정",
       "filterAllText": "전체",
       "filterSelectedProjects": "{{count}}개 선택됨",
       "filterStatus": {
@@ -6970,8 +7017,23 @@
         "codex": "Codex"
       },
       "filterGroupBy": {
-        "project": "프로젝트",
-        "date": "날짜"
+        "project": "프로젝트별 그룹",
+        "flat": "평면 목록",
+        "device": "기기별 그룹",
+        "dialogue": "대화 묶기"
+      },
+      "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
+      "deviceGroup": {
+        "local": "이 기기",
+        "offline": "오프라인",
+        "collapse": "이 기기 접기",
+        "expand": "이 기기 펼치기"
+      },
+      "foldAll": {
+        "collapseGroups": "모든 그룹 접기",
+        "collapseProjects": "프로젝트 그룹 접기",
+        "collapseDevices": "기기 그룹 접기",
+        "expandAll": "모든 그룹 펼치기"
       },
       "filterLastActivity": {
         "1d": "1일",
@@ -6981,10 +7043,12 @@
         "all": "전체"
       },
       "filterSortBy": {
-        "recency": "최근순",
-        "time": "시간순",
+        "recency": "시간순",
         "manual": "수동",
-        "alphabetic": "알파벳순"
+        "priority": "우선순위"
+      },
+      "filterSortByTip": {
+        "priority": "확인이 필요한 항목 먼저, 다음 읽지 않음, 실행 중, 나머지는 시간순"
       },
       "filterStatusHeading": "상태",
       "filterAgentHeading": "에이전트",
@@ -6993,6 +7057,24 @@
       "filterSortByHeading": "정렬",
       "filterProjectsHeading": "프로젝트",
       "filterAllProjects": "모든 프로젝트",
+      "filterHeading": "필터",
+      "filterSummaryNone": "없음",
+      "filterSummaryActive": "{{count}}개 적용 중",
+      "filterReset": "필터 초기화",
+      "displayHeading": "표시",
+      "taskInfoHeading": "세션 정보",
+      "taskInfoSummaryNone": "없음",
+      "taskInfoSummarySeparator": ", ",
+      "taskInfo": {
+        "time": "시간",
+        "pr": "PR 상태",
+        "tokens": "토큰",
+        "cost": "비용"
+      },
+      "taskInfoTip": {
+        "tokens": "누적 토큰",
+        "cost": "누적 비용"
+      },
       "dateGroup": {
         "today": "오늘",
         "yesterday": "어제",
@@ -9270,13 +9352,20 @@
         "endsAt": "{{date}}에 요금제 종료",
         "cancelAction": "구독 취소",
         "cancelConfirmTitle": "현재 구독을 취소할까요?",
-        "cancelConfirmDescription": "이 작업으로 환불되거나 잔액이 즉시 변경되지 않습니다. 현재 요금제는 {{date}}까지 사용할 수 있으며 이후에는 갱신되지 않습니다. 취소는 앱에서 되돌릴 수 없으며, 이번 결제 기간이 끝날 때까지 새 요금제를 구매할 수 없습니다.",
-        "cancelConfirmDescriptionWithoutDate": "이 작업으로 환불되거나 잔액이 즉시 변경되지 않습니다. 현재 요금제는 이번 결제 기간이 끝날 때까지 사용할 수 있으며 이후에는 갱신되지 않습니다. 취소는 앱에서 되돌릴 수 없으며, 이번 결제 기간이 끝날 때까지 새 요금제를 구매할 수 없습니다.",
+        "cancelConfirmDescription": "이 작업으로 환불되거나 잔액이 즉시 변경되지 않습니다. 현재 요금제는 {{date}}까지 사용할 수 있으며 이후에는 갱신되지 않습니다. 이번 결제 기간이 끝날 때까지 새 요금제를 구매할 수 없습니다.",
+        "cancelConfirmDescriptionWithoutDate": "이 작업으로 환불되거나 잔액이 즉시 변경되지 않습니다. 현재 요금제는 이번 결제 기간이 끝날 때까지 사용할 수 있으며 이후에는 갱신되지 않습니다. 그때까지 새 요금제를 구매할 수 없습니다.",
         "cancelConfirmAction": "취소 확인",
         "cancelSuccess": "자동 갱신을 취소했습니다. 현재 요금제는 {{date}}까지 사용할 수 있습니다.",
         "cancelSuccessWithoutDate": "자동 갱신을 취소했습니다. 현재 요금제는 이번 결제 기간이 끝난 후 종료됩니다.",
         "cancelNotSupported": "현재 이 구독은 취소할 수 없습니다.",
-        "cancelFailed": "구독을 취소하지 못했습니다. 잠시 후 다시 시도해 주세요."
+        "cancelFailed": "구독을 취소하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+        "resumeAction": "구독 재개",
+        "resumeConfirmTitle": "현재 구독을 재개할까요?",
+        "resumeConfirmDescription": "재개하면 갱신일에 자동 갱신됩니다.",
+        "resumeConfirmAction": "구독 재개",
+        "resumeSuccess": "구독을 재개했습니다. 예정대로 자동 갱신됩니다.",
+        "resumeNotAvailable": "이 구독은 재개할 수 없습니다. 최신 구독 상태를 확인한 후 다시 시도해 주세요.",
+        "resumeFailed": "구독을 재개하지 못했습니다. 잠시 후 다시 시도해 주세요."
       },
       "topupCard": {
         "action": "잔액 충전"

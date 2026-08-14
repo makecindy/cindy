@@ -10,6 +10,7 @@ import type { AgentEvent } from '../../../types/events.js';
 import type { AsyncQueue } from '../../shared/async-queue.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { PiRpcEvent } from '../rpc-client.js';
+import { makeGhostManual64KiBFixture } from '../../shared/ghost-manual-fixture.js';
 
 const noopLogger: Logger = {
   trace: () => {},
@@ -283,6 +284,27 @@ describe('pi translator', () => {
     );
     expect(terminalErrors).toHaveLength(1);
     expect(terminalErrors[0]?.data).toMatchObject({ message: 'final provider error' });
+  });
+
+  it('preserves a 64KB ghost_manual envelope only as tool_result data', () => {
+    const { content, wire } = makeGhostManual64KiBFixture();
+    expect(Buffer.byteLength(wire, 'utf8')).toBeGreaterThan(64 * 1024);
+
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_end',
+        toolCallId: 'manual-call',
+        toolName: 'ghost_manual',
+        result: { content: [{ type: 'text', text: wire }] },
+      }),
+      queue,
+      ctx,
+    );
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect(full).toMatchObject({ data: { fullText: wire }, source: 'pi' });
+    expect(JSON.parse((full!.data as { fullText: string }).fullText).content).toBe(content);
   });
 
   it('maps compaction_end (threshold) → compact_boundary with token deltas + updates contextTokens', () => {

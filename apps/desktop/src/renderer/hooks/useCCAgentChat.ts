@@ -194,8 +194,8 @@ interface UseCCAgentChatReturn {
   continuationTurnClientId: string | null;
   /** 续跑边界投影能力；legacy 时保留旧被控端的兼容兜底。 */
   continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability;
-  /** F-SYNC-2: Load older messages (prepend to top) */
-  loadOlderMessages: () => void;
+  /** F-SYNC-2: Load older messages; automatic=true remembers a successful auto-fill. */
+  loadOlderMessages: (automatic?: boolean) => Promise<boolean>;
   isLoadingMore: boolean;
   hasMoreMessages: boolean;
   historyWindowHasIsland: boolean;
@@ -549,9 +549,9 @@ export function useCCAgentChat(
     [sessionId],
   );
 
-  const loadOlderMessages = useCallback(() => {
-    if (!sessionId) return;
-    makerChatStore.loadOlderMessages(sessionId);
+  const loadOlderMessages = useCallback((automatic = false): Promise<boolean> => {
+    if (!sessionId) return Promise.resolve(false);
+    return makerChatStore.loadOlderMessages(sessionId, automatic);
   }, [sessionId]);
 
   const respondToPermission = useCallback(

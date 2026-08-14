@@ -751,6 +751,8 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/remote-file-service',
     // .cindy 发布者/审核 Ed25519 公钥信任表(私钥永不进客户端)。
     'resources/ghost-trust.json',
+    // 远端 pi manager bundle(Node 单例 daemon,SSH remote 会话的进程持有器)。
+    'resources/pi-manager',
     // 第三方开源声明,由 scripts/generate-third-party-notices.mjs 生成
     // (pnpm licenses:generate),随安装包分发以满足各开源协议的署名义务。
     'resources/THIRD-PARTY-NOTICES.txt',
@@ -1495,6 +1497,19 @@ const config: ForgeConfig = {
           config: 'vite.preload.config.ts',
           // 正式包关闭 RunAsNode fuse；随包插件改由 Electron utilityProcess
           // 承载。独立 CJS entry 与 main bundle 同目录，dev / packaged 同路径。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/cindy-brain/forgeScaffoldWorkerProcess.ts',
+          config: 'vite.preload.config.ts',
+          // Stable-parent scaffold publish/cleanup runs in a utility process;
+          // the worker's cwd is the validated parent directory capability.
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/cindy-brain/ghostSnapshotWorkerProcess.ts',
+          config: 'vite.preload.config.ts',
+          // Approval snapshot mutation is cwd-relative inside a stable-parent worker.
           target: 'preload',
         },
         {

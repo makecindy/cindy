@@ -41,16 +41,35 @@ const captured = vi.hoisted(() => ({
   closed: false,
 }));
 
+vi.mock('../transport.js', () => ({
+  createPiStdioTransport: (opts: {
+    args: string[];
+    env: Record<string, string | undefined>;
+    onProcessSpawned?: (pid: number) => void | (() => void);
+  }) => {
+    // spawn 参数断言移到 transport 工厂(spawn 行为在 stdio transport)。
+    captured.args = opts.args;
+    captured.env = opts.env;
+    opts.onProcessSpawned?.(1234);
+    return {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 1234,
+      isClosed: () => false,
+    };
+  },
+  attachJsonlReader: () => {},
+}));
+
 vi.mock('../rpc-client.js', () => ({
   PiRpcProcess: class {
     isClosed = false;
     constructor(opts: {
-      args: string[];
-      env: Record<string, string | undefined>;
       onEvent: (event: unknown) => void;
     }) {
-      captured.args = opts.args;
-      captured.env = opts.env;
       captured.onEvent = opts.onEvent;
     }
     async request(
@@ -88,6 +107,10 @@ vi.mock('../rpc-client.js', () => ({
 import { PiAgent } from '../index.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
+
+type PiTestSessionHandle = AgentSessionHandle & {
+  setModel: NonNullable<AgentSessionHandle['setModel']>;
+};
 
 const noopLogger: Logger = {
   trace: () => {}, debug: () => {}, info: () => {}, warn: () => {}, error: () => {}, fatal: () => {},
@@ -157,7 +180,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       ...(mcp?.serverNames
         ? {
           preparePiExtraSpawnConfig: async (_providers, context) => {
-            captured.mcpVendorOptions = context.vendorOptions;
+            captured.mcpVendorOptions = context?.vendorOptions;
             return {
               mcpBridge: {
                 token: 'bridge-token',
@@ -220,14 +243,14 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
     includeNextModel = false,
     mcp?: McpSetup,
-  ): Promise<AgentSessionHandle> {
+  ): Promise<PiTestSessionHandle> {
     const agent = new PiAgent(buildDeps(reviewAutoPermissionAction, includeNextModel, mcp));
     return agent.startSession({
       sessionId: 's1',
       workingDir: cwd,
       model: 'm',
       ...(permissionMode ? { permissionMode: permissionMode as never } : {}),
-    });
+    }) as Promise<PiTestSessionHandle>;
   }
 
   /**
@@ -305,6 +328,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   it('locks Review sessions to the local read-only tool surface without memory, MCP, or subagents', async () => {
     const deps = buildDeps(undefined, false, { serverNames: ['cindy_memory', 'cindy_helper'] });
     deps.getGhostRosterPrompt = vi.fn(() => 'PRIVATE ROSTER');
+    deps.resolvePiProjectTrustInput = vi.fn(async () => {
+      throw new Error('Review must not consult project approval resources');
+    });
     const explicitArtifact = path.join(agentHome, 'explicit-artifact.txt');
     const dotenvPath = path.join(cwd, '.env.local');
     writeFileSync(explicitArtifact, 'review me');
@@ -324,8 +350,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       const toolsIndex = captured.args.indexOf('--tools');
       expect(toolsIndex).toBeGreaterThan(-1);
       expect(captured.args[toolsIndex + 1]).toBe('read,grep,find,ls');
+      expect(captured.args).toContain('--no-approve');
+      expect(captured.args).toContain('--no-extensions');
+      expect(captured.args).not.toContain('--skill');
       expect(captured.mcpVendorOptions).toBeUndefined();
       expect(deps.getGhostRosterPrompt).not.toHaveBeenCalled();
+      expect(deps.resolvePiProjectTrustInput).not.toHaveBeenCalled();
 
       const promptIndex = captured.args.indexOf('--append-system-prompt');
       const appendedPrompt = promptIndex >= 0 ? captured.args[promptIndex + 1] : '';
@@ -335,6 +365,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       const configHome = captured.env.PI_CODING_AGENT_DIR;
       expect(configHome).toBeTruthy();
       expect(readdirSync(path.join(configHome!, 'extensions')).sort()).toEqual(['cindy-bridge.ts']);
+      const extensionPaths = captured.args.flatMap((arg, index) =>
+        arg === '--extension' ? [captured.args[index + 1]] : []);
+      expect(extensionPaths).toEqual([
+        path.posix.join(configHome!, 'extensions', 'cindy-bridge.ts'),
+      ]);
 
       const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
       expect(permissionFile).toBeTruthy();
@@ -1191,7 +1226,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     const events: Array<Record<string, unknown>> = [];
     void (async () => {
-      for await (const e of handle.events()) events.push(e as Record<string, unknown>);
+      for await (const e of handle.events()) {
+        events.push(e as unknown as Record<string, unknown>);
+      }
     })();
     let cardShown = false;
     handle.setInteractionResolver?.(async () => {

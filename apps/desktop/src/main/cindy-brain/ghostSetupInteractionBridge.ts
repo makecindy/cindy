@@ -237,6 +237,27 @@ export class GhostSetupInteractionBridge {
     }
   }
 
+  /** Account/data-owner boundary: cancel every actionable setup request before lease drain. */
+  cleanupAll(reason: 'session_closed' | 'session_aborted'): void {
+    for (const entry of Array.from(this.pending.values())) {
+      if (entry.completed) continue;
+      void Promise.resolve(
+        entry.onCommand({
+          kind: 'plugin_setup',
+          action: 'cancel',
+          expectedRevision: entry.snapshot.revision,
+          cleanupReason: reason,
+        }),
+      ).catch((error) => {
+        this.deps.logger?.warn('plugin setup account-boundary cleanup failed', {
+          requestId: entry.snapshot.requestId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+  }
+
   pendingSnapshots(sessionId?: string): Array<{
     sessionId: string;
     request: GhostSetupInteractionSnapshot;
