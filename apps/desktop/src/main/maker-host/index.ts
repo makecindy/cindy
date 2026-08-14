@@ -30,7 +30,6 @@ import {
 } from './codex-model-backfill.js';
 import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cindy/orca-workflow';
 import { LspServerPool, type IOSSimulatorMcpCallContext } from '@cindy/mcps';
-import type { RemoteForward } from '@cindy/maker-remote-ssh';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 
 import { createMessage } from '../localDb/ipc/messages.js';
@@ -90,6 +89,7 @@ import {
   resolveRemotePiBinaryPath,
 } from './pi-remote-transport.js';
 import { ensurePiManagerInstalled } from './pi-manager-client.js';
+import { createPiRemoteProviderForwardLease } from './pi-remote-provider-forward.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { routeInjectedRemoteMcpApprovalsThroughCindy } from './remote-claude-permission-mode.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
@@ -433,7 +433,6 @@ const staleInvalidatedCcSessions = new Set<string>();
  * ensureRemoteForward 顺延探测,断线重连由 RemoteHost re-arm 保持。
  */
 const PI_MCP_FORWARD_PORT_START = 47981;
-const piRemoteProviderForwardBySession = new Map<string, Promise<RemoteForward>>();
 /**
  * 本进程见过的 bridge 实例 — ensureCodexMcpBridgeStartedForRemote 据此检测
  * bridge 重建并清空 forcedFreshCcBridgeSessions (旧 bridge 的
@@ -1813,96 +1812,15 @@ export function getMaker(): Maker {
             });
           }
         });
-        const providerForwardEntries = new Map<string, {
-          key: string | null;
-          pending: Promise<RemoteForward>;
-          handle?: RemoteForward;
-        }>();
-        let providerForwardsReleased = false;
-        const releaseProviderForwardEntry = async ({
-          key,
-          pending,
-          handle,
-        }: {
-          key: string | null;
-          pending: Promise<RemoteForward>;
-          handle?: RemoteForward;
-        }): Promise<void> => {
-          let resolved = handle;
-          if (!resolved) {
-            try {
-              resolved = await pending;
-            } catch {
-              return;
-            }
-          }
-          if (key && piRemoteProviderForwardBySession.get(key) !== pending) return;
-          if (key) piRemoteProviderForwardBySession.delete(key);
-          await resolved.close();
-        };
-        const releaseProviderForwards = async (): Promise<void> => {
-          if (providerForwardsReleased) return;
-          providerForwardsReleased = true;
-          const entries = Array.from(providerForwardEntries.values());
-          providerForwardEntries.clear();
-          await Promise.all(entries.map(releaseProviderForwardEntry));
-        };
-        const ensureProviderForward = async (spec: {
-          localUrl: string;
-          remotePort: number;
-        }): Promise<void> => {
-          if (providerForwardsReleased) {
-            throw new Error('pi host proxy forward cannot be established after transport cleanup');
-          }
-          const local = new URL(spec.localUrl);
-          const localHost = local.hostname.replace(/^\[|\]$/g, '');
-          const localPort = Number(local.port);
-          if (
-            !['127.0.0.1', '::1', 'localhost'].includes(localHost) ||
-            !Number.isInteger(localPort) ||
-            localPort <= 0
-          ) {
-            throw new Error(`pi host proxy forward requires an explicit loopback port: ${spec.localUrl}`);
-          }
-          const entryId = [`${localHost}:${localPort}`, String(spec.remotePort)].join('\0');
-          const existing = providerForwardEntries.get(entryId);
-          if (existing) {
-            await existing.pending;
-            return;
-          }
-          const key = sessionId
-            ? [remoteHostId, sessionId, `${localHost}:${localPort}`, String(spec.remotePort)].join('\0')
-            : null;
-          let pending = key ? piRemoteProviderForwardBySession.get(key) : undefined;
-          if (!pending) {
-            pending = remoteHost.ensureRemoteForward({
-              localHost,
-              localPort,
-              preferredRemotePort: spec.remotePort,
-              exactRemotePort: true,
-            });
-            if (key) piRemoteProviderForwardBySession.set(key, pending);
-          }
-          const entry = { key, pending, handle: undefined as RemoteForward | undefined };
-          providerForwardEntries.set(entryId, entry);
-          try {
-            entry.handle = await pending;
-          } catch (error) {
-            if (providerForwardEntries.get(entryId) === entry) {
-              providerForwardEntries.delete(entryId);
-            }
-            if (key && piRemoteProviderForwardBySession.get(key) === pending) {
-              piRemoteProviderForwardBySession.delete(key);
-            }
-            throw error;
-          }
-        };
+        const providerForwardLease = createPiRemoteProviderForwardLease(
+          (spec) => remoteHost.ensureRemoteForward(spec),
+        );
         try {
           for (const spec of hostProxyForwards ?? []) {
-            await ensureProviderForward(spec);
+            await providerForwardLease.ensure(spec);
           }
         } catch (error) {
-          await Promise.allSettled([releaseProviderForwards()]);
+          await Promise.allSettled([providerForwardLease.releaseAll()]);
           throw error;
         }
         let transport;
@@ -1917,17 +1835,17 @@ export function getMaker(): Maker {
             daemonSessionId: sessionId ?? undefined,
           });
         } catch (error) {
-          await releaseProviderForwards();
+          await providerForwardLease.releaseAll();
           throw error;
         }
-        transport.ensureHostProxyForward = ensureProviderForward;
+        transport.ensureHostProxyForward = providerForwardLease.ensure;
         if (transport.killRemoteSession) {
           const killRemoteSession = transport.killRemoteSession.bind(transport);
           transport.killRemoteSession = async () => {
             try {
               await killRemoteSession();
             } finally {
-              await releaseProviderForwards();
+              await providerForwardLease.releaseAll();
             }
           };
         } else {
@@ -1936,7 +1854,7 @@ export function getMaker(): Maker {
             try {
               await close(reason);
             } finally {
-              await releaseProviderForwards();
+              await providerForwardLease.releaseAll();
             }
           };
         }

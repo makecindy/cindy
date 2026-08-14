@@ -55,6 +55,7 @@ import {
 } from '../claude-session-route-registry';
 import { setPendingCredentialSwitchReader, setProviderOAuthTokenReader } from '../provider-route';
 import {
+  authenticatePiProxySession,
   registerPiProxySession,
   resetPiProxySessionsForTest,
 } from '../pi-proxy-session-auth';
@@ -183,6 +184,17 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     clearSessionProvider('sess-pi');
     setProviderOAuthTokenReader(() => null);
     resetPiProxySessionsForTest();
+  });
+
+  it('an old disposer cannot remove a replacement registration with the same stable token', () => {
+    const disposeOld = registerPiProxySession('sess-pi', 'stable-secret');
+    const disposeReplacement = registerPiProxySession('sess-pi', 'stable-secret');
+
+    disposeOld();
+    expect(authenticatePiProxySession('sess-pi', 'stable-secret')).toBe(true);
+
+    disposeReplacement();
+    expect(authenticatePiProxySession('sess-pi', 'stable-secret')).toBe(false);
   });
 
   it('routes an Anthropic Pi request with host-managed OAuth and strips Pi placeholder auth', async () => {
