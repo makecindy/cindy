@@ -833,8 +833,11 @@ export function createCardActionHandler(
     // 然后 attach binding 把后续渠道消息路由到这个新 session。
     // session 创建参数:
     //   - agentKind = 'claude-code' (跟 desktop 默认一致)
-    //   - model/effort/permissionMode/fastMode 用 desktop 当前偏好, 缺省走
-    //     DESKTOP_CC_DEFAULTS — 这是"用 desktop 默认"的承诺
+    //   - model/effort/fastMode 用 desktop 当前偏好(含 providerId, 缺省走
+    //     DESKTOP_CC_DEFAULTS) — 这是"用 desktop 默认"的承诺
+    //   - permissionMode 例外: 飞书群 /ctr 用渠道设置「群聊新建会话权限档」
+    //     (默认 auto), 私聊/其它渠道保持 desktop 偏好 — 两个创建分支必须一致,
+    //     非 thread 分支才是 feishu(非 threadScoped 渠道)实际走的路径
     //   - 不传 vendorOptions, 跟 desktop renderer spawn 时一致 (没有
     //     send_file_to_user MCP, 接管期间该工具不可用 — 方案 A 取舍)
     const botContextId = String(event.payload.botAppId ?? '');
@@ -1018,7 +1021,7 @@ export function createCardActionHandler(
         model: requireRouteModel(),
         providerId: route.providerId ?? undefined,
         ...(routeEffort ? { effort: routeEffort } : {}),
-        permissionMode: desktopPrefs.permissionMode as PermissionMode,
+        permissionMode: controlNewPermissionMode as PermissionMode,
         fastMode: routeFastMode,
         title: FBOT_DRAFT_TITLE,
       });

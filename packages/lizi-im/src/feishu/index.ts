@@ -79,6 +79,16 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     });
   }
 
+  /**
+   * 注册群主流消息的 lane 覆写钩子(host 策略, /ctr 接管路由)。
+   * 见 wsClient.setGroupMainFlowLaneOverride。
+   */
+  setGroupMainFlowLaneOverride(
+    fn: wsClient.GroupMainFlowLaneOverride | null,
+  ): void {
+    wsClient.setGroupMainFlowLaneOverride(fn);
+  }
+
   registerIpc(): void {
     registerFeishuIpc();
   }

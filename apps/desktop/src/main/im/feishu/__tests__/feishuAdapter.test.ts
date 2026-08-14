@@ -8,7 +8,7 @@
  *   - 默认 title / ack emoji
  *   - 群 lane prepareAgentTurnText: 分页拉历史 + 相关性早停 + 失败通知 owner
  */
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import os from 'node:os';
 import path from 'node:path';
@@ -19,6 +19,11 @@ const scopeMocks = vi.hoisted(() => ({
   join: null as unknown as (...parts: string[]) => string,
   claimLegacy: vi.fn(),
   utilityText: vi.fn(),
+  listIdentities: vi.fn<
+    () => Array<{ channel: string; botContextId: string; userId: string }>
+  >(() => []),
+  bindingGet: vi.fn<() => string | null>(() => null),
+  getAttachCardMessageId: vi.fn<() => string | null>(() => null),
 }));
 
 vi.mock('electron', () => ({
@@ -41,6 +46,13 @@ vi.mock('../../../utility-model/oneShotCandidates.js', () => ({
 vi.mock('../../../maker-host/index.js', () => ({
   getMaker: () => ({}),
 }));
+vi.mock('../../binding', () => ({
+  bindingStore: {
+    listIdentities: scopeMocks.listIdentities,
+    get: scopeMocks.bindingGet,
+    getAttachCardMessageId: scopeMocks.getAttachCardMessageId,
+  },
+}));
 
 import type {
   FeishuChatHistoryPage,
@@ -49,7 +61,7 @@ import type {
   IMMessageEvent,
   IMStatus,
 } from '@cindy/im';
-import { buildFeishuAdapter } from '../adapter';
+import { buildFeishuAdapter, resolveGroupTakeoverLane } from '../adapter';
 import { formatHistoryTime } from '../groupContext';
 
 const getService = vi.fn<() => 'feishu' | 'lark'>(() => 'feishu');
@@ -68,6 +80,7 @@ const sendMarkdownText = vi.fn<(_userId: string, _text: string) => Promise<{ mes
 );
 const getChatName = vi.fn<(chatId: string) => Promise<string | null>>(async () => null);
 const getStatus = vi.fn<() => IMStatus>(() => ({ kind: 'connected', appId: 'cli_abc' }));
+const setGroupMainFlowLaneOverride = vi.fn();
 const fakeIm = {
   getService,
   fetchChatHistoryPage,
@@ -76,6 +89,7 @@ const fakeIm = {
   sendMarkdownText,
   getChatName,
   getStatus,
+  setGroupMainFlowLaneOverride,
 } as unknown as FeishuIM;
 
 function groupEvent(overrides?: Partial<IMMessageEvent>): IMMessageEvent {
@@ -482,5 +496,83 @@ describe('feishu group lane adapter hooks', () => {
     expect(fetchChatHistoryPage).not.toHaveBeenCalledWith(
       expect.objectContaining({ chatId: 'ou_owner' }),
     );
+  });
+});
+
+describe('resolveGroupTakeoverLane — 群主流消息的 /ctr 接管路由', () => {
+  beforeEach(() => {
+    scopeMocks.listIdentities.mockReset();
+    scopeMocks.bindingGet.mockReset();
+    scopeMocks.getAttachCardMessageId.mockReset();
+    scopeMocks.listIdentities.mockReturnValue([]);
+    scopeMocks.bindingGet.mockReturnValue(null);
+    scopeMocks.getAttachCardMessageId.mockReturnValue(null);
+  });
+
+  function identity(userId: string) {
+    return { channel: 'feishu', botContextId: 'cli_abc', userId };
+  }
+
+  it('本群唯一话题接管且 binding 存活 → 返回接管 lane + 话题内回复锚点(attach 卡片)', () => {
+    scopeMocks.listIdentities.mockReturnValue([
+      identity('g/oc_chat1/omt_ctr'),
+      identity('ou_dm_user'), // 私聊 identity 不是 lane, 不参与候选
+    ]);
+    scopeMocks.bindingGet.mockReturnValue('sess-1');
+    scopeMocks.getAttachCardMessageId.mockReturnValue('om_card_ctr');
+
+    expect(
+      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '接着聊' }),
+    ).toEqual({ laneUserId: 'g/oc_chat1/omt_ctr', replyAnchorMessageId: 'om_card_ctr' });
+  });
+
+  it('attach 卡片缺失(旧 binding 行)时返回 lane 但不给锚点(transport 复用 held 锚点)', () => {
+    scopeMocks.listIdentities.mockReturnValue([identity('g/oc_chat1/omt_ctr')]);
+    scopeMocks.bindingGet.mockReturnValue('sess-1');
+    scopeMocks.getAttachCardMessageId.mockReturnValue(null);
+
+    expect(
+      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '接着聊' }),
+    ).toEqual({ laneUserId: 'g/oc_chat1/omt_ctr' });
+  });
+
+  it('多个话题接管并存 → 歧义, 回落 null(默认开话题)', () => {
+    scopeMocks.listIdentities.mockReturnValue([
+      identity('g/oc_chat1/omt_ctr'),
+      identity('g/oc_chat1/omt_other'),
+    ]);
+    scopeMocks.bindingGet.mockReturnValue('sess-1');
+
+    expect(
+      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '接着聊' }),
+    ).toBeNull();
+  });
+
+  it('slash 命令恒回落且不查 binding', () => {
+    expect(
+      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '/ctr' }),
+    ).toBeNull();
+    expect(scopeMocks.listIdentities).not.toHaveBeenCalled();
+  });
+
+  it('binding 已收回(get 为 null)→ 回落 null', () => {
+    scopeMocks.listIdentities.mockReturnValue([identity('g/oc_chat1/omt_ctr')]);
+    scopeMocks.bindingGet.mockReturnValue(null);
+
+    expect(
+      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '接着聊' }),
+    ).toBeNull();
+  });
+
+  it('非本 chat / 群主流 lane(无话题)的接管不参与候选', () => {
+    scopeMocks.listIdentities.mockReturnValue([
+      identity('g/oc_other_chat/omt_ctr'),
+      identity('g/oc_chat1'), // 群主流 lane(开话题失败的降级路径)
+    ]);
+    scopeMocks.bindingGet.mockReturnValue('sess-1');
+
+    expect(
+      resolveGroupTakeoverLane({ chatId: 'oc_chat1', botAppId: 'cli_abc', text: '接着聊' }),
+    ).toBeNull();
   });
 });

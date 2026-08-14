@@ -2206,6 +2206,7 @@ interface ElectronAPI {
     effort: string;
     permissionMode: string;
     fastMode: boolean;
+    providerId: string | null;
   }) => void;
 
   syncNewMakerDraft: (snapshot: {
@@ -4749,9 +4750,16 @@ interface ElectronAPI {
     }>;
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。
-     * 让 IM /model 在 main 侧复用同一套可见性过滤,与应用内模型列表逐模型一致。fire-and-forget。
+     * 让 IM /model 在 main 侧复用同一套可见性过滤,与应用内模型列表逐模型一致；owner stamp
+     * 用于拒绝账号切换期间的迟到快照。fire-and-forget。
      */
-    syncModelVisibility: (map: Record<string, boolean>) => Promise<void>;
+    syncModelVisibility: (
+      dataOwnerId: string | null,
+      ownerGeneration: number,
+      map: Record<string, boolean>,
+    ) => Promise<void>;
+    /** Resolve the stable local/cloud owner allowed to import the pre-account preference key. */
+    claimLegacyModelVisibilityOwner: () => import('../shared/modelVisibility').ModelVisibilityLegacyOwnerClaim;
     /**
      * 「模型 / 供应商停用」override 写入(main 侧 model-disable-store);成功后 main 广播
      * PROVIDER_CHANGED,useProviders 快照刷新后 UI 拿到新的 suspended / disabled 标志。

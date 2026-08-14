@@ -120,6 +120,46 @@ export function setLifecycleAnnouncement(enabled: boolean): void {
   getLog().info(`[feishu/wsClient] lifecycleAnnouncement set to ${enabled}`);
 }
 
+export interface GroupMainFlowLaneOverrideArgs {
+  chatId: string;
+  senderOpenId: string;
+  botAppId: string;
+  /** 群消息原文(已剥 @ 占位符)。 */
+  text: string;
+}
+
+export interface GroupMainFlowLaneOverrideResult {
+  /** 接管话题 lane(g/{chatId}/{threadId} 形态)。 */
+  laneUserId: string;
+  /**
+   * 接管话题**内**的消息 id 作回复锚点(如 /ctr 控制卡的 messageId)。
+   * 群主流的触发消息不是合法锚点: 话题 lane 的回复必须 reply 到话题内
+   * 消息才能落回话题, 用顶层消息当锚点会把回复打进群主流。缺省时不 push
+   * 锚点 —— outbound 会复用该 lane 上一回合持有的话题内锚点; 完全没有时
+   * fail-closed 丢消息(位置错误比丢失更糟, 见 outbound.resolveSendTarget)。
+   */
+  replyAnchorMessageId?: string;
+}
+
+/**
+ * 群主流消息的 lane 覆写钩子(host 注入, /ctr 接管路由用)。
+ *
+ * host(desktop adapter)在本群存在活跃 /ctr 接管时返回接管话题的 lane ——
+ * 这条群主流消息就不开新话题、直接以接管 lane 路由(senderId 与出站回复
+ * 都落在接管话题, 会话状态进接管 desktop session)。返回 null = 默认行为
+ * (开话题 / 群 lane 降级)。未注入 = 默认行为。钩子是模块级单例, 与
+ * 单连接生命周期一致(last-wins, 换账号重建 adapter 时重新注册)。
+ */
+export type GroupMainFlowLaneOverride = (
+  args: GroupMainFlowLaneOverrideArgs,
+) => GroupMainFlowLaneOverrideResult | null;
+
+let groupMainFlowLaneOverride: GroupMainFlowLaneOverride | null = null;
+
+export function setGroupMainFlowLaneOverride(fn: GroupMainFlowLaneOverride | null): void {
+  groupMainFlowLaneOverride = fn;
+}
+
 /**
  * 拉取 bot 自身 open_id(判群 @ 用)。SDK 无专用封装, 走 Client.request 通用
  * 通道。失败只 log warn — 群功能惰性失效(群消息全丢), 私聊不受影响。
@@ -691,20 +731,39 @@ async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): P
       laneUserId = encodeLaneUserId(chatId, incomingThreadId);
       outbound.pushReplyAnchor(laneUserId, messageId);
     } else {
-      const opener = await outbound.openThread(messageId);
-      if (opener) {
-        laneUserId = encodeLaneUserId(chatId, opener.threadId);
-        outbound.pushReplyAnchor(laneUserId, opener.messageId);
-        // 开场白卡是本轮流式卡: streamingText.start 认领后直接 patch,
-        // 话题里不会多出一条占位消息。
-        outbound.pushPatchableOpener(laneUserId, opener.messageId);
-        // 上下文取数 lane 与路由 lane 分离: 新话题是空的, 群历史前缀仍按
-        // 触发时所在的群主流拉取(「总结上面」等依赖上文的消息才能拿到
-        // 群主流历史), 由 host adapter 消费(IMMessageEvent.groupContextLane)。
+      // /ctr 接管路由: host 声明「这条群主流消息应落进接管话题」时不开新
+      // 话题, 直接以接管话题 lane 路由 —— 回复也进同一话题, 群里不会为
+      // 接管期间的主流程消息再冒一个新话题(空开场白卡无处收口)。
+      const takeover =
+        groupMainFlowLaneOverride?.({ chatId, senderOpenId, botAppId, text }) ?? null;
+      if (takeover) {
+        laneUserId = takeover.laneUserId;
+        // 回复锚点必须是接管话题**内**的消息(host 给出, 如 /ctr 控制卡):
+        // 群主流的触发消息不是话题内消息, 拿它当锚点会把回复打进群主流。
+        // host 给不出锚点时也不 push —— outbound 复用该 lane 上一回合
+        // 持有的话题内锚点; 完全没有则 fail-closed 丢消息(不泄漏进主流)。
+        if (takeover.replyAnchorMessageId) {
+          outbound.pushReplyAnchor(laneUserId, takeover.replyAnchorMessageId);
+        }
+        // 上下文取数 lane 仍指向群主流: 接管话题里回复, 历史前缀照旧从
+        // 群主流取(与开话题路径的 groupContextLane 同语义)。
         groupContextLane = { chatId, threadId: '' };
       } else {
-        laneUserId = encodeLaneUserId(chatId, null);
-        outbound.pushReplyAnchor(laneUserId, messageId);
+        const opener = await outbound.openThread(messageId);
+        if (opener) {
+          laneUserId = encodeLaneUserId(chatId, opener.threadId);
+          outbound.pushReplyAnchor(laneUserId, opener.messageId);
+          // 开场白卡是本轮流式卡: streamingText.start 认领后直接 patch,
+          // 话题里不会多出一条占位消息。
+          outbound.pushPatchableOpener(laneUserId, opener.messageId);
+          // 上下文取数 lane 与路由 lane 分离: 新话题是空的, 群历史前缀仍按
+          // 触发时所在的群主流拉取(「总结上面」等依赖上文的消息才能拿到
+          // 群主流历史), 由 host adapter 消费(IMMessageEvent.groupContextLane)。
+          groupContextLane = { chatId, threadId: '' };
+        } else {
+          laneUserId = encodeLaneUserId(chatId, null);
+          outbound.pushReplyAnchor(laneUserId, messageId);
+        }
       }
     }
   }

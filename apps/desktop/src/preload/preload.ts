@@ -83,6 +83,10 @@ import type {
   SubagentModelSettingsState,
   SubagentModelSettingsWriteResult,
 } from '../shared/subagentModelSettings';
+import {
+  isModelVisibilityLegacyOwnerClaim,
+  type ModelVisibilityLegacyOwnerClaim,
+} from '../shared/modelVisibility';
 import type { VoiceInputAsrMode, VoiceInputProviderKind } from '../shared/voiceInputAsrProfiles';
 import type {
   VoiceInputRefinerProviderKind,
@@ -2081,12 +2085,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── IM Binding (feishu /ctr 接管 → desktop session 路由) ──
   // 整体接管态由 main/im/binding.ts 维护; renderer 用这套 API 实时知道
   // 某个 sessionId 是否被某 IM 用户接管 (用来渲染 mask + 收回按钮)。
-  /** renderer 启动/cc prefs 变化时推送当前 cc vendor 偏好给 main，供接管新建 session 时使用 */
+  /**
+   * renderer 启动/cc prefs 变化时推送当前 cc vendor 偏好给 main，供接管新建 session
+   * 时使用。providerId 必须随模型一起推送：/ctr 新建会话靠它把路由钉在用户选择的
+   * 供应商上（缺省时隐式路由可能落到官方网关，而模型只在用户供应商存在 → 400）。
+   */
   syncDesktopCcPrefs: (prefs: {
     model: string;
     effort: string;
     permissionMode: string;
     fastMode: boolean;
+    providerId: string | null;
   }): void => ipcRenderer.send('desktop:cc-prefs-changed', prefs),
 
   /**
@@ -5097,10 +5106,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。
      * 让 IM /model 在 main 侧复用同一套可见性过滤,与应用内模型列表逐模型一致。
-     * fire-and-forget(忽略返回),main 仅缓存于内存、不落盘。
+     * dataOwnerId + ownerGeneration 用于拒绝账号切换期间的迟到快照；main 仅缓存于内存、不落盘。
      */
-    syncModelVisibility: (map: Record<string, boolean>): Promise<void> =>
-      ipcRenderer.invoke('maker:model-visibility:sync', map),
+    syncModelVisibility: (
+      dataOwnerId: string | null,
+      ownerGeneration: number,
+      map: Record<string, boolean>,
+    ): Promise<void> =>
+      ipcRenderer.invoke('maker:model-visibility:sync', dataOwnerId, ownerGeneration, map),
+    claimLegacyModelVisibilityOwner: (): ModelVisibilityLegacyOwnerClaim => {
+      const value: unknown = ipcRenderer.sendSync(
+        'maker:model-visibility:legacy-owner-claim-sync',
+      );
+      return isModelVisibilityLegacyOwnerClaim(value)
+        ? value
+        : {
+            dataOwnerId: null,
+            ownerGeneration: 0,
+            claimed: false,
+            claimedByOtherOwner: false,
+            canInitialize: false,
+          };
+    },
     /**
      * 「模型 / 供应商停用」override 写入(main 侧持久化真源 model-disable-store)。
      * 成功后 main 广播 PROVIDER_CHANGED,renderer 经 useProviders 快照刷新拿到

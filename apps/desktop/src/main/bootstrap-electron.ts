@@ -404,6 +404,7 @@ import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepoi
 import { registerGitContextIpc, disposeGitContext } from './git-context';
 import { registerGitReviewDeviceOp, registerGitReviewIpc } from './git-review';
 import { registerSidebarSettingsIpc } from './sidebarSettingsStore';
+import { registerModelVisibilityOwnerClaimIpc } from './maker-host/model-visibility-owner-claim.js';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
 import { registerLocalThemesIpc } from './local-themes/register';
@@ -454,6 +455,7 @@ import {
 } from './maker-host/createDesktopProviderService.js';
 import { isCindyEmbeddingModelAvailable } from './maker-host/provider-access-policy.js';
 import { setCustomProviders } from './maker-host/active-catalog.js';
+import { clearModelVisibilityMirror } from './maker-host/model-visibility-mirror.js';
 import { setClaudeSupportedModelsListener } from '@cindy/maker-core';
 import {
   noteAnthropicSdkSupportedModels,
@@ -1184,6 +1186,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // before any Agent route can start. A failed DB read therefore stays fail-closed (empty)
   // instead of retaining the previous owner's endpoint or model entries.
   setCustomProviders([]);
+  clearModelVisibilityMirror();
   // 远程会话的镜像冷缓存里是别的设备的聊天内容。owner 命名空间已经保证下一个账号读不到
   // 它,但登出后不该在盘上留着 —— 这里 owner 还指向**旧账号**(commitActiveAppSession 在
   // teardown 之后才切),正是唯一能清准的时机。
@@ -7040,6 +7043,7 @@ app.on('ready', async () => {
   // device-link 远程 git 审查(只读):git-review:remote-op handler(被控端角色;
   // invoke-registry 捕获后供控制端隧道调用,本机 renderer 不调用)。
   registerGitReviewDeviceOp();
+  registerModelVisibilityOwnerClaimIpc();
   registerSidebarSettingsIpc();
   registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart

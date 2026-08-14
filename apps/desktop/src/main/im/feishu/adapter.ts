@@ -19,9 +19,15 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { app } from 'electron';
-import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane } from '@cindy/im';
+import {
+  decodeFeishuLaneUserId,
+  encodeFeishuLaneUserId,
+  type FeishuIM,
+  type FeishuLane,
+} from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
+import { bindingStore } from '../binding';
 import { claimLegacyImPath, ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { createLogger } from '../../logger';
 import { buildFeishuGroupContext, sanitizeDisplayText } from './groupContext';
@@ -211,10 +217,45 @@ function takeMainFlowContextLane(topicLaneUserId: string): FeishuLane | undefine
   return entry.lane;
 }
 
+/**
+ * 群主流消息的 /ctr 接管路由裁决(transport lane 覆写钩子的 host 侧实现)。
+ *
+ * 本群存在且仅存在一个「话题 lane 的活跃接管」时, 群主流消息直接落进该
+ * 接管话题 —— 不再开新话题, 会话状态进 /ctr 接管的 desktop session, 回复
+ * 也回接管话题(见 wsClient 钩子注释)。多个接管并存时歧义, 回落默认
+ * 开话题行为; slash 命令(如 /ctr 本身)恒回落, 让控制流照常拿新话题 lane。
+ * binding 可能刚被收回(detach 与消息并发) — 确认存活才接管路由。
+ *
+ * 回复锚点用 attach 时记录的 /ctr 控制卡 messageId(attachCardIds, 恒在
+ * 接管话题内) —— 群主流的触发消息不是话题内消息, 拿它当锚点会让回复
+ * 落进群主流(outbound 的 fail-closed 不变量, review P1)。
+ */
+export function resolveGroupTakeoverLane(args: {
+  chatId: string;
+  botAppId: string;
+  text: string;
+}): { laneUserId: string; replyAnchorMessageId?: string } | null {
+  if (args.text.trimStart().startsWith('/')) return null;
+  const candidates = bindingStore
+    .listIdentities('feishu', args.botAppId)
+    .map((id) => decodeFeishuLaneUserId(id.userId))
+    .filter((l): l is FeishuLane => l !== null && l.chatId === args.chatId && l.threadId !== '');
+  if (candidates.length !== 1) return null;
+  const lane = candidates[0];
+  if (!lane) return null;
+  const laneUserId = encodeFeishuLaneUserId(lane.chatId, lane.threadId);
+  const identity = { channel: 'feishu', botContextId: args.botAppId, userId: laneUserId };
+  if (!bindingStore.get(identity)) return null;
+  const anchor = bindingStore.getAttachCardMessageId(identity);
+  return anchor ? { laneUserId, replyAnchorMessageId: anchor } : { laneUserId };
+}
+
 export function buildFeishuAdapter(
   feishuIm: FeishuIM,
   config: ImOrchestratorConfig,
 ): ImChannelAdapter {
+  // 群主流消息的 /ctr 接管路由: 接管存在时消息落进接管话题, 不再开新话题。
+  feishuIm.setGroupMainFlowLaneOverride(resolveGroupTakeoverLane);
   const isLark = () => feishuIm.getService() === 'lark';
   const conversationPrefix = () => (isLark() ? '[Lark·DM] ' : '[飞书·DM] ');
   const groupPrefix = (threadId: string) =>

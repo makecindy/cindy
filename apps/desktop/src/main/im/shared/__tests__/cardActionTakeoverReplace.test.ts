@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   getMaker: vi.fn(),
   closeSession: vi.fn(async () => {}),
   getDesktopCcPrefs: vi.fn<() => DesktopCcPrefs | null>(() => null),
+  resolveLenientSessionRoute: vi.fn(),
   applyRuntimeSetModelChange:
     vi.fn<(input: unknown) => Promise<{ status: 'applied' | 'deferred' }>>(),
   registerPendingCredentialSwitchForSession: vi.fn(),
@@ -54,6 +55,9 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
+vi.mock('../../../maker-host/model-route-guard-live', () => ({
+  resolveLenientSessionRoute: mocks.resolveLenientSessionRoute,
+}));
 vi.mock('../../index', () => ({ getDesktopCcPrefs: mocks.getDesktopCcPrefs }));
 vi.mock('../controlProjects', () => ({
   listProjectsForControl: vi.fn(async () => []),
@@ -222,6 +226,15 @@ beforeEach(() => {
     })),
   });
   mocks.getDesktopCcPrefs.mockReturnValue(null);
+  // 路由裁决默认「原样放行」：真实 model-route-guard-live 会读 provider 目录,
+  // 本 harness 不搭目录 fixture; 需要裁决语义的用例自己 mockResolvedValue 覆盖。
+  mocks.resolveLenientSessionRoute.mockImplementation(
+    async (_agent: string, model: string | undefined, providerId: string | null) => ({
+      model,
+      providerId,
+      degraded: false,
+    }),
+  );
   (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue(null);
 });
 
@@ -949,5 +962,124 @@ describe('control:thread-exit 收口卡', () => {
         buttons: [expect.objectContaining({ id: 'control:start' })],
       }),
     );
+  });
+});
+
+describe('control:new 新建会话（非 threadScoped 分支 — feishu 实际路径）', () => {
+  // feishu 是非 threadScoped 渠道（见 shared/types.ts），群 /ctr 永远走
+  // 非 thread 分支 —— 权限档治理与 providerId 落地都必须在这一分支生效。
+  const feishuAdapter = {
+    channel: 'feishu',
+    threadScoped: false,
+    ui: slackUi,
+    config: { agentKind: 'claude-code', defaultModel: 'm', defaultPermissionMode: 'acceptEdits' },
+  } as unknown as ImChannelAdapter;
+
+  async function pressControlNew(
+    im: ChannelIM,
+    overrides?: Partial<IMCardActionEvent>,
+    testAdapter: ImChannelAdapter = feishuAdapter,
+  ): Promise<void> {
+    const attach = createCardActionHandler(testAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+    await registeredHandler(handler)({
+      messageId: 'ctr-new',
+      senderId: 'ou_user1',
+      chatId: 'oc_12345',
+      buttonId: 'control:new',
+      scopeKey: '',
+      payload: {
+        botAppId: 'BOT1',
+        workingDir: 'E:/Cindy/cindy',
+        displayName: 'cindy',
+      },
+      ...overrides,
+    } as IMCardActionEvent);
+  }
+
+  function setupDesktopPrefs(prefs: DesktopCcPrefs): ReturnType<typeof vi.fn> {
+    mocks.getDesktopCcPrefs.mockReturnValue(prefs);
+    const createSession = vi.fn(async () => ({ id: 'sess-new' }));
+    mocks.getMaker.mockReturnValue({ createSession, closeSession: mocks.closeSession });
+    return createSession;
+  }
+
+  it('feishu 群 /ctr：权限档用渠道设置（默认 auto），providerId 随桌面偏好传入 createSession', async () => {
+    const createSession = setupDesktopPrefs({
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      effort: 'max',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+    });
+    mocks.resolveLenientSessionRoute.mockResolvedValue({
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      effort: 'max',
+      degraded: false,
+    });
+
+    await pressControlNew(makeIm());
+
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'deepseek-v4-pro',
+        providerId: 'deepseek',
+        permissionMode: 'auto',
+      }),
+    );
+  });
+
+  it('feishu 私聊 /ctr：权限档保持 desktop 偏好', async () => {
+    const createSession = setupDesktopPrefs({
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      effort: 'max',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+    });
+    mocks.resolveLenientSessionRoute.mockResolvedValue({
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      effort: 'max',
+      degraded: false,
+    });
+
+    await pressControlNew(makeIm(), { chatId: 'ou_peer_openid' });
+
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'deepseek',
+        permissionMode: 'bypassPermissions',
+      }),
+    );
+  });
+
+  it('桌面偏好缺 providerId 时仍走隐式路由（不传 providerId，与修复前一致）', async () => {
+    const createSession = setupDesktopPrefs({
+      model: 'deepseek-v4-pro',
+      providerId: null,
+      effort: 'max',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+    });
+    mocks.resolveLenientSessionRoute.mockResolvedValue({
+      model: 'deepseek-v4-pro',
+      providerId: null,
+      effort: 'max',
+      degraded: false,
+    });
+
+    await pressControlNew(makeIm());
+
+    expect(createSession).toHaveBeenCalledTimes(1);
+    const arg = createSession.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.model).toBe('deepseek-v4-pro');
+    expect(arg.providerId).toBeUndefined();
   });
 });
