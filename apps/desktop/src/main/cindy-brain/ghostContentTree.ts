@@ -440,19 +440,6 @@ export async function hashGhostContentFiles(
       await handle.close();
     }
     const fileDigest = fileHash.digest();
-    // Between the two pathname opens, reassert the root's inode identity (not
-    // its mtime/ctime — a leaf rename legitimately changes those and must stay
-    // an "entry changed" failure). This narrows the window in which a swap of
-    // the whole root would slip the boundary assertion; it is deliberately
-    // dev/ino-only, so an inode-reusing swap is still not observable here.
-    const rootBetween = await fs.promises.lstat(rootDir, { bigint: true });
-    if (
-      rootBetween.isSymbolicLink() ||
-      !rootBetween.isDirectory() ||
-      !sameFileIdentity(rootBetween, rootIdentity)
-    ) {
-      throw new Error(`ghost content root changed while reading: ${rootDir}`);
-    }
     // Windows 的按路径 stat/lstat 在 rename/replace 后可能继续返回旧目录元数据。
     // 重新打开同一路径，并再次流式摘要；新句柄的 stat 也可能陈旧，字节对账才是最终证据。
     const verificationHandle = await fs.promises.open(
