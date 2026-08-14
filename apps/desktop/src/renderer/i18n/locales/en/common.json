@@ -479,7 +479,7 @@
         "reset": "Restore default layout",
         "resetSuccess": "Default panel layout restored",
         "resetFailed": "Could not restore the default panel layout",
-        "saved": "Panel position saved. Restore the default layout in Settings → Appearance.",
+        "saved": "Panel position saved. Restore the default layout in the Appearance section under Settings → General.",
         "saveFailed": "Could not save the panel position"
       }
     },

@@ -4,8 +4,11 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { validateGhostManifest } from '../../../shared/ghost';
+
 import {
   createGhostInstallReceipt,
+  type GhostInstallReceipt,
   GhostInstallReceiptStore,
 } from '../ghostInstallReceipt';
 
@@ -27,6 +30,57 @@ describe('GhostInstallReceiptStore cleanup', () => {
     vi.restoreAllMocks();
     await fs.promises.rm(workDir, { recursive: true, force: true });
   });
+
+  function createSetupReceipt(): GhostInstallReceipt {
+    const parsed = validateGhostManifest({
+      schemaVersion: 2,
+      id: 'hello',
+      name: 'Hello',
+      version: '1.0.0',
+      kind: 'chip',
+      entry: 'main.js',
+      settingsHtml: 'settings.html',
+      slots: ['tool', 'network'],
+      tools: [{ name: 'do_thing', description: 'Do something' }],
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            key: 'api_key',
+            label: 'API Key',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+          },
+        ],
+        connections: [
+          {
+            key: 'account',
+            label: 'Account',
+            inject: { header: 'X-Account', format: '{value}' },
+          },
+        ],
+      },
+      setup: {
+        requires: [
+          { anyOf: ['secret:api_key'] },
+          { anyOf: ['connection:account', { kv: 'repoDir', label: '本机 cindy 项目目录' }] },
+        ],
+      },
+    });
+    if (!parsed.ok) throw new Error(parsed.reason);
+
+    return createGhostInstallReceipt({
+      manifest: parsed.manifest,
+      localeResources: {},
+      enabled: true,
+      trust: {
+        level: 'unverified',
+        publisherSigned: false,
+        publisherVerified: false,
+        reviewed: false,
+      },
+      skillContentSha256: {},
+    });
+  }
 
   it('removes a regular receipt and managed snapshot tree', async () => {
     const receipt = path.join(stateRoot, 'hello.json');
@@ -114,6 +168,63 @@ describe('GhostInstallReceiptStore cleanup', () => {
 
     await expect(store.write(receipt)).rejects.toThrow('migration marker unavailable');
     expect(fs.existsSync(path.join(stateRoot, 'hello.json'))).toBe(false);
+  });
+
+  it('writes setup in the author format accepted by the v0.1.48 receipt reader', async () => {
+    const receipt = createSetupReceipt();
+    await store.write(receipt);
+
+    const persisted = JSON.parse(
+      await fs.promises.readFile(path.join(stateRoot, 'hello.json'), 'utf8'),
+    ) as { manifest: unknown };
+    expect(persisted.manifest).toMatchObject({
+      setup: {
+        requires: [
+          { anyOf: ['secret:api_key'] },
+          {
+            anyOf: [
+              'connection:account',
+              { kv: 'repoDir', label: '本机 cindy 项目目录' },
+            ],
+          },
+        ],
+      },
+    });
+    // v0.1.48 reads receipt manifests through this author-format validator.
+    expect(validateGhostManifest(persisted.manifest).ok).toBe(true);
+
+    expect(store.read('hello')).toMatchObject({
+      state: 'approved',
+      receipt: {
+        manifest: {
+          setup: {
+            requires: [
+              { anyOf: [{ kind: 'secret', key: 'api_key' }] },
+              {
+                anyOf: [
+                  { kind: 'connection', key: 'account' },
+                  { kind: 'kv', key: 'repoDir', label: '本机 cindy 项目目录' },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    });
+  });
+
+  it('still reads normalized setup receipts emitted by affected builds', async () => {
+    const receipt = createSetupReceipt();
+    await fs.promises.writeFile(
+      path.join(stateRoot, 'hello.json'),
+      `${JSON.stringify(receipt, null, 2)}\n`,
+      'utf8',
+    );
+
+    expect(store.read('hello')).toMatchObject({
+      state: 'approved',
+      receipt: { manifest: receipt.manifest },
+    });
   });
 
   it('treats only a missing migration marker as absent', () => {

@@ -271,8 +271,11 @@ describe('SessionItem — 置顶分屏拖拽', () => {
       'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
     );
     expect(row?.draggable).toBe(true);
+    expect(row?.className).toContain('cursor-pointer');
+    expect(row?.className).not.toContain('cursor-grab');
     expect(row?.querySelector('[data-split-group-drag-handle="true"]')).toBeNull();
     expect(title).not.toBeNull();
+    expect(title?.className).not.toContain('cursor-grab');
     expect(actionButton).not.toBeNull();
 
     fireEvent.pointerDown(title!, { button: 0, pointerType: 'mouse' });

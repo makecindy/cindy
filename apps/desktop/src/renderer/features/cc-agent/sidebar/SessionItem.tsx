@@ -928,10 +928,7 @@ export const SessionItem = memo(function SessionItem({
           data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
           data-no-drag={splitDragHandleActive ? 'true' : undefined}
           draggable={splitDragHandleActive}
-          className={cn(
-            'min-w-0 flex flex-1 items-center gap-1.5',
-            splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
-          )}
+          className="min-w-0 flex flex-1 items-center gap-1.5"
         >
           {/* 绑定徽章优先于普通自动化 Timer:persistentSession 会话两者皆真,
               主图标统一为 Timer，绑定态额外承载频率/暂停信息。 */}
