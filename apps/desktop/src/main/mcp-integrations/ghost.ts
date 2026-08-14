@@ -1692,6 +1692,18 @@ export function getCindyGhostsMcpDeps(
         mergedArgs = { ...args, attachments: grant.hashes };
         pendingAttachmentRevoke = grant.revoke;
       }
+      // grantAttachmentUrls 只保证授权写入那一刻的 owner 没漂移;它返回之后
+      // 到实际派发之间还有 dir/save_dir 确认、session-context 构建等好几个
+      // await 窗口,这些窗口期间的 classifyGhostVisibility 现查"当前活跃
+      // 账号"——账号切换后若新账号下恰好也装了同 id 插件,后续检查会照常
+      // 通过并派发到新账号的进程,dispatchSucceeded 因此置真,finally 就不会
+      // 撤销旧账号那笔刚授出的 ghost-grant/ghost-tool-grant,把它永久遗留在
+      // 旧账号账本里(旧账号那次调用其实从未送达自己的 sandbox)。派发前的
+      // 最后一次核对复用同一个 pendingAttachmentRevoke,漂移就当拒绝处理,
+      // 自然触发下面 finally 的撤销。
+      const ownerScopeKeyAfterAttachmentGrant = pendingAttachmentRevoke
+        ? activeOwnerScopeKey()
+        : null;
       // dispatchSucceeded 置真的两种情况:调用整体成功,或者 pipeDispatcher
       // 明确报告 TIMEOUT(语义是"可能仍在后台继续",附件已经真正交给了
       // sandbox)。下面任何一个提前 return(派发前的复判/确认,以及
@@ -1861,6 +1873,25 @@ export function getCindyGhostsMcpDeps(
             ok: false,
             errorCode: 'INTERNAL',
             message: t('newChat.pluginSetup.assessmentReadFailed'),
+          };
+        }
+        // 派发前最后一个无 await 的拦截点:核对附件授权写入之后 owner 是否
+        // 漂移(见 pendingAttachmentRevoke 旁边的注释)。命中就直接拒,让
+        // dispatchSucceeded 保持 false,交给下面 finally 去撤销那笔已经写进
+        // 旧账号账本的 ghost-grant/ghost-tool-grant——不能在这里改派发目标
+        // 或者忽略漂移继续派发,那样等于把旧账号授权的附件送进了新账号的
+        // 插件进程。
+        if (
+          ownerScopeKeyAfterAttachmentGrant !== null &&
+          activeOwnerScopeKey() !== ownerScopeKeyAfterAttachmentGrant
+        ) {
+          log.warn('ghost tool call denied: owner scope changed after attachment grant', {
+            ghostId,
+          });
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: '账号状态已变化，为了安全未执行该工具，请重试。',
           };
         }
         // ── 卡槽③:callId 在这里预铸并登记给卡片服务 ────────────────────

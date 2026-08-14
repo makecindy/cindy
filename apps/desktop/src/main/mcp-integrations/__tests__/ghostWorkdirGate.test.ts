@@ -1725,6 +1725,41 @@ describe('Full Access 插件文件交接', () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  it('附件授权成功后到派发之间账号切换：撤销旧账号的授权，不派发到新账号', async () => {
+    // 回归 Codex 新发现的 P1:grantAttachmentUrls 只保证授权写入那一刻的
+    // owner 没漂移;它返回之后到实际派发之间还有 dir/save_dir 确认、
+    // session-context 构建这些 await 窗口。如果账号在这段窗口切换,且新账号
+    // 下恰好也装了同 id 插件,后续的 classifyGhostVisibility 只会现查"当前
+    // 活跃账号",照常放行并派发到新账号的进程——旧账号那笔刚授出的
+    // ghost-tool-grant 就会永久遗留在旧账号账本里(它自己的调用其实从未
+    // 真正送达 sandbox)。这与上面"确认等待期间账号切换"那条不同:那条是
+    // 写入之前漂移、靠拦截;这条是写入之后漂移、必须靠撤销收拾。
+    const file = path.join(outsideDir, 'owner-switch-after-grant.png');
+    const bytes = Buffer.from('owner-switch-after-grant');
+    fs.writeFileSync(file, bytes);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    ledgerRefs.push({ hash, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' });
+    resolveGhostAttachmentUrlMock.mockReturnValue({ absPath: file, mimeType: 'image/png', blobHash: hash });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+    activeOwnerScopeKeyMock
+      .mockReturnValueOnce('local:owner-a:0') // grantAttachmentUrls: ownerScopeKeyAtStart
+      .mockReturnValueOnce('local:owner-a:0') // grantAttachmentUrls: ownerScopeKeyNow 核对
+      .mockReturnValueOnce('local:owner-a:0') // callGhostTool: 附件授权成功后立即捕获
+      .mockReturnValue('local:owner-b:0'); // callGhostTool: 派发前复判——已经漂移
+
+    const result = await makeDeps('codex', 'owner-switch-after-grant').callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: [`xdt-media://blob/${hash}`],
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(grantAttachmentsMock).toHaveBeenCalledTimes(1);
+    expect(revokeAttachmentsMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: '远程 Full Access',
