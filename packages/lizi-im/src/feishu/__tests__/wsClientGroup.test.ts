@@ -794,6 +794,43 @@ describe('feishu group inbound gate', () => {
     }
   });
 
+  it('清凭证取消在途孤儿发送的续段(不再 schedule/suspend 新状态)', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      let rejectFirst!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectFirst = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      const firstDelivery = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 在途发送期间清凭证: 续段按代次放弃 — 不 schedule、不 suspend。
+      wsClient.clearOrphanRetriesForCredentialClear();
+      rejectFirst(new Error('client closed'));
+      await firstDelivery;
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+
+      // 清凭证后同凭证重连: 也不应有任何重试复活。
+      await wsClient.stop({ announceOffline: false, reason: 'test-relogin' });
+      await connect();
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('queued retry is not re-armed when a different bot starts', async () => {
     vi.useFakeTimers();
     try {
