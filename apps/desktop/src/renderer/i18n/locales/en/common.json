@@ -9120,6 +9120,7 @@
       "archiveWorkerAria": "Archive worker {{name}}",
       "createWorker": "Create new worker",
       "hardLimitHint": "Hard limit reached: {{count}}. Archive an existing worker to create another one.",
+      "hardLimitSettingsHint": "Hard limit reached: {{count}}. Click to adjust in collaboration settings.",
       "softLimitHint": "Soft limit exceeded: {{count}}. More workers increase memory usage.",
       "settingsCollaboration": "Settings · Collaboration",
       "layoutMenuLabel": "Worker list layout",

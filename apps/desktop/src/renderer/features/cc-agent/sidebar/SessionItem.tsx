@@ -381,6 +381,10 @@ export const SessionItem = memo(function SessionItem({
           : remoteActivity.phase === 'running'
             ? ('running' as const)
             : ('done' as const);
+  // 左侧 vendor mark 呼吸原先只看本地 running 集;远程会话的运行态只进了右侧
+  // 状态槽,图标颜色不会刷新。只并入 phase=running,与折叠 rail 的 remoteLampOf
+  // 以及本地 pending-prompt 口径一致:needs-interaction 继续由右侧 awaiting 表达。
+  const leftIconRunning = isRunning || remoteActivity?.phase === 'running';
   const rightStatusKind =
     remoteRightStatus ??
     resolveSidebarRightStatus({
@@ -890,7 +894,7 @@ export const SessionItem = memo(function SessionItem({
       <span className="flex w-[15px] shrink-0 items-center justify-center">
         <SessionStatusIcon
           session={session}
-          isRunning={isRunning}
+          isRunning={leftIconRunning}
           isAttached={isAttached}
           hasAttentionNotification={hasAttentionNotification}
           isActive={isActive}

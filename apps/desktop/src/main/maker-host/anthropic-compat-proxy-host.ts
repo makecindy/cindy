@@ -60,6 +60,7 @@ import { getSessionProvider } from './session-provider-store.js';
 import {
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
+  resolvePendingSessionRouteDecision,
   resolveSessionRouteDecision,
 } from './provider-route.js';
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
@@ -207,6 +208,10 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (ccSessionId) noteClaudeSessionRequest(ccSessionId, ctx.reqId);
     if (!isPlainObject(body)) return null;
     const wireModel = typeof body.model === 'string' ? body.model : '';
+    const pendingRoute = sessionId
+      ? resolvePendingSessionRouteDecision(sessionId, wireModel || undefined)
+      : null;
+    if (pendingRoute) return pendingRoute;
 
     // ⓪ 订阅直连翻译:model 带 `chatgpt/` / `xai/` 前缀 → 交给本地 responses handler
     //    (localHandler 插槽,进程内直调,不多一跳;它把 Anthropic Messages ↔ OpenAI Responses
