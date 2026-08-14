@@ -71,11 +71,11 @@ import {
 } from '../cindy-brain/index.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import {
   ghostToolBlockVerdict,
   resolveToolApprovalMode,
 } from '../cindy-brain/ghostToolPermissionsStore.js';
-import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
 import { handleIncomingCindyFile } from '../cindy-brain/openFileInstall.js';
@@ -1071,6 +1071,53 @@ export function getCindyGhostsMcpDeps(
           };
         }
       };
+      // Attachment confirmation and directory handoff may wait for user input.
+      // Every side-effect recheck must therefore resolve the current installed
+      // plugin again: the original object can be removed or replaced under the
+      // same id while the card is open. The narrow recheck result uses
+      // PERMISSION_DENIED for every lost eligibility state so downstream grant
+      // code can trigger its exact-id compensation path uniformly.
+      const recheckCurrentGrantPolicy = (isGrantOnly: boolean): GhostGrantPolicyBlock | null => {
+        const currentVisibility = classifyGhostVisibility(
+          ghostId,
+          sessionWorkdir,
+          ghostVisibilityDeps,
+        );
+        if (!currentVisibility.ok) {
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: currentVisibility.message,
+          };
+        }
+        const currentTools = currentVisibility.ghost.manifest.tools;
+        if (
+          !isGrantOnly &&
+          !(currentTools ?? []).some((candidate) => candidate.name === tool)
+        ) {
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: toolNotFoundMessage(ghostId, tool, currentTools),
+          };
+        }
+        try {
+          if (getGhostSetupAssessment(ghostId).state !== 'ready') {
+            return {
+              ok: false,
+              errorCode: 'PERMISSION_DENIED',
+              message: t('newChat.pluginSetup.setupChangedDuringResume'),
+            };
+          }
+        } catch {
+          return {
+            ok: false,
+            errorCode: 'PERMISSION_DENIED',
+            message: t('newChat.pluginSetup.assessmentReadFailed'),
+          };
+        }
+        return blockedToolVerdict(currentTools, isGrantOnly);
+      };
       // 用户图片过户:attachments 里的地址逐张落媒体总仓 + 记可读引用
       // (人工确认 = ghost-grant；Host 工具代办 = ghost-tool-grant),指纹注入
       // args.attachments 交给意识。任何一张失败整批拒(ATTACHMENT_INVALID),
@@ -1195,7 +1242,7 @@ export function getCindyGhostsMcpDeps(
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-          recheckPolicy: () => blockedToolVerdict(grantVisibility.ghost.manifest.tools, true),
+          recheckPolicy: () => recheckCurrentGrantPolicy(true),
           maxCount: MAX_GRANT_ONLY_ATTACHMENTS,
         });
         if (!grant.ok) {
@@ -1252,7 +1299,7 @@ export function getCindyGhostsMcpDeps(
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-          recheckPolicy: () => blockedToolVerdict(target.manifest.tools, false),
+          recheckPolicy: () => recheckCurrentGrantPolicy(false),
           maxCount: MAX_GRANT_ATTACHMENTS,
         });
         if (!grant.ok) {
@@ -1277,7 +1324,7 @@ export function getCindyGhostsMcpDeps(
           dirAbs: dir,
           workdirAbs: sessionWorkdir,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-          recheckPolicy: () => blockedToolVerdict(target.manifest.tools, false),
+          recheckPolicy: () => recheckCurrentGrantPolicy(false),
         });
         if (!dirConfirm.ok) {
           return {
@@ -1289,7 +1336,7 @@ export function getCindyGhostsMcpDeps(
         // 确认卡的返回与出票之间绝不能沿用旧裁决：票据一旦创建可由 sandbox
         // 在稍后消费，派发器的 blocked 闸已无法撤销它。这里是最后一个无 await
         // 的拦截点，命中时保证零票据副作用。
-        const dirBlocked = blockedToolVerdict(target.manifest.tools, false);
+        const dirBlocked = recheckCurrentGrantPolicy(false);
         if (dirBlocked) return dirBlocked;
         const deposited = getDirDepositVault().deposit({
           ghostId,
@@ -1315,7 +1362,7 @@ export function getCindyGhostsMcpDeps(
           dirAbs: saveDir,
           workdirAbs: sessionWorkdir,
           getLiveSessionGrantState: hostDeps.getLiveSessionGrantState,
-          recheckPolicy: () => blockedToolVerdict(target.manifest.tools, false),
+          recheckPolicy: () => recheckCurrentGrantPolicy(false),
         });
         if (!saveConfirm.ok) {
           return {
@@ -1326,7 +1373,7 @@ export function getCindyGhostsMcpDeps(
         }
         // 与 dir 相同：出票前重新读取当前策略，不能让确认期间后的 blocked
         // 切换留下仍可消费的本地写入票据。
-        const saveBlocked = blockedToolVerdict(target.manifest.tools, false);
+        const saveBlocked = recheckCurrentGrantPolicy(false);
         if (saveBlocked) return saveBlocked;
         const saveDeposited = getSaveDepositVault().deposit({
           ghostId,

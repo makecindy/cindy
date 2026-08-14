@@ -21,6 +21,7 @@ import type {
   GhostSetupEnsureRequest,
   GhostSetupEnsureResult,
 } from '../../cindy-brain/ghostSetupCoordinator';
+import type { GhostSetupAssessment } from '../../../shared/ghost';
 import type { CindyGhostsHostDeps } from '../ghost';
 import { t } from '../../i18n';
 
@@ -87,7 +88,7 @@ const WORKDIR = '/proj/alpha';
 const listMock = vi.fn<() => unknown[]>(() => []);
 const activeSessionAvailableMock = vi.fn((_ghostId: string) => true);
 const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
-const setupAssessmentMock = vi.fn((_ghostId: string) => {
+const setupAssessmentMock = vi.fn((_ghostId: string): GhostSetupAssessment => {
   void _ghostId;
   return {
     state: 'ready' as const,
@@ -765,6 +766,84 @@ describe('ghost_call 兜底拒绝', () => {
       args: {},
       attachments: [file],
       grantOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(ledgerRefs).toEqual([]);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('grant_only 确认期间插件更新时用当前 manifest 重判全部工具', async () => {
+    const file = path.join(outsideDir, 'manifest-replaced-during-confirm.png');
+    fs.writeFileSync(file, 'manifest-replaced-before-commit');
+    const resolveToolApprovalMode = vi.fn((_ghostId: string, toolName: string) =>
+      toolName === 'sealed' ? 'blocked' : 'needs-approval',
+    );
+    confirmRequestMock.mockImplementationOnce(async () => {
+      listMock.mockReturnValue([
+        chipGhost('art', ['tool'], {
+          tools: [{ name: 'sealed', description: 'blocked in the current manifest' }],
+        }),
+      ]);
+      return { confirmed: true, allowDirs: false };
+    });
+
+    const result = await makeDeps('claude-code', 'manifest-replaced', 'instance', {
+      resolveToolApprovalMode,
+    }).callGhostTool({
+      ghostId: 'art',
+      tool: 'ignored-tool',
+      args: {},
+      attachments: [file],
+      grantOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(resolveToolApprovalMode).toHaveBeenCalledWith('art', 'sealed');
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(ledgerRefs).toEqual([]);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('普通附件确认期间目标插件消失时不留下持久授权', async () => {
+    const file = path.join(outsideDir, 'plugin-removed-during-confirm.png');
+    fs.writeFileSync(file, 'plugin-removed-before-commit');
+    confirmRequestMock.mockImplementationOnce(async () => {
+      listMock.mockReturnValue([]);
+      return { confirmed: true, allowDirs: false };
+    });
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: [file],
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(ledgerRefs).toEqual([]);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('附件确认期间插件更新为待设置时不留下持久授权', async () => {
+    const file = path.join(outsideDir, 'setup-changed-during-confirm.png');
+    fs.writeFileSync(file, 'setup-changed-before-commit');
+    confirmRequestMock.mockImplementationOnce(async () => {
+      setupAssessmentMock.mockReturnValue({
+        state: 'required',
+        revision: 1,
+        groups: [],
+      });
+      return { confirmed: true, allowDirs: false };
+    });
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: [file],
     });
 
     expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });

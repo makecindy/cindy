@@ -71,6 +71,28 @@ describe('VoiceInputDataStore persistence', () => {
     );
   });
 
+  it('recovers from transient Windows EPERM while replacing the projection file', () => {
+    const store = new VoiceInputDataStore();
+    store.updateSettings({ language: 'en' });
+    const target = path.join(dataDir, 'voice-input-data.v1.json');
+    const realRename = fs.renameSync;
+    let failFirstReplacement = true;
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (failFirstReplacement && String(from).endsWith('.tmp') && String(to) === target) {
+        failFirstReplacement = false;
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+
+    try {
+      expect(store.updateSettings({ language: 'ja' }).language).toBe('ja');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(JSON.parse(fs.readFileSync(target, 'utf8')).settings.language).toBe('ja');
+  });
+
   it.each([
     ['writeFileSync', 'disk full'],
     ['renameSync', 'rename denied'],

@@ -1,5 +1,4 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
-import fs from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -15,6 +14,7 @@ import {
 
 import { createLogger } from '../logger.js';
 import { ownerScopedUserDataPath, getActiveAppSession } from '../appSessionState.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { voiceDictionarySyncStore } from './VoiceDictionarySyncStore.js';
@@ -445,7 +445,10 @@ export class VoiceInputDataStore {
     if (this.state) return this.state;
     const filePath = getDataFilePath();
     try {
-      const raw = fs.readFileSync(filePath, 'utf-8');
+      const raw = readAtomicFileSync(filePath);
+      if (raw === null) {
+        throw Object.assign(new Error('voice input data file not found'), { code: 'ENOENT' });
+      }
       const parsed = JSON.parse(raw) as unknown;
       const snapshot = normalizeVoiceInputDataSnapshot(parsed, process.platform);
       const stampedOnDisk = isRecord(parsed) && parsed.dictionarySyncInitialized === true;
@@ -585,10 +588,7 @@ export class VoiceInputDataStore {
   private save(state: StoredVoiceInputData): void {
     const filePath = getDataFilePath();
     try {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      const tmp = `${filePath}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf-8');
-      fs.renameSync(tmp, filePath);
+      atomicWriteFileSync(filePath, JSON.stringify(state, null, 2));
     } catch (error) {
       log.warn('voice input data write failed', {
         error: error instanceof Error ? error.message : String(error),

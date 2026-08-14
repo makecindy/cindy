@@ -530,6 +530,35 @@ describe('词典同步落盘 —— 第七轮收口', () => {
     ]);
   });
 
+  it('Windows 原子替换暂时返回 EPERM 时通过备份交换完成落盘', () => {
+    writeDictionaryFile({
+      dictionaryEntries: [{ id: 'a', text: 'Cindy', source: 'manual', frequency: 1, aliases: [] }],
+      dictionaryCandidates: [],
+      suppressedAutomaticDictionaryTexts: [],
+    });
+    voiceInputDataStore.getSettings();
+
+    const syncFile = ownerPath(SYNC_FILE);
+    const realRename = fs.renameSync;
+    let failFirstReplacement = true;
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (failFirstReplacement && String(from).endsWith('.tmp') && String(to) === syncFile) {
+        failFirstReplacement = false;
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+
+    try {
+      const settings = voiceInputDataStore.addManualDictionaryEntry('Orca');
+      expect(settings.dictionaryEntries.map((entry) => entry.text).sort()).toEqual(['Cindy', 'Orca']);
+      expect(voiceDictionarySyncStore.materialize().entries.map((entry) => entry.text).sort())
+        .toEqual(['Cindy', 'Orca']);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('物化登记失败时投影与 key 基线一起回滚', () => {
     writeDictionaryFile({
       dictionaryEntries: [{ id: 'a', text: 'Cindy', source: 'manual', frequency: 1, aliases: [] }],

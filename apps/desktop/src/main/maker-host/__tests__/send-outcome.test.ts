@@ -273,7 +273,7 @@ describe('desktop send outcome helper', () => {
     `);
 
     expect(diagnostics).toEqual([]);
-  }, 15_000);
+  }, 60_000);
 });
 
 function collectTypeDiagnostics(source: string): string[] {

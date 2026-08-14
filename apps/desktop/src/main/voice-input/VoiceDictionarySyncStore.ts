@@ -23,8 +23,9 @@
 import { app } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import fs from 'node:fs';
 import path from 'node:path';
+
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile';
 
 import {
   DEFAULT_TOMBSTONE_TTL_MS,
@@ -337,10 +338,12 @@ export class VoiceDictionarySyncStore {
    */
   private mergeWithOnDiskState(next: StoredSyncData, filePath: string): StoredSyncData {
     let onDisk: StoredSyncData;
+    const raw = readAtomicFileSync(filePath);
+    if (raw === null) return next;
     try {
-      onDisk = normalizeStoredData(JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown);
+      onDisk = normalizeStoredData(JSON.parse(raw) as unknown);
     } catch {
-      // 文件不存在(首次写)或读不出来:没有可合并的东西,按原样写。
+      // 文件内容损坏或不是合法 JSON:没有可合并的东西,按原样写。
       return next;
     }
     // 盘上的是更新客户端写的:一个字节都不能碰,让 persist 的调用方拿到失败。
@@ -375,16 +378,27 @@ export class VoiceDictionarySyncStore {
     if (this.data) return this.data;
 
     const filePath = getDataFilePath();
+    let raw: string | null;
     try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown;
+      raw = readAtomicFileSync(filePath);
+    } catch (error) {
+      log.warn('dictionary sync state read failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+    if (raw === null) {
+      this.data = createInitialData();
+      return this.data;
+    }
+    try {
+      const parsed = JSON.parse(raw) as unknown;
       this.data = normalizeStoredData(parsed);
       return this.data;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        log.warn('dictionary sync state read failed, starting fresh', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      log.warn('dictionary sync state read failed, starting fresh', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       this.data = createInitialData();
       return this.data;
     }
@@ -397,10 +411,7 @@ export class VoiceDictionarySyncStore {
     const filePath = getDataFilePath();
     const merged = this.mergeWithOnDiskState(next, filePath);
     try {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(toPersistedShape(merged)), 'utf-8');
-      fs.renameSync(tmp, filePath);
+      atomicWriteFileSync(filePath, JSON.stringify(toPersistedShape(merged)));
     } catch (error) {
       // sidecar 是词典的正本,写不下去就不能报告成功:调用方据此回滚并把失败暴露
       // 给用户。早先这里只记一条 warn 就当没事 —— 于是「频次/别名涨了但只存进了

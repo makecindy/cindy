@@ -151,6 +151,31 @@ describe('AppShortcutStore', () => {
     expect(store.getOverrides()).toEqual({});
   });
 
+  it('recovers from transient Windows EPERM while replacing an existing file', () => {
+    const store = makeStore('win32');
+    store.setOverride('toggle-sidebar', combo('KeyJ', { ctrl: true }));
+    const realRename = fs.renameSync;
+    let failFirstReplacement = true;
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (failFirstReplacement && String(from).endsWith('.tmp') && String(to) === filePath()) {
+        failFirstReplacement = false;
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+
+    try {
+      store.setOverride('toggle-sidebar', combo('KeyK', { ctrl: true }));
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(store.getOverrides()['toggle-sidebar']).toEqual(combo('KeyK', { ctrl: true }));
+    expect(makeStore('win32').getOverrides()['toggle-sidebar']).toEqual(
+      combo('KeyK', { ctrl: true }),
+    );
+  });
+
   it('keeps memory, disk, and notifications unchanged when writing fails', () => {
     const onChanged = vi.fn();
     const subscriber = vi.fn();

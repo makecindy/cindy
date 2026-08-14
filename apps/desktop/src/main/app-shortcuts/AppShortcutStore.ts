@@ -1,7 +1,5 @@
-import fs from 'node:fs';
-import path from 'node:path';
-
 import { createLogger } from '../logger.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import {
   comboToElectronAccelerator,
   findAppShortcutConflict,
@@ -142,7 +140,11 @@ export class AppShortcutStore {
     if (this.overrides) return this.overrides;
     const filePath = this.options.getFilePath();
     try {
-      const raw = fs.readFileSync(filePath, 'utf-8');
+      const raw = readAtomicFileSync(filePath);
+      if (raw === null) {
+        this.overrides = {};
+        return this.overrides;
+      }
       const parsed = JSON.parse(raw) as unknown;
       const overridesRaw =
         parsed && typeof parsed === 'object'
@@ -171,24 +173,15 @@ export class AppShortcutStore {
 
   private save(overrides: AppShortcutOverrides): void {
     const filePath = this.options.getFilePath();
-    const tmp = `${filePath}.tmp`;
     try {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(
-        tmp,
+      atomicWriteFileSync(
+        filePath,
         JSON.stringify({ version: 1, overrides }, null, 2),
-        'utf-8',
       );
-      fs.renameSync(tmp, filePath);
     } catch (error) {
       log.warn('app shortcut overrides write failed', {
         error: error instanceof Error ? error.message : String(error),
       });
-      try {
-        fs.unlinkSync(tmp);
-      } catch {
-        // Best effort cleanup; preserve the original write error.
-      }
       throw error;
     }
   }
