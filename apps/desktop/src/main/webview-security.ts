@@ -86,6 +86,16 @@ export function isGhostPanelAgentEntry(
   }
 }
 
+/** 只有同时声明 agent 槽的唯一 panel 入口才注入并登记 Agent bridge。 */
+export function shouldEnableGhostPanelAgentBridge(
+  src: unknown,
+  panelHtml: unknown,
+  settingsHtml: unknown,
+  slots: readonly unknown[],
+): boolean {
+  return slots.includes('agent') && isGhostPanelAgentEntry(src, panelHtml, settingsHtml);
+}
+
 /** Agent preload 跟随 Guest 生命周期，因此 Agent Guest 只允许留在唯一 panel 入口。 */
 export function isGhostPanelNavigationAllowed(
   url: string,
@@ -719,10 +729,11 @@ export function installWebviewHardener(): void {
           pendingGhostAttach = null;
           return;
         }
-        const agentBridge = isGhostPanelAgentEntry(
+        const agentBridge = shouldEnableGhostPanelAgentBridge(
           params.src,
           ghost.manifest.panel?.html,
           ghost.manifest.settingsHtml,
+          ghost.manifest.slots,
         );
         applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params, {
           ...(agentBridge ? { panelPreloadPath: getGhostPanelGuestPreloadPath() } : {}),

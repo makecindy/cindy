@@ -51,6 +51,7 @@ import {
   isGuestShortcutKeyDownType,
   resolveGuestShortcutAction,
   setRsbPopupOpenerResolver,
+  shouldEnableGhostPanelAgentBridge,
 } from '../webview-security';
 
 describe('applyWebviewHardening', () => {
@@ -282,6 +283,25 @@ describe('applyGhostWebviewHardening(意识面板 webview)', () => {
       ),
     ).toBe(false);
     expect(isGhostPanelAgentEntry('not a url', 'ui/panel.html')).toBe(false);
+  });
+
+  it('只有声明 agent 槽的 panel 入口才启用 Agent bridge', () => {
+    expect(
+      shouldEnableGhostPanelAgentBridge(
+        'cindy-ghost://art/ui/panel.html',
+        'ui/panel.html',
+        'settings.html',
+        ['panel', 'agent'],
+      ),
+    ).toBe(true);
+    expect(
+      shouldEnableGhostPanelAgentBridge(
+        'cindy-ghost://art/ui/panel.html',
+        'ui/panel.html',
+        'settings.html',
+        ['panel'],
+      ),
+    ).toBe(false);
   });
 
   it('Agent Guest 离开唯一 panel 入口时阻断导航，普通面板仍可同源跳转', () => {
