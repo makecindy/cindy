@@ -118,3 +118,21 @@ export function sameCapturedGhostSnapshotTargetIdentity(
     current.ctimeNs === expected.ctimeNs &&
     sameGhostSnapshotPath(current.realPath, expected.realPath);
 }
+
+export function ghostContentRootIdentityFromSnapshot(
+  identity: GhostSnapshotTargetIdentity,
+): {
+  realPath: string;
+  dev: bigint;
+  ino: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+} {
+  return {
+    realPath: identity.realPath,
+    dev: identity.dev,
+    ino: identity.ino,
+    mtimeNs: identity.mtimeNs,
+    ctimeNs: identity.ctimeNs,
+  };
+}

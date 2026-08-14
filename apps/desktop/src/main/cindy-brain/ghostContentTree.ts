@@ -229,7 +229,7 @@ async function captureGhostContentRootIdentity(rootDir: string): Promise<GhostCo
   };
 }
 
-async function assertGhostContentRootIdentity(
+export async function assertGhostContentRootIdentity(
   rootDir: string,
   expected: GhostContentRootIdentity,
 ): Promise<void> {
@@ -239,8 +239,11 @@ async function assertGhostContentRootIdentity(
   } catch (error) {
     throw new Error(`ghost content root changed while reading: ${rootDir}`, { cause: error });
   }
+  const samePath = process.platform === 'win32'
+    ? current.realPath.toLowerCase() === expected.realPath.toLowerCase()
+    : current.realPath === expected.realPath;
   if (
-    current.realPath !== expected.realPath ||
+    !samePath ||
     current.dev !== expected.dev ||
     current.ino !== expected.ino ||
     current.mtimeNs !== expected.mtimeNs ||

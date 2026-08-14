@@ -10,7 +10,9 @@ import {
   sameGhostSnapshotInodeIdentity,
   sameGhostSnapshotTargetIdentity,
 } from '../ghostSnapshotIdentity';
+import { hashApprovedSkillContent } from '../ghostInstallReceipt';
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess';
+import { validateGhostManifest } from '../../../shared/ghost';
 
 let workDir: string;
 
@@ -146,5 +148,67 @@ describe('runGhostSnapshotWorkerRequest remove', () => {
 
     expect(fs.existsSync(target)).toBe(false);
     expect((await fs.promises.readdir(workDir)).some((name) => name.startsWith('skilled.remove-'))).toBe(false);
+  });
+});
+
+describe('runGhostSnapshotWorkerRequest ensure fast path', () => {
+  it('rejects an ABA replacement of the snapshot root during matches()', async () => {
+    workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-snapshot-aba-'));
+    const idDir = path.join(workDir, 'skilled');
+    const revision = '11111111-1111-4111-8111-111111111111';
+    const target = path.join(idDir, revision);
+    const replacement = path.join(workDir, 'replacement');
+    const skillMd = '---\nname: demo\ndescription: Demo skill\n---\n\nApproved instructions\n';
+    await fs.promises.mkdir(path.join(target, 'skills', 'demo'), { recursive: true });
+    await fs.promises.mkdir(path.join(replacement, 'skills', 'demo'), { recursive: true });
+    await fs.promises.writeFile(path.join(target, 'skills', 'demo', 'SKILL.md'), skillMd);
+    await fs.promises.writeFile(path.join(replacement, 'skills', 'demo', 'SKILL.md'), skillMd);
+
+    const validated = validateGhostManifest({
+      schemaVersion: 2,
+      id: 'skilled',
+      name: 'Skilled',
+      version: '1.0.0',
+      kind: 'chip',
+      entry: 'main.js',
+      slots: ['tool', 'skill'],
+      tools: [{ name: 'do_thing', description: 'do' }],
+      skill: { items: [{ dir: 'skills/demo', name: 'demo', description: 'Demo skill' }] },
+    });
+    if (!validated.ok) throw new Error(validated.reason);
+    const skillContentSha256 = await hashApprovedSkillContent(validated.manifest, target);
+    const parentStats = await fs.promises.lstat(workDir, { bigint: true });
+    const realReaddir = fs.promises.readdir;
+    let swapped = false;
+
+    vi.spyOn(fs.promises, 'readdir').mockImplementation(((
+      candidate: fs.PathLike,
+      options?: Parameters<typeof realReaddir>[1],
+    ) => {
+      const run = async () => {
+        if (!swapped && path.resolve(String(candidate)).startsWith(path.resolve(target))) {
+          swapped = true;
+          await fs.promises.rename(target, `${target}.original`);
+          await fs.promises.rename(replacement, target);
+        }
+        return realReaddir(candidate, options as never);
+      };
+      return run();
+    }) as typeof fs.promises.readdir);
+
+    await expect(runGhostSnapshotWorkerRequest({
+      expectedParent: {
+        realPath: await fs.promises.realpath(workDir),
+        dev: parentStats.dev,
+        ino: parentStats.ino,
+      },
+      operation: 'ensure',
+      targetName: `skilled/${revision}`,
+      sourceDir: target,
+      receipt: {
+        manifest: validated.manifest,
+        skillContentSha256,
+      },
+    }, workDir)).rejects.toThrow(/ghost content root changed while reading|snapshot target identity changed/);
   });
 });

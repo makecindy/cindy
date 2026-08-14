@@ -21,6 +21,7 @@ import path from 'node:path';
 
 import { GHOST_SKILL_MD_MAX_BYTES } from '../../shared/ghost.js';
 import {
+  assertGhostContentRootIdentity,
   classifyGhostDirEntry,
   collectGhostContentFiles,
   hashGhostContentFiles,
@@ -29,6 +30,7 @@ import {
 } from './ghostContentTree.js';
 import {
   captureGhostSnapshotTargetIdentity,
+  ghostContentRootIdentityFromSnapshot,
   sameCapturedGhostSnapshotTargetIdentity,
   sameGhostSnapshotInodeIdentity,
   sameGhostSnapshotParentIdentity,
@@ -122,17 +124,45 @@ async function copyDirectory(source: string, target: string): Promise<void> {
     else await fs.promises.copyFile(from, to, fs.constants.COPYFILE_EXCL);
   }
 }
-async function hashes(receipt: NonNullable<GhostSnapshotWorkerRequest['receipt']>, root: string): Promise<Record<string, string>> {
+async function hashes(
+  receipt: NonNullable<GhostSnapshotWorkerRequest['receipt']>,
+  root: string,
+  pinnedRoot?: GhostSnapshotTargetIdentity,
+): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
+  const pinnedContentRoot = pinnedRoot
+    ? ghostContentRootIdentityFromSnapshot(pinnedRoot)
+    : undefined;
+  if (pinnedContentRoot) {
+    await assertGhostContentRootIdentity(root, pinnedContentRoot);
+  }
   for (const item of receipt.manifest.skill?.items ?? []) {
-    const itemRoot = await resolveGhostContentPath(root, item.dir, { expect: 'directory', label: 'approved skill' });
-    const tree = await collectGhostContentFiles(itemRoot, { dotEntries: 'include', nonRegular: 'throw', label: `approved skill ${item.dir}` });
+    const itemBase = pinnedContentRoot?.realPath ?? root;
+    const itemRoot = await resolveGhostContentPath(itemBase, item.dir, { expect: 'directory', label: 'approved skill' });
+    if (pinnedContentRoot) {
+      await assertGhostContentRootIdentity(root, pinnedContentRoot);
+    }
+    const tree = await collectGhostContentFiles(itemRoot, {
+      dotEntries: 'include',
+      nonRegular: 'throw',
+      label: `approved skill ${item.dir}`,
+    });
+    if (pinnedContentRoot) {
+      await assertGhostContentRootIdentity(root, pinnedContentRoot);
+    }
     result[item.dir] = await hashGhostContentFiles(itemRoot, tree.files, tree.rootIdentity);
+    if (pinnedContentRoot) {
+      await assertGhostContentRootIdentity(root, pinnedContentRoot);
+    }
   }
   return result;
 }
-async function matches(receipt: NonNullable<GhostSnapshotWorkerRequest['receipt']>, root: string): Promise<boolean> {
-  const actual = await hashes(receipt, root).catch(() => null);
+async function matches(
+  receipt: NonNullable<GhostSnapshotWorkerRequest['receipt']>,
+  root: string,
+  pinnedRoot?: GhostSnapshotTargetIdentity,
+): Promise<boolean> {
+  const actual = await hashes(receipt, root, pinnedRoot).catch(() => null);
   return Boolean(actual && (receipt.manifest.skill?.items ?? []).every(
     (item) => actual[item.dir] === receipt.skillContentSha256[item.dir],
   ));
@@ -173,7 +203,7 @@ export async function runGhostSnapshotWorkerRequest(
   } catch (error) { if (!hasCode(error, 'ENOENT')) throw error; }
   if (exists) {
     await verifyDirectory(workingDir, parts[0]);
-    if (await matches(request.receipt, targetPath)) {
+    if (await matches(request.receipt, targetPath, existingTargetIdentity)) {
       // matches() reads through pathnames and does not validate the root
       // itself. Recapture a bound identity after the content match so a
       // concurrent replacement cannot mix an old inode with a new path.
