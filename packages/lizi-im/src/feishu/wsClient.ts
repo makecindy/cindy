@@ -103,6 +103,13 @@ const ORPHAN_NOTICE_COOLDOWN_MS = 60_000;
 const orphanNoticeAt = new Map<string, number>();
 
 /**
+ * 清凭证代次。clearOrphanRetriesForCredentialClear 只删 map 条目, 挡不住
+ * 已经 await 出去的 REST。代次在清凭证时递增, 发送前后比对: 过期续段不得
+ * 再 suspend/schedule, 否则同账号再登录会把登出前的 opener 重试/撤回复活。
+ */
+let orphanRetryEpoch = 0;
+
+/**
  * 提示**成功送达**的 opener 集合。与 orphanNoticeAt 分离: 后者在发送前
  * 就 set(表达「最近一次尝试」, 失败不回溯), 前者只在成功路径加入 —
  * 送达是终态事实, 不随时间失效: 重试链用它判断「提示已由其它路径送达,
@@ -241,11 +248,13 @@ export function resetOrphanRetriesForTest(): void {
 
 /**
  * 明确清除凭证/登出(clearAndDisconnect)时丢弃孤儿重试状态: 排队/挂起的
- * 重试、预算与送达标记全部清空 — 之后重新保存相同 appId/service 不会恢复
- * 旧重试向登出前的 opener 补发提示或撤回旧卡(那是 transport 重连才该有的
+ * 重试、预算与送达标记全部清空, 并递增 orphanRetryEpoch, 让已 await 出去
+ * 的 REST 续段在落定后放弃 — 之后重新保存相同 appId/service 不会恢复旧
+ * 重试向登出前的 opener 补发提示或撤回旧卡(那是 transport 重连才该有的
  * 保留语义)。
  */
 export function clearOrphanRetriesForCredentialClear(): void {
+  orphanRetryEpoch += 1;
   for (const retry of orphanNoticeRetries.values()) clearTimeout(retry.timer);
   orphanNoticeRetries.clear();
   suspendedOrphanRetries.length = 0;
@@ -342,7 +351,13 @@ async function sendOrphanOpenerNotice(
   orphanNoticeAt.set(openerMessageId, Date.now());
   // in-flight 去重: 执行中的重试会与这里共享同一次发送 — 重投不并发打出
   // 第二条提示; 结果为共享, 送达/失败按共享结果处理。
+  const epoch = orphanRetryEpoch;
   const outcome = await sendOrphanNoticeOnce(openerMessageId);
+  if (epoch !== orphanRetryEpoch) {
+    // 清凭证发生在发送期间: 续段放弃 — 不再 schedule/suspend。
+    log.info('[feishu/wsClient] orphan opener notice stale after credential clear — dropping continuation');
+    return;
+  }
   if (outcome === 'delivered') {
     // 送达: 重新认领触发消息(后续重投被入站去重拦下) + 清掉该 opener 的
     // 挂起重试(重试绕过冷却, 不清会在稍后重复提示, 甚至重试耗尽时误撤回)。
@@ -456,7 +471,12 @@ async function retryOrphanOpenerNotice(
   }
   // in-flight 去重: 与冷却后的重投共享同一次发送 — 不会并发打出第二条提示;
   // 若重投的发送已在进行, 这里等待它的结果而不是另发一条。
+  const epoch = orphanRetryEpoch;
   const outcome = await sendOrphanNoticeOnce(openerMessageId);
+  if (epoch !== orphanRetryEpoch) {
+    log.info('[feishu/wsClient] orphan opener notice retry stale after credential clear — dropping continuation');
+    return;
+  }
   if (outcome === 'delivered') {
     // 送达: 重新认领触发消息(抑制冷却后的重投再次进入提示流程)。
     claimInboundMessage(botAppId, messageId);
