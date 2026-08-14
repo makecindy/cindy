@@ -11,6 +11,8 @@
  *   - 用户模型可携带预设确认的 contextWindow；缺省时补保守默认，effort 使用 runtime 默认。
  */
 
+import type { ModelRegistry } from '@cindy/model-access-protocol';
+
 import type {
   AgentKind,
   CatalogModel,
@@ -41,6 +43,49 @@ const CUSTOM_EFFORTS: Partial<Record<AgentKind, Effort[]>> = {
 /** 自定义模型默认选中的 effort（与内置旗舰一致）。 */
 const DEFAULT_CUSTOM_EFFORT: Effort = 'high';
 
+interface RegistryEffortMetadata {
+  efforts: Effort[];
+  defaultEffort: Effort | null;
+}
+
+/**
+ * Resolve a custom model's capabilities from the canonical registry when its id is known.
+ * Registry routes are provider-specific, but custom providers intentionally keep their own
+ * provider id and model id; only the effort metadata is shared here.
+ */
+function registryEffortMetadata(
+  registry: ModelRegistry | null | undefined,
+  modelId: string,
+  agent: AgentKind,
+): RegistryEffortMetadata | undefined {
+  if (agent === 'pi' || !registry) return undefined;
+
+  const candidates = new Set([modelId]);
+  if (modelId.startsWith('chatgpt/')) candidates.add(modelId.slice('chatgpt/'.length));
+  const matches = registry.models.filter((entry) =>
+    entry.routes.some(
+      (route) =>
+        route.agents.includes(agent) &&
+        (candidates.has(entry.id) || candidates.has(route.modelId)),
+    ),
+  );
+  const entries = [...new Map(matches.map((entry) => [entry.id, entry])).values()];
+  if (entries.length !== 1) return undefined;
+
+  const entry = entries[0];
+  const perAgent = entry.perAgent?.[agent];
+  const efforts = perAgent?.efforts ?? entry.efforts;
+  if (!efforts) return undefined;
+  const declaredDefaultEffort = perAgent?.defaultEffort ?? entry.defaultEffort;
+  const defaultEffort =
+    declaredDefaultEffort && efforts.includes(declaredDefaultEffort)
+      ? declaredDefaultEffort
+      : efforts.includes(DEFAULT_CUSTOM_EFFORT)
+        ? DEFAULT_CUSTOM_EFFORT
+        : (efforts[efforts.length - 1] ?? null);
+  return { efforts: [...efforts], defaultEffort };
+}
+
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
 const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
@@ -49,6 +94,7 @@ function toCatalogModel(
   m: ProviderRuntimeModelConfig,
   providerId: string,
   agent: AgentKind,
+  modelRegistry: ModelRegistry | null | undefined,
 ): CatalogModel {
   // Pi BYOM 不从 runtime / 协议猜模型能力：只有用户逐模型明确确认后才向 catalog 暴露
   // effort。这样 catalog/UI 与稍后写入 models.json 的能力保持同一份契约，旧配置安全关闭。
@@ -58,9 +104,13 @@ function toCatalogModel(
         ? [...(m.reasoningEfforts ?? [])]
         : []
       : (CUSTOM_EFFORTS[agent] ?? []);
-  const defaultEffort = efforts.includes(DEFAULT_CUSTOM_EFFORT)
-    ? DEFAULT_CUSTOM_EFFORT
-    : (efforts[0] ?? null);
+  const registryEfforts = registryEffortMetadata(modelRegistry, m.id, agent);
+  const effectiveEfforts = registryEfforts?.efforts ?? efforts;
+  const defaultEffort =
+    registryEfforts?.defaultEffort ??
+    (effectiveEfforts.includes(DEFAULT_CUSTOM_EFFORT)
+      ? DEFAULT_CUSTOM_EFFORT
+      : (effectiveEfforts[0] ?? null));
   return {
     id: m.id,
     name: m.name,
@@ -71,7 +121,7 @@ function toCatalogModel(
     // 显式配置的窗口打标:编辑表单回转配置时必须与「缺省物化成的默认值」可区分,
     // 哪怕用户显式填的恰好等于当前默认(未来默认升级后显式值要原样保留)。
     ...(m.contextWindow !== undefined ? { contextWindowExplicit: true } : {}),
-    efforts,
+    efforts: effectiveEfforts,
     defaultEffort,
     // 选择器右栏按 group 聚合：同一自定义来源的模型聚成一组（渲染层用 provider 名兜底标签）。
     group: `custom:${providerId}`,
@@ -129,7 +179,14 @@ function toRouting(
  * 按 `runtimes` 里**已配置的 runtime** 生成各 agent 的 routing / models（每 runtime 独立 baseUrl /
  * 模型 / headers）；空 runtimes 产出空 Provider（不出现在任何 agent 列表，无害）。
  */
-export function buildUserProvider(config: CustomProviderConfig): Provider {
+export interface BuildUserProviderOptions {
+  modelRegistry?: ModelRegistry | null;
+}
+
+export function buildUserProvider(
+  config: CustomProviderConfig,
+  options: BuildUserProviderOptions = {},
+): Provider {
   // OAuth 形态路由走 Runner Bearer；none 明确走无鉴权且由 host 剥凭证；缺省保持历史 API key。
   const oauth = config.auth?.method === 'oauth' ? config.auth.oauth : undefined;
   const isOAuth = oauth !== undefined;
@@ -152,7 +209,9 @@ export function buildUserProvider(config: CustomProviderConfig): Provider {
       rt.modelsUrl,
       rt.wireProtocol,
     );
-    models[agent] = rt.models.map((m) => toCatalogModel(m, config.id, agent));
+    models[agent] = rt.models.map((m) =>
+      toCatalogModel(m, config.id, agent, options.modelRegistry),
+    );
   }
   return {
     id: config.id,

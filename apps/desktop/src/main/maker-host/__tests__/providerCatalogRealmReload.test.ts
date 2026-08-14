@@ -448,6 +448,81 @@ describe('provider catalog realm reload', () => {
     ).toEqual(activeXaiModels);
   });
 
+  it('reprojects custom provider efforts when the registry refreshes', async () => {
+    const current = structuredClone(
+      catalogNamed('catalog-before-custom-reproject', '2026-07-31T13:00:00.000Z'),
+    );
+    const currentEntry = current.modelRegistry?.models.find(
+      (entry) => entry.id === 'openai/gpt-5.6-sol',
+    );
+    if (!currentEntry) throw new Error('expected gpt-5.6-sol registry entry');
+    currentEntry.perAgent = {
+      ...currentEntry.perAgent,
+      codex: { ...currentEntry.perAgent?.codex, efforts: ['high'], defaultEffort: 'high' },
+    };
+    setActiveCatalog(current);
+
+    const config: CustomProviderConfig = {
+      id: 'registry-relay',
+      name: 'Registry Relay',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://relay.example/v1',
+          models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+        },
+      },
+    };
+    h.customProviderRead.mockResolvedValueOnce([config]);
+    await refreshCustomProvidersIntoCatalog();
+
+    const before = getActiveCatalog().providers.find((provider) => provider.id === config.id);
+    expect(before?.models.codex?.[0]).toMatchObject({
+      id: 'gpt-5.6-sol',
+      efforts: ['high'],
+      defaultEffort: 'high',
+    });
+
+    const next = structuredClone(
+      catalogNamed('catalog-after-custom-reproject', '2026-07-31T14:00:00.000Z'),
+    );
+    const nextEntry = next.modelRegistry?.models.find(
+      (entry) => entry.id === 'openai/gpt-5.6-sol',
+    );
+    if (!nextEntry) throw new Error('expected gpt-5.6-sol registry entry');
+    nextEntry.perAgent = {
+      ...nextEntry.perAgent,
+      codex: {
+        ...nextEntry.perAgent?.codex,
+        efforts: ['high', 'max', 'ultra'],
+        defaultEffort: 'ultra',
+      },
+    };
+
+    const events: number[] = [];
+    setActiveCatalogChangedListener((revision) => events.push(revision));
+    try {
+      const refresh = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({ catalog: next, source: 'remote' });
+      await refresh;
+
+      const after = getActiveCatalog().providers.find((provider) => provider.id === config.id);
+      expect(after).toMatchObject({
+        id: config.id,
+        routing: { codex: { upstream: 'https://relay.example/v1' } },
+      });
+      expect(after?.models.codex?.[0]).toMatchObject({
+        id: 'gpt-5.6-sol',
+        efforts: ['high', 'max', 'ultra'],
+        defaultEffort: 'ultra',
+      });
+      expect(events).toHaveLength(1);
+    } finally {
+      setActiveCatalogChangedListener(null);
+      setCustomProviders([]);
+    }
+  });
+
   it('按时间语义守卫 offset/Z 等价 revision,拒收真实旧值和坏值,接受真实新值', async () => {
     setActiveCatalog(catalogNamed('current-offset', '2026-08-02T10:00:00+08:00'));
     h.warn.mockClear();

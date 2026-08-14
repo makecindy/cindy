@@ -26,10 +26,12 @@
 
 import {
   BUNDLED_CATALOG,
+  buildUserProvider,
   findModelRegistryRoute,
   type AgentKind,
   type Catalog,
   type CatalogModel,
+  type CustomProviderConfig,
   type Provider,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
@@ -58,6 +60,11 @@ import {
 let base: Catalog | null = null;
 /** 用户自定义供应商(已 buildUserProvider 展开的标准 Provider),追加在 base 之后。 */
 let custom: Provider[] = [];
+/**
+ * 当前 owner 的原始自定义供应商配置。保留它是为了在 base registry 热更新时同步重建
+ * effort 投影；null 表示 custom 由测试/旧调用方直接注入，不能安全重建。
+ */
+let customConfigs: CustomProviderConfig[] | null = null;
 /**
  * codex cache 派生的规范化模型快照(原始 slug,不带 chatgpt/ 前缀)。先 augment 到
  * openai.codex,再从生效后的 codex 列表投影 openai.claude-code bridge,确保两边名称和排序同源。
@@ -747,6 +754,11 @@ export function getCatalogModelContextWindow(
 /** 由 host 的目录加载器(ensureActiveCatalogLoaded)在拉取成功后写入基础目录。 */
 export function setActiveCatalog(catalog: Catalog): void {
   base = catalog;
+  if (customConfigs) {
+    custom = customConfigs.map((config) =>
+      buildUserProvider(config, { modelRegistry: catalog.modelRegistry }),
+    );
+  }
   markChanged();
 }
 
@@ -772,6 +784,11 @@ export function commitModelPlaneFromCatalog(catalog: Catalog): void {
     providers,
     ...(catalog.modelRegistry ? { modelRegistry: catalog.modelRegistry } : {}),
   };
+  if (customConfigs) {
+    custom = customConfigs.map((config) =>
+      buildUserProvider(config, { modelRegistry: base?.modelRegistry }),
+    );
+  }
   markChanged();
 }
 
@@ -794,7 +811,20 @@ export function getModelPlaneWarnings(): readonly ModelPlaneWarning[] {
  * 传入的是已 `buildUserProvider` 展开的标准 `Provider[]`(**不含 API key**)。
  */
 export function setCustomProviders(providers: Provider[]): void {
+  customConfigs = null;
   custom = [...providers];
+  markChanged();
+}
+
+/**
+ * 注入当前 owner 的原始自定义供应商配置，并按当前 registry 展开。保留原配置供后续
+ * registry 热更新原子重建，避免 custom provider 持有旧 effort 快照。
+ */
+export function setCustomProviderConfigs(configs: CustomProviderConfig[]): void {
+  customConfigs = [...configs];
+  custom = customConfigs.map((config) =>
+    buildUserProvider(config, { modelRegistry: (base ?? BUNDLED_CATALOG).modelRegistry }),
+  );
   markChanged();
 }
 
