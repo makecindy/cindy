@@ -25,14 +25,12 @@ import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
 import { isKnownTextOnlyModel } from '../../shared/subagentModelSettings.js';
-
-const REMOTE_VISION_FALLBACK_UNSUPPORTED =
-  '当前模型不支持图片。SSH 远程会话暂不支持图片请求视觉兜底，请切换到支持图片的模型后重试。';
+import { t } from '../i18n.js';
 
 function remoteImageFallbackMessage(model: string): string | undefined {
   const settings = readSubagentModelSettings();
   return settings.visionFallbackEnabled !== false && isKnownTextOnlyModel(model)
-    ? REMOTE_VISION_FALLBACK_UNSUPPORTED
+    ? t('settings.subagentModels.remoteVisionFallbackUnsupported')
     : undefined;
 }
 

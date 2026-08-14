@@ -13,18 +13,24 @@
  *   可在 spawn 参数里显式覆盖），与「设置不静默覆盖 agent 自己声明的 model」语义一致。
  *
  * `*ProviderId` 是标准模型选择面板的「来源」维度（2026-07 用户定稿基准：全软件一个
- * 模型选择面板，处处同行为）。它是纯客户端偏好：派发通道只带模型 id；订阅前缀模型
- * （chatgpt/ / xai/）由 loopback proxy 按 model 前缀 per-request 路由到订阅，其余模型
- * 跟随会话自身路由。providerId 用于选择器按来源选模型与回显真实来源，不改写子代理
- * 请求的凭证路由。
+ * 模型选择面板，处处同行为）。普通子代理模型的 providerId 只用于选择器按来源选模型与
+ * 回显真实来源，不改写子代理请求的凭证路由。图片视觉兜底例外：同一个兜底模型可能由
+ * Claude/Codex/Pi 的不同供应商提供，因此用 visionFallbackProviderIds 保存每个 agent 实际
+ * 可用的来源，避免某个 agent 误拿另一个 agent 的凭证和 wire 协议。
  */
+export const VISION_FALLBACK_AGENTS = ['claude-code', 'codex', 'pi'] as const;
+export type VisionFallbackAgent = (typeof VISION_FALLBACK_AGENTS)[number];
+export type VisionFallbackProviderIds = Partial<Record<VisionFallbackAgent, string>>;
+
 export interface SubagentModelSettings {
   /** false = keep the original model behavior when an image is attached. */
   visionFallbackEnabled: boolean;
   /** null = use Cindy's automatic vision fallback model. */
   visionFallbackModel: string | null;
-  /** The provider route used for the selected vision fallback model. */
+  /** Legacy picker source for existing settings; new runtime routing uses visionFallbackProviderIds. */
   visionFallbackProviderId: string | null;
+  /** Per-agent provider routes for the selected vision fallback model. */
+  visionFallbackProviderIds: VisionFallbackProviderIds;
   claudeCode: string | null;
   claudeCodeProviderId: string | null;
   codex: string | null;
@@ -101,6 +107,7 @@ export const SUBAGENT_MODEL_SETTINGS_DEFAULTS: SubagentModelSettings = {
   visionFallbackEnabled: true,
   visionFallbackModel: null,
   visionFallbackProviderId: null,
+  visionFallbackProviderIds: {},
   claudeCode: null,
   claudeCodeProviderId: null,
   codex: null,
@@ -189,6 +196,38 @@ export function normalizeSubagentModelId(value: unknown): string | null {
   return trimmed;
 }
 
+export function normalizeVisionFallbackProviderIds(value: unknown): VisionFallbackProviderIds {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const input = value as Record<string, unknown>;
+  const normalized: VisionFallbackProviderIds = {};
+  for (const agent of VISION_FALLBACK_AGENTS) {
+    const providerId = normalizeSubagentModelId(input[agent]);
+    if (providerId) normalized[agent] = providerId;
+  }
+  return normalized;
+}
+
+export function hasVisionFallbackProviderMappings(
+  providerIds: VisionFallbackProviderIds | undefined,
+): boolean {
+  return Boolean(providerIds && Object.keys(providerIds).length > 0);
+}
+
+/**
+ * 新版按 agent 保存来源，防止 Claude/Codex/Pi 误用另一运行时的供应商。
+ * 空 map 代表旧版配置，兼容读取单一 providerId；新版 map 非空但当前 agent 缺值时
+ * 返回 null，由调用方提示用户重新选择可用模型，而不是退回纯文本原路由。
+ */
+export function visionFallbackProviderIdForAgent(
+  settings: Pick<SubagentModelSettings, 'visionFallbackProviderId' | 'visionFallbackProviderIds'>,
+  agent: VisionFallbackAgent,
+): string | null {
+  if (hasVisionFallbackProviderMappings(settings.visionFallbackProviderIds)) {
+    return settings.visionFallbackProviderIds[agent] ?? null;
+  }
+  return settings.visionFallbackProviderId;
+}
+
 /**
  * patch 配对一致性:按「patch 合并当前存储」后的有效模型判定 —— 有效模型为 null
  * (不指定)时,对应来源强制清为 null。来源依附于模型才有语义;不归一会允许两类
@@ -221,6 +260,22 @@ export function reconcileSubagentModelSettingsPatch(
     }
   };
   clearOrphan('visionFallbackModel', 'visionFallbackProviderId');
+  const effectiveVisionFallbackModel =
+    next.visionFallbackModel !== undefined
+      ? next.visionFallbackModel
+      : current.visionFallbackModel;
+  if (effectiveVisionFallbackModel === null) {
+    const effectiveProviderIds =
+      next.visionFallbackProviderIds !== undefined
+        ? next.visionFallbackProviderIds
+        : current.visionFallbackProviderIds;
+    if (
+      hasVisionFallbackProviderMappings(effectiveProviderIds)
+      || next.visionFallbackProviderIds !== undefined
+    ) {
+      next.visionFallbackProviderIds = {};
+    }
+  }
   clearOrphan('claudeCode', 'claudeCodeProviderId');
   clearOrphan('codex', 'codexProviderId');
   return next;
@@ -235,5 +290,16 @@ export function isValidSubagentModelIdInput(value: unknown): value is string | n
   return (
     trimmed.length <= MAX_SUBAGENT_MODEL_ID_LENGTH &&
     !containsControlCharacter(trimmed)
+  );
+}
+
+export function isValidVisionFallbackProviderIdsInput(
+  value: unknown,
+): value is Record<string, string | null> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const input = value as Record<string, unknown>;
+  return Object.keys(input).every(
+    (key) => (VISION_FALLBACK_AGENTS as readonly string[]).includes(key)
+      && isValidSubagentModelIdInput(input[key]),
   );
 }

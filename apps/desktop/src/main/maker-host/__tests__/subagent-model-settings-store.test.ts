@@ -93,6 +93,24 @@ describe('subagent model settings store', () => {
     );
   });
 
+  it('preserves separately resolved vision fallback providers for each agent', () => {
+    expect(__testing.normalize({
+      visionFallbackModel: 'vision-model',
+      visionFallbackProviderIds: {
+        'claude-code': 'claude-vision',
+        codex: 'codex-vision',
+        pi: 'pi-vision',
+      },
+    })).toEqual(withDefaults({
+      visionFallbackModel: 'vision-model',
+      visionFallbackProviderIds: {
+        'claude-code': 'claude-vision',
+        codex: 'codex-vision',
+        pi: 'pi-vision',
+      },
+    }));
+  });
+
   it('persists the codex (model, providerId, effort) triple written in one patch', () => {
     writeSubagentModelSettingsPatch({
       codex: 'gpt-5.6-terra',

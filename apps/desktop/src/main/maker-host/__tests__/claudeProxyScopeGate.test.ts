@@ -17,12 +17,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 
-const { visionFallbackSettings } = vi.hoisted(() => ({
+const { outboundFetch, visionFallbackSettings } = vi.hoisted(() => ({
+  outboundFetch: vi.fn(),
   visionFallbackSettings: {
     visionFallbackEnabled: true,
     visionFallbackModel: null as string | null,
     visionFallbackProviderId: null as string | null,
+    visionFallbackProviderIds: {} as Record<string, string>,
   },
 }));
 
@@ -53,6 +56,7 @@ vi.mock('../claude-fast-mode-log', () => ({
   createClaudeFastModeRequestTransform: () => () => null,
   createClaudeFastModeResponseObserver: () => () => undefined,
 }));
+vi.mock('../outbound-fetch', () => ({ outboundFetch }));
 
 import {
   createModelRoutingTransform,
@@ -79,6 +83,21 @@ function ctxWith(headers: Record<string, string>) {
   return { reqId: 1, method: 'POST', url: '/v1/messages', headers } as never;
 }
 
+function sse(events: unknown[]): string {
+  return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('');
+}
+
+function bridgeResponse() {
+  const response = Object.assign(new EventEmitter(), {
+    status: 200,
+    chunks: [] as string[],
+    writeHead(status: number) { this.status = status; return this; },
+    write(chunk: string) { this.chunks.push(chunk); return true; },
+    end(chunk?: string) { if (chunk) this.chunks.push(chunk); },
+  });
+  return response;
+}
+
 describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (issue #886)', () => {
   let gatewayKey: string | null;
 
@@ -91,12 +110,14 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     visionFallbackSettings.visionFallbackEnabled = true;
     visionFallbackSettings.visionFallbackModel = null;
     visionFallbackSettings.visionFallbackProviderId = null;
+    visionFallbackSettings.visionFallbackProviderIds = {};
   });
 
   afterEach(() => {
     clearSessionProvider('sess-grok');
     setCustomProviders([]);
     setCustomProviderKeyReader(() => null);
+    outboundFetch.mockReset();
   });
 
   it('claude-haiku 分类器请求(oauth-spawn)→ 换网关 key,不去 api.x.ai', () => {
@@ -210,6 +231,7 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     );
     visionFallbackSettings.visionFallbackModel = 'vision-model';
     visionFallbackSettings.visionFallbackProviderId = 'vision-provider';
+    visionFallbackSettings.visionFallbackProviderIds = { 'claude-code': 'vision-provider' };
 
     const decision = await Promise.resolve(createModelRoutingTransform()(
       {
@@ -229,6 +251,75 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
       bodyModelOverride: 'vision-model',
     });
   });
+
+  it.each(['openai-responses', 'openai-chat'] as const)(
+    'bridges a %s vision fallback instead of forwarding the text-only model',
+    async (wireProtocol) => {
+      setCustomProviders([
+        buildUserProvider({
+          id: `vision-${wireProtocol}`,
+          name: `Vision ${wireProtocol}`,
+          runtimes: {
+            'claude-code': {
+              baseUrl: 'https://vision.example/v1',
+              wireProtocol,
+              models: [{ id: 'vision-model', name: 'Vision Model' }],
+            },
+          },
+        }),
+      ]);
+      setCustomProviderKeyReader(() => 'vision-key');
+      visionFallbackSettings.visionFallbackModel = 'vision-model';
+      visionFallbackSettings.visionFallbackProviderId = `vision-${wireProtocol}`;
+
+      const decision = await Promise.resolve(createModelRoutingTransform()(
+        {
+          model: 'deepseek/deepseek-v4-pro',
+          messages: [{
+            role: 'user',
+            content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
+          }],
+        },
+        ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
+      ));
+
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      outboundFetch.mockResolvedValueOnce(new Response(
+        wireProtocol === 'openai-responses'
+          ? sse([
+              { type: 'response.created', response: { id: 'r', model: 'vision-model' } },
+              { type: 'response.output_item.added', output_index: 0, item: { type: 'message' } },
+              { type: 'response.output_text.delta', output_index: 0, delta: 'seen' },
+              { type: 'response.output_item.done', output_index: 0, item: { type: 'message' } },
+              { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 1, output_tokens: 1 } } },
+            ])
+          : sse([
+              { id: 'chat-r', model: 'vision-model', choices: [{ delta: { content: 'seen' }, finish_reason: null }] },
+              { id: 'chat-r', model: 'vision-model', choices: [{ delta: {}, finish_reason: 'stop' }] },
+            ]),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      ));
+      const response = bridgeResponse();
+      const body = {
+        model: 'deepseek/deepseek-v4-pro',
+        messages: [{
+          role: 'user',
+          content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
+        }],
+        stream: true,
+      };
+      await decision?.localHandler?.({
+        parsedBody: body,
+        ctx: ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
+        res: response,
+      } as never);
+
+      expect(JSON.parse(String(outboundFetch.mock.calls[0][1].body))).toMatchObject({
+        model: 'vision-model',
+      });
+      expect(response.chunks.join('')).toContain('message_stop');
+    },
+  );
 });
 
 describe('pi routingTransform — xdt session header selects the Pi provider route', () => {
@@ -293,6 +384,7 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     setSessionProvider('sess-pi', 'pi-vision-provider');
     visionFallbackSettings.visionFallbackModel = 'pi-vision-model';
     visionFallbackSettings.visionFallbackProviderId = 'pi-vision-provider';
+    visionFallbackSettings.visionFallbackProviderIds = { pi: 'pi-vision-provider' };
     registerPiProxySession('sess-pi', 'session-secret');
 
     const decision = await Promise.resolve(createModelRoutingTransform()(

@@ -38,6 +38,9 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
+import { createResponsesHandler } from '@cindy/anthropic-responses-bridge';
+import { createResponsesChatHandler, type ChatBridgeCapabilities } from '@cindy/responses-chat-bridge';
+import { EventEmitter } from 'node:events';
 
 import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
@@ -59,6 +62,8 @@ import { getSessionProvider } from './session-provider-store.js';
 import {
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
+  buildLocalHandlerHeaders,
+  resolveProviderRoute,
   resolveProviderRouteDecision,
   resolveSessionRouteDecision,
   rewriteModelIdForProviderRoute,
@@ -72,6 +77,7 @@ import {
   encryptedStripController,
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import {
   createClaudeFastModeRequestTransform,
@@ -93,8 +99,12 @@ import {
   anthropicRequestBodyContainsImage,
   configuredVisionFallbackModel,
   isTextOnlyModel,
-  VISION_FALLBACK_SETUP_REMINDER,
+  visionFallbackSetupReminder,
 } from './vision-fallback.js';
+import {
+  hasVisionFallbackProviderMappings,
+  visionFallbackProviderIdForAgent,
+} from '../../shared/subagentModelSettings.js';
 
 // scope = 'cc-proxy' → logger.ts 的 emit() 路由把这条流量并入统一 agent 流
 // (agent-*.ndjson, source=proxy)。child(sub) 会继续保持 'cc-proxy/sub' 前缀, routing 一致。
@@ -137,6 +147,154 @@ export function setClaudeProxySessionIdResolver(
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function withVisionFallbackModel(body: unknown, model: string): unknown {
+  return isPlainObject(body) ? { ...body, model } : body;
+}
+
+interface BufferedBridgeResponse extends EventEmitter {
+  statusCode: number;
+  headers: Record<string, string>;
+  headersSent: boolean;
+  chunks: Buffer[];
+  writeHead(status: number, headers?: Record<string, string>): BufferedBridgeResponse;
+  write(chunk: unknown): boolean;
+  end(chunk?: unknown): void;
+}
+
+function createBufferedBridgeResponse(): BufferedBridgeResponse {
+  const response = new EventEmitter() as BufferedBridgeResponse;
+  response.statusCode = 200;
+  response.headers = {};
+  response.headersSent = false;
+  response.chunks = [];
+  response.writeHead = (status, headers = {}) => {
+    response.statusCode = status;
+    response.headers = Object.fromEntries(
+      Object.entries(headers).map(([name, value]) => [name.toLowerCase(), String(value)]),
+    );
+    response.headersSent = true;
+    return response;
+  };
+  response.write = (chunk) => {
+    response.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8'));
+    return true;
+  };
+  response.end = (chunk) => {
+    if (chunk !== undefined) response.write(chunk);
+    response.emit('finish');
+  };
+  return response;
+}
+
+function responsesBridgeBaseUrl(
+  route: NonNullable<Awaited<ReturnType<typeof resolveProviderRoute>>>,
+): string | null {
+  const requestPath = route.routing.requestPath;
+  if (!requestPath || requestPath === '/responses') return route.routing.upstream;
+  return null;
+}
+
+function createVisionFallbackResponsesBridgeDecision(
+  route: NonNullable<Awaited<ReturnType<typeof resolveProviderRoute>>>,
+  agent: 'claude-code' | 'pi',
+  visionModel: string,
+  prefs: { reasoningEffort?: string; fast?: boolean },
+): RoutingDecision | null {
+  if (route.routing.wireProtocol !== 'openai-responses') return null;
+  const upstreamBase = responsesBridgeBaseUrl(route);
+  if (!upstreamBase) return null;
+  const { headers } = buildLocalHandlerHeaders(route, agent);
+  const realModel = rewriteModelIdForProviderRoute(route.providerId, agent, visionModel);
+  const handler = createResponsesHandler({
+    providers: [{
+      prefix: '',
+      upstreamBase,
+      buildHeaders: async () => headers,
+      maxOutputTokensSupported: true,
+    }],
+    logger: log,
+    fetchImpl: outboundFetch,
+  });
+  return {
+    localHandler: ({ parsedBody, ctx, res }) => handler.handle({
+      parsedBody: withVisionFallbackModel(parsedBody, realModel),
+      ctx,
+      res,
+      prefs,
+    }),
+  };
+}
+
+function createVisionFallbackChatBridgeDecision(
+  route: NonNullable<Awaited<ReturnType<typeof resolveProviderRoute>>>,
+  agent: 'claude-code' | 'pi',
+  visionModel: string,
+  prefs: { reasoningEffort?: string; fast?: boolean },
+): RoutingDecision | null {
+  if (route.routing.wireProtocol !== 'openai-chat') return null;
+  const { headers } = buildLocalHandlerHeaders(route, agent);
+  const realModel = rewriteModelIdForProviderRoute(route.providerId, agent, visionModel);
+  const capabilities: ChatBridgeCapabilities = { imageInput: 'image_url' };
+  const chatHandler = createResponsesChatHandler({
+    upstreamBase: route.routing.upstream,
+    ...(route.routing.requestPath ? { chatCompletionsPath: route.routing.requestPath } : {}),
+    buildHeaders: async () => headers,
+    rewriteModel: () => realModel,
+    capabilities,
+  }, { logger: log, fetchImpl: outboundFetch });
+  const handler = createResponsesHandler({
+    providers: [{
+      prefix: '',
+      upstreamBase: 'http://cindy.local',
+      buildHeaders: async () => ({}),
+    }],
+    logger: log,
+    fetchImpl: async (_url, init) => {
+      const response = createBufferedBridgeResponse();
+      let parsedBody: unknown;
+      try {
+        parsedBody = JSON.parse(String(init?.body ?? ''));
+      } catch {
+        return new Response(JSON.stringify({ error: { message: 'invalid Responses request body' } }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      await chatHandler.handle({ parsedBody, res: response as never });
+      return new Response(Buffer.concat(response.chunks), {
+        status: response.statusCode,
+        headers: response.headers,
+      });
+    },
+  });
+  return {
+    localHandler: ({ parsedBody, ctx, res }) => handler.handle({
+      parsedBody: withVisionFallbackModel(parsedBody, realModel),
+      ctx,
+      res,
+      prefs,
+    }),
+  };
+}
+
+function claudeVisionFallbackSetupReminderDecision(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      res.writeHead(400, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          message: visionFallbackSetupReminder(),
+        },
+      }));
+    },
+  };
 }
 
 /** 大小写不敏感取 header 值;缺失或空串 → null。 */
@@ -343,54 +501,84 @@ export function createModelRoutingTransform(): RoutingTransform {
           fromModel: body.model,
           configuredFallbackModel: visionModel,
         });
-        return {
-          localHandler: async ({ res }) => {
-            res.writeHead(400, {
-              'content-type': 'application/json; charset=utf-8',
-              'cache-control': 'no-store',
-            });
-            res.end(JSON.stringify({
-              type: 'error',
-              error: {
-                type: 'invalid_request_error',
-                message: VISION_FALLBACK_SETUP_REMINDER,
-              },
-            }));
-          },
-        };
+        return claudeVisionFallbackSetupReminderDecision();
       }
       log.info('claude vision fallback: text-only model + image → switching model', {
         fromModel: body.model,
         toModel: visionModel,
       });
-      const fallbackProviderId = settings.visionFallbackProviderId;
-      if (!fallbackProviderId) return { ...(decision ?? {}), bodyModelOverride: visionModel };
       const fallbackAgent = headerValue(ctx.headers, 'x-cindy-pi-session-id') ? 'pi' : 'claude-code';
-      return resolveProviderRouteDecision(
+      const fallbackProviderId = visionFallbackProviderIdForAgent(settings, fallbackAgent);
+      if (!fallbackProviderId && hasVisionFallbackProviderMappings(settings.visionFallbackProviderIds)) {
+        log.info('claude vision fallback: selected model has no provider for this agent', {
+          agent: fallbackAgent,
+          model: visionModel,
+        });
+        return claudeVisionFallbackSetupReminderDecision();
+      }
+      if (!fallbackProviderId) return { ...(decision ?? {}), bodyModelOverride: visionModel };
+      return resolveProviderRoute(
         fallbackProviderId,
         fallbackAgent,
-        _readGatewayKey(),
         visionModel,
       ).then((route) => {
-        if (
-          !route
-          || (route.routing.wireProtocol !== undefined
-            && route.routing.wireProtocol !== 'anthropic-messages')
-        ) {
-          log.warn('claude vision fallback provider cannot accept Anthropic messages requests', {
+        if (!route) {
+          log.warn('claude vision fallback provider route could not be resolved', {
             providerId: fallbackProviderId,
             model: visionModel,
           });
-          return decision;
+          return claudeVisionFallbackSetupReminderDecision();
         }
-        return {
-          ...(route.decision ?? {}),
-          bodyModelOverride: rewriteModelIdForProviderRoute(
-            fallbackProviderId,
-            fallbackAgent,
-            visionModel,
-          ),
+        const fallbackSessionId = fallbackAgent === 'pi'
+          ? headerValue(ctx.headers, 'x-cindy-pi-session-id')
+          : (() => {
+              const sdkSessionId = headerValue(ctx.headers, 'x-claude-code-session-id');
+              return sdkSessionId && _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null;
+            })();
+        const prefs = {
+          reasoningEffort: fallbackSessionId
+            ? getSessionEffort(fallbackSessionId) ?? undefined
+            : undefined,
+          fast: fallbackSessionId ? getSessionFastMode(fallbackSessionId) : false,
         };
+        const localBridge = createVisionFallbackResponsesBridgeDecision(
+          route,
+          fallbackAgent,
+          visionModel,
+          prefs,
+        ) ?? createVisionFallbackChatBridgeDecision(
+          route,
+          fallbackAgent,
+          visionModel,
+          prefs,
+        );
+        if (localBridge) return localBridge;
+        if (
+          route.routing.wireProtocol !== undefined
+          && route.routing.wireProtocol !== 'anthropic-messages'
+        ) {
+          log.warn('claude vision fallback provider protocol is unsupported', {
+            providerId: fallbackProviderId,
+            model: visionModel,
+            wireProtocol: route.routing.wireProtocol,
+          });
+          return claudeVisionFallbackSetupReminderDecision();
+        }
+        return resolveProviderRouteDecision(
+          fallbackProviderId,
+          fallbackAgent,
+          _readGatewayKey(),
+          visionModel,
+        ).then((resolved) => resolved
+          ? {
+              ...(resolved.decision ?? {}),
+              bodyModelOverride: rewriteModelIdForProviderRoute(
+                fallbackProviderId,
+                fallbackAgent,
+                visionModel,
+              ),
+            }
+          : claudeVisionFallbackSetupReminderDecision());
       });
     };
     return result instanceof Promise ? result.then(apply) : apply(result);

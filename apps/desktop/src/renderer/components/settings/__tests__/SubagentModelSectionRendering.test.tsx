@@ -251,6 +251,7 @@ const DEFAULTS = {
   visionFallbackEnabled: true,
   visionFallbackModel: null,
   visionFallbackProviderId: null,
+  visionFallbackProviderIds: {},
   claudeCode: null,
   claudeCodeProviderId: null,
   codex: null,

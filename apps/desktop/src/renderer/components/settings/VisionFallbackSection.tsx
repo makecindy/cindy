@@ -1,19 +1,42 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Puzzle } from 'lucide-react';
+import { effectiveSourceIdForModel, type ProviderView } from '@cindy/model-providers';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { useProviders } from '@/hooks/useProviders';
 import { toast } from '@/lib/toast';
 import {
   isKnownTextOnlyModel,
+  VISION_FALLBACK_AGENTS,
   type SubagentModelSettingsState,
+  type VisionFallbackProviderIds,
 } from '../../../shared/subagentModelSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 
+function providerIdsForVisionFallback(
+  providers: ProviderView[],
+  preferredProviderId: string | null,
+  modelId: string,
+): VisionFallbackProviderIds {
+  return Object.fromEntries(
+    VISION_FALLBACK_AGENTS.flatMap((agent) => {
+      const providerId = effectiveSourceIdForModel(
+        providers,
+        preferredProviderId,
+        modelId,
+        agent,
+      );
+      return providerId ? [[agent, providerId]] : [];
+    }),
+  ) as VisionFallbackProviderIds;
+}
+
 export function VisionFallbackRow() {
   const { t } = useTranslation();
+  const { providers } = useProviders();
   const [settings, setSettings] = useState<SubagentModelSettingsState | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -35,6 +58,7 @@ export function VisionFallbackRow() {
     visionFallbackEnabled?: boolean;
     visionFallbackModel?: string | null;
     visionFallbackProviderId?: string | null;
+    visionFallbackProviderIds?: VisionFallbackProviderIds;
   }) => {
     if (!settings || Object.entries(patch).every(([key, value]) => settings[key as keyof SubagentModelSettingsState] === value)) return;
     setPending(true);
@@ -55,6 +79,7 @@ export function VisionFallbackRow() {
 
   const isCustomized = settings.customizedKeys.includes('visionFallbackModel')
     || settings.customizedKeys.includes('visionFallbackProviderId')
+    || settings.customizedKeys.includes('visionFallbackProviderIds')
     || settings.customizedKeys.includes('visionFallbackEnabled');
   const sourceKey = isCustomized ? 'user' : 'product';
   const configuredFallbackIsTextOnly = settings.visionFallbackModel !== null
@@ -93,7 +118,14 @@ export function VisionFallbackRow() {
           <ModelSelector
             modelId={settings.visionFallbackModel ?? ''}
             effort=""
-            onModelChange={(model) => void save({ visionFallbackModel: model })}
+            onModelChange={(model) => void save({
+              visionFallbackModel: model,
+              visionFallbackProviderIds: providerIdsForVisionFallback(
+                providers,
+                settings.visionFallbackProviderId,
+                model,
+              ),
+            })}
             onEffortChange={() => undefined}
             currentProviderId={settings.visionFallbackProviderId}
             onProviderChange={(providerId, modelId) => {
@@ -102,6 +134,11 @@ export function VisionFallbackRow() {
               void save({
                 visionFallbackModel: nextModel,
                 visionFallbackProviderId: providerId,
+                visionFallbackProviderIds: providerIdsForVisionFallback(
+                  providers,
+                  providerId,
+                  nextModel,
+                ),
               });
             }}
             configurationEnabled={false}
@@ -116,6 +153,7 @@ export function VisionFallbackRow() {
               onSelect: () => void save({
                 visionFallbackModel: null,
                 visionFallbackProviderId: null,
+                visionFallbackProviderIds: {},
               }),
             }}
           />
@@ -127,6 +165,7 @@ export function VisionFallbackRow() {
             visionFallbackEnabled: true,
             visionFallbackModel: null,
             visionFallbackProviderId: null,
+            visionFallbackProviderIds: {},
           })}
         />
         <Switch

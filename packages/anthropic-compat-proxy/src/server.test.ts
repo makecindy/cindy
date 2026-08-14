@@ -973,7 +973,7 @@ describe('anthropic-compat-proxy routingTransform', () => {
     expect(JSON.parse(gateway.bodies[0]).model).toBe('gpt-5.5'); // 发上游已去前缀
   });
 
-  it('applies bodyModelOverride after request transforms while preserving the routing model', async () => {
+  it('applies bodyModelOverride before request transforms while preserving the routing model', async () => {
     const gateway = await startFakeUpstream((_i, _b, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); });
     const chatgpt = await startFakeUpstream((_i, _b, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); });
     upstreamClose = async () => { await gateway.close(); await chatgpt.close(); };
@@ -982,7 +982,7 @@ describe('anthropic-compat-proxy routingTransform', () => {
       upstream: chatgpt.url,
       transformRequest: [(body) => {
         const request = body as { model?: string; transformed?: boolean };
-        return { ...request, transformed: true };
+        return { ...request, transformed: true, transformedForModel: request.model };
       }],
       routingTransform: (body) => {
         const model = (body as { model?: string }).model ?? '';
@@ -999,6 +999,7 @@ describe('anthropic-compat-proxy routingTransform', () => {
     expect(JSON.parse(gateway.bodies[0])).toMatchObject({
       model: 'codex/gpt-5.6-luna',
       transformed: true,
+      transformedForModel: 'codex/gpt-5.6-luna',
     });
   });
 

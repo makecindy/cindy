@@ -1,9 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('electron', () => ({
+  app: {
+    getPreferredSystemLanguages: () => ['en-US'],
+    getLocale: () => 'en-US',
+  },
+}));
 
 import {
   anthropicRequestBodyContainsImage,
   configuredVisionFallbackModel,
 } from '../vision-fallback.js';
+import { setMainLocale, t } from '../../i18n.js';
 
 describe('anthropicRequestBodyContainsImage', () => {
   it('ignores images attached in earlier conversation turns', () => {
@@ -31,5 +39,18 @@ describe('configuredVisionFallbackModel', () => {
   it('returns only the model explicitly configured by the user', () => {
     expect(configuredVisionFallbackModel('gpt-5.6-luna')).toBe('gpt-5.6-luna');
     expect(configuredVisionFallbackModel(null)).toBeNull();
+  });
+});
+
+describe('vision fallback setup reminder translations', () => {
+  it.each([
+    ['zh-CN', '当前模型不支持图片'],
+    ['zh-TW', '目前的模型不支援圖片'],
+    ['en', 'does not support images'],
+    ['ja', '画像に対応していません'],
+    ['ko', '이미지를 지원하지 않습니다'],
+  ] as const)('provides a localized setup reminder for %s', (locale, expected) => {
+    setMainLocale(locale);
+    expect(t('settings.subagentModels.visionFallbackSetupReminder')).toContain(expected);
   });
 });

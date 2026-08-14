@@ -2317,6 +2317,8 @@
       "visionFallbackHint": "When the current model cannot handle images, Cindy uses the model you choose here; if none is chosen, it only shows a setup reminder.",
       "visionFallbackTextOnlyWarning": "This model cannot handle images. Choose a model that supports images in Settings.",
       "visionFallbackAutomatic": "Not set, remind only",
+      "visionFallbackSetupReminder": "The current model does not support images. Go to Settings → Tools → Vision fallback for image requests, choose an image-capable model, then try again.",
+      "remoteVisionFallbackUnsupported": "The current model does not support images. Vision fallback for image requests is not available in SSH remote sessions; switch to an image-capable model and try again.",
       "saveFailed": "Failed to save subagent settings",
       "guardrails": {
         "title": "Codex subagent guardrails",

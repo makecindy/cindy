@@ -1750,42 +1750,39 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       });
     }
 
+    // 原始 client model(transform 链与 bodyModelOverride 之前),recovery 规则据此与
+    // 下一轮主动 strip 看到的入站 model 对齐 —— 必须保留替换前的原值,不能用覆盖后的值。
+    const originalClientModel = extractBodyModel(rawBody);
+
+    // bodyModelOverride 必须在 transform 链之前应用。部分 transform 会按 model 判断
+    // 上游兼容字段（例如 xAI 的 Responses 请求），若先按原始纯文本模型 transform、
+    // 再覆写为兜底模型，得到的 body 可能不符合最终上游的 wire 要求。
+    let bodyForTransforms = rawBody;
+    if (
+      decision?.bodyModelOverride
+      && decision.bodyModelOverride !== originalClientModel
+      && isRecord(rawParsed)
+      && typeof rawParsed.model === 'string'
+    ) {
+      bodyForTransforms = Buffer.from(JSON.stringify({
+        ...rawParsed,
+        model: decision.bodyModelOverride,
+      }), 'utf8');
+      logger.info?.('overriding request model via bodyModelOverride', {
+        reqId,
+        fromModel: originalClientModel,
+        toModel: decision.bodyModelOverride,
+      });
+    }
+
     // transform 链的 ctx 附带最终上游(override 已生效):按目标上游做兼容改写的
     // transform 据此判断去向,不必在 host 侧复刻路由逻辑。
     const transformCtx: RequestTransformCtx = {
       ...requestCtx,
       upstreamBase: formatUpstreamBase(route.target),
     };
-    const transformed = runTransforms(rawBody, contentType, transforms, transformCtx, logger);
-    const outBody = transformed ?? rawBody;
-
-    // 原始 client model(transform 链与 bodyModelOverride 之前),recovery 规则据此与
-    // 下一轮主动 strip 看到的入站 model 对齐 —— 必须保留替换前的原值,不能用覆盖后的值。
-    const originalClientModel = extractBodyModel(rawBody);
-
-    // 纯文本模型 + 本轮含图 → host 让整轮切到可识图模型。替换发生在 transform 链**之后**,
-    // 所以 provider 兼容改写仍基于原始 model;非 JSON / 解析失败时保持 outBody 透传。
-    let forwardBody = outBody;
-    if (
-      decision?.bodyModelOverride
-      && decision.bodyModelOverride !== originalClientModel
-      && contentType.toLowerCase().startsWith('application/json')
-    ) {
-      try {
-        const overrideParsed: unknown = JSON.parse(outBody.toString('utf8'));
-        if (isRecord(overrideParsed) && typeof overrideParsed.model === 'string') {
-          overrideParsed.model = decision.bodyModelOverride;
-          forwardBody = Buffer.from(JSON.stringify(overrideParsed), 'utf8');
-          logger.info?.('overriding request model via bodyModelOverride', {
-            reqId,
-            fromModel: originalClientModel,
-            toModel: decision.bodyModelOverride,
-          });
-        }
-      } catch {
-        // 保留 outBody 透传,绝不因覆盖失败中断转发。
-      }
-    }
+    const transformed = runTransforms(bodyForTransforms, contentType, transforms, transformCtx, logger);
+    const forwardBody = transformed ?? bodyForTransforms;
 
     let parsedForRewrite: unknown = rawParsed;
     if (parsedForRewrite === undefined && contentType.toLowerCase().startsWith('application/json')) {
@@ -1849,7 +1846,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         method,
         url,
         originalBytes: rawBody.length,
-        outBytes: outBody.length,
+        outBytes: forwardBody.length,
       });
     }
 

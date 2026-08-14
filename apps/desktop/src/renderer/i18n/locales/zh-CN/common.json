@@ -2312,6 +2312,8 @@
       "visionFallbackHint": "当前模型不支持图片时，Cindy 会使用你在这里选择的模型；未选择时只提醒你到设置配置。",
       "visionFallbackTextOnlyWarning": "此模型不支持图片，请在设置里选择支持图片的模型。",
       "visionFallbackAutomatic": "不设置，仅提醒",
+      "visionFallbackSetupReminder": "当前模型不支持图片。请前往设置 → 工具 → 图片请求视觉兜底模型，选择支持图片的模型后重试。",
+      "remoteVisionFallbackUnsupported": "当前模型不支持图片。SSH 远程会话暂不支持图片请求视觉兜底，请切换到支持图片的模型后重试。",
       "saveFailed": "保存 Subagent 设置失败",
       "guardrails": {
         "title": "Codex Subagent 护栏",

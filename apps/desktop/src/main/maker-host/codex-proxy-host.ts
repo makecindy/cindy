@@ -81,8 +81,12 @@ import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import {
   configuredVisionFallbackModel,
   isTextOnlyModel,
-  VISION_FALLBACK_SETUP_REMINDER,
+  visionFallbackSetupReminder,
 } from './vision-fallback.js';
+import {
+  hasVisionFallbackProviderMappings,
+  visionFallbackProviderIdForAgent,
+} from '../../shared/subagentModelSettings.js';
 
 // scope = 'codex-proxy'。保持独立 scope,方便后续 E2E 日志脚本按 codex proxy 过滤。
 const log = createMakerLogger('codex-proxy');
@@ -2461,7 +2465,7 @@ function codexVisionFallbackSetupReminderDecision(): RoutingDecision {
         error: {
           type: 'invalid_request_error',
           code: 'cindy_vision_fallback_not_configured',
-          message: VISION_FALLBACK_SETUP_REMINDER,
+          message: visionFallbackSetupReminder(),
         },
       }));
     },
@@ -2504,7 +2508,15 @@ export function withCodexVisionFallback(
           });
           return codexVisionFallbackSetupReminderDecision();
         }
-        const fallbackProviderId = settings.visionFallbackProviderId;
+        const fallbackProviderId = visionFallbackProviderIdForAgent(settings, 'codex');
+        if (!fallbackProviderId && hasVisionFallbackProviderMappings(settings.visionFallbackProviderIds)) {
+          log.info('codex vision fallback: selected model has no provider for this agent', {
+            threadId: selectedThreadIdFromHeaders(ctx.headers),
+            sessionId: sessionIdFromHeaders(ctx.headers),
+            model: visionModel,
+          });
+          return codexVisionFallbackSetupReminderDecision();
+        }
         log.info('codex vision fallback: text-only model + image → switching model', {
           threadId: selectedThreadIdFromHeaders(ctx.headers),
           sessionId: sessionIdFromHeaders(ctx.headers),

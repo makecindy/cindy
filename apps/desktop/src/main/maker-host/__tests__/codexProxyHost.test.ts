@@ -344,7 +344,9 @@ describe('withCodexVisionFallback', () => {
     expect(decision).toEqual({ localHandler: expect.any(Function) });
     const response = { writeHead: vi.fn(), end: vi.fn() };
     await decision?.localHandler?.({ res: response } as never);
-    expect(response.end).toHaveBeenCalledWith(expect.stringContaining('请前往设置'));
+    expect(JSON.parse(response.end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'cindy_vision_fallback_not_configured' },
+    });
   });
 
   it('does not fall back when the body has no image', async () => {

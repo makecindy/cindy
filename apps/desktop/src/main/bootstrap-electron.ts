@@ -699,7 +699,9 @@ import {
   isCodexSubagentEffort,
   isValidCodexSubagentConcurrencyInput,
   isValidSubagentModelIdInput,
+  isValidVisionFallbackProviderIdsInput,
   normalizeSubagentModelId,
+  normalizeVisionFallbackProviderIds,
   reconcileSubagentModelSettingsPatch,
   type SubagentModelSettingsPatch,
 } from '../shared/subagentModelSettings.js';
@@ -7344,6 +7346,17 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
       throwIpcError('INVALID_PARAMS', `subagent model ${key} must be a valid string or null`);
     }
     patch[key] = normalizeSubagentModelId(value);
+  }
+  if ('visionFallbackProviderIds' in input) {
+    if (!isValidVisionFallbackProviderIdsInput(input.visionFallbackProviderIds)) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'subagent visionFallbackProviderIds must map known agents to valid provider IDs',
+      );
+    }
+    patch.visionFallbackProviderIds = normalizeVisionFallbackProviderIds(
+      input.visionFallbackProviderIds,
+    );
   }
   if ('visionFallbackEnabled' in input && typeof input.visionFallbackEnabled !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'subagent visionFallbackEnabled must be a boolean');

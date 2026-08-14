@@ -9,6 +9,7 @@ import {
   isCodexSubagentEffort,
   normalizeCodexSubagentConcurrency,
   normalizeSubagentModelId,
+  normalizeVisionFallbackProviderIds,
   type SubagentModelSettings,
   type SubagentModelSettingsPatch,
 } from '../../shared/subagentModelSettings.js';
@@ -39,6 +40,8 @@ function normalize(raw: unknown): SubagentModelSettings {
     visionFallbackModel,
     visionFallbackProviderId:
       visionFallbackModel === null ? null : normalizeSubagentModelId(input.visionFallbackProviderId),
+    visionFallbackProviderIds:
+      visionFallbackModel === null ? {} : normalizeVisionFallbackProviderIds(input.visionFallbackProviderIds),
     claudeCode,
     // 磁盘直读同样执行配对不变量:模型未指定时来源无所依附,外部手改文件留下的
     // 孤儿 providerId 会让 isCustomized 误报「已自定义」却显示「不指定」(codex review)。
@@ -93,6 +96,12 @@ export function readSubagentModelSettingsState(): OverrideSettingsState<Subagent
     && state.customizedKeys.includes('visionFallbackProviderId')
   ) {
     orphanPatch.visionFallbackProviderId = null;
+  }
+  if (
+    state.value.visionFallbackModel === null
+    && state.customizedKeys.includes('visionFallbackProviderIds')
+  ) {
+    orphanPatch.visionFallbackProviderIds = {};
   }
   if (state.value.claudeCode === null && state.customizedKeys.includes('claudeCodeProviderId')) {
     orphanPatch.claudeCodeProviderId = null;

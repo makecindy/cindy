@@ -3,11 +3,13 @@ import {
   KNOWN_TEXT_ONLY_MODEL_IDS,
   normalizeSubagentModelId,
 } from '../../shared/subagentModelSettings.js';
+import { t } from '../i18n.js';
 
 export { KNOWN_TEXT_ONLY_MODEL_IDS as TEXT_ONLY_MODEL_IDS };
 
-export const VISION_FALLBACK_SETUP_REMINDER =
-  '当前模型不支持图片。请前往设置 → 工具 → 图片请求视觉兜底模型，选择支持图片的模型后重试。';
+export function visionFallbackSetupReminder(): string {
+  return t('settings.subagentModels.visionFallbackSetupReminder');
+}
 
 export function isTextOnlyModel(model: string): boolean {
   return isKnownTextOnlyModel(model);

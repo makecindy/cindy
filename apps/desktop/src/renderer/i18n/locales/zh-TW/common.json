@@ -2311,6 +2311,8 @@
       "visionFallbackHint": "目前模型不支援圖片時，Cindy 會使用你在這裡選擇的模型；未選擇時只提醒你前往設定配置。",
       "visionFallbackTextOnlyWarning": "此模型不支援圖片，請在設定中選擇支援圖片的模型。",
       "visionFallbackAutomatic": "不設定，僅提醒",
+      "visionFallbackSetupReminder": "目前的模型不支援圖片。請前往設定 → 工具 → 圖片請求視覺備援模型，選擇支援圖片的模型後再試一次。",
+      "remoteVisionFallbackUnsupported": "目前的模型不支援圖片。SSH 遠端工作階段暫不支援圖片請求視覺備援，請切換到支援圖片的模型後再試一次。",
       "codexV2ModelHint": "Subagent 預設模型必須是 Codex 自身模型目錄內的模型，目錄外的模型（如經相容橋接入的第三方模型）會被 Codex 拒絕；Sol / Terra（Multi-Agent V2）進一步只接受 V2 目錄模型（當前為 gpt-5.6-sol 與 gpt-5.6-terra），舊版（V1）無 V2 限制。",
       "saveFailed": "儲存 Subagent 設定失敗",
       "guardrails": {
