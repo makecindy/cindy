@@ -1604,7 +1604,9 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('testID="newSession.attachmentToggleButton"');
     expect(newSource).toContain('height: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
     expect(newSource).toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
-    expect(newSource).toContain('marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
+    expect(newSource).toContain('minWidth: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(newSource).not.toContain('marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
+    expect(newSource).not.toContain('marginHorizontal: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(newSource).not.toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(newSource).toContain('const renderComposerToolbar = () => (');
     expect(newSource).toContain('PaperPlaneIcon');

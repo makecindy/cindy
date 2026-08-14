@@ -124,7 +124,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('testID="session.attachmentToggleButton"');
     expect(source).toContain('height: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
     expect(source).toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
-    expect(source).toContain('marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
+    expect(source).toContain('minWidth: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(source).not.toContain('marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
+    expect(source).not.toContain('marginHorizontal: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(source).not.toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(composerInputSource).toContain('toolbar={renderComposerToolbar()}');
     expect(source).toContain('const renderComposerToolbar = () => (');

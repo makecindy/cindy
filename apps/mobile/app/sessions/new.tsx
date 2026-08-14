@@ -6568,15 +6568,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.xs,
     height: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
     marginRight: spacing.xs,
+    minWidth: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
   },
-  // 直接父层本身就是 44×44,负 margin 只抵消它对 mainRow 的额外占位。
+  // 热区流内就是 44×44,祖先链不再靠负 margin / 溢出子节点。
   // 可见加号仍是 34pt,与文字 / 麦克风共中线。
   composerCompactAttachmentHit: {
     alignItems: 'center',
     height: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
     justifyContent: 'center',
-    marginHorizontal: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2,
-    marginVertical: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2,
     width: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
   },
   composerIconButtonActive: {
