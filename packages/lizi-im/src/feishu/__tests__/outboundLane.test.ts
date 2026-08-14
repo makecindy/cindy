@@ -317,6 +317,24 @@ describe('feishu outbound lane routing', () => {
       expect.objectContaining({ params: { receive_id_type: 'chat_id' } }),
     );
   });
+
+  it('claimPatchableOpener consumes the registered opener exactly once', async () => {
+    outbound.pushReplyAnchor('g/oc_g/omt_p1', 'om_opener');
+    outbound.pushPatchableOpener('g/oc_g/omt_p1', 'om_opener');
+
+    expect(outbound.claimPatchableOpener('g/oc_g/omt_p1')).toBe('om_opener');
+    // 第二次认领必须是 null — 同话题下一条真消息不能复用旧开场白卡 id。
+    expect(outbound.claimPatchableOpener('g/oc_g/omt_p1')).toBeNull();
+  });
+
+  it('unbindClient clears pending patchable openers (no cross-generation claim)', async () => {
+    outbound.pushReplyAnchor('g/oc_g/omt_p2', 'om_opener');
+    outbound.pushPatchableOpener('g/oc_g/omt_p2', 'om_opener');
+
+    outbound.unbindClient(); // 换账号/断线: 旧账号的开场白卡不得再被认领
+    outbound.bindClient(creds);
+    expect(outbound.claimPatchableOpener('g/oc_g/omt_p2')).toBeNull();
+  });
 });
 
 describe('feishu card lane registry', () => {

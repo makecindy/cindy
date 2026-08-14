@@ -138,6 +138,32 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     return streamingText.patchMarkdown(messageId, markdown);
   }
 
+  /**
+   * 消费群主流 @ 开话题的 pending 开场白卡: 认领并把 markdown patch 上去 —
+   * 非流式终态(!stop / 纯 unsupported)截流时, 「思考中」卡就地变成回复,
+   * 不会卡住也不会被同话题下一条消息 patch 错卡。无 pending opener 返回
+   * false(调用方走正常发送)。
+   */
+  async consumePendingOpenerCard(userId: string, markdown: string): Promise<boolean> {
+    const openerId = outbound.claimPatchableOpener(userId);
+    if (!openerId) return false;
+    await streamingText.patchMarkdown(openerId, markdown);
+    return true;
+  }
+
+  /**
+   * 撤回群主流 @ 开话题的 pending 开场白卡(slash 等自备回复的终态分支用 —
+   * 编排层拿不到回复文案, 认领后撤回, 让 slash 的回复成为话题里第一条实质
+   * 内容)。无 pending opener 返回 false。撤回失败只 log(卡残留但不被误
+   * patch — 认领已完成)。
+   */
+  async discardPendingOpenerCard(userId: string): Promise<boolean> {
+    const openerId = outbound.claimPatchableOpener(userId);
+    if (!openerId) return false;
+    await outbound.recallOwnMessage(openerId);
+    return true;
+  }
+
   sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,

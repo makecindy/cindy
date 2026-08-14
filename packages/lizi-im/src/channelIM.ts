@@ -133,6 +133,21 @@ export interface RichChannelIM extends TextChannelIM {
    * 变成 thread root 的 scopeKey, 而不泄漏渠道 messageId 编码格式。
    */
   threadKeyForMessage?(messageId: string): string;
+
+  /**
+   * 群主流 @ 开话题的「思考中」开场白卡被非流式终态(!stop / 纯 unsupported
+   * 等)截流时, 编排层用本方法消费: 认领该 lane 的 pending opener 并把 markdown
+   * patch 上去(开场白卡就地变成回复, 替代另发一条), 返回 true; 无 pending
+   * opener 返回 false, 调用方走正常发送。仅 feishu 实现。
+   */
+  consumePendingOpenerCard?(userId: string, markdown: string): Promise<boolean>;
+
+  /**
+   * 同上场景但终态内容由其它组件自行发送(slash 自备回复, 编排层拿不到
+   * 文案): 认领并**撤回** pending opener 卡(「思考中」卡不留在话题里),
+   * 返回 true; 无 pending opener 返回 false。仅 feishu 实现。
+   */
+  discardPendingOpenerCard?(userId: string): Promise<boolean>;
 }
 
 /** Backward-compatible name for the existing rich-card channel contract. */

@@ -46,6 +46,25 @@ export function createMessageHandler(
   turnRunner: ImTurnRunner,
 ): (im: TextChannelIM) => () => void {
   const { ui, channel, threadScoped } = adapter;
+  // 富卡渠道(仅 feishu 实现这两个能力): 群主流 @ 开话题的「思考中」开场白卡
+  // 在非流式终态分支的收口 — 见各分支内 consume/discard 调用点。
+  const richIm = adapter.output?.kind === 'rich-card' ? adapter.output.im : null;
+
+  /**
+   * 尝试消费 pending 开场白卡并把终态回复 patch 上去。消费成功返回 true
+   * (调用方跳过另发); 无 pending opener 或 patch 失败返回 false(回落正常
+   * 发送 — 失败场景下发送兜底, 且认领已完成, 同话题下一条不会再 patch 错卡)。
+   */
+  async function consumeOpenerWithText(userId: string, text: string): Promise<boolean> {
+    if (!richIm?.consumePendingOpenerCard) return false;
+    try {
+      return await richIm.consumePendingOpenerCard(userId, text);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`consumePendingOpenerCard failed (fallback to normal send): ${msg}`);
+      return false;
+    }
+  }
   const log = createLogger(`im:${channel}:msg`);
 
   /** Per-user serial lock — same shape as legacy messageRouter.turnLocks. */
@@ -154,17 +173,26 @@ export function createMessageHandler(
         log.error(`stopActiveTurn threw: ${msg}`);
         reply = ui.agent.sendInternalError(msg);
       }
-      try {
-        await im.sendMarkdownText(event.senderId, reply, { threadTs: event.scopeKey });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.warn(`!stop reply failed (non-fatal): ${msg}`);
+      // 群主流 @ 开话题的首条若是 !stop: 「思考中」开场白卡就地 patch 成
+      // stop 回复(消费 pending opener), 不再另发一条; 消费不了再走正常发送。
+      const openerConsumed = await consumeOpenerWithText(event.senderId, reply);
+      if (!openerConsumed) {
+        try {
+          await im.sendMarkdownText(event.senderId, reply, { threadTs: event.scopeKey });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`!stop reply failed (non-fatal): ${msg}`);
+        }
       }
       return;
     }
 
     // ── slash command (only on plain text: no attachments, no unsupported) ──
     if (pureTextCommandInput && looksLikeSlashCommand(event.text)) {
+      // slash 自备回复(编排层拿不到文案): 撤回「思考中」开场白卡 — 认领后
+      // 删除, 让 slash 回复成为话题里第一条实质内容; 卡留着会卡住且同话题
+      // 下一条真消息 patch 错卡。
+      await richIm?.discardPendingOpenerCard?.(event.senderId);
       try {
         await slash.handleSlashCommand(event.text, {
           botContextId: event.contextId,
@@ -181,13 +209,18 @@ export function createMessageHandler(
 
     // ── pure-unsupported: reply directly, do NOT invoke agent ───────────────
     if (!hasContent && event.unsupported.length > 0) {
-      try {
-        await im.sendText(event.senderId, ui.agent.unsupportedOnly(event.unsupported), {
-          threadTs: event.scopeKey,
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.warn(`unsupportedOnly send failed (non-fatal): ${msg}`);
+      const notice = ui.agent.unsupportedOnly(event.unsupported);
+      // 同 !stop: 开场白卡就地 patch 成 unsupported 提示, 消费不了再另发。
+      const openerConsumed = await consumeOpenerWithText(event.senderId, notice);
+      if (!openerConsumed) {
+        try {
+          await im.sendText(event.senderId, notice, {
+            threadTs: event.scopeKey,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`unsupportedOnly send failed (non-fatal): ${msg}`);
+        }
       }
       return;
     }

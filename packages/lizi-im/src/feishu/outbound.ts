@@ -54,6 +54,9 @@ export function unbindClient(): void {
   creds = null;
   laneAnchors.clear();
   cardLanes.clear();
+  // 换代后旧账号的开场白卡不得再被认领(claim 会把它当本轮流式卡 patch,
+  // 把新账号的答案打到旧账号的卡上)。
+  patchableOpeners.clear();
 }
 
 // ── group lane reply anchors ──────────────────────────────────────────────────
