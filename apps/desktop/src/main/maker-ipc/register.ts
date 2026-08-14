@@ -7849,6 +7849,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       createDefaults,
       inheritSourcePermissionMode,
     } = params;
+    const orcaOriginTeamId =
+      origin?.kind === 'orca' && typeof origin.teamId === 'string'
+        ? origin.teamId
+        : null;
+    const acquireOriginVendorDispatchLease = orcaOriginTeamId
+      ? () => acquireOrcaTeamDispatchLease(orcaOriginTeamId)
+      : undefined;
     if (!message) {
       return {
         ok: false,
@@ -8076,7 +8083,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             // (jump/resume 分支是既有 session 重建,不在此发,见 wakeKind:'resumed' 分支。)
             broadcastSessionCreated(session.id);
           },
-          onDispatching: () => dispatchAgentIslandUserPrompt(session.id),
+          acquireVendorDispatchLease: acquireOriginVendorDispatchLease,
+          onDispatching: () => {
+            assertOrcaQueueOriginActive(origin);
+            dispatchAgentIslandUserPrompt(session.id);
+          },
         });
         if (createdPreviewStarted) {
           if (sendResult.accepted) {
@@ -8334,6 +8345,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             {
               planMode: false,
               onAccepted: persistUserMessage,
+              acquireVendorDispatchLease: acquireOriginVendorDispatchLease,
               onDispatching: () => {
                 assertOrcaQueueOriginActive(origin);
                 dispatchAgentIslandUserPrompt(targetSessionId);
@@ -8441,6 +8453,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           {
             planMode: false,
             onAccepted: persistUserMessage,
+            acquireVendorDispatchLease: acquireOriginVendorDispatchLease,
             onDispatching: () => {
               assertOrcaQueueOriginActive(origin);
               dispatchAgentIslandUserPrompt(targetSessionId);

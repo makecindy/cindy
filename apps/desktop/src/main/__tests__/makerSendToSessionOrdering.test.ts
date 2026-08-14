@@ -385,11 +385,14 @@ describe('sendToSession ordering', () => {
     expect(helperBlock).not.toContain('assertDesktopSendDispatched(sendResult');
     expect(createBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(session, message, clientId, {');
     expect(createBranch).toContain('planMode: false,');
+    expect(createBranch).toContain('acquireVendorDispatchLease: acquireOriginVendorDispatchLease,');
+    expect(createBranch).toContain('assertOrcaQueueOriginActive(origin);');
     expect(createBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session create');");
     expect(liveBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(liveBranch).toContain('live,');
     expectOrder(liveBranch, 'message,', 'clientId,');
     expect(liveBranch).toContain('onAccepted: persistUserMessage,');
+    expect(liveBranch).toContain('acquireVendorDispatchLease: acquireOriginVendorDispatchLease,');
     expect(liveBranch).toContain('onDispatching: () => {');
     expect(liveBranch).toContain('assertOrcaQueueOriginActive(origin);');
     expect(liveBranch).toContain('dispatchAgentIslandUserPrompt(targetSessionId);');
@@ -398,11 +401,14 @@ describe('sendToSession ordering', () => {
     expect(resumedBranch).toContain('session,');
     expectOrder(resumedBranch, 'message,', 'clientId,');
     expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
+    expect(resumedBranch).toContain('acquireVendorDispatchLease: acquireOriginVendorDispatchLease,');
     expect(resumedBranch).toContain('onDispatching: () => {');
     expect(resumedBranch).toContain('assertOrcaQueueOriginActive(origin);');
     expect(resumedBranch).toContain('dispatchAgentIslandUserPrompt(targetSessionId);');
     expect(resumedBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session resumed');");
     expect(block).toContain('let userMessagePersisted = false;');
+    expect(block).toContain("origin?.kind === 'orca' && typeof origin.teamId === 'string'");
+    expect(block).toContain('? () => acquireOrcaTeamDispatchLease(orcaOriginTeamId)');
     expectOrder(
       block,
       'await createDbMessage(targetSessionId, {',
@@ -502,10 +508,10 @@ describe('sendToSession ordering', () => {
     const acceptedBlock = extractBetween(
       createBranch,
       'onAccepted: async () => {',
-      '          },\n          onDispatching:',
+      '          },\n          acquireVendorDispatchLease:',
     );
     const sendCallEndNeedle =
-      '          onDispatching: () => dispatchAgentIslandUserPrompt(session.id),\n        });';
+      "assertDesktopSendDispatched(sendResult, 'send_to_session create');";
     const afterSendResolves = createBranch.slice(
       createBranch.indexOf(sendCallEndNeedle) + sendCallEndNeedle.length,
     );
