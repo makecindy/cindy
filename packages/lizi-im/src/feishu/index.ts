@@ -147,6 +147,10 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   async consumePendingOpenerCard(userId: string, markdown: string): Promise<boolean> {
     const openerId = outbound.claimPatchableOpener(userId);
     if (!openerId) return false;
+    // 触发时的 client — patch 失败后撤回必须 pin 到它: 中途换凭证时不得
+    // 拿新账号的 client 删除旧账号的开场白(客户端 close 后撤回自然失败,
+    // 由 log 兜底, 不会跨账号操作)。
+    const triggeringClient = outbound.getBoundClient();
     try {
       await streamingText.patchMarkdown(openerId, markdown);
       return true;
@@ -157,7 +161,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       // (与孤儿撤回同一最终边界, 已 log)。
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`consumePendingOpenerCard patch failed — recalling opener: ${msg}`);
-      await outbound.recallOwnMessage(openerId);
+      if (triggeringClient) {
+        await outbound.recallOwnMessageWith(triggeringClient, openerId);
+      }
       outbound.rearmAnchorToTrigger(userId);
       return false;
     }
@@ -172,6 +178,8 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   async consumePendingOpenerAsCard(userId: string, spec: InteractiveCardSpec): Promise<boolean> {
     const openerId = outbound.claimPatchableOpener(userId);
     if (!openerId) return false;
+    // 同 consumePendingOpenerCard: 撤回 pin 到触发时的 client。
+    const triggeringClient = outbound.getBoundClient();
     try {
       await outbound.updateInteractive(openerId, spec);
       // 替换后的交互卡同样要登记发卡 lane — 否则按钮回调 resolveCardLane
@@ -183,7 +191,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       // 消息, 回落正常发卡。
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`consumePendingOpenerAsCard replace failed — recalling opener: ${msg}`);
-      await outbound.recallOwnMessage(openerId);
+      if (triggeringClient) {
+        await outbound.recallOwnMessageWith(triggeringClient, openerId);
+      }
       outbound.rearmAnchorToTrigger(userId);
       return false;
     }

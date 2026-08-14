@@ -7,9 +7,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { IMHost } from '../../types.js';
 
+const fakeClient = { fake: 'client' };
+
 const outboundMocks = vi.hoisted(() => ({
   claimPatchableOpener: vi.fn<() => string | null>(() => null),
-  recallOwnMessage: vi.fn(async () => true),
+  getBoundClient: vi.fn(() => fakeClient),
+  recallOwnMessageWith: vi.fn(async () => true),
   updateInteractive: vi.fn(async () => undefined),
   registerCardLane: vi.fn(),
   rearmAnchorToTrigger: vi.fn(() => true),
@@ -17,7 +20,8 @@ const outboundMocks = vi.hoisted(() => ({
 
 vi.mock('../outbound.js', () => ({
   claimPatchableOpener: outboundMocks.claimPatchableOpener,
-  recallOwnMessage: outboundMocks.recallOwnMessage,
+  getBoundClient: outboundMocks.getBoundClient,
+  recallOwnMessageWith: outboundMocks.recallOwnMessageWith,
   updateInteractive: outboundMocks.updateInteractive,
   registerCardLane: outboundMocks.registerCardLane,
   rearmAnchorToTrigger: outboundMocks.rearmAnchorToTrigger,
@@ -84,7 +88,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
   it('consumePendingOpenerCard: 无 pending opener 返回 false(不撤回)', async () => {
     outboundMocks.claimPatchableOpener.mockReturnValue(null);
     await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(false);
-    expect(outboundMocks.recallOwnMessage).not.toHaveBeenCalled();
+    expect(outboundMocks.recallOwnMessageWith).not.toHaveBeenCalled();
   });
 
   it('consumePendingOpenerCard: patch 失败时撤回开场白卡并返回 false(回落发送)', async () => {
@@ -93,7 +97,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
       new Error('patch failed'),
     );
     await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(false);
-    expect(outboundMocks.recallOwnMessage).toHaveBeenCalledWith('om_opener');
+    expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalledWith(fakeClient, 'om_opener');
     expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t');
   });
 
@@ -101,7 +105,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     outboundMocks.claimPatchableOpener.mockReturnValue('om_opener');
     outboundMocks.updateInteractive.mockRejectedValueOnce(new Error('replace failed'));
     await expect(im.consumePendingOpenerAsCard('g/oc_c/omt_t', SPEC)).resolves.toBe(false);
-    expect(outboundMocks.recallOwnMessage).toHaveBeenCalledWith('om_opener');
+    expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalledWith(fakeClient, 'om_opener');
     expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t');
     expect(outboundMocks.registerCardLane).not.toHaveBeenCalled();
   });
@@ -110,6 +114,6 @@ describe('FeishuIM opener consumption failure semantics', () => {
     outboundMocks.claimPatchableOpener.mockReturnValue('om_opener');
     await expect(im.consumePendingOpenerAsCard('g/oc_c/omt_t', SPEC)).resolves.toBe(true);
     expect(outboundMocks.registerCardLane).toHaveBeenCalledWith('g/oc_c/omt_t', 'om_opener');
-    expect(outboundMocks.recallOwnMessage).not.toHaveBeenCalled();
+    expect(outboundMocks.recallOwnMessageWith).not.toHaveBeenCalled();
   });
 });

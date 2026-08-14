@@ -399,16 +399,20 @@ export function evictOpenThreadOutcome(replyToMessageId: string): void {
 }
 
 /**
- * 撤回 bot 自己发的消息(孤儿开场白卡重试耗尽后的最后兜底)。返回是否成功;
- * 失败只 log — 撤回成功用户看到干净群主流而不是永久「思考中」卡, 撤回失败
- * 说明故障仍未恢复, 已无更进一步的兜底手段。
+ * 用指定 client 撤回 bot 自己发的消息 — patch/替换失败路径把撤回 pin 到
+ * 触发账号: 中途换凭证时不得拿新账号的 client 删除旧账号的开场白。
  */
-export async function recallOwnMessage(messageId: string): Promise<boolean> {
+export async function recallOwnMessageWith(
+  c: Lark.Client,
+  messageId: string,
+): Promise<boolean> {
   const log = getLog();
   try {
-    const res = await ensureClient().im.v1.message.delete({ path: { message_id: messageId } });
+    const res = await c.im.v1.message.delete({ path: { message_id: messageId } });
     if (res.code !== undefined && res.code !== 0) {
-      log.warn(`[feishu/outbound] recallOwnMessage rejected (code=${res.code}): ${res.msg ?? ''}`);
+      log.warn(
+        `[feishu/outbound] recallOwnMessage rejected (code=${res.code}): ${res.msg ?? ''}`,
+      );
       return false;
     }
     return true;
@@ -417,6 +421,15 @@ export async function recallOwnMessage(messageId: string): Promise<boolean> {
     log.warn(`[feishu/outbound] recallOwnMessage failed: ${msg}`);
     return false;
   }
+}
+
+/**
+ * 撤回 bot 自己发的消息(孤儿开场白卡重试耗尽后的最后兜底)。返回是否成功;
+ * 失败只 log — 撤回成功用户看到干净群主流而不是永久「思考中」卡, 撤回失败
+ * 说明故障仍未恢复, 已无更进一步的兜底手段。
+ */
+export async function recallOwnMessage(messageId: string): Promise<boolean> {
+  return recallOwnMessageWith(ensureClient(), messageId);
 }
 
 async function doOpenThread(replyToMessageId: string): Promise<OpenThreadOutcome> {

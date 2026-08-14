@@ -235,6 +235,21 @@ export function resetOrphanRetriesForTest(): void {
   orphanAttemptCeiling.clear();
 }
 
+/**
+ * 明确清除凭证/登出(clearAndDisconnect)时丢弃孤儿重试状态: 排队/挂起的
+ * 重试、预算与送达标记全部清空 — 之后重新保存相同 appId/service 不会恢复
+ * 旧重试向登出前的 opener 补发提示或撤回旧卡(那是 transport 重连才该有的
+ * 保留语义)。
+ */
+export function clearOrphanRetriesForCredentialClear(): void {
+  for (const retry of orphanNoticeRetries.values()) clearTimeout(retry.timer);
+  orphanNoticeRetries.clear();
+  suspendedOrphanRetries.length = 0;
+  orphanAttemptCeiling.clear();
+  orphanNoticeDelivered.clear();
+  orphanNoticeInFlight.clear();
+}
+
 /** 该 opener 的提示是否已成功送达过(首发/重投/重试任一成功 — 终态)。 */
 function wasNoticeDelivered(openerMessageId: string): boolean {
   return orphanNoticeDelivered.has(openerMessageId);
