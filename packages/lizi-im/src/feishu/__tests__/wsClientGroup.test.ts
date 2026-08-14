@@ -289,24 +289,27 @@ describe('feishu group inbound gate', () => {
     expect(mocks.openThread).toHaveBeenCalledTimes(2);
   });
 
-  it('orphan notice failure releases the dedupe claim so a redelivery retries the notice', async () => {
-    mocks.openThread
-      .mockResolvedValueOnce({ kind: 'orphaned', openerMessageId: 'om_opener' })
-      .mockResolvedValueOnce({ kind: 'orphaned', openerMessageId: 'om_opener' });
-    mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
-    await connect();
-    const events = collectEvents();
-    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+  it('orphan notice failure schedules an active retry instead of relying on redelivery', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValueOnce({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
 
-    // 首轮: 不起 turn, 提示发送失败(冷却已清、认领已释放)。
-    expect(events).toHaveLength(0);
-    expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      // 首轮: 不起 turn, 提示发送失败。
+      expect(events).toHaveLength(0);
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
 
-    // 重投: 认领已释放 → 重新处理 → 孤儿提示重试成功 — 用户不会永远
-    // 看着「思考中」的开场白卡等不到任何说明。
-    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
-    expect(mocks.replyText).toHaveBeenCalledTimes(2);
-    expect(events).toHaveLength(0);
+      // 飞书对 3s 内完成处理的事件直接 ACK 不再重推 — 主动重试不依赖重投,
+      // 用户不会永远看着「思考中」的开场白卡等不到说明。
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('drops duplicate delivery of the same message (one turn per message)', async () => {

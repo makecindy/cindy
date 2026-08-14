@@ -89,12 +89,17 @@ const strangerNoticeAt = new Map<string, number>();
  * 冷却(开场白消息 id → 上次提示 ts)防重投事件重复提示。回复挂在开场白下
  * 自动落回话题, 不惊动群主流。
  *
- * 提示发送失败时: 清掉冷却标记并释放该消息的入站认领 — 让重投消息能重试
- * 一轮。否则用户会一直看着「思考中」的开场白卡, 等不到答案也等不到说明
- * (本轮已结束, 开场白不会被 patch/撤回/再次提示)。
+ * 提示发送失败时: 释放入站认领(重推若来可重新处理)并**主动调度一次延迟
+ * 重试** — 飞书长连接对「处理 3s 内完成」的事件直接 ACK 不再重推, 只靠
+ * 释放认领等重推不可靠, 用户会永久看着「思考中」的开场白卡等不到说明。
+ * 重试由定时器执行, 不经过本函数的冷却(重推在冷却期内到达会被拦截,
+ * 不会双发); 网络长期不可用时重试失败后放弃(重推同样无效)。
  */
 const ORPHAN_NOTICE_COOLDOWN_MS = 60_000;
 const orphanNoticeAt = new Map<string, number>();
+
+const ORPHAN_NOTICE_RETRY_DELAY_MS = 10_000;
+const orphanNoticeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 async function sendOrphanOpenerNotice(
   botAppId: string,
@@ -108,12 +113,29 @@ async function sendOrphanOpenerNotice(
   try {
     await outbound.replyText(openerMessageId, transportMessages.group.threadOrphanNotice);
   } catch (err) {
-    orphanNoticeAt.delete(openerMessageId);
     releaseInboundClaim(botAppId, messageId);
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(
-      `[feishu/wsClient] orphan opener notice failed — cooldown cleared, inbound claim released for retry: ${msg}`,
+      `[feishu/wsClient] orphan opener notice failed — inbound claim released, retry scheduled in ${ORPHAN_NOTICE_RETRY_DELAY_MS}ms: ${msg}`,
     );
+    const existing = orphanNoticeRetryTimers.get(openerMessageId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      orphanNoticeRetryTimers.delete(openerMessageId);
+      void retryOrphanOpenerNotice(openerMessageId);
+    }, ORPHAN_NOTICE_RETRY_DELAY_MS);
+    orphanNoticeRetryTimers.set(openerMessageId, timer);
+  }
+}
+
+async function retryOrphanOpenerNotice(openerMessageId: string): Promise<void> {
+  const log = getLog();
+  try {
+    await outbound.replyText(openerMessageId, transportMessages.group.threadOrphanNotice);
+    log.info('[feishu/wsClient] orphan opener notice retry succeeded');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error(`[feishu/wsClient] orphan opener notice retry failed (giving up): ${msg}`);
   }
 }
 
@@ -575,6 +597,8 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
   botOpenId = null;
   strangerNoticeAt.clear();
   orphanNoticeAt.clear();
+  for (const timer of orphanNoticeRetryTimers.values()) clearTimeout(timer);
+  orphanNoticeRetryTimers.clear();
   outbound.unbindClient();
   if (opts.clearOwnerBeforeIdle) {
     pendingOfflineNotice = false;
