@@ -167,7 +167,7 @@ manifest 的 `tool` 槽只回答"这个插件**能**暴露哪些工具"。装入
 | 档位 | 语义 | 执法点 |
 | --- | --- | --- |
 | `always-allow` | 免掉「要不要让 Agent 调这个工具」的权限卡，直接放行 | `maker-host/mcp-tool-approval-policy.ts` 返回 `auto-approve` |
-| `needs-approval`（默认） | 维持原有权限链 | 同上，返回 `prompt` |
+| `needs-approval`（默认） | 每次都问，且全程禁止持久化授权 | 同上，返回 `prompt-each-time`（不是 `prompt`——`prompt` 会把判定交回 agent 自己的权限链，用户在 agent 权限卡上点一次「不再询问」就会持久化，这一档就形同虚设） |
 | `blocked` | 硬拒，任何调用方都调不动 | `cindy-brain/pipeDispatcher.ts` 的资格审 |
 
 三条不变量，改这套东西前先确认它们仍然成立：
