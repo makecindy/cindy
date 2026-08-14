@@ -51,7 +51,8 @@
 - 每个运行中的插件使用独立 Electron 沙箱进程与专属 session partition。沙箱禁止直接访问
   Node、宿主文件系统和网络。
 - 插件只允许读取自身安装目录内、经安全相对路径校验的静态资源，不得越权读取其它目录。
-- 逻辑页只能经最小 `contextBridge` 管子申请主机能力；面板 webview 保持零特权桥。
+- 逻辑页只能经最小 `contextBridge` 管子申请主机能力；面板 webview 不获得该完整管子，
+  只可在声明 `agent` slot 后使用 Host 固定的 `agent.getTarget/send` 最小桥。
 - 主机按 `webContents` 绑定反查真实 ghostId，**不信任 sender 自报身份**。
 - 沉睡、抽离和主机退出必须终止对应沙箱；沙箱崩溃只由 `GhostRuntime` 收敛，不得带崩
   主应用。
@@ -225,6 +226,10 @@
   再次核对根与目标真身；保存文件必须排他创建且不跟随最终 symlink，不能让短命票据留下消费期
   TOCTOU。附件继续使用裁决前已读入的字节，不得在批准后重新跟随原始路径。
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
+- 面板 Agent 最小桥不接受插件自报 `ghostId`、`sessionId`、运行模式或后台触发；Host 按
+  Guest WebContents 登记反查插件身份，在发送瞬间解析承载窗口当前任务，并要求面板可见、
+  聚焦及 preload 消费一份短暂真实用户激活。消息只进入普通 user 回合，失败时不得回落到
+  其它窗口或历史任务。该能力复用既有 `agent` slot，不新增权限，也不影响存量插件。
 - `ios-simulator` 槽只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有
   Host viewer。请求协议不得出现插件自报 `sessionId`，可选 `instanceId` 必须重新匹配
   当前任务的公开实例。视频帧、viewer lease、触控、Sidecar／Helper、artifact 路径、进程

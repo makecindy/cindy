@@ -42,6 +42,10 @@ import {
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
 import {
+  registerGhostPanelWebContents,
+  unregisterGhostPanelWebContents,
+} from './cindy-brain/runtime/ghostPanelWebContents.js';
+import {
   attributeRsbNativePopupSurface,
   createRsbNativePopupSurface,
 } from './rsb-browser-bridge/native-popup-surfaces.js';
@@ -57,6 +61,11 @@ import {
  */
 export function getBrowserCommentPreloadPath(): string {
   return path.join(__dirname, 'browserCommentPreload.js');
+}
+
+/** Host 唯一可信的插件面板 Guest preload 产物路径。 */
+export function getGhostPanelGuestPreloadPath(): string {
+  return path.join(__dirname, 'ghostPanelGuestPreload.js');
 }
 
 /**
@@ -141,6 +150,7 @@ export function applyWebviewHardening(
 export function applyGhostWebviewHardening(
   webPreferences: Record<string, unknown>,
   params: Record<string, string>,
+  options?: { panelPreloadPath?: string },
 ): void {
   delete params.disablewebsecurity;
   delete params.webpreferences;
@@ -157,7 +167,11 @@ export function applyGhostWebviewHardening(
   webPreferences.allowRunningInsecureContent = false;
   webPreferences.webviewTag = false;
   webPreferences.plugins = false;
-  delete webPreferences.preload;
+  if (options?.panelPreloadPath) {
+    webPreferences.preload = options.panelPreloadPath;
+  } else {
+    delete webPreferences.preload;
+  }
 }
 
 /** Renderer 接收 popup 路由消息的 IPC channel。main → renderer。 */
@@ -670,7 +684,9 @@ export function installWebviewHardener(): void {
           pendingGhostAttach = null;
           return;
         }
-        applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params);
+        applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params, {
+          panelPreloadPath: getGhostPanelGuestPreloadPath(),
+        });
         pendingGhostAttach = { id: ghost.manifest.id };
         return;
       }
@@ -690,6 +706,13 @@ export function installWebviewHardener(): void {
         // 崩溃豁免登记(lifecycle 的全局 render-process-gone 守卫据此放行,
         // 面板错误接管态负责用户侧收尾)。
         registerGhostWebContents(guestContents.id);
+        registerGhostPanelWebContents(guestContents.id, {
+          ghostId,
+          hostWebContentsId: contents.id,
+        });
+        guestContents.once('destroyed', () => {
+          unregisterGhostPanelWebContents(guestContents.id);
+        });
         // 意识面板零弹窗、零跳转:window.open 全拒,导航锁死在自己协议同源内。
         // 两个声明式例外(都是拦下导航、主机代办,面板侧依旧零桥):
         //   - /preview/ 预览链接 → 主窗口弹 lightbox(cindy-brain/previewGate.ts);

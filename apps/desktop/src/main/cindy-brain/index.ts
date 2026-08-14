@@ -5,6 +5,7 @@ import {
   ipcMain,
   safeStorage,
   shell,
+  webContents,
   type WebContents,
 } from 'electron';
 import fs from 'node:fs';
@@ -225,6 +226,8 @@ import {
   type CindyVideoParams,
 } from './cindySlot.js';
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
+import { GhostPanelAgentBridge } from './panelAgentBridge.js';
+import { resolveGhostPanelTargetSessionId } from './panelAgentTarget.js';
 import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
@@ -253,6 +256,11 @@ import {
   readGhostUnread,
   type GhostUnreadEntry,
 } from './ghostUnreadStore.js';
+import {
+  GHOST_PANEL_AGENT_SEND_CHANNEL,
+  GHOST_PANEL_AGENT_TARGET_CHANNEL,
+} from '../../shared/ghostPanelAgent.js';
+import { ghostPanelContextForWebContents } from './runtime/ghostPanelWebContents.js';
 import { isGhostUnreadProjectable, selectRevokedGhostUnreadIds } from './ghostUnreadProjection.js';
 import { GhostConfirmSlot } from './confirmSlot.js';
 import {
@@ -1560,6 +1568,27 @@ export function setGhostAgentTurnRunner(runner: GhostAgentTurnRunner | null): vo
   getGhostAgentSlot().setRunner(runner);
 }
 
+let panelAgentBridgeSingleton: GhostPanelAgentBridge | null = null;
+
+/** 插件面板只经此窄桥复用现有 agent 槽，不能指定任务或运行模式。 */
+function getGhostPanelAgentBridge(): GhostPanelAgentBridge {
+  if (!panelAgentBridgeSingleton) {
+    panelAgentBridgeSingleton = new GhostPanelAgentBridge({
+      panelContext: ghostPanelContextForWebContents,
+      hasAgentPermission: (ghostId) => {
+        const ghost = findAvailableGhost(ghostId);
+        return Boolean(ghost?.enabled && ghost.manifest.slots.includes('agent'));
+      },
+      targetSessionId: ghostPanelTargetSessionId,
+      isInteractive: isInteractiveGhostPanel,
+      issueUserActionToken: (ghostId, sessionId) =>
+        getGhostAgentSlot().issueUserActionToken(ghostId, sessionId, 'panel'),
+      run: (ghostId, payload) => getGhostAgentSlot().handleRequest(ghostId, payload),
+    });
+  }
+  return panelAgentBridgeSingleton;
+}
+
 let errandSlotSingleton: GhostErrandSlot | null = null;
 
 /** 派活取件槽单例(agent 槽 errand 加档):资格审/频控/任务表的统一守门点。 */
@@ -2338,6 +2367,39 @@ function noteGhostWindowSessionFocused(sender: WebContents, sessionId: string | 
 function mainShellWindows(): BrowserWindow[] {
   return BrowserWindow.getAllWindows().filter(
     (window) => !window.isDestroyed() && isMainShellWindowUrl(window.webContents.getURL()),
+  );
+}
+
+/**
+ * 面板目标任务解析：停靠态取承载主窗口自己的路由；独立面板窗只在主窗口
+ * 唯一时回落。多窗口有歧义就拒绝，绝不让插件提供 sessionId 猜目标。
+ */
+function ghostPanelTargetSessionId(hostWebContentsId: number): string | null {
+  const hostContents = webContents.fromId(hostWebContentsId);
+  if (!hostContents || hostContents.isDestroyed()) return null;
+  const candidates = mainShellWindows();
+  return resolveGhostPanelTargetSessionId({
+    hostIsMainShell: isMainShellWindowUrl(hostContents.getURL()),
+    hostSessionId: ghostSessionFocusByWebContents.get(hostWebContentsId),
+    mainShellSessionIds: candidates.map((window) =>
+      ghostSessionFocusByWebContents.get(window.webContents.id),
+    ),
+  });
+}
+
+/** 发送副作用只接受当前获得焦点、且所在窗口可见的真实面板 Guest。 */
+function isInteractiveGhostPanel(senderWebContentsId: number, hostWebContentsId: number): boolean {
+  const sender = webContents.fromId(senderWebContentsId);
+  const hostContents = webContents.fromId(hostWebContentsId);
+  if (!sender || sender.isDestroyed() || !sender.isFocused()) return false;
+  if (!hostContents || hostContents.isDestroyed()) return false;
+  const window = BrowserWindow.fromWebContents(hostContents);
+  return Boolean(
+    window &&
+    !window.isDestroyed() &&
+    window.isVisible() &&
+    !window.isMinimized() &&
+    BrowserWindow.getFocusedWindow() === window,
   );
 }
 
@@ -5213,6 +5275,16 @@ export function registerGhostIpc(): void {
       ? 'retry-pending'
       : 'completed';
   };
+
+  // ── 面板最小 Agent 桥 ──────────────────────────────────────────────
+  // sender 身份来自 will/did-attach-webview 的 Main 登记，不接受插件自报
+  // ghostId/sessionId。preload 先消费真实用户激活；这里再校验可见与焦点。
+  ipcMain.handle(GHOST_PANEL_AGENT_TARGET_CHANNEL, (event) =>
+    getGhostPanelAgentBridge().getTarget(event.sender.id),
+  );
+  ipcMain.handle(GHOST_PANEL_AGENT_SEND_CHANNEL, (event, payload: unknown) =>
+    getGhostPanelAgentBridge().send(event.sender.id, payload),
+  );
 
   // ── 管子(脑机接口)main 侧 handler(docs/dev-rules/plugin-security-and-authoring.md)──────────────
   // 身份不信任 sender 自报,一律按 webContents id 反查绑定表验身。

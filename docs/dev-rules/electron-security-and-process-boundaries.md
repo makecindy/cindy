@@ -125,8 +125,9 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 
 内置浏览器为了捕获 `window.open`，会在 Main hardener 中设置 `allowpopups`，随后由
 `setWindowOpenHandler` 拒绝真实弹窗并转成受控标签页。这是唯一允许的窄例外；Renderer
-不得自行添加 `allowpopups`。Ghost 面板更严格：专属 partition、无 Node、无通用 preload，
-身份由 Main 根据真实 `webContents` 反查。
+不得自行添加 `allowpopups`。Ghost 面板更严格：专属 partition、无 Node、无通用 preload；
+只允许 Main 强制注入固定的最小 Agent bridge，身份由 Main 根据真实 `webContents` 反查，
+插件不能自报 ghostId／sessionId 或选择 IPC channel。
 
 ## 4．preload 与 Context Bridge
 

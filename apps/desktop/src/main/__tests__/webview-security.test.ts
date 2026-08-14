@@ -306,6 +306,21 @@ describe('applyGhostWebviewHardening(意识面板 webview)', () => {
     expect('disablewebsecurity' in params).toBe(false);
     expect('webpreferences' in params).toBe(false);
   });
+
+  it('只接受 Main 指定的面板最小 preload，覆盖 renderer 注入路径', () => {
+    const webPreferences: Record<string, unknown> = { preload: '/tmp/evil-preload.js' };
+    const params: Record<string, string> = {
+      src: 'cindy-ghost://art/panel.html',
+      partition: 'cindy-ghost-art',
+    };
+
+    applyGhostWebviewHardening(webPreferences, params, {
+      panelPreloadPath: '/app/.vite/build/ghostPanelGuestPreload.js',
+    });
+
+    expect(webPreferences.preload).toBe('/app/.vite/build/ghostPanelGuestPreload.js');
+    expect(params.partition).toBe('cindy-ghost-art');
+  });
 });
 
 describe('installDeferredPopupRouter', () => {

@@ -205,6 +205,18 @@ describe('agentSlot · 会话模式与审计', () => {
     });
   });
 
+  it('面板点击票在审计内容中标注 surface，普通卡片票保持旧结构', async () => {
+    const runner = acceptedRunner();
+    const slot = makeSlot({ runner });
+    const token = slot.issueUserActionToken('alpha', 'session-1', 'panel')!;
+
+    await slot.handleRequest('alpha', userRequest(token));
+    expect(JSON.parse(runner.mock.calls[0][0].persistedContent).ghostAgent).toMatchObject({
+      trigger: 'user-action',
+      surface: 'panel',
+    });
+  });
+
   it('用户原文里的 event_json 字样保持原样，只替换模板本身的占位符', async () => {
     const runner = acceptedRunner();
     const slot = makeSlot({ runner });
