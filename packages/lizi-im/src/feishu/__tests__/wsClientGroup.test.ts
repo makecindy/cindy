@@ -289,11 +289,15 @@ describe('feishu group inbound gate', () => {
     expect(mocks.openThread).toHaveBeenCalledTimes(2);
   });
 
-  it('orphan notice failure schedules an active retry instead of relying on redelivery', async () => {
+  it('orphan notice failure schedules escalating active retries instead of relying on redelivery', async () => {
     vi.useFakeTimers();
     try {
       mocks.openThread.mockResolvedValueOnce({ kind: 'orphaned', openerMessageId: 'om_opener' });
-      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      // 首发失败 + 前两次重试失败, 第三次重试成功。
+      mocks.replyText
+        .mockRejectedValueOnce(new Error('transient network error'))
+        .mockRejectedValueOnce(new Error('rate limited'))
+        .mockRejectedValueOnce(new Error('still down'));
       await connect();
       const events = collectEvents();
       await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
@@ -303,9 +307,34 @@ describe('feishu group inbound gate', () => {
       expect(mocks.replyText).toHaveBeenCalledTimes(1);
 
       // 飞书对 3s 内完成处理的事件直接 ACK 不再重推 — 主动重试不依赖重投,
-      // 用户不会永远看着「思考中」的开场白卡等不到说明。
+      // 递增间隔(10s / 30s / 90s), 用户不会永远看着「思考中」的开场白卡。
       await vi.advanceTimersByTimeAsync(10_000);
       expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(4);
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('orphan notice retries are gated to the triggering connection', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValueOnce({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 首发失败后、重试触发前用户断开/换账号 — 旧账号的开场白不该发进
+      // 新账号的会话, 重试应被跳过。
+      await wsClient.stop({ announceOffline: false, reason: 'test-disconnect-before-retry' });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
       expect(events).toHaveLength(0);
     } finally {
       vi.useRealTimers();

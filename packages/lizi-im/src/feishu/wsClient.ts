@@ -89,22 +89,34 @@ const strangerNoticeAt = new Map<string, number>();
  * 冷却(开场白消息 id → 上次提示 ts)防重投事件重复提示。回复挂在开场白下
  * 自动落回话题, 不惊动群主流。
  *
- * 提示发送失败时: 释放入站认领(重推若来可重新处理)并**主动调度一次延迟
- * 重试** — 飞书长连接对「处理 3s 内完成」的事件直接 ACK 不再重推, 只靠
+ * 提示发送失败时: 释放入站认领(重推若来可重新处理)并**主动调度递增间隔的
+ * 延迟重试** — 飞书长连接对「处理 3s 内完成」的事件直接 ACK 不再重推, 只靠
  * 释放认领等重推不可靠, 用户会永久看着「思考中」的开场白卡等不到说明。
- * 重试由定时器执行, 不经过本函数的冷却(重推在冷却期内到达会被拦截,
- * 不会双发); 网络长期不可用时重试失败后放弃(重推同样无效)。
+ * 每次重试前 gate 到触发时的 connection generation — 换代后旧账号的开场白
+ * 不会发进新账号的会话。重试由定时器执行, 不经过本函数的冷却(重推在冷却期
+ * 内到达会被拦截, 不会双发); 3 次重试(总窗口 ~2 分钟)全失败后放弃 —
+ * 再长的故障窗口里平台重推同样无效, 无限重试只会让定时器跨连接悬挂。
  */
 const ORPHAN_NOTICE_COOLDOWN_MS = 60_000;
 const orphanNoticeAt = new Map<string, number>();
 
-const ORPHAN_NOTICE_RETRY_DELAY_MS = 10_000;
-const orphanNoticeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** 重试间隔按尝试次数递增 — attempt 0 用首个间隔, 超出数组则放弃。 */
+const ORPHAN_NOTICE_RETRY_DELAYS_MS = [10_000, 30_000, 90_000] as const;
+
+interface PendingOrphanRetry {
+  timer: ReturnType<typeof setTimeout>;
+  botAppId: string;
+  generation: number;
+  openerMessageId: string;
+}
+
+const orphanNoticeRetries = new Map<string, PendingOrphanRetry>();
 
 async function sendOrphanOpenerNotice(
   botAppId: string,
   messageId: string,
   openerMessageId: string,
+  generation: number,
 ): Promise<void> {
   const log = getLog();
   const last = orphanNoticeAt.get(openerMessageId) ?? 0;
@@ -116,26 +128,55 @@ async function sendOrphanOpenerNotice(
     releaseInboundClaim(botAppId, messageId);
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(
-      `[feishu/wsClient] orphan opener notice failed — inbound claim released, retry scheduled in ${ORPHAN_NOTICE_RETRY_DELAY_MS}ms: ${msg}`,
+      `[feishu/wsClient] orphan opener notice failed — inbound claim released, retry scheduled: ${msg}`,
     );
-    const existing = orphanNoticeRetryTimers.get(openerMessageId);
-    if (existing) clearTimeout(existing);
-    const timer = setTimeout(() => {
-      orphanNoticeRetryTimers.delete(openerMessageId);
-      void retryOrphanOpenerNotice(openerMessageId);
-    }, ORPHAN_NOTICE_RETRY_DELAY_MS);
-    orphanNoticeRetryTimers.set(openerMessageId, timer);
+    scheduleOrphanNoticeRetry(botAppId, generation, openerMessageId, 0);
   }
 }
 
-async function retryOrphanOpenerNotice(openerMessageId: string): Promise<void> {
+function scheduleOrphanNoticeRetry(
+  botAppId: string,
+  generation: number,
+  openerMessageId: string,
+  attempt: number,
+): void {
   const log = getLog();
+  const delay = ORPHAN_NOTICE_RETRY_DELAYS_MS[attempt];
+  if (delay === undefined) {
+    log.error(
+      `[feishu/wsClient] orphan opener notice retries exhausted — giving up (opener stays orphaned)`,
+    );
+    return;
+  }
+  const existing = orphanNoticeRetries.get(openerMessageId);
+  if (existing) clearTimeout(existing.timer);
+  const timer = setTimeout(() => {
+    orphanNoticeRetries.delete(openerMessageId);
+    void retryOrphanOpenerNotice(botAppId, generation, openerMessageId, attempt);
+  }, delay);
+  orphanNoticeRetries.set(openerMessageId, { timer, botAppId, generation, openerMessageId });
+}
+
+async function retryOrphanOpenerNotice(
+  botAppId: string,
+  generation: number,
+  openerMessageId: string,
+  attempt: number,
+): Promise<void> {
+  const log = getLog();
+  // gate 到触发时的连接: 换代/断开后不再重试 — 旧账号的开场白不该发进
+  // 新账号的会话(新账号的重推路径会走它自己的 orphaned 处理)。
+  if (!isActiveConnection(generation, botAppId)) {
+    log.info('[feishu/wsClient] orphan opener notice retry skipped: connection changed');
+    return;
+  }
   try {
     await outbound.replyText(openerMessageId, transportMessages.group.threadOrphanNotice);
     log.info('[feishu/wsClient] orphan opener notice retry succeeded');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error(`[feishu/wsClient] orphan opener notice retry failed (giving up): ${msg}`);
+    log.warn(`[feishu/wsClient] orphan opener notice retry failed (attempt ${attempt}): ${msg}`);
+    scheduleOrphanNoticeRetry(botAppId, generation, openerMessageId, attempt + 1);
   }
 }
 
@@ -597,8 +638,8 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
   botOpenId = null;
   strangerNoticeAt.clear();
   orphanNoticeAt.clear();
-  for (const timer of orphanNoticeRetryTimers.values()) clearTimeout(timer);
-  orphanNoticeRetryTimers.clear();
+  for (const retry of orphanNoticeRetries.values()) clearTimeout(retry.timer);
+  orphanNoticeRetries.clear();
   outbound.unbindClient();
   if (opts.clearOwnerBeforeIdle) {
     pendingOfflineNotice = false;
@@ -884,7 +925,7 @@ async function handleIncomingMessage(
         log.error(
           `[feishu/wsClient] openThread orphaned opener=...${opener.openerMessageId.slice(-8)} — turn dropped with in-topic notice`,
         );
-        await sendOrphanOpenerNotice(botAppId, messageId, opener.openerMessageId);
+        await sendOrphanOpenerNotice(botAppId, messageId, opener.openerMessageId, generation);
         return;
       } else {
         laneUserId = encodeLaneUserId(chatId, null);
