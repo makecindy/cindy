@@ -194,6 +194,7 @@ describe('PluginMarketApi', () => {
       method: 'POST',
       body: { eventId, releaseId: 'release-1' },
       timeoutMs: 5_000,
+      suppressAuthSideEffects: true,
     });
   });
 

@@ -126,6 +126,8 @@ export class PluginMarketApi {
           body: { eventId, releaseId },
           // 回执必须是后台尽力而为；服务端悬挂不能拖住本地安装。
           timeoutMs: 5_000,
+          // 指标端点故障不能 refresh token 或使当前用户退登。
+          suppressAuthSideEffects: true,
         },
       );
     } catch (error) {
