@@ -155,11 +155,13 @@
   `check:dco` 的失败结果不构成缺签证据，不要据此报告 DCO 问题。判定 DCO 是否通过，
   一律以 PR 上的 DCO App check 与真实提交范围（`origin/main..PR head`）的结果为准。
 - **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地
-  跑完仓库根 `pnpm test:unit`（全部单元测试），并对本次改动涉及的每个 package 跑
+  跑完仓库根 `pnpm test:unit:related`（只跑这次改动能影响到的单测；改到测试调度、
+  依赖清单、workspace 配置、Vitest 配置或单测 CI 时会自动退回全量 `pnpm test:unit`），
+  并对本次改动涉及的每个 package 跑
   `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在
   `package.json` 里的 `name`，如 `desktop`、`@cindy/maker-core`；没有 `typecheck`
   script 的 package 该步自动跳过），全部通过后才允许提交；任何一项失败都不得提交，
-  必须先修复。细则与唯一例外（防丢数据的兜底保存）见
+  必须先修复。GitHub CI 仍跑完整 `pnpm test:unit`。细则与唯一例外（防丢数据的兜底保存）见
   `docs/dev-rules/development-workflow.md`。
 - 在上述门禁之上按风险追加验证：跨模块、高风险或基础设施改动追加更广泛验证（如
   `pnpm test:all`），最终以 CI 门禁为准。不得通过跳过、删除或弱化测试制造通过。

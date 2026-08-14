@@ -85,6 +85,10 @@ test("root unit and all scripts run runner self-tests before workspace sweep", (
 		scripts["test:unit"],
 		/^pnpm test:runner && node scripts\/test-workspaces\.mjs --tier unit$/,
 	);
+	assert.equal(
+		scripts["test:unit:related"],
+		"node scripts/test-workspaces.mjs --tier unit --related",
+	);
 	assert.match(
 		scripts["test:all"],
 		/^pnpm test:runner && node scripts\/test-workspaces\.mjs --all$/,
@@ -785,6 +789,7 @@ test("parseCliOptions rejects --tier without a value", () => {
 		excludeWorkspaces: [],
 		workspaceConcurrency: undefined,
 		noLock: false,
+		related: false,
 	});
 });
 
@@ -807,6 +812,7 @@ test("parseCliOptions supports workspace include and exclude selectors", () => {
 			excludeWorkspaces: ["packages/orca-workflow"],
 			workspaceConcurrency: undefined,
 			noLock: false,
+			related: false,
 		},
 	);
 	assert.deepEqual(parseWorkspaceSelectorValue(" desktop, apps/server "), [
@@ -844,6 +850,11 @@ test("workspace concurrency defaults to a bounded CPU count and accepts both CLI
 		/requires a positive integer/,
 	);
 	assert.equal(parseCliOptions(["--no-lock"]).noLock, true);
+	assert.equal(parseCliOptions(["--related"]).related, true);
+	assert.throws(
+		() => parseCliOptions(["--related", "--all"]),
+		/--related cannot be combined with --all/,
+	);
 });
 
 test("unit CI shard arguments cover valid halves and reject malformed input", () => {
@@ -1865,6 +1876,32 @@ test("buildPnpmArgs rejects selected files outside the workspace", () => {
 			),
 		/Selected test file is outside workspace packages\/orca-workflow: packages\/other\/src\/foo\.test\.ts/,
 	);
+});
+
+test("buildPnpmArgs switches vitest to related mode when related files are provided", () => {
+	const args = buildPnpmArgs(
+		"F:/repo",
+		{ cwd: "apps/desktop" },
+		{
+			type: "packageBin",
+			bin: "vitest",
+			args: ["run", "--pool=threads", "--maxWorkers=1"],
+		},
+		{ exclude: ["**/*.bench.ts"] },
+		["apps/desktop/src/main/foo.test.ts"],
+		["apps/desktop/src/main/foo.ts"],
+	);
+	assert.equal(args[3], "vitest");
+	assert.deepEqual(args.slice(4, 9), [
+		"related",
+		"--run",
+		"--pool=threads",
+		"--maxWorkers=1",
+		"--passWithNoTests",
+	]);
+	assert.equal(args.includes("src/main/foo.ts"), true);
+	assert.equal(args.includes("src/main/foo.test.ts"), false);
+	assert.deepEqual(args.slice(-2), ["--exclude", "**/*.bench.ts"]);
 });
 
 test("buildPnpmArgs only loosens Vitest sharding for undersized workspaces", () => {
