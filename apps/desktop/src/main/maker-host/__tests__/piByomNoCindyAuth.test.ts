@@ -66,50 +66,51 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
       authenticated: true,
       identity: 'Legacy custom xAI',
     });
-    expect(await desktopPiAuthAdapter.getState({ providerId: 'xai' })).toMatchObject({
-      authenticated: true,
-      identity: 'Legacy custom xAI',
+    expect(await desktopPiAuthAdapter.getState({ providerId: 'xai' })).toEqual({
+      authenticated: false,
+      errorReason: 'xai_oauth_unavailable',
     });
   });
 
-  it('restores a legacy xai session from the custom endpoint after SuperGrok is connected', async () => {
-    grokOAuth.loggedIn = true;
-    const resolved = await resolvePiNativeProviders({
-      workingDir: '/tmp/project',
-      providerId: 'xai',
-      model: 'private-grok',
-      resumeSessionId: '/tmp/pi/legacy-session.jsonl',
-    });
-
-    expect(resolved.providers).toContainEqual(
-      expect.objectContaining({
-        id: 'xai',
-        baseUrl: 'https://private-xai.example/v1',
-        models: expect.arrayContaining([expect.objectContaining({ id: 'private-grok' })]),
-      }),
-    );
-    expect(Object.values(resolved.env)).toContain('legacy-custom-key');
-  });
-
-  it('keeps a fresh xai selection on the official provider when SuperGrok is connected', async () => {
+  it('keeps an official xai resume on SuperGrok when a custom provider has the same model', async () => {
     grokOAuth.loggedIn = true;
     const resolved = await resolvePiNativeProviders({
       workingDir: '/tmp/project',
       providerId: 'xai',
       model: 'grok-4.6',
+      resumeSessionId: '/tmp/pi/official-session.jsonl',
     });
 
-    expect(resolved.providers).toContainEqual(
-      expect.objectContaining({
-        id: 'custom:xai',
-        baseUrl: 'https://private-xai.example/v1',
-      }),
-    );
     expect(resolved.providers).toContainEqual(
       expect.objectContaining({
         id: 'xai',
         baseUrl: expect.not.stringContaining('private-xai.example'),
       }),
     );
+    expect(resolved.providers).toContainEqual(
+      expect.objectContaining({
+        id: 'custom:xai',
+        baseUrl: 'https://private-xai.example/v1',
+      }),
+    );
+  });
+
+  it('restores a migrated custom:xai session from its saved endpoint after SuperGrok is connected', async () => {
+    grokOAuth.loggedIn = true;
+    const resolved = await resolvePiNativeProviders({
+      workingDir: '/tmp/project',
+      providerId: 'custom:xai',
+      model: 'private-grok',
+      resumeSessionId: '/tmp/pi/legacy-custom-session.jsonl',
+    });
+
+    expect(resolved.providers).toContainEqual(
+      expect.objectContaining({
+        id: 'custom:xai',
+        baseUrl: 'https://private-xai.example/v1',
+        models: expect.arrayContaining([expect.objectContaining({ id: 'private-grok' })]),
+      }),
+    );
+    expect(Object.values(resolved.env)).toContain('legacy-custom-key');
   });
 });

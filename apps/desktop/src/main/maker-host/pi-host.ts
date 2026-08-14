@@ -30,7 +30,6 @@ import type {
   PiNativeProvidersResult,
 } from '@cindy/maker-core';
 import {
-  LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
   PI_REASONING_EFFORTS,
   runtimeCustomProviderId,
   storedCustomProviderId,
@@ -104,8 +103,10 @@ class DesktopPiAuthAdapter implements AuthAdapter {
     if (providerId === 'openai') {
       return desktopCodexAuthAdapter.getState({ credentialMode: 'oauth-bearer' });
     }
-    if (providerId === 'xai' && hasGrokOAuthLogin()) {
-      return { authenticated: true, identity: 'SuperGrok', authSource: 'oauth' };
+    if (providerId === 'xai') {
+      return hasGrokOAuthLogin()
+        ? { authenticated: true, identity: 'SuperGrok', authSource: 'oauth' }
+        : { authenticated: false, errorReason: 'xai_oauth_unavailable' };
     }
     if (providerId) {
       const storageProviderId = storedCustomProviderId(providerId);
@@ -573,23 +574,10 @@ export async function resolvePiNativeProviders(ctx: {
     (id, reason) =>
       log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
   );
-  const legacyCustomXai = configs.find((config) =>
-    config.id === 'xai'
-    && config.runtimes.pi?.models.some((model) => model.id === ctx.model),
-  );
-  // Before custom xAI received the runtime-only `custom:xai` id, sessions persisted `xai`.
-  // A resumed session carrying that old id must keep its saved endpoint even if SuperGrok was
-  // connected later. Fresh `xai` selections still mean the official provider when OAuth exists.
-  const useLegacyCustomXai =
-    ctx.providerId === 'xai'
-    && legacyCustomXai !== undefined
-    && (!hasGrokOAuthLogin() || ctx.resumeSessionId !== undefined);
-  if (useLegacyCustomXai) {
-    const projected = custom.providers.find(
-      (provider) => provider.id === LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID,
-    );
-    if (projected) projected.id = 'xai';
-  } else if (ctx.providerId === 'xai' || hasGrokOAuthLogin()) {
+  // `xai` is exclusively the official SuperGrok identity. Historical custom connections are
+  // migrated to the runtime-only `custom:xai` id, so resume/login/model overlap must never infer
+  // provenance or relabel a user endpoint as official (or vice versa).
+  if (ctx.providerId === 'xai' || hasGrokOAuthLogin()) {
     const selectedXaiModel = ctx.providerId === 'xai'
       || (!ctx.providerId && ctx.model.startsWith('xai/'))
       ? ctx.model
