@@ -8,11 +8,30 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { GrantPolicyError, grantAttachmentsToGhost, type AttachmentGrantDeps } from '../attachmentGrant';
 
+/**
+ * 真身 withMediaRefCompensation 的前置校验。mock 必须复刻它,否则调用方违反
+ * 记账层契约(比如拿空 refIds 开事务)时单测照样绿,把回归藏到运行期。
+ * 真身见 cindy-media/refCompensationJournal.ts。
+ */
+const REF_COMPENSATION_MAX_REF_IDS = 256;
+const REF_COMPENSATION_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function assertRefCompensationBatch(refIds: readonly string[]): void {
+  if (refIds.length === 0 || refIds.length > REF_COMPENSATION_MAX_REF_IDS) {
+    throw new Error('cindy-media: invalid reference compensation batch size');
+  }
+  if (!refIds.every((id) => REF_COMPENSATION_UUID_PATTERN.test(id))) {
+    throw new Error('cindy-media: invalid staged reference id');
+  }
+}
+
 function makeDeps(overrides: Partial<AttachmentGrantDeps> = {}): {
   deps: AttachmentGrantDeps;
   writeBlob: ReturnType<typeof vi.fn>;
   recordBlob: ReturnType<typeof vi.fn>;
   addRef: ReturnType<typeof vi.fn>;
+  withRefCompensation: ReturnType<typeof vi.fn>;
 } {
   const writeBlob = vi.fn(async ({ buffer }: { buffer: Uint8Array }) => ({
     hash: `${'0'.repeat(63)}${buffer[0]}`,
@@ -23,6 +42,19 @@ function makeDeps(overrides: Partial<AttachmentGrantDeps> = {}): {
   const recordBlob = vi.fn(async () => {});
   const addRef = vi.fn(async (_params: Parameters<AttachmentGrantDeps['addRef']>[0]) => {});
   const removeRefById = vi.fn(async (_id: string) => {});
+  const withRefCompensation = vi.fn(
+    async <T,>({
+      refIds,
+      perform,
+    }: {
+      refIds: readonly string[];
+      perform: () => Promise<T>;
+      compensate: (refId: string) => Promise<unknown>;
+    }): Promise<T> => {
+      assertRefCompensationBatch(refIds);
+      return perform();
+    },
+  );
   const deps: AttachmentGrantDeps = {
     resolveImageUrl: (url: string) => {
       if (!url.startsWith('xdt-image://')) throw new Error('xdt-image: invalid url');
@@ -33,10 +65,10 @@ function makeDeps(overrides: Partial<AttachmentGrantDeps> = {}): {
     recordBlob,
     addRef,
     removeRefById,
-    withRefCompensation: async ({ perform }) => perform(),
+    withRefCompensation: withRefCompensation as AttachmentGrantDeps['withRefCompensation'],
     ...overrides,
   };
-  return { deps, writeBlob, recordBlob, addRef };
+  return { deps, writeBlob, recordBlob, addRef, withRefCompensation };
 }
 
 describe('grantAttachmentsToGhost', () => {
@@ -69,8 +101,8 @@ describe('grantAttachmentsToGhost', () => {
     expect(addRef).not.toHaveBeenCalled();
   });
 
-  it('超过 4 张 → 拒;空批直通返回空指纹', async () => {
-    const { deps } = makeDeps();
+  it('超过 4 张 → 拒;空批直通返回空指纹且不开补偿事务', async () => {
+    const { deps, withRefCompensation } = makeDeps();
     const over = await grantAttachmentsToGhost(deps, {
       ghostId: 'g',
       urls: Array(5).fill('xdt-image://s/x.png'),
@@ -80,6 +112,9 @@ describe('grantAttachmentsToGhost', () => {
 
     const empty = await grantAttachmentsToGhost(deps, { ghostId: 'g', urls: [] });
     expect(empty).toEqual({ ok: true, hashes: [] });
+    // 真身 withMediaRefCompensation 对空 refIds 是硬抛。空批必须整段跳过补偿
+    // 事务,否则记账层的批次校验会把合法的零附件翻译成「附件过户失败」。
+    expect(withRefCompensation).not.toHaveBeenCalled();
   });
 
   it('落库中途失败 → 整批报错(不返回半截指纹)', async () => {

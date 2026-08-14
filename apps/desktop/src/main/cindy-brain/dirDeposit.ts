@@ -497,8 +497,8 @@ async function writeNewSaveFile(
         // 校验窗口内被替换成 symlink/其它文件后误删替代目标。
         if (openedStat?.isFile()) {
           try {
-              const currentStat = await fs.promises.lstat(target, { bigint: true });
-              if (samePathAndHandleFileIdentity(currentStat, openedStat)) {
+            const currentStat = await fs.promises.lstat(target, { bigint: true });
+            if (samePathAndHandleFileIdentity(currentStat, openedStat)) {
               await fs.promises.unlink(target);
             }
           } catch {

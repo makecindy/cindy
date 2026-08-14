@@ -132,6 +132,65 @@ describe('resolveModeFromConfig(档位解析)', () => {
       resolveModeFromConfig({ globalPolicy: 'custom', tools: { a: 'always-allow' } }, 'b'),
     ).toBe('needs-approval');
   });
+
+  // 工具名由插件作者完全控制。普通 `{}` 上 `tools['constructor']` 读到的是
+  // Object.prototype.constructor(truthy 但不是档位),旧实现会据此 return 并
+  // **跳过下面的 globalPolicy 继承** —— 用户选了「全部阻止」,插件更新后新增的
+  // 同名工具反而拿不到 blocked。
+  const PROTOTYPE_KEYS = [
+    'constructor',
+    'toString',
+    'valueOf',
+    'hasOwnProperty',
+    'isPrototypeOf',
+    'propertyIsEnumerable',
+    'toLocaleString',
+    '__proto__',
+  ];
+
+  it('原型链上的键不算「已配置」:全局 blocked 仍然覆盖这些工具名', () => {
+    for (const key of PROTOTYPE_KEYS) {
+      expect(resolveModeFromConfig({ globalPolicy: 'blocked', tools: { other: 'blocked' } }, key)).toBe(
+        'blocked',
+      );
+      // 没有全局策略时同样必须落到 fail-closed 的默认档,而不是返回一个函数。
+      expect(resolveModeFromConfig({ tools: { other: 'blocked' } }, key)).toBe('needs-approval');
+    }
+  });
+
+  it('normalizeConfig 产出的 tools 表是 null 原型,查不到继承成员', () => {
+    const cfg = normalizeConfig({ tools: { real_tool: 'blocked' } });
+    expect(Object.getPrototypeOf(cfg.tools)).toBeNull();
+    for (const key of PROTOTYPE_KEYS) {
+      expect(cfg.tools?.[key]).toBeUndefined();
+    }
+    expect(cfg.tools?.real_tool).toBe('blocked');
+  });
+
+  it('叫这些名字的工具被显式设定时照常生效(修复不能误伤合法配置)', () => {
+    const cfg = normalizeConfig({ tools: { constructor: 'always-allow', toString: 'blocked' } });
+    expect(resolveModeFromConfig(cfg, 'constructor')).toBe('always-allow');
+    expect(resolveModeFromConfig(cfg, 'toString')).toBe('blocked');
+  });
+
+  it('叫 __proto__ 的工具能真正落表(普通对象上赋值是改原型的空操作,存不进去)', () => {
+    // 对象字面量写 `__proto__:` 不产生自有键;renderer 经 IPC 送来的形态
+    // 与 JSON.parse 一致,`__proto__` 是货真价实的自有键,必须存得住也读得到。
+    const raw = JSON.parse('{"tools":{"__proto__":"blocked","real":"always-allow"}}') as unknown;
+    const cfg = normalizeConfig(raw);
+    expect(Object.keys(cfg.tools ?? {})).toContain('__proto__');
+    expect(resolveModeFromConfig(cfg, '__proto__')).toBe('blocked');
+    expect(resolveModeFromConfig(cfg, 'real')).toBe('always-allow');
+    // 写入白名单同样看得见它,未声明就会被 IPC 边界挡掉。
+    expect(undeclaredToolPermissionKeys(raw, [{ name: 'real', description: '' }])).toEqual([
+      '__proto__',
+    ]);
+  });
+
+  it('自有键上的非法值不被当档位用,回落到全局策略/默认档', () => {
+    const bogus = { tools: { weird: 42 } } as unknown as Parameters<typeof resolveModeFromConfig>[0];
+    expect(resolveModeFromConfig(bogus, 'weird')).toBe('needs-approval');
+  });
 });
 
 describe('ghostToolBlockVerdict(「已阻止」裁决)', () => {

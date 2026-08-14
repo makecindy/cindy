@@ -42,6 +42,7 @@ import {
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
   type GhostSetupReauthSuggest,
+  type GhostToolPermissionConfig,
   type GhostVideoRefMode,
   type GhostVideoResultParams,
   type InstalledGhost,
@@ -5706,11 +5707,23 @@ export function registerGhostIpc(): void {
   });
 
   // ── 插件/连接器工具粒度授权配置 (ghosts:tool-permissions) ──
+  // sendSync 的 handler **不能抛**:一旦抛出,event.returnValue 永远不会被赋值,
+  // Electron 也就不会回 reply,调用方 renderer 会一直同步阻塞。来源闸因此走
+  // ghosts:unread 的非抛出口径 —— 非可信 frame 拿到空配置,而空配置在读端就是
+  // 默认的 needs-approval,不构成任何放宽。
   ipcMain.on('ghosts:tool-permissions', (event, ghostId: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    event.returnValue = {
-      config: typeof ghostId === 'string' ? readGhostToolPermissions(ghostId) : {},
-    };
+    let config: GhostToolPermissionConfig = {};
+    try {
+      if (isTrustedAppRendererEvent(event) && typeof ghostId === 'string') {
+        config = readGhostToolPermissions(ghostId);
+      }
+    } catch (error) {
+      // 读盘异常同样不能把 renderer 卡死;空配置 = 界面显示默认档位。
+      log.warn('ghost tool permissions 读取失败', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    event.returnValue = { config };
   });
   ipcMain.handle('ghosts:tool-permissions:set', (event, ghostId: unknown, config: unknown) => {
     assertTrustedAppRendererEvent(event);

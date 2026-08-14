@@ -31,7 +31,7 @@ interface GhostToolPermissionsData {
   permissions: Record<string, GhostToolPermissionConfig>;
 }
 
-const DEFAULTS: GhostToolPermissionsData = { permissions: {} };
+const DEFAULTS: GhostToolPermissionsData = { permissions: emptyPermissionsMap() };
 
 function isValidMode(val: unknown): val is ToolApprovalMode {
   return typeof val === 'string' && (TOOL_APPROVAL_MODES as readonly string[]).includes(val);
@@ -47,7 +47,16 @@ function normalizeConfig(raw: unknown): GhostToolPermissionConfig {
   }
 
   if (r.tools && typeof r.tools === 'object' && !Array.isArray(r.tools)) {
-    const tools: Record<string, ToolApprovalMode> = {};
+    // **必须是 null 原型**:工具名由插件作者完全控制。普通 `{}` 上读
+    // `constructor` / `toString` / `valueOf` / `hasOwnProperty` / `__proto__`
+    // 会拿到 Object.prototype 的成员(truthy 但不是合法档位),让
+    // resolveModeFromConfig 的全局策略继承被整段短路 —— 用户选了「全部阻止」,
+    // 插件更新后新增的同名工具反而拿不到 blocked。同理 `tools['__proto__'] = ...`
+    // 在普通对象上是改原型的空操作,存不进真正的配置。
+    const tools: Record<string, ToolApprovalMode> = Object.create(null) as Record<
+      string,
+      ToolApprovalMode
+    >;
     for (const [toolName, mode] of Object.entries(r.tools as Record<string, unknown>)) {
       if (typeof toolName === 'string' && toolName.length > 0 && isValidMode(mode)) {
         tools[toolName] = mode;
@@ -77,10 +86,15 @@ export function undeclaredToolPermissionKeys(
   );
 }
 
+/** 插件 id 同样由第三方控制,查表容器一律 null 原型(理由见 normalizeConfig)。 */
+function emptyPermissionsMap(): Record<string, GhostToolPermissionConfig> {
+  return Object.create(null) as Record<string, GhostToolPermissionConfig>;
+}
+
 function normalize(raw: unknown): GhostToolPermissionsData {
-  if (!raw || typeof raw !== 'object') return { permissions: {} };
+  if (!raw || typeof raw !== 'object') return { permissions: emptyPermissionsMap() };
   const rawPerms = (raw as { permissions?: unknown }).permissions;
-  const permissions: Record<string, GhostToolPermissionConfig> = {};
+  const permissions = emptyPermissionsMap();
   if (rawPerms && typeof rawPerms === 'object') {
     for (const [ghostId, cfgRaw] of Object.entries(rawPerms as Record<string, unknown>)) {
       const cfg = normalizeConfig(cfgRaw);
@@ -103,7 +117,13 @@ const store = createOverrideSettingsFile<GhostToolPermissionsData>({
 /** 读取指定插件的工具粒度授权配置。 */
 export function readGhostToolPermissions(ghostId: string): GhostToolPermissionConfig {
   store.invalidateIfChanged();
-  return store.read().permissions[ghostId] ?? {};
+  const permissions = store.read().permissions;
+  // 与 resolveModeFromConfig 同口径:只认自有键。permissions 正常路径已是
+  // null 原型,这里兜住"缓存里换成了普通对象"的情况,别让 ghostId 叫
+  // `constructor` 的插件读到 Object.prototype 上的东西当配置。
+  if (!permissions || !Object.prototype.hasOwnProperty.call(permissions, ghostId)) return {};
+  const cfg = permissions[ghostId];
+  return cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {};
 }
 
 /** 写入/替换指定插件的工具粒度授权配置。 */
@@ -113,7 +133,9 @@ export function writeGhostToolPermissions(
 ): GhostToolPermissionConfig {
   store.invalidateIfChanged();
   const normalized = normalizeConfig(config);
-  const permissions = { ...store.read().permissions };
+  // Object.assign 到 null 原型容器:`{ ...map }` 会退回普通对象,
+  // 后续同一份缓存被读到时又暴露原型链。
+  const permissions = Object.assign(emptyPermissionsMap(), store.read().permissions);
   if (!normalized.globalPolicy && (!normalized.tools || Object.keys(normalized.tools).length === 0)) {
     delete permissions[ghostId];
   } else {
@@ -129,13 +151,20 @@ export function writeGhostToolPermissions(
  *
  * 默认必须是 needs-approval:配置缺失/损坏/读不出来都会落到这里,fail closed 到
  * 「照旧走确认」而不是「免审批」。
+ *
+ * 单工具查表**只认自有属性且必须是合法档位**:normalizeConfig 已经用 null 原型
+ * 建表,这里是第二道闸 —— cfg 也可能来自未经 normalize 的旧数据或直接构造,
+ * 一旦读到原型链上的 `constructor` / `toString`,下面的全局策略继承就会被
+ * 短路成"已配置",等于把用户显式选的 blocked 悄悄降级。
  */
 function resolveModeFromConfig(
   cfg: GhostToolPermissionConfig,
   toolName: string,
 ): ToolApprovalMode {
-  if (cfg.tools && cfg.tools[toolName]) {
-    return cfg.tools[toolName];
+  const tools = cfg.tools;
+  if (tools && Object.prototype.hasOwnProperty.call(tools, toolName)) {
+    const mode = tools[toolName];
+    if (isValidMode(mode)) return mode;
   }
   // always-allow 必须逐工具显式记录。插件更新新增的工具不在用户当初看到的
   // tools 表中，绝不能因旧的全局选择自动拿到免审批；needs/blocked 则是安全

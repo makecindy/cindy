@@ -15,7 +15,11 @@
  *   2. cindy_contacts     —— 按内层 action 细粒度判定（见 contacts/approval.ts）
  *   3. cindy::ghost_call  —— 按用户在插件详情页为该插件的该工具选的授权档位判定
  *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
- *   5. 其余                —— 逐次弹窗（第三方 server、cindy_ssh…）
+ *   5. 其余                —— `'prompt'`：交回 agent 原有权限链（第三方 server、cindy_ssh…）
+ *
+ * 注意 `'prompt'` 与 `'prompt-each-time'` 不是同义词：前者维持 agent 自己的权限链
+ * （用户可以在 agent 的权限卡上选「always allow」并持久化），后者才会全程禁止持久化
+ * 授权。需要「每次都必须问」的判定必须显式返回 `'prompt-each-time'`。
  */
 
 import type {
@@ -120,20 +124,30 @@ function readJsonObject(value: unknown): Record<string, unknown> | undefined {
  *
  * `cindy` 仍然不进 TRUSTED_MCP_SERVERS：它转发到第三方插件沙箱，不能 server 级静默。
  * 本函数只兑现用户对某个插件工具的 always-allow 选择；工作目录外附件/目录交接仍由
- * mcp-integrations/ghost.ts 的独立确认闸控制。坐标缺失、grant_only 或读取失败均 fail closed。
+ * mcp-integrations/ghost.ts 的独立确认闸控制。
+ *
+ * **非 always-allow 一律 `'prompt-each-time'`,不能回落到 `'prompt'`**：`'prompt'` 会把
+ * 判定交回 agent 自己的权限链，用户在 agent 的权限卡上点一次「不再询问」就会持久化，
+ * 之后 canUseTool 压根不再被调用 —— 插件详情页上显式选的「每次询问」就被绕过了，
+ * 三档里的中间档形同虚设。想要免打扰的正确入口是插件页的「总是允许」，本 PR 建的
+ * 就是这个机制。
+ *
+ * 同一条也覆盖 fail-closed 分支：grant_only（批量预授权，把一批文件过户给插件，
+ * 更不该允许「不再询问」）、坐标缺失、读取失败 —— 都无法证明用户选过 always-allow，
+ * 一律按最严的「每次都问且禁止持久化」处理。
  */
 function ghostCallApprovalPolicy(toolParams: unknown): McpToolApprovalPolicy {
   const params = readJsonObject(toolParams);
-  if (!params || params.grant_only === true) return 'prompt';
+  if (!params || params.grant_only === true) return 'prompt-each-time';
   const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
   const innerTool = typeof params.tool === 'string' ? params.tool.trim() : '';
-  if (!ghostId || !innerTool) return 'prompt';
+  if (!ghostId || !innerTool) return 'prompt-each-time';
   try {
     return resolveToolApprovalMode(ghostId, innerTool) === 'always-allow'
       ? 'auto-approve'
-      : 'prompt';
+      : 'prompt-each-time';
   } catch {
-    return 'prompt';
+    return 'prompt-each-time';
   }
 }
 
@@ -224,6 +238,13 @@ export function getDesktopMcpToolApprovalPolicy(
   // Codex app-server may omit the outer toolName while retaining the validated
   // ghost_call payload. The coordinates inside it remain sufficient for an
   // exact user-selected policy; malformed payloads fail closed in the helper.
+  //
+  // 约束（新增 `cindy` server 工具时必须复核）：`toolName === undefined` 会让本分支
+  // 吞掉 cindy server 上**所有**丢了工具名的调用，判据只看 payload 里的
+  // `ghost_id` + `tool`。当前 7 个工具里只有 ghost_call 同时带这两个字符串参数
+  // （ghost_info 只有 ghost_id，ghost_manual 是 ghost_id + path，forge 三件套都没有），
+  // 所以误判不了。一旦有新工具同时带这两个字段，必须先收窄这条分支（例如追加
+  // ghost_call 独有字段的形状校验），否则它会被当成 ghost_call 拿到 auto-approve。
   if (serverName === 'cindy' && (toolName === 'ghost_call' || toolName === undefined)) {
     return ghostCallApprovalPolicy(toolParams);
   }

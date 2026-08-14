@@ -327,7 +327,7 @@ describe('desktop MCP approval policy', () => {
       getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_ssh', toolName: 'call_tool' }),
     ).toBe('prompt');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_call' })).toBe(
-      'prompt',
+      'prompt-each-time',
     );
   });
 
@@ -341,26 +341,38 @@ describe('desktop MCP approval policy', () => {
       expect(resolveToolApprovalMode).toHaveBeenCalledWith('demo', 'do_thing');
     });
 
-    it('needs-approval / blocked 都不免审批(blocked 的硬拦截在派发层,不在这里)', () => {
+    // `'prompt'` 会把判定交回 agent 自己的权限链 —— 用户在 agent 的权限卡上点一次
+    // 「不再询问」就持久化,之后 canUseTool 压根不再被调用,插件详情页上显式选的
+    // 「每次询问」被绕过。只有 `'prompt-each-time'` 会全程禁止持久化授权。
+    // 这条不变量是本档位存在的意义,退回 `'prompt'` 等于把中间档做成摆设。
+    it('needs-approval / blocked 一律 prompt-each-time,禁止 agent 侧持久化授权', () => {
       resolveToolApprovalMode.mockReturnValue('needs-approval');
-      expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing' })).toBe('prompt');
+      expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing' })).toBe('prompt-each-time');
+      // blocked 的硬拦截在派发层,这里只保证它同样拿不到免审批、也持久化不了。
       resolveToolApprovalMode.mockReturnValue('blocked');
-      expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing' })).toBe('prompt');
+      expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing' })).toBe('prompt-each-time');
+    });
+
+    it('任何非 always-allow 的返回都不得是可持久化的 prompt', () => {
+      for (const mode of ['needs-approval', 'blocked', 'custom', 'nonsense'] as const) {
+        resolveToolApprovalMode.mockReturnValue(mode as never);
+        expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing' })).not.toBe('prompt');
+      }
     });
 
     it('拿不到 ghost_id / tool 坐标时 fail closed,根本不查档位', () => {
       resolveToolApprovalMode.mockReturnValue('always-allow');
-      expect(ghostCall(undefined)).toBe('prompt');
-      expect(ghostCall(null)).toBe('prompt');
-      expect(ghostCall([{ ghost_id: 'demo', tool: 'do_thing' }])).toBe('prompt');
-      expect(ghostCall({ tool: 'do_thing' })).toBe('prompt');
-      expect(ghostCall({ ghost_id: 'demo' })).toBe('prompt');
-      expect(ghostCall({ ghost_id: '   ', tool: 'do_thing' })).toBe('prompt');
-      expect(ghostCall({ ghost_id: 'demo', tool: 42 })).toBe('prompt');
+      expect(ghostCall(undefined)).toBe('prompt-each-time');
+      expect(ghostCall(null)).toBe('prompt-each-time');
+      expect(ghostCall([{ ghost_id: 'demo', tool: 'do_thing' }])).toBe('prompt-each-time');
+      expect(ghostCall({ tool: 'do_thing' })).toBe('prompt-each-time');
+      expect(ghostCall({ ghost_id: 'demo' })).toBe('prompt-each-time');
+      expect(ghostCall({ ghost_id: '   ', tool: 'do_thing' })).toBe('prompt-each-time');
+      expect(ghostCall({ ghost_id: 'demo', tool: 42 })).toBe('prompt-each-time');
       expect(resolveToolApprovalMode).not.toHaveBeenCalled();
     });
 
-    it('grant_only 做的是真实过户,不吃 always-allow', () => {
+    it('grant_only 做的是真实过户,不吃 always-allow 也不许持久化', () => {
       resolveToolApprovalMode.mockReturnValue('always-allow');
       expect(
         ghostCall({
@@ -369,7 +381,7 @@ describe('desktop MCP approval policy', () => {
           grant_only: true,
           attachments: ['/tmp/a.png'],
         }),
-      ).toBe('prompt');
+      ).toBe('prompt-each-time');
       expect(resolveToolApprovalMode).not.toHaveBeenCalled();
     });
 
@@ -377,7 +389,7 @@ describe('desktop MCP approval policy', () => {
       resolveToolApprovalMode.mockImplementation(() => {
         throw new Error('settings file unreadable');
       });
-      expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing' })).toBe('prompt');
+      expect(ghostCall({ ghost_id: 'demo', tool: 'do_thing' })).toBe('prompt-each-time');
     });
 
     it('Codex 省略 toolName 时仍用已校验的内层坐标应用 always-allow', () => {
@@ -398,7 +410,7 @@ describe('desktop MCP approval policy', () => {
           serverName: 'cindy',
           toolParams: { ghost_id: 'demo' },
         }),
-      ).toBe('prompt');
+      ).toBe('prompt-each-time');
       expect(resolveToolApprovalMode).not.toHaveBeenCalled();
     });
 

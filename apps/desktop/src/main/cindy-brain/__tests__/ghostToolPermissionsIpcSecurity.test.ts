@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('Ghost tool-permission read IPC security contract', () => {
-  it('checks the trusted renderer before reading owner-scoped tool permissions', () => {
+  it('gates the owner-scoped read on the trusted renderer without throwing out of the sendSync handler', () => {
     const main = fs.readFileSync(
       path.resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
       'utf8',
@@ -15,10 +15,17 @@ describe('Ghost tool-permission read IPC security contract', () => {
 
     expect(handlerStart).toBeGreaterThanOrEqual(0);
     expect(handlerEnd).toBeGreaterThan(handlerStart);
-    expect(handler).toContain('assertTrustedAppRendererEvent(event);');
-    expect(handler.indexOf('assertTrustedAppRendererEvent(event);')).toBeLessThan(
+    // 来源闸仍在,且必须先于读取。
+    expect(handler).toContain('isTrustedAppRendererEvent(event)');
+    expect(handler.indexOf('isTrustedAppRendererEvent(event)')).toBeLessThan(
       handler.indexOf('readGhostToolPermissions('),
     );
+    // sendSync 的 handler 抛出 => event.returnValue 永不赋值 => Electron 不回
+    // reply => 调用方 renderer 同步卡死。断言这里不用抛出式的来源闸,
+    // 并且任何路径都会给 returnValue 赋值(读盘异常也被 try/catch 兜住)。
+    expect(handler).not.toContain('assertTrustedAppRendererEvent(');
+    expect(handler).toContain('event.returnValue');
+    expect(handler).toContain('} catch (error) {');
   });
 
   it('validates installed ghost and manifest tool allowlist before persisting permissions', () => {

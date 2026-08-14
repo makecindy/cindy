@@ -23,6 +23,12 @@ function hasExactBigIntIdentity(
 /**
  * 比较两个文件身份。Windows 的路径 stat 可能令双方 dev 都为 0；只要两边
  * 非零 FileId 相等即可继续比较其它版本字段。其它平台或缺失 FileId 时拒绝。
+ *
+ * **这是弱变体，只适用于「同一个已打开句柄的前后两次 stat」这类两端同源的比对**
+ * （两端都是 handle stat 时 dev 都是真实卷序列号，两端同时为 0 的分支实际取不到）。
+ * 路径 stat 与句柄 stat 的比对必须用 {@link samePathAndHandleFileIdentity}：
+ * 那条路径上「两边 dev 都为 0」意味着只剩 ino 单独作证，而 NTFS FileId 只在卷内
+ * 唯一，跨卷可能撞号。调用方若拿不准，选强的那个。
  */
 export function sameFileIdentity<T extends number | bigint>(
   left: FileIdentity<T>,

@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 /**
  * attachmentGrant.ts — 用户图片过户(docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
@@ -15,6 +13,8 @@ import { randomUUID } from 'node:crypto';
  *
  * 依赖注入(规则 14):解析/读盘/落仓/记账全经 deps,单测内存直测。
  */
+
+import { randomUUID } from 'node:crypto';
 
 /** 解析结果:originKind 缺省按 'user'(会话内生成图过户时由接线层查账后传 'tool')。 */
 export interface ResolvedGrantSource {
@@ -177,17 +177,24 @@ export async function grantAttachmentsToGhost(
     // 整批授权行共用一个持久补偿事务。日志必须在第一个
     // addRef 前落盘；中途 blocked、DB 丢 ACK、即时删除失败或进程
     // 崩溃都能由同 owner 的下次 DB ready 精确补偿。
-    await deps.withRefCompensation({
-      refIds: prepared.map((grant) => grant.id),
-      compensate: deps.removeRefById,
-      perform: async () => {
-        for (const grant of prepared) {
-          deps.assertStillAllowed?.();
-          await deps.addRef(grant);
-          deps.assertStillAllowed?.();
-        }
-      },
-    });
+    //
+    // 空批次必须**跳过**补偿事务:真身 withMediaRefCompensation 对
+    // refIds.length === 0 是硬抛(空事务没有可回滚的行,落一份空日志纯属
+    // 污染)。零附件在本函数的契约里是合法的直通成功,不能因为记账层的
+    // 批次校验被翻译成「附件过户失败」。
+    if (prepared.length > 0) {
+      await deps.withRefCompensation({
+        refIds: prepared.map((grant) => grant.id),
+        compensate: deps.removeRefById,
+        perform: async () => {
+          for (const grant of prepared) {
+            deps.assertStillAllowed?.();
+            await deps.addRef(grant);
+            deps.assertStillAllowed?.();
+          }
+        },
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     deps.log?.warn('ghost attachment grant: import failed', { ghostId, error: message });
