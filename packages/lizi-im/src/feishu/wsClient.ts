@@ -88,11 +88,19 @@ const strangerNoticeAt = new Map<string, number>();
  * 开场白孤立(话题 id 不可恢复且撤回失败)时回复开场白说明失败 — per-opener
  * 冷却(开场白消息 id → 上次提示 ts)防重投事件重复提示。回复挂在开场白下
  * 自动落回话题, 不惊动群主流。
+ *
+ * 提示发送失败时: 清掉冷却标记并释放该消息的入站认领 — 让重投消息能重试
+ * 一轮。否则用户会一直看着「思考中」的开场白卡, 等不到答案也等不到说明
+ * (本轮已结束, 开场白不会被 patch/撤回/再次提示)。
  */
 const ORPHAN_NOTICE_COOLDOWN_MS = 60_000;
 const orphanNoticeAt = new Map<string, number>();
 
-async function sendOrphanOpenerNotice(openerMessageId: string): Promise<void> {
+async function sendOrphanOpenerNotice(
+  botAppId: string,
+  messageId: string,
+  openerMessageId: string,
+): Promise<void> {
   const log = getLog();
   const last = orphanNoticeAt.get(openerMessageId) ?? 0;
   if (Date.now() - last < ORPHAN_NOTICE_COOLDOWN_MS) return;
@@ -100,8 +108,12 @@ async function sendOrphanOpenerNotice(openerMessageId: string): Promise<void> {
   try {
     await outbound.replyText(openerMessageId, transportMessages.group.threadOrphanNotice);
   } catch (err) {
+    orphanNoticeAt.delete(openerMessageId);
+    releaseInboundClaim(botAppId, messageId);
     const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`[feishu/wsClient] orphan opener notice failed (non-fatal): ${msg}`);
+    log.warn(
+      `[feishu/wsClient] orphan opener notice failed — cooldown cleared, inbound claim released for retry: ${msg}`,
+    );
   }
 }
 
@@ -143,6 +155,16 @@ function claimInboundMessage(appId: string, messageId: string): boolean {
     seenInboundMessages.delete(k);
   }
   return true;
+}
+
+/**
+ * 释放某条消息的入站认领 —— 只在「认领了但本轮没有产出任何用户可见结果」的
+ * 放弃路径上调用(连接换代丢弃、孤儿开场白提示发送失败), 让重推能在新连接/
+ * 重试路径上重新处理。正常处理完(含已给出失败说明的放弃)绝不释放, 否则重推
+ * 会再次起 turn。
+ */
+function releaseInboundClaim(appId: string, messageId: string): void {
+  seenInboundMessages.delete(`${appId}:${messageId}`);
 }
 
 /** 测试注入口 — 生产代码不要调用(生产语义就是跨 stop/start 不清空)。 */
@@ -775,6 +797,8 @@ async function handleIncomingMessage(
   // 入站门禁复查: 附件下载等 await 期间连接可能已 stop()/换账号换代 — 不复查
   // 会把旧连接的轮次推进新连接的编排状态(锚点污染/跨账号出站)。
   if (!isActiveConnection(generation, botAppId)) {
+    // 本轮没有产出任何用户可见结果 — 释放入站认领, 让重推能在新连接上处理。
+    releaseInboundClaim(botAppId, messageId);
     log.info('[feishu/wsClient] drop inbound message: connection changed during processing');
     return;
   }
@@ -800,6 +824,9 @@ async function handleIncomingMessage(
       // 开话题是一次跨网络的 await — 期间用户可能断开/换账号: 复查门禁,
       // 防止旧连接的锚点与事件漏进新连接(或已停机的编排状态)。
       if (!isActiveConnection(generation, botAppId)) {
+        // 话题可能已开但本轮没有 emit — 释放入站认领, 让重推能在新连接上
+        // 重新处理(openThread 幂等缓存保证不会开出第二个话题)。
+        releaseInboundClaim(botAppId, messageId);
         log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
         return;
       }
@@ -820,7 +847,7 @@ async function handleIncomingMessage(
         log.error(
           `[feishu/wsClient] openThread orphaned opener=...${opener.openerMessageId.slice(-8)} — turn dropped with in-topic notice`,
         );
-        await sendOrphanOpenerNotice(opener.openerMessageId);
+        await sendOrphanOpenerNotice(botAppId, messageId, opener.openerMessageId);
         return;
       } else {
         laneUserId = encodeLaneUserId(chatId, null);

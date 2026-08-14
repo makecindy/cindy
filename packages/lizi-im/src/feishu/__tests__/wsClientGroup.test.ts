@@ -277,6 +277,33 @@ describe('feishu group inbound gate', () => {
     expect(events).toHaveLength(0);
     expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
     expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
+
+    // 放弃路径释放了入站认领 — 新连接上的重投消息应能正常处理(openThread
+    // 幂等缓存保证不会开出第二个话题)。
+    await connect();
+    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+    expect(events).toHaveLength(1);
+    expect(events[0]!.senderId).toBe('g/oc_chat1/omt_new');
+  });
+
+  it('orphan notice failure releases the dedupe claim so a redelivery retries the notice', async () => {
+    mocks.openThread
+      .mockResolvedValueOnce({ kind: 'orphaned', openerMessageId: 'om_opener' })
+      .mockResolvedValueOnce({ kind: 'orphaned', openerMessageId: 'om_opener' });
+    mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+    await connect();
+    const events = collectEvents();
+    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+
+    // 首轮: 不起 turn, 提示发送失败(冷却已清、认领已释放)。
+    expect(events).toHaveLength(0);
+    expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+    // 重投: 认领已释放 → 重新处理 → 孤儿提示重试成功 — 用户不会永远
+    // 看着「思考中」的开场白卡等不到任何说明。
+    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+    expect(mocks.replyText).toHaveBeenCalledTimes(2);
+    expect(events).toHaveLength(0);
   });
 
   it('drops duplicate delivery of the same message (one turn per message)', async () => {
