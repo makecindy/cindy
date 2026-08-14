@@ -13,8 +13,9 @@
  * 否则 `${...}` 会被外层 String.raw 插值 —— 一律用字符串拼接。
  *
  * 安全形态(重要,别当冗余删掉):
- *  - 子进程**继承 `PI_CODING_AGENT_DIR`**,因此同样加载 cindy-bridge → 权限门(`tool_call`
- *    拦截 + 凭证路径硬拦)对子代理照样生效。不传 `--no-extensions` 正是为了保住这条。
+ *  - 子进程**继承 `PI_CODING_AGENT_DIR`**,但显式 `--no-extensions` 关闭隐式发现，再只用
+ *    `--extension <configHome>/extensions/cindy-bridge.ts` 回装权限门。这样 project extension
+ *    永远不会执行，bridge 的 tool_call 拦截 + 凭证路径硬拦仍对子代理生效。
  *  - 第一期只给**只读**工具白名单(read/grep/find/ls)。这不只是保守:ask 档下非只读工具
  *    要走 `ctx.ui.confirm`,而 headless 子进程没有 UI 承接、bridge 的 catch 分支按 deny
  *    收口(fail-closed)。只读工具在门里直接放行,因此只读子代理开箱可用;写权限子代理需
@@ -113,12 +114,14 @@ const CINDY_SUBAGENT_EXTENSION_BODY = String.raw`/**
  */
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const TOOL_NAME = 'subagent';
 const MARKER = '__cindySubagent';
 const BINARY_ENV = 'CINDY_PI_SUBAGENT_BINARY';
 const DEPTH_ENV = 'CINDY_PI_SUBAGENT_DEPTH';
 const RUNTIME_FILE_ENV = 'CINDY_PI_SUBAGENT_RUNTIME_FILE';
+const CONFIG_HOME_ENV = 'PI_CODING_AGENT_DIR';
 // cindy-bridge 用它决定要不要连 MCP server;子代理不需要,spawn 时剥掉(见 runTask)。
 const MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
 // PARENT_PID_ENV 与 PARENT_WATCHDOG_INTERVAL_MS 由末尾追加的看门狗段声明(那段要能独立
@@ -350,8 +353,16 @@ function runTask(binary, task, runtime, signal, onProgress) {
       return;
     }
     const profile = PROFILES[task.agent];
+    const configHome = process.env[CONFIG_HOME_ENV];
+    if (typeof configHome !== 'string' || configHome.trim().length === 0) {
+      resolve({ text: 'subagent configuration is unavailable.', isError: true, toolUses: 0, tokens: 0, usage: emptyUsage() });
+      return;
+    }
     const args = [
       '--mode', 'json',
+      '--no-approve',
+      '--no-extensions',
+      '--extension', join(configHome, 'extensions', 'cindy-bridge.ts'),
       '--no-session',
       '--tools', profile.tools,
       '--append-system-prompt', profile.prompt,
@@ -373,8 +384,15 @@ function runTask(binary, task, runtime, signal, onProgress) {
     // 浪费:每个子代理一整套连接、每次派发一轮连接风暴(并发 4、单次最多 8),而且子代理不会
     // 显式 close,只能等进程退出(review)。这也是来源隔离不变量:子代理不能继承 root
     // bridge；未来若开放 MCP，Host 必须为子进程签发 descendant provenance。
-    // 剥这一个变量即可 —— 权限门与网关路由不受影响。
     delete childEnv[MCP_BRIDGE_ENV];
+    // 轮 25-J4 HIGH:只删 bridge descriptor 不够 —— 子代理仍继承 root 会话的
+    // 外部 MCP header 真值(CINDY_PI_REMOTE_MCP_SECRET_*)。子代理不用 MCP,
+    // 这些 secret 对它是非必需却多出的凭证暴露面(bash spawnHook 会剥离、read/
+    // /proc 有拦截, 但子 Pi 运行时/扩展/崩溃 dump/未来工具仍持有)。一并删掉:
+    // 最小凭证继承 —— 子代理只保留跑模型需要的 auth/native env。
+    for (const key of Object.keys(childEnv)) {
+      if (key.startsWith('CINDY_PI_REMOTE_MCP_SECRET_')) delete childEnv[key];
+    }
 
     let child;
     try {

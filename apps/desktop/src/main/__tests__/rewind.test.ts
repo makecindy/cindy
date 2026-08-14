@@ -816,7 +816,7 @@ describe('commitRewindAtMessage', () => {
     );
   });
 
-  it('does not advance last assistant transcript anchor when DB tx fails', async () => {
+  it('does not advance last assistant transcript anchor when DB tx fails (fail-closed)', async () => {
     txMock.mockImplementationOnce((name: string, args: unknown) => {
       txCalls.push({ name, args });
       return Promise.reject(new Error('tx failed'));
@@ -826,7 +826,12 @@ describe('commitRewindAtMessage', () => {
     selectQueue.push([makeAssistantMessageRow()]);
     selectQueue.push([makeSessionRow()]);
 
-    const result = await commitRewindAtMessage('sess-1', 'client-id');
+    // 轮 40-w4-t13:DB 事务失败必须上抛(fail-closed)—— SDK 侧 rewind 已把运行态
+    // 切到新身份, 静默吞掉会让调用方误以为成功, 重启后恢复错分支(运行态与
+    // 持久化分叉)。断言:reject + 不 advance anchor。
+    await expect(
+      commitRewindAtMessage('sess-1', 'client-id'),
+    ).rejects.toThrow(/rewind 持久化失败/);
 
     expect(commitRewindFilesMock).toHaveBeenCalledWith(
       'sdk-msg-uuid-target',
@@ -834,7 +839,6 @@ describe('commitRewindAtMessage', () => {
     );
     expect(txCalls.some((c) => c.name === 'rewind.commit')).toBe(true);
     expect(setLastAssistantTranscriptUuidMock).not.toHaveBeenCalled();
-    expect(result.id).toBe('sess-1');
   });
 
   it('throws SESSION_RUNNING when session.isTurnRunning()=true; commitRewindFiles not called, no DB update', async () => {

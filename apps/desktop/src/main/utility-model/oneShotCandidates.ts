@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { toSdkModelString, type AgentKind, type Maker } from '@cindy/maker-core';
+import { type AgentKind, type Maker } from '@cindy/maker-core';
 import { appendProviderRequestPath } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
@@ -624,7 +624,9 @@ async function requestBuiltinProviderText(
           'anthropic-version': '2023-06-01',
           'anthropic-beta': 'oauth-2025-04-20',
         },
-        model: toSdkModelString(input.model, findProviderModel(input.provider, input.agentKind, input.model)?.contextWindow),
+        // 直连 Anthropic API 用目录裸 id;不要复用 toSdkModelString——它会给 1M
+        // 目录模型追加 SDK 专用的 [1m] 后缀,/v1/messages 对该串返回 404(#2429)。
+        model: toAnthropicApiModelId(input.model),
         prompt: text,
         // Anthropic API 协议必填 max_tokens:缺省时以模型目录声明的 maxOutput
         // (模型自身输出能力)兜底,没有目录条目才回退 81920——宿主不设政策上限。
@@ -903,6 +905,19 @@ function appendProviderPath(baseUrl: string, suffix: string): string {
   // Fragments are client-side only and must not be sent as part of an API URL.
   url.hash = '';
   return url.toString();
+}
+
+/**
+ * catalog model id → 内置 Anthropic `/v1/messages` 直连请求体的 API model id。
+ *
+ * `[1m]` 是 Claude Code SDK 的 beta 通道后缀(由 toSdkModelString 按目录
+ * contextWindow 追加),不是 Anthropic API 模型名;直连 Messages API 时携带它
+ * 会被上游以 404 not_found 拒绝,进而让 Auto-review 持续 fail-closed(#2429)。
+ * 该转换仅用于内置 anthropic 直连分支——不对自定义供应商做全局字符串剥离,
+ * 部分兼容网关可能把 `[1m]` 作为自己的路由 id。
+ */
+export function toAnthropicApiModelId(model: string): string {
+  return model.endsWith('[1m]') ? model.slice(0, -'[1m]'.length) : model;
 }
 
 /** Claude providers may configure either the host root or an existing `/v1` base. */

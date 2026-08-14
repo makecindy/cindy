@@ -119,8 +119,8 @@ localStorage 按 **origin + userData 目录** 分家——dev 的 renderer 从
 ## 分层验证
 
 本节指导**开发过程中的增量验证**；提交（commit／PR）前的强制门禁以
-`development-workflow.md` 的「提交前测试门禁」为准（仓库根 `pnpm test:unit` 与相关
-package 的 typecheck 全部通过）。开发过程中根据实际改动选择最小但充分的检查：
+`development-workflow.md` 的「提交前测试门禁」为准（仓库根 `pnpm test:unit:related` 与相关
+package 的 typecheck 全部通过；CI 仍跑完整 `pnpm test:unit`）。开发过程中根据实际改动选择最小但充分的检查：
 
 ```bash
 pnpm --filter desktop typecheck
@@ -128,6 +128,7 @@ pnpm --filter desktop lint
 pnpm --filter desktop exec vitest run <测试文件路径>
 pnpm --filter desktop test
 pnpm build
+pnpm test:unit:related
 pnpm test:unit
 ```
 

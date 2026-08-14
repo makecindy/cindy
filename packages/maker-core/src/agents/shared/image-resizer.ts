@@ -3,8 +3,8 @@
  * ---------------------------------------------------------------------------
  * Last-mile shrink for images that go INTO the LLM context. UI / IM 仍然显示
  * 原图,只在 toClaudeSdkContent / toAppServerInput 这一步把 image-block 的
- * absPath 透明替换为缩好的副本路径,Claude SDK / codex app-server 读到的就是
- * resized 文件,显著节省 vision token。
+ * absPath 透明替换为缩好的副本路径,再由下游转换为模型原生图片输入,
+ * 显著节省 vision token。
  *
  * 设计要点:
  *  - 用 sharp (libvips Node binding)。所有 decode/resize/encode 都在 libuv
@@ -82,6 +82,8 @@ const DEFAULTS = {
   timeoutMs: 5000,
   cacheVersion: 'v1',
 };
+
+const VALIDATION_MAX_INPUT_PIXELS = 100_000_000;
 
 interface QueueTask {
   run: () => Promise<void>;
@@ -178,6 +180,67 @@ export class ImageResizer {
     });
     this.inflight.set(key, task);
     return task;
+  }
+
+  /**
+   * Fully decode an image before it is embedded as model-native base64 input.
+   * Magic bytes identify a container but cannot prove that the payload is complete.
+   * Missing sharp, decode errors, and timeouts all fail closed so callers can keep
+   * the existing path-reference fallback.
+   */
+  async validate(absPath: string): Promise<boolean> {
+    if (!absPath || typeof absPath !== 'string') return false;
+    return this.validateInput(absPath, { absPath });
+  }
+
+  /** Validate the exact bytes a caller is about to embed. */
+  async validateBuffer(data: Buffer): Promise<boolean> {
+    if (!Buffer.isBuffer(data) || data.length === 0) return false;
+    return this.validateInput(data, { bytes: data.length });
+  }
+
+  private async validateInput(
+    input: string | Buffer,
+    logMeta: Record<string, unknown>,
+  ): Promise<boolean> {
+    const sharp = loadSharp();
+    if (!sharp) return false;
+
+    return this.acquireSlot(async () => {
+      const work = sharp(input, {
+        failOn: 'error',
+        limitInputPixels: VALIDATION_MAX_INPUT_PIXELS,
+        sequentialRead: true,
+      })
+        .rotate()
+        .resize({
+          width: this.cfg.maxEdgePx,
+          height: this.cfg.maxEdgePx,
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .toBuffer()
+        .then(() => true)
+        .catch((error) => {
+          this.cfg.logger?.warn('image-resizer: image validation failed', {
+            ...logMeta,
+            error: String(error),
+          });
+          return false;
+        });
+      const timeout = new Promise<'timeout'>((resolve) => {
+        setTimeout(() => resolve('timeout'), this.cfg.timeoutMs).unref?.();
+      });
+      const result = await Promise.race([work, timeout]);
+      if (result === 'timeout') {
+        this.cfg.logger?.warn('image-resizer: image validation timeout', {
+          ...logMeta,
+          timeoutMs: this.cfg.timeoutMs,
+        });
+        return false;
+      }
+      return result;
+    });
   }
 
   /** 内部: 跑实际的 resize, 含并发闸门 + 超时 + 错误降级。 */

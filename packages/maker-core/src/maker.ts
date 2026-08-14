@@ -18,6 +18,7 @@
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import fs from 'node:fs';
 import path from 'node:path';
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from 'node:timers';
 
 import type { AgentKind } from './types/common.js';
 import type { Capabilities } from './types/capabilities.js';
@@ -34,6 +35,8 @@ import type {
   ListCustomizationsResult,
 } from './types/customizations.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
+import { piExplicitSkillRuntimePath } from './agents/pi/skill-runtime-provenance.js';
+import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resource-assembly.js';
 import { Session, generateSessionId } from './session.js';
 import type {
   AgentSessionHandle,
@@ -159,40 +162,112 @@ function canonicalPiRuntimePath(value: string): string {
   }
 }
 
-function mergePiRuntimeSkillStatuses(
+const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS = 250;
+const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET = 2_048;
+
+async function fingerprintPiProjectSkillForPalette(
+  sourcePath: string,
+  canonicalRepoRoot: string,
+  budget: { remainingEntries: number; deadlineAtMs: number },
+): ReturnType<typeof fingerprintPiProjectSkillEntrypoint> {
+  const remainingMs = budget.deadlineAtMs - Date.now();
+  if (remainingMs <= 0) return null;
+  let timeout: number | NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      fingerprintPiProjectSkillEntrypoint(sourcePath, canonicalRepoRoot, { budget }),
+      new Promise<null>((resolve) => {
+        timeout = setNodeTimeout(() => resolve(null), remainingMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearNodeTimeout(timeout);
+  }
+}
+
+async function mergePiRuntimeSkillStatuses(
   result: ListAgentSkillsResult,
   manifest: PiRuntimeCapabilityManifest | undefined,
-): ListAgentSkillsResult {
+): Promise<ListAgentSkillsResult> {
   if (manifest?.status !== 'loaded') return result;
-  const loadedProjectSkills = new Map(
-    manifest.commands.flatMap((command) => {
-      const baseDir = command.sourceInfo.baseDir;
-      if (
-        command.source !== 'skill'
-        || command.sourceInfo.scope !== 'project'
-        || typeof baseDir !== 'string'
-        || !command.name.startsWith('skill:')
-      ) return [];
-      return [[[
-        command.name.slice('skill:'.length),
-        canonicalPiRuntimePath(baseDir),
-      ].join('\0'), command.name] as const];
-    }),
-  );
-  if (loadedProjectSkills.size === 0) return result;
+  const loadedExplicitSkills = new Map<string, string>();
+  const loadedLegacyProjectSkills = new Map<string, string>();
+  const changedProjectSkills = new Map<string, string>();
+  const fingerprintBudget = {
+    remainingEntries: PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET,
+    deadlineAtMs: Date.now() + PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS,
+  };
+  for (const skill of manifest.projectResources?.loadedSkills ?? []) {
+    const canonicalSourcePath = canonicalPiRuntimePath(skill.sourcePath);
+    if (!skill.snapshotDigest || !skill.sourceFingerprint || !skill.canonicalRepoRoot) {
+      changedProjectSkills.set(canonicalSourcePath, skill.sourcePath);
+      continue;
+    }
+    const currentFingerprint = await fingerprintPiProjectSkillForPalette(
+      skill.sourcePath,
+      skill.canonicalRepoRoot,
+      fingerprintBudget,
+    );
+    if (
+      currentFingerprint?.contentDigest !== skill.snapshotDigest
+      || currentFingerprint.sourceStateDigest !== skill.sourceFingerprint
+    ) {
+      changedProjectSkills.set(canonicalSourcePath, skill.sourcePath);
+      continue;
+    }
+    loadedExplicitSkills.set(canonicalSourcePath, skill.commandName);
+  }
+  for (const command of manifest.commands) {
+    const baseDir = command.sourceInfo.baseDir;
+    if (command.source !== 'skill' || !command.name.startsWith('skill:')) continue;
+    const skillName = command.name.slice('skill:'.length);
+    if (command.sourceInfo.scope === 'project' && typeof baseDir === 'string') {
+      loadedLegacyProjectSkills.set(
+        [skillName, canonicalPiRuntimePath(baseDir)].join('\0'),
+        command.name,
+      );
+      continue;
+    }
+    // Pinned Pi reports explicit --skill with a paired baseDir + SKILL.md path.
+    // The shared helper rejects partial/mismatched provenance before a
+    // user/global collision can mark a project scanner result loaded. Match
+    // explicit resources by path because frontmatter names need not equal
+    // their containing folder names.
+    const explicitPath = piExplicitSkillRuntimePath(command);
+    if (explicitPath) {
+      loadedExplicitSkills.set(canonicalPiRuntimePath(explicitPath), command.name);
+    }
+  }
+  if (
+    loadedExplicitSkills.size === 0
+    && loadedLegacyProjectSkills.size === 0
+    && changedProjectSkills.size === 0
+  ) return result;
+  const changedSkillErrors = [...changedProjectSkills.values()].map((skillPath) => ({
+    path: skillPath,
+    message: 'Project skill changed after this Pi session started; restart the session to load the current version.',
+  }));
   return {
     ...result,
     skills: result.skills.map((skill) => {
-      const runtimeCommandName = skill.scope === 'repo' && skill.path
-        ? loadedProjectSkills.get([
-          skill.name,
-          canonicalPiRuntimePath(path.dirname(path.dirname(skill.path))),
-        ].join('\0'))
-        : undefined;
+      let runtimeCommandName: string | undefined;
+      if (skill.scope === 'repo' && skill.path) {
+        const canonicalSkillPath = canonicalPiRuntimePath(skill.path);
+        if (!changedProjectSkills.has(canonicalSkillPath)) {
+          runtimeCommandName = loadedExplicitSkills.get(canonicalSkillPath)
+            ?? [skill.path, path.dirname(path.dirname(skill.path))]
+              .map(canonicalPiRuntimePath)
+              .map((skillPath) => loadedLegacyProjectSkills.get([skill.name, skillPath].join('\0')))
+              .find((commandName) => commandName !== undefined);
+        }
+      }
       return runtimeCommandName
         ? { ...skill, runtimeStatus: 'loaded' as const, runtimeCommandName }
         : skill;
     }),
+    ...(changedSkillErrors.length > 0
+      ? { errors: [...(result.errors ?? []), ...changedSkillErrors] }
+      : {}),
   };
 }
 
@@ -448,7 +523,7 @@ export class Maker {
         // 的 fresh-session self-reference 恢复),需要同一把 CAS 才能把它清掉,否则下一次
         // send 会 resume 同一个不存在的会话反复失败。
         onInvalidResumeSession:
-          opts.agentKind === 'claude-code'
+          opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
             ? (expectedSdkSessionId) =>
                 this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
             : undefined,
@@ -516,15 +591,19 @@ export class Maker {
         });
       }
     } catch (error) {
+      // 轮 40-w4-t5 CRITICAL:agent-agnostic 回滚 —— startSession 成功后 storage
+      // 写失败时, 已启动的 agent handle(PI 远端 daemon session / CC / Codex)必须
+      // close, 否则 PI 无 codexThreadClaim 时 handle 不关, 远端 pi-manager session/
+      // MCP bridge 残留成「用户看不到、Maker 管不到」的半创建状态。
+      try {
+        await handle.close();
+      } catch (closeError) {
+        this.logger.warn('failed to close agent handle after session storage failure', {
+          sessionId: id,
+          error: String(closeError),
+        });
+      }
       if (codexThreadClaim) {
-        try {
-          await handle.close();
-        } catch (closeError) {
-          this.logger.warn('failed to close Codex handle after session storage failure', {
-            sessionId: id,
-            error: String(closeError),
-          });
-        }
         codexThreadClaim.release();
       }
       throw error;

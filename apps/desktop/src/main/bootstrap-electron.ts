@@ -166,6 +166,7 @@ import {
   prepare as binaryPrepare,
   peekNeedsDownload as binaryPeekNeedsDownload,
   broadcastResetForStep as binaryBroadcastResetForStep,
+  getCachedBinaryStatus,
   type AgentBinaryKind,
   type PrepareResult,
 } from './agent-binaries';
@@ -299,10 +300,12 @@ import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
 import {
   startEmbeddingHost,
   stopEmbeddingHost,
+  stopEmbeddingHostIfNoPluginVectorConsumer,
   isEmbeddingHostStarted,
   getEmbeddingService,
   isPluginVectorConsumerActive,
   registerEmbeddingHostLazyStart,
+  setEmbeddingSourceSuspended,
   type EmbeddingService,
 } from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
@@ -397,6 +400,7 @@ import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepoi
 import { registerGitContextIpc, disposeGitContext } from './git-context';
 import { registerGitReviewDeviceOp, registerGitReviewIpc } from './git-review';
 import { registerSidebarSettingsIpc } from './sidebarSettingsStore';
+import { registerModelVisibilityOwnerClaimIpc } from './maker-host/model-visibility-owner-claim.js';
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
 import { registerLocalThemesIpc } from './local-themes/register';
@@ -434,6 +438,7 @@ import {
   broadcastClaudeAuthStateChanged,
   broadcastXaiAuthStateChanged,
   refreshProviderAccessAfterAuthChange,
+  setProviderAccessRuntimeRefreshListener,
   restartCodexAfterAuthModeChange,
   waitForInitialCustomMcpRefresh,
 } from './maker-host/index.js';
@@ -441,9 +446,12 @@ import { createDynamicMaker } from './maker-host/dynamic-maker.js';
 import { ensureBundledRipgrepReady } from './maker-host/runtime-configs.js';
 import {
   ensureActiveCatalogLoaded,
+  getDesktopSelectableCatalog,
   refreshCustomProvidersIntoCatalog,
 } from './maker-host/createDesktopProviderService.js';
+import { isCindyEmbeddingModelAvailable } from './maker-host/provider-access-policy.js';
 import { setCustomProviders } from './maker-host/active-catalog.js';
+import { clearModelVisibilityMirror } from './maker-host/model-visibility-mirror.js';
 import { setClaudeSupportedModelsListener } from '@cindy/maker-core';
 import {
   noteAnthropicSdkSupportedModels,
@@ -486,9 +494,11 @@ import {
   patchGhostPanelWindowEntry,
   readGhostPanelWindowsSettings,
   removeGhostPanelWindowEntry,
+  resetGhostPanelWindowSettingsForStartup,
 } from './ghost-panel-window/settings-store.js';
 import {
   readRsbWindowSettings,
+  resetRsbWindowSettingsForStartup,
   writeRsbWindowSettingsPatch,
 } from './right-sidebar-window/settings-store.js';
 import {
@@ -587,6 +597,7 @@ import {
   writeGitSafetyAutoSnapshotEnabled,
 } from './maker-host/git-safety-settings-store.js';
 import {
+  CHAT_EMBED_MODEL_ID,
   setupChatHistoryEmbedder,
   setChatEmbeddingEnabled,
   resetCacheForNewDb as resetChatEmbedderCache,
@@ -675,16 +686,10 @@ import { getDesktopCommandRegistry, registerBuiltinDesktopCommands } from './com
 import { registerRemoteCmdIpc } from './commands/remoteCmdIpc.js';
 import { resolvePreferredSystemLocale, resolveSystemLocale } from '../shared/locale.js';
 import {
-  IM_DEFAULT_SETTINGS,
-  isImDefaultAgentKind,
-  isImDefaultEffort,
-  isImDefaultPermissionMode,
   isImDefaultSettingsChannel,
-  type ImDefaultAgentKind,
-  type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
-  type ImDefaultSettingsPatch,
 } from '../shared/imDefaultSettings.js';
+import { parseImDefaultSettingsPatch } from './im/parseDefaultSettingsPatch.js';
 import {
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
   codexSpawnConfigChanged,
@@ -746,9 +751,12 @@ import {
   getGhostCindySlot,
   getGhostManager,
   getGhostSessionActivityTracker,
+  interruptGhostCallsForAccountBoundary,
   isGhostAvailableForActiveSession,
+  reconcileGhostOauthAccountsForActiveOwner,
   refreshGhostLocalization,
   registerGhostIpc,
+  runStableOwnerPostCommitTask,
   setGhostsChangedObserver,
   suspendAllGhosts,
   waitForGhostMutations,
@@ -930,10 +938,23 @@ const _scheduleIpcRegistered = new WeakSet<object>();
  * 补齐 (否则 setChatEmbeddingEnabled 撞 _deps=null, 聊天嵌入静默不工作)。
  * sqlite-vec 不可用时仍启动 (启动后 Worker 自己 idle 不嵌), 不阻塞 app。
  */
+function isChatEmbeddingAvailable(): boolean {
+  try {
+    return isCindyEmbeddingModelAvailable(
+      getDesktopSelectableCatalog(),
+      CHAT_EMBED_MODEL_ID,
+    );
+  } catch {
+    return false;
+  }
+}
+
 function attemptStartEmbeddingHost(): void {
   // 谁都不要用就别启:插件 consumer 的标记由 ensureEmbeddingServiceForPluginVector
   // 在回调本函数之前打上,所以这里读到的是"含本次请求"的最新意向。
-  const chatEnabled = readChatEmbeddingSettings().enabled;
+  const chatAvailable = isChatEmbeddingAvailable();
+  setEmbeddingSourceSuspended('chat', !chatAvailable);
+  const chatEnabled = chatAvailable && readChatEmbeddingSettings().enabled;
   if (!chatEnabled && !isPluginVectorConsumerActive()) {
     console.log(
       '[bootstrap-electron] no embedding consumer active (chat off, no plugin vector); embeddingHost not started',
@@ -1000,25 +1021,45 @@ function attemptStartEmbeddingHost(): void {
 // DbClient / api key / gateway url 这些只有 bootstrap 有的依赖)。
 registerEmbeddingHostLazyStart(attemptStartEmbeddingHost);
 
+let chatEmbeddingRuntimeReconcile: Promise<void> = Promise.resolve();
+
+function scheduleChatEmbeddingRuntimeReconcile(): void {
+  // Stop new enqueue work before an async host shutdown can run. The queued
+  // reconciliation re-reads the latest catalog so rapid refreshes are last-write-wins.
+  const chatAvailable = isChatEmbeddingAvailable();
+  setEmbeddingSourceSuspended('chat', !chatAvailable);
+  if (!chatAvailable) setChatEmbeddingEnabled(false);
+  chatEmbeddingRuntimeReconcile = chatEmbeddingRuntimeReconcile
+    .then(async () => {
+      if (isChatEmbeddingAvailable() && readChatEmbeddingSettings().enabled) {
+        attemptStartEmbeddingHost();
+      } else {
+        await shutdownChatEmbeddingConsumer();
+      }
+    })
+    .catch((err: unknown) => {
+      createSchedulerLogger('chat-embedding-runtime').error('reconcile failed', { error: String(err) });
+    });
+}
+
+setProviderAccessRuntimeRefreshListener(scheduleChatEmbeddingRuntimeReconcile);
+
 /**
  * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
  * 向量 consumer 时才停 host —— 否则会把另一个 consumer 的能力一起关掉 (插件的
  * embed_text 全变 INTERNAL)。
  *
- * 插件在用时保留 host 的副作用是: chat provider 仍注册着, 已入队的旧 job 会继续做完。
- * 这与 chat-history-embedder 自己的设计一致 (开关只控制入队, 不取消 provider 注册,
- * 旧 pending job 不浪费用户已花的钱)。
+ * 用户手动关闭时,已入队的旧 job 仍可做完;provider access 丢失时 runtime reconcile
+ * 会另外暂停 chat source,旧 job 保持 pending,恢复可用后再续跑。
  */
 async function shutdownChatEmbeddingConsumer(): Promise<void> {
   setChatEmbeddingEnabled(false);
-  if (!isEmbeddingHostStarted()) return;
-  if (isPluginVectorConsumerActive()) {
+  if (!(await stopEmbeddingHostIfNoPluginVectorConsumer())) {
     console.log(
       '[bootstrap-electron] chat embedding off; embeddingHost kept alive for plugin vector consumer',
     );
     return;
   }
-  await stopEmbeddingHost();
   resetChatEmbedderCache();
 }
 
@@ -1078,16 +1119,64 @@ async function ensureLifecycleDbClient(userId: string) {
   });
 }
 
+const AUTH_BOUNDARY_WAIT_TIMEOUT_MS = 10_000;
+
+async function withAuthBoundaryTimeout<T>(label: string, task: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${AUTH_BOUNDARY_WAIT_TIMEOUT_MS}ms`));
+        }, AUTH_BOUNDARY_WAIT_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
+  const failures: unknown[] = [];
+  const run = async (label: string, task: () => Promise<void>): Promise<void> => {
+    try {
+      await task();
+    } catch (error) {
+      failures.push(error);
+      authBoundaryLog.error(`${label} on ${reason} failed`, error);
+    }
+  };
+
+  await run('interruptGhostCallsForAccountBoundary', () =>
+    withAuthBoundaryTimeout('interrupt Ghost calls', interruptGhostCallsForAccountBoundary));
+  await run('waitForGhostMutations', () =>
+    withAuthBoundaryTimeout('wait for Ghost mutations', waitForGhostMutations));
+  await run('suspendAllGhosts', suspendAllGhosts);
+
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Ghost projection teardown on ${reason} was incomplete`);
+  }
+}
+
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
+  const blockingFailures: unknown[] = [];
   // The boundary is already marked pending by every caller. New actions now
   // fail closed; drain an action that crossed the boundary before closing its DB.
-  await waitForTurnChangeSetActions();
+  try {
+    await withAuthBoundaryTimeout('wait for turn change-set actions', waitForTurnChangeSetActions);
+  } catch (error) {
+    blockingFailures.push(error);
+    authBoundaryLog.error(`waitForTurnChangeSetActions on ${reason} failed`, error);
+  }
   skillhubAutoSyncService.cancelInFlight();
   // Custom provider routes are owner-scoped but the active catalog is process-global.
   // Clear synchronously at the boundary; the next owner's tracked readiness reloads them
   // before any Agent route can start. A failed DB read therefore stays fail-closed (empty)
   // instead of retaining the previous owner's endpoint or model entries.
   setCustomProviders([]);
+  clearModelVisibilityMirror();
   // 远程会话的镜像冷缓存里是别的设备的聊天内容。owner 命名空间已经保证下一个账号读不到
   // 它,但登出后不该在盘上留着 —— 这里 owner 还指向**旧账号**(commitActiveAppSession 在
   // teardown 之后才切),正是唯一能清准的时机。
@@ -1130,8 +1219,11 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // Every Ghost sandbox can retain live OAuth, subscription, or in-memory
   // state. Stop them before changing owners; resident Ghosts are recreated by
   // the auth-change activation pass after the new boundary is committed.
-  await waitForGhostMutations();
-  suspendAllGhosts();
+  try {
+    await teardownGhostProjectionBoundary(reason);
+  } catch (error) {
+    blockingFailures.push(error);
+  }
   // Personal IM channels have the same DB boundary. Relogin restarts them from
   // the next owner DB-ready callback; app:ready-for-bot remains a compatibility
   // retry after the new DbClient is ready.
@@ -1236,13 +1328,39 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   } finally {
     releaseEndedSuppression();
   }
-  agentIslandService?.resetRuntimeState();
+  // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
+  // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
+  // 过期,同机幸存实例接管变慢)。内部带 1.5s 超时,不会卡住登出。
+  try {
+    await releaseDeviceLinkOwnershipBeforeLogout();
+  } catch (err) {
+    authBoundaryLog.error(
+      `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`,
+      err,
+    );
+  }
+  try {
+    await lifecycleDbClientManager.dispose(reason);
+  } finally {
+    try {
+      localDbCloseDb();
+    } catch (error) {
+      blockingFailures.push(error);
+      authBoundaryLog.error(`close local DB on ${reason} failed`, error);
+    }
+    agentIslandService?.resetRuntimeState();
+  }
+
+  if (blockingFailures.length > 0) {
+    throw new AggregateError(blockingFailures, `account boundary teardown on ${reason} was incomplete`);
+  }
 }
 
 authManager.setAccountSwitchTeardown(async () => {
   await teardownAuthAccountBoundary('runtime-replacement-account-switch');
 });
 authManager.setAuthSessionTeardown(teardownAuthAccountBoundary);
+authManager.setProjectionRepairTeardown(teardownGhostProjectionBoundary);
 
 try {
   reapClaudeOrphansSync();
@@ -1301,15 +1419,16 @@ installWebviewHardener();
 // 通知用的 host webContents 通过 mainWindowRef lazy 取,主窗未就绪时静默跳过
 // (pin 状态由 main 端 registry 保权威,renderer 端会通过 reconciliation 跟上)。
 // ── 右侧栏独立子窗口(RSB window)────────────────────────────────────────
-// 「侧边栏在新窗口中显示」偏好 + 子窗口生命周期状态机。detached 且窗口开着时,
+// 右侧栏当前进程内的分离状态 + 子窗口生命周期状态机。detached 且窗口开着时,
 // RSB host(pin/unpin 通知、tab-op dispatch 的目标 renderer)是子窗口而非主窗,
 // 下方三处 RSB bridge wiring 统一经 controller.getHostWebContents() 解析。
 // deps 全部是 lazy 闭包(mainWindowRef / isQuitting 在文件更靠后声明+赋值,
 // 调用时机远晚于此处构造),状态机本体见 right-sidebar-window/controller.ts。
+resetRsbWindowSettingsForStartup();
 const rsbWindowController = new RsbWindowController({
   settings: { read: readRsbWindowSettings, writePatch: writeRsbWindowSettingsPatch },
-  createWindow: (opts) => {
-    const window = createRightSidebarWindow(opts);
+  createWindow: () => {
+    const window = createRightSidebarWindow();
     const mainTarget =
       mainWindowRef && !mainWindowRef.isDestroyed() && !mainWindowRef.webContents.isDestroyed()
         ? mainWindowRef.webContents
@@ -1339,6 +1458,7 @@ const rsbWindowController = new RsbWindowController({
   },
   contextChannel: MAKER_PUSH.RSB_WINDOW_CONTEXT_CHANGED,
   commandChannel: MAKER_PUSH.RSB_WINDOW_COMMAND,
+  tabHandoffChannel: MAKER_PUSH.RSB_WINDOW_TAB_HANDOFF,
   isQuitting: () => isQuitting,
   canCloseWindow: () => !hasActiveRsbNativePopupSurfaces(),
   log: createLogger('right-sidebar-window-controller'),
@@ -1358,7 +1478,7 @@ function resolveIOSSimulatorRendererWindow(
 ): BrowserWindow | null {
   const owner = BrowserWindow.fromWebContents(target);
   if (!owner || !isTrustedAppRendererWindow(owner)) return null;
-  const sidebarTarget = rsbWindowController.getSidebarWebContents();
+  const sidebarTarget = rsbWindowController.getVisibleSidebarWebContents();
   const isSidebar = sidebarTarget === target;
   if (!isSidebar && !isMainShellWindowUrl(owner.webContents.getURL())) return null;
   return owner;
@@ -1370,7 +1490,7 @@ configureIOSSimulatorRendererTargets((preferredTarget) => {
     mainWindowRef && !mainWindowRef.isDestroyed() && !mainWindowRef.webContents.isDestroyed()
       ? mainWindowRef.webContents
       : null;
-  const sidebarTarget = rsbWindowController.getSidebarWebContents();
+  const sidebarTarget = rsbWindowController.getVisibleSidebarWebContents();
   const belongsToMainFamily =
     !preferredTarget || preferredTarget === mainTarget || preferredTarget === sidebarTarget;
   if (!belongsToMainFamily) {
@@ -1475,6 +1595,7 @@ registerRsbWindowIpc({
 // 主窗布局树里该 pane 停止渲染(树不动);关窗/合并即回停靠。装/卸/启停广播
 // 经 setGhostsChangedObserver 喂 reconcile,失去资格的窗口即时收掉。
 // deps 同样全 lazy(isQuitting 声明在后),状态机见 ghost-panel-window/controller.ts。
+resetGhostPanelWindowSettingsForStartup();
 const ghostPanelWindowsController = new GhostPanelWindowsController({
   settings: {
     read: readGhostPanelWindowsSettings,
@@ -1509,6 +1630,9 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
         // window torn down mid-broadcast — ignore
       }
     }
+  },
+  sendToWindow: (win, channel, payload) => {
+    try { win.webContents.send(channel, payload); } catch { /* ignore */ }
   },
   isQuitting: () => isQuitting,
   log: createLogger('ghost-panel-window-controller'),
@@ -1615,6 +1739,32 @@ setCodexImageAuthBinding({
 });
 registerGhostIpc();
 registerPluginMarketIpc();
+authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId }) => {
+  const builtinOutcome = await runStableOwnerPostCommitTask(reason, { scopeKey, dataOwnerId });
+  if (builtinOutcome === 'deferred') return builtinOutcome;
+
+  let needsRetry = builtinOutcome === 'retry-pending' || builtinOutcome === 'failed';
+  // Signed-out is a real stable scope for account-free bundled provisioning.
+  // Market and OAuth are owner-private follow-ups and stay behind this gate.
+  if (dataOwnerId === null) return needsRetry ? 'failed' : 'completed';
+  let deferred = false;
+  const marketOutcome = await syncDefaultMarketPlugins();
+  if (marketOutcome === 'failed') needsRetry = true;
+  if (marketOutcome === 'deferred') deferred = true;
+
+  try {
+    const oauthCompleted = await reconcileGhostOauthAccountsForActiveOwner();
+    if (!oauthCompleted) deferred = true;
+  } catch (error) {
+    createLogger('ghost-oauth-owner-reconcile').warn(
+      'OAuth account reconciliation for active owner failed',
+      { error: error instanceof Error ? error.message : String(error) },
+    );
+    needsRetry = true;
+  }
+
+  return needsRetry ? 'failed' : deferred ? 'deferred' : 'completed';
+});
 
 // ── Custom protocol registration (image-local-cache M2) ──────────────────
 // MUST run before app.whenReady(), and MUST be a SINGLE call:
@@ -2013,6 +2163,8 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
   resourceUsageWindowController.setLocale(currentApplicationMenuLocale);
+  rsbWindowController.setLocale(currentApplicationMenuLocale);
+  ghostPanelWindowsController.setLocale(currentApplicationMenuLocale);
   refreshGhostLocalization();
   const mainWindow = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
   if (mainWindow) {
@@ -2738,6 +2890,8 @@ const createWindow = () => {
       resourceUsagePrewarmTimer = null;
     }
     resourceUsageWindowController.destroyWindow();
+    rsbWindowController.destroyWindow();
+    ghostPanelWindowsController.destroyAllWindows();
     if (mainWindowRef === mainWindow) mainWindowRef = null;
     setDeepLinkMainWindow(null);
   });
@@ -2813,6 +2967,10 @@ const createWindow = () => {
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
       resourceUsageWindowController.prewarm();
+      // 右侧栏子窗口预热:复刻资源用量窗口模式,主窗口可见后后台创建
+      // 隐藏 BrowserWindow 并加载轻量 renderer,后续 detach 点击仅 show+focus。
+      rsbWindowController.prewarm();
+      // 插件面板保持按需创建：分离状态不跨重启恢复，多实例也不在启动期全量预热。
     }, 1_500);
     resourceUsagePrewarmTimer.unref?.();
     // 日志上报的启动补传:采集 + 脱敏是同步的重活,必须让主窗口先出来(内部再延迟 15s,
@@ -2989,20 +3147,6 @@ const createWindow = () => {
 
 let disposeSkillhubAutoSyncAuthListener: (() => void) | null = null;
 let disposeProviderAccessAuthListener: (() => void) | null = null;
-let disposePluginMarketAuthListener: (() => void) | null = null;
-let defaultPluginSyncInFlightScope: string | null = null;
-
-/** Run the existing market reconciliation once for each stable app owner. */
-function syncDefaultPluginsForActiveOwner(): void {
-  const session = getActiveAppSession();
-  if (!session.dataOwnerId || isAppSessionBoundaryPending()) return;
-  const scope = activeOwnerScopeKey();
-  if (scope === defaultPluginSyncInFlightScope) return;
-  defaultPluginSyncInFlightScope = scope;
-  void syncDefaultMarketPlugins().finally(() => {
-    if (defaultPluginSyncInFlightScope === scope) defaultPluginSyncInFlightScope = null;
-  });
-}
 
 function parseOptionalDeviceLinkDeviceId(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
@@ -3454,13 +3598,17 @@ const registerIpcHandlers = () => {
   // SET 路径既落 JSON 也立即把 chat-history-embedder 的运行时 enabled 切换 ——
   // toggle off 后下一条新消息就不再入队, 不需要重启。
   ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_GET, async () => {
-    requireAppCapability('canUseCindyGateway', 'Chat embedding requires a Cindy account.');
     return chatEmbeddingWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_SET, async (_e, enabled: unknown) => {
-    requireAppCapability('canUseCindyGateway', 'Chat embedding requires a Cindy account.');
     if (typeof enabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'chat embedding enabled required (boolean)');
+    }
+    if (enabled && !isChatEmbeddingAvailable()) {
+      throwIpcError(
+        'UNSUPPORTED_CAPABILITY',
+        'Chat embedding is not available for this account or region.',
+      );
     }
     // 先落盘 setting (即使后续 host 启停失败, 用户偏好已记下, 下次启动会用)
     writeChatEmbeddingEnabled(enabled);
@@ -3477,7 +3625,6 @@ const registerIpcHandlers = () => {
     return chatEmbeddingWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CHAT_EMBEDDING_RESET, async () => {
-    requireAppCapability('canUseCindyGateway', 'Chat embedding requires a Cindy account.');
     const settings = resetChatEmbeddingSettings();
     if (settings.enabled) {
       attemptStartEmbeddingHost();
@@ -3718,8 +3865,8 @@ const registerIpcHandlers = () => {
   // Fullscreen state query — renderer calls this on mount to recover from the
   // race where `enter-full-screen` fires before the renderer subscribes (e.g.
   // when window-state restores a fullscreen window on launch).
-  ipcMain.handle('get-fullscreen-state', (): boolean => {
-    const win = getWindow();
+  ipcMain.handle('get-fullscreen-state', (event): boolean => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? getWindow();
     if (!win) return false;
     return win.isFullScreen() || win.isSimpleFullScreen();
   });
@@ -4213,6 +4360,7 @@ const registerIpcHandlers = () => {
           pendingCompletion = completion;
         },
       });
+      await authManager.ensureStableOwnerPostCommitTasks('auth-initialize');
       if (!app.isPackaged) {
         recordDesktopDevAuthStartupResult(state, pendingCompletion, () =>
           authManager.getAuthState(),
@@ -4249,13 +4397,7 @@ const registerIpcHandlers = () => {
   });
 
   ipcMain.handle('auth:logout', async () => {
-    const releaseBoundary = beginAppSessionBoundary();
-    try {
-      await teardownAuthAccountBoundary('logout');
-      await authManager.logout();
-    } finally {
-      releaseBoundary();
-    }
+    await authManager.logout();
   });
 
   ipcMain.handle('auth:enter-local', async () => {
@@ -4263,26 +4405,14 @@ const registerIpcHandlers = () => {
       return authManager.getAuthState();
     }
     await authManager.waitForSessionInvalidation();
-    const releaseBoundary = beginAppSessionBoundary();
-    try {
-      await teardownAuthAccountBoundary('enter-local-mode');
-      return authManager.enterLocalMode();
-    } finally {
-      releaseBoundary();
-    }
+    return authManager.enterLocalMode();
   });
 
   ipcMain.handle('auth:exit-local', async () => {
     if (getActiveAppSession().mode !== 'local') {
       throwIpcError('PRECONDITION_FAILED', 'Local mode is not active.');
     }
-    const releaseBoundary = beginAppSessionBoundary();
-    try {
-      await teardownAuthAccountBoundary('exit-local-mode');
-      return authManager.exitLocalMode();
-    } finally {
-      releaseBoundary();
-    }
+    return authManager.exitLocalMode();
   });
 
   ipcMain.handle('auth:refresh', async () => {
@@ -4302,7 +4432,6 @@ const registerIpcHandlers = () => {
     clearReceipt: () => authManager.clearAccountDeletionReceipt(),
     consumeRestoredNotice: () => authManager.consumeAccountDeletionRestoredNotice(),
     isConfirmedLocalSessionCurrent: () => authManager.isConfirmedAccountDeletionSessionCurrent(),
-    teardownAccountBoundary: () => teardownAuthAccountBoundary('account-deletion'),
     clearLocalSession: () => authManager.clearLocalSessionAfterAccountDeletion(),
     logWarn: (message, error) => accountDeletionLog.warn(message, error),
   });
@@ -4744,6 +4873,14 @@ const registerIpcHandlers = () => {
     resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
 
     let piInfo: { status: 'passed' | 'failed'; path?: string; error?: string };
+    // 轮 27 LOW-4:首次准备失败后账号切换(同一进程),二进制可能已由后台
+    // 下载/手动放置变得可用 —— 轻量重试:意外可用则清除标志继续准备。
+    if (piDisabledForLaunch) {
+      const cached = getCachedBinaryStatus('pi');
+      if (cached?.binaryPath && cached.binaryPath.length > 0) {
+        piDisabledForLaunch = false;
+      }
+    }
     if (piDisabledForLaunch) {
       piInfo = {
         status: 'failed' as const,
@@ -5144,11 +5281,6 @@ const registerIpcHandlers = () => {
   // 默认插件同步不能依赖用户先打开插件页。启动时本地 owner 已经稳定则立刻
   // 复用市场快照；云端登录/切号的通知可能早于 owner boundary 释放，因此
   // 延迟到当前调用栈结束后再按已提交的新 owner 补跑一次。
-  disposePluginMarketAuthListener = authManager.onAuthStateChange(() => {
-    queueMicrotask(syncDefaultPluginsForActiveOwner);
-  });
-  syncDefaultPluginsForActiveOwner();
-
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
   ipcMain.handle(
     'dialog:show-open-directory',
@@ -6909,6 +7041,7 @@ app.on('ready', async () => {
   // device-link 远程 git 审查(只读):git-review:remote-op handler(被控端角色;
   // invoke-registry 捕获后供控制端隧道调用,本机 renderer 不调用)。
   registerGitReviewDeviceOp();
+  registerModelVisibilityOwnerClaimIpc();
   registerSidebarSettingsIpc();
   registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart
@@ -7119,6 +7252,8 @@ onQuit(
 );
 onQuit('auth-manager', () => authManager.dispose(), 'sync');
 onQuit('resource-usage-window', () => resourceUsageWindowController.dispose(), 'sync');
+onQuit('rsb-window', () => rsbWindowController.dispose(), 'sync');
+onQuit('ghost-panel-windows', () => ghostPanelWindowsController.dispose(), 'sync');
 onQuit('app-badge-clear', () => clearAllSessionAttention(), 'sync');
 onQuit('session-drag-preview', () => disposeSessionDragPreview(), 'sync');
 // 自带 adb 的常驻 server 守护进程随退出收掉(fire-and-forget detached spawn,
@@ -7140,15 +7275,6 @@ onQuit(
   },
   'sync',
 );
-onQuit(
-  'plugin-market-auth-listener',
-  () => {
-    disposePluginMarketAuthListener?.();
-    disposePluginMarketAuthListener = null;
-  },
-  'sync',
-);
-
 // Async 阶段: 并发跑, 6s 超时兜底。
 //   - shutdown-maker:       Layer 1 关 sessions → Layer 2 dispose agents (Codex
 //                           shared app-server 子进程 SIGTERM)。**必须 await** —
@@ -7165,7 +7291,12 @@ onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
 onQuit('im', () => stopImConnection('quit'), 'async');
 onQuit('codex-env', () => shutdownCodexEnvironment(), 'async');
-onQuit('pi-env', () => shutdownPiEnvironment(), 'async');
+// 轮 27 MEDIUM-3:pi-env 挪到 post-async —— 若与 shutdown-maker 同 async 并发,
+// bridge 可能在 session close 的 disposeSessionRegistrations(unregisterSessionCtx/
+// Token)之前关闭, 产生「pi dispose session registration failed (non-fatal)」
+// 日志噪声。post-async 串行在 shutdown-maker(async)之后执行, 且注册顺序在
+// remote-ssh-pool 之前(两者同 post-async, 按注册序执行 —— bridge 先于 pool 关)。
+onQuit('pi-env', () => shutdownPiEnvironment(), 'post-async');
 // embedding-host: abort 语义 —— 立刻让出 SQLite 写连接, 不等当前 tick (那批 job 保持
 // pending 下次续跑, 写事务同步原子无中断)。
 onQuit('embedding-host', () => stopEmbeddingHost(), 'async');
@@ -7182,7 +7313,11 @@ onQuit('codex-proxy', () => disposeCodexProxy(), 'async');
 // Remote file-service clients: 先于 pool 关闭, 挂断远端 daemon 的 exec channel。
 onQuit('remote-file-browser', () => disposeRemoteFileBrowser(), 'async');
 // Remote SSH pool: 主动断开所有活动连接, 防止 ssh2 子句柄阻塞 Node 进程退出。
-onQuit('remote-ssh-pool', () => disposeRemoteSshPool(), 'async');
+// post-async(非 async):shutdown-maker 在 async 阶段关 sessions 时, PiAgent.close()
+// 会经 pi-manager RPC 发 kill 杀远端 daemon —— 若 pool 在 async 并发先
+// 断开 SSH, kill 失败, daemon + env-file(含凭证)残留 30 分钟(R6 审计 M-8/M-11)。
+// 挪到 post-async 串行, 保证 session 级 kill 先完成, pool 最后收尾。
+onQuit('remote-ssh-pool', () => disposeRemoteSshPool(), 'post-async');
 // WDA deleteSession may consume longer than the shared async quit budget. Kill
 // detached WDA/Sidecar process groups synchronously before that budget starts;
 // the lightweight seam is a no-op when Simulator was never initialized.
@@ -7316,85 +7451,6 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
   return patch;
 }
 
-function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatch {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throwIpcError('INVALID_PARAMS', 'im default settings patch required (object)');
-  }
-  const input = raw as Record<string, unknown>;
-  const patch: ImDefaultSettingsPatch = {};
-  if ('agentKind' in input) {
-    if (!isImDefaultAgentKind(input.agentKind)) {
-      throwIpcError('INVALID_PARAMS', 'im default agentKind invalid');
-    }
-    patch.agentKind = input.agentKind;
-  }
-  if ('permissionMode' in input) {
-    if (!isImDefaultPermissionMode(input.permissionMode)) {
-      throwIpcError('INVALID_PARAMS', 'im default permissionMode invalid');
-    }
-    patch.permissionMode = input.permissionMode;
-  }
-  if ('agents' in input) {
-    if (!input.agents || typeof input.agents !== 'object' || Array.isArray(input.agents)) {
-      throwIpcError('INVALID_PARAMS', 'im default agents must be object');
-    }
-    const agentInput = input.agents as Record<string, unknown>;
-    const agentsPatch: NonNullable<ImDefaultSettingsPatch['agents']> = {};
-    // 三个 harness 必须对称解析；漏掉 pi 会让 IM 设置页切 Pi 后改模型静默丢弃
-    // (store 本身支持 pi，见 defaultSettingsStore / IM_DEFAULT_SETTINGS.agents.pi)。
-    for (const kind of ['claude-code', 'codex', 'pi'] as const) {
-      if (kind in agentInput) {
-        agentsPatch[kind] = parseImDefaultAgentSettings(kind, agentInput[kind]);
-      }
-    }
-    patch.agents = agentsPatch;
-  }
-  if ('providerId' in input || 'model' in input || 'effort' in input) {
-    const legacyAgentKind = patch.agentKind ?? IM_DEFAULT_SETTINGS.agentKind;
-    patch.agents = {
-      ...patch.agents,
-      [legacyAgentKind]: parseImDefaultAgentSettings(legacyAgentKind, input),
-    };
-  }
-  return patch;
-}
-
-function parseImDefaultAgentSettings(
-  agentKind: ImDefaultAgentKind,
-  raw: unknown,
-): ImDefaultAgentSettings {
-  const defaults = IM_DEFAULT_SETTINGS.agents[agentKind];
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return { ...defaults };
-  }
-  const input = raw as Record<string, unknown>;
-  let providerId = defaults.providerId;
-  let model = defaults.model;
-  let effort = defaults.effort;
-  if ('providerId' in input) {
-    if (input.providerId !== null && typeof input.providerId !== 'string') {
-      throwIpcError('INVALID_PARAMS', 'im default providerId must be string or null');
-    }
-    providerId =
-      typeof input.providerId === 'string' && input.providerId.trim()
-        ? input.providerId.trim()
-        : null;
-  }
-  if ('model' in input) {
-    if (typeof input.model !== 'string' || !input.model.trim()) {
-      throwIpcError('INVALID_PARAMS', 'im default model required (string)');
-    }
-    model = input.model.trim();
-  }
-  if ('effort' in input) {
-    if (!isImDefaultEffort(input.effort)) {
-      throwIpcError('INVALID_PARAMS', 'im default effort invalid');
-    }
-    effort = input.effort;
-  }
-  return { providerId, model, effort };
-}
-
 function silentEncryptedRetryWire() {
   const state = readSilentEncryptedRetrySettingsState();
   return {
@@ -7415,10 +7471,11 @@ function compactionWire() {
 
 function chatEmbeddingWire() {
   const state = readChatEmbeddingSettingsState();
+  const available = isChatEmbeddingAvailable();
   return {
-    enabled: state.value.enabled,
+    enabled: available && state.value.enabled,
     isCustomized: state.isCustomized,
-    defaultEnabled: state.defaults.enabled,
+    defaultEnabled: available && state.defaults.enabled,
   };
 }
 

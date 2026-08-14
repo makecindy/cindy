@@ -186,6 +186,179 @@ describe('RSB store', () => {
       expect((store.getBucket('ghost-s1').tabs[0].state as { title: string }).title).toBe('Example');
     });
 
+    it('exports and restores a memory-only bucket across host cache invalidation', async () => {
+      ipc.list.mockResolvedValueOnce({ tabs: [], activeTabId: null, persistable: false });
+      await store.ensureHydrated('handoff-s1');
+      const tab = await store.addTab('handoff-s1', 'web-browser', { url: 'https://example.com' });
+
+      const snapshot = store.getTabSnapshot('handoff-s1');
+      expect(snapshot).toEqual({
+        sessionId: 'handoff-s1',
+        tabs: [{ id: tab.id, kind: 'web-browser', state: { url: 'https://example.com' } }],
+        activeTabId: tab.id,
+        persistable: false,
+      });
+
+      store.invalidateSessionCaches();
+      store.importTabSnapshot(snapshot!);
+      store.invalidateSessionCaches();
+      await store.ensureHydrated('handoff-s1');
+
+      expect(ipc.list).toHaveBeenCalledOnce();
+      expect(store.getBucket('handoff-s1')).toEqual({
+        hydrated: true,
+        tabs: [{ id: tab.id, kind: 'web-browser', state: { url: 'https://example.com' } }],
+        activeTabId: tab.id,
+      });
+    });
+
+    it('restores a pending handoff synchronously during the target host transition', async () => {
+      ipc.list.mockResolvedValueOnce({ tabs: [], activeTabId: null, persistable: false });
+      await store.ensureHydrated('handoff-transition');
+      const tab = await store.addTab('handoff-transition', 'web-browser', {
+        url: 'https://example.com',
+      });
+      const snapshot = store.getTabSnapshot('handoff-transition');
+
+      store.invalidateSessionCaches();
+      store.importTabSnapshot(snapshot!);
+      store.resetCachesForHostTransition();
+
+      expect(store.getBucket('handoff-transition')).toEqual({
+        hydrated: true,
+        tabs: [{ id: tab.id, kind: 'web-browser', state: { url: 'https://example.com' } }],
+        activeTabId: tab.id,
+      });
+    });
+
+    it('does not let a late empty hydrate overwrite a received handoff', async () => {
+      let resolveList!: (value: {
+        tabs: never[];
+        activeTabId: null;
+        persistable: false;
+      }) => void;
+      ipc.list.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveList = resolve;
+          }),
+      );
+      const hydration = store.ensureHydrated('handoff-race');
+      const snapshot = {
+        sessionId: 'handoff-race',
+        tabs: [{ id: 'tab-a', kind: 'web-browser', state: { url: 'about:blank' } }],
+        activeTabId: 'tab-a',
+        persistable: false as const,
+      };
+
+      store.importTabSnapshot(snapshot);
+      resolveList({ tabs: [], activeTabId: null, persistable: false });
+      await hydration;
+
+      expect(store.getBucket('handoff-race')).toEqual({
+        hydrated: true,
+        tabs: snapshot.tabs,
+        activeTabId: 'tab-a',
+      });
+    });
+
+    it('can rehydrate after a host transition invalidates an in-flight hydrate', async () => {
+      let resolveInitial!: (value: {
+        tabs: never[];
+        activeTabId: null;
+      }) => void;
+      ipc.list.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveInitial = resolve;
+          }),
+      );
+
+      const initialHydration = store.ensureHydrated('host-transition-race');
+      await vi.waitFor(() => expect(ipc.list).toHaveBeenCalledOnce());
+
+      store.resetCachesForHostTransition();
+      resolveInitial({ tabs: [], activeTabId: null });
+      await initialHydration;
+      expect(store.getBucket('host-transition-race').hydrated).toBe(false);
+
+      ipc.list.mockResolvedValueOnce({
+        tabs: [{ id: 'tab-after-transition', kind: 'web-browser', state: { url: 'about:blank' } }],
+        activeTabId: 'tab-after-transition',
+      });
+      await store.ensureHydrated('host-transition-race');
+
+      expect(store.getBucket('host-transition-race')).toEqual({
+        hydrated: true,
+        tabs: [{ id: 'tab-after-transition', kind: 'web-browser', state: { url: 'about:blank' } }],
+        activeTabId: 'tab-after-transition',
+      });
+      expect(ipc.list).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not export a persistable local-DB bucket as a renderer handoff', async () => {
+      await store.ensureHydrated('persisted-s1');
+      expect(store.getTabSnapshot('persisted-s1')).toBeNull();
+    });
+
+    it('sanitizes non-persistable favicons when hydrating web-browser tabs', async () => {
+      ipc.list.mockResolvedValueOnce({
+        tabs: [
+          {
+            id: 't1',
+            kind: 'web-browser',
+            position: 0,
+            state: { url: 'https://a.com', title: 'A', favicon: 'blob:https://a.com/favicon' },
+          },
+          {
+            id: 't2',
+            kind: 'web-browser',
+            position: 1,
+            state: { url: 'https://b.com', title: 'B', favicon: 'data:image/png;base64,eA==' },
+          },
+          { id: 't3', kind: 'file-browser', position: 2, state: { selectedFilePath: 'x.md' } },
+        ],
+        activeTabId: 't1',
+      });
+      await store.ensureHydrated('s1');
+      const tabs = store.getBucket('s1').tabs;
+      // blob: 不可持久化 → 清成"无图标"。
+      expect((tabs[0].state as { favicon: string | null }).favicon).toBeNull();
+      // 小 data: 保留。
+      expect((tabs[1].state as { favicon: string | null }).favicon).toBe('data:image/png;base64,eA==');
+      // 非 web-browser kind 原样透传。
+      expect(tabs[2].state).toEqual({ selectedFilePath: 'x.md' });
+    });
+
+    it('lets title patches succeed after hydrating a poisoned web-browser tab', async () => {
+      // 发布前已把超大 data: favicon 落库的存量 tab:hydrate 消毒后,后续 patch
+      // 不再因 16KB 预检被拒(否则 title 变更也会把坏 favicon 重新并进预检)。
+      ipc.list.mockResolvedValueOnce({
+        tabs: [
+          {
+            id: 't1',
+            kind: 'web-browser',
+            position: 0,
+            state: {
+              url: 'https://a.com',
+              title: 'A',
+              favicon: `data:image/png;base64,${'x'.repeat(20 * 1024)}`,
+            },
+          },
+        ],
+        activeTabId: 't1',
+      });
+      await store.ensureHydrated('s1');
+      ipc.upsert.mockClear();
+      const tab = store.getBucket('s1').tabs[0];
+      await store.patchTabState('s1', tab.id, (current) => ({
+        ...(current as object),
+        title: 'A2',
+      }));
+      expect((store.getBucket('s1').tabs[0].state as { title: string }).title).toBe('A2');
+      expect(ipc.upsert).toHaveBeenCalledOnce();
+    });
+
     it('keeps the tab count limit for memory-only sessions', async () => {
       ipc.list.mockResolvedValueOnce({ tabs: [], activeTabId: null, persistable: false });
       await store.ensureHydrated('ghost-s1');
@@ -244,6 +417,55 @@ describe('RSB store', () => {
       // 失败回滚:tabs 仍为空,activeTabId 仍是之前的
       expect(store.getBucket('s1').tabs).toEqual([]);
       expect(store.getBucket('s1').activeTabId).toBe(prevActiveId);
+    });
+
+    it('rejects oversized persisted state before optimistic insertion', async () => {
+      const before = store.getBucket('s1');
+      const listener = vi.fn();
+      const onOptimisticAdd = vi.fn();
+      const unsubscribe = store.subscribe(listener);
+
+      const rejection = store.addTab(
+        's1',
+        'web-browser',
+        { favicon: `data:image/png;base64,${'x'.repeat(20 * 1024)}` },
+        { onOptimisticAdd },
+      );
+      await expect(rejection).rejects.toMatchObject({
+        code: 'RIGHT_SIDEBAR_STATE_TOO_LARGE',
+      });
+      await expect(rejection).rejects.toThrow(/tab state JSON too large/);
+
+      expect(store.getBucket('s1')).toBe(before);
+      expect(listener).not.toHaveBeenCalled();
+      expect(onOptimisticAdd).not.toHaveBeenCalled();
+      expect(ipc.upsert).not.toHaveBeenCalled();
+      expect(ipc.setActive).not.toHaveBeenCalled();
+      unsubscribe();
+    });
+
+    it.each([
+      ['cyclic state', () => {
+        const state: Record<string, unknown> = {};
+        state.self = state;
+        return state;
+      }],
+      ['BigInt state', () => ({ value: BigInt(1) })],
+      ['top-level function state', () => () => undefined],
+    ])('rejects non-JSON-serializable %s before optimistic insertion', async (_name, makeState) => {
+      const before = store.getBucket('s1');
+      const listener = vi.fn();
+      const unsubscribe = store.subscribe(listener);
+
+      const rejection = store.addTab('s1', 'web-browser', makeState());
+      await expect(rejection).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+      await expect(rejection).rejects.toThrow(/tab state must be JSON-serializable/);
+
+      expect(store.getBucket('s1')).toBe(before);
+      expect(listener).not.toHaveBeenCalled();
+      expect(ipc.upsert).not.toHaveBeenCalled();
+      expect(ipc.setActive).not.toHaveBeenCalled();
+      unsubscribe();
     });
 
     it('falls back to memory-only when the first persist hits a missing session FK', async () => {
@@ -902,6 +1124,30 @@ describe('RSB store', () => {
       ).rejects.toThrow('boom');
       const bucket = store.getBucket('s1');
       expect((bucket.tabs[0].state as { selectedFilePath: string | null }).selectedFilePath).toBeNull();
+    });
+
+    it('rejects oversized persisted patches without notifying or writing', async () => {
+      const a = await store.addTab('s1', 'web-browser', { favicon: null });
+      ipc.upsert.mockClear();
+      const before = store.getBucket('s1');
+      const listener = vi.fn();
+      const unsubscribe = store.subscribe(listener);
+
+      const oversizedFavicon = `data:image/png;base64,${'x'.repeat(20 * 1024)}`;
+      const rejection = store.patchTabState('s1', a.id, (current) => ({
+        ...(current as object),
+        favicon: oversizedFavicon,
+      }));
+      await expect(rejection).rejects.toMatchObject({
+        code: 'RIGHT_SIDEBAR_STATE_TOO_LARGE',
+      });
+      await expect(rejection).rejects.toThrow(/tab state JSON too large/);
+
+      expect(store.getBucket('s1')).toBe(before);
+      expect(store.getBucket('s1').tabs[0].state).toEqual({ favicon: null });
+      expect(listener).not.toHaveBeenCalled();
+      expect(ipc.upsert).not.toHaveBeenCalled();
+      unsubscribe();
     });
 
     it('serializes DB writes and coalesces the latest pending state per tab', async () => {

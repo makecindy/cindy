@@ -49,6 +49,7 @@ describe('messageAttachmentPayload', () => {
         path: 'clipboard://paste-1',
         url: 'xdt-image://session/shot.png',
         originalName: 'original.png',
+        pathOrigin: 'desktop-host',
       }),
     ]);
     expect(payload.imageAttachments).toEqual([
@@ -65,6 +66,7 @@ describe('messageAttachmentPayload', () => {
         type: 'image',
         path: 'xdt-image://session/shot.png',
         mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
         originalName: 'original.png',
       },
     ]);
@@ -95,7 +97,29 @@ describe('messageAttachmentPayload', () => {
         type: 'image',
         base64: 'inline-image',
         mimeType: 'image/png',
+        pathOrigin: 'desktop-host',
         originalName: 'fallback.png',
+      },
+    ]);
+  });
+
+  it('marks a desktop image path so remote sessions can keep the local-file warning', () => {
+    const imagePath = join('desktop', 'photo.jpg');
+    const image = attachment({
+      name: 'photo.jpg',
+      path: imagePath,
+      ext: '.jpg',
+      category: 'image',
+      mimeType: 'image/jpeg',
+    });
+
+    expect(buildMakerUserContentBlocks('', undefined, [image])).toEqual([
+      {
+        type: 'image',
+        path: imagePath,
+        mimeType: 'image/jpeg',
+        pathOrigin: 'desktop-host',
+        originalName: 'photo.jpg',
       },
     ]);
   });

@@ -2,7 +2,7 @@
  * ghost.ts — cindy-tools ghost 总机的 host 侧接线(docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
  * 网关模式:agent 工具箱里的插件发现/调用入口固定为
- * ghost_list / ghost_info / ghost_call。工具面(名称/schema/基线描述)版本内
+ * ghost_list / ghost_info / ghost_manual / ghost_call。工具面(名称/schema/基线描述)版本内
  * 恒定;完整描述(含花名册快照)会话内恒定,内容现查现报——本文件就是
  * "现查"的真身:
  *
@@ -66,10 +66,15 @@ import {
   getGhostManager,
   getGhostPipeDispatcher,
   getGhostSetupAssessment,
+  ghostForgeForbiddenRootDirs,
+  captureGhostMutationOwnerForMcp,
+  acquireGhostMutationLeaseForMcp,
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
+import { writeForgeScaffoldWithStableParent } from '../cindy-brain/forgeScaffoldCapability.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
@@ -86,6 +91,8 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('mcp/cindy');
 const MAX_FORGE_ICON_SOURCE_BYTES = 25 * 1024 * 1024;
+const GHOST_NO_TOOLS_MESSAGE =
+  '该插件未声明任何可供调用的工具;不要重试,改用其它方式完成。';
 
 const convertForgeIconToPng = createForgeIconConverter({
   fork: forkForgeIconConversionHost,
@@ -185,6 +192,60 @@ async function buildGhostSessionContext(
         }
       : null,
   );
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * Forge C-4 门:Forge 做的是**本机文件写**,裸 MCP workingDir 只是标签,不能
+ * 直接交给 fs。权威 session 行决定它是否本机、是否当前可写(远程/只读/plan 一律
+ * fail closed)。owner lease 在首个 await 前捕获、持到 scaffold/pack + 装入确认
+ * 转交结束,账号 teardown 会等它释放。
+ * ──────────────────────────────────────────────────────────────────────── */
+
+type ForgeSessionFsGate =
+  | { ok: true; workingDir: string }
+  | {
+      ok: false;
+      errorCode: 'WORKDIR_NOT_LOCAL' | 'WORKDIR_READ_ONLY';
+      message: string;
+    };
+
+async function withForgeOwnerLease<T>(operation: () => Promise<T>): Promise<T> {
+  const owner = captureGhostMutationOwnerForMcp();
+  const release = acquireGhostMutationLeaseForMcp(owner);
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
+async function getForgeSessionFsGate(
+  sessionContext: LiziMcpSessionContext | undefined,
+): Promise<ForgeSessionFsGate> {
+  const sessionId = sessionContext?.sessionId ?? null;
+  if (!sessionId) {
+    return {
+      ok: false,
+      errorCode: 'WORKDIR_NOT_LOCAL',
+      message: 'Forge requires an authoritative local session workdir',
+    };
+  }
+  const snapshot = await getSessionFsSnapshot(sessionId);
+  if (!snapshot?.workingDir || snapshot.remoteHostId) {
+    return {
+      ok: false,
+      errorCode: 'WORKDIR_NOT_LOCAL',
+      message: 'Forge cannot use a remote or unverified session workdir on the local host',
+    };
+  }
+  if (workdirWriteVerdict(snapshot.permissionMode, snapshot.planModeEnabled) === 'deny') {
+    return {
+      ok: false,
+      errorCode: 'WORKDIR_READ_ONLY',
+      message: 'Forge is disabled while the current session workdir is read-only or in plan mode',
+    };
+  }
+  return { ok: true, workingDir: snapshot.workingDir };
 }
 
 /** 意识显示名(确认卡标题用;查不到回落 id)。 */
@@ -799,6 +860,10 @@ async function grantAttachmentUrls(params: {
   );
 }
 
+function ghostHasTools(ghost: InstalledGhost): boolean {
+  return (ghost.manifest.tools?.length ?? 0) > 0;
+}
+
 function visibleChipGhosts(workdir: string | null): InstalledGhost[] {
   return getGhostManager()
     .list()
@@ -807,7 +872,7 @@ function visibleChipGhosts(workdir: string | null): InstalledGhost[] {
         ghost.enabled &&
         isGhostAvailableForActiveSession(ghost.manifest.id) &&
         ghost.manifest.kind === 'chip' &&
-        (ghost.manifest.tools?.length ?? 0) > 0 &&
+        ghostHasTools(ghost) &&
         !isGhostDisabledForWorkdir(ghost.manifest.id, workdir),
     );
 }
@@ -855,6 +920,14 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
     name: ghost.manifest.name,
     ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
     ...(recall ? { recall } : {}),
+    ...(ghost.manifest.manual
+      ? {
+          manual: ghost.manifest.manual.items.map(({ name, description }) => ({
+            name,
+            description,
+          })),
+        }
+      : {}),
     ...(setup ? { setup } : {}),
     tools: (ghost.manifest.tools ?? []).map((tool) => ({
       name: tool.name,
@@ -927,8 +1000,31 @@ export function getCindyGhostsMcpDeps(
       return {
         ok: false,
         errorCode: 'GHOST_NOT_FOUND',
-        message: '该插件未声明任何可供调用的工具;不要重试,改用其它方式完成。',
+        message: GHOST_NO_TOOLS_MESSAGE,
       };
+    },
+    async readGhostManual({ ghostId, path: manualPath }) {
+      const workdir = resolveSessionContext()?.workingDir ?? null;
+      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
+      if (!visibility.ok) {
+        return {
+          ok: false,
+          manual: [],
+          content: '',
+          errorCode: visibility.errorCode,
+          message: visibility.message,
+        };
+      }
+      if (!ghostHasTools(visibility.ghost)) {
+        return {
+          ok: false,
+          manual: [],
+          content: '',
+          errorCode: 'GHOST_NOT_FOUND',
+          message: GHOST_NO_TOOLS_MESSAGE,
+        };
+      }
+      return readInstalledGhostManual(visibility.ghost, manualPath);
     },
     async callGhostTool({
       ghostId,
@@ -1307,66 +1403,83 @@ export function getCindyGhostsMcpDeps(
       return FORGE_GUIDE;
     },
     async forgeScaffold(request): Promise<CindyForgeScaffoldResult> {
-      const sessionWorkdir = resolveSessionContext()?.workingDir ?? null;
-      const result = await scaffoldGhostDir(request, { sessionWorkdir });
-      if (result.ok) {
-        log.info('ghost forge scaffold created', {
-          dir: result.dir,
-          template: result.template,
-          files: result.files,
+      // C-4:owner lease 在首个 await 前捕获并持到副作用结束;workingDir 取权威
+      // session snapshot(远程/只读/plan fail closed),不用裸 MCP workingDir。
+      return withForgeOwnerLease(async () => {
+        const gate = await getForgeSessionFsGate(resolveSessionContext());
+        if (!gate.ok) return gate;
+        const result = await scaffoldGhostDir(request, {
+          sessionWorkdir: gate.workingDir,
+          forbiddenRootDirs: ghostForgeForbiddenRootDirs(),
+          writeScaffold: writeForgeScaffoldWithStableParent,
         });
-      }
-      return result;
-    },
-    async forgePack({ dir, iconSource }): Promise<CindyForgePackResult> {
-      let iconPng: Buffer | undefined;
-      let iconNote = '';
-      if (iconSource !== undefined) {
-        try {
-          const resolved = blobStore.resolveSafe(iconSource);
-          if (!resolved.mimeType.startsWith('image/')) {
-            throw new Error('icon_source 不是图片');
-          }
-          const stat = await fs.promises.stat(resolved.absPath);
-          if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_FORGE_ICON_SOURCE_BYTES) {
-            throw new Error(`icon_source 体积必须在 1–${MAX_FORGE_ICON_SOURCE_BYTES} 字节之间`);
-          }
-          iconPng = await convertForgeIconToPng(resolved.absPath);
-          iconNote = 'AI 图标已嵌入安装包。';
-        } catch (err) {
-          iconNote = 'AI 图标处理失败，已保留默认图标并继续打包。';
-          log.warn('ghost forge icon fallback', {
-            dir,
-            error: err instanceof Error ? err.message : String(err),
+        if (result.ok) {
+          log.info('ghost forge scaffold created', {
+            dir: result.dir,
+            template: result.template,
+            files: result.files,
           });
         }
-      }
-
-      let packed = await packGhostDir(dir, iconPng ? { iconPng } : undefined);
-      // icon overlay 的任何失败都不是打包门槛：用原源码再打一次。若原源码
-      // 本身也不合法，则返回原本就会出现的结构化错误。
-      if (!packed.ok && iconPng) {
-        const fallbackPacked = await packGhostDir(dir);
-        if (fallbackPacked.ok) {
-          packed = fallbackPacked;
-          iconNote = 'AI 图标处理失败，已保留默认图标并继续打包。';
-        } else {
-          return fallbackPacked;
+        return result;
+      });
+    },
+    async forgePack({ dir, iconSource }): Promise<CindyForgePackResult> {
+      return withForgeOwnerLease(async () => {
+        const gate = await getForgeSessionFsGate(resolveSessionContext());
+        if (!gate.ok) return gate;
+        let iconPng: Buffer | undefined;
+        let iconNote = '';
+        if (iconSource !== undefined) {
+          try {
+            const resolved = blobStore.resolveSafe(iconSource);
+            if (!resolved.mimeType.startsWith('image/')) {
+              throw new Error('icon_source 不是图片');
+            }
+            const stat = await fs.promises.stat(resolved.absPath);
+            if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_FORGE_ICON_SOURCE_BYTES) {
+              throw new Error(`icon_source 体积必须在 1–${MAX_FORGE_ICON_SOURCE_BYTES} 字节之间`);
+            }
+            iconPng = await convertForgeIconToPng(resolved.absPath);
+            iconNote = 'AI 图标已嵌入安装包。';
+          } catch (err) {
+            iconNote = 'AI 图标处理失败，已保留默认图标并继续打包。';
+            log.warn('ghost forge icon fallback', {
+              dir,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
-      }
-      if (!packed.ok) return packed;
-      // 与双击 .cindy 同一条转交通道:renderer 弹标准确认框(同 id 已装则
-      // 自动转"更新 vX → vY"),用户点头才真装。
-      await handleIncomingCindyFile(packed.cindyPath, 'ghost-forge');
-      log.info('ghost forge packed', { dir, cindyPath: packed.cindyPath, id: packed.manifest.id });
-      return {
-        ok: true,
-        cindyPath: packed.cindyPath,
-        id: packed.manifest.id,
-        name: packed.manifest.name,
-        version: packed.manifest.version,
-        note: `${iconNote}已打包并弹出装入/更新确认框,请告知用户在应用内确认(装入默认沉睡)。`,
-      };
+
+        const packOptions = {
+          sessionWorkdir: gate.workingDir,
+          forbiddenRootDirs: ghostForgeForbiddenRootDirs(),
+        };
+        let packed = await packGhostDir(dir, iconPng ? { ...packOptions, iconPng } : packOptions);
+        // icon overlay 的任何失败都不是打包门槛：用原源码再打一次。若原源码
+        // 本身也不合法，则返回原本就会出现的结构化错误。
+        if (!packed.ok && iconPng) {
+          const fallbackPacked = await packGhostDir(dir, packOptions);
+          if (fallbackPacked.ok) {
+            packed = fallbackPacked;
+            iconNote = 'AI 图标处理失败，已保留默认图标并继续打包。';
+          } else {
+            return fallbackPacked;
+          }
+        }
+        if (!packed.ok) return packed;
+        // 与双击 .cindy 同一条转交通道:renderer 弹标准确认框(同 id 已装则
+        // 自动转"更新 vX → vY"),用户点头才真装。lease 持到转交完成。
+        await handleIncomingCindyFile(packed.cindyPath, 'ghost-forge');
+        log.info('ghost forge packed', { dir, cindyPath: packed.cindyPath, id: packed.manifest.id });
+        return {
+          ok: true,
+          cindyPath: packed.cindyPath,
+          id: packed.manifest.id,
+          name: packed.manifest.name,
+          version: packed.manifest.version,
+          note: `${iconNote}已打包并弹出装入/更新确认框,请告知用户在应用内确认(装入默认沉睡)。`,
+        };
+      });
     },
     logger: log,
   };

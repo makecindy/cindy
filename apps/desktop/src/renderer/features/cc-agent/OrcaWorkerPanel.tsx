@@ -7,7 +7,6 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
@@ -37,6 +36,8 @@ export interface OrcaWorkerPanelProps {
   onFocusWorkerSessionIdConsumed?: (revision: number) => void;
   onSelectionIntentCleared?: (revision: number) => void;
   onSearchJumpConsumed?: () => void;
+  /** Main-window host navigation. Detached sidebar windows omit it and hide the settings action. */
+  onOpenSettings?: () => void;
 }
 
 function sameVisibleSessionPayload(
@@ -60,9 +61,9 @@ export function OrcaWorkerPanel({
   onFocusWorkerSessionIdConsumed,
   onSelectionIntentCleared,
   onSearchJumpConsumed,
+  onOpenSettings,
 }: OrcaWorkerPanelProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const {
     workers,
     focusedWorker,
@@ -165,8 +166,8 @@ export function OrcaWorkerPanel({
           hardLimit={hardLimit}
           onSwitchFocus={handleSwitchFocus}
           onOpenCreate={() => void handleOpenCreate()}
-          onOpenSettings={() => navigate('/settings?section=collaboration')}
-          settingsEnabled={!isSidebarWindow()}
+          onOpenSettings={() => onOpenSettings?.()}
+          settingsEnabled={!isSidebarWindow() && Boolean(onOpenSettings)}
           onArchiveWorker={handleArchiveWorker}
           clearAttentionWhenVisible={viewVisible}
         />

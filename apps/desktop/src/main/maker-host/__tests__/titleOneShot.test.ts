@@ -56,10 +56,34 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 import {
   buildTitleTarget,
   generateTitleViaProvider,
+  generateTitleViaProviderResult,
   parseResponsesSse,
   type TitleOneShotDeps,
 } from '../title-one-shot.js';
-import { setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
+import {
+  setActiveCatalog,
+  setDiscoveredCodexModels,
+  setXdGatewayModels,
+  type XdGatewayModelInfo,
+} from '../active-catalog.js';
+
+function xdGatewayModel(
+  id: string,
+  mode: NonNullable<XdGatewayModelInfo['mode']>,
+  overrides: Partial<XdGatewayModelInfo> = {},
+): XdGatewayModelInfo {
+  return {
+    id,
+    name: id,
+    mode,
+    contextWindow: 200_000,
+    efforts: ['low', 'medium', 'high'],
+    defaultEffort: 'high',
+    agents: ['claude-code'],
+    perAgent: { 'claude-code': { wireProtocol: 'anthropic-messages' } },
+    ...overrides,
+  };
+}
 
 /** openai 是动态清单供应商(2026-07-19 统一重构):注入 codex 注册表快照模拟运行时形态。 */
 async function withDiscoveredMini<T>(fn: () => T | Promise<T>): Promise<T> {
@@ -246,7 +270,7 @@ describe('generateTitleViaProvider — provider 解析', () => {
   });
 
   it('DB 无显式 + xd 已连接 → 走 xd(cc 默认)', async () => {
-    setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', mode: 'chat' }]);
+    setXdGatewayModels([xdGatewayModel('deepseek/deepseek-v4-flash', 'chat')]);
     try {
       const fetchImpl = fakeFetch(() => ({
         json: { choices: [{ message: { content: '网关标题' } }] },
@@ -316,6 +340,53 @@ describe('generateTitleViaProvider — provider 解析', () => {
   });
 });
 
+describe('generateTitleViaProviderResult — 手动重命名失败语义', () => {
+  it('direct custom DeepSeek 没有受支持的标题 wire → unsupported-provider', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { choices: [{ message: { content: '不应出现' } }] },
+    }));
+
+    await expect(
+      generateTitleViaProviderResult(
+        { sessionId: 's-deepseek', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      ),
+    ).resolves.toEqual({ status: 'unsupported-provider' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    // 自动起名的旧入口仍折叠为 null，保持启发式 fallback 契约。
+    await expect(
+      generateTitleViaProvider(
+        { sessionId: 's-deepseek', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'deepseek',
+          listConnectedProviders: async () => [providerStub('deepseek')],
+        },
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it('XD 结构上受支持但实时目录暂无聊天模型 → failed', async () => {
+    setXdGatewayModels([]);
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-xd-empty', agentKind: 'claude-code', prompt: 'x' },
+      {
+        readSessionProviderId: async () => 'xd',
+        listConnectedProviders: async () => [providerStub('xd')],
+        readGatewayKey: () => 'gk',
+      },
+    );
+
+    expect(result).toEqual({ status: 'failed' });
+  });
+
+});
+
 // ── buildTitleTarget(锁定 catalog titleModel 配置)────────────────────────
 
 describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
@@ -363,8 +434,8 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
     // xd 模型以网关实时清单为准(2026-08-06 #1891 修复:不再读静态 titleModel):
     // 注入清单含聊天模型与图像模型,标题应选聊天模型(最经济)。
     setXdGatewayModels([
-      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
-      { id: 'gpt-image-2', mode: 'image' },
+      xdGatewayModel('deepseek/deepseek-v4-flash', 'chat'),
+      xdGatewayModel('gpt-image-2', 'image'),
     ]);
     try {
       expect(buildTitleTarget('xd')).toEqual({
@@ -380,8 +451,8 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
   });
   it('xd 清单只有非聊天模型(图像/向量)→ null,不发送无效请求', () => {
     setXdGatewayModels([
-      { id: 'gpt-image-2', mode: 'image' },
-      { id: 'voyage/voyage-4', mode: 'embedding' },
+      xdGatewayModel('gpt-image-2', 'image'),
+      xdGatewayModel('voyage/voyage-4', 'embedding'),
     ]);
     try {
       expect(buildTitleTarget('xd')).toBeNull();
@@ -395,9 +466,9 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
   });
   it('xd 清单只有 chat + 图像混合 → 只选 chat,模式权威过滤', () => {
     setXdGatewayModels([
-      { id: 'gpt-image-2', mode: 'image' },
-      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
-      { id: 'moonshotai/kimi-k3', mode: 'chat' },
+      xdGatewayModel('gpt-image-2', 'image'),
+      xdGatewayModel('deepseek/deepseek-v4-flash', 'chat'),
+      xdGatewayModel('moonshotai/kimi-k3', 'chat'),
     ]);
     try {
       const target = buildTitleTarget('xd');
@@ -412,8 +483,8 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
     // responses 模型需要 Codex Responses wire,标题通道固定 gateway-chat——
     // 选中会被网关拒收,必须排除。
     setXdGatewayModels([
-      { id: 'qwen/qwen3.8-max', mode: 'responses' },
-      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
+      xdGatewayModel('qwen/qwen3.8-max', 'responses'),
+      xdGatewayModel('deepseek/deepseek-v4-flash', 'chat'),
     ]);
     try {
       const target = buildTitleTarget('xd');
@@ -423,7 +494,7 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
     }
   });
   it('xd 清单只有 responses 模型 → null(无可用 chat 模型,不发请求)', () => {
-    setXdGatewayModels([{ id: 'qwen/qwen3.8-max', mode: 'responses' }]);
+    setXdGatewayModels([xdGatewayModel('qwen/qwen3.8-max', 'responses')]);
     try {
       expect(buildTitleTarget('xd')).toBeNull();
     } finally {
@@ -432,8 +503,8 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
   });
   it('用户停用清单中最便宜的模型 → 选次便宜可用模型(Codex round 2)', () => {
     setXdGatewayModels([
-      { id: 'deepseek/deepseek-v4-flash', mode: 'chat', inputCostPerToken: 0.1, outputCostPerToken: 0.2 },
-      { id: 'moonshotai/kimi-k3', mode: 'chat', inputCostPerToken: 1, outputCostPerToken: 2 },
+      xdGatewayModel('deepseek/deepseek-v4-flash', 'chat', { inputCostPerToken: 0.1, outputCostPerToken: 0.2 }),
+      xdGatewayModel('moonshotai/kimi-k3', 'chat', { inputCostPerToken: 1, outputCostPerToken: 2 }),
     ]);
     mockReadModelDisableOverrides.mockReturnValueOnce({
       disabledModels: { 'xd:deepseek/deepseek-v4-flash': true },
@@ -447,8 +518,8 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
   });
   it('清单中全部 chat 模型都被用户停用 → null', () => {
     setXdGatewayModels([
-      { id: 'deepseek/deepseek-v4-flash', mode: 'chat' },
-      { id: 'moonshotai/kimi-k3', mode: 'chat' },
+      xdGatewayModel('deepseek/deepseek-v4-flash', 'chat'),
+      xdGatewayModel('moonshotai/kimi-k3', 'chat'),
     ]);
     mockReadModelDisableOverrides.mockReturnValueOnce({
       disabledModels: {
@@ -639,7 +710,7 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
 
 describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
   it('200 → 解析 choices[].message.content;请求形状正确(模型取自网关清单)', async () => {
-    setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', mode: 'chat' }]);
+    setXdGatewayModels([xdGatewayModel('deepseek/deepseek-v4-flash', 'chat')]);
     try {
       const fetchImpl = fakeFetch(() => ({
         json: { choices: [{ message: { content: '网关标题' } }] },
@@ -666,7 +737,7 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
     }
   });
   it('网关清单无聊天模型 → 不发送请求、回落 null', async () => {
-    setXdGatewayModels([{ id: 'gpt-image-2', mode: 'image' }]);
+    setXdGatewayModels([xdGatewayModel('gpt-image-2', 'image')]);
     try {
       const fetchImpl = fakeFetch(() => ({ json: {} }));
       const title = await generateTitleViaProvider(
@@ -685,7 +756,7 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
     }
   });
   it('无网关 key → null', async () => {
-    setXdGatewayModels([{ id: 'deepseek/deepseek-v4-flash', mode: 'chat' }]);
+    setXdGatewayModels([xdGatewayModel('deepseek/deepseek-v4-flash', 'chat')]);
     try {
       const fetchImpl = fakeFetch(() => ({ json: {} }));
       const title = await generateTitleViaProvider(

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { toast } from '@/lib/toast';
 import { confirmAndInstallGhost } from '../installFlow';
+import type { InstalledGhost } from '../../../shared/ghost';
 
 vi.mock('@/lib/toast', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -27,8 +28,10 @@ const baseManifest = {
 function setupWindow(
   manifest: object,
   installResult: { ghost: { manifest: object } } = { ghost: { manifest } },
+  installedGhosts: InstalledGhost[] = [],
 ) {
   const install = vi.fn(async () => installResult);
+  const update = vi.fn(async () => installResult);
   const electronAPI = {
     ghosts: {
       inspect: vi.fn(async () => ({
@@ -41,15 +44,16 @@ function setupWindow(
           reviewed: false,
         },
       })),
-      listSync: vi.fn(() => ({ ghosts: [] })),
+      listSync: vi.fn(() => ({ ghosts: installedGhosts })),
       install,
+      update,
     },
   };
   Object.defineProperty(globalThis, 'window', {
     value: { electronAPI },
     configurable: true,
   });
-  return { install };
+  return { install, update };
 }
 
 function deps(confirm: (options: unknown) => Promise<boolean>) {
@@ -67,6 +71,25 @@ afterEach(() => {
 });
 
 describe('installFlow · 装入确认', () => {
+  it('带 manual 的包把篇数传给装入确认信息行', async () => {
+    const manifest = {
+      ...baseManifest,
+      manual: {
+        items: [
+          { dir: 'manual/ops', name: 'ops', description: '操作手册' },
+          { dir: 'manual/faq', name: 'faq', description: '常见问题' },
+        ],
+      },
+    };
+    setupWindow(manifest);
+    const d = deps(vi.fn(async () => true));
+    await confirmAndInstallGhost('/tmp/manual.cindy', d);
+    const options = (d.confirmWithCheckbox as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      content?: { props?: { manualCount?: number } };
+    };
+    expect(options.content?.props?.manualCount).toBe(2);
+  });
+
   it('Renderer 权限清单确认后把 Node 插件安装交给 Main,并提示装入完成', async () => {
     const { install } = setupWindow(baseManifest);
     const confirm = vi.fn(async () => true);
@@ -92,6 +115,61 @@ describe('installFlow · 装入确认', () => {
 
     expect(confirm).not.toHaveBeenCalled();
     expect(install).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('installFlow · approved update binding', () => {
+  function installed(
+    approval: InstalledGhost['approval'],
+  ): InstalledGhost {
+    return {
+      manifest: {
+        ...baseManifest,
+        version: '0.9.0',
+        slots: ['card'],
+        node: undefined,
+      },
+      dir: '/brain/node-ghost',
+      enabled: true,
+      approval,
+    };
+  }
+
+  it('passes the reviewed approved revision to Main', async () => {
+    const current = installed({
+      state: 'approved',
+      revision: '00000000-0000-4000-8000-000000000001',
+    });
+    const { update } = setupWindow(baseManifest, undefined, [current]);
+    const confirm = vi.fn(async (_options: unknown) => true);
+
+    await confirmAndInstallGhost('/tmp/node-update.cindy', deps(confirm));
+
+    expect(update).toHaveBeenCalledWith('/tmp/node-update.cindy', {
+      expectedPackageSha256: 'a'.repeat(64),
+      expectedInstalledApproval:
+        'approved:00000000-0000-4000-8000-000000000001',
+    });
+  });
+
+  it('treats every target permission as added when no approved baseline exists', async () => {
+    const current = installed({ state: 'legacy-unapproved' });
+    const { update } = setupWindow(baseManifest, undefined, [current]);
+    const confirm = vi.fn(async (_options: unknown) => true);
+
+    await confirmAndInstallGhost('/tmp/legacy-update.cindy', deps(confirm));
+
+    const review = (confirm.mock.calls[0]![0] as {
+      content: { props: { diff: { added: unknown[]; unchanged: unknown[] } } };
+    }).content;
+    expect(review.props.diff.added.length).toBeGreaterThan(0);
+    expect(review.props.diff.unchanged).toEqual([]);
+    expect(update).toHaveBeenCalledWith(
+      '/tmp/legacy-update.cindy',
+      expect.objectContaining({
+        expectedInstalledApproval: 'legacy-unapproved',
+      }),
+    );
   });
 });
 

@@ -45,4 +45,3 @@ describe('telegram message lifecycle', () => {
     expect(sent.phase).toBe('final-sent');
   });
 });
-

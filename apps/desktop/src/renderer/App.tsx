@@ -151,6 +151,9 @@ export function App() {
         effort: cc.effort,
         permissionMode: cc.permissionMode,
         fastMode: draft.fastModeByModel[cc.model] === true,
+        // /ctr 新建会话需要与模型配套的供应商路由；缺省会走隐式路由落到官方网关，
+        // 用户供应商专有的模型（如 deepseek-v4-pro）会被网关 400 拒绝。
+        providerId: cc.providerId ?? null,
       });
       // main 缓存两用途:① collab worker spawn 读 model/effort/fastMode;② device-link 远程
       // 草稿镜像读全量(model/effort/fast/permission/source)+「是否显式选过模型」。故

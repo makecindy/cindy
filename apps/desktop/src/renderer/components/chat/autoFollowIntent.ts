@@ -117,6 +117,14 @@ export interface ResolveRenderPinArgs {
   restoring: boolean;
   /** The current render introduced a new user message at the tail. */
   newUserSend: boolean;
+  /**
+   * The tail user message was sent from this renderer's composer (local send,
+   * edit-resend, or a device-link send initiated on this desktop). User
+   * messages injected by other entries (IM channels, a mobile client driving
+   * the session remotely, scheduler runs) arrive over IPC with no local
+   * composer intent and must not steal the viewport (#2194).
+   */
+  sentFromThisRenderer: boolean;
   /** Auto-follow was active before this render. */
   nearBottom: boolean;
 }
@@ -169,14 +177,20 @@ export function resolveLastUserMessageObservation({
 /**
  * Resolve the render-time priority between a saved history anchor and auto-follow.
  * Reopening a session must preserve a real reading position, but a user message
- * sent during that mounted session is an explicit request to resume at the tail.
+ * sent from this renderer during that mounted session is an explicit request to
+ * resume at the tail. A user message injected by another entry (IM channel,
+ * mobile client, scheduler) carries no such intent: it follows the ordinary
+ * rule — pin only while the user is still near the bottom.
  */
 export function resolveRenderPinDecision({
   restoring,
   newUserSend,
   nearBottom,
+  sentFromThisRenderer,
 }: ResolveRenderPinArgs): ResolveRenderPinDecision {
-  if (newUserSend) return { clearRestoring: restoring, pinToBottom: true };
+  if (newUserSend && sentFromThisRenderer) {
+    return { clearRestoring: restoring, pinToBottom: true };
+  }
   if (restoring) return { clearRestoring: false, pinToBottom: false };
   return { clearRestoring: false, pinToBottom: nearBottom };
 }

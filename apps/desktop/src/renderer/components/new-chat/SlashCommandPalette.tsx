@@ -237,8 +237,8 @@ export function SlashCommandPalette({
                 ref={focused ? focusedRef : undefined}
                 type="button"
                 aria-disabled={unavailable}
-                aria-label={unavailable ? `${cmd.name}: ${t('commandPalette.projectTrustRequired')}` : cmd.name}
-                title={unavailable ? t('commandPalette.projectTrustRequired') : undefined}
+                aria-label={unavailable ? `${cmd.name}: ${t('commandPalette.projectSkillNotLoaded')}` : cmd.name}
+                title={unavailable ? t('commandPalette.projectSkillNotLoaded') : undefined}
                 // `onMouseDown` instead of `onClick` so the textarea
                 // keeps focus — click would fire after blur.
                 onMouseDown={(e) => {
@@ -295,7 +295,7 @@ export function SlashCommandPalette({
           </div>
           <div className="mt-[8px] text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
             {isSlashCommandUnavailable(focusedCmd)
-              ? t('commandPalette.projectTrustRequired')
+              ? t('commandPalette.projectSkillNotLoaded')
               : focusedCmd.description}
           </div>
         </div>,

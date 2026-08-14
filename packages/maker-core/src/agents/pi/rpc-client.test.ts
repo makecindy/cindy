@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({ spawn: vi.fn() }));
 
 vi.mock('node:child_process', () => ({ spawn: mocks.spawn }));
 
-import { PiRpcProcess } from './rpc-client.js';
+import { PiRpcProcess, createPiStdioTransport } from './rpc-client.js';
 
 function makeStream() {
   return new EventEmitter();
@@ -38,15 +38,19 @@ function createProcess(onProcessSpawned?: (pid: number) => void | (() => void)) 
     child: vi.fn(),
   };
   logger.child.mockReturnValue(logger);
-  return new PiRpcProcess({
+  const transport = createPiStdioTransport({
     binaryPath: '/pi',
     args: ['--mode', 'rpc'],
     cwd: '/work',
     env: {},
     logger,
+    onProcessSpawned,
+  });
+  return new PiRpcProcess({
+    transport,
+    logger,
     onEvent: vi.fn(),
     onExit: vi.fn(),
-    onProcessSpawned,
   });
 }
 

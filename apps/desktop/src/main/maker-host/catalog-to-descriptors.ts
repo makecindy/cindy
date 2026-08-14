@@ -82,7 +82,7 @@ function toDescriptor(
   // 把默认收起的 legacy 模型选成默认 —— 用户在选择器里根本看不到自己的默认模型。
   if (m.defaultEnabled !== undefined) d.defaultEnabled = m.defaultEnabled;
   // 新对话默认种子标记要透传：渲染层 getDefaultModelForVendor 据它优先选中被标记的模型。
-  // pi tab 的条目多从 CC 投影而来，会带上 ['claude-code']，pi 侧按 'claude-code' 口径判定。
+  // v3 可携带 Pi 自己的标记；消费端按 Agent 严格解释，不跨 Agent 借用默认策略。
   if (m.newSessionDefault !== undefined) d.newSessionDefault = m.newSessionDefault;
   if (m.cost !== undefined) d.cost = m.cost;
   if (m.maxOutput !== undefined) d.maxOutputTokens = m.maxOutput;
@@ -114,23 +114,20 @@ function intersectPiEffortCapabilities(
 
 /**
  * availableModels 按 id 拍平后仍要保留 XD 区域策略。展示/能力字段继续首见胜出；这里只把
- * 当前 agent 对应的默认标记并到首见 descriptor。Pi 按既有协议复用 claude-code 标记。
+ * 当前 agent 对应的默认标记并到首见 descriptor，不把其它 Agent 的默认策略跨投影进来。
  */
 function mergeNewSessionDefaultMarker(
   first: ModelDescriptor,
   next: ModelDescriptor,
   agent: AgentKind,
 ): ModelDescriptor {
-  const marker = agent === 'pi' ? 'claude-code' : agent;
-  if (
-    next.newSessionDefault?.includes(marker) !== true ||
-    first.newSessionDefault?.includes(marker) === true
-  ) {
-    return first;
-  }
+  const hasNewMarker =
+    next.newSessionDefault?.includes(agent) === true &&
+    first.newSessionDefault?.includes(agent) !== true;
+  if (!hasNewMarker) return first;
   return {
     ...first,
-    newSessionDefault: [...(first.newSessionDefault ?? []), marker],
+    newSessionDefault: [...(first.newSessionDefault ?? []), agent],
   };
 }
 
@@ -203,6 +200,14 @@ export function resolvePiRuntimeModelDescriptor(
     if (retired) return toDescriptor(retired, 'pi');
   }
   return null;
+}
+
+/** Pi 默认 gateway 的 v3 transport 来自 XD；描述符必须使用同一来源。 */
+export function resolvePiGatewayDescriptorProviderId(
+  providerId: string | null | undefined,
+): string {
+  const source = providerId?.trim();
+  return !source || source === 'cindy' ? 'xd' : source;
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { IpcErrorCode } from '../../shared/ipc-errors.js';
+import { createIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 
 /**
  * IPC 参数运行时校验工具 — main 进程所有 IPC handler 共用。
@@ -6,9 +6,7 @@ import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 
 /** 抛出带 code 的 IPC 错误，renderer 侧可通过 err.code 做统一处理 */
 export function throwIpcError(code: IpcErrorCode, message: string): never {
-  const err = new Error(`[${code}] ${message}`);
-  (err as { code?: IpcErrorCode }).code = code;
-  throw err;
+  throw createIpcError(code, message);
 }
 
 export function requireString(value: unknown, name: string): string {

@@ -42,6 +42,7 @@ import {
   fingerprintReviewCappedWorkspaceFiles,
   ReviewCappedWorkspaceChangedError,
 } from './reviewCappedWorkspaceFingerprint.js';
+import { readStagedIndexIdentity } from '../git-review/indexIdentityReader.js';
 
 export interface ReviewAttachmentInput {
   name: string;
@@ -194,11 +195,13 @@ interface ReviewWorkspaceSnapshot {
 interface ReviewWorkspaceSnapshotDeps {
   readReviewData: typeof readReviewData;
   fingerprintCappedWorkspaceFiles: typeof fingerprintReviewCappedWorkspaceFiles;
+  readStagedIndexIdentity: typeof readStagedIndexIdentity;
 }
 
 const defaultReviewWorkspaceSnapshotDeps: ReviewWorkspaceSnapshotDeps = {
   readReviewData,
   fingerprintCappedWorkspaceFiles: fingerprintReviewCappedWorkspaceFiles,
+  readStagedIndexIdentity,
 };
 
 /**
@@ -247,9 +250,36 @@ function workspacePathsWithoutContent(workspace: ReviewWorkspaceEvidence): strin
   return [...new Set([...capped, ...contentless])];
 }
 
+/**
+ * Sanitized staged evidence paths whose index identity must be bound (#2460).
+ *
+ * The content fingerprint above hashes worktree bytes only; staged content
+ * lives in the Git index. When a path carries both a staged and an unstaged
+ * contentless diff, swapping the index blob for another one of the same size
+ * while restoring the worktree bytes leaves status, empty-patch metadata and
+ * the worktree hash all unchanged — both freshness gates would keep accepting
+ * a conclusion drawn from the stale staged bytes. Binding the index object
+ * identity `(path, mode, stage, oid)` closes that without reading blob bytes.
+ *
+ * Collected from the sanitized staged evidence (plain staged diffs plus the
+ * capped staged bucket), so sensitive-path filtering has already been applied.
+ */
+function stagedEvidencePaths(workspace: ReviewWorkspaceEvidence): string[] {
+  const capped = (workspace.diffs.capped?.staged?.files ?? []).flatMap(
+    (file) => [file.path, file.oldPath].filter(Boolean) as string[],
+  );
+  const staged = workspace.diffs.staged.flatMap(
+    (diff) => [diff.path, diff.oldPath].filter(Boolean) as string[],
+  );
+  return [...new Set([...staged, ...capped])];
+}
+
 async function buildReviewWorkspaceSnapshot(
   reviewData: Awaited<ReturnType<typeof readReviewData>>,
-  fingerprintCappedWorkspaceFiles: typeof fingerprintReviewCappedWorkspaceFiles,
+  deps: Pick<
+    ReviewWorkspaceSnapshotDeps,
+    'fingerprintCappedWorkspaceFiles' | 'readStagedIndexIdentity'
+  >,
 ): Promise<ReviewWorkspaceSnapshot> {
   const workspace = mapReviewWorkspace(reviewData);
   const contentlessPaths = workspacePathsWithoutContent(workspace);
@@ -258,7 +288,14 @@ async function buildReviewWorkspaceSnapshot(
   const hasCappedDiff = contentlessPaths.length > 0;
   const cappedContentFingerprint =
     hasCappedDiff && reviewData.scope.repoRoot
-      ? await fingerprintCappedWorkspaceFiles(reviewData.scope.repoRoot, contentlessPaths)
+      ? await deps.fingerprintCappedWorkspaceFiles(reviewData.scope.repoRoot, contentlessPaths)
+      : null;
+  const stagedPaths = stagedEvidencePaths(workspace);
+  // Identity only — no byte reads. A read failure propagates and aborts the
+  // snapshot (fail closed), same as any other Git evidence read failure.
+  const stagedIndexIdentity =
+    stagedPaths.length > 0 && reviewData.scope.repoRoot
+      ? await deps.readStagedIndexIdentity(reviewData.scope.repoRoot, stagedPaths)
       : null;
   return {
     workspace,
@@ -283,6 +320,7 @@ async function buildReviewWorkspaceSnapshot(
               summary: reviewData.summary,
               workspace,
               cappedContentFingerprint,
+              stagedIndexIdentity,
             }),
           )
           .digest('hex')
@@ -303,20 +341,14 @@ export async function readReviewWorkspaceSnapshot(
     // result for a task that may in fact be a Git workspace.
     const reviewData = await deps.readReviewData(sourceSessionId);
     try {
-      const current = await buildReviewWorkspaceSnapshot(
-        reviewData,
-        deps.fingerprintCappedWorkspaceFiles,
-      );
+      const current = await buildReviewWorkspaceSnapshot(reviewData, deps);
       if (!current.hasCappedDiff) return current;
 
       // A capped summary and its full-content digest must describe one stable
       // workspace window. Require a second matching snapshot; a transient edit
       // during either full-file hash restarts the whole Git + content read.
       const confirmationData = await deps.readReviewData(sourceSessionId);
-      const confirmation = await buildReviewWorkspaceSnapshot(
-        confirmationData,
-        deps.fingerprintCappedWorkspaceFiles,
-      );
+      const confirmation = await buildReviewWorkspaceSnapshot(confirmationData, deps);
       if (!confirmation.hasCappedDiff) return confirmation;
       if (confirmation.fingerprint === current.fingerprint) return confirmation;
     } catch (error) {

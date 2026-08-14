@@ -142,9 +142,12 @@ describe('orca 远程路由接线不变式', () => {
   });
 
   it('右侧栏协同 tab close 不带路由副作用,避免 detached 窗口跳回 MainLayout', () => {
-    const src = read('features/right-sidebar/plugins/orca-workers/index.tsx');
-    expect(src).toContain('navigateOnSuccess: false');
-    expect(src).not.toContain('navigateOnSuccess: true');
+    const src = read('features/right-sidebar/plugins/orca-workers/OrcaWorkersTabBody.tsx');
+    expect(src).toContain('useStopOrcaCollabWithoutNavigation');
+    expect(src).not.toContain('useStopOrcaCollab({');
+    expect(src).toContain('isSidebarWindow() ? (');
+    expect(src).toContain('<MemoryRouter initialEntries={[`/cc-agent/${ctx.sessionId}`]}>');
+    expect(src).toContain('<RoutedOrcaWorkerPanel {...workerPanelProps} />');
   });
 
   it('detached 子窗口消费 browser/file/orca intent,主窗口 helper 不直接写子窗宿主 store', () => {
