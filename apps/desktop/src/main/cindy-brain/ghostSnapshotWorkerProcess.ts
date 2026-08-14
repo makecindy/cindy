@@ -28,8 +28,12 @@ import {
   resolveGhostContentPath,
 } from './ghostContentTree.js';
 import {
+  sameGhostSnapshotInodeIdentity,
   sameGhostSnapshotParentIdentity,
+  sameGhostSnapshotPath,
+  sameGhostSnapshotTargetIdentity,
   type GhostSnapshotParentIdentity,
+  type GhostSnapshotTargetIdentity,
 } from './ghostSnapshotIdentity.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
@@ -51,11 +55,6 @@ const port = (process as unknown as { parentPort?: Port }).parentPort;
 const send = (message: unknown): void => port?.postMessage(message);
 const hasCode = (error: unknown, code: string): boolean =>
   Boolean(error && typeof error === 'object' && (error as NodeJS.ErrnoException).code === code);
-function samePath(left: string, right: string): boolean {
-  const normalize = (value: string) =>
-    process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
-  return normalize(left) === normalize(right);
-}
 function targetParts(request: GhostSnapshotWorkerRequest): string[] {
   const parts = request.targetName.split('/');
   if (request.operation === 'ensure') {
@@ -71,7 +70,9 @@ function targetParts(request: GhostSnapshotWorkerRequest): string[] {
 async function verifyParent(expected: GhostSnapshotParentIdentity, workingDir: string): Promise<void> {
   const stats = await fs.promises.lstat(workingDir, { bigint: true });
   if (!sameGhostSnapshotParentIdentity(stats, expected)) throw new Error('snapshot parent identity changed');
-  if (!samePath(await fs.promises.realpath(workingDir), expected.realPath)) throw new Error('snapshot parent path changed');
+  if (!sameGhostSnapshotPath(await fs.promises.realpath(workingDir), expected.realPath)) {
+    throw new Error('snapshot parent path changed');
+  }
 }
 async function verifyDirectory(workingDir: string, name: string): Promise<void> {
   const target = path.join(workingDir, name);
@@ -83,30 +84,20 @@ async function removeVerifiedDirectory(
   workingDir: string,
   targetPath: string,
   parentName: string,
-  expectedTarget?: { realPath: string; dev: bigint; ino: bigint },
+  expectedTarget?: GhostSnapshotTargetIdentity,
 ): Promise<void> {
   const targetStat = await fs.promises.lstat(targetPath, { bigint: true });
-  if (!targetStat.isDirectory() || targetStat.isSymbolicLink()) {
-    throw new Error('snapshot target is not a real directory');
-  }
   const targetRealPath = await fs.promises.realpath(targetPath);
-  if (expectedTarget && (
-    targetStat.dev !== expectedTarget.dev ||
-    targetStat.ino !== expectedTarget.ino ||
-    !samePath(targetRealPath, expectedTarget.realPath)
-  )) {
+  if (expectedTarget && !sameGhostSnapshotTargetIdentity(targetStat, targetRealPath, expectedTarget)) {
     throw new Error('snapshot target identity changed before removal');
+  }
+  if (!expectedTarget && (!targetStat.isDirectory() || targetStat.isSymbolicLink())) {
+    throw new Error('snapshot target is not a real directory');
   }
   const quarantinePath = `${targetPath}.remove-${process.pid}-${Date.now()}`;
   await fs.promises.rename(targetPath, quarantinePath);
   const movedStat = await fs.promises.lstat(quarantinePath, { bigint: true });
-  if (
-    !movedStat.isDirectory()
-    || movedStat.isSymbolicLink()
-    || movedStat.dev !== targetStat.dev
-    || movedStat.ino !== targetStat.ino
-    || !samePath(await fs.promises.realpath(quarantinePath), targetRealPath)
-  ) {
+  if (!sameGhostSnapshotInodeIdentity(movedStat, targetStat)) {
     // Never recursively delete an unverified path. Leave the quarantined
     // directory for a later owner-checked cleanup pass.
     throw new Error('snapshot target identity changed during removal');
@@ -114,8 +105,12 @@ async function removeVerifiedDirectory(
   // The pathname was renamed through a mutable parent. Revalidate the
   // owner-bound parent before recursive deletion; on failure the isolated
   // directory is intentionally left for a later guarded cleanup pass.
+  // Removing `<id>` itself leaves no child directory to recheck — the
+  // snapshots root is already covered by verifyParent.
   await verifyParent(expectedParent, workingDir);
-  await verifyDirectory(workingDir, parentName);
+  if (!sameGhostSnapshotPath(path.dirname(targetPath), workingDir)) {
+    await verifyDirectory(workingDir, parentName);
+  }
   await fs.promises.rm(quarantinePath, { recursive: true, force: true });
 }
 async function copyDirectory(source: string, target: string): Promise<void> {
@@ -182,7 +177,7 @@ export async function runGhostSnapshotWorkerRequest(
   }
   if (!request.receipt || !request.sourceDir) throw new Error('approved skill snapshot is missing');
   let exists = false;
-  let existingTargetIdentity: { realPath: string; dev: bigint; ino: bigint } | undefined;
+  let existingTargetIdentity: GhostSnapshotTargetIdentity | undefined;
   try {
     const stat = await fs.promises.lstat(targetPath, { bigint: true });
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('snapshot target is not a real directory');
@@ -196,14 +191,19 @@ export async function runGhostSnapshotWorkerRequest(
   if (exists) {
     await verifyDirectory(workingDir, parts[0]);
     if (await matches(request.receipt, targetPath)) {
-      // matches() reads through pathnames and does not validate the
-      // baseDir itself (ghostContentTree.ts:68).  Recheck the target
-      // identity with lstat (no-follow) before accepting the fast path,
-      // so a concurrent process that swapped <id>/<revision> for a
-      // symlink after the initial lstat can't publish a linked external
-      // tree as the approved snapshot (P1, PRRT_kwDOTgdRUs6Yb404).
-      const targetKind = await classifyGhostDirEntry(targetPath);
-      if (targetKind !== 'directory') throw new Error('snapshot target is not a real directory on fast path');
+      // matches() reads through pathnames and does not validate the root
+      // itself. Re-read and compare the complete target identity before
+      // accepting the fast path, so a concurrent replacement cannot turn a
+      // content match into an approval for a different directory.
+      const targetStatAfterMatch = await fs.promises.lstat(targetPath, { bigint: true });
+      const targetRealPathAfterMatch = await fs.promises.realpath(targetPath);
+      if (!existingTargetIdentity || !sameGhostSnapshotTargetIdentity(
+        targetStatAfterMatch,
+        targetRealPathAfterMatch,
+        existingTargetIdentity,
+      )) {
+        throw new Error('snapshot target identity changed after fast path match');
+      }
       send({ ok: true }); return;
     }
   }
@@ -289,7 +289,9 @@ export async function runGhostSnapshotWorkerRequest(
     // after matches() so a concurrent swap to a symlink with identical
     // bytes is caught before we send ok (same P1 as PRRT_kwDOTgdRUs6Yb404).
     const targetKindAfterMatch = await classifyGhostDirEntry(targetPath);
-    if (targetKindAfterMatch !== 'directory') throw new Error('snapshot target no longer a real directory after match');
+    if (targetKindAfterMatch !== 'directory') {
+      throw new Error('snapshot target no longer a real directory after match');
+    }
     send({ ok: true });
   } finally {
     if (await verifyParent(request.expectedParent, workingDir).then(() => true, () => false) &&
