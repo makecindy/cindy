@@ -65,6 +65,8 @@ import type { BotCredentials, FeishuConnectionStatus } from './internal-types.js
 let client: Lark.WSClient | null = null;
 let detector: ConflictDetector | null = null;
 let currentBotAppId: string | null = null;
+/** 当前连接的 service(feishu/lark)— 账号边界含 service, 同名 appId 也不可串。 */
+let currentService: BotCredentials['service'] | null = null;
 let currentStatus: FeishuConnectionStatus = 'idle';
 let acceptingInbound = false;
 let lifecycleGeneration = 0;
@@ -125,6 +127,7 @@ const ORPHAN_NOTICE_RETRY_DELAYS_MS = [10_000, 30_000, 90_000] as const;
 interface PendingOrphanRetry {
   timer: ReturnType<typeof setTimeout>;
   botAppId: string;
+  service: BotCredentials['service'];
   openerMessageId: string;
   /** 触发消息 id — 重试成功时重新认领, 抑制冷却后的重投再次进入提示流程。 */
   messageId: string;
@@ -137,10 +140,12 @@ const orphanNoticeRetries = new Map<string, PendingOrphanRetry>();
 /**
  * stop() 时被挂起的排队重试(定时器已取消, 元数据保留)。同账号重连后由
  * start() 重新入队 — 否则事件已被 ACK, 重试随 stop 消失, 用户会一直看到
- * 「思考中」的开场白卡。跨账号不恢复(见 resumeOrphanRetriesFor 的过滤)。
+ * 「思考中」的开场白卡。跨账号不恢复(appId + service 双键, 见
+ * resumeOrphanRetriesFor 的过滤)。
  */
 interface SuspendedOrphanRetry {
   botAppId: string;
+  service: BotCredentials['service'];
   openerMessageId: string;
   messageId: string;
   attempt: number;
@@ -162,19 +167,44 @@ function suspendOrphanRetry(entry: SuspendedOrphanRetry): void {
   }
 }
 
-/** 同账号重连后恢复该 bot 被挂起的排队重试(保持退避进度)。 */
-function resumeOrphanRetriesFor(botAppId: string): void {
+/** 同账号(appId + service)重连后恢复该 bot 被挂起的排队重试(保持退避进度)。 */
+function resumeOrphanRetriesFor(botAppId: string, service: BotCredentials['service']): void {
   for (let i = suspendedOrphanRetries.length - 1; i >= 0; i--) {
     const entry = suspendedOrphanRetries[i]!;
-    if (entry.botAppId !== botAppId) continue;
+    if (entry.botAppId !== botAppId || entry.service !== service) continue;
     suspendedOrphanRetries.splice(i, 1);
     scheduleOrphanNoticeRetry(
       entry.botAppId,
+      entry.service,
       entry.openerMessageId,
       entry.messageId,
       entry.attempt,
     );
   }
+}
+
+/**
+ * 连接状态处置: 同一 bot 活跃 → false(照常执行); 已换成别的账号 → true
+ * (终止 — 旧账号的开场白不得经新 client 操作); 无连接(停止/重连中) →
+ * true 且挂起排队等重连(事件已 ACK, 终止会让提示永久消失)。
+ */
+function suspendOrDropOnConnectionChange(
+  botAppId: string,
+  service: BotCredentials['service'],
+  entry: SuspendedOrphanRetry,
+  context: string,
+): boolean {
+  if (isSameBotActive(botAppId, service)) return false;
+  const log = getLog();
+  const accountChanged =
+    currentBotAppId !== null && (currentBotAppId !== botAppId || currentService !== service);
+  if (accountChanged) {
+    log.info(`[feishu/wsClient] orphan opener ${context} skipped: account changed`);
+    return true;
+  }
+  suspendOrphanRetry(entry);
+  log.info(`[feishu/wsClient] orphan opener ${context} suspended for same-bot reconnect`);
+  return true;
 }
 
 /** 测试注入口 — 清空挂起/排队重试。生产代码不要调用。 */
@@ -190,13 +220,14 @@ function wasNoticeDelivered(openerMessageId: string): boolean {
 }
 
 /**
- * 重试/撤回的账号门: 换代后只要还是**同一个 bot**(重连), 提示/撤回仍然
- * 安全 — 用当前 client 继续即可(同账号可操作自己发的消息, 跨 stop 保留
- * 的重试因此不会死在 stale generation 上); 只有换成别的 bot 或无连接时
- * 才跳过, 旧账号的开场白不得经新账号的 client 操作。
+ * 重试/撤回的账号门: 换代后只要还是**同一个 bot**(appId + service 双键,
+ * Feishu/Lark 同名 appId 也不可串 — 凭证替换逻辑同样视 service 为账号
+ * 边界), 提示/撤回仍然安全 — 用当前 client 继续即可(同账号可操作自己发
+ * 的消息, 跨 stop 保留的重试因此不会死在 stale generation 上); 只有换成
+ * 别的账号或无连接时才失败, 旧账号的开场白不得经新账号的 client 操作。
  */
-function isSameBotActive(botAppId: string): boolean {
-  return acceptingInbound && currentBotAppId === botAppId;
+function isSameBotActive(botAppId: string, service: BotCredentials['service']): boolean {
+  return acceptingInbound && currentBotAppId === botAppId && currentService === service;
 }
 
 /**
@@ -241,6 +272,7 @@ function sendOrphanNoticeOnce(
 
 async function sendOrphanOpenerNotice(
   botAppId: string,
+  service: BotCredentials['service'],
   messageId: string,
   openerMessageId: string,
 ): Promise<void> {
@@ -275,14 +307,25 @@ async function sendOrphanOpenerNotice(
   } else {
     releaseInboundClaim(botAppId, messageId);
     log.warn(
-      '[feishu/wsClient] orphan opener notice failed — inbound claim released, retry scheduled',
+      '[feishu/wsClient] orphan opener notice failed — inbound claim released',
     );
-    scheduleOrphanNoticeRetry(botAppId, openerMessageId, messageId, 0);
+    // 发送失败发生在 stop 之后时, 连接已不在: 直接挂起排队(不创建定时器),
+    // 同账号重连后恢复; 已换账号则终止, 由新账号的重投走自己的处理。
+    const handled = suspendOrDropOnConnectionChange(
+      botAppId,
+      service,
+      { botAppId, service, openerMessageId, messageId, attempt: 0 },
+      'first-send',
+    );
+    if (!handled) {
+      scheduleOrphanNoticeRetry(botAppId, service, openerMessageId, messageId, 0);
+    }
   }
 }
 
 function scheduleOrphanNoticeRetry(
   botAppId: string,
+  service: BotCredentials['service'],
   openerMessageId: string,
   messageId: string,
   attempt: number,
@@ -296,16 +339,17 @@ function scheduleOrphanNoticeRetry(
       log.info('[feishu/wsClient] orphan notice already delivered — skipping opener recall');
       return;
     }
-    // 账号门: 已换成别的 bot 时终止(旧账号的开场白卡不得经新账号的 client
+    // 账号门: 已换成别的账号时终止(旧账号的开场白卡不得经新账号的 client
     // 操作); 无连接(停止/重连中)时挂起等重连恢复 — 终止会让事件已被 ACK
     // 的撤回链永久消失; 同一 bot 重连则照常(见 isSameBotActive)。
-    if (!isSameBotActive(botAppId)) {
-      if (currentBotAppId !== null && currentBotAppId !== botAppId) {
-        log.info('[feishu/wsClient] orphan opener recall skipped: account changed');
-        return;
-      }
-      suspendOrphanRetry({ botAppId, openerMessageId, messageId, attempt });
-      log.info('[feishu/wsClient] orphan opener recall suspended for same-bot reconnect');
+    if (
+      suspendOrDropOnConnectionChange(
+        botAppId,
+        service,
+        { botAppId, service, openerMessageId, messageId, attempt },
+        'recall',
+      )
+    ) {
       return;
     }
     // 重试耗尽: 最后兜底是撤回开场白卡 — 撤回成功用户看到干净群主流而不是
@@ -320,11 +364,12 @@ function scheduleOrphanNoticeRetry(
   if (existing) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
     orphanNoticeRetries.delete(openerMessageId);
-    void retryOrphanOpenerNotice(botAppId, openerMessageId, messageId, attempt);
+    void retryOrphanOpenerNotice(botAppId, service, openerMessageId, messageId, attempt);
   }, delay);
   orphanNoticeRetries.set(openerMessageId, {
     timer,
     botAppId,
+    service,
     openerMessageId,
     messageId,
     attempt,
@@ -333,22 +378,24 @@ function scheduleOrphanNoticeRetry(
 
 async function retryOrphanOpenerNotice(
   botAppId: string,
+  service: BotCredentials['service'],
   openerMessageId: string,
   messageId: string,
   attempt: number,
 ): Promise<void> {
   const log = getLog();
   // 账号门(重连安全): 换代后仍是同一个 bot 就用当前 client 继续重试 —
-  // 跨 stop 保留的重试链不会死在 stale generation 上; 换成别的 bot 时
+  // 跨 stop 保留的重试链不会死在 stale generation 上; 换成别的账号时
   // 终止(旧账号的开场白不发进新账号的会话); 无连接时挂起等重连恢复 —
   // 停止状态排队的重试若在重连前触发, 终止会让提示永久消失。
-  if (!isSameBotActive(botAppId)) {
-    if (currentBotAppId !== null && currentBotAppId !== botAppId) {
-      log.info('[feishu/wsClient] orphan opener notice retry skipped: account changed');
-      return;
-    }
-    suspendOrphanRetry({ botAppId, openerMessageId, messageId, attempt });
-    log.info('[feishu/wsClient] orphan opener notice retry suspended for same-bot reconnect');
+  if (
+    suspendOrDropOnConnectionChange(
+      botAppId,
+      service,
+      { botAppId, service, openerMessageId, messageId, attempt },
+      'retry',
+    )
+  ) {
     return;
   }
   // 提示已由其它路径送达(执行中的重试与重投成功交错) — 放弃整条重试链。
@@ -372,7 +419,17 @@ async function retryOrphanOpenerNotice(
     return;
   }
   log.warn(`[feishu/wsClient] orphan opener notice retry failed (attempt ${attempt})`);
-  scheduleOrphanNoticeRetry(botAppId, openerMessageId, messageId, attempt + 1);
+  // 发送失败可能发生在 stop 之后: 无连接时直接挂起(不创建定时器), 换账号
+  // 时终止 — 同账号重连后恢复。
+  const handled = suspendOrDropOnConnectionChange(
+    botAppId,
+    service,
+    { botAppId, service, openerMessageId, messageId, attempt: attempt + 1 },
+    'retry-failed',
+  );
+  if (!handled) {
+    scheduleOrphanNoticeRetry(botAppId, service, openerMessageId, messageId, attempt + 1);
+  }
 }
 
 /**
@@ -670,6 +727,7 @@ export async function start(
   const startedGeneration = ++lifecycleGeneration;
   acceptingInbound = true;
   currentBotAppId = creds.appId;
+  currentService = creds.service;
   setStatus('testing');
 
   const startDetector = new ConflictDetector({
@@ -709,7 +767,12 @@ export async function start(
       try {
         // 传入本代 connection 的 generation — 处理途中有 await(附件下载/
         // 开话题), 恢复执行时必须复查门禁, 防止旧连接的轮次漏进新连接。
-        await handleIncomingMessage(creds.appId, startedGeneration, data as RawMessageEvent);
+        await handleIncomingMessage(
+          creds.appId,
+          creds.service,
+          startedGeneration,
+          data as RawMessageEvent,
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error('[feishu/wsClient] handleIncomingMessage threw:', msg);
@@ -745,7 +808,7 @@ export async function start(
       void fetchBotOpenId();
       // 恢复本 bot 在 stop() 时被挂起的排队重试(同账号重连) — 事件已被
       // ACK, 不恢复的话孤儿提示/撤回链随断连永久消失。
-      resumeOrphanRetriesFor(creds.appId);
+      resumeOrphanRetriesFor(creds.appId, creds.service);
       if (opts.announceLifecycle !== false) {
         void announceLifecycle('online');
       } else {
@@ -843,15 +906,16 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
     clearTimeout(retry.timer);
     suspendOrphanRetry({
       botAppId: retry.botAppId,
+      service: retry.service,
       openerMessageId: retry.openerMessageId,
       messageId: retry.messageId,
       attempt: retry.attempt,
     });
   }
   orphanNoticeRetries.clear();
-  // in-flight 共享发送是连接级状态: 换代后旧发送的共享语义不再有意义
-  // (旧 client 的 replyText 会随 close 失败自结, 这里只清记账)。
-  orphanNoticeInFlight.clear();
+  // 注意: orphanNoticeInFlight **不**清空 — in-flight 的 REST 请求在 stop()
+  // 时已捕获旧 client, close 不保证取消它; 保留去重记账, 同 bot 重连后的
+  // 重投仍会共享那次在途发送而不是并发第二条(条目随 promise 落定自清理)。
   outbound.unbindClient();
   if (opts.clearOwnerBeforeIdle) {
     pendingOfflineNotice = false;
@@ -859,6 +923,7 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
   }
   if (!opts.keepStatus) {
     currentBotAppId = null;
+    currentService = null;
     setStatus('idle');
   }
 }
@@ -959,6 +1024,7 @@ function mentionsSelf(
 
 async function handleIncomingMessage(
   botAppId: string,
+  service: BotCredentials['service'],
   generation: number,
   data: RawMessageEvent,
 ): Promise<void> {
@@ -1137,7 +1203,7 @@ async function handleIncomingMessage(
         log.error(
           `[feishu/wsClient] openThread orphaned opener=...${opener.openerMessageId.slice(-8)} — turn dropped with in-topic notice`,
         );
-        await sendOrphanOpenerNotice(botAppId, messageId, opener.openerMessageId);
+        await sendOrphanOpenerNotice(botAppId, service, messageId, opener.openerMessageId);
         return;
       } else {
         laneUserId = encodeLaneUserId(chatId, null);

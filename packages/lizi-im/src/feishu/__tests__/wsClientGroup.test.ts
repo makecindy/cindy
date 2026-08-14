@@ -601,6 +601,113 @@ describe('feishu group inbound gate', () => {
     }
   });
 
+  it('failure after stop suspends immediately instead of creating a live timer', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      // 首次发送挂起中 — 断开, 该发送之后才失败(失败路径运行在停止状态)。
+      let rejectFirst!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectFirst = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      const firstDelivery = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      await wsClient.stop({ announceOffline: false, reason: 'test-stop-mid-first-send' });
+      rejectFirst(new Error('client closed'));
+      await firstDelivery;
+
+      // 停止状态: 失败路径不创建定时器(直接挂起)— 推进时间无任何发送。
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 同一 bot 重连 → 挂起恢复入队 → 送达。
+      await connect();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('in-flight dedupe survives a same-bot reconnect (redelivery shares the old send)', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      // 10s 定时重试的发送挂起中 — 断开重连后, 重投必须共享这次在途发送。
+      let resolveRetry!: (v: { messageId: string }) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((resolve) => {
+            resolveRetry = resolve;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+
+      // 断开 + 同一 bot 重连(in-flight 记账保留), 冷却(60s)过后重投。
+      await wsClient.stop({ announceOffline: false, reason: 'test-reconnect-mid-inflight' });
+      await connect();
+      await vi.advanceTimersByTimeAsync(61_000);
+      const redelivery = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+
+      // 在途发送成功 — 共享结果 'delivered', 无第三条发送。
+      resolveRetry({ messageId: 'om_ok' });
+      await redelivery;
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('suspended retries are not re-armed across service boundary (same appId, feishu → lark)', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      // 10s 重试已排队。
+
+      // 断开, 用同一 appId 但 service=lark 的凭证重连 — 旧 feishu 的挂起
+      // 重试不得恢复(账号边界含 service)。
+      await wsClient.stop({ announceOffline: false, reason: 'test-service-swap' });
+      const larkCreds = { appId: 'cli_group_test', appSecret: 'secret', service: 'lark' as const };
+      const connecting = wsClient.start(larkCreds, { announceLifecycle: false });
+      mocks.options.at(-1)?.onReady?.();
+      await connecting;
+      wsClient.setBotOpenIdForTest(BOT_OPEN_ID);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('queued retry is not re-armed when a different bot starts', async () => {
     vi.useFakeTimers();
     try {
