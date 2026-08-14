@@ -72,6 +72,7 @@ import {
   setOAuthTokenReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
+  type ProviderOAuthTokenReadOptions,
 } from './provider-route.js';
 import { setDiagnosticsKeyReader, setDiagnosticsOAuthTokenReader } from './provider-diagnostics.js';
 import {
@@ -91,6 +92,7 @@ import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import {
   getGrokAccessToken,
   hasGrokOAuthLogin,
+  recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
 } from './grok-oauth-login.js';
 import { getAuthState } from '../authManager.js';
@@ -389,6 +391,25 @@ let endpointReloadInflight: {
   promise: Promise<Catalog>;
 } | null = null;
 
+async function readXaiProviderOAuthToken(
+  options?: ProviderOAuthTokenReadOptions,
+): Promise<string | null> {
+  if (!options?.forceRefresh) return getGrokAccessToken();
+
+  // A forced retry must stay bound to the exact bearer rejected upstream. Without that
+  // baseline we cannot safely decide which account generation to refresh.
+  const staleToken = options.staleToken;
+  if (!staleToken) return null;
+
+  const outcome = await recoverGrokAuthAfterRejection(staleToken);
+  if (outcome !== 'refreshed' && outcome !== 'superseded') return null;
+
+  // `superseded` means another request/login already replaced the rejected credential.
+  // Return that newer token, but never replay the bearer which caused the 401/403.
+  const token = await getGrokAccessToken();
+  return token !== staleToken ? token : null;
+}
+
 /**
  * 启动期（splash）await 一次：加载远端目录写入 active-catalog。幂等 + 并发去重。
  * loadCatalog 永不抛（最差回落 bundled），故本函数也不会抛。
@@ -399,7 +420,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 这里在路由发生前（splash 早于任何 turn）把真实 safeStorage 读取接进去。
   setCustomProviderKeyReader(readCustomProviderKey);
   setProviderOAuthTokenReader((providerId, agent, options) => {
-    if (providerId === 'xai') return getGrokAccessToken();
+    if (providerId === 'xai') return readXaiProviderOAuthToken(options);
     // Codex and Pi processes do not carry Claude Code's native OAuth credential.
     // Their Anthropic bridges read the host-owned Claude.ai token and allow the
     // existing refresher to rotate it when needed.
@@ -923,6 +944,7 @@ export const __testing = {
   catalogLkgTemporaryPath,
   readCatalogLkg,
   replaceCatalogLkgFile,
+  readXaiProviderOAuthToken,
   selectCatalogLkgSnapshot,
   serializeCatalogLkgWrite,
   writeCatalogLkg,

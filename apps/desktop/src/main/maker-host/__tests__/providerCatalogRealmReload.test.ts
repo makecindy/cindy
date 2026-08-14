@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
     resolve: (result: unknown) => void;
   }>,
   customProviderRead: vi.fn(),
+  getGrokAccessToken: vi.fn(),
+  recoverGrokAuthAfterRejection: vi.fn(),
   warn: vi.fn(),
 }));
 
@@ -89,10 +91,11 @@ vi.mock('../claude-credentials-store.js', () => ({
   hasClaudeAiOAuthUnbound: () => false,
 }));
 vi.mock('../grok-oauth-login.js', () => ({
-  getGrokAccessToken: () => null,
+  getGrokAccessToken: h.getGrokAccessToken,
   peekGrokAccessToken: () => null,
   hasGrokOAuthLogin: () => false,
   hasGrokOAuthLoginUnbound: () => false,
+  recoverGrokAuthAfterRejection: h.recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache: () => undefined,
 }));
 vi.mock('../generic-oauth.js', () => ({
@@ -170,6 +173,48 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  it('passes xAI rejection context into forced recovery and never replays the stale token', async () => {
+    h.getGrokAccessToken.mockReset();
+    h.recoverGrokAuthAfterRejection.mockReset();
+
+    h.getGrokAccessToken.mockResolvedValueOnce('ordinary-token');
+    await expect(__testing.readXaiProviderOAuthToken()).resolves.toBe('ordinary-token');
+    expect(h.recoverGrokAuthAfterRejection).not.toHaveBeenCalled();
+
+    h.recoverGrokAuthAfterRejection.mockResolvedValueOnce('refreshed');
+    h.getGrokAccessToken.mockResolvedValueOnce('fresh-token');
+    await expect(
+      __testing.readXaiProviderOAuthToken({
+        forceRefresh: true,
+        staleToken: 'rejected-token',
+      }),
+    ).resolves.toBe('fresh-token');
+    expect(h.recoverGrokAuthAfterRejection).toHaveBeenLastCalledWith('rejected-token');
+
+    h.recoverGrokAuthAfterRejection.mockResolvedValueOnce('unchanged');
+    await expect(
+      __testing.readXaiProviderOAuthToken({
+        forceRefresh: true,
+        staleToken: 'rejected-token',
+      }),
+    ).resolves.toBeNull();
+    expect(h.getGrokAccessToken).toHaveBeenCalledTimes(2);
+
+    h.recoverGrokAuthAfterRejection.mockResolvedValueOnce('superseded');
+    h.getGrokAccessToken.mockResolvedValueOnce('replacement-token');
+    await expect(
+      __testing.readXaiProviderOAuthToken({
+        forceRefresh: true,
+        staleToken: 'rejected-token',
+      }),
+    ).resolves.toBe('replacement-token');
+
+    await expect(
+      __testing.readXaiProviderOAuthToken({ forceRefresh: true }),
+    ).resolves.toBeNull();
+    expect(h.recoverGrokAuthAfterRejection).toHaveBeenCalledTimes(3);
+  });
+
   it('drops a stale owner custom-provider read and clears the current snapshot on failure', async () => {
     const provider: CustomProviderConfig = {
       id: 'owner-a-provider',
