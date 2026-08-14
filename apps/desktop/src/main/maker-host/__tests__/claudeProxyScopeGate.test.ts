@@ -283,7 +283,10 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
         ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
       ));
 
-      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      expect(decision).toMatchObject({
+        localHandler: expect.any(Function),
+        responseProviderId: `vision-${wireProtocol}`,
+      });
       outboundFetch.mockResolvedValueOnce(new Response(
         wireProtocol === 'openai-responses'
           ? sse([

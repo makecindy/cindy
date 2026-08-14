@@ -56,6 +56,7 @@ import {
   noteClaudeSessionRequest,
   recordClaudeRequestRoute,
   recordClaudeSessionRoute,
+  recordClaudeVisionFallbackProvider,
   type ClaudeSessionBillingRoute,
 } from './claude-session-route-registry.js';
 import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
@@ -69,7 +70,7 @@ import {
   resolveSessionRouteDecision,
   rewriteModelIdForProviderRoute,
 } from './provider-route.js';
-import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
+import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { createClaudeAutoClassifierFailureObserver } from './claude-auto-permission-fallback.js';
 import {
   emptyAssistantStripController,
@@ -217,6 +218,14 @@ function createVisionFallbackResponsesBridgeDecision(
       buildHeaders: async () => headers,
       maxOutputTokensSupported: true,
       preserveToolResultImages: true,
+      ...(route.providerSource === 'user' ? {
+        onUpstreamError: ({ status, body }) => reportProviderUpstreamError({
+          agent,
+          providerId: route.providerId,
+          status,
+          bodyText: body,
+        }),
+      } : {}),
     }],
     logger: log,
     fetchImpl: outboundFetch,
@@ -247,6 +256,14 @@ function createVisionFallbackChatBridgeDecision(
     buildHeaders: async () => headers,
     rewriteModel: () => realModel,
     capabilities,
+    ...(route.providerSource === 'user' ? {
+      onUpstreamError: ({ status, body }) => reportProviderUpstreamError({
+        agent,
+        providerId: route.providerId,
+        status,
+        bodyText: body,
+      }),
+    } : {}),
   }, { logger: log, fetchImpl: outboundFetch });
   const handler = createResponsesHandler({
     providers: [{
@@ -580,7 +597,15 @@ export function createModelRoutingTransform(): RoutingTransform {
           visionModel,
           prefs,
         );
-        if (localBridge) return localBridge;
+        if (localBridge) {
+          if (fallbackAgent === 'claude-code' && fallbackSessionId) {
+            recordClaudeVisionFallbackProvider(fallbackSessionId, fallbackProviderId);
+          }
+          return {
+            ...localBridge,
+            responseProviderId: fallbackProviderId,
+          };
+        }
         if (
           route.routing.wireProtocol !== undefined
           && route.routing.wireProtocol !== 'anthropic-messages'
@@ -597,16 +622,22 @@ export function createModelRoutingTransform(): RoutingTransform {
           fallbackAgent,
           _readGatewayKey(),
           visionModel,
-        ).then((resolved) => resolved
-          ? {
-              ...(resolved.decision ?? {}),
-              bodyModelOverride: rewriteModelIdForProviderRoute(
-                fallbackProviderId,
-                fallbackAgent,
-                visionModel,
-              ),
-            }
-          : claudeVisionFallbackSetupReminderDecision());
+        ).then((resolved) => {
+          if (!resolved) return claudeVisionFallbackSetupReminderDecision();
+          if (fallbackAgent === 'claude-code' && fallbackSessionId) {
+            recordClaudeVisionFallbackProvider(fallbackSessionId, fallbackProviderId);
+          }
+          return {
+            ...(resolved.decision ?? {}),
+            bodyModelOverride: rewriteModelIdForProviderRoute(
+              fallbackProviderId,
+              fallbackAgent,
+              visionModel,
+            ),
+            transformProviderId: fallbackProviderId,
+            responseProviderId: fallbackProviderId,
+          };
+        });
       });
     };
     return result instanceof Promise ? result.then(apply) : apply(result);
@@ -687,6 +718,12 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
             const sdkSessionId = requestHeaders['x-claude-code-session-id'];
             const sessionId = sdkSessionId && _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null;
             return sessionId ? getUserProviderIdForSession(sessionId) : null;
+          },
+          resolveResponseProviderId: (ctx) => {
+            if (!ctx.providerId) return undefined;
+            return getActiveCatalog().providers.find((provider) => provider.id === ctx.providerId)?.source === 'user'
+              ? ctx.providerId
+              : null;
           },
           resolveUserProviderName: (providerId) =>
             getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,

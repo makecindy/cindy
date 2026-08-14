@@ -112,6 +112,8 @@ export interface RoutingDecision {
    * 出站路由或鉴权；典型用于「图片兜底切换到另一供应商」后仍正确做该供应商兼容改写。
    */
   transformProviderId?: string;
+  /** 本次请求最终实际归属的供应商，仅供 responseObserver 使用。 */
+  responseProviderId?: string;
   /**
    * 本地 handler(见 LocalRequestHandler)。与上面几个转发字段**互斥**:设了 handler 时其余
    * 字段忽略、不发生任何上游转发。省略 = 转发语义,与本字段引入前字节级一致。
@@ -152,6 +154,8 @@ export interface ResponseObserverCtx {
   readonly outboundHeaders?: Readonly<Record<string, string>>;
   readonly responseHeaders: Readonly<Record<string, string>>;
   readonly requestBody: Buffer;
+  /** routingTransform 标记的本次最终供应商（若有）。 */
+  readonly providerId?: string;
 }
 
 export interface ResponseObserverSink {

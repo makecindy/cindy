@@ -741,7 +741,10 @@ import {
   noteClaudeSessionTurnState,
   setClaudeBackgroundActivityBroadcaster,
 } from '../maker-host/claude-session-background-activity.js';
-import { readClaudeSessionRoute } from '../maker-host/claude-session-route-registry.js';
+import {
+  readClaudeSessionRoute,
+  takeClaudeVisionFallbackProvider,
+} from '../maker-host/claude-session-route-registry.js';
 import { consumeClaudeOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
 import { setLiveCcSessionBridge } from '../maker-host/claude-transcript-relocation.js';
 import {
@@ -4244,6 +4247,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // (今日 / session / per-message / 按模型) 同源同值。
       // 守卫: index.ts:388 stream_end fallback / codex done 不带 total_cost_usd, typeof 检查会跳过。
       if (event.type === 'done' && event.source === 'claude-code') {
+        const visionFallbackProviderId = takeClaudeVisionFallbackProvider(session.id);
         const modelPromise =
           turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
         turnModelPromiseBySession.delete(session.id);
@@ -4341,7 +4345,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 由同一份解析结果驱动。价格表走 main 端内存 + 磁盘缓存, stale 快返并后台刷新。
           const deltas = modelUsageDeltas;
           void (async () => {
-            const sessionProviderForBilling = getSessionProvider(session.id);
+            const sessionProviderForBilling =
+              visionFallbackProviderId ?? getSessionProvider(session.id);
             const observedClaudeRoute =
               sessionProviderForBilling == null ? readClaudeSessionRoute(session.id) : null;
             const explicitProviderBillingRoute = billingRouteForExplicitProvider(
@@ -4533,7 +4538,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               await recordUsageOnly();
               return;
             }
-            const providerId = getSessionProvider(session.id);
+            const providerId = visionFallbackProviderId ?? getSessionProvider(session.id);
             const observedRoute = providerId == null ? readClaudeSessionRoute(session.id) : null;
             const explicitProviderRoute = billingRouteForExplicitProvider(
               providerId,

@@ -64,6 +64,22 @@ describe('createProviderUpstreamErrorObserver', () => {
     expect(observer(ctx({ status: 401 }))).toBeNull();
   });
 
+  it('优先按最终响应供应商归属错误，而不是原始会话供应商', () => {
+    const events: ProviderUpstreamErrorEvent[] = [];
+    setProviderUpstreamErrorBroadcaster((e) => events.push(e));
+    const observer = createProviderUpstreamErrorObserver({
+      agent: 'claude-code',
+      resolveUserProviderId: () => 'original-provider',
+      resolveResponseProviderId: (responseCtx) => responseCtx.providerId ?? undefined,
+    });
+    drive(
+      observer,
+      ctx({ status: 401, providerId: 'vision-provider' }),
+      Buffer.from('{"error":{"type":"authentication_error"}}'),
+    );
+    expect(events[0]?.providerId).toBe('vision-provider');
+  });
+
   it('401 → 广播 AUTH_INVALID 结构化事件', () => {
     const events: ProviderUpstreamErrorEvent[] = [];
     setProviderUpstreamErrorBroadcaster((e) => events.push(e));

@@ -193,6 +193,8 @@ export interface ProviderUpstreamErrorObserverOptions {
    * codex: thread-id → threadToSession → session → provider。由各 proxy host 闭包提供。
    */
   resolveUserProviderId: (requestHeaders: Readonly<Record<string, string>>) => string | null;
+  /** 路由层已知最终供应商时优先使用（如视觉兜底切换到另一来源）。 */
+  resolveResponseProviderId?: (ctx: ResponseObserverCtx) => string | null | undefined;
   /** Resolve the non-secret display name for the user provider. */
   resolveUserProviderName?: (providerId: string) => string | null;
   /** 节流时钟（单测注入）。 */
@@ -214,7 +216,10 @@ export function createProviderUpstreamErrorObserver(
     // count_tokens 404 = 上游没实现该辅助端点（良性缺失），不是配置错——见文件头注释。
     // 其余 status（401/429 等）照常广播：它们与主链路同因，是真信号。
     if (ctx.status === 404 && isCountTokensUrl(ctx.url)) return null;
-    const providerId = opts.resolveUserProviderId(ctx.requestHeaders);
+    const responseProviderId = opts.resolveResponseProviderId?.(ctx);
+    const providerId = responseProviderId === undefined
+      ? opts.resolveUserProviderId(ctx.requestHeaders)
+      : responseProviderId;
     if (!providerId) return null;
 
     const chunks: Buffer[] = [];

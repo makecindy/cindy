@@ -775,6 +775,8 @@ function forward(
   // 为 true 时启用 2xx 成功响应的流式有效性门(#2242):空 2xx / 非 SSE 2xx /
   // 零事件 SSE 不再原样透传给客户端,转成结构化 502。false 保持字节级透传。
   requestDeclaredStream = false,
+  // 仅供 responseObserver 归属本次最终供应商；不影响实际出站请求。
+  responseProviderId?: string,
 ): void {
   // 客户端已断开(典型:400 缓冲期间断开后走到透明重试)——'close' 已经发过,
   // 下面挂的中断传播 listener 永远不会触发,直接不发起上游请求。
@@ -1030,6 +1032,7 @@ function forward(
             responseToolUseIds,
             threadMintedIdCache,
             requestDeclaredStream,
+            responseProviderId,
           );
           return;
         }
@@ -1047,8 +1050,9 @@ function forward(
               status,
               requestHeaders: headers,
               outboundHeaders: actualHeaders,
-              responseHeaders: flattenResponseHeaders(upstreamRes.headers),
-              requestBody: body,
+            responseHeaders: flattenResponseHeaders(upstreamRes.headers),
+            requestBody: body,
+            providerId: responseProviderId,
             }) ?? null;
             // 与流式路径同口径喂原始字节(观察器自己按 content-encoding 解码)。
             sink?.onData?.(errBody);
@@ -1096,6 +1100,7 @@ function forward(
           outboundHeaders: actualHeaders,
           responseHeaders: flattenResponseHeaders(upstreamRes.headers),
           requestBody: body,
+          providerId: responseProviderId,
         }) ?? null;
       } catch (err) {
         observerSink = null;
@@ -1872,6 +1877,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       responseToolUseIds,
       threadMintedIdCache,
       requestDeclaredStream,
+      decision?.responseProviderId,
     );
   });
 

@@ -2602,6 +2602,7 @@ export function withCodexVisionFallback(
                 visionModel,
               ),
               transformProviderId: fallbackProviderId,
+              responseProviderId: fallbackProviderId,
             };
           });
         });
@@ -2632,6 +2633,12 @@ function createCodexProxyHandle(
         resolveUserProviderId: (requestHeaders) => {
           const sessionId = sessionIdFromHeaders(requestHeaders);
           return sessionId ? getUserProviderIdForSession(sessionId) : null;
+        },
+        resolveResponseProviderId: (ctx) => {
+          if (!ctx.providerId) return undefined;
+          return getActiveCatalog().providers.find((provider) => provider.id === ctx.providerId)?.source === 'user'
+            ? ctx.providerId
+            : null;
         },
         resolveUserProviderName: (providerId) =>
           getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,

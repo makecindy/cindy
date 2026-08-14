@@ -13,8 +13,10 @@ import {
   readClaudeSessionRoute,
   recordClaudeRequestRoute,
   recordClaudeSessionRoute,
+  recordClaudeVisionFallbackProvider,
   resetClaudeSessionRouteRegistryForTest,
   takeClaudeRequestRoute,
+  takeClaudeVisionFallbackProvider,
 } from '../claude-session-route-registry';
 
 describe('claude-session-route-registry', () => {
@@ -88,6 +90,12 @@ describe('claude-session-route-registry', () => {
     noteClaudeSessionRequest('s1', 31);
 
     expect(readLatestClaudeSessionRequestId('s1')).toBe(32);
+  });
+
+  it('consumes a vision fallback provider after the current turn', () => {
+    recordClaudeVisionFallbackProvider('s1', 'vision-provider');
+    expect(takeClaudeVisionFallbackProvider('s1')).toBe('vision-provider');
+    expect(takeClaudeVisionFallbackProvider('s1')).toBeNull();
   });
 
   it('bounds request-route storage when responses never arrive', () => {
