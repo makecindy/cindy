@@ -35,6 +35,8 @@
  *         (话题 id 不可恢复且撤回失败)时不起 turn, 回复开场白说明失败
  *       → 处理途中的 await(附件下载/开话题)之后复查连接门禁 — 断开/换账号
  *         的旧连接轮次不得漏进新连接(锚点污染/跨账号出站)
+ *       → 事件级去重: 同一 message_id 只处理一次(重投丢弃; 连接换代导致的
+ *         中途丢弃会移除标记让重投可重新处理)
  *       → strip mention placeholders, record reply anchor, emit IMMessageEvent
  *
  *   card.action.trigger(_v1)
@@ -89,6 +91,42 @@ const strangerNoticeAt = new Map<string, number>();
  */
 const ORPHAN_NOTICE_COOLDOWN_MS = 60_000;
 const orphanNoticeAt = new Map<string, number>();
+
+/**
+ * 事件级去重: 飞书可能重投同一条消息(WS 重连/ack 超时), 同一 message_id 只
+ * 处理一次 — openThread 的幂等只保证不重复开话题, 不去重的话重复投递仍会对
+ * 同一消息启动两次 agent turn(锚点双份、两份回答)。连接换代导致的中途丢弃
+ * 会移除标记, 让重投消息能在新连接上重新处理。message_id 平台内唯一, 不随
+ * stop 清空(换代不会重放别的租户的消息 id)。
+ */
+const SEEN_MESSAGE_TTL_MS = 10 * 60_000;
+const SEEN_MESSAGE_MAX_ENTRIES = 500;
+const seenMessageAt = new Map<string, number>();
+
+function markMessageSeen(messageId: string): void {
+  seenMessageAt.set(messageId, Date.now());
+  if (seenMessageAt.size <= SEEN_MESSAGE_MAX_ENTRIES) return;
+  // 超过上限时剪掉过期条目; 仍超就按最旧插入序淘汰(内存有界)。
+  const now = Date.now();
+  for (const [id, ts] of seenMessageAt) {
+    if (now - ts > SEEN_MESSAGE_TTL_MS) seenMessageAt.delete(id);
+  }
+  while (seenMessageAt.size > SEEN_MESSAGE_MAX_ENTRIES) {
+    const oldest = seenMessageAt.keys().next().value;
+    if (typeof oldest !== 'string') break;
+    seenMessageAt.delete(oldest);
+  }
+}
+
+function wasMessageSeen(messageId: string): boolean {
+  const ts = seenMessageAt.get(messageId);
+  if (ts === undefined) return false;
+  if (Date.now() - ts > SEEN_MESSAGE_TTL_MS) {
+    seenMessageAt.delete(messageId);
+    return false;
+  }
+  return true;
+}
 
 async function sendOrphanOpenerNotice(openerMessageId: string): Promise<void> {
   const log = getLog();
@@ -177,6 +215,11 @@ async function fetchBotOpenId(): Promise<void> {
 /** 测试注入口 — 生产代码不要调用。 */
 export function setBotOpenIdForTest(openId: string | null): void {
   botOpenId = openId;
+}
+
+/** 测试注入口 — 清空事件级去重标记。生产代码不要调用。 */
+export function resetSeenMessagesForTest(): void {
+  seenMessageAt.clear();
 }
 
 const FEISHU_CONFLICT_ERROR = '该 App 已被另一台设备占用 (exceed_conn_limit)';
@@ -630,6 +673,14 @@ async function handleIncomingMessage(
   const rawContent = data.message.content ?? '';
   if (!senderOpenId || !messageId || !chatId) return;
 
+  // 事件级去重(先于一切业务门): 重投同一条消息直接丢弃 — openThread 幂等只
+  // 防重复开话题, 不去重则重复投递仍会对同一消息启动两次 agent turn。
+  if (wasMessageSeen(messageId)) {
+    log.info('[feishu/wsClient] drop duplicate message delivery');
+    return;
+  }
+  markMessageSeen(messageId);
+
   if (isGroup) {
     // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
     if (!mentionsSelf(data.message.mentions, botOpenId)) return;
@@ -717,6 +768,8 @@ async function handleIncomingMessage(
   // 入站门禁复查: 附件下载等 await 期间连接可能已 stop()/换账号换代 — 不复查
   // 会把旧连接的轮次推进新连接的编排状态(锚点污染/跨账号出站)。
   if (!isActiveConnection(generation, botAppId)) {
+    // 首轮未 emit 就丢弃 — 移除去重标记, 让重投消息能在新连接上重新处理。
+    seenMessageAt.delete(messageId);
     log.info('[feishu/wsClient] drop inbound message: connection changed during processing');
     return;
   }
@@ -737,6 +790,8 @@ async function handleIncomingMessage(
       // 开话题是一次跨网络的 await — 期间用户可能断开/换账号: 复查门禁,
       // 防止旧连接的锚点与事件漏进新连接(或已停机的编排状态)。
       if (!isActiveConnection(generation, botAppId)) {
+        // 首轮未 emit 就丢弃 — 移除去重标记, 让重投消息能在新连接上重新处理。
+        seenMessageAt.delete(messageId);
         log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
         return;
       }

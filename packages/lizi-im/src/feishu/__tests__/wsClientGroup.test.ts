@@ -150,6 +150,7 @@ beforeEach(async () => {
   feishuEvents.removeAllListeners('message');
   mocks.firstAllowed.mockReturnValue(OWNER);
   mocks.checkOwner.mockImplementation((id: string) => id === OWNER);
+  wsClient.resetSeenMessagesForTest();
 });
 
 afterEach(async () => {
@@ -268,6 +269,25 @@ describe('feishu group inbound gate', () => {
 
     expect(events).toHaveLength(0);
     expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+
+    // 换代丢弃时去重标记已移除 — 新连接上的重投消息应能正常处理。
+    await connect();
+    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+    expect(events).toHaveLength(1);
+    expect(events[0]!.senderId).toBe('g/oc_chat1/omt_new');
+  });
+
+  it('drops duplicate delivery of the same message (one turn per message)', async () => {
+    await connect();
+    const events = collectEvents();
+    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+    // 飞书重投同一条 @ 事件: openThread 幂等只防重复开话题, 事件级去重防
+    // 止第二次 turn(重复锚点 + 两份回答)。
+    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+
+    expect(events).toHaveLength(1);
+    expect(mocks.openThread).toHaveBeenCalledTimes(1);
+    expect(mocks.pushReplyAnchor).toHaveBeenCalledTimes(1);
   });
 
   it('routes topic messages into a topic lane without opening a new thread', async () => {

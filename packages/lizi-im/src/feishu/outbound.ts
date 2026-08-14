@@ -290,7 +290,17 @@ async function doOpenThread(
     if (recovered) return { kind: 'opened', messageId, threadId: recovered };
     // 恢复不了: 撤回开场白再降级, 避免「回复都在里面」的开场白留在群里误导。
     try {
-      await ensureClient().im.v1.message.delete({ path: { message_id: messageId } });
+      const del = await ensureClient().im.v1.message.delete({
+        path: { message_id: messageId },
+      });
+      // SDK 对业务错误不抛异常, 2xx 响应也可能带非零 code — 只有 code 缺省
+      // 或为 0 才算撤回成功, 否则开场白仍在群里, 降级会制造误导组合。
+      if (del.code !== undefined && del.code !== 0) {
+        log.error(
+          `[feishu/outbound] openThread: opener recall rejected (code=${del.code}) — opener orphaned: ${del.msg ?? ''}`,
+        );
+        return { kind: 'orphaned', openerMessageId: messageId };
+      }
       log.warn(
         '[feishu/outbound] openThread: thread_id unrecoverable — opener recalled, fallback to group lane',
       );

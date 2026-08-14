@@ -17,7 +17,9 @@ const larkMocks = vi.hoisted(() => {
       return { data: { message_id: 'om_replied', thread_id: 'omt_r1' } };
     },
   );
-  const deleteMessage = vi.fn(async () => ({ data: {} }));
+  const deleteMessage = vi.fn(
+    async (): Promise<{ code?: number; msg?: string; data?: {} }> => ({ data: {} }),
+  );
   const getMessage = vi.fn(
     async (): Promise<{ data: { items: Array<{ thread_id?: string }> } }> => ({
       data: { items: [] },
@@ -226,9 +228,20 @@ describe('feishu outbound lane routing', () => {
     });
   });
 
+  it('openThread treats a business-error delete response as failed recall (orphaned)', async () => {
+    larkMocks.reply.mockResolvedValueOnce({ data: { message_id: 'om_replied' } });
+    larkMocks.getMessage.mockRejectedValueOnce(new Error('get failed'));
+    // SDK 对业务错误不抛异常 — 2xx 响应带非零 code 时撤回并未成功。
+    larkMocks.deleteMessage.mockResolvedValueOnce({ code: 99991672, msg: 'no permission' });
+    await expect(outbound.openThread('om_root7', 'x')).resolves.toEqual({
+      kind: 'orphaned',
+      openerMessageId: 'om_replied',
+    });
+  });
+
   it('openThread returns degraded instead of throwing when the API fails', async () => {
     larkMocks.reply.mockRejectedValueOnce(new Error('no thread permission'));
-    await expect(outbound.openThread('om_root7', 'x')).resolves.toEqual({ kind: 'degraded' });
+    await expect(outbound.openThread('om_root8', 'x')).resolves.toEqual({ kind: 'degraded' });
     expect(larkMocks.deleteMessage).not.toHaveBeenCalled();
   });
 
