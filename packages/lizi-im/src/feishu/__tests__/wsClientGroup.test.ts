@@ -373,12 +373,51 @@ describe('feishu group inbound gate', () => {
     }
   });
 
-  it('in-flight retry that fails after a successful redelivery drops its chain', async () => {
+  it('redelivery while a retry is in-flight shares the same send (no concurrent duplicate)', async () => {
     vi.useFakeTimers();
     try {
       mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
       mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
-      // 第一次定时重试(10s)挂起中 — 期间重投成功送达, 之后才失败。
+      // 第一次定时重试(10s)的发送挂起中 — 重投此刻到达, 必须共享这次发送
+      // 而不是并发发出第二条提示。
+      let resolveRetry!: (v: { messageId: string }) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((resolve) => {
+            resolveRetry = resolve;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+
+      // 冷却(60s)过后的重投: in-flight 共享 — 重投自己不另发(replyText 不变)。
+      // 重投 handler 会等共享发送的结果, 不能 await(否则测试自身挂起)。
+      await vi.advanceTimersByTimeAsync(51_000);
+      const redelivery = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+
+      // 执行中的发送成功 — 共享结果 'delivered': 两条路径都收尾, 无新发送。
+      resolveRetry({ messageId: 'om_ok' });
+      await redelivery;
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('redelivery shared with a failing in-flight retry continues one chain (no duplicate)', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
+      // 第一次定时重试(10s)的发送挂起中 — 重投共享它, 之后该发送失败。
       let rejectRetry!: (err: Error) => void;
       mocks.replyText.mockImplementationOnce(
         () =>
@@ -392,18 +431,22 @@ describe('feishu group inbound gate', () => {
       await vi.advanceTimersByTimeAsync(10_000);
       expect(mocks.replyText).toHaveBeenCalledTimes(2);
 
-      // 冷却过后的重投成功送达(重投的处理里会清理挂起重试)。
-      await vi.advanceTimersByTimeAsync(61_000);
-      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
-      const deliveredCount = mocks.replyText.mock.calls.length;
-      expect(deliveredCount).toBe(3);
-
-      // 执行中的旧重试此刻才失败 — 链应停: 不 schedule 下一次、不撤回。
+      // 冷却过后的重投共享该 in-flight 发送(不另发), 随后发送失败 —
+      // 共享结果 'failed': 两条路径各自安排重试, 入口同一(替换计时器)。
+      // 重投 handler 等共享结果, 不 await。
+      await vi.advanceTimersByTimeAsync(51_000);
+      const redelivery = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
       rejectRetry(new Error('outage'));
+      await redelivery;
       await Promise.resolve();
       await Promise.resolve();
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(200_000);
+
+      // 重试链继续(单链): 下一次尝试成功送达, 之后不再有发送。
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(300_000);
       expect(mocks.replyText).toHaveBeenCalledTimes(3);
       expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
       expect(events).toHaveLength(0);
@@ -412,38 +455,25 @@ describe('feishu group inbound gate', () => {
     }
   });
 
-  it('delivered marker survives beyond 60s — a very late retry failure never revives the chain', async () => {
+  it('delivered terminal marker blocks a late send path even beyond the 60s cooldown', async () => {
     vi.useFakeTimers();
     try {
       mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
       mocks.replyText.mockRejectedValueOnce(new Error('transient network error'));
-      // 第一次定时重试挂起超过 60s(极端网络)——期间重投成功送达。
-      let rejectRetry!: (err: Error) => void;
-      mocks.replyText.mockImplementationOnce(
-        () =>
-          new Promise<{ messageId: string }>((_, reject) => {
-            rejectRetry = reject;
-          }),
-      );
       await connect();
       const events = collectEvents();
       await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+
+      // 10s 定时重试成功送达 — 终态标记写入。
       await vi.advanceTimersByTimeAsync(10_000);
       expect(mocks.replyText).toHaveBeenCalledTimes(2);
 
-      // 重投在送达标记写入 60s+ 之后才让旧请求失败 — 送达是终态, 链不复活。
-      await vi.advanceTimersByTimeAsync(61_000);
-      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
-      const deliveredCount = mocks.replyText.mock.calls.length;
-      expect(deliveredCount).toBe(3);
-
-      await vi.advanceTimersByTimeAsync(120_000); // 远超 60s 冷却窗口
-      rejectRetry(new Error('late failure'));
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      // 远超 60s 冷却窗口后的重投: 送达是终态 + 入站认领已重新认领 —
+      // 任何路径都不再发送第三条提示。
       await vi.advanceTimersByTimeAsync(300_000);
-      expect(mocks.replyText).toHaveBeenCalledTimes(3);
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
       expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
       expect(events).toHaveLength(0);
     } finally {

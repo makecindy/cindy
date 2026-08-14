@@ -138,6 +138,46 @@ function wasNoticeDelivered(openerMessageId: string): boolean {
   return orphanNoticeDelivered.has(openerMessageId);
 }
 
+/**
+ * 该 opener 当前**正在执行**的提示发送(in-flight 去重)。重试的 timer 条目
+ * 在 setTimeout 回调里先删后发 — 仅凭 orphanNoticeRetries 看不到执行中的
+ * 发送; 这里单独记账, 任何路径的发送开始前先查: 冷却后的重投不会与执行
+ * 中的重试并发发出第二条提示。结果在所有等待者间共享 — 谁发起都只有一条。
+ */
+const orphanNoticeInFlight = new Map<string, Promise<'delivered' | 'failed'>>();
+
+/**
+ * 发送孤儿提示(单一 in-flight): 同一 opener 并发进入时共享同一次发送结果,
+ * 不会打出第二条。成功即标记送达(终态); 失败返回 'failed' 由调用方决定
+ * 释放认领/安排重试。
+ */
+function sendOrphanNoticeOnce(
+  openerMessageId: string,
+): Promise<'delivered' | 'failed'> {
+  const inFlight = orphanNoticeInFlight.get(openerMessageId);
+  if (inFlight) return inFlight;
+  const log = getLog();
+  const attempt = (async (): Promise<'delivered' | 'failed'> => {
+    try {
+      await outbound.replyText(openerMessageId, transportMessages.group.threadOrphanNotice);
+      markNoticeDelivered(openerMessageId);
+      log.info('[feishu/wsClient] orphan opener notice delivered');
+      return 'delivered';
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`[feishu/wsClient] orphan opener notice send failed: ${msg}`);
+      return 'failed';
+    }
+  })();
+  // set 与 get 在同一同步块内完成 — 并发调用不会双双通过(JS 单线程)。
+  orphanNoticeInFlight.set(openerMessageId, attempt);
+  return attempt.finally(() => {
+    // 结果已共享给所有等待者后才清理; 幂等删除, 早到的 finally 不影响
+    // 已经持有 promise 引用的等待者。
+    orphanNoticeInFlight.delete(openerMessageId);
+  });
+}
+
 async function sendOrphanOpenerNotice(
   botAppId: string,
   messageId: string,
@@ -145,6 +185,12 @@ async function sendOrphanOpenerNotice(
   generation: number,
 ): Promise<void> {
   const log = getLog();
+  // 终态守卫: 提示已送达过(执行中重试/重投任一成功)则不再发送 — 这次投递
+  // 不产出可见结果, 释放本次认领。
+  if (wasNoticeDelivered(openerMessageId)) {
+    releaseInboundClaim(botAppId, messageId);
+    return;
+  }
   const last = orphanNoticeAt.get(openerMessageId) ?? 0;
   if (Date.now() - last < ORPHAN_NOTICE_COOLDOWN_MS) {
     // 冷却命中(重投场景): 这次投递不产出任何可见结果 — 释放本次认领, 否则
@@ -154,23 +200,22 @@ async function sendOrphanOpenerNotice(
     return;
   }
   orphanNoticeAt.set(openerMessageId, Date.now());
-  try {
-    await outbound.replyText(openerMessageId, transportMessages.group.threadOrphanNotice);
-    // 发送成功: 标记送达 + 重新认领触发消息(后续重投被入站去重拦下) + 清掉
-    // 该 opener 的挂起重试(重试绕过冷却, 不清会在稍后重复提示, 甚至重试
-    // 耗尽时误撤回开场白卡)。
-    markNoticeDelivered(openerMessageId);
+  // in-flight 去重: 执行中的重试会与这里共享同一次发送 — 重投不并发打出
+  // 第二条提示; 结果为共享, 送达/失败按共享结果处理。
+  const outcome = await sendOrphanNoticeOnce(openerMessageId);
+  if (outcome === 'delivered') {
+    // 送达: 重新认领触发消息(后续重投被入站去重拦下) + 清掉该 opener 的
+    // 挂起重试(重试绕过冷却, 不清会在稍后重复提示, 甚至重试耗尽时误撤回)。
     claimInboundMessage(botAppId, messageId);
     const pending = orphanNoticeRetries.get(openerMessageId);
     if (pending) {
       clearTimeout(pending.timer);
       orphanNoticeRetries.delete(openerMessageId);
     }
-  } catch (err) {
+  } else {
     releaseInboundClaim(botAppId, messageId);
-    const msg = err instanceof Error ? err.message : String(err);
     log.warn(
-      `[feishu/wsClient] orphan opener notice failed — inbound claim released, retry scheduled: ${msg}`,
+      '[feishu/wsClient] orphan opener notice failed — inbound claim released, retry scheduled',
     );
     scheduleOrphanNoticeRetry(botAppId, generation, openerMessageId, messageId, 0);
   }
@@ -240,23 +285,23 @@ async function retryOrphanOpenerNotice(
     log.info('[feishu/wsClient] orphan notice already delivered — retry chain dropped');
     return;
   }
-  try {
-    await outbound.replyText(openerMessageId, transportMessages.group.threadOrphanNotice);
-    // 送达: 标记送达 + 重新认领触发消息(抑制冷却后的重投再次进入提示流程)。
-    markNoticeDelivered(openerMessageId);
+  // in-flight 去重: 与冷却后的重投共享同一次发送 — 不会并发打出第二条提示;
+  // 若重投的发送已在进行, 这里等待它的结果而不是另发一条。
+  const outcome = await sendOrphanNoticeOnce(openerMessageId);
+  if (outcome === 'delivered') {
+    // 送达: 重新认领触发消息(抑制冷却后的重投再次进入提示流程)。
     claimInboundMessage(botAppId, messageId);
     log.info('[feishu/wsClient] orphan opener notice retry succeeded');
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`[feishu/wsClient] orphan opener notice retry failed (attempt ${attempt}): ${msg}`);
-    // 失败发生在执行中重试的 await 期间时, 重投可能已成功送达 — 先查标记
-    // 再决定是否继续, 否则会重复提示甚至耗尽后误撤回已成功提示过的卡。
-    if (wasNoticeDelivered(openerMessageId)) {
-      log.info('[feishu/wsClient] orphan notice delivered during retry — retry chain dropped');
-      return;
-    }
-    scheduleOrphanNoticeRetry(botAppId, generation, openerMessageId, messageId, attempt + 1);
+    return;
   }
+  // 失败发生在共享发送 await 期间时, 其它路径可能已成功送达 — 先查终态
+  // 标记再决定是否继续, 否则会重复提示甚至耗尽后误撤回已成功提示过的卡。
+  if (wasNoticeDelivered(openerMessageId)) {
+    log.info('[feishu/wsClient] orphan notice delivered during retry — retry chain dropped');
+    return;
+  }
+  log.warn(`[feishu/wsClient] orphan opener notice retry failed (attempt ${attempt})`);
+  scheduleOrphanNoticeRetry(botAppId, generation, openerMessageId, messageId, attempt + 1);
 }
 
 /**
@@ -720,6 +765,9 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
   orphanNoticeDelivered.clear();
   for (const retry of orphanNoticeRetries.values()) clearTimeout(retry.timer);
   orphanNoticeRetries.clear();
+  // in-flight 共享发送是连接级状态: 换代后旧发送的共享语义不再有意义
+  // (旧 client 的 replyText 会随 close 失败自结, 这里只清记账)。
+  orphanNoticeInFlight.clear();
   outbound.unbindClient();
   if (opts.clearOwnerBeforeIdle) {
     pendingOfflineNotice = false;
