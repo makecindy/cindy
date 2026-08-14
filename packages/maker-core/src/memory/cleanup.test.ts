@@ -721,4 +721,32 @@ describe('runMemoryCleanup', () => {
       spy.mockRestore();
     }
   });
+
+  it('fails cleanup when unlink leaves the source active', async () => {
+    await shard('feedback_a.md', 'feedback', 'Same', 'hook', 'same', '2026-01-01T00:00:00.000Z');
+    await shard('feedback_b.md', 'feedback', 'Same', 'hook', 'same', '2026-02-01T00:00:00.000Z');
+
+    const plan = await planMemoryCleanup(dir);
+    // 模拟 Windows 文件锁: reserveTrashTarget 的 link (src → trash) 成功,
+    // 但 unlink(src) 抛 EPERM — src 仍在活动分片, 必须 failed 而非吞错标
+    // archived (否则 rebuildIndex 仍把 src 写回 MEMORY.md, CLI 误报成功;
+    // Greptile P1 / Codex P1 on #2561 第二十三轮)。
+    const realUnlink = fs.unlink.bind(fs);
+    const unlinkSpy = vi.spyOn(fs, 'unlink').mockImplementation(async (p) => {
+      if (String(p).endsWith('feedback_a.md')) {
+        throw Object.assign(new Error('source locked'), { code: 'EPERM' });
+      }
+      return realUnlink(p as string);
+    });
+
+    try {
+      const result = await runMemoryCleanup(plan);
+      // 不标成功: failed + src 保留在活动分片。
+      expect(result.failed.some((f) => f.filename === 'feedback_a.md')).toBe(true);
+      expect(result.archived).toHaveLength(0);
+      await expect(readFile(path.join(dir, 'feedback_a.md'), 'utf8')).resolves.toContain('same');
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
 });

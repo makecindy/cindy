@@ -550,12 +550,23 @@ async function reserveTrashTarget(
     );
     try {
       await fs.link(src, candidate);
-      // link 成功 (目标已原子排他预留), 删源路径名 — unlink 失败 (Windows
-      // 锁) 则两份副本并存 (安全方向), 不保留共享 inode 状态 (R11 约定)。
-      await fs.unlink(src).catch(() => {});
+      // link 成功 (目标已原子排他预留), 删源路径名。unlink 失败 (Windows 锁
+      // / --force 下其他进程持有 src) 时**必须抛错**: src 仍在活动分片, 若吞错
+      // 继续会标 archived 而 rebuildIndex() 仍把 src 写回 MEMORY.md, CLI 误报
+      // 成功 (Greptile P1 / Codex P1 on #2561 第二十三轮: fail when unlink
+      // leaves the source active)。link 副本已落盘 (共享 inode, 数据双份安全),
+      // 抛错由外层记 failed, 下次重跑可再次处理。
+      await fs.unlink(src).catch((e) => {
+        throw Object.assign(
+          new Error(`unable to remove source after reservation: ${String(e)}`),
+          { code: 'CLEANUP_SOURCE_LOCKED' },
+        );
+      });
       return candidate;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue;
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') continue;
+      if (code === 'CLEANUP_SOURCE_LOCKED') throw e; // 源锁: 直接暴露, 不 fallback
       // link 不可用 (文件系统不支持硬链接) → fallback rename (目标随机后缀,
       // 碰撞窗口极小)。
       await fs.rename(src, candidate);
