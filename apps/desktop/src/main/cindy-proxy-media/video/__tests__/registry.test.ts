@@ -115,6 +115,20 @@ describe('VideoProviderRegistry', () => {
     ).toThrow(/duplicate alias/);
   });
 
+  it('extends a provider with newly discovered aliases without removing in-flight aliases', () => {
+    const r = new VideoProviderRegistry();
+    r.register(
+      makeFakeProvider({ id: 'xai-video', aliases: [{ alias: 'xai/old', internalModel: 'old' }] }),
+    );
+    r.registerOrExtend(
+      makeFakeProvider({ id: 'xai-video', aliases: [{ alias: 'xai/new', internalModel: 'new' }] }),
+    );
+
+    expect(r.resolveByAlias('xai/old').internalModel).toBe('old');
+    expect(r.resolveByAlias('xai/new').internalModel).toBe('new');
+    expect(r.collectAllAliases().map((alias) => alias.alias)).toEqual(['xai/new']);
+  });
+
   it('preserves registration order in collectAllAliases (first alias = default)', () => {
     const r = new VideoProviderRegistry();
     r.register(

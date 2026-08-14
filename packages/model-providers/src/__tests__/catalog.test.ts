@@ -130,7 +130,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
 
   it('xai ships the Grok Imagine subscription video model', () => {
     expect(provider('xai').videoModels).toEqual([
-      { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+      { id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' },
     ]);
   });
 

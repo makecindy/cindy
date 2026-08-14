@@ -18,22 +18,17 @@ import type {
 } from '../types.js';
 
 const XAI_API_BASE = 'https://api.x.ai/v1';
-export const XAI_VIDEO_CATALOG_MODEL_ID = 'xai/grok-imagine-video-1.5';
-const UPSTREAM_MODEL_ID = 'grok-imagine-video-1.5';
+export const XAI_VIDEO_CATALOG_MODEL_ID = 'xai/grok-imagine-video';
 const INTERNAL_CONTENT_PROTOCOL = 'xai-video:';
 const INTERNAL_CONTENT_HOST = 'content';
 const MAX_VIDEO_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 
 const SUPPORTED_DURATIONS = Array.from({ length: 15 }, (_, index) => index + 1);
 
-const CAPABILITIES: VideoProviderCapabilities = {
-  modelAliases: [
-    {
-      alias: XAI_VIDEO_CATALOG_MODEL_ID,
-      internalModel: UPSTREAM_MODEL_ID,
-      summary: 'Grok Imagine Video（最长 15 秒，支持单图生视频）',
-    },
-  ],
+const BASE_CAPABILITIES: Omit<
+  VideoProviderCapabilities,
+  'modelAliases' | 'expectedSecondsByAlias'
+> = {
   supportedDurations: SUPPORTED_DURATIONS,
   supportedResolutions: ['480p', '720p', '1080p'],
   // xAI 还支持 3:2 / 2:3，但当前插件视频协议没有这两个枚举，不能公布
@@ -49,9 +44,6 @@ const CAPABILITIES: VideoProviderCapabilities = {
   // 不能让调用方以为自己控制了静音或出声。
   supportsAudio: false,
   audioDefault: true,
-  expectedSecondsByAlias: {
-    [XAI_VIDEO_CATALOG_MODEL_ID]: 180,
-  },
   defaults: {
     duration: 6,
     resolution: '720p',
@@ -90,6 +82,8 @@ export interface CreateXaiVideoProviderOptions {
   /** 测试可收紧上限，但不能放宽生产硬顶。 */
   maxVideoDownloadBytes?: number;
   beforeDispatch?(model: string): void;
+  /** 当前 active catalog 里经类型发现／静态兜底确认可执行的 xAI alias。 */
+  modelAliases?: readonly string[];
   onAuthRejected?(failure: {
     status: number;
     body: string;
@@ -256,6 +250,24 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     requestedLimit > 0
       ? Math.min(requestedLimit, MAX_VIDEO_DOWNLOAD_BYTES)
       : MAX_VIDEO_DOWNLOAD_BYTES;
+  const aliases = [...new Set(opts.modelAliases ?? [XAI_VIDEO_CATALOG_MODEL_ID])];
+  const upstreamByAlias = new Map<string, string>();
+  for (const alias of aliases) {
+    if (!alias.startsWith('xai/') || alias.length <= 'xai/'.length) {
+      throw new Error(`xAI 视频模型 alias 无效: ${alias}`);
+    }
+    upstreamByAlias.set(alias, alias.slice('xai/'.length));
+  }
+  const expectedSecondsByAlias = Object.fromEntries(aliases.map((alias) => [alias, 180]));
+  const capabilities: VideoProviderCapabilities = {
+    ...BASE_CAPABILITIES,
+    modelAliases: aliases.map((alias) => ({
+      alias,
+      internalModel: upstreamByAlias.get(alias)!,
+      summary: 'Grok Imagine Video（最长 15 秒，支持单图生视频）',
+    })),
+    expectedSecondsByAlias,
+  };
 
   async function authorizedJson<T>(
     url: string,
@@ -288,7 +300,8 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     alias: string,
     signal?: AbortSignal,
   ): Promise<VideoTaskHandle> {
-    if (alias !== XAI_VIDEO_CATALOG_MODEL_ID) {
+    const upstreamModelId = upstreamByAlias.get(alias);
+    if (!upstreamModelId) {
       throw new Error(`xAI 视频通道不认识模型 '${alias}'`);
     }
     if (!opts.hasOAuthLogin()) {
@@ -298,7 +311,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     const ownerScopeKey = captureOwnerScope(opts);
     const images = req.images ?? [];
     const body: Record<string, unknown> = {
-      model: UPSTREAM_MODEL_ID,
+      model: upstreamModelId,
       prompt: req.prompt,
       duration: req.duration,
       resolution: req.resolution,
@@ -330,7 +343,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
     return {
       providerId: 'xai-video',
       taskId: response.request_id,
-      modelUsed: UPSTREAM_MODEL_ID,
+      modelUsed: upstreamModelId,
       submittedAt: Date.now(),
       ownerScopeKey,
     };
@@ -402,7 +415,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
 
   return {
     id: 'xai-video',
-    capabilities: CAPABILITIES,
+    capabilities,
     submit,
     poll,
     download,

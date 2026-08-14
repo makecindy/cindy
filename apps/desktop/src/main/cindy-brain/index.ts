@@ -349,10 +349,7 @@ import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
 import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
-import {
-  createXaiVideoProvider,
-  XAI_VIDEO_CATALOG_MODEL_ID,
-} from '../cindy-proxy-media/video/providers/xai.js';
+import { createXaiVideoProvider } from '../cindy-proxy-media/video/providers/xai.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
@@ -3046,9 +3043,14 @@ export function getGhostScheduleSlot(): GhostScheduleSlot {
 function getVideoProviderRegistry() {
   const registry = getCindyProxyMediaService().backend.videoRegistry;
   if (!registry) return null;
-  if (!registry.hasAlias(XAI_VIDEO_CATALOG_MODEL_ID)) {
-    registry.register(
+  const xaiAliases =
+    getActiveCatalog()
+      .providers.find((provider) => provider.id === 'xai')
+      ?.videoModels?.map((model) => model.id) ?? [];
+  if (xaiAliases.some((alias) => !registry.hasAlias(alias))) {
+    registry.registerOrExtend(
       createXaiVideoProvider({
+        modelAliases: xaiAliases,
         hasOAuthLogin: () => hasGrokOAuthLogin(),
         getAccessToken: () => getGrokAccessToken(),
         getOwnerScopeKey: () => activeOwnerScopeKey(),

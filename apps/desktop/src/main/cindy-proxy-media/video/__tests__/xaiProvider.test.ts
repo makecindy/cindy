@@ -53,6 +53,27 @@ describe('xAI video provider · capabilities', () => {
     expect(provider.capabilities.supportsAudio).toBe(false);
     expect(provider.capabilities.audioDefault).toBe(true);
   });
+
+  it('accepts future catalog aliases without a model-name whitelist', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ request_id: 'future-task' }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const future = 'xai/future-video-model';
+    const dynamicProvider = createXaiVideoProvider({
+      modelAliases: [future],
+      hasOAuthLogin: () => true,
+      getAccessToken: async () => 'oauth-token',
+      getOwnerScopeKey: () => 'owner-a',
+      isOwnerBoundaryPending: () => false,
+      fetchImplementation: fetchMock,
+    });
+
+    await expect(dynamicProvider.submit({ prompt: 'future' }, future)).resolves.toMatchObject({
+      modelUsed: 'future-video-model',
+    });
+    const init = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(init.body as string).model).toBe('future-video-model');
+  });
 });
 
 describe('xAI video provider · submit', () => {
@@ -76,7 +97,7 @@ describe('xAI video provider · submit', () => {
     expect(handle).toMatchObject({
       providerId: 'xai-video',
       taskId: 'video-1',
-      modelUsed: 'grok-imagine-video-1.5',
+      modelUsed: 'grok-imagine-video',
       ownerScopeKey: 'owner-a',
     });
     const [url, init] = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
@@ -84,7 +105,7 @@ describe('xAI video provider · submit', () => {
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer oauth-token');
     const body = JSON.parse(init.body as string);
     expect(body).toEqual({
-      model: 'grok-imagine-video-1.5',
+      model: 'grok-imagine-video',
       prompt: 'A paper dragon takes flight',
       duration: 8,
       aspect_ratio: '9:16',

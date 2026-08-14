@@ -53,6 +53,21 @@ describe('xaiImageClient', () => {
     });
   });
 
+  it('直接转发类型发现得到的未来图片模型，不依赖型号名白名单', async () => {
+    const doFetch = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }), { status: 200 }),
+    );
+
+    await channel(doFetch).generateImage({
+      model: 'xai/future-image-model',
+      prompt: 'future',
+    });
+
+    const body = JSON.parse(String(doFetch.mock.calls[0]?.[1]?.body));
+    expect(body.model).toBe('future-image-model');
+  });
+
   it('改图把最多三张本地图片编码为 xAI JSON image fields', async () => {
     const paths = await Promise.all(
       [0, 1].map(async (index) => {
