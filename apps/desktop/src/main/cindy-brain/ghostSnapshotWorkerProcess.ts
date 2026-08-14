@@ -287,20 +287,20 @@ export async function runGhostSnapshotWorkerRequest(
     }
     await verifyParent(request.expectedParent, workingDir);
     await verifyDirectory(workingDir, parts[0]);
-    if (!await matches(request.receipt, targetPath)) {
+    // Pin the freshly published target before matching, and recompare the
+    // identity after the match, so a swap between match and ok cannot let a
+    // replacement directory be reported as the approved snapshot.
+    const publishedIdentity = await captureGhostSnapshotTargetIdentity(targetPath);
+    if (!await matches(request.receipt, targetPath, publishedIdentity)) {
       if (await verifyParent(request.expectedParent, workingDir).then(() => true, () => false) &&
         await verifyDirectory(workingDir, parts[0]).then(() => true, () => false)) {
         await fs.promises.rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
       }
       throw new Error('approved skill snapshot changed while being published');
     }
-    // matches() follows symlinks through resolveGhostContentPath and does
-    // not validate the root itself (ghostContentTree.ts:68).  Recheck
-    // after matches() so a concurrent swap to a symlink with identical
-    // bytes is caught before we send ok (same P1 as PRRT_kwDOTgdRUs6Yb404).
-    const targetKindAfterMatch = await classifyGhostDirEntry(targetPath);
-    if (targetKindAfterMatch !== 'directory') {
-      throw new Error('snapshot target no longer a real directory after match');
+    const publishedIdentityAfterMatch = await captureGhostSnapshotTargetIdentity(targetPath);
+    if (!sameCapturedGhostSnapshotTargetIdentity(publishedIdentityAfterMatch, publishedIdentity)) {
+      throw new Error('snapshot target identity changed after publish match');
     }
     send({ ok: true });
   } finally {
