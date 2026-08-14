@@ -68,9 +68,17 @@ export function getGhostPanelGuestPreloadPath(): string {
   return path.join(__dirname, 'ghostPanelGuestPreload.js');
 }
 
-/** settingsHtml 与 panel.html 共用 Ghost webview 闸，但只有真正的面板入口可拿 Agent bridge。 */
-export function isGhostPanelAgentEntry(src: unknown, panelHtml: unknown): boolean {
+/**
+ * settingsHtml 与 panel.html 共用 Ghost webview 闸，但只有可唯一识别的面板入口
+ * 可拿 Agent bridge。两者指向同一文件时按路径无法分辨设置页，fail closed。
+ */
+export function isGhostPanelAgentEntry(
+  src: unknown,
+  panelHtml: unknown,
+  settingsHtml?: unknown,
+): boolean {
   if (typeof src !== 'string' || typeof panelHtml !== 'string') return false;
+  if (typeof settingsHtml === 'string' && settingsHtml === panelHtml) return false;
   try {
     return new URL(src).pathname === `/${panelHtml}`;
   } catch {
@@ -694,7 +702,11 @@ export function installWebviewHardener(): void {
           pendingGhostAttach = null;
           return;
         }
-        const agentBridge = isGhostPanelAgentEntry(params.src, ghost.manifest.panel?.html);
+        const agentBridge = isGhostPanelAgentEntry(
+          params.src,
+          ghost.manifest.panel?.html,
+          ghost.manifest.settingsHtml,
+        );
         applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params, {
           ...(agentBridge ? { panelPreloadPath: getGhostPanelGuestPreloadPath() } : {}),
         });

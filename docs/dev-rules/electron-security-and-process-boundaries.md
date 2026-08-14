@@ -128,8 +128,10 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 不得自行添加 `allowpopups`。Ghost 面板更严格：专属 partition、无 Node、无通用 preload；
 只允许 Main 强制注入固定的最小 Agent bridge，身份由 Main 根据真实 `webContents` 反查，
 插件不能自报 ghostId／sessionId 或选择 IPC channel；面板用户激活只能请求 Host 自有确认框，
-逐次确认成功后 Main 才能签发一次性 Agent 票据。`settingsHtml` 虽与面板共用 Ghost webview
-安全闸，但不得注入该 preload，也不得登记为面板 Agent sender。
+逐次确认完整最终 prompt 后 Main 才能签发一次性 Agent 票据。独立面板窗的
+确认必须路由到承载目标任务的主壳窗口。`settingsHtml` 虽与面板共用 Ghost webview
+安全闸，但不得注入该 preload，也不得登记为面板 Agent sender；若它与
+`panel.html` 指向同一文件，按路径无法区分两种界面，必须 fail closed 且不注入 Agent preload。
 
 ## 4．preload 与 Context Bridge
 

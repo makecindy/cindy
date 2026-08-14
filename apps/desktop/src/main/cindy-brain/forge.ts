@@ -3201,7 +3201,8 @@ if (target.ok && target.available) {
 \`\`\`
 
 - \`send\` 必须直接发生在一次真实点击或按键处理器中，每次用户操作最多请求一次；Host
-  随后显示 Cindy 自有确认框，只有用户逐次确认后才会启动 Agent 回合；
+  随后显示 Cindy 自有确认框，完整展示将要进入 Agent 的 message 和 context。
+  只有用户逐次确认后才会启动 Agent 回合；独立面板窗的确认会回到承载当前任务的主窗口；
 - 请求只允许 \`message\` 与可无损表示为 JSON 的 \`context\`（不接受 \`Map\`、\`Set\`、
   \`NaN\`、\`Infinity\`、\`undefined\`、稀疏数组或循环引用），不能传 \`sessionId\`、\`mode\`、
   \`trigger\`、模板或后台标记；Host 固定以 \`continue\` 继续当前任务；
@@ -3210,6 +3211,8 @@ if (target.ok && target.available) {
 - 返回值不暴露 sessionId。\`getTarget()\` 只返回当前是否可发送，适合控制按钮状态；
 - 面板桥固定使用专用的 \`window.cindyPanel\` 命名空间，避免占用存量插件可能自定义的
   \`window.cindy\`；
+- 需要该桥时，\`panel.html\` 与 \`settingsHtml\` 必须指向不同文件。同路径时 Host 无法
+  仅凭安全闸区分面板与设置页，会 fail closed 且不注入 \`window.cindyPanel\`；
 - 面板没有除此之外的电子脑管子。文件、网络、其它 slot 仍按 §5 经 BroadcastChannel
   交给 main.js 代办。
 

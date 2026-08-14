@@ -230,8 +230,11 @@
   Guest WebContents 登记反查插件身份，在发送瞬间解析承载窗口当前任务，并要求面板可见、
   聚焦及 preload 消费一份短暂真实用户激活。该激活只能请求 Cindy 自有确认框，Host 必须在
   用户逐次确认后才签发一次性 Agent 票据；普通面板点击不得直接兑换收费回合。`context` 必须
-  递归验证为可无损 JSON 值，拒绝静默改写。消息只进入普通 user 回合，失败时不得回落到其它
-  窗口或历史任务。该能力复用既有 `agent` slot，不新增权限，也不影响存量插件。
+  递归验证为可无损 JSON 值，拒绝静默改写。Host 确认框必须完整展示实际将进入
+  Agent 的 message + context，不得用截断摘要代替。独立面板窗的确认只能投给承载
+  目标任务的唯一主壳窗口；`settingsHtml` 与 `panel.html` 同路径时不注入面板桥。
+  消息只进入普通 user 回合，失败时不得回落到其它窗口或历史任务。该能力复用既有
+  `agent` slot，不新增权限，也不影响存量插件。
 - `ios-simulator` 槽只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有
   Host viewer。请求协议不得出现插件自报 `sessionId`，可选 `instanceId` 必须重新匹配
   当前任务的公开实例。视频帧、viewer lease、触控、Sidecar／Helper、artifact 路径、进程

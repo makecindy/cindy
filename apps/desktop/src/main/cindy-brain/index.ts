@@ -227,7 +227,10 @@ import {
 } from './cindySlot.js';
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostPanelAgentBridge } from './panelAgentBridge.js';
-import { resolveGhostPanelTargetSessionId } from './panelAgentTarget.js';
+import {
+  resolveGhostPanelConfirmationTargetId,
+  resolveGhostPanelTargetSessionId,
+} from './panelAgentTarget.js';
 import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
@@ -1581,8 +1584,24 @@ function getGhostPanelAgentBridge(): GhostPanelAgentBridge {
       },
       targetSessionId: ghostPanelTargetSessionId,
       isInteractive: isInteractiveGhostPanel,
-      confirmSend: (ghostId, message) =>
-        getGhostConfirmSlot().handleHostAgentSendConfirmation(ghostId, message),
+      confirmSend: (ghostId, finalPrompt, hostWebContentsId, sessionId) => {
+        const targetWebContentsId = ghostPanelConfirmationTargetWebContentsId(
+          hostWebContentsId,
+          sessionId,
+        );
+        if (targetWebContentsId === null) {
+          return Promise.resolve({
+            ok: false,
+            errorCode: 'UNAVAILABLE',
+            message: '找不到承载当前任务的主窗口',
+          });
+        }
+        return getGhostConfirmSlot().handleHostAgentSendConfirmation(
+          ghostId,
+          finalPrompt,
+          targetWebContentsId,
+        );
+      },
       issueUserActionToken: (ghostId, sessionId) =>
         getGhostAgentSlot().issueUserActionToken(ghostId, sessionId, 'panel'),
       run: (ghostId, payload) => getGhostAgentSlot().handleRequest(ghostId, payload),
@@ -2389,6 +2408,28 @@ function ghostPanelTargetSessionId(hostWebContentsId: number): string | null {
   });
 }
 
+/**
+ * 宿主确认必须落在真正承载目标任务的主壳窗口。停靠面板直接用
+ * 自己的 Host；独立面板窗只在能唯一找到同一任务的主壳时放行。
+ */
+function ghostPanelConfirmationTargetWebContentsId(
+  hostWebContentsId: number,
+  sessionId: string,
+): number | null {
+  const hostContents = webContents.fromId(hostWebContentsId);
+  if (!hostContents || hostContents.isDestroyed()) return null;
+  return resolveGhostPanelConfirmationTargetId({
+    hostIsMainShell: isMainShellWindowUrl(hostContents.getURL()),
+    hostWebContentsId,
+    hostSessionId: ghostSessionFocusByWebContents.get(hostWebContentsId),
+    targetSessionId: sessionId,
+    mainShells: mainShellWindows().map((window) => ({
+      webContentsId: window.webContents.id,
+      sessionId: ghostSessionFocusByWebContents.get(window.webContents.id),
+    })),
+  });
+}
+
 /** 发送副作用只接受当前获得焦点、且所在窗口可见的真实面板 Guest。 */
 function isInteractiveGhostPanel(senderWebContentsId: number, hostWebContentsId: number): boolean {
   const sender = webContents.fromId(senderWebContentsId);
@@ -2860,7 +2901,8 @@ export const GHOST_CONFIRM_CHANNEL = 'ghosts:confirm-request';
  * 确认弹窗槽单例(confirm):资格审/净化/限速/单飞在 GhostConfirmSlot,往返与
  * 超时兜底在 GhostConfirmDialogBridge,这里只组装"投给哪个窗口"。
  *
- * 只投**一个**窗口(focused ?? 第一个),不像 notify 那样广播:模态确认框广播
+ * 只投**一个**窗口：普通 confirm 沿用 focused ?? 第一个；面板 Agent
+ * 确认则精确投给承载目标任务的主壳。不像 notify 那样广播:模态确认框广播
  * 出去会在每个窗口各弹一个、收回多份答案。没有可投窗口时 sendToWindow 回
  * false → 桥 reject → 槽回 UNAVAILABLE(明确区别于"用户拒绝")。
  */
@@ -2869,8 +2911,21 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
     const bridge =
       getGhostConfirmDialogBridge() ??
       initGhostConfirmDialogBridge({
-        sendToWindow: (payload) => {
-          const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        sendToWindow: (payload, targetWebContentsId) => {
+          let win: BrowserWindow | null | undefined;
+          if (targetWebContentsId !== undefined) {
+            const targetContents = webContents.fromId(targetWebContentsId);
+            if (
+              !targetContents ||
+              targetContents.isDestroyed() ||
+              !isMainShellWindowUrl(targetContents.getURL())
+            ) {
+              return false;
+            }
+            win = BrowserWindow.fromWebContents(targetContents);
+          } else {
+            win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+          }
           if (!win || win.isDestroyed()) return false;
           sendGhostWindowPush(win, GHOST_CONFIRM_CHANNEL, payload);
           return true;
@@ -2885,6 +2940,9 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
           ghostName: params.ghostName,
           ...(params.iconDataUrl ? { iconDataUrl: params.iconDataUrl } : {}),
           body: params.body,
+          ...(params.targetWebContentsId !== undefined
+            ? { targetWebContentsId: params.targetWebContentsId }
+            : {}),
           confirmText: params.confirmText,
           cancelText: params.cancelText,
           danger: params.danger,

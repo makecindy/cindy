@@ -16,3 +16,30 @@ export function resolveGhostPanelTargetSessionId(input: {
   if (input.mainShellSessionIds.length !== 1) return null;
   return normalizedSessionId(input.mainShellSessionIds[0]);
 }
+
+/**
+ * 为已解析的目标任务选择确认框主壳。独立面板不把确认投给自己，
+ * 也不按窗口顺序猜；只接受唯一承载同一任务的主壳。
+ */
+export function resolveGhostPanelConfirmationTargetId(input: {
+  hostIsMainShell: boolean;
+  hostWebContentsId: number;
+  hostSessionId: string | null | undefined;
+  targetSessionId: string;
+  mainShells: readonly {
+    webContentsId: number;
+    sessionId: string | null | undefined;
+  }[];
+}): number | null {
+  const targetSessionId = normalizedSessionId(input.targetSessionId);
+  if (!targetSessionId) return null;
+  if (input.hostIsMainShell) {
+    return normalizedSessionId(input.hostSessionId) === targetSessionId
+      ? input.hostWebContentsId
+      : null;
+  }
+  const candidates = input.mainShells.filter(
+    (shell) => normalizedSessionId(shell.sessionId) === targetSessionId,
+  );
+  return candidates.length === 1 ? candidates[0]!.webContentsId : null;
+}

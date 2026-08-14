@@ -3,7 +3,10 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GhostPanelAgentBridge, type GhostPanelAgentBridgeDeps } from '../panelAgentBridge';
-import { resolveGhostPanelTargetSessionId } from '../panelAgentTarget';
+import {
+  resolveGhostPanelConfirmationTargetId,
+  resolveGhostPanelTargetSessionId,
+} from '../panelAgentTarget';
 import {
   ghostPanelContextForWebContents,
   registerGhostPanelWebContents,
@@ -48,7 +51,12 @@ describe('GhostPanelAgentBridge', () => {
     });
 
     expect(deps.issueUserActionToken).toHaveBeenCalledWith('alpha', 'session-current');
-    expect(deps.confirmSend).toHaveBeenCalledWith('alpha', '继续处理所选资源');
+    expect(deps.confirmSend).toHaveBeenCalledWith(
+      'alpha',
+      '继续处理所选资源\n\n<plugin_panel_context>\n{"nodeId":"node-1"}\n</plugin_panel_context>',
+      22,
+      'session-current',
+    );
     expect(deps.run).toHaveBeenCalledWith('alpha', {
       type: 'agent-request',
       mode: 'continue',
@@ -68,6 +76,7 @@ describe('GhostPanelAgentBridge', () => {
 
     await bridge.send(11, { message: '你好' });
 
+    expect(deps.confirmSend).toHaveBeenCalledWith('alpha', '你好', 22, 'session-current');
     expect(deps.run).toHaveBeenCalledWith('alpha', {
       type: 'agent-request',
       mode: 'continue',
@@ -134,6 +143,18 @@ describe('GhostPanelAgentBridge', () => {
       expect(deps.issueUserActionToken).not.toHaveBeenCalled();
       expect(deps.run).not.toHaveBeenCalled();
     }
+  });
+
+  it('拒绝 message + context 组合后超过 Agent 最终 prompt 上限的请求', async () => {
+    const { bridge, deps } = makeBridge();
+    const result = await bridge.send(11, {
+      message: 'm'.repeat(16_384),
+      context: { data: 'x'.repeat(50_000) },
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_REQUEST' });
+    expect(deps.confirmSend).not.toHaveBeenCalled();
+    expect(deps.run).not.toHaveBeenCalled();
   });
 
   it('拒绝 sessionId、mode 等越界字段，不签票也不运行', async () => {
@@ -212,6 +233,44 @@ describe('resolveGhostPanelTargetSessionId', () => {
         hostIsMainShell: false,
         hostSessionId: null,
         mainShellSessionIds: [null],
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('resolveGhostPanelConfirmationTargetId', () => {
+  it('停靠面板确认固定投给承载同一任务的 Host', () => {
+    expect(
+      resolveGhostPanelConfirmationTargetId({
+        hostIsMainShell: true,
+        hostWebContentsId: 22,
+        hostSessionId: 'session-current',
+        targetSessionId: 'session-current',
+        mainShells: [{ webContentsId: 22, sessionId: 'session-current' }],
+      }),
+    ).toBe(22);
+  });
+
+  it('独立面板只选唯一承载目标任务的主壳，歧义时 fail closed', () => {
+    const base = {
+      hostIsMainShell: false,
+      hostWebContentsId: 99,
+      hostSessionId: null,
+      targetSessionId: 'session-current',
+    } as const;
+    expect(
+      resolveGhostPanelConfirmationTargetId({
+        ...base,
+        mainShells: [{ webContentsId: 22, sessionId: 'session-current' }],
+      }),
+    ).toBe(22);
+    expect(
+      resolveGhostPanelConfirmationTargetId({
+        ...base,
+        mainShells: [
+          { webContentsId: 22, sessionId: 'session-current' },
+          { webContentsId: 23, sessionId: 'session-current' },
+        ],
       }),
     ).toBeNull();
   });

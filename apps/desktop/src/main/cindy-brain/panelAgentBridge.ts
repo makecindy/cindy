@@ -9,6 +9,7 @@ const PANEL_CONTEXT_PROMPT_TEMPLATE =
   '{{user_message}}\n\n<plugin_panel_context>\n{{event_json}}\n</plugin_panel_context>';
 const MAX_MESSAGE_CHARS = 16_384;
 const MAX_CONTEXT_JSON_CHARS = 65_536;
+const MAX_FINAL_PROMPT_CHARS = 65_536;
 const MAX_CONTEXT_DEPTH = 64;
 
 export interface GhostPanelAgentBridgeDeps {
@@ -19,7 +20,12 @@ export interface GhostPanelAgentBridgeDeps {
   hasAgentPermission(ghostId: string): boolean;
   targetSessionId(hostWebContentsId: number): string | null;
   isInteractive(senderWebContentsId: number, hostWebContentsId: number): boolean;
-  confirmSend(ghostId: string, message: string): Promise<GhostPipeConfirmResult>;
+  confirmSend(
+    ghostId: string,
+    finalPrompt: string,
+    hostWebContentsId: number,
+    sessionId: string,
+  ): Promise<GhostPipeConfirmResult>;
   issueUserActionToken(ghostId: string, sessionId: string): string | null;
   run(ghostId: string, payload: unknown): Promise<GhostPipeAgentResult>;
 }
@@ -58,14 +64,22 @@ function isLosslessJsonValue(value: unknown, depth = 0, ancestors = new Set<obje
   }
 }
 
-function validateContext(value: unknown): boolean {
-  if (!isLosslessJsonValue(value)) return false;
+function serializeContext(value: unknown): string | null {
+  if (!isLosslessJsonValue(value)) return null;
   try {
     const serialized = JSON.stringify(value);
-    return typeof serialized === 'string' && serialized.length <= MAX_CONTEXT_JSON_CHARS;
+    return typeof serialized === 'string' && serialized.length <= MAX_CONTEXT_JSON_CHARS
+      ? serialized
+      : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** 与 Agent Slot 的固定面板模板生成同一份最终 user prompt，供宿主逐字确认。 */
+function panelFinalPrompt(message: string, contextJson: string | null): string {
+  if (contextJson === null) return message;
+  return `${message}\n\n<plugin_panel_context>\n${contextJson}\n</plugin_panel_context>`;
 }
 
 function denied(message = '插件未申请 Agent 新回合权限，或当前未启用') {
@@ -116,11 +130,20 @@ export class GhostPanelAgentBridge {
     const message = raw.message;
     const context = raw.context;
     const hasContext = context !== undefined && context !== null;
-    if (hasContext && !validateContext(context)) {
+    const contextJson = hasContext ? serializeContext(context) : null;
+    if (hasContext && contextJson === null) {
       return {
         ok: false,
         errorCode: 'INVALID_REQUEST',
         message: `context 必须是可无损表示且不超过 ${MAX_CONTEXT_JSON_CHARS} 字符的 JSON 值`,
+      };
+    }
+    const finalPrompt = panelFinalPrompt(message, contextJson);
+    if (finalPrompt.length > MAX_FINAL_PROMPT_CHARS) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_REQUEST',
+        message: `message 与 context 组合后不能超过 ${MAX_FINAL_PROMPT_CHARS} 字符`,
       };
     }
 
@@ -133,7 +156,12 @@ export class GhostPanelAgentBridge {
       };
     }
 
-    const confirmation = await this.deps.confirmSend(panel.ghostId, message);
+    const confirmation = await this.deps.confirmSend(
+      panel.ghostId,
+      finalPrompt,
+      panel.hostWebContentsId,
+      sessionId,
+    );
     if (!confirmation.ok) {
       const errorCode =
         confirmation.errorCode === 'RATE_LIMITED' || confirmation.errorCode === 'BUSY'
