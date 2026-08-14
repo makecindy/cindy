@@ -160,7 +160,7 @@ describe('feishu outbound lane routing', () => {
     );
   });
 
-  it('openThread replies with reply_in_thread + uuid and returns the new thread id', async () => {
+  it('openThread replies with reply_in_thread + uuid and returns opened', async () => {
     const res = await outbound.openThread('om_root1', '开个话题');
     expect(larkMocks.reply).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -172,14 +172,14 @@ describe('feishu outbound lane routing', () => {
         }),
       }),
     );
-    expect(res).toEqual({ messageId: 'om_replied', threadId: 'omt_r1' });
+    expect(res).toEqual({ kind: 'opened', messageId: 'om_replied', threadId: 'omt_r1' });
   });
 
   it('openThread is idempotent per trigger message (duplicate delivery opens no second topic)', async () => {
     const first = outbound.openThread('om_root2', '开个话题');
     const second = outbound.openThread('om_root2', '开个话题');
-    expect(await first).toEqual({ messageId: 'om_replied', threadId: 'omt_r1' });
-    expect(await second).toEqual({ messageId: 'om_replied', threadId: 'omt_r1' });
+    expect(await first).toEqual({ kind: 'opened', messageId: 'om_replied', threadId: 'omt_r1' });
+    expect(await second).toEqual({ kind: 'opened', messageId: 'om_replied', threadId: 'omt_r1' });
     // 并发/重复调用只打一次 API — 飞书重投同一条 @ 事件不会开出多个话题。
     expect(larkMocks.reply).toHaveBeenCalledTimes(1);
   });
@@ -190,35 +190,45 @@ describe('feishu outbound lane routing', () => {
       data: { items: [{ thread_id: 'omt_recovered' }] },
     });
     const res = await outbound.openThread('om_root3', '开个话题');
-    expect(res).toEqual({ messageId: 'om_replied', threadId: 'omt_recovered' });
+    expect(res).toEqual({ kind: 'opened', messageId: 'om_replied', threadId: 'omt_recovered' });
     expect(larkMocks.getMessage).toHaveBeenCalledWith({
       path: { message_id: 'om_replied' },
     });
     expect(larkMocks.deleteMessage).not.toHaveBeenCalled();
   });
 
-  it('openThread recalls the opener and returns null when thread_id is unrecoverable', async () => {
+  it('openThread recalls the opener and returns degraded when thread_id is unrecoverable', async () => {
     larkMocks.reply.mockResolvedValueOnce({ data: { message_id: 'om_replied' } });
     larkMocks.getMessage.mockResolvedValueOnce({ data: { items: [] } });
-    await expect(outbound.openThread('om_root4', 'x')).resolves.toBeNull();
+    await expect(outbound.openThread('om_root4', 'x')).resolves.toEqual({ kind: 'degraded' });
     // 开场白已发出但拿不到话题 id: 撤回它再降级, 不让「回复都在里面」误导。
     expect(larkMocks.deleteMessage).toHaveBeenCalledWith({
       path: { message_id: 'om_replied' },
     });
   });
 
-  it('openThread recalls the opener and returns null when message.get itself fails', async () => {
+  it('openThread recalls the opener and returns degraded when message.get itself fails', async () => {
     larkMocks.reply.mockResolvedValueOnce({ data: { message_id: 'om_replied' } });
     larkMocks.getMessage.mockRejectedValueOnce(new Error('get failed'));
-    await expect(outbound.openThread('om_root5', 'x')).resolves.toBeNull();
+    await expect(outbound.openThread('om_root5', 'x')).resolves.toEqual({ kind: 'degraded' });
     expect(larkMocks.deleteMessage).toHaveBeenCalledWith({
       path: { message_id: 'om_replied' },
     });
   });
 
-  it('openThread returns null instead of throwing when the API fails', async () => {
+  it('openThread returns orphaned (not degraded) when recall fails too', async () => {
+    larkMocks.reply.mockResolvedValueOnce({ data: { message_id: 'om_replied' } });
+    larkMocks.getMessage.mockRejectedValueOnce(new Error('get failed'));
+    larkMocks.deleteMessage.mockRejectedValueOnce(new Error('delete failed'));
+    await expect(outbound.openThread('om_root6', 'x')).resolves.toEqual({
+      kind: 'orphaned',
+      openerMessageId: 'om_replied',
+    });
+  });
+
+  it('openThread returns degraded instead of throwing when the API fails', async () => {
     larkMocks.reply.mockRejectedValueOnce(new Error('no thread permission'));
-    await expect(outbound.openThread('om_root6', 'x')).resolves.toBeNull();
+    await expect(outbound.openThread('om_root7', 'x')).resolves.toEqual({ kind: 'degraded' });
     expect(larkMocks.deleteMessage).not.toHaveBeenCalled();
   });
 

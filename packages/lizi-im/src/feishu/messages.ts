@@ -25,6 +25,12 @@ export const messages = {
      * 本会话所有回复都落在话题里, 群主流不被刷屏; 每个话题是独立 session。
      */
     threadOpener: '🧵 开个话题聊这条, 回复都在里面 ~',
+    /**
+     * 开场白已发出但话题 id 无法恢复、撤回也失败时的兜底提示 — 回复落在
+     * 开场白所在话题内, 本轮不起 turn(降级群 lane 会一边留着开场白一边
+     * 把回答刷进群主流)。per-opener 冷却防重投事件重复提示。
+     */
+    threadOrphanNotice: '开话题出了点小问题, 这条没能处理, 麻烦再 @ 我一次~',
   },
   // (inbound.skipped removed — orchestrator owns the wording for "pure
   // unsupported" / "mixed unsupported" replies; @cindy/im just emits the raw

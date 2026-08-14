@@ -31,7 +31,10 @@
  *         reply_in_thread 开话题(对同一触发消息幂等 — 重投事件复用同一话题),
  *         事件直接进新话题 lane — 每个话题是独立 session, 回复全落话题里,
  *         群主流不被刷屏; 事件带 groupContextLane 让群历史上下文仍按群主流
- *         拉取; 开话题失败降级回群 lane `g/{chatId}` 旧行为
+ *         拉取; 开话题失败降级回群 lane `g/{chatId}` 旧行为; 开场白孤立
+ *         (话题 id 不可恢复且撤回失败)时不起 turn, 回复开场白说明失败
+ *       → 处理途中的 await(附件下载/开话题)之后复查连接门禁 — 断开/换账号
+ *         的旧连接轮次不得漏进新连接(锚点污染/跨账号出站)
  *       → strip mention placeholders, record reply anchor, emit IMMessageEvent
  *
  *   card.action.trigger(_v1)
@@ -78,6 +81,27 @@ let botOpenId: string | null = null;
 /** 非 owner 群 @ 的礼貌回应 per-user 冷却(open_id → 上次回应 ts)。 */
 const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
 const strangerNoticeAt = new Map<string, number>();
+
+/**
+ * 开场白孤立(话题 id 不可恢复且撤回失败)时回复开场白说明失败 — per-opener
+ * 冷却(开场白消息 id → 上次提示 ts)防重投事件重复提示。回复挂在开场白下
+ * 自动落回话题, 不惊动群主流。
+ */
+const ORPHAN_NOTICE_COOLDOWN_MS = 60_000;
+const orphanNoticeAt = new Map<string, number>();
+
+async function sendOrphanOpenerNotice(openerMessageId: string): Promise<void> {
+  const log = getLog();
+  const last = orphanNoticeAt.get(openerMessageId) ?? 0;
+  if (Date.now() - last < ORPHAN_NOTICE_COOLDOWN_MS) return;
+  orphanNoticeAt.set(openerMessageId, Date.now());
+  try {
+    await outbound.replyText(openerMessageId, transportMessages.group.threadOrphanNotice);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[feishu/wsClient] orphan opener notice failed (non-fatal): ${msg}`);
+  }
+}
 
 const DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 1500;
 export const QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 4500;
@@ -344,7 +368,9 @@ export async function start(
   const eventDispatcher = new Lark.EventDispatcher({}).register({
     'im.message.receive_v1': async (data: unknown) => {
       try {
-        await handleIncomingMessage(creds.appId, data as RawMessageEvent);
+        // 传入本代 connection 的 generation — 处理途中有 await(附件下载/
+        // 开话题), 恢复执行时必须复查门禁, 防止旧连接的轮次漏进新连接。
+        await handleIncomingMessage(creds.appId, startedGeneration, data as RawMessageEvent);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error('[feishu/wsClient] handleIncomingMessage threw:', msg);
@@ -467,6 +493,7 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
   }
   botOpenId = null;
   strangerNoticeAt.clear();
+  orphanNoticeAt.clear();
   outbound.unbindClient();
   if (opts.clearOwnerBeforeIdle) {
     pendingOfflineNotice = false;
@@ -572,9 +599,13 @@ function mentionsSelf(
   return mentions.some((m) => m.id?.open_id === selfOpenId);
 }
 
-async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): Promise<void> {
+async function handleIncomingMessage(
+  botAppId: string,
+  generation: number,
+  data: RawMessageEvent,
+): Promise<void> {
   const log = getLog();
-  if (!acceptingInbound) {
+  if (!isActiveConnection(generation, botAppId)) {
     log.info('[feishu/wsClient] drop inbound message while connection is stopping');
     return;
   }
@@ -683,6 +714,13 @@ async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): P
     return;
   }
 
+  // 入站门禁复查: 附件下载等 await 期间连接可能已 stop()/换账号换代 — 不复查
+  // 会把旧连接的轮次推进新连接的编排状态(锚点污染/跨账号出站)。
+  if (!isActiveConnection(generation, botAppId)) {
+    log.info('[feishu/wsClient] drop inbound message: connection changed during processing');
+    return;
+  }
+
   // 群 lane: senderId = g/{chatId}[/{threadId}], 出站按 lane 解码回群。
   // 话题内触发直接进话题 lane(锚点=触发消息, 回复自动落回话题); 群主流
   // 触发先以触发消息为根开话题再进新话题 lane(锚点=开场白消息) — 每话题
@@ -696,13 +734,28 @@ async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): P
       outbound.pushReplyAnchor(laneUserId, messageId);
     } else {
       const opener = await outbound.openThread(messageId, transportMessages.group.threadOpener);
-      if (opener) {
+      // 开话题是一次跨网络的 await — 期间用户可能断开/换账号: 复查门禁,
+      // 防止旧连接的锚点与事件漏进新连接(或已停机的编排状态)。
+      if (!isActiveConnection(generation, botAppId)) {
+        log.info('[feishu/wsClient] drop group message: connection changed while opening thread');
+        return;
+      }
+      if (opener.kind === 'opened') {
         laneUserId = encodeLaneUserId(chatId, opener.threadId);
         outbound.pushReplyAnchor(laneUserId, opener.messageId);
         // 上下文取数 lane 与路由 lane 分离: 新话题是空的, 群历史前缀仍按
         // 触发时所在的群主流拉取(「总结上面」等依赖上文的消息才能拿到
         // 群主流历史), 由 host adapter 消费(IMMessageEvent.groupContextLane)。
         groupContextLane = { chatId, threadId: '' };
+      } else if (opener.kind === 'orphaned') {
+        // 开场白已发出但话题 id 恢复失败、撤回也失败: 降级群 lane 会一边
+        // 留着「回复都在里面」的开场白、一边把回答刷进群主流。不起 turn,
+        // 回复开场白(落回话题)说明失败 — 宁可丢一轮, 不误导 + 不刷屏。
+        log.error(
+          `[feishu/wsClient] openThread orphaned opener=...${opener.openerMessageId.slice(-8)} — turn dropped with in-topic notice`,
+        );
+        await sendOrphanOpenerNotice(opener.openerMessageId);
+        return;
       } else {
         laneUserId = encodeLaneUserId(chatId, null);
         outbound.pushReplyAnchor(laneUserId, messageId);

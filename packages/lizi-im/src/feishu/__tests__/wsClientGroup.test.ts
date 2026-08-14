@@ -19,7 +19,12 @@ const mocks = {
   sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
   replyText: vi.fn(async () => ({ messageId: 'om_reply' })),
   openThread: vi.fn(
-    async (): Promise<{ messageId: string; threadId: string } | null> => ({
+    async (): Promise<
+      | { kind: 'opened'; messageId: string; threadId: string }
+      | { kind: 'degraded' }
+      | { kind: 'orphaned'; openerMessageId: string }
+    > => ({
+      kind: 'opened',
       messageId: 'om_opener',
       threadId: 'omt_new',
     }),
@@ -219,7 +224,7 @@ describe('feishu group inbound gate', () => {
   });
 
   it('falls back to the plain group lane when thread creation fails', async () => {
-    mocks.openThread.mockResolvedValueOnce(null);
+    mocks.openThread.mockResolvedValueOnce({ kind: 'degraded' });
     await connect();
     const events = collectEvents();
     await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
@@ -228,6 +233,41 @@ describe('feishu group inbound gate', () => {
     expect(events[0]!.senderId).toBe('g/oc_chat1');
     expect(events[0]!.groupContextLane).toBeUndefined();
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1', 'om_msg1');
+  });
+
+  it('orphaned opener: replies an in-topic notice and drops the turn instead of degrading', async () => {
+    mocks.openThread.mockResolvedValueOnce({ kind: 'orphaned', openerMessageId: 'om_opener' });
+    await connect();
+    const events = collectEvents();
+    await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+
+    expect(events).toHaveLength(0);
+    expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+    // 提示挂在开场白下(自动落回话题) — 不把回答刷进群主流。
+    expect(mocks.replyText).toHaveBeenCalledWith('om_opener', expect.any(String));
+  });
+
+  it('drops the turn when the connection is replaced while openThread is awaiting', async () => {
+    let resolveOpenThread!: (outcome: {
+      kind: 'opened';
+      messageId: string;
+      threadId: string;
+    }) => void;
+    mocks.openThread.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveOpenThread = resolve;
+      }),
+    );
+    await connect();
+    const events = collectEvents();
+    const handling = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+    // openThread 仍在等待 API 时用户断开/换账号 — 旧连接的轮次不得漏进新连接。
+    await wsClient.stop({ announceOffline: false, reason: 'test-disconnect-mid-open' });
+    resolveOpenThread({ kind: 'opened', messageId: 'om_opener', threadId: 'omt_new' });
+    await handling;
+
+    expect(events).toHaveLength(0);
+    expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
   });
 
   it('routes topic messages into a topic lane without opening a new thread', async () => {

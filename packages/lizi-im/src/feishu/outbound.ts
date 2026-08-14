@@ -193,16 +193,24 @@ export async function replyText(
 // promise, 已完成的按 TTL 短缓存 — 重投事件直接复用同一个话题。缓存键是
 // 触发消息 id(平台内唯一), 不随 unbindClient 清空(换代不会重放别的消息 id)。
 
-interface OpenThreadResult {
-  messageId: string;
-  threadId: string;
-}
+/** 开话题结果三态 — 调用方按状态决定路由与降级(见 openThread 文档)。 */
+export type OpenThreadOutcome =
+  /** 话题已开, 开场白 messageId + threadId 都是话题内合法锚点/身份。 */
+  | { kind: 'opened'; messageId: string; threadId: string }
+  /** 无可确认已发出的开场白(API 失败/无 id, 或已成功撤回) — 可降级群 lane。 */
+  | { kind: 'degraded' }
+  /**
+   * 开场白已发出但 thread_id 恢复失败、撤回也失败 — 开场白孤立在话题里。
+   * 降级群 lane 会一边留着「回复都在里面」的开场白、一边把回答刷进群主流;
+   * 调用方应回复开场白(落回话题)说明失败并放弃本轮, 而不是降级。
+   */
+  | { kind: 'orphaned'; openerMessageId: string };
 
 const OPEN_THREAD_DEDUP_TTL_MS = 10 * 60_000;
 const OPEN_THREAD_DEDUP_MAX_ENTRIES = 200;
 const openThreadByTrigger = new Map<
   string,
-  { ts: number; promise: Promise<OpenThreadResult | null> }
+  { ts: number; promise: Promise<OpenThreadOutcome> }
 >();
 
 function pruneOpenThreadDedup(): void {
@@ -225,19 +233,21 @@ function pruneOpenThreadDedup(): void {
 }
 
 /**
- * 以 reply_in_thread 回复触发消息, 用它作为根开一个新话题。返回开场白消息
- * id + 新话题 thread_id(话题内合法锚点)。同一触发消息并发/重复调用共享同
- * 一次开话题 — 防飞书重投事件开出多个话题(含进程重启: uuid 走服务端去重)。
+ * 以 reply_in_thread 回复触发消息, 用它作为根开一个新话题。返回三态结果:
+ * opened(新话题 lane 身份 + 锚点)/ degraded(可降级群 lane 旧行为)/
+ * orphaned(开场白已发出但话题 id 无法恢复且撤回失败 — 不能降级, 见类型注释)。
+ * 同一触发消息并发/重复调用共享同一次开话题 — 防飞书重投事件开出多个话题
+ * (含进程重启: uuid 走服务端去重)。
  *
- * 失败语义: API 失败或响应缺 message_id → null(没有可确认已发出的开场白);
- * 响应有 message_id 但缺 thread_id → 用 message.get 补查话题 id, 查不到就
- * 撤回开场白再返回 null — 不让「回复都在里面」的开场白承诺落空。调用方在
- * null 时降级回群 lane 旧行为(引用回复 + chat_id 直发)。
+ * 失败语义: API 失败或响应缺 message_id → degraded(没有可确认已发出的开场白);
+ * 响应有 message_id 但缺 thread_id → 用 message.get 补查话题 id; 查不到就
+ * 撤回开场白 — 撤回成功 → degraded, 撤回失败 → orphaned。任何状态都不出现
+ * 「开场白可见但回答进群主流」的误导组合。
  */
 export function openThread(
   replyToMessageId: string,
   text: string,
-): Promise<OpenThreadResult | null> {
+): Promise<OpenThreadOutcome> {
   const now = Date.now();
   const cached = openThreadByTrigger.get(replyToMessageId);
   if (cached && now - cached.ts <= OPEN_THREAD_DEDUP_TTL_MS) return cached.promise;
@@ -251,7 +261,7 @@ export function openThread(
 async function doOpenThread(
   replyToMessageId: string,
   text: string,
-): Promise<OpenThreadResult | null> {
+): Promise<OpenThreadOutcome> {
   const log = getLog();
   try {
     const res = await ensureClient().im.v1.message.reply({
@@ -272,29 +282,32 @@ async function doOpenThread(
       log.warn(
         '[feishu/outbound] openThread: no message_id in response — nothing provably sent',
       );
-      return null;
+      return { kind: 'degraded' };
     }
-    if (threadId) return { messageId, threadId };
+    if (threadId) return { kind: 'opened', messageId, threadId };
     // 部分成功: 开场白已发出但响应缺 thread_id — 补查消息详情恢复话题 id。
     const recovered = await tryFetchMessageThreadId(messageId);
-    if (recovered) return { messageId, threadId: recovered };
+    if (recovered) return { kind: 'opened', messageId, threadId: recovered };
     // 恢复不了: 撤回开场白再降级, 避免「回复都在里面」的开场白留在群里误导。
     try {
       await ensureClient().im.v1.message.delete({ path: { message_id: messageId } });
       log.warn(
         '[feishu/outbound] openThread: thread_id unrecoverable — opener recalled, fallback to group lane',
       );
+      return { kind: 'degraded' };
     } catch (err) {
+      // 撤回也失败: 开场白孤立在话题里 — 宁可让调用方放弃本轮(回复开场白
+      // 说明失败), 也不能降级群 lane 制造「开场白可见 + 回答刷群主流」。
       const msg = err instanceof Error ? err.message : String(err);
-      log.warn(
-        `[feishu/outbound] openThread: thread_id unrecoverable, opener recall failed (non-fatal): ${msg}`,
+      log.error(
+        `[feishu/outbound] openThread: thread_id unrecoverable and opener recall failed — opener orphaned: ${msg}`,
       );
+      return { kind: 'orphaned', openerMessageId: messageId };
     }
-    return null;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`[feishu/outbound] openThread failed (fallback to group lane): ${msg}`);
-    return null;
+    return { kind: 'degraded' };
   }
 }
 
