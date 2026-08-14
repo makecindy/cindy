@@ -100,6 +100,34 @@ export class GhostConfirmSlot {
 
   constructor(private readonly deps: ConfirmSlotDeps) {}
 
+  /**
+   * Host 为插件面板 Agent 发送强制弹出的逐次确认。
+   *
+   * 这不是插件主动申请 confirm 槽：确认由 Host 安全策略强制，因此只要求插件
+   * 已启用并声明 agent 槽。正文由 Host 从已校验的用户消息生成，超长时只在
+   * 预览层截断；真正发送的消息不在这里改写。
+   */
+  async handleHostAgentSendConfirmation(
+    ghostId: string,
+    message: string,
+  ): Promise<GhostPipeConfirmResult> {
+    const ghost = this.deps.getGhost(ghostId);
+    if (!ghost?.enabled || !ghost.manifest.slots.includes('agent')) {
+      return fail('PERMISSION_DENIED', '插件未申请 Agent 新回合权限，或当前未启用');
+    }
+    const sanitized = sanitizeGhostNoticeText(message);
+    const body =
+      sanitized.length > GHOST_CONFIRM_BODY_MAX_CHARS
+        ? `${sanitized.slice(0, GHOST_CONFIRM_BODY_MAX_CHARS - 1)}…`
+        : sanitized || '…';
+    return this.show(ghost, {
+      body,
+      confirmText: null,
+      cancelText: null,
+      danger: false,
+    });
+  }
+
   async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeConfirmResult> {
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost?.enabled || !ghost.manifest.slots.includes('confirm')) {
@@ -139,6 +167,19 @@ export class GhostConfirmSlot {
       );
     }
 
+    return this.show(ghost, {
+      body,
+      confirmText: confirmText.value,
+      cancelText: cancelText.value,
+      danger: request.danger === true,
+    });
+  }
+
+  private async show(
+    ghost: InstalledGhost,
+    request: Pick<GhostConfirmShowParams, 'body' | 'confirmText' | 'cancelText' | 'danger'>,
+  ): Promise<GhostPipeConfirmResult> {
+    const ghostId = ghost.manifest.id;
     // 骚扰钳制:限速按尝试记账(spam 顺延窗口),再看全局在场标记。
     const now = this.deps.now?.() ?? Date.now();
     const last = this.lastAttemptAt.get(ghostId);
@@ -157,10 +198,10 @@ export class GhostConfirmSlot {
         ghostId,
         ghostName: ghost.manifest.name,
         ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
-        body,
-        confirmText: confirmText.value,
-        cancelText: cancelText.value,
-        danger: request.danger === true,
+        body: request.body,
+        confirmText: request.confirmText,
+        cancelText: request.cancelText,
+        danger: request.danger,
       });
     } catch (error) {
       this.deps.log?.warn('ghost confirm dialog failed', {

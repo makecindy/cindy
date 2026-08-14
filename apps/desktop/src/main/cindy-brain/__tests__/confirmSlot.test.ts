@@ -167,6 +167,43 @@ describe('confirmSlot · 答案与失败分档', () => {
   });
 });
 
+describe('confirmSlot · Host 强制确认', () => {
+  it('面板 Agent 发送复用宿主确认框，不要求插件另行声明 confirm 槽', async () => {
+    const { slot, showConfirm } = makeSlot({
+      getGhost: () => confirmGhost({ slots: ['agent'] }),
+    });
+
+    expect(await slot.handleHostAgentSendConfirmation('confirm-ghost', '发送这条消息')).toEqual({
+      ok: true,
+      confirmed: true,
+    });
+    expect(firstShown(showConfirm)).toMatchObject({
+      ghostId: 'confirm-ghost',
+      ghostName: '确认插件',
+      body: '发送这条消息',
+      confirmText: null,
+      cancelText: null,
+      danger: false,
+    });
+  });
+
+  it('确认预览会净化并截断，但不会要求插件缩短原消息', async () => {
+    const { slot, showConfirm } = makeSlot({
+      getGhost: () => confirmGhost({ slots: ['agent'] }),
+    });
+    const message = `${'x'.repeat(GHOST_CONFIRM_BODY_MAX_CHARS + 20)}\u0007`;
+
+    expect(await slot.handleHostAgentSendConfirmation('confirm-ghost', message)).toEqual({
+      ok: true,
+      confirmed: true,
+    });
+    const shown = firstShown(showConfirm);
+    expect(shown.body).toHaveLength(GHOST_CONFIRM_BODY_MAX_CHARS);
+    expect(shown.body.endsWith('…')).toBe(true);
+    expect(shown.body).not.toContain('\u0007');
+  });
+});
+
 describe('confirmSlot · 骚扰钳制', () => {
   it('同插件 3 秒内第二次回 RATE_LIMITED,且按尝试记账(刷请求顺延窗口)', async () => {
     let clock = 1_000_000;

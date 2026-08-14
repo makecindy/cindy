@@ -127,7 +127,8 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 `setWindowOpenHandler` 拒绝真实弹窗并转成受控标签页。这是唯一允许的窄例外；Renderer
 不得自行添加 `allowpopups`。Ghost 面板更严格：专属 partition、无 Node、无通用 preload；
 只允许 Main 强制注入固定的最小 Agent bridge，身份由 Main 根据真实 `webContents` 反查，
-插件不能自报 ghostId／sessionId 或选择 IPC channel。
+插件不能自报 ghostId／sessionId 或选择 IPC channel；面板用户激活只能请求 Host 自有确认框，
+逐次确认成功后 Main 才能签发一次性 Agent 票据。
 
 ## 4．preload 与 Context Bridge
 

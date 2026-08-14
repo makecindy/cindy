@@ -228,8 +228,10 @@
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
 - 面板 Agent 最小桥不接受插件自报 `ghostId`、`sessionId`、运行模式或后台触发；Host 按
   Guest WebContents 登记反查插件身份，在发送瞬间解析承载窗口当前任务，并要求面板可见、
-  聚焦及 preload 消费一份短暂真实用户激活。消息只进入普通 user 回合，失败时不得回落到
-  其它窗口或历史任务。该能力复用既有 `agent` slot，不新增权限，也不影响存量插件。
+  聚焦及 preload 消费一份短暂真实用户激活。该激活只能请求 Cindy 自有确认框，Host 必须在
+  用户逐次确认后才签发一次性 Agent 票据；普通面板点击不得直接兑换收费回合。`context` 必须
+  递归验证为可无损 JSON 值，拒绝静默改写。消息只进入普通 user 回合，失败时不得回落到其它
+  窗口或历史任务。该能力复用既有 `agent` slot，不新增权限，也不影响存量插件。
 - `ios-simulator` 槽只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有
   Host viewer。请求协议不得出现插件自报 `sessionId`，可选 `instanceId` 必须重新匹配
   当前任务的公开实例。视频帧、viewer lease、触控、Sidecar／Helper、artifact 路径、进程

@@ -17,12 +17,13 @@ function makeBridge(overrides: Partial<GhostPanelAgentBridgeDeps> = {}) {
     hasAgentPermission: (ghostId) => ghostId === 'alpha',
     targetSessionId: (hostId) => (hostId === 22 ? 'session-current' : null),
     isInteractive: () => true,
+    confirmSend: vi.fn(async () => ({ ok: true as const, confirmed: true })),
     issueUserActionToken: vi.fn(() => 'panel-token'),
     run: vi.fn(async () => ({
-      ok: true,
+      ok: true as const,
       sessionId: 'session-current',
-      mode: 'continue',
-      disposition: 'active',
+      mode: 'continue' as const,
+      disposition: 'active' as const,
     })),
     ...overrides,
   };
@@ -47,6 +48,7 @@ describe('GhostPanelAgentBridge', () => {
     });
 
     expect(deps.issueUserActionToken).toHaveBeenCalledWith('alpha', 'session-current');
+    expect(deps.confirmSend).toHaveBeenCalledWith('alpha', '继续处理所选资源');
     expect(deps.run).toHaveBeenCalledWith('alpha', {
       type: 'agent-request',
       mode: 'continue',
@@ -75,6 +77,63 @@ describe('GhostPanelAgentBridge', () => {
       event: null,
       userActionToken: 'panel-token',
     });
+  });
+
+  it('用户取消宿主确认时不签票也不启动 Agent', async () => {
+    const { bridge, deps } = makeBridge({
+      confirmSend: vi.fn(async () => ({ ok: true as const, confirmed: false })),
+    });
+
+    expect(await bridge.send(11, { message: '不要直接发送' })).toMatchObject({
+      ok: false,
+      errorCode: 'USER_ACTION_REQUIRED',
+    });
+    expect(deps.issueUserActionToken).not.toHaveBeenCalled();
+    expect(deps.run).not.toHaveBeenCalled();
+  });
+
+  it('确认期间切换任务时 fail closed', async () => {
+    const targetSessionId = vi
+      .fn<(hostId: number) => string | null>()
+      .mockReturnValueOnce('session-current')
+      .mockReturnValueOnce('session-other');
+    const { bridge, deps } = makeBridge({ targetSessionId });
+
+    expect(await bridge.send(11, { message: '继续' })).toMatchObject({
+      ok: false,
+      errorCode: 'NO_ACTIVE_SESSION',
+    });
+    expect(deps.issueUserActionToken).not.toHaveBeenCalled();
+    expect(deps.run).not.toHaveBeenCalled();
+  });
+
+  it('拒绝 JSON 无法无损表达的 context，且不弹确认框', async () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const sparse = new Array(2);
+    sparse[0] = 'x';
+    const invalidContexts = [
+      new Map([['node', 1]]),
+      new Set(['node']),
+      new Date(),
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      -0,
+      { missing: undefined },
+      sparse,
+      circular,
+    ];
+
+    for (const context of invalidContexts) {
+      const { bridge, deps } = makeBridge();
+      expect(await bridge.send(11, { message: '继续', context })).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_REQUEST',
+      });
+      expect(deps.confirmSend).not.toHaveBeenCalled();
+      expect(deps.issueUserActionToken).not.toHaveBeenCalled();
+      expect(deps.run).not.toHaveBeenCalled();
+    }
   });
 
   it('拒绝 sessionId、mode 等越界字段，不签票也不运行', async () => {

@@ -3200,8 +3200,10 @@ if (target.ok && target.available) {
 }
 \`\`\`
 
-- \`send\` 必须直接发生在一次真实点击或按键处理器中，每次用户操作最多消费一次；
-- 请求只允许 \`message\` 与可 JSON 化的 \`context\`，不能传 \`sessionId\`、\`mode\`、
+- \`send\` 必须直接发生在一次真实点击或按键处理器中，每次用户操作最多请求一次；Host
+  随后显示 Cindy 自有确认框，只有用户逐次确认后才会启动 Agent 回合；
+- 请求只允许 \`message\` 与可无损表示为 JSON 的 \`context\`（不接受 \`Map\`、\`Set\`、
+  \`NaN\`、\`Infinity\`、\`undefined\`、稀疏数组或循环引用），不能传 \`sessionId\`、\`mode\`、
   \`trigger\`、模板或后台标记；Host 固定以 \`continue\` 继续当前任务；
 - 当前任务在发送瞬间由 Host 按承载窗口解析。没有任务、多主窗口产生歧义、面板不可见或
   未聚焦时返回结构化失败，不会猜测或回落到历史任务；

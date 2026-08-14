@@ -1581,6 +1581,8 @@ function getGhostPanelAgentBridge(): GhostPanelAgentBridge {
       },
       targetSessionId: ghostPanelTargetSessionId,
       isInteractive: isInteractiveGhostPanel,
+      confirmSend: (ghostId, message) =>
+        getGhostConfirmSlot().handleHostAgentSendConfirmation(ghostId, message),
       issueUserActionToken: (ghostId, sessionId) =>
         getGhostAgentSlot().issueUserActionToken(ghostId, sessionId, 'panel'),
       run: (ghostId, payload) => getGhostAgentSlot().handleRequest(ghostId, payload),
