@@ -50,6 +50,11 @@ export class VideoProviderRegistry {
     return this.aliasIndex.size > 0;
   }
 
+  /** 目录热更可能先于客户端通道代码；未知 alias 必须从可选清单中过滤。 */
+  hasAlias(alias: string): boolean {
+    return this.aliasIndex.has(alias);
+  }
+
   /** Throws on unknown alias — handler converts that to INVALID_ARGS. */
   resolveByAlias(alias: string): ResolvedAlias {
     const r = this.aliasIndex.get(alias);

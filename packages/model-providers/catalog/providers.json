@@ -23,6 +23,12 @@
           "name": "Grok Imagine Image (Quality)"
         }
       ],
+      "videoModels": [
+        {
+          "id": "xai/grok-imagine-video-1.5",
+          "name": "Grok Imagine Video 1.5"
+        }
+      ],
       "routing": {
         "claude-code": {
           "upstream": "https://api.x.ai/v1",

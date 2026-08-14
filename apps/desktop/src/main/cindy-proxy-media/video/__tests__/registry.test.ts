@@ -61,6 +61,7 @@ describe('VideoProviderRegistry', () => {
   it('starts empty', () => {
     const r = new VideoProviderRegistry();
     expect(r.hasAny()).toBe(false);
+    expect(r.hasAlias('missing')).toBe(false);
     expect(r.collectAllAliases()).toEqual([]);
   });
 
@@ -73,6 +74,7 @@ describe('VideoProviderRegistry', () => {
       }),
     );
     expect(r.hasAny()).toBe(true);
+    expect(r.hasAlias('fast')).toBe(true);
     const resolved = r.resolveByAlias('fast');
     expect(resolved.provider.id).toBe('fakeprov');
     expect(resolved.internalModel).toBe('fp-fast');
