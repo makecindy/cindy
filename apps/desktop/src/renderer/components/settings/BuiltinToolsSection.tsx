@@ -193,9 +193,6 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
     [effectiveWorkingDir, reload, t],
   );
 
-  // First render: null → blank (no flash). After data arrives: render list.
-  if (!plugins) return null;
-
   return (
     <div className="flex flex-col gap-[14px]">
       <div className="flex items-start justify-between gap-3">
@@ -223,27 +220,31 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
         )}
       >
         <VisionFallbackRow />
-        {plugins.length > 0 && (
+        {plugins && plugins.length > 0 && (
           <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
         )}
-        {plugins.map((plugin, index) => (
-          <PluginRow
-            key={plugin.id}
-            plugin={plugin}
-            divider={index > 0}
-            disabled={pendingIds.has(plugin.id)}
-            projectScope={effectiveWorkingDir != null}
-            onToggle={handleToggle}
-            onClearOverride={handleClearOverride}
-          />
-        ))}
+        {plugins && (
+          <>
+            {plugins.map((plugin, index) => (
+              <PluginRow
+                key={plugin.id}
+                plugin={plugin}
+                divider={index > 0}
+                disabled={pendingIds.has(plugin.id)}
+                projectScope={effectiveWorkingDir != null}
+                onToggle={handleToggle}
+                onClearOverride={handleClearOverride}
+              />
+            ))}
 
-        {plugins.length === 0 && (
-          <div className="flex items-center justify-center px-4 py-10">
-            <p className="text-13 text-[var(--settings-section-desc)]">
-              {t('settings.builtinTools.empty')}
-            </p>
-          </div>
+            {plugins.length === 0 && (
+              <div className="flex items-center justify-center px-4 py-10">
+                <p className="text-13 text-[var(--settings-section-desc)]">
+                  {t('settings.builtinTools.empty')}
+                </p>
+              </div>
+            )}
+          </>
         )}
       </div>
 

@@ -24,4 +24,10 @@ describe('BuiltinToolsSection working directory scope', () => {
       'const projectScope = normalizeWorkingDirForProjectSettings(p) ?? undefined;',
     );
   });
+
+  it('keeps the vision fallback row independent from plugin loading', () => {
+    expect(source).not.toContain('if (!plugins) return null;');
+    expect(source).toContain('<VisionFallbackRow />');
+    expect(source).toContain('{plugins && (');
+  });
 });
