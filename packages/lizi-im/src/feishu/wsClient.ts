@@ -130,6 +130,13 @@ async function sendOrphanOpenerNotice(
   orphanNoticeAt.set(openerMessageId, Date.now());
   try {
     await outbound.replyText(openerMessageId, transportMessages.group.threadOrphanNotice);
+    // 发送成功: 清掉该 opener 的挂起重试(若之前失败轮次已安排过)— 重试
+    // 绕过冷却, 不清会在稍后重复提示, 甚至重试耗尽时误撤回开场白卡。
+    const pending = orphanNoticeRetries.get(openerMessageId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      orphanNoticeRetries.delete(openerMessageId);
+    }
   } catch (err) {
     releaseInboundClaim(botAppId, messageId);
     const msg = err instanceof Error ? err.message : String(err);

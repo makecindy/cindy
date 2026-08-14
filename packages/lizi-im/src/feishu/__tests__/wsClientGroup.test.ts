@@ -159,12 +159,14 @@ beforeEach(async () => {
   feishuEvents.removeAllListeners('message');
   mocks.firstAllowed.mockReturnValue(OWNER);
   mocks.checkOwner.mockImplementation((id: string) => id === OWNER);
-  // 恢复 openThread 默认实现 — 个别用例会覆盖它, 不能泄漏到后续用例。
+  // 恢复 openThread / replyText 默认实现 — 个别用例会覆盖它们
+  // (含持续的 mockRejectedValue), 不能泄漏到后续用例。
   mocks.openThread.mockImplementation(async () => ({
     kind: 'opened',
     messageId: 'om_opener',
     threadId: 'omt_new',
   }));
+  mocks.replyText.mockImplementation(async () => ({ messageId: 'om_reply' }));
 });
 
 afterEach(async () => {
@@ -365,6 +367,37 @@ describe('feishu group inbound gate', () => {
       expect(mocks.replyText).toHaveBeenCalledTimes(4);
       // 重试耗尽: 撤回开场白卡, 用户看到干净群主流而不是永久「思考中」卡。
       expect(mocks.recallOwnMessage).toHaveBeenCalledWith('om_opener');
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('successful redelivery cancels the stale retry scheduled by the failed first attempt', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      // 首发失败 → 安排重试; 重试本身也失败一次(不耗尽)。
+      mocks.replyText
+        .mockRejectedValueOnce(new Error('transient network error'))
+        .mockRejectedValueOnce(new Error('still down'));
+      await connect();
+      const events = collectEvents();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 冷却过后的重投成功发送提示 — 之前失败轮次安排的定时重试应被清掉,
+      // 否则它会绕过冷却在稍后重复提示, 甚至耗尽后误撤回开场白卡。
+      await vi.advanceTimersByTimeAsync(61_000);
+      // 61s 内 10s + 30s 两轮定时重试都跑过且失败(共 3 次调用)。
+      expect(mocks.replyText).toHaveBeenCalledTimes(3);
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      expect(mocks.replyText).toHaveBeenCalledTimes(4);
+
+      // 再推进远超 90s 的重试窗口: 被清掉的重试链不应再有任何发送。
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(4);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
       expect(events).toHaveLength(0);
     } finally {
       vi.useRealTimers();
