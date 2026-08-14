@@ -2305,7 +2305,7 @@ function ModelSelectorContentView({
       // (2026-08-13 实测:外层 456px、面板列 511px,底部 55px 被裁)。这层 max-h-full
       // 在宿主高度**确定**时把面板列钳到宿主内(flex 拉伸 → 列内 min-h-0 让列表收缩滚动),
       // 宿主高度不确定时百分比落空为 none,由面板列自己的绝对上限兜底 —— 两个分支各管一头。
-      <div className="flex max-h-full min-h-0 min-w-0">
+      <div className="flex max-h-full min-h-0 w-full min-w-0">
       <div
         ref={bindPaneElement}
         data-model-tag-density={modelTagDensity}
@@ -2313,7 +2313,9 @@ function ModelSelectorContentView({
         className={cn(
           // 设计稿的面板骨架:搜索行贴顶(border-b 分隔)、列表贴边(自带 8px 内距)、
           // footer 用 border-t 分隔 —— 外层不再加统一 padding。
-          'flex min-h-0 flex-col',
+          // grow:stickyWidth 下宿主可能比内容宽(筛选后内容变窄、面板不回缩),
+          // 面板列拉伸填满,不在边框内留空条。
+          'flex min-h-0 grow flex-col',
           // 高度上限必须给在**面板**上:不给的话,列表按内容撑到比视口还高,外层
           // popover 裁掉超出部分,用户就翻不到最后几行(2026-08-13 实测)。列表侧配
           // min-h-0 + flex-1 收缩并内部滚动,搜索框与底部 footer 始终露着。
@@ -3341,6 +3343,9 @@ export function ModelSelector({
         // 收缩子项(min-h-0 链),列表在自己内部滚动,搜索行与 footer 完整露出。
         wrapperClassName="min-w-0 max-w-full shrink"
         panelClassName="flex min-h-0 flex-col p-0"
+        // 宽度只进不退(2026-08-14 实测反馈):rail 筛选把内容变窄时面板宽度回缩,
+        // rail 图标在指针底下移位。高度照常双向跟随(底边锚定向上收)。
+        stickyWidth
         panelAriaLabel={ariaLabel}
         trigger={trigger}
       >

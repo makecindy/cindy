@@ -105,6 +105,13 @@ interface MorphPopoverProps {
    * hug, 面板按内容/panelWidth 展开。
    */
   panelWidthMode?: 'content' | 'trigger';
+  /**
+   * 一次打开内**宽度只进不退**:打开后的重量(RO / 内容重量请求)允许面板变宽,
+   * 不允许回缩;下次打开重新起算。给「面板内还有视图筛选」的调用方(统一模型
+   * 选择器):筛选把内容变窄时面板宽度跳变,rail 图标会在指针底下移位
+   * (Chris 2026-08-14 实测反馈)。高度不受影响,继续双向跟随内容。
+   */
+  stickyWidth?: boolean;
   /** 面板形变起点底色/边色(= chip 的),默认 composer pill 规格。 */
   startBg?: string;
   startBorderColor?: string;
@@ -142,6 +149,7 @@ export function MorphPopover({
   align = 'start',
   panelWidth,
   panelWidthMode = 'content',
+  stickyWidth = false,
   startBg = 'var(--composer-pill-bg)',
   startBorderColor = 'var(--border-default)',
   endBg = 'var(--model-dropdown-bg)',
@@ -168,6 +176,8 @@ export function MorphPopover({
   const chipRectRef = useRef<DOMRect | null>(null);
   // 初始形变是否已完成(ResizeObserver 只在其后接管,避免和开场动画打架)
   const settledRef = useRef(false);
+  // stickyWidth 的本次打开宽度水位(见 prop 注释);开场重置。
+  const stickyWidthRef = useRef(0);
   // 指针驱动的关闭(菜单动作、trigger toggle、outside 交接)不把焦点归还 trigger:
   // 否则旧层会在收合结束时抢走下一层交互面的焦点。键盘关闭仍按 §14.2 回焦。
   const pointerInteractionRef = useRef(false);
@@ -201,7 +211,14 @@ export function MorphPopover({
         align === 'end'
           ? chipRect.right - VIEWPORT_PADDING
           : window.innerWidth - chipRect.left - VIEWPORT_PADDING;
-      const targetW = Math.min(desiredW, viewportMaxW, Math.max(chipRect.width, sideAvailW));
+      // stickyWidth:同一次打开内宽度只进不退(视口/锚点钳制仍最优先)。
+      const stickyFloor = stickyWidth ? stickyWidthRef.current : 0;
+      const targetW = Math.min(
+        Math.max(desiredW, stickyFloor),
+        viewportMaxW,
+        Math.max(chipRect.width, sideAvailW),
+      );
+      if (stickyWidth && targetW > stickyWidthRef.current) stickyWidthRef.current = targetW;
       panel.style.width = `${targetW}px`;
       // 可视高度钳制:停靠位到视口边缘的可用空间(内容区自滚)。avail 夹到 ≥0——
       // chip 极靠近视口边(如 side='top' 且距顶 <14px)时 avail 会为负,负 height
@@ -215,7 +232,7 @@ export function MorphPopover({
       panel.style.height = prevH;
       return { w: targetW, h: targetH };
     },
-    [align, panelWidth, panelWidthMode, side],
+    [align, panelWidth, panelWidthMode, side, stickyWidth],
   );
 
   /**
@@ -283,6 +300,7 @@ export function MorphPopover({
     if (open) {
       settledRef.current = false;
       pointerInteractionRef.current = false;
+      stickyWidthRef.current = 0; // stickyWidth 水位按「一次打开」起算
       const rect = wrap.getBoundingClientRect();
       chipRectRef.current = rect;
       // 1) 面板落到 chip 精确几何(与 chip 重合的起点),transition 关闭防测量污染。
