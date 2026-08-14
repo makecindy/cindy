@@ -78,6 +78,92 @@ describe('resolveBrowserScreenshot', () => {
     );
   });
 
+  it('rejects a symlink inside the media root that points outside it', async () => {
+    const runtimeDir = await makeRuntimeDir();
+    const mediaRoot = path.join(runtimeDir, 'media', 'browser');
+    const outsideTarget = path.join(runtimeDir, 'outside-target.png');
+    const symlinkPath = path.join(mediaRoot, 'escape.png');
+    await fs.mkdir(mediaRoot, { recursive: true });
+    await fs.writeFile(outsideTarget, PNG_BYTES);
+    await fs.symlink(outsideTarget, symlinkPath);
+    const result: BrowserControlResult = {
+      ok: true,
+      action: 'screenshot',
+      data: { path: symlinkPath, targetId: 'tab-1' },
+    };
+
+    await expect(resolveBrowserScreenshot(result, { runtimeDir })).rejects.toThrow(
+      'Browser screenshot file is unavailable',
+    );
+  });
+
+  it('rejects external screenshot files above the 5 MiB read cap', async () => {
+    const runtimeDir = await makeRuntimeDir();
+    const mediaRoot = path.join(runtimeDir, 'media', 'browser');
+    const oversizedPath = path.join(mediaRoot, 'oversized.png');
+    await fs.mkdir(mediaRoot, { recursive: true });
+    await fs.writeFile(
+      oversizedPath,
+      Buffer.concat([PNG_BYTES, Buffer.alloc(5 * 1024 * 1024, 0x00)]),
+    );
+    const result: BrowserControlResult = {
+      ok: true,
+      action: 'screenshot',
+      data: { path: oversizedPath, targetId: 'tab-1' },
+    };
+
+    await expect(resolveBrowserScreenshot(result, { runtimeDir })).rejects.toThrow(
+      'Browser screenshot file is unavailable',
+    );
+  });
+
+  it('rejects path-based screenshots when no runtimeDir is configured', async () => {
+    const runtimeDir = await makeRuntimeDir();
+    const mediaRoot = path.join(runtimeDir, 'media', 'browser');
+    const screenshotPath = path.join(mediaRoot, 'screen.png');
+    await fs.mkdir(mediaRoot, { recursive: true });
+    await fs.writeFile(screenshotPath, PNG_BYTES);
+    const result: BrowserControlResult = {
+      ok: true,
+      action: 'screenshot',
+      data: { path: screenshotPath, targetId: 'tab-1' },
+    };
+
+    await expect(
+      resolveBrowserScreenshot(result, { runtimeDir: undefined }),
+    ).rejects.toThrow('Browser screenshot file is unavailable');
+  });
+
+  it('rejects non-object payloads, payloads without data/path, and unknown magic bytes', async () => {
+    const nonObject: BrowserControlResult = {
+      ok: true,
+      action: 'screenshot',
+      data: undefined,
+    };
+    await expect(resolveBrowserScreenshot(nonObject, { runtimeDir: undefined })).rejects.toThrow(
+      'Browser screenshot payload is invalid',
+    );
+
+    const missingBoth: BrowserControlResult = {
+      ok: true,
+      action: 'screenshot',
+      data: { targetId: 'tab-1' },
+    };
+    await expect(resolveBrowserScreenshot(missingBoth, { runtimeDir: undefined })).rejects.toThrow(
+      'Browser screenshot payload is invalid',
+    );
+
+    // 合法 Base64,但内容既不是 PNG 也不是 JPEG 签名。
+    const unknownMagic: BrowserControlResult = {
+      ok: true,
+      action: 'screenshot',
+      data: { data: Buffer.alloc(64, 0x00).toString('base64'), targetId: 'tab-1' },
+    };
+    await expect(resolveBrowserScreenshot(unknownMagic, { runtimeDir: undefined })).rejects.toThrow(
+      'Browser screenshot payload is invalid',
+    );
+  });
+
   it('rejects malformed Base64 and declared MIME mismatches', async () => {
     const malformed: BrowserControlResult = {
       ok: true,

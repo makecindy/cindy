@@ -736,7 +736,9 @@ describe('createBrowserMcpServer', () => {
     await h.cleanup();
   });
 
-  it('fails closed when an oversized screenshot cannot be compressed for inline delivery', async () => {
+  it('reports compressor degradation (null) as COMPRESSION_UNAVAILABLE, not TOO_LARGE', async () => {
+    // CompressInlineImageFn 契约:null = 压缩器不可用/解码失败/超时的预期降级,
+    // 不代表图片本身无法缩小 — 错误码必须与"压缩后仍超标"区分开。
     const original = Buffer.alloc(240_000, 0xab);
     const h = await makeHarness(
       {
@@ -764,9 +766,79 @@ describe('createBrowserMcpServer', () => {
     expect(JSON.parse(block.text ?? '{}')).toMatchObject({
       ok: false,
       action: 'screenshot',
-      errorCode: 'BROWSER_SCREENSHOT_TOO_LARGE',
+      errorCode: 'BROWSER_SCREENSHOT_COMPRESSION_UNAVAILABLE',
     });
     expect(block.text).not.toContain(original.toString('base64'));
+    await h.cleanup();
+  });
+
+  it('fails closed with TOO_LARGE only when the compressed copy still exceeds the inline budget', async () => {
+    const original = Buffer.alloc(400_000, 0xab);
+    const stillOversized = Buffer.alloc(INLINE_IMAGE_TARGET_BYTES + 1, 0xcd);
+    const h = await makeHarness(
+      {
+        resolveScreenshot: async () => ({ buffer: original, mimeType: 'image/png' }),
+        compressInlineImage: async () => ({ buffer: stillOversized, mime: 'image/webp' }),
+      },
+      () => ({
+        data: original.toString('base64'),
+        mimeType: 'image/png',
+        bytes: original.byteLength,
+        tabId: 'tab-1',
+      }),
+    );
+
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'browser', args: { action: 'screenshot', targetId: 'tab-1' } },
+    });
+
+    expect(result.isError).toBe(true);
+    const blocks = result.content as Array<{ type: string; text?: string }>;
+    expect(blocks).toHaveLength(1);
+    expect(JSON.parse(blocks[0].text ?? '{}')).toMatchObject({
+      ok: false,
+      action: 'screenshot',
+      errorCode: 'BROWSER_SCREENSHOT_TOO_LARGE',
+    });
+    expect(blocks[0].text).not.toContain(original.toString('base64'));
+    expect(blocks[0].text).not.toContain(stillOversized.toString('base64'));
+    await h.cleanup();
+  });
+
+  it('maps resolveScreenshot rejections to BROWSER_SCREENSHOT_INVALID without leaking details', async () => {
+    // resolver 的 8 类校验 throw(路径越界 / Base64 损坏 / MIME 不匹配等)必须
+    // 收敛为稳定的 BROWSER_SCREENSHOT_INVALID,而不是穿透外层 catch 被泛化成
+    // BROWSER_RUNTIME_ACTION_FAILED;error 里的路径不得进入模型可见结果。
+    const secretPath = '/private/browser-runtime/media/browser/secret-screenshot.png';
+    const h = await makeHarness(
+      {
+        resolveScreenshot: async () => {
+          throw new Error(`Browser screenshot file is unavailable: ${secretPath}`);
+        },
+      },
+      () => ({
+        path: secretPath,
+        targetId: 'tab-1',
+      }),
+    );
+
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'browser', args: { action: 'screenshot', targetId: 'tab-1' } },
+    });
+
+    expect(result.isError).toBe(true);
+    const blocks = result.content as Array<{ type: string; text?: string }>;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('text');
+    expect(JSON.parse(blocks[0].text ?? '{}')).toMatchObject({
+      ok: false,
+      action: 'screenshot',
+      errorCode: 'BROWSER_SCREENSHOT_INVALID',
+    });
+    expect(blocks[0].text).not.toContain(secretPath);
+    expect(blocks[0].text).not.toContain('BROWSER_RUNTIME_ACTION_FAILED');
     await h.cleanup();
   });
 

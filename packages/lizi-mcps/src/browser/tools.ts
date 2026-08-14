@@ -9,6 +9,7 @@ import { z } from 'zod';
 import {
   INLINE_IMAGE_TARGET_BYTES,
   type BrowserMcpDeps,
+  type ResolvedBrowserScreenshot,
 } from '../types.js';
 import type { BrowserToolRegistry } from './tool-registry.js';
 import {
@@ -213,7 +214,10 @@ function errorResult(action: string, message: string): {
 }
 
 function browserScreenshotError(
-  errorCode: 'BROWSER_SCREENSHOT_INVALID' | 'BROWSER_SCREENSHOT_TOO_LARGE',
+  errorCode:
+    | 'BROWSER_SCREENSHOT_INVALID'
+    | 'BROWSER_SCREENSHOT_TOO_LARGE'
+    | 'BROWSER_SCREENSHOT_COMPRESSION_UNAVAILABLE',
   message: string,
 ): {
   content: Array<{ type: 'text'; text: string }>;
@@ -291,19 +295,53 @@ async function screenshotToolResult(
     );
   }
 
-  const resolved = await deps.resolveScreenshot(result);
+  let resolved: ResolvedBrowserScreenshot;
+  try {
+    resolved = await deps.resolveScreenshot(result);
+  } catch (err) {
+    // resolver 抛错(路径越界 / Base64 损坏 / MIME 不匹配等)是截图内容校验
+    // 失败,不是 runtime 动作失败:映射到稳定的 BROWSER_SCREENSHOT_INVALID,
+    // 不能穿透到外层被泛化成 BROWSER_RUNTIME_ACTION_FAILED。原始 error 可能
+    // 含文件路径,只进 host 日志,不进模型可见的错误信封。
+    deps.logger?.warn('browser screenshot resolve failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return browserScreenshotError(
+      'BROWSER_SCREENSHOT_INVALID',
+      '浏览器截图内容校验失败，无法作为模型图片输入。',
+    );
+  }
   const originalBytes = resolved.buffer.byteLength;
   let buffer = resolved.buffer;
   let mimeType: string = resolved.mimeType;
 
   if (buffer.byteLength > INLINE_IMAGE_TARGET_BYTES) {
-    const compressed = await deps.compressInlineImage?.(buffer, mimeType, {
-      targetBytes: INLINE_IMAGE_TARGET_BYTES,
-    });
-    if (!compressed || compressed.buffer.byteLength > INLINE_IMAGE_TARGET_BYTES) {
+    let compressed: Awaited<ReturnType<NonNullable<BrowserMcpDeps['compressInlineImage']>>> = null;
+    try {
+      compressed = (await deps.compressInlineImage?.(buffer, mimeType, {
+        targetBytes: INLINE_IMAGE_TARGET_BYTES,
+      })) ?? null;
+    } catch (err) {
+      // CompressInlineImageFn 契约是永不 throw;真 throw 了按"压缩器不可用"
+      // 降级处理,不让异常穿透成 BROWSER_RUNTIME_ACTION_FAILED。
+      deps.logger?.warn('browser screenshot compression threw, treating as unavailable', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      compressed = null;
+    }
+    // null 是压缩器的契约降级值(sharp 缺失 / 解码失败 / 超时,见
+    // CompressInlineImageFn):不是图片本身超标,不能报 TOO_LARGE。截图仍
+    // 超过内联预算所以必须 fail-closed,但错误码和文案要说真话。
+    if (!compressed) {
+      return browserScreenshotError(
+        'BROWSER_SCREENSHOT_COMPRESSION_UNAVAILABLE',
+        '浏览器截图超过模型内联传输上限，且当前主机图片压缩不可用（压缩器缺失、无法解码或超时），无法安全内联。',
+      );
+    }
+    if (compressed.buffer.byteLength > INLINE_IMAGE_TARGET_BYTES) {
       return browserScreenshotError(
         'BROWSER_SCREENSHOT_TOO_LARGE',
-        '浏览器截图超过模型内联传输上限，且无法安全压缩。请缩小窗口后重试。',
+        '浏览器截图压缩后仍超过模型内联传输上限。请缩小窗口后重试。',
       );
     }
     buffer = compressed.buffer;
