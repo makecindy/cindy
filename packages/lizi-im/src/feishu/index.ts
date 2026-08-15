@@ -76,9 +76,10 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         // 发送必然失败, 排空时补发确保用户收到结果)。
         const msg = err instanceof Error ? err.message : String(err);
         this.log.warn(`flushDeferredOpenerConsumes failed: ${msg}`);
-        if (outbound.getBoundClient() === pinnedClient) {
-          await outbound.recallOwnMessageWith(pinnedClient, openerId);
-        }
+        // 撤回始终 pin 到排空开始时的 client — 同账号再次重连(而非换账号)
+        // 时旧 REST client 仍可尝试撤回, 不会留下永久「思考中」卡; 换账号
+        // 时 pinnedClient 属于旧账号, 用它撤回旧卡正是安全方向。
+        await outbound.recallOwnMessageWith(pinnedClient, openerId);
         outbound.rearmAnchorToTrigger(entry.userId);
         try {
           if ('markdown' in entry) {
@@ -158,8 +159,12 @@ export class FeishuIM extends BaseIM implements ChannelIM {
 
   // ── outbound ────────────────────────────────────────────────────────────────
 
-  sendText(userId: string, text: string): Promise<{ messageId: string }> {
-    return outbound.sendText(userId, text);
+  async sendText(userId: string, text: string): Promise<{ messageId: string }> {
+    const result = await outbound.sendText(userId, text);
+    // 兜底发送成功 = 该 lane 的暂存消费已由这条真实消息覆盖 — 取消暂存项,
+    // 避免 connected 排空时重复呈现同一终态。
+    outbound.cancelDeferredOpenerConsumesFor(userId);
+    return result;
   }
 
   /**
@@ -173,8 +178,10 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * 适合发"提示语"类消息 — 文案里有 *strong*, `code`, [link] 等且想让用户
    * 看到正确渲染的场合。
    */
-  sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }> {
-    return outbound.sendInteractive(userId, { body: markdown, buttons: [] });
+  async sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }> {
+    const result = await outbound.sendInteractive(userId, { body: markdown, buttons: [] });
+    outbound.cancelDeferredOpenerConsumesFor(userId);
+    return result;
   }
 
   startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
@@ -266,12 +273,14 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     }
   }
 
-  sendInteractiveCard(
+  async sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
     opts?: { threadTs?: string; deliverToOwnerDm?: boolean; ownerDmNote?: string },
   ): Promise<{ messageId: string }> {
-    return outbound.sendInteractive(userId, spec, opts);
+    const result = await outbound.sendInteractive(userId, spec, opts);
+    outbound.cancelDeferredOpenerConsumesFor(userId);
+    return result;
   }
 
   updateInteractiveCard(messageId: string, spec: InteractiveCardSpec): Promise<void> {

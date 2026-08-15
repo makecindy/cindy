@@ -198,6 +198,19 @@ export function drainDeferredOpenerConsumes(): DeferredOpenerConsume[] {
 }
 
 /**
+ * 取消某 lane 的暂存消费 — 调用方的兜底发送已成功送达时(暂存与兜底之间
+ * bindClient 可能已完成), 排空会重复呈现同一终态: 成功发送后清除同 lane
+ * 的暂存项, 排空时跳过。
+ */
+export function cancelDeferredOpenerConsumesFor(userId: string): void {
+  for (let i = deferredOpenerConsumes.length - 1; i >= 0; i--) {
+    if (deferredOpenerConsumes[i]!.userId === userId) {
+      deferredOpenerConsumes.splice(i, 1);
+    }
+  }
+}
+
+/**
  * patch/替换失败撤回开场白卡后调用: 把 held 锚点回拨到触发消息(带
  * reply_in_thread 标记)。兜底发送向触发消息 reply 且 reply_in_thread=true,
  * 仍落回话题 — 而不是向已删除的开场白卡 reply 失败。无触发记录返回 false。

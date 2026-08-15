@@ -21,7 +21,9 @@ const outboundMocks = vi.hoisted(() => ({
   drainDeferredOpenerConsumes: vi.fn<
     () => Array<{ userId: string; markdown?: string; spec?: { body: string; buttons: unknown[] } }>
   >(() => []),
+  cancelDeferredOpenerConsumesFor: vi.fn(),
   recallOwnMessage: vi.fn(async () => true),
+  sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
 }));
 
 vi.mock('../outbound.js', () => ({
@@ -34,7 +36,9 @@ vi.mock('../outbound.js', () => ({
   rearmAnchorToTrigger: outboundMocks.rearmAnchorToTrigger,
   deferOpenerConsume: outboundMocks.deferOpenerConsume,
   drainDeferredOpenerConsumes: outboundMocks.drainDeferredOpenerConsumes,
+  cancelDeferredOpenerConsumesFor: outboundMocks.cancelDeferredOpenerConsumesFor,
   sendInteractive: outboundMocks.sendInteractive,
+  sendText: outboundMocks.sendText,
 }));
 
 vi.mock('../streamingText.js', () => ({
@@ -121,6 +125,18 @@ describe('FeishuIM opener consumption failure semantics', () => {
       body: '兜底回复',
       buttons: [],
     });
+  });
+
+  it('兜底发送成功后取消同 lane 的暂存消费(排空不重复呈现)', async () => {
+    outboundMocks.getBoundClient.mockReturnValue(null);
+    await im.consumePendingOpenerCard('g/oc_c/omt_t', '回复');
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalled();
+
+    // 暂存之后、兜底发送之前 bindClient 完成: 兜底发送成功 → 取消同 lane 暂存。
+    await im.sendText('g/oc_c/omt_t', '兜底');
+    expect(outboundMocks.cancelDeferredOpenerConsumesFor).toHaveBeenCalledWith(
+      'g/oc_c/omt_t',
+    );
   });
 
   it('consumePendingOpenerCard: 无 pending opener 返回 false(不撤回)', async () => {
