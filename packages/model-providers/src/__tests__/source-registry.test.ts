@@ -420,18 +420,57 @@ describe('loadCatalog', () => {
     expect(local).toMatchObject({
       source: 'local',
       capabilityEvidence: 'current',
+      unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: { version: 'test' },
     });
     expect(remote).toMatchObject({
       source: 'remote',
       capabilityEvidence: 'current',
+      unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: { version: 'test' },
     });
     expect(bundled).toEqual({
       source: 'bundled',
       capabilityEvidence: 'fallback',
+      unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: BUNDLED_CATALOG,
     });
+  });
+
+  it('tracks only XD media fields inherited from bundled in a current snapshot', async () => {
+    const bundledXd = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd');
+    if (!bundledXd) throw new Error('missing bundled XD provider');
+    const oldXd = structuredClone(bundledXd);
+    delete oldXd.embeddingModels;
+    delete oldXd.embeddingDefaults;
+
+    const inherited = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      {
+        fetchText: vi.fn(async () =>
+          JSON.stringify({ version: '2', providers: [oldXd] }),
+        ),
+      },
+    );
+    expect(inherited.capabilityEvidence).toBe('current');
+    expect(inherited.unverifiedXdMediaKinds).toEqual(['embedding']);
+    expect(
+      inherited.catalog.providers.find((provider) => provider.id === 'xd')?.embeddingModels,
+    ).toEqual(bundledXd.embeddingModels);
+
+    const explicitlyDisabled = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      {
+        fetchText: vi.fn(async () =>
+          JSON.stringify({ version: '2', providers: [{ ...oldXd, embeddingModels: [] }] }),
+        ),
+      },
+    );
+    expect(explicitlyDisabled.unverifiedXdMediaKinds).toEqual([]);
+    expect(
+      explicitlyDisabled.catalog.providers.find((provider) => provider.id === 'xd')
+        ?.embeddingModels,
+    ).toEqual([]);
   });
 
   it('only backfills Pi metadata for proven legacy snapshots across local, remote, and cache', async () => {
@@ -647,6 +686,7 @@ describe('loadCatalog', () => {
     expect(invalid).toEqual({
       source: 'bundled',
       capabilityEvidence: 'fallback',
+      unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: BUNDLED_CATALOG,
     });
   });
@@ -882,6 +922,7 @@ describe('loadCatalog', () => {
     expect(result).toEqual({
       source: 'bundled',
       capabilityEvidence: 'fallback',
+      unverifiedXdMediaKinds: ['image', 'video', 'embedding'],
       catalog: BUNDLED_CATALOG,
     });
     expect((Object.prototype as { polluted?: unknown }).polluted).toBeUndefined();

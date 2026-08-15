@@ -7,7 +7,12 @@
  * not claim that bundled XD media is currently routable by a regional endpoint.
  */
 
-import { classifyModel, type Catalog, type Provider } from '@cindy/model-providers';
+import {
+  classifyModel,
+  type Catalog,
+  type CatalogXdMediaKind,
+  type Provider,
+} from '@cindy/model-providers';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 export interface ProviderAccessContext {
@@ -20,6 +25,11 @@ const MAINLAND_FALLBACK_VIDEO_MODEL_IDS: ReadonlySet<string> = new Set([
   'seedance-fast',
   'seedance-pro',
   'bytedance/seedance-2.5',
+]);
+const ALL_XD_MEDIA_KINDS: ReadonlySet<CatalogXdMediaKind> = new Set([
+  'image',
+  'video',
+  'embedding',
 ]);
 
 function projectFallbackVideoDefaults(
@@ -45,38 +55,51 @@ function projectFallbackVideoDefaults(
 export function projectUnverifiedCatalogFallbackForBuildRegion(
   catalog: Catalog,
   region: CindyRegion,
+  unverifiedKinds: ReadonlySet<CatalogXdMediaKind> = ALL_XD_MEDIA_KINDS,
 ): Catalog {
-  if (region === 'global') return catalog;
+  if (region === 'global' || unverifiedKinds.size === 0) return catalog;
 
   let changed = false;
   const providers = catalog.providers.map((provider) => {
     if (provider.id !== CINDY_AI_PROVIDER_ID) return provider;
 
-    const videoModels = (provider.videoModels ?? []).filter((model) =>
-      MAINLAND_FALLBACK_VIDEO_MODEL_IDS.has(model.id),
-    );
-    const videoIds = new Set(videoModels.map((model) => model.id));
-    const videoDefaults = projectFallbackVideoDefaults(provider.videoDefaults, videoIds);
+    const projectImage = unverifiedKinds.has('image');
+    const projectVideo = unverifiedKinds.has('video');
+    const projectEmbedding = unverifiedKinds.has('embedding');
+    const videoModels = projectVideo
+      ? (provider.videoModels ?? []).filter((model) =>
+          MAINLAND_FALLBACK_VIDEO_MODEL_IDS.has(model.id),
+        )
+      : provider.videoModels;
+    const videoIds = new Set((videoModels ?? []).map((model) => model.id));
+    const videoDefaults = projectVideo
+      ? projectFallbackVideoDefaults(provider.videoDefaults, videoIds)
+      : provider.videoDefaults;
     const models = Object.fromEntries(
       Object.entries(provider.models).map(([agent, list]) => [
         agent,
         (list ?? []).filter((model) => {
           const group = classifyModel(model);
-          if (group === 'image' || group === 'embedding') return false;
-          return group !== 'video' || MAINLAND_FALLBACK_VIDEO_MODEL_IDS.has(model.id);
+          if (group === 'image' && projectImage) return false;
+          if (group === 'embedding' && projectEmbedding) return false;
+          return (
+            group !== 'video' ||
+            !projectVideo ||
+            MAINLAND_FALLBACK_VIDEO_MODEL_IDS.has(model.id)
+          );
         }),
       ]),
     ) as Provider['models'];
     const projected: Provider = {
       ...provider,
       models,
-      imageModels: [],
-      videoModels,
-      embeddingModels: [],
+      ...(projectImage ? { imageModels: [] } : {}),
+      ...(projectVideo ? { videoModels } : {}),
+      ...(projectEmbedding ? { embeddingModels: [] } : {}),
     };
-    delete projected.imageDefaults;
-    delete projected.videoDefaults;
-    delete projected.embeddingDefaults;
+    if (projectImage) delete projected.imageDefaults;
+    if (projectVideo) delete projected.videoDefaults;
+    if (projectEmbedding) delete projected.embeddingDefaults;
     if (videoDefaults) projected.videoDefaults = videoDefaults;
     changed = true;
     return projected;

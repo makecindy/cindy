@@ -66,6 +66,13 @@ export interface CatalogIO {
 
 export type CatalogLoadSource = 'local' | 'remote' | 'cache' | 'bundled';
 export type CatalogCapabilityEvidence = 'current' | 'fallback';
+export type CatalogXdMediaKind = 'image' | 'video' | 'embedding';
+
+const ALL_XD_MEDIA_KINDS: readonly CatalogXdMediaKind[] = [
+  'image',
+  'video',
+  'embedding',
+];
 
 export interface CatalogLoadResult {
   catalog: Catalog;
@@ -76,6 +83,18 @@ export interface CatalogLoadResult {
    * which may keep compatibility metadata but cannot prove current regional availability.
    */
   capabilityEvidence: CatalogCapabilityEvidence;
+  /**
+   * XD media fields inherited from the bundled compatibility catalog rather than
+   * explicitly supplied by the current source. These fields still need the regional
+   * fallback projection even when the rest of the snapshot has current evidence.
+   */
+  unverifiedXdMediaKinds: readonly CatalogXdMediaKind[];
+}
+
+function unverifiedXdMediaKindsForPrimary(primary: Catalog): readonly CatalogXdMediaKind[] {
+  const xd = primary.providers.find((provider) => provider.id === 'xd');
+  if (!xd) return ALL_XD_MEDIA_KINDS;
+  return xd.embeddingModels === undefined ? ['embedding'] : [];
 }
 
 // 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
@@ -422,6 +441,7 @@ export async function loadCatalogWithSource(
           catalog: mergeWithBundled(parsed),
           source: 'local',
           capabilityEvidence: 'current',
+          unverifiedXdMediaKinds: unverifiedXdMediaKindsForPrimary(parsed),
         };
       }
     } catch (err) {
@@ -517,6 +537,10 @@ export async function loadCatalogWithSource(
             catalog: mergeWithBundled(parsed),
             source: 'remote',
             capabilityEvidence,
+            unverifiedXdMediaKinds:
+              capabilityEvidence === 'current'
+                ? unverifiedXdMediaKindsForPrimary(parsed)
+                : ALL_XD_MEDIA_KINDS,
           };
         } catch (err) {
           log(io, 'warn', 'remote catalog read/parse failed, trying fallback', {
@@ -539,6 +563,7 @@ export async function loadCatalogWithSource(
               catalog: mergeWithBundled(parsed),
               source: 'cache',
               capabilityEvidence: 'fallback',
+              unverifiedXdMediaKinds: ALL_XD_MEDIA_KINDS,
             };
           }
         } catch (err) {
@@ -557,6 +582,7 @@ export async function loadCatalogWithSource(
     catalog: BUNDLED_CATALOG,
     source: 'bundled',
     capabilityEvidence: 'fallback',
+    unverifiedXdMediaKinds: ALL_XD_MEDIA_KINDS,
   };
 }
 

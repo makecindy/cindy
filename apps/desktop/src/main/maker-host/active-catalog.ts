@@ -33,6 +33,7 @@ import {
   type AgentKind,
   type Catalog,
   type CatalogCapabilityEvidence,
+  type CatalogXdMediaKind,
   type CatalogModel,
   type CustomProviderConfig,
   type Provider,
@@ -65,6 +66,12 @@ import {
 let base: Catalog | null = null;
 /** 当前基础目录是否由本次配置的 Catalog 真源明确证明；fallback 只保兼容元数据。 */
 let baseCapabilityEvidence: CatalogCapabilityEvidence = 'fallback';
+/** XD media fields inherited from bundled rather than proven by the current source. */
+let baseUnverifiedXdMediaKinds: ReadonlySet<CatalogXdMediaKind> = new Set([
+  'image',
+  'video',
+  'embedding',
+]);
 /** Last trusted Registry used only to re-project user configs; it never changes catalog membership. */
 let trustedCustomProviderRegistry: Catalog['modelRegistry'] = BUNDLED_CATALOG.modelRegistry;
 /** 用户自定义供应商(已 buildUserProvider 展开的标准 Provider),追加在 base 之后。 */
@@ -685,7 +692,11 @@ function computeMerged(): Catalog {
   const source = base ?? BUNDLED_CATALOG;
   const b =
     baseCapabilityEvidence === 'current'
-      ? source
+      ? projectUnverifiedCatalogFallbackForBuildRegion(
+          source,
+          CURRENT_CINDY_REGION,
+          baseUnverifiedXdMediaKinds,
+        )
       : projectUnverifiedCatalogFallbackForBuildRegion(source, CURRENT_CINDY_REGION);
   // Dynamic OpenAI/Anthropic roots are rebuilt from discovery/registry below,
   // but the daily OSS catalog may carry sparse PI protocol annotations. Keep
@@ -728,7 +739,11 @@ function computeMerged(): Catalog {
   // mergeWithBundled 后通常不会发生）才回落与 evidence 同级安全的 bundled 壳。
   const fallbackXdCatalog =
     baseCapabilityEvidence === 'current'
-      ? BUNDLED_CATALOG
+      ? projectUnverifiedCatalogFallbackForBuildRegion(
+          BUNDLED_CATALOG,
+          CURRENT_CINDY_REGION,
+          baseUnverifiedXdMediaKinds,
+        )
       : projectUnverifiedCatalogFallbackForBuildRegion(BUNDLED_CATALOG, CURRENT_CINDY_REGION);
   const catalogXd = b.providers.find((provider) => provider.id === 'xd');
   const xdShell =
@@ -1027,13 +1042,16 @@ export function getCatalogModelContextWindow(
 function installActiveCatalog(
   catalog: Catalog,
   capabilityEvidence: CatalogCapabilityEvidence,
+  unverifiedXdMediaKinds: readonly CatalogXdMediaKind[],
   force: boolean,
 ): boolean {
   const previous = base ?? BUNDLED_CATALOG;
+  const nextUnverifiedXdMediaKinds = new Set(unverifiedXdMediaKinds);
   if (
     !force &&
     base !== null &&
     baseCapabilityEvidence === capabilityEvidence &&
+    isDeepStrictEqual(baseUnverifiedXdMediaKinds, nextUnverifiedXdMediaKinds) &&
     isDeepStrictEqual(base, catalog)
   ) {
     return false;
@@ -1043,6 +1061,7 @@ function installActiveCatalog(
   trustedCustomProviderRegistry = projectionRegistry;
   base = catalog;
   baseCapabilityEvidence = capabilityEvidence;
+  baseUnverifiedXdMediaKinds = nextUnverifiedXdMediaKinds;
   if (customConfigs) {
     custom = customConfigs.map((config) =>
       buildUserProvider(config, { modelRegistry: projectionRegistry }),
@@ -1054,9 +1073,19 @@ function installActiveCatalog(
 
 export function setActiveCatalog(
   catalog: Catalog,
-  options: { capabilityEvidence?: CatalogCapabilityEvidence } = {},
+  options: {
+    capabilityEvidence?: CatalogCapabilityEvidence;
+    unverifiedXdMediaKinds?: readonly CatalogXdMediaKind[];
+  } = {},
 ): void {
-  installActiveCatalog(catalog, options.capabilityEvidence ?? 'current', true);
+  const capabilityEvidence = options.capabilityEvidence ?? 'current';
+  installActiveCatalog(
+    catalog,
+    capabilityEvidence,
+    options.unverifiedXdMediaKinds ??
+      (capabilityEvidence === 'fallback' ? ['image', 'video', 'embedding'] : []),
+    true,
+  );
 }
 
 /**
@@ -1066,9 +1095,19 @@ export function setActiveCatalog(
  */
 export function commitActiveCatalogSnapshot(
   catalog: Catalog,
-  options: { capabilityEvidence?: CatalogCapabilityEvidence } = {},
+  options: {
+    capabilityEvidence?: CatalogCapabilityEvidence;
+    unverifiedXdMediaKinds?: readonly CatalogXdMediaKind[];
+  } = {},
 ): boolean {
-  return installActiveCatalog(catalog, options.capabilityEvidence ?? 'current', false);
+  const capabilityEvidence = options.capabilityEvidence ?? 'current';
+  return installActiveCatalog(
+    catalog,
+    capabilityEvidence,
+    options.unverifiedXdMediaKinds ??
+      (capabilityEvidence === 'fallback' ? ['image', 'video', 'embedding'] : []),
+    false,
+  );
 }
 
 /**
@@ -1081,7 +1120,10 @@ export function commitActiveCatalogSnapshot(
  */
 export function commitModelPlaneFromCatalog(
   catalog: Catalog,
-  options: { capabilityEvidence?: CatalogCapabilityEvidence } = {},
+  options: {
+    capabilityEvidence?: CatalogCapabilityEvidence;
+    unverifiedXdMediaKinds?: readonly CatalogXdMediaKind[];
+  } = {},
 ): void {
   const current = base ?? BUNDLED_CATALOG;
   const incomingXai = catalog.providers.find((provider) => provider.id === 'xai');
@@ -1096,6 +1138,11 @@ export function commitModelPlaneFromCatalog(
     ...(catalog.modelRegistry ? { modelRegistry: catalog.modelRegistry } : {}),
   };
   baseCapabilityEvidence = options.capabilityEvidence ?? 'current';
+  if (options.unverifiedXdMediaKinds !== undefined) {
+    baseUnverifiedXdMediaKinds = new Set(options.unverifiedXdMediaKinds);
+  } else if (baseCapabilityEvidence === 'fallback') {
+    baseUnverifiedXdMediaKinds = new Set(['image', 'video', 'embedding']);
+  }
   if (customConfigs) {
     custom = customConfigs.map((config) =>
       buildUserProvider(config, { modelRegistry: trustedCustomProviderRegistry }),

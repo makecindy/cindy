@@ -33,6 +33,7 @@ import {
   type Catalog,
   type CatalogCapabilityEvidence,
   type CatalogIO,
+  type CatalogLoadResult,
   type CatalogSourceConfig,
 } from '@cindy/model-providers';
 
@@ -480,12 +481,18 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
     // 首次加载时顺手清掉旧版磁盘缓存孤儿（fire-and-forget，每进程一次）。
     void cleanupLegacyCatalogCache();
     let capabilityEvidence: CatalogCapabilityEvidence = 'fallback';
+    let unverifiedXdMediaKinds: CatalogLoadResult['unverifiedXdMediaKinds'] = [
+      'image',
+      'video',
+      'embedding',
+    ];
     activeInflight = loadCatalog(source, io, (result) => {
       capabilityEvidence = result.capabilityEvidence;
+      unverifiedXdMediaKinds = result.unverifiedXdMediaKinds;
     })
       .then(async (catalog) => {
         activeCatalogSourceKey = sourceKey;
-        setActiveCatalog(catalog, { capabilityEvidence });
+        setActiveCatalog(catalog, { capabilityEvidence, unverifiedXdMediaKinds });
         syncLocalCatalogOverridesIntoActiveCatalog();
         getActiveCatalog();
         logModelPlaneWarnings();
@@ -548,8 +555,14 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
   broadcastReferenceModelPricing();
 
   let capabilityEvidence: CatalogCapabilityEvidence = 'fallback';
+  let unverifiedXdMediaKinds: CatalogLoadResult['unverifiedXdMediaKinds'] = [
+    'image',
+    'video',
+    'embedding',
+  ];
   const flight = loadCatalog(source, io, (result) => {
     capabilityEvidence = result.capabilityEvidence;
+    unverifiedXdMediaKinds = result.unverifiedXdMediaKinds;
   })
     .then((catalog) => {
       if (
@@ -559,7 +572,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
         return getActiveCatalog();
       }
       activeCatalogSourceKey = sourceKey;
-      setActiveCatalog(catalog, { capabilityEvidence });
+      setActiveCatalog(catalog, { capabilityEvidence, unverifiedXdMediaKinds });
       broadcastReferenceModelPricing();
       return getActiveCatalog();
     })
@@ -599,7 +612,7 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   }
   const generation = endpointReloadGeneration;
   const flight = loadCatalogWithSource(sourceConfig, io)
-    .then(({ catalog, source, capabilityEvidence }) => {
+    .then(({ catalog, source, capabilityEvidence, unverifiedXdMediaKinds }) => {
       if (source === 'bundled') {
         throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
       }
@@ -622,7 +635,10 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
           // Registry 相同不代表 provider media / presets 等完整目录相同。current
           // 来源成功时必须安装这份完整快照，不能只解除 fallback 安全投影。
           if (capabilityEvidence === 'current') {
-            commitActiveCatalogSnapshot(catalog, { capabilityEvidence });
+            commitActiveCatalogSnapshot(catalog, {
+              capabilityEvidence,
+              unverifiedXdMediaKinds,
+            });
           }
           return getActiveCatalog();
         }
@@ -645,7 +661,7 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
           return getActiveCatalog();
         }
       }
-      commitActiveCatalogSnapshot(catalog, { capabilityEvidence });
+      commitActiveCatalogSnapshot(catalog, { capabilityEvidence, unverifiedXdMediaKinds });
       // computeMerged 在这里同步完成，确保告警属于刚提交的同一代目录；不能读取
       // 上一代惰性缓存留下的 warnings。
       const activeCatalog = getActiveCatalog();

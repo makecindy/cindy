@@ -181,4 +181,31 @@ describe('provider access policy', () => {
       expect(projected.providers.find((item) => item.id === 'xai')).toBe(xai);
     }
   });
+
+  it('projects only the XD media fields that were inherited from bundled', () => {
+    const input = catalog();
+    const projected = projectUnverifiedCatalogFallbackForBuildRegion(
+      input,
+      'cn',
+      new Set(['embedding']),
+    );
+    const originalXd = input.providers.find((provider) => provider.id === 'xd');
+    const xd = projected.providers.find((provider) => provider.id === 'xd');
+
+    expect(xd?.imageModels).toEqual(originalXd?.imageModels);
+    expect(xd?.imageDefaults).toEqual(originalXd?.imageDefaults);
+    expect(xd?.videoModels).toEqual(originalXd?.videoModels);
+    expect(xd?.videoDefaults).toEqual(originalXd?.videoDefaults);
+    expect(xd?.embeddingModels).toEqual([]);
+    expect(xd?.embeddingDefaults).toBeUndefined();
+    expect(xd?.models['claude-code']?.map((model) => model.id)).toEqual([
+      'shared-model',
+      'xd-only-model',
+      'gpt-image-2',
+      'seedance-fast',
+      'seedance-pro',
+      'bytedance/seedance-2.5',
+      'happyhorse',
+    ]);
+  });
 });

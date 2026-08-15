@@ -12,7 +12,11 @@ const h = vi.hoisted(() => ({
   canUseCindyGateway: true,
   loads: [] as Array<{
     source: Record<string, unknown>;
-    resolve: (catalog: unknown, capabilityEvidence?: 'current' | 'fallback') => void;
+    resolve: (
+      catalog: unknown,
+      capabilityEvidence?: 'current' | 'fallback',
+      unverifiedXdMediaKinds?: readonly ('image' | 'video' | 'embedding')[],
+    ) => void;
   }>,
   refreshLoads: [] as Array<{
     source: Record<string, unknown>;
@@ -43,11 +47,18 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
         new Promise((resolve) => {
           h.loads.push({
             source,
-            resolve: (catalog, capabilityEvidence = 'current') => {
+            resolve: (
+              catalog,
+              capabilityEvidence = 'current',
+              unverifiedXdMediaKinds = capabilityEvidence === 'current'
+                ? []
+                : ['image', 'video', 'embedding'],
+            ) => {
               onResolved?.({
                 catalog,
                 source: capabilityEvidence === 'current' ? 'remote' : 'cache',
                 capabilityEvidence,
+                unverifiedXdMediaKinds,
               });
               resolve(catalog);
             },
@@ -534,9 +545,19 @@ describe('provider catalog realm reload', () => {
       baseUrl: 'https://model.cn.example',
       fallbackBaseUrl: 'https://legacy-build-cdn.example',
     });
-    h.loads[0]!.resolve(catalogNamed('catalog-cn-initial'));
+    h.loads[0]!.resolve(catalogNamed('catalog-cn-initial'), 'current', ['embedding']);
     await initial;
     expect(activeMarker()).toBe('catalog-cn-initial');
+    const startupXd = getDesktopSelectableCatalog().providers.find(
+      (provider) => provider.id === 'xd',
+    );
+    expect(startupXd?.imageModels).toEqual(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd')?.imageModels,
+    );
+    expect(startupXd?.videoModels).toEqual(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd')?.videoModels,
+    );
+    expect(startupXd?.embeddingModels).toEqual([]);
 
     h.endpoint = 'https://model.global.example';
     const globalReload = reloadActiveCatalogForEndpointChange();
@@ -641,13 +662,96 @@ describe('provider catalog realm reload', () => {
 
     // Restore the baseline expected by the following realm-race tests.
     h.endpoint = 'https://model.cn.example';
-    setActiveCatalog(catalogNamed('catalog-cn-latest'));
+    const reset = reloadActiveCatalogForEndpointChange();
+    h.loads.at(-1)!.resolve(catalogNamed('catalog-cn-latest'));
+    await reset;
+  });
+
+  it('keeps bundled XD backfill field-scoped across endpoint reload and refresh', async () => {
+    const inheritedAll = structuredClone(catalogNamed('current-with-bundled-xd'));
+    const inheritedXai = inheritedAll.providers.find((provider) => provider.id === 'xai');
+    if (!inheritedXai) throw new Error('expected xAI provider');
+    inheritedXai.imageModels = [
+      { id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' },
+    ];
+    inheritedXai.videoModels = [
+      { id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' },
+    ];
+
+    h.endpoint = 'https://model.cn-primary-missing-xd.example';
+    const reload = reloadActiveCatalogForEndpointChange();
+    h.loads.at(-1)!.resolve(
+      inheritedAll,
+      'current',
+      ['image', 'video', 'embedding'],
+    );
+    await reload;
+
+    const projectedAll = getDesktopSelectableCatalog();
+    const projectedAllXd = projectedAll.providers.find((provider) => provider.id === 'xd');
+    expect(projectedAllXd?.imageModels).toEqual([]);
+    expect(projectedAllXd?.embeddingModels).toEqual([]);
+    expect(projectedAllXd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
+    expect(projectedAll.providers.find((provider) => provider.id === 'xai')?.videoModels).toEqual(
+      inheritedXai.videoModels,
+    );
+
+    const inheritedEmbedding = structuredClone(inheritedAll);
+    const inheritedEmbeddingXd = inheritedEmbedding.providers.find(
+      (provider) => provider.id === 'xd',
+    );
+    if (!inheritedEmbeddingXd) throw new Error('expected XD provider');
+    inheritedEmbeddingXd.imageModels = [
+      { id: 'gateway-current-image', name: 'Gateway Current Image' },
+    ];
+    inheritedEmbeddingXd.videoModels = [
+      { id: 'gateway-current-video', name: 'Gateway Current Video' },
+    ];
+
+    const partialRefresh = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    h.refreshLoads.at(-1)!.resolve({
+      catalog: inheritedEmbedding,
+      source: 'remote',
+      capabilityEvidence: 'current',
+      unverifiedXdMediaKinds: ['embedding'],
+    });
+    await partialRefresh;
+
+    const projectedEmbedding = getDesktopSelectableCatalog().providers.find(
+      (provider) => provider.id === 'xd',
+    );
+    expect(projectedEmbedding?.imageModels).toEqual(inheritedEmbeddingXd.imageModels);
+    expect(projectedEmbedding?.videoModels).toEqual(inheritedEmbeddingXd.videoModels);
+    expect(projectedEmbedding?.embeddingModels).toEqual([]);
+
+    const evidenceUpgrade = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    h.refreshLoads.at(-1)!.resolve({
+      catalog: structuredClone(inheritedEmbedding),
+      source: 'remote',
+      capabilityEvidence: 'current',
+      unverifiedXdMediaKinds: [],
+    });
+    await evidenceUpgrade;
+
+    expect(
+      getDesktopSelectableCatalog()
+        .providers.find((provider) => provider.id === 'xd')
+        ?.embeddingModels,
+    ).toEqual(inheritedEmbeddingXd.embeddingModels);
+
+    h.endpoint = 'https://model.cn.example';
+    const reset = reloadActiveCatalogForEndpointChange();
+    h.loads.at(-1)!.resolve(catalogNamed('catalog-cn-latest'));
+    await reset;
   });
 
   it('ignores an automatic refresh response from a superseded realm', async () => {
+    const staleRefreshIndex = h.refreshLoads.length;
     const staleRefresh = refreshActiveCatalogFromSource();
     await Promise.resolve();
-    expect(h.refreshLoads[0]?.source).toMatchObject({
+    expect(h.refreshLoads[staleRefreshIndex]?.source).toMatchObject({
       baseUrl: 'https://model.cn.example',
     });
 
@@ -659,18 +763,19 @@ describe('provider catalog realm reload', () => {
     );
     await globalReload;
 
+    const currentRefreshIndex = h.refreshLoads.length;
     const currentRefresh = refreshActiveCatalogFromSource();
     await Promise.resolve();
-    expect(h.refreshLoads[1]?.source).toMatchObject({
+    expect(h.refreshLoads[currentRefreshIndex]?.source).toMatchObject({
       baseUrl: 'https://model.global.example',
     });
-    h.refreshLoads[1]!.resolve({
+    h.refreshLoads[currentRefreshIndex]!.resolve({
       catalog: catalogNamed('catalog-global-refreshed', '2026-07-31T12:30:00.000Z'),
       source: 'remote',
     });
     await currentRefresh;
 
-    h.refreshLoads[0]!.resolve({
+    h.refreshLoads[staleRefreshIndex]!.resolve({
       catalog: catalogNamed('catalog-cn-stale', '2026-07-31T13:00:00.000Z'),
       source: 'remote',
     });
