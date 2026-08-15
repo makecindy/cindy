@@ -727,9 +727,9 @@ export function onToolUseEvent(
 
   if (scope === 'turn' && getSessionDbAgentKind(sessionId) === 'codex') {
     const planUpdate = parseCodexPlanUpdate(data);
+    const currentTurnAttemptToken = _turnAttemptTokenBySession.get(sessionId);
     const turnStartedAt =
-      typeof turnAttemptToken === 'number' &&
-      _turnAttemptTokenBySession.get(sessionId) !== turnAttemptToken
+      currentTurnAttemptToken !== undefined && currentTurnAttemptToken !== turnAttemptToken
         ? undefined
         : _turnStartedAtBySession.get(sessionId);
     if (planUpdate && !backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)) {

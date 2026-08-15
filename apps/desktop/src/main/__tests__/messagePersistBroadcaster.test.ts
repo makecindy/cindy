@@ -188,7 +188,7 @@ describe('update_plan tool_use persistence', () => {
     }
   });
 
-  it('rejects an old-turn plan update after a new turn has started', async () => {
+  it('rejects an old-turn plan update without a token after a new turn has started', async () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_000_000);
@@ -210,8 +210,6 @@ describe('update_plan tool_use persistence', () => {
         },
         null,
         'turn',
-        undefined,
-        1,
       );
 
       await flushWrites();
