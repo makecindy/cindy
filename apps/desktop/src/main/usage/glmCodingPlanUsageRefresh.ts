@@ -166,6 +166,25 @@ export function createGlmCodingPlanUsageReader(
     );
   }
 
+  /**
+   * 副作用后补偿(四轮 review,Greptile 残余竞态):活体校验通过 → record/clear
+   * 完成之间还有一段 await 窗口,provider CRUD 恰在此刻落地时旧副作用仍会执行
+   * ——写回旧快照(覆盖 sync 刚清的结果)或清掉新身份刚写入的快照。副作用完成后
+   * 再验一次身份,失配则:清掉旧身份写下的东西(clearSnapshotQuiet 顺带把节流身份
+   * 重置,补偿刷新不被 180s 窗口卡住),并按当前源立即补刷。口径对齐 usageBroadcaster
+   * 段已有的「写库后世代复查 + 补偿删除」模式。
+   */
+  async function compensateIfStale(
+    providerId: string,
+    keyFingerprint: string,
+    source: GlmCodingPlanProviderSource,
+  ): Promise<void> {
+    if (await isRefreshStillCurrent(providerId, keyFingerprint, source)) return;
+    await clearSnapshotQuiet(providerId);
+    const current = await readSourceSafe(providerId);
+    if (current) void refreshWith(providerId, current);
+  }
+
   function refreshWith(
     providerId: string,
     source: GlmCodingPlanProviderSource,
@@ -208,6 +227,8 @@ export function createGlmCodingPlanUsageReader(
           } catch (clearErr) {
             deps.onRefreshError(clearErr);
           }
+          // 清完补偿:窗口期内换装则按当前源立即补刷(空清除可能误删新身份快照)。
+          await compensateIfStale(providerId, keyFingerprint, source);
           return;
         }
         if (result) {
@@ -218,6 +239,8 @@ export function createGlmCodingPlanUsageReader(
             runtimeBaseUrl: source.runtimeBaseUrl,
             platform: source.platform,
           });
+          // 写完补偿:校验→写库的 await 窗口内换装则清掉刚写的旧身份快照并补刷。
+          await compensateIfStale(providerId, keyFingerprint, source);
         }
       } catch (err) {
         if (deps.isUnauthorizedError(err)) {
@@ -227,6 +250,8 @@ export function createGlmCodingPlanUsageReader(
           if (await isRefreshStillCurrent(providerId, keyFingerprint, source)) {
             try {
               await deps.clearSnapshot(providerId);
+              // 清完补偿:401 的清快照同样可能落在换装窗口内,误删新身份快照。
+              await compensateIfStale(providerId, keyFingerprint, source);
             } catch (clearErr) {
               deps.onRefreshError(clearErr);
             }

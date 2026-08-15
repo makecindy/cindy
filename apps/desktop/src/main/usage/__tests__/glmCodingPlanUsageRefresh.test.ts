@@ -55,6 +55,10 @@ interface HarnessOptions {
   fetchError?: Error;
   /** true = fetchSnapshot 挂起,由测试用 resolveFetch / rejectFetch 手动收尾(飞行中场景)。 */
   deferFetch?: boolean;
+  /** 在 recordSnapshot 副作用内部回调(模拟"校验通过→写库完成"窗口内的 CRUD)。 */
+  recordHook?: () => void;
+  /** 在 clearSnapshot 副作用内部回调(同上,清快照窗口)。 */
+  clearHook?: () => void;
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
@@ -90,10 +94,12 @@ function makeHarness(opts: HarnessOptions = {}) {
     recordSnapshot: vi.fn(async (_id, snapshot) => {
       calls.record.push(snapshot);
       cached = snapshot;
+      opts.recordHook?.();
     }),
     clearSnapshot: vi.fn(async () => {
       calls.clear += 1;
       cached = null;
+      opts.clearHook?.();
     }),
     readCachedSnapshot: vi.fn(async () => cached),
     fingerprintKey: (key: string) => `fp-${key}`,
@@ -351,5 +357,43 @@ describe('mid-flight identity change (live currency guard, #2768 首轮 ①)', (
     const h = makeHarness({ cached: legacy as GlmCodingPlanUsageSnapshot });
     await h.reader.read(SOURCE_A.providerId);
     expect(h.calls.clear).toBe(0);
+  });
+});
+
+describe('post-side-effect compensation (四轮, Greptile 残余竞态)', () => {
+  it('clears a stale write that landed after a key change inside the record window', async () => {
+    // 校验通过 → recordSnapshot 执行中换 key:旧快照写完后必须被补偿清掉,
+    // 并立即按新 key 补刷(旧实现无补偿,旧账号余量覆盖 sync 刚清的结果)。
+    const holder: { flip?: () => void } = {};
+    const h = makeHarness({
+      deferFetch: true,
+      recordHook: () => holder.flip?.(),
+    });
+    holder.flip = () => h.setSource(SOURCE_B);
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 77, resetsAt: null } })); // A 的响应
+    await vi.waitFor(() => expect(h.calls.record).toHaveLength(2)); // A 写入 + B 补刷
+    expect(h.calls.record[0].keyFingerprint).toBe('fp-key-a'); // 旧写入确实发生过
+    expect(h.calls.record.at(-1)?.keyFingerprint).toBe('fp-key-b'); // 最终态是新 key
+    expect(h.calls.record.at(-1)?.fiveHour?.utilization).toBe(40);
+    expect(h.calls.clear).toBeGreaterThanOrEqual(1); // 旧写入被补偿清除
+  });
+
+  it('re-fetches immediately when an empty-clear wipes the new identity snapshot in the window', async () => {
+    // 空响应的清快照执行中换 key:清掉的是新身份的快照 → 补偿必须绕过节流立即补刷。
+    const holder: { flip?: () => void } = {};
+    const h = makeHarness({
+      deferFetch: true,
+      clearHook: () => holder.flip?.(),
+    });
+    holder.flip = () => h.setSource(SOURCE_B);
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.resolveFetch('empty'); // 校验时仍 A → 进入清快照;清的执行中翻到 B
+    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1)); // 补偿补刷 B
+    expect(h.calls.record[0].keyFingerprint).toBe('fp-key-b');
+    expect(h.calls.fetch).toBe(2); // 清后立即补刷,未被节流卡住
+    expect(h.calls.clear).toBeGreaterThanOrEqual(2); // 原 clear + 补偿 clear
   });
 });
