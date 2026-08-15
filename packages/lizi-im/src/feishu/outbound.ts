@@ -203,7 +203,8 @@ const deferredOpenerConsumes: DeferredOpenerConsume[] = [];
  * 容量淘汰的开场白卡 id — 条目被挤掉时其 opener 已被原子预留(不可再认领),
  * 静默删除会留下永久「思考中」卡: 记录 id, 连接恢复排空时撤回。
  */
-const MAX_EVICTED_OPENERS = 50;
+// 上限防御撤除: 每个条目只是短消息 id, 且连接恢复排空即清 — 有界淘汰会
+// 再次静默丢卡(阈值从 51 推迟到 101 而已), 不留可收口记录违背设计。
 const evictedOpeners: string[] = [];
 
 /** 账号替换时清空暂存消费(属旧账号的开场白卡, 新账号不需要)。 */
@@ -223,7 +224,6 @@ export function deferOpenerConsume(
     const evicted = deferredOpenerConsumes.shift();
     if (evicted) {
       evictedOpeners.push(evicted.openerId);
-      while (evictedOpeners.length > MAX_EVICTED_OPENERS) evictedOpeners.shift();
     }
   }
 }

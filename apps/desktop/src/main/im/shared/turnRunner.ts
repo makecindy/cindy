@@ -2854,9 +2854,16 @@ export function createTurnRunner(
             ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          await output.im.sendText(userId, '✅ (本轮无文本输出)', {
-            threadTs: state.scopeKey,
-          });
+          // 群主流 @ 开话题但本轮无流式输出: pending opener 尚未被认领 —
+          // 就地消费它(思考卡变成「无文本输出」提示), 不另发也不留卡。
+          const consumed =
+            (await output.im.consumePendingOpenerCard?.(userId, '✅ (本轮无文本输出)')) ??
+            false;
+          if (!consumed) {
+            await output.im.sendText(userId, '✅ (本轮无文本输出)', {
+              threadTs: state.scopeKey,
+            });
+          }
         }
       } catch {
         /* swallow */
