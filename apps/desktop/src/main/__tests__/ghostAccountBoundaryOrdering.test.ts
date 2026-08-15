@@ -41,4 +41,16 @@ describe('Ghost account-boundary teardown ordering', () => {
     expect(helper).toContain('nodeRuntimeBrokerSingleton = null;');
     expect(ghostIndex).toContain('resetNodeRuntimeBrokerForAccountBoundary();');
   });
+
+  it('keeps Ghost call ingress closed until the active owner DbClient is ready', () => {
+    const helperStart = ghostIndex.indexOf('function canAcceptGhostCalls(): boolean {');
+    const helperEnd = ghostIndex.indexOf('\n}', helperStart);
+    const helper = ghostIndex.slice(helperStart, helperEnd);
+
+    expect(helperStart).toBeGreaterThan(-1);
+    expect(helper).toContain('!isAppSessionBoundaryPending()');
+    expect(helper).toContain('activeOwnerId !== null');
+    expect(helper).toContain('getCurrentDbClientUserId() === activeOwnerId');
+    expect(ghostIndex).toContain('canAcceptCalls: canAcceptGhostCalls,');
+  });
 });

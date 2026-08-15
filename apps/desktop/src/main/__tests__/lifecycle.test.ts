@@ -250,6 +250,27 @@ describe('runQuitDisposers', () => {
     expect(localDb).toBeGreaterThan(dbClient);
   });
 
+  it('observes Ghost skill cleanup in the async phase instead of the sync ingress hook', () => {
+    const source = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
+    const ghostSource = readFileSync(
+      new URL('../cindy-brain/index.ts', import.meta.url),
+      'utf8',
+    );
+    const beginStart = ghostSource.indexOf('export function beginGhostShutdown(): void {');
+    const beginEnd = ghostSource.indexOf('\n}', beginStart);
+    const beginBody = ghostSource.slice(beginStart, beginEnd);
+
+    expect(beginStart).toBeGreaterThan(-1);
+    expect(beginBody).toContain('if (ghostShutdownStarted) return;');
+    expect(beginBody).toContain('stopGhostRuntimesForBoundary();');
+    expect(beginBody).not.toContain('suspendAllGhosts()');
+    expect(ghostSource).toContain(
+      'ghostShutdownCleanupPromise ??= cleanupGhostOwnerSkillLinks();',
+    );
+    expect(source).toContain("onQuit('ghost-call-ingress', beginGhostShutdown, 'sync');");
+    expect(source).toContain("onQuit('ghost-skill-links', finishGhostShutdown, 'async');");
+  });
+
   it('sync disposer that throws does not block subsequent disposers', async () => {
     const { onQuit, runQuitDisposers } = await freshLifecycle();
     const log: string[] = [];

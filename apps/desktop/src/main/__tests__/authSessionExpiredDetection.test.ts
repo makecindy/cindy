@@ -173,9 +173,15 @@ describe('desktop auth session-expiry detection', () => {
     const start = ghostSource.indexOf('export async function suspendAllGhosts(): Promise<void> {');
     const end = ghostSource.indexOf('\n}\n', start);
     const body = ghostSource.slice(start, end);
+    const cleanupStart = ghostSource.indexOf('async function cleanupGhostOwnerSkillLinks()');
+    const cleanupEnd = ghostSource.indexOf('\n}\n', cleanupStart);
+    const cleanupBody = ghostSource.slice(cleanupStart, cleanupEnd);
 
-    expect(body).toContain('await removeGhostSkillLinksForRoots(listGhostOwnerProjectionRoots())');
-    expect(body).toContain('throw new Error(`ghost owner skill cleanup incomplete');
+    expect(body).toContain('await cleanupGhostOwnerSkillLinks()');
+    expect(cleanupBody).toContain(
+      'await removeGhostSkillLinksForRoots(listGhostOwnerProjectionRoots())',
+    );
+    expect(cleanupBody).toContain('throw new Error(`ghost owner skill cleanup incomplete');
     expect(body).not.toContain('AuthBoundaryQuarantine');
 
     expect(ghostSource).toContain('await withGhostSkillProjectionReconcile(');

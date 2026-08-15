@@ -766,6 +766,7 @@ import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-
 import { registerLayoutIpc } from './layout/index.js';
 import {
   beginGhostShutdown,
+  finishGhostShutdown,
   getGhostCindySlot,
   getGhostManager,
   getGhostSessionActivityTracker,
@@ -7352,6 +7353,7 @@ onQuit(
 // Ghost 调用入口必须在 sync phase 封闭：async phase 有总预算，超时后会继续进入
 // post-async；只依赖 shutdown-maker 完成无法保证 DbClient drain 后没有新 usage 写入。
 onQuit('ghost-call-ingress', beginGhostShutdown, 'sync');
+onQuit('ghost-skill-links', finishGhostShutdown, 'async');
 onQuit('shutdown-maker', shutdownMaker, 'async');
 onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
