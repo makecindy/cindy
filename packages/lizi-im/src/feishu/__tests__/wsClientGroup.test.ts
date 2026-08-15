@@ -900,6 +900,48 @@ describe('feishu group inbound gate', () => {
     }
   });
 
+  it('stale in-flight 不丢本代收口链: 安排本代重试, 旧请求落定后送达', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockResolvedValue({ kind: 'orphaned', openerMessageId: 'om_opener' });
+      // 首次发送挂起(代次 N)。
+      let rejectOld!: (err: Error) => void;
+      mocks.replyText.mockImplementationOnce(
+        () =>
+          new Promise<{ messageId: string }>((_, reject) => {
+            rejectOld = reject;
+          }),
+      );
+      await connect();
+      const events = collectEvents();
+      const firstDelivery = mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 清凭证(代次 N+1)后同凭证重登录, 平台重投: 新 handler 加入 stale
+      // in-flight → 安排本代重试(不丢收口链)。
+      wsClient.clearOrphanRetriesForCredentialClear();
+      await wsClient.stop({ announceOffline: false, reason: 'test-relogin-stale' });
+      await connect();
+      await mocks.eventHandlers['im.message.receive_v1']!(groupMessage({}));
+      await Promise.resolve();
+      expect(mocks.replyText).toHaveBeenCalledTimes(1);
+
+      // 旧请求失败 → 旧 handler 的续段被代次拦截; 本代重试在 10s 后触发,
+      // 以当前代次重新发送并送达。
+      rejectOld(new Error('client closed'));
+      await firstDelivery;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(mocks.replyText).toHaveBeenCalledTimes(2);
+      expect(mocks.recallOwnMessage).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('queued retry is not re-armed when a different bot starts', async () => {
     vi.useFakeTimers();
     try {

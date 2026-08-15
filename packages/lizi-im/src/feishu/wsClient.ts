@@ -371,8 +371,11 @@ async function sendOrphanOpenerNotice(
     return;
   }
   if (outcome === 'stale') {
-    // 加入的 in-flight 是清凭证前创建的: 本代不推进其失败结果。
-    log.info('[feishu/wsClient] orphan opener notice joined stale in-flight — dropping continuation');
+    // 加入的 in-flight 是清凭证前创建的: 本代不推进其失败结果, 但也不能
+    // 丢掉本代收口链(事件已 ACK)— 安排本代重试, 旧请求落定后的下一次
+    // 尝试会以当前代次重新发起。
+    log.info('[feishu/wsClient] orphan opener notice joined stale in-flight — scheduling own retry');
+    scheduleOrphanNoticeRetry(botAppId, service, openerMessageId, messageId, 0);
     return;
   }
   if (outcome === 'delivered') {
@@ -495,7 +498,9 @@ async function retryOrphanOpenerNotice(
     return;
   }
   if (outcome === 'stale') {
-    log.info('[feishu/wsClient] orphan opener notice retry joined stale in-flight — dropping continuation');
+    // 同上: 不推进旧请求结果, 但保留本代重试链。
+    log.info('[feishu/wsClient] orphan opener notice retry joined stale in-flight — scheduling own retry');
+    scheduleOrphanNoticeRetry(botAppId, service, openerMessageId, messageId, attempt);
     return;
   }
   if (outcome === 'delivered') {
