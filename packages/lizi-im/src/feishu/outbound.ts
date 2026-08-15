@@ -173,6 +173,31 @@ export function claimPatchableOpener(laneUserId: string): string | null {
 }
 
 /**
+ * 重连空窗(outbound client 已解绑)时到达的开场白卡消费暂存 — 同账号重连后
+ * 由 FeishuIM 排空(见 drainDeferredOpenerConsumes): 若此时直接认领, 后续
+ * patch/撤回全部失败且注册被永久移除; 若完全放弃, 本轮终态丢失且注册残留
+ * 会被下一条消息误认领。上限防御, 超限丢最旧。
+ */
+export type DeferredOpenerConsume =
+  | { userId: string; markdown: string }
+  | { userId: string; spec: InteractiveCardSpec };
+
+const MAX_DEFERRED_OPENER_CONSUMES = 50;
+const deferredOpenerConsumes: DeferredOpenerConsume[] = [];
+
+export function deferOpenerConsume(entry: DeferredOpenerConsume): void {
+  deferredOpenerConsumes.push(entry);
+  while (deferredOpenerConsumes.length > MAX_DEFERRED_OPENER_CONSUMES) {
+    deferredOpenerConsumes.shift();
+  }
+}
+
+/** 取出全部暂存的消费(清空), 调用方在连接就绪后排空。 */
+export function drainDeferredOpenerConsumes(): DeferredOpenerConsume[] {
+  return deferredOpenerConsumes.splice(0, deferredOpenerConsumes.length);
+}
+
+/**
  * patch/替换失败撤回开场白卡后调用: 把 held 锚点回拨到触发消息(带
  * reply_in_thread 标记)。兜底发送向触发消息 reply 且 reply_in_thread=true,
  * 仍落回话题 — 而不是向已删除的开场白卡 reply 失败。无触发记录返回 false。

@@ -39,9 +39,42 @@ import { downloadAttachments, type DownloadResult } from './attachmentDownloader
 import type { AttachmentRef } from './incomingContent.js';
 
 export class FeishuIM extends BaseIM implements ChannelIM {
+  /** 重连空窗暂存的开场白卡消费在连接就绪后排空(见 deferOpenerConsume)。 */
+  private readonly offImStatus: () => void;
+
   constructor(host: IMHost) {
     super('feishu', host);
     setHost(host, this.log);
+    const onImStatus = (status: IMStatus) => {
+      if (status.kind !== 'connected') return;
+      void this.flushDeferredOpenerConsumes();
+    };
+    feishuEvents.on('imStatus', onImStatus);
+    this.offImStatus = () => feishuEvents.off('imStatus', onImStatus);
+  }
+
+  /** 排空重连空窗暂存的开场白卡消费(claim + patch/替换), 失败只 log。 */
+  private async flushDeferredOpenerConsumes(): Promise<void> {
+    if (!outbound.getBoundClient()) return;
+    const pending = outbound.drainDeferredOpenerConsumes();
+    for (const entry of pending) {
+      const openerId = outbound.claimPatchableOpener(entry.userId);
+      if (!openerId) continue; // 已被后续轮次消费/无 pending
+      try {
+        if ('markdown' in entry) {
+          await streamingText.patchMarkdown(openerId, entry.markdown);
+        } else {
+          await outbound.updateInteractive(openerId, entry.spec);
+          outbound.registerCardLane(entry.userId, openerId);
+        }
+      } catch (err) {
+        // patch/替换失败: 与即时消费同口径 — 撤回开场白卡并回拨锚点。
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.warn(`flushDeferredOpenerConsumes failed: ${msg}`);
+        await outbound.recallOwnMessage(openerId);
+        outbound.rearmAnchorToTrigger(entry.userId);
+      }
+    }
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────────
@@ -72,6 +105,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
 
   async dispose(): Promise<void> {
     this.log.info('dispose');
+    this.offImStatus();
     cancelAppRegistration();
     await wsClient.stop({
       offlineTimeoutMs: wsClient.QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS,
@@ -145,10 +179,14 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * false(调用方走正常发送)。
    */
   async consumePendingOpenerCard(userId: string, markdown: string): Promise<boolean> {
-    // 重连空窗(stop→start 之间 client 已解绑)不认领: 认领会永久移除 opener,
-    // 而 patch/撤回/兜底发送此时全部失败 — 保留注册让同账号重连后的下一轮
-    // 仍可消费; 本轮回复本来也无法发出(无 client), 由调用方回落路径收口。
-    if (!outbound.getBoundClient()) return false;
+    // 重连空窗(stop→start 之间 client 已解绑): 暂存消费, 连接就绪后由
+    // flushDeferredOpenerConsumes 排空(claim + patch)— 不认领(注册保留)、
+    // 也不让本轮终态丢失或残留被下一条消息误认领。返回 true 让调用方跳过
+    // 注定失败的兜底发送。
+    if (!outbound.getBoundClient()) {
+      outbound.deferOpenerConsume({ userId, markdown });
+      return true;
+    }
     const openerId = outbound.claimPatchableOpener(userId);
     if (!openerId) return false;
     // 触发时的 client — patch 失败后撤回必须 pin 到它: 中途换凭证时不得
@@ -180,8 +218,11 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * opener 返回 false(调用方走正常发卡)。
    */
   async consumePendingOpenerAsCard(userId: string, spec: InteractiveCardSpec): Promise<boolean> {
-    // 同 consumePendingOpenerCard: 重连空窗不认领, 保留注册给重连后消费。
-    if (!outbound.getBoundClient()) return false;
+    // 同 consumePendingOpenerCard: 重连空窗暂存, 连接就绪后排空。
+    if (!outbound.getBoundClient()) {
+      outbound.deferOpenerConsume({ userId, spec });
+      return true;
+    }
     const openerId = outbound.claimPatchableOpener(userId);
     if (!openerId) return false;
     // 同 consumePendingOpenerCard: 撤回 pin 到触发时的 client。
