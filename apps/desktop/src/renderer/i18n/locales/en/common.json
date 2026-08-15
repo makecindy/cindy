@@ -2524,6 +2524,9 @@
     },
     "piPackages": {
       "title": "Pi extensions",
+      "entryTitle": "Pi extension settings",
+      "entryDescription": "Install, enable, or uninstall extensions for Cindy's Pi",
+      "backToGeneral": "Back to General",
       "description": "Extensions stay in Cindy on this device. Any ordinary Pi task executed here can use them, even when started from a phone or another connected client. Review does not load them.",
       "installSectionTitle": "Install an extension",
       "installSectionDescription": "Paste the install source from a pi.dev page, or enter an npm package name, Git URL, or local path.",

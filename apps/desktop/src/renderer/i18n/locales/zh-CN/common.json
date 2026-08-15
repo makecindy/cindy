@@ -2523,6 +2523,9 @@
     },
     "piPackages": {
       "title": "Pi 扩展",
+      "entryTitle": "Pi 扩展设置",
+      "entryDescription": "安装、启用或卸载 Cindy 的 Pi 扩展",
+      "backToGeneral": "返回通用",
       "description": "扩展只安装并运行在这台设备的 Cindy 中，不会传到手机或其他控制端。无论任务从哪里发起，只要由这台设备的普通 Pi 执行都会生效；Review 不加载。",
       "installSectionTitle": "安装扩展",
       "installSectionDescription": "粘贴 pi.dev 页面上的安装来源，或输入 npm 包名、Git 地址、本地路径。",
