@@ -100,6 +100,10 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       // 时, 剩余条目不得经新 client 修改旧账号的开场白 — 直接丢弃整批。
       if (outbound.getAccountEpoch() !== epoch) {
         this.log.info('flushDeferredOpenerConsumes: account changed — dropping remaining entries');
+        // 换代后剩余条目的 flushInFlight 登记必须清除 — 否则重新登录
+        // 原账号后 sendWithDeferredOpenerConsume 会命中残留条目, 导致
+        // 后续正常发送静默返回旧 opener id 而不实际发送。
+        this.flushInFlight.clear();
         break;
       }
       // 条目在暂存时就原子预留了 opener(携带 id)— 排空直接使用, 不会被
@@ -440,6 +444,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       ) {
         this.log.warn('sendWithDeferredOpenerConsume final send failed across reconnect (re-deferred)');
         outbound.deferOpenerConsume(entry);
+        // 保持连接时不会再次触发 connected — 主动安排延迟排空, 避免
+        // 条目无限期滞留。
+        this.scheduleFlushReArm();
       }
       throw sendErr;
     }
