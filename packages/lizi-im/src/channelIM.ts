@@ -149,6 +149,13 @@ export interface RichChannelIM extends TextChannelIM {
    * 实现。
    */
   consumePendingOpenerAsCard?(userId: string, spec: InteractiveCardSpec): Promise<boolean>;
+
+  /**
+   * 返回该 lane 上 pending opener 的触发消息 id(没有则返回 undefined)。
+   * 调用方用它判断「这张思考卡是不是本轮消息创建的」— 空文本终态等场景下
+   * 不应消费上一轮遗留的 opener。
+   */
+  getPendingOpenerTrigger?(userId: string): string | undefined;
 }
 
 /** Backward-compatible name for the existing rich-card channel contract. */

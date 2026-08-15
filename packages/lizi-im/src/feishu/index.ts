@@ -42,6 +42,24 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   /** 重连空窗暂存的开场白卡消费在连接就绪后排空(见 deferOpenerConsume)。 */
   private readonly offImStatus: () => void;
 
+  /** 排空中条目 openerId → entry — 兜底发送据此发现「条目已被 drain 但尚未
+   * 落定」, 避免 connected 事件与兜底之间的竞态导致重复呈现同一终态。 */
+  private readonly flushInFlight = new Map<string, outbound.DeferredOpenerConsume>();
+
+  /**
+   * 排空失败后重新入队的条目在保持连接时不会再次触发 connected — 调度延迟
+   * 排空自愈, 避免条目无限期滞留。
+   */
+  private flushReArmTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private scheduleFlushReArm(): void {
+    if (this.flushReArmTimer) return;
+    this.flushReArmTimer = setTimeout(() => {
+      this.flushReArmTimer = null;
+      void this.flushDeferredOpenerConsumes();
+    }, 100);
+  }
+
   constructor(host: IMHost) {
     super('feishu', host);
     setHost(host, this.log);
@@ -61,6 +79,12 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     if (!pinnedClient) return;
     const pending = outbound.drainDeferredOpenerConsumes();
     const epoch = outbound.getAccountEpoch();
+    // 排空中条目登记: 兜底发送(sendWithDeferredOpenerConsume)据此发现
+    // 「条目已被 drain 但尚未落定」, 避免 connected 事件与兜底之间的
+    // 竞态导致重复呈现同一终态。
+    for (const entry of pending) {
+      this.flushInFlight.set(entry.userId, entry);
+    }
     // 容量淘汰的开场白卡: 撤回它们(条目没了, 但卡还在话题里 — 不撤回就是
     // 永久「思考中」)。撤回经 pinnedClient, 失败只 log。
     for (const evictedId of outbound.drainEvictedOpeners()) {
@@ -97,6 +121,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         // 不得经新账号 client 呈现 — 跨账号红线)。
         if (outbound.getAccountEpoch() !== epoch) {
           this.log.info('flushDeferredOpenerConsumes: account changed — dropping entry');
+          this.flushInFlight.delete(entry.userId);
           continue;
         }
         // 撤回始终 pin 到排空开始时的 client — 同账号再次重连(而非换账号)
@@ -107,9 +132,13 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         // 旧账号终态不得经新 client 呈现(跨账号红线)。
         if (outbound.getAccountEpoch() !== epoch) {
           this.log.info('flushDeferredOpenerConsumes: account changed during recall — dropping entry');
+          this.flushInFlight.delete(entry.userId);
           continue;
         }
         outbound.rearmAnchorToTrigger(entry.userId);
+        // 排空自己的兜底发送不应被 flushInFlight 检查拦截 — 先清除登记,
+        // 让 sendWithDeferredOpenerConsume 走正常发信路径。
+        this.flushInFlight.delete(entry.userId);
         try {
           if ('markdown' in entry) {
             await this.sendMarkdownText(entry.userId, entry.markdown);
@@ -118,17 +147,19 @@ export class FeishuIM extends BaseIM implements ChannelIM {
           }
         } catch (sendErr) {
           // 兜底发送也失败(排空期间再次重连): 条目已 drain, 重新入队 —
-          // 下一次 connected 排空重试, 终态不会因一次失败永久丢失。但清
-          // 凭证(账号代次变化)后不得重新入队 — 否则登出前的终态会被重新
-          // 呈现给新一轮会话。
+          // 下一次 connected 排空重试, 终态不会因一次失败永久丢失。保持
+          // 连接的条目不会再次触发 connected — 调度延迟排空自愈。
           const sendMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
           if (outbound.getAccountEpoch() === epoch) {
             this.log.warn(`flushDeferredOpenerConsumes fallback send failed (re-deferred): ${sendMsg}`);
             outbound.deferOpenerConsume(entry);
+            this.scheduleFlushReArm();
           } else {
             this.log.info('flushDeferredOpenerConsumes: credentials cleared — dropping entry');
           }
         }
+      } finally {
+        this.flushInFlight.delete(entry.userId);
       }
     }
   }
@@ -318,6 +349,10 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     }
   }
 
+  getPendingOpenerTrigger(userId: string): string | undefined {
+    return outbound.getOpenerTrigger(userId);
+  }
+
   async sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
@@ -341,6 +376,17 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     const epoch = outbound.getAccountEpoch();
     const clientAtTake = outbound.getBoundClient();
     const entry = outbound.takeMatchingDeferredOpenerConsume(userId, kind);
+    // 兜底发送与 connected 排空竞态: 条目已被 drain 但尚未落定(在排空循环
+    // 中)— 此时 patch 正在进行, 兜底不应另发导致重复。登记了 openerId 的
+    // 条目在 flushInFlight 中, 兜底把它当已消费处理。
+    if (!entry) {
+      // 兜底发送与 connected 排空竞态: 条目已被 drain 但尚未落定(在排空
+      // 循环中)— 此时 patch 正在进行, 兜底不应另发导致重复。
+      const inFlight = this.flushInFlight.get(userId);
+      if (inFlight) {
+        return { messageId: inFlight.openerId };
+      }
+    }
     if (entry) {
       if (entry.epoch !== epoch) {
         // 条目属于旧账号: 丢弃(不得跨账号 patch/撤回/发送), 调用方内容
