@@ -19,7 +19,9 @@ const mocks = {
   sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
   replyText: vi.fn(async () => ({ messageId: 'om_reply' })),
   openThread: vi.fn(
-    async (): Promise<
+    async (
+      _messageId?: string,
+    ): Promise<
       | { kind: 'opened'; messageId: string; threadId: string }
       | { kind: 'degraded' }
       | { kind: 'orphaned'; openerMessageId: string }
@@ -369,6 +371,36 @@ describe('feishu group inbound gate', () => {
       // 重试耗尽: 撤回开场白卡, 用户看到干净群主流而不是永久「思考中」卡。
       expect(mocks.recallOwnMessage).toHaveBeenCalledWith('om_opener');
       expect(events).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stop 挂起超过 100 条孤儿收口链后同账号重连仍恢复最早一条', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.openThread.mockImplementation(async (messageId?: string) => ({
+        kind: 'orphaned' as const,
+        openerMessageId: `om_opener_${messageId ?? 'x'}`,
+      }));
+      mocks.replyText.mockRejectedValue(new Error('persistent outage'));
+      await connect();
+
+      for (let i = 0; i < 101; i += 1) {
+        await mocks.eventHandlers['im.message.receive_v1']!(
+          groupMessage({ messageId: `om_msg_${i}`, text: `@_user_1 孤儿${i}` }),
+        );
+      }
+
+      await wsClient.stop({ announceOffline: false, reason: 'same-account-reconnect' });
+      await connect();
+      mocks.replyText.mockClear();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.replyText).toHaveBeenCalledWith(
+        'om_opener_om_msg_0',
+        expect.any(String),
+      );
     } finally {
       vi.useRealTimers();
     }

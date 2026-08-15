@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
     updateInteractiveCard: vi.fn(),
     consumePendingOpenerCard: vi.fn(),
     getPendingOpenerTrigger: vi.fn(),
+    takeNotedFallbackOpenerId: vi.fn(),
   },
   getMaker: vi.fn(),
   listProviders: vi.fn(),
@@ -421,6 +422,7 @@ interface TurnOverrides {
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
   prePersistedUserMessage?: { sessionId: string; clientId: string };
+  onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
 }
 
 async function runDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrides = {}) {
@@ -443,6 +445,7 @@ async function startDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrid
     ...(overrides.prePersistedUserMessage
       ? { prePersistedUserMessage: overrides.prePersistedUserMessage }
       : {}),
+    ...(overrides.onEarlyReject ? { onEarlyReject: overrides.onEarlyReject } : {}),
   });
   return { onTurnComplete, turnPromise };
 }
@@ -546,6 +549,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.feishuIm.sendMarkdownText.mockResolvedValue(undefined);
     mocks.feishuIm.consumePendingOpenerCard.mockResolvedValue(false);
     mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue(undefined);
+    mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue(undefined);
     mocks.feishuIm.startStreamingText.mockResolvedValue({
       messageId: 'stream-1',
       append: vi.fn(),
@@ -1396,6 +1400,28 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
     expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledTimes(1);
     expect(mocks.feishuIm.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('早期拒绝兜底发送认领暂存 opener, 避免排空后再发一份', async () => {
+    setupSession(async () => ({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+    }));
+    mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue('om_deferred');
+    await runDefaultTurn(vi.fn(), {
+      onEarlyReject: async () => false,
+    });
+    await flushMicrotasks();
+
+    expect(mocks.feishuIm.takeNotedFallbackOpenerId).toHaveBeenCalledWith(
+      'ou_user',
+      'markdown',
+    );
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+      'ou_user',
+      expect.stringContaining('启动 agent 失败'),
+      expect.objectContaining({ fallbackOpenerId: 'om_deferred' }),
+    );
   });
 
   it('group history lease: live during the turn, released at terminal', async () => {
@@ -3091,6 +3117,46 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         'ou_user',
         expect.stringContaining('本轮无文本输出'),
         expect.anything(),
+      );
+    });
+  });
+
+  it('无文本输出兜底发送认领暂存 opener', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));
+    mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue('msg-user');
+    mocks.feishuIm.consumePendingOpenerCard.mockResolvedValue(false);
+    mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue('om_deferred');
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    await runDefaultTurn(onTurnComplete);
+    h.emit({
+      type: 'tool_use',
+      data: { name: 'Bash', input: { command: 'ls' } },
+      source: 'claude-code',
+    });
+    await flushMicrotasks();
+    h.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+        'ou_user',
+        expect.stringContaining('本轮无文本输出'),
+        expect.objectContaining({ fallbackOpenerId: 'om_deferred' }),
+      );
+    });
+  });
+
+  it('错误收口兜底发送认领暂存 opener', async () => {
+    mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue('msg-user');
+    mocks.feishuIm.consumePendingOpenerCard.mockResolvedValue(false);
+    mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue('om_deferred');
+    const h = setupSession(async () => ({ accepted: true }));
+    await runDefaultTurn();
+    h.emit({ type: 'error', data: { message: 'boom', isTerminal: true } });
+    await waitForAssertion(() => {
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+        'ou_user',
+        expect.stringMatching(/❌ 错误：.*boom/),
+        expect.objectContaining({ fallbackOpenerId: 'om_deferred' }),
       );
     });
   });

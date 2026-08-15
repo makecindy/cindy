@@ -161,8 +161,6 @@ interface SuspendedOrphanRetry {
 }
 const suspendedOrphanRetries: SuspendedOrphanRetry[] = [];
 
-const MAX_SUSPENDED_ORPHAN_RETRIES = 100;
-
 /**
  * 该 opener 的尝试预算天花板(opener → 最高 attempt, 只增不减, 跨链保持)。
  * 重投失败路径原本会用 attempt 0 覆盖更先进的重试链 — 反复重连+重投会把
@@ -182,7 +180,7 @@ function bumpOrphanAttemptCeiling(openerMessageId: string, attempt: number): num
   return ceiling;
 }
 
-/** 挂起一个排队重试(按 opener 去重, 预算续接天花板, 有界淘汰最旧)。 */
+/** 挂起一个排队重试(按 opener 去重, 预算续接天花板)。 */
 function suspendOrphanRetry(entry: SuspendedOrphanRetry): void {
   entry.attempt = bumpOrphanAttemptCeiling(entry.openerMessageId, entry.attempt);
   for (let i = suspendedOrphanRetries.length - 1; i >= 0; i--) {
@@ -190,10 +188,9 @@ function suspendOrphanRetry(entry: SuspendedOrphanRetry): void {
       suspendedOrphanRetries.splice(i, 1);
     }
   }
+  // 不设容量帽: 每条都是尚未终态化的孤儿收口链, 事件已 ACK。
+  // 静默 shift 最早一条会让重连后既不提示也不撤回, 用户永久看到「思考中」。
   suspendedOrphanRetries.push(entry);
-  while (suspendedOrphanRetries.length > MAX_SUSPENDED_ORPHAN_RETRIES) {
-    suspendedOrphanRetries.shift();
-  }
 }
 
 /**

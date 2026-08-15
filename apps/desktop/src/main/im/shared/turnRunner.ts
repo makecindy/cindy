@@ -520,6 +520,19 @@ export function createTurnRunner(
 ): ImTurnRunner {
   const { im, output, ui, channel } = adapter;
   const richIm = output.kind === 'rich-card' ? output.im : null;
+
+  function sendTextClaimingOpener(
+    userId: string,
+    text: string,
+    threadTs: string | undefined,
+  ): Promise<{ messageId: string }> {
+    const fallbackOpenerId = richIm?.takeNotedFallbackOpenerId?.(userId, 'markdown');
+    return im.sendText(userId, text, {
+      threadTs,
+      ...(fallbackOpenerId ? { fallbackOpenerId } : {}),
+    });
+  }
+
   /** 过程区耗时显示的低频刷新(5s)— 单个长工具调用期间状态行不冻结。 */
   const ACTIVITY_TICK_MS = 5_000;
 
@@ -2553,9 +2566,7 @@ export function createTurnRunner(
               errorCode: failure.reason,
             });
           } else {
-            await im.sendText(userId, message, {
-              threadTs: state.scopeKey,
-            });
+            await sendTextClaimingOpener(userId, message, state.scopeKey);
           }
         }
         // 群会话「完全访问」档被强确认策略拒绝: 报错文案之外, 再给 owner
@@ -2865,9 +2876,7 @@ export function createTurnRunner(
                 false)
               : false;
           if (!consumed) {
-            await output.im.sendText(userId, '✅ (本轮无文本输出)', {
-              threadTs: state.scopeKey,
-            });
+            await sendTextClaimingOpener(userId, '✅ (本轮无文本输出)', state.scopeKey);
           }
         }
       } catch {
@@ -2980,9 +2989,7 @@ export function createTurnRunner(
               ? ((await output.im.consumePendingOpenerCard?.(userId, errorText)) ?? false)
               : false;
           if (!consumed) {
-            await output.im.sendText(userId, errorText, {
-              threadTs: state.scopeKey,
-            });
+            await sendTextClaimingOpener(userId, errorText, state.scopeKey);
           }
         }
       } catch {
