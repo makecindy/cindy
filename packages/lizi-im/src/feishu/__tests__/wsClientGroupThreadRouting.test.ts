@@ -160,6 +160,7 @@ beforeEach(async () => {
   // 去重账本按设计跨 stop/start 保留, 用例之间必须显式清掉才能复用同一个
   // message_id。
   wsClient.resetInboundDedupeForTest();
+  wsClient.resetOrphanRetriesForTest();
   mocks.options.length = 0;
   mocks.eventHandlers = {};
   vi.clearAllMocks();
@@ -170,7 +171,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await wsClient.stop({ announceOffline: false, reason: 'test-cleanup' });
+  wsClient.resetOrphanRetriesForTest();
   feishuEvents.removeAllListeners('message');
+  vi.useRealTimers();
 });
 
 beforeAll(async () => {
@@ -252,7 +255,7 @@ describe('feishu group thread routing', () => {
     expect(events[0].groupContextLane).toBeUndefined();
   });
 
-  it('开话题回执不确定时不起 turn、不降级群主流', async () => {
+  it('开话题回执不确定时立刻不起 turn、不降级, 也不释放认领', async () => {
     mocks.openThread.mockResolvedValueOnce({ kind: 'unconfirmed' });
     const events = collectMessages();
     await connect();
@@ -261,6 +264,46 @@ describe('feishu group thread routing', () => {
 
     expect(events).toHaveLength(0);
     expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
-    expect(mocks.evictOpenThreadOutcome).toHaveBeenCalledWith('om_msg1');
+    expect(mocks.evictOpenThreadOutcome).not.toHaveBeenCalled();
+  });
+
+  it('回执不确定后定时用同一 uuid 取回 opened, 再发出话题 turn', async () => {
+    vi.useFakeTimers();
+    mocks.openThread
+      .mockResolvedValueOnce({ kind: 'unconfirmed' })
+      .mockResolvedValueOnce({ kind: 'opened', messageId: 'om_recovered', threadId: 'omt_rec' });
+    const events = collectMessages();
+    await connect();
+
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('回执不确定后恢复'));
+    expect(events).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledTimes(2);
+    expect(mocks.openThread).toHaveBeenLastCalledWith('om_msg1');
+    expect(events).toHaveLength(1);
+    expect(events[0].senderId).toBe('g/oc_chat1/omt_rec');
+    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith(
+      'g/oc_chat1/omt_rec',
+      'om_recovered',
+      'om_msg1',
+    );
+    vi.useRealTimers();
+  });
+
+  it('回执不确定耗尽定时重试后仍不降级群主流', async () => {
+    vi.useFakeTimers();
+    mocks.openThread.mockResolvedValue({ kind: 'unconfirmed' });
+    const events = collectMessages();
+    await connect();
+
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('一直不确定'));
+    await vi.advanceTimersByTimeAsync(10_000 + 30_000 + 90_000 + 1_000);
+
+    expect(events).toHaveLength(0);
+    expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+    // 首次 + 三档延迟重试
+    expect(mocks.openThread).toHaveBeenCalledTimes(4);
+    vi.useRealTimers();
   });
 });

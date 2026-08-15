@@ -538,15 +538,15 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     try {
       return await send();
     } catch (sendErr) {
-      // 最终兜底失败: 条目已从队列移除 — 代次未变且发起发送的 client 已不
-      // 是当前 client(仍处空窗 / 同账号已重绑新 client)时重新入队, 下一次
-      // connected 排空重试, 终态不因一次失败永久丢失。
-      if (
-        entry &&
-        outbound.getAccountEpoch() === epoch &&
-        outbound.getBoundClient() !== sendClient
-      ) {
-        this.log.warn('sendWithDeferredOpenerConsume final send failed across reconnect (re-deferred)');
+      // 最终兜底失败: 条目已从队列移除。账号代次未变时重新入队并走有界
+      // 退避排空 — 限流/临时故障时 client 可能没换代, 不能只在换 client
+      // 时才重试, 否则终态永久丢失。
+      if (entry && outbound.getAccountEpoch() === epoch) {
+        this.log.warn(
+          outbound.getBoundClient() !== sendClient
+            ? 'sendWithDeferredOpenerConsume final send failed across reconnect (re-deferred)'
+            : 'sendWithDeferredOpenerConsume final send failed (re-deferred for flush retry)',
+        );
         outbound.deferOpenerConsume(entry);
         this.scheduleConnectedFlushRetry();
       }

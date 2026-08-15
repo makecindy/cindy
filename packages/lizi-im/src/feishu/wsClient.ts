@@ -35,9 +35,11 @@
  *       → 连接换代门禁: 处理途中的 await(附件下载/开话题)之后复查
  *         isActiveConnection(generation, botAppId) — 断开/换账号的旧连接轮次
  *         直接丢弃, 不 push 锚点、不 emit, 不会路由进新账号的 client/session
- *       → 群主流 @ 开话题三态(opened / degraded / orphaned):
+ *       → 群主流 @ 开话题(opened / degraded / orphaned / unconfirmed):
  *         opened → 新话题 lane; degraded → 降级群 lane 旧行为; orphaned →
- *         回复开场白(落回话题)说明失败并放弃本轮, 不降级刷群主流
+ *         回复开场白(落回话题)说明失败并放弃本轮, 不降级刷群主流;
+ *         unconfirmed → 事件已 ACK, 定时再用同一 uuid 有界重试, 取回后
+ *         恢复 turn 或走 orphan 收口, 不立刻降级群主流
  *
  *   card.action.trigger(_v1)
  *     → drop if sender not in whitelist
@@ -238,12 +240,157 @@ function suspendOrDropOnConnectionChange(
   return true;
 }
 
+/**
+ * openThread 回执不确定时的 ACK 后恢复链。三次即时 uuid 重试仍无回执时,
+ * 事件会在 3s 内被 ACK, 不能指望平台重投。这里按孤儿提示同一套间隔
+ * (10s/30s/90s) 再用同一 uuid 取回原消息: opened → 补发 turn;
+ * orphaned → 走孤儿提示收口; degraded → 确认无卡后降级群 lane 起 turn;
+ * 仍 unconfirmed → 下一档。stop 挂起、同账号 start 恢复。
+ */
+interface UnconfirmedOpenRetry {
+  timer?: ReturnType<typeof setTimeout>;
+  botAppId: string;
+  service: BotCredentials['service'];
+  messageId: string;
+  chatId: string;
+  senderOpenId: string;
+  text: string;
+  attachments: Awaited<ReturnType<typeof downloadAttachments>>['attachments'];
+  unsupported: ReturnType<typeof parseIncoming>['unsupported'];
+  raw: RawMessageEvent;
+  attempt: number;
+}
+
+const unconfirmedOpenRetries = new Map<string, UnconfirmedOpenRetry>();
+const suspendedUnconfirmedOpens: UnconfirmedOpenRetry[] = [];
+const MAX_SUSPENDED_UNCONFIRMED_OPENS = 100;
+
+function clearUnconfirmedOpenRetries(): void {
+  for (const retry of unconfirmedOpenRetries.values()) {
+    if (retry.timer) clearTimeout(retry.timer);
+  }
+  unconfirmedOpenRetries.clear();
+  suspendedUnconfirmedOpens.length = 0;
+}
+
+function suspendUnconfirmedOpenRetry(entry: UnconfirmedOpenRetry): void {
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+    entry.timer = undefined;
+  }
+  unconfirmedOpenRetries.delete(entry.messageId);
+  for (let i = suspendedUnconfirmedOpens.length - 1; i >= 0; i--) {
+    if (suspendedUnconfirmedOpens[i]!.messageId === entry.messageId) {
+      suspendedUnconfirmedOpens.splice(i, 1);
+    }
+  }
+  suspendedUnconfirmedOpens.push(entry);
+  while (suspendedUnconfirmedOpens.length > MAX_SUSPENDED_UNCONFIRMED_OPENS) {
+    suspendedUnconfirmedOpens.shift();
+  }
+}
+
+function resumeUnconfirmedOpenRetriesFor(
+  botAppId: string,
+  service: BotCredentials['service'],
+): void {
+  for (let i = suspendedUnconfirmedOpens.length - 1; i >= 0; i--) {
+    const entry = suspendedUnconfirmedOpens[i]!;
+    suspendedUnconfirmedOpens.splice(i, 1);
+    if (entry.botAppId !== botAppId || entry.service !== service) continue;
+    scheduleUnconfirmedOpenRetry(entry);
+  }
+}
+
+function scheduleUnconfirmedOpenRetry(entry: UnconfirmedOpenRetry): void {
+  const delay = ORPHAN_NOTICE_RETRY_DELAYS_MS[entry.attempt];
+  if (delay === undefined) {
+    getLog().error(
+      '[feishu/wsClient] unconfirmed openThread retries exhausted — opener may remain thinking',
+    );
+    return;
+  }
+  const existing = unconfirmedOpenRetries.get(entry.messageId);
+  if (existing?.timer) clearTimeout(existing.timer);
+  const epoch = orphanRetryEpoch;
+  entry.timer = setTimeout(() => {
+    unconfirmedOpenRetries.delete(entry.messageId);
+    void retryUnconfirmedOpen(entry, epoch);
+  }, delay);
+  unconfirmedOpenRetries.set(entry.messageId, entry);
+}
+
+async function retryUnconfirmedOpen(
+  entry: UnconfirmedOpenRetry,
+  epoch: number,
+): Promise<void> {
+  const log = getLog();
+  if (!isSameBotActive(entry.botAppId, entry.service)) {
+    const accountChanged =
+      currentBotAppId !== null &&
+      (currentBotAppId !== entry.botAppId || currentService !== entry.service);
+    if (accountChanged) {
+      log.info('[feishu/wsClient] unconfirmed openThread retry skipped: account changed');
+      return;
+    }
+    suspendUnconfirmedOpenRetry({ ...entry, timer: undefined });
+    log.info('[feishu/wsClient] unconfirmed openThread retry suspended for same-bot reconnect');
+    return;
+  }
+  const opener = await outbound.openThread(entry.messageId);
+  if (orphanRetryEpoch !== epoch) return;
+  if (opener.kind === 'unconfirmed') {
+    scheduleUnconfirmedOpenRetry({ ...entry, timer: undefined, attempt: entry.attempt + 1 });
+    return;
+  }
+  if (opener.kind === 'orphaned') {
+    log.error(
+      `[feishu/wsClient] unconfirmed openThread recovered as orphaned opener=...${opener.openerMessageId.slice(-8)}`,
+    );
+    await sendOrphanOpenerNotice(
+      entry.botAppId,
+      entry.service,
+      entry.messageId,
+      opener.openerMessageId,
+    );
+    return;
+  }
+  let laneUserId: string;
+  let groupContextLane: { chatId: string; threadId: string } | undefined;
+  if (opener.kind === 'opened') {
+    laneUserId = encodeLaneUserId(entry.chatId, opener.threadId);
+    outbound.pushReplyAnchor(laneUserId, opener.messageId);
+    outbound.pushPatchableOpener(laneUserId, opener.messageId, entry.messageId);
+    groupContextLane = { chatId: entry.chatId, threadId: '' };
+  } else {
+    laneUserId = encodeLaneUserId(entry.chatId, null);
+    outbound.pushReplyAnchor(laneUserId, entry.messageId);
+  }
+  log.info(
+    `[feishu/wsClient] unconfirmed openThread recovered as ${opener.kind} — emitting deferred turn`,
+  );
+  feishuEvents.emit('message', {
+    channelName: 'feishu',
+    senderId: laneUserId,
+    chatId: entry.chatId,
+    contextId: entry.botAppId,
+    messageId: entry.messageId,
+    text: entry.text,
+    speaker: { id: entry.senderOpenId, name: '', isOwner: true },
+    ...(groupContextLane ? { groupContextLane } : {}),
+    attachments: entry.attachments,
+    unsupported: entry.unsupported,
+    raw: entry.raw,
+  });
+}
+
 /** 测试注入口 — 清空挂起/排队重试。生产代码不要调用。 */
 export function resetOrphanRetriesForTest(): void {
   for (const retry of orphanNoticeRetries.values()) clearTimeout(retry.timer);
   orphanNoticeRetries.clear();
   suspendedOrphanRetries.length = 0;
   orphanAttemptCeiling.clear();
+  clearUnconfirmedOpenRetries();
 }
 
 /**
@@ -260,6 +407,7 @@ export function clearOrphanRetriesForCredentialClear(): void {
   suspendedOrphanRetries.length = 0;
   orphanAttemptCeiling.clear();
   orphanNoticeDelivered.clear();
+  clearUnconfirmedOpenRetries();
   // 注意: orphanNoticeInFlight **不清空** — 在途 REST 无法取消, 保留去重
   // 记账让同凭证快速重登录后的重投共享旧请求(而不是并发第二条提示);
   // 旧请求落定后条目自清理, 续段由 orphanRetryEpoch 放弃。
@@ -906,6 +1054,7 @@ export async function start(
       // 恢复本 bot 在 stop() 时被挂起的排队重试(同账号重连) — 事件已被
       // ACK, 不恢复的话孤儿提示/撤回链随断连永久消失。
       resumeOrphanRetriesFor(creds.appId, creds.service);
+      resumeUnconfirmedOpenRetriesFor(creds.appId, creds.service);
       if (opts.announceLifecycle !== false) {
         void announceLifecycle('online');
       } else {
@@ -1010,6 +1159,9 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
     });
   }
   orphanNoticeRetries.clear();
+  for (const retry of [...unconfirmedOpenRetries.values()]) {
+    suspendUnconfirmedOpenRetry(retry);
+  }
   // 注意: orphanNoticeInFlight **不**清空 — in-flight 的 REST 请求在 stop()
   // 时已捕获旧 client, close 不保证取消它; 保留去重记账, 同 bot 重连后的
   // 重投仍会共享那次在途发送而不是并发第二条(条目随 promise 落定自清理)。
@@ -1350,14 +1502,24 @@ async function processClaimedMessage(
         await sendOrphanOpenerNotice(botAppId, service, messageId, opener.openerMessageId);
         return;
       } else if (opener.kind === 'unconfirmed') {
-        // reply 超时/断线, 同一 uuid 重试仍无回执: 服务端可能已发出思考卡。
-        // 不起 turn、不降级群主流; 释放认领 + evict, 重投再用同一 uuid 取回。
+        // 三次即时 uuid 重试仍无回执: 服务端可能已发出思考卡。事件会在 3s
+        // 内 ACK, 不能指望平台重投。不释放认领、不降级群主流, 改走 ACK 后
+        // 定时再用同一 uuid 取回 — 恢复 turn 或 orphan 收口。
         log.error(
-          '[feishu/wsClient] openThread reply unconfirmed after retries — turn dropped, not degrading to group lane',
+          '[feishu/wsClient] openThread reply unconfirmed — scheduling delayed uuid recovery, not degrading',
         );
-        if (inboundInFlight.get(`${botAppId}:${messageId}`)?.generation === generation) {
-          abandonInboundTurn(botAppId, messageId);
-        }
+        scheduleUnconfirmedOpenRetry({
+          botAppId,
+          service,
+          messageId,
+          chatId,
+          senderOpenId,
+          text,
+          attachments,
+          unsupported,
+          raw: data,
+          attempt: 0,
+        });
         return;
       } else {
         laneUserId = encodeLaneUserId(chatId, null);

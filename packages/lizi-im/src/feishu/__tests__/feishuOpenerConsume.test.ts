@@ -152,6 +152,31 @@ describe('FeishuIM opener consumption failure semantics', () => {
     vi.useRealTimers();
   });
 
+  it('同账号未换代时最终发送失败也重新暂存, 进入退避排空', async () => {
+    const client = { fake: 'same-client' };
+    outboundMocks.getBoundClient.mockReturnValue(client);
+    outboundMocks.takeMatchingDeferredOpenerConsume.mockReturnValueOnce({
+      userId: 'g/oc_c/omt_t',
+      openerId: 'om_reserved',
+      markdown: '终态',
+      epoch: 0,
+    });
+    (streamingText.patchMarkdown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('rate limited'),
+    );
+    outboundMocks.sendText.mockRejectedValueOnce(new Error('rate limited'));
+
+    await expect(im.sendText('g/oc_c/omt_t', '兜底')).rejects.toThrow('rate limited');
+    expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalled();
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'g/oc_c/omt_t',
+        openerId: 'om_reserved',
+        markdown: '终态',
+      }),
+    );
+  });
+
   it('排空时 patch 失败: 撤回 pin 到排空开始的 client 并补发终态兜底', async () => {
     const pinned = { fake: 'pinned-client' };
     outboundMocks.getBoundClient.mockReturnValue(pinned);
