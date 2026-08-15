@@ -51,26 +51,28 @@ function sameBoundAccount(next: BotCredentials): boolean {
   );
 }
 
+/**
+ * 账号代次 — 账号身份变化(换账号 bind / 明确清凭证)时递增: 在途的排空/兜底
+ * 续段据此丢弃, 旧账号的终态不得经新账号的 client 呈现。
+ */
+let accountEpoch = 0;
+
 function clearAccountScopedOutboundState(): void {
   laneAnchors.clear();
   patchableOpeners.clear();
   openerTriggers.clear();
   clearDeferredOpenerConsumes();
+  accountEpoch += 1;
 }
 
 /**
  * 明确清除凭证/登出路径(clearAndDisconnect)用: 与 transport 重连区分 —
  * 清掉账号态并重置 lastBoundCreds, 之后重新保存相同 appId/service 不会被
  * 误判为同账号重连(登出前的 opener/锚点不得被新一轮会话认领)。
- * accountEpoch 同时递增 — 在途的排空续段据此丢弃(清凭证后不得重新入队
- * 旧暂存终态, 否则登出前的 /new、错误提示会被重新呈现)。
  */
-let accountEpoch = 0;
-
 export function forgetBoundAccount(): void {
   clearAccountScopedOutboundState();
   lastBoundCreds = null;
-  accountEpoch += 1;
 }
 
 /** 当前账号代次(清凭证递增) — 在途排空续段比对用。 */
@@ -189,9 +191,10 @@ export function claimPatchableOpener(laneUserId: string): string | null {
  * patch/撤回全部失败且注册被永久移除; 若完全放弃, 本轮终态丢失且注册残留
  * 会被下一条消息误认领。上限防御, 超限丢最旧。
  */
-export type DeferredOpenerConsume =
+export type DeferredOpenerConsume = (
   | { userId: string; openerId: string; markdown: string }
-  | { userId: string; openerId: string; spec: InteractiveCardSpec };
+  | { userId: string; openerId: string; spec: InteractiveCardSpec }
+) & { epoch: number };
 
 const MAX_DEFERRED_OPENER_CONSUMES = 50;
 const deferredOpenerConsumes: DeferredOpenerConsume[] = [];
@@ -201,8 +204,13 @@ function clearDeferredOpenerConsumes(): void {
   deferredOpenerConsumes.length = 0;
 }
 
-export function deferOpenerConsume(entry: DeferredOpenerConsume): void {
-  deferredOpenerConsumes.push(entry);
+export function deferOpenerConsume(
+  entry: { userId: string; openerId: string } & (
+    | { markdown: string }
+    | { spec: InteractiveCardSpec }
+  ),
+): void {
+  deferredOpenerConsumes.push({ ...entry, epoch: accountEpoch });
   while (deferredOpenerConsumes.length > MAX_DEFERRED_OPENER_CONSUMES) {
     deferredOpenerConsumes.shift();
   }

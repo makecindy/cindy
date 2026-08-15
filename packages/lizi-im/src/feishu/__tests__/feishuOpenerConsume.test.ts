@@ -28,7 +28,12 @@ const outboundMocks = vi.hoisted(() => ({
   >(() => []),
   takeMatchingDeferredOpenerConsume: vi.fn<
     () =>
-      | { userId: string; openerId: string; markdown?: string; spec?: { body: string; buttons: unknown[] } }
+      | ({
+          userId: string;
+          openerId: string;
+          markdown?: string;
+          spec?: { body: string; buttons: unknown[] };
+        } & { epoch: number })
       | undefined
   >(() => undefined),
   getAccountEpoch: vi.fn(() => 0),
@@ -143,6 +148,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
       userId: 'g/oc_c/omt_t',
       openerId: 'om_reserved',
       markdown: '回复',
+      epoch: 0,
     });
 
     const result = await im.sendText('g/oc_c/omt_t', '兜底');
@@ -168,11 +174,13 @@ describe('FeishuIM opener consumption failure semantics', () => {
     for (let i = 0; i < 12; i += 1) await Promise.resolve();
 
     // 兜底发送失败 → 条目重新入队(终态不因一次失败永久丢失)。
-    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith({
-      userId: 'g/oc_c/omt_t',
-      openerId: 'om_opener',
-      markdown: '终态',
-    });
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'g/oc_c/omt_t',
+        openerId: 'om_opener',
+        markdown: '终态',
+      }),
+    );
   });
 
   it('consumePendingOpenerCard: 无 pending opener 返回 false(不撤回)', async () => {
@@ -186,16 +194,20 @@ describe('FeishuIM opener consumption failure semantics', () => {
     outboundMocks.claimPatchableOpener.mockReturnValue('om_reserved');
     await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(false);
     await expect(im.consumePendingOpenerAsCard('g/oc_c/omt_t', SPEC)).resolves.toBe(false);
-    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith({
-      userId: 'g/oc_c/omt_t',
-      openerId: 'om_reserved',
-      markdown: '回复',
-    });
-    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith({
-      userId: 'g/oc_c/omt_t',
-      openerId: 'om_reserved',
-      spec: SPEC,
-    });
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'g/oc_c/omt_t',
+        openerId: 'om_reserved',
+        markdown: '回复',
+      }),
+    );
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'g/oc_c/omt_t',
+        openerId: 'om_reserved',
+        spec: SPEC,
+      }),
+    );
   });
 
   it('连接就绪后排空暂存消费: 用预留的 openerId patch 文本 / 替换卡片', async () => {

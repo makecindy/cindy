@@ -77,6 +77,12 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         // 时的 client)并回拨锚点, 然后**补发终态兜底**。
         const msg = err instanceof Error ? err.message : String(err);
         this.log.warn(`flushDeferredOpenerConsumes failed: ${msg}`);
+        // 排空期间账号已换代/清凭证: 丢弃条目, 不撤回、不发送(旧账号终态
+        // 不得经新账号 client 呈现 — 跨账号红线)。
+        if (outbound.getAccountEpoch() !== epoch) {
+          this.log.info('flushDeferredOpenerConsumes: account changed — dropping entry');
+          continue;
+        }
         // 撤回始终 pin 到排空开始时的 client — 同账号再次重连(而非换账号)
         // 时旧 REST client 仍可尝试撤回, 不会留下永久「思考中」卡; 换账号
         // 时 pinnedClient 属于旧账号, 用它撤回旧卡正是安全方向。
@@ -310,8 +316,16 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     kind: 'markdown' | 'spec',
     send: () => Promise<{ messageId: string }>,
   ): Promise<{ messageId: string }> {
+    const epoch = outbound.getAccountEpoch();
+    const clientAtTake = outbound.getBoundClient();
     const entry = outbound.takeMatchingDeferredOpenerConsume(userId, kind);
     if (entry) {
+      if (entry.epoch !== epoch) {
+        // 条目属于旧账号: 丢弃(不得跨账号 patch/撤回/发送), 调用方内容
+        // 是当前账号的, 照常发送。
+        this.log.info('sendWithDeferredOpenerConsume: stale-account entry dropped');
+        return send();
+      }
       try {
         if ('markdown' in entry) {
           await streamingText.patchMarkdown(entry.openerId, entry.markdown);
@@ -322,8 +336,19 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         return { messageId: entry.openerId };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        // 就地收口失败。换代/清凭证: 丢弃(跨账号红线); 空窗(仍无 client):
+        // 重新入队等下一次 connected 排空; 否则撤回预留卡 + 回拨 + 回落。
+        if (outbound.getAccountEpoch() !== epoch) {
+          this.log.info('sendWithDeferredOpenerConsume: account changed mid-patch — dropping entry');
+          throw err;
+        }
+        if (!outbound.getBoundClient()) {
+          this.log.warn(`sendWithDeferredOpenerConsume patch failed in reconnect window (re-deferred): ${msg}`);
+          outbound.deferOpenerConsume(entry);
+          throw err;
+        }
         this.log.warn(`sendWithDeferredOpenerConsume patch failed (recalling reserved opener): ${msg}`);
-        await outbound.recallOwnMessage(entry.openerId);
+        await outbound.recallOwnMessageWith(clientAtTake ?? outbound.getBoundClient()!, entry.openerId);
         outbound.rearmAnchorToTrigger(userId);
         // fallthrough: 回落正常发送
       }
