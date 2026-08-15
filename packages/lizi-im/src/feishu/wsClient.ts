@@ -301,8 +301,11 @@ function scheduleUnconfirmedOpenRetry(entry: UnconfirmedOpenRetry): void {
   const delay = ORPHAN_NOTICE_RETRY_DELAYS_MS[entry.attempt];
   if (delay === undefined) {
     getLog().error(
-      '[feishu/wsClient] unconfirmed openThread retries exhausted — opener may remain thinking',
+      '[feishu/wsClient] unconfirmed openThread retries exhausted — holding for next reconnect',
     );
+    // 事件已 ACK, 不能释放恢复链: 挂起并把 attempt 归零, 同账号重连后再走
+    // 一轮 10/30/90s。留着耗尽的 attempt 会让 resume 立刻再次耗尽。
+    suspendUnconfirmedOpenRetry({ ...entry, timer: undefined, attempt: 0 });
     return;
   }
   const existing = unconfirmedOpenRetries.get(entry.messageId);
@@ -372,8 +375,13 @@ async function retryUnconfirmedOpen(
     outbound.pushPatchableOpener(laneUserId, opener.messageId, entry.messageId);
     groupContextLane = { chatId: entry.chatId, threadId: '' };
   } else {
-    laneUserId = encodeLaneUserId(entry.chatId, null);
-    outbound.pushReplyAnchor(laneUserId, entry.messageId);
+    // degraded 只说明这次调用没确认发出, 不能否定先前 unconfirmed 请求已经
+    // 落地。当成确认无卡去群主流派 turn, 会一边留着思考卡一边刷屏。
+    log.info(
+      '[feishu/wsClient] unconfirmed openThread still unknown after degraded — keeping recovery chain',
+    );
+    scheduleUnconfirmedOpenRetry({ ...entry, timer: undefined, attempt: entry.attempt + 1 });
+    return;
   }
   log.info(
     `[feishu/wsClient] unconfirmed openThread recovered as ${opener.kind} — emitting deferred turn`,

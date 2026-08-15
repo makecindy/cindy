@@ -267,6 +267,30 @@ describe('FeishuIM opener consumption failure semantics', () => {
     );
   });
 
+  it('等待排空期间换代后丢弃旧轮次, 不回落用新账号发送', async () => {
+    let rejectPatch!: (err: Error) => void;
+    const patchGate = new Promise<void>((_resolve, reject) => {
+      rejectPatch = reject;
+    });
+    await queueOriginalFallback('om_flushing', '终态回复');
+    (streamingText.patchMarkdown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => patchGate,
+    );
+    outboundMocks.drainDeferredOpenerConsumes.mockReturnValueOnce([
+      { userId: 'g/oc_c/omt_t', openerId: 'om_flushing', markdown: '终态回复' },
+    ]);
+
+    feishuEvents.emit('imStatus', { kind: 'connected', appId: 'cli' });
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    const sendP = sendOriginalFallback('g/oc_c/omt_t', '兜底');
+    outboundMocks.getAccountEpoch.mockReturnValue(1);
+    outboundMocks.getBoundClient.mockReturnValue({ fake: 'account-b' });
+    rejectPatch(new Error('patch failed after rebind'));
+
+    await expect(sendP).rejects.toThrow(/account changed while waiting for opener flush/);
+    expect(outboundMocks.sendText).not.toHaveBeenCalled();
+  });
+
   it('connected 排空与兜底发送重叠时复用在途暂存项, 不另发一份', async () => {
     let resolvePatch!: () => void;
     const patchGate = new Promise<void>((resolve) => {

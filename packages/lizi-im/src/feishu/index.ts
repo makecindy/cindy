@@ -593,7 +593,17 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       if (flushing) {
         const flushed = await flushing;
         this.takeCompletedOpenerConsume(fallbackOpenerId);
+        // 排空已成功就复用收据, 即使等待期间换了代 — 旧卡已就地收口,
+        // 不再经新账号 client 另发。只有排空以 null 收口时才要拦回落发送。
         if (flushed) return flushed;
+        if (outbound.getAccountEpoch() !== epoch) {
+          // 等待期间换代: 排空以 null 收口并丢掉旧条目。这里若继续
+          // send() 会用新账号 client 把旧轮次终态打到旧 lane。
+          this.log.info(
+            'sendWithDeferredOpenerConsume: account changed while waiting for flush — dropping turn',
+          );
+          throw new Error('account changed while waiting for opener flush');
+        }
       } else {
         const completed = this.takeCompletedOpenerConsume(fallbackOpenerId);
         if (completed) return completed;

@@ -291,6 +291,67 @@ describe('feishu group thread routing', () => {
     vi.useRealTimers();
   });
 
+  it('回执不确定耗尽后同账号重连仍能恢复, 不丢弃恢复链', async () => {
+    vi.useFakeTimers();
+    mocks.openThread.mockReset();
+    mocks.openThread.mockResolvedValue({ kind: 'unconfirmed' });
+    const events = collectMessages();
+    await connect();
+
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('耗尽后重连'));
+    await vi.advanceTimersByTimeAsync(10_000 + 30_000 + 90_000 + 1_000);
+    expect(events).toHaveLength(0);
+    expect(mocks.openThread).toHaveBeenCalledTimes(4);
+
+    await wsClient.stop({ announceOffline: false, reason: 'same-account-reconnect' });
+    await connect();
+    mocks.openThread.mockClear();
+    mocks.openThread.mockResolvedValueOnce({
+      kind: 'opened',
+      messageId: 'om_late',
+      threadId: 'omt_late',
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledWith('om_msg1');
+    expect(events).toHaveLength(1);
+    expect(events[0]?.senderId).toBe('g/oc_chat1/omt_late');
+    vi.useRealTimers();
+  });
+
+  it('回执不确定后恢复为 degraded 不视为确认无卡, 不降级派发', async () => {
+    vi.useFakeTimers();
+    mocks.openThread.mockReset();
+    mocks.openThread
+      .mockResolvedValueOnce({ kind: 'unconfirmed' })
+      .mockResolvedValueOnce({ kind: 'degraded' })
+      .mockResolvedValueOnce({
+        kind: 'opened',
+        messageId: 'om_late',
+        threadId: 'omt_late',
+      });
+    const events = collectMessages();
+    await connect();
+
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('先不确定后失败'));
+    expect(events).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledTimes(2);
+    expect(events).toHaveLength(0);
+    expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.senderId).toBe('g/oc_chat1/omt_late');
+    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith(
+      'g/oc_chat1/omt_late',
+      'om_late',
+      'om_msg1',
+    );
+    vi.useRealTimers();
+  });
+
   it('回执不确定耗尽定时重试后仍不降级群主流', async () => {
     vi.useFakeTimers();
     mocks.openThread.mockResolvedValue({ kind: 'unconfirmed' });
