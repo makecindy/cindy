@@ -1258,6 +1258,13 @@ describe('maker usage IPC handlers', () => {
     await expect(harness.invoke(MAKER_INVOKE.USAGE_GLM_CODING_PLAN, '')).rejects.toMatchObject({
       code: 'INVALID_PARAMS',
     });
+    // slug 白名单:超长 / 非法字符拒绝,防 states Map 无界膨胀(#2768 三轮 r3788613364)
+    await expect(
+      harness.invoke(MAKER_INVOKE.USAGE_GLM_CODING_PLAN, 'a'.repeat(41)),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(
+      harness.invoke(MAKER_INVOKE.USAGE_GLM_CODING_PLAN, 'Bad ID!'),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
   });
 
   it('fails closed when the GLM usage sender guard is missing or rejects (#2768 首轮 ③)', async () => {

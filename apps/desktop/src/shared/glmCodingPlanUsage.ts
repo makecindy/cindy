@@ -35,6 +35,8 @@ export interface GlmCodingPlanUsageSnapshot {
   monthlyMcp?: GlmCodingPlanUsageWindow | null;
   /** 供应平台（决定用量端点 origin：zhipu=open.bigmodel.cn / zai=api.z.ai）。 */
   platform: 'zhipu' | 'zai';
+  /** 查询所用 runtime 的 baseUrl（main 记录时附加）——同 key 换端点时判定快照过期。 */
+  runtimeBaseUrl?: string | null;
   source?: 'monitor-endpoint' | string | null;
   /** 快照生成时间（ms epoch）。 */
   updatedAt?: number | null;

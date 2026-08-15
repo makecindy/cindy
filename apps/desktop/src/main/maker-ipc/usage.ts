@@ -12,6 +12,7 @@ import path from 'node:path';
 import type { Maker } from '@cindy/maker-core';
 import { createLogger } from '../logger.js';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { getCurrentUserId } from '../localDb/index.js';
 import {
   readClaudeAccountUsageSnapshot,
   triggerClaudeAccountUsageRefresh,
@@ -203,6 +204,11 @@ function fingerprintGlmKey(key: string): string {
  * 有 key 才可查询(runtime 优先序 claude-code > codex > pi,取第一个有 key 的)。
  * 已知限制(v1):per-runtime key 理论上可不同,快照按"实际用于查询的那把 key"的
  * 指纹归属;两端不同 key 的边缘形态以查询端为准。
+ *
+ * 跨 owner 防拼接(#2768 三轮 review r3788613362):配置来自按 owner 切片的 DB,
+ * key 来自按"当前 owner"解析的 secret store —— 两步异步之间换号会把 B 的 key 拼到
+ * A 的端点上。入口/出口各读一次 owner,变化即整体作废(同 providerHandlers 的
+ * captureProviderOwnerSession 口径)。
  */
 async function readGlmCodingPlanSource(providerId: string): Promise<{
   providerId: string;
@@ -210,6 +216,7 @@ async function readGlmCodingPlanSource(providerId: string): Promise<{
   apiKey: string;
   platform: 'zhipu' | 'zai';
 } | null> {
+  const ownerAtStart = getCurrentUserId();
   const config = await getCustomProvider(providerId);
   if (config?.usage?.kind !== 'glm-coding-plan') return null;
   for (const agent of ['claude-code', 'codex', 'pi'] as const) {
@@ -217,6 +224,7 @@ async function readGlmCodingPlanSource(providerId: string): Promise<{
     if (!rt) continue;
     const key = readCustomProviderKey(providerId, agent);
     if (!key) continue;
+    if (getCurrentUserId() !== ownerAtStart) return null;
     return {
       providerId,
       runtimeBaseUrl: rt.baseUrl,

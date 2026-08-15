@@ -135,7 +135,10 @@ export function registerMakerUsageHandlers(
 
   // GLM Coding Plan 订阅余量 (5h token / MCP 月度窗口) — cached-first, per-provider。
   // 该 handler 会按 renderer 传入的 providerId 触发凭证背书的出网刷新,先验 sender
-  // 再读任何配置 —— 守卫缺失时 fail-closed 拒绝,不裸跑。
+  // 再读任何配置 —— 守卫缺失时 fail-closed 拒绝,不裸跑。providerId 还要过 slug
+  // 白名单:requireString 只拒空值,任意长字符串会在 reader 的 states Map 永久落
+  // 条目并逐次触发 DB 查询(被注入的 renderer 可借此膨胀 main 内存;#2768 三轮
+  // review r3788613364)——与 custom-provider-store 的 CUSTOM_PROVIDER_ID_RE 同规则。
   registry.handle(
     MAKER_INVOKE.USAGE_GLM_CODING_PLAN,
     async (event, providerId: unknown) => {
@@ -143,7 +146,11 @@ export function registerMakerUsageHandlers(
         throwIpcError('PERMISSION_DENIED', 'usage sender trust guard unavailable');
       }
       deps.assertTrustedUsageSender(event);
-      return await deps.readGlmCodingPlanUsageSnapshot(requireString(providerId, 'providerId'));
+      const id = requireString(providerId, 'providerId');
+      if (!/^[a-z0-9_-]{1,40}$/.test(id)) {
+        throwIpcError('INVALID_PARAMS', 'providerId must be a custom provider slug');
+      }
+      return await deps.readGlmCodingPlanUsageSnapshot(id);
     },
   );
 

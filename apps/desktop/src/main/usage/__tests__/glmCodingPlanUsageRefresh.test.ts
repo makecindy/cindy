@@ -319,7 +319,7 @@ describe('mid-flight identity change (live currency guard, #2768 首轮 ①)', (
 
   it('discards an old-endpoint empty response that would clear the new config snapshot', async () => {
     // 同 key 换 baseUrl 后,旧端点的 'empty'(端点 2xx 但无可解析窗口)不得清新配置快照;
-    // sync 对同 key 不清(靠链式补刷覆盖),全程 clear 应为 0。
+    // 旧快照无 runtimeBaseUrl(身份未知)时 sync 也不清,靠链式补刷覆盖。
     const h = makeHarness({ deferFetch: true, cached: snapshotOf() });
     void h.reader.read(SOURCE_A.providerId);
     await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
@@ -327,8 +327,29 @@ describe('mid-flight identity change (live currency guard, #2768 首轮 ①)', (
     await h.reader.syncForProviderChange(SOURCE_A.providerId);
     h.resolveFetch('empty'); // 旧端点的 empty 迟到
     await new Promise((r) => setTimeout(r, 0));
-    expect(h.calls.clear).toBe(0); // sync(同 key)与旧 empty 都没清
+    expect(h.calls.clear).toBe(0); // 旧快照身份未知不误清 + 旧 empty 被活体校验丢弃
     await vi.waitFor(() => expect(h.calls.fetch).toBe(2)); // 链式补刷新端点
     await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
+  });
+
+  it('clears a persisted snapshot from the old endpoint on same-key baseUrl change (#2768 三轮 r3788613366)', async () => {
+    // 旧端点的持久化快照带 runtimeBaseUrl —— 同 key 换端点后 sync 必须清掉,
+    // 否则新请求失败时 chip 无限期顶着旧端点余量。
+    const h = makeHarness({
+      cached: snapshotOf({ runtimeBaseUrl: 'https://open.bigmodel.cn/api/anthropic' }),
+    });
+    h.setSource({ ...SOURCE_A, runtimeBaseUrl: 'https://api.z.ai/api/anthropic' });
+    await h.reader.syncForProviderChange(SOURCE_A.providerId);
+    expect(h.calls.clear).toBe(1);
+    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
+    expect(h.calls.record[0].runtimeBaseUrl).toBe('https://api.z.ai/api/anthropic');
+  });
+
+  it('keeps a snapshot without identity fields (legacy shape, unknown ownership)', async () => {
+    const legacy = { ...snapshotOf() } as Partial<GlmCodingPlanUsageSnapshot>;
+    delete legacy.platform;
+    const h = makeHarness({ cached: legacy as GlmCodingPlanUsageSnapshot });
+    await h.reader.read(SOURCE_A.providerId);
+    expect(h.calls.clear).toBe(0);
   });
 });

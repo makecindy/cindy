@@ -214,6 +214,9 @@ export function createGlmCodingPlanUsageReader(
           await deps.recordSnapshot(providerId, {
             ...result,
             keyFingerprint,
+            // 完整身份随快照落库:同 key 换端点时据此判定持久化快照过期。
+            runtimeBaseUrl: source.runtimeBaseUrl,
+            platform: source.platform,
           });
         }
       } catch (err) {
@@ -261,12 +264,9 @@ export function createGlmCodingPlanUsageReader(
       s.hadSource = true;
 
       const cached = await deps.readCachedSnapshot(providerId);
-      // 换 key 防串号:持久化快照归属指纹与当前 key 不符 → 立即清除并返回无数据
-      // (不等后台刷新)。指纹缺失(异常旧快照)按未知归属沿用,不误清。
-      if (
-        cached?.keyFingerprint
-        && cached.keyFingerprint !== deps.fingerprintKey(source.apiKey)
-      ) {
+      // 换 key / 换端点防串号:持久化快照归属身份与当前源不符 → 立即清除并返回
+      // 无数据(不等后台刷新)。身份字段缺失(异常旧快照)按未知归属沿用,不误清。
+      if (isCachedSnapshotStale(cached, source, deps.fingerprintKey)) {
         await clearSnapshotQuiet(providerId);
         void refreshWith(providerId, source);
         return null;
@@ -305,13 +305,31 @@ export function createGlmCodingPlanUsageReader(
       s.noSourceUntil = 0;
       s.hadSource = true;
       const cached = await deps.readCachedSnapshot(providerId);
-      if (
-        cached?.keyFingerprint
-        && cached.keyFingerprint !== deps.fingerprintKey(source.apiKey)
-      ) {
+      // 同 key 换 baseUrl / platform 也要清:旧端点的余量不能顶着新配置展示
+      // (新请求失败时会无限期残留;#2768 三轮 review r3788613366)。
+      if (isCachedSnapshotStale(cached, source, deps.fingerprintKey)) {
         await clearSnapshotQuiet(providerId);
       }
       void refreshWith(providerId, source);
     },
   };
+}
+
+/**
+ * 持久化快照是否已不属于当前源:key 指纹 / baseUrl / platform 任一失配即过期。
+ * 身份字段缺失的旧快照按未知归属沿用(不误清);任一字段在且不等 → 过期。
+ */
+function isCachedSnapshotStale(
+  cached: GlmCodingPlanUsageSnapshot | null,
+  source: GlmCodingPlanProviderSource,
+  fingerprintKey: (key: string) => string,
+): boolean {
+  if (!cached) return false;
+  if (cached.keyFingerprint && cached.keyFingerprint !== fingerprintKey(source.apiKey)) {
+    return true;
+  }
+  if (cached.runtimeBaseUrl && cached.runtimeBaseUrl !== source.runtimeBaseUrl) {
+    return true;
+  }
+  return cached.platform !== undefined && cached.platform !== source.platform;
 }
