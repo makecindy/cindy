@@ -1557,6 +1557,11 @@ export function CustomProviderDialog({
       id,
       name: trimmedName,
       ...(auth ? { auth } : {}),
+      // 订阅用量能力标记编辑往返必须无损保留:丢了 usage 标记,updateCustomProvider
+      // 会把 DB 里的 usage 置空,同步钩子随即清快照——订阅余量显示永久消失
+      // (#2768 review r3788720175)。新建路径没有 initial,预设出身标记由
+      // AddProviderWizard 快照,不受此处影响。
+      ...(editing && initial?.usage ? { usage: initial.usage } : {}),
       runtimes,
     };
     setSaving(true);

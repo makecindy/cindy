@@ -30,6 +30,7 @@ import {
   fetchGlmCodingPlanUsageSnapshot,
 } from '../usage/glmCodingPlanUsage.js';
 import { createGlmCodingPlanUsageReader } from '../usage/glmCodingPlanUsageRefresh.js';
+import type { GlmCodingPlanReadSourceResult } from '../usage/glmCodingPlanUsageRefresh.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import {
@@ -210,12 +211,9 @@ function fingerprintGlmKey(key: string): string {
  * A 的端点上。入口/出口各读一次 owner,变化即整体作废(同 providerHandlers 的
  * captureProviderOwnerSession 口径)。
  */
-async function readGlmCodingPlanSource(providerId: string): Promise<{
-  providerId: string;
-  runtimeBaseUrl: string;
-  apiKey: string;
-  platform: 'zhipu' | 'zai';
-} | null> {
+async function readGlmCodingPlanSource(
+  providerId: string,
+): Promise<GlmCodingPlanReadSourceResult> {
   const ownerAtStart = getCurrentUserId();
   const config = await getCustomProvider(providerId);
   if (config?.usage?.kind !== 'glm-coding-plan') return null;
@@ -224,7 +222,12 @@ async function readGlmCodingPlanSource(providerId: string): Promise<{
     if (!rt) continue;
     const key = readCustomProviderKey(providerId, agent);
     if (!key) continue;
-    if (getCurrentUserId() !== ownerAtStart) return null;
+    if (getCurrentUserId() !== ownerAtStart) {
+      // 读取期间账号切换:素材不可信。返回 'stale-owner' 哨兵而非 null ——
+      // reader 对 null 走"不可查询"路径(可能清快照),对哨兵静默放弃,
+      // 避免换号误删新账号同名 provider 的快照(#2768 review r3788644129)。
+      return 'stale-owner';
+    }
     return {
       providerId,
       runtimeBaseUrl: rt.baseUrl,

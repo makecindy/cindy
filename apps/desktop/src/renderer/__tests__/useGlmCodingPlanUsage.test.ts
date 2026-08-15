@@ -19,6 +19,7 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
 }));
 
 import {
+  isGlmPushOwnerCurrent,
   ownerScopedGlmSnapshots,
   reduceGlmCodingPlanPush,
   resolvePersistedGlmCodingPlanRead,
@@ -94,5 +95,25 @@ describe('ownerScopedGlmSnapshots (data owner 隔离, #2768 首轮 ②)', () => 
     ownerScopedGlmSnapshots().set('zhipu-coding-plan', next);
     ownerState.dataOwnerId = 'owner-1';
     expect(ownerScopedGlmSnapshots().get('zhipu-coding-plan')).toBeUndefined();
+  });
+});
+
+describe('isGlmPushOwnerCurrent (推送 owner 世代戳, #2768 r3788720174)', () => {
+  beforeEach(() => {
+    ownerState.dataOwnerId = 'owner-1';
+  });
+
+  it('accepts pushes stamped with the current owner and legacy unstamped pushes', () => {
+    expect(isGlmPushOwnerCurrent({ providerId: 'p1', ownerId: 'owner-1', snapshot: SNAPSHOT }))
+      .toBe(true);
+    // ownerId 缺失 / null(旧版 main / 异常)按未知沿用,不误丢
+    expect(isGlmPushOwnerCurrent({ providerId: 'p1', snapshot: SNAPSHOT })).toBe(true);
+    expect(isGlmPushOwnerCurrent({ providerId: 'p1', ownerId: null, snapshot: SNAPSHOT }))
+      .toBe(true);
+  });
+
+  it('rejects late pushes from a previous owner (queued before the account switch)', () => {
+    expect(isGlmPushOwnerCurrent({ providerId: 'p1', ownerId: 'owner-old', snapshot: SNAPSHOT }))
+      .toBe(false);
   });
 });

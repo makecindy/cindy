@@ -26,6 +26,8 @@ export type { GlmCodingPlanUsageSnapshot };
 /** push payload 形状(与 usageBroadcaster.GlmCodingPlanUsagePushPayload 同构)。 */
 interface GlmCodingPlanUsagePushPayload {
   providerId: string;
+  /** 广播时刻的 data owner —— 与当前 owner 不符的迟到推送整体丢弃(#2768 r3788720174)。 */
+  ownerId?: string | null;
   snapshot: GlmCodingPlanUsageSnapshot | null;
 }
 
@@ -46,6 +48,15 @@ export function ownerScopedGlmSnapshots(): Map<string, GlmCodingPlanUsageSnapsho
     glmSnapshots.clear();
   }
   return glmSnapshots;
+}
+
+/**
+ * 推送世代戳是否仍然当前:ownerId 缺失(旧版 main / 异常)按未知沿用不误丢;
+ * 携带 ownerId 且与当前 data owner 不符 → 过期(旧账号排队的迟到推送)。
+ */
+export function isGlmPushOwnerCurrent(payload: GlmCodingPlanUsagePushPayload): boolean {
+  if (payload.ownerId === undefined || payload.ownerId === null) return true;
+  return payload.ownerId === getDataOwnerGeneration().dataOwnerId;
 }
 
 function isSnapshot(v: unknown): v is GlmCodingPlanUsageSnapshot {
@@ -75,8 +86,8 @@ function ensureModuleSubscription(): void {
   moduleSubscriptionInstalled = true;
   api.onGlmCodingPlanUsageChanged((payload: unknown) => {
     if (!isPushPayload(payload)) return;
-    // 经 owner 校验入口写:换号瞬间的旧账号推送因 owner 已变而落到清空后的新
-    // 缓存(不误清新账号后续写入;旧值随 clear 一起丢弃)。
+    // 迟到的旧账号推送(owner 戳与当前 owner 不符)整体丢弃,不落任何 owner 的缓存。
+    if (!isGlmPushOwnerCurrent(payload)) return;
     ownerScopedGlmSnapshots().set(payload.providerId, payload.snapshot);
   });
 }
@@ -162,6 +173,7 @@ export function useGlmCodingPlanUsage(
     const unsubscribe = api.onGlmCodingPlanUsageChanged((payload: unknown) => {
       if (cancelled || !isPushPayload(payload)) return;
       if (payload.providerId !== providerId) return;
+      if (!isGlmPushOwnerCurrent(payload)) return;
       const next = reduceGlmCodingPlanPush(
         ownerScopedGlmSnapshots().get(providerId) ?? null,
         payload,

@@ -899,9 +899,14 @@ export async function readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubsc
 //   - owner 变化(账号切换)时整体作废内存缓存 —— DB 按 userId 切片,新账号读不到
 //     旧行,冷启动 hydration 自然为空。
 
-/** push payload:renderer 按 providerId 过滤自己关心的那份。 */
+/**
+ * push payload:renderer 按 providerId 过滤自己关心的那份。ownerId 是广播时刻的
+ * data owner 标识(#2768 review r3788720174)—— 换号瞬间的迟到推送(旧账号排队、
+ * 回调在新账号执行)会被 renderer 按世代戳丢弃,不写进新账号的 module cache。
+ */
 export interface GlmCodingPlanUsagePushPayload {
   providerId: string;
+  ownerId: string | null;
   snapshot: GlmCodingPlanUsageSnapshot | null;
 }
 
@@ -1094,10 +1099,17 @@ function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapsh
   }
 }
 
-function broadcastGlmCodingPlanUsage(payload: GlmCodingPlanUsagePushPayload): void {
+function broadcastGlmCodingPlanUsage(
+  payload: Omit<GlmCodingPlanUsagePushPayload, 'ownerId'>,
+): void {
+  // owner 戳在广播出口统一盖:快照归属 = 广播时刻的 data owner。
+  const stamped: GlmCodingPlanUsagePushPayload = {
+    ...payload,
+    ownerId: currentAccountUsageOwner(),
+  };
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_GLM_CODING_PLAN_CHANGED, payload);
+      win.webContents.send(USAGE_GLM_CODING_PLAN_CHANGED, stamped);
     }
   }
 }

@@ -59,6 +59,8 @@ interface HarnessOptions {
   recordHook?: () => void;
   /** 在 clearSnapshot 副作用内部回调(同上,清快照窗口)。 */
   clearHook?: () => void;
+  /** true = readSource 返回 'stale-owner'(读取期间账号切换场景)。 */
+  staleOwner?: boolean;
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
@@ -82,7 +84,7 @@ function makeHarness(opts: HarnessOptions = {}) {
       })
     : null;
   const deps: GlmCodingPlanUsageRefreshDeps = {
-    readSource: vi.fn(async () => source),
+    readSource: vi.fn(async () => (opts.staleOwner === true ? 'stale-owner' : source)),
     fetchSnapshot: vi.fn(async () => {
       calls.fetch += 1;
       // deferred 只作用于首笔 fetch(制造"飞行中");后续 fetch(如换 key 后的链式
@@ -395,5 +397,34 @@ describe('post-side-effect compensation (四轮, Greptile 残余竞态)', () => 
     expect(h.calls.record[0].keyFingerprint).toBe('fp-key-b');
     expect(h.calls.fetch).toBe(2); // 清后立即补刷,未被节流卡住
     expect(h.calls.clear).toBeGreaterThanOrEqual(2); // 原 clear + 补偿 clear
+  });
+});
+
+describe('unknown provider / stale owner (五轮, D+F)', () => {
+  it('does not retain reader state for a provider that never existed (bounded states map)', async () => {
+    const h = makeHarness({ source: null });
+    await h.reader.read('nonexistent-id');
+    expect(h.deps.readSource).toHaveBeenCalledTimes(1);
+    // 状态槽被删 → 冷却不存在,紧接的 triggerRefresh 重新解析 source 而非跳过。
+    h.reader.triggerRefresh('nonexistent-id');
+    await vi.waitFor(() => expect(h.deps.readSource).toHaveBeenCalledTimes(2));
+    expect(h.calls.clear).toBe(0);
+  });
+
+  it('a stale-owner read has no side effects (no clear of the new owner snapshot)', async () => {
+    const seed = snapshotOf();
+    const h = makeHarness({ staleOwner: true, cached: seed });
+    await expect(h.reader.read(SOURCE_A.providerId)).resolves.toBeNull();
+    expect(h.calls.clear).toBe(0); // 绝不能清(那会删掉新账号同名 provider 快照)
+    expect(h.cached()).toBe(seed); // 快照原样(同一引用)
+    expect(h.deps.fetchSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('syncForProviderChange with a stale owner is a quiet no-op', async () => {
+    const seed = snapshotOf();
+    const h = makeHarness({ staleOwner: true, cached: seed });
+    await h.reader.syncForProviderChange(SOURCE_A.providerId);
+    expect(h.calls.clear).toBe(0);
+    expect(h.cached()).toBe(seed);
   });
 });

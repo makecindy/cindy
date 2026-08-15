@@ -21,9 +21,19 @@ export interface GlmCodingPlanProviderSource {
   platform: 'zhipu' | 'zai';
 }
 
+/**
+ * readSource 的三态结果:
+ *   - source     → 正常素材
+ *   - null       → 无该 provider / 无 usage 能力 / 无 key(业务上的"不可查询")
+ *   - 'stale-owner' → 读取期间账号切换(素材已不可信,#2768 review r3788644129):
+ *                     与"不存在"语义不同 —— 绝不能走清快照路径(那会删掉新账号
+ *                     同名 provider 的快照),只能静默放弃本次读。
+ */
+export type GlmCodingPlanReadSourceResult = GlmCodingPlanProviderSource | null | 'stale-owner';
+
 export interface GlmCodingPlanUsageRefreshDeps {
-  /** 解析 provider 的查询素材;无该 provider / 无 usage 能力 / 无 key → null。 */
-  readSource(providerId: string): Promise<GlmCodingPlanProviderSource | null>;
+  /** 解析 provider 的查询素材;三态语义见 GlmCodingPlanReadSourceResult。 */
+  readSource(providerId: string): Promise<GlmCodingPlanReadSourceResult>;
   /**
    * 拉端点快照。返回语义:snapshot = 正常;'empty' = 端点成功但无可解析窗口
    * (清缓存降级为无数据);null = 网络失败等(保留缓存下轮再试)。
@@ -135,7 +145,7 @@ export function createGlmCodingPlanUsageReader(
 
   async function readSourceSafe(
     providerId: string,
-  ): Promise<GlmCodingPlanProviderSource | null> {
+  ): Promise<GlmCodingPlanReadSourceResult> {
     try {
       return await deps.readSource(providerId);
     } catch (err) {
@@ -158,7 +168,7 @@ export function createGlmCodingPlanUsageReader(
     source: GlmCodingPlanProviderSource,
   ): Promise<boolean> {
     const current = await readSourceSafe(providerId);
-    if (!current) return false;
+    if (!current || current === 'stale-owner') return false;
     return (
       current.runtimeBaseUrl === source.runtimeBaseUrl
       && current.platform === source.platform
@@ -182,7 +192,7 @@ export function createGlmCodingPlanUsageReader(
     if (await isRefreshStillCurrent(providerId, keyFingerprint, source)) return;
     await clearSnapshotQuiet(providerId);
     const current = await readSourceSafe(providerId);
-    if (current) void refreshWith(providerId, current);
+    if (current && current !== 'stale-owner') void refreshWith(providerId, current);
   }
 
   function refreshWith(
@@ -198,7 +208,7 @@ export function createGlmCodingPlanUsageReader(
       if (s.inFlightIdentity !== identity) {
         return s.inFlight.finally(() => {
           void readSourceSafe(providerId).then((current) => {
-            if (current) void refreshWith(providerId, current);
+            if (current && current !== 'stale-owner') void refreshWith(providerId, current);
           });
         });
       }
@@ -276,12 +286,21 @@ export function createGlmCodingPlanUsageReader(
     async read(providerId: string): Promise<GlmCodingPlanUsageSnapshot | null> {
       const s = stateFor(providerId);
       const source = await readSourceSafe(providerId);
+      if (source === 'stale-owner') {
+        // 读取期间账号切换:素材不可信,静默放弃 —— 绝不能走清快照路径(会删掉
+        // 新账号同名 provider 的快照),也不动冷却/状态(#2768 review r3788644129)。
+        return null;
+      }
       if (!source) {
         s.noSourceUntil = deps.now() + throttleMs;
         // 只在「之前有过源」时清一次 —— 普通 provider 的常规读不应反复触发 DELETE。
         if (s.hadSource || s.identity !== null) {
           s.hadSource = false;
           await clearSnapshotQuiet(providerId);
+        } else {
+          // 从未存在过的 provider 不留状态槽:slug 白名单挡了形状,这里挡数量,
+          // states Map 只随真实 provider 增长(#2768 review r3788644122)。
+          states.delete(providerId);
         }
         return null;
       }
@@ -308,8 +327,15 @@ export function createGlmCodingPlanUsageReader(
       if (now < s.noSourceUntil) return;
       if (s.lastRefreshAt > 0 && now - s.lastRefreshAt < throttleMs) return;
       void readSourceSafe(providerId).then((source) => {
+        if (source === 'stale-owner') return;
         if (!source) {
-          stateFor(providerId).noSourceUntil = deps.now() + throttleMs;
+          const s2 = stateFor(providerId);
+          if (!s2.hadSource && s2.identity === null) {
+            // 同 read():不存在的 provider 不留状态槽,Map 有界。
+            states.delete(providerId);
+          } else {
+            s2.noSourceUntil = deps.now() + throttleMs;
+          }
           return;
         }
         void refreshWith(providerId, source);
@@ -319,6 +345,7 @@ export function createGlmCodingPlanUsageReader(
     async syncForProviderChange(providerId: string): Promise<void> {
       const s = stateFor(providerId);
       const source = await readSourceSafe(providerId);
+      if (source === 'stale-owner') return;
       if (!source) {
         // 删除 / 失去 usage 能力:无条件清(本进程可能从未观察过该 provider,但库里
         // 可能残留上一个进程周期的快照),广播 null 让 chip 回占位态。
