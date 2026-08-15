@@ -3698,7 +3698,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 新 turn 启动: 上一轮未配对的失败记账交接 id 已无归属, 丢弃防错配。
           pendingFailedTurnAssistantPersistId.delete(session.id);
           // 记录 turn 开始时刻，供 onTurnErrorEvent 判断 error 是否属于 /clear 之前的旧 turn。
-          noteTurnStarted(session.id);
+          noteTurnStarted(session.id, event.turnAttemptToken);
           noteSubagentObservationTurnStarted(session.id);
           // silent-stop 守卫:新 turn 开始 → 清 pendingResume + 记录时刻(陈旧判定)。
           silentStopAutoResumeGuard.noteTurnStarted(session.id);
@@ -3933,6 +3933,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           eventAgentMeta,
           event.turnScope === 'background' ? 'background' : 'turn',
           event.backgroundTurnStartedAt,
+          event.turnAttemptToken,
         );
       } else if (event.type === 'tool_result') {
         const r = onToolResultEvent(

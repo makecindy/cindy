@@ -188,6 +188,59 @@ describe('update_plan tool_use persistence', () => {
     }
   });
 
+  it('rejects an old-turn plan update after a new turn has started', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+      noteTurnStarted(SESSION, 1);
+      noteSessionAgentKind(SESSION, 'codex');
+
+      nowSpy.mockReturnValue(1_700_000_001_000);
+      noteSessionClearBoundary(SESSION, Date.now());
+      resetTurnPersistState(SESSION);
+
+      nowSpy.mockReturnValue(1_700_000_002_000);
+      noteTurnStarted(SESSION, 2);
+      onToolUseEvent(
+        SESSION,
+        {
+          toolUseId: 'plan:late-replaced-turn',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Late replaced plan', status: 'in_progress' }] },
+        },
+        null,
+        'turn',
+        undefined,
+        1,
+      );
+
+      await flushWrites();
+
+      expect(writeCodexPlanUpdate).not.toHaveBeenCalled();
+
+      onToolUseEvent(
+        SESSION,
+        {
+          toolUseId: 'plan:current-replacement-turn',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Current plan', status: 'in_progress' }] },
+        },
+        null,
+        'turn',
+        undefined,
+        2,
+      );
+      await flushWrites();
+
+      expect(writeCodexPlanUpdate).toHaveBeenCalledWith(SESSION, {
+        turnId: 'current-replacement-turn',
+        plan: [{ step: 'Current plan', status: 'in_progress' }],
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('updates the existing tool_use row when Codex repeats update_plan with the same toolUseId', async () => {
     const firstPersistId = onToolUseEvent(
       SESSION,
