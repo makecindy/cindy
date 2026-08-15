@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
     resolve: (result: unknown) => void;
   }>,
   customProviderRead: vi.fn(),
+  getGrokAccessToken: vi.fn(),
+  recoverGrokAuthAfterRejection: vi.fn(),
   warn: vi.fn(),
 }));
 
@@ -66,6 +68,7 @@ vi.mock('../../authManager.js', () => ({
 }));
 vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: h.owner }),
+  activeOwnerScopeKey: () => `signed-out:${h.owner ?? 'none'}`,
   ownerScopedUserDataPath: (...segments: string[]) =>
     path.join(os.tmpdir(), 'provider-catalog-realm-reload', h.owner, ...segments),
 }));
@@ -88,9 +91,11 @@ vi.mock('../claude-credentials-store.js', () => ({
   hasClaudeAiOAuthUnbound: () => false,
 }));
 vi.mock('../grok-oauth-login.js', () => ({
-  getGrokAccessToken: () => null,
+  getGrokAccessToken: h.getGrokAccessToken,
+  peekGrokAccessToken: () => null,
   hasGrokOAuthLogin: () => false,
   hasGrokOAuthLoginUnbound: () => false,
+  recoverGrokAuthAfterRejection: h.recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache: () => undefined,
 }));
 vi.mock('../generic-oauth.js', () => ({
@@ -136,8 +141,10 @@ import {
 } from '@cindy/model-providers';
 import {
   getActiveCatalog,
+  commitModelPlaneFromCatalog,
   setActiveCatalog,
   setActiveCatalogChangedListener,
+  setCustomProviderConfigs,
   setCustomProviders,
 } from '../active-catalog.js';
 import {
@@ -166,6 +173,48 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  it('passes xAI rejection context into forced recovery and never replays the stale token', async () => {
+    h.getGrokAccessToken.mockReset();
+    h.recoverGrokAuthAfterRejection.mockReset();
+
+    h.getGrokAccessToken.mockResolvedValueOnce('ordinary-token');
+    await expect(__testing.readXaiProviderOAuthToken()).resolves.toBe('ordinary-token');
+    expect(h.recoverGrokAuthAfterRejection).not.toHaveBeenCalled();
+
+    h.recoverGrokAuthAfterRejection.mockResolvedValueOnce('refreshed');
+    h.getGrokAccessToken.mockResolvedValueOnce('fresh-token');
+    await expect(
+      __testing.readXaiProviderOAuthToken({
+        forceRefresh: true,
+        staleToken: 'rejected-token',
+      }),
+    ).resolves.toBe('fresh-token');
+    expect(h.recoverGrokAuthAfterRejection).toHaveBeenLastCalledWith('rejected-token');
+
+    h.recoverGrokAuthAfterRejection.mockResolvedValueOnce('unchanged');
+    await expect(
+      __testing.readXaiProviderOAuthToken({
+        forceRefresh: true,
+        staleToken: 'rejected-token',
+      }),
+    ).resolves.toBeNull();
+    expect(h.getGrokAccessToken).toHaveBeenCalledTimes(2);
+
+    h.recoverGrokAuthAfterRejection.mockResolvedValueOnce('superseded');
+    h.getGrokAccessToken.mockResolvedValueOnce('replacement-token');
+    await expect(
+      __testing.readXaiProviderOAuthToken({
+        forceRefresh: true,
+        staleToken: 'rejected-token',
+      }),
+    ).resolves.toBe('replacement-token');
+
+    await expect(
+      __testing.readXaiProviderOAuthToken({ forceRefresh: true }),
+    ).resolves.toBeNull();
+    expect(h.recoverGrokAuthAfterRejection).toHaveBeenCalledTimes(3);
+  });
+
   it('drops a stale owner custom-provider read and clears the current snapshot on failure', async () => {
     const provider: CustomProviderConfig = {
       id: 'owner-a-provider',
@@ -200,6 +249,115 @@ describe('provider catalog realm reload', () => {
     await refreshCustomProvidersIntoCatalog();
     expect(getActiveCatalog().providers.some((entry) => entry.id === provider.id)).toBe(false);
     h.customProviderRead.mockReset();
+  });
+
+  it('reprojects custom efforts once on Registry refresh and preserves the custom route', async () => {
+    const current = structuredClone(catalogNamed('custom-before', '2026-08-12T10:00:00.000Z'));
+    const currentEntry = current.modelRegistry?.models.find(
+      (entry) => entry.id === 'openai/gpt-5.6-sol',
+    );
+    if (!currentEntry) throw new Error('expected gpt-5.6-sol Registry entry');
+    currentEntry.perAgent = { ...currentEntry.perAgent, codex: { efforts: ['high'] } };
+    setActiveCatalog(current);
+
+    const config: CustomProviderConfig = {
+      id: 'registry-relay',
+      name: 'Registry Relay',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://relay.example/v1',
+          models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+        },
+      },
+    };
+    setCustomProviderConfigs([config]);
+
+    const next = structuredClone(catalogNamed('custom-after', '2026-08-12T11:00:00.000Z'));
+    const nextEntry = next.modelRegistry?.models.find(
+      (entry) => entry.id === 'openai/gpt-5.6-sol',
+    );
+    if (!nextEntry) throw new Error('expected gpt-5.6-sol Registry entry');
+    nextEntry.perAgent = {
+      ...nextEntry.perAgent,
+      codex: { efforts: ['high', 'max', 'ultra'], defaultEffort: 'ultra' },
+    };
+
+    const events: number[] = [];
+    setActiveCatalogChangedListener((revision) => events.push(revision));
+    try {
+      setActiveCatalog(next);
+      const provider = getActiveCatalog().providers.find((entry) => entry.id === config.id);
+      expect(provider).toMatchObject({
+        id: config.id,
+        routing: { codex: { upstream: 'https://relay.example/v1' } },
+      });
+      expect(provider?.models.codex?.[0]).toMatchObject({
+        id: 'gpt-5.6-sol',
+        efforts: ['high', 'max', 'ultra'],
+        defaultEffort: 'ultra',
+      });
+      expect(events).toHaveLength(1);
+    } finally {
+      setActiveCatalogChangedListener(null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('keeps the current custom projection when full or model-plane catalogs omit Registry', () => {
+    const current = structuredClone(catalogNamed('registry-bearing', '2026-08-12T12:00:00.000Z'));
+    const entry = current.modelRegistry?.models.find(
+      (candidate) => candidate.id === 'openai/gpt-5.6-sol',
+    );
+    if (!entry) throw new Error('expected gpt-5.6-sol Registry entry');
+    entry.perAgent = {
+      ...entry.perAgent,
+      codex: { efforts: ['minimal', 'max'], defaultEffort: 'max' },
+    };
+    setActiveCatalog(current);
+    const config: CustomProviderConfig = {
+      id: 'registry-relay',
+      name: 'Registry Relay',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://relay.example/v1',
+          models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+        },
+      },
+    };
+    setCustomProviderConfigs([config]);
+
+    const withoutRegistry = structuredClone(current);
+    delete withoutRegistry.modelRegistry;
+    setActiveCatalog(withoutRegistry);
+    expect(
+      getActiveCatalog().providers.find((provider) => provider.id === config.id)?.models.codex?.[0],
+    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'max' });
+    expect(getActiveCatalog().modelRegistry).toBeUndefined();
+
+    setActiveCatalog(current);
+    commitModelPlaneFromCatalog(withoutRegistry);
+    expect(
+      getActiveCatalog().providers.find((provider) => provider.id === config.id)?.models.codex?.[0],
+    ).toMatchObject({ efforts: ['minimal', 'max'], defaultEffort: 'max' });
+    expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-12T12:00:00.000Z');
+    setCustomProviders([]);
+  });
+
+  it('does not revive cleared owner configs on a later Registry refresh', () => {
+    const config: CustomProviderConfig = {
+      id: 'old-owner-relay',
+      name: 'Old owner relay',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://old-owner.example/v1',
+          models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+        },
+      },
+    };
+    setCustomProviderConfigs([config]);
+    setCustomProviders([]);
+    setActiveCatalog(catalogNamed('next-owner-catalog', '2026-08-12T13:00:00.000Z'));
+    expect(getActiveCatalog().providers.some((provider) => provider.id === config.id)).toBe(false);
   });
 
   it('persists only a digest of a catalog scope that may contain URL credentials', () => {

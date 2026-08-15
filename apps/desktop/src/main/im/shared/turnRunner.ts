@@ -3293,7 +3293,10 @@ export function createTurnRunner(
     unsubscribeMakerEvents?.();
     unsubscribeMakerEvents = null;
     subscribedMaker = null;
-    rejectAllPending('session disposed');
+    // Denial reasons are classified by exact/prefix match. Keep this a stable
+    // system code so Auto-review fallback confirmations are not presented as
+    // a user click when logout / disconnect disposes the IM runner.
+    rejectAllPending('session_disposed');
     return Promise.all(aborts).then(() => undefined);
   }
 

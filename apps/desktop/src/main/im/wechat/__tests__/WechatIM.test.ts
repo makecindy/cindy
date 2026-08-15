@@ -210,6 +210,27 @@ describe('WechatIM host boundary', () => {
     });
   });
 
+  it('自动审批故障时在微信确认提示里写明原因', () => {
+    const ordinary = __testing.formatWechatInteractionPrompt({
+      kind: 'permission',
+      requestId: 'r-ordinary',
+      toolName: 'Bash',
+      input: {},
+    });
+    expect(ordinary).toContain('需要确认工具“Bash”');
+    expect(ordinary).not.toContain('自动审批没完成');
+
+    const unavailable = __testing.formatWechatInteractionPrompt({
+      kind: 'permission',
+      requestId: 'r-unavailable',
+      toolName: 'Bash',
+      input: {},
+      metadata: { autoReviewUnavailable: true },
+    });
+    expect(unavailable).toContain('自动审批没完成，请确认要不要允许这次操作。');
+    expect(unavailable).toContain('回复“允许”执行一次');
+  });
+
   it('cancels only the matching one-shot interaction when its central route closes', async () => {
     const im = new WechatIM(deps());
     vi.spyOn(im, 'sendText').mockResolvedValue({ messageId: 'interaction-prompt' });
@@ -236,6 +257,22 @@ describe('WechatIM host boundary', () => {
       kind: 'permission',
       behavior: 'deny',
       reason: 'interaction_route_released',
+    });
+  });
+
+  it('投递失败时用稳定系统码收口，不把 Error.message 当成拒绝原因', async () => {
+    const im = new WechatIM(deps());
+    vi.spyOn(im, 'sendText').mockRejectedValue(new Error('socket hang up'));
+
+    await expect(im.handleTextInteraction('peer-1', {
+      kind: 'permission',
+      requestId: 'request-send-failed',
+      toolName: 'bash',
+      input: { command: 'pnpm test' },
+    })).resolves.toEqual({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'wechat_interaction_send_failed',
     });
   });
 

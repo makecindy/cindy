@@ -3713,6 +3713,45 @@ describe('AgentInputCoordinator send transaction', () => {
     );
   });
 
+  it('dispatches new text after a persisted Pi image capability rejection', async () => {
+    const h = createHarness();
+    const sid = 'persisted-pi-image-capability-rejection';
+    const image = makeItem('q-image', 'describe the screenshot');
+    const next = makeItem('q-next', 'continue with text');
+    h.setAgentKind('pi');
+    h.sendToAgent.mockImplementationOnce(
+      async (sessionId, _message, _createOpts, sendOpts) => {
+        await persistQueuedUserMessage(sessionId, sendOpts);
+        throw Object.assign(
+          new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+          { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+        );
+      },
+    );
+
+    h.coordinator.enqueue(sid, image);
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.recovery).toEqual({ kind: 'active-turn', item: image });
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+
+    h.coordinator.enqueue(sid, next);
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'continue with text',
+    });
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.recovery).toBeNull();
+    expect(projection.error).toBeNull();
+    expect(projection.queueAbortPending).toBe(false);
+  });
+
   it('recovers a persisted turn when terminal error arrives before send resolves', async () => {
     const h = createHarness();
     const sid = 'terminal-before-send-resolve';

@@ -51,7 +51,9 @@ import {
   deriveGhostSecretTail,
   GHOST_SECRET_TAIL_MIN_VALUE_CHARS,
   isRendererAccessibleSafeStorageKey,
+  PI_PROXY_DERIVATION_KEY_STORAGE_KEY,
   PROVIDER_SECRET_IDS,
+  REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY,
 } from '../../../shared/providerSecrets';
 
 /** 内存版 SecretStorageIo:按"存储键名"读写一个 Map,模拟 safeStorage 文件层。 */
@@ -103,6 +105,11 @@ describe('providerSecrets registry', () => {
   it('keeps the OpenAI images API key behind its dedicated main-only IPC boundary', () => {
     expect(isRendererAccessibleSafeStorageKey(providerSecretStorageKey('openai-images'))).toBe(false);
     expect(isRendererAccessibleSafeStorageKey('PROVIDER_KEY_OPENAI_IMAGES')).toBe(false);
+  });
+
+  it('keeps daemon-wide remote secrets behind the main-only boundary', () => {
+    expect(isRendererAccessibleSafeStorageKey(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY)).toBe(false);
+    expect(isRendererAccessibleSafeStorageKey(PI_PROXY_DERIVATION_KEY_STORAGE_KEY)).toBe(false);
   });
 
   it('keeps custom-provider header blobs behind the main-only boundary', () => {
@@ -315,9 +322,13 @@ describe('providerSecretStore account boundary (clearAll + reconcileOwner)', () 
     const store = createProviderSecretStore(io);
     store.set('xd', 'sk-x');
     store.set('mivo', 'mivo_m');
+    io.store.set(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY, 'remote-token');
+    io.store.set(PI_PROXY_DERIVATION_KEY_STORAGE_KEY, 'pi-key');
     store.clearAll();
     expect(store.get('xd')).toBeNull();
     expect(store.get('mivo')).toBeNull();
+    expect(io.store.has(REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY)).toBe(false);
+    expect(io.store.has(PI_PROXY_DERIVATION_KEY_STORAGE_KEY)).toBe(false);
   });
 
   it('换账号清理连带动态键名密钥：provider_oauth_* blob 与 provider_key_* 自定义 key', () => {

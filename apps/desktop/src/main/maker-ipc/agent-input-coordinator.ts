@@ -3445,6 +3445,7 @@ export class AgentInputCoordinator {
       }
       latest.error = errorMessage(err);
       latest.stickyError = null;
+      const piImageCapabilityRejected = isPiImageInputUnsupportedError(err);
       // 同 handleSendNotDispatched:调度来源的 prompt 不留可被人手动 Retry 的 recovery
       // (review #944 第九轮 P1;判据内建在 setActiveTurnRecovery)。
       const schedulerOrigin = this.setActiveTurnRecovery(latest, head) === 'dropped-scheduler';
@@ -3454,6 +3455,10 @@ export class AgentInputCoordinator {
         // (用户 Retry / clearError)—— 现在没有了,不主动清就等于把会话永久钉在"有活跃
         // turn":之后所有用户与调度消息全部积压到 coordinator 被重置
         // (review #944 第十轮 P1)。
+        latest.activeTurn = null;
+      } else if (piImageCapabilityRejected) {
+        // Pi 图片能力拒绝发生在 vendor RPC 之前，不会再有 terminal event 来释放 activeTurn；
+        // 已持久化的用户行仍保留 active-turn recovery，供用户切换到视觉模型后重试。
         latest.activeTurn = null;
       }
       this.notifyRejectedUserTurn(sessionId, head);

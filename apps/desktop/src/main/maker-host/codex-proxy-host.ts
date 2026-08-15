@@ -31,6 +31,7 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
+import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
   createResponsesChatHandler,
   type ChatBridgeCapabilities,
@@ -48,6 +49,7 @@ import {
   getSessionRoutingDescriptor,
   resolveSessionRoute,
   resolveSessionRouteDecision,
+  resolvePendingSessionRouteDecision,
   buildLocalHandlerHeaders,
   inferProviderIdForModel,
   isHostInjectedAuthSession,
@@ -2191,6 +2193,10 @@ export function createModelRoutingTransform(
       return unresolvedCollabSpawnRouteDecision();
     }
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
+    const pendingRoute = sessionId
+      ? resolvePendingSessionRouteDecision(sessionId, model || undefined)
+      : null;
+    if (pendingRoute) return pendingRoute;
     const selectedRouting = sessionId
       ? getSessionRoutingDescriptor(sessionId, 'codex', model || undefined)
       : null;
@@ -2322,6 +2328,10 @@ function createTransformRequestChain(
     createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
     createProviderModelRewriteTransform(),
+    // 视觉桥透明替换（层 A，Responses 格式）：controller 未注入时短路透传，零干扰；
+    // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
+    // Anthropic 链一致，避免未来 strip 扩展覆盖 Responses input_image 时吃掉图。
+    buildVisionBridgeProxyTransform(log),
     stripNonAnthropicFields,
   ];
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {

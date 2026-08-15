@@ -412,10 +412,9 @@ describe('maker:event hot path ordering', () => {
     expect(epochCaptureIndex).toBeGreaterThanOrEqual(0);
     expect(currentEpochCheckIndex).toBeGreaterThan(epochCaptureIndex);
     expect(flushIndex).toBeGreaterThan(currentEpochCheckIndex);
-    expect(broadcastIndex).toBeGreaterThan(flushIndex);
-    expect(broadcastIndex).toBeGreaterThanOrEqual(0);
-    expect(pendingIndex).toBeGreaterThan(broadcastIndex);
-    expect(islandIndex).toBeGreaterThan(pendingIndex);
+    expect(pendingIndex).toBeGreaterThan(flushIndex);
+    expect(broadcastIndex).toBeGreaterThan(pendingIndex);
+    expect(islandIndex).toBeGreaterThan(broadcastIndex);
     expect(interactionListenerSource.slice(0, broadcastIndex)).not.toContain('handleInteractionRequest(');
     expect(source).toContain('Agent Island interaction update failed after maker interaction broadcast');
   });

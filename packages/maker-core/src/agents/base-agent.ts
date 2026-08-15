@@ -178,20 +178,52 @@ export type PiNativeApi =
   | 'anthropic-messages'
   | 'openai-responses'
   | 'openai-completions'
-  | 'google-generative-ai';
+  | 'google-generative-ai'
+  /** PI's native ChatGPT subscription adapter; not a portable BYOM protocol. */
+  | 'openai-codex-responses';
 
-export type PiNativeThinkingLevel = Exclude<Effort, 'ultra'>;
+export type PiNativeThinkingLevel = 'off' | Exclude<Effort, 'ultra'>;
+
+export interface PiNativeModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  tiers?: Array<{
+    inputTokensAbove: number;
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  }>;
+}
 
 /** BYOM:写进 pi models.json 的一个模型(原生 provider 块内)。 */
 export interface PiNativeModelSpec {
+  /** Cindy/public model id used by provider-aware routing and the UI. */
   id: string;
+  /** PI provider's native model id; omitted when it is identical to id. */
+  wireId?: string;
+  /** Sparse models.json override/addition; absent means retain PI's bundled model entry. */
+  api?: PiNativeApi;
+  /** Per-model native endpoint retained from PI's bundled provider table. */
+  baseUrl?: string;
+  /** Add a model missing from PI's bundled catalog while inheriting the provider's bundled API. */
+  catalogAddition?: boolean;
   name?: string;
+  /** Per-model request headers from the authoritative Pi catalog. */
+  headers?: Record<string, string>;
   reasoning?: boolean;
   /** Pi models.json 的 provider-specific thinking level 映射；null 明确禁用该档。 */
   thinkingLevelMap?: Partial<Record<PiNativeThinkingLevel, string | null>>;
   contextWindow?: number;
   maxTokens?: number;
   input?: Array<'text' | 'image'>;
+  /** Preserve bundled accounting metadata when a protocol correction replaces a model entry. */
+  cost?: PiNativeModelCost;
+  /** Preserve model-specific request metadata on a required full-entry replacement. */
+  compat?: Record<string, unknown>;
+  samplingParams?: Record<string, unknown>;
 }
 
 /**
@@ -219,11 +251,16 @@ export interface PiRemoteFileOps {
  * 解析产出;PiAgent 写进 models.json 的独立 provider 块,并按 model→provider 路由 set_model。
  */
 export interface PiNativeProviderSpec {
-  /** provider id(slug,禁与网关 provider `cindy` 撞名)。 */
+  /** PI runtime provider id(slug,禁与网关 provider `cindy` 撞名)。 */
   id: string;
+  /** Cindy catalog / persisted provider id; defaults to the runtime id. */
+  sourceProviderId?: string;
   name: string;
   baseUrl: string;
-  api: PiNativeApi;
+  /** BYOM provider default. Omitted only when inheriting PI's bundled provider catalog. */
+  api?: PiNativeApi;
+  /** Keep PI's bundled models and serialize only models carrying an explicit api override. */
+  inheritModels?: boolean;
   /**
    * 存放该 provider api key 的 env 变量名;models.json 用 `$<envVar>` 插值引用(与网关
    * CINDY_PI_API_KEY 同机制,密钥只进子进程 env、不落盘)。keyless(本机 Ollama 等)留空 →
@@ -232,6 +269,17 @@ export interface PiNativeProviderSpec {
   apiKeyEnvVar?: string;
   headers?: Record<string, string>;
   models: PiNativeModelSpec[];
+  /** Translate Cindy's persisted/public model id to the Pi-native model id for this provider. */
+  modelIdAliases?: Record<string, string>;
+  /**
+   * This provider is backed by a loopback service owned by the Desktop host. Remote Pi may use
+   * it only after the host establishes the exact SSH reverse-forward described here. The marker
+   * is host control-plane data and is never serialized into models.json.
+   */
+  hostProxyForward?: {
+    localUrl: string;
+    remotePort: number;
+  };
 }
 
 /** host 解析出的 pi 原生 provider + 需注入子进程的 env(api keys)。 */
@@ -440,7 +488,18 @@ export interface AgentDeps {
    * PiAgent creates a high-entropy token per session, registers it before spawn,
    * and disposes the exact registration when startup fails or the session closes.
    */
-  registerPiProxySession?: (sessionId: string, token: string) => (() => void) | void;
+  registerPiProxySession?: (
+    sessionId: string,
+    token: string,
+    resolveProviderId: () => string | null,
+  ) => (() => void) | void;
+
+  /**
+   * Pi-only: host-owned derivation for restart-stable remote proxy tokens.
+   * Desktop persists the secret key; maker-core receives only the per-session
+   * result. Missing hooks preserve the legacy process-stable fallback.
+   */
+  derivePiProxySessionToken?: (sessionId: string) => string;
 
   /**
    * BYOM:host 解析出当前会话可用的 pi **原生 provider**(用户自定义/本地模型)+ 需注入的
@@ -450,7 +509,14 @@ export interface AgentDeps {
    * 缺省 / 返回空 → 只有网关 provider `cindy`(现状,行为不变)。keyless provider 的 key 可省。
    */
   resolvePiNativeProviders?: (
-    ctx: { workingDir: string; remoteHostId?: string | null },
+    ctx: {
+      workingDir: string;
+      remoteHostId?: string | null;
+      providerId?: string | null;
+      model: string;
+      /** Present only when restoring an existing Pi session; permits private compatibility ids. */
+      resumeSessionId?: string;
+    },
   ) => Promise<PiNativeProvidersResult | null>;
 
   /**
@@ -495,6 +561,16 @@ export interface AgentDeps {
    * needs to replace built-in behavior.
    */
   capabilityAdditions?: AgentCapabilityAdditions;
+
+  /**
+   * Pi-only:视觉桥后端 env（层 C）。host 解析视觉桥配置（主/fallback 视觉后端 →
+   * OpenAI 兼容端点 + model + key）后返回键值对，PiAgent 注入 pi 子进程 spawnEnv，
+   * cindy-bridge 的 vision 工具读取。缺省 = 不注入（视觉桥工具不可用，零干扰）。
+   * model 参数供 host 按 session 模型判定是否命中视觉桥目标模型——未命中返回 null，
+   * 保证非目标/已有视觉能力的 Pi 模型不注册 vision 工具、不改变工具面（零干扰）。
+   * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
+   */
+  resolvePiVisionBridgeEnv?: (model: string) => Record<string, string> | null;
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native
@@ -669,6 +745,11 @@ export interface AgentDeps {
       logger: AgentDeps['logger'];
       /** maker sessionId(daemon 模式用作远端 daemon 的 session key)。 */
       sessionId?: string | null;
+      /** Host-owned loopback providers that must be reverse-forwarded before remote Pi starts. */
+      hostProxyForwards?: ReadonlyArray<{
+        localUrl: string;
+        remotePort: number;
+      }>;
     },
   ) => import('./pi/transport.js').PiTransport | Promise<import('./pi/transport.js').PiTransport>;
 

@@ -35,6 +35,11 @@ vi.mock('./index', () => ({
   remoteUnsubscribe: vi.fn(),
   disconnectAllControllers: vi.fn(),
   broadcast: vi.fn(),
+  captureControllerDisplayNameRequestEpoch: () => 0,
+  readControllerDisplayNameFreshnessSince: () => ({
+    changedAfterRequest: false,
+    authoritativeName: null,
+  }),
 }));
 vi.mock('../device-link/index', () => ({
   getDeviceLinkStatus: () => 'online',
@@ -46,6 +51,11 @@ vi.mock('../device-link/index', () => ({
   remoteUnsubscribe: vi.fn(),
   disconnectAllControllers: vi.fn(),
   broadcast: vi.fn(),
+  captureControllerDisplayNameRequestEpoch: () => 0,
+  readControllerDisplayNameFreshnessSince: () => ({
+    changedAfterRequest: false,
+    authoritativeName: null,
+  }),
 }));
 vi.mock('../device-link/dispatch', () => ({
   getActiveControllers: () => [],
@@ -92,8 +102,17 @@ import {
 } from '../device-link/ipc';
 import { DeviceLinkError } from '@cindy/device-link';
 import { ServerApiError } from '../serverApiClient';
-import { __testing as settingsTesting } from '../device-link/settings-store';
+import {
+  __testing as settingsTesting,
+  normalizeCachedDeviceName,
+} from '../device-link/settings-store';
 import { __testing as refcountTesting } from '../device-link/subscriptionRefcount';
+import {
+  applyControllerDisplayNamePresence,
+  createControllerDisplayNameFreshnessTracker,
+  getControllerDisplayNameFreshnessSince,
+  resetControllerDisplayNameFreshness,
+} from '../device-link/controllerDisplayNameFreshness';
 
 function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
   return {
@@ -124,6 +143,16 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
     broadcast: vi.fn(),
     readLastKnownDeviceNames: vi.fn(() => ({})),
     rememberLastKnownDeviceName: vi.fn(async () => false),
+    forgetLastKnownDeviceName: vi.fn(async () => false),
+    applyControllerDisplayNameListSnapshot: vi.fn(),
+    beginControllerDisplayNameDirectoryRefresh: vi.fn(() => 1),
+    captureControllerDisplayNameRequestEpoch: vi.fn(() => 0),
+    isLatestControllerDisplayNameDirectoryRefresh: vi.fn(() => true),
+    waitForNewerControllerDisplayNameDirectoryRefresh: vi.fn(async () => {}),
+    readControllerDisplayNameFreshnessSince: vi.fn(() => ({
+      changedAfterRequest: false,
+      authoritativeName: null,
+    })),
     ...overrides,
   };
 }
@@ -265,6 +294,109 @@ describe('device-link IPC handlers', () => {
     await expect(handleListDevices(depsNet)).rejects.toThrowError(/\[DEVICE_LINK_UNAVAILABLE\]/);
   });
 
+  it.each([
+    ['旧数据库名', '新数据库名', '新数据库名'],
+    ['', '新数据库名', '新数据库名'],
+    ['旧数据库名', null, 'Host.local'],
+  ] as const)(
+    'listDevices:被后台目录淘汰的旧响应(%s)等待后返回当前权威名(%s)',
+    async (name, authoritativeName, expectedName) => {
+      const applyControllerDisplayNameListSnapshot = vi.fn();
+      const rememberLastKnownDeviceName = vi.fn(async () => true);
+      const forgetLastKnownDeviceName = vi.fn(async () => true);
+      const waitForNewerControllerDisplayNameDirectoryRefresh = vi.fn(async () => {});
+      const deps = makeDeps({
+        apiFetch: vi.fn().mockResolvedValue({
+          devices: [
+            {
+              deviceId: 'dev-1',
+              name,
+              selfName: 'Host.local',
+              platform: 'darwin',
+              lastSeenAt: '2026-06-23T00:00:00.000Z',
+              online: true,
+              busy: false,
+              remoteControlEnabled: true,
+              controlEnabled: true,
+              isSelf: false,
+            },
+          ],
+        }),
+        applyControllerDisplayNameListSnapshot,
+        rememberLastKnownDeviceName,
+        forgetLastKnownDeviceName,
+        beginControllerDisplayNameDirectoryRefresh: vi.fn(() => 1),
+        isLatestControllerDisplayNameDirectoryRefresh: vi.fn(() => false),
+        waitForNewerControllerDisplayNameDirectoryRefresh,
+        readControllerDisplayNameFreshnessSince: vi.fn(() => ({
+          changedAfterRequest: false,
+          authoritativeName,
+        })),
+      });
+
+      await expect(handleListDevices(deps)).resolves.toMatchObject({
+        devices: [{ name: expectedName }],
+      });
+
+      expect(waitForNewerControllerDisplayNameDirectoryRefresh).toHaveBeenCalledWith(1);
+      expect(applyControllerDisplayNameListSnapshot).not.toHaveBeenCalled();
+      expect(rememberLastKnownDeviceName).not.toHaveBeenCalled();
+      expect(forgetLastKnownDeviceName).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['旧目录名', ''] as const)(
+    'listDevices:并发请求中新响应先返回时，晚到旧响应(%s)跟随新结果且不回写缓存',
+    async (oldName) => {
+      const resolvers: Array<(value: unknown) => void> = [];
+      const apiFetch: DeviceLinkIpcDeps['apiFetch'] = <T>() =>
+        new Promise<T>((resolve) => {
+          resolvers.push((value) => resolve(value as T));
+        });
+      const rememberLastKnownDeviceName = vi.fn(async () => true);
+      const forgetLastKnownDeviceName = vi.fn(async () => true);
+      const applyControllerDisplayNameListSnapshot = vi.fn();
+      const deps = makeDeps({
+        apiFetch,
+        rememberLastKnownDeviceName,
+        forgetLastKnownDeviceName,
+        applyControllerDisplayNameListSnapshot,
+      });
+      const device = (name: string) => ({
+        deviceId: 'dev-1',
+        name,
+        selfName: 'Host.local',
+        platform: 'darwin',
+        lastSeenAt: '2026-06-23T00:00:00.000Z',
+        online: true,
+        busy: false,
+        remoteControlEnabled: true,
+        controlEnabled: true,
+        isSelf: false,
+      });
+
+      const oldRequest = handleListDevices(deps);
+      const newRequest = handleListDevices(deps);
+      resolvers[1]?.({ devices: [device('新数据库名')] });
+      await expect(newRequest).resolves.toMatchObject({
+        devices: [{ name: '新数据库名' }],
+      });
+      resolvers[0]?.({ devices: [device(oldName)] });
+      await expect(oldRequest).resolves.toMatchObject({
+        devices: [{ name: '新数据库名' }],
+      });
+
+      expect(rememberLastKnownDeviceName).toHaveBeenCalledTimes(1);
+      expect(rememberLastKnownDeviceName).toHaveBeenCalledWith('dev-1', '新数据库名');
+      expect(forgetLastKnownDeviceName).not.toHaveBeenCalled();
+      expect(applyControllerDisplayNameListSnapshot).toHaveBeenCalledTimes(1);
+      expect(applyControllerDisplayNameListSnapshot).toHaveBeenCalledWith(
+        [expect.objectContaining({ deviceId: 'dev-1', name: '新数据库名' })],
+        0,
+      );
+    },
+  );
+
   it('listDevices:缓存服务端返回的有效设备名', async () => {
     const rememberLastKnownDeviceName = vi.fn(async () => true);
     const deps = makeDeps({
@@ -348,6 +480,229 @@ describe('device-link IPC handlers', () => {
       ],
     });
   });
+
+  it.each([
+    ['unknown', 'Host.local', 'Host.local'],
+    ['no', null, '12345678'],
+  ] as const)(
+    'listDevices:目录占位名 %s 无缓存时回退 selfName/设备短 ID(%s)',
+    async (name, selfName, expectedName) => {
+      const deps = makeDeps({
+        apiFetch: vi.fn().mockResolvedValue({
+          devices: [
+            {
+              deviceId: '1234567890abcdef',
+              name,
+              selfName,
+              platform: 'darwin',
+              lastSeenAt: '2026-06-23T00:00:00.000Z',
+              online: false,
+              busy: false,
+              remoteControlEnabled: false,
+              controlEnabled: true,
+              isSelf: false,
+            },
+          ],
+        }),
+        readLastKnownDeviceNames: vi.fn(() => ({})),
+      });
+
+      const result = await handleListDevices(deps);
+      expect(result.devices[0]?.name).toBe(expectedName);
+      expect(deps.rememberLastKnownDeviceName).not.toHaveBeenCalled();
+      expect(deps.forgetLastKnownDeviceName).not.toHaveBeenCalled();
+    },
+  );
+
+  it('listDevices:断线重连后的新 presence 阻止断线前旧列表响应删除名称', async () => {
+    const freshness = createControllerDisplayNameFreshnessTracker();
+    applyControllerDisplayNamePresence({
+      deviceId: 'dev-1',
+      name: '断线前名称',
+      selfName: 'Host.local',
+      freshness,
+      normalizeName: normalizeCachedDeviceName,
+      setDisplayName: vi.fn(),
+      setFallbackDisplayName: vi.fn(),
+      rememberName: vi.fn(),
+      forgetName: vi.fn(),
+    });
+    const rememberLastKnownDeviceName = vi.fn(async () => true);
+    const forgetLastKnownDeviceName = vi.fn(async () => true);
+    const apiFetch: DeviceLinkIpcDeps['apiFetch'] = async <T>() => {
+      resetControllerDisplayNameFreshness(freshness);
+      applyControllerDisplayNamePresence({
+        deviceId: 'dev-1',
+        name: '重连后名称',
+        selfName: 'Host.local',
+        freshness,
+        normalizeName: normalizeCachedDeviceName,
+        setDisplayName: vi.fn(),
+        setFallbackDisplayName: vi.fn(),
+        rememberName: vi.fn(),
+        forgetName: vi.fn(),
+      });
+      return {
+        devices: [
+          {
+            deviceId: 'dev-1',
+            name: '',
+            selfName: 'Host.local',
+            platform: 'darwin',
+            lastSeenAt: '2026-06-23T00:00:00.000Z',
+            online: true,
+            busy: false,
+            remoteControlEnabled: true,
+            controlEnabled: true,
+            isSelf: false,
+          },
+        ],
+      } as T;
+    };
+    const deps = makeDeps({
+      apiFetch,
+      rememberLastKnownDeviceName,
+      forgetLastKnownDeviceName,
+      captureControllerDisplayNameRequestEpoch: () => freshness.epoch,
+      readControllerDisplayNameFreshnessSince: (deviceId, requestEpoch) =>
+        getControllerDisplayNameFreshnessSince(freshness, deviceId, requestEpoch),
+    });
+
+    const result = await handleListDevices(deps);
+    expect(result.devices[0]?.name).toBe('重连后名称');
+    expect(rememberLastKnownDeviceName).not.toHaveBeenCalled();
+    expect(forgetLastKnownDeviceName).not.toHaveBeenCalled();
+  });
+
+  it('listDevices:仅发生 relay reset 时仍采用并缓存有效数据库展示名', async () => {
+    const freshness = createControllerDisplayNameFreshnessTracker();
+    const rememberLastKnownDeviceName = vi.fn(async () => true);
+    const forgetLastKnownDeviceName = vi.fn(async () => true);
+    const apiFetch: DeviceLinkIpcDeps['apiFetch'] = async <T>() => {
+      resetControllerDisplayNameFreshness(freshness);
+      return {
+        devices: [
+          {
+            deviceId: 'dev-1',
+            name: '数据库展示名',
+            selfName: 'Host.local',
+            platform: 'darwin',
+            lastSeenAt: '2026-06-23T00:00:00.000Z',
+            online: false,
+            busy: false,
+            remoteControlEnabled: true,
+            controlEnabled: true,
+            isSelf: false,
+          },
+        ],
+      } as T;
+    };
+    const deps = makeDeps({
+      apiFetch,
+      rememberLastKnownDeviceName,
+      forgetLastKnownDeviceName,
+      captureControllerDisplayNameRequestEpoch: () => freshness.epoch,
+      readControllerDisplayNameFreshnessSince: (deviceId, requestEpoch) =>
+        getControllerDisplayNameFreshnessSince(freshness, deviceId, requestEpoch),
+    });
+
+    const result = await handleListDevices(deps);
+    expect(result.devices[0]?.name).toBe('数据库展示名');
+    expect(rememberLastKnownDeviceName).toHaveBeenCalledWith('dev-1', '数据库展示名');
+    expect(forgetLastKnownDeviceName).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['旧目录名', '新数据库名', 'remember', '新数据库名'],
+    ['', '新数据库名', 'forget', '新数据库名'],
+    ['旧目录名', '', 'remember', 'Host.local'],
+  ] as const)(
+    'listDevices:旧目录 %s 在 presence(%s) 后不得触发 %s，并返回当前名称',
+    async (directoryName, presenceName, _mutation, expectedName) => {
+      const freshness = createControllerDisplayNameFreshnessTracker();
+      const rememberLastKnownDeviceName = vi.fn(async () => true);
+      const forgetLastKnownDeviceName = vi.fn(async () => true);
+      const apiFetch: DeviceLinkIpcDeps['apiFetch'] = async <T>() => {
+        applyControllerDisplayNamePresence({
+          deviceId: 'dev-1',
+          name: presenceName,
+          selfName: 'Host.local',
+          freshness,
+          normalizeName: (value) => normalizeCachedDeviceName(value),
+          setDisplayName: vi.fn(),
+          setFallbackDisplayName: vi.fn(),
+          rememberName: vi.fn(),
+          forgetName: vi.fn(),
+        });
+        return {
+          devices: [
+            {
+              deviceId: 'dev-1',
+              name: directoryName,
+              selfName: 'Host.local',
+              platform: 'darwin',
+              lastSeenAt: '2026-06-23T00:00:00.000Z',
+              online: true,
+              busy: false,
+              remoteControlEnabled: true,
+              controlEnabled: true,
+              isSelf: false,
+            },
+          ],
+        } as T;
+      };
+      const deps = makeDeps({
+        apiFetch,
+        rememberLastKnownDeviceName,
+        forgetLastKnownDeviceName,
+        captureControllerDisplayNameRequestEpoch: () => freshness.epoch,
+        readControllerDisplayNameFreshnessSince: (deviceId, requestEpoch) =>
+          getControllerDisplayNameFreshnessSince(freshness, deviceId, requestEpoch),
+      });
+
+      const result = await handleListDevices(deps);
+      expect(result.devices[0]?.name).toBe(expectedName);
+      expect(rememberLastKnownDeviceName).not.toHaveBeenCalled();
+      expect(forgetLastKnownDeviceName).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['Host.local', 'Host.local'],
+    [null, '12345678'],
+  ] as const)(
+    'listDevices:数据库空名清除 last-known，并回退 selfName/设备短 ID(%s)',
+    async (selfName, expectedName) => {
+      const forgetLastKnownDeviceName = vi.fn(async () => true);
+      const rememberLastKnownDeviceName = vi.fn(async () => false);
+      const deps = makeDeps({
+        apiFetch: vi.fn().mockResolvedValue({
+          devices: [
+            {
+              deviceId: '1234567890abcdef',
+              name: '',
+              selfName,
+              platform: 'darwin',
+              lastSeenAt: '2026-06-23T00:00:00.000Z',
+              online: false,
+              busy: false,
+              remoteControlEnabled: false,
+              controlEnabled: true,
+              isSelf: false,
+            },
+          ],
+        }),
+        readLastKnownDeviceNames: vi.fn(() => ({ '1234567890abcdef': '旧缓存名' })),
+        rememberLastKnownDeviceName,
+        forgetLastKnownDeviceName,
+      });
+
+      const result = await handleListDevices(deps);
+      expect(result.devices[0]?.name).toBe(expectedName);
+      expect(forgetLastKnownDeviceName).toHaveBeenCalledWith('1234567890abcdef');
+      expect(rememberLastKnownDeviceName).not.toHaveBeenCalled();
+    },
+  );
 
   it('listDevices:按本机 disabledControlDeviceIds 合成 controlEnabled=false', async () => {
     const deps = makeDeps({

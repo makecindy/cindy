@@ -267,6 +267,13 @@ export function resolveDraftSessionProviderId({
     return explicitProviderId;
   }
   if (!effectiveProviderId) return null;
+  // 预设通过「添加供应商」落地后同样属于 user provider。即使它是当前模型唯一的
+  // 已连接来源，也不能省略 providerId：main / maker-core 的 null 语义是沿用各 harness
+  // 的原生认证 fallback（Claude → Cindy gateway / Claude OAuth），不会反查目录里唯一的
+  // BYOM 来源。省略后 UI 虽显示该来源，首轮 auth gate 却会去读 gateway key，最终报
+  // `not authenticated: no_key`。用户来源必须始终显式钉住，保证其代理路由与密钥生效。
+  const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);
+  if (effectiveProvider?.source === 'user') return effectiveProviderId;
   const modelDefaultProviderId = effectiveSourceIdForModel([...providers], null, model, agent);
   // main 收到 providerId=null 后按 agent 的原生来源选择启动链路，而不是只在“提供当前
   // 模型”的来源里重算。典型分叉：XD 与 Anthropic 都已连接，只有 Anthropic 目录含
