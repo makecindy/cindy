@@ -51,9 +51,14 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     string,
     Promise<{ messageId: string } | null>
   >();
-  /** 排空已成功、尚未被兜底发送认领的收据(当拍过期, 避免劫持后续无关发送)。 */
+  /** 排空已成功、尚未被原兜底发送认领的收据(按 openerId, 当拍过期)。 */
   private readonly completedOpenerConsumes = new Map<string, { messageId: string }>();
   private readonly completedOpenerConsumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * 空窗暂存后, 只有「原兜底发送」可以认领排空结果。key = kind:userId →
+   * openerId。同 lane 的后续发送(/help 等)不得复用上一轮 /new 的 messageId。
+   */
+  private readonly pendingFallbackOpenerIds = new Map<string, string>();
   private retryFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private retryFlushAttempt = 0;
   private disposed = false;
@@ -74,31 +79,42 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     return `${kind}:${userId}`;
   }
 
-  private rememberCompletedOpenerConsume(key: string, messageId: string): void {
-    this.completedOpenerConsumes.set(key, { messageId });
-    const prev = this.completedOpenerConsumeTimers.get(key);
+  private notePendingFallback(userId: string, kind: 'markdown' | 'spec', openerId: string): void {
+    this.pendingFallbackOpenerIds.set(this.openerConsumeKey(userId, kind), openerId);
+  }
+
+  private takePendingFallbackOpenerId(
+    userId: string,
+    kind: 'markdown' | 'spec',
+  ): string | undefined {
+    const key = this.openerConsumeKey(userId, kind);
+    const openerId = this.pendingFallbackOpenerIds.get(key);
+    if (!openerId) return undefined;
+    this.pendingFallbackOpenerIds.delete(key);
+    return openerId;
+  }
+
+  private rememberCompletedOpenerConsume(openerId: string, messageId: string): void {
+    this.completedOpenerConsumes.set(openerId, { messageId });
+    const prev = this.completedOpenerConsumeTimers.get(openerId);
     if (prev) clearTimeout(prev);
     this.completedOpenerConsumeTimers.set(
-      key,
+      openerId,
       setTimeout(() => {
-        this.completedOpenerConsumeTimers.delete(key);
-        this.completedOpenerConsumes.delete(key);
+        this.completedOpenerConsumeTimers.delete(openerId);
+        this.completedOpenerConsumes.delete(openerId);
       }, 0),
     );
   }
 
-  private takeCompletedOpenerConsume(
-    userId: string,
-    kind: 'markdown' | 'spec',
-  ): { messageId: string } | undefined {
-    const key = this.openerConsumeKey(userId, kind);
-    const receipt = this.completedOpenerConsumes.get(key);
+  private takeCompletedOpenerConsume(openerId: string): { messageId: string } | undefined {
+    const receipt = this.completedOpenerConsumes.get(openerId);
     if (!receipt) return undefined;
-    this.completedOpenerConsumes.delete(key);
-    const timer = this.completedOpenerConsumeTimers.get(key);
+    this.completedOpenerConsumes.delete(openerId);
+    const timer = this.completedOpenerConsumeTimers.get(openerId);
     if (timer) {
       clearTimeout(timer);
-      this.completedOpenerConsumeTimers.delete(key);
+      this.completedOpenerConsumeTimers.delete(openerId);
     }
     return receipt;
   }
@@ -150,7 +166,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     evicted: string[];
     items: Array<{
       entry: ReturnType<typeof outbound.drainDeferredOpenerConsumes>[number];
-      key: string;
+      openerId: string;
       resolveFlush: (result: { messageId: string } | null) => void;
     }>;
   } | null {
@@ -160,14 +176,12 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     const evicted = outbound.drainEvictedOpeners();
     if (pending.length === 0 && evicted.length === 0) return null;
     const items = pending.map((entry) => {
-      const kind = 'markdown' in entry ? 'markdown' : 'spec';
-      const key = this.openerConsumeKey(entry.userId, kind);
       let resolveFlush!: (result: { messageId: string } | null) => void;
       const flushPromise = new Promise<{ messageId: string } | null>((resolve) => {
         resolveFlush = resolve;
       });
-      this.flushingOpenerConsumes.set(key, flushPromise);
-      return { entry, key, resolveFlush };
+      this.flushingOpenerConsumes.set(entry.openerId, flushPromise);
+      return { entry, openerId: entry.openerId, resolveFlush };
     });
     return { pinnedClient, epoch: outbound.getAccountEpoch(), evicted, items };
   }
@@ -189,19 +203,18 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         this.log.warn(`flushDeferredOpenerConsumes evicted-opener recall failed: ${msg}`);
       }
     }
-    for (const { entry, key, resolveFlush } of items) {
+    for (const { entry, openerId, resolveFlush } of items) {
       // 每个条目处理前重新校验账号代次: 前一个条目的 patch await 期间换代
       // 时, 剩余条目不得经新 client 修改旧账号的开场白 — 直接丢弃整批。
       if (outbound.getAccountEpoch() !== epoch) {
         this.log.info('flushDeferredOpenerConsumes: account changed — dropping remaining entries');
         resolveFlush(null);
-        this.flushingOpenerConsumes.delete(key);
-        this.completedOpenerConsumes.delete(key);
+        this.flushingOpenerConsumes.delete(openerId);
+        this.completedOpenerConsumes.delete(openerId);
         continue;
       }
       // 条目在暂存时就原子预留了 opener(携带 id)— 排空直接使用, 不会被
       // 后续轮次认领。在途 promise 已在 claimFlushBatch 同步登记。
-      const openerId = entry.openerId;
       try {
         if ('markdown' in entry) {
           await streamingText.patchMarkdown(openerId, entry.markdown);
@@ -209,7 +222,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
           await outbound.updateInteractive(openerId, entry.spec);
           outbound.registerCardLane(entry.userId, openerId);
         }
-        this.rememberCompletedOpenerConsume(key, openerId);
+        this.rememberCompletedOpenerConsume(openerId, openerId);
         resolveFlush({ messageId: openerId });
       } catch (err) {
         // patch/替换失败: 与即时消费同口径 — 撤回开场白卡(pin 到排空开始
@@ -244,7 +257,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
                   buttons: [],
                 })
               : await outbound.sendInteractive(entry.userId, entry.spec);
-          this.rememberCompletedOpenerConsume(key, sent.messageId);
+          this.rememberCompletedOpenerConsume(openerId, sent.messageId);
           resolveFlush(sent);
         } catch (sendErr) {
           // 兜底发送也失败: 重新入队并在当前连接上主动再排空。清凭证后
@@ -253,6 +266,11 @@ export class FeishuIM extends BaseIM implements ChannelIM {
           if (outbound.getAccountEpoch() === epoch) {
             this.log.warn(`flushDeferredOpenerConsumes fallback send failed (re-deferred): ${sendMsg}`);
             outbound.deferOpenerConsume(entry);
+            this.notePendingFallback(
+              entry.userId,
+              'markdown' in entry ? 'markdown' : 'spec',
+              entry.openerId,
+            );
             requeued = true;
           } else {
             this.log.info('flushDeferredOpenerConsumes: credentials cleared — dropping entry');
@@ -260,7 +278,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
           resolveFlush(null);
         }
       } finally {
-        this.flushingOpenerConsumes.delete(key);
+        this.flushingOpenerConsumes.delete(openerId);
       }
     }
     if (requeued) this.scheduleConnectedFlushRetry();
@@ -300,6 +318,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     for (const timer of this.completedOpenerConsumeTimers.values()) clearTimeout(timer);
     this.completedOpenerConsumeTimers.clear();
     this.completedOpenerConsumes.clear();
+    this.pendingFallbackOpenerIds.clear();
     this.offImStatus();
     cancelAppRegistration();
     await this.flushChain.catch(() => undefined);
@@ -391,6 +410,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     if (!outbound.getBoundClient()) {
       if (reservedOpenerId) {
         outbound.deferOpenerConsume({ userId, openerId: reservedOpenerId, markdown });
+        this.notePendingFallback(userId, 'markdown', reservedOpenerId);
       }
       return false;
     }
@@ -432,6 +452,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     if (!outbound.getBoundClient()) {
       if (reservedOpenerId) {
         outbound.deferOpenerConsume({ userId, openerId: reservedOpenerId, spec });
+        this.notePendingFallback(userId, 'spec', reservedOpenerId);
       }
       return false;
     }
@@ -484,17 +505,21 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   ): Promise<{ messageId: string }> {
     const epoch = outbound.getAccountEpoch();
     const clientAtTake = outbound.getBoundClient();
-    const key = this.openerConsumeKey(userId, kind);
-    const flushing = this.flushingOpenerConsumes.get(key);
-    if (flushing) {
-      const flushed = await flushing;
-      this.takeCompletedOpenerConsume(userId, kind);
-      if (flushed) return flushed;
-    } else {
-      const completed = this.takeCompletedOpenerConsume(userId, kind);
-      if (completed) return completed;
+    const fallbackOpenerId = this.takePendingFallbackOpenerId(userId, kind);
+    if (fallbackOpenerId) {
+      const flushing = this.flushingOpenerConsumes.get(fallbackOpenerId);
+      if (flushing) {
+        const flushed = await flushing;
+        this.takeCompletedOpenerConsume(fallbackOpenerId);
+        if (flushed) return flushed;
+      } else {
+        const completed = this.takeCompletedOpenerConsume(fallbackOpenerId);
+        if (completed) return completed;
+      }
     }
-    const entry = outbound.takeMatchingDeferredOpenerConsume(userId, kind);
+    const entry = fallbackOpenerId
+      ? outbound.takeMatchingDeferredOpenerConsume(userId, kind)
+      : undefined;
     if (entry) {
       if (entry.epoch !== epoch) {
         // 条目属于旧账号: 丢弃(不得跨账号 patch/撤回/发送), 调用方内容
@@ -521,6 +546,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         if (!outbound.getBoundClient()) {
           this.log.warn(`sendWithDeferredOpenerConsume patch failed in reconnect window (re-deferred): ${msg}`);
           outbound.deferOpenerConsume(entry);
+          this.notePendingFallback(userId, kind, entry.openerId);
           throw err;
         }
         this.log.warn(`sendWithDeferredOpenerConsume patch failed (recalling reserved opener): ${msg}`);
@@ -548,6 +574,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
             : 'sendWithDeferredOpenerConsume final send failed (re-deferred for flush retry)',
         );
         outbound.deferOpenerConsume(entry);
+        this.notePendingFallback(userId, kind, entry.openerId);
         this.scheduleConnectedFlushRetry();
       }
       throw sendErr;

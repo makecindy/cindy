@@ -152,9 +152,15 @@ describe('FeishuIM opener consumption failure semantics', () => {
     vi.useRealTimers();
   });
 
+  async function queueOriginalFallback(openerId: string, markdown: string): Promise<void> {
+    outboundMocks.getBoundClient.mockReturnValue(null);
+    outboundMocks.claimPatchableOpener.mockReturnValue(openerId);
+    await im.consumePendingOpenerCard('g/oc_c/omt_t', markdown);
+    outboundMocks.getBoundClient.mockReturnValue({ fake: 'client' });
+  }
+
   it('同账号未换代时最终发送失败也重新暂存, 进入退避排空', async () => {
-    const client = { fake: 'same-client' };
-    outboundMocks.getBoundClient.mockReturnValue(client);
+    await queueOriginalFallback('om_reserved', '终态');
     outboundMocks.takeMatchingDeferredOpenerConsume.mockReturnValueOnce({
       userId: 'g/oc_c/omt_t',
       openerId: 'om_reserved',
@@ -203,6 +209,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
 
   it('兜底发送就地收口预留 opener(不另发、不留思考卡)', async () => {
     // 空窗暂存后连接恢复: 兜底发送应优先 patch 预留卡, 而不是另发。
+    await queueOriginalFallback('om_reserved', '回复');
     outboundMocks.takeMatchingDeferredOpenerConsume.mockReturnValueOnce({
       userId: 'g/oc_c/omt_t',
       openerId: 'om_reserved',
@@ -247,6 +254,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     const patchGate = new Promise<void>((resolve) => {
       resolvePatch = resolve;
     });
+    await queueOriginalFallback('om_flushing', '终态回复');
     (streamingText.patchMarkdown as ReturnType<typeof vi.fn>).mockImplementationOnce(
       () => patchGate,
     );
@@ -262,7 +270,8 @@ describe('FeishuIM opener consumption failure semantics', () => {
     expect(outboundMocks.sendText).not.toHaveBeenCalled();
   });
 
-  it('排空已成功后兜底发送仍复用同一 opener, 不另发', async () => {
+  it('排空已成功后原兜底发送仍复用同一 opener, 不另发', async () => {
+    await queueOriginalFallback('om_done', '终态回复');
     outboundMocks.drainDeferredOpenerConsumes.mockReturnValueOnce([
       { userId: 'g/oc_c/omt_t', openerId: 'om_done', markdown: '终态回复' },
     ]);
@@ -275,6 +284,26 @@ describe('FeishuIM opener consumption failure semantics', () => {
       messageId: 'om_done',
     });
     expect(outboundMocks.sendText).not.toHaveBeenCalled();
+  });
+
+  it('排空进行中时同 lane 的新发送不认领旧终态', async () => {
+    let resolvePatch!: () => void;
+    const patchGate = new Promise<void>((resolve) => {
+      resolvePatch = resolve;
+    });
+    (streamingText.patchMarkdown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => patchGate,
+    );
+    outboundMocks.drainDeferredOpenerConsumes.mockReturnValueOnce([
+      { userId: 'g/oc_c/omt_t', openerId: 'om_flushing', markdown: '/new 回复' },
+    ]);
+    outboundMocks.sendText.mockResolvedValue({ messageId: 'om_help' });
+
+    feishuEvents.emit('imStatus', { kind: 'connected', appId: 'cli' });
+    const helpP = im.sendText('g/oc_c/omt_t', '/help');
+    resolvePatch();
+    await expect(helpP).resolves.toEqual({ messageId: 'om_help' });
+    expect(outboundMocks.sendText).toHaveBeenCalledWith('g/oc_c/omt_t', '/help');
   });
 
   it('保持连接时重新入队后按退避再排空, 不依赖下一次 connected', async () => {

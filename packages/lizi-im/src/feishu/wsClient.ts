@@ -339,6 +339,20 @@ async function retryUnconfirmedOpen(
   }
   const opener = await outbound.openThread(entry.messageId);
   if (orphanRetryEpoch !== epoch) return;
+  // saveAndConnect 的普通换账号只 stop/start, 不推进 orphanRetryEpoch —
+  // await 后必须再核当前 bot, 否则会把 A 的 opener/turn 写进 B 的 outbound。
+  if (!isSameBotActive(entry.botAppId, entry.service)) {
+    const accountChanged =
+      currentBotAppId !== null &&
+      (currentBotAppId !== entry.botAppId || currentService !== entry.service);
+    if (accountChanged) {
+      log.info('[feishu/wsClient] unconfirmed openThread dropped after await: account changed');
+      return;
+    }
+    suspendUnconfirmedOpenRetry({ ...entry, timer: undefined });
+    log.info('[feishu/wsClient] unconfirmed openThread suspended after await for same-bot reconnect');
+    return;
+  }
   if (opener.kind === 'unconfirmed') {
     scheduleUnconfirmedOpenRetry({ ...entry, timer: undefined, attempt: entry.attempt + 1 });
     return;

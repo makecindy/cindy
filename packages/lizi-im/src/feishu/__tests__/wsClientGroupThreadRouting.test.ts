@@ -306,4 +306,43 @@ describe('feishu group thread routing', () => {
     expect(mocks.openThread).toHaveBeenCalledTimes(4);
     vi.useRealTimers();
   });
+
+  it('延迟恢复 await openThread 期间换账号后不再登记锚点或派发 turn', async () => {
+    vi.useFakeTimers();
+    let resolveOpen!: (value: {
+      kind: 'opened';
+      messageId: string;
+      threadId: string;
+    }) => void;
+    mocks.openThread
+      .mockResolvedValueOnce({ kind: 'unconfirmed' })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOpen = resolve;
+          }),
+      );
+    const events = collectMessages();
+    await connect();
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('换账号'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledTimes(2);
+
+    await wsClient.stop({ announceOffline: false, reason: 'switch-account' });
+    const connecting = wsClient.start(
+      { appId: 'cli_other_bot', appSecret: 'secret', service: 'feishu' },
+      { announceLifecycle: false },
+    );
+    mocks.options.at(-1)?.onReady?.();
+    await connecting;
+
+    resolveOpen({ kind: 'opened', messageId: 'om_stale', threadId: 'omt_stale' });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(events).toHaveLength(0);
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
+    expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
 });
