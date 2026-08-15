@@ -89,6 +89,7 @@ export * from './modelAccessBean.js';
 export type {
   CatalogSourceConfig,
   CatalogIO,
+  CatalogCapabilityEvidence,
   CatalogLoadResult,
   CatalogLoadSource,
 } from './source.js';

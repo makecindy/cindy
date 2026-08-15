@@ -65,10 +65,17 @@ export interface CatalogIO {
 }
 
 export type CatalogLoadSource = 'local' | 'remote' | 'cache' | 'bundled';
+export type CatalogCapabilityEvidence = 'current' | 'fallback';
 
 export interface CatalogLoadResult {
   catalog: Catalog;
   source: CatalogLoadSource;
+  /**
+   * `current` means this exact snapshot came from the configured current catalog source
+   * (or an explicit local override). `fallback` covers LKG, legacy OSS and bundled data,
+   * which may keep compatibility metadata but cannot prove current regional availability.
+   */
+  capabilityEvidence: CatalogCapabilityEvidence;
 }
 
 // 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
@@ -411,7 +418,11 @@ export async function loadCatalogWithSource(
       if (text != null) {
         const parsed = parseCatalog(text);
         log(io, 'info', 'loaded catalog from local path', { path: cfg.localPath });
-        return { catalog: mergeWithBundled(parsed), source: 'local' };
+        return {
+          catalog: mergeWithBundled(parsed),
+          source: 'local',
+          capabilityEvidence: 'current',
+        };
       }
     } catch (err) {
       log(io, 'warn', 'local catalog read/parse failed, falling back', { err: String(err) });
@@ -441,6 +452,9 @@ export async function loadCatalogWithSource(
         try {
           const text = await io.fetchText(remoteUrl, remainingMs);
           let parsed = parseRemoteCatalog(text, allowLegacyModelMeta);
+          let capabilityEvidence: CatalogCapabilityEvidence = allowLegacyModelMeta
+            ? 'fallback'
+            : 'current';
           // Never propagate the retired compatibility block into a newly written LKG.
           let cacheText = allowLegacyModelMeta ? JSON.stringify(parsed) : text;
           const remoteRegistryUpdatedAt = registryUpdatedAt(parsed);
@@ -453,6 +467,7 @@ export async function loadCatalogWithSource(
                 if (selected.catalog !== parsed) {
                   parsed = selected.catalog;
                   cacheText = JSON.stringify(selected.catalog);
+                  capabilityEvidence = 'fallback';
                   log(
                     io,
                     'warn',
@@ -482,6 +497,7 @@ export async function loadCatalogWithSource(
                 const selected = preserveNewerCachedCatalog(parsed, committed).catalog;
                 if (selected !== parsed) {
                   parsed = selected;
+                  capabilityEvidence = 'fallback';
                   log(io, 'warn', 'serialized LKG commit preserved a newer catalog snapshot', {
                     url: logUrl,
                     remoteUpdatedAt: remoteRegistryUpdatedAt,
@@ -497,7 +513,11 @@ export async function loadCatalogWithSource(
             }
           }
           log(io, 'info', 'loaded catalog from remote', { url: logUrl });
-          return { catalog: mergeWithBundled(parsed), source: 'remote' };
+          return {
+            catalog: mergeWithBundled(parsed),
+            source: 'remote',
+            capabilityEvidence,
+          };
         } catch (err) {
           log(io, 'warn', 'remote catalog read/parse failed, trying fallback', {
             url: logUrl,
@@ -515,7 +535,11 @@ export async function loadCatalogWithSource(
           if (cached !== null) {
             const parsed = parseRemoteCatalog(cached, allowLegacyModelMeta);
             log(io, 'info', 'loaded last-known-good catalog snapshot', { url: logUrl });
-            return { catalog: mergeWithBundled(parsed), source: 'cache' };
+            return {
+              catalog: mergeWithBundled(parsed),
+              source: 'cache',
+              capabilityEvidence: 'fallback',
+            };
           }
         } catch (err) {
           log(io, 'warn', 'cached catalog read/parse failed, trying fallback', {
@@ -529,10 +553,25 @@ export async function loadCatalogWithSource(
 
   // 3) 兜底：内置 bundled。
   log(io, 'info', 'using bundled catalog');
-  return { catalog: BUNDLED_CATALOG, source: 'bundled' };
+  return {
+    catalog: BUNDLED_CATALOG,
+    source: 'bundled',
+    capabilityEvidence: 'fallback',
+  };
 }
 
 /** 启动期兼容入口：接受最终 bundled fallback，只返回目录快照。 */
-export async function loadCatalog(cfg: CatalogSourceConfig, io: CatalogIO): Promise<Catalog> {
-  return (await loadCatalogWithSource(cfg, io)).catalog;
+export async function loadCatalog(
+  cfg: CatalogSourceConfig,
+  io: CatalogIO,
+  onResolved?: (result: CatalogLoadResult) => void,
+): Promise<Catalog> {
+  const result = await loadCatalogWithSource(cfg, io);
+  try {
+    onResolved?.(result);
+  } catch {
+    // Compatibility callers expect this helper to return a valid catalog unconditionally.
+    // Hosts that need the metadata must default to fallback-safe behavior if observation fails.
+  }
+  return result.catalog;
 }

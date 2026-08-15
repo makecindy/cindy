@@ -6,6 +6,7 @@ import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 import {
   filterProviderCatalogForAccount,
   isProviderSelectable,
+  projectUnverifiedCatalogFallbackForBuildRegion,
 } from '../provider-access-policy.js';
 
 function model(id: string): CatalogModel {
@@ -136,5 +137,48 @@ describe('provider access policy', () => {
       'xai/grok-imagine-video',
       'xai/grok-imagine-video-1.5',
     ]);
+  });
+
+  it('projects only unverified XD fallback media in CN/dev and preserves xAI discovery verbatim', () => {
+    const xai: Provider = {
+      id: 'xai',
+      name: 'xAI',
+      source: 'builtin',
+      agents: ['claude-code'],
+      auth: { method: 'oauth' },
+      routing: {},
+      models: {
+        'claude-code': [
+          { ...model('xai/grok-imagine-image'), group: 'image' },
+          { ...model('xai/grok-imagine-video'), group: 'video' },
+        ],
+      },
+      imageModels: [{ id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' }],
+      videoModels: [{ id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' }],
+    };
+    const input = catalog();
+    input.providers.push(xai);
+
+    expect(projectUnverifiedCatalogFallbackForBuildRegion(input, 'global')).toBe(input);
+    for (const region of ['cn', 'dev'] as const) {
+      const projected = projectUnverifiedCatalogFallbackForBuildRegion(input, region);
+      const xd = projected.providers.find((item) => item.id === 'xd');
+      expect(xd?.imageModels).toEqual([]);
+      expect(xd?.embeddingModels).toEqual([]);
+      expect(xd?.videoModels?.map((item) => item.id)).toEqual([
+        'seedance-fast',
+        'seedance-pro',
+        'bytedance/seedance-2.5',
+      ]);
+      expect(xd?.videoDefaults).toEqual({ standard: 'seedance-fast', best: 'seedance-pro' });
+      expect(xd?.models['claude-code']?.map((item) => item.id)).toEqual([
+        'shared-model',
+        'xd-only-model',
+        'seedance-fast',
+        'seedance-pro',
+        'bytedance/seedance-2.5',
+      ]);
+      expect(projected.providers.find((item) => item.id === 'xai')).toBe(xai);
+    }
   });
 });

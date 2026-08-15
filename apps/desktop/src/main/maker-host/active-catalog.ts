@@ -30,13 +30,16 @@ import {
   findModelRegistryRoute,
   type AgentKind,
   type Catalog,
+  type CatalogCapabilityEvidence,
   type CatalogModel,
   type CustomProviderConfig,
   type Provider,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
 
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
+import { projectUnverifiedCatalogFallbackForBuildRegion } from './provider-access-policy.js';
 import {
   applyLocalConsumerOverrides,
   applyLocalOverridesToRoot,
@@ -58,6 +61,8 @@ import {
 
 /** OSS / bundled 加载来的基础目录;null = 尚未加载(回落 BUNDLED_CATALOG)。 */
 let base: Catalog | null = null;
+/** 当前基础目录是否由本次配置的 Catalog 真源明确证明；fallback 只保兼容元数据。 */
+let baseCapabilityEvidence: CatalogCapabilityEvidence = 'fallback';
 /** Last trusted Registry used only to re-project user configs; it never changes catalog membership. */
 let trustedCustomProviderRegistry: Catalog['modelRegistry'] = BUNDLED_CATALOG.modelRegistry;
 /** 用户自定义供应商(已 buildUserProvider 展开的标准 Provider),追加在 base 之后。 */
@@ -675,7 +680,11 @@ function withEmptyModels(p: Provider): Provider {
 }
 
 function computeMerged(): Catalog {
-  const b = base ?? BUNDLED_CATALOG;
+  const source = base ?? BUNDLED_CATALOG;
+  const b =
+    baseCapabilityEvidence === 'current'
+      ? source
+      : projectUnverifiedCatalogFallbackForBuildRegion(source, CURRENT_CINDY_REGION);
   // Dynamic OpenAI/Anthropic roots are rebuilt from discovery/registry below,
   // but the daily OSS catalog may carry sparse PI protocol annotations. Keep
   // only that metadata and apply it after existence has been independently
@@ -714,7 +723,11 @@ function computeMerged(): Catalog {
   lastPlanWarnings = plan.warnings;
   // XD Provider 使用随客户端发布的固定壳，远端 Catalog 只能管理非 XD Provider。
   // `/models` 会在下方重建固定壳的全部模型，Catalog 缺失、刷新或异常都不能改变 XD。
-  const builtinXd = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd');
+  const builtinXdCatalog =
+    baseCapabilityEvidence === 'current'
+      ? BUNDLED_CATALOG
+      : projectUnverifiedCatalogFallbackForBuildRegion(BUNDLED_CATALOG, CURRENT_CINDY_REGION);
+  const builtinXd = builtinXdCatalog.providers.find((provider) => provider.id === 'xd');
   const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
   const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
   const providerSources = b.providers.filter((provider) => provider.id !== 'xd');
@@ -1006,12 +1019,16 @@ export function getCatalogModelContextWindow(
 }
 
 /** 由 host 的目录加载器(ensureActiveCatalogLoaded)在拉取成功后写入基础目录。 */
-export function setActiveCatalog(catalog: Catalog): void {
+export function setActiveCatalog(
+  catalog: Catalog,
+  options: { capabilityEvidence?: CatalogCapabilityEvidence } = {},
+): void {
   const previous = base ?? BUNDLED_CATALOG;
   const projectionRegistry =
     catalog.modelRegistry ?? previous.modelRegistry ?? trustedCustomProviderRegistry;
   trustedCustomProviderRegistry = projectionRegistry;
   base = catalog;
+  baseCapabilityEvidence = options.capabilityEvidence ?? 'current';
   if (customConfigs) {
     custom = customConfigs.map((config) =>
       buildUserProvider(config, { modelRegistry: projectionRegistry }),
@@ -1028,7 +1045,10 @@ export function setActiveCatalog(catalog: Catalog): void {
  * 「xai 新表 + registry 旧表」的可观测混态窗口。
  * 目标不变量:成功且有变化 = 恰 1 revision / 1 broadcast;no-op/拒收 = 0。
  */
-export function commitModelPlaneFromCatalog(catalog: Catalog): void {
+export function commitModelPlaneFromCatalog(
+  catalog: Catalog,
+  options: { capabilityEvidence?: CatalogCapabilityEvidence } = {},
+): void {
   const current = base ?? BUNDLED_CATALOG;
   const incomingXai = catalog.providers.find((provider) => provider.id === 'xai');
   const providers =
@@ -1041,6 +1061,7 @@ export function commitModelPlaneFromCatalog(catalog: Catalog): void {
     providers,
     ...(catalog.modelRegistry ? { modelRegistry: catalog.modelRegistry } : {}),
   };
+  baseCapabilityEvidence = options.capabilityEvidence ?? 'current';
   if (customConfigs) {
     custom = customConfigs.map((config) =>
       buildUserProvider(config, { modelRegistry: trustedCustomProviderRegistry }),

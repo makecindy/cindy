@@ -31,6 +31,7 @@ import {
   parseCatalog,
   storedCustomProviderId,
   type Catalog,
+  type CatalogCapabilityEvidence,
   type CatalogIO,
   type CatalogSourceConfig,
 } from '@cindy/model-providers';
@@ -478,10 +479,13 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
     const sourceKey = catalogSourceKey(source);
     // 首次加载时顺手清掉旧版磁盘缓存孤儿（fire-and-forget，每进程一次）。
     void cleanupLegacyCatalogCache();
-    activeInflight = loadCatalog(source, io)
+    let capabilityEvidence: CatalogCapabilityEvidence = 'fallback';
+    activeInflight = loadCatalog(source, io, (result) => {
+      capabilityEvidence = result.capabilityEvidence;
+    })
       .then(async (catalog) => {
         activeCatalogSourceKey = sourceKey;
-        setActiveCatalog(catalog);
+        setActiveCatalog(catalog, { capabilityEvidence });
         syncLocalCatalogOverridesIntoActiveCatalog();
         getActiveCatalog();
         logModelPlaneWarnings();
@@ -540,10 +544,13 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
   const generation = ++endpointReloadGeneration;
   activeCatalogSourceKey = null;
   // 必须在网络 await 前失效：登录提交后 renderer/agent 可能立即读取目录。
-  setActiveCatalog(BUNDLED_CATALOG);
+  setActiveCatalog(BUNDLED_CATALOG, { capabilityEvidence: 'fallback' });
   broadcastReferenceModelPricing();
 
-  const flight = loadCatalog(source, io)
+  let capabilityEvidence: CatalogCapabilityEvidence = 'fallback';
+  const flight = loadCatalog(source, io, (result) => {
+    capabilityEvidence = result.capabilityEvidence;
+  })
     .then((catalog) => {
       if (
         endpointReloadGeneration !== generation ||
@@ -552,7 +559,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
         return getActiveCatalog();
       }
       activeCatalogSourceKey = sourceKey;
-      setActiveCatalog(catalog);
+      setActiveCatalog(catalog, { capabilityEvidence });
       broadcastReferenceModelPricing();
       return getActiveCatalog();
     })
@@ -592,7 +599,7 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   }
   const generation = endpointReloadGeneration;
   const flight = loadCatalogWithSource(sourceConfig, io)
-    .then(({ catalog, source }) => {
+    .then(({ catalog, source, capabilityEvidence }) => {
       if (source === 'bundled') {
         throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
       }
@@ -630,7 +637,7 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
           return getActiveCatalog();
         }
       }
-      commitModelPlaneFromCatalog(catalog);
+      commitModelPlaneFromCatalog(catalog, { capabilityEvidence });
       // computeMerged 在这里同步完成，确保告警属于刚提交的同一代目录；不能读取
       // 上一代惰性缓存留下的 warnings。
       const activeCatalog = getActiveCatalog();

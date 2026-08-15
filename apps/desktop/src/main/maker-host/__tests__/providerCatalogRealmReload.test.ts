@@ -9,9 +9,10 @@ const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
   owner: 'owner-default',
+  canUseCindyGateway: true,
   loads: [] as Array<{
     source: Record<string, unknown>;
-    resolve: (catalog: unknown) => void;
+    resolve: (catalog: unknown, capabilityEvidence?: 'current' | 'fallback') => void;
   }>,
   refreshLoads: [] as Array<{
     source: Record<string, unknown>;
@@ -34,9 +35,23 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
   return {
     ...actual,
     loadCatalog: vi.fn(
-      (source: Record<string, unknown>) =>
+      (
+        source: Record<string, unknown>,
+        _io: unknown,
+        onResolved?: (result: unknown) => void,
+      ) =>
         new Promise((resolve) => {
-          h.loads.push({ source, resolve });
+          h.loads.push({
+            source,
+            resolve: (catalog, capabilityEvidence = 'current') => {
+              onResolved?.({
+                catalog,
+                source: capabilityEvidence === 'current' ? 'remote' : 'cache',
+                capabilityEvidence,
+              });
+              resolve(catalog);
+            },
+          });
         }),
     ),
     loadCatalogWithSource: vi.fn(
@@ -72,8 +87,12 @@ vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...segments: string[]) =>
     path.join(os.tmpdir(), 'provider-catalog-realm-reload', h.owner, ...segments),
 }));
+vi.mock('../../../shared/brandRegion.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../shared/brandRegion.js')>();
+  return { ...actual, CURRENT_CINDY_REGION: 'cn' };
+});
 vi.mock('../../appCapabilities.js', () => ({
-  getAppCapabilities: () => ({ canUseCindyGateway: false }),
+  getAppCapabilities: () => ({ canUseCindyGateway: h.canUseCindyGateway }),
 }));
 vi.mock('../../ownerNamespaceMigration.js', () => ({
   hasLegacyOwnerNamespaceClaim: () => false,
@@ -139,6 +158,7 @@ import {
   type Catalog,
   type CustomProviderConfig,
 } from '@cindy/model-providers';
+import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
 import {
   getActiveCatalog,
   commitModelPlaneFromCatalog,
@@ -150,6 +170,7 @@ import {
 import {
   __testing,
   ensureActiveCatalogLoaded,
+  getDesktopSelectableCatalog,
   refreshActiveCatalogFromSource,
   refreshCustomProvidersIntoCatalog,
   reloadActiveCatalogForEndpointChange,
@@ -538,6 +559,79 @@ describe('provider catalog realm reload', () => {
     expect(activeMarker()).toBe('catalog-cn-latest');
   });
 
+  it('keeps bundled/LKG/waiting catalogs region-safe without hiding discovered xAI media', async () => {
+    const catalogWithXaiMedia = structuredClone(catalogNamed('catalog-with-xai-media'));
+    const xai = catalogWithXaiMedia.providers.find((provider) => provider.id === 'xai');
+    if (!xai) throw new Error('expected xAI provider');
+    xai.imageModels = [
+      { id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' },
+    ];
+    xai.imageDefaults = { standard: 'xai/grok-imagine-image' };
+    xai.videoModels = [
+      { id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' },
+      { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+    ];
+    xai.videoDefaults = { standard: 'xai/grok-imagine-video' };
+
+    h.endpoint = 'https://model.cn-fallback.example';
+    const fallbackReload = reloadActiveCatalogForEndpointChange();
+
+    // The endpoint-switch window uses bundled data, but it cannot advertise Global XD media.
+    const waitingXd = getDesktopSelectableCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(waitingXd?.imageModels).toEqual([]);
+    expect(waitingXd?.embeddingModels).toEqual([]);
+    expect(waitingXd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
+
+    h.loads.at(-1)!.resolve(catalogWithXaiMedia, 'fallback');
+    await fallbackReload;
+
+    const fallbackCatalog = getDesktopSelectableCatalog();
+    const fallbackXd = fallbackCatalog.providers.find((provider) => provider.id === 'xd');
+    expect(fallbackXd?.imageModels).toEqual([]);
+    expect(fallbackXd?.embeddingModels).toEqual([]);
+    expect(fallbackXd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
+    expect(
+      fallbackCatalog.providers.find((provider) => provider.id === 'xai')?.videoModels?.map(
+        (model) => model.id,
+      ),
+    ).toEqual(['xai/grok-imagine-video', 'xai/grok-imagine-video-1.5']);
+    expect(deriveCindyMediaConfig(fallbackCatalog.providers, 'embed')).toEqual({
+      models: [],
+      defaults: null,
+    });
+    expect(
+      deriveCindyMediaConfig(fallbackCatalog.providers, 'video').models.map((model) => model.id),
+    ).toContain('xai/grok-imagine-video-1.5');
+
+    h.endpoint = 'https://model.cn-current.example';
+    const currentReload = reloadActiveCatalogForEndpointChange();
+    expect(
+      getDesktopSelectableCatalog()
+        .providers.find((provider) => provider.id === 'xd')
+        ?.videoModels?.map((model) => model.id),
+    ).not.toContain('happyhorse');
+    h.loads.at(-1)!.resolve(catalogWithXaiMedia, 'current');
+    await currentReload;
+
+    const currentCatalog = getDesktopSelectableCatalog();
+    const currentXd = currentCatalog.providers.find((provider) => provider.id === 'xd');
+    expect(currentXd?.imageModels?.map((model) => model.id)).toContain('gpt-image-2');
+    expect(currentXd?.embeddingModels?.map((model) => model.id)).toContain('voyage/voyage-4');
+    expect(currentXd?.videoModels?.map((model) => model.id)).toContain('happyhorse');
+    expect(deriveCindyMediaConfig(currentCatalog.providers, 'embed').defaults?.standard).toBe(
+      'voyage/voyage-4',
+    );
+    expect(
+      currentCatalog.providers.find((provider) => provider.id === 'xai')?.videoModels?.map(
+        (model) => model.id,
+      ),
+    ).toEqual(['xai/grok-imagine-video', 'xai/grok-imagine-video-1.5']);
+
+    // Restore the baseline expected by the following realm-race tests.
+    h.endpoint = 'https://model.cn.example';
+    setActiveCatalog(catalogNamed('catalog-cn-latest'));
+  });
+
   it('ignores an automatic refresh response from a superseded realm', async () => {
     const staleRefresh = refreshActiveCatalogFromSource();
     await Promise.resolve();
@@ -604,6 +698,47 @@ describe('provider catalog realm reload', () => {
     expect(
       getActiveCatalog().providers.find((provider) => provider.id === 'xai')?.models.codex,
     ).toEqual(activeXaiModels);
+  });
+
+  it('projects a newer fallback refresh without hiding its xAI media discovery', async () => {
+    const current = structuredClone(
+      catalogNamed('catalog-current-before-fallback-refresh', '2026-07-31T12:30:00.000Z'),
+    );
+    setActiveCatalog(current, { capabilityEvidence: 'current' });
+    expect(
+      getDesktopSelectableCatalog()
+        .providers.find((provider) => provider.id === 'xd')
+        ?.embeddingModels?.map((model) => model.id),
+    ).toContain('voyage/voyage-4');
+
+    const fallback = structuredClone(
+      catalogNamed('catalog-fallback-refresh', '2026-07-31T13:00:00.000Z'),
+    );
+    const xai = fallback.providers.find((provider) => provider.id === 'xai');
+    if (!xai) throw new Error('expected xAI provider');
+    xai.imageModels = [{ id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' }];
+    xai.videoModels = [
+      { id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' },
+      { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+    ];
+
+    const refresh = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    h.refreshLoads.at(-1)!.resolve({
+      catalog: fallback,
+      source: 'cache',
+      capabilityEvidence: 'fallback',
+    });
+    await refresh;
+
+    const projected = getDesktopSelectableCatalog();
+    const xd = projected.providers.find((provider) => provider.id === 'xd');
+    expect(xd?.imageModels).toEqual([]);
+    expect(xd?.embeddingModels).toEqual([]);
+    expect(xd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
+    expect(projected.providers.find((provider) => provider.id === 'xai')?.videoModels).toEqual(
+      xai.videoModels,
+    );
   });
 
   it('按时间语义守卫 offset/Z 等价 revision,拒收真实旧值和坏值,接受真实新值', async () => {
