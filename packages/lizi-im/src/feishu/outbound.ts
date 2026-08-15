@@ -62,10 +62,20 @@ function clearAccountScopedOutboundState(): void {
  * 明确清除凭证/登出路径(clearAndDisconnect)用: 与 transport 重连区分 —
  * 清掉账号态并重置 lastBoundCreds, 之后重新保存相同 appId/service 不会被
  * 误判为同账号重连(登出前的 opener/锚点不得被新一轮会话认领)。
+ * accountEpoch 同时递增 — 在途的排空续段据此丢弃(清凭证后不得重新入队
+ * 旧暂存终态, 否则登出前的 /new、错误提示会被重新呈现)。
  */
+let accountEpoch = 0;
+
 export function forgetBoundAccount(): void {
   clearAccountScopedOutboundState();
   lastBoundCreds = null;
+  accountEpoch += 1;
+}
+
+/** 当前账号代次(清凭证递增) — 在途排空续段比对用。 */
+export function getAccountEpoch(): number {
+  return accountEpoch;
 }
 
 export function bindClient(c: BotCredentials): void {
@@ -204,16 +214,23 @@ export function drainDeferredOpenerConsumes(): DeferredOpenerConsume[] {
 }
 
 /**
- * 取消某 lane 的暂存消费 — 调用方的兜底发送已成功送达时(暂存与兜底之间
- * bindClient 可能已完成), 排空会重复呈现同一终态: 成功发送后清除同 lane
- * 的暂存项, 排空时跳过。
+ * 取出并移除某 lane 的匹配暂存消费 — 调用方的兜底发送在连接恢复后执行时,
+ * 优先就地收口被预留的 opener(见 FeishuIM 的发送包装): patch/替换成功即
+ * 不再另发、不留卡; 无匹配返回 undefined。
  */
-export function cancelDeferredOpenerConsumesFor(userId: string): void {
+export function takeMatchingDeferredOpenerConsume(
+  userId: string,
+  kind: 'markdown' | 'spec',
+): DeferredOpenerConsume | undefined {
   for (let i = deferredOpenerConsumes.length - 1; i >= 0; i--) {
-    if (deferredOpenerConsumes[i]!.userId === userId) {
-      deferredOpenerConsumes.splice(i, 1);
-    }
+    const entry = deferredOpenerConsumes[i]!;
+    if (entry.userId !== userId) continue;
+    if (kind === 'markdown' && !('markdown' in entry)) continue;
+    if (kind === 'spec' && !('spec' in entry)) continue;
+    deferredOpenerConsumes.splice(i, 1);
+    return entry;
   }
+  return undefined;
 }
 
 /**

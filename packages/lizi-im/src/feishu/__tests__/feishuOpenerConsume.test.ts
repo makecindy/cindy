@@ -26,7 +26,12 @@ const outboundMocks = vi.hoisted(() => ({
       spec?: { body: string; buttons: unknown[] };
     }>
   >(() => []),
-  cancelDeferredOpenerConsumesFor: vi.fn(),
+  takeMatchingDeferredOpenerConsume: vi.fn<
+    () =>
+      | { userId: string; openerId: string; markdown?: string; spec?: { body: string; buttons: unknown[] } }
+      | undefined
+  >(() => undefined),
+  getAccountEpoch: vi.fn(() => 0),
   recallOwnMessage: vi.fn(async () => true),
   sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
 }));
@@ -41,7 +46,8 @@ vi.mock('../outbound.js', () => ({
   rearmAnchorToTrigger: outboundMocks.rearmAnchorToTrigger,
   deferOpenerConsume: outboundMocks.deferOpenerConsume,
   drainDeferredOpenerConsumes: outboundMocks.drainDeferredOpenerConsumes,
-  cancelDeferredOpenerConsumesFor: outboundMocks.cancelDeferredOpenerConsumesFor,
+  takeMatchingDeferredOpenerConsume: outboundMocks.takeMatchingDeferredOpenerConsume,
+  getAccountEpoch: outboundMocks.getAccountEpoch,
   sendInteractive: outboundMocks.sendInteractive,
   sendText: outboundMocks.sendText,
 }));
@@ -131,17 +137,22 @@ describe('FeishuIM opener consumption failure semantics', () => {
     });
   });
 
-  it('兜底发送成功后取消同 lane 的暂存消费(排空不重复呈现)', async () => {
-    outboundMocks.getBoundClient.mockReturnValue(null);
-    outboundMocks.claimPatchableOpener.mockReturnValue('om_reserved');
-    await im.consumePendingOpenerCard('g/oc_c/omt_t', '回复');
-    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalled();
+  it('兜底发送就地收口预留 opener(不另发、不留思考卡)', async () => {
+    // 空窗暂存后连接恢复: 兜底发送应优先 patch 预留卡, 而不是另发。
+    outboundMocks.takeMatchingDeferredOpenerConsume.mockReturnValueOnce({
+      userId: 'g/oc_c/omt_t',
+      openerId: 'om_reserved',
+      markdown: '回复',
+    });
 
-    // 暂存之后、兜底发送之前 bindClient 完成: 兜底发送成功 → 取消同 lane 暂存。
-    await im.sendText('g/oc_c/omt_t', '兜底');
-    expect(outboundMocks.cancelDeferredOpenerConsumesFor).toHaveBeenCalledWith(
+    const result = await im.sendText('g/oc_c/omt_t', '兜底');
+    expect(outboundMocks.takeMatchingDeferredOpenerConsume).toHaveBeenCalledWith(
       'g/oc_c/omt_t',
+      'markdown',
     );
+    expect(streamingText.patchMarkdown).toHaveBeenCalledWith('om_reserved', '回复');
+    expect(result).toEqual({ messageId: 'om_reserved' });
+    expect(outboundMocks.sendText).not.toHaveBeenCalled();
   });
 
   it('排空兜底发送也失败(再次重连)时重新入队, 下一次 connected 重试', async () => {

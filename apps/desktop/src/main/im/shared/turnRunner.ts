@@ -263,6 +263,8 @@ interface QueuedSend {
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
+  /** 早期拒绝终态回调(见 ImRunAgentTurnArgs.onEarlyReject)。 */
+  onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
   /** 调用方在拼群上下文之前已落库的 user 行(见 ImRunAgentTurnArgs 同名字段)。 */
   prePersistedUserMessage?: { sessionId: string; clientId: string };
 }
@@ -871,6 +873,7 @@ export function createTurnRunner(
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
+      ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
       ...(args.prePersistedUserMessage
@@ -1161,6 +1164,7 @@ export function createTurnRunner(
           source: outcome.source,
           reason: outcome.reason,
           context: outcome.context,
+          onEarlyReject: item.onEarlyReject,
         });
         return { kind: 'rejected', reason: outcome.reason };
       }
@@ -1186,6 +1190,7 @@ export function createTurnRunner(
           source: `${channel}-runner`,
           reason: turnPolicyFailureReason,
           context: buildSendContext(rowId),
+          onEarlyReject: item.onEarlyReject,
         });
         return { kind: 'rejected', reason: turnPolicyFailureReason };
       }
@@ -1234,6 +1239,7 @@ export function createTurnRunner(
         reason: normalized.reason,
         context: buildSendContext(rowId),
         error: normalized.error,
+        onEarlyReject: item.onEarlyReject,
       });
       return { kind: 'rejected', reason: normalized.reason };
     } finally {
@@ -2492,6 +2498,7 @@ export function createTurnRunner(
       reason: string;
       context: string;
       error?: SanitizedSendOutcomeError;
+      onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
     },
   ): Promise<void> {
     log.error(`${channel} session send failed before dispatch`, {
@@ -2529,21 +2536,27 @@ export function createTurnRunner(
               ? unsupportedCopy(rejectedMode)
               : unsupportedCopy
             : `❌ 启动 agent 失败：${failure.reason}`;
-        if (
-          output.kind === 'chunked-text' &&
-          failure.turn.chunkedReplyBegun
-        ) {
-          await output.commitFinal({
-            userId,
-            text: message,
-            terminal: 'error',
-            threadTs: state.scopeKey,
-            errorCode: failure.reason,
-          });
-        } else {
-          await im.sendText(userId, message, {
-            threadTs: state.scopeKey,
-          });
+        // 早期拒绝终态交调用方消费(群主流 @ 开话题时 patch 开场白卡),
+        // 消费了就不再另发。
+        const consumed =
+          (await failure.onEarlyReject?.(failure.reason, message)) ?? false;
+        if (!consumed) {
+          if (
+            output.kind === 'chunked-text' &&
+            failure.turn.chunkedReplyBegun
+          ) {
+            await output.commitFinal({
+              userId,
+              text: message,
+              terminal: 'error',
+              threadTs: state.scopeKey,
+              errorCode: failure.reason,
+            });
+          } else {
+            await im.sendText(userId, message, {
+              threadTs: state.scopeKey,
+            });
+          }
         }
         // 群会话「完全访问」档被强确认策略拒绝: 报错文案之外, 再给 owner
         // 私聊发一张一键修复卡(切回 auto)。只对提供 permissionModeFix 文案

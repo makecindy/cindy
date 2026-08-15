@@ -60,6 +60,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     const pinnedClient = outbound.getBoundClient();
     if (!pinnedClient) return;
     const pending = outbound.drainDeferredOpenerConsumes();
+    const epoch = outbound.getAccountEpoch();
     for (const entry of pending) {
       // 条目在暂存时就原子预留了 opener(携带 id)— 排空直接使用, 不会被
       // 后续轮次认领。
@@ -89,10 +90,16 @@ export class FeishuIM extends BaseIM implements ChannelIM {
           }
         } catch (sendErr) {
           // 兜底发送也失败(排空期间再次重连): 条目已 drain, 重新入队 —
-          // 下一次 connected 排空重试, 终态不会因一次失败永久丢失。
+          // 下一次 connected 排空重试, 终态不会因一次失败永久丢失。但清
+          // 凭证(账号代次变化)后不得重新入队 — 否则登出前的终态会被重新
+          // 呈现给新一轮会话。
           const sendMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
-          this.log.warn(`flushDeferredOpenerConsumes fallback send failed (re-deferred): ${sendMsg}`);
-          outbound.deferOpenerConsume(entry);
+          if (outbound.getAccountEpoch() === epoch) {
+            this.log.warn(`flushDeferredOpenerConsumes fallback send failed (re-deferred): ${sendMsg}`);
+            outbound.deferOpenerConsume(entry);
+          } else {
+            this.log.info('flushDeferredOpenerConsumes: credentials cleared — dropping entry');
+          }
         }
       }
     }
@@ -163,11 +170,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   // ── outbound ────────────────────────────────────────────────────────────────
 
   async sendText(userId: string, text: string): Promise<{ messageId: string }> {
-    const result = await outbound.sendText(userId, text);
-    // 兜底发送成功 = 该 lane 的暂存消费已由这条真实消息覆盖 — 取消暂存项,
-    // 避免 connected 排空时重复呈现同一终态。
-    outbound.cancelDeferredOpenerConsumesFor(userId);
-    return result;
+    return this.sendWithDeferredOpenerConsume(userId, 'markdown', () =>
+      outbound.sendText(userId, text),
+    );
   }
 
   /**
@@ -182,9 +187,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * 看到正确渲染的场合。
    */
   async sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }> {
-    const result = await outbound.sendInteractive(userId, { body: markdown, buttons: [] });
-    outbound.cancelDeferredOpenerConsumesFor(userId);
-    return result;
+    return this.sendWithDeferredOpenerConsume(userId, 'markdown', () =>
+      outbound.sendInteractive(userId, { body: markdown, buttons: [] }),
+    );
   }
 
   startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
@@ -290,9 +295,40 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     spec: InteractiveCardSpec,
     opts?: { threadTs?: string; deliverToOwnerDm?: boolean; ownerDmNote?: string },
   ): Promise<{ messageId: string }> {
-    const result = await outbound.sendInteractive(userId, spec, opts);
-    outbound.cancelDeferredOpenerConsumesFor(userId);
-    return result;
+    return this.sendWithDeferredOpenerConsume(userId, 'spec', () =>
+      outbound.sendInteractive(userId, spec, opts),
+    );
+  }
+
+  /**
+   * 兜底发送包装: 空窗暂存后连接已恢复时, 优先**就地收口**被预留的 opener
+   * (patch/替换暂存内容)而不是另发 — 不留「思考中」卡、不重复呈现同一终态。
+   * 收口失败则撤回预留卡 + 回拨锚点, 回落正常发送。
+   */
+  private async sendWithDeferredOpenerConsume(
+    userId: string,
+    kind: 'markdown' | 'spec',
+    send: () => Promise<{ messageId: string }>,
+  ): Promise<{ messageId: string }> {
+    const entry = outbound.takeMatchingDeferredOpenerConsume(userId, kind);
+    if (entry) {
+      try {
+        if ('markdown' in entry) {
+          await streamingText.patchMarkdown(entry.openerId, entry.markdown);
+        } else {
+          await outbound.updateInteractive(entry.openerId, entry.spec);
+          outbound.registerCardLane(userId, entry.openerId);
+        }
+        return { messageId: entry.openerId };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.warn(`sendWithDeferredOpenerConsume patch failed (recalling reserved opener): ${msg}`);
+        await outbound.recallOwnMessage(entry.openerId);
+        outbound.rearmAnchorToTrigger(userId);
+        // fallthrough: 回落正常发送
+      }
+    }
+    return send();
   }
 
   updateInteractiveCard(messageId: string, spec: InteractiveCardSpec): Promise<void> {
