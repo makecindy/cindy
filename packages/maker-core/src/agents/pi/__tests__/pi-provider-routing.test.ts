@@ -203,6 +203,204 @@ describe('Pi provider-aware model routing', () => {
     await nativeHandle.close();
   });
 
+  it('routes host subscriptions through PI native providers and wire model ids', async () => {
+    const authProviderIds: Array<string | null | undefined> = [];
+    let resolveProxyProviderId: (() => string | null) | undefined;
+    const availableModels: ModelDescriptor[] = [
+      {
+        id: 'chatgpt/gpt-cindy-daily-test', displayName: 'GPT Daily', contextWindow: 272_000,
+        efforts: ['low', 'high'], defaultEffort: 'high',
+      },
+      {
+        id: 'xai/grok-4.5', displayName: 'Grok 4.5', contextWindow: 1_000_000,
+        efforts: ['high'], defaultEffort: 'high',
+      },
+      {
+        id: 'xai/grok-4.20', displayName: 'Grok 4.20', contextWindow: 1_000_000,
+        efforts: ['high'], defaultEffort: 'high',
+      },
+      {
+        id: 'claude-opus-5', displayName: 'Claude Opus 5', contextWindow: 1_000_000,
+        efforts: ['high'], defaultEffort: 'high',
+      },
+    ];
+    const deps: AgentDeps = {
+      auth: {
+        getState: async (options) => {
+          authProviderIds.push(options?.providerId);
+          return { authenticated: true, identity: 'test', authSource: 'oauth' as const };
+        },
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: { availableModels },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => 'openai-responses',
+      registerPiProxySession: (_sessionId, _token, resolveProviderId) => {
+        resolveProxyProviderId = resolveProviderId;
+      },
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: 'anthropic', sourceProviderId: 'anthropic', name: 'Anthropic',
+            baseUrl: 'http://127.0.0.1:9988', inheritModels: true,
+            models: [{ id: 'claude-opus-5', wireId: 'claude-opus-5' }],
+          },
+          {
+            id: 'openai-codex', sourceProviderId: 'openai', name: 'OpenAI',
+            baseUrl: 'http://127.0.0.1:9988', inheritModels: true,
+            apiKeyEnvVar: 'CINDY_PI_OPENAI_PROXY_KEY',
+            models: [{
+              id: 'chatgpt/gpt-cindy-daily-test',
+              wireId: 'gpt-cindy-daily-test',
+              catalogAddition: true,
+              contextWindow: 272_000,
+              maxTokens: 32_000,
+            }],
+          },
+          {
+            id: 'xai', sourceProviderId: 'xai', name: 'xAI',
+            baseUrl: 'http://127.0.0.1:9988/v1', inheritModels: true,
+            models: [
+              { id: 'xai/grok-4.5', wireId: 'grok-4.5' },
+              {
+                id: 'xai/grok-4.20', wireId: 'grok-4.20', api: 'openai-responses',
+                contextWindow: 1_000_000, maxTokens: 64_000,
+                cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
+                compat: { supportsStrictTools: true },
+              },
+            ],
+          },
+        ],
+        env: { CINDY_PI_OPENAI_PROXY_KEY: 'placeholder-jwt' },
+      }),
+    };
+
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'native-subscription-routing',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-cindy-daily-test',
+      effort: 'high',
+    });
+
+    expect(authProviderIds).toEqual(['openai']);
+    expect(resolveProxyProviderId?.()).toBe('openai');
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 4))
+      .toEqual(['--provider', 'openai-codex', '--model', 'gpt-cindy-daily-test']);
+    const configHome = captured.env.PI_CODING_AGENT_DIR as string;
+    const models = JSON.parse(readFileSync(path.join(configHome, 'models.json'), 'utf8')) as {
+      providers: Record<string, { api?: string; models?: Array<{ id: string; api?: string }> }>;
+    };
+    expect(models.providers.anthropic).not.toHaveProperty('api');
+    expect(models.providers.anthropic?.models).toBeUndefined();
+    expect(models.providers['openai-codex']).not.toHaveProperty('api');
+    expect(models.providers['openai-codex']?.models).toEqual([
+      expect.objectContaining({ id: 'gpt-cindy-daily-test' }),
+    ]);
+    expect(models.providers['openai-codex']?.models?.[0]).not.toHaveProperty('api');
+    expect(models.providers.xai).not.toHaveProperty('api');
+    expect(models.providers.xai?.models).toEqual([
+      expect.objectContaining({
+        id: 'grok-4.20',
+        api: 'openai-responses',
+        cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
+        compat: { supportsStrictTools: true },
+      }),
+    ]);
+    expect(JSON.parse(readFileSync(path.join(configHome, 'settings.json'), 'utf8')))
+      .toEqual({ transport: 'sse' });
+    expect(JSON.parse(readFileSync(runtimeFileOf('subagent', 'native-subscription-routing'), 'utf8')))
+      .toEqual({ model: 'gpt-cindy-daily-test', provider: 'openai-codex' });
+
+    await handle.setModel!('xai/grok-4.5', { providerId: 'xai' });
+    expect(captured.requests).toContainEqual({
+      type: 'set_model', provider: 'xai', modelId: 'grok-4.5',
+    });
+    expect(resolveProxyProviderId?.()).toBe('xai');
+    expect(JSON.parse(readFileSync(runtimeFileOf('subagent', 'native-subscription-routing'), 'utf8')))
+      .toEqual({ model: 'grok-4.5', provider: 'xai' });
+
+    await handle.setModel!('claude-opus-5', { providerId: 'anthropic' });
+    expect(captured.requests).toContainEqual({
+      type: 'set_model', provider: 'anthropic', modelId: 'claude-opus-5',
+    });
+    expect(resolveProxyProviderId?.()).toBe('anthropic');
+    await handle.close();
+  });
+
+  it('routes a persisted BYOM id through its namespaced PI runtime provider', async () => {
+    const authProviderIds: Array<string | null | undefined> = [];
+    const deps: AgentDeps = {
+      auth: {
+        getState: async (options) => {
+          authProviderIds.push(options?.providerId);
+          return { authenticated: true, identity: 'custom', authSource: 'api-key' as const };
+        },
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'chatgpt/gpt-5.6-sol',
+          displayName: 'Same-name Custom Model',
+          contextWindow: 128_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: 'openai-codex',
+            sourceProviderId: 'openai',
+            name: 'OpenAI (ChatGPT)',
+            baseUrl: 'http://127.0.0.1:9988',
+            inheritModels: true,
+            models: [{ id: 'chatgpt/gpt-5.6-sol', wireId: 'gpt-5.6-sol' }],
+          },
+          {
+            id: 'cindy-byom-openai-codex',
+            sourceProviderId: 'openai-codex',
+            name: 'User endpoint',
+            baseUrl: 'https://user.example/v1',
+            api: 'openai-completions',
+            models: [{ id: 'chatgpt/gpt-5.6-sol' }],
+          },
+        ],
+        env: {},
+      }),
+    };
+
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'namespaced-byom-routing',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-5.6-sol',
+      providerId: 'openai-codex',
+    });
+
+    expect(authProviderIds).toEqual(['openai-codex']);
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 4))
+      .toEqual(['--provider', 'cindy-byom-openai-codex', '--model', 'chatgpt/gpt-5.6-sol']);
+    const configHome = captured.env.PI_CODING_AGENT_DIR as string;
+    const models = JSON.parse(readFileSync(path.join(configHome, 'models.json'), 'utf8')) as {
+      providers: Record<string, { baseUrl?: string }>;
+    };
+    expect(models.providers['openai-codex']?.baseUrl).toBe('http://127.0.0.1:9988');
+    expect(models.providers['cindy-byom-openai-codex']?.baseUrl).toBe('https://user.example/v1');
+    expect(JSON.parse(readFileSync(runtimeFileOf('subagent', 'namespaced-byom-routing'), 'utf8')))
+      .toEqual({ model: 'chatgpt/gpt-5.6-sol', provider: 'cindy-byom-openai-codex' });
+    await handle.close();
+  });
+
   it('keeps xAI and custom providers in one snapshot and switches both directions', async () => {
     const agent = new PiAgent({
       auth: {

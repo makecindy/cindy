@@ -215,9 +215,7 @@ export function resolveXdPiGatewayWireProtocol(
   modelId: string,
 ): Extract<ProviderWireProtocol, 'openai-responses'> | null | undefined {
   const normalized = modelId.replace(/\[1m\]$/, '');
-  const gatewayModel = xdGatewayModels.find(
-    (model) => model.id === normalized,
-  );
+  const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
   if (!gatewayModel?.agents?.includes('pi')) return undefined;
   const wireProtocol = gatewayModel.perAgent?.pi?.wireProtocol;
   return wireProtocol === 'openai-responses' ? wireProtocol : null;
@@ -390,11 +388,7 @@ function projectCodexModelsToBridges(
 }
 
 /** 静态段被淘汰的供应商：先清空 providers.models，再由 discovery + Registry/local root 装配。 */
-const DYNAMIC_LIST_PROVIDER_IDS: ReadonlySet<string> = new Set([
-  'anthropic',
-  'openai',
-  'xd',
-]);
+const DYNAMIC_LIST_PROVIDER_IDS: ReadonlySet<string> = new Set(['anthropic', 'openai', 'xd']);
 
 /**
  * Anthropic discovery 映射阶段读取的 Registry 字段子集：上游缺字段时先用它补齐，
@@ -572,13 +566,13 @@ function xaiCatalogModelById(
   if (agent === 'pi') {
     const bare = id.startsWith('xai/') ? id.slice('xai/'.length) : id;
     return (
-      provider.models.pi?.find((model) => model.id === bare)
-      ?? bundled?.models.pi?.find((model) => model.id === bare)
+      provider.models.pi?.find((model) => model.id === bare) ??
+      bundled?.models.pi?.find((model) => model.id === bare)
     );
   }
   return (
-    provider.models[agent]?.find((model) => model.id === id)
-    ?? bundled?.models[agent]?.find((model) => model.id === id)
+    provider.models[agent]?.find((model) => model.id === id) ??
+    bundled?.models[agent]?.find((model) => model.id === id)
   );
 }
 
@@ -589,8 +583,8 @@ function materializeXaiAccountModels(
 ): CatalogModel[] {
   return discovered.map((entry, index) => {
     const catalogModel =
-      xaiCatalogModelById(provider, entry.id, agent)
-      ?? xaiCatalogModelById(provider, entry.id, 'pi');
+      xaiCatalogModelById(provider, entry.id, agent) ??
+      xaiCatalogModelById(provider, entry.id, 'pi');
     const registry = modelRegistryMetaFields('xai', agent, entry.id);
     const efforts = entry.efforts
       ? [...entry.efforts]
@@ -648,10 +642,7 @@ function bundledXaiFallbackMembers(provider: Provider): XaiDiscoveredModel[] {
   }));
 }
 
-function projectXaiPiModel(
-  provider: Provider,
-  model: CatalogModel,
-): CatalogModel {
+function projectXaiPiModel(provider: Provider, model: CatalogModel): CatalogModel {
   const bareId = model.id.startsWith('xai/') ? model.id.slice('xai/'.length) : model.id;
   const piMetadata = xaiCatalogModelById(provider, model.id, 'pi');
   return {
@@ -685,6 +676,38 @@ function withEmptyModels(p: Provider): Provider {
 
 function computeMerged(): Catalog {
   const b = base ?? BUNDLED_CATALOG;
+  // Dynamic OpenAI/Anthropic roots are rebuilt from discovery/registry below,
+  // but the daily OSS catalog may carry sparse PI protocol annotations. Keep
+  // only that metadata and apply it after existence has been independently
+  // proven; these entries never create a selectable model by themselves.
+  const piApiByProvider = new Map<string, Map<string, NonNullable<CatalogModel['piApi']>>>();
+  for (const provider of b.providers) {
+    const annotationSources = [
+      ...(provider.models.pi ?? []),
+      ...(provider.id === 'xai' ? (provider.models['claude-code'] ?? []) : []),
+    ];
+    for (const model of annotationSources) {
+      if (!model.piApi) continue;
+      const byModel = piApiByProvider.get(provider.id) ?? new Map();
+      byModel.set(model.id, model.piApi);
+      if (provider.id === 'openai' && model.id.startsWith(CHATGPT_MODEL_PREFIX)) {
+        byModel.set(model.id.slice(CHATGPT_MODEL_PREFIX.length), model.piApi);
+      }
+      piApiByProvider.set(provider.id, byModel);
+    }
+  }
+  const applyPiApiAnnotations = (providerId: string, models: CatalogModel[]): CatalogModel[] => {
+    const annotations = piApiByProvider.get(providerId);
+    if (!annotations || annotations.size === 0) return models;
+    return models.map((model) => {
+      const rawId =
+        providerId === 'openai' && model.id.startsWith(CHATGPT_MODEL_PREFIX)
+          ? model.id.slice(CHATGPT_MODEL_PREFIX.length)
+          : model.id;
+      const piApi = annotations.get(model.id) ?? annotations.get(rawId);
+      return piApi && model.piApi !== piApi ? { ...model, piApi } : model;
+    });
+  };
   // registry 消费计划(实体化/overlay/retired/bridge 门控)一次算好;单 route 的
   // 作者错误隔离进 warnings,由刷新路径读走打日志,不拖垮其余条目。
   const plan = planRegistryRoots(b.modelRegistry);
@@ -772,7 +795,14 @@ function computeMerged(): Catalog {
           localOverrides,
           plan.warnings,
         );
-      return projectCodexModelsToBridges(withRoot, excluded, prepareClaudeModel);
+      const projected = projectCodexModelsToBridges(withRoot, excluded, prepareClaudeModel);
+      return {
+        ...projected,
+        models: {
+          ...projected.models,
+          pi: applyPiApiAnnotations('openai', projected.models.pi ?? []),
+        },
+      };
     }
     if (p.id === 'anthropic') {
       const seed = anthropicModels.length > 0 ? anthropicModels : (p.models['claude-code'] ?? []);
@@ -800,7 +830,15 @@ function computeMerged(): Catalog {
           ),
         )
         .map((model) => ({ ...model, supportsFastMode: false }));
-      return { ...p, models: { ...p.models, 'claude-code': root, codex: codexBridge, pi: root } };
+      return {
+        ...p,
+        models: {
+          ...p.models,
+          'claude-code': root,
+          codex: codexBridge,
+          pi: applyPiApiAnnotations('anthropic', root),
+        },
+      };
     }
     if (p.id === 'xai') {
       const useAccountMembership = xaiDiscoveredModels !== null;
@@ -826,7 +864,16 @@ function computeMerged(): Catalog {
       const codexRoot = authoritativeMembers
         ? assembleAuthoritativeRoot('xai', 'codex', codexSeed, plan)
         : assembleRoot('xai', 'codex', codexSeed, plan, true);
-      const piModels = claudeRoot.map((model) => projectXaiPiModel(p, model));
+      const stripPiApi = (model: CatalogModel): CatalogModel => {
+        if (model.piApi === undefined) return model;
+        const rest = { ...model };
+        delete rest.piApi;
+        return rest;
+      };
+      const piModels = applyPiApiAnnotations(
+        'xai',
+        claudeRoot.map((model) => projectXaiPiModel(p, model)),
+      );
       return {
         ...p,
         agents: p.agents.includes('pi') ? p.agents : [...p.agents, 'pi' as AgentKind],
@@ -842,8 +889,8 @@ function computeMerged(): Catalog {
         },
         models: {
           ...p.models,
-          'claude-code': claudeRoot,
-          codex: codexRoot,
+          'claude-code': claudeRoot.map(stripPiApi),
+          codex: codexRoot.map(stripPiApi),
           pi: piModels,
         },
       };
@@ -986,9 +1033,7 @@ export function commitModelPlaneFromCatalog(catalog: Catalog): void {
   const incomingXai = catalog.providers.find((provider) => provider.id === 'xai');
   const providers =
     incomingXai && current.providers.some((provider) => provider.id === 'xai')
-      ? current.providers.map((provider) =>
-          provider.id === 'xai' ? incomingXai : provider,
-        )
+      ? current.providers.map((provider) => (provider.id === 'xai' ? incomingXai : provider))
       : current.providers;
   if (catalog.modelRegistry) trustedCustomProviderRegistry = catalog.modelRegistry;
   base = {
