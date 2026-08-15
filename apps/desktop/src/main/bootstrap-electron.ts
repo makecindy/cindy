@@ -772,6 +772,7 @@ import {
   getGhostSessionActivityTracker,
   interruptGhostCallsForAccountBoundary,
   isGhostAvailableForActiveSession,
+  noteGhostDbClientStartupOutcome,
   reconcileGhostOauthAccountsForActiveOwner,
   refreshGhostLocalization,
   registerGhostIpc,
@@ -6871,6 +6872,10 @@ app.on('ready', async () => {
       // attempt 全部撞 "DbClient not ready",scheduler/embedding 永不启动 → renderer
       // 卡在 IPC 等待 → 白屏。
       const dbClientTakeover = await ensureLifecycleDbClient(userId);
+      noteGhostDbClientStartupOutcome(
+        userId,
+        dbClientTakeover.mode !== 'failed' && dbClientTakeover.mode !== 'skipped',
+      );
       logStartupPhase('db-client-takeover');
       if (dbClientTakeover.mode === 'failed' || dbClientTakeover.mode === 'skipped') {
         dbClientLog.warn('[DbClient] lifecycle client unavailable; skip db-client startup hooks', {

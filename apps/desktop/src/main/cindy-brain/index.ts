@@ -1534,12 +1534,42 @@ export function getGhostRuntime(): GhostRuntime {
 
 let dispatcherSingleton: GhostPipeDispatcher | null = null;
 
+let ghostDbClientUnavailableFor: {
+  dataOwnerId: string;
+  generation: number;
+} | null = null;
+
+/**
+ * Record the terminal outcome of this owner's lifecycle DbClient startup.
+ * Before an outcome exists, calls stay closed so account restoration cannot race DB takeover.
+ * A terminal unavailable outcome fails open: usage still warns through recordUsage, while the
+ * optional counter never becomes a hard dependency for the underlying plugin call.
+ */
+export function noteGhostDbClientStartupOutcome(
+  dataOwnerId: string,
+  dbClientAvailable: boolean,
+): void {
+  const activeSession = getActiveAppSession();
+  if (isAppSessionBoundaryPending() || activeSession.dataOwnerId !== dataOwnerId) {
+    return;
+  }
+  ghostDbClientUnavailableFor = dbClientAvailable
+    ? null
+    : {
+        dataOwnerId,
+        generation: activeSession.generation,
+      };
+}
+
 function canAcceptGhostCalls(): boolean {
-  const activeOwnerId = getActiveAppSession().dataOwnerId;
+  const activeSession = getActiveAppSession();
+  const activeOwnerId = activeSession.dataOwnerId;
   return (
     !isAppSessionBoundaryPending() &&
     activeOwnerId !== null &&
-    getCurrentDbClientUserId() === activeOwnerId
+    (getCurrentDbClientUserId() === activeOwnerId ||
+      (ghostDbClientUnavailableFor?.dataOwnerId === activeOwnerId &&
+        ghostDbClientUnavailableFor.generation === activeSession.generation))
   );
 }
 
