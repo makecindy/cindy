@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, parse } from 'node:path';
 
 import {
   resolveDevCliFlags,
@@ -153,12 +153,16 @@ describe('resolveDevCliFlags', () => {
       canonicalizePath: sensitiveVolume,
     });
     expect(miss.isolatedDirIsEpochDerived).toBe(false);
-    // 缺省实现:路径与全部有字母的祖先都不存在时无从探测卷语义 → 保守不折叠
-    // (/AppData 在测试机不存在,最近存在祖先是根目录,无字母可翻转)。
+    // 缺省实现:路径与全部有字母的祖先都不存在时无从探测卷语义 → 保守不折叠。
+    // 使用唯一的根目录子路径，避免宿主碰巧已有 /AppData 让测试依赖机器状态。
+    const guaranteedMissingParent = join(
+      parse(tmpdir()).root,
+      `__xdt-dev-cli-flags-missing-${process.pid}-${Date.now()}__`,
+    );
     const unprobeable = resolveDevCliFlags({
       ...base,
       envIsolated: '1',
-      envUserDataDir: '/AppData/XDT-Maker-DEV2',
+      envUserDataDir: join(guaranteedMissingParent, 'AppData', 'XDT-Maker-DEV2'),
       envUserDataDirEpoch: '1',
     });
     expect(unprobeable.isolatedDirIsEpochDerived).toBe(false);

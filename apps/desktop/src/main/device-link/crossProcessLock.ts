@@ -229,6 +229,8 @@ export async function withSecurityBoundaryLock<T>(
   let ownLock: PublishedLock | null = null;
   let takeovers = 0;
   let publishingAfterTakeover = false;
+  let finalTakeoverPublicationRetries = 0;
+  let finalTakeoverDeadlineGrace = false;
   const processIdentity = await getProcessIdentity(process.pid);
   // Do not charge the first process-identity probe against the caller's wait
   // budget. On Windows the initial CIM/WMIC lookup can take several seconds.
@@ -241,6 +243,14 @@ export async function withSecurityBoundaryLock<T>(
     await recoverPendingOwnRecord(lockPath);
     if (await reclaimInProgress(lockPath)) {
       reason = 'busy';
+      if (finalTakeoverDeadlineGrace) {
+        // The retry can briefly observe the reclaim gate that just released
+        // the final stale record. Allow one cleanup tick before the deadline;
+        // a gate that remains active on the next pass still fails closed.
+        finalTakeoverDeadlineGrace = false;
+        await sleep(LOCK_RETRY_MS);
+        continue;
+      }
       if (Date.now() >= deadline) break;
       await sleep(LOCK_RETRY_MS);
       continue;
@@ -274,21 +284,25 @@ export async function withSecurityBoundaryLock<T>(
         break;
       }
 
-      if (publishingAfterTakeover && Date.now() >= deadline) {
-        reason = 'busy';
-        break;
-      }
       if (
         publishingAfterTakeover
         && takeovers >= MAX_TAKEOVERS
         && (code === 'EBUSY' || code === 'EPERM' || code === 'EACCES')
-        && Date.now() < deadline
+        && finalTakeoverPublicationRetries < 1
       ) {
         // Windows can keep a just-quarantined path busy for a tick. The final
-        // takeover already spent its reclaim budget; retry publication only.
+        // stale-owner check may already have consumed waitMs, so grant exactly
+        // one publication retry before applying the caller deadline.
+        finalTakeoverPublicationRetries += 1;
+        finalTakeoverDeadlineGrace = true;
         reason = 'busy';
         await sleep(LOCK_RETRY_MS);
         continue;
+      }
+
+      if (publishingAfterTakeover && Date.now() >= deadline) {
+        reason = 'busy';
+        break;
       }
       if (publishingAfterTakeover && takeovers >= MAX_TAKEOVERS) {
         reason = 'busy';

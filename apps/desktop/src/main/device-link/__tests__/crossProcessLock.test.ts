@@ -729,8 +729,13 @@ describe('接管陈旧锁', () => {
     await writeStaleStrictLock(lock);
     const originalRename = fsp.rename;
     const originalLink = fsp.link;
+    const originalNow = Date.now;
     let takeovers = 0;
     let busyPublishes = 0;
+    let deadlineElapsed = false;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(
+      () => originalNow() + (deadlineElapsed ? 5_000 : 0),
+    );
     const renameSpy = vi.spyOn(fsp, 'rename').mockImplementation((async (
       from: unknown,
       to: unknown,
@@ -739,6 +744,9 @@ describe('接管陈旧锁', () => {
       if (from === lock && typeof to === 'string' && to.startsWith(`${lock}.reclaim-`)) {
         takeovers += 1;
         if (takeovers < 3) await writeStaleStrictLock(lock);
+        // Make the final publication happen after waitMs without slowing the
+        // test or depending on machine load.
+        else deadlineElapsed = true;
       }
       return result;
     }) as typeof fsp.rename);
@@ -753,12 +761,70 @@ describe('接管陈旧锁', () => {
       return (originalLink as (...args: unknown[]) => Promise<unknown>)(from, to);
     }) as typeof fsp.link);
     try {
-      await expect(
-        withCrossProcessLock(lock, { label: 'final-takeover-busy', waitMs: 2_000 }, async (s) => s),
-      ).resolves.toEqual({ held: true });
-      expect(takeovers).toBe(3);
-      expect(busyPublishes).toBe(1);
+      const result = await withCrossProcessLock(
+        lock,
+        { label: 'final-takeover-busy', waitMs: 500 },
+        async (status) => status,
+      );
+      expect({ result, takeovers, busyPublishes }).toEqual({
+        result: { held: true },
+        takeovers: 3,
+        busyPublishes: 1,
+      });
     } finally {
+      nowSpy.mockRestore();
+      renameSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+  });
+
+  it('bounds repeated busy publications after the final stale takeover', async () => {
+    const lock = path.join(dir, 'lock');
+    await writeStaleStrictLock(lock);
+    const originalRename = fsp.rename;
+    const originalLink = fsp.link;
+    const originalNow = Date.now;
+    let takeovers = 0;
+    let busyPublishes = 0;
+    let deadlineElapsed = false;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(
+      () => originalNow() + (deadlineElapsed ? 5_000 : 0),
+    );
+    const renameSpy = vi.spyOn(fsp, 'rename').mockImplementation((async (
+      from: unknown,
+      to: unknown,
+    ) => {
+      const result = await (originalRename as (...args: unknown[]) => Promise<unknown>)(from, to);
+      if (from === lock && typeof to === 'string' && to.startsWith(`${lock}.reclaim-`)) {
+        takeovers += 1;
+        if (takeovers < 3) await writeStaleStrictLock(lock);
+        else deadlineElapsed = true;
+      }
+      return result;
+    }) as typeof fsp.rename);
+    const linkSpy = vi.spyOn(fsp, 'link').mockImplementation((async (
+      from: unknown,
+      to: unknown,
+    ) => {
+      if (to === lock && takeovers === 3 && busyPublishes < 2) {
+        busyPublishes += 1;
+        throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+      }
+      return (originalLink as (...args: unknown[]) => Promise<unknown>)(from, to);
+    }) as typeof fsp.link);
+    try {
+      const result = await withCrossProcessLock(
+        lock,
+        { label: 'bounded-final-takeover-busy', waitMs: 500 },
+        async (status) => status,
+      );
+      expect({ result, takeovers, busyPublishes }).toEqual({
+        result: { held: false, reason: 'busy' },
+        takeovers: 3,
+        busyPublishes: 2,
+      });
+    } finally {
+      nowSpy.mockRestore();
       renameSpy.mockRestore();
       linkSpy.mockRestore();
     }
