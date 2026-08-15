@@ -302,7 +302,11 @@ function createVisionFallbackChatBridgeDecision(
       if (init?.signal?.aborted) onAbort();
       else init?.signal?.addEventListener('abort', onAbort, { once: true });
 
-      const completed = chatHandler.handle({ parsedBody, res: response as never }).catch((error) => {
+      const completed = chatHandler.handle({
+        parsedBody,
+        res: response as never,
+        signal: init?.signal ?? undefined,
+      }).catch((error) => {
         if (init?.signal?.aborted) return;
         log.warn('vision fallback chat bridge failed', {
           error: error instanceof Error ? error.message : String(error),

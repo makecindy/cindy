@@ -354,6 +354,7 @@ export interface ChatBridgeProviderConfig {
 export interface ChatBridgeHandleArgs {
   parsedBody: unknown;
   res: ServerResponse;
+  signal?: AbortSignal;
 }
 
 export interface ResponsesChatBridgeHandler {

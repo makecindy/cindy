@@ -36,6 +36,35 @@ function streamResponse(lines: unknown[]): Response {
 }
 
 describe('createResponsesChatHandler', () => {
+  it('does not start upstream when the request is aborted while building headers', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    let releaseHeaders: (headers: Record<string, string>) => void = () => {};
+    const headersReady = new Promise<Record<string, string>>((resolve) => {
+      releaseHeaders = resolve;
+    });
+    const controller = new AbortController();
+    const buildHeaders = vi.fn(() => headersReady);
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1',
+      buildHeaders,
+    }, { fetchImpl });
+    const handling = handler.handle({
+      parsedBody: {
+        model: 'custom-model',
+        input: [{ type: 'message', role: 'user', content: 'hello' }],
+      },
+      res: new FakeResponse() as never,
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(buildHeaders).toHaveBeenCalledTimes(1));
+    controller.abort();
+    releaseHeaders({});
+    await handling;
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('posts translated Chat request and streams Responses events', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));

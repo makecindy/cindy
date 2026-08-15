@@ -152,7 +152,8 @@ export function createResponsesChatHandler(
   const fetchImpl = opts.fetchImpl ?? fetch;
 
   return {
-    async handle({ parsedBody, res }): Promise<void> {
+    async handle({ parsedBody, res, signal }): Promise<void> {
+      if (signal?.aborted) return;
       if (!isPlainObject(parsedBody) || typeof parsedBody.model !== 'string') {
         writeJson(res, 400, responsesError(400, 'invalid_request', 'invalid Responses request body'));
         return;
@@ -220,6 +221,7 @@ export function createResponsesChatHandler(
         writeJson(res, 502, responsesError(502, 'authentication_unavailable', 'provider authentication is unavailable'));
         return;
       }
+      if (signal?.aborted) return;
 
       const abort = new AbortController();
       const abortUpstream = (): void => abort.abort();
