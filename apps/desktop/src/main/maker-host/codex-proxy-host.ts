@@ -62,7 +62,10 @@ import {
   rewriteSessionModelIdForRoute,
 } from './provider-route.js';
 import { getSessionProvider } from './session-provider-store.js';
-import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
+import {
+  composeResponseObservers,
+  recordClaudeRateLimitHeaders,
+} from './claude-rate-limit-headers-observer.js';
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { createXaiProxyAuthInvalidationObserver } from './xai-auth-invalidation-host.js';
 import { xaiServerSideTools } from './xai-server-side-tools.js';
@@ -966,6 +969,29 @@ function createAnthropicBridgeDecision(
       : () => false,
     imageCodec: desktopAnthropicImageCodec,
     ...(onUpstreamError ? { onUpstreamError } : {}),
+    // 账号额度旁路 —— 只给「内置 Anthropic + 订阅 OAuth + 官方 hostname」这一种路由
+    // 装。桥的 localHandler 绕开了 compat-proxy 的转发层, 转发层上的
+    // createClaudeRateLimitHeadersObserver 看不到这些响应(见 #2626), 所以额度只能
+    // 从这里回喂; 解析与去抖仍走 observer 那份共用状态, 不复制第二份。
+    //
+    // 其余形态一律不装: API key / 自定义兼容供应商 / XD Gateway 的响应要么没有
+    // unified headers, 要么根本不属于这个 Claude 订阅账号, 误写会污染快照。
+    ...(isAnthropicSubscriptionOAuth && isOfficialAnthropicUpstream(upstreamBase)
+      ? {
+          onUpstreamResponse: ({ responseHeaders, requestHeaders }: {
+            responseHeaders: Headers;
+            requestHeaders: Readonly<Record<string, string>>;
+          }) => {
+            // Fetch `Headers` 不支持索引取值, 直接传下去会被静默解析成 null;
+            // 迭代出的 key 一律小写, 正是解析函数要求的形态。
+            recordClaudeRateLimitHeaders({
+              upstreamBase,
+              responseHeaders: Object.fromEntries(responseHeaders),
+              requestHeaders,
+            });
+          },
+        }
+      : {}),
   }, {
     logger: log,
     fetchImpl: outboundFetch,

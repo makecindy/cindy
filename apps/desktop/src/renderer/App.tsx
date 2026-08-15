@@ -238,6 +238,10 @@ export function App() {
           const shouldPatchActiveModel = markModelChoice !== false || effort !== undefined;
           if (shouldPatchActiveModel) {
             patch(vendor, {
+              // markModelChoice=false 仍要写回当前活动模型:远程新建草稿
+              // pushActiveDraftPref、以及旧控制端换模都走这条 wire。丢掉 model
+              // 会让被控端 lastByVendor 停在旧模型。选模标记由 store 的
+              // preserving 路径单独守住,这里只负责同步当前活动值。
               model: modelId,
               providerId: providerId || null,
               ...(effort !== undefined ? { effort: effort as Effort } : {}),
