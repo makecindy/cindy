@@ -171,6 +171,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         this.log.info('flushDeferredOpenerConsumes: account changed — dropping remaining entries');
         resolveFlush(null);
         this.flushingOpenerConsumes.delete(key);
+        this.completedOpenerConsumes.delete(key);
         continue;
       }
       // 条目在暂存时就原子预留了 opener(携带 id)— 排空直接使用, 不会被
