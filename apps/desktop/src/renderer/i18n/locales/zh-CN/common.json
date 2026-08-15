@@ -466,6 +466,11 @@
         "hint": "置顶任务以卡片形式展示，含执行状态摘要，卡片高度随摘要长短错落；侧栏拉宽时自动分 2~3 列。",
         "aria": "切换侧边栏卡片模式"
       },
+      "sidebarMainListMode": {
+        "label": "任务列表显示方式",
+        "hint": "侧边栏主列表（置顶以外）的显示形态：文字为紧凑单行，列表为带预览的两行。",
+        "aria": "切换任务列表显示方式"
+      },
       "layout": {
         "label": "面板布局",
         "hint": "面板位置和宽度会保留到下次启动。如果布局变得难以使用，可以恢复默认排列。",
@@ -1476,7 +1481,11 @@
           "confirmTitle": "确认覆盖",
           "confirmSubtitle": "选择从 {{source}} 复制的字段。",
           "source": "来源",
-          "columns": { "field": "字段", "source": "来源值", "target": "当前值" },
+          "columns": {
+            "field": "字段",
+            "source": "来源值",
+            "target": "当前值"
+          },
           "fields": {
             "endpointBundle": "端点与 API 协议",
             "baseUrl": "基础 URL",
@@ -1503,7 +1512,11 @@
           "targetReady_other": "可填充 {{count}} 个字段",
           "targetIncompatible_one": "{{count}} 个字段不兼容",
           "targetIncompatible_other": "{{count}} 个字段不兼容",
-          "status": { "needsConfirm": "需要确认", "ready": "可以填充", "incompatible": "不兼容" },
+          "status": {
+            "needsConfirm": "需要确认",
+            "ready": "可以填充",
+            "incompatible": "不兼容"
+          },
           "secretIndependent": "复制到 {{target}} 的独立本地密钥",
           "overwriteCurrent": "替换当前值",
           "fillEmpty": "填充当前空字段",
@@ -1547,6 +1560,7 @@
         "refreshAdded": "已发现 {{count}} 个新模型",
         "refreshNoNew": "模型列表已是最新，无新增",
         "refreshFailed": "模型列表刷新失败，请稍后再试",
+        "refreshFetchDisabled": "模型目录远程拉取未启用，已跳过刷新",
         "disableModel": "停用此模型",
         "enableModel": "启用此模型",
         "capabilityGroupHint": "不会出现在对话模型选择中，仅供图像生成等功能使用",
@@ -2424,7 +2438,8 @@
       "toast": {
         "enabled": "对话记录语义索引已启用",
         "disabled": "对话记录语义索引已停止",
-        "toggleFailed": "切换对话嵌入失败"
+        "unavailable": "当前账号或地区暂不支持对话记录语义索引",
+        "toggleFailed": "切换对话记录语义索引失败"
       }
     },
     "messageNavRail": {
@@ -3140,7 +3155,9 @@
           "claude-code": "Claude Code",
           "codex": "Codex",
           "pi": "Pi"
-        }
+        },
+        "groupCtrPermissionLabel": "群聊 /ctr 新建任务权限档",
+        "groupCtrPermissionDescription": "群里 @bot 用 /ctr 新建任务时使用的权限档，默认「自动审批」。群上下文里有成员可控的内容，设成「完全访问」后将直接执行、不再逐条确认，请确认群里的人都可信。"
       }
     },
     "shortcuts": {
@@ -3310,6 +3327,7 @@
         "manageAria": "管理 {{name}}",
         "agentInvoked": "Agent 自动调用",
         "upToDate": "已是最新",
+        "oauthAuthorizationExpired": "授权已失效，需重新连接",
         "installAria": "安装 {{name}}"
       },
       "market": {
@@ -3430,6 +3448,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "需要重新确认权限",
+        "action": "重新确认权限",
+        "actionAria": "重新确认插件「{{name}}」的权限",
+        "noticeTitle": "需要重新确认权限",
+        "bodyLegacy": "Cindy 没有这个插件的权限确认记录，所以先把它停用了。点「重新确认权限」重新过一遍它要的权限，确认后即可继续使用。",
+        "bodyInvalid": "这个插件的权限确认记录已损坏，所以先把它停用了。点「重新确认权限」重新过一遍它要的权限，确认后即可继续使用。",
+        "bodyBuiltinRestart": "这个内置插件的权限记录出了点问题。重启 Cindy 即可自动恢复，无需其他操作。"
+      },
       "install": "安装插件…",
       "empty": "还没有安装任何插件",
       "emptyHint": "可从插件市场安装，或点击右上角导入 .cindy 文件",
@@ -3484,6 +3511,7 @@
         "uninstalled": "已卸载「{{name}}」",
         "installedAsleep": "已安装「{{name}}」（已停用，可随时在此启用）",
         "updated": "「{{name}}」已更新到 v{{version}}",
+        "reapproved": "已恢复「{{name}}」",
         "exported": "已导出「{{name}}」的 .cindy 文件",
         "exportFailed": "导出「{{name}}」失败，请重试",
         "projectDisabled": "已在此项目停用「{{name}}」",
@@ -3503,6 +3531,7 @@
         "metaWithAuthor": "作者 {{author}} · 版本 {{version}}。将安装到本机，可随时卸载。",
         "enableNow": "安装后立即生效",
         "enableNowOpenPanel": "安装后立即生效并打开面板",
+        "manualCount": "随包手册 {{count}} 篇",
         "expandDescription": "展开完整介绍",
         "collapseDescription": "收起介绍"
       },
@@ -3625,6 +3654,7 @@
         "fileInvalid": "不是合法的 .cindy 插件文件",
         "hostUnsupported": "这个插件需要当前版本尚未提供的 Cindy 能力。请先升级 Cindy，再重新安装。",
         "alreadyInstalled": "这个插件已经安装",
+        "approvalRequired": "需要重新确认这个插件的权限后才能继续",
         "commandConflict": "它的指令和已装插件撞名了，先卸载占用方或让作者改名",
         "idReserved": "该 id 使用了官方保留前缀 cindy-，仅随应用内置的插件可用",
         "sourceMissing": "找不到所选文件",
@@ -3735,8 +3765,14 @@
       "updateConfirm": {
         "title": "更新插件「{{name}}」？",
         "body": "版本 {{from}} → {{to}}。将替换现有版本；生效状态与面板位置保持不变。",
+        "oauthClientChanged": "本次更新更换了 OAuth 客户端。使用插件内置授权的已连接账号将在更新后失效，需要重新连接。",
         "confirm": "更新",
         "cancel": "取消"
+      },
+      "reapproveConfirm": {
+        "title": "重新确认「{{name}}」的权限？",
+        "body": "按下方清单重新授权这个已安装的插件，无需重新提供安装包文件。",
+        "confirm": "确认并恢复"
       },
       "pick": {
         "dialogTitle": "选择文件夹",
@@ -3754,6 +3790,7 @@
       },
       "updateAll": {
         "title": "全部更新 · {{count}} 个插件",
+        "collapseDiff": "收起",
         "description": "普通更新会自动完成；真实包请求新增权限时需要逐项确认。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "排队中",
@@ -3763,7 +3800,13 @@
         "statusFailed": "更新失败",
         "background": "后台继续",
         "doneAction": "完成",
-        "doneToast": "批量更新完成：{{done}} 个已更新，{{rest}} 个未完成"
+        "doneToast": "批量更新完成：{{done}} 个已更新，{{rest}} 个未完成",
+        "permissionChanged": "权限变更",
+        "rereview": "重新审阅",
+        "reviewDiff": "查看",
+        "reviewOutdated": "审查过期",
+        "approve": "同意",
+        "skip": "跳过"
       }
     },
     "mcp": {
@@ -4420,6 +4463,7 @@
     "close": "关闭",
     "menuItems": {
       "settings": "设置",
+      "resourceUsage": "资源用量",
       "help": "帮助",
       "issues": "问题反馈",
       "checkForUpdates": "检查更新"
@@ -4457,12 +4501,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "停用「{{name}}」？",
-      "body": "关闭这个面板会停用整个插件，它的面板和能力都会暂停。之后可以随时在侧边栏「插件」里重新开启。",
+      "body": "关闭这个面板会停用插件并暂停其能力。你可以随时在侧边栏「插件」中重新启用。",
       "confirm": "停用"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "合并回主窗口",
+    "mergeBack": "返回主窗口",
     "unavailable": "该插件面板当前不可用"
   },
   "ghostPanelBubble": {
@@ -4472,6 +4516,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "右侧边栏",
+    "panelError": {
+      "title": "面板加载失败",
+      "description": "这个面板暂时无法显示，其他面板仍可继续使用。",
+      "reload": "重新加载面板"
+    },
     "window": {
       "title": "侧边栏",
       "mergeBack": "合并回主窗口",
@@ -4502,6 +4551,7 @@
         "ghostPanel": "插件面板"
       },
       "controls": {
+        "showAria": "显示侧栏",
         "maximizeAria": "最大化侧栏",
         "restoreAria": "退出最大化",
         "closeAria": "关闭侧栏",
@@ -5512,7 +5562,7 @@
         "budget": "GPT 折扣",
         "grok": "xAI",
         "google": "Google",
-        "china": "国内",
+        "china": "中国",
         "image": "图像",
         "video": "视频",
         "tts": "语音合成",
@@ -5520,6 +5570,7 @@
         "realtime": "实时语音",
         "embedding": "向量",
         "compression": "压缩",
+        "ungrouped": "未分组",
         "other": "其它"
       },
       "search": {
@@ -5531,6 +5582,7 @@
         "context": "{{value}} 上下文",
         "codexCompatibilityMode": "Codex 兼容模式",
         "price": "{{input}}/{{output}} / 百万",
+        "subscriptionBadgeCompact": "订阅",
         "fastBadge": "快速"
       },
       "source": {
@@ -5691,6 +5743,7 @@
       "startFailed": "开启协同失败",
       "startFailedContinue": "开启协同失败，已改为单任务继续",
       "createWorkerRefreshFailed": "Worker 状态刷新失败，请稍后重试",
+      "assignmentFailed": "Worker 已创建，但无法确认任务是否派发成功。请先查看 Worker 面板，再决定是否重试",
       "openHint": "召集 Worker 协作",
       "disabledHint": "协同模式已关闭，请在设置中重新启用",
       "unavailableHint": "暂时无法确认协同设置，请稍后重试",
@@ -6626,7 +6679,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "远端连接已中断（daemon 可能正在升级或重启）。本轮已结束 — 请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
-      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时不可用，需要审批的操作会被拒绝。想自己确认这些操作，可以把任务切到「默认权限」。",
+      "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断（网络或服务波动），需要审批的操作已转由你来确认。想少被打断，可以把任务切到「默认权限」自行掌控。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 会话无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
@@ -6900,7 +6953,7 @@
         "remoteSettings": "远程连接设置",
         "multiSelect": "多选",
         "deselect": "取消勾选",
-        "menuTrigger": "远程机器",
+        "menuTrigger": "任务范围",
         "selectedCount_one": "{{count}} 台机器",
         "selectedCount_other": "{{count}} 台机器"
       },
@@ -6919,6 +6972,8 @@
         "awaitingPluginSetup": "等待插件设置"
       },
       "showAllSessions": "显示全部 {{count}} 项",
+      "allSessions": "全部任务",
+      "scopeLocalSessions": "本机任务",
       "dialogues": "对话",
       "newDialogue": "新任务",
       "dialoguesToggleExpand": "展开对话",
@@ -6936,12 +6991,10 @@
       "projects": "项目",
       "newProject": "新建项目",
       "createProjectFailed": "新建项目失败",
-      "projectsSectionToggleExpand": "展开项目",
-      "projectsSectionToggleCollapse": "收起项目",
       "projectsToggleExpand": "展开所有项目任务",
       "projectsToggleCollapse": "收起所有项目任务",
-      "filterAria": "整理侧边栏（状态：{{status}}，Agent：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
-      "organizeSidebar": "整理侧边栏",
+      "filterAria": "侧边栏显示设置（状态：{{status}}，Agent：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
+      "organizeSidebar": "侧边栏显示设置",
       "filterAllText": "全部",
       "filterSelectedProjects": "已选 {{count}} 个",
       "filterStatus": {
@@ -6955,8 +7008,23 @@
         "codex": "Codex"
       },
       "filterGroupBy": {
-        "project": "项目",
-        "date": "日期"
+        "project": "按项目分组",
+        "flat": "平铺",
+        "device": "按设备分组",
+        "dialogue": "对话归为一组"
+      },
+      "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
+      "deviceGroup": {
+        "local": "本机",
+        "offline": "离线",
+        "collapse": "收起该设备",
+        "expand": "展开该设备"
+      },
+      "foldAll": {
+        "collapseGroups": "收起所有分组",
+        "collapseProjects": "收起项目分组",
+        "collapseDevices": "收起设备分组",
+        "expandAll": "展开所有分组"
       },
       "filterLastActivity": {
         "1d": "1 天",
@@ -6966,10 +7034,12 @@
         "all": "全部"
       },
       "filterSortBy": {
-        "recency": "最近优先",
-        "time": "最早优先",
+        "recency": "按时间排序",
         "manual": "手动排序",
-        "alphabetic": "字母排序"
+        "priority": "优先级"
+      },
+      "filterSortByTip": {
+        "priority": "等你处理的排在最前，然后是未读、运行中，其余按时间"
       },
       "filterStatusHeading": "状态",
       "filterAgentHeading": "Agent",
@@ -6978,6 +7048,24 @@
       "filterSortByHeading": "排序",
       "filterProjectsHeading": "项目",
       "filterAllProjects": "所有项目",
+      "filterHeading": "筛选",
+      "filterSummaryNone": "无",
+      "filterSummaryActive": "{{count}} 项生效",
+      "filterReset": "重置筛选",
+      "displayHeading": "显示",
+      "taskInfoHeading": "任务信息",
+      "taskInfoSummaryNone": "无",
+      "taskInfoSummarySeparator": "、",
+      "taskInfo": {
+        "time": "时间",
+        "pr": "PR 状态",
+        "tokens": "Token",
+        "cost": "费用"
+      },
+      "taskInfoTip": {
+        "tokens": "累计 Token",
+        "cost": "累计费用"
+      },
       "dateGroup": {
         "today": "今天",
         "yesterday": "昨天",
@@ -8238,7 +8326,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "需要信任此项目后可用"
+    "projectSkillNotLoaded": "当前 Pi 任务尚未加载此项目 Skill，新任务会自动尝试加载"
   },
   "skillhub": {
     "home": {
@@ -8865,6 +8953,7 @@
       "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
+      "hostShellCommandBlocked": "Cindy 已阻止会绕过内嵌模拟器的 Shell 命令。请改用模拟器工具控制设备、启动应用、操作界面、截图和诊断。",
       "upstreamResponseIdleTimeout": "模型长时间没有任何响应，本轮已自动中断以免无限等待。已完成的工具调用都保留，可以直接发下一条消息继续。",
       "codexCompactionNotConverging": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。压不动的部分通常不在对话里——system prompt 与工具定义占掉的空间压缩清不掉。新开一个任务可以继续。",
       "codexCompactionNotConvergingModelSwitch": "Codex 反复压缩上下文却压不动，本轮已自动中断以免无限循环。本任务中途切换过模型，而 Codex 仍按切换前那个模型的上下文上限来判断。切回原模型可以继续，或者新开一个任务。",
@@ -8992,17 +9081,9 @@
     "dropHint": "松开以在此分栏打开任务",
     "loadingTask": "正在加载任务…",
     "resizeAria": "调整任务分栏大小",
-    "openInSplit": "在分栏中打开",
-    "openSide": {
-      "left": "在左侧打开任务",
-      "right": "在右侧打开任务",
-      "top": "在上方打开任务",
-      "bottom": "在下方打开任务"
-    },
     "alreadyOpen": "该任务已在当前分栏中打开，请选择其他任务",
     "limitReached": "一个分栏最多可打开 {{count}} 个任务，请先关闭一个任务分栏再重试",
-    "addUnavailable": "当前无法在分栏中打开该任务，请先在主区域打开一个任务再重试",
-    "workerUnavailable": "Worker 任务不能单独在分栏中打开，请改为打开所属 Lead 任务"
+    "addUnavailable": "当前无法在分栏中打开该任务，请先在主区域打开一个任务再重试"
   },
   "extraDirs": {
     "menuAria": "操作菜单",
@@ -9380,7 +9461,8 @@
     },
     "currentSubscription": {
       "title": "当前订阅",
-      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。"
+      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。",
+      "purchaseBlockedUntilPeriodEnd": "当前套餐将于 {{date}} 结束，届时可购买新套餐。"
     },
     "subscriptionStatus": {
       "INCOMPLETE": "等待完成支付",

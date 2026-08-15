@@ -466,6 +466,11 @@
         "hint": "고정된 세션을 작업 현황 요약이 담긴 카드로 표시합니다. 카드 높이는 요약 길이에 따라 달라지며, 사이드바를 넓히면 2~3열로 자동 배치됩니다.",
         "aria": "사이드바 카드 모드 전환"
       },
+      "sidebarMainListMode": {
+        "label": "세션 목록 표시 방식",
+        "hint": "사이드바 기본 목록(고정 제외)의 표시 형식입니다. 텍스트는 간결한 한 줄, 목록은 미리보기가 있는 두 줄입니다.",
+        "aria": "세션 목록 표시 방식 전환"
+      },
       "layout": {
         "label": "패널 레이아웃",
         "hint": "패널 위치와 너비는 다음 실행에도 유지됩니다. 사용하기 어려운 배치가 되면 기본 레이아웃으로 복원할 수 있습니다.",
@@ -1476,7 +1481,11 @@
           "confirmTitle": "덮어쓰기 확인",
           "confirmSubtitle": "{{source}}에서 복사할 필드를 선택하세요.",
           "source": "원본",
-          "columns": { "field": "필드", "source": "원본 값", "target": "현재 값" },
+          "columns": {
+            "field": "필드",
+            "source": "원본 값",
+            "target": "현재 값"
+          },
           "fields": {
             "endpointBundle": "엔드포인트 및 API 프로토콜",
             "baseUrl": "기본 URL",
@@ -1551,6 +1560,7 @@
         "refreshAdded": "새 모델 {{count}}개를 발견했습니다",
         "refreshNoNew": "모델 목록이 최신 상태입니다. 새 항목이 없습니다",
         "refreshFailed": "모델 목록을 새로고침하지 못했습니다. 잠시 후 다시 시도해 주세요",
+        "refreshFetchDisabled": "모델 카탈로그 원격 가져오기가 비활성화되어 새로고침을 건너뛰었습니다",
         "disableModel": "이 모델 비활성화",
         "enableModel": "이 모델 활성화",
         "capabilityGroupHint": "대화 모델 선택에는 표시되지 않으며, 이미지 생성 등 기능에서만 사용됩니다.",
@@ -2428,7 +2438,8 @@
       "toast": {
         "enabled": "채팅 기록 의미 색인이 활성화됨",
         "disabled": "채팅 기록 의미 색인이 중지됨",
-        "toggleFailed": "채팅 임베딩 전환 실패"
+        "unavailable": "이 계정 또는 지역에서는 채팅 기록 의미 색인을 사용할 수 없습니다",
+        "toggleFailed": "채팅 기록 의미 색인 전환 실패"
       }
     },
     "messageNavRail": {
@@ -3144,7 +3155,9 @@
           "claude-code": "Claude Code",
           "codex": "Codex",
           "pi": "Pi"
-        }
+        },
+        "groupCtrPermissionLabel": "그룹 /ctr 새 세션 권한 모드",
+        "groupCtrPermissionDescription": "그룹 채팅에서 @bot /ctr로 새 세션을 만들 때 적용되는 권한 모드입니다. 기본값은 자동 승인입니다. 그룹 컨텍스트에는 멤버가 조작할 수 있는 내용이 포함되므로 전체 액세스를 선택하면 확인 없이 바로 실행됩니다. 신뢰할 수 있는 그룹에서만 선택하세요."
       }
     },
     "shortcuts": {
@@ -3314,6 +3327,7 @@
         "manageAria": "{{name}} 관리",
         "agentInvoked": "Agent가 자동 호출",
         "upToDate": "최신 상태",
+        "oauthAuthorizationExpired": "인증 만료 · 다시 연결 필요",
         "installAria": "{{name}} 설치"
       },
       "market": {
@@ -3434,6 +3448,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "권한 재확인 필요",
+        "action": "권한 다시 확인",
+        "actionAria": "플러그인 {{name}}의 권한 다시 확인",
+        "noticeTitle": "권한 재확인 필요",
+        "bodyLegacy": "Cindy에 이 플러그인의 권한 확인 기록이 없어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요.",
+        "bodyInvalid": "이 플러그인의 권한 확인 기록이 손상되어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요.",
+        "bodyBuiltinRestart": "이 내장 플러그인의 승인 기록에 문제가 발생했습니다. Cindy를 다시 시작하면 자동으로 복구되며, 다른 조치는 필요하지 않습니다."
+      },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
       "emptyHint": "마켓에서 설치하거나 위 메뉴에서 .cindy 파일을 가져올 수 있습니다",
@@ -3488,6 +3511,7 @@
         "uninstalled": "\"{{name}}\" 제거됨",
         "installedAsleep": "\"{{name}}\" 설치 완료 (비활성 상태이며 여기에서 언제든 활성화할 수 있습니다)",
         "updated": "\"{{name}}\"이(가) v{{version}}(으)로 업데이트되었습니다",
+        "reapproved": "\"{{name}}\"이(가) 복원되었습니다",
         "exported": "\"{{name}}\"의 .cindy 파일을 내보냈습니다",
         "exportFailed": "\"{{name}}\"을(를) 내보내지 못했습니다. 다시 시도하세요",
         "projectDisabled": "이 프로젝트에서 \"{{name}}\"을(를) 껐습니다",
@@ -3507,6 +3531,7 @@
         "metaWithAuthor": "제작자 {{author}} · 버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "enableNow": "설치 후 바로 활성화",
         "enableNowOpenPanel": "설치 후 바로 활성화하고 패널 열기",
+        "manualCount": "번들 매뉴얼 {{count}}개",
         "expandDescription": "전체 소개 보기",
         "collapseDescription": "소개 접기"
       },
@@ -3629,6 +3654,7 @@
         "fileInvalid": "유효한 .cindy 플러그인 파일이 아닙니다",
         "hostUnsupported": "이 플러그인에는 현재 버전에서 제공하지 않는 Cindy 기능이 필요합니다. Cindy를 업데이트한 후 다시 설치하세요.",
         "alreadyInstalled": "이 플러그인은 이미 설치되어 있습니다",
+        "approvalRequired": "계속하려면 이 플러그인의 권한을 다시 확인해야 합니다",
         "commandConflict": "명령어가 설치된 플러그인과 충돌합니다. 먼저 상대를 제거하거나 명령어 이름을 변경하세요.",
         "idReserved": "이 id는 공식 예약 접두사 cindy-를 사용합니다. 앱에 내장된 플러그인만 사용할 수 있습니다",
         "sourceMissing": "선택한 파일을 찾을 수 없습니다",
@@ -3739,8 +3765,14 @@
       "updateConfirm": {
         "title": "플러그인 \"{{name}}\"을(를) 업데이트할까요?",
         "body": "버전 {{from}} → {{to}}. 설치된 버전을 교체합니다. 활성 상태와 패널 위치는 유지됩니다.",
+        "oauthClientChanged": "이번 업데이트에서 OAuth 클라이언트가 변경됩니다. 플러그인의 기본 인증을 사용하는 연결된 계정은 업데이트 후 만료되며 다시 연결해야 합니다.",
         "confirm": "업데이트",
         "cancel": "취소"
+      },
+      "reapproveConfirm": {
+        "title": "\"{{name}}\" 권한을 다시 확인할까요?",
+        "body": "아래 권한을 확인하면 설치된 플러그인이 다시 승인됩니다. 설치 파일은 필요하지 않습니다.",
+        "confirm": "확인 후 복원"
       },
       "pick": {
         "dialogTitle": "폴더 선택",
@@ -3758,6 +3790,7 @@
       },
       "updateAll": {
         "title": "모두 업데이트 · {{count}}개",
+        "collapseDiff": "접기",
         "description": "일반 업데이트는 자동으로 완료되며, 검증된 실제 패키지가 새 권한을 요청할 때만 개별 확인합니다.",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "대기 중",
@@ -3767,7 +3800,13 @@
         "statusFailed": "업데이트 실패",
         "background": "백그라운드에서 계속",
         "doneAction": "완료",
-        "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료"
+        "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료",
+        "permissionChanged": "권한 변경됨",
+        "rereview": "다시 검토",
+        "reviewDiff": "검토",
+        "reviewOutdated": "검토 기간 만료",
+        "approve": "승인",
+        "skip": "건너뛰기"
       }
     },
     "mcp": {
@@ -4424,6 +4463,7 @@
     "close": "닫기",
     "menuItems": {
       "settings": "설정",
+      "resourceUsage": "리소스 사용량",
       "help": "도움말",
       "issues": "이슈",
       "checkForUpdates": "업데이트 확인"
@@ -4461,12 +4501,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "\"{{name}}\" 플러그인을 비활성화할까요?",
-      "body": "이 패널을 닫으면 플러그인 전체가 비활성화되어 패널과 기능이 중지됩니다. 사이드바의 '플러그인'에서 언제든지 다시 활성화할 수 있습니다.",
+      "body": "이 패널을 닫으면 플러그인이 비활성화되고 기능이 중지됩니다. 사이드바의 '플러그인'에서 언제든지 다시 활성화할 수 있습니다.",
       "confirm": "비활성화"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "메인 창으로 되돌리기",
+    "mergeBack": "메인 창으로 돌아가기",
     "unavailable": "이 플러그인 패널은 현재 사용할 수 없습니다"
   },
   "ghostPanelBubble": {
@@ -4476,6 +4516,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "오른쪽 사이드바",
+    "panelError": {
+      "title": "패널을 불러오지 못했습니다",
+      "description": "이 패널은 지금 표시할 수 없습니다. 다른 패널은 계속 사용할 수 있습니다.",
+      "reload": "패널 다시 불러오기"
+    },
     "window": {
       "title": "사이드바",
       "mergeBack": "메인 창으로 되돌리기",
@@ -4506,6 +4551,7 @@
         "ghostPanel": "플러그인 패널"
       },
       "controls": {
+        "showAria": "사이드바 표시",
         "maximizeAria": "사이드바 최대화",
         "restoreAria": "최대화 해제",
         "closeAria": "사이드바 닫기",
@@ -5516,7 +5562,7 @@
         "budget": "GPT 할인",
         "grok": "xAI",
         "google": "Google",
-        "china": "국내",
+        "china": "중국",
         "image": "이미지",
         "video": "비디오",
         "tts": "음성 합성",
@@ -5524,6 +5570,7 @@
         "realtime": "실시간 음성",
         "embedding": "임베딩",
         "compression": "압축",
+        "ungrouped": "미분류",
         "other": "기타"
       },
       "search": {
@@ -5535,6 +5582,7 @@
         "context": "컨텍스트 {{value}}",
         "codexCompatibilityMode": "Codex 호환 모드",
         "price": "{{input}}/{{output}} / 100만",
+        "subscriptionBadgeCompact": "구독",
         "fastBadge": "고속"
       },
       "source": {
@@ -5695,6 +5743,7 @@
       "startFailed": "협업을 시작하지 못했습니다",
       "startFailedContinue": "협업을 시작하지 못했습니다. 단일 세션으로 계속합니다.",
       "createWorkerRefreshFailed": "Worker 상태를 새로 고칠 수 없습니다. 다시 시도해 주세요.",
+      "assignmentFailed": "Worker를 만들었지만 작업 할당 여부를 확인할 수 없습니다. 다시 시도하기 전에 Worker 패널을 확인하세요.",
       "openHint": "Worker 를 불러 함께 작업",
       "disabledHint": "협업 모드가 비활성화되어 있습니다. 설정에서 활성화하세요.",
       "unavailableHint": "협업 설정을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
@@ -6630,7 +6679,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "원격 연결이 중단되었습니다(daemon이 업그레이드 또는 재시작 중일 수 있습니다). 턴이 종료되었습니다 — 다시 전송하세요.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "원격 세션에서는 로컬 파일/이미지 첨부에 접근할 수 없습니다. 내용을 직접 붙여넣으세요.",
-      "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰를 일시적으로 사용할 수 없어 검토가 필요한 작업이 거부됩니다. 직접 승인하려면 이 세션을 기본 권한으로 전환하세요.",
+      "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰가 판단을 내리지 못했습니다(네트워크 또는 서비스 일시 장애). 검토가 필요한 작업은 직접 확인하도록 전환되었습니다. 중단을 줄이려면 이 작업을 기본 권한으로 전환하세요.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "원격 Claude Code 세션은 로컬 호환 프록시를 통해 라우팅할 수 없습니다(내부 오류).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
@@ -6904,7 +6953,7 @@
         "remoteSettings": "원격 연결 설정",
         "multiSelect": "다중 선택",
         "deselect": "선택 해제",
-        "menuTrigger": "원격 기기",
+        "menuTrigger": "세션 범위",
         "selectedCount_one": "기기 {{count}}대",
         "selectedCount_other": "기기 {{count}}대"
       },
@@ -6923,6 +6972,8 @@
         "awaitingPluginSetup": "플러그인 설정 대기 중"
       },
       "showAllSessions": "모두 표시 {{count}}개",
+      "allSessions": "모든 세션",
+      "scopeLocalSessions": "이 기기의 세션",
       "dialogues": "대화",
       "newDialogue": "새 세션",
       "dialoguesToggleExpand": "대화 펼치기",
@@ -6940,12 +6991,10 @@
       "projects": "프로젝트",
       "newProject": "새 프로젝트",
       "createProjectFailed": "프로젝트 생성 실패",
-      "projectsSectionToggleExpand": "프로젝트 펼치기",
-      "projectsSectionToggleCollapse": "프로젝트 접기",
       "projectsToggleExpand": "모든 프로젝트 세션 펼치기",
       "projectsToggleCollapse": "모든 프로젝트 세션 접기",
-      "filterAria": "사이드바 정리(상태: {{status}}, Agent: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
-      "organizeSidebar": "사이드바 정리",
+      "filterAria": "사이드바 표시 설정(상태: {{status}}, Agent: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
+      "organizeSidebar": "사이드바 표시 설정",
       "filterAllText": "전체",
       "filterSelectedProjects": "{{count}}개 선택됨",
       "filterStatus": {
@@ -6959,8 +7008,23 @@
         "codex": "Codex"
       },
       "filterGroupBy": {
-        "project": "프로젝트",
-        "date": "날짜"
+        "project": "프로젝트별 그룹",
+        "flat": "평면 목록",
+        "device": "기기별 그룹",
+        "dialogue": "대화 묶기"
+      },
+      "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
+      "deviceGroup": {
+        "local": "이 기기",
+        "offline": "오프라인",
+        "collapse": "이 기기 접기",
+        "expand": "이 기기 펼치기"
+      },
+      "foldAll": {
+        "collapseGroups": "모든 그룹 접기",
+        "collapseProjects": "프로젝트 그룹 접기",
+        "collapseDevices": "기기 그룹 접기",
+        "expandAll": "모든 그룹 펼치기"
       },
       "filterLastActivity": {
         "1d": "1일",
@@ -6970,10 +7034,12 @@
         "all": "전체"
       },
       "filterSortBy": {
-        "recency": "최근순",
-        "time": "시간순",
+        "recency": "시간순",
         "manual": "수동",
-        "alphabetic": "알파벳순"
+        "priority": "우선순위"
+      },
+      "filterSortByTip": {
+        "priority": "확인이 필요한 항목 먼저, 다음 읽지 않음, 실행 중, 나머지는 시간순"
       },
       "filterStatusHeading": "상태",
       "filterAgentHeading": "에이전트",
@@ -6982,6 +7048,24 @@
       "filterSortByHeading": "정렬",
       "filterProjectsHeading": "프로젝트",
       "filterAllProjects": "모든 프로젝트",
+      "filterHeading": "필터",
+      "filterSummaryNone": "없음",
+      "filterSummaryActive": "{{count}}개 적용 중",
+      "filterReset": "필터 초기화",
+      "displayHeading": "표시",
+      "taskInfoHeading": "세션 정보",
+      "taskInfoSummaryNone": "없음",
+      "taskInfoSummarySeparator": ", ",
+      "taskInfo": {
+        "time": "시간",
+        "pr": "PR 상태",
+        "tokens": "토큰",
+        "cost": "비용"
+      },
+      "taskInfoTip": {
+        "tokens": "누적 토큰",
+        "cost": "누적 비용"
+      },
       "dateGroup": {
         "today": "오늘",
         "yesterday": "어제",
@@ -8242,7 +8326,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "이 프로젝트를 신뢰하면 사용할 수 있습니다"
+    "projectSkillNotLoaded": "현재 Pi 작업에는 이 프로젝트 Skill이 아직 로드되지 않았습니다. 새 작업에서는 자동으로 로드를 시도합니다."
   },
   "skillhub": {
     "home": {
@@ -8869,6 +8953,7 @@
       "silentStopExhausted": "모델이 빈 응답을 반복해서 반환하여 자동 재개가 일시 중지되었습니다. \"계속\"을 클릭하여 작업을 재개하세요.",
       "permissionTightenInterruptFailed": "권한을 강화하는 동안 실행 중인 작업을 중지하지 못했습니다. 작업이 끝날 때까지 확인 없이 계속 실행될 수 있습니다. 필요하면 수동으로 중지하세요.",
       "codexAutoReviewUnavailable": "자동 리뷰를 일시적으로 사용할 수 없습니다. 현재 작업을 차단하고 기본 권한으로 전환했습니다. 다시 시도하세요. 필요한 경우 확인을 요청합니다.",
+      "hostShellCommandBlocked": "Cindy가 내장 iOS 시뮬레이터를 우회하는 셸 명령을 차단했습니다. 기기 제어, 앱 실행, 화면 조작, 스크린샷, 진단에는 iOS 시뮬레이터 도구를 사용하세요.",
       "upstreamResponseIdleTimeout": "모델이 오랫동안 응답하지 않아 무한 대기를 막기 위해 이번 턴을 자동으로 중단했습니다. 완료된 도구 호출은 유지되며, 다음 메시지를 보내 계속할 수 있습니다.",
       "codexCompactionNotConverging": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 공간을 차지하는 것은 대화가 아니라 압축으로 줄일 수 없는 시스템 프롬프트와 도구 정의인 경우가 대부분입니다. 새 세션을 시작하세요.",
       "codexCompactionNotConvergingModelSwitch": "Codex가 컨텍스트를 반복해서 압축했지만 줄어들지 않아, 무한 루프를 막기 위해 이번 턴을 자동으로 중단했습니다. 이 세션은 도중에 모델을 변경했고, Codex는 변경 전 모델의 컨텍스트 한도로 계속 판단하고 있습니다. 원래 모델로 되돌리거나 새 세션을 시작하세요.",
@@ -8996,17 +9081,9 @@
     "dropHint": "여기에 세션을 놓아 열기",
     "loadingTask": "세션 불러오는 중…",
     "resizeAria": "세션 분할 창 크기 조절",
-    "openInSplit": "분할로 열기",
-    "openSide": {
-      "left": "세션을 왼쪽에 열기",
-      "right": "세션을 오른쪽에 열기",
-      "top": "세션을 위쪽에 열기",
-      "bottom": "세션을 아래쪽에 열기"
-    },
     "alreadyOpen": "이 세션은 이미 분할 창에 열려 있습니다. 다른 세션을 선택하세요.",
     "limitReached": "한 분할 창에는 세션을 최대 {{count}}개까지 열 수 있습니다. 분할 창 하나를 닫고 다시 시도하세요.",
-    "addUnavailable": "현재 분할 창에서 이 세션을 열 수 없습니다. 기본 영역에서 세션을 연 후 다시 시도하세요.",
-    "workerUnavailable": "Worker는 별도의 분할 창에서 열 수 없습니다. 소속 Lead 세션을 대신 여세요."
+    "addUnavailable": "현재 분할 창에서 이 세션을 열 수 없습니다. 기본 영역에서 세션을 연 후 다시 시도하세요."
   },
   "extraDirs": {
     "menuAria": "작업 메뉴",
@@ -9384,7 +9461,8 @@
     },
     "currentSubscription": {
       "title": "현재 구독",
-      "purchaseBlocked": "종료되지 않은 구독이 있습니다. 기존 구독을 처리한 후 새 요금제를 구매하세요."
+      "purchaseBlocked": "종료되지 않은 구독이 있습니다. 기존 구독을 처리한 후 새 요금제를 구매하세요.",
+      "purchaseBlockedUntilPeriodEnd": "현재 요금제는 {{date}}에 종료됩니다. 종료 후 새 요금제를 구매할 수 있습니다."
     },
     "subscriptionStatus": {
       "INCOMPLETE": "결제 대기",

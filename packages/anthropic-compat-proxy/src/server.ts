@@ -771,6 +771,10 @@ function forward(
   // 同底再铸」的自激循环(codex-connector review P1)。由 createAnthropicCompatProxy
   // 注入,forward 是模块级函数取不到闭包作用域。
   threadMintedIdCache?: Map<string, Set<string>> | null,
+  // 请求体显式声明 `"stream": true`(请求处理层解析一次后传入,不二次 parse)。
+  // 为 true 时启用 2xx 成功响应的流式有效性门(#2242):空 2xx / 非 SSE 2xx /
+  // 零事件 SSE 不再原样透传给客户端,转成结构化 502。false 保持字节级透传。
+  requestDeclaredStream = false,
 ): void {
   // 客户端已断开(典型:400 缓冲期间断开后走到透明重试)——'close' 已经发过,
   // 下面挂的中断传播 listener 永远不会触发,直接不发起上游请求。
@@ -864,7 +868,11 @@ function forward(
   // response 的终态处理,保证 observer 与下游收口语义不受事件先后影响。
   let failActiveResponse: ((err: unknown) => void) | null = null;
 
-  const finishClientAfterUpstreamFailure = (err: Error, message = `upstream stream error: ${String(err)}`): boolean => {
+  const finishClientAfterUpstreamFailure = (
+    err: Error,
+    message = `upstream stream error: ${String(err)}`,
+    code?: string,
+  ): boolean => {
     if (
       clientAborted ||
       proxyDestroyedClient ||
@@ -881,7 +889,7 @@ function forward(
     if (!clientRes.headersSent) {
       clientRes.writeHead(502, { 'content-type': 'application/json' });
       clientRes.end(JSON.stringify({
-        error: { type: 'proxy_error', message },
+        error: { type: 'proxy_error', ...(code ? { code } : {}), message },
       }));
     } else {
       // 已经把上游的部分响应发给客户端时,不能 end 一个看似完整的 SSE。
@@ -1021,6 +1029,7 @@ function forward(
             pathOverride,
             responseToolUseIds,
             threadMintedIdCache,
+            requestDeclaredStream,
           );
           return;
         }
@@ -1214,7 +1223,64 @@ function forward(
       toolUseIdRewrite.on('error', (err) => failStreamingResponse('error', err));
     }
 
-    clientRes.writeHead(status, upstreamRes.statusMessage, respHeaders);
+    // ── 流式请求的成功响应有效性门(#2242)──────────────────────────────
+    // 请求显式声明 stream:true 时,2xx 响应不再「先 writeHead 再 pipe」:上游或
+    // 网关产生的**正常结束的空 2xx / 非 SSE 2xx / 零事件 SSE** 会被客户端(Claude
+    // Code)当成 "empty or malformed response (HTTP 200)" 而无法分类重试。此时把
+    // writeHead 延迟到确认合法流才提交 —— 明文 SSE 扫到首个 event:/data: 行提交,
+    // 压缩 SSE 无法扫行、收到首字节即提交(空 2xx 仍被 end 分支拦);上游干净结束
+    // 仍未提交 → 结构化 502(proxy_error + code)。已提交后的截断继续走既有连接
+    // 失败语义(finishClientAfterUpstreamFailure → destroy),不补成正常结束。
+    // 只约束显式流式请求:非流式 JSON 响应照旧字节透传,零行为变化。
+    const gateStreamValidity = requestDeclaredStream && status >= 200 && status < 300;
+    // 合法 SSE 的首个事件必然远早于此(Anthropic 首行即 event: message_start);
+    // 上限只为封顶「持续输出无事件垃圾」时的内存与延迟。
+    const STREAM_GATE_PENDING_CAP_BYTES = 64 * 1024;
+    const SSE_EVENT_MARKER_RE = /(^|\r?\n)(event|data):/;
+    let streamGateCommitted = false;
+    const pendingChunks: Buffer[] = [];
+    let pendingBytes = 0;
+    let pendingText = '';
+    const commitStreamResponse = (): void => {
+      if (streamGateCommitted) return;
+      streamGateCommitted = true;
+      clientRes.writeHead(status, upstreamRes.statusMessage, respHeaders);
+      const dest = toolUseIdRewrite ?? clientRes;
+      // 门控期间积累的待发字节(非门控路径恒为空)先写出,再切回字节级 pipe ——
+      // pipe 是 SSE 零延迟的命脉('data' 监听只做计数+错误体收集,不影响流)。
+      for (const chunk of pendingChunks) dest.write(chunk);
+      pendingChunks.length = 0;
+      pendingText = '';
+      if (toolUseIdRewrite) {
+        // 客户端断开 / 上游故障收口时把 transform 一并拆掉,避免上游继续灌进无消费者的流。
+        const rewriteStream = toolUseIdRewrite;
+        clientRes.on('close', () => rewriteStream.destroy());
+        upstreamRes.pipe(rewriteStream);
+        rewriteStream.pipe(clientRes);
+      } else {
+        upstreamRes.pipe(clientRes);
+      }
+    };
+    if (!gateStreamValidity) commitStreamResponse();
+
+    /** 未提交状态下把无效流转成结构化 502(观察器按上游真实终态另行收口)。 */
+    const rejectInvalidStreamResponse = (code: string, detail: Record<string, unknown>): void => {
+      logger.warn?.('◀ invalid success response to a streaming request → 502', {
+        reqId,
+        method,
+        path: upstreamPathname,
+        status,
+        code,
+        contentType: upstreamRes.headers['content-type'],
+        contentEncoding: upstreamRes.headers['content-encoding'],
+        ...detail,
+      });
+      finishClientAfterUpstreamFailure(
+        new Error(`invalid streaming response (${code})`),
+        `upstream returned an invalid success response to a streaming request (${code})`,
+        code,
+      );
+    };
 
     // 收 body: 总字节始终累加;status >= 400 时额外收集前 ERROR_RESPONSE_DUMP_MAX_BYTES
     // 字节做 dump 用。2xx 路径只做计数, 无内存压力。
@@ -1234,11 +1300,67 @@ function forward(
         errBuf.push(chunk.length <= remain ? chunk : chunk.subarray(0, remain));
         errBufBytes += Math.min(chunk.length, remain);
       }
+      if (!streamGateCommitted) {
+        // 门控中(未提交):积累待发字节并判定是否可提交。
+        if (pendingBytes < STREAM_GATE_PENDING_CAP_BYTES) {
+          pendingChunks.push(chunk);
+          pendingBytes += chunk.length;
+        } else {
+          pendingBytes += chunk.length;
+        }
+        if (!isSse) {
+          // 非 SSE 2xx:留在门控里等 end 统一转 502(有界缓冲做 errorType 诊断);
+          // 超上限说明上游在持续输出非流式字节,立刻转 502 并切断上游。
+          if (pendingBytes > STREAM_GATE_PENDING_CAP_BYTES) {
+            upstreamResponseTerminal = 'error';
+            observerError(new Error('invalid streaming response (non_sse_stream_response)'));
+            rejectInvalidStreamResponse('non_sse_stream_response', { bytes: totalBytes });
+            upstreamReq.destroy(new Error('invalid streaming response (non_sse_stream_response)'));
+          }
+          return;
+        }
+        if (isCompressed) {
+          // 压缩 SSE 无法按明文扫事件行:首字节即提交(与改写器同款不解压原则);
+          // 空 2xx 仍由 end 分支拦截。
+          commitStreamResponse();
+          return;
+        }
+        // 事件标记均为 ASCII,UTF-8 多字节字符被 chunk 边界截断不影响判定。
+        pendingText += chunk.toString('utf8');
+        if (SSE_EVENT_MARKER_RE.test(pendingText)) {
+          commitStreamResponse();
+        } else if (pendingBytes > STREAM_GATE_PENDING_CAP_BYTES) {
+          upstreamResponseTerminal = 'error';
+          observerError(new Error('invalid streaming response (sse_without_events)'));
+          rejectInvalidStreamResponse('sse_without_events', { bytes: totalBytes });
+          upstreamReq.destroy(new Error('invalid streaming response (sse_without_events)'));
+        }
+      }
     });
     upstreamRes.on('end', () => {
       if (upstreamResponseTerminal !== null) return;
       upstreamResponseTerminal = 'end';
       if (clientAborted || clientRes.destroyed || upstreamFailureHandled) return;
+      if (!streamGateCommitted) {
+        // 上游对流式请求「正常结束」却始终没有产生合法流:空 2xx / 非 SSE 2xx /
+        // 零事件 SSE。观察器按上游真实终态收口(end),客户端收结构化 502。
+        observerEnd();
+        const detail: Record<string, unknown> = { bytes: totalBytes };
+        let code: string;
+        if (totalBytes === 0) {
+          code = 'empty_stream_response';
+        } else if (isSse) {
+          code = 'sse_without_events';
+        } else {
+          code = 'non_sse_stream_response';
+          const merged = Buffer.concat(pendingChunks);
+          const decoded = decodeBodyForLog(merged, String(upstreamRes.headers['content-encoding'] ?? ''));
+          const errorType = extractErrorType(decoded, String(upstreamRes.headers['content-type'] ?? ''));
+          if (errorType) detail.errorType = errorType;
+        }
+        rejectInvalidStreamResponse(code, detail);
+        return;
+      }
       // 4xx/5xx 用 warn 级别冒泡, 默认只记低风险摘要 (status / content-type / bytes / errorType),
       // 完整 body 只在 debug 级别下才进日志 —— 避免 release 把上游错误体里可能回显的请求字段
       // 静默落盘到用户磁盘。debug 关时 isDebugEnabled 提前返 false, 不付 dump 字符串构造开销。
@@ -1281,15 +1403,6 @@ function forward(
       failStreamingResponse('close');
     });
 
-    if (toolUseIdRewrite) {
-      // 客户端断开 / 上游故障收口时把 transform 一并拆掉,避免上游继续灌进无消费者的流。
-      const rewriteStream = toolUseIdRewrite;
-      clientRes.on('close', () => rewriteStream.destroy());
-      upstreamRes.pipe(toolUseIdRewrite);
-      toolUseIdRewrite.pipe(clientRes);
-    } else {
-      upstreamRes.pipe(clientRes);  // ← 字节级 pipe,SSE 零延迟的命脉('data' 只是计数+错误体收集, 不影响流)
-    }
   });
 
   upstreamReq.on('error', (err) => {
@@ -1654,6 +1767,10 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         parsedForRewrite = undefined;
       }
     }
+    // 请求是否显式声明流式(#2242 有效性门的启用判据)。复用上方解析结果,
+    // 非 JSON / 未声明 → false,响应路径保持字节级透传不变。
+    const requestDeclaredStream =
+      isRecord(parsedForRewrite) && parsedForRewrite.stream === true;
     const requestedIds = collectToolUseIdsForResponseRewrite(parsedForRewrite);
     // 全新/刚归一化的 kimi 会话,请求体可能还没有任何铸造形态 id(历史缺席),
     // 但模型仍会铸 minted id —— 用请求体 model 判定 kimi,确保首 fresh id 也
@@ -1728,6 +1845,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       route.pathOverride,
       responseToolUseIds,
       threadMintedIdCache,
+      requestDeclaredStream,
     );
   });
 

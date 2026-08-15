@@ -4,9 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  desktopUserDataDirNameForRegion,
+  resolveDesktopDevRegion,
+} from './shared/desktop-dev-region.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PRODUCT_USER_DATA_NAME = 'Cindy';
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
@@ -186,15 +189,16 @@ export function identifyDesktopProcesses(processes, worktrees) {
   return result;
 }
 
-function defaultUserDataDir() {
+function defaultUserDataDir(region = 'global') {
+  const dirName = desktopUserDataDirNameForRegion(region);
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    return path.join(appData, PRODUCT_USER_DATA_NAME);
+    return path.join(appData, dirName);
   }
   if (process.platform === 'darwin') {
-    return path.join(os.homedir(), 'Library', 'Application Support', PRODUCT_USER_DATA_NAME);
+    return path.join(os.homedir(), 'Library', 'Application Support', dirName);
   }
-  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), PRODUCT_USER_DATA_NAME);
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), dirName);
 }
 
 function isProcessAlive(pid) {
@@ -264,6 +268,7 @@ export function mergeDesktopInstanceRecords(scanned, records, worktrees) {
       // main + renderer process scan as a second, independent signal.
       ready: record.state === 'ready' && scannedItem?.ready === true,
       mode: record.mode,
+      region: record.region ?? null,
       passive: Boolean(record.passive),
       isolated: Boolean(record.isolated),
       userDataDir: record.userDataDir,
@@ -302,7 +307,7 @@ function printText(report) {
   console.log('active dev instances:');
   for (const instance of report.instances) {
     console.log(
-      `- pid=${instance.pid} state=${instance.state} mode=${instance.mode} passive=${instance.passive}` +
+      `- pid=${instance.pid} state=${instance.state} mode=${instance.mode} region=${instance.region ?? 'unknown'} passive=${instance.passive}` +
       ` root=${instance.rootDir} commit=${instance.commit ?? 'unverified'} userData=${instance.userDataDir ?? 'unknown'}`,
     );
   }
@@ -310,11 +315,12 @@ function printText(report) {
 
 function main() {
   const options = parseArgs(process.argv.slice(2));
+  const region = resolveDesktopDevRegion([], process.env);
   const worktrees = repositoryWorktrees();
   const processes = listProcesses();
   const preliminary = identifyDesktopProcesses(processes, worktrees);
   const userDataDirs = new Set([
-    path.resolve(options.userDataDir ?? process.env.XDT_USER_DATA_DIR ?? defaultUserDataDir()),
+    path.resolve(options.userDataDir ?? process.env.XDT_USER_DATA_DIR ?? defaultUserDataDir(region)),
     ...preliminary.map((item) => item.userDataDir).filter(Boolean).map((item) => path.resolve(item)),
   ]);
   const scanned = preliminary;

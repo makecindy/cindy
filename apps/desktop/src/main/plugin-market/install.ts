@@ -16,6 +16,7 @@ import { app } from 'electron';
 
 import {
   validateGhostManifest,
+  type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import type {
@@ -57,6 +58,9 @@ function sanitizeInstallDetail(message: string): string {
 
 export async function installCustomMarketPlugin(input: {
   pluginDir: string;
+  expected?: GhostManifest;
+  /** 更新时把审阅所绑定的 Host receipt token 贯穿到最终安装出口。 */
+  expectedInstalledApproval?: string;
   expectedGhostId: string;
   expectedVersion: string;
   sourceType: Extract<PluginMarketItemSource, 'git-market' | 'local-market'>;
@@ -171,12 +175,31 @@ export async function installCustomMarketPlugin(input: {
         sanitizeInstallDetail(packed.message),
       );
     }
+    // 唯一防篡改防线:比对实际打进包的 manifest,而非打包前磁盘上的 ghost.json。
+    // 堵住"前置比对通过后、打包读取文件前"目录被改(保持 id/version 却新增
+    // 权限声明)的窗口——装的就是 packed.manifest,必须以它为准。
+    // expected 只在校验流程显式提供了用户审阅过的清单时做防篡改比对;
+    // 来源隔离路径(permissionPolicy)由 expectedGhostId/expectedVersion +
+    // permissionBaselineManifest 在装出前复核。
+    if (
+      input.expected !== undefined &&
+      JSON.stringify(packed.manifest) !== JSON.stringify(input.expected)
+    ) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'Plugin changed after permission review',
+      );
+    }
     const permissionPolicy = { mode: 'manual' as const, sourceType: input.sourceType };
+    // 装出前最后防线:打包期间账号、所选来源或运行时插件状态都可能已变化。
+    // 复核与落位必须在同一把锁内完成,否则复核结论会在落位前过期。
     const commit = async (
       approval?: Pick<PluginMarketPackageReviewFacts, 'packageSha256' | 'installedBaseline'>,
     ): Promise<InstalledGhost> => {
       const run = async (): Promise<InstalledGhost> => {
         await input.beforeCommit?.();
+        // 自定义来源已经把 Renderer 审阅的本地清单与实际打包清单逐字节绑定，
+        // 不再进入官方市场“下载真实包后复核”的分支。
         const installed = await installOrUpdateMarketGhostPackage(tempPath, {
           // Main 会从真实临时包再次解析并与所选市场条目的身份核对；不能使用
           // 打包前活目录里的值，否则目录在打包窗口变化时会把另一个插件装入。
@@ -185,6 +208,9 @@ export async function installCustomMarketPlugin(input: {
           permissionPolicy,
           ...(input.permissionBaselineManifest
             ? { permissionBaselineManifest: input.permissionBaselineManifest }
+            : {}),
+          ...(input.expectedInstalledApproval
+            ? { expectedInstalledApproval: input.expectedInstalledApproval }
             : {}),
           ...(approval
             ? {

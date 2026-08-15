@@ -11,9 +11,9 @@ import { describe, expect, it } from 'vitest';
  * 的 auth 持久状态——refresh token 文件、服务端 device token(登出会连坐作废)、
  * relogin marker(一次性,被消费掉 primary 就看不到)、canary flag、账号删除 receipt。
  *
- * 约束的是破坏性动作,不是写入本身:passive 照常续期并写回轮换后的新 token(写入的
- * 是有效凭证,primary 侧由 replacement-retry 消化);停掉续期反而会让它的 access
- * token 过期后没有任何自愈路径。
+ * 约束的是破坏性动作,不是已知 realm 会话的轮换写回:passive 照常续期并写回
+ * 有效的新 token,primary 侧由 replacement-retry 消化。但旧版裸 token 格式没有 realm,
+ * passive 无权猜测并把它迁移成本区会话。
  *
  * 2026-07-27 事故:两个 MIGRATE_FAILED 的 passive 实例(05:30 与 07:51)在 LocalDbGate
  * fatal 界面点「返回登录」,logout 删掉整机 refresh token;正在使用的 primary 分别在
@@ -155,7 +155,8 @@ describe('passive shared-userData instance auth isolation', () => {
     const body = authSource.slice(start, end);
 
     // dev + packaged 共库双开是受支持的场景（--preserve-running）：老构建的 primary
-    // 可能仍在消费三个 legacy 文件，passive 只能写入新原子记录，不能删除旧文件。
+    // 可能仍在消费三个 legacy 文件，passive 不能删除它们，也不能给没有
+    // realm 的裸 token 擅自分区。
     expect(body).toContain('if (!isPassiveSharedUserDataInstance()) {');
     const guardIdx = body.indexOf('if (!isPassiveSharedUserDataInstance()) {');
     expect(body.indexOf('removeSafe(LEGACY_REFRESH_TOKEN_KEY);')).toBeGreaterThan(guardIdx);
@@ -163,13 +164,24 @@ describe('passive shared-userData instance auth isolation', () => {
     const legacyTokenIdx = body.indexOf(
       'const legacyToken = readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);',
     );
-    const migrationGuardIdx = body.indexOf(
-      'if (!isPassiveSharedUserDataInstance()) {',
+    const ambiguousRealmGuardIdx = body.indexOf(
+      'if (legacyToken && isPassiveSharedUserDataInstance()) {',
       legacyTokenIdx,
     );
-    expect(migrationGuardIdx).toBeGreaterThan(legacyTokenIdx);
+    expect(ambiguousRealmGuardIdx).toBeGreaterThan(legacyTokenIdx);
+    const migrationWriteIdx = body.indexOf(
+      'writePersistedAuthSession(legacyToken, AUTH_REGION)',
+      legacyTokenIdx,
+    );
+    expect(migrationWriteIdx).toBeGreaterThan(ambiguousRealmGuardIdx);
+    const passiveBranch = body.slice(ambiguousRealmGuardIdx, migrationWriteIdx);
+    expect(passiveBranch).toContain('passiveLocalSignOut = true;');
+    expect(passiveBranch).toContain("commitActiveAppSession('signed-out');");
+    expect(passiveBranch).toContain('return snapshotLoggedOutAuthState();');
+    expect(passiveBranch).not.toContain('writePersistedAuthSession');
+    expect(passiveBranch).not.toContain('removeSafe(');
     expect(body.indexOf('removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);')).toBeGreaterThan(
-      migrationGuardIdx,
+      migrationWriteIdx,
     );
   });
 
@@ -195,6 +207,30 @@ describe('passive shared-userData instance auth isolation', () => {
     const body = sliceBody('export function clearAccountDeletionReceipt(): void {', '\n}\n');
     expect(body).not.toContain('isPassiveSharedUserDataInstance');
     expect(body).toContain('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);');
+  });
+
+  it('passive 登录不得在 owner gate 前消费共享 receipt 或 relogin marker', () => {
+    const acceptStart = authSource.indexOf('async function acceptLoginOutcome(');
+    const acceptEnd = authSource.indexOf('\n}\n\nasync function runLoginAction', acceptStart);
+    const acceptBody = authSource.slice(acceptStart, acceptEnd);
+    const acceptGuard = acceptBody.indexOf('if (!isPassiveSharedUserDataInstance()) {');
+    expect(acceptGuard).toBeGreaterThan(-1);
+    expect(acceptBody.indexOf('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);')).toBeGreaterThan(
+      acceptGuard,
+    );
+
+    const completeStart = authSource.indexOf('async function completeLogin(');
+    const completeEnd = authSource.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
+    const completeBody = authSource.slice(completeStart, completeEnd);
+    const completeGuard = completeBody.indexOf('if (!isPassiveSharedUserDataInstance()) {');
+    expect(completeGuard).toBeGreaterThan(-1);
+    expect(completeBody.indexOf('removeSafe(LEGACY_REFRESH_TOKEN_KEY);')).toBeGreaterThan(
+      completeGuard,
+    );
+    expect(completeBody.indexOf('removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);')).toBeGreaterThan(
+      completeGuard,
+    );
+    expect(completeBody.indexOf('clearReloginFlag();')).toBeGreaterThan(completeGuard);
   });
 
   it('冷启动确定性失效:passive 不删盘,非 passive 也只做 compare-and-delete', () => {

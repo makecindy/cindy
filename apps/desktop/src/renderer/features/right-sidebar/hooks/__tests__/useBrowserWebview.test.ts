@@ -387,6 +387,57 @@ describe('useBrowserWebview', () => {
     expect(result!.favicon).toBe('');
   });
 
+  it('skips non-persistable favicon candidates and keeps a safe fallback', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', {
+        favicons: [
+          `data:image/png;base64,${'x'.repeat(20 * 1024)}`,
+          'blob:https://example.com/favicon',
+          `https://example.com/${'x'.repeat(20 * 1024)}`,
+          'https://example.com/favicon.ico',
+        ],
+      });
+    });
+    expect(result!.favicon).toBe('https://example.com/favicon.ico');
+  });
+
+  it('persists small data: favicons and returns null when every candidate is non-persistable', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', {
+        favicons: ['data:image/png;base64,eA=='],
+      });
+    });
+    // 小 data: 是自包含、可跨重启的,应当被持久化(SPA dev-server 场景)。
+    expect(result!.favicon).toBe('data:image/png;base64,eA==');
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', {
+        favicons: ['blob:https://example.com/favicon'],
+      });
+    });
+    // 全部候选不可持久化 → null(保留已有持久化图标,不覆盖)。
+    expect(result!.favicon).toBeNull();
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', {
+        favicons: ['file:///etc/passwd', 'javascript:alert(1)'],
+      });
+    });
+    expect(result!.favicon).toBeNull();
+  });
+
   it('does not treat a suppressed stale navigation report as a missing favicon', () => {
     let result: UseBrowserWebviewResult | null = null;
     render(createElement(HookProbe, {

@@ -38,6 +38,7 @@ import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { useApiKey } from '@/hooks/useApiKey';
+import { extractIpcError } from '@/utils/ipcError';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useModelAccessCreditUsage } from '@/hooks/useModelAccessCreditUsage';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
@@ -2086,8 +2087,16 @@ export function ProvidersSection() {
         await window.electronAPI.maker.refreshBuiltinProviderModels(p.id);
         toast.success(t('settings.providers.models.refreshDone'));
         refetch();
-      } catch {
-        toast.error(t('settings.providers.models.refreshFailed'));
+      } catch (err) {
+        // 目录拉取被禁用(dev 缺省禁网/XDT_DISABLE_MODELS_FETCH)时 main 根本没
+        // 发起请求——这是预期内的跳过,用 info 如实提示,不和真实网络失败
+        // 混为一谈地报「刷新失败,请稍后再试」。
+        const ipcError = extractIpcError(err);
+        if (ipcError?.code === 'MODEL_CATALOG_FETCH_DISABLED') {
+          toast.info(t('settings.providers.models.refreshFetchDisabled'));
+        } else {
+          toast.error(t('settings.providers.models.refreshFailed'));
+        }
       } finally {
         finishProviderRefresh(p.id);
       }

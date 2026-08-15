@@ -466,6 +466,11 @@
         "hint": "ピン留めセッションをタスク状況の要約付きカードで表示します。カードの高さは要約の長さで変わり、サイドバーを広げると 2〜3 列に自動配置されます。",
         "aria": "サイドバーカードモードを切り替える"
       },
+      "sidebarMainListMode": {
+        "label": "セッションリストの表示",
+        "hint": "サイドバーのメインリスト（ピン留め以外）の表示形式。テキストはコンパクトな 1 行、リストはプレビュー付きの 2 行です。",
+        "aria": "セッションリストの表示を切り替える"
+      },
       "layout": {
         "label": "パネルレイアウト",
         "hint": "パネルの位置と幅は次回起動時も保持されます。使いにくい配置になった場合は、初期レイアウトに戻せます。",
@@ -1476,7 +1481,11 @@
           "confirmTitle": "上書きを確認",
           "confirmSubtitle": "{{source}} からコピーする項目を選択してください。",
           "source": "コピー元",
-          "columns": { "field": "項目", "source": "コピー元", "target": "現在値" },
+          "columns": {
+            "field": "項目",
+            "source": "コピー元",
+            "target": "現在値"
+          },
           "fields": {
             "endpointBundle": "エンドポイントと API プロトコル",
             "baseUrl": "ベース URL",
@@ -1551,6 +1560,7 @@
         "refreshAdded": "新しいモデルを {{count}} 件検出しました",
         "refreshNoNew": "モデル一覧は最新です。新規はありません",
         "refreshFailed": "モデル一覧を更新できませんでした。しばらくしてから再試行してください",
+        "refreshFetchDisabled": "モデルカタログのリモート取得が無効のため、更新をスキップしました",
         "disableModel": "このモデルを無効にする",
         "enableModel": "このモデルを有効にする",
         "capabilityGroupHint": "チャットのモデル選択には表示されず、画像生成などの機能でのみ使用されます。",
@@ -2428,7 +2438,8 @@
       "toast": {
         "enabled": "チャット履歴の意味索引を有効にしました",
         "disabled": "チャット履歴の意味索引を停止しました",
-        "toggleFailed": "チャット埋め込みの切り替えに失敗しました"
+        "unavailable": "このアカウントまたは地域ではチャット履歴の意味索引を利用できません",
+        "toggleFailed": "チャット履歴の意味索引の切り替えに失敗しました"
       }
     },
     "messageNavRail": {
@@ -3144,7 +3155,9 @@
           "claude-code": "Claude Code",
           "codex": "Codex",
           "pi": "Pi"
-        }
+        },
+        "groupCtrPermissionLabel": "グループ /ctr 新規セッションの権限モード",
+        "groupCtrPermissionDescription": "グループで @bot の /ctr により新規セッションを作成する際の権限モード。初期値は「自動承認」。グループの文脈にはメンバーが操作できる内容が含まれるため、「フルアクセス」を選ぶと確認なしで直接実行されます。信頼できるグループでのみ選択してください。"
       }
     },
     "shortcuts": {
@@ -3314,6 +3327,7 @@
         "manageAria": "{{name}} を管理",
         "agentInvoked": "Agent が自動で呼び出し",
         "upToDate": "最新です",
+        "oauthAuthorizationExpired": "認証期限切れ・再接続が必要",
         "installAria": "{{name}} をインストール"
       },
       "market": {
@@ -3434,6 +3448,15 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "権限の再確認が必要",
+        "action": "権限を再確認",
+        "actionAria": "プラグイン「{{name}}」の権限を再確認",
+        "noticeTitle": "権限の再確認が必要",
+        "bodyLegacy": "このプラグインの権限確認の記録が Cindy にないため、無効のままにしています。「権限を再確認」から要求される権限を確認し、あらためて許可してください。",
+        "bodyInvalid": "このプラグインの権限確認の記録が壊れているため、無効のままにしています。「権限を再確認」から要求される権限を確認し、あらためて許可してください。",
+        "bodyBuiltinRestart": "この内蔵プラグインの承認記録に問題が発生しました。Cindy を再起動すると自動的に復元されます。他の操作は不要です。"
+      },
       "install": "プラグインをインストール…",
       "empty": "まだプラグインがインストールされていません",
       "emptyHint": "マーケットからインストールするか、上のメニューから .cindy ファイルを読み込めます",
@@ -3488,6 +3511,7 @@
         "uninstalled": "「{{name}}」をアンインストールしました",
         "installedAsleep": "「{{name}}」をインストールしました(無効状態。ここでいつでも有効化できます)",
         "updated": "「{{name}}」を v{{version}} に更新しました",
+        "reapproved": "「{{name}}」を復元しました",
         "exported": "「{{name}}」の .cindy ファイルを書き出しました",
         "exportFailed": "「{{name}}」を書き出せませんでした。もう一度お試しください",
         "projectDisabled": "「{{name}}」をこのプロジェクトで無効にしました",
@@ -3507,6 +3531,7 @@
         "metaWithAuthor": "作者 {{author}} · バージョン {{version}}。ローカルにインストールされ、いつでもアンインストールできます。",
         "enableNow": "インストール後すぐに有効化",
         "enableNowOpenPanel": "インストール後すぐに有効化してパネルを開く",
+        "manualCount": "同梱マニュアル {{count}} 件",
         "expandDescription": "紹介全文を表示",
         "collapseDescription": "紹介を折りたたむ"
       },
@@ -3629,6 +3654,7 @@
         "fileInvalid": "有効な .cindy プラグインファイルではありません",
         "hostUnsupported": "このプラグインには、現在のバージョンでは提供されていない Cindy の機能が必要です。Cindy を更新してから、もう一度インストールしてください。",
         "alreadyInstalled": "このプラグインは既にインストールされています",
+        "approvalRequired": "続けるには、このプラグインの権限を再確認する必要があります",
         "commandConflict": "コマンドがインストール済みのプラグインと重複しています。先に相手をアンインストールするか、コマンド名を変更してください。",
         "idReserved": "この id は公式予約プレフィックス cindy- を使用しています。アプリに同梱されたプラグインのみ使用できます",
         "sourceMissing": "選択したファイルが見つかりません",
@@ -3739,8 +3765,14 @@
       "updateConfirm": {
         "title": "プラグイン「{{name}}」を更新しますか?",
         "body": "バージョン {{from}} → {{to}}。既存バージョンを置き換えます。有効状態とパネル位置は保持されます。",
+        "oauthClientChanged": "この更新で OAuth クライアントが変更されます。プラグイン内蔵の認証を使用している接続済みアカウントは更新後に無効となり、再接続が必要です。",
         "confirm": "更新",
         "cancel": "キャンセル"
+      },
+      "reapproveConfirm": {
+        "title": "「{{name}}」の権限を再確認しますか?",
+        "body": "以下の権限を確認して、このインストール済みプラグインをあらためて許可します。インストールファイルは不要です。",
+        "confirm": "確認して復元"
       },
       "pick": {
         "dialogTitle": "フォルダを選択",
@@ -3758,6 +3790,7 @@
       },
       "updateAll": {
         "title": "すべて更新 · {{count}} 件",
+        "collapseDiff": "折りたたむ",
         "description": "通常の更新は自動で完了し、検証済みの実パッケージが新しい権限を要求する場合のみ個別に確認します。",
         "versionRange": "v{{from}} → v{{to}}",
         "statusPending": "待機中",
@@ -3767,7 +3800,13 @@
         "statusFailed": "更新に失敗",
         "background": "バックグラウンドで続行",
         "doneAction": "完了",
-        "doneToast": "一括更新が完了:{{done}} 件更新、{{rest}} 件未完了"
+        "doneToast": "一括更新が完了:{{done}} 件更新、{{rest}} 件未完了",
+        "permissionChanged": "権限変更",
+        "rereview": "再確認",
+        "reviewDiff": "確認",
+        "reviewOutdated": "レビュー期限切れ",
+        "approve": "承認",
+        "skip": "スキップ"
       }
     },
     "mcp": {
@@ -4424,6 +4463,7 @@
     "close": "閉じる",
     "menuItems": {
       "settings": "設定",
+      "resourceUsage": "リソース使用量",
       "help": "ヘルプ",
       "issues": "フィードバック",
       "checkForUpdates": "更新を確認"
@@ -4461,12 +4501,12 @@
   "ghostPanel": {
     "disableConfirm": {
       "title": "「{{name}}」を無効にしますか？",
-      "body": "このパネルを閉じるとプラグイン全体が無効になり、パネルと機能が停止します。サイドバーの「プラグイン」からいつでも再度有効にできます。",
+      "body": "このパネルを閉じるとプラグインが無効になり、機能が停止します。サイドバーの「プラグイン」からいつでも再度有効にできます。",
       "confirm": "無効にする"
     }
   },
   "ghostPanelWindow": {
-    "mergeBack": "メインウィンドウに戻す",
+    "mergeBack": "メインウィンドウに戻る",
     "unavailable": "このプラグインパネルは現在利用できません"
   },
   "ghostPanelBubble": {
@@ -4476,6 +4516,11 @@
   },
   "rightSidebar": {
     "ariaLabel": "右サイドバー",
+    "panelError": {
+      "title": "パネルの読み込みに失敗しました",
+      "description": "このパネルは現在表示できません。他のパネルは引き続き利用できます。",
+      "reload": "パネルを再読み込み"
+    },
     "window": {
       "title": "サイドバー",
       "mergeBack": "メインウィンドウに戻す",
@@ -4506,6 +4551,7 @@
         "ghostPanel": "プラグインパネル"
       },
       "controls": {
+        "showAria": "サイドバーを表示",
         "maximizeAria": "サイドバーを最大化",
         "restoreAria": "最大化を解除",
         "closeAria": "サイドバーを閉じる",
@@ -5516,7 +5562,7 @@
         "budget": "GPT 割引",
         "grok": "xAI",
         "google": "Google",
-        "china": "国内",
+        "china": "中国",
         "image": "画像",
         "video": "動画",
         "tts": "音声合成",
@@ -5524,6 +5570,7 @@
         "realtime": "リアルタイム音声",
         "embedding": "埋め込み",
         "compression": "圧縮",
+        "ungrouped": "未分類",
         "other": "その他"
       },
       "search": {
@@ -5535,6 +5582,7 @@
         "context": "コンテキスト {{value}}",
         "codexCompatibilityMode": "Codex 互換モード",
         "price": "{{input}}/{{output}} / 100万",
+        "subscriptionBadgeCompact": "サブスク",
         "fastBadge": "高速"
       },
       "source": {
@@ -5695,6 +5743,7 @@
       "startFailed": "協同の開始に失敗しました",
       "startFailedContinue": "協同の開始に失敗しました。単一セッションとして続行します。",
       "createWorkerRefreshFailed": "Worker の状態を更新できませんでした。もう一度お試しください。",
+      "assignmentFailed": "Worker は作成されましたが、タスクが割り当てられたか確認できません。再試行する前に Worker パネルを確認してください。",
       "openHint": "Worker を呼んで協同する",
       "disabledHint": "協同モードは無効です。設定で有効にしてください。",
       "unavailableHint": "協同設定を確認できません。しばらくしてから再試行してください。",
@@ -6630,7 +6679,7 @@
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "リモート接続が中断されました（daemon がアップグレードまたは再起動中の可能性があります）。ターンが終了しました — 再送信してください。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
-      "AUTO_REVIEW_UNAVAILABLE": "自動レビューが一時的に利用できないため、レビューが必要な操作は拒否されます。ご自身で承認する場合は、このセッションをデフォルト権限に切り替えてください。",
+      "AUTO_REVIEW_UNAVAILABLE": "自動レビューが判断できませんでした（ネットワークまたはサービスの一時的な問題）。レビューが必要な操作はご自身での確認に切り替わりました。中断を減らしたい場合は、このタスクをデフォルト権限に切り替えてください。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "リモート Claude Code セッションはローカル互換プロキシ経由でルーティングできません(内部エラー)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
@@ -6904,7 +6953,7 @@
         "remoteSettings": "リモート接続設定",
         "multiSelect": "複数選択",
         "deselect": "選択を解除",
-        "menuTrigger": "リモートマシン",
+        "menuTrigger": "タスク範囲",
         "selectedCount_one": "{{count}} 台のマシン",
         "selectedCount_other": "{{count}} 台のマシン"
       },
@@ -6923,6 +6972,8 @@
         "awaitingPluginSetup": "プラグイン設定待ち"
       },
       "showAllSessions": "すべて表示 {{count}} 件",
+      "allSessions": "すべてのセッション",
+      "scopeLocalSessions": "このデバイスのセッション",
       "dialogues": "会話",
       "newDialogue": "新規セッション",
       "dialoguesToggleExpand": "会話を展開",
@@ -6940,12 +6991,10 @@
       "projects": "プロジェクト",
       "newProject": "新規プロジェクト",
       "createProjectFailed": "プロジェクトの作成に失敗しました",
-      "projectsSectionToggleExpand": "プロジェクトを展開",
-      "projectsSectionToggleCollapse": "プロジェクトを折りたたむ",
       "projectsToggleExpand": "すべてのプロジェクトセッションを展開",
       "projectsToggleCollapse": "すべてのプロジェクトセッションを折りたたむ",
-      "filterAria": "サイドバー整理（ステータス：{{status}}、Agent：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}）",
-      "organizeSidebar": "サイドバー整理",
+      "filterAria": "サイドバー表示設定（ステータス：{{status}}、Agent：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}）",
+      "organizeSidebar": "サイドバー表示設定",
       "filterAllText": "すべて",
       "filterSelectedProjects": "{{count}} 件選択",
       "filterStatus": {
@@ -6959,8 +7008,23 @@
         "codex": "Codex"
       },
       "filterGroupBy": {
-        "project": "プロジェクト",
-        "date": "日付"
+        "project": "プロジェクトでグループ化",
+        "flat": "フラット表示",
+        "device": "デバイスでグループ化",
+        "dialogue": "チャットをまとめる"
+      },
+      "filterGroupByDeviceManualTip": "手動並び替え中はデバイスグループを使えません",
+      "deviceGroup": {
+        "local": "このデバイス",
+        "offline": "オフライン",
+        "collapse": "このデバイスを折りたたむ",
+        "expand": "このデバイスを展開"
+      },
+      "foldAll": {
+        "collapseGroups": "すべてのグループを折りたたむ",
+        "collapseProjects": "プロジェクトグループを折りたたむ",
+        "collapseDevices": "デバイスグループを折りたたむ",
+        "expandAll": "すべてのグループを展開"
       },
       "filterLastActivity": {
         "1d": "1日",
@@ -6970,10 +7034,12 @@
         "all": "すべて"
       },
       "filterSortBy": {
-        "recency": "最近順",
-        "time": "時系列",
+        "recency": "時間順",
         "manual": "手動",
-        "alphabetic": "アルファベット順"
+        "priority": "優先度"
+      },
+      "filterSortByTip": {
+        "priority": "要対応を最上位に、次に未読、実行中、残りは時間順"
       },
       "filterStatusHeading": "ステータス",
       "filterAgentHeading": "エージェント",
@@ -6982,6 +7048,24 @@
       "filterSortByHeading": "並び替え",
       "filterProjectsHeading": "プロジェクト",
       "filterAllProjects": "すべてのプロジェクト",
+      "filterHeading": "フィルター",
+      "filterSummaryNone": "なし",
+      "filterSummaryActive": "{{count}} 件適用中",
+      "filterReset": "フィルターをリセット",
+      "displayHeading": "表示",
+      "taskInfoHeading": "セッション情報",
+      "taskInfoSummaryNone": "なし",
+      "taskInfoSummarySeparator": "、",
+      "taskInfo": {
+        "time": "時間",
+        "pr": "PR ステータス",
+        "tokens": "トークン",
+        "cost": "コスト"
+      },
+      "taskInfoTip": {
+        "tokens": "累計トークン",
+        "cost": "累計コスト"
+      },
       "dateGroup": {
         "today": "今日",
         "yesterday": "昨日",
@@ -8242,7 +8326,7 @@
     }
   },
   "commandPalette": {
-    "projectTrustRequired": "このプロジェクトを信頼すると使用できます"
+    "projectSkillNotLoaded": "現在の Pi タスクでは、このプロジェクト Skill はまだ読み込まれていません。新しいタスクでは自動的に読み込みを試みます。"
   },
   "skillhub": {
     "home": {
@@ -8869,6 +8953,7 @@
       "silentStopExhausted": "モデルが空の応答を繰り返し返したため、自動再開を一時停止しました。「続行」をクリックしてタスクを再開してください。",
       "permissionTightenInterruptFailed": "権限を厳格化する際に実行中のタスクを停止できませんでした。タスクは終了まで確認なしで実行され続ける可能性があります。必要に応じて手動で停止してください。",
       "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
+      "hostShellCommandBlocked": "Cindy は内蔵 iOS シミュレータを迂回するシェルコマンドをブロックしました。デバイスの操作、アプリの起動、画面操作、スクリーンショット、診断には iOS シミュレータツールを使用してください。",
       "upstreamResponseIdleTimeout": "モデルから長時間応答がなかったため、無限待機を避けるためこのターンを自動中断しました。完了したツール呼び出しは保持されています。次のメッセージを送信して続行できます。",
       "codexCompactionNotConverging": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。容量を占めているのは会話ではなく、圧縮では削れないシステムプロンプトとツール定義であることがほとんどです。新しいセッションを開始してください。",
       "codexCompactionNotConvergingModelSwitch": "Codex がコンテキストの圧縮を繰り返しても効果がないため、無限ループを避けるためこのターンを自動中断しました。このセッションは途中でモデルを切り替えており、Codex は切り替え前のモデルの上限でコンテキストを判定し続けています。元のモデルに戻すか、新しいセッションを開始してください。",
@@ -8996,17 +9081,9 @@
     "dropHint": "ここにセッションをドロップして開く",
     "loadingTask": "セッションを読み込み中…",
     "resizeAria": "セッションペインのサイズを変更",
-    "openInSplit": "分割で開く",
-    "openSide": {
-      "left": "セッションを左側で開く",
-      "right": "セッションを右側で開く",
-      "top": "セッションを上側で開く",
-      "bottom": "セッションを下側で開く"
-    },
     "alreadyOpen": "このセッションはすでに分割内で開いています。別のセッションを選択してください。",
     "limitReached": "1 つの分割で開けるセッションは最大 {{count}} 件です。ペインを 1 つ閉じてから、もう一度お試しください。",
-    "addUnavailable": "このセッションは現在の分割で開けません。メイン領域でセッションを開いてから、もう一度お試しください。",
-    "workerUnavailable": "Worker は個別のペインで開けません。所属する Lead セッションを開いてください。"
+    "addUnavailable": "このセッションは現在の分割で開けません。メイン領域でセッションを開いてから、もう一度お試しください。"
   },
   "extraDirs": {
     "menuAria": "操作メニュー",
@@ -9384,7 +9461,8 @@
     },
     "currentSubscription": {
       "title": "現在のサブスクリプション",
-      "purchaseBlocked": "未終了のサブスクリプションがあります。既存のサブスクリプションを処理してから新しいプランを購入してください。"
+      "purchaseBlocked": "未終了のサブスクリプションがあります。既存のサブスクリプションを処理してから新しいプランを購入してください。",
+      "purchaseBlockedUntilPeriodEnd": "現在のプランは {{date}} に終了します。終了後に新しいプランを購入できます。"
     },
     "subscriptionStatus": {
       "INCOMPLETE": "支払い待ち",

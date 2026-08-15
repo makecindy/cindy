@@ -201,6 +201,9 @@ function createHarness(opts?: {
   const onUserMessagePersisted = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onUserMessagePersisted']>
   >(() => {});
+  const onUserMessageQueryable = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onUserMessageQueryable']>
+  >(() => {});
   const onUserMessagePersistenceFailed = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onUserMessagePersistenceFailed']>
   >(() => {});
@@ -296,6 +299,7 @@ function createHarness(opts?: {
     onUndispatchedUserTurn,
     onUserMessagePersisting,
     onUserMessagePersisted,
+    onUserMessageQueryable,
     onUserMessagePersistenceFailed,
     onAcceptedQueuedMessage,
     onDispatchedUserTurn,
@@ -332,6 +336,7 @@ function createHarness(opts?: {
     onUndispatchedUserTurn,
     onUserMessagePersisting,
     onUserMessagePersisted,
+    onUserMessageQueryable,
     onUserMessagePersistenceFailed,
     onAcceptedQueuedMessage,
     onDispatchedUserTurn,
@@ -3609,7 +3614,20 @@ describe('AgentInputCoordinator send transaction', () => {
 
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
     expect(shouldBroadcastResult).toBe(false);
+    expect(h.onUserMessageQueryable).not.toHaveBeenCalled();
     expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+  });
+
+  it('notifies queryability only after an accepted row survives the clear generation', async () => {
+    const h = createHarness();
+    const sid = 'queryable-after-persist';
+    const first = makeItem('q-1', 'first');
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+
+    expect(h.onUserMessagePersisted).toHaveBeenCalledWith(sid, expect.objectContaining(first));
+    expect(h.onUserMessageQueryable).toHaveBeenCalledWith(sid, expect.objectContaining(first));
   });
 
   it('settles a persistence failure after clear without treating the row as durable', async () => {

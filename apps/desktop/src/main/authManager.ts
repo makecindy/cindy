@@ -41,7 +41,6 @@ import {
   type ProviderConfig,
   type SocialProvider,
 } from '@cindy/auth-client';
-import { closeDb as closeLocalDb } from './localDb';
 import { readReloginFlag, clearReloginFlag } from './updateService';
 import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
@@ -72,6 +71,11 @@ import { createDesktopPollCredentials, runHostedCallbackPolling } from './authHo
 import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures';
 
 import { createLogger } from './logger';
+import {
+  isGhostSkillProjectionBoundaryStableForOwner,
+  withGhostSkillProjectionOwnerCommit,
+  withGhostSkillProjectionReadOnlyOwner,
+} from './authBoundaryQuarantine.js';
 import { buildFocusDeepLink } from './deepLink';
 import { getResolvedMainLocale, t } from './i18n';
 import {
@@ -89,19 +93,26 @@ import {
   type DesktopLoginActionResult,
 } from '../shared/authIpc';
 import {
+  activeOwnerScopeKey,
   beginAppSessionBoundary,
   commitActiveAppSession,
+  commitVolatileAppSession,
   getActiveAppSession,
   getActiveDataOwnerPushStamp,
+  isAppSessionBoundaryPending,
+  LOCAL_DATA_OWNER_ID,
   type AppSessionMode,
 } from './appSessionState.js';
-import { shouldTeardownColdStartRuntime } from './authColdStartBoundary.js';
 import {
   claimLegacyOwnerNamespace,
   recordLegacyGhostMigrationResult,
 } from './ownerNamespaceMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
+import {
+  StableOwnerPostCommitCoordinator,
+  type StableOwnerPostCommitTask,
+} from './stableOwnerPostCommit.js';
 
 const log = createLogger('authManager');
 
@@ -237,9 +248,35 @@ type AccountSwitchTeardown = (context: {
 
 /** Releases every account-scoped runtime before terminal local sign-out. */
 type AuthSessionTeardown = (reason: string) => void | Promise<void>;
+type ProjectionRepairTeardown = (reason: string) => void | Promise<void>;
 
 let accountSwitchTeardown: AccountSwitchTeardown | null = null;
 let authSessionTeardown: AuthSessionTeardown | null = null;
+let projectionRepairTeardown: ProjectionRepairTeardown | null = null;
+
+const stableOwnerPostCommitCoordinator = new StableOwnerPostCommitCoordinator({
+  snapshot: () => {
+    const session = getActiveAppSession();
+    return {
+      scopeKey: activeOwnerScopeKey(),
+      dataOwnerId: session.dataOwnerId,
+      stable:
+        !isAppSessionBoundaryPending()
+        && isGhostSkillProjectionBoundaryStableForOwner(session.dataOwnerId),
+    };
+  },
+  warn: (message, meta) => log.warn(message, meta),
+});
+
+function requestStableOwnerPostCommit(reason: string): void {
+  if (isPassiveSharedUserDataInstance()) return;
+  void stableOwnerPostCommitCoordinator.ensure(reason);
+}
+
+async function ensureStableOwnerPostCommit(reason: string): Promise<void> {
+  if (isPassiveSharedUserDataInstance()) return;
+  await stableOwnerPostCommitCoordinator.ensure(reason);
+}
 
 // ── Module-level state ──────────────────────────────────────────────────────
 
@@ -797,12 +834,260 @@ function mergeMembershipWithExisting(
   };
 }
 
+/** Serialize a verified cloud owner commit with the shared Ghost projection. */
+async function withCloudOwnerCommit<T>(opts: {
+  previousOwnerId: string | null;
+  nextOwnerId: string;
+  prepareTransition: () => Promise<void>;
+  prepareCommit?: () => Promise<void>;
+  commit: () => T | Promise<T>;
+}): Promise<T> {
+  if (isPassiveSharedUserDataInstance()) {
+    return withGhostSkillProjectionReadOnlyOwner(opts.nextOwnerId, opts.commit);
+  }
+  let releaseBoundary: (() => void) | null = null;
+  // A same-owner projection repair tears down the owner-bound Ghost runtime but
+  // keeps the same mode/owner, so commitActiveAppSession's same-owner early
+  // return would NOT advance the owner generation — stale async work that
+  // captured the pre-repair scope key would then pass the post-release guard.
+  // Force a generation bump so the scope key changes across the teardown.
+  let forceBumpGeneration = false;
+  let result!: T;
+  let committed = false;
+  try {
+    result = await withGhostSkillProjectionOwnerCommit({
+      previousOwnerId: opts.previousOwnerId,
+      nextOwnerId: opts.nextOwnerId,
+      prepareTransition: async ({ ownerChanged }) => {
+        notifyRendererAuthBoundaryPending();
+        releaseBoundary = beginAppSessionBoundary();
+        if (ownerChanged) {
+          await opts.prepareTransition();
+        } else {
+          if (!projectionRepairTeardown) {
+            throw new Error('Ghost projection repair requires a teardown hook');
+          }
+          forceBumpGeneration = true;
+          await projectionRepairTeardown('same-owner-projection-recovery');
+        }
+      },
+      prepareCommit: opts.prepareCommit,
+      commit: async () => {
+        const result = await opts.commit();
+        // Same-owner repair: advance the owner generation after the real commit
+        // so activeOwnerScopeKey() changes and stale captured scopes are rejected.
+        if (forceBumpGeneration) {
+          const session = getActiveAppSession();
+          commitActiveAppSession(session.mode, session.dataOwnerId ?? undefined, true);
+        }
+        return result;
+      },
+    });
+    committed = true;
+  } finally {
+    const release = releaseBoundary as (() => void) | null;
+    release?.();
+    if (release) notifyRenderer();
+  }
+  if (committed) requestStableOwnerPostCommit('owner-commit');
+  return result;
+}
+
+/**
+ * Publish an account-free owner only after the same global Ghost projection
+ * transition used by cloud login and account replacement has completed.
+ *
+ * The auth fields are cleared in the commit callback, after the durable
+ * pending marker and teardown. If the transition cannot be persisted or the
+ * sweep fails, the local session is still made account-free, but the durable
+ * boundary remains non-stable so a later cloud owner cannot commit without a
+ * fresh sweep.
+ */
+async function withAccountFreeOwnerCommit(opts: {
+  reason: string;
+  nextMode: Extract<AppSessionMode, 'signed-out' | 'local'>;
+  preservePersistedRefreshToken?: boolean;
+  notify?: boolean;
+  clearOnFailure?: boolean;
+  authAlreadyCleared?: boolean;
+  validateBeforeCommit?: () => boolean;
+  shouldClearOnFailure?: () => boolean;
+}): Promise<void> {
+  let authCleared = opts.authAlreadyCleared ?? false;
+  let releaseBoundary: (() => void) | null = null;
+  // Same-owner account-free repair tears down the owner-bound Ghost runtime but
+  // keeps the same mode/owner, so commitActiveAppSession's same-owner early
+  // return would NOT advance the owner generation — stale async work that
+  // captured the pre-repair scope key would then pass the post-release guard.
+  let forceBumpGeneration = false;
+  const notify = opts.notify ?? true;
+  const previousOwnerId = getActiveAppSession().dataOwnerId;
+  if (isPassiveSharedUserDataInstance()) {
+    if (opts.validateBeforeCommit && !opts.validateBeforeCommit()) {
+      throw new AuthApiError(
+        'AUTH_FLOW_SUPERSEDED',
+        409,
+        'Account-free owner transition was superseded before commit',
+      );
+    }
+    if (!authCleared) {
+      clearAuth({
+        notify: false,
+        nextMode: opts.nextMode,
+        preservePersistedRefreshToken: true,
+        deferSessionCommit: true,
+      });
+      authCleared = true;
+    }
+    commitVolatileAppSession(opts.nextMode);
+    if (notify) {
+      notifyRenderer();
+      notifyAuthListeners();
+    }
+    return;
+  }
+  try {
+    await withGhostSkillProjectionOwnerCommit({
+      previousOwnerId,
+      nextOwnerId: opts.nextMode === 'local' ? LOCAL_DATA_OWNER_ID : null,
+      prepareTransition: async ({ ownerChanged }) => {
+        notifyRendererAuthBoundaryPending();
+        releaseBoundary = beginAppSessionBoundary();
+        if (ownerChanged) {
+          if (!authSessionTeardown) {
+            throw new Error('account-free owner transition requires a teardown hook');
+          }
+          await authSessionTeardown(opts.reason);
+        } else {
+          if (!projectionRepairTeardown) {
+            throw new Error('account-free projection repair requires a teardown hook');
+          }
+          forceBumpGeneration = true;
+          await projectionRepairTeardown(opts.reason);
+        }
+      },
+      prepareCommit: async () => {
+        if (opts.validateBeforeCommit && !opts.validateBeforeCommit()) {
+          throw new AuthApiError(
+            'AUTH_FLOW_SUPERSEDED',
+            409,
+            'Account-free owner transition was superseded before commit',
+          );
+        }
+      },
+      commit: () => {
+        if (!authCleared) {
+          clearAuth({
+            notify: false,
+            nextMode: opts.nextMode,
+            preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
+            deferSessionCommit: true,
+          });
+          authCleared = true;
+        }
+        commitActiveAppSession(opts.nextMode);
+        // Same-owner account-free repair: advance the owner generation after the
+        // real commit so activeOwnerScopeKey() changes and stale captured scopes
+        // are rejected across the teardown.
+        if (forceBumpGeneration) {
+          commitActiveAppSession(opts.nextMode, undefined, true);
+        }
+      },
+    });
+  } catch (error) {
+    // A terminal auth path must not leave an in-memory cloud owner active. The
+    // durable state is intentionally left missing/pending so future cloud
+    // publication remains fail-closed until another full transition succeeds.
+    if (opts.clearOnFailure && (opts.shouldClearOnFailure?.() ?? true)) {
+      if (!authCleared) {
+        clearAuth({
+          notify: false,
+          nextMode: 'signed-out',
+          preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
+          deferSessionCommit: true,
+        });
+        authCleared = true;
+      }
+      // The durable app-session write may be the operation that failed. Keep
+      // the process account-free without retrying that write on this path.
+      try {
+        commitVolatileAppSession('signed-out');
+      } catch (sessionError) {
+        log.error('failed to commit volatile signed-out fallback', sessionError);
+      }
+    }
+    throw error;
+  } finally {
+    const release = releaseBoundary as (() => void) | null;
+    release?.();
+    if (release && notify) notifyRenderer();
+  }
+
+  requestStableOwnerPostCommit('owner-commit');
+  if (notify) {
+    notifyRenderer();
+    notifyAuthListeners();
+  }
+}
+
+async function recoverAccountFreeOwnerAtStartup(
+  mode: Extract<AppSessionMode, 'signed-out' | 'local'>,
+  reason: string,
+): Promise<void> {
+  const ownerId = mode === 'local' ? LOCAL_DATA_OWNER_ID : null;
+  if (isGhostSkillProjectionBoundaryStableForOwner(ownerId)) {
+    if (getActiveAppSession().mode !== mode || getActiveAppSession().dataOwnerId !== ownerId) {
+      if (isPassiveSharedUserDataInstance()) {
+        commitVolatileAppSession(mode);
+      } else {
+        commitActiveAppSession(mode);
+      }
+    }
+    await ensureStableOwnerPostCommit('owner-already-stable');
+    return;
+  }
+  await withAccountFreeOwnerCommit({
+    reason,
+    nextMode: mode,
+    notify: false,
+    clearOnFailure: mode === 'signed-out',
+    preservePersistedRefreshToken: true,
+  });
+}
+
+function commitCloudAppSession(ownerId: string): void {
+  if (isPassiveSharedUserDataInstance()) {
+    commitVolatileAppSession('cloud', ownerId);
+  } else {
+    commitActiveAppSession('cloud', ownerId);
+  }
+}
+
+async function finishColdStartSignedOut(reason: string): Promise<AuthState> {
+  await recoverAccountFreeOwnerAtStartup('signed-out', reason);
+  return snapshotLoggedOutAuthState();
+}
+
 export function setAccountSwitchTeardown(teardown: AccountSwitchTeardown | null): void {
   accountSwitchTeardown = teardown;
 }
 
 export function setAuthSessionTeardown(teardown: AuthSessionTeardown | null): void {
   authSessionTeardown = teardown;
+}
+
+export function setProjectionRepairTeardown(teardown: ProjectionRepairTeardown | null): void {
+  projectionRepairTeardown = teardown;
+}
+
+/** Register the owner-scoped work that must settle after the durable boundary is stable. */
+export function setStableOwnerPostCommitTask(task: StableOwnerPostCommitTask | null): void {
+  stableOwnerPostCommitCoordinator.setTask(task);
+}
+
+/** Pull-based startup fallback for an owner that was already stable before registration. */
+export async function ensureStableOwnerPostCommitTasks(reason: string): Promise<void> {
+  await ensureStableOwnerPostCommit(reason);
 }
 
 // ── User-level API key sync ─────────────────────────────────────────────────
@@ -1285,7 +1570,7 @@ function snapshotAuthState(): AuthState {
     mode: appSession.mode,
     dataOwnerId: appSession.dataOwnerId,
     ownerGeneration: appSession.generation,
-    canEnterApp: appSession.mode !== 'signed-out',
+    canEnterApp: appSession.mode !== 'signed-out' && !isAppSessionBoundaryPending(),
     isAuthenticated: isCloudAuthenticated,
     isCanary: currentUser !== null && canaryFlagStore.read(),
     deviceId,
@@ -1514,33 +1799,34 @@ async function expireRuntimeAuth(
   reason: SessionExpiredReason = 'unknown',
   opts: { preservePersistedRefreshToken?: boolean } = {},
 ): Promise<void> {
+  // Raise the owner boundary before clearing auth so queued owner-scoped
+  // continuations see the pending boundary and fail closed, rather than
+  // executing between token clearance and the async teardown (P1,
+  // PRRT_kwDOTgdRUs6YaakC).  beginAppSessionBoundary is ref-counted;
+  // withAccountFreeOwnerCommit will extend it, and the finally block
+  // releases the outer reference after teardown completes.
   const releaseBoundary = beginAppSessionBoundary();
-  notifyRendererAuthBoundaryPending();
   clearAuth({
     notify: false,
+    nextMode: 'signed-out',
     preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
     deferSessionCommit: true,
   });
   try {
-    if (accountSwitchTeardown) {
-      await accountSwitchTeardown({ previousUserId, nextUserId: 'signed-out' });
-    } else {
-      log.warn(
-        'runtime auth expiry teardown hook is not registered; falling back to localDb close',
-      );
-    }
+    await withAccountFreeOwnerCommit({
+      reason,
+      nextMode: 'signed-out',
+      preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
+      notify: false,
+      clearOnFailure: true,
+      authAlreadyCleared: true,
+    });
   } catch (err) {
-    // A teardown failure must not restore an expired credential. Continue with
-    // the local DB close and signed-out notifications, while keeping evidence
-    // for diagnosing the stale owner runtime.
-    log.error('runtime auth expiry owner teardown failed', err);
-  }
-  try {
-    closeLocalDb();
-  } catch (err) {
-    log.error('closeLocalDb on runtime auth expiry failed', err);
+    // A teardown or durable-state failure must not restore an expired
+    // credential. The helper has already cleared the in-memory owner; leave
+    // the durable boundary non-stable for the next recovery attempt.
+    log.error('runtime auth expiry owner transition failed', err);
   } finally {
-    commitActiveAppSession('signed-out');
     releaseBoundary();
     notifyRenderer();
     notifyAuthListeners();
@@ -1557,38 +1843,33 @@ async function expireRuntimeAuth(
 export function invalidateSession(reason: string): Promise<void> {
   if (sessionInvalidationPromise) return sessionInvalidationPromise;
 
+  // Raise the owner boundary before clearing auth (same P1 fix as
+  // expireRuntimeAuth — see PRRT_kwDOTgdRUs6YaakC).
+  const releaseBoundary = beginAppSessionBoundary();
+  clearAuth({ notify: false, nextMode: 'signed-out', deferSessionCommit: true });
+
   // Schedule teardown one microtask later so the single-flight promise can be
   // published and credentials can be cleared synchronously first. API calls
   // that detect the rejection may themselves run inside a scheduler/service
   // being torn down; they must be able to unwind without a stop-await cycle.
-  const releaseBoundary = beginAppSessionBoundary();
   const run = Promise.resolve().then(async () => {
     try {
-      if (authSessionTeardown) {
-        await authSessionTeardown(reason);
-      } else {
-        log.warn(
-          `auth session teardown hook is not registered for ${reason}; falling back to localDb close`,
-        );
-      }
+      await withAccountFreeOwnerCommit({
+        reason,
+        nextMode: 'signed-out',
+        notify: false,
+        clearOnFailure: true,
+        authAlreadyCleared: true,
+      });
     } catch (error) {
-      log.error(`auth session teardown on ${reason} failed (non-fatal)`, error);
-    }
-    try {
-      closeLocalDb();
-    } catch (error) {
-      log.error(`closeLocalDb on ${reason} failed (non-fatal)`, error);
+      log.error(`auth session owner transition on ${reason} failed`, error);
     } finally {
-      commitActiveAppSession('signed-out');
       releaseBoundary();
     }
+    notifyRenderer();
+    notifyAuthListeners();
   });
   sessionInvalidationPromise = run;
-  // Keep the current renderer surface in place until its session-expired
-  // dialog is acknowledged. Main-process consumers still need the immediate
-  // logged-out transition so no account-scoped work can restart meanwhile.
-  clearAuth({ notify: false, deferSessionCommit: true });
-  notifyAuthListeners();
   // invalidateSession 的 reason 是调用方语境串而非服务端失效码,这里只把
   // 「账号不可用」显式归类,其余统一走通用过期文案。
   notifySessionExpired(reason === 'account-unavailable' ? 'account-unavailable' : 'unknown');
@@ -1670,25 +1951,27 @@ export function hasNoPersistedAuthCredentials(): boolean {
   );
 }
 
-/** Enter the account-free local session after the host has torn down old runtime state. */
-export function enterLocalMode(): AuthState {
+/** Enter the account-free local session through the shared projection boundary. */
+export async function enterLocalMode(): Promise<AuthState> {
   browserAuthorizationSlot.cancelActive();
   // Local mode has a different data owner. Drop process-local generic OAuth
   // tokens before switching the committed owner so cloud credentials cannot
   // be reused by the account-free session.
   getProviderSecretStore().invalidateCaches();
-  clearAuth({ notify: false, nextMode: 'local' });
-  notifyRenderer();
-  notifyAuthListeners();
+  await withAccountFreeOwnerCommit({
+    reason: 'enter-local-mode',
+    nextMode: 'local',
+  });
   return snapshotAuthState();
 }
 
 /** Leave local mode without deleting its owner-scoped data. */
-export function exitLocalMode(): AuthState {
+export async function exitLocalMode(): Promise<AuthState> {
   if (getActiveAppSession().mode !== 'local') return snapshotAuthState();
-  clearAuth({ notify: false, nextMode: 'signed-out' });
-  notifyRenderer();
-  notifyAuthListeners();
+  await withAccountFreeOwnerCommit({
+    reason: 'exit-local-mode',
+    nextMode: 'signed-out',
+  });
   return snapshotAuthState();
 }
 
@@ -1818,7 +2101,9 @@ export async function confirmAccountDeletion(input: {
     receipt.authIdentity !== expectedIdentity ||
     receipt.realm !== activeAuthRealm
   ) {
-    removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
+    if (!isPassiveSharedUserDataInstance()) {
+      removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
+    }
     throw new AuthApiError(
       'ACCOUNT_DELETION_RECEIPT_MISSING',
       400,
@@ -1891,14 +2176,22 @@ export function isConfirmedAccountDeletionSessionCurrent(): boolean {
   );
 }
 
-export function clearLocalSessionAfterAccountDeletion(): boolean {
+export async function clearLocalSessionAfterAccountDeletion(): Promise<boolean> {
   if (!isConfirmedAccountDeletionSessionCurrent()) return false;
-  try {
-    closeLocalDb();
-  } catch (error) {
-    log.error('closeLocalDb after account deletion failed', error);
-  }
-  clearAuth();
+  const expectedCredential = confirmedAccountDeletionCredential;
+  await withAccountFreeOwnerCommit({
+    reason: 'account-deletion',
+    nextMode: 'signed-out',
+    clearOnFailure: true,
+    validateBeforeCommit: () =>
+      expectedCredential !== null &&
+      confirmedAccountDeletionCredential === expectedCredential &&
+      isConfirmedAccountDeletionSessionCurrent(),
+    shouldClearOnFailure: () =>
+      expectedCredential !== null &&
+      confirmedAccountDeletionCredential === expectedCredential &&
+      isConfirmedAccountDeletionSessionCurrent(),
+  });
   return true;
 }
 
@@ -1983,6 +2276,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   // Local mode is a committed account-free session. It must win before any
   // persisted cloud refresh token is inspected or any auth network call runs.
   if (getActiveAppSession().mode === 'local') {
+    await recoverAccountFreeOwnerAtStartup('local', 'cold-start-local-recovery');
     return snapshotAuthState();
   }
   // 进程内已登录快路径:auth 状态是 main 进程全局的,主窗登录后其它 renderer
@@ -1993,7 +2287,26 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   // 冷启动时 accessToken/currentUser 必为空,不影响下方完整初始化流程
   // (relogin marker 消费、持久化 refresh_token 校验)。
   if (accessToken && currentUser) {
-    commitActiveAppSession('cloud', currentUser.id);
+    if (!isGhostSkillProjectionBoundaryStableForOwner(currentUser.id)) {
+      const previousSession = getActiveAppSession();
+      await withCloudOwnerCommit({
+        previousOwnerId: previousSession.dataOwnerId,
+        nextOwnerId: currentUser.id,
+        prepareTransition: async () => {
+          if (!accountSwitchTeardown) {
+            throw new Error('active cloud owner recovery requires a teardown hook');
+          }
+          await accountSwitchTeardown({
+            previousUserId: previousSession.dataOwnerId ?? previousSession.mode,
+            nextUserId: currentUser!.id,
+          });
+        },
+        commit: () => commitCloudAppSession(currentUser!.id),
+      });
+    } else {
+      commitCloudAppSession(currentUser.id);
+    }
+    await ensureStableOwnerPostCommit('auth-initialize-stable-cloud');
     return snapshotAuthState();
   }
 
@@ -2001,7 +2314,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   // （副窗 mount / renderer reload 都会走到这里）。直到显式登录或进程重启为止。
   if (passiveLocalSignOut) {
     log.info('passive shared-userData instance stays signed out locally (tombstone)');
-    commitActiveAppSession('signed-out');
+    commitVolatileAppSession('signed-out');
     return snapshotLoggedOutAuthState();
   }
 
@@ -2027,7 +2340,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
         reloginFlag.version,
       );
       passiveLocalSignOut = true;
-      commitActiveAppSession('signed-out');
+      commitVolatileAppSession('signed-out');
       return snapshotLoggedOutAuthState();
     }
     log.info(
@@ -2041,8 +2354,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
     removeSafe(LEGACY_REFRESH_TOKEN_KEY);
     clearReloginFlag();
-    commitActiveAppSession('signed-out');
-    return snapshotLoggedOutAuthState();
+    return finishColdStartSignedOut('cold-start-relogin-required');
   }
 
   // Old Feishu-auth refresh tokens are intentionally not portable to auth-server.
@@ -2058,20 +2370,27 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   }
   let persistedSession = readPersistedAuthSession();
   if (!persistedSession) {
-    // 旧版只保存裸 refresh token；迁移时按安装包区域解释，并以单个加密 JSON
-    // 原子记录替代，确保 token 与 realm 永不分离。passive 可以写入有效的新记录，
-    // 但旧文件仍留给可能正在消费它的旧版 primary。
+    // 旧版只保存裸 refresh token，没有 realm 可供校验。只有独占 userData 的
+    // primary 才能按当前构建区域迁移它；passive 若猜 AUTH_REGION，恰好会在旧
+    // cn / global 共库时把对端 token 认领成本区会话，随后 refresh 轮换并改写
+    // primary 的凭证。这里 fail closed：保留旧文件，本进程稳定保持登出，等
+    // 同区域的独占实例完成原子迁移。
     const legacyToken = readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
+    if (legacyToken && isPassiveSharedUserDataInstance()) {
+      log.warn(
+        'passive shared-userData instance found an unscoped legacy refresh token; refusing to assign a realm or rotate it',
+      );
+      passiveLocalSignOut = true;
+      commitActiveAppSession('signed-out');
+      return snapshotLoggedOutAuthState();
+    }
     if (legacyToken && writePersistedAuthSession(legacyToken, AUTH_REGION)) {
-      if (!isPassiveSharedUserDataInstance()) {
-        removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
-      }
+      removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);
       persistedSession = { version: 1, realm: AUTH_REGION, refreshToken: legacyToken };
     }
   }
   if (!persistedSession) {
-    commitActiveAppSession('signed-out');
-    return snapshotLoggedOutAuthState();
+    return finishColdStartSignedOut('cold-start-no-persisted-session');
   }
   try {
     await loadClientEndpointsForRealm(persistedSession.realm);
@@ -2079,8 +2398,7 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
     // 对端区域清单暂不可用时保留原子凭据；退回构建区 refresh 会把有效 token
     // 当成非法凭据，因此本次仅以未登录放行 UI，下一次 initialize/重启可重试。
     log.warn('persisted auth realm manifest unavailable; keeping session for retry', error);
-    commitActiveAppSession('signed-out');
-    return snapshotLoggedOutAuthState();
+    return finishColdStartSignedOut('cold-start-realm-manifest-unavailable');
   }
   const storedToken = persistedSession.refreshToken;
 
@@ -2098,10 +2416,17 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   const coldStartCompletion = coldStartAuthInFlight;
   return awaitWithStartupTimeout(coldStartCompletion, {
     timeoutMs: COLD_START_AUTH_GATE_TIMEOUT_MS,
-    onTimeout: () => {
+    onTimeout: async () => {
       options.onColdStartPending?.(coldStartCompletion);
       log.warn(
-        `cold-start auth still pending after ${COLD_START_AUTH_GATE_TIMEOUT_MS}ms — unblocking startup as logged out, flow continues in background`,
+        `cold-start auth still pending after ${COLD_START_AUTH_GATE_TIMEOUT_MS}ms — recovering the account-free projection before startup continues`,
+      );
+      // A signed-out fallback is not safe until the shared Ghost projection
+      // has been swept. Otherwise the previous cloud owner's links remain
+      // available to local/anonymous Agent processes during a slow refresh.
+      await recoverAccountFreeOwnerAtStartup(
+        'signed-out',
+        'cold-start-timeout-recovery',
       );
       return snapshotLoggedOutAuthState();
     },
@@ -2124,7 +2449,6 @@ async function runColdStartRefreshFlow(
   storedRealm: AuthRegion,
 ): Promise<AuthState> {
   const epochAtStart = authStateEpoch;
-  let releaseBoundary: (() => void) | null = null;
   const epochChanged = (point: string): boolean => {
     if (authStateEpoch === epochAtStart) return false;
     log.warn(
@@ -2167,8 +2491,7 @@ async function runColdStartRefreshFlow(
       // 共享 userData 的另一个实例已切到其它区域。旧区域请求无论成功失败都不能
       // 覆盖/删除新原子记录；本实例本次以未登录返回，后续 initialize 可加载新清单。
       log.warn('cold-start auth realm changed on disk; discarding stale refresh result');
-      commitActiveAppSession('signed-out');
-      return snapshotLoggedOutAuthState();
+      return finishColdStartSignedOut('cold-start-realm-changed');
     }
     if (!refreshResult.ok) {
       // 只在「确定性凭据失效」时清除 token。429 限流 / 5xx / 断网等瞬时失败保留 token,
@@ -2202,8 +2525,7 @@ async function runColdStartRefreshFlow(
           `cold-start refresh still failing after ${attempts} attempt(s) — keeping refresh token, starting logged out`,
         );
       }
-      commitActiveAppSession('signed-out');
-      return snapshotLoggedOutAuthState();
+      return finishColdStartSignedOut(`cold-start-refresh-${action.kind}`);
     }
 
     const refreshData = refreshResult.data as RefreshResponse;
@@ -2217,59 +2539,50 @@ async function runColdStartRefreshFlow(
       log.warn(
         `cold-start refresh rejected cross-realm personal session realm=${storedRealm} buildRegion=${AUTH_REGION}`,
       );
-      commitActiveAppSession('signed-out');
-      return snapshotLoggedOutAuthState();
+      return finishColdStartSignedOut('cold-start-incompatible-membership');
     }
-    const previousAppSession = getActiveAppSession();
-    const needsColdStartAccountBoundary = shouldTeardownColdStartRuntime(
-      previousAppSession,
-      refreshData.membership.id,
-    );
-    if (accountSwitchTeardown && needsColdStartAccountBoundary) {
-      // Cold-start refresh may outlive initialize()'s startup timeout. Keep
-      // the owner boundary held for the entire late commit sequence so stale
-      // IPC cannot reopen the previous owner's database while teardown,
-      // namespace claiming, and session publication are still in flight.
-      //
-      // A normal restart of the same cloud account is not an account switch.
-      // In that case the new process has no old in-memory owner runtime to
-      // tear down; calling this hook after localDb:ensure-ready would dispose
-      // the freshly-created DbClient and stop device-link, leaving the process
-      // permanently stuck at "DbClient not ready" until another restart.
-      releaseBoundary = beginAppSessionBoundary();
-      await accountSwitchTeardown({
-        previousUserId: previousAppSession.dataOwnerId ?? 'signed-out',
-        nextUserId: refreshData.membership.id,
-      });
-      if (epochChanged('after-cold-start-teardown')) {
-        releaseBoundary();
-        releaseBoundary = null;
-        return snapshotAuthState();
-      }
-    }
-    await claimLegacyNamespaceForVerifiedUser(refreshData.membership.id);
-    if (epochChanged('after-owner-namespace-claim')) {
-      releaseBoundary?.();
-      releaseBoundary = null;
-      return snapshotAuthState();
-    }
-    if (storedRealm !== activeAuthRealm) {
-      activateClientEndpointRealm(storedRealm);
-      activeAuthRealm = storedRealm;
-    }
+    // Refresh is token-rotating. Preserve the server-issued replacement before
+    // the cross-process projection gate can reject or defer the owner commit.
     writePersistedAuthSession(refreshData.refreshToken, storedRealm);
     lastAcceptedRefreshToken = refreshData.refreshToken;
-
-    accessToken = refreshData.accessToken;
-    // 2026-07 起身份完全以 auth membership 为准(产品 /api/user/me 已退役)。
-    currentUser = mapMembershipToAuthUser(refreshData.membership);
-    commitActiveAppSession('cloud', currentUser.id);
-    persistedRefreshTokenNeedsIdentityCheck = false;
-    clearReplacementIntegrationReloadTimers();
+    const previousSession = getActiveAppSession();
+    await withCloudOwnerCommit({
+      previousOwnerId: previousSession.dataOwnerId,
+      nextOwnerId: refreshData.membership.id,
+      prepareTransition: async () => {
+        if (!accountSwitchTeardown) {
+          throw new Error('cold-start cloud owner transition requires a teardown hook');
+        }
+        await accountSwitchTeardown({
+          previousUserId: previousSession.dataOwnerId ?? previousSession.mode,
+          nextUserId: refreshData.membership.id,
+        });
+        if (epochChanged('after-cold-start-teardown')) {
+          throw new Error('cold-start cloud owner transition was superseded');
+        }
+      },
+      prepareCommit: async () => {
+        await claimLegacyNamespaceForVerifiedUser(refreshData.membership.id);
+        if (epochChanged('after-owner-namespace-claim')) {
+          throw new Error('cold-start cloud owner commit was superseded');
+        }
+      },
+      commit: () => {
+        if (storedRealm !== activeAuthRealm) {
+          activateClientEndpointRealm(storedRealm);
+          activeAuthRealm = storedRealm;
+        }
+        accessToken = refreshData.accessToken;
+        currentUser = mapMembershipToAuthUser(refreshData.membership);
+        commitCloudAppSession(currentUser.id);
+        persistedRefreshTokenNeedsIdentityCheck = false;
+        clearReplacementIntegrationReloadTimers();
+      },
+    });
     scheduleCanaryFlagSync({
       token: refreshData.accessToken,
       expectedAuthEpoch: epochAtStart,
-      expectedUserId: currentUser.id,
+      expectedUserId: refreshData.membership.id,
     });
     scheduleRefresh(refreshData.accessToken);
     // XD / Mivo key 均为本地 only,不再在冷启动从服务器同步到本地。
@@ -2281,8 +2594,6 @@ async function runColdStartRefreshFlow(
     // 广播拿到冷启动状态——不广播就永远收不到 auto-login 事件。
     notifyRenderer();
     notifyAuthListeners();
-    releaseBoundary?.();
-    releaseBoundary = null;
     return snapshotAuthState();
   } catch (err) {
     // 网络类失败都在 apiFetch 内部消化(返回 status 0),能走到这里的是 refresh 成功
@@ -2303,10 +2614,9 @@ async function runColdStartRefreshFlow(
       }
       resetActiveAuthRealmToBuild();
     }
-    releaseBoundary?.();
-    releaseBoundary = null;
-    if (!epochChanged('catch-return')) commitActiveAppSession('signed-out');
-    return epochChanged('catch-return-state') ? snapshotAuthState() : snapshotLoggedOutAuthState();
+    if (epochChanged('catch-return')) return snapshotAuthState();
+    await finishColdStartSignedOut('cold-start-local-state-sync-failed');
+    return snapshotLoggedOutAuthState();
   }
 }
 
@@ -2375,79 +2685,73 @@ async function completeLogin(
     outcome.accountDeletionRestored === true || pendingAccountDeletionRestored;
   const nextUser = mapMembershipToAuthUser(outcome.membership);
   const previousSession = getActiveAppSession();
-  let releaseBoundary: (() => void) | null = null;
-  if (previousSession.dataOwnerId !== nextUser.id) {
-    releaseBoundary = beginAppSessionBoundary();
-    try {
-      if (accountSwitchTeardown) {
-        await accountSwitchTeardown({
-          previousUserId: previousSession.dataOwnerId ?? previousSession.mode,
-          nextUserId: nextUser.id,
-        });
-      } else {
-        closeLocalDb();
+  if (authStateEpoch !== loginEpoch) {
+    throw new AuthApiError(
+      'AUTH_FLOW_SUPERSEDED',
+      409,
+      'Login was superseded by a newer auth action',
+    );
+  }
+
+  const committedRealm = pendingAuthRealm ?? AUTH_REGION;
+  await withCloudOwnerCommit({
+    previousOwnerId: previousSession.dataOwnerId,
+    nextOwnerId: nextUser.id,
+    prepareTransition: async () => {
+      if (!accountSwitchTeardown) {
+        throw new Error('login cloud owner transition requires a teardown hook');
       }
-    } catch (err) {
-      releaseBoundary();
-      releaseBoundary = null;
-      throw err;
-    }
-  }
-  // legacy 飞书集成清理已随主机 token 链退役(2026-07-17):这里不再有登录前
-  // 的异步清理窗口,epoch 守卫保留给未来在提交前重新引入 await 的改动兜底。
-  if (authStateEpoch !== loginEpoch) {
-    releaseBoundary?.();
-    throw new AuthApiError(
-      'AUTH_FLOW_SUPERSEDED',
-      409,
-      'Login was superseded by a newer auth action',
-    );
-  }
-
-  try {
-    await claimLegacyNamespaceForVerifiedUser(nextUser.id);
-  } catch (error) {
-    // The boundary must not remain pending if legacy namespace claiming fails.
-    releaseBoundary?.();
-    releaseBoundary = null;
-    throw error;
-  }
-  if (authStateEpoch !== loginEpoch) {
-    releaseBoundary?.();
-    throw new AuthApiError(
-      'AUTH_FLOW_SUPERSEDED',
-      409,
-      'Login was superseded by a newer auth action',
-    );
-  }
-
-  try {
-    pendingAccountToken = null;
-    pendingAccountDeletionRestored = false;
-    accessToken = outcome.accessToken;
-    persistedRefreshTokenNeedsIdentityCheck = false;
-    clearReplacementIntegrationReloadTimers();
-    const committedRealm = pendingAuthRealm ?? AUTH_REGION;
-    activateClientEndpointRealm(committedRealm);
-    activeAuthRealm = committedRealm;
-    writePersistedAuthSession(outcome.refreshToken, committedRealm);
-    removeSafe(LEGACY_REFRESH_TOKEN_KEY);
-    lastAcceptedRefreshToken = outcome.refreshToken;
-    removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
-    accountDeletionRestoredNoticePending = deletionWasRestored;
-    clearReloginFlag();
-    // 显式登录解除 passive 本地登出墓碑(见 passiveLocalSignOut)。
-    passiveLocalSignOut = false;
-    currentUser = nextUser;
-    commitActiveAppSession('cloud', currentUser.id);
-    pendingAuthRealm = null;
-  } finally {
-    releaseBoundary?.();
-  }
+      await accountSwitchTeardown({
+        previousUserId: previousSession.dataOwnerId ?? previousSession.mode,
+        nextUserId: nextUser.id,
+      });
+    },
+    prepareCommit: async () => {
+      if (authStateEpoch !== loginEpoch) {
+        throw new AuthApiError(
+          'AUTH_FLOW_SUPERSEDED',
+          409,
+          'Login was superseded by a newer auth action',
+        );
+      }
+      await claimLegacyNamespaceForVerifiedUser(nextUser.id);
+      if (authStateEpoch !== loginEpoch) {
+        throw new AuthApiError(
+          'AUTH_FLOW_SUPERSEDED',
+          409,
+          'Login was superseded by a newer auth action',
+        );
+      }
+    },
+    commit: () => {
+      pendingAccountToken = null;
+      pendingAccountDeletionRestored = false;
+      accessToken = outcome.accessToken;
+      persistedRefreshTokenNeedsIdentityCheck = false;
+      clearReplacementIntegrationReloadTimers();
+      activateClientEndpointRealm(committedRealm);
+      activeAuthRealm = committedRealm;
+      writePersistedAuthSession(outcome.refreshToken, committedRealm);
+      if (!isPassiveSharedUserDataInstance()) {
+        removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+      }
+      lastAcceptedRefreshToken = outcome.refreshToken;
+      if (!isPassiveSharedUserDataInstance()) {
+        removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
+        clearReloginFlag();
+      }
+      accountDeletionRestoredNoticePending = deletionWasRestored;
+      // 显式登录解除 passive 本地登出墓碑(见 passiveLocalSignOut)。
+      passiveLocalSignOut = false;
+      currentUser = nextUser;
+      commitCloudAppSession(currentUser.id);
+      pendingAuthRealm = null;
+    },
+  });
   scheduleCanaryFlagSync({
     token: outcome.accessToken,
     expectedAuthEpoch: loginEpoch,
-    expectedUserId: currentUser.id,
+    expectedUserId: nextUser.id,
   });
   scheduleRefresh(outcome.accessToken);
   getProviderSecretStore().reconcileOwner(outcome.membership.id);
@@ -2464,7 +2768,9 @@ async function acceptLoginOutcome(outcome: LoginOutcome): Promise<AuthFlowState>
   if (outcome.status === 'ok' || outcome.status === 'select_account') {
     // Membership selection already establishes which passport owns the new
     // login. A receipt from the previous login must not survive this boundary.
-    removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
+    if (!isPassiveSharedUserDataInstance()) {
+      removeSafe(ACCOUNT_DELETION_RECEIPT_KEY);
+    }
   }
   if (
     (outcome.status === 'ok' || outcome.status === 'select_account') &&
@@ -2956,10 +3262,17 @@ export async function refresh(): Promise<boolean> {
           });
         } else {
           resetActiveAuthRealmToBuild();
-          commitActiveAppSession('signed-out');
+          await recoverAccountFreeOwnerAtStartup(
+            'signed-out',
+            'runtime-incompatible-membership',
+          );
         }
         return false;
       }
+      // Refresh is token-rotating. Preserve the replacement before any owner
+      // projection transition can defer this process.
+      writePersistedAuthSession(data.refreshToken, refreshRealm);
+      lastAcceptedRefreshToken = data.refreshToken;
       const needsIdentityCheck =
         replacementRetries > 0 ||
         persistedRefreshTokenNeedsIdentityCheck ||
@@ -2969,73 +3282,47 @@ export async function refresh(): Promise<boolean> {
         // instance. Verify / reconcile the account before accepting its access token,
         // otherwise renderer state could still show account A while API calls use B.
         persistedRefreshTokenNeedsIdentityCheck = true;
-        writePersistedAuthSession(data.refreshToken, refreshRealm);
-        lastAcceptedRefreshToken = data.refreshToken;
-
         const previousUserId = currentUser?.id ?? null;
         const nextUser = mergeMembershipWithExisting(data.membership, currentUser);
         const accountSwitched = previousUserId !== null && previousUserId !== nextUser.id;
-        let releaseBoundary: (() => void) | null = null;
         if (accountSwitched) {
           log.warn(
             `runtime replacement refresh switched authenticated user from ${previousUserId} to ${nextUser.id}; reconciling auth state`,
           );
-          notifyRendererAuthBoundaryPending();
-          releaseBoundary = beginAppSessionBoundary();
-          try {
-            if (accountSwitchTeardown) {
-              await accountSwitchTeardown({ previousUserId, nextUserId: nextUser.id });
-            } else {
-              log.warn(
-                'runtime replacement account switch teardown hook is not registered; falling back to localDb close only',
-              );
+        }
+        await withCloudOwnerCommit({
+          previousOwnerId: getActiveAppSession().dataOwnerId,
+          nextOwnerId: nextUser.id,
+          prepareTransition: async () => {
+            if (!accountSwitchTeardown) {
+              throw new Error('runtime cloud owner transition requires a teardown hook');
             }
-            closeLocalDb();
-          } catch (err) {
-            releaseBoundary();
-            releaseBoundary = null;
-            log.error('runtime replacement account switch teardown failed', err);
-            notifyRenderer();
-            scheduleRefreshRetryAfterTransientFailure();
-            return false;
-          }
-          if (refreshWasSuperseded('after-account-switch-teardown')) {
-            releaseBoundary();
-            return false;
-          }
-        }
-
-        if (accountSwitched) {
-          try {
+            await accountSwitchTeardown({
+              previousUserId: previousUserId ?? getActiveAppSession().mode,
+              nextUserId: nextUser.id,
+            });
+            if (refreshWasSuperseded('after-account-switch-teardown')) {
+              throw new Error('runtime cloud owner transition was superseded');
+            }
+          },
+          prepareCommit: async () => {
             await claimLegacyNamespaceForVerifiedUser(nextUser.id);
-          } catch (err) {
-            // Namespace claiming is still inside the owner boundary. Always
-            // release it before retrying so a failed claim cannot permanently
-            // block all owner-bound IPC work.
-            releaseBoundary?.();
-            releaseBoundary = null;
-            throw err;
-          }
-          if (refreshWasSuperseded('after-owner-namespace-claim')) {
-            releaseBoundary?.();
-            releaseBoundary = null;
-            return false;
-          }
-        }
-
-        if (authRealmChanged) {
-          activateClientEndpointRealm(refreshRealm);
-          activeAuthRealm = refreshRealm;
-        }
-        accessToken = data.accessToken;
-        currentUser = nextUser;
-        try {
-          commitActiveAppSession('cloud', currentUser.id);
-        } finally {
-          releaseBoundary?.();
-        }
+            if (refreshWasSuperseded('after-owner-namespace-claim')) {
+              throw new Error('runtime cloud owner commit was superseded');
+            }
+          },
+          commit: () => {
+            if (authRealmChanged) {
+              activateClientEndpointRealm(refreshRealm);
+              activeAuthRealm = refreshRealm;
+            }
+            accessToken = data.accessToken;
+            currentUser = nextUser;
+            commitCloudAppSession(currentUser.id);
+          },
+        });
         persistedRefreshTokenNeedsIdentityCheck = false;
-        getProviderSecretStore().reconcileOwner(currentUser.id);
+        getProviderSecretStore().reconcileOwner(nextUser.id);
         if (accountSwitched) {
           try {
             await clearPerAccountIntegrations();
@@ -3047,31 +3334,45 @@ export async function refresh(): Promise<boolean> {
             );
           }
           if (refreshWasSuperseded('after-integration-reload')) return false;
-          scheduleReplacementIntegrationReloadRetries(currentUser.id);
+          scheduleReplacementIntegrationReloadRetries(nextUser.id);
         }
         scheduleCanaryFlagSync({
           token: data.accessToken,
           expectedAuthEpoch: refreshEpoch,
-          expectedUserId: currentUser.id,
+          expectedUserId: nextUser.id,
         });
         scheduleRefresh(data.accessToken);
         notifyRenderer();
-        if (previousUserId !== currentUser.id || authRealmChanged) {
+        if (previousUserId !== nextUser.id || authRealmChanged) {
           notifyAuthListeners();
         }
         return true;
       }
 
-      if (authRealmChanged) {
-        activateClientEndpointRealm(refreshRealm);
-        activeAuthRealm = refreshRealm;
-      }
-      accessToken = data.accessToken;
-      currentUser = mergeMembershipWithExisting(data.membership, currentUser);
-      commitActiveAppSession('cloud', currentUser.id);
+      const nextUser = mergeMembershipWithExisting(data.membership, currentUser);
+      await withCloudOwnerCommit({
+        previousOwnerId: getActiveAppSession().dataOwnerId,
+        nextOwnerId: nextUser.id,
+        prepareTransition: async () => {
+          if (!accountSwitchTeardown) {
+            throw new Error('runtime cloud owner transition requires a teardown hook');
+          }
+          await accountSwitchTeardown({
+            previousUserId: getActiveAppSession().dataOwnerId ?? getActiveAppSession().mode,
+            nextUserId: nextUser.id,
+          });
+        },
+        commit: () => {
+          if (authRealmChanged) {
+            activateClientEndpointRealm(refreshRealm);
+            activeAuthRealm = refreshRealm;
+          }
+          accessToken = data.accessToken;
+          currentUser = nextUser;
+          commitCloudAppSession(currentUser.id);
+        },
+      });
       persistedRefreshTokenNeedsIdentityCheck = false;
-      writePersistedAuthSession(data.refreshToken);
-      lastAcceptedRefreshToken = data.refreshToken;
       scheduleRefresh(data.accessToken);
       notifyRenderer();
       if (authRealmChanged) {
@@ -3098,16 +3399,9 @@ export async function refresh(): Promise<boolean> {
 export async function logout(): Promise<void> {
   const currentAccessToken = accessToken;
   const currentAuthBaseUrl = authServerUrl(activeAuthRealm);
-  // 注意:真实登出入口(bootstrap auth:logout handler)在调用本函数**之前**已
-  // dispose DbClient 并释放 device-link 持有权(releaseDeviceLinkOwnershipBeforeLogout);
-  // 需要在 DB 关闭前收尾写入的逻辑应挂在那条链路上,而不是本函数内(此时已太晚)。
-  // chat-data-localization: drop the per-user db connection so the next
-  // login (potentially a different user) opens a fresh file via ensureReady.
-  try {
-    closeLocalDb();
-  } catch (err) {
-    log.error('closeLocalDb on logout failed', err);
-  }
+  // The shared projection state machine owns the full teardown and only then
+  // publishes the signed-out owner. The bootstrap IPC handler must not wrap a
+  // second independent boundary around this transition.
   // Ordinary logout abandons an unconfirmed challenge. Confirmed deletion uses
   // clearLocalSessionAfterAccountDeletion() and intentionally preserves receipt.
   //
@@ -3120,7 +3414,16 @@ export async function logout(): Promise<void> {
   } else {
     clearAccountDeletionReceipt();
   }
-  clearAuth();
+  let localTransitionError: unknown = null;
+  try {
+    await withAccountFreeOwnerCommit({
+      reason: 'logout',
+      nextMode: 'signed-out',
+      clearOnFailure: true,
+    });
+  } catch (error) {
+    localTransitionError = error;
+  }
 
   // passive 共享实例跳过服务端登出:refresh token 按 (user, device) 一对一存,而它与
   // primary 共用同一 deviceId——调这一发会把 primary 的那份一起作废,即使本地文件留着,
@@ -3133,6 +3436,7 @@ export async function logout(): Promise<void> {
       baseUrl: currentAuthBaseUrl,
     }).catch(() => {});
   }
+  if (localTransitionError) throw localTransitionError;
 }
 
 /**

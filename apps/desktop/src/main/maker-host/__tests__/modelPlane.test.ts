@@ -376,26 +376,33 @@ describe('registry presence 实体化', () => {
     for (const list of Object.values(xd?.models ?? {})) expect(list).toEqual([]);
   });
 
-  it('区域门控后的 XD /models 标记保留，并从 claude-code 可达面投影到 Pi', () => {
+  it('区域门控后的 XD /models Agent 与默认标记原样保留，不跨 Agent 投影', () => {
     setXdGatewayModels([
       {
         id: 'deepseek/deepseek-v4-pro',
-        agents: ['claude-code', 'codex'],
-        newSessionDefault: ['claude-code', 'codex'],
+        name: 'DeepSeek V4 Pro',
+        contextWindow: 200_000,
+        agents: ['claude-code', 'codex', 'pi'],
+        newSessionDefault: ['claude-code', 'codex', 'pi'],
+        perAgent: {
+          'claude-code': { wireProtocol: 'anthropic-messages' },
+          codex: { wireProtocol: 'openai-responses' },
+          pi: { wireProtocol: 'openai-responses' },
+        },
       },
     ]);
 
     expect(
       models('xd', 'claude-code').find((m) => m.id === 'deepseek/deepseek-v4-pro')
         ?.newSessionDefault,
-    ).toEqual(['claude-code', 'codex']);
+    ).toEqual(['claude-code', 'codex', 'pi']);
     expect(
       models('xd', 'codex').find((m) => m.id === 'deepseek/deepseek-v4-pro')
         ?.newSessionDefault,
-    ).toEqual(['claude-code', 'codex']);
+    ).toEqual(['claude-code', 'codex', 'pi']);
     expect(
       models('xd', 'pi').find((m) => m.id === 'deepseek/deepseek-v4-pro')?.newSessionDefault,
-    ).toEqual(['claude-code', 'codex']);
+    ).toEqual(['claude-code', 'codex', 'pi']);
   });
 });
 

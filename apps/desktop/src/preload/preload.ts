@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
+import type { SessionDragPreviewPalette } from '../shared/sessionDragPreview';
 import {
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
@@ -46,6 +47,9 @@ import {
   type TerminateAgentProcessRequest,
   type TerminateAgentProcessResult,
 } from '../shared/processMonitor';
+import {
+  RESOURCE_USAGE_WINDOW_OPEN_CHANNEL,
+} from '../shared/resourceUsageWindow';
 import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
 import { VOICE_INPUT_POWER_STATE_CHANNEL } from '../shared/voiceInputPowerIpc';
 import {
@@ -118,7 +122,9 @@ import type {
 import type {
   RsbWindowCommandRouteRequest,
   RsbWindowCommandRouteResult,
+  RsbWindowTabHandoff,
 } from '../shared/rightSidebarWindow';
+import { RSB_WINDOW_TAB_HANDOFF_CHANNEL } from '../shared/rightSidebarWindow';
 import {
   RSB_NATIVE_POPUP_CLAIM_CHANNEL,
   RSB_NATIVE_POPUP_CLOSE_CHANNEL,
@@ -380,6 +386,7 @@ const fanOutOrcaWorkerChanged = createIpcFanOut('maker:orca:worker-changed');
 const fanOutRsbWindowStateChanged = createIpcFanOut('maker:rsb-window:state-changed');
 const fanOutRsbWindowContextChanged = createIpcFanOut('maker:rsb-window:context-changed');
 const fanOutRsbWindowCommand = createIpcFanOut('maker:rsb-window:command');
+const fanOutRsbWindowTabHandoff = createIpcFanOut(RSB_WINDOW_TAB_HANDOFF_CHANNEL);
 // 插件停靠面板独立窗口(ghost panel window)状态推送
 const fanOutGhostPanelWindowStateChanged = createIpcFanOut(
   'maker:ghost-panel-window:state-changed',
@@ -1029,8 +1036,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ ghost: unknown }> => ipcRenderer.invoke('ghosts:install', lizFilePath, opts),
     update: (
       lizFilePath: string,
-      opts: { expectedPackageSha256: string },
-    ): Promise<{ ghost: unknown }> => ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
+      opts: {
+        expectedPackageSha256: string;
+        expectedInstalledApproval: string;
+      },
+    ): Promise<{ ghost: unknown }> =>
+      ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
     cindyPrefsSync: (
       id: string,
     ): {
@@ -1099,6 +1110,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
       packageSha256: string;
       iconDataUrl?: string;
     }> => ipcRenderer.invoke('ghosts:inspect', lizFilePath),
+    /** 本地包第三条恢复路径:从已装目录读确认卡事实(零副作用)。 */
+    reapproveInspect: (id: string): Promise<{
+      manifest: unknown;
+      trust: unknown;
+      manifestSha256: string;
+      approvalProjectionSha256: string;
+      previouslyEnabled: boolean;
+      inspectTicket: string;
+    }> => ipcRenderer.invoke('ghosts:reapprove-inspect', id),
+    /** 确认卡点过同意后开 receipt;sha + 一次性票据绑定确认时的事实与 owner。 */
+    reapproveInstalled: (
+      id: string,
+      opts: {
+        enable: boolean;
+        expectedManifestSha256: string;
+        expectedApprovalProjectionSha256: string;
+        expectedInstalledApproval: string;
+        inspectTicket: string;
+      },
+    ): Promise<{ ghost: unknown }> =>
+      ipcRenderer.invoke('ghosts:reapprove-installed', id, opts),
     uninstall: (id: string): Promise<{ ok: true }> => ipcRenderer.invoke('ghosts:uninstall', id),
     /** 详情页「导出 .cindy」:main 打包安装目录 → 系统保存对话框落盘。 */
     export: (
@@ -1501,8 +1533,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 写偏好;true 附带开窗,false 附带关窗。返回新 state。 */
     setDetached: (
       detached: boolean,
+      handoff?: RsbWindowTabHandoff,
     ): Promise<{ detached: boolean; lastOpen: boolean; open: boolean }> =>
-      ipcRenderer.invoke('maker:rsb-window:set-detached', detached),
+      ipcRenderer.invoke('maker:rsb-window:set-detached', detached, handoff),
     /** 子窗口 mount 时拉主窗上报的渲染上下文(main 缓存的最后一份)。 */
     getContext: (): Promise<{
       sessionId: string | null;
@@ -1527,6 +1560,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onStateChanged: fanOutRsbWindowStateChanged,
     onContextChanged: fanOutRsbWindowContextChanged,
     onCommand: fanOutRsbWindowCommand,
+    onTabHandoff: (cb: (handoff: RsbWindowTabHandoff) => void): (() => void) =>
+      fanOutRsbWindowTabHandoff((data) => cb(data as RsbWindowTabHandoff)),
   },
 
   // ── 插件停靠面板独立窗口(ghost panel window)──────────────────────────
@@ -1552,6 +1587,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<Record<string, { detached: boolean; lastOpen: boolean; open: boolean }>> =>
       ipcRenderer.invoke('maker:ghost-panel-window:set-detached', ghostId, detached),
     onStateChanged: fanOutGhostPanelWindowStateChanged,
+  },
+
+  // ── 资源用量独立子窗口 ──────────────────────────────────────────────
+  // 主窗口只持有打开能力；资源窗口的关闭与就绪能力在专用 preload 中暴露。
+  resourceUsageWindow: {
+    open: (): Promise<void> => ipcRenderer.invoke(RESOURCE_USAGE_WINDOW_OPEN_CHANNEL),
   },
 
   agentIsland: {
@@ -5096,8 +5137,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:model-price-override:reset', target),
 
     // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session。
-    openSessionInNewWindow: (sessionId: string): Promise<void> =>
-      ipcRenderer.invoke('maker:open-session-in-new-window', sessionId),
+    openSessionInNewWindow: (sessionId: string, deviceId?: string | null): Promise<void> =>
+      ipcRenderer.invoke('maker:open-session-in-new-window', sessionId, deviceId),
+    openSessionInNewWindowIfDroppedOutside: (
+      sessionId: string,
+      deviceId?: string | null,
+    ): Promise<boolean> =>
+      ipcRenderer.invoke(
+        'maker:open-session-in-new-window-if-dropped-outside',
+        sessionId,
+        deviceId,
+      ),
+    beginSessionDragPreview: (
+      label: string,
+      sessionId: string,
+      deviceId: string | null | undefined,
+      palette: SessionDragPreviewPalette,
+    ): Promise<void> =>
+      ipcRenderer.invoke('maker:session-drag-preview:start', label, sessionId, deviceId, palette),
+    endSessionDragPreview: (dragEndAtMs?: number): void =>
+      ipcRenderer.send('maker:session-drag-preview:end', dragEndAtMs),
 
     // ── Palette `/` 命令三源 (palette refactor) ─────────────────────────
     // Renderer 通过这四个调用合并三路数据 + 触发 desktop 命令 execute。
@@ -5343,14 +5402,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
         providerId?: string | null;
         /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
         workerPermissionMode?: 'auto' | 'bypassPermissions';
+        /** 新建 Lead 专用：等首条输入 accepted 且可查询后再派任务。 */
+        deferDelegateTask?: boolean;
       },
       // main handler 实际返回 teamId(见 enableOrcaInternal);此前类型写成 workflowId 是漂移。
     ): Promise<{
       teamId: string;
       workerSessionId: string;
       workerId: string;
+      dispatched: boolean;
       workerPermissionMode: 'auto' | 'bypassPermissions';
+      uiAssignmentSnapshotBeforeMs: number;
     }> => ipcRenderer.invoke('maker:session:enable-orca', leadSessionId, opts),
+
+    dispatchOrcaUiAssignment: (
+      leadSessionId: string,
+      workerSessionId: string,
+      initialTask: string,
+      snapshotBeforeMs: number,
+      waitForLeadHistory: boolean,
+    ): Promise<unknown> =>
+      ipcRenderer.invoke(
+        'maker:worker:dispatch-ui-assignment',
+        leadSessionId,
+        workerSessionId,
+        initialTask,
+        snapshotBeforeMs,
+        waitForLeadHistory,
+      ),
 
     /**
      * F-COLLAB: 关闭 lead session 的当前协同 workflow。
@@ -6393,7 +6472,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onH264Frame: (callback: (payload: IOSSimulatorH264FramePush) => void) =>
         fanOutIOSSimulatorH264Frame((payload) => callback(payload as IOSSimulatorH264FramePush)),
       onRouteStatus: (callback: (payload: IOSSimulatorRouteStatusPush) => void) =>
-        fanOutIOSSimulatorRouteStatus((payload) => callback(payload as IOSSimulatorRouteStatusPush)),
+        fanOutIOSSimulatorRouteStatus((payload) =>
+          callback(payload as IOSSimulatorRouteStatusPush),
+        ),
       onFocusRequest: (callback: (request: IOSSimulatorFocusRequest) => void) =>
         fanOutIOSSimulatorFocusRequest((request) => callback(request as IOSSimulatorFocusRequest)),
     },

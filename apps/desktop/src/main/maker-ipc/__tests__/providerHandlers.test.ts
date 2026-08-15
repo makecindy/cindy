@@ -792,6 +792,28 @@ describe('provider:models-refresh handler', () => {
       message: '[MODEL_ACCESS_FAILED] Cindy AI model list refresh failed.',
     });
   });
+
+  it('dev 禁网走专用错误码透传,不伪装成可重试的 INTERNAL', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        refreshBuiltinModels: async () => {
+          throwIpcError(
+            'MODEL_CATALOG_FETCH_DISABLED',
+            '模型目录远程拉取未启用,本次未发起请求',
+          );
+        },
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'xai'),
+    ).rejects.toMatchObject({
+      code: 'MODEL_CATALOG_FETCH_DISABLED',
+      message: '[MODEL_CATALOG_FETCH_DISABLED] 模型目录远程拉取未启用,本次未发起请求',
+    });
+  });
 });
 
 describe('provider:models-auto-refresh handler', () => {

@@ -10,6 +10,7 @@ import type { AgentEvent } from '../../../types/events.js';
 import type { AsyncQueue } from '../../shared/async-queue.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { PiRpcEvent } from '../rpc-client.js';
+import { makeGhostManual64KiBFixture } from '../../shared/ghost-manual-fixture.js';
 
 const noopLogger: Logger = {
   trace: () => {},
@@ -157,6 +158,153 @@ describe('pi translator', () => {
         source: 'pi',
       }),
     ]);
+  });
+
+  it('surfaces a terminal provider error after Pi settles instead of staying in Working', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const rawError =
+      'HTTP 400: third-party apps draw from extra usage. Authorization: Bearer secret-token';
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage: rawError,
+          usage: { input: 0, output: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const errors = events.filter((event) => event.type === 'error');
+    expect(errors).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          message: 'HTTP 400: third-party apps draw from extra usage. Authorization: [REDACTED]',
+          isTerminal: true,
+        }),
+      }),
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'done', source: 'pi' }));
+    expect(events.at(-1)).toEqual(expect.objectContaining({
+      type: 'status',
+      data: expect.objectContaining({ status: 'Done', isRunning: false }),
+    }));
+  });
+
+  it('drops a pending provider error when Pi auto-retry succeeds', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage: 'HTTP status 529: overloaded',
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'auto_retry_start',
+        attempt: 1,
+        maxAttempts: 3,
+        errorMessage: 'HTTP status 529: overloaded',
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Recovered answer' }],
+          stopReason: 'stop',
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'auto_retry_end', success: true }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const errors = events.filter((event) => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.data).toMatchObject({ isTerminal: false, willRetry: true });
+    expect((events.find((event) => event.type === 'done')?.data as { result?: string }).result)
+      .toBe('Recovered answer');
+  });
+
+  it('does not duplicate a terminal error after Pi auto-retry is exhausted', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage: 'initial provider error',
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({ type: 'auto_retry_end', success: false, finalError: 'final provider error' }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const terminalErrors = events.filter(
+      (event) =>
+        event.type === 'error' &&
+        (event.data as { isTerminal?: boolean }).isTerminal === true,
+    );
+    expect(terminalErrors).toHaveLength(1);
+    expect(terminalErrors[0]?.data).toMatchObject({ message: 'final provider error' });
+  });
+
+  it('preserves a 64KB ghost_manual envelope only as tool_result data', () => {
+    const { content, wire } = makeGhostManual64KiBFixture();
+    expect(Buffer.byteLength(wire, 'utf8')).toBeGreaterThan(64 * 1024);
+
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_end',
+        toolCallId: 'manual-call',
+        toolName: 'ghost_manual',
+        result: { content: [{ type: 'text', text: wire }] },
+      }),
+      queue,
+      ctx,
+    );
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect(full).toMatchObject({ data: { fullText: wire }, source: 'pi' });
+    expect(JSON.parse((full!.data as { fullText: string }).fullText).content).toBe(content);
   });
 
   it('maps compaction_end (threshold) → compact_boundary with token deltas + updates contextTokens', () => {

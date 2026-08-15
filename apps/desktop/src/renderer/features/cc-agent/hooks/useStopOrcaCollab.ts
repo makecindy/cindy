@@ -11,7 +11,7 @@
  * 失败:toast 提示, 不抛错(swallowed), busy 状态自动复位。
  */
 import { useCallback, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, type NavigateFunction } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -41,11 +41,13 @@ export interface StopOrcaCollabApi {
   busy: boolean;
 }
 
-export function useStopOrcaCollab(opts: UseStopOrcaCollabOptions): StopOrcaCollabApi {
+function useStopOrcaCollabCore(
+  opts: UseStopOrcaCollabOptions,
+  navigate: NavigateFunction | null,
+): StopOrcaCollabApi {
   const { leadSessionId, navigateOnSuccess = true } = opts;
   const { t } = useTranslation();
   const { confirm: confirmDialog } = useConfirmDialog();
-  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
 
   const requestStop = useCallback(async () => {
@@ -63,7 +65,7 @@ export function useStopOrcaCollab(opts: UseStopOrcaCollabOptions): StopOrcaColla
       // 销毁一个不存在的 team、或撞上同 id 的本机会话,而远端的协同其实还开着。
       await makerApiForSticky(leadSessionId).disableOrca(leadSessionId);
       void sessionsStore.forceRefresh('active');
-      if (navigateOnSuccess) {
+      if (navigateOnSuccess && navigate) {
         navigate(`/cc-agent/${leadSessionId}`, { replace: true });
       }
       return true;
@@ -77,4 +79,19 @@ export function useStopOrcaCollab(opts: UseStopOrcaCollabOptions): StopOrcaColla
   }, [leadSessionId, busy, confirmDialog, t, navigate, navigateOnSuccess]);
 
   return { requestStop, busy };
+}
+
+/** Router host path: stop collaboration and optionally navigate back to the lead task. */
+export function useStopOrcaCollab(opts: UseStopOrcaCollabOptions): StopOrcaCollabApi {
+  return useStopOrcaCollabCore(opts, useNavigate());
+}
+
+/**
+ * Lightweight auxiliary-window path. It deliberately avoids React Router so the detached
+ * sidebar can keep its minimal renderer entry while reusing the same stop-confirmation flow.
+ */
+export function useStopOrcaCollabWithoutNavigation(
+  opts: Omit<UseStopOrcaCollabOptions, 'navigateOnSuccess'>,
+): StopOrcaCollabApi {
+  return useStopOrcaCollabCore({ ...opts, navigateOnSuccess: false }, null);
 }

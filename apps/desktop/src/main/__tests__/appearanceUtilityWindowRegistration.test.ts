@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+﻿import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -33,7 +33,7 @@ describe('utility window appearance bootstrap registration', () => {
   });
 
   it('utility renderer 订阅运行期外观变化并直接更新 CSS 字体变量', () => {
-    const source = readMainSource('../renderer/index.tsx');
+    const source = readMainSource('../renderer/main-entry.tsx');
     expect(source).toContain('isAppearanceUtilityView');
     expect(source).toContain('appearanceSettings?.onChanged?.(applyFontSettings)');
     expect(source).toContain('import.meta.hot?.dispose(disposeUtilityAppearanceSettingsSync)');

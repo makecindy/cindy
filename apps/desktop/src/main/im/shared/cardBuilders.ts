@@ -105,6 +105,17 @@ export interface ImCardBuilders {
     sessions: RecentControlSession[];
   }): InteractiveCardSpec;
   buildResolvedCard(label: string): InteractiveCardSpec;
+  /** 「群会话不能用完全访问」失败时的私聊修复卡(仅提供 permissionModeFix 文案的渠道)。 */
+  buildPermissionModeFixCard(args: {
+    sessionId: string;
+    agentKind: AgentKind;
+    sessionTitle: string;
+  }): InteractiveCardSpec;
+  /** 授权卡收口: 保留原始正文 + 追加决策结果, 去掉按钮。 */
+  buildResolvedPermissionCard(
+    original: { title: string; body: string },
+    label: string,
+  ): InteractiveCardSpec;
 }
 
 export function createCardBuilders(
@@ -519,6 +530,52 @@ export function createCardBuilders(
     buildResolvedCard(label) {
       return {
         body: label,
+        buttons: [],
+      };
+    },
+
+    /**
+     * 「群会话不能用完全访问」的私聊修复卡 — 一键把会话切回 auto。payload
+     * 带 sessionId + agentKind(cardAction 通道只带 senderId, 业务 id 走 payload)。
+     */
+    buildPermissionModeFixCard(args: {
+      sessionId: string;
+      agentKind: AgentKind;
+      sessionTitle: string;
+    }): InteractiveCardSpec {
+      const fixUi = ui.cards.permissionModeFix;
+      if (!fixUi) {
+        throw new Error('buildPermissionModeFixCard requires ui.cards.permissionModeFix (feishu)');
+      }
+      return {
+        title: fixUi.title,
+        body: fixUi.body(args.sessionTitle),
+        buttons: [
+          {
+            id: 'permissionMode:fix-auto',
+            label: fixUi.btnFix,
+            type: 'primary' as const,
+            payload: {
+              sessionId: args.sessionId,
+              agentKind: args.agentKind,
+            },
+          },
+        ],
+      };
+    },
+
+    /**
+     * 授权卡被点击后的收口形态: **保留原始正文**(工具名 + 参数预览 — 用户
+     * 需要看到自己刚刚批准的是什么), 去掉按钮, 末尾追加决策结果一行。
+     * 与 buildResolvedCard 的差异正在于不吞掉决策正文。
+     */
+    buildResolvedPermissionCard(
+      original: { title: string; body: string },
+      label: string,
+    ): InteractiveCardSpec {
+      return {
+        title: original.title,
+        body: `${original.body}\n\n${label}`,
         buttons: [],
       };
     },

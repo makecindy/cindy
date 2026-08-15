@@ -71,6 +71,7 @@ import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
 import { MessageStream } from '@/components/chat/MessageStream';
+import { measureComposerStackTopOffset } from '@/components/chat/messageStreamIndicatorPosition';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import {
   shareSelectionStore,
@@ -99,7 +100,6 @@ import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
-import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { ChatDisplaySnapshotProvider } from '@/components/chat/ChatDisplaySnapshotContext';
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
@@ -220,6 +220,11 @@ import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
 import { consumePendingRemoteCollab, enableRemoteCollabForSession } from './remoteCollabHandoff';
+import {
+  dispatchDeferredUiAssignment,
+  getRecoverableDeferredUiAssignment,
+  type DeferredUiAssignment,
+} from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { localizeAgentStatus } from './lib/localizeAgentStatus';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
@@ -626,8 +631,6 @@ export function CCAgentSessionView({
     ) => void;
   } | null>();
   const rightSidebarCollapsed = outletContext?.rightSidebarCollapsed ?? true;
-  const onToggleRightSidebar = outletContext?.onToggleRightSidebar;
-  // B2b:面板所在侧 —— 折叠态的展开入口要留守面板消失的那一侧(缺省经典右侧)。
   const rightSidebarSide = outletContext?.rightSidebarSide ?? 'right';
   const setRightSidebarAvailable = outletContext?.setRightSidebarAvailable;
   const setRightSidebarSessionId = outletContext?.setRightSidebarSessionId;
@@ -694,10 +697,7 @@ export function CCAgentSessionView({
   const hasControlledBanner = showComposerControlledBanner && controlledBy.length > 0;
   const controlledBannerCollapsed = useComposerCollapsed(sessionId ?? null);
   const showExpandedControlledBanner = hasControlledBanner && !controlledBannerCollapsed;
-  // 平台分流:mac 右栏开关放在 ContentHeader 右端(见 ContentHeader.tsx),Windows
-  // 放在下方 chip 栈第一行。两端都靠 ownsRoute 限定只在全屏聊天视图出现。
   const isMac = window.electronAPI?.platform === 'darwin';
-
   // messageWidth：消息流容器宽度（视觉边距 50px / compact 20px）
   // inputWidth：ChatInput / 状态栏 / workingDir 行的宽度（视觉边距 40px / compact 10px）
   // doc rail 内嵌场景(isCompactRail)恒 compact;主会话不显式传 compact,由 hook
@@ -1161,17 +1161,23 @@ export function CCAgentSessionView({
     setOverlayEl(node);
   }, []);
   const [overlayHeight, setOverlayHeight] = useState(200);
+  const [composerStackTopOffset, setComposerStackTopOffset] = useState<number | undefined>(
+    undefined,
+  );
 
   useEffect(() => {
     if (!overlayEl) return;
+    const measureOverlay = () => {
+      // 状态行会动态出现 / 收起，overlay 总高度不等于 composer 栈顶边。
+      // 直接量完整 composer 栈（含计划模式提示）到 overlay 底边的距离，
+      // 让消息流悬浮按钮不受状态行或输入框内部状态高度影响。
+      setOverlayHeight(overlayEl.offsetHeight);
+      setComposerStackTopOffset(measureComposerStackTopOffset(overlayEl));
+    };
     // Seed with the current height so the first paint after remount uses the
     // real value (not the stale state from the previous mount).
-    setOverlayHeight(overlayEl.offsetHeight);
-    const ro = new ResizeObserver(() => {
-      // offsetHeight (includes padding) instead of contentRect.height so the
-      // bottom padding fully covers the overlay.
-      setOverlayHeight(overlayEl.offsetHeight);
-    });
+    measureOverlay();
+    const ro = new ResizeObserver(measureOverlay);
     ro.observe(overlayEl);
     return () => ro.disconnect();
   }, [overlayEl]);
@@ -1206,6 +1212,18 @@ export function CCAgentSessionView({
       navigate(target);
     });
   }, [handoffFrom?.dispatcherSessionId, navigate, ownsWindowRoute, sessionId]);
+
+  // #2194: 只有本端 composer 发出的 user 消息才强制回底；IM / 手机端 /
+  // 定时任务注入的按普通新内容处理（贴底才跟随）。useCallback 稳定引用——
+  // MessageStream 的未读 diff effect 依赖它，内联箭头会让父组件每次
+  // re-render 都重跑一遍 O(n) diff（Copilot review nit）。sessionId 不可用
+  // 的极短窗口按**非本端发送**处理：该窗口内本端发送会被 guard 早返、根本
+  // 发不出去，能到达的 user 消息必然来自外部（Copilot review nit）。
+  const isLocalUserSend = useCallback(
+    (clientId: string) =>
+      sessionId ? makerChatStore.isLocalSentUserMessage(sessionId, clientId) : false,
+    [sessionId],
+  );
 
   const handleOpenForkOrigin = useCallback(() => {
     if (!canNavigateSession) {
@@ -1414,6 +1432,31 @@ export function CCAgentSessionView({
     updateQueueItem,
     chatDisplaySnapshot,
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
+  useEffect(() => {
+    if (!sessionId || !isOrcaLeadSessionView || !historyLoaded) return;
+    const recoveredAssignment = getRecoverableDeferredUiAssignment({
+      leadSessionId: sessionId,
+      messages,
+      deviceId: remoteDeviceId,
+      remoteRouteUnavailable: remoteConn !== 'connected',
+    });
+    if (!recoveredAssignment) return;
+    // Renderer may exit after the Lead input becomes durable but before the accepted callback
+    // starts the second-stage Worker dispatch. A persisted pending receipt is safe to consume once
+    // this Lead's history has loaded a user row; the main-side gate still enforces snapshot time.
+    void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
+      log.error('recover persisted deferred Worker assignment after session mount failed', err);
+      toast.error(t('newChat.collaboration.assignmentFailed'));
+    });
+  }, [
+    historyLoaded,
+    isOrcaLeadSessionView,
+    messages,
+    remoteConn,
+    remoteDeviceId,
+    sessionId,
+    t,
+  ]);
   // 展示引擎可乐观跟随 intent；真实 event reducer 仍只读 store.agentKind。
   const displayAgentKind = agentSwitchIntent?.target ?? dbToMakerAgentKind(session?.agentKind);
   // 真实会话 agentKind(pending switch intent 不影响)——压缩分流必须用它,
@@ -2614,7 +2657,18 @@ export function CCAgentSessionView({
             },
           );
           if (slashDispatch.handled) {
-            if (slashDispatch.accepted) pending.onDeferredAccepted?.();
+            if (slashDispatch.accepted) {
+              pending.onDeferredAccepted?.();
+              const resumedSessionId = sessionId;
+              if (resumedSessionId) {
+                void dispatchDeferredUiAssignment(resumedSessionId, undefined, {
+                  waitForLeadHistory: false,
+                }).catch((err) => {
+                  log.error('recover deferred Worker assignment after slash command failed', err);
+                  toast.error(t('newChat.collaboration.assignmentFailed'));
+                });
+              }
+            }
             return;
           }
 
@@ -2677,7 +2731,16 @@ export function CCAgentSessionView({
                 }
               : undefined,
           );
-          if (accepted) pending.onDeferredAccepted?.();
+          if (accepted) {
+            pending.onDeferredAccepted?.();
+            const resumedSessionId = sessionId;
+            if (resumedSessionId) {
+              void dispatchDeferredUiAssignment(resumedSessionId, undefined).catch((err) => {
+                log.error('recover deferred Worker assignment after user message failed', err);
+                toast.error(t('newChat.collaboration.assignmentFailed'));
+              });
+            }
+          }
         } catch (error) {
           log.warn(
             'pending send after working directory selection failed:',
@@ -2812,7 +2875,17 @@ export function CCAgentSessionView({
           : await maybeDispatchDesktopSlashCommand(message, files, {
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
             });
-      if (slashDispatch.handled) return slashDispatch.accepted;
+      if (slashDispatch.handled) {
+        if (slashDispatch.accepted && sessionId) {
+          void dispatchDeferredUiAssignment(sessionId, undefined, {
+            waitForLeadHistory: false,
+          }).catch((err) => {
+            log.error('recover deferred Worker assignment after slash command failed', err);
+            toast.error(t('newChat.collaboration.assignmentFailed'));
+          });
+        }
+        return slashDispatch.accepted;
+      }
       message = slashDispatch.message;
       if (message !== originalMessage && opts) {
         opts = {
@@ -2936,7 +3009,7 @@ export function CCAgentSessionView({
         ...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {}),
       };
       if (deliveryMode === 'steer') {
-        return steerMessage(
+        const accepted = await steerMessage(
           message,
           model,
           effort,
@@ -2946,8 +3019,15 @@ export function CCAgentSessionView({
           mentions,
           sendOptions,
         );
+        if (accepted && sessionId) {
+          void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
+            log.error('recover deferred Worker assignment after user message failed', err);
+            toast.error(t('newChat.collaboration.assignmentFailed'));
+          });
+        }
+        return accepted;
       }
-      return sendMessage(
+      const accepted = await sendMessage(
         message,
         model,
         effort,
@@ -2957,6 +3037,13 @@ export function CCAgentSessionView({
         mentions,
         sendOptions,
       );
+      if (accepted && sessionId) {
+        void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
+          log.error('recover deferred Worker assignment after user message failed', err);
+          toast.error(t('newChat.collaboration.assignmentFailed'));
+        });
+      }
+      return accepted;
     },
     [
       maybeDispatchDesktopSlashCommand,
@@ -3346,6 +3433,7 @@ export function CCAgentSessionView({
     }
     pendingConsumedRef.current = true;
     void (async () => {
+      let deferredUiAssignment = pending.deferredUiAssignment;
       // device-link 草稿开了协同:先把协同开起来,再发首轮 —— 否则 Lead 的第一个 turn
       // 拿不到 cindy_orca 工具。等待放在这里而不是 draft route,是为了不让「对端会话已
       // 建好、用户输入还只在内存里」的窗口跟着一次可能 30s 的隧道往返一起变长(见
@@ -3360,7 +3448,7 @@ export function CCAgentSessionView({
       if (holdComposer) setRemoteHandoffPreparing(true);
       try {
         if (pending.remoteCollab) {
-          const ok = await consumePendingRemoteCollab(pending.remoteCollab, {
+          const remoteCollab = await consumePendingRemoteCollab(pending.remoteCollab, {
             leadSessionId: sessionId,
             logTag: 'pending first message',
             onFailed: (err) =>
@@ -3370,8 +3458,11 @@ export function CCAgentSessionView({
                   continueAsSingleSession: true,
                 }),
               ),
+            onAssignmentUnconfirmed: () =>
+              toast.error(t('newChat.collaboration.assignmentFailed')),
           });
-          if (ok) {
+          if (remoteCollab.ok) {
+            deferredUiAssignment = remoteCollab.deferredUiAssignment;
             void sessionsStore.forceRefresh('active');
             void revealOrcaWorkersTab(sessionId).catch((revealErr) => {
               log.warn('revealOrcaWorkersTab after pending collab failed', revealErr);
@@ -3399,6 +3490,19 @@ export function CCAgentSessionView({
             });
           }
           await deliverRecoverableHandoff(sessionId, () => true);
+          if (slashDispatch.accepted) {
+            void dispatchDeferredUiAssignment(sessionId, deferredUiAssignment, {
+              // Desktop slash commands are consumed by their own handlers and intentionally do
+              // not create a normal Lead user-history row. The command's accepted result is the
+              // ordering boundary for the independent Worker assignment.
+              waitForLeadHistory: false,
+            }).catch((err) => {
+              log.error('deferred Worker assignment after slash command failed', err);
+              toast.error(t('newChat.collaboration.assignmentFailed'));
+            });
+          } else if (deferredUiAssignment) {
+            toast.error(t('newChat.collaboration.assignmentFailed'));
+          }
           return;
         }
         const pendingAgentReferences = pending.agentReferences
@@ -3425,7 +3529,7 @@ export function CCAgentSessionView({
             : undefined;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
-        await deliverRecoverableHandoff(sessionId, () =>
+        const delivered = await deliverRecoverableHandoff(sessionId, () =>
           sendMessage(
             pendingText,
             session.model,
@@ -3455,6 +3559,14 @@ export function CCAgentSessionView({
               : undefined,
           ),
         );
+        if (delivered) {
+          void dispatchDeferredUiAssignment(sessionId, deferredUiAssignment).catch((err) => {
+            log.error('deferred Worker assignment after first message failed', err);
+            toast.error(t('newChat.collaboration.assignmentFailed'));
+          });
+        } else if (deferredUiAssignment) {
+          toast.error(t('newChat.collaboration.assignmentFailed'));
+        }
       } finally {
         if (holdComposer) setRemoteHandoffPreparing(false);
       }
@@ -3488,6 +3600,7 @@ export function CCAgentSessionView({
     }
     pendingGoalConsumedRef.current = true;
     void (async () => {
+      let deferredUiAssignment: DeferredUiAssignment | undefined;
       // 锁必须覆盖**从消费 pendingGoal 到 setGoal 结束**的全程,不能只包住开协同那段:
       // 前面的 subscribe 与后面的 setGoal 同样是隧道 invoke、同样可能走到 30s 超时,
       // 锁在它们之外的话,这两个窗口里用户补发的消息会抢在目标首轮之前跑
@@ -3504,7 +3617,7 @@ export function CCAgentSessionView({
         }
         // 与首条消息同款:目标首轮同样要排在协同之后(见上方 pending 消费的注释)。
         if (pendingGoal.remoteCollab) {
-          const ok = await consumePendingRemoteCollab(pendingGoal.remoteCollab, {
+          const remoteCollab = await consumePendingRemoteCollab(pendingGoal.remoteCollab, {
             leadSessionId: sessionId,
             logTag: 'pending goal',
             onFailed: (err) =>
@@ -3514,8 +3627,11 @@ export function CCAgentSessionView({
                   continueAsSingleSession: true,
                 }),
               ),
+            onAssignmentUnconfirmed: () =>
+              toast.error(t('newChat.collaboration.assignmentFailed')),
           });
-          if (ok) {
+          if (remoteCollab.ok) {
+            deferredUiAssignment = remoteCollab.deferredUiAssignment;
             void sessionsStore.forceRefresh('active');
             void revealOrcaWorkersTab(sessionId).catch((revealErr) => {
               log.warn('revealOrcaWorkersTab after pending goal collab failed', revealErr);
@@ -3525,7 +3641,7 @@ export function CCAgentSessionView({
         // 与首条消息同一条路:交付成功才丢副本。setGoal 失败会抛错,
         // deliver 里 forget 根本执行不到,副本自然保留 —— 目标正文是用户敲的,
         // 留着下次进本会话回填,比只弹一句"失败"更有用。
-        await deliverRecoverableHandoff(sessionId, async () => {
+        const delivered = await deliverRecoverableHandoff(sessionId, async () => {
           await goalApiFor(sessionId).setGoal({
             sessionId,
             objective: pendingGoal.objective,
@@ -3533,10 +3649,19 @@ export function CCAgentSessionView({
           });
           return true;
         });
+        if (delivered) {
+          void dispatchDeferredUiAssignment(sessionId, deferredUiAssignment).catch((err) => {
+            log.error('deferred Worker assignment after goal failed', err);
+            toast.error(t('newChat.collaboration.assignmentFailed'));
+          });
+        }
         toast.success(t('goal.toast.set'));
       } catch (err) {
         log.warn('pending goal setGoal failed:', err);
         toast.error(t('goal.toast.failed'));
+        if (deferredUiAssignment) {
+          toast.error(t('newChat.collaboration.assignmentFailed'));
+        }
       } finally {
         setRemoteHandoffPreparing(false);
       }
@@ -3680,6 +3805,7 @@ export function CCAgentSessionView({
       // a TS-narrowing fallback, never expected to fire at runtime.
       workingDir={session?.workingDir ?? ''}
       messages={messages}
+      historyLoaded={historyLoaded}
       taskUpdates={taskUpdates}
       isSessionStreaming={isStreaming}
       continuationTurnClientId={continuationTurnClientId}
@@ -3688,11 +3814,13 @@ export function CCAgentSessionView({
       isLoadingMore={isLoadingMore}
       hasMoreMessages={hasMoreMessages}
       bottomPadding={overlayHeight}
+      composerStackTopOffset={composerStackTopOffset}
       contentWidth={messageWidth}
       focusMessageClientId={focusedMessageTarget?.clientId ?? null}
       focusMessageRequestId={focusedMessageTarget?.requestId ?? 0}
       forkOrigin={forkOrigin}
       onOpenForkOrigin={handleOpenForkOrigin}
+      isLocalUserSend={isLocalUserSend}
     />
   );
 
@@ -4138,6 +4266,7 @@ export function CCAgentSessionView({
             <div
               className="mx-auto flex flex-col items-center gap-[10px]"
               style={{ width: inputWidth }}
+              data-chat-composer-stack
             >
               {/* FP-7 / F-PERM-2 / F7.4: mutually exclusive prompts.
                  Plan review takes precedence — the SDK won't interleave it with
@@ -4521,41 +4650,18 @@ export function CCAgentSessionView({
         </div>
 
         {/* TopRightChipStack:聊天视图右上 chip 浮层。
-          chip 栈第一行 = 右栏展开入口(仅 Windows 且右栏折叠时;展开态的折叠按钮
-          归属右栏 TabBar;mac 开关在 ContentHeader 右端,故 !isMac 守卫)。
+          Windows 固定侧栏入口由 MainLayout 承载；当入口位于右侧时在本栈第一行
+          保留等尺寸占位，让消息跳转等 portal chip 自然落到下一行。
           MessageStream 内部的 PrevMessageJumpChip 通过 portal 挂入同一栈,自然落到下一行。
           "本次会话改动文件列表"已迁移到 RSB review tab,不再保留浮动按钮 + 滑入抽屉。 */}
         <TopRightChipStack>
-          {/* Windows 折叠态的展开入口钉在聊天区靠缝的角上;面板贴右时在右上
-            (本栈第一行),贴左时镜像到左上(下方容器)。 */}
           {!isMac &&
-            rightSidebarCollapsed &&
             (ownsRoute || showRsbToggle) &&
-            onToggleRightSidebar &&
+            rightSidebarCollapsed &&
             rightSidebarSide === 'right' && (
-              <RightSidebarToggle
-                collapsed={rightSidebarCollapsed}
-                onToggle={onToggleRightSidebar}
-                side="right"
-              />
+              <div aria-hidden className="h-7 w-7 shrink-0" />
             )}
         </TopRightChipStack>
-        {/* mac 不渲染本 chip(2026-07-09 Lizi 口径):mac 的折叠 toggle 无论面板贴
-          哪侧都**恒钉窗口右上角**(MainLayout 浮层,与左栏折叠按钮对称);
-          Windows 仅折叠态显示,面板贴左时镜像到聊天区左上角。 */}
-        {!isMac &&
-          rightSidebarCollapsed &&
-          (ownsRoute || showRsbToggle) &&
-          onToggleRightSidebar &&
-          rightSidebarSide === 'left' && (
-            <div className="pointer-events-none absolute left-3 top-3 z-20 flex flex-col items-start gap-2">
-              <RightSidebarToggle
-                collapsed={rightSidebarCollapsed}
-                onToggle={onToggleRightSidebar}
-                side="left"
-              />
-            </div>
-          )}
       </section>
     </>
   );

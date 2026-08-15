@@ -26,7 +26,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { GroupHistoryAccessScope } from './groupHistoryAccess';
-import type { ImOutputDriver, IMMessageEvent, IMUnsupportedEntry, TextChannelIM } from '@cindy/im';
+import type { ImOutputDriver, IMAttachment, IMMessageEvent, IMUnsupportedEntry, TextChannelIM } from '@cindy/im';
 
 /** 渠道名 — 同时是 sessions.source 列值与 IdentityKey.channel 的值域。 */
 export type ImChannelName =
@@ -85,6 +85,29 @@ export interface ImSessionNamespace {
    * 返回 null/缺省 = 用渠道默认。只影响**新建**行; 已存在行的权限归 owner 管。
    */
   permissionModeFor?(userId: string): PermissionMode | null;
+  /**
+   * 建行/复活行后异步解析正式标题(飞书群 lane → 拉群名拼 `[飞书·群] {群名}`)。
+   * 返回 null/缺省 = 保持 defaultTitle。幂等(值稳定), 失败不阻塞建行。
+   */
+  resolveSessionTitle?(userId: string, scopeKey?: string): Promise<string | null>;
+  /**
+   * 该 userId 的会话不参与 oneshot 起名(飞书群主流 lane 只剩开话题失败的
+   * 降级路径, 标题是稳定的「群名」, 不该被首条消息的话题标题漂掉;
+   * 话题 lane 与 DM lane 仍照常起名)。
+   */
+  skipOneshotTitleFor?(userId: string): boolean;
+  /**
+   * 渠道自定义 oneshot 标题拼装(飞书话题 lane →
+   * `[飞书·{群名}·{话题简介}] {threadId 后 6 位}`)。收到 oneshot 生成的
+   * 简介文本后返回完整标题; 返回 null = 该 lane 不适用, 回落默认
+   * generatedTitlePrefix 路径。
+   */
+  composeGeneratedTitle?(
+    userId: string,
+    scopeKey: string | undefined,
+    generated: string,
+    sessionId: string,
+  ): Promise<string | null>;
   /**
    * 非接管会话 oneshot 生成正式标题时的前缀(如 'Slack · ' / '[飞书·DM] ')。
    *   - threadScoped 渠道(slack): 新 thread 会话的首条消息触发;
@@ -173,9 +196,15 @@ export interface ImChannelAdapter {
    * commit 在消息完成鉴权、session wiring 且确定被派发/排队后调用, 是群窗口
    * 游标推进的时机锚点; 受理前失败不调用, 这批上下文下次仍会进入 prompt。
    * 返回 null = 不改写。钩子抛错按"不改写"降级, 不阻断消息。
+   *
+   * contextAttachments: 上下文附带的附件(群历史里的图片/文件) —— 只拼进
+   * 模型消息(buildImUserMessage 的 image/file block), **不落库、不进
+   * transcript**(它们不是触发用户发的)。与用户自己 attachments 的语义边界
+   * 正在于此: 触发消息附件照常走 attachments 落库。
    */
   prepareAgentTurnText?(event: IMMessageEvent): Promise<{
     agentText: string;
+    contextAttachments?: IMAttachment[];
     commit?: () => void | Promise<void>;
   } | null>;
   /**
@@ -185,8 +214,24 @@ export interface ImChannelAdapter {
    * 该轮(fail-closed), 不会静默放开。
    */
   turnPermissionPolicyFor?(event: IMMessageEvent): TurnPermissionPolicy | undefined;
+  /**
+   * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 返回 true 的档位在
+   * dispatch 时不挂 turnPermissionPolicy(maker 不再 fail-closed, 按用户显式
+   * 选择直接执行)。飞书用它在用户于渠道设置中显式选择「完全访问」后取缔
+   * 群护栏; 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道
+   * 不实现即保持 fail-closed。
+   */
+  turnPolicyOptionalForMode?(permissionMode: PermissionMode): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
+  /**
+   * slash 命令事件的渠道钩子 — 在 handleSlashCommand 之前调用。飞书用它记住
+   * 「群主流 @ 开话题」事件带的群主流取数 lane(groupContextLane): /ctr 等
+   * slash 不经过 prepareAgentTurnText, 开话题那条事件攒下的 thread 前上下文
+   * 会丢失; 记住后由话题里第一条 agent 消息领走(见 adapter 实现)。
+   * 其它渠道不实现即 no-op。
+   */
+  onSlashCommandEvent?(event: IMMessageEvent): void;
 }
 
 // ── UI 文案包 ─────────────────────────────────────────────────────────────────
@@ -260,7 +305,8 @@ export interface ImUiTextPack {
    */
   error?: {
     agentUnsupported: string;
-    permissionModeUnsupported: string;
+    /** 函数形态接收 maker 拒绝时的权限档 id(如 acceptEdits), 报错能点名档位。 */
+    permissionModeUnsupported: string | ((permissionMode: string) => string);
     /** 换 Agent 后仍可能不兼容的权限模式(bypassPermissions / acceptEdits)时附加。 */
     agentSwitchAlsoCheckPermissionMode?: string;
   };
@@ -274,6 +320,23 @@ export interface ImUiTextPack {
       resolvedAllowOnce: string;
       resolvedAllowAlways: string;
       resolvedDeny: string;
+      /**
+       * 授权卡转投 owner 私聊(deliverToOwnerDm)后, 在原群/话题 lane 里发的
+       * 指路提示 — 否则群里的人不知道卡片去了哪。缺省不发。函数形态接收
+       * toolName, 提示里能点出「具体是什么操作」。
+       */
+      dmRoutedNotice?: string | ((toolName: string) => string);
+    };
+    /**
+     * 「群会话不能用完全访问」失败时的私聊修复卡 — 一键把本会话切回
+     * 自动审批(auto)。仅飞书提供; 缺省渠道不发卡只发报错文案。
+     */
+    permissionModeFix?: {
+      title: string;
+      body: (sessionTitle: string) => string;
+      btnFix: string;
+      resolved: string;
+      failed: (reason: string) => string;
     };
     ask: {
       title: (header: string) => string;

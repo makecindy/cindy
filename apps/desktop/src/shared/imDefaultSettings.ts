@@ -22,6 +22,13 @@ export type ImDefaultAgentSettingsMap = Record<ImDefaultAgentKind, ImDefaultAgen
 export interface ImDefaultSettings {
   agentKind: ImDefaultAgentKind;
   permissionMode: ImDefaultPermissionMode;
+  /**
+   * 群聊 /ctr 新建会话用的权限档(当前仅 feishu 消费): 群上下文含成员可控
+   * 内容, 默认 'auto'(自动审批)保留操作确认; 用户可在渠道设置里改成
+   * 'bypassPermissions'(完全访问) — 群轮次会因强确认策略互斥被拒绝, 由
+   * 错误路径的私聊引导卡兜底切回。
+   */
+  groupCtrPermissionMode: ImDefaultPermissionMode;
   agents: ImDefaultAgentSettingsMap;
 }
 
@@ -38,6 +45,7 @@ export interface ImDefaultSettingsState extends ImDefaultSettings {
 export const IM_DEFAULT_SETTINGS: ImDefaultSettings = {
   agentKind: 'claude-code',
   permissionMode: 'auto',
+  groupCtrPermissionMode: 'auto',
   agents: {
     'claude-code': {
       providerId: null,

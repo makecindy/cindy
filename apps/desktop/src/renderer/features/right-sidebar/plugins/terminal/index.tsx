@@ -15,13 +15,16 @@
  * 注册：模块顶层 import-side-effect。plugins/index.ts 把它 import 进来。
  */
 
+import { lazy } from 'react';
 import { Terminal as TerminalIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
-import { TerminalTabBody } from './TerminalTabBody';
-import { disposeXterm } from './lib/xtermPool';
+
+const TerminalTabBody = lazy(() =>
+  import('./TerminalTabBody').then((module) => ({ default: module.TerminalTabBody })),
+);
 
 export interface TerminalState {
   /** PTY 是否已在 main 端 spawn。每次 app 启动后 hydrate 强制设 false（PTY 死了） */
@@ -88,6 +91,7 @@ const plugin: TabKindPlugin<TerminalState> = {
     } catch {
       /* 已经 disposed / not found 都静默 */
     }
+    const { disposeXterm } = await import('./lib/xtermPool');
     disposeXterm(ctx.tabId);
   },
 };

@@ -229,7 +229,9 @@ export interface CatalogModel {
   family?: string;
   /**
    * 厂商分组 id —— 决定模型在选择器右栏的分组归属（替代渲染层按 id 前缀硬猜）。
-   * 当前取值与渲染层 ModelCategory 对齐：'anthropic' | 'gpt' | 'gpt-budget' | 'google' | 'china'。
+   * 当前取值与渲染层 ModelCategory 对齐：'anthropic' | 'gpt' | 'gpt-budget' | 'grok' |
+   * 'google' | 'china' | 'ungrouped' | 'image' | 'video' | 'tts' | 'stt' | 'realtime' |
+   * 'embedding' | 'compression' | 'other'。
    * 缺省时渲染层回退到 id 前缀归类（categorize）。新增未知分组需在渲染层补 i18n 标签。
    */
   group?: string;
@@ -356,11 +358,11 @@ export interface CatalogModel {
    * model-access `/models` v2 响应写入本字段；公共 Registry 的同名策略字段由 server 消费，
    * `modelPlanePolicy` 刻意不把它投影进 CatalogModel，避免 Global 绕过区域门。
    *
-   * 渲染层优先取被标记、当前可用且默认可见的模型；无标记时回退 `sortOrder` 第一。取值仅
-   * wire agent（'claude-code' | 'codex'）；pi 按 'claude-code' 口径投影。缺省 = 不作为默认。
+   * 渲染层优先取被标记、当前可用且默认可见的模型；无标记时回退 `sortOrder` 第一。
+   * v3 可显式标记 'claude-code'、'codex' 或 'pi'；客户端不跨 Agent 投影。缺省 = 不作为默认。
    * 故意**不纳入** `modelSignature` 跨供应商一致性校验：同一 id 在不同供应商下可各自表态。
    */
-  newSessionDefault?: ('claude-code' | 'codex')[];
+  newSessionDefault?: AgentKind[];
   /**
    * 该来源下的模型是否已由用户确认支持图片输入。目前只供 Pi 自定义 provider 使用；
    * 缺省按 false 处理，避免把纯文本端点误报成视觉模型。它是 per-provider 能力，不参与

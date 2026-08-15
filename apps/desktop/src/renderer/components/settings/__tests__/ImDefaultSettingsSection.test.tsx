@@ -67,6 +67,10 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: () => null,
 }));
 
+vi.mock('@/components/new-chat/PermissionSelector', () => ({
+  PermissionSelector: () => null,
+}));
+
 vi.mock('../DefaultOverrideControls', () => ({
   DefaultOverrideControls: () => null,
 }));
@@ -79,6 +83,7 @@ function defaults(agentKind: ImDefaultSettingsState['agentKind']): ImDefaultSett
   return {
     agentKind,
     permissionMode: 'auto',
+    groupCtrPermissionMode: 'auto',
     agents: {
       'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
       codex: { providerId: null, model: 'codex/gpt-5.5', effort: 'high' },
@@ -236,6 +241,21 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     await second.findByText('settings.imBot.defaults.agentLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
+    ).toBeNull();
+  });
+
+  it('renders the group /ctr permission field on feishu, hidden on other channels', async () => {
+    const feishu = render(<ImDefaultSettingsSection channel="feishu" />);
+    await feishu.findByText('settings.imBot.defaults.groupCtrPermissionLabel');
+    expect(
+      feishu.queryByText('settings.imBot.defaults.groupCtrPermissionDescription'),
+    ).not.toBeNull();
+    cleanup();
+
+    const wechat = render(<ImDefaultSettingsSection channel="wechat" />);
+    await wechat.findByText('settings.imBot.defaults.agentLabel');
+    expect(
+      wechat.queryByText('settings.imBot.defaults.groupCtrPermissionLabel'),
     ).toBeNull();
   });
 });

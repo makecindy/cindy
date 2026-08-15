@@ -16,7 +16,7 @@
  * 跨渠道互不影响。
  */
 
-import type { IMMessageEvent, TextChannelIM } from '@cindy/im';
+import type { IMAttachment, IMMessageEvent, TextChannelIM } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import {
@@ -147,6 +147,14 @@ export function createMessageHandler(
 
     // ── slash command (only on plain text: no attachments, no unsupported) ──
     if (pureTextCommandInput && looksLikeSlashCommand(event.text)) {
+      // 渠道钩子先于命令处理 — 飞书靠它记住开话题 slash 事件的群主流取数
+      // lane(thread 前上下文), 供流程结束后话题里的第一条 agent 消息使用。
+      try {
+        adapter.onSlashCommandEvent?.(event);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`onSlashCommandEvent threw (non-fatal): ${msg}`);
+      }
       try {
         await slash.handleSlashCommand(event.text, {
           botContextId: event.contextId,
@@ -193,7 +201,11 @@ export function createMessageHandler(
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
-    let prepared: { agentText: string; commit?: () => void | Promise<void> } | null = null;
+    let prepared: {
+      agentText: string;
+      contextAttachments?: IMAttachment[];
+      commit?: () => void | Promise<void>;
+    } | null = null;
     if (adapter.prepareAgentTurnText) {
       try {
         prepared = await adapter.prepareAgentTurnText(event);
@@ -217,6 +229,10 @@ export function createMessageHandler(
         ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
         ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
+        // 群历史附件只进模型消息、不落库(见 ImRunAgentTurnArgs.contextAttachments)。
+        ...(prepared?.contextAttachments?.length
+          ? { contextAttachments: prepared.contextAttachments }
+          : {}),
         ...(prepared?.commit
           ? {
               // turnRunner 只在 provider 真正接受消息后调用；排队、停止与

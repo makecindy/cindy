@@ -3,6 +3,7 @@ import type {
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
 } from '@cindy/model-providers';
+import { savedCustomProviderModelShape } from '@/../shared/piRuntimeInitialization';
 
 export type RuntimeFillAgent = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
 export interface RuntimeFillHeaderRow {
@@ -122,25 +123,10 @@ function endpointBundleSupported(
   return source.requestPath.trim().length === 0 || (sourceAgent !== 'pi' && targetAgent !== 'pi');
 }
 
-function savedModelShape(model: ProviderRuntimeModelConfig, includePiCapabilities: boolean) {
-  return {
-    id: model.id.trim(),
-    name: model.name.trim(),
-    ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
-    ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
-    ...(includePiCapabilities && model.supportsImageInput === true
-      ? { supportsImageInput: true }
-      : {}),
-    ...(includePiCapabilities && model.reasoning === true && model.reasoningEfforts?.length
-      ? { reasoning: true, reasoningEfforts: [...model.reasoningEfforts] }
-      : {}),
-  } satisfies ProviderRuntimeModelConfig;
-}
-
 function validModels(models: ProviderRuntimeModelConfig[]) {
   return models
     .filter((model) => model.id.trim() && model.name.trim())
-    .map((model) => savedModelShape(model, true));
+    .map((model) => savedCustomProviderModelShape(model, true));
 }
 
 function canonicalHeaders(headers: RuntimeFillHeaderRow[]) {
@@ -168,10 +154,10 @@ function modelsForTarget(
 ) {
   const targetById = new Map(validModels(targetModels).map((model) => [model.id, model]));
   return validModels(sourceModels).map((sourceModel) => {
-    if (targetAgent !== 'pi') return savedModelShape(sourceModel, false);
-    if (sourceAgent === 'pi') return savedModelShape(sourceModel, true);
+    if (targetAgent !== 'pi') return savedCustomProviderModelShape(sourceModel, false);
+    if (sourceAgent === 'pi') return savedCustomProviderModelShape(sourceModel, true);
 
-    const portable = savedModelShape(sourceModel, false);
+    const portable = savedCustomProviderModelShape(sourceModel, false);
     const existing = targetById.get(portable.id);
     return {
       ...portable,

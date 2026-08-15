@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION,
   MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION,
   MODEL_ACCESS_MODELS_PATH,
   MODEL_REGISTRY_LEGACY_SCHEMA_VERSION,
   MODEL_REGISTRY_SCHEMA_VERSION,
@@ -15,7 +16,7 @@ import {
 } from '../index.js';
 
 const VALID_RESPONSE: ListModelsResponse = {
-  schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  schemaVersion: MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION,
   models: [
     {
       id: 'example-chat-model',
@@ -41,6 +42,20 @@ const VALID_RESPONSE: ListModelsResponse = {
           outputCostPerToken: 0.000_002,
         },
       ],
+    },
+  ],
+};
+
+const VALID_V3_RESPONSE: ListModelsResponse = {
+  ...VALID_RESPONSE,
+  schemaVersion: MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
+  models: [
+    {
+      ...VALID_RESPONSE.models[0]!,
+      perAgent: {
+        'claude-code': { supportsFastMode: false, wireProtocol: 'anthropic-messages' },
+        codex: { wireProtocol: 'openai-responses' },
+      },
     },
   ],
 };
@@ -120,7 +135,8 @@ describe('model access catalog contract', () => {
     const { newSessionDefault: _newSessionDefault, ...legacyModel } = VALID_RESPONSE.models[0]!;
     const versions = [
       [MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION, legacyModel],
-      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
     ] as const;
 
     for (const [schemaVersion, model] of versions) {
@@ -179,7 +195,7 @@ describe('model access catalog contract', () => {
     });
     expectReject(withDefault([]), 'response.models[0].newSessionDefault');
     expectReject(withDefault(['codex', 'codex']), 'response.models[0].newSessionDefault');
-    expectReject(withDefault(['pi']), 'response.models[0].newSessionDefault');
+    expect(parseListModelsResponse(withDefault(['pi']))).toMatchObject({ ok: true });
     expectReject(
       {
         ...VALID_RESPONSE,
@@ -199,7 +215,8 @@ describe('model access catalog contract', () => {
     const { newSessionDefault: _newSessionDefault, ...legacyModel } = VALID_RESPONSE.models[0]!;
     for (const [schemaVersion, model] of [
       [MODEL_ACCESS_CATALOG_LEGACY_SCHEMA_VERSION, legacyModel],
-      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_V2_SCHEMA_VERSION, VALID_RESPONSE.models[0]!],
+      [MODEL_ACCESS_CATALOG_SCHEMA_VERSION, VALID_V3_RESPONSE.models[0]!],
     ] as const) {
       expect(parseListModelsResponse({ schemaVersion, models: [model] }).ok).toBe(true);
       expectReject({ schemaVersion, models: [{ ...model, mode: 42 }] }, 'response.models[0].mode');
@@ -240,7 +257,7 @@ describe('model access catalog contract', () => {
     );
   });
 
-  it('accepts missing or empty legacy agents while rejecting unsupported explicit values', () => {
+  it('accepts missing or empty agents, filters future kinds, and rejects malformed values', () => {
     const {
       agents: _agents,
       newSessionDefault: _newSessionDefault,
@@ -251,11 +268,14 @@ describe('model access catalog contract', () => {
     for (const model of [withoutAgents, { ...withoutAgents, agents: [] }]) {
       expect(parseListModelsResponse({ ...VALID_RESPONSE, models: [model] }).ok).toBe(true);
     }
-    expectReject(
-      {
+    expect(
+      parseListModelsResponse({
         ...VALID_RESPONSE,
-        models: [{ ...VALID_RESPONSE.models[0], agents: ['pi'] }],
-      },
+        models: [{ ...withoutAgents, agents: ['future-agent'] }],
+      }),
+    ).toMatchObject({ ok: true, value: { models: [{ agents: [] }] } });
+    expectReject(
+      { ...VALID_RESPONSE, models: [{ ...withoutAgents, agents: [42] }] },
       'response.models[0].agents',
     );
   });
@@ -276,7 +296,7 @@ describe('model access catalog contract', () => {
   });
 
   it('rejects unsupported schema versions and malformed nested pricing', () => {
-    expectReject({ ...VALID_RESPONSE, schemaVersion: 3 }, 'response.schemaVersion');
+    expectReject({ ...VALID_RESPONSE, schemaVersion: 4 }, 'response.schemaVersion');
     expectReject(
       {
         ...VALID_RESPONSE,
@@ -289,6 +309,71 @@ describe('model access catalog contract', () => {
       },
       'response.models[0].tieredPricing[0].range',
     );
+  });
+
+  it('accepts v3 Pi only with an explicit supported wire protocol', () => {
+    const piModel = {
+      ...VALID_V3_RESPONSE.models[0],
+      agents: ['claude-code', 'codex', 'pi'],
+      perAgent: {
+        ...VALID_V3_RESPONSE.models[0]!.perAgent,
+        pi: { wireProtocol: 'openai-responses' },
+      },
+    } as const;
+    expect(parseListModelsResponse({ ...VALID_V3_RESPONSE, models: [piModel] }).ok).toBe(true);
+    expectReject(
+      { ...VALID_V3_RESPONSE, models: [{ ...piModel, perAgent: {} }] },
+      'response.models[0].perAgent.claude-code.wireProtocol',
+    );
+    expectReject(
+      {
+        ...VALID_V3_RESPONSE,
+        models: [
+          {
+            ...piModel,
+            perAgent: {
+              ...piModel.perAgent,
+              pi: { wireProtocol: 'anthropic-messages' },
+            },
+          },
+        ],
+      },
+      'response.models[0].perAgent.pi.wireProtocol must be openai-responses',
+    );
+    expectReject(
+      {
+        ...VALID_V3_RESPONSE,
+        models: [
+          {
+            ...piModel,
+            perAgent: {
+              ...piModel.perAgent,
+              codex: { wireProtocol: 'anthropic-messages' },
+            },
+          },
+        ],
+      },
+      'response.models[0].perAgent.codex.wireProtocol must be openai-responses',
+    );
+  });
+
+  it('requires complete runtime metadata in v3 without changing v2', () => {
+    const { name: _name, contextWindow: _contextWindow, ...incomplete } =
+      VALID_V3_RESPONSE.models[0]!;
+    expectReject(
+      { ...VALID_V3_RESPONSE, models: [{ ...incomplete, contextWindow: 200_000 }] },
+      'response.models[0].name',
+    );
+    expectReject(
+      { ...VALID_V3_RESPONSE, models: [{ ...incomplete, name: 'Example Chat Model' }] },
+      'response.models[0].contextWindow',
+    );
+    expect(
+      parseListModelsResponse({
+        ...VALID_RESPONSE,
+        models: [{ ...incomplete, perAgent: VALID_RESPONSE.models[0]!.perAgent }],
+      }).ok,
+    ).toBe(true);
   });
 
   it('rejects defaults that are absent from the declared effort list', () => {
@@ -310,6 +395,20 @@ describe('model access catalog contract', () => {
         ],
       },
       'response.models[0].perAgent.codex.defaultEffort',
+    );
+    expectReject(
+      {
+        ...VALID_RESPONSE,
+        models: [
+          {
+            ...VALID_RESPONSE.models[0],
+            efforts: ['low', 'high'],
+            defaultEffort: 'high',
+            perAgent: { codex: { efforts: ['low'] } },
+          },
+        ],
+      },
+      'response.models[0].perAgent.codex.efforts',
     );
   });
 

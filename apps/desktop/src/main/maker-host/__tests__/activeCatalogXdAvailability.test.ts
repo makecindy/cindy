@@ -2,9 +2,9 @@
  * active-catalog XD 网关权威模型清单重建单测(2026-07-19 统一重构后语义)。
  * 不变量:
  *   - 空列表 = 不展示任何 XD 模型;清除后不回退任何静态数据;
- *   - 元数据只信服务端下发 + 确定性默认值(不再回落产品目录条目):
- *       efforts 缺失 → 合成 3 档(low/medium/high,默认 high);显式 [] → 不可调;
- *       supportsFastMode 缺失 → false;defaultEnabled 缺失 → 默认可见;
+ *   - 元数据只信服务端下发(不再回落产品目录条目):
+ *       efforts 缺失 / 显式 [] → 不可调，defaultEffort 不猜 high;
+ *       supportsFastMode / defaultEnabled 缺失保持缺失;
  *   - perAgent 覆盖块按 tab 应用(gpt 系 cc/codex 的 Fast / 窗口分叉);
  *   - tab 归属:服务端 agents > 仅 claude-code;
  *   - 其它供应商永不受影响。
@@ -15,14 +15,14 @@ import { BUNDLED_CATALOG, type CatalogModel } from '@cindy/model-providers';
 
 import {
   getActiveCatalog,
-  isXdCodexAnthropicBridgeModel,
+  resolveXdPiGatewayWireProtocol,
   setActiveCatalog,
   setAnthropicDiscoveredModels,
   setXdGatewayModels,
 } from '../active-catalog.js';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
-function xdModels(agent: 'claude-code' | 'codex') {
+function xdModels(agent: 'claude-code' | 'codex' | 'pi') {
   const xd = getActiveCatalog().providers.find((p) => p.id === 'xd');
   return xd?.models[agent] ?? [];
 }
@@ -70,51 +70,67 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('claude-code')).toEqual([]);
   });
 
-  it('未登记模型按 Claude-only 兜底并投影到 Codex bridge:3 档 effort + fast=false + 200k 窗口', () => {
+  it('v3 未声明 agents 的模型不进入任何 runtime', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{ id: 'brand-new-model' }]);
-
-    const cc = xdModels('claude-code');
-    const codex = xdModels('codex');
-    expect(cc.map((m) => m.id)).toEqual(['brand-new-model']);
-    expect(cc[0]).toMatchObject({
-      name: 'brand-new-model',
-      contextWindow: 200_000,
-      efforts: ['low', 'medium', 'high'],
-      defaultEffort: 'high',
-      supportsFastMode: false,
-    });
-    expect(codex).toEqual([
-      {
-        ...cc[0],
-        codexCompatibilityWireProtocol: 'anthropic-messages',
-      },
-    ]);
-    expect('codexCompatibilityWireProtocol' in cc[0]).toBe(false);
-    expect(isXdCodexAnthropicBridgeModel('brand-new-model')).toBe(true);
-    expect(
-      deriveAvailableModels(getActiveCatalog(), 'codex').map((model) => model.id),
-    ).toContain('brand-new-model');
+    expect(xdModels('claude-code')).toEqual([]);
+    expect(xdModels('codex')).toEqual([]);
+    expect(xdModels('pi')).toEqual([]);
   });
 
-  it('Claude-only 模型投影到 Codex bridge 时清除未实现的 Fast 能力', () => {
+  it('服务端显式声明 Codex Responses 路由及其能力覆写', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{
       id: 'fast-claude-only',
-      agents: ['claude-code'],
+      agents: ['claude-code', 'codex'],
       supportsFastMode: true,
+      perAgent: {
+        codex: { supportsFastMode: false, wireProtocol: 'openai-responses' },
+      },
     }]);
     expect(xdModels('claude-code')[0]?.supportsFastMode).toBe(true);
     expect(xdModels('codex')[0]).toMatchObject({
       supportsFastMode: false,
-      codexCompatibilityWireProtocol: 'anthropic-messages',
     });
+  });
+
+  it('Pi 在 cindy provider 内只接受 v3 指定的 Responses API', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'invalid-messages-wire',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'anthropic-messages' } },
+      },
+      {
+        id: 'responses-model',
+        agents: ['claude-code', 'codex', 'pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
+      {
+        id: 'claude-only-model',
+        agents: ['claude-code'],
+        perAgent: { 'claude-code': { wireProtocol: 'anthropic-messages' } },
+      },
+    ]);
+
+    expect(resolveXdPiGatewayWireProtocol('invalid-messages-wire')).toBeNull();
+    expect(resolveXdPiGatewayWireProtocol('responses-model')).toBe('openai-responses');
+    expect(resolveXdPiGatewayWireProtocol('responses-model[1m]')).toBe('openai-responses');
+    expect(resolveXdPiGatewayWireProtocol('claude-only-model')).toBeUndefined();
+    expect(resolveXdPiGatewayWireProtocol('unknown-model')).toBeUndefined();
   });
 
   it('显式登记 efforts=[] 表示不可调,不合成 3 档;fast 显式 false 尊重', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
-      { id: 'claude-haiku-4-5', name: 'Haiku 4.5', efforts: [], supportsFastMode: false },
+      {
+        id: 'claude-haiku-4-5',
+        agents: ['claude-code'],
+        name: 'Haiku 4.5',
+        efforts: [],
+        supportsFastMode: false,
+      },
     ]);
     const cc = xdModels('claude-code');
     expect(cc[0]).toMatchObject({
@@ -151,11 +167,10 @@ describe('XD 网关权威模型清单重建', () => {
         defaultEffort: 'high',
       });
     }
-    expect(isXdCodexAnthropicBridgeModel('gpt-5.6-sol')).toBe(false);
     expect('codexCompatibilityWireProtocol' in xdModels('codex')[0]).toBe(false);
   });
 
-  it('仅 codex 的原生模型不投影到 Claude tab,也不标记为 bridge', () => {
+  it('仅 codex 的模型不投影到 Claude tab', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
       {
@@ -167,7 +182,6 @@ describe('XD 网关权威模型清单重建', () => {
 
     expect(xdModels('claude-code')).toEqual([]);
     expect(xdModels('codex').map((model) => model.id)).toEqual(['codex-native-only']);
-    expect(isXdCodexAnthropicBridgeModel('codex-native-only')).toBe(false);
   });
 
   it('perAgent 覆盖块按 tab 应用(cc 无 Fast + 1M 窗口;codex 保持基线)', () => {
@@ -194,7 +208,10 @@ describe('XD 网关权威模型清单重建', () => {
 
   it('defaultEnabled 显式 false 透传;缺省不写键(= 默认可见)', () => {
     setActiveCatalog(BUNDLED_CATALOG);
-    setXdGatewayModels([{ id: 'hidden-model', defaultEnabled: false }, { id: 'visible-model' }]);
+    setXdGatewayModels([
+      { id: 'hidden-model', agents: ['claude-code'], defaultEnabled: false },
+      { id: 'visible-model', agents: ['claude-code'] },
+    ]);
     const cc = xdModels('claude-code');
     expect(cc.find((m) => m.id === 'hidden-model')?.defaultEnabled).toBe(false);
     expect('defaultEnabled' in (cc.find((m) => m.id === 'visible-model') ?? {})).toBe(false);
@@ -202,7 +219,10 @@ describe('XD 网关权威模型清单重建', () => {
 
   it('icon(AI Gateway 展示图标设定)透传;缺省不写键(渲染层回落来源供应商标)', () => {
     setActiveCatalog(BUNDLED_CATALOG);
-    setXdGatewayModels([{ id: 'claude-fable-5', icon: 'claude' }, { id: 'plain-model' }]);
+    setXdGatewayModels([
+      { id: 'claude-fable-5', agents: ['claude-code'], icon: 'claude' },
+      { id: 'plain-model', agents: ['claude-code'] },
+    ]);
     const cc = xdModels('claude-code');
     expect(cc.find((m) => m.id === 'claude-fable-5')?.icon).toBe('claude');
     expect('icon' in (cc.find((m) => m.id === 'plain-model') ?? {})).toBe(false);
@@ -213,13 +233,21 @@ describe('XD 网关权威模型清单重建', () => {
     setXdGatewayModels([
       {
         id: 'gateway-vision',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
         modalities: { input: ['text', 'image'], output: ['text'] },
       },
       {
         id: 'gateway-text',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
         modalities: { input: ['text'], output: ['text'] },
       },
-      { id: 'gateway-unknown' },
+      {
+        id: 'gateway-unknown',
+        agents: ['pi'],
+        perAgent: { pi: { wireProtocol: 'openai-responses' } },
+      },
     ]);
 
     const pi = deriveAvailableModels(getActiveCatalog(), 'pi');
@@ -239,34 +267,40 @@ describe('XD 网关权威模型清单重建', () => {
     setXdGatewayModels([
       {
         id: 'half-price',
+        agents: ['claude-code'],
         costDiscount: 0.5,
         inputCostPerToken: 0.000012,
         outputCostPerToken: 0.000036,
       },
       {
         id: 'twenty-percent-off',
+        agents: ['claude-code'],
         costDiscount: 0.2,
         inputCostPerToken: 0.00001,
         outputCostPerToken: 0.00002,
       },
       {
         id: 'free-model',
+        agents: ['claude-code'],
         inputCostPerToken: 0,
         outputCostPerToken: 0,
       },
       {
         id: 'full-price',
+        agents: ['claude-code'],
         inputCostPerToken: 0.000012,
         outputCostPerToken: 0.000036,
       },
       {
         id: 'invalid-discount',
+        agents: ['claude-code'],
         costDiscount: 1.2,
         inputCostPerToken: 0.000012,
         outputCostPerToken: 0.000036,
       },
       {
         id: 'missing-output',
+        agents: ['claude-code'],
         inputCostPerToken: 0.000012,
       },
     ]);
@@ -295,31 +329,30 @@ describe('XD 网关权威模型清单重建', () => {
     expect(cc.find((m) => m.id === 'missing-output')?.cost).toBeUndefined();
   });
 
-  it('非法 effort 档位被白名单过滤;defaultEffort 不在档位集内时回落 high 规则', () => {
+  it('efforts 缺失时不合成档位，也不猜默认档', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
       {
-        id: 'weird-model',
-        efforts: ['high', 'bogus-effort', 'max'],
-        defaultEffort: 'bogus-effort',
+        id: 'fixed-effort-model',
+        agents: ['claude-code'],
       },
     ]);
     const cc = xdModels('claude-code');
-    expect(cc[0].efforts).toEqual(['high', 'max']);
-    expect(cc[0].defaultEffort).toBe('high');
+    expect(cc[0].efforts).toEqual([]);
+    expect(cc[0].defaultEffort).toBeNull();
   });
 
   it('其它供应商的模型列表逐字不变(同 id 模型经订阅直连仍可用)', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const anthropicBefore = getActiveCatalog().providers.find((p) => p.id === 'anthropic');
-    setXdGatewayModels([{ id: 'claude-opus-4-6' }]);
+    setXdGatewayModels([{ id: 'claude-opus-4-6', agents: ['claude-code'] }]);
     const anthropicAfter = getActiveCatalog().providers.find((p) => p.id === 'anthropic');
     expect(anthropicAfter?.models).toEqual(anthropicBefore?.models);
   });
 
   it('清除实时清单后不回退任何静态模型', () => {
     setActiveCatalog(BUNDLED_CATALOG);
-    setXdGatewayModels([{ id: 'claude-opus-4-6' }]);
+    setXdGatewayModels([{ id: 'claude-opus-4-6', agents: ['claude-code'] }]);
     expect(xdModels('claude-code')).toHaveLength(1);
     setXdGatewayModels([]);
     expect(xdModels('claude-code')).toEqual([]);

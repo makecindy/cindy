@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 export type DesktopDevMode = 'remote' | 'local' | 'unknown';
 export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
@@ -24,6 +25,8 @@ export interface DesktopDevInstanceRecord {
   rootDir: string;
   commit: string | null;
   mode: DesktopDevMode;
+  /** 构建区域；共享 userData 启动器据此拒绝跨区域 passive 预览。 */
+  region: CindyRegion;
   passive: boolean;
   isolated: boolean;
   userDataDir: string;
@@ -40,6 +43,7 @@ export interface BeginDesktopDevInstanceOptions {
   rootDir: string;
   commit?: string | null;
   mode?: DesktopDevMode;
+  region?: CindyRegion;
   passive: boolean;
   isolated: boolean;
   pid?: number;
@@ -132,6 +136,7 @@ export function beginDesktopDevInstance(
     rootDir: path.resolve(options.rootDir),
     commit: options.commit ?? null,
     mode: options.mode ?? 'unknown',
+    region: options.region ?? 'global',
     passive: options.passive,
     isolated: options.isolated,
     userDataDir: path.resolve(options.userDataDir),

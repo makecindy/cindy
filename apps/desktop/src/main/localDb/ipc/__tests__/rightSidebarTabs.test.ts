@@ -245,6 +245,26 @@ describe('rightSidebarTabs IPC', () => {
       ).rejects.toThrow(/RIGHT_SIDEBAR_STATE_TOO_LARGE/);
     });
 
+    it.each([
+      ['cyclic state', () => {
+        const state: Record<string, unknown> = {};
+        state.self = state;
+        return state;
+      }],
+      ['BigInt state', () => ({ value: BigInt(1) })],
+      ['top-level function state', () => () => undefined],
+    ])('rejects non-JSON-serializable %s with INVALID_PARAMS', async (_name, makeState) => {
+      await expect(
+        invoke('local-db:right-sidebar-tabs:upsert', {
+          id: 't1',
+          sessionId: 's1',
+          kind: 'web-browser',
+          position: 0,
+          state: makeState(),
+        }),
+      ).rejects.toThrow(/\[INVALID_PARAMS\] tab state must be JSON-serializable/);
+    });
+
     it('rejects invalid params (missing sessionId)', async () => {
       await expect(
         invoke('local-db:right-sidebar-tabs:upsert', {

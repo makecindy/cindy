@@ -15,7 +15,11 @@ import crypto from 'node:crypto';
 
 import { ownerScopedUserDataPath } from '../appSessionState';
 import { createLogger, maskPath } from '../logger';
-import { getCurrentUserId } from '../authManager';
+import { getCurrentDataOwnerId, getCurrentUserId } from '../authManager';
+import {
+  assertGhostSkillProjectionBoundaryStableForOwner,
+  withSharedGlobalSkillProjectionMutation,
+} from '../authBoundaryQuarantine.js';
 import { registryService } from '../skillhub/registry';
 import { computeFolderHash } from '../skillhub/folderHash';
 import { ensureSymlinkToShared } from '../skillhub/installService';
@@ -285,7 +289,13 @@ export async function applyProposal(params: ApplyProposalParams): Promise<ApplyP
     }
   }
   try {
-    const linkResult = await prepareSharedGlobalSkillLinks();
+    const ownerId = getCurrentDataOwnerId();
+    const linkResult = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
+      prepareSharedGlobalSkillLinks({
+        assertOwnerStable: () =>
+          assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
+      }),
+    );
     for (const warning of linkResult.warnings) {
       log.warn('shared global skill link warning:', warning);
     }

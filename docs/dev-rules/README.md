@@ -19,7 +19,8 @@
 - [`desktop-development.md`](desktop-development.md)：Desktop 的 Agent 安全启动入口与
   分层验证命令。
 - [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)：
-  Electron 进程职责、Renderer 信任模型、BrowserWindow、preload、IPC 与远程内容安全边界。
+  Electron 进程职责、Renderer 信任模型、BrowserWindow、独立辅助窗口统一生命周期、
+  preload、IPC 与远程内容安全边界。
 - [`credentials-and-local-storage.md`](credentials-and-local-storage.md)：凭证不入仓、
   用户持久数据、临时文件与测试目录的安全边界。
 - [`media-storage-and-protocols.md`](media-storage-and-protocols.md)：Desktop 媒体总仓、

@@ -3,12 +3,16 @@
  * Apple tooling remains in main; this renderer plugin only consumes typed IPC.
  */
 
+import { lazy } from 'react';
 import { Smartphone } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
-import { IOSSimulatorTabBody } from './IOSSimulatorTabBody';
+
+const IOSSimulatorTabBody = lazy(() =>
+  import('./IOSSimulatorTabBody').then((module) => ({ default: module.IOSSimulatorTabBody })),
+);
 
 export interface IOSSimulatorTabState {
   instanceId: string | null;

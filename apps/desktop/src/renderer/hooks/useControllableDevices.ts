@@ -3,12 +3,13 @@
  *
  * 与 useDeviceLinkSettings(被控开关 / controlledBy / 轮询 / getState 全套)不同,这里只
  * 拉设备列表 + 订阅 presence / 本地控制偏好,筛出**可控目标**:
- * `online && remoteControlEnabled && controlEnabled && !isSelf`。
+ * `online && remoteControlEnabled && controlEnabled && !isSelf && !isMobilePlatform(platform)`。
  * 供「添加远程项目」弹窗的设备下拉 + 入口 gate(useHasAnyRemoteTarget)共用,避免在首页
  * 常驻时背上整套设置页的订阅开销。device-link 不可用(未登录 / relay 断)→ 静默空列表。
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 
 export interface ControllableDevice {
   deviceId: string;
@@ -17,11 +18,18 @@ export interface ControllableDevice {
 }
 
 /**
- * 可作为远程项目目标的判定:同账号、在线、对方已开「允许被控」、本机未关闭控制、且不是本机。
- * 纯函数,供 hook 过滤 + 单测复用(守住这条准入,避免误把离线 / 未开被控 / 本机列进去)。
+ * 可作为远程项目目标的判定:同账号、在线、对方已开「允许被控」、本机未关闭控制、
+ * 不是本机、且不是只能作为控制端的手机。
+ * 纯函数,供 hook 过滤 + 单测复用(守住这条准入,避免误把离线 / 未开被控 / 本机 / 手机列进去)。
  */
 export function isControllableDevice(d: DeviceLinkDeviceView): boolean {
-  return d.online && d.remoteControlEnabled && d.controlEnabled && !d.isSelf;
+  return (
+    d.online &&
+    d.remoteControlEnabled &&
+    d.controlEnabled &&
+    !d.isSelf &&
+    !isMobilePlatform(d.platform)
+  );
 }
 
 /** 把设备全量列表(含本机/离线/未开被控)收敛成可控目标视图。纯函数,便于单测整条 transform。 */
@@ -59,7 +67,8 @@ export interface SelectableDevice extends ControllableDevice {
 }
 
 /**
- * 设备切换器的准入:同账号、非本机、本机未关闭控制;对方的「允许被控」**只在它在线时才作数**。
+ * 设备切换器的准入:同账号、非本机、非手机、本机未关闭控制;对方的「允许被控」
+ * **只在它在线时才作数**。
  *
  * 与 isControllableDevice 的差别是不要求 online —— 见 SelectableDevice。
  *
@@ -70,7 +79,9 @@ export interface SelectableDevice extends ControllableDevice {
  * `controlEnabled` 是控制端本地偏好,任何时候都权威,照常要求。
  */
 export function isSelectableDevice(d: DeviceLinkDeviceView): boolean {
-  if (d.isSelf || !d.controlEnabled) return false;
+  // 手机端是控制端而非被控端。即便旧版本或异常 presence 报出 remoteControlEnabled=true，
+  // 也不能把 iOS / Android 暴露成新建对话的运行目标。
+  if (d.isSelf || !d.controlEnabled || isMobilePlatform(d.platform)) return false;
   return d.online ? d.remoteControlEnabled : true;
 }
 

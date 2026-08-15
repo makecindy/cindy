@@ -13,11 +13,14 @@ import {
   GhostTapPendingQueue,
   GhostTurnOriginTracker,
   GhostTurnTranslator,
+  createGhostPrimarySessionFocusTracker,
   createGhostSessionFocusTracker,
   ghostActivityId,
   isGhostEligibleSessionRow,
+  isGhostSessionSwitchEligibleRow,
   normalizeTurnUsage,
   readStatusIsRunning,
+  resolveGhostPrimarySessionId,
   resolveGhostUserHookModel,
   withGhostAssistantHookModel,
   withGhostUserHookModel,
@@ -30,6 +33,224 @@ import {
   type GhostPipeEventPush,
   type InstalledGhost,
 } from '../../../shared/ghost';
+
+describe('did-session-switched primary session resolution', () => {
+  it('allows ordinary sessions and Orca leads, but never workers or background sessions', () => {
+    expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: null })).toBe(true);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'shared', orcaRole: 'lead' })).toBe(true);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'plugin', orcaRole: 'lead' })).toBe(true);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: 'worker' })).toBe(false);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'desktop', orcaRole: 'unknown' })).toBe(false);
+    expect(isGhostSessionSwitchEligibleRow({ source: 'scheduler', orcaRole: null })).toBe(false);
+  });
+
+  it('keeps ordinary and lead ids, and maps a worker to its lead', async () => {
+    const roles = new Map<string, string | null>([
+      ['ordinary', null],
+      ['lead', 'lead'],
+      ['worker', 'worker'],
+    ]);
+    const readSession = vi.fn(async (sessionId: string) =>
+      roles.has(sessionId) ? { orcaRole: roles.get(sessionId) } : null,
+    );
+    const resolveWorkerLead = vi.fn(async () => 'lead');
+
+    await expect(
+      resolveGhostPrimarySessionId('ordinary', readSession, resolveWorkerLead),
+    ).resolves.toBe('ordinary');
+    await expect(resolveGhostPrimarySessionId('lead', readSession, resolveWorkerLead)).resolves.toBe(
+      'lead',
+    );
+    await expect(
+      resolveGhostPrimarySessionId('worker', readSession, resolveWorkerLead),
+    ).resolves.toBe('lead');
+    expect(resolveWorkerLead).toHaveBeenCalledTimes(1);
+    expect(resolveWorkerLead).toHaveBeenCalledWith('worker');
+  });
+
+  it('fails closed for missing rows, unknown roles, missing teams, and lookup failures', async () => {
+    const noTeam = vi.fn(async () => null);
+    await expect(
+      resolveGhostPrimarySessionId('missing', async () => null, noTeam),
+    ).resolves.toBeNull();
+    await expect(
+      resolveGhostPrimarySessionId('unknown', async () => ({ orcaRole: 'unknown' }), noTeam),
+    ).resolves.toBeNull();
+    await expect(
+      resolveGhostPrimarySessionId('worker', async () => ({ orcaRole: 'worker' }), noTeam),
+    ).resolves.toBeNull();
+    await expect(
+      resolveGhostPrimarySessionId(
+        'worker',
+        async () => {
+          throw new Error('db unavailable');
+        },
+        noTeam,
+      ),
+    ).resolves.toBeNull();
+  });
+});
+
+describe('createGhostPrimarySessionFocusTracker', () => {
+  it('deduplicates different workers that resolve to the same lead', async () => {
+    const published: string[] = [];
+    const notify = vi.fn(async (sessionId: string, claim: () => Promise<boolean>) => {
+      if (await claim()) published.push(sessionId);
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(async () => 'lead', notify);
+
+    tracker.note('worker-1');
+    await vi.waitFor(() => expect(published).toEqual(['lead']));
+    tracker.note('worker-2');
+    await Promise.resolve();
+
+    expect(published).toEqual(['lead']);
+  });
+
+  it('ignores a stale async resolution after focus changes', async () => {
+    let resolveFirst!: (sessionId: string | null) => void;
+    let resolveSecond!: (sessionId: string | null) => void;
+    const first = new Promise<string | null>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const second = new Promise<string | null>((resolve) => {
+      resolveSecond = resolve;
+    });
+    const resolve = vi.fn((sessionId: string) => (sessionId === 'worker-1' ? first : second));
+    const published: string[] = [];
+    const notify = vi.fn(async (sessionId: string, claim: () => Promise<boolean>) => {
+      if (await claim()) published.push(sessionId);
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(resolve, notify);
+
+    tracker.note('worker-1');
+    tracker.note('worker-2');
+    resolveSecond('lead-2');
+    await vi.waitFor(() => expect(published).toEqual(['lead-2']));
+    resolveFirst('lead-1');
+    await Promise.resolve();
+
+    expect(published).toEqual(['lead-2']);
+  });
+
+  it('claims publication at the final async boundary', async () => {
+    const pending: Array<{ sessionId: string; claim: () => Promise<boolean> }> = [];
+    const tracker = createGhostPrimarySessionFocusTracker(async () => 'lead', (sessionId, claim) => {
+      pending.push({ sessionId, claim });
+    });
+
+    tracker.note('worker-1');
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    tracker.note('worker-2');
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+
+    await expect(pending[0]?.claim()).resolves.toBe(false);
+    await expect(pending[1]?.claim()).resolves.toBe(true);
+    await expect(pending[1]?.claim()).resolves.toBe(false);
+  });
+
+  it('rejects a lead mapping that changes before publication', async () => {
+    let currentLead = 'lead-1';
+    const pending: Array<{ sessionId: string; claim: () => Promise<boolean> }> = [];
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async () => currentLead,
+      (sessionId, claim) => pending.push({ sessionId, claim }),
+    );
+
+    tracker.note('worker');
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    currentLead = 'lead-2';
+
+    expect(pending[0]?.sessionId).toBe('lead-1');
+    await expect(pending[0]?.claim()).resolves.toBe(false);
+  });
+
+  it('allows the same unresolved focus to retry after the first lookup fails', async () => {
+    let attempts = 0;
+    const published: string[] = [];
+    const notify = vi.fn(async (sessionId: string, claim: () => Promise<boolean>) => {
+      if (await claim()) published.push(sessionId);
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(async () => {
+      attempts += 1;
+      return attempts === 1 ? null : 'lead';
+    }, notify);
+
+    tracker.note('worker');
+    await vi.waitFor(() => expect(attempts).toBe(1));
+    tracker.note('worker');
+    await vi.waitFor(() => expect(published).toEqual(['lead']));
+
+    expect(attempts).toBe(3);
+  });
+
+  it('preserves the published lead while a same-lead worker focus is unresolved', async () => {
+    let workerBAttempts = 0;
+    const published: string[] = [];
+    const notify = vi.fn(async (sessionId: string, claim: () => Promise<boolean>) => {
+      if (await claim()) published.push(sessionId);
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(async (sessionId) => {
+      if (sessionId === 'worker-b') {
+        workerBAttempts += 1;
+        return workerBAttempts === 1 ? null : 'lead-a';
+      }
+      return 'lead-a';
+    }, notify);
+
+    tracker.note('worker-a');
+    await vi.waitFor(() => expect(published).toEqual(['lead-a']));
+    tracker.note('worker-b');
+    await vi.waitFor(() => expect(workerBAttempts).toBe(1));
+    tracker.note('worker-b');
+    await vi.waitFor(() => expect(workerBAttempts).toBe(3));
+
+    expect(published).toEqual(['lead-a']);
+  });
+
+  it('allows the same focus to retry when the publication recheck fails', async () => {
+    let attempts = 0;
+    const pending: Array<{ sessionId: string; claim: () => Promise<boolean> }> = [];
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async () => {
+        attempts += 1;
+        return attempts === 2 ? null : 'lead';
+      },
+      (sessionId, claim) => pending.push({ sessionId, claim }),
+    );
+
+    tracker.note('worker');
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    await expect(pending[0]?.claim()).resolves.toBe(false);
+
+    tracker.note('worker');
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    await expect(pending[1]?.claim()).resolves.toBe(true);
+    expect(attempts).toBe(4);
+  });
+
+  it('clears deduplication when focus explicitly leaves the session', async () => {
+    const published: string[] = [];
+    const notify = vi.fn(async (sessionId: string, claim: () => Promise<boolean>) => {
+      if (await claim()) published.push(sessionId);
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async (sessionId) => (sessionId === 'hidden-worker' ? null : 'lead'),
+      notify,
+    );
+
+    tracker.note('worker');
+    await vi.waitFor(() => expect(published).toHaveLength(1));
+    tracker.note(null);
+    tracker.note('lead');
+    await vi.waitFor(() => expect(published).toHaveLength(2));
+    tracker.note(null);
+    tracker.note('lead');
+    await vi.waitFor(() => expect(published).toHaveLength(3));
+
+    expect(published).toEqual(['lead', 'lead', 'lead']);
+  });
+});
 
 function ghost(
   id: string,
@@ -72,6 +293,33 @@ function makeGateway(overrides: Partial<GhostSubscriptionGatewayDeps> = {}) {
   };
   return { gw: new GhostSubscriptionGateway(deps), sent, running, deps };
 }
+
+describe('subscriptionGateway owner boundary', () => {
+  it('drops buffered events when the owner changes during wake', async () => {
+    let releaseWake!: () => void;
+    let ownerValid = true;
+    const onInvalidated = vi.fn();
+    const wake = vi.fn(() => new Promise<void>((resolve) => { releaseWake = resolve; }));
+    const { gw, sent } = makeGateway({
+      listGhosts: () => [ghost('a', { topics: ['activity'] })],
+      wake,
+      ownerScope: {
+        capture: () => ({ ownerId: 'owner-a', generation: 1 }),
+        isCurrent: () => ownerValid,
+        isStable: () => ownerValid,
+        onInvalidated,
+      },
+    });
+
+    gw.publish('activity', 'did-thinking-start', { sessionId: 's1', blockId: 'b1' });
+    await vi.waitFor(() => expect(wake).toHaveBeenCalledOnce());
+    ownerValid = false;
+    releaseWake();
+
+    await vi.waitFor(() => expect(onInvalidated).toHaveBeenCalledWith('a'));
+    expect(sent).toHaveLength(0);
+  });
+});
 
 const TURN_DATA = { sessionId: 's1', agent: 'claude-code' };
 

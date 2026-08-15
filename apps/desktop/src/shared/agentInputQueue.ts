@@ -30,6 +30,8 @@ export interface AgentInputSerializedFile {
   size: number;
   category: AgentInputFileCategory;
   mimeType: string;
+  /** Renderer-owned image path that originated on this Desktop host. */
+  pathOrigin?: 'desktop-host';
   url?: string;
   originalName?: string;
   base64?: string;
@@ -933,12 +935,15 @@ export function buildMakerUserMessage(
   let hasAnnotatedImage = false;
   for (const f of queued.files ?? []) {
     const type = getAgentInputAttachmentBlockType(f.category, f.ext);
+    const pathOrigin = type === 'image' && f.pathOrigin === 'desktop-host'
+      ? { pathOrigin: f.pathOrigin }
+      : {};
     if (f.url) {
-      blocks.push({ type, path: f.url, mimeType: f.mimeType });
+      blocks.push({ type, path: f.url, mimeType: f.mimeType, ...pathOrigin });
     } else if (f.path && !f.path.startsWith('clipboard://')) {
-      blocks.push({ type, path: f.path, mimeType: f.mimeType });
+      blocks.push({ type, path: f.path, mimeType: f.mimeType, ...pathOrigin });
     } else if (f.base64) {
-      blocks.push({ type, base64: f.base64, mimeType: f.mimeType });
+      blocks.push({ type, base64: f.base64, mimeType: f.mimeType, ...pathOrigin });
     } else {
       continue;
     }

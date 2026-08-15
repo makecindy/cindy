@@ -103,6 +103,7 @@ vi.mock('../../../../../../packages/maker-core/src/agents/pi/rpc-client.js', () 
 }));
 
 import { buildPiAgent } from '../pi-host.js';
+import { setXdGatewayModels } from '../active-catalog.js';
 
 const logger = {
   trace: vi.fn(),
@@ -130,9 +131,17 @@ describe('buildPiAgent roster prompt assembly', () => {
     mkdirSync(workingDir, { recursive: true });
     mkdirSync(state.userDataPath, { recursive: true });
     writeFileSync(state.ripgrepPath, 'fake managed ripgrep');
+    setXdGatewayModels([{
+      id: 'm',
+      name: 'M',
+      contextWindow: 200_000,
+      agents: ['pi'],
+      perAgent: { pi: { wireProtocol: 'openai-responses' } },
+    }]);
   });
 
   afterEach(() => {
+    setXdGatewayModels([]);
     rmSync(root, { recursive: true, force: true });
   });
 

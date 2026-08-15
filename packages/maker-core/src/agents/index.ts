@@ -66,8 +66,14 @@ export {
 export { isNetworkishErrorMessage } from './shared/network-error.js';
 export {
   AUTO_REVIEW_UNAVAILABLE_CODE,
+  AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
+  AUTO_REVIEW_RETRY_ATTEMPTS,
+  AUTO_REVIEW_RETRY_BACKOFF_MS,
+  AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS,
+  autoReviewRetryBudgetMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   getAutoReviewActionTextLength,
+  getAutoReviewDelegateHardCeilingMs,
   isAutoReviewUnavailableNotice,
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
   type AutoReviewDecision,

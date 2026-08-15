@@ -52,6 +52,9 @@ export type IpcErrorCode =
   | 'BUDGET_MODEL_REQUIRES_API_MODE'
   | 'NO_PROVIDER_FOR_AGENT'
   | 'PROVIDER_ROUTE_UNAVAILABLE'
+  // AI 重新命名：仅暴露用户可以采取明确行动的失败原因。
+  | 'TITLE_NO_MATERIAL'
+  | 'TITLE_PROVIDER_UNSUPPORTED'
   // 会话内 /goal
   | 'GOAL_ALREADY_ACTIVE'
   | 'GOAL_NOT_FOUND'
@@ -171,6 +174,7 @@ export type IpcErrorCode =
   | 'MODEL_ACCESS_FAILED' // 拉取/轮换失败(网络或服务端错误),可重试
   | 'MODEL_ACCESS_DISABLED' // 服务端灰度未启用(503)——走手填兜底
   | 'MODEL_ACCESS_UNSUPPORTED' // 企业未接入(403)——XD 网关不可用,不重试
+  | 'MODEL_CATALOG_FETCH_DISABLED' // 模型目录远程拉取被禁用(dev 缺省禁网/XDT_DISABLE_MODELS_FETCH),未发起请求
   | 'PLAN_CHANGE_NOT_AVAILABLE' // 当前订阅不能切换到目标套餐，可返回候选列表重选
   // 钉钉机器人连接
   | 'DINGTALK_AUTH_FAILED' // Client ID / Client Secret 被钉钉拒绝
@@ -257,6 +261,8 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'BUDGET_MODEL_REQUIRES_API_MODE',
   'NO_PROVIDER_FOR_AGENT',
   'PROVIDER_ROUTE_UNAVAILABLE',
+  'TITLE_NO_MATERIAL',
+  'TITLE_PROVIDER_UNSUPPORTED',
   'GOAL_ALREADY_ACTIVE',
   'GOAL_NOT_FOUND',
   'LEARN_BUSY',
@@ -352,6 +358,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'MODEL_ACCESS_FAILED',
   'MODEL_ACCESS_DISABLED',
   'MODEL_ACCESS_UNSUPPORTED',
+  'MODEL_CATALOG_FETCH_DISABLED',
   'PLAN_CHANGE_NOT_AVAILABLE',
   'DINGTALK_AUTH_FAILED',
   'DINGTALK_NETWORK_FAILED',
@@ -388,6 +395,20 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
 
 export function isIpcErrorCode(code: unknown): code is IpcErrorCode {
   return typeof code === 'string' && IPC_ERROR_CODES.has(code as IpcErrorCode);
+}
+
+/**
+ * 标准 IpcError 构造器 —— main 的 throwIpcError 与 renderer 侧预检共用同一形状
+ * (`[code] message` + err.code),避免两处手写漂移。isIpcError 按 err.code 判定,
+ * 不依赖 err.name。
+ */
+export function createIpcError(
+  code: IpcErrorCode,
+  message: string,
+): Error & { code: IpcErrorCode } {
+  const err = new Error(`[${code}] ${message}`) as Error & { code: IpcErrorCode };
+  err.code = code;
+  return err;
 }
 
 export function isIpcError(err: unknown): err is Error & { code: IpcErrorCode } {

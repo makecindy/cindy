@@ -89,6 +89,10 @@ import { PiAgent } from '../index.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
+type PiTestSessionHandle = AgentSessionHandle & {
+  setModel: NonNullable<AgentSessionHandle['setModel']>;
+};
+
 const noopLogger: Logger = {
   trace: () => {}, debug: () => {}, info: () => {}, warn: () => {}, error: () => {}, fatal: () => {},
   child: () => noopLogger,
@@ -157,7 +161,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       ...(mcp?.serverNames
         ? {
           preparePiExtraSpawnConfig: async (_providers, context) => {
-            captured.mcpVendorOptions = context.vendorOptions;
+            captured.mcpVendorOptions = context?.vendorOptions;
             return {
               mcpBridge: {
                 token: 'bridge-token',
@@ -206,6 +210,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
           }] : []),
         ],
       },
+      resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
       registerPiProxySession: (sessionId, token) => {
         captured.proxyRegistration = { sessionId, token };
@@ -219,14 +224,14 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
     includeNextModel = false,
     mcp?: McpSetup,
-  ): Promise<AgentSessionHandle> {
+  ): Promise<PiTestSessionHandle> {
     const agent = new PiAgent(buildDeps(reviewAutoPermissionAction, includeNextModel, mcp));
     return agent.startSession({
       sessionId: 's1',
       workingDir: cwd,
       model: 'm',
       ...(permissionMode ? { permissionMode: permissionMode as never } : {}),
-    });
+    }) as Promise<PiTestSessionHandle>;
   }
 
   /**
@@ -304,6 +309,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   it('locks Review sessions to the local read-only tool surface without memory, MCP, or subagents', async () => {
     const deps = buildDeps(undefined, false, { serverNames: ['cindy_memory', 'cindy_helper'] });
     deps.getGhostRosterPrompt = vi.fn(() => 'PRIVATE ROSTER');
+    deps.resolvePiProjectTrustInput = vi.fn(async () => {
+      throw new Error('Review must not consult project approval resources');
+    });
     const explicitArtifact = path.join(agentHome, 'explicit-artifact.txt');
     const dotenvPath = path.join(cwd, '.env.local');
     writeFileSync(explicitArtifact, 'review me');
@@ -323,8 +331,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       const toolsIndex = captured.args.indexOf('--tools');
       expect(toolsIndex).toBeGreaterThan(-1);
       expect(captured.args[toolsIndex + 1]).toBe('read,grep,find,ls');
+      expect(captured.args).toContain('--no-approve');
+      expect(captured.args).toContain('--no-extensions');
+      expect(captured.args).not.toContain('--skill');
       expect(captured.mcpVendorOptions).toBeUndefined();
       expect(deps.getGhostRosterPrompt).not.toHaveBeenCalled();
+      expect(deps.resolvePiProjectTrustInput).not.toHaveBeenCalled();
 
       const promptIndex = captured.args.indexOf('--append-system-prompt');
       const appendedPrompt = promptIndex >= 0 ? captured.args[promptIndex + 1] : '';
@@ -334,6 +346,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       const configHome = captured.env.PI_CODING_AGENT_DIR;
       expect(configHome).toBeTruthy();
       expect(readdirSync(path.join(configHome!, 'extensions')).sort()).toEqual(['cindy-bridge.ts']);
+      const extensionPaths = captured.args.flatMap((arg, index) =>
+        arg === '--extension' ? [captured.args[index + 1]] : []);
+      expect(extensionPaths).toEqual([
+        path.join(configHome!, 'extensions', 'cindy-bridge.ts'),
+      ]);
 
       const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
       expect(permissionFile).toBeTruthy();
@@ -696,6 +713,29 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect.objectContaining({ id: 'chatgpt/gpt-retired', maxTokens: 96_000 }),
     ]));
     expect(agent.capabilities.availableModels.map((model) => model.id)).toEqual(['m']);
+    await handle.close();
+  });
+
+  it('resume 模型同时缺少公开与 retained 描述符时不会在来源初始化前访问 resolver', async () => {
+    const deps = buildDeps();
+    deps.resolvePiRuntimeModelDescriptor = vi.fn(() => null);
+    deps.resolvePiGatewayModelDescriptor = vi.fn(() => null);
+    const agent = new PiAgent(deps);
+    const resumeFile = path.join(agentHome, 'missing-retained-session.jsonl');
+    writeFileSync(resumeFile, '{}\n');
+
+    const handle = await agent.startSession({
+      sessionId: 'missing-retained-resume',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-missing',
+      providerId: 'openai',
+      resumeSessionId: resumeFile,
+    });
+
+    expect(deps.resolvePiGatewayModelDescriptor).toHaveBeenCalledWith(
+      'openai',
+      'chatgpt/gpt-missing',
+    );
     await handle.close();
   });
 
@@ -1087,7 +1127,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r4', confirmed: true });
   });
 
-  it('auto mode silently blocks gray actions when the current-model reviewer is unavailable', async () => {
+  // 审阅器不可用时降级为「问用户」,不再静默拒绝:宿主侧已重试过,走到这里
+  // 说明确实没救回来。静默否掉一批正常的灰区操作会让 Auto 档看起来像坏了,
+  // 而用户既看不到原因也无法接管。降级后安全边界不变(未点头仍不执行)。
+  it('auto mode hands gray actions to the user when the current-model reviewer is unavailable', async () => {
     const handle = await start('auto');
     let resolverCalls = 0;
     handle.setInteractionResolver?.(async () => {
@@ -1096,8 +1139,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     firePermissionRequest('r7', 'write', { path: '/tmp/outside.txt' });
     await flush();
-    expect(resolverCalls).toBe(0);
-    expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r7', confirmed: false });
+    expect(resolverCalls).toBe(1);
+    expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r7', confirmed: true });
   });
 
   it('ask mode still prompts for in-workspace writes (auto shortcut is auto-only)', async () => {
@@ -1164,7 +1207,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     const events: Array<Record<string, unknown>> = [];
     void (async () => {
-      for await (const e of handle.events()) events.push(e as Record<string, unknown>);
+      for await (const e of handle.events()) {
+        events.push(e as unknown as Record<string, unknown>);
+      }
     })();
     let cardShown = false;
     handle.setInteractionResolver?.(async () => {

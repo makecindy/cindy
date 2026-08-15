@@ -153,6 +153,7 @@ import * as imageCacheStore from '../imageCacheStore.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import { materializeGeneratedImage } from '../cindy-media/generatedMedia.js';
 import { getDbClient } from '../localDb/client/current.js';
+import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence,
   loadAgentInputQueueSnapshot,
@@ -188,6 +189,7 @@ import {
   listReviewHistoricalAttachments,
   loadReviewEvidence,
   readReviewContextFingerprint,
+  reviewBranchBaselineIsCurrent,
   reviewWorkspaceFingerprintIsCurrent,
   resolveReviewArtifactPath,
   SensitiveReviewPathError,
@@ -207,6 +209,7 @@ import {
   ReviewArtifactFingerprintChangedError,
   ReviewArtifactFingerprintLimitError,
 } from '../reviewer/reviewArtifactFingerprint.js';
+import { reviewChangeSetContentPaths } from '../reviewer/reviewEvidenceSafety.js';
 import { enforceReviewCreateOptions } from '../reviewer/reviewSessionPolicy.js';
 import { reviewSourceIdentityMatches } from '../reviewer/reviewSourceIdentity.js';
 import { buildReviewSessionTitle } from '../reviewer/reviewSessionTitle.js';
@@ -591,6 +594,11 @@ import {
 } from '../agent-island/notificationPolicy.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { createOrcaLifecycleService, ORCA_WORKER_READY_MESSAGE } from './orcaLifecycleService.js';
+import { buildUiAssignmentInitialTask } from './orcaUiAssignment.js';
+import {
+  createOrcaUiAssignmentDispatchClaims,
+  createOrcaUiAssignmentHistoryGate,
+} from './orcaUiAssignmentHistoryGate.js';
 import { throwOrcaServiceFailure } from './orcaServiceFailure.js';
 import {
   createOrcaTeamService,
@@ -756,6 +764,10 @@ import {
   runMemoryChangeWithCodexRestart,
   type MemoryChangeParts,
 } from './deferredCodexRestart.js';
+import {
+  createDeferredRestartAppliedWake,
+  createDeferredRestartQueueGate,
+} from './deferredRestartQueueWiring.js';
 import {
   hasAnySessionInTurn,
   isSessionTurnDispatchBoundaryBusy,
@@ -1456,6 +1468,7 @@ interface OrcaCollabService {
     workerSessionId: string;
     workerId: string;
     dispatched: boolean;
+    uiAssignmentSnapshotBeforeMs: number;
     workerPermissionMode: OrcaWorkerPermissionMode;
     dispatchOutcome?: CollabDispatchOutcome;
   }>;
@@ -1656,6 +1669,8 @@ interface EnableOrcaOptions {
   providerId?: string | null;
   /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
+  /** 新建 Lead 专用：先建 Worker，等首条 Lead 输入 accepted 且可查询后再派任务。 */
+  deferDelegateTask?: boolean;
 }
 
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
@@ -5466,6 +5481,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 新控制端只有看到此位才允许给被控端 Orca Team 选择 Worker Full access。
       // 旧 desktop 缺省为 false，避免显式 bypassPermissions 被旧 handler 静默忽略。
       supportsOrcaWorkerPermissionMode: true,
+      // 新控制端只有看到此位，才会让被控端延后 UI initial_task 并在 Lead 首条
+      // 输入 accepted 且历史可查询后走 WORKER_DISPATCH_UI_ASSIGNMENT；旧端继续即时派发。
+      supportsDeferredOrcaUiAssignment: true,
       // 调度更新支持 intervalMs:null 的显式清空表达(IPC 入口归一化成引擎的
       // 「带 key 的 undefined」)。旧 desktop 缺省为 false——旧引擎会把 null 当
       // 已设间隔算出 now+null 立即触发,mobile 必须据此回退旧 wire 形态(省略
@@ -7059,15 +7077,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         throw error;
       }
+      // A committed branch is reviewable content on its own: opening an existing
+      // worktree and running /review has no conversation, no dirty tree and no
+      // turn of its own, yet the branch's commits are exactly what to review.
       if (
         evidence.context.length === 0 &&
         !evidence.workspace?.dirty &&
+        !evidence.branch &&
         !evidence.changeSet &&
         evidence.artifacts.length === 0 &&
         !request.focus
       ) {
         await cleanupPreparedArtifacts?.();
-        throwIpcError('INVALID_PARAMS', 'The current task has no reviewable content yet');
+        // "Nothing to review" and "the branch was there but could not be read"
+        // are different answers, and only the second one tells the user what to
+        // do about it. The prompt-level warning never runs on this path.
+        throwIpcError(
+          'INVALID_PARAMS',
+          evidence.branchUnavailableReason
+            ? `Review could not load this branch's changes (${evidence.branchUnavailableReason})`
+            : 'The current task has no reviewable content yet',
+        );
       }
       let builtPrompt: ReturnType<typeof buildReviewPrompt>;
       try {
@@ -7075,6 +7105,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           focus: evidence.focusPath ? `审查路径：${evidence.focusPath}` : request.focus,
           context: evidence.context,
           workspace: evidence.workspace,
+          branch: evidence.branch,
+          ...(evidence.branchUnavailableReason
+            ? { branchUnavailableReason: evidence.branchUnavailableReason }
+            : {}),
           changeSet: evidence.changeSet,
           artifacts: evidence.artifacts,
           artifactsOmitted: evidence.artifactsOmitted,
@@ -7117,11 +7151,52 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               }
             }
           }
-          // Every harness grants read access to the source working directory.
-          // Git identity/diff fingerprints do not cover ignored build output,
-          // caches or nested-submodule contents, so the reusable result must
-          // also bind the complete non-sensitive readable workspace content.
-          const artifactPaths = [...reviewReadPaths, sourceWorkingDir];
+          // Fingerprint what the review actually covers, not the whole
+          // workspace: explicit artifacts, attachments and the reviewed change
+          // set. The reviewer still reads the full workspace through workingDir,
+          // but an unrelated file edit must not invalidate a completed review,
+          // and a full-workspace content hash cannot stay inside its byte budget
+          // on a real checkout.
+          //
+          // Change-set paths are bound even when Git evidence exists: the Git
+          // fingerprint hashes identity, porcelain status and patches, so an
+          // ignored deliverable built by the reviewed turn (dist/report.html)
+          // is covered by neither unless it is included here.
+          // The change set is the review target only when nothing better was
+          // selected. With uncommitted work or a branch diff in hand it is not
+          // part of the evidence, so neither its gaps nor its paths belong
+          // here — those commits are already represented by the selected
+          // evidence, and binding unreviewed paths would let an unrelated turn
+          // refuse the review or invalidate its result.
+          //
+          // The accepted cost: a branch review does not bind an ignored file
+          // the latest turn happened to produce, so editing that file mid-review
+          // will not invalidate the result. Binding it would mean an unrelated
+          // turn — one whose content is not being reviewed — could refuse the
+          // review outright or expire it. Between "an unreviewed file went
+          // unwatched" and "an unreviewed file blocked a valid review", this
+          // takes the first. Reviewing that deliverable is still available by
+          // attaching it explicitly, which puts it in reviewReadPaths.
+          const changeSetIsReviewed = !evidence.workspace?.dirty && !evidence.branch;
+          const changeSetContent = changeSetIsReviewed
+            ? reviewChangeSetContentPaths(evidence.changeSet, sourceWorkingDir)
+            : { paths: [], truncated: false };
+          // A change set that cannot account for everything the turn changed —
+          // whether it was summarized away or never enumerable in the first
+          // place — cannot serve as a baseline. Refuse instead of publishing a
+          // conclusion whose freshness check silently skipped the remainder.
+          //
+          // A Git fingerprint is not an exemption: it hashes tracked evidence
+          // only, so a missing entry that happens to be an ignored deliverable
+          // is covered by neither side — exactly the gap this change closes.
+          if (changeSetContent.truncated) {
+            throw new ReviewPreconditionError({
+              code: 'artifact-unavailable',
+              message:
+                'The reviewed change set cannot account for every file the turn changed, so Review cannot bind a complete content baseline',
+            });
+          }
+          const artifactPaths = [...new Set([...reviewReadPaths, ...changeSetContent.paths])];
           const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };
           let artifactFingerprint: string;
           try {
@@ -7217,6 +7292,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                     'The task files changed before Review started. Run /review again for the current result.',
                 };
               }
+              // The workspace fingerprint pins HEAD, not the base it is compared
+              // against; a moved base changes the branch diff without touching it.
+              if (!(await reviewBranchBaselineIsCurrent(source.id, evidence.branch))) {
+                return {
+                  code: 'source-files-changed',
+                  message:
+                    'The branch comparison base changed before Review started. Run /review again for the current result.',
+                };
+              }
               if (
                 !(await artifactFingerprintIsCurrent(
                   authorizedArtifactPaths,
@@ -7266,6 +7350,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                   code: 'source-files-changed',
                   message:
                     'The task files changed while Review was running. Run /review again for the current result.',
+                };
+              }
+              if (!(await reviewBranchBaselineIsCurrent(source.id, evidence.branch))) {
+                return {
+                  code: 'source-files-changed',
+                  message:
+                    'The branch comparison base changed while Review was running. Run /review again for the current result.',
                 };
               }
               if (
@@ -7611,6 +7702,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     workerSessionId: string;
     workerId: string;
     dispatched: boolean;
+    uiAssignmentSnapshotBeforeMs: number;
     workerPermissionMode: OrcaWorkerPermissionMode;
     dispatchOutcome?: CollabDispatchOutcome;
   }> {
@@ -7625,6 +7717,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       fast: opts.fast,
       providerId: opts.providerId,
       delegateTask: opts.delegateTask,
+      deferDelegateTask: opts.deferDelegateTask,
       workerPermissionMode: opts.workerPermissionMode,
     });
     if (!result.ok) throwOrcaServiceFailure(result);
@@ -7641,6 +7734,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       workerSessionId: result.workerSessionId,
       workerId: result.workerId,
       dispatched: result.dispatched,
+      uiAssignmentSnapshotBeforeMs: result.uiAssignmentSnapshotBeforeMs,
       workerPermissionMode: result.workerPermissionMode,
       ...(result.dispatchOutcome ? { dispatchOutcome: result.dispatchOutcome } : {}),
     };
@@ -8811,6 +8905,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fast?: unknown;
         providerId?: unknown;
         workerPermissionMode?: unknown;
+        deferDelegateTask?: unknown;
       };
       const workerAgent: AgentKind =
         body.workerAgent === 'codex' ? 'codex' : body.workerAgent === 'pi' ? 'pi' : 'claude-code';
@@ -8820,6 +8915,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         !isOrcaWorkerPermissionMode(body.workerPermissionMode)
       ) {
         throwIpcError('INVALID_PARAMS', 'workerPermissionMode must be auto or bypassPermissions');
+      }
+      if (body.deferDelegateTask !== undefined && typeof body.deferDelegateTask !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'deferDelegateTask must be a boolean');
       }
       return enableOrcaInternal(leadSessionId, {
         workerAgent,
@@ -8835,7 +8933,72 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ? body.providerId.trim()
             : undefined,
         workerPermissionMode: body.workerPermissionMode,
+        deferDelegateTask: body.deferDelegateTask,
       });
+    },
+  );
+
+  ipcMain.handle(
+    MAKER_INVOKE.WORKER_DISPATCH_UI_ASSIGNMENT,
+    async (
+      _e,
+      leadSessionId: unknown,
+      workerSessionId: unknown,
+      initialTask: unknown,
+      snapshotBeforeMs: unknown,
+      waitForLeadHistory: unknown,
+    ) => {
+      if (typeof leadSessionId !== 'string' || leadSessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'leadSessionId required');
+      }
+      if (typeof workerSessionId !== 'string' || workerSessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'workerSessionId required');
+      }
+      if (typeof initialTask !== 'string' || initialTask.trim().length === 0) {
+        throwIpcError('INVALID_PARAMS', 'initialTask required');
+      }
+      if (
+        typeof snapshotBeforeMs !== 'number' ||
+        !Number.isFinite(snapshotBeforeMs) ||
+        snapshotBeforeMs < 0
+      ) {
+        throwIpcError('INVALID_PARAMS', 'snapshotBeforeMs must be a non-negative number');
+      }
+      if (typeof waitForLeadHistory !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'waitForLeadHistory must be a boolean');
+      }
+      if (waitForLeadHistory) {
+        const queryable = await orcaUiAssignmentHistoryGate.waitUntilQueryable(
+          leadSessionId,
+          snapshotBeforeMs,
+        );
+        if (!queryable) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'Lead input was not queryable before the UI assignment deadline',
+          );
+        }
+      }
+      return orcaUiAssignmentDispatchClaims.runOnce(
+        {
+          leadSessionId,
+          workerSessionId,
+          snapshotBeforeMs,
+        },
+        async () => {
+          const result = await orcaTeamService.sendToWorker({
+            callerLeadSessionId: leadSessionId,
+            targetSessionId: workerSessionId,
+            message: buildUiAssignmentInitialTask({
+              leadSessionId,
+              initialTask: initialTask.trim(),
+              snapshotBeforeMs,
+            }),
+          });
+          if (!result.ok) throwOrcaServiceFailure(result);
+          return result;
+        },
+      );
     },
   );
 
@@ -9295,6 +9458,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
     },
   });
+
+  const orcaUiAssignmentHistoryGate = createOrcaUiAssignmentHistoryGate({
+    hasUserMessageSince: async (leadSessionId, snapshotBeforeMs) => {
+      const page = await getMessagesForHistory({
+        sessionIds: [leadSessionId],
+        workdir: null,
+        fromMs: snapshotBeforeMs,
+        toMs: null,
+        agentKind: null,
+        roles: ['user'],
+        includeRewound: false,
+        limit: 1,
+        cursor: null,
+        order: 'asc',
+      });
+      return page.items.length > 0;
+    },
+  });
+  const orcaUiAssignmentDispatchClaims = createOrcaUiAssignmentDispatchClaims();
 
   const orcaLifecycleService = createOrcaLifecycleService({
     getActiveTeamByLead,
@@ -10756,6 +10938,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // durable transcript row.
       void queuedAttachmentOwnership.settleDurable(sessionId, item.clientId);
     },
+    onUserMessageQueryable: (sessionId) => {
+      orcaUiAssignmentHistoryGate.notifyUserMessagePersisted(sessionId);
+    },
     onUserMessagePersistenceFailed: (sessionId, item, opts) => {
       settleQueuedAttachmentPersistenceFailure(sessionId, item.clientId, opts.retainForRetry);
     },
@@ -10870,20 +11055,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       }
     },
-    hasPendingCredentialSwitch: (sessionId) => {
-      if (pendingCredentialSwitchHolder?.has(sessionId) === true) return true;
-      // 延迟 Codex 重启 pending 期间同样挡住本地 Codex live 会话的排队派发 ——
-      // 否则排队消息在旧 host 上接续开新 turn,重启被无限顺延(review P1
-      // 2026-07-23)。未 spawn / 已关闭的会话不挡:fresh spawn 本来就读新设置。
-      // maker 是 dynamic facade,owner 边界窗口会抛 → 按不挡处理(边界会清 pending)。
-      if (deferredCodexRestartHolder?.isPending() !== true) return false;
-      try {
-        const session = maker.listActiveSessions().find((s) => s.id === sessionId);
-        return !!session && session.agentKind === 'codex' && !session.remoteHostId;
-      } catch {
-        return false;
-      }
-    },
+    // 谓词逻辑在 deferredRestartQueueWiring.ts(与 #2506 跨模块回归共用同一
+    // 工厂,harness 不再照抄接线形状);holder 晚于 coordinator 构造,经闭包
+    // 晚绑定。
+    hasPendingCredentialSwitch: createDeferredRestartQueueGate({
+      hasPendingCredentialSwitchEntry: (sessionId) =>
+        pendingCredentialSwitchHolder?.has(sessionId) === true,
+      isDeferredRestartPending: () => deferredCodexRestartHolder?.isPending() === true,
+      listActiveSessions: () => maker.listActiveSessions(),
+    }),
     emitProjection: (projection) => {
       broadcastToAllWindows(MAKER_PUSH.INPUT_PROJECTION, projection);
     },
@@ -11097,11 +11277,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .listActiveSessions()
         .filter((session) => session.agentKind === 'codex' && !session.remoteHostId)
         .map((session) => session.id),
-    onApplied: (sessionIds) => {
-      for (const sessionId of sessionIds) {
-        inputCoordinator.wakeSession(sessionId, 'deferred-codex-restart-applied');
-      }
-    },
+    onApplied: createDeferredRestartAppliedWake({
+      wakeSession: (sessionId, reason) => inputCoordinator.wakeSession(sessionId, reason),
+    }),
     logger: log,
   });
   deferredCodexRestartHolder = deferredCodexRestartService;

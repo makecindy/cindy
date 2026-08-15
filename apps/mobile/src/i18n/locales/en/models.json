@@ -8,6 +8,7 @@
     "emptyDefault": "No models available",
     "loadingDefault": "Loading models…",
     "subscriptionBadge": "Subscription",
+    "subscriptionBadgeCompact": "Sub",
     "backToModels": "Back to model list",
     "agentSwitchHint": "After you pick a model, the next message switches to {{agent}}",
     "crossAgentEmptyHint": "Connect a {{agent}} model source on the controlled device first",
@@ -24,7 +25,16 @@
     "fastMode": "Fast Mode",
     "fastModeAccessibility": "Fast mode {{model}}",
     "reasoningEffort": "Reasoning Effort",
-    "reasoningEffortAccessibility": "Reasoning effort {{label}}"
+    "reasoningEffortAccessibility": "Reasoning effort {{label}}",
+    "effortLevels": {
+      "minimal": "Minimal",
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "xhigh": "Extra High",
+      "max": "Max",
+      "ultra": "Ultra"
+    }
   },
   "agentSwitch": {
     "browseAccessibility": "Browse {{agent}} models",

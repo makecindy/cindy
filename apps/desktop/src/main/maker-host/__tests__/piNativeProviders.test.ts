@@ -4,6 +4,8 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import { derivePiRuntimeFromClaudeRuntime } from '../../../shared/piRuntimeInitialization.js';
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
@@ -23,6 +25,40 @@ const piRuntime = (over: Partial<NonNullable<Cfg['runtimes']['pi']>> = {}) => ({
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
+  it('turns a Claude-derived wizard runtime and copied Pi key into a callable native provider', () => {
+    const derived = derivePiRuntimeFromClaudeRuntime({
+      baseUrl: 'https://api.example/anthropic',
+      headers: { 'x-tenant': 'acme' },
+      models: [{ id: 'model-a', name: 'Model A', contextWindow: 100_000 }],
+    });
+    expect(derived).not.toBeNull();
+
+    const { providers, env } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'wizard-provider',
+          name: 'Wizard Provider',
+          auth: { method: 'apiKey' },
+          runtimes: { pi: derived! },
+        },
+      ],
+      (providerId, agent) =>
+        providerId === 'wizard-provider' && agent === 'pi' ? 'wizard-secret' : null,
+    );
+
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({
+      id: 'wizard-provider',
+      name: 'Wizard Provider',
+      baseUrl: 'https://api.example/anthropic',
+      api: 'anthropic-messages',
+      models: [{ id: 'model-a', name: 'Model A', contextWindow: 100_000 }],
+    });
+    expect(env[providers[0].apiKeyEnvVar!]).toBe('wizard-secret');
+    expect(providers[0].headers?.['x-tenant']).toMatch(/^\$CINDY_PI_KEY_/);
+    expect(Object.values(env)).toContain('acme');
+  });
+
   it('maps wire protocols to pi api forms (openai-chat→openai-completions, undefined→openai-completions)', () => {
     const cases: Array<[string | undefined, string]> = [
       ['anthropic-messages', 'anthropic-messages'],

@@ -1,7 +1,43 @@
 // normalizeGhostPanelWindowsSettings:坏数据 fail-closed 清洗。
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-import { normalizeGhostPanelWindowsSettings } from '../settings-store.js';
+const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-ghost-panel-window-settings-'));
+
+vi.mock('electron', () => ({
+  app: {
+    getPath: (name: string) => {
+      if (name !== 'userData') throw new Error(`unexpected getPath(${name})`);
+      return tmpUserData;
+    },
+  },
+}));
+
+vi.mock('../../maker-host/logger-adapter.js', () => ({
+  desktopMakerLogger: {
+    child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  },
+}));
+
+import {
+  normalizeGhostPanelWindowsSettings,
+  patchGhostPanelWindowEntry,
+  readGhostPanelWindowsSettings,
+  resetGhostPanelWindowSettingsForStartup,
+} from '../settings-store.js';
+
+const settingsFile = path.join(tmpUserData, 'ghost-panel-windows-settings.json');
+
+beforeEach(() => {
+  if (fs.existsSync(settingsFile)) fs.unlinkSync(settingsFile);
+  resetGhostPanelWindowSettingsForStartup();
+});
+
+afterEach(() => {
+  if (fs.existsSync(settingsFile)) fs.unlinkSync(settingsFile);
+});
 
 describe('normalizeGhostPanelWindowsSettings', () => {
   it('合法条目原样保留', () => {
@@ -30,5 +66,29 @@ describe('normalizeGhostPanelWindowsSettings', () => {
         },
       }),
     ).toEqual({ windows: { good: { detached: false, lastOpen: true } } });
+  });
+});
+
+describe('runtime state', () => {
+  it('每个插件的分离状态仅保存在当前进程内', () => {
+    patchGhostPanelWindowEntry('cindy-art', { detached: true, lastOpen: true });
+
+    expect(readGhostPanelWindowsSettings()).toEqual({
+      windows: { 'cindy-art': { detached: true, lastOpen: true } },
+    });
+    expect(fs.existsSync(settingsFile)).toBe(false);
+  });
+
+  it('startup 清空所有插件分离态并删除旧版本偏好文件', () => {
+    patchGhostPanelWindowEntry('cindy-art', { detached: true, lastOpen: true });
+    fs.writeFileSync(
+      settingsFile,
+      JSON.stringify({ windows: { 'cindy-art': { detached: true, lastOpen: true } } }),
+    );
+
+    resetGhostPanelWindowSettingsForStartup();
+
+    expect(readGhostPanelWindowsSettings()).toEqual({ windows: {} });
+    expect(fs.existsSync(settingsFile)).toBe(false);
   });
 });

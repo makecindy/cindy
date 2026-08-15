@@ -580,6 +580,8 @@ export const MAKER_INVOKE = {
   PROJECT_AUTOMATION_REMOVE_SCHEDULE: 'maker:project-automation:remove-schedule',
   // multi-worker Phase 1
   WORKER_CREATE: 'maker:worker:create',
+  /** 新建 Lead 的首条输入 accepted 后，派发此前延后的 UI initial_task。 */
+  WORKER_DISPATCH_UI_ASSIGNMENT: 'maker:worker:dispatch-ui-assignment',
   WORKER_LIST: 'maker:worker:list',
   WORKER_SWITCH_FOCUS: 'maker:worker:switch-focus',
   WORKER_IDLE: 'maker:worker:idle',
@@ -650,6 +652,11 @@ export const MAKER_INVOKE = {
    * 自动同步。窗口生命周期见 main/secondary-windows.ts。
    */
   OPEN_SESSION_IN_NEW_WINDOW: 'maker:open-session-in-new-window',
+  /** Native task drag released outside every Cindy app window. */
+  OPEN_SESSION_IN_NEW_WINDOW_IF_DROPPED_OUTSIDE:
+    'maker:open-session-in-new-window-if-dropped-outside',
+  /** Start the transient task drag preview shown outside Cindy windows. */
+  SESSION_DRAG_PREVIEW_START: 'maker:session-drag-preview:start',
   /**
    * 右侧栏独立子窗口(RSB window)——「侧边栏在新窗口中显示」全局偏好 + 窗口生命周期。
    * 状态机 / 窗口管理见 main/right-sidebar-window/controller.ts。
@@ -702,6 +709,11 @@ export const MAKER_INVOKE = {
  * (typically localStorage 镜像) 推给 main, main 只更新内存缓存供后续工具调用读。
  */
 export const MAKER_SEND = {
+  /**
+   * Stop the transient task drag preview. Release feedback is latency-sensitive
+   * and has no response payload, so it must not pay an invoke/ack round trip.
+   */
+  SESSION_DRAG_PREVIEW_END: 'maker:session-drag-preview:end',
   /**
    * macOS permission coach: begin a native drag of the real Computer Use app
    * bundle into System Settings. Main validates that the sender is the
@@ -777,9 +789,9 @@ export const MAKER_PUSH = {
   MCP_CHANGED: 'maker:mcp:changed',
   /**
    * 自定义供应商上游错误的结构化广播(payload = ProviderUpstreamErrorEvent:
-   * { agent, providerId, code, retryable, status, detail? })。仅「会话显式路由到
-   * user 供应商」的 status≥400 响应触发,main 侧 30s/(providerId,code) 节流。
-   * renderer 据 code 显示 providerError.* i18n toast + 修复引导。
+   * { agent, providerId, code, retryable, status, detail?, errorType?, reqId? })。
+   * 仅「会话显式路由到 user 供应商」的 status≥400 响应触发,main 侧 30s/(providerId, code) 节流。
+   * renderer 据 code 显示 providerError.* i18n toast + 修复引导;errorType / reqId 供诊断详情。
    */
   PROVIDER_UPSTREAM_ERROR: 'maker:provider:upstream-error',
   /**
@@ -875,6 +887,8 @@ export const MAKER_PUSH = {
   RSB_WINDOW_CONTEXT_CHANGED: 'maker:rsb-window:context-changed',
   /** main → 子窗口命令(如 open-terminal),只发子窗口。payload = RsbWindowCommand。 */
   RSB_WINDOW_COMMAND: 'maker:rsb-window:command',
+  /** 子窗口合并回主窗口前交接不可持久化 session 的 tab 快照，只发主窗口。 */
+  RSB_WINDOW_TAB_HANDOFF: 'maker:rsb-window:tab-handoff',
   /** Main-owned H.264 access unit pushed without Renderer polling. */
   IOS_SIMULATOR_H264_FRAME: 'maker:ios-simulator:h264-frame',
   /** Main-owned public route selection/status for the iOS Simulator viewer. */

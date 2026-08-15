@@ -114,10 +114,8 @@ describe('desktop auth session-expiry detection', () => {
     expect(body).toContain(
       "notifySessionExpired(reason === 'account-unavailable' ? 'account-unavailable' : 'unknown');",
     );
-    // 弹窗必须发生在清态之后(渲染面保持到用户确认,但 main 侧立即转登出)。
-    expect(body.indexOf('clearAuth({ notify: false });')).toBeLessThan(
-      body.indexOf('notifySessionExpired('),
-    );
+    expect(body).toContain('await withAccountFreeOwnerCommit({');
+    expect(body).toContain('clearOnFailure: true');
   });
 
   it('device-link 收到 relay auth-failed 时主动 refresh,把被顶下线汇入会话过期出口', () => {
@@ -150,5 +148,57 @@ describe('desktop auth session-expiry detection', () => {
     const teardownEnd = deviceLinkSource.indexOf('\n}\n', teardownStart);
     const teardownBody = deviceLinkSource.slice(teardownStart, teardownEnd);
     expect(teardownBody).toContain('clearTimeout(relayAuthRecoveryRetryTimer);');
+  });
+
+  it('routes replacement refresh through the durable Ghost projection owner boundary', () => {
+    const refreshStart = authSource.indexOf('export async function refresh(): Promise<boolean> {');
+    const refreshEnd = authSource.indexOf('\n}\n\nexport async function logout()', refreshStart);
+    const refreshBody = authSource.slice(refreshStart, refreshEnd);
+
+    expect(authSource).toContain('withGhostSkillProjectionOwnerCommit,');
+    expect(authSource).toContain("from './authBoundaryQuarantine.js';");
+    expect(refreshBody).toContain('writePersistedAuthSession(data.refreshToken, refreshRealm);');
+    expect(refreshBody).toContain('await withCloudOwnerCommit({');
+    expect(refreshBody).toContain('nextOwnerId: nextUser.id');
+    expect(refreshBody.indexOf('writePersistedAuthSession(data.refreshToken, refreshRealm);')).toBeLessThan(
+      refreshBody.indexOf('await withCloudOwnerCommit({'),
+    );
+  });
+
+  it('keeps the Ghost sweep inside the shared owner state machine', () => {
+    const ghostSource = readFileSync(
+      resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    const start = ghostSource.indexOf('export async function suspendAllGhosts(): Promise<void> {');
+    const end = ghostSource.indexOf('\n}\n', start);
+    const body = ghostSource.slice(start, end);
+
+    expect(body).toContain('await removeGhostSkillLinksForRoots(listGhostOwnerProjectionRoots())');
+    expect(body).toContain('throw new Error(`ghost owner skill cleanup incomplete');
+    expect(body).not.toContain('AuthBoundaryQuarantine');
+
+    expect(ghostSource).toContain('await withGhostSkillProjectionReconcile(');
+    expect(ghostSource).toContain('releaseLease = beginGhostMutation(owner);');
+    expect(ghostSource.indexOf('await withGhostSkillProjectionReconcile(')).toBeLessThan(
+      ghostSource.indexOf('releaseLease = beginGhostMutation(owner);'),
+    );
+  });
+
+  it('requires every Ghost runtime lookup to match the durable projection owner', () => {
+    const ghostSource = readFileSync(
+      resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    const start = ghostSource.indexOf('export function isGhostAvailableForActiveSession(');
+    const end = ghostSource.indexOf('\n}\n', start);
+    const body = ghostSource.slice(start, end);
+    expect(body).toContain('isGhostSkillProjectionBoundaryStableForOwner(activeOwner)');
+
+    const requireStart = ghostSource.indexOf('function requireGhostAvailableForActiveSession(');
+    const requireEnd = ghostSource.indexOf('\n}\n', requireStart);
+    const requireBody = ghostSource.slice(requireStart, requireEnd);
+    expect(requireBody).toContain("throwIpcError(\n        'PRECONDITION_FAILED'");
+    expect(requireBody).toContain('isAppSessionBoundaryPending()');
   });
 });

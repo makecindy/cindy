@@ -63,6 +63,18 @@ const workerPanelSource = readTextLf(
   resolve(__dirname, '..', 'features', 'cc-agent', 'OrcaWorkerPanel.tsx'),
   'utf8',
 );
+const workersTabBodySource = readTextLf(
+  resolve(
+    __dirname,
+    '..',
+    'features',
+    'right-sidebar',
+    'plugins',
+    'orca-workers',
+    'OrcaWorkersTabBody.tsx',
+  ),
+  'utf8',
+);
 const workerSelectionHookSource = readTextLf(
   resolve(__dirname, '..', 'features', 'cc-agent', 'hooks', 'useOrcaWorkerSelection.ts'),
   'utf8',
@@ -398,8 +410,9 @@ describe('OrcaWorkflowRoute source invariants', () => {
   });
 
   it('does not navigate the detached sidebar window to settings from the worker toolbar', () => {
-    expect(workerPanelSource).toContain("import { isSidebarWindow } from '@/lib/sidebarWindow';");
-    expect(workerPanelSource).toContain('settingsEnabled={!isSidebarWindow()}');
+    expect(workersTabBodySource).toContain("import { isSidebarWindow } from '@/lib/sidebarWindow';");
+    expect(workersTabBodySource).toContain('<OrcaWorkerPanel {...workerPanelProps} />');
+    expect(workersTabBodySource).toContain('<RoutedOrcaWorkerPanel {...workerPanelProps} />');
   });
 
   it('marks the collaboration worker chat as sidebar-embedded so it cannot replace the host route', () => {

@@ -31,6 +31,7 @@ import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
+import { derivePiRuntimeFromClaudeRuntime } from '@/../shared/piRuntimeInitialization';
 
 import {
   isLoopbackProviderUrl,
@@ -807,6 +808,14 @@ export function AddProviderWizard({
         if (preset.authMethod !== 'none') {
           const k = apiKey.trim();
           if (k) keys[agent] = k;
+        }
+      }
+      const claudeRuntime = runtimes['claude-code'];
+      if (!preset.runtimes.pi && !runtimes.pi && claudeRuntime) {
+        const piRuntime = derivePiRuntimeFromClaudeRuntime(claudeRuntime);
+        if (piRuntime) {
+          runtimes.pi = piRuntime;
+          if (keys['claude-code']) keys.pi = keys['claude-code'];
         }
       }
       if (Object.keys(runtimes).length === 0) {

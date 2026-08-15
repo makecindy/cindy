@@ -20,9 +20,20 @@ import { diffChars } from 'diff';
 
 import { isImageBytesReachable, loadImageSourceBase64 } from '@/lib/annotationBurnIn';
 import { createLogger } from '@/lib/logger';
-import { computeExportScale, domToPngBlob, resolveExportBackground } from '@/lib/rasterizeToImage';
+import {
+  computeExportScale,
+  domToPngBlob,
+  EXPORT_MAX_OUTPUT_PIXELS,
+  resolveExportBackground,
+} from '@/lib/rasterizeToImage';
 
 const log = createLogger('ShareConversationImage');
+
+/**
+ * Desktop 长图可安全使用比共享默认值更长的单边；像素总量仍沿用 4096² 预算，
+ * 所以窄长聊天记录不会因“塞不进正方形”被误拒绝，也不会放大位图内存峰值。
+ */
+const SHARE_IMAGE_MAX_EDGE_PX = 16_384;
 
 /** 消息行挂的定位属性 —— 与 MessageStream 的 wrapper 保持一致。 */
 export const SHARE_SESSION_ATTR = 'data-share-session-id';
@@ -279,11 +290,19 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
 }
 
 /**
- * 分享图至少保留 1x CSS 像素密度。共享光栅化层的 4096 单边上限是内存硬边界，
- * 继续缩小虽能成功导出，但正文会退化成不可读缩略图；这里宁可明确拒绝。
+ * 分享图至少保留 1x CSS 像素密度。聊天记录使用更长的单边上限，但输出像素总量
+ * 仍受共享 4096² 预算约束；任一限制要求缩到 1x 以下时，宁可明确拒绝不可读缩略图。
  */
 export function assertShareImageReadableSize(root: HTMLElement): void {
-  if (computeExportScale(root.scrollWidth, root.scrollHeight, 2) < 1) {
+  if (
+    computeExportScale(
+      root.scrollWidth,
+      root.scrollHeight,
+      2,
+      SHARE_IMAGE_MAX_EDGE_PX,
+      EXPORT_MAX_OUTPUT_PIXELS,
+    ) < 1
+  ) {
     throw new ShareImageTooLargeError();
   }
 }
@@ -535,7 +554,11 @@ export async function buildShareImageBlob({
     );
     assertShareImageReadableSize(stage);
 
-    return await domToPngBlob(stage, { background });
+    return await domToPngBlob(stage, {
+      background,
+      maxEdge: SHARE_IMAGE_MAX_EDGE_PX,
+      maxOutputPixels: EXPORT_MAX_OUTPUT_PIXELS,
+    });
   } finally {
     host.remove();
   }

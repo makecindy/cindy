@@ -58,6 +58,11 @@ describe('iOS Simulator Codex dynamic tools', () => {
         type: 'inputText',
         text: expect.stringContaining('"check_environment"'),
       });
+      // The workflow hint is model guidance: naming a superseded tool would send
+      // the model straight back to the ambiguous name this rename hides.
+      const listed = JSON.stringify(result?.contentItems ?? []);
+      expect(listed).toContain('list_simulator_devices');
+      expect(listed).not.toContain('list_devices');
       expect(callTool).not.toHaveBeenCalled();
     }
   });
