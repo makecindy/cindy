@@ -55,6 +55,7 @@ function clearAccountScopedOutboundState(): void {
   laneAnchors.clear();
   patchableOpeners.clear();
   openerTriggers.clear();
+  clearDeferredOpenerConsumes();
 }
 
 /**
@@ -179,11 +180,16 @@ export function claimPatchableOpener(laneUserId: string): string | null {
  * 会被下一条消息误认领。上限防御, 超限丢最旧。
  */
 export type DeferredOpenerConsume =
-  | { userId: string; markdown: string }
-  | { userId: string; spec: InteractiveCardSpec };
+  | { userId: string; openerId: string; markdown: string }
+  | { userId: string; openerId: string; spec: InteractiveCardSpec };
 
 const MAX_DEFERRED_OPENER_CONSUMES = 50;
 const deferredOpenerConsumes: DeferredOpenerConsume[] = [];
+
+/** 账号替换时清空暂存消费(属旧账号的开场白卡, 新账号不需要)。 */
+function clearDeferredOpenerConsumes(): void {
+  deferredOpenerConsumes.length = 0;
+}
 
 export function deferOpenerConsume(entry: DeferredOpenerConsume): void {
   deferredOpenerConsumes.push(entry);

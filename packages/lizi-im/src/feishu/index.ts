@@ -61,8 +61,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     if (!pinnedClient) return;
     const pending = outbound.drainDeferredOpenerConsumes();
     for (const entry of pending) {
-      const openerId = outbound.claimPatchableOpener(entry.userId);
-      if (!openerId) continue; // 已被后续轮次消费/无 pending
+      // 条目在暂存时就原子预留了 opener(携带 id)— 排空直接使用, 不会被
+      // 后续轮次认领。
+      const openerId = entry.openerId;
       try {
         if ('markdown' in entry) {
           await streamingText.patchMarkdown(openerId, entry.markdown);
@@ -72,8 +73,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         }
       } catch (err) {
         // patch/替换失败: 与即时消费同口径 — 撤回开场白卡(pin 到排空开始
-        // 时的 client)并回拨锚点, 然后**补发终态兜底**(空窗内调用方的兜底
-        // 发送必然失败, 排空时补发确保用户收到结果)。
+        // 时的 client)并回拨锚点, 然后**补发终态兜底**。
         const msg = err instanceof Error ? err.message : String(err);
         this.log.warn(`flushDeferredOpenerConsumes failed: ${msg}`);
         // 撤回始终 pin 到排空开始时的 client — 同账号再次重连(而非换账号)
@@ -88,8 +88,11 @@ export class FeishuIM extends BaseIM implements ChannelIM {
             await this.sendInteractiveCard(entry.userId, entry.spec);
           }
         } catch (sendErr) {
+          // 兜底发送也失败(排空期间再次重连): 条目已 drain, 重新入队 —
+          // 下一次 connected 排空重试, 终态不会因一次失败永久丢失。
           const sendMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
-          this.log.warn(`flushDeferredOpenerConsumes fallback send failed: ${sendMsg}`);
+          this.log.warn(`flushDeferredOpenerConsumes fallback send failed (re-deferred): ${sendMsg}`);
+          outbound.deferOpenerConsume(entry);
         }
       }
     }
@@ -208,11 +211,17 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     // 也不让本轮终态丢失或残留被下一条消息误认领。返回 **false**(仅入队,
     // 未送达): 调用方走兜底发送(空窗内必然失败、被既有 catch 收口), 且
     // /ctr 等「仅送达后进入控制态」的调用方不会被误导。
+    // 重连空窗(stop→start 之间 client 已解绑): **原子预留** opener(claim
+    // 并随条目携带 id)— 后续消息的 streamingText.start 不会误认领这张卡,
+    // 排空时也不会因已被领取而静默丢弃; 排空失败可重新入队重试。
+    const reservedOpenerId = outbound.claimPatchableOpener(userId);
     if (!outbound.getBoundClient()) {
-      outbound.deferOpenerConsume({ userId, markdown });
+      if (reservedOpenerId) {
+        outbound.deferOpenerConsume({ userId, openerId: reservedOpenerId, markdown });
+      }
       return false;
     }
-    const openerId = outbound.claimPatchableOpener(userId);
+    const openerId = reservedOpenerId;
     if (!openerId) return false;
     // 触发时的 client — patch 失败后撤回必须 pin 到它: 中途换凭证时不得
     // 拿新账号的 client 删除旧账号的开场白(客户端 close 后撤回自然失败,
@@ -246,11 +255,14 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     // 同 consumePendingOpenerCard: 重连空窗暂存(未送达, 返回 false),
     // 连接就绪后排空。false 让 safeSendCard 报告未送达 — /ctr 不会在
     // 卡片尚未可见时 enterControl(否则重连失败/排空失败会把用户锁死)。
+    const reservedOpenerId = outbound.claimPatchableOpener(userId);
     if (!outbound.getBoundClient()) {
-      outbound.deferOpenerConsume({ userId, spec });
+      if (reservedOpenerId) {
+        outbound.deferOpenerConsume({ userId, openerId: reservedOpenerId, spec });
+      }
       return false;
     }
-    const openerId = outbound.claimPatchableOpener(userId);
+    const openerId = reservedOpenerId;
     if (!openerId) return false;
     // 同 consumePendingOpenerCard: 撤回 pin 到触发时的 client。
     const triggeringClient = outbound.getBoundClient();
