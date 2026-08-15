@@ -62,6 +62,12 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     const pending = outbound.drainDeferredOpenerConsumes();
     const epoch = outbound.getAccountEpoch();
     for (const entry of pending) {
+      // 每个条目处理前重新校验账号代次: 前一个条目的 patch await 期间换代
+      // 时, 剩余条目不得经新 client 修改旧账号的开场白 — 直接丢弃整批。
+      if (outbound.getAccountEpoch() !== epoch) {
+        this.log.info('flushDeferredOpenerConsumes: account changed — dropping remaining entries');
+        break;
+      }
       // 条目在暂存时就原子预留了 opener(携带 id)— 排空直接使用, 不会被
       // 后续轮次认领。
       const openerId = entry.openerId;
