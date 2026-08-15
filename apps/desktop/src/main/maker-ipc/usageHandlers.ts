@@ -68,6 +68,14 @@ export interface MakerUsageHandlerDeps {
   readReferenceModelPricing(): ModelPricingMap;
   readUsageHistory(opts?: UsageHistoryReadOptions): Promise<UsageHistoryPayload>;
   emptyUsageHistory(): UsageHistoryPayload;
+  /**
+   * sender 归属校验(生产 = security/trustedAppRenderer 的 assertTrustedAppRendererEvent,
+   * 不通过时抛 PERMISSION_DENIED)。经 deps 注入保持 handler body 免 Electron 可测
+   * (规则同 providerHandlers)。USAGE_GLM_CODING_PLAN 会触发凭证背书的出网请求,
+   * **必须**有守卫才放行(electron-security:新 handler 不得以旧代码没校验为由省略;
+   * #2768 首轮 review r3785828851)。
+   */
+  assertTrustedUsageSender?(event: unknown): void;
 }
 
 export function registerMakerUsageHandlers(
@@ -126,9 +134,15 @@ export function registerMakerUsageHandlers(
   });
 
   // GLM Coding Plan 订阅余量 (5h token / MCP 月度窗口) — cached-first, per-provider。
+  // 该 handler 会按 renderer 传入的 providerId 触发凭证背书的出网刷新,先验 sender
+  // 再读任何配置 —— 守卫缺失时 fail-closed 拒绝,不裸跑。
   registry.handle(
     MAKER_INVOKE.USAGE_GLM_CODING_PLAN,
-    async (_e, providerId: unknown) => {
+    async (event, providerId: unknown) => {
+      if (!deps.assertTrustedUsageSender) {
+        throwIpcError('PERMISSION_DENIED', 'usage sender trust guard unavailable');
+      }
+      deps.assertTrustedUsageSender(event);
       return await deps.readGlmCodingPlanUsageSnapshot(requireString(providerId, 'providerId'));
     },
   );

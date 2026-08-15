@@ -54,6 +54,7 @@ import { getCustomProvider } from '../maker-host/custom-provider-store.js';
 import { setClaudeRateLimitHeadersListener } from '../maker-host/claude-rate-limit-headers-observer.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createCodexRateLimitResetService } from '../usage/codexRateLimitReset.js';
 
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
@@ -318,6 +319,10 @@ export function registerMakerUsageIpc(maker: Maker): void {
     readClaudeSubscriptionUsageSnapshot: () => claudeSubscriptionUsageReader.read(),
     readGlmCodingPlanUsageSnapshot: (providerId: string) =>
       glmCodingPlanUsageReader.read(providerId),
+    // GLM 用量 handler 触发凭证背书的出网刷新:先验 sender(electron-security 新
+    // handler 门禁;handler 侧守卫缺失时 fail-closed)。
+    assertTrustedUsageSender: (event) =>
+      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
     readClaudeAccountUsageSnapshot,
     triggerClaudeAccountUsageRefresh,
     readModelPricing: getGatewayModelPricing,

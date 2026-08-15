@@ -134,6 +134,22 @@ export function createGlmCodingPlanUsageReader(
     }
   }
 
+  /**
+   * 飞行中身份是否仍然有效:重读当前源并与飞行发起时的 key 指纹比对(对齐 claude
+   * reader 的 isRefreshStillCurrent 口径)。换 key / 删除发生在 fetch 途中时,旧 key
+   * 的响应(含 'empty' / 401 的清快照副作用)必须整体丢弃 —— 否则迟到写回会把
+   * syncForProviderChange 刚清掉的旧账号快照复活(删除场景无人再纠正,长期残留;
+   * #2768 首轮 review r3785815250 / r3785828831)。
+   * 只在 fetch 完成时调用(每完成一次付一次 source 解析),不在请求热路径上。
+   */
+  async function isRefreshStillCurrent(
+    providerId: string,
+    keyFingerprint: string,
+  ): Promise<boolean> {
+    const current = await readSourceSafe(providerId);
+    return current !== null && deps.fingerprintKey(current.apiKey) === keyFingerprint;
+  }
+
   function refreshWith(
     providerId: string,
     source: GlmCodingPlanProviderSource,
@@ -165,8 +181,9 @@ export function createGlmCodingPlanUsageReader(
         const result = await deps.fetchSnapshot(source);
         s.backoffMs = 0;
         s.backoffUntil = 0;
-        // 换 key 发生在飞行中:旧 key 的响应直接丢弃。
-        if (s.inFlightKeyFingerprint !== keyFingerprint) return;
+        // 换 key / 删除发生在飞行中:重读当前源比对指纹(死守卫教训 —— 与
+        // inFlightKeyFingerprint 自身比较恒过,等于没有检查),旧响应整体丢弃。
+        if (!(await isRefreshStillCurrent(providerId, keyFingerprint))) return;
         if (result === 'empty') {
           // 端点成功但无可解析窗口 —— 清快照降级;不动节流状态(防逐次重打敏感端点)。
           try {
@@ -185,8 +202,9 @@ export function createGlmCodingPlanUsageReader(
       } catch (err) {
         if (deps.isUnauthorizedError(err)) {
           // 只清快照、不动 API key —— 401/403 也可能是套餐类型 / 接口权限不支持;
-          // 节流保留,防每个 read 都重打。
-          if (s.inFlightKeyFingerprint === keyFingerprint) {
+          // 节流保留,防每个 read 都重打。清快照同样要过活体校验:旧 key 的 401
+          // 不得把新 key 刚写入的快照清掉。
+          if (await isRefreshStillCurrent(providerId, keyFingerprint)) {
             try {
               await deps.clearSnapshot(providerId);
             } catch (clearErr) {

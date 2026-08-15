@@ -1200,6 +1200,7 @@ describe('maker usage IPC handlers', () => {
       readReferenceModelPricing: vi.fn(() => ({})),
       readUsageHistory: vi.fn().mockResolvedValue(emptyHistory),
       emptyUsageHistory: vi.fn(() => emptyHistory),
+      assertTrustedUsageSender: vi.fn(),
       ...over,
     };
   }
@@ -1257,6 +1258,31 @@ describe('maker usage IPC handlers', () => {
     await expect(harness.invoke(MAKER_INVOKE.USAGE_GLM_CODING_PLAN, '')).rejects.toMatchObject({
       code: 'INVALID_PARAMS',
     });
+  });
+
+  it('fails closed when the GLM usage sender guard is missing or rejects (#2768 首轮 ③)', async () => {
+    // 守卫缺失:handler 会触发凭证背书的出网刷新 —— fail-closed,不裸跑
+    const noGuard = new IpcHarness();
+    registerMakerUsageHandlers(noGuard, makeUsageDeps({
+      readGlmCodingPlanUsageSnapshot: vi.fn().mockResolvedValue(null),
+      assertTrustedUsageSender: undefined,
+    }));
+    await expect(noGuard.invoke(MAKER_INVOKE.USAGE_GLM_CODING_PLAN, 'p1'))
+      .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+
+    // 守卫拒绝(非本机主页面来源):同样拒绝,不读 provider
+    const readGlmCodingPlanUsageSnapshot = vi.fn().mockResolvedValue(null);
+    const guarded = new IpcHarness();
+    registerMakerUsageHandlers(guarded, makeUsageDeps({
+      readGlmCodingPlanUsageSnapshot,
+      assertTrustedUsageSender: () => {
+        const err = new Error('untrusted sender') as Error & { code?: string };
+        err.code = 'PERMISSION_DENIED';
+        throw err;
+      },
+    }));
+    await expect(guarded.invoke(MAKER_INVOKE.USAGE_GLM_CODING_PLAN, 'p1')).rejects.toThrow();
+    expect(readGlmCodingPlanUsageSnapshot).not.toHaveBeenCalled();
   });
 
   it('keeps the legacy device-link pricing channel flat and USD-only', async () => {

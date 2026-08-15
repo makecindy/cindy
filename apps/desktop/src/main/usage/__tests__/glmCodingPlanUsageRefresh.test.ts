@@ -53,6 +53,8 @@ interface HarnessOptions {
   cached?: GlmCodingPlanUsageSnapshot | null;
   fetchResult?: GlmCodingPlanUsageSnapshot | 'empty' | null;
   fetchError?: Error;
+  /** true = fetchSnapshot 挂起,由测试用 resolveFetch / rejectFetch 手动收尾(飞行中场景)。 */
+  deferFetch?: boolean;
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
@@ -67,10 +69,21 @@ function makeHarness(opts: HarnessOptions = {}) {
     = opts.source === undefined ? SOURCE_A : opts.source;
   let cached: GlmCodingPlanUsageSnapshot | null = opts.cached ?? null;
 
+  let resolveFetch!: (value: GlmCodingPlanUsageSnapshot | 'empty' | null) => void;
+  let rejectFetch!: (reason: Error) => void;
+  const deferredFetch = opts.deferFetch === true
+    ? new Promise<GlmCodingPlanUsageSnapshot | 'empty' | null>((res, rej) => {
+        resolveFetch = res;
+        rejectFetch = rej;
+      })
+    : null;
   const deps: GlmCodingPlanUsageRefreshDeps = {
     readSource: vi.fn(async () => source),
     fetchSnapshot: vi.fn(async () => {
       calls.fetch += 1;
+      // deferred 只作用于首笔 fetch(制造"飞行中");后续 fetch(如换 key 后的链式
+      // 补刷)走正常 mock 值,避免复用同一个已 resolve 的 promise 把旧值喂给新请求。
+      if (deferredFetch && calls.fetch === 1) return deferredFetch;
       if (opts.fetchError) throw opts.fetchError;
       return opts.fetchResult ?? snapshotOf();
     }),
@@ -97,6 +110,8 @@ function makeHarness(opts: HarnessOptions = {}) {
     setCached(next: GlmCodingPlanUsageSnapshot | null) { cached = next; },
     cached: () => cached,
     advance(ms: number) { now += ms; },
+    resolveFetch: (value: GlmCodingPlanUsageSnapshot | 'empty' | null) => resolveFetch(value),
+    rejectFetch: (reason: Error) => rejectFetch(reason),
   };
 }
 
@@ -203,12 +218,12 @@ describe('refresh semantics — errors / throttle', () => {
   it('resets throttle when the key changes (identity change re-arms refresh)', async () => {
     const h = makeHarness();
     await h.reader.read(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
     h.setSource(SOURCE_B);
     h.advance(1_000); // 远未到节流窗口
     await h.reader.read(SOURCE_A.providerId);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(2));
-    expect(h.calls.record.at(-1)?.keyFingerprint).toBe('fp-key-b');
+    // 等写库完成而不是 fetch 计数 —— fetch 先于 record 两个异步拍。
+    await vi.waitFor(() => expect(h.calls.record.at(-1)?.keyFingerprint).toBe('fp-key-b'));
   });
 });
 
@@ -225,7 +240,7 @@ describe('syncForProviderChange()', () => {
     h.setSource(SOURCE_B);
     await h.reader.syncForProviderChange(SOURCE_A.providerId);
     expect(h.calls.clear).toBe(1);
-    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
     expect(h.calls.record[0].keyFingerprint).toBe('fp-key-b');
   });
 });
@@ -242,5 +257,50 @@ describe('per-provider isolation', () => {
     h.setSource(SOURCE_A);
     await h.reader.read('provider-one');
     expect(h.calls.fetch).toBe(2);
+  });
+});
+
+describe('mid-flight identity change (live currency guard, #2768 首轮 ①)', () => {
+  it('discards an old-key response that lands after a key change mid-flight', async () => {
+    // key A 的 fetch 在飞行中,provider 换成 key B —— A 的迟到响应(77%)不得落库,
+    // 只有 B 的补刷快照(默认 40%)可写(旧实现死守卫恒过,A 会复活已清快照)。
+    const h = makeHarness({ deferFetch: true });
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.setSource(SOURCE_B);
+    await h.reader.syncForProviderChange(SOURCE_A.providerId); // 清快照 + 链式补刷 B
+    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 77, resetsAt: null } })); // A 的响应迟到
+    // 补刷 B 走正常 mock(40%),写库以 record 为准等
+    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
+    expect(h.calls.record[0].keyFingerprint).toBe('fp-key-b'); // 只写了 B
+    expect(h.calls.record[0].fiveHour?.utilization).toBe(40); // A 的 77% 没进来
+  });
+
+  it('does not resurrect a snapshot when the provider is deleted mid-flight', async () => {
+    const h = makeHarness({ deferFetch: true, cached: snapshotOf() });
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.setSource(null);
+    await h.reader.syncForProviderChange(SOURCE_A.providerId); // 删除:清快照
+    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 88, resetsAt: null } })); // A 迟到
+    // 给在飞 continuation 一个微任务排空的机会
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.calls.record).toHaveLength(0); // 无任何写回
+    expect(h.cached()).toBeNull(); // 快照保持已清
+    expect(h.calls.fetch).toBe(1); // 无源,不补刷
+  });
+
+  it('a stale 401 does not clear the new key snapshot', async () => {
+    // A 的 fetch 飞行中已换成 B 且 B 快照在手 —— A 的迟到 401 不得清掉 B 的数据。
+    const h = makeHarness({ deferFetch: true });
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    const bSnapshot = snapshotOf({ keyFingerprint: 'fp-key-b' });
+    h.setSource(SOURCE_B);
+    h.setCached(bSnapshot);
+    h.rejectFetch(new UnauthorizedError('401'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.calls.clear).toBe(0); // 未误清
+    expect(h.cached()).toBe(bSnapshot);
   });
 });

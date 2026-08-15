@@ -12,11 +12,13 @@
  * 触发时机:mount 时调一次 getGlmCodingPlan(main 端 cached-first,无快照会触发后台
  * 刷新),后续端点刷新 / CRUD 清快照时 main push。与 useClaudeSubscriptionUsage 的
  * 差别是身份维度:GLM Coding Plan 是用户自定义 provider,快照按 provider 隔离,
- * module cache 也按 providerId 分槽。
+ * module cache 也按 providerId 分槽,**并按 data owner 整体清空**(双账号同名
+ * provider 时防串号,见 ownerScopedGlmSnapshots)。
  */
 
 import { useEffect, useState } from 'react';
 
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { GlmCodingPlanUsageSnapshot } from '../../shared/glmCodingPlanUsage';
 
 export type { GlmCodingPlanUsageSnapshot };
@@ -27,7 +29,24 @@ interface GlmCodingPlanUsagePushPayload {
   snapshot: GlmCodingPlanUsageSnapshot | null;
 }
 
-const lastSnapshots = new Map<string, GlmCodingPlanUsageSnapshot | null>();
+/**
+ * module 缓存按 data owner 隔离(#2768 首轮 review r3785828841):双账号各有同名 GLM
+ * provider 时,provider id 复用而归属换了 —— owner 变化必须整体清空,否则新账号的
+ * chip 会先 seed 上一个账号的余量(IPC 读失败时无限期)。口径对齐
+ * providersSnapshotStore.getCachedProvidersSnapshot 的 owner 校验。
+ * 导出仅供单测直接验证 owner 切换语义,组件代码走 ownerScopedGlmSnapshots()。
+ */
+let glmSnapshotsOwnerId: string | null = null;
+const glmSnapshots = new Map<string, GlmCodingPlanUsageSnapshot | null>();
+
+export function ownerScopedGlmSnapshots(): Map<string, GlmCodingPlanUsageSnapshot | null> {
+  const { dataOwnerId } = getDataOwnerGeneration();
+  if (glmSnapshotsOwnerId !== dataOwnerId) {
+    glmSnapshotsOwnerId = dataOwnerId;
+    glmSnapshots.clear();
+  }
+  return glmSnapshots;
+}
 
 function isSnapshot(v: unknown): v is GlmCodingPlanUsageSnapshot {
   return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -56,7 +75,9 @@ function ensureModuleSubscription(): void {
   moduleSubscriptionInstalled = true;
   api.onGlmCodingPlanUsageChanged((payload: unknown) => {
     if (!isPushPayload(payload)) return;
-    lastSnapshots.set(payload.providerId, payload.snapshot);
+    // 经 owner 校验入口写:换号瞬间的旧账号推送因 owner 已变而落到清空后的新
+    // 缓存(不误清新账号后续写入;旧值随 clear 一起丢弃)。
+    ownerScopedGlmSnapshots().set(payload.providerId, payload.snapshot);
   });
 }
 
@@ -95,11 +116,11 @@ export function useGlmCodingPlanUsage(
   ensureModuleSubscription();
   const key = providerId ?? '';
   const [snapshot, setSnapshot] = useState<GlmCodingPlanUsageSnapshot | null>(() =>
-    enabled && providerId ? (lastSnapshots.get(providerId) ?? null) : null,
+    enabled && providerId ? (ownerScopedGlmSnapshots().get(providerId) ?? null) : null,
   );
 
   useEffect(() => {
-    setSnapshot(enabled && providerId ? (lastSnapshots.get(providerId) ?? null) : null);
+    setSnapshot(enabled && providerId ? (ownerScopedGlmSnapshots().get(providerId) ?? null) : null);
   }, [enabled, providerId]);
 
   useEffect(() => {
@@ -114,12 +135,12 @@ export function useGlmCodingPlanUsage(
         if (cancelled) return;
         const resolved = resolvePersistedGlmCodingPlanRead(persisted);
         if (resolved.action === 'clear') {
-          lastSnapshots.set(providerId, null);
+          ownerScopedGlmSnapshots().set(providerId, null);
           setSnapshot(null);
           return;
         }
         if (resolved.action === 'apply') {
-          lastSnapshots.set(providerId, resolved.snapshot);
+          ownerScopedGlmSnapshots().set(providerId, resolved.snapshot);
           setSnapshot(resolved.snapshot);
         }
       })
@@ -141,8 +162,11 @@ export function useGlmCodingPlanUsage(
     const unsubscribe = api.onGlmCodingPlanUsageChanged((payload: unknown) => {
       if (cancelled || !isPushPayload(payload)) return;
       if (payload.providerId !== providerId) return;
-      const next = reduceGlmCodingPlanPush(lastSnapshots.get(providerId) ?? null, payload);
-      lastSnapshots.set(providerId, next);
+      const next = reduceGlmCodingPlanPush(
+        ownerScopedGlmSnapshots().get(providerId) ?? null,
+        payload,
+      );
+      ownerScopedGlmSnapshots().set(providerId, next);
       setSnapshot(next);
     });
     return () => {

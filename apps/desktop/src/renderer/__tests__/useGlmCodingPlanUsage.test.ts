@@ -10,9 +10,16 @@
  * 不得覆盖当前 provider 的缓存。
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// owner 代际由测试侧可控切换(直接 mock 数据源,不起 React 环境)。
+const ownerState = vi.hoisted(() => ({ dataOwnerId: 'owner-1' as string | null }));
+vi.mock('@/contexts/dataOwnerGeneration', () => ({
+  getDataOwnerGeneration: () => ({ dataOwnerId: ownerState.dataOwnerId }),
+}));
 
 import {
+  ownerScopedGlmSnapshots,
   reduceGlmCodingPlanPush,
   resolvePersistedGlmCodingPlanRead,
 } from '../hooks/useGlmCodingPlanUsage';
@@ -63,5 +70,29 @@ describe('reduceGlmCodingPlanPush', () => {
     expect(reduceGlmCodingPlanPush(current, null)).toBe(current);
     expect(reduceGlmCodingPlanPush(current, { snapshot: SNAPSHOT })).toBe(current);
     expect(reduceGlmCodingPlanPush(current, 'nope')).toBe(current);
+  });
+});
+
+describe('ownerScopedGlmSnapshots (data owner 隔离, #2768 首轮 ②)', () => {
+  beforeEach(() => {
+    // 切到新 owner 触发清空,再回到基准 owner,隔离用例间的残留。
+    ownerState.dataOwnerId = 'reset-owner';
+    ownerScopedGlmSnapshots();
+    ownerState.dataOwnerId = 'owner-1';
+    ownerScopedGlmSnapshots();
+  });
+
+  it('clears cached snapshots when the data owner changes (same-named provider)', () => {
+    ownerScopedGlmSnapshots().set('zhipu-coding-plan', SNAPSHOT);
+    expect(ownerScopedGlmSnapshots().get('zhipu-coding-plan')).toBe(SNAPSHOT);
+    // 换号:双账号同名 GLM provider 复用同一 id —— 缓存必须整体作废,
+    // 否则新账号 chip 先 seed 旧账号余量(IPC 读失败时无限期)。
+    ownerState.dataOwnerId = 'owner-2';
+    expect(ownerScopedGlmSnapshots().get('zhipu-coding-plan')).toBeUndefined();
+    // 新 owner 的写入不回渗旧 owner
+    const next = { ...SNAPSHOT, fiveHour: { utilization: 5, resetsAt: null } };
+    ownerScopedGlmSnapshots().set('zhipu-coding-plan', next);
+    ownerState.dataOwnerId = 'owner-1';
+    expect(ownerScopedGlmSnapshots().get('zhipu-coding-plan')).toBeUndefined();
   });
 });
