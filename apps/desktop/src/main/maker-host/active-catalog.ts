@@ -982,18 +982,18 @@ export function getActiveCatalog(): Catalog {
 }
 
 /**
- * 返回指定 provider/agent 下模型的目录上下文窗口。
+ * 返回指定 provider/agent 下与 wire model 对应的目录模型。
  *
  * Codex wire model 可能带有 `[1m]` 展示后缀，或被 route 的 stripPrefix
  * 包了一层；目录始终保存原始模型 id，因此查询在这里统一做去后缀/去前缀
  * 候选归一，避免各个上游 bridge 自己复制一份模型匹配逻辑。
  */
-export function getCatalogModelContextWindow(
+export function getCatalogModel(
   providerId: string,
   agent: AgentKind,
   modelId: string,
   stripPrefix?: string,
-): number | null {
+): CatalogModel | null {
   const candidates = new Set<string>([modelId, modelId.replace(/\[1m\]$/, '')]);
   if (stripPrefix && modelId.startsWith(stripPrefix)) {
     const stripped = modelId.slice(stripPrefix.length);
@@ -1001,8 +1001,22 @@ export function getCatalogModelContextWindow(
     candidates.add(stripped.replace(/\[1m\]$/, ''));
   }
   const provider = getActiveCatalog().providers.find((entry) => entry.id === providerId);
-  const model = provider?.models[agent]?.find((entry) => candidates.has(entry.id));
-  return model?.contextWindow ?? null;
+  const models = provider?.models[agent];
+  for (const candidate of candidates) {
+    const model = models?.find((entry) => entry.id === candidate);
+    if (model) return model;
+  }
+  return null;
+}
+
+/** 返回指定 provider/agent 下模型的目录上下文窗口。 */
+export function getCatalogModelContextWindow(
+  providerId: string,
+  agent: AgentKind,
+  modelId: string,
+  stripPrefix?: string,
+): number | null {
+  return getCatalogModel(providerId, agent, modelId, stripPrefix)?.contextWindow ?? null;
 }
 
 /** 由 host 的目录加载器(ensureActiveCatalogLoaded)在拉取成功后写入基础目录。 */

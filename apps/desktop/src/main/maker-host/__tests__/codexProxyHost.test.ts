@@ -123,6 +123,10 @@ vi.mock('@cindy/responses-anthropic-bridge', () => ({
   createResponsesAnthropicHandler: mockState.createResponsesAnthropicHandler,
 }));
 
+// Keep the cold SUT transform in collection time instead of charging it to the
+// first 20-second test. Later cases still use freshCodexProxyHost for isolation.
+const initiallyLoadedCodexProxyHost = await import('../codex-proxy-host.js');
+
 async function freshCodexProxyHost() {
   vi.resetModules();
   mockState.createAnthropicCompatProxy.mockReset();
@@ -147,7 +151,7 @@ describe('withCodexUpstreamRecording', () => {
   }) as never;
 
   it('records the override upstream origin for the request thread', async () => {
-    const host = await freshCodexProxyHost();
+    const host = initiallyLoadedCodexProxyHost;
     host.resetCodexThreadUpstreamForTest();
     const wrapped = host.withCodexUpstreamRecording(
       () => ({ upstreamOverride: 'https://api.x.ai/v1' }),
@@ -595,6 +599,117 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       setCustomProviderKeyReader(() => null);
       setCustomProviders([]);
     }
+  });
+
+  async function captureUserChatBridgeCapabilities(options: {
+    supportsImageInput?: boolean;
+    catalogModel?: string;
+    catalogModels?: Array<{ id: string; supportsImageInput?: boolean }>;
+    wireModel?: string;
+    stripPrefix?: string;
+  }) {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const catalogModel = options.catalogModel ?? 'vision-model';
+    const provider = buildUserProvider({
+      id: 'opt-in-chat',
+      name: 'Opt-in Chat',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://chat.example/v1',
+          wireProtocol: 'openai-chat',
+          models: options.catalogModels?.map((model) => ({
+            ...model,
+            name: model.id,
+          })) ?? [
+            {
+              id: catalogModel,
+              name: 'Vision Model',
+              ...(options.supportsImageInput !== undefined
+                ? { supportsImageInput: options.supportsImageInput }
+                : {}),
+            },
+          ],
+        },
+      },
+    });
+    const codexRouting = provider.routing.codex;
+    if (!codexRouting) throw new Error('test provider is missing Codex routing');
+    setCustomProviders([{
+      ...provider,
+      routing: {
+        ...provider.routing,
+        codex: {
+          ...codexRouting,
+          ...(options.stripPrefix
+            ? { modelIdRewrite: { stripPrefix: options.stripPrefix } }
+            : {}),
+        },
+      },
+    }]);
+    setCustomProviderKeyReader(() => 'opt-in-key');
+    host.registerComposed('session-opt-in-image', 'thread-opt-in-image', 'PRODUCT_PROMPT');
+    setSessionProvider('session-opt-in-image', 'opt-in-chat');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: options.wireModel ?? catalogModel, input: 'hello' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { 'thread-id': 'thread-opt-in-image' },
+        },
+      ));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      const handlerCall = (mockState.createResponsesChatHandler.mock.calls as unknown as Array<[
+        { capabilities?: { imageInput?: string } },
+      ]>).at(-1);
+      return handlerCall?.[0].capabilities;
+    } finally {
+      clearSessionProvider('session-opt-in-image');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  }
+
+  it('enables image_url for an explicitly opted-in user-provider model', async () => {
+    const capabilities = await captureUserChatBridgeCapabilities({ supportsImageInput: true });
+    expect(capabilities?.imageInput).toBe('image_url');
+  });
+
+  it.each([undefined, false])(
+    'keeps an unverified user-provider model fail-closed when supportsImageInput is %s',
+    async (supportsImageInput) => {
+      const capabilities = await captureUserChatBridgeCapabilities({ supportsImageInput });
+      expect(capabilities?.imageInput).toBeUndefined();
+    },
+  );
+
+  it('matches opted-in catalog models after stripPrefix and [1m] normalization', async () => {
+    const capabilities = await captureUserChatBridgeCapabilities({
+      supportsImageInput: true,
+      catalogModel: 'vision-model',
+      wireModel: 'vendor/vision-model[1m]',
+      stripPrefix: 'vendor/',
+    });
+    expect(capabilities?.imageInput).toBe('image_url');
+  });
+
+  it('prefers the exact catalog model over an opted-in normalized fallback', async () => {
+    const capabilities = await captureUserChatBridgeCapabilities({
+      catalogModels: [
+        { id: 'vision-model', supportsImageInput: true },
+        { id: 'vendor/vision-model[1m]' },
+      ],
+      wireModel: 'vendor/vision-model[1m]',
+      stripPrefix: 'vendor/',
+    });
+    expect(capabilities?.imageInput).toBeUndefined();
   });
 
   it('does not forward unsupported passthrough fields into the translator', async () => {

@@ -41,6 +41,7 @@ import {
   setCustomProviderModelReasoning,
   setCustomProviderModelReasoningEffort,
   setCustomProviderModelSupportsImageInput,
+  shouldShowCustomProviderModelImageInput,
   updateCustomProvider,
   type RuntimeKeys,
 } from '@/lib/customProviders';
@@ -2132,7 +2133,7 @@ export function CustomProviderDialog({
                       >
                         <Trash2 size={16} />
                       </button>
-                      {activeTab === 'pi' && (
+                      {shouldShowCustomProviderModelImageInput(activeTab, f.wireProtocol) && (
                         <div className="flex basis-full flex-col gap-2 pr-12 text-[var(--settings-section-desc)]">
                           <label className="flex cursor-pointer items-start gap-2">
                             <input
@@ -2160,29 +2161,31 @@ export function CustomProviderDialog({
                               </span>
                             </span>
                           </label>
-                          <label className="flex cursor-pointer items-start gap-2">
-                            <input
-                              type="checkbox"
-                              checked={m.reasoning === true}
-                              onChange={(event) => {
-                                const reasoning = event.currentTarget.checked;
-                                patch(activeTab, (x) => ({
-                                  ...x,
-                                  models: setCustomProviderModelReasoning(x.models, i, reasoning),
-                                }));
-                              }}
-                              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
-                            />
-                            <span className="flex flex-col gap-0.5 leading-snug">
-                              <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
-                                {t('settings.providers.custom.fields.modelSupportsReasoning')}
+                          {activeTab === 'pi' && (
+                            <label className="flex cursor-pointer items-start gap-2">
+                              <input
+                                type="checkbox"
+                                checked={m.reasoning === true}
+                                onChange={(event) => {
+                                  const reasoning = event.currentTarget.checked;
+                                  patch(activeTab, (x) => ({
+                                    ...x,
+                                    models: setCustomProviderModelReasoning(x.models, i, reasoning),
+                                  }));
+                                }}
+                                className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
+                              />
+                              <span className="flex flex-col gap-0.5 leading-snug">
+                                <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
+                                  {t('settings.providers.custom.fields.modelSupportsReasoning')}
+                                </span>
+                                <span className="text-11">
+                                  {t('settings.providers.custom.fields.modelSupportsReasoningHelp')}
+                                </span>
                               </span>
-                              <span className="text-11">
-                                {t('settings.providers.custom.fields.modelSupportsReasoningHelp')}
-                              </span>
-                            </span>
-                          </label>
-                          {m.reasoning === true && (
+                            </label>
+                          )}
+                          {activeTab === 'pi' && m.reasoning === true && (
                             <div className="ml-6 flex flex-col gap-1.5">
                               <span className="text-11 font-medium text-[var(--settings-section-sublabel)]">
                                 {t('settings.providers.custom.fields.modelReasoningEfforts')}

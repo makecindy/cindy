@@ -113,6 +113,14 @@ export function setCustomProviderModelSupportsImageInput(
   });
 }
 
+/** 图片开关只暴露给确实会消费该元数据的 runtime/protocol。 */
+export function shouldShowCustomProviderModelImageInput(
+  agent: AgentKind,
+  wireProtocol: ProviderWireProtocol,
+): boolean {
+  return agent === 'pi' || (agent === 'codex' && wireProtocol === 'openai-chat');
+}
+
 export function setCustomProviderModelReasoning(
   models: readonly ProviderRuntimeModelConfig[],
   targetIndex: number,

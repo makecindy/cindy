@@ -16,6 +16,7 @@ import {
   setCustomProviderModelReasoning,
   setCustomProviderModelReasoningEffort,
   setCustomProviderModelSupportsImageInput,
+  shouldShowCustomProviderModelImageInput,
   updateCustomProvider,
 } from '../customProviders';
 import type {
@@ -286,6 +287,19 @@ describe('setCustomProviderModelSupportsImageInput', () => {
   });
 });
 
+describe('shouldShowCustomProviderModelImageInput', () => {
+  it.each([
+    ['pi', 'openai-chat', true],
+    ['pi', 'openai-responses', true],
+    ['codex', 'openai-chat', true],
+    ['codex', 'openai-responses', false],
+    ['codex', 'anthropic-messages', false],
+    ['claude-code', 'anthropic-messages', false],
+  ] as const)('returns %s / %s => %s', (agent, wireProtocol, expected) => {
+    expect(shouldShowCustomProviderModelImageInput(agent, wireProtocol)).toBe(expected);
+  });
+});
+
 describe('Pi custom-provider reasoning controls', () => {
   it('enables conservative default levels and removes the capability when disabled', () => {
     const models = [{ id: 'reasoner', name: 'Reasoner' }];
@@ -377,7 +391,7 @@ describe('customProviderModelConfigFromCatalogModel', () => {
     });
   });
 
-  it('preserves an explicit Pi image-input capability through the edit round trip', () => {
+  it('preserves an explicit image-input capability through the edit round trip', () => {
     expect(
       customProviderModelConfigFromCatalogModel({
         id: 'vision-model',
@@ -504,6 +518,7 @@ describe('providerViewToCustomProviderConfig', () => {
             contextWindow: 200_000,
             efforts: [],
             defaultEffort: null,
+            supportsImageInput: true,
           },
         ],
       },
@@ -520,7 +535,7 @@ describe('providerViewToCustomProviderConfig', () => {
           requestPath: '/tenant/acme/infer?stream=1',
           wireProtocol: 'openai-chat',
           modelsUrl: 'http://127.0.0.1:4000/v1/models',
-          models: [{ id: 'local-model', name: 'Local Model' }],
+          models: [{ id: 'local-model', name: 'Local Model', supportsImageInput: true }],
         },
       },
     });

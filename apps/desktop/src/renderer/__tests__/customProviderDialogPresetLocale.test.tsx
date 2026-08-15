@@ -50,6 +50,7 @@ vi.mock('@/lib/customProviders', () => ({
   setCustomProviderModelReasoning: vi.fn(),
   setCustomProviderModelReasoningEffort: vi.fn(),
   setCustomProviderModelSupportsImageInput: vi.fn(),
+  shouldShowCustomProviderModelImageInput: vi.fn(() => false),
   updateCustomProvider: vi.fn(),
 }));
 
