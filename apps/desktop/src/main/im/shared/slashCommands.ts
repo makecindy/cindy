@@ -106,7 +106,12 @@ export function createSlashHandlers(
           log.warn(`consumePendingOpener withMarkdown failed (fallback to normal send): ${msg}`);
         }
       }
-      await im.sendMarkdownText(ctx.userId, text);
+      const fallbackOpenerId = richIm?.takeNotedFallbackOpenerId?.(ctx.userId, 'markdown');
+      if (fallbackOpenerId) {
+        await im.sendMarkdownText(ctx.userId, text, { fallbackOpenerId });
+      } else {
+        await im.sendMarkdownText(ctx.userId, text);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`safeSendText failed (non-fatal): ${msg}`);
@@ -133,7 +138,12 @@ export function createSlashHandlers(
         log.warn('safeSendCard failed: channel has no rich-card output');
         return false;
       }
-      await richIm.sendInteractiveCard(ctx.userId, spec);
+      const fallbackOpenerId = richIm.takeNotedFallbackOpenerId?.(ctx.userId, 'spec');
+      if (fallbackOpenerId) {
+        await richIm.sendInteractiveCard(ctx.userId, spec, { fallbackOpenerId });
+      } else {
+        await richIm.sendInteractiveCard(ctx.userId, spec);
+      }
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

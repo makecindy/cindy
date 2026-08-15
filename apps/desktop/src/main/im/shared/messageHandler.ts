@@ -183,7 +183,10 @@ export function createMessageHandler(
         : false;
       if (!openerConsumed) {
         try {
-          await im.sendMarkdownText(event.senderId, reply, { threadTs: event.scopeKey });
+          await im.sendMarkdownText(event.senderId, reply, {
+            threadTs: event.scopeKey,
+            fallbackOpenerId: richIm?.takeNotedFallbackOpenerId?.(event.senderId, 'markdown'),
+          });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.warn(`!stop reply failed (non-fatal): ${msg}`);
@@ -251,6 +254,7 @@ export function createMessageHandler(
           try {
             await im.sendMarkdownText(event.senderId, errorText, {
               threadTs: event.scopeKey,
+              fallbackOpenerId: richIm?.takeNotedFallbackOpenerId?.(event.senderId, 'markdown'),
             });
           } catch {
             /* 发送失败与卡残留同一最终边界 */
@@ -274,6 +278,7 @@ export function createMessageHandler(
         try {
           await im.sendText(event.senderId, notice, {
             threadTs: event.scopeKey,
+            fallbackOpenerId: richIm?.takeNotedFallbackOpenerId?.(event.senderId, 'markdown'),
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -409,6 +414,7 @@ export function createMessageHandler(
         try {
           await im.sendText(event.senderId, ui.agent.sendInternalError(msg), {
             threadTs: event.scopeKey,
+            fallbackOpenerId: richIm?.takeNotedFallbackOpenerId?.(event.senderId, 'markdown'),
           });
         } catch {
           /* swallow */

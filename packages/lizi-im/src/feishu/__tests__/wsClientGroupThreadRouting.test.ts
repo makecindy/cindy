@@ -30,7 +30,7 @@ const mocks = {
   replyText: vi.fn(async () => ({ messageId: 'om_reply' })),
   // 返回 degraded = 开话题失败(降级回群 lane), 单测按用例覆盖。
   openThread: vi.fn<
-    () => Promise<
+    (messageId?: string) => Promise<
       | { kind: 'opened'; messageId: string; threadId: string }
       | { kind: 'degraded' }
       | { kind: 'orphaned'; openerMessageId: string }
@@ -304,6 +304,35 @@ describe('feishu group thread routing', () => {
     expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
     // 首次 + 三档延迟重试
     expect(mocks.openThread).toHaveBeenCalledTimes(4);
+    vi.useRealTimers();
+  });
+
+  it('stop 挂起超过 100 条 unconfirmed 后同账号重连仍恢复最早一条', async () => {
+    vi.useFakeTimers();
+    mocks.openThread.mockResolvedValue({ kind: 'unconfirmed' });
+    const events = collectMessages();
+    await connect();
+
+    for (let i = 0; i < 101; i += 1) {
+      await mocks.eventHandlers['im.message.receive_v1'](
+        groupMainFlowMessage(`回执不确定${i}`, `om_unconfirmed_${i}`),
+      );
+    }
+    expect(events).toHaveLength(0);
+
+    await wsClient.stop({ announceOffline: false, reason: 'same-account-reconnect' });
+    await connect();
+    mocks.openThread.mockClear();
+    mocks.openThread.mockImplementation(async (messageId?: string) => {
+      if (messageId === 'om_unconfirmed_0') {
+        return { kind: 'opened' as const, messageId: 'om_first', threadId: 'omt_first' };
+      }
+      return { kind: 'unconfirmed' as const };
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledWith('om_unconfirmed_0');
+    expect(events.some((event) => event.messageId === 'om_unconfirmed_0')).toBe(true);
     vi.useRealTimers();
   });
 

@@ -55,10 +55,15 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   private readonly completedOpenerConsumes = new Map<string, { messageId: string }>();
   private readonly completedOpenerConsumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
-   * 空窗暂存后, 只有「原兜底发送」可以认领排空结果。key = kind:userId →
-   * openerId。同 lane 的后续发送(/help 等)不得复用上一轮 /new 的 messageId。
+   * 空窗暂存后, 只有「原兜底发送」可以认领排空结果。按 openerId 记账 —
+   * 同 lane 的后续发送(/help 等)不得复用上一轮的 messageId。
    */
-  private readonly pendingFallbackOpenerIds = new Map<string, string>();
+  private readonly pendingFallbackOpenerIds = new Map<
+    string,
+    { userId: string; kind: 'markdown' | 'spec' }
+  >();
+  /** consume 暂存后按轮次压栈, 原兜底发送 pop 出本轮 openerId。 */
+  private readonly notedFallbackStacks = new Map<string, string[]>();
   private retryFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private retryFlushAttempt = 0;
   private disposed = false;
@@ -79,19 +84,38 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     return `${kind}:${userId}`;
   }
 
-  private notePendingFallback(userId: string, kind: 'markdown' | 'spec', openerId: string): void {
-    this.pendingFallbackOpenerIds.set(this.openerConsumeKey(userId, kind), openerId);
-  }
-
-  private takePendingFallbackOpenerId(
+  private notePendingFallback(
     userId: string,
     kind: 'markdown' | 'spec',
-  ): string | undefined {
+    openerId: string,
+    rememberForCaller = false,
+  ): void {
+    this.pendingFallbackOpenerIds.set(openerId, { userId, kind });
+    if (!rememberForCaller) return;
     const key = this.openerConsumeKey(userId, kind);
-    const openerId = this.pendingFallbackOpenerIds.get(key);
-    if (!openerId) return undefined;
-    this.pendingFallbackOpenerIds.delete(key);
+    const stack = this.notedFallbackStacks.get(key) ?? [];
+    stack.push(openerId);
+    this.notedFallbackStacks.set(key, stack);
+  }
+
+  takeNotedFallbackOpenerId(userId: string, kind: 'markdown' | 'spec'): string | undefined {
+    const key = this.openerConsumeKey(userId, kind);
+    const stack = this.notedFallbackStacks.get(key);
+    const openerId = stack?.pop();
+    if (stack && stack.length === 0) this.notedFallbackStacks.delete(key);
     return openerId;
+  }
+
+  private claimFallbackOpenerId(
+    userId: string,
+    kind: 'markdown' | 'spec',
+    fallbackOpenerId: string | undefined,
+  ): string | undefined {
+    if (!fallbackOpenerId) return undefined;
+    const meta = this.pendingFallbackOpenerIds.get(fallbackOpenerId);
+    if (!meta || meta.userId !== userId || meta.kind !== kind) return undefined;
+    this.pendingFallbackOpenerIds.delete(fallbackOpenerId);
+    return fallbackOpenerId;
   }
 
   private rememberCompletedOpenerConsume(openerId: string, messageId: string): void {
@@ -319,6 +343,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     this.completedOpenerConsumeTimers.clear();
     this.completedOpenerConsumes.clear();
     this.pendingFallbackOpenerIds.clear();
+    this.notedFallbackStacks.clear();
     this.offImStatus();
     cancelAppRegistration();
     await this.flushChain.catch(() => undefined);
@@ -356,9 +381,16 @@ export class FeishuIM extends BaseIM implements ChannelIM {
 
   // ── outbound ────────────────────────────────────────────────────────────────
 
-  async sendText(userId: string, text: string): Promise<{ messageId: string }> {
-    return this.sendWithDeferredOpenerConsume(userId, 'markdown', () =>
-      outbound.sendText(userId, text),
+  async sendText(
+    userId: string,
+    text: string,
+    opts?: { threadTs?: string; fallbackOpenerId?: string },
+  ): Promise<{ messageId: string }> {
+    return this.sendWithDeferredOpenerConsume(
+      userId,
+      'markdown',
+      () => outbound.sendText(userId, text),
+      opts?.fallbackOpenerId,
     );
   }
 
@@ -373,9 +405,16 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * 适合发"提示语"类消息 — 文案里有 *strong*, `code`, [link] 等且想让用户
    * 看到正确渲染的场合。
    */
-  async sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }> {
-    return this.sendWithDeferredOpenerConsume(userId, 'markdown', () =>
-      outbound.sendInteractive(userId, { body: markdown, buttons: [] }),
+  async sendMarkdownText(
+    userId: string,
+    markdown: string,
+    opts?: { threadTs?: string; fallbackOpenerId?: string },
+  ): Promise<{ messageId: string }> {
+    return this.sendWithDeferredOpenerConsume(
+      userId,
+      'markdown',
+      () => outbound.sendInteractive(userId, { body: markdown, buttons: [] }),
+      opts?.fallbackOpenerId,
     );
   }
 
@@ -411,7 +450,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     if (!outbound.getBoundClient()) {
       if (reservedOpenerId) {
         outbound.deferOpenerConsume({ userId, openerId: reservedOpenerId, markdown });
-        this.notePendingFallback(userId, 'markdown', reservedOpenerId);
+        this.notePendingFallback(userId, 'markdown', reservedOpenerId, true);
       }
       return false;
     }
@@ -449,7 +488,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     if (!outbound.getBoundClient()) {
       if (reservedOpenerId) {
         outbound.deferOpenerConsume({ userId, openerId: reservedOpenerId, spec });
-        this.notePendingFallback(userId, 'spec', reservedOpenerId);
+        this.notePendingFallback(userId, 'spec', reservedOpenerId, true);
       }
       return false;
     }
@@ -494,7 +533,12 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     if (!outbound.getBoundClient()) {
       this.log.warn('consumePendingOpener: reconnect window — re-deferred');
       outbound.deferOpenerConsume({ userId, openerId, ...payload });
-      this.notePendingFallback(userId, 'markdown' in payload ? 'markdown' : 'spec', openerId);
+      this.notePendingFallback(
+        userId,
+        'markdown' in payload ? 'markdown' : 'spec',
+        openerId,
+        true,
+      );
       return false;
     }
     if (triggeringClient) {
@@ -515,10 +559,18 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   async sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
-    opts?: { threadTs?: string; deliverToOwnerDm?: boolean; ownerDmNote?: string },
+    opts?: {
+      threadTs?: string;
+      fallbackOpenerId?: string;
+      deliverToOwnerDm?: boolean;
+      ownerDmNote?: string;
+    },
   ): Promise<{ messageId: string }> {
-    return this.sendWithDeferredOpenerConsume(userId, 'spec', () =>
-      outbound.sendInteractive(userId, spec, opts),
+    return this.sendWithDeferredOpenerConsume(
+      userId,
+      'spec',
+      () => outbound.sendInteractive(userId, spec, opts),
+      opts?.fallbackOpenerId,
     );
   }
 
@@ -531,10 +583,11 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     userId: string,
     kind: 'markdown' | 'spec',
     send: () => Promise<{ messageId: string }>,
+    requestedFallbackOpenerId?: string,
   ): Promise<{ messageId: string }> {
     const epoch = outbound.getAccountEpoch();
     const clientAtTake = outbound.getBoundClient();
-    const fallbackOpenerId = this.takePendingFallbackOpenerId(userId, kind);
+    const fallbackOpenerId = this.claimFallbackOpenerId(userId, kind, requestedFallbackOpenerId);
     if (fallbackOpenerId) {
       const flushing = this.flushingOpenerConsumes.get(fallbackOpenerId);
       if (flushing) {
@@ -547,7 +600,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       }
     }
     const entry = fallbackOpenerId
-      ? outbound.takeMatchingDeferredOpenerConsume(userId, kind)
+      ? outbound.takeDeferredOpenerConsumeById(fallbackOpenerId)
       : undefined;
     if (entry) {
       if (entry.epoch !== epoch) {

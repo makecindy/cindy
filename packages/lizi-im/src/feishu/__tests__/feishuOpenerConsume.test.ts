@@ -36,6 +36,16 @@ const outboundMocks = vi.hoisted(() => ({
         } & { epoch: number })
       | undefined
   >(() => undefined),
+  takeDeferredOpenerConsumeById: vi.fn<
+    (openerId: string) =>
+      | ({
+          userId: string;
+          openerId: string;
+          markdown?: string;
+          spec?: { body: string; buttons: unknown[] };
+        } & { epoch: number })
+      | undefined
+  >(() => undefined),
   drainEvictedOpeners: vi.fn(() => []),
   getAccountEpoch: vi.fn(() => 0),
   recallOwnMessage: vi.fn(async () => true),
@@ -54,6 +64,7 @@ vi.mock('../outbound.js', () => ({
   deferOpenerConsume: outboundMocks.deferOpenerConsume,
   drainDeferredOpenerConsumes: outboundMocks.drainDeferredOpenerConsumes,
   takeMatchingDeferredOpenerConsume: outboundMocks.takeMatchingDeferredOpenerConsume,
+  takeDeferredOpenerConsumeById: outboundMocks.takeDeferredOpenerConsumeById,
   drainEvictedOpeners: outboundMocks.drainEvictedOpeners,
   getAccountEpoch: outboundMocks.getAccountEpoch,
   sendInteractive: outboundMocks.sendInteractive,
@@ -123,6 +134,8 @@ describe('FeishuIM opener consumption failure semantics', () => {
     outboundMocks.drainDeferredOpenerConsumes.mockReturnValue([]);
     outboundMocks.takeMatchingDeferredOpenerConsume.mockReset();
     outboundMocks.takeMatchingDeferredOpenerConsume.mockReturnValue(undefined);
+    outboundMocks.takeDeferredOpenerConsumeById.mockReset();
+    outboundMocks.takeDeferredOpenerConsumeById.mockReturnValue(undefined);
     outboundMocks.drainEvictedOpeners.mockReset();
     outboundMocks.drainEvictedOpeners.mockReturnValue([]);
     outboundMocks.getAccountEpoch.mockReset();
@@ -159,9 +172,17 @@ describe('FeishuIM opener consumption failure semantics', () => {
     outboundMocks.getBoundClient.mockReturnValue({ fake: 'client' });
   }
 
+  async function sendOriginalFallback(
+    userId: string,
+    text: string,
+  ): Promise<{ messageId: string }> {
+    const fallbackOpenerId = im.takeNotedFallbackOpenerId(userId, 'markdown');
+    return im.sendText(userId, text, { fallbackOpenerId });
+  }
+
   it('同账号未换代时最终发送失败也重新暂存, 进入退避排空', async () => {
     await queueOriginalFallback('om_reserved', '终态');
-    outboundMocks.takeMatchingDeferredOpenerConsume.mockReturnValueOnce({
+    outboundMocks.takeDeferredOpenerConsumeById.mockReturnValueOnce({
       userId: 'g/oc_c/omt_t',
       openerId: 'om_reserved',
       markdown: '终态',
@@ -172,7 +193,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     );
     outboundMocks.sendText.mockRejectedValueOnce(new Error('rate limited'));
 
-    await expect(im.sendText('g/oc_c/omt_t', '兜底')).rejects.toThrow('rate limited');
+    await expect(sendOriginalFallback('g/oc_c/omt_t', '兜底')).rejects.toThrow('rate limited');
     expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalled();
     expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -210,18 +231,15 @@ describe('FeishuIM opener consumption failure semantics', () => {
   it('兜底发送就地收口预留 opener(不另发、不留思考卡)', async () => {
     // 空窗暂存后连接恢复: 兜底发送应优先 patch 预留卡, 而不是另发。
     await queueOriginalFallback('om_reserved', '回复');
-    outboundMocks.takeMatchingDeferredOpenerConsume.mockReturnValueOnce({
+    outboundMocks.takeDeferredOpenerConsumeById.mockReturnValueOnce({
       userId: 'g/oc_c/omt_t',
       openerId: 'om_reserved',
       markdown: '回复',
       epoch: 0,
     });
 
-    const result = await im.sendText('g/oc_c/omt_t', '兜底');
-    expect(outboundMocks.takeMatchingDeferredOpenerConsume).toHaveBeenCalledWith(
-      'g/oc_c/omt_t',
-      'markdown',
-    );
+    const result = await sendOriginalFallback('g/oc_c/omt_t', '兜底');
+    expect(outboundMocks.takeDeferredOpenerConsumeById).toHaveBeenCalledWith('om_reserved');
     expect(streamingText.patchMarkdown).toHaveBeenCalledWith('om_reserved', '回复');
     expect(result).toEqual({ messageId: 'om_reserved' });
     expect(outboundMocks.sendText).not.toHaveBeenCalled();
@@ -264,7 +282,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     outboundMocks.takeMatchingDeferredOpenerConsume.mockReturnValue(undefined);
 
     feishuEvents.emit('imStatus', { kind: 'connected', appId: 'cli' });
-    const sendP = im.sendText('g/oc_c/omt_t', '兜底');
+    const sendP = sendOriginalFallback('g/oc_c/omt_t', '兜底');
     resolvePatch();
     await expect(sendP).resolves.toEqual({ messageId: 'om_flushing' });
     expect(outboundMocks.sendText).not.toHaveBeenCalled();
@@ -280,10 +298,31 @@ describe('FeishuIM opener consumption failure semantics', () => {
     feishuEvents.emit('imStatus', { kind: 'connected', appId: 'cli' });
     for (let i = 0; i < 12; i += 1) await Promise.resolve();
 
-    await expect(im.sendText('g/oc_c/omt_t', '兜底')).resolves.toEqual({
+    await expect(sendOriginalFallback('g/oc_c/omt_t', '兜底')).resolves.toEqual({
       messageId: 'om_done',
     });
     expect(outboundMocks.sendText).not.toHaveBeenCalled();
+  });
+
+  it('排空完成后同 lane 后续发送不得认领旧 opener 终态', async () => {
+    await queueOriginalFallback('om_done', '终态回复');
+    outboundMocks.drainDeferredOpenerConsumes.mockReturnValueOnce([
+      { userId: 'g/oc_c/omt_t', openerId: 'om_done', markdown: '终态回复' },
+    ]);
+    outboundMocks.takeMatchingDeferredOpenerConsume.mockReturnValue(undefined);
+
+    feishuEvents.emit('imStatus', { kind: 'connected', appId: 'cli' });
+    for (let i = 0; i < 12; i += 1) await Promise.resolve();
+
+    outboundMocks.sendText.mockResolvedValue({ messageId: 'om_help' });
+    await expect(im.sendText('g/oc_c/omt_t', '/help')).resolves.toEqual({
+      messageId: 'om_help',
+    });
+    expect(outboundMocks.sendText).toHaveBeenCalledWith('g/oc_c/omt_t', '/help');
+
+    await expect(sendOriginalFallback('g/oc_c/omt_t', '兜底')).resolves.toEqual({
+      messageId: 'om_done',
+    });
   });
 
   it('排空进行中时同 lane 的新发送不认领旧终态', async () => {

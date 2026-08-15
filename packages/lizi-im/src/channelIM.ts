@@ -43,14 +43,14 @@ export interface TextChannelIM {
   sendText(
     userId: string,
     text: string,
-    opts?: { threadTs?: string },
+    opts?: { threadTs?: string; fallbackOpenerId?: string },
   ): Promise<{ messageId: string }>;
 
   /** 渲染 markdown 的文本消息(粗体 / 行内 code / 链接等)。 */
   sendMarkdownText(
     userId: string,
     markdown: string,
-    opts?: { threadTs?: string },
+    opts?: { threadTs?: string; fallbackOpenerId?: string },
   ): Promise<{ messageId: string }>;
 
   /** 发送本地文件;失败原因见 SendFileResult.reason。 */
@@ -87,6 +87,8 @@ export interface RichChannelIM extends TextChannelIM {
     spec: InteractiveCardSpec,
     opts?: {
       threadTs?: string;
+      /** 原兜底发送认领本轮暂存 opener, 后续发送不要传。 */
+      fallbackOpenerId?: string;
       /**
        * **只有授权类(permission)卡片**可以传 true: 群 lane 里把卡片改投宿主私聊 ——
        * 群里的授权卡消不掉, 而且只有宿主本人能回答它。
@@ -156,6 +158,12 @@ export interface RichChannelIM extends TextChannelIM {
    * 不应消费上一轮遗留的 opener。
    */
   getPendingOpenerTrigger?(userId: string): string | undefined;
+
+  /**
+   * consume 在空窗暂存后, 原兜底发送领取本轮 openerId, 再经 send* 的
+   * fallbackOpenerId 认领排空结果。后续发送不要调用, 否则会领走别人的轮次。
+   */
+  takeNotedFallbackOpenerId?(userId: string, kind: 'markdown' | 'spec'): string | undefined;
 }
 
 /** Backward-compatible name for the existing rich-card channel contract. */

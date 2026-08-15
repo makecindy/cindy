@@ -258,6 +258,13 @@ export function takeMatchingDeferredOpenerConsume(
   return undefined;
 }
 
+/** 按 openerId 取出暂存消费 — 原兜底发送认领本轮条目, 避免同 lane 后续发送误领。 */
+export function takeDeferredOpenerConsumeById(openerId: string): DeferredOpenerConsume | undefined {
+  const index = deferredOpenerConsumes.findIndex((entry) => entry.openerId === openerId);
+  if (index < 0) return undefined;
+  return deferredOpenerConsumes.splice(index, 1)[0];
+}
+
 /**
  * 返回该 lane 上 pending opener 的触发消息 id(没有则返回 undefined)。
  * 调用方用它判断「这张思考卡是不是本轮消息创建的」— 空文本终态等场景下

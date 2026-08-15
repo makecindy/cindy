@@ -263,7 +263,6 @@ interface UnconfirmedOpenRetry {
 
 const unconfirmedOpenRetries = new Map<string, UnconfirmedOpenRetry>();
 const suspendedUnconfirmedOpens: UnconfirmedOpenRetry[] = [];
-const MAX_SUSPENDED_UNCONFIRMED_OPENS = 100;
 
 function clearUnconfirmedOpenRetries(): void {
   for (const retry of unconfirmedOpenRetries.values()) {
@@ -284,10 +283,9 @@ function suspendUnconfirmedOpenRetry(entry: UnconfirmedOpenRetry): void {
       suspendedUnconfirmedOpens.splice(i, 1);
     }
   }
+  // 不设容量帽: 每条都是尚未终态化的轮次, 事件已 ACK、入站认领仍在。
+  // 静默 shift 最早一条会让重连后既不重派 turn, 也无法收口服务端思考卡。
   suspendedUnconfirmedOpens.push(entry);
-  while (suspendedUnconfirmedOpens.length > MAX_SUSPENDED_UNCONFIRMED_OPENS) {
-    suspendedUnconfirmedOpens.shift();
-  }
 }
 
 function resumeUnconfirmedOpenRetriesFor(
