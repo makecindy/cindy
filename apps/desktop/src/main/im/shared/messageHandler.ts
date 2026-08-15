@@ -343,6 +343,16 @@ export function createMessageHandler(
         ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
         ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
         ...(handedOverAck !== undefined ? { ackReactionIdPromise: handedOverAck } : {}),
+        // 早期拒绝终态(missing_auth / credential busy): 本条消息自己开了话题
+        // 时, 用终态文案收口开场白卡 — 否则「思考中」卡残留且下一条误认领。
+        ...(event.groupContextLane
+          ? {
+              onEarlyReject: async (reason: string, text: string) => {
+                void reason;
+                return consumeOpenerWithText(event.senderId, text);
+              },
+            }
+          : {}),
         ...(prePersisted ? { prePersistedUserMessage: prePersisted } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
         // 群历史附件只进模型消息、不落库(见 ImRunAgentTurnArgs.contextAttachments)。

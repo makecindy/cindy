@@ -468,6 +468,21 @@ describe('messageHandler !stop routing', () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
+  it('早期拒绝终态(missing_auth)经 onEarlyReject 收口开场白卡', async () => {
+    let capturedArgs: Parameters<ImTurnRunner['runAgentTurn']>[0] | undefined;
+    runAgentTurn.mockImplementationOnce(async (args: Parameters<ImTurnRunner['runAgentTurn']>[0]) => {
+      capturedArgs = args;
+      const consumed = (await args.onEarlyReject?.('missing_auth', 'AUTH_MISSING_TEXT')) ?? false;
+      expect(consumed).toBe(true);
+    });
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ text: '帮我看看', groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(capturedArgs).toBeDefined();
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith('U123456789', 'AUTH_MISSING_TEXT');
+  });
+
   it('同话题后续 !stop 不消费上一轮的 pending opener(归属不抢占)', async () => {
     // 消息 A 已开话题且其 pending opener 尚未被流式认领; 本条 B 是同一话题的
     // 后续消息(groupContextLane 缺省)— B 不得 patch A 的思考卡。

@@ -403,6 +403,13 @@ export interface ImRunAgentTurnArgs {
    * 重置), 那时这份预落库对不上号, dispatch 必须照常自己落一条。
    */
   prePersistedUserMessage?: { sessionId: string; clientId: string };
+  /**
+   * 早期拒绝终态(missing_auth / credential_mode_switch 等正常 resolve 的
+   * reject/busy)回调 — turnRunner 把本要另发的终态文案交给调用方: 返回
+   * true 表示已消费(如群主流 @ 开话题时 patch 开场白卡), turnRunner 跳过
+   * 自己的发送; false/缺省则照常发送。
+   */
+  onEarlyReject?(reason: string, text: string): Promise<boolean> | boolean;
 }
 
 export interface ImTurnTerminal {
@@ -669,7 +676,11 @@ export function createTurnRunner(
       const created = await createAuthenticatedDefaultRouteTarget(botContextId, userId, scopeKey);
       if (!created.target) {
         if (args.queueMode === 'internal') {
-          await replyMissingAuth(userId, created.missingAuth, scopeKey);
+          const text =
+            ui.agent.authMissing?.({ ...created.missingAuth, attached: false }) ??
+            ui.agent.apiKeyMissing;
+          const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
+          if (!consumed) await replyMissingAuth(userId, created.missingAuth, scopeKey);
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
@@ -681,12 +692,14 @@ export function createTurnRunner(
       const auth = await checkImRouteAuthDetailed(row, undefined, authCheckDeps());
       if (!auth.ok) {
         if (args.queueMode === 'internal') {
-          await replyMissingAuth(
-            userId,
-            { ...auth, agentKind: row.agentKind, model: row.model },
-            scopeKey,
-            target.attached,
-          );
+          const authStatus = { ...auth, agentKind: row.agentKind, model: row.model };
+          const text =
+            ui.agent.authMissing?.({ ...authStatus, attached: target.attached }) ??
+            ui.agent.apiKeyMissing;
+          const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
+          if (!consumed) {
+            await replyMissingAuth(userId, authStatus, scopeKey, target.attached);
+          }
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
@@ -775,7 +788,12 @@ export function createTurnRunner(
     } catch (err) {
       if (isCredentialModeSwitchBusyError(err)) {
         if (args.queueMode === 'internal') {
-          await handleSessionWiringBusy(userId, turn);
+          const consumed = (await args.onEarlyReject?.('credential_mode_switch', ui.agent.credentialBusy)) ?? false;
+          if (!consumed) {
+            await handleSessionWiringBusy(userId, turn);
+          } else {
+            await completeTurnCallbackAfterAck(turn);
+          }
         } else {
           await completeTurnCallbackAfterAck(turn);
         }

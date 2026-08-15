@@ -287,7 +287,11 @@ function isSameBotActive(botAppId: string, service: BotCredentials['service']): 
  * 发送; 这里单独记账, 任何路径的发送开始前先查: 冷却后的重投不会与执行
  * 中的重试并发发出第二条提示。结果在所有等待者间共享 — 谁发起都只有一条。
  */
-const orphanNoticeInFlight = new Map<string, Promise<'delivered' | 'failed'>>();
+interface InFlightOrphanSend {
+  epoch: number;
+  promise: Promise<'delivered' | 'failed'>;
+}
+const orphanNoticeInFlight = new Map<string, InFlightOrphanSend>();
 
 /**
  * 处理中的入站消息记账(key = `${appId}:${messageId}` → 所属 generation)。
@@ -304,9 +308,15 @@ const inboundInFlight = new Map<string, { generation: number }>();
  */
 function sendOrphanNoticeOnce(
   openerMessageId: string,
-): Promise<'delivered' | 'failed'> {
+  epoch: number,
+): Promise<'delivered' | 'failed' | 'stale'> {
   const inFlight = orphanNoticeInFlight.get(openerMessageId);
-  if (inFlight) return inFlight;
+  if (inFlight) {
+    // 清凭证前创建的 in-flight 不得被新代处理者当作本代结果推进 — 否则
+    // 旧请求失败时新 handler 的 epoch 校验通过, 登出前的重试复活。
+    if (inFlight.epoch !== epoch) return Promise.resolve('stale');
+    return inFlight.promise;
+  }
   const log = getLog();
   const attempt = (async (): Promise<'delivered' | 'failed'> => {
     try {
@@ -321,7 +331,7 @@ function sendOrphanNoticeOnce(
     }
   })();
   // set 与 get 在同一同步块内完成 — 并发调用不会双双通过(JS 单线程)。
-  orphanNoticeInFlight.set(openerMessageId, attempt);
+  orphanNoticeInFlight.set(openerMessageId, { epoch, promise: attempt });
   return attempt.finally(() => {
     // 结果已共享给所有等待者后才清理; 幂等删除, 早到的 finally 不影响
     // 已经持有 promise 引用的等待者。
@@ -354,10 +364,15 @@ async function sendOrphanOpenerNotice(
   // in-flight 去重: 执行中的重试会与这里共享同一次发送 — 重投不并发打出
   // 第二条提示; 结果为共享, 送达/失败按共享结果处理。
   const epoch = orphanRetryEpoch;
-  const outcome = await sendOrphanNoticeOnce(openerMessageId);
+  const outcome = await sendOrphanNoticeOnce(openerMessageId, epoch);
   if (epoch !== orphanRetryEpoch) {
     // 清凭证发生在发送期间: 续段放弃 — 不再 schedule/suspend。
     log.info('[feishu/wsClient] orphan opener notice stale after credential clear — dropping continuation');
+    return;
+  }
+  if (outcome === 'stale') {
+    // 加入的 in-flight 是清凭证前创建的: 本代不推进其失败结果。
+    log.info('[feishu/wsClient] orphan opener notice joined stale in-flight — dropping continuation');
     return;
   }
   if (outcome === 'delivered') {
@@ -474,9 +489,13 @@ async function retryOrphanOpenerNotice(
   // in-flight 去重: 与冷却后的重投共享同一次发送 — 不会并发打出第二条提示;
   // 若重投的发送已在进行, 这里等待它的结果而不是另发一条。
   const epoch = orphanRetryEpoch;
-  const outcome = await sendOrphanNoticeOnce(openerMessageId);
+  const outcome = await sendOrphanNoticeOnce(openerMessageId, epoch);
   if (epoch !== orphanRetryEpoch) {
     log.info('[feishu/wsClient] orphan opener notice retry stale after credential clear — dropping continuation');
+    return;
+  }
+  if (outcome === 'stale') {
+    log.info('[feishu/wsClient] orphan opener notice retry joined stale in-flight — dropping continuation');
     return;
   }
   if (outcome === 'delivered') {
