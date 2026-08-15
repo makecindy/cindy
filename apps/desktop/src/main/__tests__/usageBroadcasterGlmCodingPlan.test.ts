@@ -96,6 +96,26 @@ describe('glm coding plan snapshot store (per-provider)', () => {
     await expect(broadcaster.readGlmCodingPlanUsageSnapshot('p1')).resolves.toBeNull();
   });
 
+  it('clearing one provider does not invalidate another provider in-flight hydration (#2768 二轮 r3788460233)', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    // p1 的 hydration 挂起中;期间无关的 p2 被 clear —— 旧全局世代实现会把 p1
+    // 的在飞读一并作废(误丢后一个 180s 节流窗内无法恢复)。
+    let resolveP1!: (value: { snapshot: string } | null) => void;
+    const p1Read = new Promise<{ snapshot: string } | null>((res) => { resolveP1 = res; });
+    mocks.queryOne.mockImplementation(async (_sql: string, params: unknown[]) =>
+      (params[0] === 'p1' ? p1Read : null) as { snapshot: string } | null);
+
+    const readPromise = broadcaster.readGlmCodingPlanUsageSnapshot('p1');
+    await broadcaster.clearGlmCodingPlanUsageSnapshot('p2');
+    resolveP1({ snapshot: JSON.stringify(snapshotOf(42)) });
+    await readPromise;
+
+    // p2 的 clear 不影响 p1 —— 42 正常落到缓存(后续 read 已 hydrated,不再回库)
+    mocks.queryOne.mockClear();
+    const current = await broadcaster.readGlmCodingPlanUsageSnapshot('p1');
+    expect(current?.fiveHour?.utilization).toBe(42);
+  });
+
   it('replaces the snapshot wholesale on record (single source, no merge)', async () => {
     const broadcaster = await import('../usageBroadcaster');
     mocks.queryOne.mockResolvedValue(null);

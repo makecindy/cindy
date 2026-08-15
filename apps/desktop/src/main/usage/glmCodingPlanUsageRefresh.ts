@@ -54,9 +54,10 @@ const DEFAULT_BACKOFF_INITIAL_MS = 5 * 60_000;
 const DEFAULT_BACKOFF_MAX_MS = 30 * 60_000;
 
 interface ProviderRefreshState {
-  keyFingerprint: string | null;
+  /** 当前身份签名(key 指纹|baseUrl|platform)—— 任一变化都重置节流并触发换装。 */
+  identity: string | null;
   inFlight: Promise<void> | null;
-  inFlightKeyFingerprint: string | null;
+  inFlightIdentity: string | null;
   lastRefreshAt: number;
   backoffMs: number;
   backoffUntil: number;
@@ -88,9 +89,9 @@ export function createGlmCodingPlanUsageReader(
     let s = states.get(providerId);
     if (!s) {
       s = {
-        keyFingerprint: null,
+        identity: null,
         inFlight: null,
-        inFlightKeyFingerprint: null,
+        inFlightIdentity: null,
         lastRefreshAt: 0,
         backoffMs: 0,
         backoffUntil: 0,
@@ -102,9 +103,18 @@ export function createGlmCodingPlanUsageReader(
     return s;
   }
 
-  function resetThrottleForIdentity(s: ProviderRefreshState, keyFingerprint: string): void {
-    if (s.keyFingerprint === keyFingerprint) return;
-    s.keyFingerprint = keyFingerprint;
+  /** 完整身份签名:key 指纹 | baseUrl | platform——任一变化即换人/换端点。 */
+  function identityOf(source: GlmCodingPlanProviderSource): string {
+    return [
+      deps.fingerprintKey(source.apiKey),
+      source.runtimeBaseUrl,
+      source.platform,
+    ].join('|');
+  }
+
+  function resetThrottleForIdentity(s: ProviderRefreshState, identity: string): void {
+    if (s.identity === identity) return;
+    s.identity = identity;
     s.lastRefreshAt = 0;
     s.backoffMs = 0;
     s.backoffUntil = 0;
@@ -112,7 +122,7 @@ export function createGlmCodingPlanUsageReader(
 
   async function clearSnapshotQuiet(providerId: string): Promise<void> {
     const s = stateFor(providerId);
-    s.keyFingerprint = null;
+    s.identity = null;
     s.lastRefreshAt = 0;
     s.backoffMs = 0;
     s.backoffUntil = 0;
@@ -135,19 +145,25 @@ export function createGlmCodingPlanUsageReader(
   }
 
   /**
-   * 飞行中身份是否仍然有效:重读当前源并与飞行发起时的 key 指纹比对(对齐 claude
-   * reader 的 isRefreshStillCurrent 口径)。换 key / 删除发生在 fetch 途中时,旧 key
-   * 的响应(含 'empty' / 401 的清快照副作用)必须整体丢弃 —— 否则迟到写回会把
-   * syncForProviderChange 刚清掉的旧账号快照复活(删除场景无人再纠正,长期残留;
-   * #2768 首轮 review r3785815250 / r3785828831)。
+   * 飞行中身份是否仍然有效:重读当前源并与飞行发起时的完整身份比对——key 指纹 +
+   * baseUrl + platform(对齐 claude reader 的 isRefreshStillCurrent 口径)。换 key /
+   * 换端点 / 换平台 / 删除发生在 fetch 途中时,旧配置的响应(含 'empty' / 401 的
+   * 清快照副作用)必须整体丢弃 —— 只比 key 指纹不够:同一把 key 改 baseUrl(如
+   * zhipu↔zai)后,旧端点的迟到响应同样会污染新配置(#2768 二轮 review r3788456291)。
    * 只在 fetch 完成时调用(每完成一次付一次 source 解析),不在请求热路径上。
    */
   async function isRefreshStillCurrent(
     providerId: string,
     keyFingerprint: string,
+    source: GlmCodingPlanProviderSource,
   ): Promise<boolean> {
     const current = await readSourceSafe(providerId);
-    return current !== null && deps.fingerprintKey(current.apiKey) === keyFingerprint;
+    if (!current) return false;
+    return (
+      current.runtimeBaseUrl === source.runtimeBaseUrl
+      && current.platform === source.platform
+      && deps.fingerprintKey(current.apiKey) === keyFingerprint
+    );
   }
 
   function refreshWith(
@@ -156,10 +172,11 @@ export function createGlmCodingPlanUsageReader(
   ): Promise<void> {
     const s = stateFor(providerId);
     const keyFingerprint = deps.fingerprintKey(source.apiKey);
+    const identity = identityOf(source);
     if (s.inFlight) {
-      // 飞行中的 fetch 属于另一把 key(换 key):等旧请求收尾后按当时最新源补一次
-      // (旧响应会被指纹校验丢弃)。同 key 直接复用旧 promise。
-      if (s.inFlightKeyFingerprint !== keyFingerprint) {
+      // 飞行中的 fetch 属于另一身份(换 key / 换端点):等旧请求收尾后按当时最新源
+      // 补一次(旧响应会被活体校验丢弃)。同身份直接复用旧 promise。
+      if (s.inFlightIdentity !== identity) {
         return s.inFlight.finally(() => {
           void readSourceSafe(providerId).then((current) => {
             if (current) void refreshWith(providerId, current);
@@ -169,21 +186,21 @@ export function createGlmCodingPlanUsageReader(
       return s.inFlight;
     }
 
-    resetThrottleForIdentity(s, keyFingerprint);
+    resetThrottleForIdentity(s, identity);
     const now = deps.now();
     if (now < s.backoffUntil) return Promise.resolve();
     if (s.lastRefreshAt > 0 && now - s.lastRefreshAt < throttleMs) return Promise.resolve();
 
     s.lastRefreshAt = now;
-    s.inFlightKeyFingerprint = keyFingerprint;
+    s.inFlightIdentity = identity;
     s.inFlight = (async () => {
       try {
         const result = await deps.fetchSnapshot(source);
         s.backoffMs = 0;
         s.backoffUntil = 0;
-        // 换 key / 删除发生在飞行中:重读当前源比对指纹(死守卫教训 —— 与
-        // inFlightKeyFingerprint 自身比较恒过,等于没有检查),旧响应整体丢弃。
-        if (!(await isRefreshStillCurrent(providerId, keyFingerprint))) return;
+        // 换 key / 换端点 / 删除发生在飞行中:重读当前源比对完整身份(死守卫教训
+        // —— 与自身保存的字段比较恒过,等于没有检查),旧响应整体丢弃。
+        if (!(await isRefreshStillCurrent(providerId, keyFingerprint, source))) return;
         if (result === 'empty') {
           // 端点成功但无可解析窗口 —— 清快照降级;不动节流状态(防逐次重打敏感端点)。
           try {
@@ -202,9 +219,9 @@ export function createGlmCodingPlanUsageReader(
       } catch (err) {
         if (deps.isUnauthorizedError(err)) {
           // 只清快照、不动 API key —— 401/403 也可能是套餐类型 / 接口权限不支持;
-          // 节流保留,防每个 read 都重打。清快照同样要过活体校验:旧 key 的 401
-          // 不得把新 key 刚写入的快照清掉。
-          if (await isRefreshStillCurrent(providerId, keyFingerprint)) {
+          // 节流保留,防每个 read 都重打。清快照同样要过活体校验:旧配置的 401
+          // 不得把新配置刚写入的快照清掉。
+          if (await isRefreshStillCurrent(providerId, keyFingerprint, source)) {
             try {
               await deps.clearSnapshot(providerId);
             } catch (clearErr) {
@@ -221,7 +238,7 @@ export function createGlmCodingPlanUsageReader(
         deps.onRefreshError(err);
       } finally {
         s.inFlight = null;
-        s.inFlightKeyFingerprint = null;
+        s.inFlightIdentity = null;
       }
     })();
     return s.inFlight;
@@ -234,7 +251,7 @@ export function createGlmCodingPlanUsageReader(
       if (!source) {
         s.noSourceUntil = deps.now() + throttleMs;
         // 只在「之前有过源」时清一次 —— 普通 provider 的常规读不应反复触发 DELETE。
-        if (s.hadSource || s.keyFingerprint !== null) {
+        if (s.hadSource || s.identity !== null) {
           s.hadSource = false;
           await clearSnapshotQuiet(providerId);
         }

@@ -303,4 +303,32 @@ describe('mid-flight identity change (live currency guard, #2768 首轮 ①)', (
     expect(h.calls.clear).toBe(0); // 未误清
     expect(h.cached()).toBe(bSnapshot);
   });
+
+  it('discards an old-endpoint response when baseUrl changes with the same key (#2768 二轮 r3788456291)', async () => {
+    // 同一把 key 只改 baseUrl(zhipu→zai 端点)—— 只比指纹挡不住,必须比完整身份。
+    const h = makeHarness({ deferFetch: true });
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.setSource({ ...SOURCE_A, runtimeBaseUrl: 'https://api.z.ai/api/anthropic' });
+    await h.reader.syncForProviderChange(SOURCE_A.providerId);
+    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 66, resetsAt: null } })); // 旧端点迟到
+    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
+    expect(h.calls.record[0].fiveHour?.utilization).toBe(40); // 旧端点的 66% 没进来
+    expect(h.calls.record[0].platform).toBe('zhipu'); // 补刷按新配置(仍 zhipu 平台)成功
+  });
+
+  it('discards an old-endpoint empty response that would clear the new config snapshot', async () => {
+    // 同 key 换 baseUrl 后,旧端点的 'empty'(端点 2xx 但无可解析窗口)不得清新配置快照;
+    // sync 对同 key 不清(靠链式补刷覆盖),全程 clear 应为 0。
+    const h = makeHarness({ deferFetch: true, cached: snapshotOf() });
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.setSource({ ...SOURCE_A, runtimeBaseUrl: 'https://api.z.ai/api/anthropic' });
+    await h.reader.syncForProviderChange(SOURCE_A.providerId);
+    h.resolveFetch('empty'); // 旧端点的 empty 迟到
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.calls.clear).toBe(0); // sync(同 key)与旧 empty 都没清
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(2)); // 链式补刷新端点
+    await vi.waitFor(() => expect(h.calls.record).toHaveLength(1));
+  });
 });

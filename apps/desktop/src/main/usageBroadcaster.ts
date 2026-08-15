@@ -908,10 +908,19 @@ export interface GlmCodingPlanUsagePushPayload {
 const glmCodingPlanUsageSnapshots = new Map<string, GlmCodingPlanUsageSnapshot | null>();
 const glmCodingPlanUsageHydrated = new Set<string>();
 const glmCodingPlanUsageLoadPromises = new Map<string, Promise<void>>();
-/** 世代计数: owner 变化 / clear 时 +1, 作废在飞的 hydration(不复活旧数据)。 */
-let glmCodingPlanUsageGeneration = 0;
+/**
+ * per-provider 世代: clear 只作废**该 provider** 在飞的 hydration / record——全局世代
+ * 会把无关 provider 的并发写一并误丢(成功请求已进 180s 节流,误丢后一个节流窗内
+ * 无法恢复;#2768 二轮 review r3788460233)。owner 变化才整体作废(ownerEpoch)。
+ */
+const glmCodingPlanUsageGenerations = new Map<string, number>();
+let glmCodingPlanUsageOwnerEpoch = 0;
 let glmCodingPlanUsageOwner: string | null = null;
 let glmCodingPlanUsageOwnerInitialized = false;
+
+function glmGenerationOf(providerId: string): number {
+  return glmCodingPlanUsageGenerations.get(providerId) ?? 0;
+}
 
 function resetGlmCodingPlanUsageCacheIfOwnerChanged(): void {
   const owner = currentAccountUsageOwner();
@@ -923,7 +932,8 @@ function resetGlmCodingPlanUsageCacheIfOwnerChanged(): void {
   glmCodingPlanUsageSnapshots.clear();
   glmCodingPlanUsageHydrated.clear();
   glmCodingPlanUsageLoadPromises.clear();
-  glmCodingPlanUsageGeneration += 1;
+  glmCodingPlanUsageGenerations.clear();
+  glmCodingPlanUsageOwnerEpoch += 1;
 }
 
 function ensureGlmCodingPlanUsageLoaded(providerId: string): Promise<void> {
@@ -931,7 +941,8 @@ function ensureGlmCodingPlanUsageLoaded(providerId: string): Promise<void> {
   if (glmCodingPlanUsageHydrated.has(providerId)) return Promise.resolve();
   let load = glmCodingPlanUsageLoadPromises.get(providerId);
   if (!load) {
-    const generation = glmCodingPlanUsageGeneration;
+    const generation = glmGenerationOf(providerId);
+    const ownerEpoch = glmCodingPlanUsageOwnerEpoch;
     load = (async () => {
       try {
         if (!currentAccountUsageOwner()) return;
@@ -939,8 +950,11 @@ function ensureGlmCodingPlanUsageLoaded(providerId: string): Promise<void> {
           'SELECT snapshot FROM coding_plan_usage_snapshots WHERE provider_id = ?',
           [providerId],
         );
-        // clear / owner 变化抢先发生 → 本次读结果作废。
-        if (generation !== glmCodingPlanUsageGeneration) return;
+        // 本 provider 被 clear / owner 变化抢先 → 本次读结果作废。
+        if (
+          ownerEpoch !== glmCodingPlanUsageOwnerEpoch
+          || generation !== glmGenerationOf(providerId)
+        ) return;
         glmCodingPlanUsageHydrated.add(providerId);
         if (!row?.snapshot) return;
         const parsed: unknown = JSON.parse(row.snapshot);
@@ -975,9 +989,13 @@ export async function recordGlmCodingPlanUsageSnapshot(
   snapshot: unknown,
 ): Promise<void> {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
-  const generation = glmCodingPlanUsageGeneration;
+  const generation = glmGenerationOf(providerId);
+  const ownerEpoch = glmCodingPlanUsageOwnerEpoch;
   await ensureGlmCodingPlanUsageLoaded(providerId);
-  if (generation !== glmCodingPlanUsageGeneration) return;
+  if (
+    ownerEpoch !== glmCodingPlanUsageOwnerEpoch
+    || generation !== glmGenerationOf(providerId)
+  ) return;
 
   const next = snapshot as GlmCodingPlanUsageSnapshot;
   glmCodingPlanUsageSnapshots.set(providerId, next);
@@ -996,7 +1014,10 @@ export async function recordGlmCodingPlanUsageSnapshot(
          updated_at = excluded.updated_at`,
       [providerId, JSON.stringify(next), Date.now()],
     );
-    if (generation !== glmCodingPlanUsageGeneration) {
+    if (
+      ownerEpoch !== glmCodingPlanUsageOwnerEpoch
+      || generation !== glmGenerationOf(providerId)
+    ) {
       // clear 在写库 await 期间抢先:补偿删除,防下次冷启动读回残留。
       await getDbClient().exec(
         'DELETE FROM coding_plan_usage_snapshots WHERE provider_id = ?',
@@ -1015,11 +1036,9 @@ export async function clearGlmCodingPlanUsageSnapshot(providerId: string): Promi
   resetGlmCodingPlanUsageCacheIfOwnerChanged();
   glmCodingPlanUsageHydrated.add(providerId);
   glmCodingPlanUsageSnapshots.set(providerId, null);
-  glmCodingPlanUsageGeneration += 1;
+  // 只 bump 本 provider 的世代 —— 其它 provider 并发中的 hydration/record 不受影响。
+  glmCodingPlanUsageGenerations.set(providerId, glmGenerationOf(providerId) + 1);
   broadcastGlmCodingPlanUsage({ providerId, snapshot: null });
-  // 世代 +1 会作废所有 provider 的在飞 hydration —— 已 hydrated 的内存值不受影响,
-  // 只有真正在飞的旧读会丢弃,语义与"clear 只针对单 provider"不冲突(其它 provider
-  // 的冷启动读会被重置后重新发起)。
 
   try {
     await getDbClient().exec(
