@@ -1071,6 +1071,19 @@ export function commitModelPlaneFromCatalog(
 }
 
 /**
+ * An identical snapshot fetched from the configured current source strengthens the
+ * active catalog's capability evidence even when its Registry revision is unchanged.
+ * The reverse transition is intentionally not applied here: an unchanged fallback
+ * response cannot invalidate proof already obtained for the same active snapshot.
+ */
+export function promoteActiveCatalogCapabilityEvidenceToCurrent(): boolean {
+  if (baseCapabilityEvidence === 'current') return false;
+  baseCapabilityEvidence = 'current';
+  markChanged();
+  return true;
+}
+
+/**
  * 注入用户本地目录 override 快照(model-catalog-override-store 已清洗)。
  * 调用方(createDesktopProviderService)负责变更判定,避免无谓 revision。
  */

@@ -700,7 +700,7 @@ describe('provider catalog realm reload', () => {
     ).toEqual(activeXaiModels);
   });
 
-  it('projects a newer fallback refresh without hiding its xAI media discovery', async () => {
+  it('projects a newer fallback refresh, then promotes identical current evidence', async () => {
     const current = structuredClone(
       catalogNamed('catalog-current-before-fallback-refresh', '2026-07-31T12:30:00.000Z'),
     );
@@ -737,6 +737,24 @@ describe('provider catalog realm reload', () => {
     expect(xd?.embeddingModels).toEqual([]);
     expect(xd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
     expect(projected.providers.find((provider) => provider.id === 'xai')?.videoModels).toEqual(
+      xai.videoModels,
+    );
+
+    const recovered = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    h.refreshLoads.at(-1)!.resolve({
+      catalog: structuredClone(fallback),
+      source: 'remote',
+      capabilityEvidence: 'current',
+    });
+    await recovered;
+
+    const promoted = getDesktopSelectableCatalog();
+    const promotedXd = promoted.providers.find((provider) => provider.id === 'xd');
+    expect(promotedXd?.imageModels?.map((model) => model.id)).toContain('gpt-image-2');
+    expect(promotedXd?.embeddingModels?.map((model) => model.id)).toContain('voyage/voyage-4');
+    expect(promotedXd?.videoModels?.map((model) => model.id)).toContain('happyhorse');
+    expect(promoted.providers.find((provider) => provider.id === 'xai')?.videoModels).toEqual(
       xai.videoModels,
     );
   });

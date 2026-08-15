@@ -44,6 +44,7 @@ import {
   commitModelPlaneFromCatalog,
   getActiveCatalog,
   getModelPlaneWarnings,
+  promoteActiveCatalogCapabilityEvidenceToCurrent,
   setActiveCatalog,
   setCustomProviderConfigs,
   setCustomProviders,
@@ -579,6 +580,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
  * (同=no-op,异=拒收+告警——线上纠错必须 forward-fix 抬 updatedAt)。通过后经
  * `commitModelPlaneFromCatalog` **单次 swap、单次 markChanged** 提交,成功且有
  * 变化 = 恰 1 revision/1 广播(出口只有 active-catalog changedListener),
+ * 同内容但 fallback → current 的证据升级 = 恰 1 revision/1 广播；其余
  * no-op/失败/拒收 = 0。
  */
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
@@ -614,8 +616,16 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
       const incomingRegistry = catalog.modelRegistry;
       if (currentRegistry && incomingRegistry) {
         const relation = compareModelRegistryRevisions(incomingRegistry, currentRegistry);
-        if (relation === 'older' || relation === 'same') {
-          // 旧版拒收；同版同内容纯 no-op。两者都不 commit，零 revision 零广播。
+        if (relation === 'older') {
+          // 旧版拒收，不 commit，零 revision 零广播。
+          return getActiveCatalog();
+        }
+        if (relation === 'same') {
+          // 内容相同仍可能带来 fallback → current 的能力证据升级；这会改变
+          // CN/dev 对 XD fallback 媒体的投影，因此必须形成一次可观测更新。
+          if (capabilityEvidence === 'current') {
+            promoteActiveCatalogCapabilityEvidenceToCurrent();
+          }
           return getActiveCatalog();
         }
         if (relation === 'invalid-incoming') {
