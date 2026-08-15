@@ -817,6 +817,97 @@ describe('provider catalog realm reload', () => {
     ).toEqual(activeXaiModels);
   });
 
+  it('installs a same-registry fallback snapshot and propagates evidence atomically', async () => {
+    const current = structuredClone(
+      catalogNamed('catalog-current-before-same-registry-fallback', '2026-07-31T12:30:00.000Z'),
+    );
+    setActiveCatalog(current, { capabilityEvidence: 'current' });
+
+    const fallback = structuredClone(current);
+    fallback.providers[0] = {
+      ...fallback.providers[0]!,
+      name: 'catalog-fallback-same-registry',
+    };
+    const fallbackXd = fallback.providers.find((provider) => provider.id === 'xd');
+    const fallbackXai = fallback.providers.find((provider) => provider.id === 'xai');
+    if (!fallbackXd || !fallbackXai) throw new Error('expected fallback providers');
+    fallbackXd.imageModels = [{ id: 'fallback-image', name: 'Fallback Image' }];
+    fallbackXd.videoModels = [{ id: 'fallback-video', name: 'Fallback Video' }];
+    fallbackXd.embeddingModels = [{ id: 'fallback-embedding', name: 'Fallback Embedding' }];
+    fallbackXai.videoModels = [
+      { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+    ];
+
+    const events: number[] = [];
+    setActiveCatalogChangedListener((revision) => events.push(revision));
+    try {
+      const refresh = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({
+        catalog: fallback,
+        source: 'cache',
+        capabilityEvidence: 'fallback',
+      });
+      await refresh;
+
+      expect(activeMarker()).toBe('catalog-fallback-same-registry');
+      const projected = getDesktopSelectableCatalog();
+      expect(projected.providers.find((provider) => provider.id === 'xd')).toMatchObject({
+        imageModels: [],
+        videoModels: [],
+        embeddingModels: [],
+      });
+      expect(projected.providers.find((provider) => provider.id === 'xai')?.videoModels).toEqual(
+        fallbackXai.videoModels,
+      );
+      expect(events).toHaveLength(1);
+
+      const exactFallbackRepeat = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({
+        catalog: structuredClone(fallback),
+        source: 'cache',
+        capabilityEvidence: 'fallback',
+      });
+      await exactFallbackRepeat;
+
+      expect(events).toHaveLength(1);
+
+      const evidenceUpgrade = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({
+        catalog: structuredClone(fallback),
+        source: 'remote',
+        capabilityEvidence: 'current',
+        unverifiedXdMediaKinds: ['image'],
+      });
+      await evidenceUpgrade;
+
+      expect(
+        getDesktopSelectableCatalog().providers.find((provider) => provider.id === 'xd'),
+      ).toMatchObject({
+        imageModels: [],
+        videoModels: fallbackXd.videoModels,
+        embeddingModels: fallbackXd.embeddingModels,
+      });
+      expect(events).toHaveLength(2);
+
+      const exactRepeat = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({
+        catalog: structuredClone(fallback),
+        source: 'remote',
+        capabilityEvidence: 'current',
+        unverifiedXdMediaKinds: ['image'],
+      });
+      await exactRepeat;
+
+      expect(events).toHaveLength(2);
+    } finally {
+      setActiveCatalogChangedListener(null);
+    }
+  });
+
   it('projects a newer fallback refresh, then promotes identical current evidence', async () => {
     const current = structuredClone(
       catalogNamed('catalog-current-before-fallback-refresh', '2026-07-31T12:30:00.000Z'),
@@ -907,13 +998,15 @@ describe('provider catalog realm reload', () => {
     };
 
     try {
-      // 同一时刻仅 ISO 表示不同：Registry 内容相同，应 no-op 且不误报警。
+      // 同一时刻仅 ISO 表示不同：Registry 关系仍为 same；完整 Catalog 快照不同则
+      // 原子安装 incoming，但不应误报同 revision 冲突。
       await refreshWith('equivalent-z', '2026-08-02T02:00:00.000Z');
-      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T10:00:00+08:00');
+      expect(activeMarker()).toBe('equivalent-z');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T02:00:00.000Z');
       expect(h.warn).not.toHaveBeenCalled();
 
       await refreshWith('actually-older', '2026-08-02T01:59:59.000Z');
-      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T10:00:00+08:00');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T02:00:00.000Z');
 
       await refreshWith('actually-newer', '2026-08-02T03:00:00.000Z');
       expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T03:00:00.000Z');

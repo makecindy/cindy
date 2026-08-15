@@ -632,14 +632,13 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
           return getActiveCatalog();
         }
         if (relation === 'same') {
-          // Registry 相同不代表 provider media / presets 等完整目录相同。current
-          // 来源成功时必须安装这份完整快照，不能只解除 fallback 安全投影。
-          if (capabilityEvidence === 'current') {
-            commitActiveCatalogSnapshot(catalog, {
-              capabilityEvidence,
-              unverifiedXdMediaKinds,
-            });
-          }
+          // Registry 相同不代表 provider media / presets 等完整目录相同；无论本次
+          // 选中 current 还是 fallback，都必须把完整快照与能力证据原子安装。
+          // commitActiveCatalogSnapshot 会保留完整快照与证据均相同的精确 no-op。
+          commitActiveCatalogSnapshot(catalog, {
+            capabilityEvidence,
+            unverifiedXdMediaKinds,
+          });
           return getActiveCatalog();
         }
         if (relation === 'invalid-incoming') {
