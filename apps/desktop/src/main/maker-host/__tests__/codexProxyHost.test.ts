@@ -503,6 +503,40 @@ describe('withCodexVisionFallback', () => {
     }
   });
 
+  it('shows the setup reminder when the selected XD fallback has no gateway key', async () => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    setXdGatewayModels([{ id: 'gpt-5.6-sol', agents: ['claude-code', 'codex'] }]);
+    host.setCodexProxyGatewayKeyReader(() => null);
+    mockState.visionFallbackSettings = {
+      visionFallbackEnabled: true,
+      visionFallbackModel: 'gpt-5.6-sol',
+      visionFallbackProviderId: 'xd',
+    };
+
+    try {
+      const decision = await host.withCodexVisionFallback(() => null)(
+        imageBody('deepseek/deepseek-v4-pro'),
+        ctxFor('t-xd-missing-key'),
+      );
+
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      const response = { writeHead: vi.fn(), end: vi.fn() };
+      await decision?.localHandler?.({ res: response } as never);
+      expect(JSON.parse(response.end.mock.calls[0][0])).toMatchObject({
+        error: { code: 'cindy_vision_fallback_not_configured' },
+      });
+    } finally {
+      mockState.visionFallbackSettings = {
+        visionFallbackEnabled: true,
+        visionFallbackModel: null,
+        visionFallbackProviderId: null,
+      };
+      host.setCodexProxyGatewayKeyReader(() => null);
+      setXdGatewayModels([]);
+    }
+  });
+
   it.each([
     ['OpenAI Chat', 'openai-chat', 'createResponsesChatHandler'],
     ['Anthropic Messages', 'anthropic-messages', 'createResponsesAnthropicHandler'],

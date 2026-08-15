@@ -692,12 +692,12 @@ export function createModelRoutingTransform(): RoutingTransform {
           _readGatewayKey(),
           visionModel,
         ).then((resolved) => {
-          if (!resolved) return claudeVisionFallbackSetupReminderDecision();
+          if (!resolved || !resolved.decision) return claudeVisionFallbackSetupReminderDecision();
           if ((fallbackAgent === 'claude-code' || fallbackAgent === 'pi') && fallbackSessionId) {
             recordClaudeVisionFallbackProvider(fallbackSessionId, visionModel, fallbackProviderId);
           }
           return {
-            ...(resolved.decision ?? {}),
+            ...resolved.decision,
             bodyModelOverride: rewriteModelIdForProviderRoute(
               fallbackProviderId,
               fallbackAgent,

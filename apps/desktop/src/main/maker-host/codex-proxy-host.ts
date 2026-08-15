@@ -2664,12 +2664,12 @@ export function withCodexVisionFallback(
             _readGatewayKey(),
             visionModel,
           ).then((resolved) => {
-            if (!resolved) {
+            if (!resolved || !resolved.decision) {
               return codexVisionFallbackSetupReminderDecision();
             }
             recordFallback();
             return {
-              ...(resolved.decision ?? {}),
+              ...resolved.decision,
               bodyModelOverride: rewriteModelIdForProviderRoute(
                 fallbackProviderId,
                 'codex',

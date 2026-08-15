@@ -70,7 +70,7 @@ import {
   resetClaudeSessionRouteRegistryForTest,
 } from '../claude-session-route-registry';
 import { setCustomProviderKeyReader } from '../provider-route';
-import { setCustomProviders } from '../active-catalog';
+import { setCustomProviders, setXdGatewayModels } from '../active-catalog';
 import { buildUserProvider } from '@cindy/model-providers';
 import { setPendingCredentialSwitchReader, setProviderOAuthTokenReader } from '../provider-route';
 import {
@@ -119,6 +119,7 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
   afterEach(() => {
     clearSessionProvider('sess-grok');
     setCustomProviders([]);
+    setXdGatewayModels([]);
     setCustomProviderKeyReader(() => null);
     outboundFetch.mockReset();
     setPendingCredentialSwitchReader(() => undefined);
@@ -142,6 +143,35 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     expect(writeHead).toHaveBeenCalledWith(503, expect.any(Object));
     expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
       error: { code: 'provider_switch_pending' },
+    });
+  });
+
+  it('shows the setup reminder when the selected XD fallback has no gateway key', async () => {
+    gatewayKey = null;
+    setXdGatewayModels([{ id: 'gpt-5.6-sol', agents: ['claude-code', 'codex'] }]);
+    visionFallbackSettings.visionFallbackModel = 'gpt-5.6-sol';
+    visionFallbackSettings.visionFallbackProviderId = 'xd';
+    visionFallbackSettings.visionFallbackProviderIds = { 'claude-code': 'xd' };
+
+    const decision = await Promise.resolve(createModelRoutingTransform()(
+      {
+        model: 'deepseek/deepseek-v4-pro',
+        messages: [{
+          role: 'user',
+          content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
+        }],
+      },
+      ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
+    ));
+
+    expect(decision).toEqual({ localHandler: expect.any(Function) });
+    const response = { writeHead: vi.fn(), end: vi.fn() };
+    await decision?.localHandler?.({ res: response } as never);
+    expect(JSON.parse(response.end.mock.calls[0][0])).toMatchObject({
+      error: {
+        type: 'invalid_request_error',
+        message: expect.stringContaining('Vision fallback'),
+      },
     });
   });
 
