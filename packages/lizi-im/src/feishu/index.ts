@@ -380,13 +380,19 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         // fallthrough: 回落正常发送
       }
     }
+    const sendClient = outbound.getBoundClient();
     try {
       return await send();
     } catch (sendErr) {
-      // 最终兜底在撤回后再次断线: 条目已从队列移除 — 代次未变时重新入队,
-      // 下一次 connected 排空重试, 终态不因一次失败永久丢失。
-      if (entry && outbound.getAccountEpoch() === epoch && !outbound.getBoundClient()) {
-        this.log.warn('sendWithDeferredOpenerConsume final send failed in reconnect window (re-deferred)');
+      // 最终兜底失败: 条目已从队列移除 — 代次未变且发起发送的 client 已不
+      // 是当前 client(仍处空窗 / 同账号已重绑新 client)时重新入队, 下一次
+      // connected 排空重试, 终态不因一次失败永久丢失。
+      if (
+        entry &&
+        outbound.getAccountEpoch() === epoch &&
+        outbound.getBoundClient() !== sendClient
+      ) {
+        this.log.warn('sendWithDeferredOpenerConsume final send failed across reconnect (re-deferred)');
         outbound.deferOpenerConsume(entry);
       }
       throw sendErr;
