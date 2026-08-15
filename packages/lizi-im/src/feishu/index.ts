@@ -55,7 +55,10 @@ export class FeishuIM extends BaseIM implements ChannelIM {
 
   /** 排空重连空窗暂存的开场白卡消费(claim + patch/替换), 失败只 log。 */
   private async flushDeferredOpenerConsumes(): Promise<void> {
-    if (!outbound.getBoundClient()) return;
+    // 排空开始时的 client — 撤回与失败兜底都 pin 到它: 排空期间换账号
+    // 不得经新 client 删除旧账号的开场白。
+    const pinnedClient = outbound.getBoundClient();
+    if (!pinnedClient) return;
     const pending = outbound.drainDeferredOpenerConsumes();
     for (const entry of pending) {
       const openerId = outbound.claimPatchableOpener(entry.userId);
@@ -68,11 +71,25 @@ export class FeishuIM extends BaseIM implements ChannelIM {
           outbound.registerCardLane(entry.userId, openerId);
         }
       } catch (err) {
-        // patch/替换失败: 与即时消费同口径 — 撤回开场白卡并回拨锚点。
+        // patch/替换失败: 与即时消费同口径 — 撤回开场白卡(pin 到排空开始
+        // 时的 client)并回拨锚点, 然后**补发终态兜底**(调用方已因 consume
+        // 返回 true 跳过正常发送, 不补发用户收不到结果)。
         const msg = err instanceof Error ? err.message : String(err);
         this.log.warn(`flushDeferredOpenerConsumes failed: ${msg}`);
-        await outbound.recallOwnMessage(openerId);
+        if (outbound.getBoundClient() === pinnedClient) {
+          await outbound.recallOwnMessageWith(pinnedClient, openerId);
+        }
         outbound.rearmAnchorToTrigger(entry.userId);
+        try {
+          if ('markdown' in entry) {
+            await this.sendMarkdownText(entry.userId, entry.markdown);
+          } else {
+            await this.sendInteractiveCard(entry.userId, entry.spec);
+          }
+        } catch (sendErr) {
+          const sendMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+          this.log.warn(`flushDeferredOpenerConsumes fallback send failed: ${sendMsg}`);
+        }
       }
     }
   }

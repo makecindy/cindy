@@ -17,6 +17,7 @@ const outboundMocks = vi.hoisted(() => ({
   registerCardLane: vi.fn(),
   rearmAnchorToTrigger: vi.fn(() => true),
   deferOpenerConsume: vi.fn(),
+  sendInteractive: vi.fn(async () => ({ messageId: 'om_sent' })),
   drainDeferredOpenerConsumes: vi.fn<
     () => Array<{ userId: string; markdown?: string; spec?: { body: string; buttons: unknown[] } }>
   >(() => []),
@@ -33,6 +34,7 @@ vi.mock('../outbound.js', () => ({
   rearmAnchorToTrigger: outboundMocks.rearmAnchorToTrigger,
   deferOpenerConsume: outboundMocks.deferOpenerConsume,
   drainDeferredOpenerConsumes: outboundMocks.drainDeferredOpenerConsumes,
+  sendInteractive: outboundMocks.sendInteractive,
 }));
 
 vi.mock('../streamingText.js', () => ({
@@ -94,6 +96,31 @@ describe('FeishuIM opener consumption failure semantics', () => {
     vi.clearAllMocks();
     // 默认有绑定 client — 个别用例覆盖为 null, 不能泄漏到后续用例。
     outboundMocks.getBoundClient.mockReturnValue({ fake: 'client' });
+  });
+
+  it('排空时 patch 失败: 撤回 pin 到排空开始的 client 并补发终态兜底', async () => {
+    const pinned = { fake: 'pinned-client' };
+    outboundMocks.getBoundClient.mockReturnValue(pinned);
+    outboundMocks.drainDeferredOpenerConsumes.mockReturnValueOnce([
+      { userId: 'g/oc_c/omt_t', markdown: '兜底回复' },
+    ]);
+    outboundMocks.claimPatchableOpener.mockReturnValue('om_opener');
+    (streamingText.patchMarkdown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('patch failed'),
+    );
+
+    feishuEvents.emit('imStatus', { kind: 'connected', appId: 'cli' });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalledWith(pinned, 'om_opener');
+    expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t');
+    // 补发兜底: 文本经 sendMarkdownText(sendInteractive) 正常发送。
+    expect(outboundMocks.sendInteractive).toHaveBeenCalledWith('g/oc_c/omt_t', {
+      body: '兜底回复',
+      buttons: [],
+    });
   });
 
   it('consumePendingOpenerCard: 无 pending opener 返回 false(不撤回)', async () => {
