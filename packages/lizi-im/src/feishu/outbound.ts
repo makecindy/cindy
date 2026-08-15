@@ -259,6 +259,15 @@ export function takeMatchingDeferredOpenerConsume(
 }
 
 /**
+ * 返回该 lane 上 pending opener 的触发消息 id(没有则返回 undefined)。
+ * 调用方用它判断「这张思考卡是不是本轮消息创建的」— 空文本终态等场景下
+ * 不应消费上一轮遗留的 opener。
+ */
+export function getOpenerTrigger(laneUserId: string): string | undefined {
+  return openerTriggers.get(laneUserId);
+}
+
+/**
  * patch/替换失败撤回开场白卡后调用: 把 held 锚点回拨到触发消息(带
  * reply_in_thread 标记)。兜底发送向触发消息 reply 且 reply_in_thread=true,
  * 仍落回话题 — 而不是向已删除的开场白卡 reply 失败。无触发记录返回 false。

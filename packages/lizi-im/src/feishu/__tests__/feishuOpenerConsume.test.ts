@@ -40,6 +40,7 @@ const outboundMocks = vi.hoisted(() => ({
   getAccountEpoch: vi.fn(() => 0),
   recallOwnMessage: vi.fn(async () => true),
   sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
+  getOpenerTrigger: vi.fn(() => undefined),
 }));
 
 vi.mock('../outbound.js', () => ({
@@ -57,6 +58,7 @@ vi.mock('../outbound.js', () => ({
   getAccountEpoch: outboundMocks.getAccountEpoch,
   sendInteractive: outboundMocks.sendInteractive,
   sendText: outboundMocks.sendText,
+  getOpenerTrigger: outboundMocks.getOpenerTrigger,
 }));
 
 vi.mock('../streamingText.js', () => ({

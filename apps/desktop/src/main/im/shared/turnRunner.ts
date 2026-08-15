@@ -2855,10 +2855,15 @@ export function createTurnRunner(
           });
         } else {
           // 群主流 @ 开话题但本轮无流式输出: pending opener 尚未被认领 —
-          // 就地消费它(思考卡变成「无文本输出」提示), 不另发也不留卡。
+          // 仅当 opener 是本轮消息创建的(trigger 匹配)才消费, 否则另发
+          // (避免消费上一轮遗留的 opener 造成归属错乱)。
+          const triggerId = output.im.getPendingOpenerTrigger?.(userId);
+          const isMyOpener = triggerId === turn.userMessageId;
           const consumed =
-            (await output.im.consumePendingOpenerCard?.(userId, '✅ (本轮无文本输出)')) ??
-            false;
+            isMyOpener
+              ? ((await output.im.consumePendingOpenerCard?.(userId, '✅ (本轮无文本输出)')) ??
+                false)
+              : false;
           if (!consumed) {
             await output.im.sendText(userId, '✅ (本轮无文本输出)', {
               threadTs: state.scopeKey,
@@ -2968,8 +2973,12 @@ export function createTurnRunner(
           });
         } else {
           const errorText = `❌ 错误：${msg}`;
+          const triggerId = output.im.getPendingOpenerTrigger?.(userId);
+          const isMyOpener = triggerId === turn?.userMessageId;
           const consumed =
-            (await output.im.consumePendingOpenerCard?.(userId, errorText)) ?? false;
+            isMyOpener
+              ? ((await output.im.consumePendingOpenerCard?.(userId, errorText)) ?? false)
+              : false;
           if (!consumed) {
             await output.im.sendText(userId, errorText, {
               threadTs: state.scopeKey,

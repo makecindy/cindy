@@ -429,6 +429,10 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     }
   }
 
+  getPendingOpenerTrigger(userId: string): string | undefined {
+    return outbound.getOpenerTrigger(userId);
+  }
+
   async sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
