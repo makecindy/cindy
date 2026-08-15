@@ -452,6 +452,25 @@ describe('messageHandler !stop routing', () => {
       'U123456789',
       slackUi.agent.sendInternalError('list projects failed'),
     );
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('slash 抛错且 opener 收口返回 false 时补发内部错误', async () => {
+    handleSlashCommand.mockRejectedValueOnce(new Error('list projects failed'));
+    consumePendingOpenerCard.mockResolvedValue(false);
+    deliver(makeEvent({ text: '/ctr', groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith(
+      'U123456789',
+      slackUi.agent.sendInternalError('list projects failed'),
+    );
+    expect(sendMarkdownText).toHaveBeenCalledWith(
+      'U123456789',
+      slackUi.agent.sendInternalError('list projects failed'),
+      { threadTs: '1234.5678' },
+    );
     expect(runAgentTurn).not.toHaveBeenCalled();
   });
 

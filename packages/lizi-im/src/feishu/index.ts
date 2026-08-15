@@ -394,8 +394,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   /**
    * 消费群主流 @ 开话题的 pending 开场白卡: 认领并把 markdown patch 上去 —
    * 非流式终态(!stop / 纯 unsupported)截流时, 「思考中」卡就地变成回复,
-   * 不会卡住也不会被同话题下一条消息 patch 错卡。无 pending opener 返回
-   * false(调用方走正常发送)。
+   * 不会卡住也不会被同话题下一条消息 patch 错卡。无 pending opener、或
+   * 同账号空窗暂存, 返回 false(调用方走正常发送)。patch 失败且账号已换代
+   * 时返回 true: 旧轮次已丢弃, 调用方不得用新 client 跨账号发。
    */
   async consumePendingOpenerCard(userId: string, markdown: string): Promise<boolean> {
     // 重连空窗(stop→start 之间 client 已解绑): 暂存消费, 连接就绪后由
@@ -416,25 +417,20 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     }
     const openerId = reservedOpenerId;
     if (!openerId) return false;
-    // 触发时的 client — patch 失败后撤回必须 pin 到它: 中途换凭证时不得
-    // 拿新账号的 client 删除旧账号的开场白(客户端 close 后撤回自然失败,
-    // 由 log 兜底, 不会跨账号操作)。
+    // 触发时的 client / 账号代次 — patch 失败后撤回必须 pin 到它们:
+    // 中途换凭证时不得拿新账号的 client 删除旧账号的开场白, 也不得指示
+    // 调用方用新 client 向旧 lane 回落发送。
     const triggeringClient = outbound.getBoundClient();
+    const epoch = outbound.getAccountEpoch();
     try {
       await streamingText.patchMarkdown(openerId, markdown);
       return true;
     } catch (err) {
-      // patch 失败: 认领已完成, 卡不会再被后续流式 patch — 撤回它让兜底
-      // 发送成为唯一回复; 同时把 held 锚点回拨到触发消息(带 reply_in_thread),
-      // 否则兜底发送会向已删除的开场白卡 reply 失败。撤回也失败则卡残留
-      // (与孤儿撤回同一最终边界, 已 log)。
       const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(`consumePendingOpenerCard patch failed — recalling opener: ${msg}`);
-      if (triggeringClient) {
-        await outbound.recallOwnMessageWith(triggeringClient, openerId);
-      }
-      outbound.rearmAnchorToTrigger(userId);
-      return false;
+      this.log.warn(`consumePendingOpenerCard patch failed: ${msg}`);
+      return this.recoverFailedOpenerConsume(userId, openerId, epoch, triggeringClient, {
+        markdown,
+      });
     }
   }
 
@@ -442,7 +438,8 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * 消费群主流 @ 开话题的 pending 开场白卡并把卡片 spec 原地替换上去 —
    * slash 的首个卡片反馈(/ctr picker、/model 选择卡等)就地变成开场白卡,
    * 话题里只有一张卡且锚点有效(不是撤回后拿已删消息当锚点)。无 pending
-   * opener 返回 false(调用方走正常发卡)。
+   * opener、或同账号空窗暂存, 返回 false(调用方走正常发卡)。替换失败且
+   * 账号已换代时返回 true: 旧轮次已丢弃, 调用方不得跨账号发卡。
    */
   async consumePendingOpenerAsCard(userId: string, spec: InteractiveCardSpec): Promise<boolean> {
     // 同 consumePendingOpenerCard: 重连空窗暂存(未送达, 返回 false),
@@ -458,8 +455,9 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     }
     const openerId = reservedOpenerId;
     if (!openerId) return false;
-    // 同 consumePendingOpenerCard: 撤回 pin 到触发时的 client。
+    // 同 consumePendingOpenerCard: 撤回 pin 到触发时的 client, 失败路径核代次。
     const triggeringClient = outbound.getBoundClient();
+    const epoch = outbound.getAccountEpoch();
     try {
       await outbound.updateInteractive(openerId, spec);
       // 替换后的交互卡同样要登记发卡 lane — 否则按钮回调 resolveCardLane
@@ -467,16 +465,47 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       outbound.registerCardLane(userId, openerId);
       return true;
     } catch (err) {
-      // 同 consumePendingOpenerCard: 替换失败撤回开场白卡并回拨锚点到触发
-      // 消息, 回落正常发卡。
       const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(`consumePendingOpenerAsCard replace failed — recalling opener: ${msg}`);
+      this.log.warn(`consumePendingOpenerAsCard replace failed: ${msg}`);
+      return this.recoverFailedOpenerConsume(userId, openerId, epoch, triggeringClient, {
+        spec,
+      });
+    }
+  }
+
+  /**
+   * patch/替换失败后的账号代次门。未换账号才能回落发送; 同账号空窗重新暂存;
+   * 已换账号丢弃旧轮次并返回 true, 避免调用方用新 client 向旧 lane 发送。
+   */
+  private async recoverFailedOpenerConsume(
+    userId: string,
+    openerId: string,
+    epoch: number,
+    triggeringClient: ReturnType<typeof outbound.getBoundClient>,
+    payload: { markdown: string } | { spec: InteractiveCardSpec },
+  ): Promise<boolean> {
+    if (outbound.getAccountEpoch() !== epoch) {
+      this.log.info('consumePendingOpener: account changed — dropping turn');
       if (triggeringClient) {
         await outbound.recallOwnMessageWith(triggeringClient, openerId);
       }
-      outbound.rearmAnchorToTrigger(userId);
+      return true;
+    }
+    if (!outbound.getBoundClient()) {
+      this.log.warn('consumePendingOpener: reconnect window — re-deferred');
+      outbound.deferOpenerConsume({ userId, openerId, ...payload });
+      this.notePendingFallback(userId, 'markdown' in payload ? 'markdown' : 'spec', openerId);
       return false;
     }
+    if (triggeringClient) {
+      await outbound.recallOwnMessageWith(triggeringClient, openerId);
+    }
+    if (outbound.getAccountEpoch() !== epoch) {
+      this.log.info('consumePendingOpener: account changed during recall — dropping turn');
+      return true;
+    }
+    outbound.rearmAnchorToTrigger(userId);
+    return false;
   }
 
   getPendingOpenerTrigger(userId: string): string | undefined {

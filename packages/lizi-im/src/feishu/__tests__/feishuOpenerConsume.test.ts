@@ -428,4 +428,71 @@ describe('FeishuIM opener consumption failure semantics', () => {
     expect(outboundMocks.registerCardLane).toHaveBeenCalledWith('g/oc_c/omt_t', 'om_opener');
     expect(outboundMocks.recallOwnMessageWith).not.toHaveBeenCalled();
   });
+
+  it('consumePendingOpenerCard: patch 等待中换账号则丢弃旧轮次, 不指示调用方发送', async () => {
+    outboundMocks.claimPatchableOpener.mockReturnValue('om_opener');
+    (streamingText.patchMarkdown as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      outboundMocks.getAccountEpoch.mockReturnValue(1);
+      outboundMocks.getBoundClient.mockReturnValue({ fake: 'account-b' });
+      throw new Error('patch failed after rebind');
+    });
+
+    await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(true);
+    expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalledWith(fakeClient, 'om_opener');
+    expect(outboundMocks.rearmAnchorToTrigger).not.toHaveBeenCalled();
+    expect(outboundMocks.deferOpenerConsume).not.toHaveBeenCalled();
+  });
+
+  it('consumePendingOpenerCard: patch 失败仍同账号但空窗时重新暂存, 不撤回', async () => {
+    outboundMocks.claimPatchableOpener.mockReturnValue('om_opener');
+    (streamingText.patchMarkdown as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      outboundMocks.getBoundClient.mockReturnValue(null);
+      throw new Error('client unbound mid-patch');
+    });
+
+    await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(false);
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'g/oc_c/omt_t',
+        openerId: 'om_opener',
+        markdown: '回复',
+      }),
+    );
+    expect(outboundMocks.recallOwnMessageWith).not.toHaveBeenCalled();
+    expect(outboundMocks.rearmAnchorToTrigger).not.toHaveBeenCalled();
+  });
+
+  it('consumePendingOpenerAsCard: 替换等待中换账号则丢弃旧轮次, 不指示调用方发送', async () => {
+    outboundMocks.claimPatchableOpener.mockReturnValue('om_opener');
+    outboundMocks.updateInteractive.mockImplementationOnce(async () => {
+      outboundMocks.getAccountEpoch.mockReturnValue(1);
+      outboundMocks.getBoundClient.mockReturnValue({ fake: 'account-b' });
+      throw new Error('replace failed after rebind');
+    });
+
+    await expect(im.consumePendingOpenerAsCard('g/oc_c/omt_t', SPEC)).resolves.toBe(true);
+    expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalledWith(fakeClient, 'om_opener');
+    expect(outboundMocks.rearmAnchorToTrigger).not.toHaveBeenCalled();
+    expect(outboundMocks.deferOpenerConsume).not.toHaveBeenCalled();
+    expect(outboundMocks.registerCardLane).not.toHaveBeenCalled();
+  });
+
+  it('consumePendingOpenerAsCard: 替换失败仍同账号但空窗时重新暂存, 不撤回', async () => {
+    outboundMocks.claimPatchableOpener.mockReturnValue('om_opener');
+    outboundMocks.updateInteractive.mockImplementationOnce(async () => {
+      outboundMocks.getBoundClient.mockReturnValue(null);
+      throw new Error('client unbound mid-replace');
+    });
+
+    await expect(im.consumePendingOpenerAsCard('g/oc_c/omt_t', SPEC)).resolves.toBe(false);
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'g/oc_c/omt_t',
+        openerId: 'om_opener',
+        spec: SPEC,
+      }),
+    );
+    expect(outboundMocks.recallOwnMessageWith).not.toHaveBeenCalled();
+    expect(outboundMocks.rearmAnchorToTrigger).not.toHaveBeenCalled();
+  });
 });

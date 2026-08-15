@@ -236,11 +236,24 @@ export function createMessageHandler(
         log.error(`slash command threw: ${msg}`);
         // slash 在首个回复发出前抛错(如 /ctr 枚举失败): sink 未被调用,
         // 开场白卡用内部错误内容收口 — 否则「思考中」卡永久保留。
+        // withMarkdown 返回 false(撤回/空窗暂存)或抛错时走正常发送兜底,
+        // 与 !stop / runAgentTurn 失败分支同一口径。
+        const errorText = ui.agent.sendInternalError(msg);
+        let openerConsumed = false;
         if (sink) {
           try {
-            await sink.withMarkdown(event.senderId, ui.agent.sendInternalError(msg));
+            openerConsumed = await sink.withMarkdown(event.senderId, errorText);
           } catch {
-            /* 收口失败与卡残留同一最终边界 */
+            openerConsumed = false;
+          }
+        }
+        if (!openerConsumed) {
+          try {
+            await im.sendMarkdownText(event.senderId, errorText, {
+              threadTs: event.scopeKey,
+            });
+          } catch {
+            /* 发送失败与卡残留同一最终边界 */
           }
         }
       }
