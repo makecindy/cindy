@@ -181,6 +181,23 @@ describe('fetchProviderModels', () => {
     ]);
   });
 
+  it('parses GLM Responses catalog entries keyed by slug', async () => {
+    const result = await fetchProviderModels(spec({ agent: 'codex' }), async () =>
+      fakeResponse(
+        200,
+        JSON.stringify({
+          models: [
+            { slug: 'glm-5.3', display_name: 'GLM-5.3', context_window: 202_752 },
+          ],
+        }),
+      ),
+    );
+
+    expect(result.models).toEqual([
+      { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 202_752 },
+    ]);
+  });
+
   it('classifies 401 as AUTH_INVALID with status', async () => {
     const r = await fetchProviderModels(spec(), async () =>
       fakeResponse(401, JSON.stringify({ error: { message: 'invalid api key' } })),

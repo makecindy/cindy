@@ -35,12 +35,15 @@ import { derivePiRuntimeFromClaudeRuntime } from '@/../shared/piRuntimeInitializ
 
 import {
   isLoopbackProviderUrl,
+  isProviderRequestPath,
   presetDisplayName,
   sortPresetsForRegion,
 } from '@cindy/model-providers';
 import type {
   AgentKind,
   CustomProviderConfig,
+  ProviderModelDiscoverySource,
+  ProviderModelRouteConfig,
   ProviderPreset,
   ProviderView,
 } from '@cindy/model-providers';
@@ -90,16 +93,52 @@ function presetRuntimeBaseUrl(
 }
 
 function isValidEditablePresetBaseUrl(value: string): boolean {
+  return parseSafePresetHttpUrl(value) !== null;
+}
+
+function parseSafePresetHttpUrl(value: string): URL | null {
   try {
     const url = new URL(value);
-    return (
-      (url.protocol === 'http:' || url.protocol === 'https:')
-      && !url.username
-      && !url.password
-    );
+    if (
+      (url.protocol !== 'http:' && url.protocol !== 'https:')
+      || url.username
+      || url.password
+    ) return null;
+    return url;
   } catch {
-    return false;
+    return null;
   }
+}
+
+function isAllowedDiscoveryWireProtocol(
+  agent: AgentKind,
+  value: unknown,
+): value is ProviderModelRouteConfig['wireProtocol'] {
+  const supported =
+    value === 'anthropic-messages'
+    || value === 'openai-responses'
+    || value === 'openai-chat';
+  return supported && (agent !== 'claude-code' || value === 'anthropic-messages');
+}
+
+function isDiscoverySourceValidForRuntime(
+  agent: AgentKind,
+  runtimeBaseUrl: string,
+  source: ProviderModelDiscoverySource,
+): boolean {
+  const runtimeUrl = parseSafePresetHttpUrl(runtimeBaseUrl);
+  const sourceUrl = parseSafePresetHttpUrl(source.baseUrl);
+  if (
+    !runtimeUrl
+    || !sourceUrl
+    || sourceUrl.origin !== runtimeUrl.origin
+    || !isAllowedDiscoveryWireProtocol(agent, source.wireProtocol)
+  ) return false;
+  if (source.modelsUrl !== undefined) {
+    const modelsUrl = parseSafePresetHttpUrl(source.modelsUrl);
+    if (!modelsUrl || modelsUrl.origin !== sourceUrl.origin) return false;
+  }
+  return source.requestPath === undefined || isProviderRequestPath(source.requestPath);
 }
 
 /**
@@ -313,6 +352,8 @@ export function AddProviderWizard({
         /** 列模型端点上报的上下文窗口,**按 agent 分槽**(同一 id 双端可不同,如
          *  cc=1M / codex=272K);完成创建时按所属 runtime 取值,预设值优先、本值兜底。 */
         contextWindows?: Partial<Record<AgentKind, number>>;
+        /** 附加目录发现出的模型级路由；主 runtime 目录发现的模型保持缺省路由。 */
+        routes?: Partial<Record<AgentKind, ProviderModelRouteConfig>>;
       }
     >
   >(new Map());
@@ -560,6 +601,7 @@ export function AddProviderWizard({
         recommended: boolean;
         agents: AgentKind[];
         contextWindows?: Partial<Record<AgentKind, number>>;
+        routes?: Partial<Record<AgentKind, ProviderModelRouteConfig>>;
       }
     >();
     for (const agent of Object.keys(preset.runtimes) as AgentKind[]) {
@@ -567,8 +609,17 @@ export function AddProviderWizard({
         const existing = initial.get(m.id);
         if (existing) {
           if (!existing.agents.includes(agent)) existing.agents.push(agent);
+          if (m.route && !existing.routes?.[agent]) {
+            existing.routes = { ...existing.routes, [agent]: m.route };
+          }
         } else {
-          initial.set(m.id, { name: m.name, checked: true, recommended: true, agents: [agent] });
+          initial.set(m.id, {
+            name: m.name,
+            checked: true,
+            recommended: true,
+            agents: [agent],
+            ...(m.route ? { routes: { [agent]: m.route } } : {}),
+          });
         }
       }
     }
@@ -605,41 +656,76 @@ export function AddProviderWizard({
         .map(([modelsUrl]) => modelsUrl),
     );
     const results = await Promise.all(
-      agents.map(async (agent) => {
+      agents.flatMap((agent) => {
         const rt = preset.runtimes[agent];
         if (!rt) {
-          return {
-            agent,
-            ok: false,
-            models: [] as { id: string; name: string; contextWindow?: number }[],
-          };
+          return [];
         }
-        try {
-          const r = await window.electronAPI.maker.fetchProviderModels({
-            agent,
-            baseUrl: presetRuntimeBaseUrl(preset, agent, presetBaseUrls),
-            authMethod: preset.authMethod ?? 'apiKey',
+        const runtimeBaseUrl = presetRuntimeBaseUrl(preset, agent, presetBaseUrls);
+        const sources: {
+          baseUrl: string;
+          modelsUrl: string | null;
+          wireProtocol?: ProviderModelRouteConfig['wireProtocol'];
+          route?: ProviderModelRouteConfig;
+        }[] = [
+          {
+            baseUrl: runtimeBaseUrl,
             modelsUrl: rt.modelsUrl ?? null,
-            apiKey: apiKey.trim() || null,
             ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
-            ...(rt.headers ? { headers: rt.headers } : {}),
-          });
-          return { agent, ok: !!(r.ok && r.models), models: r.models ?? [] };
-        } catch {
-          return {
-            agent,
-            ok: false,
-            models: [] as { id: string; name: string; contextWindow?: number }[],
-          };
-        }
+          },
+          ...(rt.modelDiscovery ?? [])
+            .filter((source) => isDiscoverySourceValidForRuntime(agent, runtimeBaseUrl, source))
+            .map((source) => ({
+              baseUrl: source.baseUrl,
+              modelsUrl: source.modelsUrl ?? null,
+              wireProtocol: source.wireProtocol,
+              route: {
+                baseUrl: source.baseUrl,
+                wireProtocol: source.wireProtocol,
+                ...(source.requestPath ? { requestPath: source.requestPath } : {}),
+              },
+            })),
+        ];
+        return sources.map(async (source) => {
+          try {
+            const r = await window.electronAPI.maker.fetchProviderModels({
+              agent,
+              baseUrl: source.baseUrl,
+              authMethod: preset.authMethod ?? 'apiKey',
+              modelsUrl: source.modelsUrl,
+              apiKey: apiKey.trim() || null,
+              ...(source.wireProtocol ? { wireProtocol: source.wireProtocol } : {}),
+              ...(rt.headers ? { headers: rt.headers } : {}),
+            });
+            return {
+              agent,
+              modelsUrl: source.modelsUrl,
+              route: source.route,
+              ok: !!(r.ok && r.models),
+              models: r.models ?? [],
+            };
+          } catch {
+            return {
+              agent,
+              modelsUrl: source.modelsUrl,
+              route: source.route,
+              ok: false,
+              models: [] as { id: string; name: string; contextWindow?: number }[],
+            };
+          }
+        });
       }),
     );
     // 过期响应丢弃:用户已返回 / 换选了其它供应商,旧结果不得合入当前清单。
     if (seq !== fetchSeqRef.current) return;
+    const defaultDiscoveredModels = new Set(
+      results
+        .filter((result) => !result.route)
+        .flatMap((result) => result.models.map((model) => `${result.agent}\u0000${model.id}`)),
+    );
     setPicks((prev) => {
       const next = new Map(prev);
-      for (const { agent, models } of results) {
-        const modelsUrl = preset.runtimes[agent]?.modelsUrl;
+      for (const { agent, models, modelsUrl, route } of results) {
         const preservePresetOwnership = !!modelsUrl && splitDiscoveryUrls.has(modelsUrl);
         for (const m of models) {
           const existing = next.get(m.id);
@@ -653,12 +739,24 @@ export function AddProviderWizard({
             // 「预设没写窗口」的兜底)。
             const backfillWindow =
               existing.contextWindows?.[agent] === undefined && m.contextWindow !== undefined;
-            if (mergedAgents !== existing.agents || backfillWindow) {
+            const presetOwnsModel =
+              preset.runtimes[agent]?.models.some((model) => model.id === m.id) === true;
+            const discoveredRoute =
+              route &&
+              !presetOwnsModel &&
+              !defaultDiscoveredModels.has(`${agent}\u0000${m.id}`) &&
+              !existing.routes?.[agent]
+                ? route
+                : undefined;
+            if (mergedAgents !== existing.agents || backfillWindow || discoveredRoute) {
               next.set(m.id, {
                 ...existing,
                 agents: mergedAgents,
                 ...(backfillWindow
                   ? { contextWindows: { ...existing.contextWindows, [agent]: m.contextWindow } }
+                  : {}),
+                ...(discoveredRoute
+                  ? { routes: { ...existing.routes, [agent]: discoveredRoute } }
                   : {}),
               });
             }
@@ -671,6 +769,7 @@ export function AddProviderWizard({
               ...(m.contextWindow !== undefined
                 ? { contextWindows: { [agent]: m.contextWindow } }
                 : {}),
+              ...(route ? { routes: { [agent]: route } } : {}),
             });
           }
         }
@@ -757,7 +856,13 @@ export function AddProviderWizard({
     const preset = sel.preset;
     const selected = [...picks.entries()]
       .filter(([, v]) => v.checked)
-      .map(([id, v]) => ({ id, name: v.name, agents: v.agents, contextWindows: v.contextWindows }));
+      .map(([id, v]) => ({
+        id,
+        name: v.name,
+        agents: v.agents,
+        contextWindows: v.contextWindows,
+        routes: v.routes,
+      }));
     if (selected.length === 0) {
       toast.error(t('settings.providers.wizard.noModelSelected'));
       return;
@@ -787,6 +892,9 @@ export function AddProviderWizard({
               id: m.id,
               name: m.name,
               ...(agent === 'pi' && presetModel?.piApi ? { piApi: presetModel.piApi } : {}),
+              ...(presetModel?.route ?? m.routes?.[agent]
+                ? { route: presetModel?.route ?? m.routes?.[agent] }
+                : {}),
               ...(contextWindow !== undefined ? { contextWindow } : {}),
               ...(presetModel?.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...(presetModel?.reasoning === true && presetModel.reasoningEfforts?.length

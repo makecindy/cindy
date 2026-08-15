@@ -598,6 +598,31 @@ describe('custom provider runtime fill', () => {
     ]);
   });
 
+  it('preserves model-level routes when runtime-fill copies models', () => {
+    const source = draft({
+      models: [
+        {
+          id: 'glm-5.3',
+          name: 'GLM-5.3',
+          route: {
+            baseUrl: 'https://open.bigmodel.cn/api/v1',
+            wireProtocol: 'openai-responses',
+            requestPath: '/responses',
+          },
+        },
+      ],
+    });
+    const result = applyRuntimeFillFields(
+      draft({ models: [{ id: 'glm-5.3', name: 'Old GLM-5.3' }] }),
+      source,
+      ['models'],
+      { sourceAgent: 'codex', targetAgent: 'codex' },
+    );
+
+    expect(result.models).toEqual(source.models);
+    expect(result.models[0]?.route).not.toBe(source.models[0]?.route);
+  });
+
   it('ignores Pi-only capabilities when comparing or filling a non-Pi target', () => {
     const source = draft({
       models: [
@@ -655,17 +680,29 @@ describe('custom provider runtime fill', () => {
 
   it('takes a deep snapshot for review and apply', () => {
     const source = draft({
-      models: [{ id: 'model-a', name: 'Model A', reasoningEfforts: ['low'] }],
+      models: [
+        {
+          id: 'model-a',
+          name: 'Model A',
+          route: {
+            baseUrl: 'https://api.example/v1',
+            wireProtocol: 'openai-responses',
+          },
+          reasoningEfforts: ['low'],
+        },
+      ],
       headers: [{ name: 'X-Test', value: 'one' }],
     });
     const snapshot = cloneRuntimeFillDraft(source);
 
     source.models[0].name = 'Changed';
+    source.models[0].route!.baseUrl = 'https://changed.example/v1';
     source.models[0].reasoningEfforts?.push('high');
     source.headers[0].value = 'two';
 
     expect(snapshot.models[0]).toMatchObject({
       name: 'Model A',
+      route: { baseUrl: 'https://api.example/v1' },
       reasoningEfforts: ['low'],
     });
     expect(snapshot.headers[0]).toEqual({ name: 'X-Test', value: 'one' });

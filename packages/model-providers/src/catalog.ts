@@ -21,6 +21,7 @@ import type {
   Effort,
   ProviderPreset,
   PresetSortRegion,
+  ProviderModelRouteConfig,
 } from './types.js';
 import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
@@ -34,6 +35,43 @@ const WIRE_PROTOCOLS = ['anthropic-messages', 'openai-responses', 'openai-chat']
 
 function isWireProtocol(value: unknown): value is (typeof WIRE_PROTOCOLS)[number] {
   return typeof value === 'string' && (WIRE_PROTOCOLS as readonly string[]).includes(value);
+}
+
+function isWireProtocolAllowedForAgent(
+  agent: AgentKind,
+  value: unknown,
+): value is (typeof WIRE_PROTOCOLS)[number] {
+  return isWireProtocol(value) && (agent !== 'claude-code' || value === 'anthropic-messages');
+}
+
+function isValidModelRoute(
+  agent: AgentKind,
+  runtimeBaseUrl: unknown,
+  value: unknown,
+): value is ProviderModelRouteConfig {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const route = value as Record<string, unknown>;
+  if (
+    typeof route.baseUrl !== 'string' ||
+    route.baseUrl.trim().length === 0 ||
+    !isWireProtocolAllowedForAgent(agent, route.wireProtocol)
+  ) return false;
+  try {
+    const runtimeUrl = new URL(String(runtimeBaseUrl));
+    const routeUrl = new URL(route.baseUrl);
+    if (
+      (runtimeUrl.protocol !== 'http:' && runtimeUrl.protocol !== 'https:') ||
+      (routeUrl.protocol !== 'http:' && routeUrl.protocol !== 'https:') ||
+      runtimeUrl.username ||
+      runtimeUrl.password ||
+      routeUrl.username ||
+      routeUrl.password ||
+      routeUrl.origin !== runtimeUrl.origin
+    ) return false;
+  } catch {
+    return false;
+  }
+  return route.requestPath === undefined || isProviderRequestPath(route.requestPath);
 }
 
 function isAgentKind(v: unknown): v is AgentKind {
@@ -101,11 +139,22 @@ function validateAccess(p: Provider): void {
 }
 
 /** 轻量校验一个 model 条目的必需字段。 */
-function validateModel(m: CatalogModel, providerId: string): void {
+function validateModel(
+  m: CatalogModel,
+  providerId: string,
+  agent: AgentKind,
+  runtimeBaseUrl: unknown,
+): void {
   assert(typeof m.id === 'string' && m.id.length > 0, `model.id missing in provider '${providerId}'`);
   assert(typeof m.name === 'string' && m.name.length > 0, `model.name missing for '${m.id}'`);
   if (m.piApi !== undefined) {
     assert(isPiModelApi(m.piApi), `model.piApi invalid for '${m.id}'`);
+  }
+  if (m.route !== undefined) {
+    assert(
+      isValidModelRoute(agent, runtimeBaseUrl, m.route),
+      `model.route invalid for '${m.id}' in provider '${providerId}'`,
+    );
   }
   assert(typeof m.contextWindow === 'number' && m.contextWindow > 0, `model.contextWindow invalid for '${m.id}'`);
   assert(Array.isArray(m.efforts), `model.efforts must be array for '${m.id}'`);
@@ -305,7 +354,7 @@ function validateProvider(p: Provider): void {
     }
     const list = p.models[agent];
     assert(Array.isArray(list), `provider '${p.id}' declares agent '${agent}' but no models[${agent}]`);
-    for (const m of list) validateModel(m, p.id);
+    for (const m of list) validateModel(m, p.id, agent, routing.upstream);
   }
   // 约束：若声明了 titleModel（标题 oneShot 用的最经济模型），它必须存在于本供应商任一
   // agent 的模型清单里 —— 防把不存在 / 拼错的 id 配进去导致运行时静默起不出标题。
@@ -472,6 +521,11 @@ function isHttpUrl(v: unknown): boolean {
   }
 }
 
+function httpUrl(v: unknown): URL | null {
+  if (!isHttpUrl(v)) return null;
+  return new URL(v as string);
+}
+
 /**
  * runtime.modelsUrl 非法（非 http(s) URL）时剥掉该字段、保留预设本体——OSS 推错一个
  * 不可见字段不该让整条预设消失，更不该让用户保存时撞 main 侧 URL 校验无法自助修复。
@@ -481,6 +535,17 @@ function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
   const runtimes: ProviderPreset['runtimes'] = {};
   for (const [agent, rt] of Object.entries(p.runtimes) as [AgentKind, ProviderPreset['runtimes'][AgentKind] & object][]) {
     let next = rt;
+    const models = next.models.map((model) => {
+      if (model.route === undefined || isValidModelRoute(agent, next.baseUrl, model.route)) {
+        return model;
+      }
+      const { route: _drop, ...rest } = model;
+      changed = true;
+      return rest;
+    });
+    if (models.some((model, index) => model !== next.models[index])) {
+      next = { ...next, models };
+    }
     if (next.modelsUrl !== undefined && !isHttpUrl(next.modelsUrl)) {
       const { modelsUrl: _drop, ...rest } = next;
       next = rest;
@@ -490,6 +555,43 @@ function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
       const { requestPath: _drop, ...rest } = next;
       next = rest;
       changed = true;
+    }
+    if (next.modelDiscovery !== undefined) {
+      const runtimeUrl = httpUrl(next.baseUrl);
+      const sources = Array.isArray(next.modelDiscovery)
+        ? next.modelDiscovery.filter((candidate) => {
+            if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
+            const source = candidate as unknown as Record<string, unknown>;
+            const sourceUrl = httpUrl(source.baseUrl);
+            if (!runtimeUrl || !sourceUrl || sourceUrl.origin !== runtimeUrl.origin) return false;
+            if (!isWireProtocol(source.wireProtocol)) return false;
+            if (agent === 'claude-code' && source.wireProtocol !== 'anthropic-messages') {
+              return false;
+            }
+            if (
+              source.modelsUrl !== undefined &&
+              (!isHttpUrl(source.modelsUrl) ||
+                httpUrl(source.modelsUrl)?.origin !== sourceUrl.origin)
+            ) {
+              return false;
+            }
+            return (
+              source.requestPath === undefined || isProviderRequestPath(source.requestPath)
+            );
+          })
+        : [];
+      if (
+        !Array.isArray(next.modelDiscovery) ||
+        sources.length !== next.modelDiscovery.length
+      ) {
+        changed = true;
+      }
+      if (sources.length > 0) {
+        next = { ...next, modelDiscovery: sources };
+      } else {
+        const { modelDiscovery: _drop, ...rest } = next;
+        next = rest;
+      }
     }
     runtimes[agent] = next;
   }

@@ -646,6 +646,47 @@ describe('provider OAuth and upstream URL validation', () => {
     catalog.providers[0]!.routing.codex!.upstream = 'https://user:pass@api.example/v1';
     expect(() => parseCatalog(catalog)).toThrow(/upstream invalid/);
   });
+
+  it('accepts a same-origin Responses model route', () => {
+    const catalog = oauthCatalog();
+    catalog.providers[0]!.models.codex![0] = model('m1', {
+      route: {
+        baseUrl: 'https://api.example/v1',
+        wireProtocol: 'openai-responses',
+        requestPath: '/responses',
+      },
+    });
+    expect(parseCatalog(catalog).providers[0]!.models.codex![0]!.route).toEqual({
+      baseUrl: 'https://api.example/v1',
+      wireProtocol: 'openai-responses',
+      requestPath: '/responses',
+    });
+  });
+
+  it.each([
+    ['non-object route', null],
+    ['missing base URL', { wireProtocol: 'openai-responses' }],
+    ['cross-origin base URL', { baseUrl: 'https://other.example/v1', wireProtocol: 'openai-responses' }],
+    ['embedded credentials', { baseUrl: 'https://user:pass@api.example/v1', wireProtocol: 'openai-responses' }],
+    ['invalid protocol', { baseUrl: 'https://api.example/v1', wireProtocol: 'invalid' }],
+    ['unsafe request path', { baseUrl: 'https://api.example/v1', wireProtocol: 'openai-responses', requestPath: '//other.example' }],
+    ['Claude-incompatible protocol', { baseUrl: 'https://api.example/v1', wireProtocol: 'openai-responses' }],
+  ])('rejects %s model routes', (_label, route) => {
+    const catalog = oauthCatalog();
+    if (_label === 'Claude-incompatible protocol') {
+      catalog.providers[0]!.agents = ['claude-code'];
+      catalog.providers[0]!.routing = {
+        'claude-code': {
+          upstream: 'https://api.example/v1',
+          authStrategy: 'oauth-token',
+        },
+      };
+      catalog.providers[0]!.models = { 'claude-code': [model('m1', { route })] };
+    } else {
+      catalog.providers[0]!.models.codex![0] = model('m1', { route });
+    }
+    expect(() => parseCatalog(catalog)).toThrow(/model\.route invalid/);
+  });
 });
 
 describe('buildRegistry 的清单发现失败投影', () => {

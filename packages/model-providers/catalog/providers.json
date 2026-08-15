@@ -1578,6 +1578,13 @@
         "codex": {
           "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
           "wireProtocol": "openai-chat",
+          "modelDiscovery": [
+            {
+              "baseUrl": "https://open.bigmodel.cn/api/v1",
+              "modelsUrl": "https://open.bigmodel.cn/api/v1/models",
+              "wireProtocol": "openai-responses"
+            }
+          ],
           "models": [
             {
               "id": "glm-5.2",

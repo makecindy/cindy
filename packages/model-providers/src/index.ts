@@ -23,6 +23,8 @@ export type {
   Catalog,
   CustomProviderConfig,
   CustomProviderRuntimeConfig,
+  ProviderModelDiscoverySource,
+  ProviderModelRouteConfig,
   ProviderRuntimeModelConfig,
   PiReasoningEffort,
   PiModelApi,
