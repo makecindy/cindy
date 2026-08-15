@@ -68,7 +68,7 @@ import {
 } from './mcp-tool-approval-policy.js';
 import { getRipgrepBinaryPath, claudeUpstreamEndpoint } from './runtime-configs.js';
 import { getActiveCatalog, resolveXdPiGatewayWireProtocol } from './active-catalog.js';
-import { resolveManagedPiPackageResources } from './pi-package-store.js';
+import { mutatePiPackage, resolveManagedPiPackageResources } from './pi-package-store.js';
 
 const log = createLogger('pi-host');
 
@@ -1284,6 +1284,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       return path.join(app.getPath('userData'), 'pi-agent-home');
     },
     resolvePiManagedPackageResources: resolveManagedPiPackageResources,
+    mutatePiManagedPackage: (request) => mutatePiPackage({
+      ...request,
+      ...(request.action === 'install' ? { confirmed: true } : {}),
+    }),
     preparePiExtraSpawnConfig: async (providers, ctx) => {
       const extra = await getPiExtraSpawnConfig(providers, opts.logger, ctx);
       if (!extra?.mcpBridge || extra.mcpBridge.servers.length === 0) return extra;

@@ -1925,6 +1925,7 @@ describe('Pi provider-aware model routing', () => {
         };
       },
       derivePiProxySessionToken,
+      mutatePiManagedPackage: vi.fn(async () => ({ changed: true })),
       resolveRemotePiBinaryPath: async () => '/remote/pi',
       getRemotePiFileOps: () => ({
         mkdirp: async () => {},
@@ -1956,6 +1957,7 @@ describe('Pi provider-aware model routing', () => {
       expect.arrayContaining(['CINDY_PI_API_KEY', 'CINDY_PI_XAI_PROXY_API_KEY']),
     );
     expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(registeredToken);
+    expect(transportOptions?.env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
     const firstToken = registeredToken;
     const firstSpawnEnv = { ...transportOptions?.env };
 

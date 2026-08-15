@@ -283,6 +283,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
   }
 
+  function fireManagedPackageRequest(
+    id: string,
+    action: 'install' | 'update' | 'remove',
+    source: string,
+  ): void {
+    captured.onEvent!({
+      type: 'extension_ui_request',
+      method: 'input',
+      id,
+      title: 'cindy:pi-package',
+      placeholder: JSON.stringify({ action, source }),
+    });
+  }
+
   it('spawns with a private managed rg path, default prompt and no restrictive tool allowlist', async () => {
     if (process.platform === 'win32') {
       // Windows 的环境变量键不区分大小写，无法同时构造“仅有小写键”的进程环境。
@@ -331,8 +345,160 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.env.no_proxy).toBeUndefined();
   });
 
+  it('routes chat-requested Pi extension installs into the host-managed store', async () => {
+    const mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: { source: 'npm:context-mode', enabled: false },
+    }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      expect(captured.env.CINDY_PI_PACKAGE_MANAGEMENT).toBe('1');
+      fireManagedPackageRequest('pkg-1', 'install', ' npm:context-mode ');
+      const response = await waitForResponse('pkg-1');
+      expect(mutatePiManagedPackage).toHaveBeenCalledWith({
+        action: 'install',
+        source: 'npm:context-mode',
+      });
+      expect(JSON.parse(String(response.value))).toMatchObject({
+        ok: true,
+        result: {
+          changed: true,
+          affectedPackage: { source: 'npm:context-mode', enabled: false },
+        },
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('deterministically handles an exact pi install user command before prompting the model', async () => {
+    const mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: {
+        source: 'npm:context-mode',
+        name: 'context-mode',
+        version: '1.0.169',
+        enabled: false,
+        requiresExtensionApproval: true,
+        resources: [{
+          kind: 'extension',
+          name: 'extension.js',
+          compatibility: 'partial',
+          compatibilityIssues: ['notifications'],
+        }],
+      },
+    }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-command-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send({ type: 'user', content: 'pi install npm:context-mode' });
+      expect(mutatePiManagedPackage).toHaveBeenCalledWith({
+        action: 'install',
+        source: 'npm:context-mode',
+      });
+      const prompt = captured.requests.find((request) => request.type === 'prompt');
+      expect(prompt?.message).toContain('[Cindy internal Pi extension operation receipt]');
+      expect(prompt?.message).toContain('"compatibility":"partial"');
+      expect(prompt?.message).toContain('"notifications"');
+      expect(prompt?.message).toContain('Do not run bash');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('bounds oversized Pi extension receipts while preserving package identity and counts', async () => {
+    const resources = Array.from({ length: 200 }, (_, index) => ({
+      kind: 'extension',
+      name: `extension-${index}-${'x'.repeat(500)}`,
+      compatibility: 'partial',
+      compatibilityIssues: Array.from({ length: 32 }, () => 'y'.repeat(64)),
+      detectedApis: Array.from({ length: 32 }, () => 'z'.repeat(64)),
+    }));
+    const mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true,
+      affectedPackage: {
+        source: 'npm:oversized-extension',
+        name: 'oversized-extension',
+        version: '9.8.7',
+        enabled: false,
+        requiresExtensionApproval: true,
+        resources,
+      },
+    }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-large-receipt-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send({ type: 'user', content: 'pi install npm:oversized-extension' });
+      const prompt = captured.requests.find((request) => request.type === 'prompt')?.message ?? '';
+      expect(prompt.length).toBeLessThanOrEqual(16_384);
+      expect(prompt).toContain('"name":"oversized-extension"');
+      expect(prompt).toContain('"version":"9.8.7"');
+      expect(prompt).toContain('"enabled":false');
+      expect(prompt).toContain('"resourceCount":200');
+      expect(prompt).toContain('"outputTruncated":true');
+      expect(prompt).toContain('"detailsOmitted":"receipt-size-limit"');
+
+      fireManagedPackageRequest('pkg-large', 'install', 'npm:oversized-extension');
+      const response = await waitForResponse('pkg-large');
+      const parsed = JSON.parse(String(response.value));
+      expect(String(response.value).length).toBeLessThanOrEqual(16_384);
+      expect(parsed.result).toMatchObject({
+        changed: true,
+        outputTruncated: true,
+        affectedPackage: {
+          name: 'oversized-extension',
+          version: '9.8.7',
+          enabled: false,
+          resourceCount: 200,
+          detailsOmitted: 'receipt-size-limit',
+        },
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('leaves natural-language Pi extension requests for the dedicated model tool', async () => {
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-natural-language-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send({ type: 'user', content: '请帮我安装 context-mode 这个 Pi 扩展' });
+      expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+      expect(captured.requests.find((request) => request.type === 'prompt')?.message)
+        .toBe('请帮我安装 context-mode 这个 Pi 扩展');
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('locks Review sessions to the local read-only tool surface without memory, MCP, or subagents', async () => {
     const deps = buildDeps(undefined, false, { serverNames: ['cindy_memory', 'cindy_helper'] });
+    deps.mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
     deps.getGhostRosterPrompt = vi.fn(() => 'PRIVATE ROSTER');
     deps.resolvePiProjectTrustInput = vi.fn(async () => {
       throw new Error('Review must not consult project approval resources');
@@ -359,6 +525,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(captured.args).toContain('--no-approve');
       expect(captured.args).toContain('--no-extensions');
       expect(captured.args).not.toContain('--skill');
+      expect(captured.env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
       expect(captured.mcpVendorOptions).toBeUndefined();
       expect(deps.getGhostRosterPrompt).not.toHaveBeenCalled();
       expect(deps.resolvePiProjectTrustInput).not.toHaveBeenCalled();
@@ -407,6 +574,14 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         reviewOnly: true,
       });
       expect(handle.getPlanMode?.()).toBe(false);
+
+      fireManagedPackageRequest('review-pkg', 'install', 'npm:context-mode');
+      expect(await waitForResponse('review-pkg')).toEqual({
+        type: 'extension_ui_response',
+        id: 'review-pkg',
+        cancelled: true,
+      });
+      expect(deps.mutatePiManagedPackage).not.toHaveBeenCalled();
     } finally {
       await handle.close();
     }

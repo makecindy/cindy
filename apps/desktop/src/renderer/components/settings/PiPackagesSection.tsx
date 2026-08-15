@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
-import { AlertTriangle, Puzzle, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Puzzle, RefreshCw, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type {
@@ -10,9 +10,7 @@ import type {
   PiPackageRuntimeRequirement,
   PiPackageView,
 } from '@/../shared/piPackages';
-import {
-  shouldShowPiPackagePostMutationNotice,
-} from '@/../shared/piPackages';
+import { shouldShowPiPackagePostMutationNotice } from '@/../shared/piPackages';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -84,18 +82,26 @@ function RuntimeRequirementDetails({ requirement }: { requirement: PiPackageRunt
               packageName: requirement.packageName,
             })
           : requirement.compatible === false
-          ? t('settings.piPackages.runtimeMismatch', {
-              packageName: requirement.packageName,
-              range: requirement.range,
-              currentVersion: requirement.currentVersion,
-            })
-          : t('settings.piPackages.runtimeUnknown', {
-              packageName: requirement.packageName,
-              range: requirement.range,
-            })}
+            ? t('settings.piPackages.runtimeMismatch', {
+                packageName: requirement.packageName,
+                range: requirement.range,
+                currentVersion: requirement.currentVersion,
+              })
+            : t('settings.piPackages.runtimeUnknown', {
+                packageName: requirement.packageName,
+                range: requirement.range,
+              })}
       </p>
     </div>
   );
+}
+
+function packageCompatibilityNoticeCount(pkg: PiPackageView): number {
+  const resourceNotices = pkg.resources.filter(
+    (resource) => resource.compatibility !== 'supported' || Boolean(resource.compatibilityIssues?.length),
+  ).length;
+  const runtimeNotices = pkg.runtimeRequirements?.filter((requirement) => requirement.compatible !== true).length ?? 0;
+  return resourceNotices + runtimeNotices + (pkg.warning ? 1 : 0);
 }
 
 export function PiPackagesSection() {
@@ -108,6 +114,7 @@ export function PiPackagesSection() {
   const [pendingRemoval, setPendingRemoval] = useState<PiPackageView | null>(null);
   const [compatibilityNotice, setCompatibilityNotice] = useState<PiPackageView | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [expandedSources, setExpandedSources] = useState<Set<string>>(() => new Set());
 
   const load = async () => {
     try {
@@ -121,7 +128,9 @@ export function PiPackagesSection() {
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+  }, []);
 
   const runMutation = async (
     action: PiPackageMutationAction,
@@ -142,9 +151,9 @@ export function PiPackagesSection() {
         setSource('');
       }
       if (
-        (action === 'install' || action === 'update')
-        && result.affectedPackage
-        && shouldShowPiPackagePostMutationNotice(result.affectedPackage)
+        (action === 'install' || action === 'update') &&
+        result.affectedPackage &&
+        shouldShowPiPackagePostMutationNotice(result.affectedPackage)
       ) {
         setCompatibilityNotice(result.affectedPackage);
       }
@@ -160,6 +169,14 @@ export function PiPackagesSection() {
 
   const installSource = source.trim();
   const empty = useMemo(() => !loading && available && packages.length === 0, [available, loading, packages]);
+  const toggleDetails = (packageSource: string) => {
+    setExpandedSources((current) => {
+      const next = new Set(current);
+      if (next.has(packageSource)) next.delete(packageSource);
+      else next.add(packageSource);
+      return next;
+    });
+  };
 
   return (
     <div className="flex flex-col gap-8">
@@ -174,10 +191,7 @@ export function PiPackagesSection() {
 
       <section className="flex flex-col gap-3" aria-labelledby="pi-extension-install-title">
         <div className="flex flex-col gap-1">
-          <h3
-            id="pi-extension-install-title"
-            className="text-14 font-medium text-[var(--settings-section-sublabel)]"
-          >
+          <h3 id="pi-extension-install-title" className="text-14 font-medium text-[var(--settings-section-sublabel)]">
             {t('settings.piPackages.installSectionTitle')}
           </h3>
           <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
@@ -212,47 +226,49 @@ export function PiPackagesSection() {
       </section>
 
       <section className="flex flex-col gap-3" aria-labelledby="pi-extension-installed-title">
-        <h3
-          id="pi-extension-installed-title"
-          className="text-14 font-medium text-[var(--settings-section-sublabel)]"
-        >
+        <h3 id="pi-extension-installed-title" className="text-14 font-medium text-[var(--settings-section-sublabel)]">
           {t('settings.piPackages.installedSectionTitle')}
         </h3>
 
         {!available && (
-          <p className="text-12 text-[var(--settings-section-desc)]">
-            {t('settings.piPackages.piUnavailable')}
-          </p>
+          <p className="text-12 text-[var(--settings-section-desc)]">{t('settings.piPackages.piUnavailable')}</p>
         )}
 
         {empty && (
           <div className="rounded-xl border border-dashed border-[var(--settings-theme-card-border)] px-5 py-8 text-center">
-            <p className="text-12 text-[var(--settings-section-desc)]">
-              {t('settings.piPackages.empty')}
-            </p>
+            <p className="text-12 text-[var(--settings-section-desc)]">{t('settings.piPackages.empty')}</p>
           </div>
         )}
 
-        <div className="flex flex-col gap-3">
+        <div className={packages.length > 0 ? CARD_CLASS : undefined}>
           {packages.map((pkg) => {
             const packageBusy = Boolean(busy?.endsWith(`:${pkg.source}`));
             const packageManageable = pkg.manageable !== false;
+            const expanded = expandedSources.has(pkg.source);
+            const noticeCount = packageCompatibilityNoticeCount(pkg);
             return (
-              <div key={pkg.source} className={CARD_CLASS}>
-                <div className="flex items-start justify-between gap-4 px-4 py-4">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                      <p className="truncate text-13 font-medium text-[var(--settings-section-sublabel)]">
-                        {pkg.name}
-                      </p>
-                      {pkg.version && (
-                        <span className="text-11 text-[var(--settings-section-desc)]">v{pkg.version}</span>
-                      )}
-                    </div>
-                    <p className="mt-1 break-all font-mono text-11 text-[var(--settings-section-desc)]">
-                      {pkg.source}
-                    </p>
-                  </div>
+              <div key={pkg.source} className="border-b border-[var(--settings-theme-card-border)] last:border-b-0">
+                <div className="flex min-h-11 items-center gap-1.5 px-3 py-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleDetails(pkg.source)}
+                    aria-expanded={expanded}
+                    className="flex min-w-0 flex-1 items-baseline gap-2 text-left"
+                  >
+                    <span className="truncate text-13 font-medium text-[var(--settings-section-sublabel)]">
+                      {pkg.name}
+                    </span>
+                    {pkg.version && (
+                      <span className="shrink-0 text-11 text-[var(--settings-section-desc)]">v{pkg.version}</span>
+                    )}
+                  </button>
+                  <span className="hidden shrink-0 text-11 text-[var(--settings-section-desc)] xl:block">
+                    {!packageManageable
+                      ? t('settings.piPackages.rowStatus.unmanageable')
+                      : noticeCount > 0
+                        ? t('settings.piPackages.rowStatus.notices', { count: noticeCount })
+                        : t('settings.piPackages.rowStatus.compatible')}
+                  </span>
                   <Switch
                     checked={pkg.enabled}
                     disabled={packageBusy || !packageManageable}
@@ -265,60 +281,70 @@ export function PiPackagesSection() {
                     }}
                     aria-label={t('settings.piPackages.toggleAria', { name: pkg.name })}
                   />
-                </div>
-
-                <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
-
-                <div className="flex flex-col gap-2 px-4 py-3">
-                  {pkg.resources.map((resource, index) => (
-                    <ResourceCompatibilityDetails
-                      key={`${resource.kind}:${resource.name}:${index}`}
-                      resource={resource}
-                    />
-                  ))}
-                  {pkg.runtimeRequirements?.map((requirement) => (
-                    <RuntimeRequirementDetails
-                      key={`${requirement.packageName}:${requirement.range}`}
-                      requirement={requirement}
-                    />
-                  ))}
-                  {pkg.warning && (
-                    <span className="text-12 text-[var(--settings-section-desc)]">
-                      {t(`settings.piPackages.warning.${pkg.warning}`)}
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-end gap-2 px-4 pb-4">
                   <button
                     type="button"
                     disabled={packageBusy || !packageManageable}
                     onClick={() => void runMutation('update', pkg.source)}
-                    className={ACTION_CLASS}
+                    aria-label={t('settings.piPackages.updateAria', { name: pkg.name })}
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--settings-section-desc)] transition-colors hover:bg-sidebar-item-hover disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <RefreshCw size={14} />
-                    {t('settings.piPackages.update')}
                   </button>
                   <button
                     type="button"
                     disabled={packageBusy || !packageManageable}
                     onClick={() => setPendingRemoval(pkg)}
-                    className={ACTION_CLASS}
+                    aria-label={t('settings.piPackages.removeAria', { name: pkg.name })}
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--settings-section-desc)] transition-colors hover:bg-sidebar-item-hover disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Trash2 size={14} />
-                    {t('settings.piPackages.remove')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleDetails(pkg.source)}
+                    aria-expanded={expanded}
+                    aria-label={
+                      expanded
+                        ? t('settings.piPackages.collapseDetails', { name: pkg.name })
+                        : t('settings.piPackages.showDetails', { name: pkg.name })
+                    }
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--settings-section-desc)] transition-colors hover:bg-sidebar-item-hover"
+                  >
+                    {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                   </button>
                 </div>
+
+                {expanded && (
+                  <div className="flex flex-col gap-2 border-t border-[var(--settings-theme-card-border)] bg-[var(--surface-subtle)] px-4 py-3">
+                    <p className="break-all font-mono text-11 text-[var(--settings-section-desc)]">
+                      {pkg.source}
+                    </p>
+                    {pkg.resources.map((resource, index) => (
+                      <ResourceCompatibilityDetails
+                        key={`${resource.kind}:${resource.name}:${index}`}
+                        resource={resource}
+                      />
+                    ))}
+                    {pkg.runtimeRequirements?.map((requirement) => (
+                      <RuntimeRequirementDetails
+                        key={`${requirement.packageName}:${requirement.range}`}
+                        requirement={requirement}
+                      />
+                    ))}
+                    {pkg.warning && (
+                      <span className="text-12 text-[var(--settings-section-desc)]">
+                        {t(`settings.piPackages.warning.${pkg.warning}`)}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       </section>
 
-      <AlertDialog.Root
-        open={pendingRemoval !== null}
-        onOpenChange={(open) => !open && setPendingRemoval(null)}
-      >
+      <AlertDialog.Root open={pendingRemoval !== null} onOpenChange={(open) => !open && setPendingRemoval(null)}>
         <AlertDialog.Portal>
           <AlertDialog.Overlay className="fixed inset-0 z-[100] bg-black/35" />
           <AlertDialog.Content
@@ -349,7 +375,7 @@ export function PiPackagesSection() {
                 </button>
               </AlertDialog.Action>
             </div>
-        </AlertDialog.Content>
+          </AlertDialog.Content>
         </AlertDialog.Portal>
       </AlertDialog.Root>
 
@@ -476,7 +502,10 @@ export function PiPackagesSection() {
                   const requiresApproval = compatibilityNotice?.requiresExtensionApproval;
                   setCompatibilityNotice(null);
                   if (packageSource && requiresApproval) {
-                    void runMutation('set-enabled', packageSource, { enabled: true, confirmed: true });
+                    void runMutation('set-enabled', packageSource, {
+                      enabled: true,
+                      confirmed: true,
+                    });
                   }
                 }}
               >

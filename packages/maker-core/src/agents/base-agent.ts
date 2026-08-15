@@ -417,6 +417,11 @@ export interface TurnChangeCaptureHooks {
   }): void;
 }
 
+export interface PiManagedPackageMutationRequest {
+  action: 'install' | 'update' | 'remove';
+  source: string;
+}
+
 export interface AgentDeps {
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
@@ -465,6 +470,13 @@ export interface AgentDeps {
     promptTemplates: string[];
     packageRoots: string[];
   }>;
+
+  /**
+   * Pi-only: mutate Cindy's host-owned Pi extension store. This is deliberately
+   * separate from the Pi CLI so chat requests cannot fall through to the
+   * user's ~/.pi directory or bypass Cindy's inspection/approval state.
+   */
+  mutatePiManagedPackage?: (request: PiManagedPackageMutationRequest) => Promise<unknown>;
 
   /**
    * Pi-only: resolve the immutable Cindy project-approval input for one new

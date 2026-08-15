@@ -192,6 +192,14 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("startsWith('mcp__')");
   });
 
+  it('hard-blocks Pi package CLI mutations from the model-facing bash tool', () => {
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('commandMutatesPiPackages');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "event.toolName === 'bash' && commandMutatesPiPackages",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('Use cindy_pi_extension');
+  });
+
   it('checks the Review deny-by-default boundary before ordinary permission handling', () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
     const reviewGate = source.indexOf('if (permission.reviewOnly)');
