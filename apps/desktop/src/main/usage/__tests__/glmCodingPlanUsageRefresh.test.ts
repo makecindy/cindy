@@ -384,6 +384,7 @@ describe('post-side-effect compensation (四轮, Greptile 残余竞态)', () => 
 
   it('re-fetches immediately when an empty-clear wipes the new identity snapshot in the window', async () => {
     // 空响应的清快照执行中换 key:清掉的是新身份的快照 → 补偿必须绕过节流立即补刷。
+    // 清后缓存为空 → 补偿不再重复清(clear===1),但补刷照发(身份失配天然重置节流)。
     const holder: { flip?: () => void } = {};
     const h = makeHarness({
       deferFetch: true,
@@ -396,7 +397,32 @@ describe('post-side-effect compensation (四轮, Greptile 残余竞态)', () => 
     await vi.waitFor(() => expect(h.calls.record).toHaveLength(1)); // 补偿补刷 B
     expect(h.calls.record[0].keyFingerprint).toBe('fp-key-b');
     expect(h.calls.fetch).toBe(2); // 清后立即补刷,未被节流卡住
-    expect(h.calls.clear).toBeGreaterThanOrEqual(2); // 原 clear + 补偿 clear
+    expect(h.calls.clear).toBe(1); // 原空响应清;补偿对空缓存不再重复清
+  });
+
+  it('compensation spares a fresh snapshot already written by the new identity (六轮 Greptile 4/5)', async () => {
+    // 校验通过 → A 写库完成的窗口内,B 的链式补刷已先落库:
+    // 补偿只清「仍属于旧身份」的快照,无条件按 providerId 删会误删 B 的新快照
+    // (补刷再失败则当前账号额度显示丢失一个节流窗)。
+    const bSnapshot = snapshotOf({
+      keyFingerprint: 'fp-key-b',
+      runtimeBaseUrl: SOURCE_A.runtimeBaseUrl,
+    });
+    const holder: { flip?: () => void } = {};
+    const h = makeHarness({
+      deferFetch: true,
+      recordHook: () => {
+        holder.flip?.();
+        h.setCached(bSnapshot); // 模拟 B 的补刷在本窗口内已先落库
+      },
+    });
+    holder.flip = () => h.setSource(SOURCE_B);
+    void h.reader.read(SOURCE_A.providerId);
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(1));
+    h.resolveFetch(snapshotOf({ fiveHour: { utilization: 77, resetsAt: null } })); // A 的响应
+    await vi.waitFor(() => expect(h.calls.fetch).toBe(2)); // 补偿仍按当前源补刷
+    expect(h.calls.clear).toBe(0); // B 的新快照未被补偿误删
+    expect(h.cached()?.keyFingerprint).toBe('fp-key-b'); // 最终态是新身份
   });
 });
 

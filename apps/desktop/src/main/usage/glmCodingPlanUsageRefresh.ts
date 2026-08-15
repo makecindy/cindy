@@ -177,12 +177,37 @@ export function createGlmCodingPlanUsageReader(
   }
 
   /**
+   * 持久化快照是否仍属于给定身份(旧请求视角):身份字段齐全且全部匹配。
+   * 字段不完整的旧快照归属不明,保守按"不属于"处理(宁可留给补刷覆盖,
+   * 不冒误删风险)。
+   */
+  function cachedBelongsToSource(
+    cached: GlmCodingPlanUsageSnapshot | null,
+    keyFingerprint: string,
+    source: GlmCodingPlanProviderSource,
+  ): boolean {
+    if (!cached) return false;
+    if (!cached.keyFingerprint || !cached.runtimeBaseUrl || cached.platform === undefined) {
+      return false;
+    }
+    return (
+      cached.keyFingerprint === keyFingerprint
+      && cached.runtimeBaseUrl === source.runtimeBaseUrl
+      && cached.platform === source.platform
+    );
+  }
+
+  /**
    * 副作用后补偿(四轮 review,Greptile 残余竞态):活体校验通过 → record/clear
    * 完成之间还有一段 await 窗口,provider CRUD 恰在此刻落地时旧副作用仍会执行
    * ——写回旧快照(覆盖 sync 刚清的结果)或清掉新身份刚写入的快照。副作用完成后
-   * 再验一次身份,失配则:清掉旧身份写下的东西(clearSnapshotQuiet 顺带把节流身份
-   * 重置,补偿刷新不被 180s 窗口卡住),并按当前源立即补刷。口径对齐 usageBroadcaster
-   * 段已有的「写库后世代复查 + 补偿删除」模式。
+   * 再验一次身份,失配则清残留并按当前源立即补刷。
+   *
+   * 清除带身份条件(六轮 review,Greptile 4/5):新身份的链式补刷可能在本窗口内
+   * **已先落库**——无条件按 providerId 删会误删新快照,补刷再遇网络错误/401/429
+   * 时当前账号额度显示丢失(一个节流窗内无法恢复)。因此只清「仍属于旧身份」的
+   * 快照;新身份已落库的不动。补偿刷新的节流绕过不依赖 clearSnapshotQuiet 的
+   * 身份重置——refreshWith 对不同身份天然重置节流。
    */
   async function compensateIfStale(
     providerId: string,
@@ -190,7 +215,10 @@ export function createGlmCodingPlanUsageReader(
     source: GlmCodingPlanProviderSource,
   ): Promise<void> {
     if (await isRefreshStillCurrent(providerId, keyFingerprint, source)) return;
-    await clearSnapshotQuiet(providerId);
+    const cached = await deps.readCachedSnapshot(providerId);
+    if (cachedBelongsToSource(cached, keyFingerprint, source)) {
+      await clearSnapshotQuiet(providerId);
+    }
     const current = await readSourceSafe(providerId);
     if (current && current !== 'stale-owner') void refreshWith(providerId, current);
   }
