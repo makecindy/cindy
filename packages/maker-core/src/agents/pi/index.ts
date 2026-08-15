@@ -77,8 +77,11 @@ import {
 } from './cindy-subagent-source.js';
 import { normalizePiToolForAutoReview } from './auto-review-policy.js';
 import {
+  annotatePermissionRequestForUnavailableReview,
+  createAutoReviewConfirmUndeliveredNotice,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
+  isSystemPermissionDenialReason,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
@@ -1738,6 +1741,7 @@ export class PiAgent extends BaseAgent {
     // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
     // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
       autoReviewUnavailableNotice.reset();
+      autoReviewConfirmUndeliveredNotice.reset();
     };
     /**
      * 挂起的权限卡登记表 —— 档位切换 / 会话关闭时必须能把它们强制 settle 并让 UI 收卡,
@@ -1751,6 +1755,8 @@ export class PiAgent extends BaseAgent {
       settle: (resolveAs: 'allow' | 'deny') => void;
       /** 高风险审批(MCP prompt-each-time、灰区 ask、审查中收紧):放宽档位不得批量放行。 */
       forcePrompt: boolean;
+      /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
+      unavailableHandoff?: boolean;
     };
     const pendingPrompts = new Map<string, PendingPrompt>();
     const registerPendingPrompt = (requestId: string, entry: PendingPrompt): (() => void) => {
@@ -1764,6 +1770,9 @@ export class PiAgent extends BaseAgent {
         // (与 CC / Codex 的同名逻辑一致 —— 否则 pending 期间切档能让破坏性调用自动过)。
         const effectiveResolveAs: 'allow' | 'deny' =
           resolveAs === 'allow' && entry.forcePrompt ? 'deny' : resolveAs;
+        if (effectiveResolveAs === 'deny' && entry.unavailableHandoff) {
+          autoReviewConfirmUndeliveredNotice.notify();
+        }
         pendingPrompts.delete(requestId);
         entry.settle(effectiveResolveAs);
         queue.push({
@@ -1782,13 +1791,16 @@ export class PiAgent extends BaseAgent {
     };
     // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Codex 同口径,走既有的
     // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。
-    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+    const emitAutoReviewRuntimeNotice = (message: string): void => {
       queue.push({
         type: 'error',
         data: { message, isTerminal: false },
         source: 'pi',
       });
-    });
+    };
+    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
+    const autoReviewConfirmUndeliveredNotice =
+      createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
     const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
       const request = {
         sessionId: opts.sessionId,
@@ -2011,6 +2023,7 @@ export class PiAgent extends BaseAgent {
               readRoots: [opts.workingDir, ...mutableExtraDirs],
               reviewAutoAction,
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
+              notifyAutoReviewConfirmUndelivered: () => autoReviewConfirmUndeliveredNotice.notify(),
               registeredMcpServerNames,
               registerPendingPrompt,
               turnPermissionPolicy: activeTurnPermissionPolicy,
@@ -2584,6 +2597,7 @@ export class PiAgent extends BaseAgent {
       autoReviewDecisionCache.clear();
       // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
       autoReviewUnavailableNotice.reset();
+      autoReviewConfirmUndeliveredNotice.reset();
       const data = (resp.data ?? {}) as { contextWindow?: number };
       if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
         ctx.contextWindow = data.contextWindow;
@@ -2803,6 +2817,7 @@ export class PiAgent extends BaseAgent {
         if (nextMode !== requestedPermissionSnapshot.mode) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
+          autoReviewConfirmUndeliveredNotice.reset();
         }
         const previousMode = requestedPermissionSnapshot.mode;
         await writePermissionSnapshotOrFailClosed({
@@ -3330,6 +3345,8 @@ export class PiAgent extends BaseAgent {
       reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
+      /** 故障确认没送到 / 被系统收口时纠正「用户拒绝」归因。 */
+      notifyAutoReviewConfirmUndelivered: () => void;
       /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
       registeredMcpServerNames: ReadonlySet<string>;
       sessionId: string;
@@ -3341,7 +3358,11 @@ export class PiAgent extends BaseAgent {
        */
       registerPendingPrompt: (
         requestId: string,
-        entry: { settle: (resolveAs: 'allow' | 'deny') => void; forcePrompt: boolean },
+        entry: {
+          settle: (resolveAs: 'allow' | 'deny') => void;
+          forcePrompt: boolean;
+          unavailableHandoff?: boolean;
+        },
       ) => () => void;
       /**
        * 本轮 host 权限策略(个人微信 / Telegram 群等);无策略为 null。命中
@@ -3419,6 +3440,7 @@ export class PiAgent extends BaseAgent {
         readRoots,
         reviewAutoAction,
         notifyAutoReviewUnavailable,
+        notifyAutoReviewConfirmUndelivered,
         registeredMcpServerNames,
         registerPendingPrompt,
         turnPermissionPolicy,
@@ -3465,10 +3487,11 @@ export class PiAgent extends BaseAgent {
        * 不能把用户的明确拒绝也一并翻转。
        */
       const requestUserDecision = async (
-        opts: { forcePrompt: boolean },
+        opts: { forcePrompt: boolean; unavailableHandoff?: boolean },
       ): Promise<{ decided: boolean; approved: boolean }> => {
         if (!resolver) {
           this.deps.logger.warn('pi permission request has no interaction resolver', { toolName });
+          if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
           return { decided: false, approved: false };
         }
         // 登记进会话级 pending 表:等卡期间用户切档(或关会话)时由 dismissAllPendingPrompts
@@ -3484,14 +3507,15 @@ export class PiAgent extends BaseAgent {
           };
           unregister = registerPendingPrompt(id, {
             forcePrompt: opts.forcePrompt,
+            ...(opts.unavailableHandoff ? { unavailableHandoff: true } : {}),
             // 切档替用户做的临时决定同样是「已决」—— 调用方不该再按 bypass 语义二次翻转。
             settle: (resolveAs) => finalize({ decided: true, approved: resolveAs === 'allow' }),
           });
           // resolver 是 host 注入的外部回调:可能同步 throw,也可能返回非 Promise。直接
           // `.then` 会让同步异常绕过下面的 finalize —— pending 条目永不注销、这次请求永不
           // settle,调用就此悬挂(copilot 报)。包一层把同步失败也收进 fail-closed 分支。
-          Promise.resolve().then(() => resolver({
-            kind: 'permission',
+          const permissionRequest = {
+            kind: 'permission' as const,
             requestId: id,
             toolName,
             input,
@@ -3501,14 +3525,27 @@ export class PiAgent extends BaseAgent {
             ...(hostApprovalPresentation?.description
               ? { description: hostApprovalPresentation.description }
               : {}),
-          })).then((decision) => {
+          };
+          Promise.resolve().then(() => resolver(
+            opts.unavailableHandoff
+              ? annotatePermissionRequestForUnavailableReview(permissionRequest)
+              : permissionRequest,
+          )).then((decision) => {
             if (decision.kind !== 'permission') {
               this.deps.logger.warn('pi permission got mismatched decision kind', {
                 toolName,
                 decisionKind: decision.kind,
               });
+              if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
               finalize({ decided: false, approved: false });
               return;
+            }
+            if (
+              opts.unavailableHandoff
+              && decision.behavior === 'deny'
+              && isSystemPermissionDenialReason(decision.reason)
+            ) {
+              notifyAutoReviewConfirmUndelivered();
             }
             finalize({ decided: true, approved: decision.behavior === 'allow' });
           }).catch((err) => {
@@ -3516,6 +3553,7 @@ export class PiAgent extends BaseAgent {
               toolName,
               message: err instanceof Error ? err.message : String(err),
             });
+            if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
             finalize({ decided: false, approved: false });
           });
         });
@@ -3532,13 +3570,21 @@ export class PiAgent extends BaseAgent {
        * Codex 的 dismissAllPending 同口径。
        */
       const requestUserConfirmation = async (
-        opts?: { forcePrompt?: boolean },
+        opts?: { forcePrompt?: boolean; unavailableHandoff?: boolean },
       ): Promise<boolean> => {
         // 发起确认前:已切到 Full access 就不该再弹卡。
         // 但 forcePrompt 代表不能被权限放宽追认的安全边界；若 host lease / 预检失效
         // 真的让 policy turn 落进 Full access，宁可拒绝也不能静默放行。
-        if (isFullAccessNow()) return opts?.forcePrompt === true ? false : true;
-        const outcome = await requestUserDecision({ forcePrompt: opts?.forcePrompt === true });
+        if (isFullAccessNow()) {
+          if (opts?.forcePrompt === true && opts.unavailableHandoff) {
+            notifyAutoReviewConfirmUndelivered();
+          }
+          return opts?.forcePrompt === true ? false : true;
+        }
+        const outcome = await requestUserDecision({
+          forcePrompt: opts?.forcePrompt === true,
+          ...(opts?.unavailableHandoff ? { unavailableHandoff: true } : {}),
+        });
         // 已有决策(用户明确表态,或切档时代为 settle)→ 以它为准,不再被档位二次翻转。
         if (outcome.decided) return outcome.approved;
         // 拿不到决策:Full access 下按 bypass 语义放行,其余一律 fail-closed。
@@ -3681,7 +3727,10 @@ export class PiAgent extends BaseAgent {
               type: 'extension_ui_response',
               id,
               confirmed: askNeedsUserDecision
-                ? await requestUserConfirmation({ forcePrompt: true })
+                ? await requestUserConfirmation({
+                    forcePrompt: true,
+                    unavailableHandoff: decision.unavailable === true,
+                  })
                 : false,
             });
             return;

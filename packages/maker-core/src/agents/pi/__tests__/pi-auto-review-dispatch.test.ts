@@ -107,6 +107,12 @@ vi.mock('../rpc-client.js', () => ({
 import { PiAgent } from '../index.js';
 import type { AgentDeps, AgentSessionHandle } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
+import {
+  AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
+  AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
+  AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
+} from '../../shared/auto-review-decision.js';
+import type { InteractionDecision, InteractionRequest } from '../../../types/events.js';
 
 type PiTestSessionHandle = AgentSessionHandle & {
   setModel: NonNullable<AgentSessionHandle['setModel']>;
@@ -1152,14 +1158,121 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   it('auto mode hands gray actions to the user when the current-model reviewer is unavailable', async () => {
     const handle = await start('auto');
     let resolverCalls = 0;
-    handle.setInteractionResolver?.(async () => {
+    const seen: InteractionRequest[] = [];
+    handle.setInteractionResolver?.(async (req) => {
+      seen.push(req);
       resolverCalls++;
       return { kind: 'permission', behavior: 'allow' } as never;
     });
     firePermissionRequest('r7', 'write', { path: '/tmp/outside.txt' });
     await flush();
     expect(resolverCalls).toBe(1);
+    expect(seen[0]).toMatchObject({
+      kind: 'permission',
+      description: AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
+      metadata: { [AUTO_REVIEW_UNAVAILABLE_METADATA_KEY]: true },
+    });
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r7', confirmed: true });
+  });
+
+  it.each([
+    'wecom_interaction_timeout',
+    'wechat_interaction_timeout',
+    'replaced_by_new_request',
+    'wecom_interaction_cancelled_by_stop',
+  ] as const)('does not treat a missing confirmation as a user rejection after auto-review fails (%s)', async (reason) => {
+    const handle = await start('auto');
+    handle.setInteractionResolver?.(async () => ({
+      kind: 'permission',
+      behavior: 'deny',
+      reason,
+    }));
+    const notices: string[] = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        if (
+          event.type === 'error'
+          && typeof event.data === 'object'
+          && event.data !== null
+          && 'message' in event.data
+          && typeof event.data.message === 'string'
+        ) {
+          notices.push(event.data.message);
+        }
+      }
+    })().catch(() => {});
+
+    firePermissionRequest(`undelivered-${reason}`, 'write', { path: '/tmp/outside.txt' });
+    expect(await waitForResponse(`undelivered-${reason}`)).toMatchObject({
+      type: 'extension_ui_response',
+      confirmed: false,
+    });
+    await flush();
+    expect(notices.some((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toBe(true);
+    expect(notices.some((message) => message.includes('not a user rejection'))).toBe(true);
+    await handle.close();
+  });
+
+  it('keeps a real user deny distinct from a missing confirmation on Pi', async () => {
+    const handle = await start('auto');
+    handle.setInteractionResolver?.(async () => ({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'User denied',
+    }));
+    const notices: string[] = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        if (
+          event.type === 'error'
+          && typeof event.data === 'object'
+          && event.data !== null
+          && 'message' in event.data
+          && typeof event.data.message === 'string'
+        ) {
+          notices.push(event.data.message);
+        }
+      }
+    })().catch(() => {});
+
+    firePermissionRequest('pi-user-deny', 'write', { path: '/tmp/outside.txt' });
+    expect(await waitForResponse('pi-user-deny')).toMatchObject({
+      type: 'extension_ui_response',
+      confirmed: false,
+    });
+    await flush();
+    expect(notices.some((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toBe(false);
+    await handle.close();
+  });
+
+  it('does not treat a system-dismissed Pi confirmation as a user rejection after auto-review fails', async () => {
+    const handle = await start('auto');
+    handle.setInteractionResolver?.(async () => await new Promise<InteractionDecision>(() => {}));
+    const notices: string[] = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        if (
+          event.type === 'error'
+          && typeof event.data === 'object'
+          && event.data !== null
+          && 'message' in event.data
+          && typeof event.data.message === 'string'
+        ) {
+          notices.push(event.data.message);
+        }
+      }
+    })().catch(() => {});
+
+    firePermissionRequest('pi-dismiss', 'write', { path: '/tmp/outside.txt' });
+    await flush();
+    await handle.setPermissionMode?.('ask');
+    expect(await waitForResponse('pi-dismiss')).toMatchObject({
+      type: 'extension_ui_response',
+      confirmed: false,
+    });
+    await flush();
+    expect(notices.some((message) => message.includes(`[${AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE}]`))).toBe(true);
+    await handle.close();
   });
 
   it('ask mode still prompts for in-workspace writes (auto shortcut is auto-only)', async () => {

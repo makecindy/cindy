@@ -5940,6 +5940,7 @@
       "alwaysAllowScoped": "このセッションでは {{scope}} を常に許可",
       "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
       "alwaysAllowSessionHint": "この 1 回のリクエストだけでなく、このセッション全体に適用されます。",
+      "autoReviewUnavailable": "自動レビューを完了できませんでした。この操作を許可するか確認してください。",
       "ruleSeparator": "、"
     },
     "deviceSwitcher": {
@@ -6727,6 +6728,7 @@
       "REMOTE_DAEMON_CLOSED": "リモート接続が中断されました（daemon がアップグレードまたは再起動中の可能性があります）。ターンが終了しました — 再送信してください。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
       "AUTO_REVIEW_UNAVAILABLE": "自動レビューが判断できませんでした（ネットワークまたはサービスの一時的な問題）。レビューが必要な操作はご自身での確認に切り替わりました。中断を減らしたい場合は、このタスクをデフォルト権限に切り替えてください。",
+      "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自動レビューを完了できず、確認も完了しませんでした。これはユーザーによる拒否ではありません。",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "リモート Claude Code セッションはローカル互換プロキシ経由でルーティングできません(内部エラー)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
       "REMOTE_LOCAL_ONLY_PROVIDER": "このモデルプロバイダーはローカル専用サービス（Ollama など）で、SSH リモートタスクからはアクセスできません。Cindy AI ゲートウェイに切り替えるか、リモートホストから到達可能なプロバイダーを選んでください。",

@@ -3274,8 +3274,8 @@ export function installDesktopInteractionListener(session: {
           dismissRendererInteraction(pending, req.requestId, 'timeout', 'deny');
         }, PERMISSION_INTERACTION_TIMEOUT_MS);
       }
-      // Register before delivery so a fast renderer/device response cannot race
-      // the resolver and be discarded as an unknown request.
+      // 必须先登记 pending,再广播。否则 renderer / device-link 回得太快会打到
+      // 「no pending resolver」,确认卡看起来没反应,Codex 最终却记成用户拒绝。
       pendingInteractionResolvers.set(req.requestId, entry);
       broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId: session.id,
