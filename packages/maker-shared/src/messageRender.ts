@@ -20,6 +20,26 @@ export interface MessageRenderSourceMessageLike {
   toolInput?: unknown;
   /** SDK tool-use id — used to link a Task/collab tool-call to its live `agent_task_update`. */
   toolUseId?: string | null;
+  /**
+   * Owning Agent/Task tool-use id when this message was produced inside a
+   * subagent. Plan scanning treats it as an ownership boundary: subagent plan
+   * calls never compete for the top-level pinned panel.
+   */
+  parentToolUseId?: string | null;
+  /**
+   * Host-persisted message metadata. Plan ownership only reads two keys:
+   * `autoResume` / `origin` — user rows carrying either are internal dispatches
+   * (auto-resume continuation, scheduler runs), not the user opening a new
+   * topic, so they must not cut a plan session boundary.
+   *
+   * Surfaces that strip `agentMeta` during projection (desktop renderer's
+   * ChatMessage) must instead carry the projected flags below.
+   */
+  agentMeta?: Record<string, unknown> | null;
+  /** Desktop renderer projection of synthetic trigger rows (auto-resume 等)。 */
+  isSyntheticTrigger?: boolean;
+  /** Desktop renderer projection of scheduler-originated user rows. */
+  automationOrigin?: unknown;
   /** Host-persisted SDK turn boundary on the final assistant or owning Codex plan row. */
   turnCompleted?: boolean;
   /**
@@ -446,6 +466,109 @@ export function dedupeToolMediaByUrl<TMedia extends MessageRenderToolMediaLike>(
   return out;
 }
 
+/**
+ * 计划所有权的**唯一** user 边界判据:这个 user 行是不是"用户真的开口"的反面。
+ *
+ * 落在 user 行上但不构成边界的四类:
+ *  - 自动续跑 / scheduler 定时消息(agentMeta.autoResume / origin;desktop 渲染层
+ *    投影成 isSyntheticTrigger / automationOrigin 后丢弃原 meta,两套字段都认):
+ *    同一件事的延续,当边界会把进行中的计划切成新 session、历史里出现重复计划卡;
+ *  - 同轮 steer 插话:turn 还在跑,用户在指挥进行中的活,不是开新话题
+ *    (MessageStream 的 turn 分组同样把 steer 排除在新 turn 边界外);
+ *  - 子代理内部的 user 行(带 parentUuid / parentToolUseId):子任务的输入,当边界
+ *    会顶掉主线程计划、换 key 重挂载 TodoListCard。
+ *
+ * **计划分组(findMessageTodoInsertions)与失败回扫(markCodexPlanTurnFailed)共用
+ * 这一份判据**。两边各自推导过一次,结果是回扫只豁免了 steer:计划之后经过一次
+ * 自动续跑再以 terminal error 收尾时,回扫在合成 user 行上提前 break、够不到本轮
+ * 计划,全勾完的失败计划先按旧数据退场,等 main 的异步印记广播才复活(手机端断连
+ * 则要到重新加载,review P2)。
+ */
+function isSyntheticUserRow(message: MessageRenderSourceMessageLike): boolean {
+  if (isHookUserRow(message)) return false;
+  const meta = message.agentMeta;
+  return (
+    message.isSyntheticTrigger === true ||
+    (message.automationOrigin !== undefined && message.automationOrigin !== null) ||
+    meta?.autoResume === true ||
+    (meta?.origin !== undefined && meta?.origin !== null) ||
+    isSteerUserRow(message) ||
+    hasSubagentParent(message)
+  );
+}
+
+function isHookUserRow(message: MessageRenderSourceMessageLike): boolean {
+  const hookSource =
+    (message as Record<string, unknown>).hookSource ??
+    message.agentMeta?.hookSource;
+  return hookSource !== undefined && hookSource !== null;
+}
+
+/**
+ * 子代理归属判定:desktop 投影出顶层 parentToolUseId;mobile / main 原始行只有
+ * agentMeta.parentUuid。二者任一存在即视为子代理内部消息。
+ */
+function hasSubagentParent(message: MessageRenderSourceMessageLike): boolean {
+  const explicit =
+    message.parentToolUseId ??
+    message.agentMeta?.parentToolUseId ??
+    message.agentMeta?.parent_tool_use_id;
+  if (typeof explicit === 'string' && explicit.trim().length > 0) {
+    // 显式的 tool-parent 字段本身就是归属证明,不需要形态消歧。
+    return isSubagentParentId(explicit) || !looksLikeLegacyTranscriptUuid(explicit);
+  }
+  // 裸 parentUuid 不足以证明子代理归属:旧 Claude 导入把普通 transcript 链边
+  // 也存在这个字段(同 latestMessageText.logic.ts 的既定判据),把它一律当子
+  // 代理会让旧会话的顶层计划被面板与对账整段过滤掉。只认 SDK tool-use id 形态。
+  const nested = (message as { source?: { agentMeta?: Record<string, unknown> | null } }).source;
+  for (const candidate of [message.agentMeta?.parentUuid, nested?.agentMeta?.parentUuid]) {
+    if (typeof candidate === 'string' && isSubagentParentId(candidate)) return true;
+  }
+  return false;
+}
+
+/** Live Claude/Codex SDK tool-use ids;裸 uuid 形态的 legacy transcript 链边不算。 */
+const SUBAGENT_PARENT_ID_RE = /^(?:toolu|call)[_-]/iu;
+/**
+ * 兼容模型(kimi 系等)的 tool-use id 形态:`${ToolName}_${序号}`。resume 前的
+ * 转录归一化(maker-core 的 jsonl-tool-id-normalize)还会把它改写成 `Task_x1`
+ * (移出铸造空间,x 可顺延)与 `Bash_5_dup2`(去重),这些都是**真实 tool-use id**
+ * 并被同步写进子代理行的 parent_tool_use_id。只认 toolu_/call_ 前缀会把这类
+ * 子代理的 TodoWrite 当成顶层计划,而 desktop 实时流因显式投影不受影响 →
+ * 又一次多端分叉(review P2)。
+ *
+ * 与 legacy transcript 链边不会误撞:这条形态要求"下划线 + 可选 x + 末段数字",
+ * RFC uuid 与 `preceding-user-uuid` 都不含下划线数字结尾。
+ *
+ * 残留边界(如实记录):**任意**自定义形态的 tool id(既非 toolu_/call_,也非
+ * `名字_序号`)仍会被判成非 tool parent。彻底的解法是持久化时就记下"这是显式
+ * tool parent"这一位,而不是让每个消费方按字符串形态猜——同 canonical 计划模型
+ * 那笔欠账,留待正式建模时一并收口。
+ */
+const COMPAT_TOOL_USE_ID_RE = /^[A-Za-z][A-Za-z0-9_-]*_x*\d+(?:_dup\d+)?$/u;
+
+/**
+ * 投影侧共用的同一条判据:这个字符串是不是 SDK 的 tool-parent id 形态。
+ *
+ * 把 DB 行的裸 `agentMeta.parentUuid` 提升成显式 `parentToolUseId` 的投影(desktop
+ * 渲染层的历史恢复)必须先过这一关 —— legacy Claude 导入把 transcript 链边
+ * (`preceding-user-uuid` 这类非 RFC 串)存在同一个键上,无条件提升会让顶层计划行
+ * 被判成子代理、普通 user 行被当成合成边界,而保留裸字段的 mobile / main 不会,
+ * 于是同一份历史在两端分组不同(review P2)。
+ */
+export function isSubagentParentToolUseId(value: string): boolean {
+  return isSubagentParentId(value);
+}
+
+function isSubagentParentId(value: string): boolean {
+  const trimmed = value.trim();
+  return SUBAGENT_PARENT_ID_RE.test(trimmed) || COMPAT_TOOL_USE_ID_RE.test(trimmed);
+}
+
+function looksLikeLegacyTranscriptUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value.trim());
+}
+
 export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMessageLike>(
   messages: readonly TMessage[],
   options: MessageRenderTodoGroupingOptions = {},
@@ -457,14 +580,27 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     firstIndex: number;
     lastIndex: number;
     source: MessageRenderTodoSource;
+    /** 该 session 首条计划调用之前最近一条 user 消息的下标(turn 边界锚点)。 */
+    userBoundaryIndex: number;
   }> = [];
   const lastSessionBySource = new Map<MessageRenderTodoSource, (typeof sessions)[number]>();
   const taskState = new Map<string, MessageRenderTodoItem>();
+  let lastUserIndex = -1;
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
+    if (message.role === 'user') {
+      if (!isSyntheticUserRow(message)) lastUserIndex = index;
+      continue;
+    }
     const source = agentPlanSource(toolNameOf(message));
     if (!source) continue;
+    // 子代理内部的计划调用不属于顶层面板:它们的 owner 是那个 Agent/Task 工具行,
+    // 混进来会顶掉主线程计划(顶层"最新计划"按位置竞争,历史病 §3.1.5)。
+    // 两套字段都认:desktop 投影出顶层 parentToolUseId;mobile 保留原始
+    // agentMeta.parentUuid(normalizeRemoteMessages 不投影,父行滑出分页窗口
+    // 时孤儿子消息回退顶层流,不认 meta 就会把子代理清单当顶层计划)。
+    if (hasSubagentParent(message)) continue;
 
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const previous = lastSessionBySource.get(source);
@@ -479,9 +615,18 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     // 置 false)后不算边界,sealed-then-updated 的复亮行为不变。
     const previousSealed =
       Boolean(previous) && planRowSealOf(messages[previous!.lastIndex]).sealed;
+    // 普通 user turn 也是所有权边界:用户开了新话题,旧的未完成计划不得把新计划
+    // 吞成"续期"(历史病 §3.1.2/3.1.3——串号后新计划复用旧 key、Task 状态跨
+    // turn 拼接)。task source 例外:显式指向已有任务的操作(TaskUpdate/TaskGet
+    // 带已知 id)仍是同一份清单的合法续写。
+    const crossesUserBoundary =
+      Boolean(previous)
+      && lastUserIndex > (previous?.lastIndex ?? -1)
+      && !(source === 'task' && taskToolTargetsExistingTask(message, resultText, taskState));
     const startsNewSession =
       !previous
       || previousSealed
+      || crossesUserBoundary
       || (Boolean(previousAllDone) && !continuesCompletedTaskSession);
     if (source === 'task' && startsNewSession) {
       taskState.clear();
@@ -500,7 +645,13 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
       previous.todos = parsed;
       previous.lastIndex = index;
     } else {
-      const session = { todos: parsed, firstIndex: index, lastIndex: index, source };
+      const session = {
+        todos: parsed,
+        firstIndex: index,
+        lastIndex: index,
+        source,
+        userBoundaryIndex: lastUserIndex,
+      };
       sessions.push(session);
       lastSessionBySource.set(source, session);
     }
@@ -551,6 +702,9 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (!isAgentPlanToolName(toolNameOf(message))) continue;
+    // 与 findMessageTodoInsertions 同一条边界:子代理内部的计划调用不参与
+    // 顶层"最新计划事件"的判定,否则子调用会让顶层 insertion 判为过期。
+    if (hasSubagentParent(message)) continue;
     latestPlanIndex = index;
     latestPlanMessage = message;
   }
@@ -715,12 +869,11 @@ export function applyCodexPlanSnapshotOnDone<
  * (mobile 与 main 侧的原始行保持这个形状),desktop 渲染层把它投影成顶层
  * `delivery` 后丢弃原 meta。只看顶层会让 mobile / main 的所有权回扫在插话行上
  * 提前收手,全勾完的失败计划先按旧数据退场、等 main 的异步印记广播才复活
- * (断连时要等到重新加载,review P2)。
+ * (断连时要等到重新加载,review P2)。计划分组边界与失败回扫共用这一个谓词,
+ * 两处不再各自推导"什么算插话"。
  */
 function isSteerUserRow(message: MessageRenderSourceMessageLike): boolean {
-  if (message.delivery === 'steer') return true;
-  const meta = (message as { agentMeta?: { delivery?: unknown } | null }).agentMeta;
-  return meta?.delivery === 'steer';
+  return message.delivery === 'steer' || message.agentMeta?.delivery === 'steer';
 }
 
 /**
@@ -734,10 +887,12 @@ function isSteerUserRow(message: MessageRenderSourceMessageLike): boolean {
  * Ownership boundary: only rows inside the failing turn's segment — after the
  * latest turn-starting user message — may be stamped. Codex plan rows are
  * per-turn (`plan:<turnId>` is created within its own turn), so the scan stops
- * cold at the first user row that started a turn. A mid-turn steer interjection
- * (`delivery: 'steer'`) does NOT start a new turn — the vendor turn keeps
- * running and its plan row stays owned by the same turn — so steer rows do not
- * end the scan. A failed turn that never emitted `update_plan` stamps nothing;
+ * cold at the first user row that started a turn. What counts as "started a
+ * turn" is `isSyntheticUserRow`'s negation — the same predicate the plan
+ * grouping boundary uses, so steer interjections, auto-resume / scheduler
+ * dispatches, and subagent-internal user rows all keep the scan going instead of
+ * each surface re-deriving its own list. A failed turn that never emitted
+ * `update_plan` stamps nothing;
  * reaching past the boundary would resurrect an unrelated historical plan
  * (pre-seal-era all-done rows retire via the legacy fallback, and a stray
  * failure stamp would flip them back to "alive" with no durable write to
@@ -748,7 +903,7 @@ export function markCodexPlanTurnFailed<TMessage extends MessageRenderSourceMess
 ): { messages: readonly TMessage[]; changed: boolean; toolUseId: string | null } {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message.role === 'user' && !isSteerUserRow(message)) break;
+    if (message.role === 'user' && !isSyntheticUserRow(message)) break;
     if (message.role !== 'tool_use' || toolNameOf(message) !== 'update_plan') continue;
     if (planRowSealOf(message).sealed || planRowTurnFailed(message)) {
       return { messages, changed: false, toolUseId: null };

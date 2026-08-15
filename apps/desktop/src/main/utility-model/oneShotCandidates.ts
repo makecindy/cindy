@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-import { toSdkModelString, type AgentKind, type Maker } from '@cindy/maker-core';
-import { appendProviderRequestPath } from '@cindy/model-providers';
+import { type AgentKind, type Maker } from '@cindy/maker-core';
+import { appendProviderRequestPath, storedCustomProviderId } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
@@ -56,7 +56,7 @@ export type UtilityTextRequestOptions = {
   maxTokens?: number;
   timeoutMs?: number;
   /** Optional lightweight reasoning hint for short internal classifiers. */
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
   providerId?: string;
   agentKind?: AgentKind;
@@ -470,7 +470,7 @@ async function requestExplicitProviderText(
   const isOAuth = authStrategy === 'oauth-token';
   const noAuth = authStrategy === 'none';
   const credential = isOAuth
-    ? readCachedGenericOAuthAccessToken(provider.id, provider.auth.oauth)
+    ? readCachedGenericOAuthAccessToken(storedCustomProviderId(provider.id), provider.auth.oauth)
     : noAuth
       ? null
       : readCustomProviderKey(provider.id, agentKind);
@@ -554,7 +554,7 @@ async function requestBuiltinProviderText(
     transport: UtilityModelTransport;
     maxTokens?: number;
     timeoutMs?: number;
-    reasoningEffort?: 'low' | 'medium' | 'high';
+    reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   },
 ): Promise<UtilityTextResult> {
   const profile: UtilityModelProfile = {
@@ -624,7 +624,9 @@ async function requestBuiltinProviderText(
           'anthropic-version': '2023-06-01',
           'anthropic-beta': 'oauth-2025-04-20',
         },
-        model: toSdkModelString(input.model, findProviderModel(input.provider, input.agentKind, input.model)?.contextWindow),
+        // 直连 Anthropic API 用目录裸 id;不要复用 toSdkModelString——它会给 1M
+        // 目录模型追加 SDK 专用的 [1m] 后缀,/v1/messages 对该串返回 404(#2429)。
+        model: toAnthropicApiModelId(input.model),
         prompt: text,
         // Anthropic API 协议必填 max_tokens:缺省时以模型目录声明的 maxOutput
         // (模型自身输出能力)兜底,没有目录条目才回退 81920——宿主不设政策上限。
@@ -824,7 +826,7 @@ async function requestLiteLlmText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 20_000;
@@ -905,6 +907,19 @@ function appendProviderPath(baseUrl: string, suffix: string): string {
   return url.toString();
 }
 
+/**
+ * catalog model id → 内置 Anthropic `/v1/messages` 直连请求体的 API model id。
+ *
+ * `[1m]` 是 Claude Code SDK 的 beta 通道后缀(由 toSdkModelString 按目录
+ * contextWindow 追加),不是 Anthropic API 模型名;直连 Messages API 时携带它
+ * 会被上游以 404 not_found 拒绝,进而让 Auto-review 持续 fail-closed(#2429)。
+ * 该转换仅用于内置 anthropic 直连分支——不对自定义供应商做全局字符串剥离,
+ * 部分兼容网关可能把 `[1m]` 作为自己的路由 id。
+ */
+export function toAnthropicApiModelId(model: string): string {
+  return model.endsWith('[1m]') ? model.slice(0, -'[1m]'.length) : model;
+}
+
 /** Claude providers may configure either the host root or an existing `/v1` base. */
 function joinAnthropicMessagesPath(baseUrl: string): string {
   const url = new URL(baseUrl);
@@ -933,7 +948,7 @@ async function requestProviderHttpText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
   /** Some coding-specialized models reject their wire's reasoning field. */
   supportsReasoning?: boolean;
   /** Unknown custom routes may reject optional fields from an otherwise compatible wire. */
@@ -1120,12 +1135,18 @@ async function requestCustomProviderText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  reasoningEffort?: 'low' | 'medium' | 'high';
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
 }): Promise<string> {
   const headers: Record<string, string> = {
     ...(input.headers ?? {}),
     'Content-Type': 'application/json',
   };
+  const wire: ProviderWire =
+    input.agentKind === 'claude-code' || input.wireProtocol === 'anthropic-messages'
+      ? 'anthropic-messages'
+      : input.wireProtocol === 'openai-chat'
+        ? 'chat-completions'
+        : 'responses';
   // safeStorage 有当前凭证时覆盖历史 header；没有时仅 api-key 策略允许保留旧版
   // header-only 配置，以便用户升级后继续可用。OAuth 与 none 仍必须清掉复制进来的凭证头。
   const preserveLegacyApiKeyHeaders =
@@ -1138,19 +1159,13 @@ async function requestCustomProviderText(input: {
   }
   if (input.credential) {
     headers.Authorization = `Bearer ${input.credential}`;
-    if (input.agentKind === 'claude-code' && input.authStrategy === 'api-key-header') {
+    if (wire === 'anthropic-messages' && input.authStrategy === 'api-key-header') {
       headers['x-api-key'] = input.credential;
     }
   }
-  if (input.agentKind === 'claude-code') {
+  if (wire === 'anthropic-messages') {
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
   }
-  const wire: ProviderWire =
-    input.agentKind === 'claude-code'
-      ? 'anthropic-messages'
-      : input.wireProtocol === 'openai-chat'
-        ? 'chat-completions'
-        : 'responses';
   return requestProviderHttpText({
     wire,
     endpoint: input.requestPath

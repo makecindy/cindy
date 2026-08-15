@@ -16,11 +16,19 @@
  *
  * Inbound flow:
  *   im.message.receive_v1
- *     → drop if chat_type ≠ 'p2p'
- *     → if no owner yet: TOFU-claim sender as owner + send welcome
- *     → drop if sender open_id ≠ owner
- *     → parse content + download attachments
- *     → emit IMMessageEvent
+ *     p2p:
+ *       → if no owner yet: TOFU-claim sender as owner + send welcome
+ *       → drop if sender open_id ≠ owner
+ *       → parse content + download attachments
+ *       → emit IMMessageEvent
+ *     group:
+ *       → drop if not @-mentioning this bot (bot open_id fetched via
+ *         /open-apis/bot/v3/info after connect; unknown → drop all group msgs)
+ *       → drop if no owner bound yet (群里绝不 TOFU 认主 — 钉钉同款)
+ *       → non-owner @bot → polite notice (per-user cooldown), no turn
+ *       → owner @bot → strip mention placeholders, senderId = lane id
+ *         `g/{chatId}[/{threadId}]`, speaker = owner, record reply anchor,
+ *         emit IMMessageEvent
  *
  *   card.action.trigger(_v1)
  *     → drop if sender not in whitelist
@@ -38,6 +46,7 @@ import * as storage from './storage.js';
 import { parseIncoming } from './incomingContent.js';
 import { downloadAttachments } from './attachmentDownloader.js';
 import { parseCardAction } from './cardActionParser.js';
+import { encodeLaneUserId } from './codec.js';
 import { getLog } from './moduleScope.js';
 import { messages as transportMessages } from './messages.js';
 import type { BotCredentials, FeishuConnectionStatus } from './internal-types.js';
@@ -54,6 +63,62 @@ let conflictTransitionGeneration: number | null = null;
 
 let lifecycleAnnouncementEnabled = true;
 let pendingOfflineNotice = false;
+
+/**
+ * 本 bot 在自己 app 视角下的 open_id — 群消息判 @ 用(mentions[].id.open_id
+ * 对比)。连接成功后从 /open-apis/bot/v3/info 拉取; null = 未知, 此时群消息
+ * 一律丢弃(惰性失效, 不影响私聊)。换凭证/断开时清空。
+ */
+let botOpenId: string | null = null;
+
+/** 非 owner 群 @ 的礼貌回应 per-user 冷却(open_id → 上次回应 ts)。 */
+const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
+const strangerNoticeAt = new Map<string, number>();
+
+/**
+ * 入站消息去重 —— 飞书事件是「至少送达一次」: 服务端等不到我们的 ACK 就会把
+ * 同一条消息**原样再推一遍**(同一个 message_id)。没有这道闸, 重推会被当成一条
+ * 新消息跑完整一轮 turn: 群里多出一条 bot 回复 + 多花一次模型调用。
+ *
+ * 实测(2026-08-14 14:37, 本机网络抖动、relay 同时断线重连): 话题里只有一条
+ * 用户消息, 却出现两条 bot 回复; 日志里同一句 9 字消息进了两次 processOne。
+ *
+ * 设计要点:
+ *   - 按 (appId, message_id) 记账 —— 换 bot 不会互相串; 用户真的重复发一遍是
+ *     **另一个** message_id, 不会被误杀。
+ *   - 认领动作必须同步完成(检查 + 落账之间不许有 await), 否则两个并发帧会双双
+ *     通过。调用点也因此放在 handleIncomingMessage 的第一个 await 之前。
+ *   - **不随 stop/start 或重连清空**: 重推恰恰发生在断连重连前后, 那时清空等于
+ *     闸门在最需要它的时刻失效。只按 TTL + 容量淘汰。
+ */
+const INBOUND_DEDUPE_TTL_MS = 10 * 60_000;
+const INBOUND_DEDUPE_MAX_ENTRIES = 1_000;
+const seenInboundMessages = new Map<string, number>();
+
+/** true = 本进程没见过这条消息(可以处理); false = 重推, 应当丢弃。 */
+function claimInboundMessage(appId: string, messageId: string): boolean {
+  const key = `${appId}:${messageId}`;
+  const now = Date.now();
+  const seenAt = seenInboundMessages.get(key);
+  if (seenAt !== undefined && now - seenAt < INBOUND_DEDUPE_TTL_MS) return false;
+  // delete + set: Map 对已存在的 key 保留旧插入序, 过期条目刷新后必须重新排到
+  // 队尾, 否则下面按插入序淘汰会先砍掉刚刷新的那条。
+  seenInboundMessages.delete(key);
+  seenInboundMessages.set(key, now);
+  for (const [k, ts] of seenInboundMessages) {
+    const withinBudget = seenInboundMessages.size <= INBOUND_DEDUPE_MAX_ENTRIES;
+    // 插入序 = 时间序, 最老的都没过期且没超量 ⇒ 后面的也不用看。
+    if (withinBudget && now - ts < INBOUND_DEDUPE_TTL_MS) break;
+    if (k === key) continue;
+    seenInboundMessages.delete(k);
+  }
+  return true;
+}
+
+/** 测试注入口 — 生产代码不要调用(生产语义就是跨 stop/start 不清空)。 */
+export function resetInboundDedupeForTest(): void {
+  seenInboundMessages.clear();
+}
 
 const DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 1500;
 export const QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 4500;
@@ -98,6 +163,37 @@ export function getCurrentBotAppId(): string | null {
 export function setLifecycleAnnouncement(enabled: boolean): void {
   lifecycleAnnouncementEnabled = enabled;
   getLog().info(`[feishu/wsClient] lifecycleAnnouncement set to ${enabled}`);
+}
+
+/**
+ * 拉取 bot 自身 open_id(判群 @ 用)。SDK 无专用封装, 走 Client.request 通用
+ * 通道。失败只 log warn — 群功能惰性失效(群消息全丢), 私聊不受影响。
+ */
+async function fetchBotOpenId(): Promise<void> {
+  const log = getLog();
+  const c = outbound.getBoundClient();
+  if (!c) return;
+  try {
+    const res = await c.request<{ bot?: { open_id?: string } }>({
+      method: 'GET',
+      url: '/open-apis/bot/v3/info',
+    });
+    const openId = res?.bot?.open_id;
+    if (typeof openId === 'string' && openId) {
+      botOpenId = openId;
+      log.info(`[feishu/wsClient] bot open_id resolved ...${openId.slice(-8)}`);
+    } else {
+      log.warn('[feishu/wsClient] bot/v3/info returned no open_id — group messages disabled');
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[feishu/wsClient] fetchBotOpenId failed (group messages disabled): ${msg}`);
+  }
+}
+
+/** 测试注入口 — 生产代码不要调用。 */
+export function setBotOpenIdForTest(openId: string | null): void {
+  botOpenId = openId;
 }
 
 const FEISHU_CONFLICT_ERROR = '该 App 已被另一台设备占用 (exceed_conn_limit)';
@@ -322,6 +418,7 @@ export async function start(
   switch (verdict.kind) {
     case 'connected':
       if (currentStatus !== 'connected') setStatus('connected');
+      void fetchBotOpenId();
       if (opts.announceLifecycle !== false) {
         void announceLifecycle('online');
       } else {
@@ -409,6 +506,8 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
     detector.abandon();
     detector = null;
   }
+  botOpenId = null;
+  strangerNoticeAt.clear();
   outbound.unbindClient();
   if (opts.clearOwnerBeforeIdle) {
     pendingOfflineNotice = false;
@@ -464,10 +563,54 @@ interface RawMessageEvent {
   message?: {
     message_id?: string;
     chat_id?: string;
+    thread_id?: string;
     chat_type?: string;
     message_type?: string;
     content?: string;
+    mentions?: Array<{
+      key: string;
+      id?: { open_id?: string };
+      name?: string;
+    }>;
   };
+}
+
+/** 平台显示名消毒: 控制字符/格式字符(含零宽)剥除 + 截断(不可信输入)。 */
+function sanitizeMentionName(value: string): string {
+  return value
+    .replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+    .trim()
+    .slice(0, 64);
+}
+
+/**
+ * 群消息文本清洗: 剥掉 @bot 的占位符(`@_user_1` 形态, key 来自 mentions),
+ * 其他人的占位符替换为 `@名字`(名字是平台可改字段 — 不可信输入, 控制字符
+ * 剥除 + 截断后使用)。text/post 抽出的正文里的占位符同一口径处理。
+ */
+function resolveMentionPlaceholders(
+  text: string,
+  mentions: NonNullable<NonNullable<RawMessageEvent['message']>['mentions']>,
+  selfOpenId: string,
+): string {
+  let out = text;
+  for (const mention of mentions) {
+    if (!mention.key) continue;
+    const isSelf = mention.id?.open_id === selfOpenId;
+    const safeName = sanitizeMentionName(mention.name ?? "");
+    const replacement = isSelf ? '' : `@${safeName || 'user'}`;
+    out = out.split(mention.key).join(replacement);
+  }
+  return out.replace(/[ \t]{2,}/g, ' ').trim();
+}
+
+/** 群消息是否 @ 到本 bot。botOpenId 未知恒 false(群功能惰性失效)。 */
+function mentionsSelf(
+  mentions: NonNullable<RawMessageEvent['message']>['mentions'],
+  selfOpenId: string | null,
+): boolean {
+  if (!selfOpenId || !mentions) return false;
+  return mentions.some((m) => m.id?.open_id === selfOpenId);
 }
 
 async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): Promise<void> {
@@ -483,11 +626,12 @@ async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): P
     return;
   }
 
-  // p2p only
-  if (data.message.chat_type !== 'p2p') {
-    log.info(`[feishu/wsClient] drop non-p2p chat_type=${data.message.chat_type}`);
+  const chatType = data.message.chat_type;
+  if (chatType !== 'p2p' && chatType !== 'group') {
+    log.info(`[feishu/wsClient] drop unsupported chat_type=${chatType}`);
     return;
   }
+  const isGroup = chatType === 'group';
 
   const senderOpenId = data.sender.sender_id?.open_id;
   const messageId = data.message.message_id;
@@ -496,32 +640,67 @@ async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): P
   const rawContent = data.message.content ?? '';
   if (!senderOpenId || !messageId || !chatId) return;
 
-  // TOFU: first p2p sender becomes owner. Send welcome and continue
-  // processing this very message (so the user's first ask isn't lost).
-  if (ownerGuard.tryClaimOwner(senderOpenId)) {
-    log.info(`[feishu/wsClient] TOFU: claimed owner ...${senderOpenId.slice(-8)}`);
-    emitRendererStatus();
-    try {
-      await outbound.sendText(senderOpenId, transportMessages.ownerBinding.welcome);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`[feishu/wsClient] TOFU welcome send failed (non-fatal): ${msg}`);
-    }
-  }
-
-  // whitelist gate
-  if (!ownerGuard.check(senderOpenId)) {
-    log.warn(`[feishu/wsClient] drop non-whitelisted sender ...${senderOpenId.slice(-8)}`);
+  // 重推闸门 —— 必须在第一个 await 之前同步认领(见 claimInboundMessage), 也必须
+  // 排在所有副作用(开话题 / 打表情 / 下附件 / 陌生人提示)之前: 重推一旦漏过去,
+  // 这些动作都会再做一遍。
+  if (!claimInboundMessage(botAppId, messageId)) {
+    log.info(
+      `[feishu/wsClient] drop duplicate inbound message ...${messageId.slice(-8)} ` +
+        '(feishu re-push; already handled)',
+    );
     return;
   }
 
-  if (pendingOfflineNotice) {
-    pendingOfflineNotice = false;
-    try {
-      await outbound.sendText(senderOpenId, transportMessages.lifecycle.offlineNotice);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`[feishu/wsClient] offlineNotice send failed (non-fatal): ${msg}`);
+  if (isGroup) {
+    // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。
+    if (!mentionsSelf(data.message.mentions, botOpenId)) return;
+    // 群里绝不 TOFU 认主(钉钉同款): 没有 owner 时群消息全丢。
+    if (!ownerGuard.firstAllowed()) {
+      log.info('[feishu/wsClient] drop group mention: no owner bound yet');
+      return;
+    }
+    // 非 owner @bot → 礼貌回应(per-user 冷却), 不起 turn。
+    if (!ownerGuard.check(senderOpenId)) {
+      const last = strangerNoticeAt.get(senderOpenId) ?? 0;
+      if (Date.now() - last >= STRANGER_NOTICE_COOLDOWN_MS) {
+        strangerNoticeAt.set(senderOpenId, Date.now());
+        try {
+          await outbound.replyText(messageId, transportMessages.group.strangerNotice);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`[feishu/wsClient] stranger notice failed (non-fatal): ${msg}`);
+        }
+      }
+      return;
+    }
+  } else {
+    // TOFU: first p2p sender becomes owner. Send welcome and continue
+    // processing this very message (so the user's first ask isn't lost).
+    if (ownerGuard.tryClaimOwner(senderOpenId)) {
+      log.info(`[feishu/wsClient] TOFU: claimed owner ...${senderOpenId.slice(-8)}`);
+      emitRendererStatus();
+      try {
+        await outbound.sendText(senderOpenId, transportMessages.ownerBinding.welcome);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`[feishu/wsClient] TOFU welcome send failed (non-fatal): ${msg}`);
+      }
+    }
+
+    // whitelist gate
+    if (!ownerGuard.check(senderOpenId)) {
+      log.warn(`[feishu/wsClient] drop non-whitelisted sender ...${senderOpenId.slice(-8)}`);
+      return;
+    }
+
+    if (pendingOfflineNotice) {
+      pendingOfflineNotice = false;
+      try {
+        await outbound.sendText(senderOpenId, transportMessages.lifecycle.offlineNotice);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`[feishu/wsClient] offlineNotice send failed (non-fatal): ${msg}`);
+      }
     }
   }
 
@@ -545,20 +724,69 @@ async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): P
     }
   }
 
+  // 群消息: 剥 @bot 占位符、其他 @ 转显示名。
+  const text =
+    isGroup && data.message.mentions && botOpenId
+      ? resolveMentionPlaceholders(parsed.text, data.message.mentions, botOpenId)
+      : parsed.text;
+
   // Drop entirely only when there's literally nothing to relay.
-  if (!parsed.text && attachments.length === 0 && unsupported.length === 0) {
+  if (!text && attachments.length === 0 && unsupported.length === 0) {
     return;
+  }
+
+  // 群 lane: senderId = g/{chatId}[/{threadId}], 出站按 lane 解码回群。
+  // 话题内触发直接进话题 lane(锚点=触发消息, 回复自动落回话题); 群主流
+  // 触发先以触发消息为根开话题再进新话题 lane(锚点=开场白消息) — 每话题
+  // 独立 session, 群主流保持干净; 开话题失败才降级回群 lane 旧行为。
+  let laneUserId: string | null = null;
+  let groupContextLane: { chatId: string; threadId: string } | undefined;
+  if (isGroup) {
+    const incomingThreadId = data.message.thread_id;
+    if (incomingThreadId) {
+      laneUserId = encodeLaneUserId(chatId, incomingThreadId);
+      outbound.pushReplyAnchor(laneUserId, messageId);
+    } else {
+      // 群主流的 @ 恒开新话题 —— 群里存在 /ctr 接管也不例外: 接管严格按话题
+      // 记账(binding 的 userId 就是话题 lane), 群主流不是任何接管的入口。
+      // 拿接管话题去截流群主流消息会让「群里随便 @ 一句」都掉进那条被接管的
+      // 会话(用户感知: 不管在哪问, 工作目录都是绑定那个项目)。要跟接管会话
+      // 说话就在那个话题里说。
+      const opener = await outbound.openThread(messageId);
+      if (opener) {
+        laneUserId = encodeLaneUserId(chatId, opener.threadId);
+        outbound.pushReplyAnchor(laneUserId, opener.messageId);
+        // 开场白卡是本轮流式卡: streamingText.start 认领后直接 patch,
+        // 话题里不会多出一条占位消息。
+        outbound.pushPatchableOpener(laneUserId, opener.messageId);
+        // 上下文取数 lane 与路由 lane 分离: 新话题是空的, 群历史前缀仍按
+        // 触发时所在的群主流拉取(「总结上面」等依赖上文的消息才能拿到
+        // 群主流历史), 由 host adapter 消费(IMMessageEvent.groupContextLane)。
+        groupContextLane = { chatId, threadId: '' };
+      } else {
+        laneUserId = encodeLaneUserId(chatId, null);
+        outbound.pushReplyAnchor(laneUserId, messageId);
+      }
+    }
   }
 
   // Emit raw fields — orchestrator decides how to render unsupported (it owns
   // the user-facing wording and the "skip agent for pure-unsupported" rule).
   feishuEvents.emit('message', {
     channelName: 'feishu',
-    senderId: senderOpenId,
+    senderId: laneUserId ?? senderOpenId,
     chatId,
     contextId: botAppId,
     messageId,
-    text: parsed.text,
+    text,
+    ...(laneUserId
+      ? {
+          // 群轮次必带 speaker — 共享层以它识别群轮(强确认策略/命令主人门)。
+          // 触发人恒为 owner(上面的门已保证), name 留空(飞书事件不带显示名)。
+          speaker: { id: senderOpenId, name: '', isOwner: true },
+        }
+      : {}),
+    ...(groupContextLane ? { groupContextLane } : {}),
     attachments,
     unsupported,
     raw: data,
@@ -575,6 +803,16 @@ async function handleCardAction(data: unknown): Promise<unknown> {
   try {
     const event = parseCardAction({ raw: data });
     if (event) {
+      // 群卡片的回调 senderId 归一成发卡 lane(与消息侧 /ctr 锁、接管 binding
+      // 的键一致, 否则锁永远清不掉);私聊卡 / 改投 DM 卡没有登记, 保持
+      // operator.open_id。白名单校验仍以 operator.open_id 为准(parser 内)。
+      const lane = outbound.resolveCardLane(event.messageId, event.chatId);
+      if (lane) {
+        event.senderId = lane;
+        log.info(
+          `[feishu/wsClient] card action sender normalized to lane ...${lane.slice(-8)}`,
+        );
+      }
       // Keep the Feishu callback path short: card handlers often patch the
       // same message, and doing that before the action ACK returns can race
       // the client-side card action state. Dispatch on the next tick so the

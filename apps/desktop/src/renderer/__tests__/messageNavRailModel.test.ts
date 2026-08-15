@@ -20,6 +20,8 @@ import {
   pickActiveNavId,
   pickVisibleNavRange,
   planNavRailTicks,
+  planNavRailTickWidth,
+  planNavRailTickProgress,
   promptPreviewLine,
   shouldBackfillForNavRail,
 } from '@/components/chat/messageNavRailModel';
@@ -48,6 +50,20 @@ describe('deriveNavRailEntries', () => {
 
   it('空输入返回空数组', () => {
     expect(deriveNavRailEntries([])).toEqual([]);
+  });
+
+  it('保留自动化来源标记,供导航条用短刻度区分', () => {
+    const entries = deriveNavRailEntries([
+      msg({ clientId: 'u1', role: 'user', content: '手动提问' }),
+      msg({
+        clientId: 'u2',
+        role: 'user',
+        content: '自动提问',
+        automationOrigin: { kind: 'scheduler', scheduleId: 'schedule-1' },
+      }),
+      msg({ clientId: 'u3', role: 'user', content: '普通提问', automationOrigin: undefined }),
+    ]);
+    expect(entries.map((entry) => entry.isAutomation)).toEqual([false, true, false]);
   });
 
   it('运行中插话(delivery=steer)不算新一轮,不产生刻度', () => {
@@ -403,6 +419,23 @@ describe('planNavRailTicks', () => {
   it('零条目 / 零空间不炸', () => {
     expect(planNavRailTicks(0, 500).hiddenCount).toBe(0);
     expect(planNavRailTicks(10, 0).hiddenCount).toBe(0);
+  });
+});
+
+describe('planNavRailTickWidth', () => {
+  it('以 hover/scrub 目标为中心逐级伸缩三根刻度', () => {
+    expect(planNavRailTickWidth({ distance: 0, isActive: false, inView: false })).toBe('w-[26px]');
+    expect(planNavRailTickWidth({ distance: 1, isActive: false, inView: false })).toBe('w-[26px]');
+    expect(planNavRailTickWidth({ distance: 2, isActive: false, inView: false })).toBe('w-[26px]');
+    expect(planNavRailTickWidth({ distance: null, isActive: true, inView: true })).toBe('w-[26px]');
+  });
+
+  it('自动化刻度保持更短的层级', () => {
+    expect(planNavRailTickWidth({ distance: null, isActive: false, inView: false, isAutomation: true })).toBe('w-[26px]');
+  });
+
+  it('交互进度按目标及邻居距离衰减', () => {
+    expect([null, 0, 1, 2, 3, 4].map(planNavRailTickProgress)).toEqual([0, 1, 0.7, 0.4, 0.2, 0]);
   });
 });
 

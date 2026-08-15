@@ -41,6 +41,13 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+async function waitForInitialDialogFocus(): Promise<void> {
+  const nameInput = screen.getByPlaceholderText(
+    'settings.providers.custom.fields.namePlaceholder',
+  );
+  await waitFor(() => expect(document.activeElement).toBe(nameInput));
+}
+
 describe('CustomProviderDialog accessibility', () => {
   it('ignores consumed and IME Escape events, then restores focus after closing', async () => {
     function Harness() {
@@ -144,6 +151,7 @@ describe('CustomProviderDialog accessibility', () => {
     const baseUrl = screen.getByPlaceholderText(
       'settings.providers.custom.fields.baseUrlPlaceholder',
     );
+    await waitForInitialDialogFocus();
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
     await waitFor(() => expect((apiKey as HTMLInputElement).value).toBe(''));
@@ -157,6 +165,50 @@ describe('CustomProviderDialog accessibility', () => {
 
     await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
     expect(customProviderMocks.updateCustomProvider.mock.calls[0]?.[1]).toEqual({});
+  });
+
+  it('keeps model-level routes when saving an existing provider', async () => {
+    const initial: CustomProviderConfig = {
+      id: 'glm-coding-plan',
+      name: 'GLM Coding Plan',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        codex: {
+          baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+          wireProtocol: 'openai-chat',
+          requestPath: '/chat/completions',
+          models: [
+            {
+              id: 'glm-5.3',
+              name: 'GLM-5.3',
+              route: {
+                baseUrl: 'https://open.bigmodel.cn/api/v1',
+                wireProtocol: 'openai-responses',
+                requestPath: '/responses',
+              },
+            },
+          ],
+        },
+      },
+    };
+    customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+
+    const user = userEvent.setup();
+    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+    expect(customProviderMocks.updateCustomProvider.mock.calls[0]?.[0].runtimes.codex?.models).toEqual([
+      {
+        id: 'glm-5.3',
+        name: 'GLM-5.3',
+        route: {
+          baseUrl: 'https://open.bigmodel.cn/api/v1',
+          wireProtocol: 'openai-responses',
+          requestPath: '/responses',
+        },
+      },
+    ]);
   });
 
   it('restores an untouched hydrated key when returning to API-key mode on the saved endpoint', async () => {
@@ -182,6 +234,7 @@ describe('CustomProviderDialog accessibility', () => {
       'settings.providers.custom.fields.baseUrlPlaceholder',
     );
 
+    await waitForInitialDialogFocus();
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
     await waitFor(() => expect((apiKey as HTMLInputElement).value).toBe(''));
@@ -217,6 +270,7 @@ describe('CustomProviderDialog accessibility', () => {
     const baseUrl = screen.getByPlaceholderText(
       'settings.providers.custom.fields.baseUrlPlaceholder',
     );
+    await waitForInitialDialogFocus();
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
@@ -256,6 +310,7 @@ describe('CustomProviderDialog accessibility', () => {
     const baseUrl = screen.getByPlaceholderText(
       'settings.providers.custom.fields.baseUrlPlaceholder',
     );
+    await waitForInitialDialogFocus();
     await user.clear(baseUrl);
     await user.type(baseUrl, 'https://new.example.test/v1');
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
@@ -320,6 +375,7 @@ describe('CustomProviderDialog accessibility', () => {
       'settings.providers.custom.fields.apiKeyEditPlaceholder',
     );
 
+    await waitForInitialDialogFocus();
     await user.clear(apiKey);
     await user.type(apiKey, 'replacement-secret');
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));

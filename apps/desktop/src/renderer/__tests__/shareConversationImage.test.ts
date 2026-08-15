@@ -178,19 +178,37 @@ describe('inlineCloneImages', () => {
 });
 
 describe('assertShareImageReadableSize', () => {
-  it('保留至少 1x 的可读导出尺寸', () => {
+  it('窄长聊天记录超过 4096px 仍可保持至少 1x', () => {
     const el = root('');
     Object.defineProperties(el, {
       scrollWidth: { value: 800 },
-      scrollHeight: { value: 4096 },
+      scrollHeight: { value: 10_000 },
     });
     expect(() => assertShareImageReadableSize(el)).not.toThrow();
   });
 
-  it('需要缩到 1x 以下时拒绝生成不可读缩略图', () => {
+  it('达到分享长图单边上限时仍允许 1x', () => {
     const el = root('');
     Object.defineProperties(el, {
       scrollWidth: { value: 800 },
+      scrollHeight: { value: 16_384 },
+    });
+    expect(() => assertShareImageReadableSize(el)).not.toThrow();
+  });
+
+  it('超过分享长图单边上限时拒绝生成不可读缩略图', () => {
+    const el = root('');
+    Object.defineProperties(el, {
+      scrollWidth: { value: 800 },
+      scrollHeight: { value: 16_385 },
+    });
+    expect(() => assertShareImageReadableSize(el)).toThrow(ShareImageTooLargeError);
+  });
+
+  it('单边未超限但输出像素超过预算时仍拒绝', () => {
+    const el = root('');
+    Object.defineProperties(el, {
+      scrollWidth: { value: 4096 },
       scrollHeight: { value: 4097 },
     });
     expect(() => assertShareImageReadableSize(el)).toThrow(ShareImageTooLargeError);

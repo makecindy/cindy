@@ -18,7 +18,7 @@
  */
 
 import { createElement, Fragment } from 'react';
-import { act, cleanup, createEvent, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -62,9 +62,13 @@ vi.mock('react-router-dom', () => ({
 
 vi.mock('@/contexts/PrRefsContext', () => {
   const EMPTY: unknown[] = [];
+  // usePrActions 的真实实现保证 value 恒定;mock 同样给稳定引用,
+  // 避免 effect deps 每渲染变化干扰本文件的重渲染计数断言。
+  const ACTIONS = { registerPrConsumer: vi.fn(() => () => undefined) };
   return {
     usePrRefsForSession: () => EMPTY,
     usePrStatuses: () => ({ statuses: new Map(), fetchStatusesForSession: vi.fn() }),
+    usePrActions: () => ACTIONS,
   };
 });
 
@@ -197,6 +201,30 @@ describe('SessionItem — 归档视觉', () => {
   });
 });
 
+describe('SessionItem — 任务菜单', () => {
+  it('不再暴露分栏打开入口', () => {
+    render(rowsElement([makeSession('menu-session')], new Set()));
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'ccAgent.sidebar.sessionMenu.moreActions',
+      }),
+    );
+
+    const menu = screen.getByRole('menu');
+    expect(
+      within(menu).getByRole('menuitem', {
+        name: 'ccAgent.sidebar.sessionMenu.rename',
+      }),
+    ).toBeTruthy();
+    expect(
+      within(menu).queryByRole('menuitem', {
+        name: /(?:splitGroup\.openInSplit|在分栏中打开)/,
+      }),
+    ).toBeNull();
+  });
+});
+
 describe('SessionItem — 置顶分屏拖拽', () => {
   it('原生整行拖拽保留普通内容起手，并排除内部操作按钮', () => {
     const pinnedSession = {
@@ -208,6 +236,12 @@ describe('SessionItem — 置顶分屏拖拽', () => {
       effectAllowed: 'none',
       setData: (format: string, data: string) => values.set(format, data),
     };
+    const openOutside = vi.fn().mockResolvedValue(false);
+    const electronApiDescriptor = Object.getOwnPropertyDescriptor(window, 'electronAPI');
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { maker: { openSessionInNewWindowIfDroppedOutside: openOutside } },
+    });
     const { container } = render(
       createElement(SessionAttentionUrgencyProvider, {
         urgentSessionIds: new Set<string>(),
@@ -237,8 +271,11 @@ describe('SessionItem — 置顶分屏拖拽', () => {
       'button[aria-label="ccAgent.sidebar.sessionMenu.moreActions"]',
     );
     expect(row?.draggable).toBe(true);
+    expect(row?.className).toContain('cursor-pointer');
+    expect(row?.className).not.toContain('cursor-grab');
     expect(row?.querySelector('[data-split-group-drag-handle="true"]')).toBeNull();
     expect(title).not.toBeNull();
+    expect(title?.className).not.toContain('cursor-grab');
     expect(actionButton).not.toBeNull();
 
     fireEvent.pointerDown(title!, { button: 0, pointerType: 'mouse' });
@@ -246,6 +283,9 @@ describe('SessionItem — 置顶分屏拖拽', () => {
 
     expect(values.get(SPLIT_GROUP_SESSION_MIME)).toBe(pinnedSession.id);
     expect(dataTransfer.effectAllowed).toBe('copyMove');
+
+    fireEvent.dragEnd(row!, { dataTransfer });
+    expect(openOutside).toHaveBeenCalledWith(pinnedSession.id, null);
 
     values.clear();
     dataTransfer.effectAllowed = 'none';
@@ -257,6 +297,12 @@ describe('SessionItem — 置顶分屏拖拽', () => {
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(values.has(SPLIT_GROUP_SESSION_MIME)).toBe(false);
     expect(dataTransfer.effectAllowed).toBe('none');
+
+    if (electronApiDescriptor) {
+      Object.defineProperty(window, 'electronAPI', electronApiDescriptor);
+    } else {
+      Reflect.deleteProperty(window, 'electronAPI');
+    }
   });
 });
 

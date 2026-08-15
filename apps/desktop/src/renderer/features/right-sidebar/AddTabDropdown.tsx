@@ -16,7 +16,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  Activity,
   Bot,
   FileDiff,
   FolderTree,
@@ -82,14 +81,6 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
     labelKey: 'rightSidebar.tabs.kinds.backgroundTasks',
     icon: ListTodo,
     order: 17,
-    enabled: true,
-    singleton: true,
-  },
-  {
-    kind: 'resource-usage',
-    labelKey: 'rightSidebar.tabs.kinds.resourceUsage',
-    icon: Activity,
-    order: 18,
     enabled: true,
     singleton: true,
   },

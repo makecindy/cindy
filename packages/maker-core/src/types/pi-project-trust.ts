@@ -117,6 +117,13 @@ export interface PiProjectSettingsProjection {
   readonly revision?: string;
 }
 
+/** Immutable startup input supplied by the host's project-approval authority. */
+export interface PiProjectTrustInputSnapshot {
+  readonly identity: PiProjectIdentityResolution;
+  readonly approval: PiProjectApprovalSnapshot | null;
+  readonly discovered: PiProjectDiscoveredResources;
+}
+
 export interface PiProjectTrustDecision {
   status: PiProjectTrustStatus;
   /** `${canonicalRepoRoot}\0${canonicalWorkingDir}`; null when unavailable. */

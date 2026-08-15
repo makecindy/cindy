@@ -679,19 +679,13 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       return { ok: false, errorCode: 'NOT_FOUND', message: `lead session ${params.leadSessionId} not found` };
     }
 
-    // Pi 尚无远程 runtime:PiAgent.startSession 对 remoteHostId 一律 NotSupportedError,
-    // 远端 ensure 又对 pi 跳过,SSH 远程 Lead + Pi worker 必然在 bootstrap 期被包成笼统
-    // INTERNAL —— 在 preflight 就以可操作信息拒绝(codex-connector 报)。lead 侧的
-    // capabilities 层已拒 Pi 远程会话,此闸补上 worker 创建(UI popover / MCP / 批量)路径。
-    if (lead.remoteHostId && params.agent === 'pi') {
-      return {
-        ok: false,
-        errorCode: 'INVALID_PARAMS',
-        message:
-          'Pi workers are not available for SSH remote leads: pi sessions are local-only for now — pick Claude Code or Codex for this worker',
-      };
-    }
-
+    // 轮 42:解除「SSH remote lead 禁 Pi worker」闸 —— 该闸写于 Pi SSH remote 能力
+    // 落地之前(前提「PiAgent.startSession 对 remoteHostId 一律 NotSupportedError」
+    // 已不成立, 现 remote pi 会话全链路可用)。worker 创建走通用 remote 路径:
+    // createWorkerInTeam 里 worker 继承 lead.remoteHostId(同远端主机 spawn, 共享远端
+    // workingDir), ensureRemoteReadyForSessionStart 对 pi 已支持 silent install +
+    // pi-manager 预上传, orca_worker_bridge 工具面经 SSH remote-forward 隧道注入。
+    // 与 CC/Codex remote worker 同构;此闸会让 remote pi lead 完全无法使用 pi worker。
     const defaults = deps.getWorkerDefaults(params.agent);
     const inheritedModelComesFromDefaults =
       params.model === undefined

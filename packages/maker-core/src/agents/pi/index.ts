@@ -16,13 +16,42 @@
  *
  * P0 骨架已支持:流式文本/thinking/工具事件、steer、abort、set_model/set_thinking_level、
  * resume(switch_session)、usage/cost 快照。
- * SSH remote host 尚未支持；跨设备控制走 device-link，在目标设备本地启动 Pi。
+ * SSH remote:远端会话由 host 注入的 getRemotePiTransport 承担(createSshPiDaemonTransport,
+ * 经 pi-manager daemon 持久;见 pi-remote-transport.ts)—— 远端路径真实存在, 文件头不再
+ * 写「尚未支持」。跨设备控制仍走 device-link, 在目标设备本地启动 Pi。
  */
 
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
+
+/**
+ * 轮 40-w4-t5 CRITICAL:远端 agentHome 是 POSIX 路径($HOME/... 或展开后的
+ * /home/...), 平台相关 path.join 在 Windows 上会拼出反斜杠
+ * ($HOME\.xdt-server\...), 经 fileOps 单引号 quote 后远端 bash 不展开 $HOME
+ * 也不认反斜杠分隔 —— 数据写到错误路径。所有远端派生路径必须 POSIX join。
+ */
+function joinRemotePosixPath(...parts: string[]): string {
+  return path.posix.join(...parts);
+}
+
+/**
+ * 轮 21-W1 HIGH:sdkSessionId(pi get_state 的 sessionFile/sessionId)是 resume 的
+ * 权威键, 直接持久化并被 workflow 回读。异常/损坏的 pi 输出(远端被攻破或
+ * 半崩溃)可能回传任意值 → 跨会话误路由或把恢复状态绑到错误会话。fail-closed:
+ * 非空字符串 + 长度上限 + 无控制字符(换行/NUL 会破坏 DB 行与 resume 参数),
+ * 不满足则抛错拒绝启动(与「拿不到 session 身份就 refuse」同语义)。
+ * 合法 pi 的 sessionFile 是绝对路径 / sessionId 是 UUID, 两者都远小于上限。
+ */
+function validateSdkSessionId(value: string): string {
+  if (value.length === 0 || value.length > 4096 || /[\r\n\0]/.test(value)) {
+    throw new Error(
+      'pi get_state returned an unsafe sessionFile/sessionId (empty, overlong, or containing control characters) — refusing to start',
+    );
+  }
+  return value;
+}
 
 import {
   AgentNotAuthenticatedError,
@@ -48,8 +77,11 @@ import {
 } from './cindy-subagent-source.js';
 import { normalizePiToolForAutoReview } from './auto-review-policy.js';
 import {
+  annotatePermissionRequestForUnavailableReview,
+  createAutoReviewConfirmUndeliveredNotice,
   createAutoReviewUnavailableNotice,
   extractAutoReviewUserIntent,
+  isSystemPermissionDenialReason,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
@@ -85,7 +117,15 @@ import {
 } from '../shared/review-read-scope.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
+import { createPiStdioTransport, type PiTransport } from './transport.js';
+import type { PiRemoteFileOps } from '../base-agent.js';
 import { capturePiRuntimeCapabilityManifest } from './runtime-capabilities.js';
+import {
+  assembleApprovedPiProjectResources,
+  reconcilePiProjectResourceRuntime,
+  stageApprovedPiProjectResources,
+  unavailablePiProjectResourceAssembly,
+} from './project-resource-assembly.js';
 import {
   createPiTranslateContext,
   disposePiTranslateContext,
@@ -103,21 +143,61 @@ import {
 import type { PiRuntimeCapabilityManifest } from '../../types/pi-runtime-capabilities.js';
 
 const PI_PROVIDER_ID = 'cindy';
-// 既非 Cindy 网关(cindy/xd)也非订阅直连(openai/anthropic/xai)的 providerId = 显式 BYOM
+// 既非 Cindy 网关(cindy/xd)也非经 compat proxy 的订阅直连(openai/anthropic)的 providerId = 显式 BYOM
 // 路由,必须在本会话解析出的 nativeProviders 里;缺席时不得静默回落网关(见 startSession /
-// setModel 的 fail-closed)。
-const NON_BYOM_PROVIDER_IDS = new Set([PI_PROVIDER_ID, 'xd', 'openai', 'anthropic', 'xai']);
+// setModel 的 fail-closed)。xAI 已改走 Pi 原生 provider，同样必须解析成功。
+const NON_BYOM_PROVIDER_IDS = new Set([PI_PROVIDER_ID, 'xd', 'openai', 'anthropic']);
 const PI_API_KEY_ENV = 'CINDY_PI_API_KEY';
 const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
 const PI_SECRET_ENV_NAMES_ENV = 'CINDY_PI_SECRET_ENV_NAMES';
 const PI_MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
+/** 轮 42 P1:models.json 内容指纹(远端 daemon 启动身份的一部分, 值无凭证)。 */
+const PI_MODELS_JSON_HASH_ENV = 'CINDY_PI_MODELS_JSON_HASH';
+/** 远端权限/Extra Dir 快照指纹 —— 档位变则 envHash 变, daemon 重启而非覆盖热读文件。 */
+const PI_PERMISSION_HASH_ENV = 'CINDY_PI_PERMISSION_HASH';
+/** 远端附件内联上限:超过则 fail-before-dispatch, 不静默截断。 */
+const REMOTE_PI_ATTACHMENT_MAX_BYTES = 256 * 1024;
+/**
+ * Compatibility fallback for hosts that do not provide persistent derivation.
+ * Desktop injects its owner-scoped safeStorage-backed deriver so restart and
+ * reattach keep the same token; other hosts retain the previous process-stable
+ * behavior without making the token derivable from the public session id alone.
+ */
+const PI_PROXY_SESSION_TOKEN_KEY = randomBytes(32);
+
+/**
+ * baseUrl 是否指向本机 loopback(远端会话不可达)。与 host 侧 isLoopbackUrl 同口径:
+ * localhost / ::1 / 0.0.0.0 / **整个 127.0.0.0/8**(轮 42 P2 —— 只匹配 127.0.0.1
+ * 会漏 127.0.1.1 等别名, 那些 URL 在远端解析到远端自己)。
+ */
+function isLoopbackOnlyBaseUrl(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (host === 'localhost' || host === '::1' || host === '0.0.0.0') return true;
+    // 127.0.0.0/8:第一段 127, 后三段任意。
+    const m = /^127(?:\.\d{1,3}){3}$/.exec(host);
+    if (m) {
+      const parts = host.split('.').map(Number);
+      return parts.every((p) => p >= 0 && p <= 255);
+    }
+    return false;
+  } catch {
+    return false; // 非法 URL 不判 loopback(其它校验兜底)
+  }
+}
 const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
 /** 分支摘要同样可能触发一次完整 LLM 调用。 */
 const PI_BRANCH_NAVIGATION_TIMEOUT_MS = 600_000;
+
+/** PI 的 OpenAI Responses client 以 baseUrl 为 `/v1` 根；Anthropic client 则自行追加 `/v1/messages`。 */
+function piResponsesBaseUrl(endpoint: string): string {
+  const trimmed = endpoint.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
+}
 
 class PiImageInputUnsupportedError extends Error {
   readonly code = PI_IMAGE_INPUT_UNSUPPORTED_CODE;
@@ -155,6 +235,31 @@ function truncateToByteBudget(text: string, maxBytes: number): string {
 }
 
 /** 任意串 → memory slug 片段([a-z0-9-],截断)。 */
+/**
+ * 轮 42 P1:远端会话 spawn env 路径的稳定派生段 —— sha256(sessionId) 前 12 hex。
+ * 同 session 断链重连/恢复复用同一路径 → env 稳定 → envHash 稳定 → daemon
+ * 纯 attach 保活。匿名会话(无 sessionId)无法跨 startSession 复用, 回落
+ * randomBytes 语义(每次新路径, 无 attach 语义可言)。
+ */
+function stableSessionPathSegment(sid: string | undefined): string {
+  if (!sid) return randomBytes(8).toString('hex');
+  return createHash('sha256').update(sid).digest('hex').slice(0, 12);
+}
+
+function stableRemoteProxySessionToken(
+  sid: string | undefined,
+  hostDeriver?: (sessionId: string) => string,
+): string {
+  if (!sid) return randomBytes(32).toString('base64url');
+  const token = hostDeriver
+    ? hostDeriver(sid)
+    : createHmac('sha256', PI_PROXY_SESSION_TOKEN_KEY).update(sid).digest('base64url');
+  if (!/^[A-Za-z0-9_-]{40,256}$/.test(token)) {
+    throw new Error('pi: host returned an invalid proxy session token');
+  }
+  return token;
+}
+
 function slugifyForMemory(input: string, maxLen: number): string {
   const s = input.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   return (s || 'anon').slice(0, maxLen);
@@ -208,7 +313,7 @@ async function stageManagedRipgrep(
     throw new Error('pi: managed ripgrep path must point to a file');
   }
 
-  const binDir = path.join(configHome, 'bin');
+  const binDir = joinRemotePosixPath(configHome, 'bin');
   const targetPath = path.join(binDir, process.platform === 'win32' ? 'rg.exe' : 'rg');
   await fs.mkdir(binDir, { recursive: true });
   await fs.copyFile(sourcePath, targetPath);
@@ -298,10 +403,14 @@ interface PiPromptImage {
 }
 
 /** UserMessage → pi prompt 文本 + images。mention/file 以路径文本引用。 */
-async function buildPiPrompt(message: UserMessage): Promise<{ text: string; images: PiPromptImage[] }> {
+async function buildPiPrompt(
+  message: UserMessage,
+  opts?: { remote?: boolean },
+): Promise<{ text: string; images: PiPromptImage[] }> {
   if (typeof message.content === 'string') {
     return { text: message.content, images: [] };
   }
+  const remote = Boolean(opts?.remote);
   const textParts: string[] = [];
   const images: PiPromptImage[] = [];
   for (const block of message.content as UserContentBlock[]) {
@@ -310,22 +419,69 @@ async function buildPiPrompt(message: UserMessage): Promise<{ text: string; imag
         textParts.push(block.text);
         break;
       case 'mention':
+        // 远端 Pi 读不到本机路径; mention 只是引用提示, 不内联目录/文件内容。
+        if (remote) {
+          throw new Error(
+            `pi: remote sessions cannot use local path mentions (${block.path}) — the remote Pi process cannot read desktop paths`,
+          );
+        }
         textParts.push(`\`${block.path}\``);
         break;
       case 'file':
+        if (remote) {
+          // 远端 Pi 读不到本机路径。内联文本内容;二进制/超大文件 fail-before-dispatch,
+          // 避免 turn 被接受但附件静默丢失,或远端同路径文件被误读。
+          let data: Buffer;
+          try {
+            const stat = await fs.stat(block.path);
+            if (stat.size > REMOTE_PI_ATTACHMENT_MAX_BYTES) {
+              throw new Error(
+                `pi: remote file attachment ${block.path} is ${stat.size} bytes (limit ${REMOTE_PI_ATTACHMENT_MAX_BYTES}) — upload to the remote host or send a smaller file`,
+              );
+            }
+            data = await fs.readFile(block.path);
+          } catch (err) {
+            if (err instanceof Error && err.message.startsWith('pi: remote file attachment')) throw err;
+            throw new Error(
+              `pi: failed to read file attachment ${block.path}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+          if (data.length > REMOTE_PI_ATTACHMENT_MAX_BYTES) {
+            throw new Error(
+              `pi: remote file attachment ${block.path} is ${data.length} bytes (limit ${REMOTE_PI_ATTACHMENT_MAX_BYTES}) — upload to the remote host or send a smaller file`,
+            );
+          }
+          const name = path.basename(block.path);
+          if (data.includes(0)) {
+            throw new Error(
+              `pi: remote sessions cannot inline binary file attachments (${name}) — upload the file to the remote host first`,
+            );
+          }
+          textParts.push(
+            `Attached file \`${name}\` (inlined from desktop; remote Pi cannot read the original path):\n\`\`\`\n${data.toString('utf8')}\n\`\`\``,
+          );
+          break;
+        }
         textParts.push(`Attached file (read-only reference): \`${block.path}\``);
         break;
       case 'image': {
+        // 轮 40-w4-t6 CRITICAL:用户显式发送的图片读取失败不得静默降级为文本
+        // 占位 —— 否则 DB/UI 显示已发送图片但 Pi 实际只收到「图片不可用」,
+        // 消息内容丢失且不可恢复。fail-before-dispatch:抛错让 Session.send
+        // 未 accepted / 事务回滚, 用户看到可恢复错误。
+        let data: Buffer;
         try {
-          const data = await fs.readFile(block.path);
-          images.push({
-            type: 'image',
-            data: data.toString('base64'),
-            mimeType: guessImageMime(block.path, block.mimeType),
-          });
-        } catch {
-          textParts.push(`(image unavailable: ${block.path})`);
+          data = await fs.readFile(block.path);
+        } catch (err) {
+          throw new Error(
+            `pi: failed to read image attachment ${block.path}: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
+        images.push({
+          type: 'image',
+          data: data.toString('base64'),
+          mimeType: guessImageMime(block.path, block.mimeType),
+        });
         break;
       }
     }
@@ -439,10 +595,74 @@ export class PiAgent extends BaseAgent {
   }
 
   /** host 注入的 pi 配置目录(auth/models/settings/sessions);缺省落系统临时目录。 */
-  private resolveAgentHome(): string {
-    const injected = this.deps.resolvePiAgentHome?.();
+  private resolveAgentHome(remoteHostId?: string | null): string {
+    const injected = this.deps.resolvePiAgentHome?.(remoteHostId);
     if (injected && injected.trim().length > 0) return injected;
+    // 轮 22 MEDIUM-4:兜底路径在远端会话必须是 POSIX —— Windows 上
+    // os.tmpdir() 是 C:\...\Temp, 经 fileOps.mkdirp 送到远端 Linux 会创建
+    // 含反斜杠的字面目录名。
+    // 轮 40-w4-t3 CRITICAL:远端 agentHome 承载 session 历史(sessions/*.jsonl)
+    // 与 DB sdk_session_id 持久关联 —— /tmp 会被远端重启/系统 tmp cleaner
+    // 清掉, resume 时静默 fresh fallback + 覆盖 DB。迁到远端用户持久目录
+    // ($HOME/.xdt-server/v1/pi-agent-home, 与 pi-manager 安装目录同级);
+    // run-tmp/env-file 等短生命周期内容仍由各路径单独放临时目录。
+    if (remoteHostId) {
+      return '$HOME/.xdt-server/v1/pi-agent-home';
+    }
     return path.join(os.tmpdir(), 'cindy-pi-agent-home');
+  }
+
+  /**
+   * 构造 pi RPC 进程的字节流 transport。
+   *
+   * 本地:createPiStdioTransport(spawn `pi --mode rpc`, 接 stdin/stdout)。
+   * 远端(remoteHostId 且 host 注入 getRemotePiTransport):交给 host 实现 ——
+   * 通常是 RemoteHost.execStream 在远端跑同一命令、把 stdin/stdout 拽回本地
+   * (SshPiTransport)。PiAgent 对两种来源的差异零感知(协议层只认行)。
+   *
+   * remoteBinaryPath:远端 pi 二进制绝对路径(host 已 probe)。需要它来决定
+   * plan-mode 扩展路径 / subagent spawn env —— 本地场景即 this.deps.binaryPath。
+   */
+  private async createTransport(
+    opts: {
+      args: string[];
+      cwd: string;
+      env: Record<string, string | undefined>;
+      sessionId?: string | null;
+      hostProxyForwards?: ReadonlyArray<{
+        localUrl: string;
+        remotePort: number;
+      }>;
+    },
+    onProcessSpawned?: (pid: number) => void | (() => void),
+    remoteHostId?: string | null,
+    remoteBinaryPath?: string,
+  ): Promise<{ transport: PiTransport; remoteBinaryPath: string | undefined }> {
+    if (remoteHostId && this.deps.getRemotePiTransport) {
+      const transport = await this.deps.getRemotePiTransport(remoteHostId, {
+        binaryPath: this.deps.binaryPath,
+        // startSession 已在 plan-mode 段前 resolve;host 侧有 cache,重复 probe 秒回。
+        remoteBinaryPath: remoteBinaryPath ?? this.deps.binaryPath,
+        args: opts.args,
+        cwd: opts.cwd,
+        env: opts.env,
+        logger: this.deps.logger,
+        sessionId: opts.sessionId ?? null,
+        hostProxyForwards: opts.hostProxyForwards,
+      });
+      return { transport, remoteBinaryPath: transport.remoteBinaryPath ?? remoteBinaryPath };
+    }
+    return {
+      transport: createPiStdioTransport({
+        binaryPath: this.deps.binaryPath,
+        args: opts.args,
+        cwd: opts.cwd,
+        env: opts.env,
+        logger: this.deps.logger,
+        onProcessSpawned,
+      }),
+      remoteBinaryPath: undefined,
+    };
   }
 
   /**
@@ -456,9 +676,32 @@ export class PiAgent extends BaseAgent {
     agentHome: string,
     nativeProviders: PiNativeProviderSpec[] = [],
     retainedRuntimeModel?: ModelDescriptor,
-  ): Promise<Map<string, boolean>> {
-    const endpoint = this.deps.runtimeConfig.endpoint;
+    gatewayProviderId?: string | null,
+    opts: { remote?: boolean; fileOps?: PiRemoteFileOps; preview?: boolean } = {},
+  ): Promise<{
+    gatewayImageInputByModel: Map<string, boolean>;
+    gatewayApiByModel: Map<string, 'anthropic-messages' | 'openai-responses'>;
+    /** models.json 内容 sha256 —— 远端 daemon 启动身份的一部分(轮 42 P1)。 */
+    modelsJsonHash: string;
+  }> {
+    // 远端:baseUrl 用 host 注入的 upstream endpoint(remoteEndpoint,gateway key 同源),
+    // 不用本地 loopback compat proxy(远端够不到)。订阅 OAuth 的 loopback 分流远端不可达,
+    // 远端恒走 gateway-key(见 docs/research/pi-ssh-remote-feasibility.md §2)。
+    const endpoint = opts.remote
+      ? this.deps.runtimeConfig.remoteEndpoint
+      : this.deps.runtimeConfig.endpoint;
     if (!endpoint) {
+      // 远端缺 remoteEndpoint(host 未装配/网关凭据未就绪):
+      // - 有 BYOM native provider → 不 throw(BYOM 用自己的 baseUrl + env key 可跑);
+      //   cindy gateway 块写 127.0.0.1:0(无调用方选它, 纯摆设, 与本地缺 endpoint 同款)。
+      // - 纯 gateway(无 BYOM)→ fail-fast,不静默写 127.0.0.1:0 让会话「看似启动、
+      //   首回合网络错误」(对齐 CC 的 [REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE] guard)。
+      // 轮 42 P1(codex-connector):BYOM-only 用户不该被 XD gateway 凭据挡住。
+      if (opts.remote && nativeProviders.length === 0) {
+        throw new Error(
+          '[REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE] Remote Pi sessions need the XD gateway endpoint issued after sign-in (runtimeConfig.remoteEndpoint is empty)',
+        );
+      }
       this.deps.logger.warn('pi: runtimeConfig.endpoint missing — models.json will have no usable provider');
     }
     const publicModels = this.capabilities.availableModels;
@@ -466,20 +709,46 @@ export class PiAgent extends BaseAgent {
       ? [...publicModels, retainedRuntimeModel]
       : publicModels;
     const gatewayImageInputByModel = new Map<string, boolean>();
+    const gatewayApiByModel = new Map<string, 'anthropic-messages' | 'openai-responses'>();
     const models = runtimeModels.map((publicModel: ModelDescriptor) => {
       // availableModels 为跨 provider 拍平的公开能力；BYOM 同 id 冲突时 effort
       // 会按设计收敛成交集。cindy gateway 块则代表内置路由，必须回查其
       // provider-aware 描述符，不能被同名 non-reasoning BYOM 清空 reasoning。
       // host 未注入 resolver 或只有 BYOM 条目时保留旧 flat fallback。
-      const m = this.deps.resolvePiGatewayModelDescriptor?.(publicModel.id) ?? publicModel;
+      const m = this.deps.resolvePiGatewayModelDescriptor?.(
+        gatewayProviderId,
+        publicModel.id,
+      ) ?? publicModel;
+      const resolvedApi = this.deps.resolvePiGatewayModelApi?.(gatewayProviderId, m.id);
+      if (
+        resolvedApi === null ||
+        (resolvedApi !== undefined &&
+          resolvedApi !== 'anthropic-messages' &&
+          resolvedApi !== 'openai-responses')
+      ) {
+        throw new Error(`Model Access v3 did not provide a Pi wire protocol for model: ${m.id}`);
+      }
+      // undefined 明确表示该模型不属于 XD Pi 目录。订阅直连及 BYOM-only 模型仍需出现在
+      // cindy compat provider 的模型表中，沿用它们既有的 Messages 前门；只有 null 才是
+      // “属于 XD 但 v3 配置不完整”，上面已 fail closed。
+      const api = resolvedApi ?? 'anthropic-messages';
+      gatewayApiByModel.set(m.id, api);
       const supportsImageInput = m.supportsImageInput === true;
       gatewayImageInputByModel.set(m.id, supportsImageInput);
       return {
         id: m.id,
         name: m.displayName,
+        // Pi 0.83 支持同一 provider 下逐模型覆盖 API/baseUrl。provider 身份仍是
+        // `cindy`；Model Access v3 让 PI 固定命中 Gateway 的 `/v1/responses` 前门。
+        // 该前门可由 Gateway 翻译到不同上游，不代表底层模型原生实现 Responses。
+        api,
+        ...(api === 'openai-responses' && endpoint
+          ? { baseUrl: piResponsesBaseUrl(endpoint) }
+          : {}),
         reasoning: m.efforts.length > 0,
         input: supportsImageInput ? ['text', 'image'] : ['text'],
-        contextWindow: m.contextWindow > 0 ? m.contextWindow : 200_000,
+        // Model Access v3 requires this value; never replace the server limit with a client guess.
+        contextWindow: m.contextWindow,
         maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : 32_000,
         // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
         cost: {
@@ -496,10 +765,16 @@ export class PiAgent extends BaseAgent {
         baseUrl: endpoint ?? 'http://127.0.0.1:0',
         api: 'anthropic-messages',
         apiKey: `$${PI_API_KEY_ENV}`,
-        headers: {
-          'x-cindy-pi-session-id': `$${PI_SESSION_ID_ENV}`,
-          'x-cindy-pi-session-token': `$${PI_SESSION_TOKEN_ENV}`,
-        },
+        // 本地 loopback compat proxy 用 session headers 做订阅 OAuth 注入;远端打真上游
+        // 网关(remoteEndpoint)不该带(对齐 claude-env「本地 proxy 专用物不上远端」)。
+        ...(opts.remote
+          ? {}
+          : {
+              headers: {
+                'x-cindy-pi-session-id': `$${PI_SESSION_ID_ENV}`,
+                'x-cindy-pi-session-token': `$${PI_SESSION_TOKEN_ENV}`,
+              },
+            }),
         models,
       },
     };
@@ -508,35 +783,91 @@ export class PiAgent extends BaseAgent {
         this.deps.logger.warn('pi: native provider id collides with gateway provider "cindy" — skipped', { id: np.id });
         continue;
       }
+      const nativeModels = (
+        np.inheritModels
+          ? np.models.filter(
+              (model) => model.api !== undefined || model.catalogAddition === true,
+            )
+          : np.models
+      ).map((m) => ({
+        id: m.wireId ?? m.id,
+        name: m.name ?? m.id,
+        ...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
+        ...(m.headers && Object.keys(m.headers).length > 0 ? { headers: m.headers } : {}),
+        ...(m.api ? { api: m.api } : {}),
+        reasoning: m.reasoning ?? false,
+        ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
+        input: m.input ?? ['text'],
+        contextWindow: m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000,
+        maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : 16_000,
+        ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
+        ...(m.compat ? { compat: structuredClone(m.compat) } : {}),
+        ...(m.samplingParams ? { samplingParams: structuredClone(m.samplingParams) } : {}),
+      }));
+      if (!np.inheritModels && !np.api) {
+        throw new Error(`pi: native provider '${np.id}' has no default api`);
+      }
       providers[np.id] = {
         name: np.name,
         baseUrl: np.baseUrl,
-        api: np.api,
+        ...(np.api ? { api: np.api } : {}),
         // keyless(本机 Ollama 等)也要给 dummy key,否则 pi /model 不显示该模型。
         apiKey: np.apiKeyEnvVar ? `$${np.apiKeyEnvVar}` : 'pi-native-keyless',
         ...(np.headers && Object.keys(np.headers).length > 0 ? { headers: np.headers } : {}),
-        models: np.models.map((m) => ({
-          id: m.id,
-          name: m.name ?? m.id,
-          reasoning: m.reasoning ?? false,
-          ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
-          input: m.input ?? ['text'],
-          contextWindow: m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000,
-          maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : 16_000,
-        })),
+        ...(nativeModels.length > 0 ? { models: nativeModels } : {}),
       };
     }
-    await fs.mkdir(agentHome, { recursive: true });
-    await fs.writeFile(path.join(agentHome, 'models.json'), JSON.stringify({ providers }, null, 2) + '\n');
-    return gatewayImageInputByModel;
+    const modelsJsonPath = joinRemotePosixPath(agentHome, 'models.json');
+    const modelsJsonContent = JSON.stringify({ providers }, null, 2) + '\n';
+    const modelsJsonHash = createHash('sha256').update(modelsJsonContent).digest('hex');
+    const settingsJsonPath = joinRemotePosixPath(agentHome, 'settings.json');
+    // The native ChatGPT adapter prefers WebSocket in auto mode. Cindy's
+    // authenticated loopback proxy is an HTTP/SSE boundary, so pin SSE for the
+    // isolated embedded runtime. Other PI providers ignore this transport knob.
+    const settingsJsonContent = JSON.stringify({ transport: 'sse' }, null, 2) + '\n';
+    if (!opts.preview) {
+      // 诊断(排查 LAZY_CREATE_FAILED):远端写前留痕 —— 确认 writeModelsJson 是否
+      // 执行、endpoint 是否有值、路径形态。
+      this.deps.logger.info?.('pi writeModelsJson', {
+        remote: opts.remote === true,
+        hasFileOps: Boolean(opts.fileOps),
+        endpointSet: Boolean(endpoint),
+        modelsJsonPath,
+        providerKeys: Object.keys(providers),
+      });
+      if (opts.fileOps) {
+        await opts.fileOps.mkdirp(agentHome);
+        // fileOps 远端写入内部已 umask 077(创建即 600,无 TOCTOU —— R5 H-1)。
+        await opts.fileOps.writeFile(modelsJsonPath, modelsJsonContent);
+        await opts.fileOps.writeFile(settingsJsonPath, settingsJsonContent);
+        this.deps.logger.info?.('pi writeModelsJson done', { modelsJsonPath });
+      } else {
+        await fs.mkdir(agentHome, { recursive: true });
+        // 控制面文件:显式 600,防同机其他用户读 BYOM baseUrl / provider 路由
+        // (R5 安全审计 H-5)。
+        await fs.writeFile(modelsJsonPath, modelsJsonContent, { mode: 0o600 });
+        await fs.writeFile(settingsJsonPath, settingsJsonContent, { mode: 0o600 });
+      }
+    }
+    return {
+      gatewayImageInputByModel,
+      gatewayApiByModel,
+      // 轮 42 P1(codex-connector):models.json 内容 hash 纳入远端 daemon 启动身份
+      // —— BYOM baseUrl/wire 或 gateway endpoint 变更会改写此文件, 但 env/cmd
+      // 可能不变; 不加这个 daemon 会误判纯 attach 用旧配置。
+      modelsJsonHash,
+    };
   }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
-    if (opts.remoteHostId) {
+    // 轮 22 LOW-6:空串 remoteHostId 规范化 —— Boolean('') 是 false 会让会话
+    // 被判定本地但后续仍把 '' 传给 resolvePiNativeProviders 等, 行为分裂。
+    if (opts.remoteHostId === '') opts.remoteHostId = undefined;
+    if (opts.remoteHostId && !this.deps.getRemotePiTransport) {
       throw new NotSupportedError('remoteSession', {
         supported: false,
         reason: 'not-implemented',
-        message: 'pi sessions are local-only for now',
+        message: 'pi remote sessions require a host-provided getRemotePiTransport hook',
       });
     }
     const reviewMode = opts.reviewMode === true;
@@ -551,6 +882,9 @@ export class PiAgent extends BaseAgent {
         const resolved = await this.deps.resolvePiNativeProviders({
           workingDir: opts.workingDir,
           remoteHostId: opts.remoteHostId,
+          providerId: opts.providerId,
+          model: opts.model,
+          resumeSessionId: opts.resumeSessionId,
         });
         nativeProviders = resolved?.providers ?? [];
         nativeEnv = resolved?.env ?? {};
@@ -566,6 +900,17 @@ export class PiAgent extends BaseAgent {
         .filter((provider) => provider.id !== PI_PROVIDER_ID)
         .map((provider) => [provider.id, provider] as const),
     );
+    const nativeProviderBySourceId = new Map(
+      nativeProviders
+        .filter((provider) => provider.id !== PI_PROVIDER_ID)
+        .map((provider) => [provider.sourceProviderId ?? provider.id, provider] as const),
+    );
+    const nativeProviderForSource = (
+      providerId: string,
+    ): PiNativeProviderSpec | undefined =>
+      nativeProviderBySourceId.get(providerId) ?? nativeProviderById.get(providerId);
+    const resolveNativeModelId = (providerId: string, model: string): string =>
+      nativeProviderById.get(providerId)?.modelIdAliases?.[model] ?? model;
     // providerId 是模型来源的主键；同名模型可同时存在于 Cindy 网关和多个 BYOM provider。
     // 三态语义(与 session-provider-store 对齐):
     //   - 显式 BYOM id → 该 native provider(经上面的 model-combo fail-closed 校验);
@@ -578,17 +923,46 @@ export class PiAgent extends BaseAgent {
       providerId?: string | null,
     ): string => {
       if (providerId) {
-        const native = nativeProviderById.get(providerId);
-        return native?.models.some((candidate) => candidate.id === model)
+        const native = nativeProviderForSource(providerId);
+        const nativeModel = native ? resolveNativeModelId(native.id, model) : model;
+        return native?.models.some((candidate) => candidate.id === nativeModel)
           ? native.id
           : PI_PROVIDER_ID;
       }
       if (providerId === null) return PI_PROVIDER_ID;
-      return nativeProviders.find(
-        (provider) => provider.id !== PI_PROVIDER_ID
-          && provider.models.some((candidate) => candidate.id === model),
-      )?.id ?? PI_PROVIDER_ID;
+      // 旧会话/旧客户端没有 providerId 时，只能按启动快照做兼容回退。每个 provider
+      // 必须先应用自己的 alias：例如 xAI 的裸 `grok-4.6` 实际对应
+      // `xai/grok-4.6`。若多个 native provider 都能解释同一个 id，则来源并不唯一，
+      // 直接拒绝恢复，不能靠数组顺序猜一个端点，更不能把提示词改发到默认网关。
+      const matches = nativeProviders.filter((provider) => {
+        if (provider.id === PI_PROVIDER_ID) return false;
+        if (
+          provider.sourceProviderId !== undefined &&
+          !(
+            (provider.sourceProviderId === 'openai' && model.startsWith('chatgpt/')) ||
+            (provider.sourceProviderId === 'xai' && model.startsWith('xai/')) ||
+            (provider.sourceProviderId === 'anthropic' && model.startsWith('claude-'))
+          )
+        ) return false;
+        const candidateModel = provider.modelIdAliases?.[model] ?? model;
+        return provider.models.some((candidate) => candidate.id === candidateModel);
+      });
+      if (matches.length > 1) {
+        throw new Error(
+          `pi: provider-less model '${model}' matches multiple native providers `
+          + `(${matches.map((provider) => provider.id).join(', ')}); refusing to guess an endpoint.`,
+        );
+      }
+      return matches[0]?.id ?? PI_PROVIDER_ID;
     };
+    const resolveWireModel = (providerId: string, model: string): string => {
+      const nativeModel = resolveNativeModelId(providerId, model);
+      return nativeProviderById
+        .get(providerId)
+        ?.models.find((candidate) => candidate.id === nativeModel)?.wireId ?? nativeModel;
+    };
+    const resolveSourceProvider = (providerId: string): string =>
+      nativeProviderById.get(providerId)?.sourceProviderId ?? providerId;
     // 显式 BYOM 路由必须 fail closed:当调用方钉了一个既非 Cindy 网关(cindy/xd)也非
     // 订阅直连(openai/anthropic/xai)的自定义/本地 provider 时,该来源必须在本次解析出的
     // nativeProviders 里。若原生解析失败(配置/safeStorage 暂时读不到)或该 provider 缺席,
@@ -609,8 +983,9 @@ export class PiAgent extends BaseAgent {
     ): providerId is string => {
       if (!providerId || NON_BYOM_PROVIDER_IDS.has(providerId)) return false;
       if (resolveFailed) return true;
-      const native = nativeProviderById.get(providerId);
-      return !native || !native.models.some((candidate) => candidate.id === model);
+      const native = nativeProviderForSource(providerId);
+      const nativeModel = native ? resolveNativeModelId(native.id, model) : model;
+      return !native || !native.models.some((candidate) => candidate.id === nativeModel);
     };
     if (explicitByomUnresolvable(opts.providerId, opts.model, nativeResolveFailed)) {
       throw new Error(
@@ -622,6 +997,48 @@ export class PiAgent extends BaseAgent {
       );
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
+    // 轮 42 P2(codex-connector):远端 Pi 会话 + baseUrl 指向本机 loopback 的 BYOM
+    // provider 必须拒绝 —— 远端 pi 进程在 SSH 主机上连 localhost 连的是**远端
+    // 自己**, 用户本机的 Ollama 等服务不可达, 首回合必然失败/错配(甚至连到远端
+    // 无关服务)。与订阅 provider 拒绝同款 fail-fast, 引导换网关或远端可达的 BYOM。
+    // 同时校验显式 providerId 与 legacy/default 路由 resolve 出的 native provider
+    // (providerId 未持久化时 resolveProviderForModel 也能选出 BYOM)。
+    if (opts.remoteHostId) {
+      const candidateRuntimeIds = new Set<string>();
+      if (opts.providerId && !NON_BYOM_PROVIDER_IDS.has(opts.providerId)) {
+        const explicitNative = nativeProviderForSource(opts.providerId);
+        if (explicitNative) candidateRuntimeIds.add(explicitNative.id);
+      }
+      if (
+        initialProvider !== PI_PROVIDER_ID &&
+        !NON_BYOM_PROVIDER_IDS.has(resolveSourceProvider(initialProvider))
+      ) {
+        candidateRuntimeIds.add(initialProvider);
+      }
+      for (const runtimeProviderId of candidateRuntimeIds) {
+        const loopbackNative = nativeProviderById.get(runtimeProviderId);
+        if (loopbackNative && isLoopbackOnlyBaseUrl(loopbackNative.baseUrl) && !loopbackNative.hostProxyForward) {
+          throw new Error(
+            `[REMOTE_LOCAL_ONLY_PROVIDER] pi: BYOM provider '${resolveSourceProvider(runtimeProviderId)}' baseUrl ${loopbackNative.baseUrl} is loopback-only — ` +
+              'a remote Pi session runs on the SSH host and cannot reach a service on this machine; ' +
+              'pick the XD gateway or a BYOM endpoint reachable from that host.',
+          );
+        }
+      }
+    }
+    const initialWireModel = resolveWireModel(initialProvider, opts.model);
+    // 先解析 native provider 再做 auth：老会话/远端控制端可能没有持久化 providerId，
+    // 仍必须能从 model→provider 映射识别纯 BYOM，不能误落 Cindy gateway 登录门。
+    // startup effort 快照也使用同一来源，因此必须在快照 resolver 之前完成初始化。
+    const authProviderId =
+      opts.providerId ??
+      (initialProvider !== PI_PROVIDER_ID
+        ? resolveSourceProvider(initialProvider)
+        : opts.model.startsWith('chatgpt/')
+          ? 'openai'
+          : opts.model.startsWith('xai/')
+            ? 'xai'
+            : null);
 
     // availableModels 是跨 provider 拍平的公开选择面；启动旧任务时必须按实际来源重查
     // provider-aware 描述符，不能拿同 id 的内置/BYOM 首见条目校验持久化 effort。
@@ -632,7 +1049,7 @@ export class PiAgent extends BaseAgent {
     );
     const runtimeProviderId =
       opts.providerId === undefined && initialProvider !== PI_PROVIDER_ID
-        ? initialProvider
+        ? resolveSourceProvider(initialProvider)
         : opts.providerId;
     const mayResolveRuntimeModel = publicRuntimeModel !== undefined || !!opts.resumeSessionId;
     const selectedRuntimeModel = mayResolveRuntimeModel
@@ -677,12 +1094,14 @@ export class PiAgent extends BaseAgent {
     ): readonly Effort[] | undefined => {
       if (providerId !== PI_PROVIDER_ID) {
         return startupEffortsOfNativeModel(
-          nativeProviderById.get(providerId)?.models.find((model) => model.id === modelId),
+          nativeProviderById.get(providerId)?.models.find(
+            (model) => model.id === resolveNativeModelId(providerId, modelId),
+          ),
         );
       }
       const gatewayModel = modelId === opts.model && selectedRuntimeModel
         ? selectedRuntimeModel
-        : this.deps.resolvePiGatewayModelDescriptor?.(modelId)
+        : this.deps.resolvePiGatewayModelDescriptor?.(authProviderId, modelId)
           ?? this.capabilities.availableModels.find((model) => model.id === modelId);
       return gatewayModel?.efforts;
     };
@@ -701,17 +1120,6 @@ export class PiAgent extends BaseAgent {
       );
     };
 
-    // 先解析 native provider 再做 auth：老会话/远端控制端可能没有持久化 providerId，
-    // 仍必须能从 model→provider 映射识别纯 BYOM，不能误落 Cindy gateway 登录门。
-    const authProviderId =
-      opts.providerId ??
-      (initialProvider !== PI_PROVIDER_ID
-        ? initialProvider
-        : opts.model.startsWith('chatgpt/')
-          ? 'openai'
-          : opts.model.startsWith('xai/')
-            ? 'xai'
-            : null);
     const credentialMode =
       resolveAgentCredentialMode({ agentKind: 'pi', providerId: authProviderId, model: opts.model }) ??
       'gateway-key';
@@ -726,8 +1134,82 @@ export class PiAgent extends BaseAgent {
       );
     }
     const authEnv = await this.deps.auth.getAuthEnv({ credentialMode, providerId: authProviderId });
+    // 轮 42 P1(codex-connector):远端 pi + 订阅凭证(oauth-bearer)必须拒绝 ——
+    // getAuthEnv 返回的是**本地 loopback proxy 的占位 key**, 远端 models.json
+    // 却写真实 upstream endpoint 且不携带本地 proxy 的 OAuth 注入 headers,
+    // pi 会把占位 key 当网关 key 打真实 upstream → 每个远端 turn 都失败。
+    // 远端只支持 gateway-key(与 writeModelsJson 的远端分支一致)。fail-fast
+    // 拒绝比「看似启动、首回合 401」可诊断。
+    const remoteOAuthViaHostProxy = Boolean(
+      opts.remoteHostId && nativeProviderById.get(initialProvider)?.hostProxyForward,
+    );
+    if (opts.remoteHostId && credentialMode === 'oauth-bearer' && !remoteOAuthViaHostProxy) {
+      // 轮 42 P2(codex-connector):NotSupportedError 自己拼 message, 不带
+      // bracketed code —— sessionCreateHandler 只认 [REMOTE_*] 前缀。message
+      // 前加 [REMOTE_NATIVE_OAUTH_UNAVAILABLE] 让 renderer 走 5 语言可行动
+      // 文案(引导换 gateway-key / BYOM)。
+      throw new NotSupportedError('remoteSubscriptionProvider', {
+        supported: false,
+        reason: 'platform-limited',
+        message:
+          '[REMOTE_NATIVE_OAUTH_UNAVAILABLE] remote pi sessions require gateway-key auth (subscription/OAuth providers are local-only for now — pick an XD gateway or BYOM API-key provider)',
+      });
+    }
 
-    const agentHome = this.resolveAgentHome();
+    const agentHome = this.resolveAgentHome(opts.remoteHostId);
+    // 远端会话的 agentHome 文件操作走 host 注入的 SSH fs 原语;本地走 node:fs。
+    // 语义:远端 pi 进程在远端读这些文件,host 侧必须把写/读/删落到远端机器。
+    // 轮 22 HIGH-2 fail-fast:远端会话缺 fileOps 时静默回落 node:fs 会把
+    // models.json/perm/扩展写到本地而 pi 在远端读 —— 「静默做错事」。
+    // 与 getRemotePiTransport 缺失同款 NotSupportedError 拒绝启动。
+    const fileOps = opts.remoteHostId
+      ? this.deps.getRemotePiFileOps?.(opts.remoteHostId)
+      : undefined;
+    if (opts.remoteHostId && !fileOps) {
+      throw new NotSupportedError('remoteFileOps', {
+        supported: false,
+        reason: 'not-implemented',
+        message: 'remote pi sessions require getRemotePiFileOps — host must provide SSH file primitives',
+      });
+    }
+    const remote = Boolean(opts.remoteHostId);
+    const mkdirp = async (dir: string): Promise<void> => {
+      if (fileOps) return fileOps.mkdirp(dir);
+      await fs.mkdir(dir, { recursive: true });
+    };
+    const writeFile = async (file: string, content: string, mode?: number): Promise<void> => {
+      if (fileOps) return fileOps.writeFile(file, content, mode);
+      if (mode !== undefined) {
+        await fs.writeFile(file, content, { mode });
+      } else {
+        // 凭证/控制面文件(models.json 的 BYOM baseUrl、权限档、bridge 扩展)对
+        // 同机其他用户应不可读:默认 600(R5 安全审计 H-5)。显式 mode 由调用方决定。
+        await fs.writeFile(file, content, { mode: 0o600 });
+      }
+    };
+    const statFile = async (file: string): Promise<{ isFile: boolean } | null> => {
+      if (fileOps) return fileOps.stat(file);
+      try {
+        const s = await fs.stat(file);
+        return { isFile: s.isFile() };
+      } catch {
+        return null;
+      }
+    };
+    const rmPath = async (target: string, opts2?: { recursive?: boolean }): Promise<void> => {
+      // 轮 22 MEDIUM-5:两分支统一吞错(force 语义) —— 远端 fileOps.rm 抛错
+      // 时本地分支却静默, 语义不对称会误导未来调用方。rm 失败由上层
+      // cleanupConfigHome 的 catch 兜底。
+      try {
+        if (fileOps) {
+          await fileOps.rm(target, opts2);
+        } else {
+          await fs.rm(target, { recursive: opts2?.recursive === true, force: true });
+        }
+      } catch {
+        /* best-effort:rm 失败不致命 */
+      }
+    };
     // 每个 startSession 用独立的配置目录承载 models.json + cindy-bridge extension
     // (经 PI_CODING_AGENT_DIR 交给子进程),隔离并发普通会话:两个会话同写共享的
     // agentHome/models.json 时,第二次写入会在首次写完到 spawn 之间(多个 await)截断/
@@ -735,42 +1217,89 @@ export class PiAgent extends BaseAgent {
     // session 状态仍由 --session-dir 指向共享 sessions;权限档由 CINDY_PI_PERMISSION_FILE
     // 显式路径提供 —— 两者都与配置目录独立(同 forkSdkSession 的 forkHome 隔离手法),
     // configHome 在进程退出/close/启动失败时清理。
-    const configHome = path.join(agentHome, 'run-tmp', randomBytes(8).toString('hex'));
+    // 轮 42 P1(codex-connector):远端会话的 configHome 必须**稳定派生**——
+    // 之前用 randomBytes, 每次 startSession 变 → spawn env 变 → envHash 必变
+    // → daemon 判配置变更 → kill + respawn, 断链重连的 attach 保活失效
+    // (与轮 41 session token 同源)。隔离语义(并发会话不共享 models.json /
+    // extensions)由 daemon 的 envHash 串行化保证: 同 session 的 envHash 相同
+    // → 纯 attach 复用同一路径, 无并发写; envHash 不同(如模型变更) → kill
+    // 先于 spawn, 旧进程已死, 路径复用安全。本地会话无 envHash 约束, 保持
+    // randomBytes 隔离(多实例并发启动)。
+    // 远端再叠 models.json hash:startSession 在 pi/ensure 之前就会写
+    // models.json, 若只按 sessionId 分目录, 另一实例改路由会先覆盖仍在跑的
+    // 旧 Pi / 子代理热读快照。
+    let configHome = remote
+      ? joinRemotePosixPath(agentHome, 'run-tmp', stableSessionPathSegment(opts.sessionId))
+      : joinRemotePosixPath(agentHome, 'run-tmp', randomBytes(8).toString('hex'));
     let configHomeCleaned = false;
+    // 清理失败(SSH 断链时 fileOps.rm 抛错)不置标志 —— 下次会话的 startSession
+    // 会主动清陈旧 configHome(见下),且不因「一次失败永久跳过」累积泄漏
+    // (R4-2 竞态 1/6)。
     const cleanupConfigHome = (): void => {
       if (configHomeCleaned) return;
-      configHomeCleaned = true;
-      void fs.rm(configHome, { recursive: true, force: true }).catch(() => {});
+      void rmPath(configHome, { recursive: true }).then(
+        () => { configHomeCleaned = true; },
+        // 失败不置标志(下次 startSession 清陈旧目录兜底), 但必须留日志——
+        // 否则远端 SSH fs 卡死等根因不可见(R7 审计 L-3)。
+        (err) => {
+          this.deps.logger.debug('pi configHome cleanup failed (retried next startSession)', {
+            configHome,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        },
+      );
     };
-    const gatewayImageInputByModel = await this.writeModelsJson(
+    // 轮 40-w4-t4 CRITICAL:不再在新会话启动时清 run-tmp 其它目录 —— 远端
+    // 并发会话 A 的 configHome 会被 B 的启动清理删除(无 owner/lease 校验),
+    // 破坏 A 的 bridge extension/models.json 运行期快照。清理只绑定到
+    // 本会话自己的 close/失败(cleanupConfigHome);run-tmp 残留(断链时清理
+    // 失败的孤儿)由本会话 close 路径的低频清理覆盖, 不牺牲活跃会话。
+    // 注:断链残留的孤儿 configHome 会累积 —— 但删错活跃会话是毁任务,
+    // 宁可残留(可由用户手动清或未来加 lease 机制), 不误删。
+    if (remote) {
+      const preview = await this.writeModelsJson(
+        configHome,
+        nativeProviders,
+        retainedRuntimeModel,
+        authProviderId,
+        { remote, fileOps, preview: true },
+      );
+      configHome = joinRemotePosixPath(
+        agentHome,
+        'run-tmp',
+        `${stableSessionPathSegment(opts.sessionId)}-${preview.modelsJsonHash.slice(0, 16)}`,
+      );
+    }
+    const { gatewayImageInputByModel, gatewayApiByModel, modelsJsonHash } = await this.writeModelsJson(
       configHome,
       nativeProviders,
       retainedRuntimeModel,
+      authProviderId,
+      { remote, fileOps },
     );
-    const sessionDir = path.join(agentHome, 'sessions');
-    await fs.mkdir(sessionDir, { recursive: true });
+    const sessionDir = joinRemotePosixPath(agentHome, 'sessions');
+    await mkdirp(sessionDir);
 
     // cindy-bridge extension:每次 startSession 覆写,保证桥代码与本版本一致。
     // 与 models.json 同放隔离 configHome(Pi 从 PI_CODING_AGENT_DIR/extensions 扫描)。
-    const extensionsDir = path.join(configHome, 'extensions');
-    await fs.mkdir(extensionsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME),
-      CINDY_BRIDGE_EXTENSION_SOURCE,
-    );
+    const extensionsDir = joinRemotePosixPath(configHome, 'extensions');
+    await mkdirp(extensionsDir);
+    // 轮 40-w4-t15 HIGH:远端派生路径一律 posix join —— 宿主机 path.join 在
+    // Windows 上对 POSIX 路径的混合分隔符处理不可依赖(扩展文件扫描不到
+    // 会导致 bridge/subagent 静默失效)。
+    const bridgeExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME);
+    await writeFile(bridgeExtensionPath, CINDY_BRIDGE_EXTENSION_SOURCE);
     // cindy-subagent extension:与 bridge 并列的独立扩展(职责分离 —— bridge 管权限门与
     // MCP 桥,这个只管子代理)。子进程继承 PI_CODING_AGENT_DIR,因此同样加载 bridge,
     // 权限门对子代理照样生效;递归由扩展内的 depth env 自己截断。
+    const subagentExtensionPath = joinRemotePosixPath(extensionsDir, CINDY_SUBAGENT_EXTENSION_FILENAME);
     if (!reviewMode) {
-      await fs.writeFile(
-        path.join(extensionsDir, CINDY_SUBAGENT_EXTENSION_FILENAME),
-        CINDY_SUBAGENT_EXTENSION_SOURCE,
-      );
+      await writeFile(subagentExtensionPath, CINDY_SUBAGENT_EXTENSION_SOURCE);
     }
 
     // 权限档文件:extension 每次 tool_call 现读(热切换);读不到按 ask fail-closed。
-    const runtimeDir = path.join(agentHome, 'runtime');
-    await fs.mkdir(runtimeDir, { recursive: true });
+    const runtimeDir = joinRemotePosixPath(agentHome, 'runtime');
+    await mkdirp(runtimeDir);
     // 防御:sessionId 会拼进文件名,不能含路径分隔符 / 上级引用 —— 否则可逃出 runtimeDir
     // 覆盖任意文件(codex review)。IPC 边界已统一校验,这里对所有 startSession 调用方
     // (scheduler / orca / resume 等)再兜一层 fail-closed,与安全底线一致。
@@ -789,30 +1318,19 @@ export class PiAgent extends BaseAgent {
     //     bypassPermissions,本实例的破坏性工具不再确认。这是跨实例权限提升,比路由更严重,
     //     属于「本 PR 代码路径会走到的权限类缺陷」,一并收口而不是外推。
     // 代价是文件按 startSession 而非 sessionId 唯一 → 必须显式回收,见 cleanupRuntimeFiles。
-    const runtimeInstanceId = randomBytes(8).toString('hex');
-    const permissionFile = path.join(
-      runtimeDir,
-      `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}.json`,
-    );
-    // 子代理运行期快照(model + provider)。与权限档同机制:文件而非 env —— env 在 spawn
-    // 时定型,会话中途 setModel 后子代理会继续用启动时的旧模型(greptile P1),而 BYOM /
-    // 本地 provider 不一起传还会让同名模型落到错误 endpoint(codex P2,pi-harness §3 要求
-    // BYOM 直连原生 provider)。扩展每次派子代理现读本文件。
-    const subagentRuntimeFile = path.join(
-      runtimeDir,
-      `subagent-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}.json`,
-    );
-    let runtimeFilesCleaned = false;
-    /**
-     * 回收本运行时的两个 runtime 文件(幂等)。带 nonce 之后它们不再按 sessionId 复用,
-     * 不回收就会随每次 startSession 无界堆积在 runtimeDir 里。
-     */
-    const cleanupRuntimeFiles = (): void => {
-      if (runtimeFilesCleaned) return;
-      runtimeFilesCleaned = true;
-      void fs.rm(permissionFile, { force: true }).catch(() => {});
-      void fs.rm(subagentRuntimeFile, { force: true }).catch(() => {});
-    };
+    // 轮 42 P1:远端会话用稳定派生(同 session 重连复用路径 → env 稳定 →
+    // envHash 稳定 → attach 保活); 本地保持 nonce 隔离(多实例并发启动)。
+    // 远端同路径热读文件的覆盖:权限/Extra Dir 快照 hash 进 spawn env
+    // (CINDY_PI_PERMISSION_HASH) —— 档位变则 envHash 变, daemon 先 kill 再 spawn,
+    // 不让另一实例把 Full Access 写进仍在跑的 Pi。
+    const runtimeInstanceId = remote
+      ? stableSessionPathSegment(sid)
+      : randomBytes(8).toString('hex');
+    // 轮 20-V1 HIGH:远端路径必须 POSIX join —— path.join 在 Windows 本地会把
+    // runtimeDir 与文件名拼成反斜杠(远端 shell 不认, 权限文件/子代理 runtime
+    // 写不进删不掉, 破坏权限门与子代理路由)。runtimeDir 已是 posix(956 行)。
+    // 远端权限/子代理文件名带启动快照 hash:startSession 在 pi/ensure 之前就会写文件,
+    // 若复用旧路径, 另一实例的更宽档位会先覆盖仍在跑的 Pi 热读文件。
     // auto 保留(Cindy 侧 dispatcher 用);bridge 只特判 bypassPermissions,auto 在
     // 桥内行为同 ask(非只读全部冒泡)。其余档(default/acceptEdits/plan)归 ask 最严。
     const normalizePermissionMode = (mode: string | undefined): 'ask' | 'auto' | 'bypassPermissions' =>
@@ -849,6 +1367,33 @@ export class PiAgent extends BaseAgent {
       readOnlyRoots: [...mutableExtraDirs],
       ...reviewPathSnapshot,
     };
+    const permissionSnapshotHash = createHash('sha256')
+      .update(JSON.stringify(requestedPermissionSnapshot))
+      .digest('hex')
+      .slice(0, 16);
+    const permissionFile = joinRemotePosixPath(
+      runtimeDir,
+      `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}${remote ? `-${permissionSnapshotHash}` : ''}.json`,
+    );
+    // 子代理运行期快照(model + provider)。与权限档同机制:文件而非 env —— env 在 spawn
+    // 时定型,会话中途 setModel 后子代理会继续用启动时的旧模型(greptile P1),而 BYOM /
+    // 本地 provider 不一起传还会让同名模型落到错误 endpoint(codex P2,pi-harness §3 要求
+    // BYOM 直连原生 provider)。扩展每次派子代理现读本文件。
+    const subagentRuntimeFile = joinRemotePosixPath(
+      runtimeDir,
+      `subagent-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}${remote ? `-${permissionSnapshotHash}` : ''}.json`,
+    );
+    let runtimeFilesCleaned = false;
+    /**
+     * 回收本运行时的两个 runtime 文件(幂等)。带 nonce 之后它们不再按 sessionId 复用,
+     * 不回收就会随每次 startSession 无界堆积在 runtimeDir 里。
+     */
+    const cleanupRuntimeFiles = (): void => {
+      if (runtimeFilesCleaned) return;
+      runtimeFilesCleaned = true;
+      void rmPath(permissionFile);
+      void rmPath(subagentRuntimeFile);
+    };
     // 权限档写入串行化 + 代际跳过。并发/连续切档(本地与远程控制端同时切,或用户快速连点)时,
     // 无串行的 fs.writeFile 可能让较早的 Full-access 写在较新的 Ask 写之后落盘 —— bridge 每次
     // tool_call 现读就会读到过期的 bypassPermissions,而 host 闭包/UI 已切到 Ask,后续破坏性工具
@@ -877,7 +1422,7 @@ export class PiAgent extends BaseAgent {
       const run = permissionWriteChain.then(async () => {
         if (gen !== permissionWriteGen) return;
         try {
-          await fs.writeFile(permissionFile, JSON.stringify(snapshot) + '\n');
+          await writeFile(permissionFile, JSON.stringify(snapshot) + '\n');
         } catch (error) {
           // 失败的最新意图不能留在 requested 里。否则一次 Full-access 写失败后，
           // 随后的 Extra Dirs 更新会从 requested 继承 bypassPermissions，再把失败的
@@ -952,7 +1497,7 @@ export class PiAgent extends BaseAgent {
       const run = subagentRuntimeWriteChain.then(async (): Promise<boolean> => {
         // 已被更晚的意图取代:旧内容不得在新内容之后落盘(视作成功,最新那次负责收口)。
         if (gen !== subagentRuntimeWriteGen) return true;
-        await fs.writeFile(subagentRuntimeFile, JSON.stringify(snapshot) + '\n');
+        await writeFile(subagentRuntimeFile, JSON.stringify(snapshot) + '\n');
         return true;
       });
       // 链永不停在 rejected 上(同权限档):否则一次写失败后续写永远追加不进去。
@@ -964,13 +1509,20 @@ export class PiAgent extends BaseAgent {
           message: error instanceof Error ? error.message : String(error),
         });
         // 留着旧内容比没有更危险(会把请求发到过期 provider),删掉让使用点也失败关闭。
-        await fs.rm(subagentRuntimeFile, { force: true }).catch(() => {});
+        await rmPath(subagentRuntimeFile);
         return false;
       }
     };
     // 会话暴露前先落初始快照(await:模型第一次调 subagent 时文件必须已经在)。
-    if (subagentRoutingEnabled && !(await writeSubagentRuntimeFile({ model: opts.model, provider: initialProvider }))) {
-      subagentRoutingEnabled = false;
+    // 轮 40-w4-t16 MEDIUM(降级回退):初始写失败**不永久禁用** subagent ——
+    // 一次临时 fs/权限错误锁死整个会话的 subagent 路由不可接受。保留 enabled,
+    // 但文件缺失让扩展 fail-closed(不派发);后续每次 setModel 都会重试写
+    // (writeSubagentRuntimeFile 由 subagentRuntimeWriteChain 串行), 文件恢复
+    // 可写即自动恢复。
+    if (subagentRoutingEnabled && !(await writeSubagentRuntimeFile({ model: initialWireModel, provider: initialProvider }))) {
+      this.deps.logger.warn('pi subagent initial runtime snapshot write failed — routing stays enabled, will retry on next model set', {
+        sessionId: opts.sessionId,
+      });
     }
 
     // MCP:host 把 in-process providers 暴露成 localhost streamable-HTTP，也可给出
@@ -982,7 +1534,12 @@ export class PiAgent extends BaseAgent {
     let mcpEnv: PiExtraSpawnConfig['mcpEnv'] = {};
     let disposeSessionCtx: (() => void) | undefined;
     const registeredMcpServerNames = new Set<string>();
-    if (!reviewMode && this.deps.preparePiExtraSpawnConfig) {
+    // 远端会话:host 可 gate 掉 in-process MCP bridge(loopback URL 远端够不到;
+    // Phase 1 不桥 orca/memory/ghost)。外部 HTTP MCP 直连不受影响。
+    const remoteSkipMcpBridge = Boolean(
+      opts.remoteHostId && this.deps.remotePiSkipMcpBridge?.(opts.remoteHostId),
+    );
+    if (!reviewMode && !remoteSkipMcpBridge && this.deps.preparePiExtraSpawnConfig) {
       try {
         const extra = await this.deps.preparePiExtraSpawnConfig(this.deps.mcpProviders ?? [], {
           sessionId: opts.sessionId,
@@ -991,6 +1548,7 @@ export class PiAgent extends BaseAgent {
           vendorOptions: mutableVendorOptions,
           mcpCallerKind: 'root',
           mcpCallerAttested: true,
+          ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
         });
         mcpBridge = extra?.mcpBridge ?? null;
         mcpEnv = extra?.mcpEnv ?? {};
@@ -1058,28 +1616,104 @@ export class PiAgent extends BaseAgent {
     ].filter((s): s is string => !!s && s.length > 0);
     const appendSystemPrompt = appendSections.join('\n\n');
 
+    // 远端会话先 resolve 远端 pi 二进制路径(probe;plan-mode 扩展路径 / subagent
+    // spawn env 都依赖它)。本地场景即 this.deps.binaryPath,无额外开销。
+    // 轮 22 HIGH-1 fail-fast:远端缺 resolveRemotePiBinaryPath 或 probe 失败时,
+    // 静默回落本地 binaryPath 会让 subagent 在远端 spawn 本地路径(No such file)
+    // + plan-mode 扩展静默禁用 —— 拒绝启动, 与 getRemotePiTransport 同款守卫。
+    const effectivePiBinaryPath = opts.remoteHostId
+      ? await (async (hostId: string): Promise<string> => {
+          const resolved = await this.deps.resolveRemotePiBinaryPath?.(hostId);
+          if (!resolved) {
+            throw new NotSupportedError('remotePiBinaryPath', {
+              supported: false,
+              reason: 'not-implemented',
+              message: 'remote pi sessions require resolveRemotePiBinaryPath — host must probe the remote pi binary',
+            });
+          }
+          return resolved;
+        })(opts.remoteHostId)
+      : this.deps.binaryPath;
+
     // plan 模式:挂载 pi 自带的 plan-mode example 扩展(随 pi 分发,版本匹配,免 vendoring)。
     // 只在文件存在时 --extension;缺失则 plan 模式静默降级(setPlanMode 时 warn)。
     // 加载本身零副作用:plan 模式默认关,扩展 hook 全早返;仅 /plan 开启后才注入 plan 提示词。
-    const planModeExtPath = path.join(
-      path.dirname(this.deps.binaryPath),
-      'examples', 'extensions', 'plan-mode', 'index.ts',
-    );
+    // 远端:扩展随远端 pi 分发(installer 解压整包),路径基于远端二进制。
+    // 轮 40-w4-t15:远端二进制是 POSIX 路径, 本地是平台路径 —— 按会话远端性
+    // 选择 dirname 语义。
+    const planModeExtPath = opts.remoteHostId
+      ? joinRemotePosixPath(
+          path.posix.dirname(effectivePiBinaryPath),
+          'examples', 'extensions', 'plan-mode', 'index.ts',
+        )
+      : path.join(
+          path.dirname(effectivePiBinaryPath),
+          'examples', 'extensions', 'plan-mode', 'index.ts',
+        );
     let planModeExtAvailable = false;
     try {
-      planModeExtAvailable = (await fs.stat(planModeExtPath)).isFile();
+      planModeExtAvailable = (await statFile(planModeExtPath))?.isFile === true;
     } catch {
       /* 缺失 → 不挂载 plan-mode */
     }
 
+    // Project resources have exactly one authority: the host-owned PR3 trust
+    // snapshot. Freeze it once per new runtime, then assemble only its eligible
+    // skills. Missing/throwing authorities and paths fail closed; never infer
+    // approval from permission mode, MCP/plugin state, or caller vendor options.
+    let projectResourceAssembly = unavailablePiProjectResourceAssembly(
+      reviewMode
+        ? 'review-mode-project-resources-disabled'
+        : 'approval-resolver-unavailable',
+    );
+    if (!reviewMode && this.deps.resolvePiProjectTrustInput) {
+      try {
+        const trustInput = await this.deps.resolvePiProjectTrustInput({
+          ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+          workingDir: opts.workingDir,
+          ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
+        });
+        projectResourceAssembly = await assembleApprovedPiProjectResources(
+          trustInput,
+          opts.workingDir,
+        );
+        projectResourceAssembly = await stageApprovedPiProjectResources(
+          projectResourceAssembly,
+          configHome,
+        );
+      } catch {
+        projectResourceAssembly = unavailablePiProjectResourceAssembly(
+          'approval-resolver-failed',
+        );
+        this.deps.logger.warn('pi project approval resolver failed closed', {
+          sessionId: opts.sessionId ?? null,
+        });
+      }
+    }
+    this.deps.logger.debug('pi project resource assembly snapshot', {
+      sessionId: opts.sessionId ?? null,
+      status: projectResourceAssembly.diagnostic.status,
+      reason: projectResourceAssembly.diagnostic.reason,
+      approvalRevision: projectResourceAssembly.diagnostic.approvalRevision,
+      requestedSkillCount: projectResourceAssembly.diagnostic.requestedSkillCount,
+    });
+
     const args = [
       '--mode', 'rpc',
+      // Keep Pi's project trust and implicit extension discovery disabled even
+      // when project settings declare packages/extensions. Cindy-owned/pinned
+      // extensions and approved skills are the only explicit additions below.
+      '--no-approve',
+      '--no-extensions',
       '--session-dir', sessionDir,
       '--provider', initialProvider,
-      '--model', opts.model,
+      '--model', initialWireModel,
       ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
       ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
+      '--extension', bridgeExtensionPath,
+      ...(!reviewMode ? ['--extension', subagentExtensionPath] : []),
       ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+      ...projectResourceAssembly.launchSkillPaths.flatMap((skillPath) => ['--skill', skillPath]),
     ];
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
@@ -1091,6 +1725,7 @@ export class PiAgent extends BaseAgent {
     // follow-up send)同口径。清空只认 turn 终态,由 send 预检覆盖为最新值。
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
     let mutableModel = opts.model;
+    let mutableWireModel = initialWireModel;
     // Pi RPC 实际选中的 provider。与用于宿主鉴权/审阅元数据的 mutableProviderId 分开：
     // null/订阅来源会归一到 cindy，setModel 未显式传来源时也必须跟随本次解析结果。
     let mutablePiProviderId = initialProvider;
@@ -1106,6 +1741,7 @@ export class PiAgent extends BaseAgent {
     // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
     // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
       autoReviewUnavailableNotice.reset();
+      autoReviewConfirmUndeliveredNotice.reset();
     };
     /**
      * 挂起的权限卡登记表 —— 档位切换 / 会话关闭时必须能把它们强制 settle 并让 UI 收卡,
@@ -1119,6 +1755,8 @@ export class PiAgent extends BaseAgent {
       settle: (resolveAs: 'allow' | 'deny') => void;
       /** 高风险审批(MCP prompt-each-time、灰区 ask、审查中收紧):放宽档位不得批量放行。 */
       forcePrompt: boolean;
+      /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
+      unavailableHandoff?: boolean;
     };
     const pendingPrompts = new Map<string, PendingPrompt>();
     const registerPendingPrompt = (requestId: string, entry: PendingPrompt): (() => void) => {
@@ -1132,6 +1770,9 @@ export class PiAgent extends BaseAgent {
         // (与 CC / Codex 的同名逻辑一致 —— 否则 pending 期间切档能让破坏性调用自动过)。
         const effectiveResolveAs: 'allow' | 'deny' =
           resolveAs === 'allow' && entry.forcePrompt ? 'deny' : resolveAs;
+        if (effectiveResolveAs === 'deny' && entry.unavailableHandoff) {
+          autoReviewConfirmUndeliveredNotice.notify();
+        }
         pendingPrompts.delete(requestId);
         entry.settle(effectiveResolveAs);
         queue.push({
@@ -1150,13 +1791,16 @@ export class PiAgent extends BaseAgent {
     };
     // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Codex 同口径,走既有的
     // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。
-    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice((message) => {
+    const emitAutoReviewRuntimeNotice = (message: string): void => {
       queue.push({
         type: 'error',
         data: { message, isTerminal: false },
         source: 'pi',
       });
-    });
+    };
+    const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
+    const autoReviewConfirmUndeliveredNotice =
+      createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
     const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
       const request = {
         sessionId: opts.sessionId,
@@ -1187,6 +1831,7 @@ export class PiAgent extends BaseAgent {
     // preparePiExtraSpawnConfig 注册、但 handle 尚未交出,close() 不会跑 → 单独
     // 兜底注销 ctx 再抛(构造失败没有 proc 可关)。catch 必抛,故其后 proc 恒已赋值。
     let proc: PiRpcProcess;
+    let sessionTransport: PiTransport | undefined;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
     let runtimeCapabilityGeneration = 0;
     const runtimeCapabilityListeners = new Set<(
@@ -1210,7 +1855,16 @@ export class PiAgent extends BaseAgent {
         notifyRuntimeCapabilityListener(listener, manifest);
       }
     };
-    const proxySessionToken = randomBytes(32).toString('base64url');
+    // 普通远端会话直连网关(remoteEndpoint),不生成本地 proxy token。只有显式声明
+    // hostProxyForward 的 provider（当前为 xAI）仍通过 Desktop compat proxy：
+    // SSH 只解决可达性，session token 继续提供逐会话鉴权，不能把 loopback 端口
+    // 当作信任边界。
+    const remoteUsesHostProxy = remote && nativeProviders.some((provider) => provider.hostProxyForward);
+    const proxySessionToken = remoteUsesHostProxy
+      ? stableRemoteProxySessionToken(opts.sessionId, this.deps.derivePiProxySessionToken)
+      : !remote
+        ? randomBytes(32).toString('base64url')
+        : undefined;
     let disposeProxySession: (() => void) | undefined;
     // 幂等:onExit(进程异常退出)与 close()(用户结束)可能都调用它;首次注销后置位,
     // 后续调用直接返回,避免二次注销(codex review:crash 时须由 onExit 立即释放)。
@@ -1229,14 +1883,30 @@ export class PiAgent extends BaseAgent {
       if (firstError) throw firstError;
     };
     try {
-      const managedRipgrepPath = await stageManagedRipgrep(
-        configHome,
-        this.deps.runtimeConfig.managedExecutablePaths?.ripgrep,
-      );
-      if (opts.sessionId && this.deps.registerPiProxySession) {
-        const disposer = this.deps.registerPiProxySession(opts.sessionId, proxySessionToken);
+      // 远端不 stage 本地 rg(本机二进制远端无意义)—— 远端走 PATH 上的 rg(远端 POSIX
+      // 系统常见),与 CC/Codex 远端一致(不注入受管工具路径)。
+      const managedRipgrepPath = remote
+        ? undefined
+        : await stageManagedRipgrep(
+            configHome,
+            this.deps.runtimeConfig.managedExecutablePaths?.ripgrep,
+          );
+      if (proxySessionToken && opts.sessionId && this.deps.registerPiProxySession) {
+        const disposer = this.deps.registerPiProxySession(
+          opts.sessionId,
+          proxySessionToken,
+          () => mutablePiProviderId === PI_PROVIDER_ID
+            ? null
+            : resolveSourceProvider(mutablePiProviderId),
+        );
         if (typeof disposer === 'function') disposeProxySession = disposer;
       }
+      // 视觉桥后端 env（层 C）：host 解析后注入，cindy-bridge 的 vision 工具读取。
+      // 键名可能含 API key，须纳入 piSecretEnvNames 剥离面。
+      // 传当前 session model：未命中视觉桥目标模型的 Pi 模型不注入 env、不注册
+      // vision 工具（零干扰，不因别的模型配置了视觉桥而改变本模型工具面）。
+      const visionBridgeEnv =
+        this.deps.resolvePiVisionBridgeEnv?.(opts.model) ?? null;
       // 这些值必须留在 Pi 父进程，供 models.json 的 $ENV 请求期解析及 bridge
       // client 使用；cindy-bridge 用该**仅含变量名**的清单在 bash spawn 边界剥离
       // 真值，阻止 LLM shell 绕过工具审批直连 localhost proxy/MCP 或盗用 BYOM key。
@@ -1244,6 +1914,7 @@ export class PiAgent extends BaseAgent {
         PI_API_KEY_ENV,
         PI_SESSION_ID_ENV,
         PI_SESSION_TOKEN_ENV,
+        ...(visionBridgeEnv ? Object.keys(visionBridgeEnv) : []),
         ...Object.keys(authEnv),
         ...Object.keys(nativeEnv),
         ...Object.keys(mcpEnv),
@@ -1257,22 +1928,42 @@ export class PiAgent extends BaseAgent {
         // 受管工具路径同属控制面：不得让获批 bash 改写/替换后影响后续自动放行的 grep/find。
         ...(managedRipgrepPath ? [PI_MANAGED_RG_PATH_ENV] : []),
       ]));
+      // 远端会话零继承本机 env(对齐 claude env-builder mode:'remote')—— 本机全量 env
+      // 对远端无意义且是隐私泄漏面;远端只有精选集合(CINDY_PI_* + authEnv + MCP header)。
+      // 本地保持历史行为(继承本机 env)。
+      // 「Agent 流量走本地 Proxy」:远端会话注入 HTTPS_PROXY/HTTP_PROXY/NO_PROXY
+      // (指向本地代理经 SSH remote-forward 隧道),与 CC 远端同机制。
+      // 失败(fail-closed)直接传播 —— 用户显式开启代理却静默直连是安全语义缺陷
+      // (R2 MCP BUG-2):隧道 arm 失败应让会话启动失败,而非绕过代理。
+      const proxyEnv = remote && this.deps.getRemotePiAgentProxyEnv
+        ? await this.deps.getRemotePiAgentProxyEnv(opts.remoteHostId!)
+        : null;
       const spawnEnv: NodeJS.ProcessEnv = {
-        ...process.env,
+        ...(remote ? {} : process.env),
         ...authEnv,
+        ...(proxyEnv ?? {}),
         // BYOM 原生 provider 的 api keys(键名对应 spec.apiKeyEnvVar,models.json 用 $ENV 引用)。
         ...nativeEnv,
         // 外部 MCP header 真值只经 env 交给 bridge extension；host 生成独立名字，
         // 且这些键已进入 piSecretEnvNames，LLM 可调用的 bash 子进程拿不到。
         ...mcpEnv,
+        // 视觉桥后端 env（层 C）：键含 API key 已纳入 piSecretEnvNames 剥离面。
+        ...(visionBridgeEnv ? visionBridgeEnv : {}),
         [PI_SESSION_ID_ENV]: opts.sessionId ?? '',
-        [PI_SESSION_TOKEN_ENV]: proxySessionToken,
+        ...(proxySessionToken !== undefined
+          ? { [PI_SESSION_TOKEN_ENV]: proxySessionToken }
+          : {}),
         [PI_SECRET_ENV_NAMES_ENV]: JSON.stringify(piSecretEnvNames),
         PI_CODING_AGENT_DIR: configHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
+        // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
+        // 缺失时 bridge 仍保留 reviewOnly 语义, 不降级成普通 ask;见
+        // cindy-bridge-source currentPermissionState fail-closed)。
+        ...(reviewMode ? { CINDY_PI_REVIEW_ONLY: '1' } : {}),
         // 子代理:cindy-subagent 扩展据此 spawn 子 pi 进程。给二进制路径而不是让扩展猜
-        // process.execPath —— host 本来就知道本次会话用的是哪个 pi。
-        [CINDY_SUBAGENT_ENV.binary]: this.deps.binaryPath,
+        // process.execPath —— host 本来就知道本次会话用的是哪个 pi。远端会话用远端
+        // 二进制路径(effectivePiBinaryPath;本地路径远端不存在,spawn 会失败)。
+        [CINDY_SUBAGENT_ENV.binary]: effectivePiBinaryPath,
         // 只给文件路径:model/provider 由扩展每次现读,setModel 后立即生效。
         // 快照没能持久化时**不传**该 env —— 扩展据此完全不注册 subagent 工具(fail-closed,
         // 宁可本次会话没有子代理,也不让它带着空/旧快照把请求发到错误 endpoint)。
@@ -1293,19 +1984,36 @@ export class PiAgent extends BaseAgent {
         if (key.toLowerCase() === PI_MANAGED_RG_PATH_ENV.toLowerCase()) delete spawnEnv[key];
       }
       if (managedRipgrepPath) spawnEnv[PI_MANAGED_RG_PATH_ENV] = managedRipgrepPath;
+      // 轮 42 P1:models.json 内容 hash 进 spawn env —— 远端 daemon 的 envHash
+      // 覆盖它, 配置变更(models.json 改写)时条件 restart 判定生效, 不误 attach。
+      // 仅远端注入(本地无 envHash 机制); 值本身无凭证(只是内容指纹)。
+      if (remote) {
+        spawnEnv[PI_MODELS_JSON_HASH_ENV] = modelsJsonHash;
+        spawnEnv[PI_PERMISSION_HASH_ENV] = permissionSnapshotHash;
+      }
       mergeLoopbackNoProxy(spawnEnv);
-      proc = new PiRpcProcess({
-        binaryPath: this.deps.binaryPath,
-        args,
-        cwd: opts.workingDir,
-        env: spawnEnv,
-        logger: this.deps.logger,
-        onProcessSpawned: (pid) =>
+      const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
+      const { transport } = await this.createTransport(
+        {
+          args,
+          cwd: opts.workingDir,
+          env: spawnEnv,
+          sessionId: opts.sessionId,
+          hostProxyForwards: initialHostProxyForward ? [initialHostProxyForward] : [],
+        },
+        (pid) =>
           this.deps.registerLocalAgentProcess?.({
             pid,
             kind: 'pi',
             role: 'task-host',
           }),
+        opts.remoteHostId,
+        effectivePiBinaryPath,
+      );
+      sessionTransport = transport;
+      proc = new PiRpcProcess({
+        transport,
+        logger: this.deps.logger,
         onEvent: (event: PiRpcEvent) => {
           if (event.type === 'extension_ui_request') {
             this.handleExtensionUiRequest(event, proc, () => ({
@@ -1315,6 +2023,7 @@ export class PiAgent extends BaseAgent {
               readRoots: [opts.workingDir, ...mutableExtraDirs],
               reviewAutoAction,
               notifyAutoReviewUnavailable: () => autoReviewUnavailableNotice.notify(),
+              notifyAutoReviewConfirmUndelivered: () => autoReviewConfirmUndeliveredNotice.notify(),
               registeredMcpServerNames,
               registerPendingPrompt,
               turnPermissionPolicy: activeTurnPermissionPolicy,
@@ -1356,20 +2065,34 @@ export class PiAgent extends BaseAgent {
               data: { message: `pi process exited unexpectedly (code=${code}, signal=${signal})`, isTerminal: true },
               source: 'pi',
             });
-            // 崩溃/被杀:上层见迭代器结束即把 session 标 closed,close() 随后短路,
-            // proxy token 与 MCP session ctx 会滞留 Main 内存直到重启 —— 期间任何本地
-            // 进程仍可拿旧 token 经 loopback 代理盗用宿主凭证(codex review)。在此幂等注销。
-            try {
-              disposeSessionRegistrations();
-            } catch (err) {
-              this.deps.logger.warn('pi dispose on unexpected exit failed (non-fatal)', {
-                message: err instanceof Error ? err.message : String(err),
-              });
+            // 轮 43 P1(codex-connector):**远端 daemon 模式不注销 MCP 注册** ——
+            // transport onClose(SSH 闪断/桥断)≠ 进程死, daemon 仍持有同一个 pi
+            // 子进程继续跑; 注销 MCP 注册会关闭 SSH remote-forward 隧道并清掉
+            // MCP session context, 远端 pi 的 cindy_memory/cindy_orca/cindy_ghost
+            // 等 MCP 调用在 detach 期间立即 401 或不可达, 破坏断链保活语义。
+            // 本地 stdio 无 daemon, onExit 即真死, 保持清理。
+            if (!remote) {
+              try {
+                disposeSessionRegistrations();
+              } catch (err) {
+                this.deps.logger.warn('pi dispose on unexpected exit failed (non-fatal)', {
+                  message: err instanceof Error ? err.message : String(err),
+                });
+              }
             }
           }
           // 进程已死:隔离的 configHome(models.json + extension)与 runtime 文件不再被读,清理。
-          cleanupConfigHome();
-          cleanupRuntimeFiles();
+          // 轮 42 P1(codex-connector):**远端会话不清理** —— daemon 模式下
+          // transport onClose(SSH 闪断)≠ 进程死, daemon 仍持有同一个 pi 子进程
+          // 继续跑; 删 configHome/permission/subagent runtime 会让存活 pi 的
+          // 后续工具调用降级 ask / 审批卡死 / 子代理路由丢, 破坏断链保活语义。
+          // 远端只在用户显式关闭时由 daemon 的 killRemoteSession 清 session,
+          // runtime 文件残留由下次 startSession 的清陈旧目录兜底(轮 40-w4-t4)。
+          // 本地 stdio 无 daemon, onExit 即真死, 保持清理。
+          if (!remote) {
+            cleanupConfigHome();
+            cleanupRuntimeFiles();
+          }
           queue.end();
         },
       });
@@ -1380,8 +2103,11 @@ export class PiAgent extends BaseAgent {
       } catch {
         /* best-effort:注销失败不掩盖原始构造错误 */
       }
-      cleanupConfigHome();
-      cleanupRuntimeFiles();
+      // 轮 42 P1:远端失败也不清理 runtime 文件(可能与并发存活会话共享/复用)。
+      if (!remote) {
+        cleanupConfigHome();
+        cleanupRuntimeFiles();
+      }
       throw err;
     }
 
@@ -1484,7 +2210,7 @@ export class PiAgent extends BaseAgent {
       stage: 'ready' | 'switch_session' | 'fork',
     ): Promise<void> => {
       const generation = ++runtimeCapabilityGeneration;
-      const manifest = await capturePiRuntimeCapabilityManifest(
+      const capturedManifest = await capturePiRuntimeCapabilityManifest(
         proc,
         {
           ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
@@ -1493,6 +2219,13 @@ export class PiAgent extends BaseAgent {
         generation,
         stage,
       );
+      const manifest = {
+        ...capturedManifest,
+        projectResources: reconcilePiProjectResourceRuntime(
+          projectResourceAssembly,
+          capturedManifest,
+        ),
+      };
       if (!closed && generation === runtimeCapabilityGeneration) publishRuntimeCapabilities(manifest);
     };
     let runtimeCaptureStage: 'ready' | 'switch_session' = 'ready';
@@ -1504,25 +2237,35 @@ export class PiAgent extends BaseAgent {
         // resume 成功。Cindy 先做本地文件存在性检查，再决定是否允许 fresh fallback。
         let resumeFileExists = false;
         try {
-          resumeFileExists = (await fs.stat(opts.resumeSessionId)).isFile();
+          resumeFileExists = (await statFile(opts.resumeSessionId))?.isFile === true;
         } catch {
           resumeFileExists = false;
         }
         if (!resumeFileExists) {
-          const mayFallback = (await opts.onInvalidResumeSession?.(opts.resumeSessionId)) ?? true;
-          if (!mayFallback) {
-            throw new Error('pi resume failed and fallback rejected: session file missing');
-          }
+          // 轮 25 CRITICAL:session 文件缺失 = 历史数据已不存在, fresh 是唯一
+          // 合理选择 —— 不因 onInvalidResumeSession 的 CAS 结果(防并发覆盖的
+          // claude 语义)拒绝 fallback。CAS 仍执行(清 DB 残留 id), 但返回值
+          // 不作为 fallback 门禁:文件都没了, 不存在「覆盖并发新值」的风险。
+          // (main 已合入的集成测试固化了该语义: CAS=false 仍允许 fresh)
+          await opts.onInvalidResumeSession?.(opts.resumeSessionId).catch(() => undefined);
           this.deps.logger.warn('pi resume session file missing, starting fresh session', {
             resumeSessionId: opts.resumeSessionId,
           });
         } else {
           const switched = await proc.request({ type: 'switch_session', sessionPath: opts.resumeSessionId });
           if (!switched.success) {
-            const mayFallback = (await opts.onInvalidResumeSession?.(opts.resumeSessionId)) ?? true;
-            if (!mayFallback) {
-              // proc 关闭 + ctx 注销由下面的 catch 统一处理,这里只抛。
-              throw new Error(`pi resume failed and fallback rejected: ${switched.error ?? 'unknown'}`);
+            // 轮 25 CRITICAL:switch 失败也允许 fallback(同文件缺失理由)——
+            // CAS 结果不作门禁, fresh 比卡死强。CAS 仍执行清 DB 残留。
+            // 轮 42 P2(codex-connector):fresh fallback 前**必须**检查 CAS 结果
+            // —— 并发 owner 已把 sdk_session_id 替换成更新的 resume 身份时,
+            // 直接 fresh 新建会话会把新 handle 写回同 session row, 覆盖并发者
+            // 的新身份。CAS false = 不是唯一 owner, abort 让上层重试/走并发路径。
+            const casCleared = await opts.onInvalidResumeSession?.(opts.resumeSessionId).catch(() => false) ?? true;
+            if (casCleared === false) {
+              await proc.close().catch(() => undefined);
+              throw new Error(
+                `pi resume of ${opts.resumeSessionId} failed and CAS did not clear it (concurrent owner replaced it) — aborting fresh fallback to avoid overwriting the newer resume identity`,
+              );
             }
             this.deps.logger.warn('pi resume failed, starting fresh session', {
               resumeSessionId: opts.resumeSessionId,
@@ -1554,6 +2297,15 @@ export class PiAgent extends BaseAgent {
       }
 
       const state = await proc.request({ type: 'get_state' });
+      // 轮 40-w4-t4 CRITICAL:get_state 是 ready 边界 —— success:false(会话
+      // 加载失败等)或缺失 boolean success 时, 不得把它当成启动成功并发布伪
+      // session id(resume/remote 场景会把「无法确认真实会话状态」的协议失败
+      // 降级成新会话, 误导上层认为恢复成功)。fail-closed: 抛错走启动失败清理。
+      if (typeof state.success !== 'boolean' || !state.success) {
+        throw new Error(
+          `pi get_state failed (success=${String(state.success)} error=${String(state.error)}) — refusing to start with unknown session state`,
+        );
+      }
       const stateData = (state.data ?? {}) as {
         sessionFile?: string | null;
         sessionId?: string;
@@ -1562,7 +2314,15 @@ export class PiAgent extends BaseAgent {
       if (typeof stateData.model?.contextWindow === 'number' && stateData.model.contextWindow > 0) {
         ctx.contextWindow = stateData.model.contextWindow;
       }
-      sdkSessionId = stateData.sessionFile || stateData.sessionId || `pi-${Date.now()}`;
+      if (
+        (typeof stateData.sessionFile !== 'string' || stateData.sessionFile.length === 0)
+        && (typeof stateData.sessionId !== 'string' || stateData.sessionId.length === 0)
+      ) {
+        // 轮 40-w4-t4:不再用 pi-${Date.now()} 掩盖 —— 拿不到真实 session 身份
+        // 就 fail-closed(伪 id 会让 resume 指向不存在的路径)。
+        throw new Error('pi get_state returned no sessionFile/sessionId — refusing to start');
+      }
+      sdkSessionId = validateSdkSessionId(stateData.sessionFile || stateData.sessionId!);
       queue.push({ type: 'session_id', data: sdkSessionId, source: 'pi' });
 
       // get_state is the ready boundary. Capture exactly once after the final
@@ -1597,9 +2357,17 @@ export class PiAgent extends BaseAgent {
       } catch {
         /* best-effort:注销失败不掩盖原始启动错误 */
       }
+      // 轮 42 P1(codex-connector fresh evidence):startup 失败路径的 proc.close()
+      // 被 .catch 吞掉 —— 远端 daemon 会话 killRemoteSession 失败时, pi 子进程
+      // 可能仍带着凭证 env 在跑, 这里再删 configHome/permission/subagent 会让
+      // 存活 pi 丢 bridge/permission 状态。与 onExit/close() 同口径: 远端会话
+      // 失败不清理 runtime 文件, 残留交给 daemon idle 回收 / 下次 startSession
+      // 的清陈旧目录兜底(轮 40-w4-t4); 本地 stdio close 后进程必死, 保持清理。
       await proc.close().catch(() => {});
-      cleanupConfigHome();
-      cleanupRuntimeFiles();
+      if (!remote) {
+        cleanupConfigHome();
+        cleanupRuntimeFiles();
+      }
       throw err;
     }
 
@@ -1622,7 +2390,9 @@ export class PiAgent extends BaseAgent {
         ? gatewayImageInputByModel.get(mutableModel) === true
         : nativeProviderById
           .get(mutablePiProviderId)
-          ?.models.find((candidate) => candidate.id === mutableModel)
+          ?.models.find(
+            (candidate) => candidate.id === resolveNativeModelId(mutablePiProviderId, mutableModel),
+          )
           ?.input?.includes('image') === true;
       if (supportsImageInput) return;
       throw new PiImageInputUnsupportedError();
@@ -1654,11 +2424,51 @@ export class PiAgent extends BaseAgent {
         );
       }
       const provider = resolveProviderForModel(model, requestedProviderId);
+      const wireModel = resolveWireModel(provider, model);
+      if (provider === PI_PROVIDER_ID) {
+        const routeProviderId = requestedProviderId !== undefined
+          ? requestedProviderId
+          : mutableProviderId;
+        const resolvedApi = this.deps.resolvePiGatewayModelApi?.(routeProviderId, model);
+        if (
+          resolvedApi === null ||
+          (resolvedApi !== undefined &&
+            resolvedApi !== 'anthropic-messages' &&
+            resolvedApi !== 'openai-responses')
+        ) {
+          throw new Error(
+            `Model Access v3 did not provide a Pi wire protocol for model: ${model}`,
+          );
+        }
+        const desiredApi = resolvedApi ?? 'anthropic-messages';
+        const configuredApi = gatewayApiByModel.get(model);
+        if (configuredApi && configuredApi !== desiredApi) {
+          throw new Error(
+            `pi: provider switch for model '${model}' requires API '${desiredApi}', but this session ` +
+              `started with '${configuredApi}'; restart the Pi session to change provider wire protocol.`,
+          );
+        }
+      }
       // effort 能力校验必须排在写路由快照**之前**:它会抛错中止本次切换,而快照一旦落盘就
       // 指向了新 provider —— 那正是父子路由分叉的形状(upstream #1451 与本 PR 的合并点)。
       const nextEffortSnapshot = resolveStartupEffortSnapshot(provider, model);
       if (setOpts?.effort) {
         assertStartupEffortAllowed(nextEffortSnapshot, setOpts.effort);
+      }
+      // 远端启动快照保留会话内可切换的全部 native provider，但 SSH reverse-forward
+      // 只为当前实际路由建立。否则用户仅仅登录过 xAI，就会在启动任意 Cindy/BYOM
+      // 远程会话时抢占固定端口 47989；端口冲突会阻断一个完全不使用 xAI 的任务。
+      // 切到 host-backed provider 前先按需建隧道，且必须排在子代理路由快照与
+      // set_model RPC 之前：建隧道失败时父子路由都保持原值。
+      const hostProxyForward = nativeProviderById.get(provider)?.hostProxyForward;
+      if (remote && hostProxyForward) {
+        if (!sessionTransport?.ensureHostProxyForward) {
+          throw new Error(
+            `[REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE] pi: provider '${provider}' requires a Desktop host proxy forward, ` +
+              'but this remote transport cannot establish one; restart the session after reconnecting the remote host.',
+          );
+        }
+        await sessionTransport.ensureHostProxyForward(hostProxyForward);
       }
       // 子代理路由快照必须**先落盘、再切 pi 侧模型**,顺序不能反(review)。
       //
@@ -1680,8 +2490,11 @@ export class PiAgent extends BaseAgent {
       // 所以这一步落的是**带 pending 标记的**新路由:内容已经就位(证明可写、内容可回滚),但
       // 扩展见到 `pending: true` 就拒绝派发。等待窗口里一个子进程都起不来,既不会用未确认的新
       // 路由、也不会用与父不一致的旧路由;确认后再清掉标记放行。
-      const previousSnapshot = { model: mutableModel, provider: mutablePiProviderId };
-      if (!(await writeSubagentRuntimeFile({ model, provider, pending: true }))) {
+      const previousSnapshot = {
+        model: mutableWireModel,
+        provider: mutablePiProviderId,
+      };
+      if (!(await writeSubagentRuntimeFile({ model: wireModel, provider, pending: true }))) {
         throw new Error(
           'pi: 无法持久化子代理路由快照,已取消本次模型切换(避免父会话切到新 provider 而子代理仍按旧路由派发)。'
           + '请检查运行目录是否可写后重试。',
@@ -1689,7 +2502,11 @@ export class PiAgent extends BaseAgent {
       }
       let resp;
       try {
-        resp = await proc.request({ type: 'set_model', provider, modelId: model });
+        resp = await proc.request({
+          type: 'set_model',
+          provider,
+          modelId: wireModel,
+        });
       } catch (err) {
         // RPC **reject / 超时 / 写 stdin 失败 / 进程已退出**:与 `success:false` 有本质区别 ——
         // 那种情况我们**知道**没生效,可以回滚;这里我们**不知道** pi 侧到底切没切。
@@ -1758,19 +2575,29 @@ export class PiAgent extends BaseAgent {
       // pi 已确认 → 清掉 pending 标记放行派发。写失败时**不**抛错:模型切换本身确实成功了,
       // 谎报失败会让上层与 UI 状态和 pi 真实状态背离。代价是这个会话的子代理一直被 pending
       // 挡住(可见的降级、拒绝时有明确文案),而它是安全方向 —— 绝不会把委派发到错误 endpoint。
-      if (!(await writeSubagentRuntimeFile({ model, provider }))) {
+      if (!(await writeSubagentRuntimeFile({ model: wireModel, provider }))) {
         deps.logger.error(
           'pi: model switch confirmed but the subagent routing snapshot stayed pending; '
           + 'subagent delegation stays disabled for this session (fail-closed)',
         );
       }
       mutableModel = model;
+      mutableWireModel = wireModel;
       mutablePiProviderId = provider;
       activeEffortSnapshot = nextEffortSnapshot;
-      if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
+      if (setOpts && Object.hasOwn(setOpts, 'providerId')) {
+        mutableProviderId = setOpts.providerId;
+      } else if (provider !== PI_PROVIDER_ID) {
+        // 轮 40-w4-t13 MEDIUM:providerless 切模时实际路由变了 —— 宿主鉴权/审查
+        // 元数据必须跟随实际路由, 否则 reviewAutoAction 用旧 provider 做决策
+        // (AutoReviewRequest.providerId + 缓存键都错)。null/订阅来源已归一为
+        // cindy(PI_PROVIDER_ID), 不在此分支。
+        mutableProviderId = resolveSourceProvider(provider);
+      }
       autoReviewDecisionCache.clear();
       // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
       autoReviewUnavailableNotice.reset();
+      autoReviewConfirmUndeliveredNotice.reset();
       const data = (resp.data ?? {}) as { contextWindow?: number };
       if (typeof data.contextWindow === 'number' && data.contextWindow > 0) {
         ctx.contextWindow = data.contextWindow;
@@ -1827,7 +2654,7 @@ export class PiAgent extends BaseAgent {
               reviewReadGrants,
             );
           }
-          const { text, images } = await buildPiPrompt(message);
+          const { text, images } = await buildPiPrompt(message, { remote });
           rejectIfCancelled(sendOpts, 'send');
           assertImageInputSupported(images);
           setAutoReviewIntent(message.content);
@@ -1866,7 +2693,7 @@ export class PiAgent extends BaseAgent {
             reviewReadGrants,
           );
         }
-        const { text, images } = await buildPiPrompt(message);
+        const { text, images } = await buildPiPrompt(message, { remote });
         rejectIfCancelled(sendOpts, 'steer');
         assertImageInputSupported(images);
         setAutoReviewIntent(message.content);
@@ -1918,10 +2745,23 @@ export class PiAgent extends BaseAgent {
             message: err instanceof Error ? err.message : String(err),
           });
         }
-        await proc.close();
-        // 会话结束:清理隔离的 configHome 与 runtime 文件(onExit 幂等,二者先到先清)。
-        cleanupConfigHome();
-        cleanupRuntimeFiles();
+        // 轮 40-w4-t10 MEDIUM(修复的修复):runtime 文件清理必须在 finally ——
+        // proc.close 抛错(如 killRemoteSession 失败)时旧实现会跳过 cleanup,
+        // 权限文件/subagent snapshot 残留在磁盘。清理不受 close 成败影响。
+        // 轮 42 P1(codex-connector 修正):**远端会话不清理** —— killRemoteSession
+        // 失败说明远端 pi 可能仍持有 configHome/permission/subagent runtime
+        // 继续跑(凭证仍在 env), 删文件会让存活 pi 丢 bridge/permission 状态。
+        // 与 onExit 同口径:远端残留交给 daemon idle 回收/下次 startSession 的
+        // 清陈旧目录兜底(轮 40-w4-t4); 本地 stdio 无 daemon, close 后进程必死。
+        try {
+          await proc.close();
+        } finally {
+          if (!remote) {
+            // 会话结束:清理隔离的 configHome 与 runtime 文件(onExit 幂等,二者先到先清)。
+            cleanupConfigHome();
+            cleanupRuntimeFiles();
+          }
+        }
       },
 
       events(): AsyncIterable<AgentEvent> {
@@ -1977,6 +2817,7 @@ export class PiAgent extends BaseAgent {
         if (nextMode !== requestedPermissionSnapshot.mode) {
           autoReviewDecisionCache.clear();
           autoReviewUnavailableNotice.reset();
+          autoReviewConfirmUndeliveredNotice.reset();
         }
         const previousMode = requestedPermissionSnapshot.mode;
         await writePermissionSnapshotOrFailClosed({
@@ -2133,8 +2974,22 @@ export class PiAgent extends BaseAgent {
         if (!state.success) throw new Error(`pi rewind get_state failed: ${state.error ?? 'unknown'}`);
         const replacement = (state.data as { sessionFile?: string } | undefined)?.sessionFile;
         if (!replacement) throw new Error('pi rewind replacement session path unavailable');
-        sdkSessionId = replacement;
+        sdkSessionId = validateSdkSessionId(replacement);
         queue.push({ type: 'session_id', data: replacement, source: 'pi' });
+        // 轮 40-w4-t17 HIGH-2:rewind 切到新 session file 后必须重读 plan-mode
+        // entry —— 与 ready 路径(readPersistedPlanMode)同语义:新分支的 plan
+        // 状态可能与旧闭包 planModeActive 不一致, 不校正会让 UI/DB 残留旧分支
+        // 状态, 且下次 setPlanMode 因 enabled===planModeActive 直接 no-op。
+        const planModeAfterFork = planModeExtAvailable ? await readPersistedPlanMode() : null;
+        if (planModeAfterFork !== null && planModeAfterFork !== planModeActive) {
+          planModeActive = planModeAfterFork;
+          queue.push({ type: 'plan_mode_changed', data: { enabled: planModeAfterFork }, source: 'pi' });
+        } else if (planModeAfterFork === null && planModeActive) {
+          // 新分支读不到 plan entry(异常/旧格式):不能假定沿用旧分支的开启态,
+          // 置回未开启并通知(保守, 用户可再开)。
+          planModeActive = false;
+          queue.push({ type: 'plan_mode_changed', data: { enabled: false }, source: 'pi' });
+        }
         // The Pi session has already switched to the replacement file. Do not
         // make rewind wait for optional discovery; the generation fence keeps
         // this asynchronous refresh from publishing stale data.
@@ -2285,16 +3140,28 @@ export class PiAgent extends BaseAgent {
    *   - uuidMap 返回空(pi agentMeta 不落 SDK uuid,host 无处可 remap,不会 break 再 fork)
    */
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
+    // 远端会话的 session 文件在远端机器,本地 fork 的 stdio 读不到;且 fork 是离线
+    // 纯文件操作,走本地 fs 会误读本机 agentHome。显式报错(对齐 CC/Codex 远端 fork 语义
+    // —— 它们由 daemon 在远端执行;PI 的 daemon 化见 Phase 3)。
+    // 判定用 opts.remoteHostId(编排层从源 session 传), 不用实例字段 —— 并发
+    // 会话覆盖 lastRemoteHostId 会双向误判(R4 竞态 #1)。
+    if (opts.remoteHostId) {
+      throw new NotSupportedError('remoteFork', {
+        supported: false,
+        reason: 'not-implemented',
+        message: 'pi fork is not supported for remote sessions yet (Phase 3 daemon)',
+      });
+    }
     const log = this.deps.logger;
-    const agentHome = this.resolveAgentHome();
-    const sessionDir = path.join(agentHome, 'sessions');
+    const agentHome = this.resolveAgentHome(opts.remoteHostId);
+    const sessionDir = joinRemotePosixPath(agentHome, 'sessions');
     // 离线 fork 只需 models.json 里有 `cindy` 供应商供 pi 启动校验 --provider。
     // 不能写共享的 agentHome/models.json:另一窗口正启动 BYOM 会话时(startSession
     // 写入 native providers 后到 spawn 之间还有多个 await),本处覆盖会把该 provider
     // 清掉,导致那个 spawn 携带 --provider <byom> 却找不到而启动失败(codex review)。
     // 用隔离的 coding-agent 目录承载 fork 专属 models.json(PI_CODING_AGENT_DIR),
     // --session-dir 仍指向共享 sessions(两者是独立 flag),互不干扰。
-    const forkHome = path.join(agentHome, 'fork-tmp', randomBytes(8).toString('hex'));
+    const forkHome = joinRemotePosixPath(agentHome, 'fork-tmp', randomBytes(8).toString('hex'));
     await this.writeModelsJson(forkHome);
 
     // fork 全程离线(clone/fork 是纯 session 文件操作),真凭证拿不到也不影响;
@@ -2310,32 +3177,40 @@ export class PiAgent extends BaseAgent {
     // 模型 id 必须在 models.json 内(pi 启动校验 --model);用 host 注入的首个可用模型。
     const forkModel = this.capabilities.availableModels[0]?.id ?? 'claude-sonnet-5';
 
-    const proc = new PiRpcProcess({
-      binaryPath: this.deps.binaryPath,
-      args: [
-        '--mode', 'rpc',
-        '--session-dir', sessionDir,
-        '--session', opts.sourceSdkSessionId,
-        '--provider', PI_PROVIDER_ID,
-        '--model', forkModel,
-        '--no-context-files',
-        '--offline',
-      ],
-      cwd: opts.workingDir && opts.workingDir.trim().length > 0 ? opts.workingDir : sessionDir,
-      env: {
-        ...process.env,
-        ...authEnv,
-        [PI_API_KEY_ENV]: authEnv[PI_API_KEY_ENV] ?? 'pi-fork-offline',
-        // 隔离的 models.json 家目录(见上);session 文件仍由 --session-dir 提供。
-        PI_CODING_AGENT_DIR: forkHome,
+    // fork 始终走本地 stdio transport(session 文件在本地 agentHome;远端分支见
+    // forkSdkSession 的 remote 化,暂未支持)。
+    const { transport: forkTransport } = await this.createTransport(
+      {
+        args: [
+          '--mode', 'rpc',
+          '--no-approve',
+          '--no-extensions',
+          '--session-dir', sessionDir,
+          '--session', opts.sourceSdkSessionId,
+          '--provider', PI_PROVIDER_ID,
+          '--model', forkModel,
+          '--no-context-files',
+          '--offline',
+        ],
+        cwd: opts.workingDir && opts.workingDir.trim().length > 0 ? opts.workingDir : sessionDir,
+        env: {
+          ...process.env,
+          ...authEnv,
+          [PI_API_KEY_ENV]: authEnv[PI_API_KEY_ENV] ?? 'pi-fork-offline',
+          // 隔离的 models.json 家目录(见上);session 文件仍由 --session-dir 提供。
+          PI_CODING_AGENT_DIR: forkHome,
+        },
       },
-      logger: log,
-      onProcessSpawned: (pid) =>
+      (pid) =>
         this.deps.registerLocalAgentProcess?.({
           pid,
           kind: 'pi',
           role: 'control-plane-service',
         }),
+    );
+    const proc = new PiRpcProcess({
+      transport: forkTransport,
+      logger: log,
       onEvent: () => {},
       onExit: () => {},
     });
@@ -2470,6 +3345,8 @@ export class PiAgent extends BaseAgent {
       reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
+      /** 故障确认没送到 / 被系统收口时纠正「用户拒绝」归因。 */
+      notifyAutoReviewConfirmUndelivered: () => void;
       /** 本会话实际注册过的桥接 MCP server 名;MCP 归属判定只认这批(防冒名顶替)。 */
       registeredMcpServerNames: ReadonlySet<string>;
       sessionId: string;
@@ -2481,7 +3358,11 @@ export class PiAgent extends BaseAgent {
        */
       registerPendingPrompt: (
         requestId: string,
-        entry: { settle: (resolveAs: 'allow' | 'deny') => void; forcePrompt: boolean },
+        entry: {
+          settle: (resolveAs: 'allow' | 'deny') => void;
+          forcePrompt: boolean;
+          unavailableHandoff?: boolean;
+        },
       ) => () => void;
       /**
        * 本轮 host 权限策略(个人微信 / Telegram 群等);无策略为 null。命中
@@ -2559,6 +3440,7 @@ export class PiAgent extends BaseAgent {
         readRoots,
         reviewAutoAction,
         notifyAutoReviewUnavailable,
+        notifyAutoReviewConfirmUndelivered,
         registeredMcpServerNames,
         registerPendingPrompt,
         turnPermissionPolicy,
@@ -2605,10 +3487,11 @@ export class PiAgent extends BaseAgent {
        * 不能把用户的明确拒绝也一并翻转。
        */
       const requestUserDecision = async (
-        opts: { forcePrompt: boolean },
+        opts: { forcePrompt: boolean; unavailableHandoff?: boolean },
       ): Promise<{ decided: boolean; approved: boolean }> => {
         if (!resolver) {
           this.deps.logger.warn('pi permission request has no interaction resolver', { toolName });
+          if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
           return { decided: false, approved: false };
         }
         // 登记进会话级 pending 表:等卡期间用户切档(或关会话)时由 dismissAllPendingPrompts
@@ -2624,14 +3507,15 @@ export class PiAgent extends BaseAgent {
           };
           unregister = registerPendingPrompt(id, {
             forcePrompt: opts.forcePrompt,
+            ...(opts.unavailableHandoff ? { unavailableHandoff: true } : {}),
             // 切档替用户做的临时决定同样是「已决」—— 调用方不该再按 bypass 语义二次翻转。
             settle: (resolveAs) => finalize({ decided: true, approved: resolveAs === 'allow' }),
           });
           // resolver 是 host 注入的外部回调:可能同步 throw,也可能返回非 Promise。直接
           // `.then` 会让同步异常绕过下面的 finalize —— pending 条目永不注销、这次请求永不
           // settle,调用就此悬挂(copilot 报)。包一层把同步失败也收进 fail-closed 分支。
-          Promise.resolve().then(() => resolver({
-            kind: 'permission',
+          const permissionRequest = {
+            kind: 'permission' as const,
             requestId: id,
             toolName,
             input,
@@ -2641,14 +3525,27 @@ export class PiAgent extends BaseAgent {
             ...(hostApprovalPresentation?.description
               ? { description: hostApprovalPresentation.description }
               : {}),
-          })).then((decision) => {
+          };
+          Promise.resolve().then(() => resolver(
+            opts.unavailableHandoff
+              ? annotatePermissionRequestForUnavailableReview(permissionRequest)
+              : permissionRequest,
+          )).then((decision) => {
             if (decision.kind !== 'permission') {
               this.deps.logger.warn('pi permission got mismatched decision kind', {
                 toolName,
                 decisionKind: decision.kind,
               });
+              if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
               finalize({ decided: false, approved: false });
               return;
+            }
+            if (
+              opts.unavailableHandoff
+              && decision.behavior === 'deny'
+              && isSystemPermissionDenialReason(decision.reason)
+            ) {
+              notifyAutoReviewConfirmUndelivered();
             }
             finalize({ decided: true, approved: decision.behavior === 'allow' });
           }).catch((err) => {
@@ -2656,6 +3553,7 @@ export class PiAgent extends BaseAgent {
               toolName,
               message: err instanceof Error ? err.message : String(err),
             });
+            if (opts.unavailableHandoff) notifyAutoReviewConfirmUndelivered();
             finalize({ decided: false, approved: false });
           });
         });
@@ -2672,13 +3570,21 @@ export class PiAgent extends BaseAgent {
        * Codex 的 dismissAllPending 同口径。
        */
       const requestUserConfirmation = async (
-        opts?: { forcePrompt?: boolean },
+        opts?: { forcePrompt?: boolean; unavailableHandoff?: boolean },
       ): Promise<boolean> => {
         // 发起确认前:已切到 Full access 就不该再弹卡。
         // 但 forcePrompt 代表不能被权限放宽追认的安全边界；若 host lease / 预检失效
         // 真的让 policy turn 落进 Full access，宁可拒绝也不能静默放行。
-        if (isFullAccessNow()) return opts?.forcePrompt === true ? false : true;
-        const outcome = await requestUserDecision({ forcePrompt: opts?.forcePrompt === true });
+        if (isFullAccessNow()) {
+          if (opts?.forcePrompt === true && opts.unavailableHandoff) {
+            notifyAutoReviewConfirmUndelivered();
+          }
+          return opts?.forcePrompt === true ? false : true;
+        }
+        const outcome = await requestUserDecision({
+          forcePrompt: opts?.forcePrompt === true,
+          ...(opts?.unavailableHandoff ? { unavailableHandoff: true } : {}),
+        });
         // 已有决策(用户明确表态,或切档时代为 settle)→ 以它为准,不再被档位二次翻转。
         if (outcome.decided) return outcome.approved;
         // 拿不到决策:Full access 下按 bypass 语义放行,其余一律 fail-closed。
@@ -2805,26 +3711,36 @@ export class PiAgent extends BaseAgent {
             return;
           }
           if (decision.verdict === 'ask') {
+            // 审阅器故障降级来的 ask 提示一次:用户需要知道自己为何突然开始被问,
+            // 否则 Auto 档看起来像坏了。模型判定的 ask 不提示(那是正常工作)。
+            if (decision.unavailable) notifyAutoReviewUnavailable();
             // policy turn + auto 的灰区语义对齐 Codex:只有渠道 policy 明确命中的调用
             // 才打扰 owner；普通 Auto-Review ask 直接 fail-closed，不再额外弹微信确认。
             // 无 policy 的 Desktop auto 会话维持既有逐次确认行为。
+            //
+            // **故障降级(unavailable)例外**:上面刚告诉用户"已转由你确认",若这里仍按
+            // policy 静默拒绝,提示与行为就自相矛盾 —— 用户看到可接管的说明却没有确认
+            // 入口,操作照样被拒(PR #2474 review)。故障不是"模型判定该问",而是基础
+            // 设施失灵,用户有权亲自决定,所以走真实确认。
+            const askNeedsUserDecision = decision.unavailable || !turnPermissionPolicy;
             proc.send({
               type: 'extension_ui_response',
               id,
-              confirmed: turnPermissionPolicy
-                ? false
-                : await requestUserConfirmation({ forcePrompt: true }),
+              confirmed: askNeedsUserDecision
+                ? await requestUserConfirmation({
+                    forcePrompt: true,
+                    unavailableHandoff: decision.unavailable === true,
+                  })
+                : false,
             });
             return;
           }
           if (decision.verdict === 'block') {
-            // 审阅器没跑起来 ≠ 模型判定危险:前者是基础设施故障,提示一次让用户能接管;
-            // 后者按 Auto 本意保持静默。动作两种都仍然 confirmed:false。
-            if (decision.unavailable) notifyAutoReviewUnavailable();
+            // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默。
+            // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这里。)
             this.deps.logger.debug('pi auto-review blocked tool call', {
               toolName,
               reason: decision.reason,
-              unavailable: decision.unavailable === true,
             });
           }
           proc.send({

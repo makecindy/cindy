@@ -331,6 +331,15 @@ export function ErrorBanner({
       attempt: terminalRateLimitRetryProgress.attempt,
       maxAttempts: terminalRateLimitRetryProgress.maxAttempts,
     });
+  } else if (agentKind === 'pi' && /pi ssh transport closed|ssh channel closed/.test(error)) {
+    // 轮 34 HIGH-2:Pi 远端 transport 关闭(SSH 断链/daemon 挂)—— 提示可恢复。
+    // daemon 持久模式下远端 pi 进程继续跑, 重连后重新 bridge 即可 attach。
+    displayError = t('chat.errorBanner.piTransportClosed');
+  } else if (agentKind === 'pi' && /pi-manager daemon is not available/.test(error)) {
+    displayError = t('chat.errorBanner.piManagerUnavailable');
+  } else if (agentKind === 'pi' && /bundled node not installed/.test(error)) {
+    // 引导:需先装 claude-code 或 codex 连带 node。
+    displayError = t('chat.errorBanner.piBundledNodeMissing');
   } else if (isOverloadError) {
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。

@@ -319,10 +319,6 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.match(shards, /^      fail-fast: false$/m);
 	assert.match(shards, /^        shard: \[1, 2\]$/m);
 	assert.match(shards, /^      XDT_UNIT_TEST_SHARD: \$\{\{ matrix\.shard \}\}\/2$/m);
-	assert.match(shards, /^      - name: Reject cindy-protocol rollback or divergence$/m);
-	assert.match(shards, /^        if: \$\{\{ github\.event_name == 'pull_request' \}\}$/m);
-	assert.match(shards, /^          CINDY_PROTOCOL_BASE_REF: \$\{\{ github\.event\.pull_request\.base\.sha \}\}$/m);
-	assert.match(shards, /^        run: node scripts\/check-submodule-forward\.mjs$/m);
 	assert.match(shards, /^        run: pnpm exec node scripts\/test-workspaces\.mjs --tier unit$/m);
 	assert.doesNotMatch(shards, /pnpm test:(?:unit|runner)/);
 

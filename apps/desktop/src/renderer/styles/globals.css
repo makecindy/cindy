@@ -1043,6 +1043,7 @@ body.resizing-pane [data-ghost-webview] {
 [data-app-hidden='true'] .session-running-dot,
 [data-app-hidden='true'] .thinking-dot,
 [data-app-hidden='true'] .ghost-card-sweep,
+[data-app-hidden='true'] .brand-loading-mark-sheen::before,
 [data-app-hidden='true'] .ghost-bubble-face,
 [data-app-hidden='true'] .agent-island-mascot-character,
 [data-app-hidden='true'] .agent-island-mascot-keyboard,
@@ -1171,6 +1172,64 @@ body.resizing-pane [data-ghost-webview] {
 .msg-stream-items > *:has([data-fixed-menu-anchor]) {
   content-visibility: visible;
   contain-intrinsic-size: none;
+}
+
+/* 分享选择模式会在消息 wrapper 左侧动态挂载绝对定位的选择框。该元素需要真实
+   消息盒参与布局与绘制；继续使用视口外 intrinsic 占位会让长消息末尾的选择框
+   被压缩或裁切。仅让可分享消息退出隔离，常态和工具类条目继续保留渲染跳过。 */
+.msg-stream-items[data-share-selection-active] > [data-share-message-id] {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
+}
+
+/* 会话切换 shell-first 帧的品牌加载指示(BrandLoadingMark):
+   wordmark 低亮常驻 + 亮带经同形 mask 在字标形状内扫过(Codex Desktop
+   startup loader 同构表现)。两条硬约束:
+   ① 延迟浮现 —— 指示器整体 200ms 后才淡入(brand-loading-appear,both 起始
+      透明)。多数会话下一帧就挂载完,指示器从未可见,小会话不闪 loading;
+   ② compositor-only —— 扫光用 sheen 伪层的 transform 位移(而非
+      background-position):消息树构建阻塞主线程时 transform 动画不冻结。
+   reduced-motion:两个动画全停,wordmark 直接静态显示(见下方 reduce 块)。 */
+.brand-loading-mark {
+  opacity: 0;
+  animation: brand-loading-appear var(--motion-base) ease-out 200ms both;
+}
+.brand-loading-mark > img {
+  opacity: 0.35;
+}
+.brand-loading-mark-sheen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  background: linear-gradient(
+    100deg,
+    transparent 10%,
+    var(--text-primary) 50%,
+    transparent 90%
+  );
+  transform: translateX(-120%);
+  animation: brand-loading-sheen 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes brand-loading-appear {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes brand-loading-sheen {
+  to {
+    transform: translateX(350%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-loading-mark {
+    animation: none;
+    opacity: 1;
+  }
+  .brand-loading-mark-sheen::before {
+    animation: none;
+    transform: translateX(-120%);
+  }
 }
 
 /* 意识卡片 running 扫光(卡槽③):主机盖在意识画布上的斜向光带。
@@ -1370,7 +1429,9 @@ body.resizing-pane [data-ghost-webview] {
 /* CINDY dark hljs 整改(D 裁决 2026-07-17,§15.4 双门槛):
    github-dark .hljs-section #1f6feb × CINDY surface-elevated #312F2F = 2.87 <3:1(语法色门槛);
    保持色相(蓝 H212 S84%),仅提亮度 L52%→53.5% → #2573ec × #312F2F = 3.00 ≥3:1。
-   -punctuation/-tag dark 无单独选择器,继承 .dark .hljs text #c9d1d9(× #312F2F=8.62 ≥3,无需整改)。 */
+   -punctuation/-tag dark 无单独选择器,继承 .dark .hljs text #c9d1d9(× #312F2F=8.62 ≥3,无需整改)。
+   2026-08 色阶改版复算: 代码块底随 surface-elevated 变为 #1F1F1F,#2573ec×#1F1F1F=3.72、
+   #c9d1d9×#1F1F1F=10.68,整改值继续达标,选择器与值均不需调整(决策表 §9)。 */
 [data-theme='cindy-dark'] .hljs-section {
   color: #2573ec;
 }
@@ -2025,7 +2086,7 @@ body.resizing-pane [data-ghost-webview] {
 /* E4D 毛玻璃(R1 audit,用户裁决透壁纸 2026-07-17):仅 CINDY family,窗口 vibrancy
    透壁纸(main 设置)+ 应用内 backdrop-filter 互透。**仅侧栏 + 浮层 blur;主内容区
    不透明(macOS 标准范式;用户勘误 2026-07-17:主区不透壁纸,content-area 回落
-   --content-area=--surface-hsl 不透明 #EDEDED/#2A2828)**。blur(50px 侧栏、6px 浮层)。
+   --content-area=--surface-hsl 不透明,2026-08 起 #F2F2ED/#181818)**。blur(50px 侧栏、6px 浮层)。
    精确选择器(转义 Tailwind class .bg-\[var\(--panel-bg\)\] 等,避免 contains 过命中渐变/border)。其他 family 不命中,行为零变化。 */
 [data-theme='cindy-light'] body,
 [data-theme='cindy-dark'] body {
@@ -2045,7 +2106,7 @@ body.resizing-pane [data-ghost-webview] {
    .bg-\[var\(--panel-bg\)\] 已从本规则移除 —— 该 class 的消费者全是右侧工具面板族
    (RSB TabBar/Body、Review、PanelChrome、Ghost 面板、独立窗顶带),被劫持成玻璃后
    与左侧主区(不透明 content-area)底色打架;移除后回落 CINDY 的 --panel-bg
-   (#EDEDED/#2A2828),与主区同色,右侧面板整体与左边聊天区一致(模式2 口径)。 */
+   (2026-08 起 #F2F2ED/#181818),与主区同色,右侧面板整体与左边聊天区一致(模式2 口径)。 */
 [data-theme='cindy-light'] aside.bg-sidebar {
   background: var(--surface-translucent-sidebar);
 }
@@ -2063,7 +2124,7 @@ body.resizing-pane [data-ghost-webview] {
   -webkit-backdrop-filter: blur(28px);
 }
 /* 模式2 主面板:用户勘误 2026-07-17 — 主内容区不透壁纸(macOS 标准范式),撤销 blur。
-   content-area 回落 --content-area(=var(--surface-hsl) 不透明 #EDEDED/#2A2828),无 blur。
+   content-area 回落 --content-area(=var(--surface-hsl) 不透明,2026-08 起 #F2F2ED/#181818),无 blur。
    surface-translucent-main token 保留注册但 CINDY override 改不透明等价值(见 cindy themes)。 */
 /* 模式3 浮层卡:blur 6px + surface-translucent-overlay(cmd-palette/popover 类) */
 [data-theme='cindy-light'] .bg-\[var\(--cmd-palette-bg\)\],

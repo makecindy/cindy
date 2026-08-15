@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./catalog": "./catalog/providers.json",
+    "./pi-model-catalog": "./catalog/pi-model-catalog.json",
     "./sections": "./src/sections.ts",
     "./branding": "./src/providerBranding.ts",
     "./registry": "./src/registry.ts",
@@ -27,9 +28,6 @@
     "email": "feedback@cindy.app"
   },
   "license": "Apache-2.0",
-  "dependencies": {
-    "@cindy/model-access-protocol": "workspace:*"
-  },
   "devDependencies": {
     "@types/node": "*",
     "typescript": "^5.7.0",

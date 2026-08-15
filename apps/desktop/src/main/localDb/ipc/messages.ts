@@ -2080,7 +2080,15 @@ export async function listMessagesForAgentHandoff(
   sessionId: string,
   limit = 400,
   after?: { createdAt: number; rowid: number },
-): Promise<Array<{ clientId: string; role: string; content: unknown; createdAt: number }>> {
+): Promise<
+  Array<{
+    clientId: string;
+    role: string;
+    content: unknown;
+    createdAt: number;
+    agentMeta: Record<string, unknown> | null;
+  }>
+> {
   const db = getDbClient().drizzle;
   const [sessRow] = await db
     .select({ clearedAt: sessions.clearedAt })
@@ -2103,6 +2111,7 @@ export async function listMessagesForAgentHandoff(
       role: messages.role,
       content: messages.content,
       createdAt: messages.createdAt,
+      agentMeta: messages.agentMeta,
     })
     .from(messages)
     .where(
@@ -2118,7 +2127,18 @@ export async function listMessagesForAgentHandoff(
     } catch {
       // 与 messageToCamel 同口径:非法 JSON 保留原字符串
     }
-    return { clientId: r.clientId, role: r.role, content, createdAt: r.createdAt };
+    let agentMeta: Record<string, unknown> | null = null;
+    if (r.agentMeta) {
+      try {
+        const parsed: unknown = JSON.parse(r.agentMeta);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          agentMeta = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // 非法 JSON 视为无 meta
+      }
+    }
+    return { clientId: r.clientId, role: r.role, content, createdAt: r.createdAt, agentMeta };
   });
 }
 

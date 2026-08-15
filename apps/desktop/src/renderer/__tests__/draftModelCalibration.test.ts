@@ -284,16 +284,28 @@ describe('pickConnectedModelForAgent — newSessionDefault 标记优先（步骤
     expect(picked?.providerId).toBe('anthropic');
   });
 
-  it('pi 按 claude-code 口径判定标记（pi 镜像 cc-compatible 模型）', () => {
+  it('pi accepts its explicit v3 marker', () => {
     const providers = [
       provider('xd', true, {
         pi: [
           model('claude-sonnet-5', { sortOrder: 0 }),
-          model('deepseek', { sortOrder: 44, newSessionDefault: ['claude-code'] }),
+          model('deepseek', { sortOrder: 44, newSessionDefault: ['pi'] }),
         ],
       }),
     ];
     expect(pickId(providers, 'pi', 'claude-sonnet-5')).toBe('deepseek');
+  });
+
+  it('pi does not borrow a claude-code default marker', () => {
+    const providers = [
+      provider('anthropic', true, {
+        pi: [
+          model('claude-sonnet-5', { sortOrder: 0 }),
+          model('claude-opus-5', { sortOrder: 44, newSessionDefault: ['claude-code'] }),
+        ],
+      }),
+    ];
+    expect(pickId(providers, 'pi', 'claude-sonnet-5')).toBe('claude-sonnet-5');
   });
 
   it('被标记但默认收起(defaultEnabled:false)时不选', () => {
@@ -627,6 +639,25 @@ describe('校准结果要带上供应商', () => {
 });
 
 describe('resolveDraftSessionProviderId', () => {
+  it('唯一已连接来源是用户 Provider 时仍显式保留，避免 Claude 回退 Cindy gateway', () => {
+    const codingPlan = {
+      ...provider('coding-plan', true, {
+        'claude-code': [model('ark-code-latest')],
+      }),
+      source: 'user',
+    } as ProviderView;
+
+    expect(
+      resolveDraftSessionProviderId({
+        providers: [codingPlan],
+        agent: 'claude-code',
+        model: 'ark-code-latest',
+        explicitProviderId: null,
+        effectiveProviderId: 'coding-plan',
+      }),
+    ).toBe('coding-plan');
+  });
+
   it('XD 已连接但不提供当前模型时,不能省略校准选中的 Anthropic 来源(issue #1196)', () => {
     const gateway = provider('xd', true, {
       'claude-code': [model('claude-sonnet-5')],

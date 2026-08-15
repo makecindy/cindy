@@ -27,10 +27,27 @@ vi.mock('electron', () => ({
 }));
 
 const nativePopupWebContentsIds = vi.hoisted(() => new Set<number>());
+const resourceUsageWebContentsIds = vi.hoisted(() => new Set<number>());
+const rsbWindowWebContentsIds = vi.hoisted(() => new Set<number>());
+const ghostPanelWebContentsIds = vi.hoisted(() => new Set<number>());
 
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   isRsbNativePopupWebContentsId: (webContentsId: number) =>
     nativePopupWebContentsIds.has(webContentsId),
+}));
+
+vi.mock('../resource-usage-window/registry.js', () => ({
+  isResourceUsageWebContentsId: (webContentsId: number) =>
+    resourceUsageWebContentsIds.has(webContentsId),
+}));
+
+vi.mock('../right-sidebar-window/registry.js', () => ({
+  isRsbWindowWebContentsId: (webContentsId: number) => rsbWindowWebContentsIds.has(webContentsId),
+}));
+
+vi.mock('../ghost-panel-window/registry.js', () => ({
+  isGhostPanelWebContentsId: (webContentsId: number) =>
+    ghostPanelWebContentsIds.has(webContentsId),
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -578,6 +595,9 @@ describe('installQuitHandler render-process-gone', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     nativePopupWebContentsIds.clear();
+    resourceUsageWebContentsIds.clear();
+    rsbWindowWebContentsIds.clear();
+    ghostPanelWebContentsIds.clear();
   });
 
   type RenderGoneHandler = (
@@ -642,6 +662,52 @@ describe('installQuitHandler render-process-gone', () => {
         expect.stringContaining('native popup render-process-gone'),
       );
       expect(mocks.logger.error).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it('resource usage renderer crash does NOT shut the app down', async () => {
+    resourceUsageWebContentsIds.add(44);
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(undefined, { id: 44, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('resource usage render-process-gone'),
+      );
+      expect(mocks.logger.error).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it('right sidebar renderer crash does NOT shut the app down', async () => {
+    rsbWindowWebContentsIds.add(45);
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(undefined, { id: 45, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('right sidebar render-process-gone'),
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it('ghost panel renderer crash does NOT shut the app down', async () => {
+    ghostPanelWebContentsIds.add(46);
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(undefined, { id: 46, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('ghost panel render-process-gone'),
+      );
     } finally {
       restore();
     }

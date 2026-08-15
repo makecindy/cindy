@@ -41,7 +41,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { WorktreeBadge } from '@/components/sidebar/WorktreeBadge';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { SessionRenameInput } from '../SessionRenameInput';
-import { usePrRefsForSession } from '@/contexts/PrRefsContext';
+import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
 import { SessionTooltip } from './SessionTooltip';
 import {
   DropdownMenu,
@@ -63,7 +63,8 @@ import {
 import { toast } from '@/lib/toast';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
-import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
+import { buildSessionInfoPieces, SessionInfoMeta } from './SessionInfoMeta';
+import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { highlightSegments } from '../lib/highlightSegments';
 import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
 import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
@@ -95,15 +96,12 @@ import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import {
-  SPLIT_GROUP_DRAG_HANDLE_SELECTOR,
-  SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR,
+  finishSessionDrag,
   isSplitGroupDragSource,
   needsDedicatedSplitGroupDragHandle,
-  shouldStartSplitGroupDrag,
-  writeSplitGroupSessionDragData,
+  startSessionDrag,
 } from '../splitGroupDnd';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
-import { OpenInSplitMenu } from './OpenInSplitMenu';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
 // When many ungrouped automation rows mount simultaneously they all need the
@@ -252,8 +250,8 @@ export interface SessionItemProps {
    */
   matchIndices?: readonly number[];
   /**
-   * hover 时右侧展示的"项目来源"标签(项目 displayName 或"对话")。
-   * 仅在时间排序视图下由父层注入 —— 项目分组视图里项目名已由 ProjectNode 表头承载,
+   * 标题旁的"项目来源"标签(项目 displayName 或"对话")。
+   * 仅在平铺视图下由父层注入 —— 项目分组视图里项目名已由 ProjectNode 表头承载,
    * 无需再在会话行重复显示,因此不传。
    */
   sourceLabel?: string;
@@ -312,6 +310,17 @@ export const SessionItem = memo(function SessionItem({
 }: SessionItemProps) {
   const { t } = useTranslation();
   const prRefs = usePrRefsForSession(session.id);
+  // 任务信息复选(C 期):行右侧信息槽内容,与整理菜单同源共享状态。
+  const { fields: taskInfoFields } = useTaskInfoFields();
+  // 勾选 pr 且行渲染时注册为 PR 消费者:注册即拉取(远程会话含引用补拉),
+  // 此后 Provider 周期/聚焦统一刷新,失败自愈(usePrActions 的 value 恒定)。
+  const { registerPrConsumer } = usePrActions();
+  const wantsPrInfo = taskInfoFields.includes('pr');
+  const remoteDeviceId = session.deviceLinkDeviceId;
+  useEffect(() => {
+    if (!wantsPrInfo) return undefined;
+    return registerPrConsumer(session.id, remoteDeviceId);
+  }, [wantsPrInfo, remoteDeviceId, session.id, registerPrConsumer]);
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅(性能不变量第 2 条),
   // 非按住态恒为 null,不惊动 memo。
   const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
@@ -323,6 +332,16 @@ export const SessionItem = memo(function SessionItem({
     session.userSendAt && session.userSendAt > session.updatedAt
       ? session.userSendAt
       : session.updatedAt;
+  // PR 信息(C' 期):勾选且有引用时取最新一条(prRefs 已按 lastSeenAt 降序)。
+  const infoPrRef = taskInfoFields.includes('pr') ? prRefs[0] : undefined;
+  // 传 hasPrRef 让 PR 参与「按勾选顺序」排列(否则它恒在最前)。
+  const infoPieces = buildSessionInfoPieces(
+    session,
+    taskInfoFields,
+    activityIso,
+    t,
+    infoPrRef != null,
+  );
   // 右侧状态指示器五档优先级(高→低),色表全端统一(侧栏 / 卡片 / 灵动岛同一张表):
   //   1. error(出错终止 / 定时任务失败未读)→ 红点   —— 红专职表示"坏了"
   //   2. awaiting(等待回复/权限/计划审阅)→ TapTap 蓝点 —— "在等你",邀请而非告警
@@ -362,6 +381,10 @@ export const SessionItem = memo(function SessionItem({
           : remoteActivity.phase === 'running'
             ? ('running' as const)
             : ('done' as const);
+  // 左侧 vendor mark 呼吸原先只看本地 running 集;远程会话的运行态只进了右侧
+  // 状态槽,图标颜色不会刷新。只并入 phase=running,与折叠 rail 的 remoteLampOf
+  // 以及本地 pending-prompt 口径一致:needs-interaction 继续由右侧 awaiting 表达。
+  const leftIconRunning = isRunning || remoteActivity?.phase === 'running';
   const rightStatusKind =
     remoteRightStatus ??
     resolveSidebarRightStatus({
@@ -589,35 +612,17 @@ export const SessionItem = memo(function SessionItem({
 
   const handleDragStart = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
-      const target =
-        dragStartTargetRef.current ?? (event.target instanceof Element ? event.target : null);
+      startSessionDrag(event, {
+        sessionId: session.id,
+        deviceId: session.deviceLinkDeviceId,
+        label: displayTitle,
+        enabled: splitDragEnabled,
+        needsDedicatedHandle: needsSplitDragHandle,
+        dragStartTarget: dragStartTargetRef.current,
+      });
       dragStartTargetRef.current = null;
-      const startedOnDedicatedHandle = Boolean(target?.closest(SPLIT_GROUP_DRAG_HANDLE_SELECTOR));
-      const startedOnInteractiveElement = Boolean(
-        target !== event.currentTarget && target?.closest(SPLIT_GROUP_DRAG_INTERACTIVE_SELECTOR),
-      );
-      if (
-        !shouldStartSplitGroupDrag({
-          enabled: splitDragEnabled,
-          needsDedicatedHandle: needsSplitDragHandle,
-          startedOnDedicatedHandle,
-          startedOnInteractiveElement,
-        })
-      ) {
-        event.preventDefault();
-        return;
-      }
-      if (
-        !writeSplitGroupSessionDragData(event.dataTransfer, session.id, {
-          deviceId: session.deviceLinkDeviceId,
-        })
-      ) {
-        event.preventDefault();
-        return;
-      }
-      event.currentTarget.dataset.sessionDragging = 'true';
     },
-    [needsSplitDragHandle, session.deviceLinkDeviceId, session.id, splitDragEnabled],
+    [displayTitle, needsSplitDragHandle, session.deviceLinkDeviceId, session.id, splitDragEnabled],
   );
 
   // isActive 由 false → true(或初次 mount 时即为 true)→ 把行滚进 viewport。
@@ -726,8 +731,8 @@ export const SessionItem = memo(function SessionItem({
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
-    void window.electronAPI.maker.openSessionInNewWindow(session.id);
-  }, [remoteWritesBlocked, session.id, t]);
+    void window.electronAPI.maker.openSessionInNewWindow(session.id, session.deviceLinkDeviceId);
+  }, [remoteWritesBlocked, session.deviceLinkDeviceId, session.id, t]);
 
   // 复制 cindy://session/<id> 深度链接到剪贴板。三个变体(标准/Pinned/Archived/Draft)
   // 共用此 handler — sessionId 始终存在(draft 也是 DB-backed 的 Session row)。
@@ -751,14 +756,6 @@ export const SessionItem = memo(function SessionItem({
       {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
     </DropdownMenuItem>
   );
-  const openInSplitMenu = (
-    <OpenInSplitMenu
-      sessionId={session.id}
-      orcaRole={session.orcaRole}
-      onOpenSession={() => onClick(session.id)}
-    />
-  );
-
   const canMoveToProject =
     Boolean(onMoveSession) &&
     !isEmpty &&
@@ -825,7 +822,7 @@ export const SessionItem = memo(function SessionItem({
       onDragStart={handleDragStart}
       onDragEnd={(event) => {
         dragStartTargetRef.current = null;
-        delete event.currentTarget.dataset.sessionDragging;
+        finishSessionDrag(event, session.id, session.deviceLinkDeviceId);
       }}
       onPointerDown={(e) => {
         if (shouldPrefetchSessionOnPointerDown(e, { isActive, isEditing })) {
@@ -847,7 +844,13 @@ export const SessionItem = memo(function SessionItem({
         }
       }}
       onContextMenu={(e) => {
-        if (isEditing) return;
+        if (isEditing) {
+          // 重命名输入框上的右键交给系统的可编辑菜单(剪切/复制/粘贴,main 侧
+          // selection-context-menu),但必须拦下冒泡——否则会穿透到滚动容器的
+          // 空白处右键 handler,整理菜单和原生菜单叠着弹(2026-08-13 实机回归)。
+          e.stopPropagation();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         prefetchRemovalPreflight();
@@ -891,7 +894,7 @@ export const SessionItem = memo(function SessionItem({
       <span className="flex w-[15px] shrink-0 items-center justify-center">
         <SessionStatusIcon
           session={session}
-          isRunning={isRunning}
+          isRunning={leftIconRunning}
           isAttached={isAttached}
           hasAttentionNotification={hasAttentionNotification}
           isActive={isActive}
@@ -925,10 +928,7 @@ export const SessionItem = memo(function SessionItem({
           data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
           data-no-drag={splitDragHandleActive ? 'true' : undefined}
           draggable={splitDragHandleActive}
-          className={cn(
-            'min-w-0 flex flex-1 items-center gap-1.5',
-            splitDragHandleActive && 'cursor-grab active:cursor-grabbing',
-          )}
+          className="min-w-0 flex flex-1 items-center gap-1.5"
         >
           {/* 绑定徽章优先于普通自动化 Timer:persistentSession 会话两者皆真,
               主图标统一为 Timer，绑定态额外承载频率/暂停信息。 */}
@@ -966,6 +966,19 @@ export const SessionItem = memo(function SessionItem({
               )}
             />
           )}
+          {sourceLabel ? (
+            <span
+              title={sourceLabel}
+              className={cn(
+                'min-w-0 truncate text-xs font-normal',
+                isActive
+                  ? 'text-sidebar-item-active-foreground/70'
+                  : 'text-[var(--cmd-palette-item-meta)]',
+              )}
+            >
+              {sourceLabel}
+            </span>
+          ) : null}
         </span>
       )}
 
@@ -1003,16 +1016,9 @@ export const SessionItem = memo(function SessionItem({
             {showRightStatus ? (
               <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
             ) : (
-              <time
-                dateTime={activityIso}
-                title={formatSidebarTimeAbsolute(activityIso)}
-                className={cn(
-                  'min-w-0 truncate text-right text-xs font-medium tabular-nums',
-                  isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
-                )}
-              >
-                {formatSidebarTime(activityIso, t)}
-              </time>
+              // 任务信息复选(C 期):按用户勾选拼装 pr / tokens / cost / time;默认仅
+              // time,与旧时间槽渲染等价。全不选 → 槽位留空(min-w-14 仍保住 action 锚点)。
+              <SessionInfoMeta pieces={infoPieces} prRef={infoPrRef} isActive={isActive} />
             )}
           </div>
 
@@ -1185,7 +1191,6 @@ export const SessionItem = memo(function SessionItem({
                   {t('ccAgent.sidebar.sessionMenu.unarchive')}
                 </DropdownMenuItem>
                 {exportShareMenuItem}
-                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -1206,7 +1211,6 @@ export const SessionItem = memo(function SessionItem({
                 >
                   {t('ccAgent.sidebar.sessionMenu.rename')}
                 </DropdownMenuItem>
-                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                 <DropdownMenuItem
@@ -1238,7 +1242,6 @@ export const SessionItem = memo(function SessionItem({
                 </DropdownMenuItem>
                 {moveToProjectSubmenu}
                 <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
-                {openInSplitMenu}
                 {copySessionIdSubmenu}
                 <DropdownMenuItem
                   disabled={remoteWritesBlocked}
@@ -1284,7 +1287,7 @@ export const SessionItem = memo(function SessionItem({
   // Tooltip——鼠标一到列表项立即显示该对话的 PR 与实时状态(产品要求,
   // 不等全局 500ms 悬停延迟)。无 PR 的行原样返回,保持本文件"密集列表
   // 少挂 Tip"的既有取舍。
-  // 统一 hover 浮层:PR 优先 / 无 PR 时回落到 sourceLabel / 都没有则透传 row。
+  // 统一 hover 浮层:PR 优先;来源标签已写在标题旁,不再用浮层重复。
   // 具体优先级、配色和 orca-lead 回退详见 SessionTooltip.tsx。
   // 单独 automation-generated 会话(未被 AutomationSessionGroupItem 吸走)在 hover 时
   // 显示「下次运行倒计时 + 累计运行次数」,与分组头 rowTooltip 同语义。分组内子行
@@ -1294,7 +1297,6 @@ export const SessionItem = memo(function SessionItem({
     <SessionTooltip
       sessionId={session.id}
       prRefs={prRefs}
-      sourceLabel={sourceLabel}
       isAutomationSession={showAutomationTooltip}
     >
       {row}

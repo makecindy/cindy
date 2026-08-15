@@ -22,10 +22,15 @@ const readReviewBranchDiffMock = vi.fn();
 const readReviewFileDiffMock = vi.fn();
 const readReviewImagePreviewMock = vi.fn();
 const readReviewMarkdownPreviewMock = vi.fn();
+const withSessionReviewExecutionMock = vi.hoisted(() => vi.fn());
 
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
   shell: { openPath: vi.fn() },
+}));
+
+vi.mock('../sshReviewBackend.js', () => ({
+  withSessionReviewExecution: withSessionReviewExecutionMock,
 }));
 
 vi.mock('../ipc.js', async (importOriginal) => {
@@ -49,6 +54,9 @@ const { handleRemoteOp, GIT_REVIEW_MAX_JSON_BYTES } = __gitReviewDeviceOpTesting
 
 beforeEach(() => {
   vi.clearAllMocks();
+  withSessionReviewExecutionMock.mockImplementation(
+    (_sessionId: string, task: () => Promise<unknown>) => task(),
+  );
 });
 
 describe('git-review device-op', () => {
@@ -115,6 +123,17 @@ describe('git-review device-op', () => {
   it('summarizes untagged dispatch errors as structured {ok:false}', async () => {
     readReviewDataMock.mockRejectedValue(new Error('boom'));
     expect(await handleRemoteOp({ op: 'get', payload: { sessionId: 's1' } })).toEqual({ ok: false, message: 'boom' });
+  });
+
+  it('does not expose controlled-device SSH setup details', async () => {
+    withSessionReviewExecutionMock.mockRejectedValue(
+      new Error('[SSH_AUTH_FAILED] Identity file C:\\Users\\alice\\.ssh\\id_ed25519'),
+    );
+
+    expect(await handleRemoteOp({ op: 'get', payload: { sessionId: 's1' } })).toEqual({
+      ok: false,
+      message: 'SSH workspace review is unavailable on the controlled device',
+    });
   });
 
   it('gzips large compressible results and round-trips through resultGz', async () => {

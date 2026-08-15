@@ -19,7 +19,8 @@
     "allowOnce": "允许一次",
     "allowOnceAccessibility": "允许一次权限请求",
     "allowOnceConfirm": "确认允许一次",
-    "highRisk": "高风险"
+    "highRisk": "高风险",
+    "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。"
   },
   "planMode": {
     "label": "计划模式",

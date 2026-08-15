@@ -193,6 +193,8 @@ describe('mobile home desktop-first surface', () => {
     expect((homeSource.match(/^  useRemoteSessionStoreVersion\(\);$/gm) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(homeSource).toContain('useMinuteNow();');
     expect(homeSource).toContain('<RadioTower');
+    expect(homeSource).toContain('<UsersRound');
+    expect(homeSource).not.toContain('<Puzzle');
     expect(homeSource).toContain('width: 24');
     expect(homeSource).toContain('width: iconSize.md');
     expect(homeSource).toContain('size={cindyList ? iconSize.sm : isClaudeCodeAgentKind(item.session.agentKind) ? 19 : iconSize.lg}');

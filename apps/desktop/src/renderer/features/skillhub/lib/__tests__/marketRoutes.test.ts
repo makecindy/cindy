@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -126,7 +126,7 @@ describe('market management copy and errors', () => {
   });
 
   it('keeps the confirm provider in the main App tree so AuthProvider has a stable context during HMR', () => {
-    const indexSource = readFileSync(resolve(skillhubDir, '../../index.tsx'), 'utf8');
+    const indexSource = readFileSync(resolve(skillhubDir, '../../main-entry.tsx'), 'utf8');
     const appSource = readFileSync(resolve(skillhubDir, '../../App.tsx'), 'utf8');
 
     expect(indexSource).toContain('<App />');

@@ -13,7 +13,7 @@ We are grateful to all open source authors and maintainers.
 
 ------------------------------------------------------------------------------
 SCOPE NOTES:
-  - 包含 Rust/Tauri updater 运行时 crate 闭包和随包 Android Platform-Tools。
+  - 包含 Rust/Tauri updater、Windows 功能键监听器的运行时 crate 闭包和随包 Android Platform-Tools。
 
 受限或专有第三方组件不列入开源包数量,另见配套的 THIRD-PARTY-RESTRICTED.txt。
 Restricted or proprietary components are disclosed in the companion file.

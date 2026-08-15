@@ -127,6 +127,43 @@ export function createWordFadeState(): WordFadeState {
 }
 
 /**
+ * 流式消息在切换任务时会随 MessageStream 一起卸载。动画状态如果只挂在
+ * MarkdownRenderer 实例上，回来后整条已有正文会被当成首次到达并重播。
+ *
+ * 这里按消息身份保留一个有界 LRU：同一条仍在流式中的消息 remount 后继续使用原来的
+ * 绝对时间线；终态渲染会主动释放。上限只兜底清理由后台结束、此后再未打开的任务。
+ */
+const WORD_FADE_STATE_CACHE_MAX = 64;
+const wordFadeStateCache = new Map<string, WordFadeState>();
+
+export function getOrCreateWordFadeState(cacheKey?: string): WordFadeState {
+  if (!cacheKey) return createWordFadeState();
+  const cached = wordFadeStateCache.get(cacheKey);
+  if (cached) {
+    wordFadeStateCache.delete(cacheKey);
+    wordFadeStateCache.set(cacheKey, cached);
+    return cached;
+  }
+
+  const state = createWordFadeState();
+  wordFadeStateCache.set(cacheKey, state);
+  if (wordFadeStateCache.size > WORD_FADE_STATE_CACHE_MAX) {
+    const oldest = wordFadeStateCache.keys().next().value;
+    if (oldest !== undefined) wordFadeStateCache.delete(oldest);
+  }
+  return state;
+}
+
+export function releaseWordFadeState(cacheKey?: string): void {
+  if (cacheKey) wordFadeStateCache.delete(cacheKey);
+}
+
+/** 测试专用：隔离模块级 remount 状态。 */
+export function _resetWordFadeStateCacheForTests(): void {
+  wordFadeStateCache.clear();
+}
+
+/**
  * animationend 落袋入口:MarkdownRenderer 根节点上监听冒泡的 animationend,
  * 把播完 stream-word-in 的词 key 记进 state.settled。按动画名过滤 —— 同一子树里
  * 其它动画(代码高亮、chip 等)的 animationend 不误伤。

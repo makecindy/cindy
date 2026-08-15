@@ -104,11 +104,17 @@ describe('Maker.shutdown', () => {
       model: 'm',
       remoteHostId: 'host-1',
     });
+    const closeReasons: string[] = [];
+    maker.on((event) => {
+      if (event.type === 'session:closed') closeReasons.push(event.reason);
+    });
     expect(session.getStatus()).toBe('active');
     expect(maker.listActiveSessions()).toHaveLength(1);
     await maker.shutdown();
 
     expect(detach).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(0);
+    expect(closeReasons).toEqual(['requested']);
+    expect(maker.getSessionCloseReason(session)).toBe('requested');
   });
 });

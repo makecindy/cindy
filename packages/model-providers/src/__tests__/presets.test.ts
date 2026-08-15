@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 
 import { BUNDLED_CATALOG, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from '../catalog.js';
 import { mergeWithBundled } from '../source.js';
-import type { Catalog } from '../types.js';
+import type { AgentKind, Catalog } from '../types.js';
 
 /** 最小合法目录（单 provider）。 */
 function minimalCatalog(extra?: Partial<Catalog>): Catalog {
@@ -45,6 +45,63 @@ const VALID_PRESET = {
 };
 
 describe('sanitizePresets', () => {
+  it('preserves valid per-model piApi only for supported PI protocol names', () => {
+    const valid = {
+      ...VALID_PRESET,
+      id: 'pi-api',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: 'openai-responses' as const,
+          models: [
+            {
+              id: 'deepseek-v4-pro',
+              name: 'DeepSeek V4 Pro',
+              piApi: 'openai-responses' as const,
+            },
+          ],
+        },
+      },
+    };
+    expect(sanitizePresets([valid])).toEqual([valid]);
+    expect(sanitizePresets([
+      {
+        ...valid,
+        id: 'bad-pi-api',
+        runtimes: {
+          pi: {
+            ...valid.runtimes.pi,
+            models: [{ id: 'x', name: 'X', piApi: 'claude-v1' }],
+          },
+        },
+      },
+    ])).toEqual([]);
+  });
+
+  it('accepts Pi official catalog provider ids only on Pi runtimes', () => {
+    const valid = {
+      ...VALID_PRESET,
+      id: 'pi-catalog',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          piCatalogProviderId: 'deepseek',
+          models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+        },
+      },
+    };
+    expect(sanitizePresets([valid])).toEqual([valid]);
+    expect(sanitizePresets([{
+      ...valid,
+      id: 'wrong-runtime',
+      runtimes: { codex: valid.runtimes.pi },
+    }])).toEqual([]);
+    expect(sanitizePresets([{
+      ...valid,
+      id: 'bad-id',
+      runtimes: { pi: { ...valid.runtimes.pi, piCatalogProviderId: '../xai' } },
+    }])).toEqual([]);
+  });
   it('accepts explicit Pi reasoning metadata and rejects ambiguous capability declarations', () => {
     const piReasoning = {
       ...VALID_PRESET,
@@ -59,12 +116,31 @@ describe('sanitizePresets', () => {
               name: 'Reasoner',
               reasoning: true,
               reasoningEfforts: ['low', 'high', 'xhigh'],
+              reasoningDefaultEffort: 'high',
             },
           ],
         },
       },
     };
     expect(sanitizePresets([piReasoning])).toEqual([piReasoning]);
+    expect(
+      sanitizePresets([{
+        ...piReasoning,
+        id: 'invalid-default-effort',
+        runtimes: {
+          pi: {
+            ...piReasoning.runtimes.pi,
+            models: [{
+              id: 'reasoner',
+              name: 'Reasoner',
+              reasoning: true,
+              reasoningEfforts: ['low', 'high'],
+              reasoningDefaultEffort: 'max',
+            }],
+          },
+        },
+      }]),
+    ).toEqual([]);
     expect(
       sanitizePresets([
         {
@@ -144,6 +220,72 @@ describe('sanitizePresets', () => {
     expect(out[0]!.runtimes['claude-code']?.modelsUrl).toBe('https://x.example/v1/models');
     for (const p of out.slice(1)) {
       expect(p.runtimes['claude-code']?.modelsUrl).toBeUndefined();
+    }
+  });
+
+  it('modelDiscovery 只保留同源且协议合法的附加目录', () => {
+    const source = {
+      baseUrl: 'https://x.example/api/v1',
+      modelsUrl: 'https://x.example/api/v1/models',
+      wireProtocol: 'openai-responses',
+    };
+    const runtime = (modelDiscovery: unknown) => ({
+      codex: {
+        baseUrl: 'https://x.example/api/coding/paas/v4',
+        wireProtocol: 'openai-chat',
+        models: [{ id: 'glm-5.2', name: 'GLM-5.2' }],
+        modelDiscovery,
+      },
+    });
+    const out = sanitizePresets([
+      { id: 'good-discovery', name: 'Good', runtimes: runtime([source]) },
+      {
+        id: 'cross-origin',
+        name: 'Cross origin',
+        runtimes: runtime([{ ...source, baseUrl: 'https://evil.example/api/v1' }]),
+      },
+      {
+        id: 'bad-models-url',
+        name: 'Bad models URL',
+        runtimes: runtime([{ ...source, modelsUrl: 'https://evil.example/models' }]),
+      },
+      {
+        id: 'bad-protocol',
+        name: 'Bad protocol',
+        runtimes: runtime([{ ...source, wireProtocol: 'bogus' }]),
+      },
+    ]);
+
+    expect(out).toHaveLength(4);
+    expect(out[0]!.runtimes.codex?.modelDiscovery).toEqual([source]);
+    for (const preset of out.slice(1)) {
+      expect(preset.runtimes.codex?.modelDiscovery).toBeUndefined();
+    }
+  });
+
+  it('模型级 route 只保留同源且与 agent 兼容的声明', () => {
+    const modelRoute = (route: unknown) => ({
+      codex: {
+        baseUrl: 'https://x.example/v1',
+        models: [{ id: 'm', name: 'M', route }],
+      },
+    });
+    const valid = {
+      baseUrl: 'https://x.example/v1',
+      wireProtocol: 'openai-responses' as const,
+      requestPath: '/responses',
+    };
+    const out = sanitizePresets([
+      { id: 'valid-route', name: 'Valid', runtimes: modelRoute(valid) },
+      { id: 'cross-origin-route', name: 'Cross origin', runtimes: modelRoute({ ...valid, baseUrl: 'https://evil.example/v1' }) },
+      { id: 'credential-route', name: 'Credentials', runtimes: modelRoute({ ...valid, baseUrl: 'https://user:pass@x.example/v1' }) },
+      { id: 'bad-protocol-route', name: 'Bad protocol', runtimes: modelRoute({ ...valid, wireProtocol: 'invalid' }) },
+      { id: 'bad-path-route', name: 'Bad path', runtimes: modelRoute({ ...valid, requestPath: '//evil.example' }) },
+    ]);
+
+    expect(out[0]!.runtimes.codex?.models[0]!.route).toEqual(valid);
+    for (const preset of out.slice(1)) {
+      expect(preset.runtimes.codex?.models[0]!.route).toBeUndefined();
     }
   });
 
@@ -227,6 +369,27 @@ describe('parseCatalog presets 容错', () => {
 });
 
 describe('mergeWithBundled presets 兜底', () => {
+  it('远端 xAI 目录缺少 Pi 时不在 bundled 合并层复活静态成员', () => {
+    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!;
+    const remoteXai = {
+      ...bundledXai,
+      agents: ['claude-code', 'codex'] as AgentKind[],
+      routing: {
+        'claude-code': bundledXai.routing['claude-code']!,
+        codex: bundledXai.routing.codex!,
+      },
+      models: {
+        'claude-code': bundledXai.models['claude-code']!,
+        codex: bundledXai.models.codex!,
+      },
+    };
+    const merged = mergeWithBundled(minimalCatalog({ providers: [remoteXai] }));
+    const xai = merged.providers.find((provider) => provider.id === 'xai');
+    expect(xai?.agents).not.toContain('pi');
+    expect(xai?.routing.pi).toBeUndefined();
+    expect(xai?.models.pi).toBeUndefined();
+  });
+
   it('远端 presets 与 bundled 按 id 合并：远端同 id 优先，bundled 缺项不丢', () => {
     const merged = mergeWithBundled(minimalCatalog({ presets: [VALID_PRESET] }));
     expect(merged.presets?.find((preset) => preset.id === 'openrouter')).toEqual(VALID_PRESET);
@@ -294,6 +457,45 @@ describe('mergeWithBundled presets 兜底', () => {
         ?.models[0]
         ?.contextWindow,
     ).toBe(512_000);
+  });
+
+  it.each(['deepseek', 'moonshot-kimi-cn', 'moonshot-kimi-global'])(
+    '旧远端 %s 缺少 Pi runtime 时从 bundled 回填已核实的 Pi 元数据',
+    (id) => {
+      const bundled = BUNDLED_CATALOG.presets?.find((preset) => preset.id === id);
+      expect(bundled?.runtimes.pi).toBeDefined();
+      const { pi: _missing, ...remoteRuntimes } = bundled!.runtimes;
+      const remote = { ...bundled!, name: `Remote ${id}`, runtimes: remoteRuntimes };
+      const merged = mergeWithBundled(minimalCatalog({ version: '2', presets: [remote] }));
+      const resolved = merged.presets?.find((preset) => preset.id === id);
+      expect(resolved?.name).toBe(`Remote ${id}`);
+      expect(resolved?.runtimes.pi).toEqual(bundled?.runtimes.pi);
+    },
+  );
+
+  it('远端已有 Pi runtime 时完整优先，不与 bundled 模型级混合', () => {
+    const bundled = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'deepseek');
+    const remotePi = {
+      baseUrl: 'https://remote.example/v1',
+      models: [{ id: 'remote-model', name: 'Remote Model' }],
+    };
+    const merged = mergeWithBundled(minimalCatalog({
+      presets: [{ ...bundled!, runtimes: { ...bundled!.runtimes, pi: remotePi } }],
+    }));
+    expect(merged.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi).toEqual(remotePi);
+  });
+
+  it('当前或未知目录版本缺少 Pi runtime 时保持缺失，不静默复活 bundled runtime', () => {
+    const bundled = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'deepseek');
+    const { pi: _missing, ...remoteRuntimes } = bundled!.runtimes;
+    for (const version of ['3', '4', 'test']) {
+      const merged = mergeWithBundled(minimalCatalog({
+        version,
+        presets: [{ ...bundled!, runtimes: remoteRuntimes }],
+      }));
+      expect(merged.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
+        .toBeUndefined();
+    }
   });
 
   it('旧远端同 id preset 缺少 nameZhTW 时从 bundled 回填，显式远端值仍优先', () => {
@@ -599,6 +801,56 @@ describe('官方渠道预设契约', () => {
     });
   });
 
+  it('DeepSeek 的 Pi runtime 来自官方目录并保留逐模型推理档位', () => {
+    const pi = preset('deepseek')?.runtimes.pi;
+    expect(pi?.piCatalogProviderId).toBe('deepseek');
+    expect(pi?.models.find((model) => model.id === 'deepseek-v4-flash')).toMatchObject({
+      contextWindow: 1_000_000,
+      reasoning: true,
+      reasoningEfforts: ['low', 'high', 'max'],
+      reasoningDefaultEffort: 'high',
+    });
+    expect(pi?.models.find((model) => model.id === 'deepseek-v4-pro')).toMatchObject({
+      contextWindow: 1_000_000,
+      reasoning: true,
+      reasoningEfforts: ['high', 'max'],
+      reasoningDefaultEffort: 'high',
+    });
+  });
+
+  it.each([
+    ['moonshot-kimi-cn', 'https://api.moonshot.cn/v1'],
+    ['moonshot-kimi-global', 'https://api.moonshot.ai/v1'],
+  ])('%s 为 Pi 同步完整 Kimi 官方目录与逐模型能力', (id, baseUrl) => {
+    const pi = preset(id)?.runtimes.pi;
+    expect(pi?.baseUrl).toBe(baseUrl);
+    expect(pi?.piCatalogProviderId).toBe(id === 'moonshot-kimi-cn' ? 'moonshotai-cn' : 'moonshotai');
+    expect(pi?.models.length).toBeGreaterThan(3);
+    expect(pi?.models.find((model) => model.id === 'kimi-k3')).toMatchObject({
+      contextWindow: 1_048_576,
+      supportsImageInput: true,
+      reasoning: true,
+      reasoningEfforts: ['low', 'high', 'max'],
+      reasoningDefaultEffort: 'max',
+    });
+    expect(pi?.models.find((model) => model.id === 'kimi-k2.7-code')).toMatchObject({
+      contextWindow: 262_144,
+      supportsImageInput: true,
+    });
+    expect(pi?.models.find((model) => model.id === 'kimi-k2.7-code'))
+      .not.toHaveProperty('reasoningEfforts');
+  });
+
+  it.each([
+    ['moonshot-kimi-code', 'kimi-coding'],
+    ['minimax-cn', 'minimax-cn'],
+    ['minimax-global', 'minimax'],
+  ])('%s 的 Pi 预设投影官方 Anthropic Messages 协议', (id, providerId) => {
+    const pi = preset(id)?.runtimes.pi;
+    expect(pi?.piCatalogProviderId).toBe(providerId);
+    expect(pi?.wireProtocol).toBe('anthropic-messages');
+  });
+
   it.each([
     ['zhipu-coding-plan-cn', 'https://open.bigmodel.cn/api/coding/paas/v4'],
     ['zai-coding-plan-global', 'https://api.z.ai/api/coding/paas/v4'],
@@ -609,6 +861,20 @@ describe('官方渠道预设契约', () => {
       baseUrl,
       wireProtocol: 'openai-chat',
     }));
+  });
+
+  it('智谱中国 Coding Plan 绑定时追加 Responses 模型目录', () => {
+    expect(preset('zhipu-coding-plan-cn')?.runtimes.codex).toMatchObject({
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      wireProtocol: 'openai-chat',
+      modelDiscovery: [
+        {
+          baseUrl: 'https://open.bigmodel.cn/api/v1',
+          modelsUrl: 'https://open.bigmodel.cn/api/v1/models',
+          wireProtocol: 'openai-responses',
+        },
+      ],
+    });
   });
 
   it('阿里云百炼 Coding Plan 与 Token Plan 使用专属端点，个人/团队版分开锁定模型窗口', () => {

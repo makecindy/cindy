@@ -24,6 +24,7 @@ export * from "./native-sidecar/sandbox.js";
 export * from "./native-sidecar/layout.js";
 export * from "./ownership-store.js";
 export * from "./ownership-registry-file.js";
+export * from "./pending-create-evidence-file.js";
 export * from "./project-adapter.js";
 export * from "./runtime.js";
 export * from "./resource-scheduler.js";

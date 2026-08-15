@@ -80,7 +80,7 @@ import { readModelDisableOverrides } from '../../maker-host/model-disable-store.
 import { isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
-import { getUtilityTextCandidates, requestUtilityText } from '../oneShotCandidates.js';
+import { getUtilityTextCandidates, requestUtilityText, toAnthropicApiModelId } from '../oneShotCandidates.js';
 
 const getProfiles = vi.mocked(getUtilityModelChainProfiles);
 const readKey = vi.mocked(readClaudeApiKey);
@@ -495,6 +495,68 @@ describe('utility one-shot candidates', () => {
       model: 'chat-model',
       reasoning_effort: 'low',
       messages: [{ role: 'user', content: 'generate' }],
+    });
+  });
+
+  it('uses Anthropic Messages for an explicitly selected pi anthropic-messages provider', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [
+        {
+          id: 'pi-anthropic-only',
+          name: 'Pi Anthropic Only',
+          source: 'user',
+          agents: ['pi'],
+          auth: { method: 'apiKey' },
+          routing: {
+            pi: {
+              upstream: 'https://anthropic-only.example/v1',
+              wireProtocol: 'anthropic-messages',
+              authStrategy: 'api-key-header',
+            },
+          },
+          models: {
+            pi: [{ id: 'pi-anthropic-model', name: 'Pi Anthropic Model', contextWindow: 100_000 }],
+          },
+        },
+      ],
+    } as never);
+    readCustomKey.mockReturnValue('pi-secret');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          content: [{ type: 'text', text: 'review decision' }],
+        }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'review this action', {
+      providerId: 'pi-anthropic-only',
+      agentKind: 'pi',
+      model: 'pi-anthropic-model',
+      maxTokens: 256,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      text: 'review decision',
+      providerId: 'pi-anthropic-only',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://anthropic-only.example/v1/messages',
+      expect.anything(),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0]?.[1] as { body: string; headers: Record<string, string> };
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer pi-secret',
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      'x-api-key': 'pi-secret',
+    });
+    expect(JSON.parse(init.body)).toEqual({
+      model: 'pi-anthropic-model',
+      max_tokens: 256,
+      messages: [{ role: 'user', content: 'review this action' }],
     });
   });
 
@@ -1033,6 +1095,77 @@ describe('utility one-shot candidates', () => {
     expect(body.max_tokens).toBe(64_000);
   });
 
+  it('内置 Anthropic 直连:1M 目录模型的 body.model 用裸目录 id,不带 SDK 专用 [1m] 后缀(#2429)', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: {
+          'claude-code': { upstream: 'https://anthropic.example/api/v1', authStrategy: 'oauth-passthrough' },
+        },
+        models: {
+          'claude-code': [{ id: 'claude-fable-5', name: 'Fable', contextWindow: 1_000_000, maxOutput: 64_000 }],
+        },
+      }],
+    } as never);
+    readClaudeOAuth.mockResolvedValue({ accessToken: 'anthropic-token' });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'verdict' }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'review this', {
+      providerId: 'anthropic',
+      agentKind: 'claude-code',
+      model: 'claude-fable-5',
+    });
+
+    expect(result).toMatchObject({ ok: true, providerId: 'anthropic' });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.model).toBe('claude-fable-5');
+  });
+
+  it('toAnthropicApiModelId:剥掉尾部 [1m],其余 id 原样返回(防御显示 id 泄入)', () => {
+    expect(toAnthropicApiModelId('claude-opus-5[1m]')).toBe('claude-opus-5');
+    expect(toAnthropicApiModelId('claude-fable-5')).toBe('claude-fable-5');
+    expect(toAnthropicApiModelId('claude-haiku-4-5-20251001')).toBe('claude-haiku-4-5-20251001');
+  });
+
+  it('内置 Anthropic 直连:非 1M 模型的 body.model 保持目录 id 不变(不回归)', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: {
+          'claude-code': { upstream: 'https://anthropic.example/api/v1', authStrategy: 'oauth-passthrough' },
+        },
+        models: {
+          'claude-code': [{ id: 'claude-haiku-4-5-20251001', name: 'Haiku', contextWindow: 200_000, maxOutput: 64_000 }],
+        },
+      }],
+    } as never);
+    readClaudeOAuth.mockResolvedValue({ accessToken: 'anthropic-token' });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'verdict' }] }),
+    } as never);
+
+    await requestUtilityText(makerMock(false), 'review this', {
+      providerId: 'anthropic',
+      agentKind: 'claude-code',
+      model: 'claude-haiku-4-5-20251001',
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.model).toBe('claude-haiku-4-5-20251001');
+  });
+
   it('缺省不传 maxTokens 时,xd wire 不发送输出上限(模型自然输出)', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
@@ -1443,7 +1576,9 @@ describe('utility one-shot candidates', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://anthropic.example/api/v1/messages', expect.anything());
     const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string>; body: string };
     expect(init.headers.Authorization).toBe('Bearer anthropic-token');
-    expect(JSON.parse(init.body).model).toBe('claude-sonnet-4-6[1m]');
+    // [1m] 是 Claude Code SDK 的 beta 通道后缀,直连 /v1/messages 会 404(#2429):
+    // 直连请求体必须用目录裸 id。
+    expect(JSON.parse(init.body).model).toBe('claude-sonnet-4-6');
   });
 
   it('uses OpenAI Codex OAuth and strips the bridge model prefix on the selected route', async () => {

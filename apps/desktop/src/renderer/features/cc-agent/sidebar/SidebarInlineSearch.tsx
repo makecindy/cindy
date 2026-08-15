@@ -79,7 +79,7 @@ export function SidebarInlineSearch({
   useEffect(() => {
     if (!openSignal) return;
     setForceOpen(true);
-    const id = window.setTimeout(() => inputRef.current?.focus(), 0);
+    const id = window.setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
     return () => window.clearTimeout(id);
   }, [openSignal]);
 

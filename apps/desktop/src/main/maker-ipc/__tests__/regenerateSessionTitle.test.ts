@@ -4,9 +4,16 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const logger = vi.hoisted(() => ({
+  warn: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+}));
+
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
 vi.mock('../../logger.js', () => ({
-  createLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() }),
+  createLogger: () => logger,
 }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: vi.fn() }));
 vi.mock('../../localDb/latestMessageText.js', () => ({
@@ -19,6 +26,7 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
 }));
 vi.mock('../../maker-host/title-one-shot.js', () => ({
   generateTitleViaProvider: vi.fn(),
+  generateTitleViaProviderResult: vi.fn(),
 }));
 vi.mock('../../i18n.js', () => ({
   getResolvedMainLocale: vi.fn(() => 'en'),
@@ -29,13 +37,21 @@ import {
   regenerateMakerSessionTitle,
   type RegenerateTitleDeps,
 } from '../title.js';
-import { generateTitleViaProvider } from '../../maker-host/title-one-shot.js';
+import {
+  generateTitleViaProvider,
+  type TitleOneShotResult,
+} from '../../maker-host/title-one-shot.js';
 import { getResolvedMainLocale } from '../../i18n.js';
 import type { RegenerateTitleMaterial } from '../../localDb/latestMessageText.js';
 
 beforeEach(() => {
   vi.mocked(getResolvedMainLocale).mockReturnValue('en');
+  vi.clearAllMocks();
 });
+
+function generatedTitle(title: string): TitleOneShotResult {
+  return { status: 'ok', title };
+}
 
 /** 默认素材:短会话——最近窗口已覆盖会话开头(开场消息就是窗口第一条)。 */
 function makeDeps(overrides: Partial<RegenerateTitleDeps> = {}): RegenerateTitleDeps {
@@ -49,7 +65,7 @@ function makeDeps(overrides: Partial<RegenerateTitleDeps> = {}): RegenerateTitle
   return {
     readSessionAgentKind: vi.fn(async () => 'claude-code' as const),
     collectMaterial: vi.fn(async () => material),
-    generateTitle: vi.fn(async () => '登录失败排查'),
+    generateTitle: vi.fn(async () => generatedTitle('登录失败排查')),
     ...overrides,
   };
 }
@@ -243,15 +259,22 @@ describe('regenerateMakerSessionTitle', () => {
     expect(prompt).not.toContain('Conversation opening');
   });
 
-  it('空 sessionId / 会话不存在 → null 且不发起生成', async () => {
-    const deps = makeDeps({ readSessionAgentKind: vi.fn(async () => null) });
+  it('空 sessionId / 会话不存在且素材为空 → NOT_FOUND 且不发起生成', async () => {
+    const deps = makeDeps({
+      readSessionAgentKind: vi.fn(async () => null),
+      collectMaterial: vi.fn(async () => ({
+        opening: { text: '', createdAt: null, rowid: null },
+        recent: [],
+      })),
+    });
 
-    expect(await regenerateMakerSessionTitle('', deps)).toBeNull();
-    expect(await regenerateMakerSessionTitle('missing', deps)).toBeNull();
+    await expect(regenerateMakerSessionTitle('', deps)).rejects.toThrow(/\[INVALID_PARAMS\]/);
+    await expect(regenerateMakerSessionTitle('missing', deps)).rejects.toThrow(/\[NOT_FOUND\]/);
+    expect(deps.collectMaterial).toHaveBeenCalledOnce();
     expect(deps.generateTitle).not.toHaveBeenCalled();
   });
 
-  it('会话没有任何对话素材(空草稿)→ null 且不发起生成', async () => {
+  it('会话没有任何对话素材(空草稿/纯附件)→ TITLE_NO_MATERIAL 并留下脱敏日志', async () => {
     const deps = makeDeps({
       collectMaterial: vi.fn(async () => ({
         opening: { text: '', createdAt: null, rowid: null },
@@ -259,24 +282,40 @@ describe('regenerateMakerSessionTitle', () => {
       })),
     });
 
-    expect(await regenerateMakerSessionTitle('s1', deps)).toBeNull();
+    await expect(regenerateMakerSessionTitle('s1', deps)).rejects.toThrow(
+      /\[TITLE_NO_MATERIAL\]/,
+    );
     expect(deps.generateTitle).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith('regenerate session title skipped', {
+      sessionId: 's1',
+      reason: 'no-material',
+    });
   });
 
-  it('生成结果为空 / 全空白 → null;两侧空白被 trim', async () => {
-    expect(
-      await regenerateMakerSessionTitle('s1', makeDeps({ generateTitle: vi.fn(async () => null) })),
-    ).toBeNull();
-    expect(
-      await regenerateMakerSessionTitle(
+  it.each([
+    ['unsupported-provider', 'TITLE_PROVIDER_UNSUPPORTED'],
+    ['failed', 'INTERNAL'],
+  ] as const)('oneShot %s → %s', async (status, code) => {
+    const deps = makeDeps({ generateTitle: vi.fn(async () => ({ status })) });
+
+    await expect(regenerateMakerSessionTitle('s1', deps)).rejects.toThrow(
+      new RegExp(`\\[${code}\\]`),
+    );
+  });
+
+  it('成功结果两侧空白被 trim；空白结果按非法输出拒绝', async () => {
+    await expect(
+      regenerateMakerSessionTitle(
         's1',
-        makeDeps({ generateTitle: vi.fn(async () => '   ') }),
+        makeDeps({ generateTitle: vi.fn(async () => generatedTitle('   ')) }),
       ),
-    ).toBeNull();
+    ).rejects.toThrow(/\[INTERNAL\]/);
     expect(
       await regenerateMakerSessionTitle(
         's1',
-        makeDeps({ generateTitle: vi.fn(async () => '  登录失败排查  ') }),
+        makeDeps({
+          generateTitle: vi.fn(async () => generatedTitle('  登录失败排查  ')),
+        }),
       ),
     ).toBe('登录失败排查');
   });
@@ -288,22 +327,28 @@ describe('regenerateMakerSessionTitle', () => {
     '根据对话内容，这是一个标题',
     '这是一条超过二十个 Unicode 字符的标题文本',
   ])('模型返回明显 transcript/元文本时拒绝保存: %s', async (generated) => {
-    expect(
-      await regenerateMakerSessionTitle(
+    await expect(
+      regenerateMakerSessionTitle(
         's1',
-        makeDeps({ generateTitle: vi.fn(async () => generated) }),
+        makeDeps({ generateTitle: vi.fn(async () => generatedTitle(generated)) }),
       ),
-    ).toBeNull();
+    ).rejects.toThrow(/\[INTERNAL\]/);
   });
 
-  it('依赖抛错被吞并返回 null(与 generate-title 同一失败口径)', async () => {
+  it('依赖异常被脱敏为通用 INTERNAL 错误，不向 renderer 透传原始错误', async () => {
     const deps = makeDeps({
       collectMaterial: vi.fn(async () => {
         throw new Error('db not ready');
       }),
     });
 
-    expect(await regenerateMakerSessionTitle('s1', deps)).toBeNull();
+    await expect(regenerateMakerSessionTitle('s1', deps)).rejects.toThrow(
+      /^\[INTERNAL\] AI title generation failed$/,
+    );
+    expect(logger.warn).toHaveBeenCalledWith('regenerate session title failed', {
+      sessionId: 's1',
+      error: 'Error: db not ready',
+    });
   });
 
   it.each([

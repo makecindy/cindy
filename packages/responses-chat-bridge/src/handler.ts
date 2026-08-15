@@ -166,7 +166,13 @@ export function createResponsesChatHandler(
           capabilities: provider.capabilities,
           onDroppedTool: (type, index) => {
             if (type === 'web_search') {
-              throw new UnsupportedResponsesFeatureError(`tools[${index}].web_search`);
+              log.warn?.('responses-chat bridge dropped unsupported built-in tool', {
+                model: request.model,
+                tool: type,
+                index,
+                action: 'continue_without_tool',
+              });
+              return;
             }
             log.warn?.('responses-chat bridge dropped non-function tool', { type, index });
           },

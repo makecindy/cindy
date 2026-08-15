@@ -7,6 +7,7 @@ export {
   handleGhostCall,
   handleGhostInfo,
   handleGhostList,
+  handleGhostManual,
   sanitizeGhostSetupAssessment,
 } from './ghost/mcpServer.js';
 export type {
@@ -20,6 +21,9 @@ export type {
   CindyGhostInfoErrorCode,
   CindyGhostInfoHostResult,
   CindyGhostInfoResult,
+  CindyGhostManualErrorCode,
+  CindyGhostManualIndexItem,
+  CindyGhostManualResult,
   CindyGhostSetupAllowedAction,
   CindyGhostSetupAssessment,
   CindyGhostSetupPlan,

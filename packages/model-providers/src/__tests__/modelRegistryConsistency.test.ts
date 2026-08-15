@@ -7,7 +7,7 @@ import type {
   ModelRegistryEntry,
   ModelRegistryRoute,
   ModelReferencePrice,
-} from "@cindy/model-access-protocol";
+} from "../modelAccessBean.js";
 
 /**
  * model-registry.json 数据自一致性门禁(#1429 跟进)。

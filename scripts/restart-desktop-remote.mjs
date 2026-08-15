@@ -4,7 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { applyDesktopDevStartupConfig } from './shared/desktop-dev-region.mjs';
+import {
+  applyDesktopDevStartupConfig,
+  desktopUserDataDirNameForRegion,
+  resolveDesktopDevRegion,
+} from './shared/desktop-dev-region.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -15,12 +19,10 @@ const startupReadyTimeoutMs = 120_000;
 const forceKillLabel = process.platform === 'win32' ? 'taskkill /F /T' : 'kill -9';
 
 /**
- * 产品 userData 目录基名(--isolated 沙箱目录 `<BRAND_USER_DATA_DIR_NAME>-dev[-<名字>]`
- * 的派生基座)。⚠️ 值必须与 packages/maker-shared/src/brandIdentity.ts 的
- * BRAND_IDENTITY.userDataDirName 一致——.mjs 无法 import TS 单点,只能镜像字面量;
+ * 产品默认 userData 目录基名。⚠️ 值必须与
+ * packages/maker-shared/src/brandIdentity.ts 的 BRAND_IDENTITY.userDataDirName
+ * 一致——.mjs 无法 import TS 单点,只能镜像字面量;
  * 一致性由 scripts/__tests__/brand-identity-sync.test.mjs 断言兜底。
- * 主进程侧(devCliFlags.ts)以 app.getPath('userData') 为基座派生同名目录,两边
- * 必须落在同一路径,否则 restart 脚本创建的沙箱目录与实际生效目录分家。
  */
 export const BRAND_USER_DATA_DIR_NAME = 'Cindy';
 
@@ -429,7 +431,7 @@ function closeDarwinTerminalTtys(ttys) {
 }
 
 /**
- * --isolated 的默认独立 userData 目录:与正式版的 `Cindy` 平级、名字带 -dev 后缀,
+ * --isolated 的默认独立 userData 目录:与当前区域正式目录平级、名字带 -dev2 后缀,
  * 稳定不随 checkout 变(多个 worktree 共享同一个 dev 沙箱,想再细分用命名沙箱
  * `--isolated=<名字>` 或自己设 XDT_USER_DATA_DIR 覆盖)。命名沙箱目录再追加
  * `-<名字>` 后缀,每个名字一条完全独立的沙箱。只在 dev 生效——主进程入口只在
@@ -447,15 +449,80 @@ function userDataDirNamed(dirName) {
   return path.join(xdgConfig, dirName);
 }
 
-function defaultIsolatedUserDataDir(isolationName) {
+export function defaultIsolatedUserDataDir(isolationName, region = 'global') {
   // 目录纪元 v2(-dev2),与 devCliFlags.ts 的派生保持一字不差:#871 起隔离沙箱用
   // CindyDev 钥匙串身份,旧 -dev 目录留给旧 checkout(#912 review)。
-  return userDataDirNamed(`${BRAND_USER_DATA_DIR_NAME}-dev2${isolationName ? `-${isolationName}` : ''}`);
+  const baseName = desktopUserDataDirNameForRegion(region);
+  return userDataDirNamed(`${baseName}-dev2${isolationName ? `-${isolationName}` : ''}`);
 }
 
 /** 非隔离 dev 与正式版共用的 userData 目录。 */
-function productionUserDataDir() {
-  return userDataDirNamed(BRAND_USER_DATA_DIR_NAME);
+export function productionUserDataDir(region = 'global') {
+  return userDataDirNamed(desktopUserDataDirNameForRegion(region));
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== 'ESRCH';
+  }
+}
+
+/**
+ * --preserve-running 只有在目标 profile 的所有存活实例都明确声明同一区域时
+ * 才能共享。旧记录没有 region，属于无法证明兼容，必须 fail closed。
+ */
+export function inspectSharedUserDataRegion(userDataDir, expectedRegion, processes = []) {
+  const recordsDir = path.join(userDataDir, '.dev-instances');
+  const liveRecords = [];
+  try {
+    for (const name of fs.readdirSync(recordsDir)) {
+      if (!name.endsWith('.json')) continue;
+      try {
+        const record = JSON.parse(fs.readFileSync(path.join(recordsDir, name), 'utf8'));
+        if (Number.isInteger(record?.pid) && isProcessAlive(record.pid)) liveRecords.push(record);
+      } catch {
+        // 损坏记录不能证明兼容；若确有 helper 占用，下面的 process guard 会拒绝。
+      }
+    }
+  } catch {
+    // 没有注册表时继续看进程扫描。
+  }
+
+  const incompatibleRecords = liveRecords.filter(
+    (record) => record.region !== expectedRegion || typeof record.rootDir !== 'string',
+  );
+  if (incompatibleRecords.length > 0) {
+    return {
+      compatible: false,
+      reason:
+        `target userData has live instance record(s) with incompatible or unknown region: ` +
+        incompatibleRecords
+          .map(
+            (record) =>
+              `pid=${record.pid},region=${record.region ?? 'unknown'},` +
+              `root=${record.rootDir ?? 'unknown'}`,
+          )
+          .join('; '),
+    };
+  }
+
+  const scannedUsers = processes.filter((proc) => commandUsesUserDataDir(proc.command, userDataDir));
+  const unprovenUsers = scannedUsers.filter(
+    (proc) => !liveRecords.some((record) => commandContainsPath(proc.command, record.rootDir)),
+  );
+  if (unprovenUsers.length > 0) {
+    return {
+      compatible: false,
+      reason:
+        `target userData has active process(es) not covered by a live ` +
+        `region=${expectedRegion} instance record: ` +
+        unprovenUsers.map((proc) => `pid=${proc.pid}`).join(', '),
+    };
+  }
+  return { compatible: true, reason: null };
 }
 
 function parseIsolationName(isolatedArg) {
@@ -699,6 +766,7 @@ async function main() {
   // --local 切换到本地模式(连 localhost:3333);缺省走 remote(连 xdt-api)。
   const mode = argv.includes('--local') ? 'local' : 'remote';
   const startupConfig = applyDesktopStartupConfigForPhase({ argv, mode });
+  const selectedRegion = startupConfig?.region ?? resolveDesktopDevRegion(argv, process.env);
   const isolatedArg = argv.find((a) => a === '--isolated' || a.startsWith('--isolated='));
   if (preserveRunning && killOnly) {
     throw new Error('--preserve-running cannot be combined with the internal --kill-only stage');
@@ -754,8 +822,8 @@ async function main() {
     console.log(`==> Endpoint manifest: ${startupConfig.endpointManifestFile}`);
   }
   // --isolated[=<名字>]: dev 使用独立的 userData 目录(数据库/登录态/会话全部与
-  // 正式版隔离,首次要重新登录 Cindy 账号)。不带名字 = 默认沙箱(Cindy-dev);
-  // 带名字 = 独立命名沙箱(Cindy-dev-<名字>),每个名字一条,可同时多开。
+  // 正式版隔离,首次要重新登录 Cindy 账号)。不带名字 = 当前区域默认沙箱;
+  // 带名字 = 在区域沙箱名后追加 `-<名字>`,每个名字一条,可同时多开。
   // 实现:置 XDT_USER_DATA_DIR(主进程入口只在非 packaged 时应用,见
   // apps/desktop/src/main/index.ts),经 devEnvPrefix 白名单透传给 dev 进程。
   // 已手动设了 XDT_USER_DATA_DIR 时尊重用户的值,不覆盖。
@@ -778,7 +846,7 @@ async function main() {
     process.env.XDT_ISOLATED = '1';
     if (isolationName) process.env.XDT_ISOLATED_NAME = isolationName;
     if (!process.env.XDT_USER_DATA_DIR) {
-      process.env.XDT_USER_DATA_DIR = defaultIsolatedUserDataDir(isolationName);
+      process.env.XDT_USER_DATA_DIR = defaultIsolatedUserDataDir(isolationName, selectedRegion);
       // 可信纪元信号:仅当目录由本脚本按 -dev2 纪元派生时携带,主进程据此允许
       // 显式 env 覆写命中纪元判定。用户手动设 XDT_USER_DATA_DIR(上面的分支不
       // 进入)或旧 checkout 启动都不带该信号 → 观察模式,防旧代码对同一显式
@@ -819,11 +887,11 @@ async function main() {
   // --isolated 名字,或用户自己停掉那个实例。preserve-running 不进此门 ——
   // 它的语义就是共享 userData 的被动预览。检测是尽力而为:靠 helper 进程命令行
   // 上的 --user-data-dir,对方实例刚启动还没起 helper 时可能漏检。
+  const targetUserDataDir = process.env.XDT_USER_DATA_DIR
+    || (isolatedArg
+      ? defaultIsolatedUserDataDir(parseIsolationName(isolatedArg), selectedRegion)
+      : productionUserDataDir(selectedRegion));
   if (!preserveRunning) {
-    const targetUserDataDir = process.env.XDT_USER_DATA_DIR
-      || (isolatedArg
-        ? defaultIsolatedUserDataDir(parseIsolationName(isolatedArg))
-        : productionUserDataDir());
     const conflicts = listDesktopDevProcesses().filter(
       (proc) => !commandContainsPath(proc.command, rootDir)
         && commandUsesUserDataDir(proc.command, targetUserDataDir),
@@ -836,6 +904,18 @@ async function main() {
       console.error('==> Refusing to stop processes outside this checkout. Pick a different sandbox');
       console.error('    name (--isolated=<name>), or stop that instance yourself and re-run.');
       process.exit(1);
+    }
+  } else {
+    const compatibility = inspectSharedUserDataRegion(
+      targetUserDataDir,
+      selectedRegion,
+      listDesktopDevProcesses(),
+    );
+    if (!compatibility.compatible) {
+      throw new Error(
+        `--preserve-running cannot safely share ${targetUserDataDir}: ${compatibility.reason}. ` +
+          'Restart the existing instance with the same region, or use an isolated sandbox.',
+      );
     }
   }
 

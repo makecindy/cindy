@@ -28,6 +28,7 @@ import type {
 } from '../../shared/ghost.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS, isGhostPluginErrorCode } from '../../shared/ghost.js';
 import type { GhostRuntimeState } from './runtime/GhostRuntime.js';
+import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
 
 export interface PipeDispatcherDeps {
   /** app/账号边界是否仍允许受理新调用；边界结束后可恢复。 */
@@ -42,6 +43,7 @@ export interface PipeDispatcherDeps {
   sendToGhost(ghostId: string, payload: GhostPipeToolCall): boolean;
   /** 记录一次已受理的顶层调用；失败只能记日志，不能影响派发。 */
   recordUsage(ghostId: string): Promise<void>;
+  ownerScope?: GhostOwnerScope;
   /** 单次调用超时(默认 330s,见 DEFAULT_TIMEOUT_MS 注释)。 */
   timeoutMs?: number;
   setTimeoutFn?: typeof setTimeout;
@@ -63,6 +65,7 @@ interface PendingBindingClaim {
 interface PendingCall {
   ghostId: string;
   tool: string;
+  ownerScopeSnapshot: unknown;
   /** 宿主能力按用途绑定，允许同请求一次受控重试，禁止换参或无限消费。 */
   claimedBindings: Map<string, PendingBindingClaim>;
   resolve: (result: GhostToolCallResult) => void;
@@ -180,6 +183,12 @@ export class GhostPipeDispatcher {
     if (this.deps.runtimeStateOf(ghostId) === 'fused') {
       return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件 ${ghostId} 已熔断(反复崩溃),重载或重新启用后再试` };
     }
+    let ownerScopeSnapshot: unknown;
+    try {
+      ownerScopeSnapshot = this.deps.ownerScope?.capture();
+    } catch {
+      return this.ownerBoundaryResult();
+    }
 
     // ── 按需拉起 ────────────────────────────────────────────────────────
     if (this.deps.runtimeStateOf(ghostId) !== 'running') {
@@ -187,6 +196,9 @@ export class GhostPipeDispatcher {
       if (!spawned.ok) {
         return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件启动失败:${spawned.reason}` };
       }
+    }
+    if (!this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
+      return this.ownerBoundaryResult();
     }
 
     // spawn() 是本路径在计数前唯一的 await。退出门禁可能在沙箱加载期间关闭，
@@ -220,6 +232,7 @@ export class GhostPipeDispatcher {
       const entry: PendingCall = {
         ghostId,
         tool,
+        ownerScopeSnapshot,
         claimedBindings: new Map(),
         resolve,
         timer: undefined,
@@ -232,6 +245,10 @@ export class GhostPipeDispatcher {
       this.pending.set(callId, entry);
       this.armTimer(callId, entry);
 
+      if (!this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
+        this.settle(callId, this.ownerBoundaryResult());
+        return;
+      }
       if (!this.deps.sendToGhost(ghostId, payload)) {
         // 逻辑页不在线(拉起后瞬时死亡等):立即收卷。
         this.settle(callId, { ok: false, errorCode: 'GHOST_CRASHED', message: '电子脑离线,派发失败' });
@@ -416,6 +433,10 @@ export class GhostPipeDispatcher {
     if (entry.ghostId !== senderGhostId) {
       return { accepted: false, reason: '不是你的卷子' };
     }
+    if (!this.ownerScopeUsable(senderGhostId, entry.ownerScopeSnapshot)) {
+      this.settle(p.callId, this.ownerBoundaryResult());
+      return { accepted: false, reason: '账号边界已变化' };
+    }
     if (entry.timeoutExtensionsAllowed) {
       this.extendDeadline(p.callId, entry, Date.now() + entry.baseTimeoutMs);
     }
@@ -450,6 +471,10 @@ export class GhostPipeDispatcher {
         actual: senderGhostId,
       });
       return { accepted: false, reason: '不是你的卷子' };
+    }
+    if (!this.ownerScopeUsable(senderGhostId, entry.ownerScopeSnapshot)) {
+      this.settle(p.callId, this.ownerBoundaryResult());
+      return { accepted: false, reason: '账号边界已变化' };
     }
     const result: GhostToolCallResult = p.ok
       ? { ok: true, result: p.result ?? null }
@@ -494,5 +519,19 @@ export class GhostPipeDispatcher {
       totalMs: Date.now() - entry.startedAt,
     });
     entry.resolve(result);
+  }
+
+  private ownerScopeUsable(ghostId: string, captured: unknown): boolean {
+    if (isGhostOwnerScopeUsable(this.deps.ownerScope, captured)) return true;
+    this.deps.ownerScope?.onInvalidated?.(ghostId);
+    return false;
+  }
+
+  private ownerBoundaryResult(): GhostToolCallResult {
+    return {
+      ok: false,
+      errorCode: 'GHOST_ASLEEP',
+      message: 'Plugin owner boundary changed before dispatch; retry after the active session settles.',
+    };
   }
 }

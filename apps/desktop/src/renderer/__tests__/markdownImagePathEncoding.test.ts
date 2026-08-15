@@ -99,7 +99,15 @@ describe('Markdown local image path encoding', () => {
   });
 
   it('blocks privileged local paths in untrusted Markdown previews', () => {
-    expect(normalizeMarkdownImageSrc('/tmp/private.png', '/repo', false)).toBeUndefined();
+    for (const src of [
+      '/tmp/private.png',
+      'C:\\Users\\alice\\private.png',
+      'relative/private.png',
+      'file:///tmp/private.png',
+      'xdt-file://local/?path=%2Ftmp%2Fprivate.png',
+    ]) {
+      expect(normalizeMarkdownImageSrc(src, '/repo', false)).toBeUndefined();
+    }
     expect(normalizeMarkdownImageSrc('https://example.com/public.png', '/repo', false)).toBe(
       'https://example.com/public.png',
     );

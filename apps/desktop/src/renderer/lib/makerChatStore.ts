@@ -40,6 +40,7 @@ import {
   applyCodexPlanSnapshotOnDone,
   getLatestMessageTodoState,
   isAgentPlanToolName,
+  isSubagentParentToolUseId,
   markCodexPlanTurnFailed,
 } from '@cindy/maker-shared/message-render';
 import {
@@ -57,6 +58,7 @@ import type {
   AgentInputCreateOpts,
   AgentInputProjection,
   AgentInputQueuedMessage,
+  AgentInputRecovery,
   AgentInputSessionRef,
   AgentInputReference,
 } from '../../shared/agentInputQueue';
@@ -118,6 +120,10 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
 import { createLogger } from '@/lib/logger';
+import {
+  markSessionAutomaticHistoryLoadCompleted,
+  resetSessionAutomaticHistoryLoadCompletion,
+} from '@/lib/sessionScrollStore';
 import { extractIpcError } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
@@ -190,6 +196,7 @@ const DEVICE_LINK_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
 const AGENT_RUNTIME_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   // Auto 档下审阅器没跑起来(与「模型判定动作危险」不同,后者刻意保持静默)。
   'AUTO_REVIEW_UNAVAILABLE',
+  'AUTO_REVIEW_CONFIRM_UNDELIVERED',
 ] as const);
 const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   'maker:event',
@@ -636,6 +643,7 @@ export interface PendingPermission {
   displayName?: string;
   description?: string;
   suggestions?: unknown[];
+  autoReviewUnavailable?: boolean;
 }
 
 /** F7.2: Pending ask-user-question data — holds ALL questions for the wizard. */
@@ -909,6 +917,40 @@ interface RemoteOptimisticSendScope {
 }
 
 let nextRemoteOptimisticRecoverySequence = 0;
+
+/** 各 session「正在识别图片中」toast id（duration 0 手动 dismiss），按 sessionId 隔离，
+ *  避免不同会话/窗口的输出互相误 dismiss；agent 首个输出或失败收口时清理对应 session。 */
+const _visionBridgeToastIds = new Map<string, string>();
+
+/** 清理指定 session 的「正在识别图片中」toast（dismiss 找不到 id 时是 no-op，安全）。 */
+function dismissVisionBridgeToast(sessionId: string): void {
+  const id = _visionBridgeToastIds.get(sessionId);
+  if (id) {
+    toast.dismiss(id);
+    _visionBridgeToastIds.delete(sessionId);
+  }
+}
+
+/** 视觉桥用户提示事件 reason 枚举（识别中 / fallback / 不可用）。 */
+const VISION_BRIDGE_REASONS = new Set([
+  'vision-bridge-recognizing',
+  'vision-bridge-fallback',
+  'vision-bridge-unavailable',
+]);
+
+/**
+ * 视觉桥提示事件判定：reason 命中枚举 且 source 是 main 合成的 'vision-bridge' 专用来源
+ * 且 isTerminal === false。三重校验避免把普通 agent / 远程转发的 error（含伪造 reason）
+ * 误当视觉桥提示弹 toast，或吞掉真实终态错误。
+ */
+function isVisionBridgeReason(event: unknown): boolean {
+  if (!event || typeof event !== 'object') return false;
+  const { type, data, source } = event as { type?: string; data?: unknown; source?: unknown };
+  if (type !== 'error' || source !== 'vision-bridge') return false;
+  const reason = (data as { reason?: unknown } | null)?.reason;
+  if (typeof reason !== 'string' || !VISION_BRIDGE_REASONS.has(reason)) return false;
+  return (data as { isTerminal?: unknown } | null)?.isTerminal === false;
+}
 
 function captureRemoteOptimisticSendScope(
   sessionId: string,
@@ -2058,6 +2100,8 @@ function cancelRemoteOptimisticSendsForRemoteClear(
   clearBoundaryMs: number,
   opts: { historicalHydration?: boolean } = {},
 ): void {
+  // 历史 hydration 也会走到这里,但它只清理旧 optimistic 状态,并没有替换当前消息窗口;
+  // 因此只作废在途请求,不能把已经完成的自动补载误判成新窗口。
   bumpMessagesEpoch(sessionId);
   bumpInteractionReconcileEpoch(sessionId);
   invalidateInputProjectionRequests(sessionId);
@@ -2280,6 +2324,13 @@ export interface SessionChatState {
    */
   errorReason?: string | null;
   recoverableError: string | null;
+  /**
+   * 输入投影自带的 recovery 镜像（main 的 retry 权威状态）。renderer 侧人工
+   * Retry 登记本端意图时用它区分 queue-head（原样重发既有队首项）与
+   * active-turn（克隆 / 续跑指令）——projection 线上本就有该字段，仅镜像，
+   * 不改协议。
+   */
+  inputRecovery: AgentInputRecovery;
   /**
    * 当前已派发 turn 的 retry 候选文本。
    *
@@ -2571,6 +2622,7 @@ function createInitialState(): SessionChatState {
     usageLimitRecovery: null,
     errorReason: null,
     recoverableError: null,
+    inputRecovery: null,
     activeTurnRetryText: null,
     errorRetryText: null,
     credentialSwitchWait: null,
@@ -2638,6 +2690,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   usageLimitRecovery: null,
   errorReason: null,
   recoverableError: null,
+  inputRecovery: null,
   activeTurnRetryText: null,
   errorRetryText: null,
   credentialSwitchWait: null,
@@ -2689,6 +2742,99 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
 const sessions = new Map<string, SessionChatState>();
 const listeners = new Map<string, Set<() => void>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
+
+/**
+ * #2194: clientIds of user messages sent from THIS renderer's composer.
+ * sendMessageCore / steerMessageCore are the choke points every local send
+ * (composer send, edit-resend, steer, device-link send initiated on this
+ * desktop) passes through, so those local user messages are recorded there.
+ * Further paths register separately: local UI triggers (silent-stop Continue /
+ * app-exit Continue / Mivo) in sendUiTriggerCore; a manual Retry in
+ * retryLastError (clone via the receipt's supersedesUserClientId, hidden
+ * continue via originalSyntheticTrigger, queue-head redispatch via the
+ * mirrored inputRecovery captured at click time); and queue actions that
+ * dispatch a restored/externally-queued row (resumeQueue, steerQueuedMessage)
+ * at click time.
+ * MessageStream uses this to tell an explicit local send — which force-pins
+ * the viewport to the tail — apart from user messages injected by other
+ * entries (IM channels, a mobile client driving the session remotely,
+ * scheduler runs), which must not steal the reading position. Memory-only
+ * by design: the force-pin only matters at send time; after a renderer
+ * restart the restore path owns the viewport anchor.
+ */
+const localSentUserMessageIds = new Map<string, Set<string>>();
+/** Generous per-session cap — the lookup only matters right after sending. */
+const LOCAL_SENT_IDS_CAP = 200;
+
+function markLocalSentUserMessage(sessionId: string, clientId: string): void {
+  let ids = localSentUserMessageIds.get(sessionId);
+  if (!ids) {
+    ids = new Set();
+    localSentUserMessageIds.set(sessionId, ids);
+  }
+  // 已存在时直接返回：重复登记不该无谓逐出最旧 id（容量会掉到 CAP-1，
+  //  Copilot review nit）。
+  if (ids.has(clientId)) return;
+  if (ids.size >= LOCAL_SENT_IDS_CAP) {
+    const oldest = ids.values().next().value;
+    if (oldest !== undefined) ids.delete(oldest);
+  }
+  ids.add(clientId);
+}
+
+/**
+ * Roll back a speculative mark (e.g. queued steer marked before the IPC when
+ * main persists before resolving). Never recreates a purged session's entry.
+ */
+function unmarkLocalSentUserMessage(sessionId: string, clientId: string): void {
+  localSentUserMessageIds.get(sessionId)?.delete(clientId);
+}
+
+/** Whether the given user message was sent from this renderer's composer. */
+function isLocalSentUserMessage(sessionId: string, clientId: string): boolean {
+  return localSentUserMessageIds.get(sessionId)?.has(clientId) ?? false;
+}
+
+/**
+ * #2194: 人工 Retry（active-turn）的一次性本端意图。main 的
+ * performRetryLastError 在返回 projection 前就 emit 并 scheduleDrain
+ * （queueMicrotask），续跑 / 克隆行可能抢在 retry 的 IPC 回执前经
+ * localDb.messages.onCreated 落库、被 MessageStream 基线化为外部
+ * （Codex review P1）。但 main 的 emit 先于 scheduleDrain，投影事件必然
+ * 先于落库广播携带本次产物——点击时记下意图（含点击时刻的队列快照），
+ * applyInputProjection 时凭意图同步认领新 clientId，不等回执。
+ * 回执 settle 时无条件清意图（兜底清理）。
+ */
+const pendingLocalRetryIntents = new Map<string, { queueIds: Set<string> }>();
+
+/**
+ * 与 retryLastError 回执扫描同口径：retry 生效（resumed）时 main 在 unshift
+ * 前同步清掉 error / recovery，投影必然双空，且 unshift → emit 同步、队首
+ * 必然是本次产物；未生效的投影（含 superseded）里没有本次产物，意图继续
+ * pending 等生效投影或回执清理。点击后首个 error/recovery 双空的投影就是
+ * 本次生效投影（其它路径并发清 error 本身就让本次 retry superseded），
+ * 无论是否认领到产物都消费意图——一次性语义。
+ */
+function claimLocalRetryProductFromProjection(projection: AgentInputProjection): void {
+  const intent = pendingLocalRetryIntents.get(projection.sessionId);
+  if (!intent) return;
+  if (projection.error !== null || projection.recovery !== null) return;
+  pendingLocalRetryIntents.delete(projection.sessionId);
+  if (!sessions.has(projection.sessionId)) return;
+  const headClientId = projection.pendingQueue[0]?.clientId;
+  for (const item of projection.pendingQueue) {
+    if (intent.queueIds.has(item.clientId)) continue;
+    if (item.supersedesUserClientId) {
+      markLocalSentUserMessage(projection.sessionId, item.clientId);
+    } else if (
+      item.originalSyntheticTrigger === 'continue' &&
+      item.autoResume !== true &&
+      headClientId === item.clientId
+    ) {
+      markLocalSentUserMessage(projection.sessionId, item.clientId);
+    }
+  }
+}
 
 /**
  * F-SB-7: Global listeners — notified whenever ANY session's state changes.
@@ -3059,18 +3205,22 @@ function isBeforeOrAtRendererClearBoundary(sessionId: string, createdAt: string)
  * explicitly free a specific session.
  */
 function _purgeSession(sessionId: string): void {
+  // session 删除/归档/驱逐：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   discardPendingTextDelta(sessionId);
   discardDeferredStateWork(sessionId);
   clearIssueConfirmDraftsForSession(sessionId);
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
-  bumpMessagesEpoch(sessionId);
+  invalidateMessageHistoryWindow(sessionId);
   invalidateInputProjectionRequests(sessionId);
   // 删除 / 归档 / LRU 都是 renderer owner 边界。作废仍在附件物化或 composer
   // 交接中的迟到 continuation，且不写入 /clear 的历史时间边界。
   bumpRendererClearGeneration(sessionId);
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
   sessions.delete(sessionId);
+  localSentUserMessageIds.delete(sessionId);
+  pendingLocalRetryIntents.delete(sessionId);
   // 状态快照同步失效:该会话若有 running / pending / 待投递 transition 条目,
   // 不能在缓存里残留(purge 不走 setState,需单独置位)。
   _stopTransitions.delete(sessionId);
@@ -3280,7 +3430,7 @@ function _demoteIdleSessions(): void {
     // 等于代际重置,必须 bump epoch 作废 in-flight 的翻页 / 跳转补齐,并由本次重置释放
     // 分页锁。漏 bump 的后果是 in-flight 那一页按 demote 前的游标提交,把一段脱离上下文
     // 的旧历史 merge 进空切片(或重开后的新切片),最近的消息反而缺席(#676 review)。
-    bumpMessagesEpoch(sessionId);
+    invalidateMessageHistoryWindow(sessionId);
     setState(sessionId, (s) => ({
       ...s,
       messages: [],
@@ -3518,6 +3668,9 @@ function applyInputProjection(
   if (opts.supersedeQueries !== false) {
     supersedeInputProjectionRequests(projection.sessionId);
   }
+  // #2194: 人工 Retry 的一次性意图认领——必须在落库广播（onCreated）可能
+  // 到达之前完成登记，main 的 emit 先于 scheduleDrain，这里一定更早。
+  claimLocalRetryProductFromProjection(projection);
   // wire 上「字段缺省」就是旧被控端的能力信号；新版没有续跑项时也会显式发 null。
   // 必须在 `?? null` 归一化前按 own property 读取，不能让 undefined/null 混淆版本。
   const continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability =
@@ -3702,6 +3855,9 @@ function applyInputProjection(
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
       continuationTurnClientId: projectedContinuationTurnClientId,
       continuationInFlightProjectionCapability,
+      // 线上字段镜像（旧被控端缺省回落 null），供人工 Retry 区分 queue-head /
+      // active-turn 归属（#2194 本端意图登记）。
+      inputRecovery: projection.recovery ?? null,
       ...(authRetryProjectionError ? { _authRetryPersistOnProjectionError: undefined } : {}),
     };
   });
@@ -4085,7 +4241,7 @@ function isTerminalErrorData(data: unknown): boolean {
 
 function normalizeAgentTaskUpdate(
   data: unknown,
-  source?: 'claude-code' | 'codex' | 'pi',
+  source?: string,
 ): AgentTaskUpdate | null {
   if (!data || typeof data !== 'object') return null;
   const raw = data as Record<string, unknown>;
@@ -4416,6 +4572,7 @@ export function handleStreamEvent(
   };
   switch (event.type) {
     case 'text': {
+      dismissVisionBridgeToast(event.sessionId);
       const { text, isFinal, isFullText } = event.data as {
         text: string;
         isFinal: boolean;
@@ -4705,6 +4862,7 @@ export function handleStreamEvent(
     }
 
     case 'tool_use': {
+      dismissVisionBridgeToast(event.sessionId);
       const { toolUseId, toolName, input } = event.data as {
         toolUseId: string;
         toolName: string;
@@ -4801,6 +4959,9 @@ export function handleStreamEvent(
     }
 
     case 'done': {
+      // turn 终态兜底清理：done 时清掉该 session 的「正在识别图片中」toast，
+      // 即使没有 text/tool_use 也不残留（视觉桥要么已结束要么被放弃）。
+      dismissVisionBridgeToast(event.sessionId);
       // silent-stop:上游空内容消息静默收尾,main 守卫 1.5s 后会自动续跑(或弹耗尽横幅)。
       // 保持 isRunning=true,避免 renderer 的 500ms 完成去抖触发假完成通知。守卫非续跑
       // 决策通过 exhausted terminal error 广播到达 renderer,那时才正确设 isRunning=false。
@@ -4920,11 +5081,40 @@ export function handleStreamEvent(
         message: errMsgRaw,
         reason,
         errorStatus,
+        imageCount,
       } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
+        imageCount?: number;
       };
+      // 视觉桥用户提示（正在识别 / fallback / 不可用）：toast 展示，完全不改 turn 状态
+      // （不设 recoverableError、不阻断开流），零阻断。用 isVisionBridgeReason 三重校验
+      // （source==='vision-bridge' + isTerminal:false + reason 枚举）——普通 agent / 远程
+      // 转发的同名 reason error 不通过校验，继续走普通 error 处理（不吞真实错误）。
+      if (isVisionBridgeReason(event)) {
+        if (reason === 'vision-bridge-recognizing') {
+          const count = typeof imageCount === 'number' && imageCount > 0 ? imageCount : 1;
+          // 先清旧 id 再存新：连续 recognizing（多图/多 turn）不残留上一张的 loading toast。
+          dismissVisionBridgeToast(event.sessionId);
+          _visionBridgeToastIds.set(
+            event.sessionId,
+            toast.info(i18n.t('chat.visionBridge.analyzing', { count }), { duration: 0 }),
+          );
+          return state;
+        }
+        // fallback / unavailable：识别结束（失败或降级），清掉对应 session 的 loading toast，
+        // 避免「正在识别中」与「已回退」同时挂着。
+        dismissVisionBridgeToast(event.sessionId);
+        if (reason === 'vision-bridge-fallback') {
+          toast.warning(i18n.t('chat.visionBridge.fallback'), { duration: 5000 });
+          return state;
+        }
+        if (reason === 'vision-bridge-unavailable') {
+          toast.warning(i18n.t('chat.visionBridge.unavailable'), { duration: 6000 });
+          return state;
+        }
+      }
       const safeErrMsgRaw = redactSensitiveText(errMsgRaw);
       const safeErrMsg =
         typeof errorStatus === 'number' &&
@@ -4948,6 +5138,9 @@ export function handleStreamEvent(
                 ? i18n.t('logic.errors.codexAutoReviewUnavailable')
                 : decodeRemoteErrorMessage(safeErrMsg);
       const isTerminalError = isTerminalErrorData(event.data);
+      // 终态错误 = turn 收口（含失败）：清掉该 session 的「正在识别图片中」toast，
+      // 避免视觉桥未输出就终结时 loading toast 残留（done/abort/terminal error 兜底）。
+      if (isTerminalError) dismissVisionBridgeToast(event.sessionId);
       if (!isTerminalError) {
         // Codex app-server 的有限重连进度是进行态，不是用户需要处理的错误。
         // 复用 Cindy 自动接管活动行的视觉通道，固定 clientId 原地更新 N/M；
@@ -5097,6 +5290,7 @@ export function handleStreamEvent(
         displayName?: string;
         description?: string;
         suggestions?: unknown[];
+        autoReviewUnavailable?: boolean;
       };
       return {
         ...state,
@@ -5108,6 +5302,7 @@ export function handleStreamEvent(
           displayName: data.displayName,
           description: data.description,
           suggestions: data.suggestions,
+          autoReviewUnavailable: data.autoReviewUnavailable === true,
         },
       };
     }
@@ -5648,7 +5843,7 @@ type MakerEventPayload = {
   event?: {
     type: string;
     data: unknown;
-    source?: 'claude-code' | 'codex' | 'pi';
+    source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
     agentMeta?: Record<string, unknown>;
     turnContinuationId?: number;
   };
@@ -5696,7 +5891,7 @@ type PendingTextDeltaBatch = {
   text: string;
   dataOwner: DataOwnerGeneration;
   ingress: LiveIngressContext;
-  source?: 'claude-code' | 'codex' | 'pi';
+  source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
   persistId?: string;
   agentMeta?: Record<string, unknown>;
 };
@@ -6128,9 +6323,19 @@ export function parsePendingPluginSetup(request: {
   };
 }
 
-function initGlobalListeners(): void {
+interface GlobalListenerOptions {
+  /**
+   * Only the primary renderer owns legacy remote-auth recovery. Auxiliary renderers still
+   * consume the shared event stream, but must not read credentials, restart sessions, resend
+   * messages, or persist a retry failure independently.
+   */
+  ownsRemoteAuthRetry?: boolean;
+}
+
+function initGlobalListeners(options: GlobalListenerOptions = {}): void {
   if (globalListenersInitialized) return; // idempotent for StrictMode / HMR
   globalListenersInitialized = true;
+  const ownsRemoteAuthRetry = options.ownsRemoteAuthRetry !== false;
 
   // ── Maker 主事件流: 一根管子接所有 vendor → maker AgentEvent ──
   // 老链路是 8 个独立 IPC channel; 新链路一个 maker:event 通道,按 event.type 分发。
@@ -6147,6 +6352,13 @@ function initGlobalListeners(): void {
     const persistId = payload.persistId;
     const resolvedContent = payload.resolvedContent;
 
+    // 视觉桥提示只信本机 main 直发：远端（device-link 转发）入站的 source:'vision-bridge'
+    // 事件一律丢弃——source 是 main 合成标记不是防伪签名，已配对远端可伪造；不转发远端
+    // 视觉桥提示（它属于发起会话所在设备的本地 UI 反馈）。
+    if (ingress.remoteDeviceId && isVisionBridgeReason(event)) {
+      return;
+    }
+
     if (isTextDeltaEvent(event)) {
       enqueueTextDeltaPayload(sessionId, event, persistId, ingress);
       return;
@@ -6157,7 +6369,9 @@ function initGlobalListeners(): void {
     // session_id: 老链路是单独 IPC channel, 新链路融进 maker:event (Claude / Codex 同源)
     if (event.type === 'session_id') {
       const sdkSessionId = typeof event.data === 'string' ? event.data : undefined;
-      if (!sdkSessionId) return;
+      // 轮 21-W1 HIGH:与 maker-core 侧同款 fail-closed —— 空串/超长/含控制字符
+      // 的 sessionId 不得写入内存与持久化(resume 权威键被污染会跨会话误路由)。
+      if (!sdkSessionId || sdkSessionId.length > 4096 || /[\r\n\0]/.test(sdkSessionId)) return;
       const current = getOrCreateState(sessionId);
       if (current.sdkSessionId === sdkSessionId) return;
       setState(sessionId, (s) => ({ ...s, sdkSessionId }));
@@ -6204,6 +6418,7 @@ function initGlobalListeners(): void {
       const preSnap = getOrCreateState(sessionId);
       const authRetryCount = preSnap._authRetryCount ?? 0;
       if (
+        ownsRemoteAuthRetry &&
         isAuthError &&
         preSnap.remoteHostId &&
         preSnap.agentKind === 'claude-code' &&
@@ -6325,6 +6540,7 @@ function initGlobalListeners(): void {
       //     是否正在 retry；贸然落库若 retry 成功会留下虚假错误卡，不落库则
       //     等价于旧行为（重启后错误丢失）—— 保守起见不做 deferred。
       if (
+        ownsRemoteAuthRetry &&
         isAuthError &&
         preSnap.remoteHostId &&
         preSnap.agentKind === 'claude-code' &&
@@ -6360,6 +6576,13 @@ function initGlobalListeners(): void {
       );
       // MEM-OPT-1: trim non-active sessions after turn completes
       queueMicrotask(() => _trimMessagesIfNeeded(sessionId));
+    }
+    // 视觉桥用户提示事件（source==='vision-bridge' + reason 枚举 + isTerminal:false）：
+    // 已在 dispatchStreamEventPayload 的 case 'error' 分流为 toast，不进 error-banner /
+    // recoverableError 链路（否则会被误渲染成「SDK error surfaced」错误横幅）。三重校验
+    // 保证不吞真实终态错误、不把普通 agent/远程 error 误当视觉桥提示。
+    if (event.type === 'error' && isVisionBridgeReason(event)) {
+      return;
     }
     if (event.type === 'error') {
       const errData = (event.data as { message?: string; sdkError?: string }) ?? {};
@@ -6491,6 +6714,7 @@ function initGlobalListeners(): void {
     const persistId = payload.persistId;
 
     if (request.kind === 'permission') {
+      const metadata = request.metadata as Record<string, unknown> | undefined;
       const data: CCAgentPermissionRequestPayload = {
         sessionId,
         requestId: request.requestId,
@@ -6500,6 +6724,7 @@ function initGlobalListeners(): void {
         displayName: typeof request.displayName === 'string' ? request.displayName : undefined,
         description: typeof request.description === 'string' ? request.description : undefined,
         suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
+        autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
       };
       setState(sessionId, (s) =>
         handleStreamEvent(s, { sessionId, type: 'permission_request', data }),
@@ -6636,7 +6861,15 @@ function initGlobalListeners(): void {
   };
 
   const handleLiveInteractionRequestRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
-    if (!isCurrentLiveIngress(ingress)) return;
+    if (!isCurrentLiveIngress(ingress)) {
+      const payload = raw as { sessionId?: unknown; request?: { requestId?: unknown; kind?: unknown } } | null;
+      log.warn('dropped stale live interaction request', {
+        sessionId: typeof payload?.sessionId === 'string' ? payload.sessionId : undefined,
+        requestId: typeof payload?.request?.requestId === 'string' ? payload.request.requestId : undefined,
+        kind: typeof payload?.request?.kind === 'string' ? payload.request.kind : undefined,
+      });
+      return;
+    }
     const sessionId = (raw as { sessionId?: unknown } | null)?.sessionId;
     if (typeof sessionId === 'string' && sessionId.length > 0) {
       bumpInteractionReconcileEpoch(sessionId);
@@ -8867,6 +9100,17 @@ function bumpMessagesEpoch(sessionId: string): void {
   _messagesEpoch.set(sessionId, (_messagesEpoch.get(sessionId) ?? 0) + 1);
 }
 
+/**
+ * 作废当前逻辑历史窗口:既让在途分页不能提交回旧窗口,也让下一次挂载重新获得自动
+ * 补载预算。在真正替换当前窗口的路径中,纯内存 trim 是唯一例外——它正是要保留
+ * “这个窗口已经自动补过”的事实,避免切回会话后重复拉同一段历史,所以仍只调用
+ * bumpMessagesEpoch。
+ */
+function invalidateMessageHistoryWindow(sessionId: string): void {
+  bumpMessagesEpoch(sessionId);
+  resetSessionAutomaticHistoryLoadCompletion(sessionId);
+}
+
 function isCurrentHistoryFetch(
   sessionId: string,
   token: number,
@@ -9479,7 +9723,7 @@ function ensureInitialMessages(sessionId: string): void {
 function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean }): void {
   discardPendingTextDelta(sessionId);
   // 代际递增:作废 in-flight 的 loadOlderMessages 追页窗口(见 _messagesEpoch 注释)。
-  bumpMessagesEpoch(sessionId);
+  invalidateMessageHistoryWindow(sessionId);
   invalidateHistoryFetch(sessionId);
   // Drop the in-flight guard so ensureInitialMessages can run again.
   _historyFetchInFlight.delete(sessionId);
@@ -9550,7 +9794,7 @@ function removeMessagesByClientIds(
   invalidateRemoteMessageCache(sessionId);
   discardPendingTextDelta(sessionId);
   // 作废删除提交前发起的历史分页，避免旧页响应把已经清除的行重新 merge 回来。
-  if (options.invalidateHistory !== false) bumpMessagesEpoch(sessionId);
+  if (options.invalidateHistory !== false) invalidateMessageHistoryWindow(sessionId);
   setState(sessionId, (s) => {
     const removedMessages = s.messages.filter((message) => deletedClientIds.has(message.clientId));
     const messages = s.messages.filter((message) => !deletedClientIds.has(message.clientId));
@@ -9620,7 +9864,7 @@ function dropMessagesFromClientId(sessionId: string, clientId: string): void {
   // 路径,同样必须作废 in-flight 的分页 / 跳转补齐。漏 bump 的后果是它们把 rewind
   // 刚软删掉的行当作有效响应 merge 回渲染层(#676 review)。clientId 不在列表时
   // 也照 bump:代价只是让 in-flight 分页重新取一次,比漏作废安全。
-  bumpMessagesEpoch(sessionId);
+  invalidateMessageHistoryWindow(sessionId);
   setState(sessionId, (s) => {
     const idx = s.messages.findIndex((m) => m.clientId === clientId);
     // 目标已经不在切片里(reload / 重开把它清掉了)也必须放锁:上面 bump 过 epoch,
@@ -9873,12 +10117,10 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
       //
       // historyWindowHasIsland 按"是否保留了晚到的本地行"决定清不清,见下方 lateArrivals。
       const isContiguous = reachedKnownWindow;
-      // 代际 bump 与分页锁释放都**只在重建真正提交后**才做。原先在 setState 之前先 bump:
-      // 一旦更新器里的 isStreaming 守卫(分页期间开始了新 turn)否掉这次重建,窗口没换、
-      // 却已经作废掉一个无关的 in-flight 跳转 / 翻页、还替它放了锁;更晚启动的对账也会
-      // 因为这个白 bump 被当成陈旧丢掉(#676 review codex P1)。setState 是同步的,
-      // 把 bump 挪到它之后不引入任何可观察的中间态。
-      let didRebuild = false;
+      // 代际 bump 与分页锁释放都**只在重建确定提交时**做。不能放在 setState 外面提前 bump:
+      // 更新器里的 isStreaming 守卫可能否掉重建。也不能等 setState 通知完成后才 bump:
+      // MessageStream 要在同一次通知里观察到窗口已失效、重置已挂载的自动补载预算。
+      // updater 同步执行且下面所有早退都已经结束,在 return 新 state 前失效正好满足两边。
       setState(sessionId, (s) => {
         // promise 期间可能已开始新 turn(streaming)→ 放弃本次合并,turn 结束会再触发。
         // force 时(stall 看门狗已确认被控端 not-running)放行:此处 isStreaming 是卡死残留。
@@ -9912,7 +10154,7 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
         // 无缺失且无权威字段变化 → 不换引用(视同已应用)。
         if (messages === s.messages) return s;
         if (isContiguous) return { ...s, messages };
-        didRebuild = true;
+        invalidateMessageHistoryWindow(sessionId);
         const oldestRow = oldestMessageRow(collected, 'newest-first');
         // 保留下来的晚到行是否**可证明**与新窗口连续:
         //  - 比权威窗口最新一行还新 → 就是分页期间的 live push,接在尾部,连续;
@@ -9970,7 +10212,6 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
           historyWindowHasIsland: hasDetachedArrival,
         };
       });
-      if (didRebuild) bumpMessagesEpoch(sessionId);
     } finally {
       // 消息路径的早返 / 异常都要等交互重建落定;交互失败会让 run reject(替换原结果),
       // 语义正确:本代不完成。
@@ -10023,21 +10264,26 @@ function finalizeStuckRemoteTurn(sessionId: string): void {
  */
 const MAX_LOAD_OLDER_PAGES = 10;
 
-function loadOlderMessages(sessionId: string): void {
+/**
+ * 加载并提交更早的历史。返回 true 仅表示当前缓存窗口确实向前推进;
+ * 行首守卫、空页、全程失败、代际作废和提交异常都返回 false。
+ * automatic=true 时只在推进成功后耗尽该缓存窗口的跨 mount 自动补载预算。
+ */
+function loadOlderMessages(sessionId: string, automatic = false): Promise<boolean> {
   const state = getOrCreateState(sessionId);
-  if (state.isLoadingMore || !state.hasMoreMessages) return;
+  if (state.isLoadingMore || !state.hasMoreMessages) return Promise.resolve(false);
 
   let firstPageOpts: { limit: number; before?: string; beforeTs?: number };
   if (state.oldestMessageId) {
     firstPageOpts = { limit: 50, before: state.oldestMessageId };
   } else if (state.messages.length > 0) {
     const oldest = state.messages[0];
-    if (!oldest.createdAt) return;
+    if (!oldest.createdAt) return Promise.resolve(false);
     const ts = new Date(oldest.createdAt).getTime();
-    if (!Number.isFinite(ts)) return;
+    if (!Number.isFinite(ts)) return Promise.resolve(false);
     firstPageOpts = { limit: 50, beforeTs: ts };
   } else {
-    return;
+    return Promise.resolve(false);
   }
 
   setState(sessionId, (s) => ({ ...s, isLoadingMore: true }));
@@ -10049,7 +10295,7 @@ function loadOlderMessages(sessionId: string): void {
   // 远程会话(device-link)往上翻页加载更多历史:会话与消息只在被控端,必须走 origin-aware
   // 的 listMessagesFor(本地会话回落 messageService.list),否则查控制端空库 → 旧历史加载为空。
   // 与初始加载 / backfill(本文件其余处)保持一致。
-  void (async () => {
+  return (async () => {
     try {
       const collected: Message[] = [];
       // 跨页按 clientId 去重:mergeMessages 只对"新批 vs 已有"去重,不去重批内
@@ -10096,7 +10342,7 @@ function loadOlderMessages(sessionId: string): void {
       // 重置之后,新代际很可能已经开始自己的分页并重新置了锁 —— 这里再无条件清一次,
       // 就是把别人的锁放掉,让后续滚动 / 跳转并发去抢同一个游标,重新制造游标回退与
       // 重复分页(#676 review)。谁重置谁释放,被作废的请求一律不碰。
-      if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return;
+      if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return false;
 
       if (collected.length === 0) {
         setState(sessionId, (s) => ({
@@ -10105,17 +10351,28 @@ function loadOlderMessages(sessionId: string): void {
           hasMoreMessages: hasMore ? s.hasMoreMessages : false,
           isLoadingMore: false,
         }));
-        return;
+        return false;
       }
 
       const mapped = mapServerMessages(collected);
-      setState(sessionId, (s) => ({
-        ...s,
-        messages: mergeMessages(mapped, s.messages, {}, 'newest-first'),
-        oldestMessageId: oldestId ?? s.oldestMessageId,
-        hasMoreMessages: hasMore,
-        isLoadingMore: false,
-      }));
+      let didAdvanceWindow = false;
+      setState(sessionId, (s) => {
+        const messages = mergeMessages(mapped, s.messages, {}, 'newest-first');
+        const nextOldestMessageId = oldestId ?? s.oldestMessageId;
+        didAdvanceWindow =
+          messages.length > s.messages.length || nextOldestMessageId !== s.oldestMessageId;
+        return {
+          ...s,
+          messages,
+          oldestMessageId: nextOldestMessageId,
+          hasMoreMessages: hasMore,
+          isLoadingMore: false,
+        };
+      });
+      if (didAdvanceWindow && automatic) {
+        markSessionAutomaticHistoryLoadCompleted(sessionId);
+      }
+      return didAdvanceWindow;
     } catch (err) {
       // map/merge/commit 阶段兜底(subagent review P1):任何异常都必须复位
       // isLoadingMore,否则行首守卫会让该会话永久无法再翻页(spinner 卡死)。
@@ -10128,6 +10385,7 @@ function loadOlderMessages(sessionId: string): void {
       if ((_messagesEpoch.get(sessionId) ?? 0) === epochAtStart) {
         setState(sessionId, (s) => ({ ...s, isLoadingMore: false }));
       }
+      return false;
     }
   })();
 }
@@ -10863,10 +11121,44 @@ function setQueueExpanded(sessionId: string, expanded: boolean): void {
 
 function resumeQueue(sessionId: string): void {
   if (!sessionId) return;
+  // #2194 (Codex review P2): 暂停队列的「继续」是本端点击意图——恢复后 drain
+  // 派发的队首项落库时会作为新尾部 user 行出现，不登记则门控误判为外部注入，
+  // 续跑在屏幕外开始（队列可能来自上一次 renderer 生命周期或外部入口）。
+  // 点击时刻快照队首。main 的 resume 在返回 projection 前就会 emit 并
+  // scheduleDrain，快的恢复队列上队首行可能抢在回执回调前落库、被基线化为
+  // 外部（Codex review P2）：点击意图在点击时刻已确定，先登记，回执确认未
+  // 生效（仍 paused / 队首已不在队列）或 IPC 失败再回滚（会话已 purge 时
+  // 回滚为 no-op，不会复活条目）。
+  const preResumeState = sessions.get(sessionId);
+  const preResumeHeadClientId =
+    preResumeState?.queuePaused === true
+      ? (preResumeState.pendingQueue[0]?.clientId ?? null)
+      : null;
+  if (preResumeHeadClientId) {
+    markLocalSentUserMessage(sessionId, preResumeHeadClientId);
+  }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.resume(sessionId, boundaryOpts) : input.resume(sessionId),
-  ).catch((err) => log.warn('resumeQueue failed:', err));
+  )
+    .then(({ projection }) => {
+      if (
+        preResumeHeadClientId &&
+        !(
+          sessions.has(sessionId) &&
+          projection.queuePaused === false &&
+          projection.pendingQueue.some((item) => item.clientId === preResumeHeadClientId)
+        )
+      ) {
+        unmarkLocalSentUserMessage(sessionId, preResumeHeadClientId);
+      }
+    })
+    .catch((err) => {
+      if (preResumeHeadClientId) {
+        unmarkLocalSentUserMessage(sessionId, preResumeHeadClientId);
+      }
+      log.warn('resumeQueue failed:', err);
+    });
 }
 
 function setQueueInteractionLock(sessionId: string, lockId: string, locked: boolean): void {
@@ -11350,6 +11642,10 @@ async function sendMessageCore(
     opts,
     identity,
   );
+  // #2194: 登记本端发送——MessageStream 的强 pin 只认这个集合，外部入口
+  // （IM / 手机端 / 定时任务）注入的 user 消息不抢视口。后续路径 return false
+  // （如 beforeEnqueue 回滚）会留下一个永不渲染的 id，无害。
+  markLocalSentUserMessage(sessionId, queued.clientId);
 
   const deviceLinkRemote = remoteScopeAtStart !== null;
   const remoteRecord = remoteScopeAtStart
@@ -11734,6 +12030,8 @@ async function steerMessageCore(
     opts,
     identity,
   );
+  // #2194: 与 sendMessageCore 相同——本端 steer 也是明确的本地发送意图。
+  markLocalSentUserMessage(sessionId, queued.clientId);
   const deviceLinkRemote = remoteScopeAtStart !== null;
   const remoteDeviceId = remoteScopeAtStart?.deviceId;
   const remoteRecord = remoteScopeAtStart
@@ -11970,17 +12268,24 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
   return withAgentSendDispatch(
     sessionId,
     () => Promise.resolve(false),
-    () =>
-      steerApi.input
+    () => {
+      // #2194 (Codex review P1): main 的 steer 在返回成功**之前**就
+      // persistAcceptedUserMessage，onCreated 推送可能抢在回执登记前把该行
+      // 基线化为外部消息——校验通过后、IPC 之前先登记，确定失败再回滚
+      // （unmark 不会复活已 purge 会话的条目）。
+      markLocalSentUserMessage(sessionId, clientId);
+      return steerApi.input
         .steer(sessionId, queued, {
           removeFromQueue: true,
           ...getRemoteInputClearBoundaryOpts(sessionId),
         })
         .then((ok) => {
+          if (!ok) unmarkLocalSentUserMessage(sessionId, clientId);
           requestInputProjection(sessionId);
           return ok;
         })
         .catch((err) => {
+          unmarkLocalSentUserMessage(sessionId, clientId);
           // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
           // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
           const message = decodeRemoteErrorMessage(
@@ -11994,7 +12299,8 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
             errorRetryText: null,
           }));
           return false;
-        }),
+        });
+    },
   );
 }
 
@@ -12018,6 +12324,9 @@ function stopSession(
   },
 ): void {
   if (!sessionId) return;
+  // Stop/abort 乐观终态：立即清掉该 session 的「正在识别图片中」toast，
+  // 否则 duration:0 的 loading toast 会残留到下一次同 session 输出才消失。
+  dismissVisionBridgeToast(sessionId);
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
   // Stop 的乐观终态必须立即作废此前同源查询与旧操作；不能等响应回来，
   // 否则旧结果会在 abort 往返期间把刚清掉的 owner 重新写回。先推进再捕获，
@@ -12176,10 +12485,106 @@ function retryLastError(sessionId: string): Promise<void> {
   // renderer 不传文案、不做判定。
   // retryLastError 在 main 内会先 await 历史查询再入队，必须从点击时刻起占住与
   // Agent 切换共享的发送 token；否则后点的切换能越过这段查询，让重试改由新 Agent 执行。
+  // #2194 (review P1): 人工 Retry 是本地意图，但重试项由 main 在
+  // performRetryLastError 以**新 clientId** 生成，发送侧登记不到。权威归属：
+  // 人工 retry 的零产出克隆项自带 `supersedesUserClientId`（仅 manual 非 auto
+  // 路径设置，见 agent-input-coordinator.ts），直接按字段辨认——不猜队首差分
+  // （异步窗口内可能混入外部入队）、不做文本猜测（维护者口径，#2222）。
+  // 有产出分支的隐藏续跑指令由 main 显式清掉 supersedes 字段，但它同样是本次
+  // 点击的产物：按 `originalSyntheticTrigger === 'continue'` 且非 autoResume
+  // 辨认（auto 自动续跑不是用户动作，不标记；Codex review P1）。
+  // queue-head（派发前失败）分支 main 原样重发**既有队首项**——没有新
+  // clientId、没有 supersedesUserClientId。以点击时刻镜像的 inputRecovery
+  // （projection 线上自带字段）取权威 clientId；重载后内存标记丢失时，续跑
+  // 落库的新行仍能识别为本端意图（Codex review P2）。
+  const preRetryRecovery = sessions.get(sessionId)?.inputRecovery ?? null;
+  const preRetryQueueHeadClientId =
+    preRetryRecovery?.kind === 'queue-head' ? preRetryRecovery.clientId : null;
+  // 点击时刻的队列快照：回执里只登记**新出现**的项。点击前就在队列里的外部
+  // 入队项（例如被 main 按文本标记 originalSyntheticTrigger='continue' 的
+  // 外部项）不属于本次点击的产物，不能误认（Greptile review P1）。
+  const preRetryQueueIds = new Set(
+    (sessions.get(sessionId)?.pendingQueue ?? []).map((item) => item.clientId),
+  );
+  // active-turn 重试的产物 clientId 由 main 生成、点击时刻未知，而 main 的
+  // scheduleDrain（queueMicrotask）可能抢在 IPC 回执前把产物行落库——但
+  // main 的 emit 先于 scheduleDrain，投影事件更早。记下一次性意图（含点击
+  // 时刻队列快照），applyInputProjection 凭意图同步认领（Codex review P1）；
+  // 回执 settle 时清理。queue-head 分支不产生新项，走下面的 id 预登记。
+  if (preRetryRecovery?.kind === 'active-turn') {
+    pendingLocalRetryIntents.set(sessionId, { queueIds: preRetryQueueIds });
+  }
+  // queue-head 重试的 clientId 点击时刻已知，但 main 的 scheduleDrain 经
+  // queueMicrotask 在返回 projection 前就会跑，重发的队首行可能抢在回执
+  // 回调前落库、被基线化为外部（Codex review P2）：先预登记，回执确认未
+  // 生效或 IPC 失败再回滚（会话已 purge 时回滚为 no-op）。
+  if (preRetryQueueHeadClientId) {
+    markLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
+  }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
     boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
-  ).then(() => undefined);
+  ).then(
+    ({ projection }) => {
+      // 一次性意图的兜底清理：正常路径下 applyInputProjection 已凭意图认领
+      // 并消费；未消费时（投影 stale 被丢 / 顺序异常）回执扫描仍是 fallback。
+      pendingLocalRetryIntents.delete(sessionId);
+      // 扫**回执自带的投影快照**而非当前 state：回执由 main 在 scheduleDrain 之前
+      // 同步生成（agent-input-coordinator.ts performRetryLastError 末尾），必然含
+      // 本次克隆；drain 可能抢在本回调前消费克隆并推送新投影覆盖 state
+      // （Greptile review P1），那时扫 state.pendingQueue 会漏记。
+      // 会话在 retry settle 前被 purge 时不登记——否则会把 localSentUserMessageIds
+      // 条目重新创建出来（泄漏 + 同 id 会话重建后旧标记复活，Copilot review nit）。
+      // purge 本身会清掉预登记，这里直接返回即可。
+      if (!sessions.has(sessionId)) return;
+      // 本次 retry 生效（outcome 'resumed'）时 main 在 unshift 前同步清掉
+      // error / recovery，回执必然双空；superseded / no-op 时 recovery 原样
+      // 保留，回执里根本没有本次点击的产物——并发出现在队首的外部 continue
+      // 项不得误认（Greptile review P1）。
+      const retryTookEffect = projection.error === null && projection.recovery === null;
+      if (retryTookEffect) {
+        for (const item of projection.pendingQueue) {
+          if (preRetryQueueIds.has(item.clientId)) continue;
+          if (item.supersedesUserClientId) {
+            markLocalSentUserMessage(sessionId, item.clientId);
+          } else if (
+            item.originalSyntheticTrigger === 'continue' &&
+            item.autoResume !== true &&
+            projection.pendingQueue[0]?.clientId === item.clientId
+          ) {
+            // 有产出人工 retry 的隐藏续跑指令：合成行渲染 null，不登记则续跑产出
+            // 在屏幕外开始（Codex review P1）。auto 自动续跑不标记。
+            // 还须是回执队首：retry 生效时 main 把本次续跑指令 unshift 到队首，
+            // 且 unshift → getProjection 之间无 await（同步），队首必然是本次
+            // 产物；并发的外部入队项只会被压在下面（Greptile review P1）。
+            markLocalSentUserMessage(sessionId, item.clientId);
+          }
+        }
+      }
+      // queue-head 重试的预登记确认：仅当回执确认本次重试生效（error 清空且
+      // recovery 已清）且**队首项仍在回执队列**（被本次 retry 重新武装，main
+      // 同步 getProjection 先于 drain）才保留；若已被并发 drain 消费派发
+      // （不在队列）或本次 retry 实为 superseded / no-op，回滚预登记——留着
+      // 会让该外部行落库时误触发强制回底（Greptile review P1）。
+      if (
+        preRetryQueueHeadClientId &&
+        !(
+          retryTookEffect &&
+          projection.pendingQueue.some((item) => item.clientId === preRetryQueueHeadClientId)
+        )
+      ) {
+        unmarkLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
+      }
+    },
+    (err) => {
+      // IPC 失败：本次点击没有产生任何效果，清意图 + 回滚 queue-head 预登记。
+      pendingLocalRetryIntents.delete(sessionId);
+      if (preRetryQueueHeadClientId) {
+        unmarkLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
+      }
+      throw err;
+    },
+  );
 }
 
 /**
@@ -12274,6 +12679,8 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
 }
 
 async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string): Promise<void> {
+  // /clear 清空会话：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   // Pin the clear lifecycle to the last known device before any await. The
   // mirror is intentionally cleared below, so live origin lookup is no longer
   // reliable for either clearSession or closeSession.
@@ -12282,7 +12689,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
   // Invalidate old history/projection operations before the first network await.
   // The clear guard itself must be the new authority generation, otherwise an
   // older projection can win the race and reinsert pre-clear queue state.
-  bumpMessagesEpoch(sessionId);
+  invalidateMessageHistoryWindow(sessionId);
   bumpInteractionReconcileEpoch(sessionId);
   supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
   if (remoteDeviceId) {
@@ -13143,12 +13550,23 @@ async function setPlanMode(sessionId: string, enabled: boolean): Promise<void> {
       ? s
       : { ...s, planModeEnabled: enabled, planModeRev: s.planModeRev + 1 },
   );
+  // 轮 40-w4-t17 HIGH-1:runtime setPlanMode 失败必须 fail-closed —— 旧实现只
+  // catch 记日志, 继续持久化 DB, UI/DB 显示已开启但 PI runtime 实际未进入
+  // plan mode(状态分叉, 下一条消息以普通模式执行)。
   const runtimePush = window.electronAPI.maker
     .setPlanMode(sessionId, enabled)
     .catch((err: unknown) => {
-      log.warn('setPlanMode IPC failed:', err);
+      // 回滚乐观值, 不持久化, UI 不谎报。
+      setState(sessionId, (s) =>
+        s.planModeEnabled === enabled
+          ? { ...s, planModeEnabled: previous, planModeRev: s.planModeRev + 1 }
+          : s,
+      );
+      log.warn('setPlanMode runtime push failed — plan mode not applied', err);
+      throw err;
     });
   try {
+    await runtimePush;
     await sessionService.update(sessionId, { planModeEnabled: enabled });
   } catch (err) {
     // 持久化失败 → 回滚乐观值(store + runtime 尽力), UI 不谎报已开启。
@@ -13271,6 +13689,8 @@ function setAskUserDraft(sessionId: string, next: AskUserDraft | null): void {
  */
 function closeSessionQuery(sessionId: string): void {
   if (!sessionId) return;
+  // 会话关闭：清掉该 session 的「正在识别图片中」toast，防残留。
+  dismissVisionBridgeToast(sessionId);
   makerApiFor(sessionId)
     .closeSession(sessionId)
     .catch((err) => log.warn('maker.closeSession failed:', err));
@@ -13399,6 +13819,12 @@ function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
         // 远端 SSH 会话:重启后 lazy-create 缺它会把远端 workingDir 当本地路径。
         ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
       };
+      // #2194 (Codex review P1): 本地 UI 触发器（silent-stop「继续」/ 中断横幅
+      // 「继续任务」/ Mivo 触发）是本端点击意图——合成行虽不渲染气泡，但点击后
+      // 用户要看到续跑产出，必须按本端发送登记以触发强制回底；未读计数对
+      // isSyntheticTrigger 行一律跳过，不会因此产生幻影未读。direct-send 兜底
+      // 分支的 clientId 由执行端生成，renderer 无从登记（行缺失的稀有路径）。
+      markLocalSentUserMessage(sessionId, queued.clientId);
       const operation = beginInputProjectionOperation(sessionId, remoteDeviceId);
       return operation.api.input
         .enqueue(sessionId, queued, { sendAtMs: Date.now() })
@@ -13499,7 +13925,14 @@ function getAgentSwitchIntentRev(sessionId: string): number {
 function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
-  if (item.targetAgentKind !== 'claude-code' && item.targetAgentKind !== 'codex') return null;
+  // 轮 42 P1(codex-connector):pi 遗漏 —— main 的 performSessionAgentSwitch 与
+  // AgentSwitchIntentRecord.target 都支持 'pi', 这里收窄成 cc/codex 会把
+  // 等待下轮的 Pi switch 意图归一化成 null, pending 状态在 renderer 丢失。
+  if (
+    item.targetAgentKind !== 'claude-code'
+    && item.targetAgentKind !== 'codex'
+    && item.targetAgentKind !== 'pi'
+  ) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
   // providerId 缺失按 null(与 main projectPendingAgentSwitchIntent 的 `?? null` 对齐);
   // 只有出现非 string / 非空值的脏值才判非法,避免协议演进时静默丢掉合法意图。
@@ -13696,6 +14129,8 @@ export const makerChatStore = {
   loadAroundMessage,
   loadAroundMessageClientId,
   sendMessage,
+  /** #2194: MessageStream 强 pin 门控——区分本端发送与外部注入的 user 消息。 */
+  isLocalSentUserMessage,
   beginRemoteOptimisticComposerTransition,
   cancelRemoteOptimisticSendsForDataOwnerBoundary,
   // /goal 从首页新建的会话不经普通发送路径,自动起名漏触发 —— 暴露此动作让调用方用目标文案补起名。
@@ -14299,14 +14734,17 @@ function isHiddenThinkingRow(m: Message): boolean {
 /**
  * 该服务端行**渲染后不会留下可见锚点**(初始页全是这类行时必须继续往前翻页)。
  *
- * 四类:
+ * 五类:
  *   - `tool_result`:配对的 tool_use 父消息可能在更老的页里,MessageStream 会丢弃 orphan;
  *   - 被 `isHiddenThinkingRow` 过滤掉的行:直接不进渲染列表;
  *   - 计划工具调用:MessageStream 会吞掉,只更新 composer 上方的计划胶囊;
  *   - 合成指令行(`isSyntheticTriggerRow`):MessageStream 渲染 null、content 置空,
  *     与 `loadOlderMessages` 的可见锚点判定同口径(见该处「合成指令行渲染 null,不算可见
  *     锚点」)。少了这一类,一页里只要混进一条合成 user 行就会被当成锚点提前停止回填,
- *     而它映射后同样不产生可见内容 —— 症状与完全不回填一样。
+ *     而它映射后同样不产生可见内容 —— 症状与完全不回填一样;
+ *   - 子代理内部行(`isSubagentInternalHistoryRow`):`buildRenderItems` 在入口整体剔除,
+ *     一条都不进渲染列表。子代理密集的会话最新一页可能**全部**是这类行(实测本机库里
+ *     单会话可达上万条),漏登记就会重现上面那种「DB 里有几千条、重开渲染 0 项」的症状。
  *
  * 任何组合占满整页,都会让映射结果为空,而 MessageStream 在 `visibleRenderItems.length === 0`
  * 时不触发自动翻页 —— 结果是 DB 里有几千条消息、重开会话却渲染 0 项,更老的用户/助手消息
@@ -14317,8 +14755,20 @@ function isNonAnchorHistoryRow(m: Message): boolean {
     m.role === 'tool_result' ||
     isHiddenThinkingRow(m) ||
     isAgentPlanHistoryToolUseRow(m) ||
-    isSyntheticTriggerRow(m)
+    isSyntheticTriggerRow(m) ||
+    isSubagentInternalHistoryRow(m)
   );
+}
+
+/**
+ * 服务端行是子代理内部消息(`buildRenderItems` 会整体剔除,见该处 Pass -1)。
+ *
+ * 判据与渲染侧共用同一个形态函数:只认 SDK tool-parent 形态,legacy Claude 导入存在
+ * 同一字段上的普通 transcript 链边不算 —— 否则父会话自己的正文会被当成无锚点行。
+ */
+function isSubagentInternalHistoryRow(m: Message): boolean {
+  const parent = m.agentMeta?.parentUuid;
+  return typeof parent === 'string' && parent.length > 0 && isSubagentParentToolUseId(parent);
 }
 
 function isAgentPlanHistoryToolUseRow(m: Message): boolean {
@@ -14380,7 +14830,12 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(typeof m.agentMeta?.model === 'string' && m.agentMeta.model
           ? { model: m.agentMeta.model }
           : {}),
-        ...(typeof m.agentMeta?.parentUuid === 'string' && m.agentMeta.parentUuid
+        // 只提升 SDK tool-parent 形态(toolu_ / call_):legacy Claude 导入把
+        // transcript 链边(preceding-user-uuid 这类非 RFC 串)也存在 parentUuid 上,
+        // 无条件提升会让顶层计划行被判成子代理、普通 user 行被当成合成边界,而
+        // 保留裸字段的 mobile / main 不会——同一份历史两端分组分叉(review P2)。
+        ...(typeof m.agentMeta?.parentUuid === 'string' &&
+        isSubagentParentToolUseId(m.agentMeta.parentUuid)
           ? { parentToolUseId: m.agentMeta.parentUuid }
           : {}),
       };
@@ -14460,7 +14915,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(typeof m.agentMeta?.model === 'string' && m.agentMeta.model
           ? { model: m.agentMeta.model }
           : {}),
-        ...(typeof m.agentMeta?.parentUuid === 'string' && m.agentMeta.parentUuid
+        ...(typeof m.agentMeta?.parentUuid === 'string' &&
+        isSubagentParentToolUseId(m.agentMeta.parentUuid)
           ? { parentToolUseId: m.agentMeta.parentUuid }
           : {}),
       };
@@ -14634,6 +15090,16 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(delivery === 'turn' || delivery === 'steer' ? { delivery } : {}),
         ...(goalObjective ? { goalBadge: goalObjective } : {}),
         ...(hookSource ? { hookSource } : {}),
+        // 子代理内部的 user 行(SDK parent_tool_use_id):投影给计划归属判定,
+        // 否则 maker-shared 会把它当成"用户开新话题"切断主线程计划 session。
+        // 只提升 SDK tool-parent 形态:legacy Claude 导入把 transcript 链边
+        // (preceding-user-uuid 这类非 RFC 串)也存在 parentUuid 上,无条件提升会
+        // 反过来把**普通 user 行**当成子代理内部消息,新计划继续复用旧 session/key、
+        // 跨话题合并计划卡(review P1)。
+        ...(typeof m.agentMeta?.parentUuid === 'string' &&
+        isSubagentParentToolUseId(m.agentMeta.parentUuid)
+          ? { parentToolUseId: m.agentMeta.parentUuid }
+          : {}),
       };
     }
     // /goal 达成记录:持久消息(role:'assistant' + 空 content + agentMeta.goalCompletion)
@@ -14769,7 +15235,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...(typeof m.agentMeta?.model === 'string' && m.agentMeta.model
         ? { model: m.agentMeta.model }
         : {}),
-      ...(typeof m.agentMeta?.parentUuid === 'string' && m.agentMeta.parentUuid
+      ...(typeof m.agentMeta?.parentUuid === 'string' &&
+      isSubagentParentToolUseId(m.agentMeta.parentUuid)
         ? { parentToolUseId: m.agentMeta.parentUuid }
         : {}),
       isStreaming: false,

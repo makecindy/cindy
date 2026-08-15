@@ -230,6 +230,9 @@ export default {
     // UNIT_POOL_DEFAULT above).
     requiredUnitWorkspace('@cindy/maker-core', 'packages/maker-core', { pool: 'forks' }),
     requiredUnitWorkspace('@cindy/maker-remote-ssh', 'packages/maker-remote-ssh'),
+    // 轮 42:新包 maker-pi-manager(TS 单例 pi daemon)已随 SSH remote 交付;
+    // 漏登记会让 test-workspaces 的 manifest 覆盖校验失败(全量门禁拒跑)。
+    requiredUnitWorkspace('@cindy/maker-pi-manager', 'packages/maker-pi-manager'),
     requiredUnitWorkspace('@cindy/maker-scheduler', 'packages/maker-scheduler'),
     requiredUnitWorkspace('@cindy/maker-shared', 'packages/maker-shared'),
     requiredUnitWorkspace('@cindy/model-providers', 'packages/model-providers'),
@@ -249,9 +252,8 @@ export default {
     requiredUnitWorkspace('@cindy/remote-file-service', 'packages/remote-file-service'),
     requiredUnitWorkspace('@cindy/voice-input-core', 'packages/voice-input-core'),
     requiredUnitWorkspace('@cindy/wechat-ilink', 'packages/wechat-ilink'),
-    noCollectableWorkspace('@cindy/device-link-protocol', 'cindy-protocol/packages/device-link-protocol'),
-    requiredUnitWorkspace('@cindy/model-access-protocol', 'cindy-protocol/packages/model-access-protocol'),
-    requiredUnitWorkspace('@cindy/plugin-protocol', 'cindy-protocol/packages/plugin-protocol'),
-    requiredUnitWorkspace('@cindy/slack-hook-protocol', 'cindy-protocol/packages/slack-hook-protocol'),
+    noCollectableWorkspace('@cindy/device-link-protocol', 'packages/device-link-protocol'),
+    requiredUnitWorkspace('@cindy/plugin-protocol', 'packages/plugin-protocol'),
+    requiredUnitWorkspace('@cindy/slack-hook-protocol', 'packages/slack-hook-protocol'),
   ],
 };

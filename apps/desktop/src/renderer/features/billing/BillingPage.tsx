@@ -84,6 +84,7 @@ type CurrentPlanFacts = {
   includedCredits: string | null;
   periodEndAt: string | null;
   cancelAtPeriodEnd: boolean;
+  resumable: boolean;
 };
 
 const SUPPORTED_BILLING_PROVIDERS = new Set<SupportedBillingProvider>(['alipay', 'stripe']);
@@ -319,6 +320,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const [loadingSubscription, setLoadingSubscription] = useState(true);
   const [subscriptionError, setSubscriptionError] = useState(false);
   const [cancelingSubscription, setCancelingSubscription] = useState(false);
+  const [resumingSubscription, setResumingSubscription] = useState(false);
   const [openingSubscriptionPortal, setOpeningSubscriptionPortal] = useState(false);
   const [creditUsage, setCreditUsage] = useState<ModelAccessCreditUsage | null>(null);
   const [balance, setBalance] = useState<ModelAccessBalance | null>(null);
@@ -339,6 +341,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const checkout = useBillingCheckout(accountId);
   const previousCheckoutPhaseRef = useRef(checkout.state.phase);
   const cancelSubscriptionLockRef = useRef(false);
+  const resumeSubscriptionLockRef = useRef(false);
   const subscriptionPortalLockRef = useRef(false);
   const subscriptionPortalRefreshPendingRef = useRef(false);
   // 取消订阅的 DELETE 不带 subscriptionId,服务端按「请求时已认证的账号」执行。
@@ -746,6 +749,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         : null,
       periodEndAt: formatBillingDate(currentSubscription.currentPeriodEndAt, billingLocale),
       cancelAtPeriodEnd: currentSubscription.cancelAtPeriodEnd,
+      resumable: currentSubscription.resumable === true,
     };
   }, [billingLocale, currentSubscription, planNameOf, t]);
 
@@ -796,7 +800,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       });
       if (!confirmed) return;
       // 确认期间账号被换掉(或本 section 已卸载)就放弃:再发请求会取消到另一个账号
-      // 的订阅,而取消不可撤销。
+      // 的订阅状态。
       if (!sectionMountedRef.current || accountIdRef.current !== confirmingAccountId) return;
 
       setCancelingSubscription(true);
@@ -824,6 +828,53 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       cancelSubscriptionLockRef.current = false;
     }
   }, [billingLocale, confirm, currentPlanFacts?.periodEndAt, currentSubscription, t]);
+
+  const resumeCurrentSubscription = useCallback(async () => {
+    if (
+      resumeSubscriptionLockRef.current ||
+      !currentSubscription ||
+      !currentSubscription.cancelAtPeriodEnd ||
+      currentSubscription.resumable !== true
+    ) {
+      return;
+    }
+    resumeSubscriptionLockRef.current = true;
+    try {
+      const confirmingAccountId = accountIdRef.current;
+      const confirmed = await confirm({
+        title: t('billing.settings.subscriptionCard.resumeConfirmTitle'),
+        description: t('billing.settings.subscriptionCard.resumeConfirmDescription'),
+        confirmText: t('billing.settings.subscriptionCard.resumeConfirmAction'),
+        cancelText: t('commonUi.confirmDialog.cancel'),
+      });
+      if (!confirmed) return;
+      // 确认期间账号被换掉(或本 section 已卸载)就放弃:恢复会作用到另一个账号的订阅。
+      if (!sectionMountedRef.current || accountIdRef.current !== confirmingAccountId) return;
+
+      setResumingSubscription(true);
+      try {
+        const resumed = await billingApi.resumeCurrentSubscription();
+        setCurrentSubscription(resumed);
+        setSubscriptionError(false);
+        toast.success(t('billing.settings.subscriptionCard.resumeSuccess'));
+      } catch (error) {
+        const ipcError = extractIpcError(error);
+        if (ipcError?.code === 'RESUME_NOT_AVAILABLE') {
+          // 服务端已否定当前投影，立即重拉，避免继续展示过期的恢复入口。
+          void loadSubscription();
+        }
+        toast.error(
+          ipcError?.code === 'RESUME_NOT_AVAILABLE'
+            ? t('billing.settings.subscriptionCard.resumeNotAvailable')
+            : t('billing.settings.subscriptionCard.resumeFailed'),
+        );
+      } finally {
+        setResumingSubscription(false);
+      }
+    } finally {
+      resumeSubscriptionLockRef.current = false;
+    }
+  }, [confirm, currentSubscription, loadSubscription, t]);
 
   // The server quote remains authoritative for business reachability. Until
   // that contract supports cross-interval/provider changes, keep those two
@@ -974,6 +1025,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               loadingSubscription ||
               loadingBalance ||
               cancelingSubscription ||
+              resumingSubscription ||
               openingSubscriptionPortal
             }
             className="inline-flex h-8 shrink-0 items-center gap-2 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:opacity-45"
@@ -996,16 +1048,19 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               showPlanChangeEntry={showPlanChangeEntry}
               showPortalEntry={currentSubscription?.provider === 'stripe'}
               canceling={cancelingSubscription}
+              resuming={resumingSubscription}
               openingPortal={openingSubscriptionPortal}
               actionDisabled={
                 loadingSubscription ||
                 subscriptionError ||
                 cancelingSubscription ||
+                resumingSubscription ||
                 openingSubscriptionPortal
               }
               pendingPlanChange={pendingPlanChange}
               pendingTargetName={planNameOf(pendingPlanChange?.targetPlan?.product.code)}
               onCancelSubscription={() => void cancelCurrentSubscription()}
+              onResumeSubscription={() => void resumeCurrentSubscription()}
               onOpenPortal={() => void openSubscriptionPortal()}
               onChangePlan={openPlanChange}
               onPurchase={() => openPurchaseDialog('SUBSCRIPTION')}
@@ -1089,6 +1144,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         amountError={amountError}
         subscriptionPurchaseBlocked={subscriptionPurchaseBlocked}
         currentSubscriptionOfferCode={currentSubscriptionOfferCode}
+        subscriptionCancelAtPeriodEnd={currentSubscription?.cancelAtPeriodEnd ?? false}
+        subscriptionPeriodEndAt={currentSubscription?.currentPeriodEndAt ?? null}
         canCheckout={canCheckout}
         onClose={closeSubscriptionDialog}
         onRetry={() => void loadBillingState()}
@@ -1113,6 +1170,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         amountError={amountError}
         subscriptionPurchaseBlocked={false}
         currentSubscriptionOfferCode={null}
+        subscriptionCancelAtPeriodEnd={false}
+        subscriptionPeriodEndAt={null}
         canCheckout={canCheckout}
         onClose={closeTopupDialog}
         onRetry={() => void loadBillingState()}
@@ -1161,11 +1220,13 @@ function SubscriptionOverviewCard({
   showPlanChangeEntry,
   showPortalEntry,
   canceling,
+  resuming,
   openingPortal,
   actionDisabled,
   pendingPlanChange,
   pendingTargetName,
   onCancelSubscription,
+  onResumeSubscription,
   onOpenPortal,
   onChangePlan,
   onPurchase,
@@ -1177,11 +1238,13 @@ function SubscriptionOverviewCard({
   showPlanChangeEntry: boolean;
   showPortalEntry: boolean;
   canceling: boolean;
+  resuming: boolean;
   openingPortal: boolean;
   actionDisabled: boolean;
   pendingPlanChange: BillingPendingPlanChange | null;
   pendingTargetName: string | null;
   onCancelSubscription: () => void;
+  onResumeSubscription: () => void;
   onOpenPortal: () => void;
   onChangePlan: () => void;
   onPurchase: () => void;
@@ -1264,7 +1327,7 @@ function SubscriptionOverviewCard({
                   className="group inline-flex h-8 min-w-[9.5rem] select-none items-center justify-center gap-1.5 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] data-[state=open]:bg-[var(--surface-chip)] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {t('billing.settings.subscriptionCard.manageAction')}
-                  {canceling || openingPortal ? (
+                  {canceling || resuming || openingPortal ? (
                     <Spinner size={13} />
                   ) : (
                     <ChevronDown
@@ -1317,6 +1380,22 @@ function SubscriptionOverviewCard({
                       </DropdownMenuItem>
                     </>
                   )}
+                {facts.cancelAtPeriodEnd && facts.resumable && (
+                  <>
+                    <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                    <DropdownMenuItem
+                      onSelect={onResumeSubscription}
+                      disabled={actionDisabled}
+                      className="h-9 rounded-lg px-3 text-12 focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)]"
+                    >
+                      {resuming ? (
+                        <Spinner size={13} />
+                      ) : (
+                        t('billing.settings.subscriptionCard.resumeAction')
+                      )}
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
@@ -1774,6 +1853,8 @@ function BillingOfferDialog({
   amountError,
   subscriptionPurchaseBlocked,
   currentSubscriptionOfferCode,
+  subscriptionCancelAtPeriodEnd,
+  subscriptionPeriodEndAt,
   canCheckout,
   onClose,
   onRetry,
@@ -1796,6 +1877,8 @@ function BillingOfferDialog({
   amountError: string | null;
   subscriptionPurchaseBlocked: boolean;
   currentSubscriptionOfferCode: string | null;
+  subscriptionCancelAtPeriodEnd: boolean;
+  subscriptionPeriodEndAt: string | null;
   canCheckout: boolean;
   onClose: () => void;
   onRetry: () => void;
@@ -1807,6 +1890,10 @@ function BillingOfferDialog({
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const formattedSubscriptionPeriodEndAt = formatBillingDate(
+    subscriptionPeriodEndAt,
+    billingLocale,
+  );
   const title =
     kind === 'SUBSCRIPTION'
       ? t('billing.dialogs.subscription.title')
@@ -2057,7 +2144,11 @@ function BillingOfferDialog({
 
                   {kind === 'SUBSCRIPTION' && selected && subscriptionPurchaseBlocked && (
                     <p className="mt-4 text-12 leading-5 text-[var(--text-secondary)]">
-                      {t('billing.currentSubscription.purchaseBlocked')}
+                      {subscriptionCancelAtPeriodEnd && formattedSubscriptionPeriodEndAt
+                        ? t('billing.currentSubscription.purchaseBlockedUntilPeriodEnd', {
+                            date: formattedSubscriptionPeriodEndAt,
+                          })
+                        : t('billing.currentSubscription.purchaseBlocked')}
                     </p>
                   )}
                 </div>
