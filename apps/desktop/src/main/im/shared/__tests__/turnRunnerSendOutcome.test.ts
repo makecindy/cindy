@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
     patchMarkdownCard: vi.fn(),
     sendInteractiveCard: vi.fn(),
     updateInteractiveCard: vi.fn(),
+    consumePendingOpenerCard: vi.fn(),
   },
   getMaker: vi.fn(),
   listProviders: vi.fn(),
@@ -542,6 +543,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     mocks.feishuIm.removeMessageReaction.mockResolvedValue(undefined);
     mocks.feishuIm.sendText.mockResolvedValue(undefined);
     mocks.feishuIm.sendMarkdownText.mockResolvedValue(undefined);
+    mocks.feishuIm.consumePendingOpenerCard.mockResolvedValue(false);
     mocks.feishuIm.startStreamingText.mockResolvedValue({
       messageId: 'stream-1',
       append: vi.fn(),
@@ -3083,6 +3085,37 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
     h.emit({ type: 'done', data: {}, source: 'claude-code' });
     await waitForAssertion(() => {
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
+        'ou_user',
+        expect.stringContaining('本轮无文本输出'),
+        expect.anything(),
+      );
+    });
+  });
+
+  it('首个文本前 error 就地消费 pending opener, 同话题下一轮无文本不会误认领', async () => {
+    mocks.feishuIm.consumePendingOpenerCard
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnA = vi.fn();
+    await runDefaultTurn(onTurnA);
+    h.emit({ type: 'error', data: { message: 'boom', isTerminal: true } });
+    await waitForAssertion(() => {
+      expect(onTurnA).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.consumePendingOpenerCard).toHaveBeenCalledWith(
+        'ou_user',
+        expect.stringMatching(/❌ 错误：.*boom/),
+      );
+    });
+    expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+
+    const onTurnB = vi.fn();
+    await runDefaultTurn(onTurnB, { userMessageId: 'msg-user-2', text: 'followup' });
+    h.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await waitForAssertion(() => {
+      expect(onTurnB).toHaveBeenCalledTimes(1);
+      expect(mocks.feishuIm.consumePendingOpenerCard).toHaveBeenCalledTimes(2);
       expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
         'ou_user',
         expect.stringContaining('本轮无文本输出'),

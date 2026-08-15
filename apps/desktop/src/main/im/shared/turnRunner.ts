@@ -2967,9 +2967,14 @@ export function createTurnRunner(
             ...(turn && turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          await output.im.sendText(userId, `❌ 错误：${msg}`, {
-            threadTs: state.scopeKey,
-          });
+          const errorText = `❌ 错误：${msg}`;
+          const consumed =
+            (await output.im.consumePendingOpenerCard?.(userId, errorText)) ?? false;
+          if (!consumed) {
+            await output.im.sendText(userId, errorText, {
+              threadTs: state.scopeKey,
+            });
+          }
         }
       } catch {
         /* swallow */

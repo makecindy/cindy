@@ -41,6 +41,18 @@ import type { AttachmentRef } from './incomingContent.js';
 export class FeishuIM extends BaseIM implements ChannelIM {
   /** 重连空窗暂存的开场白卡消费在连接就绪后排空(见 deferOpenerConsume)。 */
   private readonly offImStatus: () => void;
+  /** 串行排空, 避免 connected 与失败重试重叠处理同一条目。 */
+  private flushChain: Promise<void> = Promise.resolve();
+  /** 正在排空的条目: 兜底发送等它结束, 不另发一份相同终态。 */
+  private readonly flushingOpenerConsumes = new Map<
+    string,
+    Promise<{ messageId: string } | null>
+  >();
+  /** 排空已成功、尚未被兜底发送认领的收据(当拍过期, 避免劫持后续无关发送)。 */
+  private readonly completedOpenerConsumes = new Map<string, { messageId: string }>();
+  private readonly completedOpenerConsumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private retryFlushScheduled = false;
+  private disposed = false;
 
   constructor(host: IMHost) {
     super('feishu', host);
@@ -53,17 +65,98 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     this.offImStatus = () => feishuEvents.off('imStatus', onImStatus);
   }
 
-  /** 排空重连空窗暂存的开场白卡消费(claim + patch/替换), 失败只 log。 */
-  private async flushDeferredOpenerConsumes(): Promise<void> {
-    // 排空开始时的 client — 撤回与失败兜底都 pin 到它: 排空期间换账号
-    // 不得经新 client 删除旧账号的开场白。
+  private openerConsumeKey(userId: string, kind: 'markdown' | 'spec'): string {
+    return `${kind}:${userId}`;
+  }
+
+  private rememberCompletedOpenerConsume(key: string, messageId: string): void {
+    this.completedOpenerConsumes.set(key, { messageId });
+    const prev = this.completedOpenerConsumeTimers.get(key);
+    if (prev) clearTimeout(prev);
+    this.completedOpenerConsumeTimers.set(
+      key,
+      setTimeout(() => {
+        this.completedOpenerConsumeTimers.delete(key);
+        this.completedOpenerConsumes.delete(key);
+      }, 0),
+    );
+  }
+
+  private takeCompletedOpenerConsume(
+    userId: string,
+    kind: 'markdown' | 'spec',
+  ): { messageId: string } | undefined {
+    const key = this.openerConsumeKey(userId, kind);
+    const receipt = this.completedOpenerConsumes.get(key);
+    if (!receipt) return undefined;
+    this.completedOpenerConsumes.delete(key);
+    const timer = this.completedOpenerConsumeTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.completedOpenerConsumeTimers.delete(key);
+    }
+    return receipt;
+  }
+
+  /** 当前连接仍在时重新入队后主动再排空, 不坐等下一次 connected。 */
+  private scheduleConnectedFlushRetry(): void {
+    if (this.disposed || this.retryFlushScheduled) return;
+    this.retryFlushScheduled = true;
+    queueMicrotask(() => {
+      this.retryFlushScheduled = false;
+      if (this.disposed || !outbound.getBoundClient()) return;
+      void this.flushDeferredOpenerConsumes();
+    });
+  }
+
+  private flushDeferredOpenerConsumes(): Promise<void> {
+    // drain + 登记在途必须同步: connected 与兜底发送发生在同一轮时,
+    // 发送才能看见正在排空的条目。
+    const batch = this.claimFlushBatch();
+    this.flushChain = this.flushChain.then(
+      () => this.processFlushBatch(batch),
+      () => this.processFlushBatch(batch),
+    );
+    return this.flushChain;
+  }
+
+  private claimFlushBatch(): {
+    pinnedClient: NonNullable<ReturnType<typeof outbound.getBoundClient>>;
+    epoch: number;
+    evicted: string[];
+    items: Array<{
+      entry: ReturnType<typeof outbound.drainDeferredOpenerConsumes>[number];
+      key: string;
+      resolveFlush: (result: { messageId: string } | null) => void;
+    }>;
+  } | null {
     const pinnedClient = outbound.getBoundClient();
-    if (!pinnedClient) return;
+    if (!pinnedClient) return null;
     const pending = outbound.drainDeferredOpenerConsumes();
-    const epoch = outbound.getAccountEpoch();
+    const evicted = outbound.drainEvictedOpeners();
+    if (pending.length === 0 && evicted.length === 0) return null;
+    const items = pending.map((entry) => {
+      const kind = 'markdown' in entry ? 'markdown' : 'spec';
+      const key = this.openerConsumeKey(entry.userId, kind);
+      let resolveFlush!: (result: { messageId: string } | null) => void;
+      const flushPromise = new Promise<{ messageId: string } | null>((resolve) => {
+        resolveFlush = resolve;
+      });
+      this.flushingOpenerConsumes.set(key, flushPromise);
+      return { entry, key, resolveFlush };
+    });
+    return { pinnedClient, epoch: outbound.getAccountEpoch(), evicted, items };
+  }
+
+  /** 排空重连空窗暂存的开场白卡消费(claim + patch/替换), 失败只 log。 */
+  private async processFlushBatch(
+    batch: ReturnType<FeishuIM['claimFlushBatch']>,
+  ): Promise<void> {
+    if (!batch) return;
+    const { pinnedClient, epoch, evicted, items } = batch;
     // 容量淘汰的开场白卡: 撤回它们(条目没了, 但卡还在话题里 — 不撤回就是
     // 永久「思考中」)。撤回经 pinnedClient, 失败只 log。
-    for (const evictedId of outbound.drainEvictedOpeners()) {
+    for (const evictedId of evicted) {
       try {
         await outbound.recallOwnMessageWith(pinnedClient, evictedId);
       } catch (err) {
@@ -71,15 +164,17 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         this.log.warn(`flushDeferredOpenerConsumes evicted-opener recall failed: ${msg}`);
       }
     }
-    for (const entry of pending) {
+    for (const { entry, key, resolveFlush } of items) {
       // 每个条目处理前重新校验账号代次: 前一个条目的 patch await 期间换代
       // 时, 剩余条目不得经新 client 修改旧账号的开场白 — 直接丢弃整批。
       if (outbound.getAccountEpoch() !== epoch) {
         this.log.info('flushDeferredOpenerConsumes: account changed — dropping remaining entries');
-        break;
+        resolveFlush(null);
+        this.flushingOpenerConsumes.delete(key);
+        continue;
       }
       // 条目在暂存时就原子预留了 opener(携带 id)— 排空直接使用, 不会被
-      // 后续轮次认领。
+      // 后续轮次认领。在途 promise 已在 claimFlushBatch 同步登记。
       const openerId = entry.openerId;
       try {
         if ('markdown' in entry) {
@@ -88,6 +183,8 @@ export class FeishuIM extends BaseIM implements ChannelIM {
           await outbound.updateInteractive(openerId, entry.spec);
           outbound.registerCardLane(entry.userId, openerId);
         }
+        this.rememberCompletedOpenerConsume(key, openerId);
+        resolveFlush({ messageId: openerId });
       } catch (err) {
         // patch/替换失败: 与即时消费同口径 — 撤回开场白卡(pin 到排空开始
         // 时的 client)并回拨锚点, 然后**补发终态兜底**。
@@ -97,6 +194,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         // 不得经新账号 client 呈现 — 跨账号红线)。
         if (outbound.getAccountEpoch() !== epoch) {
           this.log.info('flushDeferredOpenerConsumes: account changed — dropping entry');
+          resolveFlush(null);
           continue;
         }
         // 撤回始终 pin 到排空开始时的 client — 同账号再次重连(而非换账号)
@@ -107,28 +205,36 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         // 旧账号终态不得经新 client 呈现(跨账号红线)。
         if (outbound.getAccountEpoch() !== epoch) {
           this.log.info('flushDeferredOpenerConsumes: account changed during recall — dropping entry');
+          resolveFlush(null);
           continue;
         }
         outbound.rearmAnchorToTrigger(entry.userId);
         try {
-          if ('markdown' in entry) {
-            await this.sendMarkdownText(entry.userId, entry.markdown);
-          } else {
-            await this.sendInteractiveCard(entry.userId, entry.spec);
-          }
+          // 走 outbound 直发, 避免再进 sendWithDeferred 等待自己造成死锁。
+          const sent =
+            'markdown' in entry
+              ? await outbound.sendInteractive(entry.userId, {
+                  body: entry.markdown,
+                  buttons: [],
+                })
+              : await outbound.sendInteractive(entry.userId, entry.spec);
+          this.rememberCompletedOpenerConsume(key, sent.messageId);
+          resolveFlush(sent);
         } catch (sendErr) {
-          // 兜底发送也失败(排空期间再次重连): 条目已 drain, 重新入队 —
-          // 下一次 connected 排空重试, 终态不会因一次失败永久丢失。但清
-          // 凭证(账号代次变化)后不得重新入队 — 否则登出前的终态会被重新
-          // 呈现给新一轮会话。
+          // 兜底发送也失败: 重新入队并在当前连接上主动再排空。清凭证后
+          // 不得重新入队 — 否则登出前的终态会被重新呈现给新一轮会话。
           const sendMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
           if (outbound.getAccountEpoch() === epoch) {
             this.log.warn(`flushDeferredOpenerConsumes fallback send failed (re-deferred): ${sendMsg}`);
             outbound.deferOpenerConsume(entry);
+            this.scheduleConnectedFlushRetry();
           } else {
             this.log.info('flushDeferredOpenerConsumes: credentials cleared — dropping entry');
           }
+          resolveFlush(null);
         }
+      } finally {
+        this.flushingOpenerConsumes.delete(key);
       }
     }
   }
@@ -161,8 +267,13 @@ export class FeishuIM extends BaseIM implements ChannelIM {
 
   async dispose(): Promise<void> {
     this.log.info('dispose');
+    this.disposed = true;
+    for (const timer of this.completedOpenerConsumeTimers.values()) clearTimeout(timer);
+    this.completedOpenerConsumeTimers.clear();
+    this.completedOpenerConsumes.clear();
     this.offImStatus();
     cancelAppRegistration();
+    await this.flushChain.catch(() => undefined);
     await wsClient.stop({
       offlineTimeoutMs: wsClient.QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS,
       reason: 'transport-dispose',
@@ -340,6 +451,16 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   ): Promise<{ messageId: string }> {
     const epoch = outbound.getAccountEpoch();
     const clientAtTake = outbound.getBoundClient();
+    const key = this.openerConsumeKey(userId, kind);
+    const flushing = this.flushingOpenerConsumes.get(key);
+    if (flushing) {
+      const flushed = await flushing;
+      this.takeCompletedOpenerConsume(userId, kind);
+      if (flushed) return flushed;
+    } else {
+      const completed = this.takeCompletedOpenerConsume(userId, kind);
+      if (completed) return completed;
+    }
     const entry = outbound.takeMatchingDeferredOpenerConsume(userId, kind);
     if (entry) {
       if (entry.epoch !== epoch) {
@@ -394,6 +515,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       ) {
         this.log.warn('sendWithDeferredOpenerConsume final send failed across reconnect (re-deferred)');
         outbound.deferOpenerConsume(entry);
+        this.scheduleConnectedFlushRetry();
       }
       throw sendErr;
     }
