@@ -263,6 +263,8 @@ interface QueuedSend {
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
+  /** 调用方在拼群上下文之前已落库的 user 行(见 ImRunAgentTurnArgs 同名字段)。 */
+  prePersistedUserMessage?: { sessionId: string; clientId: string };
 }
 
 type DetachDrainOutcome = 'rewire' | 'cancelled';
@@ -392,6 +394,15 @@ export interface ImRunAgentTurnArgs {
    * 缺省(undefined)= turn 自己打, 与老行为一致。
    */
   ackReactionIdPromise?: Promise<string | null> | null;
+  /**
+   * 调用方已经**提前落库**的用户消息(见 persistInboundUserMessageEarly)。
+   *
+   * 带上它, dispatch 时就不再重复写一条 user 行, 只把 turn 的 changeset 锚到
+   * 这条已有记录上。sessionId 必须一起带 —— 提前落库与真正 dispatch 之间隔着
+   * 群上下文拼装(实测 15~60s), 期间路由可能已经改到另一个 session(如 /new
+   * 重置), 那时这份预落库对不上号, dispatch 必须照常自己落一条。
+   */
+  prePersistedUserMessage?: { sessionId: string; clientId: string };
 }
 
 export interface ImTurnTerminal {
@@ -416,6 +427,28 @@ export type ImTurnDispatch =
 /** createTurnRunner 返回的编排实例 — per channel 一个。 */
 export interface ImTurnRunner {
   runAgentTurn(args: ImRunAgentTurnArgs): Promise<void>;
+  /**
+   * 把渠道用户消息**提前**写进本地 messages 表 —— 只给「dispatch 之前还有重活」
+   * 的渠道用(群上下文拼装: 回翻群历史 + 轻量模型扫描, 实测 15~60s)。
+   *
+   * 用户消息平时是在 provider 受理那一刻才落库(见 dispatchQueuedSend 的
+   * onAccepted 注释), 于是这段重活期间桌面端根本看不到"消息已经收到";
+   * 用户会以为消息丢了。这里在重活开始前先落一条, 并把 clientId 交回调用方,
+   * 由它透传给 runAgentTurn(prePersistedUserMessage), dispatch 就不再重复写。
+   *
+   * **只在这条会话此刻完全空闲时才落**(没有 turn 在跑、没有排队消息) ——
+   * 忙的时候提前落会把新提问排在上一轮回答之前, 正是 onAccepted 注释里要
+   * 避免的顺序错乱。忙 / 新会话(行还没建)/ 受保护内容 ⇒ 返回 null,
+   * 完全退回原行为。
+   */
+  persistInboundUserMessageEarly?: (args: {
+    botContextId: string;
+    userId: string;
+    scopeKey?: string;
+    text: string;
+    attachments?: readonly IMAttachment[];
+    protectedContent?: boolean;
+  }) => Promise<{ sessionId: string; clientId: string } | null>;
   /**
    * Durable callers own their queue and receive an observable accepted/terminal
    * contract. Busy work is never copied into turnRunner's in-memory sendQueue.
@@ -822,6 +855,9 @@ export function createTurnRunner(
       ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
+      ...(args.prePersistedUserMessage
+        ? { prePersistedUserMessage: args.prePersistedUserMessage }
+        : {}),
     };
 
     // turn 进行中(本 session 的本渠道 turn 未收口 / sendQueue 已有人排队 /
@@ -1065,15 +1101,23 @@ export function createTurnRunner(
           // 路径直接 session.send,必须额外调这里,否则守卫额度恒 0,首次
           // silent-stop 就落"已耗尽"误导横幅且永不自动续跑)。
           noteSilentStopUserSend(rowId);
+          // 已经提前落过库(群上下文拼装前, 见 persistInboundUserMessageEarly)就
+          // 复用那条记录, 不再写第二条。sessionId 必须相符 —— 拼装期间路由若换到
+          // 别的 session(/new 重置等), 那份预落库不属于本轮, 照常自己落一条。
+          const prePersisted =
+            item.prePersistedUserMessage?.sessionId === rowId
+              ? item.prePersistedUserMessage
+              : null;
           // 受保护群的触发消息不进会话存档 —— 正文与附件都不落。turn 照常跑,
           // agent 拿得到内容; 只是这一轮的输入不留在长期记录里。
           const persisted = item.protectedContent
             ? null
-            : await persistUserMessage({
+            : (prePersisted ??
+              (await persistUserMessage({
                 sessionId: rowId,
                 text: item.text,
                 attachments: item.attachments,
-              });
+              })));
           await adapter.onUserMessagePersisted?.({
             sessionId: rowId,
             userMessageId: item.turn.userMessageId,
@@ -3257,6 +3301,54 @@ export function createTurnRunner(
     return sessionStates.get(sessionId)?.makerSession ?? null;
   }
 
+  /**
+   * 提前落库入站用户消息 —— 契约与取舍见 ImTurnRunner.persistInboundUserMessageEarly。
+   *
+   * 残留窗口(已知、可接受): 落库之后、dispatch 之前如果**别的入口**(desktop
+   * 手打 / scheduler)在同一 session 上起了新 turn, 我们这条 user 行就会排在那轮
+   * assistant 输出之前。代价是 transcript 顺序看着别扭一次; 换来的是常态下
+   * 15~60s 的"消息像丢了"彻底消失。
+   */
+  async function persistInboundUserMessageEarly(args: {
+    botContextId: string;
+    userId: string;
+    scopeKey?: string;
+    text: string;
+    attachments?: readonly IMAttachment[];
+    protectedContent?: boolean;
+  }): Promise<{ sessionId: string; clientId: string } | null> {
+    // 受保护群的触发消息永不进存档(与 onAccepted 同一条边界)。
+    if (args.protectedContent === true) return null;
+    if (args.text.length === 0 && (args.attachments?.length ?? 0) === 0) return null;
+    let target: RouteTarget | null;
+    try {
+      // 只解析既有路由: 提前落库不该新建 session 行, 也不该抢在认证预检之前
+      // 制造出一条会话(新会话仍按原路径在 dispatch 时建行 + 落库)。
+      target = await resolveExistingRouteTarget(args.botContextId, args.userId, args.scopeKey);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`early persist route resolve failed (skipped): ${msg}`);
+      return null;
+    }
+    if (!target) return null;
+    const sessionId = target.row.id;
+    // 空闲判据要覆盖**所有**入口, 不只本渠道: 接管态下 desktop / scheduler 也会
+    // 在同一个 session 上起 turn, 它那轮的 assistant 输出会落在我们之后。
+    // getSession 是只读查在内存里的 session(不新建), 拿不到 ⇒ 本进程没有活
+    // session, 也就没有在跑的 turn。
+    if (getMaker().getSession(sessionId)?.isTurnRunning() === true) return null;
+    const state = sessionStates.get(sessionId);
+    if (state && (state.queue.length > 0 || state.sendQueue.length > 0)) return null;
+    const persisted = await persistUserMessage({
+      sessionId,
+      text: args.text,
+      ...(args.attachments ? { attachments: args.attachments } : {}),
+    });
+    if (!persisted) return null;
+    log.info(`pre-persisted user message for session=${sessionId.slice(-8)}`);
+    return { sessionId, clientId: persisted.clientId };
+  }
+
   async function stopActiveTurn(args: {
     botContextId: string;
     userId: string;
@@ -3335,6 +3427,7 @@ export function createTurnRunner(
 
   return {
     runAgentTurn,
+    persistInboundUserMessageEarly,
     dispatchAgentTurn,
     resolveRouteTarget,
     hasAuthForRoute: (row) => hasAuthForImRoute(row, undefined, authCheckDeps()),

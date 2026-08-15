@@ -3,9 +3,9 @@
  *
  * 历史:本文件曾是「迁移前硬编码清单的逐字快照」守卫(规则 10 no-break)。统一重构后
  * 静态清单**按设计**退役——anthropic/openai/xd 的清单运行时动态注入(SDK 发现 /
- * codex 注册表 / 网关下发,见 active-catalog + model-discovery),bundled 只剩 xai。
+ * codex 注册表 / 网关下发,见 active-catalog + model-discovery),bundled 的 xai 仅作离线 fallback。
  * 冻结快照随之退役;本守卫改为守派生机制本身的契约:
- *   1. bundled 派生 = 仅 xai 静态清单(动态供应商零静态模型,不用假数据冒充);
+ *   1. bundled 派生 = xai 离线 fallback(账号发现成功后由账号快照收缩成员);
  *   2. 注入后的目录按 provider 序 flatMap + id 首见去重,per-agent 分叉字段透传;
  *   3. refreshCatalogDerivedModels 原地 splice(已建会话持引用可见新目录)。
  */
@@ -61,10 +61,11 @@ function injectedCatalog(): Catalog {
 }
 
 describe('deriveAvailableModels — dynamic-first catalog contract', () => {
-  it('adds native minimal thinking to reasoning-capable Pi models only', () => {
+  it('publishes Pi effort controls only when the official catalog has an explicit thinking map', () => {
     const pi = deriveAvailableModels(BUNDLED_CATALOG, 'pi');
-    expect(pi.find((m) => m.id === 'xai/grok-4.3')?.efforts[0]).toBe('minimal');
-    expect(pi.find((m) => m.id === 'xai/grok-code-fast')?.efforts).toEqual([]);
+    expect(pi.find((m) => m.id === 'grok-4.3')?.efforts).toEqual([]);
+    expect(pi.find((m) => m.id === 'grok-4.5')?.efforts).toEqual(['minimal', 'low', 'medium', 'high']);
+    expect(pi.find((m) => m.id === 'grok-4.6')?.efforts).toEqual([]);
   });
 
   it('preserves the explicit effort subset of a Pi BYOM model in remote capabilities', () => {
@@ -114,13 +115,13 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
             wireProtocol: 'openai-responses',
             models: [
               {
-                id: 'xai/grok-4.3',
+                id: 'grok-4.3',
                 name: 'Grok 4.3 through BYOM',
                 reasoning: true,
                 reasoningEfforts: ['low'],
               },
               {
-                id: 'xai/grok-4.5',
+                id: 'grok-4.5',
                 name: 'Grok 4.5 without declared reasoning',
               },
             ],
@@ -130,25 +131,25 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     );
 
     const flatModels = deriveAvailableModels(catalog, 'pi');
-    const flat = flatModels.filter((m) => m.id === 'xai/grok-4.3');
+    const flat = flatModels.filter((m) => m.id === 'grok-4.3');
     expect(flat).toHaveLength(1);
     expect(flat[0]).toMatchObject({
-      efforts: ['low'],
-      defaultEffort: 'low',
+      efforts: [],
+      defaultEffort: null,
     });
     expect(
-      resolvePiRuntimeModelDescriptor(catalog, 'colliding-reasoning', 'xai/grok-4.3'),
+      resolvePiRuntimeModelDescriptor(catalog, 'colliding-reasoning', 'grok-4.3'),
     ).toMatchObject({
       efforts: ['low'],
       defaultEffort: 'low',
     });
-    expect(flatModels.find((m) => m.id === 'xai/grok-4.5')).toMatchObject({
+    expect(flatModels.find((m) => m.id === 'grok-4.5')).toMatchObject({
       efforts: [],
       defaultEffort: null,
     });
   });
 
-  it('resolves the cindy gateway descriptor from built-ins when a non-reasoning BYOM claims the same id first', () => {
+  it('resolves the native xAI descriptor when a non-reasoning BYOM claims the same id first', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     catalog.providers.unshift(
       buildUserProvider({
@@ -159,22 +160,22 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
           pi: {
             baseUrl: 'http://127.0.0.1:11434/v1',
             wireProtocol: 'openai-responses',
-            models: [{ id: 'xai/grok-4.5', name: 'Grok 4.5 without reasoning' }],
+            models: [{ id: 'grok-4.5', name: 'Grok 4.5 without reasoning' }],
           },
         },
       }),
     );
 
-    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'xai/grok-4.5')).toMatchObject({
+    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'grok-4.5')).toMatchObject({
       efforts: [],
       defaultEffort: null,
     });
     expect(
-      resolvePiRuntimeModelDescriptor(catalog, 'colliding-non-reasoning', 'xai/grok-4.5'),
+      resolvePiRuntimeModelDescriptor(catalog, 'colliding-non-reasoning', 'grok-4.5'),
     ).toMatchObject({ efforts: [], defaultEffort: null });
-    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'xai/grok-4.5')).toMatchObject({
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'xai', 'grok-4.5')).toMatchObject({
       efforts: ['minimal', 'low', 'medium', 'high'],
-      defaultEffort: 'high',
+      defaultEffort: 'medium',
     });
   });
 
@@ -227,7 +228,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     );
   });
 
-  it('bundled(未注入)派生 = 仅 xai 静态清单,动态供应商不贡献任何条目', () => {
+  it('bundled(未注入)派生 = xai 离线 fallback,其它动态供应商不贡献条目', () => {
     const cc = deriveAvailableModels(BUNDLED_CATALOG, 'claude-code');
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');
     expect(cc.map((m) => m.id)).toEqual([

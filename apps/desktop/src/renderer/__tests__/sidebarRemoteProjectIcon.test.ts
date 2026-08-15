@@ -56,7 +56,7 @@ describe('sidebar remote project icon', () => {
 
   it('keeps remote session icons next to titles instead of in the right-side time slots', () => {
     expect(sessionItemSource).toMatch(
-      /<span[\s\S]*?className=\{cn\(\s*'min-w-0 flex flex-1 items-center gap-1\.5'[\s\S]*?<SidebarTitleMarquee[\s\S]*?\{remoteIconKind && \([\s\S]*?<RemoteProjectIcon/,
+      /<span[\s\S]*?className="min-w-0 flex flex-1 items-center gap-1\.5"[\s\S]*?<SidebarTitleMarquee[\s\S]*?\{remoteIconKind && \([\s\S]*?<RemoteProjectIcon/,
     );
     // C 期起右侧时间槽由 SessionInfoMeta 承担(任务信息复选),仍在同一让位容器内。
     expect(sessionItemSource).toMatch(

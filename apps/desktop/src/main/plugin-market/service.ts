@@ -21,6 +21,7 @@ import {
   isSafeGhostRelativePath,
   isOfficialGhostId,
   validateGhostManifest,
+  validateNormalizedGhostManifest,
   type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
@@ -917,7 +918,7 @@ export class PluginMarketService {
       // install.ts:184-191 的打包前比对同向（但此处比对的是预览清单而非
       // 实际打包字节，名字/版本/作者差异不在此处检测）。
       if (options.expectedManifest !== undefined) {
-        const reviewed = validateGhostManifest(options.expectedManifest);
+        const reviewed = validateNormalizedGhostManifest(options.expectedManifest);
         // 畸形 payload 会造成 ghostPermissionBaselineKey crash（slots.includes
         // 等字段解引用），先验证再比对。验证失败时直接拒——审阅过的清单连基本
         // 结构都不对，不能信任。
@@ -1629,14 +1630,14 @@ export class PluginMarketService {
     }
 
     const reviewedManifest = options.reviewedManifest
-      ? validateGhostManifest(options.reviewedManifest)
+      ? validateNormalizedGhostManifest(options.reviewedManifest)
       : null;
     if (reviewedManifest && !reviewedManifest.ok) {
       throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
     }
     const permissionCap =
       options.permissionPolicy?.mode === 'cap'
-        ? validateGhostManifest(options.permissionPolicy.manifest)
+        ? validateNormalizedGhostManifest(options.permissionPolicy.manifest)
         : null;
     if (permissionCap && !permissionCap.ok) {
       throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');

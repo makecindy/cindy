@@ -429,6 +429,14 @@ export async function forkSessionAtMessage(
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
   }
 
+  // 轮 26 发现 5 防御深度:远端会话 fork 由 SDK 层拒绝(pi forkSdkSession 抛
+  // NotSupportedError remoteFork;cc/codex 由 daemon 远端执行)。host 层显式
+  // 守卫兜底 —— 若未来某 agent 的 SDK 守卫漏掉,这里阻止 DB 写入产生
+  // 「remoteHostId 丢失的本地化僵尸会话」(轮 26 HIGH-1 同源)。
+  if (source.remoteHostId) {
+    throw forkError('REMOTE_NOT_SUPPORTED', '远端会话暂不支持在本地 fork');
+  }
+
   // 2. 读 target message + rowid —— 同毫秒边界必须按真实插入顺序判断。
   const [target] = await db
     .select({
@@ -573,6 +581,9 @@ export async function forkSessionAtMessage(
       ...(tailTurnsToDrop !== undefined ? { tailTurnsToDrop } : {}),
       title: newTitle,
       workingDir: source.workingDir ?? undefined,
+      // Pi 的 fork 守卫判定源 session 是否远端(用 DB 的 remoteHostId, 不用
+      // agent 实例字段 —— R4 竞态 #1)。
+      remoteHostId: source.remoteHostId ?? null,
     }).catch((err: unknown) => {
       // 这里刻意用 isCodex(非 usesTailTurnFork):CODEX_FORK_STATE_UNAVAILABLE 是 codex 专属
       // 错误码 + 文案,只有真 codex 失败才包装。pi 与 cc 一样裸抛原始错误(不会拿到指名道姓
@@ -605,6 +616,7 @@ export async function forkSessionAtMessage(
   const toolParentUuids = usesTailTurnFork
     ? []
     : collectClaudeToolParentUuids(sourceMessages, claudeAnchorIndex);
+  try {
   await getDbClient().tx('fork.session', {
     sourceSessionId,
     sourceClearedAt: source.clearedAt,
@@ -632,6 +644,9 @@ export async function forkSessionAtMessage(
       userSendAt: now,
       agentKind: forkSource.agentKind,
       workspaceKind: source.workspaceKind,
+      // 轮 26 HIGH-1:远端会话 fork 必须继承 remoteHostId —— 缺失会落成
+      // NULL, 子会话被下游当成本地会话处理(本地 transport/MCP 全错)。
+      remoteHostId: source.remoteHostId ?? null,
       codexHistoryHasProductPrompt: source.codexHistoryHasProductPrompt,
       parentSessionId: source.id,
       forkedAtMessageId: messageClientId,
@@ -645,6 +660,18 @@ export async function forkSessionAtMessage(
     resetHandoffBoundaryClientId,
     newMessageIds,
   });
+  } catch (err) {
+    // 轮 40-w4-t13 HIGH:SDK 侧已创建新 session file(forkSdkSession), DB 事务
+    // 失败时该文件成孤儿 —— 调用方收到失败, 但孤儿累积不可达。至少记录
+    // 可恢复线索(sdkSessionId), 供诊断/清理; 错误照常上抛。
+    if (newSdkSessionId) {
+      console.error(
+        `[fork] SDK session ${newSdkSessionId} created but DB transaction failed — orphan session file left behind`,
+        { sourceSessionId, error: err instanceof Error ? err.message : String(err) },
+      );
+    }
+    throw err;
+  }
 
   // 6. 返回 mapper 转过的新 session（含 messageCount）
   const [row] = await db.select().from(sessions).where(eq(sessions.id, newSessionId));
@@ -711,6 +738,9 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     title: newTitle,
     workingDir: source.workingDir ?? undefined,
     stripEncryptedReasoning: true,
+    // 轮 26:与 forkSessionAtMessage 对齐 —— 源必为本地(上方已拒远端), 显式
+    // 传 null 保持 forkSdkSession 参数形态一致。
+    remoteHostId: source.remoteHostId ?? null,
   }).catch((err: unknown) => {
     const detail = codexForkFailureDetail(err);
     throw forkError(

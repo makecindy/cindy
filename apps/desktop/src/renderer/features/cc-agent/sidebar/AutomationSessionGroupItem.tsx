@@ -625,6 +625,7 @@ export function AutomationSessionGroupItem({
               onRename,
               onTogglePin,
               indented,
+              sourceLabel: sourceLabelMap?.get(session.id),
             };
 
             return sessionVariant === 'list' ? (
@@ -639,7 +640,6 @@ export function AutomationSessionGroupItem({
               <SessionItem
                 key={session.id}
                 {...commonProps}
-                sourceLabel={sourceLabelMap?.get(session.id)}
                 insideAutomationGroup
               />
             );

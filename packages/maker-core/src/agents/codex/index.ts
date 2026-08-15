@@ -449,6 +449,8 @@ function isLocalForkHostKey(key: string): boolean {
 
 /** Review threads use a one-session app-server so native Codex memory cannot leak in. */
 const LOCAL_REVIEW_HOST_PREFIX = 'local-review:';
+/** Codex Desktop's built-in Apps server has no user-configurable MCP transport. */
+const CODEX_APPS_MCP_SERVER_NAME = 'codex_apps';
 
 function localReviewHostKey(sessionId: string): string {
   return `${LOCAL_REVIEW_HOST_PREFIX}${sessionId || randomUUID()}`;
@@ -605,6 +607,13 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function hasCodexMcpTransport(value: unknown): boolean {
+  const config = asRecord(value);
+  return [config.command, config.url].some(
+    (transport) => typeof transport === 'string' && transport.trim().length > 0,
+  );
 }
 
 /**
@@ -3848,7 +3857,20 @@ export class CodexAgent extends BaseAgent {
         const effectiveConfig = asRecord(configResponse.config);
         const configuredMcp = asRecord(effectiveConfig.mcp_servers);
         const configuredPlugins = asRecord(effectiveConfig.plugins);
-        const mcpServerNames = new Set(Object.keys(configuredMcp));
+        const configuredMcpServerNames = new Set(
+          Object.entries(configuredMcp)
+            .filter(([, serverConfig]) => hasCodexMcpTransport(serverConfig))
+            .map(([serverName]) => serverName),
+        );
+        const transportConfiguredMcpServerNames = new Set(configuredMcpServerNames);
+        for (const pluginConfig of Object.values(configuredPlugins)) {
+          const pluginMcp = asRecord(asRecord(pluginConfig).mcp_servers);
+          for (const [serverName, serverConfig] of Object.entries(pluginMcp)) {
+            if (!hasCodexMcpTransport(serverConfig)) continue;
+            transportConfiguredMcpServerNames.add(serverName);
+          }
+        }
+        const unconfiguredRuntimeMcpServerNames = new Set<string>();
         let cursor: string | null = null;
         do {
           const status: CodexMcpServerStatusListResponse =
@@ -3857,9 +3879,23 @@ export class CodexAgent extends BaseAgent {
             { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId: null },
             { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
           );
-          for (const server of status.data) mcpServerNames.add(server.name);
+          for (const server of status.data) {
+            if (
+              !transportConfiguredMcpServerNames.has(server.name) &&
+              server.name !== CODEX_APPS_MCP_SERVER_NAME
+            ) {
+              unconfiguredRuntimeMcpServerNames.add(server.name);
+            }
+          }
           cursor = status.nextCursor;
         } while (cursor !== null);
+        if (unconfiguredRuntimeMcpServerNames.size > 0) {
+          throw new Error(
+            `Codex reported runtime MCP servers without transport-bearing config: ${[
+              ...unconfiguredRuntimeMcpServerNames,
+            ].sort().join(', ')}`,
+          );
+        }
 
         const skillPaths = new Set([
           ...skills.map((skill) => skill.path),
@@ -3877,7 +3913,13 @@ export class CodexAgent extends BaseAgent {
             .sort()
             .map((skillPath) => ({ path: skillPath, enabled: false }));
         }
-        for (const serverName of mcpServerNames) {
+        // Only configured MCP entries have a command/url transport that can
+        // accept a per-thread `.enabled=false` merge. `codex_apps` is an
+        // app-server builtin surfaced by mcpServerStatus/list but absent from
+        // config/read; synthesizing an override for it makes Codex 0.145.0
+        // reject thread/start with "invalid transport". Apps are isolated by
+        // `features.apps=false` below instead.
+        for (const serverName of configuredMcpServerNames) {
           reviewCapabilityConfig[
             `mcp_servers.${renderReviewConfigSegment(serverName)}.enabled`
           ] = false;
@@ -3887,7 +3929,8 @@ export class CodexAgent extends BaseAgent {
             `plugins.${quoteReviewConfigSegment(pluginId)}.enabled`
           ] = false;
           const pluginMcp = asRecord(asRecord(configuredPlugins[pluginId]).mcp_servers);
-          for (const serverName of Object.keys(pluginMcp)) {
+          for (const [serverName, serverConfig] of Object.entries(pluginMcp)) {
+            if (!hasCodexMcpTransport(serverConfig)) continue;
             reviewCapabilityConfig[
               `plugins.${quoteReviewConfigSegment(pluginId)}.mcp_servers.${renderReviewConfigSegment(serverName)}.enabled`
             ] = false;
@@ -5482,6 +5525,8 @@ export class CodexAgent extends BaseAgent {
       req: InteractionRequest,
       opts?: {
         forcePrompt?: boolean;
+        /** Auto 下跳过轻量 reviewer 转人工；仍保留 Full access 自动放行与热切换语义。 */
+        promptInAuto?: boolean;
         autoReviewAction?: ReviewableAction;
         itemId?: string;
       },
@@ -5492,6 +5537,7 @@ export class CodexAgent extends BaseAgent {
           opts?.forcePrompt === true ||
           (req.kind === 'permission' &&
             forceTurnConfirmation(req.toolName, req.input));
+        const promptInAuto = opts?.promptInAuto === true;
         // Full access 的普通审批不应打断用户。Auto 在已验证路由上由 app-server
         // auto_review 负责；fallback 路由则由 user reviewer 把越界请求发回客户端，
         // 再由 Cindy reviewer 静默裁决。
@@ -5537,6 +5583,7 @@ export class CodexAgent extends BaseAgent {
         // UI 不可用时 dispatchInteraction 自然 fail-closed decline。
         if (
           !forcePrompt &&
+          !promptInAuto &&
           mutablePermissionMode === 'auto' &&
           opts?.autoReviewAction
         ) {
@@ -6354,6 +6401,14 @@ export class CodexAgent extends BaseAgent {
         suggestions: codexSessionApprovalSuggestions(),
         metadata: params.reason ? { reason: params.reason } : undefined,
       }, {
+        // Codex may omit grantRoot for ordinary apply_patch requests. Without a
+        // concrete target the lightweight reviewer cannot classify the write,
+        // but silently declining is surfaced by app-server as "rejected by user"
+        // even though no user interaction happened. In interactive Auto, route
+        // that protocol gap to the ordinary approval UI; unlike forcePrompt this
+        // still lets a pending request follow a switch to Full access. Unattended
+        // policy turns retain their earlier fail-closed branch above.
+        promptInAuto: !params.grantRoot?.trim(),
         autoReviewAction: { kind: 'file-write', path: params.grantRoot ?? undefined },
         itemId: params.itemId,
       });

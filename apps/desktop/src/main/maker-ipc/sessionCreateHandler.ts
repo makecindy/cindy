@@ -20,6 +20,17 @@ function remoteRouteErrorCode(err: unknown): IpcErrorCode | null {
   if (msg.includes('[REMOTE_PROVIDER_UPDATING]')) return 'REMOTE_PROVIDER_UPDATING';
   if (msg.includes('[REMOTE_PROVIDER_UNSUPPORTED]')) return 'REMOTE_PROVIDER_UNSUPPORTED';
   if (msg.includes('[REMOTE_NATIVE_OAUTH_UNAVAILABLE]')) return 'REMOTE_NATIVE_OAUTH_UNAVAILABLE';
+  // 轮 40-w4-t3 HIGH:远端 Pi 会话启动时 Cindy AI gateway endpoint 未就绪 ——
+  // maker-core 抛 [REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE](含 raw 实现细节
+  // runtimeConfig.remoteEndpoint is empty)。不映射会让用户看到不可操作的英文
+  // raw message;映射后 renderer 走已存在 5 语言的
+  // logic.errors.remoteError.REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE 文案(引导去
+  // Settings → Model Providers 检查 Cindy AI 状态)。
+  if (msg.includes('[REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE]')) return 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE';
+  // 轮 42 P2:远端 Pi 选了 loopback-only BYOM provider —— 创建即拒绝, renderer
+  // 走 logic.errors.remoteError.REMOTE_LOCAL_ONLY_PROVIDER 文案(引导换网关或
+  // 远端可达的 BYOM 端点)。
+  if (msg.includes('[REMOTE_LOCAL_ONLY_PROVIDER]')) return 'REMOTE_LOCAL_ONLY_PROVIDER';
   return null;
 }
 

@@ -127,6 +127,7 @@
       "chipMetrics": "사용량 표시기",
       "memory": "메모리",
       "subagentModels": "하위 에이전트",
+      "visionBridge": "비전 브리지",
       "compaction": "컨텍스트 압축",
       "terminalShell": "기본 터미널 셸",
       "composer": "메시지 입력",
@@ -308,6 +309,7 @@
         "statusInstalled": "설치됨",
         "statusNotInstalled": "설치되지 않음",
         "claudeCodeName": "Claude Code",
+        "piName": "Pi",
         "button": {
           "install": "설치",
           "reinstall": "재설치",
@@ -477,7 +479,7 @@
         "reset": "기본 레이아웃 복원",
         "resetSuccess": "기본 패널 레이아웃을 복원했습니다",
         "resetFailed": "기본 패널 레이아웃을 복원하지 못했습니다",
-        "saved": "패널 위치를 저장했습니다. 설정 → 외관에서 기본 레이아웃으로 복원할 수 있습니다.",
+        "saved": "패널 위치를 저장했습니다. 설정 → 일반의 모양 섹션에서 기본 레이아웃으로 복원할 수 있습니다.",
         "saveFailed": "패널 위치를 저장하지 못했습니다"
       }
     },
@@ -984,7 +986,7 @@
         },
         "inputMonitoring": {
           "label": "단축키 감지 권한",
-          "tooltip": "Fn, 단독 Command / Option / Control, Fn이 포함된 음성 입력 단축키를 감지하는 데 사용됩니다. 일반 조합 단축키와 F1-F24 단일 키에는 보통 필요하지 않습니다. 허용됨은 현재 실행 중인 앱이 단축키를 감지할 수 있다는 뜻이며, 개발 빌드에서는 Terminal을 통해 권한이 부여될 수 있습니다."
+          "tooltip": "Fn, 단독 Command / Option / Control, Fn이 포함된 단축키, 그리고 F1-F24 단일 키의 길게 눌러 말하기에서 키를 놓는 시점을 감지하는 데 사용됩니다. 일반 조합 단축키에는 필요하지 않습니다. 허용됨은 현재 실행 중인 앱이 단축키를 감지할 수 있다는 뜻이며, 개발 빌드에서는 Terminal을 통해 권한이 부여될 수 있습니다."
         },
         "accessibility": {
           "label": "자동 입력",
@@ -2319,7 +2321,7 @@
       "title": "하위 에이전트",
       "description": "Claude Code와 Codex가 하위 작업을 실행할 때 사용할 기본 모델을 설정하고 Codex 하위 에이전트의 가드레일을 구성합니다. 설정은 진입점별로 적용되며 모델별로 저장되지 않습니다.",
       "unspecified": "지정 안 함(기본 동작 사용)",
-      "hint": "선택 가능한 모델은 연결된 모델 소스에 따라 달라집니다. 지정하지 않으면 Agent의 기본 설정을 사용합니다. Claude Code 변경 사항은 새 세션부터 적용됩니다. Codex 변경 사항은 유휴 상태에서 즉시 재시작되어 반영되며, 작업 실행 중에는 로컬 Codex 세션이 모두 유휴 상태가 된 후 자동 적용됩니다.",
+      "hint": "Claude Code 하위 에이전트에서는 모델만 지정할 수 있으며 추론 강도는 Claude Code의 기본 동작을 따릅니다. 선택 가능한 모델은 연결된 모델 소스에 따라 달라집니다. 지정하지 않으면 Agent의 기본 설정을 사용합니다. Claude Code 변경 사항은 새 세션부터 적용됩니다. Codex 변경 사항은 유휴 상태에서 즉시 재시작되어 반영되며, 작업 실행 중에는 로컬 Codex 세션이 모두 유휴 상태가 된 후 자동 적용됩니다.",
       "codexV2ModelHint": "하위 에이전트 기본 모델은 Codex 자체 모델 카탈로그에 있는 모델이어야 하며, 카탈로그 외부 모델(호환 브리지로 연결된 서드파티 모델 등)은 Codex가 거부합니다. Sol / Terra(멀티 에이전트 V2)는 나아가 V2 카탈로그 모델(현재 gpt-5.6-sol과 gpt-5.6-terra)만 허용합니다. 이전 버전 멀티 에이전트(V1)에는 V2 제한이 없습니다.",
       "saveFailed": "하위 에이전트 설정 저장 실패",
       "guardrails": {
@@ -2389,6 +2391,37 @@
     "compatMode": {
       "title": "팁",
       "description": "기능 스위치 모음. 일부는 새 세션에서 반영됩니다(각 cell 설명 참고)."
+    },
+    "visionBridge": {
+      "title": "비전 브리지",
+      "description": "텍스트 전용 모델에 이미지 인식 기능을 부여합니다. 별도의 멀티모달 모델이 이미지를 텍스트로 변환한 뒤 전달합니다.",
+      "enableLabel": "비전 브리지 활성화",
+      "enableHint": "끄면 모든 모델이 이전과 동일하게 동작합니다. 켜면 아래에서 선택한 모델의 이미지가 비전 백엔드에서 텍스트로 변환됩니다. 사용하면 이러한 모델로 전송된 이미지와 포커스 힌트로 사용되는 주변 텍스트가 선택한 비전 백엔드로 전송됩니다.",
+      "enableAria": "비전 브리지 전환",
+      "toast": {
+        "saved": "비전 브리지 설정이 저장되었습니다",
+        "saveFailed": "비전 브리지 설정 저장에 실패했습니다"
+      },
+      "capability": {
+        "vision": "이미지 지원으로 확인됨",
+        "noVision": "텍스트 전용으로 확인됨",
+        "unknown": "이미지 지원 여부 불명"
+      },
+      "targetModels": {
+        "label": "비전 브리지를 사용할 모델",
+        "hint": "텍스트 전용 모델(예: DeepSeek)은 기본 선택됩니다. 이미지 지원 모델도 선택할 수 있습니다(예: 더 저렴한 설명 모델로 토큰 절약).",
+        "empty": "사용 가능한 모델이 없습니다.",
+        "toggleAria": "{{model}}의 비전 브리지 전환"
+      },
+      "backends": {
+        "label": "비전 백엔드 모델",
+        "hint": "이미지를 텍스트로 변환하는 멀티모달 모델을 최대 2개 선택합니다. 두 번째(백업)는 선택 사항입니다.",
+        "primary": "기본",
+        "fallback": "백업",
+        "unset": "선택 안 됨",
+        "noBackup": "백업 없음",
+        "hintSecondary": "기본 백엔드를 우선 사용합니다. 실패하고 백업이 설정되어 있으면 백업으로 전환합니다. 둘 다 실패하면 이미지를 인식하지 못하고 텍스트 안내로 대체하고 알립니다."
+      }
     },
     "terminalShell": {
       "title": "기본 터미널 셸",
@@ -4820,7 +4853,10 @@
         "localOnly": "메시지별 정확한 변경 사항은 아직 원격 작업에서 사용할 수 없습니다.",
         "partialNotice": "이 메시지에는 정확히 추적할 수 없는 명령 또는 도구 쓰기가 포함되어 있습니다. 아래에는 캡처된 일부만 표시되며 완전한 패치가 아닙니다.",
         "emptyTitle": "기록된 변경 사항 없음",
-        "emptyDesc": "이 메시지에 저장된 패치에는 표시할 수 있는 파일 변경 사항이 없습니다."
+        "emptyDesc": "이 메시지에 저장된 패치에는 표시할 수 있는 파일 변경 사항이 없습니다.",
+        "crossSessionSwitchDisabled": "이 리뷰는 협업 세션에 속합니다. 소스 전환은 해당 세션 안에서만 사용할 수 있습니다.",
+        "previewUnavailable": "이 메시지는 과거 변경 사항을 기록하므로 현재 디스크의 파일 내용을 안정적으로 미리 볼 수 없습니다.",
+        "snapshotPatchUnavailable": "과거 변경 스냅샷에서는 현재 worktree용 git apply 명령을 만들 수 없습니다."
       },
       "fileCount_one": "{{count}}개 파일",
       "fileCount_other": "{{count}}개 파일",
@@ -4878,6 +4914,7 @@
         "in-progress": "git 작업 진행 중",
         "agent-running": "에이전트 실행 중",
         "disabled": "리뷰를 사용할 수 없음",
+        "historical-snapshot": "과거 변경 스냅샷은 읽기 전용입니다",
         "remote-device": "원격 기기 세션은 보기 전용입니다",
         "remote-ssh": "SSH 워크스페이스 검토는 보기 전용입니다"
       },
@@ -6092,6 +6129,11 @@
     "imageMissing": {
       "title": "이미지가 손실되었습니다"
     },
+    "visionBridge": {
+      "analyzing": "이미지 인식 중…({{count}}장)",
+      "fallback": "비전 브리지가 백업 비전 백엔드를 사용했습니다(기본 백엔드 사용 불가)",
+      "unavailable": "비전 브리지를 사용할 수 없어 이미지를 인식하지 못했고 텍스트 안내로 대체했습니다"
+    },
     "newMessageIndicator": {
       "aria": "맨 아래로 이동, {{count}}개의 새 메시지 보기",
       "label_one": "새 메시지 {{count}}개",
@@ -6194,7 +6236,10 @@
       "networkShowRaw": "원본 오류 보기",
       "networkHideRaw": "원본 오류 숨기기",
       "silentStopContinue": "계속",
-      "silentStopContinueTitle": "현재 작업 계속"
+      "silentStopContinueTitle": "현재 작업 계속",
+      "piTransportClosed": "원격 Pi 연결이 끊어졌습니다(SSH 채널 닫힘). 원격 작업은 계속 실행 중입니다. 다시 연결하면 계속할 수 있습니다.",
+      "piManagerUnavailable": "원격 Pi 관리자가 준비되지 않았습니다. 잠시 후 다시 시도하세요. 계속 실패하면 「설정 → 원격 머신」에서 Pi를 다시 설치하세요.",
+      "piBundledNodeMissing": "원격 호스트에 런타임(Node.js)이 없습니다. 「설정 → 원격 머신」에서 호스트를 펼쳐 먼저 Claude Code 또는 Codex의 「설치」를 클릭하세요(Node.js가 함께 설치됨). 그런 다음 Pi 작업을 시작하세요."
     },
     "backgroundActivity": {
       "status": "백그라운드 하위 작업 실행 중, 모델 사용량을 소비하고 있습니다…",
@@ -6611,6 +6656,8 @@
       "automationSent": "자동화 작업에서 보냄",
       "automationSentNamed": "자동화 작업 \"{{name}}\"에서 보냄",
       "automationViewTask": "자동화 작업 보기",
+      "orcaFromLead": "Lead에서 온 메시지",
+      "orcaFromWorker": "Worker에서 온 메시지",
       "expandLongMessage": "전체 메시지 보기",
       "collapseLongMessage": "접기",
       "sessionReference": {
@@ -6676,13 +6723,13 @@
       }
     },
     "upgradeBanner": {
-      "description": "원격 {{hostId}}의 cc-manager에 새 버전이 있습니다 — 업그레이드하면 이 호스트의 모든 Claude Code 원격 세션이 중단됩니다",
-      "upgrading": "{{hostId}}의 cc-manager를 업그레이드하는 중…",
+      "description": "원격 {{hostId}}의 {{manager}}에 새 버전이 있습니다 — 업그레이드하면 이 호스트의 모든 원격 세션이 중단됩니다",
+      "upgrading": "{{hostId}}의 {{manager}}를 업그레이드하는 중…",
       "upgrade": "지금 업그레이드",
-      "upgradeTitle": "새 cc-manager 다운로드 및 재시작 (현재 세션이 중단됨)",
+      "upgradeTitle": "새 {{manager}} 다운로드 및 재시작 (현재 세션이 중단됨)",
       "dismissTitle": "나중에 (다음 실행 시 다시 알림)",
       "failed": "업그레이드 실패: {{message}}",
-      "daemonNotReady": "cc-manager 업그레이드가 완료되었지만 원격 daemon이 아직 시작되지 않았습니다 — 메시지를 수동으로 다시 전송하세요"
+      "daemonNotReady": "{{manager}} 업그레이드가 완료되었지만 원격 daemon이 아직 시작되지 않았습니다 — 메시지를 수동으로 다시 전송하세요"
     },
     "remoteError": {
       "REMOTE_DAEMON_CLOSED": "원격 연결이 중단되었습니다(daemon이 업그레이드 또는 재시작 중일 수 있습니다). 턴이 종료되었습니다 — 다시 전송하세요.",
@@ -6690,6 +6737,7 @@
       "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰가 판단을 내리지 못했습니다(네트워크 또는 서비스 일시 장애). 검토가 필요한 작업은 직접 확인하도록 전환되었습니다. 중단을 줄이려면 이 작업을 기본 권한으로 전환하세요.",
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "원격 Claude Code 세션은 로컬 호환 프록시를 통해 라우팅할 수 없습니다(내부 오류).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
+      "REMOTE_LOCAL_ONLY_PROVIDER": "이 모델 제공자는 로컬 전용 서비스(예: Ollama)라서 SSH 원격 작업에서 접근할 수 없습니다. Cindy AI 게이트웨이로 전환하거나 원격 호스트에서 접근 가능한 제공자를 선택하세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요."
     },
@@ -9066,6 +9114,7 @@
       "archiveWorkerAria": "Worker {{name}} 아카이브",
       "createWorker": "새 Worker 만들기",
       "hardLimitHint": "하드 제한 {{count}} 에 도달했습니다. 기존 Worker 를 아카이브하면 더 만들 수 있습니다.",
+      "hardLimitSettingsHint": "하드 제한 {{count}} 에 도달했습니다. 클릭하여 협업 설정을 조정합니다.",
       "softLimitHint": "소프트 제한 {{count}} 를 초과했습니다. Worker 가 많을수록 메모리 사용량이 늘어납니다.",
       "settingsCollaboration": "설정 · 협업",
       "layoutMenuLabel": "Worker 목록 표시 방식",
@@ -9351,13 +9400,20 @@
         "endsAt": "{{date}}에 요금제 종료",
         "cancelAction": "구독 취소",
         "cancelConfirmTitle": "현재 구독을 취소할까요?",
-        "cancelConfirmDescription": "이 작업으로 환불되거나 잔액이 즉시 변경되지 않습니다. 현재 요금제는 {{date}}까지 사용할 수 있으며 이후에는 갱신되지 않습니다. 취소는 앱에서 되돌릴 수 없으며, 이번 결제 기간이 끝날 때까지 새 요금제를 구매할 수 없습니다.",
-        "cancelConfirmDescriptionWithoutDate": "이 작업으로 환불되거나 잔액이 즉시 변경되지 않습니다. 현재 요금제는 이번 결제 기간이 끝날 때까지 사용할 수 있으며 이후에는 갱신되지 않습니다. 취소는 앱에서 되돌릴 수 없으며, 이번 결제 기간이 끝날 때까지 새 요금제를 구매할 수 없습니다.",
+        "cancelConfirmDescription": "이 작업으로 환불되거나 잔액이 즉시 변경되지 않습니다. 현재 요금제는 {{date}}까지 사용할 수 있으며 이후에는 갱신되지 않습니다. 이번 결제 기간이 끝날 때까지 새 요금제를 구매할 수 없습니다.",
+        "cancelConfirmDescriptionWithoutDate": "이 작업으로 환불되거나 잔액이 즉시 변경되지 않습니다. 현재 요금제는 이번 결제 기간이 끝날 때까지 사용할 수 있으며 이후에는 갱신되지 않습니다. 그때까지 새 요금제를 구매할 수 없습니다.",
         "cancelConfirmAction": "취소 확인",
         "cancelSuccess": "자동 갱신을 취소했습니다. 현재 요금제는 {{date}}까지 사용할 수 있습니다.",
         "cancelSuccessWithoutDate": "자동 갱신을 취소했습니다. 현재 요금제는 이번 결제 기간이 끝난 후 종료됩니다.",
         "cancelNotSupported": "현재 이 구독은 취소할 수 없습니다.",
-        "cancelFailed": "구독을 취소하지 못했습니다. 잠시 후 다시 시도해 주세요."
+        "cancelFailed": "구독을 취소하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+        "resumeAction": "구독 재개",
+        "resumeConfirmTitle": "현재 구독을 재개할까요?",
+        "resumeConfirmDescription": "재개하면 갱신일에 자동 갱신됩니다.",
+        "resumeConfirmAction": "구독 재개",
+        "resumeSuccess": "구독을 재개했습니다. 예정대로 자동 갱신됩니다.",
+        "resumeNotAvailable": "이 구독은 재개할 수 없습니다. 최신 구독 상태를 확인한 후 다시 시도해 주세요.",
+        "resumeFailed": "구독을 재개하지 못했습니다. 잠시 후 다시 시도해 주세요."
       },
       "topupCard": {
         "action": "잔액 충전"

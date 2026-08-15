@@ -228,6 +228,8 @@ export const VOICE_INPUT_CODE_TO_MAC_NATIVE_KEY_CODE: Readonly<Record<string, nu
   Object.entries(MAC_NATIVE_KEY_CODE_TO_VOICE_INPUT_KEY).map(([keyCode, value]) => [value.code, Number(keyCode)]),
 );
 
+const VOICE_INPUT_FUNCTION_KEY_CODE_PATTERN = /^F(?:[1-9]|1[0-9]|2[0-4])$/;
+
 export const DEFAULT_VOICE_INPUT_REFINEMENT_INSTRUCTIONS = [
   '让文本清楚自然，不明显改写；保留我的语气，不改成公文或客服话术。',
   '保留技术词、模型名、产品名、变量、路径、命令和大小写。',
@@ -320,25 +322,47 @@ export function isVoiceInputModifierShortcut(
   return Boolean(shortcut?.trigger === 'modifier' && isVoiceInputModifierShortcutCode(shortcut.code));
 }
 
+export function isVoiceInputBareFunctionKeyShortcut(
+  shortcut: VoiceInputShortcut | null | undefined,
+): shortcut is VoiceInputShortcut & { trigger: 'keyboard' } {
+  if (!shortcut || shortcut.trigger === 'modifier') return false;
+  return (
+    VOICE_INPUT_FUNCTION_KEY_CODE_PATTERN.test(shortcut.code) &&
+    !shortcut.modifiers.meta &&
+    !shortcut.modifiers.ctrl &&
+    !shortcut.modifiers.alt &&
+    !shortcut.modifiers.shift &&
+    !shortcut.modifiers.fn
+  );
+}
+
 export function isVoiceInputMacNativeKeyboardShortcut(
   shortcut: VoiceInputShortcut | null | undefined,
 ): shortcut is VoiceInputShortcut & { trigger: 'keyboard' } {
   if (!shortcut || shortcut.trigger === 'modifier') return false;
-  if (!(shortcut.code in VOICE_INPUT_CODE_TO_MAC_NATIVE_KEY_CODE)) return false;
-  // Only Fn-based keyboard shortcuts need the listen-only native helper.
-  // Plain function keys such as F16 can be registered by Electron's
-  // globalShortcut without prompting for macOS Input Monitoring permission.
-  return Boolean(shortcut.modifiers.fn);
+  if (isVoiceInputBareFunctionKeyShortcut(shortcut)) return true;
+  if (!shortcut.modifiers.fn) return false;
+  return (
+    shortcut.code in VOICE_INPUT_CODE_TO_MAC_NATIVE_KEY_CODE ||
+    VOICE_INPUT_FUNCTION_KEY_CODE_PATTERN.test(shortcut.code)
+  );
 }
 
 export function voiceInputShortcutNeedsMacNativeListener(
   shortcut: VoiceInputShortcut | null | undefined,
   platform: string,
 ): boolean {
+  if (platform !== 'darwin') return false;
   if (isVoiceInputModifierShortcut(shortcut)) return true;
   if (!shortcut || shortcut.trigger === 'modifier') return false;
-  if (shortcut.modifiers.fn) return isVoiceInputMacNativeKeyboardShortcut(shortcut);
-  return platform === 'darwin' && isVoiceInputMacNativeKeyboardShortcut(shortcut);
+  return isVoiceInputMacNativeKeyboardShortcut(shortcut);
+}
+
+export function voiceInputShortcutNeedsWindowsNativeListener(
+  shortcut: VoiceInputShortcut | null | undefined,
+  platform: string,
+): boolean {
+  return platform === 'win32' && isVoiceInputBareFunctionKeyShortcut(shortcut);
 }
 
 export function createVoiceInputShortcutFromMacNativeKeys(keys: readonly string[]): VoiceInputShortcut | null {
@@ -360,10 +384,21 @@ export function createVoiceInputShortcutFromMacNativeKeys(keys: readonly string[
     };
   }
 
-  const nonModifierKeys = keys.filter((key) => key.startsWith('KeyCode:'));
+  const nonModifierKeys = keys.filter(
+    (key) => key.startsWith('KeyCode:') || key.startsWith('Function:'),
+  );
   if (nonModifierKeys.length !== 1) return null;
-  const keyCode = Number(nonModifierKeys[0].slice('KeyCode:'.length));
-  const mapped = MAC_NATIVE_KEY_CODE_TO_VOICE_INPUT_KEY[keyCode];
+  const nativeKey = nonModifierKeys[0];
+  const functionCode = nativeKey.startsWith('Function:')
+    ? nativeKey.slice('Function:'.length)
+    : null;
+  const keyCode = nativeKey.startsWith('KeyCode:')
+    ? Number(nativeKey.slice('KeyCode:'.length))
+    : Number.NaN;
+  const mapped =
+    functionCode && VOICE_INPUT_FUNCTION_KEY_CODE_PATTERN.test(functionCode)
+      ? { code: functionCode, key: functionCode }
+      : MAC_NATIVE_KEY_CODE_TO_VOICE_INPUT_KEY[keyCode];
   if (!mapped) return null;
 
   return {
@@ -386,10 +421,12 @@ export function isVoiceInputMacNativeKeyboardShortcutPressed(
 ): boolean {
   if (!isVoiceInputMacNativeKeyboardShortcut(shortcut)) return false;
   const keySet = new Set(keys);
-  const expectedKeyCode = VOICE_INPUT_CODE_TO_MAC_NATIVE_KEY_CODE[shortcut.code];
-  if (typeof expectedKeyCode !== 'number') return false;
-  const nonModifierKeys = keys.filter((key) => key.startsWith('KeyCode:'));
-  if (nonModifierKeys.length !== 1 || nonModifierKeys[0] !== `KeyCode:${expectedKeyCode}`) return false;
+  const expectedNativeKey = getMacNativeShortcutKey(shortcut);
+  if (!expectedNativeKey) return false;
+  const nonModifierKeys = keys.filter(
+    (key) => key.startsWith('KeyCode:') || key.startsWith('Function:'),
+  );
+  if (nonModifierKeys.length !== 1 || nonModifierKeys[0] !== expectedNativeKey) return false;
 
   return (
     keySet.has('Fn') === shortcut.modifiers.fn &&
@@ -405,8 +442,16 @@ export function isVoiceInputMacNativeKeyboardShortcutTargetDown(
   shortcut: VoiceInputShortcut,
 ): boolean {
   if (!isVoiceInputMacNativeKeyboardShortcut(shortcut)) return false;
+  const expectedNativeKey = getMacNativeShortcutKey(shortcut);
+  return Boolean(expectedNativeKey && keys.includes(expectedNativeKey));
+}
+
+function getMacNativeShortcutKey(shortcut: VoiceInputShortcut): string | null {
+  if (VOICE_INPUT_FUNCTION_KEY_CODE_PATTERN.test(shortcut.code)) {
+    return `Function:${shortcut.code}`;
+  }
   const expectedKeyCode = VOICE_INPUT_CODE_TO_MAC_NATIVE_KEY_CODE[shortcut.code];
-  return typeof expectedKeyCode === 'number' && keys.includes(`KeyCode:${expectedKeyCode}`);
+  return typeof expectedKeyCode === 'number' ? `KeyCode:${expectedKeyCode}` : null;
 }
 
 export function getDefaultVoiceInputSettings(

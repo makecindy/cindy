@@ -50,6 +50,74 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);');
   });
 
+  it('每个 relay 连接代上线时从设备目录补齐已在线控制端展示名', () => {
+    const deviceLinkHost = readFileSync(resolve(mainRoot, 'device-link/index.ts'), 'utf8');
+
+    expect(deviceLinkHost).toContain("serverApiFetch<DeviceDirectoryResponse>('/api/device-link/devices'");
+    const onlineBranch = deviceLinkHost.indexOf("if (status === 'online') {");
+    const seedCachedNames = deviceLinkHost.indexOf(
+      'seedControllerDisplayNamesFromLastKnown();',
+      onlineBranch,
+    );
+    const refreshDirectory = deviceLinkHost.indexOf(
+      'void refreshControllerDisplayNamesFromDirectory(displayNameGeneration);',
+      onlineBranch,
+    );
+    const replaySubscriptions = deviceLinkHost.indexOf(
+      "replayActiveSubscriptions('ws-online');",
+      onlineBranch,
+    );
+    expect(onlineBranch).toBeGreaterThanOrEqual(0);
+    expect(seedCachedNames).toBeGreaterThan(onlineBranch);
+    expect(refreshDirectory).toBeGreaterThan(seedCachedNames);
+    expect(replaySubscriptions).toBeGreaterThan(refreshDirectory);
+    expect(deviceLinkHost).toContain(
+      'generation !== controllerDisplayNameRefreshGeneration',
+    );
+    expect(deviceLinkHost).toContain(
+      'const directoryRequestSequence = beginControllerDisplayNameDirectoryRefresh();',
+    );
+    expect(deviceLinkHost).toContain(
+      '!isLatestControllerDisplayNameDirectoryRefresh(directoryRequestSequence)',
+    );
+    expect(deviceLinkHost).toContain(
+      'latestControllerDisplayNameDirectoryRefresh = {',
+    );
+    expect(deviceLinkHost).toContain(
+      'const requestEpoch = controllerDisplayNameFreshness.epoch;',
+    );
+    expect(deviceLinkHost).toContain(
+      'applyControllerDisplayNamePresence({',
+    );
+    expect(deviceLinkHost).toContain(
+      "Object.prototype.hasOwnProperty.call(snap, 'selfName')",
+    );
+    expect(deviceLinkHost).toContain('applyControllerDisplayNameDirectorySnapshot({');
+  });
+
+  it('presence 展示名统一走协调器，无有效权威名时保留 dispatch 回退链', () => {
+    const deviceLinkHost = readFileSync(resolve(mainRoot, 'device-link/index.ts'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const dispatch = readFileSync(resolve(mainRoot, 'device-link/dispatch.ts'), 'utf8')
+      .replace(/\r\n/g, '\n');
+
+    const presenceHandler = deviceLinkHost.indexOf('client.onPresenceChanged');
+    const applyPresenceName = deviceLinkHost.indexOf(
+      'applyControllerDisplayNamePresence({',
+      presenceHandler,
+    );
+    expect(presenceHandler).toBeGreaterThanOrEqual(0);
+    expect(applyPresenceName).toBeGreaterThan(presenceHandler);
+
+    // guard 不写缓存时，dispatch 继续按「数据库名 → 自报名 → 短 ID」回退。
+    expect(dispatch).toContain(
+      'return controllerDisplayNameByDevice.get(deviceId)\n    ?? normalizedReportedName\n    ?? reportedControllerNameByDevice.get(deviceId);',
+    );
+    expect(dispatch).toContain(
+      'const displayName = normalized\n    ?? reportedControllerNameByDevice.get(deviceId)\n    ?? deviceId.slice(0, 8);',
+    );
+  });
+
   it('keeps device-link:voice:credential-sync matched but rejected (feature removed, readable error for old mobile)', () => {
     const dispatch = readFileSync(resolve(mainRoot, 'device-link/dispatch.ts'), 'utf8');
 

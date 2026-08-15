@@ -222,8 +222,27 @@ export function createMessageHandler(
     // 表情; turn 没建起来就 rejected 时由 turnRunner 撤掉)。
     // undefined = 没提前打, turn 自己打(与老行为一致)。
     let handedOverAck: Promise<string | null> | null | undefined;
+    // 用户消息也提前落库 —— 表情只解决了「渠道里看得到反馈」, 桌面端那条会话里
+    // 这条消息要等 turn 真正派发才出现(落库挂在 provider 受理的 onAccepted 上),
+    // 群上下文拼装慢的时候就是 15~60s 的空白, 看着像消息丢了。忙 / 新会话 /
+    // 受保护内容时返回 null, 完全退回原行为(见 persistInboundUserMessageEarly)。
+    let prePersisted: { sessionId: string; clientId: string } | null = null;
     if (adapter.prepareAgentTurnText) {
       handedOverAck = event.messageId ? ackProcessingEarly(im, event.messageId) : null;
+      try {
+        prePersisted =
+          (await turnRunner.persistInboundUserMessageEarly?.({
+            botContextId: event.contextId,
+            userId: event.senderId,
+            scopeKey: threadScoped ? event.scopeKey : undefined,
+            text: event.text,
+            attachments: event.attachments,
+            ...(event.protectedContent === true ? { protectedContent: true } : {}),
+          })) ?? null;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`early user-message persist failed (non-fatal): ${msg}`);
+      }
       try {
         prepared = await adapter.prepareAgentTurnText(event);
       } catch (err) {
@@ -246,6 +265,7 @@ export function createMessageHandler(
         ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
         ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
         ...(handedOverAck !== undefined ? { ackReactionIdPromise: handedOverAck } : {}),
+        ...(prePersisted ? { prePersistedUserMessage: prePersisted } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
         // 群历史附件只进模型消息、不落库(见 ImRunAgentTurnArgs.contextAttachments)。
         ...(prepared?.contextAttachments?.length

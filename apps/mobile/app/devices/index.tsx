@@ -32,10 +32,10 @@ import {
   Lock,
   Pencil,
   Pin,
-  Puzzle,
   RefreshCw,
   RadioTower,
   SquarePen,
+  UsersRound,
   X,
 } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -2624,8 +2624,9 @@ function SessionStatusMark({
       {archived ? (
         <Archive color={cindyList ? colors.textSecondary : colors.textTertiary} size={cindyList ? iconSize.sm : iconSize.lg} strokeWidth={iconStroke.thin} />
       ) : orcaLead ? (
+        // 与桌面 SessionStatusIcon /「+」菜单协同项同款 UsersRound，不再用旧 Puzzle。
         <SessionStatusPulse running={running}>
-          <Puzzle color={glyphColor} size={cindyList ? iconSize.sm : iconSize.action} strokeWidth={iconStroke.thin} />
+          <UsersRound color={glyphColor} size={cindyList ? iconSize.sm : iconSize.action} strokeWidth={iconStroke.thin} />
         </SessionStatusPulse>
       ) : attached ? (
         <SessionStatusPulse running={running}>

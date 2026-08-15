@@ -203,7 +203,7 @@ function ProviderRow({
       type="button"
       onClick={onClick}
       title={name}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left transition-colors hover:bg-[var(--surface-hover)]"
+      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
     >
       <span
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
@@ -786,12 +786,16 @@ export function AddProviderWizard({
             return {
               id: m.id,
               name: m.name,
+              ...(agent === 'pi' && presetModel?.piApi ? { piApi: presetModel.piApi } : {}),
               ...(contextWindow !== undefined ? { contextWindow } : {}),
               ...(presetModel?.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...(presetModel?.reasoning === true && presetModel.reasoningEfforts?.length
                 ? {
                     reasoning: true,
                     reasoningEfforts: [...presetModel.reasoningEfforts],
+                    ...(presetModel.reasoningDefaultEffort
+                      ? { reasoningDefaultEffort: presetModel.reasoningDefaultEffort }
+                      : {}),
                   }
                 : {}),
             };
@@ -804,6 +808,7 @@ export function AddProviderWizard({
           models: agentModels,
           ...(rt.headers ? { headers: rt.headers } : {}),
           ...(rt.modelsUrl ? { modelsUrl: rt.modelsUrl } : {}),
+          ...(rt.piCatalogProviderId ? { piCatalogProviderId: rt.piCatalogProviderId } : {}),
         };
         if (preset.authMethod !== 'none') {
           const k = apiKey.trim();
@@ -1398,7 +1403,7 @@ export function AddProviderWizard({
                             })
                           }
                           className={cn(
-                            'flex items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--surface-hover)]',
+                            'flex items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
                             i > 0 && 'border-t',
                           )}
                           style={{ borderColor: 'var(--border-default)' }}

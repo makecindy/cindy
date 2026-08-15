@@ -141,6 +141,9 @@ function collectEvents(): IMMessageEvent[] {
 
 beforeEach(async () => {
   await wsClient.stop({ announceOffline: false, reason: 'test-reset' });
+  // 入站去重账本按设计跨 stop/start 保留(重推高发在重连前后), 所以用例之间
+  // 想复用同一个 message_id 必须显式清账。
+  wsClient.resetInboundDedupeForTest();
   mocks.options.length = 0;
   mocks.eventHandlers = {};
   vi.clearAllMocks();

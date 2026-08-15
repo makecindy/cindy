@@ -75,6 +75,51 @@ let botOpenId: string | null = null;
 const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
 const strangerNoticeAt = new Map<string, number>();
 
+/**
+ * 入站消息去重 —— 飞书事件是「至少送达一次」: 服务端等不到我们的 ACK 就会把
+ * 同一条消息**原样再推一遍**(同一个 message_id)。没有这道闸, 重推会被当成一条
+ * 新消息跑完整一轮 turn: 群里多出一条 bot 回复 + 多花一次模型调用。
+ *
+ * 实测(2026-08-14 14:37, 本机网络抖动、relay 同时断线重连): 话题里只有一条
+ * 用户消息, 却出现两条 bot 回复; 日志里同一句 9 字消息进了两次 processOne。
+ *
+ * 设计要点:
+ *   - 按 (appId, message_id) 记账 —— 换 bot 不会互相串; 用户真的重复发一遍是
+ *     **另一个** message_id, 不会被误杀。
+ *   - 认领动作必须同步完成(检查 + 落账之间不许有 await), 否则两个并发帧会双双
+ *     通过。调用点也因此放在 handleIncomingMessage 的第一个 await 之前。
+ *   - **不随 stop/start 或重连清空**: 重推恰恰发生在断连重连前后, 那时清空等于
+ *     闸门在最需要它的时刻失效。只按 TTL + 容量淘汰。
+ */
+const INBOUND_DEDUPE_TTL_MS = 10 * 60_000;
+const INBOUND_DEDUPE_MAX_ENTRIES = 1_000;
+const seenInboundMessages = new Map<string, number>();
+
+/** true = 本进程没见过这条消息(可以处理); false = 重推, 应当丢弃。 */
+function claimInboundMessage(appId: string, messageId: string): boolean {
+  const key = `${appId}:${messageId}`;
+  const now = Date.now();
+  const seenAt = seenInboundMessages.get(key);
+  if (seenAt !== undefined && now - seenAt < INBOUND_DEDUPE_TTL_MS) return false;
+  // delete + set: Map 对已存在的 key 保留旧插入序, 过期条目刷新后必须重新排到
+  // 队尾, 否则下面按插入序淘汰会先砍掉刚刷新的那条。
+  seenInboundMessages.delete(key);
+  seenInboundMessages.set(key, now);
+  for (const [k, ts] of seenInboundMessages) {
+    const withinBudget = seenInboundMessages.size <= INBOUND_DEDUPE_MAX_ENTRIES;
+    // 插入序 = 时间序, 最老的都没过期且没超量 ⇒ 后面的也不用看。
+    if (withinBudget && now - ts < INBOUND_DEDUPE_TTL_MS) break;
+    if (k === key) continue;
+    seenInboundMessages.delete(k);
+  }
+  return true;
+}
+
+/** 测试注入口 — 生产代码不要调用(生产语义就是跨 stop/start 不清空)。 */
+export function resetInboundDedupeForTest(): void {
+  seenInboundMessages.clear();
+}
+
 const DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 1500;
 export const QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 4500;
 
@@ -594,6 +639,17 @@ async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): P
   const msgType = data.message.message_type ?? '';
   const rawContent = data.message.content ?? '';
   if (!senderOpenId || !messageId || !chatId) return;
+
+  // 重推闸门 —— 必须在第一个 await 之前同步认领(见 claimInboundMessage), 也必须
+  // 排在所有副作用(开话题 / 打表情 / 下附件 / 陌生人提示)之前: 重推一旦漏过去,
+  // 这些动作都会再做一遍。
+  if (!claimInboundMessage(botAppId, messageId)) {
+    log.info(
+      `[feishu/wsClient] drop duplicate inbound message ...${messageId.slice(-8)} ` +
+        '(feishu re-push; already handled)',
+    );
+    return;
+  }
 
   if (isGroup) {
     // 没 @ 到本 bot 的群消息一律丢(bot open_id 未知时也丢 — 惰性失效)。

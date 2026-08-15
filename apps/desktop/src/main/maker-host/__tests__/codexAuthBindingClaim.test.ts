@@ -55,7 +55,12 @@ vi.mock('../../appSessionState.js', async (importOriginal) => {
   };
 });
 
-function fixture(): { codexHome: string; systemAuth: string; localAuth: string; bindingFile: string } {
+function fixture(): {
+  codexHome: string;
+  systemAuth: string;
+  localAuth: string;
+  bindingFile: string;
+} {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-binding-claim-'));
   dirs.push(root);
   h.userDataDir = path.join(root, 'user-data');
@@ -120,6 +125,9 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
       identity: 'dev@example.test',
     });
     expect(readBindingFile(bindingFile)).toMatchObject({ openai: 'owner-a' });
+    expect(readBindingFile(bindingFile)).toMatchObject({
+      sources: { openai: 'native-harness-inherited' },
+    });
     await expect(adapter.getAccessToken()).resolves.toBe('system-token');
   });
 
@@ -166,9 +174,8 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     const { codexHome, systemAuth, localAuth, bindingFile } = fixture();
     fs.mkdirSync(codexHome, { recursive: true });
     fs.copyFileSync(systemAuth, localAuth);
-    const { CODEX_USER_DISCONNECT_REASON, writeInvalidatedSystemCodexAuthMarker } = await import(
-      '../codex-auth-invalidation.js'
-    );
+    const { CODEX_USER_DISCONNECT_REASON, writeInvalidatedSystemCodexAuthMarker } =
+      await import('../codex-auth-invalidation.js');
     expect(
       writeInvalidatedSystemCodexAuthMarker(
         codexHome,

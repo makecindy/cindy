@@ -53,7 +53,8 @@ function formatDuration(ms: number | undefined): string | undefined {
 function providerLabel(provider: SubagentProvider): string {
   if (provider === 'claude-code') return 'Claude Code';
   if (provider === 'codex') return 'Codex';
-  return 'PI';
+  // 轮 33 C2:'PI' → 'Pi'(与全产品命名一致)。
+  return 'Pi';
 }
 
 function runTitle(run: SubagentRun, fallback: string): string {

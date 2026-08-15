@@ -21,14 +21,18 @@ import { join } from 'node:path';
 import {
   assistantHasFollowingUserBoundary,
   buildRenderItems,
+  collectDeleteAnchorClientIds,
   collectStableLocalFileRefs,
   collectTurnFinalAssistantClientIds,
   findRestorableViewportItemIdx,
   groupWorkRuns,
   insertForkOriginItem,
+  isScrollNavigationKey,
+  pickDeleteCompensationAnchorKey,
   shouldBlockAssistantFork,
   type RenderItem,
 } from '../components/chat/MessageStream';
+import { shouldHandleNavigationKey } from '../components/chat/useNavigationKeyListener';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import type { TurnChangeSetSummary } from '../../shared/turnChangeSet';
 
@@ -1338,5 +1342,130 @@ describe('collectStableLocalFileRefs — reference stability', () => {
       mkFileRef('foo.ts'),
       mkFileRef('bar.ts'),
     ]);
+  });
+});
+
+// ── pickDeleteCompensationAnchorKey ──────────────────────────────────────────
+
+describe('pickDeleteCompensationAnchorKey', () => {
+  it('picks the first surviving neighbor after the deleted range', () => {
+    // 旧全量: 窗口 [w1,w2,v,w3] 被整段清掉, 邻居 after 是 next, 会话尾是 tail
+    const prevAll = ['head', 'w1', 'w2', 'v', 'w3', 'next', 'mid', 'tail'];
+    const curAll = ['head', 'next', 'mid', 'tail'];
+    expect(pickDeleteCompensationAnchorKey(prevAll, curAll, 'v')).toBe('next');
+  });
+
+  it('falls back to the nearest surviving predecessor when no successor remains', () => {
+    const prevAll = ['head', 'keep', 'v', 'gone1', 'gone2'];
+    const curAll = ['head', 'keep'];
+    expect(pickDeleteCompensationAnchorKey(prevAll, curAll, 'v')).toBe('keep');
+  });
+
+  it('does not rebuild at conversation tail when prev is the full old sequence', () => {
+    // 回归: 窗口整段被清时旧可见窗与 cur 全量无交集, helper 会落到 cur 末项(会话尾);
+    // 调用方必须传旧全量序列才能保住删除区间后的邻居。
+    const prevVisibleOnly = ['w1', 'w2', 'v', 'w3']; // 整窗被清, 无存活邻接
+    const prevAll = ['head', 'w1', 'w2', 'v', 'w3', 'next', 'mid', 'tail'];
+    const curAll = ['head', 'next', 'mid', 'tail'];
+    expect(pickDeleteCompensationAnchorKey(prevVisibleOnly, curAll, 'v')).toBe('tail');
+    expect(pickDeleteCompensationAnchorKey(prevAll, curAll, 'v')).toBe('next');
+  });
+
+  it('returns null when deleted key is absent from prevKeys', () => {
+    expect(pickDeleteCompensationAnchorKey(['a', 'b'], ['a', 'b', 'c'], 'missing')).toBeNull();
+  });
+
+  it('picks the intervening tool row when a focused child is deleted from a surviving work group', () => {
+    const before = groupWorkRuns(
+      buildRenderItems([
+        mkUser('u1'),
+        mkAssistant('a-intro', 'Starting.'),
+        mkTool('t1', 'Read'),
+        mkAssistant('a-draft', 'Progress update.'),
+        mkTool('t2', 'Bash'),
+        mkAssistant('a-final', 'done'),
+      ]).items,
+      false,
+    );
+    const after = groupWorkRuns(
+      buildRenderItems([
+        mkUser('u1'),
+        mkAssistant('a-intro', 'Starting.'),
+        mkTool('t1', 'Read'),
+        mkTool('t2', 'Bash'),
+        mkAssistant('a-final', 'done'),
+      ]).items,
+      false,
+    );
+    const previousAnchorIds = collectDeleteAnchorClientIds(before);
+    const currentAnchorIds = collectDeleteAnchorClientIds(after);
+    const previousGroup = before.find((item) => item.type === 'work_group');
+    const currentGroup = after.find((item) => item.type === 'work_group');
+
+    expect(previousGroup).toBeDefined();
+    expect(currentGroup).toBeDefined();
+    expect(previousGroup?.key).toBe(currentGroup?.key);
+    expect(previousAnchorIds).toEqual(['u1', 'a-intro', 't1', 'a-draft', 't2', 'a-final']);
+    expect(currentAnchorIds).toEqual(['u1', 'a-intro', 't1', 't2', 'a-final']);
+    expect(pickDeleteCompensationAnchorKey(previousAnchorIds, currentAnchorIds, 'a-draft')).toBe(
+      't2',
+    );
+  });
+
+  it('picks the next message when an anchored task card is deleted from a surviving work group', () => {
+    const messagesBefore = [
+      mkUser('u1'),
+      mkTool('t1', 'Read'),
+      mkResult('r-t1', 'tu-t1'),
+      mkTool('task1', 'Agent', { description: 'Review auth flow', prompt: 'Check auth' }),
+      mkResult('r-task1', 'tu-task1', 'done'),
+      mkAssistant('a-final', 'done'),
+    ];
+    const before = groupWorkRuns(buildRenderItems(messagesBefore).items, false);
+    const after = groupWorkRuns(
+      buildRenderItems(
+        messagesBefore.filter((message) => !['task1', 'r-task1'].includes(message.clientId)),
+      ).items,
+      false,
+    );
+    const previousAnchorIds = collectDeleteAnchorClientIds(before);
+    const currentAnchorIds = collectDeleteAnchorClientIds(after);
+    const previousGroup = before.find((item) => item.type === 'work_group');
+    const currentGroup = after.find((item) => item.type === 'work_group');
+
+    expect(previousGroup?.key).toBe('work-t1');
+    expect(currentGroup?.key).toBe(previousGroup?.key);
+    expect(previousAnchorIds).toEqual(['u1', 't1', 'task1', 'a-final']);
+    expect(currentAnchorIds).toEqual(['u1', 't1', 'a-final']);
+    expect(
+      pickDeleteCompensationAnchorKey(previousAnchorIds, currentAnchorIds, 'task1'),
+    ).toBe('a-final');
+  });
+
+  it('keeps an intervening non-message render item after a top-level message is deleted', () => {
+    const previousItemKeys = ['msg-user', 'work-tool', 'msg-assistant'];
+    const currentItemKeys = ['work-tool', 'msg-assistant'];
+    const previousMessageIds = ['user', 'assistant'];
+    const currentMessageIds = ['assistant'];
+
+    expect(
+      pickDeleteCompensationAnchorKey(previousMessageIds, currentMessageIds, 'user'),
+    ).toBe('assistant');
+    expect(
+      pickDeleteCompensationAnchorKey(previousItemKeys, currentItemKeys, 'msg-user'),
+    ).toBe('work-tool');
+  });
+});
+
+describe('focus scroll takeover keys', () => {
+  it('treats Space as user-controlled scrolling', () => {
+    expect(isScrollNavigationKey(' ')).toBe(true);
+    expect(isScrollNavigationKey('Enter')).toBe(false);
+  });
+
+  it('does not treat Space in an editable target as scroll takeover', () => {
+    expect(shouldHandleNavigationKey(' ', null)).toBe(true);
+    expect(shouldHandleNavigationKey('PageUp', null)).toBe(true);
+    expect(shouldHandleNavigationKey('Enter', null)).toBe(false);
   });
 });

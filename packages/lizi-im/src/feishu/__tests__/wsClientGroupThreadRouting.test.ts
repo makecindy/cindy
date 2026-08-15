@@ -113,11 +113,13 @@ const credentials = {
 const OWNER = 'ou_owner';
 const BOT = 'ou_bot';
 
-function groupMainFlowMessage(text: string): unknown {
+// message_id 可覆写 —— 入站层按 message_id 去重(飞书重推闸门), 用例里模拟
+// "两条不同的消息" 必须给不同 id, 否则第二条会被当成重推丢掉。
+function groupMainFlowMessage(text: string, messageId = 'om_msg1'): unknown {
   return {
     sender: { sender_id: { open_id: OWNER } },
     message: {
-      message_id: 'om_msg1',
+      message_id: messageId,
       chat_id: 'oc_chat1',
       chat_type: 'group',
       message_type: 'text',
@@ -148,6 +150,9 @@ function collectMessages(): IMMessageEvent[] {
 
 beforeEach(async () => {
   await wsClient.stop({ announceOffline: false, reason: 'test-reset' });
+  // 去重账本按设计跨 stop/start 保留, 用例之间必须显式清掉才能复用同一个
+  // message_id。
+  wsClient.resetInboundDedupeForTest();
   mocks.options.length = 0;
   mocks.eventHandlers = {};
   vi.clearAllMocks();
@@ -202,8 +207,12 @@ describe('feishu group thread routing', () => {
     const events = collectMessages();
     await connect();
 
-    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('第一句'));
-    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('第二句'));
+    await mocks.eventHandlers['im.message.receive_v1'](
+      groupMainFlowMessage('第一句', 'om_first'),
+    );
+    await mocks.eventHandlers['im.message.receive_v1'](
+      groupMainFlowMessage('第二句', 'om_second'),
+    );
 
     expect(mocks.openThread).toHaveBeenCalledTimes(2);
     expect(events.map((e) => e.senderId)).toEqual(['g/oc_chat1/omt_a', 'g/oc_chat1/omt_b']);
