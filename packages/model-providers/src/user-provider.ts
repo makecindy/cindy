@@ -130,6 +130,7 @@ function toCatalogModel(
   return {
     id: m.id,
     name: m.name,
+    ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
     contextWindow: m.contextWindow ?? DEFAULT_CUSTOM_CONTEXT_WINDOW,
     // 用户自己填了才算显式声明;走 DEFAULT_CUSTOM_CONTEXT_WINDOW 兜底的不标记 ——
     // 那是「仅用于展示」的保守默认,不能拿去收敛运行期上报的窗口。

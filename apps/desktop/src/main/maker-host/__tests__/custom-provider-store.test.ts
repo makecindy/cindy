@@ -182,6 +182,46 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
     }
   });
 
+  it('accepts supported per-model piApi values only on a Pi runtime', () => {
+    for (const piApi of [
+      'anthropic-messages',
+      'openai-responses',
+      'openai-completions',
+      'google-generative-ai',
+    ]) {
+      expect(validateCustomProviderConfig({
+        id: 'pi-api',
+        name: 'Pi API',
+        runtimes: {
+          pi: {
+            baseUrl: 'https://example.com/v1',
+            models: [{ id: 'm', name: 'M', piApi }],
+          },
+        },
+      }).ok).toBe(true);
+    }
+    expect(validateCustomProviderConfig({
+      id: 'bad-pi-api',
+      name: 'Bad Pi API',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://example.com/v1',
+          models: [{ id: 'm', name: 'M', piApi: 'claude-v1' }],
+        },
+      },
+    }).ok).toBe(false);
+    expect(validateCustomProviderConfig({
+      id: 'wrong-runtime-pi-api',
+      name: 'Wrong runtime Pi API',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.com/v1',
+          models: [{ id: 'm', name: 'M', piApi: 'openai-responses' }],
+        },
+      },
+    }).ok).toBe(false);
+  });
+
   it('accepts only explicit, non-empty, valid Pi reasoning effort capabilities', () => {
     const config = (model: Record<string, unknown>, agent: 'pi' | 'codex' = 'pi') => ({
       id: 'reasoning-provider',
@@ -597,6 +637,32 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       { id: 'legacy', name: 'Legacy' },
       { id: 'explicit-off', name: 'Explicit off' },
     ]);
+  });
+
+  it('round-trips a per-model Pi protocol correction', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'deepseek-pi',
+      name: 'DeepSeek Pi',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          wireProtocol: 'openai-responses',
+          models: [{
+            id: 'deepseek-v4-pro',
+            name: 'DeepSeek V4 Pro',
+            piApi: 'openai-responses',
+          }],
+        },
+      },
+    });
+
+    expect((await getCustomProvider('deepseek-pi'))?.runtimes.pi?.models).toEqual([{
+      id: 'deepseek-v4-pro',
+      name: 'DeepSeek V4 Pro',
+      piApi: 'openai-responses',
+    }]);
   });
 
   it('round-trips an explicit Chat Completions protocol', async () => {

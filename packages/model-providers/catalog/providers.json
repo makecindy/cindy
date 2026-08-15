@@ -5,11 +5,7 @@
       "id": "xai",
       "name": "xAI",
       "source": "builtin",
-      "agents": [
-        "claude-code",
-        "codex",
-        "pi"
-      ],
+      "agents": ["claude-code", "codex", "pi"],
       "auth": {
         "method": "oauth"
       },
@@ -37,9 +33,7 @@
         "claude-code": {
           "upstream": "https://api.x.ai/v1",
           "authStrategy": "oauth-passthrough",
-          "modelPrefixes": [
-            "xai/"
-          ]
+          "modelPrefixes": ["xai/"]
         },
         "codex": {
           "upstream": "https://api.x.ai/v1",
@@ -53,9 +47,7 @@
             "originator",
             "session_id"
           ],
-          "modelPrefixes": [
-            "xai/"
-          ]
+          "modelPrefixes": ["xai/"]
         },
         "pi": {
           "upstream": "https://api.x.ai/v1",
@@ -77,11 +69,7 @@
             "sortOrder": 49,
             "description": "xAI Grok 4.5 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
             "contextWindow": 500000,
-            "efforts": [
-              "low",
-              "medium",
-              "high"
-            ],
+            "efforts": ["low", "medium", "high"],
             "defaultEffort": "high",
             "status": "active"
           },
@@ -92,11 +80,7 @@
             "sortOrder": 51,
             "description": "xAI Grok 4.3 通用旗舰,1M 上下文(SuperGrok 订阅直连)",
             "contextWindow": 1000000,
-            "efforts": [
-              "low",
-              "medium",
-              "high"
-            ],
+            "efforts": ["low", "medium", "high"],
             "defaultEffort": "high",
             "status": "active"
           },
@@ -155,12 +139,7 @@
             "sortOrder": 98,
             "description": "旧版兼容 alias;新会话请使用明确的 Grok 4.20 model ID",
             "contextWindow": 1000000,
-            "efforts": [
-              "low",
-              "medium",
-              "high",
-              "xhigh"
-            ],
+            "efforts": ["low", "medium", "high", "xhigh"],
             "defaultEffort": "high",
             "status": "deprecated",
             "defaultEnabled": false
@@ -186,11 +165,7 @@
             "sortOrder": 49,
             "description": "xAI Grok 4.5 新旗舰,编码/agent 任务最强,500k 上下文(SuperGrok 订阅直连)",
             "contextWindow": 500000,
-            "efforts": [
-              "low",
-              "medium",
-              "high"
-            ],
+            "efforts": ["low", "medium", "high"],
             "defaultEffort": "high",
             "status": "active"
           },
@@ -201,11 +176,7 @@
             "sortOrder": 51,
             "description": "xAI Grok 4.3 通用旗舰,1M 上下文(SuperGrok 订阅直连)",
             "contextWindow": 1000000,
-            "efforts": [
-              "low",
-              "medium",
-              "high"
-            ],
+            "efforts": ["low", "medium", "high"],
             "defaultEffort": "high",
             "status": "active"
           },
@@ -264,11 +235,7 @@
             "sortOrder": 98,
             "description": "旧版兼容 alias;新会话请使用明确的 Grok 4.20 model ID",
             "contextWindow": 1000000,
-            "efforts": [
-              "low",
-              "medium",
-              "high"
-            ],
+            "efforts": ["low", "medium", "high"],
             "defaultEffort": "high",
             "status": "deprecated",
             "defaultEnabled": false
@@ -312,11 +279,7 @@
             "sortOrder": 50,
             "contextWindow": 500000,
             "maxOutput": 500000,
-            "efforts": [
-              "low",
-              "medium",
-              "high"
-            ],
+            "efforts": ["low", "medium", "high"],
             "defaultEffort": "medium",
             "status": "active",
             "supportsImageInput": true,
@@ -456,11 +419,7 @@
               "name": "DeepSeek V4 Flash",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "low",
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["low", "high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -468,10 +427,7 @@
               "name": "DeepSeek V4 Pro",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             }
           ]
@@ -659,11 +615,7 @@
               "contextWindow": 1048576,
               "supportsImageInput": true,
               "reasoning": true,
-              "reasoningEfforts": [
-                "low",
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["low", "high", "max"],
               "reasoningDefaultEffort": "max"
             }
           ]
@@ -777,11 +729,7 @@
               "contextWindow": 1048576,
               "supportsImageInput": true,
               "reasoning": true,
-              "reasoningEfforts": [
-                "low",
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["low", "high", "max"],
               "reasoningDefaultEffort": "max"
             }
           ]
@@ -847,11 +795,7 @@
               "contextWindow": 1048576,
               "supportsImageInput": true,
               "reasoning": true,
-              "reasoningEfforts": [
-                "low",
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["low", "high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -860,11 +804,7 @@
               "contextWindow": 262144,
               "supportsImageInput": true,
               "reasoning": true,
-              "reasoningEfforts": [
-                "low",
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["low", "high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1151,10 +1091,7 @@
               "name": "DeepSeek V4 Flash",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1162,10 +1099,7 @@
               "name": "DeepSeek V4 Flash 0731",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1173,10 +1107,7 @@
               "name": "DeepSeek V4 Pro",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1184,10 +1115,7 @@
               "name": "GLM-5",
               "contextWindow": 202752,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1195,10 +1123,7 @@
               "name": "GLM-5.1",
               "contextWindow": 202752,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1206,10 +1131,7 @@
               "name": "GLM-5.2",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1259,11 +1181,7 @@
               "contextWindow": 1000000,
               "supportsImageInput": true,
               "reasoning": true,
-              "reasoningEfforts": [
-                "low",
-                "medium",
-                "xhigh"
-              ],
+              "reasoningEfforts": ["low", "medium", "xhigh"],
               "reasoningDefaultEffort": "medium"
             }
           ]
@@ -1462,10 +1380,7 @@
               "name": "DeepSeek V4 Flash",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1473,10 +1388,7 @@
               "name": "DeepSeek V4 Flash 0731",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1484,10 +1396,7 @@
               "name": "DeepSeek V4 Pro",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1495,10 +1404,7 @@
               "name": "GLM-5",
               "contextWindow": 202752,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1506,10 +1412,7 @@
               "name": "GLM-5.1",
               "contextWindow": 202752,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1517,10 +1420,7 @@
               "name": "GLM-5.2",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["high", "max"],
               "reasoningDefaultEffort": "high"
             },
             {
@@ -1570,11 +1470,7 @@
               "contextWindow": 1000000,
               "supportsImageInput": true,
               "reasoning": true,
-              "reasoningEfforts": [
-                "low",
-                "medium",
-                "xhigh"
-              ],
+              "reasoningEfforts": ["low", "medium", "xhigh"],
               "reasoningDefaultEffort": "medium"
             }
           ]
@@ -1713,12 +1609,7 @@
               "name": "GLM-5.2",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "low",
-                "medium",
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["low", "medium", "high", "max"],
               "reasoningDefaultEffort": "medium"
             },
             {
@@ -1788,12 +1679,7 @@
               "name": "GLM-5.2",
               "contextWindow": 1000000,
               "reasoning": true,
-              "reasoningEfforts": [
-                "low",
-                "medium",
-                "high",
-                "max"
-              ],
+              "reasoningEfforts": ["low", "medium", "high", "max"],
               "reasoningDefaultEffort": "medium"
             },
             {

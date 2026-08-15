@@ -12,7 +12,7 @@
 
 import { parseModelRegistry } from './modelAccessValidator.js';
 
-import { PI_REASONING_EFFORTS } from './types.js';
+import { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
 import type {
   Catalog,
   Provider,
@@ -42,6 +42,10 @@ function isAgentKind(v: unknown): v is AgentKind {
 
 function isEffort(v: unknown): v is Effort {
   return typeof v === 'string' && (EFFORTS as readonly string[]).includes(v);
+}
+
+function isPiModelApi(v: unknown): boolean {
+  return typeof v === 'string' && (PI_MODEL_APIS as readonly string[]).includes(v);
 }
 
 function hasValidPresetReasoningCapability(
@@ -100,6 +104,9 @@ function validateAccess(p: Provider): void {
 function validateModel(m: CatalogModel, providerId: string): void {
   assert(typeof m.id === 'string' && m.id.length > 0, `model.id missing in provider '${providerId}'`);
   assert(typeof m.name === 'string' && m.name.length > 0, `model.name missing for '${m.id}'`);
+  if (m.piApi !== undefined) {
+    assert(isPiModelApi(m.piApi), `model.piApi invalid for '${m.id}'`);
+  }
   assert(typeof m.contextWindow === 'number' && m.contextWindow > 0, `model.contextWindow invalid for '${m.id}'`);
   assert(Array.isArray(m.efforts), `model.efforts must be array for '${m.id}'`);
   assert(m.efforts.every(isEffort), `model.efforts has invalid value for '${m.id}'`);
@@ -428,6 +435,7 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       const mm = m as Record<string, unknown>;
       if (typeof mm.id !== 'string' || mm.id.length === 0) return false;
       if (typeof mm.name !== 'string' || mm.name.length === 0) return false;
+      if (mm.piApi !== undefined && !isPiModelApi(mm.piApi)) return false;
       if (
         mm.contextWindow !== undefined
         && (typeof mm.contextWindow !== 'number' || !Number.isFinite(mm.contextWindow) || mm.contextWindow <= 0)

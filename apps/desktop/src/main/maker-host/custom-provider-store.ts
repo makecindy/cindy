@@ -21,6 +21,7 @@ import type {
   CustomProviderRuntimeConfig,
   OAuthProviderDescriptor,
   PiReasoningEffort,
+  PiModelApi,
   ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 import {
@@ -29,6 +30,7 @@ import {
   isLoopbackProviderUrl,
   isProviderRequestPath,
   PI_REASONING_EFFORTS,
+  PI_MODEL_APIS,
   preservesPiCatalogModels,
 } from '@cindy/model-providers';
 
@@ -47,18 +49,18 @@ const MAX_NAME_LEN = 60;
 
 /** 验证结果：ok 或带 code + message（供 handler 映射成 throwIpcError）。 */
 export type ValidationResult =
-  | { ok: true }
-  | { ok: false; code: 'INVALID_PARAMS'; message: string };
+  { ok: true } | { ok: false; code: 'INVALID_PARAMS'; message: string };
 
 function invalid(message: string): ValidationResult {
   return { ok: false, code: 'INVALID_PARAMS', message };
 }
 
 function isPiReasoningEffort(value: unknown): value is PiReasoningEffort {
-  return (
-    typeof value === 'string' &&
-    (PI_REASONING_EFFORTS as readonly string[]).includes(value)
-  );
+  return typeof value === 'string' && (PI_REASONING_EFFORTS as readonly string[]).includes(value);
+}
+
+function isPiModelApi(value: unknown): value is PiModelApi {
+  return typeof value === 'string' && (PI_MODEL_APIS as readonly string[]).includes(value);
 }
 
 function parseStoredPiReasoningCapability(
@@ -76,10 +78,11 @@ function parseStoredPiReasoningCapability(
   ) {
     return {};
   }
-  const defaultEffort = isPiReasoningEffort(model.reasoningDefaultEffort)
-    && efforts.includes(model.reasoningDefaultEffort)
-    ? model.reasoningDefaultEffort
-    : undefined;
+  const defaultEffort =
+    isPiReasoningEffort(model.reasoningDefaultEffort) &&
+    efforts.includes(model.reasoningDefaultEffort)
+      ? model.reasoningDefaultEffort
+      : undefined;
   return {
     reasoning: true,
     reasoningEfforts: efforts,
@@ -121,10 +124,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   } catch {
     return invalid(`runtime '${agent}' baseUrl is not a valid URL`);
   }
-  if (
-    r.requestPath !== undefined
-    && !isProviderRequestPath(r.requestPath)
-  ) {
+  if (r.requestPath !== undefined && !isProviderRequestPath(r.requestPath)) {
     return invalid(`runtime '${agent}' requestPath invalid`);
   }
   if (!Array.isArray(r.models)) return invalid(`runtime '${agent}' models must be an array`);
@@ -138,12 +138,10 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       return invalid(`runtime '${agent}' model.name required`);
     }
     if (
-      mm.contextWindow !== undefined
-      && (
-        typeof mm.contextWindow !== 'number'
-        || !Number.isFinite(mm.contextWindow)
-        || mm.contextWindow <= 0
-      )
+      mm.contextWindow !== undefined &&
+      (typeof mm.contextWindow !== 'number' ||
+        !Number.isFinite(mm.contextWindow) ||
+        mm.contextWindow <= 0)
     ) {
       return invalid(`runtime '${agent}' model.contextWindow must be a positive number`);
     }
@@ -153,10 +151,13 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
       return invalid(`runtime '${agent}' model.supportsImageInput must be a boolean`);
     }
+    if (mm.piApi !== undefined && (agent !== 'pi' || !isPiModelApi(mm.piApi))) {
+      return invalid(`runtime '${agent}' model.piApi invalid`);
+    }
     const hasReasoningCapability =
-      mm.reasoning !== undefined
-      || mm.reasoningEfforts !== undefined
-      || mm.reasoningDefaultEffort !== undefined;
+      mm.reasoning !== undefined ||
+      mm.reasoningEfforts !== undefined ||
+      mm.reasoningDefaultEffort !== undefined;
     if (hasReasoningCapability && agent !== 'pi') {
       return invalid(`runtime '${agent}' reasoning capability is only supported for pi models`);
     }
@@ -174,11 +175,9 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
         return invalid(`runtime '${agent}' model.reasoningEfforts invalid`);
       }
       if (
-        mm.reasoningDefaultEffort !== undefined
-        && (
-          !isPiReasoningEffort(mm.reasoningDefaultEffort)
-          || !mm.reasoningEfforts.includes(mm.reasoningDefaultEffort)
-        )
+        mm.reasoningDefaultEffort !== undefined &&
+        (!isPiReasoningEffort(mm.reasoningDefaultEffort) ||
+          !mm.reasoningEfforts.includes(mm.reasoningDefaultEffort))
       ) {
         return invalid(`runtime '${agent}' model.reasoningDefaultEffort invalid`);
       }
@@ -189,9 +188,10 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (r.wireProtocol !== undefined) {
     // Pi 是多协议 harness；Codex 也具备 Responses / Chat / Anthropic bridge。
     // Claude Code 只接受原生 Anthropic Messages。
-    const allowed = agent === 'claude-code'
-      ? ['anthropic-messages']
-      : ['openai-responses', 'openai-chat', 'anthropic-messages'];
+    const allowed =
+      agent === 'claude-code'
+        ? ['anthropic-messages']
+        : ['openai-responses', 'openai-chat', 'anthropic-messages'];
     if (typeof r.wireProtocol !== 'string' || !allowed.includes(r.wireProtocol)) {
       return invalid(`runtime '${agent}' wireProtocol invalid`);
     }
@@ -220,12 +220,10 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     }
   }
   if (
-    r.piCatalogProviderId !== undefined
-    && (
-      agent !== 'pi'
-      || typeof r.piCatalogProviderId !== 'string'
-      || !/^[a-z0-9-]+$/.test(r.piCatalogProviderId)
-    )
+    r.piCatalogProviderId !== undefined &&
+    (agent !== 'pi' ||
+      typeof r.piCatalogProviderId !== 'string' ||
+      !/^[a-z0-9-]+$/.test(r.piCatalogProviderId))
   ) {
     return invalid(`runtime '${agent}' piCatalogProviderId invalid`);
   }
@@ -275,18 +273,16 @@ function validateAuthSection(auth: unknown): ValidationResult {
   const unknownField = Object.keys(o).find((field) => !allowedFields.has(field));
   if (unknownField) return invalid(`auth.oauth.${unknownField} is not allowed`);
   if (
-    flow === 'authorization-code'
-    && (o.deviceAuthorizationUrl !== undefined || o.extraDeviceParams !== undefined)
+    flow === 'authorization-code' &&
+    (o.deviceAuthorizationUrl !== undefined || o.extraDeviceParams !== undefined)
   ) {
     return invalid('auth.oauth device-code fields not allowed for authorization-code');
   }
   if (
-    flow === 'device-code'
-    && (
-      o.authorizeUrl !== undefined
-      || o.extraAuthParams !== undefined
-      || o.redirectPort !== undefined
-    )
+    flow === 'device-code' &&
+    (o.authorizeUrl !== undefined ||
+      o.extraAuthParams !== undefined ||
+      o.redirectPort !== undefined)
   ) {
     return invalid('auth.oauth authorization-code fields not allowed for device-code');
   }
@@ -315,12 +311,11 @@ function validateAuthSection(auth: unknown): ValidationResult {
   }
   if (o.redirectPort !== undefined) {
     if (
-      flow !== 'authorization-code'
-      ||
-      typeof o.redirectPort !== 'number'
-      || !Number.isInteger(o.redirectPort)
-      || o.redirectPort <= 0
-      || o.redirectPort >= 65536
+      flow !== 'authorization-code' ||
+      typeof o.redirectPort !== 'number' ||
+      !Number.isInteger(o.redirectPort) ||
+      o.redirectPort <= 0 ||
+      o.redirectPort >= 65536
     ) {
       return invalid('auth.oauth.redirectPort invalid');
     }
@@ -331,16 +326,11 @@ function validateAuthSection(auth: unknown): ValidationResult {
       return invalid(`auth.oauth.${field} invalid`);
     }
     if (
-      Object.values(o[field] as Record<string, unknown>).some(
-        (value) => typeof value !== 'string',
-      )
+      Object.values(o[field] as Record<string, unknown>).some((value) => typeof value !== 'string')
     ) {
       return invalid(`auth.oauth.${field} invalid`);
     }
-    const collision = findReservedOAuthExtraParam(
-      o[field] as Record<string, unknown>,
-      flow,
-    );
+    const collision = findReservedOAuthExtraParam(o[field] as Record<string, unknown>, flow);
     if (collision) {
       return invalid(`auth.oauth.${field} cannot override '${collision}'`);
     }
@@ -349,10 +339,10 @@ function validateAuthSection(auth: unknown): ValidationResult {
     try {
       const url = new URL(String(o.modelsDiscoveryUrl));
       if (
-        typeof o.modelsDiscoveryUrl !== 'string'
-        || url.protocol !== 'https:'
-        || url.username
-        || url.password
+        typeof o.modelsDiscoveryUrl !== 'string' ||
+        url.protocol !== 'https:' ||
+        url.username ||
+        url.password
       ) {
         return invalid('auth.oauth.modelsDiscoveryUrl must be https');
       }
@@ -413,6 +403,7 @@ function normalizeRuntime(
     .map((m) => ({
       id: m.id.trim(),
       name: m.name.trim(),
+      ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
       ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
@@ -497,15 +488,17 @@ function invalidateEditedPiCatalogMarker(
   const previousPi = previous.runtimes.pi;
   const nextPi = next.runtimes.pi;
   if (
-    !previousPi?.piCatalogProviderId
-    || !nextPi?.piCatalogProviderId
-    || previousPi.piCatalogProviderId !== nextPi.piCatalogProviderId
-  ) return next;
+    !previousPi?.piCatalogProviderId ||
+    !nextPi?.piCatalogProviderId ||
+    previousPi.piCatalogProviderId !== nextPi.piCatalogProviderId
+  )
+    return next;
   const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
-  const unchanged = normalizeBaseUrl(previousPi.baseUrl) === normalizeBaseUrl(nextPi.baseUrl)
-    && effectivePiWireProtocol(previousPi.wireProtocol)
-      === effectivePiWireProtocol(nextPi.wireProtocol)
-    && preservesPiCatalogModels(previousPi.models, nextPi.models);
+  const unchanged =
+    normalizeBaseUrl(previousPi.baseUrl) === normalizeBaseUrl(nextPi.baseUrl) &&
+    effectivePiWireProtocol(previousPi.wireProtocol) ===
+      effectivePiWireProtocol(nextPi.wireProtocol) &&
+    preservesPiCatalogModels(previousPi.models, nextPi.models);
   if (unchanged) return next;
   const pi = { ...nextPi };
   delete pi.piCatalogProviderId;
@@ -539,7 +532,9 @@ export function mergeDiscoveredModelsIntoConfig(
           ...fresh.map((m) => ({
             id: m.id,
             name: m.name,
-            ...(typeof m.contextWindow === 'number' && Number.isFinite(m.contextWindow) && m.contextWindow > 0
+            ...(typeof m.contextWindow === 'number' &&
+            Number.isFinite(m.contextWindow) &&
+            m.contextWindow > 0
               ? { contextWindow: Math.floor(m.contextWindow) }
               : {}),
           })),
@@ -582,15 +577,17 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
     const r = rt as Record<string, unknown>;
     const models = Array.isArray(r.models)
       ? r.models
-          .filter((m): m is Record<string, unknown> =>
-            !!m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string',
+          .filter(
+            (m): m is Record<string, unknown> =>
+              !!m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string',
           )
           .map((m) => ({
             id: String(m.id),
             name: String(m.name ?? ''),
-            ...(typeof m.contextWindow === 'number'
-              && Number.isFinite(m.contextWindow)
-              && m.contextWindow > 0
+            ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
+            ...(typeof m.contextWindow === 'number' &&
+            Number.isFinite(m.contextWindow) &&
+            m.contextWindow > 0
               ? { contextWindow: m.contextWindow }
               : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
@@ -604,7 +601,9 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
     };
     if (
       typeof r.wireProtocol === 'string' &&
-      (r.wireProtocol === 'anthropic-messages' || r.wireProtocol === 'openai-responses' || r.wireProtocol === 'openai-chat')
+      (r.wireProtocol === 'anthropic-messages' ||
+        r.wireProtocol === 'openai-responses' ||
+        r.wireProtocol === 'openai-chat')
     ) {
       entry.wireProtocol = r.wireProtocol;
     }
@@ -616,9 +615,9 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
     }
     if (typeof r.modelsUrl === 'string' && r.modelsUrl.length > 0) entry.modelsUrl = r.modelsUrl;
     if (
-      agent === 'pi'
-      && typeof r.piCatalogProviderId === 'string'
-      && /^[a-z0-9-]+$/.test(r.piCatalogProviderId)
+      agent === 'pi' &&
+      typeof r.piCatalogProviderId === 'string' &&
+      /^[a-z0-9-]+$/.test(r.piCatalogProviderId)
     ) {
       entry.piCatalogProviderId = r.piCatalogProviderId;
     }
@@ -736,10 +735,11 @@ export async function updateCustomProviderIfUnchanged(
   const expectedRuntimes = JSON.stringify(expectedConfig.runtimes);
   const expectedAuth = expectedConfig.auth ? JSON.stringify(expectedConfig.auth) : null;
   if (
-    existing.name !== expectedConfig.name
-    || existing.runtimes !== expectedRuntimes
-    || existing.auth !== expectedAuth
-  ) return false;
+    existing.name !== expectedConfig.name ||
+    existing.runtimes !== expectedRuntimes ||
+    existing.auth !== expectedAuth
+  )
+    return false;
   const result = await db
     .update(customProviders)
     .set({
@@ -748,10 +748,7 @@ export async function updateCustomProviderIfUnchanged(
       auth: nextConfig.auth ? JSON.stringify(nextConfig.auth) : null,
       updatedAt: Math.max(now, existing.updatedAt + 1),
     })
-    .where(and(
-      eq(customProviders.id, id),
-      eq(customProviders.updatedAt, existing.updatedAt),
-    ));
+    .where(and(eq(customProviders.id, id), eq(customProviders.updatedAt, existing.updatedAt)));
   return result.changes === 1;
 }
 

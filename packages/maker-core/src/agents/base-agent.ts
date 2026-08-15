@@ -178,7 +178,9 @@ export type PiNativeApi =
   | 'anthropic-messages'
   | 'openai-responses'
   | 'openai-completions'
-  | 'google-generative-ai';
+  | 'google-generative-ai'
+  /** PI's native ChatGPT subscription adapter; not a portable BYOM protocol. */
+  | 'openai-codex-responses';
 
 export type PiNativeThinkingLevel = 'off' | Exclude<Effort, 'ultra'>;
 
@@ -198,19 +200,28 @@ export interface PiNativeModelCost {
 
 /** BYOM:写进 pi models.json 的一个模型(原生 provider 块内)。 */
 export interface PiNativeModelSpec {
+  /** Cindy/public model id used by provider-aware routing and the UI. */
   id: string;
+  /** PI provider's native model id; omitted when it is identical to id. */
+  wireId?: string;
+  /** Sparse models.json override/addition; absent means retain PI's bundled model entry. */
+  api?: PiNativeApi;
+  /** Per-model native endpoint retained from PI's bundled provider table. */
+  baseUrl?: string;
+  /** Add a model missing from PI's bundled catalog while inheriting the provider's bundled API. */
+  catalogAddition?: boolean;
   name?: string;
   /** Per-model request headers from the authoritative Pi catalog. */
   headers?: Record<string, string>;
-  /** Per-model API from Pi's official catalog; providers may mix protocols. */
-  api?: PiNativeApi;
   reasoning?: boolean;
   /** Pi models.json 的 provider-specific thinking level 映射；null 明确禁用该档。 */
   thinkingLevelMap?: Partial<Record<PiNativeThinkingLevel, string | null>>;
   contextWindow?: number;
   maxTokens?: number;
   input?: Array<'text' | 'image'>;
+  /** Preserve bundled accounting metadata when a protocol correction replaces a model entry. */
   cost?: PiNativeModelCost;
+  /** Preserve model-specific request metadata on a required full-entry replacement. */
   compat?: Record<string, unknown>;
   samplingParams?: Record<string, unknown>;
 }
@@ -240,11 +251,16 @@ export interface PiRemoteFileOps {
  * 解析产出;PiAgent 写进 models.json 的独立 provider 块,并按 model→provider 路由 set_model。
  */
 export interface PiNativeProviderSpec {
-  /** provider id(slug,禁与网关 provider `cindy` 撞名)。 */
+  /** PI runtime provider id(slug,禁与网关 provider `cindy` 撞名)。 */
   id: string;
+  /** Cindy catalog / persisted provider id; defaults to the runtime id. */
+  sourceProviderId?: string;
   name: string;
   baseUrl: string;
-  api: PiNativeApi;
+  /** BYOM provider default. Omitted only when inheriting PI's bundled provider catalog. */
+  api?: PiNativeApi;
+  /** Keep PI's bundled models and serialize only models carrying an explicit api override. */
+  inheritModels?: boolean;
   /**
    * 存放该 provider api key 的 env 变量名;models.json 用 `$<envVar>` 插值引用(与网关
    * CINDY_PI_API_KEY 同机制,密钥只进子进程 env、不落盘)。keyless(本机 Ollama 等)留空 →
@@ -472,7 +488,11 @@ export interface AgentDeps {
    * PiAgent creates a high-entropy token per session, registers it before spawn,
    * and disposes the exact registration when startup fails or the session closes.
    */
-  registerPiProxySession?: (sessionId: string, token: string) => (() => void) | void;
+  registerPiProxySession?: (
+    sessionId: string,
+    token: string,
+    resolveProviderId: () => string | null,
+  ) => (() => void) | void;
 
   /**
    * Pi-only: host-owned derivation for restart-stable remote proxy tokens.

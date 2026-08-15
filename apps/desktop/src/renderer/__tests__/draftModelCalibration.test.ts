@@ -639,6 +639,25 @@ describe('校准结果要带上供应商', () => {
 });
 
 describe('resolveDraftSessionProviderId', () => {
+  it('唯一已连接来源是用户 Provider 时仍显式保留，避免 Claude 回退 Cindy gateway', () => {
+    const codingPlan = {
+      ...provider('coding-plan', true, {
+        'claude-code': [model('ark-code-latest')],
+      }),
+      source: 'user',
+    } as ProviderView;
+
+    expect(
+      resolveDraftSessionProviderId({
+        providers: [codingPlan],
+        agent: 'claude-code',
+        model: 'ark-code-latest',
+        explicitProviderId: null,
+        effectiveProviderId: 'coding-plan',
+      }),
+    ).toBe('coding-plan');
+  });
+
   it('XD 已连接但不提供当前模型时,不能省略校准选中的 Anthropic 来源(issue #1196)', () => {
     const gateway = provider('xd', true, {
       'claude-code': [model('claude-sonnet-5')],

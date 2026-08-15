@@ -208,6 +208,25 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect(() => parseCatalog(bad)).toThrow(/icon/);
   });
 
+  it('accepts the four portable piApi values and rejects unknown PI protocols', () => {
+    for (const piApi of [
+      'anthropic-messages',
+      'openai-responses',
+      'openai-completions',
+      'google-generative-ai',
+    ] as const) {
+      const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+      catalog.providers.find((provider) => provider.id === 'xai')!
+        .models['claude-code']![0]!.piApi = piApi;
+      expect(() => parseCatalog(catalog)).not.toThrow();
+    }
+
+    const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    (bad.providers.find((provider) => provider.id === 'xai')!
+      .models['claude-code']![0] as unknown as Record<string, unknown>).piApi = 'claude-v1';
+    expect(() => parseCatalog(bad)).toThrow(/piApi/);
+  });
+
   it('ships custom-provider presets (OSS 热更的第三方模板)', () => {
     const presets = BUNDLED_CATALOG.presets ?? [];
     expect(presets.length).toBeGreaterThan(0);
@@ -232,6 +251,13 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       openrouter?.runtimes['claude-code']?.models.find((m) => m.id === 'deepseek/deepseek-v4-pro')
         ?.contextWindow,
     ).toBe(1_000_000);
+    expect(deepseek?.runtimes.pi).toMatchObject({
+      wireProtocol: 'openai-chat',
+      models: [
+        { id: 'deepseek-v4-flash' },
+        { id: 'deepseek-v4-pro' },
+      ],
+    });
   });
 
   it('Kimi Code(编程计划)按各 harness 的权威目录保留 contextWindow', () => {

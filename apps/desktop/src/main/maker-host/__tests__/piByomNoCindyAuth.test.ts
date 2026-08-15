@@ -38,7 +38,12 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: (providerId: string) =>
     providerId === 'xai' ? 'legacy-custom-key' : null,
 }));
-vi.mock('../grok-oauth-login.js', () => ({ hasGrokOAuthLogin: () => grokOAuth.loggedIn }));
+vi.mock('../grok-oauth-login.js', () => ({
+  hasGrokOAuthLogin: () => grokOAuth.loggedIn,
+  getGrokAccessToken: async () => 'grok-test-token',
+  peekGrokAccessToken: () => (grokOAuth.loggedIn ? 'grok-test-token' : null),
+  recoverGrokAuthAfterRejection: async () => 'superseded' as const,
+}));
 
 import { desktopPiAuthAdapter, resolvePiNativeProviders } from '../pi-host.js';
 
@@ -83,7 +88,8 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
 
     expect(resolved.providers).toContainEqual(
       expect.objectContaining({
-        id: 'xai',
+        id: 'cindy-byom-xai',
+        sourceProviderId: 'xai',
         baseUrl: expect.not.stringContaining('private-xai.example'),
       }),
     );

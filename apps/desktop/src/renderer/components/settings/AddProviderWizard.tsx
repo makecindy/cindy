@@ -786,6 +786,7 @@ export function AddProviderWizard({
             return {
               id: m.id,
               name: m.name,
+              ...(agent === 'pi' && presetModel?.piApi ? { piApi: presetModel.piApi } : {}),
               ...(contextWindow !== undefined ? { contextWindow } : {}),
               ...(presetModel?.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...(presetModel?.reasoning === true && presetModel.reasoningEfforts?.length

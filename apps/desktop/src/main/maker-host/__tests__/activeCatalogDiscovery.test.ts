@@ -103,6 +103,26 @@ describe('active-catalog discovered augment', () => {
     expect(openaiIds('pi')).toContain('chatgpt/gpt-5.7');
   });
 
+  it('applies a daily PI protocol annotation only after OpenAI discovery proves the model exists', () => {
+    const catalog = bundledWithoutRegistry();
+    const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
+    openai.models.pi = [
+      {
+        ...fake('chatgpt/gpt-5.7'),
+        piApi: 'openai-responses',
+      },
+    ];
+    setActiveCatalog(catalog);
+
+    expect(openaiIds('pi')).not.toContain('chatgpt/gpt-5.7');
+
+    setDiscoveredCodexModels([fake('gpt-5.7')]);
+    const projected = getActiveCatalog()
+      .providers.find((provider) => provider.id === 'openai')
+      ?.models.pi?.find((candidate) => candidate.id === 'chatgpt/gpt-5.7');
+    expect(projected).toMatchObject({ piApi: 'openai-responses' });
+  });
+
   it('SuperGrok fallback keeps namespaced roots but projects bare Pi ids', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
@@ -119,19 +139,13 @@ describe('active-catalog discovered augment', () => {
 
   it('xAI account snapshot is authoritative and projects canonical ids per harness', () => {
     setActiveCatalog(BUNDLED_CATALOG);
-    setXaiDiscoveredModels([
-      { id: 'xai/grok-4.5' },
-      { id: 'xai/grok-4.6' },
-    ]);
+    setXaiDiscoveredModels([{ id: 'xai/grok-4.5' }, { id: 'xai/grok-4.6' }]);
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
     expect(xai?.models['claude-code']?.map((model) => model.id)).toEqual([
       'xai/grok-4.5',
       'xai/grok-4.6',
     ]);
-    expect(xai?.models.codex?.map((model) => model.id)).toEqual([
-      'xai/grok-4.5',
-      'xai/grok-4.6',
-    ]);
+    expect(xai?.models.codex?.map((model) => model.id)).toEqual(['xai/grok-4.5', 'xai/grok-4.6']);
     expect(xai?.models.pi?.map((model) => model.id)).toEqual(['grok-4.5', 'grok-4.6']);
     expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')).toMatchObject({
       contextWindow: 500_000,

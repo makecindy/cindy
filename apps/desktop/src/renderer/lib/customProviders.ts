@@ -75,6 +75,33 @@ export function replaceCustomProviderModelId(
   return { id: nextId, name: model.name };
 }
 
+/**
+ * A preset piApi is upstream metadata, not a second user choice. Once the user
+ * explicitly chooses a PI runtime protocol, remove those hidden per-model
+ * defaults so the saved runtime protocol becomes authoritative.
+ */
+export function clearCustomProviderModelPiApiOverrides(
+  models: readonly ProviderRuntimeModelConfig[],
+): ProviderRuntimeModelConfig[] {
+  return models.map((model) => {
+    if (!model.piApi) return model;
+    const next = { ...model };
+    delete next.piApi;
+    return next;
+  });
+}
+
+/** PI always persists the selected protocol, including its common Chat default. */
+export function customProviderWireProtocolForSave(
+  agent: AgentKind,
+  wireProtocol: ProviderWireProtocol,
+  defaultWireProtocol: ProviderWireProtocol,
+): ProviderWireProtocol | undefined {
+  return agent === 'pi' || wireProtocol !== defaultWireProtocol
+    ? wireProtocol
+    : undefined;
+}
+
 export function setCustomProviderModelSupportsImageInput(
   models: readonly ProviderRuntimeModelConfig[],
   targetIndex: number,
@@ -149,6 +176,7 @@ export function customProviderModelConfigFromCatalogModel(
     | 'contextWindowExplicit'
     | 'defaultEnabled'
     | 'supportsImageInput'
+    | 'piApi'
   > &
     Partial<Pick<CatalogModel, 'efforts' | 'defaultEffort'>>,
   agent?: AgentKind,
@@ -162,6 +190,7 @@ export function customProviderModelConfigFromCatalogModel(
   return {
     id: model.id,
     name: model.name,
+    ...(agent === 'pi' && model.piApi ? { piApi: model.piApi } : {}),
     ...(model.contextWindowExplicit === true || model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
       ? { contextWindow: model.contextWindow }
       : {}),

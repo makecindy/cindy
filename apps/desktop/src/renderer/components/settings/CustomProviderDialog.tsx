@@ -15,14 +15,7 @@
  */
 
 import * as Dialog from '@radix-ui/react-dialog';
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type RefObject,
-} from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
 
@@ -39,7 +32,9 @@ import {
 } from '@/components/settings/CustomProviderRuntimeFillOverlay';
 import { extractIpcError } from '@/utils/ipcError';
 import {
+  clearCustomProviderModelPiApiOverrides,
   createCustomProvider,
+  customProviderWireProtocolForSave,
   piCatalogProviderIdAfterRouteEdit,
   readCustomProviderKey,
   replaceCustomProviderModelId,
@@ -116,24 +111,26 @@ const DIALOG_FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
-const TAB_META: Record<DialogAgentKind, { Mark: typeof ClaudeMark; labelKey: string; helpKey: string }> =
-  {
-    'claude-code': {
-      Mark: ClaudeMark,
-      labelKey: 'settings.providers.custom.protocol.claude',
-      helpKey: 'settings.providers.custom.protocol.claudeDesc',
-    },
-    codex: {
-      Mark: CodexMark,
-      labelKey: 'settings.providers.custom.protocol.codex',
-      helpKey: 'settings.providers.custom.protocol.codexDesc',
-    },
-    pi: {
-      Mark: PiMark,
-      labelKey: 'settings.providers.custom.protocol.pi',
-      helpKey: 'settings.providers.custom.protocol.piDesc',
-    },
-  };
+const TAB_META: Record<
+  DialogAgentKind,
+  { Mark: typeof ClaudeMark; labelKey: string; helpKey: string }
+> = {
+  'claude-code': {
+    Mark: ClaudeMark,
+    labelKey: 'settings.providers.custom.protocol.claude',
+    helpKey: 'settings.providers.custom.protocol.claudeDesc',
+  },
+  codex: {
+    Mark: CodexMark,
+    labelKey: 'settings.providers.custom.protocol.codex',
+    helpKey: 'settings.providers.custom.protocol.codexDesc',
+  },
+  pi: {
+    Mark: PiMark,
+    labelKey: 'settings.providers.custom.protocol.pi',
+    helpKey: 'settings.providers.custom.protocol.piDesc',
+  },
+};
 
 /** pi 默认 wire protocol:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。 */
 const PI_DEFAULT_WIRE: ProviderWireProtocol = 'openai-chat';
@@ -426,9 +423,7 @@ export function CustomProviderDialog({
   const picker = childLayer?.kind === 'model-picker' ? childLayer.value : null;
   const presetMenuOpen = childLayer?.kind === 'preset-menu';
   const [keyHydrationReady, setKeyHydrationReady] = useState(!editing);
-  const [keyHydrationFailed, setKeyHydrationFailed] = useState<
-    Record<DialogAgentKind, boolean>
-  >({
+  const [keyHydrationFailed, setKeyHydrationFailed] = useState<Record<DialogAgentKind, boolean>>({
     'claude-code': false,
     codex: false,
     pi: false,
@@ -436,6 +431,7 @@ export function CustomProviderDialog({
   const runtimeFillTriggerRef = useRef<HTMLButtonElement>(null);
   const modelPickerTriggerRef = useRef<HTMLButtonElement>(null);
   const modelFetchInFlightRef = useRef(false);
+  const scrimRef = useRef<HTMLDivElement>(null);
   const dialogPanelRef = useRef<HTMLDivElement>(null);
   // 原生 window listener 的生命周期不跟着每次 render 重绑；layout effect 只把
   // 已提交的层状态写入 ref，既避开 passive effect 延迟，也不暴露被放弃的并发 render。
@@ -485,6 +481,24 @@ export function CustomProviderDialog({
   }, [dismissTopmostLayer]);
 
   useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      if (event.target !== scrimRef.current) return;
+      if (!childLayerRef.current && !runtimeFillRef.current) return;
+
+      // This must run before Radix's document-capture outside-dismiss. The
+      // scrim gesture belongs to the dialog's current child layer; consuming
+      // it here prevents Radix from committing a closed popover before the
+      // form can settle that layer exactly once.
+      event.preventDefault();
+      event.stopPropagation();
+      dismissTopmostLayer();
+    };
+    window.addEventListener('pointerdown', onPointerDown, { capture: true });
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+  }, [dismissTopmostLayer]);
+
+  useEffect(() => {
     const returnFocusElement =
       document.activeElement instanceof HTMLElement && document.activeElement !== document.body
         ? document.activeElement
@@ -507,7 +521,9 @@ export function CustomProviderDialog({
   const rtRef = useRef(rt);
   /** 唯一的 rt 写入口：状态更新的同时同步镜像进 rtRef（updater 幂等，StrictMode 双调无害）。 */
   const setRtSynced = useCallback(
-    (fn: (prev: Record<DialogAgentKind, RuntimeFields>) => Record<DialogAgentKind, RuntimeFields>) => {
+    (
+      fn: (prev: Record<DialogAgentKind, RuntimeFields>) => Record<DialogAgentKind, RuntimeFields>,
+    ) => {
       setRt((prev) => {
         const updated = fn(prev);
         // Do not consume the catalog marker while the user is still editing.
@@ -584,15 +600,19 @@ export function CustomProviderDialog({
     [savedBaselineFor],
   );
 
-  const changeAuthMode = useCallback((mode: CustomProviderAuthMode) => {
-    setAuthMode(mode);
-    if (mode !== 'apiKey') return;
-    setRtSynced((prev) =>
-      Object.fromEntries(
-        AGENTS.map((agent) => [agent, restoreHydratedKey(agent, prev[agent])]),
-      ) as Record<DialogAgentKind, RuntimeFields>,
-    );
-  }, [restoreHydratedKey, setRtSynced]);
+  const changeAuthMode = useCallback(
+    (mode: CustomProviderAuthMode) => {
+      setAuthMode(mode);
+      if (mode !== 'apiKey') return;
+      setRtSynced(
+        (prev) =>
+          Object.fromEntries(
+            AGENTS.map((agent) => [agent, restoreHydratedKey(agent, prev[agent])]),
+          ) as Record<DialogAgentKind, RuntimeFields>,
+      );
+    },
+    [restoreHydratedKey, setRtSynced],
+  );
 
   // 新建态拉取预设模板（本地 IPC 极快返回；失败静默 —— 没有预设也不影响手填，规则 7 不做 loading）。
   // 按实际构建区域排序，不随 UI 语言变化（只排序不过滤，可达性由测试连接实测裁决）。
@@ -667,7 +687,11 @@ export function CustomProviderDialog({
     setKeyHydrationFailed({ 'claude-code': false, codex: false, pi: false });
     const revisionAtStart = { ...keyEditRevisionRef.current };
     void (async () => {
-      const nextHas: Record<DialogAgentKind, boolean> = { 'claude-code': false, codex: false, pi: false };
+      const nextHas: Record<DialogAgentKind, boolean> = {
+        'claude-code': false,
+        codex: false,
+        pi: false,
+      };
       const fetched: Partial<Record<DialogAgentKind, string>> = {};
       const failed: Record<DialogAgentKind, boolean> = {
         'claude-code': false,
@@ -849,7 +873,9 @@ export function CustomProviderDialog({
       );
     });
     if (hasUnreviewedConflict) {
-      setRuntimeFill((prev) => (prev ? { ...prev, stage: 'confirm', targets: freshTargets } : prev));
+      setRuntimeFill((prev) =>
+        prev ? { ...prev, stage: 'confirm', targets: freshTargets } : prev,
+      );
       return;
     }
 
@@ -941,7 +967,13 @@ export function CustomProviderDialog({
     (agent: DialogAgentKind, wireProtocol: ProviderWireProtocol) => {
       setRtSynced((prev) => ({
         ...prev,
-        [agent]: { ...prev[agent], wireProtocol },
+        [agent]: {
+          ...prev[agent],
+          wireProtocol,
+          ...(agent === 'pi'
+            ? { models: clearCustomProviderModelPiApiOverrides(prev[agent].models) }
+            : {}),
+        },
       }));
       setTest((prev) => ({ ...prev, [agent]: IDLE_TEST }));
     },
@@ -987,8 +1019,8 @@ export function CustomProviderDialog({
       );
     const useSaved = Boolean(
       initial?.id &&
-        savedBaseline &&
-        connectionTestCanUseSaved(probeFields, savedBaseline, authMode),
+      savedBaseline &&
+      connectionTestCanUseSaved(probeFields, savedBaseline, authMode),
     );
     setTest((prev) => ({ ...prev, [agent]: { status: 'testing' } }));
     try {
@@ -1006,20 +1038,16 @@ export function CustomProviderDialog({
                 ...(agent !== 'pi' && rf.requestPath.trim()
                   ? { requestPath: rf.requestPath.trim() }
                   : {}),
-                apiKey:
-                  authMode === 'apiKey' && canSendApiKey ? rf.apiKey.trim() || null : null,
+                apiKey: authMode === 'apiKey' && canSendApiKey ? rf.apiKey.trim() || null : null,
                 ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
               },
             },
       );
       if (
         providerConnectionTestRequestSignature(
-          agent === 'pi'
-            ? { ...rtRef.current[agent], requestPath: '' }
-            : rtRef.current[agent],
+          agent === 'pi' ? { ...rtRef.current[agent], requestPath: '' } : rtRef.current[agent],
           authModeRef.current,
-        ) !==
-        requestSig
+        ) !== requestSig
       )
         return;
       setTest((prev) => ({
@@ -1031,12 +1059,9 @@ export function CustomProviderDialog({
     } catch (e) {
       if (
         providerConnectionTestRequestSignature(
-          agent === 'pi'
-            ? { ...rtRef.current[agent], requestPath: '' }
-            : rtRef.current[agent],
+          agent === 'pi' ? { ...rtRef.current[agent], requestPath: '' } : rtRef.current[agent],
           authModeRef.current,
-        ) !==
-        requestSig
+        ) !== requestSig
       )
         return;
       const ipc = extractIpcError(e);
@@ -1060,7 +1085,8 @@ export function CustomProviderDialog({
       fetchingModels['claude-code'] ||
       fetchingModels.codex ||
       fetchingModels.pi
-    ) return; // 单飞（按钮已禁用，兜底）
+    )
+      return; // 单飞（按钮已禁用，兜底）
     const baseUrl = rf.baseUrl.trim();
     if (!baseUrl) {
       toast.error(t('settings.providers.custom.fetch.needBaseUrl'));
@@ -1086,14 +1112,11 @@ export function CustomProviderDialog({
     const canSendApiKey =
       authMode !== 'apiKey' ||
       !savedBaseline ||
-      canSendHydratedApiKey(
-        rf,
-        savedBaseline,
-        authMode,
-        keyEditRevisionRef.current[agent],
-      );
+      canSendHydratedApiKey(rf, savedBaseline, authMode, keyEditRevisionRef.current[agent]);
     const reuseSaved = Boolean(
-      initial?.id && savedBaseline && modelFetchCanReuseSavedCredentials(rf, savedBaseline, authMode),
+      initial?.id &&
+      savedBaseline &&
+      modelFetchCanReuseSavedCredentials(rf, savedBaseline, authMode),
     );
     modelFetchInFlightRef.current = true;
     setFetchingModels((prev) => ({ ...prev, [agent]: true }));
@@ -1118,6 +1141,7 @@ export function CustomProviderDialog({
           .map((m) => ({
             id: m.id.trim(),
             name: m.name.trim(),
+            ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
             ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
             ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
@@ -1148,6 +1172,7 @@ export function CustomProviderDialog({
             return {
               id: m.id,
               name: cur?.name || m.name,
+              ...(agent === 'pi' && cur?.piApi ? { piApi: cur.piApi } : {}),
               ...(contextWindow !== undefined ? { contextWindow } : {}),
               ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
               ...(cur?.supportsImageInput === true ? { supportsImageInput: true } : {}),
@@ -1218,12 +1243,14 @@ export function CustomProviderDialog({
       const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
       const reasoning = latest ? latest.reasoning : m.reasoning;
       const reasoningEfforts = latest ? latest.reasoningEfforts : m.reasoningEfforts;
+      const piApi = latest ? latest.piApi : m.piApi;
       const reasoningDefaultEffort = latest
         ? latest.reasoningDefaultEffort
         : m.reasoningDefaultEffort;
       return {
         id: m.id,
         name: latest?.name.trim() ? latest.name.trim() : m.name,
+        ...(picker.agent === 'pi' && piApi ? { piApi } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
         ...(supportsImageInput === true ? { supportsImageInput: true } : {}),
@@ -1231,9 +1258,7 @@ export function CustomProviderDialog({
           ? {
               reasoning: true,
               reasoningEfforts: [...reasoningEfforts],
-              ...(reasoningDefaultEffort
-                ? { reasoningDefaultEffort }
-                : {}),
+              ...(reasoningDefaultEffort ? { reasoningDefaultEffort } : {}),
             }
           : {}),
       };
@@ -1244,6 +1269,7 @@ export function CustomProviderDialog({
         merged.push({
           id,
           name: m.name.trim() || id,
+          ...(picker.agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
@@ -1378,6 +1404,7 @@ export function CustomProviderDialog({
         .map((m) => ({
           id: m.id.trim(),
           name: m.name.trim(),
+          ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
@@ -1411,10 +1438,15 @@ export function CustomProviderDialog({
       }
       const savedHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
       const defaultProtocol = defaultWireFor(a);
+      const savedWireProtocol = customProviderWireProtocolForSave(
+        a,
+        rf.wireProtocol,
+        defaultProtocol,
+      );
       runtimes[a] = {
         baseUrl: rf.baseUrl.trim(),
         ...(requestPath ? { requestPath } : {}),
-        ...(rf.wireProtocol !== defaultProtocol ? { wireProtocol: rf.wireProtocol } : {}),
+        ...(savedWireProtocol ? { wireProtocol: savedWireProtocol } : {}),
         models,
         ...(Object.keys(savedHeaders).length > 0 ? { headers: savedHeaders } : {}),
         ...(rf.modelsUrl.trim() ? { modelsUrl: rf.modelsUrl.trim() } : {}),
@@ -1574,16 +1606,13 @@ export function CustomProviderDialog({
 
   return (
     <div
+      ref={scrimRef}
+      data-custom-provider-dialog-scrim="true"
       className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
       onPointerDown={(event) => {
         // pointerdown 时先按当前层级结算，避免 Popover 的 outside-dismiss 在随后
         // click 前把状态改成 closed，令同一次手势继续误关底层表单。
-        if (
-          event.button === 0 &&
-          event.target === event.currentTarget &&
-          !saving &&
-          !runtimeFill
-        ) {
+        if (event.button === 0 && event.target === event.currentTarget && !saving && !runtimeFill) {
           event.preventDefault();
           event.stopPropagation();
           dismissTopmostLayer();
@@ -1851,28 +1880,32 @@ export function CustomProviderDialog({
                           : undefined
                       }
                     >
-                      {t(activeTab === 'pi'
-                        ? `settings.providers.custom.wireProtocol.pi${
-                            option.value === 'anthropic-messages'
-                              ? 'Anthropic'
-                              : option.value === 'openai-responses'
-                                ? 'Responses'
-                                : 'Chat'
-                          }`
-                        : option.labelKey)}
+                      {t(
+                        activeTab === 'pi'
+                          ? `settings.providers.custom.wireProtocol.pi${
+                              option.value === 'anthropic-messages'
+                                ? 'Anthropic'
+                                : option.value === 'openai-responses'
+                                  ? 'Responses'
+                                  : 'Chat'
+                            }`
+                          : option.labelKey,
+                      )}
                     </button>
                   ))}
                 </div>
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                  {t(activeTab === 'pi'
-                    ? `settings.providers.custom.wireProtocol.pi${
-                        f.wireProtocol === 'anthropic-messages'
-                          ? 'AnthropicHelp'
-                          : f.wireProtocol === 'openai-chat'
-                            ? 'ChatHelp'
-                            : 'ResponsesHelp'
-                      }`
-                    : customProviderCodexWireProtocolOption(f.wireProtocol).helpKey)}
+                  {t(
+                    activeTab === 'pi'
+                      ? `settings.providers.custom.wireProtocol.pi${
+                          f.wireProtocol === 'anthropic-messages'
+                            ? 'AnthropicHelp'
+                            : f.wireProtocol === 'openai-chat'
+                              ? 'ChatHelp'
+                              : 'ResponsesHelp'
+                        }`
+                      : customProviderCodexWireProtocolOption(f.wireProtocol).helpKey,
+                  )}
                 </span>
               </div>
             )}
@@ -2021,8 +2054,8 @@ export function CustomProviderDialog({
                         <SettingsTextInput
                           surface="ivory"
                           value={
-                            windowDrafts[`${activeTab}:${i}`]
-                            ?? (m.contextWindow != null ? String(m.contextWindow) : '')
+                            windowDrafts[`${activeTab}:${i}`] ??
+                            (m.contextWindow != null ? String(m.contextWindow) : '')
                           }
                           onBlur={() =>
                             setWindowDrafts((drafts) => {

@@ -29,6 +29,19 @@ export type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | '
 export const PI_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type PiReasoningEffort = (typeof PI_REASONING_EFFORTS)[number];
 
+/**
+ * PI models.json understands these four portable inference protocols. The
+ * provider-level wireProtocol remains the default for an endpoint; piApi is a
+ * sparse per-model override for newly released models or protocol corrections.
+ */
+export const PI_MODEL_APIS = [
+  'anthropic-messages',
+  'openai-responses',
+  'openai-completions',
+  'google-generative-ai',
+] as const;
+export type PiModelApi = (typeof PI_MODEL_APIS)[number];
+
 /** Provider runtime 上游实际接受的推理 wire protocol。 */
 export type ProviderWireProtocol =
   | 'anthropic-messages'
@@ -225,6 +238,8 @@ export interface ModelCost {
 export interface CatalogModel {
   /** 与 maker-core 现有 model id 一致（如 'claude-opus-4-8' / 'gpt-5.5' / 'codex/gpt-5.5'）。 */
   id: string;
+  /** Sparse PI protocol override; absence means use PI's bundled model catalog. */
+  piApi?: PiModelApi;
   /** 展示名（= maker-core ModelDescriptor.displayName）。 */
   name: string;
   description?: string;
@@ -477,6 +492,8 @@ export interface Provider {
 export interface ProviderRuntimeModelConfig {
   id: string;
   name: string;
+  /** Per-model PI protocol override; provider wireProtocol remains the fallback. */
+  piApi?: PiModelApi;
   contextWindow?: number;
   /** 模型未被用户显式开关时的可见性；缺省保持历史行为（默认可见）。 */
   defaultEnabled?: boolean;
