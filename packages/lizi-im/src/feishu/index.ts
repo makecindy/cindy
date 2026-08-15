@@ -87,6 +87,12 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         // 时旧 REST client 仍可尝试撤回, 不会留下永久「思考中」卡; 换账号
         // 时 pinnedClient 属于旧账号, 用它撤回旧卡正是安全方向。
         await outbound.recallOwnMessageWith(pinnedClient, openerId);
+        // 撤回 await 期间也可能换代/清凭证 — 发送前**再次**校验账号代次,
+        // 旧账号终态不得经新 client 呈现(跨账号红线)。
+        if (outbound.getAccountEpoch() !== epoch) {
+          this.log.info('flushDeferredOpenerConsumes: account changed during recall — dropping entry');
+          continue;
+        }
         outbound.rearmAnchorToTrigger(entry.userId);
         try {
           if ('markdown' in entry) {
