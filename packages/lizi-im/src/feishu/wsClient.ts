@@ -1349,6 +1349,16 @@ async function processClaimedMessage(
         );
         await sendOrphanOpenerNotice(botAppId, service, messageId, opener.openerMessageId);
         return;
+      } else if (opener.kind === 'unconfirmed') {
+        // reply 超时/断线, 同一 uuid 重试仍无回执: 服务端可能已发出思考卡。
+        // 不起 turn、不降级群主流; 释放认领 + evict, 重投再用同一 uuid 取回。
+        log.error(
+          '[feishu/wsClient] openThread reply unconfirmed after retries — turn dropped, not degrading to group lane',
+        );
+        if (inboundInFlight.get(`${botAppId}:${messageId}`)?.generation === generation) {
+          abandonInboundTurn(botAppId, messageId);
+        }
+        return;
       } else {
         laneUserId = encodeLaneUserId(chatId, null);
         outbound.pushReplyAnchor(laneUserId, messageId);

@@ -149,6 +149,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
 
   afterEach(async () => {
     await im.dispose();
+    vi.useRealTimers();
   });
 
   it('排空时 patch 失败: 撤回 pin 到排空开始的 client 并补发终态兜底', async () => {
@@ -251,7 +252,8 @@ describe('FeishuIM opener consumption failure semantics', () => {
     expect(outboundMocks.sendText).not.toHaveBeenCalled();
   });
 
-  it('保持连接时重新入队后主动再排空, 不依赖下一次 connected', async () => {
+  it('保持连接时重新入队后按退避再排空, 不依赖下一次 connected', async () => {
+    vi.useFakeTimers();
     outboundMocks.drainDeferredOpenerConsumes
       .mockReturnValueOnce([
         { userId: 'g/oc_c/omt_t', openerId: 'om_opener', markdown: '终态' },
@@ -265,17 +267,43 @@ describe('FeishuIM opener consumption failure semantics', () => {
     outboundMocks.sendInteractive.mockRejectedValueOnce(new Error('rate limited'));
 
     feishuEvents.emit('imStatus', { kind: 'connected', appId: 'cli' });
-    for (let i = 0; i < 40; i += 1) await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledTimes(1);
+    expect(streamingText.patchMarkdown).toHaveBeenCalledTimes(1);
 
-    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 'g/oc_c/omt_t',
-        openerId: 'om_opener',
-        markdown: '终态',
-      }),
-    );
+    await vi.advanceTimersByTimeAsync(99);
+    expect(streamingText.patchMarkdown).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(streamingText.patchMarkdown).toHaveBeenCalledTimes(2);
     expect(streamingText.patchMarkdown).toHaveBeenNthCalledWith(2, 'om_opener', '终态');
+    vi.useRealTimers();
+  });
+
+  it('排空持续失败时按退避上限停止, 不零延迟风暴', async () => {
+    vi.useFakeTimers();
+    outboundMocks.drainDeferredOpenerConsumes.mockImplementation(() => [
+      { userId: 'g/oc_c/omt_t', openerId: 'om_opener', markdown: '终态' },
+    ]);
+    (streamingText.patchMarkdown as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('patch failed'),
+    );
+    outboundMocks.sendInteractive.mockRejectedValue(new Error('rate limited'));
+
+    feishuEvents.emit('imStatus', { kind: 'connected', appId: 'cli' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(streamingText.patchMarkdown).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(streamingText.patchMarkdown).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(streamingText.patchMarkdown).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(900);
+    expect(streamingText.patchMarkdown).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(2700);
+    expect(streamingText.patchMarkdown).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(streamingText.patchMarkdown).toHaveBeenCalledTimes(5);
+    vi.useRealTimers();
   });
 
   it('consumePendingOpenerCard: 无 pending opener 返回 false(不撤回)', async () => {

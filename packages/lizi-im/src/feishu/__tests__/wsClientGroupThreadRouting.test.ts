@@ -34,8 +34,10 @@ const mocks = {
       | { kind: 'opened'; messageId: string; threadId: string }
       | { kind: 'degraded' }
       | { kind: 'orphaned'; openerMessageId: string }
+      | { kind: 'unconfirmed' }
     >
   >(async () => ({ kind: 'opened', messageId: 'om_opener', threadId: 'omt_new' })),
+  evictOpenThreadOutcome: vi.fn(),
   pushReplyAnchor: vi.fn(),
   pushPatchableOpener: vi.fn(),
   resolveCardLane: vi.fn<(messageId: string, chatId: string) => string | null>(
@@ -86,6 +88,7 @@ vi.doMock('../outbound.js', () => ({
   sendText: mocks.sendText,
   replyText: mocks.replyText,
   openThread: mocks.openThread,
+  evictOpenThreadOutcome: mocks.evictOpenThreadOutcome,
   pushReplyAnchor: mocks.pushReplyAnchor,
   pushPatchableOpener: mocks.pushPatchableOpener,
   resolveCardLane: mocks.resolveCardLane,
@@ -247,5 +250,17 @@ describe('feishu group thread routing', () => {
     expect(events[0].senderId).toBe('g/oc_chat1');
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1', 'om_msg1');
     expect(events[0].groupContextLane).toBeUndefined();
+  });
+
+  it('开话题回执不确定时不起 turn、不降级群主流', async () => {
+    mocks.openThread.mockResolvedValueOnce({ kind: 'unconfirmed' });
+    const events = collectMessages();
+    await connect();
+
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('回执不确定'));
+
+    expect(events).toHaveLength(0);
+    expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+    expect(mocks.evictOpenThreadOutcome).toHaveBeenCalledWith('om_msg1');
   });
 });

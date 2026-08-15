@@ -267,7 +267,43 @@ describe('feishu outbound lane routing', () => {
   it('openThread returns degraded instead of throwing when the API fails', async () => {
     larkMocks.reply.mockRejectedValueOnce(new Error('no thread permission'));
     await expect(outbound.openThread('om_root8')).resolves.toEqual({ kind: 'degraded' });
+    expect(larkMocks.reply).toHaveBeenCalledTimes(1);
     expect(larkMocks.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it('openThread retries an uncertain timeout with the same uuid and recovers', async () => {
+    larkMocks.reply
+      .mockRejectedValueOnce(Object.assign(new Error('timeout of 10000ms exceeded'), { code: 'ETIMEDOUT' }))
+      .mockResolvedValueOnce({ data: { message_id: 'om_recovered', thread_id: 'omt_recovered' } });
+    await expect(outbound.openThread('om_root_timeout')).resolves.toEqual({
+      kind: 'opened',
+      messageId: 'om_recovered',
+      threadId: 'omt_recovered',
+    });
+    expect(larkMocks.reply).toHaveBeenCalledTimes(2);
+    expect(larkMocks.reply.mock.calls.every((call) => {
+      const data = call[0]?.data as { uuid?: string } | undefined;
+      return data?.uuid === 'om_root_timeout';
+    })).toBe(true);
+  });
+
+  it('openThread does not degrade after bounded uncertain retries still have no receipt', async () => {
+    const reset = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    larkMocks.reply
+      .mockRejectedValueOnce(reset)
+      .mockRejectedValueOnce(reset)
+      .mockRejectedValueOnce(reset);
+    await expect(outbound.openThread('om_root_unconfirmed')).resolves.toEqual({
+      kind: 'unconfirmed',
+    });
+    expect(larkMocks.reply).toHaveBeenCalledTimes(3);
+    expect(larkMocks.deleteMessage).not.toHaveBeenCalled();
+    // 不是稳定结论: 清缓存后下一次调用会重新打 API。
+    await expect(outbound.openThread('om_root_unconfirmed')).resolves.toEqual({
+      kind: 'opened',
+      messageId: 'om_replied',
+      threadId: 'omt_r1',
+    });
   });
 
   it('evictOpenThreadOutcome drops the cached result so the next call retries the API', async () => {

@@ -416,7 +416,7 @@ export async function replyText(
 // promise, 已完成的按 TTL 短缓存 — 重投事件直接复用同一个话题。缓存键是
 // 触发消息 id(平台内唯一), 不随 unbindClient 清空(换代不会重放别的消息 id)。
 
-/** 开话题结果三态 — 调用方按状态决定路由与降级(见 openThread 文档)。 */
+/** 开话题结果 — 调用方按状态决定路由与降级(见 openThread 文档)。 */
 export type OpenThreadOutcome =
   /** 话题已开, 开场白 messageId + threadId 都是话题内合法锚点/身份。 */
   | { kind: 'opened'; messageId: string; threadId: string }
@@ -427,10 +427,18 @@ export type OpenThreadOutcome =
    * 降级群 lane 会一边留着「思考中」的开场白卡、一边把回答刷进群主流;
    * 调用方应回复开场白(落回话题)说明失败并放弃本轮, 而不是降级。
    */
-  | { kind: 'orphaned'; openerMessageId: string };
+  | { kind: 'orphaned'; openerMessageId: string }
+  /**
+   * reply 在超时/断线后用同一 uuid 有界重试仍拿不到回执 — 服务端可能已经
+   * 发出「思考中」卡。不能降级群 lane(会刷屏 + 留卡), 调用方应放弃本轮
+   * 并 evict 缓存, 让重投再用同一 uuid 取回原 message_id/thread_id。
+   */
+  | { kind: 'unconfirmed' };
 
 const OPEN_THREAD_DEDUP_TTL_MS = 10 * 60_000;
 const OPEN_THREAD_DEDUP_MAX_ENTRIES = 200;
+/** 超时/断线后用同一 uuid 再打 reply 的次数(不含首次)。 */
+const OPEN_THREAD_UNCERTAIN_RETRIES = 2;
 const openThreadByTrigger = new Map<
   string,
   { ts: number; promise: Promise<OpenThreadOutcome> }
@@ -460,23 +468,27 @@ function pruneOpenThreadDedup(): void {
  * 本轮流式卡**: 发一张「思考中」占位卡片(message 可被 patch 升级成正文),
  * 之后流式卡直接 patch 它 — 话题里不会多出一条「开个话题聊这条」的占位
  * 消息, 第一条可见内容就是答案本身(streamingText.start 经
- * claimPatchableOpener 认领)。返回三态结果: opened(话题身份 + 开场白卡
- * id)/ degraded(可降级群 lane 旧行为)/ orphaned(开场白卡已发出但话题 id
- * 无法恢复且撤回失败 — 不能降级, 见类型注释)。同一触发消息并发/重复调用
+ * claimPatchableOpener 认领)。返回 opened / degraded / orphaned / unconfirmed
+ * (见类型注释)。同一触发消息并发/重复调用
  * 共享同一次开话题 — 防飞书重投事件开出多个话题(含进程重启: uuid 走服务端
  * 去重)。
  *
  * 失败语义: API 失败或响应缺 message_id → degraded(没有可确认已发出的开场白);
  * 响应有 message_id 但缺 thread_id → 用 message.get 补查话题 id; 查不到就
  * 撤回开场白 — 撤回成功 → degraded, 撤回失败(含业务错误码)→ orphaned。
- * 任何状态都不出现「开场白可见但回答进群主流」的误导组合。
+ * reply 超时/断线等不确定错误 → 同一 uuid 有界重试取回原消息; 仍无回执 →
+ * unconfirmed(不降级)。任何状态都不出现「开场白可见但回答进群主流」。
  */
 export function openThread(replyToMessageId: string): Promise<OpenThreadOutcome> {
   const now = Date.now();
   const cached = openThreadByTrigger.get(replyToMessageId);
   if (cached && now - cached.ts <= OPEN_THREAD_DEDUP_TTL_MS) return cached.promise;
 
-  const promise = doOpenThread(replyToMessageId);
+  const promise = doOpenThread(replyToMessageId).then((outcome) => {
+    // unconfirmed 不是稳定结论: 清掉缓存, 重投再用同一 uuid 取回原消息。
+    if (outcome.kind === 'unconfirmed') openThreadByTrigger.delete(replyToMessageId);
+    return outcome;
+  });
   openThreadByTrigger.set(replyToMessageId, { ts: now, promise });
   pruneOpenThreadDedup();
   return promise;
@@ -527,6 +539,69 @@ export async function recallOwnMessage(messageId: string): Promise<boolean> {
   return recallOwnMessageWith(ensureClient(), messageId);
 }
 
+/** reply 抛错是否「结果不确定」: 请求可能已在服务端落地, 不能立刻假定没发。 */
+function isUncertainOpenThreadError(err: unknown): boolean {
+  const name = err instanceof Error ? err.name : '';
+  const msg = err instanceof Error ? err.message : String(err);
+  const code =
+    err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : '';
+  const hay = `${name} ${code} ${msg}`.toLowerCase();
+  return /timeout|timed?\s*out|etimedout|econnreset|econnrefused|econnaborted|enotfound|eai_again|epipe|socket hang up|network|fetch failed|aborted|und_err/.test(
+    hay,
+  );
+}
+
+async function replyOpenThread(
+  c: Lark.Client,
+  replyToMessageId: string,
+): Promise<{ messageId: string; threadId: string } | 'degraded' | 'unconfirmed'> {
+  const log = getLog();
+  const maxAttempts = 1 + OPEN_THREAD_UNCERTAIN_RETRIES;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const res = await c.im.v1.message.reply({
+        path: { message_id: replyToMessageId },
+        data: {
+          content: JSON.stringify(buildMarkdownCardV2(transportMessages.streaming.randomThinking())),
+          msg_type: 'interactive',
+          reply_in_thread: true,
+          // 服务端幂等键: 同一触发消息重复开话题(重投事件、进程重启后重放)时,
+          // 飞书按 uuid 去重(1 小时内同 uuid 至多发一条, 重复调用返回原消息
+          // id), 不会开出第二个话题。超时后用同一 uuid 重试即可取回原消息。
+          uuid: replyToMessageId,
+        },
+      });
+      const messageId = res.data?.message_id ?? '';
+      const threadId = res.data?.thread_id ?? '';
+      if (!messageId) {
+        log.warn(
+          '[feishu/outbound] openThread: no message_id in response — nothing provably sent',
+        );
+        return 'degraded';
+      }
+      return { messageId, threadId };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const uncertain = isUncertainOpenThreadError(err);
+      if (uncertain && attempt < maxAttempts) {
+        log.warn(
+          `[feishu/outbound] openThread reply uncertain (retry ${attempt}/${OPEN_THREAD_UNCERTAIN_RETRIES} with same uuid): ${msg}`,
+        );
+        continue;
+      }
+      if (uncertain) {
+        log.warn(
+          `[feishu/outbound] openThread reply unconfirmed after ${maxAttempts} attempts — not degrading: ${msg}`,
+        );
+        return 'unconfirmed';
+      }
+      log.warn(`[feishu/outbound] openThread failed (fallback to group lane): ${msg}`);
+      return 'degraded';
+    }
+  }
+  return 'unconfirmed';
+}
+
 async function doOpenThread(replyToMessageId: string): Promise<OpenThreadOutcome> {
   const log = getLog();
   // 全程 pin 到触发时的 client: reply / message.get / message.delete 都用
@@ -540,61 +615,39 @@ async function doOpenThread(replyToMessageId: string): Promise<OpenThreadOutcome
     log.warn(`[feishu/outbound] openThread failed (fallback to group lane): ${msg}`);
     return { kind: 'degraded' };
   }
+  const replied = await replyOpenThread(c, replyToMessageId);
+  if (replied === 'degraded') return { kind: 'degraded' };
+  if (replied === 'unconfirmed') return { kind: 'unconfirmed' };
+  const { messageId, threadId } = replied;
+  if (threadId) return { kind: 'opened', messageId, threadId };
+  // 部分成功: 开场白已发出但响应缺 thread_id — 补查消息详情恢复话题 id。
+  const recovered = await tryFetchMessageThreadId(c, messageId);
+  if (recovered) return { kind: 'opened', messageId, threadId: recovered };
+  // 恢复不了: 撤回开场白再降级, 避免「思考中」的开场白卡留在群里误导。
   try {
-    const res = await c.im.v1.message.reply({
-      path: { message_id: replyToMessageId },
-      data: {
-        content: JSON.stringify(buildMarkdownCardV2(transportMessages.streaming.randomThinking())),
-        msg_type: 'interactive',
-        reply_in_thread: true,
-        // 服务端幂等键: 同一触发消息重复开话题(重投事件、进程重启后重放)时,
-        // 飞书按 uuid 去重(1 小时内同 uuid 至多发一条, 重复调用返回原消息
-        // id), 不会开出第二个话题。
-        uuid: replyToMessageId,
-      },
+    const del = await c.im.v1.message.delete({
+      path: { message_id: messageId },
     });
-    const messageId = res.data?.message_id ?? '';
-    const threadId = res.data?.thread_id ?? '';
-    if (!messageId) {
-      log.warn(
-        '[feishu/outbound] openThread: no message_id in response — nothing provably sent',
-      );
-      return { kind: 'degraded' };
-    }
-    if (threadId) return { kind: 'opened', messageId, threadId };
-    // 部分成功: 开场白已发出但响应缺 thread_id — 补查消息详情恢复话题 id。
-    const recovered = await tryFetchMessageThreadId(c, messageId);
-    if (recovered) return { kind: 'opened', messageId, threadId: recovered };
-    // 恢复不了: 撤回开场白再降级, 避免「思考中」的开场白卡留在群里误导。
-    try {
-      const del = await c.im.v1.message.delete({
-        path: { message_id: messageId },
-      });
-      // SDK 对业务错误不抛异常, 2xx 响应也可能带非零 code — 只有 code 缺省
-      // 或为 0 才算撤回成功, 否则开场白卡仍在群里, 降级会制造误导组合。
-      if (del.code !== undefined && del.code !== 0) {
-        log.error(
-          `[feishu/outbound] openThread: opener recall rejected (code=${del.code}) — opener orphaned: ${del.msg ?? ''}`,
-        );
-        return { kind: 'orphaned', openerMessageId: messageId };
-      }
-      log.warn(
-        '[feishu/outbound] openThread: thread_id unrecoverable — opener recalled, fallback to group lane',
-      );
-      return { kind: 'degraded' };
-    } catch (err) {
-      // 撤回也失败: 开场白卡孤立在话题里 — 宁可让调用方放弃本轮(回复开场白
-      // 说明失败), 也不能降级群 lane 制造「开场白可见 + 回答刷群主流」。
-      const msg = err instanceof Error ? err.message : String(err);
+    // SDK 对业务错误不抛异常, 2xx 响应也可能带非零 code — 只有 code 缺省
+    // 或为 0 才算撤回成功, 否则开场白卡仍在群里, 降级会制造误导组合。
+    if (del.code !== undefined && del.code !== 0) {
       log.error(
-        `[feishu/outbound] openThread: thread_id unrecoverable and opener recall failed — opener orphaned: ${msg}`,
+        `[feishu/outbound] openThread: opener recall rejected (code=${del.code}) — opener orphaned: ${del.msg ?? ''}`,
       );
       return { kind: 'orphaned', openerMessageId: messageId };
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`[feishu/outbound] openThread failed (fallback to group lane): ${msg}`);
+    log.warn(
+      '[feishu/outbound] openThread: thread_id unrecoverable — opener recalled, fallback to group lane',
+    );
     return { kind: 'degraded' };
+  } catch (err) {
+    // 撤回也失败: 开场白卡孤立在话题里 — 宁可让调用方放弃本轮(回复开场白
+    // 说明失败), 也不能降级群 lane 制造「开场白可见 + 回答刷群主流」。
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error(
+      `[feishu/outbound] openThread: thread_id unrecoverable and opener recall failed — opener orphaned: ${msg}`,
+    );
+    return { kind: 'orphaned', openerMessageId: messageId };
   }
 }
 

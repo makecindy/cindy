@@ -38,6 +38,9 @@ import * as streamingText from './streamingText.js';
 import { downloadAttachments, type DownloadResult } from './attachmentDownloader.js';
 import type { AttachmentRef } from './incomingContent.js';
 
+/** 连接仍在时重新入队后的排空退避: 100ms / 300ms / 900ms / 2.7s, 耗尽坐等下一次 connected。 */
+const CONNECTED_FLUSH_RETRY_DELAYS_MS = [100, 300, 900, 2700] as const;
+
 export class FeishuIM extends BaseIM implements ChannelIM {
   /** 重连空窗暂存的开场白卡消费在连接就绪后排空(见 deferOpenerConsume)。 */
   private readonly offImStatus: () => void;
@@ -51,7 +54,8 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   /** 排空已成功、尚未被兜底发送认领的收据(当拍过期, 避免劫持后续无关发送)。 */
   private readonly completedOpenerConsumes = new Map<string, { messageId: string }>();
   private readonly completedOpenerConsumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private retryFlushScheduled = false;
+  private retryFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryFlushAttempt = 0;
   private disposed = false;
 
   constructor(host: IMHost) {
@@ -59,6 +63,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     setHost(host, this.log);
     const onImStatus = (status: IMStatus) => {
       if (status.kind !== 'connected') return;
+      this.resetConnectedFlushRetry();
       void this.flushDeferredOpenerConsumes();
     };
     feishuEvents.on('imStatus', onImStatus);
@@ -98,15 +103,34 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     return receipt;
   }
 
-  /** 当前连接仍在时重新入队后主动再排空, 不坐等下一次 connected。 */
+  /** 取消挂起的排空重试并把退避进度清零(connected / 成功排空 / dispose)。 */
+  private resetConnectedFlushRetry(): void {
+    if (this.retryFlushTimer) {
+      clearTimeout(this.retryFlushTimer);
+      this.retryFlushTimer = null;
+    }
+    this.retryFlushAttempt = 0;
+  }
+
+  /**
+   * 当前连接仍在时重新入队后主动再排空, 不坐等下一次 connected。
+   * 用递增延迟 + 次数上限, 避免限流/权限/服务故障持续失败时零延迟 REST 风暴。
+   */
   private scheduleConnectedFlushRetry(): void {
-    if (this.disposed || this.retryFlushScheduled) return;
-    this.retryFlushScheduled = true;
-    queueMicrotask(() => {
-      this.retryFlushScheduled = false;
+    if (this.disposed || this.retryFlushTimer) return;
+    const delay = CONNECTED_FLUSH_RETRY_DELAYS_MS[this.retryFlushAttempt];
+    if (delay === undefined) {
+      this.log.warn(
+        'flushDeferredOpenerConsumes: retry budget exhausted — waiting for next connected',
+      );
+      return;
+    }
+    this.retryFlushTimer = setTimeout(() => {
+      this.retryFlushTimer = null;
       if (this.disposed || !outbound.getBoundClient()) return;
+      this.retryFlushAttempt += 1;
       void this.flushDeferredOpenerConsumes();
-    });
+    }, delay);
   }
 
   private flushDeferredOpenerConsumes(): Promise<void> {
@@ -154,6 +178,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   ): Promise<void> {
     if (!batch) return;
     const { pinnedClient, epoch, evicted, items } = batch;
+    let requeued = false;
     // 容量淘汰的开场白卡: 撤回它们(条目没了, 但卡还在话题里 — 不撤回就是
     // 永久「思考中」)。撤回经 pinnedClient, 失败只 log。
     for (const evictedId of evicted) {
@@ -228,7 +253,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
           if (outbound.getAccountEpoch() === epoch) {
             this.log.warn(`flushDeferredOpenerConsumes fallback send failed (re-deferred): ${sendMsg}`);
             outbound.deferOpenerConsume(entry);
-            this.scheduleConnectedFlushRetry();
+            requeued = true;
           } else {
             this.log.info('flushDeferredOpenerConsumes: credentials cleared — dropping entry');
           }
@@ -238,6 +263,8 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         this.flushingOpenerConsumes.delete(key);
       }
     }
+    if (requeued) this.scheduleConnectedFlushRetry();
+    else this.retryFlushAttempt = 0;
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────────
@@ -269,6 +296,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   async dispose(): Promise<void> {
     this.log.info('dispose');
     this.disposed = true;
+    this.resetConnectedFlushRetry();
     for (const timer of this.completedOpenerConsumeTimers.values()) clearTimeout(timer);
     this.completedOpenerConsumeTimers.clear();
     this.completedOpenerConsumes.clear();
