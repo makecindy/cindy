@@ -67,9 +67,11 @@ const UPSTREAM_SOCKET_TIMEOUT_MS = 10 * 60 * 1000;
 // 半开(TCP 已建连、无数据、不 close,如网关假死 / 中间设备丢包)时内核不会触发
 // 任何超时,客户端会永远挂在流式响应上(pi/CC 会话「生成中」卡死,重启才能恢复)。
 // 这里在响应已开始、但持续 idleMs 收不到任何字节时主动 destroy 上游请求,让客户端
-// 收到截断并立即失败收尾。默认 90s —— 远小于 10 分钟 socket 超时,又足够容纳 LLM
-// 首 token 的正常延迟;可经 ProxyOptions.upstreamStreamIdleTimeoutMs 覆盖(测试用短值)。
-const UPSTREAM_STREAM_IDLE_TIMEOUT_MS = 90 * 1000;
+// 收到截断并立即失败收尾。默认 300s —— 与 CC 侧 CLAUDE_STREAM_IDLE_TIMEOUT_MS 对齐
+// (env-builder.ts:90s 会误杀 Opus xhigh/max 长 thinking,已从默认 90s 提到 300s);
+// 外层看门狗必须高于内层自愈预算,否则半开修掉的同时会把本来可自愈的慢流变成
+// 用户可见失败。可经 ProxyOptions.upstreamStreamIdleTimeoutMs 覆盖(0 禁用,测试用短值)。
+const UPSTREAM_STREAM_IDLE_TIMEOUT_MS = 300 * 1000;
 
 // WebSocket 这里只等 HTTP 101 握手，不应沿用允许长时间生成的 10 分钟超时。
 // 中间代理静默丢弃 Upgrade 时尽快回 426，让 Codex 原生 transport 降到 HTTP。
