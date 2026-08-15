@@ -203,6 +203,301 @@ describe('Pi provider-aware model routing', () => {
     await nativeHandle.close();
   });
 
+  it('keeps xAI and custom providers in one snapshot and switches both directions', async () => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: 'xai/grok-4.6',
+            displayName: 'Grok 4.6',
+            contextWindow: 500_000,
+            efforts: ['minimal', 'low', 'medium', 'high'],
+            defaultEffort: 'medium',
+          },
+          {
+            id: 'local-model',
+            displayName: 'Local Model',
+            contextWindow: 128_000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: 'xai',
+            name: 'xAI',
+            baseUrl: 'http://127.0.0.1:9',
+            api: 'anthropic-messages',
+            apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+            headers: {
+              'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
+              'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
+            },
+            modelIdAliases: {
+              'grok-4.6': 'xai/grok-4.6',
+              'xai/grok-4.6': 'xai/grok-4.6',
+            },
+            models: [{
+              id: 'xai/grok-4.6',
+              api: 'anthropic-messages',
+              contextWindow: 500_000,
+              maxTokens: 500_000,
+              input: ['text', 'image'],
+              reasoning: true,
+              compat: {
+                supportsStore: false,
+                supportsDeveloperRole: false,
+                supportsReasoningEffort: false,
+              },
+            }],
+          },
+          {
+            id: 'native-a',
+            name: 'Native A',
+            baseUrl: 'http://a.test',
+            api: 'openai-completions',
+            models: [{ id: 'local-model' }],
+          },
+        ],
+        env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
+      }),
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'grok-46-native',
+      workingDir: cwd,
+      model: 'xai/grok-4.6',
+      providerId: 'xai',
+      effort: 'medium',
+    });
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
+      .toEqual(['--provider', 'xai']);
+    expect(captured.args.slice(captured.args.indexOf('--model'), captured.args.indexOf('--model') + 2))
+      .toEqual(['--model', 'xai/grok-4.6']);
+    expect(captured.env.CINDY_PI_API_KEY).toBe('gateway-key');
+    expect(captured.env.CINDY_PI_XAI_PROXY_API_KEY).toBe('xai-proxy-placeholder');
+
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, { apiKey: string; models: Array<Record<string, unknown>> }> };
+    expect(models.providers.cindy?.apiKey).toBe('$CINDY_PI_API_KEY');
+    expect(models.providers.xai?.apiKey).toBe('$CINDY_PI_XAI_PROXY_API_KEY');
+    expect(models.providers.xai?.models.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
+      api: 'anthropic-messages',
+      contextWindow: 500_000,
+      maxTokens: 500_000,
+      input: ['text', 'image'],
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+      },
+    });
+    expect(JSON.parse(readFileSync(runtimeFileOf('subagent', 'grok-46-native'), 'utf8'))).toEqual({
+      model: 'xai/grok-4.6',
+      provider: 'xai',
+    });
+    await handle.setModel!('local-model', { providerId: 'native-a' });
+    await handle.setModel!('xai/grok-4.6', { providerId: 'xai' });
+    expect(captured.requests).toContainEqual({
+      type: 'set_model',
+      provider: 'native-a',
+      modelId: 'local-model',
+    });
+    expect(captured.requests).toContainEqual({
+      type: 'set_model',
+      provider: 'xai',
+      modelId: 'xai/grok-4.6',
+    });
+    await handle.close();
+  });
+
+  it('applies each native provider alias during provider-less compatibility routing', async () => {
+    const provider = (id: string, aliases?: Record<string, string>) => ({
+      id,
+      name: id,
+      baseUrl: `http://${id}.test`,
+      api: 'anthropic-messages' as const,
+      ...(aliases ? { modelIdAliases: aliases } : {}),
+      models: [{ id: id === 'xai' ? 'xai/grok-4.6' : 'other-model' }],
+    });
+    const agent = new PiAgent({
+      auth: {
+        getState: async (options) => ({
+          authenticated: true,
+          identity: options?.providerId === 'xai' ? 'SuperGrok' : 'test',
+          authSource: 'oauth' as const,
+        }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          provider('other'),
+          provider('xai', {
+            'grok-4.6': 'xai/grok-4.6',
+            'xai/grok-4.6': 'xai/grok-4.6',
+          }),
+        ],
+        env: {},
+      }),
+    });
+
+    const bare = await agent.startSession({
+      sessionId: 'providerless-grok-bare',
+      workingDir: cwd,
+      model: 'grok-4.6',
+    });
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
+      .toEqual(['--provider', 'xai']);
+    expect(captured.args.slice(captured.args.indexOf('--model'), captured.args.indexOf('--model') + 2))
+      .toEqual(['--model', 'xai/grok-4.6']);
+    await bare.close();
+
+    const namespaced = await agent.startSession({
+      sessionId: 'providerless-grok-namespaced',
+      workingDir: cwd,
+      model: 'xai/grok-4.6',
+    });
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
+      .toEqual(['--provider', 'xai']);
+    await namespaced.close();
+  });
+
+  it('fails closed when provider-less aliases are ambiguous', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [
+        {
+          id: 'native-a',
+          name: 'Native A',
+          baseUrl: 'http://a.test',
+          api: 'openai-completions',
+          modelIdAliases: { legacy: 'native-a-model' },
+          models: [{ id: 'native-a-model' }],
+        },
+        {
+          id: 'native-b',
+          name: 'Native B',
+          baseUrl: 'http://b.test',
+          api: 'openai-completions',
+          modelIdAliases: { legacy: 'native-b-model' },
+          models: [{ id: 'native-b-model' }],
+        },
+      ],
+      env: {},
+    })));
+    await expect(agent.startSession({
+      sessionId: 'providerless-alias-conflict',
+      workingDir: cwd,
+      model: 'legacy',
+    })).rejects.toThrow(/matches multiple native providers.*refusing to guess an endpoint/);
+    expect(captured.args).toEqual([]);
+  });
+
+  it('fails closed when an explicit xAI selection cannot build the Pi native provider', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: ['minimal', 'low', 'medium', 'high'],
+          defaultEffort: 'medium',
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => {
+        throw new Error('xAI token unavailable');
+      },
+    };
+    await expect(new PiAgent(deps).startSession({
+      sessionId: 'grok-46-native-failed',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+    })).rejects.toThrow(/BYOM provider 'xai' cannot serve model 'grok-4.6'.*refusing to fall back/);
+    expect(captured.args).toEqual([]);
+  });
+
+  it('passes resume identity so a historical xAI model can stay private to the restored session', async () => {
+    const resolver = vi.fn(async (ctx) => ({
+      providers: [{
+        id: 'xai',
+        name: 'xAI',
+        baseUrl: 'http://127.0.0.1:9',
+        api: 'anthropic-messages' as const,
+        modelIdAliases: { 'grok-retired': 'xai/grok-retired' },
+        models: [{ id: 'xai/grok-retired', api: 'anthropic-messages' as const }],
+      }],
+      env: {},
+    }));
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'provider-auth-placeholder' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: { availableModels: [] },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: resolver,
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'historical-xai-resume',
+      resumeSessionId: 'pi-sdk-session-old',
+      workingDir: cwd,
+      model: 'grok-retired',
+      providerId: 'xai',
+    });
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'xai',
+      model: 'grok-retired',
+      resumeSessionId: 'pi-sdk-session-old',
+    }));
+    expect(captured.args.slice(captured.args.indexOf('--model'), captured.args.indexOf('--model') + 2))
+      .toEqual(['--model', 'xai/grok-retired']);
+    await handle.close();
+  });
+
   it('keeps built-in gateway reasoning when a same-id non-reasoning BYOM empties the flat effort intersection', async () => {
     const resolver = vi.fn((_providerId: string | null | undefined, modelId: string) => {
       if (modelId !== 'shared-model') return null;
@@ -1260,6 +1555,321 @@ describe('Pi provider-aware model routing', () => {
     })).rejects.toThrow(/\[REMOTE_LOCAL_ONLY_PROVIDER\]/);
     // 未走到 spawn(transport 从未创建)。
     expect(captured.args).toEqual([]);
+  });
+
+  it('allows an explicitly forwarded remote xAI provider and keeps proxy auth in the remote env', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+      ensureHostProxyForward: async () => {},
+    };
+    let transportOptions:
+      Parameters<NonNullable<AgentDeps['getRemotePiTransport']>>[1] | undefined;
+    let registeredToken: string | undefined;
+    let disposed = 0;
+    const base = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: 'xai',
+            name: 'xAI',
+            baseUrl: 'http://127.0.0.1:47989',
+            api: 'anthropic-messages',
+            apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+            headers: {
+              'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
+              'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
+            },
+            models: [{ id: 'xai/grok-4.6' }],
+            modelIdAliases: {
+              'grok-4.6': 'xai/grok-4.6',
+              'xai/grok-4.6': 'xai/grok-4.6',
+            },
+            hostProxyForward: {
+              localUrl: 'http://127.0.0.1:18765',
+              remotePort: 47989,
+            },
+          },
+        ],
+        env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
+      }),
+      [
+        {
+          id: 'gateway-model',
+          displayName: 'Gateway model',
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+        {
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    );
+    const stableTokens = new Map([
+      ['remote-xai-forward', 'a'.repeat(43)],
+      ['remote-xai-other', 'b'.repeat(43)],
+    ]);
+    const derivePiProxySessionToken = vi.fn((sessionId: string) => stableTokens.get(sessionId)!);
+    const agentDeps: AgentDeps = {
+      ...base,
+      auth: {
+        ...base.auth,
+        getState: async () => ({
+          authenticated: true,
+          identity: 'SuperGrok',
+          authSource: 'oauth',
+        }),
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: {
+        ...base.runtimeConfig,
+        remoteEndpoint: 'https://gateway.example.test',
+      },
+      registerPiProxySession: (_sessionId, token) => {
+        registeredToken = token;
+        return () => {
+          disposed += 1;
+        };
+      },
+      derivePiProxySessionToken,
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async () => {},
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+      getRemotePiTransport: async (_hostId, opts) => {
+        transportOptions = opts;
+        return remoteStub;
+      },
+    };
+    const agent = new PiAgent(agentDeps);
+    const handle = await agent.startSession({
+      sessionId: 'remote-xai-forward',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      remoteHostId: 'remote-host',
+    });
+    expect(transportOptions?.hostProxyForwards).toEqual([
+      { localUrl: 'http://127.0.0.1:18765', remotePort: 47989 },
+    ]);
+    expect(registeredToken).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+    expect(transportOptions?.env.CINDY_PI_API_KEY).toBe('gateway-key');
+    expect(transportOptions?.env.CINDY_PI_XAI_PROXY_API_KEY).toBe('xai-proxy-placeholder');
+    expect(JSON.parse(transportOptions?.env.CINDY_PI_SECRET_ENV_NAMES ?? '[]')).toEqual(
+      expect.arrayContaining(['CINDY_PI_API_KEY', 'CINDY_PI_XAI_PROXY_API_KEY']),
+    );
+    expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(registeredToken);
+    const firstToken = registeredToken;
+    const firstSpawnEnv = { ...transportOptions?.env };
+
+    captured.requests.length = 0;
+    await handle.setModel!('gateway-model', { providerId: 'xd' });
+    await handle.setModel!('grok-4.6', { providerId: 'xai' });
+    expect(captured.requests).toContainEqual({
+      type: 'set_model',
+      provider: 'cindy',
+      modelId: 'gateway-model',
+    });
+    expect(captured.requests).toContainEqual({
+      type: 'set_model',
+      provider: 'xai',
+      modelId: 'xai/grok-4.6',
+    });
+    await handle.close();
+    expect(disposed).toBe(1);
+
+    // Reconstruct the agent to model a Desktop restart. The host-owned
+    // derivation survives while maker-core process-local state does not.
+    const reattached = await new PiAgent(agentDeps).startSession({
+      sessionId: 'remote-xai-forward',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      remoteHostId: 'remote-host',
+    });
+    expect(registeredToken).toBe(firstToken);
+    expect(transportOptions?.env).toEqual(firstSpawnEnv);
+    expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(firstToken);
+    await reattached.close();
+    expect(disposed).toBe(2);
+
+    const otherSession = await new PiAgent(agentDeps).startSession({
+      sessionId: 'remote-xai-other',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      remoteHostId: 'remote-host',
+    });
+    expect(registeredToken).not.toBe(firstToken);
+    expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(registeredToken);
+    expect(derivePiProxySessionToken).toHaveBeenCalledWith('remote-xai-forward');
+    expect(derivePiProxySessionToken).toHaveBeenCalledWith('remote-xai-other');
+    await otherSession.close();
+    expect(disposed).toBe(3);
+
+    const legacyDeps: AgentDeps = {
+      ...agentDeps,
+      derivePiProxySessionToken: undefined,
+    };
+    const legacy = await new PiAgent(legacyDeps).startSession({
+      sessionId: 'remote-xai-legacy',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      remoteHostId: 'remote-host',
+    });
+    const legacyToken = registeredToken;
+    await legacy.close();
+    const legacyReattached = await new PiAgent(legacyDeps).startSession({
+      sessionId: 'remote-xai-legacy',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      remoteHostId: 'remote-host',
+    });
+    expect(registeredToken).toBe(legacyToken);
+    await legacyReattached.close();
+    expect(disposed).toBe(5);
+  });
+
+  it('defers the remote xAI forward until a running gateway session actually switches to xAI', async () => {
+    const forwardEvents: string[] = [];
+    let rejectForward = true;
+    let remoteWrites = 0;
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+      ensureHostProxyForward: async (spec) => {
+        forwardEvents.push(`forward:${spec.localUrl}:${spec.remotePort}`);
+        if (rejectForward) throw new Error('remote port already in use');
+      },
+    };
+    let transportOptions:
+      Parameters<NonNullable<AgentDeps['getRemotePiTransport']>>[1] | undefined;
+    const base = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: 'xai',
+            name: 'xAI',
+            baseUrl: 'http://127.0.0.1:47989',
+            api: 'anthropic-messages',
+            apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+            models: [{ id: 'xai/grok-4.6' }],
+            modelIdAliases: {
+              'grok-4.6': 'xai/grok-4.6',
+              'xai/grok-4.6': 'xai/grok-4.6',
+            },
+            hostProxyForward: {
+              localUrl: 'http://127.0.0.1:18765',
+              remotePort: 47989,
+            },
+          },
+        ],
+        env: { CINDY_PI_XAI_PROXY_API_KEY: 'xai-proxy-placeholder' },
+      }),
+      [
+        {
+          id: 'gateway-model',
+          displayName: 'Gateway model',
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+        {
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    );
+    captured.requestHandler = async (command) => {
+      if (command.type === 'set_model') forwardEvents.push('set_model');
+      return command.type === 'get_state'
+        ? { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } }
+        : { success: true, data: {} };
+    };
+    const agent = new PiAgent({
+      ...base,
+      auth: {
+        ...base.auth,
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: {
+        ...base.runtimeConfig,
+        remoteEndpoint: 'https://gateway.example.test',
+      },
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async () => {
+          remoteWrites += 1;
+        },
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+      getRemotePiTransport: async (_hostId, opts) => {
+        transportOptions = opts;
+        return remoteStub;
+      },
+    });
+    const handle = await agent.startSession({
+      sessionId: 'remote-gateway-then-xai',
+      workingDir: cwd,
+      model: 'gateway-model',
+      providerId: 'xd',
+      remoteHostId: 'remote-host',
+    });
+
+    expect(transportOptions?.hostProxyForwards).toEqual([]);
+    expect(forwardEvents).toEqual([]);
+
+    captured.requests.length = 0;
+    remoteWrites = 0;
+    await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).rejects.toThrow(
+      /remote port already in use/,
+    );
+    expect(remoteWrites).toBe(0);
+    expect(captured.requests).not.toContainEqual({
+      type: 'set_model',
+      provider: 'xai',
+      modelId: 'xai/grok-4.6',
+    });
+
+    rejectForward = false;
+    forwardEvents.length = 0;
+    await handle.setModel!('grok-4.6', { providerId: 'xai' });
+    expect(forwardEvents).toEqual([
+      'forward:http://127.0.0.1:18765:47989',
+      'set_model',
+    ]);
+    await handle.close();
   });
 
   it('hashes the remote permission snapshot into spawn env so a later Full-access attach restarts', async () => {

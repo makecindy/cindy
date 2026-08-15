@@ -178,12 +178,16 @@ export interface RoutingDescriptor {
   headerOverrideState?: 'configured' | 'unknown';
   /** 可选 quirk 适配钩子名（对齐 OpenCode custom loader，承接无法纯数据表达的特例）。 */
   adapter?: string;
+  /** 该 Responses 端点是否接受 `max_output_tokens`；缺省 false，避免自定义端点被误发参数。 */
+  maxOutputTokensSupported?: boolean;
   /**
    * 自定义供应商的「列模型」端点回带（可选）。路由器**不消费**本字段——它只是把
    * `CustomProviderRuntimeConfig.modelsUrl` 带进 Provider/ProviderView，让编辑表单
    * （providerViewToConfig 从 routing 重建配置）不丢这个持久化字段。
    */
   modelsUrl?: string;
+  /** Pi 官方模型目录的 provider id；仅供 Pi 原生 provider 复用上游核实的模型协议/能力。 */
+  piCatalogProviderId?: string;
   /**
    * 该路由能服务的 wire model id 命名空间前缀白名单（每项形如 `xai/`，必须以 `/` 结尾）。
    *
@@ -487,6 +491,8 @@ export interface ProviderRuntimeModelConfig {
    * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的 BYOM 端点。
    */
   reasoningEfforts?: PiReasoningEffort[];
+  /** Pi 自定义模型的厂商推荐默认推理强度；必须包含在 reasoningEfforts 中。 */
+  reasoningDefaultEffort?: PiReasoningEffort;
 }
 
 /**
@@ -500,6 +506,7 @@ export interface ProviderPresetRuntime {
   baseUrl: string;
   /** 非标准推理端点的相对路径；缺省由 wire protocol 推导。 */
   requestPath?: string;
+  maxOutputTokensSupported?: boolean;
   /** 推荐模型清单（预填进表单，用户可增删改）。 */
   models: ProviderRuntimeModelConfig[];
   /** 可选预填请求头。 */
@@ -515,6 +522,8 @@ export interface ProviderPresetRuntime {
    * 防用户无意改坏已核验端点。
    */
   baseUrlEditable?: boolean;
+  /** 对应 `pi.dev/api/models/providers/<id>`；创建连接时快照，旧连接不自动补。 */
+  piCatalogProviderId?: string;
 }
 
 /**
@@ -590,6 +599,7 @@ export interface CustomProviderRuntimeConfig {
   baseUrl: string;
   /** 非标准推理端点的相对路径；缺省由 wire protocol 推导。 */
   requestPath?: string;
+  maxOutputTokensSupported?: boolean;
   /** 用户模型；contextWindow 可由预设带入，缺省时由 `buildUserProvider` 补保守默认。 */
   models: ProviderRuntimeModelConfig[];
   /**
@@ -604,6 +614,8 @@ export interface CustomProviderRuntimeConfig {
    * 从预设创建时随 `ProviderPresetRuntime.modelsUrl` 快照进来并持久化，编辑态仍可再拉。
    */
   modelsUrl?: string;
+  /** Pi 官方模型目录 provider id；缺省保持历史手填/BYOM 行为。 */
+  piCatalogProviderId?: string;
 }
 
 /**

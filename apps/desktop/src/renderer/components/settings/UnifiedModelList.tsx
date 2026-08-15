@@ -722,7 +722,7 @@ export function UnifiedModelList({
                   return (
                     <div
                       key={row.id}
-                      className="group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--surface-hover)]"
+                      className="group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
                     >
                       <span
                         className="min-w-0 truncate text-14 font-medium"

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-05T00:00:00.000Z",
+  "updatedAt": "2026-08-14T00:00:00.000Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -142,6 +142,7 @@
       "contextWindow": 1050000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "defaultEffort": "high",
       "sortOrder": 17,
       "routes": [
         {
@@ -1607,6 +1608,7 @@
       "contextWindow": 400000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh"],
+      "defaultEffort": "high",
       "sortOrder": 101,
       "defaultEnabled": false,
       "routes": [

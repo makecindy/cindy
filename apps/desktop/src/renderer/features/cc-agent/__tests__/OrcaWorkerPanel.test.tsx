@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   refreshCreationState: vi.fn(),
   setCreateOpen: vi.fn(),
   toastError: vi.fn(),
+  toolbarProps: {} as Record<string, unknown>,
 }));
 
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
@@ -20,7 +21,12 @@ vi.mock('@/lib/sidebarWindow', () => ({ isSidebarWindow: () => false }));
 vi.mock('@/lib/toast', () => ({ toast: { error: mocks.toastError } }));
 vi.mock('../CCAgentSessionView', () => ({ CCAgentSessionView: () => null }));
 vi.mock('../CreateWorkerPopover', () => ({ CreateWorkerPopover: () => null }));
-vi.mock('../RolePillDropdown', () => ({ WorkerListToolbar: () => null }));
+vi.mock('../RolePillDropdown', () => ({
+  WorkerListToolbar: (props: Record<string, unknown>) => {
+    mocks.toolbarProps = props;
+    return null;
+  },
+}));
 vi.mock('../hooks/useOrcaWorkerSelection', () => ({
   useOrcaWorkerSelection: () => ({
     workers: [],
@@ -56,6 +62,7 @@ describe('OrcaWorkerPanel New Maker shortcut', () => {
     mocks.refreshCreationState.mockReset();
     mocks.setCreateOpen.mockReset();
     mocks.toastError.mockReset();
+    mocks.toolbarProps = {};
   });
 
   afterEach(() => {
@@ -116,5 +123,26 @@ describe('OrcaWorkerPanel New Maker shortcut', () => {
     await expect(request).resolves.toBe(true);
     expect(mocks.setCreateOpen).not.toHaveBeenCalled();
     await expect(requestNewWorkerFromShortcut()).resolves.toBe(false);
+  });
+});
+
+describe('OrcaWorkerPanel settings navigation wiring', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('omits settings navigation for device-link controlled leads', () => {
+    render(<OrcaWorkerPanel leadSessionId="lead-1" deviceId="dev-1" viewVisible />);
+    expect(mocks.toolbarProps.onOpenSettings).toBeUndefined();
+  });
+
+  it('wires settings navigation for local leads', () => {
+    render(<OrcaWorkerPanel leadSessionId="lead-1" deviceId={null} viewVisible />);
+    expect(mocks.toolbarProps.onOpenSettings).toBeTypeOf('function');
+  });
+
+  it('fails closed for unresolved device ownership', () => {
+    render(<OrcaWorkerPanel leadSessionId="lead-1" viewVisible />);
+    expect(mocks.toolbarProps.onOpenSettings).toBeUndefined();
   });
 });

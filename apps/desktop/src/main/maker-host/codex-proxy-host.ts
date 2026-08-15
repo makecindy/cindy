@@ -52,6 +52,7 @@ import {
   resolveProviderRoute,
   resolveProviderRouteDecision,
   rewriteModelIdForProviderRoute,
+  resolvePendingSessionRouteDecision,
   buildLocalHandlerHeaders,
   inferProviderIdForModel,
   isHostInjectedAuthSession,
@@ -1967,7 +1968,7 @@ const MINIMAX_RESPONSES_UPSTREAMS: ReadonlySet<string> = new Set([
 
 function isMiniMaxResponsesSession(ctx: RequestTransformCtx): boolean {
   const sessionId = sessionIdFromTransformCtx(ctx);
-  const providerId = sessionId ? getSessionProvider(sessionId) : null;
+  const providerId = ctx.providerId ?? (sessionId ? getSessionProvider(sessionId) : null);
   if (!providerId) return false;
   const upstream = getActiveCatalog().providers.find((provider) => provider.id === providerId)
     ?.routing.codex?.upstream.replace(/\/+$/, '');
@@ -1997,6 +1998,11 @@ function createMiniMaxResponsesCompatTransform(): RequestTransform {
 function createProviderModelRewriteTransform(): RequestTransform {
   return (body, ctx) => {
     const sessionId = sessionIdFromTransformCtx(ctx);
+    if (ctx.providerId) {
+      if (!isPlainObject(body) || typeof body.model !== 'string') return null;
+      const rewritten = rewriteModelIdForProviderRoute(ctx.providerId, 'codex', body.model);
+      return rewritten === body.model ? null : { ...body, model: rewritten };
+    }
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
     if (sessionId && explicitProviderId) return rewriteSessionModelIdForRoute(sessionId, 'codex', body);
     return rewriteImplicitModelIdForRoute('codex', body);
@@ -2251,6 +2257,10 @@ export function createModelRoutingTransform(
       return unresolvedCollabSpawnRouteDecision();
     }
     const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
+    const pendingRoute = sessionId
+      ? resolvePendingSessionRouteDecision(sessionId, model || undefined)
+      : null;
+    if (pendingRoute) return pendingRoute;
     const selectedRouting = sessionId
       ? getSessionRoutingDescriptor(sessionId, 'codex', model || undefined)
       : null;

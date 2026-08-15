@@ -49,6 +49,10 @@ export interface SubagentModelSettings {
 
 /** 已知不支持图片输入的模型；设置页用它提示用户避免选错视觉模型。 */
 export const KNOWN_TEXT_ONLY_MODEL_IDS = new Set([
+  'deepseek/deepseek-v3',
+  'deepseek-v3',
+  'deepseek/deepseek-v3.2',
+  'deepseek-v3.2',
   'deepseek/deepseek-v4-pro',
   'deepseek-v4-pro',
   'deepseek/deepseek-v4-flash',

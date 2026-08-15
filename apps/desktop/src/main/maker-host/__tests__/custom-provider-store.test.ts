@@ -92,6 +92,10 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
   it('rejects bad / reserved ids', () => {
     expect(validateCustomProviderConfig({ ...valid, id: 'Bad Id' }).ok).toBe(false);
     expect(validateCustomProviderConfig({ ...valid, id: 'xd' }).ok).toBe(false);
+    expect(validateCustomProviderConfig({ ...valid, id: 'xai' }).ok).toBe(false);
+    expect(validateCustomProviderConfig({ ...valid, id: 'xai' }, { allowLegacyXai: true }).ok).toBe(
+      true,
+    );
     // 'cindy' 撞 pi 网关 provider id,必须保留
     expect(validateCustomProviderConfig({ ...valid, id: 'cindy' }).ok).toBe(false);
   });
@@ -195,6 +199,7 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
         config({
           reasoning: true,
           reasoningEfforts: ['low', 'high', 'xhigh'],
+          reasoningDefaultEffort: 'high',
         }),
       ),
     ).toEqual({ ok: true });
@@ -216,6 +221,11 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       ).ok,
     ).toBe(false);
     expect(validateCustomProviderConfig(config({ reasoningEfforts: ['high'] })).ok).toBe(false);
+    expect(validateCustomProviderConfig(config({
+      reasoning: true,
+      reasoningEfforts: ['low', 'high'],
+      reasoningDefaultEffort: 'max',
+    })).ok).toBe(false);
     expect(
       validateCustomProviderConfig(
         config(
@@ -360,6 +370,199 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     ]);
   });
 
+  it('round-trips the Pi official catalog provider id without adding it to other runtimes', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'official-pi',
+      name: 'Official Pi',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          piCatalogProviderId: 'deepseek',
+          models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+        },
+      },
+    });
+    expect((await getCustomProvider('official-pi'))?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    expect(validateCustomProviderConfig({
+      id: 'bad-catalog-runtime',
+      name: 'Bad',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.example/v1',
+          piCatalogProviderId: 'deepseek',
+          models: [{ id: 'm', name: 'M' }],
+        },
+      },
+    }).ok).toBe(false);
+  });
+
+  it('clears the Pi catalog marker when any write path changes saved model metadata', async () => {
+    mountDb();
+    const original = await createCustomProvider({
+      id: 'official-pi-edited',
+      name: 'Official Pi',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.deepseek.com',
+          wireProtocol: 'openai-chat',
+          piCatalogProviderId: 'deepseek',
+          models: [{
+            id: 'deepseek-v4-pro',
+            name: 'DeepSeek V4 Pro',
+            contextWindow: 1_000_000,
+            reasoning: true,
+            reasoningEfforts: ['high', 'max'],
+            reasoningDefaultEffort: 'high',
+          }],
+        },
+      },
+    });
+    const edited: CustomProviderConfig = {
+      ...original,
+      runtimes: {
+        ...original.runtimes,
+        pi: {
+          ...original.runtimes.pi!,
+          models: [{
+            ...original.runtimes.pi!.models[0]!,
+            name: 'My DeepSeek',
+            contextWindow: 64_000,
+            supportsImageInput: true,
+            reasoningEfforts: ['low'],
+            reasoningDefaultEffort: 'low',
+          }],
+        },
+      },
+    };
+    expect((await updateCustomProvider('official-pi-edited', {
+      ...original,
+      name: 'Renamed provider only',
+    }))?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    const defaultProtocolRoundTrip: CustomProviderConfig = {
+      ...original,
+      runtimes: {
+        ...original.runtimes,
+        pi: { ...original.runtimes.pi!, wireProtocol: undefined },
+      },
+    };
+    expect((await updateCustomProvider('official-pi-edited', defaultProtocolRoundTrip))
+      ?.runtimes.pi?.piCatalogProviderId).toBe('deepseek');
+    expect((await updateCustomProvider('official-pi-edited', {
+      ...defaultProtocolRoundTrip,
+      runtimes: {
+        ...defaultProtocolRoundTrip.runtimes,
+        pi: {
+          ...defaultProtocolRoundTrip.runtimes.pi!,
+          wireProtocol: 'anthropic-messages',
+        },
+      },
+    }))?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+
+    await updateCustomProvider('official-pi-edited', original);
+    expect((await updateCustomProvider('official-pi-edited', edited))?.runtimes.pi)
+      .not.toHaveProperty('piCatalogProviderId');
+
+    const second = await createCustomProvider({
+      ...original,
+      id: 'official-pi-discovered',
+    });
+    expect(await updateCustomProviderIfUnchanged(
+      second.id,
+      second,
+      {
+        ...second,
+        runtimes: {
+          ...second.runtimes,
+          pi: {
+            ...second.runtimes.pi!,
+            models: [
+              ...second.runtimes.pi!.models,
+              { id: 'new-from-models-url', name: 'New model' },
+            ],
+          },
+        },
+      },
+    )).toBe(true);
+    expect((await getCustomProvider(second.id))?.runtimes.pi?.piCatalogProviderId)
+      .toBe('deepseek');
+
+    const replaced = await createCustomProvider({
+      ...original,
+      id: 'official-pi-replaced',
+    });
+    expect((await updateCustomProvider(replaced.id, {
+      ...replaced,
+      runtimes: {
+        ...replaced.runtimes,
+        pi: {
+          ...replaced.runtimes.pi!,
+          models: [{
+            id: 'deepseek-v4-flash',
+            name: 'My Flash Model',
+            contextWindow: 64_000,
+            supportsImageInput: true,
+            reasoning: true,
+            reasoningEfforts: ['low'],
+            reasoningDefaultEffort: 'low',
+          }],
+        },
+      },
+    }))?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+    expect((await getCustomProvider(replaced.id))?.runtimes.pi).toMatchObject({
+      models: [{
+        id: 'deepseek-v4-flash',
+        name: 'My Flash Model',
+        contextWindow: 64_000,
+        supportsImageInput: true,
+        reasoning: true,
+        reasoningEfforts: ['low'],
+        reasoningDefaultEffort: 'low',
+      }],
+    });
+
+    const deleted = await createCustomProvider({
+      ...original,
+      id: 'official-pi-deleted',
+    });
+    expect((await updateCustomProvider(deleted.id, {
+      ...deleted,
+      runtimes: {
+        ...deleted.runtimes,
+        pi: { ...deleted.runtimes.pi!, models: [] },
+      },
+    }))?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+    const deletedSnapshot = await getCustomProvider(deleted.id);
+    expect((await updateCustomProvider(deleted.id, {
+      ...deletedSnapshot!,
+      runtimes: {
+        ...deletedSnapshot!.runtimes,
+        pi: {
+          ...deletedSnapshot!.runtimes.pi!,
+          models: deleted.runtimes.pi!.models,
+        },
+      },
+    }))?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+
+    const duplicate = await createCustomProvider({
+      ...original,
+      id: 'official-pi-duplicate',
+    });
+    expect((await updateCustomProvider(duplicate.id, {
+      ...duplicate,
+      runtimes: {
+        ...duplicate.runtimes,
+        pi: {
+          ...duplicate.runtimes.pi!,
+          models: [
+            { ...duplicate.runtimes.pi!.models[0]!, name: 'Edited first duplicate' },
+            duplicate.runtimes.pi!.models[0]!,
+          ],
+        },
+      },
+    }))?.runtimes.pi).not.toHaveProperty('piCatalogProviderId');
+  });
+
   it('round-trips only an explicitly enabled Pi reasoning capability', async () => {
     mountDb();
     await createCustomProvider({
@@ -375,6 +578,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
               name: 'Reasoner',
               reasoning: true,
               reasoningEfforts: ['low', 'high', 'xhigh'],
+              reasoningDefaultEffort: 'xhigh',
             },
             { id: 'legacy', name: 'Legacy' },
             { id: 'explicit-off', name: 'Explicit off', reasoning: false },
@@ -388,6 +592,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
         name: 'Reasoner',
         reasoning: true,
         reasoningEfforts: ['low', 'high', 'xhigh'],
+        reasoningDefaultEffort: 'xhigh',
       },
       { id: 'legacy', name: 'Legacy' },
       { id: 'explicit-off', name: 'Explicit off' },

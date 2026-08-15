@@ -21,6 +21,8 @@
 
 import {
   actualSourceIdForModel,
+  runtimeCustomProviderId,
+  storedCustomProviderId,
   type AgentKind,
   type Provider,
   type ProviderView,
@@ -59,6 +61,7 @@ export function setCustomProviderKeyReader(reader: CustomProviderKeyReader): voi
  * mutation 之间不会短暂恢复路由。
  */
 export function beginProviderRouteMutation(providerId: string): () => void {
+  providerId = runtimeCustomProviderId(providerId);
   providerRouteMutationCounts.set(
     providerId,
     (providerRouteMutationCounts.get(providerId) ?? 0) + 1,
@@ -74,7 +77,7 @@ export function beginProviderRouteMutation(providerId: string): () => void {
 }
 
 export function isProviderRouteMutationInProgress(providerId: string): boolean {
-  return providerRouteMutationCounts.has(providerId);
+  return providerRouteMutationCounts.has(runtimeCustomProviderId(providerId));
 }
 
 /**
@@ -95,7 +98,7 @@ export function setOAuthTokenReader(reader: OAuthTokenReader): void {
 /** 查询自定义供应商该 runtime 是否已有可注入的 API key（不暴露明文）。 */
 export function hasCustomProviderKey(providerId: string, agent: AgentKind): boolean {
   if (isProviderRouteMutationInProgress(providerId)) return false;
-  return Boolean(customProviderKeyReader(providerId, agent));
+  return Boolean(customProviderKeyReader(storedCustomProviderId(providerId), agent));
 }
 
 export interface ProviderOAuthTokenReadOptions {
@@ -151,6 +154,17 @@ const CLIENT_AUTH_HEADERS = ['authorization', 'x-api-key'];
 const MISSING_CUSTOM_PROVIDER_API_KEY = 'cindy-missing-custom-provider-api-key';
 const DISABLED_PROVIDER_ROUTE_ERROR = 'provider_route_disabled';
 const UPDATING_PROVIDER_ROUTE_ERROR = 'provider_route_updating';
+const PENDING_PROVIDER_SWITCH_ERROR = 'provider_switch_pending';
+
+type PendingCredentialSwitchReader = (
+  sessionId: string,
+) => { model: string; providerId: string | null; previousModel?: string } | undefined;
+let pendingCredentialSwitchReader: PendingCredentialSwitchReader = () => undefined;
+
+/** Main wires the pending switch service into this synchronous routing boundary. */
+export function setPendingCredentialSwitchReader(reader: PendingCredentialSwitchReader): void {
+  pendingCredentialSwitchReader = reader;
+}
 
 /**
  * 已迁移但无法安全执行的历史路由必须由 proxy 原地拒绝，不能返回 null：
@@ -196,6 +210,49 @@ function updatingProviderRouteDecision(providerId: string): RoutingDecision {
       res.end(payload);
     },
   };
+}
+
+function pendingProviderSwitchRouteDecision(providerId: string | null): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const source = providerId ? `Provider '${providerId}'` : 'The default Provider route';
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: PENDING_PROVIDER_SWITCH_ERROR,
+          code: PENDING_PROVIDER_SWITCH_ERROR,
+          message: `${source} has a pending Provider switch; retry after the current turn completes.`,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'retry-after': '1',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+function samePendingSwitchModel(left: string, right: string): boolean {
+  const leftBare = left.endsWith('[1m]') ? left.slice(0, -'[1m]'.length) : left;
+  const rightBare = right.endsWith('[1m]') ? right.slice(0, -'[1m]'.length) : right;
+  return leftBare === rightBare;
+}
+
+export function resolvePendingSessionRouteDecision(
+  sessionId: string,
+  wireModel: string | undefined,
+): RoutingDecision | null {
+  const providerId = getSessionProvider(sessionId);
+  const pendingSwitch = pendingCredentialSwitchReader(sessionId);
+  return wireModel &&
+    pendingSwitch &&
+    samePendingSwitchModel(pendingSwitch.model, wireModel) &&
+    (!pendingSwitch.previousModel ||
+      !samePendingSwitchModel(pendingSwitch.previousModel, wireModel))
+    ? pendingProviderSwitchRouteDecision(providerId)
+    : null;
 }
 
 function withoutClientAuthHeaders(
@@ -578,10 +635,13 @@ async function readProviderRouteCredentials(
   routing: RoutingDescriptor,
   agent: AgentKind,
 ): Promise<{ apiKey: string | null; oauthToken: string | null }> {
-  const apiKey = provider.source === 'user' ? customProviderKeyReader(provider.id, agent) : null;
+  const credentialProviderId =
+    provider.source === 'user' ? storedCustomProviderId(provider.id) : provider.id;
+  const apiKey =
+    provider.source === 'user' ? customProviderKeyReader(credentialProviderId, agent) : null;
   let oauthToken: string | null = null;
   if (routing.authStrategy === 'oauth-token') {
-    oauthToken = oauthTokenReader(provider.id);
+    oauthToken = oauthTokenReader(credentialProviderId);
   } else if (routing.authStrategy === 'provider-oauth-header') {
     try {
       oauthToken = await providerOAuthTokenReader(provider.id, agent);
@@ -638,7 +698,8 @@ export function resolveSessionRouteDecision(
   wireModel?: string,
 ): RoutingDecision | null | Promise<RoutingDecision | null> {
   const providerId = getSessionProvider(sessionId);
-  if (!providerId) return null;
+  const pendingDecision = resolvePendingSessionRouteDecision(sessionId, wireModel);
+  if (!providerId) return pendingDecision;
   if (isProviderRouteMutationInProgress(providerId)) {
     return updatingProviderRouteDecision(providerId);
   }
@@ -647,9 +708,13 @@ export function resolveSessionRouteDecision(
   const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!routing) return null;
   if (routing.disabled) return disabledProviderRouteDecision(providerId);
+  if (pendingDecision) return pendingDecision;
   if (!routingServesWireModel(routing, wireModel)) return null;
   // 自定义供应商：resolve 时按 provider_key_<id>_<agent> 读出该 runtime 的 API key 注入鉴权头（不在 catalog）。
-  const apiKey = provider?.source === 'user' ? customProviderKeyReader(providerId, agent) : null;
+  const credentialProviderId =
+    provider?.source === 'user' ? storedCustomProviderId(providerId) : providerId;
+  const apiKey =
+    provider?.source === 'user' ? customProviderKeyReader(credentialProviderId, agent) : null;
   const withRequestPath = (decision: RoutingDecision | null): RoutingDecision | null =>
     decision && wireModel && routing.requestPath
       ? { ...decision, pathOverride: routing.requestPath }
@@ -658,7 +723,13 @@ export function resolveSessionRouteDecision(
   // （临期刷新在后台单飞，不阻塞路由热路径，规则 10）。
   if (routing.authStrategy === 'oauth-token') {
     return withRequestPath(
-      buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthTokenReader(providerId)),
+      buildRouteDecision(
+        routing,
+        gatewayKey,
+        agent,
+        apiKey,
+        oauthTokenReader(credentialProviderId),
+      ),
     );
   }
   if (routing.authStrategy !== 'provider-oauth-header') {

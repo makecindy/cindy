@@ -26,10 +26,12 @@
 
 import {
   BUNDLED_CATALOG,
+  buildUserProvider,
   findModelRegistryRoute,
   type AgentKind,
   type Catalog,
   type CatalogModel,
+  type CustomProviderConfig,
   type Provider,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
@@ -56,8 +58,12 @@ import {
 
 /** OSS / bundled 加载来的基础目录;null = 尚未加载(回落 BUNDLED_CATALOG)。 */
 let base: Catalog | null = null;
+/** Last trusted Registry used only to re-project user configs; it never changes catalog membership. */
+let trustedCustomProviderRegistry: Catalog['modelRegistry'] = BUNDLED_CATALOG.modelRegistry;
 /** 用户自定义供应商(已 buildUserProvider 展开的标准 Provider),追加在 base 之后。 */
 let custom: Provider[] = [];
+/** 当前 owner 的原始配置；仅用于 Registry 热更新后的运行时重投影。 */
+let customConfigs: CustomProviderConfig[] | null = null;
 /**
  * codex cache 派生的规范化模型快照(原始 slug,不带 chatgpt/ 前缀)。先 augment 到
  * openai.codex,再从生效后的 codex 列表投影 openai.claude-code bridge,确保两边名称和排序同源。
@@ -70,6 +76,38 @@ let discoveredCodex: CatalogModel[] = [];
  * 空/坏数据绝不抹掉静态兜底。由 generic-oauth 的 models 发现流程写入。
  */
 const discoveredByProvider = new Map<string, Partial<Record<AgentKind, CatalogModel[]>>>();
+
+/**
+ * xAI 订阅账号从官方 `/v1/user` → `/v1/models` 读到的权威成员清单。
+ *
+ * `null` = 当前 owner 尚无成功账号快照，允许公共 Catalog / bundled 只作为启动救急；
+ * `[]` = 上游明确返回空清单，仍是权威结果。成员保存为 canonical `xai/grok-*`，
+ * Claude/Codex 原样消费，Pi 在投影时去掉 `xai/`。
+ */
+export interface XaiDiscoveredModel {
+  id: string;
+  name?: string;
+  description?: string;
+  contextWindow?: number;
+  contextWindowVerified?: boolean;
+  maxOutput?: number;
+  efforts?: CatalogModel['efforts'];
+  defaultEffort?: CatalogModel['defaultEffort'];
+}
+
+let xaiDiscoveredModels: XaiDiscoveredModel[] | null = null;
+/**
+ * 供应商媒体模型动态发现快照。成功快照决定当前账号的型号存在性，静态／远端
+ * 同 id 条目只提供 first-wins 展示元数据；发现失败不写本 Map，完整回落静态目录。
+ * 媒体字段显式 `[]` 是服务端停用信号，合并时不得被本快照复活。
+ */
+const discoveredMediaByProvider = new Map<
+  string,
+  {
+    imageModels?: NonNullable<Provider['imageModels']>;
+    videoModels?: NonNullable<Provider['videoModels']>;
+  }
+>();
 /** 单 tab 能力覆盖块(shared/modelAccess ModelAccessAgentOverride 同形)。 */
 export interface XdGatewayAgentOverride {
   contextWindow?: number;
@@ -293,6 +331,26 @@ function augmentModels(
   return { ...p, models: { ...p.models, [agent]: models } };
 }
 
+function applyMediaDiscovery(
+  provider: Provider,
+  key: 'imageModels' | 'videoModels',
+  discovered: NonNullable<Provider['imageModels']>,
+): Provider {
+  const existing = provider[key];
+  // undefined = 这份原始目录没有声明能力；正常加载路径会先由 source 用 bundled
+  // 补旧目录。[] 则是明确停用。两种情况都不能仅凭账号发现把能力凭空复活。
+  if (!existing || existing.length === 0) return provider;
+  // 官方端点成功返回空清单 = 当前账号此类媒体没有可执行型号。它与请求失败不同，
+  // 必须清掉旧快照／静态兜底，不能继续展示一个账号实际不可用的型号。
+  if (discovered.length === 0) return { ...provider, [key]: [] };
+  const discoveredById = new Map(discovered.map((model) => [model.id, model]));
+  const retained = existing.filter((model) => discoveredById.delete(model.id));
+  const next = [...retained, ...discoveredById.values()];
+  const unchanged =
+    next.length === existing.length && next.every((model, index) => model === existing[index]);
+  return unchanged ? provider : { ...provider, [key]: next };
+}
+
 /**
  * 以生效 Codex 列表校正 bridge 的展示名称 / 排序，同时保留 bridge 自己的 context、effort、
  * defaultEnabled 等 runtime 能力。这样旧远端目录里曾固化的本地化后缀也不会继续泄漏。
@@ -332,7 +390,11 @@ function projectCodexModelsToBridges(
 }
 
 /** 静态段被淘汰的供应商：先清空 providers.models，再由 discovery + Registry/local root 装配。 */
-const DYNAMIC_LIST_PROVIDER_IDS: ReadonlySet<string> = new Set(['anthropic', 'openai', 'xd']);
+const DYNAMIC_LIST_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  'anthropic',
+  'openai',
+  'xd',
+]);
 
 /**
  * Anthropic discovery 映射阶段读取的 Registry 字段子集：上游缺字段时先用它补齐，
@@ -358,10 +420,10 @@ function modelRegistryMetaFields(
   agent: AgentKind,
   modelId: string,
 ): RegistryMetaFields | undefined {
-  const catalog = base ?? BUNDLED_CATALOG;
   // 模型 registry 的路由与 perAgent 覆盖只按 claude-code / codex 建键;Pi 是动态 BYOM,
   // 无 registry per-agent 覆盖,按 agent 无关处理(取条目基线元数据)。
   const registryAgent = agent === 'pi' ? undefined : agent;
+  const catalog = base ?? BUNDLED_CATALOG;
   const matched = findModelRegistryRoute(catalog.modelRegistry, providerId, modelId, registryAgent);
   if (!matched) return undefined;
   const { entry } = matched;
@@ -488,6 +550,130 @@ function assembleRoot(
   return preserveDeclarationOrder ? out : sortModelsByOrder(out);
 }
 
+/** Registry / local override 只能补账号已返回的条目，不能重新实体化账号没有的成员。 */
+function assembleAuthoritativeRoot(
+  providerId: string,
+  agent: RootAgentKind,
+  models: readonly CatalogModel[],
+  plan: ModelPlaneRegistryPlan,
+): CatalogModel[] {
+  const memberIds = new Set(models.map((model) => model.id));
+  return assembleRoot(providerId, agent, models, plan, true).filter((model) =>
+    memberIds.has(model.id),
+  );
+}
+
+function xaiCatalogModelById(
+  provider: Provider,
+  id: string,
+  agent: AgentKind,
+): CatalogModel | undefined {
+  const bundled = BUNDLED_CATALOG.providers.find((entry) => entry.id === 'xai');
+  if (agent === 'pi') {
+    const bare = id.startsWith('xai/') ? id.slice('xai/'.length) : id;
+    return (
+      provider.models.pi?.find((model) => model.id === bare)
+      ?? bundled?.models.pi?.find((model) => model.id === bare)
+    );
+  }
+  return (
+    provider.models[agent]?.find((model) => model.id === id)
+    ?? bundled?.models[agent]?.find((model) => model.id === id)
+  );
+}
+
+function materializeXaiAccountModels(
+  provider: Provider,
+  agent: RootAgentKind,
+  discovered: readonly XaiDiscoveredModel[],
+): CatalogModel[] {
+  return discovered.map((entry, index) => {
+    const catalogModel =
+      xaiCatalogModelById(provider, entry.id, agent)
+      ?? xaiCatalogModelById(provider, entry.id, 'pi');
+    const registry = modelRegistryMetaFields('xai', agent, entry.id);
+    const efforts = entry.efforts
+      ? [...entry.efforts]
+      : [...(registry?.efforts ?? catalogModel?.efforts ?? [])];
+    const requestedDefault =
+      entry.defaultEffort !== undefined
+        ? entry.defaultEffort
+        : (registry?.defaultEffort ?? catalogModel?.defaultEffort ?? null);
+    const defaultEffort =
+      requestedDefault !== null && efforts.includes(requestedDefault)
+        ? requestedDefault
+        : efforts.includes('high')
+          ? 'high'
+          : (efforts[efforts.length - 1] ?? null);
+    const contextWindow =
+      entry.contextWindow ?? registry?.contextWindow ?? catalogModel?.contextWindow ?? 200_000;
+    const contextWindowVerified =
+      entry.contextWindow !== undefined
+        ? (entry.contextWindowVerified ?? true)
+        : registry?.contextWindow !== undefined || catalogModel?.contextWindowVerified === true;
+    return {
+      ...catalogModel,
+      id: entry.id,
+      name: entry.name ?? registry?.name ?? catalogModel?.name ?? entry.id.slice('xai/'.length),
+      ...(entry.description !== undefined
+        ? { description: entry.description }
+        : registry?.description !== undefined
+          ? { description: registry.description }
+          : {}),
+      group: registry?.group ?? catalogModel?.group ?? 'grok',
+      sortOrder: registry?.sortOrder ?? catalogModel?.sortOrder ?? 1_000 + index,
+      contextWindow,
+      ...(contextWindowVerified ? { contextWindowVerified: true } : {}),
+      ...(entry.maxOutput !== undefined
+        ? { maxOutput: entry.maxOutput }
+        : registry?.maxOutput !== undefined
+          ? { maxOutput: registry.maxOutput }
+          : catalogModel?.maxOutput !== undefined
+            ? { maxOutput: catalogModel.maxOutput }
+            : {}),
+      efforts,
+      defaultEffort,
+      ...(registry?.supportsFastMode !== undefined
+        ? { supportsFastMode: registry.supportsFastMode }
+        : {}),
+      status: registry?.status ?? catalogModel?.status ?? 'active',
+      defaultEnabled: registry?.defaultEnabled ?? catalogModel?.defaultEnabled ?? true,
+    };
+  });
+}
+
+function bundledXaiFallbackMembers(provider: Provider): XaiDiscoveredModel[] {
+  return (provider.models.pi ?? []).map((model) => ({
+    id: model.id.startsWith('xai/') ? model.id : `xai/${model.id}`,
+  }));
+}
+
+function projectXaiPiModel(
+  provider: Provider,
+  model: CatalogModel,
+): CatalogModel {
+  const bareId = model.id.startsWith('xai/') ? model.id.slice('xai/'.length) : model.id;
+  const piMetadata = xaiCatalogModelById(provider, model.id, 'pi');
+  return {
+    ...model,
+    ...piMetadata,
+    id: bareId,
+    name: model.name,
+    description: model.description,
+    group: model.group,
+    sortOrder: model.sortOrder,
+    contextWindow: model.contextWindow,
+    ...(model.contextWindowVerified !== undefined
+      ? { contextWindowVerified: model.contextWindowVerified }
+      : {}),
+    ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
+    efforts: model.efforts,
+    defaultEffort: model.defaultEffort,
+    status: model.status,
+    defaultEnabled: model.defaultEnabled,
+  };
+}
+
 /** 把 provider 的全部 per-agent 模型清单清零(保留身份卡);已为空则原样返回。 */
 function withEmptyModels(p: Provider): Provider {
   const entries = Object.entries(p.models) as [AgentKind, CatalogModel[]][];
@@ -506,23 +692,11 @@ function computeMerged(): Catalog {
   // XD Provider 使用随客户端发布的固定壳，远端 Catalog 只能管理非 XD Provider。
   // `/models` 会在下方重建固定壳的全部模型，Catalog 缺失、刷新或异常都不能改变 XD。
   const builtinXd = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd');
+  const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
   const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
   const providerSources = b.providers.filter((provider) => provider.id !== 'xd');
   if (builtinXd) providerSources.splice(Math.max(0, remoteXdIndex), 0, builtinXd);
-  let providers: Provider[] = providerSources.map((provider): Provider => {
-    if (provider.id !== 'xai') return provider;
-    const claudeRoute = provider.routing['claude-code'];
-    const claudeModels = provider.models['claude-code'] ?? [];
-    if (!claudeRoute) return provider;
-    return {
-      ...provider,
-      agents: provider.agents.includes('pi')
-        ? provider.agents
-        : [...provider.agents, 'pi' as AgentKind],
-      routing: { ...provider.routing, pi: provider.routing.pi ?? claudeRoute },
-      models: { ...provider.models, pi: provider.models.pi ?? claudeModels },
-    };
-  });
+  let providers: Provider[] = providerSources;
 
   // 先清零已退役的静态 providers.models 段：无论目录来自 bundled 还是远端，
   // OpenAI/Anthropic 的 root 都只由 discovery 证据 + Registry presence + local
@@ -553,6 +727,20 @@ function computeMerged(): Catalog {
       let next = p;
       for (const [agent, additions] of Object.entries(byAgent) as [AgentKind, CatalogModel[]][]) {
         if (additions.length > 0) next = augmentModels(next, agent, additions);
+      }
+      return next;
+    });
+  }
+  if (discoveredMediaByProvider.size > 0) {
+    providers = providers.map((provider) => {
+      const snapshot = discoveredMediaByProvider.get(provider.id);
+      if (!snapshot) return provider;
+      let next = provider;
+      if (snapshot.imageModels) {
+        next = applyMediaDiscovery(next, 'imageModels', snapshot.imageModels);
+      }
+      if (snapshot.videoModels) {
+        next = applyMediaDiscovery(next, 'videoModels', snapshot.videoModels);
       }
       return next;
     });
@@ -615,22 +803,48 @@ function computeMerged(): Catalog {
       return { ...p, models: { ...p.models, 'claude-code': root, codex: codexBridge, pi: root } };
     }
     if (p.id === 'xai') {
-      const claudeRoot = assembleRoot(
-        'xai',
-        'claude-code',
-        p.models['claude-code'] ?? [],
-        plan,
-        true,
-      );
-      const codexRoot = assembleRoot('xai', 'codex', p.models.codex ?? [], plan, true);
+      const useAccountMembership = xaiDiscoveredModels !== null;
+      const accountModels = xaiDiscoveredModels ?? [];
+      // The bundled-only fallback uses Pi's official list as its membership seed because it is
+      // the freshest packaged xAI list (and currently carries Grok 4.6). A loaded server Catalog
+      // remains the preceding fallback and keeps its own legacy static membership for old server
+      // compatibility. Any successful account snapshot, including [], overrides both.
+      const authoritativeMembers = useAccountMembership
+        ? accountModels
+        : b === BUNDLED_CATALOG || p === bundledXai
+          ? bundledXaiFallbackMembers(p)
+          : null;
+      const claudeSeed = authoritativeMembers
+        ? materializeXaiAccountModels(p, 'claude-code', authoritativeMembers)
+        : (p.models['claude-code'] ?? []);
+      const codexSeed = authoritativeMembers
+        ? materializeXaiAccountModels(p, 'codex', authoritativeMembers)
+        : (p.models.codex ?? []);
+      const claudeRoot = authoritativeMembers
+        ? assembleAuthoritativeRoot('xai', 'claude-code', claudeSeed, plan)
+        : assembleRoot('xai', 'claude-code', claudeSeed, plan, true);
+      const codexRoot = authoritativeMembers
+        ? assembleAuthoritativeRoot('xai', 'codex', codexSeed, plan)
+        : assembleRoot('xai', 'codex', codexSeed, plan, true);
+      const piModels = claudeRoot.map((model) => projectXaiPiModel(p, model));
       return {
         ...p,
+        agents: p.agents.includes('pi') ? p.agents : [...p.agents, 'pi' as AgentKind],
+        routing: {
+          ...p.routing,
+          ...(p.routing.pi
+            ? {}
+            : bundledXai?.routing.pi
+              ? {
+                  pi: bundledXai.routing.pi,
+                }
+              : {}),
+        },
         models: {
           ...p.models,
           'claude-code': claudeRoot,
           codex: codexRoot,
-          // Pi 恒定镜像 claude-code root(拿满 root 能力,如 grok-4.20 的 xhigh 档)。
-          ...(p.agents.includes('pi') ? { pi: claudeRoot } : {}),
+          pi: piModels,
         },
       };
     }
@@ -746,7 +960,16 @@ export function getCatalogModelContextWindow(
 
 /** 由 host 的目录加载器(ensureActiveCatalogLoaded)在拉取成功后写入基础目录。 */
 export function setActiveCatalog(catalog: Catalog): void {
+  const previous = base ?? BUNDLED_CATALOG;
+  const projectionRegistry =
+    catalog.modelRegistry ?? previous.modelRegistry ?? trustedCustomProviderRegistry;
+  trustedCustomProviderRegistry = projectionRegistry;
   base = catalog;
+  if (customConfigs) {
+    custom = customConfigs.map((config) =>
+      buildUserProvider(config, { modelRegistry: projectionRegistry }),
+    );
+  }
   markChanged();
 }
 
@@ -764,14 +987,20 @@ export function commitModelPlaneFromCatalog(catalog: Catalog): void {
   const providers =
     incomingXai && current.providers.some((provider) => provider.id === 'xai')
       ? current.providers.map((provider) =>
-          provider.id === 'xai' ? { ...provider, models: incomingXai.models } : provider,
+          provider.id === 'xai' ? incomingXai : provider,
         )
       : current.providers;
+  if (catalog.modelRegistry) trustedCustomProviderRegistry = catalog.modelRegistry;
   base = {
     ...current,
     providers,
     ...(catalog.modelRegistry ? { modelRegistry: catalog.modelRegistry } : {}),
   };
+  if (customConfigs) {
+    custom = customConfigs.map((config) =>
+      buildUserProvider(config, { modelRegistry: trustedCustomProviderRegistry }),
+    );
+  }
   markChanged();
 }
 
@@ -794,7 +1023,20 @@ export function getModelPlaneWarnings(): readonly ModelPlaneWarning[] {
  * 传入的是已 `buildUserProvider` 展开的标准 `Provider[]`(**不含 API key**)。
  */
 export function setCustomProviders(providers: Provider[]): void {
+  customConfigs = null;
   custom = [...providers];
+  markChanged();
+}
+
+/**
+ * 保存当前 owner 的原始配置并按生效 Registry 展开。配置本身不改写、不持久化；目录刷新时
+ * 可在同一个 revision 内重算 effort 投影。
+ */
+export function setCustomProviderConfigs(configs: CustomProviderConfig[]): void {
+  customConfigs = [...configs];
+  custom = customConfigs.map((config) =>
+    buildUserProvider(config, { modelRegistry: trustedCustomProviderRegistry }),
+  );
   markChanged();
 }
 
@@ -819,6 +1061,36 @@ export function setDiscoveredProviderModels(
   const byAgent = discoveredByProvider.get(providerId) ?? {};
   byAgent[agent] = [...models];
   discoveredByProvider.set(providerId, byAgent);
+  markChanged();
+}
+
+/** 成功空数组同样是权威成员快照；null 仅表示当前 owner 尚无成功快照。 */
+export function setXaiDiscoveredModels(models: readonly XaiDiscoveredModel[] | null): void {
+  xaiDiscoveredModels = models === null ? null : models.map((model) => ({ ...model }));
+  markChanged();
+}
+
+/**
+ * 原子注入供应商图片／视频发现快照。成功快照决定存在性，同 id 静态元数据优先；
+ * 传 null 清空该供应商账号态快照，回到当前
+ * 静态／远端目录；失败路径不应调用，以保留同账号上次成功结果。
+ */
+export function setDiscoveredProviderMediaModels(
+  providerId: string,
+  snapshot: {
+    imageModels?: NonNullable<Provider['imageModels']>;
+    videoModels?: NonNullable<Provider['videoModels']>;
+  } | null,
+): void {
+  if (snapshot === null) discoveredMediaByProvider.delete(providerId);
+  else {
+    const previous = discoveredMediaByProvider.get(providerId) ?? {};
+    discoveredMediaByProvider.set(providerId, {
+      ...previous,
+      ...(snapshot.imageModels ? { imageModels: [...snapshot.imageModels] } : {}),
+      ...(snapshot.videoModels ? { videoModels: [...snapshot.videoModels] } : {}),
+    });
+  }
   markChanged();
 }
 

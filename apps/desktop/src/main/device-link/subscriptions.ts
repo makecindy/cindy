@@ -142,7 +142,7 @@ export function updateControllerMetadata(
   deviceId: string,
   name: string,
   capabilities?: readonly string[],
-): void {
+): boolean {
   const e = registry.get(deviceId);
   if (capabilities) {
     const normalized = normalizeCapabilities(capabilities);
@@ -151,7 +151,9 @@ export function updateControllerMetadata(
   }
   // Do not recreate a topic entry during link-open; modern controllers must still
   // replay subscribe before their remembered topics become active.
-  if (e) e.name = name;
+  if (!e || e.name === name) return false;
+  e.name = name;
+  return true;
 }
 
 export function controllerHasTopic(deviceId: string, topic: string): boolean {

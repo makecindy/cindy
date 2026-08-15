@@ -40,6 +40,11 @@ function request(action: AutoReviewRequest['action']): AutoReviewRequest {
 describe('resolveAutoReviewDecision', () => {
   it('names the legacy prompt result as an internal needs-review tier, not a UI prompt', () => {
     expect(classifyLocalAutoReviewTier(request({ kind: 'other' }))).toBe('needs-review');
+    expect(classifyLocalAutoReviewTier(request({
+      kind: 'other',
+      description: 'unmapped built-in',
+      requireConsent: true,
+    }))).toBe('prompt-each-time');
     expect(classifyLocalAutoReviewTier(request({ kind: 'read' }))).toBe('auto-approve');
   });
 
@@ -107,6 +112,16 @@ describe('resolveAutoReviewDecision', () => {
     await expect(resolveAutoReviewDecision(request(action), delegate))
       .resolves.toEqual({ verdict: 'allow' });
     expect(delegate).toHaveBeenCalledOnce();
+  });
+
+  it('does not let the reviewer allow unmapped tools that require consent', async () => {
+    const delegate = vi.fn(async () => ({ verdict: 'allow' as const }));
+    await expect(resolveAutoReviewDecision(request({
+      kind: 'other',
+      description: 'unmapped built-in with path-shaped args',
+      requireConsent: true,
+    }), delegate)).resolves.toEqual({ verdict: 'ask' });
+    expect(delegate).not.toHaveBeenCalled();
   });
 
   it.each([

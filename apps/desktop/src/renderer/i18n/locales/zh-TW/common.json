@@ -479,7 +479,7 @@
         "reset": "恢復預設佈局",
         "resetSuccess": "已恢復預設面板佈局",
         "resetFailed": "無法恢復預設面板佈局",
-        "saved": "面板位置已儲存；可在「設定 → 外觀」中恢復預設佈局",
+        "saved": "面板位置已儲存；可在「設定 → 一般」的「外觀」區段恢復預設配置",
         "saveFailed": "無法儲存面板位置"
       }
     },
@@ -2321,7 +2321,7 @@
       "title": "Subagent",
       "description": "分別設定 Claude Code 和 Codex 執行子任務時使用的預設模型，併為 Codex Subagent 配置執行護欄。設定按入口生效，不會為每個模型單獨儲存。",
       "unspecified": "不指定（跟隨原邏輯）",
-      "hint": "可選模型取決於已連線的模型來源；留空表示使用 Agent 原本的預設設定。Claude Code 的修改從新建的 Agent 會話開始生效；Codex 的修改在空閒時立即重啟生效，有任務執行時會在本地 Codex 會話全部空閒後自動應用。",
+      "hint": "Claude Code Subagent 僅支援指定模型，推理強度沿用 Claude Code 原生邏輯。可選模型取決於已連線的模型來源；留空表示使用 Agent 原本的預設設定。Claude Code 的修改從新建的 Agent 會話開始生效；Codex 的修改在空閒時立即重啟生效，有任務執行時會在本地 Codex 會話全部空閒後自動應用。",
       "visionFallbackLabel": "圖片請求的視覺備援模型",
       "visionFallbackEnabledAria": "啟用圖片請求的視覺備援",
       "visionFallbackHint": "目前模型不支援圖片時，Cindy 會用此模型處理本輪圖片。",
@@ -9113,6 +9113,7 @@
       "archiveWorkerAria": "歸檔 Worker {{name}}",
       "createWorker": "建立新 Worker",
       "hardLimitHint": "已達硬上限 {{count}} 個 · 歸檔現有 Worker 後可繼續建立",
+      "hardLimitSettingsHint": "已達硬上限 {{count}} 個 · 點擊前往協同設定調整",
       "softLimitHint": "已超過軟上限 {{count}} 個 · Worker 過多會增加記憶體佔用",
       "settingsCollaboration": "設定 · 協同",
       "layoutMenuLabel": "Worker 列表顯示方式",

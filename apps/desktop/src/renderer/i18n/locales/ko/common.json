@@ -479,7 +479,7 @@
         "reset": "기본 레이아웃 복원",
         "resetSuccess": "기본 패널 레이아웃을 복원했습니다",
         "resetFailed": "기본 패널 레이아웃을 복원하지 못했습니다",
-        "saved": "패널 위치를 저장했습니다. 설정 → 외관에서 기본 레이아웃으로 복원할 수 있습니다.",
+        "saved": "패널 위치를 저장했습니다. 설정 → 일반의 모양 섹션에서 기본 레이아웃으로 복원할 수 있습니다.",
         "saveFailed": "패널 위치를 저장하지 못했습니다"
       }
     },
@@ -2321,7 +2321,7 @@
       "title": "하위 에이전트",
       "description": "Claude Code와 Codex가 하위 작업을 실행할 때 사용할 기본 모델을 설정하고 Codex 하위 에이전트의 가드레일을 구성합니다. 설정은 진입점별로 적용되며 모델별로 저장되지 않습니다.",
       "unspecified": "지정 안 함(기본 동작 사용)",
-      "hint": "선택 가능한 모델은 연결된 모델 소스에 따라 달라집니다. 지정하지 않으면 Agent의 기본 설정을 사용합니다. Claude Code 변경 사항은 새 세션부터 적용됩니다. Codex 변경 사항은 유휴 상태에서 즉시 재시작되어 반영되며, 작업 실행 중에는 로컬 Codex 세션이 모두 유휴 상태가 된 후 자동 적용됩니다.",
+      "hint": "Claude Code 하위 에이전트에서는 모델만 지정할 수 있으며 추론 강도는 Claude Code의 기본 동작을 따릅니다. 선택 가능한 모델은 연결된 모델 소스에 따라 달라집니다. 지정하지 않으면 Agent의 기본 설정을 사용합니다. Claude Code 변경 사항은 새 세션부터 적용됩니다. Codex 변경 사항은 유휴 상태에서 즉시 재시작되어 반영되며, 작업 실행 중에는 로컬 Codex 세션이 모두 유휴 상태가 된 후 자동 적용됩니다.",
       "visionFallbackLabel": "이미지 요청용 시각 폴백 모델",
       "visionFallbackEnabledAria": "이미지 요청용 시각 폴백 사용",
       "visionFallbackHint": "현재 모델이 이미지를 처리할 수 없으면 Cindy가 이 모델로 이번 요청의 이미지를 처리합니다.",
@@ -9113,6 +9113,7 @@
       "archiveWorkerAria": "Worker {{name}} 아카이브",
       "createWorker": "새 Worker 만들기",
       "hardLimitHint": "하드 제한 {{count}} 에 도달했습니다. 기존 Worker 를 아카이브하면 더 만들 수 있습니다.",
+      "hardLimitSettingsHint": "하드 제한 {{count}} 에 도달했습니다. 클릭하여 협업 설정을 조정합니다.",
       "softLimitHint": "소프트 제한 {{count}} 를 초과했습니다. Worker 가 많을수록 메모리 사용량이 늘어납니다.",
       "settingsCollaboration": "설정 · 협업",
       "layoutMenuLabel": "Worker 목록 표시 방식",

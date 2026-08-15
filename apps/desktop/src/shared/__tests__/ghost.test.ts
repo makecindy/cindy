@@ -32,6 +32,7 @@ import {
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
+  validateNormalizedGhostManifest,
   withGhostResolvedLocale,
   type GhostManifest,
 } from '../ghost';
@@ -2494,6 +2495,26 @@ describe('ghost · setup 就绪声明校验(使用前置检查,2026-07-21)', () 
         },
       ],
     });
+  });
+
+  it('Host 标准化清单可重复校验，但作者入口仍拒绝内部 setup 格式', () => {
+    const parsed = validateGhostManifest({
+      ...setupBase(),
+      setup: {
+        requires: [
+          { anyOf: ['secret:api_key_a'] },
+          { anyOf: ['connection:inst_conn', { kv: 'default_repo', label: '默认仓库' }] },
+        ],
+      },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    expect(validateGhostManifest(parsed.manifest).ok).toBe(false);
+    const repeated = validateNormalizedGhostManifest(parsed.manifest);
+    expect(repeated.ok).toBe(true);
+    if (!repeated.ok) return;
+    expect(repeated.manifest).toEqual(parsed.manifest);
   });
 
   it('不声明 setup 时清单不带该字段(缺省走宿主启发式)', () => {

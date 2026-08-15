@@ -69,11 +69,12 @@ import {
   takeClaudeVisionFallbackProvider,
   resetClaudeSessionRouteRegistryForTest,
 } from '../claude-session-route-registry';
-import { setProviderOAuthTokenReader } from '../provider-route';
 import { setCustomProviderKeyReader } from '../provider-route';
 import { setCustomProviders } from '../active-catalog';
 import { buildUserProvider } from '@cindy/model-providers';
+import { setPendingCredentialSwitchReader, setProviderOAuthTokenReader } from '../provider-route';
 import {
+  authenticatePiProxySession,
   registerPiProxySession,
   resetPiProxySessionsForTest,
 } from '../pi-proxy-session-auth';
@@ -112,6 +113,7 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     visionFallbackSettings.visionFallbackModel = null;
     visionFallbackSettings.visionFallbackProviderId = null;
     visionFallbackSettings.visionFallbackProviderIds = {};
+    setPendingCredentialSwitchReader(() => undefined);
   });
 
   afterEach(() => {
@@ -119,6 +121,28 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     setCustomProviders([]);
     setCustomProviderKeyReader(() => null);
     outboundFetch.mockReset();
+    setPendingCredentialSwitchReader(() => undefined);
+  });
+
+  it('订阅直连目标也在进入 bridge 前拦截 pending switch', async () => {
+    setPendingCredentialSwitchReader(() => ({
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
+      previousModel: 'claude-opus-4-8',
+    }));
+    const decision = await Promise.resolve(
+      createModelRoutingTransform()(
+        { model: 'chatgpt/gpt-5.5' },
+        ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+      ),
+    );
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'provider_switch_pending' },
+    });
   });
 
   it('claude-haiku 分类器请求(oauth-spawn)→ 换网关 key,不去 api.x.ai', () => {
@@ -385,6 +409,7 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
           'claude-code': {
             baseUrl: 'https://vision.example/v1?tenant=acme',
             wireProtocol: 'openai-responses',
+            maxOutputTokensSupported: true,
             requestPath: '/tenant/acme/infer?stream=1',
             models: [{ id: 'vision-model', name: 'Vision Model' }],
           },
@@ -410,6 +435,7 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
           role: 'user',
           content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
         }],
+        max_tokens: 123,
         stream: true,
       },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
@@ -422,6 +448,7 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
           role: 'user',
           content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'eA==' } }],
         }],
+        max_tokens: 123,
         stream: true,
       },
       ctx: ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
@@ -431,6 +458,9 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     expect(outboundFetch.mock.calls[0]?.[0]).toBe(
       'https://vision.example/v1/tenant/acme/infer?tenant=acme&stream=1',
     );
+    expect(JSON.parse(String(outboundFetch.mock.calls[0]?.[1].body))).toMatchObject({
+      max_output_tokens: 123,
+    });
     expect(response.chunks.join('')).toContain('message_stop');
   });
 
@@ -522,6 +552,17 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     setCustomProviderKeyReader(() => null);
     setCustomProviders([]);
     resetPiProxySessionsForTest();
+  });
+
+  it('an old disposer cannot remove a replacement registration with the same stable token', () => {
+    const disposeOld = registerPiProxySession('sess-pi', 'stable-secret');
+    const disposeReplacement = registerPiProxySession('sess-pi', 'stable-secret');
+
+    disposeOld();
+    expect(authenticatePiProxySession('sess-pi', 'stable-secret')).toBe(true);
+
+    disposeReplacement();
+    expect(authenticatePiProxySession('sess-pi', 'stable-secret')).toBe(false);
   });
 
   it('routes an Anthropic Pi request with host-managed OAuth and strips Pi placeholder auth', async () => {

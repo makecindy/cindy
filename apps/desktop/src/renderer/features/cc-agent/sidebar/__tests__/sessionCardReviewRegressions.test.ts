@@ -119,6 +119,22 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).not.toContain('titlePrefixWidth');
   });
 
+  it('merges remote activity into the left vendor-mark running state', () => {
+    // 远程会话的运行态原先只进右侧状态槽,左侧图标仍只看本地 running 集。
+    // 只并入 phase=running,与折叠 rail / remoteLampOf 同一口径;
+    // needs-interaction 继续由右侧 awaiting 表达。
+    expect(sessionItemSource).toContain(
+      'const leftIconRunning = isRunning || remoteActivity?.phase === \'running\'',
+    );
+    expect(sessionItemSource).toContain('isRunning={leftIconRunning}');
+    expect(sessionCardSource).toContain(
+      'const leftIconRunning = isRunning || remoteActivity?.phase === \'running\'',
+    );
+    expect(sessionCardSource).toContain('isRunning={leftIconRunning}');
+    expect(sessionCardSource).not.toContain('isRemoteSessionActivityActive');
+    expect(sessionItemSource).not.toContain('isRemoteSessionActivityActive');
+  });
+
   it('keeps card preview line budgets stable across content sources', () => {
     expect(sessionCardSource).toContain(
       'const cardPreviewLineClamp = session.summary ? 3 : isRunning ? 2 : isAutomationGenerated ? 1 : 2',
@@ -334,6 +350,34 @@ describe('SessionCard review regressions', () => {
       "? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'",
     );
     expect(automationGroupSource).toContain(": 'text-foreground hover:bg-sidebar-item-hover'");
+  });
+
+  it('matches list-mode title type to the text-mode session row', () => {
+    expect(sessionCardSource).toContain("'text-sm font-medium leading-[1.3]'");
+    expect(sessionCardSource).toContain(
+      'inputClassName="absolute inset-x-0 top-1/2 h-6 -translate-y-1/2 text-sm font-medium text-foreground"',
+    );
+    expect(sessionCardSource).toContain("'mt-1 overflow-hidden text-xs leading-[1.45]'");
+    expect(sessionCardSource).toContain('className="leading-none"');
+    expect(sessionCardSource).not.toContain("'text-13 font-semibold leading-[1.3] tracking-[-0.005em]'");
+    expect(sessionItemSource).toContain("'text-left text-sm font-medium'");
+  });
+
+  it('keeps list-mode time and remote marks on the text-mode color and size', () => {
+    expect(sessionCardSource).toContain('size={12}');
+    expect(sessionCardSource).toContain(": 'text-sidebar-action-icon'");
+    expect(sessionCardSource).not.toContain("size={11}\n                      strokeWidth={1.8}");
+    expect(sessionItemSource).toContain('size={12}');
+    expect(sessionItemSource).toContain(": 'text-sidebar-action-icon'");
+  });
+
+  it('shows the project source label inline in both list and text modes', () => {
+    expect(sessionCardSource).toContain('{sourceLabel ? (');
+    expect(sessionItemSource).toContain('{sourceLabel ? (');
+    expect(sessionItemSource).toContain('title={sourceLabel}');
+    expect(sessionCardSource).toContain('title={sourceLabel}');
+    expect(sessionItemSource).toContain("'min-w-0 truncate text-xs font-normal'");
+    expect(sessionItemSource).not.toContain('sourceLabel={sourceLabel}');
   });
 
   it('aligns list automation headers with regular tasks and indents only expanded children', () => {

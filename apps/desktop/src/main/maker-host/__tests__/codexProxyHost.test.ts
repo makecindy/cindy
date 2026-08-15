@@ -224,7 +224,8 @@ describe('withCodexUpstreamRecording', () => {
     const { buildUserProvider } = await import('@cindy/model-providers');
     const { setCustomProviders } = await import('../active-catalog.js');
     const { setCustomProviderKeyReader } = await import('../provider-route.js');
-    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { setSessionProvider, clearSessionProvider } =
+      await import('../session-provider-store.js');
     setCustomProviders([
       buildUserProvider({
         id: 'kimi-moonshot',
@@ -560,7 +561,10 @@ describe('withCodexVisionFallback', () => {
     },
   );
 
-  it('does not route a known text-only model selected as the fallback', async () => {
+  it.each([
+    'deepseek/deepseek-v4-pro',
+    'deepseek/deepseek-v3',
+  ])('does not route a known text-only model selected as the fallback: %s', async (model) => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');
     const { setCustomProviders } = await import('../active-catalog.js');
@@ -572,7 +576,7 @@ describe('withCodexVisionFallback', () => {
         runtimes: {
           codex: {
             baseUrl: 'https://text.example/v1',
-            models: [{ id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+            models: [{ id: model, name: model }],
           },
         },
       }),
@@ -580,7 +584,7 @@ describe('withCodexVisionFallback', () => {
     setCustomProviderKeyReader(() => 'text-key');
     mockState.visionFallbackSettings = {
       visionFallbackEnabled: true,
-      visionFallbackModel: 'deepseek/deepseek-v4-pro',
+      visionFallbackModel: model,
       visionFallbackProviderId: 'text-provider',
     };
 
@@ -589,7 +593,7 @@ describe('withCodexVisionFallback', () => {
         upstreamOverride: 'https://original.example/v1',
       }));
 
-      expect(await wrapped(imageBody('deepseek/deepseek-v4-pro'), ctxFor('t-text-fallback'))).toEqual({
+      expect(await wrapped(imageBody(model), ctxFor('t-text-fallback'))).toEqual({
         localHandler: expect.any(Function),
       });
     } finally {
@@ -907,6 +911,75 @@ describe('decideCodexRoute', () => {
 });
 
 describe('chatBridgeCapabilitiesForRoute', () => {
+  it('fails closed before a pending target reaches the old custom local bridge', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const {
+      setCustomProviderKeyReader,
+      setPendingCredentialSwitchReader,
+    } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'provider-a',
+        name: 'Provider A',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://provider-a.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'shared-model', name: 'Shared Model' }],
+          },
+        },
+      }),
+    ]);
+    const readKey = vi.fn(() => 'provider-a-key');
+    setCustomProviderKeyReader(readKey);
+    setPendingCredentialSwitchReader(() => ({
+      model: 'shared-model',
+      providerId: 'provider-b',
+    }));
+    host.registerComposed('session-pending-bridge', 'thread-pending-bridge', 'PRODUCT_PROMPT');
+    setSessionProvider('session-pending-bridge', 'provider-a');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const body = { model: 'shared-model', input: [{ role: 'user', content: 'hello' }] };
+      const ctx = {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-pending-bridge' },
+      };
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(body, ctx));
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      expect(readKey).not.toHaveBeenCalled();
+      expect(mockState.createResponsesChatHandler).not.toHaveBeenCalled();
+
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision!.localHandler!({
+        rawBody: Buffer.from(JSON.stringify(body)),
+        parsedBody: body,
+        ctx,
+        res: { writeHead, end } as never,
+      });
+      expect(writeHead).toHaveBeenCalledWith(
+        503,
+        expect.objectContaining({ 'retry-after': '1' }),
+      );
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: { code: 'provider_switch_pending' },
+      });
+    } finally {
+      host.unregister('session-pending-bridge');
+      clearSessionProvider('session-pending-bridge');
+      setPendingCredentialSwitchReader(() => undefined);
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('does not forward unsupported passthrough fields into the translator', async () => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
     const capabilities = chatBridgeCapabilitiesForRoute(
@@ -4008,6 +4081,7 @@ describe('codex proxy host', () => {
       method: 'POST',
       url: '/responses',
       headers: { 'thread-id': 'thread-minimax' },
+      providerId: 'renamed-minimax',
     };
     for (const transform of transforms) {
       const next = transform(current, ctx);
@@ -4173,7 +4247,11 @@ describe('codex proxy host', () => {
 
   it('normalizes implicit-source xAI Codex requests before forwarding', async () => {
     const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+    const { setActiveCatalog, setXaiDiscoveredModels } = await import('../active-catalog.js');
     const { clearSessionProvider } = await import('../session-provider-store.js');
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXaiDiscoveredModels([{ id: 'xai/grok-code-fast' }]);
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
       url: 'http://127.0.0.1:43210',
       dispose: vi.fn(async () => undefined),
@@ -4182,33 +4260,38 @@ describe('codex proxy host', () => {
     host.registerComposed('session-xai-implicit', 'thread-xai-implicit', 'PRODUCT_PROMPT');
     clearSessionProvider('session-xai-implicit');
 
-    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    let current: unknown = {
-      model: 'xai/grok-code-fast',
-      instructions: 'BASE_PROMPT\n\nPRODUCT_PROMPT',
-      reasoning: { effort: 'high', summary: 'auto' },
-      input: [
-        { type: 'reasoning', encrypted_content: 'gAAA' },
-        { role: 'user', content: 'hello' },
-      ],
-    };
-    const ctx = {
-      method: 'POST',
-      url: '/responses',
-      headers: { 'thread-id': 'thread-xai-implicit' },
-    };
-    for (const transform of transforms) {
-      const next = transform(current, ctx);
-      if (next !== null && next !== undefined) current = next;
-    }
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      let current: unknown = {
+        model: 'xai/grok-code-fast',
+        instructions: 'BASE_PROMPT\n\nPRODUCT_PROMPT',
+        reasoning: { effort: 'high', summary: 'auto' },
+        input: [
+          { type: 'reasoning', encrypted_content: 'gAAA' },
+          { role: 'user', content: 'hello' },
+        ],
+      };
+      const ctx = {
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-xai-implicit' },
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
 
-    expect(current).toEqual({
-      model: 'grok-code-fast',
-      input: [
-        { type: 'message', role: 'system', content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
-        { type: 'message', role: 'user', content: 'hello' },
-      ],
-    });
+      expect(current).toEqual({
+        model: 'grok-code-fast',
+        input: [
+          { type: 'message', role: 'system', content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
+          { type: 'message', role: 'user', content: 'hello' },
+        ],
+      });
+    } finally {
+      setXaiDiscoveredModels(null);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
   });
 
   it('normalizes a bare xAI fallback model when routing supplies the target provider', async () => {

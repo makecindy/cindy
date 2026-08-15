@@ -479,7 +479,7 @@
         "reset": "初期レイアウトに戻す",
         "resetSuccess": "パネルレイアウトを初期状態に戻しました",
         "resetFailed": "パネルレイアウトを初期状態に戻せませんでした",
-        "saved": "パネル位置を保存しました。設定 → 外観から初期レイアウトに戻せます。",
+        "saved": "パネル位置を保存しました。［設定 → 一般］の［外観］セクションで初期レイアウトに戻せます。",
         "saveFailed": "パネル位置を保存できませんでした"
       }
     },
@@ -2321,7 +2321,7 @@
       "title": "サブエージェント",
       "description": "Claude Code と Codex がサブタスクを実行するときに使用する既定のモデルを設定し、Codex サブエージェントのガードレールを構成します。設定は入口ごとに適用され、モデルごとには保存されません。",
       "unspecified": "指定しない（既定の動作を使用）",
-      "hint": "選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になります。Codex の変更はアイドル時に即時再起動で反映され、タスク実行中はローカルの Codex セッションがすべてアイドルになった後に自動適用されます。",
+      "hint": "Claude Code のサブエージェントではモデルのみ指定でき、推論強度は Claude Code 本来の動作に従います。選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になります。Codex の変更はアイドル時に即時再起動で反映され、タスク実行中はローカルの Codex セッションがすべてアイドルになった後に自動適用されます。",
       "visionFallbackLabel": "画像リクエスト用の視覚フォールバックモデル",
       "visionFallbackEnabledAria": "画像リクエスト用の視覚フォールバックを有効にする",
       "visionFallbackHint": "現在のモデルが画像を扱えない場合、Cindy はこのモデルで今回の画像を処理します。",
@@ -9113,8 +9113,9 @@
       "archiveWorkerAria": "Worker {{name}} をアーカイブ",
       "createWorker": "新しい Worker を作成",
       "hardLimitHint": "ハード上限 {{count}} に達しました。既存 Worker をアーカイブすると追加できます。",
+      "hardLimitSettingsHint": "ハード上限 {{count}} に達しました。クリックして協同設定を調整します。",
       "softLimitHint": "ソフト上限 {{count}} を超えています。Worker が多いほどメモリ使用量が増えます。",
-      "settingsCollaboration": "設定 · コラボレーション",
+      "settingsCollaboration": "設定 · 協同",
       "layoutMenuLabel": "Worker リストの表示方式",
       "layoutTabs": "タブ",
       "layoutDropdown": "ドロップダウン",

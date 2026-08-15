@@ -1255,7 +1255,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     // 群 lane 报错文案之外, 再发一张一键修复卡到 owner 私聊。
     expect(mocks.feishuIm.sendText).toHaveBeenCalledWith(
       'g/oc_group1/omt_t1',
-      expect.stringContaining('群/话题会话不能用'),
+      expect.stringContaining('/permission'),
       expect.anything(),
     );
     expect(mocks.feishuIm.sendInteractiveCard).toHaveBeenCalledWith(
