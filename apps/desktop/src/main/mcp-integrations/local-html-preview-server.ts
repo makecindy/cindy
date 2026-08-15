@@ -14,9 +14,9 @@
  *    nearest-existing-ancestor, same semantics as
  *    `packages/lizi-mcps/src/shared/assertInsidePath.ts`), rejects dotfiles,
  *    `..`/backslash/encoded traversal and non-whitelisted extensions;
- *  - GET/HEAD only; `nosniff` + `no-store` + a page-level CSP
- *    (connect-src 'none' + sandbox; no remote subresources) on EVERY
- *    response, error/refusal paths included;
+ *  - GET/HEAD only; `nosniff` + `no-store` + a page-level CSP on EVERY
+ *    response, error/refusal paths included (see the CSP constant for which
+ *    directives are load-bearing and which are not);
  *  - on listener error/close the origin grant is revoked immediately so a
  *    freed port can never be taken over while the SSRF policy still trusts it.
  *
@@ -24,6 +24,22 @@
  * actually listens on (the host calls `applyPreviewOrigins` after a successful
  * bind, and clears it on any error/close). Other loopback hosts/ports and
  * `file://` stay blocked.
+ *
+ * SCOPE — what this module does NOT try to stop, and why:
+ *  - Filesystem races (swap a validated path for a symlink mid-request). An
+ *    attacker who can win that race already holds filesystem write access and
+ *    timing control, and can read the file directly; the defence would guard a
+ *    door in a wall that does not exist.
+ *  - A preview page exfiltrating its own content (page-initiated navigation,
+ *    WebRTC, DNS prefetch). Running arbitrary JS in this browser with
+ *    unrestricted network access is an already-accepted capability of the
+ *    stack — see the SECURITY POSTURE note in browser-managed-config.ts.
+ *  - Another local process impersonating this server after port reuse. That
+ *    presupposes an already-compromised machine.
+ * What IS defended: an arbitrary local process reading workspace files through
+ * this listener (capability token + path containment), the SSRF allowlist
+ * widening beyond one exact origin, page persistence via Service Worker, and
+ * the page reaching OTHER local services (see the CSP constant).
  */
 import crypto from 'node:crypto';
 import { createReadStream } from 'node:fs';
@@ -109,41 +125,45 @@ const MIME: Record<string, string> = {
 };
 
 /**
- * Page-level hardening for previewed pages: NO remote subresources at all
- * (no https: in any directive), same-origin + inline + data: only. Without
- * this, a preview page could load a third-party script which reads
- * same-origin files and then exfiltrates them — closing remote loads
- * removes that injection surface. Pages that legitimately need CDN assets
- * must vendor them locally first (documented in browser-workflow.md).
+ * Page-level policy for previewed pages.
  *
- * Exfiltration containment (verified against real Chrome, 2026-08-06):
- *  - `connect-src 'none'`: the page can never fetch/XHR/WS ANYTHING, not
- *    even same-origin files — so a script has no channel to read file
- *    contents it could carry away. (The preview page is a static render
- *    verification target; it does not legitimately need fetch.)
- *  - `sandbox allow-scripts allow-same-origin`: blocks window.open /
- *    popups and sandboxed top-level navigation where Chromium enforces it.
- *    NOTE: `navigate-to` is NOT used — Chromium/Electron do not implement
- *    that directive and silently ignore it (probed: location.href to an
- *    external origin still navigates). With fetch closed and every
- *    subresource directive same-origin-only, a successful self-navigation
- *    carries nothing but the page's own rendered DOM.
+ * Two directives here are load-bearing; the rest are cheap defence in depth.
+ *
+ *  - `worker-src 'none'` — LOAD-BEARING. Service Worker scripts fall back to
+ *    `script-src` when `worker-src` is absent, so a preview script could
+ *    register a SW in the /preview/<token>/ scope. A SW OUTLIVES the preview
+ *    and answers later navigations with synthetic responses that carry none
+ *    of these headers. Persistence beyond the page is the one thing an
+ *    in-page script cannot otherwise obtain here.
+ *
+ *  - `connect-src 'self'` — LOAD-BEARING. The preview page itself sits on
+ *    loopback, and browsers restrict private-page → private-service requests
+ *    far less than public-page → private-service ones. Page-context fetch also
+ *    does NOT pass through the Node SSRF guard, so the exact-origin allowlist
+ *    cannot cover it. `'self'` keeps the page off every OTHER local service
+ *    (notably the managed browser's own CDP port) while still letting it read
+ *    its own directory — pages that `fetch('./data.json')` to render must keep
+ *    working, or the tool stops being usable and callers go back to launching
+ *    a raw browser, which is the incident this feature exists to prevent.
+ *
+ * NOT a goal: stopping a preview page from exfiltrating its own content.
+ * Page-initiated navigation (`location.href` with data in the URL), WebRTC and
+ * DNS prefetch are all left alone, because arbitrary JS with unrestricted
+ * network access is already an accepted capability of this browser stack (see
+ * the SECURITY POSTURE note in browser-managed-config.ts). `connect-src` does
+ * incidentally block cross-origin fetch, but that is a side effect of the
+ * local-service containment above, not a claim of exfiltration containment —
+ * partial containment would be worse than none, since it invites reliance.
  */
 const CSP =
   "default-src 'none'; " +
   "script-src 'self' 'unsafe-inline'; " +
-  // Service Worker scripts fall back to `script-src` when `worker-src` is
-  // absent: an untrusted preview script could then register a SW in the
-  // /preview/<token>/ scope and answer navigations with synthetic HTML that
-  // carries NO CSP (the SW response bypasses this server's headers) —
-  // escaping connect-src/sandbox and reading same-origin files. `worker-src
-  // 'none'` closes that channel (codex-connector P1, round 27).
   "worker-src 'none'; " +
   "style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' data:; " +
   "font-src 'self' data:; " +
   "media-src 'self' data:; " +
-  "connect-src 'none'; " +
+  "connect-src 'self'; " +
   "form-action 'none'; " +
   "base-uri 'none'; " +
   "object-src 'none'; " +
@@ -152,18 +172,13 @@ const CSP =
 
 /**
  * Headers applied to EVERY response (200 and all error/refusal paths). A
- * refusal must not be served without CSP/no-store: a page without CSP on
- * this origin would give a script an unprotected execution context to
- * probe the tokenized URLs from (Copilot review, round 4).
+ * refusal must not be served without CSP/no-store: a page without CSP on this
+ * origin would give a script an unprotected execution context on the preview
+ * origin (Copilot review).
  */
 const SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'Cache-Control': 'no-store',
-  // DNS prefetch is NOT constrained by connect-src, the CSP or the
-  // navigation guard: an untrusted preview script could encode DOM/CSSOM
-  // data into dns-prefetch lookups to attacker-controlled names. The
-  // server-side header is authoritative (codex-connector P1, round 16).
-  'X-DNS-Prefetch-Control': 'off',
   'Content-Security-Policy': CSP,
 };
 
@@ -260,7 +275,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
         });
       });
       // The callbacks must revoke only the origin of THIS start round
-      // (P2, round 26): dispose() → immediate reuse starts a NEW listener
+      // (P2): dispose() → immediate reuse starts a NEW listener
       // with a NEW origin; the OLD listener's delayed 'close'/'error' event
       // must not drop the new round's grant (otherwise the fresh grant
       // disappears and its preview tabs get closed). `roundOrigin` is set
@@ -294,7 +309,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
         srv.close();
         // NOTE: do NOT set `failed` here — dispose → new start is the
         // documented reuse contract; only THIS start round must fail
-        // (Copilot P1, round 19).
+        // (Copilot P1).
         throw new LocalPreviewError('UNAVAILABLE', '预览服务已销毁');
       }
       const addr = srv.address();
@@ -312,7 +327,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     })();
     try {
       const result = await starting;
-      // Clear on success too (round 24, Copilot P1 companion): with dispose()
+      // Clear on success too (Copilot P1 companion): with dispose()
       // no longer nulling `starting`, a RESOLVED promise left in place would
       // make the next ensureStarted() return the stale origin instead of
       // starting a fresh listener after dispose → new start (the reuse
@@ -347,10 +362,10 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       // open below cannot redirect the read outside the root.
       const real = await fs.realpath(target);
       await assertInsideRoot(root, real);
-      // Re-check hidden segments on the REAL path (round 16): a symlink with
-      // an ordinary name (e.g. `assets -> .private`) passes the request-path
-      // check but resolves into a hidden directory — hidden-directory content
-      // must stay unreadable through ANY path form (Greptile P1).
+      // Re-check hidden segments on the REAL path: a symlink with an ordinary
+      // name (e.g. `assets -> .private`) passes the request-path check but
+      // resolves into a hidden directory — hidden-directory content must stay
+      // unreadable through ANY path form (Greptile P1).
       const realRel = nodePath.relative(root, real);
       if (realRel.split(nodePath.sep).some((s) => s.length > 0 && s.startsWith('.'))) {
         return null;
@@ -388,14 +403,6 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
       tokens.delete(token);
       return refuse(res);
     }
-    // Root identity pinning: the serving root's canonical path must not have
-    // changed since the token was issued. A rename-and-swap of the entry dir
-    // (replaced by a symlink/junction pointing outside the workspace) would
-    // otherwise make both realpaths here resolve to the new target while
-    // staying mutually "inside" (codex-connector P1, round 4).
-    const currentRoot = await fs.realpath(entry.root).catch(() => null);
-    if (!currentRoot || currentRoot !== entry.root) return refuse(res);
-
     let relPath: string;
     try {
       relPath = decodeURIComponent(match[2]);
@@ -413,122 +420,28 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     const baseName = nodePath.basename(abs);
     if (baseName.startsWith('.') || !ALLOWED_EXTENSIONS.has(ext)) return refuse(res);
 
-    // Snapshot the vetted object BEFORE opening (size + nanosecond
-    // timestamps). The opened handle must describe the SAME object when
-    // re-checked after open: a swap-and-restore of the path (replace `abs`
-    // with an outside symlink for fs.open, then restore it before the
-    // realpath recheck) would defeat a pathname-only recheck while the fd
-    // still references the outside file (codex-connector P1, round 6).
-    // Reject symlink/junction at ANY level between the serving root and the
-    // target (round 17): `lstat(abs)` only inspects the FINAL component — a
-    // swapped ANCESTOR directory link is followed by path resolution, so an
-    // outside final file would still be reported as a regular file. Check
-    // every level from the serving root down (the root itself is covered by
-    // the realpath recheck).
-    let chainOk = true;
-    let probe = entry.root;
-    const chainSegs = nodePath.relative(entry.root, abs).split(nodePath.sep).filter(Boolean);
-    for (let i = 0; i < chainSegs.length; i++) {
-      probe = nodePath.join(probe, chainSegs[i]);
-      const lst = await fs.lstat(probe, { bigint: true }).catch(() => null);
-      if (!lst) {
-        chainOk = false;
-        break;
-      }
-      const isLast = i === chainSegs.length - 1;
-      if (isLast ? !lst.isFile() : !lst.isDirectory()) {
-        chainOk = false;
-        break;
-      }
-    }
-    if (!chainOk) return refuse(res);
-    // Pre-open lstat (round 15): reject symlinks outright — the swap vector
-    // is a symlink/junction, and lstat reveals it even when stat/realpath
-    // would resolve through it. The opened fd's identity must then match
-    // this lstat snapshot: a swap AFTER the lstat but BEFORE open would
-    // change the inode under the path, and the dev/ino comparison below
-    // would refuse. This binds the handle to one stable path inspection
-    // (codex-connector P1).
-    const preLstat = await fs.lstat(abs, { bigint: true }).catch(() => null);
-    if (!preLstat?.isFile() || preLstat.nlink > 1n) return refuse(res);
-    const preStat = await fs.stat(abs, { bigint: true }).catch(() => null);
-    if (!preStat?.isFile()) return refuse(res);
-    // Reject hard links (nlink > 1): a link inside the root pointing at an
-    // outside inode defeats realpath + dev/ino identity checks — realpath
-    // returns the link's own in-root name and dev/ino trivially match the
-    // same inode, so outside content would be served (codex-connector P1,
-    // round 12).
-    if (preStat.nlink > 1n) return refuse(res);
-    // Open by file descriptor: closes the TOCTOU window between containment
-    // checks and the actual read. Immediately after opening, re-verify the
-    // path still resolves to the vetted real path AND the handle's identity
-    // fields match the pre-open snapshot.
-    const fd = await fs.open(abs, 'r').catch(() => null);
-    if (!fd) return refuse(res);
-    const recheck = await fs.realpath(abs).catch(() => null);
-    if (!recheck || recheck !== abs) {
-      await fd.close().catch(() => {});
-      return refuse(res);
-    }
-    let stat;
-    try {
-      stat = await fd.stat({ bigint: true });
-    } catch {
-      await fd.close().catch(() => {});
-      return refuse(res);
-    }
-    // Tie the identity comparison to the path AS OF AFTER open + realpath
-    // recheck (codex-connector P1, round 13): a watcher that swaps `abs` to
-    // an outside symlink BEFORE preStat, then restores it before the
-    // realpath recheck, would make preStat AND the fd describe the SAME
-    // outside file — every preStat-vs-fd comparison (including dev/ino and
-    // nlink) would then pass. postStat can only describe the restored
-    // (vetted) path, so any mismatch with the fd is refused.
-    const postStat = await fs.stat(abs, { bigint: true }).catch(() => null);
-    if (!postStat?.isFile() || postStat.nlink > 1n) {
-      await fd.close().catch(() => {});
-      return refuse(res);
-    }
-    if (
-      !stat.isFile() ||
-      stat.size !== postStat.size ||
-      stat.mtimeNs !== postStat.mtimeNs ||
-      stat.birthtimeNs !== postStat.birthtimeNs ||
-      // Filesystem-object identity: size + timestamps can be forged by a
-      // swap-and-restore attacker; dev/ino cannot. Without this, an fd opened
-      // on an outside file (same size/timestamps) would still be served
-      // (Greptile P1, round 10).
-      stat.dev !== postStat.dev ||
-      stat.ino !== postStat.ino ||
-      // Hard-link count must also match the post-open path snapshot (round 12).
-      stat.nlink !== postStat.nlink ||
-      // The fd must ALSO match the pre-open lstat identity: a swap between
-      // the lstat and open would change the inode under the path (round 15).
-      stat.dev !== preLstat.dev ||
-      stat.ino !== preLstat.ino
-    ) {
-      await fd.close().catch(() => {});
-      return refuse(res);
-    }
+    // `abs` is the realpath produced by resolveServedPath and has already been
+    // asserted inside the serving root. We deliberately do NOT re-verify the
+    // object's identity between here and the read: defeating a path check by
+    // swapping files mid-request requires filesystem write access plus timing
+    // control, and an attacker holding those can simply read the file directly
+    // — the race defence would be guarding a door in a wall that isn't there.
+    const stat = await fs.stat(abs, { bigint: true }).catch(() => null);
+    if (!stat?.isFile()) return refuse(res);
 
     res.writeHead(200, {
       'Content-Type': MIME[ext] ?? 'application/octet-stream',
-      // `stat.size` is a bigint (fd.stat({ bigint: true })); Number() would
-      // lose precision beyond Number.MAX_SAFE_INTEGER and send a wrong
-      // Content-Length for very large resources (video/wasm), which can make
-      // clients truncate or hang. toString() keeps the exact value
-      // (Copilot P1, round 24).
+      // `stat.size` is a bigint; Number() would lose precision beyond
+      // Number.MAX_SAFE_INTEGER and send a wrong Content-Length for very large
+      // resources (video/wasm), making clients truncate or hang (Copilot P1).
       'Content-Length': stat.size.toString(),
       ...SECURITY_HEADERS,
     });
     if (req.method === 'HEAD') {
-      await fd.close().catch(() => {});
       res.end();
       return;
     }
-    // Path is ignored at runtime when `fd` is set; passing it keeps the TS
-    // signature happy.
-    const stream = createReadStream(abs, { fd, autoClose: true });
+    const stream = createReadStream(abs);
     stream.on('error', () => res.destroy());
     stream.pipe(res);
   }
@@ -547,13 +460,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     const targetAbs = nodePath.isAbsolute(input.localPath)
       ? nodePath.resolve(input.localPath)
       : nodePath.resolve(rootAbs, input.localPath);
-    // Anchor the root identity at the FIRST boundary check (round 14): a
-    // concurrent rename-and-swap of workingDir itself (into a symlink/
-    // junction pointing outside) between this check and the realpaths below
-    // would make workingDirReal AND entryReal both resolve outside and pass
-    // the comparison. The anchor is taken at the same instant as the first
-    // check, so any later deviation from it is refused.
-    const rootAnchor = await fs.realpath(rootAbs).catch(() => {
+    const rootReal = await fs.realpath(rootAbs).catch(() => {
       throw new LocalPreviewError('PATH_NOT_ALLOWED', `工作区不可解析: ${rootAbs}`);
     });
     await assertInsideRoot(rootAbs, targetAbs);
@@ -561,7 +468,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     // serving root IS the entry's directory, so the request-stage
     // hidden-segment checks in resolveServedPath can never see the hidden
     // root — the page would be served from hidden-directory content
-    // (Greptile P1, round 12).
+    // (Greptile P1).
     const relToRoot = nodePath.relative(rootAbs, targetAbs);
     if (relToRoot.split(nodePath.sep).some((s) => s.length > 0 && s.startsWith('.'))) {
       throw new LocalPreviewError('PATH_NOT_ALLOWED', '入口不能位于隐藏目录内');
@@ -577,38 +484,27 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     if (!stat?.isFile()) {
       throw new LocalPreviewError('NOT_FOUND', '入口文件不存在或不是普通文件');
     }
-    // Resolve the working dir + entry to their REAL paths and re-assert the
-    // boundary against those identities: a concurrent rename-and-swap of the
-    // entry directory (into a symlink/junction pointing outside the
-    // workspace) between the checks above and token issuance must not become
-    // the serving root (codex-connector P1, round 5). The root must also
-    // still BE the identity anchored at the first check — a swapped root
-    // (symlink/junction to an outside directory) would otherwise make both
-    // realpaths resolve outside and pass the comparison (round 14).
-    const workingDirReal = await fs.realpath(rootAbs).catch(() => {
-      throw new LocalPreviewError('PATH_NOT_ALLOWED', `工作区不可解析: ${rootAbs}`);
-    });
-    if (workingDirReal !== rootAnchor) {
-      throw new LocalPreviewError('PATH_NOT_ALLOWED', '工作区根在边界校验后被替换');
-    }
+    // Resolve the entry to its REAL path and re-assert the boundary against
+    // that identity: `public/index.html` may be a symlink pointing outside the
+    // workspace, and its directory is what becomes the serving root. This is a
+    // static fact about the link, not a race defence.
     const entryReal = await fs.realpath(targetAbs).catch(() => {
       throw new LocalPreviewError('NOT_FOUND', '入口文件不可解析');
     });
-    await assertInsideRoot(rootAnchor, entryReal);
-    // Re-check hidden segments on the REAL entry path (round 17): an
-    // ordinary-named symlink (e.g. `public -> .private`) passes the lexical
-    // check above but resolves into a hidden directory which would BECOME
-    // the serving root — the request-stage checks could never see it again
-    // (codex-connector P1).
-    const entryRel = nodePath.relative(rootAnchor, entryReal);
+    await assertInsideRoot(rootReal, entryReal);
+    // Re-check hidden segments on the REAL entry path: an ordinary-named
+    // symlink (e.g. `public -> .private`) passes the lexical check above but
+    // resolves into a hidden directory which would BECOME the serving root —
+    // the request-stage checks could never see it again (codex-connector P1).
+    const entryRel = nodePath.relative(rootReal, entryReal);
     if (entryRel.split(nodePath.sep).some((s) => s.length > 0 && s.startsWith('.'))) {
       throw new LocalPreviewError('PATH_NOT_ALLOWED', '入口不能位于隐藏目录内');
     }
-    // Re-check the HTML extension on the REAL entry path (P2, round 26): a
-    // workspace entry named `index.html` that is a symlink to a plain
-    // `.js`/`.json` file passes the lexical check above; after realpath the
-    // entry would be served as non-HTML, violating the .html/.htm-only
-    // contract (and its directory would become the serving root).
+    // Re-check the HTML extension on the REAL entry path (P2): a workspace
+    // entry named `index.html` that is a symlink to a plain `.js`/`.json` file
+    // passes the lexical check above; after realpath the entry would be served
+    // as non-HTML, violating the .html/.htm-only contract (and its directory
+    // would become the serving root).
     const realExt = nodePath.extname(entryReal).toLowerCase();
     if (!ENTRY_EXTENSIONS.has(realExt)) {
       throw new LocalPreviewError(
@@ -622,21 +518,13 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
   async function createPreviewUrl(input: CreatePreviewInput): Promise<{ url: string }> {
     // Validate the entry FIRST: an invalid request (out-of-workspace, missing,
     // non-HTML) must never start the listener or grant an origin
-    // (Copilot review, round 4).
+    // (Copilot review).
     const entryAbs = await resolveEntryPath(input);
     const base = await ensureStarted();
     // Serving root = the entry's directory: relative resources work, but the
     // page can never reach sibling workspace content outside that directory.
-    // `entryAbs` is already the REAL path (resolved + re-asserted above);
-    // re-verify the root's physical identity right before pinning it into
-    // the token, so a directory swap between validation and issuance cannot
-    // pin an external directory as the serving root (codex-connector P1,
-    // round 5).
+    // `entryAbs` is already the REAL path (resolved + re-asserted above).
     const root = nodePath.dirname(entryAbs);
-    const rootNow = await fs.realpath(root).catch(() => null);
-    if (!rootNow || rootNow !== root) {
-      throw new LocalPreviewError('PATH_NOT_ALLOWED', '入口目录身份在发放前发生变化');
-    }
     const token = crypto.randomBytes(32).toString('hex'); // 256-bit, unguessable
     if (tokens.size >= MAX_PREVIEWS) {
       const oldest = tokens.keys().next().value;
@@ -655,7 +543,7 @@ export function createLocalPreviewServer(deps: LocalPreviewServerDeps) {
     // quit path (the process may exit before it fires). The event handler
     // stays as an idempotent safety net for listener crashes.
     revokeOrigin();
-    // NOTE (round 24, Copilot P1): do NOT null `starting` here. If dispose
+    // NOTE (Copilot P1): do NOT null `starting` here. If dispose
     // runs while ensureStarted() is mid-startup, keeping the in-flight
     // promise visible means a concurrent second ensureStarted() call sees
     // `starting` still set, returns the SAME promise and does NOT reset

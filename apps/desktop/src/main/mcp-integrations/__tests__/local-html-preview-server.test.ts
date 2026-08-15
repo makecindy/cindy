@@ -1,8 +1,7 @@
 import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
-import { promises as fsPromises } from 'node:fs';
 import os from 'node:os';
 import nodePath from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   createLocalPreviewServer,
@@ -72,18 +71,23 @@ describe('local-html-preview-server', () => {
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('cache-control')).toBe('no-store');
     const csp = res.headers.get('content-security-policy') ?? '';
-    expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("form-action 'none'");
     expect(csp).toContain('sandbox allow-scripts allow-same-origin');
-    // Service Worker script loads fall back to script-src when worker-src is
-    // absent; a registered SW could answer scope navigations with synthetic
-    // HTML carrying NO CSP (SW responses bypass this server's headers) and
-    // escape connect-src/sandbox — worker-src 'none' must be explicit
-    // (codex-connector P1, round 27).
+    // LOAD-BEARING #1 — Service Worker script loads fall back to script-src
+    // when worker-src is absent; a registered SW OUTLIVES the preview and
+    // answers later navigations with synthetic responses carrying none of
+    // these headers (codex-connector P1).
     expect(csp).toContain("worker-src 'none'");
-    // DNS prefetch is not constrained by connect-src/CSP — the header must
-    // close the dns-prefetch exfiltration channel (codex-connector P1, round 16).
-    expect(res.headers.get('x-dns-prefetch-control')).toBe('off');
+    // LOAD-BEARING #2 — the preview page sits on loopback, where browsers
+    // restrict private→private requests far less than public→private, and
+    // page-context fetch does not pass through the Node SSRF guard. 'self'
+    // keeps the page off every OTHER local service (notably the managed
+    // browser's own CDP port).
+    expect(csp).toContain("connect-src 'self'");
+    // ...but it must NOT be 'none': a preview page that cannot read its own
+    // data files renders blank, the screenshot is useless, and callers go
+    // back to launching a raw browser — the incident this feature prevents.
+    expect(csp).not.toContain("connect-src 'none'");
     // navigate-to is NOT relied on: Chromium does not implement it, so it
     // must not appear pretending to be a control that does not exist.
     expect(csp).not.toContain('navigate-to');
@@ -108,77 +112,6 @@ describe('local-html-preview-server', () => {
     expect(res400.status).toBe(400);
     expect(res400.headers.get('cache-control')).toBe('no-store');
     expect(res400.headers.get('content-security-policy')).toContain('sandbox');
-  });
-
-  it('refuses requests after the serving root is renamed (root identity pinned)', async () => {
-    const { url } = await createUrl();
-    expect((await get(url)).status).toBe(200);
-    // Rename the entry dir away and put nothing in its place: the pinned root
-    // no longer resolves to the same canonical path → refuse (fail-closed).
-    const entryDir = nodePath.join(workingDir, 'dist');
-    const renamed = nodePath.join(workingDir, 'dist-renamed');
-    // Windows cannot rename a directory while a file inside it is still
-    // open (EPERM); the just-served fd may not be released synchronously on
-    // the CI runner. Retry briefly so the test observes the rename semantics
-    // rather than the OS's handle-release timing (round 26 CI flake).
-    const { rename } = await import('node:fs/promises');
-    let renamedOk = false;
-    for (let attempt = 0; attempt < 20 && !renamedOk; attempt++) {
-      try {
-        await rename(entryDir, renamed);
-        renamedOk = true;
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-    }
-    expect(renamedOk).toBe(true);
-    expect((await get(url)).status).toBe(404);
-    // cleanup so afterEach dispose doesn't hit a stale path (same retry
-    // discipline for the rename-back)
-    let restoredOk = false;
-    for (let attempt = 0; attempt < 20 && !restoredOk; attempt++) {
-      try {
-        await rename(renamed, entryDir);
-        restoredOk = true;
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-    }
-    expect(restoredOk).toBe(true);
-  });
-
-  it('refuses a served fd whose dev/ino differs from the post-open path stat (swap-and-restore)', async () => {
-    // Simulates the round-10/13 attack: the post-open path `stat` is forged to
-    // carry the victim file's size/timestamps but a DIFFERENT filesystem-object
-    // identity (dev/ino), while `fs.open` really opens the outside file. The
-    // size/timestamp comparison alone would pass; the dev/ino check must refuse.
-    // Identity is compared against the path stat taken AFTER open + realpath
-    // recheck (round 13): a pre-open snapshot could itself be taken inside a
-    // swap window and would then describe the same outside file as the fd.
-    const { url } = await createUrl();
-    const realStat = await fsPromises.stat(
-      nodePath.join(workingDir, 'dist', 'index.html'),
-      { bigint: true },
-    );
-    const forged = {
-      ...realStat,
-      size: realStat.size,
-      mtimeNs: realStat.mtimeNs,
-      birthtimeNs: realStat.birthtimeNs,
-      dev: realStat.dev + 1n,
-      ino: realStat.ino + 1n,
-      isFile: () => true,
-    };
-    // call order: pre-open snapshot (normal) → post-open path stat (forged)
-    const statSpy = vi
-      .spyOn(fsPromises, 'stat')
-      .mockResolvedValueOnce(realStat as never)
-      .mockResolvedValueOnce(forged as never);
-    try {
-      expect((await get(url)).status).toBe(404);
-    } finally {
-      statSpy.mockRestore();
-    }
   });
 
   it('serves relative CSS/JS resources from the entry directory', async () => {
@@ -228,7 +161,7 @@ describe('local-html-preview-server', () => {
     expect((await get(`${base}/link.html`)).status).toBe(404);
   });
 
-  it('refuses an ENTRY whose realpath target is NOT an HTML file, even when the symlink name ends in .html (P2, round 26)', async () => {
+  it('refuses an ENTRY whose realpath target is NOT an HTML file, even when the symlink name ends in .html (P2)', async () => {
     // `index.html -> app.js`: the lexical check passes on the link name, but
     // the REAL entry is a plain JS file — serving it would violate the
     // .html/.htm-only entry contract (and its dir would become the root).
@@ -243,7 +176,7 @@ describe('local-html-preview-server', () => {
     await expect(createUrl('dist/index.html')).rejects.toThrow(/UNSUPPORTED_FILE/);
   });
 
-  it('refuses an ENTRY that resolves into a hidden directory via an ordinary-named symlink (codex-connector P1, round 17)', async () => {
+  it('refuses an ENTRY that resolves into a hidden directory via an ordinary-named symlink (codex-connector P1)', async () => {
     // `public -> .private` passes the lexical hidden-segment check, but the
     // REAL entry path lands in a hidden directory which would become the
     // serving root.
@@ -259,7 +192,7 @@ describe('local-html-preview-server', () => {
     await expect(createUrl('public/index.html')).rejects.toThrow(/PATH_NOT_ALLOWED/);
   });
 
-  it('rejects a symlink with an ordinary name that resolves into a hidden directory (Greptile P1, round 16)', async () => {
+  it('rejects a symlink with an ordinary name that resolves into a hidden directory (Greptile P1)', async () => {
     // `assets -> .private` passes the request-path hidden-segment check
     // ("assets" is not hidden), but realpath resolves into `.private` — the
     // REAL path must be re-checked for hidden segments.
@@ -321,9 +254,9 @@ describe('local-html-preview-server', () => {
     expect(previews.at(-1)).toEqual([expect.stringMatching(/^http:\/\/127.0.0.1:\d+$/)]);
   });
 
-  it('concurrent requests share one in-flight startup, and dispose revocation stays the last grant (Copilot P1, round 24)', async () => {
+  it('concurrent requests share one in-flight startup, and dispose revocation stays the last grant (Copilot P1)', async () => {
     // Two requests arriving while startup is still in flight must share the
-    // SAME `starting` promise (round 24: dispose no longer nulls it, and
+    // SAME `starting` promise (dispose no longer nulls it, and
     // ensureStarted clears it only after settle) — one listener, one grant.
     // This is the observable half of the Copilot P1 race: if a fresh round
     // started per request (starting cleared early), the second request would
@@ -358,7 +291,7 @@ describe('local-html-preview-server', () => {
     ttlServer.dispose();
   });
 
-  it('refuses an ENTRY inside a hidden directory (Greptile P1, round 12)', async () => {
+  it('refuses an ENTRY inside a hidden directory (Greptile P1)', async () => {
     // The serving root IS the entry's directory, so request-stage
     // hidden-segment checks can never see a hidden root — the entry path
     // itself must be rejected up front.
@@ -369,17 +302,5 @@ describe('local-html-preview-server', () => {
     await mkdir(nodePath.join(workingDir, 'dist', '.private'), { recursive: true });
     await writeFile(nodePath.join(workingDir, 'dist', '.private', 'index.html'), '<p>hidden</p>');
     await expect(createUrl('dist/.private/index.html')).rejects.toThrow(/PATH_NOT_ALLOWED/);
-  });
-
-  it('refuses a hard-linked resource pointing outside the root (codex-connector P1, round 12)', async () => {
-    // realpath returns the link's own in-root name and dev/ino trivially
-    // match the same inode — only nlink > 1 exposes the outside hard link.
-    const outside = nodePath.join(tmpRoot, 'outside-secrets.json');
-    await writeFile(outside, '{"secret":true}');
-    const link = nodePath.join(workingDir, 'dist', 'data.json');
-    await fsPromises.link(outside, link);
-    const { url } = await createUrl();
-    const base = url.slice(0, url.lastIndexOf('/'));
-    expect((await get(`${base}/data.json`)).status).toBe(404);
   });
 });
