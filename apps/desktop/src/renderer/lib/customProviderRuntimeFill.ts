@@ -4,6 +4,7 @@ import type {
   ProviderWireProtocol,
 } from '@cindy/model-providers';
 import { savedCustomProviderModelShape } from '@/../shared/piRuntimeInitialization';
+import { clearCustomProviderModelPiApiOverrides } from './customProviders';
 
 export type RuntimeFillAgent = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
 export interface RuntimeFillHeaderRow {
@@ -160,6 +161,7 @@ function modelsForTarget(
   targetAgent: RuntimeFillAgent,
   sourceWire: ProviderWireProtocol,
   targetWire: ProviderWireProtocol,
+  preserveTargetPiApi: boolean,
 ) {
   const targetById = new Map(validModels(targetModels).map((model) => [model.id, model]));
   const sourceCarriesImageInput = runtimeConsumesModelImageInput(sourceAgent, sourceWire);
@@ -173,6 +175,9 @@ function modelsForTarget(
     const reasoningSource = sourceAgent === 'pi' ? sourceModel : existing;
     return {
       ...portable,
+      ...(preserveTargetPiApi && targetAgent === 'pi' && existing?.piApi
+        ? { piApi: existing.piApi }
+        : {}),
       ...(targetConsumesImageInput && supportsImageInput ? { supportsImageInput: true } : {}),
       ...(targetAgent === 'pi' &&
       reasoningSource?.reasoning === true &&
@@ -354,6 +359,7 @@ export function buildRuntimeFillDiffs(
     options.targetAgent,
     wire,
     wire,
+    false,
   );
   const targetModelsForProspectiveWire = modelsForTarget(
     target.models,
@@ -362,6 +368,7 @@ export function buildRuntimeFillDiffs(
     options.targetAgent,
     wire,
     wire,
+    false,
   );
   const sourceModelsForCurrentWire = modelsForTarget(
     source.models,
@@ -370,6 +377,7 @@ export function buildRuntimeFillDiffs(
     options.targetAgent,
     wire,
     targetWire,
+    true,
   );
   const targetModelsForCurrentWire = modelsForTarget(
     target.models,
@@ -378,12 +386,14 @@ export function buildRuntimeFillDiffs(
     options.targetAgent,
     targetWire,
     targetWire,
+    true,
   );
   const modelsDependOnEndpoint =
     wire !== targetWire &&
-    (JSON.stringify(sourceModelsForProspectiveWire) ===
-      JSON.stringify(targetModelsForProspectiveWire)) !==
-      (JSON.stringify(sourceModelsForCurrentWire) === JSON.stringify(targetModelsForCurrentWire));
+    (JSON.stringify(sourceModelsForProspectiveWire) !==
+      JSON.stringify(sourceModelsForCurrentWire) ||
+      JSON.stringify(targetModelsForProspectiveWire) !==
+        JSON.stringify(targetModelsForCurrentWire));
 
   return RUNTIME_FILL_FIELD_ORDER.filter((field) => {
     if (!options.includeApiKey && field === 'apiKey' && !implicitApiKeyClear) return false;
@@ -638,8 +648,11 @@ export function applyRuntimeFillFields(
         options.targetAgent,
         sourceWire,
         targetWire,
+        !copyWireProtocol,
       )
-    : target.models;
+    : copyWireProtocol && options.targetAgent === 'pi'
+      ? clearCustomProviderModelPiApiOverrides(target.models)
+      : target.models;
   const copyHeaders =
     selected.has('headers') &&
     !sourceHasHiddenHeaders &&

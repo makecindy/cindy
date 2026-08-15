@@ -598,6 +598,43 @@ describe('custom provider runtime fill', () => {
     ]);
   });
 
+  it('preserves target Pi model protocol overrides during a models-only fill', () => {
+    const source = draft({
+      wireProtocol: 'openai-chat',
+      models: [{ id: 'model-a', name: 'Updated model' }],
+    });
+    const target = draft({
+      wireProtocol: 'openai-responses',
+      models: [{ id: 'model-a', name: 'Old model', piApi: 'openai-responses' }],
+    });
+
+    expect(
+      applyRuntimeFillFields(target, source, ['models'], {
+        sourceAgent: 'codex',
+        targetAgent: 'pi',
+      }),
+    ).toMatchObject({
+      wireProtocol: 'openai-responses',
+      models: [{ id: 'model-a', name: 'Updated model', piApi: 'openai-responses' }],
+    });
+  });
+
+  it('clears Pi model protocol overrides when explicitly filling its wire protocol', () => {
+    const source = draft({ wireProtocol: 'openai-chat' });
+    const target = draft({
+      wireProtocol: 'openai-responses',
+      models: [{ id: 'model-a', name: 'Model A', piApi: 'openai-responses' }],
+    });
+
+    const result = applyRuntimeFillFields(target, source, ['wireProtocol'], {
+      sourceAgent: 'codex',
+      targetAgent: 'pi',
+    });
+
+    expect(result.wireProtocol).toBe('openai-chat');
+    expect(result.models).toEqual([{ id: 'model-a', name: 'Model A' }]);
+  });
+
   it('copies image capability from Pi to an OpenAI Chat Codex target but drops reasoning', () => {
     const source = draft({
       models: [
@@ -736,6 +773,67 @@ describe('custom provider runtime fill', () => {
       wireProtocol: 'openai-chat',
       models: [{ id: 'model-a', name: 'Model A' }],
     });
+  });
+
+  it('keeps an endpoint switch coupled to stale image clearing when model names also differ', () => {
+    const source = draft({
+      baseUrl: 'https://api.example.test/v1',
+      wireProtocol: 'openai-chat',
+      models: [{ id: 'model-a', name: 'Source model' }],
+    });
+    const target = draft({
+      baseUrl: 'https://api.example.test/v1',
+      wireProtocol: 'openai-responses',
+      models: [{ id: 'model-a', name: 'Target model', supportsImageInput: true }],
+    });
+    const diffs = buildRuntimeFillDiffs(source, target, {
+      includeApiKey: true,
+      sourceAgent: 'pi',
+      targetAgent: 'codex',
+    });
+
+    expect(diffs.find((diff) => diff.field === 'models')).toMatchObject({
+      targetState: 'conflict',
+      implicitClear: true,
+    });
+    expect(runtimeFillFieldsForToggle('wireProtocol', diffs)).toEqual(
+      expect.arrayContaining(['wireProtocol', 'models']),
+    );
+    expect(runtimeFillFieldsForToggle('models', diffs)).toEqual(
+      expect.arrayContaining(['wireProtocol', 'models']),
+    );
+    expect(normalizeRuntimeFillSelection(['wireProtocol'], diffs)).toEqual(
+      expect.arrayContaining(['wireProtocol', 'models']),
+    );
+  });
+
+  it('keeps a Pi protocol switch coupled to override clearing when model names also differ', () => {
+    const source = draft({
+      baseUrl: 'https://api.example.test/v1',
+      wireProtocol: 'openai-chat',
+      models: [{ id: 'model-a', name: 'Source model' }],
+    });
+    const target = draft({
+      baseUrl: 'https://api.example.test/v1',
+      wireProtocol: 'openai-responses',
+      models: [{ id: 'model-a', name: 'Target model', piApi: 'openai-responses' }],
+    });
+    const diffs = buildRuntimeFillDiffs(source, target, {
+      includeApiKey: true,
+      sourceAgent: 'codex',
+      targetAgent: 'pi',
+    });
+
+    expect(diffs.find((diff) => diff.field === 'models')).toMatchObject({
+      targetState: 'conflict',
+      implicitClear: true,
+    });
+    expect(runtimeFillFieldsForToggle('wireProtocol', diffs)).toEqual(
+      expect.arrayContaining(['wireProtocol', 'models']),
+    );
+    expect(runtimeFillFieldsForToggle('models', diffs)).toEqual(
+      expect.arrayContaining(['wireProtocol', 'models']),
+    );
   });
 
   it('uses the same model and header counting semantics as save', () => {
