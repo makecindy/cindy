@@ -47,12 +47,17 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex')).toEqual([]);
   });
 
-  it('远端 Catalog 不能覆盖 XD Provider 壳或注入 XD 模型', () => {
+  it('current Catalog controls the XD media shell while /models controls chat membership', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
     const catalogXd = catalog.providers.find((provider) => provider.id === 'xd');
-    const builtinXd = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd');
-    if (!catalogXd || !builtinXd) throw new Error('missing XD provider fixture');
+    if (!catalogXd) throw new Error('missing XD provider fixture');
     catalogXd.name = 'Catalog-supplied XD';
+    catalogXd.imageModels = [];
+    delete catalogXd.imageDefaults;
+    catalogXd.embeddingModels = [];
+    delete catalogXd.embeddingDefaults;
+    catalogXd.videoModels = [{ id: 'seedance-fast', name: 'Seedance Fast' }];
+    catalogXd.videoDefaults = { standard: 'seedance-fast' };
     catalogXd.models['claude-code'] = [
       {
         id: 'catalog-only-model',
@@ -66,7 +71,10 @@ describe('XD 网关权威模型清单重建', () => {
     setActiveCatalog(catalog);
 
     const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
-    expect(activeXd?.name).toBe(builtinXd.name);
+    expect(activeXd?.name).toBe('Catalog-supplied XD');
+    expect(activeXd?.imageModels).toEqual([]);
+    expect(activeXd?.embeddingModels).toEqual([]);
+    expect(activeXd?.videoModels).toEqual([{ id: 'seedance-fast', name: 'Seedance Fast' }]);
     expect(xdModels('claude-code')).toEqual([]);
   });
 

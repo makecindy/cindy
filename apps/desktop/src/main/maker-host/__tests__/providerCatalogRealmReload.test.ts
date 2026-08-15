@@ -610,17 +610,29 @@ describe('provider catalog realm reload', () => {
         .providers.find((provider) => provider.id === 'xd')
         ?.videoModels?.map((model) => model.id),
     ).not.toContain('happyhorse');
-    h.loads.at(-1)!.resolve(catalogWithXaiMedia, 'current');
+    const currentCatalogWithExplicitXd = structuredClone(catalogWithXaiMedia);
+    const explicitXd = currentCatalogWithExplicitXd.providers.find(
+      (provider) => provider.id === 'xd',
+    );
+    if (!explicitXd) throw new Error('expected XD provider');
+    explicitXd.imageModels = [];
+    delete explicitXd.imageDefaults;
+    explicitXd.embeddingModels = [];
+    delete explicitXd.embeddingDefaults;
+    explicitXd.videoModels = [{ id: 'seedance-fast', name: 'Seedance Fast' }];
+    explicitXd.videoDefaults = { standard: 'seedance-fast' };
+    h.loads.at(-1)!.resolve(currentCatalogWithExplicitXd, 'current');
     await currentReload;
 
     const currentCatalog = getDesktopSelectableCatalog();
     const currentXd = currentCatalog.providers.find((provider) => provider.id === 'xd');
-    expect(currentXd?.imageModels?.map((model) => model.id)).toContain('gpt-image-2');
-    expect(currentXd?.embeddingModels?.map((model) => model.id)).toContain('voyage/voyage-4');
-    expect(currentXd?.videoModels?.map((model) => model.id)).toContain('happyhorse');
-    expect(deriveCindyMediaConfig(currentCatalog.providers, 'embed').defaults?.standard).toBe(
-      'voyage/voyage-4',
-    );
+    expect(currentXd?.imageModels).toEqual([]);
+    expect(currentXd?.embeddingModels).toEqual([]);
+    expect(currentXd?.videoModels).toEqual([{ id: 'seedance-fast', name: 'Seedance Fast' }]);
+    expect(deriveCindyMediaConfig(currentCatalog.providers, 'embed')).toEqual({
+      models: [],
+      defaults: null,
+    });
     expect(
       currentCatalog.providers.find((provider) => provider.id === 'xai')?.videoModels?.map(
         (model) => model.id,
@@ -664,7 +676,7 @@ describe('provider catalog realm reload', () => {
     });
     await staleRefresh;
 
-    expect(activeMarker()).toBe('catalog-global-current');
+    expect(activeMarker()).toBe('catalog-global-refreshed');
     expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-07-31T12:30:00.000Z');
   });
 
@@ -740,10 +752,28 @@ describe('provider catalog realm reload', () => {
       xai.videoModels,
     );
 
+    const recoveredCatalog = structuredClone(fallback);
+    recoveredCatalog.providers[0] = {
+      ...recoveredCatalog.providers[0]!,
+      name: 'catalog-current-same-registry',
+    };
+    const recoveredXd = recoveredCatalog.providers.find((provider) => provider.id === 'xd');
+    const recoveredXai = recoveredCatalog.providers.find((provider) => provider.id === 'xai');
+    if (!recoveredXd || !recoveredXai) throw new Error('expected recovered providers');
+    recoveredXd.imageModels = [];
+    delete recoveredXd.imageDefaults;
+    recoveredXd.embeddingModels = [];
+    delete recoveredXd.embeddingDefaults;
+    recoveredXd.videoModels = [{ id: 'seedance-fast', name: 'Seedance Fast' }];
+    recoveredXd.videoDefaults = { standard: 'seedance-fast' };
+    recoveredXai.videoModels = [
+      { id: 'xai/grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5' },
+    ];
+
     const recovered = refreshActiveCatalogFromSource();
     await Promise.resolve();
     h.refreshLoads.at(-1)!.resolve({
-      catalog: structuredClone(fallback),
+      catalog: recoveredCatalog,
       source: 'remote',
       capabilityEvidence: 'current',
     });
@@ -751,11 +781,12 @@ describe('provider catalog realm reload', () => {
 
     const promoted = getDesktopSelectableCatalog();
     const promotedXd = promoted.providers.find((provider) => provider.id === 'xd');
-    expect(promotedXd?.imageModels?.map((model) => model.id)).toContain('gpt-image-2');
-    expect(promotedXd?.embeddingModels?.map((model) => model.id)).toContain('voyage/voyage-4');
-    expect(promotedXd?.videoModels?.map((model) => model.id)).toContain('happyhorse');
+    expect(activeMarker()).toBe('catalog-current-same-registry');
+    expect(promotedXd?.imageModels).toEqual([]);
+    expect(promotedXd?.embeddingModels).toEqual([]);
+    expect(promotedXd?.videoModels).toEqual([{ id: 'seedance-fast', name: 'Seedance Fast' }]);
     expect(promoted.providers.find((provider) => provider.id === 'xai')?.videoModels).toEqual(
-      xai.videoModels,
+      recoveredXai.videoModels,
     );
   });
 

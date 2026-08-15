@@ -41,10 +41,9 @@ import { getBaseUrl } from '../manifestService.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { getBuildClientEndpoint, getClientEndpoint } from '../clientEndpointsService.js';
 import {
-  commitModelPlaneFromCatalog,
+  commitActiveCatalogSnapshot,
   getActiveCatalog,
   getModelPlaneWarnings,
-  promoteActiveCatalogCapabilityEvidenceToCurrent,
   setActiveCatalog,
   setCustomProviderConfigs,
   setCustomProviders,
@@ -578,10 +577,9 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
  * 已完成,再复用同一 `loadCatalogWithSource` 源选择;bundled fallback 视为失败保
  * LKG。守卫序:realm/generation → updatedAt 时间单调 → 同一时刻规范化 digest
  * (同=no-op,异=拒收+告警——线上纠错必须 forward-fix 抬 updatedAt)。通过后经
- * `commitModelPlaneFromCatalog` **单次 swap、单次 markChanged** 提交,成功且有
+ * `commitActiveCatalogSnapshot` **单次 swap、单次 markChanged** 提交,成功且有
  * 变化 = 恰 1 revision/1 广播(出口只有 active-catalog changedListener),
- * 同内容但 fallback → current 的证据升级 = 恰 1 revision/1 广播；其余
- * no-op/失败/拒收 = 0。
+ * fallback → current 会连同完整目录快照一起替换；精确 no-op/失败/拒收 = 0。
  */
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   await ensureActiveCatalogLoaded();
@@ -621,10 +619,10 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
           return getActiveCatalog();
         }
         if (relation === 'same') {
-          // 内容相同仍可能带来 fallback → current 的能力证据升级；这会改变
-          // CN/dev 对 XD fallback 媒体的投影，因此必须形成一次可观测更新。
+          // Registry 相同不代表 provider media / presets 等完整目录相同。current
+          // 来源成功时必须安装这份完整快照，不能只解除 fallback 安全投影。
           if (capabilityEvidence === 'current') {
-            promoteActiveCatalogCapabilityEvidenceToCurrent();
+            commitActiveCatalogSnapshot(catalog, { capabilityEvidence });
           }
           return getActiveCatalog();
         }
@@ -647,7 +645,7 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
           return getActiveCatalog();
         }
       }
-      commitModelPlaneFromCatalog(catalog, { capabilityEvidence });
+      commitActiveCatalogSnapshot(catalog, { capabilityEvidence });
       // computeMerged 在这里同步完成，确保告警属于刚提交的同一代目录；不能读取
       // 上一代惰性缓存留下的 warnings。
       const activeCatalog = getActiveCatalog();

@@ -24,6 +24,8 @@
  * createDesktopProviderService.ts,这样依赖本 holder 的纯逻辑模块(及其单测)不被 electron 污染。
  */
 
+import { isDeepStrictEqual } from 'node:util';
+
 import {
   BUNDLED_CATALOG,
   buildUserProvider,
@@ -721,17 +723,20 @@ function computeMerged(): Catalog {
   // 作者错误隔离进 warnings,由刷新路径读走打日志,不拖垮其余条目。
   const plan = planRegistryRoots(b.modelRegistry);
   lastPlanWarnings = plan.warnings;
-  // XD Provider 使用随客户端发布的固定壳，远端 Catalog 只能管理非 XD Provider。
-  // `/models` 会在下方重建固定壳的全部模型，Catalog 缺失、刷新或异常都不能改变 XD。
-  const builtinXdCatalog =
+  // XD 的对话模型成员仍由下方 `/models` 权威重建，但 provider 壳中的媒体清单、
+  // 默认项和显式空值必须服从当前 Catalog。只有目录本身缺少 XD（生产加载经
+  // mergeWithBundled 后通常不会发生）才回落与 evidence 同级安全的 bundled 壳。
+  const fallbackXdCatalog =
     baseCapabilityEvidence === 'current'
       ? BUNDLED_CATALOG
       : projectUnverifiedCatalogFallbackForBuildRegion(BUNDLED_CATALOG, CURRENT_CINDY_REGION);
-  const builtinXd = builtinXdCatalog.providers.find((provider) => provider.id === 'xd');
+  const catalogXd = b.providers.find((provider) => provider.id === 'xd');
+  const xdShell =
+    catalogXd ?? fallbackXdCatalog.providers.find((provider) => provider.id === 'xd');
   const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
   const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
   const providerSources = b.providers.filter((provider) => provider.id !== 'xd');
-  if (builtinXd) providerSources.splice(Math.max(0, remoteXdIndex), 0, builtinXd);
+  if (xdShell) providerSources.splice(Math.max(0, remoteXdIndex), 0, xdShell);
   let providers: Provider[] = providerSources;
 
   // 先清零已退役的静态 providers.models 段：无论目录来自 bundled 还是远端，
@@ -1019,22 +1024,51 @@ export function getCatalogModelContextWindow(
 }
 
 /** 由 host 的目录加载器(ensureActiveCatalogLoaded)在拉取成功后写入基础目录。 */
-export function setActiveCatalog(
+function installActiveCatalog(
   catalog: Catalog,
-  options: { capabilityEvidence?: CatalogCapabilityEvidence } = {},
-): void {
+  capabilityEvidence: CatalogCapabilityEvidence,
+  force: boolean,
+): boolean {
   const previous = base ?? BUNDLED_CATALOG;
+  if (
+    !force &&
+    base !== null &&
+    baseCapabilityEvidence === capabilityEvidence &&
+    isDeepStrictEqual(base, catalog)
+  ) {
+    return false;
+  }
   const projectionRegistry =
     catalog.modelRegistry ?? previous.modelRegistry ?? trustedCustomProviderRegistry;
   trustedCustomProviderRegistry = projectionRegistry;
   base = catalog;
-  baseCapabilityEvidence = options.capabilityEvidence ?? 'current';
+  baseCapabilityEvidence = capabilityEvidence;
   if (customConfigs) {
     custom = customConfigs.map((config) =>
       buildUserProvider(config, { modelRegistry: projectionRegistry }),
     );
   }
   markChanged();
+  return true;
+}
+
+export function setActiveCatalog(
+  catalog: Catalog,
+  options: { capabilityEvidence?: CatalogCapabilityEvidence } = {},
+): void {
+  installActiveCatalog(catalog, options.capabilityEvidence ?? 'current', true);
+}
+
+/**
+ * Atomically install one complete source snapshot and its capability evidence. Refresh
+ * callers use this instead of comparing only modelRegistry: media lists, presets and
+ * explicit empty fields are part of the same catalog truth. Exact no-ops stay silent.
+ */
+export function commitActiveCatalogSnapshot(
+  catalog: Catalog,
+  options: { capabilityEvidence?: CatalogCapabilityEvidence } = {},
+): boolean {
+  return installActiveCatalog(catalog, options.capabilityEvidence ?? 'current', false);
 }
 
 /**
@@ -1068,19 +1102,6 @@ export function commitModelPlaneFromCatalog(
     );
   }
   markChanged();
-}
-
-/**
- * An identical snapshot fetched from the configured current source strengthens the
- * active catalog's capability evidence even when its Registry revision is unchanged.
- * The reverse transition is intentionally not applied here: an unchanged fallback
- * response cannot invalidate proof already obtained for the same active snapshot.
- */
-export function promoteActiveCatalogCapabilityEvidenceToCurrent(): boolean {
-  if (baseCapabilityEvidence === 'current') return false;
-  baseCapabilityEvidence = 'current';
-  markChanged();
-  return true;
 }
 
 /**
