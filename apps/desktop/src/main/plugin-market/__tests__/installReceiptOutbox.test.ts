@@ -84,6 +84,36 @@ describe('PluginInstallReceiptOutbox', () => {
     expect(h.outbox.pending()).toEqual([]);
   });
 
+  it('rechecks the active owner after backoff before retrying a receipt', async () => {
+    let activeOwner = true;
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(undefined);
+    const wait = vi.fn(async () => {
+      activeOwner = false;
+    });
+    const h = harness(send, {
+      randomUUID: () => EVENT_A,
+      retryDelaysMs: [0, 10],
+      shouldSend: () => activeOwner,
+      wait,
+    });
+    h.outbox.enqueue(PLUGIN_ID, 'release-1');
+
+    await h.outbox.flush();
+
+    expect(wait).toHaveBeenCalledWith(10);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(h.outbox.pending()).toMatchObject([{ eventId: EVENT_A }]);
+
+    activeOwner = true;
+    await h.outbox.flush();
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(h.outbox.pending()).toEqual([]);
+  });
+
   it('keeps a failed event and a new outbox instance resends it after app restart', async () => {
     const h = harness(
       vi.fn(async () => {

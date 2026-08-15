@@ -185,6 +185,9 @@ export class PluginInstallReceiptOutbox {
         for (const delayMs of this.retryDelaysMs) {
           if (!this.shouldSend()) return;
           if (delayMs > 0) await this.wait(delayMs);
+          // backoff 期间可能切换 owner；发送前必须重新核对，不能用新 owner 的
+          // token 发送旧 owner 目录里的回执。
+          if (!this.shouldSend()) return;
           try {
             await this.send(entry.receipt);
             delivered = true;
