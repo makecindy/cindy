@@ -98,12 +98,8 @@ import {
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
 import { getActiveAppSession } from '../appSessionState.js';
-import {
-  filterProviderCatalogForAccount,
-  projectProviderCatalogForBuildRegion,
-} from './provider-access-policy.js';
+import { filterProviderCatalogForAccount } from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   claimDetectedNativeProviderAuth,
   migrateLegacyNativeProviderAuthBindings,
@@ -849,11 +845,7 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  const regionCatalog = projectProviderCatalogForBuildRegion(
-    getActiveCatalog(),
-    CURRENT_CINDY_REGION,
-  );
-  return filterProviderCatalogForAccount(regionCatalog, {
+  return filterProviderCatalogForAccount(getActiveCatalog(), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
 }
