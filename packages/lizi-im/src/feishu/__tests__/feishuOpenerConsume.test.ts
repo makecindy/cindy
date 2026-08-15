@@ -180,6 +180,32 @@ describe('FeishuIM opener consumption failure semantics', () => {
     return im.sendText(userId, text, { fallbackOpenerId });
   }
 
+  it('兜底发送就地收口撤回失败不另发, 重新暂存', async () => {
+    await queueOriginalFallback('om_reserved', '终态');
+    outboundMocks.takeDeferredOpenerConsumeById.mockReturnValueOnce({
+      userId: 'g/oc_c/omt_t',
+      openerId: 'om_reserved',
+      markdown: '终态',
+      epoch: 0,
+    });
+    (streamingText.patchMarkdown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('patch failed'),
+    );
+    outboundMocks.recallOwnMessageWith.mockResolvedValueOnce(false);
+
+    await expect(sendOriginalFallback('g/oc_c/omt_t', '兜底')).rejects.toThrow('patch failed');
+    expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalled();
+    expect(outboundMocks.rearmAnchorToTrigger).not.toHaveBeenCalled();
+    expect(outboundMocks.sendText).not.toHaveBeenCalled();
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'g/oc_c/omt_t',
+        openerId: 'om_reserved',
+        markdown: '终态',
+      }),
+    );
+  });
+
   it('同账号未换代时最终发送失败也重新暂存, 进入退避排空', async () => {
     await queueOriginalFallback('om_reserved', '终态');
     outboundMocks.takeDeferredOpenerConsumeById.mockReturnValueOnce({
@@ -200,6 +226,34 @@ describe('FeishuIM opener consumption failure semantics', () => {
         userId: 'g/oc_c/omt_t',
         openerId: 'om_reserved',
         markdown: '终态',
+      }),
+    );
+  });
+
+  it('排空时撤回失败不补发终态, 重新入队', async () => {
+    const pinned = { fake: 'pinned-client' };
+    outboundMocks.getBoundClient.mockReturnValue(pinned);
+    outboundMocks.drainDeferredOpenerConsumes.mockReturnValueOnce([
+      { userId: 'g/oc_c/omt_t', openerId: 'om_opener', markdown: '兜底回复' },
+    ]);
+    (streamingText.patchMarkdown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('patch failed'),
+    );
+    outboundMocks.recallOwnMessageWith.mockResolvedValueOnce(false);
+
+    feishuEvents.emit('imStatus', { kind: 'connected', appId: 'cli' });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalledWith(pinned, 'om_opener');
+    expect(outboundMocks.rearmAnchorToTrigger).not.toHaveBeenCalled();
+    expect(outboundMocks.sendInteractive).not.toHaveBeenCalled();
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'g/oc_c/omt_t',
+        openerId: 'om_opener',
+        markdown: '兜底回复',
       }),
     );
   });
@@ -474,6 +528,44 @@ describe('FeishuIM opener consumption failure semantics', () => {
     await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(false);
     expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalledWith(fakeClient, 'om_opener');
     expect(outboundMocks.rearmAnchorToTrigger).toHaveBeenCalledWith('g/oc_c/omt_t');
+  });
+
+  it('consumePendingOpenerCard: 撤回失败不回拨不另发, 重新暂存等重试', async () => {
+    outboundMocks.claimPatchableOpener.mockReturnValue('om_opener');
+    (streamingText.patchMarkdown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('patch failed'),
+    );
+    outboundMocks.recallOwnMessageWith.mockResolvedValueOnce(false);
+
+    await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(false);
+    expect(outboundMocks.recallOwnMessageWith).toHaveBeenCalledWith(fakeClient, 'om_opener');
+    expect(outboundMocks.rearmAnchorToTrigger).not.toHaveBeenCalled();
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'g/oc_c/omt_t',
+        openerId: 'om_opener',
+        markdown: '回复',
+      }),
+    );
+    expect(im.takeNotedFallbackOpenerId('g/oc_c/omt_t', 'markdown')).toBe('om_opener');
+  });
+
+  it('consumePendingOpenerAsCard: 撤回失败不回拨不另发, 重新暂存', async () => {
+    outboundMocks.claimPatchableOpener.mockReturnValue('om_opener');
+    outboundMocks.updateInteractive.mockRejectedValueOnce(new Error('replace failed'));
+    outboundMocks.recallOwnMessageWith.mockResolvedValueOnce(false);
+
+    await expect(im.consumePendingOpenerAsCard('g/oc_c/omt_t', SPEC)).resolves.toBe(false);
+    expect(outboundMocks.rearmAnchorToTrigger).not.toHaveBeenCalled();
+    expect(outboundMocks.registerCardLane).not.toHaveBeenCalled();
+    expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'g/oc_c/omt_t',
+        openerId: 'om_opener',
+        spec: SPEC,
+      }),
+    );
+    expect(im.takeNotedFallbackOpenerId('g/oc_c/omt_t', 'spec')).toBe('om_opener');
   });
 
   it('consumePendingOpenerAsCard: 替换失败时撤回并返回 false', async () => {

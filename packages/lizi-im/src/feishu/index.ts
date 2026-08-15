@@ -263,11 +263,24 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         // 撤回始终 pin 到排空开始时的 client — 同账号再次重连(而非换账号)
         // 时旧 REST client 仍可尝试撤回, 不会留下永久「思考中」卡; 换账号
         // 时 pinnedClient 属于旧账号, 用它撤回旧卡正是安全方向。
-        await outbound.recallOwnMessageWith(pinnedClient, openerId);
+        const recalled = await outbound.recallOwnMessageWith(pinnedClient, openerId);
         // 撤回 await 期间也可能换代/清凭证 — 发送前**再次**校验账号代次,
         // 旧账号终态不得经新 client 呈现(跨账号红线)。
         if (outbound.getAccountEpoch() !== epoch) {
           this.log.info('flushDeferredOpenerConsumes: account changed during recall — dropping entry');
+          resolveFlush(null);
+          continue;
+        }
+        if (!recalled) {
+          // 撤回失败: 思考中卡还在。不得回拨+另发, 否则用户同时看到卡和新回答。
+          this.log.warn('flushDeferredOpenerConsumes: recall failed — re-deferred');
+          outbound.deferOpenerConsume(entry);
+          this.notePendingFallback(
+            entry.userId,
+            'markdown' in entry ? 'markdown' : 'spec',
+            entry.openerId,
+          );
+          requeued = true;
           resolveFlush(null);
           continue;
         }
@@ -513,7 +526,8 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   }
 
   /**
-   * patch/替换失败后的账号代次门。未换账号才能回落发送; 同账号空窗重新暂存;
+   * patch/替换失败后的账号代次门。未换账号且撤回成功才能回拨+回落发送;
+   * 撤回失败重新暂存走有界排空(思考中卡还在, 不得另发); 同账号空窗重新暂存;
    * 已换账号丢弃旧轮次并返回 true, 避免调用方用新 client 向旧 lane 发送。
    */
   private async recoverFailedOpenerConsume(
@@ -526,7 +540,10 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     if (outbound.getAccountEpoch() !== epoch) {
       this.log.info('consumePendingOpener: account changed — dropping turn');
       if (triggeringClient) {
-        await outbound.recallOwnMessageWith(triggeringClient, openerId);
+        const recalled = await outbound.recallOwnMessageWith(triggeringClient, openerId);
+        if (!recalled) {
+          this.log.warn('consumePendingOpener: recall failed after account change — dropping turn');
+        }
       }
       return true;
     }
@@ -542,9 +559,25 @@ export class FeishuIM extends BaseIM implements ChannelIM {
       return false;
     }
     if (triggeringClient) {
-      await outbound.recallOwnMessageWith(triggeringClient, openerId);
-    }
-    if (outbound.getAccountEpoch() !== epoch) {
+      const recalled = await outbound.recallOwnMessageWith(triggeringClient, openerId);
+      if (outbound.getAccountEpoch() !== epoch) {
+        this.log.info('consumePendingOpener: account changed during recall — dropping turn');
+        return true;
+      }
+      if (!recalled) {
+        // 撤回失败: 思考中卡还在。不回拨、不让调用方另发; 重新暂存走有界排空。
+        this.log.warn('consumePendingOpener: recall failed — re-deferred');
+        outbound.deferOpenerConsume({ userId, openerId, ...payload });
+        this.notePendingFallback(
+          userId,
+          'markdown' in payload ? 'markdown' : 'spec',
+          openerId,
+          true,
+        );
+        this.scheduleConnectedFlushRetry();
+        return false;
+      }
+    } else if (outbound.getAccountEpoch() !== epoch) {
       this.log.info('consumePendingOpener: account changed during recall — dropping turn');
       return true;
     }
@@ -642,10 +675,18 @@ export class FeishuIM extends BaseIM implements ChannelIM {
           throw err;
         }
         this.log.warn(`sendWithDeferredOpenerConsume patch failed (recalling reserved opener): ${msg}`);
-        await outbound.recallOwnMessageWith(clientAtTake ?? outbound.getBoundClient()!, entry.openerId);
+        const recalled = await outbound.recallOwnMessageWith(
+          clientAtTake ?? outbound.getBoundClient()!,
+          entry.openerId,
+        );
         // 撤回 await 期间也可能再次断线 — 发送前复查代次(跨账号红线)。
         if (outbound.getAccountEpoch() !== epoch) {
           this.log.info('sendWithDeferredOpenerConsume: account changed during recall — dropping entry');
+          throw err;
+        }
+        if (!recalled) {
+          // 撤回失败: 思考中卡还在。不回拨、不另发; 外层 catch 重新入队排空。
+          this.log.warn('sendWithDeferredOpenerConsume: recall failed — keeping opener for retry');
           throw err;
         }
         outbound.rearmAnchorToTrigger(userId);

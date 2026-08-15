@@ -32,6 +32,9 @@ const larkMocks = vi.hoisted(() => {
       return Promise.resolve({ data: {} });
     },
   );
+  const patch = vi.fn(
+    async (): Promise<{ code?: number; msg?: string; data?: {} }> => ({ data: {} }),
+  );
   const getMessage = vi.fn(
     function (
       this: unknown,
@@ -42,7 +45,7 @@ const larkMocks = vi.hoisted(() => {
       return Promise.resolve({ data: { items: [] } });
     },
   );
-  return { create, reply, deleteMessage, getMessage, replyOwners, getOwners, deleteOwners };
+  return { create, reply, deleteMessage, getMessage, patch, replyOwners, getOwners, deleteOwners };
 });
 
 vi.mock('@larksuiteoapi/node-sdk', () => ({
@@ -54,6 +57,7 @@ vi.mock('@larksuiteoapi/node-sdk', () => ({
           reply: larkMocks.reply,
           delete: larkMocks.deleteMessage,
           get: larkMocks.getMessage,
+          patch: larkMocks.patch,
         },
         messageReaction: { create: vi.fn(), delete: vi.fn() },
         image: { create: vi.fn() },
@@ -323,6 +327,26 @@ describe('feishu outbound lane routing', () => {
     await expect(outbound.recallOwnMessage('om_rejected')).resolves.toBe(false);
     larkMocks.deleteMessage.mockRejectedValueOnce(new Error('network down'));
     await expect(outbound.recallOwnMessage('om_throw')).resolves.toBe(false);
+  });
+
+  it('updateInteractive / patchCardRaw reject HTTP 200 with a non-zero Feishu code', async () => {
+    outbound.pushReplyAnchor('g/oc_g/omt_t', 'om_anchor');
+    larkMocks.patch.mockResolvedValueOnce({ code: 99991663, msg: 'card not editable' });
+    await expect(
+      outbound.updateInteractive('om_opener', { body: '终态', buttons: [] }),
+    ).rejects.toThrow(/99991663|card not editable/);
+
+    larkMocks.patch.mockResolvedValueOnce({ code: 230002, msg: 'permission denied' });
+    await expect(outbound.patchCardRaw('om_opener', { schema: '2.0' })).rejects.toThrow(
+      /230002|permission denied/,
+    );
+
+    larkMocks.patch.mockResolvedValueOnce({ code: 0, data: {} });
+    await expect(
+      outbound.updateInteractive('om_opener', { body: 'ok', buttons: [] }),
+    ).resolves.toBeUndefined();
+    larkMocks.patch.mockResolvedValueOnce({ data: {} });
+    await expect(outbound.patchCardRaw('om_opener', { schema: '2.0' })).resolves.toBeUndefined();
   });
 
   it('openThread pins recovery/recall to the client that created the opener', async () => {

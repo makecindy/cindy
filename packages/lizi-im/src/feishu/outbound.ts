@@ -516,6 +516,12 @@ export function evictOpenThreadOutcome(replyToMessageId: string): void {
  * 用指定 client 撤回 bot 自己发的消息 — patch/替换失败路径把撤回 pin 到
  * 触发账号: 中途换凭证时不得拿新账号的 client 删除旧账号的开场白。
  */
+/** 飞书 REST 2xx 仍可能带非零业务码; SDK 对此不抛。缺省或 0 才算成功。 */
+function feishuBusinessRejectReason(res: { code?: number; msg?: string }): string | null {
+  if (res.code === undefined || res.code === 0) return null;
+  return res.msg ? `${res.msg} (code=${res.code})` : `code=${res.code}`;
+}
+
 export async function recallOwnMessageWith(
   c: Lark.Client,
   messageId: string,
@@ -523,10 +529,9 @@ export async function recallOwnMessageWith(
   const log = getLog();
   try {
     const res = await c.im.v1.message.delete({ path: { message_id: messageId } });
-    if (res.code !== undefined && res.code !== 0) {
-      log.warn(
-        `[feishu/outbound] recallOwnMessage rejected (code=${res.code}): ${res.msg ?? ''}`,
-      );
+    const rejected = feishuBusinessRejectReason(res);
+    if (rejected) {
+      log.warn(`[feishu/outbound] recallOwnMessage rejected: ${rejected}`);
       return false;
     }
     return true;
@@ -796,19 +801,27 @@ export async function updateInteractive(
   spec: InteractiveCardSpec,
 ): Promise<void> {
   const card = buildInteractiveCardV1(spec);
-  await ensureClient().im.v1.message.patch({
+  const res = await ensureClient().im.v1.message.patch({
     path: { message_id: messageId },
     data: { content: JSON.stringify(card) },
   });
+  const rejected = feishuBusinessRejectReason(res);
+  if (rejected) {
+    throw new Error(`updateInteractive rejected: ${rejected}`);
+  }
 }
 
 // ── raw card patch (used by streamingText for v2 markdown patching) ───────────
 
 export async function patchCardRaw(messageId: string, cardJson: unknown): Promise<void> {
-  await ensureClient().im.v1.message.patch({
+  const res = await ensureClient().im.v1.message.patch({
     path: { message_id: messageId },
     data: { content: JSON.stringify(cardJson) },
   });
+  const rejected = feishuBusinessRejectReason(res);
+  if (rejected) {
+    throw new Error(`patchCardRaw rejected: ${rejected}`);
+  }
 }
 
 /**
