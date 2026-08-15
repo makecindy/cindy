@@ -6,6 +6,7 @@ export interface RecoveryContextSnapshot {
   contextWindow: number;
   progressCount: number;
   recentProgress: RecoveryCheckpoint['recentProgress'];
+  predecessorPlan?: RecoveryCheckpoint['predecessorPlan'] | null;
 }
 
 export interface RecoveryDecisionInput {
@@ -112,6 +113,7 @@ export function buildRecoveryCheckpoint(
     contextRatio: contextRatio(snapshot.contextTokens, snapshot.contextWindow),
     progressCount: snapshot.progressCount,
     createdAt: new Date().toISOString(),
+    predecessorPlan: snapshot.predecessorPlan ?? previous?.predecessorPlan,
     recentProgress: snapshot.recentProgress.slice(0, 6).map((entry) => ({
       role: entry.role,
       summary: boundedSummary(entry.summary),

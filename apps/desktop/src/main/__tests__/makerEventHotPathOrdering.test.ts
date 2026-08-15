@@ -22,6 +22,80 @@ const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts'
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
+  it('settles recovery plans only from the owning current provider generation', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const lifecycleStart = wireSessionSource.indexOf(
+      'onTerminal: ({ turnGeneration, event, isCurrentGeneration }) => {',
+    );
+    const remoteReturnIndex = wireSessionSource.indexOf(
+      'if (session.remoteHostId) return;',
+      lifecycleStart,
+    );
+    const recoveryDoneIndex = wireSessionSource.indexOf('recoveryPlanSettlement.settleDone(');
+
+    expect(lifecycleStart).toBeGreaterThanOrEqual(0);
+    expect(remoteReturnIndex).toBeGreaterThan(lifecycleStart);
+    expect(recoveryDoneIndex).toBeGreaterThan(lifecycleStart);
+    expect(recoveryDoneIndex).toBeLessThan(remoteReturnIndex);
+    expect(wireSessionSource.slice(recoveryDoneIndex, recoveryDoneIndex + 700)).toContain(
+      'turnGeneration',
+    );
+    expect(wireSessionSource.slice(recoveryDoneIndex, recoveryDoneIndex + 700)).toContain(
+      'isCurrentGeneration',
+    );
+    const recoveryErrorIndex = wireSessionSource.indexOf('recoveryPlanSettlement.settleError(');
+    expect(recoveryErrorIndex).toBeGreaterThanOrEqual(0);
+    expect(recoveryErrorIndex).toBeLessThan(remoteReturnIndex);
+    expect(wireSessionSource.slice(recoveryErrorIndex, recoveryErrorIndex + 700)).toContain(
+      'turnGeneration',
+    );
+    expect(wireSessionSource.slice(recoveryErrorIndex, recoveryErrorIndex + 700)).toContain(
+      'isCurrentGeneration',
+    );
+  });
+
+  it('routes recovery user persistence through the pre-await plan closure boundary', () => {
+    expect(source).toContain('recoveryPlanSettlement.persistUserBoundary({');
+    expect(source).toContain(
+      'closePlanUpdates: () => closeCodexPlanUpdatesForRecovery(sessionId, predecessorPlan)',
+    );
+    expect(source).toContain('persist: persistUserMessage');
+    expect(source).toContain('providerGeneration,');
+    expect(source).toContain('recoveryPlanSettlement.teardown(sessionId);');
+  });
+
+  it('keeps an already-dispatched recovery settlement while follow-up input queues', () => {
+    const coordinatorSource = extractInputCoordinatorSource();
+    const userEnqueueSource = coordinatorSource.match(
+      /onUserEnqueue: \(sessionId\) => \{[\s\S]*?\n {4}\},\n {4}onAutomaticEnqueue:/,
+    )?.[0];
+    const automaticEnqueueSource = coordinatorSource.match(
+      /onAutomaticEnqueue: \(sessionId\) => \{[\s\S]*?\n {4}\},\n {4}onRejectedUserTurn:/,
+    )?.[0];
+
+    expect(userEnqueueSource).toBeTruthy();
+    expect(automaticEnqueueSource).toBeTruthy();
+    expect(userEnqueueSource).not.toContain('recoveryPlanSettlement.teardown(sessionId);');
+    expect(automaticEnqueueSource).not.toContain('recoveryPlanSettlement.teardown(sessionId);');
+    expect(coordinatorSource).toContain(
+      'recoveryPlanSettlement.cancelUndispatched(sessionId, item.clientId);',
+    );
+  });
+
+  it('drains pending message writes before reading a retry recovery snapshot', () => {
+    const coordinatorSource = extractInputCoordinatorSource();
+    const snapshotReaderSource = coordinatorSource.match(
+      /getRecoveryContextSnapshot: async \(sessionId, userClientId\) => \{[\s\S]*?\n {4}\},/,
+    )?.[0];
+
+    expect(snapshotReaderSource).toBeTruthy();
+    expectOrder(
+      snapshotReaderSource ?? '',
+      'await drainPersistQueue();',
+      'return getRecoveryContextSnapshot(sessionId, userClientId);',
+    );
+  });
+
   it('rewires a replacement Session instance that retains the same business id', () => {
     const wireSessionSource = extractWireSessionSource();
 
@@ -943,6 +1017,17 @@ function extractWireSessionSource(): string {
     throw new Error('wireSessionToIpc source block not found');
   }
   return wireSessionSource;
+}
+
+function extractInputCoordinatorSource(): string {
+  const coordinatorStart = source.indexOf('const inputCoordinator: AgentInputCoordinator =');
+  const coordinatorEnd = source.indexOf(
+    '\n  agentInputCoordinatorHolder = inputCoordinator;',
+    coordinatorStart,
+  );
+  expect(coordinatorStart).toBeGreaterThanOrEqual(0);
+  expect(coordinatorEnd).toBeGreaterThan(coordinatorStart);
+  return source.slice(coordinatorStart, coordinatorEnd);
 }
 
 function extractInstallDesktopInteractionListenerSource(): string {

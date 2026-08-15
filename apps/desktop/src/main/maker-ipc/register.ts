@@ -395,6 +395,8 @@ import {
   flushOrphanToolResults,
   getLastAssistantTranscriptUuid,
   getSessionDbAgentKind,
+  closeCodexPlanUpdatesForRecovery,
+  isCodexPlanUpdateClosed,
   isSuccessfulCodexDoneEventData,
   markAssistantTurnCompleted,
   markAssistantTurnFailed,
@@ -407,6 +409,7 @@ import {
   onInteractionResolved,
   clearCodexPlanRowsForSession,
   persistCodexPlanOnDone,
+  persistRecoveredCodexPlanOnDone,
   persistCodexPlanOnTerminalError,
   onThinkingEvent,
   onToolResultEvent,
@@ -841,6 +844,7 @@ import {
   type SuppressedTurnError,
   type SuppressedTurnErrorOwner,
 } from './autoResumeBookkeeping.js';
+import { RecoveryPlanSettlement } from './recoveryPlanSettlement.js';
 import {
   InterruptedTurnAutoResumeGuard,
   isAutoResumeUserMessage,
@@ -1015,6 +1019,7 @@ export function cancelSchedulerAutoResume(sessionId: string, runId: string): boo
   // teardown 是既有唯一生命周期出口：撤退避、清 coordinator 接管与隐藏续跑、
   // 结算活动行并通知 runner。runId 校验防止迟到的旧 abort 误杀新 run。
   autoResumeBookkeeping.teardown(sessionId);
+  recoveryPlanSettlement.teardown(sessionId);
   return true;
 }
 
@@ -1046,6 +1051,7 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
     failPendingSchedulerAutoResume(sessionId, attemptToken),
   log: (message, fields) => log.debug(message, fields),
 });
+const recoveryPlanSettlement = new RecoveryPlanSettlement();
 
 /**
  * A Codex reconnect-stall retry is scheduled against the current runtime
@@ -1065,6 +1071,7 @@ function resetAutomaticRecoveryForExplicitStop(sessionId: string): void {
   silentStopAutoResumeGuard.noteSessionReset(sessionId);
   interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
   autoResumeBookkeeping.teardown(sessionId);
+  recoveryPlanSettlement.teardown(sessionId);
 }
 
 function autoResumeAttemptToken(item: AgentInputQueuedMessage): number | null {
@@ -3518,11 +3525,43 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       );
     },
     onTerminal: ({ turnGeneration, event, isCurrentGeneration }) => {
-      if (session.remoteHostId) return;
-      const turnLeaseId = providerTurnLeaseId(session.instanceId, turnGeneration);
       const isSilentStop =
         event.type === 'done' &&
         (event.data as { silentStop?: unknown } | null | undefined)?.silentStop === true;
+      if (event.source === 'codex' && !isSilentStop) {
+        const attemptToken =
+          typeof event.turnAttemptToken === 'number' ? event.turnAttemptToken : null;
+        if (event.type === 'done') {
+          const recoveredPlan = recoveryPlanSettlement.settleDone(
+            session.id,
+            attemptToken,
+            event.data as { cancelled?: unknown; raw?: { id?: unknown; status?: unknown } } | null,
+            'foreground',
+            turnGeneration,
+            isCurrentGeneration,
+          );
+          if (recoveredPlan) persistRecoveredCodexPlanOnDone(session.id, recoveredPlan);
+        } else if (isTerminalTurnErrorEvent(event)) {
+          const errorTurnId =
+            typeof (event.data as { raw?: { id?: unknown } } | null)?.raw?.id === 'string'
+              ? (event.data as { raw: { id: string } }).raw.id
+              : null;
+          recoveryPlanSettlement.settleError(
+            session.id,
+            attemptToken,
+            errorTurnId,
+            'foreground',
+            turnGeneration,
+            isCurrentGeneration,
+          );
+        }
+      }
+      // SSH-backed sessions intentionally skip the local turn-lease bookkeeping
+      // below, but their Codex lifecycle still owns the same durable recovery
+      // plan settlement. Keep this return after the generation-scoped terminal
+      // handling so remote successes seal the exact predecessor row as well.
+      if (session.remoteHostId) return;
+      const turnLeaseId = providerTurnLeaseId(session.instanceId, turnGeneration);
       if (isSilentStop && isCurrentGeneration) {
         // The provider turn ended, but the product turn remains occupied while
         // the bounded auto-resume decision runs. Its exact lease is either
@@ -3584,6 +3623,17 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         backgroundTurnPredatesSessionClear(session.id, event.backgroundTurnStartedAt)
       ) {
         return;
+      }
+      if (event.source === 'codex' && event.type === 'tool_use') {
+        const planEvent = event.data as { toolUseId?: unknown; toolName?: unknown };
+        if (
+          planEvent.toolName === 'update_plan' &&
+          typeof planEvent.toolUseId === 'string' &&
+          (isCodexPlanUpdateClosed(session.id, planEvent.toolUseId) ||
+            recoveryPlanSettlement.ownsPredecessorPlan(session.id, planEvent.toolUseId))
+        ) {
+          return;
+        }
       }
       // 自动续跑的 pending 不能只靠 status(isRunning=true) 清理：Pi/Claude 的
       // terminal-only 路径可能首个事件就是 error。Session 已把 host-owned token
@@ -5035,6 +5085,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
             interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
             autoResumeBookkeeping.teardown(session.id);
+            recoveryPlanSettlement.teardown(session.id);
           }
           // rehydrate / 凭证切换 close-rebuild 窗口:同一逻辑会话进程内重建,
           // 协调器状态应连续。窗口内保留 input boundary(不 abort,避免取消
@@ -10004,8 +10055,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         autoResumeBookkeeping.releasePendingOutcome(sessionId, attemptToken, message.clientId);
       }
     };
+    const checkpoint = message.agentMeta?.recoveryCheckpoint;
     try {
-      return await enqueueDurableWrite(`user:${sessionId}:${message.clientId}`, (ownerScope) => {
+      const persistUserMessage = () => enqueueDurableWrite(`user:${sessionId}:${message.clientId}`, (ownerScope) => {
         // Coordinator accepts can stamp transcriptParentUuid early; this late FIFO
         // fallback covers makerSendTransaction/direct createDbMessage paths.
         const transcriptParentUuid = getLastAssistantTranscriptUuid(sessionId);
@@ -10036,6 +10088,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentKind ? { ...enrichedMessage, agentKind } : enrichedMessage,
           scopedOpts,
         );
+      });
+      const predecessorPlan = checkpoint?.predecessorPlan;
+      if (!predecessorPlan) return await persistUserMessage();
+      const providerGeneration = maker.getSession(sessionId)?.getTurnGeneration();
+      if (typeof providerGeneration !== 'number') {
+        throw new Error('Recovery provider generation unavailable before durable persistence');
+      }
+      return await recoveryPlanSettlement.persistUserBoundary({
+        sessionId,
+        recoveryUserClientId: message.clientId,
+        attemptToken: autoResumeAttemptTokenFromAgentMeta(message.agentMeta),
+        providerGeneration,
+        plan: predecessorPlan,
+        closePlanUpdates: () => closeCodexPlanUpdatesForRecovery(sessionId, predecessorPlan),
+        persist: persistUserMessage,
       });
     } catch (err) {
       releasePendingOutcomeOnFailure();
@@ -11076,9 +11143,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       publishUiContinuation(sessionId, clientId);
     },
-    // 新消息进队 → 作废该会话的待续跑记账(渠道那条旧消息已被别的内容取代)。
-    // 用 enqueue 入口而不是消息文本: 零产出重试重发的是原文, 文本上无从区分,
-    // 而它走 unshift 不经这里, 于是不会把自己的回流作废掉。
+    // 新消息进队 → 作废该会话的渠道待续跑记账(渠道那条旧消息已被别的内容取代)。
+    // 已 dispatch 的计划恢复结算必须继续归属于当前 provider generation；普通 follow-up
+    // 只会排在它后面，不能在这里拆掉。真正未派发的恢复项由下面两个精确 item/clientId
+    // 回调 cancelUndispatched，Stop/关闭则走显式 teardown。
     onUserEnqueue: (sessionId) => {
       autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);
       // The user turn can dispatch before the backoff callback observes that its
@@ -11104,6 +11172,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {
+      if (item.recoveryCheckpoint?.predecessorPlan) {
+        recoveryPlanSettlement.cancelUndispatched(sessionId, item.clientId);
+      }
       discardQueuedAttachmentOwnership(sessionId, item.clientId);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
       // Auto-resume cleanup must run before generic claimed-retry release:
@@ -11177,6 +11248,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     onUndispatchedUserTurn: (sessionId, item, disposition) => {
       // 目标轮落库了却没能 dispatch(取消 / 失败): 记账该立刻还回去, 而不是等超时。
+      if (item.recoveryCheckpoint?.predecessorPlan) {
+        recoveryPlanSettlement.cancelUndispatched(sessionId, item.clientId);
+      }
       publishUiTurnUndispatched(sessionId, item.clientId);
       clearPendingTurnChangeSets(sessionId);
       gitSnapshotCoordinator?.onTurnAbort(sessionId);

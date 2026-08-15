@@ -17,6 +17,7 @@ import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
 import { getMaker } from '../maker-host/index.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import type { Session } from '../../renderer/lib/ccAgent.types';
@@ -417,6 +418,10 @@ export async function forkSessionAtMessage(
   sourceSessionId: string,
   messageClientId: string,
 ): Promise<Session> {
+  // A successful recovery seals its predecessor plan on the main persistence
+  // FIFO. Fork must snapshot after that seal; a fork started before recovery
+  // completion naturally drains without it and keeps the independent plan live.
+  await drainPersistQueue();
   const db = getDbClient().drizzle;
 
   // 1. 读 source session
@@ -682,6 +687,7 @@ export async function forkSessionAtMessage(
 }
 
 export async function forkSessionStripEncrypted(sourceSessionId: string): Promise<Session> {
+  await drainPersistQueue();
   const db = getDbClient().drizzle;
 
   const [source] = await db

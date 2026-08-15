@@ -48,6 +48,7 @@ import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
+import type { RecoveryPredecessorPlan } from '../shared/agentInputQueue.js';
 
 const log = createLogger('messagePersistBroadcaster');
 
@@ -61,6 +62,29 @@ interface AssistantBlock {
 
 const assistantBlocks = new Map<string, AssistantBlock>();
 const clearBoundaryBySession = new Map<string, number>();
+const closedCodexPlanUpdatesBySession = new Map<string, Map<string, string>>();
+
+export function isCodexPlanUpdateClosed(sessionId: string, toolUseId: string): boolean {
+  return closedCodexPlanUpdatesBySession.get(sessionId)?.has(toolUseId) === true;
+}
+
+function rememberCodexPlanTerminalSeal(
+  sessionId: string,
+  toolUseId: string,
+  persistId: string,
+): void {
+  getOrCreateSessionMap(closedCodexPlanUpdatesBySession, sessionId).set(toolUseId, persistId);
+}
+
+/** The predecessor turn is over; its late provider events can no longer mutate this generation. */
+export function closeCodexPlanUpdatesForRecovery(
+  sessionId: string,
+  plan: RecoveryPredecessorPlan,
+): void {
+  if (plan.toolUseId === `plan:${plan.turnId}`) {
+    rememberCodexPlanTerminalSeal(sessionId, plan.toolUseId, plan.clientId);
+  }
+}
 
 export function noteSessionClearBoundary(sessionId: string, clearedAt: string | number | null | undefined): void {
   if (clearedAt === null || clearedAt === undefined) {
@@ -713,6 +737,10 @@ export function onToolUseEvent(
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
   const toolName = typeof data.toolName === 'string' ? data.toolName : '';
 
+  if (toolName === 'update_plan' && toolUseId && isCodexPlanUpdateClosed(sessionId, toolUseId)) {
+    return undefined;
+  }
+
   if (scope === 'background') {
     if (backgroundTurnPredatesSessionClear(sessionId, backgroundTurnStartedAt)) {
       return undefined;
@@ -839,6 +867,7 @@ export function persistCodexPlanOnDone(
   // 终态已定,这份计划行不再需要跨段引用;同时保留最新 input 供同 turn 的
   // 重复 done(罕见)幂等复用。
   planRowMap?.set(toolUseId, { persistId, input: nextInput });
+  if (isSuccessfulTerminal) rememberCodexPlanTerminalSeal(sessionId, toolUseId, persistId);
   enqueueWrite(`codex_plan_done:${sessionId}:${persistId}`, async (ownerScope) => {
     const updated = await updateDbMessageContent(sessionId, persistId, {
       toolUseId,
@@ -851,6 +880,28 @@ export function persistCodexPlanOnDone(
     // Reuse the existing upsert-style row broadcast so a renderer that mounts
     // between `done` and this queued write, plus remote mirrors, receives the
     // durable terminal snapshot instead of keeping its stale local copy.
+    if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+  });
+  return true;
+}
+
+export function persistRecoveredCodexPlanOnDone(
+  sessionId: string,
+  plan: RecoveryPredecessorPlan,
+): boolean {
+  if (!plan.clientId || plan.toolUseId !== `plan:${plan.turnId}` || !Array.isArray(plan.input.plan))
+    return false;
+
+  const terminalPlanAtMs = Date.now();
+  rememberCodexPlanTerminalSeal(sessionId, plan.toolUseId, plan.clientId);
+  enqueueWrite(`codex_recovered_plan_done:${sessionId}:${plan.clientId}`, async (ownerScope) => {
+    const updated = await updateDbMessageContent(sessionId, plan.clientId, {
+      toolUseId: plan.toolUseId,
+      toolName: 'update_plan',
+      input: plan.input,
+      terminalPlanSnapshot: true,
+      terminalPlanAtMs,
+    });
     if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
   });
   return true;
@@ -1671,6 +1722,7 @@ export function clearCodexPlanRowsForSession(sessionId: string): void {
 
 export function clearSessionPersistState(sessionId: string): void {
   clearCodexPlanRowsForSession(sessionId);
+  closedCodexPlanUpdatesBySession.delete(sessionId);
   assistantBlocks.delete(sessionId);
   backgroundTurnPersistStatesBySession.delete(sessionId);
   lastAgentMetaBySession.delete(sessionId);

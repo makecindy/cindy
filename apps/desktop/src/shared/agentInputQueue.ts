@@ -180,10 +180,24 @@ export interface RecoveryCheckpoint {
   contextRatio: number | null;
   progressCount: number;
   createdAt: string;
+  /**
+   * Exact plan generation owned by the interrupted predecessor turn. Main
+   * keeps this internal so a later successful recovery turn can seal that
+   * durable row even when the recovery itself emits no update_plan event.
+   */
+  predecessorPlan?: RecoveryPredecessorPlan;
   recentProgress: Array<{
     role: 'assistant' | 'tool_use' | 'thinking' | 'ask_user' | 'plan_review';
     summary: string;
   }>;
+}
+
+export interface RecoveryPredecessorPlan {
+  clientId: string;
+  toolUseId: string;
+  turnId: string;
+  /** Frozen update_plan input for this generation; step states remain factual. */
+  input: Record<string, unknown>;
 }
 
 export interface AgentInputQueuedMessage {
