@@ -36,6 +36,7 @@ const outboundMocks = vi.hoisted(() => ({
         } & { epoch: number })
       | undefined
   >(() => undefined),
+  drainEvictedOpeners: vi.fn(() => []),
   getAccountEpoch: vi.fn(() => 0),
   recallOwnMessage: vi.fn(async () => true),
   sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
@@ -52,6 +53,7 @@ vi.mock('../outbound.js', () => ({
   deferOpenerConsume: outboundMocks.deferOpenerConsume,
   drainDeferredOpenerConsumes: outboundMocks.drainDeferredOpenerConsumes,
   takeMatchingDeferredOpenerConsume: outboundMocks.takeMatchingDeferredOpenerConsume,
+  drainEvictedOpeners: outboundMocks.drainEvictedOpeners,
   getAccountEpoch: outboundMocks.getAccountEpoch,
   sendInteractive: outboundMocks.sendInteractive,
   sendText: outboundMocks.sendText,

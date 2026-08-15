@@ -199,9 +199,17 @@ export type DeferredOpenerConsume = (
 const MAX_DEFERRED_OPENER_CONSUMES = 50;
 const deferredOpenerConsumes: DeferredOpenerConsume[] = [];
 
+/**
+ * 容量淘汰的开场白卡 id — 条目被挤掉时其 opener 已被原子预留(不可再认领),
+ * 静默删除会留下永久「思考中」卡: 记录 id, 连接恢复排空时撤回。
+ */
+const MAX_EVICTED_OPENERS = 50;
+const evictedOpeners: string[] = [];
+
 /** 账号替换时清空暂存消费(属旧账号的开场白卡, 新账号不需要)。 */
 function clearDeferredOpenerConsumes(): void {
   deferredOpenerConsumes.length = 0;
+  evictedOpeners.length = 0;
 }
 
 export function deferOpenerConsume(
@@ -212,8 +220,17 @@ export function deferOpenerConsume(
 ): void {
   deferredOpenerConsumes.push({ ...entry, epoch: accountEpoch });
   while (deferredOpenerConsumes.length > MAX_DEFERRED_OPENER_CONSUMES) {
-    deferredOpenerConsumes.shift();
+    const evicted = deferredOpenerConsumes.shift();
+    if (evicted) {
+      evictedOpeners.push(evicted.openerId);
+      while (evictedOpeners.length > MAX_EVICTED_OPENERS) evictedOpeners.shift();
+    }
   }
+}
+
+/** 取出被容量淘汰的开场白卡 id(清空), 连接恢复排空时撤回。 */
+export function drainEvictedOpeners(): string[] {
+  return evictedOpeners.splice(0, evictedOpeners.length);
 }
 
 /** 取出全部暂存的消费(清空), 调用方在连接就绪后排空。 */

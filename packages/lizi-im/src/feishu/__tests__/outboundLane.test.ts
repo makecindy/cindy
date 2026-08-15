@@ -344,6 +344,16 @@ describe('feishu outbound lane routing', () => {
     expect(outbound.rearmAnchorToTrigger('g/oc_g/omt_p9')).toBe(false);
   });
 
+  it('暂存队列容量淘汰记录 opener id, 连接恢复时撤回(不留思考卡)', async () => {
+    for (let i = 0; i < 51; i++) {
+      outbound.deferOpenerConsume({ userId: `g/oc_g/omt_ev${i}`, openerId: `om_ev${i}`, markdown: 'x' });
+    }
+    const pending = outbound.drainDeferredOpenerConsumes();
+    expect(pending).toHaveLength(50);
+    const evicted = outbound.drainEvictedOpeners();
+    expect(evicted).toEqual(['om_ev0']);
+  });
+
   it('claimPatchableOpener consumes the registered opener exactly once', async () => {
     outbound.pushReplyAnchor('g/oc_g/omt_p1', 'om_opener');
     outbound.pushPatchableOpener('g/oc_g/omt_p1', 'om_opener');

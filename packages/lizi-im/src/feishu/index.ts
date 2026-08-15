@@ -61,6 +61,16 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     if (!pinnedClient) return;
     const pending = outbound.drainDeferredOpenerConsumes();
     const epoch = outbound.getAccountEpoch();
+    // 容量淘汰的开场白卡: 撤回它们(条目没了, 但卡还在话题里 — 不撤回就是
+    // 永久「思考中」)。撤回经 pinnedClient, 失败只 log。
+    for (const evictedId of outbound.drainEvictedOpeners()) {
+      try {
+        await outbound.recallOwnMessageWith(pinnedClient, evictedId);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.warn(`flushDeferredOpenerConsumes evicted-opener recall failed: ${msg}`);
+      }
+    }
     for (const entry of pending) {
       // 每个条目处理前重新校验账号代次: 前一个条目的 patch await 期间换代
       // 时, 剩余条目不得经新 client 修改旧账号的开场白 — 直接丢弃整批。
