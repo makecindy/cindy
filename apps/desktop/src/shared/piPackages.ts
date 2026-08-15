@@ -95,6 +95,34 @@ export interface PiPackageListResult {
 
 export type PiPackageMutationAction = 'install' | 'remove' | 'update' | 'set-enabled';
 
+/** Relative filesystem sources need a task working directory; Settings has none. */
+export function isRelativeLocalPiPackageSource(value: string): boolean {
+  const source = value.trim();
+  if (!source) return false;
+
+  const fileSource = /^file:(.*)$/i.exec(source);
+  if (fileSource) {
+    const filePath = fileSource[1];
+    if (!filePath || filePath.startsWith('/') || filePath.startsWith('\\\\')) return false;
+    if (/^[a-z]:[/\\]/i.test(filePath)) return false;
+    return true;
+  }
+
+  if (source.startsWith('/') || source.startsWith('\\\\')) return false;
+  if (/^[a-z]:/i.test(source)) return !/^[a-z]:[/\\]/i.test(source);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(source)) return false;
+  if (/^[^/\\\s]+@[^/\\\s]+:.+/.test(source)) return false;
+  if (/^@[^/\\\s]+[/\\][^/\\\s]+(?:@[^/\\\s]+)?$/.test(source)) return false;
+  return source === '.'
+    || source === '..'
+    || source.startsWith('./')
+    || source.startsWith('../')
+    || source.startsWith('.\\')
+    || source.startsWith('..\\')
+    || source.includes('/')
+    || source.includes('\\');
+}
+
 export interface PiPackageMutationRequest {
   action: PiPackageMutationAction;
   source: string;

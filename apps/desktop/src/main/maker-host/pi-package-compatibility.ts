@@ -49,12 +49,7 @@ interface SemverApi {
 
 const semver = createRequire(import.meta.url)('semver') as SemverApi;
 
-const ISSUE_BY_API: Record<PiExtensionUiApi, PiPackageCompatibilityIssue> = {
-  select: 'interactive-dialogs',
-  confirm: 'interactive-dialogs',
-  input: 'interactive-dialogs',
-  editor: 'interactive-dialogs',
-  notify: 'notifications',
+const ISSUE_BY_API: Partial<Record<PiExtensionUiApi, PiPackageCompatibilityIssue>> = {
   setStatus: 'status-display',
   setWorkingMessage: 'status-display',
   setWorkingVisible: 'status-display',
@@ -85,7 +80,17 @@ const ISSUE_BY_API: Record<PiExtensionUiApi, PiPackageCompatibilityIssue> = {
   registerEntryRenderer: 'tui-rendering',
 };
 
-const KNOWN_UI_APIS = new Set<PiExtensionUiApi>(Object.keys(ISSUE_BY_API) as PiExtensionUiApi[]);
+const KNOWN_UI_APIS = new Set<PiExtensionUiApi>([
+  ...(Object.keys(ISSUE_BY_API) as PiExtensionUiApi[]),
+  // RPC exposes these through extension_ui_request. Cindy maps dialogs onto
+  // its cross-device question card and presents notifications in the task
+  // transcript, so they are adapted instead of merely tolerated.
+  'select',
+  'confirm',
+  'input',
+  'editor',
+  'notify',
+]);
 
 type AstNode = {
   type: string;
@@ -115,40 +120,55 @@ export function evaluatePiRuntimeRequirements(
     if (typeof range !== 'string' || !range.trim()) return [];
     const normalizedRange = range.trim();
     const legacyRuntimePackage = LEGACY_PI_RUNTIME_PACKAGES.has(packageName);
-    const canCompare = Boolean(currentVersion && semver.valid(currentVersion) && semver.validRange(normalizedRange));
-    return [{
-      packageName,
-      range: normalizedRange,
-      ...(currentVersion ? { currentVersion } : {}),
-      compatible: legacyRuntimePackage
-        ? false
-        : canCompare
-          ? semver.satisfies(currentVersion!, normalizedRange, { includePrerelease: true })
-          : null,
-      ...(legacyRuntimePackage ? { reason: 'legacy-runtime-package' as const } : {}),
-    }];
+    const canCompare = Boolean(
+      currentVersion && semver.valid(currentVersion) && semver.validRange(normalizedRange),
+    );
+    return [
+      {
+        packageName,
+        range: normalizedRange,
+        ...(currentVersion ? { currentVersion } : {}),
+        compatible: legacyRuntimePackage
+          ? false
+          : canCompare
+            ? semver.satisfies(currentVersion!, normalizedRange, { includePrerelease: true })
+            : null,
+        ...(legacyRuntimePackage ? { reason: 'legacy-runtime-package' as const } : {}),
+      },
+    ];
   });
 }
 
 function isNode(value: unknown): value is AstNode {
-  return Boolean(value) && typeof value === 'object' && typeof (value as { type?: unknown }).type === 'string';
+  return (
+    Boolean(value) &&
+    typeof value === 'object' &&
+    typeof (value as { type?: unknown }).type === 'string'
+  );
 }
 
 function propertyName(node: unknown): string | null {
   if (!isNode(node)) return null;
   if (node.type === 'Identifier' && typeof node.name === 'string') return node.name;
-  if ((node.type === 'StringLiteral' || node.type === 'Literal') && typeof node.value === 'string') return node.value;
+  if ((node.type === 'StringLiteral' || node.type === 'Literal') && typeof node.value === 'string')
+    return node.value;
   return null;
 }
 
 function memberParts(node: unknown): { object: unknown; property: string } | null {
-  if (!isNode(node) || (node.type !== 'MemberExpression' && node.type !== 'OptionalMemberExpression')) return null;
+  if (
+    !isNode(node) ||
+    (node.type !== 'MemberExpression' && node.type !== 'OptionalMemberExpression')
+  )
+    return null;
   const property = propertyName(node.property);
   return property ? { object: node.object, property } : null;
 }
 
 function identifierName(node: unknown): string | null {
-  return isNode(node) && node.type === 'Identifier' && typeof node.name === 'string' ? node.name : null;
+  return isNode(node) && node.type === 'Identifier' && typeof node.name === 'string'
+    ? node.name
+    : null;
 }
 
 function isLikelyContextName(name: string): boolean {
@@ -193,11 +213,17 @@ function isExtensionApiExpression(node: unknown, extensionApiBindings: Set<strin
   return name !== null && extensionApiBindings.has(name);
 }
 
-function isUiExpression(node: unknown, contextBindings: Set<string>, uiBindings: Set<string>): boolean {
+function isUiExpression(
+  node: unknown,
+  contextBindings: Set<string>,
+  uiBindings: Set<string>,
+): boolean {
   const name = identifierName(node);
   if (name && uiBindings.has(name)) return true;
   const member = memberParts(node);
-  return Boolean(member && member.property === 'ui' && isContextExpression(member.object, contextBindings));
+  return Boolean(
+    member && member.property === 'ui' && isContextExpression(member.object, contextBindings),
+  );
 }
 
 function collectChildNodes(node: AstNode): AstNode[] {
@@ -219,11 +245,12 @@ function walk(node: AstNode, visit: (node: AstNode) => void): void {
 
 function functionParams(node: AstNode): AstNode[] {
   if (
-    node.type !== 'FunctionDeclaration'
-    && node.type !== 'FunctionExpression'
-    && node.type !== 'ArrowFunctionExpression'
-    && node.type !== 'ObjectMethod'
-  ) return [];
+    node.type !== 'FunctionDeclaration' &&
+    node.type !== 'FunctionExpression' &&
+    node.type !== 'ArrowFunctionExpression' &&
+    node.type !== 'ObjectMethod'
+  )
+    return [];
   return Array.isArray(node.params) ? node.params.filter(isNode) : [];
 }
 
@@ -241,8 +268,10 @@ function collectBindings(root: AstNode): {
   walk(root, (node) => {
     for (const param of functionParams(node)) {
       const name = identifierName(param);
-      if (name && (isLikelyContextName(name) || hasExtensionContextType(param))) contextBindings.add(name);
-      if (name && (isLikelyExtensionApiName(name) || hasExtensionApiType(param))) extensionApiBindings.add(name);
+      if (name && (isLikelyContextName(name) || hasExtensionContextType(param)))
+        contextBindings.add(name);
+      if (name && (isLikelyExtensionApiName(name) || hasExtensionApiType(param)))
+        extensionApiBindings.add(name);
     }
     if (node.type === 'CallExpression' || node.type === 'OptionalCallExpression') {
       const member = memberParts(node.callee);
@@ -275,10 +304,18 @@ function collectBindings(root: AstNode): {
         return;
       }
       const member = memberParts(init);
-      if (member && isUiExpression(member.object, contextBindings, uiBindings) && KNOWN_UI_APIS.has(member.property as PiExtensionUiApi)) {
+      if (
+        member &&
+        isUiExpression(member.object, contextBindings, uiBindings) &&
+        KNOWN_UI_APIS.has(member.property as PiExtensionUiApi)
+      ) {
         methodBindings.set(id.name, member.property as PiExtensionUiApi);
       }
-      if (member && isExtensionApiExpression(member.object, extensionApiBindings) && KNOWN_UI_APIS.has(member.property as PiExtensionUiApi)) {
+      if (
+        member &&
+        isExtensionApiExpression(member.object, extensionApiBindings) &&
+        KNOWN_UI_APIS.has(member.property as PiExtensionUiApi)
+      ) {
         methodBindings.set(id.name, member.property as PiExtensionUiApi);
       }
       return;
@@ -291,10 +328,16 @@ function collectBindings(root: AstNode): {
       const localName = identifierName(property.value);
       if (!key || !localName) continue;
       if (isContextExpression(init, contextBindings) && key === 'ui') uiBindings.add(localName);
-      if (isUiExpression(init, contextBindings, uiBindings) && KNOWN_UI_APIS.has(key as PiExtensionUiApi)) {
+      if (
+        isUiExpression(init, contextBindings, uiBindings) &&
+        KNOWN_UI_APIS.has(key as PiExtensionUiApi)
+      ) {
         methodBindings.set(localName, key as PiExtensionUiApi);
       }
-      if (isExtensionApiExpression(init, extensionApiBindings) && KNOWN_UI_APIS.has(key as PiExtensionUiApi)) {
+      if (
+        isExtensionApiExpression(init, extensionApiBindings) &&
+        KNOWN_UI_APIS.has(key as PiExtensionUiApi)
+      ) {
         methodBindings.set(localName, key as PiExtensionUiApi);
       }
     }
@@ -304,20 +347,30 @@ function collectBindings(root: AstNode): {
 }
 
 function modeComparison(node: unknown, contextBindings: Set<string>): 'true' | 'false' | null {
-  if (!isNode(node) || (node.type !== 'BinaryExpression' && node.type !== 'LogicalExpression')) return null;
+  if (!isNode(node) || (node.type !== 'BinaryExpression' && node.type !== 'LogicalExpression'))
+    return null;
   if (node.type === 'LogicalExpression') return null;
   const operator = typeof node.operator === 'string' ? node.operator : '';
   const leftMember = memberParts(node.left);
   const rightMember = memberParts(node.right);
-  const leftString = isNode(node.left) && (node.left.type === 'StringLiteral' || node.left.type === 'Literal')
-    && typeof node.left.value === 'string' ? node.left.value : null;
-  const rightString = isNode(node.right) && (node.right.type === 'StringLiteral' || node.right.type === 'Literal')
-    && typeof node.right.value === 'string' ? node.right.value : null;
-  const modeMember = leftMember?.property === 'mode' && isContextExpression(leftMember.object, contextBindings)
-    ? leftMember
-    : rightMember?.property === 'mode' && isContextExpression(rightMember.object, contextBindings)
-      ? rightMember
+  const leftString =
+    isNode(node.left) &&
+    (node.left.type === 'StringLiteral' || node.left.type === 'Literal') &&
+    typeof node.left.value === 'string'
+      ? node.left.value
       : null;
+  const rightString =
+    isNode(node.right) &&
+    (node.right.type === 'StringLiteral' || node.right.type === 'Literal') &&
+    typeof node.right.value === 'string'
+      ? node.right.value
+      : null;
+  const modeMember =
+    leftMember?.property === 'mode' && isContextExpression(leftMember.object, contextBindings)
+      ? leftMember
+      : rightMember?.property === 'mode' && isContextExpression(rightMember.object, contextBindings)
+        ? rightMember
+        : null;
   const value = modeMember === leftMember ? rightString : leftString;
   if (!modeMember || (value !== 'tui' && value !== 'rpc')) return null;
   const equal = operator === '===' || operator === '==';
@@ -328,7 +381,8 @@ function modeComparison(node: unknown, contextBindings: Set<string>): 'true' | '
 }
 
 function collectDetectedApis(root: AstNode): Set<PiExtensionUiApi> {
-  const { contextBindings, extensionApiBindings, uiBindings, methodBindings } = collectBindings(root);
+  const { contextBindings, extensionApiBindings, uiBindings, methodBindings } =
+    collectBindings(root);
   const detected = new Set<PiExtensionUiApi>();
 
   const visit = (node: AstNode, tuiOnly: boolean): void => {
@@ -339,14 +393,24 @@ function collectDetectedApis(root: AstNode): Set<PiExtensionUiApi> {
       if (isNode(node.alternate)) visit(node.alternate, tuiOnly || comparison === 'false');
       return;
     }
-    if (node.type === 'ConditionalExpression' && isNode(node.test) && isNode(node.consequent) && isNode(node.alternate)) {
+    if (
+      node.type === 'ConditionalExpression' &&
+      isNode(node.test) &&
+      isNode(node.consequent) &&
+      isNode(node.alternate)
+    ) {
       const comparison = modeComparison(node.test, contextBindings);
       visit(node.test, tuiOnly);
       visit(node.consequent, tuiOnly || comparison === 'true');
       visit(node.alternate, tuiOnly || comparison === 'false');
       return;
     }
-    if (node.type === 'LogicalExpression' && node.operator === '&&' && isNode(node.left) && isNode(node.right)) {
+    if (
+      node.type === 'LogicalExpression' &&
+      node.operator === '&&' &&
+      isNode(node.left) &&
+      isNode(node.right)
+    ) {
       const comparison = modeComparison(node.left, contextBindings);
       visit(node.left, tuiOnly);
       visit(node.right, tuiOnly || comparison === 'true');
@@ -368,7 +432,11 @@ function collectDetectedApis(root: AstNode): Set<PiExtensionUiApi> {
     }
     if (!tuiOnly) {
       const member = memberParts(node);
-      if (member && isUiExpression(member.object, contextBindings, uiBindings) && member.property === 'theme') {
+      if (
+        member &&
+        isUiExpression(member.object, contextBindings, uiBindings) &&
+        member.property === 'theme'
+      ) {
         detected.add('theme');
       }
     }
@@ -383,9 +451,11 @@ function collectImports(root: AstNode): string[] {
   const imports = new Set<string>();
   walk(root, (node) => {
     if (
-      (node.type === 'ImportDeclaration' || node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration')
-      && isNode(node.source)
-      && typeof node.source.value === 'string'
+      (node.type === 'ImportDeclaration' ||
+        node.type === 'ExportNamedDeclaration' ||
+        node.type === 'ExportAllDeclaration') &&
+      isNode(node.source) &&
+      typeof node.source.value === 'string'
     ) {
       imports.add(node.source.value);
       return;
@@ -395,7 +465,11 @@ function collectImports(root: AstNode): string[] {
     const isDynamicImport = isNode(node.callee) && node.callee.type === 'Import';
     if (calleeName !== 'require' && !isDynamicImport) return;
     const first = Array.isArray(node.arguments) ? node.arguments.find(isNode) : undefined;
-    if (first && (first.type === 'StringLiteral' || first.type === 'Literal') && typeof first.value === 'string') {
+    if (
+      first &&
+      (first.type === 'StringLiteral' || first.type === 'Literal') &&
+      typeof first.value === 'string'
+    ) {
       imports.add(first.value);
     }
   });
@@ -434,16 +508,22 @@ async function readSourceFileBounded(file: string): Promise<{ source: string; by
   }
 }
 
-async function resolveLocalModule(fromFile: string, specifier: string, packageRoot: string): Promise<string | null> {
+async function resolveLocalModule(
+  fromFile: string,
+  specifier: string,
+  packageRoot: string,
+): Promise<string | null> {
   if (!specifier.startsWith('.')) return null;
   const base = path.resolve(path.dirname(fromFile), specifier);
   const candidates = new Set<string>([base]);
   const currentExtension = path.extname(base).toLowerCase();
   if (currentExtension) {
-    for (const extension of LOCAL_MODULE_EXTENSIONS) candidates.add(`${base.slice(0, -currentExtension.length)}${extension}`);
+    for (const extension of LOCAL_MODULE_EXTENSIONS)
+      candidates.add(`${base.slice(0, -currentExtension.length)}${extension}`);
   } else {
     for (const extension of LOCAL_MODULE_EXTENSIONS) candidates.add(`${base}${extension}`);
-    for (const extension of LOCAL_MODULE_EXTENSIONS) candidates.add(path.join(base, `index${extension}`));
+    for (const extension of LOCAL_MODULE_EXTENSIONS)
+      candidates.add(path.join(base, `index${extension}`));
   }
   const rootPrefix = `${packageRoot}${path.sep}`;
   for (const candidate of candidates) {
@@ -508,7 +588,14 @@ export async function analyzePiExtensionCompatibility(
   }
 
   const apis = [...detectedApis].sort();
-  const issues = [...new Set(apis.map((api) => ISSUE_BY_API[api]))].sort();
+  const issues = [
+    ...new Set(
+      apis.flatMap((api) => {
+        const issue = ISSUE_BY_API[api];
+        return issue ? [issue] : [];
+      }),
+    ),
+  ].sort();
   if (incomplete) issues.push('analysis-incomplete');
   return {
     compatibility: issues.some((issue) => issue !== 'analysis-incomplete')

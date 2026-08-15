@@ -15,13 +15,14 @@ import path from 'node:path';
 import { app } from 'electron';
 import matter from 'gray-matter';
 
-import type {
-  PiPackageListResult,
-  PiPackageMutationRequest,
-  PiPackageMutationResult,
-  PiPackageResourceKind,
-  PiPackageResourceView,
-  PiPackageView,
+import {
+  isRelativeLocalPiPackageSource,
+  type PiPackageListResult,
+  type PiPackageMutationRequest,
+  type PiPackageMutationResult,
+  type PiPackageResourceKind,
+  type PiPackageResourceView,
+  type PiPackageView,
 } from '../../shared/piPackages.js';
 import { createLogger } from '../logger.js';
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
@@ -50,10 +51,28 @@ const MAX_ALL_INSPECTION_MS = 10_000;
 const MAX_EXTENSION_FILES = 128;
 const INSPECTION_CACHE_MS = 1_000;
 const STATE_VERSION = 2;
+const changeListeners = new Set<() => void>();
 const PACKAGE_URL_PATTERN = /(?:git:)?[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi;
 const INSTALL_LIFECYCLE_SCRIPTS = new Set([
   'preinstall', 'install', 'postinstall', 'prepare', 'prepublish', 'prepublishOnly',
 ]);
+
+export function onPiPackagesChanged(listener: () => void): () => void {
+  changeListeners.add(listener);
+  return () => changeListeners.delete(listener);
+}
+
+function notifyPiPackagesChanged(): void {
+  for (const listener of changeListeners) {
+    try {
+      listener();
+    } catch (error) {
+      log.warn('Pi package change listener failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
 
 interface PiPackageState {
   version: typeof STATE_VERSION;
@@ -1118,6 +1137,10 @@ function mutationCommandSource(
 
 export async function mutatePiPackage(request: PiPackageMutationRequest): Promise<PiPackageMutationResult> {
   const source = requireSource(request.source);
+  if (request.action === 'install' && isRelativeLocalPiPackageSource(source)) {
+    throw new Error('Relative local Pi package sources require a task working directory');
+  }
+  let mutationMayHaveChangedState = false;
   return enqueueMutation(async () => {
     // A list/runtime resource read that started before this mutation may still
     // be walking package files. Let it finish before Pi rewrites the install
@@ -1126,6 +1149,7 @@ export async function mutatePiPackage(request: PiPackageMutationRequest): Promis
     let affectedSource: string | undefined;
     if (request.action === 'install') {
       if (request.confirmed !== true) throw new Error('Pi package installation requires confirmation');
+      mutationMayHaveChangedState = true;
       // Reinstalling an existing source can replace executable code. Revoke
       // before invoking Pi so even a partially failed install cannot inherit a
       // stale approval on the next runtime.
@@ -1144,6 +1168,7 @@ export async function mutatePiPackage(request: PiPackageMutationRequest): Promis
         ...(affectedSource ? sourceAliases(affectedSource) : []),
       ]);
     } else if (request.action === 'remove') {
+      mutationMayHaveChangedState = true;
       const previous = await findAffectedInspectedPackage(await inspectAllPackages(), source);
       await runPiPackageCommand([
         'remove',
@@ -1161,6 +1186,7 @@ export async function mutatePiPackage(request: PiPackageMutationRequest): Promis
         approvedExtensionSources: state.approvedExtensionSources.filter((item) => !removedSources.has(item)),
       });
     } else if (request.action === 'update') {
+      mutationMayHaveChangedState = true;
       const previous = await findAffectedInspectedPackage(await inspectAllPackages(), source);
       await revokeExtensionApproval([
         ...sourceAliases(source),
@@ -1212,6 +1238,18 @@ export async function mutatePiPackage(request: PiPackageMutationRequest): Promis
     const affectedPackage = affectedSource
       ? findAffectedPiPackage(result.packages, affectedSource)
       : findAffectedPiPackage(result.packages, source);
-    return { ...result, changed: true, ...(affectedPackage ? { affectedPackage } : {}) };
+    const mutationResult = { ...result, changed: true, ...(affectedPackage ? { affectedPackage } : {}) };
+    notifyPiPackagesChanged();
+    return mutationResult;
+  }).catch((error) => {
+    // install/update/remove may already have changed Pi's package tree or
+    // Cindy's approval state before the CLI reports failure. Refresh every
+    // open Settings view and command palette instead of leaving a stale
+    // enabled package visible until the next manual reload.
+    if (mutationMayHaveChangedState) {
+      invalidateInspectionCache();
+      notifyPiPackagesChanged();
+    }
+    throw error;
   });
 }

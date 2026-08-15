@@ -198,6 +198,10 @@ describe('cindy-bridge extension source', () => {
       "event.toolName === 'bash' && commandMutatesPiPackages",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('Use cindy_pi_extension');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      'delete process.env[PI_PACKAGE_MANAGEMENT_ENV]',
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('token: piPackageManagementToken');
   });
 
   it('checks the Review deny-by-default boundary before ordinary permission handling', () => {

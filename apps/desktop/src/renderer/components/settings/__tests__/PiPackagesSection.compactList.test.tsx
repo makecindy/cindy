@@ -30,7 +30,8 @@ function packageView(index: number): PiPackageView {
     resources: [{
       kind: 'extension',
       name: `extensions/index-${index}.ts`,
-      compatibility: 'supported',
+      compatibility: index === 6 ? 'partial' : 'supported',
+      ...(index === 6 ? { compatibilityIssues: ['requires unsupported Pi UI'] } : {}),
     }],
   };
 }
@@ -44,6 +45,7 @@ describe('PiPackagesSection compact installed list', () => {
           packages: Array.from({ length: 6 }, (_, index) => packageView(index + 1)),
         })),
         mutatePiPackage: vi.fn(),
+        onPiPackagesChanged: vi.fn(() => () => undefined),
       },
     };
   });
@@ -61,6 +63,7 @@ describe('PiPackagesSection compact installed list', () => {
     });
     expect(screen.getAllByRole('switch')).toHaveLength(6);
     expect(screen.getAllByRole('button', { name: 'settings.piPackages.showDetails' })).toHaveLength(6);
+    expect(screen.getByLabelText('settings.piPackages.rowStatus.noticeCount')).toBeTruthy();
     expect(screen.queryByText('settings.piPackages.status.extensionSupported')).toBeNull();
     expect(screen.queryByText('npm:sample-extension-1')).toBeNull();
 

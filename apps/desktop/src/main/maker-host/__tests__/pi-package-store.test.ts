@@ -19,12 +19,29 @@ import { findAffectedPiPackage, parsePiPackageListOutput } from '../pi-package-s
 import { evaluatePiRuntimeRequirements } from '../pi-package-compatibility.js';
 import {
   hasPiPackageCompatibilityWarning,
+  isRelativeLocalPiPackageSource,
   mergePiPackageCommands,
   shouldShowPiPackagePostMutationNotice,
   shouldListPiPackageCommands,
 } from '../../../shared/piPackages.js';
 
 describe('Pi package list parser', () => {
+  it('distinguishes task-relative paths from registry and Git package sources', () => {
+    expect(isRelativeLocalPiPackageSource('./extension.ts')).toBe(true);
+    expect(isRelativeLocalPiPackageSource('../extensions/context-mode')).toBe(true);
+    expect(isRelativeLocalPiPackageSource('extensions/context-mode')).toBe(true);
+    expect(isRelativeLocalPiPackageSource('file:./extension.ts')).toBe(true);
+    expect(isRelativeLocalPiPackageSource('file:../extensions/context-mode')).toBe(true);
+    expect(isRelativeLocalPiPackageSource('C:extensions\\context-mode')).toBe(true);
+    expect(isRelativeLocalPiPackageSource('file:///absolute/extensions/context-mode')).toBe(false);
+    expect(isRelativeLocalPiPackageSource('C:\\extensions\\context-mode')).toBe(false);
+    expect(isRelativeLocalPiPackageSource('context-mode')).toBe(false);
+    expect(isRelativeLocalPiPackageSource('@scope/context-mode')).toBe(false);
+    expect(isRelativeLocalPiPackageSource('npm:context-mode')).toBe(false);
+    expect(isRelativeLocalPiPackageSource('git:https://example.com/org/repo.git')).toBe(false);
+    expect(isRelativeLocalPiPackageSource('git@example.com:org/repo.git')).toBe(false);
+  });
+
   it('parses Pi user package sources and installed paths without accepting headings', () => {
     expect(parsePiPackageListOutput([
       'User packages:',

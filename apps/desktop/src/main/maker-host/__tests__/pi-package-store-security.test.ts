@@ -177,6 +177,57 @@ describe('Pi package executable-code boundary', () => {
       .toContain(source);
   });
 
+  it('rejects task-relative local paths at the context-free Settings boundary', async () => {
+    const store = await import('../pi-package-store.js');
+
+    await expect(store.mutatePiPackage({
+      action: 'install',
+      source: './extensions/context-mode',
+      confirmed: true,
+    })).rejects.toThrow(/working directory/);
+    expect(runtime.spawns).toEqual([]);
+  });
+
+  it('notifies open settings and command palettes after a successful mutation', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+
+    await store.mutatePiPackage({ action: 'install', source, confirmed: true });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    await store.mutatePiPackage({ action: 'update', source });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes open settings when a failed update has already revoked approval', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    await store.mutatePiPackage({
+      action: 'set-enabled',
+      source,
+      enabled: true,
+      confirmed: true,
+    });
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+
+    runtime.exitCode = 1;
+    runtime.stderr = 'update failed';
+    await expect(store.mutatePiPackage({ action: 'update', source }))
+      .rejects.toThrow(/update failed/);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    runtime.exitCode = 0;
+    runtime.stderr = '';
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+    });
+    unsubscribe();
+  });
+
   it('revokes approval when Pi normalizes an absolute local package source', async () => {
     const { root } = await createPackage();
     const normalizedSource = path.relative(

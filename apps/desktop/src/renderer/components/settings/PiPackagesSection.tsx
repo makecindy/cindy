@@ -10,7 +10,10 @@ import type {
   PiPackageRuntimeRequirement,
   PiPackageView,
 } from '@/../shared/piPackages';
-import { shouldShowPiPackagePostMutationNotice } from '@/../shared/piPackages';
+import {
+  isRelativeLocalPiPackageSource,
+  shouldShowPiPackagePostMutationNotice,
+} from '@/../shared/piPackages';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -132,6 +135,10 @@ export function PiPackagesSection() {
     void load();
   }, []);
 
+  useEffect(() => window.electronAPI.maker.onPiPackagesChanged(() => {
+    void load();
+  }), []);
+
   const runMutation = async (
     action: PiPackageMutationAction,
     packageSource: string,
@@ -211,7 +218,13 @@ export function PiPackagesSection() {
             <button
               type="button"
               disabled={!available || !installSource || Boolean(busy)}
-              onClick={() => setPendingInstall(installSource)}
+              onClick={() => {
+                if (isRelativeLocalPiPackageSource(installSource)) {
+                  toast.error(t('settings.piPackages.relativePathUnsupported'));
+                  return;
+                }
+                setPendingInstall(installSource);
+              }}
               className={cn(ACTION_CLASS, 'shrink-0')}
             >
               <Puzzle size={14} />
@@ -266,9 +279,18 @@ export function PiPackagesSection() {
                     {!packageManageable
                       ? t('settings.piPackages.rowStatus.unmanageable')
                       : noticeCount > 0
-                        ? t('settings.piPackages.rowStatus.notices', { count: noticeCount })
+                        ? t('settings.piPackages.rowStatus.noticeCount', { count: noticeCount })
                         : t('settings.piPackages.rowStatus.compatible')}
                   </span>
+                  {packageManageable && noticeCount > 0 && (
+                    <span
+                      className="flex shrink-0 items-center text-[var(--warning-fg)] xl:hidden"
+                      aria-label={t('settings.piPackages.rowStatus.noticeCount', { count: noticeCount })}
+                      title={t('settings.piPackages.rowStatus.noticeCount', { count: noticeCount })}
+                    >
+                      <AlertTriangle size={14} aria-hidden />
+                    </span>
+                  )}
                   <Switch
                     checked={pkg.enabled}
                     disabled={packageBusy || !packageManageable}

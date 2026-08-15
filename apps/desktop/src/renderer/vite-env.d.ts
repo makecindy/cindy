@@ -4856,6 +4856,8 @@ interface ElectronAPI {
       request: import('../shared/piPackages').PiPackageMutationRequest,
     ) => Promise<import('../shared/piPackages').PiPackageMutationResult>;
 
+    onPiPackagesChanged: (handler: () => void) => () => void;
+
     onDesktopCommandTriggered: (
       handler: (payload: {
         command: string;

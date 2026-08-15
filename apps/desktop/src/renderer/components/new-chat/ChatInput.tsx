@@ -3571,6 +3571,9 @@ export function ChatInput({
   useEffect(() => {
     reloadSlashCommands();
   }, [reloadSlashCommands]);
+  useEffect(() => window.electronAPI.maker.onPiPackagesChanged(() => {
+    reloadSlashCommands({ forceReload: true });
+  }), [reloadSlashCommands]);
   // Slash 指令与 $意识一致:doc 保持可逐字编辑的普通文本,完整命中当前 roster
   // 时才由 decoration 显示确认胶囊。异步 roster 刷新不进入 keystroke 热路径。
   useEffect(() => {

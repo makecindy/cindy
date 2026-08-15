@@ -7,7 +7,9 @@ import { analyzePiExtensionCompatibility } from '../pi-package-compatibility.js'
 
 const roots: string[] = [];
 
-async function makePackage(files: Record<string, string>): Promise<{ root: string; entry: string }> {
+async function makePackage(
+  files: Record<string, string>,
+): Promise<{ root: string; entry: string }> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-compat-'));
   roots.push(root);
   for (const [relative, source] of Object.entries(files)) {
@@ -42,18 +44,22 @@ describe('Pi extension compatibility parser', () => {
 
     await expect(analyzePiExtensionCompatibility(pkg.entry, pkg.root)).resolves.toMatchObject({
       compatibility: 'partial',
-      compatibilityIssues: ['interactive-dialogs', 'status-display'],
+      compatibilityIssues: ['status-display'],
       detectedApis: ['select', 'setStatus'],
       scannedFiles: 2,
     });
   });
 
-  it('does not warn for TUI calls guarded by ctx.mode while still reporting RPC-path calls', async () => {
+  it('does not warn for TUI-only calls or RPC UI requests that Cindy adapts', async () => {
     const pkg = await makePackage({
       'index.ts': `
         export default function setup(pi: any) {
           pi.on('session_start', async (_event: unknown, runtime) => {
             if (runtime.mode === 'tui') await runtime.ui.custom(() => undefined);
+            await runtime.ui.select('Pick', ['a', 'b']);
+            await runtime.ui.confirm('Confirm', 'Proceed?');
+            await runtime.ui.input('Name');
+            await runtime.ui.editor('Edit', 'draft');
             runtime.ui.notify('loaded');
           });
         }
@@ -61,9 +67,9 @@ describe('Pi extension compatibility parser', () => {
     });
 
     const result = await analyzePiExtensionCompatibility(pkg.entry, pkg.root);
-    expect(result.compatibility).toBe('partial');
-    expect(result.detectedApis).toEqual(['notify']);
-    expect(result.compatibilityIssues).toEqual(['notifications']);
+    expect(result.compatibility).toBe('supported');
+    expect(result.detectedApis).toEqual(['confirm', 'editor', 'input', 'notify', 'select']);
+    expect(result.compatibilityIssues).toEqual([]);
   });
 
   it('ignores comments and string literals that only mention Pi UI APIs', async () => {
