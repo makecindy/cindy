@@ -371,11 +371,26 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         }
         this.log.warn(`sendWithDeferredOpenerConsume patch failed (recalling reserved opener): ${msg}`);
         await outbound.recallOwnMessageWith(clientAtTake ?? outbound.getBoundClient()!, entry.openerId);
+        // 撤回 await 期间也可能再次断线 — 发送前复查代次(跨账号红线)。
+        if (outbound.getAccountEpoch() !== epoch) {
+          this.log.info('sendWithDeferredOpenerConsume: account changed during recall — dropping entry');
+          throw err;
+        }
         outbound.rearmAnchorToTrigger(userId);
         // fallthrough: 回落正常发送
       }
     }
-    return send();
+    try {
+      return await send();
+    } catch (sendErr) {
+      // 最终兜底在撤回后再次断线: 条目已从队列移除 — 代次未变时重新入队,
+      // 下一次 connected 排空重试, 终态不因一次失败永久丢失。
+      if (entry && outbound.getAccountEpoch() === epoch && !outbound.getBoundClient()) {
+        this.log.warn('sendWithDeferredOpenerConsume final send failed in reconnect window (re-deferred)');
+        outbound.deferOpenerConsume(entry);
+      }
+      throw sendErr;
+    }
   }
 
   updateInteractiveCard(messageId: string, spec: InteractiveCardSpec): Promise<void> {
