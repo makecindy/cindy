@@ -1713,6 +1713,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     if (opts.routingTransform && contentType.toLowerCase().startsWith('application/json')) {
       try {
         rawParsed = JSON.parse(rawBody.toString('utf8'));
+      } catch {
+        // Some native clients (notably PI's ChatGPT adapter) send compressed
+        // JSON while keeping content-type=application/json. Header/path based
+        // routing must still run; the selected local handler receives rawBody
+        // and can forward it byte-for-byte without parsing.
+      }
+      try {
         const maybeDecision = opts.routingTransform(rawParsed, requestCtx);
         decision = isPromiseLike<RoutingDecision | null>(maybeDecision)
           ? await maybeDecision

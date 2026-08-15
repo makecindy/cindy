@@ -425,6 +425,83 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(seenUrl).toBe('https://api.deepseek.com/chat/completions');
   });
 
+  it('仅选择 glm-5.3 时 saved 探测使用模型级 Responses 路由', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'glm-responses-only',
+        name: 'GLM Responses Only',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+            wireProtocol: 'openai-chat',
+            requestPath: '/legacy/chat',
+            models: [
+              {
+                id: 'glm-5.3',
+                name: 'GLM-5.3',
+                route: {
+                  baseUrl: 'https://open.bigmodel.cn/api/v1',
+                  wireProtocol: 'openai-responses',
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ]);
+    setDiagnosticsKeyReader(() => 'glm-key');
+
+    expect(resolveSavedProbeSpec('glm-responses-only', 'codex')).toMatchObject({
+      baseUrl: 'https://open.bigmodel.cn/api/v1',
+      modelId: 'glm-5.3',
+      wireProtocol: 'openai-responses',
+      requestPath: undefined,
+    });
+    let seenUrl = '';
+    await testProviderConnection(
+      { kind: 'saved', providerId: 'glm-responses-only', agent: 'codex' },
+      async (url) => {
+        seenUrl = String(url);
+        return fakeResponse(200, '{}');
+      },
+    );
+    expect(seenUrl).toBe('https://open.bigmodel.cn/api/v1/responses');
+  });
+
+  it('无模型级 route 的 glm-5.2 saved 探测继续使用 runtime V4 Chat 路由', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'glm-chat-only',
+        name: 'GLM Chat Only',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+            wireProtocol: 'openai-chat',
+            requestPath: '/chat/completions',
+            models: [{ id: 'glm-5.2', name: 'GLM-5.2' }],
+          },
+        },
+      }),
+    ]);
+    setDiagnosticsKeyReader(() => 'glm-key');
+
+    expect(resolveSavedProbeSpec('glm-chat-only', 'codex')).toMatchObject({
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      modelId: 'glm-5.2',
+      wireProtocol: 'openai-chat',
+      requestPath: '/chat/completions',
+    });
+    let seenUrl = '';
+    await testProviderConnection(
+      { kind: 'saved', providerId: 'glm-chat-only', agent: 'codex' },
+      async (url) => {
+        seenUrl = String(url);
+        return fakeResponse(200, 'data: [DONE]\n\n');
+      },
+    );
+    expect(seenUrl).toBe('https://open.bigmodel.cn/api/coding/paas/v4/chat/completions');
+  });
+
   it('saved 探测沿用自定义供应商的精确请求路径', async () => {
     setCustomProviders([
       buildUserProvider({

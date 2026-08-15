@@ -78,6 +78,16 @@ export interface PiTransport {
    * 进程(对齐 CC/Codex daemon 生命周期)。普通(非 daemon)transport 不设。
    */
   killRemoteSession?: () => Promise<void>;
+
+  /**
+   * (可选)远端会话按需建立 Desktop host loopback provider 的 SSH reverse-forward。
+   * 启动时只为当前 provider 建隧道；会话内 setModel 切到其它 host-backed provider
+   * 时先调用本钩子，成功后才允许更新路由快照或发送 set_model RPC。
+   */
+  ensureHostProxyForward?: (spec: {
+    localUrl: string;
+    remotePort: number;
+  }) => Promise<void>;
 }
 
 export interface PiStdioTransportOptions {

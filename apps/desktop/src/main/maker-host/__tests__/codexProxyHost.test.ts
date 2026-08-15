@@ -3863,7 +3863,11 @@ describe('codex proxy host', () => {
 
   it('normalizes implicit-source xAI Codex requests before forwarding', async () => {
     const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+    const { setActiveCatalog, setXaiDiscoveredModels } = await import('../active-catalog.js');
     const { clearSessionProvider } = await import('../session-provider-store.js');
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXaiDiscoveredModels([{ id: 'xai/grok-code-fast' }]);
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
       url: 'http://127.0.0.1:43210',
       dispose: vi.fn(async () => undefined),
@@ -3872,33 +3876,38 @@ describe('codex proxy host', () => {
     host.registerComposed('session-xai-implicit', 'thread-xai-implicit', 'PRODUCT_PROMPT');
     clearSessionProvider('session-xai-implicit');
 
-    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    let current: unknown = {
-      model: 'xai/grok-code-fast',
-      instructions: 'BASE_PROMPT\n\nPRODUCT_PROMPT',
-      reasoning: { effort: 'high', summary: 'auto' },
-      input: [
-        { type: 'reasoning', encrypted_content: 'gAAA' },
-        { role: 'user', content: 'hello' },
-      ],
-    };
-    const ctx = {
-      method: 'POST',
-      url: '/responses',
-      headers: { 'thread-id': 'thread-xai-implicit' },
-    };
-    for (const transform of transforms) {
-      const next = transform(current, ctx);
-      if (next !== null && next !== undefined) current = next;
-    }
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      let current: unknown = {
+        model: 'xai/grok-code-fast',
+        instructions: 'BASE_PROMPT\n\nPRODUCT_PROMPT',
+        reasoning: { effort: 'high', summary: 'auto' },
+        input: [
+          { type: 'reasoning', encrypted_content: 'gAAA' },
+          { role: 'user', content: 'hello' },
+        ],
+      };
+      const ctx = {
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-xai-implicit' },
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
 
-    expect(current).toEqual({
-      model: 'grok-code-fast',
-      input: [
-        { type: 'message', role: 'system', content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
-        { type: 'message', role: 'user', content: 'hello' },
-      ],
-    });
+      expect(current).toEqual({
+        model: 'grok-code-fast',
+        input: [
+          { type: 'message', role: 'system', content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
+          { type: 'message', role: 'user', content: 'hello' },
+        ],
+      });
+    } finally {
+      setXaiDiscoveredModels(null);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
   });
 
   it('leaves non-xai/ bodies untouched in explicit xAI sessions (transform 与路由 scope 门同源, #890 review)', async () => {

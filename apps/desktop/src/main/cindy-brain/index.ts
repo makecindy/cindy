@@ -306,7 +306,11 @@ import {
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-access-policy.js';
-import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
+import {
+  getGrokAccessToken,
+  getGrokOAuthCredentialGeneration,
+  hasGrokOAuthLogin,
+} from '../maker-host/grok-oauth-login.js';
 import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-host.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
@@ -349,6 +353,7 @@ import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
 import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
+import { createXaiVideoProvider } from '../cindy-proxy-media/video/providers/xai.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
@@ -3043,11 +3048,45 @@ export function getGhostScheduleSlot(): GhostScheduleSlot {
  * 生成走主机统一图片通道(art 底层客户端,与聊天画图同一条付费链路);
  * 产物落媒体总仓(blob + 账本,出生=该意识),意识只拿到指纹字符串。
  */
+function getVideoProviderRegistry() {
+  const registry = getCindyProxyMediaService().backend.videoRegistry;
+  if (!registry) return null;
+  const xaiAliases =
+    getActiveCatalog()
+      .providers.find((provider) => provider.id === 'xai')
+      ?.videoModels?.map((model) => model.id) ?? [];
+  if (xaiAliases.some((alias) => !registry.hasAlias(alias))) {
+    registry.registerOrExtend(
+      createXaiVideoProvider({
+        modelAliases: xaiAliases,
+        hasOAuthLogin: () => hasGrokOAuthLogin(),
+        getAccessToken: () => getGrokAccessToken(),
+        getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
+        getOwnerScopeKey: () => activeOwnerScopeKey(),
+        isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
+        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+        beforeDispatch: (model) => assertMediaModelStillEnabled('video', model),
+        onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
+      }),
+    );
+  }
+  return registry;
+}
+
+/** 视频目录的 provider 级就绪判据；未知来源绝不投影成可选型号。 */
+function isVideoCatalogProviderReady(providerId: string): boolean {
+  if (providerId === 'xd') return isXdGatewayProviderReady(providerId);
+  if (providerId === 'xai') {
+    return !isAppSessionBoundaryPending() && hasGrokOAuthLogin();
+  }
+  return false;
+}
+
 /**
  * 当前媒体能力配置(图像/视频同一套推导)——与会话模型列表**同一获取
  * 来源**:providers.json 运行时目录(getActiveCatalog,OSS 热更 + 内置兜底),
- * 汇总各供应商的 imageModels/imageDefaults 或 videoModels/videoDefaults
- * (今天只有 xd 网关一家有)。清单与默认/档位选型全部来自目录,主机代码零
+ * 汇总各供应商的 imageModels/imageDefaults 或 videoModels/videoDefaults。
+ * 清单与默认/档位选型全部来自目录,主机代码零
  * 模型字面量;派生规则见 cindyMediaCatalog.ts。
  *
  * 目录里没有该类目的任何模型(极端:远端目录带了 xd 段却不带媒体清单)→
@@ -3074,18 +3113,19 @@ function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConf
         // (PR #1707 review)。滤掉后按既有语义降级:被滤条目不占 first-wins,
         // 目录默认指向它时回落清单首项;整份清单都不认识才是空清单 → NO_CANDIDATE。
         // 执行侧那道防御保留 —— 它管的是这里与执行层之间的窗口。
-        (kind === 'embed' && !isKnownEmbeddingModel(modelId)),
+        (kind === 'embed' && !isKnownEmbeddingModel(modelId)) ||
+        // 视频目录可能比当前客户端通道先热更。执行 registry 不认识的型号
+        // 必须先过滤，不能把“目录有”冒充成“这版客户端能下单”。
+        (kind === 'video' && !(getVideoProviderRegistry()?.hasAlias(modelId) ?? false)),
       // 执行通道凭证就绪过滤(未就绪的来源整段不进白名单,见 imageChannelRegistry
-      // 头注)。图像走 registry;视频通道今天只有 xd 一家、不经 registry,但同样要求
-      // 网关能力在场 —— 未登录本地模式(canUseCindyGateway=false)下 xd 的视频型号
-      // 不能进清单,否则用户在本地模式钉选/点名视频型号就是"可选但必失败"
-      // (2026-07 review:与图像的就绪语义对齐)。
-      // 向量与视频同口径:通道只有 xd 一家、不经 registry,但要求账号网关能力与
-      // model-access 随凭据成对下发的 endpoint 同时在场。登录同步完成前 / 存量
-      // 手填 key 没有配套 endpoint 时,那种型号不该出现在清单里让用户钉选。
+      // 头注)。视频按目录 provider 归属分别检查：xd 要求账号网关能力与 endpoint
+      // 同时在场，xai 要求 SuperGrok OAuth 已连接；未知来源 fail closed。
+      // 向量仍只有 xd 一家执行通道。
       kind === 'image'
         ? (providerId) => getImageChannelRegistry().isProviderReady(providerId)
-        : isXdGatewayProviderReady,
+        : kind === 'video'
+          ? isVideoCatalogProviderReady
+          : isXdGatewayProviderReady,
       // 编辑就绪过滤:仅支持生成的来源(supportsEdit: false)的模型不进编辑清单,
       // 防用户把该型号钉到 image.edit 偏好后在 editImage 路径拿到确定性 400。
       kind === 'image'
@@ -3168,7 +3208,7 @@ async function runGhostVideo(
     refMode?: GhostVideoRefMode;
   } & CindyVideoParams,
 ): Promise<{ buffer: Buffer; mimeType: string; videoParams: GhostVideoResultParams }> {
-  const registry = getCindyProxyMediaService().backend.videoRegistry;
+  const registry = getVideoProviderRegistry();
   if (!registry || !registry.hasAny()) {
     throw new Error('视频能力不可用:主机未配置视频通道');
   }
@@ -3197,7 +3237,7 @@ async function runGhostVideo(
  */
 function getGhostVideoCapabilities(model: string): CindyVideoCapabilities | null {
   try {
-    const registry = getCindyProxyMediaService().backend.videoRegistry;
+    const registry = getVideoProviderRegistry();
     if (!registry || !registry.hasAny()) return null;
     const caps = registry.resolveByAlias(model).provider.capabilities;
     return {
@@ -3267,6 +3307,7 @@ function getImageChannelRegistry(): ImageChannelRegistry {
       createXaiImageChannel({
         hasOAuthLogin: () => hasGrokOAuthLogin(),
         getAccessToken: () => getGrokAccessToken(),
+        getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
         getOwnerScopeKey: () => activeOwnerScopeKey(),
         isOwnerBoundaryPending: () => isGhostBoundaryPending(),
         fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
@@ -3597,7 +3638,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       // registry 缺席/型号查无 → null,cindySlot 用自己的缺省。
       videoExpectedSeconds: (model) => {
         try {
-          const registry = getCindyProxyMediaService().backend.videoRegistry;
+          const registry = getVideoProviderRegistry();
           if (!registry || !registry.hasAny()) return null;
           return registry.resolveByAlias(model).expectedSeconds;
         } catch {

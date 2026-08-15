@@ -761,6 +761,85 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
     });
   });
 
+  it('同一 GLM key 下普通模型走 V4 Chat，glm-5.3 走 V1 Responses', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'zhipu-plan',
+        name: 'Zhipu Plan',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+            wireProtocol: 'openai-chat',
+            requestPath: '/chat/completions',
+            models: [
+              { id: 'glm-5.2', name: 'GLM-5.2' },
+              {
+                id: 'glm-5.3',
+                name: 'GLM-5.3',
+                route: {
+                  baseUrl: 'https://open.bigmodel.cn/api/v1',
+                  wireProtocol: 'openai-responses',
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'glm-key');
+    setSessionProvider('s-user', 'zhipu-plan');
+
+    expect(getSessionRoutingDescriptor('s-user', 'codex', 'glm-5.2')).toMatchObject({
+      upstream: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      wireProtocol: 'openai-chat',
+      requestPath: '/chat/completions',
+    });
+    expect(getSessionRoutingDescriptor('s-user', 'codex', 'glm-5.3')).toEqual(
+      expect.objectContaining({
+        upstream: 'https://open.bigmodel.cn/api/v1',
+        wireProtocol: 'openai-responses',
+        authStrategy: 'api-key-header',
+      }),
+    );
+    expect(getSessionRoutingDescriptor('s-user', 'codex', 'glm-5.3')).not.toHaveProperty(
+      'requestPath',
+    );
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'glm-5.3')).toEqual({
+      headerOverride: { authorization: 'Bearer glm-key' },
+      upstreamOverride: 'https://open.bigmodel.cn/api/v1',
+      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+    });
+  });
+
+  it('routes a legacy custom xai row independently from the built-in SuperGrok source', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'xai',
+        name: 'Private xAI-compatible endpoint',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://private-xai.example/v1',
+            models: [{ id: 'private-grok', name: 'Private Grok' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((id, agent) =>
+      id === 'xai' && agent === 'codex' ? 'legacy-custom-key' : null,
+    );
+    setSessionProvider('s-user', 'custom:xai');
+
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'xai')).toBe(true);
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'custom:xai')).toBe(
+      true,
+    );
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY)).toEqual({
+      headerOverride: { authorization: 'Bearer legacy-custom-key' },
+      upstreamOverride: 'https://private-xai.example/v1',
+      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+    });
+  });
+
   it('跨供应商切换 pending 时不把目标模型发给旧供应商', async () => {
     setCustomProviders([
       buildUserProvider({
@@ -921,7 +1000,6 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
     });
     expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'gpt-5.5')).toBeNull();
   });
-
   it('blocks new routes while endpoint and key switch as one logical mutation', async () => {
     setCustomProviders([
       buildUserProvider({

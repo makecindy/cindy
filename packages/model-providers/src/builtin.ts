@@ -25,7 +25,7 @@ import catalogJson from '../catalog/providers.json' with { type: 'json' };
 import modelRegistryJson from '../catalog/model-registry.json' with { type: 'json' };
 
 import type { ModelRegistry } from './modelAccessBean.js';
-import type { Catalog, Provider } from './types.js';
+import type { Catalog, CatalogModel, Provider } from './types.js';
 
 /** 仓内 v2 目录文件(xai 清单 + presets;同一文件发布到 OSS `cfg/providers.json`)。 */
 const catalogFile = catalogJson as unknown as Catalog;
@@ -64,6 +64,14 @@ if (!xaiRaw) {
   throw new Error('[model-providers] catalog/providers.json missing builtin provider "xai"');
 }
 const xaiFromCatalog = withVerifiedStaticWindows(xaiRaw);
+const withoutPiApi = (model: CatalogModel): CatalogModel => {
+  if (model.piApi === undefined) return model;
+  const rest = { ...model };
+  delete rest.piApi;
+  return rest;
+};
+const xaiClaudeModels = xaiFromCatalog.models['claude-code'] ?? [];
+const xaiCodexModels = xaiFromCatalog.models.codex ?? [];
 
 /** xAI 静态清单同时供 Claude bridge、Codex 与 Pi bridge 使用。 */
 const XAI_PROVIDER: Provider = {
@@ -77,7 +85,11 @@ const XAI_PROVIDER: Provider = {
   },
   models: {
     ...xaiFromCatalog.models,
-    pi: xaiFromCatalog.models.pi ?? xaiFromCatalog.models['claude-code'] ?? [],
+    'claude-code': xaiClaudeModels.map(withoutPiApi),
+    codex: xaiCodexModels.map(withoutPiApi),
+    // providers.json 的 piApi 只属于 Pi；源文件仍与 xAI 静态根同表维护，
+    // bundled 投影在这里拆开，避免协议注解污染 Claude/Codex 快照契约。
+    pi: xaiFromCatalog.models.pi ?? xaiClaudeModels,
   },
 };
 
