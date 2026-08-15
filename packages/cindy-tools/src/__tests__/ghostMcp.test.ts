@@ -835,6 +835,30 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
     expect(String(payload.hint)).toContain("markdown");
   });
 
+  it("xdt_media_descriptions 透传但不被 hoist(视觉桥描述不触发图卡渲染)", async () => {
+    const result = await handleGhostCall(
+      fakeDeps({
+        callGhostTool: async () => ({
+          ok: true,
+          result: { done: true },
+          producedMedia: ["cindy-media://blobs/abc.png"],
+          xdt_media_descriptions: [
+            { url: "cindy-media://blobs/abc.png", description: "一张截图" },
+          ],
+        }),
+      }),
+      { ghost_id: "xd-feishu", tool: "call_tool", args: {} },
+    );
+    const payload = parsePayload(result);
+    // 描述字段原样透传给模型(纯文本模型靠它看到图)。
+    expect(payload.xdt_media_descriptions).toEqual([
+      { url: "cindy-media://blobs/abc.png", description: "一张截图" },
+    ]);
+    // 不被提升为图卡字段:渲染层只认 xdt_image_urls / xdt_video_urls 顶层,
+    // xdt_media_descriptions 不是媒体卡,不会触发双份渲染。
+    expect(payload.xdt_image_urls).toBeUndefined();
+  });
+
   it("图片入卡令牌提升:xdt_images_in_card === true 才上提(与音频令牌同款)", async () => {
     const withToken = parsePayload(
       await handleGhostCall(

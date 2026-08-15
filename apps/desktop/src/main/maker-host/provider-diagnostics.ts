@@ -333,8 +333,14 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     isAgentSelectableModel(m, { userProvider: provider.source === 'user' }),
   );
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
+  const baseUrl = model.route?.baseUrl ?? routing.upstream;
+  const wireProtocol = model.route?.wireProtocol ?? routing.wireProtocol;
   // Pi derives its inference path from wireProtocol and does not consume requestPath.
-  const requestPath = agent === 'pi' ? undefined : routing.requestPath;
+  const requestPath = agent === 'pi'
+    ? undefined
+    : model.route
+      ? model.route.requestPath
+      : routing.requestPath;
   // OAuth 形态：探测凭证用 Runner 持有的 access_token（与 oauth-token 路由同源），未登录时
   // 无 token → 探测会得到 AUTH_INVALID，这本身就是「先去登录」的正确结论。
   // token 走 authorization 头而**不走 apiKey 字段**——apiKey 会让 cc 探测同时发
@@ -344,9 +350,9 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     const oauthToken = oauthProbeTokenReader(providerId);
     return {
       agent,
-      baseUrl: routing.upstream,
+      baseUrl,
       modelId: model.id,
-      wireProtocol: routing.wireProtocol,
+      wireProtocol,
       requestPath,
       apiKey: null,
       headers: {
@@ -358,9 +364,9 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   if (routing.authStrategy === 'none') {
     return {
       agent,
-      baseUrl: routing.upstream,
+      baseUrl,
       modelId: model.id,
-      wireProtocol: routing.wireProtocol,
+      wireProtocol,
       requestPath,
       apiKey: null,
       headers: withoutCredentialHeaders(routing.headerOverride),
@@ -369,12 +375,12 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   const apiKey = keyReader(providerId, agent);
   return {
     agent,
-    baseUrl: routing.upstream,
+    baseUrl,
     modelId: model.id,
     // 与 oauth-token 分支对齐：Chat 桥接供应商（api-key-header + openai-chat）的 saved 探测
     // 必须带上 wireProtocol，否则 buildProbeRequest 回落到原生 /responses，对 Chat-only 上游
     // 误报连接失败（真实会话走 resolveSessionRoute 不受影响，探测结论会与真实会话相反）。
-    wireProtocol: routing.wireProtocol,
+    wireProtocol,
     requestPath,
     apiKey,
     // 与真实会话路由保持 legacy 兼容：safeStorage 已有 key 时清掉旧凭证头，由 apiKey

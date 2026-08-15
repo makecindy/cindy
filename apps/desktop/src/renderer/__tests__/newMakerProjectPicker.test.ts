@@ -477,14 +477,13 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toMatch(/hiddenSwitcherVendors\.includes\(draft\.vendor\)/);
   });
 
-  it('hides SSH targets for Pi and fail-closed guards Pi+SSH session creation', () => {
-    // dialog:选中 Pi 时把 SSH 主机从可选目标里剔除。
-    expect(addRemoteProjectDialogSource).toContain("agentVendor === 'pi'");
-    expect(addRemoteProjectDialogSource).toMatch(/excludeSsh\s*\?\s*\[\]/);
-    // 父层把当前 draft.vendor 传进 dialog 驱动过滤。
+  it('does not hide SSH targets for Pi (Pi SSH remote runtime landed)', () => {
+    // dialog:Pi 已支持 SSH 远端(轮 35),不再按 vendor 排除 SSH 主机。
+    expect(addRemoteProjectDialogSource).toContain('const excludeSsh = false;');
+    // 父层仍把当前 draft.vendor 传进 dialog 驱动目标列表。
     expect(newMakerDraftRouteSource).toContain('agentVendor={draft.vendor}');
-    // 兜底:SSH 建会话前拦住 Pi,抛清晰的本地化错误而非建出注定失败的会话。
-    expect(newMakerDraftRouteSource).toContain("t('ccAgent.draft.piRemoteUnsupported')");
+    // 兜底不再需要:Pi+SSH 组合合法,路由里不得残留「Pi 仅本地」的拒绝文案。
+    expect(newMakerDraftRouteSource).not.toContain("t('ccAgent.draft.piRemoteUnsupported')");
   });
 
   // #807:设备切换 pill。三条产品裁决写进源码断言,防后续重构悄悄改掉。

@@ -203,6 +203,14 @@ export type CindyGhostCallResult =
        * 收不到生成图)。
        */
       producedMedia?: string[];
+      /**
+       * 工具结果图片的文字描述(可选,host 视觉桥最佳努力附加)。纯文本模型
+       * 拿不到 cindy-media:// 图片内容只能看到 URL 文本——host 把图片经
+       * 外部多模态模型转成描述随结果带回,模型据此「看到」图而非幻觉编造。
+       * 仅 host 侧注入的视觉桥能力存在且命中时附加;渲染层/IM 出站只消费
+       * 固定媒体字段,不消费本字段(兼容性有回归测试锁定)。
+       */
+      xdt_media_descriptions?: Array<{ url: string; description: string }>;
     }
   | {
       ok: false;
@@ -215,6 +223,10 @@ export type CindyGhostCallResult =
 /** ghost_forge_pack 的结构化失败分类(host 侧产生,原样透传给 agent)。 */
 export type CindyForgePackErrorCode =
   | 'DIR_NOT_FOUND' // 目录不存在或不是目录
+  | 'SOURCE_OUTSIDE_WORKDIR' // 源目录不在当前会话工作目录内
+  | 'WORKDIR_NOT_LOCAL' // 当前会话工作目录在远端或无法证明为本地
+  | 'WORKDIR_READ_ONLY' // 当前会话禁止写入
+  | 'SOURCE_IS_INSTALLED_PLUGIN' // 源目录命中 Host 管理的已安装插件或批准状态根
   | 'MANIFEST_INVALID' // ghost.json 缺失 / 不合法(message 带具体原因)
   | 'ENTRY_MISSING' // 清单声明的 entry / panel.html 等文件不在目录里
   | 'TOO_LARGE' // 文件数或总体积超上限
@@ -251,7 +263,7 @@ export type CindyForgeScaffoldResult =
     }
   | {
       ok: false;
-      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'INTERNAL';
+      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'WORKDIR_NOT_LOCAL' | 'WORKDIR_READ_ONLY' | 'INTERNAL';
       message: string;
     };
 

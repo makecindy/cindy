@@ -90,4 +90,23 @@ describe('PermissionPrompt i18n', () => {
 
     expect(screen.getByText('Always allow for this session')).toBeTruthy();
   });
+
+  it('explains that auto-review failed and this click only confirms the current action', () => {
+    render(
+      <PermissionPrompt
+        permission={{
+          requestId: 'permission-unavailable',
+          toolName: 'exec',
+          input: { command: 'npx tsc --noEmit' },
+          title: 'Allow Codex to run this command?',
+          description: 'Automatic review could not finish, so this action needs your confirmation.',
+          autoReviewUnavailable: true,
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('自动审批没完成，请确认要不要允许这次操作。')).toBeTruthy();
+    expect(screen.queryByText('Automatic review could not finish, so this action needs your confirmation.')).toBeNull();
+  });
 });

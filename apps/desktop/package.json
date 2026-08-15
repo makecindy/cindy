@@ -92,6 +92,7 @@
     "@cindy/ios-simulator-runtime": "workspace:*",
     "@cindy/maker-cc-manager": "workspace:*",
     "@cindy/maker-core": "workspace:*",
+    "@cindy/maker-pi-manager": "workspace:*",
     "@cindy/maker-remote-ssh": "workspace:*",
     "@cindy/maker-scheduler": "workspace:*",
     "@cindy/maker-shared": "workspace:*",

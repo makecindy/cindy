@@ -17,12 +17,16 @@ import { GHOST_MANIFEST_SUMMARY_MAX_CHARS } from '@cindy/plugin-protocol';
 
 import {
   FORGE_GUIDE,
-  packGhostDir,
+  // 本测试文件用同名本地包装器(注入 sessionWorkdir / writeScaffold 门参)遮蔽,
+  // 故 raw 函数以别名导入;main 的 packGhostDirToFile 无包装器,直接导入。
+  packGhostDir as packGhostDirRaw,
   packGhostDirToFile,
-  scaffoldGhostDir,
+  scaffoldGhostDir as scaffoldGhostDirRaw,
+  type ForgeScaffoldWriteRequest,
   type ForgeScaffoldTemplate,
 } from '../forge';
 import { GhostManager } from '../GhostManager';
+import { sameForgeScaffoldParentIdentity } from '../forgeScaffoldIdentity';
 import { GHOST_SIGNATURE_FILE, signGhostPackage } from '../ghostSignature';
 import { GHOST_INSTALL_MANIFEST_MAX_BYTES } from '../../../shared/ghost';
 
@@ -43,6 +47,64 @@ const canSymlink = (() => {
 const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 
 let workDir: string;
+
+async function testScaffoldWriter(request: ForgeScaffoldWriteRequest) {
+  const parentStats = await fs.promises.lstat(request.parentDir, { bigint: true });
+  if (!sameForgeScaffoldParentIdentity(parentStats, request.expectedParent)) {
+    return { ok: false as const, errorCode: 'INTERNAL' as const, message: 'parent changed' };
+  }
+  const target = path.join(request.parentDir, request.targetName);
+  try {
+    await fs.promises.lstat(target);
+    return { ok: false as const, errorCode: 'TARGET_EXISTS' as const, message: 'exists' };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const staging = await fs.promises.mkdtemp(path.join(request.parentDir, `.${request.targetName}-scaffold-`));
+  try {
+    for (const file of request.files) {
+      const abs = path.join(staging, file.path);
+      await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+      await fs.promises.writeFile(abs, Buffer.from(file.base64, 'base64'), { flag: 'wx' });
+    }
+    try {
+      await fs.promises.rename(staging, target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST' || (error as NodeJS.ErrnoException).code === 'ENOTEMPTY') {
+        return { ok: false as const, errorCode: 'TARGET_EXISTS' as const, message: 'exists' };
+      }
+      throw error;
+    }
+    return { ok: true as const };
+  } catch (error) {
+    await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+function scaffoldGhostDir(
+  input: Parameters<typeof scaffoldGhostDirRaw>[0],
+  options: Omit<NonNullable<Parameters<typeof scaffoldGhostDirRaw>[1]>, 'writeScaffold'> = {},
+) {
+  return scaffoldGhostDirRaw(input, { ...options, writeScaffold: testScaffoldWriter });
+}
+
+function packGhostDir(
+  dir: string,
+  options: Omit<NonNullable<Parameters<typeof packGhostDirRaw>[1]>, 'sessionWorkdir'> = {},
+) {
+  return packGhostDirRaw(dir, { sessionWorkdir: workDir, ...options });
+}
+
+async function expectSameExistingRealPath(actual: string, expected: string): Promise<void> {
+  const normalize = (value: string) =>
+    process.platform === 'win32' ? value.toLowerCase() : value;
+  const [actualReal, expectedReal] = await Promise.all([
+    fs.promises.realpath(actual),
+    fs.promises.realpath(expected),
+  ]);
+  expect(normalize(actualReal)).toBe(normalize(expectedReal));
+}
 
 beforeEach(async () => {
   workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-test-'));
@@ -75,6 +137,368 @@ async function makeSrcDir(files: Record<string, string | Buffer>): Promise<strin
 }
 
 describe('packGhostDir', () => {
+  it('writes an in-workdir alias output to the canonical source directory', async () => {
+    const sourceTarget = path.join(workDir, 'source-target');
+    const sourceAlias = path.join(workDir, 'source-alias');
+    await fs.promises.mkdir(sourceTarget, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(sourceTarget, 'ghost.json'),
+      JSON.stringify({ ...GOOD_MANIFEST, id: 'inside' }),
+    );
+    await fs.promises.writeFile(path.join(sourceTarget, 'main.js'), 'export default {}');
+    await fs.promises.symlink(
+      sourceTarget,
+      sourceAlias,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const packed = await packGhostDir(sourceAlias);
+    expect(packed).toMatchObject({ ok: true });
+    if (!packed.ok) return;
+    await expectSameExistingRealPath(
+      packed.cindyPath,
+      path.join(sourceTarget, 'inside-1.0.0.cindy'),
+    );
+    await expect(fs.promises.access(path.join(sourceTarget, 'inside-1.0.0.cindy'))).resolves.toBeUndefined();
+  });
+
+  it('rejects a file replaced by a link after classification', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': 'export default {};',
+    });
+    const outsideRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-file-race-'));
+    const outsideFile = path.join(outsideRoot, 'secret.js');
+    await fs.promises.writeFile(outsideFile, 'outside-secret');
+    const originalLstat = fs.promises.lstat.bind(fs.promises);
+    let swapped = false;
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation(async (file: fs.PathLike, options?: fs.StatOptions) => {
+      // 忠实转发 options:readBoundedFileNoFollow 在 Windows 走 lstat(path,{bigint:true}),
+      // 丢掉 options 会返回非 bigint stat、令 sameInode 误判,破坏无关的 ghost.json 读取。
+      const result = await (
+        originalLstat as (p: fs.PathLike, o?: fs.StatOptions) => Promise<fs.Stats & fs.BigIntStats>
+      )(file, options);
+      if (!swapped && path.basename(String(file)) === 'main.js') {
+        swapped = true;
+        await fs.promises.rm(String(file), { force: true });
+        await fs.promises.symlink(
+          outsideFile,
+          String(file),
+          process.platform === 'win32' ? 'file' : undefined,
+        );
+      }
+      return result;
+    });
+    try {
+      const packed = await packGhostDir(dir);
+      expect(packed).toMatchObject({ ok: false, errorCode: 'ENTRY_MISSING' });
+      await expect(fs.promises.access(path.join(dir, 'demo-1.0.0.cindy'))).rejects.toThrow();
+    } finally {
+      lstatSpy.mockRestore();
+      await fs.promises.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a child directory replaced by a junction before recursion', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': 'export default {};',
+      'assets/readme.txt': 'inside',
+    });
+    const outsideRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-dir-race-'));
+    const outsideDir = path.join(outsideRoot, 'assets');
+    await fs.promises.mkdir(outsideDir, { recursive: true });
+    await fs.promises.writeFile(path.join(outsideDir, 'secret.txt'), 'outside-secret');
+    const assetsDir = path.join(dir, 'assets');
+    const originalLstat = fs.promises.lstat.bind(fs.promises);
+    let swapped = false;
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation(async (file: fs.PathLike, options?: fs.StatOptions) => {
+      // 忠实转发 options:readBoundedFileNoFollow 在 Windows 走 lstat(path,{bigint:true}),
+      // 丢掉 options 会返回非 bigint stat、令 sameInode 误判,破坏无关的 ghost.json 读取。
+      const result = await (
+        originalLstat as (p: fs.PathLike, o?: fs.StatOptions) => Promise<fs.Stats & fs.BigIntStats>
+      )(file, options);
+      if (!swapped && path.resolve(String(file)) === path.resolve(assetsDir)) {
+        swapped = true;
+        await fs.promises.rm(assetsDir, { recursive: true, force: true });
+        await fs.promises.symlink(
+          outsideDir,
+          assetsDir,
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+      }
+      return result;
+    });
+    try {
+      const packed = await packGhostDir(dir);
+      expect(packed).toMatchObject({ ok: false, errorCode: 'SOURCE_OUTSIDE_WORKDIR' });
+      await expect(fs.promises.access(path.join(dir, 'demo-1.0.0.cindy'))).rejects.toThrow();
+    } finally {
+      lstatSpy.mockRestore();
+      await fs.promises.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('requires the source to stay inside the current session workdir', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': 'export default {}',
+    });
+    await expect(packGhostDirRaw(dir)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'SOURCE_OUTSIDE_WORKDIR',
+    });
+    await expect(
+      packGhostDirRaw(dir, { sessionWorkdir: path.join(workDir, 'missing-workdir') }),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'SOURCE_OUTSIDE_WORKDIR',
+    });
+
+    const outsideRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-outside-'));
+    try {
+      const outsideDir = path.join(outsideRoot, 'src');
+      await fs.promises.cp(dir, outsideDir, { recursive: true });
+      await expect(packGhostDirRaw(outsideDir, { sessionWorkdir: workDir })).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'SOURCE_OUTSIDE_WORKDIR',
+      });
+
+      const alias = path.join(workDir, 'outside-alias');
+      await fs.promises.symlink(outsideDir, alias, 'junction');
+      await expect(packGhostDirRaw(alias, { sessionWorkdir: workDir })).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'SOURCE_OUTSIDE_WORKDIR',
+      });
+    } finally {
+      await fs.promises.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects Host-managed roots, descendants, case aliases, and junction aliases', async () => {
+    const managedRoot = path.join(workDir, 'managed');
+    const installedDir = path.join(managedRoot, 'demo');
+    await fs.promises.mkdir(installedDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(installedDir, 'ghost.json'),
+      JSON.stringify(GOOD_MANIFEST),
+    );
+    await fs.promises.writeFile(path.join(installedDir, 'main.js'), '// installed');
+
+    await expect(
+      packGhostDir(managedRoot, { forbiddenRootDirs: [managedRoot] }),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'SOURCE_IS_INSTALLED_PLUGIN',
+    });
+    await expect(
+      packGhostDir(installedDir, { forbiddenRootDirs: [managedRoot] }),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'SOURCE_IS_INSTALLED_PLUGIN',
+    });
+
+    if (process.platform === 'win32') {
+      await expect(
+        packGhostDir(installedDir.toUpperCase(), {
+          forbiddenRootDirs: [managedRoot.toLowerCase()],
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'SOURCE_IS_INSTALLED_PLUGIN',
+      });
+    }
+
+    const alias = path.join(workDir, 'installed-alias');
+    try {
+      await fs.promises.symlink(
+        installedDir,
+        alias,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch {
+      return;
+    }
+    await expect(
+      packGhostDir(alias, { forbiddenRootDirs: [managedRoot] }),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'SOURCE_IS_INSTALLED_PLUGIN',
+    });
+  });
+
+  it('rejects a source directory that contains a Host-managed root', async () => {
+    // 源目录是受管根的**祖先**:单向判定放行时,递归打包会走进 cindy-brain /
+    // ghost-install-state,把已安装插件字节、批准 receipt 与技能快照一并打进 .cindy。
+    // 只要在 owner 数据目录里放一个 ghost.json 就能触发,所以判定必须双向。
+    const ownerData = path.join(workDir, 'owner-data');
+    const managedRoot = path.join(ownerData, 'cindy-brain');
+    await fs.promises.mkdir(managedRoot, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(managedRoot, 'receipt.json'),
+      JSON.stringify({ secret: 'approved state' }),
+    );
+    await fs.promises.writeFile(
+      path.join(ownerData, 'ghost.json'),
+      JSON.stringify(GOOD_MANIFEST),
+    );
+    await fs.promises.writeFile(path.join(ownerData, 'main.js'), '// authoring source');
+
+    await expect(
+      packGhostDir(ownerData, { forbiddenRootDirs: [managedRoot] }),
+    ).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'SOURCE_IS_INSTALLED_PLUGIN',
+    });
+  });
+
+  it('does not follow a link inside the source dir into a Host-managed root', async () => {
+    // **契约用例,不是回归用例**:改动前 Dirent 的类型位也把 junction 报成 link,
+    // 所以这条在旧实现下同样是绿的。钉住的是契约本身 —— 双向包含判定挡的是"源目录是
+    // 受管根的祖先",这条挡的是另一半(源目录里放一条指向受管根的链接);判类型一律
+    // lstat、不信 Dirent 类型位之后,这一半不再依赖 libuv 的实现细节。
+    const managedRoot = path.join(workDir, 'managed');
+    await fs.promises.mkdir(managedRoot, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(managedRoot, 'receipt.json'),
+      JSON.stringify({ secret: 'approved state' }),
+    );
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// authoring source',
+    });
+    try {
+      await fs.promises.symlink(
+        managedRoot,
+        path.join(dir, 'state'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch {
+      return; // 该环境建不了链接(无权限),跳过;判定逻辑与其他平台同源。
+    }
+
+    const result = await packGhostDir(dir, { forbiddenRootDirs: [managedRoot] });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const JSZip = (await import('jszip')).default;
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(result.cindyPath));
+    expect(Object.keys(zip.files).sort()).toEqual(['ghost.json', 'main.js']);
+  });
+
+  it('rejects a declared file that is a link instead of packing a package without it', async () => {
+    // `stat` 会穿透链接让声明检查过关,而收集步按类型跳过链接 —— 包里就少了 main.js,
+    // 错误延迟到用户装入时才现形。打包期直接拒,报清楚。
+    const dir = await makeSrcDir({ 'ghost.json': JSON.stringify(GOOD_MANIFEST) });
+    const realEntry = path.join(workDir, 'real-main.js');
+    await fs.promises.writeFile(realEntry, '// outside');
+    try {
+      await fs.promises.symlink(realEntry, path.join(dir, 'main.js'), 'file');
+    } catch {
+      return; // 该环境建不了链接(无权限),跳过;判定逻辑与其他平台同源。
+    }
+
+    await expect(packGhostDir(dir)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'ENTRY_MISSING',
+    });
+  });
+
+  it('rejects a declared file below a linked ancestor instead of omitting it from the package', async () => {
+    const manifest = {
+      ...GOOD_MANIFEST,
+      slots: ['tool', 'panel'],
+      panel: { title: 'Linked panel', html: 'linked/panel.html', minWidth: 240 },
+    };
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// authoring source',
+    });
+    const realPanelDir = path.join(workDir, 'real-panel');
+    await fs.promises.mkdir(realPanelDir);
+    await fs.promises.writeFile(path.join(realPanelDir, 'panel.html'), '<main>linked</main>');
+    try {
+      await fs.promises.symlink(realPanelDir, path.join(dir, 'linked'), directoryLinkType);
+    } catch {
+      return;
+    }
+
+    await expect(packGhostDir(dir)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'ENTRY_MISSING',
+    });
+  });
+
+  it('rejects a required path whose casing differs from the collected ZIP entry', async () => {
+    const manifest = { ...GOOD_MANIFEST, entry: 'Main.js' };
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// actual lower-case path',
+    });
+    const declaredEntry = path.join(dir, 'Main.js');
+    const actualEntry = path.join(dir, 'main.js');
+    const originalLstat = fs.promises.lstat.bind(fs.promises);
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation(async (file: fs.PathLike, options?: fs.StatOptions) => {
+      const target = path.resolve(String(file)) === path.resolve(declaredEntry) ? actualEntry : file;
+      return (
+        originalLstat as (p: fs.PathLike, o?: fs.StatOptions) => Promise<fs.Stats & fs.BigIntStats>
+      )(target, options);
+    });
+    try {
+      await expect(packGhostDir(dir)).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'ENTRY_MISSING',
+      });
+    } finally {
+      lstatSpy.mockRestore();
+    }
+  });
+
+  it('rejects a missing extra node entry instead of producing a partially runnable package', async () => {
+    const manifest = {
+      ...GOOD_MANIFEST,
+      slots: ['node'],
+      tools: undefined,
+      node: {
+        entry: 'node/worker.cjs',
+        entries: ['node/secondary.cjs'],
+        protocol: 'json-rpc-stdio',
+      },
+    };
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// browser brain',
+      'node/worker.cjs': '// primary worker',
+    });
+
+    await expect(packGhostDir(dir)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'ENTRY_MISSING',
+    });
+  });
+
+  it('rejects a missing declared icon when no icon overlay is supplied', async () => {
+    const manifest = { ...GOOD_MANIFEST, icon: 'assets/icon.png' };
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// browser brain',
+    });
+
+    await expect(packGhostDir(dir)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'ENTRY_MISSING',
+    });
+  });
+
+  it('allows an independent authoring directory outside managed roots', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// authoring source',
+    });
+    const result = await packGhostDir(dir, {
+      forbiddenRootDirs: [path.join(workDir, 'managed')],
+    });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+  });
+
   it('happy path:产物落源码目录(id-version.cindy),且能被装入侧 inspect 认可', async () => {
     const dir = await makeSrcDir({
       'ghost.json': JSON.stringify(GOOD_MANIFEST),
@@ -84,7 +508,7 @@ describe('packGhostDir', () => {
     const r = await packGhostDir(dir);
     expect(r.ok, JSON.stringify(r)).toBe(true);
     if (!r.ok) return;
-    expect(r.cindyPath).toBe(path.join(dir, 'demo-1.0.0.cindy'));
+    await expectSameExistingRealPath(r.cindyPath, path.join(dir, 'demo-1.0.0.cindy'));
     expect(r.manifest.id).toBe('demo');
 
     // 装入侧同一契约验证:inspect 直接吃打包产物。
@@ -93,6 +517,37 @@ describe('packGhostDir', () => {
     expect('manifest' in inspected, JSON.stringify(inspected)).toBe(true);
 
     await fs.promises.rm(r.cindyPath, { force: true });
+  });
+
+  it('把已校验的 manifest 快照直接用于产物，避免校验 A、打包 B', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': 'export default {};',
+    });
+    const originalReaddir = fs.promises.readdir.bind(fs.promises);
+    let mutated = false;
+    const readdirSpy = vi.spyOn(fs.promises, 'readdir').mockImplementation(async (directory, options) => {
+      const entries = await originalReaddir(directory, options as never);
+      if (!mutated && path.resolve(String(directory)) === path.resolve(dir)) {
+        mutated = true;
+        await fs.promises.writeFile(
+          path.join(dir, 'ghost.json'),
+          JSON.stringify({ ...GOOD_MANIFEST, id: 'bravo', version: '9.0.0' }),
+        );
+      }
+      return entries as never;
+    });
+    try {
+      const packed = await packGhostDir(dir);
+      expect(packed).toMatchObject({ ok: true, manifest: GOOD_MANIFEST });
+      if (!packed.ok) return;
+      const zip = await JSZip.loadAsync(await fs.promises.readFile(packed.cindyPath));
+      const manifest = await zip.file('ghost.json')?.async('string');
+      expect(manifest).toContain('"id":"demo"');
+      expect(manifest).not.toContain('"id":"bravo"');
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it('iconPng 仅覆盖包内图标与清单快照，不改写插件源码', async () => {
@@ -602,6 +1057,58 @@ describe('packGhostDir', () => {
 });
 
 describe('scaffoldGhostDir', () => {
+  it('fails closed when the scaffold parent has no trustworthy filesystem identity', async () => {
+    const parentStat = await fs.promises.lstat(workDir, { bigint: true });
+    const realPath = await fs.promises.realpath(workDir);
+    expect(
+      sameForgeScaffoldParentIdentity(parentStat, { realPath, dev: 0n, ino: 0n }),
+    ).toBe(false);
+
+    const zeroIdentityStat = new Proxy(parentStat, {
+      get(target, key) {
+        if (key === 'dev' || key === 'ino') return 0n;
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    expect(
+      sameForgeScaffoldParentIdentity(zeroIdentityStat, {
+        realPath,
+        dev: parentStat.dev,
+        ino: parentStat.ino,
+      }),
+    ).toBe(false);
+  });
+
+  it('passes the stable parent identity as lossless bigint values', async () => {
+    const parentStat = await fs.promises.lstat(workDir, { bigint: true });
+    let captured: ForgeScaffoldWriteRequest | undefined;
+    const result = await scaffoldGhostDirRaw(
+      {
+        dir: path.join(workDir, 'bigint-parent'),
+        template: 'plain',
+        id: 'bigint-parent',
+        name: 'BigInt parent',
+      },
+      {
+        sessionWorkdir: workDir,
+        writeScaffold: async (request) => {
+          captured = request;
+          return { ok: true };
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(captured?.expectedParent).toEqual({
+      realPath: await fs.promises.realpath(workDir),
+      dev: parentStat.dev,
+      ino: parentStat.ino,
+    });
+    expect(typeof captured?.expectedParent.dev).toBe('bigint');
+    expect(typeof captured?.expectedParent.ino).toBe('bigint');
+  });
+
   it.each<ForgeScaffoldTemplate>(['plain', 'agent-action', 'node-json-rpc', 'node-mcp'])(
     '生成 %s 模板，随后可以直接打包并通过装入检查',
     async (template) => {
@@ -687,6 +1194,92 @@ describe('scaffoldGhostDir', () => {
     await expect(fs.promises.stat(invalid)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('拒绝把骨架落进 Host 受管根:根内、后代、大小写别名与 junction 别名都不行', async () => {
+    // 受管根恰好落在会话工作目录里(用户把 userData 当工作目录打开的情形):
+    // 工作目录检查放行,受管根检查必须接着挡住。
+    const managedRoot = path.join(workDir, 'cindy-brain');
+    const installedDir = path.join(managedRoot, 'demo');
+    await fs.promises.mkdir(installedDir, { recursive: true });
+    const scaffold = (dir: string, forbidden: readonly string[]) =>
+      scaffoldGhostDir(
+        { dir, template: 'plain', id: 'managed-demo', name: 'Managed demo' },
+        { sessionWorkdir: workDir, forbiddenRootDirs: forbidden },
+      );
+
+    expect(await scaffold(path.join(managedRoot, 'fresh'), [managedRoot])).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+    });
+    expect(
+      await scaffold(path.join(installedDir, 'src'), [managedRoot]),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(fs.existsSync(path.join(installedDir, 'src'))).toBe(false);
+
+    // 状态根还没建出来也要挡住(首次装入前就该拒)。
+    const stateRoot = path.join(workDir, 'ghost-install-state');
+    expect(await scaffold(path.join(stateRoot, 'nested'), [stateRoot])).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+    });
+
+    if (process.platform === 'win32') {
+      expect(
+        await scaffold(path.join(managedRoot.toUpperCase(), 'fresh'), [
+          managedRoot.toLowerCase(),
+        ]),
+      ).toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    }
+
+    // junction/软链别名:字面在别处,realpath 落在受管根内。
+    const alias = path.join(workDir, 'managed-alias');
+    try {
+      fs.symlinkSync(installedDir, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch {
+      return; // Windows 无特权时建不出夹具,守卫仍在
+    }
+    expect(await scaffold(path.join(alias, 'src'), [managedRoot])).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_INPUT',
+    });
+    expect(fs.existsSync(path.join(installedDir, 'src'))).toBe(false);
+  });
+
+  it('工作目录里的独立作者目录不受受管根禁区影响', async () => {
+    const dir = path.join(workDir, 'my-plugin');
+    expect(
+      await scaffoldGhostDir(
+        { dir, template: 'plain', id: 'my-plugin', name: 'My plugin' },
+        {
+          sessionWorkdir: workDir,
+          forbiddenRootDirs: [
+            path.join(workDir, 'cindy-brain'),
+            path.join(workDir, 'ghost-install-state'),
+          ],
+        },
+      ),
+    ).toMatchObject({ ok: true, dir });
+  });
+
+  it('拒绝仍指向工作目录内部的链接祖先，不把 8.3 路径兼容变成链接放行', async () => {
+    const realRoot = path.join(workDir, 'real-author-root');
+    const aliasRoot = path.join(workDir, 'author-alias');
+    await fs.promises.mkdir(path.join(realRoot, 'nested'), { recursive: true });
+    try {
+      await fs.promises.symlink(realRoot, aliasRoot, directoryLinkType);
+    } catch {
+      return;
+    }
+
+    const dir = path.join(aliasRoot, 'nested', 'plugin');
+    expect(
+      await scaffoldGhostDir(
+        { dir, template: 'plain', id: 'linked-parent', name: 'Linked parent' },
+        { sessionWorkdir: workDir },
+      ),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(fs.existsSync(path.join(realRoot, 'nested', 'plugin'))).toBe(false);
+  });
+
   it('软链祖先把字面在工作目录内的路径引到外面 → 拒绝且外面不落盘', async () => {
     // Windows 无特权时目录软链可能 EPERM,建不出夹具就跳过(守卫仍在)。
     const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-outside-'));
@@ -717,6 +1310,15 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  it('documents installed-directory isolation and the structured refusal', () => {
+    expect(FORGE_GUIDE).toContain('已安装插件目录');
+    expect(FORGE_GUIDE).toContain('SOURCE_IS_INSTALLED_PLUGIN');
+    // 脚手架侧的同一禁区也要写进手册,否则 agent 会先把骨架建进安装目录再撞墙。
+    expect(FORGE_GUIDE).toContain('也不能落在已安装插件目录或 Host 状态目录内');
+    expect(FORGE_GUIDE).toContain('复制/迁出');
+    expect(FORGE_GUIDE).toContain('junction');
+  });
+
   it('manual 作者契约按职责分流并支持与工具目录交叉导航', () => {
     for (const marker of [
       '## 3.6 manual:按需披露复杂工作流与分层资料',

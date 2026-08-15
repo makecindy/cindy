@@ -44,10 +44,45 @@ export class VideoProviderRegistry {
     this.providers.set(provider.id, provider);
   }
 
+  /**
+   * 用同一 provider 的新能力快照补充／更新 alias。旧 alias 索引不删除：目录热更
+   * 期间已经提交的长视频任务仍要能继续 poll/download；新请求是否可用由当前目录
+   * 白名单在提交前重查。其它 provider 已占用的 alias 仍严格拒绝。
+   */
+  registerOrExtend(provider: VideoProvider): void {
+    const existing = this.providers.get(provider.id);
+    if (!existing) {
+      this.register(provider);
+      return;
+    }
+    for (const alias of provider.capabilities.modelAliases) {
+      const occupied = this.aliasIndex.get(alias.alias);
+      if (occupied && occupied.provider.id !== provider.id) {
+        throw new Error(
+          `[videoRegistry] duplicate alias: ${alias.alias} (already registered by ${occupied.provider.id})`,
+        );
+      }
+    }
+    for (const alias of provider.capabilities.modelAliases) {
+      this.aliasIndex.set(alias.alias, {
+        provider,
+        internalModel: alias.internalModel,
+        summary: alias.summary,
+        expectedSeconds: provider.capabilities.expectedSecondsByAlias[alias.alias] ?? 120,
+      });
+    }
+    this.providers.set(provider.id, provider);
+  }
+
   /** True if at least one provider is registered. Tools should be omitted
    *  from the catalog when this is false (no models = no callable tools). */
   hasAny(): boolean {
     return this.aliasIndex.size > 0;
+  }
+
+  /** 目录热更可能先于客户端通道代码；未知 alias 必须从可选清单中过滤。 */
+  hasAlias(alias: string): boolean {
+    return this.aliasIndex.has(alias);
   }
 
   /** Throws on unknown alias — handler converts that to INVALID_ARGS. */

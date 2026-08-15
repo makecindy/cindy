@@ -153,6 +153,37 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('${');
   });
 
+  it('keeps Pi vision bridge tool security invariants (registration, size, magic-byte, redirect, redaction)', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    // 工具只在已启用且可解析 primary 后端时注册（fallback-only 不注册）。
+    expect(source).toContain('piVisionCfg.enabled && piVisionCfg.primary');
+    // 图片大小上限（stat 前置 + read 后 TOCTOU 复查）与魔数校验，防止任意本地文件外传。
+    expect(source).toContain('MAX_IMAGE_BYTES');
+    expect(source).toContain('statSync(imagePath)');
+    expect(source).toContain('sniffImageMime');
+    // 请求禁止跟随重定向（凭证/图片不流向非预期端点）。
+    expect(source).toContain("redirect: 'error'");
+    // 路由指定额外头必须合并进请求（anthropic-version / x-api-key / 自定义 provider 头），
+    // 缺失会被后端拒（对齐 host 侧 vision-channel 的 headers 合并）。
+    expect(source).toContain('...spec.headers');
+    // anthropic-messages 视觉请求必须带 max_tokens（/v1/messages 强制要求，缺省会 400）。
+    expect(source).toContain('max_tokens: 1024');
+    // fallback 去重必须比较 headers——同 (url/model/auth) 但路由头不同（如不同
+    // anthropic-beta）的 fallback 是独立后端，不得误判为重复跳过（P2）。
+    expect(source).toContain('JSON.stringify(cfg.fallback.headers');
+    // 本地图片转 data URL 进请求体，路径字符串不外发。
+    expect(source).toContain('image_url:');
+    expect(source).toContain("'data:'");
+    // 错误脱敏：模型侧只看到泛化文案，不含本地路径 / key / URL。
+    expect(source).toContain("'vision: vision backend request failed'");
+    expect(source).toContain("'vision HTTP '");
+    expect(source).toContain("'vision: unable to read the image file'");
+    // host 可关联日志：fallback 行为有结构化 stderr 输出（脱敏，仅 backendRole/model）。
+    expect(source).toContain('vision bridge pi primary backend failed');
+    expect(source).toContain('vision bridge pi used fallback backend');
+    expect(source).toContain('vision bridge pi fallback backend failed');
+  });
+
   it('captures known writes before execution and marks opaque tools only after a result', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on('tool_call'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('FILE_WRITE_BUILTINS.has(event.toolName)');
