@@ -72,8 +72,8 @@ export class FeishuIM extends BaseIM implements ChannelIM {
         }
       } catch (err) {
         // patch/替换失败: 与即时消费同口径 — 撤回开场白卡(pin 到排空开始
-        // 时的 client)并回拨锚点, 然后**补发终态兜底**(调用方已因 consume
-        // 返回 true 跳过正常发送, 不补发用户收不到结果)。
+        // 时的 client)并回拨锚点, 然后**补发终态兜底**(空窗内调用方的兜底
+        // 发送必然失败, 排空时补发确保用户收到结果)。
         const msg = err instanceof Error ? err.message : String(err);
         this.log.warn(`flushDeferredOpenerConsumes failed: ${msg}`);
         if (outbound.getBoundClient() === pinnedClient) {
@@ -198,11 +198,12 @@ export class FeishuIM extends BaseIM implements ChannelIM {
   async consumePendingOpenerCard(userId: string, markdown: string): Promise<boolean> {
     // 重连空窗(stop→start 之间 client 已解绑): 暂存消费, 连接就绪后由
     // flushDeferredOpenerConsumes 排空(claim + patch)— 不认领(注册保留)、
-    // 也不让本轮终态丢失或残留被下一条消息误认领。返回 true 让调用方跳过
-    // 注定失败的兜底发送。
+    // 也不让本轮终态丢失或残留被下一条消息误认领。返回 **false**(仅入队,
+    // 未送达): 调用方走兜底发送(空窗内必然失败、被既有 catch 收口), 且
+    // /ctr 等「仅送达后进入控制态」的调用方不会被误导。
     if (!outbound.getBoundClient()) {
       outbound.deferOpenerConsume({ userId, markdown });
-      return true;
+      return false;
     }
     const openerId = outbound.claimPatchableOpener(userId);
     if (!openerId) return false;
@@ -235,10 +236,12 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * opener 返回 false(调用方走正常发卡)。
    */
   async consumePendingOpenerAsCard(userId: string, spec: InteractiveCardSpec): Promise<boolean> {
-    // 同 consumePendingOpenerCard: 重连空窗暂存, 连接就绪后排空。
+    // 同 consumePendingOpenerCard: 重连空窗暂存(未送达, 返回 false),
+    // 连接就绪后排空。false 让 safeSendCard 报告未送达 — /ctr 不会在
+    // 卡片尚未可见时 enterControl(否则重连失败/排空失败会把用户锁死)。
     if (!outbound.getBoundClient()) {
       outbound.deferOpenerConsume({ userId, spec });
-      return true;
+      return false;
     }
     const openerId = outbound.claimPatchableOpener(userId);
     if (!openerId) return false;

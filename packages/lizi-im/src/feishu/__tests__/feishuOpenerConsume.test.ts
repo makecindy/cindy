@@ -129,10 +129,10 @@ describe('FeishuIM opener consumption failure semantics', () => {
     expect(outboundMocks.recallOwnMessageWith).not.toHaveBeenCalled();
   });
 
-  it('重连空窗(无绑定 client)暂存消费: 不认领、返回 true 跳过注定失败的兜底', async () => {
+  it('重连空窗(无绑定 client)暂存消费: 不认领、返回 false(仅入队未送达)', async () => {
     outboundMocks.getBoundClient.mockReturnValue(null);
-    await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(true);
-    await expect(im.consumePendingOpenerAsCard('g/oc_c/omt_t', SPEC)).resolves.toBe(true);
+    await expect(im.consumePendingOpenerCard('g/oc_c/omt_t', '回复')).resolves.toBe(false);
+    await expect(im.consumePendingOpenerAsCard('g/oc_c/omt_t', SPEC)).resolves.toBe(false);
     expect(outboundMocks.deferOpenerConsume).toHaveBeenCalledWith({
       userId: 'g/oc_c/omt_t',
       markdown: '回复',
