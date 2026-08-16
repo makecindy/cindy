@@ -5567,6 +5567,8 @@
         "favoritesGroup": "お気に入り",
         "authGroup": "ログイン済みアカウント",
         "favoritesEmpty": "お気に入りはまだありません——モデルの行にカーソルを合わせて ☆ で保存できます",
+        "layoutBadge": "新スタイルを試す",
+        "layoutClassic": "旧スタイルに戻す",
         "addFavorite": "お気に入りに保存",
         "removeFavorite": "お気に入りから削除",
         "favoriteConfig": "保存した設定",

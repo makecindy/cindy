@@ -86,6 +86,7 @@ import {
   isSubscriptionDirectModel,
 } from '../../../shared/subscriptionModels';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
+import { setModelPickerLayout, useModelPickerLayout } from '@/state/modelPickerLayout';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { useDeviceLinkModelMirrorVersion } from '@/state/deviceLinkModelMirror';
 import {
@@ -950,6 +951,8 @@ function ModelSelectorContentView({
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t } = useTranslation();
+  // 列表样式试用开关(本机偏好):footer 的切换按钮 + 面板行样式共用。
+  const pickerLayout = useModelPickerLayout();
   const constrainedListMaxHeight = modelListMaxHeightForRows(maxVisibleModelRows);
   const [paneElement, setPaneElement] = useState<HTMLDivElement | null>(null);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
@@ -2419,17 +2422,16 @@ function ModelSelectorContentView({
             ? { overlayClassName: overlayContentClassName }
             : {})}
         />
-        {/* 「连接来源」footer —— 与既有面板同规则(device-link 远程隐藏)。
-            设计稿 .panel-foot / .foot-link:border-t 分隔、9px/14px 内距、13px 文字链
-            (hover 提亮文字,不加底色)。 */}
-        {onNavigateToProviders && !deviceId && (
-          <div className="shrink-0 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
+        {/* footer:「连接来源」(与既有面板同规则,device-link 远程隐藏)+ 右侧
+            列表样式试用开关(本机偏好,见 modelPickerLayout;两种样式并存期的入口)。 */}
+        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
+          {onNavigateToProviders && !deviceId ? (
             <button
               type="button"
               disabled={interactionDisabled}
               onClick={onNavigateToProviders}
               className={cn(
-                'flex items-center gap-1.5 text-13 text-[var(--text-secondary)]',
+                'flex min-w-0 items-center gap-1.5 text-13 text-[var(--text-secondary)]',
                 'transition-colors hover:text-[var(--text-primary)]',
                 interactionDisabled && 'cursor-not-allowed opacity-50',
               )}
@@ -2437,8 +2439,22 @@ function ModelSelectorContentView({
               <Plus size={14} className="shrink-0" />
               <span className="truncate">{t('newChat.modelSelector.source.connect')}</span>
             </button>
-          </div>
-        )}
+          ) : (
+            <span />
+          )}
+          <button
+            type="button"
+            data-layout-toggle
+            onClick={() =>
+              setModelPickerLayout(pickerLayout === 'badge' ? 'classic' : 'badge')
+            }
+            className="shrink-0 whitespace-nowrap text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"
+          >
+            {pickerLayout === 'badge'
+              ? t('newChat.modelSelector.unified.layoutClassic')
+              : t('newChat.modelSelector.unified.layoutBadge')}
+          </button>
+        </div>
       </div>
       </div>
     );

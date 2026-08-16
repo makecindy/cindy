@@ -1,6 +1,10 @@
 import { Star, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import type {
+  FocusEvent as ReactFocusEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+} from 'react';
 
 import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 
@@ -10,10 +14,32 @@ import type { Effort } from '@/lib/userPreferences.types';
 
 import { EFFORT_TIER_COLORS, PRICE_TIER_COLORS } from '@/themes/effortTierColors';
 
+import { ClaudeMark } from '@/components/icons/ClaudeMark';
+import { CodexMark } from '@/components/icons/CodexMark';
+import { PiMark } from '@/components/icons/PiMark';
+import type { ModelPickerLayout } from '@/state/modelPickerLayout';
+
 import { agentOptionOf } from './agentOptions';
 // 图标规则(模型条目 icon 优先、缺省回落来源供应商标)只有一份实现,复用它而不是抄一份。
 import { ModelIconMark } from './ModelSelector';
-import { anchorKey, type UnifiedAnchor, type UnifiedRowConfig } from './unifiedModelSelection';
+import {
+  anchorKey,
+  type UnifiedAnchor,
+  type UnifiedEngine,
+  type UnifiedRowConfig,
+} from './unifiedModelSelection';
+
+/**
+ * badge 样式的引擎徽标底色 —— 各引擎的品牌固定色(跨主题一致,语义豁免:与
+ * ClaudeMark/CodexMark 的 brand variant 同一条豁免规则,不走主题 token)。
+ * cc 取 Anthropic 陶土橙(ClaudeMark brand 同值);codex 取官方渐变中段蓝;
+ * pi 上游无官方色,取与两者可区分的紫(同设计稿 v7)。
+ */
+const ENGINE_BADGE_TINT: Record<UnifiedEngine, string> = {
+  cc: '#d97757',
+  codex: '#7a9dff',
+  pi: '#a78bfa',
+};
 
 /** 单行(双行布局):L1 图标 · 名称 · ☆ · 三元组 · 勾;L2 一句描述。 */
 export function UnifiedModelRow({
@@ -37,6 +63,9 @@ export function UnifiedModelRow({
   priceDisplay,
   defaultBadge,
   subscriptionLabel,
+  layout = 'classic',
+  channelLabel,
+  onEngineCycle,
 }: {
   entry: UnifiedModelEntry;
   anchor: UnifiedAnchor;
@@ -92,6 +121,18 @@ export function UnifiedModelRow({
    * 那类模型走套餐额度,行内画 $ 档串会误导成按量计费。
    */
   subscriptionLabel?: string;
+  /**
+   * 列表样式(modelPickerLayout 试用开关):
+   *   - 'classic'(默认):现行双行布局,行首来源图标、引擎在行尾三元组;
+   *   - 'badge':v7 设计稿单行布局 —— 行首 22px **引擎徽标**(官方 mark + 品牌色底,
+   *     点按在候选引擎间快切),右缘常驻**来源字签**(channelLabel),价格串按实付
+   *     比例上色(0.5 字符下限,见 badge 分支头注)。
+   */
+  layout?: ModelPickerLayout;
+  /** badge 样式右缘的来源字签文案(providerLabel 的既有结果,不另造词)。 */
+  channelLabel?: string;
+  /** badge 样式行首徽标点按 = 切到下一个候选引擎;单候选行不传(徽标不可点)。 */
+  onEngineCycle?: () => void;
 }) {
   const { t } = useTranslation();
   const provider = providers.find((item) => item.id === entry.providerId);
@@ -102,32 +143,242 @@ export function UnifiedModelRow({
     config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
   }${config.fast ? ' · Fast' : ''}`;
 
+  // 行根节点的交互与语义两种样式完全一致(选中/浮层/键盘),只有布局不同 —— 抽成
+  // 共享 props,badge 分支不复制一遍手写事件导致行为漂移。
+  const rowRootProps = {
+    role: 'option' as const,
+    'aria-selected': selected,
+    tabIndex: interactionDisabled ? -1 : 0,
+    'data-model-selected': selected ? ('true' as const) : undefined,
+    'data-unified-anchor': anchorKey(anchor),
+    onPointerEnter: reveal,
+    onPointerMove: reveal,
+    onPointerLeave: onLeave,
+    onFocus: (event: ReactFocusEvent<HTMLDivElement>) => onReveal(anchor, event.currentTarget),
+    onBlur: (event: ReactFocusEvent<HTMLDivElement>) => onBlurAway(event.relatedTarget),
+    onClick: onSelect,
+    onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (event.target !== event.currentTarget || interactionDisabled) return;
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        onRevealForKeyboard(anchor, event.currentTarget);
+        return;
+      }
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      onSelect();
+    },
+  };
+
+  const starButton = (
+    <button
+      type="button"
+      disabled={interactionDisabled}
+      onClick={(event) => {
+        event.stopPropagation();
+        onStar();
+      }}
+      title={
+        isFavoriteRow
+          ? t('newChat.modelSelector.unified.removeFavorite')
+          : t('newChat.modelSelector.unified.addFavorite')
+      }
+      aria-label={
+        isFavoriteRow
+          ? t('newChat.modelSelector.unified.removeFavorite')
+          : t('newChat.modelSelector.unified.addFavorite')
+      }
+      className={cn(
+        'flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-opacity',
+        isFavoriteRow || justFavorited
+          ? 'text-[var(--favorite-star)] opacity-100'
+          : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--favorite-star)]',
+      )}
+    >
+      <Star size={14} fill={isFavoriteRow || justFavorited ? 'currentColor' : 'none'} />
+    </button>
+  );
+
+  if (layout === 'badge') {
+    const tint = ENGINE_BADGE_TINT[config.engine];
+    const badgeMark =
+      config.engine === 'cc' ? (
+        <ClaudeMark size={13} variant="brand" />
+      ) : config.engine === 'codex' ? (
+        <CodexMark size={14} variant="brand" />
+      ) : (
+        <PiMark size={13} className="text-[#a78bfa]" />
+      );
+    const badgeStyle = {
+      backgroundColor: `color-mix(in srgb, ${tint} 14%, transparent)`,
+      boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${tint} 30%, transparent)`,
+    };
+    return (
+      <div
+        {...rowRootProps}
+        className={cn(
+          'group/row flex h-[38px] w-full cursor-pointer items-center gap-2 rounded-[10px] px-2.5 transition-colors duration-100',
+          'hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          (selected || active) && 'bg-[var(--model-item-hover)]',
+          interactionDisabled && 'cursor-not-allowed opacity-50',
+        )}
+      >
+        {/* 引擎徽标 = 本样式唯一的图标系统:官方 mark + 品牌色底。可点时在候选引擎间
+            快切(与浮层引擎胶囊同一条 applyEngine 链路,语义一致);单候选行只作标识。 */}
+        {onEngineCycle && !interactionDisabled ? (
+          <button
+            type="button"
+            data-engine-badge={config.engine}
+            title={engineOption.label}
+            aria-label={engineOption.label}
+            onClick={(event) => {
+              event.stopPropagation();
+              onEngineCycle();
+            }}
+            className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[7px] transition-transform hover:scale-110 active:scale-95"
+            style={badgeStyle}
+          >
+            {badgeMark}
+          </button>
+        ) : (
+          <span
+            data-engine-badge={config.engine}
+            title={engineOption.label}
+            className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[7px]"
+            style={badgeStyle}
+          >
+            {badgeMark}
+          </span>
+        )}
+        <span
+          title={entry.description ? `${entry.displayName} — ${entry.description}` : entry.displayName}
+          className="min-w-0 truncate text-14 font-medium leading-5 text-[var(--model-item-text)]"
+        >
+          {entry.displayName}
+        </span>
+        {defaultBadge && (
+          <span
+            data-default-badge
+            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-1.5 py-[1px] text-10 font-medium text-[var(--text-secondary)]"
+          >
+            {defaultBadge}
+          </span>
+        )}
+        {subscriptionLabel && (
+          <span
+            data-subscription-badge
+            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-10 font-normal leading-[1.45] text-[var(--text-secondary)]"
+          >
+            {subscriptionLabel}
+          </span>
+        )}
+        {priceDisplay?.kind === 'free' && (
+          <span
+            data-price-free
+            className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-10 font-medium leading-[1.45]"
+            style={{
+              color: EFFORT_TIER_COLORS.low,
+              backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
+            }}
+          >
+            {t('newChat.modelSelector.pricing.free')}
+          </span>
+        )}
+        {priceDisplay?.kind === 'tier' && priceDisplay.tier !== undefined && (
+          <span
+            data-price-tier
+            className="flex shrink-0 items-center gap-1"
+            {...(priceDisplay.title ? { title: priceDisplay.title } : {})}
+          >
+            {priceDisplay.paidPct !== undefined && priceDisplay.discountPct !== undefined ? (
+              (() => {
+                // badge 样式(Chris 2026-08-16 裁决):亮宽 = 档数 × 实付比例,**下限
+                // 0.5 个字符**(↓85% 这类只按比例会剩一条彩缝,太少上色很怪);颜色仍按
+                // 点亮字符数四舍五入取 1 绿 / 2 黄 / 3 红。
+                const litChars = Math.min(
+                  priceDisplay.tier,
+                  Math.max(0.5, (priceDisplay.paidPct / 100) * priceDisplay.tier),
+                );
+                const colorTier = Math.min(3, Math.max(1, Math.round(litChars))) as 1 | 2 | 3;
+                return (
+                  <>
+                    <span
+                      aria-hidden
+                      className="relative inline-block text-11 font-semibold leading-none tracking-[0.5px]"
+                    >
+                      <span className="invisible">{priceSymbol.repeat(priceDisplay.tier)}</span>
+                      <span className="absolute inset-0 text-[var(--text-tertiary)] opacity-55">
+                        {priceSymbol.repeat(priceDisplay.tier)}
+                      </span>
+                      <span
+                        data-price-lit={litChars.toFixed(2)}
+                        className="absolute inset-0"
+                        style={{
+                          color: PRICE_TIER_COLORS[`t${colorTier}`],
+                          clipPath: `inset(0 ${(100 - (litChars / priceDisplay.tier) * 100).toFixed(1)}% 0 0)`,
+                        }}
+                      >
+                        {priceSymbol.repeat(priceDisplay.tier)}
+                      </span>
+                    </span>
+                    <span
+                      data-discount-badge
+                      className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-10 font-medium leading-[1.45]"
+                      style={{
+                        color: EFFORT_TIER_COLORS.low,
+                        backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
+                      }}
+                    >
+                      {`↓${priceDisplay.discountPct}%`}
+                    </span>
+                  </>
+                );
+              })()
+            ) : (
+              <span
+                className="text-11 font-semibold leading-none tracking-[0.5px]"
+                style={{ color: PRICE_TIER_COLORS[`t${priceDisplay.tier}`] }}
+              >
+                {priceSymbol.repeat(priceDisplay.tier)}
+              </span>
+            )}
+          </span>
+        )}
+        {starButton}
+        {/* 右缘簇:⚡ + 档位字 + 来源字签(常驻,任何滚动位置都读得出这行是谁家的)。
+            引擎不再进右簇 —— 行首徽标已承载。 */}
+        <span
+          title={tripleTitle}
+          className={cn(
+            'ml-auto flex shrink-0 items-center gap-2 text-12',
+            emphasizeTriple ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
+          )}
+        >
+          {config.fast && (
+            <Zap
+              size={11}
+              fill="currentColor"
+              className="shrink-0"
+              aria-label={t('newChat.modelSelector.meta.fastBadge')}
+            />
+          )}
+          {config.effort && <span>{effortLabelOf(config.agent, config.effort)}</span>}
+          {channelLabel && (
+            <span
+              data-channel-tag
+              className="whitespace-nowrap rounded-[4px] border border-[var(--model-dropdown-border)] px-1.5 py-px text-10 text-[var(--text-tertiary)]"
+            >
+              {channelLabel}
+            </span>
+          )}
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div
-      role="option"
-      aria-selected={selected}
-      tabIndex={interactionDisabled ? -1 : 0}
-      data-model-selected={selected ? 'true' : undefined}
-      data-unified-anchor={anchorKey(anchor)}
-      onPointerEnter={reveal}
-      onPointerMove={reveal}
-      onPointerLeave={onLeave}
-      onFocus={(event) => onReveal(anchor, event.currentTarget)}
-      onBlur={(event) => onBlurAway(event.relatedTarget)}
-      onClick={onSelect}
-      onKeyDown={(event) => {
-        // 只处理落在**行本身**上的按键:滑杆(← / →)与 ☆ 都在浮层 / 行内子元素上,
-        // 它们的键位不能被这里劫持(event.target !== currentTarget 时直接放行)。
-        if (event.target !== event.currentTarget || interactionDisabled) return;
-        if (event.key === 'ArrowLeft') {
-          event.preventDefault();
-          onRevealForKeyboard(anchor, event.currentTarget);
-          return;
-        }
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        onSelect();
-      }}
+      {...rowRootProps}
       className={cn(
         'group/row flex w-full cursor-pointer flex-col rounded-[10px] px-2.5 py-2 transition-colors duration-100',
         'hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
@@ -247,32 +498,7 @@ export function UnifiedModelRow({
             )}
           </span>
         )}
-        <button
-          type="button"
-          disabled={interactionDisabled}
-          onClick={(event) => {
-            event.stopPropagation();
-            onStar();
-          }}
-          title={
-            isFavoriteRow
-              ? t('newChat.modelSelector.unified.removeFavorite')
-              : t('newChat.modelSelector.unified.addFavorite')
-          }
-          aria-label={
-            isFavoriteRow
-              ? t('newChat.modelSelector.unified.removeFavorite')
-              : t('newChat.modelSelector.unified.addFavorite')
-          }
-          className={cn(
-            'flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-opacity',
-            isFavoriteRow || justFavorited
-              ? 'text-[var(--favorite-star)] opacity-100'
-              : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--favorite-star)]',
-          )}
-        >
-          <Star size={14} fill={isFavoriteRow || justFavorited ? 'currentColor' : 'none'} />
-        </button>
+        {starButton}
         {/* 常驻三元组:引擎图标 + 推理强度 + ⚡。所有行同构,自定义行整组提亮一档。
             设计稿 .l1-right:margin-left auto 把右侧簇推到最右,左侧簇贴名字排。 */}
         <span

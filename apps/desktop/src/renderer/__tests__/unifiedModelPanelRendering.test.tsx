@@ -15,7 +15,7 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -24,6 +24,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
       const table: Record<string, string> = {
         'settings.providers.anthropic.title': 'Anthropic',
         'settings.providers.openai.title': 'OpenAI',
+        'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.modelListAria': '模型列表',
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.search.placeholderAll': '搜索模型…',
@@ -34,6 +35,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.unified.customized': '已自定义',
         'newChat.modelSelector.unified.reset': '恢复推荐',
         'newChat.modelSelector.unified.railAll': '全部',
+        'newChat.modelSelector.unified.layoutBadge': '试用新样式',
+        'newChat.modelSelector.unified.layoutClassic': '回到旧样式',
         'newChat.modelSelector.unified.railSameEngine': `仅 ${options?.agent ?? ''}`,
         'newChat.modelSelector.unified.crossEngineWarning': '切换引擎会重建上下文，可能丢失内容',
         'newChat.modelSelector.category.anthropic': 'Anthropic',
@@ -890,5 +893,144 @@ describe('统一面板 · 行内折扣徽标', () => {
     expect(without.container.querySelector('[data-discount-badge]')).toBeNull();
     expect(without.container.querySelector('[data-price-tier]')).toBeNull();
     expect(without.container.querySelector('[data-price-free]')).toBeNull();
+  });
+});
+
+describe('列表样式试用开关(badge · v7 引擎徽标行)', () => {
+  afterEach(async () => {
+    const { __resetForTest } = await import('@/state/modelPickerLayout');
+    __resetForTest();
+  });
+
+  it('badge 行:引擎徽标(可点快切)、来源字签、价格按实付比例上色且 0.5 字符钳制', async () => {
+    const { UnifiedModelRow } = await import('@/components/new-chat/UnifiedModelRow');
+    const entry = {
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      displayName: 'GPT-5.5',
+      sourceConnected: true,
+      candidates: ['claude-code' as const, 'codex' as const],
+      recommended: 'codex' as const,
+      nativeAgent: 'codex' as const,
+      capabilities: {
+        codex: {
+          agent: 'codex' as const,
+          wireModelId: 'gpt-5.5',
+          efforts: ['low', 'high'] as const,
+          defaultEffort: 'high' as const,
+          defaultEffortSource: 'catalog' as const,
+          supportsFastMode: false,
+          contextWindow: 272000,
+          contextWindowVerified: false,
+        },
+      },
+    };
+    const config = {
+      engine: 'codex' as const,
+      agent: 'codex' as const,
+      efforts: ['low', 'high'] as const,
+      effort: 'high' as const,
+      fast: false,
+      fastCapable: false,
+      customized: false,
+      capability: entry.capabilities.codex,
+      wireModelId: 'gpt-5.5',
+    };
+    const onSelect = vi.fn();
+    const onEngineCycle = vi.fn();
+    const common = {
+      entry,
+      anchor: { kind: 'model' as const, providerId: 'xd', modelId: 'gpt-5.5' },
+      config,
+      selected: false,
+      active: false,
+      isFavoriteRow: false,
+      emphasizeTriple: false,
+      justFavorited: false,
+      interactionDisabled: false,
+      effortLabelOf: (_agent: 'claude-code' | 'codex' | 'pi', effort: string) => effort,
+      providers: [],
+      onReveal: vi.fn(),
+      onRevealForKeyboard: vi.fn(),
+      onLeave: vi.fn(),
+      onBlurAway: vi.fn(),
+      onSelect,
+      onStar: vi.fn(),
+      layout: 'badge' as const,
+      channelLabel: 'Cindy AI',
+    };
+    const hexToRgb = (hex: string) =>
+      `rgb(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)})`;
+
+    // $1 档 ↓85%(实付 15%):比例只有 0.15 字符 → 钳到 0.5,裁掉右侧 50%,颜色 t1 绿。
+    const clamped = render(
+      React.createElement(UnifiedModelRow, {
+        ...common,
+        onEngineCycle,
+        priceDisplay: {
+          kind: 'tier' as const,
+          tier: 1 as const,
+          paidPct: 15,
+          discountPct: 85,
+          title: '立省 85%',
+        },
+      }),
+    );
+    const badgeEl = clamped.container.querySelector('[data-engine-badge]') as HTMLElement;
+    expect(badgeEl.getAttribute('data-engine-badge')).toBe('codex');
+    expect(clamped.container.querySelector('[data-channel-tag]')?.textContent).toBe('Cindy AI');
+    // 引擎在行首徽标承载,badge 行不再渲染旧三元组结构。
+    expect(clamped.container.querySelector('[data-unified-triple]')).toBeNull();
+    const lit = clamped.container.querySelector('[data-price-lit]') as HTMLElement;
+    expect(lit.getAttribute('data-price-lit')).toBe('0.50');
+    expect(lit.getAttribute('style')).toContain('inset(0 50.0% 0 0)');
+    expect(lit.getAttribute('style')).toContain(hexToRgb(PRICE_TIER_COLORS.t1));
+    // 徽标是按钮:点击走快切回调,且不触发行选中(stopPropagation)。
+    fireEvent.click(badgeEl);
+    expect(onEngineCycle).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+    clamped.unmount();
+
+    // $$$ ↓40%(实付 60%):1.8 字符按比例点亮(裁掉右侧 40%),颜色 round(1.8)=2 黄。
+    const proportional = render(
+      React.createElement(UnifiedModelRow, {
+        ...common,
+        priceDisplay: {
+          kind: 'tier' as const,
+          tier: 3 as const,
+          paidPct: 60,
+          discountPct: 40,
+          title: '立省 40%',
+        },
+      }),
+    );
+    const propLit = proportional.container.querySelector('[data-price-lit]') as HTMLElement;
+    expect(propLit.getAttribute('data-price-lit')).toBe('1.80');
+    expect(propLit.getAttribute('style')).toContain('inset(0 40.0% 0 0)');
+    expect(propLit.getAttribute('style')).toContain(hexToRgb(PRICE_TIER_COLORS.t2));
+    proportional.unmount();
+
+    // 不传 onEngineCycle(单候选)→ 徽标是纯标识 span,不可点。
+    const single = render(React.createElement(UnifiedModelRow, common));
+    expect(single.container.querySelector('button[data-engine-badge]')).toBeNull();
+    expect(single.container.querySelector('span[data-engine-badge]')).not.toBeNull();
+  });
+
+  it('面板级:footer 按钮切换样式,行进入 badge 布局并带来源字签', async () => {
+    renderPanel();
+    await act(async () => {
+      fireEvent.click(screen.getByText('试用新样式'));
+    });
+    const { getModelPickerLayout } = await import('@/state/modelPickerLayout');
+    expect(getModelPickerLayout()).toBe('badge');
+    expect(screen.getByText('回到旧样式')).toBeTruthy();
+    const row = rowFor('GPT-5.5');
+    expect(row.querySelector('[data-engine-badge]')).not.toBeNull();
+    expect(row.querySelector('[data-channel-tag]')?.textContent).toBe('Cindy AI');
+    // 组头粘性吸顶(v7):badge 样式下组标题带 sticky。
+    const header = document.querySelector(
+      '[role="group"][aria-label="Cindy AI"] > div',
+    ) as HTMLElement;
+    expect(header.className).toContain('sticky');
   });
 });

@@ -17,6 +17,7 @@ import {
 } from '@/lib/modelPriceFormat';
 import type { Effort } from '@/lib/userPreferences.types';
 import { getModelEngineOverride, useModelEnginePrefsVersion } from '@/state/modelEnginePrefs';
+import { useModelPickerLayout } from '@/state/modelPickerLayout';
 import { useModelFavorites, type ModelFavoriteItem } from '@/state/modelFavorites';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 
@@ -236,6 +237,8 @@ export function UnifiedModelPanel({
   const memoryVersion = useProviderModelMemoryVersion();
 
   const sessionAgent = sessionEngineFilter?.currentAgent;
+  // 列表样式试用开关(本机偏好):badge = v7 引擎徽标行;classic = 现行样式。
+  const pickerLayout = useModelPickerLayout();
   // 会话内默认停在「同引擎」视图(规格 §1.6:切引擎有损,默认给无损那一面)。
   const [rail, setRail] = useState<UnifiedRailFilter>(() =>
     sessionAgent ? { kind: 'engine', agent: sessionAgent } : { kind: 'all' },
@@ -789,8 +792,15 @@ export function UnifiedModelPanel({
               role="group"
               aria-label={sectionLabel(section)}
             >
-              {/* 设计稿 .group-label:11.5px 常规字重、padding 8/10/4。 */}
-              <div className="truncate px-2.5 pb-1 pt-2 text-11 text-[var(--text-tertiary)]">
+              {/* 设计稿 .group-label:11.5px 常规字重、padding 8/10/4。
+                  badge 样式下粘性吸顶:滚到组中间时组名钉在列表顶端(v7 设计稿)。 */}
+              <div
+                className={cn(
+                  'truncate px-2.5 pb-1 pt-2 text-11 text-[var(--text-tertiary)]',
+                  pickerLayout === 'badge' &&
+                    'sticky top-0 z-[5] bg-[var(--model-dropdown-bg)]',
+                )}
+              >
                 {sectionLabel(section)}
               </div>
               {section.rows.map((row) => {
@@ -868,6 +878,30 @@ export function UnifiedModelPanel({
                     interactionDisabled={interactionDisabled}
                     effortLabelOf={effortLabelOf}
                     providers={providers}
+                    layout={pickerLayout}
+                    // badge 样式:右缘来源字签(providerLabel 既有结果);行首徽标点按
+                    // 在候选引擎间快切 —— 与浮层引擎胶囊走**同一条 applyEngine 链路**
+                    // (选中行的草稿回写 / 会话跨引擎确认语义因此完全一致)。收藏行不给
+                    // 快切(☆ 是配置副本,徽标只作标识,改引擎去浮层改那条收藏)。
+                    {...(pickerLayout === 'badge'
+                      ? {
+                          channelLabel: providerLabel(row.entry.providerId),
+                          ...(configurationEnabled &&
+                          !row.favorite &&
+                          row.entry.candidates.length > 1
+                            ? {
+                                onEngineCycle: () => {
+                                  const engines = row.entry.candidates.map(engineOfAgentKind);
+                                  const next =
+                                    engines[
+                                      (engines.indexOf(config.engine) + 1) % engines.length
+                                    ];
+                                  if (next) applyEngine(row.anchor, row.entry, config, next);
+                                },
+                              }
+                            : {}),
+                        }
+                      : {})}
                     onReveal={revealFlyout}
                     onRevealForKeyboard={revealFlyoutForKeyboard}
                     onLeave={scheduleCloseFromRow}
