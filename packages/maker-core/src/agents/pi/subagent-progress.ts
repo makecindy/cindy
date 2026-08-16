@@ -16,24 +16,18 @@
  * 的 UI 概念。
  */
 
-import { normalizeSubagentTranscriptEntries } from "@cindy/maker-shared/agent-task";
-import type { AgentTaskUpdateEventData } from "../../types/events.js";
+import type { AgentTaskUpdateEventData } from '../../types/events.js';
 
 /** 子代理卡状态(`AgentTaskStatus` 的子集)。 */
-export type PiSubagentStatus = "running" | "completed" | "failed" | "stopped";
+export type PiSubagentStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
-const STATUSES = new Set<PiSubagentStatus>([
-  "running",
-  "completed",
-  "failed",
-  "stopped",
-]);
+const STATUSES = new Set<PiSubagentStatus>(['running', 'completed', 'failed', 'stopped']);
 
 /** 单条上报的最大字符数:防子代理把长输出经进度帧灌进事件流。 */
 const MAX_TEXT = 2_000;
 
 /** 扩展与本模块共用的载荷标记 —— 扩展源码里逐字使用同一个键名。 */
-export const PI_SUBAGENT_PROGRESS_MARKER = "__cindySubagent";
+export const PI_SUBAGENT_PROGRESS_MARKER = '__cindySubagent';
 
 /**
  * 子代理的**累计**用量分量(与 pi 自己的 `message_end.usage` 同形)。
@@ -63,43 +57,35 @@ export interface PiSubagentProgress {
 }
 
 function readUsage(value: unknown): PiSubagentUsage | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
   const read = (key: string): number => {
     const n = raw[key];
-    return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+    return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0;
   };
   const usage: PiSubagentUsage = {
-    input: read("input"),
-    output: read("output"),
-    cacheRead: read("cacheRead"),
-    cacheWrite: read("cacheWrite"),
-    cost: read("cost"),
+    input: read('input'),
+    output: read('output'),
+    cacheRead: read('cacheRead'),
+    cacheWrite: read('cacheWrite'),
+    cost: read('cost'),
   };
   // 全零就当没有:避免为无意义的帧在父侧建立 taskId 记账条目。
-  if (
-    !usage.input &&
-    !usage.output &&
-    !usage.cacheRead &&
-    !usage.cacheWrite &&
-    !usage.cost
-  ) {
+  if (!usage.input && !usage.output && !usage.cacheRead && !usage.cacheWrite && !usage.cost) {
     return undefined;
   }
   return usage;
 }
 
 function readString(value: unknown, max = MAX_TEXT): string | undefined {
-  if (typeof value !== "string") return undefined;
+  if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
 }
 
 function readCount(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
-    return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
   return Math.floor(value);
 }
 
@@ -112,52 +98,45 @@ function readCount(value: unknown): number | undefined {
  * 刻意不猜:状态不在白名单内一律按 running,而不是编造终态 —— 把仍在跑的子代理显示成
  * 已完成比没有状态更糟。
  */
-export function parsePiSubagentProgress(
-  partialResult: unknown,
-): PiSubagentProgress | null {
+export function parsePiSubagentProgress(partialResult: unknown): PiSubagentProgress | null {
   const raw = readProgressDetails(partialResult);
   if (!raw) return null;
 
   // taskId 是卡片/tool_use 的关联键,**只 trim 不截断**:截断+省略号会改写 id,
   // 后续 update 再也命中不到同一张卡(表现为卡片不更新或另开一张)。
-  const taskId = typeof raw.taskId === "string" ? raw.taskId.trim() : "";
+  const taskId = typeof raw.taskId === 'string' ? raw.taskId.trim() : '';
   if (!taskId) return null;
 
   const status: PiSubagentStatus = STATUSES.has(raw.status as PiSubagentStatus)
     ? (raw.status as PiSubagentStatus)
-    : "running";
+    : 'running';
 
   const totalTokens = readCount(raw.totalTokens);
   const toolUses = readCount(raw.toolUses);
   const durationMs = readCount(raw.durationMs);
-  const delegatedUsage = readUsage(raw.usage);
-  const usage =
-    totalTokens !== undefined ||
-    toolUses !== undefined ||
-    durationMs !== undefined ||
-    delegatedUsage
-      ? {
-          ...(totalTokens !== undefined ? { totalTokens } : {}),
-          ...(toolUses !== undefined ? { toolUses } : {}),
-          ...(durationMs !== undefined ? { durationMs } : {}),
-        }
-      : undefined;
+  const usage = totalTokens !== undefined || toolUses !== undefined || durationMs !== undefined
+    ? {
+        ...(totalTokens !== undefined ? { totalTokens } : {}),
+        ...(toolUses !== undefined ? { toolUses } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      }
+    : undefined;
 
   const title = readString(raw.agentName, 96);
   const description = readString(raw.task);
   const summary = readString(raw.summary);
   const model = readString(raw.model, 200);
-  // 子进程只在终态帧带上完整工作过程;host 侧再做一次收窄与落盘。
-  const transcriptEntries = normalizeSubagentTranscriptEntries(raw.transcript);
+
+  const delegatedUsage = readUsage(raw.usage);
 
   return {
     update: {
-      provider: "pi",
+      provider: 'pi',
       taskId,
       parentToolUseId: taskId,
       status,
       subagentObservation: {
-        kind: status === "running" ? "progress" : "terminal",
+        kind: status === 'running' ? 'progress' : 'terminal',
         logicalSubagentId: taskId,
         parentToolUseId: taskId,
       },
@@ -166,24 +145,15 @@ export function parsePiSubagentProgress(
       ...(summary ? { summary } : {}),
       ...(model ? { model } : {}),
       ...(usage ? { usage } : {}),
-      ...(transcriptEntries ? { transcriptEntries } : {}),
     },
     ...(delegatedUsage ? { delegatedUsage } : {}),
   };
 }
 
-function readProgressDetails(
-  partialResult: unknown,
-): Record<string, unknown> | null {
-  if (
-    !partialResult ||
-    typeof partialResult !== "object" ||
-    Array.isArray(partialResult)
-  )
-    return null;
+function readProgressDetails(partialResult: unknown): Record<string, unknown> | null {
+  if (!partialResult || typeof partialResult !== 'object' || Array.isArray(partialResult)) return null;
   const details = (partialResult as { details?: unknown }).details;
-  if (!details || typeof details !== "object" || Array.isArray(details))
-    return null;
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return null;
   const raw = details as Record<string, unknown>;
   // 标记必须逐字命中:别的工具流式上报恰好带 details 时不得被误认成子代理进度。
   if (raw[PI_SUBAGENT_PROGRESS_MARKER] !== 1) return null;

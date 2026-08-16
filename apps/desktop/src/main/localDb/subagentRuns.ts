@@ -2,6 +2,7 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import {
+  PI_DURABLE_SUBAGENT_CAPABILITIES,
   SUBAGENT_PR1_CAPABILITIES,
   type SubagentActivityEntry,
   type SubagentCapabilities,
@@ -16,11 +17,10 @@ import {
   subagentSpawnResultIndicatesRunning,
   type AgentTaskUpdate,
 } from '@cindy/maker-shared/agent-task';
-import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, ne, or } from 'drizzle-orm';
 
 import { getDbClient } from './client/current.js';
 import { messages, sessions, subagentRunAliases, subagentRuns } from './schema.js';
-import { deleteSubagentTranscript, writeSubagentTranscript } from './subagentTranscriptStore.js';
 
 const MAX_ALIAS_COUNT = 128;
 const MAX_PROVIDER_RUN_IDS = 64;
@@ -76,6 +76,57 @@ function boundedNumber(value: number | undefined): number | undefined {
     : undefined;
 }
 
+function boundedCost(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function flagInt(value: number | null | undefined): number | null {
+  return value === 1 ? 1 : value === 0 ? 0 : null;
+}
+
+/** A later terminal frame without full text must not erase the first return. */
+function returnedResultValues(
+  data: unknown,
+  terminalStatus: boolean,
+  existing?: SubagentRunRow,
+  reset = false,
+): {
+  returnedResult: string | null;
+  returnedResultEmpty: number | null;
+  returnedResultTruncated: number | null;
+} {
+  const prior = reset ? undefined : existing;
+  if (prior && (prior.returnedResult !== null || prior.returnedResultEmpty === 1)) {
+    return {
+      returnedResult: prior.returnedResult,
+      returnedResultEmpty: flagInt(prior.returnedResultEmpty),
+      returnedResultTruncated: flagInt(prior.returnedResultTruncated),
+    };
+  }
+  const unchanged = {
+    returnedResult: prior?.returnedResult ?? null,
+    returnedResultEmpty: flagInt(prior?.returnedResultEmpty),
+    returnedResultTruncated: flagInt(prior?.returnedResultTruncated),
+  };
+  if (!terminalStatus || !data || typeof data !== 'object' || Array.isArray(data)) {
+    return unchanged;
+  }
+  const raw = data as Record<string, unknown>;
+  const explicitEmpty = raw.returnedResultEmpty === true || raw.returnedResultEmpty === 1;
+  if (typeof raw.returnedResult !== 'string' && !explicitEmpty) return unchanged;
+  const source = typeof raw.returnedResult === 'string' ? raw.returnedResult : '';
+  const bounded = truncateUtf8(source, MAX_RETURNED_RESULT_BYTES);
+  const empty = explicitEmpty || bounded.value.trim().length === 0;
+  return {
+    returnedResult: bounded.value.length > 0 ? bounded.value : null,
+    returnedResultEmpty: empty ? 1 : 0,
+    returnedResultTruncated:
+      bounded.truncated || raw.returnedResultTruncated === true || raw.returnedResultTruncated === 1
+        ? 1
+        : 0,
+  };
+}
+
 function parseStringArray(raw: string): string[] {
   try {
     const value: unknown = JSON.parse(raw);
@@ -128,7 +179,9 @@ function parseCapabilities(raw: string): SubagentCapabilities {
     // Fail closed below.
   }
   const parentContext =
-    value.parentContext === 'snapshot' || value.parentContext === 'live'
+    value.parentContext === 'none'
+    || value.parentContext === 'snapshot'
+    || value.parentContext === 'live'
       ? value.parentContext
       : 'unknown';
   return {
@@ -166,29 +219,37 @@ function terminal(status: SubagentRunStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'stopped';
 }
 
-function capabilitiesForRun(
-  existing: string | undefined,
+function initialCapabilities(update: AgentTaskUpdate): Readonly<SubagentCapabilities> {
+  return update.provider === 'pi' && update.taskType === 'pi_subagent'
+    ? PI_DURABLE_SUBAGENT_CAPABILITIES
+    : SUBAGENT_PR1_CAPABILITIES;
+}
+
+function capabilitiesForUpdate(
   update: AgentTaskUpdate,
-  status: SubagentRunStatus,
-  hasTranscript: boolean,
-): string {
-  const stored = existing ? parseCapabilities(existing) : SUBAGENT_PR1_CAPABILITIES;
-  const capabilities: SubagentCapabilities = {
-    ...stored,
-    viewFullTranscript: hasTranscript,
-    // The existing precise stop bridge currently has a reliable task-level
-    // implementation only for a live local Claude task.
-    stop: status === 'running' && update.provider === 'claude-code' && Boolean(update.taskId),
-  };
-  return JSON.stringify(capabilities);
+  data: unknown,
+  existing?: SubagentRunRow,
+): SubagentCapabilities {
+  if (update.provider === 'pi' && update.taskType === 'pi_subagent_diagnostic') {
+    return { ...SUBAGENT_PR1_CAPABILITIES };
+  }
+  const current = existing
+    ? parseCapabilities(existing.capabilities)
+    : { ...initialCapabilities(update) };
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return current;
+  const context = (data as Record<string, unknown>).subagentParentContext;
+  return context === 'none' || context === 'snapshot' || context === 'live'
+    ? { ...current, parentContext: context }
+    : current;
 }
 
 function mergeStatus(
   previous: SubagentRunStatus | undefined,
   next: SubagentRunStatus,
   provider: SubagentProvider,
+  resume = false,
 ): SubagentRunStatus {
-  if (!previous) return next;
+  if (!previous || resume) return next;
   if (previous === 'failed' || previous === 'stopped') return previous;
   // Codex can discover a running descendant after the direct child appeared
   // complete; that is aggregate expansion, not resurrection of a failed run.
@@ -196,7 +257,12 @@ function mergeStatus(
   return next;
 }
 
-function activityKind(status: SubagentRunStatus, created: boolean): SubagentActivityEntry['kind'] {
+function activityKind(
+  status: SubagentRunStatus,
+  created: boolean,
+  resumed = false,
+): SubagentActivityEntry['kind'] {
+  if (resumed) return 'resumed';
   if (created && status === 'running') return 'started';
   if (status === 'completed') return 'completed';
   if (status === 'failed') return 'failed';
@@ -210,11 +276,26 @@ function appendActivity(
   status: SubagentRunStatus,
   occurredAt: number,
   created: boolean,
+  resumed = false,
 ): SubagentActivityEntry[] {
   const summary = boundedText(update.summary ?? update.description, TEXT_LIMITS.activitySummary);
   const lastToolName = boundedText(update.lastToolName, TEXT_LIMITS.lastToolName);
-  const kind = activityKind(status, created);
+  const kind = activityKind(status, created, resumed);
   const previous = current.at(-1);
+  if (
+    previous
+    && update.provider === 'pi'
+    && previous.kind === kind
+    && previous.status === status
+  ) {
+    const replacement: SubagentActivityEntry = {
+      ...previous,
+      ...(summary ? { summary } : {}),
+      ...(lastToolName ? { lastToolName } : {}),
+      occurredAt,
+    };
+    return [...current.slice(0, -1), replacement];
+  }
   if (
     previous &&
     previous.kind === kind &&
@@ -235,11 +316,12 @@ function appendActivity(
   return [...current, next].slice(-MAX_ACTIVITY_ENTRIES);
 }
 
-function rowToRun(row: SubagentRunRow): SubagentRun {
+function rowToRun(row: SubagentRunRow, localArtifacts = true): SubagentRun {
   const usage = {
     ...(row.totalTokens !== null ? { totalTokens: row.totalTokens } : {}),
     ...(row.toolUses !== null ? { toolUses: row.toolUses } : {}),
     ...(row.durationMs !== null ? { durationMs: row.durationMs } : {}),
+    ...(row.provider === 'pi' && row.costUsd !== null ? { costUsd: row.costUsd } : {}),
   };
   return {
     id: row.id,
@@ -256,7 +338,15 @@ function rowToRun(row: SubagentRunRow): SubagentRun {
     ...(row.model ? { model: row.model } : {}),
     ...(row.reasoningEffort ? { reasoningEffort: row.reasoningEffort } : {}),
     ...(Object.keys(usage).length > 0 ? { usage } : {}),
-    capabilities: parseCapabilities(row.capabilities),
+    capabilities: localArtifacts
+      ? parseCapabilities(row.capabilities)
+      : {
+          ...parseCapabilities(row.capabilities),
+          viewFullTranscript: false,
+          resume: false,
+          steer: false,
+          stop: false,
+        },
     startedAt: row.startedAt,
     updatedAt: row.updatedAt,
     ...(row.endedAt !== null ? { endedAt: row.endedAt } : {}),
@@ -387,6 +477,11 @@ export async function persistSubagentTaskUpdate(
   // Remote/device-link sessions are not owned by this database. PR1 fails
   // closed instead of accidentally attaching their events to the controller.
   if (!session || session.status === 'deleted') return null;
+  if (
+    session.clearedAt !== null
+    && update.createdAt
+    && finiteTime(update.createdAt, Number.MAX_SAFE_INTEGER) <= session.clearedAt
+  ) return null;
 
   const incomingIdentityAliases = mergeUnique(
     [],
@@ -397,10 +492,9 @@ export async function persistSubagentTaskUpdate(
     ],
     MAX_ALIAS_COUNT,
   );
-  const incomingProviderRunIds =
-    observation.kind === 'spawn'
-      ? mergeUnique([], observation.providerRunIds ?? [], MAX_PROVIDER_RUN_IDS)
-      : [];
+  const incomingProviderRunIds = observation.kind === 'spawn'
+    ? mergeUnique([], observation.providerRunIds ?? [], MAX_PROVIDER_RUN_IDS)
+    : [];
   const lookupAliases = mergeUnique(
     incomingIdentityAliases,
     incomingProviderRunIds,
@@ -410,6 +504,23 @@ export async function persistSubagentTaskUpdate(
   // A progress/terminal event is never authority to invent a child or attach a
   // control call's receiver ids to an arbitrary existing run.
   if (!existing && observation.kind !== 'spawn') return null;
+  // Durable reconciliation repeats after the parent handle is unloaded. Once a
+  // launch message was rewound, never recreate a hidden PI row on every Fleet
+  // read; the still-running child remains stoppable through deletion cleanup.
+  if (
+    !existing
+    && update.provider === 'pi'
+    && (update.taskType === 'pi_subagent' || update.taskType === 'pi_subagent_diagnostic')
+    && update.createdAt
+    && observation.parentToolUseId
+  ) {
+    const visibleParents = await visibleParentToolUseIds(
+      sessionId,
+      [observation.parentToolUseId],
+      session.clearedAt,
+    );
+    if (!visibleParents.has(observation.parentToolUseId)) return null;
+  }
   const now = Number.isSafeInteger(observedAt) && observedAt >= 0 ? observedAt : Date.now();
   const updatedAt = finiteTime(update.updatedAt, now);
   if (codexSummaryEnrichment) {
@@ -432,33 +543,42 @@ export async function persistSubagentTaskUpdate(
       .where(eq(subagentRuns.id, existing.id));
     return { runId: existing.id, created: false, firstForSession: false };
   }
+  const existingProviderRunIds = existing ? parseStringArray(existing.providerRunIds) : [];
+  const isPiDurable = update.provider === 'pi' && update.taskType === 'pi_subagent';
+  const resumed = Boolean(
+    isPiDurable
+    && existing
+    && terminal(existing.status)
+    && observation.kind === 'spawn'
+    && incomingProviderRunIds.some((id) => !existingProviderRunIds.includes(id)),
+  );
   const startedAt = existing?.startedAt ?? finiteTime(update.createdAt, updatedAt);
-  const status = mergeStatus(existing?.status, update.status, update.provider);
+  const status = mergeStatus(existing?.status, update.status, update.provider, resumed);
   const aliases = mergeUnique(
     existing ? parseStringArray(existing.aliases) : [],
     incomingIdentityAliases,
     MAX_ALIAS_COUNT,
   );
   const providerRunIds = mergeUnique(
-    existing ? parseStringArray(existing.providerRunIds) : [],
+    existingProviderRunIds,
     incomingProviderRunIds,
     MAX_PROVIDER_RUN_IDS,
   );
-  const activity = appendActivity(
+  let activity = appendActivity(
     existing ? parseActivity(existing.activity) : [],
     update,
     status,
     updatedAt,
     !existing,
+    resumed,
   );
+  if (resumed && terminal(status)) {
+    activity = appendActivity(activity, update, status, updatedAt, false);
+  }
   const parentToolUseId =
-    boundedText(observation.parentToolUseId, TEXT_LIMITS.id) ?? existing?.parentToolUseId ?? null;
-  const runId = existing?.id ?? createId();
-  const transcriptFile = await persistTranscriptIfPresent(
-    runId,
-    update,
-    existing?.transcriptFile ?? null,
-  );
+    boundedText(observation.parentToolUseId, TEXT_LIMITS.id) ??
+    existing?.parentToolUseId ??
+    null;
   const values = {
     parentToolUseId,
     aliases: JSON.stringify(aliases),
@@ -467,7 +587,8 @@ export async function persistSubagentTaskUpdate(
     title: boundedText(update.title, TEXT_LIMITS.title) ?? existing?.title ?? null,
     description:
       boundedText(update.description, TEXT_LIMITS.description) ?? existing?.description ?? null,
-    summary: boundedText(update.summary, TEXT_LIMITS.summary) ?? existing?.summary ?? null,
+    summary:
+      boundedText(update.summary, TEXT_LIMITS.summary) ?? (resumed ? null : existing?.summary ?? null),
     model:
       update.model === null
         ? null
@@ -476,19 +597,22 @@ export async function persistSubagentTaskUpdate(
       boundedText(update.reasoningEffort, TEXT_LIMITS.reasoningEffort) ??
       existing?.reasoningEffort ??
       null,
-    totalTokens: boundedNumber(update.usage?.totalTokens) ?? existing?.totalTokens ?? null,
-    toolUses: boundedNumber(update.usage?.toolUses) ?? existing?.toolUses ?? null,
-    durationMs: boundedNumber(update.usage?.durationMs) ?? existing?.durationMs ?? null,
-    capabilities: capabilitiesForRun(
-      existing?.capabilities,
-      update,
-      status,
-      Boolean(transcriptFile),
-    ),
+    totalTokens:
+      boundedNumber(update.usage?.totalTokens) ?? (resumed ? null : existing?.totalTokens ?? null),
+    toolUses: boundedNumber(update.usage?.toolUses) ?? (resumed ? null : existing?.toolUses ?? null),
+    durationMs:
+      boundedNumber(update.usage?.durationMs) ?? (resumed ? null : existing?.durationMs ?? null),
+    costUsd: isPiDurable
+      ? boundedCost(update.usage?.costUsd) ?? (resumed ? null : existing?.costUsd ?? null)
+      : existing?.costUsd ?? null,
+    capabilities: JSON.stringify(capabilitiesForUpdate(update, data, existing)),
     activity: JSON.stringify(activity),
+    ...(isPiDurable
+      ? returnedResultValues(data, terminal(status), existing, resumed)
+      : returnedResultValues(undefined, false, existing)),
     startedAt,
     updatedAt: Math.max(existing?.updatedAt ?? 0, updatedAt),
-    endedAt: terminal(status) ? (existing?.endedAt ?? updatedAt) : null,
+    endedAt: terminal(status) ? (resumed ? updatedAt : existing?.endedAt ?? updatedAt) : null,
   };
 
   if (existing) {
@@ -499,10 +623,7 @@ export async function persistSubagentTaskUpdate(
       mergeUnique(aliases, providerRunIds, MAX_INDEXED_ALIAS_COUNT),
       now,
     );
-    await db
-      .update(subagentRuns)
-      .set({ ...values, transcriptFile })
-      .where(eq(subagentRuns.id, existing.id));
+    await db.update(subagentRuns).set(values).where(eq(subagentRuns.id, existing.id));
     return { runId: existing.id, created: false, firstForSession: false };
   }
 
@@ -518,56 +639,28 @@ export async function persistSubagentTaskUpdate(
       ),
     )
     .limit(1);
+  const id = createId();
   await db.insert(subagentRuns).values({
-    id: runId,
+    id,
     sessionId,
     provider: update.provider,
     logicalAgentId: observation.logicalSubagentId,
     ...values,
-    ...(transcriptFile ? { transcriptFile } : {}),
   });
   await persistAliasProjection(
-    { id: runId, sessionId, provider: update.provider },
+    { id, sessionId, provider: update.provider },
     mergeUnique(aliases, providerRunIds, MAX_INDEXED_ALIAS_COUNT),
     now,
   );
-  return { runId, created: true, firstForSession: !visibleBefore };
+  return { runId: id, created: true, firstForSession: !visibleBefore };
 }
 
-/**
- * Writes captured child-session content on the frame that carries it.
- *
- * Adapters attach bounded snapshots at complete-message boundaries. Each write
- * atomically replaces the prior snapshot so a running detail can refresh without
- * appending duplicate deltas. A failed write keeps the previous readable file.
- */
-async function persistTranscriptIfPresent(
-  runId: string,
-  update: AgentTaskUpdate,
-  existingFile: string | null,
-): Promise<string | null> {
-  const entries = update.transcriptEntries
-    ? [
-        ...(update.description && !update.transcriptEntries.some((entry) => entry.role === 'parent')
-          ? [
-              {
-                role: 'parent' as const,
-                content: update.description,
-                occurredAt: finiteTime(update.createdAt, Date.now()),
-              },
-            ]
-          : []),
-        ...update.transcriptEntries,
-      ]
-    : undefined;
-  if (!entries || entries.length === 0) return null;
-  const written = await writeSubagentTranscript(runId, entries);
-  return written ?? existingFile;
-}
-
-async function readableSession(sessionId: string): Promise<{ clearedAt: number | null } | null> {
+async function readableSession(sessionId: string): Promise<{
+  clearedAt: number | null;
+  remoteHostId: string | null;
+} | null> {
   const [session] = await getDbClient()
-    .drizzle.select({ clearedAt: sessions.clearedAt })
+    .drizzle.select({ clearedAt: sessions.clearedAt, remoteHostId: sessions.remoteHostId })
     .from(sessions)
     .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted')))
     .limit(1);
@@ -631,72 +724,6 @@ async function visibleParentToolUseIds(
   return new Set(rows.flatMap((row) => (row.toolUseId ? [row.toolUseId] : [])));
 }
 
-/**
- * Removes transcript pointers for runs that the parent task can no longer show.
- *
- * Clear, rewind and task deletion intentionally preserve audit rows. Their
- * potentially user-authored transcript payloads must not remain as unreachable
- * files, so invalidation boundaries call this best-effort pruning pass.
- */
-export async function pruneInvisibleSubagentTranscripts(sessionId: string): Promise<number> {
-  const db = getDbClient().drizzle;
-  const [session] = await db
-    .select({ status: sessions.status, clearedAt: sessions.clearedAt })
-    .from(sessions)
-    .where(eq(sessions.id, sessionId))
-    .limit(1);
-  const rows = await db
-    .select({
-      id: subagentRuns.id,
-      parentToolUseId: subagentRuns.parentToolUseId,
-      transcriptFile: subagentRuns.transcriptFile,
-      capabilities: subagentRuns.capabilities,
-      startedAt: subagentRuns.startedAt,
-      rewindAt: subagentRuns.rewindAt,
-      deletedAt: subagentRuns.deletedAt,
-    })
-    .from(subagentRuns)
-    .where(and(eq(subagentRuns.sessionId, sessionId), isNotNull(subagentRuns.transcriptFile)));
-  if (rows.length === 0) return 0;
-
-  const sessionVisible = Boolean(session && session.status !== 'deleted');
-  const parentCandidates = sessionVisible
-    ? rows.flatMap((row) => (row.parentToolUseId ? [row.parentToolUseId] : []))
-    : [];
-  const visibleParents = sessionVisible
-    ? await visibleParentToolUseIds(sessionId, parentCandidates, session?.clearedAt ?? null)
-    : new Set<string>();
-  let pruned = 0;
-
-  for (const row of rows) {
-    const transcriptFile = row.transcriptFile;
-    if (!transcriptFile) continue;
-    const invisible =
-      !sessionVisible ||
-      row.rewindAt !== null ||
-      row.deletedAt !== null ||
-      (session?.clearedAt !== null &&
-        session?.clearedAt !== undefined &&
-        row.startedAt <= session.clearedAt) ||
-      (Boolean(row.parentToolUseId) && !visibleParents.has(row.parentToolUseId!));
-    if (!invisible) continue;
-
-    const capabilities = {
-      ...parseCapabilities(row.capabilities),
-      viewFullTranscript: false,
-    } satisfies SubagentCapabilities;
-    const result = await db
-      .update(subagentRuns)
-      .set({ transcriptFile: null, capabilities: JSON.stringify(capabilities) })
-      .where(and(eq(subagentRuns.id, row.id), eq(subagentRuns.transcriptFile, transcriptFile)))
-      .run();
-    if (result.changes !== 1) continue;
-    pruned += 1;
-    await deleteSubagentTranscript(transcriptFile);
-  }
-  return pruned;
-}
-
 interface SubagentListCursor {
   startedAt: number;
   id: string;
@@ -733,7 +760,7 @@ function decodeCursor(raw: string | undefined): SubagentListCursor | null {
 
 export async function listSubagentRuns(
   sessionId: string,
-  options: { cursor?: string; limit?: number } = {},
+  options: { cursor?: string; limit?: number; provider?: SubagentProvider } = {},
 ): Promise<{ runs: SubagentRun[]; nextCursor?: string } | null> {
   const session = await readableSession(sessionId);
   if (!session) return null;
@@ -748,6 +775,7 @@ export async function listSubagentRuns(
     eq(subagentRuns.sessionId, sessionId),
     isNull(subagentRuns.rewindAt),
     isNull(subagentRuns.deletedAt),
+    ...(options.provider ? [eq(subagentRuns.provider, options.provider)] : []),
   ];
   if (session.clearedAt !== null) {
     baseConditions.push(gt(subagentRuns.startedAt, session.clearedAt));
@@ -763,7 +791,10 @@ export async function listSubagentRuns(
       conditions.push(
         or(
           lt(subagentRuns.startedAt, scanCursor.startedAt),
-          and(eq(subagentRuns.startedAt, scanCursor.startedAt), lt(subagentRuns.id, scanCursor.id)),
+          and(
+            eq(subagentRuns.startedAt, scanCursor.startedAt),
+            lt(subagentRuns.id, scanCursor.id),
+          ),
         )!,
       );
     }
@@ -781,14 +812,16 @@ export async function listSubagentRuns(
       session.clearedAt,
     );
     visibleRows.push(
-      ...batch.filter((row) => !row.parentToolUseId || visibleToolUseIds.has(row.parentToolUseId)),
+      ...batch.filter(
+        (row) => !row.parentToolUseId || visibleToolUseIds.has(row.parentToolUseId),
+      ),
     );
     const lastScanned = batch[batch.length - 1];
     scanCursor = { startedAt: lastScanned.startedAt, id: lastScanned.id };
     exhausted = batch.length < pageSize + 1;
   }
   const page = visibleRows.slice(0, pageSize);
-  const runs = page.map(rowToRun);
+  const runs = page.map((row) => rowToRun(row, session.remoteHostId === null));
   return {
     runs,
     ...(visibleRows.length > pageSize && page.length > 0
@@ -856,29 +889,6 @@ async function resolveDetailRow(
   return aliased?.run;
 }
 
-/** Returns the file pointer only while the run is still visible in its parent task. */
-export async function getVisibleSubagentTranscriptFile(
-  sessionId: string,
-  provider: SubagentProvider,
-  runIdOrAlias: string,
-): Promise<string | null> {
-  const session = await readableSession(sessionId);
-  if (!session) return null;
-  const normalizedIdentifier = boundedText(runIdOrAlias, TEXT_LIMITS.id);
-  if (!normalizedIdentifier) return null;
-  const row = await resolveDetailRow(sessionId, provider, normalizedIdentifier, session.clearedAt);
-  if (!row?.transcriptFile) return null;
-  if (row.parentToolUseId) {
-    const visibleToolUseIds = await visibleParentToolUseIds(
-      sessionId,
-      [row.parentToolUseId],
-      session.clearedAt,
-    );
-    if (!visibleToolUseIds.has(row.parentToolUseId)) return null;
-  }
-  return row.transcriptFile;
-}
-
 export async function getSubagentRunDetail(
   sessionId: string,
   provider: SubagentProvider,
@@ -899,10 +909,21 @@ export async function getSubagentRunDetail(
     if (!visibleToolUseIds.has(row.parentToolUseId)) return null;
   }
 
-  const run = rowToRun(row);
+  const run = rowToRun(row, session.remoteHostId === null);
   let returnedResult: string | undefined;
   let returnedResultTruncated = false;
   if (
+    row.provider === 'pi' &&
+    run.capabilities.viewReturnedResult &&
+    terminal(row.status) &&
+    (row.returnedResult !== null || row.returnedResultEmpty === 1)
+  ) {
+    if (row.returnedResult) {
+      const bounded = truncateUtf8(row.returnedResult, MAX_RETURNED_RESULT_BYTES);
+      returnedResult = bounded.value;
+      returnedResultTruncated = row.returnedResultTruncated === 1 || bounded.truncated;
+    }
+  } else if (
     run.capabilities.viewReturnedResult &&
     row.provider === 'codex' &&
     row.status === 'completed' &&
@@ -932,12 +953,13 @@ export async function getSubagentRunDetail(
       .orderBy(desc(messages.createdAt))
       .limit(1);
     const text = result ? parseMessageText(result.content) : undefined;
-    // Claude's background Agent tool result is only a launch receipt. Once the
-    // task reaches terminal state, expose the task_notification summary instead.
-    const returnedText =
-      row.provider === 'claude-code' && subagentSpawnResultIndicatesRunning('Agent', text)
-        ? (row.summary ?? undefined)
-        : text;
+    // Claude and PI background tool results are only launch receipts. Once the
+    // durable task reaches terminal state, expose the terminal observation
+    // summary instead of presenting the stale receipt as the returned result.
+    const receiptToolName = row.provider === 'pi' ? 'subagent' : 'Agent';
+    const returnedText = subagentSpawnResultIndicatesRunning(receiptToolName, text)
+      ? row.summary ?? undefined
+      : text;
     if (returnedText) {
       const bounded = truncateUtf8(returnedText, MAX_RETURNED_RESULT_BYTES);
       returnedResult = bounded.value;

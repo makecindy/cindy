@@ -5,14 +5,15 @@
  * plugin，让数据库中已持久化的旧页签仍可原位恢复和关闭，但不再允许新建。
  */
 
+import { lazy } from 'react';
 import { Activity } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
-import { ResourceUsageBody } from './ResourceUsageBody';
-
-export { ResourceUsageBody };
+const ResourceUsageBody = lazy(() =>
+  import('./ResourceUsageBody').then((module) => ({ default: module.ResourceUsageBody })),
+);
 
 export type ResourceUsageState = Record<never, never>;
 

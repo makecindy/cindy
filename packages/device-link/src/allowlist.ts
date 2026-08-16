@@ -343,6 +343,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:project-automation:remove-schedule',
   // —— Orca 协同(Lead 控多 Worker;在被控端进程内编排)——
   'maker:worker:create',
+  'maker:worker:dispatch-ui-assignment',
   'maker:worker:list',
   'maker:worker:switch-focus',
   'maker:worker:idle',
@@ -377,6 +378,13 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 本机查必空)。后台任务面板挂载水合用。老被控端无此 channel → CHANNEL_NOT_ALLOWED
   // → 控制端降级空表(面板退化为事件流 + 消息扫描两源)。
   'maker:session-background-tasks:list',
+  // Durable PI Subagent truth and process handles live on the data-owning device.
+  // Reads and exact controls must execute there; the controller must never fall
+  // back to its own pi-agent-home for a remote task.
+  'local-db:subagent-runs:list',
+  'local-db:subagent-runs:detail',
+  'local-db:subagent-runs:transcript',
+  'maker:pi-subagent:control',
   // —— Goal(目标模式;goal 状态机在被控端 GoalController 执行才有意义)——
   'maker:goal:set',
   'maker:goal:clear',
@@ -620,6 +628,9 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 10min,压缩恰好到预算上限时会先 INVOKE_TIMEOUT,被误判为「设备无响应」并
   // 可能触发 peer-link 恢复(codex P2)——同 desktop-cmd:run 模式加 1min 余量。
   'maker:compact-session': 11 * 60_000,
+  // 被控端先等 Lead history 最多 30s，再 resume/queue Worker；默认 30s 会与服务端
+  // deadline 对撞，把边沿成功误报成 DEVICE_LINK_TIMEOUT。留出派发和回程余量。
+  'maker:worker:dispatch-ui-assignment': 65_000,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。

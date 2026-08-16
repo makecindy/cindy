@@ -10,6 +10,7 @@ import type { AgentEvent } from '../../../types/events.js';
 import type { AsyncQueue } from '../../shared/async-queue.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { PiRpcEvent } from '../rpc-client.js';
+import { makeGhostManual64KiBFixture } from '../../shared/ghost-manual-fixture.js';
 
 const noopLogger: Logger = {
   trace: () => {},
@@ -64,6 +65,101 @@ describe('pi translator', () => {
         subagentObservation: expect.objectContaining({ kind: 'terminal' }),
       }),
     ]);
+  });
+
+  it('does not project management commands as Subagent runs', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_start',
+        toolCallId: 'sa-doctor',
+        toolName: 'subagent',
+        args: { action: 'doctor' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({ type: 'tool_execution_end', toolCallId: 'sa-doctor', result: 'PASS', isError: false }),
+      queue,
+      ctx,
+    );
+    expect(events.filter((event) => event.type === 'agent_task_update')).toEqual([]);
+  });
+
+  it('uses the explicit value-oriented title for a Subagent run', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_start',
+        toolCallId: 'sa-title',
+        toolName: 'subagent',
+        args: { title: 'Grok 连通性验证', agent: 'worker' },
+      }),
+      queue,
+      ctx,
+    );
+    expect(events.find((event) => event.type === 'agent_task_update')?.data).toMatchObject({
+      title: 'Grok 连通性验证',
+    });
+  });
+
+  it('derives a batch title from task value instead of role labels', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_start',
+        toolCallId: 'sa-batch-title',
+        toolName: 'subagent',
+        args: {
+          tasks: [
+            { agent: 'worker', task: 'Verify Grok routing and usage' },
+            { agent: 'worker', task: 'Review retry classification' },
+          ],
+        },
+      }),
+      queue,
+      ctx,
+    );
+    expect(events.find((event) => event.type === 'agent_task_update')?.data).toMatchObject({
+      title: 'Verify Grok routing and usage · Review retry classification',
+    });
+  });
+
+  it('keeps a durable PI launch receipt running after tool_execution_end', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(
+      ev({ type: 'tool_execution_start', toolCallId: 'sa-bg', toolName: 'subagent', args: { async: true } }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_end',
+        toolCallId: 'sa-bg',
+        result: {
+          content: [{
+            type: 'text',
+            text: 'Cindy subagent launched. The agent is working in the background.',
+          }],
+        },
+        isError: false,
+      }),
+      queue,
+      ctx,
+    );
+
+    const updates = events.filter((event) => event.type === 'agent_task_update');
+    expect(updates.at(-1)?.data).toMatchObject({
+      taskId: 'sa-bg',
+      status: 'running',
+      taskType: 'pi_subagent',
+    });
   });
 
   it.each([
@@ -283,6 +379,27 @@ describe('pi translator', () => {
     );
     expect(terminalErrors).toHaveLength(1);
     expect(terminalErrors[0]?.data).toMatchObject({ message: 'final provider error' });
+  });
+
+  it('preserves a 64KB ghost_manual envelope only as tool_result data', () => {
+    const { content, wire } = makeGhostManual64KiBFixture();
+    expect(Buffer.byteLength(wire, 'utf8')).toBeGreaterThan(64 * 1024);
+
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_end',
+        toolCallId: 'manual-call',
+        toolName: 'ghost_manual',
+        result: { content: [{ type: 'text', text: wire }] },
+      }),
+      queue,
+      ctx,
+    );
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect(full).toMatchObject({ data: { fullText: wire }, source: 'pi' });
+    expect(JSON.parse((full!.data as { fullText: string }).fullText).content).toBe(content);
   });
 
   it('maps compaction_end (threshold) → compact_boundary with token deltas + updates contextTokens', () => {

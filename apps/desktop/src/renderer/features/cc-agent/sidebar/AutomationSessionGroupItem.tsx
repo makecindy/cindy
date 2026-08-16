@@ -15,7 +15,10 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import type { Session } from '@/lib/ccAgent.types';
-import type { AutomationScheduleAction, AutomationSessionGroup } from '../lib/automationSidebarGrouping';
+import type {
+  AutomationScheduleAction,
+  AutomationSessionGroup,
+} from '../lib/automationSidebarGrouping';
 import {
   getAutomationGroupChildView,
   getAutomationGroupLatestSession,
@@ -124,8 +127,7 @@ export function AutomationSessionGroupItem({
   // 「已停止」= paused(用户主动暂停)+ expired(计划到期不再触发);两者对用户体验
   // 而言都是「不会再自动跑」,视觉上都在 Timer chip 上叠 Pause 徽标,并在 tooltip
   // 里显示「已停止」文案,避免用户误判为普通空闲态。
-  const isScheduleStopped =
-    group.scheduleStatus === 'paused' || group.scheduleStatus === 'expired';
+  const isScheduleStopped = group.scheduleStatus === 'paused' || group.scheduleStatus === 'expired';
   const hasVisibleChildren = visibleSessions.length > 0;
   // running / loading 也只看最新那条:组头 vendor mark 呼吸 + Timer chip 呼吸 + 右侧
   // spinner 都据此,与最新 session 子行一致(需求:「loading 状态和最新的 session 保持一致」)。
@@ -196,10 +198,7 @@ export function AutomationSessionGroupItem({
       }
       return;
     }
-    if (
-      frozen.hasBeenActive ||
-      (activeSessionId ?? null) !== frozen.originActiveSessionId
-    ) {
+    if (frozen.hasBeenActive || (activeSessionId ?? null) !== frozen.originActiveSessionId) {
       setFrozen(null);
     }
   }, [activeSessionId, frozen, group.sessions]);
@@ -263,12 +262,11 @@ export function AutomationSessionGroupItem({
   const countdownText = shouldTickCountdown
     ? formatSidebarFutureTime(group.nextFireAt, t, new Date(countdownNowMs))
     : '';
-  const stoppedText = isScheduleStopped
-    ? t('ccAgent.sidebar.automationGroup.stopped')
-    : '';
-  const runCountText = group.sessions.length > 0
-    ? t('ccAgent.sidebar.automationGroup.runCount', { count: group.sessions.length })
-    : '';
+  const stoppedText = isScheduleStopped ? t('ccAgent.sidebar.automationGroup.stopped') : '';
+  const runCountText =
+    group.sessions.length > 0
+      ? t('ccAgent.sidebar.automationGroup.runCount', { count: group.sessions.length })
+      : '';
   const rowTooltip = useMemo(
     () =>
       countdownText || stoppedText || runCountText ? (
@@ -303,7 +301,8 @@ export function AutomationSessionGroupItem({
         contentClassName={cn(
           'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
           'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
-        )}>
+        )}
+      >
         {/* 行 onClick 只承担鼠标点击空白 = 点击标题的转发;不加 role="button" / tabIndex /
             onKeyDown —— ARIA 不允许 role=button widget 内嵌可交互 <button>,且键盘 keydown
             会冒泡穿过内部按钮的 stopPropagation(click 语义)造成双触发。键盘可达性由内部
@@ -314,11 +313,7 @@ export function AutomationSessionGroupItem({
             // list 组头与普通 SessionCard 共用 10px 内容边距；只有展开后的子任务
             // 由下方 pl-3 容器额外缩进。text 模式继续沿用 SessionItem 的树形缩进。
             'group relative flex h-8 w-full items-center gap-1.5 rounded-full',
-            sessionVariant === 'list'
-              ? 'px-2.5'
-              : indented
-                ? 'pl-[22px] pr-2'
-                : 'pl-3 pr-2',
+            sessionVariant === 'list' ? 'px-2.5' : indented ? 'pl-[22px] pr-2' : 'pl-3 pr-2',
             'text-left text-sm font-medium',
             hasActiveHidden
               ? 'bg-sidebar-item-active text-[var(--sidebar-item-active-foreground)]'
@@ -349,7 +344,9 @@ export function AutomationSessionGroupItem({
                 vendor={agentKindToVendor(latestSession?.agentKind)}
                 size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}
                 running={isRunning}
-                colorClassName={hasActiveHidden ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
+                colorClassName={
+                  hasActiveHidden ? 'text-[var(--sidebar-item-active-foreground)]' : undefined
+                }
               />
             </span>
             {/* text 延续 vendor → Timer → 标题；list 把 Timer 排到标题右侧，避免它
@@ -365,9 +362,7 @@ export function AutomationSessionGroupItem({
                 onClick={(e) => {
                   e.stopPropagation();
                   navigate(
-                    group.scheduleId
-                      ? scheduleFocusPath(group.scheduleId)
-                      : '/cc-agent/scheduled',
+                    group.scheduleId ? scheduleFocusPath(group.scheduleId) : '/cc-agent/scheduled',
                   );
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
@@ -415,7 +410,11 @@ export function AutomationSessionGroupItem({
             <ToggleIcon
               size={12}
               strokeWidth={2}
-              className={hasActiveHidden ? 'text-[var(--sidebar-item-active-foreground)]' : 'text-[var(--cmd-palette-item-meta)]'}
+              className={
+                hasActiveHidden
+                  ? 'text-[var(--sidebar-item-active-foreground)]'
+                  : 'text-[var(--cmd-palette-item-meta)]'
+              }
             />
           </button>
           {/* focus 隐藏条件用命名 group(/slot) 收窄到本槽位:行内 toggle/title
@@ -429,9 +428,17 @@ export function AutomationSessionGroupItem({
                 fade 出让位给 [Run][More] 按钮组。 */}
             <div
               className={cn(
-                'flex items-center gap-1 text-xs font-medium',
-                hasActiveHidden ? 'text-[var(--sidebar-item-active-foreground)]' : 'text-sidebar-action-icon',
-                scheduleId && !menuOpen && 'group-hover:opacity-0 group-focus-within/slot:opacity-0',
+                // 字体 / 色号与普通任务行的信息槽(SessionInfoMeta)完全同款——含
+                // tabular-nums(C 期给普通行加的等宽数字,分组头当时漏跟),
+                // 让「9 分钟 / 4 小时」这类时间在两种行里对齐、粗细一致
+                // (2026-08-12 用户裁决)。
+                'flex items-center gap-1 text-xs font-medium tabular-nums',
+                hasActiveHidden
+                  ? 'text-[var(--sidebar-item-active-foreground)]'
+                  : 'text-sidebar-action-icon',
+                scheduleId &&
+                  !menuOpen &&
+                  'group-hover:opacity-0 group-focus-within/slot:opacity-0',
                 menuOpen && 'opacity-0',
               )}
             >
@@ -445,7 +452,11 @@ export function AutomationSessionGroupItem({
                   >
                     <span
                       className="size-2 rounded-full"
-                      style={{ backgroundColor: hasActiveHidden ? 'var(--sidebar-item-active-foreground)' : 'var(--card-status-error)' }}
+                      style={{
+                        backgroundColor: hasActiveHidden
+                          ? 'var(--sidebar-item-active-foreground)'
+                          : 'var(--card-status-error)',
+                      }}
                       aria-hidden
                     />
                   </span>
@@ -458,7 +469,11 @@ export function AutomationSessionGroupItem({
                   >
                     <span
                       className="size-2 rounded-full"
-                      style={{ backgroundColor: hasActiveHidden ? 'var(--sidebar-item-active-foreground)' : 'var(--card-status-awaiting)' }}
+                      style={{
+                        backgroundColor: hasActiveHidden
+                          ? 'var(--sidebar-item-active-foreground)'
+                          : 'var(--card-status-awaiting)',
+                      }}
                       aria-hidden
                     />
                   </span>
@@ -469,7 +484,9 @@ export function AutomationSessionGroupItem({
                     strokeWidth={2}
                     className={cn(
                       'size-4',
-                      hasActiveHidden ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
+                      hasActiveHidden
+                        ? 'text-sidebar-item-active-foreground'
+                        : 'text-sidebar-action-icon',
                     )}
                     aria-label={t('ccAgent.sidebar.status.running', 'Running')}
                     title={t('ccAgent.sidebar.status.running', 'Running')}
@@ -483,7 +500,11 @@ export function AutomationSessionGroupItem({
                   >
                     <span
                       className="size-2 rounded-full"
-                      style={{ backgroundColor: hasActiveHidden ? 'var(--sidebar-item-active-foreground)' : 'var(--card-status-done)' }}
+                      style={{
+                        backgroundColor: hasActiveHidden
+                          ? 'var(--sidebar-item-active-foreground)'
+                          : 'var(--card-status-done)',
+                      }}
                       aria-hidden
                     />
                   </span>
@@ -569,7 +590,10 @@ export function AutomationSessionGroupItem({
                     <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
                     <DropdownMenuItem
                       onSelect={() => onScheduleAction(group, 'delete')}
-                      disabled={group.scheduleSource === 'project' && (!group.workingDir || !group.projectConfigId)}
+                      disabled={
+                        group.scheduleSource === 'project' &&
+                        (!group.workingDir || !group.projectConfigId)
+                      }
                       className={cn(MENU_ITEM_CLASS, 'text-[hsl(var(--destructive))]')}
                     >
                       {t('ccAgent.sidebar.automationGroup.menu.delete')}
@@ -601,6 +625,7 @@ export function AutomationSessionGroupItem({
               onRename,
               onTogglePin,
               indented,
+              sourceLabel: sourceLabelMap?.get(session.id),
             };
 
             return sessionVariant === 'list' ? (
@@ -615,7 +640,6 @@ export function AutomationSessionGroupItem({
               <SessionItem
                 key={session.id}
                 {...commonProps}
-                sourceLabel={sourceLabelMap?.get(session.id)}
                 insideAutomationGroup
               />
             );

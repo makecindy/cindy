@@ -32,13 +32,43 @@ describe('stop agent task IPC handler', () => {
     expect(stopBackgroundTask).toHaveBeenCalledWith('task-1');
   });
 
-  it('is idempotent when the session is not loaded (task cannot be alive)', async () => {
+  it('is idempotent when neither a live session nor a detached task is found', async () => {
     const harness = new IpcHarness();
     registerStopAgentTaskHandler(harness, { getLiveSession: vi.fn(() => undefined) });
 
     await expect(
       harness.invoke(MAKER_INVOKE.STOP_AGENT_TASK, 'session-1', 'task-1'),
     ).resolves.toEqual({ ok: true });
+  });
+
+  it('stops a detached task even when its parent session handle is unloaded', async () => {
+    const harness = new IpcHarness();
+    const stopDetachedTask = vi.fn().mockResolvedValue(true);
+    registerStopAgentTaskHandler(harness, {
+      getLiveSession: vi.fn(() => undefined),
+      stopDetachedTask,
+    });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.STOP_AGENT_TASK, 'session-1', 'task-1'),
+    ).resolves.toEqual({ ok: true });
+    expect(stopDetachedTask).toHaveBeenCalledWith('session-1', 'task-1');
+  });
+
+  it('prefers an exact detached PI task after the live session switched harnesses', async () => {
+    const harness = new IpcHarness();
+    const stopDetachedTask = vi.fn().mockResolvedValue(true);
+    const stopBackgroundTask = vi.fn().mockResolvedValue(undefined);
+    registerStopAgentTaskHandler(harness, {
+      getLiveSession: vi.fn(() => ({ stopBackgroundTask })),
+      stopDetachedTask,
+    });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.STOP_AGENT_TASK, 'session-1', 'old-pi-task'),
+    ).resolves.toEqual({ ok: true });
+    expect(stopDetachedTask).toHaveBeenCalledWith('session-1', 'old-pi-task');
+    expect(stopBackgroundTask).not.toHaveBeenCalled();
   });
 
   it('maps NotSupportedError to UNSUPPORTED_CAPABILITY', async () => {

@@ -79,6 +79,7 @@ describe('agentInputQueue', () => {
             size: 128,
             category: 'image',
             mimeType: 'image/png',
+            pathOrigin: 'desktop-host',
             url: 'xdt-image://session/shot.png',
           },
         ]),
@@ -87,7 +88,12 @@ describe('agentInputQueue', () => {
       type: 'user',
       content: [
         { type: 'text', text: 'inspect attachment' },
-        { type: 'image', path: 'xdt-image://session/shot.png', mimeType: 'image/png' },
+        {
+          type: 'image',
+          path: 'xdt-image://session/shot.png',
+          mimeType: 'image/png',
+          pathOrigin: 'desktop-host',
+        },
       ],
     });
   });

@@ -83,6 +83,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:schedule:create',
       'maker:schedule:get-runtime-state',
       'maker:worker:create',
+      'maker:worker:dispatch-ui-assignment',
       'maker:session:enable-orca',
       'maker:rewind:commit',
       'maker:fork',
@@ -100,6 +101,18 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
 
   it('放行会话后台任务快照只读(任务真身在被控端,后台任务面板挂载水合用)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:list')).toBe(true);
+  });
+
+  it('routes durable PI Subagent reads and controls to the data-owning device', () => {
+    for (const channel of [
+      'local-db:subagent-runs:list',
+      'local-db:subagent-runs:detail',
+      'local-db:subagent-runs:transcript',
+      'maker:pi-subagent:control',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(false);
   });
 
   it('放行会话级完整对等补充(fork-strip / context-usage / 窄口径 patch-meta / Magic 重命名)', () => {
@@ -384,6 +397,12 @@ describe('INVOKE_TIMEOUT_OVERRIDES_MS', () => {
     // 相同预算,压缩恰好到上限时会先 INVOKE_TIMEOUT 并被误判为设备无响应(codex P2)。
     // 严格大于 10min,锁住「带余量」的语义,防止回退成无余量的同值。
     expect(INVOKE_TIMEOUT_OVERRIDES_MS['maker:compact-session']).toBeGreaterThan(10 * 60_000);
+  });
+
+  it('UI Worker 派单超时必须大于 Lead history gate 的 30s 执行预算', () => {
+    expect(
+      INVOKE_TIMEOUT_OVERRIDES_MS['maker:worker:dispatch-ui-assignment'],
+    ).toBeGreaterThan(30_000);
   });
 });
 

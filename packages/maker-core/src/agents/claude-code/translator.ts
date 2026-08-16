@@ -16,10 +16,7 @@
  */
 
 import type { AgentEvent, AgentTaskStatus, AgentTaskUsage, AgentTaskUpdateEventData } from '../../types/events.js';
-import {
-  normalizeWorkflowProgressEntries,
-  type SubagentTranscriptEntryInput,
-} from '@cindy/maker-shared/agent-task';
+import { normalizeWorkflowProgressEntries } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
@@ -135,15 +132,6 @@ export interface RuntimeState {
   /** 明确属于 local_bash / local_workflow 的 task_id；稀疏后续帧继续排除。 */
   excludedSubagentTaskIds: Set<string>;
   /**
-   * 子代理工作过程,按 parent_tool_use_id 分桶。
-   *
-   * 磁盘 JSONL 看似现成,但它按 sdkSessionId 组织,而 subagent 观测帧不带这个 id,
-   * 定位不到自己那份;格式也归上游所有,升级即失配。这里改成在事件流经 translator
-   * 时就地留存 —— 与 Codex / PI 同一条路径,数据结构完全归 Cindy。
-   * 终态帧交出后即释放,避免长会话累积。
-   */
-  subagentTranscriptByParentToolUseId: Map<string, SubagentTranscriptEntryInput[]>;
-  /**
    * 上一次 SDK assistant 消息提取出来的 agentMeta (uuid / sdkSessionId / model / ...).
    * 主 agent 的 stream_event 累积时用它补齐 transcript 锚点；subagent stream
    * 则必须按 parent_tool_use_id 隔离，不能共享这份会话级状态。
@@ -166,66 +154,9 @@ export function newRuntimeState(): RuntimeState {
     subagentParentToolUseIdByTaskId: new Map(),
     confirmedSubagentTaskIds: new Set(),
     excludedSubagentTaskIds: new Set(),
-    subagentTranscriptByParentToolUseId: new Map(),
     lastAssistantMeta: null,
     lastResultUsageAggregate: null,
   };
-}
-
-const SUBAGENT_TRANSCRIPT_MAX_ENTRIES = 500;
-const SUBAGENT_TRANSCRIPT_MAX_CONTENT = 64 * 1024;
-const SUBAGENT_TRANSCRIPT_MAX_BUCKETS = 64;
-
-/**
- * 就地留存一条子代理产出。
- *
- * 三重上界都必要:单条内容、每个子代理的条数、以及同时在留存的子代理数。最后一条
- * 针对的是长会话里反复派子代理、其中一部分因中断/错误从不发终态帧的情况 —— 那些桶
- * 没有交付点,不设上限就会在整个会话生命周期里只增不减。
- */
-function noteSubagentTranscript(
-  rt: RuntimeState,
-  parentToolUseId: string,
-  entry: SubagentTranscriptEntryInput,
-): void {
-  if (!parentToolUseId || !entry.content) return;
-  let bucket = rt.subagentTranscriptByParentToolUseId.get(parentToolUseId);
-  if (!bucket) {
-    if (rt.subagentTranscriptByParentToolUseId.size >= SUBAGENT_TRANSCRIPT_MAX_BUCKETS) {
-      const oldest = rt.subagentTranscriptByParentToolUseId.keys().next();
-      if (!oldest.done) rt.subagentTranscriptByParentToolUseId.delete(oldest.value);
-    }
-    bucket = [];
-    rt.subagentTranscriptByParentToolUseId.set(parentToolUseId, bucket);
-  }
-  if (bucket.length >= SUBAGENT_TRANSCRIPT_MAX_ENTRIES) bucket.shift();
-  bucket.push(
-    entry.content.length > SUBAGENT_TRANSCRIPT_MAX_CONTENT
-      ? { ...entry, content: `${entry.content.slice(0, SUBAGENT_TRANSCRIPT_MAX_CONTENT - 1)}…` }
-      : entry,
-  );
-}
-
-/** Read the current bounded snapshot without releasing it. */
-function snapshotSubagentTranscript(
-  rt: RuntimeState,
-  parentToolUseId: string | undefined,
-): SubagentTranscriptEntryInput[] | undefined {
-  if (!parentToolUseId) return undefined;
-  const bucket = rt.subagentTranscriptByParentToolUseId.get(parentToolUseId);
-  return bucket && bucket.length > 0 ? bucket.slice() : undefined;
-}
-
-/** Terminal frame takes and releases the bounded snapshot. */
-function drainSubagentTranscript(
-  rt: RuntimeState,
-  parentToolUseId: string | undefined,
-): SubagentTranscriptEntryInput[] | undefined {
-  if (!parentToolUseId) return undefined;
-  const bucket = rt.subagentTranscriptByParentToolUseId.get(parentToolUseId);
-  if (!bucket || bucket.length === 0) return undefined;
-  rt.subagentTranscriptByParentToolUseId.delete(parentToolUseId);
-  return bucket;
 }
 
 /**
@@ -992,13 +923,8 @@ function toClaudeTaskUpdate(msg: {
     ? getSubagentTaskUsage?.(msg.task_id)
     : undefined;
   // SDK 有非零统计时继续信任 SDK；只有明确为 0 / 缺失时才用 host 观测值修正。
-  const usage = hostUsage
-    ? {
-        ...sdkUsage,
-        ...((sdkUsage?.totalTokens ?? 0) === 0 && hostUsage.totalTokens !== undefined
-          ? { totalTokens: hostUsage.totalTokens }
-          : {}),
-      }
+  const usage = hostUsage && (sdkUsage?.totalTokens ?? 0) === 0
+    ? { ...sdkUsage, totalTokens: hostUsage.totalTokens }
     : sdkUsage;
   const model = parentToolUseId
     ? rt.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
@@ -1049,12 +975,6 @@ function toClaudeTaskUpdate(msg: {
     ...(model ? { model } : {}),
     ...(workflowProgress ? { workflowProgress } : {}),
     ...(subagentObservation ? { subagentObservation } : {}),
-    ...(isKnownSubagent && msg.subtype === 'task_notification'
-      ? (() => {
-          const transcriptEntries = drainSubagentTranscript(rt, parentToolUseId);
-          return transcriptEntries ? { transcriptEntries } : {};
-        })()
-      : {}),
   };
 }
 
@@ -1203,58 +1123,6 @@ function handleAssistant(
   ctx.rt.lastAssistantMeta = assistantMeta;
 
   const content = msg.message?.content ?? [];
-  // 带 parent_tool_use_id 的 assistant 消息来自子代理而非主线程,就地留存供右栏回看。
-  // 这条判据与下方模型隔离用的是同一个字段,不额外引入身份来源。
-  const subagentParentToolUseId =
-    typeof assistantMeta.parentUuid === 'string' && assistantMeta.parentUuid
-      ? assistantMeta.parentUuid
-      : undefined;
-  if (subagentParentToolUseId) {
-    const occurredAt = Date.now();
-    let captured = false;
-    for (const blockRaw of content) {
-      const block = blockRaw as { type?: string; text?: string; name?: string };
-      if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
-        noteSubagentTranscript(ctx.rt, subagentParentToolUseId, {
-          role: 'subagent',
-          content: block.text,
-          occurredAt,
-        });
-        captured = true;
-      } else if (block.type === 'tool_use' && typeof block.name === 'string') {
-        noteSubagentTranscript(ctx.rt, subagentParentToolUseId, {
-          role: 'tool',
-          content: `Using ${block.name}`,
-          occurredAt,
-          toolName: block.name,
-        });
-        captured = true;
-      }
-    }
-    if (captured) {
-      const taskId = [...ctx.rt.subagentParentToolUseIdByTaskId.entries()]
-        .find(([, parentId]) => parentId === subagentParentToolUseId)?.[0];
-      const transcriptEntries = snapshotSubagentTranscript(ctx.rt, subagentParentToolUseId);
-      if (taskId && transcriptEntries) {
-        queue.push({
-          type: 'agent_task_update',
-          data: {
-            provider: 'claude-code',
-            taskId,
-            parentToolUseId: subagentParentToolUseId,
-            status: 'running',
-            subagentObservation: {
-              kind: 'progress',
-              logicalSubagentId: taskId,
-              parentToolUseId: subagentParentToolUseId,
-            },
-            transcriptEntries,
-          },
-          source: 'claude-code',
-        });
-      }
-    }
-  }
   // silent-stop 观测素材: 本条消息是否带实质内容(非空 text / 非 thinking 块)。
   // 未知块 fail-safe 为有内容，避免 SDK 新 block 被误续跑。
   // 逐条覆盖写, turn end 时留下的就是最后一条 assistant 消息的判定(见 TurnState 字段注释)。

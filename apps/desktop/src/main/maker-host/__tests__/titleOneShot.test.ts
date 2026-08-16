@@ -731,7 +731,11 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
       ];
       expect(url).toBe(`${XD_GATEWAY_BASE_URL}/v1/chat/completions`);
       expect(init.headers.authorization).toBe('Bearer gk-1');
-      expect(JSON.parse(init.body).model).toBe('deepseek/deepseek-v4-flash');
+      expect(JSON.parse(init.body)).toMatchObject({
+        model: 'deepseek/deepseek-v4-flash',
+        max_tokens: 32,
+        thinking: { type: 'disabled' },
+      });
     } finally {
       setXdGatewayModels([]);
     }

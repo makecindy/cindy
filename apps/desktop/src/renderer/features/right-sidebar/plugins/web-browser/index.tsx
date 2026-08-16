@@ -17,14 +17,17 @@
 
 import { Globe, Volume2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
-import { useState } from 'react';
+import { lazy, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 
 import { normalizePersistableFavicon } from '../../../../../shared/faviconPersistence';
 import { registerTabKind } from '../../registry';
 import type { TabKindPlugin } from '../../types';
-import { BrowserTabBody } from './BrowserTabBody';
+
+const BrowserTabBody = lazy(() =>
+  import('./BrowserTabBody').then((module) => ({ default: module.BrowserTabBody })),
+);
 
 /** plugin state shape —— 反序列化口径:JSON identity 即可恢复。 */
 export interface WebBrowserState {

@@ -1,4 +1,9 @@
 ﻿import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +29,15 @@ import {
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
 import type { ProxyHandle } from './types.js';
+
+const TEST_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const TEST_PI_BINARY = path.join(
+  TEST_REPO_ROOT,
+  'apps',
+  'pi-bin',
+  `${process.platform}-${process.arch}`,
+  process.platform === 'win32' ? 'pi.exe' : 'pi',
+);
 
 function startFakeUpstream(
   handler: (reqIndex: number, body: string, res: ServerResponse) => void,
@@ -1258,6 +1272,74 @@ const THINKING_ERROR_BODY = JSON.stringify({
   },
 });
 
+// 混合 sync + async transform：锁定 runTransforms 的串行 await 语义（顺序保持、
+// async 被 await、null 透传、失败回退）。防止后续改动误并行化破坏链式顺序依赖。
+describe('anthropic-compat-proxy mixed sync+async transform chain', () => {
+  it('awaits async transforms in order and keeps sync passthrough', async () => {
+    const order: string[] = [];
+    const custom = await startFakeUpstream((_i, body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ echoed: JSON.parse(body) }));
+    });
+    upstreamClose = custom.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: custom.url,
+      transformRequest: [
+        // 第一个：sync transform 透传（返回 null），不改 body。
+        (_body) => {
+          order.push('sync-passthrough');
+          return null;
+        },
+        // 第二个：async transform，模拟视觉桥（延迟后改写 body）。
+        async (body) => {
+          order.push('async-begin');
+          await new Promise((r) => setTimeout(r, 20));
+          order.push('async-end');
+          return { ...(body as Record<string, unknown>), model: 'rewritten-by-async' };
+        },
+        // 第三个：sync transform，在 async 结果上再改。
+        (body) => {
+          order.push('sync-after-async');
+          return { ...(body as Record<string, unknown>), extra: true };
+        },
+      ],
+    });
+
+    await post(proxy.url, { model: 'original', messages: [{ role: 'user', content: 'x' }] });
+    // 顺序：sync 透传 → async 开始 → async 结束 → sync 尾改（严格串行，无并行交错）。
+    expect(order).toEqual(['sync-passthrough', 'async-begin', 'async-end', 'sync-after-async']);
+    // async 的结果被下游消费：final body 同时含 async 与 sync 的改写。
+    expect(custom.bodies).toHaveLength(1);
+    const sent = JSON.parse(custom.bodies[0]);
+    expect(sent.model).toBe('rewritten-by-async');
+    expect(sent.extra).toBe(true);
+  });
+
+  it('recovers from a throwing async transform by skipping it (passthrough)', async () => {
+    const custom = await startFakeUpstream((_i, body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ echoed: JSON.parse(body) }));
+    });
+    upstreamClose = custom.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: custom.url,
+      transformRequest: [
+        async () => {
+          throw new Error('boom');
+        },
+        (body) => ({ ...(body as Record<string, unknown>), survived: true }),
+      ],
+    });
+
+    await post(proxy.url, { model: 'original', messages: [] });
+    expect(custom.bodies).toHaveLength(1);
+    // 抛错的 async transform 被跳过，后续 sync transform 照常执行。
+    expect(JSON.parse(custom.bodies[0]).survived).toBe(true);
+  });
+});
+
 // 跨厂商切回 Anthropic 模型: 历史里 gpt 留下的空壳 thinking 块 + 后面一句 text。
 function anthropicBodyWithEmptyThinking(): unknown {
   return {
@@ -1812,6 +1894,167 @@ describe('anthropic-compat-proxy empty-assistant-message recovery (moonshot/kimi
 });
 
 describe('anthropic-compat-proxy localHandler(路由决策交本地 handler,不转发上游)', () => {
+  it.skipIf(!existsSync(TEST_PI_BINARY))(
+    'real PI zstd request crosses the proxy parse boundary and reaches the raw local handler',
+    { timeout: 30_000 },
+    async () => {
+      const gateway = await startFakeUpstream((_i, _b, res) => {
+        res.writeHead(500);
+        res.end('default upstream must not be reached');
+      });
+      upstreamClose = gateway.close;
+      let seen: { raw: Buffer; encoding: string | undefined; parsed: unknown; url: string } | null = null;
+      let resolveSeen: (() => void) | null = null;
+      const seenPromise = new Promise<void>((resolve) => { resolveSeen = resolve; });
+      proxy = await createAnthropicCompatProxy({
+        upstream: gateway.url,
+        transformRequest: [],
+        routingTransform: (body, ctx) => {
+          if (ctx.headers['x-native-route'] !== 'openai') return null;
+          return {
+            localHandler: async ({ rawBody, parsedBody, res }) => {
+              seen = {
+                raw: Buffer.from(rawBody),
+                encoding: ctx.headers['content-encoding'],
+                parsed: parsedBody,
+                url: ctx.url,
+              };
+              resolveSeen?.();
+              res.writeHead(401, { 'content-type': 'application/json' });
+              res.end('{"error":{"message":"intentional test stop"}}');
+            },
+          };
+        },
+      });
+      const configHome = mkdtempSync(path.join(tmpdir(), 'pi-zstd-proxy-e2e-'));
+      const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
+      const placeholderJwt = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
+        'https://api.openai.com/auth': { chatgpt_account_id: 'cindy-pi-proxy' },
+      })}.`;
+      let child: ChildProcessWithoutNullStreams | null = null;
+      try {
+        writeFileSync(path.join(configHome, 'models.json'), JSON.stringify({
+          providers: {
+            'openai-codex': {
+              baseUrl: proxy.url,
+              apiKey: '$CINDY_PI_OPENAI_PROXY_KEY',
+              headers: { 'x-native-route': 'openai' },
+              models: [{
+                id: 'gpt-cindy-zstd-test',
+                name: 'GPT Cindy zstd test',
+                reasoning: false,
+                input: ['text'],
+                contextWindow: 128_000,
+                maxTokens: 16_000,
+              }],
+            },
+          },
+        }));
+        writeFileSync(path.join(configHome, 'settings.json'), JSON.stringify({ transport: 'sse' }));
+        child = spawn(TEST_PI_BINARY, [
+          '--provider', 'openai-codex',
+          '--model', 'gpt-cindy-zstd-test',
+          '--no-session',
+          '--no-tools',
+          '--no-extensions',
+          '--no-skills',
+          '--no-prompt-templates',
+          '--no-context-files',
+          '--mode', 'rpc',
+        ], {
+          cwd: TEST_REPO_ROOT,
+          env: {
+            ...process.env,
+            PI_CODING_AGENT_DIR: configHome,
+            CINDY_PI_OPENAI_PROXY_KEY: placeholderJwt,
+          },
+        });
+        let stderr = '';
+        child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+        child.stdin.write(JSON.stringify({ id: 'test-prompt', type: 'prompt', message: 'ping' }) + '\n');
+        let reachTimeout: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            seenPromise,
+            new Promise<never>((_resolve, reject) => {
+              reachTimeout = setTimeout(
+                () => reject(new Error(`real PI did not reach proxy: ${stderr}`)),
+                10_000,
+              );
+            }),
+          ]);
+        } finally {
+          if (reachTimeout) clearTimeout(reachTimeout);
+        }
+
+        const observed = seen as {
+          raw: Buffer;
+          encoding: string | undefined;
+          parsed: unknown;
+          url: string;
+        } | null;
+        expect(observed).not.toBeNull();
+        expect(observed?.url).toBe('/codex/responses');
+        expect(observed?.encoding).toBe('zstd');
+        expect(observed?.parsed).toBeUndefined();
+        expect([...observed!.raw.subarray(0, 4)]).toEqual([0x28, 0xb5, 0x2f, 0xfd]);
+        expect(gateway.bodies).toHaveLength(0);
+      } finally {
+        if (child && child.exitCode === null && child.signalCode === null) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+              if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+              resolve();
+            }, 1_000);
+            child!.once('close', () => {
+              clearTimeout(timer);
+              resolve();
+            });
+            child!.kill('SIGTERM');
+          });
+        }
+        rmSync(configHome, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('JSON content-type with compressed bytes still routes by headers and preserves raw body', async () => {
+    const gateway = await startFakeUpstream((_i, _b, res) => { res.writeHead(200); res.end('{}'); });
+    upstreamClose = gateway.close;
+    const compressed = gzipSync(Buffer.from(JSON.stringify({ model: 'gpt-native' })));
+    let seen: Buffer | null = null;
+    proxy = await createAnthropicCompatProxy({
+      upstream: gateway.url,
+      transformRequest: [],
+      routingTransform: (body, ctx) => {
+        expect(body).toBeUndefined();
+        if (ctx.headers['x-native-route'] !== 'openai') return null;
+        return {
+          localHandler: async ({ rawBody, parsedBody, res }) => {
+            seen = Buffer.from(rawBody);
+            expect(parsedBody).toBeUndefined();
+            res.writeHead(204);
+            res.end();
+          },
+        };
+      },
+    });
+
+    const response = await fetch(`${proxy.url}/codex/responses`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-encoding': 'gzip',
+        'x-native-route': 'openai',
+      },
+      body: compressed,
+    });
+
+    expect(response.status).toBe(204);
+    expect(seen).toEqual(compressed);
+    expect(gateway.bodies).toHaveLength(0);
+  });
+
   it('命中 handler:收到原始字节 + 已解析 body + ctx,自写响应(含 SSE 流式),上游零请求', async () => {
     const gateway = await startFakeUpstream((_i, _b, res) => { res.writeHead(200); res.end('{}'); });
     upstreamClose = gateway.close;

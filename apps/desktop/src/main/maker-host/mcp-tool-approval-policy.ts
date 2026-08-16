@@ -49,6 +49,7 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   // 免审查询会以 ASLEEP / DISABLED 区分已安装插件的不可见原因；这是有意
   // 接受的存在性披露，只读元数据不因此回退为逐次审批或统一成 NOT_FOUND。
   'cindy::ghost_info',
+  'cindy::ghost_manual',
   'cindy::ghost_forge_guide',
   'cindy_browser::list_tools',
   'cindy_android::list_tools',

@@ -1,33 +1,43 @@
 /**
  * GhostPanelWindowsController —— 插件停靠面板独立窗口的状态机(main 侧单例,
- * 依赖注入可测)。蓝本是 RsbWindowController,按 ghostId 多实例并做了减法:
- * 面板体只吃 manifest(广播全窗口可达),无需 ready 握手 / 上下文中继 / 命令队列。
+ * 依赖注入可测)。
  *
- * 每个 ghostId 的三态(与 RSB 同构):
+ * 每 ghostId 三态(与 RSB 同构):
  *   A. detached=false            —— 面板停靠在主窗布局树里
- *   C. detached=true, 窗口打开   —— 面板活在独立窗口
- *   (v1 关窗即回停靠,不保留"偏好开着但窗口收起"的 B 态;lastOpen 仅在
- *    app 退出路径保留,供重启恢复。)
+ *   C. detached=true, 窗口打开   —— 面板活在独立窗口(隐藏复用,紧接开/关只隐藏)
  *
- * 职责:
- *  - 每 ghost 窗口生命周期(重复 open = focus;closed 区分用户关窗 vs app 退出)
- *  - 偏好 / lastOpen 落盘(settings-store),状态变化广播所有窗口
- *  - reconcile:插件卸载/停用/换形态时收窗(卸载删条目;停用清标志,
- *    避免"面板既不停靠也开不了窗"的死角)
+ * 生命周期基线对齐 PR #2434 ResourceUsageWindowController 与右侧栏窗口改造:
+ *   - 惰性预热：首次 open/setDetached(true) 创建隐藏窗口，presentation-ready 后展示
+ *   - 本次运行期按需创建：首次分离后隐藏复用，客户端重启后回到主窗口
+ *   - 双阶段就绪握手（renderer-ready → presentation-ready），5s 超时展示壳
+ *   - 隐藏复用：普通关窗只 hide(setDetached(false) 才真正 destroy)
+ *   - 崩溃恢复有界（每 ghostId 独立计数）
+ *   - 多 ghostId 实例间状态隔离
+ *   - reconcile:插件卸载/停用/换形态时 dispose 对应窗口
  */
 
-import type { BrowserWindow } from 'electron';
+import type { BrowserWindow, WebContents } from 'electron';
 
 import type {
   GhostPanelWindowEntryState,
   GhostPanelWindowsState,
 } from '../../shared/ghostPanelWindow.js';
+import {
+  GHOST_PANEL_WINDOW_CLOSE_REQUESTED_CHANNEL,
+  GHOST_PANEL_WINDOW_LOCALE_CHANGED_CHANNEL,
+  GHOST_PANEL_WINDOW_MINIMIZE_REQUESTED_CHANNEL,
+  GHOST_PANEL_WINDOW_PRESENTATION_READY_CHANNEL,
+  GHOST_PANEL_WINDOW_RENDERER_READY_CHANNEL,
+  GHOST_PANEL_WINDOW_VISIBILITY_CHANGED_CHANNEL,
+} from '../../shared/ghostPanelWindow.js';
+import type { SupportedLocale } from '../../shared/locale.js';
 import type { InstalledGhost } from '../../shared/ghost.js';
 import type { GhostPanelWindowsSettings } from './settings-store.js';
 
 interface ControllerLogger {
   info(message: string, ...args: unknown[]): void;
   warn(message: string, ...args: unknown[]): void;
+  error(message: string, ...args: unknown[]): void;
 }
 
 export interface GhostPanelWindowsControllerDeps {
@@ -36,25 +46,41 @@ export interface GhostPanelWindowsControllerDeps {
     patchEntry(ghostId: string, patch: Partial<{ detached: boolean; lastOpen: boolean }>): void;
     removeEntry(ghostId: string): void;
   };
-  /** 创建子窗口(不负责挂 closed 钩子,controller 自己挂)。 */
   createWindow: (ghostId: string) => BrowserWindow;
-  /**
-   * 该插件当前是否具备"可抽离的停靠面板"资格:已装、启用、声明了 panel 且
-   * position 不是 'tab'。open/setDetached 前置校验与 reconcile 共用同一判据。
-   */
   isGhostDetachable: (ghostId: string) => boolean;
-  /** 状态变化广播(所有窗口)。bootstrap 注入 getAllWindows 遍历实现。 */
   broadcastState: (state: GhostPanelWindowsState) => void;
+  /** main → renderer push(仅子窗口)。 */
+  sendToWindow: (win: BrowserWindow, channel: string, payload: unknown) => void;
   isQuitting: () => boolean;
   log: ControllerLogger;
 }
 
+const DEFAULT_OPEN_TIMEOUT_MS = 5000;
+const DEFAULT_RECOVERY_STABILITY_MS = 30_000;
+const MAX_AUTOMATIC_RECOVERY_ATTEMPTS = 1;
+
+interface WindowSlot {
+  win: BrowserWindow;
+  rendererReady: boolean;
+  presentationReady: boolean;
+  visible: boolean;
+  pendingOpen: boolean;
+  destroyingWindow: boolean;
+  openTimeout: NodeJS.Timeout | null;
+  recoveryStabilityTimeout: NodeJS.Timeout | null;
+  automaticRecoveryAttempts: number;
+}
+
 export class GhostPanelWindowsController {
-  private readonly windows = new Map<string, BrowserWindow>();
-  /** close() 到 closed 事件之间窗口仍未 destroyed,不能继续当活窗。 */
-  private readonly closingIds = new Set<string>();
+  private readonly slots = new Map<string, WindowSlot>();
+  private disposed = false;
+  private locale: SupportedLocale | null = null;
 
   constructor(private readonly deps: GhostPanelWindowsControllerDeps) {}
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 公共接口
+  // ══════════════════════════════════════════════════════════════════════
 
   getState(): GhostPanelWindowsState {
     const out: GhostPanelWindowsState = {};
@@ -62,68 +88,171 @@ export class GhostPanelWindowsController {
     for (const [id, entry] of Object.entries(windows)) {
       out[id] = this.entryState(id, entry);
     }
-    // 运行时开着但条目被清了的窗口(理论不存在,防御性合入)
-    for (const id of this.windows.keys()) {
+    for (const id of this.slots.keys()) {
       if (!(id in out)) out[id] = this.entryState(id, { detached: false, lastOpen: false });
     }
     return out;
   }
 
-  /** 幂等打开:已开则 show + focus;资格不符则清条目(防陈年状态复活废窗)。 */
-  open(ghostId: string): void {
-    const existing = this.windows.get(ghostId);
-    if (existing && !existing.isDestroyed()) {
-      if (this.closingIds.has(ghostId)) return;
-      if (existing.isMinimized()) existing.restore();
-      existing.show();
-      existing.focus();
-      return;
+  /**
+   * 后台预热指定 ghostId：创建隐藏窗口并加载 renderer，不改变用户焦点。
+   * 可在当前运行期提前为即将打开的插件面板准备 renderer。
+   */
+  prewarm(ghostId: string): void {
+    if (this.disposed) return;
+    if (!this.deps.isGhostDetachable(ghostId)) return;
+    this.ensureSlot(ghostId);
+  }
+
+  setLocale(locale: SupportedLocale): void {
+    this.locale = locale;
+    for (const slot of this.slots.values()) {
+      if (slot.win.isDestroyed()) continue;
+      try {
+        slot.win.webContents.send(GHOST_PANEL_WINDOW_LOCALE_CHANGED_CHANNEL, locale);
+      } catch {
+        // Window may be tearing down.
+      }
     }
+  }
+
+  /**
+   * 幂等打开:热窗口(presentationReady)立即显示;冷窗口等待首份内容。
+   * 资格不符则清条目防陈年状态复活。
+   */
+  open(ghostId: string): void {
+    if (this.disposed) return;
     if (!this.deps.isGhostDetachable(ghostId)) {
-      this.deps.log.warn('ghost not detachable, pruning window entry', { ghostId });
+      this.deps.log.warn('ghost not detachable, pruning entry', { ghostId });
+      const staleSlot = this.slots.get(ghostId);
+      if (staleSlot && !staleSlot.destroyingWindow) this.disposeSlot(ghostId, staleSlot);
       this.deps.settings.removeEntry(ghostId);
       this.broadcast();
       return;
     }
-    const win = this.deps.createWindow(ghostId);
-    this.windows.set(ghostId, win);
-    this.closingIds.delete(ghostId);
-    win.on('closed', () => this.onClosed(ghostId));
+
+    const existing = this.slots.get(ghostId);
+    if (existing) {
+      if (
+        existing.visible &&
+        existing.win.isVisible() &&
+        !existing.win.isMinimized()
+      ) {
+        existing.win.focus();
+        return;
+      }
+      if (existing.presentationReady) {
+        this.showAndFocus(ghostId, existing);
+        return;
+      }
+      existing.pendingOpen = true;
+      this.scheduleOpenFallback(ghostId, existing);
+      this.deps.settings.patchEntry(ghostId, { detached: true, lastOpen: true });
+      this.broadcast();
+      return;
+    }
+
+    const slot = this.ensureSlot(ghostId);
+    if (!slot) return;
+    slot.pendingOpen = true;
+    if (slot.presentationReady) {
+      this.showAndFocus(ghostId, slot);
+    } else {
+      this.scheduleOpenFallback(ghostId, slot);
+    }
     this.deps.settings.patchEntry(ghostId, { detached: true, lastOpen: true });
     this.broadcast();
-    this.deps.log.info('ghost panel window opened', { ghostId });
   }
 
-  /** 写偏好;true 附带开窗,false 附带关窗(= 回停靠)。返回新 state 供 invoke 直接回。 */
+  /** 普通关窗只隐藏(保留 renderer,供下次瞬时恢复)。偏好保持 detached:true。 */
+  close(ghostId: string): void {
+    const slot = this.slots.get(ghostId);
+    if (!slot) {
+      // 窗口不存在,但仍需落盘 lastOpen=false
+      this.deps.settings.patchEntry(ghostId, { lastOpen: false });
+      this.broadcast();
+      return;
+    }
+    this.hideWindow(ghostId, slot);
+  }
+
+  /** 写偏好;true 开窗,false 真正销毁窗口(= 回停靠)。 */
   setDetached(ghostId: string, next: boolean): GhostPanelWindowsState {
     if (next) {
-      this.open(ghostId); // open 内部落 detached/lastOpen 并广播
+      this.open(ghostId);
     } else {
       this.deps.settings.patchEntry(ghostId, { detached: false, lastOpen: false });
-      const win = this.windows.get(ghostId);
-      if (win && !win.isDestroyed()) {
-        // onClosed 会广播,这里不重复
-        this.closingIds.add(ghostId);
-        win.close();
-      } else {
-        this.broadcast();
+      const slot = this.slots.get(ghostId);
+      if (slot && !slot.destroyingWindow) {
+        this.disposeSlot(ghostId, slot);
       }
+      this.broadcast();
     }
-    // open/close 的幂等分支可能没广播(如重复 setDetached(true)),兜底广播必达。
-    this.broadcast();
     return this.getState();
   }
 
-  /**
-   * 与"当前已装清单"对齐(broadcastGhostsChanged 观察者):
-   * 失去抽离资格(卸载/停用/换 tab 形态)→ 收窗;卸载删条目,其余清标志
-   * ——面板回停靠(或随卸载消失),不留"够不着"的死角。
-   */
+  // ── 双阶段就绪 ──────────────────────────────────────────────────────
+
+  markRendererReady(sender: WebContents): void {
+    const entry = this.slotForSender(sender);
+    if (!entry) return;
+    entry.slot.rendererReady = true;
+    if (this.locale) {
+      try {
+        sender.send(GHOST_PANEL_WINDOW_LOCALE_CHANGED_CHANNEL, this.locale);
+      } catch {
+        // Renderer may be tearing down.
+      }
+    }
+  }
+
+  markPresentationReady(sender: WebContents): void {
+    const entry = this.slotForSender(sender);
+    if (!entry) return;
+    entry.slot.presentationReady = true;
+    this.scheduleRecoveryStabilityReset(entry.slot);
+    if (entry.slot.pendingOpen) {
+      this.showAndFocus(entry.ghostId, entry.slot);
+    }
+  }
+
+  /** 查找 sender 对应的 ghostId+slot;非本 controller 管理的窗口返回 null。 */
+  slotForSender(sender: WebContents): { ghostId: string; slot: WindowSlot } | null {
+    for (const [id, slot] of this.slots) {
+      if (slot.win && !slot.win.isDestroyed() && slot.win.webContents === sender) {
+        return { ghostId: id, slot };
+      }
+    }
+    return null;
+  }
+
+  getSidebarWebContents(ghostId: string): WebContents | null {
+    const slot = this.slots.get(ghostId);
+    if (!slot || slot.win.isDestroyed()) return null;
+    return slot.win.webContents;
+  }
+
+  requestClose(sender: WebContents): void {
+    const entry = this.slotForSender(sender);
+    if (!entry) return;
+    this.deps.sendToWindow(entry.slot.win, GHOST_PANEL_WINDOW_CLOSE_REQUESTED_CHANNEL, undefined);
+  }
+
+  resolveCloseRequest(sender: WebContents, approved: boolean): void {
+    const entry = this.slotForSender(sender);
+    // The renderer owns the confirmation and performs setEnabled(false) after
+    // approval. Keep the window visible until that operation succeeds so an IPC
+    // failure does not silently hide an enabled plugin.
+    if (!entry || !approved) return;
+  }
+
+  // ── reconcile ──────────────────────────────────────────────────────
+
   reconcile(ghosts: InstalledGhost[]): void {
     const byId = new Map(ghosts.map((g) => [g.manifest.id, g]));
     const knownIds = new Set([
       ...Object.keys(this.deps.settings.read().windows),
-      ...this.windows.keys(),
+      ...this.slots.keys(),
     ]);
     let changed = false;
     for (const id of knownIds) {
@@ -134,10 +263,10 @@ export class GhostPanelWindowsController {
         ghost.manifest.panel !== undefined &&
         ghost.manifest.panel.position !== 'tab';
       if (detachable) continue;
-      const win = this.windows.get(id);
-      if (win && !win.isDestroyed() && !this.closingIds.has(id)) {
-        this.closingIds.add(id);
-        win.close();
+
+      const slot = this.slots.get(id);
+      if (slot && !slot.destroyingWindow) {
+        this.disposeSlot(id, slot);
       }
       if (ghost === undefined) {
         this.deps.settings.removeEntry(id);
@@ -150,6 +279,236 @@ export class GhostPanelWindowsController {
     if (changed) this.broadcast();
   }
 
+  // ── 生命周期 ────────────────────────────────────────────────────────
+
+  /** 主窗口销毁时回收所有隐藏窗口;controller 仍可随下一扇主窗重新预热。 */
+  destroyAllWindows(): void {
+    for (const [id, slot] of this.slots) {
+      this.clearTimeouts(slot);
+      if (!slot.win.isDestroyed()) {
+        slot.destroyingWindow = true;
+        try { slot.win.destroy(); } catch { /* already gone */ }
+      }
+    }
+    this.slots.clear();
+  }
+
+  /** 应用退出时永久停止并同步销毁所有缓存窗口。 */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.destroyAllWindows();
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 内部:窗口创建与生命周期
+  // ══════════════════════════════════════════════════════════════════════
+
+  private ensureSlot(ghostId: string): WindowSlot | null {
+    const existing = this.slots.get(ghostId);
+    if (existing && !existing.win.isDestroyed()) return existing;
+
+    let win: BrowserWindow;
+    try {
+      win = this.deps.createWindow(ghostId);
+    } catch (error) {
+      this.deps.log.warn('ghost panel window creation failed', {
+        ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+
+    const slot: WindowSlot = {
+      win,
+      rendererReady: false,
+      presentationReady: false,
+      visible: false,
+      pendingOpen: false,
+      destroyingWindow: false,
+      openTimeout: null,
+      recoveryStabilityTimeout: null,
+      automaticRecoveryAttempts: 0,
+    };
+    this.slots.set(ghostId, slot);
+
+    win.on('close', (event) => {
+      if (slot.destroyingWindow || this.disposed) return;
+      event.preventDefault();
+      this.requestClose(win.webContents);
+    });
+    win.on('minimize', () => {
+      if (slot.destroyingWindow || this.disposed) return;
+      // 原生标题栏（macOS 黄灯）与系统级最小化入口也必须复用 Ghost 气泡语义。
+      // 先恢复，避免在 renderer 完成 setDetached(false) 前短暂留在 Dock/任务栏。
+      if (win.isMinimized()) win.restore();
+      this.deps.sendToWindow(win, GHOST_PANEL_WINDOW_MINIMIZE_REQUESTED_CHANNEL, undefined);
+    });
+    win.on('show', () => this.onNativeVisibilityChanged(ghostId, slot, true));
+    win.on('hide', () => this.onNativeVisibilityChanged(ghostId, slot, false));
+    win.on('closed', () => this.onClosed(ghostId, slot));
+    win.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace) this.onRendererReloadStarted(ghostId, slot);
+    });
+    win.webContents.on(
+      'did-fail-load',
+      (_event, errorCode, errorDescription, _validatedUrl, isMainFrame) => {
+        if (isMainFrame && errorCode !== -3) {
+          this.invalidateSlot(ghostId, slot, `load failed (${errorCode}): ${errorDescription}`);
+        }
+      },
+    );
+    win.webContents.on('render-process-gone', (_event, details) => {
+      this.invalidateSlot(ghostId, slot, `renderer process gone: ${details.reason}`);
+    });
+
+    return slot;
+  }
+
+  private showAndFocus(ghostId: string, slot: WindowSlot): void {
+    this.clearOpenTimeout(slot);
+    slot.pendingOpen = false;
+    if (slot.win.isMinimized()) slot.win.restore();
+    slot.win.show();
+    slot.win.focus();
+    slot.visible = true;
+    this.deps.sendToWindow(slot.win, GHOST_PANEL_WINDOW_VISIBILITY_CHANGED_CHANNEL, { visible: true });
+    this.broadcast();
+  }
+
+  private hideWindow(ghostId: string, slot: WindowSlot): void {
+    this.clearOpenTimeout(slot);
+    slot.pendingOpen = false;
+    if (slot.win.isVisible()) slot.win.hide();
+    slot.visible = false;
+    try {
+      this.deps.sendToWindow(slot.win, GHOST_PANEL_WINDOW_VISIBILITY_CHANGED_CHANNEL, { visible: false });
+    } catch { /* window may be torn down */ }
+    this.deps.settings.patchEntry(ghostId, { lastOpen: false });
+    this.broadcast();
+    this.deps.log.info('ghost panel window hidden', { ghostId });
+  }
+
+  private onNativeVisibilityChanged(
+    ghostId: string,
+    slot: WindowSlot,
+    visible: boolean,
+  ): void {
+    if (
+      this.slots.get(ghostId) !== slot ||
+      slot.win.isDestroyed() ||
+      slot.destroyingWindow ||
+      this.disposed
+    ) {
+      return;
+    }
+    if (slot.visible === visible && !slot.pendingOpen) return;
+    slot.visible = visible;
+    if (visible) slot.pendingOpen = false;
+    try {
+      this.deps.sendToWindow(slot.win, GHOST_PANEL_WINDOW_VISIBILITY_CHANGED_CHANNEL, { visible });
+    } catch {
+      // Native visibility can change while the renderer is tearing down.
+    }
+    this.broadcast();
+  }
+
+  private onClosed(ghostId: string, slot: WindowSlot): void {
+    this.clearTimeouts(slot);
+    if (this.slots.get(ghostId) !== slot) return;
+    this.slots.delete(ghostId);
+    if (slot.destroyingWindow) return;
+    if (this.deps.isQuitting()) return;
+    if (ghostId in this.deps.settings.read().windows) {
+      this.deps.settings.patchEntry(ghostId, { detached: false, lastOpen: false });
+    }
+    this.broadcast();
+    this.deps.log.info('ghost panel window closed (destroyed)', { ghostId });
+  }
+
+  // ── 超时 ────────────────────────────────────────────────────────────
+
+  private scheduleOpenFallback(ghostId: string, slot: WindowSlot): void {
+    this.clearOpenTimeout(slot);
+    slot.openTimeout = setTimeout(() => {
+      slot.openTimeout = null;
+      if (slot.win.isDestroyed() || !slot.pendingOpen) return;
+      if (!slot.visible) this.showAndFocus(ghostId, slot);
+    }, DEFAULT_OPEN_TIMEOUT_MS);
+    slot.openTimeout.unref?.();
+  }
+
+  private clearOpenTimeout(slot: WindowSlot): void {
+    if (!slot.openTimeout) return;
+    clearTimeout(slot.openTimeout);
+    slot.openTimeout = null;
+  }
+
+  private scheduleRecoveryStabilityReset(slot: WindowSlot): void {
+    if (slot.automaticRecoveryAttempts === 0) return;
+    if (slot.recoveryStabilityTimeout) {
+      clearTimeout(slot.recoveryStabilityTimeout);
+    }
+    slot.recoveryStabilityTimeout = setTimeout(() => {
+      slot.recoveryStabilityTimeout = null;
+      if (slot.win.isDestroyed() || !slot.presentationReady) return;
+      slot.automaticRecoveryAttempts = 0;
+    }, DEFAULT_RECOVERY_STABILITY_MS);
+    slot.recoveryStabilityTimeout.unref?.();
+  }
+
+  // ── 崩溃恢复 ────────────────────────────────────────────────────────
+
+  private onRendererReloadStarted(_ghostId: string, slot: WindowSlot): void {
+    if (slot.win.isDestroyed()) return;
+    const shouldRestore = slot.visible || slot.pendingOpen;
+    if (shouldRestore) slot.pendingOpen = true;
+    if (slot.visible) slot.win.hide();
+    slot.rendererReady = false;
+    slot.presentationReady = false;
+    if (shouldRestore) {
+      this.scheduleOpenFallback(_ghostId, slot);
+    }
+  }
+
+  private invalidateSlot(ghostId: string, slot: WindowSlot, reason: string): void {
+    if (slot.win.isDestroyed()) return;
+    const reopen = slot.pendingOpen || slot.visible;
+    this.deps.log.warn('ghost panel cached window invalidated', { ghostId, reason, reopen });
+    this.disposeSlot(ghostId, slot);
+    if (!reopen || this.disposed) return;
+    if (slot.automaticRecoveryAttempts >= MAX_AUTOMATIC_RECOVERY_ATTEMPTS) {
+      this.deps.log.error('ghost panel automatic recovery exhausted', { ghostId, reason });
+      return;
+    }
+    // 重建并重新 open:恢复额度在 presentationReady 时重置
+    const replacement = this.ensureSlot(ghostId);
+    if (!replacement) return;
+    replacement.automaticRecoveryAttempts = slot.automaticRecoveryAttempts + 1;
+    replacement.pendingOpen = true;
+    this.scheduleOpenFallback(ghostId, replacement);
+    this.deps.settings.patchEntry(ghostId, { detached: true, lastOpen: true });
+    this.broadcast();
+  }
+
+  // ── 销毁 ────────────────────────────────────────────────────────────
+
+  private disposeSlot(ghostId: string, slot: WindowSlot): void {
+    this.clearTimeouts(slot);
+    this.slots.delete(ghostId);
+    slot.destroyingWindow = true;
+    try {
+      if (!slot.win.isDestroyed()) slot.win.destroy();
+    } catch { /* already gone */ }
+  }
+
+  private clearTimeouts(slot: WindowSlot): void {
+    if (slot.openTimeout) { clearTimeout(slot.openTimeout); slot.openTimeout = null; }
+    if (slot.recoveryStabilityTimeout) { clearTimeout(slot.recoveryStabilityTimeout); slot.recoveryStabilityTimeout = null; }
+  }
+
+  // ── 查询 ────────────────────────────────────────────────────────────
+
   private entryState(
     ghostId: string,
     entry: { detached: boolean; lastOpen: boolean },
@@ -158,22 +517,9 @@ export class GhostPanelWindowsController {
   }
 
   private isOpen(ghostId: string): boolean {
-    const win = this.windows.get(ghostId);
-    return win !== undefined && !this.closingIds.has(ghostId) && !win.isDestroyed();
-  }
-
-  private onClosed(ghostId: string): void {
-    this.windows.delete(ghostId);
-    this.closingIds.delete(ghostId);
-    // app 退出路径:保留 detached/lastOpen 供下次启动恢复,也不广播(窗口都在销毁)
-    if (this.deps.isQuitting()) return;
-    // reconcile 的卸载路径可能已删条目(真实 close 是异步的,closed 晚到)——
-    // 不要凭空再造一条陈年条目。
-    if (ghostId in this.deps.settings.read().windows) {
-      this.deps.settings.patchEntry(ghostId, { detached: false, lastOpen: false });
-    }
-    this.broadcast();
-    this.deps.log.info('ghost panel window closed (re-docked)', { ghostId });
+    const slot = this.slots.get(ghostId);
+    if (!slot || slot.win.isDestroyed()) return false;
+    return slot.visible || slot.pendingOpen;
   }
 
   private broadcast(): void {

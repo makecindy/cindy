@@ -2010,9 +2010,8 @@ function handleSubAgentActivity(
         ...(item.agentThreadId ? { providerRunIds: [item.agentThreadId] } : {}),
       },
       ...(item.agentThreadId ? { receiverThreadIds: [item.agentThreadId] } : {}),
-      ...(agentPath ? { title: agentPath, nativeName: agentPath } : {}),
+      ...(agentPath ? { title: agentPath } : {}),
       ...(model ? { model } : {}),
-      role: 'developer',
     },
     source: 'codex',
   });

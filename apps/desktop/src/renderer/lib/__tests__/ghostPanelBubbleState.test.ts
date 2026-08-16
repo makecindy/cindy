@@ -37,7 +37,12 @@ function ghost(
           },
         }),
   };
-  return { manifest, dir: `/fake/${id}`, enabled: opts.enabled ?? true };
+  return {
+    manifest,
+    dir: `/fake/${id}`,
+    enabled: opts.enabled ?? true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+  };
 }
 
 afterEach(() => {
@@ -135,5 +140,22 @@ describe('ghostPanelBubbleState · 变化信号(引用替换)', () => {
     const after = getGhostPanelBubbleState();
     minimizeGhostPanel('x'); // 已最小化,幂等短路,不替换
     expect(getGhostPanelBubbleState()).toBe(after);
+  });
+});
+
+describe('ghostPanelBubbleState · 跨独立窗口同步', () => {
+  it('另一个 BrowserWindow 写入气泡状态后刷新本窗口镜像', () => {
+    // 首次读取会惰性注册 storage listener。
+    getGhostPanelBubbleState();
+
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'xdt:ghostPanelBubble:v1',
+        storageArea: window.localStorage,
+        newValue: JSON.stringify({ a: { minimized: true } }),
+      }),
+    );
+
+    expect(getGhostPanelBubbleState().a).toEqual({ minimized: true });
   });
 });

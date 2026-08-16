@@ -1,5 +1,6 @@
 import { app } from 'electron';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -9,14 +10,23 @@ import { createLogger } from './logger.js';
 import {
   GHOST_MANIFEST_FILE,
   isOfficialGhostId,
-  validateGhostManifest,
+  isValidGhostId,
 } from '../shared/ghost.js';
+import { parseInstalledGhostManifest } from './installedGhostManifest.js';
 import {
   NO_LEGACY_GHOST_RECOVERY,
   type LegacyGhostRecoveryStatus,
 } from '../shared/legacyGhostRecovery.js';
+import { readLegacyGhostApprovalProjection } from './cindy-brain/GhostManager.js';
+import { withGhostInstallLock } from './cindy-brain/ghostInstallLock.js';
+import {
+  GHOST_MANIFEST_MAX_BYTES,
+  readBoundedFileNoFollow,
+  readBoundedFileNoFollowSync,
+} from './utils/readBoundedFile.js';
 
 const CLAIM_MARKER = '.owner-namespace-claim-v1.json';
+const LEGACY_GHOST_RECOVERY_MARKER = '.legacy-ghost-recovery-v1.json';
 const BUILTIN_PROVISIONING_STATE_FILE = '.builtin-provisioning.json';
 const LEGACY_PATHS = [
   'ghost-kv',
@@ -55,12 +65,34 @@ interface ClaimMarker {
   complete: boolean;
 }
 
+interface LegacyGhostRecoveryMarker {
+  version: 1 | 2;
+  ownerKey: string;
+  pendingIds: string[];
+  /** Deterministic content failures remain inside the frozen id whitelist. */
+  failedIds?: string[];
+  /** Complete approval-fact digest frozen before a source directory is moved. */
+  approvalProjectionSha256ById?: Record<string, string>;
+}
+
+type LegacyGhostRecoveryMarkerRead =
+  | { kind: 'ready'; marker: LegacyGhostRecoveryMarker }
+  | { kind: 'missing' }
+  | { kind: 'deferred' }
+  | { kind: 'invalid' };
+
 interface MigrationDeps {
   userDataDir(): string;
   readFile(file: string): Promise<string>;
   writeFileExclusive(file: string, text: string): Promise<void>;
   writeFile(file: string, text: string): Promise<void>;
-  lstat(file: string): Promise<{ isDirectory(): boolean; mtimeMs?: number }>;
+  unlink(file: string): Promise<void>;
+  lstat(file: string): Promise<{
+    isDirectory(): boolean;
+    isFile?: () => boolean;
+    isSymbolicLink?: () => boolean;
+    mtimeMs?: number;
+  }>;
   readdir(dir: string): Promise<string[]>;
   mkdir(dir: string): Promise<void>;
   rename(source: string, target: string): Promise<void>;
@@ -90,7 +122,8 @@ type ProcessIdentityReader = (pid: number) => ProcessIdentitySnapshot | null;
 /** claim 被推迟(而非放弃)的原因;下次独占启动时自然重试完成。 */
 export type OwnerNamespaceClaimDeferredReason =
   | 'passive-shared-user-data'
-  | 'concurrent-live-instances';
+  | 'concurrent-live-instances'
+  | 'legacy-discovery-incomplete';
 
 export interface OwnerNamespaceMigrationResult {
   status: 'skipped' | 'deferred' | 'claimed-by-other-owner' | 'migrated' | 'partial';
@@ -98,6 +131,10 @@ export interface OwnerNamespaceMigrationResult {
   conflicts: number;
   provisioningStateMoved?: boolean;
   deferredReason?: OwnerNamespaceClaimDeferredReason;
+  /** Ghost directories moved before approval backfill; durable across restart. */
+  recoveredIds?: string[];
+  /** Expected full approval projection where the source was still available to freeze. */
+  recoveredApprovalProjectionSha256ById?: Record<string, string>;
 }
 
 const log = createLogger('ownerNamespaceMigration');
@@ -120,6 +157,7 @@ const productionDeps: MigrationDeps = {
   readFile: (file) => fs.readFile(file, 'utf-8'),
   writeFileExclusive: (file, text) => fs.writeFile(file, text, { encoding: 'utf-8', flag: 'wx' }),
   writeFile: (file, text) => fs.writeFile(file, text, 'utf-8'),
+  unlink: (file) => fs.unlink(file),
   lstat: (file) => fs.lstat(file),
   readdir: (dir) => fs.readdir(dir),
   mkdir: async (dir) => {
@@ -154,6 +192,33 @@ function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
+
+function normalizeLegacyApprovalProjectionDigests(
+  value: unknown,
+  pendingIds: readonly string[],
+): { ok: true; digests?: Record<string, string> } | { ok: false } {
+  if (value === undefined) return { ok: true };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false };
+  const pending = new Set(pendingIds);
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (
+    entries.some(
+      ([id, digest]) =>
+        !pending.has(id) || typeof digest !== 'string' || !SHA256_HEX_RE.test(digest),
+    )
+  ) {
+    return { ok: false };
+  }
+  return {
+    ok: true,
+    digests: Object.fromEntries(entries.sort(([left], [right]) => left.localeCompare(right))) as Record<
+      string,
+      string
+    >,
+  };
+}
+
 async function readMarker(deps: MigrationDeps, markerPath: string): Promise<ClaimMarker | null> {
   try {
     const parsed = JSON.parse(await deps.readFile(markerPath)) as Partial<ClaimMarker>;
@@ -169,6 +234,87 @@ async function readMarker(deps: MigrationDeps, markerPath: string): Promise<Clai
     if (isMissing(error)) return null;
     throw error;
   }
+}
+
+async function readLegacyGhostRecoveryMarker(
+  deps: MigrationDeps,
+  markerPath: string,
+): Promise<LegacyGhostRecoveryMarkerRead> {
+  const ownerRoot = path.dirname(markerPath);
+  let ownerRealPath: string;
+  try {
+    ownerRealPath = await fs.realpath(ownerRoot);
+  } catch (error) {
+    return isMissing(error) ? { kind: 'missing' } : { kind: 'deferred' };
+  }
+  let bytes: Buffer | null;
+  try {
+    bytes = await readBoundedFileNoFollow(markerPath, 64 * 1024, {
+      containWithin: ownerRealPath,
+      nonBlocking: true,
+    });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === 'ENOENT') return { kind: 'missing' };
+    // ELOOP: O_NOFOLLOW on a symlink — deterministic, never self-healing.
+    if (code === 'ELOOP') return { kind: 'invalid' };
+    return { kind: 'deferred' };
+  }
+  // 非普通文件 / 超过 64 KiB / containment 失败都是确定性缺陷,不会自行恢复;
+  // 按 invalid 而非 deferred 处理,避免"永久重试但不收敛"的活跃性死锁。
+  if (bytes === null) return { kind: 'invalid' };
+  const text = bytes.toString('utf8');
+  try {
+    const parsed = JSON.parse(text) as Partial<LegacyGhostRecoveryMarker>;
+    const failedIds = parsed.failedIds ?? [];
+    const projections = normalizeLegacyApprovalProjectionDigests(
+      parsed.approvalProjectionSha256ById,
+      parsed.pendingIds ?? [],
+    );
+    if (
+      (parsed.version === 1 || parsed.version === 2) &&
+      typeof parsed.ownerKey === 'string' &&
+      Array.isArray(parsed.pendingIds) &&
+      parsed.pendingIds.every((id) => typeof id === 'string' && isValidGhostId(id)) &&
+      Array.isArray(failedIds) &&
+      failedIds.every((id) => typeof id === 'string' && isValidGhostId(id)) &&
+      failedIds.every((id) => parsed.pendingIds?.includes(id)) &&
+      projections.ok
+    ) {
+      if (parsed.pendingIds.length === 0) return { kind: 'missing' };
+      const marker: LegacyGhostRecoveryMarker = {
+        version: parsed.version,
+        ownerKey: parsed.ownerKey,
+        pendingIds: [...new Set(parsed.pendingIds)],
+        ...(failedIds.length > 0 ? { failedIds: [...new Set(failedIds)] } : {}),
+        ...(projections.digests
+          ? { approvalProjectionSha256ById: projections.digests }
+          : {}),
+      };
+      return { kind: 'ready', marker };
+    }
+    return { kind: 'invalid' };
+  } catch {
+    return { kind: 'invalid' };
+  }
+}
+
+async function writeLegacyGhostRecoveryMarker(
+  deps: MigrationDeps,
+  markerPath: string,
+  marker: LegacyGhostRecoveryMarker,
+): Promise<void> {
+  await writeJsonAtomically(deps, markerPath, marker);
+}
+
+async function writeJsonAtomically(
+  deps: MigrationDeps,
+  targetPath: string,
+  value: unknown,
+): Promise<void> {
+  const tempPath = `${targetPath}.${randomUUID()}.tmp`;
+  await deps.writeFile(tempPath, JSON.stringify(value));
+  await deps.rename(tempPath, targetPath);
 }
 
 function isPidAliveDefault(pid: number): boolean {
@@ -641,28 +787,76 @@ interface LegacyGhostDir {
   id: string;
   dir: string;
   command: string | null;
+  rootStats: fsSync.Stats;
+  dirStats: fsSync.Stats;
+  rootRealPath: string;
+  dirRealPath: string;
 }
 
-function filterLegacyGhostsByIdPolicy(
-  ghosts: LegacyGhostDir[],
-  rejectReservedIds: boolean,
-): LegacyGhostDir[] {
-  return rejectReservedIds ? ghosts.filter((ghost) => !isOfficialGhostId(ghost.id)) : ghosts;
+interface LegacyGhostDiscovery {
+  ghosts: LegacyGhostDir[];
+  deferredRoots: string[];
+  deferredIds: string[];
+  invalidIds: string[];
 }
 
-function readValidLegacyGhostDir(
+type LegacyGhostManifestRead =
+  | { kind: 'ready'; command: string | null }
+  | { kind: 'deferred' }
+  | { kind: 'invalid' };
+
+function sameLegacyDirectoryIdentity(expected: fsSync.Stats, current: fsSync.Stats): boolean {
+  if (!current.isDirectory() || current.isSymbolicLink()) return false;
+  if (expected.dev !== 0 || expected.ino !== 0 || current.dev !== 0 || current.ino !== 0) {
+    return expected.dev === current.dev && expected.ino === current.ino;
+  }
+  return expected.birthtimeMs === current.birthtimeMs && expected.ctimeMs === current.ctimeMs;
+}
+
+function sameLegacyCanonicalPath(left: string, right: string): boolean {
+  const fold = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+  return fold(path.resolve(left)) === fold(path.resolve(right));
+}
+
+function isLegacyPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative.length > 0 && !path.isAbsolute(relative) &&
+    relative !== '..' && !relative.startsWith(`..${path.sep}`);
+}
+
+function readLegacyGhostManifest(
   dir: string,
   expectedId: string,
-): Pick<LegacyGhostDir, 'command'> | null {
+): LegacyGhostManifestRead {
+  const manifestPath = path.join(dir, GHOST_MANIFEST_FILE);
+  // Keep recovery's three-state I/O semantics at this boundary. The installed
+  // manifest parser only owns the legacy-manual compatibility rule; it must
+  // not collapse a transient no-follow/containment failure into an ordinary
+  // invalid manifest, because recovery must defer rather than freeze it out.
+  let containWithin: string;
+  try {
+    containWithin = fsSync.realpathSync(dir);
+  } catch (error) {
+    return isMissing(error) ? { kind: 'invalid' } : { kind: 'deferred' };
+  }
+  let bytes: Buffer | null;
+  try {
+    bytes = readBoundedFileNoFollowSync(manifestPath, GHOST_MANIFEST_MAX_BYTES, {
+      containWithin,
+    });
+  } catch (error) {
+    return isMissing(error) ? { kind: 'invalid' } : { kind: 'deferred' };
+  }
+  if (bytes === null) return { kind: 'invalid' };
   let raw: unknown;
   try {
-    raw = JSON.parse(fsSync.readFileSync(path.join(dir, GHOST_MANIFEST_FILE), 'utf-8'));
+    raw = JSON.parse(bytes.toString('utf8')) as unknown;
   } catch {
-    return null;
+    return { kind: 'invalid' };
   }
-  const parsed = validateGhostManifest(raw);
-  if (!parsed.ok || parsed.manifest.id !== expectedId) return null;
-  return { command: parsed.manifest.command ?? null };
+  const parsed = parseInstalledGhostManifest(raw);
+  if (!parsed.ok || parsed.manifest.id !== expectedId) return { kind: 'invalid' };
+  return { kind: 'ready', command: parsed.manifest.command ?? null };
 }
 
 function pathExistsNoFollowSync(
@@ -697,21 +891,85 @@ function ownerScopedLegacyGhostRootDir(userDataDir: string, ownerKey: string): s
   return path.join(userDataDir, 'owners', ownerKey, 'brain');
 }
 
-function listLegacyGhostDirsInRoots(
-  roots: string[],
-): LegacyGhostDir[] {
-  const result: LegacyGhostDir[] = [];
-  for (const root of roots) {
+const OWNER_STORAGE_KEY_RE = /^[a-f0-9]{20}$/;
+
+/** All legacy/content and approval projection roots that must be revoked at an owner boundary. */
+export function listLegacyOwnerProjectionRoots(userDataDir: string): string[] {
+  const ownersRoot = path.join(userDataDir, 'owners');
+  const roots = [
+    ...sharedLegacyGhostRootDirs(userDataDir),
+  ];
+  let entries: fsSync.Dirent[];
+  try {
+    entries = fsSync.readdirSync(ownersRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isMissing(error)) return roots;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!OWNER_STORAGE_KEY_RE.test(entry.name)) continue;
+    const ownerRoot = path.join(ownersRoot, entry.name);
+    let ownerStat: fsSync.Stats;
     try {
-      const stats = fsSync.lstatSync(root);
-      if (!stats.isDirectory() || stats.isSymbolicLink()) continue;
-    } catch {
+      // Dirent.d_type is not authoritative on network/special filesystems. A
+      // missed owner directory would bypass the next account-boundary retry.
+      ownerStat = fsSync.lstatSync(ownerRoot);
+    } catch (error) {
+      if (isMissing(error)) continue;
+      throw error;
+    }
+    if (!ownerStat.isDirectory() || ownerStat.isSymbolicLink()) {
+      throw new Error(`owner projection namespace is not a regular directory: ${ownerRoot}`);
+    }
+    roots.push(
+      path.join(ownerRoot, 'brain'),
+      path.join(ownerRoot, 'cindy-brain'),
+      path.join(ownerRoot, 'ghost-install-state'),
+    );
+  }
+  return roots;
+}
+
+function scanLegacyGhostDirsInRoots(
+  roots: string[],
+): LegacyGhostDiscovery {
+  const result: LegacyGhostDiscovery = {
+    ghosts: [],
+    deferredRoots: [],
+    deferredIds: [],
+    invalidIds: [],
+  };
+  for (const root of roots) {
+    let rootStats: fsSync.Stats;
+    let rootRealPath: string;
+    try {
+      rootStats = fsSync.lstatSync(root);
+      if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
+        result.invalidIds.push(root);
+        continue;
+      }
+      rootRealPath = fsSync.realpathSync.native(root);
+    } catch (error) {
+      if (!isMissing(error)) result.deferredRoots.push(root);
       continue;
     }
     let entries: fsSync.Dirent[];
     try {
       entries = fsSync.readdirSync(root, { withFileTypes: true });
+    } catch (error) {
+      if (!isMissing(error)) result.deferredRoots.push(root);
+      continue;
+    }
+    try {
+      const rootAfterRead = fsSync.lstatSync(root);
+      const rootRealAfterRead = fsSync.realpathSync.native(root);
+      if (!sameLegacyDirectoryIdentity(rootStats, rootAfterRead) ||
+          !sameLegacyCanonicalPath(rootRealPath, rootRealAfterRead)) {
+        result.deferredRoots.push(root);
+        continue;
+      }
     } catch {
+      result.deferredRoots.push(root);
       continue;
     }
     for (const entry of entries) {
@@ -720,15 +978,82 @@ function listLegacyGhostDirsInRoots(
       let dirStats: fsSync.Stats;
       try {
         dirStats = fsSync.lstatSync(dir);
-      } catch {
+      } catch (error) {
+        if (!isMissing(error)) result.deferredIds.push(entry.name);
         continue;
       }
-      if (!dirStats.isDirectory() || dirStats.isSymbolicLink()) continue;
-      const valid = readValidLegacyGhostDir(dir, entry.name);
-      if (valid) result.push({ root, id: entry.name, dir, command: valid.command });
+      if (!dirStats.isDirectory() || dirStats.isSymbolicLink()) {
+        result.invalidIds.push(entry.name);
+        continue;
+      }
+      let dirRealPath: string;
+      try {
+        dirRealPath = fsSync.realpathSync.native(dir);
+        if (!isLegacyPathInside(rootRealPath, dirRealPath)) {
+          result.invalidIds.push(entry.name);
+          continue;
+        }
+      } catch (error) {
+        if (!isMissing(error)) result.deferredIds.push(entry.name);
+        continue;
+      }
+      const manifest = readLegacyGhostManifest(dir, entry.name);
+      if (manifest.kind === 'deferred') {
+        result.deferredIds.push(entry.name);
+      } else if (manifest.kind === 'invalid') {
+        result.invalidIds.push(entry.name);
+      } else {
+        try {
+          const rootAfterManifest = fsSync.lstatSync(root);
+          const dirAfterManifest = fsSync.lstatSync(dir);
+          const rootRealAfterManifest = fsSync.realpathSync.native(root);
+          const dirRealAfterManifest = fsSync.realpathSync.native(dir);
+          if (!sameLegacyDirectoryIdentity(rootStats, rootAfterManifest) ||
+              !sameLegacyDirectoryIdentity(dirStats, dirAfterManifest) ||
+              !sameLegacyCanonicalPath(rootRealPath, rootRealAfterManifest) ||
+              !sameLegacyCanonicalPath(dirRealPath, dirRealAfterManifest) ||
+              !isLegacyPathInside(rootRealAfterManifest, dirRealAfterManifest)) {
+            result.deferredIds.push(entry.name);
+            continue;
+          }
+        } catch {
+          result.deferredIds.push(entry.name);
+          continue;
+        }
+        result.ghosts.push({
+          root,
+          id: entry.name,
+          dir,
+          command: manifest.command,
+          rootStats,
+          dirStats,
+          rootRealPath,
+          dirRealPath,
+        });
+      }
     }
   }
   return result;
+}
+
+function listLegacyGhostDirsInRoots(roots: string[]): LegacyGhostDir[] {
+  return scanLegacyGhostDirsInRoots(roots).ghosts;
+}
+
+function hasStableLegacyGhostSourceSync(legacy: LegacyGhostDir): boolean {
+  try {
+    const currentRoot = fsSync.lstatSync(legacy.root);
+    const currentDir = fsSync.lstatSync(legacy.dir);
+    const currentRootReal = fsSync.realpathSync.native(legacy.root);
+    const currentDirReal = fsSync.realpathSync.native(legacy.dir);
+    return sameLegacyDirectoryIdentity(legacy.rootStats, currentRoot) &&
+      sameLegacyDirectoryIdentity(legacy.dirStats, currentDir) &&
+      sameLegacyCanonicalPath(legacy.rootRealPath, currentRootReal) &&
+      sameLegacyCanonicalPath(legacy.dirRealPath, currentDirReal) &&
+      isLegacyPathInside(currentRootReal, currentDirReal);
+  } catch {
+    return false;
+  }
 }
 
 function listSharedLegacyGhostDirs(
@@ -782,8 +1107,20 @@ export function listLegacyGhostTombstoneRoots(
 ): string[] {
   const ownerKey = dataOwnerStorageKey(ownerId);
   const targetRoot = path.join(userDataDir, 'owners', ownerKey, 'cindy-brain');
-  const sharedLegacyGhosts = listSharedLegacyGhostDirs(userDataDir);
-  const scopedLegacyGhosts = listOwnerScopedLegacyGhostDirs(userDataDir, ownerKey);
+  const sharedDiscovery = scanLegacyGhostDirsInRoots(sharedLegacyGhostRootDirs(userDataDir));
+  const scopedDiscovery = scanLegacyGhostDirsInRoots([
+    ownerScopedLegacyGhostRootDir(userDataDir, ownerKey),
+  ]);
+  if (
+    sharedDiscovery.deferredRoots.length > 0 ||
+    sharedDiscovery.deferredIds.length > 0 ||
+    scopedDiscovery.deferredRoots.length > 0 ||
+    scopedDiscovery.deferredIds.length > 0
+  ) {
+    return [];
+  }
+  const sharedLegacyGhosts = sharedDiscovery.ghosts;
+  const scopedLegacyGhosts = scopedDiscovery.ghosts;
   const markerRead = readMarkerSync(userDataDir);
   const sharedRecoveryBlocked =
     sharedLegacyGhosts.length > 0 &&
@@ -861,36 +1198,120 @@ export function getLegacyGhostRecoveryStatus(
 
   const root = userDataDir ?? app.getPath('userData');
   const ownerKey = dataOwnerStorageKey(session.dataOwnerId);
-  const rejectReservedIds = options.rejectReservedIds === true;
-  const sharedLegacyGhosts = filterLegacyGhostsByIdPolicy(
-    listSharedLegacyGhostDirs(root),
-    rejectReservedIds,
+  const sharedDiscovery = scanLegacyGhostDirsInRoots(sharedLegacyGhostRootDirs(root));
+  const scopedDiscovery = scanLegacyGhostDirsInRoots([
+    ownerScopedLegacyGhostRootDir(root, ownerKey),
+  ]);
+  const targetRoot = path.join(root, 'owners', ownerKey, 'cindy-brain');
+  const sharedLegacyGhosts = sharedDiscovery.ghosts;
+  const scopedLegacyGhosts = scopedDiscovery.ghosts;
+  const legacyGhosts = options.rejectReservedIds
+    ? [...sharedLegacyGhosts, ...scopedLegacyGhosts].filter((ghost) => !isOfficialGhostId(ghost.id))
+    : [...sharedLegacyGhosts, ...scopedLegacyGhosts];
+  const recoveryMarkerRead = readLegacyGhostRecoveryMarkerSync(root, ownerKey);
+  const recoveryMarker = recoveryMarkerRead.kind === 'ready'
+    ? recoveryMarkerRead.marker
+    : null;
+  // Defer the target-root scan until we know there are legacy sources or
+  // pending recovery ids.  Scanning beforehand wastes work in a healthy
+  // profile and, worse, can block the recovery-status IPC or report a
+  // spurious deferred status when an unrelated installed plugin has a
+  // corrupt ghost.json (e.g. leftover FIFO after a sync conflict).
+  const hasRecoveryCandidates =
+    legacyGhosts.length > 0 || (recoveryMarker?.pendingIds?.length ?? 0) > 0;
+  const targetDiscovery = hasRecoveryCandidates
+    ? scanLegacyGhostDirsInRoots([targetRoot])
+    : { ghosts: [], deferredIds: [], invalidIds: [], deferredRoots: [] };
+  const sourceDiscoveryProblemIds = new Set(
+    [
+      ...sharedDiscovery.deferredIds,
+      ...sharedDiscovery.invalidIds,
+      ...scopedDiscovery.deferredIds,
+      ...scopedDiscovery.invalidIds,
+    ].filter((id) => !options.rejectReservedIds || !isOfficialGhostId(id)),
   );
-  const scopedLegacyGhosts = filterLegacyGhostsByIdPolicy(
-    listOwnerScopedLegacyGhostDirs(root, ownerKey),
-    rejectReservedIds,
+  // Filter reserved IDs from pending marker ids so they don't inflate
+  // status counts in packaged builds (P2, PRRT_kwDOTgdRUs6YbtXr).
+  const visiblePendingIds = options.rejectReservedIds
+    ? (recoveryMarker?.pendingIds ?? []).filter((id) => !isOfficialGhostId(id))
+    : (recoveryMarker?.pendingIds ?? []);
+  // A marker containing only reserved ids has no applicable recovery
+  // whitelist in packaged builds; treat it as empty for fresh legacy sources.
+  const hasVisibleFrozenWhitelist = recoveryMarker !== null && visiblePendingIds.length > 0;
+  const targetInvalidIds = new Set(
+    targetDiscovery.invalidIds.filter((id) => visiblePendingIds.includes(id)),
   );
-
-  const markerRead = readMarkerSync(root);
-  const sharedRecoveryBlocked =
-    sharedLegacyGhosts.length > 0 &&
-    (markerRead.invalid ||
-      (markerRead.marker !== null && markerRead.marker.ownerKey !== ownerKey));
-  if (sharedRecoveryBlocked && scopedLegacyGhosts.length === 0) {
-    if (markerRead.marker && markerRead.marker.ownerKey !== ownerKey) {
-      // 已明确属于其他账号的共享目录不是当前账号的恢复任务。
-      return NO_LEGACY_GHOST_RECOVERY;
-    }
+  // Filter reserved IDs from per-id counts so they don't report spurious
+  // deferred/invalid problems for ids that can never be recovered (P2,
+  // PRRT_kwDOTgdRUs6YRp62).  deferredRoots are root-level (not per-id)
+  // and can't be id-filtered.
+  const sourceDeferredIds = options.rejectReservedIds
+    ? [...sharedDiscovery.deferredIds, ...scopedDiscovery.deferredIds]
+      .filter((id) => !isOfficialGhostId(id))
+    : [...sharedDiscovery.deferredIds, ...scopedDiscovery.deferredIds];
+  // Filter target deferred IDs by pendingIds so an unrelated installed
+  // plugin's transient read error doesn't make the status report deferred
+  // (P2, PRRT_kwDOTgdRUs6YcxiJ).  Already done in recoverLegacyGhostPlugins.
+  const discoveryDeferred =
+    sharedDiscovery.deferredRoots.length > 0 ||
+    scopedDiscovery.deferredRoots.length > 0 ||
+    targetDiscovery.deferredRoots.length > 0 ||
+    sourceDeferredIds.length > 0 ||
+    targetDiscovery.deferredIds.some((id) => visiblePendingIds.includes(id));
+  // 一个与待恢复 id 无关的 target 目录损坏（比如安装了别的插件但 ghost.json
+  // 偶然坏了）不应永久卡死本 owner 的整批 legacy 恢复。用已按 pendingIds
+  // 过滤的 targetInvalidIds 判定，而不是原始的 targetDiscovery.invalidIds。
+  const discoveryHasInvalid =
+    sourceDiscoveryProblemIds.size > 0 || targetInvalidIds.size > 0;
+  const installedTargetIds = new Set(targetDiscovery.ghosts.map((ghost) => ghost.id));
+  const legacySourceIds = new Set(legacyGhosts.map((ghost) => ghost.id));
+  const knownDiscoveryIds = new Set([
+    ...legacySourceIds,
+    ...sourceDiscoveryProblemIds,
+    ...targetInvalidIds,
+    ...visiblePendingIds,
+  ]);
+  const deferredRootCount =
+    sharedDiscovery.deferredRoots.length +
+    scopedDiscovery.deferredRoots.length +
+    targetDiscovery.deferredRoots.length;
+  const knownDiscoveryCount = knownDiscoveryIds.size + deferredRootCount;
+  if (recoveryMarkerRead.kind === 'invalid') {
     return {
       state: 'partial',
-      legacyPluginCount: sharedLegacyGhosts.length,
+      legacyPluginCount: Math.max(1, knownDiscoveryCount),
       canRetry: false,
     };
   }
-  const eligibleLegacyGhosts = sharedRecoveryBlocked
-    ? scopedLegacyGhosts
-    : [...sharedLegacyGhosts, ...scopedLegacyGhosts];
-  const legacyPluginCount = eligibleLegacyGhosts.length;
+  if (recoveryMarkerRead.kind === 'deferred' || discoveryDeferred) {
+    return {
+      state: 'deferred',
+      legacyPluginCount: Math.max(1, knownDiscoveryCount),
+      canRetry: process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1',
+      deferredReason: 'legacy-discovery-incomplete',
+    };
+  }
+  const recoveredIds = (recoveryMarker?.pendingIds ?? []).filter((id) =>
+    installedTargetIds.has(id) &&
+    !legacySourceIds.has(id) &&
+    recoveryMarker?.approvalProjectionSha256ById?.[id] !== undefined &&
+    (!options.rejectReservedIds || !isOfficialGhostId(id)),
+  );
+  const unexpectedFrozenIds = recoveryMarker
+    ? (hasVisibleFrozenWhitelist
+      ? legacyGhosts.map((ghost) => ghost.id).filter((id) => !visiblePendingIds.includes(id))
+      : [])
+    : [];
+  const legacyPluginCount = new Set([
+    ...legacyGhosts.map((ghost) => ghost.id),
+    ...sourceDiscoveryProblemIds,
+    ...targetInvalidIds,
+    ...recoveredIds,
+    ...visiblePendingIds,
+  ]).size;
+  if (discoveryHasInvalid && targetInvalidIds.size > 0) {
+    return { state: 'partial', legacyPluginCount: Math.max(1, legacyPluginCount), canRetry: false };
+  }
   if (legacyPluginCount === 0) return NO_LEGACY_GHOST_RECOVERY;
   if (process.env.XDT_PASSIVE_SHARED_USER_DATA === '1') {
     return { state: 'deferred', legacyPluginCount, canRetry: false };
@@ -898,13 +1319,42 @@ export function getLegacyGhostRecoveryStatus(
   if (hasConcurrentLiveInstanceSync(root, isPidAlive, readProcessIdentity)) {
     return { state: 'deferred', legacyPluginCount, canRetry: false };
   }
+  if (recoveredIds.length > 0) {
+    // Keep the target-only retry on the same exact-process identity policy as
+    // the owner-wide check above. A PID-only fallback here would let a reused
+    // stale registry PID block the only backfill path for an already-moved
+    // plugin.
+    if (hasConcurrentLiveInstanceSync(root, isPidAlive, readProcessIdentity)) {
+      return { state: 'deferred', legacyPluginCount, canRetry: false };
+    }
+    return { state: 'partial', legacyPluginCount, canRetry: true };
+  }
+  if (unexpectedFrozenIds.length > 0) {
+    return { state: 'partial', legacyPluginCount, canRetry: false };
+  }
 
-  const targetRoot = path.join(root, 'owners', ownerKey, 'cindy-brain');
+  if (discoveryHasInvalid && legacyGhosts.length === 0) {
+    return { state: 'partial', legacyPluginCount, canRetry: false };
+  }
+  const markerRead = readMarkerSync(root);
+  const sharedRecoveryBlocked =
+    sharedLegacyGhosts.length > 0 &&
+    (markerRead.invalid ||
+      (markerRead.marker !== null && markerRead.marker.ownerKey !== ownerKey));
+  if (sharedRecoveryBlocked && scopedLegacyGhosts.length === 0) {
+    if (markerRead.marker && markerRead.marker.ownerKey !== ownerKey) {
+      return { state: 'claimed-by-other-owner', legacyPluginCount, canRetry: false };
+    }
+    return { state: 'partial', legacyPluginCount, canRetry: false };
+  }
+
+  const eligibleLegacyGhosts = (sharedRecoveryBlocked ? scopedLegacyGhosts : legacyGhosts)
+    .filter((ghost) => !hasVisibleFrozenWhitelist || visiblePendingIds.includes(ghost.id));
   if (!hasSafeRecoveryTargetChainSync(root, targetRoot)) {
     return { state: 'partial', legacyPluginCount, canRetry: false };
   }
   const occupiedCommands = new Set(
-    listLegacyGhostDirsInRoots([targetRoot])
+    targetDiscovery.ghosts
       .map((legacy) => legacy.command?.toLowerCase() ?? null)
       .filter((command): command is string => command !== null),
   );
@@ -950,15 +1400,69 @@ export async function recoverLegacyGhostPlugins(
   const userDataDir = deps.userDataDir();
   const ownerKey = dataOwnerStorageKey(ownerId);
   const markerPath = path.join(userDataDir, CLAIM_MARKER);
-  const rejectReservedIds = options.rejectReservedIds === true;
-  const sharedLegacyGhosts = filterLegacyGhostsByIdPolicy(
-    listSharedLegacyGhostDirs(userDataDir),
-    rejectReservedIds,
+  const recoveryMarkerPath = path.join(
+    userDataDir,
+    'owners',
+    ownerKey,
+    LEGACY_GHOST_RECOVERY_MARKER,
   );
-  const scopedLegacyGhosts = filterLegacyGhostsByIdPolicy(
-    listOwnerScopedLegacyGhostDirs(userDataDir, ownerKey),
-    rejectReservedIds,
+  const sharedDiscovery = scanLegacyGhostDirsInRoots(sharedLegacyGhostRootDirs(userDataDir));
+  const scopedDiscovery = scanLegacyGhostDirsInRoots([
+    ownerScopedLegacyGhostRootDir(userDataDir, ownerKey),
+  ]);
+  const sharedLegacyGhosts = sharedDiscovery.ghosts;
+  const scopedLegacyGhosts = scopedDiscovery.ghosts;
+  // Defer the target-root scan until we know there are legacy sources or
+  // pending recovery ids.  Scanning beforehand can block the synchronous
+  // owner claim when an unrelated installed plugin has a corrupt ghost.json
+  // (e.g. leftover FIFO after a sync conflict).  Pattern from
+  // getLegacyGhostRecoveryStatusForActiveSession (checklist item 6.5a).
+  const targetRoot = path.join(userDataDir, 'owners', ownerKey, 'cindy-brain');
+  const earlyRecoveryMarkerRead = readLegacyGhostRecoveryMarkerSync(
+    userDataDir,
+    ownerKey,
   );
+  const hasRecoveryCandidates =
+    sharedLegacyGhosts.length > 0 ||
+    scopedLegacyGhosts.length > 0 ||
+    (earlyRecoveryMarkerRead.kind === 'ready' &&
+      (earlyRecoveryMarkerRead.marker?.pendingIds?.length ?? 0) > 0);
+  const targetDiscovery = hasRecoveryCandidates
+    ? scanLegacyGhostDirsInRoots([targetRoot])
+    : { ghosts: [], deferredIds: [], invalidIds: [], deferredRoots: [] };
+  // Filter reserved IDs from per-id counts so they don't force a spurious
+  // deferred that blocks valid legacy plugins from being moved (P1,
+  // PRRT_kwDOTgdRUs6YSU-u).  Match the filter already applied in
+  // getLegacyGhostRecoveryStatus.
+  // targetDiscovery scans the whole install root, so a deferred id for a
+  // plugin not in the recovery marker's pendingIds must not abort recovery
+  // of the ones that are pending (P2, PRRT_kwDOTgdRUs6YcrCo).  Only
+  // count target-level deferred ids that are actually in pendingIds.
+  const discoveryDeferred =
+    sharedDiscovery.deferredRoots.length > 0 ||
+    scopedDiscovery.deferredRoots.length > 0 ||
+    targetDiscovery.deferredRoots.length > 0 ||
+    [...sharedDiscovery.deferredIds, ...scopedDiscovery.deferredIds]
+      .some((id) => !options.rejectReservedIds || !isOfficialGhostId(id)) ||
+    targetDiscovery.deferredIds.some((id) =>
+      (!options.rejectReservedIds || !isOfficialGhostId(id)) &&
+      (earlyRecoveryMarkerRead.kind === 'ready' &&
+        earlyRecoveryMarkerRead.marker?.pendingIds?.includes(id)),
+    );
+  const discoveryInvalidCount = new Set([
+    ...sharedDiscovery.invalidIds,
+    ...scopedDiscovery.invalidIds,
+  ]).size;
+  if (discoveryDeferred) {
+    const result: OwnerNamespaceMigrationResult = {
+      status: 'deferred',
+      moved: 0,
+      conflicts: discoveryInvalidCount,
+      deferredReason: 'legacy-discovery-incomplete',
+    };
+    recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+    return result;
+  }
   let marker: ClaimMarker | null = null;
   let eligibleSharedGhosts = sharedLegacyGhosts;
   let sharedRecoveryBlocked = false;
@@ -977,6 +1481,115 @@ export async function recoverLegacyGhostPlugins(
       });
     }
   }
+  const recoveryMarkerRead = await readLegacyGhostRecoveryMarker(deps, recoveryMarkerPath);
+  if (recoveryMarkerRead.kind === 'deferred') {
+    log.warn('legacy ghost recovery deferred: durable recovery marker temporarily unreadable');
+    const result: OwnerNamespaceMigrationResult = {
+      status: 'deferred',
+      moved: 0,
+      conflicts: 0,
+      deferredReason: 'legacy-discovery-incomplete',
+    };
+    recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+    return result;
+  }
+  if (recoveryMarkerRead.kind === 'invalid') {
+    log.warn('legacy ghost recovery blocked: durable recovery marker is invalid');
+    const result: OwnerNamespaceMigrationResult = {
+      status: 'partial',
+      moved: 0,
+      conflicts: sharedLegacyGhosts.length + scopedLegacyGhosts.length,
+    };
+    recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+    return result;
+  }
+  const recoveryMarker = recoveryMarkerRead.kind === 'ready'
+    ? recoveryMarkerRead.marker
+    : null;
+  let recoveryMarkerPersisted = recoveryMarker !== null;
+  const recoveryMarkerNeedsVersionUpgrade = recoveryMarker?.version === 1;
+  if (recoveryMarker && recoveryMarker.ownerKey !== ownerKey) {
+    log.warn('legacy ghost recovery blocked: durable recovery marker owner mismatch', {
+      expectedOwnerKey: ownerKey,
+      actualOwnerKey: recoveryMarker.ownerKey,
+    });
+    const result: OwnerNamespaceMigrationResult = {
+      status: 'partial',
+      moved: 0,
+      conflicts: sharedLegacyGhosts.length + scopedLegacyGhosts.length,
+    };
+    recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+    return result;
+  }
+  const discoveredSourceIds = new Set([
+    ...sharedLegacyGhosts.map((ghost) => ghost.id),
+    ...scopedLegacyGhosts.map((ghost) => ghost.id),
+    ...[...sharedDiscovery.invalidIds, ...scopedDiscovery.invalidIds]
+      .filter((id) => isValidGhostId(id)),
+  ]);
+  // The durable marker is a frozen recovery capability, not merely progress
+  // bookkeeping. Apply the packaged-build reserved-id policy at this queue
+  // boundary so neither fresh discovery nor an older dirty marker can retain
+  // an official namespace id for later recovery.
+  const isRecoverableId = (id: string): boolean =>
+    !options.rejectReservedIds || !isOfficialGhostId(id);
+  const sourceDiscoveryIds = new Set([...discoveredSourceIds].filter(isRecoverableId));
+  const targetDiscoveryIds = new Set(targetDiscovery.ghosts.map((ghost) => ghost.id));
+  const visiblePendingIds = (recoveryMarker?.pendingIds ?? []).filter(isRecoverableId);
+  const hasVisibleFrozenWhitelist = recoveryMarker !== null && visiblePendingIds.length > 0;
+  const pendingRecoveryIds = new Set(
+    [...(hasVisibleFrozenWhitelist ? visiblePendingIds : sourceDiscoveryIds)],
+  );
+  const approvalProjectionSha256ById = new Map<string, string>(
+    Object.entries(recoveryMarker?.approvalProjectionSha256ById ?? {})
+      .filter(([id]) => isRecoverableId(id)),
+  );
+  const failedRecoveryIds = new Set(
+    (recoveryMarker?.failedIds ??
+      [...sourceDiscoveryIds].filter((id) =>
+        [...sharedDiscovery.invalidIds, ...scopedDiscovery.invalidIds].includes(id),
+      )).filter(isRecoverableId),
+  );
+  const recoveryMarkerNeedsPolicyCleanup = recoveryMarker !== null && (
+    recoveryMarker.pendingIds.some((id) => !isRecoverableId(id))
+    || recoveryMarker.failedIds?.some((id) => !isRecoverableId(id)) === true
+    || Object.keys(recoveryMarker.approvalProjectionSha256ById ?? {})
+      .some((id) => !isRecoverableId(id))
+  );
+  for (const id of [...sharedDiscovery.invalidIds, ...scopedDiscovery.invalidIds]) {
+    if (isValidGhostId(id) && pendingRecoveryIds.has(id)) failedRecoveryIds.add(id);
+  }
+  const movedThisRun = new Set<string>();
+  // Pending ids that are only in the target root (already moved by a prior
+  // run) and not in any legacy source.  These bypass the per-plugin
+  // rejectReservedIds guard that only runs over source legacy entries
+  // (line 1252), so reserved/official ids must be filtered here as well.
+  // Match the same conditional gating as the source-side guard: only
+  // reject when options.rejectReservedIds is true (packaged builds).
+  const recoveredTargetIds = (): string[] => [...pendingRecoveryIds]
+    .filter((id) =>
+      (movedThisRun.has(id) || (targetDiscoveryIds.has(id) && !sourceDiscoveryIds.has(id)))
+    )
+    .sort();
+  const targetOnlyPendingIdsWithoutFrozenDigest = (): string[] => [...pendingRecoveryIds]
+    .filter((id) =>
+      targetDiscoveryIds.has(id) &&
+      !sourceDiscoveryIds.has(id) &&
+      !approvalProjectionSha256ById.has(id)
+    )
+    .sort();
+  const recoveredApprovalProjectionDigests = (): Record<string, string> => {
+    const recovered: Record<string, string> = {};
+    for (const id of recoveredTargetIds()) {
+      const frozenDigest = approvalProjectionSha256ById.get(id);
+      if (frozenDigest !== undefined) {
+        recovered[id] = frozenDigest;
+      }
+    }
+    return Object.fromEntries(Object.entries(recovered).sort(([left], [right]) =>
+      left.localeCompare(right),
+    ));
+  };
   if (
     sharedRecoveryBlocked &&
     scopedLegacyGhosts.length === 0 &&
@@ -991,23 +1604,74 @@ export async function recoverLegacyGhostPlugins(
     recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
     return result;
   }
-
-  const targetRoot = path.join(userDataDir, 'owners', ownerKey, 'cindy-brain');
   let movableLegacyGhosts: ReturnType<typeof listLegacyGhostDirs> = [];
-  let conflicts = sharedRecoveryBlocked ? sharedLegacyGhosts.length : 0;
+  const unexpectedFrozenIds = hasVisibleFrozenWhitelist
+    ? [...sourceDiscoveryIds].filter((id) => !pendingRecoveryIds.has(id))
+    : [];
+  let conflicts = (sharedRecoveryBlocked ? sharedLegacyGhosts.length : 0) +
+    discoveryInvalidCount + unexpectedFrozenIds.length;
+  const movableById = new Map<string, ReturnType<typeof listLegacyGhostDirs>>();
   for (const legacy of [...eligibleSharedGhosts, ...scopedLegacyGhosts]) {
+    if (options.rejectReservedIds && isOfficialGhostId(legacy.id)) {
+      conflicts += 1;
+      continue;
+    }
+    if (hasVisibleFrozenWhitelist && !pendingRecoveryIds.has(legacy.id)) {
+      continue;
+    }
+    if (failedRecoveryIds.has(legacy.id)) {
+      // A formerly invalid id may be retried after its manifest is repaired,
+      // but it remains inside the original frozen whitelist.
+      failedRecoveryIds.delete(legacy.id);
+    }
     if ((await pathType(deps, path.join(targetRoot, legacy.id))) === 'missing') {
-      movableLegacyGhosts.push(legacy);
+      const siblings = movableById.get(legacy.id) ?? [];
+      siblings.push(legacy);
+      movableById.set(legacy.id, siblings);
     } else {
       conflicts += 1;
     }
   }
-  if (movableLegacyGhosts.length === 0) {
-    const result: OwnerNamespaceMigrationResult = {
-      status: conflicts > 0 ? 'partial' : 'skipped',
+  for (const siblings of movableById.values()) {
+    if (siblings.length === 1) {
+      movableLegacyGhosts.push(siblings[0]);
+    } else {
+      // Same id in multiple legacy roots is ambiguous legacy state. Do not
+      // move one copy and leave the other behind: that would create a target
+      // which can never be safely backfilled or retried.
+      conflicts += siblings.length;
+    }
+  }
+  const activePendingIds = new Set([
+    ...pendingRecoveryIds,
+  ].filter((id) => sourceDiscoveryIds.has(id) || recoveredTargetIds().includes(id)));
+  if (activePendingIds.size > 0) {
+    movableLegacyGhosts = movableLegacyGhosts.filter((legacy) =>
+      activePendingIds.has(legacy.id),
+    );
+  }
+  const buildNoMoveResult = (): OwnerNamespaceMigrationResult => {
+    const recoveredApprovalProjectionSha256ById = recoveredApprovalProjectionDigests();
+    const recoveredIds = Object.keys(recoveredApprovalProjectionSha256ById);
+    const effectiveConflicts = conflicts + targetOnlyPendingIdsWithoutFrozenDigest().length;
+    return {
+      status: effectiveConflicts > 0 || recoveredIds.length > 0 ? 'partial' : 'skipped',
       moved: 0,
-      conflicts,
+      conflicts: effectiveConflicts,
+      ...(recoveredIds.length > 0
+        ? {
+            recoveredIds,
+            recoveredApprovalProjectionSha256ById,
+          }
+        : {}),
     };
+  };
+  if (
+    movableLegacyGhosts.length === 0
+    && !recoveryMarkerNeedsVersionUpgrade
+    && !recoveryMarkerNeedsPolicyCleanup
+  ) {
+    const result = buildNoMoveResult();
     recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
     return result;
   }
@@ -1048,6 +1712,79 @@ export async function recoverLegacyGhostPlugins(
     return result;
   }
 
+  if (
+    recoveryMarkerNeedsPolicyCleanup
+    && pendingRecoveryIds.size === 0
+    && !sharedRecoveryBlocked
+  ) {
+    try {
+      await deps.unlink(recoveryMarkerPath);
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    recoveryMarkerPersisted = false;
+  }
+
+  // Freeze the complete approval projection only after passive/concurrent
+  // ownership has been ruled out. A source that is still in the legacy root
+  // can be re-frozen on every retry, but a target-only directory can never be
+  // inferred from its current mutable bytes.
+  let approvalProjectionDigestsChanged = false;
+  const projectionReadyLegacyGhosts: typeof movableLegacyGhosts = [];
+  for (const legacy of movableLegacyGhosts) {
+    try {
+      const frozen = await readLegacyGhostApprovalProjection(legacy.dir, legacy.id);
+      if (approvalProjectionSha256ById.get(legacy.id) !== frozen.sha256) {
+        approvalProjectionSha256ById.set(legacy.id, frozen.sha256);
+        approvalProjectionDigestsChanged = true;
+      }
+    } catch (error) {
+      conflicts += 1;
+      log.warn('legacy ghost recovery could not freeze approval projection', {
+        id: legacy.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    projectionReadyLegacyGhosts.push(legacy);
+  }
+  movableLegacyGhosts = projectionReadyLegacyGhosts;
+
+  // Freeze the recovery whitelist and its projections before any rename. A
+  // deferred instance must not write durable recovery state.
+  if (
+    (!recoveryMarkerPersisted ||
+      approvalProjectionDigestsChanged ||
+      recoveryMarkerNeedsVersionUpgrade ||
+      recoveryMarkerNeedsPolicyCleanup) &&
+    pendingRecoveryIds.size > 0 &&
+    !sharedRecoveryBlocked
+  ) {
+    await deps.mkdir(path.dirname(recoveryMarkerPath));
+    await writeLegacyGhostRecoveryMarker(deps, recoveryMarkerPath, {
+      version: 2,
+      ownerKey,
+      pendingIds: [...pendingRecoveryIds].sort(),
+      ...(failedRecoveryIds.size > 0 ? { failedIds: [...failedRecoveryIds].sort() } : {}),
+      ...(approvalProjectionSha256ById.size > 0
+        ? {
+            approvalProjectionSha256ById: Object.fromEntries(
+              [...approvalProjectionSha256ById.entries()].sort(([left], [right]) =>
+                left.localeCompare(right),
+              ),
+            ),
+          }
+        : {}),
+    });
+    recoveryMarkerPersisted = true;
+  }
+
+  if (movableLegacyGhosts.length === 0) {
+    const result = buildNoMoveResult();
+    recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+    return result;
+  }
+
   if (options.shouldAbort?.()) return { status: 'deferred', moved: 0, conflicts: 0 };
   await deps.mkdir(userDataDir);
   const sharedDirs = new Set(sharedLegacyGhosts.map((legacy) => legacy.dir));
@@ -1081,16 +1818,12 @@ export async function recoverLegacyGhostPlugins(
     );
   }
   if (movableLegacyGhosts.length === 0) {
-    const result: OwnerNamespaceMigrationResult = {
-      status: conflicts > 0 ? 'partial' : 'skipped',
-      moved: 0,
-      conflicts,
-    };
+    const result = buildNoMoveResult();
     recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
     return result;
   }
   const occupiedCommands = new Set(
-    listLegacyGhostDirsInRoots([targetRoot])
+    targetDiscovery.ghosts
       .map((legacy) => legacy.command?.toLowerCase() ?? null)
       .filter((command): command is string => command !== null),
   );
@@ -1109,11 +1842,7 @@ export async function recoverLegacyGhostPlugins(
   }
   movableLegacyGhosts = commandSafeLegacyGhosts;
   if (movableLegacyGhosts.length === 0) {
-    const result: OwnerNamespaceMigrationResult = {
-      status: conflicts > 0 ? 'partial' : 'skipped',
-      moved: 0,
-      conflicts,
-    };
+    const result = buildNoMoveResult();
     recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
     return result;
   }
@@ -1144,6 +1873,35 @@ export async function recoverLegacyGhostPlugins(
         movableLegacyGhosts = scopedMovableGhosts;
       }
     }
+  }
+  if (pendingRecoveryIds.size > 0) {
+    if (!hasSafeRecoveryTargetChainSync(userDataDir, targetRoot)) {
+      const result: OwnerNamespaceMigrationResult = {
+        status: 'partial',
+        moved: 0,
+        conflicts: conflicts + movableLegacyGhosts.length,
+      };
+      recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+      return result;
+    }
+    await deps.mkdir(path.dirname(recoveryMarkerPath));
+    const nextRecoveryMarker: LegacyGhostRecoveryMarker = {
+      version: 2,
+      ownerKey,
+      pendingIds: [...pendingRecoveryIds].sort(),
+      ...(failedRecoveryIds.size > 0 ? { failedIds: [...failedRecoveryIds].sort() } : {}),
+      ...(approvalProjectionSha256ById.size > 0
+        ? {
+            approvalProjectionSha256ById: Object.fromEntries(
+              [...approvalProjectionSha256ById.entries()].sort(([left], [right]) =>
+                left.localeCompare(right),
+              ),
+            ),
+          }
+        : {}),
+    };
+    await writeLegacyGhostRecoveryMarker(deps, recoveryMarkerPath, nextRecoveryMarker);
+    recoveryMarkerPersisted = true;
   }
   const targetRootWasMissing = (await pathType(deps, targetRoot)) === 'missing';
   await deps.mkdir(targetRoot);
@@ -1295,9 +2053,52 @@ export async function recoverLegacyGhostPlugins(
       });
       break;
     }
+    if (!hasStableLegacyGhostSourceSync(legacy)) {
+      failed = true;
+      conflicts += 1;
+      log.warn('legacy ghost recovery refused source whose root or directory changed', {
+        id: legacy.id,
+      });
+      continue;
+    }
+    const expectedApprovalProjectionSha256 = approvalProjectionSha256ById.get(legacy.id);
+    if (!expectedApprovalProjectionSha256) {
+      failed = true;
+      conflicts += 1;
+      log.warn('legacy ghost recovery refused source without a frozen approval projection', {
+        id: legacy.id,
+      });
+      continue;
+    }
     try {
-      await deps.rename(legacy.dir, target);
+      const current = await readLegacyGhostApprovalProjection(legacy.dir, legacy.id);
+      if (current.sha256 !== expectedApprovalProjectionSha256) {
+        failed = true;
+        conflicts += 1;
+        log.warn('legacy ghost recovery refused source whose approval projection changed', {
+          id: legacy.id,
+        });
+        continue;
+      }
+    } catch (error) {
+      failed = true;
+      conflicts += 1;
+      log.warn('legacy ghost recovery could not re-read the frozen approval projection', {
+        id: legacy.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    try {
+      // Hold the per-id install lock during rename so a concurrent
+      // install/update on the same id cannot write a pending journal
+      // that recovery on next launch would misidentify as an uncommitted
+      // install and delete.
+      await withGhostInstallLock(legacy.id, async () => {
+        await deps.rename(legacy.dir, target);
+      });
       moved += 1;
+      movedThisRun.add(legacy.id);
     } catch (error) {
       failed = true;
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
@@ -1366,25 +2167,167 @@ export async function recoverLegacyGhostPlugins(
       }
     }
   }
+  const recoveredApprovalProjectionSha256ById = recoveredApprovalProjectionDigests();
+  const recoveredIds = Object.keys(recoveredApprovalProjectionSha256ById);
+  const effectiveConflicts = conflicts + targetOnlyPendingIdsWithoutFrozenDigest().length;
   const result: OwnerNamespaceMigrationResult = {
-    status: failed || conflicts > 0 ? 'partial' : 'migrated',
+    status: failed || effectiveConflicts > 0 ? 'partial' : 'migrated',
     moved,
-    conflicts,
+    conflicts: effectiveConflicts,
     ...(provisioningStateMoved ? { provisioningStateMoved: true } : {}),
     ...(concurrentRecoveryInterrupted
       ? { deferredReason: 'concurrent-live-instances' as const }
+      : {}),
+    ...(recoveredIds.length > 0
+      ? {
+          recoveredIds,
+          recoveredApprovalProjectionSha256ById,
+        }
       : {}),
   };
   recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
   return result;
 }
 
+function readLegacyGhostRecoveryMarkerSync(
+  userDataDir: string,
+  ownerKey: string,
+): LegacyGhostRecoveryMarkerRead {
+  const markerPath = path.join(
+    userDataDir,
+    'owners',
+    ownerKey,
+    LEGACY_GHOST_RECOVERY_MARKER,
+  );
+  let ownerRoot: string;
+  try {
+    ownerRoot = fsSync.realpathSync(path.join(userDataDir, 'owners', ownerKey));
+  } catch (error) {
+    return isMissing(error) ? { kind: 'missing' } : { kind: 'deferred' };
+  }
+  let bytes: Buffer | null;
+  try {
+    bytes = readBoundedFileNoFollowSync(markerPath, 64 * 1024, {
+      containWithin: ownerRoot,
+    });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === 'ENOENT') return { kind: 'missing' };
+    // same as sync: ELOOP = symlink → deterministic, never self-healing.
+    if (code === 'ELOOP') return { kind: 'invalid' };
+    return { kind: 'deferred' };
+  }
+  // 非普通文件 / 超过 64 KiB / containment 失败:确定性缺陷,invalid 而非 deferred。
+  if (bytes === null) return { kind: 'invalid' };
+  const text = bytes.toString('utf8');
+  try {
+    const parsed = JSON.parse(text) as Partial<LegacyGhostRecoveryMarker>;
+    const failedIds = parsed.failedIds ?? [];
+    const projections = normalizeLegacyApprovalProjectionDigests(
+      parsed.approvalProjectionSha256ById,
+      parsed.pendingIds ?? [],
+    );
+    if (
+      (parsed.version === 1 || parsed.version === 2) &&
+      parsed.ownerKey === ownerKey &&
+      Array.isArray(parsed.pendingIds) &&
+      parsed.pendingIds.every((id) => typeof id === 'string' && isValidGhostId(id)) &&
+      Array.isArray(failedIds) &&
+      failedIds.every((id) => typeof id === 'string' && isValidGhostId(id)) &&
+      failedIds.every((id) => parsed.pendingIds?.includes(id)) &&
+      projections.ok
+    ) {
+      if (parsed.pendingIds.length === 0) return { kind: 'missing' };
+      return { kind: 'ready', marker: {
+          version: parsed.version,
+          ownerKey,
+          pendingIds: [...new Set(parsed.pendingIds)],
+          ...(failedIds.length > 0 ? { failedIds: [...new Set(failedIds)] } : {}),
+          ...(projections.digests
+            ? { approvalProjectionSha256ById: projections.digests }
+            : {}),
+        } };
+    }
+    return { kind: 'invalid' };
+  } catch {
+    return { kind: 'invalid' };
+  }
+}
+
+/**
+ * Acknowledge only Ghost ids whose approval backfill finished. Keeping the
+ * marker until this point closes the rename -> receipt crash window.
+ */
+export async function acknowledgeRecoveredLegacyGhosts(
+  ownerId: string,
+  ids: readonly string[],
+  deps: MigrationDeps = productionDeps,
+): Promise<void> {
+  if (ids.length === 0) return;
+  const ownerKey = dataOwnerStorageKey(ownerId);
+  const markerPath = path.join(
+    deps.userDataDir(),
+    'owners',
+    ownerKey,
+    LEGACY_GHOST_RECOVERY_MARKER,
+  );
+  const markerRead = await readLegacyGhostRecoveryMarker(deps, markerPath);
+  if (markerRead.kind === 'missing') return;
+  if (markerRead.kind === 'deferred') {
+    throw new Error('legacy ghost recovery marker temporarily unreadable');
+  }
+  if (markerRead.kind === 'invalid') {
+    throw new Error('invalid legacy ghost recovery marker');
+  }
+  const marker = markerRead.marker;
+  if (marker.ownerKey !== ownerKey) {
+    throw new Error('legacy ghost recovery marker owner mismatch');
+  }
+  const acknowledged = new Set(ids);
+  const pendingIds = marker.pendingIds.filter((id) => !acknowledged.has(id));
+  if (pendingIds.length === marker.pendingIds.length) return;
+  if (pendingIds.length === 0) {
+    try {
+      await deps.unlink(markerPath);
+    } catch (error) {
+      if (isMissing(error)) return;
+      await writeLegacyGhostRecoveryMarker(deps, markerPath, {
+        version: 2,
+        ownerKey,
+        pendingIds: [],
+      });
+    }
+    return;
+  }
+  await writeLegacyGhostRecoveryMarker(deps, markerPath, {
+    version: 2,
+    ownerKey,
+    pendingIds,
+    ...(marker.failedIds?.length
+      ? { failedIds: marker.failedIds.filter((id) => !acknowledged.has(id)) }
+      : {}),
+    ...(marker.approvalProjectionSha256ById
+      ? {
+          approvalProjectionSha256ById: Object.fromEntries(
+            Object.entries(marker.approvalProjectionSha256ById).filter(
+              ([id]) => !acknowledged.has(id),
+            ),
+          ),
+        }
+      : {}),
+  });
+}
+
 async function pathType(
   deps: MigrationDeps,
   file: string,
-): Promise<'missing' | 'directory' | 'other'> {
+): Promise<'missing' | 'directory' | 'file' | 'link' | 'other'> {
   try {
-    return (await deps.lstat(file)).isDirectory() ? 'directory' : 'other';
+    const stat = await deps.lstat(file);
+    if (stat.isSymbolicLink?.()) return 'link';
+    if (stat.isDirectory()) return 'directory';
+    if (stat.isFile?.()) return 'file';
+    return 'other';
   } catch (error) {
     if (isMissing(error)) return 'missing';
     throw error;
@@ -1414,13 +2357,21 @@ async function moveWithoutOverwrite(
   source: string,
   target: string,
   abortCheck?: () => Promise<void>,
+  assertTargetChain?: () => void,
 ): Promise<{ moved: number; conflicts: number }> {
   const sourceType = await pathType(deps, source);
   if (sourceType === 'missing') return { moved: 0, conflicts: 0 };
+  // Legacy links and special files are not migratable data.  Do not rename
+  // them into the owner namespace where later consumers could follow them.
+  if (sourceType === 'link' || sourceType === 'other') {
+    return { moved: 0, conflicts: 1 };
+  }
 
   const targetType = await pathType(deps, target);
   if (targetType === 'missing') {
+    assertTargetChain?.();
     await deps.mkdir(path.dirname(target));
+    assertTargetChain?.();
     try {
       await deps.rename(source, target);
       return { moved: 1, conflicts: 0 };
@@ -1445,6 +2396,7 @@ async function moveWithoutOverwrite(
       path.join(source, name),
       path.join(target, name),
       abortCheck,
+      assertTargetChain,
     );
     moved += result.moved;
     conflicts += result.conflicts;
@@ -1692,6 +2644,22 @@ export async function claimLegacyOwnerNamespace(
   }
 
   await deps.mkdir(userDataDir);
+  if (!hasSafeRecoveryTargetChainSync(userDataDir, targetRoot)) {
+    const existingLegacyPathCount = (
+      await Promise.all(
+        LEGACY_PATHS.map(async (relativePath) =>
+          (await pathType(deps, path.join(userDataDir, relativePath))) !== 'missing',
+        ),
+      )
+    ).filter(Boolean).length;
+    const result: OwnerNamespaceMigrationResult = {
+      status: 'partial',
+      moved: 0,
+      conflicts: existingLegacyPathCount,
+    };
+    recordLegacyGhostMigrationResult(ownerId, result, userDataDir);
+    return result;
+  }
   let marker = existingMarker;
   if (!marker) {
     marker = { version: 1, ownerKey, complete: false };
@@ -1764,6 +2732,11 @@ export async function claimLegacyOwnerNamespace(
         source,
         path.join(targetRoot, relativePath),
         throttledAbortCheck,
+        () => {
+          if (!hasSafeRecoveryTargetChainSync(userDataDir, targetRoot)) {
+            throw new Error('owner namespace claim target chain is not link-free');
+          }
+        },
       );
       moved += result.moved;
       conflicts += result.conflicts;
@@ -1810,7 +2783,7 @@ export async function claimLegacyOwnerNamespace(
     }
   }
   if (!failed) {
-    await deps.writeFile(markerPath, JSON.stringify({ ...marker, complete: true }));
+    await writeJsonAtomically(deps, markerPath, { ...marker, complete: true });
   }
   log.info('legacy owner namespace claim completed', {
     ownerKey,
@@ -1823,6 +2796,7 @@ export async function claimLegacyOwnerNamespace(
 
 export const __testing = {
   CLAIM_MARKER,
+  LEGACY_GHOST_RECOVERY_MARKER,
   LEGACY_PATHS,
   isSameUserDataDir,
   pathExistsNoFollowSync,

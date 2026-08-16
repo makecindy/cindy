@@ -129,6 +129,31 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
 - 工具可见性不是权限边界：`providers.ts` 的 `cindy_orca` provider 没有 per-role `isEnabled` gate，普通 session / worker / lead 的差异必须由 handler 和 host service 拒绝。
 - Codex 场景的真实 session 身份来自 MCP request context；`session-context.ts` 用 `AsyncLocalStorage` 提供 `withLiziMcpSessionContext` / `resolveLiziMcpSessionContext`，不能依赖全局 fallback 猜身份。
 - renderer 开启协同走 `CCAgentSessionView.tsx` 的 `requestEnableCollab`，MCP 工具通过 `cindy_orca` callback 进入同一组 service。
+- renderer 通过 UI 开启协同且填写了首个任务时，`OrcaLifecycleService.enableTeam` 复用既有
+  `initial_task` 正文，并附带 Lead session id 与按需回查说明。已有 Lead 会话继续即时派单；
+  新建任务页先用 ready placeholder 建立可恢复的 Worker agent history，但不派发用户任务；等首条
+  普通输入／目标已被宿主接受且 user history 可查询后，
+  再通过 `maker:worker:dispatch-ui-assignment` 派发同一份 `initial_task`。Desktop slash command
+  是被独立 handler 消费、不会形成普通 user history 的控制动作，因此以 command accepted
+  作为排序边界，不等待不存在的 history 行；command rejected 或普通输入／目标交付失败时
+  不派 Worker，并明确提示用户到 Worker 面板确认状态。
+- 二段派单凭据在 Lead 首条输入 accepted 前持久化；若 renderer 在 accepted 后、实际 invoke 前退出，
+  Lead 会话重新挂载并读到 user history 后会自动消费仍为 `pending` 的凭据。invoke 前先转为
+  `uncertain`，配合进程内 tombstone，保证响应丢失、重启恢复和迟到 receipt 不会自动重复派单。
+  多个窗口可能同时恢复同一条 `pending`，因此 Main 进程还要按 Lead、Worker 与快照时间建立
+  共享 claim；同一 assignment 的并发或后续请求共用第一次派发结果，最终只调用一次 Worker
+  投递。
+- Worker 侧按需查询统一走 `orca_worker_bridge.read_lead_history`：工具从已认证的
+  `worker_id + worker session` 归属反查唯一 Lead，调用方不能指定任意 session；只返回
+  `user/assistant`、排除 rewound、限制单页数量并保持 `(createdAt,rowid)` 游标分页。它不
+  create/resume Lead，也不发送消息，所以本机与 SSH Worker 都能在不唤醒 Lead 的前提下读取
+  同一份上下文。Worker 只有在任务依赖「当前工作／继续／这个 PR」等相对范围时才查询；
+  自包含任务直接执行。没有显式 Worker 任务时不会用 Lead 输入擅自起任务；该 handoff 也不
+  改写 MCP `create_worker` / `create_workers` 已由 Lead 组织好的 `initial_task`。
+- device-link 只有在被控端 capability 与本次 `enableOrca` 成功响应都证明支持 deferred
+  handoff（含 `dispatched=false` 与宿主时间戳）时才建立二段派单凭据；旧端继续即时派单，
+  并为兼容保留待发送 Lead 文本。二段派单发生隧道超时时不自动重试，也不把模糊终态说成
+  失败，避免同一任务重复执行；UI 引导用户先查看 Worker 面板。
 
 ### Codex Lead 机制
 

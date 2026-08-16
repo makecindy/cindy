@@ -15,24 +15,13 @@
  * `applyAgentTaskUpdateEvent`; the render layer links it to its originating tool-call.
  */
 
-export type AgentTaskStatus = "running" | "completed" | "failed" | "stopped";
+export type AgentTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface AgentTaskUsage {
   totalTokens?: number;
   toolUses?: number;
   durationMs?: number;
-}
-
-/**
- * One captured child-session line. Harness adapters emit these on the terminal
- * frame; the host owns sequencing, bounds and persistence, so adapters only
- * need to report what the child actually said or did.
- */
-export interface SubagentTranscriptEntryInput {
-  role: "parent" | "subagent" | "tool";
-  content: string;
-  occurredAt: number;
-  toolName?: string;
+  costUsd?: number;
 }
 
 /**
@@ -45,7 +34,7 @@ export interface SubagentTranscriptEntryInput {
  * 两套词表兼容)。
  */
 export interface WorkflowProgressEntry {
-  type: "workflow_phase" | "workflow_agent";
+  type: 'workflow_phase' | 'workflow_agent';
   index: number;
   /** phase 标题(workflow_phase 条目)。 */
   title?: string;
@@ -76,40 +65,36 @@ const WORKFLOW_PROGRESS_PREVIEW_MAX = 300; // resultPreview / promptPreview / er
 const WORKFLOW_PROGRESS_SUMMARY_MAX = 160; // lastToolSummary
 const WORKFLOW_PROGRESS_TEXT_MAX = 200; // label / title / phaseTitle 等短文本
 
-const WORKFLOW_PROGRESS_STRING_FIELDS: ReadonlyArray<
-  readonly [string, number]
-> = [
-  ["title", WORKFLOW_PROGRESS_TEXT_MAX],
-  ["label", WORKFLOW_PROGRESS_TEXT_MAX],
-  ["phaseTitle", WORKFLOW_PROGRESS_TEXT_MAX],
-  ["agentId", WORKFLOW_PROGRESS_TEXT_MAX],
-  ["model", WORKFLOW_PROGRESS_TEXT_MAX],
-  ["state", WORKFLOW_PROGRESS_TEXT_MAX],
-  ["lastToolName", WORKFLOW_PROGRESS_TEXT_MAX],
-  ["agentType", WORKFLOW_PROGRESS_TEXT_MAX],
-  ["lastToolSummary", WORKFLOW_PROGRESS_SUMMARY_MAX],
-  ["resultPreview", WORKFLOW_PROGRESS_PREVIEW_MAX],
-  ["promptPreview", WORKFLOW_PROGRESS_PREVIEW_MAX],
-  ["error", WORKFLOW_PROGRESS_PREVIEW_MAX],
+const WORKFLOW_PROGRESS_STRING_FIELDS: ReadonlyArray<readonly [string, number]> = [
+  ['title', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['label', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['phaseTitle', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['agentId', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['model', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['state', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['lastToolName', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['agentType', WORKFLOW_PROGRESS_TEXT_MAX],
+  ['lastToolSummary', WORKFLOW_PROGRESS_SUMMARY_MAX],
+  ['resultPreview', WORKFLOW_PROGRESS_PREVIEW_MAX],
+  ['promptPreview', WORKFLOW_PROGRESS_PREVIEW_MAX],
+  ['error', WORKFLOW_PROGRESS_PREVIEW_MAX],
 ];
 
 const WORKFLOW_PROGRESS_NUMBER_FIELDS: ReadonlyArray<string> = [
-  "phaseIndex",
-  "queuedAt",
-  "startedAt",
-  "lastProgressAt",
-  "attempt",
+  'phaseIndex',
+  'queuedAt',
+  'startedAt',
+  'lastProgressAt',
+  'attempt',
 ];
 
 function clampedString(value: unknown, max: number): string | undefined {
-  if (typeof value !== "string" || value.length === 0) return undefined;
+  if (typeof value !== 'string' || value.length === 0) return undefined;
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
 function finiteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 /**
@@ -124,9 +109,9 @@ export function normalizeWorkflowProgressEntries(
   const out: WorkflowProgressEntry[] = [];
   for (const item of raw) {
     if (out.length >= WORKFLOW_PROGRESS_MAX_ENTRIES) break;
-    if (!item || typeof item !== "object") continue;
+    if (!item || typeof item !== 'object') continue;
     const e = item as Record<string, unknown>;
-    if (e.type !== "workflow_phase" && e.type !== "workflow_agent") continue;
+    if (e.type !== 'workflow_phase' && e.type !== 'workflow_agent') continue;
     const index = finiteNumber(e.index);
     if (index === undefined) continue;
     const entry: Record<string, unknown> = { type: e.type, index };
@@ -138,14 +123,14 @@ export function normalizeWorkflowProgressEntries(
       const value = finiteNumber(e[key]);
       if (value !== undefined) entry[key] = value;
     }
-    if (typeof e.cached === "boolean") entry.cached = e.cached;
+    if (typeof e.cached === 'boolean') entry.cached = e.cached;
     out.push(entry as unknown as WorkflowProgressEntry);
   }
   return out.length > 0 ? out : undefined;
 }
 
 export interface AgentTaskUpdate {
-  provider: "claude-code" | "codex" | "pi";
+  provider: 'claude-code' | 'codex' | 'pi';
   taskId: string;
   parentToolUseId?: string;
   status: AgentTaskStatus;
@@ -160,12 +145,6 @@ export interface AgentTaskUpdate {
   /** `null` is an explicit live-update instruction to clear a stale model badge. */
   model?: string | null;
   reasoningEffort?: string;
-  /**
-   * Child session content captured at complete-message boundaries. The host
-   * persists bounded snapshots to a Cindy-owned file; it never crosses the
-   * renderer boundary on the live event path.
-   */
-  transcriptEntries?: SubagentTranscriptEntryInput[];
   receiverThreadIds?: string[];
   /**
    * workflow 逐 agent 进度树(taskType=local_workflow 时由 task_progress 事件携带)。
@@ -186,14 +165,9 @@ export function deriveAgentTaskStatus(
   result?: string,
   options?: { resultIsLaunchReceipt?: boolean },
 ): AgentTaskStatus {
-  const hasResult = typeof result === "string" && result.trim().length > 0;
-  if (
-    updateStatus === "running" &&
-    hasResult &&
-    !options?.resultIsLaunchReceipt
-  )
-    return "completed";
-  return updateStatus ?? (hasResult ? "completed" : "running");
+  const hasResult = typeof result === 'string' && result.trim().length > 0;
+  if (updateStatus === 'running' && hasResult && !options?.resultIsLaunchReceipt) return 'completed';
+  return updateStatus ?? (hasResult ? 'completed' : 'running');
 }
 
 /**
@@ -203,183 +177,86 @@ export function deriveAgentTaskStatus(
  * MCP 工具一律带 `mcp__` 前缀,不会与裸 `subagent` 撞名。
  */
 export function isSubagentSpawnToolName(toolName: string): boolean {
-  return (
-    toolName === "Agent" ||
-    toolName === "Task" ||
-    toolName === PI_SUBAGENT_TOOL_NAME ||
-    toolName === "collab:spawn" ||
-    toolName === "collab:spawnAgent"
-  );
+  return toolName === 'Agent'
+    || toolName === 'Task'
+    || toolName === PI_SUBAGENT_TOOL_NAME
+    || toolName === 'collab:spawn'
+    || toolName === 'collab:spawnAgent';
 }
 
 export function isAgentTaskToolName(toolName: string): boolean {
-  return isSubagentSpawnToolName(toolName) || toolName.startsWith("collab:");
+  return isSubagentSpawnToolName(toolName) || toolName.startsWith('collab:');
 }
 
 /** PI 子代理工具名 —— maker-core 的 pi 扩展注册端与本文件的卡片判据共用,不各写字面量。 */
-export const PI_SUBAGENT_TOOL_NAME = "subagent";
+export const PI_SUBAGENT_TOOL_NAME = 'subagent';
 
 /**
  * Validate + shape a raw `agent_task_update` event payload into an `AgentTaskUpdate`.
  * Returns null when neither a taskId nor a parentToolUseId is present (un-linkable).
  */
-const TRANSCRIPT_MAX_ENTRIES = 500;
-const TRANSCRIPT_MAX_CONTENT = 64 * 1024;
-const TRANSCRIPT_ROLES = new Set(["parent", "subagent", "tool"]);
-
-/**
- * Bounds the adapter-supplied transcript before it reaches the host. Entry count
- * and per-entry length are capped here rather than at each adapter so one chatty
- * child cannot grow an unbounded durable record.
- */
-export function normalizeSubagentTranscriptEntries(
-  raw: unknown,
-): SubagentTranscriptEntryInput[] | undefined {
-  if (!Array.isArray(raw) || raw.length === 0) return undefined;
-  const out: SubagentTranscriptEntryInput[] = [];
-  for (const item of raw) {
-    if (out.length >= TRANSCRIPT_MAX_ENTRIES) break;
-    if (!item || typeof item !== "object") continue;
-    const entry = item as Record<string, unknown>;
-    if (typeof entry.role !== "string" || !TRANSCRIPT_ROLES.has(entry.role))
-      continue;
-    if (typeof entry.content !== "string" || !entry.content) continue;
-    const occurredAt =
-      typeof entry.occurredAt === "number" && Number.isFinite(entry.occurredAt)
-        ? entry.occurredAt
-        : undefined;
-    if (occurredAt === undefined) continue;
-    const rawContent =
-      entry.role === "tool"
-        ? typeof entry.toolName === "string"
-          ? entry.toolName
-          : entry.content
-        : entry.content;
-    const content =
-      rawContent.length > TRANSCRIPT_MAX_CONTENT
-        ? `${rawContent.slice(0, TRANSCRIPT_MAX_CONTENT - 1)}…`
-        : rawContent;
-    out.push({
-      role: entry.role as SubagentTranscriptEntryInput["role"],
-      content,
-      occurredAt,
-      ...(typeof entry.toolName === "string" && entry.toolName
-        ? { toolName: entry.toolName.slice(0, 240) }
-        : {}),
-    });
-  }
-  return out.length > 0 ? out : undefined;
-}
-
 export function normalizeAgentTaskUpdate(
   data: unknown,
-  source?: "claude-code" | "codex" | "pi",
+  source?: 'claude-code' | 'codex' | 'pi',
 ): AgentTaskUpdate | null {
-  if (!data || typeof data !== "object") return null;
+  if (!data || typeof data !== 'object') return null;
   const raw = data as Record<string, unknown>;
-  const taskId =
-    typeof raw.taskId === "string" && raw.taskId.length > 0
-      ? raw.taskId
-      : undefined;
+  const taskId = typeof raw.taskId === 'string' && raw.taskId.length > 0 ? raw.taskId : undefined;
   const parentToolUseId =
-    typeof raw.parentToolUseId === "string" && raw.parentToolUseId.length > 0
+    typeof raw.parentToolUseId === 'string' && raw.parentToolUseId.length > 0
       ? raw.parentToolUseId
       : undefined;
   if (!taskId && !parentToolUseId) return null;
   const rawStatus = raw.status;
   const status: AgentTaskStatus =
-    rawStatus === "completed" ||
-    rawStatus === "failed" ||
-    rawStatus === "stopped"
+    rawStatus === 'completed' || rawStatus === 'failed' || rawStatus === 'stopped'
       ? rawStatus
-      : "running";
-  const provider =
-    raw.provider === "codex" ||
-    raw.provider === "claude-code" ||
-    raw.provider === "pi"
-      ? raw.provider
-      : source === "codex" || source === "pi"
-        ? source
-        : "claude-code";
-  const usageRaw =
-    raw.usage && typeof raw.usage === "object"
-      ? (raw.usage as Record<string, unknown>)
-      : null;
+      : 'running';
+  const provider = raw.provider === 'codex' || raw.provider === 'claude-code' || raw.provider === 'pi'
+    ? raw.provider
+    : source === 'codex' || source === 'pi'
+      ? source
+      : 'claude-code';
+  const usageRaw = raw.usage && typeof raw.usage === 'object' ? raw.usage as Record<string, unknown> : null;
   const usage: AgentTaskUsage | undefined = usageRaw
     ? {
-        ...(typeof usageRaw.totalTokens === "number"
-          ? { totalTokens: usageRaw.totalTokens }
-          : {}),
-        ...(typeof usageRaw.toolUses === "number"
-          ? { toolUses: usageRaw.toolUses }
-          : {}),
-        ...(typeof usageRaw.durationMs === "number"
-          ? { durationMs: usageRaw.durationMs }
-          : {}),
+        ...(typeof usageRaw.totalTokens === 'number' ? { totalTokens: usageRaw.totalTokens } : {}),
+        ...(typeof usageRaw.toolUses === 'number' ? { toolUses: usageRaw.toolUses } : {}),
+        ...(typeof usageRaw.durationMs === 'number' ? { durationMs: usageRaw.durationMs } : {}),
+        ...(typeof usageRaw.costUsd === 'number' ? { costUsd: usageRaw.costUsd } : {}),
       }
     : undefined;
-  const workflowProgress = normalizeWorkflowProgressEntries(
-    raw.workflowProgress,
-  );
-  const transcriptEntries = normalizeSubagentTranscriptEntries(
-    raw.transcriptEntries,
-  );
+  const workflowProgress = normalizeWorkflowProgressEntries(raw.workflowProgress);
   return {
     provider,
     taskId: taskId ?? parentToolUseId!,
     ...(parentToolUseId ? { parentToolUseId } : {}),
     status,
-    ...(typeof raw.title === "string" && raw.title ? { title: raw.title } : {}),
-    ...(typeof raw.description === "string" && raw.description
-      ? { description: raw.description }
-      : {}),
-    ...(typeof raw.summary === "string" && raw.summary
-      ? { summary: raw.summary }
-      : {}),
-    ...(typeof raw.outputFile === "string" && raw.outputFile
-      ? { outputFile: raw.outputFile }
-      : {}),
+    ...(typeof raw.title === 'string' && raw.title ? { title: raw.title } : {}),
+    ...(typeof raw.description === 'string' && raw.description ? { description: raw.description } : {}),
+    ...(typeof raw.summary === 'string' && raw.summary ? { summary: raw.summary } : {}),
+    ...(typeof raw.outputFile === 'string' && raw.outputFile ? { outputFile: raw.outputFile } : {}),
     ...(usage && Object.keys(usage).length > 0 ? { usage } : {}),
-    ...(typeof raw.lastToolName === "string" && raw.lastToolName
-      ? { lastToolName: raw.lastToolName }
-      : {}),
-    ...(typeof raw.taskType === "string" && raw.taskType
-      ? { taskType: raw.taskType }
-      : {}),
-    ...(typeof raw.workflowName === "string" && raw.workflowName
-      ? { workflowName: raw.workflowName }
-      : {}),
+    ...(typeof raw.lastToolName === 'string' && raw.lastToolName ? { lastToolName: raw.lastToolName } : {}),
+    ...(typeof raw.taskType === 'string' && raw.taskType ? { taskType: raw.taskType } : {}),
+    ...(typeof raw.workflowName === 'string' && raw.workflowName ? { workflowName: raw.workflowName } : {}),
     ...(raw.model === null
       ? { model: null }
-      : typeof raw.model === "string" && raw.model
+      : typeof raw.model === 'string' && raw.model
         ? { model: raw.model }
         : {}),
-    ...(typeof raw.reasoningEffort === "string" && raw.reasoningEffort
-      ? { reasoningEffort: raw.reasoningEffort }
-      : {}),
-    ...(transcriptEntries ? { transcriptEntries } : {}),
+    ...(typeof raw.reasoningEffort === 'string' && raw.reasoningEffort ? { reasoningEffort: raw.reasoningEffort } : {}),
     ...(Array.isArray(raw.receiverThreadIds)
-      ? {
-          receiverThreadIds: raw.receiverThreadIds.filter(
-            (id): id is string => typeof id === "string",
-          ),
-        }
+      ? { receiverThreadIds: raw.receiverThreadIds.filter((id): id is string => typeof id === 'string') }
       : {}),
     ...(workflowProgress ? { workflowProgress } : {}),
-    ...(typeof raw.createdAt === "string" && raw.createdAt
-      ? { createdAt: raw.createdAt }
-      : {}),
-    ...(typeof raw.updatedAt === "string" && raw.updatedAt
-      ? { updatedAt: raw.updatedAt }
-      : {}),
+    ...(typeof raw.createdAt === 'string' && raw.createdAt ? { createdAt: raw.createdAt } : {}),
+    ...(typeof raw.updatedAt === 'string' && raw.updatedAt ? { updatedAt: raw.updatedAt } : {}),
   };
 }
 
 /** Field-wise merge of a newer update over a prior one (newer non-empty fields win). */
-export function mergeAgentTaskUpdate(
-  prev: AgentTaskUpdate | undefined,
-  next: AgentTaskUpdate,
-): AgentTaskUpdate {
+export function mergeAgentTaskUpdate(prev: AgentTaskUpdate | undefined, next: AgentTaskUpdate): AgentTaskUpdate {
   if (!prev) return next;
   return {
     ...prev,
@@ -393,28 +270,17 @@ export function mergeAgentTaskUpdate(
     // CLI 节流帧不带 workflowProgress(undefined = 沿用旧树),必须保留上一帧。
     workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
-    model: next.model === null ? null : (next.model ?? prev.model),
-    reasoningEffort: next.reasoningEffort ?? prev.reasoningEffort,
-    transcriptEntries: next.transcriptEntries ?? prev.transcriptEntries,
+    model: next.model === null ? null : next.model ?? prev.model,
     updatedAt: next.updatedAt ?? prev.updatedAt,
   };
 }
 
 /** Two updates describe the same task if their taskId/parentToolUseId aliases overlap. */
-export function isSameAgentTaskAlias(
-  left: AgentTaskUpdate,
-  right: AgentTaskUpdate,
-): boolean {
+export function isSameAgentTaskAlias(left: AgentTaskUpdate, right: AgentTaskUpdate): boolean {
   if (left.taskId === right.taskId) return true;
-  if (left.parentToolUseId && left.parentToolUseId === right.taskId)
-    return true;
-  if (right.parentToolUseId && right.parentToolUseId === left.taskId)
-    return true;
-  return Boolean(
-    left.parentToolUseId &&
-    right.parentToolUseId &&
-    left.parentToolUseId === right.parentToolUseId,
-  );
+  if (left.parentToolUseId && left.parentToolUseId === right.taskId) return true;
+  if (right.parentToolUseId && right.parentToolUseId === left.taskId) return true;
+  return Boolean(left.parentToolUseId && right.parentToolUseId && left.parentToolUseId === right.parentToolUseId);
 }
 
 /**
@@ -428,7 +294,7 @@ export function isSameAgentTaskAlias(
 export function applyAgentTaskUpdateEvent(
   prevMap: ReadonlyMap<string, AgentTaskUpdate> | undefined,
   data: unknown,
-  source: "claude-code" | "codex" | "pi" | undefined,
+  source: 'claude-code' | 'codex' | 'pi' | undefined,
   nowIso: string,
 ): Map<string, AgentTaskUpdate> | null {
   const update = normalizeAgentTaskUpdate(data, source);
@@ -442,9 +308,7 @@ export function applyAgentTaskUpdateEvent(
     keys.add(value.taskId);
     if (value.parentToolUseId) keys.add(value.parentToolUseId);
   }
-  const existing = [...keys]
-    .map((key) => nextMap.get(key))
-    .find((value): value is AgentTaskUpdate => Boolean(value));
+  const existing = [...keys].map((key) => nextMap.get(key)).find((value): value is AgentTaskUpdate => Boolean(value));
   const timedUpdate: AgentTaskUpdate = {
     ...update,
     createdAt: update.createdAt ?? existing?.createdAt ?? nowIso,
@@ -485,7 +349,7 @@ export function findAgentTaskUpdate(
  */
 export interface AgentTaskCardModel {
   status: AgentTaskStatus;
-  provider: "claude-code" | "codex" | "pi";
+  provider: 'claude-code' | 'codex' | 'pi';
   /** Best title, or null when nothing usable was found (caller supplies its own fallback). */
   title: string | null;
   description?: string;
@@ -515,8 +379,8 @@ export function subagentSpawnReceiptName(
   toolInput: unknown,
   result: string | undefined,
 ): string | undefined {
-  if (toolName !== "collab:spawn") return undefined;
-  const name = readInputString(toolInput, ["name"]);
+  if (toolName !== 'collab:spawn') return undefined;
+  const name = readInputString(toolInput, ['name']);
   const trimmed = result?.trim();
   return name && trimmed && trimmed === name ? name : undefined;
 }
@@ -530,27 +394,30 @@ export function subagentSpawnResultIndicatesRunning(
   toolName: string | undefined,
   result: string | null | undefined,
 ): boolean {
-  const trimmed =
-    typeof result === "string" ? result.trim().replace(/\r\n/g, "\n") : "";
+  const trimmed = typeof result === 'string'
+    ? result.trim().replace(/\r\n/g, '\n')
+    : '';
   // Claude's asynchronous Agent tool returns a textual launch receipt while the
   // child is still running. Treat it like the structured Codex V1 receipt so a
   // paired stale `running` update does not close the task prematurely.
-  if (
-    (toolName === "Agent" || toolName === "Task") &&
-    (trimmed === "Async agent launched successfully." ||
-      (trimmed.startsWith("Async agent launched successfully.\nagentId: ") &&
-        trimmed.includes("\nThe agent is working in the background.")))
-  ) {
+  if (toolName === PI_SUBAGENT_TOOL_NAME
+    && trimmed === 'Cindy subagent launched. The agent is working in the background.') {
     return true;
   }
-  if (toolName !== "collab:spawnAgent") return false;
-  return (result ?? "")
-    .split(/\r?\n/)
-    .some((line) =>
-      /^[^:\n]+:\s*(?:running|in[_-]?progress|started|active)\s*$/i.test(
-        line.trim(),
-      ),
-    );
+  if ((toolName === 'Agent' || toolName === 'Task')
+    && (
+      trimmed === 'Async agent launched successfully.'
+      || (
+        trimmed.startsWith('Async agent launched successfully.\nagentId: ')
+        && trimmed.includes('\nThe agent is working in the background.')
+      )
+    )) {
+    return true;
+  }
+  if (toolName !== 'collab:spawnAgent') return false;
+  return (result ?? '').split(/\r?\n/).some((line) =>
+    /^[^:\n]+:\s*(?:running|in[_-]?progress|started|active)\s*$/i.test(line.trim()),
+  );
 }
 
 export function buildAgentTaskCardModel(input: {
@@ -562,31 +429,26 @@ export function buildAgentTaskCardModel(input: {
   const { toolName, toolInput, update, result } = input;
   const status = deriveAgentTaskStatus(update?.status, result, {
     resultIsLaunchReceipt:
-      subagentSpawnReceiptName(toolName, toolInput, result) !== undefined ||
-      subagentSpawnResultIndicatesRunning(toolName, result),
+      subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
+      || subagentSpawnResultIndicatesRunning(toolName, result),
   });
-  const provider: "claude-code" | "codex" | "pi" =
-    update?.provider ??
-    (toolName?.startsWith("collab:")
-      ? "codex"
+  const provider: 'claude-code' | 'codex' | 'pi' =
+    update?.provider
+    ?? (toolName?.startsWith('collab:')
+      ? 'codex'
       : toolName === PI_SUBAGENT_TOOL_NAME
-        ? "pi"
-        : "claude-code");
+        ? 'pi'
+        : 'claude-code');
   const title = compactText(
-    update?.title ??
-      readInputString(toolInput, ["description", "task", "name"]) ??
-      readInputString(toolInput, ["prompt"]),
+    update?.title
+      ?? readInputString(toolInput, ['description', 'task', 'name'])
+      ?? readInputString(toolInput, ['prompt']),
     96,
   );
   const description = compactText(
-    update?.description ??
-      readInputString(toolInput, ["prompt", "description", "task"]),
+    update?.description ?? readInputString(toolInput, ['prompt', 'description', 'task']),
   );
-  const spawnReceiptName = subagentSpawnReceiptName(
-    toolName,
-    toolInput,
-    result,
-  );
+  const spawnReceiptName = subagentSpawnReceiptName(toolName, toolInput, result);
   // 有实时 update(子线程送来的 tokens / 工具调用数 / 终态)时不再暴露启动回执:
   // title 与运行状态已经表达了同样的信息,再显示「Subagent X 已启动」会让 codex 卡
   // 比 Claude 子代理卡多出一行冗余文案 —— 两者共用同一张卡,形态必须一致。历史回放
@@ -594,9 +456,7 @@ export function buildAgentTaskCardModel(input: {
   const spawnedAgentName = update ? undefined : spawnReceiptName;
   // 启动回执命中时 summary 不携带裸路径(路径已在 spawnedAgentName / title 中),
   // 否则手机端会把 agentPath 原样当摘要展示。
-  const summary = spawnReceiptName
-    ? detailText(update?.summary)
-    : detailText(result, update?.summary);
+  const summary = spawnReceiptName ? detailText(update?.summary) : detailText(result, update?.summary);
   return {
     status,
     provider,
@@ -606,31 +466,25 @@ export function buildAgentTaskCardModel(input: {
     ...(spawnedAgentName ? { spawnedAgentName } : {}),
     ...(update?.lastToolName ? { lastToolName: update.lastToolName } : {}),
     ...(update?.outputFile ? { outputFile: update.outputFile } : {}),
-    ...(typeof update?.usage?.totalTokens === "number"
-      ? { totalTokens: update.usage.totalTokens }
-      : {}),
-    ...(typeof update?.usage?.toolUses === "number"
-      ? { toolUses: update.usage.toolUses }
-      : {}),
-    ...(typeof update?.usage?.durationMs === "number"
-      ? { durationMs: update.usage.durationMs }
-      : {}),
+    ...(typeof update?.usage?.totalTokens === 'number' ? { totalTokens: update.usage.totalTokens } : {}),
+    ...(typeof update?.usage?.toolUses === 'number' ? { toolUses: update.usage.toolUses } : {}),
+    ...(typeof update?.usage?.durationMs === 'number' ? { durationMs: update.usage.durationMs } : {}),
   };
 }
 
 function readInputString(input: unknown, keys: string[]): string | undefined {
-  if (!input || typeof input !== "object") return undefined;
+  if (!input || typeof input !== 'object') return undefined;
   const obj = input as Record<string, unknown>;
   for (const key of keys) {
     const value = obj[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return undefined;
 }
 
 function compactText(text: string | undefined, max = 260): string | undefined {
   if (!text) return undefined;
-  const oneLine = text.replace(/\s+/g, " ").trim();
+  const oneLine = text.replace(/\s+/g, ' ').trim();
   if (oneLine.length <= max) return oneLine;
   return `${oneLine.slice(0, max - 1)}…`;
 }

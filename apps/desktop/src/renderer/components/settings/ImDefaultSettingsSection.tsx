@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 
 import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
@@ -26,6 +27,7 @@ import {
   IM_DEFAULT_EFFORT_OVERRIDES,
   IM_DEFAULT_SETTINGS,
   isUnconditionalTurnPolicyChannel,
+  isImDefaultPermissionMode,
   type ImDefaultAgentKind,
   type ImDefaultEffort,
   type ImDefaultSettingsChannel,
@@ -370,6 +372,34 @@ export function ImDefaultSettingsSection({
           />
         </div>
       </div>
+
+      {/* 飞书专属: 群里新建任务统一用的权限档(默认自动审批) —— 群里 @bot 开话题、
+          群里 /new、群里 /ctr 都以它为准, 上面那个权限档只管私聊。群上下文含成员
+          可控内容; 用户显式选择「完全访问」时群护栏取缔(不挂强确认策略, 直接
+          执行), 防注入过滤仍独立生效。共享 PermissionSelector — 权限语义与
+          新建对话工具栏同一份。 */}
+      {channel === 'feishu' && (
+        <div className="flex flex-col gap-2">
+          <span className="text-12 font-medium text-[var(--text-secondary)]">
+            {t('settings.imBot.defaults.groupPermissionLabel')}
+          </span>
+          <PermissionSelector
+            permissionMode={settings.groupPermissionMode}
+            vendorKey={vendorKeyFor(settings.agentKind)}
+            triggerVariant="field"
+            disabled={pending}
+            ariaContext={t('settings.imBot.defaults.groupPermissionLabel')}
+            onPermissionModeChange={(mode) => {
+              if (isImDefaultPermissionMode(mode)) {
+                void persist({ groupPermissionMode: mode });
+              }
+            }}
+          />
+          <p className="text-11 leading-[1.45] text-[var(--text-secondary)]">
+            {t('settings.imBot.defaults.groupPermissionDescription')}
+          </p>
+        </div>
+      )}
 
       {turnPolicyWarning && (
         <div

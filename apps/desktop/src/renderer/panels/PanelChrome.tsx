@@ -3,6 +3,7 @@ import { Maximize2, Minimize2, Minus, PictureInPicture2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next';
 
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 
 import { usePanelMaximize } from '../layout/panelMaximize';
@@ -48,6 +49,11 @@ export interface PanelChromeProps {
   onMinimize?: () => void;
   /** 传入即长出「关闭」系统按钮(恒排最右);二次确认等语义归调用方。 */
   onClose?: () => void;
+  /**
+   * 是否渲染贴主窗口顶边的 46px 窗口拖拽带。纵向 Grid 的非首行传 false，
+   * 避免在窗口中部浪费高度并产生误触拖窗区域；默认 true 保持根级面板行为。
+   */
+  showWindowSpacer?: boolean;
 }
 
 export function PanelChrome({
@@ -57,6 +63,7 @@ export function PanelChrome({
   onDetach,
   onMinimize,
   onClose,
+  showWindowSpacer = true,
 }: PanelChromeProps): ReactNode {
   const { t } = useTranslation();
   const maximize = usePanelMaximize();
@@ -74,30 +81,33 @@ export function PanelChrome({
       {/* 窗口 chrome 让位带(§6 规则 3:顶部 46px 是系统领地,任何面板不得占用)。
           做进标准头 = 约束由引擎兜底,面板作者不靠自觉;整条归窗口拖动
           (B3 口径:46px 带拖窗、36px 头拖面板),与聊天顶栏/工具面板顶带连成一线。 */}
-      <div
-        aria-hidden
-        className="h-[46px] shrink-0 border-b border-[var(--border-default)] bg-[var(--panel-bg)]"
-        style={{ WebkitAppRegion: 'drag' } as CSSProperties}
-      >
-        {/* ChromeActions 浮层按钮簇的 no-drag 洞:左栏折叠时本面板可能顶到窗口
-            最左,顶带会盖住左上角折叠/菜单按钮 —— Electron 拖拽区是纯几何
-            (drag 矩形减 no-drag 矩形)且挖洞只在 drag 元素后代上可靠生效,
-            浮层自身的 no-drag 不算数(同 Sidebar 顶行 / ContentHeader spacer)。
-            fixed 定位取窗口坐标:面板不在左上角时矩形与顶带不相交 = 几何
-            no-op,无需感知自己的列位;pointer-events:none 不挡命中(拖拽区
-            注册是几何计算,不依赖 DOM 事件)。 */}
+      {showWindowSpacer && (
         <div
-          data-testid="panel-chrome-actions-hit-hole"
-          className="pointer-events-none fixed top-0 h-[46px]"
-          style={
-            {
-              left: chromeClusterX,
-              width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
-              WebkitAppRegion: 'no-drag',
-            } as CSSProperties
-          }
-        />
-      </div>
+          aria-hidden
+          data-testid="panel-chrome-window-spacer"
+          className="h-[46px] shrink-0 border-b border-[var(--border-default)] bg-[var(--panel-bg)]"
+          style={{ WebkitAppRegion: 'drag' } as CSSProperties}
+        >
+          {/* ChromeActions 浮层按钮簇的 no-drag 洞:左栏折叠时本面板可能顶到窗口
+              最左,顶带会盖住左上角折叠/菜单按钮 —— Electron 拖拽区是纯几何
+              (drag 矩形减 no-drag 矩形)且挖洞只在 drag 元素后代上可靠生效,
+              浮层自身的 no-drag 不算数(同 Sidebar 顶行 / ContentHeader spacer)。
+              fixed 定位取窗口坐标:面板不在左上角时矩形与顶带不相交 = 几何
+              no-op,无需感知自己的列位;pointer-events:none 不挡命中(拖拽区
+              注册是几何计算,不依赖 DOM 事件)。 */}
+          <div
+            data-testid="panel-chrome-actions-hit-hole"
+            className="pointer-events-none fixed top-0 h-[46px]"
+            style={
+              {
+                left: chromeClusterX,
+                width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+                WebkitAppRegion: 'no-drag',
+              } as CSSProperties
+            }
+          />
+        </div>
+      )}
       <div
         data-panel-drag-handle=""
         className="flex h-[36px] shrink-0 items-center justify-between gap-2 border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-3"
@@ -110,46 +120,36 @@ export function PanelChrome({
           <div className="flex shrink-0 items-center gap-0.5">
             {actions}
             {onMinimize && (
-              <button
-                type="button"
+              <ChromeIconButton
                 aria-label={t('panelChrome.minimizeAria')}
                 onClick={onMinimize}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
                 <Minus size={14} />
-              </button>
+              </ChromeIconButton>
             )}
             {onDetach && (
-              <button
-                type="button"
+              <ChromeIconButton
                 aria-label={t('panelChrome.detachAria')}
                 onClick={onDetach}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
                 <PictureInPicture2 size={14} />
-              </button>
+              </ChromeIconButton>
             )}
             {showMaximize && (
-              // 按下命中 button 时 PanelDragController 会让路(标准头手势面的
-              // 交互元素豁免),点击不会误触"拿起面板"。
-              <button
-                type="button"
+              <ChromeIconButton
                 aria-label={t(isMaximized ? 'panelChrome.restoreAria' : 'panelChrome.maximizeAria')}
                 onClick={() => maximize.toggle(panelKind)}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
                 {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-              </button>
+              </ChromeIconButton>
             )}
             {onClose && (
-              <button
-                type="button"
+              <ChromeIconButton
                 aria-label={t('panelChrome.closeAria')}
                 onClick={onClose}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
                 <X size={14} />
-              </button>
+              </ChromeIconButton>
             )}
           </div>
         )}
