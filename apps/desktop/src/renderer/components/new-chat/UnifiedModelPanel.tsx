@@ -710,17 +710,25 @@ export function UnifiedModelPanel({
     if (!list) return;
     const listTop = list.getBoundingClientRect().top;
     let current: { label: string; providerId: string | null } | null = null;
+    let nextTop: number | null = null;
     for (const el of list.querySelectorAll<HTMLElement>('[data-group-label]')) {
-      // 组头自带 8px 上衬,标题文字未完全滚出前不接管(+12 让切换发生在文字贴顶时)。
-      if (el.getBoundingClientRect().top - listTop < -12) {
+      const top = el.getBoundingClientRect().top - listTop;
+      // 标题文字未完全滚出前不接管(-12 让切换发生在文字贴顶时)。
+      if (top < -12) {
         current = {
           label: el.dataset.groupLabel ?? '',
           providerId: el.dataset.groupProvider ?? null,
         };
       } else {
+        nextTop = top;
         break;
       }
     }
+    // 下一组的组头一进入题头区(题头总高 50px)上一组题头就提前退场,把组尾的行
+    // 和迎面而来的新组头都亮出来 —— 等到组员全走光了牌子还挂在那(Chris 2026-08-16
+    // 实测:「不要等最后一行模型名都没了,还在」)。退场到新组头自己滚出顶部(-12)
+    // 接管之间,顶部走原生滚动,无题头。
+    if (nextTop !== null && nextTop < 50) current = null;
     // 滚动每帧都会进来,内容没变就复用旧引用,不触发重渲染。
     setStickyLabel((prev) =>
       prev?.label === current?.label && prev?.providerId === current?.providerId
@@ -756,16 +764,16 @@ export function UnifiedModelPanel({
       {pickerLayout === 'badge' && stickyLabel && (
         <div
           aria-hidden
-          // 复刻真组头的静止位形:文字距列表顶 16px(= 列表 p-2 8px + 组头 pt-2 8px),
-          // 接管瞬间与列表顶部的真组头逐像素重合。收尾照设计稿 .sec:实底渐隐到透明,
-          // 不画硬线 —— 行从渐变里柔和浮现,不被线拦腰切开。
-          // 上下间距必须对称:文字上方净空 16px,下方同样留 15px 实底(文字底 27px +
-          // 15 = 42px)再接 12px 渐隐尾;实底只到文字下缘就渐隐会让下一行的字贴着题头
-          // 文字冒出来(Chris 2026-08-16 实测「贴底」)。
-          className="pointer-events-none absolute inset-x-0 top-0 z-[6] px-[18px] pt-4 text-11 leading-none text-[var(--text-tertiary)] h-[54px]"
+          // 复刻真组头的静止位形:文字距列表顶约 13px(= 列表 p-2 8px + 组头 pt-1 4px
+          // + 图标行内居中),接管瞬间与列表顶部的真组头逐像素重合。收尾照设计稿 .sec:
+          // 实底渐隐到透明,不画硬线 —— 行从渐变里柔和浮现,不被线拦腰切开。
+          // 上下间距对称:文字上下各约 13px 实底净空(实底到 38px)再接 12px 渐隐尾;
+          // 实底只到文字下缘就渐隐会让下一行的字贴着题头文字冒出来(Chris 2026-08-16
+          // 实测「贴底」)。
+          className="pointer-events-none absolute inset-x-0 top-0 z-[6] h-[50px] px-[18px] pt-3 text-11 leading-none text-[var(--text-tertiary)]"
           style={{
             background:
-              'linear-gradient(180deg, var(--model-dropdown-bg) 0, var(--model-dropdown-bg) 42px, transparent)',
+              'linear-gradient(180deg, var(--model-dropdown-bg) 0, var(--model-dropdown-bg) 38px, transparent)',
           }}
         >
           <div className="flex items-center gap-1.5">
@@ -864,6 +872,9 @@ export function UnifiedModelPanel({
               key={section.key}
               role="group"
               aria-label={sectionLabel(section)}
+              // badge 样式:组间距放在 section 容器上(组头自身上下衬对称),标签文字
+              // 到上一组尾行与到本组首行的距离一致(Chris 2026-08-16:「上下高度对齐」)。
+              className={cn(pickerLayout === 'badge' && 'mt-2 first:mt-0')}
             >
               {/* 设计稿 .group-label:11.5px 常规字重、padding 8/10/4。
                   badge 样式的"滚动中组名常驻"不用 sticky(sticky 钉在滚动容器
@@ -875,7 +886,12 @@ export function UnifiedModelPanel({
                 {...(section.group?.type === 'provider'
                   ? { 'data-group-provider': section.group.providerId }
                   : {})}
-                className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-11 text-[var(--text-tertiary)]"
+                className={cn(
+                  'flex items-center gap-1.5 px-2.5 text-11 text-[var(--text-tertiary)]',
+                  // badge:上 4 下 12(配合列表 8px 上衬,顶部文字上下净空各约 13px,
+                  // 与滚动题头卡同一套位形);classic 保持既有 8/4 节奏。
+                  pickerLayout === 'badge' ? 'pb-3 pt-1 leading-none' : 'pb-1 pt-2',
+                )}
               >
                 {pickerLayout === 'badge' && section.group?.type === 'provider' && (
                   <ProviderRailMark
