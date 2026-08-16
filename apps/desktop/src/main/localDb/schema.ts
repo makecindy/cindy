@@ -415,6 +415,102 @@ export const botLifecycleEvents = sqliteTable(
   }),
 );
 
+/** Global durable task-event ledger. Payloads are bounded metadata only. */
+export const botSessionEventLedger = sqliteTable(
+  'bot_session_event_ledger',
+  {
+    id: text('id').primaryKey(),
+    eventKey: text('event_key').notNull(),
+    sessionId: text('session_id').notNull(),
+    eventType: text('event_type').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    originBotId: text('origin_bot_id'),
+    lineageJson: text('lineage_json').notNull().default('[]'),
+    hopCount: integer('hop_count').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqEventKey: uniqueIndex('uniq_bot_session_event_ledger_key').on(t.eventKey),
+    idxSessionCreated: index('idx_bot_session_event_ledger_session_created').on(
+      t.sessionId,
+      t.createdAt,
+    ),
+    idxTypeCreated: index('idx_bot_session_event_ledger_type_created').on(
+      t.eventType,
+      t.createdAt,
+    ),
+  }),
+);
+
+/** Logical Bot subscriptions; rules match classes of tasks rather than IDs. */
+export const botEventSubscriptions = sqliteTable(
+  'bot_event_subscriptions',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    status: text('status', { enum: ['active', 'paused'] }).notNull().default('active'),
+    ruleJson: text('rule_json').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxBotStatus: index('idx_bot_event_subscriptions_bot_status').on(t.botId, t.status),
+  }),
+);
+
+/** Per-Bot durable inbox and processing/delivery facts. */
+export const botInboxItems = sqliteTable(
+  'bot_inbox_items',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    subscriptionId: text('subscription_id')
+      .notNull()
+      .references(() => botEventSubscriptions.id, { onDelete: 'cascade' }),
+    eventId: text('event_id')
+      .notNull()
+      .references(() => botSessionEventLedger.id, { onDelete: 'cascade' }),
+    processingSessionId: text('processing_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    status: text('status', {
+      enum: ['pending', 'processing', 'handled', 'failed', 'skipped'],
+    })
+      .notNull()
+      .default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    resultText: text('result_text'),
+    resultDeliveryStatus: text('result_delivery_status', {
+      enum: ['none', 'queued', 'partial', 'failed'],
+    })
+      .notNull()
+      .default('none'),
+    resultDeliveryError: text('result_delivery_error'),
+    receivedAt: integer('received_at').notNull(),
+    startedAt: integer('started_at'),
+    handledAt: integer('handled_at'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqSubscriptionEvent: uniqueIndex('uniq_bot_inbox_subscription_event').on(
+      t.subscriptionId,
+      t.eventId,
+    ),
+    idxBotStatusReceived: index('idx_bot_inbox_bot_status_received').on(
+      t.botId,
+      t.status,
+      t.receivedAt,
+    ),
+    idxProcessingSession: index('idx_bot_inbox_processing_session').on(t.processingSessionId),
+  }),
+);
+
 /** Stable project/workspace policy owned by a Bot Profile, not by one Session. */
 export const botProjectBindings = sqliteTable(
   'bot_project_bindings',

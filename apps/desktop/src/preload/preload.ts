@@ -632,6 +632,7 @@ const fanOutBotDelegationChanged = createIpcFanOut('maker:bot-delegation:changed
 const fanOutBotAutomationChanged = createIpcFanOut('maker:bot-automation:changed');
 const fanOutBotLifecycleChanged = createIpcFanOut('maker:bot-lifecycle:changed');
 const fanOutBotDeliveryChanged = createIpcFanOut('maker:bot-delivery:changed');
+const fanOutBotInboxChanged = createIpcFanOut('maker:bot-inbox:changed');
 const fanOutMakerUsageTodaySpend = createIpcFanOut('usage:today-spend-changed'); // Claude USD
 const fanOutMakerUsageTodayTokens = createIpcFanOut('usage:today-tokens-changed'); // Codex token
 const fanOutMakerUsageModelPricing = createIpcFanOut('usage:model-pricing-changed');
@@ -4995,6 +4996,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
       retry: (botId: string, deliveryId: string, allowDuplicateRisk = false): Promise<{ id: string }> =>
         ipcRenderer.invoke('maker:bot-delivery:retry', botId, deliveryId, allowDuplicateRisk),
       onChanged: fanOutBotDeliveryChanged,
+    },
+    botInbox: {
+      listSubscriptions: (
+        botId: string,
+      ): Promise<import('../shared/botSessionEvents').BotEventSubscriptionView[]> =>
+        ipcRenderer.invoke('maker:bot-event-subscriptions:list', botId),
+      upsertSubscription: (input: {
+        id?: string;
+        botId: string;
+        name: string;
+        status?: 'active' | 'paused';
+        rule: Partial<import('../shared/botSessionEvents').BotEventSubscriptionRule>;
+      }): Promise<import('../shared/botSessionEvents').BotEventSubscriptionView> =>
+        ipcRenderer.invoke('maker:bot-event-subscription:upsert', input),
+      list: (
+        botId: string,
+        limit?: number,
+      ): Promise<import('../shared/botSessionEvents').BotInboxItemView[]> =>
+        ipcRenderer.invoke('maker:bot-inbox:list', botId, limit),
+      retry: (botId: string, inboxItemId: string): Promise<void> =>
+        ipcRenderer.invoke('maker:bot-inbox:retry', botId, inboxItemId),
+      onChanged: fanOutBotInboxChanged,
     },
     botAutomations: {
       list: (botId: string): Promise<import('../shared/botAutomation').BotAutomation[]> =>

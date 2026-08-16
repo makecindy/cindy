@@ -345,6 +345,11 @@ import {
 import { deliverMountedBotRoute } from './botMountedRouteDelivery.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
 import {
+  createBotSessionEventService,
+  type BotSessionEventService,
+} from './botSessionEventService.js';
+import { subscribeSessionMetadataPatches } from '../sessionEventSource.js';
+import {
   createBotCompactRuntimeRefreshCoordinator,
   replaceBotRuntimeAfterPreflight,
   type BotCompactBoundary,
@@ -1737,6 +1742,8 @@ interface EnableOrcaOptions {
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
 let botDelegationServiceHolder: BotDelegationService | null = null;
 let botDeliveryOutboxServiceHolder: BotDeliveryOutboxService | null = null;
+let botSessionEventServiceHolder: BotSessionEventService | null = null;
+let botSessionEventMetadataUnsubscribe: (() => void) | null = null;
 
 export function enqueueBotDelivery(input: EnqueueBotDeliveryInput): Promise<{ id: string }> {
   const outbox = botDeliveryOutboxServiceHolder;
@@ -4553,6 +4560,42 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               });
             } catch (error) {
               log.warn('Bot delegation terminal settlement failed', {
+                sessionId: session.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          })();
+          void (async () => {
+            try {
+              await drainPersistQueue();
+              const doneData = event.data as {
+                result?: unknown;
+                message?: unknown;
+                reason?: unknown;
+                sdkError?: unknown;
+              } | null;
+              const finalText = typeof doneData?.result === 'string' ? doneData.result : '';
+              const errorText = [doneData?.message, doneData?.reason]
+                .find((value): value is string => typeof value === 'string' && value.length > 0);
+              const failed = isTerminalTurnErrorEvent(event);
+              await botSessionEventServiceHolder?.recordTurnEvent({
+                sessionId: session.id,
+                outcome: failed ? 'failed' : 'completed',
+                ...(typeof doneData?.sdkError === 'string'
+                  ? { failureCode: doneData.sdkError }
+                  : {}),
+                ...(typeof event.turnAttemptToken === 'number'
+                  ? { attemptToken: event.turnAttemptToken }
+                  : {}),
+              });
+              await botSessionEventServiceHolder?.settleProcessingForSession({
+                sessionId: session.id,
+                outcome: failed ? 'failed' : 'completed',
+                resultText: finalText,
+                error: errorText,
+              });
+            } catch (error) {
+              log.warn('Bot Session event settlement failed', {
                 sessionId: session.id,
                 error: error instanceof Error ? error.message : String(error),
               });
@@ -9307,13 +9350,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onChanged: (payload) => broadcastToAllWindows(MAKER_PUSH.BOT_DELEGATION_CHANGED, payload),
     requireRuntimeSnapshot: true,
   });
+  botSessionEventServiceHolder?.dispose();
+  botSessionEventMetadataUnsubscribe?.();
+  botSessionEventServiceHolder = createBotSessionEventService({
+    dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted }) =>
+      dispatchBotSessionMessage({
+        targetSessionId,
+        message,
+        persistedContent,
+        clientId,
+        onAccepted,
+      }),
+    enqueueDelivery: (params) => {
+      const outbox = botDeliveryOutboxServiceHolder;
+      if (!outbox) throw new Error('Bot delivery outbox is not initialized');
+      return outbox.enqueue(params);
+    },
+    onChanged: (payload) => broadcastToAllWindows(MAKER_PUSH.BOT_INBOX_CHANGED, payload),
+  });
+  botSessionEventMetadataUnsubscribe = subscribeSessionMetadataPatches((event) => {
+    void botSessionEventServiceHolder
+      ?.recordMetadataPatch(event.sessionId, event.patch, event.occurredAt)
+      .catch((error) => {
+        log.warn('Bot Session metadata event persistence failed', {
+          sessionId: event.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  });
   registerBotLifecycleHandlers({
     maker,
     getDelegationService: () => botDelegationServiceHolder,
     getOutboxService: () => botDeliveryOutboxServiceHolder,
+    onResumed: (botId) => botSessionEventServiceHolder?.drainBot(botId),
   });
   const outboxForRestore = botDeliveryOutboxServiceHolder;
   const delegationForRestore = botDelegationServiceHolder;
+  const sessionEventsForRestore = botSessionEventServiceHolder;
   setSessionTokenUsageObserver(async ({ sessionId, totalTokens }) => {
     await delegationForRestore.enforceBudgetForSession(sessionId, totalTokens);
   });
@@ -9329,6 +9402,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await delegationForRestore.restore();
     } catch (error) {
       log.warn('Bot delegation restore failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      await sessionEventsForRestore.restore();
+    } catch (error) {
+      log.warn('Bot Session event inbox restore failed', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -9402,6 +9482,87 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return outboxForRestore.retry(deliveryId, botId, {
         allowDuplicateRisk: allowDuplicateRisk === true,
       });
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_EVENT_SUBSCRIPTIONS_LIST,
+    async (event, botId: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof botId !== 'string' || botId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'botId required');
+      }
+      return sessionEventsForRestore.listSubscriptions(botId);
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_EVENT_SUBSCRIPTION_UPSERT,
+    async (event, input: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        throwIpcError('INVALID_PARAMS', 'subscription input must be an object');
+      }
+      const value = input as Record<string, unknown>;
+      if (
+        typeof value.botId !== 'string'
+        || !value.botId
+        || typeof value.name !== 'string'
+        || !value.name.trim()
+        || !value.rule
+        || typeof value.rule !== 'object'
+        || Array.isArray(value.rule)
+      ) {
+        throwIpcError('INVALID_PARAMS', 'botId + name + rule required');
+      }
+      if (
+        value.id !== undefined
+        && (typeof value.id !== 'string' || !value.id.trim())
+      ) {
+        throwIpcError('INVALID_PARAMS', 'subscription id must be a non-empty string');
+      }
+      if (
+        value.status !== undefined
+        && value.status !== 'active'
+        && value.status !== 'paused'
+      ) {
+        throwIpcError('INVALID_PARAMS', 'subscription status must be active or paused');
+      }
+      return sessionEventsForRestore.upsertSubscription({
+        ...(typeof value.id === 'string' ? { id: value.id } : {}),
+        botId: value.botId,
+        name: value.name,
+        ...(value.status === 'active' || value.status === 'paused'
+          ? { status: value.status }
+          : {}),
+        rule: value.rule as Record<string, unknown>,
+      });
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_INBOX_LIST,
+    async (event, botId: unknown, limit?: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof botId !== 'string' || botId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'botId required');
+      }
+      if (limit !== undefined && (typeof limit !== 'number' || !Number.isFinite(limit))) {
+        throwIpcError('INVALID_PARAMS', 'limit must be a finite number');
+      }
+      return sessionEventsForRestore.listInbox(botId, limit as number | undefined);
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_INBOX_RETRY,
+    async (event, botId: unknown, inboxItemId: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (
+        typeof botId !== 'string'
+        || !botId
+        || typeof inboxItemId !== 'string'
+        || !inboxItemId
+      ) {
+        throwIpcError('INVALID_PARAMS', 'botId + inboxItemId required');
+      }
+      await sessionEventsForRestore.retryInboxItem(botId, inboxItemId);
     },
   );
 

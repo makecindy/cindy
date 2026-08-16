@@ -5542,6 +5542,38 @@
         "resume-failed": "恢復 Bot 失敗"
       }
     },
+    "inbox": {
+      "title": "任務事件收件匣",
+      "description": "訂閱其他任務的完成、失敗與待決策狀態。Bot 會從持久收件匣自動醒來，先複查任務現況，再將自己的處理結果投遞至已掛載通道。",
+      "defaultSubscriptionName": "任務結果與待決策狀態",
+      "watchTaskStates": "自動關注任務狀態",
+      "saving": "正在儲存…",
+      "pending": "待處理",
+      "processing": "處理中",
+      "failed": "需關注",
+      "timeline": "事件時間軸",
+      "ruleSummary": "關注任務完成、失敗、等拍板、待驗收與待總控狀態。",
+      "pausedSummary": "已暫停自動關注任務事件。",
+      "refresh": "重新整理任務事件",
+      "loading": "正在載入任務事件…",
+      "emptyWatching": "關注已開啟。新的符合事件會出現在這裡，並自動喚醒這個 Bot。",
+      "emptyPaused": "開啟關注，讓這個 Bot 擁有持久的任務事件收件匣。",
+      "loadFailed": "無法載入任務事件。",
+      "saveFailed": "無法儲存任務事件訂閱。",
+      "retryFailed": "無法重試這個任務事件。",
+      "retry": "重試任務事件",
+      "openTask": "開啟來源任務",
+      "untitledTask": "未命名任務",
+      "sidebarAttention": "有 {{count}} 個任務事件需要關注",
+      "status": { "pending": "待處理", "processing": "處理中", "handled": "已處理", "failed": "失敗", "skipped": "已略過" },
+      "events": {
+        "session": {
+          "turn": { "completed": "任務回合已完成", "failed": "任務回合失敗" },
+          "metadata": { "changed": "任務狀態已變更" },
+          "decision": { "required": "任務需要決策" }
+        }
+      }
+    },
     "adapterBoundaryTitle": "保留訊息層邊界",
     "adapterBoundaryDescription": "Telegram 引用、飛書卡片、Slack thread 與本地投遞仍由各自 adapter 負責。本頁只負責 Bot 身分與任務投影。",
     "backToChat": "返回對話",

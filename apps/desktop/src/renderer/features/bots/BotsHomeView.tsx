@@ -58,6 +58,7 @@ import { BotProjectSettings } from './BotProjectSettings';
 import { BotAutomationSettings } from './BotAutomationSettings';
 import { BotRouteSettings } from './BotRouteSettings';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
+import { BotEventInboxSettings } from './BotEventInboxSettings';
 import { BotChannelCapabilitySummary } from './BotChannelCapabilitySummary';
 
 const AVATARS = ['🤖', '✦', '◈', '◎', '☄️', '🧭'];
@@ -491,6 +492,7 @@ function BotSettings({
             </div>
           </header>
           <BotLifecycleSettings bot={bot} onOpenSession={onOpenSession} />
+          <BotEventInboxSettings bot={bot} />
         </div>
       </main>
     );
@@ -542,6 +544,8 @@ function BotSettings({
         ) : null}
 
         <BotLifecycleSettings bot={bot} onOpenSession={onOpenSession} />
+
+        <BotEventInboxSettings bot={bot} />
 
         <BotProjectSettings bot={bot} />
 

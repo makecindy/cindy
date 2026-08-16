@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
 import type { BotHealthStatus } from '../../../shared/botLifecycle';
+import type { BotInboxItemView } from '../../../shared/botSessionEvents';
 import { getBotHealth, useBotProfiles } from './botStore';
 
 const CHANNEL_LABELS = {
@@ -46,6 +47,7 @@ function BotsSidebarContent() {
   const archivedBots = bots.filter((bot) => bot.status === 'archived');
   const collapsed = useSidebarCollapsedState();
   const [healthByBotId, setHealthByBotId] = useState<Record<string, BotHealthStatus>>({});
+  const [attentionByBotId, setAttentionByBotId] = useState<Record<string, number>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +64,34 @@ function BotsSidebarContent() {
     });
     return () => {
       cancelled = true;
+    };
+  }, [bots]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async (targetBotId?: string) => {
+      const targets = targetBotId ? bots.filter((bot) => bot.id === targetBotId) : bots;
+      const settled = await Promise.allSettled(
+        targets.map(async (bot) => [bot.id, await window.electronAPI.maker.botInbox.list(bot.id, 100)] as const),
+      );
+      if (cancelled) return;
+      setAttentionByBotId((previous) => {
+        const next = { ...previous };
+        for (const result of settled) {
+          if (result.status !== 'fulfilled') continue;
+          const [id, items] = result.value as readonly [string, BotInboxItemView[]];
+          next[id] = items.filter((item) => item.status === 'pending' || item.status === 'processing' || item.status === 'failed').length;
+        }
+        return next;
+      });
+    };
+    void load();
+    const unsubscribe = window.electronAPI.maker.botInbox.onChanged((payload) => {
+      void load(payload.botId);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
     };
   }, [bots]);
 
@@ -152,6 +182,7 @@ function BotsSidebarContent() {
                   ? mountedChannels.join(' · ')
                   : CHANNEL_LABELS.local;
               const health = healthByBotId[bot.id];
+              const attention = attentionByBotId[bot.id] ?? 0;
               return (
                 <button
                   type="button"
@@ -178,6 +209,14 @@ function BotsSidebarContent() {
                       {channelSummary}
                     </span>
                   </span>
+                  {attention > 0 ? (
+                    <span
+                      className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[var(--accent-cta-bg)] px-1 text-10 font-medium text-[var(--accent-pure-cta-fg)]"
+                      aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
+                    >
+                      {attention > 99 ? '99+' : attention}
+                    </span>
+                  ) : null}
                   {health === 'recovering' ? (
                     <LoaderCircle
                       size={13}

@@ -4692,6 +4692,29 @@ interface ElectronAPI {
         ) => void,
       ) => () => void;
     };
+    botInbox: {
+      listSubscriptions: (
+        botId: string,
+      ) => Promise<import('../shared/botSessionEvents').BotEventSubscriptionView[]>;
+      upsertSubscription: (input: {
+        id?: string;
+        botId: string;
+        name: string;
+        status?: 'active' | 'paused';
+        rule: Partial<import('../shared/botSessionEvents').BotEventSubscriptionRule>;
+      }) => Promise<import('../shared/botSessionEvents').BotEventSubscriptionView>;
+      list: (
+        botId: string,
+        limit?: number,
+      ) => Promise<import('../shared/botSessionEvents').BotInboxItemView[]>;
+      retry: (botId: string, inboxItemId: string) => Promise<void>;
+      onChanged: (
+        cb: (
+          payload: import('../shared/botSessionEvents').BotInboxChangedPayload,
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
+      ) => () => void;
+    };
     botAutomations: {
       list: (botId: string) => Promise<import('../shared/botAutomation').BotAutomation[]>;
       create: (

@@ -13,6 +13,7 @@
 import { BrowserWindow } from 'electron';
 
 import { tapWindowBroadcast } from '../../device-link/broadcast-tap';
+import { publishSessionMetadataPatch } from '../../sessionEventSource';
 
 /** 广播「session 行已创建」到本机所有窗口 + device-link 控制端。best-effort。 */
 export function broadcastSessionCreated(sessionId: string): void {
@@ -43,4 +44,5 @@ export function broadcastSessionPatched(sessionId: string, patch: Record<string,
       // best-effort UI 刷新失败不影响 IM 业务
     }
   }
+  publishSessionMetadataPatch(sessionId, patch);
 }

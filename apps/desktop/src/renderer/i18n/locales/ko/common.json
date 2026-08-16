@@ -5542,6 +5542,38 @@
         "resume-failed": "Bot 재개 실패"
       }
     },
+    "inbox": {
+      "title": "작업 이벤트 받은편지함",
+      "description": "다른 작업의 완료, 실패 및 결정 대기 상태를 구독합니다. Bot은 영구 받은편지함에서 깨어나 현재 상태를 확인한 뒤 자신의 처리 결과를 연결된 채널로 보냅니다.",
+      "defaultSubscriptionName": "작업 결과 및 결정 대기",
+      "watchTaskStates": "작업 상태 자동 관찰",
+      "saving": "저장 중…",
+      "pending": "대기 중",
+      "processing": "처리 중",
+      "failed": "확인 필요",
+      "timeline": "이벤트 타임라인",
+      "ruleSummary": "완료, 실패, 결정 대기, 검수 대기 및 총괄 대기 상태를 관찰합니다.",
+      "pausedSummary": "작업 이벤트 자동 관찰이 일시 중지되었습니다.",
+      "refresh": "작업 이벤트 새로고침",
+      "loading": "작업 이벤트를 불러오는 중…",
+      "emptyWatching": "관찰 중입니다. 새 일치 이벤트가 여기에 표시되고 이 Bot을 깨웁니다.",
+      "emptyPaused": "관찰을 켜서 이 Bot에 영구 작업 이벤트 받은편지함을 추가하세요.",
+      "loadFailed": "작업 이벤트를 불러올 수 없습니다.",
+      "saveFailed": "작업 이벤트 구독을 저장할 수 없습니다.",
+      "retryFailed": "이 작업 이벤트를 다시 시도할 수 없습니다.",
+      "retry": "작업 이벤트 다시 시도",
+      "openTask": "원본 작업 열기",
+      "untitledTask": "제목 없는 작업",
+      "sidebarAttention": "{{count}}개의 작업 이벤트를 확인해야 합니다",
+      "status": { "pending": "대기 중", "processing": "처리 중", "handled": "처리됨", "failed": "실패", "skipped": "건너뜀" },
+      "events": {
+        "session": {
+          "turn": { "completed": "작업 턴 완료", "failed": "작업 턴 실패" },
+          "metadata": { "changed": "작업 상태 변경" },
+          "decision": { "required": "작업에 결정 필요" }
+        }
+      }
+    },
     "adapterBoundaryTitle": "어댑터 경계 유지",
     "adapterBoundaryDescription": "Telegram 답글, Feishu 카드, Slack 스레드와 로컬 전달은 각 어댑터가 담당합니다. 이 화면은 Bot 정체성과 작업 투영만 다룹니다.",
     "backToChat": "채팅으로 돌아가기",

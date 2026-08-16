@@ -5542,6 +5542,38 @@
         "resume-failed": "恢复 Bot 失败"
       }
     },
+    "inbox": {
+      "title": "任务事件收件箱",
+      "description": "订阅其它任务的完成、失败和待决策状态。Bot 会从持久收件箱自动醒来，先复查任务现状，再把自己的处理结果投递到已挂载通道。",
+      "defaultSubscriptionName": "任务结果与待决策状态",
+      "watchTaskStates": "自动关注任务状态",
+      "saving": "正在保存…",
+      "pending": "待处理",
+      "processing": "处理中",
+      "failed": "需关注",
+      "timeline": "事件时间线",
+      "ruleSummary": "关注任务完成、失败、等拍板、待验收和待总控状态。",
+      "pausedSummary": "已暂停自动关注任务事件。",
+      "refresh": "刷新任务事件",
+      "loading": "正在加载任务事件…",
+      "emptyWatching": "关注已开启。新的匹配事件会出现在这里，并自动唤醒这个 Bot。",
+      "emptyPaused": "开启关注，让这个 Bot 获得持久的任务事件收件箱。",
+      "loadFailed": "无法加载任务事件。",
+      "saveFailed": "无法保存任务事件订阅。",
+      "retryFailed": "无法重试这个任务事件。",
+      "retry": "重试任务事件",
+      "openTask": "打开来源任务",
+      "untitledTask": "未命名任务",
+      "sidebarAttention": "有 {{count}} 个任务事件需要关注",
+      "status": { "pending": "待处理", "processing": "处理中", "handled": "已处理", "failed": "失败", "skipped": "已跳过" },
+      "events": {
+        "session": {
+          "turn": { "completed": "任务回合已完成", "failed": "任务回合失败" },
+          "metadata": { "changed": "任务状态已变化" },
+          "decision": { "required": "任务需要决策" }
+        }
+      }
+    },
     "adapterBoundaryTitle": "保留消息层边界",
     "adapterBoundaryDescription": "Telegram 引用、飞书卡片、Slack thread 和本地投递仍由各自 adapter 负责。本页面只负责 Bot 身份和任务投影。",
     "backToChat": "返回对话",

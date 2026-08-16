@@ -54,6 +54,8 @@ export interface BotLifecycleServiceDeps {
     keepTaskHistory: boolean,
   ) => Promise<void>;
   now?: () => number;
+  /** Resume durable work owned by the Bot after lifecycle state is active. */
+  onResumed?: (botId: string) => void | Promise<void>;
 }
 
 const lifecycleLocks = new Map<
@@ -316,6 +318,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       deliveries,
     });
     broadcastBotLifecycleChanged({ botId, action: 'resume' });
+    await deps.onResumed?.(botId);
     return result;
   };
 

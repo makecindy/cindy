@@ -5542,6 +5542,38 @@
         "resume-failed": "Bot の再開に失敗"
       }
     },
+    "inbox": {
+      "title": "タスクイベント受信箱",
+      "description": "他のタスクの完了、失敗、判断待ちを購読します。Bot は永続受信箱から起動し、現在の状態を確認してから自身の結果を接続済みチャンネルへ送ります。",
+      "defaultSubscriptionName": "タスク結果と判断待ち",
+      "watchTaskStates": "タスク状態を自動監視",
+      "saving": "保存中…",
+      "pending": "待機中",
+      "processing": "処理中",
+      "failed": "要確認",
+      "timeline": "イベントタイムライン",
+      "ruleSummary": "完了、失敗、判断待ち、検収待ち、総合管理待ちを監視します。",
+      "pausedSummary": "タスクイベントの自動監視は一時停止中です。",
+      "refresh": "タスクイベントを更新",
+      "loading": "タスクイベントを読み込み中…",
+      "emptyWatching": "監視中です。該当する新しいイベントがここに表示され、この Bot を起動します。",
+      "emptyPaused": "監視を有効にすると、この Bot に永続タスクイベント受信箱が追加されます。",
+      "loadFailed": "タスクイベントを読み込めませんでした。",
+      "saveFailed": "タスクイベント購読を保存できませんでした。",
+      "retryFailed": "このタスクイベントを再試行できませんでした。",
+      "retry": "タスクイベントを再試行",
+      "openTask": "元のタスクを開く",
+      "untitledTask": "無題のタスク",
+      "sidebarAttention": "{{count}} 件のタスクイベントに確認が必要です",
+      "status": { "pending": "待機中", "processing": "処理中", "handled": "処理済み", "failed": "失敗", "skipped": "スキップ" },
+      "events": {
+        "session": {
+          "turn": { "completed": "タスクのターンが完了しました", "failed": "タスクのターンが失敗しました" },
+          "metadata": { "changed": "タスク状態が変更されました" },
+          "decision": { "required": "タスクに判断が必要です" }
+        }
+      }
+    },
     "adapterBoundaryTitle": "アダプター境界を維持",
     "adapterBoundaryDescription": "Telegram の返信、Feishu カード、Slack スレッド、ローカル配信は各アダプターが担当します。この画面は Bot ID とタスク投影のみを扱います。",
     "backToChat": "チャットに戻る",

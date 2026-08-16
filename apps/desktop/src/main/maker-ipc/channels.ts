@@ -724,6 +724,10 @@ export const MAKER_INVOKE = {
   BOT_DELIVERIES_LIST: 'maker:bot-deliveries:list',
   BOT_DELIVERY_RETRY: 'maker:bot-delivery:retry',
   BOT_LIFECYCLE_ACTION: 'maker:bot-lifecycle:action',
+  BOT_EVENT_SUBSCRIPTIONS_LIST: 'maker:bot-event-subscriptions:list',
+  BOT_EVENT_SUBSCRIPTION_UPSERT: 'maker:bot-event-subscription:upsert',
+  BOT_INBOX_LIST: 'maker:bot-inbox:list',
+  BOT_INBOX_RETRY: 'maker:bot-inbox:retry',
 } as const;
 
 /**
@@ -860,6 +864,7 @@ export const MAKER_PUSH = {
   BOT_AUTOMATION_CHANGED: 'maker:bot-automation:changed',
   BOT_DELIVERY_CHANGED: 'maker:bot-delivery:changed',
   BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',
+  BOT_INBOX_CHANGED: 'maker:bot-inbox:changed',
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,
    * 经 device-link tap 转发给控制端(account 级 → sessions topic),控制端刷新远程草稿显示镜像。

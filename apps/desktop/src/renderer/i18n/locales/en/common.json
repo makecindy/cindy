@@ -5544,6 +5544,38 @@
         "resume-failed": "Bot resume failed"
       }
     },
+    "inbox": {
+      "title": "Task event inbox",
+      "description": "Subscribe to task outcomes and decision states. The Bot wakes from this durable inbox, inspects the current task, and can deliver its own summary to mounted channels.",
+      "defaultSubscriptionName": "Task outcomes and decisions",
+      "watchTaskStates": "Watch task states automatically",
+      "saving": "Saving…",
+      "pending": "Waiting",
+      "processing": "Handling",
+      "failed": "Needs attention",
+      "timeline": "Event timeline",
+      "ruleSummary": "Watching completed, failed, awaiting decision, awaiting acceptance, and awaiting controller states.",
+      "pausedSummary": "Automatic task-event watching is paused.",
+      "refresh": "Refresh task events",
+      "loading": "Loading task events…",
+      "emptyWatching": "Watching is active. New matching task events will appear here and wake this Bot.",
+      "emptyPaused": "Turn on watching to give this Bot a durable task-event inbox.",
+      "loadFailed": "Task events could not be loaded.",
+      "saveFailed": "The task-event subscription could not be saved.",
+      "retryFailed": "This task event could not be retried.",
+      "retry": "Retry task event",
+      "openTask": "Open source task",
+      "untitledTask": "Untitled task",
+      "sidebarAttention": "{{count}} task events need attention",
+      "status": { "pending": "Waiting", "processing": "Handling", "handled": "Handled", "failed": "Failed", "skipped": "Skipped" },
+      "events": {
+        "session": {
+          "turn": { "completed": "Task turn completed", "failed": "Task turn failed" },
+          "metadata": { "changed": "Task state changed" },
+          "decision": { "required": "Task needs a decision" }
+        }
+      }
+    },
     "adapterBoundaryTitle": "Adapter boundary preserved",
     "adapterBoundaryDescription": "Telegram replies, Feishu cards, Slack threads and local delivery remain owned by their adapters. This screen only provides Bot identity and task projection.",
     "backToChat": "Back to chat",
