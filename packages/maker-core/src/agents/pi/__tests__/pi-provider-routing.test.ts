@@ -392,6 +392,80 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('serializes inheritModels Grok 4.6 capability corrections into models.json', async () => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: ['low', 'medium', 'high', 'xhigh'],
+          defaultEffort: 'high',
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'xai',
+          sourceProviderId: 'xai',
+          name: 'xAI',
+          baseUrl: 'http://127.0.0.1:9988/v1',
+          inheritModels: true,
+          models: [{
+            id: 'grok-4.6',
+            wireId: 'grok-4.6',
+            api: 'openai-completions',
+            reasoning: true,
+            thinkingLevelMap: {
+              minimal: null,
+              low: 'low',
+              medium: 'medium',
+              high: 'high',
+              xhigh: 'xhigh',
+              max: null,
+            },
+            compat: {
+              supportsStore: false,
+              supportsDeveloperRole: false,
+              supportsReasoningEffort: true,
+            },
+          }],
+        }],
+        env: {},
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'grok-46-capability-correction',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      effort: 'xhigh',
+    });
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: Record<string, { models?: Array<Record<string, unknown>> }> };
+    expect(models.providers.xai?.models).toEqual([
+      expect.objectContaining({
+        id: 'grok-4.6',
+        api: 'openai-completions',
+        reasoning: true,
+        thinkingLevelMap: expect.objectContaining({ xhigh: 'xhigh' }),
+        compat: expect.objectContaining({ supportsReasoningEffort: true }),
+      }),
+    ]);
+    expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'xhigh' });
+    await handle.close();
+  });
+
   it('routes a persisted BYOM id through its namespaced PI runtime provider', async () => {
     const authProviderIds: Array<string | null | undefined> = [];
     const deps: AgentDeps = {

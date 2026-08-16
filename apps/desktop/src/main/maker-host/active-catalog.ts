@@ -215,6 +215,18 @@ let localOverrides: ModelCatalogOverrides = EMPTY_MODEL_CATALOG_OVERRIDES;
 let lastPlanWarnings: ModelPlaneWarning[] = [];
 
 type Effort = CatalogModel['efforts'][number];
+const EFFORT_RANK: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+
+/** Union discovery with the known official ladder so an incomplete SuperGrok payload cannot hide xhigh.
+ * Official source (2026-08-16): https://docs.x.ai/developers/model-capabilities/text/reasoning
+ * Grok 4.6 = low | medium | high (default) | xhigh. */
+function mergeKnownXaiEfforts(
+  discovered: readonly Effort[] | undefined,
+  baseline: readonly Effort[] | undefined,
+): Effort[] {
+  const seen = new Set<Effort>([...(discovered ?? []), ...(baseline ?? [])]);
+  return EFFORT_RANK.filter((effort) => seen.has(effort));
+}
 
 function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
   return (model.agents ?? []).filter((agent) => {
@@ -614,13 +626,18 @@ function materializeXaiAccountModels(
       xaiCatalogModelById(provider, entry.id, agent) ??
       xaiCatalogModelById(provider, entry.id, 'pi');
     const registry = modelRegistryMetaFields('xai', agent, entry.id);
-    const efforts = entry.efforts
-      ? [...entry.efforts]
-      : [...(registry?.efforts ?? catalogModel?.efforts ?? [])];
+    const efforts = mergeKnownXaiEfforts(
+      entry.efforts,
+      registry?.efforts ?? catalogModel?.efforts,
+    );
     const requestedDefault =
-      entry.defaultEffort !== undefined
-        ? entry.defaultEffort
-        : (registry?.defaultEffort ?? catalogModel?.defaultEffort ?? null);
+      registry?.defaultEffort != null && efforts.includes(registry.defaultEffort)
+        ? registry.defaultEffort
+        : catalogModel?.defaultEffort != null && efforts.includes(catalogModel.defaultEffort)
+          ? catalogModel.defaultEffort
+          : entry.defaultEffort !== undefined
+            ? entry.defaultEffort
+            : null;
     const defaultEffort =
       requestedDefault !== null && efforts.includes(requestedDefault)
         ? requestedDefault

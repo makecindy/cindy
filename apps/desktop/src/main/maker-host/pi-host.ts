@@ -474,6 +474,9 @@ export function buildPiSubscriptionNativeProviders(
   retainedOpenAiModel?: ModelDescriptor | null,
 ): PiNativeProvidersResult {
   const providers: PiNativeProviderSpec[] = [];
+  const officialXaiById = new Map(
+    (officialPiModels('xai') ?? []).map((model) => [model.id, model]),
+  );
   const env: Record<string, string> = {
     [PI_OPENAI_PROXY_KEY_ENV]: piOpenaiProxyPlaceholderJwt(),
     [PI_XAI_PROXY_API_KEY_ENV]: PI_PROVIDER_AUTH_PLACEHOLDER_KEY,
@@ -566,6 +569,9 @@ export function buildPiSubscriptionNativeProviders(
           !!model.piApi &&
           !!bundledModel &&
           bundledModel.api !== model.piApi;
+        const officialModel = sourceProviderId === 'xai' ? officialXaiById.get(wireId) : undefined;
+        const officialThinking = officialXaiThinkingSpec(officialModel);
+        const capabilityCorrection = xaiOfficialCapabilityCorrection(bundledModel, officialModel);
         const isRegistryBaselineOverlay = sourceProviderId === 'openai' && !!bundledModel;
         const catalogCost = catalogCostForPiNative(model.cost);
         if (isRegistryBaselineOverlay) {
@@ -602,6 +608,19 @@ export function buildPiSubscriptionNativeProviders(
           };
         }
         const preserved = isProtocolCorrection ? bundledModel : contextProfileTemplate;
+        const thinkingLevelMap =
+          capabilityCorrection?.thinkingLevelMap
+          ?? officialThinking?.thinkingLevelMap
+          ?? (preserved?.thinkingLevelMap
+            ? { ...preserved.thinkingLevelMap }
+            : model.efforts.length > 0
+              ? Object.fromEntries(
+                  PI_REASONING_EFFORTS.map((effort) => [
+                    effort,
+                    model.efforts.includes(effort) ? effort : null,
+                  ]),
+                )
+              : undefined);
         return {
           id: model.id,
           wireId,
@@ -623,13 +642,17 @@ export function buildPiSubscriptionNativeProviders(
               listedModelIdsByProvider?.get(piProviderId) ??
               listedPiModelIds(bundledModelsByProvider)?.get(piProviderId);
             if (!listedIds || listedIds.has(wireId)) return {};
-            return { catalogAddition: true, api: model.piApi ?? 'openai-responses' };
+            return { catalogAddition: true };
           })(),
-          ...(sourceProviderId !== 'openai' &&
-          model.piApi &&
-          (isAnnotatedAddition || isProtocolCorrection)
-            ? { api: model.piApi }
-            : {}),
+          ...(isXaiCatalogAddition
+            ? { api: model.piApi ?? 'openai-responses' }
+            : capabilityCorrection
+              ? { api: capabilityCorrection.api }
+            : sourceProviderId !== 'openai' &&
+                model.piApi &&
+                (isAnnotatedAddition || isProtocolCorrection)
+              ? { api: model.piApi }
+              : {}),
           name: isContextProfileAddition ? model.name : (preserved?.name ?? model.name),
           contextWindow: isContextProfileAddition
             ? model.contextWindow
@@ -639,31 +662,30 @@ export function buildPiSubscriptionNativeProviders(
             : model.maxOutput
               ? { maxTokens: model.maxOutput }
               : {}),
-          reasoning: preserved?.reasoning ?? model.efforts.length > 0,
+          reasoning:
+            capabilityCorrection?.reasoning
+            ?? officialThinking?.reasoning
+            ?? preserved?.reasoning
+            ?? model.efforts.length > 0,
           ...(preserved?.input
             ? { input: [...preserved.input] }
             : model.supportsImageInput === true
               ? { input: ['text', 'image'] as Array<'text' | 'image'> }
               : {}),
-          ...(preserved?.thinkingLevelMap
-            ? { thinkingLevelMap: { ...preserved.thinkingLevelMap } }
-            : model.efforts.length > 0
-              ? {
-                  thinkingLevelMap: Object.fromEntries(
-                    PI_REASONING_EFFORTS.map((effort) => [
-                      effort,
-                      model.efforts.includes(effort) ? effort : null,
-                    ]),
-                  ),
-                }
-              : {}),
+          ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
           ...(preserved?.cost
             ? { cost: { ...preserved.cost } }
             : catalogCost
               ? { cost: catalogCost }
               : {}),
           ...(preserved?.headers ? { headers: { ...preserved.headers } } : {}),
-          ...(preserved?.compat ? { compat: structuredClone(preserved.compat) } : {}),
+          ...(capabilityCorrection?.compat
+            ? { compat: capabilityCorrection.compat }
+            : isXaiCatalogAddition && officialThinking?.compat
+              ? { compat: officialThinking.compat }
+            : preserved?.compat
+              ? { compat: structuredClone(preserved.compat) }
+              : {}),
         };
       }),
     });
@@ -942,6 +964,65 @@ const piModelCatalog = piModelCatalogJson as unknown as {
 /** Keep Cindy's historical xai/ ids while Pi's official native provider uses bare model ids. */
 export function piNativeModelId(providerId: string, model: string): string {
   return providerId === 'xai' && model.startsWith('xai/') ? model.slice('xai/'.length) : model;
+}
+
+function reasoningCompatEnabled(compat: Record<string, unknown> | undefined): boolean {
+  return compat?.supportsReasoningEffort !== false;
+}
+
+function thinkingMapsDiffer(
+  left: PiNativeModelSpec['thinkingLevelMap'] | undefined,
+  right: PiNativeModelSpec['thinkingLevelMap'] | undefined,
+): boolean {
+  return PI_REASONING_EFFORTS.some((level) => (left?.[level] ?? null) !== (right?.[level] ?? null));
+}
+
+/**
+ * Publish a full inheritModels replacement when Pi's bundled row is behind the
+ * official xAI ladder. Overlay rows without `api` are dropped (writeModelsJson
+ * only serializes api / catalogAddition); keeping bundled.api preserves protocol
+ * while replacing thinkingLevelMap and supportsReasoningEffort.
+ *
+ * Source: https://docs.x.ai/developers/model-capabilities/text/reasoning (2026-08-16)
+ * Grok 4.6 = low | medium | high (default) | xhigh.
+ */
+function officialXaiThinkingSpec(
+  official: PiNativeModelSpec | undefined,
+): Pick<PiNativeModelSpec, 'reasoning' | 'thinkingLevelMap' | 'compat'> | null {
+  if (!official?.thinkingLevelMap) return null;
+  return {
+    reasoning: official.reasoning !== false,
+    thinkingLevelMap: Object.fromEntries(
+      PI_REASONING_EFFORTS.map((level) => [level, official.thinkingLevelMap?.[level] ?? null]),
+    ),
+    compat: {
+      ...(official.compat ?? {}),
+      supportsReasoningEffort: reasoningCompatEnabled(official.compat),
+    },
+  };
+}
+
+function xaiOfficialCapabilityCorrection(
+  bundled: PiBundledModelInfo | undefined,
+  official: PiNativeModelSpec | undefined,
+): Pick<PiNativeModelSpec, 'api' | 'reasoning' | 'thinkingLevelMap' | 'compat'> | null {
+  if (!bundled || !official?.thinkingLevelMap) return null;
+  const mapDiffers = thinkingMapsDiffer(bundled.thinkingLevelMap, official.thinkingLevelMap);
+  const compatDiffers =
+    reasoningCompatEnabled(bundled.compat) !== reasoningCompatEnabled(official.compat);
+  if (!mapDiffers && !compatDiffers) return null;
+  return {
+    api: bundled.api,
+    reasoning: official.reasoning !== false,
+    thinkingLevelMap: Object.fromEntries(
+      PI_REASONING_EFFORTS.map((level) => [level, official.thinkingLevelMap?.[level] ?? null]),
+    ),
+    compat: {
+      ...(bundled.compat ?? {}),
+      ...(official.compat ?? {}),
+      supportsReasoningEffort: reasoningCompatEnabled(official.compat),
+    },
+  };
 }
 
 function officialPiModels(providerId: string): PiNativeModelSpec[] | null {
