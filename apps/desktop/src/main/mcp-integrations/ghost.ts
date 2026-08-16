@@ -86,6 +86,7 @@ import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
 import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
 import { createForgeIconConverter } from './forgeIconConversion.js';
 import { forkForgeIconConversionHost } from './forgeIconConversionHost.js';
+import { isFrozenBuiltinPluginAllowed } from './codexBuiltinToolPolicy.js';
 import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 
@@ -1094,7 +1095,10 @@ export function collectCindyMediaUrls(
   }
 }
 
-function visibleChipGhosts(workdir: string | null): InstalledGhost[] {
+function visibleChipGhosts(
+  workdir: string | null,
+  vendorOptions?: Readonly<Record<string, unknown>>,
+): InstalledGhost[] {
   return getGhostManager()
     .list()
     .filter(
@@ -1103,6 +1107,7 @@ function visibleChipGhosts(workdir: string | null): InstalledGhost[] {
         isGhostAvailableForActiveSession(ghost.manifest.id) &&
         ghost.manifest.kind === 'chip' &&
         ghostHasTools(ghost) &&
+        isFrozenBuiltinPluginAllowed(vendorOptions, ghost.manifest.id) &&
         !isGhostDisabledForWorkdir(ghost.manifest.id, workdir),
     );
 }
@@ -1182,6 +1187,13 @@ export function getCindyGhostsMcpDeps(
 ): CindyGhostsMcpDeps {
   const resolveSessionContext = (): LiziMcpSessionContext | undefined =>
     getLiziMcpSessionContext() ?? sessionCtx;
+  const isGhostAllowedByFrozenProfile = (ghostId: string): boolean =>
+    isFrozenBuiltinPluginAllowed(resolveSessionContext()?.vendorOptions, ghostId);
+  const frozenProfileDenied = () => ({
+    ok: false as const,
+    errorCode: 'GHOST_DISABLED_IN_WORKDIR' as const,
+    message: '当前 Bot Profile 未启用该插件；不要重试，改用已授权能力或让用户更新 Bot 配置并 Renew。',
+  });
   return {
     // 花名册快照(server 装配时取一次):唤醒的芯片意识 + 召回线索,进
     // ghost_list 工具描述做语义召回。system 段由 getGhostRosterPrompt 在每个
@@ -1197,9 +1209,10 @@ export function getCindyGhostsMcpDeps(
     // 宁缺勿全,不注入工具描述;Codex 正常 startSession 的 developerInstructions
     // 会在拿到真实 workdir 后单独装配 system 段。
     getRosterItems() {
-      const workdir = resolveSessionContext()?.workingDir;
+      const context = resolveSessionContext();
+      const workdir = context?.workingDir;
       if (!workdir) return [];
-      return visibleChipGhosts(workdir)
+      return visibleChipGhosts(workdir, context?.vendorOptions)
         .map((g) => {
           const recall = ghostRecall(g);
           return {
@@ -1213,15 +1226,20 @@ export function getCindyGhostsMcpDeps(
     async listAwakeGhosts(): Promise<CindyGhostInfo[]> {
       // 现查同样按会话 workdir 滤掉目录级禁用的意识(ALS 恢复的真实语境
       // 优先)——模型主动 ghost_list 也看不到被禁用的条目,清单层面干净。
-      const workdir = resolveSessionContext()?.workingDir ?? null;
-      return visibleChipGhosts(workdir)
+      const context = resolveSessionContext();
+      const workdir = context?.workingDir ?? null;
+      return visibleChipGhosts(workdir, context?.vendorOptions)
         .map(toCindyGhostInfo);
     },
     async getAwakeGhost(ghostId) {
+      if (!isGhostAllowedByFrozenProfile(ghostId)) return frozenProfileDenied();
       const workdir = resolveSessionContext()?.workingDir ?? null;
       const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
       if (!visibility.ok) return visibility;
-      const visible = visibleChipGhosts(workdir).find(
+      const visible = visibleChipGhosts(
+        workdir,
+        resolveSessionContext()?.vendorOptions,
+      ).find(
         (ghost) => ghost.manifest.id === ghostId,
       );
       if (visible) {
@@ -1234,6 +1252,9 @@ export function getCindyGhostsMcpDeps(
       };
     },
     async readGhostManual({ ghostId, path: manualPath }) {
+      if (!isGhostAllowedByFrozenProfile(ghostId)) {
+        return { ...frozenProfileDenied(), manual: [], content: '' };
+      }
       const workdir = resolveSessionContext()?.workingDir ?? null;
       const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
       if (!visibility.ok) {
@@ -1271,6 +1292,7 @@ export function getCindyGhostsMcpDeps(
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
       const sessionWorkdir = sessionContext?.workingDir ?? null;
+      if (!isGhostAllowedByFrozenProfile(ghostId)) return frozenProfileDenied();
       const initialVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
@@ -1519,6 +1541,7 @@ export function getCindyGhostsMcpDeps(
       // Pre-dispatch revalidation: attachment grants and dir tickets may have
       // taken time; confirm the target is still available before committing the
       // callId and dispatching to the sandbox.
+      if (!isGhostAllowedByFrozenProfile(ghostId)) return frozenProfileDenied();
       const preDispatchVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
@@ -1563,6 +1586,7 @@ export function getCindyGhostsMcpDeps(
         }
       }
       // Full revalidation after session-context await (DB query may take time)
+      if (!isGhostAllowedByFrozenProfile(ghostId)) return frozenProfileDenied();
       const postCtxVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,

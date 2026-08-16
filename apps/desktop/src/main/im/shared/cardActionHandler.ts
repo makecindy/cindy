@@ -1385,125 +1385,129 @@ export function createCardActionHandler(
         return;
       }
       try {
-        await runInImAccountGeneration(accountGeneration, async () => {
-          log.info(
-            `card action sender=...${event.senderId.slice(-8)} button=${event.buttonId} payload=${JSON.stringify(event.payload).slice(0, 200)}`,
-          );
-
-          // model:pick is NOT an InteractionRequest reply — it's a direct command
-          // triggered by the /model slash command's picker card. Handle it
-          // separately: update DB + live session, patch card to "已切换".
-          if (event.buttonId === 'model:pick') {
-            await handleModelPick(im, event);
-            return;
-          }
-
-          // Same shape as model:pick — direct command from /permission picker card.
-          if (
-            event.buttonId === 'permmode:pick'
-            || event.buttonId === 'permmode:confirm-full-access'
-          ) {
-            await handlePermissionModePick(im, event);
-            return;
-          }
-          if (event.buttonId === 'permmode:cancel-full-access') {
-            await handlePermissionModeCancel(im, event);
-            return;
-          }
-          if (event.buttonId === 'permissionMode:fix-auto') {
-            await handlePermissionModeFixToAuto(im, event);
-            return;
-          }
-
-          // /ctr picker —
-          //   pick (workspace) → 替换为 session picker
-          //   back            → 替换回 workspace picker
-          //   session-pick    → attach binding + 接力 brief
-          //   new             → 新建 session + attach
-          //   exit            → patch 为 resolved 卡片, 不动 session
-          if (event.buttonId === 'control:pick') {
-            await handleControlPick(im, event);
-            return;
-          }
-          if (event.buttonId === 'control:back') {
-            await handleControlBack(im, event);
-            return;
-          }
-          if (event.buttonId === 'control:session-pick') {
-            await handleControlSessionPick(im, event);
-            return;
-          }
-          if (event.buttonId === 'control:new') {
-            await handleControlNewSession(im, event);
-            return;
-          }
-          if (event.buttonId === 'control:exit') {
-            await handleControlExit(im, event);
-            return;
-          }
-          if (event.buttonId === 'control:thread-exit') {
-            await handleControlThreadExit(im, event);
-            return;
-          }
-          if (event.buttonId === 'control:start') {
-            await handleControlStart(im, event);
-            return;
-          }
-
-          // /project picker — pick(项目) / dialogue(回托管对话目录) / cancel
-          if (event.buttonId === 'project:pick') {
-            await handleProjectSwitch(im, event, 'project');
-            return;
-          }
-          if (event.buttonId === 'project:dialogue') {
-            await handleProjectSwitch(im, event, 'dialogue');
-            return;
-          }
-          if (event.buttonId === 'project:cancel') {
-            const projectUi = adapter.ui.cards.project;
-            if (projectUi) {
-              await patchProjectCard(im, event.messageId, projectUi.resolvedCancel);
-            }
-            return;
-          }
-
-          const decision = decisionFromPress(event);
-          if (!decision) {
-            log.warn(`unknown buttonId=${event.buttonId} — ignoring`);
-            return;
-          }
-
-          const requestId = String(event.payload.requestId ?? '');
-          if (!requestId) {
-            log.warn('no requestId in payload — ignoring');
-            return;
-          }
-
-          const resolved = resolvePending(requestId, decision);
-          if (!resolved) {
-            // 卡片正文**不动**: 交互被作废时 turnRunner 已经把它收口了(dropInteractionCard),
-            // 而这里拿不到的另一半原因是"刚刚已经成功处理过" —— 那种情况改写成过期态
-            // 等于把一次已经生效的授权报成失效。渠道侧的气泡提示已足够告知这次点击无效。
-            log.warn(
-              `no pending interaction for requestId=...${requestId.slice(-8)} (already resolved? user double-tapped?)`,
+        await runInImAccountGeneration(
+          accountGeneration,
+          async () => {
+            log.info(
+              `card action sender=...${event.senderId.slice(-8)} button=${event.buttonId} payload=${JSON.stringify(event.payload).slice(0, 200)}`,
             );
-            return;
-          }
 
-          // Patch the card to a resolved state so the user sees their choice took.
-          // 授权卡保留原始正文(工具名 + 参数预览)再追加决策结果 — 用户要能
-          // 回看自己批准的是什么; 其它交互卡维持整卡替换的旧形态。
-          const resolvedLabel = describeDecision(decision);
-          try {
-            const spec = resolved.permissionCard
-              ? cards.buildResolvedPermissionCard(resolved.permissionCard, resolvedLabel)
-              : cards.buildResolvedCard(resolvedLabel);
-            await im.updateInteractiveCard(event.messageId, spec);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(`updateInteractiveCard failed (non-fatal): ${msg}`);
-          }
-        });
+            // model:pick is NOT an InteractionRequest reply — it's a direct command
+            // triggered by the /model slash command's picker card. Handle it
+            // separately: update DB + live session, patch card to "已切换".
+            if (event.buttonId === 'model:pick') {
+              await handleModelPick(im, event);
+              return;
+            }
+
+            // Same shape as model:pick — direct command from /permission picker card.
+            if (
+              event.buttonId === 'permmode:pick' ||
+              event.buttonId === 'permmode:confirm-full-access'
+            ) {
+              await handlePermissionModePick(im, event);
+              return;
+            }
+            if (event.buttonId === 'permmode:cancel-full-access') {
+              await handlePermissionModeCancel(im, event);
+              return;
+            }
+            if (event.buttonId === 'permissionMode:fix-auto') {
+              await handlePermissionModeFixToAuto(im, event);
+              return;
+            }
+
+            // /ctr picker —
+            //   pick (workspace) → 替换为 session picker
+            //   back            → 替换回 workspace picker
+            //   session-pick    → attach binding + 接力 brief
+            //   new             → 新建 session + attach
+            //   exit            → patch 为 resolved 卡片, 不动 session
+            if (event.buttonId === 'control:pick') {
+              await handleControlPick(im, event);
+              return;
+            }
+            if (event.buttonId === 'control:back') {
+              await handleControlBack(im, event);
+              return;
+            }
+            if (event.buttonId === 'control:session-pick') {
+              await handleControlSessionPick(im, event);
+              return;
+            }
+            if (event.buttonId === 'control:new') {
+              await handleControlNewSession(im, event);
+              return;
+            }
+            if (event.buttonId === 'control:exit') {
+              await handleControlExit(im, event);
+              return;
+            }
+            if (event.buttonId === 'control:thread-exit') {
+              await handleControlThreadExit(im, event);
+              return;
+            }
+            if (event.buttonId === 'control:start') {
+              await handleControlStart(im, event);
+              return;
+            }
+
+            // /project picker — pick(项目) / dialogue(回托管对话目录) / cancel
+            if (event.buttonId === 'project:pick') {
+              await handleProjectSwitch(im, event, 'project');
+              return;
+            }
+            if (event.buttonId === 'project:dialogue') {
+              await handleProjectSwitch(im, event, 'dialogue');
+              return;
+            }
+            if (event.buttonId === 'project:cancel') {
+              const projectUi = adapter.ui.cards.project;
+              if (projectUi) {
+                await patchProjectCard(im, event.messageId, projectUi.resolvedCancel);
+              }
+              return;
+            }
+
+            const decision = decisionFromPress(event);
+            if (!decision) {
+              log.warn(`unknown buttonId=${event.buttonId} — ignoring`);
+              return;
+            }
+
+            const requestId = String(event.payload.requestId ?? '');
+            if (!requestId) {
+              log.warn('no requestId in payload — ignoring');
+              return;
+            }
+
+            const resolved = resolvePending(requestId, decision);
+            if (!resolved) {
+              // 卡片正文**不动**: 交互被作废时 turnRunner 已经把它收口了(dropInteractionCard),
+              // 而这里拿不到的另一半原因是"刚刚已经成功处理过" —— 那种情况改写成过期态
+              // 等于把一次已经生效的授权报成失效。渠道侧的气泡提示已足够告知这次点击无效。
+              log.warn(
+                `no pending interaction for requestId=...${requestId.slice(-8)} (already resolved? user double-tapped?)`,
+              );
+              return;
+            }
+
+            // Patch the card to a resolved state so the user sees their choice took.
+            // 授权卡保留原始正文(工具名 + 参数预览)再追加决策结果 — 用户要能
+            // 回看自己批准的是什么; 其它交互卡维持整卡替换的旧形态。
+            const resolvedLabel = describeDecision(decision);
+            try {
+              const spec = resolved.permissionCard
+                ? cards.buildResolvedPermissionCard(resolved.permissionCard, resolvedLabel)
+                : cards.buildResolvedCard(resolvedLabel);
+              await im.updateInteractiveCard(event.messageId, spec);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              log.warn(`updateInteractiveCard failed (non-fatal): ${msg}`);
+            }
+          },
+          channel,
+        );
       } catch (err) {
         if (isImAccountScopeClosedError(err)) {
           log.info(`drop card action from stale account generation channel=${channel}`);

@@ -443,7 +443,11 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     return { kind: 'idle' };
   }
 
-  async sendText(userId: string, text: string): Promise<{ messageId: string }> {
+  async sendText(
+    userId: string,
+    text: string,
+    opts?: { threadTs?: string; idempotencyKey?: string },
+  ): Promise<{ messageId: string }> {
     const active = this.#activeTasks.get(userId);
     const epoch = this.#epoch;
     if (!epoch || this.#compatibilityDisabled || epoch.abort.signal.aborted) {
@@ -458,7 +462,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         })
       )?.contextToken;
     if (!contextToken) throw new Error('WECHAT_PEER_NOT_KNOWN');
-    const clientId = randomUUID();
+    const clientId = outboundClientId(opts?.idempotencyKey);
     await epoch.transport.sendMessage(
       {
         peerId: userId,
@@ -535,11 +539,20 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     return true;
   }
 
-  sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }> {
-    return this.sendText(userId, filterWechatMarkdown(markdown));
+  sendMarkdownText(
+    userId: string,
+    markdown: string,
+    opts?: { threadTs?: string; idempotencyKey?: string },
+  ): Promise<{ messageId: string }> {
+    return this.sendText(userId, filterWechatMarkdown(markdown), opts);
   }
 
-  async sendFile(userId: string, absPath: string, displayName?: string): Promise<SendFileResult> {
+  async sendFile(
+    userId: string,
+    absPath: string,
+    displayName?: string,
+    opts?: { threadTs?: string; idempotencyKey?: string },
+  ): Promise<SendFileResult> {
     const epoch = this.#epoch;
     if (!epoch || this.#compatibilityDisabled || epoch.abort.signal.aborted) {
       return { ok: false, reason: 'SEND_FAIL' };
@@ -572,7 +585,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       if (this.#compatibilityDisabled || epoch.abort.signal.aborted) {
         return { ok: false, reason: 'SEND_FAIL' };
       }
-      const clientId = randomUUID();
+      const clientId = outboundClientId(opts?.idempotencyKey);
       await epoch.transport.sendMedia(
         {
           peerId: userId,
@@ -2015,6 +2028,10 @@ function machineErrorCode(error: unknown): string {
   return error instanceof Error ? safeMachineCode(error.message) : 'unknown_error';
 }
 
+function outboundClientId(idempotencyKey?: string): string {
+  return idempotencyKey?.trim() || randomUUID();
+}
+
 export const __testing = {
   activePeerIdForSession,
   acceptedPollTaskIds,
@@ -2022,6 +2039,7 @@ export const __testing = {
   classifyOutboxSendError,
   hasWechatTaskContent,
   normalizeFinalOutputText,
+  outboundClientId,
   formatWechatInteractionPrompt,
   parseWechatInteractionReply,
   stopActiveWechatTurns,

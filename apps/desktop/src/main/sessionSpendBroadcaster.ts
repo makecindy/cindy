@@ -35,6 +35,14 @@ import { currentLedgerCurrency } from './usage/ledgerCurrency.js';
 
 const log = createLogger('sessionSpendBroadcaster');
 
+type SessionTokenUsageObserver = (payload: SessionTokensPayload) => void | Promise<void>;
+let sessionTokenUsageObserver: SessionTokenUsageObserver | null = null;
+
+/** Runtime-owned observer; used by bounded child tasks without coupling this module to Maker IPC. */
+export function setSessionTokenUsageObserver(observer: SessionTokenUsageObserver | null): void {
+  sessionTokenUsageObserver = observer;
+}
+
 /** IPC channel: main → renderer 推单 session 累计 cost 变化。 */
 export const USAGE_SESSION_SPEND_CHANGED = 'usage:session-spend-changed';
 /** IPC channel: main → renderer 推单 session 累计 token 变化。 */
@@ -195,8 +203,17 @@ export async function recordSessionTurnTokens(
       .from(sessions)
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
+    const payload = { sessionId, totalTokens: row?.totalTokenUsage ?? 0 };
+    try {
+      await sessionTokenUsageObserver?.(payload);
+    } catch (observerError) {
+      log.warn(
+        'session token usage observer failed:',
+        observerError instanceof Error ? observerError.message : String(observerError),
+      );
+    }
     if (!isOwnerScopeCurrent(ownerScope)) return;
-    broadcastTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 }, ownerScope);
+    broadcastTokens(payload, ownerScope);
   } catch (err) {
     log.warn('recordSessionTurnTokens failed:', err instanceof Error ? err.message : String(err));
   }

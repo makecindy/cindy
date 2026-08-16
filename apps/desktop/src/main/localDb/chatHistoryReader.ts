@@ -47,6 +47,7 @@ export interface HistoryPage<T> {
 // ── list_workdirs ───────────────────────────────────────────────────────────
 
 export interface ListWorkdirsParams {
+  sessionIds?: string[] | null;
   limit: number;
   cursor: HistoryCursor | null; // cursor.createdAt = lastSessionAt 的 ms; cursor.id = workingDir 字符串
   order: HistoryOrder;
@@ -72,6 +73,10 @@ export interface WorkdirAggregate {
 export async function listWorkdirsForHistory(
   params: ListWorkdirsParams,
 ): Promise<HistoryPage<WorkdirAggregate>> {
+  const scopedSessionIds = params.sessionIds ?? null;
+  if (scopedSessionIds !== null && scopedSessionIds.length === 0) {
+    return { items: [], nextCursor: null, hasMore: false };
+  }
   const db = getDbClient().drizzle;
   const orderFn = params.order === 'asc' ? asc : desc;
   // SQLite GROUP_CONCAT 没有内置 DISTINCT 区分; 用 sql 表达式更直观, 后端再 split
@@ -82,6 +87,7 @@ export async function listWorkdirsForHistory(
 
   // 基础过滤: 不要 deleted, 不要无 workingDir
   const baseConds = [ne(sessions.status, 'deleted'), isNotNull(sessions.workingDir)];
+  if (scopedSessionIds !== null) baseConds.push(inArray(sessions.id, scopedSessionIds));
   // 排除 app-managed dialogue 子树(<userData>/dialogues/<day>/<sessionId>):
   // 每个 standalone dialogue 会话一个目录, 是无界增长源——不排除的话大聊天历史
   // 用户一次 list_workdirs 会物化上千个单会话组(Codex review)。它们是内部
@@ -157,6 +163,7 @@ export async function listWorkdirsForHistory(
 // ── list_sessions ───────────────────────────────────────────────────────────
 
 export interface ListSessionsParams {
+  sessionIds?: string[] | null;
   workdir: string | null;
   fromMs: number | null;
   toMs: number | null;
@@ -187,10 +194,15 @@ export interface SessionSummary {
 export async function listSessionsForHistory(
   params: ListSessionsParams,
 ): Promise<HistoryPage<SessionSummary>> {
+  const scopedSessionIds = params.sessionIds ?? null;
+  if (scopedSessionIds !== null && scopedSessionIds.length === 0) {
+    return { items: [], nextCursor: null, hasMore: false };
+  }
   const db = getDbClient().drizzle;
   const orderFn = params.order === 'asc' ? asc : desc;
 
   const conds = [];
+  if (scopedSessionIds !== null) conds.push(inArray(sessions.id, scopedSessionIds));
   if (!params.includeDeleted) conds.push(ne(sessions.status, 'deleted'));
   if (params.workdir !== null) {
     const candidates = await resolveStoredWorkingDirCandidates(params.workdir);
@@ -341,6 +353,9 @@ const MAX_WORKDIR_SESSION_RESOLUTION = 5000;
 export async function getMessagesForHistory(
   params: GetMessagesParams,
 ): Promise<HistoryPage<HistoryMessage>> {
+  if (params.sessionIds !== null && params.sessionIds.length === 0) {
+    return { items: [], nextCursor: null, hasMore: false };
+  }
   const db = getDbClient().drizzle;
   const orderFn = params.order === 'asc' ? asc : desc;
 

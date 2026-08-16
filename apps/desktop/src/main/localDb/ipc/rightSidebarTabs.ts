@@ -35,7 +35,7 @@ const log = createLogger('rightSidebarTabs');
 
 /** 单 session 最多 20 个 tab,超抛 RIGHT_SIDEBAR_TOO_MANY_TABS。 */
 const MAX_TABS_PER_SESSION = 20;
-const SINGLETON_TAB_KINDS = new Set(['subagents']);
+const SINGLETON_TAB_KINDS = new Set(['subagents', 'bot-delegations']);
 
 export interface TabRow {
   id: string;

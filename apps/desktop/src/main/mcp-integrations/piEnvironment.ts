@@ -46,7 +46,10 @@ import {
   type CodexHttpBridge,
   withMcpRouteIdentity,
 } from './codexHttpBridge.js';
-import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
+import {
+  CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+  readDisabledBuiltinPluginIds,
+} from './codexBuiltinToolPolicy.js';
 import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plugins.js';
 // 直接取 plugins 模块的 registry 单例,不经 maker-host/index.ts —— 后者 import pi-host,
 // 从 mcp-integrations 反向 import 会成环。
@@ -96,10 +99,12 @@ function cloneRemoteServers(
 
 function isLoopbackMcpHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
-  return normalized === 'localhost'
-    || normalized === '127.0.0.1'
-    || normalized === '::1'
-    || normalized === '[::1]';
+  return (
+    normalized === 'localhost' ||
+    normalized === '127.0.0.1' ||
+    normalized === '::1' ||
+    normalized === '[::1]'
+  );
 }
 
 function isAllowedRemoteMcpUrl(url: URL): boolean {
@@ -123,10 +128,10 @@ function shutdownGeneration(started: StartedPiBridge): Promise<void> {
         // 否则 promise 已 settled(reject), 后续 shutdownGeneration 复用同一
         // promise 永远不重试, 该 generation 残留到进程结束。
         started.shutdownPromise = null;
-        console.error(
-          '[pi-env] bridge shutdown failed — generation retained for retry/diagnosis',
-          { generation: started.generation, error: err instanceof Error ? err.message : String(err) },
-        );
+        console.error('[pi-env] bridge shutdown failed — generation retained for retry/diagnosis', {
+          generation: started.generation,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
   }
   return started.shutdownPromise;
@@ -168,15 +173,22 @@ export async function getPiExtraSpawnConfig(
     releaseGeneration(started);
   };
 
+  const disabledPluginIds = sessionId
+    ? (readDisabledBuiltinPluginIds(sessionCtx?.vendorOptions) ??
+      createPluginRegistry().getDisabledRuntimePluginIds(sessionCtx?.workingDir ?? ''))
+    : [];
   // collab 全局禁用时与 CC/Codex 同闸门:剥掉 orca 类协同 server(cindy_orca /
   // orca_worker_bridge),避免禁用后 pi 仍能建队/发消息(R5 配置审计 H-7)。
   // 只按名字剥协同 server —— cindy_memory / ghost / 外部 HTTP MCP 与 collab
   // 无关,照常注入(CC 的 selectRemoteInjectableServerNames 同语义)。
-  const collabEnabled = createPluginRegistry().isEnabled('collab');
-  const collabGated = (servers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers']) =>
-    collabEnabled
-      ? servers
-      : servers.filter((server) => !REMOTE_COLLAB_SERVER_NAMES.has(server.name));
+  const collabEnabled =
+    createPluginRegistry().isEnabled('collab') && !disabledPluginIds.includes('collab');
+  const capabilityGated = (servers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers']) =>
+    servers.filter((server) => {
+      if (!collabEnabled && REMOTE_COLLAB_SERVER_NAMES.has(server.name)) return false;
+      const pluginId = pluginIdForKnownProviderName(server.name);
+      return !pluginId || !disabledPluginIds.includes(pluginId);
+    });
 
   // 匿名会话:不注册身份、URL 不带 query。工具 handler 拿不到 ctx 时回落业务
   // 错误码(如 LEAD_NOT_SUPPORTED)—— 与改动前一致,不打 401。
@@ -184,7 +196,7 @@ export async function getPiExtraSpawnConfig(
     return {
       mcpBridge: {
         token: bridge?.token ?? '',
-        servers: collabGated([
+        servers: capabilityGated([
           ...(bridge ? serverNames.map((name) => ({ name, url: bridge.url(name) })) : []),
           ...cloneRemoteServers(remoteServers),
         ]),
@@ -198,7 +210,7 @@ export async function getPiExtraSpawnConfig(
   // 让配置变更后的旧活动会话继续使用其启动时快照。
   if (!bridge) {
     return {
-      mcpBridge: { token: '', servers: collabGated(cloneRemoteServers(remoteServers)) },
+      mcpBridge: { token: '', servers: capabilityGated(cloneRemoteServers(remoteServers)) },
       mcpEnv: { ...mcpEnv },
       disposeSessionCtx: disposeLease,
     };
@@ -208,9 +220,6 @@ export async function getPiExtraSpawnConfig(
   // 项目级普通工具策略在此按会话 workdir 冻结进 vendorOptions(与 Codex 的
   // registerCodexMcpThreadContext 同键同语义):bridge 的 per-call gate 据此阻断本项目
   // 停用的内置工具,后续 Settings 变更不影响已在跑的会话(codex review)。
-  const disabledPluginIds = createPluginRegistry().getDisabledRuntimePluginIds(
-    sessionCtx?.workingDir ?? '',
-  );
   // PiAgent 传入的是该 session 专属的可变副本。这里必须保留同一引用：start_team
   // 成功后 MakerSession.setVendorOptions 会原地写入 Lead 身份，既有 HTTP MCP handler
   // 要在下一次 create_worker 调用时立即看到。复制对象会把 bridge 永久冻结在启动态。
@@ -219,9 +228,7 @@ export async function getPiExtraSpawnConfig(
   const liziCtx: LiziMcpSessionContext = {
     agentKind: 'pi',
     sessionId,
-    ...(sessionCtx?.sessionInstanceId
-      ? { sessionInstanceId: sessionCtx.sessionInstanceId }
-      : {}),
+    ...(sessionCtx?.sessionInstanceId ? { sessionInstanceId: sessionCtx.sessionInstanceId } : {}),
     workingDir: sessionCtx?.workingDir ?? '',
     vendorOptions,
     mcpCallerKind: sessionCtx?.mcpCallerKind ?? 'unknown',
@@ -243,9 +250,7 @@ export async function getPiExtraSpawnConfig(
   // 轮 41 CRITICAL:确定性派生(进程级 key + sessionId HMAC, 64 hex 与旧形状一致)
   // —— 同 session 断链重连/恢复复用同一 token, envHash 稳定, daemon 纯 attach
   // 保活生效;桌面重启 → key 变 → 新 token → pi 重建, 两两一致。
-  const sessionToken = createHmac('sha256', PI_BRIDGE_SESSION_KEY)
-    .update(sessionId)
-    .digest('hex');
+  const sessionToken = createHmac('sha256', PI_BRIDGE_SESSION_KEY).update(sessionId).digest('hex');
   let tokenGeneration: number | undefined;
   try {
     tokenGeneration = bridge.registerSessionToken(sessionId, sessionToken);
@@ -255,7 +260,7 @@ export async function getPiExtraSpawnConfig(
     throw error;
   }
   try {
-    const servers = collabGated([
+    const servers = capabilityGated([
       ...serverNames.map((name) => ({
         name,
         url: withMcpRouteIdentity(bridge.url(name), {
@@ -317,10 +322,12 @@ export async function shutdownPiEnvironment(): Promise<void> {
   if (current) current.retired = true;
   await pending?.catch(() => null);
   // 退出/换账号是硬边界：Maker 会话也在关闭，强制收掉所有代际，不等 lease。
-  await Promise.all([...generations].map((generation) => {
-    generation.retired = true;
-    return shutdownGeneration(generation);
-  }));
+  await Promise.all(
+    [...generations].map((generation) => {
+      generation.retired = true;
+      return shutdownGeneration(generation);
+    }),
+  );
   environmentShuttingDown = false;
 }
 
@@ -337,7 +344,10 @@ export function resetPiEnvironmentForTest(): void {
 }
 
 /** bridge 单例懒启动(首个会话触发,失败下次重试)。 */
-async function ensureBridge(providers: McpProvider[], logger: MakerLogger): Promise<StartedPiBridge | null> {
+async function ensureBridge(
+  providers: McpProvider[],
+  logger: MakerLogger,
+): Promise<StartedPiBridge | null> {
   // 轮 40-w4-t10 MEDIUM:关停期间 fail-closed —— 不重启 bridge。
   if (environmentShuttingDown) return null;
   for (;;) {
@@ -389,7 +399,10 @@ async function ensureBridge(providers: McpProvider[], logger: MakerLogger): Prom
         timer.unref?.();
         // pending settle(成功/失败)即取消超时 —— 成功路径 startPromise 保留
         // 该已完成的 pending(缓存命中), 超时不再触发。
-        void pending.then(() => clearTimeout(timer), () => clearTimeout(timer));
+        void pending.then(
+          () => clearTimeout(timer),
+          () => clearTimeout(timer),
+        );
       }),
       pending,
     ]);
@@ -422,13 +435,13 @@ async function doStart(
       return {
         agentKind: active.agentKind,
         workingDir: active.workingDir,
+        ...(active.memoryScopeKey ? { memoryScopeKey: active.memoryScopeKey } : {}),
+        ...(active.remoteHostId ? { remoteHostId: active.remoteHostId } : {}),
         vendorOptions: active.vendorOptions,
         sessionId: active.sessionId,
         mcpCallerKind: active.mcpCallerKind,
         mcpCallerAttested: active.mcpCallerAttested,
-        ...(active.sessionInstanceId
-          ? { sessionInstanceId: active.sessionInstanceId }
-          : {}),
+        ...(active.sessionInstanceId ? { sessionInstanceId: active.sessionInstanceId } : {}),
         getSessionContext: ctx.getSessionContext,
       };
     },
@@ -459,9 +472,12 @@ async function doStart(
       try {
         providerEnv = await provider.getExtraEnv?.(ctx);
       } catch {
-        logger.warn('pi bridge: skipping remote HTTP MCP provider whose environment could not be built', {
-          providerName: provider.name,
-        });
+        logger.warn(
+          'pi bridge: skipping remote HTTP MCP provider whose environment could not be built',
+          {
+            providerName: provider.name,
+          },
+        );
         continue;
       }
 
@@ -480,9 +496,12 @@ async function doStart(
       // mergeLoopbackNoProxy 完全一致，避免 127/8 中其它地址经 HTTP_PROXY 泄密；同时
       // 拒绝 URL 内嵌凭证和非 web 协议。
       if (!isAllowedRemoteMcpUrl(parsedUrl)) {
-        logger.warn('pi bridge: skipping remote HTTP MCP provider outside the URL security boundary', {
-          providerName: provider.name,
-        });
+        logger.warn(
+          'pi bridge: skipping remote HTTP MCP provider outside the URL security boundary',
+          {
+            providerName: provider.name,
+          },
+        );
         continue;
       }
 

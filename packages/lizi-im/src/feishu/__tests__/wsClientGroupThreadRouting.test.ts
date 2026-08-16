@@ -28,10 +28,16 @@ const mocks = {
   getBoundClient: vi.fn(() => null),
   sendText: vi.fn(async () => ({ messageId: 'om_sent' })),
   replyText: vi.fn(async () => ({ messageId: 'om_reply' })),
-  // 返回 null = 开话题失败(降级回群 lane), 单测按用例覆盖。
+  // 返回 degraded = 开话题失败(降级回群 lane), 单测按用例覆盖。
   openThread: vi.fn<
-    () => Promise<{ messageId: string; threadId: string } | null>
-  >(async () => ({ messageId: 'om_opener', threadId: 'omt_new' })),
+    (messageId?: string) => Promise<
+      | { kind: 'opened'; messageId: string; threadId: string }
+      | { kind: 'degraded' }
+      | { kind: 'orphaned'; openerMessageId: string }
+      | { kind: 'unconfirmed' }
+    >
+  >(async () => ({ kind: 'opened', messageId: 'om_opener', threadId: 'omt_new' })),
+  evictOpenThreadOutcome: vi.fn(),
   pushReplyAnchor: vi.fn(),
   pushPatchableOpener: vi.fn(),
   resolveCardLane: vi.fn<(messageId: string, chatId: string) => string | null>(
@@ -82,6 +88,7 @@ vi.doMock('../outbound.js', () => ({
   sendText: mocks.sendText,
   replyText: mocks.replyText,
   openThread: mocks.openThread,
+  evictOpenThreadOutcome: mocks.evictOpenThreadOutcome,
   pushReplyAnchor: mocks.pushReplyAnchor,
   pushPatchableOpener: mocks.pushPatchableOpener,
   resolveCardLane: mocks.resolveCardLane,
@@ -153,6 +160,7 @@ beforeEach(async () => {
   // 去重账本按设计跨 stop/start 保留, 用例之间必须显式清掉才能复用同一个
   // message_id。
   wsClient.resetInboundDedupeForTest();
+  wsClient.resetOrphanRetriesForTest();
   mocks.options.length = 0;
   mocks.eventHandlers = {};
   vi.clearAllMocks();
@@ -163,7 +171,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await wsClient.stop({ announceOffline: false, reason: 'test-cleanup' });
+  wsClient.resetOrphanRetriesForTest();
   feishuEvents.removeAllListeners('message');
+  vi.useRealTimers();
 });
 
 beforeAll(async () => {
@@ -187,7 +197,7 @@ describe('feishu group thread routing', () => {
 
     expect(mocks.openThread).toHaveBeenCalledWith('om_msg1');
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
-    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener');
+    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith('g/oc_chat1/omt_new', 'om_opener', 'om_msg1');
     expect(events).toHaveLength(1);
     expect(events[0].senderId).toBe('g/oc_chat1/omt_new');
     // 新话题是空的, 群历史前缀仍按触发时所在的群主流拉取。
@@ -202,8 +212,8 @@ describe('feishu group thread routing', () => {
    */
   it('每次群主流 @bot 都开自己的新话题(没有任何"截流进接管话题"的通道)', async () => {
     mocks.openThread
-      .mockResolvedValueOnce({ messageId: 'om_opener1', threadId: 'omt_a' })
-      .mockResolvedValueOnce({ messageId: 'om_opener2', threadId: 'omt_b' });
+      .mockResolvedValueOnce({ kind: 'opened', messageId: 'om_opener1', threadId: 'omt_a' })
+      .mockResolvedValueOnce({ kind: 'opened', messageId: 'om_opener2', threadId: 'omt_b' });
     const events = collectMessages();
     await connect();
 
@@ -234,7 +244,7 @@ describe('feishu group thread routing', () => {
   });
 
   it('开话题失败时降级回群 lane(锚点 = 触发消息)', async () => {
-    mocks.openThread.mockResolvedValueOnce(null);
+    mocks.openThread.mockResolvedValueOnce({ kind: 'degraded' });
     const events = collectMessages();
     await connect();
 
@@ -243,5 +253,186 @@ describe('feishu group thread routing', () => {
     expect(events[0].senderId).toBe('g/oc_chat1');
     expect(mocks.pushReplyAnchor).toHaveBeenCalledWith('g/oc_chat1', 'om_msg1');
     expect(events[0].groupContextLane).toBeUndefined();
+  });
+
+  it('开话题回执不确定时立刻不起 turn、不降级, 也不释放认领', async () => {
+    mocks.openThread.mockResolvedValueOnce({ kind: 'unconfirmed' });
+    const events = collectMessages();
+    await connect();
+
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('回执不确定'));
+
+    expect(events).toHaveLength(0);
+    expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+    expect(mocks.evictOpenThreadOutcome).not.toHaveBeenCalled();
+  });
+
+  it('回执不确定后定时用同一 uuid 取回 opened, 再发出话题 turn', async () => {
+    vi.useFakeTimers();
+    mocks.openThread
+      .mockResolvedValueOnce({ kind: 'unconfirmed' })
+      .mockResolvedValueOnce({ kind: 'opened', messageId: 'om_recovered', threadId: 'omt_rec' });
+    const events = collectMessages();
+    await connect();
+
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('回执不确定后恢复'));
+    expect(events).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledTimes(2);
+    expect(mocks.openThread).toHaveBeenLastCalledWith('om_msg1');
+    expect(events).toHaveLength(1);
+    expect(events[0].senderId).toBe('g/oc_chat1/omt_rec');
+    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith(
+      'g/oc_chat1/omt_rec',
+      'om_recovered',
+      'om_msg1',
+    );
+    vi.useRealTimers();
+  });
+
+  it('回执不确定耗尽后同账号重连仍能恢复, 不丢弃恢复链', async () => {
+    vi.useFakeTimers();
+    mocks.openThread.mockReset();
+    mocks.openThread.mockResolvedValue({ kind: 'unconfirmed' });
+    const events = collectMessages();
+    await connect();
+
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('耗尽后重连'));
+    await vi.advanceTimersByTimeAsync(10_000 + 30_000 + 90_000 + 1_000);
+    expect(events).toHaveLength(0);
+    expect(mocks.openThread).toHaveBeenCalledTimes(4);
+
+    await wsClient.stop({ announceOffline: false, reason: 'same-account-reconnect' });
+    await connect();
+    mocks.openThread.mockClear();
+    mocks.openThread.mockResolvedValueOnce({
+      kind: 'opened',
+      messageId: 'om_late',
+      threadId: 'omt_late',
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledWith('om_msg1');
+    expect(events).toHaveLength(1);
+    expect(events[0]?.senderId).toBe('g/oc_chat1/omt_late');
+    vi.useRealTimers();
+  });
+
+  it('回执不确定后恢复为 degraded 不视为确认无卡, 不降级派发', async () => {
+    vi.useFakeTimers();
+    mocks.openThread.mockReset();
+    mocks.openThread
+      .mockResolvedValueOnce({ kind: 'unconfirmed' })
+      .mockResolvedValueOnce({ kind: 'degraded' })
+      .mockResolvedValueOnce({
+        kind: 'opened',
+        messageId: 'om_late',
+        threadId: 'omt_late',
+      });
+    const events = collectMessages();
+    await connect();
+
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('先不确定后失败'));
+    expect(events).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledTimes(2);
+    expect(events).toHaveLength(0);
+    expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.senderId).toBe('g/oc_chat1/omt_late');
+    expect(mocks.pushPatchableOpener).toHaveBeenCalledWith(
+      'g/oc_chat1/omt_late',
+      'om_late',
+      'om_msg1',
+    );
+    vi.useRealTimers();
+  });
+
+  it('回执不确定耗尽定时重试后仍不降级群主流', async () => {
+    vi.useFakeTimers();
+    mocks.openThread.mockResolvedValue({ kind: 'unconfirmed' });
+    const events = collectMessages();
+    await connect();
+
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('一直不确定'));
+    await vi.advanceTimersByTimeAsync(10_000 + 30_000 + 90_000 + 1_000);
+
+    expect(events).toHaveLength(0);
+    expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+    // 首次 + 三档延迟重试
+    expect(mocks.openThread).toHaveBeenCalledTimes(4);
+    vi.useRealTimers();
+  });
+
+  it('stop 挂起超过 100 条 unconfirmed 后同账号重连仍恢复最早一条', async () => {
+    vi.useFakeTimers();
+    mocks.openThread.mockResolvedValue({ kind: 'unconfirmed' });
+    const events = collectMessages();
+    await connect();
+
+    for (let i = 0; i < 101; i += 1) {
+      await mocks.eventHandlers['im.message.receive_v1'](
+        groupMainFlowMessage(`回执不确定${i}`, `om_unconfirmed_${i}`),
+      );
+    }
+    expect(events).toHaveLength(0);
+
+    await wsClient.stop({ announceOffline: false, reason: 'same-account-reconnect' });
+    await connect();
+    mocks.openThread.mockClear();
+    mocks.openThread.mockImplementation(async (messageId?: string) => {
+      if (messageId === 'om_unconfirmed_0') {
+        return { kind: 'opened' as const, messageId: 'om_first', threadId: 'omt_first' };
+      }
+      return { kind: 'unconfirmed' as const };
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledWith('om_unconfirmed_0');
+    expect(events.some((event) => event.messageId === 'om_unconfirmed_0')).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('延迟恢复 await openThread 期间换账号后不再登记锚点或派发 turn', async () => {
+    vi.useFakeTimers();
+    let resolveOpen!: (value: {
+      kind: 'opened';
+      messageId: string;
+      threadId: string;
+    }) => void;
+    mocks.openThread
+      .mockResolvedValueOnce({ kind: 'unconfirmed' })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOpen = resolve;
+          }),
+      );
+    const events = collectMessages();
+    await connect();
+    await mocks.eventHandlers['im.message.receive_v1'](groupMainFlowMessage('换账号'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.openThread).toHaveBeenCalledTimes(2);
+
+    await wsClient.stop({ announceOffline: false, reason: 'switch-account' });
+    const connecting = wsClient.start(
+      { appId: 'cli_other_bot', appSecret: 'secret', service: 'feishu' },
+      { announceLifecycle: false },
+    );
+    mocks.options.at(-1)?.onReady?.();
+    await connecting;
+
+    resolveOpen({ kind: 'opened', messageId: 'om_stale', threadId: 'omt_stale' });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(events).toHaveLength(0);
+    expect(mocks.pushPatchableOpener).not.toHaveBeenCalled();
+    expect(mocks.pushReplyAnchor).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });

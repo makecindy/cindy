@@ -165,6 +165,7 @@ import {
 } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
+import { openBotDelegationsTab } from '@/features/right-sidebar/lib/openBotDelegationsTab';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -417,6 +418,8 @@ interface CCAgentSessionViewProps {
   sidebarTargetSessionId?: string;
   /** 禁止该常驻视图在挂载时抢占键盘焦点（例如非 owner 的分屏 pane）。 */
   disableAutofocus?: boolean;
+  /** 历史回查只读视图：保留消息流与上下文，但不允许发送或修改 Session。 */
+  readOnly?: boolean;
 }
 
 /**
@@ -539,6 +542,7 @@ export function CCAgentSessionView({
   onSessionNavigate,
   sidebarTargetSessionId,
   disableAutofocus = false,
+  readOnly = false,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
@@ -762,6 +766,17 @@ export function CCAgentSessionView({
       ? sessionSnapshotPatchBufferRef.current.merge(sessionId, sessionBase)
       : null;
   const isOrcaLeadSessionView = session?.orcaRole === 'lead';
+
+  // Every Cindy Bot task owns one durable Bot-collaboration tab. Registration
+  // is silent: it never expands the sidebar or replaces the user's active tab.
+  useEffect(() => {
+    if (!ownsWindowRoute || !viewVisible || !sessionId || session?.source !== 'bot') return;
+    void openBotDelegationsTab(sessionId, {
+      focusTab: false,
+      revealSidebar: false,
+      userInitiated: false,
+    }).catch(() => undefined);
+  }, [ownsWindowRoute, session?.source, sessionId, viewVisible]);
 
   // worktree-parallel-sessions:订阅当前 session 的 worktree 创建态(creating/failed)。
   // 触发源:NewMakerDraftRoute 的 worktree 异步创建路径。
@@ -1934,6 +1949,7 @@ export function CCAgentSessionView({
 
   useEffect(() => {
     const unsub = window.electronAPI.maker.onDesktopCommandTriggered((payload) => {
+      if (readOnly) return;
       if (payload.sessionId && payload.sessionId !== sessionId) return;
       if (payload.command === 'help') {
         void insertHelpCard();
@@ -1997,7 +2013,7 @@ export function CCAgentSessionView({
       // 'issue' 命令由下方独立 effect 处理(需要 handleSend,其声明在本 effect 之后)。
     });
     return unsub;
-  }, [insertHelpCard, clearSession, insertSystemCard, sessionId, t]);
+  }, [clearSession, insertHelpCard, insertSystemCard, readOnly, sessionId, t]);
 
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
@@ -2835,7 +2851,9 @@ export function CCAgentSessionView({
         onDeferredAccepted?: () => void;
       },
     ) => {
+      if (readOnly) return false;
       const deliveryMode = opts?.deliveryMode ?? 'queue';
+      const originalMessage = message;
       const navigationRequestVersion =
         deliveryMode !== 'steer' && matchNavigationCommandName(message)
           ? ++sessionNavigationVersionRef.current
@@ -2860,6 +2878,45 @@ export function CCAgentSessionView({
         return;
       }
 
+      // Hermes-compatible Bot lifecycle: `/new` inside the fixed canonical
+      // task means "compact and keep this Bot task", never "silently create a
+      // replacement Session". Claude accepts /compact as an agent command;
+      // Pi exposes a native compact RPC because its slash input is escaped;
+      // Codex only supports upstream automatic compaction, so keep the task
+      // intact and explain the explicit Renew escape hatch.
+      const botNewMatch =
+        deliveryMode !== 'steer' && sessionRef.current?.source === 'bot'
+          ? message.match(/^\/new(?:\s+(.*))?$/s)
+          : null;
+      if (botNewMatch) {
+        const instructions = botNewMatch[1]?.trim();
+        if (realAgentKind === 'claude-code') {
+          message = `/compact${instructions ? ` ${instructions}` : ''}`;
+        } else if (compactChannelRef.current === 'compact-session') {
+          if (!sessionId || isRunningRef.current) {
+            toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+            return false;
+          }
+          try {
+            const result = await makerApiForSticky(sessionId).compactSession(
+              sessionId,
+              instructions || undefined,
+            );
+            if (result?.noop) toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
+            else if (result) toast.success(t('ccAgent.sidebar.sessionMenu.compactSuccess'));
+            else toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+            return !!result;
+          } catch (err) {
+            log.warn('Bot /new compact-session failed', err);
+            toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+            return false;
+          }
+        } else {
+          toast.info(t('bots.codexAutomaticCompact'));
+          return true;
+        }
+      }
+
       // ── Slash command dispatch (palette refactor) ──
       // 三源 palette 命中:
       //   - desktop 命令(/help /clear ...) → executeDesktopCommand IPC,
@@ -2867,7 +2924,6 @@ export function CCAgentSessionView({
       //     广播回 renderer (上面 useEffect 订阅), 不发给 agent。
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
-      const originalMessage = message;
       const slashDispatch =
         deliveryMode === 'steer'
           ? await maybeDispatchDesktopSlashCommand(message, files, {
@@ -3061,6 +3117,7 @@ export function CCAgentSessionView({
       navigate,
       session,
       sessionId,
+      readOnly,
       t,
       vendorAuthGate,
       remoteDeviceId,
@@ -3086,6 +3143,7 @@ export function CCAgentSessionView({
   // sessionId,防止多视图(orca split / 多窗口)同时挂载时重复发送。
   useEffect(() => {
     const unsub = window.electronAPI.maker.onDesktopCommandTriggered((payload) => {
+      if (readOnly) return;
       if (payload.command !== 'issue') return;
       if (!payload.sessionId || payload.sessionId !== sessionId || !session) return;
       const details = payload.args?.trim()
@@ -3104,7 +3162,7 @@ export function CCAgentSessionView({
       );
     });
     return unsub;
-  }, [sessionId, session, handleSend, t]);
+  }, [handleSend, readOnly, session, sessionId, t]);
 
   const { confirm: confirmDialog } = useConfirmDialog();
   // 防双击重入:ConfirmDialogProvider 是队列语义,弹窗 mount 前的连续点击会入队
@@ -3365,6 +3423,7 @@ export function CCAgentSessionView({
   const sessionAgentKind = session?.agentKind;
   const sessionModel = session?.model;
   useEffect(() => {
+    if (readOnly) return;
     if (!sessionAgentKind || !sessionModel || !sessionId) return;
     // device-link 远程会话:vendor↔model 一致性由被控端权威保证。控制端不能替它"纠正"——
     // 远程模型可能只存在于被控端(本地目录查不到 → 误判跨 vendor),且本地 DB 没有该会话行,
@@ -3388,6 +3447,7 @@ export function CCAgentSessionView({
     sessionAgentKind,
     sessionId,
     sessionModel,
+    readOnly,
   ]);
 
   // 远程协同交接被 app 关闭打断时的兜底:把上次没能发出去的正文回填到输入框。
@@ -3839,14 +3899,15 @@ export function CCAgentSessionView({
         <SessionContentHeaderRegistration
           session={session}
           remoteSessionUnavailable={remoteSessionUnavailable}
+          readOnly={readOnly}
         />
       )}
       {/* 右栏在场声明：与上方 header 注册同一「主实例」判据。仅全屏聊天视图声明，
           内嵌实例不声明（否则会在 doc rail / 协同面板上误开右栏）。 */}
-      {ownsRoute && setRightSidebarAvailable && (
+      {ownsRoute && !readOnly && setRightSidebarAvailable && (
         <RightSidebarAvailabilityRegistration declare={setRightSidebarAvailable} />
       )}
-      {ownsRoute && sessionId && setRightSidebarSessionId && (
+      {ownsRoute && !readOnly && sessionId && setRightSidebarSessionId && (
         <RightSidebarSessionIdRegistration
           sessionId={sessionId}
           initialCollapsed={shouldFirstFrameRevealOrcaWorkers ? false : undefined}
@@ -3857,7 +3918,7 @@ export function CCAgentSessionView({
       {/* workdir 透 plugin ctx;remote session 一并携带 remoteHostId(文件浏览经
           main 路由到远端 file-service,不再推空串禁用)。session 还没解析时
           workingDir 为 undefined → 推空串走兜底,不阻塞渲染。 */}
-      {ownsRoute && setRightSidebarWorkdir && (
+      {ownsRoute && !readOnly && setRightSidebarWorkdir && (
         <RightSidebarWorkdirRegistration
           workdir={session?.workingDir ?? ''}
           remoteHostId={session?.remoteHostId ?? null}
@@ -4145,7 +4206,7 @@ export function CCAgentSessionView({
                 Retry 门控与恢复路径(同步登录态 / fork 剥离),此前的简化红条
                 一律显示重试会把用户带进同样的失败循环。onRetry 忽略 retryText
                 (typed token),发隐藏续跑指令;onCancel = dismiss 持久化。 */}
-            {errorTailMsg &&
+            {!readOnly && errorTailMsg &&
               !errorTailBannerHidden &&
               !syntheticContinuationPending &&
               !error &&
@@ -4178,7 +4239,9 @@ export function CCAgentSessionView({
                     canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
                   }
                   silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
-                  onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}
+                  onForkStripEncrypted={
+                    !readOnly && canNavigateSession ? handleForkStripEncrypted : undefined
+                  }
                   forkStripEncryptedRunning={forkStripEncryptedRunning}
                   style={{ width: inputWidth }}
                   className="py-1"
@@ -4187,7 +4250,7 @@ export function CCAgentSessionView({
 
             {/* interrupted-turn-resume(简化版):session 双时间戳驱动的中断提示。
               历史中断行(上方 errorTailMsg 判定)优先;互斥条件与 error-tail 同款。 */}
-            {!errorTailMsg &&
+            {!readOnly && !errorTailMsg &&
               interruptedFromSession &&
               !syntheticContinuationPending &&
               !error &&
@@ -4203,7 +4266,7 @@ export function CCAgentSessionView({
                 />
               )}
 
-            {error && (
+            {!readOnly && error && (
               <ErrorBanner
                 error={error}
                 errorReason={errorReason}
@@ -4226,7 +4289,9 @@ export function CCAgentSessionView({
                 onViewBalance={canAccessBilling ? handleViewBalance : undefined}
                 errorSourceProviderId={liveErrorSourceProviderId}
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
-                onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}
+                onForkStripEncrypted={
+                  !readOnly && canNavigateSession ? handleForkStripEncrypted : undefined
+                }
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
                 style={{ width: inputWidth }}
                 className="py-1"
@@ -4236,7 +4301,7 @@ export function CCAgentSessionView({
             {/* worktree 恢复横幅(P1):worktree 已被回收(目录缺失、分支还在)时
               提供一键恢复。组件自查 restore-status,非 restorable 自渲染 null;
               与 error/streaming 互斥条件从轻——目录缺失是持续状态,不依赖错误出现。 */}
-            {sessionId && !isStreaming && !agentStatus.isRunning && (
+            {!readOnly && sessionId && !isStreaming && !agentStatus.isRunning && (
               <WorktreeRestoreBanner
                 sessionId={sessionId}
                 style={{ width: inputWidth }}
@@ -4417,8 +4482,8 @@ export function CCAgentSessionView({
                   isAgentBusy={isAgentBusy}
                   onStop={handleStopSession}
                   pendingQueue={pendingQueue}
-                  disabled={remoteHandoffPreparing || session?.source === 'review'}
-                  settingsLocked={session?.source === 'review'}
+                  disabled={readOnly || remoteHandoffPreparing || session?.source === 'review'}
+                  settingsLocked={readOnly || session?.source === 'review'}
                   queuePaused={queuePaused}
                   queueExpanded={queueExpanded}
                   onQueueExpandedChange={setQueueExpanded}
@@ -4637,7 +4702,7 @@ export function CCAgentSessionView({
                       // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
                       // (与 SessionContentHeader 的 runningSessionIds 一致,codex P1);
                       // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
-                      compactChannel !== null
+                      !readOnly && compactChannel !== null
                         && !(realAgentKind === 'pi' && !!session?.remoteHostId)
                         && session != null && agentStatus.contextTokens > 0
                         && !(compactChannel === 'compact-session' && agentStatus.isRunning)

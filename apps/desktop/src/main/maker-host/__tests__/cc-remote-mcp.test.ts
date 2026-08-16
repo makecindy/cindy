@@ -10,24 +10,33 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
 import type { CodexHttpBridge } from '../../mcp-integrations/codexHttpBridge.js';
+import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../../mcp-integrations/codexBuiltinToolPolicy.js';
 import { buildCcRemoteHttpMcpServers } from '../cc-remote-mcp.js';
 
 function fakeBridge() {
-  const registered = new Map<string, {
-    sessionId: string;
-    sessionInstanceId?: string;
-    agentKind: string;
-    vendorOptions: unknown;
-  }>();
-  const bridge = {
-    registerSessionCtx: vi.fn((sessionId: string, ctx: {
+  const registered = new Map<
+    string,
+    {
       sessionId: string;
       sessionInstanceId?: string;
       agentKind: string;
       vendorOptions: unknown;
-    }) => {
-      registered.set(sessionId, ctx);
-    }),
+    }
+  >();
+  const bridge = {
+    registerSessionCtx: vi.fn(
+      (
+        sessionId: string,
+        ctx: {
+          sessionId: string;
+          sessionInstanceId?: string;
+          agentKind: string;
+          vendorOptions: unknown;
+        },
+      ) => {
+        registered.set(sessionId, ctx);
+      },
+    ),
     unregisterSessionCtx: vi.fn((sessionId: string, expectedCtx?: unknown) => {
       if (expectedCtx !== undefined && registered.get(sessionId) !== expectedCtx) return;
       registered.delete(sessionId);
@@ -81,6 +90,33 @@ describe('buildCcRemoteHttpMcpServers', () => {
     expect(() => cleanup()).not.toThrow();
   });
 
+  it('does not inject collaboration when the frozen Bot Toolset disables it', async () => {
+    const { bridge, registered } = fakeBridge();
+    const { servers, fingerprint } = await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'bot-no-collab',
+        workingDir: '/remote/repo',
+        vendorOptions: {
+          [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['collab'],
+        },
+      },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        isCollabEnabled: () => true,
+      },
+    );
+    expect(servers).toEqual({});
+    expect(fingerprint).toBe('disabled');
+    expect(registered.size).toBe(0);
+  });
+
   it('flags needsFreshStart when the bridge token is unavailable (R21 P2)', async () => {
     // token 失效但本要注入:调用方必须 forceFresh — 否则 attach 回带旧
     // Authorization header 的 alive query, 协同 MCP 持续 401。
@@ -122,7 +158,11 @@ describe('buildCcRemoteHttpMcpServers', () => {
     // 此前注入注册过 ctx 的 session, collab 禁用后 build 必须摘掉它 —
     // 否则 ?session=<id> 的授权路由在禁用后仍可用到 bridge 关闭。
     const { bridge, registered } = fakeBridge();
-    registered.set('s-disable', { sessionId: 's-disable', agentKind: 'claude-code', vendorOptions: {} });
+    registered.set('s-disable', {
+      sessionId: 's-disable',
+      agentKind: 'claude-code',
+      vendorOptions: {},
+    });
     const { servers, fingerprint } = await buildCcRemoteHttpMcpServers(
       { host: HOST, sessionId: 's-disable', workingDir: '/remote/repo' },
       {
@@ -243,7 +283,10 @@ describe('buildCcRemoteHttpMcpServers', () => {
       },
     );
     cleanup();
-    expect(spies.unregisterSessionCtx).toHaveBeenCalledWith('s1', expect.objectContaining({ sessionId: 's1' }));
+    expect(spies.unregisterSessionCtx).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ sessionId: 's1' }),
+    );
   });
 
   it('re-registering the same session overwrites instead of accumulating (resume/rebuild)', async () => {
@@ -272,7 +315,10 @@ describe('buildCcRemoteHttpMcpServers', () => {
       getBridgeToken: async () => 'tok',
       synthesizeVendorOptions: async () => ({}),
     };
-    const first = await buildCcRemoteHttpMcpServers({ host: HOST, sessionId: 's1', workingDir: '/a' }, deps);
+    const first = await buildCcRemoteHttpMcpServers(
+      { host: HOST, sessionId: 's1', workingDir: '/a' },
+      deps,
+    );
     await buildCcRemoteHttpMcpServers({ host: HOST, sessionId: 's1', workingDir: '/b' }, deps);
     first.cleanup();
     expect(registered.has('s1')).toBe(true);
@@ -292,7 +338,12 @@ describe('buildCcRemoteHttpMcpServers', () => {
       orcaWorkerSessionId: 's1',
     };
     await buildCcRemoteHttpMcpServers(
-      { host: HOST, sessionId: 's1', workingDir: '/remote/repo', vendorOptions: workerVendorOptions },
+      {
+        host: HOST,
+        sessionId: 's1',
+        workingDir: '/remote/repo',
+        vendorOptions: workerVendorOptions,
+      },
       {
         ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_orca'], bridge }),
         ensureForward: vi.fn(async () => 47921),
@@ -386,7 +437,11 @@ describe('buildCcRemoteHttpMcpServers', () => {
         synthesizeVendorOptions: async () => ({}),
       },
     );
-    expect(Object.keys(servers).sort()).toEqual(['cindy_memory', 'cindy_orca', 'orca_worker_bridge']);
+    expect(Object.keys(servers).sort()).toEqual([
+      'cindy_memory',
+      'cindy_orca',
+      'orca_worker_bridge',
+    ]);
     expect(servers.cindy_memory).toEqual({
       type: 'http',
       url: 'http://127.0.0.1:47921/mcp/cindy_memory?session=s1',
@@ -394,7 +449,10 @@ describe('buildCcRemoteHttpMcpServers', () => {
     });
     // ctx 必须带 remoteHostId — cindy_memory 据此把远端路径隔离到
     // ssh:<hostId>:<path> 的独立 store。
-    expect(registered.get('s1')).toMatchObject({ remoteHostId: 'host-1', workingDir: '/remote/repo' });
+    expect(registered.get('s1')).toMatchObject({
+      remoteHostId: 'host-1',
+      workingDir: '/remote/repo',
+    });
   });
 
   it('injects only cindy_memory when collab is disabled but the session Maker Memory flag is on', async () => {

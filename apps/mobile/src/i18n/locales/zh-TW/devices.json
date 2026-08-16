@@ -104,6 +104,8 @@
     },
     "plan": "計劃",
     "automationsButtonA11y": "開啟遠端自動化",
+    "bots": "Bots",
+    "botsButtonA11y": "開啟這台裝置上的 Bots",
     "search": {
       "openA11y": "搜尋遠端任務",
       "closeA11y": "關閉搜尋遠端任務",
@@ -180,6 +182,19 @@
       "openA11y": "開啟自動化生成的任務 {{title}}"
     },
     "viewAllRuns": "檢視全部 {{count}} 次執行"
+  },
+  "bots": {
+    "eyebrow": "長期助理",
+    "title": "Bots",
+    "subtitle": "{{deviceName}} 上的 Bot",
+    "emptyTitle": "這台裝置還沒有 Bot",
+    "emptyCopy": "請先在桌面端建立 Bot，再從手機開啟它的主工作階段。",
+    "unsupportedTitle": "桌面端暫不支援遠端 Bots",
+    "unsupportedCopy": "請更新這台電腦上的 Cindy。現有工作階段不會受到影響。",
+    "noDescription": "尚無描述",
+    "openA11y": "開啟 Bot {{name}} 的主工作階段",
+    "unavailableA11y": "Bot {{name}} 暫時無法開啟：{{status}}",
+    "status": { "active": "使用中", "paused": "已暫停", "error": "需要處理", "archived": "已封存", "deleting": "正在刪除", "needsDesktop": "需在桌面端初始化" }
   },
   "automations": {
     "error": {

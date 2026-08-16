@@ -209,11 +209,12 @@ function makeDeps(
   agentKind: TestAgentKind = 'claude-code',
   sessionId: string | null = 's1',
   sessionInstanceId: string | null = sessionId ? `${sessionId}-instance` : null,
+  vendorOptions: Record<string, unknown> = {},
 ) {
   const ctx = {
     agentKind,
     workingDir: WORKDIR,
-    vendorOptions: {},
+    vendorOptions,
     ...(sessionId ? { sessionId } : {}),
     ...(sessionInstanceId ? { sessionInstanceId } : {}),
   } as unknown as LiziMcpSessionContext;
@@ -438,6 +439,26 @@ describe('花名册 / ghost_list 过滤', () => {
     const deps = makeDeps();
     expect((deps.getRosterItems?.() ?? []).map((r) => r.id)).toEqual(['art', 'other']);
     expect((await deps.listAwakeGhosts()).map((g) => g.id)).toEqual(['art', 'other']);
+  });
+
+  it('Bot 冻结 Toolset 从花名册、info 与 manual 同时隐藏未授权插件', async () => {
+    const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', {
+      __cindyDisabledBuiltinPluginIds: ['art'],
+    });
+
+    expect((deps.getRosterItems?.() ?? []).map((item) => item.id)).toEqual(['other']);
+    await expect(deps.listAwakeGhosts()).resolves.toMatchObject([{ id: 'other' }]);
+    await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+      message: expect.stringContaining('Bot Profile'),
+    });
+    await expect(deps.readGhostManual({ ghostId: 'art' })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+      manual: [],
+      content: '',
+    });
   });
 
   it('缺 workingDir 时 system 花名册 fail closed，不回退全量', () => {
@@ -710,6 +731,22 @@ describe('ghost_call 兜底拒绝', () => {
     const deps = makeDeps();
     const r = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
     expect(r).toMatchObject({ ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('Bot 冻结 Toolset 在 ghost_call 主机边界拒绝猜 ID 绕过', async () => {
+    const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', {
+      __cindyDisabledBuiltinPluginIds: ['art'],
+    });
+
+    const result = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+      message: expect.stringContaining('Bot Profile'),
+    });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 

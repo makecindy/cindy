@@ -16,6 +16,7 @@ import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-sh
 import { getDbClient } from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
+import { commitBotProfileDeletion } from '../botProfileDeletionStore.js';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
 import { resolveBusinessSessionId } from '../../sessionIds';
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
@@ -909,6 +910,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
     .update(sessions)
     .set({
       sdkSessionId: null,
+      codexPlanJson: null,
       // Concurrent /clear calls may finish their DB awaits out of order. Keep
       // both persisted boundaries monotonic so the older completion cannot
       // make pre-clear history visible again or invalidate a newer input token.
@@ -1061,6 +1063,12 @@ export function registerSessionIpc(
       !ALLOWED_ORCA_ROLES.has(bodyObj.orcaRole as string)
     ) {
       throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(bodyObj.orcaRole)}`);
+    }
+    if (bodyObj.source !== undefined) {
+      throwIpcError(
+        'UNSUPPORTED_CAPABILITY',
+        'Bot task creation is only available through the Bot lifecycle service',
+      );
     }
     const workspaceKind =
       (createBody?.workspaceKind as 'project' | 'dialogue' | undefined) ?? 'project';
@@ -1289,6 +1297,7 @@ export function registerSessionIpc(
       const db = getDbClient().drizzle;
       const updated = await withSessionRouteLock(sid, async () => {
         if (!isOwnerScopeCurrent(ownerScope)) return null;
+        await assertGenericSessionLifecycleAllowed(db, sid);
         // 显式 .run() 才能从生产 DbClient.drizzle proxy 拿到 changes；隐式 await
         // 会丢弃写结果。CAS 是否命中必须以该原子 UPDATE 的 changes 判定。
         const writeResult = await db
@@ -1429,7 +1438,10 @@ export function registerSessionIpc(
     // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
     // 按下过保存,这个方向的偏差是安全的。
     if (typeof p.title === 'string') noteUserTitleWritten(sid);
-    await withStatusWriteLock(sid, p.status, () => writeSessionPatch(db, sid, setObj, p.status));
+    await withStatusWriteLock(sid, p.status, async () => {
+      if (p.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sid);
+      await writeSessionPatch(db, sid, setObj, p.status);
+    });
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
     // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
     if (p.clearedAt !== undefined) {
@@ -1579,6 +1591,7 @@ export async function patchSessionMetaInDb(
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
   const updated = await withStatusWriteLock(sessionId, patch.status, async () => {
+    if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     await writeSessionPatch(db, sessionId, setObj, patch.status);
     const row = await selectSessionWithCount(db, sessionId);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
@@ -1613,6 +1626,28 @@ export async function patchSessionMetaInDb(
   // 经 tap 转发:订阅了该被控端 `sessions` topic 的控制端也即时收到这条 patched(push 驱动镜像)。
   if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, patch, ownerScope);
   return updated;
+}
+
+/**
+ * Bot tasks are absent from the ordinary task pool, so their active/history/
+ * route transitions must go through the Bot lifecycle service. That service
+ * updates the Profile pointer and Session projection atomically.
+ */
+async function assertGenericSessionLifecycleAllowed(
+  db: DbClient['drizzle'],
+  sessionId: string,
+): Promise<void> {
+  const [target] = await db
+    .select({ source: sessions.source })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  if (target?.source === 'bot') {
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Bot task lifecycle is managed by Bot Renew and history controls',
+    );
+  }
 }
 
 export interface RenameSessionMetaChange {
@@ -1763,6 +1798,49 @@ export async function setSessionsStatusInDb(
     workingDir: item.workingDir,
     status: item.status,
   }));
+}
+
+/**
+ * Detach Bot-owned tasks before the owning Profile is permanently removed.
+ * Kept transcripts become ordinary archived tasks; discarded transcripts
+ * become ordinary deleted tombstones so no inaccessible source=bot orphan is
+ * left after the Bot FK graph is cascaded away.
+ */
+export async function deleteBotProfileAndDetachSessionsInDb(
+  botId: string,
+  sessionIds: string[],
+  keepTaskHistory: boolean,
+): Promise<void> {
+  const ids = [...new Set(sessionIds)];
+  const ownerScope = captureOwnerScope();
+  const db = getDbClient().drizzle;
+  const commitDeletion = () => commitBotProfileDeletion({
+    botId,
+    sessionIds: ids,
+    keepTaskHistory,
+  });
+  const committed = ids.length > 0
+    ? await withSessionRouteLocks(ids, commitDeletion)
+    : await commitDeletion();
+  const status = committed.status;
+
+  for (const id of ids) {
+    notifyAgentIslandSessionPatch(id, { status });
+    broadcastSessionPatched(id, { status, source: 'desktop' }, ownerScope);
+    notifyGhostSessionStatusChange(id, status, null);
+    removeHookAttachmentDir(id, status);
+    if (status === 'deleted') {
+      void imageCacheStore.removeSession(id).catch((error) => {
+        log.warn('Bot task image cleanup failed', { sessionId: id, error: String(error) });
+      });
+      void removeWechatSessionAttachmentDir(id).catch((error) => {
+        log.warn('Bot task attachment cleanup failed', { sessionId: id, error: String(error) });
+      });
+      void removeDeletedSessionMediaRefs(id, db).catch((error) => {
+        log.warn('Bot task media cleanup failed', { sessionId: id, error: String(error) });
+      });
+    }
+  }
 }
 
 /**

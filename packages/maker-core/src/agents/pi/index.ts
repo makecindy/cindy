@@ -87,6 +87,7 @@ import {
 } from '../shared/auto-review-decision.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import { buildMemoryScopeKey } from '../../memory/storage.js';
+import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
 import type {
   Capabilities,
   ManualCompactResult,
@@ -111,6 +112,7 @@ import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../
 import { scanPiCustomizations } from './customization-scanner.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
+import { scanRemotePiSkills } from '../shared/remote-skill-scanner.js';
 import {
   assertReviewMessageContentPaths,
   buildReviewReadGrants,
@@ -126,6 +128,8 @@ import {
   stageApprovedPiProjectResources,
   unavailablePiProjectResourceAssembly,
 } from './project-resource-assembly.js';
+import { applyPiBotSkillPolicy } from './bot-skill-policy.js';
+import { isBotMcpServerAllowed } from '../shared/bot-runtime-policy.js';
 import {
   createPiTranslateContext,
   disposePiTranslateContext,
@@ -871,6 +875,8 @@ export class PiAgent extends BaseAgent {
       });
     }
     const reviewMode = opts.reviewMode === true;
+    const workspaceReadOnly = opts.workspaceAccess === 'read-only';
+    const workspaceWritePaths = [...(opts.workspaceWritePaths ?? [])];
 
     // BYOM:host 解析当前会话可用的原生 provider(用户自定义/本地模型)+ 需注入的 env(keys)。
     // 缺省 → 空,只有网关 provider `cindy`(现状不变)。失败不致命,降级为无原生 provider。
@@ -881,6 +887,7 @@ export class PiAgent extends BaseAgent {
       try {
         const resolved = await this.deps.resolvePiNativeProviders({
           workingDir: opts.workingDir,
+          ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
           remoteHostId: opts.remoteHostId,
           providerId: opts.providerId,
           model: opts.model,
@@ -1335,7 +1342,8 @@ export class PiAgent extends BaseAgent {
     // 桥内行为同 ask(非只读全部冒泡)。其余档(default/acceptEdits/plan)归 ask 最严。
     const normalizePermissionMode = (mode: string | undefined): 'ask' | 'auto' | 'bypassPermissions' =>
       mode === 'bypassPermissions' ? 'bypassPermissions' : mode === 'auto' ? 'auto' : 'ask';
-    let permissionMode = reviewMode ? 'ask' : normalizePermissionMode(opts.permissionMode);
+    let permissionMode =
+      reviewMode || workspaceReadOnly ? 'ask' : normalizePermissionMode(opts.permissionMode);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     const reviewReadGrants = reviewMode
       ? await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? [])
@@ -1345,6 +1353,12 @@ export class PiAgent extends BaseAgent {
     // sessions. The Review-only marker is capability-like: absence means the
     // normal bridge, while `true` selects the restricted Review bridge.
     const reviewPathSnapshot = reviewMode ? { reviewReadPaths, reviewOnly: true as const } : {};
+    const workspaceAccessSnapshot = workspaceReadOnly
+      ? { workspaceReadOnly: true as const }
+      : {};
+    const workspaceWriteScopeSnapshot = workspaceWritePaths.length > 0
+      ? { workspaceWritePaths: [...workspaceWritePaths] }
+      : {};
     // 与 Claude / Codex 一致，运行期 Orca 身份更新必须原地落在同一个对象上。
     // Desktop Pi MCP bridge 在 startSession 时持有这个引用；start_team 成功后 host
     // 调 setVendorOptions，后续 create_worker 等工具才能立即读到最新 Lead 身份。
@@ -1354,6 +1368,8 @@ export class PiAgent extends BaseAgent {
       readOnlyRoots: string[];
       reviewReadPaths?: string[];
       reviewOnly?: true;
+      workspaceReadOnly?: true;
+      workspaceWritePaths?: string[];
     };
     const permissionPrivilege = (mode: PermissionSnapshot['mode']): number =>
       mode === 'bypassPermissions' ? 2 : mode === 'auto' ? 1 : 0;
@@ -1361,11 +1377,15 @@ export class PiAgent extends BaseAgent {
       mode: permissionMode,
       readOnlyRoots: [...mutableExtraDirs],
       ...reviewPathSnapshot,
+      ...workspaceAccessSnapshot,
+      ...workspaceWriteScopeSnapshot,
     };
     let persistedPermissionSnapshot: PermissionSnapshot = {
       mode: permissionMode,
       readOnlyRoots: [...mutableExtraDirs],
       ...reviewPathSnapshot,
+      ...workspaceAccessSnapshot,
+      ...workspaceWriteScopeSnapshot,
     };
     const permissionSnapshotHash = createHash('sha256')
       .update(JSON.stringify(requestedPermissionSnapshot))
@@ -1406,6 +1426,8 @@ export class PiAgent extends BaseAgent {
         mode: next.mode,
         readOnlyRoots: [...next.readOnlyRoots],
         ...reviewPathSnapshot,
+        ...workspaceAccessSnapshot,
+        ...workspaceWriteScopeSnapshot,
       };
       // 收紧必须立刻约束 host 侧审批门；等待磁盘 I/O 才改闭包会留下一个 Full access
       // 的窗口。放宽反过来只能等对应快照成功落盘，避免 host 已放行而 bridge 仍是旧档。
@@ -1418,6 +1440,8 @@ export class PiAgent extends BaseAgent {
         ...requestedPermissionSnapshot,
         readOnlyRoots: [...requestedPermissionSnapshot.readOnlyRoots],
         ...reviewPathSnapshot,
+        ...workspaceAccessSnapshot,
+        ...workspaceWriteScopeSnapshot,
       };
       const run = permissionWriteChain.then(async () => {
         if (gen !== permissionWriteGen) return;
@@ -1434,6 +1458,8 @@ export class PiAgent extends BaseAgent {
               mode: permissionMode,
               readOnlyRoots: [...persistedPermissionSnapshot.readOnlyRoots],
               ...reviewPathSnapshot,
+              ...workspaceAccessSnapshot,
+              ...workspaceWriteScopeSnapshot,
             };
           }
           throw error;
@@ -1447,6 +1473,8 @@ export class PiAgent extends BaseAgent {
             mode: snapshot.mode,
             readOnlyRoots: [...snapshot.readOnlyRoots],
             ...reviewPathSnapshot,
+            ...workspaceAccessSnapshot,
+            ...workspaceWriteScopeSnapshot,
           };
         }
       });
@@ -1541,7 +1569,11 @@ export class PiAgent extends BaseAgent {
     );
     if (!reviewMode && !remoteSkipMcpBridge && this.deps.preparePiExtraSpawnConfig) {
       try {
-        const extra = await this.deps.preparePiExtraSpawnConfig(this.deps.mcpProviders ?? [], {
+        const extra = await this.deps.preparePiExtraSpawnConfig(
+          (this.deps.mcpProviders ?? []).filter((provider) =>
+            isBotMcpServerAllowed(opts.botRuntimeProfile?.mcpPolicy, provider.name),
+          ),
+          {
           sessionId: opts.sessionId,
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
@@ -1549,7 +1581,8 @@ export class PiAgent extends BaseAgent {
           mcpCallerKind: 'root',
           mcpCallerAttested: true,
           ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
-        });
+          },
+        );
         mcpBridge = extra?.mcpBridge ?? null;
         mcpEnv = extra?.mcpEnv ?? {};
         disposeSessionCtx = extra?.disposeSessionCtx;
@@ -1575,7 +1608,24 @@ export class PiAgent extends BaseAgent {
       (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true &&
       (this.memoryOverride ?? true) === true &&
       !!this.deps.makerMemory;
-    const memoryScopeKey = buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
+    const makerMemoryPromptEnabled =
+      !reviewMode &&
+      (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true &&
+      (this.memoryOverride ?? true) === true &&
+      (opts.makerMemoryIndexSnapshot !== undefined || !!this.deps.makerMemory);
+    const memoryScopeKey =
+      opts.makerMemoryScopeKey ?? buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
+    let makerMemoryIndex = '';
+    if (makerMemoryPromptEnabled) {
+      try {
+        makerMemoryIndex = opts.makerMemoryIndexSnapshot
+          ?? await (await this.deps.makerMemory!.getStore(memoryScopeKey)).getIndex();
+      } catch (err) {
+        this.deps.logger.warn('pi maker memory load failed at session start (skipping injection)', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     const digestSlugBase = slugifyForMemory(opts.sessionId ?? `pi-${process.pid}`, 24);
     let digestSeq = 0;
     const writeCompactionDigest = async (summary: string, reason: string): Promise<void> => {
@@ -1609,8 +1659,13 @@ export class PiAgent extends BaseAgent {
       ? ''
       : this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
     const appendSections = [
+      reviewMode ? undefined : opts.botProfilePrompt?.trim(),
       this.deps.runtimeConfig.systemPrompt?.trim(),
       ghostRosterPrompt.trim(),
+      reviewMode ? undefined : opts.botProfileContextPrompt?.trim(),
+      makerMemoryPromptEnabled ? MAKER_MEMORY_RULES : undefined,
+      makerMemoryIndex.trim(),
+      reviewMode ? undefined : opts.botUserProfilePrompt?.trim(),
       reviewMode ? undefined : opts.userPrompt?.trim(),
       piExtraDirsPrompt(mutableExtraDirs),
     ].filter((s): s is string => !!s && s.length > 0);
@@ -1697,6 +1752,11 @@ export class PiAgent extends BaseAgent {
       approvalRevision: projectResourceAssembly.diagnostic.approvalRevision,
       requestedSkillCount: projectResourceAssembly.diagnostic.requestedSkillCount,
     });
+    const botSkillSelection = applyPiBotSkillPolicy(
+      reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
+      projectResourceAssembly,
+    );
+    projectResourceAssembly = botSkillSelection.projectAssembly;
 
     const args = [
       '--mode', 'rpc',
@@ -1709,11 +1769,12 @@ export class PiAgent extends BaseAgent {
       '--provider', initialProvider,
       '--model', initialWireModel,
       ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
+      ...(botSkillSelection.disableImplicitSkills ? ['--no-skills'] : []),
       ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
       '--extension', bridgeExtensionPath,
       ...(!reviewMode ? ['--extension', subagentExtensionPath] : []),
       ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
-      ...projectResourceAssembly.launchSkillPaths.flatMap((skillPath) => ['--skill', skillPath]),
+      ...botSkillSelection.explicitSkillPaths.flatMap((skillPath) => ['--skill', skillPath]),
     ];
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
@@ -1960,6 +2021,10 @@ export class PiAgent extends BaseAgent {
         // 缺失时 bridge 仍保留 reviewOnly 语义, 不降级成普通 ask;见
         // cindy-bridge-source currentPermissionState fail-closed)。
         ...(reviewMode ? { CINDY_PI_REVIEW_ONLY: '1' } : {}),
+        ...(workspaceReadOnly ? { CINDY_PI_WORKSPACE_READ_ONLY: '1' } : {}),
+        ...(workspaceWritePaths.length > 0
+          ? { CINDY_PI_WORKSPACE_WRITE_PATHS: JSON.stringify(workspaceWritePaths) }
+          : {}),
         // 子代理:cindy-subagent 扩展据此 spawn 子 pi 进程。给二进制路径而不是让扩展猜
         // process.execPath —— host 本来就知道本次会话用的是哪个 pi。远端会话用远端
         // 二进制路径(effectivePiBinaryPath;本地路径远端不存在,spawn 会失败)。
@@ -2800,9 +2865,11 @@ export class PiAgent extends BaseAgent {
       },
 
       async setPermissionMode(mode): Promise<void> {
-        if (reviewMode) {
-          deps.logger.debug('pi setPermissionMode ignored for hard read-only Review session', {
+        if (reviewMode || workspaceReadOnly) {
+          deps.logger.debug('pi setPermissionMode ignored for host-owned hard read-only session', {
             requested: mode,
+            reviewMode,
+            workspaceReadOnly,
           });
           return;
         }
@@ -3298,6 +3365,11 @@ export class PiAgent extends BaseAgent {
    * .agents/skills。项目条目仅表示已发现；只有 get_commands 能确认 loaded。
    */
   override async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
+    if (opts.remoteHostId) {
+      const fileOps = this.deps.getRemoteAgentFileOps?.(opts.remoteHostId);
+      if (!fileOps) throw new Error('Pi remote Skill discovery requires remote file operations');
+      return scanRemotePiSkills({ fileOps, workingDir: opts.workingDir });
+    }
     const { items, errors } = await scanPiCustomizations({
       workingDirs: opts.workingDir ? [opts.workingDir] : [],
     });

@@ -23,6 +23,31 @@ export type DbTxName =
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
+  | 'bots.createProfile'
+  | 'bots.updateProfile'
+  | 'bots.replaceCanonicalSession'
+  | 'bots.createRouteSession'
+  | 'bots.setRouteStatus'
+  | 'bots.prepareRuntime'
+  | 'bots.finishRuntime'
+  | 'bots.createAutomationSession'
+  | 'bots.finalizeAutomationRun'
+  | 'bots.finishDelegation'
+  | 'bots.createDelegation'
+  | 'bots.retainWorkspaceLeases'
+  | 'bots.finalizeWorkspaceLeaseRelease'
+  | 'bots.attachWorkspaceLease'
+  | 'bots.pauseLifecycle'
+  | 'bots.resumeLifecycle'
+  | 'bots.archiveLifecycle'
+  | 'bots.deleteProfile'
+  | 'bots.linkSession'
+  | 'bots.upsertProjectBinding'
+  | 'bots.upsertChannel'
+  | 'bots.migrateLegacyProfile'
+  | 'bots.importBehaviorBundle'
+  | 'bots.applyImMigration'
+  | 'bots.beginImMigrationRollback'
   | 'wechatActivateBindingEpoch'
   | 'wechatCommitPollBatch'
   | 'wechatLeaseNextTask'
@@ -457,6 +482,259 @@ export interface ImDeleteBindingsArgs {
   }>;
 }
 
+export interface BotsCreateProfileArgs {
+  id: string;
+  displayName: string;
+  description: string;
+  avatar: string;
+  avatarColor: string;
+  identitySource: string;
+  capabilitiesJson: string;
+  now: number;
+}
+
+export interface BotsUpdateProfileArgs {
+  id: string;
+  displayName?: string;
+  description?: string;
+  avatar?: string;
+  avatarColor?: string;
+  status?: string;
+  identitySource: string;
+  capabilitiesJson: string;
+  profileContentChanged: boolean;
+  expectedCurrentVersion: number;
+  now: number;
+}
+
+export interface BotsReplaceCanonicalSessionArgs {
+  botId: string;
+  expectedCanonicalSessionId: string | null;
+  expectedProfileVersion: number;
+  session: {
+    id: string;
+    title: string;
+    workingDir: string | null;
+    workspaceKind: string;
+    model: string;
+    effort: string;
+    permissionMode: string;
+    agentKind: string;
+    remoteHostId: string | null;
+    providerId: string | null;
+    parentSessionId?: string | null;
+    extraDirs: string;
+    source: string;
+    createdAt: number;
+    updatedAt: number;
+  };
+  now: number;
+}
+
+export interface BotsReplaceCanonicalSessionResult {
+  created: boolean;
+  canonicalSessionId: string | null;
+  archivedCanonicalSessionId: string | null;
+}
+
+export interface BotsCreateRouteSessionArgs {
+  routeId: string;
+  botId: string;
+  channelId: string;
+  routeKey: string;
+  ownerDeviceId: string;
+  ownerGeneration: number;
+  expectedCurrentSessionId: string | null;
+  profileVersion: number;
+  forceRenew: boolean;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+  now: number;
+}
+
+export interface BotsCreateRouteSessionResult {
+  created: boolean;
+  sessionId: string;
+  archivedRuntimeSessionId: string | null;
+}
+
+export interface BotsSetRouteStatusArgs {
+  routeId: string;
+  botId: string;
+  expectedOwnerGeneration: number;
+  currentOwnerDeviceId: string | null;
+  currentSessionId: string | null;
+  status: string;
+  now: number;
+}
+
+export interface BotsPrepareRuntimeArgs {
+  snapshot: {
+    id: string; botId: string; sessionId: string; profileVersion: number; agentKind: string;
+    workingDir: string; memoryScopeKey: string | null; configuredJson: string; resolvedJson: string;
+    preparedAt: number;
+  };
+  eventId: string;
+  eventPayloadJson: string;
+}
+
+export interface BotsFinishRuntimeArgs {
+  snapshotId: string;
+  botId: string;
+  sessionId: string;
+  status: 'applied' | 'degraded' | 'failed';
+  finishedAt: number;
+  failureJson: string | null;
+  eventId: string;
+  eventType: 'runtime-applied' | 'runtime-failed';
+  eventPayloadJson: string;
+}
+
+export interface BotsCreateAutomationSessionArgs {
+  automationRunId: string;
+  botId: string;
+  localChannelId: string;
+  profileVersion: number;
+  routeKey: string;
+  workingDirSnapshot: string;
+  remoteHostIdSnapshot: string | null;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+  now: number;
+}
+
+export interface BotsFinalizeAutomationRunArgs {
+  automationRunId: string;
+  sessionId: string;
+  status: 'success' | 'failed' | 'aborted';
+  errorMessage: string | null;
+  workspaceLeaseId: string | null;
+  worktreePathSnapshot: string | null;
+  finishedAt: number;
+}
+
+export interface BotsFinishDelegationArgs {
+  delegationId: string;
+  status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
+  resultSummary: string | null;
+  outputArtifactsJson: string;
+  lastError: string | null;
+  tokensUsed?: number;
+  completedAt: number;
+}
+
+export interface BotsFinishDelegationResult {
+  id: string;
+  parentSessionId: string | null;
+  childSessionId: string | null;
+  status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
+}
+
+export interface BotsCreateDelegationArgs {
+  maxActiveChildren: number;
+  delegation: {
+    id: string; requestingBotId: string; targetBotId: string; parentSessionId: string;
+    childSessionId: string; objective: string; contextRefsJson: string; artifactRefsJson: string;
+    permissionSnapshotJson: string; lineageJson: string; targetProfileVersion: number;
+    depth: number; budgetTokens: number | null; createdAt: number;
+  };
+  localChannelId: string;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+export interface BotsRetainWorkspaceLeasesArgs { botId: string; at: number }
+export interface BotsFinalizeWorkspaceLeaseReleaseArgs {
+  leaseId: string; botId: string; expectedGeneration: number; anchorSessionId: string | null;
+  releasedAt: number; eventId?: string; eventType?: string;
+}
+export interface BotsAttachWorkspaceLeaseArgs {
+  attachmentId: string; leaseId: string; sessionId: string; generation: number;
+  workingDir: string; remoteHostId: string | null; now: number;
+}
+export interface BotsLifecycleTransitionArgs {
+  botId: string; canonicalSessionId: string | null; expectedProfileStatus: string;
+  at: number; eventId: string;
+}
+export interface BotsArchiveLifecycleArgs extends BotsLifecycleTransitionArgs {
+  expectedProfileStatus: string; worktreeDisposition: string;
+}
+export interface BotsDeleteProfileArgs {
+  botId: string;
+  sessionIds: string[];
+  keepTaskHistory: boolean;
+  at: number;
+}
+export interface BotsLinkSessionArgs {
+  botId: string;
+  sessionId: string;
+  role: 'canonical' | 'route' | 'history' | 'automation' | 'delegation';
+  channelId: string | null;
+  routeKey: string | null;
+  hasExpectedCanonical: boolean;
+  expectedCanonicalSessionId: string | null;
+  now: number;
+  eventId: string;
+}
+export interface BotsUpsertProjectBindingArgs {
+  id: string;
+  botId: string;
+  projectKey: string;
+  workingDir: string;
+  remoteHostId: string | null;
+  defaultBranch: string | null;
+  workspacePolicy: 'none' | 'reuse' | 'per-task' | 'read-only';
+  isDefault: boolean;
+  allowedPathsJson: string;
+  now: number;
+  eventId: string;
+}
+export interface BotsUpsertChannelArgs {
+  id: string;
+  botId: string;
+  kind: string;
+  enabled: boolean;
+  configJson: string | null;
+  now: number;
+}
+export interface BotsMigrateLegacyProfileArgs {
+  id: string;
+  displayName: string;
+  description: string;
+  avatar: string;
+  avatarColor: string;
+  identitySource: string;
+  capabilitiesJson: string;
+  channelKind: string | null;
+  legacySessionId: string | null;
+  now: number;
+}
+export interface BotsImportBehaviorBundleArgs {
+  bot: {
+    id: string; displayName: string; description: string; avatar: string; avatarColor: string;
+    identitySource: string; capabilitiesJson: string;
+  };
+  channels: Array<{ id: string; kind: string; enabled: boolean }>;
+  automations: Array<{
+    scheduleId: string; linkId: string; name: string; prompt: string; executionMode: string;
+    scriptConfig: string | null; cronExpr: string; timezone: string; recurring: boolean;
+    manual: boolean; intervalMs: number | null; agentKind: string; model: string | null;
+    providerId: string | null; effort: string | null; fastMode: boolean;
+    persistentSession: boolean; silentWhenIdle: boolean; notifyDesktop: boolean;
+    executionPolicyJson: string;
+  }>;
+  now: number;
+  eventId: string;
+}
+export interface BotsApplyImMigrationArgs {
+  migrationId: string; requestId: string; botId: string; channelId: string; routeId: string;
+  connectionId: string; ownership: 'local-adapter' | 'server-relay'; kind: string;
+  accountKey: string; planHash: string; channelConfigJson: string; capabilitiesJson: string;
+  adapterBindingsJson: string;
+  candidates: Array<{ sessionId: string; status: 'active' | 'archived'; updatedAt: number }>;
+  now: number; eventId: string;
+}
+export interface BotsBeginImMigrationRollbackArgs {
+  migrationId: string; now: number; eventId: string;
+}
+
 export type WechatInboxStatus =
   | 'pending'
   | 'dispatching'
@@ -761,6 +1039,31 @@ export type DbTxArgsByName = {
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
+  'bots.createProfile': BotsCreateProfileArgs;
+  'bots.updateProfile': BotsUpdateProfileArgs;
+  'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionArgs;
+  'bots.createRouteSession': BotsCreateRouteSessionArgs;
+  'bots.setRouteStatus': BotsSetRouteStatusArgs;
+  'bots.prepareRuntime': BotsPrepareRuntimeArgs;
+  'bots.finishRuntime': BotsFinishRuntimeArgs;
+  'bots.createAutomationSession': BotsCreateAutomationSessionArgs;
+  'bots.finalizeAutomationRun': BotsFinalizeAutomationRunArgs;
+  'bots.finishDelegation': BotsFinishDelegationArgs;
+  'bots.createDelegation': BotsCreateDelegationArgs;
+  'bots.retainWorkspaceLeases': BotsRetainWorkspaceLeasesArgs;
+  'bots.finalizeWorkspaceLeaseRelease': BotsFinalizeWorkspaceLeaseReleaseArgs;
+  'bots.attachWorkspaceLease': BotsAttachWorkspaceLeaseArgs;
+  'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
+  'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
+  'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
+  'bots.deleteProfile': BotsDeleteProfileArgs;
+  'bots.linkSession': BotsLinkSessionArgs;
+  'bots.upsertProjectBinding': BotsUpsertProjectBindingArgs;
+  'bots.upsertChannel': BotsUpsertChannelArgs;
+  'bots.migrateLegacyProfile': BotsMigrateLegacyProfileArgs;
+  'bots.importBehaviorBundle': BotsImportBehaviorBundleArgs;
+  'bots.applyImMigration': BotsApplyImMigrationArgs;
+  'bots.beginImMigrationRollback': BotsBeginImMigrationRollbackArgs;
   wechatActivateBindingEpoch: WechatActivateBindingEpochArgs;
   wechatCommitPollBatch: WechatCommitPollBatchArgs;
   wechatLeaseNextTask: WechatLeaseNextTaskArgs;
@@ -806,6 +1109,31 @@ export type DbTxResultByName = {
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;
+  'bots.createProfile': undefined;
+  'bots.updateProfile': { currentVersion: number };
+  'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionResult;
+  'bots.createRouteSession': BotsCreateRouteSessionResult;
+  'bots.setRouteStatus': undefined;
+  'bots.prepareRuntime': undefined;
+  'bots.finishRuntime': boolean;
+  'bots.createAutomationSession': undefined;
+  'bots.finalizeAutomationRun': undefined;
+  'bots.finishDelegation': BotsFinishDelegationResult | null;
+  'bots.createDelegation': undefined;
+  'bots.retainWorkspaceLeases': number;
+  'bots.finalizeWorkspaceLeaseRelease': undefined;
+  'bots.attachWorkspaceLease': undefined;
+  'bots.pauseLifecycle': { routes: number; automations: number };
+  'bots.resumeLifecycle': { routes: number; automations: number };
+  'bots.archiveLifecycle': { sessions: number };
+  'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
+  'bots.linkSession': { archivedCanonicalSessionIds: string[] };
+  'bots.upsertProjectBinding': undefined;
+  'bots.upsertChannel': undefined;
+  'bots.migrateLegacyProfile': undefined;
+  'bots.importBehaviorBundle': undefined;
+  'bots.applyImMigration': { routeId: string };
+  'bots.beginImMigrationRollback': undefined;
   wechatActivateBindingEpoch: WechatActivateBindingEpochResult;
   wechatCommitPollBatch: WechatCommitPollBatchResult;
   wechatLeaseNextTask: WechatLeasedTask | null;

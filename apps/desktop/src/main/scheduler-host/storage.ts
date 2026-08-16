@@ -172,7 +172,7 @@ const UNREAD_TERMINAL_RUN_STATUSES: ScheduleRun['status'][] = [
 ];
 
 function toScheduleSource(value: string | null): Schedule['source'] | undefined {
-  if (value === 'user' || value === 'project') return value;
+  if (value === 'user' || value === 'project' || value === 'bot') return value;
   return undefined;
 }
 
@@ -325,9 +325,13 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
   async list(filter?: ListFilter): Promise<Schedule[]> {
     const db = this.getDb();
     const query = db.select().from(schedules);
+    // Bot-owned definitions have a dedicated settings/history surface. Keep
+    // them out of the generic Automations list while listActive() still loads
+    // them into the Scheduler engine for automatic firing.
+    const nonBot = or(isNull(schedules.source), sql`${schedules.source} <> 'bot'`);
     const rows = filter?.status
-      ? await query.where(eq(schedules.status, filter.status))
-      : await query;
+      ? await query.where(and(eq(schedules.status, filter.status), nonBot))
+      : await query.where(nonBot);
     return rows.map(scheduleToCamel);
   }
 
@@ -604,11 +608,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .from(scheduleRuns)
       .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
       .where(
-        or(
-          isNotNull(scheduleRuns.sessionId),
-          and(
-            isNull(scheduleRuns.readAt),
-            inArray(scheduleRuns.status, UNREAD_TERMINAL_RUN_STATUSES),
+        and(
+          or(isNull(schedules.source), sql`${schedules.source} <> 'bot'`),
+          or(
+            isNotNull(scheduleRuns.sessionId),
+            and(
+              isNull(scheduleRuns.readAt),
+              inArray(scheduleRuns.status, UNREAD_TERMINAL_RUN_STATUSES),
+            ),
           ),
         ),
       );
@@ -683,7 +690,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
    */
   async listCostSummaries(): Promise<ScheduleCostSummary[]> {
     const db = this.getDb();
-    const runCostRows = (await db.select().from(scheduleRuns)).map(scheduleRunToCamel);
+    const nonBotScheduleRows = await db
+      .select({ id: schedules.id })
+      .from(schedules)
+      .where(or(isNull(schedules.source), sql`${schedules.source} <> 'bot'`));
+    const nonBotScheduleIds = new Set(nonBotScheduleRows.map((row) => row.id));
+    const runCostRows = (await db.select().from(scheduleRuns))
+      .map(scheduleRunToCamel)
+      .filter((row) => nonBotScheduleIds.has(row.scheduleId));
 
     const bySchedule = new Map<string, ScheduleTurnCostState>();
     const linkedSessionIds = new Set<string>();
@@ -1001,6 +1015,18 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return scheduleRunToCamel(row);
   }
 
+  /** Resolve the owning Schedule without exposing the run payload itself. */
+  async getScheduleForRun(runId: string): Promise<Schedule | null> {
+    const db = this.getDb();
+    const [row] = await db
+      .select({ schedule: schedules })
+      .from(scheduleRuns)
+      .innerJoin(schedules, eq(schedules.id, scheduleRuns.scheduleId))
+      .where(eq(scheduleRuns.id, runId))
+      .limit(1);
+    return row?.schedule ? scheduleToCamel(row.schedule) : null;
+  }
+
   async deleteOrphanRuns(): Promise<number> {
     const db = this.getDb();
     // 显式 .run() 才能经 drizzleProxy 拿到 changes(见 claimDueFire 注释)
@@ -1117,8 +1143,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     const [row] = await db
       .select({ n: sql<number>`count(*)` })
       .from(scheduleRuns)
+      .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
       .where(
         and(
+          or(isNull(schedules.source), sql`${schedules.source} <> 'bot'`),
           isNull(scheduleRuns.readAt),
           inArray(scheduleRuns.status, ['success', 'failed', 'aborted', 'interrupted']),
         ),
@@ -1181,6 +1209,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .set({ readAt: Date.now() })
       .where(
         and(
+          sql`${scheduleRuns.scheduleId} IN (
+            SELECT ${schedules.id}
+            FROM ${schedules}
+            WHERE ${schedules.source} IS NULL OR ${schedules.source} <> 'bot'
+          )`,
           isNull(scheduleRuns.readAt),
           inArray(scheduleRuns.status, ['success', 'failed', 'aborted', 'interrupted']),
         ),

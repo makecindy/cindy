@@ -19,6 +19,7 @@ import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps } from './_history_types.js';
 import { okPayload, errorPayload } from './_payload.js';
 import { encodeCursor, decodeCursor } from './_history_cursor.js';
+import { resolveHistoryScope } from './_history_scope.js';
 
 const DESCRIPTION = [
   `列出 ${BRAND_NAME} 本地数据库里所有出现过的工作目录(workdir), 以及每个 workdir 下`,
@@ -40,6 +41,7 @@ const DESCRIPTION = [
 
 export interface ListWorkdirsToolDeps {
   history: XdtHelperHistoryDeps;
+  getSessionContext?: () => import('../types.js').LiziMcpSessionContext | undefined;
 }
 
 export function registerListWorkdirsTool(
@@ -68,8 +70,11 @@ export function registerListWorkdirsTool(
         .describe('按 lastSessionAt 排序, desc = 最近活动的在前(默认), asc = 最早活动的在前。'),
     },
     handler: async ({ limit, cursor, order }) => {
+      const scope = await resolveHistoryScope(deps.history, deps.getSessionContext, null);
+      if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
       const cursorObj = decodeCursor(cursor);
       const result = await deps.history.listWorkdirs({
+        sessionIds: scope.sessionIds,
         limit,
         cursor: cursorObj,
         order,

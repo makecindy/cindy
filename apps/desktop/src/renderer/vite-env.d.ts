@@ -296,10 +296,8 @@ type SubagentModelSettingsState =
   import('../shared/subagentModelSettings').SubagentModelSettingsState;
 type SubagentModelSettingsWriteResult =
   import('../shared/subagentModelSettings').SubagentModelSettingsWriteResult;
-type VisionBridgeSettingsPatch =
-  import('../shared/visionBridgeSettings').VisionBridgeSettingsPatch;
-type VisionBridgeSettingsState =
-  import('../shared/visionBridgeSettings').VisionBridgeSettingsState;
+type VisionBridgeSettingsPatch = import('../shared/visionBridgeSettings').VisionBridgeSettingsPatch;
+type VisionBridgeSettingsState = import('../shared/visionBridgeSettings').VisionBridgeSettingsState;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -1082,7 +1080,9 @@ interface ElectronAPI {
   appDisplayVersion: string;
   appDisplayVersionDetail: string;
   preferredSystemLocale: ApplicationMenuLocale;
-  onLocaleChanged?: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
+  onLocaleChanged?: (
+    cb: (locale: import('../shared/locale').SupportedLocale) => void,
+  ) => () => void;
   getDeviceId: () => Promise<string>;
   windowMinimize: () => void;
   windowMaximize: () => void;
@@ -1286,9 +1286,7 @@ interface ElectronAPI {
       iconDataUrl?: string;
     }>;
     /** 本地包第三条恢复路径第一步:从已装目录读确认卡事实,零副作用。 */
-    reapproveInspect: (
-      id: string,
-    ) => Promise<{
+    reapproveInspect: (id: string) => Promise<{
       manifest: import('../shared/ghost').GhostManifest;
       trust: import('../shared/ghost').GhostTrustInfo;
       /** 确认卡展示时的清单字节指纹;确认时回传,防确认间隙清单被换。 */
@@ -1864,7 +1862,9 @@ interface ElectronAPI {
     rendererReady: () => Promise<void>;
     presentationReady: () => Promise<void>;
     onSamplingActiveChanged: (cb: (active: boolean) => void) => () => void;
-    onLocaleChanged: (cb: (locale: import('../shared/locale').SupportedLocale) => void) => () => void;
+    onLocaleChanged: (
+      cb: (locale: import('../shared/locale').SupportedLocale) => void,
+    ) => () => void;
   };
 
   /** 插件停靠面板独立窗口(每 ghostId 一扇窗;状态机在 main)。 */
@@ -3682,7 +3682,12 @@ interface ElectronAPI {
       agent?: 'cc' | 'pi',
     ) => Promise<{ ok: true; daemonReady: boolean }>;
     ccMgrListPendingUpgrades: () => Promise<{
-      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string; agent: 'cc' | 'pi' }>;
+      pending: Array<{
+        hostId: string;
+        currentVersion: string;
+        availableVersion: string;
+        agent: 'cc' | 'pi';
+      }>;
     }>;
     ccMgrDismissPendingUpgrade: (hostId: string, agent?: 'cc' | 'pi') => Promise<{ ok: true }>;
     // Codex credential sync
@@ -4166,6 +4171,72 @@ interface ElectronAPI {
       ackInterrupted: (id: string) => Promise<void>;
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     };
+    bots: {
+      list: () => Promise<unknown[]>;
+      listChannelConnections: () => Promise<
+        Array<import('../shared/botChannelRegistry').BotChannelConnection>
+      >;
+      get: (botId: string) => Promise<unknown>;
+      export: (body: { botId: string }) => Promise<
+        import('../shared/botPortability').BotBundleExportResult
+      >;
+      import: () => Promise<import('../shared/botPortability').BotBundleImportResult>;
+      health: (botId: string) => Promise<import('../shared/botLifecycle').BotHealthReport>;
+      lifecycleEvents: (body: {
+        botId: string;
+        limit?: number;
+      }) => Promise<Array<import('../shared/botLifecycle').BotLifecycleEventView>>;
+      searchHistory: (
+        body: import('../shared/botLifecycle').BotHistorySearchRequest,
+      ) => Promise<import('../shared/botLifecycle').BotHistorySearchResponse>;
+      create: (body: unknown) => Promise<unknown>;
+      migrateLegacy: (body: unknown) => Promise<unknown>;
+      update: (body: unknown) => Promise<unknown>;
+      upsertChannel: (body: unknown) => Promise<unknown>;
+      planImMigration: (body: {
+        botId: string;
+        connectionId: string;
+      }) => Promise<import('../shared/botImMigration').BotImMigrationPlan>;
+      applyImMigration: (
+        body: import('../shared/botImMigration').ApplyBotImMigrationInput,
+      ) => Promise<import('../shared/botImMigration').BotImMigrationRecord>;
+      listImMigrations: (
+        botId: string,
+      ) => Promise<Array<import('../shared/botImMigration').BotImMigrationRecord>>;
+      rollbackImMigration: (body: {
+        migrationId: string;
+      }) => Promise<import('../shared/botImMigration').BotImMigrationRecord>;
+      upsertRoute: (body: unknown) => Promise<unknown>;
+      setRouteStatus: (body: unknown) => Promise<unknown>;
+      upsertProjectBinding: (body: {
+        id?: string;
+        botId: string;
+        workingDir: string;
+        remoteHostId?: string | null;
+        defaultBranch?: string | null;
+        workspacePolicy: import('../shared/botWorkspace').BotWorkspacePolicy;
+        isDefault: boolean;
+        allowedPaths?: string[];
+      }) => Promise<unknown>;
+      archiveProjectBinding: (body: { botId: string; id: string }) => Promise<unknown>;
+      releaseWorkspaceLease: (body: {
+        botId: string;
+        leaseId: string;
+        expectedGeneration: number;
+      }) => Promise<unknown>;
+      createCanonicalSession: (body: {
+        botId: string;
+        expectedCanonicalSessionId: string | null;
+        expectedProfileVersion: number;
+        recoverMissingOnly?: boolean;
+      }) => Promise<{
+        created: boolean;
+        canonicalSessionId: string;
+        session: import('@/lib/ccAgent.types').Session;
+      }>;
+      linkSession: (body: unknown) => Promise<unknown>;
+      history: (botId: string) => Promise<unknown[]>;
+    };
     conversations: {
       search: (
         request: import('../shared/conversationSearch').ConversationSearchRequest,
@@ -4578,6 +4649,78 @@ interface ElectronAPI {
   maker: {
     listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown>;
+    listBotDelegations: (
+      parentSessionId: string,
+      status?: import('../shared/botDelegation').BotDelegationStatus,
+    ) => Promise<import('../shared/botDelegation').BotDelegationListResult>;
+    cancelBotDelegation: (
+      parentSessionId: string,
+      delegationId: string,
+    ) => Promise<import('../shared/botDelegation').BotDelegationCancelResult>;
+    onBotDelegationChanged: (
+      cb: (
+        payload: import('../shared/botDelegation').BotDelegationChangedPayload,
+        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
+    runBotLifecycleAction: (
+      request: import('../shared/botLifecycle').BotLifecycleActionRequest,
+    ) => Promise<import('../shared/botLifecycle').BotLifecycleActionResult>;
+    onBotLifecycleChanged: (
+      cb: (
+        payload: {
+          botId: string;
+          action: import('../shared/botLifecycle').BotLifecycleAction;
+        },
+        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
+    botDeliveries: {
+      list: (
+        botId: string,
+        limit?: number,
+      ) => Promise<import('../shared/botDelivery').BotDeliveryView[]>;
+      retry: (
+        botId: string,
+        deliveryId: string,
+        allowDuplicateRisk?: boolean,
+      ) => Promise<{ id: string }>;
+      onChanged: (
+        cb: (
+          payload: import('../shared/botDelivery').BotDeliveryChangedPayload,
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
+      ) => () => void;
+    };
+    botAutomations: {
+      list: (botId: string) => Promise<import('../shared/botAutomation').BotAutomation[]>;
+      create: (
+        input: import('../shared/botAutomation').CreateBotAutomationInput,
+      ) => Promise<import('../shared/botAutomation').BotAutomation>;
+      update: (
+        automationId: string,
+        patch: import('../shared/botAutomation').UpdateBotAutomationInput,
+      ) => Promise<import('../shared/botAutomation').BotAutomation>;
+      pause: (automationId: string) => Promise<void>;
+      resume: (automationId: string) => Promise<void>;
+      runNow: (automationId: string) => Promise<{ runId: string }>;
+      delete: (automationId: string) => Promise<void>;
+      listRuns: (
+        automationId: string,
+        limit?: number,
+      ) => Promise<import('../shared/botAutomation').BotAutomationRun[]>;
+      retryDelivery: (
+        automationId: string,
+        runId: string,
+        allowDuplicateRisk?: boolean,
+      ) => Promise<void>;
+      onChanged: (
+        cb: (
+          payload: { botId: string; automationId?: string; runId?: string },
+          ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+        ) => void,
+      ) => () => void;
+    };
     /** workflow 逐 agent 进度树(只读);读不到 / 解析失败返回 null → 回退 workflow 级卡片。 */
     getWorkflowProgress: (
       sessionId: string,
@@ -4829,7 +4972,12 @@ interface ElectronAPI {
 
     listAgentSkills: (
       agentKind: 'claude-code' | 'codex' | 'pi',
-      params: { workingDir?: string; forceReload?: boolean; sessionId?: string },
+      params: {
+        workingDir?: string;
+        remoteHostId?: string;
+        forceReload?: boolean;
+        sessionId?: string;
+      },
     ) => Promise<{
       success: boolean;
       error?: string;
@@ -5381,7 +5529,9 @@ interface ElectronAPI {
 
     /** 视觉桥设置（目标模型勾选 + 视觉后端主/备选）。 */
     visionBridgeSettingsGet: () => Promise<VisionBridgeSettingsState>;
-    visionBridgeSettingsSet: (patch: VisionBridgeSettingsPatch) => Promise<VisionBridgeSettingsState>;
+    visionBridgeSettingsSet: (
+      patch: VisionBridgeSettingsPatch,
+    ) => Promise<VisionBridgeSettingsState>;
     visionBridgeSettingsReset: () => Promise<VisionBridgeSettingsState>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */

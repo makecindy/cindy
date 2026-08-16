@@ -18,6 +18,7 @@ import { createTurnRunner, type ImTurnRunner } from './turnRunner';
 import { createSlashHandlers } from './slashCommands';
 import { createMessageHandler } from './messageHandler';
 import { createCardActionHandler } from './cardActionHandler';
+import { renewBotImRouteTarget, resolveBotImRouteTarget } from './botRouteTarget';
 import type { ImChannelAdapter, ImChannelName } from './types';
 
 const log = createLogger('im:orchestrator');
@@ -74,6 +75,8 @@ export function createImOrchestrator(adapter: ImChannelAdapter): ImOrchestrator 
   const cards = createCardBuilders(adapter.ui, repo.getDefaultEffortFor);
   const turnRunner = createTurnRunner(adapter, repo, cards, {
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+    resolveBotRouteTarget: resolveBotImRouteTarget,
+    renewBotRouteTarget: renewBotImRouteTarget,
   });
   const slash = createSlashHandlers(adapter, repo, cards, turnRunner);
   const attachMessageHandler = createMessageHandler(adapter, slash, turnRunner);

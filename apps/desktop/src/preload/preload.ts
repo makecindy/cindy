@@ -47,9 +47,7 @@ import {
   type TerminateAgentProcessRequest,
   type TerminateAgentProcessResult,
 } from '../shared/processMonitor';
-import {
-  RESOURCE_USAGE_WINDOW_OPEN_CHANNEL,
-} from '../shared/resourceUsageWindow';
+import { RESOURCE_USAGE_WINDOW_OPEN_CHANNEL } from '../shared/resourceUsageWindow';
 import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
 import { VOICE_INPUT_POWER_STATE_CHANNEL } from '../shared/voiceInputPowerIpc';
 import {
@@ -630,6 +628,10 @@ const fanOutIOSSimulatorRouteStatus = createIpcFanOut(IOS_SIMULATOR_ROUTE_STATUS
 const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
   'maker:session-background-activity-changed',
 );
+const fanOutBotDelegationChanged = createIpcFanOut('maker:bot-delegation:changed');
+const fanOutBotAutomationChanged = createIpcFanOut('maker:bot-automation:changed');
+const fanOutBotLifecycleChanged = createIpcFanOut('maker:bot-lifecycle:changed');
+const fanOutBotDeliveryChanged = createIpcFanOut('maker:bot-delivery:changed');
 const fanOutMakerUsageTodaySpend = createIpcFanOut('usage:today-spend-changed'); // Claude USD
 const fanOutMakerUsageTodayTokens = createIpcFanOut('usage:today-tokens-changed'); // Codex token
 const fanOutMakerUsageModelPricing = createIpcFanOut('usage:model-pricing-changed');
@@ -1044,8 +1046,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedPackageSha256: string;
         expectedInstalledApproval: string;
       },
-    ): Promise<{ ghost: unknown }> =>
-      ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
+    ): Promise<{ ghost: unknown }> => ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
     cindyPrefsSync: (
       id: string,
     ): {
@@ -1115,7 +1116,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       iconDataUrl?: string;
     }> => ipcRenderer.invoke('ghosts:inspect', lizFilePath),
     /** 本地包第三条恢复路径:从已装目录读确认卡事实(零副作用)。 */
-    reapproveInspect: (id: string): Promise<{
+    reapproveInspect: (
+      id: string,
+    ): Promise<{
       manifest: unknown;
       trust: unknown;
       manifestSha256: string;
@@ -1133,8 +1136,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedInstalledApproval: string;
         inspectTicket: string;
       },
-    ): Promise<{ ghost: unknown }> =>
-      ipcRenderer.invoke('ghosts:reapprove-installed', id, opts),
+    ): Promise<{ ghost: unknown }> => ipcRenderer.invoke('ghosts:reapprove-installed', id, opts),
     uninstall: (id: string): Promise<{ ok: true }> => ipcRenderer.invoke('ghosts:uninstall', id),
     /** 详情页「导出 .cindy」:main 打包安装目录 → 系统保存对话框落盘。 */
     export: (
@@ -4101,9 +4103,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ ok: true; daemonReady: boolean }> =>
       ipcRenderer.invoke('maker:remote-ssh:cc-mgr-force-upgrade', { hostId, sessionId, agent }),
     ccMgrListPendingUpgrades: (): Promise<{
-      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string; agent: 'cc' | 'pi' }>;
+      pending: Array<{
+        hostId: string;
+        currentVersion: string;
+        availableVersion: string;
+        agent: 'cc' | 'pi';
+      }>;
     }> => ipcRenderer.invoke('maker:remote-ssh:cc-mgr-list-pending-upgrades'),
-    ccMgrDismissPendingUpgrade: (hostId: string, agent: 'cc' | 'pi' = 'cc'): Promise<{ ok: true }> =>
+    ccMgrDismissPendingUpgrade: (
+      hostId: string,
+      agent: 'cc' | 'pi' = 'cc',
+    ): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:remote-ssh:cc-mgr-dismiss-pending-upgrade', { hostId, agent }),
 
     // ── Codex auth sync (Phase B+) ────────────────────────────────────────
@@ -4594,6 +4604,51 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:sessions:ack-interrupted', id),
       // Stage 2 C2: fork 已迁到 electronAPI.maker.fork (走 maker:fork IPC)。
     },
+    bots: {
+      list: (): Promise<unknown[]> => ipcRenderer.invoke('local-db:bots:list'),
+      listChannelConnections: (): Promise<unknown[]> =>
+        ipcRenderer.invoke('local-db:bots:channel-connections'),
+      get: (botId: string): Promise<unknown> => ipcRenderer.invoke('local-db:bots:get', botId),
+      export: (body: { botId: string }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:export', body),
+      import: (): Promise<unknown> => ipcRenderer.invoke('local-db:bots:import'),
+      health: (botId: string): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:health', botId),
+      lifecycleEvents: (body: unknown): Promise<unknown[]> =>
+        ipcRenderer.invoke('local-db:bots:lifecycle-events', body),
+      searchHistory: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:search-history', body),
+      create: (body: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:bots:create', body),
+      migrateLegacy: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:migrate-legacy', body),
+      update: (body: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:bots:update', body),
+      upsertChannel: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:channel-upsert', body),
+      planImMigration: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:im-migration-plan', body),
+      applyImMigration: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:im-migration-apply', body),
+      listImMigrations: (botId: string): Promise<unknown[]> =>
+        ipcRenderer.invoke('local-db:bots:im-migrations-list', botId),
+      rollbackImMigration: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:im-migration-rollback', body),
+      upsertRoute: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:route-upsert', body),
+      setRouteStatus: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:route-set-status', body),
+      upsertProjectBinding: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:project-binding-upsert', body),
+      archiveProjectBinding: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:project-binding-archive', body),
+      releaseWorkspaceLease: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:workspace-lease-release', body),
+      createCanonicalSession: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:create-canonical-session', body),
+      linkSession: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:bots:link-session', body),
+      history: (botId: string): Promise<unknown[]> =>
+        ipcRenderer.invoke('local-db:bots:history', botId),
+    },
     conversations: {
       search: (request: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:conversations:search', request),
@@ -4918,6 +4973,67 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:list-available-agents'),
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
       ipcRenderer.invoke('maker:get-capabilities', agentKind),
+    listBotDelegations: (
+      parentSessionId: string,
+      status?: import('../shared/botDelegation').BotDelegationStatus,
+    ): Promise<import('../shared/botDelegation').BotDelegationListResult> =>
+      ipcRenderer.invoke('maker:bot-delegations:list', parentSessionId, status),
+    cancelBotDelegation: (
+      parentSessionId: string,
+      delegationId: string,
+    ): Promise<import('../shared/botDelegation').BotDelegationCancelResult> =>
+      ipcRenderer.invoke('maker:bot-delegation:cancel', parentSessionId, delegationId),
+    onBotDelegationChanged: fanOutBotDelegationChanged,
+    runBotLifecycleAction: (
+      request: import('../shared/botLifecycle').BotLifecycleActionRequest,
+    ): Promise<import('../shared/botLifecycle').BotLifecycleActionResult> =>
+      ipcRenderer.invoke('maker:bot-lifecycle:action', request),
+    onBotLifecycleChanged: fanOutBotLifecycleChanged,
+    botDeliveries: {
+      list: (botId: string, limit?: number): Promise<import('../shared/botDelivery').BotDeliveryView[]> =>
+        ipcRenderer.invoke('maker:bot-deliveries:list', botId, limit),
+      retry: (botId: string, deliveryId: string, allowDuplicateRisk = false): Promise<{ id: string }> =>
+        ipcRenderer.invoke('maker:bot-delivery:retry', botId, deliveryId, allowDuplicateRisk),
+      onChanged: fanOutBotDeliveryChanged,
+    },
+    botAutomations: {
+      list: (botId: string): Promise<import('../shared/botAutomation').BotAutomation[]> =>
+        ipcRenderer.invoke('maker:bot-automations:list', botId),
+      create: (
+        input: import('../shared/botAutomation').CreateBotAutomationInput,
+      ): Promise<import('../shared/botAutomation').BotAutomation> =>
+        ipcRenderer.invoke('maker:bot-automation:create', input),
+      update: (
+        automationId: string,
+        patch: import('../shared/botAutomation').UpdateBotAutomationInput,
+      ): Promise<import('../shared/botAutomation').BotAutomation> =>
+        ipcRenderer.invoke('maker:bot-automation:update', automationId, patch),
+      pause: (automationId: string): Promise<void> =>
+        ipcRenderer.invoke('maker:bot-automation:pause', automationId),
+      resume: (automationId: string): Promise<void> =>
+        ipcRenderer.invoke('maker:bot-automation:resume', automationId),
+      runNow: (automationId: string): Promise<{ runId: string }> =>
+        ipcRenderer.invoke('maker:bot-automation:run-now', automationId),
+      delete: (automationId: string): Promise<void> =>
+        ipcRenderer.invoke('maker:bot-automation:delete', automationId),
+      listRuns: (
+        automationId: string,
+        limit?: number,
+      ): Promise<import('../shared/botAutomation').BotAutomationRun[]> =>
+        ipcRenderer.invoke('maker:bot-automation:list-runs', automationId, limit),
+      retryDelivery: (
+        automationId: string,
+        runId: string,
+        allowDuplicateRisk = false,
+      ): Promise<void> =>
+        ipcRenderer.invoke(
+          'maker:bot-automation:retry-delivery',
+          automationId,
+          runId,
+          allowDuplicateRisk,
+        ),
+      onChanged: fanOutBotAutomationChanged,
+    },
     listTurnChangeSets: (
       sessionId: string,
     ): Promise<import('../shared/turnChangeSet').TurnChangeSetSummary[]> =>
@@ -5114,9 +5230,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<void> =>
       ipcRenderer.invoke('maker:model-visibility:sync', dataOwnerId, ownerGeneration, map),
     claimLegacyModelVisibilityOwner: (): ModelVisibilityLegacyOwnerClaim => {
-      const value: unknown = ipcRenderer.sendSync(
-        'maker:model-visibility:legacy-owner-claim-sync',
-      );
+      const value: unknown = ipcRenderer.sendSync('maker:model-visibility:legacy-owner-claim-sync');
       return isModelVisibilityLegacyOwnerClaim(value)
         ? value
         : {
@@ -5232,7 +5346,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     listAgentSkills: (
       agentKind: 'claude-code' | 'codex' | 'pi',
-      params: { workingDir?: string; forceReload?: boolean; sessionId?: string },
+      params: {
+        workingDir?: string;
+        remoteHostId?: string;
+        forceReload?: boolean;
+        sessionId?: string;
+      },
     ): Promise<{
       success: boolean;
       error?: string;

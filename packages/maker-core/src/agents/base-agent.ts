@@ -95,6 +95,8 @@ export interface CodexMcpThreadContextArgs {
   /** 当前 Maker Session 实例代号；同 business session 重建后必须变化。 */
   sessionInstanceId?: string;
   workingDir: string;
+  /** Host-owned memory namespace override shared with prompt injection and MCP tools. */
+  memoryScopeKey?: string;
   /**
    * SSH remote 会话的 host id。cindy_memory 的 store 定位键要靠它区分
    * 「远端路径」与「本地同名路径」(buildMemoryScopeKey), 缺省 = 本地会话。
@@ -236,13 +238,20 @@ export interface PiNativeModelSpec {
  *   - rm(清理:configHome / perm / subagent / forkHome)
  * 所有路径都是远端机器上的绝对路径(与 pi 进程 cwd 一致)。
  */
-export interface PiRemoteFileOps {
+export interface RemoteAgentFileOps {
+  stat(file: string): Promise<{ isFile: boolean } | null>;
+  /** Missing/unreadable directories return an empty array. */
+  listDir(dir: string): Promise<string[]>;
+  /** Bounded UTF-8 read used for remote runtime metadata such as SKILL.md. */
+  readFile(file: string, maxBytes?: number): Promise<string>;
+  /** Hash the complete remote file without transferring its contents to the client. */
+  sha256File(file: string): Promise<string>;
+}
+
+export interface PiRemoteFileOps extends RemoteAgentFileOps {
   mkdirp(dir: string): Promise<void>;
   writeFile(file: string, content: string, mode?: number): Promise<void>;
-  stat(file: string): Promise<{ isFile: boolean } | null>;
   rm(fileOrDir: string, opts?: { recursive?: boolean }): Promise<void>;
-  /** 列目录子项名(供陈旧 configHome 清理等)。失败返回空数组。 */
-  listDir(dir: string): Promise<string[]>;
 }
 
 /**
@@ -786,6 +795,11 @@ export interface AgentDeps {
     remoteHostId: string,
   ) => PiRemoteFileOps;
 
+  /** Read-only filesystem truth used by remote Skill catalog discovery. */
+  getRemoteAgentFileOps?: (
+    remoteHostId: string,
+  ) => RemoteAgentFileOps;
+
 
   /**
    * Codex 专用:读**这个 thread 本次实际出口**的出站代理路径判定,用于把「后端不可达」
@@ -1171,6 +1185,54 @@ export class AgentNotAuthenticatedError extends Error {
   }
 }
 
+export interface BotRuntimeSkillEntry {
+  name: string;
+  runtimeCommandName?: string;
+  path?: string;
+  enabled?: boolean;
+  runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
+  scope?: string;
+}
+
+export interface BotRuntimeSkillPolicy {
+  mode: 'inherit' | 'allowlist';
+  configured: string[];
+  catalog: BotRuntimeSkillEntry[];
+}
+
+export interface BotRuntimeMcpEntry {
+  name: string;
+  source: 'builtin' | 'custom';
+  available?: boolean;
+}
+
+export interface BotRuntimeMcpPolicy {
+  mode: 'inherit' | 'allowlist';
+  configured: string[];
+  catalog: BotRuntimeMcpEntry[];
+}
+
+export interface BotRuntimeToolsetEntry {
+  id: string;
+  name: string;
+  essential?: boolean;
+  available?: boolean;
+}
+
+export interface BotRuntimeToolsetPolicy {
+  mode: 'inherit' | 'allowlist';
+  configured: string[];
+  catalog: BotRuntimeToolsetEntry[];
+}
+
+export interface BotRuntimeProfile {
+  botId: string;
+  profileVersion: number;
+  skillPolicy: BotRuntimeSkillPolicy;
+  mcpPolicy: BotRuntimeMcpPolicy;
+  toolsetPolicy: BotRuntimeToolsetPolicy;
+}
+
 export interface StartSessionOptions {
   /**
    * Business 层 session id (host 调用 maker.createSession 时传的 opts.id, 由
@@ -1228,6 +1290,30 @@ export interface StartSessionOptions {
    */
   userPrompt?: string;
   /**
+   * Bot Profile runtime context, resolved by the main/DB authority at session
+   * start. It is a startup system-prompt segment, not a per-turn user prefix.
+   * Harness adapters place it before the user personalization segment.
+   */
+  botProfilePrompt?: string;
+  /**
+   * Stable profile-binding metadata rendered separately from the Bot SOUL.
+   * Hermes keeps the active-profile marker outside the identity document so
+   * profile metadata never mutates user-authored identity bytes.
+   */
+  botProfileContextPrompt?: string;
+  /**
+   * Hermes USER.md equivalent for a Bot Profile. This is frozen with the
+   * Profile/runtime snapshot and belongs in the volatile prompt tier after
+   * memory, not inside the Bot's SOUL identity.
+   */
+  botUserProfilePrompt?: string;
+  /**
+   * Native Bot capability snapshot resolved by the host before the harness
+   * starts. Adapters must enforce this through their own Skill/MCP/tool config;
+   * it must never be converted into natural-language capability claims.
+   */
+  botRuntimeProfile?: BotRuntimeProfile;
+  /**
    * 是否启用 Maker Memory (本次 session 内). 跟 userPrompt 同模式 — renderer 启 session
    * 时透传当前 memoryMode='maker' → true, 'native' / 'off' → false。main 不持久化。
    *
@@ -1241,11 +1327,37 @@ export interface StartSessionOptions {
    */
   makerMemoryEnabled?: boolean;
   /**
+   * Stable host-owned Maker Memory scope. Cindy Bots use this to keep memory
+   * isolated by Bot identity instead of sharing it with every task in a workdir.
+   */
+  makerMemoryScopeKey?: string;
+  /**
+   * Exact host-frozen memory bytes for this runtime start. When present the
+   * harness must inject these bytes instead of re-reading MEMORY.md later in
+   * startup, otherwise the persisted runtime snapshot and the actual prompt
+   * can observe different memory generations.
+   */
+  makerMemoryIndexSnapshot?: string;
+  /**
    * Host-owned Cindy Review policy. This is not a user permission preset:
    * adapters must keep the session local, fresh, memory-free and hard
    * read-only even if a later control request tries to widen permissions.
    */
   reviewMode?: true;
+  /**
+   * Host-owned workspace access boundary. Unlike Review this keeps the normal
+   * Bot profile, Skills, MCPs, memory and remote capabilities available while
+   * preventing the harness from mutating the bound project workspace. A later
+   * permission-mode control request must never widen this boundary.
+   */
+  workspaceAccess?: 'read-write' | 'read-only';
+  /**
+   * Host-frozen writable subtrees for this workspace. Undefined/empty keeps
+   * the legacy whole-workspace write scope; a non-empty list narrows writes
+   * to these exact files or directory subtrees and must be enforced by the
+   * harness even when permissionMode is Full Access.
+   */
+  workspaceWritePaths?: string[];
   /**
    * Exact local files or directories that a host-owned Review may inspect in
    * addition to workingDir. Adapters must treat files as exact grants and

@@ -88,8 +88,13 @@ import {
   mergeTelegramGroupActivationViews,
   resetGroupContextCursorsSafely,
 } from './groupWindow.js';
-import { createHookDispatcher } from './dispatcher.js';
+import { createHookDispatcher, type HookDispatcher } from './dispatcher.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
+import {
+  hookBotRouteSourceFromExternalKey,
+  resolveHookBotRouteTarget,
+  renewHookBotRouteTarget,
+} from './botRouteTarget.js';
 import { resolveHookInteraction } from './interactions.js';
 import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
@@ -99,11 +104,14 @@ import { resetTelegramSpeakerRegistrationCache } from '../im/telegram/contactsAu
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { setLifecycleAnnouncementFromIpc } from './lifecycleAnnouncementIpc.js';
+import type { BotChannelConnection } from '../../shared/botChannelRegistry.js';
+import { hookViewToBotChannelConnections } from './botChannelConnections.js';
 
 const log = createLogger('hook-control');
 
 let store: SlackHookStore | null = null;
 let manager: HookControlManager | null = null;
+let botMigrationDispatcher: HookDispatcher | null = null;
 let disposeAuthListener: (() => void) | null = null;
 let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 let codexMcpRefreshPending = false;
@@ -157,6 +165,58 @@ function disabledHookView(): SlackHookView {
       defaultWorkspace: null,
     },
   };
+}
+
+/** Concrete server-relay identities available to Cindy Bots. */
+export function listHookBotChannelConnections(): BotChannelConnection[] {
+  const view = hookControlAvailable() ? ensureInstances().manager.snapshot() : disabledHookView();
+  return hookViewToBotChannelConnections(view);
+}
+
+/** Server-relay Bot delivery with provider-owned idempotency and ACK. */
+export async function sendHookBotRouteMessage(input: {
+  provider: 'telegram' | 'slack';
+  accountKey: string;
+  externalKey: string;
+  opId: string;
+  text: string;
+}): Promise<
+  | { ok: true; messageId?: string | null }
+  | { ok: false; retryable: boolean; errorCode: string; message: string }
+> {
+  if (!hookControlAvailable()) {
+    return {
+      ok: false,
+      retryable: true,
+      errorCode: 'HOOK_ACCOUNT_UNAVAILABLE',
+      message: 'Cindy account relay services are unavailable.',
+    };
+  }
+  const result = await ensureInstances().manager.sendBotRouteMessage(input);
+  if (result.ok) return { ok: true, messageId: result.messageId };
+  const code = result.error?.trim() || 'RELAY_DELIVERY_FAILED';
+  return {
+    ok: false,
+    retryable:
+      result.retryAfterMs !== undefined
+      || code === 'HOOK_NOT_CONNECTED'
+      || code === 'MESSAGE_OP_TIMEOUT',
+    errorCode: code,
+    message: code,
+  };
+}
+
+/** Serialize a relay migration against every legacy hook admission. */
+export async function runHookBotMigrationExclusive<T>(
+  scope: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (!hookControlAvailable()) return operation();
+  ensureInstances();
+  if (!botMigrationDispatcher?.runMigrationExclusive) {
+    throw new Error('Hook dispatcher migration gate is unavailable');
+  }
+  return botMigrationDispatcher.runMigrationExclusive(scope, operation);
 }
 
 /**
@@ -340,6 +400,13 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
         log,
       }),
       runner: createMakerHookSessionRunner({ log }),
+      resolveBotRouteTarget: ({ externalKey, source }) =>
+        resolveHookBotRouteTarget(externalKey, source),
+      renewBotRouteTarget: ({ externalKey }) => renewHookBotRouteTarget(externalKey),
+      migrationScopeForDispatch: ({ externalKey, source }) => {
+        const routeSource = hookBotRouteSourceFromExternalKey(externalKey, source);
+        return routeSource?.accountKey ? `${routeSource.platform}:${routeSource.accountKey}` : null;
+      },
       buildContextPrefix: buildGroupContextPrefix,
       // 新建 hook 会话默认预建独立 worktree(并发隔离); deps 组装与
       // maker-ipc/register.ts 的 use_worktree 分支同款。失败由 dispatcher
@@ -410,6 +477,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       accountInitiallyActive: false,
       log,
     });
+    botMigrationDispatcher = dispatcher;
     manager = createHookControlManager({
       store,
       isAvailable: hookControlAvailable,
@@ -451,32 +519,36 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // permissionModes 仍取 capabilities(运行时能力, 与供应商无关), server
       // 侧据此渲染权限档下拉(选中值经 dispatch options.permissionMode 回流)
       listAgentModels: async () => {
-        const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
+        const providers = await getDesktopProviderService().listProviders({
+          allowSideEffects: true,
+        });
         // 动态取 runtime 已注册的 agent(含 Pi,若已安装);上游此处硬编码 cc/codex(早于 Pi),
         // 本 PR 的 Pi 接入以 listAvailableAgents() 为准 —— 与新建入口按注册结果门控同源。
-        return getMaker().listAvailableAgents().map((agentKind) => {
-          const models = visibleModelUnion(providers, agentKind, (providerId, m) =>
-            isModelVisible(
-              getModelVisibilityOverride(agentKind, providerId, m.id),
-              m.defaultEnabled,
-            ),
-          );
-          return {
-            agentKind,
-            models: models.map((m) => ({
-              id: m.id,
-              displayName: m.name,
-              efforts: m.efforts,
-              defaultEffort: m.defaultEffort,
-              // 分组随行: 折扣版(gpt-budget)与官方版 displayName 故意同名,
-              // Slack 卡与 Tina 下拉都靠 group 加区分后缀
-              ...(m.group !== undefined ? { group: m.group } : {}),
-            })),
-            permissionModes: getMaker()
-              .getCapabilities(agentKind)
-              .permissionModes.map((pm) => ({ id: pm.id, displayName: pm.displayName })),
-          };
-        });
+        return getMaker()
+          .listAvailableAgents()
+          .map((agentKind) => {
+            const models = visibleModelUnion(providers, agentKind, (providerId, m) =>
+              isModelVisible(
+                getModelVisibilityOverride(agentKind, providerId, m.id),
+                m.defaultEnabled,
+              ),
+            );
+            return {
+              agentKind,
+              models: models.map((m) => ({
+                id: m.id,
+                displayName: m.name,
+                efforts: m.efforts,
+                defaultEffort: m.defaultEffort,
+                // 分组随行: 折扣版(gpt-budget)与官方版 displayName 故意同名,
+                // Slack 卡与 Tina 下拉都靠 group 加区分后缀
+                ...(m.group !== undefined ? { group: m.group } : {}),
+              })),
+              permissionModes: getMaker()
+                .getCapabilities(agentKind)
+                .permissionModes.map((pm) => ({ id: pm.id, displayName: pm.displayName })),
+            };
+          });
       },
       // 绑定授权链接: 用系统浏览器打开(远程控制时落被控机, 设置页另给复制链接)
       openExternalUrl: (url) => {
@@ -855,15 +927,18 @@ export function registerHookControlIpc(): void {
     }
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.TELEGRAM_BEHAVIOR_GET, async (_e, payload) => {
-    requireHookControl();
-    const bindingId = requireString(requireObject(payload).bindingId, 'bindingId');
-    try {
-      return { behavior: await ensureInstances().manager.getTelegramBehavior(bindingId) };
-    } catch (err) {
-      throwHookPrefsError(err);
-    }
-  });
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.TELEGRAM_BEHAVIOR_GET,
+    async (_e, payload) => {
+      requireHookControl();
+      const bindingId = requireString(requireObject(payload).bindingId, 'bindingId');
+      try {
+        return { behavior: await ensureInstances().manager.getTelegramBehavior(bindingId) };
+      } catch (err) {
+        throwHookPrefsError(err);
+      }
+    },
+  );
 
   registerTrustedHookControlHandler(
     HOOK_CONTROL_INVOKE.TELEGRAM_BEHAVIOR_SET,
@@ -902,33 +977,36 @@ export function registerHookControlIpc(): void {
     },
   );
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.TELEGRAM_GROUPS_LIST, async (_e, payload) => {
-    requireHookControl();
-    const bindingId = requireString(requireObject(payload).bindingId, 'bindingId');
-    try {
-      const { manager: m } = ensureInstances();
-      const behavior = await m.getTelegramBehavior(bindingId);
-      const binding = m.snapshot().telegram.binding;
-      if (
-        binding?.state !== 'confirmed' ||
-        binding.bindingId !== bindingId ||
-        binding.bindingId !== behavior.bindingId ||
-        !binding.principalId
-      ) {
-        throw new HookNotConnectedError('telegram');
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.TELEGRAM_GROUPS_LIST,
+    async (_e, payload) => {
+      requireHookControl();
+      const bindingId = requireString(requireObject(payload).bindingId, 'bindingId');
+      try {
+        const { manager: m } = ensureInstances();
+        const behavior = await m.getTelegramBehavior(bindingId);
+        const binding = m.snapshot().telegram.binding;
+        if (
+          binding?.state !== 'confirmed' ||
+          binding.bindingId !== bindingId ||
+          binding.bindingId !== behavior.bindingId ||
+          !binding.principalId
+        ) {
+          throw new HookNotConnectedError('telegram');
+        }
+        const knownGroups = await listTelegramKnownGroupsForStableBinding(
+          { bindingId: binding.bindingId, principalId: binding.principalId },
+          () => m.snapshot().telegram.binding,
+        );
+        if (knownGroups === null) throw new HookNotConnectedError('telegram');
+        return {
+          groups: mergeTelegramGroupActivationViews(knownGroups, behavior.groupActivation),
+        };
+      } catch (err) {
+        throwHookPrefsError(err);
       }
-      const knownGroups = await listTelegramKnownGroupsForStableBinding(
-        { bindingId: binding.bindingId, principalId: binding.principalId },
-        () => m.snapshot().telegram.binding,
-      );
-      if (knownGroups === null) throw new HookNotConnectedError('telegram');
-      return {
-        groups: mergeTelegramGroupActivationViews(knownGroups, behavior.groupActivation),
-      };
-    } catch (err) {
-      throwHookPrefsError(err);
-    }
-  });
+    },
+  );
 
   registerTrustedHookControlHandler(
     HOOK_CONTROL_INVOKE.TELEGRAM_GROUP_ACTIVATION_SET,

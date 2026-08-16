@@ -117,7 +117,12 @@ async function recycleOwnWorktreeForRemovedSession(
  */
 async function findOwningWorktreeSessionIds(sessionId: string): Promise<string[]> {
   const row = await readSessionRecycleSnapshot(sessionId);
-  if (!row || (row.status !== 'deleted' && row.status !== 'archived')) return [];
+  if (
+    !row ||
+    row.source === 'bot' ||
+    (row.status !== 'deleted' && row.status !== 'archived')
+  )
+    return [];
 
   const sharedPathKeys = new Set<string>();
   const workingDirKey = pathKey(row.workingDir);
@@ -139,6 +144,7 @@ async function findOwningWorktreeSessionIds(sessionId: string): Promise<string[]
 
 interface SessionRecycleSnapshot {
   status: string | null | undefined;
+  source: string | null | undefined;
   workingDir: string | null;
   worktreePath: string | null;
 }
@@ -151,6 +157,7 @@ async function readSessionRecycleSnapshot(
     const [row] = await db
       .select({
         status: sessions.status,
+        source: sessions.source,
         workingDir: sessions.workingDir,
         worktreePath: sessions.worktreePath,
       })
@@ -184,9 +191,10 @@ async function readCurrentSessionStatus(
 ): Promise<string | null> {
   try {
     const [row] = await db
-      .select({ status: sessions.status })
+      .select({ status: sessions.status, source: sessions.source })
       .from(sessions)
       .where(eq(sessions.id, sessionId));
+    if (row?.source === 'bot') return null;
     return row?.status ?? null;
   } catch (err) {
     log.warn(
@@ -209,11 +217,11 @@ export async function reconcileWorktreesForDeletedSessions(): Promise<void> {
   const candidates = store.getAll().filter((m) => !m.ephemeral);
   if (candidates.length === 0) return;
 
-  let rows: Array<{ id: string; status: string | null }>;
+  let rows: Array<{ id: string; status: string | null; source: string | null }>;
   try {
     const db = getDbClient().drizzle;
     rows = await db
-      .select({ id: sessions.id, status: sessions.status })
+      .select({ id: sessions.id, status: sessions.status, source: sessions.source })
       .from(sessions)
       .where(
         inArray(
@@ -230,10 +238,11 @@ export async function reconcileWorktreesForDeletedSessions(): Promise<void> {
     return;
   }
 
-  const statusById = new Map(rows.map((r) => [r.id, r.status]));
+  const rowById = new Map(rows.map((r) => [r.id, r]));
   for (const meta of candidates) {
-    const status = statusById.get(meta.sessionId);
-    const orphaned = status === undefined || status === 'deleted';
+    const row = rowById.get(meta.sessionId);
+    const status = row?.status;
+    const orphaned = !row || (row.source !== 'bot' && status === 'deleted');
     if (!orphaned) continue;
     log.info(
       `[sessionRemovalRecycle] reconciling orphaned worktree at ${meta.path} (session ${meta.sessionId}, status=${status ?? 'missing'})`,

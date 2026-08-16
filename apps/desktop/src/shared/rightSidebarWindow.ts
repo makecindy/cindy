@@ -62,6 +62,14 @@ export type RsbWindowCommand =
       /** False persists the tab without expanding the sidebar. */
       revealSidebar?: boolean;
     }
+  /** 打开/聚焦 Bot 间协作记录；每个 Bot 父任务单例。 */
+  | {
+      type: 'open-bot-delegations-tab';
+      sessionId: string;
+      focusDelegationId?: string | null;
+      focusTab?: boolean;
+      revealSidebar?: boolean;
+    }
   | {
       type: 'open-turn-review';
       sessionId: string;

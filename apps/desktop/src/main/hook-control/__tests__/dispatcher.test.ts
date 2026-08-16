@@ -197,6 +197,14 @@ async function tick(times = 10): Promise<void> {
   for (let i = 0; i < times; i++) await Promise.resolve();
 }
 
+function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function makeDispatcher(overrides?: {
   getConnection?: HookDispatcherDeps['getConnection'];
   runner?: HookSessionRunner;
@@ -211,6 +219,9 @@ function makeDispatcher(overrides?: {
   subscribeUiSessionIntervention?: HookDispatcherDeps['subscribeUiSessionIntervention'];
   subscribeUiTurnDispatching?: HookDispatcherDeps['subscribeUiTurnDispatching'];
   subscribeUiTurnUndispatched?: HookDispatcherDeps['subscribeUiTurnUndispatched'];
+  resolveBotRouteTarget?: HookDispatcherDeps['resolveBotRouteTarget'];
+  renewBotRouteTarget?: HookDispatcherDeps['renewBotRouteTarget'];
+  migrationScopeForDispatch?: HookDispatcherDeps['migrationScopeForDispatch'];
   accountInitiallyActive?: boolean;
   log?: HookDispatcherDeps['log'];
 }) {
@@ -224,6 +235,9 @@ function makeDispatcher(overrides?: {
     bindings,
     terminalLedger: overrides?.terminalLedger,
     runner,
+    resolveBotRouteTarget: overrides?.resolveBotRouteTarget,
+    renewBotRouteTarget: overrides?.renewBotRouteTarget,
+    migrationScopeForDispatch: overrides?.migrationScopeForDispatch,
     prepareWorktree: overrides?.prepareWorktree,
     buildContextPrefix: overrides?.buildContextPrefix,
     dialogue: overrides?.dialogue,
@@ -379,6 +393,54 @@ describe('normalizeTaskSource', () => {
 });
 
 describe('dispatcher 核心语义', () => {
+  it('Bot migration gate blocks newly admitted hook dispatches until commit', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    const gate = deferred<void>();
+    let migrationStarted = false;
+    const migration = d.runMigrationExclusive!('slack:T1', async () => {
+      migrationStarted = true;
+      await gate.promise;
+    });
+    await vi.waitFor(() => expect(migrationStarted).toBe(true));
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    expect(fr.calls).toHaveLength(0);
+
+    gate.resolve();
+    await migration;
+    await tick();
+    expect(fr.calls).toHaveLength(1);
+    fr.finish();
+  });
+
+  it('Bot migration gate leaves unrelated relay accounts available', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      migrationScopeForDispatch: ({ externalKey }) =>
+        externalKey.startsWith('telegram:') ? 'telegram:bot-2' : 'slack:T1',
+    });
+    const c = collector();
+    const gate = deferred<void>();
+    let migrationStarted = false;
+    const migration = d.runMigrationExclusive!('slack:T1', async () => {
+      migrationStarted = true;
+      await gate.promise;
+    });
+    await vi.waitFor(() => expect(migrationStarted).toBe(true));
+
+    d.handleDispatch('conn-1', telegramDispatch({ requestId: 'req-other-account' }), c.send);
+    await tick();
+    expect(fr.calls).toHaveLength(1);
+    fr.finish();
+
+    gate.resolve();
+    await migration;
+  });
+
   it('账号 ingress 未打开时丢弃派发，activate 后才开始处理', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner, accountInitiallyActive: false });
@@ -3125,6 +3187,32 @@ describe('options 透传(model/effort/agentKind/permissionMode)', () => {
 });
 
 describe('session.archive(/new 换代归档旧代会话)', () => {
+  it('mounted Bot Route renews before legacy binding archival', async () => {
+    const fr = fakeRunner();
+    const bindings = memoryBindings();
+    bindings.set('conn-1', 'telegram:dm:bot:user:g1', 'legacy-session');
+    const archived: string[] = [];
+    const renewed: string[] = [];
+    const d = createHookDispatcher({
+      getConnection: () => CONFIG,
+      bindings,
+      runner: fr.runner,
+      renewBotRouteTarget: async ({ externalKey }) => {
+        renewed.push(externalKey);
+        return { sessionId: 'bot-route-next', workingDir: '/bot-owned/project' };
+      },
+      archiveSessionRow: async (sessionId) => void archived.push(sessionId),
+      log: noopLog,
+    });
+
+    d.handleSessionArchive('conn-1', 'telegram:dm:bot:user:g1');
+    await tick();
+
+    expect(renewed).toEqual(['telegram:dm:bot:user:g1']);
+    expect(archived).toEqual([]);
+    expect(bindings.get('conn-1', 'telegram:dm:bot:user:g1')).toBeNull();
+  });
+
   it('安全接管旧 Slack 命名空间映射；跨白名单映射只清理不归档', async () => {
     const safeSession = 'legacy-safe';
     const unsafeSession = 'legacy-unsafe';
@@ -3302,6 +3390,50 @@ describe('session.archive(/new 换代归档旧代会话)', () => {
     const sessionId = c.last('task.ack')!.payload.sessionId as string;
     expect(archived).toEqual([sessionId]);
     expect(bindings.get('conn-1', 'slack:dm:U1:g1')).toBeNull();
+    fr.finish();
+  });
+});
+
+describe('mounted Bot Route dispatch', () => {
+  it('uses the canonical Bot task ahead of a stale explicit session and bypasses legacy workspace aliases', async () => {
+    const fr = fakeRunner();
+    const legacyBindings = memoryBindings();
+    legacyBindings.set('conn-1', 'telegram:dm:bot:user:g1', 'legacy-session');
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      bindings: legacyBindings,
+      resolveBotRouteTarget: async () => ({
+        sessionId: 'bot-canonical',
+        workingDir: '/bot-owned/project',
+      }),
+    });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({
+        requestId: 'bot-route',
+        externalKey: 'telegram:dm:bot:user:g1',
+        workspace: null,
+        sessionId: 'stale-server-session',
+        source: { im: 'telegram' },
+      }),
+      c.send,
+    );
+    await tick();
+
+    expect(c.last('task.ack')?.payload).toMatchObject({
+      result: 'accepted',
+      sessionId: 'bot-canonical',
+    });
+    expect(fr.calls).toHaveLength(1);
+    expect(fr.calls[0]).toMatchObject({
+      sessionId: 'bot-canonical',
+      isNew: false,
+      botRoute: true,
+      workingDir: '/bot-owned/project',
+    });
+    expect(fr.calls[0].isDirAuthorized).toBeUndefined();
     fr.finish();
   });
 });
@@ -4343,6 +4475,84 @@ describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () 
 });
 
 describe('官方 bot ack 表情(msg.op)', () => {
+  it('主动投递必须等匹配 ACK，重复 opId 复用同一个在途请求', async () => {
+    const { d } = makeDispatcher();
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    const payload = {
+      opId: 'deliver-1',
+      scope: { externalKey: 'telegram:dm:bot:user:g1' },
+      action: { kind: 'send' as const, text: 'done', tier: 'html' as const },
+    };
+
+    const first = d.sendMessageOp('conn-1', payload);
+    const duplicate = d.sendMessageOp('conn-1', payload);
+    expect(first).toBe(duplicate);
+    expect(c.sent.filter((message) => message.type === 'msg.op')).toHaveLength(1);
+
+    d.onMessageOpResult('conn-1', { opId: payload.opId, ok: true, messageId: '42' });
+    await expect(first).resolves.toEqual({ opId: payload.opId, ok: true, messageId: '42' });
+  });
+
+  it('断连让主动投递以可重试错误收口，迟到 ACK 不会复活旧请求', async () => {
+    const { d } = makeDispatcher();
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    const pending = d.sendMessageOp('conn-1', {
+      opId: 'deliver-offline',
+      scope: { externalKey: 'telegram:dm:bot:user:g1' },
+      action: { kind: 'send', text: 'done', tier: 'html' },
+    });
+
+    d.onDisconnected('conn-1');
+    await expect(pending).resolves.toEqual({
+      opId: 'deliver-offline',
+      ok: false,
+      error: 'HOOK_NOT_CONNECTED',
+      retryAfterMs: 1_000,
+    });
+    d.onMessageOpResult('conn-1', {
+      opId: 'deliver-offline',
+      ok: true,
+      messageId: 'late',
+    });
+  });
+
+  it('老 server fail closed，外来连接 ACK 不能收口当前投递', async () => {
+    const { d } = makeDispatcher();
+    const old = collector();
+    d.onConnected('old-conn', old.send, []);
+    await expect(
+      d.sendMessageOp('old-conn', {
+        opId: 'unsupported',
+        scope: { externalKey: 'telegram:dm:bot:user:g1' },
+        action: { kind: 'send', text: 'done', tier: 'html' },
+      }),
+    ).resolves.toEqual({
+      opId: 'unsupported',
+      ok: false,
+      error: 'MESSAGE_OPS_UNSUPPORTED',
+    });
+    expect(old.sent.filter((message) => message.type === 'msg.op')).toHaveLength(0);
+
+    const current = collector();
+    d.onConnected('conn-1', current.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    const pending = d.sendMessageOp('conn-1', {
+      opId: 'owned-op',
+      scope: { externalKey: 'telegram:dm:bot:user:g1' },
+      action: { kind: 'send', text: 'done', tier: 'html' },
+    });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    d.onMessageOpResult('conn-2', { opId: 'owned-op', ok: true, messageId: 'foreign' });
+    await tick();
+    expect(settled).toBe(false);
+    d.onMessageOpResult('conn-1', { opId: 'owned-op', ok: true, messageId: 'owned' });
+    await expect(pending).resolves.toMatchObject({ ok: true, messageId: 'owned' });
+  });
+
   it('排队的任务也要给 👀 —— 用户分不清是在排队还是丢了', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });

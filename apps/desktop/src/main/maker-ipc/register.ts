@@ -254,6 +254,7 @@ import {
   getSessionRowSnapshotStrict,
   persistSessionFields,
   recycleSessionWorktreeForStatusChange,
+  setSessionsStatusInDb,
 } from '../localDb/ipc/sessions.js';
 // sidebar-card-mode: turn-done 后触发任务现状摘要生成
 import { maybeGenerateSessionTaskSummary } from '../sessionTaskSummary.js';
@@ -280,7 +281,17 @@ import {
   setWorkerFocus,
   updateWorkerStatus,
 } from '../localDb/orcaTeamStore.js';
-import { messages, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
+import {
+  botLifecycleEvents,
+  botChannels,
+  botProfiles,
+  botRoutes,
+  botSessionLinks,
+  messages,
+  orcaTeams,
+  orcaWorkers,
+  sessions,
+} from '../localDb/schema.js';
 import {
   isOrcaWorkerPermissionMode,
   type OrcaWorkerPermissionMode,
@@ -316,6 +327,26 @@ import {
   writeAgentResourceSetting,
 } from '../maker-host/agent-resource-settings-store.js';
 import { createAgentResourceSettingsIpc } from './agent-resource-settings-ipc.js';
+import {
+  createBotDelegationService,
+  type BotDelegationService,
+} from './botDelegationService.js';
+import {
+  createBotDeliveryOutboxService,
+  type EnqueueBotDeliveryInput,
+  type BotDeliveryOutboxService,
+} from './botDeliveryOutboxService.js';
+import { registerBotLifecycleHandlers } from './botLifecycleService.js';
+import {
+  createBotCompactRuntimeRefreshCoordinator,
+  replaceBotRuntimeAfterPreflight,
+  type BotCompactBoundary,
+  type BotCompactRuntimeRefreshOutcome,
+  type BotCompactRuntimeSession,
+} from './botCompactRuntimeRefresh.js';
+import { isBotCanonicalReplacementBusy } from './botCanonicalReplacementGuard.js';
+import { configureBotCanonicalReplacementCoordinator } from './botCanonicalReplacementCoordinator.js';
+import { botSessionInputBlockReason } from './botSessionInputGuard.js';
 import { createGitSnapshotCoordinator } from '../maker-host/git-snapshot-host.js';
 import {
   cancelCodexAuthModeChange,
@@ -324,6 +355,7 @@ import {
   getMaker,
   getMakerIfReady,
   getPluginRegistry,
+  preflightBotRuntimeResources,
   prepareCodexForAuthModeChange,
   restartCodexAfterAuthModeChange,
   setBeforeLocalCodexSessionStartHook,
@@ -440,6 +472,7 @@ import {
   recordSessionContextSnapshot,
   recordSessionTurnSpend,
   recordSessionTurnTokens,
+  setSessionTokenUsageObserver,
 } from '../sessionSpendBroadcaster.js';
 import {
   codexUsageToTokens,
@@ -528,6 +561,7 @@ import {
   cancelIOSSimulatorSessionOperations,
 } from '../mcp-integrations/ios-simulator.js';
 import { MAKER_INVOKE, MAKER_PUSH, MAKER_SEND } from './channels.js';
+import { BOT_DELEGATION_STATUSES } from '../../shared/botDelegation.js';
 import type { CollabDispatchOutcome } from './collabSendOutcome.js';
 import { runAcceptedCallback } from './acceptedCallbackRunner.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
@@ -659,7 +693,14 @@ import {
 } from './agentHandoff.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
-import { buildPlanReconcileNote, summarizeOpenPlan } from './planReconcile.js';
+import {
+  clearSealedCodexPlanState,
+  readCodexPlanState,
+} from '../localDb/codexPlanState.js';
+import {
+  buildCompletedPlanGuardNote,
+  buildPlanReconcileNote,
+} from './planReconcile.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
@@ -1687,6 +1728,20 @@ interface EnableOrcaOptions {
 }
 
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
+let botDelegationServiceHolder: BotDelegationService | null = null;
+let botDeliveryOutboxServiceHolder: BotDeliveryOutboxService | null = null;
+
+export function enqueueBotDelivery(input: EnqueueBotDeliveryInput): Promise<{ id: string }> {
+  const outbox = botDeliveryOutboxServiceHolder;
+  if (!outbox) throw new Error('Bot delivery outbox is not initialized');
+  return outbox.enqueue(input);
+}
+
+export function retryBotDelivery(id: string, botId: string): Promise<{ id: string }> {
+  const outbox = botDeliveryOutboxServiceHolder;
+  if (!outbox) throw new Error('Bot delivery outbox is not initialized');
+  return outbox.retry(id, botId);
+}
 // session event wiring 是模块级函数；service 在 registerMakerIpc 内构造后注入给事件回调。
 let orcaTeamServiceForEvents: OrcaTeamService | null = null;
 
@@ -1746,6 +1801,10 @@ let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
  */
 export function tryGetOrcaCollabService(): OrcaCollabService | null {
   return orcaCollabServiceHolder;
+}
+
+export function tryGetBotDelegationService(): BotDelegationService | null {
+  return botDelegationServiceHolder;
 }
 
 function createBridgeWorkerLabel(task: string): string {
@@ -2058,6 +2117,42 @@ function hasPendingAgentInteractionForSession(sessionId: string): boolean {
       (entry) => entry.sessionId === sessionId,
     ) || ghostSetupInteractionBridge.pendingSnapshots(sessionId).length > 0
   );
+}
+
+type BotCompactRuntimeRefreshHandler = (
+  session: BotCompactRuntimeSession,
+  boundary: BotCompactBoundary,
+) => Promise<BotCompactRuntimeRefreshOutcome>;
+
+/**
+ * `wireSessionToIpc` is module-scoped because IM adapters and scheduler paths
+ * create Sessions outside the renderer IPC handler.  The real refresh routine
+ * needs the register-time Maker/bootstrap closure, so keep one narrow holder
+ * and let the instance-scoped coordinator own all compact settle signals.
+ */
+let botCompactRuntimeRefreshHandler: BotCompactRuntimeRefreshHandler | null = null;
+const botCompactRuntimeRefreshCoordinator = createBotCompactRuntimeRefreshCoordinator({
+  hasPendingInteraction: hasPendingAgentInteractionForSession,
+  refresh: (session, boundary) =>
+    botCompactRuntimeRefreshHandler?.(session, boundary) ?? Promise.resolve('deferred'),
+  onError: (sessionId, error) => {
+    log.warn('Bot compact runtime refresh failed; lazy resume remains available', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  },
+});
+
+function attemptBotCompactRuntimeRefresh(session: WiredSession, trigger: string): void {
+  if (!botCompactRuntimeRefreshCoordinator.hasPending(session.id)) return;
+  void botCompactRuntimeRefreshCoordinator.attempt(session).then((outcome) => {
+    if (outcome === 'refreshed') {
+      log.info('Bot compact runtime refreshed at idle boundary', {
+        sessionId: session.id,
+        trigger,
+      });
+    }
+  });
 }
 
 function isPendingDesktopOnlyConfirmation(requestId: string): boolean {
@@ -2533,6 +2628,35 @@ const sessionTurnLeaseTracker = new SessionTurnLeaseTracker({
   now: Date.now,
   warn: (message, fields) => log.warn(message, fields),
 });
+
+/**
+ * Renew replaces the canonical task and closes its live runtime.  The same
+ * per-session lock used by message dispatch must therefore cover the final
+ * busy check and the SQLite CAS; otherwise a turn can start between a renderer
+ * precheck and the archive transaction and lose its terminal output.
+ */
+export async function assertBotCanonicalReplacementIdle(sessionId: string): Promise<void> {
+  const live = getMakerIfReady()?.getSession(sessionId);
+  const busy = isBotCanonicalReplacementBusy({
+    turnRunning: live?.isTurnRunning() === true,
+    backgroundTaskCount: live?.listBackgroundTasks().length ?? 0,
+    trackedTurn: sessionTurnActivityTracker.isSessionInTurn(sessionId),
+    leasedTurn: await sessionTurnLeaseTracker.isTurnActive(sessionId),
+    pendingInteraction: hasPendingAgentInteractionForSession(sessionId),
+  });
+  if (busy) {
+    throwIpcError(
+      'SESSION_RUNNING',
+      'Bot 主任务仍在运行或等待交互，请等待本轮结束后再 Renew',
+    );
+  }
+}
+configureBotCanonicalReplacementCoordinator((sessionId, operation) =>
+  withSendToSessionLock(sessionId, async () => {
+    await assertBotCanonicalReplacementIdle(sessionId);
+    return operation();
+  }),
+);
 const silentStopTurnLeaseGate = new SilentStopTurnLeaseGate();
 function providerTurnLeaseId(sessionInstanceId: string, turnGeneration: number): string {
   return `${sessionInstanceId}:${turnGeneration}`;
@@ -3578,6 +3702,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
       // potentially multi-megabyte payload to every renderer and device-link controller.
       if (event.type === 'turn_diff') return;
+      if (event.type === 'compact_boundary') {
+        // A provider may continue the same product turn after compacting.  Only
+        // remember the exact runtime incarnation here; the final idle boundary
+        // below owns close/bootstrap so paired done/usage events are not lost.
+        botCompactRuntimeRefreshCoordinator.noteBoundary(session);
+      }
       if (
         event.turnScope === 'background' &&
         Object.prototype.hasOwnProperty.call(event, 'backgroundTurnStartedAt') &&
@@ -3691,7 +3821,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 新 turn 启动: 上一轮未配对的失败记账交接 id 已无归属, 丢弃防错配。
           pendingFailedTurnAssistantPersistId.delete(session.id);
           // 记录 turn 开始时刻，供 onTurnErrorEvent 判断 error 是否属于 /clear 之前的旧 turn。
-          noteTurnStarted(session.id);
+          noteTurnStarted(session.id, event.turnAttemptToken);
           noteSubagentObservationTurnStarted(session.id);
           // silent-stop 守卫:新 turn 开始 → 清 pendingResume + 记录时刻(陈旧判定)。
           silentStopAutoResumeGuard.noteTurnStarted(session.id);
@@ -3926,6 +4056,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           eventAgentMeta,
           event.turnScope === 'background' ? 'background' : 'turn',
           event.backgroundTurnStartedAt,
+          event.turnAttemptToken,
         );
       } else if (event.type === 'tool_result') {
         const r = onToolResultEvent(
@@ -4034,6 +4165,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       }
       if (event.type === 'done' && !isContinuationBoundary) {
         void gitSnapshotCoordinator?.onTurnEnd(session.id);
+      }
+      if (
+        (event.type === 'done' && !isContinuationBoundary) ||
+        (event.type === 'status' && shouldMarkTurnStatusIdleAfterBroadcast) ||
+        event.type === 'agent_task_update'
+      ) {
+        attemptBotCompactRuntimeRefresh(session, `event:${event.type}`);
       }
       if (isTerminalTurnErrorEvent(event)) {
         gitSnapshotCoordinator?.onTurnAbort(session.id);
@@ -4248,6 +4386,30 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               });
             } catch {
               /* non-fatal */
+            }
+          })();
+          void (async () => {
+            try {
+              const doneData = event.data as {
+                result?: unknown;
+                message?: unknown;
+                reason?: unknown;
+              } | null;
+              const finalText =
+                typeof doneData?.result === 'string' ? doneData.result : '';
+              const errorText = [doneData?.message, doneData?.reason]
+                .find((value): value is string => typeof value === 'string' && value.length > 0);
+              await botDelegationServiceHolder?.settleSession({
+                childSessionId: session.id,
+                outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
+                resultText: finalText,
+                error: errorText,
+              });
+            } catch (error) {
+              log.warn('Bot delegation terminal settlement failed', {
+                sessionId: session.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
             }
           })();
         }
@@ -5085,6 +5247,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // session reachable from the in-memory routing map.
           cancelDirectAbortReconciliation(session.id);
           pendingFailedTurnAssistantPersistId.delete(session.id);
+          botCompactRuntimeRefreshCoordinator.clearForClosedSession(session);
           wiredSessionsById.delete(session.id);
           for (const dispose of registration.disposers) {
             try {
@@ -5184,6 +5347,23 @@ export interface RegisterMakerIpcOptions {
   waitForAccountProviderModelsReady(): Promise<void>;
   /** Provider 刷新协调器已可用；紧跟 configure 发出，避免后续 handler 失败造成永久等待。 */
   onProviderModelAutoRefreshConfigured(): void;
+  /** Final adapter-owned delivery for proactive Bot route notifications. */
+  deliverBotRouteMessage?(input: {
+    channel: string;
+    ownership: 'local-adapter' | 'server-relay';
+    accountKey: string;
+    principalKey: string;
+    threadKey?: string | null;
+    deliveryKey?: string | null;
+    idempotencyKey: string;
+    text: string;
+    sessionId?: string | null;
+    workingDir?: string | null;
+    onProgress?: (receipt: Record<string, unknown>) => Promise<void>;
+  }): Promise<
+    | { ok: true; receipt: Record<string, unknown> }
+    | { ok: false; retryable: boolean; errorCode: string; message: string }
+  >;
 }
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
@@ -5969,16 +6149,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const kind = requireAgentKind(agentKind);
         const skillParams = (params ?? {}) as {
           workingDir?: string;
+          remoteHostId?: string;
           forceReload?: boolean;
           sessionId?: string;
         };
-        const linksChanged = await prepareProjectSkillLinksFailSoft(skillParams?.workingDir);
+        const linksChanged = skillParams.remoteHostId
+          ? false
+          : await prepareProjectSkillLinksFailSoft(skillParams.workingDir);
         if (kind === 'codex' && linksChanged) {
           skillParams.forceReload = true;
         }
-        if (kind === 'codex') {
+        if (kind === 'codex' && !skillParams.remoteHostId) {
           await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
-        } else if (kind === 'claude-code') {
+        } else if (kind === 'claude-code' && !skillParams.remoteHostId) {
           await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
         }
         const result = await maker.listAgentSkills(kind, skillParams);
@@ -6514,6 +6697,205 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     return { session, didInjectOrcaInstructions, didInjectProjectContext };
   }
+
+  async function recordBotCompactRuntimeLifecycle(input: {
+    botId: string;
+    sessionId: string;
+    eventType: 'compact-runtime-refresh-requested' | 'compact-runtime-refresh-applied' |
+      'compact-runtime-refresh-deferred' | 'compact-runtime-refresh-failed';
+    boundary: BotCompactBoundary;
+    profileVersion: number;
+    reason?: string;
+  }): Promise<void> {
+    await getDbClient().drizzle.insert(botLifecycleEvents).values({
+      id: randomUUID(),
+      botId: input.botId,
+      sessionId: input.sessionId,
+      eventType: input.eventType,
+      payloadJson: JSON.stringify({
+        profileVersion: input.profileVersion,
+        runtimeInstanceId: input.boundary.sessionInstanceId,
+        compactBoundaryCount: input.boundary.boundaryCount,
+        firstObservedAt: input.boundary.firstObservedAt,
+        lastObservedAt: input.boundary.lastObservedAt,
+        ...(input.reason ? { reason: input.reason } : {}),
+      }),
+      createdAt: Date.now(),
+    });
+  }
+
+  botCompactRuntimeRefreshHandler = async (
+    compactSession,
+    boundary,
+  ): Promise<BotCompactRuntimeRefreshOutcome> => {
+    const expectedSession = compactSession as WiredSession;
+    return withSendToSessionLock(expectedSession.id, async () => {
+      if (maker.getSession(expectedSession.id) !== expectedSession) return 'not-bot';
+
+      const db = getDbClient().drizzle;
+      const [row] = await db
+        .select({
+          botId: botSessionLinks.botId,
+          role: botSessionLinks.role,
+          routeKey: botSessionLinks.routeKey,
+          profileVersion: botSessionLinks.profileVersion,
+          source: sessions.source,
+          status: sessions.status,
+          title: sessions.title,
+          workingDir: sessions.workingDir,
+          workspaceKind: sessions.workspaceKind,
+          agentKind: sessions.agentKind,
+          model: sessions.model,
+          providerId: sessions.providerId,
+          effort: sessions.effort,
+          fastMode: sessions.fastMode,
+          permissionMode: sessions.permissionMode,
+          planModeEnabled: sessions.planModeEnabled,
+          sdkSessionId: sessions.sdkSessionId,
+          remoteHostId: sessions.remoteHostId,
+          orcaRole: sessions.orcaRole,
+          codexHistoryHasProductPrompt: sessions.codexHistoryHasProductPrompt,
+        })
+        .from(sessions)
+        .innerJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+        .where(eq(sessions.id, expectedSession.id))
+        .limit(1);
+      if (
+        !row ||
+        row.source !== 'bot' ||
+        row.status !== 'active' ||
+        (row.role !== 'canonical' && row.role !== 'route')
+      ) {
+        return 'not-bot';
+      }
+      if (
+        row.role === 'route' &&
+        (row.routeKey?.startsWith('automation:') || row.routeKey?.startsWith('delegation:'))
+      ) {
+        // These short-lived runs own their own terminal archive transaction.
+        // Rebuilding one here would race that owner and could resurrect it.
+        return 'not-bot';
+      }
+      if (
+        expectedSession.isTurnRunning() ||
+        expectedSession.listBackgroundTasks().length > 0 ||
+        hasPendingAgentInteractionForSession(expectedSession.id)
+      ) {
+        await recordBotCompactRuntimeLifecycle({
+          botId: row.botId,
+          sessionId: expectedSession.id,
+          eventType: 'compact-runtime-refresh-deferred',
+          boundary,
+          profileVersion: row.profileVersion,
+          reason: 'runtime-busy',
+        });
+        return 'deferred';
+      }
+      if (!row.workingDir) {
+        await recordBotCompactRuntimeLifecycle({
+          botId: row.botId,
+          sessionId: expectedSession.id,
+          eventType: 'compact-runtime-refresh-failed',
+          boundary,
+          profileVersion: row.profileVersion,
+          reason: 'working-dir-missing',
+        });
+        return 'not-bot';
+      }
+
+      const createOpts = buildCreateOptsWithStderr({
+        id: expectedSession.id,
+        agentKind: dbToMakerAgentKind(row.agentKind),
+        workingDir: row.workingDir,
+        workspaceKind: row.workspaceKind,
+        model: row.model ?? undefined,
+        providerId: row.providerId,
+        effort: (row.effort ?? undefined) as CreateOpts['effort'],
+        fastMode: !!row.fastMode,
+        permissionMode: permissionModeOrAsk(row.permissionMode),
+        planMode: !!row.planModeEnabled,
+        title: row.title ?? undefined,
+        resumeSessionId: row.sdkSessionId ?? undefined,
+        remoteHostId: row.remoteHostId ?? undefined,
+        orcaRole: row.orcaRole as CreateOpts['orcaRole'],
+        codexHistoryHasProductPrompt: row.codexHistoryHasProductPrompt ?? undefined,
+      });
+      await synthesizeOrcaVendorOptionsFromDb(expectedSession.id, createOpts);
+      const extraDirs = await readSessionExtraDirsFromDb(expectedSession.id).catch((error) => {
+        log.warn('Bot compact refresh could not read extra dirs; continuing without them', {
+          sessionId: expectedSession.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return [];
+      });
+      if (extraDirs.length > 0) createOpts.extraDirs = extraDirs;
+
+      const workDirReady = await checkWorkDirExists(
+        expectedSession.id,
+        createOpts.workingDir,
+        createOpts.agentKind,
+        createOpts.remoteHostId,
+      );
+      if (!workDirReady) {
+        await recordBotCompactRuntimeLifecycle({
+          botId: row.botId,
+          sessionId: expectedSession.id,
+          eventType: 'compact-runtime-refresh-failed',
+          boundary,
+          profileVersion: row.profileVersion,
+          reason: 'working-dir-unavailable',
+        });
+        return 'not-bot';
+      }
+
+      await recordBotCompactRuntimeLifecycle({
+        botId: row.botId,
+        sessionId: expectedSession.id,
+        eventType: 'compact-runtime-refresh-requested',
+        boundary,
+        profileVersion: row.profileVersion,
+      });
+      try {
+        await ensureRemoteReadyForSessionStart({ createOpts });
+        // Resource drift is a Renew boundary, not a reason to destroy the
+        // currently healthy runtime. Resolve the exact native Skill/MCP/
+        // Toolset bundle before closeSession so a failed preflight leaves the
+        // old process and its resume ownership untouched.
+        await withRehydrateCloseSuppressed(expectedSession.id, async () => {
+          const refreshed = await replaceBotRuntimeAfterPreflight({
+            preflight: () =>
+              preflightBotRuntimeResources(createOpts as MakerSessionCreateOpts),
+            isCurrentOwner: () => maker.getSession(expectedSession.id) === expectedSession,
+            close: () => maker.closeSession(expectedSession.id, 'runtime-refresh'),
+            bootstrap: async () => (await bootstrapSession(createOpts)).session,
+          });
+          await markOrcaRoleIfNeeded(refreshed.id, createOpts.orcaRole);
+          broadcastSessionCreated(refreshed.id);
+        });
+        await recordBotCompactRuntimeLifecycle({
+          botId: row.botId,
+          sessionId: expectedSession.id,
+          eventType: 'compact-runtime-refresh-applied',
+          boundary,
+          profileVersion: row.profileVersion,
+        });
+        return 'refreshed';
+      } catch (error) {
+        await recordBotCompactRuntimeLifecycle({
+          botId: row.botId,
+          sessionId: expectedSession.id,
+          eventType: 'compact-runtime-refresh-failed',
+          boundary,
+          profileVersion: row.profileVersion,
+          reason:
+            error instanceof Error && error.name.trim()
+              ? error.name.trim().slice(0, 120)
+              : 'Error',
+        }).catch(() => undefined);
+        throw error;
+      }
+    });
+  };
 
   // switchFocus 和 sendToWorker 都可能唤醒 idle worker；统一走这里才能保留 extraDirs。
   async function resumeOrcaWorkerSessionIfMissing(target: {
@@ -7943,6 +8325,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: error instanceof Error ? error.message : String(error),
         };
       }
+      const compactedRuntime = maker.getSession(targetSessionId);
+      if (compactedRuntime && botCompactRuntimeRefreshCoordinator.hasPending(targetSessionId)) {
+        await botCompactRuntimeRefreshCoordinator.attempt(compactedRuntime);
+      }
     }
 
     // ── create 分支 ──────────────────────────────────────────────────────────
@@ -8569,6 +8955,331 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sendToSessionLocks.set(targetSessionId, tracked);
     return tracked;
   }
+
+  const dispatchBotSessionMessage = async (params: {
+    targetSessionId: string;
+    message: string;
+    persistedContent?: string;
+    clientId?: string;
+    onAccepted?: () => void | Promise<void>;
+  }) => {
+    if (params.clientId) {
+      const [persisted] = await getDbClient()
+        .drizzle.select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.sessionId, params.targetSessionId),
+            eq(messages.clientId, params.clientId),
+          ),
+        )
+        .limit(1);
+      if (persisted) {
+        await params.onAccepted?.();
+        return {
+          ok: true as const,
+          targetSessionId: params.targetSessionId,
+          wakeKind: 'already-active' as const,
+        };
+      }
+    }
+    return sendToSessionInternal(params);
+  };
+
+  botDeliveryOutboxServiceHolder?.dispose();
+  botDeliveryOutboxServiceHolder = createBotDeliveryOutboxService({
+    onChanged: (payload) => broadcastToAllWindows(MAKER_PUSH.BOT_DELIVERY_CHANGED, payload),
+    deliver: async (row, payload, attempt) => {
+      if (payload.kind !== 'session-message') {
+        return {
+          ok: false as const,
+          retryable: false,
+          errorCode: 'UNSUPPORTED_DELIVERY_KIND',
+          message: `Unsupported Bot delivery kind: ${payload.kind}`,
+        };
+      }
+      const targetSessionId =
+        typeof payload.targetSessionId === 'string' ? payload.targetSessionId : row.sessionId;
+      const fallbackBotId =
+        typeof payload.fallbackBotId === 'string' ? payload.fallbackBotId : row.botId;
+      const clientId =
+        typeof payload.clientId === 'string' && payload.clientId
+          ? payload.clientId
+          : `bot-outbox:${row.id}`;
+      const message = typeof payload.message === 'string' ? payload.message : '';
+      const persistedContent =
+        typeof payload.persistedContent === 'string' ? payload.persistedContent : message;
+      if (!targetSessionId || !message) {
+        return {
+          ok: false as const,
+          retryable: false,
+          errorCode: 'INVALID_PAYLOAD',
+          message: 'Bot session delivery requires targetSessionId and message',
+        };
+      }
+
+      const [fallback] = await getDbClient()
+        .drizzle.select({ canonicalSessionId: botProfiles.canonicalSessionId })
+        .from(botProfiles)
+        .where(eq(botProfiles.id, fallbackBotId))
+        .limit(1);
+      const candidates = [...new Set([targetSessionId, fallback?.canonicalSessionId].filter(
+        (value): value is string => typeof value === 'string' && value.length > 0,
+      ))];
+      let lastFailure: { errorCode: string; message: string } | null = null;
+      for (const candidate of candidates) {
+        const result = await dispatchBotSessionMessage({
+          targetSessionId: candidate,
+          message,
+          persistedContent,
+          clientId,
+        });
+        if (result.ok) {
+          if (!row.routeId) return { ok: true as const };
+          const [targetTask] = await getDbClient()
+            .drizzle.select({ workingDir: sessions.workingDir })
+            .from(sessions)
+            .where(eq(sessions.id, candidate))
+            .limit(1);
+          const [route] = await getDbClient()
+            .drizzle.select({
+              botId: botRoutes.botId,
+              channelId: botRoutes.channelId,
+              principalKey: botRoutes.principalKey,
+              threadKey: botRoutes.threadKey,
+              capabilitiesJson: botRoutes.capabilitiesJson,
+              routeStatus: botRoutes.status,
+              channelKind: botChannels.kind,
+              channelEnabled: botChannels.enabled,
+              channelConfigJson: botChannels.configJson,
+            })
+            .from(botRoutes)
+            .innerJoin(botChannels, eq(botChannels.id, botRoutes.channelId))
+            .where(eq(botRoutes.id, row.routeId))
+            .limit(1);
+          if (!route || route.botId !== row.botId || route.channelId !== row.channelId) {
+            return {
+              ok: false as const,
+              retryable: false,
+              errorCode: 'ROUTE_OWNERSHIP_MISMATCH',
+              message: 'Bot delivery route no longer belongs to the mounted Channel.',
+            };
+          }
+          if (route.routeStatus !== 'active' || !route.channelEnabled) {
+            return {
+              ok: false as const,
+              retryable: true,
+              errorCode: 'ROUTE_UNAVAILABLE',
+              message: `Bot delivery route is ${route.routeStatus}.`,
+            };
+          }
+          let channelConfig: Record<string, unknown> = {};
+          let routeCapabilities: Record<string, unknown> = {};
+          try {
+            const parsed = JSON.parse(route.channelConfigJson) as unknown;
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              channelConfig = parsed as Record<string, unknown>;
+            }
+          } catch {
+            // Invalid durable config is terminal: retries cannot repair it.
+          }
+          try {
+            const parsed = JSON.parse(route.capabilitiesJson) as unknown;
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              routeCapabilities = parsed as Record<string, unknown>;
+            }
+          } catch {
+            // Missing relay address is handled below as a terminal route error.
+          }
+          const ownership = channelConfig.ownership;
+          const accountKey = typeof channelConfig.accountKey === 'string'
+            ? channelConfig.accountKey.trim()
+            : '';
+          if (
+            (ownership !== 'local-adapter' && ownership !== 'server-relay')
+            || !accountKey
+          ) {
+            return {
+              ok: false as const,
+              retryable: false,
+              errorCode: 'INVALID_CHANNEL_CONFIG',
+              message: 'Bot Channel delivery identity is incomplete.',
+            };
+          }
+          if (!options.deliverBotRouteMessage) {
+            return {
+              ok: false as const,
+              retryable: true,
+              errorCode: 'CHANNEL_DELIVERY_NOT_READY',
+              message: 'Bot Channel delivery is not initialized.',
+            };
+          }
+          await attempt.recordExternalDispatch({
+            retrySafe: ownership === 'server-relay' || route.channelKind === 'wechat',
+            transport: ownership,
+          });
+          const delivered = await options.deliverBotRouteMessage({
+            channel: route.channelKind,
+            ownership,
+            accountKey,
+            principalKey: route.principalKey,
+            threadKey: route.threadKey,
+            deliveryKey:
+              typeof routeCapabilities.deliveryKey === 'string'
+                ? routeCapabilities.deliveryKey
+                : null,
+            idempotencyKey: row.idempotencyKey,
+            text: persistedContent,
+            sessionId: candidate,
+            workingDir: targetTask?.workingDir ?? null,
+            onProgress: attempt.recordProgress,
+          });
+          return delivered.ok
+            ? { ok: true as const, receipt: delivered.receipt }
+            : {
+                ok: false as const,
+                retryable: delivered.retryable,
+                errorCode: delivered.errorCode,
+                message: delivered.message,
+              };
+        }
+        lastFailure = { errorCode: result.errorCode, message: result.message };
+        if (result.errorCode !== 'ARCHIVED' && result.errorCode !== 'DELETED' && result.errorCode !== 'NOT_FOUND') {
+          break;
+        }
+      }
+      return {
+        ok: false as const,
+        retryable: true,
+        errorCode: lastFailure?.errorCode ?? 'TARGET_UNAVAILABLE',
+        message: lastFailure?.message ?? 'No active Bot task is available for delivery',
+      };
+    },
+  });
+  botDelegationServiceHolder?.dispose();
+  botDelegationServiceHolder = createBotDelegationService({
+    dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted }) =>
+      dispatchBotSessionMessage({
+        targetSessionId,
+        message,
+        persistedContent,
+        clientId,
+        onAccepted,
+      }),
+    enqueueDelivery: (params) => {
+      const outbox = botDeliveryOutboxServiceHolder;
+      if (!outbox) throw new Error('Bot delivery outbox is not initialized');
+      return outbox.enqueue(params);
+    },
+    abortSession: (async (sessionId) => {
+      const session = maker.getSession(sessionId);
+      if (session?.isTurnRunning?.()) await session.abort();
+    }),
+    archiveSession: async (sessionId) => {
+      await setSessionsStatusInDb([sessionId], 'archived');
+    },
+    closeSession: (sessionId) => maker.closeSession(sessionId),
+    broadcastSessionCreated,
+    onChanged: (payload) => broadcastToAllWindows(MAKER_PUSH.BOT_DELEGATION_CHANGED, payload),
+    requireRuntimeSnapshot: true,
+  });
+  registerBotLifecycleHandlers({
+    maker,
+    getDelegationService: () => botDelegationServiceHolder,
+    getOutboxService: () => botDeliveryOutboxServiceHolder,
+  });
+  const outboxForRestore = botDeliveryOutboxServiceHolder;
+  const delegationForRestore = botDelegationServiceHolder;
+  setSessionTokenUsageObserver(async ({ sessionId, totalTokens }) => {
+    await delegationForRestore.enforceBudgetForSession(sessionId, totalTokens);
+  });
+  void (async () => {
+    try {
+      await outboxForRestore.restore();
+    } catch (error) {
+      log.warn('Bot delivery outbox restore failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      await delegationForRestore.restore();
+    } catch (error) {
+      log.warn('Bot delegation restore failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  })();
+
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_DELEGATIONS_LIST,
+    async (event, parentSessionId: unknown, status?: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof parentSessionId !== 'string' || parentSessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'parentSessionId required');
+      }
+      if (
+        status !== undefined
+        && (typeof status !== 'string'
+          || !BOT_DELEGATION_STATUSES.includes(
+            status as (typeof BOT_DELEGATION_STATUSES)[number],
+          ))
+      ) {
+        throwIpcError('INVALID_PARAMS', 'invalid Bot delegation status');
+      }
+      return delegationForRestore.listDelegations(
+        parentSessionId,
+        status as (typeof BOT_DELEGATION_STATUSES)[number] | undefined,
+      );
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_DELEGATION_CANCEL,
+    async (event, parentSessionId: unknown, delegationId: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (
+        typeof parentSessionId !== 'string'
+        || parentSessionId.length === 0
+        || typeof delegationId !== 'string'
+        || delegationId.length === 0
+      ) {
+        throwIpcError('INVALID_PARAMS', 'parentSessionId + delegationId required');
+      }
+      return delegationForRestore.cancelDelegation(parentSessionId, delegationId);
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_DELIVERIES_LIST,
+    async (event, botId: unknown, limit?: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof botId !== 'string' || botId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'botId required');
+      }
+      if (limit !== undefined && (typeof limit !== 'number' || !Number.isFinite(limit))) {
+        throwIpcError('INVALID_PARAMS', 'limit must be a finite number');
+      }
+      return outboxForRestore.listForBot(botId, limit as number | undefined);
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_DELIVERY_RETRY,
+    async (event, botId: unknown, deliveryId: unknown, allowDuplicateRisk?: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (
+        typeof botId !== 'string'
+        || botId.length === 0
+        || typeof deliveryId !== 'string'
+        || deliveryId.length === 0
+      ) {
+        throwIpcError('INVALID_PARAMS', 'botId + deliveryId required');
+      }
+      if (allowDuplicateRisk !== undefined && typeof allowDuplicateRisk !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'allowDuplicateRisk must be boolean');
+      }
+      return outboxForRestore.retry(deliveryId, botId, {
+        allowDuplicateRisk: allowDuplicateRisk === true,
+      });
+    },
+  );
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
   // sendToSessionInternal 这一条主机通路，因此会话恢复、繁忙排队、消息落库与
@@ -10134,23 +10845,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     reconcileCreateOptsWithDb: reconcileCreateOptsAgainstDb,
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
-    // 计划对账:未收口的旧计划让 agent 在下一轮顺手交代。读近段历史现算,
-    // 无 pending 状态(清单被更新/清掉后下一轮自然不再注入)。
-    // 窗口 1000 行(交接用 400):计划行被长工具流挤出窗口时 summarize 返回
-    // null → 本轮不注入——降级方向是"少提醒",不会误提醒,可接受;不做全量
-    // 分页回溯,避免每次发送为一个提示扫全历史。
     peekPlanReconcileNote: async (sessionId) => {
-      // 读排在同一条持久化 FIFO 之后:终态章(persistCodexPlanOnDone)与失败印记
-      // 只是 enqueueWrite 入队,不等它们落库就查,会读到未盖章的旧快照 → 给已经
-      // 收口的计划多注入一次对账;反过来,全勾完但失败的计划可能因 turnCompleted:false
-      // 还没写进去而漏掉唯一的收口通道(review P2)。调用方对失败已经 catch 成 null,
-      // 队列被 app-session 边界打断时最多这一轮不注入。
-      const rows = await enqueueDurableWrite(`plan-reconcile-read:${sessionId}`, () =>
-        listMessagesForAgentHandoff(sessionId, 1000),
+      const snapshot = await enqueueDurableWrite(`plan-reconcile-read:${sessionId}`, () =>
+        readCodexPlanState(sessionId),
       );
-      const summary = summarizeOpenPlan(rows);
-      return summary ? buildPlanReconcileNote(summary) : null;
+      if (!snapshot) return null;
+      if (snapshot.state === 'sealed') {
+        return {
+          note: buildCompletedPlanGuardNote(),
+          sealedTurnId: snapshot.turnId,
+        };
+      }
+      const openSteps = snapshot.plan
+        .filter((item) => item.status !== 'completed')
+        .map((item) => item.step);
+      if (openSteps.length === 0 && snapshot.state !== 'interrupted') return null;
+      return {
+        note: buildPlanReconcileNote({ openSteps, totalSteps: snapshot.plan.length }),
+      };
     },
+    consumeSealedPlanReconcileNote: (sessionId, turnId) =>
+      enqueueDurableWrite(`plan-seal-consume:${sessionId}:${turnId}`, () =>
+        clearSealedCodexPlanState(sessionId, turnId),
+      ),
     // 手机客户端说明的开关:被控端盖章的来源判据(本机 renderer / 桌面控制端 / 平台
     // 未知一律 false)。必须在这里现取,不能提前求值缓存——同一个装配好的事务会服务
     // 后续所有 send,来源是逐次调用的属性。
@@ -10164,7 +10881,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const [sessionId] = args;
     if (typeof sessionId !== 'string') return await sendToAgentAcceptedUnlocked(...args);
     await assertReviewExternalInputAllowed(sessionId);
-    return await withSendToSessionLock(sessionId, () => sendToAgentAcceptedUnlocked(...args));
+    const compactedRuntime = maker.getSession(sessionId);
+    if (compactedRuntime && botCompactRuntimeRefreshCoordinator.hasPending(sessionId)) {
+      await botCompactRuntimeRefreshCoordinator.attempt(compactedRuntime);
+    }
+    return await withSendToSessionLock(sessionId, async () => {
+      const [botInput] = await getDbClient()
+        .drizzle.select({
+          source: sessions.source,
+          role: botSessionLinks.role,
+          profileStatus: botProfiles.status,
+        })
+        .from(sessions)
+        .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+        .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      const blocked = botSessionInputBlockReason(botInput ?? null);
+      if (blocked) throwIpcError('PRECONDITION_FAILED', blocked);
+      return sendToAgentAcceptedUnlocked(...args);
+    });
   };
   /**
    * Same-turn steer contract: resolved STEER means maker-core accepted the
@@ -10182,6 +10918,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ): Promise<void> => {
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     await assertReviewExternalInputAllowed(sessionId);
+    const [botInput] = await getDbClient()
+      .drizzle.select({
+        source: sessions.source,
+        role: botSessionLinks.role,
+        profileStatus: botProfiles.status,
+      })
+      .from(sessions)
+      .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+      .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    const blocked = botSessionInputBlockReason(botInput ?? null);
+    if (blocked) throwIpcError('PRECONDITION_FAILED', blocked);
     const sess = maker.getSession(sessionId);
     if (!sess) {
       log.warn('steer: session not running', { sessionId });

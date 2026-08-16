@@ -1,0 +1,122 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  addBotProfile,
+  addBotProfileAndWait,
+  getBotProfiles,
+  removeBotProfile,
+  setCanonicalBotSession,
+  updateBotProfile,
+} from '../botStore';
+
+describe('bot profile store', () => {
+  const createdIds: string[] = [];
+
+  afterEach(() => {
+    for (const id of createdIds.splice(0)) removeBotProfile(id);
+  });
+
+  it('creates a Bot profile without a fake Session projection', () => {
+    const bot = addBotProfile({
+      name: 'Telegram release helper',
+      channel: 'telegram',
+      description: 'Release notes',
+    });
+    createdIds.push(bot.id);
+
+    expect(bot.sessions).toHaveLength(0);
+    expect(bot.canonicalSessionId).toBeUndefined();
+  });
+
+  it('replaces the optimistic Bot with the authoritative profile returned by main', async () => {
+    const create = vi.fn(async (input: { id: string }) => ({
+      id: input.id,
+      name: 'Hermes identity bot',
+      description: 'Authoritative profile',
+      identitySource: '# SOUL\nYou are the real Bot identity.',
+      userContextSource: '# USER\nChris',
+      avatar: '🪽',
+      avatarColor: 'blue',
+      enabled: true,
+      status: 'active',
+      currentVersion: 1,
+      createdAt: 123,
+      skills: ['research'],
+      capabilities: {
+        harness: 'claude',
+        model: 'claude-sonnet-4-6',
+        permissions: 'ask',
+      },
+      channels: [{ id: `${input.id}:local`, kind: 'local', enabled: true }],
+      sessions: [],
+    }));
+    const storage = new Map<string, string>();
+    vi.stubGlobal('window', {
+      electronAPI: { localDb: { bots: { create } } },
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+        removeItem: (key: string) => storage.delete(key),
+      },
+    });
+    try {
+      const bot = await addBotProfileAndWait({
+        name: 'Draft name',
+        channel: 'local',
+        description: '',
+      });
+      createdIds.push(bot.id);
+      expect(bot).toMatchObject({
+        name: 'Hermes identity bot',
+        identitySource: '# SOUL\nYou are the real Bot identity.',
+        userContextSource: '# USER\nChris',
+        avatar: '🪽',
+      });
+      expect(getBotProfiles().find((item) => item.id === bot.id)).toMatchObject({
+        identitySource: '# SOUL\nYou are the real Bot identity.',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps one canonical projection and archives the previous one', () => {
+    const bot = addBotProfile({ name: 'History helper', channel: 'local', description: '' });
+    createdIds.push(bot.id);
+
+    setCanonicalBotSession(bot.id, { id: 'session-1', title: 'History helper', updatedAt: 1 });
+    setCanonicalBotSession(bot.id, { id: 'session-2', title: 'History helper', updatedAt: 2 });
+
+    const current = getBotProfiles().find((item) => item.id === bot.id);
+    expect(current?.canonicalSessionId).toBe('session-2');
+    expect(current?.sessions.filter((item) => item.kind === 'chat')).toHaveLength(1);
+    expect(current?.sessions.find((item) => item.id === 'session-1')).toMatchObject({
+      kind: 'history',
+      status: 'archived',
+    });
+  });
+
+  it('returns the persisted Bot profile when updating only the selected Bot', async () => {
+    const first = addBotProfile({ name: 'First', channel: 'local', description: '' });
+    const second = addBotProfile({ name: 'Second', channel: 'slack', description: '' });
+    createdIds.push(first.id, second.id);
+
+    const updated = await updateBotProfile(first.id, { name: 'Renamed', enabled: false });
+
+    expect(updated).toMatchObject({
+      id: first.id,
+      name: 'Renamed',
+      enabled: false,
+    });
+
+    expect(getBotProfiles().find((bot) => bot.id === first.id)).toMatchObject({
+      name: 'Renamed',
+      enabled: false,
+    });
+    expect(getBotProfiles().find((bot) => bot.id === second.id)?.name).toBe('Second');
+
+    removeBotProfile(first.id);
+    expect(getBotProfiles().some((bot) => bot.id === first.id)).toBe(false);
+    expect(getBotProfiles().some((bot) => bot.id === second.id)).toBe(true);
+  });
+});

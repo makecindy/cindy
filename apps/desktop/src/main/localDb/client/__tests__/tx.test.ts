@@ -40,8 +40,10 @@ CREATE TABLE sessions (
   user_send_at INTEGER,
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
+  source TEXT NOT NULL DEFAULT 'desktop',
   workspace_kind TEXT NOT NULL DEFAULT 'project',
   codex_history_has_product_prompt INTEGER,
+  codex_plan_json TEXT,
   parent_session_id TEXT,
   forked_at_message_id TEXT,
   created_at INTEGER NOT NULL,
@@ -158,6 +160,7 @@ interface TestSessionRow {
   userSendAt: number | null;
   agentKind: string;
   orcaRole: string | null;
+  source: string;
   workspaceKind: string;
   codexHistoryHasProductPrompt: boolean | null;
   parentSessionId: string | null;
@@ -468,40 +471,48 @@ describe('db worker tx handlers', () => {
     });
   });
 
-  it('rewind.commit soft-deletes target-and-after messages and resets session context', async () => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      await client.exec(
-        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
-        ['m1', 'c1', 's1', 'user', 'before', 100, 'm2', 'c2', 's1', 'assistant', 'after', 200],
-      );
+  it.each([false, true])(
+    'rewind.commit soft-deletes messages and resets session context (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await seedSession(client, 's1');
+        await client.exec('UPDATE sessions SET codex_plan_json = ? WHERE id = ?', [
+          JSON.stringify({ turnId: 'turn-old', plan: [], state: 'sealed' }),
+          's1',
+        ]);
+        await client.exec(
+          'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
+          ['m1', 'c1', 's1', 'user', 'before', 100, 'm2', 'c2', 's1', 'assistant', 'after', 200],
+        );
 
-      await client.tx('rewind.commit', {
-        sessionId: 's1',
-        targetCreatedAt: 200,
-        sdkSessionId: 'sdk-after-rewind',
-        now: 999,
-      });
+        await client.tx('rewind.commit', {
+          sessionId: 's1',
+          targetCreatedAt: 200,
+          sdkSessionId: 'sdk-after-rewind',
+          now: 999,
+        });
 
-      await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
-        [
-          { id: 'm1', rewind_at: null },
-          { id: 'm2', rewind_at: 999 },
-        ],
-      );
-      await expect(
-        client.queryOne(
-          'SELECT user_send_at, context_tokens, context_window, sdk_session_id FROM sessions WHERE id = ?',
-          ['s1'],
-        ),
-      ).resolves.toEqual({
-        user_send_at: 999,
-        context_tokens: 0,
-        context_window: 0,
-        sdk_session_id: 'sdk-after-rewind',
-      });
-    });
-  });
+        await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual(
+          [
+            { id: 'm1', rewind_at: null },
+            { id: 'm2', rewind_at: 999 },
+          ],
+        );
+        await expect(
+          client.queryOne(
+            'SELECT user_send_at, context_tokens, context_window, sdk_session_id, codex_plan_json FROM sessions WHERE id = ?',
+            ['s1'],
+          ),
+        ).resolves.toEqual({
+          user_send_at: 999,
+          context_tokens: 0,
+          context_window: 0,
+          sdk_session_id: 'sdk-after-rewind',
+          codex_plan_json: null,
+        });
+      }, { useInlineWorker });
+    },
+  );
 
   it('rewind.commit uses target message id to avoid same-timestamp over-delete', async () => {
     await withClient(async (client) => {
@@ -914,6 +925,32 @@ describe('db worker tx handlers', () => {
       });
     });
   });
+
+  it.each([false, true])(
+    'sessions.setStatus rejects Bot tasks atomically (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 'regular');
+          await seedSession(client, 'bot', { source: 'bot' });
+
+          await expect(
+            client.tx('sessions.setStatus', {
+              sessionIds: ['regular', 'bot'],
+              status: 'archived',
+            }),
+          ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+          await expect(
+            client.query('SELECT id, status FROM sessions ORDER BY id'),
+          ).resolves.toEqual([
+            { id: 'bot', status: 'active' },
+            { id: 'regular', status: 'active' },
+          ]);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
 
   it('rewind.commit follows transcript parent links and preserves the prior assistant when timestamps are inverted', async () => {
     await withClient(async (client) => {
@@ -2193,8 +2230,8 @@ async function seedSession(
       sdk_session_id, total_token_usage, total_cost_usd, context_tokens,
       context_window, fast_mode, cleared_at, pinned_at, user_send_at,
       agent_kind, orca_role, workspace_kind, parent_session_id, forked_at_message_id,
-      created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      source, created_at, updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       s.id,
       s.title,
@@ -2217,6 +2254,7 @@ async function seedSession(
       s.workspaceKind,
       s.parentSessionId,
       s.forkedAtMessageId,
+      s.source,
       s.createdAt,
       s.updatedAt,
     ],
@@ -2244,6 +2282,7 @@ function sessionRow(id: string, overrides: Partial<TestSessionRow> = {}): TestSe
     userSendAt: 1,
     agentKind: 'cc',
     orcaRole: null,
+    source: 'desktop',
     workspaceKind: 'project',
     codexHistoryHasProductPrompt: null,
     parentSessionId: null,

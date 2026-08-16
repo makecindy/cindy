@@ -167,15 +167,36 @@ function currentPermissionState(): {
   readOnlyRoots: string[];
   reviewReadPaths: string[];
   reviewOnly: boolean;
+  workspaceReadOnly: boolean;
+  workspaceWritePaths: string[];
 } {
   // 轮 40-w4-t12 HIGH-1:review-only 是会话创建时的启动语义(reviewMode), 由
   // PiAgent 以独立 env 标记注入 —— 权限文件损坏/缺失时**不得**降级成普通 ask
   // (否则 hard review-only 变成可交互确认的普通会话)。文件解析失败 → fail-closed:
   // 保留 reviewOnly(按启动标记), reviewReadPaths 保守清空(读不了就不放行额外路径)。
   const reviewOnlyByStart = process.env.CINDY_PI_REVIEW_ONLY === '1';
+  const workspaceReadOnlyByStart = process.env.CINDY_PI_WORKSPACE_READ_ONLY === '1';
+  const workspaceWritePathsByStart = (() => {
+    if (!process.env.CINDY_PI_WORKSPACE_WRITE_PATHS) return null;
+    try {
+      const parsed = JSON.parse(process.env.CINDY_PI_WORKSPACE_WRITE_PATHS);
+      return Array.isArray(parsed)
+        ? parsed.filter((value: unknown) => typeof value === 'string')
+        : [];
+    } catch {
+      return [];
+    }
+  })();
   const file = process.env.CINDY_PI_PERMISSION_FILE ?? '';
   if (!file) {
-    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
+    return {
+      mode: 'ask',
+      readOnlyRoots: [],
+      reviewReadPaths: [],
+      reviewOnly: reviewOnlyByStart,
+      workspaceReadOnly: workspaceReadOnlyByStart,
+      workspaceWritePaths: workspaceWritePathsByStart ?? [],
+    };
   }
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'));
@@ -188,9 +209,22 @@ function currentPermissionState(): {
         ? parsed.reviewReadPaths.filter((root: unknown) => typeof root === 'string')
         : [],
       reviewOnly: parsed?.reviewOnly === true || reviewOnlyByStart,
+      workspaceReadOnly:
+        parsed?.workspaceReadOnly === true || workspaceReadOnlyByStart,
+      workspaceWritePaths: workspaceWritePathsByStart
+        ?? (Array.isArray(parsed?.workspaceWritePaths)
+          ? parsed.workspaceWritePaths.filter((value: unknown) => typeof value === 'string')
+          : []),
     };
   } catch {
-    return { mode: 'ask', readOnlyRoots: [], reviewReadPaths: [], reviewOnly: reviewOnlyByStart };
+    return {
+      mode: 'ask',
+      readOnlyRoots: [],
+      reviewReadPaths: [],
+      reviewOnly: reviewOnlyByStart,
+      workspaceReadOnly: workspaceReadOnlyByStart,
+      workspaceWritePaths: workspaceWritePathsByStart ?? [],
+    };
   }
 }
 
@@ -1089,6 +1123,23 @@ export default async function cindyBridge(pi: any) {
         reason: 'Cindy Review only permits read-only access to this task and its explicit artifacts.',
       };
     }
+    if (
+      permission.workspaceReadOnly
+      && (FILE_WRITE_BUILTINS.has(event.toolName) || event.toolName === 'bash')
+    ) {
+      return {
+        block: true,
+        reason:
+          'This Cindy Bot project is mounted read-only. Choose a writable project policy to modify it.',
+      };
+    }
+    if (permission.workspaceWritePaths.length > 0 && event.toolName === 'bash') {
+      return {
+        block: true,
+        reason:
+          'This Cindy Bot has a restricted write scope. Shell commands are disabled because their write targets cannot be proven safe.',
+      };
+    }
     if (FILE_WRITE_BUILTINS.has(event.toolName)) {
       try {
         // Internal synchronization point: the host snapshots only the target file for
@@ -1145,6 +1196,49 @@ export default async function cindyBridge(pi: any) {
         isInsideRoot(targetPath, agentHomeDir)
         || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, agentHomeDir))
       );
+    const writeInsideWorkspaceControlDir = (() => {
+      if (!targetPath) return false;
+      const root = process.cwd();
+      const protectedDirs = new Set(['.git', '.agents', '.codex']);
+      const isProtected = (candidate: string) => {
+        const relative = path.relative(path.resolve(root), path.resolve(candidate));
+        if (relative === '' || relative === '..' || relative.startsWith('..' + path.sep)) return false;
+        return protectedDirs.has(relative.split(path.sep)[0] || '');
+      };
+      return isProtected(targetPath)
+        || (writeTargetResolved !== null && isProtected(writeTargetResolved));
+    })();
+    const writeInsideBotScope = targetPath
+      && permission.workspaceWritePaths.some((root) => {
+        let resolvedRoot: string | null = null;
+        try {
+          resolvedRoot = realpathSync(root);
+        } catch {
+          resolvedRoot = null;
+        }
+        return (
+          isInsideRoot(targetPath, root)
+          && writeTargetResolved !== null
+          && resolvedRoot !== null
+          && isInsideRoot(writeTargetResolved, resolvedRoot)
+        );
+      });
+    if (
+      targetPath
+      && FILE_WRITE_BUILTINS.has(event.toolName)
+      && permission.workspaceWritePaths.length > 0
+      && writeInsideWorkspaceControlDir
+    ) {
+      return { block: true, reason: 'Cindy workspace control directories are read-only.' };
+    }
+    if (
+      targetPath
+      && FILE_WRITE_BUILTINS.has(event.toolName)
+      && permission.workspaceWritePaths.length > 0
+      && !writeInsideBotScope
+    ) {
+      return { block: true, reason: 'This path is outside the Cindy Bot project write allowlist.' };
+    }
     if (
       targetPath
       && FILE_WRITE_BUILTINS.has(event.toolName)

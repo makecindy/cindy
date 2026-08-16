@@ -394,6 +394,7 @@ import {
   WorktreePool,
   reconcileWorktreesForDeletedSessions,
 } from './worktree';
+import { reconcileBotWorkspaceLeases } from './maker-ipc/botWorkspaceRuntime';
 // shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
 import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
 // session-git-pr-context: 会话分支感知 + PR 关联状态 IPC
@@ -513,7 +514,9 @@ import {
   clearDeferredCodexRestartForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
+  enqueueBotDelivery,
   registerMakerIpc as registerMakerCoreIpc,
+  retryBotDelivery,
   isSessionTurnPendingCompletion,
   stopOrcaIdleWatcher,
   setGoalClearObserver,
@@ -523,6 +526,7 @@ import {
   setGoalAskAnswerObserver,
   withSendToSessionLock,
 } from './maker-ipc/register.js';
+import { deliverBotRouteMessage } from './im/index.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -806,6 +810,7 @@ import {
   attachSchedulerEventListeners,
   resetSchedulerReady,
 } from './maker-ipc/schedule.js';
+import { registerBotAutomationHandlers } from './maker-ipc/bot-automation.js';
 import { registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
 import { startGoalController, getGoalController } from './goal-host/index.js';
 import { startLearnHost, getLearnController, resetLearnController } from './learn-host/index.js';
@@ -4656,6 +4661,7 @@ const registerIpcHandlers = () => {
         refreshXdGatewayModels,
         waitForAccountProviderModelsReady: waitForCurrentAccountProviderModelsReady,
         onProviderModelAutoRefreshConfigured: markMakerProviderRefreshConfigured,
+        deliverBotRouteMessage,
       });
       registerMakerTitleIpc({ isSessionTurnPendingCompletion });
       registerMakerHelpIpc(ipcMaker);
@@ -4729,6 +4735,10 @@ const registerIpcHandlers = () => {
           return null;
         }
       });
+      registerBotAutomationHandlers({
+        enqueueDelivery: enqueueBotDelivery,
+        retryDelivery: retryBotDelivery,
+      });
       // maker:goal:* handler 同样提前一次性注册(eager);handler 内部 getGoalController()
       // 取单例,invoke 时 controller 已由 attemptStartScheduler → startGoalController 启动。
       registerGoalHandlers();
@@ -4774,6 +4784,9 @@ const registerIpcHandlers = () => {
     // (崩溃窗口/回收失败)的孤儿,启动期补一次回收。fire-and-forget,不阻塞启动。
     void reconcileWorktreesForDeletedSessions().catch((err) => {
       console.error('[bootstrap-electron] worktree reconcile failed (non-fatal):', err);
+    });
+    void reconcileBotWorkspaceLeases().catch((err) => {
+      console.error('[bootstrap-electron] Bot workspace reconcile failed (non-fatal):', err);
     });
     // 同窗口的 shadow savepoint 对账:owning session 已删除的孤儿保存点链
     // (refs/cindy/savepoints/<sid>)启动期补删。fire-and-forget,不阻塞启动。

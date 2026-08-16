@@ -109,9 +109,12 @@ import {
 } from '../shared/overload-error.js';
 import { buildCodexEnv } from './env-builder.js';
 import {
+  buildCodexBotSkillConfigOverrides,
+  buildCodexBotMcpConfigOverrides,
   buildCodexCapabilityConfigOverrides,
   buildCodexCapabilitySkillConfigOverrides,
   buildCodexSessionCapabilityRoutingPolicy,
+  mergeCodexSkillConfigOverrides,
   requiresCodexCapabilitySkillDiscovery,
 } from './capability-routing.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
@@ -386,15 +389,21 @@ function buildCodexDeveloperInstructions(parts: {
   ghostRosterPrompt?: string;
   runtimeSystemPrompt?: string;
   makerMemoryIndex?: string;
+  botProfilePrompt?: string;
+  botProfileContextPrompt?: string;
+  botUserProfilePrompt?: string;
   userPrompt?: string;
 }): string {
   return [
+    parts.botProfilePrompt,
     MAKER_CODEX_SYSTEM_PROMPT_APPEND,
     parts.makerMemoryRules,
     parts.contactsRules,
     parts.ghostRosterPrompt,
+    parts.botProfileContextPrompt,
     parts.runtimeSystemPrompt,
     parts.makerMemoryIndex,
+    parts.botUserProfilePrompt,
     parts.userPrompt,
   ]
     .filter((s): s is string => !!s && s.trim().length > 0)
@@ -570,6 +579,7 @@ function supportsCodexForkExcludeTurns(userAgent: string | undefined): boolean {
 
 const READONLY_REFERENCES_PERMISSION_PROFILE = 'cindy-readonly-references';
 const REVIEW_PERMISSION_PROFILE = 'cindy-review-readonly';
+const BOT_WRITE_SCOPE_PERMISSION_PROFILE = 'cindy-bot-write-scope';
 const REVIEW_CREDENTIAL_GLOB_DENIES: Record<string, 'deny'> = Object.fromEntries(
   REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS.map((pattern) => [pattern, 'deny'] as const),
 );
@@ -1800,7 +1810,11 @@ export class CodexAgent extends BaseAgent {
     // 查询上下文，既能发现全局 skills，又不会误带任意项目的 repo skills。
     const workingDir = opts.workingDir || os.homedir();
     try {
-      const { skills, errors } = await this.listSkillsForCwd(workingDir, opts.forceReload ?? false);
+      const { skills, errors } = await this.listSkillsForCwd(
+        workingDir,
+        opts.forceReload ?? false,
+        opts.remoteHostId,
+      );
       const out: ListAgentSkillsResult = {
         skills: skills
           .filter(isPaletteVisibleCodexSkill)
@@ -1839,8 +1853,11 @@ export class CodexAgent extends BaseAgent {
   private async listSkillsForCwd(
     workingDir: string,
     forceReload: boolean,
+    remoteHostId?: string,
   ): Promise<{ skills: SkillMetadata[]; errors: Array<{ path?: string; message: string }> }> {
-    const { host } = await this.getUtilityHost();
+    const host = remoteHostId
+      ? await this.getHost(remoteHostId)
+      : (await this.getUtilityHost()).host;
     return await this.listSkillsForHost(host, workingDir, forceReload);
   }
 
@@ -2817,6 +2834,41 @@ export class CodexAgent extends BaseAgent {
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/codex` : 'codex');
     const reviewMode = opts.reviewMode === true;
+    const workspaceReadOnly = opts.workspaceAccess === 'read-only';
+    const workspaceWritePaths = [...(opts.workspaceWritePaths ?? [])];
+    const workspaceWriteRestricted = !workspaceReadOnly && workspaceWritePaths.length > 0;
+    const workspacePathApi = opts.remoteHostId ? path.posix : path;
+    const botWorkspaceFilesystemRule = (() => {
+      const root = workspacePathApi.resolve(opts.workingDir);
+      const rule: Record<string, unknown> = {
+        '.': 'read',
+        '.git': 'read',
+        '.agents': 'read',
+        '.codex': 'read',
+      };
+      for (const candidate of workspaceWritePaths) {
+        const resolved = workspacePathApi.resolve(candidate);
+        const relative = workspacePathApi.relative(root, resolved);
+        if (
+          relative === '..'
+          || relative.startsWith(`..${workspacePathApi.sep}`)
+          || workspacePathApi.isAbsolute(relative)
+        ) {
+          throw new Error(`Cindy Bot write scope escapes its workspace: ${candidate}`);
+        }
+        const firstSegment = relative.split(workspacePathApi.sep)[0];
+        if (firstSegment === '.git' || firstSegment === '.agents' || firstSegment === '.codex') {
+          throw new Error(`Cindy Bot write scope includes a protected control directory: ${candidate}`);
+        }
+        rule[relative || '.'] = 'write';
+      }
+      // A root grant may set `.` to write, but the more specific control
+      // directories remain read-only in the same workspace rule.
+      rule['.git'] = 'read';
+      rule['.agents'] = 'read';
+      rule['.codex'] = 'read';
+      return rule;
+    })();
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Codex sessions only');
     }
@@ -2853,13 +2905,14 @@ export class CodexAgent extends BaseAgent {
     const makerMemoryEnabled = makerMemoryFlag === true && !!makerMemory;
     // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key,
     // 键规则与理由见 buildMemoryScopeKey (memory/storage.ts)。
-    const memoryScopeKey = buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
+    const memoryScopeKey =
+      opts.makerMemoryScopeKey ?? buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
     // This per-session injection flag must not mutate the shared manager.
     if (makerMemoryEnabled && makerMemory) {
       try {
         const store = await makerMemory.getStore(memoryScopeKey);
         makerMemoryRules = MAKER_MEMORY_RULES;
-        makerMemoryIndex = await store.getIndex();
+        makerMemoryIndex = opts.makerMemoryIndexSnapshot ?? await store.getIndex();
         memoryFlushController = new MemoryFlushController({
           logger: log.child('memory-flush'),
           workdir: memoryScopeKey,
@@ -3600,7 +3653,8 @@ export class CodexAgent extends BaseAgent {
      */
     let mutableCatalogModel: string | undefined = opts.model;
     let mutableEffort: Effort = opts.effort ?? 'high';
-    let mutablePermissionMode: PermissionMode = reviewMode ? 'ask' : opts.permissionMode ?? 'ask';
+    let mutablePermissionMode: PermissionMode =
+      reviewMode || workspaceReadOnly ? 'ask' : opts.permissionMode ?? 'ask';
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     const reviewReadGrants = reviewMode
       ? await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? [])
@@ -3611,8 +3665,10 @@ export class CodexAgent extends BaseAgent {
     );
     // Named profiles defined through thread/start.config are thread-local. Codex
     // 0.145.0 cannot resolve that thread-local definition when the selector is
-    // repeated on turn/start, so remember whether the thread is already using it.
-    let readonlyReferencesProfileActive = false;
+    // repeated on turn/start, so remember whether the thread is already using
+    // the currently selected Cindy workspace profile (Review, Bot write scope,
+    // or read-only references).
+    let workspacePermissionProfileActive = false;
     // A fresh thread/start has no rollout yet, so thread/resume fails until a
     // turn/start may have crossed the server acceptance boundary. Once a turn
     // was attempted, prefer resume before replacing the thread; "no rollout"
@@ -3955,6 +4011,18 @@ export class CodexAgent extends BaseAgent {
         );
       }
     }
+    capabilityRoutingConfig = mergeCodexSkillConfigOverrides(
+      capabilityRoutingConfig,
+      buildCodexBotSkillConfigOverrides(
+        reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
+      ),
+    );
+    capabilityRoutingConfig = {
+      ...capabilityRoutingConfig,
+      ...buildCodexBotMcpConfigOverrides(
+        reviewMode ? undefined : opts.botRuntimeProfile?.mcpPolicy,
+      ),
+    };
     if (
       Object.keys(capabilityRoutingConfig).length > 0 &&
       !capabilityRoutingProtocolSupported
@@ -3984,6 +4052,12 @@ export class CodexAgent extends BaseAgent {
         `Codex reference directories require app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
       );
     }
+    if (workspaceWriteRestricted && !readonlyReferenceDirsSupported) {
+      releaseHostBindingLeaseIfNeeded();
+      throw new Error(
+        `Cindy Bot write scopes require Codex permission profiles from app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
+      );
+    }
     if (
       mutablePermissionMode === 'auto' &&
       !(approvalsReviewerProtocolSupported && approvalsReviewerRouteSupported)
@@ -4010,7 +4084,7 @@ export class CodexAgent extends BaseAgent {
       this.codexHome?.startsWith('/')
         ? `${this.codexHome.replace(/\/+$/, '')}/${sub}`
         : path.join(this.codexHome ?? '', sub);
-    const codexExtraWritableRoots = reviewMode || !this.codexHome
+    const codexExtraWritableRoots = reviewMode || workspaceReadOnly || !this.codexHome
       ? []
       : [joinCodexHome('memories')];
     const runtimeWorkspaceRoots = (): string[] =>
@@ -4062,6 +4136,19 @@ export class CodexAgent extends BaseAgent {
           ...(codexExtraWritableRoots[0] ? { [codexExtraWritableRoots[0]]: 'write' } : {}),
         },
         network: { enabled: false },
+      },
+    };
+    const botWriteScopeConfig: Record<string, unknown> = {
+      [`permissions.${BOT_WRITE_SCOPE_PERMISSION_PROFILE}`]: {
+        filesystem: {
+          ':root': 'read',
+          ':workspace_roots': 'read',
+          ':tmpdir': 'write',
+          ':slash_tmp': 'write',
+          [opts.workingDir]: botWorkspaceFilesystemRule,
+          ...(codexExtraWritableRoots[0] ? { [codexExtraWritableRoots[0]]: 'write' } : {}),
+        },
+        network: { enabled: true },
       },
     };
     const reviewPermissionsConfig: Record<string, unknown> = {
@@ -4144,6 +4231,7 @@ export class CodexAgent extends BaseAgent {
           mcpCallerAttested: true,
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
+          ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
           // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
           ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
           vendorOptions: vo,
@@ -4556,7 +4644,7 @@ export class CodexAgent extends BaseAgent {
     });
     const hasHostShellCommandPolicy = Boolean(this.deps.getShellCommandPolicy);
     function currentApprovalConfig(): CodexPermissionConfig {
-      if (reviewMode) {
+      if (reviewMode || workspaceReadOnly) {
         return { approvalPolicy: 'never', sandbox: 'read-only' };
       }
       const config = mapPermissionToCodex(
@@ -4573,13 +4661,19 @@ export class CodexAgent extends BaseAgent {
       return config;
     }
 
-    function shouldUseReadonlyReferencesProfile(): boolean {
-      return (
-        reviewMode ||
-        (readonlyReferenceDirsSupported &&
-          mutableExtraDirs.length > 0 &&
-          mutablePermissionMode !== 'bypassPermissions')
-      );
+    function currentWorkspacePermissionProfile(): string | undefined {
+      if (reviewMode) return REVIEW_PERMISSION_PROFILE;
+      // A Bot binding's write scope is a host-enforced boundary. It must remain
+      // selected even when the user chooses Full Access.
+      if (workspaceWriteRestricted) return BOT_WRITE_SCOPE_PERMISSION_PROFILE;
+      if (
+        readonlyReferenceDirsSupported
+        && mutableExtraDirs.length > 0
+        && mutablePermissionMode !== 'bypassPermissions'
+      ) {
+        return READONLY_REFERENCES_PERMISSION_PROFILE;
+      }
+      return undefined;
     }
 
     function currentThreadWorkspaceConfig(): Pick<
@@ -4595,6 +4689,7 @@ export class CodexAgent extends BaseAgent {
       const config = {
         ...capabilityRoutingConfig,
         ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig : {}),
+        ...(workspaceWriteRestricted ? botWriteScopeConfig : {}),
         ...(reviewMode ? reviewPermissionsConfig : {}),
         ...(reviewMode
           ? {
@@ -4618,12 +4713,11 @@ export class CodexAgent extends BaseAgent {
           : {}),
         ...(Object.keys(config).length > 0 ? { config } : {}),
       };
-      if (shouldUseReadonlyReferencesProfile()) {
+      const permissionProfile = currentWorkspacePermissionProfile();
+      if (permissionProfile) {
         return {
           ...shared,
-          permissions: reviewMode
-            ? REVIEW_PERMISSION_PROFILE
-            : READONLY_REFERENCES_PERMISSION_PROFILE,
+          permissions: permissionProfile,
         };
       }
       return { ...shared, sandbox };
@@ -4656,16 +4750,16 @@ export class CodexAgent extends BaseAgent {
           : {}),
       };
       if (
-        shouldUseReadonlyReferencesProfile() &&
+        currentWorkspacePermissionProfile() !== undefined &&
         !activeTurnPermissionPolicy
       ) {
         // The profile was selected on thread/start or thread/resume. Repeating
         // the selector here makes Codex 0.145.0 reload its base config (which
         // does not contain our per-thread definition) and reject turn/start
         // with "default_permissions requires a `[permissions]` table".
-        if (!readonlyReferencesProfileActive) {
+        if (!workspacePermissionProfileActive) {
           throw new Error(
-            'Codex read-only reference profile is not active for this thread; restore it with thread/resume before turn/start',
+            'Codex workspace permission profile is not active for this thread; restore it with thread/resume before turn/start',
           );
         }
         return shared;
@@ -4860,6 +4954,9 @@ export class CodexAgent extends BaseAgent {
       ghostRosterPrompt,
       runtimeSystemPrompt: this.deps.runtimeConfig.systemPrompt,
       makerMemoryIndex,
+      botProfilePrompt: reviewMode ? undefined : opts.botProfilePrompt,
+      botProfileContextPrompt: reviewMode ? undefined : opts.botProfileContextPrompt,
+      botUserProfilePrompt: reviewMode ? undefined : opts.botUserProfilePrompt,
       userPrompt: reviewMode ? undefined : opts.userPrompt,
     });
     const useProxyChannel = isCodexProxyChannelReady();
@@ -4967,7 +5064,7 @@ export class CodexAgent extends BaseAgent {
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
         }
         sdkSessionId = threadId;
-        readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
+        workspacePermissionProfileActive = currentWorkspacePermissionProfile() !== undefined;
         threadMayHaveRollout = true;
         // Resumed app-server threads may have sticky collaborationMode='plan' from
         // a previous handle whose plan cycle ended without a follow-up turn. Since
@@ -5039,7 +5136,7 @@ export class CodexAgent extends BaseAgent {
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
         }
         sdkSessionId = threadId;
-        readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
+        workspacePermissionProfileActive = currentWorkspacePermissionProfile() !== undefined;
         threadMayHaveRollout = false;
         log.info('thread/start ok', { threadId, model: resp.model, serviceTier: mutableServiceTier ?? null });
       } catch (e) {
@@ -5078,7 +5175,7 @@ export class CodexAgent extends BaseAgent {
           if (settled) {
             if (onLateResolve) {
               void Promise.resolve(onLateResolve(value)).catch((error) => {
-                log.warn(`late read-only reference profile ${action} cleanup threw`, {
+                log.warn(`late workspace permission profile ${action} cleanup threw`, {
                   error: String(error),
                   threadId,
                 });
@@ -5107,7 +5204,7 @@ export class CodexAgent extends BaseAgent {
         timer = setTimeout(() => {
           rejectOnce(
             new Error(
-              `Codex read-only reference profile ${action} did not acknowledge within ${PROFILE_LIFECYCLE_ACK_TIMEOUT_MS}ms`,
+              `Codex workspace permission profile ${action} did not acknowledge within ${PROFILE_LIFECYCLE_ACK_TIMEOUT_MS}ms`,
             ),
           );
         }, PROFILE_LIFECYCLE_ACK_TIMEOUT_MS);
@@ -5137,7 +5234,7 @@ export class CodexAgent extends BaseAgent {
       const inheritedHostBindingLease = releaseHostBindingLease !== null;
       acquireHostBindingLeaseIfNeeded();
       try {
-        assertCurrentHost('read-only reference profile replacement');
+        assertCurrentHost('workspace permission profile replacement');
         const resp = await requestProfileLifecycle<ThreadStartResponse>({
           action: 'replacement',
           signal,
@@ -5164,14 +5261,14 @@ export class CodexAgent extends BaseAgent {
             });
           },
         });
-        assertCurrentHost('read-only reference profile replacement');
+        assertCurrentHost('workspace permission profile replacement');
         const nextThreadId = resp.thread.id;
         if (closed) {
           await unsubscribeDetachedThread(
             nextThreadId,
             'unused profile replacement cleanup after close',
           );
-          throw new Error('Codex session closed during read-only reference profile replacement');
+          throw new Error('Codex session closed during workspace permission profile replacement');
         }
         if (
           Object.hasOwn(resp, 'serviceTier') &&
@@ -5184,7 +5281,7 @@ export class CodexAgent extends BaseAgent {
             'unused profile replacement release',
           );
           if (!released) {
-            throw staleHostError('read-only reference profile replacement cleanup');
+            throw staleHostError('workspace permission profile replacement cleanup');
           }
           unregisterCodexMcpContext(previousThreadId);
           if (closed) {
@@ -5192,7 +5289,7 @@ export class CodexAgent extends BaseAgent {
               nextThreadId,
               'unused profile replacement cleanup after concurrent close',
             );
-            throw new Error('Codex session closed during read-only reference profile replacement');
+            throw new Error('Codex session closed during workspace permission profile replacement');
           }
           threadId = nextThreadId;
           sdkSessionId = nextThreadId;
@@ -5215,9 +5312,9 @@ export class CodexAgent extends BaseAgent {
             ? { threadId, historyHasProductPrompt: true }
             : undefined;
         }
-        readonlyReferencesProfileActive = shouldUseReadonlyReferencesProfile();
+        workspacePermissionProfileActive = currentWorkspacePermissionProfile() !== undefined;
         threadMayHaveRollout = false;
-        log.debug('unused thread replaced with read-only reference profile', {
+        log.debug('unused thread replaced with workspace permission profile', {
           previousThreadId,
           threadId,
           referenceRoots: mutableExtraDirs.length,
@@ -5234,10 +5331,13 @@ export class CodexAgent extends BaseAgent {
      * a sandboxPolicy (for example Full access), or when references are added
      * to a thread that started without them.
      */
-    const ensureReadonlyReferencesProfileForNextTurn = (
+    const ensureWorkspacePermissionProfileForNextTurn = (
       signal?: AbortSignal,
     ): Promise<void> | null => {
-      if (!shouldUseReadonlyReferencesProfile() || readonlyReferencesProfileActive) return null;
+      if (
+        currentWorkspacePermissionProfile() === undefined
+        || workspacePermissionProfileActive
+      ) return null;
       return (async () => {
         if (!threadMayHaveRollout) {
           await replaceUnusedThreadWithCurrentProfile(signal);
@@ -5245,7 +5345,7 @@ export class CodexAgent extends BaseAgent {
         }
         const resumeThreadWorkspaceConfig = currentThreadWorkspaceConfig();
         const resumeServiceTierGeneration = serviceTierMutationGeneration;
-        assertCurrentHost('read-only reference profile refresh');
+        assertCurrentHost('workspace permission profile refresh');
         let resp: ThreadResumeResponse;
         try {
           resp = await requestProfileLifecycle<ThreadResumeResponse>({
@@ -5268,7 +5368,7 @@ export class CodexAgent extends BaseAgent {
           await replaceUnusedThreadWithCurrentProfile(signal);
           return;
         }
-        assertCurrentHost('read-only reference profile refresh');
+        assertCurrentHost('workspace permission profile refresh');
         if (
           Object.hasOwn(resp, 'serviceTier') &&
           resumeServiceTierGeneration === serviceTierMutationGeneration
@@ -5277,9 +5377,9 @@ export class CodexAgent extends BaseAgent {
         } else if (resumeServiceTierGeneration !== serviceTierMutationGeneration) {
           void pushThreadSettings({ serviceTier: mutableServiceTier ?? null });
         }
-        readonlyReferencesProfileActive = 'permissions' in resumeThreadWorkspaceConfig;
+        workspacePermissionProfileActive = 'permissions' in resumeThreadWorkspaceConfig;
         threadMayHaveRollout = true;
-        log.debug('read-only reference profile restored before turn/start', {
+        log.debug('workspace permission profile restored before turn/start', {
           threadId,
           referenceRoots: mutableExtraDirs.length,
         });
@@ -9994,13 +10094,13 @@ export class CodexAgent extends BaseAgent {
         // Phase 3: 把 mutable 配置每 turn 透传 — server 接受 per-turn 覆盖。
         // **关键**: 无引用目录时用 sandboxPolicy: SandboxPolicy；有引用目录时继承
         // thread/start / thread/resume 已激活的 named permissions profile。profile
-        // selector 不能在 turn/start 重复发送，见 ensureReadonlyReferencesProfileForNextTurn。
+        // selector 不能在 turn/start 重复发送，见 ensureWorkspacePermissionProfileForNextTurn。
         // effort 同理: 协议层只能在 turn/start 透传 (v2.rs:5800), thread/start 不接;
         // 用户在 session 创建时选的 effort 也是靠 first turn/start 这里传过去才生效。
         let turnWorkspaceConfig: ReturnType<typeof currentTurnWorkspaceConfig>;
         let turnThreadWorkspaceConfig: ReturnType<typeof currentThreadWorkspaceConfig>;
         try {
-          const profileRefresh = ensureReadonlyReferencesProfileForNextTurn(sendOpts?.signal);
+          const profileRefresh = ensureWorkspacePermissionProfileForNextTurn(sendOpts?.signal);
           if (profileRefresh) await profileRefresh;
           turnWorkspaceConfig = currentTurnWorkspaceConfig();
           // A stale-daemon retry must hydrate the exact thread-level profile
@@ -10009,11 +10109,11 @@ export class CodexAgent extends BaseAgent {
           turnThreadWorkspaceConfig = currentThreadWorkspaceConfig();
         } catch (e) {
           isTurnStartPending = false;
-          endPlanCycleAfterPreStartFailure('read-only reference profile refresh failed');
+          endPlanCycleAfterPreStartFailure('workspace permission profile refresh failed');
           flushDeferredTerminalTurnCompletionsIfIdle();
           rejectIfCancelled(sendOpts, 'send');
-          const message = `Failed to restore Codex read-only reference permissions: ${String(e)}`;
-          log.error('read-only reference profile refresh failed', { error: String(e), threadId });
+          const message = `Failed to restore Codex workspace permissions: ${String(e)}`;
+          log.error('workspace permission profile refresh failed', { error: String(e), threadId });
           eventQueue.push({
             type: 'error',
             data: { message, isTerminal: true },
@@ -10110,7 +10210,7 @@ export class CodexAgent extends BaseAgent {
         // the request crosses the acceptance boundary: the peer can accept the
         // turn even if the local transport loses the response.
         if ('sandboxPolicy' in turnWorkspaceConfig) {
-          readonlyReferencesProfileActive = false;
+          workspacePermissionProfileActive = false;
         }
         // After turn/start is attempted, resume before ever replacing this
         // thread. Only an explicit "no rollout found" proves it stayed unused.
@@ -10512,7 +10612,7 @@ export class CodexAgent extends BaseAgent {
                 turnParams.collaborationMode.settings.reasoning_effort =
                   clampEffortForCodex(mutableModel, mutableEffort);
               }
-              readonlyReferencesProfileActive = 'permissions' in turnThreadWorkspaceConfig;
+              workspacePermissionProfileActive = 'permissions' in turnThreadWorkspaceConfig;
               threadMayHaveRollout = true;
               if (collaborationMode?.mode === 'default') {
                 planModeDefaultMarkerNeeded = true;
@@ -10947,9 +11047,11 @@ export class CodexAgent extends BaseAgent {
       },
 
       async setPermissionMode(newMode: PermissionMode) {
-        if (reviewMode) {
-          log.debug('setPermissionMode ignored for hard read-only Review session', {
+        if (reviewMode || workspaceReadOnly) {
+          log.debug('setPermissionMode ignored for host-owned hard read-only session', {
             requested: newMode,
+            reviewMode,
+            workspaceReadOnly,
           });
           return;
         }
@@ -11115,7 +11217,7 @@ export class CodexAgent extends BaseAgent {
           }
           threadId = nextThreadId;
           sdkSessionId = nextThreadId;
-          readonlyReferencesProfileActive = false;
+          workspacePermissionProfileActive = false;
           threadMayHaveRollout = true;
           subscription = host.subscribeThread(threadId, handlers);
           registerRootCodexMcpContext();

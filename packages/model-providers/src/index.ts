@@ -23,6 +23,8 @@ export type {
   Catalog,
   CustomProviderConfig,
   CustomProviderRuntimeConfig,
+  ProviderModelDiscoverySource,
+  ProviderModelRouteConfig,
   ProviderRuntimeModelConfig,
   PiReasoningEffort,
   PiModelApi,
@@ -89,6 +91,8 @@ export * from './modelAccessBean.js';
 export type {
   CatalogSourceConfig,
   CatalogIO,
+  CatalogCapabilityEvidence,
+  CatalogXdMediaKind,
   CatalogLoadResult,
   CatalogLoadSource,
 } from './source.js';

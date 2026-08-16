@@ -92,6 +92,12 @@ import { bindingStore, executeDetach } from './binding';
 import { IM_DEFAULT_EFFORT_OVERRIDES, IM_DEFAULT_SETTINGS } from '../../shared/imDefaultSettings';
 import { getAuthState } from '../authManager';
 import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
+import { listHookBotChannelConnections } from '../hook-control/ipc.js';
+import {
+  LOCAL_BOT_CHANNEL_FEATURES,
+  type BotChannelConnection,
+} from '../../shared/botChannelRegistry.js';
+import { materializeLocalMarkdownImages } from './shared/localMarkdownImages.js';
 
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
@@ -113,6 +119,199 @@ export {
 } from './host';
 
 const log = createLogger('main:im');
+
+export interface BotRouteDeliveryInput {
+  channel: string;
+  ownership: 'local-adapter' | 'server-relay';
+  accountKey: string;
+  principalKey: string;
+  threadKey?: string | null;
+  deliveryKey?: string | null;
+  idempotencyKey: string;
+  text: string;
+  sessionId?: string | null;
+  workingDir?: string | null;
+  onProgress?: (receipt: Record<string, unknown>) => Promise<void>;
+}
+
+export type BotRouteDeliveryResult =
+  | { ok: true; receipt: Record<string, unknown> }
+  | { ok: false; retryable: boolean; errorCode: string; message: string };
+
+/**
+ * Deliver a proactive Bot result through the already-wired local IM adapter.
+ *
+ * The Bot domain owns retry/idempotency; the adapter continues to own the
+ * channel's final formatting, thread semantics and provider acknowledgement.
+ * Server-relay delivery deliberately does not fall back to a local adapter:
+ * that would cross account/transport ownership and could send to the wrong
+ * bot identity.
+ */
+export async function deliverBotRouteMessage(
+  input: BotRouteDeliveryInput,
+): Promise<BotRouteDeliveryResult> {
+  if (input.ownership === 'server-relay') {
+    if (
+      (input.channel !== 'telegram' && input.channel !== 'slack')
+      || !input.deliveryKey?.trim()
+    ) {
+      return {
+        ok: false,
+        retryable: false,
+        errorCode: 'RELAY_ROUTE_UNADDRESSABLE',
+        message: 'The server-relay Bot Route has no authenticated delivery address.',
+      };
+    }
+    const { sendHookBotRouteMessage } = await import('../hook-control/ipc.js');
+    const result = await sendHookBotRouteMessage({
+      provider: input.channel,
+      accountKey: input.accountKey,
+      externalKey: input.deliveryKey,
+      opId: input.idempotencyKey,
+      text: input.text,
+    });
+    return result.ok
+      ? {
+          ok: true,
+          receipt: {
+            channel: input.channel,
+            ...(result.messageId ? { messageId: result.messageId } : {}),
+          },
+        }
+      : result;
+  }
+  const connection = listBotChannelConnections().find(
+    (item) => item.kind === input.channel
+      && item.ownership === input.ownership
+      && item.accountKey === input.accountKey,
+  );
+  if (!connection) {
+    return {
+      ok: false,
+      retryable: false,
+      errorCode: 'CHANNEL_IDENTITY_MISMATCH',
+      message: 'The mounted Bot Channel no longer matches the local adapter identity.',
+    };
+  }
+  if (!connection.connected) {
+    return {
+      ok: false,
+      retryable: true,
+      errorCode: 'CHANNEL_OFFLINE',
+      message: `The ${input.channel} adapter is offline.`,
+    };
+  }
+  const orchestrator = getImOrchestrator(input.channel);
+  if (!orchestrator) {
+    return {
+      ok: false,
+      retryable: true,
+      errorCode: 'CHANNEL_NOT_READY',
+      message: `The ${input.channel} adapter is not ready.`,
+    };
+  }
+  try {
+    const materialized = input.sessionId && input.workingDir && input.text.includes('![')
+      ? await materializeLocalMarkdownImages({
+          text: input.text,
+          workingDir: input.workingDir,
+          sessionId: input.sessionId,
+          maxImages: 4,
+        })
+      : { text: input.text, absPaths: [] };
+    // Personal WeChat supports proactive sends through its latest encrypted
+    // peer context, while commitFinal is intentionally restricted to a live
+    // inbound task.  Its provider clientId is the Bot outbox key, so a host
+    // crash can safely replay the same operation without creating a duplicate.
+    if (input.channel === 'wechat') {
+      const sent = await orchestrator.adapter.output.im.sendMarkdownText(
+        input.principalKey,
+        materialized.text,
+        {
+          ...(input.threadKey ? { threadTs: input.threadKey } : {}),
+          idempotencyKey: input.idempotencyKey,
+        },
+      );
+      await input.onProgress?.({ textMessageId: sent.messageId, sentMediaCount: 0 });
+      for (let index = 0; index < materialized.absPaths.length; index += 1) {
+        const result = await orchestrator.adapter.output.im.sendFile(
+          input.principalKey,
+          materialized.absPaths[index]!,
+          undefined,
+          {
+            idempotencyKey: `${input.idempotencyKey}:media:${index}`,
+          },
+        );
+        if (!result.ok) {
+          throw new Error(`WECHAT_MEDIA_SEND_FAILED:${result.reason}`);
+        }
+        await input.onProgress?.({
+          sentMediaCount: index + 1,
+          ...(result.messageId ? { lastMediaMessageId: result.messageId } : {}),
+        });
+      }
+      return {
+        ok: true,
+        receipt: { channel: input.channel, messageId: sent.messageId },
+      };
+    }
+    if (orchestrator.adapter.output.kind === 'chunked-text') {
+      await orchestrator.adapter.output.commitFinal({
+        userId: input.principalKey,
+        text: materialized.text,
+        terminal: 'done',
+        ...(input.threadKey ? { threadTs: input.threadKey } : {}),
+        ...(materialized.absPaths.length > 0
+          ? { mediaAbsPaths: materialized.absPaths }
+          : {}),
+        ...(input.workingDir ? { allowedFileRoots: [input.workingDir] } : {}),
+      });
+      await input.onProgress?.({ committedFinal: true });
+      return {
+        ok: true,
+        receipt: { channel: input.channel, accepted: true },
+      };
+    }
+    const sent = await orchestrator.adapter.output.im.sendMarkdownText(
+      input.principalKey,
+      materialized.text,
+      input.threadKey ? { threadTs: input.threadKey } : undefined,
+    );
+    await input.onProgress?.({ textMessageId: sent.messageId, sentMediaCount: 0 });
+    const attachmentMessageIds: string[] = [];
+    for (const absPath of materialized.absPaths) {
+      const attachment = await orchestrator.adapter.output.im.sendFile(
+        input.principalKey,
+        absPath,
+        undefined,
+        input.threadKey ? { threadTs: input.threadKey } : undefined,
+      );
+      if (!attachment.ok) {
+        throw new Error(`CHANNEL_MEDIA_SEND_FAILED:${attachment.reason}`);
+      }
+      if (attachment.messageId) attachmentMessageIds.push(attachment.messageId);
+      await input.onProgress?.({
+        sentMediaCount: attachmentMessageIds.length,
+        attachmentMessageIds: [...attachmentMessageIds],
+      });
+    }
+    return {
+      ok: true,
+      receipt: {
+        channel: input.channel,
+        messageId: sent.messageId,
+        ...(attachmentMessageIds.length > 0 ? { attachmentMessageIds } : {}),
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      retryable: true,
+      errorCode: 'CHANNEL_SEND_FAILED',
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
 let wired = false;
 
@@ -228,6 +427,11 @@ export function startImOrchestrators(): void {
   wireDingTalkOrchestrator(dingtalkIm, DINGTALK_CONFIG);
   wireWechatOrchestrator(wechatIm, WECHAT_CONFIG);
   wireWecomOrchestrator(wecomIm, WECOM_CONFIG);
+
+  ipcMain.handle('local-db:bots:channel-connections', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return listBotChannelConnections();
+  });
 
   ipcMain.handle('wechatBot:get-state', (event) => {
     assertTrustedAppRendererEvent(event);
@@ -401,6 +605,40 @@ export function startImOrchestrators(): void {
   // Bot connection is intentionally NOT kicked off here — it happens in
   // `startImConnection()` after Main confirms the current owner's localDb is
   // ready. See module header table for full lifecycle.
+}
+
+/**
+ * Main-side authority for concrete Bot Channel identities.
+ * Migration and renderer listing must consume the same snapshot; renderer
+ * supplied account ids or capability flags are never trusted.
+ */
+export function listBotChannelConnections(): BotChannelConnection[] {
+  const channels = [
+    ['telegram', telegramIm],
+    ['feishu', feishuIm],
+    ['discord', discordIm],
+    ['dingtalk', dingtalkIm],
+    ['wechat', wechatIm],
+    ['wecom', wecomIm],
+  ] as const;
+  const localConnections: BotChannelConnection[] = channels.map(([kind, channelIm]) => {
+    const status = channelIm.getStatus();
+    const accountKey =
+      'appId' in status && typeof status.appId === 'string' ? status.appId.trim() : '';
+    return {
+      id: `local:${kind}:${accountKey || 'unconfigured'}`,
+      kind,
+      ownership: 'local-adapter' as const,
+      status: status.kind,
+      connected: status.kind === 'connected',
+      accountKey: accountKey || null,
+      accountName: null,
+      scopeKey: accountKey || null,
+      routable: accountKey.length > 0,
+      features: [...(LOCAL_BOT_CHANNEL_FEATURES[kind] ?? [])],
+    };
+  });
+  return [...localConnections, ...listHookBotChannelConnections()];
 }
 
 async function initializeImConnection(): Promise<void> {

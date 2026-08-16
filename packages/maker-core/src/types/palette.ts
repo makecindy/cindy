@@ -76,6 +76,11 @@ export type UnifiedCommand = DesktopCommandMeta | AgentBuiltinCommand | AgentSki
 export interface ListAgentSkillsOptions {
   /** Omit to list only agent-global skills without a project scope. */
   workingDir?: string;
+  /**
+   * SSH workspace owner. When present, discovery must run against this host's
+   * native runtime/filesystem and must never fall back to the local machine.
+   */
+  remoteHostId?: string;
   forceReload?: boolean;
 }
 

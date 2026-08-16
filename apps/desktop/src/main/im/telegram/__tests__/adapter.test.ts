@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { IMMessageEvent } from '@cindy/im';
+
+vi.mock('../behaviorStore', () => ({
+  readTelegramPersona: () => ({
+    botName: 'Legacy Telegram Bot',
+    soul: 'You are the legacy Telegram identity.',
+  }),
+}));
 
 import { buildTelegramAdapter } from '../adapter';
 
@@ -52,5 +59,30 @@ describe('Telegram group history access scope', () => {
       provider: 'telegram-personal:bot-1',
       lane: null,
     });
+  });
+});
+
+describe('Telegram identity boundary', () => {
+  const adapter = buildTelegramAdapter({} as never, {} as never);
+  const dm = {
+    contextId: 'telegram-account',
+    senderId: '12345',
+    messageId: 'm-identity',
+    chatId: '12345',
+    text: 'who are you?',
+    attachments: [],
+    unsupported: [],
+  } as unknown as IMMessageEvent;
+
+  it('keeps the legacy Telegram persona for a legacy IM task', async () => {
+    await expect(adapter.prepareAgentTurnText?.(dm, { botRoute: false })).resolves.toEqual({
+      agentText:
+        '<bot_persona>\n你的名字: Legacy Telegram Bot\n' +
+        'You are the legacy Telegram identity.\n</bot_persona>\n\nwho are you?',
+    });
+  });
+
+  it('uses only the frozen Cindy Bot Profile identity for a mounted Bot Route', async () => {
+    await expect(adapter.prepareAgentTurnText?.(dm, { botRoute: true })).resolves.toBeNull();
   });
 });

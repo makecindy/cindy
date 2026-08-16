@@ -190,6 +190,7 @@ describe('hook-control runtime capability gate', () => {
       handleInteractionDecision: vi.fn(),
       handleTurnDelivery,
       onMessageOpResult: vi.fn(),
+      sendMessageOp: vi.fn(),
       setEmojiReactionsMode: vi.fn(),
       settleAckReactions: vi.fn(),
       activateAccount: vi.fn(),
@@ -1547,6 +1548,84 @@ const TELEGRAM_CONFIRMED: ProviderBindStatusPayload = {
 };
 
 describe('Telegram provider capability, binding and prefs', () => {
+  it('Bot 主动投递在 manager 边界校验 provider 与已绑定账号', async () => {
+    const sendMessageOp = vi.fn(async (_connectionId, payload) => ({
+      opId: payload.opId,
+      ok: true,
+      messageId: 'telegram-message-1',
+    }));
+    const dispatcher = {
+      handleDispatch: vi.fn(),
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onMessageOpResult: vi.fn(),
+      sendMessageOp,
+      setEmojiReactionsMode: vi.fn(),
+      settleAckReactions: vi.fn(),
+      cancel: vi.fn(),
+      handleSessionArchive: vi.fn(),
+      handleInteractionDecision: vi.fn(),
+      handleTurnDelivery: vi.fn(),
+      activateAccount: vi.fn(),
+      deactivateAccount: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as NonNullable<HookControlManagerDeps['dispatcher']>;
+    const manager = makeManager(
+      memoryStore({
+        url: 'wss://unused.example',
+        enabled: false,
+        telegramEnabled: false,
+        telegramBindingCache: {
+          bindingId: 'binding-telegram-1',
+          principalId: 'telegram-user-1',
+          principalName: 'Cindy User',
+          scopeId: 'bot-1',
+          scopeName: 'cindy_example_bot',
+        },
+      }),
+      { dispatcher },
+    );
+    cleanups.push(() => manager.dispose());
+
+    await expect(
+      manager.sendBotRouteMessage({
+        provider: 'telegram',
+        accountKey: 'bot-1',
+        externalKey: 'slack:T1:C1:171234.5678',
+        opId: 'provider-mismatch',
+        text: 'done',
+      }),
+    ).resolves.toMatchObject({ ok: false, error: 'ROUTE_PROVIDER_MISMATCH' });
+    await expect(
+      manager.sendBotRouteMessage({
+        provider: 'telegram',
+        accountKey: 'other-bot',
+        externalKey: 'telegram:dm:bot-1:user-1:g1',
+        opId: 'account-mismatch',
+        text: 'done',
+      }),
+    ).resolves.toMatchObject({ ok: false, error: 'ROUTE_ACCOUNT_MISMATCH' });
+    expect(sendMessageOp).not.toHaveBeenCalled();
+
+    await expect(
+      manager.sendBotRouteMessage({
+        provider: 'telegram',
+        accountKey: 'bot-1',
+        externalKey: 'telegram:dm:bot-1:user-1:g1',
+        opId: 'valid-route',
+        text: 'done',
+      }),
+    ).resolves.toMatchObject({ ok: true, messageId: 'telegram-message-1' });
+    expect(sendMessageOp).toHaveBeenCalledWith(
+      expect.stringMatching(/:telegram$/),
+      {
+        opId: 'valid-route',
+        scope: { externalKey: 'telegram:dm:bot-1:user-1:g1' },
+        action: { kind: 'send', text: 'done', tier: 'html' },
+      },
+    );
+  });
+
   it('冷启动与账号重激活都从缓存恢复 Telegram actions', async () => {
     const store = memoryStore({
       url: 'wss://unused.example',
@@ -1585,6 +1664,7 @@ describe('Telegram provider capability, binding and prefs', () => {
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
       onMessageOpResult: vi.fn(),
+      sendMessageOp: vi.fn(),
       setEmojiReactionsMode: vi.fn(),
       settleAckReactions: vi.fn(),
       cancel: vi.fn(),

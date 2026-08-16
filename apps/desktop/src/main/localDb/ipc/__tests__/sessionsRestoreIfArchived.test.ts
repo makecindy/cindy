@@ -224,4 +224,12 @@ describe('local-db:sessions:restore-if-archived', () => {
   it('throws NOT_FOUND when the session no longer exists', async () => {
     await expect(restore('missing')).rejects.toThrow('[NOT_FOUND]');
   });
+
+  it('does not restore Bot history through the ordinary task lifecycle', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET source = 'bot' WHERE id = 'target'").run();
+
+    await expect(restore()).rejects.toThrow(/Bot task lifecycle/);
+    expect(readStatus()).toBe('archived');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
 });

@@ -1,7 +1,7 @@
 /**
  * SidebarTopNav —— 侧栏顶部常驻动作/导航列表(取代原 HorizontalTabbar)。
  * ---------------------------------------------------------------------------
- * 一条同级、等权的列表行,按顺序:新建 / 自动任务 / Plugins / 搜索。
+ * 一条同级、等权的列表行,按顺序:新建 / 自动任务 / Plugins / Bots / 搜索。
  *   - 新建 / 自动任务:项目(cc-agent)视图的动作 —— 在任意视图点击都跳回项目视图并执行。
  *   - Plugins:主视图切换(navigateToView),命中当前视图时高亮。
  *   - 搜索(SidebarInlineSearch):静息态与其余行同款「🔍 搜索」;hover / 聚焦
@@ -19,7 +19,7 @@
  */
 
 import { useCallback } from 'react';
-import { CirclePlus, Plug, Timer } from 'lucide-react';
+import { Bot, CirclePlus, Plug, Timer } from 'lucide-react';
 import { useNavigate, useMatch } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -124,6 +124,26 @@ export function SidebarTopNav({
       {hasGhostUnread && <AttentionDot size={6} className="ml-auto mr-0.5" />}
     </button>
   ) : null;
+  const botsRow = showScrollable ? (
+    <button
+      onClick={() => navigateToView('bots')}
+      className={cn(ROW_CLASS, activeKey === 'bots' && ROW_ACTIVE_CLASS)}
+      aria-label={t('sidebar.tabs.bots')}
+      aria-current={activeKey === 'bots' ? 'page' : undefined}
+    >
+      <Bot
+        size={15}
+        strokeWidth={1.8}
+        className={cn(
+          'shrink-0',
+          activeKey === 'bots'
+            ? 'text-sidebar-item-active-foreground'
+            : 'text-[var(--sidebar-nav-text)]',
+        )}
+      />
+      <span className="leading-none">{t('sidebar.tabs.bots')}</span>
+    </button>
+  ) : null;
   const searchRow = showScrollable ? (
     <SidebarInlineSearch
       search={search}
@@ -141,6 +161,7 @@ export function SidebarTopNav({
         <div className="flex flex-col gap-0.5 pr-3 pl-3">
           {automationsRow}
           {pluginsRow}
+          {botsRow}
         </div>
         <div
           className={cn(
@@ -180,6 +201,7 @@ export function SidebarTopNav({
       )}
       {automationsRow}
       {pluginsRow}
+      {botsRow}
       {searchRow}
     </div>
   );

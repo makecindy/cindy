@@ -761,6 +761,56 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
     });
   });
 
+  it('同一 GLM key 下普通模型走 V4 Chat，glm-5.3 走 V1 Responses', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'zhipu-plan',
+        name: 'Zhipu Plan',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+            wireProtocol: 'openai-chat',
+            requestPath: '/chat/completions',
+            models: [
+              { id: 'glm-5.2', name: 'GLM-5.2' },
+              {
+                id: 'glm-5.3',
+                name: 'GLM-5.3',
+                route: {
+                  baseUrl: 'https://open.bigmodel.cn/api/v1',
+                  wireProtocol: 'openai-responses',
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'glm-key');
+    setSessionProvider('s-user', 'zhipu-plan');
+
+    expect(getSessionRoutingDescriptor('s-user', 'codex', 'glm-5.2')).toMatchObject({
+      upstream: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      wireProtocol: 'openai-chat',
+      requestPath: '/chat/completions',
+    });
+    expect(getSessionRoutingDescriptor('s-user', 'codex', 'glm-5.3')).toEqual(
+      expect.objectContaining({
+        upstream: 'https://open.bigmodel.cn/api/v1',
+        wireProtocol: 'openai-responses',
+        authStrategy: 'api-key-header',
+      }),
+    );
+    expect(getSessionRoutingDescriptor('s-user', 'codex', 'glm-5.3')).not.toHaveProperty(
+      'requestPath',
+    );
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'glm-5.3')).toEqual({
+      headerOverride: { authorization: 'Bearer glm-key' },
+      upstreamOverride: 'https://open.bigmodel.cn/api/v1',
+      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+    });
+  });
+
   it('routes a legacy custom xai row independently from the built-in SuperGrok source', () => {
     setCustomProviders([
       buildUserProvider({

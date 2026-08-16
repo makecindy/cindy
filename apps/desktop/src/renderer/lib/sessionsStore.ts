@@ -498,6 +498,10 @@ export const sessionsStore = {
    */
   prependCreated(session: Session): void {
     if (!session?.id) return;
+    // Bot canonical sessions have their own sidebar/history projection. They must
+    // never leak into the regular desktop Session cache through the optimistic
+    // prepend path (the IPC list already excludes source='bot').
+    if (session.source === 'bot') return;
     let touched = false;
     for (const [k, list] of cache) {
       if (k === 'archived') continue;

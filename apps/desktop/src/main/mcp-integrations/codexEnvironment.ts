@@ -10,7 +10,10 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Logger, McpProvider, McpProviderContext } from '@cindy/maker-core';
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plugins.js';
-import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
+import {
+  CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
+  CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+} from './codexBuiltinToolPolicy.js';
 
 import {
   startCodexHttpBridge,
@@ -57,7 +60,7 @@ let activeBridge: CodexHttpBridge | null = null;
 let activeBridgeServerNames: string[] | null = null;
 const disabledPluginPolicyByThread = new Map<
   string,
-  { sessionInstanceId?: string; policy: unknown }
+  { sessionInstanceId?: string; disabledPolicy: unknown; allowedPolicy: unknown }
 >();
 const callerProvenanceByThread = new Map<
   string,
@@ -157,14 +160,17 @@ export function registerCodexMcpThreadContext(
   ctx: LiziMcpSessionContext,
 ): void {
   const requestedPolicy = ctx.vendorOptions?.[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY];
+  const requestedAllowedPolicy = ctx.vendorOptions?.[CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY];
   const frozen = disabledPluginPolicyByThread.get(threadId);
   if (!frozen || frozen.sessionInstanceId !== ctx.sessionInstanceId) {
     disabledPluginPolicyByThread.set(threadId, {
       ...(ctx.sessionInstanceId ? { sessionInstanceId: ctx.sessionInstanceId } : {}),
-      policy: requestedPolicy,
+      disabledPolicy: requestedPolicy,
+      allowedPolicy: requestedAllowedPolicy,
     });
   }
-  const effectivePolicy = disabledPluginPolicyByThread.get(threadId)?.policy;
+  const effectivePolicy = disabledPluginPolicyByThread.get(threadId)?.disabledPolicy;
+  const effectiveAllowedPolicy = disabledPluginPolicyByThread.get(threadId)?.allowedPolicy;
   const previousProvenance = callerProvenanceByThread.get(threadId);
   const sameSessionInstance =
     ctx.sessionInstanceId !== undefined &&
@@ -202,6 +208,7 @@ export function registerCodexMcpThreadContext(
     vendorOptions: {
       ...ctx.vendorOptions,
       [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: effectivePolicy,
+      [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: effectiveAllowedPolicy,
     },
   });
 }
@@ -248,6 +255,7 @@ async function doStart(
       return {
         agentKind: active.agentKind,
         workingDir: active.workingDir,
+        ...(active.memoryScopeKey ? { memoryScopeKey: active.memoryScopeKey } : {}),
         // SSH remote 会话的 ctx 字段必须透传 — cindy_memory 用它算 scope key
         // (buildMemoryScopeKey);丢掉的话远端工具会落到本地路径 key 的 store,
         // 与 agent prompt 注入读的 ssh:<hostId>:<path> store 分家 (review R4 P1)。

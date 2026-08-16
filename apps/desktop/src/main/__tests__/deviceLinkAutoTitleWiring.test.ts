@@ -203,7 +203,7 @@ describe('user rename notification ordering', () => {
       // local-db:sessions:update(本机重命名框)
       [
         "if (typeof p.title === 'string') noteUserTitleWritten(sid);",
-        'await withStatusWriteLock(sid, p.status, () => writeSessionPatch(db, sid, setObj, p.status));',
+        'await withStatusWriteLock(sid, p.status, async () => {',
       ],
       // patchSessionMetaInDb(device-link 远程改名)
       [

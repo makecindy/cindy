@@ -412,6 +412,56 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it('keeps the normal Bot runtime while making the workspace permission immutable', async () => {
+    const deps = buildDeps(undefined, false, { serverNames: ['cindy_memory', 'cindy_helper'] });
+    deps.getGhostRosterPrompt = vi.fn(() => 'BOT ROSTER');
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'bot-read-only-session',
+      workingDir: cwd,
+      model: 'm',
+      permissionMode: 'bypassPermissions',
+      workspaceAccess: 'read-only',
+      botProfilePrompt: 'BOT SOUL: research without changing the project.',
+      makerMemoryEnabled: true,
+      makerMemoryIndexSnapshot: '## Bot Memory\n- frozen memory',
+      botUserProfilePrompt: '## User Profile\nCall the user Chris.',
+    });
+    try {
+      expect(captured.args).not.toContain('--tools');
+      expect(captured.mcpVendorOptions).toBeDefined();
+      const extensionPaths = captured.args.flatMap((arg, index) =>
+        arg === '--extension' ? [captured.args[index + 1]] : []);
+      expect(extensionPaths).toEqual(expect.arrayContaining([
+        path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'extensions', 'cindy-bridge.ts'),
+        path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'extensions', 'cindy-subagent.ts'),
+      ]));
+      const promptIndex = captured.args.indexOf('--append-system-prompt');
+      expect(captured.args[promptIndex + 1]).toContain('BOT SOUL');
+      expect(captured.args[promptIndex + 1]).toContain('BOT ROSTER');
+      expect(captured.args[promptIndex + 1]).toContain('frozen memory');
+      expect(captured.args[promptIndex + 1]).toContain('Call the user Chris');
+      expect(captured.args[promptIndex + 1].indexOf('frozen memory')).toBeLessThan(
+        captured.args[promptIndex + 1].indexOf('Call the user Chris'),
+      );
+      expect(captured.env.CINDY_PI_WORKSPACE_READ_ONLY).toBe('1');
+
+      const permissionFile = captured.env.CINDY_PI_PERMISSION_FILE;
+      expect(permissionFile).toBeTruthy();
+      expect(JSON.parse(readFileSync(permissionFile!, 'utf8'))).toMatchObject({
+        mode: 'ask',
+        workspaceReadOnly: true,
+      });
+
+      await handle.setPermissionMode?.('bypassPermissions');
+      expect(JSON.parse(readFileSync(permissionFile!, 'utf8'))).toMatchObject({
+        mode: 'ask',
+        workspaceReadOnly: true,
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('把 session 花名册快照追加到 Pi system prompt', async () => {
     const deps = buildDeps();
     deps.getGhostRosterPrompt = vi.fn(() => 'GHOST ROSTER PROMPT');

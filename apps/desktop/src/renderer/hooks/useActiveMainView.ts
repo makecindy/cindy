@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
-export type MainViewKey = 'cc-agent' | 'issues' | 'plugins';
+export type MainViewKey = 'cc-agent' | 'issues' | 'plugins' | 'bots';
 
 interface ViewDef {
   key: MainViewKey;
@@ -29,6 +29,7 @@ const VIEWS: ViewDef[] = [
   { key: 'cc-agent', to: '/cc-agent', prefixes: ['/cc-agent'] },
   { key: 'issues', to: '/issues', prefixes: ['/issues'] },
   { key: 'plugins', to: '/plugins', prefixes: ['/plugins', '/skillhub'] },
+  { key: 'bots', to: '/bots', prefixes: ['/bots'] },
 ];
 
 const DEFAULT_KEY: MainViewKey = 'cc-agent';

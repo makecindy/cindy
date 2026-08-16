@@ -43,11 +43,13 @@ import { ipcMain, BrowserWindow, app } from 'electron';
 import type { AgentKind, Maker } from '@cindy/maker-core';
 import type {
   Scheduler,
+  Schedule,
   CreateScheduleInput,
   UpdateScheduleInput,
   ListFilter,
   ScheduleTemplate,
   SchedulerEvent,
+  SchedulerRuntimeSnapshot,
 } from '@cindy/maker-scheduler';
 import {
   BUILTIN_TEMPLATES,
@@ -102,6 +104,55 @@ function broadcastSchedulerEvent(event: SchedulerEvent): void {
   } catch (err) {
     log.warn(`agent island schedule event update failed: ${String(err)}`);
   }
+}
+
+async function filterGenericRuntimeSnapshot(
+  snapshot: SchedulerRuntimeSnapshot,
+  storage: DrizzleScheduleStorage,
+): Promise<SchedulerRuntimeSnapshot> {
+  const scheduleIds = new Set([
+    ...snapshot.inFlightRuns.map((run) => run.scheduleId),
+    ...snapshot.waitingSchedules.map((waiting) => waiting.scheduleId),
+  ]);
+  const sourceById = new Map(
+    await Promise.all(
+      [...scheduleIds].map(async (scheduleId) => [
+        scheduleId,
+        (await storage.get(scheduleId))?.source,
+      ] as const),
+    ),
+  );
+  const inFlightRuns = snapshot.inFlightRuns.filter(
+    (run) => sourceById.get(run.scheduleId) !== 'bot',
+  );
+  const waitingSchedules = snapshot.waitingSchedules.filter(
+    (waiting) => sourceById.get(waiting.scheduleId) !== 'bot',
+  );
+  return {
+    ...snapshot,
+    inFlight: inFlightRuns.length,
+    slotsInUse: inFlightRuns.filter(
+      (run) => run.phase !== 'queued' && run.phase !== 'cancelling',
+    ).length,
+    inFlightRuns,
+    waitingSchedules,
+  };
+}
+
+async function broadcastGenericSchedulerEvent(
+  event: SchedulerEvent,
+  storage: DrizzleScheduleStorage,
+): Promise<void> {
+  if (event.type === 'runtime-state') {
+    const snapshot = await filterGenericRuntimeSnapshot(event.snapshot, storage);
+    broadcastSchedulerEvent({ ...event, snapshot });
+    return;
+  }
+  if ('scheduleId' in event) {
+    const schedule = await storage.get(event.scheduleId);
+    if (schedule?.source === 'bot') return;
+  }
+  broadcastSchedulerEvent(event);
 }
 
 /** 非 Scheduler 引擎写入 run 衍生数据后，通知各端重新读取该任务。 */
@@ -218,6 +269,31 @@ async function withScheduler<T>(cb: (deps: SchedulerDeps) => Promise<T>): Promis
   }
 }
 
+async function requireGenericSchedule(scheduler: Scheduler, scheduleId: string): Promise<Schedule> {
+  const schedule = await scheduler.get(scheduleId);
+  if (!schedule || schedule.source === 'bot') {
+    throwIpcError('NOT_FOUND', `schedule ${scheduleId} not found`);
+  }
+  return schedule;
+}
+
+async function requireGenericScheduleRun(
+  storage: DrizzleScheduleStorage,
+  runId: string,
+): Promise<Schedule> {
+  const schedule = await storage.getScheduleForRun(runId);
+  if (!schedule || schedule.source === 'bot') {
+    throwIpcError('NOT_FOUND', `schedule run ${runId} not found`);
+  }
+  return schedule;
+}
+
+function rejectReservedBotSource(input: Record<string, unknown>, field: string): void {
+  if (Object.prototype.hasOwnProperty.call(input, 'source')) {
+    throwIpcError('INVALID_PARAMS', `${field}.source is managed by its owning domain`);
+  }
+}
+
 /**
  * Device-link JSON 边界翻译:mobile 清空 intervalMs 用可序列化的 null 表达
  * (`JSON.stringify` 会丢掉值为 undefined 的 key,见 maker-shared
@@ -330,14 +406,17 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_GET, async (_e, id: unknown) => {
     const scheduleId = requireString(id, 'id');
-    return withScheduler(({ scheduler }) => scheduler.get(scheduleId));
+    return withScheduler(({ scheduler }) => requireGenericSchedule(scheduler, scheduleId));
   });
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_CREATE, async (_e, input: unknown) => {
-    requireObject(input, 'input');
+    const body = requireObject(input, 'input');
+    rejectReservedBotSource(body, 'input');
     return withScheduler(async ({ scheduler }) => {
       const normalized = await stabilizePreRunHookForCreate(
-        normalizeNullableIntervalMs(input as CreateScheduleInput & { intervalMs?: number | null }),
+        normalizeNullableIntervalMs(
+          body as unknown as CreateScheduleInput & { intervalMs?: number | null },
+        ),
         hookPathDeps,
       );
       return scheduler.create(normalized);
@@ -346,26 +425,29 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_UPDATE, async (_e, id: unknown, patch: unknown) => {
     const scheduleId = requireString(id, 'id');
-    requireObject(patch, 'patch');
-    return withScheduler(({ scheduler }) =>
-      scheduler.updateFromCurrent(scheduleId, (existing) =>
+    const body = requireObject(patch, 'patch');
+    rejectReservedBotSource(body, 'patch');
+    return withScheduler(async ({ scheduler }) => {
+      await requireGenericSchedule(scheduler, scheduleId);
+      return scheduler.updateFromCurrent(scheduleId, (existing) =>
         stabilizePreRunHookForUpdate(
           existing,
           normalizeLegacyDeviceLinkIntervalClear(
             normalizeNullableIntervalMs(
-              patch as UpdateScheduleInput & { intervalMs?: number | null },
+              body as UpdateScheduleInput & { intervalMs?: number | null },
             ),
             isDeviceLinkInvoke(),
           ),
           hookPathDeps,
         ),
-      ),
-    );
+      );
+    });
   });
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_DELETE, async (_e, id: unknown) => {
     const scheduleId = requireString(id, 'id');
     return withScheduler(async ({ scheduler, storage }) => {
+      await requireGenericSchedule(scheduler, scheduleId);
       // 删 automation 前先把它名下所有未读历史标记为已读 —— 用户都决定删了,
       // 残留 unread badge 没意义。失败仅记日志,不阻断 delete 主流程。
       try {
@@ -383,6 +465,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_PAUSE, async (_e, id: unknown) => {
     const scheduleId = requireString(id, 'id');
     return withScheduler(async ({ scheduler, storage }) => {
+      await requireGenericSchedule(scheduler, scheduleId);
       const result = await scheduler.pause(scheduleId);
       // pause 后顺手清掉这条 schedule 名下的未读历史 —— 用户主动暂停就视为
       // 已不再关心当前一批结果,badge 一并消化。失败仅记日志,不影响 pause 本身。
@@ -400,12 +483,18 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_RESUME, async (_e, id: unknown) => {
     const scheduleId = requireString(id, 'id');
-    return withScheduler(({ scheduler }) => scheduler.resume(scheduleId));
+    return withScheduler(async ({ scheduler }) => {
+      await requireGenericSchedule(scheduler, scheduleId);
+      return scheduler.resume(scheduleId);
+    });
   });
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_RUN_NOW, async (_e, id: unknown) => {
     const scheduleId = requireString(id, 'id');
-    return withScheduler(({ scheduler }) => scheduler.runNow(scheduleId));
+    return withScheduler(async ({ scheduler }) => {
+      await requireGenericSchedule(scheduler, scheduleId);
+      return scheduler.runNow(scheduleId);
+    });
   });
 
   // 表单「AI 生成」:按用户自然语言描述生成前置检查脚本(utility model 单次生成,
@@ -542,7 +631,10 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_RUNS, async (_e, scheduleId: unknown, limit: unknown) => {
     const id = requireString(scheduleId, 'scheduleId');
     const lim = typeof limit === 'number' && Number.isFinite(limit) ? limit : undefined;
-    return withScheduler(({ scheduler }) => scheduler.listRuns(id, lim));
+    return withScheduler(async ({ scheduler }) => {
+      await requireGenericSchedule(scheduler, id);
+      return scheduler.listRuns(id, lim);
+    });
   });
 
   // 一并回传引擎的 in-flight runId 快照:renderer 的通知抑制标记要靠它区分「DB 里查不到
@@ -554,10 +646,13 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   // 会出现「行还是 running、controller 已注销」。消费方(reconcileRunMarkers)能识别这种
   // 不一致并安排一次重查,所以这里不为它忙等重采样。
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_SIDEBAR_INDEX_RUNS, async () =>
-    withScheduler(async ({ storage, scheduler }) => ({
-      runs: await storage.listSidebarIndexRuns(),
-      inflightRunIds: scheduler.listInflightRunIds(),
-    })),
+    withScheduler(async ({ storage, scheduler }) => {
+      const snapshot = await filterGenericRuntimeSnapshot(scheduler.getRuntimeSnapshot(), storage);
+      return {
+        runs: await storage.listSidebarIndexRuns(),
+        inflightRunIds: snapshot.inFlightRuns.map((run) => run.runId),
+      };
+    }),
   );
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_COST_SUMMARIES, async () =>
@@ -566,7 +661,10 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_DELETE_RUN, async (_e, runId: unknown) => {
     const id = requireString(runId, 'runId');
-    return withScheduler(({ scheduler }) => scheduler.deleteRun(id));
+    return withScheduler(async ({ scheduler, storage }) => {
+      await requireGenericScheduleRun(storage, id);
+      return scheduler.deleteRun(id);
+    });
   });
 
   // Renderer 在 delete/pause 前查 in-flight 数量 —— >0 时弹合并文案的二次确认
@@ -574,14 +672,16 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   // 不查 DB,几乎无延迟。
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_GET_INFLIGHT_COUNT, async (_e, id: unknown) => {
     const scheduleId = requireString(id, 'id');
-    return withScheduler(({ scheduler }) =>
-      Promise.resolve(scheduler.getInflightCount(scheduleId)),
-    );
+    return withScheduler(async ({ scheduler }) => {
+      await requireGenericSchedule(scheduler, scheduleId);
+      return scheduler.getInflightCount(scheduleId);
+    });
   });
 
   // Renderer 首次进入页面时补取一次运行快照，避免错过更早广播的 runtime-state。
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_GET_RUNTIME_STATE, async () =>
-    withScheduler(({ scheduler }) => Promise.resolve(scheduler.getRuntimeSnapshot())),
+    withScheduler(({ scheduler, storage }) =>
+      filterGenericRuntimeSnapshot(scheduler.getRuntimeSnapshot(), storage)),
   );
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_GET_UNREAD_COUNT, async () =>
@@ -603,6 +703,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_MARK_RUN_READ, async (_e, runId: unknown) => {
     const id = requireString(runId, 'runId');
     return withScheduler(async ({ storage }) => {
+      await requireGenericScheduleRun(storage, id);
       const scheduleId = await storage.markRunRead(id);
       // markRunRead 已自带 "已读 / 非终态 / 不存在" 三种 no-op 短路;
       // 拿到 scheduleId 才广播 —— 让 useRuns 拉到带 readAt 的新 row、badge hook 重算总数。
@@ -614,7 +715,8 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_MARK_SCHEDULE_RUNS_READ, async (_e, scheduleId: unknown) => {
     const id = requireString(scheduleId, 'scheduleId');
-    return withScheduler(async ({ storage }) => {
+    return withScheduler(async ({ scheduler, storage }) => {
+      await requireGenericSchedule(scheduler, id);
       const updated = await storage.markAllRunsRead(id);
       // 仅在有真实更新时广播,避免 no-op 也触发下游 refetch。
       if (updated > 0) {
@@ -639,9 +741,13 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         : {};
     const overrides =
       body.overrides && typeof body.overrides === 'object'
-        ? normalizeNullableIntervalMs(
-            body.overrides as Partial<CreateScheduleInput> & { intervalMs?: number | null },
-          )
+        ? (() => {
+            const rawOverrides = body.overrides as Record<string, unknown>;
+            rejectReservedBotSource(rawOverrides, 'overrides');
+            return normalizeNullableIntervalMs(
+              rawOverrides as Partial<CreateScheduleInput> & { intervalMs?: number | null },
+            );
+          })()
         : {};
     return withScheduler(({ scheduler }) => {
       const template = findTemplate(templateId);
@@ -687,16 +793,21 @@ export function attachSchedulerEventListeners(
   storage: DrizzleScheduleStorage,
 ): void {
   // 单一 channel 多事件类型:renderer 按 event.type 分支
-  scheduler.on('fired', broadcastSchedulerEvent);
-  scheduler.on('completed', broadcastSchedulerEvent);
-  scheduler.on('failed', broadcastSchedulerEvent);
-  scheduler.on('silenced', broadcastSchedulerEvent);
-  scheduler.on('notified', broadcastSchedulerEvent);
-  scheduler.on('deferred', broadcastSchedulerEvent);
-  scheduler.on('skipped', broadcastSchedulerEvent);
-  scheduler.on('session-bound', broadcastSchedulerEvent);
-  scheduler.on('changed', broadcastSchedulerEvent);
-  scheduler.on('runtime-state', broadcastSchedulerEvent);
+  const broadcastGeneric = (event: SchedulerEvent): void => {
+    void broadcastGenericSchedulerEvent(event, storage).catch((error) => {
+      log.warn(`generic schedule event filtering failed: ${String(error)}`);
+    });
+  };
+  scheduler.on('fired', broadcastGeneric);
+  scheduler.on('completed', broadcastGeneric);
+  scheduler.on('failed', broadcastGeneric);
+  scheduler.on('silenced', broadcastGeneric);
+  scheduler.on('notified', broadcastGeneric);
+  scheduler.on('deferred', broadcastGeneric);
+  scheduler.on('skipped', broadcastGeneric);
+  scheduler.on('session-bound', broadcastGeneric);
+  scheduler.on('changed', broadcastGeneric);
+  scheduler.on('runtime-state', broadcastGeneric);
 
   // 必须在 .on 全挂完之后调:setSchedulerReady 会立即 resolve 在途 await,
   // 之后业务 IPC 跑起来可能触发 changed/fired,listener 漏挂会丢事件。

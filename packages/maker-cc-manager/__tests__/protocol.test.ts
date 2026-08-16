@@ -17,8 +17,8 @@ describe('protocol constants', () => {
     expect(PROTOCOL_VERSION).toBeGreaterThan(0);
   });
 
-  it('requires v3 so old daemons cannot ignore root-only host tool guards', () => {
-    expect(PROTOCOL_VERSION).toBe(3);
+  it('requires v4 so old daemons cannot ignore host Bot workspace policies', () => {
+    expect(PROTOCOL_VERSION).toBe(4);
   });
 
   it('METHODS has expected method names', () => {

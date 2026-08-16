@@ -34,6 +34,25 @@ export interface HookBindingStore {
   remove(connectionId: string, externalKey: string): void;
 }
 
+export interface HookBindingSnapshot {
+  connectionId: string;
+  externalKey: string;
+  sessionId: string;
+  updatedAt: number;
+}
+
+export interface HookBindingMigrationStore extends HookBindingStore {
+  /** Stable snapshot used by Bot migration planning and rollback. */
+  list(): HookBindingSnapshot[];
+  /** Apply a batch delete with one atomic file replacement. */
+  removeMany(rows: readonly HookBindingSnapshot[]): void;
+  /** Restore an earlier batch without replacing bindings created afterwards. */
+  restoreMany(rows: readonly HookBindingSnapshot[]): {
+    restored: number;
+    skippedConflicts: number;
+  };
+}
+
 interface BindingRow {
   sessionId: string;
   updatedAt: number;
@@ -44,7 +63,7 @@ type BindingFile = Record<string, Record<string, BindingRow>>;
 export function createHookBindingStore(deps: {
   filePath: string;
   log: { warn(msg: string): void };
-}): HookBindingStore {
+}): HookBindingMigrationStore {
   const { filePath, log } = deps;
 
   function readAll(): BindingFile {
@@ -107,6 +126,72 @@ export function createHookBindingStore(deps: {
       if (!Object.hasOwn(ns, externalKey)) return;
       delete (ns as Record<string, BindingRow>)[externalKey];
       writeAll(data);
+    },
+    list() {
+      const rows: HookBindingSnapshot[] = [];
+      for (const [connectionId, rawNamespace] of Object.entries(readAll())) {
+        if (!rawNamespace || typeof rawNamespace !== 'object' || Array.isArray(rawNamespace)) {
+          continue;
+        }
+        for (const [externalKey, rawRow] of Object.entries(rawNamespace)) {
+          if (
+            !rawRow
+            || typeof rawRow !== 'object'
+            || typeof rawRow.sessionId !== 'string'
+            || typeof rawRow.updatedAt !== 'number'
+          ) {
+            continue;
+          }
+          rows.push({
+            connectionId,
+            externalKey,
+            sessionId: rawRow.sessionId,
+            updatedAt: rawRow.updatedAt,
+          });
+        }
+      }
+      return rows.sort((a, b) =>
+        a.connectionId.localeCompare(b.connectionId)
+        || a.externalKey.localeCompare(b.externalKey),
+      );
+    },
+    removeMany(rows) {
+      if (rows.length === 0) return;
+      const data = readAll();
+      let changed = false;
+      for (const row of rows) {
+        const ns: unknown = data[row.connectionId];
+        if (!ns || typeof ns !== 'object' || Array.isArray(ns)) continue;
+        const current = (ns as Record<string, BindingRow | undefined>)[row.externalKey];
+        if (!current || current.sessionId !== row.sessionId) continue;
+        delete (ns as Record<string, BindingRow>)[row.externalKey];
+        changed = true;
+      }
+      if (changed) writeAll(data);
+    },
+    restoreMany(rows) {
+      if (rows.length === 0) return { restored: 0, skippedConflicts: 0 };
+      const data = readAll();
+      let changed = false;
+      let restored = 0;
+      let skippedConflicts = 0;
+      for (const row of rows) {
+        const ns = namespaceFor(data, row.connectionId);
+        const current = ns[row.externalKey];
+        if (current?.sessionId === row.sessionId && current.updatedAt === row.updatedAt) continue;
+        // A newer task may claim the lane after migration removed the old
+        // binding. Rollback must preserve that newer claim instead of
+        // resurrecting the stale task over it.
+        if (current) {
+          skippedConflicts += 1;
+          continue;
+        }
+        ns[row.externalKey] = { sessionId: row.sessionId, updatedAt: row.updatedAt };
+        restored += 1;
+        changed = true;
+      }
+      if (changed) writeAll(data);
+      return { restored, skippedConflicts };
     },
   };
 }

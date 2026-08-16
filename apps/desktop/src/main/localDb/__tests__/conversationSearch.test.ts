@@ -29,4 +29,10 @@ describe('conversationSearch source invariants', () => {
   it('keeps the raw stored title in the session summary', () => {
     expect(conversationSearchSource).toContain('title: row.title,');
   });
+
+  it('keeps ordinary task search on the desktop-visible source boundary by default', () => {
+    expect(conversationSearchSource).toContain(
+      'hostScope.sessionSources === undefined\n    ? DESKTOP_VISIBLE_SESSION_SOURCES',
+    );
+  });
 });

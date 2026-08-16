@@ -42,6 +42,8 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:switch-session-agent',
       'maker:get-session-agent-switch-intent',
       'local-db:sessions:list',
+      'local-db:bots:list',
+      'local-db:bots:get',
       'local-db:conversations:search',
       DL_HISTORY_MESSAGES_CHANNEL,
       'local-db:messages:list',
@@ -50,6 +52,21 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:message:delete',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
+    }
+  });
+
+  it('只放行 Bot profile 只读投影，不开放远程管理面', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:bots:list')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:bots:get')).toBe(true);
+    for (const channel of [
+      'local-db:bots:create',
+      'local-db:bots:update',
+      'local-db:bots:renew',
+      'local-db:bots:delete',
+      'local-db:bots:import',
+      'local-db:bots:export',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(false);
     }
   });
 

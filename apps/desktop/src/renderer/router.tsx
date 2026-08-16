@@ -24,6 +24,10 @@ import { SkillhubMarketListView } from '@/features/skillhub/SkillhubMarketListVi
 import { MakerExperimentalView } from '@/features/maker-experimental/MakerExperimentalView';
 import { SchedulerPage } from '@/features/scheduler';
 import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
+import { BotsFeatureLayout } from '@/features/bots/BotsFeatureLayout';
+import { BotsHomeView } from '@/features/bots/BotsHomeView';
+import { BotHistorySessionView } from '@/features/bots/BotHistorySessionView';
+import { BotSessionView } from '@/features/bots/BotSessionView';
 
 /**
  * 三层路由架构：
@@ -36,6 +40,7 @@ import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
  *         └── MainLayout            → 主功能区
  *              ├── /                → Navigate to /cc-agent
  *              ├── /cc-agent/...    → CCAgentFeatureLayout
+ *              ├── /bots/...        → BotsFeatureLayout
  *              └── /settings        → SettingsView
  *
  * LocalDbGate 下沉在路由层：AuthProvider 在 RouterProvider 之外无法 useNavigate。
@@ -105,6 +110,16 @@ export const router = createHashRouter([
                       { path: 'orca/new', element: <Navigate to="/cc-agent/new" replace /> },
                       { path: 'orca/:sessionId', element: <OrcaWorkflowRoute /> },
                       { path: ':sessionId', element: <CCAgentSessionView /> },
+                    ],
+                  },
+                  {
+                    path: 'bots',
+                    element: <BotsFeatureLayout />,
+                    children: [
+                      { index: true, element: <BotsHomeView /> },
+                      { path: ':botId', element: <BotsHomeView /> },
+                      { path: ':botId/session/:sessionId', element: <BotSessionView /> },
+                      { path: ':botId/history/:sessionId', element: <BotHistorySessionView /> },
                     ],
                   },
                   {

@@ -764,6 +764,21 @@ export default function DeviceDetailScreen() {
               }}
             />
           </View>
+          <View style={{ minWidth: windowLayout.metricMinWidth }} testID="deviceDetail.botActions">
+            <MainWindowActionButton
+              action={{
+                accessibilityLabel: t('devices.detail.botsButtonA11y'),
+                label: t('devices.detail.bots'),
+                onPress: () => guardedPush({
+                  pathname: '/bots/[deviceId]',
+                  params: { deviceId, name: deviceName },
+                }),
+                testID: 'deviceDetail.botsButton',
+              }}
+              density="compact"
+              style={{ minHeight: windowLayout.metricMinHeight, minWidth: windowLayout.metricMinWidth }}
+            />
+          </View>
           {loading ? <ActivityIndicator color={colors.textSecondary} /> : null}
         </View>
       </SummaryStrip>

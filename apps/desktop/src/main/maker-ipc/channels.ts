@@ -708,6 +708,22 @@ export const MAKER_INVOKE = {
   GOAL_PAUSE: 'maker:goal:pause',
   GOAL_RESUME: 'maker:goal:resume',
   GOAL_UPDATE: 'maker:goal:update',
+  /** Cindy Bot 父任务列出自己发起的 Bot 间委派。 */
+  BOT_DELEGATIONS_LIST: 'maker:bot-delegations:list',
+  /** Cindy Bot 父任务取消仍在运行或等待中的委派。 */
+  BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
+  BOT_AUTOMATIONS_LIST: 'maker:bot-automations:list',
+  BOT_AUTOMATION_CREATE: 'maker:bot-automation:create',
+  BOT_AUTOMATION_UPDATE: 'maker:bot-automation:update',
+  BOT_AUTOMATION_PAUSE: 'maker:bot-automation:pause',
+  BOT_AUTOMATION_RESUME: 'maker:bot-automation:resume',
+  BOT_AUTOMATION_RUN_NOW: 'maker:bot-automation:run-now',
+  BOT_AUTOMATION_DELETE: 'maker:bot-automation:delete',
+  BOT_AUTOMATION_LIST_RUNS: 'maker:bot-automation:list-runs',
+  BOT_AUTOMATION_RETRY_DELIVERY: 'maker:bot-automation:retry-delivery',
+  BOT_DELIVERIES_LIST: 'maker:bot-deliveries:list',
+  BOT_DELIVERY_RETRY: 'maker:bot-delivery:retry',
+  BOT_LIFECYCLE_ACTION: 'maker:bot-lifecycle:action',
 } as const;
 
 /**
@@ -839,6 +855,11 @@ export const MAKER_PUSH = {
   DESKTOP_COMMAND_TRIGGERED: 'maker:desktop-command-triggered',
   /** multi-worker: worker 增删改 / focus 切换时 broadcast, renderer useWorkers hook 订阅刷新。 */
   ORCA_WORKER_CHANGED: 'maker:orca:worker-changed',
+  /** Bot 间委派状态改变；payload 带父/子任务 id，广播自动附 owner generation。 */
+  BOT_DELEGATION_CHANGED: 'maker:bot-delegation:changed',
+  BOT_AUTOMATION_CHANGED: 'maker:bot-automation:changed',
+  BOT_DELIVERY_CHANGED: 'maker:bot-delivery:changed',
+  BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,
    * 经 device-link tap 转发给控制端(account 级 → sessions topic),控制端刷新远程草稿显示镜像。

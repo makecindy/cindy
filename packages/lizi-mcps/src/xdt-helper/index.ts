@@ -109,6 +109,11 @@ export {
   type SearchChatHistoryToolDeps,
 } from './search_chat_history.js';
 export {
+  registerBotDurableNoteTools,
+  type BotDurableNoteCallbacks,
+  type BotDurableNoteToolDeps,
+} from './bot_durable_notes.js';
+export {
   registerSubmitGithubIssueTool,
   type SubmitGithubIssueDeps,
   type SubmitGithubIssueHostResult,

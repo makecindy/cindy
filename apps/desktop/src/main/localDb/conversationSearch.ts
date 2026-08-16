@@ -14,6 +14,7 @@ import type {
 } from '../../shared/conversationSearch.js';
 import { conversationSearchTitle } from '../../shared/conversationSearch.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import type { SessionSource } from '../../shared/sessionSource.js';
 import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
 import { searchChatHistoryHybrid } from './chatHistorySearch.js';
@@ -46,8 +47,18 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 type SessionRow = typeof sessions.$inferSelect;
 
+export interface ConversationSearchHostScope {
+  /**
+   * Main-owned source scope. Undefined preserves the normal desktop task
+   * search boundary; null permits every source only when another authoritative
+   * filter (for example Bot-owned Session ids) already constrains the query.
+   */
+  sessionSources?: readonly SessionSource[] | null;
+}
+
 export async function searchConversations(
   request: ConversationSearchRequest,
+  hostScope: ConversationSearchHostScope = {},
 ): Promise<ConversationSearchResponse> {
   const query = request.query.trim();
   if (!query) {
@@ -62,6 +73,9 @@ export async function searchConversations(
 
   const limit = clampLimit(request.limit);
   const filters = normalizeFilters(request);
+  const sessionSources = hostScope.sessionSources === undefined
+    ? DESKTOP_VISIBLE_SESSION_SOURCES
+    : hostScope.sessionSources;
   const sortBy = normalizeSortBy(request.sortBy);
   const skipVector = request.semanticMode === 'keyword';
   if (filters.sessionIds && filters.sessionIds.length === 0) {
@@ -73,7 +87,7 @@ export async function searchConversations(
       poolCapped: false,
     };
   }
-  const sessionRows = await listSearchableSessions(filters);
+  const sessionRows = await listSearchableSessions(filters, sessionSources);
   if (sessionRows.length === 0) {
     return {
       query,
@@ -111,6 +125,7 @@ export async function searchConversations(
     filters,
     activityCutoff,
     skipVector,
+    sessionSources,
   });
 
   const contentMessageIds = content.hits.map((hit) => hit.messageId);
@@ -163,6 +178,7 @@ async function searchContentUntilUniqueSessions({
   filters,
   activityCutoff,
   skipVector,
+  sessionSources,
 }: {
   query: string;
   limit: number;
@@ -170,6 +186,7 @@ async function searchContentUntilUniqueSessions({
   filters: NormalizedConversationSearchFilters;
   activityCutoff: number | null;
   skipVector: boolean;
+  sessionSources: readonly SessionSource[] | null;
 }) {
   const targetUniqueSessions = Math.min(limit * 2, allowedSessionIds.length);
   const queryEmbeddingCache = new Map<string, number[]>();
@@ -189,7 +206,7 @@ async function searchContentUntilUniqueSessions({
       contextRadius: 0,
       limit: pageLimit,
       offset,
-      sessionSources: DESKTOP_VISIBLE_SESSION_SOURCES,
+      sessionSources,
       sessionStatuses: sessionStatusesForFilter(filters.status),
       excludeCleared: true,
       sessionActivityFromMs: activityCutoff,
@@ -259,7 +276,11 @@ function normalizeSortBy(value: ConversationSearchSortBy | undefined): Conversat
   return value === 'activityDesc' || value === 'activityAsc' ? value : 'relevance';
 }
 
-async function listSearchableSessions(filters: NormalizedConversationSearchFilters): Promise<SessionRow[]> {
+async function listSearchableSessions(
+  filters: NormalizedConversationSearchFilters,
+  sessionSources: readonly SessionSource[] | null,
+): Promise<SessionRow[]> {
+  if (sessionSources !== null && sessionSources.length === 0) return [];
   const db = getDbClient().drizzle;
   const statusCond = statusCondition(filters.status);
   const agentCond = filters.agentKind === 'all' ? undefined : eq(sessions.agentKind, filters.agentKind);
@@ -274,7 +295,7 @@ async function listSearchableSessions(filters: NormalizedConversationSearchFilte
     .select()
     .from(sessions)
     .where(and(
-      inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+      sessionSources === null ? undefined : inArray(sessions.source, sessionSources),
       statusCond,
       agentCond,
       sessionIdsCond,

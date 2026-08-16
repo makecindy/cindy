@@ -6,6 +6,10 @@
  * invocations so we can assert they were called.
  */
 
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -243,6 +247,90 @@ describe('SessionRegistry', () => {
         tool_input: {},
       }),
     ).resolves.toEqual({ continue: true });
+  });
+
+  it('enforces a remote Bot write allowlist before Full Access permissions', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-remote-bot-scope-'));
+    const allowed = path.join(root, 'allowed');
+    const outside = path.join(root, 'outside');
+    mkdirSync(allowed);
+    mkdirSync(outside);
+    mkdirSync(path.join(root, '.git'));
+    symlinkSync(outside, path.join(allowed, 'escape'));
+    try {
+      const { factory: baseFactory } = buildFakeFactory();
+      let captured: SdkQueryFactoryOptions | undefined;
+      const registry = new SessionRegistry({
+        sdkQueryFactory: (opts) => {
+          captured = opts;
+          return baseFactory(opts);
+        },
+      });
+      registry.create({
+        sessionId: 's-bot-write-scope',
+        cwd: root,
+        model: 'm',
+        env: {},
+        permissionMode: 'bypassPermissions',
+        workspaceWritePaths: [allowed],
+      });
+      const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+      expect(preToolUse).toBeDefined();
+      await expect(preToolUse!({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(allowed, 'ok.ts') },
+      })).resolves.toEqual({ continue: true });
+      for (const call of [
+        { tool_name: 'Bash', tool_input: { command: 'touch allowed/x' } },
+        { tool_name: 'Edit', tool_input: { file_path: path.join(outside, 'no.ts') } },
+        { tool_name: 'Write', tool_input: { file_path: path.join(allowed, 'escape', 'no.ts') } },
+        { tool_name: 'Write', tool_input: { file_path: path.join(root, '.git', 'config') } },
+      ]) {
+        await expect(preToolUse!({ hook_event_name: 'PreToolUse', ...call })).resolves.toMatchObject({
+          hookSpecificOutput: { permissionDecision: 'deny' },
+        });
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('enforces a remote read-only Bot workspace before Full Access permissions', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-remote-bot-readonly-'));
+    try {
+      const { factory: baseFactory } = buildFakeFactory();
+      let captured: SdkQueryFactoryOptions | undefined;
+      const registry = new SessionRegistry({
+        sdkQueryFactory: (opts) => {
+          captured = opts;
+          return baseFactory(opts);
+        },
+      });
+      registry.create({
+        sessionId: 's-bot-readonly',
+        cwd: root,
+        model: 'm',
+        env: {},
+        permissionMode: 'bypassPermissions',
+        workspaceReadOnly: true,
+      });
+      const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+      await expect(preToolUse!({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(root, 'no.ts') },
+      })).resolves.toMatchObject({
+        hookSpecificOutput: { permissionDecision: 'deny' },
+      });
+      await expect(preToolUse!({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Read',
+        tool_input: { file_path: path.join(root, 'ok.ts') },
+      })).resolves.toEqual({ continue: true });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('allows the exact Orca report tool for the root and denies nested Claude agents', async () => {

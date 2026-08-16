@@ -282,6 +282,63 @@ describe('dynamic lizi MCP session context', () => {
     expect(getStore).toHaveBeenLastCalledWith('/home/me/proj');
   });
 
+  it('uses the host-owned Bot memory scope instead of the route workdir', async () => {
+    const getStore = vi.fn(async (_scope: string) => ({
+      list: vi.fn(async () => []),
+    }));
+    const getManager = () => ({
+      isEnabled: () => true,
+      getStore,
+    }) as never;
+    const provider = createLiziMcpProviders({ memory: { getManager } })
+      .find((p) => p.name === 'cindy_memory');
+    if (!provider) throw new Error('cindy_memory provider missing');
+
+    const cfg = provider.toClaudeSdkConfig({
+      agentKind: 'claude-code',
+      workingDir: '/project-a',
+      memoryScopeKey: 'bot:release-helper',
+      vendorOptions: {},
+    }) as { type: 'sdk'; instance: unknown };
+
+    const result = await tools(cfg.instance).call_tool.handler({
+      name: 'memory_list',
+      args: {},
+    });
+
+    expect(parse(result as never)).toMatchObject({ ok: true, data: [] });
+    expect(getStore).toHaveBeenLastCalledWith('bot:release-helper');
+  });
+
+  it('passes host-owned Bot identity to session_search without exposing it as tool input', async () => {
+    const searchSessions = vi.fn(async () => []);
+    const getManager = () => ({
+      isEnabled: () => true,
+      getStore: vi.fn(),
+    }) as never;
+    const provider = createLiziMcpProviders({ memory: { getManager, searchSessions } })
+      .find((p) => p.name === 'cindy_memory');
+    if (!provider) throw new Error('cindy_memory provider missing');
+
+    const cfg = provider.toClaudeSdkConfig({
+      agentKind: 'claude-code',
+      workingDir: '/project-a',
+      memoryScopeKey: 'bot:release-helper',
+      sessionId: 'bot-session-a',
+      vendorOptions: {},
+    }) as { type: 'sdk'; instance: unknown };
+
+    await tools(cfg.instance).call_tool.handler({
+      name: 'session_search',
+      args: { query: 'release' },
+    });
+
+    expect(searchSessions).toHaveBeenCalledWith('release', {
+      callerMemoryScopeKey: 'bot:release-helper',
+      callerSessionId: 'bot-session-a',
+    });
+  });
+
   it('advertises Cindy as the helper self-inspection category', async () => {
     const server = createXdtHelperMcpServer(
       {},

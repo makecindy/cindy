@@ -27,6 +27,7 @@ import {
   withMcpRouteIdentity,
 } from '../mcp-integrations/codexHttpBridge.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
+import { readDisabledBuiltinPluginIds } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { getSessionOrcaRole, getWorkerLink } from '../localDb/orcaTeamStore.js';
 
 /**
@@ -137,18 +138,25 @@ export async function buildCcRemoteHttpMcpServers(
    */
   fingerprint?: string;
 }> {
-  const empty: { servers: Record<string, CcRemoteHttpMcpServerConfig>; cleanup: () => void; needsFreshStart?: boolean } = {
+  const empty: {
+    servers: Record<string, CcRemoteHttpMcpServerConfig>;
+    cleanup: () => void;
+    needsFreshStart?: boolean;
+  } = {
     servers: {},
     cleanup: () => {},
   };
   const started = await deps.ensureBridgeStarted();
   if (!started) return empty;
+  const synthesize = deps.synthesizeVendorOptions ?? synthesizeCcRemoteVendorOptions;
+  const vendorOptions = args.vendorOptions ?? (await synthesize(args.sessionId));
+  const disabledPluginIds = readDisabledBuiltinPluginIds(vendorOptions) ?? [];
   // collab 全局禁用时 bridge 名单不反映开关 (keepOrcaProviderStable) —
   // 远端注入以同一闸门为准, 协同段整个不注入 (codex-connector R20 P2)。
   // cindy_memory 独立走 per-session Maker Memory 开关, 与 collab 互不牵连。
   // 合成规则唯一真源在 selectRemoteInjectableServerNames (codexHttpBridge.ts)。
   const names = selectRemoteInjectableServerNames(started.serverNames, {
-    collabEnabled: deps.isCollabEnabled?.() ?? true,
+    collabEnabled: (deps.isCollabEnabled?.() ?? true) && !disabledPluginIds.includes('collab'),
     memoryEnabled: args.makerMemoryEnabled === true,
   });
   if (names.length === 0) {
@@ -172,7 +180,6 @@ export async function buildCcRemoteHttpMcpServers(
     // 的 alive query, 协同 MCP 持续 401 (codex-connector R21 P2)。
     return { ...empty, needsFreshStart: names.length > 0 };
   }
-  const synthesize = deps.synthesizeVendorOptions ?? synthesizeCcRemoteVendorOptions;
   const ctx = {
     agentKind: 'claude-code' as const,
     sessionId: args.sessionId,
@@ -182,7 +189,7 @@ export async function buildCcRemoteHttpMcpServers(
     workingDir: args.workingDir,
     // remote ctx: scope key 语义见 maker-core buildMemoryScopeKey。
     remoteHostId: args.host.id,
-    vendorOptions: args.vendorOptions ?? (await synthesize(args.sessionId)),
+    vendorOptions,
   };
   // 同 session 重建 (resume/rebuild/reattach) 直接覆盖注册,注册表以 sessionId
   // 为 key,天然不累积。

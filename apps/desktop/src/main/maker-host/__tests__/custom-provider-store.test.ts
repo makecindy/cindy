@@ -182,6 +182,48 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
     }
   });
 
+  it('accepts a same-origin model route and rejects unsafe route variants', () => {
+    const config = (route: unknown) => ({
+      ...valid,
+      runtimes: {
+        codex: {
+          baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'glm-5.3', name: 'GLM-5.3', route }],
+        },
+      },
+    });
+    expect(
+      validateCustomProviderConfig(
+        config({
+          baseUrl: 'https://open.bigmodel.cn/api/v1',
+          wireProtocol: 'openai-responses',
+        }),
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      validateCustomProviderConfig(
+        config({
+          baseUrl: 'https://evil.example/api/v1',
+          wireProtocol: 'openai-responses',
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config({
+          baseUrl: 'https://user:secret@open.bigmodel.cn/api/v1',
+          wireProtocol: 'openai-responses',
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config({ baseUrl: 'https://open.bigmodel.cn/api/v1', wireProtocol: 'bogus' }),
+      ).ok,
+    ).toBe(false);
+  });
+
   it('accepts supported per-model piApi values only on a Pi runtime', () => {
     for (const piApi of [
       'anthropic-messages',
@@ -754,6 +796,34 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     });
     expect((await getCustomProvider('openrouter'))?.runtimes.codex?.requestPath)
       .toBe('/tenant/acme/v2/infer?stream=1');
+  });
+
+  it('round-trips a validated model-specific route', async () => {
+    mountDb();
+    await createCustomProvider({
+      ...valid,
+      runtimes: {
+        codex: {
+          baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+          wireProtocol: 'openai-chat',
+          models: [
+            {
+              id: 'glm-5.3',
+              name: 'GLM-5.3',
+              route: {
+                baseUrl: 'https://open.bigmodel.cn/api/v1',
+                wireProtocol: 'openai-responses',
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.models[0]?.route).toEqual({
+      baseUrl: 'https://open.bigmodel.cn/api/v1',
+      wireProtocol: 'openai-responses',
+    });
   });
 
   it('strips requestPath from Pi native runtime records', async () => {

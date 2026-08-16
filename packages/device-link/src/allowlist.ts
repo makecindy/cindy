@@ -244,6 +244,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'git-context:pr-status',
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
+  // Cindy Bots 的只读投影。Bot canonical Session 不进入普通任务列表，Mobile
+  // 必须先读 profile 才能找到真实任务；写入/管理入口仍只允许本机 renderer。
+  'local-db:bots:list',
+  'local-db:bots:get',
   'local-db:sessions:get',
   // Read-only indexed task search for the remote Composer @ palette. Older
   // controlled clients reject this channel and the controller falls back to

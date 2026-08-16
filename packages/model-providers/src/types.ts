@@ -216,6 +216,27 @@ export interface RoutingDescriptor {
   modelPrefixes?: string[];
 }
 
+/**
+ * 同一 runtime 内单个模型的上游覆盖。
+ *
+ * 鉴权与固定 headers 仍继承 runtime 级 `RoutingDescriptor`；这里只允许切换同源端点、
+ * wire protocol 与可选请求路径，避免为一个 API key 再造第二套 provider/runtime。
+ */
+export interface ProviderModelRouteConfig {
+  /** 该模型的兼容上游 base URL。 */
+  baseUrl: string;
+  /** 该模型实际使用的 wire protocol。 */
+  wireProtocol: ProviderWireProtocol;
+  /** 非标准推理端点的相对路径；缺省按 wire protocol 推导。 */
+  requestPath?: string;
+}
+
+/** 绑定向导追加拉取的模型目录；发现到的模型会携带对应模型级路由。 */
+export interface ProviderModelDiscoverySource extends ProviderModelRouteConfig {
+  /** 可选精确列模型端点；缺省由 `baseUrl` 推导。 */
+  modelsUrl?: string;
+}
+
 /** 模型计费（$/1M tokens）。可选——OSS 目录可后补，缺值 UI 不展示价格。 */
 export interface ModelCost {
   input?: number;
@@ -240,6 +261,8 @@ export interface CatalogModel {
   id: string;
   /** Sparse PI protocol override; absence means use PI's bundled model catalog. */
   piApi?: PiModelApi;
+  /** 同一 provider/runtime 内该模型的上游覆盖；缺省使用 provider 级路由。 */
+  route?: ProviderModelRouteConfig;
   /** 展示名（= maker-core ModelDescriptor.displayName）。 */
   name: string;
   description?: string;
@@ -494,6 +517,8 @@ export interface ProviderRuntimeModelConfig {
   name: string;
   /** Per-model PI protocol override; provider wireProtocol remains the fallback. */
   piApi?: PiModelApi;
+  /** 同一 runtime 内该模型的上游覆盖；缺省使用 runtime 级路由。 */
+  route?: ProviderModelRouteConfig;
   contextWindow?: number;
   /** 模型未被用户显式开关时的可见性；缺省保持历史行为（默认可见）。 */
   defaultEnabled?: boolean;
@@ -531,6 +556,8 @@ export interface ProviderPresetRuntime {
    * `…/anthropic`，但列模型接口只在 `https://api.moonshot.cn/v1/models`（同一 key 可用）。
    */
   modelsUrl?: string;
+  /** 绑定时除 runtime 主目录外追加拉取的模型目录。 */
+  modelDiscovery?: ProviderModelDiscoverySource[];
   /**
    * 允许添加向导编辑预填 base URL。仅用于本机 / 自托管网关类预设；普通官方渠道保持只读，
    * 防用户无意改坏已核验端点。
