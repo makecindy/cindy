@@ -123,6 +123,32 @@ describe('buildUserProvider (per-runtime)', () => {
     });
   });
 
+  it('projects a model-specific protocol route into the provider catalog', () => {
+    const provider = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: {
+          ...codexOnly.runtimes.codex!,
+          models: [
+            {
+              id: 'glm-5.3',
+              name: 'GLM-5.3',
+              route: {
+                baseUrl: 'https://openrouter.ai/api/v1',
+                wireProtocol: 'openai-responses',
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(provider.models.codex?.[0]?.route).toEqual({
+      baseUrl: 'https://openrouter.ai/api/v1',
+      wireProtocol: 'openai-responses',
+    });
+  });
+
   it('inherits Registry efforts only for a unique route of the target agent', () => {
     const provider = buildUserProvider(
       {

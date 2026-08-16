@@ -392,6 +392,27 @@ describe('customProviderModelConfigFromCatalogModel', () => {
     });
   });
 
+  it('preserves a model-specific route through the edit round trip', () => {
+    expect(
+      customProviderModelConfigFromCatalogModel({
+        id: 'glm-5.3',
+        name: 'GLM-5.3',
+        contextWindow: 200_000,
+        route: {
+          baseUrl: 'https://open.bigmodel.cn/api/v1',
+          wireProtocol: 'openai-responses',
+        },
+      }),
+    ).toEqual({
+      id: 'glm-5.3',
+      name: 'GLM-5.3',
+      route: {
+        baseUrl: 'https://open.bigmodel.cn/api/v1',
+        wireProtocol: 'openai-responses',
+      },
+    });
+  });
+
   it('reconstructs explicit Pi reasoning capability from catalog efforts only for Pi', () => {
     const catalogModel = {
       id: 'reasoner',
@@ -524,6 +545,54 @@ describe('providerViewToCustomProviderConfig', () => {
         },
       },
     });
+  });
+
+  it('preserves model-level routes through the edit round trip', () => {
+    const provider = {
+      id: 'glm-coding-plan',
+      name: 'GLM Coding Plan',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: {
+        codex: {
+          upstream: 'https://open.bigmodel.cn/api/paas/v4',
+          authStrategy: 'api-key-header',
+          wireProtocol: 'openai-chat',
+          requestPath: '/chat/completions',
+        },
+      },
+      models: {
+        codex: [
+          {
+            id: 'glm-5.3',
+            name: 'GLM-5.3',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+            route: {
+              baseUrl: 'https://open.bigmodel.cn/api/v1',
+              wireProtocol: 'openai-responses',
+              requestPath: '/responses',
+            },
+          },
+        ],
+      },
+      connected: true,
+    } satisfies ProviderView;
+
+    expect(providerViewToCustomProviderConfig(provider).runtimes.codex?.models).toEqual([
+      {
+        id: 'glm-5.3',
+        name: 'GLM-5.3',
+        route: {
+          baseUrl: 'https://open.bigmodel.cn/api/v1',
+          wireProtocol: 'openai-responses',
+          requestPath: '/responses',
+        },
+      },
+    ]);
   });
 
   it('round-trips Pi reasoning efforts from a provider view', () => {

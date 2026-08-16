@@ -6,10 +6,13 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { LIVE_TASK_PRIORITY } from '../../shared/liveTaskPriority';
 import type { Session } from '@/lib/ccAgent.types';
 import type { ProjectNode } from '../features/cc-agent/lib/projectGrouping';
 import {
+  advanceViewedPriorityHold,
   buildMainListEntries,
+  holdViewedPriorityRank,
   sessionPriorityRank,
   splitEntriesByDevice,
   type MainListEntry,
@@ -150,10 +153,10 @@ describe('buildMainListEntries — 排序口径', () => {
       attentionSessionIds: new Set([waiting.id, unread.id]),
       waitingSessionIds: new Set([waiting.id]),
     };
-    expect(sessionPriorityRank(waiting, ctx)).toBe(0);
-    expect(sessionPriorityRank(unread, ctx)).toBe(1);
-    expect(sessionPriorityRank(running, ctx)).toBe(2);
-    expect(sessionPriorityRank(idleNewest, ctx)).toBe(3);
+    expect(sessionPriorityRank(waiting, ctx)).toBe(LIVE_TASK_PRIORITY.waiting);
+    expect(sessionPriorityRank(unread, ctx)).toBe(LIVE_TASK_PRIORITY.unread);
+    expect(sessionPriorityRank(running, ctx)).toBe(LIVE_TASK_PRIORITY.running);
+    expect(sessionPriorityRank(idleNewest, ctx)).toBe(LIVE_TASK_PRIORITY.rest);
     const entries = buildMainListEntries({
       projects: [],
       dialogues: [idleNewest, running, unread, waiting],
@@ -166,6 +169,171 @@ describe('buildMainListEntries — 排序口径', () => {
     expect(labels(entries)).toEqual(['s:needs-input', 's:done-unread', 's:running', 's:idle']);
   });
 
+  it('keeps the open unread task in place, then parks it at the top of the rest tier after leave', () => {
+    const unread = session({ updatedAt: '2026-07-01T00:00:00Z', title: 'just-read' });
+    const olderRest = session({ updatedAt: '2026-08-12T00:00:00Z', title: 'older-rest' });
+    const waiting = session({ updatedAt: '2026-07-20T00:00:00Z', title: 'needs-input' });
+    const hold = {
+      heldPriorityRanks: new Map<string, number>(),
+      recentlyViewedAtMs: new Map<string, number>(),
+    };
+    const opened = advanceViewedPriorityHold(
+      hold,
+      unread.id,
+      {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set([unread.id, waiting.id]),
+        waitingSessionIds: new Set([waiting.id]),
+      },
+      1_000,
+    );
+    expect(opened.heldPriorityRanks.get(unread.id)).toBe(1);
+    const stillOpen = buildMainListEntries({
+      projects: [],
+      dialogues: [olderRest, unread, waiting],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set([waiting.id]),
+        waitingSessionIds: new Set([waiting.id]),
+        heldPriorityRanks: opened.heldPriorityRanks,
+        recentlyViewedAtMs: opened.recentlyViewedAtMs,
+      },
+    });
+    expect(labels(stillOpen)).toEqual(['s:needs-input', 's:just-read', 's:older-rest']);
+
+    const leaveAt = Date.parse('2026-08-13T00:00:00Z');
+    const left = advanceViewedPriorityHold(
+      opened,
+      olderRest.id,
+      {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set([waiting.id]),
+        waitingSessionIds: new Set([waiting.id]),
+      },
+      leaveAt,
+    );
+    expect(left.heldPriorityRanks.has(unread.id)).toBe(false);
+    expect(left.recentlyViewedAtMs.get(unread.id)).toBe(leaveAt);
+    const afterLeave = buildMainListEntries({
+      projects: [],
+      dialogues: [olderRest, unread, waiting],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set([waiting.id]),
+        waitingSessionIds: new Set([waiting.id]),
+        heldPriorityRanks: left.heldPriorityRanks,
+        recentlyViewedAtMs: left.recentlyViewedAtMs,
+      },
+    });
+    expect(labels(afterLeave)).toEqual(['s:needs-input', 's:just-read', 's:older-rest']);
+    expect(sessionPriorityRank(unread, {
+      runningSessionIds: new Set<string>(),
+      attentionSessionIds: new Set([waiting.id]),
+      waitingSessionIds: new Set([waiting.id]),
+      recentlyViewedAtMs: left.recentlyViewedAtMs,
+    })).toBe(LIVE_TASK_PRIORITY.rest);
+
+    const sunkWithoutViewedAt = buildMainListEntries({
+      projects: [],
+      dialogues: [olderRest, unread, waiting],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set([waiting.id]),
+        waitingSessionIds: new Set([waiting.id]),
+      },
+    });
+    expect(labels(sunkWithoutViewedAt)).toEqual(['s:needs-input', 's:older-rest', 's:just-read']);
+
+    const recencyIgnoresLeave = buildMainListEntries({
+      projects: [],
+      dialogues: [olderRest, unread],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'recency',
+      manualProjectOrder: [],
+      priorityContext: {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set<string>(),
+        recentlyViewedAtMs: left.recentlyViewedAtMs,
+      },
+    });
+    expect(labels(recencyIgnoresLeave)).toEqual(['s:older-rest', 's:just-read']);
+  });
+
+  it('holds the unread rank even if attention is cleared before the first viewed render', () => {
+    const unread = session({ updatedAt: '2026-07-01T00:00:00Z', title: 'just-read' });
+    const olderRest = session({ updatedAt: '2026-08-12T00:00:00Z', title: 'older-rest' });
+    const waiting = session({ updatedAt: '2026-07-20T00:00:00Z', title: 'needs-input' });
+    const hold = {
+      heldPriorityRanks: new Map<string, number>(),
+      recentlyViewedAtMs: new Map<string, number>(),
+    };
+    holdViewedPriorityRank(hold, unread.id, {
+      runningSessionIds: new Set<string>(),
+      attentionSessionIds: new Set([unread.id, waiting.id]),
+      waitingSessionIds: new Set([waiting.id]),
+    });
+    const afterClear = advanceViewedPriorityHold(
+      hold,
+      unread.id,
+      {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set([waiting.id]),
+        waitingSessionIds: new Set([waiting.id]),
+      },
+      1_000,
+    );
+    expect(afterClear.heldPriorityRanks.get(unread.id)).toBe(LIVE_TASK_PRIORITY.unread);
+    const entries = buildMainListEntries({
+      projects: [],
+      dialogues: [olderRest, unread, waiting],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set([waiting.id]),
+        waitingSessionIds: new Set([waiting.id]),
+        heldPriorityRanks: afterClear.heldPriorityRanks,
+      },
+    });
+    expect(labels(entries)).toEqual(['s:needs-input', 's:just-read', 's:older-rest']);
+  });
+
+  it('does not let leave time promote a still-waiting or running task', () => {
+    const waitingOld = session({ updatedAt: '2026-07-01T00:00:00Z', title: 'waiting-old' });
+    const waitingNew = session({ updatedAt: '2026-08-12T00:00:00Z', title: 'waiting-new' });
+    const leaveAt = Date.parse('2026-08-13T00:00:00Z');
+    const entries = buildMainListEntries({
+      projects: [],
+      dialogues: [waitingOld, waitingNew],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set([waitingOld.id, waitingNew.id]),
+        waitingSessionIds: new Set([waitingOld.id, waitingNew.id]),
+        recentlyViewedAtMs: new Map([[waitingOld.id, leaveAt]]),
+      },
+    });
+    expect(labels(entries)).toEqual(['s:waiting-new', 's:waiting-old']);
+  });
+
   it('waitingSessionIds 缺省时全部 attention 落 unread 档(老调用方零迁移)', () => {
     const attention = session({ updatedAt: '2026-08-01T00:00:00Z', title: 'attn' });
     const running = session({ updatedAt: '2026-08-05T00:00:00Z', title: 'running' });
@@ -173,8 +341,8 @@ describe('buildMainListEntries — 排序口径', () => {
       runningSessionIds: new Set([running.id]),
       attentionSessionIds: new Set([attention.id]),
     };
-    expect(sessionPriorityRank(attention, ctx)).toBe(1);
-    expect(sessionPriorityRank(running, ctx)).toBe(2);
+    expect(sessionPriorityRank(attention, ctx)).toBe(LIVE_TASK_PRIORITY.unread);
+    expect(sessionPriorityRank(running, ctx)).toBe(LIVE_TASK_PRIORITY.running);
   });
 
   it('a project inherits its best session priority (group floats with its members)', () => {

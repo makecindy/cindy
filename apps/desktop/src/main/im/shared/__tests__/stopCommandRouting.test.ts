@@ -92,6 +92,8 @@ describe('messageHandler !stop routing', () => {
   let handleSlashCommand: ReturnType<typeof vi.fn>;
   let sendMarkdownText: ReturnType<typeof vi.fn>;
   let sendText: ReturnType<typeof vi.fn>;
+  let consumePendingOpenerCard: ReturnType<typeof vi.fn>;
+  let consumePendingOpenerAsCard: ReturnType<typeof vi.fn>;
   let deliver: (event: IMMessageEvent) => void;
 
   function wire(threadScoped: boolean): void {
@@ -100,6 +102,9 @@ describe('messageHandler !stop routing', () => {
     handleSlashCommand = vi.fn(async () => true);
     sendMarkdownText = vi.fn(async () => undefined);
     sendText = vi.fn(async () => undefined);
+    // 群主流 @ 开话题的开场白卡收口能力(仅 feishu 实现; 这里模拟富卡渠道)。
+    consumePendingOpenerCard = vi.fn(async () => false);
+    consumePendingOpenerAsCard = vi.fn(async () => false);
 
     const im = {
       onMessage(handler: (event: IMMessageEvent) => void) {
@@ -108,11 +113,14 @@ describe('messageHandler !stop routing', () => {
       },
       sendMarkdownText,
       sendText,
+      consumePendingOpenerCard,
+      consumePendingOpenerAsCard,
     } as unknown as ChannelIM;
 
     const adapter = {
       channel: 'slack',
       im,
+      output: { kind: 'rich-card', im },
       ui: slackUi,
       threadScoped,
     } as unknown as ImChannelAdapter;
@@ -403,6 +411,212 @@ describe('messageHandler !stop routing', () => {
       slackUi.agent.sendInternalError('abort exploded'),
       { threadTs: '1234.5678' },
     );
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  // ── 群主流 @ 开话题的开场白卡收口(仅富卡渠道) ────────────────────────────
+  // 非流式终态分支若让「思考中」开场白卡留在话题里: 卡卡住, 且同话题下一条
+  // 真消息会把答案 patch 到这张旧卡上。终态分支要么消费卡 patch 回复, 要么
+  // 撤回卡让自备回复成为第一条实质内容。
+
+  it('!stop 首条消费开场白卡: patch 回复, 不再另发', async () => {
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith(
+      'U123456789',
+      slackUi.agent.stopDone(0),
+    );
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    expect(stopActiveTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('consume 返回 false 时回落正常发送(有 pending opener 但消费失败)', async () => {
+    deliver(makeEvent({ groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).toHaveBeenCalledTimes(1);
+    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+      threadTs: '1234.5678',
+    });
+  });
+
+  it('slash 抛错时用内部错误收口开场白卡(sink 未被调用过)', async () => {
+    handleSlashCommand.mockRejectedValueOnce(new Error('list projects failed'));
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ text: '/ctr', groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith(
+      'U123456789',
+      slackUi.agent.sendInternalError('list projects failed'),
+    );
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('slash 抛错且 opener 收口返回 false 时补发内部错误', async () => {
+    handleSlashCommand.mockRejectedValueOnce(new Error('list projects failed'));
+    consumePendingOpenerCard.mockResolvedValue(false);
+    deliver(makeEvent({ text: '/ctr', groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith(
+      'U123456789',
+      slackUi.agent.sendInternalError('list projects failed'),
+    );
+    expect(sendMarkdownText).toHaveBeenCalledWith(
+      'U123456789',
+      slackUi.agent.sendInternalError('list projects failed'),
+      { threadTs: '1234.5678' },
+    );
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('runAgentTurn 抛错且本条开了话题: 用内部错误收口开场白卡', async () => {
+    runAgentTurn.mockRejectedValueOnce(new Error('provider exploded'));
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ text: '帮我看看', groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith(
+      'U123456789',
+      slackUi.agent.sendInternalError('provider exploded'),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('早期拒绝终态(missing_auth)经 onEarlyReject 收口开场白卡', async () => {
+    let capturedArgs: Parameters<ImTurnRunner['runAgentTurn']>[0] | undefined;
+    runAgentTurn.mockImplementationOnce(async (args: Parameters<ImTurnRunner['runAgentTurn']>[0]) => {
+      capturedArgs = args;
+      const consumed = (await args.onEarlyReject?.('missing_auth', 'AUTH_MISSING_TEXT')) ?? false;
+      expect(consumed).toBe(true);
+    });
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ text: '帮我看看', groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(capturedArgs).toBeDefined();
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith('U123456789', 'AUTH_MISSING_TEXT');
+  });
+
+  it('同话题后续 !stop 不消费上一轮的 pending opener(归属不抢占)', async () => {
+    // 消息 A 已开话题且其 pending opener 尚未被流式认领; 本条 B 是同一话题的
+    // 后续消息(groupContextLane 缺省)— B 不得 patch A 的思考卡。
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ text: '!stop' }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).not.toHaveBeenCalled();
+    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+      threadTs: '1234.5678',
+    });
+  });
+
+  it('同话题后续 slash 不注入 opener sink', async () => {
+    let capturedCtx: Parameters<typeof handleSlashCommand>[1] | undefined;
+    handleSlashCommand.mockImplementation(async (_text: string, ctx: Parameters<typeof handleSlashCommand>[1]) => {
+      capturedCtx = ctx;
+      return true;
+    });
+    deliver(makeEvent({ text: '/project' }));
+    await flushMicrotasks();
+
+    expect(handleSlashCommand).toHaveBeenCalledTimes(1);
+    expect(capturedCtx?.consumePendingOpener).toBeUndefined();
+  });
+
+  it('consume patch 抛错时回落正常发送(回复不丢, 认领已完成)', async () => {
+    consumePendingOpenerCard.mockRejectedValue(new Error('patch failed'));
+    deliver(makeEvent({ groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+      threadTs: '1234.5678',
+    });
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('slash 首条注入 opener sink: 首个回复就地消费开场白卡', async () => {
+    let capturedCtx: Parameters<typeof handleSlashCommand>[1] | undefined;
+    handleSlashCommand.mockImplementation(async (_text: string, ctx: Parameters<typeof handleSlashCommand>[1]) => {
+      capturedCtx = ctx;
+      return true;
+    });
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ text: '/project', groupContextLane: { chatId: 'C1', threadId: '' } }));
+    await flushMicrotasks();
+
+    expect(handleSlashCommand).toHaveBeenCalledTimes(1);
+    expect(runAgentTurn).not.toHaveBeenCalled();
+
+    // sink 存在且首个 withMarkdown 消费开场白卡(第二次起回落)。
+    expect(capturedCtx?.consumePendingOpener).toBeDefined();
+    await expect(capturedCtx!.consumePendingOpener!.withMarkdown('U123456789', '回复')).resolves.toBe(true);
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith('U123456789', '回复');
+    await expect(capturedCtx!.consumePendingOpener!.withMarkdown('U123456789', '第二条')).resolves.toBe(false);
+    expect(consumePendingOpenerCard).toHaveBeenCalledTimes(1);
+  });
+
+  it('纯 unsupported 首条消费开场白卡: patch 提示, 不再另发', async () => {
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(
+      makeEvent({
+        text: '',
+        unsupported: [{ type: 'audio', label: '语音（暂不支持）' }] as IMMessageEvent['unsupported'],
+        groupContextLane: { chatId: 'C1', threadId: '' },
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).toHaveBeenCalledWith(
+      'U123456789',
+      slackUi.agent.unsupportedOnly([{ type: 'audio', label: '语音（暂不支持）' }]),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('同话题后续 !stop 不消费上一轮的 pending opener(归属不抢占)', async () => {
+    // 消息 A 已开话题且其 pending opener 尚未被流式认领; 本条 B 是同一话题的
+    // 后续消息(groupContextLane 缺省)— B 不得 patch A 的思考卡。
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(makeEvent({ text: '!stop' }));
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).not.toHaveBeenCalled();
+    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+      threadTs: '1234.5678',
+    });
+  });
+
+  it('同话题后续 slash 不注入 opener sink', async () => {
+    let capturedCtx: Parameters<typeof handleSlashCommand>[1] | undefined;
+    handleSlashCommand.mockImplementation(async (_text: string, ctx: Parameters<typeof handleSlashCommand>[1]) => {
+      capturedCtx = ctx;
+      return true;
+    });
+    deliver(makeEvent({ text: '/project' }));
+    await flushMicrotasks();
+
+    expect(handleSlashCommand).toHaveBeenCalledTimes(1);
+    expect(capturedCtx?.consumePendingOpener).toBeUndefined();
+  });
+
+  it('同话题后续纯 unsupported 不消费上一轮的 pending opener', async () => {
+    consumePendingOpenerCard.mockResolvedValue(true);
+    deliver(
+      makeEvent({
+        text: '',
+        unsupported: [{ type: 'audio', label: '语音（暂不支持）' }] as IMMessageEvent['unsupported'],
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(consumePendingOpenerCard).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledTimes(1);
     expect(runAgentTurn).not.toHaveBeenCalled();
   });
 });

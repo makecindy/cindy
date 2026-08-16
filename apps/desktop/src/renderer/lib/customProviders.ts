@@ -177,6 +177,7 @@ export function customProviderModelConfigFromCatalogModel(
     | 'defaultEnabled'
     | 'supportsImageInput'
     | 'piApi'
+    | 'route'
   > &
     Partial<Pick<CatalogModel, 'efforts' | 'defaultEffort'>>,
   agent?: AgentKind,
@@ -191,6 +192,7 @@ export function customProviderModelConfigFromCatalogModel(
     id: model.id,
     name: model.name,
     ...(agent === 'pi' && model.piApi ? { piApi: model.piApi } : {}),
+    ...(model.route ? { route: { ...model.route } } : {}),
     ...(model.contextWindowExplicit === true || model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
       ? { contextWindow: model.contextWindow }
       : {}),

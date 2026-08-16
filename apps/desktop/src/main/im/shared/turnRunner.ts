@@ -263,6 +263,8 @@ interface QueuedSend {
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
+  /** 早期拒绝终态回调(见 ImRunAgentTurnArgs.onEarlyReject)。 */
+  onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
   /** 调用方在拼群上下文之前已落库的 user 行(见 ImRunAgentTurnArgs 同名字段)。 */
   prePersistedUserMessage?: { sessionId: string; clientId: string };
 }
@@ -403,6 +405,13 @@ export interface ImRunAgentTurnArgs {
    * 重置), 那时这份预落库对不上号, dispatch 必须照常自己落一条。
    */
   prePersistedUserMessage?: { sessionId: string; clientId: string };
+  /**
+   * 早期拒绝终态(missing_auth / credential_mode_switch 等正常 resolve 的
+   * reject/busy)回调 — turnRunner 把本要另发的终态文案交给调用方: 返回
+   * true 表示已消费(如群主流 @ 开话题时 patch 开场白卡), turnRunner 跳过
+   * 自己的发送; false/缺省则照常发送。
+   */
+  onEarlyReject?(reason: string, text: string): Promise<boolean> | boolean;
 }
 
 export interface ImTurnTerminal {
@@ -511,6 +520,19 @@ export function createTurnRunner(
 ): ImTurnRunner {
   const { im, output, ui, channel } = adapter;
   const richIm = output.kind === 'rich-card' ? output.im : null;
+
+  function sendTextClaimingOpener(
+    userId: string,
+    text: string,
+    threadTs: string | undefined,
+  ): Promise<{ messageId: string }> {
+    const fallbackOpenerId = richIm?.takeNotedFallbackOpenerId?.(userId, 'markdown');
+    return im.sendText(userId, text, {
+      threadTs,
+      ...(fallbackOpenerId ? { fallbackOpenerId } : {}),
+    });
+  }
+
   /** 过程区耗时显示的低频刷新(5s)— 单个长工具调用期间状态行不冻结。 */
   const ACTIVITY_TICK_MS = 5_000;
 
@@ -669,7 +691,11 @@ export function createTurnRunner(
       const created = await createAuthenticatedDefaultRouteTarget(botContextId, userId, scopeKey);
       if (!created.target) {
         if (args.queueMode === 'internal') {
-          await replyMissingAuth(userId, created.missingAuth, scopeKey);
+          const text =
+            ui.agent.authMissing?.({ ...created.missingAuth, attached: false }) ??
+            ui.agent.apiKeyMissing;
+          const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
+          if (!consumed) await replyMissingAuth(userId, created.missingAuth, scopeKey);
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
@@ -681,12 +707,14 @@ export function createTurnRunner(
       const auth = await checkImRouteAuthDetailed(row, undefined, authCheckDeps());
       if (!auth.ok) {
         if (args.queueMode === 'internal') {
-          await replyMissingAuth(
-            userId,
-            { ...auth, agentKind: row.agentKind, model: row.model },
-            scopeKey,
-            target.attached,
-          );
+          const authStatus = { ...auth, agentKind: row.agentKind, model: row.model };
+          const text =
+            ui.agent.authMissing?.({ ...authStatus, attached: target.attached }) ??
+            ui.agent.apiKeyMissing;
+          const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
+          if (!consumed) {
+            await replyMissingAuth(userId, authStatus, scopeKey, target.attached);
+          }
         }
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'missing_auth' };
@@ -775,7 +803,12 @@ export function createTurnRunner(
     } catch (err) {
       if (isCredentialModeSwitchBusyError(err)) {
         if (args.queueMode === 'internal') {
-          await handleSessionWiringBusy(userId, turn);
+          const consumed = (await args.onEarlyReject?.('credential_mode_switch', ui.agent.credentialBusy)) ?? false;
+          if (!consumed) {
+            await handleSessionWiringBusy(userId, turn);
+          } else {
+            await completeTurnCallbackAfterAck(turn);
+          }
         } else {
           await completeTurnCallbackAfterAck(turn);
         }
@@ -853,6 +886,7 @@ export function createTurnRunner(
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
+      ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
       ...(args.prePersistedUserMessage
@@ -1143,6 +1177,7 @@ export function createTurnRunner(
           source: outcome.source,
           reason: outcome.reason,
           context: outcome.context,
+          onEarlyReject: item.onEarlyReject,
         });
         return { kind: 'rejected', reason: outcome.reason };
       }
@@ -1168,6 +1203,7 @@ export function createTurnRunner(
           source: `${channel}-runner`,
           reason: turnPolicyFailureReason,
           context: buildSendContext(rowId),
+          onEarlyReject: item.onEarlyReject,
         });
         return { kind: 'rejected', reason: turnPolicyFailureReason };
       }
@@ -1216,6 +1252,7 @@ export function createTurnRunner(
         reason: normalized.reason,
         context: buildSendContext(rowId),
         error: normalized.error,
+        onEarlyReject: item.onEarlyReject,
       });
       return { kind: 'rejected', reason: normalized.reason };
     } finally {
@@ -2474,6 +2511,7 @@ export function createTurnRunner(
       reason: string;
       context: string;
       error?: SanitizedSendOutcomeError;
+      onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
     },
   ): Promise<void> {
     log.error(`${channel} session send failed before dispatch`, {
@@ -2511,21 +2549,25 @@ export function createTurnRunner(
               ? unsupportedCopy(rejectedMode)
               : unsupportedCopy
             : `❌ 启动 agent 失败：${failure.reason}`;
-        if (
-          output.kind === 'chunked-text' &&
-          failure.turn.chunkedReplyBegun
-        ) {
-          await output.commitFinal({
-            userId,
-            text: message,
-            terminal: 'error',
-            threadTs: state.scopeKey,
-            errorCode: failure.reason,
-          });
-        } else {
-          await im.sendText(userId, message, {
-            threadTs: state.scopeKey,
-          });
+        // 早期拒绝终态交调用方消费(群主流 @ 开话题时 patch 开场白卡),
+        // 消费了就不再另发。
+        const consumed =
+          (await failure.onEarlyReject?.(failure.reason, message)) ?? false;
+        if (!consumed) {
+          if (
+            output.kind === 'chunked-text' &&
+            failure.turn.chunkedReplyBegun
+          ) {
+            await output.commitFinal({
+              userId,
+              text: message,
+              terminal: 'error',
+              threadTs: state.scopeKey,
+              errorCode: failure.reason,
+            });
+          } else {
+            await sendTextClaimingOpener(userId, message, state.scopeKey);
+          }
         }
         // 群会话「完全访问」档被强确认策略拒绝: 报错文案之外, 再给 owner
         // 私聊发一张一键修复卡(切回 auto)。只对提供 permissionModeFix 文案
@@ -2823,9 +2865,19 @@ export function createTurnRunner(
             ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          await output.im.sendText(userId, '✅ (本轮无文本输出)', {
-            threadTs: state.scopeKey,
-          });
+          // 群主流 @ 开话题但本轮无流式输出: pending opener 尚未被认领 —
+          // 仅当 opener 是本轮消息创建的(trigger 匹配)才消费, 否则另发
+          // (避免消费上一轮遗留的 opener 造成归属错乱)。
+          const triggerId = output.im.getPendingOpenerTrigger?.(userId);
+          const isMyOpener = triggerId === turn.userMessageId;
+          const consumed =
+            isMyOpener
+              ? ((await output.im.consumePendingOpenerCard?.(userId, '✅ (本轮无文本输出)')) ??
+                false)
+              : false;
+          if (!consumed) {
+            await sendTextClaimingOpener(userId, '✅ (本轮无文本输出)', state.scopeKey);
+          }
         }
       } catch {
         /* swallow */
@@ -2929,9 +2981,16 @@ export function createTurnRunner(
             ...(turn && turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          await output.im.sendText(userId, `❌ 错误：${msg}`, {
-            threadTs: state.scopeKey,
-          });
+          const errorText = `❌ 错误：${msg}`;
+          const triggerId = output.im.getPendingOpenerTrigger?.(userId);
+          const isMyOpener = triggerId === turn?.userMessageId;
+          const consumed =
+            isMyOpener
+              ? ((await output.im.consumePendingOpenerCard?.(userId, errorText)) ?? false)
+              : false;
+          if (!consumed) {
+            await sendTextClaimingOpener(userId, errorText, state.scopeKey);
+          }
         }
       } catch {
         /* swallow */

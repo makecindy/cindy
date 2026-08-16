@@ -420,7 +420,8 @@ export function AutomationSessionGroupItem({
           {/* focus 隐藏条件用命名 group(/slot) 收窄到本槽位:行内 toggle/title
               button 点击后焦点常驻行内,整行 group-focus-within 会让选中态
               (非 hover)的 meta 文本被永久隐藏,与 SessionItem 同款修法。 */}
-          <div className="group/slot relative ml-auto flex h-6 min-w-14 max-w-[96px] shrink-0 items-center justify-end">
+          <div className="group/slot relative ml-auto flex h-6 max-w-[96px] shrink-0 items-center justify-end">
+            <div className="grid h-6 max-w-[96px] grid-cols-[max-content] items-center justify-items-end">
             {/* 右侧状态槽 —— 与 SessionItem 同款五档色表 / 图标尺寸(size-4 wrapper +
                 size-2 dot / size-12 spinner),让分组头和普通任务行状态语义视觉可比。
                 showRightStatus=true 时渲染状态图标(error/awaiting/done 圆点 + running
@@ -432,7 +433,7 @@ export function AutomationSessionGroupItem({
                 // tabular-nums(C 期给普通行加的等宽数字,分组头当时漏跟),
                 // 让「9 分钟 / 4 小时」这类时间在两种行里对齐、粗细一致
                 // (2026-08-12 用户裁决)。
-                'flex items-center gap-1 text-xs font-medium tabular-nums',
+                'col-start-1 row-start-1 flex items-center gap-1 text-xs font-medium tabular-nums',
                 hasActiveHidden
                   ? 'text-[var(--sidebar-item-active-foreground)]'
                   : 'text-sidebar-action-icon',
@@ -514,6 +515,14 @@ export function AutomationSessionGroupItem({
               )}
             </div>
             {scheduleId && (
+              <>
+              <div
+                aria-hidden
+                className={cn(
+                  'invisible col-start-1 row-start-1 h-6 w-[42px]',
+                  !menuOpen && 'hidden group-hover:block group-focus-within/slot:block',
+                )}
+              />
               <div
                 className={cn(
                   'absolute right-0 top-0 flex h-6 items-center gap-0.5',
@@ -601,7 +610,9 @@ export function AutomationSessionGroupItem({
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
+              </>
             )}
+            </div>
           </div>
         </div>
       </Tip>

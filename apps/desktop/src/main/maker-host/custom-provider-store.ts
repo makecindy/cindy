@@ -22,6 +22,7 @@ import type {
   OAuthProviderDescriptor,
   PiReasoningEffort,
   PiModelApi,
+  ProviderWireProtocol,
   ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 import {
@@ -90,6 +91,43 @@ function parseStoredPiReasoningCapability(
   };
 }
 
+function parseStoredModelRoute(
+  agent: AgentKind,
+  runtimeBaseUrl: string,
+  value: unknown,
+): ProviderRuntimeModelConfig['route'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const route = value as Record<string, unknown>;
+  if (
+    typeof route.baseUrl !== 'string' ||
+    !isAllowedWireProtocol(agent, route.wireProtocol)
+  ) {
+    return undefined;
+  }
+  try {
+    const runtimeUrl = new URL(runtimeBaseUrl);
+    const routeUrl = new URL(route.baseUrl);
+    if (
+      (routeUrl.protocol !== 'http:' && routeUrl.protocol !== 'https:') ||
+      routeUrl.username ||
+      routeUrl.password ||
+      routeUrl.origin !== runtimeUrl.origin
+    ) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  if (route.requestPath !== undefined && !isProviderRequestPath(route.requestPath)) {
+    return undefined;
+  }
+  return {
+    baseUrl: route.baseUrl,
+    wireProtocol: route.wireProtocol,
+    ...(typeof route.requestPath === 'string' ? { requestPath: route.requestPath } : {}),
+  };
+}
+
 function validateNoAuthLoopbackBoundary(
   auth: CustomProviderConfig['auth'],
   runtimes: Partial<Record<AgentKind, CustomProviderRuntimeConfig>>,
@@ -103,8 +141,31 @@ function validateNoAuthLoopbackBoundary(
     if (runtime.modelsUrl !== undefined && !isLoopbackProviderUrl(runtime.modelsUrl)) {
       return invalid(`runtime '${agent}' modelsUrl must be loopback when auth method is none`);
     }
+    for (const model of runtime.models) {
+      if (model.route && !isLoopbackProviderUrl(model.route.baseUrl)) {
+        return invalid(
+          `runtime '${agent}' model '${model.id}' route.baseUrl must be loopback when auth method is none`,
+        );
+      }
+    }
   }
   return { ok: true };
+}
+
+function allowedWireProtocols(agent: string): readonly ProviderWireProtocol[] {
+  return agent === 'claude-code'
+    ? ['anthropic-messages']
+    : ['openai-responses', 'openai-chat', 'anthropic-messages'];
+}
+
+function isAllowedWireProtocol(
+  agent: string,
+  value: unknown,
+): value is ProviderWireProtocol {
+  return (
+    typeof value === 'string' &&
+    allowedWireProtocols(agent).includes(value as ProviderWireProtocol)
+  );
 }
 
 function validateRuntime(agent: string, rt: unknown): ValidationResult {
@@ -113,12 +174,13 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (typeof r.baseUrl !== 'string' || r.baseUrl.trim().length === 0) {
     return invalid(`runtime '${agent}' baseUrl required`);
   }
+  let runtimeUrl: URL;
   try {
-    const u = new URL(r.baseUrl);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    runtimeUrl = new URL(r.baseUrl);
+    if (runtimeUrl.protocol !== 'http:' && runtimeUrl.protocol !== 'https:') {
       return invalid(`runtime '${agent}' baseUrl must be http(s)`);
     }
-    if (u.username || u.password) {
+    if (runtimeUrl.username || runtimeUrl.password) {
       return invalid(`runtime '${agent}' baseUrl must not contain embedded credentials`);
     }
   } catch {
@@ -154,6 +216,40 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (mm.piApi !== undefined && (agent !== 'pi' || !isPiModelApi(mm.piApi))) {
       return invalid(`runtime '${agent}' model.piApi invalid`);
     }
+    if (mm.route !== undefined) {
+      if (!mm.route || typeof mm.route !== 'object' || Array.isArray(mm.route)) {
+        return invalid(`runtime '${agent}' model.route must be an object`);
+      }
+      const route = mm.route as Record<string, unknown>;
+      if (typeof route.baseUrl !== 'string' || route.baseUrl.trim().length === 0) {
+        return invalid(`runtime '${agent}' model.route.baseUrl required`);
+      }
+      let routeUrl: URL;
+      try {
+        routeUrl = new URL(route.baseUrl);
+      } catch {
+        return invalid(`runtime '${agent}' model.route.baseUrl is not a valid URL`);
+      }
+      if (routeUrl.protocol !== 'http:' && routeUrl.protocol !== 'https:') {
+        return invalid(`runtime '${agent}' model.route.baseUrl must be http(s)`);
+      }
+      if (routeUrl.username || routeUrl.password) {
+        return invalid(
+          `runtime '${agent}' model.route.baseUrl must not contain embedded credentials`,
+        );
+      }
+      if (routeUrl.origin !== runtimeUrl.origin) {
+        return invalid(`runtime '${agent}' model.route.baseUrl must use the runtime origin`);
+      }
+      if (
+        !isAllowedWireProtocol(agent, route.wireProtocol)
+      ) {
+        return invalid(`runtime '${agent}' model.route.wireProtocol invalid`);
+      }
+      if (route.requestPath !== undefined && !isProviderRequestPath(route.requestPath)) {
+        return invalid(`runtime '${agent}' model.route.requestPath invalid`);
+      }
+    }
     const hasReasoningCapability =
       mm.reasoning !== undefined ||
       mm.reasoningEfforts !== undefined ||
@@ -188,11 +284,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (r.wireProtocol !== undefined) {
     // Pi 是多协议 harness；Codex 也具备 Responses / Chat / Anthropic bridge。
     // Claude Code 只接受原生 Anthropic Messages。
-    const allowed =
-      agent === 'claude-code'
-        ? ['anthropic-messages']
-        : ['openai-responses', 'openai-chat', 'anthropic-messages'];
-    if (typeof r.wireProtocol !== 'string' || !allowed.includes(r.wireProtocol)) {
+    if (!isAllowedWireProtocol(agent, r.wireProtocol)) {
       return invalid(`runtime '${agent}' wireProtocol invalid`);
     }
   }
@@ -404,6 +496,17 @@ function normalizeRuntime(
       id: m.id.trim(),
       name: m.name.trim(),
       ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
+      ...(m.route
+        ? {
+            route: {
+              baseUrl: m.route.baseUrl.trim(),
+              wireProtocol: m.route.wireProtocol,
+              ...(m.route.requestPath?.trim()
+                ? { requestPath: m.route.requestPath.trim() }
+                : {}),
+            },
+          }
+        : {}),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
       ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
@@ -575,28 +678,33 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
     const rt = obj[agent];
     if (!rt || typeof rt !== 'object') continue;
     const r = rt as Record<string, unknown>;
+    const baseUrl = typeof r.baseUrl === 'string' ? r.baseUrl : '';
     const models = Array.isArray(r.models)
       ? r.models
           .filter(
             (m): m is Record<string, unknown> =>
               !!m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string',
           )
-          .map((m) => ({
-            id: String(m.id),
-            name: String(m.name ?? ''),
-            ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
-            ...(typeof m.contextWindow === 'number' &&
-            Number.isFinite(m.contextWindow) &&
-            m.contextWindow > 0
-              ? { contextWindow: m.contextWindow }
-              : {}),
-            ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-            ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-            ...parseStoredPiReasoningCapability(agent, m),
-          }))
+          .map((m) => {
+            const route = parseStoredModelRoute(agent, baseUrl, m.route);
+            return {
+              id: String(m.id),
+              name: String(m.name ?? ''),
+              ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
+              ...(route ? { route } : {}),
+              ...(typeof m.contextWindow === 'number' &&
+              Number.isFinite(m.contextWindow) &&
+              m.contextWindow > 0
+                ? { contextWindow: m.contextWindow }
+                : {}),
+              ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+              ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+              ...parseStoredPiReasoningCapability(agent, m),
+            };
+          })
       : [];
     const entry: CustomProviderRuntimeConfig = {
-      baseUrl: typeof r.baseUrl === 'string' ? r.baseUrl : '',
+      baseUrl,
       models,
     };
     if (

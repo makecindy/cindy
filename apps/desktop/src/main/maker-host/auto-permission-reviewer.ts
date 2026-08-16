@@ -17,14 +17,20 @@ interface AutoPermissionReviewerLogger {
 }
 
 export interface AutoPermissionReviewerDeps {
-  requestText(request: AutoReviewRequest, prompt: string): Promise<string | null>;
+  requestText(
+    request: AutoReviewRequest,
+    prompt: string,
+    context: { signal: AbortSignal },
+  ): Promise<string | null>;
   logger: AutoPermissionReviewerLogger;
   /**
-   * 本次请求允许的单次耗时。缺省用构造时的 timeoutPolicy.requestTimeoutMs。
-   *
-   * 存在的理由:额度是**按模型能力逐请求**决定的(强制思考的模型要 30s,能关
-   * 思考的 12s 就够,见 auto-review-budget.ts),而 timeoutPolicy 是构造期固定的。
-   * 如果这里的守卫仍按固定值计时,放宽额度的那一档会被自己的守卫切断。
+   * `true` when requestText owns candidate fallback and transient retries. The reviewer then
+   * invokes it once, avoiding duplicate full-chain runs after an inner timeout.
+   */
+  managesRetries?: boolean;
+  /**
+   * 本次 requestText 执行边界允许的总耗时。缺省用构造时的
+   * timeoutPolicy.requestTimeoutMs；专用候选链用它把整链预算交给同一个取消守卫。
    */
   resolveRequestTimeoutMs?(request: AutoReviewRequest): number;
 }
@@ -209,11 +215,15 @@ async function attemptReview(
   requestTimeoutMs: number,
 ): Promise<{ decision: AutoReviewDecision } | { failure: AttemptFailure; error?: string }> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
   try {
     const text = await Promise.race([
-      deps.requestText(request, prompt),
+      deps.requestText(request, prompt, { signal: controller.signal }),
       new Promise<typeof REVIEW_TIMEOUT>((resolve) => {
-        timeout = setTimeout(() => resolve(REVIEW_TIMEOUT), requestTimeoutMs);
+        timeout = setTimeout(() => {
+          controller.abort();
+          resolve(REVIEW_TIMEOUT);
+        }, requestTimeoutMs);
       }),
     ]);
     if (text === REVIEW_TIMEOUT) return { failure: 'timeout' };
@@ -269,8 +279,10 @@ export function createAutoPermissionReviewer(
     // 切分是错的:抖动恢复往往就差那几秒,把 12s 切成 4s 会把本来能成功的请求
     // 也判成超时,反而制造失败。总耗时的上界由 maker-core 的
     // AUTO_REVIEW_DELEGATE_HARD_CEILING_MS 兜住,那里已按最慢一档 + 重试留足。
-    const attempts = 1 + REVIEW_RETRIES;
-    // 单次超时按本次请求的模型能力取(强制思考的模型需要更久),缺省回到构造期策略。
+    // 专用模型路由在一次 requestText 内完成候选回退与短暂错误重试；外层若再按
+    // 旧规则重试，会在首轮超时后重新启动整条候选链。普通调用方继续沿用三次尝试。
+    const attempts = deps.managesRetries ? 1 : 1 + REVIEW_RETRIES;
+    // 单次超时按本次请求的执行边界取，缺省回到构造期策略。
     const requestTimeoutMs = deps.resolveRequestTimeoutMs?.(request)
       ?? timeoutPolicy.requestTimeoutMs;
     // 重试的**意图是次数**(试满 attempts 次),不是"在某个时间窗内尽量试"。

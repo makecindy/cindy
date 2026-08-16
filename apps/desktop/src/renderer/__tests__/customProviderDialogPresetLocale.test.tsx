@@ -65,7 +65,15 @@ const localizedPreset: ProviderPreset = {
   runtimes: {
     codex: {
       baseUrl: 'http://127.0.0.1:4000/v1',
-      models: [{ id: 'local-model', name: 'Local Model' }],
+      models: [{
+        id: 'local-model',
+        name: 'Local Model',
+        route: {
+          baseUrl: 'http://127.0.0.1:4000/v1',
+          wireProtocol: 'openai-responses',
+          requestPath: '/responses',
+        },
+      }],
     },
   },
 };
@@ -284,6 +292,38 @@ describe('CustomProviderDialog preset locale ownership', () => {
     await findReadyPresetTrigger();
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.cancel' }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an existing model route through fetch picker confirmation and save', async () => {
+    i18nState.language = 'zh-TW';
+    renderDialog();
+
+    const trigger = await findReadyPresetTrigger();
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+    await screen.findByRole('heading', {
+      name: 'settings.providers.custom.fetch.pickerTitle',
+    });
+    fireEvent.click(screen.getByRole('button', { name: /settings\.providers\.custom\.fetch\.confirm/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', {
+        name: 'settings.providers.custom.fetch.pickerTitle',
+      })).toBeNull();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex?.models[0]).toEqual({
+      id: 'local-model',
+      name: 'Local Model',
+      route: {
+        baseUrl: 'http://127.0.0.1:4000/v1',
+        wireProtocol: 'openai-responses',
+        requestPath: '/responses',
+      },
+    });
   });
 
   it.each([
