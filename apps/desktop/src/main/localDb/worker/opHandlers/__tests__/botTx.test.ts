@@ -48,6 +48,11 @@ describe('Bot named worker transactions', () => {
         session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL, event_type TEXT NOT NULL,
         payload_json TEXT NOT NULL, created_at INTEGER NOT NULL
       );
+      CREATE TABLE bot_event_subscriptions (
+        id TEXT PRIMARY KEY, bot_id TEXT NOT NULL REFERENCES bot_profiles(id) ON DELETE CASCADE,
+        name TEXT NOT NULL, status TEXT NOT NULL, rule_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
     `);
   });
 
@@ -56,9 +61,17 @@ describe('Bot named worker transactions', () => {
   it('creates a local-first profile and atomically installs and renews canonical sessions', () => {
     tx(db, { name: 'bots.createProfile', args: {
       id: 'bot-1', displayName: 'Hermes', description: '', avatar: '🤖', avatarColor: 'violet',
-      identitySource: 'identity', capabilitiesJson: '{}', now: 1,
+      identitySource: 'identity', capabilitiesJson: '{}',
+      eventSubscription: {
+        id: 'bot-control-events:bot-1', name: 'Task state events', status: 'active',
+        ruleJson: '{"eventTypes":["session.turn.completed"]}',
+      },
+      now: 1,
     } });
     expect(db.prepare('SELECT kind FROM bot_channels').pluck().all()).toEqual(['local']);
+    expect(db.prepare('SELECT id, status FROM bot_event_subscriptions').get()).toEqual({
+      id: 'bot-control-events:bot-1', status: 'active',
+    });
 
     const session = (id: string, now: number) => ({
       id, title: 'Hermes', workingDir: `/tmp/${id}`, workspaceKind: 'dialogue',

@@ -5383,6 +5383,49 @@
     "add": "Bot 추가",
     "addTitle": "Bot 추가",
     "addDescription": "먼저 로컬 Bot을 만들고 필요할 때 IM 메시지 채널을 연결합니다.",
+    "createWizard": {
+      "chooseTemplateDescription": "시작 템플릿을 선택하세요. Bot은 먼저 로컬 장기 어시스턴트로 생성되고 메시지 채널은 나중에 연결합니다.",
+      "identityDescription": "장기 정체성과 권장 기능을 확인한 뒤 실제 기본 작업으로 바로 이동합니다.",
+      "recommended": "추천",
+      "continue": "계속 설정",
+      "back": "템플릿으로 돌아가기",
+      "creating": "생성 중…",
+      "createFailed": "Bot을 만들 수 없습니다. 다시 시도하세요.",
+      "avatarLabel": "아바타",
+      "roleLabel": "장기 정체성과 역할",
+      "roleHint": "여기서는 Bot의 정체성과 장기 책임만 정의합니다. 사용자 정보, Skills, MCP, 도구, 권한, 자동화와 채널은 각각 별도로 관리됩니다.",
+      "recommendedConfiguration": "권장 설정",
+      "localProfile": "Bot 형태",
+      "localProfileValue": "로컬 Bot",
+      "currentHarness": "Claude · 현재 기본 모델",
+      "enabled": "사용",
+      "notEnabled": "기본으로 사용 안 함",
+      "taskEvents": "작업 이벤트",
+      "automatic": "자동 구독 및 깨우기",
+      "channelsLater": "Telegram, Feishu, Slack 등은 나중에 연결하는 메시지 채널이며 Bot의 정체성을 결정하지 않습니다.",
+      "profileSeparationTitle": "각 Bot은 독립된 Profile입니다",
+      "profileSeparationDescription": "정체성, 사용자 정보, 메모리, Skills, MCP, 자동화, 작업과 채널은 분리 저장되며 다른 Profile의 값을 빌려 쓰지 않습니다.",
+      "templates": {
+        "control": {
+          "title": "총괄 Bot",
+          "summary": "다른 작업의 완료, 실패, 결정 대기 이벤트를 받고 조정하거나 보고합니다.",
+          "defaultName": "총괄 Bot",
+          "defaultDescription": "중요한 작업 상태를 지켜보고 조정을 기다리다 잊히는 일을 없앱니다."
+        },
+        "prSteward": {
+          "title": "PR 관리자",
+          "summary": "작업 이벤트와 자동화로 리뷰, 검사, 전달 상태를 추적합니다.",
+          "defaultName": "PR 관리자",
+          "defaultDescription": "PR과 전달 작업을 계속 추적하고 실행 가능한 변화를 담당 작업으로 돌려보냅니다."
+        },
+        "assistant": {
+          "title": "일반 어시스턴트",
+          "summary": "장기 정체성과 전용 메모리를 가지며 기본으로 다른 작업을 관찰하지 않습니다.",
+          "defaultName": "내 어시스턴트",
+          "defaultDescription": "필요할 때 기능과 메시지 채널을 추가할 수 있는 장기 개인 어시스턴트입니다."
+        }
+      }
+    },
     "portability": {
       "title": "가져오기 및 내보내기",
       "description": "자격 증명, IM 계정, 작업 기록, 메모리, 프로젝트 경로 또는 실행 상태를 제외한 공유 가능한 동작 설정을 내보냅니다. 가져온 외부 채널과 자동화는 비활성 상태로 유지됩니다.",
@@ -5411,7 +5454,25 @@
     "save": "저장",
     "settings": "Bot 설정",
     "emptyTitle": "아직 Bot이 없습니다",
-    "emptyDescription": "Bot을 추가해 장기 어시스턴트에 독립적인 정체성과 대표 채팅을 부여하세요.",
+    "emptyDescription": "Bot은 일반 작업에 장기 정체성, 이벤트 수신함, 자동화와 메시지 채널을 더합니다.",
+    "emptyBenefits": {
+      "identity": {
+        "title": "장기 정체성",
+        "description": "정체성, 사용자 정보, Skills와 메모리는 Bot별로 분리됩니다."
+      },
+      "events": {
+        "title": "작업 이벤트 자동 수신",
+        "description": "다른 작업이 완료, 실패 또는 결정 대기 상태가 되면 구독 Bot에 영구 이벤트가 전달됩니다."
+      },
+      "automation": {
+        "title": "자동화와 협업",
+        "description": "일정, Bot 간 위임, 프로젝트와 worktree가 장기 Bot에 연결됩니다."
+      },
+      "channels": {
+        "title": "필요할 때 채널 연결",
+        "description": "먼저 로컬 Bot을 만들고 Telegram, Feishu, Slack 등을 나중에 연결합니다."
+      }
+    },
     "noDescription": "설명 없음",
     "sessions": "개 작업",
     "sessionsTitle": "Bot 작업",
@@ -5565,7 +5626,13 @@
       "openTask": "원본 작업 열기",
       "untitledTask": "제목 없는 작업",
       "sidebarAttention": "{{count}}개의 작업 이벤트를 확인해야 합니다",
-      "status": { "pending": "대기 중", "processing": "처리 중", "handled": "처리됨", "failed": "실패", "skipped": "건너뜀" },
+      "status": {
+        "pending": "대기 중",
+        "processing": "처리 중",
+        "handled": "처리됨",
+        "failed": "실패",
+        "skipped": "건너뜀"
+      },
       "events": {
         "session": {
           "turn": { "completed": "작업 턴 완료", "failed": "작업 턴 실패" },

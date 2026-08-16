@@ -3,6 +3,7 @@ import {
   Archive,
   Bot,
   ChevronRight,
+  CheckCircle2,
   CircleAlert,
   LoaderCircle,
   PauseCircle,
@@ -72,7 +73,10 @@ function BotsSidebarContent() {
     const load = async (targetBotId?: string) => {
       const targets = targetBotId ? bots.filter((bot) => bot.id === targetBotId) : bots;
       const settled = await Promise.allSettled(
-        targets.map(async (bot) => [bot.id, await window.electronAPI.maker.botInbox.list(bot.id, 100)] as const),
+        targets.map(
+          async (bot) =>
+            [bot.id, await window.electronAPI.maker.botInbox.list(bot.id, 100)] as const,
+        ),
       );
       if (cancelled) return;
       setAttentionByBotId((previous) => {
@@ -80,7 +84,10 @@ function BotsSidebarContent() {
         for (const result of settled) {
           if (result.status !== 'fulfilled') continue;
           const [id, items] = result.value as readonly [string, BotInboxItemView[]];
-          next[id] = items.filter((item) => item.status === 'pending' || item.status === 'processing' || item.status === 'failed').length;
+          next[id] = items.filter(
+            (item) =>
+              item.status === 'pending' || item.status === 'processing' || item.status === 'failed',
+          ).length;
         }
         return next;
       });
@@ -205,9 +212,7 @@ function BotsSidebarContent() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-13 font-medium">{bot.name}</span>
-                    <span className="block truncate text-10 opacity-70">
-                      {channelSummary}
-                    </span>
+                    <span className="block truncate text-10 opacity-70">{channelSummary}</span>
                   </span>
                   {attention > 0 ? (
                     <span
@@ -234,6 +239,12 @@ function BotsSidebarContent() {
                       size={13}
                       className="shrink-0 text-[var(--text-tertiary)]"
                       aria-label={t('bots.lifecycle.healthStatus.paused')}
+                    />
+                  ) : health === 'healthy' ? (
+                    <CheckCircle2
+                      size={13}
+                      className="shrink-0 text-[var(--status-success)]"
+                      aria-label={t('bots.lifecycle.healthStatus.healthy')}
                     />
                   ) : null}
                   <ChevronRight size={14} className="shrink-0 opacity-50" />
@@ -268,7 +279,9 @@ function BotsSidebarContent() {
                       >
                         <span aria-hidden>{bot.avatar || '🤖'}</span>
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-13 font-medium">{bot.name}</span>
+                      <span className="min-w-0 flex-1 truncate text-13 font-medium">
+                        {bot.name}
+                      </span>
                       <ChevronRight size={14} className="shrink-0 opacity-50" />
                     </button>
                   );

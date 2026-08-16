@@ -490,6 +490,12 @@ export interface BotsCreateProfileArgs {
   avatarColor: string;
   identitySource: string;
   capabilitiesJson: string;
+  eventSubscription?: {
+    id: string;
+    name: string;
+    status: 'active' | 'paused';
+    ruleJson: string;
+  };
   now: number;
 }
 

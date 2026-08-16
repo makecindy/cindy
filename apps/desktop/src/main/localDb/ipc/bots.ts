@@ -40,10 +40,12 @@ import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace.js';
 import { sessionCreateToRow, sessionToCamel } from '../mapper.js';
 import { botProfileContentChanged, mergeBotProfileCapabilities } from './botProfileVersioning.js';
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults.js';
+import { normalizeBotSessionControlMode } from '../../../shared/botSessionControl.js';
 import { BOT_WORKSPACE_POLICIES, type BotWorkspacePolicy } from '../../../shared/botWorkspace.js';
 import { projectIdentityKey } from '../../../shared/projectKeys.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
 import { BOT_ROUTE_STATUSES, type BotRouteStatus } from '../../../shared/botRoute.js';
+import { normalizeBotEventSubscriptionRule } from '../../../shared/botSessionEvents.js';
 import {
   botChannelMountIdentity,
   sameBotChannelMountIdentity,
@@ -290,6 +292,7 @@ async function readProfile(db: ReturnType<typeof getDbClient>['drizzle'], botId:
       memory: config.memory !== false,
       automation: config.automation === true,
       permissions: config.permissions === 'trusted' ? 'trusted' : 'ask',
+      sessionControlMode: normalizeBotSessionControlMode(config.sessionControlMode),
     },
     channels: channels.map((channel) => ({
       id: channel.id,
@@ -752,8 +755,43 @@ export function registerBotIpc(): void {
       body.capabilities &&
       typeof body.capabilities === 'object' &&
       !Array.isArray(body.capabilities)
-        ? body.capabilities
+        ? (body.capabilities as Record<string, unknown>)
         : {};
+    const userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+    let eventSubscription:
+      { id: string; name: string; status: 'active' | 'paused'; ruleJson: string } | undefined;
+    if (body.eventSubscription !== undefined) {
+      if (
+        !body.eventSubscription ||
+        typeof body.eventSubscription !== 'object' ||
+        Array.isArray(body.eventSubscription)
+      ) {
+        throwIpcError('INVALID_PARAMS', 'eventSubscription 必须是对象');
+      }
+      const subscription = body.eventSubscription as Record<string, unknown>;
+      const suffix = readText(subscription.id, 'eventSubscription.id', 80) || 'control-events';
+      if (
+        subscription.status !== undefined &&
+        subscription.status !== 'active' &&
+        subscription.status !== 'paused'
+      ) {
+        throwIpcError('INVALID_PARAMS', 'eventSubscription.status 无效');
+      }
+      if (
+        !subscription.rule ||
+        typeof subscription.rule !== 'object' ||
+        Array.isArray(subscription.rule)
+      ) {
+        throwIpcError('INVALID_PARAMS', 'eventSubscription.rule 必须是对象');
+      }
+      const status = subscription.status === 'paused' ? 'paused' : 'active';
+      eventSubscription = {
+        id: `bot-${suffix}:${id}`,
+        name: readText(subscription.name, 'eventSubscription.name', 120, true),
+        status,
+        ruleJson: safeJson(normalizeBotEventSubscriptionRule(subscription.rule)),
+      };
+    }
     const now = Date.now();
     const client = getDbClient();
     const db = client.drizzle;
@@ -764,7 +802,8 @@ export function registerBotIpc(): void {
       avatar,
       avatarColor,
       identitySource,
-      capabilitiesJson: safeJson({ ...capabilities, skills }),
+      capabilitiesJson: safeJson({ ...capabilities, skills, userContextSource }),
+      eventSubscription,
       now,
     });
     return readProfile(db, id);

@@ -2,19 +2,14 @@ import { useSyncExternalStore } from 'react';
 import { getDraft } from '@/state/newMakerDraft';
 import type { BotWorkspacePolicy } from '../../../shared/botWorkspace';
 import type { BotChannelConnection } from '../../../shared/botChannelRegistry';
-import type {
-  BotImMigrationPlan,
-  BotImMigrationRecord,
-} from '../../../shared/botImMigration';
-import type {
-  BotBundleExportResult,
-  BotBundleImportResult,
-} from '../../../shared/botPortability';
+import type { BotImMigrationPlan, BotImMigrationRecord } from '../../../shared/botImMigration';
+import type { BotBundleExportResult, BotBundleImportResult } from '../../../shared/botPortability';
 import type { BotHealthReport } from '../../../shared/botLifecycle';
 import {
   normalizeBotSessionControlMode,
   type BotSessionControlMode,
 } from '../../../shared/botSessionControl';
+import type { BotEventSubscriptionRule } from '../../../shared/botSessionEvents';
 
 export type BotChannel =
   'telegram' | 'feishu' | 'slack' | 'discord' | 'wechat' | 'dingtalk' | 'wecom' | 'x' | 'local';
@@ -201,6 +196,25 @@ function defaultCapabilities(harness: BotCapabilities['harness'] = 'claude'): Bo
   };
 }
 
+export interface CreateBotProfileInput {
+  name: string;
+  description: string;
+  /** Kept for legacy callers; every new Bot is local-first and Channels mount later. */
+  channel?: BotChannel;
+  identitySource?: string;
+  userContextSource?: string;
+  avatar?: string;
+  avatarColor?: string;
+  skills?: string[];
+  capabilities?: Partial<BotCapabilities>;
+  eventSubscription?: {
+    id?: string;
+    name: string;
+    status?: 'active' | 'paused';
+    rule: Partial<BotEventSubscriptionRule>;
+  };
+}
+
 function readProfiles(): BotProfile[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -330,17 +344,16 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
     channel,
     description: typeof item.description === 'string' ? item.description : '',
     identitySource: typeof item.identitySource === 'string' ? item.identitySource : '',
-    userContextSource:
-      typeof item.userContextSource === 'string' ? item.userContextSource : '',
+    userContextSource: typeof item.userContextSource === 'string' ? item.userContextSource : '',
     avatar: typeof item.avatar === 'string' ? item.avatar : '🤖',
     avatarColor: typeof item.avatarColor === 'string' ? item.avatarColor : 'violet',
     enabled: item.enabled !== false,
     status:
-      item.status === 'active'
-      || item.status === 'paused'
-      || item.status === 'error'
-      || item.status === 'archived'
-      || item.status === 'deleting'
+      item.status === 'active' ||
+      item.status === 'paused' ||
+      item.status === 'error' ||
+      item.status === 'archived' ||
+      item.status === 'deleting'
         ? item.status
         : item.enabled === false
           ? 'paused'
@@ -506,10 +519,15 @@ export function useBotProfiles(): BotProfile[] {
   return useSyncExternalStore(subscribeBotProfiles, getBotProfiles, getBotProfiles);
 }
 
-export function addBotProfile(
-  input: Pick<BotProfile, 'name' | 'channel' | 'description'>,
-): BotProfile {
+export function addBotProfile(input: CreateBotProfileInput): BotProfile {
   const now = Date.now();
+  const harness = normalizeBotHarness(input.capabilities?.harness);
+  const capabilities = {
+    ...defaultCapabilities(harness),
+    ...(input.capabilities ?? {}),
+    harness,
+    sessionControlMode: normalizeBotSessionControlMode(input.capabilities?.sessionControlMode),
+  };
   const bot: BotProfile = {
     id: `bot_${now}_${Math.random().toString(36).slice(2, 8)}`,
     name: input.name.trim() || 'New Bot',
@@ -517,12 +535,13 @@ export function addBotProfile(
     // the Bot's identity/type; the requested channel is attached below.
     channel: 'local',
     description: input.description.trim(),
-    avatar: '🤖',
-    avatarColor: 'violet',
+    identitySource: input.identitySource?.trim() || undefined,
+    userContextSource: input.userContextSource?.trim() ?? '',
+    avatar: input.avatar?.trim() || '🤖',
+    avatarColor: input.avatarColor?.trim() || 'violet',
     enabled: true,
-    skills: [],
-    userContextSource: '',
-    capabilities: defaultCapabilities(),
+    skills: normalizeStringList(input.skills),
+    capabilities,
     createdAt: now,
     // The real canonical Session is created by BotsHomeView after the profile
     // exists. Never create a fake bot-chat-* projection.
@@ -534,27 +553,29 @@ export function addBotProfile(
 }
 
 /** Create the local projection and wait until main/SQLite owns the profile. */
-export async function addBotProfileAndWait(
-  input: Pick<BotProfile, 'name' | 'channel' | 'description'>,
-): Promise<BotProfile> {
+export async function addBotProfileAndWait(input: CreateBotProfileInput): Promise<BotProfile> {
   const bot = addBotProfile(input);
   const api = botsApi();
   if (!api) return bot;
   try {
-    const created = normalizeDbProfile(await api.create({
-      id: bot.id,
-      name: bot.name,
-      description: bot.description,
-      avatar: bot.avatar,
-      avatarColor: bot.avatarColor,
-      skills: bot.skills,
-      capabilities: bot.capabilities,
-      identitySource: bot.identitySource ?? '',
-    }));
+    const created = normalizeDbProfile(
+      await api.create({
+        id: bot.id,
+        name: bot.name,
+        description: bot.description,
+        avatar: bot.avatar,
+        avatarColor: bot.avatarColor,
+        skills: bot.skills,
+        capabilities: bot.capabilities,
+        identitySource: bot.identitySource ?? '',
+        userContextSource: bot.userContextSource ?? '',
+        eventSubscription: input.eventSubscription,
+      }),
+    );
     if (!created) throw new Error('Bot profile create returned an invalid profile');
-    profiles = profiles.map((item) => item.id === bot.id ? created : item);
+    profiles = profiles.map((item) => (item.id === bot.id ? created : item));
     persist();
-    if (input.channel !== 'local') {
+    if (input.channel && input.channel !== 'local') {
       await api.upsertChannel({ botId: bot.id, kind: input.channel, enabled: true });
     }
   } catch (error) {
@@ -674,14 +695,14 @@ export async function listBotChannelConnections(): Promise<BotChannelConnection[
   const rows = await api.listChannelConnections();
   return rows.filter(
     (item): item is BotChannelConnection =>
-      !!item
-      && typeof item === 'object'
-      && typeof item.kind === 'string'
-      && typeof item.id === 'string'
-      && (item.ownership === 'local-adapter' || item.ownership === 'server-relay')
-      && typeof item.status === 'string'
-      && typeof item.connected === 'boolean'
-      && (typeof item.accountKey === 'string' || item.accountKey === null),
+      !!item &&
+      typeof item === 'object' &&
+      typeof item.kind === 'string' &&
+      typeof item.id === 'string' &&
+      (item.ownership === 'local-adapter' || item.ownership === 'server-relay') &&
+      typeof item.status === 'string' &&
+      typeof item.connected === 'boolean' &&
+      (typeof item.accountKey === 'string' || item.accountKey === null),
   );
 }
 

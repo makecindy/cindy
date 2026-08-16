@@ -64,6 +64,12 @@ describe('bot profile store', () => {
         name: 'Draft name',
         channel: 'local',
         description: '',
+        identitySource: '# SOUL\nPersistent release steward.',
+        userContextSource: '# USER\nWorks with the release team.',
+        avatar: '🛠️',
+        avatarColor: 'blue',
+        skills: ['research'],
+        capabilities: { automation: true, sessionControlMode: 'coordinate' },
       });
       createdIds.push(bot.id);
       expect(bot).toMatchObject({
@@ -75,6 +81,19 @@ describe('bot profile store', () => {
       expect(getBotProfiles().find((item) => item.id === bot.id)).toMatchObject({
         identitySource: '# SOUL\nYou are the real Bot identity.',
       });
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identitySource: '# SOUL\nPersistent release steward.',
+          userContextSource: '# USER\nWorks with the release team.',
+          avatar: '🛠️',
+          avatarColor: 'blue',
+          skills: ['research'],
+          capabilities: expect.objectContaining({
+            automation: true,
+            sessionControlMode: 'coordinate',
+          }),
+        }),
+      );
     } finally {
       vi.unstubAllGlobals();
     }

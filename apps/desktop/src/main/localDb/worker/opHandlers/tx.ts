@@ -198,6 +198,16 @@ function botsCreateProfile(db: Database.Database, args: unknown): void {
       (id, bot_id, session_id, event_type, payload_json, created_at)
       VALUES (?, ?, NULL, 'created', '{}', ?)`)
       .run(`${id}:created:${now}`, id, now);
+    if (p.eventSubscription !== undefined) {
+      const subscription = asRecord(p.eventSubscription, 'eventSubscription');
+      db.prepare(`INSERT INTO bot_event_subscriptions
+        (id, bot_id, name, status, rule_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(expectString(subscription.id, 'eventSubscription.id'), id,
+          expectString(subscription.name, 'eventSubscription.name'),
+          expectString(subscription.status, 'eventSubscription.status'),
+          expectString(subscription.ruleJson, 'eventSubscription.ruleJson'), now, now);
+    }
   })();
 }
 

@@ -5383,6 +5383,49 @@
     "add": "新增 Bot",
     "addTitle": "新增 Bot",
     "addDescription": "先建立本地 Bot，再依需要掛載 IM 訊息通道。",
+    "createWizard": {
+      "chooseTemplateDescription": "選擇一個起點。Bot 會先建立為本地長期助理，訊息通道稍後掛載。",
+      "identityDescription": "確認長期身分與建議能力，建立後立即進入真實主任務。",
+      "recommended": "建議",
+      "continue": "繼續設定",
+      "back": "返回範本",
+      "creating": "正在建立…",
+      "createFailed": "無法建立 Bot，請重試。",
+      "avatarLabel": "頭像",
+      "roleLabel": "長期身分與職責",
+      "roleHint": "這裡只定義 Bot 是誰、長期負責什麼。你的資料、Skills、MCP、工具、權限、自動化與訊息通道仍分開管理。",
+      "recommendedConfiguration": "建議設定",
+      "localProfile": "Bot 形態",
+      "localProfileValue": "本地 Bot",
+      "currentHarness": "Claude · 使用目前預設模型",
+      "enabled": "啟用",
+      "notEnabled": "預設不啟用",
+      "taskEvents": "任務事件",
+      "automatic": "自動訂閱並喚醒",
+      "channelsLater": "Telegram、飛書與 Slack 等是可掛載的訊息通道，不會決定 Bot 身分。",
+      "profileSeparationTitle": "每個 Bot 都是獨立 Profile",
+      "profileSeparationDescription": "身分、使用者背景、記憶、Skills、MCP、自動化、任務與訊息通道分別保存，不會互相借用。",
+      "templates": {
+        "control": {
+          "title": "總控",
+          "summary": "自動接收其他任務完成、失敗與待決策事件，再繼續協調或回報。",
+          "defaultName": "總控",
+          "defaultDescription": "盯住所有重要任務狀態，避免工作停在待總控卻沒人知道。"
+        },
+        "prSteward": {
+          "title": "PR 總管",
+          "summary": "透過任務事件與自動化跟進評審、檢查與交付狀態。",
+          "defaultName": "PR 總管",
+          "defaultDescription": "持續跟進 PR 與交付任務，將可行動變化交回負責的任務。"
+        },
+        "assistant": {
+          "title": "一般助理",
+          "summary": "擁有長期身分與獨立記憶，預設不觀察或控制其他任務。",
+          "defaultName": "我的助理",
+          "defaultDescription": "可長期使用，並能按需掛載能力與訊息通道的個人助理。"
+        }
+      }
+    },
     "portability": {
       "title": "匯入與匯出",
       "description": "匯出可分享的行為設定，不包含憑證、IM 帳號、任務歷史、記憶、專案路徑或執行狀態。匯入的外部通道與自動化預設停用。",
@@ -5411,7 +5454,25 @@
     "save": "儲存",
     "settings": "Bot 設定",
     "emptyTitle": "尚未建立 Bot",
-    "emptyDescription": "新增一個 Bot，讓長期助理擁有獨立身分與主任務入口。",
+    "emptyDescription": "Bot 比一般任務多一層長期身分、事件收件匣、自動化與訊息通道。",
+    "emptyBenefits": {
+      "identity": {
+        "title": "長期身分",
+        "description": "身分、使用者背景、Skills 與記憶依 Bot 隔離，不會串到其他 Bot。"
+      },
+      "events": {
+        "title": "自動接收任務事件",
+        "description": "其他任務完成、失敗或等待決策時，訂閱 Bot 會收到持久事件。"
+      },
+      "automation": {
+        "title": "自動化與協同",
+        "description": "排程、Bot 間委派、專案與 worktree 都連結到長期 Bot。"
+      },
+      "channels": {
+        "title": "依需要掛載訊息通道",
+        "description": "先建立本地 Bot，再連接 Telegram、飛書與 Slack 等入口。"
+      }
+    },
     "noDescription": "尚無描述",
     "sessions": "個任務",
     "sessionsTitle": "Bot 任務",
@@ -5565,7 +5626,13 @@
       "openTask": "開啟來源任務",
       "untitledTask": "未命名任務",
       "sidebarAttention": "有 {{count}} 個任務事件需要關注",
-      "status": { "pending": "待處理", "processing": "處理中", "handled": "已處理", "failed": "失敗", "skipped": "已略過" },
+      "status": {
+        "pending": "待處理",
+        "processing": "處理中",
+        "handled": "已處理",
+        "failed": "失敗",
+        "skipped": "已略過"
+      },
       "events": {
         "session": {
           "turn": { "completed": "任務回合已完成", "failed": "任務回合失敗" },

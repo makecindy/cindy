@@ -1,25 +1,19 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-  type FormEvent,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   ArrowLeft,
+  BellRing,
   Bot,
   Check,
+  Clock3,
   Download,
   ImagePlus,
+  MessageCircleMore,
   Plus,
   RefreshCcw,
   Settings2,
   Sparkles,
   Upload,
-  X,
 } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -34,7 +28,6 @@ import type { MakerVendor } from '@/lib/ccAgent.types';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
 import { useRegisterContentHeader } from '../feature-context';
 import {
-  addBotProfileAndWait,
   applyBotImMigration,
   listBotChannelConnections,
   listBotImMigrations,
@@ -53,6 +46,7 @@ import {
   type BotImMigrationRecord,
   type BotProfile,
 } from './botStore';
+import { AddBotDialog } from './AddBotDialog';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotProjectSettings } from './BotProjectSettings';
 import { BotAutomationSettings } from './BotAutomationSettings';
@@ -84,115 +78,8 @@ function BotAvatar({ bot, size = 'h-10 w-10' }: { bot: BotProfile; size?: string
       className={cn('inline-flex shrink-0 items-center justify-center rounded-xl text-lg', size)}
       style={avatarColorStyle(bot.avatarColor)}
     >
-      <span aria-hidden>
-        {bot.avatar || '🤖'}
-      </span>
+      <span aria-hidden>{bot.avatar || '🤖'}</span>
     </span>
-  );
-}
-
-function AddBotDialog({
-  open,
-  onOpenChange,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onCreated: (bot: BotProfile) => void;
-}) {
-  const { t } = useTranslation();
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [creating, setCreating] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setName('');
-    setDescription('');
-  }, [open]);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setCreating(true);
-    try {
-      // A Bot is a local profile first. IM surfaces are mounted later from
-      // Settings, so creation never implies Telegram/Feishu ownership.
-      const bot = await addBotProfileAndWait({ name, channel: 'local', description });
-      onOpenChange(false);
-      onCreated(bot);
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 outline-none">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <Dialog.Title className="text-16 font-medium text-[var(--text-primary)]">
-                {t('bots.addTitle')}
-              </Dialog.Title>
-              <Dialog.Description className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                {t('bots.addDescription')}
-              </Dialog.Description>
-            </div>
-            <Dialog.Close asChild>
-              <button
-                type="button"
-                className="rounded-lg p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
-                aria-label={t('bots.close')}
-              >
-                <X size={16} />
-              </button>
-            </Dialog.Close>
-          </div>
-
-          <form className="mt-5 flex flex-col gap-4" onSubmit={submit}>
-            <label className="flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-              {t('bots.nameLabel')}
-              <input
-                autoFocus
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder={t('bots.namePlaceholder')}
-                className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-                required
-              />
-            </label>
-            <label className="flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
-              {t('bots.descriptionLabel')}
-              <textarea
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                placeholder={t('bots.descriptionPlaceholder')}
-                rows={3}
-                className="resize-none rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-              />
-            </label>
-            <div className="mt-1 flex justify-end gap-2">
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  className="h-8 rounded-lg px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-                >
-                  {t('bots.cancel')}
-                </button>
-              </Dialog.Close>
-              <button
-                type="submit"
-                disabled={creating}
-                className="h-8 rounded-lg bg-[var(--accent-cta-bg)] px-3 text-12 font-medium text-[var(--accent-pure-cta-fg)] hover:opacity-90"
-              >
-                {t('bots.create')}
-              </button>
-            </div>
-          </form>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
   );
 }
 
@@ -1278,8 +1165,11 @@ export function BotsHomeView() {
 
   if (!selectedBot) {
     return (
-      <main className="h-full overflow-y-auto bg-[var(--surface)] px-8 py-8" role="main">
-        <div className="mx-auto flex max-w-3xl flex-col items-center py-24 text-center">
+      <main
+        className="h-full overflow-y-auto bg-[var(--surface)] px-4 py-6 sm:px-8 sm:py-8"
+        role="main"
+      >
+        <div className="mx-auto flex max-w-3xl flex-col items-center py-10 text-center sm:py-20">
           <Bot size={34} className="text-[var(--text-tertiary)]" />
           <h1 className="mt-5 text-24 font-medium text-[var(--text-primary)]">
             {t('bots.emptyTitle')}
@@ -1287,6 +1177,29 @@ export function BotsHomeView() {
           <p className="mt-2 max-w-md text-13 leading-6 text-[var(--text-secondary)]">
             {t('bots.emptyDescription')}
           </p>
+          <div className="mt-6 grid w-full gap-3 text-left sm:grid-cols-2">
+            {(
+              [
+                [Sparkles, 'identity'],
+                [BellRing, 'events'],
+                [Clock3, 'automation'],
+                [MessageCircleMore, 'channels'],
+              ] as const
+            ).map(([Icon, key]) => (
+              <div
+                key={String(key)}
+                className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4"
+              >
+                <Icon size={16} className="text-[var(--text-secondary)]" />
+                <p className="mt-3 text-13 font-medium text-[var(--text-primary)]">
+                  {t(`bots.emptyBenefits.${key}.title`)}
+                </p>
+                <p className="mt-1 text-11 leading-5 text-[var(--text-secondary)]">
+                  {t(`bots.emptyBenefits.${key}.description`)}
+                </p>
+              </div>
+            ))}
+          </div>
           <button
             type="button"
             onClick={openAdd}

@@ -5383,6 +5383,49 @@
     "add": "Bot を追加",
     "addTitle": "Bot を追加",
     "addDescription": "まずローカル Bot を作成し、必要に応じて IM チャンネルを追加します。",
+    "createWizard": {
+      "chooseTemplateDescription": "開始テンプレートを選びます。Bot はまずローカルの長期アシスタントとして作成され、メッセージチャンネルは後から追加します。",
+      "identityDescription": "長期的な役割と推奨機能を確認し、作成後は実際のメインタスクを開きます。",
+      "recommended": "おすすめ",
+      "continue": "続ける",
+      "back": "テンプレートに戻る",
+      "creating": "作成中…",
+      "createFailed": "Bot を作成できませんでした。もう一度お試しください。",
+      "avatarLabel": "アバター",
+      "roleLabel": "長期的な ID と役割",
+      "roleHint": "ここでは Bot の人格と長期的な責務だけを定義します。ユーザー情報、Skills、MCP、ツール、権限、自動化、チャンネルは別々に管理されます。",
+      "recommendedConfiguration": "推奨設定",
+      "localProfile": "Bot の形態",
+      "localProfileValue": "ローカル Bot",
+      "currentHarness": "Claude · 現在の既定モデル",
+      "enabled": "有効",
+      "notEnabled": "既定では無効",
+      "taskEvents": "タスクイベント",
+      "automatic": "自動購読して起動",
+      "channelsLater": "Telegram、Feishu、Slack などは後から追加するメッセージチャンネルであり、Bot の ID を決めません。",
+      "profileSeparationTitle": "各 Bot は独立した Profile",
+      "profileSeparationDescription": "ID、ユーザー情報、メモリ、Skills、MCP、自動化、タスク、チャンネルは分離して保存され、別の Profile から流用されません。",
+      "templates": {
+        "control": {
+          "title": "コントロール Bot",
+          "summary": "他のタスクの完了、失敗、判断待ちイベントを受け取り、調整または報告します。",
+          "defaultName": "コントロール Bot",
+          "defaultDescription": "重要なタスク状態を監視し、調整待ちのまま見落とされる作業をなくします。"
+        },
+        "prSteward": {
+          "title": "PR 管理 Bot",
+          "summary": "タスクイベントと自動化でレビュー、チェック、デリバリー状況を追跡します。",
+          "defaultName": "PR 管理 Bot",
+          "defaultDescription": "PR とデリバリータスクを追跡し、対応可能な変化を担当タスクへ戻します。"
+        },
+        "assistant": {
+          "title": "通常アシスタント",
+          "summary": "長期的な ID と専用メモリを持ち、既定では他のタスクを監視しません。",
+          "defaultName": "マイアシスタント",
+          "defaultDescription": "必要に応じて機能とメッセージチャンネルを追加できる長期アシスタントです。"
+        }
+      }
+    },
     "portability": {
       "title": "インポートとエクスポート",
       "description": "認証情報、IM アカウント、タスク履歴、メモリ、プロジェクトパス、実行状態を含まない共有可能な動作設定を書き出します。取り込んだ外部チャンネルと自動化は無効のままです。",
@@ -5411,7 +5454,25 @@
     "save": "保存",
     "settings": "Bot 設定",
     "emptyTitle": "Bot はまだありません",
-    "emptyDescription": "Bot を追加して、長期アシスタントに独自の ID とチャット入口を持たせます。",
+    "emptyDescription": "Bot は通常のタスクに長期 ID、イベント受信箱、自動化、メッセージチャンネルを追加します。",
+    "emptyBenefits": {
+      "identity": {
+        "title": "長期 ID",
+        "description": "ID、ユーザー情報、Skills、メモリは Bot ごとに分離されます。"
+      },
+      "events": {
+        "title": "タスクイベントを自動受信",
+        "description": "他のタスクが完了、失敗、判断待ちになると購読 Bot に永続イベントが届きます。"
+      },
+      "automation": {
+        "title": "自動化と連携",
+        "description": "スケジュール、Bot 間委任、プロジェクト、worktree は長期 Bot に紐づきます。"
+      },
+      "channels": {
+        "title": "必要な時にチャンネルを追加",
+        "description": "まずローカル Bot を作成し、その後 Telegram、Feishu、Slack などを接続します。"
+      }
+    },
     "noDescription": "説明はありません",
     "sessions": "タスク",
     "sessionsTitle": "Bot タスク",
@@ -5565,10 +5626,19 @@
       "openTask": "元のタスクを開く",
       "untitledTask": "無題のタスク",
       "sidebarAttention": "{{count}} 件のタスクイベントに確認が必要です",
-      "status": { "pending": "待機中", "processing": "処理中", "handled": "処理済み", "failed": "失敗", "skipped": "スキップ" },
+      "status": {
+        "pending": "待機中",
+        "processing": "処理中",
+        "handled": "処理済み",
+        "failed": "失敗",
+        "skipped": "スキップ"
+      },
       "events": {
         "session": {
-          "turn": { "completed": "タスクのターンが完了しました", "failed": "タスクのターンが失敗しました" },
+          "turn": {
+            "completed": "タスクのターンが完了しました",
+            "failed": "タスクのターンが失敗しました"
+          },
           "metadata": { "changed": "タスク状態が変更されました" },
           "decision": { "required": "タスクに判断が必要です" }
         }
