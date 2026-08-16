@@ -2555,17 +2555,12 @@ export class PiAgent extends BaseAgent {
      * setModel 的临界区正文。经 `setModelChain` 串行化后调用 —— 不要直接调它,
      * 并发进入会让 pending / 落定两次写交错。
      */
-    const writableNativeModels = (provider: PiNativeProviderSpec) =>
-      provider.inheritModels
-        ? provider.models.filter(
-            (model) => model.api !== undefined || model.catalogAddition === true,
-          )
-        : provider.models;
     const nativeOffersModel = (providerId: string, modelId: string): boolean => {
       const native = nativeProviderById.get(providerId);
       if (!native) return false;
       const nativeModel = resolveNativeModelId(providerId, modelId);
-      return writableNativeModels(native).some((candidate) => candidate.id === nativeModel);
+      // inheritModels 里没有 api/catalogAddition 的行是 Pi 自带目录,不是缺失模型。
+      return native.models.some((candidate) => candidate.id === nativeModel);
     };
     const sameRecord = (
       left?: Record<string, string>,
@@ -2621,10 +2616,14 @@ export class PiAgent extends BaseAgent {
           (provider) => (provider.sourceProviderId ?? provider.id) === 'xai',
         );
         if (!live || !liveXai) return false;
+        // 远端 hostProxyForward 依赖启动时注入的 session token / 代理登记。
+        // 登录后才出现的 xAI 块带上隧道,请求会因没有 CINDY_PI_SESSION_TOKEN 失败。
+        if (liveXai.hostProxyForward && !proxySessionToken) return false;
         const currentXai = nativeProviderForSource('xai');
         if (currentXai) {
           if (currentXai.baseUrl !== liveXai.baseUrl) return false;
           if (!sameRecord(currentXai.headers, liveXai.headers)) return false;
+          if (liveXai.hostProxyForward && !currentXai.hostProxyForward) return false;
         }
         const envKey = liveXai.apiKeyEnvVar;
         if (envKey) {
