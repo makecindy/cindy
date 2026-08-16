@@ -735,7 +735,14 @@ export function UnifiedModelPanel({
       {pickerLayout === 'badge' && stickyLabel && (
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 z-[6] flex h-7 items-end truncate border-b border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)] px-[18px] pb-[5px] text-11 leading-none text-[var(--text-tertiary)]"
+          // 复刻真组头的静止位形:文字距列表顶 16px(= 列表 p-2 8px + 组头 pt-2 8px),
+          // 接管瞬间与列表顶部的真组头逐像素重合。收尾照设计稿 .sec:实底渐隐到透明
+          // (78% 实底),不画硬线 —— 行从渐变里柔和浮现,不被线拦腰切开。
+          className="pointer-events-none absolute inset-x-0 top-0 z-[6] h-10 truncate px-[18px] pt-4 text-11 leading-none text-[var(--text-tertiary)]"
+          style={{
+            background:
+              'linear-gradient(180deg, var(--model-dropdown-bg) 0, var(--model-dropdown-bg) 30px, transparent)',
+          }}
         >
           {stickyLabel}
         </div>
