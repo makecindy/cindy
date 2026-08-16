@@ -441,15 +441,19 @@ function normalizeAllowedPaths(
   remoteHostId: string | null,
 ): string[] {
   const paths = readStringList(value, 'allowedPaths');
-  if (remoteHostId) return paths.map((item) => normalizeWorkingDirForStorage(item) ?? item);
-  const root = path.resolve(workingDir);
+  const pathApi = remoteHostId ? path.posix : path;
+  const root = pathApi.resolve(workingDir);
   return paths.map((item) => {
-    const candidate = path.resolve(item);
-    const relative = path.relative(root, candidate);
-    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    const candidate = pathApi.resolve(item);
+    const relative = pathApi.relative(root, candidate);
+    if (
+      relative === '..'
+      || relative.startsWith(`..${pathApi.sep}`)
+      || pathApi.isAbsolute(relative)
+    ) {
       throwIpcError('INVALID_PARAMS', 'allowedPaths 必须位于绑定项目目录内');
     }
-    return normalizeWorkingDirForStorage(candidate) ?? candidate;
+    return remoteHostId ? candidate : normalizeWorkingDirForStorage(candidate) ?? candidate;
   });
 }
 

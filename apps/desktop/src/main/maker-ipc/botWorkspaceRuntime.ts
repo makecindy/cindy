@@ -627,11 +627,12 @@ function bindingWorkspaceWritePaths(input: {
   let configured: string[] = [];
   try {
     const parsed = JSON.parse(input.allowedPathsJson) as unknown;
-    if (Array.isArray(parsed)) {
-      configured = parsed.filter((value): value is string => typeof value === 'string' && value.length > 0);
+    if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== 'string')) {
+      throw new Error('Bot workspace allowedPaths snapshot is invalid.');
     }
+    configured = parsed.filter((value) => value.length > 0);
   } catch {
-    return undefined;
+    throw new Error('Bot workspace allowedPaths snapshot is invalid.');
   }
   if (configured.length === 0) return undefined;
   const pathApi = input.remoteHostId ? path.posix : path;
@@ -644,7 +645,10 @@ function bindingWorkspaceWritePaths(input: {
     }
     return [pathApi.resolve(runtimeRoot, relative)];
   });
-  return mapped.length > 0 ? [...new Set(mapped)] : undefined;
+  if (mapped.length !== configured.length) {
+    throw new Error('Bot workspace allowedPaths escaped the bound project.');
+  }
+  return [...new Set(mapped)];
 }
 
 /**

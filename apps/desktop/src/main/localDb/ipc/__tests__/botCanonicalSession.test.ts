@@ -1949,6 +1949,50 @@ describe('Bot canonical Session lifecycle', () => {
     ).rejects.toThrow('allowedPaths');
   });
 
+  it('rejects remote allowed paths outside the bound project', async () => {
+    await expect(
+      invoke('local-db:bots:project-binding-upsert', {
+        botId: 'bot-1',
+        workingDir: '/srv/repos/product',
+        remoteHostId: 'remote-1',
+        workspacePolicy: 'none',
+        isDefault: true,
+        allowedPaths: ['/srv/secrets'],
+      }),
+    ).rejects.toThrow('allowedPaths');
+  });
+
+  it('fails closed when a persisted allowed-path snapshot escapes the bound project', async () => {
+    await invoke('local-db:bots:project-binding-upsert', {
+      botId: 'bot-1',
+      workingDir: '/repo/product',
+      workspacePolicy: 'none',
+      isDefault: true,
+      allowedPaths: ['/repo/product/docs'],
+    });
+    await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    h.sqlite!.prepare(
+      "UPDATE bot_project_bindings SET allowed_paths_json = '[\"/repo/other\"]' WHERE bot_id = 'bot-1'",
+    ).run();
+    const opts = {
+      id: 'session-1',
+      agentKind: 'pi' as const,
+      workingDir: '/tmp/placeholder',
+      workspaceKind: 'dialogue' as const,
+      model: 'grok-4.5',
+      permissionMode: 'ask' as const,
+    };
+
+    await expect(prepareBotWorkspaceRuntime(opts)).rejects.toThrow(
+      'allowedPaths escaped the bound project',
+    );
+    expect(opts.workingDir).toBe('/tmp/placeholder');
+  });
+
   it('removes a newly allocated dialogue workspace when Git initialization fails', async () => {
     h.ensureGit.mockRejectedValueOnce(new Error('git init failed'));
 
