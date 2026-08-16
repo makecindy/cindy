@@ -54,6 +54,22 @@ describe('WorkLouderCodexKeyboardLayout', () => {
     expect(screen.getByRole('button', { name: /旋钮/ })).toBeTruthy();
   });
 
+  it('shows a pressed key when the physical board reports that part', () => {
+    const settings = createWorkLouderCodexDefaultSettings();
+    render(
+      <WorkLouderCodexKeyboardLayout
+        layout={settings.layout}
+        agentSlots={agentSlots()}
+        labels={LABELS}
+        pressedParts={new Set(['ACT06'])}
+        onEditKeycap={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /^FAST/ }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: /^APPR/ }).getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('puts the encoder and the stick in the corners they occupy on the device', () => {
     const settings = createWorkLouderCodexDefaultSettings();
     const { container } = render(

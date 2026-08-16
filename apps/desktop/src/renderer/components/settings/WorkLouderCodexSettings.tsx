@@ -50,6 +50,7 @@ import {
   type WorkLouderCodexConnectionStatus,
   type WorkLouderCodexKeycapId,
   type WorkLouderCodexLayout,
+  type WorkLouderCodexPreviewPart,
   type WorkLouderCodexSettingsPatch,
   type WorkLouderCodexState,
 } from '../../../shared/workLouderCodex';
@@ -142,6 +143,9 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
   const [editingPart, setEditingPart] = useState<
     WorkLouderCodexAgentKey | WorkLouderCodexControlPart | null
   >(null);
+  const [pressedParts, setPressedParts] = useState<ReadonlySet<WorkLouderCodexPreviewPart>>(
+    () => new Set(),
+  );
   const settings = state?.settings ?? WORKLOUDER_CODEX_DEFAULT_SETTINGS;
   const enabledSkills = useMemo(
     () => skills.filter((skill) => skill.kind === 'skill' && !skill.parseError),
@@ -158,6 +162,18 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
   useEffect(() => {
     if (!bootstrapped) void refreshSkills();
   }, [bootstrapped, refreshSkills]);
+
+  useEffect(() => {
+    const unsubscribe = window.electronAPI?.workLouderCodex?.onPreviewInput?.((input) => {
+      setPressedParts((current) => {
+        const next = new Set(current);
+        if (input.pressed) next.add(input.part);
+        else next.delete(input.part);
+        return next;
+      });
+    });
+    return () => unsubscribe?.();
+  }, []);
 
   const commitBrightness = (): void => {
     if (!state || brightnessDraft === state.settings.lightingBrightness) return;
@@ -385,19 +401,22 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
             {t('settings.shortcuts.workLouderCodex.layout.keyboard.description')}
           </p>
         </div>
-        <WorkLouderCodexKeyboardLayout
-          layout={settings.layout}
-          agentSlots={state?.agentSlots ?? []}
-          disabled={!state || saving}
-          labels={{
-            analogStick: t('settings.shortcuts.workLouderCodex.layout.keyboard.analogStick'),
-            encoder: t('settings.shortcuts.workLouderCodex.layout.keyboard.encoder'),
-            indicator: t('settings.shortcuts.workLouderCodex.layout.keyboard.indicator'),
-          }}
-          hintFor={hintFor}
-          canEdit={(key) => !key.startsWith('AG') || settings.agentSource === 'custom'}
-          onEditKeycap={openPartEditor}
-        />
+        <div className="flex justify-center">
+          <WorkLouderCodexKeyboardLayout
+            layout={settings.layout}
+            agentSlots={state?.agentSlots ?? []}
+            disabled={!state || saving}
+            labels={{
+              analogStick: t('settings.shortcuts.workLouderCodex.layout.keyboard.analogStick'),
+              encoder: t('settings.shortcuts.workLouderCodex.layout.keyboard.encoder'),
+              indicator: t('settings.shortcuts.workLouderCodex.layout.keyboard.indicator'),
+            }}
+            hintFor={hintFor}
+            canEdit={(key) => !key.startsWith('AG') || settings.agentSource === 'custom'}
+            onEditKeycap={openPartEditor}
+            pressedParts={pressedParts}
+          />
+        </div>
       </SettingsCard>
 
       {/* The six task keys follow one rule as a set, so it is chosen once here.

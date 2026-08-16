@@ -14,6 +14,8 @@ import {
   type WorkLouderCodexConnectionReason,
   type WorkLouderCodexConnectionStatus,
   type WorkLouderCodexDeviceState,
+  type WorkLouderCodexPreviewInput,
+  type WorkLouderCodexPreviewPart,
   type WorkLouderCodexRendererAction,
   type WorkLouderCodexSettings,
   type WorkLouderCodexState,
@@ -110,6 +112,8 @@ export class WorkLouderCodexLightingController {
     private readonly activateSession: (sessionId: string, focus?: boolean) => void,
     private readonly loadTaskCatalog: TaskCatalogLoader = async () => [],
     private readonly dispatchRendererAction: (action: WorkLouderCodexRendererAction) => void = () =>
+      undefined,
+    private readonly dispatchPreviewInput: (input: WorkLouderCodexPreviewInput) => void = () =>
       undefined,
   ) {}
 
@@ -284,6 +288,7 @@ export class WorkLouderCodexLightingController {
 
   private handleHidInput(event: WorkLouderCodexHidEvent): void {
     this.handleDeviceActivity();
+    this.emitPreviewInput(previewPartForHidKey(event.key, this.settings.layout.separateMicrophoneKeys), event.act);
     const agentMatch = /^AG0([0-5])$/.exec(event.key);
     if (agentMatch) {
       if (event.act === 1) this.handleAgentKeyPress(Number(agentMatch[1]));
@@ -432,6 +437,7 @@ export class WorkLouderCodexLightingController {
   private handleJoystickInput(event: WorkLouderCodexJoystickEvent): void {
     this.handleDeviceActivity();
     const direction = joystickDirection(event);
+    this.emitPreviewInput('analog', direction ? 1 : 0);
 
     // Scrolling follows the stick continuously — held means keep scrolling, and
     // pushing further means faster — so it cannot go through the one-shot path
@@ -689,6 +695,23 @@ export class WorkLouderCodexLightingController {
     const state = this.getState();
     for (const listener of this.stateListeners) listener(state);
   }
+
+  private emitPreviewInput(part: WorkLouderCodexPreviewPart | null, act: number): void {
+    if (!part) return;
+    if (act !== 0 && act !== 1) return;
+    this.dispatchPreviewInput({ part, pressed: act === 1 });
+  }
+}
+
+function previewPartForHidKey(
+  key: string,
+  separateMicrophoneKeys: boolean,
+): WorkLouderCodexPreviewPart | null {
+  if (/^AG0[0-5]$/.test(key)) return key as WorkLouderCodexPreviewPart;
+  if (key.startsWith('ENC')) return 'encoder';
+  if (!separateMicrophoneKeys && (key === 'ACT10' || key === 'ACT11')) return 'ACT10_ACT11';
+  if (/^ACT(?:0[6-9]|1[0-2])$/.test(key)) return key as WorkLouderCodexPreviewPart;
+  return null;
 }
 
 function emptyAgentSlots(): WorkLouderCodexAgentSlotState[] {

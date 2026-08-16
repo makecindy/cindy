@@ -9,6 +9,7 @@ import { registerInputDevice } from '../input-devices/registry.js';
 import {
   WORKLOUDER_CODEX_ACTION_CHANNEL,
   WORKLOUDER_CODEX_DEVICE,
+  WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL,
   WORKLOUDER_CODEX_GET_STATE_CHANNEL,
   WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL,
   WORKLOUDER_CODEX_PROBE_CHANNEL,
@@ -16,6 +17,7 @@ import {
   WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
+  type WorkLouderCodexPreviewInput,
   type WorkLouderCodexRendererAction,
   type WorkLouderCodexState,
 } from '../../shared/workLouderCodex.js';
@@ -107,6 +109,7 @@ export const workLouderCodexLightingController = new WorkLouderCodexLightingCont
       ? buildWorkLouderCodexTaskCatalog(rendererTaskCatalog)
       : listWorkLouderCodexTaskCatalog(),
   dispatchRendererAction,
+  dispatchPreviewInput,
 );
 
 let settingsIpcRegistered = false;
@@ -191,6 +194,14 @@ function dispatchRendererAction(action: WorkLouderCodexRendererAction): void {
   if (!sendMainWindowMessage(WORKLOUDER_CODEX_ACTION_CHANNEL, action)) {
     log.debug('Codex Micro action skipped because the main renderer is not ready', {
       type: action.type,
+    });
+  }
+}
+
+function dispatchPreviewInput(input: WorkLouderCodexPreviewInput): void {
+  if (!sendMainWindowMessage(WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL, input)) {
+    log.debug('Codex Micro preview skipped because the main renderer is not ready', {
+      part: input.part,
     });
   }
 }

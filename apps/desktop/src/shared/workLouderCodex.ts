@@ -37,6 +37,7 @@ export const WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL = 'worklouder-codex:publish-
 export type WorkLouderCodexPublishedTask = InputDevicePublishedTask;
 export const WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL = 'worklouder-codex:state-changed';
 export const WORKLOUDER_CODEX_ACTION_CHANNEL = 'worklouder-codex:action';
+export const WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL = 'worklouder-codex:preview-input';
 
 export const WORKLOUDER_CODEX_AGENT_SLOT_COUNT = 6;
 
@@ -120,6 +121,16 @@ export const WORKLOUDER_CODEX_KEYCAP_IDS = [
 export type WorkLouderCodexAutoDim = (typeof WORKLOUDER_CODEX_AUTO_DIM_OPTIONS)[number];
 export type WorkLouderCodexAgentSource = (typeof WORKLOUDER_CODEX_AGENT_SOURCES)[number];
 export type WorkLouderCodexCommandSlot = (typeof WORKLOUDER_CODEX_COMMAND_SLOTS)[number];
+export type WorkLouderCodexPreviewPart =
+  | WorkLouderCodexCommandSlot
+  | `AG0${0 | 1 | 2 | 3 | 4 | 5}`
+  | 'analog'
+  | 'encoder';
+
+export interface WorkLouderCodexPreviewInput {
+  part: WorkLouderCodexPreviewPart;
+  pressed: boolean;
+}
 export type WorkLouderCodexAnalogDirection = (typeof WORKLOUDER_CODEX_ANALOG_DIRECTIONS)[number];
 export type WorkLouderCodexEncoderAction = (typeof WORKLOUDER_CODEX_ENCODER_ACTIONS)[number];
 export type WorkLouderCodexEncoderMode = (typeof WORKLOUDER_CODEX_ENCODER_MODES)[number];

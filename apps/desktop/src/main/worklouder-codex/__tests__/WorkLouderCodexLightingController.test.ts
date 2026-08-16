@@ -311,6 +311,41 @@ describe('WorkLouderCodexLightingController', () => {
     });
   });
 
+  it('mirrors physical presses onto the settings preview without changing actions', () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const dispatch = vi.fn();
+    const preview = vi.fn();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      vi.fn(),
+      undefined,
+      dispatch,
+      preview,
+    );
+    controller.start();
+
+    hidRef.current?.({ key: 'ACT06', act: 1 });
+    hidRef.current?.({ key: 'ACT06', act: 0 });
+    hidRef.current?.({ key: 'ENC_CW', act: 2 });
+
+    expect(preview).toHaveBeenCalledWith({ part: 'ACT06', pressed: true });
+    expect(preview).toHaveBeenCalledWith({ part: 'ACT06', pressed: false });
+    expect(preview).not.toHaveBeenCalledWith(expect.objectContaining({ part: 'encoder' }));
+    expect(dispatch).toHaveBeenCalled();
+  });
+
   describe('joystick scrolling', () => {
     function makeStick() {
       const stickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {

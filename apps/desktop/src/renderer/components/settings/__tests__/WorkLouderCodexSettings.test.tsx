@@ -110,6 +110,9 @@ describe('WorkLouderCodexSettings', () => {
     // not individually clickable.
     expect(screen.getByRole('img', { name: /AG00/ })).toBeTruthy();
     expect(screen.getByRole('img', { name: /AG05/ })).toBeTruthy();
+    expect(screen.getByTestId('worklouder-codex-keyboard-layout').parentElement?.className).toContain(
+      'justify-center',
+    );
 
     const slider = screen.getByRole('slider', {
       name: 'settings.shortcuts.workLouderCodex.lighting.brightness.aria',

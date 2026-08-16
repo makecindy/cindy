@@ -1830,6 +1830,9 @@ interface ElectronAPI {
     ) => Promise<void>;
     onStateChanged: (callback: (state: WorkLouderCodexState) => void) => () => void;
     onAction: (callback: (action: WorkLouderCodexRendererAction) => void) => () => void;
+    onPreviewInput: (
+      callback: (input: import('../shared/workLouderCodex').WorkLouderCodexPreviewInput) => void,
+    ) => () => void;
   };
 
   // ── 右侧栏独立子窗口(RSB window)──────────────────────────────────────

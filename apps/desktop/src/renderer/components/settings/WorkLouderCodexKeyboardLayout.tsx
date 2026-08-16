@@ -12,6 +12,7 @@ import {
   type WorkLouderCodexCommandSlot,
   type WorkLouderCodexKeycapId,
   type WorkLouderCodexLayout,
+  type WorkLouderCodexPreviewPart,
 } from '../../../shared/workLouderCodex';
 import { WorkLouderCodexKeycapGlyph } from './WorkLouderCodexKeycapGlyphs';
 
@@ -50,6 +51,7 @@ export interface WorkLouderCodexKeyboardLayoutProps {
    */
   canEdit?(key: WorkLouderCodexEditableKey): boolean;
   onEditKeycap?(slot: WorkLouderCodexEditableKey): void;
+  pressedParts?: ReadonlySet<WorkLouderCodexPreviewPart>;
 }
 
 /**
@@ -69,6 +71,7 @@ export function WorkLouderCodexKeyboardLayout({
   hintFor,
   canEdit,
   onEditKeycap,
+  pressedParts,
 }: WorkLouderCodexKeyboardLayoutProps) {
   const editHandlerFor = (key: WorkLouderCodexEditableKey) =>
     canEdit && !canEdit(key) ? undefined : onEditKeycap;
@@ -86,6 +89,7 @@ export function WorkLouderCodexKeyboardLayout({
       part={slot}
       hint={hintFor?.(slot) ?? { legend: slot, name: agentSlots[index]?.title ?? null }}
       disabled={disabled}
+      pressed={pressedParts?.has(slot) ?? false}
       onEdit={editHandlerFor(slot)}
       className="bg-[var(--wl-agent-cap)] shadow-[var(--wl-agent-shadow)]"
     >
@@ -102,6 +106,7 @@ export function WorkLouderCodexKeyboardLayout({
         part={slot}
         hint={hintFor?.(slot) ?? { legend: keycapId }}
         disabled={disabled}
+        pressed={pressedParts?.has(slot) ?? false}
         onEdit={editHandlerFor(slot)}
         className={cn('bg-[var(--wl-command-cap)] shadow-[var(--wl-command-shadow)]', className)}
       >
@@ -130,6 +135,7 @@ export function WorkLouderCodexKeyboardLayout({
           part="encoder"
           hint={hintFor?.('encoder') ?? { legend: labels.encoder }}
           disabled={disabled}
+          pressed={pressedParts?.has('encoder') ?? false}
           onEdit={editHandlerFor('encoder')}
           rounded="full"
           className="bg-transparent shadow-none"
@@ -141,6 +147,7 @@ export function WorkLouderCodexKeyboardLayout({
           part="analog"
           hint={hintFor?.('analog') ?? { legend: labels.analogStick }}
           disabled={disabled}
+          pressed={pressedParts?.has('analog') ?? false}
           onEdit={editHandlerFor('analog')}
           className="bg-transparent shadow-none"
         >
@@ -218,6 +225,7 @@ function BoardPart({
   children,
   className,
   disabled,
+  pressed = false,
   onEdit,
   rounded = 'xl',
 }: {
@@ -226,6 +234,7 @@ function BoardPart({
   children: ReactNode;
   className?: string;
   disabled: boolean;
+  pressed?: boolean;
   onEdit?: (part: WorkLouderCodexEditableKey) => void;
   rounded?: 'xl' | 'full';
 }) {
@@ -239,6 +248,7 @@ function BoardPart({
     onEdit && !disabled && 'cursor-pointer active:scale-[0.97]',
     onEdit &&
       'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+    pressed && 'scale-[0.97] ring-2 ring-[var(--focus-ring-soft)]',
     disabled && 'cursor-not-allowed opacity-60',
     className,
   );
@@ -247,6 +257,7 @@ function BoardPart({
     <button
       type="button"
       aria-label={label}
+      aria-pressed={pressed}
       disabled={disabled}
       onClick={() => onEdit(part)}
       className={classes}
@@ -254,7 +265,7 @@ function BoardPart({
       {children}
     </button>
   ) : (
-    <div role="img" aria-label={label} className={classes}>
+    <div role="img" aria-label={label} data-pressed={pressed ? 'true' : undefined} className={classes}>
       {children}
     </div>
   );

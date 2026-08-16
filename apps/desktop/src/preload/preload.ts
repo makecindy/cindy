@@ -31,6 +31,7 @@ import {
 import {
   WORKLOUDER_CODEX_ACTION_CHANNEL,
   WORKLOUDER_CODEX_GET_STATE_CHANNEL,
+  WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL,
   WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL,
   WORKLOUDER_CODEX_PROBE_CHANNEL,
   WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL,
@@ -38,6 +39,7 @@ import {
   WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
   WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
+  type WorkLouderCodexPreviewInput,
   type WorkLouderCodexRendererAction,
   type WorkLouderCodexSettingsPatch,
   type WorkLouderCodexState,
@@ -1572,6 +1574,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ): void => callback(action);
       ipcRenderer.on(WORKLOUDER_CODEX_ACTION_CHANNEL, listener);
       return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_ACTION_CHANNEL, listener);
+    },
+    onPreviewInput: (callback: (input: WorkLouderCodexPreviewInput) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        input: WorkLouderCodexPreviewInput,
+      ): void => callback(input);
+      ipcRenderer.on(WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL, listener);
     },
   },
 
