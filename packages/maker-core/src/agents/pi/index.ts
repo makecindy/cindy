@@ -404,6 +404,29 @@ function parsePiManagedPackageCommand(text: string): ParsedPiManagedPackageComma
 }
 
 function resolvePiManagedPackageSource(source: string, workingDir: string): string {
+  const resolveRelativeLocalSource = (relativeSource: string): string => {
+    const driveRelative = /^([a-z]):(?![/\\])/i.exec(relativeSource);
+    if (driveRelative) {
+      const workingDrive = /^([a-z]):[/\\]/i.exec(workingDir);
+      if (!workingDrive || workingDrive[1].toLowerCase() !== driveRelative[1].toLowerCase()) {
+        return relativeSource;
+      }
+      return path.win32.resolve(workingDir, relativeSource);
+    }
+    return /^[a-z]:[/\\]/i.test(workingDir) || workingDir.startsWith('\\\\')
+      ? path.win32.resolve(workingDir, relativeSource)
+      : path.resolve(workingDir, relativeSource);
+  };
+  const fileSource = /^file:(.*)$/i.exec(source);
+  if (fileSource) {
+    const filePath = fileSource[1];
+    const relativeFilePath = filePath
+      && !filePath.startsWith('/')
+      && !filePath.startsWith('\\\\')
+      && !/^[a-z]:[/\\]/i.test(filePath);
+    return relativeFilePath ? resolveRelativeLocalSource(filePath) : source;
+  }
+  if (/^[a-z]:(?![/\\])/i.test(source)) return resolveRelativeLocalSource(source);
   if (/^[a-z][a-z0-9+.-]*:/i.test(source)) return source;
   if (/^[^/\\\s]+@[^/\\\s]+:.+/.test(source)) return source;
   if (/^@[^/\\\s]+[/\\][^/\\\s]+(?:@[^/\\\s]+)?$/.test(source)) return source;
@@ -416,7 +439,7 @@ function resolvePiManagedPackageSource(source: string, workingDir: string): stri
     source.startsWith('..\\') ||
     source.includes('/') ||
     source.includes('\\');
-  return relative ? path.resolve(workingDir, source) : source;
+  return relative ? resolveRelativeLocalSource(source) : source;
 }
 
 function piManagedPackageResultSummary(result: unknown): Record<string, unknown> {

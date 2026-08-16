@@ -803,11 +803,44 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         source: path.resolve(cwd, './extensions/context-mode'),
       });
 
+      await handle.send({
+        type: 'user',
+        content: 'pi install file:./extensions/file-context-mode',
+      });
+      expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
+        action: 'install',
+        source: path.resolve(cwd, './extensions/file-context-mode'),
+      });
+
       fireManagedPackageRequest('pkg-relative', 'update', '../shared/pi-extension');
       await waitForResponse('pkg-relative');
       expect(mutatePiManagedPackage).toHaveBeenLastCalledWith({
         action: 'update',
         source: path.resolve(cwd, '../shared/pi-extension'),
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('resolves a Windows drive-relative Pi extension source against a same-drive task directory', async () => {
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = mutatePiManagedPackage;
+    const workingDir = 'C:\\repo\\app';
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-windows-relative-source-session',
+      workingDir,
+      model: 'm',
+    });
+    try {
+      await handle.send({
+        type: 'user',
+        content: 'pi install C:extensions\\context-mode',
+      });
+      expect(mutatePiManagedPackage).toHaveBeenCalledWith({
+        action: 'install',
+        source: path.win32.resolve(workingDir, 'C:extensions\\context-mode'),
       });
     } finally {
       await handle.close();
