@@ -31,7 +31,7 @@ function packageView(index: number): PiPackageView {
       kind: 'extension',
       name: `extensions/index-${index}.ts`,
       compatibility: index === 6 ? 'partial' : 'supported',
-      ...(index === 6 ? { compatibilityIssues: ['requires unsupported Pi UI'] } : {}),
+      ...(index === 6 ? { compatibilityIssues: ['custom-ui' as const] } : {}),
     }],
   };
 }
@@ -63,11 +63,12 @@ describe('PiPackagesSection compact installed list', () => {
     });
     expect(screen.getAllByRole('switch')).toHaveLength(6);
     expect(screen.getAllByRole('button', { name: 'settings.piPackages.showDetails' })).toHaveLength(6);
+    const noticeCountLabels = screen.getAllByText('settings.piPackages.rowStatus.noticeCount');
+    expect(noticeCountLabels.filter((element) => element.getAttribute('aria-hidden') !== 'true')).toHaveLength(1);
+    expect(noticeCountLabels.find((element) => element.classList.contains('sr-only'))).toBeTruthy();
     expect(
-      screen
-        .getAllByText('settings.piPackages.rowStatus.noticeCount')
-        .some((element) => element.classList.contains('sr-only')),
-    ).toBe(true);
+      noticeCountLabels.find((element) => element.classList.contains('xl:block'))?.getAttribute('aria-hidden'),
+    ).toBe('true');
     expect(screen.queryByText('settings.piPackages.status.extensionSupported')).toBeNull();
     expect(screen.queryByText('npm:sample-extension-1')).toBeNull();
 

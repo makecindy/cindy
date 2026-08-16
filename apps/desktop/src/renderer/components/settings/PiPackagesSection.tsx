@@ -384,7 +384,10 @@ export function PiPackagesSection() {
                       <span className="shrink-0 text-11 text-[var(--settings-section-desc)]">v{pkg.version}</span>
                     )}
                   </button>
-                  <span className="hidden shrink-0 text-11 text-[var(--settings-section-desc)] xl:block">
+                  <span
+                    aria-hidden="true"
+                    className="hidden shrink-0 text-11 text-[var(--settings-section-desc)] xl:block"
+                  >
                     {!packageManageable
                       ? t('settings.piPackages.rowStatus.unmanageable')
                       : noticeCount > 0
