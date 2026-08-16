@@ -729,12 +729,12 @@ describe('接管陈旧锁', () => {
     await writeStaleStrictLock(lock);
     const originalRename = fsp.rename;
     const originalLink = fsp.link;
-    const originalNow = Date.now;
+    const frozenNow = Date.now();
     let takeovers = 0;
     let busyPublishes = 0;
     let deadlineElapsed = false;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(
-      () => originalNow() + (deadlineElapsed ? 5_000 : 0),
+      () => frozenNow + (deadlineElapsed ? 5_000 : 0),
     );
     const renameSpy = vi.spyOn(fsp, 'rename').mockImplementation((async (
       from: unknown,
@@ -783,12 +783,12 @@ describe('接管陈旧锁', () => {
     await writeStaleStrictLock(lock);
     const originalRename = fsp.rename;
     const originalLink = fsp.link;
-    const originalNow = Date.now;
+    const frozenNow = Date.now();
     let takeovers = 0;
     let busyPublishes = 0;
     let deadlineElapsed = false;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(
-      () => originalNow() + (deadlineElapsed ? 5_000 : 0),
+      () => frozenNow + (deadlineElapsed ? 5_000 : 0),
     );
     const renameSpy = vi.spyOn(fsp, 'rename').mockImplementation((async (
       from: unknown,

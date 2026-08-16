@@ -1288,6 +1288,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       });
       const agent = new PiAgent(deps);
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-byom-cwd-'));
+      const { readFileSync, readdirSync } = await import('node:fs');
+      const runTmp = path.join(agentHome, 'run-tmp');
+      const configHomesBefore = new Set(existsSync(runTmp) ? readdirSync(runTmp) : []);
       let handle: AgentSessionHandle | null = null;
       try {
         const gatewayBefore = seenRequests.length;
@@ -1298,10 +1301,11 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         // models.json 里有独立的 localbyom provider 块,baseUrl 直连原生端点。
         // 现落在每会话隔离的 configHome(agentHome/run-tmp/<hex>),不在共享 agentHome 根;
-        // 本 test 只起一个会话,run-tmp 下恰有一个子目录。
-        const { readFileSync, readdirSync } = await import('node:fs');
-        const runTmp = path.join(agentHome, 'run-tmp');
-        const configHome = path.join(runTmp, readdirSync(runTmp)[0]);
+        // 整个集成文件共用 agentHome，而 close 后的 configHome 是异步清理。用启动前快照
+        // 精确选中本会话新建的目录，避免误读正在删除的上一个会话。
+        const createdConfigHomes = readdirSync(runTmp).filter((name) => !configHomesBefore.has(name));
+        expect(createdConfigHomes).toHaveLength(1);
+        const configHome = path.join(runTmp, createdConfigHomes[0]!);
         const config = JSON.parse(readFileSync(path.join(configHome, 'models.json'), 'utf8')) as {
           providers: Record<string, { baseUrl: string; api: string; apiKey: string; models: Array<{ id: string }> }>;
         };
