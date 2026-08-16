@@ -348,7 +348,6 @@ import {
   createBotSessionEventService,
   type BotSessionEventService,
 } from './botSessionEventService.js';
-import { subscribeSessionMetadataPatches } from '../sessionEventSource.js';
 import {
   createBotCompactRuntimeRefreshCoordinator,
   replaceBotRuntimeAfterPreflight,
@@ -1743,7 +1742,6 @@ let orcaCollabServiceHolder: OrcaCollabService | null = null;
 let botDelegationServiceHolder: BotDelegationService | null = null;
 let botDeliveryOutboxServiceHolder: BotDeliveryOutboxService | null = null;
 let botSessionEventServiceHolder: BotSessionEventService | null = null;
-let botSessionEventMetadataUnsubscribe: (() => void) | null = null;
 
 export function enqueueBotDelivery(input: EnqueueBotDeliveryInput): Promise<{ id: string }> {
   const outbox = botDeliveryOutboxServiceHolder;
@@ -4572,22 +4570,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 result?: unknown;
                 message?: unknown;
                 reason?: unknown;
-                sdkError?: unknown;
               } | null;
               const finalText = typeof doneData?.result === 'string' ? doneData.result : '';
               const errorText = [doneData?.message, doneData?.reason]
                 .find((value): value is string => typeof value === 'string' && value.length > 0);
               const failed = isTerminalTurnErrorEvent(event);
-              await botSessionEventServiceHolder?.recordTurnEvent({
-                sessionId: session.id,
-                outcome: failed ? 'failed' : 'completed',
-                ...(typeof doneData?.sdkError === 'string'
-                  ? { failureCode: doneData.sdkError }
-                  : {}),
-                ...(typeof event.turnAttemptToken === 'number'
-                  ? { attemptToken: event.turnAttemptToken }
-                  : {}),
-              });
               await botSessionEventServiceHolder?.settleProcessingForSession({
                 sessionId: session.id,
                 outcome: failed ? 'failed' : 'completed',
@@ -9351,7 +9338,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     requireRuntimeSnapshot: true,
   });
   botSessionEventServiceHolder?.dispose();
-  botSessionEventMetadataUnsubscribe?.();
   botSessionEventServiceHolder = createBotSessionEventService({
     dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted }) =>
       dispatchBotSessionMessage({
@@ -9367,16 +9353,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return outbox.enqueue(params);
     },
     onChanged: (payload) => broadcastToAllWindows(MAKER_PUSH.BOT_INBOX_CHANGED, payload),
-  });
-  botSessionEventMetadataUnsubscribe = subscribeSessionMetadataPatches((event) => {
-    void botSessionEventServiceHolder
-      ?.recordMetadataPatch(event.sessionId, event.patch, event.occurredAt)
-      .catch((error) => {
-        log.warn('Bot Session metadata event persistence failed', {
-          sessionId: event.sessionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
   });
   registerBotLifecycleHandlers({
     maker,

@@ -194,7 +194,11 @@ export function BotEventInboxSettings({ bot }: { bot: BotProfile }) {
                     </div>
                     <p className="mt-1 text-11 text-[var(--text-secondary)]">
                       {t(`bots.inbox.events.${item.event.eventType}`, { defaultValue: item.event.eventType })}
-                      {item.event.decisionState ? ` · ${item.event.decisionState}` : ''}
+                      {item.event.workflowState
+                        ? ` · ${item.event.workflowState.label ?? item.event.workflowState.key}`
+                        : item.event.decisionState
+                          ? ` · ${item.event.decisionState}`
+                          : ''}
                     </p>
                     {item.resultText ? (
                       <p className="mt-2 line-clamp-3 text-11 leading-5 text-[var(--text-secondary)]">

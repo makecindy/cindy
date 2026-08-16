@@ -11,7 +11,11 @@ vi.mock('../../localDb/client/current.js', () => ({
 }));
 
 import { createBotSessionEventService } from '../botSessionEventService.js';
-import { BOT_SESSION_EVENT, DEFAULT_CONTROL_BOT_EVENT_RULE } from '../../../shared/botSessionEvents.js';
+import {
+  DEFAULT_CONTROL_BOT_EVENT_RULE,
+  type BotSessionStateTransition,
+  type BotSessionStateTransitionSource,
+} from '../../../shared/botSessionEvents.js';
 
 function createDatabase(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -125,7 +129,35 @@ function count(sqlite: Database.Database, table: string): number {
   return (sqlite.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
 }
 
-describe('Bot task-event inbox service', () => {
+function transition(
+  transitionId: string,
+  current: Partial<BotSessionStateTransition['current']> = {},
+): BotSessionStateTransition {
+  return {
+    transitionId,
+    sessionId: 'task-1',
+    occurredAt: 20,
+    title: '实现功能',
+    source: 'desktop',
+    workingDir: '/repo/cindy',
+    previous: {
+      lifecycle: 'active',
+      execution: 'running',
+      attention: null,
+      workflow: null,
+    },
+    current: {
+      lifecycle: 'active',
+      execution: 'normal-ended',
+      attention: null,
+      workflow: null,
+      ...current,
+    },
+    changedFacets: ['execution'],
+  };
+}
+
+describe('Bot task-state transition inbox service', () => {
   let sqlite: Database.Database;
   let ids: number;
   let accepted: (() => void | Promise<void>) | undefined;
@@ -144,16 +176,17 @@ describe('Bot task-event inbox service', () => {
     enqueueDelivery = vi.fn(async () => ({ id: 'delivery-1' }));
   });
 
-  function service() {
+  function service(overrides: Partial<Parameters<typeof createBotSessionEventService>[0]> = {}) {
     return createBotSessionEventService({
       dispatch,
       enqueueDelivery,
       now: () => 100,
       createId: () => `generated-${++ids}`,
+      ...overrides,
     });
   }
 
-  it('deduplicates repeated terminal facts and does not wake paused Bots', async () => {
+  it('deduplicates authoritative transitions and does not wake paused Bots', async () => {
     const events = service();
     await events.upsertSubscription({
       id: 'subscription-control',
@@ -168,8 +201,8 @@ describe('Bot task-event inbox service', () => {
       rule: DEFAULT_CONTROL_BOT_EVENT_RULE,
     });
 
-    await events.recordTurnEvent({ sessionId: 'task-1', outcome: 'completed', attemptToken: 5 });
-    await events.recordTurnEvent({ sessionId: 'task-1', outcome: 'completed', attemptToken: 5 });
+    await events.recordStateTransition(transition('state-transition-1'));
+    await events.recordStateTransition(transition('state-transition-1'));
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
 
     expect(count(sqlite, 'bot_session_event_ledger')).toBe(1);
@@ -179,7 +212,7 @@ describe('Bot task-event inbox service', () => {
     });
   });
 
-  it('does not settle a queued notification before the Bot turn is accepted', async () => {
+  it('does not settle a heartbeat activation before the Bot turn is accepted', async () => {
     const events = service();
     await events.upsertSubscription({
       id: 'subscription-control',
@@ -187,7 +220,7 @@ describe('Bot task-event inbox service', () => {
       name: '总控订阅',
       rule: DEFAULT_CONTROL_BOT_EVENT_RULE,
     });
-    await events.recordTurnEvent({ sessionId: 'task-1', outcome: 'completed', attemptToken: 5 });
+    await events.recordStateTransition(transition('state-transition-1'));
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
 
     await events.settleProcessingForSession({
@@ -212,7 +245,7 @@ describe('Bot task-event inbox service', () => {
     });
   });
 
-  it('turns a decision title into an inbox event and sends only the Bot result to Telegram', async () => {
+  it('consumes a workflow-state transition and sends only the Bot result to Telegram', async () => {
     const events = service();
     await events.upsertSubscription({
       id: 'subscription-control',
@@ -220,15 +253,25 @@ describe('Bot task-event inbox service', () => {
       name: '总控订阅',
       rule: DEFAULT_CONTROL_BOT_EVENT_RULE,
     });
-    sqlite.prepare("UPDATE sessions SET title = '实现功能 · 待总控', updated_at = 20 WHERE id = 'task-1'").run();
 
-    await events.recordMetadataPatch('task-1', { title: '实现功能 · 待总控' }, 20);
+    await events.recordStateTransition({
+      ...transition('state-transition-decision', { execution: 'running' }),
+      title: '实现功能 · 待总控',
+      current: {
+        lifecycle: 'active',
+        execution: 'running',
+        attention: 'needs-user',
+        workflow: { key: 'awaiting-controller', label: '待总控' },
+      },
+      changedFacets: ['attention', 'workflow'],
+    });
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
     await accepted?.();
     const [item] = await events.listInbox('control-bot');
     expect(item.event).toMatchObject({
-      eventType: BOT_SESSION_EVENT.DECISION_REQUIRED,
-      decisionState: '待总控',
+      transitionId: 'state-transition-decision',
+      workflowState: { key: 'awaiting-controller', label: '待总控' },
+      currentState: { workflow: { key: 'awaiting-controller', label: '待总控' } },
     });
 
     await events.settleProcessingForSession({
@@ -250,7 +293,74 @@ describe('Bot task-event inbox service', () => {
     expect(JSON.stringify(enqueueDelivery.mock.calls)).not.toContain('实现功能 · 待总控');
   });
 
-  it('recovers interrupted processing after restart and retries it through the same inbox row', async () => {
+  it('binds the control-plane transition source and resolves logical relationships at match time', async () => {
+    const listeners: Array<(value: BotSessionStateTransition) => void> = [];
+    const unsubscribe = vi.fn();
+    const source: BotSessionStateTransitionSource = {
+      subscribe: vi.fn((next) => {
+        listeners.push(next);
+        return unsubscribe;
+      }),
+    };
+    const events = service({
+      stateTransitionSource: source,
+      resolveSessionRelations: vi.fn(async () => ['delegated-by-bot']),
+    });
+    await events.upsertSubscription({
+      id: 'subscription-control',
+      botId: 'control-bot',
+      name: '我委派的任务',
+      rule: {
+        sessionRelations: ['delegated-by-bot'],
+        executionStates: ['normal-ended'],
+        activationMode: 'heartbeat-turn',
+        resultDelivery: 'none',
+      },
+    });
+
+    expect(listeners).toHaveLength(1);
+    listeners[0]!(transition('state-transition-delegated'));
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    events.dispose();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps earlier Draft inbox rows readable without treating them as current state', async () => {
+    sqlite.prepare(`
+      INSERT INTO bot_event_subscriptions VALUES
+        ('legacy-subscription', 'control-bot', '旧订阅', 'active', ?, 1, 1)
+    `).run(JSON.stringify(DEFAULT_CONTROL_BOT_EVENT_RULE));
+    sqlite.prepare(`
+      INSERT INTO bot_session_event_ledger VALUES
+        ('legacy-event', 'legacy-key', 'task-1', 'session.decision.required', ?, NULL, '[]', 0, 20)
+    `).run(JSON.stringify({
+      sessionId: 'task-1',
+      eventType: 'session.decision.required',
+      title: '实现功能 · 待总控',
+      status: 'active',
+      source: 'desktop',
+      workingDir: '/repo/cindy',
+      occurredAt: 20,
+      decisionState: '待总控',
+    }));
+    sqlite.prepare(`
+      INSERT INTO bot_inbox_items
+        (id, bot_id, subscription_id, event_id, status, attempts,
+         result_delivery_status, received_at, updated_at)
+      VALUES ('legacy-inbox', 'control-bot', 'legacy-subscription', 'legacy-event',
+        'pending', 0, 'none', 20, 20)
+    `).run();
+
+    const events = service();
+    await events.restore();
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    expect(dispatch.mock.calls[0]?.[0].message).toContain(
+      'Legacy Draft notification: session.decision.required',
+    );
+    expect((await events.listInbox('control-bot'))[0]?.event.decisionState).toBe('待总控');
+  });
+
+  it('recovers interrupted activation after restart through the same inbox row', async () => {
     const events = service();
     await events.upsertSubscription({
       id: 'subscription-control',
@@ -258,7 +368,9 @@ describe('Bot task-event inbox service', () => {
       name: '总控订阅',
       rule: DEFAULT_CONTROL_BOT_EVENT_RULE,
     });
-    await events.recordTurnEvent({ sessionId: 'task-1', outcome: 'failed', attemptToken: 5 });
+    await events.recordStateTransition(transition('state-transition-error', {
+      execution: 'error-ended',
+    }));
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
     await accepted?.();
     dispatch.mockClear();

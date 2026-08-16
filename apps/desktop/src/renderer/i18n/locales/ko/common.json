@@ -5635,6 +5635,7 @@
       },
       "events": {
         "session": {
+          "state": { "transition": "작업 상태 전환" },
           "turn": { "completed": "작업 턴 완료", "failed": "작업 턴 실패" },
           "metadata": { "changed": "작업 상태 변경" },
           "decision": { "required": "작업에 결정 필요" }

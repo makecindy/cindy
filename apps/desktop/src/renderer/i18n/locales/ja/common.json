@@ -5635,6 +5635,7 @@
       },
       "events": {
         "session": {
+          "state": { "transition": "タスク状態が遷移しました" },
           "turn": {
             "completed": "タスクのターンが完了しました",
             "failed": "タスクのターンが失敗しました"

@@ -57,7 +57,6 @@ import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
-import { publishSessionMetadataPatch } from '../../sessionEventSource.js';
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
@@ -190,7 +189,6 @@ export function broadcastSessionPatched(
       }
     }
   }
-  publishSessionMetadataPatch(sessionId, patch);
 }
 
 /**

@@ -5635,6 +5635,7 @@
       },
       "events": {
         "session": {
+          "state": { "transition": "任務狀態已變遷" },
           "turn": { "completed": "任務回合已完成", "failed": "任務回合失敗" },
           "metadata": { "changed": "任務狀態已變更" },
           "decision": { "required": "任務需要決策" }

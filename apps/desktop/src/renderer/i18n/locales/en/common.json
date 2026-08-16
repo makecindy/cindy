@@ -5637,6 +5637,7 @@
       },
       "events": {
         "session": {
+          "state": { "transition": "Task state changed" },
           "turn": { "completed": "Task turn completed", "failed": "Task turn failed" },
           "metadata": { "changed": "Task state changed" },
           "decision": { "required": "Task needs a decision" }

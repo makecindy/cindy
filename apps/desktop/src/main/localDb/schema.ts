@@ -415,7 +415,11 @@ export const botLifecycleEvents = sqliteTable(
   }),
 );
 
-/** Global durable task-event ledger. Payloads are bounded metadata only. */
+/**
+ * Bot consumption ledger for authoritative task-state transitions. This is a
+ * dedupe/audit receipt, not another task-state publisher or source of truth.
+ * Payloads are bounded projection metadata only.
+ */
 export const botSessionEventLedger = sqliteTable(
   'bot_session_event_ledger',
   {
@@ -442,7 +446,7 @@ export const botSessionEventLedger = sqliteTable(
   }),
 );
 
-/** Logical Bot subscriptions; rules match classes of tasks rather than IDs. */
+/** Logical Bot subscriptions; rules match state facets/relationships, never task IDs. */
 export const botEventSubscriptions = sqliteTable(
   'bot_event_subscriptions',
   {

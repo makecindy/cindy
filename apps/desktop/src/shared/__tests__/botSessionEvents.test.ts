@@ -9,53 +9,97 @@ import {
 
 const EVENT: BotSessionEventPayload = {
   sessionId: 'task-1',
-  eventType: BOT_SESSION_EVENT.DECISION_REQUIRED,
+  eventType: BOT_SESSION_EVENT.STATE_TRANSITION,
+  transitionId: 'transition-1',
   title: '发布流程 · 待总控',
   status: 'active',
   source: 'desktop',
   workingDir: '/repo/cindy',
   occurredAt: 10,
-  decisionState: '待总控',
+  previousState: {
+    lifecycle: 'active',
+    execution: 'running',
+    attention: null,
+    workflow: null,
+  },
+  currentState: {
+    lifecycle: 'active',
+    execution: 'normal-ended',
+    attention: 'needs-user',
+    workflow: { key: 'awaiting-controller', label: '待总控' },
+  },
+  changedFacets: ['execution', 'attention', 'workflow'],
+  outcome: 'completed',
+  workflowState: { key: 'awaiting-controller', label: '待总控' },
 };
 
-describe('Bot task-event subscription rules', () => {
-  it('normalizes open logical rules without closing the event namespace', () => {
+describe('Bot task-state transition subscriptions', () => {
+  it('normalizes logical rules and upgrades the short-lived Draft rule shape', () => {
     expect(normalizeBotEventSubscriptionRule({
-      eventTypes: [' session.* ', 'session.*', 'custom.review.ready'],
-      sources: ['desktop', 'desktop'],
-      wakeMode: 'manual',
+      sessionRelations: [' delegated-by-bot ', 'delegated-by-bot'],
+      executionStates: [' normal-ended ', 'normal-ended'],
+      activationMode: 'inbox-only',
       resultDelivery: 'none',
     })).toEqual({
-      eventTypes: ['session.*', 'custom.review.ready'],
-      sources: ['desktop'],
+      sessionRelations: ['delegated-by-bot'],
+      executionStates: ['normal-ended'],
       excludeOwnBotSessions: true,
+      activationMode: 'inbox-only',
+      resultDelivery: 'none',
+    });
+
+    expect(normalizeBotEventSubscriptionRule({
+      eventTypes: ['session.turn.completed', 'session.turn.failed'],
+      decisionStates: ['待总控'],
       wakeMode: 'manual',
+      resultDelivery: 'none',
+    } as never)).toEqual({
+      sessionRelations: ['all-local'],
+      executionStates: ['normal-ended', 'error-ended'],
+      workflowStates: ['待总控'],
+      excludeOwnBotSessions: true,
+      activationMode: 'inbox-only',
       resultDelivery: 'none',
     });
   });
 
-  it('matches event prefixes, source, workdir and decision-state filters', () => {
+  it('matches changed unified-state facets plus logical relation and metadata filters', () => {
     expect(matchesBotEventSubscription({
-      eventTypes: ['session.*'],
+      sessionRelations: ['delegated-by-bot'],
+      executionStates: ['normal-ended'],
+      workflowStates: ['待总控'],
       sources: ['desktop'],
       workingDirPrefixes: ['/repo'],
-      decisionStates: ['待总控'],
-      wakeMode: 'automatic',
+      activationMode: 'heartbeat-turn',
       resultDelivery: 'all-active-routes',
-    }, EVENT, 'control-bot')).toBe(true);
+    }, EVENT, 'control-bot', { sessionRelations: ['delegated-by-bot'] })).toBe(true);
 
     expect(matchesBotEventSubscription({
-      eventTypes: ['session.*'],
-      sources: ['scheduler'],
-      wakeMode: 'automatic',
+      sessionRelations: ['watched-by-bot'],
+      executionStates: ['normal-ended'],
+      activationMode: 'heartbeat-turn',
       resultDelivery: 'none',
-    }, EVENT, 'control-bot')).toBe(false);
+    }, EVENT, 'control-bot', { sessionRelations: ['delegated-by-bot'] })).toBe(false);
+  });
+
+  it('does not treat a snapshot with the same facet value as a transition', () => {
+    expect(matchesBotEventSubscription({
+      sessionRelations: ['all-local'],
+      executionStates: ['normal-ended'],
+      activationMode: 'heartbeat-turn',
+      resultDelivery: 'none',
+    }, {
+      ...EVENT,
+      previousState: { ...EVENT.currentState! },
+      changedFacets: [],
+    }, 'control-bot')).toBe(false);
   });
 
   it('stops self-notifications, cross-Bot cycles and excessive hops', () => {
     const rule = {
-      eventTypes: ['*'],
-      wakeMode: 'automatic' as const,
+      sessionRelations: ['all-local'],
+      executionStates: ['normal-ended'],
+      activationMode: 'heartbeat-turn' as const,
       resultDelivery: 'none' as const,
     };
     expect(matchesBotEventSubscription(rule, {

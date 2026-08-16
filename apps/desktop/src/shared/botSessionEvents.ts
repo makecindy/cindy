@@ -1,15 +1,44 @@
 /**
- * Open Cindy task-event contract used by Bot subscriptions and inboxes.
+ * Bot-side consumer contract for the unified Cindy task-state projection.
  *
- * Known event names are exported for producers, while `BotSessionEventType`
- * intentionally remains `string`: new task states must not require a schema
- * migration or a central enum edit before Bots can subscribe to them.
+ * The control-plane work owns the authoritative state model and transition
+ * publisher. Cindy Bots only consumes that stream, applies logical
+ * subscriptions, persists matched transitions, and optionally activates a Bot
+ * turn. There is deliberately no producer/publish API in this module.
+ *
+ * `BotObservedSessionState` mirrors the four open facets currently reserved by
+ * the control-plane Draft. Before this PR can become Ready it must be aliased or
+ * adapted to the final exported control-plane type rather than becoming a
+ * second source of task truth.
  */
+export interface BotObservedSessionState {
+  lifecycle: string;
+  execution: string;
+  attention: string | null;
+  workflow: { key: string; label?: string } | null;
+}
+
+export interface BotSessionStateTransition {
+  /** Stable id/generation supplied by the authoritative state publisher. */
+  transitionId: string;
+  sessionId: string;
+  occurredAt: number;
+  previous: BotObservedSessionState;
+  current: BotObservedSessionState;
+  /** Open facet names; consumers must ignore unknown additions. */
+  changedFacets: string[];
+  /** Display/routing context from the same projection snapshot. */
+  title: string;
+  source: string;
+  workingDir: string;
+}
+
+export interface BotSessionStateTransitionSource {
+  subscribe(listener: (transition: BotSessionStateTransition) => void): () => void;
+}
+
 export const BOT_SESSION_EVENT = {
-  TURN_COMPLETED: 'session.turn.completed',
-  TURN_FAILED: 'session.turn.failed',
-  METADATA_CHANGED: 'session.metadata.changed',
-  DECISION_REQUIRED: 'session.decision.required',
+  STATE_TRANSITION: 'session.state.transition',
 } as const;
 
 export type BotSessionEventType = string;
@@ -27,14 +56,20 @@ export type BotInboxStatus = (typeof BOT_INBOX_STATUSES)[number];
 export interface BotSessionEventPayload {
   sessionId: string;
   eventType: BotSessionEventType;
+  /** Missing only on inbox rows written by the corrected-away Draft producer. */
+  transitionId?: string;
   title: string;
   status: string;
   source: string;
   workingDir: string;
   occurredAt: number;
+  /** Authoritative state snapshots. Missing only on legacy Draft inbox rows. */
+  previousState?: BotObservedSessionState;
+  currentState?: BotObservedSessionState;
+  changedFacets?: string[];
   outcome?: 'completed' | 'failed';
-  failureCode?: string;
-  changedFields?: string[];
+  workflowState?: { key: string; label?: string };
+  /** Compatibility for inbox rows created by the earlier Draft producer. */
   decisionState?: string;
   originBotId?: string;
   lineage?: string[];
@@ -42,18 +77,23 @@ export interface BotSessionEventPayload {
 }
 
 export interface BotEventSubscriptionRule {
-  /** Exact names or prefix patterns ending in `.*`. Empty means every event. */
-  eventTypes: string[];
-  /** Optional Session source allow-list. */
+  /**
+   * Logical relationships resolved at match time. `all-local` is the broad
+   * control-Bot scope; other open values include `delegated-by-bot` and future
+   * watch-list relationships. Session ids never live in this rule.
+   */
+  sessionRelations: string[];
+  /** Match when the corresponding authoritative facet changes into a value. */
+  executionStates?: string[];
+  attentionStates?: string[];
+  workflowStates?: string[];
+  /** Optional task metadata constraints, evaluated after the logical relation. */
   sources?: string[];
-  /** Optional working-directory prefixes. */
   workingDirPrefixes?: string[];
-  /** Only decision events whose normalized state is listed here. */
-  decisionStates?: string[];
   /** Prevent a Bot's own canonical/route tasks from recursively waking it. */
   excludeOwnBotSessions?: boolean;
-  /** Automatically enqueue a turn in the Bot canonical task. */
-  wakeMode: 'automatic' | 'manual';
+  /** `heartbeat-turn` activates the canonical Bot task; `inbox-only` only records. */
+  activationMode: 'heartbeat-turn' | 'inbox-only';
   /** Deliver the Bot-generated result to mounted Routes after processing. */
   resultDelivery: 'all-active-routes' | 'none';
   /** Optional Channel-kind allow-list for result delivery. */
@@ -93,32 +133,52 @@ export interface BotInboxChangedPayload {
   inboxItemId?: string;
 }
 
-function matchesEventType(pattern: string, eventType: string): boolean {
-  const normalized = pattern.trim();
-  if (!normalized) return false;
-  if (normalized === '*') return true;
-  if (normalized.endsWith('.*')) return eventType.startsWith(normalized.slice(0, -1));
-  return normalized === eventType;
+function uniqueStrings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean))]
+    : [];
 }
 
+/**
+ * Reads the short-lived Draft shape as well as the state-transition shape, so
+ * local preview data made before this design correction remains usable.
+ */
 export function normalizeBotEventSubscriptionRule(
   input: Partial<BotEventSubscriptionRule> | null | undefined,
 ): BotEventSubscriptionRule {
-  const uniqueStrings = (value: unknown): string[] =>
-    Array.isArray(value)
-      ? [...new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))]
-      : [];
+  const legacy = input as (Partial<BotEventSubscriptionRule> & {
+    eventTypes?: unknown;
+    decisionStates?: unknown;
+    wakeMode?: unknown;
+  }) | null | undefined;
+  const legacyEventTypes = uniqueStrings(legacy?.eventTypes);
+  const executionStates = uniqueStrings(input?.executionStates);
+  if (executionStates.length === 0) {
+    if (legacyEventTypes.includes('session.turn.completed')) executionStates.push('normal-ended');
+    if (legacyEventTypes.includes('session.turn.failed')) executionStates.push('error-ended');
+  }
+  const workflowStates = uniqueStrings(input?.workflowStates);
+  if (workflowStates.length === 0) workflowStates.push(...uniqueStrings(legacy?.decisionStates));
+  const sessionRelations = uniqueStrings(input?.sessionRelations);
   return {
-    eventTypes: uniqueStrings(input?.eventTypes),
+    sessionRelations: sessionRelations.length > 0 ? sessionRelations : ['all-local'],
+    ...(executionStates.length > 0 ? { executionStates } : {}),
+    ...(uniqueStrings(input?.attentionStates).length > 0
+      ? { attentionStates: uniqueStrings(input?.attentionStates) }
+      : {}),
+    ...(workflowStates.length > 0 ? { workflowStates } : {}),
     ...(uniqueStrings(input?.sources).length > 0 ? { sources: uniqueStrings(input?.sources) } : {}),
     ...(uniqueStrings(input?.workingDirPrefixes).length > 0
       ? { workingDirPrefixes: uniqueStrings(input?.workingDirPrefixes) }
       : {}),
-    ...(uniqueStrings(input?.decisionStates).length > 0
-      ? { decisionStates: uniqueStrings(input?.decisionStates) }
-      : {}),
     excludeOwnBotSessions: input?.excludeOwnBotSessions !== false,
-    wakeMode: input?.wakeMode === 'manual' ? 'manual' : 'automatic',
+    activationMode:
+      input?.activationMode === 'inbox-only' || legacy?.wakeMode === 'manual'
+        ? 'inbox-only'
+        : 'heartbeat-turn',
     resultDelivery: input?.resultDelivery === 'none' ? 'none' : 'all-active-routes',
     ...(uniqueStrings(input?.deliveryChannelKinds).length > 0
       ? { deliveryChannelKinds: uniqueStrings(input?.deliveryChannelKinds) }
@@ -126,25 +186,49 @@ export function normalizeBotEventSubscriptionRule(
   };
 }
 
+function facetChanged<T>(previous: T, current: T): boolean {
+  return JSON.stringify(previous) !== JSON.stringify(current);
+}
+
 export function matchesBotEventSubscription(
   ruleInput: Partial<BotEventSubscriptionRule> | null | undefined,
   event: BotSessionEventPayload,
   ownBotId: string,
+  context: { sessionRelations: string[] } = { sessionRelations: [] },
 ): boolean {
   const rule = normalizeBotEventSubscriptionRule(ruleInput);
+  const previousState = event.previousState;
+  const currentState = event.currentState;
+  // Legacy Draft rows were matched before persistence. They remain readable,
+  // but must never be reinterpreted as authoritative state transitions.
+  if (!previousState || !currentState) return false;
   if (
-    rule.eventTypes.length > 0
-    && !rule.eventTypes.some((pattern) => matchesEventType(pattern, event.eventType))
+    !rule.sessionRelations.includes('all-local')
+    && !rule.sessionRelations.some((relation) => context.sessionRelations.includes(relation))
   ) return false;
   if (rule.sources?.length && !rule.sources.includes(event.source)) return false;
   if (
     rule.workingDirPrefixes?.length
     && !rule.workingDirPrefixes.some((prefix) => event.workingDir.startsWith(prefix))
   ) return false;
+  const transitionConditions = [
+    Boolean(
+      rule.executionStates?.includes(currentState.execution)
+      && facetChanged(previousState.execution, currentState.execution),
+    ),
+    Boolean(
+      rule.attentionStates?.includes(currentState.attention ?? '')
+      && facetChanged(previousState.attention, currentState.attention),
+    ),
+    Boolean(
+      rule.workflowStates?.some((state) =>
+        state === currentState.workflow?.key || state === currentState.workflow?.label)
+      && facetChanged(previousState.workflow, currentState.workflow),
+    ),
+  ];
   if (
-    rule.decisionStates?.length
-    && event.eventType === BOT_SESSION_EVENT.DECISION_REQUIRED
-    && (!event.decisionState || !rule.decisionStates.includes(event.decisionState))
+    (rule.executionStates?.length || rule.attentionStates?.length || rule.workflowStates?.length)
+    && !transitionConditions.some(Boolean)
   ) return false;
   if (rule.excludeOwnBotSessions !== false && event.originBotId === ownBotId) return false;
   if ((event.lineage ?? []).includes(ownBotId)) return false;
@@ -152,13 +236,10 @@ export function matchesBotEventSubscription(
 }
 
 export const DEFAULT_CONTROL_BOT_EVENT_RULE: BotEventSubscriptionRule = {
-  eventTypes: [
-    BOT_SESSION_EVENT.TURN_COMPLETED,
-    BOT_SESSION_EVENT.TURN_FAILED,
-    BOT_SESSION_EVENT.DECISION_REQUIRED,
-  ],
-  decisionStates: ['等拍板', '待验收', '待总控'],
+  sessionRelations: ['all-local'],
+  executionStates: ['normal-ended', 'error-ended'],
+  workflowStates: ['等拍板', '待验收', '待总控'],
   excludeOwnBotSessions: true,
-  wakeMode: 'automatic',
+  activationMode: 'heartbeat-turn',
   resultDelivery: 'all-active-routes',
 };
