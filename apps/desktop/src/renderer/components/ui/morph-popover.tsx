@@ -112,6 +112,12 @@ interface MorphPopoverProps {
    * (Chris 2026-08-14 实测反馈)。高度不受影响,继续双向跟随内容。
    */
   stickyWidth?: boolean;
+  /**
+   * stickyWidth 的**形态代际**:值变化 = 调用方声明面板整体换了形态(如统一模型
+   * 选择器的列表样式切换),宽度水位当场清零、允许面板回缩重新贴内容。只进不退
+   * 防的是同形态内筛选抖动,不该把上一形态(如带侧栏)的宽度扛进下一形态。
+   */
+  stickyWidthKey?: unknown;
   /** 面板形变起点底色/边色(= chip 的),默认 composer pill 规格。 */
   startBg?: string;
   startBorderColor?: string;
@@ -150,6 +156,7 @@ export function MorphPopover({
   panelWidth,
   panelWidthMode = 'content',
   stickyWidth = false,
+  stickyWidthKey,
   startBg = 'var(--composer-pill-bg)',
   startBorderColor = 'var(--border-default)',
   endBg = 'var(--model-dropdown-bg)',
@@ -178,6 +185,13 @@ export function MorphPopover({
   const settledRef = useRef(false);
   // stickyWidth 的本次打开宽度水位(见 prop 注释);开场重置。
   const stickyWidthRef = useRef(0);
+  // stickyWidthKey 换代 → 水位清零(render 期 ref 比对:重置必须发生在切换引发的
+  // ResizeObserver 补量之前,effect 会晚于它)。
+  const stickyWidthKeyRef = useRef(stickyWidthKey);
+  if (stickyWidthKeyRef.current !== stickyWidthKey) {
+    stickyWidthKeyRef.current = stickyWidthKey;
+    stickyWidthRef.current = 0;
+  }
   // 指针驱动的关闭(菜单动作、trigger toggle、outside 交接)不把焦点归还 trigger:
   // 否则旧层会在收合结束时抢走下一层交互面的焦点。键盘关闭仍按 §14.2 回焦。
   const pointerInteractionRef = useRef(false);

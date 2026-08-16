@@ -3464,7 +3464,10 @@ export function ModelSelector({
         panelClassName="flex min-h-0 flex-col p-0"
         // 宽度只进不退(2026-08-14 实测反馈):rail 筛选把内容变窄时面板宽度回缩,
         // rail 图标在指针底下移位。高度照常双向跟随(底边锚定向上收)。
+        // 列表样式切换是**形态换代**,水位随 key 清零 —— 否则从 classic(带 48px
+        // 侧栏)当场切到 badge,面板扛着旧宽度不回缩(Chris 2026-08-17:「有一点点宽」)。
         stickyWidth
+        stickyWidthKey={pickerLayout}
         panelAriaLabel={ariaLabel}
         trigger={trigger}
       >
