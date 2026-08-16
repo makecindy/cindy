@@ -180,7 +180,13 @@ export async function loadAllQueueSnapshotPayloads(): Promise<string[]> {
   return rows.map((r) => r.payload);
 }
 
-/** Count snapshot rows in SQLite without returning or parsing their message bodies in JS. */
+/**
+ * Count restorable snapshot rows in SQLite without returning or parsing their message bodies in JS.
+ *
+ * The messages anti-join closes the crash window where the user row committed before the
+ * snapshot-delete write: restoreQueueSnapshot applies the same clientId de-duplication, so cold
+ * list_sessions counts cannot temporarily disagree with list_session_queue after restoration.
+ */
 export async function loadAgentInputQueueSnapshotCounts(
   sessionIds: readonly string[],
 ): Promise<Record<string, number>> {
@@ -197,7 +203,32 @@ export async function loadAgentInputQueueSnapshotCounts(
       `SELECT session_id AS sessionId,
               CASE
                 WHEN json_valid(payload) = 1 AND json_type(payload) = 'array'
-                THEN json_array_length(payload)
+                THEN (
+                  SELECT COUNT(*)
+                  FROM json_each(payload) AS snapshot_item
+                  WHERE CASE
+                    WHEN snapshot_item.type = 'object'
+                    THEN
+                      json_type(snapshot_item.value, '$.clientId') = 'text'
+                      AND length(json_extract(snapshot_item.value, '$.clientId')) > 0
+                      AND json_type(snapshot_item.value, '$.text') = 'text'
+                      AND json_type(snapshot_item.value, '$.persistedContent') = 'text'
+                      AND json_type(snapshot_item.value, '$.chatMessage') = 'object'
+                      AND json_type(snapshot_item.value, '$.createOpts') = 'object'
+                      AND json_extract(snapshot_item.value, '$.createOpts.agentKind')
+                          IN ('claude-code', 'codex', 'pi')
+                    ELSE 0
+                  END
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM messages
+                      WHERE messages.session_id = agent_input_queue_snapshots.session_id
+                        AND messages.client_id = json_extract(
+                          snapshot_item.value,
+                          '$.clientId'
+                        )
+                    )
+                )
                 ELSE NULL
               END AS itemCount
        FROM agent_input_queue_snapshots

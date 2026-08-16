@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -132,11 +133,53 @@ describe('agent input queue snapshot durability boundary', () => {
     await expect(
       loadAgentInputQueueSnapshotCounts(['session-1', 'session-2', 'session-1']),
     ).resolves.toEqual({ 'session-1': 2, 'session-2': 0 });
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('json_array_length(payload)'), [
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('json_each(payload)'), [
       'session-1',
       'session-2',
     ]);
     expect(query.mock.calls[0]?.[0]).not.toContain('SELECT payload');
+  });
+
+  it('excludes snapshot items already persisted in messages from cold queued counts', async () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE agent_input_queue_snapshots (
+        session_id TEXT PRIMARY KEY,
+        payload TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE messages (
+        session_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        UNIQUE(session_id, client_id)
+      );
+    `);
+    const accepted = queued('accepted', 'client-accepted');
+    const waiting = queued('waiting', 'client-waiting');
+    db.prepare(
+      'INSERT INTO agent_input_queue_snapshots (session_id, payload, updated_at) VALUES (?, ?, ?)',
+    ).run(
+      'session-crash-window',
+      JSON.stringify([accepted, waiting, 'malformed legacy row']),
+      Date.now(),
+    );
+    db.prepare('INSERT INTO messages (session_id, client_id) VALUES (?, ?)').run(
+      'session-crash-window',
+      accepted.clientId,
+    );
+    const query = vi.fn(async <T = unknown>(sql: string, params: unknown[] = []) =>
+      db.prepare(sql).all(...params) as T[]);
+    mocks.getDbClient.mockReturnValue({ query } as never);
+
+    try {
+      await expect(
+        loadAgentInputQueueSnapshotCounts(['session-crash-window']),
+      ).resolves.toEqual({ 'session-crash-window': 1 });
+      expect(query.mock.calls[0]?.[0]).toContain('NOT EXISTS');
+      expect(query.mock.calls[0]?.[0]).toContain('FROM messages');
+    } finally {
+      db.close();
+    }
   });
 
   it('fails closed for corrupt snapshots and database read failures', async () => {
